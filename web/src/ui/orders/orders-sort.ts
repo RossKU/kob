@@ -1,4 +1,5 @@
-// What the Portfolio's order lists sort by: each column of an order's line, as a value the shared sort (ui/kit/sort.ts) compares.
+// What the Portfolio's order lists sort by. Each column of an order's line is a value the shared
+// sort (ui/kit/sort.ts) compares.
 import { curveRestKas } from '../../kob/curve';
 import { RAW_TOKEN_DECIMALS, t } from '../../i18n';
 import { daaToUnix } from '../../kob/daa';
@@ -12,8 +13,11 @@ export const ORDER_SORT_KEYS = ['time', 'market', 'type', 'side', 'price', 'avg'
 export type OrderSortKey = (typeof ORDER_SORT_KEYS)[number];
 
 /**
- * The columns of the order tables, in the usual exchange order, the time first. The leading columns are the same in the three Portfolio tables (Trade
- * history has no Type): Time, Market, Type, Side, Price, Amount, Total. Open orders go on with Filled, Status, the buttons; Order history with Avg price, Filled, Status. `time` is the table's own order (newest first).
+ * The columns of the order tables, in the usual exchange order with the time first. The leading
+ * columns are the same in the three Portfolio tables, and Trade history has no Type. They are Time,
+ * Market, Type, Side, Price, Amount and Total. Open orders go on with Filled, Status and the
+ * buttons. Order history goes on with Avg price, Filled and Status. `time` is the table's own
+ * order, newest first.
  */
 export function orderColumns(tab: 'open' | 'history', usd = false): (DtColumn<OrderSortKey> | DtPlain)[] {
   const time: DtColumn<OrderSortKey> = { key: 'time', label: t('orders.col.time'), kind: 'time', card: 'badge' };
@@ -31,7 +35,10 @@ export function orderColumns(tab: 'open' | 'history', usd = false): (DtColumn<Or
     : [time, market, type, side, price, amount, total, filled, status, { key: 'act', plain: true }, { key: 'toggle', plain: true }];
 }
 
-/** When the order was placed, unix seconds: the wallet's record of it, else the time of its genesis block (null: unknown). */
+/**
+ * When the order was placed, in unix seconds. It is the wallet's record of it, else the time of its
+ * genesis block. Null means unknown.
+ */
 export function placedUnix(row: OrderRowModel, clock: Clock | null | undefined): bigint | null {
   const genesis = row.entry.view ? BigInt(row.entry.view.genesis.daa) : null;
   const placedRecord = row.entry.record?.placedAtUnix ? BigInt(row.entry.record.placedAtUnix) : 0n;
@@ -39,8 +46,10 @@ export function placedUnix(row: OrderRowModel, clock: Clock | null | undefined):
 }
 
 /**
- * The filled amount of an order, base units (null: unknown). The indexer's `filled_amount` is what the fills took; `amount_left` is 0 for every ended order but a
- * killed one, so `total - left` reads an order cancelled after a partial fill as 100 % filled. Only a row without the field (a node-read or recorded order) falls back to it.
+ * The filled amount of an order, in base units. Null means unknown. The indexer's `filled_amount`
+ * is what the fills took. `amount_left` is 0 for every ended order but a killed one, so `total -
+ * left` would read an order cancelled after a partial fill as 100 % filled. Only a row without the
+ * field, such as a node-read or recorded order, falls back to it.
  */
 export function filledAmount(row: OrderRowModel): bigint | null {
   const f = row.entry.view?.filled_amount;
@@ -49,12 +58,18 @@ export function filledAmount(row: OrderRowModel): bigint | null {
   return row.amountTotal > row.amountLeft ? row.amountTotal - row.amountLeft : 0n;
 }
 
-/** The status word of an order: `closed` with something filled is "closed, partly filled" (a bid an older covenant let a fill below its minimum end early). */
+/**
+ * The status word of an order. `closed` with something filled is "closed, partly filled", as for a
+ * bid that an older covenant let a fill below its minimum end early.
+ */
 export function statusText(row: OrderRowModel): string {
   return row.status === 'closed' && (filledAmount(row) ?? 0n) > 0n ? t('orders.status.closedPartial') : t(`orders.status.${row.status}`);
 }
 
-/** The filled part of an order in hundredths of a percent (null: a KAS budget, which has no amount to compare). */
+/**
+ * The filled part of an order in hundredths of a percent. Null for a KAS budget, which has no
+ * amount to compare.
+ */
 export function filledPermyriad(row: OrderRowModel): number | null {
   const total = row.amountTotal;
   const filled = filledAmount(row);
@@ -63,20 +78,28 @@ export function filledPermyriad(row: OrderRowModel): number | null {
 }
 
 /**
- * The KAS a plain bid has spent on its fills when its placement is not in this browser (no budget record): the filled tokens at the order's average fill price (null: not a bid
- * with a budget, nothing filled, or no average price yet). `filled_amount` is a decimal string.
+ * The KAS a plain bid has spent on its fills when its placement is not in this browser, so there is
+ * no budget record. It is the filled tokens at the order's average fill price. It is null when the
+ * order is not a bid with a budget, nothing filled, or there is no average price yet.
+ * `filled_amount` is a decimal string.
  */
 export function bidSpentByFills(row: OrderRowModel, avg: bigint | null | undefined): bigint | null {
   const filled = filledAmount(row) ?? 0n;
   return row.budget && !row.pair && avg !== null && avg !== undefined && filled > 0n ? quoteOf(filled, avg, row.scale, 'down') : null;
 }
 
-/** An order that is over (filled, cancelled, refunded, killed or closed): its fills are all it ever did. */
+/**
+ * An order that is over (filled, cancelled, refunded, killed or closed). Its fills are all it ever
+ * did.
+ */
 export const orderEnded = (row: OrderRowModel): boolean => !row.live && row.status !== 'unknown';
 
 /**
- * The Total column, KAS (null: none). An open order: its initial amount at its limit price (what it offers). An ended order: what actually traded, the filled amount at the
- * average fill price `avg` (the order's own fills, read from its events; null / undefined until they are: no figure yet), 0 when nothing filled. A pair order has none.
+ * The Total column in KAS, or null for none. An open order shows its initial amount at its limit
+ * price, which is what it offers. An ended order shows what actually traded, which is the filled
+ * amount at the average fill price `avg`, or 0 when nothing filled. `avg` is the order's own fills
+ * read from its events, and null or undefined until they are, so there is no figure yet. A pair
+ * order has none.
  */
 export function orderTotalKas(row: OrderRowModel, avg: bigint | null | undefined): bigint | null {
   if (row.pair) return null;
@@ -86,12 +109,16 @@ export function orderTotalKas(row: OrderRowModel, avg: bigint | null | undefined
     if (filled === 0n) return 0n;
     return avg !== null && avg !== undefined ? quoteOf(filled, avg, row.scale, 'down') : null;
   }
-  // a curve: what the whole table sells for (each level at its own price)
+  // A curve: what the whole table sells for, with each level at its own price.
   if (row.curve) return curveRestKas(row.curve.levelSize, row.curve.table, row.curve.total, row.curve.total, row.scale);
   return row.amountTotal !== null && row.price !== null ? quoteOf(row.amountTotal, row.price, row.scale, 'down') : null;
 }
 
-/** The value of one column for an order. `marketText`: the market as the line names it; `decimalsOf`: the decimals of the order's token; `avgOf`: its average fill price (null: not known). */
+/**
+ * The value of one column for an order. `marketText` is the market as the line names it,
+ * `decimalsOf` the decimals of the order's token, and `avgOf` its average fill price (null when not
+ * known).
+ */
 export function orderSortValue(
   row: OrderRowModel,
   key: OrderSortKey,

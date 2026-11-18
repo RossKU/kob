@@ -22,39 +22,53 @@ export interface PositionCardProps {
   actions: OrderRowActions;
   onCancelPosition(position: Position): void;
   /**
-   * close: cancel the position's live orders, then unwind at market: a buy-first position sells the released tokens, a sell-first one buys
-   * back the amount it sold (absent: no close button)
+   * Close cancels the position's live orders, then unwinds at market. A buy-first position sells
+   * the released tokens and a sell-first one buys back the amount it sold. When absent there is no
+   * close button.
    */
   onClosePosition?(position: Position): void;
   busy: string | null;
-  /** wall-clock mapping of DAA scores (repeat "until" date) */
+  /** Wall-clock mapping of DAA scores, for the repeat "until" date. */
   clock?: Clock | null;
-  /** loads the fill events of one order; absent (no indexer): no fills section */
+  /**
+   * Loads the fill events of one order. When absent, with no indexer, there is no fills section.
+   */
   loadEvents?: (id: Hex, signal: AbortSignal) => Promise<EventView[]>;
-  /** a market page's panel: the member lines draw their details only once opened */
+  /** A market page's panel. The member lines draw their details only once opened. */
   compact?: boolean;
-  /** kascov.io's picture of a token, for the icons */
+  /** kascov.io's picture of a token, for the icons. */
   iconOf?: (covenantId: string) => KascovMeta | null;
-  /** the table the card is in (its member lines have that table's cells) */
+  /** The table the card is in. Its member lines have that table's cells. */
   columns?: 'open' | 'history';
-  /** the table's fixed decimals of a price column and of the KAS Total column (OrdersView: the finest of the whole list), for the member lines */
+  /**
+   * The table's fixed decimals of a price column and of the KAS Total column, the finest of the
+   * whole list from OrdersView, for the member lines.
+   */
   priceDp?: number;
   kasDp?: number;
-  /** the average fill price of an ended member order (the Total of its line is what it traded; null: none, undefined: not read yet) */
+  /**
+   * The average fill price of an ended member order. The Total of its line is what it traded. Null
+   * means none, and undefined means not read yet.
+   */
   avgOf?: (id: Hex) => bigint | null | undefined;
 }
 
-/** An if-done / OCO-entry / repeat position: the entry with its exits, one cancel for all of them (ONE transaction where possible). */
+/**
+ * An if-done, OCO-entry or repeat position. It shows the entry with its exits and one cancel for
+ * all of them, in one transaction where possible.
+ */
 export function PositionCard(props: PositionCardProps) {
   const p = props.position;
-  // the price path, the PnL and the fills: under the head line on demand (the member lines say the rest)
+  // The price path, the PnL and the fills are under the head line on demand. The member lines say
+  // the rest.
   const [summaryOpen, setSummaryOpen] = useState(false);
   const entryRow = p.entry ? props.rows.get(p.entry.covenant_id) : undefined;
   const exitRows = p.exits.map((x) => props.rows.get(x.covenant_id)).filter((r): r is OrderRowModel => !!r);
   const sum = summarizePosition(p, props.rows, props.clock ?? null);
   const tone = sum.phase === 'closed' || sum.phase === 'cancelled' ? 'neutral' : sum.phase === 'repeat-waiting' ? 'info' : 'ok';
   const token = props.tokenOf(sum.token);
-  // a pair position (KobIfdPair entry and its KobCondPair exits): prices in the quote token B, the title names the pair
+  // A pair position (KobIfdPair entry and its KobCondPair exits) has prices in the quote token B,
+  // and the title names the pair.
   const pairOf = entryRow?.pair ?? exitRows.find((r) => r.pair)?.pair ?? null;
   const pair = pairOf ? { quote: props.tokenOf(pairOf.quote), quoteId: pairOf.quote } : null;
   const typeKey = entryRow?.typeKey && entryRow.typeKey !== 'unknown' ? entryRow.typeKey : null;
