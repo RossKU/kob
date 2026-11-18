@@ -711,7 +711,7 @@ export function PriceChart(props: PriceChartProps) {
           {/* the size of the chart: outside the tools' scroller, so a phone never scrolls it away */}
           <div class="chart-tools chart-size">
             {mid ? (
-              <button type="button" aria-pressed={midOn ? 'true' : 'false'} aria-label={t('market.chart.midToggle')} title={t('market.chart.midToggle')} data-testid="chart-mid-toggle" onClick={() => setMidOn(!midOn)}>
+              <button type="button" class="chart-mid-btn" aria-pressed={midOn ? 'true' : 'false'} aria-label={t('market.chart.midToggle')} title={t('market.chart.midToggle')} data-testid="chart-mid-toggle" onClick={() => setMidOn(!midOn)}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-dasharray="3 3" aria-hidden="true">
                   <path d="M3 12h18" />
                 </svg>

@@ -216,6 +216,8 @@ body:has(.market-page) .container { max-width: none; }
 .chart-tools .chart-kascov-logo { width: 16px; height: 16px; border-radius: 4px; opacity: 0.6; }
 .chart-tools button:hover:not([aria-disabled='true']) .chart-kascov-logo, .chart-tools button[aria-pressed='true'] .chart-kascov-logo { opacity: 1; }
 @media (pointer: coarse) { .chart-tools button { min-width: 36px; height: 34px; } }
+/* the mid-line toggle is a desktop control: a phone header has no room for it (the line keeps the stored choice, on by default) */
+@media (max-width: 759px) { .chart-tools .chart-mid-btn { display: none; } }
 /* a narrow phone: the intervals, Draw and the kascov + full-size pair stay on one line with wider fonts too (about 20 px back) */
 @media (max-width: 400px) {
   .chart-intervals button { padding: 3px 8px; }
