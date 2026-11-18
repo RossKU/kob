@@ -1,33 +1,42 @@
-// The drawings of chart-drawings.ts as a series primitive of Lightweight Charts v5 (the library's plugin API, the way its official plugin examples draw:
-// a primitive attached to the candle series, one pane view with a renderer, an axis view for the price tag). The library calls `updateAllViews` before
-// every paint (pan, zoom, resize, new data), so a drawing follows the chart without any bookkeeping here; the colours are read from the theme's tokens at
-// paint time (`colors`), so a theme change needs only a repaint. Only types are imported from the library: its code stays in its own lazy chunk.
+// The drawings of chart-drawings.ts as a series primitive of Lightweight Charts v5. It uses the
+// library's plugin API, the way its official plugin examples draw. A primitive is attached to the
+// candle series, with one pane view with a renderer and an axis view for the price tag. The
+// library calls `updateAllViews` before every paint (pan, zoom, resize, new data), so a drawing
+// follows the chart without any bookkeeping here. The colours are read from the theme's tokens at
+// paint time (`colors`), so a theme change needs only a repaint. Only types are imported from the
+// library, and its code stays in its own lazy chunk.
 import type { IChartApiBase, Logical, ISeriesApi, ISeriesPrimitive, ISeriesPrimitiveAxisView, IPrimitivePaneRenderer, IPrimitivePaneView, SeriesAttachedParameter, SeriesType, Time } from 'lightweight-charts';
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
 import { extendToPane, logicalAt, logicalX, pickShape, timeAt, type Anchor, type Drawing, type DrawingColor, type Shape, type TimeGrid } from './chart-drawings';
 
 export interface DrawingColors {
-  /** the paint of a swatch (a theme token's value, read now) */
+  /** The paint of a swatch: a theme token's value, read now. */
   swatch: (c: DrawingColor) => string;
-  /** the drawing the delete tool is over */
+  /** The drawing the delete tool is over. */
   hot: string;
-  /** the price tag's text and the point dots' fill */
+  /** The price tag's text and the point dots' fill. */
   surface: string;
 }
 
 /** What the tools show besides the stored drawings. */
 export interface DrawingOverlay {
-  /** the first point of a two-point drawing being made (and which one), and where the pointer is now: a dashed preview between them, in the next colour */
+  /**
+   * The first point of a two-point drawing being made, and which one, and where the pointer is
+   * now. A dashed preview is drawn between them, in the next colour.
+   */
   pending: Anchor | null;
   pendingKind: 'trend' | 'xline' | 'box';
   cursor: Anchor | null;
   color: DrawingColor;
-  /** the drawing under the delete tool's pointer; `hoverColor` set (the recolour tool): it shows in that colour, else in the delete tool's hot colour */
+  /**
+   * The drawing under the delete tool's pointer. With `hoverColor` set, which is the recolour
+   * tool, it shows in that colour. Otherwise it shows in the delete tool's hot colour.
+   */
   hover: string | null;
   hoverColor: DrawingColor | null;
 }
 
-/** A pixel of tolerance for picking a drawing: 8 for a mouse, 14 for a finger. */
+/** A pixel of tolerance for picking a drawing: 8 for a mouse and 14 for a finger. */
 export const PICK_MOUSE = 8;
 export const PICK_TOUCH = 14;
 
@@ -43,7 +52,10 @@ export class DrawingsPrimitive implements ISeriesPrimitive<Time> {
   private tags: ISeriesPrimitiveAxisView[] = [];
   private readonly view: IPrimitivePaneView;
 
-  /** What the last paint put in the pane, as text (the panel's data-drawn* attributes, which the tests read): `shown` is the last text handed to `onShown`. */
+  /**
+   * What the last paint put in the pane, as text. It is the panel's `data-drawn*` attributes,
+   * which the tests read. `shown` is the last text handed to `onShown`.
+   */
   private shown = '';
 
   constructor(
@@ -67,12 +79,12 @@ export class DrawingsPrimitive implements ISeriesPrimitive<Time> {
     this.api?.requestUpdate();
   }
 
-  /** A repaint (a theme change: the colours are read at paint time). */
+  /** A repaint, for a theme change. The colours are read at paint time. */
   refresh(): void {
     this.api?.requestUpdate();
   }
 
-  // -------------------------------------------------------------------------------- pointer <-> chart
+  // ------------------------------------------------------------------ pointer and chart
 
   private chart(): IChartApiBase<Time> | null {
     return this.api?.chart ?? null;
@@ -81,7 +93,10 @@ export class DrawingsPrimitive implements ISeriesPrimitive<Time> {
     return this.api?.series ?? null;
   }
 
-  /** The chart point under a pane pixel (x, y): its time (the bar grid carries it past the first and the newest bar) and price. Null while the chart has no data. */
+  /**
+   * The chart point under a pane pixel (x, y), with its time and price. The bar grid carries the
+   * time past the first and the newest bar. It is null while the chart has no data.
+   */
   anchorAt(x: number, y: number): Anchor | null {
     const chart = this.chart();
     const series = this.series();
@@ -101,7 +116,8 @@ export class DrawingsPrimitive implements ISeriesPrimitive<Time> {
     const chart = this.chart();
     const series = this.series();
     if (!chart || !series || !this.grid) return null;
-    // not `logicalToCoordinate(fractional)`: the library puts a fractional index at x = 0 (see logicalX)
+    // Not `logicalToCoordinate(fractional)`. The library puts a fractional index at x = 0 (see
+    // logicalX).
     const scale = chart.timeScale();
     const x = logicalX(logicalAt(this.grid, a.time), (i) => scale.logicalToCoordinate(i as Logical));
     const y = series.priceToCoordinate(a.price);
@@ -134,7 +150,7 @@ export class DrawingsPrimitive implements ISeriesPrimitive<Time> {
     const a = pending ? this.px(pending) : null;
     const b = cursor ? this.px(cursor) : null;
     this.preview = a && b ? { x1: a.x, y1: a.y, x2: b.x, y2: b.y } : null;
-    // the price tag of a horizontal line on the price axis
+    // The price tag of a horizontal line on the price axis.
     const series = this.series();
     const h = this.chart()?.paneSize().height ?? 0;
     this.tags = [];
@@ -169,7 +185,8 @@ export class DrawingsPrimitive implements ISeriesPrimitive<Time> {
         if (extendToPane(s.x1, s.y1, s.x2, s.y2, w, h)) visible++;
       } else if (Math.max(s.x1, s.x2) >= 0 && Math.min(s.x1, s.x2) <= w && Math.max(s.y1, s.y2) >= 0 && Math.min(s.y1, s.y2) <= h) visible++;
     }
-    // where each drawing's points are (kind:x1,x2 in whole pixels, a horizontal line has none): a drawing squeezed to the left edge, or out of its time order, shows here
+    // Where each drawing's points are, as `kind:x1,x2` in whole pixels. A horizontal line has none.
+    // A drawing squeezed to the left edge, or out of its time order, shows here.
     const at = this.shapes.map((s) => (s.kind === 'hline' ? 'hline' : `${s.kind}:${Math.round(s.x1)},${Math.round(s.x2)}`)).join('|');
     const text = `${this.shapes.length}/${visible}/${at}`;
     if (text === this.shown) return;
@@ -177,7 +194,10 @@ export class DrawingsPrimitive implements ISeriesPrimitive<Time> {
     this.onShown(this.shapes.length, visible, at);
   }
 
-  /** What the drawing under the pointer is painted in: the colour a click would give it (recolour tool), else the delete tool's hot colour. */
+  /**
+   * What the drawing under the pointer is painted in. It is the colour a click would give it
+   * (recolour tool), else the delete tool's hot colour.
+   */
   private hoverPaint(): string {
     const c = this.colors();
     return this.overlay.hoverColor ? c.swatch(this.overlay.hoverColor) : c.hot;
@@ -206,7 +226,8 @@ export class DrawingsPrimitive implements ISeriesPrimitive<Time> {
           ctx.strokeStyle = color;
           ctx.stroke();
         };
-        // the line through two points, clipped to the pane: it runs on past both points to the plot's edges
+        // The line through two points, clipped to the pane. It runs on past both points to the
+        // plot's edges.
         const extended = (x1: number, y1: number, x2: number, y2: number) => {
           const e = extendToPane(x1, y1, x2, y2, mediaSize.width, mediaSize.height);
           if (!e) return;

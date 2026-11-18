@@ -1,27 +1,38 @@
-// The chart's candle loads: the full series (MAX_BARS bars) on the first view and on a change of token, interval or orientation source, and after
-// that only the bars since the newest one on screen (`from` = its bucket start, inclusive: that bar may still be growing), merged into the cached
-// series. A live refresh then reads a handful of buckets instead of 1500 (the indexer scans only the window from `from`). Chart reads go at low
-// fetch priority (indexer.ts `RequestOptions.priority`): the order ticket's reads come first. Anything that could have
-// rewritten older bars (a reorg, a resync, a new price basis, an answer as long as the limit) takes the full load again.
+// The chart's candle loads. The first view and a change of token, interval or orientation source
+// load the full series (MAX_BARS bars). After that only the bars since the newest one on screen
+// are loaded, merged into the cached series. `from` is its bucket start, inclusive, because that
+// bar may still be growing. A live refresh then reads a handful of buckets instead of 1500, since
+// the indexer scans only the window from `from`. Chart reads go at low fetch priority (indexer.ts
+// `RequestOptions.priority`), and the order ticket's reads come first. Anything that could have
+// rewritten older bars takes the full load again. That is a reorg, a resync, a new price basis or
+// an answer as long as the limit.
 import type { CandleInterval, CandlesView, PairCandlesView } from '../../data/indexer-types';
 import type { IndexerApi } from '../../data/indexer';
 
 export const MAX_BARS = 1500;
 
-/** What one chart draws: a token's KAS candles, the indexer's pair candles, or the two KAS legs of a client-side pair ratio. */
+/**
+ * What one chart draws: a token's KAS candles, the indexer's pair candles, or the two KAS legs of a
+ * client-side pair ratio.
+ */
 export type ChartView =
   | { kind: 'kas'; v: CandlesView }
   | { kind: 'pair'; pc: PairCandlesView }
   | { kind: 'usd'; q: CandlesView; b: CandlesView };
 
-/** The chart's source: one token's KAS book, or a pair BASE/QUOTE (`pairCandles`: ask the indexer for its pair candles first). */
+/**
+ * The chart's source: one token's KAS book, or a pair BASE/QUOTE. `pairCandles` asks the indexer
+ * for its pair candles first.
+ */
 export type ChartSource = { token: string } | { base: string; quote: string; pairCandles?: boolean };
 
 /**
- * The pair candles of BASE/QUOTE with the pair volume of QUOTE/BASE added to each bucket, turned round (the two orientations are one market: the pair
- * fills of an order placed as QUOTE/BASE are volume of this pair too; the volume of A is the other view's volume of B and the other way round). The rates come
- * from the two KAS series and are the same either way, so only the volumes are taken from the other view (a bucket it lacks adds nothing). The view
- * unchanged for a missing one or one of another pair.
+ * The pair candles of BASE/QUOTE with the pair volume of QUOTE/BASE added to each bucket, turned
+ * round. The two orientations are one market. The pair fills of an order placed as QUOTE/BASE are
+ * volume of this pair too. The volume of A is the other view's volume of B and the other way
+ * round. The rates come from the two KAS series and are the same either way, so only the volumes
+ * are taken from the other view. A bucket it lacks adds nothing. The view is unchanged for a
+ * missing one or one of another pair.
  */
 export function mergePairCandleOrientations(ab: PairCandlesView, ba: PairCandlesView | null | undefined): PairCandlesView {
   if (!ba || ba.base !== ab.quote || ba.quote !== ab.base) return ab;
@@ -36,7 +47,10 @@ export function mergePairCandleOrientations(ab: PairCandlesView, ba: PairCandles
   };
 }
 
-/** The pair candles of both orientations as one series (a missing or unreadable other orientation leaves this one). */
+/**
+ * The pair candles of both orientations as one series. A missing or unreadable other orientation
+ * leaves this one.
+ */
 async function pairCandlesBoth(indexer: IndexerApi, base: string, quote: string, q: { interval: CandleInterval; from?: number; limit: number }, signal: AbortSignal): Promise<PairCandlesView | null> {
   const [ab, ba] = await Promise.all([
     indexer.pairCandles(base, quote, q, { signal, priority: 'low' }),
@@ -48,7 +62,10 @@ async function pairCandlesBoth(indexer: IndexerApi, base: string, quote: string,
   return ab ? mergePairCandleOrientations(ab, ba) : null;
 }
 
-/** The bars of `old` before `from`, then `fresh` (ascending; a bucket in both is taken from `fresh`), the newest `max` of them. */
+/**
+ * The bars of `old` before `from`, then `fresh`, ascending, where a bucket in both is taken from
+ * `fresh`. The newest `max` of them are kept.
+ */
 export function mergeBars<T extends { t: number }>(old: readonly T[], fresh: readonly T[], from: number, max: number = MAX_BARS): T[] {
   const kept = old.filter((x) => x.t < from);
   const added = [...fresh].filter((x) => x.t >= from).sort((a, b) => a.t - b.t);
@@ -58,7 +75,10 @@ export function mergeBars<T extends { t: number }>(old: readonly T[], fresh: rea
 
 const lastT = (items: readonly { t: number }[]): number | null => (items.length ? items[items.length - 1]!.t : null);
 
-/** The bucket start an incremental load reads from (the newest bar on screen; for two legs the older of their newest bars), null: none, load in full. */
+/**
+ * The bucket start an incremental load reads from. It is the newest bar on screen, or for two
+ * legs the older of their newest bars. Null means none, so load in full.
+ */
 export function incrementalFrom(view: ChartView): number | null {
   if (view.kind === 'kas') return lastT(view.v.items);
   if (view.kind === 'pair') return lastT(view.pc.items);
@@ -67,7 +87,10 @@ export function incrementalFrom(view: ChartView): number | null {
   return q === null || b === null ? null : Math.min(q, b);
 }
 
-/** One KAS series merged with its newer bars, or null when only a full load is safe (unsupported now, another basis, an answer cut at the limit). */
+/**
+ * One KAS series merged with its newer bars. It is null when only a full load is safe: unsupported
+ * now, another basis, or an answer cut at the limit.
+ */
 function mergeKas(prev: CandlesView, next: CandlesView | null, from: number, limit: number): CandlesView | null {
   if (!next || next.price_basis !== prev.price_basis || next.items.length >= limit) return null;
   return { ...next, items: mergeBars(prev.items, next.items, from, limit) };
@@ -82,7 +105,7 @@ async function loadFull(indexer: IndexerApi, src: ChartSource, interval: CandleI
     const pc = await pairCandlesBoth(indexer, src.base, src.quote, { interval, limit }, signal);
     if (pc) return { kind: 'pair', pc };
   }
-  // both legs on the same interval and window
+  // Both legs are on the same interval and window.
   const [q, b] = await Promise.all([indexer.candles(src.quote, { interval, limit }, { signal, priority: 'low' }), indexer.candles(src.base, { interval, limit }, { signal, priority: 'low' })]);
   return q && b ? { kind: 'usd', q, b } : null;
 }
@@ -109,8 +132,9 @@ async function loadNewer(indexer: IndexerApi, src: ChartSource, prev: ChartView,
 }
 
 /**
- * The series to draw: with `prev` (the cached series of the same source and interval, still valid) only the bars since its newest one, merged into
- * it; else, or when the newer bars cannot be merged safely, the full series.
+ * The series to draw. With `prev`, the cached series of the same source and interval that is
+ * still valid, it loads only the bars since its newest one and merges them into it. Otherwise, or
+ * when the newer bars cannot be merged safely, it loads the full series.
  */
 export async function loadCandles(
   indexer: IndexerApi,
