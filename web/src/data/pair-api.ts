@@ -1,12 +1,17 @@
-// Adapter of the indexer's pair API (docs/ops/executor.md 5.4, "Pair orders"): every pair view the client returns goes through here, so that
-// nothing malformed reaches bigint math and every GUESS about a detail the document does not fix lives in this one file.
+// Adapter of the indexer's pair API (docs/ops/executor.md 5.4, "Pair orders"). Every pair view the
+// client returns goes through here, so nothing malformed reaches bigint math. Every guess about a
+// detail the document does not fix lives in this one file.
 //
-// Guesses (the document fixes the field names of each item but not every envelope; the executor of this branch serializes them as below):
-//   * `GET /v1/pairs` is documented as a JSON array; a `{ items: [...] }` envelope is accepted too.
-//   * `/candles` and `/fills` carry their rows in `items` (the 5.3 market-data convention); `next_cursor` of `/fills` may be absent (= null).
-//   * `/fills` `volume_24h` may be absent on an older build: zeros are reported then.
-//   * the counts of a `/v1/pairs` entry that an older build omits (`entry_asks`, `entry_bids`, `conditionals`) read as 0.
-//   * event `detail.pair` / `detail.evidence` are read defensively (`pairDetailOf`, `evidenceDetailOf`): a field of the wrong type is dropped.
+// The document fixes the field names of each item but not every envelope. The executor serializes
+// them as these guesses assume:
+// - `GET /v1/pairs` is documented as a JSON array. A `{ items: [...] }` envelope is accepted too.
+// - `/candles` and `/fills` carry their rows in `items`, the 5.3 market-data convention.
+//   `next_cursor` of `/fills` may be absent, which reads as null.
+// - `/fills` `volume_24h` may be absent on an older build, and zeros are reported then.
+// - The counts of a `/v1/pairs` entry that an older build omits (`entry_asks`, `entry_bids`,
+//   `conditionals`) read as 0.
+// - Event `detail.pair` and `detail.evidence` are read defensively (`pairDetailOf`,
+//   `evidenceDetailOf`). A field of the wrong type is dropped.
 import type {
   EventView, PairBookView, PairCandleView, PairCandlesView, PairEventDetail, PairEvidenceDetail, PairFillView, PairFillsView, PairLevelView,
   PairRateView, PairSummaryView,
@@ -19,7 +24,10 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 const decOrNull = (v: unknown): string | null => (typeof v === 'string' && DEC.test(v) ? v : null);
 const count = (v: unknown): number => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : 0);
 
-/** Keeps only well-formed pair levels (decimal-string price and amount, positive denominator, numerator and amount, a known source). */
+/**
+ * Keeps only well-formed pair levels. They have a decimal-string price and amount, a positive
+ * denominator, numerator and amount, and a known source.
+ */
 export function sanitizePairBook(v: PairBookView): PairBookView {
   const ok = (l: PairLevelView): boolean =>
     isObj(l) && SOURCES.has(l.source) && typeof l.price_num === 'string' && typeof l.price_den === 'string' && typeof l.amount === 'string' &&
@@ -27,7 +35,10 @@ export function sanitizePairBook(v: PairBookView): PairBookView {
   return { ...v, asks: (v.asks ?? []).filter(ok), bids: (v.bids ?? []).filter(ok) };
 }
 
-/** `GET /v1/pairs` answer (an array, or an `items` envelope) -> well-formed entries (oriented hex32 pairs, base != quote), counts defaulting to 0. */
+/**
+ * Turns a `GET /v1/pairs` answer, an array or an `items` envelope, into well-formed entries. They
+ * are oriented hex32 pairs with base != quote, and the counts default to 0.
+ */
 export function adaptPairSummaries(raw: unknown): PairSummaryView[] | null {
   const items = Array.isArray(raw) ? raw : isObj(raw) && Array.isArray(raw.items) ? raw.items : null;
   if (!items) return null;
@@ -50,7 +61,10 @@ const rate = (v: unknown): PairRateView | null => {
   return value !== null && num !== null && den !== null && BigInt(den) > 0n ? { value, num, den } : null;
 };
 
-/** `/candles` answer -> the view with only well-formed candles (four valid rates, a numeric bucket time); null when it is not a candle view. */
+/**
+ * Turns a `/candles` answer into the view with only well-formed candles, which have four valid
+ * rates and a numeric bucket time. Null when it is not a candle view.
+ */
 export function adaptPairCandles(raw: unknown): PairCandlesView | null {
   if (!isObj(raw) || !Array.isArray(raw.items)) return null;
   const items: PairCandleView[] = [];
@@ -74,7 +88,10 @@ export function adaptPairCandles(raw: unknown): PairCandlesView | null {
   };
 }
 
-/** `/fills` answer -> the view with only well-formed fills; `volume_24h` zeros and `next_cursor` null when absent. */
+/**
+ * Turns a `/fills` answer into the view with only well-formed fills. `volume_24h` is zeros and
+ * `next_cursor` null when absent.
+ */
 export function adaptPairFills(raw: unknown): PairFillsView | null {
   if (!isObj(raw) || !Array.isArray(raw.items)) return null;
   const items = raw.items.filter(
@@ -93,7 +110,10 @@ function cursorOf(v: unknown): string | null {
   return typeof v === 'number' && Number.isSafeInteger(v) ? String(v) : null;
 }
 
-/** `detail.pair` of a pair fill event (null for any other event). Pair fills never carry a KAS price: `price` here is the order's B quote. */
+/**
+ * `detail.pair` of a pair fill event, null for any other event. Pair fills never carry a KAS
+ * price, so `price` here is the order's B quote.
+ */
 export function pairDetailOf(ev: Pick<EventView, 'detail'>): PairEventDetail | null {
   const d = isObj(ev.detail) ? ev.detail.pair : null;
   if (!isObj(d) || (d.side !== 'ask' && d.side !== 'bid') || typeof d.base !== 'string' || typeof d.quote !== 'string' || decOrNull(d.amount_a) === null) return null;
@@ -104,7 +124,10 @@ export function pairDetailOf(ev: Pick<EventView, 'detail'>): PairEventDetail | n
   };
 }
 
-/** `detail.evidence` of a pair conditional's arm / trail / triggered fill (mode 0: KAS quotes `a`, `b`; mode 1: a pair order's `price`). */
+/**
+ * `detail.evidence` of a pair conditional's arm, trail or triggered fill. Mode 0 carries the KAS
+ * quotes `a` and `b`, and mode 1 a pair order's `price`.
+ */
 export function evidenceDetailOf(ev: Pick<EventView, 'detail'>): PairEvidenceDetail | null {
   const d = isObj(ev.detail) ? ev.detail.evidence : null;
   if (!isObj(d) || typeof d.mode !== 'number') return null;
