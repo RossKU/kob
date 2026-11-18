@@ -1,10 +1,15 @@
-// Which creator-hosted (https) logos a wallet view may load (review M5). A token anyone can send to an address carries a logo address its creator picked; loading
-// it in a view of that address would tell the creator's host the visitor's IP at that moment. So in wallet views (Portfolio, per-address lists) an https logo loads
-// only for a token the user acquired on their own:
-//   - an order of this wallet names it (it placed an ask or bid with it, a fill of its bid delivered it, claims included, or it sold it);
-//   - the user created it (the creation records);
-//   - or the user clicked "Show logo" on it (remembered per token in this browser).
-// Anything unknown counts as not acquired. Market views are not gated. ipfs:// logos and kascov.io's checked copies are not gated here either.
+// Which creator-hosted (https) logos a wallet view may load.
+//
+// Anyone can send a token to an address, and the token carries a logo address its creator
+// picked. Loading it in a view of that address would tell the creator's host the visitor's IP at
+// that moment. So in wallet views (Portfolio, per-address lists) an https logo loads only for a
+// token the user acquired on their own:
+// - an order of this wallet names it, because it placed an ask or bid with it, a fill of its bid
+//   delivered it (claims included), or it sold it,
+// - the user created it, by the creation records,
+// - or the user clicked "Show logo" on it, which is remembered per token in this browser.
+// Anything unknown counts as not acquired. Market views are not gated. ipfs:// logos and
+// kascov.io's checked copies are not gated here either.
 import { useEffect, useState } from 'preact/hooks';
 
 export const LOGO_SHOWN_KEY = 'kob.logo.shown';
@@ -20,7 +25,10 @@ const browserStore = (): Store | null => {
   }
 };
 
-/** The tokens named by the wallet's own orders (their token and a pair's quote) and by its creation records; lower-case ids. */
+/**
+ * The tokens named by the wallet's own orders (their token and a pair's quote) and by its creation
+ * records, as lower-case ids.
+ */
 export function acquiredTokens(orders: readonly { token: string | null; pair?: { quote: string } | null }[], creations: readonly { covenantId: string }[]): Set<string> {
   const out = new Set<string>();
   const add = (v: string | null | undefined) => {
@@ -35,7 +43,7 @@ export function acquiredTokens(orders: readonly { token: string | null; pair?: {
   return out;
 }
 
-/** The ids the user chose to show, read from `store`; a missing, broken or oversized value is empty. */
+/** The ids the user chose to show, read from `store`. A missing, broken or huge value is empty. */
 export function readShown(store: Store | null = browserStore()): Set<string> {
   try {
     const raw = store?.getItem(LOGO_SHOWN_KEY);
@@ -47,7 +55,10 @@ export function readShown(store: Store | null = browserStore()): Set<string> {
   }
 }
 
-/** The gating rule: a wallet view withholds an https logo of a token that is neither acquired nor shown by choice; everything else is not gated here. */
+/**
+ * The gating rule. A wallet view withholds an https logo of a token that is neither acquired nor
+ * shown by choice. Everything else is not gated here.
+ */
 export const withholdsLogo = (scope: 'wallet' | undefined, allowed: boolean, kind: 'https' | 'ipfs'): boolean => scope === 'wallet' && !allowed && kind === 'https';
 
 class LogoGate {
@@ -62,7 +73,10 @@ class LogoGate {
   private emit() {
     for (const l of this.listeners) l();
   }
-  /** The acquired set of the wallet `owner` (its key); a new wallet replaces the old set. Unchanged content does not notify. */
+  /**
+   * Sets the acquired set of the wallet `owner`, by its key. A new wallet replaces the old set.
+   * Unchanged content does not notify.
+   */
   setAcquired(owner: string | null, ids: ReadonlySet<string>): void {
     const same = owner === this.owner && ids.size === this.acquired.size && [...ids].every((i) => this.acquired.has(i));
     if (same) return;
@@ -75,7 +89,10 @@ class LogoGate {
     const id = covenantId.toLowerCase();
     return this.acquired.has(id) || this.shownSet().has(id);
   }
-  /** The user's "Show logo" click: remembered for this token (the in-page value is set first; a store that refuses writes still applies for this visit). */
+  /**
+   * Remembers the user's "Show logo" click for this token. The in-page value is set first, so a
+   * store that refuses writes still applies for this visit.
+   */
   show(covenantId: string, store: Store | null = browserStore()): void {
     const id = covenantId.toLowerCase();
     const s = this.shownSet();
@@ -84,14 +101,14 @@ class LogoGate {
     try {
       store?.setItem(LOGO_SHOWN_KEY, JSON.stringify([...s].slice(-MAX_SHOWN)));
     } catch {
-      /* the choice holds for this visit only */
+      /* The choice holds for this visit only. */
     }
   }
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => void this.listeners.delete(fn);
   }
-  /** for tests */
+  /** For tests. */
   reset(): void {
     this.acquired = new Set();
     this.owner = null;
@@ -100,9 +117,13 @@ class LogoGate {
   }
 }
 
+/** The app's one logo gate. */
 export const logoGate = new LogoGate();
 
-/** Whether a creator-hosted logo of this token may load in a wallet view; re-renders when that changes. */
+/**
+ * Whether a creator-hosted logo of this token may load in a wallet view. Re-renders when that
+ * changes.
+ */
 export function useLogoAllowed(covenantId: string): boolean {
   const [, setN] = useState(0);
   useEffect(() => logoGate.subscribe(() => setN((n) => n + 1)), []);

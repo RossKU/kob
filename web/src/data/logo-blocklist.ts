@@ -1,14 +1,19 @@
-// The token-logo blocklist: which tokens' logos this app does not load, and the report that adds one (founder decision 2026-11-03).
+// The token-logo blocklist: which tokens' logos this app does not load, and the report that adds
+// one.
 //
-// KOB keeps no third-party image. A logo that should not be shown is taken down by a REPORT: the first report of a token hides its logo for everybody
-// (the letter avatar shows instead) until the operator of the indexer reviews it and restores it. The indexer (`GET /v1/logo-blocklist`, `POST
-// /v1/logo-reports`; docs/api.md 3.19 and 3.20) is the single source of truth; the GitHub Issue form feeds the same list.
-//
-//   * The list is read at start and every 2 minutes and the last good one is kept in localStorage (so the first paint after a reload already hides what
-//     the last visit knew). The list FAILS OPEN: when the indexer cannot be reached, answers anything but a well-formed list, or has no such route, the
-//     last known list stays (empty on a first visit) and logos show. It never hides everything because it could not be read.
-//   * A token the viewer has just reported is hidden for this viewer at once, whatever the answer (a recorded report during the operator's cooldown
-//     hides nothing for anyone else, but this viewer has said what they think of the logo).
+// KOB keeps no third-party image. A logo that should not be shown is taken down by a report. The
+// first report of a token hides its logo for everybody, with the letter avatar instead, until the
+// operator of the indexer reviews it and restores it. The indexer is the single source of truth
+// (`GET /v1/logo-blocklist`, `POST /v1/logo-reports`, docs/api.md 3.19 and 3.20). The GitHub
+// Issue form feeds the same list.
+// - The list is read at start and every 2 minutes. The last good one is kept in localStorage, so
+//   the first paint after a reload already hides what the last visit knew.
+// - The list fails open. When the indexer cannot be reached, answers anything but a well-formed
+//   list or has no such route, the last known list stays (empty on a first visit) and logos show.
+//   It never hides everything because it could not be read.
+// - A token the viewer has just reported is hidden for this viewer at once, whatever the answer.
+//   A report recorded during the operator's cooldown hides nothing for anyone else, but this
+//   viewer has said what they think of the logo.
 import { defaultStorage, type StorageLike } from '../config';
 
 export const LOGO_BLOCKLIST_KEY = 'kob.logo-blocklist.v1';
@@ -17,17 +22,24 @@ export const LOGO_BLOCKLIST_REFRESH_MS = 120_000;
 const MAX_BODY = 1_000_000;
 const HEX64 = /^[0-9a-f]{64}$/;
 
+/** Why a viewer reports a logo. */
 export type LogoReason = 'illegal' | 'impersonation' | 'other';
 export const LOGO_REASONS: readonly LogoReason[] = ['illegal', 'impersonation', 'other'];
 
-/** The indexer's list URL: the configured one, else `<indexer base>/v1/logo-blocklist`; '' when there is neither. */
+/**
+ * The indexer's list URL. That is the configured one, else `<indexer base>/v1/logo-blocklist`, or
+ * an empty string when there is neither.
+ */
 export function logoBlocklistUrlOf(c: { logoBlocklistUrl: string; indexerUrl: string }): string {
   if (c.logoBlocklistUrl) return c.logoBlocklistUrl;
   const base = c.indexerUrl.replace(/\/+$/, '');
   return /^https?:\/\//i.test(base) ? `${base}/v1/logo-blocklist` : '';
 }
 
-/** Where a report is posted: the list's URL with its last segment `logo-reports`; null when the list's URL has another shape. */
+/**
+ * Where a report is posted, the list's URL with its last segment `logo-reports`. Null when the
+ * list's URL has another shape.
+ */
 export function logoReportsUrlOf(blocklistUrl: string): string | null {
   return blocklistUrl.endsWith('/v1/logo-blocklist') ? `${blocklistUrl.slice(0, -'logo-blocklist'.length)}logo-reports` : null;
 }
@@ -45,6 +57,7 @@ export function parseBlocklist(doc: unknown): Set<string> | null {
   return out;
 }
 
+/** Options of `createLogoBlocklist`. */
 export interface BlocklistOptions {
   fetch?: typeof fetch;
   storage?: StorageLike | null;
@@ -52,19 +65,24 @@ export interface BlocklistOptions {
   timeoutMs?: number;
 }
 
+/** The hidden logos, kept current from the indexer. */
 export interface LogoBlocklist {
   isHidden(covenantId: string): boolean;
-  /** Hides `covenantId` for this viewer now (after their own report). */
+  /** Hides `covenantId` for this viewer now, after their own report. */
   hideLocally(covenantId: string): void;
   subscribe(fn: () => void): () => void;
-  /** Reads the list now and then every `intervalMs`; returns the stop. Starting again with the same URL is a no-op (one timer per URL). */
+  /**
+   * Reads the list now and then every `intervalMs`, and returns the stop. Starting again with the
+   * same URL adds a user of its one timer.
+   */
   start(url: string): () => void;
-  /** One read; false when the list was not read (the last known list stays). */
+  /** One read. False when the list was not read, and the last known list stays. */
   refresh(url: string): Promise<boolean>;
-  /** A change counter (for hooks). */
+  /** A change counter, for hooks. */
   version(): number;
 }
 
+/** Makes a blocklist that starts from the list this browser kept. */
 export function createLogoBlocklist(o: BlocklistOptions = {}): LogoBlocklist {
   const fetchFn = o.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const storage = o.storage === undefined ? defaultStorage() : o.storage;
@@ -79,23 +97,23 @@ export function createLogoBlocklist(o: BlocklistOptions = {}): LogoBlocklist {
       try {
         f();
       } catch {
-        /* a listener must not stop the others */
+        /* A listener must not stop the others. */
       }
     }
   };
-  // the last list this browser read: the first paint hides what the last visit knew
+  // Start from the last list this browser read, so the first paint hides what the last visit knew.
   try {
     const raw = storage?.getItem(LOGO_BLOCKLIST_KEY);
     const kept = raw ? parseBlocklist(JSON.parse(raw)) : null;
     if (kept) hidden = kept;
   } catch {
-    /* an unreadable store is an empty one */
+    /* An unreadable store is an empty one. */
   }
   const keep = () => {
     try {
       storage?.setItem(LOGO_BLOCKLIST_KEY, JSON.stringify({ hidden: [...hidden].sort() }));
     } catch {
-      /* storage full or blocked: this visit still has the list */
+      /* Storage is full or blocked. This visit still has the list. */
     }
   };
   const same = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((x) => b.has(x));
@@ -118,7 +136,7 @@ export function createLogoBlocklist(o: BlocklistOptions = {}): LogoBlocklist {
       }
       return true;
     } catch {
-      // fails open: unreachable, not JSON, or no such route on this indexer
+      // Fails open when unreachable, not JSON, or without such a route on this indexer.
       return false;
     } finally {
       clearTimeout(timer);
@@ -175,13 +193,17 @@ export function createLogoBlocklist(o: BlocklistOptions = {}): LogoBlocklist {
 /** The app's one blocklist. */
 export const logoBlocklist: LogoBlocklist = createLogoBlocklist();
 
-// ------------------------------------------------------------------------------------------------ the report
+// --- The report ---
 
+/** What filing a report gave. */
 export type ReportResult =
   | { ok: true; result: 'hidden' | 'recorded' }
   | { ok: false; reason: 'unavailable' | 'rate-limited' | 'invalid' | 'network'; retryAfterSecs?: number };
 
-/** Files a report with the indexer. Never rejects. `hidden`: the logo is hidden for everybody now; `recorded`: kept for the operator to review. */
+/**
+ * Files a report with the indexer. It never rejects. `hidden` means the logo is hidden for
+ * everybody now. `recorded` means the report is kept for the operator to review.
+ */
 export async function reportLogo(reportsUrl: string, covenantId: string, reason: LogoReason, o: { fetch?: typeof fetch; timeoutMs?: number } = {}): Promise<ReportResult> {
   const fetchFn = o.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const ctl = new AbortController();
@@ -212,7 +234,10 @@ export async function reportLogo(reportsUrl: string, covenantId: string, reason:
   }
 }
 
-/** The pre-filled GitHub Issue form for a report (the repository's `logo-report.yml`): the covenant id is a query parameter of the form's field. */
+/**
+ * The pre-filled GitHub Issue form for a report (the repository's `logo-report.yml`). The
+ * covenant id is a query parameter of the form's field.
+ */
 export function githubReportUrl(covenantId: string, repo = 'RossKU/kob'): string {
   return `https://github.com/${repo}/issues/new?template=logo-report.yml&covenant_id=${encodeURIComponent(covenantId.toLowerCase())}`;
 }
