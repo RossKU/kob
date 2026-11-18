@@ -1,5 +1,6 @@
-//! The two roles at the command line: `setup --executor | --indexer | --executor --indexer`, the removed `--role` (refused), and a start
-//! with role flags against a configuration set up for other roles. The binary end to end; nothing here contacts a node.
+//! The two roles at the command line: `setup --executor | --indexer | --executor --indexer`, the
+//! removed `--role` (refused), and a start with role flags against a configuration set up for other
+//! roles. The binary end to end; nothing here contacts a node.
 
 use std::path::Path;
 use std::process::{Command, Output};
