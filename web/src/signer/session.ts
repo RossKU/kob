@@ -1,16 +1,21 @@
-// The private-key signer's one-approval merge session: the pure rules (no DOM, no key). The frame decodes a whole merge plan (kob/merge.ts
-// `planMerge`, every link built against provisional outpoints), the user allows it once, and each later `sign` that carries the session id is
-// signed without a prompt only while this frame's own decoding finds it to be exactly the next link of that plan:
+// The private-key signer's one-approval merge session, as pure rules with no DOM and no key.
 //
-// - a pure self-merge of one token (`mergeFacts`): every input signed by this key (so every input amount is committed, and the fee is
-//   inputs minus outputs), one token output to this key holding the whole amount, at most one KAS change to this key, nothing else, no
-//   blocking finding and no warning beyond the two a frame without a node or registry always gets;
-// - the next link of the plan the user allowed (`admitStep`): the same original UTXOs (outpoint, KAS and token amount) and the outputs of
-//   the links this session signed before, the same merged amount and carrier, a fee within the per-transaction cap and the budget left,
-//   no input spent twice, before the session expires.
+// The frame decodes a whole merge plan (kob/merge.ts `planMerge`), every link built against
+// provisional outpoints. The user allows it once. Each later `sign` that carries the session id is
+// signed without a prompt only while this frame's own decoding finds it to be both of these:
 //
-// Anything else ends the session and is shown for confirmation as usual. A KRON token input carries no signature, so a KRON merge never
-// qualifies (founder 2026-11-14: KRON stays one approval per transaction).
+// - A pure self-merge of one token (`mergeFacts`). Every input is signed by this key, so every
+//   input amount is committed and the fee is inputs minus outputs. There is one token output to
+//   this key holding the whole amount and at most one KAS change to this key, and nothing else.
+//   There is no blocking finding and no warning beyond the two that a frame without a node or a
+//   registry always gets.
+// - The next link of the plan the user allowed (`admitStep`). It spends the same original UTXOs,
+//   by outpoint, KAS and token amount, and the outputs of the links this session signed before. It
+//   keeps the same merged amount and carrier. Its fee is within the per-transaction cap and the
+//   budget left. It spends no input twice, and it comes before the session expires.
+//
+// Anything else ends the session and is shown for confirmation as usual. A KRON token input
+// carries no signature, so a KRON merge never qualifies. KRON stays one approval per transaction.
 import type { DecodedInput, SigningSummary } from '../kob/decode';
 import { MAX_TOKEN_INPUTS } from '../kob/guards';
 import { tokenCarrierFloor } from '../kob/orders/common';
@@ -19,9 +24,12 @@ import type { BuiltTx, Hex, TokenState } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 import { mergedTokens } from './summary';
 
-/** The most transactions one session covers (kob/merge.ts MAX_MERGE_TXS: a test keeps them equal). */
+/** The most transactions one session covers. A test keeps it equal to merge.ts MAX_MERGE_TXS. */
 export const SESSION_MAX_TXS = 50;
-/** Slack per transaction on top of twice the planned fee: a later link is rebuilt at the rate then. */
+/**
+ * Slack per transaction on top of twice the planned fee, because a later link is rebuilt at the
+ * rate then.
+ */
 export const SESSION_FEE_SLACK = 100_000n;
 /** The per-transaction fee cap never exceeds 0.2 KAS. */
 export const SESSION_TX_FEE_CAP = 20_000_000n;
@@ -31,14 +39,17 @@ export const SESSION_FEE_CAP = 500_000_000n;
 export const SESSION_BASE_MS = 120_000;
 export const SESSION_PER_TX_MS = 10_000;
 export const SESSION_MAX_MS = 600_000;
-/** The most KAS inputs of one merge link (the builder adds a few for the fee at most). */
+/** The most KAS inputs of one merge link. The builder adds at most a few for the fee. */
 const MAX_KAS_INPUTS = 9;
 const ONE_KAS = 100_000_000n;
-/** The warnings a frame without a node or a registry always gets: every other warning refuses. */
+/** The warnings a frame without a node or a registry always gets. Every other warning refuses. */
 const EXPECTED_WARNINGS = new Set<string>(['inputs-unverified', 'token-unlisted']);
 const ZERO_SUBNETWORK = /^0{40}$/;
 
-/** Why a transaction or a plan is not admitted (tests and the frame's own reasoning; never shown as text). */
+/**
+ * Why a transaction or a plan is not admitted. It serves tests and the frame's own reasoning and is
+ * never shown as text.
+ */
 export type Refusal =
   | 'blocking' | 'warning' | 'info' | 'shape' | 'not-merge' | 'input' | 'unsigned' | 'output' | 'net' | 'fee' | 'carrier' | 'token'
   | 'plan-size' | 'plan-token' | 'plan-reuse' | 'plan-parent' | 'plan-fee'
@@ -56,11 +67,14 @@ export interface MergeFacts {
   covenantId: Hex;
   program: string;
   tokenInputs: BoundUtxo[];
-  /** outpoints of the key's own KAS inputs */
+  /** The outpoints of the key's own KAS inputs. */
   kasInputs: string[];
-  /** the one token output: its index, KAS and token amount */
+  /** The one token output, as its index, KAS and token amount. */
   output: { index: number; kas: bigint; amount: bigint };
-  /** the borrow setting (kob/token-state.ts `borrowKeyOf`) every token input carries and the merged output keeps */
+  /**
+   * The borrow setting (kob/token-state.ts `borrowKeyOf`) that every token input carries and the
+   * merged output keeps.
+   */
   setting: string;
   fee: bigint;
 }
@@ -69,9 +83,11 @@ const outpoint = (i: { transactionId: string; index: number }): string => `${i.t
 const refuse = (why: Refusal): { refused: Refusal } => ({ refused: why });
 
 /**
- * The facts of `built` when it is a pure self-merge of one token of `pubkey` that this frame may sign under a session (see the head of this
- * file), else why not. `decoded` is this frame's decoding of `built` for `pubkey` (summary.ts `summarize`). Fails closed: anything not
- * known to be a merge refuses.
+ * The facts of `built` when it is a pure self-merge of one token of `pubkey` that this frame may
+ * sign under a session, as the head of this file says. Otherwise it gives the reason why not.
+ *
+ * `decoded` is this frame's decoding of `built` for `pubkey` (summary.ts `summarize`). It fails
+ * closed, so anything not known to be a merge refuses.
  */
 export function mergeFacts(kob: Pick<KobWasm, 'templates' | 'tokenScriptPublicKey'>, decoded: SigningSummary, built: BuiltTx, pubkey: Hex): MergeFacts | { refused: Refusal } {
   if (decoded.blocking.length > 0) return refuse('blocking');
@@ -86,14 +102,16 @@ export function mergeFacts(kob: Pick<KobWasm, 'templates' | 'tokenScriptPublicKe
   if (m.outCount !== 1 || m.inCount < 2 || m.inCount > MAX_TOKEN_INPUTS) return refuse('not-merge');
   const covenantId = m.ref.covenantId;
 
-  // every input is this key's and signed by it: then every input amount is committed, and so is the fee
+  // Every input is this key's and signed by it. Then every input amount is committed, and so is
+  // the fee.
   if (decoded.signatures !== tx.inputs.length || built.sign.length !== tx.inputs.length || built.sign.some((s) => s.pubkey !== pubkey)) return refuse('unsigned');
   if (decoded.inputs.length !== tx.inputs.length) return refuse('input');
   const tokenInputs: BoundUtxo[] = [];
   const kasInputs: string[] = [];
   let program: string | null = null;
   let largest = 0n;
-  // the token state of the first token input (its plan's), which every other token input must share in borrow setting and extension
+  // The token state of the first token input, from its plan. Every other token input must share
+  // its borrow setting and extension.
   let first: TokenState | null = null;
   for (const d of decoded.inputs as DecodedInput[]) {
     const raw = tx.inputs[d.index];
@@ -116,7 +134,8 @@ export function mergeFacts(kob: Pick<KobWasm, 'templates' | 'tokenScriptPublicKe
   }
   if (program === null || first === null || tokenInputs.length !== m.inCount || kasInputs.length > MAX_KAS_INPUTS) return refuse('input');
 
-  // outputs: the one merged token UTXO and at most one KAS change, both this key's, nothing flagged
+  // The outputs are the one merged token UTXO and at most one KAS change, both this key's, with
+  // nothing flagged.
   let output: MergeFacts['output'] | null = null;
   let change = 0;
   for (const o of decoded.outputs) {
@@ -127,8 +146,9 @@ export function mergeFacts(kob: Pick<KobWasm, 'templates' | 'tokenScriptPublicKe
     else return refuse('output');
   }
   if (!output || output.amount !== m.amount || decoded.outputs.length !== tx.outputs.length) return refuse('output');
-  // the merged output is exactly the state kob/merge.ts plans: the whole amount, this key, the inputs' extension and borrow setting (a
-  // setting dropped or changed on the way is not a merge)
+  // The merged output is exactly the state kob/merge.ts plans. It holds the whole amount for this
+  // key, with the inputs' extension and borrow setting. A setting dropped or changed on the way is
+  // not a merge.
   const want = withBorrowOf(keyState('kcc20', m.amount, pubkey, extensionOfState(first), program as never), first);
   if (kob.tokenScriptPublicKey(program as never, want) !== tx.outputs[output.index]?.scriptPublicKey) return refuse('output');
 
@@ -136,14 +156,15 @@ export function mergeFacts(kob: Pick<KobWasm, 'templates' | 'tokenScriptPublicKe
   if (k.toOthers !== 0n || k.locked.total !== 0n || k.released !== 0n || k.fromOthers !== 0n) return refuse('net');
   if (decoded.net.tokens.some((x) => x.toOthers !== 0n || x.escrowed !== 0n || x.released !== 0n || x.walletDelta !== 0n)) return refuse('net');
 
-  // the fee: inputs minus outputs, as the builder reports it
+  // The fee is inputs minus outputs, and the builder must report the same.
   const sumIn = tx.inputs.reduce((s, i) => s + BigInt(i.utxo.amount), 0n);
   const sumOut = tx.outputs.reduce((s, o) => s + BigInt(o.value), 0n);
   const fee = sumIn - sumOut;
   if (fee <= 0n || fee !== k.fee || fee !== BigInt(built.fee.fee)) return refuse('fee');
 
-  // the merged UTXO keeps the largest input carrier, at most 1 KAS, at least the program's floor (kob/merge.ts `mergedCarrier`): the
-  // wallet's KAS is never parked on a token UTXO
+  // The merged UTXO keeps the largest input carrier, capped at 1 KAS, or the program's floor when
+  // that is higher (kob/merge.ts `mergedCarrier`). The check refuses any carrier above that, so
+  // the wallet's KAS is never parked on a token UTXO.
   const tpl = kob.templates().find((x) => x.name === program && x.tokenSlots);
   if (!tpl) return refuse('token');
   const floor = tokenCarrierFloor(kob as KobWasm, tpl.hash);
@@ -155,38 +176,45 @@ export function mergeFacts(kob: Pick<KobWasm, 'templates' | 'tokenScriptPublicKe
 
 /** One link of the allowed plan, as each step is checked against it. */
 export interface PlannedLink {
-  /** the wallet's original UTXOs it merges, by outpoint */
+  /** The wallet's original UTXOs it merges, by outpoint. */
   fresh: Map<string, BoundUtxo>;
-  /** the earlier links whose merged outputs it spends */
+  /** The earlier links whose merged outputs it spends. */
   parents: number[];
-  /** the merged token amount and the KAS its output keeps */
+  /** The merged token amount, and the KAS its output keeps. */
   amount: bigint;
   carrier: bigint;
   fee: bigint;
-  /** the borrow setting it merges in and keeps */
+  /** The borrow setting it merges in and keeps. */
   setting: string;
 }
 
-/** What the user allows: derived by this frame from the plan it decoded, never taken from the app. */
+/**
+ * What the user allows. This frame derives it from the plan it decoded and never takes it from the
+ * app.
+ */
 export interface SessionTerms {
   covenantId: Hex;
   program: string;
   links: PlannedLink[];
-  /** the planned fees, and the caps: per transaction and for the whole session */
+  /** The planned fees, and the caps per transaction and for the whole session. */
   plannedFee: bigint;
   perTxFeeMax: bigint;
   feeMax: bigint;
   ttlMs: number;
-  /** the original UTXOs the plan merges, their token amount, and the UTXOs it leaves */
+  /** The original UTXOs the plan merges, their token amount, and the UTXOs it leaves. */
   utxos: number;
   amount: bigint;
   outputs: number;
 }
 
 /**
- * The terms of a session over `plan` (the links in run order, each with its facts), or why there is none: every link a merge of the same
- * token, no outpoint spent twice, a link's other token inputs the merged outputs of earlier links of the plan (`plan[j].tx.id`, the
- * provisional id the plan is built against), within the hard caps.
+ * The terms of a session over `plan`, or why there is none. `plan` holds the links in run order,
+ * each with its facts. The terms need:
+ * - every link to be a merge of the same token,
+ * - no outpoint spent twice,
+ * - a link's other token inputs to be the merged outputs of earlier links of the plan, by
+ *   `plan[j].tx.id`, the provisional id the plan is built against,
+ * - the fees to stay within the hard caps.
  */
 export function sessionTerms(plan: readonly { built: BuiltTx; facts: MergeFacts }[]): SessionTerms | { refused: Refusal } {
   const n = plan.length;
@@ -212,7 +240,7 @@ export function sessionTerms(plan: readonly { built: BuiltTx; facts: MergeFacts 
     for (const u of f.tokenInputs) {
       const p = produced.get(u.outpoint);
       if (!p) {
-        // an original UTXO of the wallet, never another output of a transaction of the plan
+        // An original UTXO of the wallet, never another output of a transaction of the plan.
         if (planIds.has(u.outpoint.split(':')[0]!)) return refuse('plan-parent');
         fresh.set(u.outpoint, u);
         continue;
@@ -220,7 +248,7 @@ export function sessionTerms(plan: readonly { built: BuiltTx; facts: MergeFacts 
       if (p.link >= k || p.kas !== u.kas || p.amount !== u.amount) return refuse('plan-parent');
       parents.push(p.link);
     }
-    // a KAS input of the plan is the wallet's own coin, never an output of the plan itself
+    // A KAS input of the plan is the wallet's own coin, never an output of the plan itself.
     if (f.kasInputs.some((o) => planIds.has(o.split(':')[0]!))) return refuse('plan-parent');
     utxos += fresh.size;
     for (const u of fresh.values()) amount += u.amount;
@@ -237,31 +265,49 @@ export function sessionTerms(plan: readonly { built: BuiltTx; facts: MergeFacts 
   return { covenantId: first.covenantId, program: first.program, links, plannedFee, perTxFeeMax, feeMax, ttlMs, utxos, amount, outputs: leaves };
 }
 
-/** A live session: the terms and what the run has used of them. Held in the frame's memory only. */
+/**
+ * A live session, as the terms and what the run has used of them. It lives in the frame's memory
+ * only.
+ */
 export interface SessionState {
   sid: string;
   pubkey: Hex;
   terms: SessionTerms;
-  /** when it expires on the frame's monotonic clock, and on the wall clock (a monotonic clock can stand still while the device sleeps) */
+  /**
+   * When it expires on the frame's monotonic clock and on the wall clock. Both are kept because a
+   * monotonic clock can stand still while the device sleeps.
+   */
   expiresAt: number;
   expiresAtWall: number;
-  /** every outpoint a step of this session spent */
+  /** Every outpoint a step of this session spent. */
   consumed: Set<string>;
-  /** the merged output of each signed link, with the transaction id this frame's own finalize gave it */
+  /**
+   * The merged output of each signed link, with the transaction id this frame's own finalize gave
+   * it.
+   */
   signed: BoundUtxo[];
   feeLeft: bigint;
 }
 
-/** Opens the state of a session the user allowed at `now` (the frame's monotonic clock) and `wall` (its wall clock). */
+/**
+ * Opens the state of a session the user allowed at `now` on the frame's monotonic clock and `wall`
+ * on its wall clock.
+ */
 export function openState(sid: string, pubkey: Hex, terms: SessionTerms, now: number, wall: number): SessionState {
   return { sid, pubkey, terms, expiresAt: now + terms.ttlMs, expiresAtWall: wall + terms.ttlMs, consumed: new Set(), signed: [], feeLeft: terms.feeMax };
 }
 
 /**
- * Whether `facts` (the decoded step) is exactly the next link of the allowed plan at `now` / `wall` (it expires on whichever clock passes
- * first): null when it is, else why not. The step's token
- * inputs must be the link's original UTXOs as allowed and the merged outputs of the links this session signed, nothing else, its merged amount
- * and carrier the planned ones, its fee within both caps, none of its inputs spent by an earlier step.
+ * Checks that `facts`, the decoded step, is exactly the next link of the allowed plan at `now` and
+ * `wall`. It returns null when it is, else why not. The session expires on whichever clock passes
+ * first.
+ *
+ * The step must meet all of these:
+ * - Its token inputs are the link's original UTXOs as allowed and the merged outputs of the links
+ *   this session signed, and nothing else.
+ * - Its merged amount, carrier and borrow setting are the planned ones.
+ * - Its fee is within both caps.
+ * - An earlier step spent none of its inputs.
  */
 export function admitStep(s: SessionState, facts: MergeFacts, now: number, wall: number): Refusal | null {
   if (now >= s.expiresAt || wall >= s.expiresAtWall) return 'expired';
@@ -285,7 +331,10 @@ export function admitStep(s: SessionState, facts: MergeFacts, now: number, wall:
   return null;
 }
 
-/** Records a step once it is signed (core.ts; a failure to sign ends the session instead): its inputs spent, its fee debited, its output kept. */
+/**
+ * Records a step once it is signed (core.ts). It marks its inputs spent, debits its fee and keeps
+ * its output. A failure to sign ends the session instead.
+ */
 export function recordStep(s: SessionState, facts: MergeFacts, txid: Hex): void {
   for (const o of [...facts.tokenInputs.map((u) => u.outpoint), ...facts.kasInputs]) s.consumed.add(o);
   s.feeLeft -= facts.fee;

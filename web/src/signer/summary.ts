@@ -1,8 +1,17 @@
-// The signer's own short summary of a signing request: decoded INSIDE the signer frame with kob-wasm (`decodeSigning`, the decoder of the
-// app's confirmation screen), from the transaction itself, never from what the app says about it: the net effect on this key, the fee, and the
-// terms of every order the transaction creates or amends (side, type, amount, prices, stops, timing: the rows of the confirmation screen), so a
-// changed price or stop cannot pass behind an unchanged net effect. A plain order of a KAS market the app shows inverted (KAS/TOKEN) is said
-// first as the user placed it (sell KAS for tokens), its chain-side terms below; every price reads "X per Y", never a pair notation.
+// The signer's own short summary of a signing request.
+//
+// It is decoded inside the signer frame with kob-wasm (`decodeSigning`, the decoder of the app's
+// confirmation screen). It comes from the transaction itself, never from what the app says about
+// it. It holds:
+// - the net effect on this key,
+// - the fee,
+// - the terms of every order the transaction creates or amends: side, type, amount, prices, stops
+//   and timing, as the rows of the confirmation screen.
+//
+// The order terms are there so that a changed price or stop cannot pass behind an unchanged net
+// effect. A plain order of a KAS market that the app shows inverted (KAS/TOKEN) is said first as
+// the user placed it, for example sell KAS for tokens. Its chain-side terms follow. Every price
+// reads "X per Y", never as a pair notation.
 import { decodeSigning, type DecodedOrder, type SigningKind, type SigningSummary, type TokenRef } from '../kob/decode';
 import { spendsPreparation } from '../kob/issue';
 import { curveNumbersOfState, curveProblems, tablePreview } from '../kob/curve';
@@ -21,21 +30,28 @@ import { auctionSeconds, orderRows, orderTitle, orderTypeCode, type Fmt, type Ma
 import type { GenesisClaim, LockHint, TokenHint } from './protocol';
 import { div, kasWords, tokensPerKasWords, tokenWords, type Rounding } from './words';
 
+/** One line of the summary, such as a net amount, a lock or a payment to other keys. */
 export interface SummaryLine {
   label: string;
   value: string;
-  /** 'out' = leaves this key, 'in' = comes to it */
+  /** `out` leaves this key and `in` comes to it. */
   dir: 'in' | 'out' | null;
 }
 
-/** One order the transaction creates or amends, described from its decoded state (an if-done entry: its committed exit as `exit`). */
+/**
+ * One order the transaction creates or amends, described from its decoded state. An if-done entry
+ * carries its committed exit as `exit`.
+ */
 export interface SummaryOrder {
   title: string;
-  /** the token of the order (ticker hint and the covenant id's 8 + 8 hex) */
+  /** The token of the order, as its ticker hint and 8 + 8 hex of the covenant id. */
   token: string;
   /**
-   * `id`: the confirmation row it comes from (confirm-model.ts `orderRows`); `daa`: the DAA score of a start or an expiry the row names (said
-   * from the clock as "in 28 s" where one is known)
+   * The rows of the order.
+   *
+   * - `id` is the confirmation row it comes from (confirm-model.ts `orderRows`).
+   * - `daa` is the DAA score of a start or an expiry the row names. Where a clock is known, it is
+   *   said from it, as in "in 28 s".
    */
   rows: { id?: string; label: string; value: string; daa?: string }[];
   exit: SummaryOrder | null;
@@ -44,19 +60,32 @@ export interface SummaryOrder {
 /** The count and the distinct codes of the findings the frame shows as one problems note. */
 const problemsOf = (found: readonly { code: string }[]): { problems: number; problemCodes: string[] } => ({ problems: found.length, problemCodes: [...new Set(found.map((b) => b.code))] });
 
+/** The signer frame's summary of one request, as lines, orders, the fee and the problems found. */
 export interface SignerSummary {
   title: string;
   lines: SummaryLine[];
-  /** the orders the transaction creates or amends (a sweep in place keeps its order's terms and is not listed) */
+  /**
+   * The orders the transaction creates or amends. A sweep in place keeps its order's terms and is
+   * not listed.
+   */
   orders: SummaryOrder[];
   fee: string;
-  /** the transaction spends inputs the wallet does not sign (an order's own UTXOs, custodies, strays): their KAS is the node's word, which the signature does not cover (audit round 2, S1) */
+  /**
+   * Set when the transaction spends inputs the wallet does not sign, such as an order's own UTXOs,
+   * custodies or strays. Their KAS is the node's word, which the signature does not cover.
+   */
   unsignedKas?: boolean;
-  /** decoder findings that block signing on the app's confirmation screen (shown as one line here, never hidden) */
+  /**
+   * The count of decoder findings that block signing on the app's confirmation screen. The frame
+   * shows them as one line and never hides them.
+   */
   problems: number;
-  /** the codes of those findings (the frame names them, and Approve stays disabled while there are any) */
+  /** The codes of those findings. The frame names them, and Approve stays disabled while any do. */
   problemCodes: string[];
-  /** the decoding it was made from (a re-timed request is compared with the approved one on it: retime.ts) */
+  /**
+   * The decoding the summary was made from. A re-timed request is compared with the approved one on
+   * it (retime.ts).
+   */
   decoded: SigningSummary;
 }
 
@@ -77,38 +106,50 @@ const TITLE: Record<SigningKind, string> = {
   other: 'signer.kind.other',
 };
 
-/** blocking for the app's confirmation screen unless the user asked for them (it knows, the frame does not): shown here as "to other keys" lines */
+/**
+ * Findings that block the app's confirmation screen unless the user asked for them. The app knows
+ * whether the user did and the frame does not, so the frame shows them as "to other keys" lines.
+ */
 const SHOWN_AS_LINES = new Set<string>(['payment-out', 'transfer-out']);
 
 /**
- * A token's label in the frame: the app's ticker hint (a label only: the app chooses it) next to 8 + 8 hex of the covenant id the transaction
- * itself carries (a 4 + 4 fragment is 32 bits, which a token made to match it can copy).
+ * A token's label in the frame. It is the app's ticker hint next to 8 + 8 hex of the covenant id
+ * the transaction itself carries. The ticker is only a label that the app chooses. A 4 + 4 fragment
+ * would be 32 bits, which a token made to match it can copy.
  */
 const tokenName = (covenantId: Hex, hint: TokenHint | undefined, frame = false): string => {
-  // nothing states its decimals: named by its covenant id, its raw amount, said so
+  // Nothing states its decimals. It is named by its covenant id, and the label says the amount is
+  // raw.
   if (!hint || hint.source === 'assumed') return t('signer.net.tokenAssumed', { id: longId(covenantId) });
-  // named as app/token-display.ts shows it: by its covenant id, and by the ticker its creator gave it where it has one; marked
+  // Named and marked as app/token-display.ts shows it, by its covenant id and by the ticker its
+  // creator gave it where it has one.
   if (hint.source === 'scale') return t('signer.net.tokenScale', { id: longId(covenantId), decimals: hint.decimals });
   if (hint.source === 'program') return t('signer.net.tokenProgram', { id: longId(covenantId), decimals: hint.decimals, source: hint.convention ?? '' });
   if (hint.source === 'issued') return t('signer.net.tokenIssued', { ticker: hint.ticker, id: longId(covenantId) });
   if (hint.source === 'declared') return t('signer.net.tokenDeclared', { ticker: hint.ticker, id: longId(covenantId) });
-  // a registry token: in the signer frame (`frame`) the ticker and decimals are the app's word, which the frame says; the app's own confirmation
-  // is the app
+  // A registry token. In the signer frame (`frame`) its ticker and decimals are the app's word, and
+  // the label says so. The app's own confirmation is the app, so it shows them plainly.
   if (!frame) return `${hint.ticker} (${longId(covenantId)})`;
   return t('signer.net.tokenListed', { ticker: hint.ticker, id: longId(covenantId), decimals: hint.decimals });
 };
 
-/** A TokenRef from the app's hint (ticker and decimals are labels; without a hint amounts stay in base units). */
+/**
+ * A TokenRef from the app's hint. Its ticker and decimals are labels. Without a hint, amounts stay
+ * in base units.
+ */
 function refOfHint(covenantId: Hex, hints: TokenHint[], frame = false): TokenRef {
   const h = hints.find((x) => x.covenantId === covenantId);
-  // an assumed token's amounts carry its covenant id as their unit
+  // An assumed token's amounts carry its covenant id as their unit.
   const ticker = h ? (h.ticker || longId(covenantId)) : null;
   return { covenantId, ticker, decimals: h?.decimals ?? null, display: tokenName(covenantId, h, frame), inRegistry: false, tradable: false };
 }
 
 /**
- * The hints with the scale the transaction's own orders name, for a token nothing else states the decimals of (no declaration, no program default, no table of
- * this frame): the order quotes per that whole token, as the ticket that planned it did. Read from the decoded transaction, in the frame too, so it is no word of the app's.
+ * Adds to the hints the scale the transaction's own orders name, for a token whose decimals nothing
+ * else states. Such a token has no declaration, no program default and no table of this frame.
+ *
+ * The order quotes per that whole token, as the ticket that planned it did. The scale is read from
+ * the decoded transaction, in the frame too, so it is not the app's word.
  */
 function withOrderScales(s: SigningSummary, hints: readonly TokenHint[]): TokenHint[] {
   const scales = new Map<Hex, bigint>();
@@ -130,16 +171,23 @@ function withOrderScales(s: SigningSummary, hints: readonly TokenHint[]): TokenH
   return out;
 }
 
-/** The hints as the confirmation model's registry lookup (a pair order's quote token B): ticker and decimals only. */
+/**
+ * The hints as the confirmation model's registry lookup, which it uses for a pair order's quote
+ * token B. Only the ticker and decimals are filled.
+ */
 function hintRegistry(hints: TokenHint[]): TokenRegistry {
   const byCovenantId = new Map(hints.map((h) => [h.covenantId, { covenantId: h.covenantId, ticker: h.ticker || longId(h.covenantId), decimals: h.decimals, tradable: false } as unknown as TokenInfo]));
   return { network: '', templates: [], templateChecks: [], tokens: [], byCovenantId };
 }
 
 /**
- * Rows whose detail carries a signed term the value does not: the seconds of an auction (how fast the price falls to the bound), of the auction
- * after a stop entry's trigger, and the sizes a pair trigger needs to touch. The signer frame (`summarize`) shows no detail line of its own, so it
- * says them in the value (audit 2026-10-30 G2); the app's confirmation shows the detail beside the value as before.
+ * Rows whose detail carries a signed term that the value does not. They are:
+ * - the seconds of an auction, which say how fast the price falls to the bound,
+ * - the seconds of the auction after a stop entry's trigger,
+ * - the sizes a pair trigger needs to touch.
+ *
+ * The signer frame (`summarize`) shows no detail line of its own, so it says them in the value. The
+ * app's confirmation shows the detail beside the value.
  */
 const SIGNED_TERM_DETAIL = new Set(['auction', 'entryStop', 'pairTrigger']);
 
@@ -162,10 +210,13 @@ function timeOf(r: { id: string; value: string }, d: OrderDescription): { daa?: 
   return daa > 0n && r.value === t('confirm.f.daa', { daa: daa.toString() }) ? { daa: daa.toString() } : {};
 }
 
-/** The chain-side price rows of a plain order, said in the view's terms instead on the flipped view. */
+/** The chain-side price rows of a plain order. The flipped view says them in its own terms. */
 const CHAIN_PRICE_ROWS = new Set(['price', 'allIn', 'auction']);
 
-/** The view word of each plain order type, for the title of an order on the flipped view ("Sell KAS · market (auction)"). */
+/**
+ * The view word of each plain order type, for the title of an order on the flipped view, as in
+ * "Sell KAS · market (auction)".
+ */
 const FLIP_TYPE: Record<string, string> = {
   limit: 'signer.flip.type.limit', limitDay: 'signer.flip.type.limitDay', market: 'signer.flip.type.market', marketFok: 'signer.flip.type.marketFok',
   ioc: 'signer.flip.type.ioc', fok: 'signer.flip.type.fok', twap: 'signer.flip.type.twap', dca: 'signer.flip.type.dca', dutch: 'signer.flip.type.dutch',
@@ -173,10 +224,17 @@ const FLIP_TYPE: Record<string, string> = {
 };
 
 /**
- * A plain order of a KAS market (KobAsk / KobBid) on the view the app shows inverted (KAS/TOKEN, the hint's `inverted`): said as the user placed
- * it, still from the decoded order. The chain buys tokens where the user sells KAS: "Sell KAS · market (auction)", what is sold and received,
- * the prices in tokens per KAS (rounded against the user); the chain-side terms (budget, escrow, minimum fill) follow as plainly labelled rows.
- * Null for every other order, a native view, or a token the app gave no ticker for.
+ * Says a plain order of a KAS market (KobAsk or KobBid) as the user placed it, on a view the app
+ * shows inverted.
+ *
+ * The view is KAS/TOKEN, the hint's `inverted`. The summary still comes from the decoded order.
+ * Where the chain buys tokens, the user sells KAS. The summary gives:
+ * - a title such as "Sell KAS · market (auction)",
+ * - what is sold and received,
+ * - the prices in tokens per KAS, rounded against the user.
+ *
+ * The chain-side terms, such as budget, escrow and minimum fill, follow as plainly labelled rows.
+ * It returns null for every other order and for a native view.
  */
 function flippedSummary(o: DecodedOrder, hint: TokenHint | undefined, kob: KobWasm | undefined, chain: SummaryOrder, terms = false): SummaryOrder | null {
   const d = o.description;
@@ -185,7 +243,7 @@ function flippedSummary(o: DecodedOrder, hint: TokenHint | undefined, kob: KobWa
   const T = hint.ticker || longId(d.tokenCovId);
   const dec = hint.decimals;
   const scale = d.scale;
-  // a price that decays to 0 is a decay (the bound is 0 KAS, and it is said so: audit 2026-10-30 G6)
+  // A price that decays to 0 is still a decay. Its bound is 0 KAS, and the summary says so.
   const decays = !!d.auction && d.auction.slope > 0n;
   const start = d.price;
   const end = decays ? d.auction!.priceEnd : start;
@@ -196,21 +254,24 @@ function flippedSummary(o: DecodedOrder, hint: TokenHint | undefined, kob: KobWa
   const rows: { label: string; value: string }[] = [];
   let side: 'buy' | 'sell';
   if (kind === 'KobBid') {
-    // the chain buys a fixed amount of tokens for at most its budget: the user sells up to that much KAS for those tokens; a higher KAS
-    // price per token is fewer tokens per KAS, worse for the user (rounded down)
+    // The chain buys a fixed amount of tokens for at most its budget, so the user sells up to that
+    // much KAS for those tokens. A higher KAS price per token is fewer tokens per KAS, which is
+    // worse for the user, so it rounds down.
     side = 'sell';
     const st = o.state.state as unknown as { reserve?: string; deliveryCarrier?: string };
     const { amount: n, fills } = bidAmountOf(o, kob, scale, end + d.tip);
     const budget = o.value - (fills > 0n ? fills - 1n : 0n) - fills * BigInt(st.deliveryCarrier ?? '0') - BigInt(st.reserve ?? '0');
     rows.push({ label: t('signer.flip.youSell'), value: t('signer.flip.upTo', { amount: kasT(budget > 0n ? budget : 0n, 'up') }) });
-    // a multi-fill market order can deliver more than the amount its budget was sized for (the carrier of a fill that does not happen buys tokens)
+    // A multi-fill market order can deliver more than the amount its budget was sized for, because
+    // the carrier of a fill that does not happen buys tokens.
     const power = kob && isMultiFillMarket(d) ? maxReceiveOf(o, kob) : undefined;
     rows.push({ label: t('signer.flip.youReceive'), value: power !== undefined && power > n ? t('signer.flip.upTo', { amount: tokT(power, 'down') }) : tokT(n, 'down') });
     rows.push({ label: t(decays ? 'signer.flip.expected' : 'signer.flip.price'), value: per(start, 'down') });
     if (decays || d.tip > 0n) rows.push({ label: t('signer.flip.worst'), value: per(end + d.tip, 'down') });
   } else {
-    // the chain sells a fixed amount of tokens for at least its price: the user pays those tokens and buys the KAS they fetch; a lower KAS
-    // price per token is more tokens per KAS, worse for the user (rounded up)
+    // The chain sells a fixed amount of tokens for at least its price, so the user pays those
+    // tokens and buys the KAS they fetch. A lower KAS price per token is more tokens per KAS, which
+    // is worse for the user, so it rounds up.
     side = 'buy';
     const n = d.tokenAmount ?? d.amountLeft ?? 0n;
     const kasAt = (price: bigint) => div(n * (price > d.tip ? price - d.tip : 0n), scale, 'down');
@@ -219,24 +280,31 @@ function flippedSummary(o: DecodedOrder, hint: TokenHint | undefined, kob: KobWa
     rows.push({ label: t(decays ? 'signer.flip.expected' : 'signer.flip.price'), value: per(start, 'up') });
     if (decays || d.tip > 0n) rows.push({ label: t('signer.flip.worst'), value: per(end > d.tip ? end - d.tip : 1n, 'up') });
   }
-  // how fast the price falls is a signed term the flipped prices do not say (audit 2026-10-30 G2)
+  // How fast the price falls is a signed term that the flipped prices do not say.
   const seconds = auctionSeconds(d);
   if (terms && seconds !== null) rows.push({ label: t('confirm.f.auction'), value: t('confirm.f.auctionValue', { seconds }) });
   return {
     title: t('signer.flip.title', { side: t(side === 'sell' ? 'common.side.sell' : 'common.side.buy'), type: typeName }),
-    // the token, and the order as the chain holds it: its terms follow
+    // The token, and the order as the chain holds it. Its terms follow.
     token: t('signer.flip.onChain', { token: chain.token, order: chain.title }),
-    // the chain's prices are said above in the view's terms: its other terms follow
+    // The chain's prices are said above in the view's terms. Its other terms follow.
     rows: [...rows, ...chain.rows.filter((r) => !CHAIN_PRICE_ROWS.has(r.id ?? ''))],
     exit: null,
   };
 }
 
 /**
- * The amount a plain bid's escrow was made for and the deliveries it funds: the largest `n` whose escrow (the covenant's `bidEscrow` of `n` in
- * `f` fills) the order UTXO holds, `f` as the planner budgets it (one for IOC / FOK / market, one per slice of a DCA, one per minimum fill of a
- * resting bid up to DEFAULT_BID_FILLS), else the count of up to MAX_FILLS_SEARCHED that makes the escrow exact (a count the user chose).
- * Without kob-wasm: the value over the worst rate, carriers and reserve not counted.
+ * Finds the amount a plain bid's escrow was made for and the deliveries it funds.
+ *
+ * The amount is the largest `n` whose escrow the order UTXO holds. The escrow is the covenant's
+ * `bidEscrow` of `n` in `f` fills. First `f` is taken as the planner budgets it:
+ * - one for IOC, FOK and market,
+ * - one per slice of a DCA,
+ * - one per minimum fill of a resting bid, up to DEFAULT_BID_FILLS.
+ *
+ * When that escrow is not exact, it tries each count up to MAX_FILLS_SEARCHED that makes it exact,
+ * which is a count the user chose. Without kob-wasm it gives the value over the worst rate, with
+ * carriers and reserve not counted.
  */
 function bidAmountOf(o: DecodedOrder, kob: KobWasm | undefined, scale: bigint, rate: bigint): { amount: bigint; fills: bigint } {
   const d = o.description;
@@ -277,8 +345,10 @@ function bidAmountOf(o: DecodedOrder, kob: KobWasm | undefined, scale: bigint, r
 }
 
 /**
- * The fills a multi-fill market BUY budgets (its escrow is `bidEscrow(order, amount, fills)`: `bidAmountOf` finds the count that makes it
- * exact) and the delivery carrier each pays; null for every other order, or without kob-wasm.
+ * The fills a multi-fill market buy budgets, and the delivery carrier each pays.
+ *
+ * Its escrow is `bidEscrow(order, amount, fills)`, and `bidAmountOf` finds the count that makes it
+ * exact. It returns null for every other order, and without kob-wasm.
  */
 function marketFillsOf(o: DecodedOrder, kob: KobWasm | undefined): MarketFillsFacts | null {
   const d = o.description;
@@ -290,8 +360,11 @@ function marketFillsOf(o: DecodedOrder, kob: KobWasm | undefined): MarketFillsFa
 }
 
 /**
- * The most a bid's escrow lets its fills deliver: kob-wasm `bidBuyingPower` of the order state and the KAS on its UTXO (the covenant's remaining
- * buying power). A bid's quantity is its KAS, so it is the amount the escrow was sized for plus what the carriers of fills that do not happen buy.
+ * The most a bid's escrow lets its fills deliver.
+ *
+ * It is kob-wasm `bidBuyingPower` of the order state and the KAS on its UTXO, the covenant's
+ * remaining buying power. A bid's quantity is its KAS. So this is the amount the escrow was sized
+ * for plus what the carriers of fills that do not happen buy.
  */
 function maxReceiveOf(o: DecodedOrder, kob: KobWasm): bigint | undefined {
   try {
@@ -302,10 +375,14 @@ function maxReceiveOf(o: DecodedOrder, kob: KobWasm): bigint | undefined {
 }
 
 /**
- * KAS a pure self-transfer of token UTXOs (a Merge: no order created, every token output the wallet's own) moves off the wallet's token UTXOs into
- * spendable KAS: the KAS on its token inputs less the KAS on its token outputs. The KAS line counts KAS on the wallet's token UTXOs as the wallet's
- * already, so a merge reads as the fee alone there; this line says what becomes spendable. 0 for anything else: in a placement, part of that KAS
- * moves into the order's custody instead.
+ * The KAS that a pure self-transfer of token UTXOs moves off the wallet's token UTXOs into
+ * spendable KAS.
+ *
+ * Such a transfer is a Merge. It creates no order, and every token output is the wallet's own. The
+ * amount is the KAS on its token inputs less the KAS on its token outputs. The KAS line already
+ * counts KAS on the wallet's token UTXOs as the wallet's, so there a merge reads as the fee alone.
+ * This line says what becomes spendable. It is 0 for anything else, because in a placement part of
+ * that KAS moves into the order's custody instead.
  */
 export function freedFromTokens(s: Pick<SigningSummary, 'maker' | 'inputs' | 'outputs' | 'orders'>): bigint {
   const outs = s.outputs.filter((o) => o.token !== null);
@@ -315,13 +392,20 @@ export function freedFromTokens(s: Pick<SigningSummary, 'maker' | 'inputs' | 'ou
   return kasIn > kasOut ? kasIn - kasOut : 0n;
 }
 
-/** One token a pure merge folds: how many of the wallet's UTXOs go in, how many come out, and the amount (the same on both sides). */
+/**
+ * One token a pure merge folds. It gives how many of the wallet's UTXOs go in, how many come out,
+ * and the amount, which is the same on both sides.
+ */
 export interface MergedToken { ref: TokenRef; inCount: number; outCount: number; amount: bigint }
 
 /**
- * The tokens a request merges, or null when it is not a pure merge: a self-transfer of the wallet's own token UTXOs (no order created or spent,
- * every token input and output the wallet's own plain UTXO) that puts each token's amount into FEWER UTXOs and keeps it unchanged. A merge moves
- * no token to anyone and changes no balance, so the net effect lists no token line: this says what is signed (N UTXOs into M, the same amount).
+ * The tokens a request merges, or null when it is not a pure merge.
+ *
+ * A pure merge is a self-transfer of the wallet's own token UTXOs. It creates or spends no order,
+ * and every token input and output is the wallet's own plain UTXO. It puts each token's amount into
+ * fewer UTXOs and keeps the amount unchanged. A merge moves no token to anyone and changes no
+ * balance, so the net effect lists no token line. This says what is signed: N UTXOs into M, with
+ * the same amount.
  */
 export function mergedTokens(s: Pick<SigningSummary, 'kind' | 'maker' | 'inputs' | 'outputs' | 'orders' | 'spends'>): MergedToken[] | null {
   if (s.kind !== 'send' || s.orders.length > 0 || s.spends.length > 0) return null;
@@ -354,10 +438,14 @@ const MAX_CLOSED_LINES = 8;
 const MAX_FILLS_SEARCHED = 64n;
 
 /**
- * The orders whose price scale does not fit the decimals the app gave their token (audit 2026-10-30 G7). A plain order of a token whose decimals the
- * app says it knows (a registry, issued, declared or program-default token: not an `assumed` one) quotes its price per the standard scale
- * `10^min(decimals, 9)` base units, which is what the app plans; the frame cannot check the decimals themselves, but an order whose scale
- * disagrees with them reads differently under a different hint (the same order read as 0.5, 500,000,000 or 0.05 tokens). Blocks Approve.
+ * The orders whose price scale does not fit the decimals the app gave their token. Any such order
+ * blocks Approve.
+ *
+ * Take a plain order of a token whose decimals the app says it knows, meaning any hint but an
+ * `assumed` one. It quotes its price per the standard scale of `10^min(decimals, 9)` base units,
+ * which is what the app plans. The frame cannot check the decimals themselves. But an order whose
+ * scale disagrees with them reads differently under a different hint, so the same order could read
+ * as 0.5, 500,000,000 or 0.05 tokens.
  */
 function scaleMismatches(s: SigningSummary, hints: TokenHint[]): { code: string }[] {
   const out: { code: string }[] = [];
@@ -370,7 +458,10 @@ function scaleMismatches(s: SigningSummary, hints: TokenHint[]): { code: string 
   return out;
 }
 
-/** The delivery the order is signed with (a signed term: mode, and a top-up's tip and threshold); an if-done entry's on its exit. */
+/**
+ * Adds the delivery the order is signed with, a signed term. It names the mode, and for a top-up
+ * its tip and threshold. An if-done entry's delivery goes on its exit.
+ */
 function withDelivery(sum: SummaryOrder, o: DecodedOrder, hints: TokenHint[]): SummaryOrder {
   const dl = o.delivery;
   if (!dl) return sum;
@@ -387,14 +478,20 @@ function withDelivery(sum: SummaryOrder, o: DecodedOrder, hints: TokenHint[]): S
   return { ...sum, rows: [...sum.rows, ...rows] };
 }
 
-/** Compact lines of a decoded request: KAS and every token, net for this key; KAS locked into orders and paid to other keys; the fee. */
+/**
+ * Builds the compact lines of a decoded request. They are:
+ * - KAS and every token, net for this key,
+ * - KAS locked into orders and paid to other keys,
+ * - the fee.
+ */
 export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: KobWasm, terms = false): SignerSummary {
   const hints = withOrderScales(s, appHints);
   const lines: SummaryLine[] = [];
   const k = s.net.kas;
   const kas = (v: bigint) => `${formatKas(v)} KAS`;
   lines.push({ label: t('signer.net.kas'), value: signed(k.walletDelta, kas), dir: k.walletDelta < 0n ? 'out' : k.walletDelta > 0n ? 'in' : null });
-  // every token figure carries its unit ("−2 EXKCC"); a token nothing names (an assumed one: its amount is raw, its covenant id is its label) has none to carry
+  // Every token figure carries its unit, as in "−2 EXKCC". A token nothing names has none to
+  // carry. That is an assumed one, whose amount is raw and whose label is its covenant id.
   const unitOf = (hint: TokenHint | undefined): string => (hint && hint.source !== 'assumed' && hint.ticker ? ` ${hint.ticker}` : '');
   for (const tok of s.net.tokens) {
     const hint = hints.find((h) => h.covenantId === tok.ref.covenantId);
@@ -402,7 +499,7 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     const amount = (v: bigint) => `${formatTokenAmount(v, hint ? hint.decimals : RAW_TOKEN_DECIMALS)}${unitOf(hint)}`;
     if (tok.walletDelta !== 0n) lines.push({ label, value: signed(tok.walletDelta, amount), dir: tok.walletDelta < 0n ? 'out' : 'in' });
     if (tok.toOthers > 0n) lines.push({ label: t('signer.net.tokensToOthers', { token: label }), value: amount(tok.toOthers), dir: 'out' });
-    // an unlock: what the wallet's creator lock held (the line above says it comes to this key)
+    // An unlock says what the wallet's creator lock held. The line above says it comes to this key.
     if (tok.unlocked > 0n) lines.push({ label: t('signer.net.unlocked', { token: label }), value: amount(tok.unlocked), dir: null });
   }
   const merged = mergedTokens(s);
@@ -413,11 +510,14 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   }
   if (k.locked.total > 0n) lines.push({ label: t('signer.net.locked'), value: kas(k.locked.total), dir: null });
   if (k.released > 0n) lines.push({ label: t('signer.net.released'), value: kas(k.released), dir: null });
-  // WHICH of the wallet's orders a cancel closes (8 + 8 hex of its covenant id, as the token is named): a hostile indexer can only swap one of the user's own orders for another, and this makes the swap visible (S7)
+  // Which of the wallet's orders a cancel closes, by 8 + 8 hex of its covenant id as the token is
+  // named. A hostile indexer can only swap one of the user's own orders for another, and this
+  // makes the swap visible.
   for (const sp of s.spends.filter((x) => x.makerIsWallet && x.covenantId && (x.action === 'cancel' || x.action === 'refund' || x.action === 'sweep')).slice(0, MAX_CLOSED_LINES)) {
     lines.push({ label: t(sp.action === 'sweep' ? 'signer.net.sweeps' : sp.retired ? 'signer.net.closesRetired' : 'signer.net.closes'), value: longId(sp.covenantId!), dir: null });
   }
-  // a claim (bid-delivery-spec §7): what the order bought, where it goes, the carrier added to the order
+  // A claim (bid-delivery-spec §7) says what the order bought, where it goes and the carrier added
+  // to the order.
   for (const sp of s.spends.filter((x) => x.makerIsWallet && x.covenantId && x.bought && (x.action === 'claim' || x.bought.input !== null))) {
     const b = sp.bought!;
     const token = sp.description?.pair ? (sp.description.pair.side === 'buy' ? sp.description.pair.base.covId : sp.description.pair.quote.covId) : sp.description?.tokenCovId;
@@ -435,7 +535,7 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     if (cont && was !== undefined && cont.value > was) lines.push({ label: t('signer.net.claimCarrier'), value: kas(cont.value - was), dir: null });
   }
   if (k.toOthers > 0n) lines.push({ label: t('signer.net.toOthers'), value: kas(k.toOthers), dir: 'out' });
-  // a take: the resting orders it fills at their own prices, and the price on average
+  // A take says the resting orders it fills at their own prices, and the average price.
   if (s.take) {
     const tk = s.take;
     const hint = hints.find((h) => h.covenantId === tk.ref.covenantId);
@@ -451,27 +551,42 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     return withDelivery(flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain, terms) ?? chain, o, hints);
   });
   const found = [...s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)), ...(terms ? scaleMismatches(s, hints) : [])];
-  // the maker's cancel of an order under an older contract version (the cancel-only table): said as such, with what returns to the wallet
+  // The maker's cancel of an order under an older contract version, from the cancel-only table, is
+  // titled as such, with what returns to the wallet.
   const retiredCancel = (s.kind === 'cancel' || s.kind === 'cancel-position') && s.spends.some((x) => x.retired);
   return { title: t(merged ? 'signer.kind.merge' : retiredCancel ? 'signer.kind.cancelRetired' : (TITLE[s.kind] ?? TITLE.other)), lines, orders, fee: kas(k.fee), ...(s.inputs.length > s.signatures ? { unsignedKas: true } : {}), ...problemsOf(found), decoded: s };
 }
 
 /**
- * Decodes `built` for `maker` (the signer's own key) and summarises it. Throws when the decoder does. `locks`: the app's hint of this key's
- * creator locks, so a lock coin to one is recognised; the decoder takes only a lock of this key that is open by `now` (the frame's clock).
+ * Decodes `built` for `maker`, the signer's own key, and summarises it. It throws when the decoder
+ * does.
+ *
+ * `locks` is the app's hint of this key's creator locks, so that a lock coin to one is recognised.
+ * The decoder takes only a lock of this key that is open by `now`, the frame's clock.
  */
 export function summarize(kob: KobWasm, built: BuiltTx, maker: Hex, hints: TokenHint[], locks?: readonly LockHint[], now?: number): SignerSummary {
   return summaryLines(decodeSigning({ kob, built, maker, registry: null, ...(locks?.length ? { locks } : {}), ...(now !== undefined ? { now } : {}) }), hints, kob, true);
 }
 
 /**
- * A token creation (KCC-23) as ONE request: the preparation `prep` and the genesis `built` spending its output 0. Checked here, from the
- * transactions alone: the genesis spends exactly the preparation's output 0; every input of the preparation is a P2PK coin of this key and is
- * signed; every output pays this key (P2PK, no covenant): the genesis funding and change; its payload is a KCC-23 declaration. With the app's
- * `claim` of the genesis token outputs, each claimed output must carry exactly the script of its claimed state in the claimed program and be
- * bound to the one new covenant: the frame then names the supply and what this key receives, and those outputs are no longer "unknown". Summarised
- * as the genesis (its decoded effect) with the declared name, ticker and decimals first, the KAS line and the fee covering both. Throws when a
- * check fails (the request is refused, never shown).
+ * Summarises a token creation (KCC-23) as one request. It is the preparation `prep` and the genesis
+ * `built` that spends its output 0.
+ *
+ * These are checked here, from the transactions alone:
+ * - The genesis spends exactly the preparation's output 0.
+ * - Every input of the preparation is a P2PK coin of this key and is signed.
+ * - Every output of the preparation pays this key by P2PK with no covenant. These are the genesis
+ *   funding and the change.
+ * - The preparation's payload is a KCC-23 declaration.
+ *
+ * With the app's `claim` of the genesis token outputs, each claimed output must carry exactly the
+ * script of its claimed state in the claimed program, and be bound to the one new covenant. The
+ * frame then names the supply and what this key receives, and those outputs are no longer
+ * "unknown".
+ *
+ * The summary is the genesis's decoded effect, with the declared name, ticker and decimals first.
+ * The KAS line and the fee cover both transactions. It throws when a check fails, so the request is
+ * refused and never shown.
  */
 export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, maker: Hex, hints: TokenHint[], claim?: GenesisClaim): SignerSummary {
   const own = `000020${maker}ac`;
@@ -482,7 +597,8 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
   });
   if (prep.tx.outputs.some((o) => o.covenant || o.scriptPublicKey !== own)) throw new Error('pays another key');
   const decl = decodeDeclaration(kob, prep.tx.payload).token;
-  // a creator lock the declaration states (its script parsed by kob-wasm) of this key: the outputs its hash owns are this key's share, locked
+  // A creator lock of this key that the declaration states, its script parsed by kob-wasm. The
+  // outputs its hash owns are this key's share, locked.
   const declaredLock = lockOfScript(kob, decl.lock);
   const lock = declaredLock && declaredLock.key === maker ? declaredLock : null;
   const prepIn = prep.tx.inputs.reduce((a, i) => a + BigInt(i.utxo.amount), 0n);
@@ -490,13 +606,16 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
   const prepFee = prepIn - prepOut;
   if (prepFee < 0n || prepFee !== BigInt(prep.fee.fee)) throw new Error('fee');
   const g = summarize(kob, built, maker, hints);
-  // the claimed token outputs, each re-derived from its state: an output that does not match refuses the request
+  // The claimed token outputs, each re-derived from its state. An output that does not match
+  // refuses the request.
   const verified = new Set<number>();
   let supply = 0n;
   let toMaker = 0n;
   let lockedToMaker = 0n;
-  // a claimed curve (the genesis's sell order of this key): its output is exactly the script of its unbound state, alone in its own covenant
-  // group, made by this key, of the claimed program and commitment, and its custody is the claimed token output it owns with exactly its amount
+  // A claimed curve is the genesis's sell order of this key. Its output must:
+  // - be exactly the script of its unbound state, alone in its own covenant group,
+  // - be made by this key, of the claimed program and commitment,
+  // - have as custody the claimed token output it owns, with exactly its amount.
   let curveLines: SummaryLine[] = [];
   if (claim?.curve) {
     const c = claim.curve;
@@ -515,7 +634,11 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
     }
     verified.add(c.index);
     const table = (s.table as string[]).map((p) => BigInt(p));
-    // stricter than the protocol: a table that never falls, a tip below every level, levels that hold the amount, the scale of the declared decimals
+    // Stricter than the protocol. It needs:
+    // - a table that never falls,
+    // - a tip below every level,
+    // - levels that hold the amount,
+    // - the scale of the declared decimals.
     if (decl.decimals === null || curveProblems(s as never, decl.decimals).length > 0) throw new Error('claim');
     try {
       kob.checkNumbers(c.state as never);
@@ -549,9 +672,10 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
       else if (lock && o.ownerScheme === 3 && o.owner === lock.authority && o.borrowScheme === 0) lockedToMaker += BigInt(o.amount);
     }
   }
-  // the custody of this key's own curve is not "to others"
+  // The custody of this key's own curve is not "to others".
   const onCurve = claim?.curve ? claim.outputs.filter((o) => o.owner === claim.curve!.covenantId && o.ownerScheme === 4).reduce((a, o) => a + BigInt(o.amount), 0n) : 0n;
-  // the KAS line: the genesis spends this key's preparation output, so its net is the creation's, less the preparation's fee
+  // The genesis spends this key's preparation output. So the net of the KAS line is the
+  // creation's, less the preparation's fee.
   const k = g.decoded.net.kas;
   const delta = k.walletDelta - prepFee;
   const kas = (v: bigint) => `${formatKas(v)} KAS`;
@@ -560,8 +684,8 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
     { label: t('signer.declare.symbol'), value: decl.symbol ?? '', dir: null },
     { label: t('signer.declare.decimals'), value: decl.decimals === null ? '' : String(decl.decimals), dir: null },
     { label: t('signer.declare.steps'), value: t('signer.declare.stepsValue'), dir: null },
-    // the program and the extension commitment of the token output scripts, as the outputs were checked against them (audit 2026-10-30 G4: two
-    // creations that differ only there looked the same)
+    // The program and the extension commitment of the token output scripts, as the outputs were
+    // checked against them. Without them, two creations that differ only there would look the same.
     ...(claim
       ? [
           { label: t('signer.declare.program'), value: claim.program, dir: null },
@@ -581,12 +705,13 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
     { label: t('signer.net.kas'), value: signed(delta, kas), dir: delta < 0n ? 'out' : delta > 0n ? 'in' : null },
     ...g.lines.slice(1),
   ];
-  // the token outputs checked against the claim are not "unknown scripts": every other finding still counts
+  // The token outputs checked against the claim are not "unknown scripts". Every other finding
+  // still counts.
   const problems = g.decoded.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code) && !(b.code === 'output-unknown' && b.output !== undefined && verified.has(b.output)));
   return { ...g, title: t('signer.kind.createToken'), lines, fee: kas(k.fee + prepFee), ...problemsOf(problems) };
 }
 
-/** "4 min 30 s": a session's validity as the frame says it (never rounded up). */
+/** A session's validity as the frame says it, such as "4 min 30 s". It never rounds up. */
 function durationWords(ms: number): string {
   const s = Math.floor(ms / 1000);
   const min = Math.floor(s / 60);
@@ -595,15 +720,23 @@ function durationWords(ms: number): string {
 }
 
 /**
- * The screen of a one-approval merge session (session.ts): what the frame derived from the plan it decoded, never what the app says. The
- * token by its covenant id (8 + 8 hex), the UTXOs merged and left, the token amount (unchanged), the most transactions, the most network fee
- * in all (and the planned fee), and how long the approval lasts. `decoded` is the first link's decoding (the summary type carries one).
+ * Builds the screen of a one-approval merge session (session.ts).
+ *
+ * It shows what the frame derived from the plan it decoded, never what the app says:
+ * - the token, by 8 + 8 hex of its covenant id,
+ * - the UTXOs merged and left, and the token amount, which is unchanged,
+ * - the most transactions,
+ * - the most network fee in all, and the planned fee,
+ * - how long the approval lasts.
+ *
+ * `decoded` is the first link's decoding, because the summary type carries one.
  */
 export function sessionSummary(terms: Pick<SessionTermsView, 'covenantId' | 'links' | 'utxos' | 'outputs' | 'amount' | 'feeMax' | 'plannedFee' | 'ttlMs'>, hints: TokenHint[], decoded: SigningSummary): SignerSummary {
   const hint = hints.find((h) => h.covenantId === terms.covenantId);
   const unit = hint && hint.source !== 'assumed' && hint.ticker ? ` ${hint.ticker}` : '';
-  // nothing this frame can check states the decimals (no pinned table lists the token, no declaration or convention was hinted): the
-  // amount is in base units, and says so, never a bare integer
+  // Nothing this frame can check states the decimals. No pinned table lists the token, and no
+  // declaration or convention was hinted. So the amount is in base units and says so, never as a
+  // bare integer.
   const raw = !hint || hint.source === 'assumed';
   const amount = raw ? t('signer.session.rawAmount', { amount: formatTokenAmount(terms.amount, RAW_TOKEN_DECIMALS) }) : `${formatTokenAmount(terms.amount, hint.decimals)}${unit}`;
   const lines: SummaryLine[] = [
