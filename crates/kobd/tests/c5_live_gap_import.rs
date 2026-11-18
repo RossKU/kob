@@ -192,3 +192,46 @@ async fn an_imported_exit_is_linked_to_its_known_entry() {
     let cu = xv.custody.unwrap().utxo.expect("custody");
     assert!(cu.state.is_some(), "an imported order has its custody's holding row (proven state)");
 }
+
+/// Security review 2026-11-17 M6: with a cross-checking node, a rebase closes an order only when neither node has its output,
+/// and adopts a successor only when both report it.
+#[tokio::test]
+async fn with_a_cross_checking_node_the_authority_alone_neither_closes_nor_adopts() {
+    use kobd::rpc::multi::{MultiNode, NodeSpec};
+    let c = Ctx::new();
+    let make = |m: u8| {
+        let b = bid(m, 245_000_000);
+        let v = b.escrow(10 * WHOLE, 3).unwrap() as u64;
+        (AnyState::KobBid(b), v)
+    };
+    let (sa, va) = make(MAKER_A);
+    let (sb, vb) = make(MAKER_B);
+    let (ta, tb) = (c.w.create_tx(sa.clone(), va, MAKER_A, 0), c.w.create_tx(sb.clone(), vb, MAKER_B, 0));
+    c.push(&[&ta, &tb]).await;
+    let (cov_a, cov_b) = (c.w.cov(&ta, 0), c.w.cov(&tb, 0));
+    let (spk_a, spk_b) = (spk_bytes(&sa.spk()), spk_bytes(&sb.spk()));
+    // the authority has neither order output: A moved to a same-script successor, B is gone. The cross-checking node still
+    // has A's output and no successor; it has B's successor.
+    let succ_a = node_utxo(&spk_a, cov_a, Hash32([0x71; 32]), 0, va);
+    let succ_b = node_utxo(&spk_b, cov_b, Hash32([0x72; 32]), 0, vb);
+    c.hs.node.set_utxos(vec![succ_a.clone(), succ_b.clone()]);
+    let second = MockNode::new("testnet-10");
+    second.set_utxos(vec![node_utxo(&spk_a, cov_a, Hash32(ta.tx.id), 0, va), succ_b]);
+    let spec = |url: &str, cross_check: bool| NodeSpec {
+        url: url.into(),
+        fetch: !cross_check,
+        submit: true,
+        connections: 1,
+        cross_check,
+        may_lead: !cross_check,
+    };
+    let pair = MultiNode::new(vec![(spec("primary", false), c.hs.node.clone()), (spec("second", true), second)], c.hs.node.clone());
+    let cursor = Cursor { hash: c.hs.node.tip(), daa: c.daa() };
+    let rep = reconcile_open_orders(&c.hs.ingest, &pair, "testnet-10", cursor).await.unwrap();
+    assert_eq!((rep.closed, rep.adopted), (0, 1), "{rep:?}");
+    // A: the second node has its output, so it is kept where it was (the authority's successor is not adopted)
+    assert_eq!(c.hs.status(&cov_a), "open");
+    assert_eq!(view(&c, &cov_a).current.unwrap().txid, Hash32(ta.tx.id).to_hex());
+    // B: both report the successor
+    assert_eq!(view(&c, &cov_b).current.unwrap().txid, Hash32([0x72; 32]).to_hex());
+}
