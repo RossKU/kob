@@ -51,18 +51,20 @@ fn a_passive_order_is_never_filled_below_its_minimum_fill_unless_the_fill_takes_
 }
 
 #[test]
-fn a_bid_fills_below_its_minimum_fill_only_when_the_fill_ends_it() {
+fn a_bid_fills_below_its_minimum_fill_only_when_the_fill_takes_all_its_buying_power() {
     // a bid with a minimum fill of 3 whole tokens and an ask of 2: used(n) = n x 260,100 sompi exactly (2.60 + 0.001 per
-    // whole token), so after a fill of 2,000 a bid funded for 5,000 still has 3,000 of buying power (one minimum fill: it
-    // continues, and the covenant refuses the small fill), while one funded for 4,999 has 2,999 left (it ends: the fill is
-    // exempt from its minimum fill)
+    // whole token). A bid funded for 5,000 still has 3,000 of buying power after a fill of 2,000 (it would continue); one
+    // funded for 4,999 has 2,999 left (it would end). Either way the fill of 2,000 leaves buying power, so it is below the
+    // minimum and refused (KobBid 242aaae3). A bid funded for exactly 2,000 is exhausted by that fill: exempt.
     let s = BidState { min_fill: 3 * WHOLE, ..bid(1, P260, T3) };
     assert!(s.can_continue(s.used(5_000).unwrap() - s.used(2_000).unwrap() + s.delivery_carrier));
     assert!(!s.can_continue(s.used(4_999).unwrap() - s.used(2_000).unwrap() + s.delivery_carrier));
-    let r = run(&input(&book(vec![l_bid(1, s.clone(), 5_000), l_ask(2, ask(2, P250, 2 * WHOLE, T3))])), &cfg());
-    assert_eq!(amount_all(&r, cid(1)), 0, "a fill of 2,000 would leave a bid able to continue below its minimum fill");
-    let r = run(&input(&book(vec![l_bid(1, s.clone(), 4_999), l_ask(2, ask(2, P250, 2 * WHOLE, T3))])), &cfg());
-    assert_eq!(amount_of(&r, cid(1)), 2 * WHOLE, "the fill ends the bid: exempt from its minimum fill");
+    for funded in [5_000, 4_999] {
+        let r = run(&input(&book(vec![l_bid(1, s.clone(), funded), l_ask(2, ask(2, P250, 2 * WHOLE, T3))])), &cfg());
+        assert_eq!(amount_all(&r, cid(1)), 0, "funded {funded}: a fill of 2,000 below the minimum would leave buying power");
+    }
+    let r = run(&input(&book(vec![l_bid(1, s.clone(), 2 * WHOLE), l_ask(2, ask(2, P250, 2 * WHOLE, T3))])), &cfg());
+    assert_eq!(amount_of(&r, cid(1)), 2 * WHOLE, "the fill takes all the buying power: exempt from the minimum fill");
     // the bid's continuation is gone: its fill terminated it (no output carries the bid's script)
     let spk = spk_to_string(&AnyState::KobBid(s).spk());
     assert!(r.prepared[0].signed.tx.outputs.iter().all(|o| o.script_public_key != spk), "the bid ended");
