@@ -1,24 +1,30 @@
-//! `become` as a splice (docs/argent/argent-feedback.md, item 10): the hand-written order, the Argent ports and a prototype of
-//! a splice lowering of `become`, run side by side in the rusty-kaspa v2.1.0 script engine.
+//! Runs the hand-written order, the Argent ports and a prototype of a splice lowering of `become`
+//! (docs/argent/argent-feedback.md, item 10) side by side in the rusty-kaspa v2.1.0 script engine.
 //!
-//! Variants of `KobAsk`, all compiled with the same constructor arguments (`contracts/orders/KobAsk.ctor.json`):
+//! Variants of `KobAsk`, all compiled with the same constructor arguments
+//! (`contracts/orders/KobAsk.ctor.json`):
 //!   A  hand-written SilverScript (`contracts/orders/KobAsk.sil`);
-//!   B  the 1:1 Argent port (`contracts/research/argent/port/kob_ask_port.ag` -> argentc -> `port-out/KobAsk.port.sil`);
-//!   C  the idiomatic port, B without the body checks the generated ones repeat (`kob_ask_port_idiomatic.ag` ->
-//!      `port-out/KobAsk.idiomatic.sil`; it must equal B with those lines removed);
-//!   D  a prototype of a splice lowering of `become`: C's generated SilverScript with the continuation state literal and
-//!      the generated `validateOutputState` replaced, by a text transform ([`become_as_splice`]), with the changed state
-//!      fields collected per continuation and their bytes spliced into this script (the way `KobAsk.sil`'s `contSpk`
-//!      does). Everything else argentc generates (count bounds, `cont.length == count`, cancel's `OpAuthOutputCount ==
-//!      0`) is kept. D1 is the same with the continuation count bounded to one slot (`emits ...[0..=1]`).
+//!   B  the 1:1 Argent port (`contracts/research/argent/port/kob_ask_port.ag` -> argentc ->
+//!      `port-out/KobAsk.port.sil`);
+//!   C  the idiomatic port, B without the body checks the generated ones repeat
+//!      (`kob_ask_port_idiomatic.ag` -> `port-out/KobAsk.idiomatic.sil`; it must equal B with those
+//!      lines removed);
+//!   D  a prototype of a splice lowering of `become`: C's generated SilverScript with the
+//!      continuation state literal and the generated `validateOutputState` replaced, by a text
+//!      transform ([`become_as_splice`]), with the changed state fields collected per continuation
+//!      and their bytes spliced into this script (the way `KobAsk.sil`'s `contSpk` does).
+//!      Everything else argentc generates (count bounds, `cont.length == count`, cancel's
+//!      `OpAuthOutputCount == 0`) is kept. D1 is the same with the continuation count bounded to
+//!      one slot (`emits ...[0..=1]`).
 //!
-//! Measured: redeem script bytes; script units per order input, its signature script, transaction size, compute mass
-//! and relay floor (100 sompi/gram) of a partial fill that rests, a full fill, a refund and a cancel (the kob-protocol
-//! fixtures, compute budgets tightened per variant). Behaviour: every KCC-20 fixture and branch shape that spends a
-//! `KobAsk`, as built (positives), and edits of them (negatives: forged continuation states, a dropped, duplicated or
-//! foreign continuation, a continuation where none may be, a cancel that continues the covenant), must get the same
-//! verdict at every input under B, C, D and D1 as under A. Ablations (one check removed) show which check carries which
-//! verdict. Run:
+//! Measured: redeem script bytes; script units per order input, its signature script, transaction
+//! size, compute mass and relay floor (100 sompi/gram) of a partial fill that rests, a full fill, a
+//! refund and a cancel (the kob-protocol fixtures, compute budgets tightened per variant).
+//! Behaviour: every KCC-20 fixture and branch shape that spends a `KobAsk`, as built (positives),
+//! and edits of them (negatives: forged continuation states, a dropped, duplicated or foreign
+//! continuation, a continuation where none may be, a cancel that continues the covenant), must get
+//! the same verdict at every input under B, C, D and D1 as under A. Ablations (one check removed)
+//! show which check carries which verdict. Run:
 //!
 //! ```text
 //! cargo test --release -p kob-tests --test argent_become_splice_tests -- --nocapture

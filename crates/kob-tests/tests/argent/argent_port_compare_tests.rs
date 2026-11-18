@@ -1,21 +1,27 @@
-//! Opcode-level comparison of the hand-written `KobAsk` and its idiomatic Argent port (docs/argent/argent-port-compare.md,
-//! docs/argent/argent-feedback.md item 10).
+//! Compares the hand-written `KobAsk` and its idiomatic Argent port at opcode level
+//! (docs/argent/argent-port-compare.md, docs/argent/argent-feedback.md item 10).
 //!
-//! Three variants, compiled with the same constructor arguments (`contracts/orders/KobAsk.ctor.json`):
+//! Three variants, compiled with the same constructor arguments
+//! (`contracts/orders/KobAsk.ctor.json`):
 //!   hand       `contracts/orders/KobAsk.sil` (hand-written SilverScript);
-//!   idiomatic  `contracts/research/argent/port-out/KobAsk.idiomatic.sil` (argentc output of `port/kob_ask_port_idiomatic.ag`);
-//!   splice1    `contracts/research/argent/port/KobAsk.splice1.sil` (the idiomatic port with `become` lowered to a splice of the
-//!              changed field, written by `argent_become_splice_tests.rs`).
+//!   idiomatic  `contracts/research/argent/port-out/KobAsk.idiomatic.sil` (argentc output of
+//!              `port/kob_ask_port_idiomatic.ag`);
+//!   splice1    `contracts/research/argent/port/KobAsk.splice1.sil` (the idiomatic port with
+//!              `become` lowered to a splice of the changed field, written by
+//!              `argent_become_splice_tests.rs`).
 //!
-//! For each variant this writes an annotated disassembly to `contracts/research/argent/port/compare/KobAsk.<variant>.opcodes.txt`
-//! and a per-section byte table to `contracts/research/argent/port/compare/KobAsk.sections.txt`:
+//! For each variant this writes an annotated disassembly to
+//! `contracts/research/argent/port/compare/KobAsk.<variant>.opcodes.txt` and a per-section byte
+//! table to `contracts/research/argent/port/compare/KobAsk.sections.txt`:
 //!   - every opcode with its offset in the redeem script and its push data;
-//!   - the source statement it was compiled from (silverscript-lang `record_debug_infos`; the bytecode is asserted to be
-//!     identical to a compile without debug info);
-//!   - the entry it belongs to (`settle`, `cancel`) and the state field of each push in the state span;
-//!   - a tag for every opcode that disappears when one construct is removed from the source and the script is compiled
-//!     again (constructs removed one after the other; the listings before and after are matched by a longest common
-//!     subsequence of (opcode, push data)). The byte ranges in the files are the offsets of the tagged opcodes.
+//!   - the source statement it was compiled from (silverscript-lang `record_debug_infos`; the
+//!     bytecode is asserted to be identical to a compile without debug info);
+//!   - the entry it belongs to (`settle`, `cancel`) and the state field of each push in the state
+//!     span;
+//!   - a tag for every opcode that disappears when one construct is removed from the source and the
+//!     script is compiled again (constructs removed one after the other; the listings before and
+//!     after are matched by a longest common subsequence of (opcode, push data)). The byte ranges
+//!     in the files are the offsets of the tagged opcodes.
 //!
 //! The committed files must be what this test writes. Regenerate with:
 //!
