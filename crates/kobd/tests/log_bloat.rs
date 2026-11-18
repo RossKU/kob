@@ -1,9 +1,10 @@
 //! Regression: the permanent record log keeps facts, not the attacker's bytes.
 //!
-//! Any transaction whose payload starts with `KOB1` is relevant, and its whole payload used to be stored forever (and replayed
-//! on every rebuild), decodable or not. Now an undecodable payload is a five-byte stand-in that the processor rejects as
-//! `payload:undecodable`, and a decodable one keeps only its placement (order) records, canonically re-encoded and at most one per
-//! output of the transaction.
+//! Any transaction whose payload starts with `KOB1` is relevant, but its whole payload is not
+//! stored forever (and replayed on every rebuild), decodable or not. An undecodable payload is a
+//! five-byte stand-in that the processor rejects as `payload:undecodable`, and a decodable one
+//! keeps only its placement (order) records, canonically re-encoded and at most one per output of
+//! the transaction.
 
 use kobd::hex::HexBytes;
 use kobd::indexer::db::open_memory;

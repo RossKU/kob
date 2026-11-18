@@ -797,8 +797,9 @@ async fn kron_maker_export_import_is_verified_against_the_node_utxo_set() {
     assert!(cv.ok, "the KRON custody UTXO was verified against the node: {cv:?}");
 }
 
-/// TN10 soak 10-01: `kobd db import-orders` run next to a running `run` interleaved two writers of one record log and broke
-/// its hash chain. Every writer of a data directory now holds an exclusive OS lock; readers do not need it.
+/// `kobd db import-orders` run next to a running `run` must not interleave two writers of one
+/// record log and break its hash chain. Every writer of a data directory holds an exclusive OS
+/// lock; readers do not need it.
 #[tokio::test]
 async fn a_data_directory_has_one_writer_and_readers_work_next_to_it() {
     let dir = tempfile::tempdir().unwrap();

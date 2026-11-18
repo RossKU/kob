@@ -1,22 +1,28 @@
-//! Offline processing capacity: synthetic accepted-chain data at 10 BPS with 300 transactions per block (3,000 tx/s), fed
-//! through the indexer's processing pipeline without a network: the JSON of a `getVirtualChainFromBlockV2` response at
-//! `High` (each non-KOB transaction about 1,350 bytes with the fields the node sends), parsed as the wRPC client parses it,
-//! checked (`into_batch`) and committed (`Ingest::apply_batch`: file database in WAL mode, record log with fsync). The mix
-//! is mostly non-KOB transfers (some with covenant outputs of other projects) plus real KOB transactions built with the
-//! protocol builders: placements, fills and cancels of asks, and x402-style token payments of an allowlisted token whose
-//! transaction ids the facilitator watches.
+//! Offline processing capacity: synthetic accepted-chain data at 10 BPS with 300 transactions per
+//! block (3,000 tx/s), fed through the indexer's processing pipeline without a network: the JSON of
+//! a `getVirtualChainFromBlockV2` response at `High` (each non-KOB transaction about 1,350 bytes
+//! with the fields the node sends), parsed as the wRPC client parses it, checked (`into_batch`) and
+//! committed (`Ingest::apply_batch`: file database in WAL mode, record log with fsync). The mix is
+//! mostly non-KOB transfers (some with covenant outputs of other projects) plus real KOB
+//! transactions built with the protocol builders: placements, fills and cancels of asks, and
+//! x402-style token payments of an allowlisted token whose transaction ids the facilitator watches.
 //!
 //! `capacity_smoke` (CI) runs 20 blocks and checks the rows. The full benchmark is ignored:
-//! `cargo test --release -p kobd --test capacity -- --ignored --nocapture full_capacity`
 //!
-//! Environment (full benchmark): `KOB_CAP_CHAIN_SECS` seconds of chain per run (default 60), `KOB_CAP_TX_PER_BLOCK`
-//! (default 300), `KOB_CAP_MIX` expected KOB transactions per block, e.g. `creates=1,fills=1,cancels=0.5,x402=1,foreign=0.05`
-//! (`foreign`: share of the other transactions with a covenant output of another project), `KOB_CAP_VERIFY_THREADS` threads
-//! of the pure pass before the database pass (default: cores, at most 4; 1: inline).
+//! ```text
+//! cargo test --release -p kobd --test capacity -- --ignored --nocapture full_capacity
+//! ```
 //!
-//! `the_parallel_verification_pass_changes_nothing` (CI) checks that the parallel pass and the inline one give the same rows;
-//! `rows_match_a_reference_file` (ignored, `KOB_CAP_ROWS_REF=<file>`) compares a fixed chain's rows with a file written by
-//! another build (a refactoring of the write path must not change a row).
+//! Environment (full benchmark): `KOB_CAP_CHAIN_SECS` seconds of chain per run (default 60),
+//! `KOB_CAP_TX_PER_BLOCK` (default 300), `KOB_CAP_MIX` expected KOB transactions per block, e.g.
+//! `creates=1,fills=1,cancels=0.5,x402=1,foreign=0.05` (`foreign`: share of the other transactions
+//! with a covenant output of another project), `KOB_CAP_VERIFY_THREADS` threads of the pure pass
+//! before the database pass (default: cores, at most 4; 1: inline).
+//!
+//! `the_parallel_verification_pass_changes_nothing` (CI) checks that the parallel pass and the
+//! inline one give the same rows; `rows_match_a_reference_file` (ignored,
+//! `KOB_CAP_ROWS_REF=<file>`) compares a fixed chain's rows with a file written by another build (a
+//! refactoring of the write path must not change a row).
 
 mod common;
 
@@ -175,11 +181,12 @@ fn hex_of(tag: &str, n: u64, len: usize) -> String {
     s
 }
 
-/// A non-KOB transaction exactly as a v2.1.0 node reports one at `High` (field set and order of a TN10 flood transfer
-/// captured on 2026-10-02): one input with its spent entry and address, one or two outputs with addresses, the masses and
-/// hashes the indexer does not read. Four in five are a P2SH self-transfer with an 8-byte signature script and one
-/// output (1,290 bytes, the captured median), one in five a P2PK payment with a 66-byte signature, two outputs and a
-/// 32-byte payload (about 1,750 bytes): about 1,380 bytes on average, against 1,354 measured per accepted transaction
+/// A non-KOB transaction exactly as a v2.1.0 node reports one at `High` (field set and order of a
+/// captured TN10 flood transfer): one input with its spent entry and address, one or two outputs
+/// with addresses, the masses and hashes the indexer does not read. Four in five are a P2SH
+/// self-transfer with an 8-byte signature script and one output (1,290 bytes, the captured median),
+/// one in five a P2PK payment with a 66-byte signature, two outputs and a 32-byte payload (about
+/// 1,750 bytes): about 1,380 bytes on average, against 1,354 measured per accepted transaction
 /// during the flood. With `foreign`, the first output is bound to a covenant of another project.
 fn noise_json(n: u64, foreign: bool, block: &Hash32, daa: u64) -> String {
     let addr = |k: u64| format!("kaspatest:pz{}", &hex_of("addr", k, 32)[..59]);

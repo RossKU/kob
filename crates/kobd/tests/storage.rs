@@ -1,6 +1,6 @@
-//! Storage policy: no raw node responses, only compact extracted KOB records
-//! forever and chain-block rows for the reorg window. These tests measure what that costs and keep it
-//! from regressing; `cargo test -p kobd --test storage -- --nocapture` prints the numbers that
+//! Storage policy: no raw node responses, only compact extracted KOB records forever and
+//! chain-block rows for the reorg window. These tests measure what that costs and keep it from
+//! regressing; `cargo test -p kobd --test storage -- --nocapture` prints the numbers that
 //! `docs/ops/executor.md` quotes.
 
 mod common;

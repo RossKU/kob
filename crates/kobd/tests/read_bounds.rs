@@ -1,4 +1,5 @@
-//! Audit 2026-10-30 I3 / I4 regressions: the candles window never overflows, and an order view bounds its strays.
+//! Regressions for I3 and I4 (`docs/security/AUDIT-2026-10.md`): the candles window never
+//! overflows, and an order view bounds its strays.
 
 use kobd::hex::Hash32;
 use kobd::indexer::db::open_memory;

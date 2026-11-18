@@ -1,11 +1,14 @@
-//! Archive pruning (`kobd::indexer::archive`): a store that keeps its history deletes the final spent UTXO rows of the orders that are no
-//! longer live, the amends of final blocks and the spent holdings past a retention, and answers the API as a store that keeps everything.
+//! Archive pruning (`kobd::indexer::archive`): a store that keeps its history deletes the final
+//! spent UTXO rows of the orders that are no longer live, the amends of final blocks and the spent
+//! holdings past a retention, and answers the API as a store that keeps everything.
 //!
-//! Two stores follow the same synthetic chain, one that prunes and one that does not. The read API of both answers the same JSON on its
-//! main endpoints after every few rounds of orders (placed, filled, partly filled, amended, cancelled), after a reorg inside the window
-//! that undoes a closing, and after a fill of an order that stayed live through all of it; a rebuild of the pruning store from its record
-//! log (`kobd db replay` prunes at its end) holds the same rows; and with a short retention the spent holdings past it go while the token
-//! keeps its program (the token list) and a live order keeps its spent custody.
+//! Two stores follow the same synthetic chain, one that prunes and one that does not. The read API
+//! of both answers the same JSON on its main endpoints after every few rounds of orders (placed,
+//! filled, partly filled, amended, cancelled), after a reorg inside the window that undoes a
+//! closing, and after a fill of an order that stayed live through all of it; a rebuild of the
+//! pruning store from its record log (`kobd db replay` prunes at its end) holds the same rows; and
+//! with a short retention the spent holdings past it go while the token keeps its program (the
+//! token list) and a live order keeps its spent custody.
 
 mod common;
 

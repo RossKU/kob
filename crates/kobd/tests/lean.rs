@@ -1,8 +1,10 @@
-//! Lean storage (`kobd::indexer::lean`): the store keeps the live book and a short retention of closed orders.
+//! Lean storage (`kobd::indexer::lean`): the store keeps the live book and a short retention of
+//! closed orders.
 //!
-//! Two stores follow the same synthetic chain, one that keeps its history and one that is lean. After every round of orders the
-//! book the matcher and keepers read (`book::snapshot`) and the live rows must be identical; the lean store's file must stay
-//! bounded while the other grows with the chain.
+//! Two stores follow the same synthetic chain, one that keeps its history and one that is lean.
+//! After every round of orders the book the matcher and keepers read (`book::snapshot`) and the
+//! live rows must be identical; the lean store's file must stay bounded while the other grows with
+//! the chain.
 
 mod common;
 
@@ -435,12 +437,13 @@ async fn a_lean_indexer_prunes_by_itself_and_keeps_no_record_log() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
-// A big store: a batch costs a bounded time, and the follower catches up before it prunes (the lean conversion of the soak's executor
-// B: its store of 1.19 million orders was over the 500 MB cap, every batch took 5 s, and the follower, which ran one batch after each
-// of its steps, fell behind and stayed there).
+// A big store: a batch costs a bounded time, and the follower catches up before it prunes (a
+// follower that ran one batch after each of its steps on a store of over a million orders would
+// fall behind and stay there).
 
-/// `n` closed orders, each with two events and two spent UTXOs, in the shape of the soak's stores, by set-based SQL. Order `i` was last
-/// touched at DAA `i` in block 0, so the oldest are the lowest.
+/// `n` closed orders, each with two events and two spent UTXOs, in the shape of a long-running
+/// executor's store, by set-based SQL. Order `i` was last touched at DAA `i` in block 0, so the
+/// oldest are the lowest.
 fn seed_closed_orders(h: &Harness, n: i64) {
     let g = h.ingest.lock().unwrap();
     g.conn()
@@ -492,9 +495,9 @@ async fn a_batch_on_a_big_store_takes_a_bounded_time_and_deletes_the_oldest_orde
         assert!(now > last_oldest, "the oldest closed orders go first: {now} after {last_oldest}");
         last_oldest = now;
     }
-    // each batch is a few steps of a few dozen orders: tens of milliseconds (a commit on a slow disk of a CI runner can take a second
-    // once in a while: the median is what is bounded closely; it was 5 s a batch on the soak's store, one sort of every closed order and
-    // a read of every spent row in each batch)
+    // each batch is a few steps of a few dozen orders: tens of milliseconds (a commit on a slow
+    // disk of a CI runner can take a second once in a while: the median is what is bounded closely;
+    // sorting every closed order and reading every spent row in each batch would take seconds)
     times.sort();
     let (median, worst) = (times[times.len() / 2], times[times.len() - 1]);
     assert!(median < std::time::Duration::from_millis(300), "the median batch took {median:?}");
