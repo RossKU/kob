@@ -1,22 +1,40 @@
-// Token logos in formats other than the four the page shows as they are (PNG, JPEG, WEBP, GIF; data/kascov.ts `sniffImage`): SVG (also gzip-compressed),
-// AVIF, HEIC, JPEG XL, BMP, ICO and TIFF. Any of them is accepted only on the CHECKED paths (data/logos.ts, data/kascov.ts): its bytes were read and
-// compared with what the creator committed to (`image_hash`, the IPFS CID or kascov.io's copy), always the hash of the ORIGINAL file. It is then drawn
-// once in an <img> (where an SVG runs no script and loads nothing else) onto a canvas and shown as a WEBP (PNG where the browser cannot encode WEBP), so
-// the page shows only a raster picture it made itself. Before any of it the file is searched for code (`pictureProblem`): an SVG with a script, an
-// event handler, an external reference ..., or a raster file with HTML or script hidden in it, is never shown. A format this browser cannot decode (HEIC outside Safari, say) gives no picture: the letter.
+// Token logos in formats other than the four the page shows as they are, which are PNG, JPEG,
+// WEBP and GIF (data/kascov.ts `sniffImage`). The others are SVG (also gzip-compressed), AVIF,
+// HEIC, JPEG XL, BMP, ICO and TIFF.
+//
+// Any of them is accepted only on the checked paths (data/logos.ts, data/kascov.ts). There its
+// bytes were read and compared with what the creator committed to, always the hash of the
+// original file. That is `image_hash`, the IPFS CID or kascov.io's copy. The file is then drawn
+// once in an <img>, where an SVG runs no script and loads nothing else, onto a canvas. It is shown
+// as a WEBP, or a PNG where the browser cannot encode WEBP, so the page shows only a raster picture
+// it made itself.
+//
+// Before any of it the file is searched for code (`pictureProblem`). An SVG with a script, an
+// event handler or an external reference is never shown, nor is a raster file with HTML or script
+// hidden in it. A format this browser cannot decode, such as HEIC outside Safari, gives no
+// picture, and the letter is shown.
 import type { ImageMime } from './kascov';
 import { sniffImage } from './kascov';
 
-/** The side of the picture a file is drawn at (a logo is shown at most at 64 CSS px; twice that for a dense screen). */
+/**
+ * The side of the picture a file is drawn at. A logo is shown at most at 64 CSS px, and this is
+ * twice that for a dense screen.
+ */
 export const RASTER_PX = 128;
 
-/** The largest SVG a gzip-compressed one may expand to (a compressed file must not unfold into an unbounded document). */
+/**
+ * The largest SVG a gzip-compressed one may expand to, so that a compressed file cannot unfold into
+ * an unbounded document.
+ */
 export const MAX_SVG_BYTES = 1_500_000;
 
 /** Formats drawn to a raster picture before they are shown. */
 export type DrawnMime = 'image/svg+xml' | 'image/avif' | 'image/heic' | 'image/jxl' | 'image/bmp' | 'image/x-icon' | 'image/tiff';
 
-/** Whether `bytes` are an SVG document: UTF-8 text whose first element is `<svg` (after a BOM, an XML declaration, comments and a DOCTYPE). */
+/**
+ * Whether `bytes` are an SVG document, meaning UTF-8 text whose first element is `<svg`. A BOM, an
+ * XML declaration, comments and a DOCTYPE may come before it.
+ */
 export function isSvg(bytes: Uint8Array): boolean {
   if (bytes.length < 5) return false;
   const s = new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(0, Math.min(bytes.length, 4096)));
@@ -32,7 +50,8 @@ export function isSvg(bytes: Uint8Array): boolean {
       if (end < 0) return false;
       i = end + 3;
     } else if (s.slice(i, i + 9).toUpperCase() === '<!DOCTYPE') {
-      // a DOCTYPE with an internal subset (`[ <!ENTITY ...> ]`) ends at `]>`: the document is still an SVG, and `svgActiveContent` refuses the entities
+      // A DOCTYPE with an internal subset (`[ <!ENTITY ...> ]`) ends at `]>`. The document is
+      // still an SVG, and `svgActiveContent` refuses the entities.
       const gt = s.indexOf('>', i);
       const open = s.indexOf('[', i);
       const end = open >= 0 && (gt < 0 || open < gt) ? s.indexOf(']>', open) + 1 : gt;
@@ -47,7 +66,10 @@ export function isSvg(bytes: Uint8Array): boolean {
 
 const ascii = (b: Uint8Array, at: number, n: number): string => String.fromCharCode(...b.subarray(at, at + n));
 
-/** The ISO-BMFF brands of a file (`ftyp` box: the major brand and the compatible ones), lower case; empty for another file. */
+/**
+ * The ISO-BMFF brands of a file in lower case, from the `ftyp` box: the major brand and the
+ * compatible ones. Empty for another file.
+ */
 function ftypBrands(b: Uint8Array): string[] {
   if (b.length < 16 || ascii(b, 4, 4) !== 'ftyp') return [];
   const size = Math.min(b.length, ((b[0]! << 24) | (b[1]! << 16) | (b[2]! << 8) | b[3]!) >>> 0);
@@ -56,7 +78,10 @@ function ftypBrands(b: Uint8Array): string[] {
   return out.map((x) => x.toLowerCase());
 }
 
-/** The format of a file the page draws before it shows it (magic bytes, never the address's extension), or null. `gzip`: maybe a compressed SVG. */
+/**
+ * The format of a file the page draws before it shows it, or null. It goes by the magic bytes,
+ * never by the address's extension. `gzip` means maybe a compressed SVG.
+ */
 export function sniffDrawn(b: Uint8Array): DrawnMime | 'gzip' | null {
   if (isSvg(b)) return 'image/svg+xml';
   const brands = ftypBrands(b);
@@ -71,15 +96,19 @@ export function sniffDrawn(b: Uint8Array): DrawnMime | 'gzip' | null {
   return null;
 }
 
-/** Whether the page can show `bytes` at all (as they are, or drawn), from the magic bytes alone. */
+/** Whether the page can show `bytes` at all, as they are or drawn, from the magic bytes alone. */
 export const isPicture = (b: Uint8Array): boolean => sniffImage(b) !== null || sniffDrawn(b) !== null;
 
+/** Picture bytes in a format the page shows as they are. */
 export interface Raster {
   bytes: Uint8Array;
   mime: ImageMime;
 }
 
-/** Draws checked bytes of `mime` at `px` x `px` (keeping their aspect, centred), encoded as WEBP, else PNG. Null when the browser cannot decode or encode them. */
+/**
+ * Draws checked bytes of `mime` at `px` x `px`, keeping their aspect and centred, encoded as WEBP,
+ * else PNG. Null when the browser cannot decode or encode them.
+ */
 export async function rasterize(bytes: Uint8Array, mime: DrawnMime, px = RASTER_PX): Promise<Raster | null> {
   if (typeof document === 'undefined' || typeof Image === 'undefined' || typeof URL.createObjectURL !== 'function') return null;
   const url = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: mime }));
@@ -105,14 +134,17 @@ export async function rasterize(bytes: Uint8Array, mime: DrawnMime, px = RASTER_
     }
     return null;
   } catch {
-    // a file this browser cannot decode, or a canvas it will not read back
+    // A file this browser cannot decode, or a canvas it will not read back.
     return null;
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
-/** Expands gzip bytes, at most `max` of output; null for anything else, a broken stream or more than `max`. */
+/**
+ * Expands gzip bytes to at most `max` of output. Null for anything else, a broken stream or more
+ * than `max`.
+ */
 export async function gunzipCapped(bytes: Uint8Array, max = MAX_SVG_BYTES): Promise<Uint8Array | null> {
   if (typeof DecompressionStream === 'undefined') return null;
   try {
@@ -141,13 +173,17 @@ export async function gunzipCapped(bytes: Uint8Array, max = MAX_SVG_BYTES): Prom
   }
 }
 
-// ------------------------------------------------------------------------------------------------ no code in a picture
+// --- No code in a picture ---
 
 /**
- * What an SVG document carries that is not a plain drawing, or null: a script, an event handler, a `javascript:` (or other script) address, an HTML
- * island (`foreignObject`, `iframe`, `object`, `embed`), an entity declaration (an XML bomb), an animation that changes an address, or a reference to
- * anything outside the file (`http(s):`, `//host`, another file, `@import`). Shown in an <img> none of this would run; a file with any of it is refused
- * all the same, so the app never shows a picture that was made to do more than be a picture.
+ * What an SVG document carries that is not a plain drawing, or null. It looks for:
+ * - a script, an event handler, or a `javascript:` or other script address,
+ * - an HTML island (`foreignObject`, `iframe`, `object`, `embed`),
+ * - an entity declaration, which could be an XML bomb,
+ * - an animation that changes an address,
+ * - a reference to anything outside the file (`http(s):`, `//host`, another file, `@import`).
+ * Shown in an <img> none of this would run. A file with any of it is refused all the same, so the
+ * app never shows a picture that was made to do more than be a picture.
  */
 export function svgActiveContent(text: string): string | null {
   const s = text.replace(/\s+/g, ' ');
@@ -163,7 +199,8 @@ export function svgActiveContent(text: string): string | null {
     [/@import\b/i, 'style import'],
   ];
   for (const [re, why] of rules) if (re.test(s)) return why;
-  // an address in the file may only point inside it (`#id`) or carry a picture (`data:image/png|jpeg|webp|gif;base64,`)
+  // An address in the file may only point inside it (`#id`) or carry a picture
+  // (`data:image/png|jpeg|webp|gif;base64,`).
   for (const m of s.matchAll(/\b(href|src)\s*=\s*(["'])(.*?)\2/gi)) {
     const v = m[3]!.trim();
     if (v.startsWith('#') || /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(v)) continue;
@@ -180,8 +217,9 @@ export function svgActiveContent(text: string): string | null {
 const MARKERS = ['<script', 'javascript:', '<html', '<body', '<iframe', '<object', '<embed', '<?php', 'onerror=', 'onload='];
 
 /**
- * Web code hidden in a raster file (a "polyglot": a picture that is also an HTML page or a script), or null. The bytes are searched as ASCII without
- * case for the markers of HTML, script and server code; a real picture's compressed data practically never spells one out.
+ * Web code hidden in a raster file, or null. Such a "polyglot" is a picture that is also an HTML
+ * page or a script. The bytes are searched as ASCII, ignoring case, for the markers of HTML,
+ * script and server code. A real picture's compressed data practically never spells one out.
  */
 export function rasterHiddenCode(bytes: Uint8Array): string | null {
   let s = '';
@@ -191,7 +229,10 @@ export function rasterHiddenCode(bytes: Uint8Array): string | null {
   return null;
 }
 
-/** Why a picture file must not be shown or declared, or null: `not a picture`, or the code found in it. A compressed SVG is expanded and checked as an SVG. */
+/**
+ * Why a picture file must not be shown or declared, or null. The reason is `not a picture` or the
+ * code found in it. A compressed SVG is expanded and checked as an SVG.
+ */
 export async function pictureProblem(bytes: Uint8Array): Promise<string | null> {
   const kind = sniffImage(bytes) ? 'raster' : sniffDrawn(bytes);
   if (kind === null) return 'not a picture';
@@ -205,13 +246,16 @@ export async function pictureProblem(bytes: Uint8Array): Promise<string | null> 
   return rasterHiddenCode(bytes);
 }
 
-/** Draws a checked file to a raster picture; injectable for tests. */
+/** Draws a checked file to a raster picture. Tests inject their own. */
 export type Rasterize = (bytes: Uint8Array, mime: DrawnMime) => Promise<Raster | null>;
 
 /**
- * What the page shows for CHECKED bytes (their hash was compared before): the bytes themselves for PNG, JPEG, WEBP and GIF (an animation stays one),
- * else the picture drawn from them (SVG, a gzip-compressed SVG, AVIF, HEIC, JPEG XL, BMP, ICO, TIFF). Null for anything else, a file with code in it
- * (`pictureProblem`) or a file the browser cannot draw.
+ * What the page shows for checked bytes, whose hash was compared before.
+ *
+ * For PNG, JPEG, WEBP and GIF it is the bytes themselves, so an animation stays one. For SVG, a
+ * gzip-compressed SVG, AVIF, HEIC, JPEG XL, BMP, ICO and TIFF it is the picture drawn from them.
+ * It is null for anything else, for a file with code in it (`pictureProblem`) and for a file the
+ * browser cannot draw.
  */
 export async function shownPicture(bytes: Uint8Array, draw: Rasterize = rasterize): Promise<Raster | null> {
   if ((await pictureProblem(bytes)) !== null) return null;

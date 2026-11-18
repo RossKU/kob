@@ -1,25 +1,41 @@
-// Token logos from the address the token's creator gave (founder decision 2026-11-03), beside kascov.io's checked copy (data/kascov.ts).
+// Token logos from the address the token's creator gave, beside kascov.io's checked copy
+// (data/kascov.ts).
 //
-// KOB stores and serves no third-party image (a cache would make the operator a publisher). A logo is loaded by the VIEWER'S BROWSER, straight from its
-// source, and a report (data/logo-blocklist.ts) takes it down. The sources, in the order the app tries them:
+// KOB stores and serves no third-party image, because a cache would make the operator a
+// publisher. A logo is loaded by the viewer's browser, straight from its source, and a report
+// (data/logo-blocklist.ts) takes it down. The sources, in the order the app tries them:
+// 1. kascov.io's saved copy, shown only when its bytes hash to what the creator committed to
+//    (data/kascov.ts).
+// 2. `ipfs://<cid>[/path]`, from the creator's KCC-23 declaration or kascov's claim. The bytes are
+//    fetched from a public gateway (`AppConfig.ipfsGatewayUrl`, default https://dweb.link/ipfs)
+//    and shown from a `blob:` URL. They are checked against the CID where that is possible
+//    without a library (`verifyIpfsBytes`). That is a CIDv1 raw leaf, or a one-block CIDv0 or
+//    dag-pb file with no path, so an image of at most 256 KiB. A larger file, or one inside a
+//    directory, is a many-block DAG whose check needs the whole DAG. There the gateway's content
+//    addressing is accepted. The gateway can then serve other bytes of a valid picture type, but it
+//    cannot make the creator's address point elsewhere.
+// 3. `https://`, from the declaration, or kascov's claimed image when it has no saved copy. It is
+//    a plain lazy <img src> with no referrer, in a fixed box, labelled "Image from the creator's
+//    site, not checked". The `fetch` sends no credentials, but the <img> sends the host's own
+//    cookies, if any. The creator's host sends no CORS header, so the page cannot read the bytes.
+//    Nothing is checked, and that host sees the viewer's IP address and when the logo was looked
+//    at. The Settings switch turns this source off. Wallet views load it only for a token the user
+//    acquired or chose to show (data/logo-gate.ts).
+//    When the declaration carries an `image_hash` (SHA-256 of the picture file, KCC-0021's
+//    field), the page first tries to read the bytes, with a CORS-mode `fetch` without credentials
+//    or referrer (`createHttpsChecker`).
+//    - Readable and equal to the hash, they are shown from a `blob:` URL as checked.
+//    - Readable and different, the letter is shown with a note that the picture does not match
+//      the creation record.
+//    - Not readable, the usual case without a CORS header, it falls back to the unchecked <img>.
+//    An `ipfs://` image with an `image_hash` is compared with it as well.
+// 4. The letter avatar.
 //
-//   1. kascov.io's saved copy, shown only when its bytes hash to what the creator committed to (data/kascov.ts): unchanged.
-//   2. `ipfs://<cid>[/path]` (the creator's KCC-23 declaration, or kascov's claim): the BYTES are fetched from a public gateway (`AppConfig.ipfsGatewayUrl`,
-//      default https://dweb.link/ipfs) and shown from a `blob:` URL. The bytes are checked against the CID where that is possible without a library
-//      (`verifyIpfsBytes`: a CIDv1 raw leaf, or a one-block CIDv0 / dag-pb file with no path, i.e. an image of at most 256 KiB); a larger file or one
-//      inside a directory is a many-block DAG, whose check needs the whole DAG, so there the gateway's content addressing is accepted (the gateway can
-//      then serve other bytes of a valid image type; it cannot make the creator's address point elsewhere).
-//   3. `https://` (the declaration, or kascov's claimed image when it has no saved copy): a plain <img src> with no referrer, lazy (no credentials for the `fetch`; the <img> sends the host's own cookies, if any),
-//      in a fixed box, labelled "Image from the creator's site, not checked". The creator's host sends no CORS header, so the page cannot read the bytes:
-//      nothing is checked, and that host sees the viewer's IP address and when the logo was looked at. The Settings switch turns this source off. Wallet views load it only for a token the user acquired or chose to show (data/logo-gate.ts).
-//      When the declaration carries an `image_hash` (SHA-256 of the picture file, KCC-0021's field), the page first tries to READ the bytes
-//      (`fetch` in CORS mode, no credentials, no referrer): readable and equal to the hash, they are shown from a `blob:` URL as checked; readable and
-//      different, the letter is shown with a note that the picture does not match the creation record (`createHttpsChecker`); not readable (no CORS
-//      header, the usual case), it falls back to the unchecked <img> above. An `ipfs://` image with an `image_hash` is compared with it as well.
-//   4. The letter avatar.
-//
-// SVG, AVIF, HEIC, JPEG XL, BMP, ICO and TIFF pictures are shown only from checked bytes (the hash is that of the original file), drawn to a WEBP first
-// (data/svg-logo.ts). For every source: no `data:` URL, no host that is an IP literal, `localhost` or a name without a dot (an address inside the viewer's network).
+// SVG, AVIF, HEIC, JPEG XL, BMP, ICO and TIFF pictures are shown only from bytes the page read
+// itself, drawn to a WEBP first (data/svg-logo.ts). Those bytes are checked against the original
+// file's hash, except for a many-block IPFS file, where the gateway's content addressing stands
+// in. For every source the app refuses a `data:` URL and a host that is an IP literal,
+// `localhost` or a name without a dot, which is an address inside the viewer's network.
 import { readCapped, sha256Hex, type ImageMime } from './kascov';
 import { refusedHost, type LogoRef } from './logo-url';
 import { isPicture, shownPicture, type Rasterize } from './svg-logo';
@@ -28,13 +44,13 @@ export { parseLogoRef, refusedHost, safeHttpsLogo, type LogoRef } from './logo-u
 
 export { DEFAULT_IPFS_GATEWAY_URL } from '../config';
 
-/** The largest picture file the app loads as bytes (and the Create page hashes): 1.5 MB. */
+/** The largest picture file the app loads as bytes and the Create page hashes, 1.5 MB. */
 export const MAX_LOGO_BYTES = 1_500_000;
 
-/** A declared `image_hash`: 64 lowercase hex characters, else null. */
+/** Reads a declared `image_hash`, 64 lowercase hex characters, else null. */
 export const asImageHash = (v: unknown): string | null => (typeof v === 'string' && /^[0-9a-f]{64}$/.test(v) ? v : null);
 
-// ------------------------------------------------------------------------------------------------ IPFS: the CID against the bytes
+// --- IPFS: the CID against the bytes ---
 
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
@@ -82,7 +98,7 @@ function varint(n: number): number[] {
   return out;
 }
 
-/** The unsigned varint at `at`: [value, next index], or null. */
+/** The unsigned varint at `at`, as [value, next index], or null. */
 function readVarint(b: Uint8Array, at: number): [number, number] | null {
   let v = 0;
   let shift = 1;
@@ -94,7 +110,10 @@ function readVarint(b: Uint8Array, at: number): [number, number] | null {
   return null;
 }
 
-/** What a CID commits to: the SHA-256 digest and how the bytes were wrapped before hashing. Null for any other hash function or codec. */
+/**
+ * What a CID commits to, the SHA-256 digest and how the bytes were wrapped before hashing. Null
+ * for any other hash function or codec.
+ */
 export function parseCid(cid: string): { digest: Uint8Array; codec: 'raw' | 'dag-pb' } | null {
   if (cid.startsWith('Qm')) {
     const mh = base58Decode(cid);
@@ -113,10 +132,13 @@ export function parseCid(cid: string): { digest: Uint8Array; codec: 'raw' | 'dag
   return codec[0] === 0x55 ? { digest, codec: 'raw' } : codec[0] === 0x70 ? { digest, codec: 'dag-pb' } : null;
 }
 
-/** The largest file the default importer puts in ONE block (chunk size 256 KiB). */
+/** The largest file the default importer puts in one block, with a chunk size of 256 KiB. */
 const ONE_BLOCK = 262_144;
 
-/** A one-block UnixFS file as dag-pb serialises it: PBNode{ Data: UnixFS{ Type: File, Data: bytes, filesize } }, no links. */
+/**
+ * A one-block UnixFS file as dag-pb serialises it, without links:
+ * PBNode{ Data: UnixFS{ Type: File, Data: bytes, filesize } }.
+ */
 function unixfsFileBlock(file: Uint8Array): Uint8Array {
   const inner = [0x08, 0x02, 0x12, ...varint(file.length)];
   const tail = [0x18, ...varint(file.length)];
@@ -132,44 +154,59 @@ const sameBytes = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.leng
 const fromHex = (h: string): Uint8Array => new Uint8Array((h.match(/../g) ?? []).map((x) => parseInt(x, 16)));
 
 /**
- * Whether `bytes` are what `cid` names: `true` (they hash to it), `false` (they do not), or `null` when this cannot be checked without the whole DAG
- * (a path inside a directory, a file of more than one block, a codec or hash this check does not know): the caller then relies on the gateway.
+ * Whether `bytes` are what `cid` names. `true` means they hash to it and `false` that they do not.
+ * `null` means this cannot be checked without the whole DAG, and the caller then relies on the
+ * gateway. That is a path inside a directory, a file of more than one block, or a codec or hash
+ * this check does not know.
  */
 export async function verifyIpfsBytes(cid: string, path: string, bytes: Uint8Array, sha256: (b: Uint8Array) => Promise<string | null> = sha256Hex): Promise<boolean | null> {
   if (path !== '') return null;
   const c = parseCid(cid);
   if (!c) return null;
   if (c.codec === 'dag-pb' && bytes.length > ONE_BLOCK) return null;
-  // a CIDv1 raw leaf is the file itself; a dag-pb CID names the wrapped block (a file of one block). A file of at most 256 KiB that does not hash to its
-  // dag-pb CID in that form is treated as forged (one imported with a smaller chunk size is many blocks and shows a letter instead: the safe direction).
+  // A CIDv1 raw leaf is the file itself. A dag-pb CID names the wrapped block of a one-block file.
+  // A file of at most 256 KiB that does not hash to its dag-pb CID in that form is treated as
+  // forged. One imported with a smaller chunk size is many blocks and shows a letter instead,
+  // which is the safe direction.
   const hash = await sha256(c.codec === 'raw' ? bytes : unixfsFileBlock(bytes));
   if (hash === null) return null;
   return sameBytes(fromHex(hash), c.digest);
 }
 
-// ------------------------------------------------------------------------------------------------ IPFS: fetch through the gateway
+// --- IPFS: fetch through the gateway ---
 
+/** Options of `fetchIpfsImage`. */
 export interface IpfsFetchOptions {
   fetch?: typeof fetch;
   signal?: AbortSignal | undefined;
-  /** default 10 s */
+  /** Default 10 s. */
   timeoutMs?: number;
-  /** default 1.5 MB */
+  /** Default 1.5 MB. */
   maxBytes?: number;
   sha256?: (b: Uint8Array) => Promise<string | null>;
-  /** the creator's committed SHA-256 of the file (64 lowercase hex): the fetched bytes must equal it, else `hashMismatch` */
+  /**
+   * The creator's committed SHA-256 of the file, 64 lowercase hex. The fetched bytes must hash to
+   * it, else `onMismatch` is called and nothing is returned.
+   */
   imageHash?: string | null | undefined;
   onMismatch?: OnHashMismatch | undefined;
-  /** draws a checked file that is not PNG, JPEG, WEBP or GIF to a raster picture (default `rasterize` of data/svg-logo.ts) */
+  /**
+   * Draws a checked file that is not PNG, JPEG, WEBP or GIF to a raster picture (default
+   * `rasterize` of data/svg-logo.ts).
+   */
   rasterize?: Rasterize;
 }
 
+/** The picture of an `ipfs://` logo and what it was checked against. */
 export interface IpfsImage { bytes: Uint8Array; mime: ImageMime; checked: boolean; /** the bytes were compared with `imageHash` and are equal */ hashChecked?: boolean }
 
-/** Called when the gateway served a picture that is not the file the creator's `image_hash` names (the picture is then not returned). */
+/**
+ * Called when the gateway served a picture that is not the file the creator's `image_hash` names.
+ * The picture is then not returned.
+ */
 export type OnHashMismatch = () => void;
 
-/** The gateway URL of a reference (null when no gateway is configured, or the gateway is not https). */
+/** The gateway URL of a reference. Null when no gateway is configured or it is not https. */
 export function ipfsGatewayUrl(gateway: string, ref: Extract<LogoRef, { kind: 'ipfs' }>): string | null {
   const g = gateway.trim().replace(/\/+$/, '');
   if (g === '') return null;
@@ -183,9 +220,15 @@ export function ipfsGatewayUrl(gateway: string, ref: Extract<LogoRef, { kind: 'i
 }
 
 /**
- * The image behind an `ipfs://` logo, fetched as bytes from `gateway` (redirects are followed: dweb.link answers with its per-CID subdomain). Null when the gateway
- * does not answer, the file is too large, is not a raster image by its magic bytes (no SVG, no HTML), or its bytes are NOT what the CID names where that can be
- * checked (`verifyIpfsBytes`). `checked`: the bytes were compared with the CID; `hashChecked`: with the creator's `image_hash` (a different file is not returned: `onMismatch`).
+ * The image behind an `ipfs://` logo, fetched as bytes from `gateway`.
+ *
+ * Redirects are followed, because dweb.link answers with its per-CID subdomain. It is null when
+ * the gateway does not answer or the file is too large. It is also null when the file is not a
+ * picture the page can show (data/svg-logo.ts), or its bytes are not what the CID names where
+ * that can be checked (`verifyIpfsBytes`).
+ * - `checked`: the bytes were compared with the CID.
+ * - `hashChecked`: they were compared with the creator's `image_hash`. A different file is not
+ *   returned, and `onMismatch` is called.
  */
 export async function fetchIpfsImage(gateway: string, ref: Extract<LogoRef, { kind: 'ipfs' }>, o: IpfsFetchOptions = {}): Promise<IpfsImage | null> {
   const url = ipfsGatewayUrl(gateway, ref);
@@ -222,15 +265,25 @@ export async function fetchIpfsImage(gateway: string, ref: Extract<LogoRef, { ki
   }
 }
 
+/** Loads `ipfs://` logos as blob URLs. */
 export interface IpfsLoader {
-  /** The blob URL of the logo of `ref`, null when there is none. With `imageHash` the bytes must equal it, else null (and `mismatched` is true). Never rejects. */
+  /**
+   * The blob URL of the logo of `ref`, null when there is none. With `imageHash` the bytes must
+   * hash to it, else it is null and `mismatched` is true. It never rejects.
+   */
   load(gateway: string, ref: Extract<LogoRef, { kind: 'ipfs' }>, imageHash?: string | null): Promise<string | null>;
-  /** Whether the gateway served another file than the one `imageHash` names (known after `load` resolved). */
+  /**
+   * Whether the gateway served another file than the one `imageHash` names, known once `load`
+   * resolved.
+   */
   mismatched(gateway: string, ref: Extract<LogoRef, { kind: 'ipfs' }>, imageHash: string): boolean;
   clear(): void;
 }
 
-/** Loads `ipfs://` logos through a gateway, at most `limit` at once, one blob URL per (gateway, address), a failure not retried for `failTtlMs` (default 5 min). */
+/**
+ * Loads `ipfs://` logos through a gateway, at most `limit` at once, with one blob URL per gateway
+ * and address. A failure is not retried for `failTtlMs` (default 5 min).
+ */
 export function createIpfsLoader(o: IpfsFetchOptions & { limit?: number; failTtlMs?: number; now?: () => number; makeUrl?: (bytes: Uint8Array, mime: ImageMime) => string } = {}): IpfsLoader {
   const limit = Math.max(1, o.limit ?? 3);
   const failTtlMs = o.failTtlMs ?? 300_000;
@@ -262,7 +315,8 @@ export function createIpfsLoader(o: IpfsFetchOptions & { limit?: number; failTtl
       if (running) return running;
       const failedAt = failed.get(key);
       if (failedAt !== undefined && now() - failedAt < failTtlMs) return Promise.resolve(null);
-      // not tied to the caller's signal: a row scrolled away must not cancel what the next visit will use
+      // Not tied to the caller's signal. A row scrolled away must not cancel what the next visit
+      // will use.
       const p = slot(() => fetchIpfsImage(gateway, ref, { ...o, signal: undefined, imageHash: imageHash ?? null, onMismatch: () => wrong.add(key) }))
         .then((img) => {
           if (!img) {
@@ -287,37 +341,48 @@ export function createIpfsLoader(o: IpfsFetchOptions & { limit?: number; failTtl
   };
 }
 
-/** The app's one IPFS logo loader: the session's blob URLs. */
+/** The app's one IPFS logo loader, which holds the session's blob URLs. */
 export const ipfsLoader: IpfsLoader = createIpfsLoader();
 
-// ------------------------------------------------------------------------------------------------ https: read the bytes, compare with the hash
+// --- https: read the bytes, compare with the hash ---
 
 /**
- * What reading an `https://` logo and comparing it with the creator's `image_hash` gave:
- *   `match`      the bytes were readable (the host allows it with a CORS header) and hash to `image_hash`: shown from a blob URL as checked;
- *   `mismatch`   readable and a different file: the picture at the address is not the one the creation record names, nothing is shown;
- *   `refused`    readable and equal to the hash but not a picture (HTML ..., or an SVG the browser cannot draw): never shown;
- *   `unreadable` the page could not read it (no CORS header, offline, an error status, too large, no `crypto.subtle`): nothing could be checked,
- *                the caller falls back to the unchecked <img>.
+ * What reading an `https://` logo and comparing it with the creator's `image_hash` gave.
+ * - `match`: the bytes were readable, because the host allows it with a CORS header, and hash to
+ *   `image_hash`. They are shown from a blob URL as checked.
+ * - `mismatch`: readable and a different file. The picture at the address is not the one the
+ *   creation record names, and nothing is shown.
+ * - `refused`: readable and equal to the hash, but not a picture the page can show, such as HTML
+ *   or an SVG the browser cannot draw. It is never shown.
+ * - `unreadable`: the page could not read it, from no CORS header, offline, an error status, too
+ *   large or no `crypto.subtle`. Nothing could be checked, and the caller falls back to the
+ *   unchecked <img>.
  */
 export type HttpsCheck = { kind: 'match'; bytes: Uint8Array; mime: ImageMime } | { kind: 'mismatch' | 'refused' | 'unreadable' };
 
+/** Options of `checkHttpsImage`. */
 export interface HttpsCheckOptions {
   fetch?: typeof fetch;
   signal?: AbortSignal | undefined;
-  /** default 10 s */
+  /** Default 10 s. */
   timeoutMs?: number;
-  /** default MAX_LOGO_BYTES */
+  /** Default MAX_LOGO_BYTES. */
   maxBytes?: number;
   sha256?: (b: Uint8Array) => Promise<string | null>;
-  /** draws a checked file that is not PNG, JPEG, WEBP or GIF to a raster picture (default `rasterize` of data/svg-logo.ts) */
+  /**
+   * Draws a checked file that is not PNG, JPEG, WEBP or GIF to a raster picture (default
+   * `rasterize` of data/svg-logo.ts).
+   */
   rasterize?: Rasterize;
 }
 
 /**
- * Reads an `https://` logo as bytes and compares them with `imageHash` (64 lowercase hex). The request carries no credentials and no referrer and runs in
- * CORS mode: a host that does not send `Access-Control-Allow-Origin` makes it fail, which is `unreadable` (the common case: the page then shows the
- * unchecked <img>, as for a logo with no hash). The URL is one `safeHttpsLogo` accepted.
+ * Reads an `https://` logo as bytes and compares them with `imageHash` (64 lowercase hex).
+ *
+ * The request carries no credentials and no referrer and runs in CORS mode. A host that does not
+ * send `Access-Control-Allow-Origin` makes it fail, which is `unreadable`. That is the common
+ * case, and the page then shows the unchecked <img>, as for a logo with no hash. The URL is one
+ * `safeHttpsLogo` accepted.
  */
 export async function checkHttpsImage(url: string, imageHash: string, o: HttpsCheckOptions = {}): Promise<HttpsCheck> {
   if (o.signal?.aborted) return { kind: 'unreadable' };
@@ -334,7 +399,8 @@ export async function checkHttpsImage(url: string, imageHash: string, o: HttpsCh
     const got = await (o.sha256 ?? sha256Hex)(bytes);
     if (got === null) return { kind: 'unreadable' };
     if (got !== imageHash) return { kind: 'mismatch' };
-    // the ORIGINAL bytes hash to the commitment: shown as they are, or as the picture drawn from them (SVG, AVIF ...)
+    // The original bytes hash to the commitment. They are shown as they are, or for SVG, AVIF and
+    // the like as the picture drawn from them.
     const r = await shownPicture(bytes, o.rasterize);
     return r ? { kind: 'match', bytes: r.bytes, mime: r.mime } : { kind: 'refused' };
   } catch {
@@ -345,15 +411,23 @@ export async function checkHttpsImage(url: string, imageHash: string, o: HttpsCh
   }
 }
 
+/** An `HttpsCheck` as the views use it, with a blob URL for a match. */
 export type HttpsOutcome = { kind: 'match'; src: string } | { kind: 'mismatch' | 'refused' | 'unreadable' };
 
+/** Checks `https://` logos against their hashes and remembers the outcomes. */
 export interface HttpsChecker {
-  /** The outcome for `url` against `imageHash` (once per pair per session; an unreadable one again after `failTtlMs`). Never rejects. A match carries a blob URL. */
+  /**
+   * The outcome for `url` against `imageHash`. It is checked once per pair per session, and an
+   * unreadable one again after `failTtlMs`. It never rejects. A match carries a blob URL.
+   */
   check(url: string, imageHash: string): Promise<HttpsOutcome>;
   clear(): void;
 }
 
-/** Checks `https://` logos against their hashes, at most `limit` at once (default 3), remembering outcomes. */
+/**
+ * Checks `https://` logos against their hashes, at most `limit` at once (default 3), remembering
+ * outcomes.
+ */
 export function createHttpsChecker(o: HttpsCheckOptions & { limit?: number; failTtlMs?: number; now?: () => number; makeUrl?: (bytes: Uint8Array, mime: ImageMime) => string } = {}): HttpsChecker {
   const limit = Math.max(1, o.limit ?? 3);
   const failTtlMs = o.failTtlMs ?? 300_000;
