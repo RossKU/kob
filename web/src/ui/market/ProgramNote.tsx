@@ -1,7 +1,11 @@
-// What a token page says about a token's PROGRAM and DECIMALS where no registry entry does (a token only the indexer, the wallet or kascov.io names),
-// as the tooltip of the token-family chip: the token program as KOB pins it (matched by template hash, so a name here is KOB's own table, never a claim of a third
-// party) with its review status, and where the decimals come from, by the rules the whole app uses (declaration, the program's default such as KaspaRocket's 3,
-// else the first order names them). Plus the link to the token on kascov.io for a row kascov.io named. Pure facts and labels: nothing here is a rating.
+// What a token page says about a token's program and decimals where no registry entry does. That
+// covers a token only the indexer, the wallet or kascov.io names. It is the tooltip of the
+// token-family chip. It gives the token program as KOB pins it, matched by template hash, so a
+// name here is KOB's own table and never a claim of a third party. It adds the program's review
+// status. It also says where the decimals come from, by the rules the whole app uses: the
+// declaration, the program's default such as KaspaRocket's 3, else the first order names them. A
+// row kascov.io named also gets the link to the token on kascov.io. These are facts and labels
+// only. Nothing here is a rating.
 import { useServices } from '../../app/context';
 import { decimalsOrigin } from '../../app/token-display';
 import { kascovNetwork, kascovTokenUrl } from '../../data/kascov';
@@ -10,15 +14,20 @@ import { TOKEN_PROGRAMS, programDefaultDecimals } from '../../kob/programs.gener
 import type { TokenRow } from './token-model';
 
 /**
- * The "Program" row of a token's details, for EVERY token: which token program it runs and how that was established, as one neutral fact line (no colour, no
- * badge; the risk policy lives in token-model.ts `tokenRiskCodes` and is untouched). `name` is the program as this build knows it (`KCC-20 (KOB reference, 3x3)`,
- * `KCC-20 (KaspaCom 0.2.5)`) or "unknown program"; `basis` says how it was established:
- *   genesis       KOB's own genesis check passed (the program is the one the check decoded from the token's creation)
- *   genesisFailed the genesis check found a problem (the program is still read from the template hash, when there is one)
- *   matched       a registry token whose template matches the program pinned in this build
- *   differs       a registry token whose template does not match the pinned program (or names none this build has)
- *   hash          the template hash an indexer or kascov.io names is the one of a program in this build's table; the genesis was not checked
- * `basis` is null when nothing is known.
+ * The "Program" row of a token's details, for every token. It says which token program the token
+ * runs and how that was established, as one neutral fact line with no colour and no badge. The
+ * risk policy lives in token-model.ts `tokenRiskCodes` and is untouched. `name` is the program as
+ * this build knows it (`KCC-20 (KOB reference, 3x3)`, `KCC-20 (KaspaCom 0.2.5)`) or "unknown
+ * program". `basis` says how it was established, and is null when nothing is known.
+ * - `genesis`: KOB's own genesis check passed. The program is the one the check decoded from the
+ *   token's creation.
+ * - `genesisFailed`: the genesis check found a problem. The program is still read from the
+ *   template hash, when there is one.
+ * - `matched`: a registry token whose template matches the program pinned in this build.
+ * - `differs`: a registry token whose template does not match the pinned program, or names none
+ *   this build has.
+ * - `hash`: the template hash an indexer or kascov.io names is the one of a program in this
+ *   build's table. The genesis was not checked.
  */
 export interface ProgramFact {
   name: string;
@@ -31,7 +40,8 @@ export function programFact(row: ProgramRow): ProgramFact {
   const g = row.genesis;
   const program = (g?.status === 'verified' ? (TOKEN_PROGRAMS.find((p) => p.name === g.program) ?? null) : null) ?? programOfRow(row);
   if (!program) {
-    // a registry template this build has no program for: the family and the registry's id for it are all that is known
+    // A registry template this build has no program for. The family and the registry's id for it
+    // are all that is known.
     const info = row.info;
     if (info && info.openList !== true) return { name: t('market.program.nameOfTemplate', { family: t(`market.badge.family.${info.family}`), template: info.templateId }), basis: 'differs' };
     return { name: t('market.program.unknown'), basis: null };
@@ -43,23 +53,34 @@ export function programFact(row: ProgramRow): ProgramFact {
   return { name, basis: 'hash' };
 }
 
-/** `KCC-20 (KOB reference, 3x3) · checked from its genesis`: the text of the Program row. */
+/**
+ * The text of the Program row, such as `KCC-20 (KOB reference, 3x3) · checked from its genesis`.
+ */
 export function programFactText(row: ProgramRow): string {
   const f = programFact(row);
   return f.basis ? `${f.name} · ${t(`market.program.basis.${f.basis}`)}` : f.name;
 }
 
-/** The pinned program a row names: its verified program (`info`), else the one its template hash names in this build's table; null when none. */
+/**
+ * The pinned program a row names. It is its verified program (`info`), else the one its template
+ * hash names in this build's table, else null.
+ */
 export function programOfRow(row: Pick<TokenRow, 'info' | 'index'>): (typeof TOKEN_PROGRAMS)[number] | null {
   const name = row.info?.program ?? null;
   const hash = row.info?.templateHash || row.index?.template_hash || null;
   return TOKEN_PROGRAMS.find((p) => (name !== null && p.name === name) || (hash !== null && p.templateHash === hash)) ?? null;
 }
 
-/** `reviewed`, `pending review`, `test only`: the review status of a program in this build's table. */
+/**
+ * The review status of a program in this build's table: `reviewed`, `pending review` or `test
+ * only`.
+ */
 export const reviewText = (review: string): string => t(`market.program.review.${review}`);
 
-/** Where the decimals of a row not yet opened for trading come from: the sentence, or the one saying they are not known yet. */
+/**
+ * Where the decimals of a row not yet opened for trading come from. It is the sentence, or the one
+ * saying they are not known yet.
+ */
 export function decimalsLine(row: Pick<TokenRow, 'declared' | 'decimals' | 'info' | 'index'>): string {
   const program = programOfRow(row);
   if (row.declared && row.decimals !== null) return t('market.open.decimals.declared', { decimals: row.decimals });
@@ -69,8 +90,10 @@ export function decimalsLine(row: Pick<TokenRow, 'declared' | 'decimals' | 'info
 }
 
 /**
- * What a token page says about a token's program and decimals where no registry entry does, as the tooltip text of the token-family chip (no box, no line
- * of its own): the program as KOB pins it with its review status, and where the decimals (and the price step) come from.
+ * What a token page says about a token's program and decimals where no registry entry does. It is
+ * the tooltip text of the token-family chip, with no box and no line of its own. It names the
+ * program as KOB pins it with its review status, and where the decimals and the price step come
+ * from.
  */
 export function programTitle(row: TokenRow): string | null {
   const lines: string[] = [];
@@ -84,7 +107,10 @@ export function programTitle(row: TokenRow): string | null {
   return lines.length ? lines.join('\n') : null;
 }
 
-/** The link to the token on kascov.io, for a row kascov.io named (a new tab, no referrer). */
+/**
+ * The link to the token on kascov.io, for a row kascov.io named. It opens a new tab with no
+ * referrer.
+ */
 export function KascovLink(props: { row: Pick<TokenRow, 'covenantId' | 'kascov'> }) {
   const { config } = useServices();
   const net = kascovNetwork(config.network);

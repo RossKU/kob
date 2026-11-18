@@ -1,6 +1,8 @@
-// One token of a market page, whichever way it is known: a listed row, a row only kascov.io names, the wallet's node-verified holdings of it, token
-// outputs of it the node confirmed, and for a token without a registry entry the TokenInfo synthesised from what the chain and the indexer show
-// (use-open-token.ts). The token page and the two sides of a pair page share this, so a token trades on a pair exactly when it trades on its own page.
+// One token of a market page, whichever way it is known. It may be a listed row, a row only
+// kascov.io names, the wallet's node-verified holdings of it, or token outputs of it the node
+// confirmed. For a token without a registry entry it is the TokenInfo synthesised from what the
+// chain and the indexer show (use-open-token.ts). The token page and the two sides of a pair page
+// share this, so a token trades on a pair exactly when it trades on its own page.
 import { useMemo } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { displayToken } from '../../app/token-display';
@@ -16,34 +18,52 @@ import { useOpenToken, type OpenTokenState } from './use-open-token';
 import { usePublicToken, type PublicTokenState } from './use-public-token';
 
 export interface MarketTokenOptions {
-  /** the rows of the registry and the indexer's token list */
+  /** The rows of the registry and the indexer's token list. */
   rows: readonly TokenRow[];
-  /** the indexer's token list is still being read */
+  /** The indexer's token list is still being read. */
   rowsLoading: boolean;
-  /** changes when the book moved: an open-list token's scales are read again */
+  /** Changes when the book moved, so an open-list token's scales are read again. */
   refreshKey: number;
-  /** decimals entered for the token's first order (used only while no order tells the scale) */
+  /**
+   * Decimals entered for the token's first order. They are used only while no order tells the
+   * scale.
+   */
   decimals: number | null;
-  /** the verified declarations known so far (`useDeclarationLookup`) */
+  /** The verified declarations known so far (`useDeclarationLookup`). */
   declared: (covenantId: string) => DeclaredToken | null | undefined;
 }
 
 export interface MarketToken {
-  /** the token as the page trades it: the row with its synthesised TokenInfo where it has one, named */
+  /**
+   * The token as the page trades it: the row with its synthesised TokenInfo where it has one,
+   * named.
+   */
   row: TokenRow | null;
-  /** the row with the creator's name, ticker and icon from kascov.io where KOB has none of its own (the facts stay KOB's) */
+  /**
+   * The row with the creator's name, ticker and icon from kascov.io where KOB has none of its own.
+   * The facts stay KOB's.
+   */
   headerRow: TokenRow | null;
-  /** what an order ticket trades, named as the page names it (the list's ticker, else the creator's on kascov.io): a label, the id stays the identity */
+  /**
+   * What an order ticket trades, named as the page names it. That is the list's ticker, else the
+   * creator's on kascov.io. It is a label, and the id stays the identity.
+   */
   ticketInfo: TokenInfo | null;
   open: OpenTokenState;
   held: HeldTokenState;
   pub: PublicTokenState;
   shown: TokenInfo | undefined;
-  /** the token's facts are its declaration's: no registry entry, or one that disagrees with the chain */
+  /**
+   * The token's facts are its declaration's, because there is no registry entry or one that
+   * disagrees with the chain.
+   */
   onChain: boolean;
-  /** an answer that can still change the row is on its way (the lists, the wallet's holdings, the token outputs, kascov.io) */
+  /**
+   * An answer that can still change the row is on its way: the lists, the wallet's holdings, the
+   * token outputs or kascov.io.
+   */
   resolving: boolean;
-  /** the state of kascov.io's token list (use-kascov.ts): the chart's kascov toggle follows it */
+  /** The state of kascov.io's token list (use-kascov.ts). The chart's kascov toggle follows it. */
   kascovStatus: KascovState['status'];
 }
 
@@ -52,37 +72,49 @@ export function useMarketToken(id: string, o: MarketTokenOptions): MarketToken {
   const { registry, kob } = services;
   const { rows, rowsLoading, refreshKey, decimals, declared: declaredOf } = o;
   const listedRow = useMemo(() => rows.find((r) => r.covenantId === id) ?? null, [rows, id]);
-  // the creator's name, ticker and icon from kascov.io, where KOB has none of its own (kascov-merge.ts; the facts stay KOB's)
+  // The creator's name, ticker and icon from kascov.io, where KOB has none of its own
+  // (kascov-merge.ts). The facts stay KOB's.
   const kascov = useKascov();
-  // a token in neither list (no order of it yet) that kascov.io names and whose program this build pins: the same row the market list shows for it
+  // A token in neither list, with no order of it yet, that kascov.io names and whose program this
+  // build pins. It is the same row the market list shows for it.
   const kascovRow = useMemo(
     () => (!listedRow && kascov.status === 'ok' ? kascovRowOf(id, kascov.tokens, { network: services.config.network, templates: kob.templates(), registry, declared: declaredOf }) : null),
     [listedRow, kascov, id, services.config.network, kob, registry, declaredOf],
   );
-  // a KCC-20 token in neither list (no order of it yet): its market opens from the wallet's node-verified holdings of it, else from token outputs of it
-  // the indexer names and the node confirms, whoever holds them (kob/open-token.ts); the kascov.io row is only what the page shows while it checks, or
-  // when nothing verifies (no ticket then: the page says which fact is missing)
-  // A listed row that names no program because several order placements claim different ones (`program_ambiguous`; anyone can place one) is
-  // resolved the same way: the program a token output of the wallet or of any holder shows, confirmed on the node, wins; with none the page says so
-  // (audit 2026-10-30 V1)
+  // A KCC-20 token in neither list, with no order of it yet. Its market opens from the wallet's
+  // node-verified holdings of it, else from token outputs of it the indexer names and the node
+  // confirms, whoever holds them (kob/open-token.ts). The kascov.io row is only what the page
+  // shows while it checks, or when nothing verifies. There is no ticket then, and the page says
+  // which fact is missing.
+  // A listed row that names no program is resolved the same way. That happens when several order
+  // placements claim different programs (`program_ambiguous`), which anyone can place. The program
+  // a token output of the wallet or of any holder shows, confirmed on the node, wins. With none
+  // the page says so.
   const ambiguous = listedRow?.index?.program_ambiguous === true;
   const notListed = (!listedRow || ambiguous) && !rowsLoading;
   const held = useHeldToken(id, notListed);
   const pub = usePublicToken(id, notListed && !held.row && !held.loading);
   const baseRow = ambiguous ? (held.row ?? pub.row ?? listedRow) : (listedRow ?? held.row ?? pub.row ?? kascovRow);
-  // the token's KCC-23 declaration (verified against its covenant id): its decimals decide an open-list token's scale, its facts are shown
-  // a token only the wallet's holdings show (the indexer lists it to its owner, not in its token list: no order names it yet) is asked for its declaration
-  // too, so a fresh browser of the issuing key names it and knows its decimals instead of asking for them
+  // The token's KCC-23 declaration, verified against its covenant id. Its decimals decide an
+  // open-list token's scale, and its facts are shown. A token only the wallet's holdings show is
+  // asked for its declaration too. The indexer lists it to its owner and not in its token list,
+  // because no order names it yet. So a fresh browser of the issuing key names it and knows its
+  // decimals instead of asking for them.
   const declared = useDeclaration(id, listedRow?.index?.declaration === true || !!held.row || !!pub.row);
-  // an open-list token (program on the strict list, no registry entry) is tradable with a TokenInfo synthesised from its orders: its decimals taken
-  // from the scale its orders share
+  // An open-list token has a program on the strict list and no registry entry. It is tradable with
+  // a TokenInfo synthesised from its orders, with its decimals taken from the scale its orders
+  // share.
   const open = useOpenToken(baseRow, refreshKey, decimals, declared ?? null);
-  // a token the indexer lists without a ticker ("") is named like one without any (app/token-display.ts): the open-list token's name (this
-  // browser's issuance ticker, else its covenant id), else the display name; never an empty name in a title, a unit or a hint
+  // A token the indexer lists without a ticker ("") is named like one without any
+  // (app/token-display.ts). That is the open-list token's name, this browser's issuance ticker or
+  // else its covenant id, else the display name. There is never an empty name in a title, a unit
+  // or a hint.
   const shown = useMemo(() => displayToken(registry, services.config.network, id), [registry, services.config.network, id, declared]);
-  // where the token's facts are its declaration's (no registry entry, or one that disagrees with the chain): its name as declared, and the marker
-  // the wallet views show ("declared, bound by ancestry", "facts disagree"); never one of this browser's issuance or of assumed decimals here, where the
-  // decimals are the market's (the banner under the title says where they come from)
+  // Where the token's facts are its declaration's, there is no registry entry or it disagrees with
+  // the chain. Its name is then as declared, with the marker the wallet views show ("declared,
+  // bound by ancestry", "facts disagree"). It never uses one of this browser's issuance or of
+  // assumed decimals here. The decimals are the market's, and the banner under the title says
+  // where they come from.
   const onChain = !!shown && (shown.decimalsSource === 'declared' || !!shown.declarationConflicts?.length);
   const row = useMemo(() => {
     if (!baseRow) return baseRow;
@@ -91,13 +123,15 @@ export function useMarketToken(id: string, o: MarketTokenOptions): MarketToken {
       ? { ...named, info: open.info, decimals: open.info.decimals, scale: scaleOfDecimals(open.info.decimals), tick: 1n, tradable: true, reason: null }
       : named;
   }, [baseRow, open.info, shown, onChain]);
-  // the title bar's row: the creator's name, ticker and icon from kascov.io where KOB has none of its own (the facts below stay KOB's)
+  // The title bar's row has the creator's name, ticker and icon from kascov.io where KOB has none
+  // of its own. The facts below stay KOB's.
   const headerRow = useMemo(() => (row && kascov.status === 'ok' ? applyKascov(row, kascov.tokens, longId(row.covenantId)) : row), [row, kascov]);
   const ticketInfo = useMemo(() => {
     const i = row?.info ?? null;
     return i && i.openList && headerRow && headerRow.ticker && headerRow.ticker !== i.ticker ? { ...i, ticker: headerRow.ticker } : i;
   }, [row?.info, headerRow?.ticker]);
-  // the token outputs are asked for last and always answer (a row or a reason): until then a token in neither list, or a listed row with no program, is undecided
+  // The token outputs are asked for last and always answer, with a row or a reason. Until then a
+  // token in neither list, or a listed row with no program, is undecided.
   const undecided = (!listedRow || ambiguous) && !held.row && !pub.row && pub.reason === null;
   const resolving = rowsLoading || held.loading || pub.loading || undecided || (!baseRow && kascov.status === 'loading');
   return { row, headerRow, ticketInfo, open, held, pub, shown, onChain, resolving, kascovStatus: kascov.status };

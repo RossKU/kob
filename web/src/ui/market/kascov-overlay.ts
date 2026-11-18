@@ -1,12 +1,17 @@
-// The chart's optional third-party line: kascov.io's price of the token (data/kascov-candles.ts) in the units of KOB's own chart, laid onto KOB's own bars. Pure.
+// The chart's optional third-party line: kascov.io's price of the token (data/kascov-candles.ts),
+// in the units of KOB's own chart and laid onto KOB's own bars. The module is pure.
 //
-// kascov's close is `quote_sompi / base_amount` sompi per base unit. KOB's chart shows KAS per WHOLE token with the market's decimals (kasPerToken, the same arithmetic as the
-// candles), so the line uses the very same conversion, exact, and only then a float for the canvas. A flipped market (KAS/TOKEN) shows the reciprocal. A token pair
-// (BASE over QUOTE) shows BASE's KAS price over QUOTE's KAS price at every bucket both legs have; a bucket one leg lacks is skipped.
+// kascov's close is `quote_sompi / base_amount`, in sompi per base unit. KOB's chart shows KAS per
+// whole token with the market's decimals (kasPerToken, the same arithmetic as the candles). So the
+// line uses the very same conversion, exact, and only then a float for the canvas. A flipped
+// market (KAS/TOKEN) shows the reciprocal. A token pair (BASE over QUOTE) shows BASE's KAS price
+// over QUOTE's KAS price at every bucket both legs have. A bucket one leg lacks is skipped.
 //
-// The line is laid onto the bars KOB already draws: for each bar, the close of the latest kascov bucket that starts before the bar's end (carried across a quiet stretch, as KOB
-// carries its own close). That keeps the chart's time axis exactly KOB's (an extra point would add a position to it and shift the legend and the drawings), and a coarser kascov
-// bucket (15 m under 1m and 5m bars) draws as a step. Bars before kascov's first candle have no point.
+// The line is laid onto the bars KOB already draws. For each bar it takes the close of the latest
+// kascov bucket that starts before the bar's end. It is carried across a quiet stretch, as KOB
+// carries its own close. That keeps the chart's time axis exactly KOB's, because an extra point
+// would add a position to it and shift the legend and the drawings. A coarser kascov bucket, such
+// as 15 m under 1m and 5m bars, draws as a step. Bars before kascov's first candle have no point.
 import type { KascovSpot } from '../../data/kascov';
 import type { KascovCandle } from '../../data/kascov-candles';
 import { t } from '../../i18n';
@@ -17,10 +22,13 @@ import { invert, kasPerToken } from './orientation';
 export interface OverlayPoint { t: number; price: Rational }
 export interface OverlayLeg { candles: readonly KascovCandle[]; decimals: number }
 
-/** KAS per whole token of a candle's close (exact). */
+/** KAS per whole token of a candle's close, exact. */
 export const kasPerWholeToken = (c: KascovCandle, decimals: number): Rational => kasPerToken(c.quoteSompi, decimals, c.baseAmount);
 
-/** A token's kascov line in KAS per token, or (`inverted`, a flipped market) tokens per KAS. Oldest first. */
+/**
+ * A token's kascov line in KAS per token, or in tokens per KAS when `inverted` for a flipped
+ * market. Oldest first.
+ */
 export function tokenPoints(leg: OverlayLeg, inverted: boolean): OverlayPoint[] {
   const out: OverlayPoint[] = [];
   for (const c of leg.candles) {
@@ -46,8 +54,9 @@ export function pairPoints(base: OverlayLeg, quote: OverlayLeg): OverlayPoint[] 
 }
 
 /**
- * The line on KOB's bars: `barTimes` are the bars' open times in seconds (ascending, as the chart has them), `intervalMs` the bars' length. Per bar the price of the latest point
- * that starts before the bar's end, null while there is none.
+ * The line on KOB's bars. `barTimes` are the bars' open times in seconds, ascending as the chart
+ * has them, and `intervalMs` is the bars' length. Per bar it gives the price of the latest point
+ * that starts before the bar's end, or null while there is none.
  */
 export function laidOnBars(points: readonly OverlayPoint[], barTimes: readonly number[], intervalMs: number): (Rational | null)[] {
   const out: (Rational | null)[] = [];
@@ -60,7 +69,10 @@ export function laidOnBars(points: readonly OverlayPoint[], barTimes: readonly n
   return out;
 }
 
-/** The chart's data of the line: a point per bar that has a price (a bar with none is left out: the line starts where kascov's history does). */
+/**
+ * The chart's data of the line: a point per bar that has a price. A bar with none is left out, so
+ * the line starts where kascov's history does.
+ */
 export function lineData(values: readonly (Rational | null)[], barTimes: readonly number[]): { time: number; value: number }[] {
   const out: { time: number; value: number }[] = [];
   values.forEach((r, i) => {
@@ -71,19 +83,25 @@ export function lineData(values: readonly (Rational | null)[], barTimes: readonl
   return out;
 }
 
-/** About 5 significant digits, at most 6 decimals, trailing zeros trimmed, never a bare zero: `0.01625`, `61.5`, `<0.000001`. */
+/**
+ * About 5 significant digits, at most 6 decimals, trailing zeros trimmed, never a bare zero:
+ * `0.01625`, `61.5`, `<0.000001`.
+ */
 export function overlayPriceText(r: Rational): string {
   const dp = significantDp(r, PRICE_SIGNIFICANT_DIGITS, 0, PRICE_DP_CAP);
   const shown = formatRational(r, dp, 'nearest', 0, ',');
   return shown === '0' ? `<${formatRational({ num: 1n, den: 10n ** BigInt(PRICE_DP_CAP) }, PRICE_DP_CAP, 'nearest', PRICE_DP_CAP)}` : shown;
 }
 
-// ------------------------------------------------------------------------------------------------ the market list's tooltip line
+// ------------------------------------------------------------------ the market list's tooltip line
 
-/** KAS per whole token of kascov's spot (`num` sompi per `den` base units), with the market's decimals (exact). */
+/**
+ * KAS per whole token of kascov's spot (`num` sompi per `den` base units), with the market's
+ * decimals, exact.
+ */
 export const spotPrice = (spot: KascovSpot, decimals: number): Rational => kasPerToken(spot.num, decimals, spot.den);
 
-/** BASE over QUOTE from both tokens' spots: BASE's KAS price over QUOTE's (exact). */
+/** BASE over QUOTE from both tokens' spots: BASE's KAS price over QUOTE's, exact. */
 export function spotPairPrice(base: KascovSpot, baseDecimals: number, quote: KascovSpot, quoteDecimals: number): Rational {
   const b = spotPrice(base, baseDecimals);
   const q = spotPrice(quote, quoteDecimals);
@@ -91,8 +109,10 @@ export function spotPairPrice(base: KascovSpot, baseDecimals: number, quote: Kas
 }
 
 /**
- * The line kascov adds to a price cell's tooltip in the market list: `kascov: 0.01625 KAS (-35%)`, the percent being kascov's price against KOB's own price shown in that cell
- * (signed, whole percent); without a KOB price, `kascov: 0.01625 KAS`. Null without a kascov price. Display only, third party: nothing sorts or warns by it.
+ * The line kascov adds to a price cell's tooltip in the market list, such as
+ * `kascov: 0.01625 KAS (-35%)`. The percent is kascov's price against KOB's own price shown in
+ * that cell, signed, in whole percent. Without a KOB price it is `kascov: 0.01625 KAS`. It is null
+ * without a kascov price. It is display only and third party. Nothing sorts or warns by it.
  */
 export function kascovTitleLine(kascov: Rational | null, own: Rational | null, unit: string): string | null {
   if (!kascov || kascov.num <= 0n || kascov.den <= 0n) return null;
@@ -104,18 +124,25 @@ export function kascovTitleLine(kascov: Rational | null, own: Rational | null, u
   return t('market.list.kascovLinePct', { price, unit, percent: pct === 0n ? '0%' : `${diff < 0n ? '-' : '+'}${pct}%` });
 }
 
-/** `cell` with the kascov line as the last line of its tooltip (the tooltip it has stays as it is). */
+/**
+ * `cell` with the kascov line as the last line of its tooltip. The tooltip it has stays as it is.
+ */
 export function withKascovLine<C extends { text: string | null; title: string | null }>(cell: C, line: string | null): C {
   return line === null ? cell : { ...cell, title: cell.title ? `${cell.title}\n${line}` : line };
 }
 
-/** Why the chart's kascov toggle is shown disabled: the token has no kascov price, one of a pair's tokens has none, or the kascov list is not loaded (yet / at all). */
+/**
+ * Why the chart's kascov toggle is shown disabled. The token has no kascov price, one of a pair's
+ * tokens has none, or the kascov list is not loaded, yet or at all.
+ */
 export type KascovWhy = 'token' | 'pair' | 'list';
 
 /**
- * What a market page tells the chart about its kascov toggle. `status` is the token list's state (use-kascov.ts); `legs` the chart's tokens (one, or BASE then QUOTE for a
- * pair) with whether kascov prices each. `{}` while kascov is off for the deployment (no toggle); `{ kascov }` when every leg is priced (the working toggle); else
- * `{ kascovWhy }` (the toggle shown disabled, with the reason). Pure.
+ * What a market page tells the chart about its kascov toggle. `status` is the token list's state
+ * (use-kascov.ts). `legs` are the chart's tokens, one or BASE then QUOTE for a pair, with whether
+ * kascov prices each. The result is `{}` while kascov is off for the deployment, so there is no
+ * toggle. It is `{ kascov }` when every leg is priced, which is the working toggle. Otherwise it
+ * is `{ kascovWhy }`, the toggle shown disabled with the reason. Pure.
  */
 export function kascovChartGate(
   status: 'off' | 'loading' | 'unavailable' | 'ok',
