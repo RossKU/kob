@@ -79,6 +79,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
             { side: 'sell', ...(props.amount ? { amount: BigInt(props.amount) } : {}), ...(props.price ? { price: BigInt(props.price) } : {}) }
           : undefined,
   );
+  // a limit sell that the link filled in (side, amount, price): said above the ticket until the book or the form replaces it (a link can name any price)
+  const linkFilled = useRef(props.ticket === 'ask' ? prefill : undefined);
   const [liveKey, setLiveKey] = useState(0);
   // bumps on a reorg / resync (history may have changed, not only grown): the chart reloads in full instead of fetching only its newest bars
   const [resyncKey, setResyncKey] = useState(0);
@@ -439,6 +441,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
                   <Button small variant="ghost" onClick={() => setEntered(null)} data-testid="first-order-change">{t('market.first.change')}</Button>
                 </Banner>
               ) : null}
+              {linkFilled.current && prefill === linkFilled.current ? <Banner tone="warn" data-testid="ticket-link-filled">{t('market.ticket.linkFilled')}</Banner> : null}
               {wallet.networkMismatch ? <Banner tone="error" data-testid="ticket-network-blocked">{t('market.ticket.networkBlocked')}</Banner> : null}
               <OrderTicket token={ticketInfo ?? info} prefill={prefill} inverted={inverted} facts={<TokenFacts rows={[checkedRow ?? row]} compact data-testid="ticket-token-facts" />} />
             </div>
