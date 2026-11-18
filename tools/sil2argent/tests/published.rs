@@ -25,12 +25,15 @@ fn source(actor: &str) -> ActorSource {
     }
 }
 
-/// Every contracts/orders/*.sil is an actor of KOBOrders, and nothing else is.
+/// The hand-written orders KOBOrders wraps: those of contracts/orders the interface KOBOrders.ag declares (KobCurveAsk is not
+/// in the router's interface), as scripts/build-argent.sh selects them.
 fn order_names() -> Vec<String> {
+    let iface = std::fs::read_to_string(root().join("contracts/argent/KOBOrders.ag")).expect("KOBOrders.ag");
     let mut names: Vec<String> = std::fs::read_dir(root().join("contracts/orders"))
         .expect("contracts/orders")
         .filter_map(|e| e.ok())
         .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".sil")).map(str::to_string))
+        .filter(|n| iface.lines().any(|l| l.starts_with(&format!("actor {n} "))))
         .collect();
     names.sort();
     names
