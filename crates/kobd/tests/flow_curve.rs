@@ -454,3 +454,45 @@ async fn the_curve_view_serialises_its_levels() {
     assert_eq!(b["asks"][2]["curve_level"], 2);
     assert_eq!(b["asks"][2]["covenant_id"], cov.to_hex());
 }
+
+/// Security review 2026-11-17 M4: a book of depth k holds at most k levels of a curve, and its top k (per order and
+/// aggregated) are exact; an order view lists at most 50 remaining levels.
+#[tokio::test]
+async fn a_shallow_book_and_a_view_take_only_the_best_levels_of_a_long_curve() {
+    let c = Ctx::new();
+    // 120 levels, a few equal prices in a row; and a plain ask between them
+    let table: Vec<i64> = (0..120).map(|i| P250 + (i / 3) * 2_500_000).collect();
+    let s = CurveAskState { table, total: 120 * WHOLE, amount_left: 120 * WHOLE, ..curve(MAKER_A) };
+    let (_, cov, _) = placed(&c, &s).await;
+    let a = ask(MAKER_B, P250 + 2_500_000);
+    let plain = c.w.create_tx(AnyState::KobAsk(a), CARRIER, MAKER_B, 10 * WHOLE);
+    c.push(&[&plain]).await;
+    let g = c.hs.ingest.lock().unwrap();
+    let ctx = read_ctx(&c);
+    let rows = |depth| match reads::book(g.conn(), &ctx, &Hash32(TOKEN_COV), depth, false).unwrap().asks {
+        BookSide::Orders(v) => v.into_iter().map(|o| (o.curve_level, o.price.parse::<i64>().unwrap())).collect::<Vec<_>>(),
+        BookSide::Levels(_) => unreachable!(),
+    };
+    let levels = |depth| match reads::book(g.conn(), &ctx, &Hash32(TOKEN_COV), depth, true).unwrap().asks {
+        BookSide::Levels(v) => {
+            v.into_iter().map(|l| (l.price.parse::<i64>().unwrap(), l.amount.parse::<i64>().unwrap())).collect::<Vec<_>>()
+        }
+        BookSide::Orders(_) => unreachable!(),
+    };
+    // levels 0-2 at 2.50, 3-5 at 2.525 (the older curve before the plain ask at that price), 6 at 2.55
+    let seven = rows(7);
+    let curve_level = |l: i64| (Some(l), P250 + (l / 3) * 2_500_000);
+    let want: Vec<_> = (0..6).map(curve_level).chain([(None, P250 + 2_500_000)]).collect();
+    assert_eq!(seven, want);
+    assert_eq!(rows(5), want[..5].to_vec());
+    let all = rows(200);
+    assert_eq!(all.len(), 121);
+    assert_eq!(&all[..7], &seven[..]);
+    assert_eq!(all[7], curve_level(6));
+    // aggregated: the curve's three levels at a price are one level, the plain ask's tokens added at its price
+    assert_eq!(levels(3), vec![(P250, 3 * WHOLE), (P250 + 2_500_000, 13 * WHOLE), (P250 + 5_000_000, 3 * WHOLE)]);
+    assert_eq!(&levels(100)[..3], &levels(3)[..]);
+    let v = reads::order(g.conn(), &ctx, &cov).unwrap().unwrap();
+    let cv = v.curve.unwrap();
+    assert_eq!((cv.levels, cv.remaining.len()), (120, reads::CURVE_VIEW_LEVELS));
+}

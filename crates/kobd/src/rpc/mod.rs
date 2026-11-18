@@ -77,6 +77,11 @@ pub const MAX_MESSAGE_BYTES: usize = 1 << 30;
 /// The UTXO queries and the windows keep their own limits.
 pub const SMALL_CALL_MAX_BYTES: usize = 16 << 20;
 
+/// The largest acceptance-data answer (`getVirtualChainFromBlock` with transaction ids), 64 MiB:
+/// a cross-check window is tens to hundreds of KB, and a catch-up of hours stays far below it
+/// (security review 2026-11-17 L6: one node could make the client buffer 1 GiB).
+pub const CHAIN_IDS_MAX_BYTES: usize = 64 << 20;
+
 /// A transport error that is the request's size limit ([`RpcError::TooLarge`]), else
 /// [`RpcError::Transport`].
 fn transport_error(e: tokio_tungstenite::tungstenite::Error) -> RpcError {
@@ -154,6 +159,15 @@ pub trait ChainSource: Send + Sync + 'static {
     /// The default is [`ChainSource::sink_blue_score`], the one node's own.
     fn vouched_sink_blue_score(&self) -> impl Future<Output = Result<u64, RpcError>> + Send {
         self.sink_blue_score()
+    }
+    /// The cross-checking node's unspent outputs of the given addresses, when this source has one
+    /// (`None`: a single node). A rebase closes an order only when neither node has its output
+    /// (security review 2026-11-17 M6).
+    fn cross_check_utxos(&self, addresses: &[String]) -> impl Future<Output = Result<Option<Vec<AddressUtxo>>, RpcError>> + Send {
+        async move {
+            let _ = addresses;
+            Ok(None)
+        }
     }
     /// Blue score of a block the node knows (`None`: the node does not know it).
     fn block_blue_score(&self, hash: Hash32) -> impl Future<Output = Result<Option<u64>, RpcError>> + Send;
@@ -855,7 +869,7 @@ impl ChainSource for WrpcClient {
     async fn chain_with_ids(&self, start: Hash32, min_confirmations: Option<u64>) -> Result<ChainIds, RpcError> {
         if self.borsh_url().is_some() {
             let frame = move |id| borsh::chain_ids_request(id, start, min_confirmations);
-            let (timeout, cap) = (self.cfg.request_timeout, self.cfg.max_message_bytes);
+            let (timeout, cap) = (self.cfg.request_timeout, CHAIN_IDS_MAX_BYTES.min(self.cfg.max_message_bytes));
             return self.call_borsh(frame, timeout, cap, |body, _| borsh::decode_chain_ids(body)).await;
         }
         let mut params = serde_json::json!({ "startHash": start.to_hex(), "includeAcceptedTransactionIds": true });
@@ -867,7 +881,7 @@ impl ChainSource for WrpcClient {
             Reply::Borsh { .. } => Err(RpcError::Decode("a Borsh answer to a JSON request".into())),
         };
         // tens to hundreds of KB: on a VSPC connection, so the small calls never wait behind it
-        let (timeout, cap) = (self.cfg.request_timeout, self.cfg.max_message_bytes);
+        let (timeout, cap) = (self.cfg.request_timeout, CHAIN_IDS_MAX_BYTES.min(self.cfg.max_message_bytes));
         let wire = Wire::Json { method: "getVirtualChainFromBlock", params };
         self.call_on(self.vspc_slot().await, wire, timeout, cap, parse).await
     }

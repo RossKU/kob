@@ -310,9 +310,10 @@ impl tower_http::compression::predicate::Predicate for JsonAboveMin {
 /// Rate-limit weight of a route.
 ///
 /// The queries that scan cost `heavy` tokens, and everything else costs one. The scanning routes
-/// are the candles, quotes, stats, depth, trades, books, token UTXOs, strays and pairs.
+/// are the candles, quotes, stats, depth, trades, books, token UTXOs, strays, pairs, fills, token
+/// events and the order list. One order and its events are a light read by id.
 fn route_cost(path: &str, heavy: u32) -> u32 {
-    const HEAVY: [&str; 9] = [
+    const HEAVY: [&str; 11] = [
         "/v1/candles/",
         "/v1/quotes/",
         "/v1/stats",
@@ -322,8 +323,10 @@ fn route_cost(path: &str, heavy: u32) -> u32 {
         "/v1/token-utxos",
         "/v1/strays",
         "/v1/pairs",
+        "/v1/fills",
+        "/v1/token-events",
     ];
-    if HEAVY.iter().any(|p| path.starts_with(p)) {
+    if path.trim_end_matches('/') == "/v1/orders" || HEAVY.iter().any(|p| path.starts_with(p)) {
         heavy.max(1)
     } else {
         1
@@ -367,6 +370,8 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
     edge_cache::apply(&mut resp, &method, &path, &query, now_ms);
+    // no content sniffing of an answer (security review 2026-11-17 I6)
+    resp.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     if let Some(origin) = cors {
         if let Ok(v) = HeaderValue::from_str(&origin) {
             let h = resp.headers_mut();
@@ -442,10 +447,13 @@ mod cost_tests {
             "/v1/pairs/ab/cd/book",
             "/v1/pairs/ab/cd/candles",
             "/v1/pairs/ab/cd/fills",
+            "/v1/orders",
+            "/v1/fills",
+            "/v1/token-events",
         ] {
             assert_eq!(route_cost(p, 5), 5, "{p}");
         }
-        for p in ["/v1/health", "/v1/tokens", "/v1/orders/ab", "/v1/ws"] {
+        for p in ["/v1/health", "/v1/tokens", "/v1/orders/ab", "/v1/orders/ab/events", "/v1/ws"] {
             assert_eq!(route_cost(p, 5), 1, "{p}");
         }
         assert_eq!(route_cost("/v1/stats/ab", 0), 1, "a zero weight still costs one");

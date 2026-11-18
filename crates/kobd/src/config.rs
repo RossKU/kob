@@ -286,13 +286,19 @@ pub struct LogoReportsConfig {
     /// Reports one client may file per hour (the client address of the guard: behind
     /// `api.trusted_proxies`, IPv6 per `api.rate_limit.ipv6_prefix_bits`). Default 5; 0: none.
     pub per_client_per_hour: u32,
-    /// Reports accepted from all clients together per 24 hours. Default 200; 0: none.
+    /// Reports that newly hide a logo, from all clients together, per 24 hours (a report of a
+    /// token already hidden does not count). Default 200; 0: none.
     pub max_per_day: u32,
+    /// Origins whose pages may file a report (the web app's, `https://kob.example`). A browser
+    /// request with any other `Origin` is refused, so another site cannot make its visitors'
+    /// browsers report. Empty (default): `api.cors_allow_origin` when it names one origin, else no
+    /// browser report. A request without `Origin` (the GitHub workflow, a script) is not affected.
+    pub origins: Vec<String>,
 }
 
 impl Default for LogoReportsConfig {
     fn default() -> Self {
-        LogoReportsConfig { enabled: false, cooldown_secs: 21_600, per_client_per_hour: 5, max_per_day: 200 }
+        LogoReportsConfig { enabled: false, cooldown_secs: 21_600, per_client_per_hour: 5, max_per_day: 200, origins: vec![] }
     }
 }
 

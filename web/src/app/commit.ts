@@ -8,6 +8,13 @@ import type { Clock } from '../kob/plan-types';
 import { pendingSpends } from './pending-spends';
 import type { Services } from './services';
 
+const ownTxListeners = new Set<() => void>();
+/** Calls `f` after the wallet's own transaction was accepted (a placement, an amend, a cancel): the order lists reload. Returns the unsubscribe. */
+export function onOwnTxAccepted(f: () => void): () => void {
+  ownTxListeners.add(f);
+  return () => void ownTxListeners.delete(f);
+}
+
 /** What `commitAccepted` needs to know about an accepted transaction. */
 export interface CommitArgs {
   services: Pick<Services, 'kob' | 'tracker' | 'config'>;
@@ -68,6 +75,13 @@ export async function commitAccepted(a: CommitArgs): Promise<PlacementRecord[]> 
     );
   } catch {
     /* Tracking is a cache. The indexer or a re-import can rebuild it. */
+  }
+  for (const f of [...ownTxListeners]) {
+    try {
+      f();
+    } catch {
+      /* a listener must not break the commit */
+    }
   }
   return saved;
 }

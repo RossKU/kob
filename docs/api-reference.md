@@ -58,14 +58,14 @@ only when `[api] metrics = true` (the default), the KAS price route (25) only wh
 | 5 | `GET /v1/books/{token}` | [3.6](#36-get-v1bookstoken) | H | yes |
 | 6 | `GET /v1/pairs` | [3.7](#37-pairs) | H | yes |
 | 7 | `GET /v1/pairs/{base}/{quote}/book` | [3.7](#37-pairs) | H | yes |
-| 8 | `GET /v1/pairs/{base}/{quote}/candles` | [3.7](#37-pairs) | H | no |
+| 8 | `GET /v1/pairs/{base}/{quote}/candles` | [3.7](#37-pairs) | H | yes |
 | 9 | `GET /v1/pairs/{base}/{quote}/fills` | [3.7](#37-pairs) | H | no |
-| 10 | `GET /v1/orders` | [3.8](#38-get-v1orders) | 1 | no |
+| 10 | `GET /v1/orders` | [3.8](#38-get-v1orders) | H | yes |
 | 11 | `GET /v1/orders/{covenant_id}` | [3.9](#39-get-v1orderscovenant_id) | 1 | no |
 | 12 | `GET /v1/orders/{covenant_id}/events` | [3.10](#310-get-v1orderscovenant_idevents) | 1 | no |
-| 13 | `GET /v1/fills` | [3.11](#311-get-v1fills) | 1 | no |
+| 13 | `GET /v1/fills` | [3.11](#311-get-v1fills) | H | yes |
 | 14 | `GET /v1/strays` | [3.12](#312-get-v1strays) | H | no |
-| 15 | `GET /v1/token-events` | [3.13](#313-get-v1token-events) | 1 | no |
+| 15 | `GET /v1/token-events` | [3.13](#313-get-v1token-events) | H | no |
 | 16 | `GET /v1/token-utxos` | [3.14](#314-get-v1token-utxos) | H | no |
 | 17 | `GET /v1/trades/{token}` | [3.15](#315-get-v1tradestoken) | H | no |
 | 18 | `GET /v1/candles/{token}` | [3.16](#316-get-v1candlestoken) | H | yes |
@@ -628,7 +628,7 @@ curl -s $API/v1/orders/$ORDER
 | `children` | array, **omitted** | Covenant ids of orders created by this order (if-done exits): the newest 100, oldest first. Single lookups only. |
 | `children_total` | number, **omitted** | Present only when the order has more children than `children` lists: how many it has. |
 | `pair` | object, **omitted** | Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`): `base`, `quote`, `base_family`, `quote_family`, `base_template_hash`, `quote_template_hash`, `base_scale`, `quote_scale`, `side` (`ask`/`bid`), `price`, `price_num`, `price_den`, `stop_price` (omitted), `quote_now`, `amount_left`, `custodies` (`token`, `role` `base`/`quote`, `expected_amount`, and `utxo` and `ok`, both omitted outside single lookups and the live orders of a `maker=` list), `prefund` (omitted), `delivery_carrier`. See [ops/executor.md](ops/executor.md) 5.4. |
-| `curve` | object, **omitted** | A `KobCurveAsk` (`docs/design/curve-ask-spec.md`), from its current state: `level` (the current level, number), `levels` (number), `level_size`, `total`, `price_now` (the current level's price, null when sold out), `max_fill` (the most one fill takes from here: the rest of 8 levels), `unbound` (bool: created in its token's genesis and not yet filled or amended; `tokenCovId` is zero in `state`, `token` is the custody's), `remaining` (array of `level` number, `price`, `amount`: the levels left, the current first). Its `price` and `quote` are `price_now`; `expiry_daa` and `refund_due_daa` are null (it rests until sold out or cancelled). |
+| `curve` | object, **omitted** | A `KobCurveAsk` (`docs/design/curve-ask-spec.md`), from its current state: `level` (the current level, number), `levels` (number), `level_size`, `total`, `price_now` (the current level's price, null when sold out), `max_fill` (the most one fill takes from here: the rest of 8 levels), `unbound` (bool: created in its token's genesis and not yet filled or amended; `tokenCovId` is zero in `state`, `token` is the custody's), `remaining` (array of `level` number, `price`, `amount`: the levels left, the current first, at most 50; `state` has them all). Its `price` and `quote` are `price_now`; `expiry_daa` and `refund_due_daa` are null (it rests until sold out or cancelled). |
 | `warnings` | array of string | Show these with the order: `genesis_unverified` unless every token it trades is `genesis_verified`, `live_mint_authority`. |
 
 A token UTXO object (`custody.utxo`, `strays[]`) has `txid`, `index`, `token`, `owner`, `amount`, `value` (the KAS carrier),
@@ -779,6 +779,9 @@ curl -s "$API/v1/token-utxos?owner=$KEY&token=$TOKEN&limit=100"
 Trades of a token in KAS, **newest first**: all the fills of one transaction on one token form one trade. Only KAS-book fills
 make prices (a pair fill never enters trades). Heavy.
 
+A self-trade makes no price (no trade, candle, `last` or 24 h figure): a fill whose transaction the order's maker key funded, or
+one of a maker with fills on both sides of the transaction. Every other fill counts, however small.
+
 | Param | Type | Default | Meaning |
 |---|---|---|---|
 | `before` | integer | none | Only trades with `id` below this. |
@@ -899,6 +902,10 @@ Body (JSON, at most 1024 bytes; `content-type` is not checked; unknown fields ar
 | `source` | optional, only `"github"`: the report came from the Issue form (default: the web app) |
 | `ref` | optional, with `source`: the GitHub issue number (1 or more) |
 
+The body must be `content-type: application/json`, and a request that carries an `Origin` (a browser page) must come from one of
+`[logo_reports] origins` (default: `cors_allow_origin` when it names one origin; with `*` no browser report is taken). Only a
+token the indexer knows is reported: an order trades it, it has a holding or a KCC-23 declaration.
+
 Rules, in order:
 
 * the token is not in the blocklist: it is added hidden; answer `hidden`;
@@ -908,14 +915,17 @@ Rules, in order:
 * it is restored and the cooldown has passed: it is hidden again; answer `hidden`.
 
 A token the operator hid for good (`hide`) stays hidden whatever is reported. Reports are limited per client
-(`per_client_per_hour`, default 5; the client address of section 5.4) and in all (`max_per_day`, default 200 per 24 hours);
-only accepted reports count. The generic rate limit of section 5.2 applies first (cost 1).
+(`per_client_per_hour`, default 5; the client address of section 5.4) and by the logos they newly hide (`max_per_day`, default
+200 per 24 hours; a report of a token already hidden does not count); only accepted reports count. The generic rate limit of section 5.2 applies first (cost 1).
 
 | Status | When |
 |---|---|
 | `200` | filed: `{"result": "hidden" | "recorded", "covenant_id": "<hex32>"}` |
 | `400` | not JSON, an unknown field or value, `covenant_id` not 32 bytes of hex, `ref` without `source` or 0 |
+| `403` | `forbidden_origin`: a browser page of another origin |
+| `404` | `unknown_token`: no indexed token has that covenant id |
 | `413` | body over 1024 bytes |
+| `415` | `unsupported_media_type`: the body is not `application/json` |
 | `429` | `rate_limited` (section 5.1), `Retry-After` in seconds |
 
 ```
@@ -1070,8 +1080,9 @@ of the window, at its bucket.
 ## 4. WebSocket
 
 **URL** `ws://<host>/v1/ws` (`wss://` behind a TLS-terminating proxy). The route is an ordinary `GET` with the upgrade headers;
-the upgrade request passes the same guard as REST (client address resolution, rate limit at cost 1, CORS headers; no `Origin`
-check). The concurrency cap and request timeout bound only the handshake, not the session. Messages are JSON **text** frames in
+the upgrade request passes the same guard as REST (client address resolution, rate limit at cost 1, CORS headers). With a `cors_allow_origin` that names one origin, an upgrade whose `Origin` is another one is refused (`403`
+`forbidden_origin`); one without `Origin` is not. While three quarters of `max_ws_connections` are open, a client that holds two
+sockets gets no more. The concurrency cap and request timeout bound only the handshake, not the session. Messages are JSON **text** frames in
 both directions. Frames carry notices; amounts and prices inside them are strings.
 
 ### 4.1 Client messages
@@ -1205,11 +1216,13 @@ too; WebSocket messages after the upgrade do not, they have their own cap).
 
 * A request takes **1 token** from each bucket, or `heavy_route_cost` (default **5**; capped at the bucket's burst) when its path
   starts with `/v1/candles/`, `/v1/quotes/`, `/v1/stats/`, `/v1/depth/`, `/v1/trades/`, `/v1/books/`, `/v1/token-utxos`, `/v1/strays` or
-  `/v1/pairs` (which includes all four pair routes). Everything else, including `/v1/orders*`, `/v1/fills`, `/v1/tokens*`,
-  `/v1/token-events`, `/v1/health*`, `/v1/metrics`, `/v1/logo-*` and `/v1/ws`, costs 1. With the defaults a client can burst 12 heavy requests
+  `/v1/pairs` (which includes all four pair routes), `/v1/fills`, `/v1/token-events`, or is `/v1/orders` (the list). Everything
+  else, including `/v1/orders/{id}` and its events, `/v1/tokens*`, `/v1/health*`, `/v1/metrics`, `/v1/logo-*` and `/v1/ws`, costs 1. With the defaults a client can burst 12 heavy requests
   and sustain 4 per second.
 * Order of charging: the client bucket, then the site bucket, then the global bucket; a request refused by an earlier bucket does
-  not charge the global one, so a limited client cannot drain everybody else's share.
+  not charge the global one, so a limited client cannot drain everybody else's share. A busy client (above a quarter of its own
+  rate or half its burst) takes from the global bucket only while it is more than half full, so a few addresses at their own
+  limit cannot lock everyone else out.
 * A refused request gets `429` `rate_limited` and `Retry-After: N` where N is the whole seconds (rounded up, at least 1) until
   the missing tokens exist.
 * `per_ip_rps = 0` disables the per-client and site buckets; `global_rps = 0` disables the global bucket.
@@ -1337,7 +1350,8 @@ Top-level table of the same file (section 3.19). Unknown keys are refused.
 | `enabled` | `false` | Serve `POST /v1/logo-reports` and `GET /v1/logo-blocklist`; off, both are `404`. |
 | `cooldown_secs` | `21600` | After the operator restored a token, reports for it are only recorded for this long. |
 | `per_client_per_hour` | `5` | Reports one client may file per hour; 0 = none. |
-| `max_per_day` | `200` | Reports accepted from all clients together per 24 hours; 0 = none. |
+| `max_per_day` | `200` | Reports that newly hide a logo, from all clients together, per 24 hours; 0 = none. |
+| `origins` | `[]` | Origins whose pages may report (`["https://kob.example"]`); empty: `cors_allow_origin` if it names one origin, else no browser report. |
 
 The state lives in the indexer's database (`logo_blocklist`, `logo_reports`), is not derived from the chain, and is not rebuilt by
 `kobd db replay` (use `kobd logo-reports export` before and `import` after).

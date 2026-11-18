@@ -75,12 +75,43 @@ const fn public(secs: u32) -> Policy {
     Policy::Public { secs, stale: 0 }
 }
 
-fn query_value<'a>(query: &'a str, key: &str) -> Option<&'a str> {
-    query.split('&').filter_map(|kv| kv.split_once('=').or(Some((kv, "")))).find(|(k, _)| *k == key).map(|(_, v)| v)
+/// A query component as the handler reads it: `+` is a space and `%XX` a byte (security review
+/// 2026-11-17 L1: `t%6F=` is `to=`).
+fn decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < b.len() => match std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                Some(v) => {
+                    out.push(v);
+                    i += 2;
+                }
+                None => out.push(b'%'),
+            },
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The decoded `(key, value)` pairs of a query, in order.
+fn pairs(query: &str) -> impl Iterator<Item = (String, String)> + '_ {
+    query.split('&').filter(|kv| !kv.is_empty()).map(|kv| {
+        let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+        (decode(k), decode(v))
+    })
+}
+
+fn query_value(query: &str, key: &str) -> Option<String> {
+    pairs(query).find(|(k, _)| k == key).map(|(_, v)| v)
 }
 
 fn has_repeated(query: &str, key: &str) -> bool {
-    query.split('&').filter(|kv| kv.split_once('=').map_or(*kv, |(k, _)| k) == key).count() > 1
+    pairs(query).filter(|(k, _)| k == key).count() > 1
 }
 
 /// The policy of a successful answer to `method path?query`.
@@ -184,7 +215,12 @@ mod tests {
             let (old, now) = (NOW - 86_400_000, NOW);
             assert_eq!(get(p, &format!("to={old}&to={now}")), open, "a repeated `to`: the handler reads the last one");
             assert_eq!(get(p, &format!("to={now}&to={old}")), open, "a repeated `to` is never cached long");
+            // the handler decodes the keys: `t%6F` is a second `to` (security review 2026-11-17 L1)
+            assert_eq!(get(p, &format!("to={old}&t%6F={now}")), open, "an encoded repeated `to`");
+            assert_eq!(get(p, &format!("%74o={old}")), closed, "an encoded `to` alone is read as `to`");
+            assert_eq!(get(p, "to=1%2B2"), open, "a value that decodes to no number");
         }
+        assert_eq!(get("/v1/books/ab", "%5Fnc=1"), "no-store", "an encoded bypass parameter");
     }
 
     #[test]

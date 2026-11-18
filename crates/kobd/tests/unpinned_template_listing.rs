@@ -134,3 +134,46 @@ async fn an_order_of_a_retired_template_is_served_by_id_only_and_marked_cancel_o
     assert_eq!(v.template_hash, retired.hash_hex());
     assert!(v.state_known && v.current.is_some(), "its current UTXO and state are what its maker's cancel spends");
 }
+
+/// The maker's cancel of an order under a retired template is read through its `cancel(sig)` entry: the order reads
+/// `cancelled` with a `cancel` event, not `closed` by an `unknown` spend. Both a delivery-row `KobBid` (legacy span) and a KRON
+/// kind of the minimum-fill row.
+#[tokio::test]
+async fn the_makers_cancel_of_a_retired_template_order_reads_cancelled() {
+    use kob_protocol::build::{Action, CancelOrder};
+    use kob_protocol::tx::FeeOptions;
+    for label in ["KobBid dfcd78f1", "KobBidKron 7cb4f6ab"] {
+        let c = Ctx::new();
+        let r = kob_protocol::retired::retired().iter().find(|r| r.label() == label).unwrap();
+        let s = match r.kind {
+            kob_protocol::artifacts::TemplateId::KobBid => AnyState::KobBid(bid(MAKER_A, 245_000_000)),
+            _ => kron(AnyState::KobBid(bid(MAKER_A, 245_000_000))),
+        };
+        let value = match &s {
+            AnyState::KobBid(b) | AnyState::KobBidKron(b) => b.escrow(10 * WHOLE, 3).unwrap() as u64,
+            _ => unreachable!(),
+        };
+        let create = c.w.create_tx(s.clone(), value, MAKER_A, 0);
+        c.push(&[&create]).await;
+        let cov = c.w.cov(&create, 0);
+        record_under(&c, &cov, r.hash);
+        let cancel = c.w.sign(&Action::CancelOrder(CancelOrder {
+            retired: Some(r.hash),
+            prefund: None,
+            order: c.w.order(&create, 0, s),
+            custody: None,
+            foreign: vec![],
+            strays: vec![],
+            tokens: vec![],
+            funding: vec![c.w.coin(MAKER_A, 10)],
+            change: None,
+            replace: None,
+            lock_time: 0,
+            records: vec![],
+            fee: FeeOptions::default(),
+        }));
+        c.push(&[&cancel]).await;
+        assert_eq!(c.hs.status(&cov), "cancelled", "{label}");
+        assert_eq!(c.hs.event_kinds(&cov), ["create", "cancel"], "{label}");
+    }
+}

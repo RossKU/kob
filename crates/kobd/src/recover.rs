@@ -565,6 +565,15 @@ pub async fn reconcile_open_orders<S: ChainSource>(
     }
     let addrs: Vec<String> = addr_of.values().cloned().collect();
     let utxos = fetch_utxos(source, &addrs).await?;
+    // With a cross-checking node, an output either node has is kept, and only an output both
+    // report is adopted: the authority alone neither closes nor adopts (security review
+    // 2026-11-17 M6).
+    let mut cross: Option<HashSet<(Hash32, u32)>> = None;
+    for chunk in addrs.chunks(50) {
+        if let Some(v) = source.cross_check_utxos(chunk).await? {
+            cross.get_or_insert_with(HashSet::new).extend(v.iter().map(|u| (u.outpoint.transaction_id, u.outpoint.index)));
+        }
+    }
     let mut by_spk: HashMap<&[u8], Vec<&AddressUtxo>> = HashMap::new();
     for u in &utxos {
         by_spk.entry(&u.utxo_entry.script_public_key.0).or_default().push(u);
@@ -575,13 +584,16 @@ pub async fn reconcile_open_orders<S: ChainSource>(
     let mut used: HashSet<(Hash32, u32)> = HashSet::new();
     for t in &tracked {
         let live = by_spk.get(t.spk.as_slice()).map(|v| v.as_slice()).unwrap_or(&[]);
-        if live.iter().any(|u| u.outpoint.transaction_id == t.txid && u.outpoint.index == t.idx) {
+        if live.iter().any(|u| u.outpoint.transaction_id == t.txid && u.outpoint.index == t.idx)
+            || cross.as_ref().is_some_and(|c| c.contains(&(t.txid, t.idx)))
+        {
             continue;
         }
         let successor = live.iter().find(|u| {
             u.utxo_entry.covenant_id == Some(t.cov)
                 && !tracked_outpoints.contains(&(u.outpoint.transaction_id, u.outpoint.index))
                 && !used.contains(&(u.outpoint.transaction_id, u.outpoint.index))
+                && cross.as_ref().is_none_or(|c| c.contains(&(u.outpoint.transaction_id, u.outpoint.index)))
         });
         match successor {
             Some(u) => {

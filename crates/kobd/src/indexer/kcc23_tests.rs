@@ -454,3 +454,20 @@ async fn a_junk_declaration_payload_stays_out_of_the_record_log() {
 
 #[path = "kcc23_bounds_tests.rs"]
 mod bounds;
+
+/// Security review 2026-11-17 L5: beyond MAX_CANDIDATES the oldest unnamed candidates go, inside the window too.
+#[test]
+fn the_candidates_are_capped_oldest_first() {
+    let conn = open_memory("testnet-10").unwrap();
+    conn.execute(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
+         INSERT INTO kcc23_candidates (txid, tx, created_block, daa) SELECT CAST(printf('%032d', i) AS BLOB), x'00', 1, 1000 + i FROM n",
+        [MAX_CANDIDATES + 5],
+    )
+    .unwrap();
+    assert_eq!(prune(&conn, 0).unwrap(), 5);
+    let (n, oldest): (i64, i64) =
+        conn.query_row("SELECT COUNT(*), MIN(daa) FROM kcc23_candidates", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!((n, oldest), (MAX_CANDIDATES, 1006));
+    assert_eq!(prune(&conn, 0).unwrap(), 0);
+}

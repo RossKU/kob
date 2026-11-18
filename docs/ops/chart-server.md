@@ -234,7 +234,8 @@ no image. To let visitors report a logo (the first report hides it for everyone 
 enabled = true
 # cooldown_secs = 21600        # after a restore, reports are only recorded for 6 hours
 # per_client_per_hour = 5
-# max_per_day = 200
+# max_per_day = 200            # logos newly hidden per day, all clients
+origins = ["https://kob.example"]   # the web app's origin: other sites' pages cannot report
 ```
 
 The two routes (`POST /v1/logo-reports`, `GET /v1/logo-blocklist`) then sit behind the same tunnel; the per-client limit uses the
@@ -248,10 +249,11 @@ if it fails) at most once a minute while anyone has USD on. It needs outbound HT
 
 **Abuse, in the API and at Cloudflare.** The API limits each client on its own: 20 requests per second with a burst of 60 per
 client address (an IPv6 visitor by its /64, and all the /64s of one /48 together at 100 per second), a heavy read (candles, stats,
-depth, trades, books, holdings, strays, pairs) costs 5 of those tokens, and the whole server answers 500 requests per second (burst
+depth, trades, books, holdings, strays, pairs, the order list, fills, token events) costs 5 of those tokens, and the whole server answers 500 requests per second (burst
 1,000). WebSockets are capped per client address and in all (`docs/api.md`). Past a limit the answer is 429 with `Retry-After`. Two
 consequences: visitors behind one carrier-grade NAT address share one bucket (a market list reads one `/v1/stats` per token), and a
-flood spread over many addresses can drain the global bucket so that everyone gets 429. If that happens, add rules at Cloudflare in
+flood spread over many addresses can drain the global bucket; half of it is kept for quiet clients (within a quarter of their own
+rate), so they still get through. If that happens, add rules at Cloudflare in
 front of the tunnel instead of raising the limits: a rate-limiting rule for the heavy paths (`/v1/candles/`, `/v1/stats/`,
 `/v1/depth/`, `/v1/trades/`, `/v1/books/`, `/v1/pairs`) and Bot Fight Mode. What the free plan allows changes; check the dashboard.
 

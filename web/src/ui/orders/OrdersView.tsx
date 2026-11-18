@@ -24,6 +24,7 @@ import {
 import { DataTable, KAS_FRACTION_MAX, MoneyCell, type DtColumn } from '../kit/DataTable';
 import { ConnectBar } from '../shell/WalletButton';
 import { useLiveRefresh } from '../market/live';
+import { onOwnTxAccepted } from '../../app/commit';
 import { RowsControl } from '../market/ListPaging';
 import { TipBadge } from '../market/TipBadge';
 import { useListPage } from '../market/use-market-list';
@@ -146,6 +147,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   // a fill reloads the list only when it names one of the wallet's own orders (an entry or a placement record), not every fill of the market
   const ownIds = useRef<ReadonlySet<string>>(new Set());
   useLiveRefresh(services, ['fills'], (e) => isOwnFill(ownIds.current, e), data.refresh, REFRESH_MS);
+  // the wallet's own accepted transaction (a placement, an amend, a cancel) is no fill: the list reads again at once
+  useEffect(() => onOwnTxAccepted(() => data.refresh()), [data.refresh]);
 
   const tab: PortfolioTab = embed ? embedTab : (props.tab ?? 'balances');
   const setTab = (next: PortfolioTab) => (embed ? setEmbedTab(next) : navigate({ name: 'portfolio', tab: next }));

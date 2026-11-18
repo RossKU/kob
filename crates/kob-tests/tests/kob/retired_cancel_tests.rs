@@ -3,7 +3,8 @@
 //!
 //! For every retired template of the table (the bid re-version `acf39cf`: `KobBid` b995661f and its KRON twins, the conditional,
 //! if-done and pair kinds that embed it and their delivery-0 builds; the F1 generation `da35841`; the bid delivery re-pin
-//! `0714451`, whose templates have the legacy state layout of their kind): an order of its kind, on a program of its family,
+//! `0714451`, whose templates have the legacy state layout of their kind; the KRON kinds of the minimum-fill re-pin `71a6c32`): an
+//! order of its kind, on a program of its family,
 //! is cancelled with `CancelOrder::retired`. The order input is the retired template's P2SH (the bytes
 //! of `crates/kob-protocol/data/retired`, read here from disk), its `cancel(sig)` validates, and the custody, the strays and
 //! the order's KAS go back to the maker. A signature of anyone else, or the redeem script of another retired template of the
@@ -150,7 +151,7 @@ fn maker_units(built: &BuiltTx) -> i64 {
 #[test]
 fn every_retired_template_is_cancelled_by_its_maker_in_the_engine() {
     let maker_spk = format!("0000{}", to_hex(kob_protocol::script::p2pk_spk(&pk(MAKER_A)).script()));
-    assert_eq!(retired().len(), 39);
+    assert_eq!(retired().len(), 49);
     for r in retired() {
         let p = program_of(r.kind);
         let (state, value) = order_of(r.kind, p);

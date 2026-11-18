@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { StrayView } from '../../data/indexer-types';
 import { loadKobNode } from '../../kob/wasm.node';
 import { MAKER, OTHER, TOKEN, orderViewOf, placeGolden, strayFor, tokenUtxo, tokenUtxoView } from '../../testing/chain-fixtures';
-import { balanceColumnFractions, combineBalances, strayTotals, unreviewedProgram } from './balances-model';
+import { balanceColumnFractions, combineBalances, orderTokenPrograms, strayTotals, unreviewedProgram } from './balances-model';
 import { unitsFraction } from '../kit';
 
 const kob = loadKobNode();
@@ -110,5 +110,18 @@ describe('combineBalances: tokens a Collected bid bought', () => {
     expect(c.tokens[0]).toMatchObject({ token: TOKEN.covenantId, free: 0n, escrowed: 0n, bought: 900n, boughtOrders: 1 });
     // the column fraction covers what the In your orders cell shows (for sale + bought)
     expect(balanceColumnFractions(c.tokens, () => 3, unitsFraction).escrowed).toBe(unitsFraction(900n, 3));
+  });
+});
+
+describe('orderTokenPrograms', () => {
+  it('names the program of a token held only in orders, from the template hash its orders name', () => {
+    const mint = '734850b0af0aeef49f009167bf9ddd238fd8c5cdbe214234f97181ac6f5cc498';
+    const m = orderTokenPrograms([
+      { token: '07'.repeat(32), token_template_hash: mint.toUpperCase() },
+      { token: '08'.repeat(32), token_template_hash: '00'.repeat(32) },
+      { token: null, token_template_hash: mint },
+    ]);
+    expect([...m]).toEqual([['07'.repeat(32), 'KCC20PublicMint']]);
+    expect(unreviewedProgram(m.get('07'.repeat(32)))).toBe(false);
   });
 });

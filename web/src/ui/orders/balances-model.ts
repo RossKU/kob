@@ -27,6 +27,19 @@ export function unreviewedProgram(program: TokenProgram | null | undefined): boo
   return TOKEN_PROGRAMS.find((p) => p.name === program)?.review !== 'reviewed';
 }
 
+/**
+ * The token program each live order names (`token_template_hash`, a pinned program's), by token: the program of a token held only in orders, which
+ * neither the registry nor a free UTXO names (a whole new supply put on sale at its creation would read "unsupported program").
+ */
+export function orderTokenPrograms(views: readonly Pick<OrderView, 'token' | 'token_template_hash'>[]): Map<Hex, TokenProgram> {
+  const out = new Map<Hex, TokenProgram>();
+  for (const v of views) {
+    const p = TOKEN_PROGRAMS.find((x) => x.templateHash === v.token_template_hash?.toLowerCase())?.name;
+    if (v.token && p && !out.has(v.token)) out.set(v.token, p as TokenProgram);
+  }
+  return out;
+}
+
 const big = (v: string | number | bigint | null | undefined): bigint => (v === null || v === undefined ? 0n : BigInt(v));
 
 /** Per token: sum of the live (unspent) stray UTXOs' token amounts, split into recoverable (the order is live) and lost. */

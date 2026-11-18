@@ -249,3 +249,20 @@ fn the_lean_pruning_keeps_a_live_orders_custody_and_no_pruning_takes_a_program_b
     c.execute("DELETE FROM token_holdings WHERE txid = ?1", [h(60)]).unwrap();
     assert_eq!(programs(&c), before);
 }
+
+/// Security review 2026-11-17 L4: an archive store keeps the newest KEEP_REJECTS rejects; the window's stay.
+#[test]
+fn the_rejects_beyond_the_newest_are_pruned_once_final() {
+    let mut c = store();
+    c.execute(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)          INSERT INTO rejects (block_seq, txid, reason) SELECT 50, zeroblob(32), 'payload:undecodable' FROM n",
+        [KEEP_REJECTS + 30],
+    )
+    .unwrap();
+    c.execute("INSERT INTO rejects (block_seq, txid, reason) VALUES (105, zeroblob(32), 'x')", []).unwrap();
+    let cfg = ArchiveConfig::new(1);
+    while prune(&mut c, &cfg, 1_010, None, 10).unwrap().more {}
+    let (n, window): (i64, i64) =
+        c.query_row("SELECT COUNT(*), SUM(block_seq >= 100) FROM rejects", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!((n, window), (KEEP_REJECTS, 1));
+}

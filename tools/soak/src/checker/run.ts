@@ -909,6 +909,11 @@ function pairFill(x: Ctx, e: EventView, memo: OrderMemo): void {
 
 // ------------------------------------------------------------------------------------------------ 1. custody and node UTXOs
 
+/** The order's script: a cancel-only order (retired template) keeps its own, not today's kind's. */
+function orderSpk(kob: Env['kob'], v: OrderView): string {
+  return v.cancel_only ? kob.retiredScriptPublicKey(v.template_hash, v.state!) : kob.scriptPublicKey(v.state!);
+}
+
 async function custodyStep(x: Ctx, views: Map<string, OrderView>, cursor: number, now: number): Promise<void> {
   const { env, A } = x;
   const net = env.cfg.network;
@@ -935,7 +940,7 @@ async function custodyStep(x: Ctx, views: Map<string, OrderView>, cursor: number
     const probs: string[] = [];
     problems.set(v.covenant_id, probs);
     try {
-      want.push({ order: v.covenant_id, what: 'order', addr: addr(env.kob.scriptPublicKey(v.state)), txid: v.current.txid, index: v.current.index, cov: v.covenant_id });
+      want.push({ order: v.covenant_id, what: 'order', addr: addr(orderSpk(env.kob, v)), txid: v.current.txid, index: v.current.index, cov: v.covenant_id });
     } catch (e) {
       probs.push(`order script not derivable: ${errText(e)}`);
     }
