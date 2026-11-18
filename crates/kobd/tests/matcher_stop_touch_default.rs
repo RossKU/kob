@@ -1,6 +1,7 @@
-//! The wallet's default trigger threshold of a stop scales with the stop's size (`defaults::default_min_touch`: the larger of
-//! its minimum fill and 25 % of its amount): a one-whole print at the stop no longer arms a 1,000-whole stop, while a stop
-//! whose user chose the minimum fill as its threshold still arms on it.
+//! The wallet's default trigger threshold of a stop scales with the stop's size
+//! (`defaults::default_min_touch`: the larger of its minimum fill and 25 % of its amount). A
+//! one-whole print at the stop does not arm a 1,000-whole stop, while a stop whose user chose the
+//! minimum fill as its threshold still arms on it.
 
 #[path = "matcher_common/mod.rs"]
 mod common;

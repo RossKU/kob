@@ -1,6 +1,6 @@
-//! The surplus-inventory budgets (`tokens[].maxAmount`, `maxFee`) bound a whole tick: each batch of the tick is planned
-//! against what the batches before it left, so batches of different pair markets that keep the same token cannot each
-//! use the whole budget.
+//! Tests that the surplus-inventory budgets (`tokens[].maxAmount`, `maxFee`) bound a whole tick:
+//! each batch of the tick is planned against what the batches before it left, so batches of
+//! different pair markets that keep the same token cannot each use the whole budget.
 
 #[path = "matcher_common/mod.rs"]
 mod common;

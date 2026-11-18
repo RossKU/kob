@@ -1,7 +1,8 @@
-//! A refusal that names no order (the pre-simulation fails the transaction, not an input of it) costs the other orders of
-//! the tick at most the attempts that search for the order it comes from: the engine leaves out half of the plan's fills at
-//! a time, a smaller plan that passes is the batch, and the fills left out are planned in the next batches. The tick no
-//! longer gives up the lowest-priority fills one by one until its attempts run out.
+//! Tests that a refusal that names no order (the pre-simulation fails the transaction, not an input
+//! of it) costs the other orders of the tick at most the attempts that search for the order it
+//! comes from. The engine leaves out half of the plan's fills at a time, a smaller plan that passes
+//! is the batch, and the fills left out are planned in the next batches. The tick does not give up
+//! the lowest-priority fills one by one until its attempts run out.
 
 #[path = "matcher_common/mod.rs"]
 mod common;

@@ -1,6 +1,6 @@
-//! Planner fuzzing: random books of every order kind on every token program. Every transaction
-//! the matcher prepares must pass the rusty-kaspa v2.1.0 engine (no covenant rule violated), and
-//! no plan may fill a FOK partially, spend a stray, exceed 8 token inputs or spend one covenant id
+//! Planner fuzzing: random books of every order kind on every token program. Every transaction the
+//! matcher prepares must pass the rusty-kaspa v2.1.0 engine (no covenant rule violated), and no
+//! plan may fill a FOK partially, spend a stray, exceed 8 token inputs or spend one covenant id
 //! twice (`common::check_invariants`). `KOB_FUZZ_ITERS` sets the number of books (default 60),
 //! `KOB_FUZZ_SEED` the seed.
 

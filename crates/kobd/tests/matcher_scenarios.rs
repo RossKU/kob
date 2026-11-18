@@ -1,5 +1,6 @@
-//! Matcher scenarios (`docs/spec/matcher.md` §2–§8, §11): every order type and mixes, each planned
-//! batch built by `kob_protocol` and validated through the rusty-kaspa v2.1.0 script engine.
+//! Tests the matcher scenarios (`docs/spec/matcher.md` §2–§8, §11): every order type and mixes,
+//! each planned batch built by `kob_protocol` and validated through the rusty-kaspa v2.1.0 script
+//! engine.
 
 #[path = "matcher_common/mod.rs"]
 mod common;
@@ -1141,7 +1142,7 @@ fn a_market_buy_that_crosses_at_its_start_pays_the_start_price() {
 #[test]
 fn a_market_order_whose_start_does_not_pay_the_fee_fills_at_the_first_tick_that_does() {
     // One whole token at the touch: its 0.002 KAS of tips do not pay the fee, the first tick that does decides, whether the
-    // matcher acts 150 or 199 DAA into the auction (its latency no longer costs the maker).
+    // matcher acts 150 or 199 DAA into the auction (its latency does not cost the maker).
     let mut ticks = vec![];
     for elapsed in [150i64, 199] {
         let m = market_bid(1, P250, NOW as i64 - elapsed, T3);

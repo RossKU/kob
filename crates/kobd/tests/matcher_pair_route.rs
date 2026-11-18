@@ -1,17 +1,28 @@
-//! Pair orders routed through the KAS books in the matcher's global batch (`matcher::batch`, `matcher::pair`) on in-memory
-//! books: the port of the former cross limit suite to `KobPair` orders, both sides. A pair ASK of A for B is filled through
-//! plain KAS bids of A and plain KAS asks of B in one transaction, a pair BID through plain KAS bids of B (its B sold) and
-//! plain KAS asks of A (its A bought), at the token slot limits of both programs, with FOK / IOC rules, buying exactly the T
-//! its delivery needs (an ask's `ceil(n × p / scale)` of B, a bid's exactly n of A; more only when an ask's minimum fill forces
-//! it, and then to the maker), best prices first, ranked with direct orders by price → tip → age, never at a loss, never
-//! sharing an order with another transaction of the tick except as a chained continuation. Every transaction is
-//! engine-validated and leaves the operator no token. Amounts are base units (`WHOLE` = one whole token of the fixtures),
-//! prices base units of B per whole A.
+//! Tests pair orders routed through the KAS books in the matcher's global batch (`matcher::batch`,
+//! `matcher::pair`) on in-memory books, for both sides.
 //!
-//! Not ported (their rule no longer exists, option (2) of the pair design): the old route restrictions R1 / R2 (a token sold
-//! by cross limits only into plain bids, a token bought only from plain orders; a pair leg may now share a transaction with
-//! any KAS order), "a token sold and bought by cross limits in one transaction" (allowed), and the cross caps of 4 A outputs and
-//! 4 B inputs (the program slot limits alone bound a route).
+//! A pair ASK of A for B is filled through plain KAS bids of A and plain KAS asks of B in one
+//! transaction. A pair BID is filled through plain KAS bids of B (its B sold) and plain KAS asks of
+//! A (its A bought). The tests cover:
+//!
+//! * The token slot limits of both programs and the FOK / IOC rules.
+//! * Buying exactly the T its delivery needs: an ask's `ceil(n × p / scale)` of B, a bid's exactly
+//!   n of A. More is bought only when an ask's minimum fill forces it, and then it goes to the
+//!   maker.
+//! * Best prices first, ranked with direct orders by price, then tip, then age.
+//! * Never a loss, and never sharing an order with another transaction of the tick except as a
+//!   chained continuation.
+//! * Every transaction is engine-validated and leaves the operator no token.
+//!
+//! Amounts are base units (`WHOLE` = one whole token of the fixtures), prices base units of B per
+//! whole A.
+//!
+//! Not ported (their rule is gone, option (2) of the pair design):
+//!
+//! * The route restrictions R1 / R2 (a token sold by cross limits only into plain bids, a token
+//!   bought only from plain orders). A pair leg may share a transaction with any KAS order.
+//! * "A token sold and bought by cross limits in one transaction" (allowed).
+//! * The cross caps of 4 A outputs and 4 B inputs (the program slot limits alone bound a route).
 
 #[path = "matcher_common/mod.rs"]
 mod common;
@@ -455,7 +466,8 @@ fn pair_inputs(p: &Prepared) -> Vec<(String, u64, u16)> {
 
 #[test]
 fn two_pair_orders_in_one_route_on_the_widest_shape() {
-    // The soak's shape (2026-10-01): two pair asks selling A for B in one transaction, one selling out and one keeping a rest,
+    // The soak's shape: two pair asks selling A for B in one transaction, one selling out and one
+    // keeping a rest,
     // through three plain bids of A (with the rest: the four token-A outputs) and four asks of one whole B (the four token-B
     // inputs). Its closing input needs the most script units of the batch: the committed budgets must cover it.
     let mut v = vec![
@@ -759,10 +771,12 @@ fn ioc_pair_orders_are_walked_in_rate_order_in_both_books() {
 
 // ------------------------------------------------------------------ opposite pair orders
 
-/// Live TN10 soak (2026-10-01, TETH / TUSD): two orders of opposite directions (A for B and B for A) whose legs both cross at
-/// the best KAS prices. Each took one leg first (its purchase, ranked above the plain bids), blocking the other's second leg;
-/// the reconciliation then dropped both. Neither filled while both rested: 7 to 13 min for a 2 to 3 KAS route in the soak. Now
-/// opposite pair orders (an ASK and a BID of one pair, or an ASK of A/B with an ASK of B/A) share the transaction or are netted.
+/// Live TN10 soak case, TETH / TUSD: two orders of opposite directions (A for B and B for A) whose
+/// legs both cross at the best KAS prices. Each took one leg first (its purchase, ranked above the
+/// plain bids), blocking the other's second leg; the reconciliation then dropped both. Neither
+/// filled while both rested: 7 to 13 min for a 2 to 3 KAS route in the soak. Opposite pair orders
+/// (an ASK and a BID of one pair, or an ASK of A/B with an ASK of B/A) share the transaction or are
+/// netted.
 #[test]
 fn opposite_pair_orders_never_block_each_other() {
     // both directions pay: A and B bid at 2.60 and ask at 2.70 per whole token; the ASK sells A for 0.5 B per A (it costs 1.35
@@ -818,11 +832,13 @@ fn opposite_pair_orders_never_block_each_other() {
 
 // ------------------------------------------------------------------ live soak regressions (pair asks)
 
-/// Live TN10 soak (2026-10-01, TETH>TUSD): a v2.6 route bought B in whole ask lots and delivered the remainder of the last one
-/// to the maker, so its largest fill could lose where a smaller one paid (29 whole A at 0.621 KAS needed 7.511 whole B: 8
-/// whole lots at 2.329 = 18.63 KAS for 18.01 KAS). Protocol v3 buys exactly `ceil(n × rate / scale)` of B, so the route's margin
-/// is linear in its fill (up to one base unit of rounding per leg): the largest fill pays when any does, and the same book
-/// fills the whole pair order, through every time in force (a FOK one too), at exactly 7,511 base units of B.
+/// Live TN10 soak case, TETH>TUSD: a v2.6 route bought B in whole ask lots and delivered the
+/// remainder of the last one to the maker, so its largest fill could lose where a smaller one paid
+/// (29 whole A at 0.621 KAS needed 7.511 whole B: 8 whole lots at 2.329 = 18.63 KAS for 18.01 KAS).
+/// Protocol v3 buys exactly `ceil(n × rate / scale)` of B, so the route's margin is linear in its
+/// fill (up to one base unit of rounding per leg): the largest fill pays when any does, and the
+/// same book fills the whole pair order, through every time in force (a FOK one too), at exactly
+/// 7,511 base units of B.
 #[test]
 fn a_route_buys_exactly_its_b_so_the_largest_fill_pays() {
     let scene = |tif: i64| {
@@ -836,15 +852,17 @@ fn a_route_buys_exactly_its_b_so_the_largest_fill_pays() {
     }
 }
 
-/// Live TN10 soak (2026-10-01 10:59 UTC, TETH>TUSD; the book reduced to the orders that matter, prices as on chain, rates
-/// scaled to the fixture tokens): an IOC pair ask of 26 whole A and resting ones of 15 and 32 sell A for B through one bid of A
-/// (22 whole at 6.211 KAS) and two asks of B (5 whole at 23.276, 4 at 23.421). The IOC walked first and took the whole bid at
-/// a loss, and the route was dropped whole; bounded to the largest fill that pays, the rest of the bid tempted the resting
-/// pair orders into the same loss, so no single drop raised the profit and the batch was given up. In v3 the losing step is an
-/// ask's minimum fill (one whole token): 22 whole A need 5,566 B, the cheap ask holds 5,000 and the 566 more would force a
-/// whole token of the dearer ask. The largest fill that pays is the most the cheap ask covers, floor(5,000 x 1,000 / 253) =
-/// 19,762 base units of A; on the 2,238 left of the bid either resting pair order would buy a whole B token for a fraction of
-/// one and loses.
+/// Live TN10 soak case, TETH>TUSD (the book reduced to the orders that matter, prices as on chain,
+/// rates scaled to the fixture tokens): an IOC pair ask of 26 whole A and resting ones of 15 and 32
+/// sell A for B through one bid of A (22 whole at 6.211 KAS) and two asks of B (5 whole at 23.276,
+/// 4 at 23.421). If the IOC walks first and takes the whole bid at a loss, the route is dropped
+/// whole; if it is bounded to the largest fill that pays, the rest of the bid tempts the resting
+/// pair orders into the same loss, so no single drop raises the profit and the batch is given up.
+/// In v3 the losing step is an ask's minimum fill (one whole token): 22 whole A need 5,566 B, the
+/// cheap ask holds 5,000 and the 566 more would force a whole token of the dearer ask. The largest
+/// fill that pays is the most the cheap ask covers, floor(5,000 x 1,000 / 253) = 19,762 base units
+/// of A; on the 2,238 left of the bid either resting pair order would buy a whole token of B for a
+/// fraction of one and loses.
 #[test]
 fn live_an_ioc_pair_ask_is_not_lost_behind_resting_ones_on_one_bid() {
     let v = vec![
@@ -861,12 +879,13 @@ fn live_an_ioc_pair_ask_is_not_lost_behind_resting_ones_on_one_bid() {
     assert_eq!((amount_in(&r, cid(200)), amount_in(&r, cid(201))), (5 * WHOLE, 0), "exactly the cheap ask");
 }
 
-/// Live TN10 soak (2026-10-02 02:58:52 to 02:59:20 UTC, TETH>TUSD `e7302001`; the book at DAA 585,769,450 delta-debugged to
-/// one bid of A and asks of B, prices as on chain, rates scaled to the fixture tokens): the best pair order pays only up to what
-/// the cheap ask of B covers. The rest of the bid goes to the next resting pair order, which loses on it (in v3: a whole token
-/// of the dear ask, its minimum fill, for a fraction of one), and each further one takes the same rest at the same loss once the
-/// one before is dropped. The profit step dropped at most 1 + 8 of these substitutes: with ten or more behind the paying one it
-/// gave the batch up and nothing at all was built for 28 s (the plain crossings of the book starved with it).
+/// Live TN10 soak case, TETH>TUSD (the book at DAA 585,769,450 delta-debugged to one bid of A and
+/// asks of B, prices as on chain, rates scaled to the fixture tokens): the best pair order pays
+/// only up to what the cheap ask of B covers. The rest of the bid goes to the next resting pair
+/// order, which loses on it (in v3: a whole token of the dear ask, its minimum fill, for a fraction
+/// of one), and each further one takes the same rest at the same loss once the one before is
+/// dropped. With ten or more of them behind the paying one the batch must not be given up: giving
+/// it up builds nothing at all and starves the plain crossings of the book.
 #[test]
 fn live_a_paying_pair_ask_is_not_lost_behind_ten_losing_ones_on_one_bid() {
     let scene = |losers: u32| {
@@ -889,12 +908,13 @@ fn live_a_paying_pair_ask_is_not_lost_behind_ten_losing_ones_on_one_bid() {
     }
 }
 
-/// Live TN10 soak (2026-10-03 10:41 UTC, TBTC>TUSD; the view at DAA 586,904,845, prices as on chain, rates scaled to the
-/// fixture tokens: a whole TBTC of 4.01 KAS sells for 0.161 to 0.166 of a whole TUSD of 23.73 KAS). Ten pair orders had been
-/// filled down to one whole token each, whose B (0.16 of a whole TUSD) cost a whole v2.6 lot: the standalone bound left all ten
-/// out and the pair book stayed crossed by up to 4 % for hours. v3 buys exactly the B each delivery needs where the asks of B
-/// allow small fills (minimum fill 1 base unit here): each pair order pays on its own, every one that fills buys exactly its
-/// `ceil(n × rate / scale)` and no B is wasted.
+/// Live TN10 soak case, TBTC>TUSD (the view at DAA 586,904,845, prices as on chain, rates scaled to
+/// the fixture tokens: a whole TBTC of 4.01 KAS sells for 0.161 to 0.166 of a whole TUSD of 23.73
+/// KAS). Ten pair orders were filled down to one whole token each, whose B (0.16 of a whole TUSD)
+/// cost a whole v2.6 lot: the standalone bound left all ten out and the pair book stayed crossed by
+/// up to 4 % for hours. v3 buys exactly the B each delivery needs where the asks of B allow small
+/// fills (minimum fill 1 base unit here): each pair order pays on its own, every one that fills
+/// buys exactly its `ceil(n × rate / scale)` and no B is wasted.
 #[test]
 fn live_small_pair_order_remainders_buy_exactly_their_b() {
     let rates = [166, 163, 162, 163, 164, 166, 165, 161, 166, 164];
@@ -930,11 +950,13 @@ fn live_small_pair_order_remainders_buy_exactly_their_b() {
     assert!(filled >= 6, "at least the six v2.6 filled through one shared lot: {filled}");
 }
 
-/// Live TN10 soak (2026-10-03 10:41 UTC, TUSD>TBTC; the view at DAA 586,904,845, prices as on chain, rates scaled to the fixture
-/// tokens: a whole TUSD of 23.7 KAS buys 5.76 whole TBTC of 4.02 KAS). The soak bots sized pair orders at a fixed rate so that
-/// the delivery landed a sliver ABOVE a whole v2.6 lot of B (4 whole A for 23.04 lots of B): a fill bought 24 lots and the 0.96
-/// lot of waste exceeded the route's spread, so alone neither paid and only together (47 lots for 46.1) both filled. v3 buys
-/// exactly 23,040 and 23,060 base units of B: alone each pays, together both fill with exactly 46,100.
+/// Live TN10 soak case, TUSD>TBTC (the view at DAA 586,904,845, prices as on chain, rates scaled to
+/// the fixture tokens: a whole TUSD of 23.7 KAS buys 5.76 whole TBTC of 4.02 KAS). The soak bots
+/// sized pair orders at a fixed rate so that the delivery landed a sliver above a whole v2.6 lot of
+/// B (4 whole A for 23.04 lots of B). A fill bought 24 lots and the 0.96 lot of waste exceeded the
+/// route's spread, so alone neither paid and only together (47 lots for 46.1) both filled. v3 buys
+/// exactly 23,040 and 23,060 base units of B: alone each pays, together both fill with exactly
+/// 46,100.
 #[test]
 fn live_pair_orders_a_sliver_above_whole_tokens_of_b_fill_alone_and_together() {
     let books = || {

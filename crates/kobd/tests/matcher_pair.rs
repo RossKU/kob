@@ -1,9 +1,16 @@
-//! Pair orders in the matcher's global batch (`matcher::batch`, `matcher::pair`) on in-memory books: routed through the two
-//! KAS books (a pair ASK sells A into bids of A and buys B from asks of B; a pair BID sells B into bids of B and buys A from
-//! asks of A), netted against opposite pair orders (any number per side, exact rounded amounts, the surplus to the pair asks
-//! or sold into the KAS bids), FOK / IOC / minimum fill, pair conditionals armed in the batch of their evidence (two
-//! KAS-book fills, or a resting pair fill), if-done pair fills creating their exits. Every transaction is engine-validated
-//! and leaves the operator no token. Amounts are base units (`WHOLE` = one whole token), prices base units of B per whole A.
+//! Tests pair orders in the matcher's global batch (`matcher::batch`, `matcher::pair`) on in-memory
+//! books. The tests cover:
+//!
+//! * Routing through the two KAS books: a pair ASK sells A into bids of A and buys B from asks of
+//!   B; a pair BID sells B into bids of B and buys A from asks of A.
+//! * Netting against opposite pair orders (any number per side, exact rounded amounts, the surplus
+//!   to the pair asks or sold into the KAS bids).
+//! * FOK / IOC / minimum fill.
+//! * Pair conditionals armed in the batch of their evidence (two KAS-book fills, or a resting pair
+//!   fill), and if-done pair fills creating their exits.
+//!
+//! Every transaction is engine-validated and leaves the operator no token. Amounts are base units
+//! (`WHOLE` = one whole token), prices base units of B per whole A.
 
 #[path = "matcher_common/mod.rs"]
 mod common;

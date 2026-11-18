@@ -1,6 +1,7 @@
-//! The matcher's book from the indexer (`indexer::book::listed_orders`) carries what a delivering bid's fill spends: a
-//! mode-1 bid's proven bought-custody (`ListedOrder::bought_custody`, exact, so the order is a candidate) and a mode-2
-//! bid's top-up targets, the maker's live receive UTXOs of the token and commitment (`ListedOrder::receive`).
+//! Tests that the matcher's book from the indexer (`indexer::book::listed_orders`) carries what a
+//! delivering bid's fill spends: a mode-1 bid's proven bought-custody
+//! (`ListedOrder::bought_custody`, exact, so the order is a candidate) and a mode-2 bid's top-up
+//! targets, the maker's live receive UTXOs of the token and commitment (`ListedOrder::receive`).
 
 mod common;
 #[path = "common/delivery.rs"]
