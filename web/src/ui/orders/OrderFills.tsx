@@ -1,4 +1,5 @@
-// Fill history of one order on demand (R-8): every fill with its time, amount, price and payout, the average price, and a CSV download.
+// Fill history of one order on demand. It shows every fill with its time, amount, price and payout,
+// the average price and a CSV download.
 import { kasValueText } from '../../app/fiat';
 import { useFiat } from '../../app/use-fiat';
 import { priceUsdText } from './fiat-price';
@@ -19,13 +20,15 @@ import { countText } from './plural';
 export interface OrderFillsProps {
   row: OrderRowModel;
   token: TokenInfo | undefined;
-  /** a pair order's quote token B (its fills show the B amount and the counterparty, no price) */
+  /**
+   * A pair order's quote token B. Its fills show the B amount and the counterparty, with no price.
+   */
   quote?: TokenInfo | undefined;
   network: string;
   loadEvents(id: Hex, signal: AbortSignal): Promise<EventView[]>;
 }
 
-/** Base units this order has filled so far (indexer view), 0 when unknown. */
+/** Base units this order has filled so far, from the indexer view. It is 0 when unknown. */
 export const filledAmountOf = (row: OrderRowModel): bigint => {
   const v = row.entry.view?.filled_amount;
   return typeof v === 'string' && /^\d+$/.test(v) ? BigInt(v) : 0n;
@@ -35,12 +38,14 @@ export function OrderFills(props: OrderFillsProps) {
   const { row, token } = props;
   const [open, setOpen] = useState(false);
   const txUrl = useTxUrl();
-  // the USD display: a price and the payout in dollars
+  // The USD display shows a price and the payout in dollars.
   const fiat = useFiat();
   const data = useAsync(async (signal) => (open ? fillHistory(await props.loadEvents(row.id, signal), row.scale) : null), [open, row.id]);
   const decimals = token?.decimals ?? RAW_TOKEN_DECIMALS;
-  // prices are the order's state prices (sompi per whole token of `row.scale` base units). One number of decimals for the whole list and the average (the finest any of them needs,
-  // 5 significant digits, at most 6), the exact price in the title: the decimal points line up and no price is cut without saying so
+  // Prices are the order's state prices, in sompi per whole token of `row.scale` base units. The
+  // whole list and the average have one number of decimals, the finest any of them needs, with 5
+  // significant digits and at most 6. The exact price is in the title. So the decimal points line
+  // up and no price is cut without saying so.
   const priceDp = priceDpOf([...(data.data?.rows ?? []).map((r) => r.price), data.data?.avgPrice].map((price) => ({ price, decimals, scale: row.scale })));
   const unit = tokenUnit(token?.ticker, row.token);
   const kasPer = t('orders.unit.kasPer', { ticker: unit.text || '?' });
@@ -48,7 +53,8 @@ export function OrderFills(props: OrderFillsProps) {
   const priceTitle = (p: bigint) => (fiat && !row.pair ? undefined : `${exactPriceText(p, decimals, row.scale)} ${kasPer}`);
   const price = (p: bigint) => (fiat && !row.pair ? priceUsdText(p, decimals, row.scale, fiat) : `${priceCell(p)} ${kasPer}`);
   const amountText = (a: bigint) => amountCell(a, decimals).text;
-  // a pair order: its fills are volume only (amounts of A and B, how it was filled), never a price
+  // A pair order's fills are volume only, with amounts of A and B and how it was filled, and never
+  // a price.
   const pairOrder = !!row.pair;
   const quote = props.quote;
   const bText = (b: bigint | null | undefined) => (b === null || b === undefined ? '—' : quote ? amountCell(b, quote.decimals).text : b.toString());
@@ -94,7 +100,8 @@ export function OrderFills(props: OrderFillsProps) {
                   <tbody>
                     {h.rows.map((r) => {
                       const href = txUrl(r.txid);
-                      // a click anywhere on the row opens the fill's transaction on the block explorer, in a new tab (the id itself is a link too)
+                      // A click anywhere on the row opens the fill's transaction on the block
+                      // explorer, in a new tab. The id itself is a link too.
                       const open = (e: MouseEvent) => {
                         if (href && !(e.target as HTMLElement).closest('a, button')) window.open(href, '_blank', 'noopener,noreferrer');
                       };

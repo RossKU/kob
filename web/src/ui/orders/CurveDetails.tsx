@@ -1,5 +1,6 @@
-// An order's details for a stepped sell curve (KobCurveAsk): the remaining levels as a step line (sold part muted), first / last / now price,
-// levels left and what the rest pays if it sells.
+// An order's details for a stepped sell curve (KobCurveAsk). They show the remaining levels as a
+// step line with the sold part muted, the first, last and now price, the levels left and what the
+// rest pays if it sells.
 import { t } from '../../i18n';
 import { curveRestKas, curveSteps, type CurveStep } from '../../kob/curve';
 import type { CurveFacts } from '../../kob/order-facts';
@@ -13,10 +14,16 @@ export interface CurveDetailsProps {
   decimals: number;
 }
 
-/** Sompi the levels still for sale pay if they all sell (each level rounded up, as the covenant pays the maker). */
+/**
+ * Sompi the levels still for sale pay if they all sell. Each level is rounded up, as the covenant
+ * pays the maker.
+ */
 export const restProceeds = (c: CurveFacts, amountLeft: bigint, scale: bigint): bigint => curveRestKas(c.levelSize, c.table, c.total, amountLeft, scale);
 
-/** The steps lifted onto a floor a quarter of the table's range under its lowest price (never below zero), so the rise shows. */
+/**
+ * The steps lifted onto a floor a quarter of the table's range under its lowest price, never below
+ * zero, so the rise shows.
+ */
 export function graphSteps(steps: CurveStep[]): CurveStep[] {
   if (!steps.length) return steps;
   const lo = steps.reduce((m, x) => (x.price < m ? x.price : m), steps[0]!.price);
@@ -29,7 +36,8 @@ export function graphSteps(steps: CurveStep[]): CurveStep[] {
 export function CurveDetails(p: CurveDetailsProps) {
   const c = p.curve;
   const left = p.amountLeft ?? 0n;
-  // the graph spans the table's own range (a gentle curve, 1.04x, would be a flat line over a zero baseline): prices above a floor under the first
+  // The graph spans the table's own range. A gentle curve, 1.04x, would otherwise be a flat line
+  // over a zero baseline. Prices above a floor under the first are shown.
   const steps = graphSteps(curveSteps(c.levelSize, c.table, c.total, left));
   const price = (v: bigint | null | undefined) => (v === null || v === undefined ? '—' : <Amount kind="price" value={v} decimals={p.decimals} scale={p.scale} group />);
   return (

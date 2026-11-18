@@ -12,9 +12,12 @@ export interface RecoverPanelProps {
   records: PlacementRecord[];
   pubkey: Hex;
   store: RecordStore;
-  /** cancel a live order found from its record (the My orders row's cancel, through the confirm screen) */
+  /**
+   * Cancel a live order found from its record, as the My orders row's cancel does through the
+   * confirm screen.
+   */
   onCancel?(covenantId: string): void;
-  /** records changed (import): reload the orders */
+  /** Records changed by an import, so reload the orders. */
   onChanged(): void;
 }
 
@@ -23,8 +26,9 @@ interface Rescan {
 }
 
 /**
- * Recovery of your orders without the indexer: your placement records (kept in this browser) are what lets the app find and cancel an order even
- * when the indexer is gone. Export them, import them on another browser, or rescan them against the node.
+ * Recovery of your orders without the indexer. Your placement records, kept in this browser, are
+ * what lets the app find and cancel an order even when the indexer is gone. Export them, import
+ * them on another browser, or rescan them against the node.
  */
 export function RecoverPanel(props: RecoverPanelProps) {
   const services = useServices();

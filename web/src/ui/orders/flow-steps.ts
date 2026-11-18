@@ -1,22 +1,26 @@
-// The stepper of a flow card (TxFlow.tsx): its steps' states as stepper items, with the private-key signer's one approval in front (a merge
-// session) and a step that follows the run outside it ("Merge, then sell": the sale) behind.
+// The stepper of a flow card (TxFlow.tsx). It shows the steps' states as stepper items, with the
+// private-key signer's one approval in front, as in a merge session, and a step that follows the
+// run outside it behind, such as "Merge, then sell" with the sale.
 import { t } from '../../i18n';
 import type { StepperItem } from '../kit/stepper-model';
 import type { SendPhase } from '../confirm/SendStatus';
 import type { StepState } from './TxFlow';
 
-/** The run's one approval in the private-key signer: none, being asked, given, refused (an error) or declined. */
+/**
+ * The run's one approval in the private-key signer: none, being asked, given, refused (an error) or
+ * declined.
+ */
 export type SessionStep = 'none' | 'asking' | 'open' | 'failed' | 'declined';
 
 export interface FlowStepperInput {
   titles: readonly string[];
   states: readonly StepState[];
-  /** the running step's send (ui/confirm/SendStatus.tsx): what it waits for */
+  /** The running step's send (ui/confirm/SendStatus.tsx), which says what it waits for. */
   phase?: SendPhase | null;
-  /** the send waits until the wallet sees the previous transaction */
+  /** The send waits until the wallet sees the previous transaction. */
   waiting?: boolean;
   session?: SessionStep;
-  /** after the run: current once every step went through ("Sell", "Confirm the sale") */
+  /** After the run. It is current once every step went through, as "Sell" or "Confirm the sale". */
   then?: { label: string; note: string };
 }
 
@@ -47,7 +51,8 @@ export function flowStepperItems(a: FlowStepperInput): StepperItem[] {
   a.titles.forEach((label, i) => {
     const s = a.states[i] ?? 'pending';
     const base = { label, testid: `flow-step-${i}`, data: s };
-    // the approval of the whole run comes first: no step runs before it, and one it stopped never started
+    // The approval of the whole run comes first. No step runs before it, and one it stopped never
+    // started.
     if (session === 'asking' || sessionFailed) return items.push({ ...base, state: 'waiting' });
     if (s === 'pending') return items.push({ ...base, state: 'waiting' });
     if (s === 'preparing') return items.push({ ...base, state: 'current', busy: true, note: t('stepper.note.preparing') });

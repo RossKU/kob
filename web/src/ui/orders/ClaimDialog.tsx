@@ -12,15 +12,16 @@ export interface ClaimDialogProps {
   row: OrderRowModel;
   ctx: ClaimContext;
   onClose(): void;
-  /** the claim is built: hand it to the flow (`toast`: its submitted line) */
+  /** The claim is built. Hand it to the flow, with `toast` as its submitted line. */
   onPlanned(plan: CancelPlan, toast: string): void;
 }
 
 type Kind = ClaimChoice['kind'];
 
 /**
- * Claim of what a Collected buy order bought: to the wallet, merged with the wallet's UTXOs, or sold by a limit sell placed in the
- * same approval. The fee is shown before signing; a costly merge suggests fewer UTXOs.
+ * Claim of what a Collected buy order bought. It goes to the wallet, is merged with the wallet's
+ * UTXOs, or is sold by a limit sell placed in the same approval. The fee is shown before signing,
+ * and a costly merge suggests fewer UTXOs.
  */
 export function ClaimDialog(props: ClaimDialogProps) {
   const services = useServices();
@@ -31,7 +32,7 @@ export function ClaimDialog(props: ClaimDialogProps) {
   const decimals = tk?.decimals ?? 0;
   const ticker = tk?.ticker ?? '?';
   const s = st.state as unknown as Record<string, string>;
-  // the sell's prices are per whole token of the token market's scale
+  // The sell's prices are per whole token of the token market's scale.
   const scale = ctx.scale ?? 1n;
   const mergeMax = Math.min(ctx.room, ctx.wallet.length);
   const [kind, setKind] = useState<Kind>('claim');

@@ -1,5 +1,6 @@
-// Amend of a curve (KobCurveAsk) in place: the price now and the last level's re-spread the levels left, the level size, tip and minimum fill
-// change; the amount left stays. One transaction (the maker's cancel continuing the curve), through the same flow as every amend.
+// Amend of a curve (KobCurveAsk) in place. The price now and the last level's re-spread the levels
+// left. The level size, tip and minimum fill change, and the amount left stays. It is one
+// transaction, the maker's cancel continuing the curve, through the same flow as every amend.
 import { useMemo, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import type { StrayView } from '../../data/indexer-types';
@@ -89,7 +90,7 @@ export function CurveAmendDialog(props: CurveAmendDialogProps) {
   const snap: OrderSnapshot = useMemo(
     () => ({
       covenantId: row.id, order: { transactionId: '00'.repeat(32), index: 0, amount: row.entry.view?.current?.value ?? '0', covenantId: row.id, state: props.state },
-      // the preview binds an unbound curve to the token the row names
+      // The preview binds an unbound curve to the token the row names.
       custody: { transactionId: '00'.repeat(32), index: 0, amount: '0', covenantId: row.token ?? '', state: { amount: s.amountLeft, owner: row.id, owner_scheme: 4, borrow_scheme: 0, borrow_guard: '0'.repeat(64), extension_commitment: s.extensionCommitment } },
       strays: [], refundDueDaa: null, deadline: null, source: 'indexer',
     }),
