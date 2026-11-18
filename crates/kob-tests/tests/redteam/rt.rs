@@ -1,17 +1,19 @@
-//! Red-team harness: honest engine-built transactions, one mutation per attack, judged by the rusty-kaspa v2.1.0 script
-//! engine (every input script with an unlimited meter, the covenant context, amounts, the storage-mass commitment and
-//! the block mass limits). Mempool policy (fee floor, standardness) is not applied: consensus only.
+//! Harness of the red-team suites: honest engine-built transactions, one mutation per attack,
+//! judged by the rusty-kaspa v2.1.0 script engine (every input script with an unlimited meter, the
+//! covenant context, amounts, the storage-mass commitment and the block mass limits). Mempool
+//! policy (fee floor, standardness) is not applied: consensus only.
 //!
-//! The attack patterns follow the kaspa-redteam 0.17.2 library (MIT, Kaspero Labs; the ids are theirs, this code is
-//! KOB's own): `OUT-01..04`, `FEE-01`, `IN-01..02`, `SIG-01..02`, `FAM-10`, `BOR-01`, plus KOB's token-amount and
-//! delivery attacks (`TOK-*`, `DLV-*`).
+//! The attack patterns follow the kaspa-redteam 0.17.2 library (MIT, Kaspero Labs; the ids are
+//! theirs, this code is KOB's own): `OUT-01..04`, `FEE-01`, `IN-01..02`, `SIG-01..02`, `FAM-10`,
+//! `BOR-01`, plus KOB's token-amount and delivery attacks (`TOK-*`, `DLV-*`).
 //!
-//! Seats: the attacker builds the transaction and holds the keys of the taker, matcher, keeper and keeper (intents)
-//! seats and its own key; every signature of those keys is made again after each change. Any other signature (a
-//! maker's) is kept as it was, so a change it commits to breaks it.
+//! Seats: the attacker builds the transaction and holds the keys of the taker, matcher, keeper and
+//! keeper (intents) seats and its own key; every signature of those keys is made again after each
+//! change. Any other signature (a maker's) is kept as it was, so a change it commits to breaks it.
 //!
-//! An accepted attempt is a note only by an explicit rule of [`classify`] (the attack's own note rule, or the
-//! allow-list [`ALLOW`]); anything else accepted is a finding, written as a replay file.
+//! An accepted attempt is a note only by an explicit rule of [`classify`] (the attack's own note
+//! rule, or the allow-list [`ALLOW`]); anything else accepted is a finding, written as a replay
+//! file.
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
