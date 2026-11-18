@@ -573,6 +573,9 @@ pub struct IssueSpec {
     /// A curve placed in this genesis (`docs/design/curve-ask-spec.md` §4); one of the holders is
     /// its custody.
     pub curve: Option<GenesisCurve>,
+    /// A creator lock (`crate::creator_lock`): declared as `lock`; the holders it owns (owner
+    /// scheme 0x03, its P2SH hash, borrow disabled) open at its time.
+    pub lock: Option<crate::creator_lock::CreatorLock>,
 }
 
 /// A `KobCurveAsk` created in its token's genesis, unbound.
@@ -626,6 +629,7 @@ impl IssueSpec {
             program: IssueProgram::default(),
             mass_margin_percent: DEFAULT_MASS_MARGIN_PERCENT,
             curve: None,
+            lock: None,
         }
     }
 
@@ -642,6 +646,7 @@ impl IssueSpec {
             website: self.website.clone(),
             x: self.x.clone(),
             telegram: self.telegram.clone(),
+            lock: self.lock.map(|l| l.script_hex()),
         }
     }
 
@@ -745,6 +750,16 @@ impl IssueSpec {
         }
         if self.carrier == 0 {
             return invalid("carrier must be positive");
+        }
+        if let Some(l) = &self.lock {
+            let l = crate::creator_lock::CreatorLock::new(l.until, l.key).map_err(|e| IssueError::Invalid(e.to_string()))?;
+            let held = self.holders.iter().filter(|h| h.owner_scheme == SCHEME_P2SH && h.owner == l.authority());
+            if held.clone().count() == 0 {
+                return invalid("creator lock: no holder is owned by the lock (owner scheme 0x03, its P2SH hash)");
+            }
+            if held.clone().any(|h| h.borrow_scheme != 0) {
+                return invalid("creator lock: a locked holder has borrowing enabled");
+            }
         }
         Ok(warnings)
     }

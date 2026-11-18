@@ -454,6 +454,9 @@ pub struct TokenMetadata {
     pub x: Option<String>,
     /// `https://t.me/<handle>`.
     pub telegram: Option<String>,
+    /// A creator lock's redeem script, 88 lowercase hex characters (`crate::creator_lock`): the
+    /// genesis outputs owned by its P2SH hash open at its time.
+    pub lock: Option<String>,
 }
 
 impl TokenMetadata {
@@ -496,6 +499,13 @@ impl TokenMetadata {
         if self.telegram.as_deref().is_some_and(|t| !is_telegram_url(t)) {
             return Err("telegram must be https://t.me/<handle> (5..=32 of A-Z a-z 0-9 _)".into());
         }
+        if self
+            .lock
+            .as_deref()
+            .is_some_and(|l| l.bytes().any(|b| b.is_ascii_uppercase()) || crate::creator_lock::CreatorLock::parse_hex(l).is_none())
+        {
+            return Err("lock must be a creator lock script in lowercase hex".into());
+        }
         let len = self.payload_unchecked().len();
         if len > MAX_TOKEN_PAYLOAD {
             return Err(format!(
@@ -507,7 +517,8 @@ impl TokenMetadata {
 
     /// The compact JSON text, with the members in a fixed order.
     ///
-    /// The order is `name, symbol, decimals, description, image, image_hash, website, x, telegram`.
+    /// The order is `name, symbol, decimals, description, image, image_hash, website, x, telegram,
+    /// lock`.
     /// Unset optional members are left out.
     pub fn json(&self) -> String {
         let s = |v: &str| serde_json::to_string(v).expect("json string");
@@ -519,6 +530,7 @@ impl TokenMetadata {
             ("website", &self.website),
             ("x", &self.x),
             ("telegram", &self.telegram),
+            ("lock", &self.lock),
         ] {
             if let Some(v) = v {
                 out.push_str(&format!(",\"{k}\":{}", s(v)));
@@ -570,6 +582,10 @@ pub struct TokenDeclaration {
     pub x: Option<String>,
     /// `telegram`: `https://t.me/<handle>`.
     pub telegram: Option<String>,
+    /// `lock`: a creator lock's redeem script (hex, lowercased), taken only when it is exactly the
+    /// template (`crate::creator_lock::CreatorLock::parse`). What it holds is
+    /// [`VerifiedDeclaration::lock`].
+    pub lock: Option<String>,
     /// The fields present but not taken (`decimals: not an integer from 0 to 18`, ...).
     pub issues: Vec<String>,
 }
@@ -629,6 +645,20 @@ impl TokenDeclaration {
         d.website = text("website", MAX_TEXT_CHARS, &|s| link_ok(s, false), &mut issues);
         d.x = text("x", MAX_TEXT_CHARS, &is_x_url, &mut issues);
         d.telegram = text("telegram", MAX_TEXT_CHARS, &is_telegram_url, &mut issues);
+        d.lock = match obj.get("lock") {
+            None => None,
+            Some(Value::String(s)) => match crate::creator_lock::CreatorLock::parse_hex(s) {
+                Some(l) => Some(l.script_hex()),
+                None => {
+                    issues.push(issue("lock", "not a creator lock script"));
+                    None
+                }
+            },
+            Some(_) => {
+                issues.push(issue("lock", "not a string"));
+                None
+            }
+        };
         d.decimals = match obj.get("decimals") {
             None => None,
             Some(Value::Number(n)) => match n.as_u64() {
@@ -876,6 +906,10 @@ pub struct VerifiedDeclaration {
     pub json: String,
     /// KOB's token fields read from it.
     pub token: TokenDeclaration,
+    /// The declared creator lock, verified against the genesis: what it holds and until when.
+    /// `None` without a `lock`, or when it holds nothing in the genesis (named in
+    /// `token.issues`).
+    pub lock: Option<crate::creator_lock::VerifiedLock>,
 }
 
 impl LaunchProof {
@@ -903,13 +937,24 @@ impl LaunchProof {
         let genesis = self.genesis.to_tx()?;
         let id = Hash::from_bytes(self.covenant_id);
         let json = verify_binding(&prep, &genesis, id).map_err(|e| e.to_string())?.to_string();
-        let token = TokenDeclaration::from_object(&parse_object(&json).map_err(|e| e.to_string())?);
+        let mut token = TokenDeclaration::from_object(&parse_object(&json).map_err(|e| e.to_string())?);
+        let lock = match token.lock.as_deref().and_then(crate::creator_lock::CreatorLock::parse_hex) {
+            None => None,
+            Some(l) => match crate::creator_lock::verify_genesis_lock(&genesis, id, &l) {
+                Ok(v) => Some(v),
+                Err(why) => {
+                    token.issues.push(issue("lock", &why));
+                    None
+                }
+            },
+        };
         Ok(VerifiedDeclaration {
             covenant_id: self.covenant_id,
             preparation_txid: tx_id(&prep).as_bytes(),
             genesis_txid: tx_id(&genesis).as_bytes(),
             json,
             token,
+            lock,
         })
     }
 }

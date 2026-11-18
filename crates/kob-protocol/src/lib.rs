@@ -60,6 +60,7 @@
 pub mod artifacts;
 pub mod budget;
 pub mod build;
+pub mod creator_lock;
 pub mod defaults;
 pub mod error;
 pub mod family;

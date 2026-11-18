@@ -325,7 +325,7 @@ pub fn role(m: &Mtx, i: usize) -> Role {
         SigPlan::TokenLeader { template: t, .. }
         | SigPlan::TokenDelegator { template: t, .. }
         | SigPlan::KronToken { template: t, .. } => Role::Token(*t),
-        SigPlan::P2pk { pubkey } => Role::Plain(*pubkey),
+        SigPlan::P2pk { pubkey } | SigPlan::CreatorLock { key: pubkey, .. } => Role::Plain(*pubkey),
     }
 }
 
@@ -1370,6 +1370,7 @@ pub fn describe(m: &Mtx) -> String {
             SigPlan::KronToken { state, witnesses, .. } => format!("kron {state:?} w{witnesses:?}"),
             SigPlan::P2pk { pubkey } => format!("p2pk {}", &hex(pubkey)[..8]),
             SigPlan::RetiredCancel { .. } => "retired cancel".into(),
+            SigPlan::CreatorLock { until, .. } => format!("creator lock until {until}"),
         };
         s.push_str(&format!(
             "  in {i}: {} {} cov {:?} {}\n",

@@ -230,6 +230,7 @@ fn input_item(i: &MIn) -> Item {
     let value = i.entry.amount;
     let (holder, what) = match &i.plan {
         SigPlan::P2pk { pubkey } => (Holder::Key(*pubkey), What::Kas),
+        SigPlan::CreatorLock { .. } => (Holder::Unknown, What::Other("creator lock coin".into())),
         SigPlan::Entry { template: t, state, .. } | SigPlan::RetiredCancel { template: t, state, .. } => {
             match AnyState::decode(*t, state) {
                 Ok(s) => (cov.map(Holder::Cov).unwrap_or(Holder::Unknown), What::Order(*t, s)),

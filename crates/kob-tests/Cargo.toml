@@ -26,6 +26,10 @@ sha2 = "0.10"
 # is discovered without one.
 
 [[test]]
+name = "creator_lock_tests"
+path = "tests/kcc20/creator_lock_tests.rs"
+
+[[test]]
 name = "artifacts_tests"
 path = "tests/kob/artifacts_tests.rs"
 

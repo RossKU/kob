@@ -213,6 +213,9 @@ pub enum Witness {
     P2pk(#[serde(with = "crate::json::field")] [u8; 32]),
     /// The KCC-20 borrow path (leader only, no signature).
     Borrow,
+    /// A `p2sh/v1` owner (scheme 0x03): the index of the input whose script public key is the P2SH
+    /// of the owner (a creator lock's coin, `crate::creator_lock`). Nobody signs the token input.
+    P2sh(u8),
 }
 
 /// How one input's signature script is assembled.
@@ -259,6 +262,15 @@ pub enum SigPlan {
         #[serde(with = "crate::json::field", default, skip_serializing_if = "Option::is_none")]
         signer: Option<[u8; 32]>,
     },
+    /// The coin of a creator lock (`crate::creator_lock`): `push(sig65) push(script)`, a
+    /// SIGHASH_ALL signature of `key`; the transaction's lock time is at least `until`.
+    #[serde(rename_all = "camelCase")]
+    CreatorLock {
+        #[serde(with = "crate::json::field")]
+        until: u64,
+        #[serde(with = "crate::json::field")]
+        key: [u8; 32],
+    },
     /// The maker's `cancel(sig)` of an order under a retired template.
     ///
     /// Retired templates are in the cancel-only table (`crate::retired`). The redeem script is the
@@ -302,10 +314,11 @@ impl SigPlan {
             }
             SigPlan::TokenLeader { witness, .. } | SigPlan::TokenDelegator { witness, .. } => match witness {
                 Witness::P2pk(k) => Some(*k),
-                Witness::CovenantId | Witness::Borrow => None,
+                Witness::CovenantId | Witness::Borrow | Witness::P2sh(_) => None,
             },
             SigPlan::KronToken { signer, .. } => *signer,
             SigPlan::RetiredCancel { maker, .. } => Some(*maker),
+            SigPlan::CreatorLock { key, .. } => Some(*key),
         }
     }
 
@@ -322,6 +335,7 @@ impl SigPlan {
             SigPlan::RetiredCancel { template: t, retired, state, .. } => {
                 crate::retired::retired_for(retired, *t).ok()?.redeem(state).ok()
             }
+            SigPlan::CreatorLock { until, key } => Some(crate::creator_lock::CreatorLock { until: *until, key: *key }.script()),
         }
     }
 
@@ -351,6 +365,7 @@ impl SigPlan {
             SigPlan::RetiredCancel { template: t, retired, state, .. } => {
                 crate::retired::retired_for(retired, *t)?.redeem(state).map(|_| ())
             }
+            SigPlan::CreatorLock { until, key } => crate::creator_lock::CreatorLock::new(*until, *key).map(|_| ()),
         }
     }
 
@@ -365,7 +380,7 @@ impl SigPlan {
             SigPlan::KronToken { template: t, state, .. } => state.spk_with(token_template(*t)),
             // An unknown actor or a malformed state gives an unspendable empty script, and `check`
             // refuses such a plan.
-            SigPlan::Router { .. } | SigPlan::RetiredCancel { .. } => self
+            SigPlan::Router { .. } | SigPlan::RetiredCancel { .. } | SigPlan::CreatorLock { .. } => self
                 .redeem()
                 .map(|r| kaspa_txscript::pay_to_script_hash_script(&r))
                 .unwrap_or_else(|| ScriptPublicKey::new(0, Default::default())),
@@ -397,6 +412,7 @@ impl SigPlan {
                     Witness::CovenantId => leader_witness(None),
                     Witness::P2pk(_) => leader_witness(Some(need("kcc20 leader")?)),
                     Witness::Borrow => crate::script::borrow_witness(),
+                    Witness::P2sh(at) => vec![0x00, *at],
                 };
                 let next = ArtifactValue::Array(next_states.iter().map(kcc20_state_value).collect());
                 entry_sigscript(tpl, &state.redeem_with(tpl), "transfer", &[next, ArtifactValue::Bytes(w)]).map_err(Error::Invalid)
@@ -407,6 +423,7 @@ impl SigPlan {
                     Witness::CovenantId => vec![],
                     Witness::P2pk(_) => need("kcc20 delegator")?.to_vec(),
                     Witness::Borrow => return invalid("the KCC-20 borrow path is the leader's only (a delegate needs its owner)"),
+                    Witness::P2sh(at) => vec![*at],
                 };
                 entry_sigscript(tpl, &state.redeem_with(tpl), "transfer_delegator", &[ArtifactValue::Bytes(w)]).map_err(Error::Invalid)
             }
@@ -431,6 +448,9 @@ impl SigPlan {
             }
             SigPlan::RetiredCancel { template: t, retired, state, .. } => {
                 crate::retired::retired_for(retired, *t)?.cancel_sigscript(state, need("retired cancel")?)
+            }
+            SigPlan::CreatorLock { until, key } => {
+                Ok(crate::creator_lock::CreatorLock { until: *until, key: *key }.sig_script(need("creator lock")?))
             }
         }
     }
@@ -1368,6 +1388,7 @@ impl Draft {
                 self.inputs.iter().position(|i| matches!(&i.plan, DPlan::Plain(SigPlan::P2pk { pubkey }) if pubkey == k))
             }
             Witness::Borrow => return invalid("KRON tokens have no borrow path"),
+            Witness::P2sh(_) => return invalid("KRON tokens have no p2sh owner"),
         };
         let idx = found.ok_or_else(|| match w {
             Witness::CovenantId => Error::Invalid(format!(
@@ -1378,7 +1399,7 @@ impl Draft {
                 "KRON tokens of {} are held by address presence: the transaction needs a P2PK input of that key (add a funding input)",
                 to_hex(k)
             )),
-            Witness::Borrow => Error::Invalid("KRON tokens have no borrow path".into()),
+            Witness::Borrow | Witness::P2sh(_) => Error::Invalid("KRON tokens have no borrow path".into()),
         })?;
         // The witness is one script-number byte. Indices above 127 read as negative and can never
         // authorise.
@@ -1536,6 +1557,7 @@ impl Draft {
                             (Witness::P2pk(_), Some(_)) => "sig",
                             (Witness::P2pk(_), None) => "addr",
                             (Witness::Borrow, _) => "borrow",
+                            (Witness::P2sh(_), _) => "p2sh",
                         },
                         counts.0,
                         counts.1
@@ -1803,6 +1825,7 @@ fn witness_tag(w: &Witness) -> &'static str {
         Witness::CovenantId => "covid",
         Witness::P2pk(_) => "p2pk",
         Witness::Borrow => "borrow",
+        Witness::P2sh(_) => "p2sh",
     }
 }
 

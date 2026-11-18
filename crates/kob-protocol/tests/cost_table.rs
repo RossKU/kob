@@ -27,6 +27,7 @@ fn input_kind(p: &SigPlan) -> String {
         SigPlan::KronToken { template, .. } => format!("{}.token", template.name()),
         SigPlan::Router { actor, entry, .. } => format!("router.{actor}.{entry}"),
         SigPlan::RetiredCancel { template, .. } => format!("{}.cancel(retired)", template.name()),
+        SigPlan::CreatorLock { .. } => "creator-lock".into(),
     }
 }
 
