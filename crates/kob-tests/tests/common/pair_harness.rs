@@ -1,5 +1,6 @@
-//! Engine harness of the pair order suites (`KobPair`, `KobCondPair`, `KobIfdPair`; contracts/orders): the three pair
-//! templates compiled from their (possibly mutated) sources, and a transaction editor over honest `kob-protocol` builds.
+//! Provides the engine harness of the pair order suites (`KobPair`, `KobCondPair`, `KobIfdPair`;
+//! contracts/orders): the three pair templates compiled from their (possibly mutated) sources, and
+//! a transaction editor over honest `kob-protocol` builds.
 //!
 //! Include it next to the `kob-protocol` fixtures in a test binary:
 //! ```ignore
@@ -11,26 +12,31 @@
 //! mod ph;
 //! ```
 //!
-//! Templates under test ([`Subs`]): `KobPair`, then `KobCondPair` (its build constants PAIR_TPL / PRE / SUF re-pointed
-//! at the compiled KobPair), then `KobIfdPair` (COND_TPL / PRE / SUF and PAIR_TPL / PRE / SUF re-pointed);
-//! [`Subs::compile_asks`]: the KCC-20 ask family and its readers instead (`KobAsk`, then `KobCondAsk` and `KobCondBid`
-//! against it, `KobIfdAsk` against KobCondBid and KobAsk, `KobIfdBid` against KobCondAsk). An ablation
-//! run (`KOB_ABLATION_SRC` = a directory with mutated sources, `KOB_ABLATION=1`) therefore executes the weakened covenant
-//! everywhere it appears: as the order filled, as trigger evidence of a conditional, as the exit an entry creates.
-//! Without an ablation the compiled templates must equal the pinned ones. A mutation must not move the state span.
+//! Templates under test ([`Subs`]): `KobPair`, then `KobCondPair` (its build constants PAIR_TPL /
+//! PRE / SUF re-pointed at the compiled KobPair), then `KobIfdPair` (COND_TPL / PRE / SUF and
+//! PAIR_TPL / PRE / SUF re-pointed); [`Subs::compile_asks`]: the KCC-20 ask family and its readers
+//! instead (`KobAsk`, then `KobCondAsk` and `KobCondBid` against it, `KobIfdAsk` against KobCondBid
+//! and KobAsk, `KobIfdBid` against KobCondAsk). An ablation run (`KOB_ABLATION_SRC` = a directory
+//! with mutated sources, `KOB_ABLATION=1`) therefore executes the weakened covenant everywhere it
+//! appears: as the order filled, as trigger evidence of a conditional, as the exit an entry
+//! creates. Without an ablation the compiled templates must equal the pinned ones. A mutation must
+//! not move the state span.
 //!
-//! Bid delivery modes (docs/design/bid-delivery-spec.md): the pair templates carry a delivery block appended to their
-//! state (`KobPair` / `KobCondPair`: mode, recvThreshold, topupTip, bought; `KobIfdPair`: the three exit fields).
-//! The library builds states with the block; a scenario replaces the block per input ([`Ed::dlv_in`]) or per order output
-//! ([`Ed::dlv_out`], continuations and exits) with [`set_block`]. An entry call with fewer arguments
-//! than the compiled entry takes (the new trailing `form`) is padded with zeros, and its signature script is encoded with
-//! the compiled artifact's ABI. [`Ed::borrow_leaders`] turns a KCC-20 leader to the borrow path (witness `0x01`).
+//! Bid delivery modes (docs/design/bid-delivery-spec.md): the pair templates carry a delivery block
+//! appended to their state (`KobPair` / `KobCondPair`: mode, recvThreshold, topupTip, bought;
+//! `KobIfdPair`: the three exit fields). The library builds states with the block; a scenario
+//! replaces the block per input ([`Ed::dlv_in`]) or per order output ([`Ed::dlv_out`],
+//! continuations and exits) with [`set_block`]. An entry call with fewer arguments than the
+//! compiled entry takes (the trailing `form`) is padded with zeros, and its signature script is
+//! encoded with the compiled artifact's ABI. [`Ed::borrow_leaders`] turns a KCC-20 leader to the
+//! borrow path (witness `0x01`).
 //!
-//! [`Ed::finish`] rewrites every pair-template script of the transaction to the build under test: the redeem scripts of
-//! the spent pair UTXOs, every output whose script public key the library derived from a pair template (looked up in
-//! `kob_protocol::artifacts::spk_trace`), the KobCondPair prefix / suffix arguments of a KobIfdPair fill, and the
-//! covenant id of a genesis whose outputs changed (an IFD exit: binding and the custody owned by it). A genesis id that
-//! is not the honest id of the pinned outputs (a forged exit id) is left as it is.
+//! [`Ed::finish`] rewrites every pair-template script of the transaction to the build under test:
+//! the redeem scripts of the spent pair UTXOs, every output whose script public key the library
+//! derived from a pair template (looked up in `kob_protocol::artifacts::spk_trace`), the
+//! KobCondPair prefix / suffix arguments of a KobIfdPair fill, and the covenant id of a genesis
+//! whose outputs changed (an IFD exit: binding and the custody owned by it). A genesis id that is
+//! not the honest id of the pinned outputs (a forged exit id) is left as it is.
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -1229,16 +1235,17 @@ pub fn mixed_pairs_33() -> [(TemplateId, TemplateId); 2] {
     [(Kcc20Ref, KronToken2433), (KronToken2433, Kcc20Ref)]
 }
 
-/// The mixed pairs on the published public-mint build (KCC20PublicMint, 3 / 3, tradable since 41b7fdb; audit AUD-PM), gated
+/// The mixed pairs on the published public-mint build (KCC20PublicMint, 3 / 3; audit AUD-PM), gated
 /// like the 3 / 3 ones ([`slot_excess`]).
 pub fn mixed_pairs_pm() -> [(TemplateId, TemplateId); 2] {
     use TemplateId::{Kcc20PublicMint, KronToken2433};
     [(Kcc20PublicMint, KronToken2433), (KronToken2433, Kcc20PublicMint)]
 }
 
-/// The mixed pairs on KaspaRocket's token program (KaspaRocketToken11458: the public-mint actor at 10 / 10 slots, tradable on
-/// mainnet since its review of 2026-10-27). Its slots exceed the eight token inputs a KOB order transaction carries, so no scenario
-/// is skipped on it: the order's own bound refuses a ninth input (`kob_ifd_pair_tests` NIS8 / NIS9).
+/// The mixed pairs on KaspaRocket's token program (KaspaRocketToken11458: the public-mint actor at
+/// 10 / 10 slots, tradable on mainnet). Its slots exceed the eight token inputs a KOB order
+/// transaction carries, so no scenario is skipped on it: the order's own bound refuses a ninth
+/// input (`kob_ifd_pair_tests` NIS8 / NIS9).
 pub fn mixed_pairs_kr() -> [(TemplateId, TemplateId); 2] {
     use TemplateId::{KaspaRocketToken11458, KronToken2433};
     [(KaspaRocketToken11458, KronToken2433), (KronToken2433, KaspaRocketToken11458)]

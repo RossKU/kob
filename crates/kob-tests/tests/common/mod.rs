@@ -38,11 +38,12 @@ pub fn check_generated_source(name: &str, generated: &str) {
     assert_eq!(committed, generated.replace("\r\n", "\n"), "{name}.sil differs from its generator: rerun with KOB_REGEN=1");
 }
 
-/// The KCC-20 program the default token of the KAS-kind suites runs on (`kob_v2_tests`, `kob_v2_buy_tests`: `Token::new()`,
-/// the 3 / 3 runs). Unset (or `KCC20Ref`): the reference 3 / 3 program. `KCC20PublicMint`: the published public-mint build
-/// (`TemplateId::Kcc20PublicMint`, 3 / 3, pinned template), how the KAS-kind suites and their ablation catalogs are run on
-/// that program (audit AUD-PM). `KaspaRocketToken11458`: KaspaRocket's 10 / 10 build of the same actor (its review of
-/// 2026-10-27). `KForgeToken7214`: KForge's 6 / 6 build of it (its review of 2026-11-05). Anything else panics.
+/// The KCC-20 program the default token of the KAS-kind suites runs on (`kob_v2_tests`,
+/// `kob_v2_buy_tests`: `Token::new()`, the 3 / 3 runs). Unset (or `KCC20Ref`): the reference 3 / 3
+/// program. `KCC20PublicMint`: the published public-mint build (`TemplateId::Kcc20PublicMint`, 3 /
+/// 3, pinned template), how the KAS-kind suites and their ablation catalogs are run on that program
+/// (audit AUD-PM). `KaspaRocketToken11458`: KaspaRocket's 10 / 10 build of the same actor.
+/// `KForgeToken7214`: KForge's 6 / 6 build of it. Anything else panics.
 #[allow(dead_code)]
 pub fn kcc20_33_program() -> kob_protocol::artifacts::TemplateId {
     use kob_protocol::artifacts::TemplateId;
