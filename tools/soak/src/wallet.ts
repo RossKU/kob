@@ -115,6 +115,8 @@ export class BotWallet {
       detect: () => true,
       connect: async () => ({ id: 'kasware', label: name, address: k.address, pubkey: k.publicKey, network: env.cfg.network, version: 'soak' }),
       signTx: async (built: BuiltTx) => signBuilt(built, [sk]),
+      // a local key that signs what it is given, like the app's private-key signer: no wallet node whose view of fresh inputs must be awaited
+      inputPolicy: 'offline',
     };
   }
 
