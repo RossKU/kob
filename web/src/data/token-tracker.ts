@@ -1,24 +1,36 @@
-// P2PK-owned KCC-20 UTXOs of a wallet key. A token UTXO is a P2SH covenant output whose address depends on its whole state (amount, owner,
-// ...), so the node cannot list "the tokens of a key": someone has to know the states. Sources, in order:
-//   1. the indexer's proposed `GET /v1/token-utxos` (when it exists; a 404/501 degrades silently),
-//   2. this LOCAL tracker: candidate outpoints learned from the app's own transactions (issuance outputs, token CHANGE outputs of
-//      placements / cancels / sends: `trackFromBuilt`) and from manual import.
-// Whatever the source, every candidate is VERIFIED against the node before it is offered for spending: its P2SH address is derived from
-// the claimed state (kob-wasm `tokenScriptPublicKey`), the node must list the outpoint there, and the covenant id must match. An indexer or a
-// storage entry can therefore be stale or wrong, never dangerous.
+// Key-owned token UTXOs of a wallet key, KCC-20 and KRON.
 //
-// The indexer's last answer is kept in memory for the session: while the indexer cannot be read (down, or standalone mode) its candidates are
-// still the ones it gave last, verified on the node like any other (one that was spent since is not listed there, so it is not offered, and it is
-// forgotten), so a wallet can still sell what it holds while the app trades through the node.
+// A token UTXO is a P2SH covenant output whose address depends on its whole state, such as the
+// amount and the owner. So the node cannot list "the tokens of a key", and someone has to know the
+// states. The sources, in order:
+// 1. The indexer's `GET /v1/token-utxos`. An indexer without the route is skipped silently.
+// 2. This local tracker. It learns candidate outpoints from the app's own transactions
+//    (`trackFromBuilt`) and from manual import. Those are issuance outputs and the token change
+//    outputs of placements, cancels and sends.
+// Whatever the source, every candidate is verified against the node before it is offered for
+// spending. Its P2SH address is derived from the claimed state (kob-wasm `tokenScriptPublicKey`),
+// the node must list the outpoint there, and the covenant id must match. An indexer or a storage
+// entry can therefore be stale or wrong, but never dangerous.
 //
-// Balances read every token the wallet holds, not only the registry's (`heldTokens`): the indexer tracks the holdings of every token of
-// a pinned program (a token received from another trading app, a launchpad or a bridge), and each candidate is verified the same way. The script
-// is derived from the program kob-wasm pins, so a look-alike program or an output whose state the indexer misreports never verifies.
+// The indexer's last answer is kept in memory for the session. While the indexer cannot be read,
+// because it is down or in standalone mode, its candidates are the ones it gave last. They are
+// verified on the node like any other. One that was spent since is not listed there, so it is not
+// offered, and it is forgotten. A wallet can thus still sell what it holds while the app trades
+// through the node.
 //
-// The reverse also holds: the local list is the only record of holdings the indexer never saw (issuance outputs, anything from before
-// the indexer's database started), so nothing here may forget a candidate on weak evidence. A candidate the node does not list is only
-// pruned after MISS_CONFIRMATIONS misses on separate checks that span the grace period, an empty node answer counts for nothing, and a
-// store this code cannot read is copied aside before it is overwritten.
+// Balances (`heldTokens`) read every token the wallet holds, not only the registry's. The indexer
+// tracks the holdings of every token of a pinned program, such as a token received from another
+// trading app, a launchpad or a bridge. Each candidate is verified the same way. The script is
+// derived from the program kob-wasm pins, so a look-alike program or an output whose state the
+// indexer misreports never verifies.
+//
+// The reverse also holds. The local list is the only record of holdings the indexer never saw,
+// such as issuance outputs and anything from before the indexer's database started. So nothing
+// here may forget a candidate on weak evidence.
+// - A candidate the node does not list is pruned only after MISS_CONFIRMATIONS misses on separate
+//   checks that span the grace period.
+// - An empty node answer counts for nothing.
+// - A store this code cannot read is copied aside before it is overwritten.
 import type { Hex, TokenProgram, TokenState, TokenUtxo, BuiltTx, U64 } from '../kob/types';
 import { TOKEN_PROGRAMS } from '../kob/programs.generated';
 import { familyOfProgram, isKeyOwned, isKronState, isKronUnspendable, keyState } from '../kob/token-state';
@@ -30,14 +42,21 @@ import { spkStringToAddress, normalizeNetwork, type KaspaSdk } from './kaspa-sdk
 import type { StorageLike } from '../config';
 import { defaultStorage } from '../config';
 
+/** A token to look up: its covenant id and program. */
 export interface TokenRef {
   covenantId: Hex;
   program: TokenProgram;
-  /** the token's extension commitment (registry): lets an indexer answer without a `state` be rebuilt into a full state */
+  /**
+   * The token's extension commitment from the registry. It lets an indexer answer without a
+   * `state` be rebuilt into a full state.
+   */
   extensionCommitment?: Hex;
 }
 
-/** A token UTXO verified on the node, of any token: the program its script was derived under (balances). */
+/**
+ * A token UTXO of any token, verified on the node, with the program its script was derived under.
+ * Balances use it.
+ */
 export interface HeldTokenUtxo extends TokenUtxo {
   covenantId: Hex;
   program: TokenProgram;
@@ -50,37 +69,48 @@ export interface TrackedToken {
   tokenCovId: Hex;
   program: TokenProgram;
   state: TokenState;
-  /** KAS (sompi) carried by the output when it was created */
+  /** KAS (sompi) carried by the output when it was created. */
   carrier: U64;
-  /** ms since the epoch: unverified candidates survive a grace period (a just-submitted tx is not visible to the node at once) */
+  /**
+   * When it was added, in ms since the epoch. Unverified candidates survive a grace period,
+   * because the node does not see a just-submitted transaction at once.
+   */
   addedAt: number;
   /**
-   * Misses: checks (spaced apart) at which the node did not list this outpoint. Persisted so that a candidate is pruned only after the
-   * miss is confirmed, not on one wrong or partial node answer; all cleared when the candidate verifies again. Absent in older stores.
+   * Misses are checks, spaced apart, at which the node did not list this outpoint. They are stored
+   * so that a candidate is pruned only after the miss is confirmed, not on one wrong or partial
+   * node answer. All are cleared when the candidate verifies again. Older stores lack them.
    */
   missCount?: number;
   firstMissAt?: number;
   lastMissAt?: number;
 }
 
+/** What `TokenTracker` needs. */
 export interface TokenTrackerDeps {
   kob: KobWasm;
   node: NodeApi;
   sdk: KaspaSdk;
   network: string;
-  /** default: localStorage when usable, else in memory */
+  /** Defaults to localStorage when usable, else memory. */
   storage?: StorageLike | null;
-  /** optional first source; only `tokenUtxos` is used */
+  /** The optional first source. Only `tokenUtxos` is used. */
   indexer?: Pick<IndexerApi, 'tokenUtxos'> | null;
   now?: () => number;
-  /** how long an unverifiable candidate is kept before it is pruned (default 15 min) */
+  /** How long an unverifiable candidate is kept before it is pruned (default 15 min). */
   pendingGraceMs?: number;
 }
 
 const STORE_VERSION = 1;
-/** candidates asked of the indexer per page for a token's public lookup (`publicTokenUtxos`): two pages at most */
+/**
+ * Candidates asked of the indexer per page for a token's public lookup (`publicTokenUtxos`), two
+ * pages at most.
+ */
 const PUBLIC_PAGE = 25;
-/** a candidate the node does not list is pruned only after this many misses (and once they span the grace period) */
+/**
+ * A candidate the node does not list is pruned only after this many misses that span the grace
+ * period.
+ */
 const MISS_CONFIRMATIONS = 3;
 const HEX32 = /^[0-9a-f]{64}$/;
 const DEC = /^\d+$/;
@@ -107,7 +137,10 @@ class MemoryStorage implements StorageLike {
   }
 }
 
-/** Validates an untrusted candidate (storage, import text); returns null if any field is malformed. */
+/**
+ * Validates an untrusted candidate from storage or import text. Returns null if any field is
+ * malformed.
+ */
 export function sanitizeTracked(v: unknown, now = 0): TrackedToken | null {
   if (typeof v !== 'object' || v === null) return null;
   const o = v as Record<string, unknown>;
@@ -122,7 +155,8 @@ export function sanitizeTracked(v: unknown, now = 0): TrackedToken | null {
   const program = o.program as TokenProgram;
   let state: TokenState;
   if (familyOfProgram(program) === 'kron') {
-    // KRON layout (46 bytes): id_type + is_minter; a KCC-20 state under a KRON program (or the reverse) is malformed
+    // The KRON layout (46 bytes) has id_type and is_minter. A KCC-20 state under a KRON program,
+    // or the reverse, is malformed.
     if (typeof s.id_type !== 'number' || typeof s.is_minter !== 'number' || 'owner_scheme' in s) return null;
     state = { amount: s.amount, owner: s.owner, id_type: s.id_type, is_minter: s.is_minter };
   } else {
@@ -141,13 +175,15 @@ export function sanitizeTracked(v: unknown, now = 0): TrackedToken | null {
     carrier: o.carrier,
     addedAt: typeof o.addedAt === 'number' && Number.isFinite(o.addedAt) ? o.addedAt : now,
   };
-  // miss bookkeeping (optional: stores written before it load unchanged; malformed values are dropped, not fatal)
+  // The miss bookkeeping is optional, so stores without it load unchanged. Malformed values are
+  // dropped, not fatal.
   if (typeof o.missCount === 'number' && Number.isInteger(o.missCount) && o.missCount > 0 && o.missCount < 1_000_000) out.missCount = o.missCount;
   if (typeof o.firstMissAt === 'number' && Number.isFinite(o.firstMissAt)) out.firstMissAt = o.firstMissAt;
   if (typeof o.lastMissAt === 'number' && Number.isFinite(o.lastMissAt)) out.lastMissAt = o.lastMissAt;
   return out;
 }
 
+/** Finds, remembers and verifies the token UTXOs a wallet key holds. */
 export class TokenTracker {
   private readonly kob: KobWasm;
   private readonly node: NodeApi;
@@ -157,9 +193,15 @@ export class TokenTracker {
   private readonly indexer: Pick<IndexerApi, 'tokenUtxos'> | null;
   private readonly now: () => number;
   private readonly graceMs: number;
-  /** two misses count as separate checks only this far apart (also bounds how often a miss is written to the store) */
+  /**
+   * Two misses count as separate checks only this far apart. It also bounds how often a miss is
+   * written to the store.
+   */
   private readonly missSpacingMs: number;
-  /** the indexer's last candidates per owner and token (`*`: every token of the owner), for reads while it cannot answer */
+  /**
+   * The indexer's last candidates per owner and token, with `*` for every token of the owner. They
+   * serve reads while it cannot answer.
+   */
   private readonly lastFromIndexer = new Map<string, TrackedToken[]>();
 
   constructor(d: TokenTrackerDeps) {
@@ -174,13 +216,16 @@ export class TokenTracker {
     this.missSpacingMs = Math.max(1000, Math.floor(this.graceMs / 10));
   }
 
-  // ---------------------------------------------------------------------------------------------- store
+  // --- Store ---
 
   private key(pubkey: Hex): string {
     return `kob.tokens.v${STORE_VERSION}.${this.network}.${pubkey.toLowerCase()}`;
   }
 
-  /** the stored candidates plus whether the raw value is something this code cannot represent in full (corrupt, foreign version, rejected items) */
+  /**
+   * The stored candidates, and whether the raw value is something this code cannot represent in
+   * full. That is corrupt JSON, a foreign version or rejected items.
+   */
   private read(pubkey: Hex): { items: TrackedToken[]; raw: string | null; damaged: boolean } {
     let raw: string | null = null;
     try {
@@ -201,22 +246,23 @@ export class TokenTracker {
 
   private save(pubkey: Hex, items: TrackedToken[]): void {
     try {
-      // a stored value that load() could not take in full (corrupt JSON, another version, entries it rejected) would be silently replaced
-      // by this write and its holdings lost: keep the raw value under a side key first, and do not write at all if that fails
+      // A stored value that load() could not take in full would be silently replaced by this
+      // write, and its holdings lost. That is corrupt JSON, another version or entries it
+      // rejected. Keep the raw value under a side key first, and do not write at all if that fails.
       const cur = this.read(pubkey);
       if (cur.damaged && cur.raw !== null) this.storage.setItem(`${this.key(pubkey)}.unreadable.${this.now()}`, cur.raw);
       this.storage.setItem(this.key(pubkey), JSON.stringify({ v: STORE_VERSION, items }));
     } catch {
-      /* storage full or blocked: tracking is best effort, the indexer / a re-import can rebuild it */
+      /* Storage is full or blocked. The indexer or a re-import can rebuild the list. */
     }
   }
 
-  /** Remembered candidates of a key (unverified). */
+  /** The remembered candidates of a key, unverified. */
   list(pubkey: Hex): TrackedToken[] {
     return this.load(pubkey);
   }
 
-  /** Remembers a candidate; returns false when it is malformed or already known. */
+  /** Remembers a candidate. Returns false when it is malformed or already known. */
   add(pubkey: Hex, t: Omit<TrackedToken, 'addedAt'> & { addedAt?: number }): boolean {
     const c = sanitizeTracked({ ...t, addedAt: t.addedAt ?? this.now() }, this.now());
     if (!c) return false;
@@ -245,8 +291,9 @@ export class TokenTracker {
   }
 
   /**
-   * Manual import (Settings): JSON of one candidate or an array of them, in the `TrackedToken` shape (`addedAt` optional).
-   * Returns how many were new; throws on malformed input (nothing is imported then).
+   * Imports candidates by hand from Settings. The text is JSON of one candidate or an array of
+   * them, in the `TrackedToken` shape with `addedAt` optional. Returns how many were new. It
+   * throws on malformed input, and nothing is imported then.
    */
   importJson(pubkey: Hex, text: string): number {
     let data: unknown;
@@ -263,15 +310,21 @@ export class TokenTracker {
     return n;
   }
 
-  // ---------------------------------------------------------------------------------------------- learning from our own transactions
+  // --- Learning from our own transactions ---
 
   /**
-   * Records the token outputs of a built transaction that are owned by `maker` (KCC-20 P2PK scheme; KRON address presence): the token change of a
-   * placement, cancel or send, the tokens returned by a replacement, ... Reads `built.plans[..].nextStates` (the states the leader authorises; KRON
-   * token inputs all carry the same list, the first one of each token is read) and pairs each
-   * with the transaction output whose script it derives to, so an output is only tracked if its script really commits to that state.
-   * Call it when the transaction is submitted (the outputs then appear on chain; until then they are just "pending" candidates).
-   * `txId` defaults to `built.tx.id`; pass the SIGNED transaction's id if finalizing could ever change it.
+   * Records the token outputs of a built transaction that `maker` owns, by the KCC-20 P2PK scheme
+   * or by KRON address presence.
+   *
+   * Examples are the token change of a placement, cancel or send, and the tokens returned by a
+   * replacement. It reads `built.plans[..].nextStates`, the states the leader authorises. KRON
+   * token inputs all carry the same list, so the first one of each token is read. Each state is
+   * paired with the transaction output whose script it derives to, so an output is tracked only if
+   * its script really commits to that state.
+   *
+   * Call it when the transaction is submitted. The outputs then appear on chain, and until then
+   * they are only pending candidates. `txId` defaults to `built.tx.id`. Pass the signed
+   * transaction's id if finalizing could ever change it.
    */
   trackFromBuilt(kob: KobWasm, built: BuiltTx, maker: Hex, txId: Hex = built.tx.id): TrackedToken[] {
     const found: TrackedToken[] = [];
@@ -308,16 +361,22 @@ export class TokenTracker {
     return found;
   }
 
-  // ---------------------------------------------------------------------------------------------- recovering an issuance
+  // --- Recovering an issuance ---
 
   /**
-   * Finds the issuance outputs of a token created BEFORE the genesis named its states in its payload (docs/spec/token-metadata.md, 3). Such an
-   * output is a P2SH output of a state nobody but its issuer ever saw, so it is found the one way left: the issuer says what the state is. Its
-   * owner is `pubkey`, its amount one of `amounts` (what the issuer gave the key at creation, base units), the rest is the standard issuance
-   * (extension commitment `token.extensionCommitment`, else zero; no borrowing). For each candidate the node is asked for the UTXOs at the
-   * script it derives; whatever it lists there under the token's covenant id is the output (the script commits to the whole state, so it cannot
-   * be another one) and is remembered like any tracked output. `program` unknown (`token.program` absent): every KCC-20 program is tried.
-   * Returns the outputs found, remembered now or before; a failed node call rejects and changes nothing.
+   * Finds the issuance outputs of a token created before the genesis named its states in its
+   * payload (docs/spec/token-metadata.md, 3).
+   *
+   * Such an output is a P2SH output of a state nobody but its issuer ever saw. So it is found the
+   * one way left, by the issuer saying what the state is. Its owner is `pubkey` and its amount is
+   * one of `amounts`, the base units the issuer gave the key at creation. The rest is the standard
+   * issuance, with the extension commitment `token.extensionCommitment` (else zero) and no
+   * borrowing. Without `token.program`, every KCC-20 program is tried.
+   *
+   * For each candidate the node is asked for the UTXOs at the script it derives. Whatever it lists
+   * there under the token's covenant id is the output, because the script commits to the whole
+   * state. It is remembered like any tracked output. Returns the outputs found, remembered now or
+   * before. A failed node call rejects and changes nothing.
    */
   async recoverIssued(pubkey: Hex, token: { covenantId: Hex; program?: TokenProgram | null; extensionCommitment?: Hex | null }, amounts: readonly (bigint | string)[]): Promise<TrackedToken[]> {
     const me = pubkey.toLowerCase();
@@ -332,7 +391,7 @@ export class TokenTracker {
           const spk = this.kob.tokenScriptPublicKey(program, state).toLowerCase();
           claims.push({ program, state, spk, address: spkStringToAddress(this.sdk, spk, this.network) });
         } catch {
-          /* a program that cannot encode the state has no such output */
+          /* A program that cannot encode the state has no such output. */
         }
       }
     }
@@ -351,22 +410,25 @@ export class TokenTracker {
     return found;
   }
 
-  // ---------------------------------------------------------------------------------------------- resolving
+  // --- Resolving ---
 
   private stateFromView(v: TokenUtxoView, token: TokenRef): TokenState | null {
     if (v.state) return v.state;
     const family = familyOfProgram(token.program);
     if (family === 'kcc20' && !token.extensionCommitment) return null;
-    // A key-owned token UTXO (KCC-20: P2PK owner without borrow guard; KRON: the program's holder owner). This stand-in
-    // is plain: a holding with a borrow setting (spendable on the owner path, option A) needs the state the indexer proved
-    // (`v.state`, used above), since its script commits to the scheme and guard. Without it the node check below finds no
-    // output at the stand-in's script and the candidate is dropped, never spent under a wrong state.
+    // A key-owned token UTXO: for KCC-20 a P2PK owner without borrow guard, for KRON the program's
+    // holder owner. This stand-in is plain. A holding with a borrow setting, which is spendable on
+    // the owner path, needs the state the indexer proved (`v.state`, used above), since its script
+    // commits to the scheme and guard. Without it the node check below finds no output at the
+    // stand-in's script, and the candidate is dropped, never spent under a wrong state.
     return keyState(family, v.amount, v.owner, token.extensionCommitment ?? null, token.program);
   }
 
   /**
-   * Candidates from the indexer; `answered` is false when there is none, it does not know the endpoint or it failed (the indexer is optional).
-   * The indexer is the PRIMARY source; the local list only adds what the indexer cannot know (issuance outputs, transactions it has not indexed yet).
+   * Candidates from the indexer. `answered` is false when there is no indexer, when it does not
+   * know the endpoint and when it failed, because the indexer is optional. The indexer is the
+   * primary source. The local list only adds what the indexer cannot know, such as issuance outputs
+   * and transactions it has not indexed yet.
    */
   private async fromIndexer(pubkey: Hex, token: TokenRef): Promise<{ answered: boolean; items: TrackedToken[] }> {
     if (!this.indexer) return { answered: false, items: [] };
@@ -375,7 +437,8 @@ export class TokenTracker {
     try {
       views = await this.indexer.tokenUtxos({ owner: pubkey, token: token.covenantId, spent: false });
     } catch {
-      // the indexer cannot be read: what it gave last (verified on the node below like any candidate)
+      // The indexer cannot be read, so use what it gave last. It is verified on the node below like
+      // any candidate.
       return { answered: false, items: this.lastFromIndexer.get(key) ?? [] };
     }
     if (!views) return { answered: false, items: [] };
@@ -384,7 +447,8 @@ export class TokenTracker {
       if (v.spent || v.token.toLowerCase() !== token.covenantId) continue;
       const state = this.stateFromView(v, token);
       if (!state || state.owner.toLowerCase() !== pubkey.toLowerCase() || !isKeyOwned(state, token.program)) continue;
-      // the state must be of this token's family (a KCC-20 state under a KRON program cannot derive a script)
+      // The state must be of this token's family. A KCC-20 state under a KRON program cannot
+      // derive a script.
       if (isKronState(state) !== (familyOfProgram(token.program) === 'kron')) continue;
       const program = v.program && PROGRAMS.includes(v.program) && familyOfProgram(v.program as TokenProgram) === familyOfProgram(token.program) ? (v.program as TokenProgram) : token.program;
       const c = sanitizeTracked({ transactionId: v.txid, index: v.index, tokenCovId: token.covenantId, program, state, carrier: v.value, addedAt: this.now() }, this.now());
@@ -400,7 +464,10 @@ export class TokenTracker {
     while (this.lastFromIndexer.size > 200) this.lastFromIndexer.delete(this.lastFromIndexer.keys().next().value!);
   }
 
-  /** The kept indexer candidates of `key` the node did not verify are forgotten (spent since the indexer listed them). */
+  /**
+   * Forgets the kept indexer candidates of `key` the node did not verify, which were spent since
+   * the indexer listed them.
+   */
   private forgetUnverified(key: string, verified: ReadonlySet<string>): void {
     const kept = this.lastFromIndexer.get(key);
     if (!kept) return;
@@ -409,19 +476,24 @@ export class TokenTracker {
   }
 
   /**
-   * The spendable token UTXOs of `pubkey` for `token`, verified live on the node: (indexer candidates ∪ local candidates) whose derived
-   * P2SH address actually holds the outpoint with the right covenant id. Largest amount first. A local candidate the node does not list is
-   * NOT dropped on that evidence alone (a wrong, partial or empty answer must never wipe holdings): the miss is recorded and the candidate
-   * is pruned once it is confirmed (see `settle`). One the node contradicts (the outpoint exists under another covenant id) is dropped at
-   * once. A failed node call throws before anything is written.
+   * The spendable token UTXOs of `pubkey` for `token`, verified live on the node, largest amount
+   * first.
+   *
+   * They are the indexer and local candidates whose derived P2SH address actually holds the
+   * outpoint with the right covenant id. A local candidate the node does not list is not dropped on
+   * that evidence alone, because a wrong, partial or empty answer must never wipe holdings. The
+   * miss is recorded, and the candidate is pruned once it is confirmed (see `settle`). One the node
+   * contradicts, with the outpoint under another covenant id, is dropped at once. A failed node
+   * call throws before anything is written.
    */
   async tokenUtxosFor(pubkey: Hex, token: TokenRef): Promise<TokenUtxo[]> {
     const me = pubkey.toLowerCase();
     const covId = token.covenantId.toLowerCase();
     const localForToken = this.load(me).filter((t) => t.tokenCovId === covId);
     const { answered: indexerAnswered, items: fromIndexer } = await this.fromIndexer(me, { ...token, covenantId: covId });
-    // an outpoint the indexer also lists stays in the local list: after an indexer reset (fresh database) such holdings are known to
-    // neither source otherwise. They dedupe in the map below and are pruned like any other candidate once spent.
+    // An outpoint the indexer also lists stays in the local list. After an indexer reset to a fresh
+    // database, neither source would know such holdings otherwise. They dedupe in the map below
+    // and are pruned like any other candidate once spent.
 
     const byOutpoint = new Map<string, TrackedToken>();
     for (const c of [...fromIndexer, ...localForToken]) byOutpoint.set(`${outpointKey(c.transactionId, c.index)}:${c.state.amount}`, c);
@@ -435,10 +507,14 @@ export class TokenTracker {
   }
 
   /**
-   * Candidates checked on the node: each one's P2SH address is derived from its claimed state under its program (kob-wasm's pinned bytes), and
-   * the node must list the outpoint there, with the candidate's covenant id. `contradicted`: the node lists the outpoint at that script under
-   * another covenant id. `answered`: the node listed anything at all (an empty answer is no evidence either way). Throws when the node fails,
-   * and when a script cannot be derived unless `skipUnderivable` (a candidate the program cannot encode is then simply not verified).
+   * Checks candidates on the node.
+   *
+   * Each one's P2SH address is derived from its claimed state under its program, from kob-wasm's
+   * pinned bytes. The node must list the outpoint there, with the candidate's covenant id.
+   * - `contradicted`: the node lists the outpoint at that script under another covenant id.
+   * - `answered`: the node listed anything at all. An empty answer is no evidence either way.
+   * It throws when the node fails. It also throws when a script cannot be derived, unless
+   * `skipUnderivable` is set. A candidate the program cannot encode is then simply not verified.
    */
   private async verifyOnNode(candidates: readonly TrackedToken[], skipUnderivable = false): Promise<{ verified: Map<string, HeldTokenUtxo>; contradicted: Set<string>; answered: boolean }> {
     const withAddress = candidates.flatMap((c) => {
@@ -467,11 +543,14 @@ export class TokenTracker {
   }
 
   /**
-   * Every token UTXO of `pubkey` that verifies on the node, of ANY token (balances; the registry's tokens and the others): the indexer's
-   * holdings of the owner (`GET /v1/token-utxos?owner=`, every token of a pinned program) and the local candidates of every token. Besides the
-   * key-owned UTXOs the builders spend it keeps KRON pubkey-owned ones (`id_type` 0), for display only: never pass them to a builder.
-   * `skip`: tokens whose key-owned UTXOs the caller reads with `tokenUtxosFor` already. Read-only (the local store is not changed); sorted
-   * by token, then largest amount first.
+   * Every token UTXO of `pubkey` that verifies on the node, of any token, for balances.
+   *
+   * It covers the registry's tokens and the others. The candidates are the indexer's holdings of
+   * the owner (`GET /v1/token-utxos?owner=`, every token of a pinned program) and the local
+   * candidates of every token. Besides the key-owned UTXOs the builders spend, it keeps KRON
+   * pubkey-owned ones (`id_type` 0) for display only. Never pass those to a builder. `skip` names
+   * tokens whose key-owned UTXOs the caller already reads with `tokenUtxosFor`. It is read-only and
+   * does not change the local store. The result is sorted by token, then largest amount first.
    */
   async heldTokens(pubkey: Hex, o: { skip?: ReadonlySet<Hex> } = {}): Promise<HeldTokenUtxo[]> {
     const me = pubkey.toLowerCase();
@@ -488,13 +567,19 @@ export class TokenTracker {
   }
 
   /**
-   * The token UTXOs of ONE token, whoever holds them, that the node confirms: what a market page needs to know about a token no order of which
-   * the indexer lists (its program and its extension commitment). The indexer's `GET /v1/token-utxos?token=` names candidates with a state, exactly
-   * as it does for a wallet's holdings (`allFromIndexer`), and each one is verified like any other: the P2SH address derived from the claimed
-   * state under a program this build pins must hold the outpoint on the node, under this covenant id. An indexer that lies, is stale or
-   * knows nothing yields fewer or no confirmed UTXOs, never a wrong one. Read-only (the local store is not touched). `indexer`: whether the indexer
-   * answered at all (`unavailable`: none configured, the route is not served, or the request failed); `claimed`: how many candidates it named;
-   * `nodeFailed`: the node could not be asked (the candidates stay unconfirmed). Largest amount first.
+   * The token UTXOs of one token, whoever holds them, that the node confirms, largest amount first.
+   *
+   * A market page needs them for a token of which the indexer lists no order, to learn its program
+   * and its extension commitment. The indexer's `GET /v1/token-utxos?token=` names candidates with
+   * a state, exactly as it does for a wallet's holdings (`allFromIndexer`). Each one is verified
+   * like any other. The P2SH address derived from the claimed state under a program this build
+   * pins must hold the outpoint on the node, under this covenant id. An indexer that lies, is stale
+   * or knows nothing yields fewer or no confirmed UTXOs, never a wrong one. It is read-only and
+   * does not touch the local store.
+   * - `indexer`: whether the indexer answered at all. `unavailable` means none is configured, the
+   *   route is not served or the request failed.
+   * - `claimed`: how many candidates it named.
+   * - `nodeFailed`: the node could not be asked, and the candidates stay unconfirmed.
    */
   async publicTokenUtxos(covenantId: Hex): Promise<{ indexer: 'ok' | 'unavailable'; claimed: number; nodeFailed: boolean; utxos: HeldTokenUtxo[] }> {
     const id = covenantId.toLowerCase();
@@ -524,10 +609,13 @@ export class TokenTracker {
   }
 
   /**
-   * The unspent token UTXOs a creator lock holds (kob/creator-lock.ts: owner scheme 0x03, owner = the lock's `authority`, no borrow setting),
-   * verified on the node like any other candidate: the locked genesis outputs its verified declaration names, and what the indexer lists for
-   * that owner (`GET /v1/token-utxos?owner=<authority>&token=`: tokens anyone sent to the lock later). Read-only; largest amount first.
-   * Throws when the node cannot be asked.
+   * The unspent token UTXOs a creator lock holds, verified on the node like any other candidate.
+   *
+   * A creator lock (kob/creator-lock.ts) holds them under owner scheme 0x03, with the lock's
+   * `authority` as owner and no borrow setting. The candidates are the locked genesis outputs its
+   * verified declaration names, and what the indexer lists for that owner
+   * (`GET /v1/token-utxos?owner=<authority>&token=`), meaning tokens anyone sent to the lock later.
+   * It is read-only and sorts the largest amount first. It throws when the node cannot be asked.
    */
   async lockedTokenUtxos(lock: { covenantId: Hex; program: TokenProgram; authority: Hex; extensionCommitment: Hex; genesis?: { txid: Hex; outputs: readonly { index: number; amount: U64 }[] } }): Promise<TokenUtxo[]> {
     const id = lock.covenantId.toLowerCase();
@@ -558,14 +646,17 @@ export class TokenTracker {
     return [...verified.values()].map(({ program: _p, ...u }) => u as TokenUtxo).sort(byAmountDesc);
   }
 
-  /** The indexer's holdings of an owner, any token (views without a state, or of a program this build does not pin, are left out). */
+  /**
+   * The indexer's holdings of an owner, of any token. Views without a state, or of a program this
+   * build does not pin, are left out.
+   */
   private async allFromIndexer(me: Hex): Promise<TrackedToken[]> {
     if (!this.indexer) return [];
     let views: TokenUtxoView[] | null;
     try {
       views = await this.indexer.tokenUtxos({ owner: me, spent: false });
     } catch {
-      // the indexer cannot be read: what it gave last (verified on the node by the caller)
+      // The indexer cannot be read, so use what it gave last. The caller verifies it on the node.
       return this.lastFromIndexer.get(`${me}|*`) ?? [];
     }
     const out: TrackedToken[] = [];
@@ -581,15 +672,20 @@ export class TokenTracker {
   }
 
   /**
-   * Applies what one node check learned to the stored candidates of a token. Works on a FRESH read of the store (the awaits of the check
-   * can overlap an `add` / `trackFromBuilt`, whose write must not be reverted by a stale snapshot) and only on the outpoints the check
-   * asked about.
-   *  - verified: the miss record is cleared.
-   *  - contradicted by the node (same outpoint, other covenant id): dropped at once, that is node confirmation.
-   *  - an EMPTY node answer: no evidence either way ("all spent" looks the same as a broken answer), nothing changes.
-   *  - otherwise a miss, recorded at most once per `missSpacingMs`; the candidate is dropped only when it is past the pending grace, has
-   *    >= MISS_CONFIRMATIONS misses and the first of them is at least the grace period old (so a bad answer, or a short outage, never
-   *    accumulates into a deletion).
+   * Applies what one node check learned to the stored candidates of a token.
+   *
+   * It works on a fresh read of the store, because the awaits of the check can overlap an `add` or
+   * a `trackFromBuilt`, whose write a stale snapshot must not revert. It touches only the outpoints
+   * the check asked about.
+   * - Verified: the miss record is cleared.
+   * - Contradicted by the node, with the same outpoint under another covenant id: dropped at once,
+   *   because that is node confirmation.
+   * - An empty node answer: nothing changes. It is no evidence either way, because "all spent"
+   *   looks the same as a broken answer.
+   * - Otherwise a miss, recorded at most once per `missSpacingMs`. The candidate is dropped only
+   *   when it is past the pending grace, has at least MISS_CONFIRMATIONS misses, and the first of
+   *   them is at least the grace period old. So a bad answer or a short outage never accumulates
+   *   into a deletion.
    */
   private settle(me: Hex, covId: Hex, r: { queried: Set<string>; verified: Set<string>; contradicted: Set<string>; answerEmpty: boolean }): void {
     const nowMs = this.now();
@@ -629,7 +725,7 @@ export class TokenTracker {
     if (changed) this.save(me, out);
   }
 
-  /** Total token base units across the verified UTXOs (bigint). */
+  /** Total token base units across the verified UTXOs. */
   async balanceFor(pubkey: Hex, token: TokenRef): Promise<bigint> {
     return (await this.tokenUtxosFor(pubkey, token)).reduce((s, u) => s + BigInt(u.state.amount), 0n);
   }

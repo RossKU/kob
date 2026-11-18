@@ -1,21 +1,33 @@
-// KOB's own genesis check of a token, run when its page opens (founder decision 2026-10-28).
+// KOB's own genesis check of a token, run when its page opens.
 //
-// What it is: the bytes of the token's creation (its genesis group) come from a public data source, and the rules of `kob registry verify-genesis`
-// run on them inside the app (kob-wasm `verifyGenesis`, crates/kob-protocol/src/genesis_open.rs): the covenant id is recomputed from the authorising
-// outpoint and every output of the group, every redeem script is hashed against its output and decoded as an instance of a pinned token program, and
-// an unspent TokenSeed is rebuilt from the group's own owner and class. The covenant id commits to all of it, so the source is only a supplier: a
-// wrong, incomplete or tampered answer can make the check fail, never pass.
+// The bytes of the token's creation, its genesis group, come from a public data source. The rules
+// of `kob registry verify-genesis` run on them inside the app (kob-wasm `verifyGenesis`,
+// crates/kob-protocol/src/genesis_open.rs).
+// - The covenant id is recomputed from the authorising outpoint and every output of the group.
+// - Every redeem script is hashed against its output and decoded as an instance of a pinned token
+//   program.
+// - An unspent TokenSeed is rebuilt from the group's own owner and class.
+// The covenant id commits to all of it, so the source is only a supplier. A wrong, incomplete or
+// tampered answer can make the check fail, never pass.
 //
-// Sources, in order, each asked at most once per token and session (an in-memory cache, plus a saved copy of the EVIDENCE of a token that verified,
-// which is re-checked on every use and never trusted):
-//   1. kascov.io's per-token file `<data>/<network>/c/<covenant id>.json` (CORS `*`): the genesis transaction id, the group's outputs with their
-//      script public keys and revealed redeem scripts, and, for a token with a KCC-23 declaration, the authorising outpoint (the preparation output).
-//   2. the Kaspa REST explorer (api.kaspa.org, api-tn10.kaspa.org; CORS `*`), only when 1 is not enough: the genesis transaction (its authorising
-//      input, its outputs, the keys it pays to) and, for a group output a spend of which kascov names but did not give the script of, that spend.
-// This needs kascov.io for the genesis transaction id (no source maps a covenant id to its genesis); without it the answer is "unavailable".
+// The sources, in order:
+// 1. kascov.io's per-token file `<data>/<network>/c/<covenant id>.json` (CORS `*`). It gives the
+//    genesis transaction id, and the group's outputs with their script public keys and revealed
+//    redeem scripts. For a token with a KCC-23 declaration it also gives the authorising outpoint,
+//    the preparation output.
+// 2. The Kaspa REST explorer (api.kaspa.org, api-tn10.kaspa.org, CORS `*`), only when 1 is not
+//    enough. It gives the genesis transaction with its authorising input, its outputs and the keys
+//    it pays to. For a group output whose script kascov did not give, it also gives the spend that
+//    revealed it.
+// A verified or failed answer is kept in memory for the session, and an unavailable one for
+// `retryMs`. The evidence of a token that verified is also saved, and it is checked again on
+// every use, never trusted. The check needs kascov.io for the genesis transaction id, because no
+// source maps a covenant id to its genesis. Without it the answer is "unavailable".
 //
-// Result: verified (KOB's own fact), failed (the data does not match, or the genesis is not clean: a warning), or unavailable (the check could not
-// be done: never a statement about the token).
+// The result is one of:
+// - verified, which is KOB's own fact,
+// - failed, because the data does not match or the genesis is not clean, shown as a warning,
+// - unavailable, because the check could not be done. That is never a statement about the token.
 import type { BridgeFacts, GenesisRequest, GenesisVerdict } from '../kob/genesis';
 import { familyOfProgram } from '../kob/token-state';
 import type { TokenProgram } from '../kob/types';
@@ -24,63 +36,82 @@ import { readCapped, kascovNetwork, type KascovNetwork } from './kascov';
 /** The public Kaspa REST explorer of each network. */
 export const EXPLORER_BASE: Readonly<Record<KascovNetwork, string>> = { mainnet: 'https://api.kaspa.org', 'testnet-10': 'https://api-tn10.kaspa.org' };
 
-/** A bridge's minter in a token's genesis: `federated` (kUSDT's BridgeMint, role `bridge-minter`) or `zk` (Kozmic's, `zk-bridge-minter`). */
+/**
+ * A bridge's minter in a token's genesis. It is `federated` for kUSDT's BridgeMint (role
+ * `bridge-minter`) or `zk` for Kozmic's (`zk-bridge-minter`).
+ */
 export interface BridgeMinter {
   kind: 'federated' | 'zk';
   facts: BridgeFacts;
 }
 
+/** Why a genesis check could not be done. */
 export type GenesisUnavailableReason = 'history' | 'program' | 'unreachable';
+/** Where the bytes of a verified genesis came from. */
 export type GenesisSource = 'kascov' | 'explorer' | 'saved';
 
+/** The result of a token's genesis check. */
 export type GenesisCheck =
   | {
       status: 'verified';
-      /** where the bytes came from (the verification itself is always local) */
+      /** Where the bytes came from. The verification itself is always local. */
       source: GenesisSource;
       txid: string;
       program: string;
-      /** token units the genesis created in holders */
+      /** Token units the genesis created in holders. */
       supply: bigint;
-      /** the allowance of the genesis `PublicMint` outputs (the most anyone could mint beyond `supply` when the genesis was made); null without a public minter */
+      /**
+       * The allowance of the genesis `PublicMint` outputs, the most anyone could mint beyond
+       * `supply` when the genesis was made. Null without a public minter.
+       */
       mintAllowance: bigint | null;
-      /** the genesis holds a KRON minter (`is_minter = 1`): it mints any amount, so there is no allowance to state (`mintAllowance` is null) */
+      /**
+       * Set when the genesis holds a KRON minter (`is_minter = 1`). It mints any amount, so there
+       * is no allowance to state, and `mintAllowance` is null.
+       */
       mintUnbounded?: boolean;
       /**
-       * The token is issued by a bridge: the genesis holds a minter KOB pins as a bridge's (kUSDT's BridgeMint, a federated bridge whose signers sign
-       * every mint; Kozmic's BridgeMint, a ZK bridge that mints only beside its bridge covenant). Not a public mint: it adds nothing to `mintAllowance`.
+       * Set when the token is issued by a bridge. The genesis then holds a minter KOB pins as a
+       * bridge's. That is kUSDT's BridgeMint, a federated bridge whose signers sign every mint, or
+       * Kozmic's BridgeMint, a ZK bridge that mints only beside its bridge covenant. It is not a
+       * public mint, so it adds nothing to `mintAllowance`.
        */
       bridge?: boolean;
-      /** Which bridge minter, and what its state names (unchecked: the pin recognises the minter's code, not the bridge or its signers). Set with `bridge`. */
+      /**
+       * Which bridge minter, and what its state names, set with `bridge`. This is unchecked,
+       * because the pin recognises the minter's code, not the bridge or its signers.
+       */
       bridgeMinter?: BridgeMinter;
       /**
-       * Every genesis public minter is still unspent according to the source, so no mint has used it: the allowance is all still there. False/null:
-       * a mint may have used some (how much is left is not checked).
+       * True when every genesis public minter is still unspent according to the source, so no mint
+       * has used it and the allowance is all still there. False or null means a mint may have used
+       * some, and how much is left is not checked.
        */
       mintersUnspent: boolean | null;
     }
   | { status: 'failed'; code: 'mismatch' | 'contaminated'; message: string }
   | { status: 'unavailable'; reason: GenesisUnavailableReason };
 
-// ------------------------------------------------------------------------------------------------ source data
+// --- Source data ---
 
-/** One genesis output as a source gave it (not checked yet). */
+/** One genesis output as a source gave it, not checked yet. */
 interface SourceOutput {
   index: number;
   value: string;
   spk: string;
   redeem: string | null;
-  /** the spend of it, when the source names one */
+  /** The spend of it, when the source names one. */
   spentTxid: string | null;
-  /** unspent according to the source (null: not said) */
+  /** Whether it is unspent according to the source, null when not said. */
   live: boolean | null;
 }
 
+/** The genesis group as kascov's per-covenant file gives it. */
 export interface KascovGenesis {
   genesisTxid: string;
   authorizing: { txid: string; index: number } | null;
   outputs: SourceOutput[];
-  /** the file says its list of outputs or revealed scripts is incomplete */
+  /** Whether the file says its list of outputs or revealed scripts is incomplete. */
   partial: boolean;
 }
 
@@ -91,8 +122,9 @@ const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === '
 const sompi = (v: unknown): string | null => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? String(v) : null);
 
 /**
- * The genesis group out of kascov's per-covenant file; null when the file is not for this covenant on this network or has no usable genesis. Only the
- * outputs the genesis transaction itself created are taken (outpoint `<genesis txid>:<index>`).
+ * The genesis group out of kascov's per-covenant file. Null when the file is not for this covenant
+ * on this network or has no usable genesis. Only the outputs the genesis transaction itself
+ * created are taken, with outpoint `<genesis txid>:<index>`.
  */
 export function parseKascovGenesis(doc: unknown, covenantId: string, network: KascovNetwork): KascovGenesis | null {
   const d = obj(doc);
@@ -113,7 +145,8 @@ export function parseKascovGenesis(doc: unknown, covenantId: string, network: Ka
     });
   }
   outputs.sort((a, b) => a.index - b.index);
-  // (a busy token's file keeps only its newest outputs: the group may be missing here and then comes from the explorer)
+  // A busy token's file keeps only its newest outputs. The group may be missing here and then
+  // comes from the explorer.
   if (outputs.some((o, i) => i > 0 && outputs[i - 1]!.index === o.index)) return null;
   const k = obj(d.kcc23);
   const prep = k?.binding === 'verified' && typeof k.preparation_txid === 'string' && HEX64.test(k.preparation_txid) ? k.preparation_txid : null;
@@ -126,14 +159,21 @@ export function parseKascovGenesis(doc: unknown, covenantId: string, network: Ka
   };
 }
 
+/** The genesis group as the explorer's transaction JSON gives it. */
 export interface ExplorerGenesis {
   authorizing: { txid: string; index: number } | null;
   outputs: { index: number; value: string; spk: string; address: string | null }[];
-  /** x-only keys of the transaction's P2PK outputs (the creator's change): candidate owners of an unspent TokenSeed */
+  /**
+   * The x-only keys of the transaction's P2PK outputs, the creator's change. They are candidate
+   * owners of an unspent TokenSeed.
+   */
   ownerHints: string[];
 }
 
-/** The genesis group out of the explorer's transaction JSON (`/transactions/<txid>?inputs=true&outputs=true`); null when it is not that transaction. */
+/**
+ * The genesis group out of the explorer's transaction JSON
+ * (`/transactions/<txid>?inputs=true&outputs=true`). Null when it is not that transaction.
+ */
 export function parseExplorerGenesis(doc: unknown, txid: string, covenantId: string): ExplorerGenesis | null {
   const d = obj(doc);
   if (!d || d.transaction_id !== txid || !Array.isArray(d.outputs) || !Array.isArray(d.inputs)) return null;
@@ -165,7 +205,10 @@ export function parseExplorerGenesis(doc: unknown, txid: string, covenantId: str
   return { authorizing, outputs, ownerHints: ownerHints.slice(0, 8) };
 }
 
-/** The last data push of a signature script as hex (the redeem script of a P2SH spend); null when the script is not only pushes or has none. */
+/**
+ * The last data push of a signature script as hex, the redeem script of a P2SH spend. Null when
+ * the script is not only pushes or has none.
+ */
 export function lastPush(sigHex: string): string | null {
   if (!isHex(sigHex, 400_000)) return null;
   const b = new Uint8Array(sigHex.length / 2);
@@ -197,7 +240,10 @@ export function lastPush(sigHex: string): string | null {
   return last && last.length > 0 ? [...last].map((x) => x.toString(16).padStart(2, '0')).join('') : null;
 }
 
-/** The redeem script that the spend `spender` (explorer JSON) of `<txid>:<index>` revealed; null when it is not that spend. */
+/**
+ * The redeem script that the spend `spender` (explorer JSON) of `<txid>:<index>` revealed. Null
+ * when it is not that spend.
+ */
 export function revealFromSpend(doc: unknown, spender: string, txid: string, index: number): string | null {
   const d = obj(doc);
   if (!d || d.transaction_id !== spender || !Array.isArray(d.inputs)) return null;
@@ -208,27 +254,34 @@ export function revealFromSpend(doc: unknown, spender: string, txid: string, ind
   return null;
 }
 
-// ------------------------------------------------------------------------------------------------ the checker
+// --- The checker ---
 
+/** Options of `createGenesisChecker`. */
 export interface GenesisCheckerOptions {
-  /** the facade over kob-wasm `verifyGenesis` (tests pass a stub or the real one) */
+  /** The facade over kob-wasm `verifyGenesis`. Tests pass a stub or the real one. */
   verify: (req: GenesisRequest) => GenesisVerdict;
   fetch?: typeof fetch;
   now?: () => number;
-  /** where the evidence of verified tokens is saved (default: this browser's localStorage); null: nowhere */
+  /**
+   * Where the evidence of verified tokens is saved. The default is this browser's localStorage,
+   * and null saves it nowhere.
+   */
   storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
-  /** each request, headers to last byte (default 8 s) */
+  /** Each request, headers to last byte (default 8 s). */
   timeoutMs?: number;
-  /** how long an `unavailable` answer is kept before the same token is asked again (default 5 min) */
+  /** How long an `unavailable` answer is kept before the token is asked again (default 5 min). */
   retryMs?: number;
-  /** the explorers (default `EXPLORER_BASE`) */
+  /** The explorers (default `EXPLORER_BASE`). */
   explorer?: Readonly<Record<KascovNetwork, string>>;
 }
 
+/** Runs and remembers the genesis check of tokens. */
 export interface GenesisChecker {
   /**
-   * The genesis check of `covenantId`, once per token per session. `kascovBase`: the data set's base (`AppConfig.tokenNamesUrl`; '' = no source).
-   * `programHint`: a template hash a third party named for the token's program. Never rejects.
+   * The genesis check of `covenantId`. A verified or failed answer is kept for the session, and an
+   * unavailable one for `retryMs`. `kascovBase` is the data set's base (`AppConfig.tokenNamesUrl`),
+   * and an empty string means no source. `programHint` is a template hash a third party named for
+   * the token's program. It never rejects.
    */
   check(network: string, covenantId: string, o: { kascovBase: string; programHint?: string | null; signal?: AbortSignal | undefined }): Promise<GenesisCheck>;
   /** The answer already known for the token, without asking anything. */
@@ -241,7 +294,7 @@ const STORE_MAX_ENTRIES = 24;
 const STORE_MAX_ENTRY_CHARS = 150_000;
 const KASCOV_FILE_MAX = 8_000_000;
 const EXPLORER_MAX = 1_000_000;
-/** most explorer requests spent on finding the spends that revealed a token's genesis scripts */
+/** Most explorer requests spent on finding the spends that revealed a token's genesis scripts. */
 const MAX_SPEND_REQUESTS = 6;
 const ADDRESS_PAGE = 50;
 
@@ -250,6 +303,7 @@ interface Saved {
   req: GenesisRequest;
 }
 
+/** Makes a genesis checker with its own memory cache. */
 export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
   const fetchFn = o.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const now = o.now ?? Date.now;
@@ -284,11 +338,14 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
       const rest = loadSaved().filter((e) => e.k !== entry.k);
       storage()?.setItem(STORE_KEY, JSON.stringify({ v: 1, e: [...rest, entry].slice(-STORE_MAX_ENTRIES) }));
     } catch {
-      /* storage full, blocked or absent: the check just runs again next time */
+      /* Storage is full, blocked or absent. The check just runs again next time. */
     }
   };
 
-  /** One GET of JSON; null for anything but a 200 with a JSON body within `max` bytes (CORS, 404, timeout, offline alike). */
+  /**
+   * One GET of JSON. It fails for anything but a 200 with a JSON body within `max` bytes, so CORS,
+   * a 404, a timeout and offline are alike. `notFound` marks a 404.
+   */
   async function getJson(url: string, max: number, signal?: AbortSignal): Promise<{ ok: true; doc: unknown } | { ok: false; notFound: boolean }> {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), timeoutMs);
@@ -317,7 +374,8 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
   }
 
   function verified(v: Extract<GenesisVerdict, { status: 'verified' }>, source: GenesisSource, live: (boolean | null)[], outputs: { index: number }[]): GenesisCheck {
-    // a bridge's minter is a mint authority, but not a public mint with an allowance: it is named as the token's issuance instead
+    // A bridge's minter is a mint authority, but not a public mint with an allowance. It is named
+    // as the token's issuance instead.
     const bridges = v.companionOutputs.filter((c) => c.role === 'bridge-minter' || c.role === 'zk-bridge-minter');
     const bridgeAt = new Set(bridges.map((c) => c.index));
     const first = bridges[0];
@@ -327,7 +385,8 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
     const liveOf = (index: number) => live[outputs.findIndex((x) => x.index === index)] ?? null;
     return {
       status: 'verified', source, txid: v.txid, program: v.program, supply: v.supply,
-      // a KRON minter has no allowance: it mints without bound (the verdict's allowance 0 is no 'Mint left: 0')
+      // A KRON minter has no allowance, because it mints without bound. The verdict's allowance of
+      // 0 does not mean 'Mint left: 0'.
       mintAllowance: minters.length > 0 && !kron ? v.mintAllowance : null,
       ...(minters.length > 0 && kron ? { mintUnbounded: true } : {}),
       mintersUnspent: minters.length === 0 ? null : minters.every((m) => liveOf(m) === true) ? true : minters.some((m) => liveOf(m) === false) ? false : null,
@@ -339,15 +398,17 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
     const hint = programHint && HEX64.test(programHint) ? programHint : undefined;
     const key = `${network}:${covenantId}`;
 
-    // 0. a saved copy of the evidence of an earlier check: used only if it verifies again, here and now
+    // 0. A saved copy of the evidence of an earlier check, used only if it verifies again here and
+    // now.
     const saved = loadSaved().find((e) => e.k === key);
     if (saved) {
       const v = safeVerify(saved.req);
-      // (whether the minters were unspent is a hint of the source, not part of the evidence: a saved copy never says "the whole allowance is there")
+      // Whether the minters were unspent is a hint of the source, not part of the evidence. So a
+      // saved copy never says "the whole allowance is there".
       if (v.status === 'verified' && saved.req.covenantId === covenantId) return verified(v, 'saved', [], saved.req.outputs);
     }
 
-    // 1. kascov's file for this covenant
+    // 1. kascov's file for this covenant.
     const base = kascovBase.replace(/\/+$/, '');
     if (base === '') return { status: 'unavailable', reason: 'history' };
     const file = await getJson(`${base}/${network}/c/${covenantId}.json`, KASCOV_FILE_MAX, signal);
@@ -356,8 +417,9 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
     if (!g) return { status: 'unavailable', reason: 'history' };
     const kascovOutputs = (): GenesisRequest['outputs'] => g.outputs.map((x) => ({ index: x.index, value: x.value, spk: x.spk, ...(x.redeem ? { redeemScript: x.redeem } : {}) }));
     const live = g.outputs.map((x) => x.live);
-    // kascov's file alone can only make a token 'unavailable', never 'failed' (a mismatch that only a supplier's incomplete or stale file shows is
-    // asked again later, audit 2026-10-29 F8): a failure needs the explorer's transaction too, or the self-authenticating contamination
+    // kascov's file alone can only make a token 'unavailable', never 'failed'. A mismatch that only
+    // a supplier's incomplete or stale file shows is asked again later. A failure needs the
+    // explorer's transaction too, or the self-authenticating contamination.
     let kascovMismatch = false;
     let reason: GenesisUnavailableReason = 'history';
 
@@ -369,14 +431,16 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
         return verified(v, 'kascov', live, g.outputs);
       }
       if (v.status === 'failed' && (v.code === 'contaminated' || !g.partial)) {
-        // contamination is self-authenticating (the covenant id recomputed); a mismatch of a complete file is held back until the explorer has been asked
+        // Contamination is self-authenticating, because the covenant id was recomputed. A mismatch
+        // of a complete file is held back until the explorer has been asked.
         if (v.code === 'contaminated') return { status: 'failed', code: 'contaminated', message: v.message };
         kascovMismatch = true;
       }
       if (v.status === 'unavailable' && v.code === 'unsupported_program') reason = 'program';
     }
 
-    // 2. the explorer: the genesis transaction (authorising input, group, the keys it pays to), and the spends that revealed scripts kascov did not give
+    // 2. The explorer gives the genesis transaction with its authorising input, group and the keys
+    // it pays to. It also gives the spends that revealed scripts kascov did not give.
     const api = explorer[network];
     const tx = await getJson(`${api}/transactions/${g.genesisTxid}?inputs=true&outputs=true&resolve_previous_outpoints=no`, EXPLORER_MAX, signal);
     if (!tx.ok) return { status: 'unavailable', reason: kascovMismatch ? 'unreachable' : tx.notFound ? reason : 'unreachable' };
@@ -389,11 +453,13 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
     for (const x of e.outputs) {
       const k = byIndex.get(x.index);
       const same = !!k && k.spk === x.spk;
-      // kascov's script is used only for the output whose script public key it matches (the hash check would refuse it anyway)
+      // kascov's script is used only for the output whose script public key it matches. The hash
+      // check would refuse it anyway.
       let redeem = same ? k.redeem : null;
       if (!redeem && !(same && k.live === true) && requests < MAX_SPEND_REQUESTS) {
-        // revealed by the spend of the output: the one kascov names, else the spend found in the history of the output's script address
-        // (an output kascov calls unspent has no spend to find: it stays unrevealed, or is rebuilt)
+        // The script is revealed by the spend of the output. That is the one kascov names, else the
+        // spend found in the history of the output's script address. An output kascov calls unspent
+        // has no spend to find, so it stays unrevealed or is rebuilt.
         if (same && k.spentTxid) {
           requests++;
           const sp = await getJson(`${api}/transactions/${k.spentTxid}?inputs=true&outputs=false&resolve_previous_outpoints=no`, EXPLORER_MAX, signal);
@@ -438,7 +504,8 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
         p = run(n, id, opts.kascovBase, opts.programHint ?? null, opts.signal)
           .catch((): GenesisCheck => ({ status: 'unavailable', reason: 'unreachable' }))
           .then((result) => {
-            // an aborted run (the caller gave up) says nothing about the token: it is not remembered
+            // An aborted run, where the caller gave up, says nothing about the token. It is not
+            // remembered.
             if (!opts.signal?.aborted) memory.set(key, { result, at: now() });
             inflight.delete(key);
             return result;

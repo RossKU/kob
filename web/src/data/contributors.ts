@@ -1,61 +1,84 @@
-// Who has paid an address, read in the browser from the public Kaspa REST explorer (`EXPLORER_BASE`: api.kaspa.org, api-tn10.kaspa.org; CORS `*`, and the
-// paging header below is exposed to the page). The Support page's table (ui/support/SupportPage.tsx) comes from here; the parsing and ranking are pure.
+// Who has paid an address, read in the browser from the public Kaspa REST explorer
+// (`EXPLORER_BASE`: api.kaspa.org, api-tn10.kaspa.org). It serves CORS `*` and exposes the paging
+// header below to the page. The Support page's table (ui/support/SupportPage.tsx) comes from
+// here, and the parsing and ranking are pure.
 //
-// What counts: an accepted transaction with outputs to the address and none of its inputs from it (the address's own spending, change included, is not a
-// contribution; a coinbase has no sender). A payment is credited to one sender, the input address that put in the most, as a wallet often spends from several.
-// Only addresses are taken from the chain: payloads are not asked for and no free text ever reaches the page.
+// What counts is an accepted transaction with outputs to the address and none of its inputs from
+// it. The address's own spending, change included, is not a contribution, and a coinbase has no
+// sender. A payment is credited to one sender, the input address that put in the most, as a
+// wallet often spends from several. Only addresses are taken from the chain. Payloads are not
+// asked for, and no free text ever reaches the page.
 import { EXPLORER_BASE } from './genesis-check';
 import { readCapped, type KascovNetwork } from './kascov';
 
-/** `kaspa:` or `kaspatest:` and a cashaddr body (a pubkey or script address is 61 characters, an ECDSA one 63). Nothing else from a source is shown. */
+/**
+ * `kaspa:` or `kaspatest:` and a cashaddr body. A pubkey or script address body is 61 characters,
+ * an ECDSA one 63. Nothing else from a source is shown.
+ */
 const ADDRESS = /^kaspa(test)?:[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{61,63}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 
+/** Whether `v` is a mainnet or testnet Kaspa address. */
 export const isKaspaAddress = (v: unknown): v is string => typeof v === 'string' && ADDRESS.test(v);
 
-/** The network an address belongs to: its transactions are on that chain, whatever network the app is set to. */
+/**
+ * The network an address belongs to. Its transactions are on that chain, whatever network the app
+ * is set to.
+ */
 export const networkOfAddress = (address: string): KascovNetwork => (address.startsWith('kaspatest:') ? 'testnet-10' : 'mainnet');
 
-/** Most rows the route gives per request (its own limit). */
+/** Most rows the route gives per request, its own limit. */
 export const CONTRIBUTIONS_PAGE = 500;
-/** Most requests per read, one after the other: 5,000 transactions. A longer history is cut at its newest ones, said so on the page. */
+/**
+ * Most requests per read, one after the other, so 5,000 transactions. A longer history is cut at
+ * its newest ones, and the page says so.
+ */
 export const CONTRIBUTIONS_MAX_PAGES = 10;
 const PAGE_MAX_BYTES = 8_000_000;
 const PAGE_TIMEOUT_MS = 15_000;
 
+/** One payment to the address, credited to its sender. */
 export interface Payment {
   txid: string;
   sender: string;
-  /** sompi paid to the address by this transaction */
+  /** Sompi paid to the address by this transaction. */
   amount: bigint;
-  /** block time, epoch milliseconds */
+  /** Block time, epoch milliseconds. */
   time: number;
 }
 
+/** One sender's total. */
 export interface Contributor {
   address: string;
-  /** sompi */
+  /** Sompi. */
   total: bigint;
-  /** block time of the first payment, epoch milliseconds */
+  /** Block time of the first payment, epoch milliseconds. */
   first: number;
 }
 
+/** The ranked senders of an address, and whether the history was read whole. */
 export interface Contributions {
-  /** best first (`rankContributors`) */
+  /** Best first (`rankContributors`). */
   contributors: Contributor[];
-  /** false: a transaction could not be read, or the history is longer than the requests allowed, so a total may be low */
+  /**
+   * False when a transaction could not be read, or the history is longer than the requests
+   * allowed, so a total may be low.
+   */
   complete: boolean;
 }
 
 const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
 
-/** An amount in sompi: a JSON number above 2^53 has already lost digits and is not taken. */
+/** An amount in sompi. A JSON number above 2^53 has already lost digits and is not taken. */
 function sompi(v: unknown): bigint | null {
   if (typeof v === 'number') return Number.isSafeInteger(v) && v >= 0 ? BigInt(v) : null;
   return typeof v === 'string' && /^\d{1,20}$/.test(v) ? BigInt(v) : null;
 }
 
-/** The address that put the most into `inputs` (ties: the lower address), or null when an input is not resolved. */
+/**
+ * The address that put the most into `inputs`, the lower address on a tie. Null when an input is
+ * not resolved.
+ */
 function senderOf(inputs: readonly unknown[], prefix: string): string | null {
   const put = new Map<string, bigint>();
   for (const raw of inputs) {
@@ -73,7 +96,10 @@ function senderOf(inputs: readonly unknown[], prefix: string): string | null {
   return best;
 }
 
-/** One transaction of the route: its payment, null when it is none, 'unreadable' when it cannot be told. */
+/**
+ * One transaction of the route as its payment. Null when it is none, 'unreadable' when it cannot
+ * be told.
+ */
 export function paymentOf(raw: unknown, address: string): Payment | null | 'unreadable' {
   const tx = obj(raw);
   if (!tx || !HEX64.test(String(tx.transaction_id)) || !Array.isArray(tx.outputs)) return 'unreadable';
@@ -95,7 +121,10 @@ export function paymentOf(raw: unknown, address: string): Payment | null | 'unre
   return { txid: tx.transaction_id as string, sender, amount, time };
 }
 
-/** Totals per sender, best first: by total given, ties by the earlier first contribution (then by address, so the order never depends on the read). */
+/**
+ * Totals per sender, best first. They rank by total given, ties by the earlier first
+ * contribution, then by address, so the order never depends on the read.
+ */
 export function rankContributors(payments: Iterable<Payment>): Contributor[] {
   const by = new Map<string, Contributor>();
   for (const p of payments) {
@@ -108,7 +137,10 @@ export function rankContributors(payments: Iterable<Payment>): Contributor[] {
   return [...by.values()].sort((a, b) => (a.total === b.total ? a.first - b.first || (a.address < b.address ? -1 : 1) : a.total > b.total ? -1 : 1));
 }
 
-/** One page of the route. `resolve_previous_outpoints=light` adds each input's address and amount; `fields` leaves the payload out. */
+/**
+ * One page of the route. `resolve_previous_outpoints=light` adds each input's address and amount,
+ * and `fields` leaves the payload out.
+ */
 export function contributionsUrl(address: string, before: string | null): string {
   const q = `limit=${CONTRIBUTIONS_PAGE}&resolve_previous_outpoints=light&acceptance=accepted&fields=transaction_id,block_time,is_accepted,inputs,outputs`;
   return `${EXPLORER_BASE[networkOfAddress(address)]}/addresses/${address}/full-transactions-page?${q}${before === null ? '' : `&before=${before}`}`;
@@ -136,9 +168,11 @@ async function readPage(url: string, fetchFn: typeof fetch, signal?: AbortSignal
 }
 
 /**
- * Walks the address's history, newest first, one request at a time, until the route names no next page or `CONTRIBUTIONS_MAX_PAGES` is reached. The cursor is a
- * block time, so a payment arriving during the read shifts nothing; a transaction seen twice counts once. Rejects when any request fails: a table of half
- * the history would rank people wrongly, so the page shows a line instead.
+ * Walks the address's history, newest first, one request at a time, until the route names no next
+ * page or `CONTRIBUTIONS_MAX_PAGES` is reached. The cursor is a block time, so a payment arriving
+ * during the read shifts nothing. A transaction seen twice counts once. It rejects when any
+ * request fails, because a table of half the history would rank people wrongly. The page shows a
+ * line instead.
  */
 export async function readContributions(address: string, o: { fetch?: typeof fetch; signal?: AbortSignal } = {}): Promise<Contributions> {
   const fetchFn = o.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));

@@ -1,17 +1,20 @@
-// The tokens issued from this browser, per network: their decimals, ticker and name, which the issuer chose and nothing on chain records
-// (the genesis carries no metadata). They prefill the decimals field of a token's first order (`TokenPage`), where the user sees and confirms
-// them, and name a token the registry does not list wherever it is shown (app/token-display.ts), marked unverified. Per-browser convenience: a
-// failed or blocked storage leaves the field empty and the token unnamed, never another value.
+// The tokens issued from this browser, per network, with the decimals, ticker and name the issuer
+// chose. The genesis itself carries no metadata.
+//
+// They prefill the decimals field of a token's first order (`TokenPage`), where the user sees and
+// confirms them. They also name a token the registry does not list wherever it is shown
+// (app/token-display.ts), marked unverified. This is a per-browser convenience. A failed or
+// blocked storage leaves the field empty and the token unnamed, never another value.
 import { defaultStorage, type StorageLike } from '../config';
 
 const KEY = 'kob.issuedDecimals.v1';
-/** Most entries kept (the oldest are dropped). */
+/** Most entries kept. The oldest are dropped. */
 const MAX_ENTRIES = 200;
 
 /** What this browser knows of a token it issued. */
 export interface IssuedToken {
   decimals: number;
-  /** empty for an entry of an older build (decimals only) */
+  /** Empty for an entry of an older build, which kept the decimals only. */
   ticker: string;
   name: string;
 }
@@ -19,10 +22,13 @@ export interface IssuedToken {
 type Memo = Record<string, Record<string, IssuedToken>>;
 
 const isDecimals = (d: unknown): d is number => typeof d === 'number' && Number.isInteger(d) && d >= 0 && d <= 18;
-/** A ticker or name as a label: printable, short (an entry written by hand is dropped, not shown). */
+/**
+ * A ticker or name as a label, printable and short. A label that is not is dropped, not shown, as
+ * from an entry written by hand.
+ */
 const label = (v: unknown, max: number): string => (typeof v === 'string' && v.length <= max && /^[\x20-\x7e]*$/.test(v) ? v.trim() : '');
 
-/** One entry: the decimals alone (older builds), or the issued token. */
+/** One entry, the decimals alone of an older build or the issued token. */
 function entryOf(v: unknown): IssuedToken | null {
   if (isDecimals(v)) return { decimals: v, ticker: '', name: '' };
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
@@ -50,7 +56,10 @@ function read(storage: StorageLike | null): Memo {
   }
 }
 
-/** Remembers a token issued here. False when the storage is unavailable or the decimals are not ones an issuance accepts. */
+/**
+ * Remembers a token issued here. False when the storage is unavailable or the decimals are not
+ * ones an issuance accepts.
+ */
 export function rememberIssuedToken(network: string, covenantId: string, token: { decimals: number; ticker?: string; name?: string }, storage: StorageLike | null = defaultStorage()): boolean {
   const id = covenantId.toLowerCase();
   if (!storage || !/^[0-9a-f]{64}$/.test(id) || !isDecimals(token.decimals)) return false;
@@ -66,7 +75,7 @@ export function rememberIssuedToken(network: string, covenantId: string, token: 
   }
 }
 
-/** Remembers the decimals of a token issued here (no ticker or name). */
+/** Remembers the decimals of a token issued here, without ticker or name. */
 export function rememberIssuedDecimals(network: string, covenantId: string, decimals: number, storage: StorageLike | null = defaultStorage()): boolean {
   return rememberIssuedToken(network, covenantId, { decimals }, storage);
 }
