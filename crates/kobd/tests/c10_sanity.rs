@@ -89,3 +89,13 @@ fn an_order_with_a_negative_interval_is_not_listed_and_so_is_never_evidence() {
     }
     assert!(check(&AnyState::KobAsk(AskState { interval: 0, ..ask(1, 250_000_000) })).is_ok());
 }
+
+/// S4: a mode-2 order whose `topupTip` is not below `COVENANT_OUTPUT_MIN` (0.08 KAS) is not listed, so the matcher never fills
+/// it and no order book shows it: a filler would profit from making a fresh receive UTXO for each fill. Its maker cancels it.
+#[test]
+fn a_top_up_order_with_a_tip_above_the_cap_is_not_listed() {
+    let m2 = |tip| AnyState::KobBid(BidState { mode: MODE_TOPUP, recv_threshold: 1, topup_tip: tip, ..bid(1, 250_000_000) });
+    assert!(bid(1, 250_000_000).delivery_carrier > TOPUP_TIP_MAX, "the carrier rule alone would allow the larger tip");
+    assert_eq!(check(&m2(TOPUP_TIP_MAX)), Ok(()));
+    assert_eq!(check(&m2(TOPUP_TIP_MAX + 1)).unwrap_err(), "bad_state:delivery:outside_the_delivery_rules");
+}
