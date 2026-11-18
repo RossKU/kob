@@ -507,7 +507,7 @@ export interface ConfigLayers {
 }
 
 /**
- * A node or indexer URL that this browser's stored settings (localStorage `kob.settings`) put in force instead of the deployment's: it applies to every
+ * A node, indexer or registry URL that this browser's stored settings (localStorage `kob.settings`) put in force instead of the deployment's: it applies to every
  * later visit, so the app says so on every page (`deployment`: what config.json / `__KOB_CONFIG__` / the defaults would have used).
  */
 export interface StoredOverride {
@@ -515,7 +515,7 @@ export interface StoredOverride {
    * `extraIndexerUrls`: the stored list of further indexers (`value` / `deployment`: the URLs joined by ', ') that the market start is checked
    * against; `allowQueryOverrides`: a stored `true` that lets links repoint the node and the indexer (`value` 'true', `deployment` 'false').
    */
-  field: 'indexerUrl' | 'nodeUrl' | 'extraIndexerUrls' | 'allowQueryOverrides';
+  field: 'indexerUrl' | 'nodeUrl' | 'registryUrl' | 'extraIndexerUrls' | 'allowQueryOverrides';
   value: string;
   deployment: string;
 }
@@ -613,7 +613,7 @@ export function resolveConfig(layers: ConfigLayers = {}): ResolvedConfig {
     cfg = apply(apply(cfg, pickServers(deployment)), pickServers({ ...stored, ...queried }));
   }
   // only a stored value that is still in force (a link did not replace it) and differs from the deployment's
-  const storedOverrides: StoredOverride[] = (['indexerUrl', 'nodeUrl'] as const)
+  const storedOverrides: StoredOverride[] = (['indexerUrl', 'nodeUrl', 'registryUrl'] as const)
     .filter((f) => stored[f] !== undefined && stored[f] === cfg[f] && cfg[f] !== deployment[f])
     .map((f): StoredOverride => ({ field: f, value: cfg[f], deployment: deployment[f] }));
   // the further indexers a stored setting names are the references of the market-start check: said like a stored indexer

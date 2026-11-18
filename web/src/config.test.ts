@@ -363,6 +363,12 @@ describe('logoBlocklistUrl and ipfsGatewayUrl: where the token-logo blocklist an
 });
 
 describe('stored node / indexer overrides', () => {
+  it('a registry URL saved in this browser that differs from the deployment is reported; the same one is not', () => {
+    const r = resolveConfig({ settings: { registryUrl: 'https://reg.example/tokens.json' } });
+    expect(r.storedOverrides).toEqual([{ field: 'registryUrl', value: 'https://reg.example/tokens.json', deployment: './registry/tokens.json' }]);
+    expect(resolveConfig({ settings: { registryUrl: './registry/tokens.json' } }).storedOverrides).toEqual([]);
+  });
+
   it('a node or indexer saved in this browser that differs from the deployment is reported', () => {
     const r = resolveConfig({ file: { indexerUrl: 'https://idx.example' }, settings: { indexerUrl: 'https://other.example', nodeUrl: 'wss://node.example' } });
     expect(r.storedOverrides).toEqual([
@@ -406,7 +412,7 @@ describe("the deployment's servers belong to the deployment's network", () => {
   it('what the stored setting names itself stays (it chose those servers for that network); a landing screen that is not market-bound stays', () => {
     const r = resolveConfig({ file: { ...file, home: 'list' }, settings: { network: 'mainnet', indexerUrl: 'https://main.example', registryUrl: './mine.json' } });
     expect(r.config).toMatchObject({ network: 'mainnet', indexerUrl: 'https://main.example', nodeUrl: '', registryUrl: './mine.json', home: 'list' });
-    expect(r.storedOverrides.map((o) => o.field)).toEqual(['indexerUrl']);
+    expect(r.storedOverrides.map((o) => o.field)).toEqual(['indexerUrl', 'registryUrl']);
   });
 
   it('a link that changes the network (allowQueryOverrides) drops them too, but keeps the servers it names', () => {

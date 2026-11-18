@@ -136,6 +136,7 @@ export default {
 
   'shell.banner.storedNode': 'Node saved in this browser: {url} (site default: {deployment}). Balances, inputs and confirmations come from it. If you did not set it, reset it.',
   'shell.banner.storedIndexer': 'Indexer saved in this browser: {url} (site default: {deployment}). The book, prices and orders come from it. If you did not set it, reset it.',
+  'shell.banner.storedRegistry': 'Token registry saved in this browser: {url} (site default: {deployment}). Token names and tickers come from it. If you did not set it, reset it.',
   'shell.banner.storedExtraIndexers': 'Further indexers saved in this browser: {urls} (site default: {deployment}). Prices and market order starts are checked against them. If you did not set them, reset them.',
   'shell.banner.storedQueryOverrides': 'Saved settings let links choose the node and indexer (allowQueryOverrides): a link could point the app at servers you did not choose. If you did not set it, reset it.',
   'shell.banner.storedNone': 'none',

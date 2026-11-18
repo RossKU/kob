@@ -77,6 +77,10 @@ function storedEntry(o: StoredOverride): StatusEntry {
   if (o.field === 'allowQueryOverrides') {
     return { key: `stored-${o.field}`, tone: 'warn', class: 'banner-compact', testid: 'banner-stored-query-overrides', text: t('shell.banner.storedQueryOverrides'), link };
   }
+  if (o.field === 'registryUrl') {
+    const text = t('shell.banner.storedRegistry', { url: o.value, deployment: o.deployment });
+    return { key: `stored-${o.field}`, tone: 'warn', class: 'banner-compact', testid: 'banner-stored-registry', text, link };
+  }
   const shown = (url: string): string => url || t(o.field === 'nodeUrl' ? 'settings.nodeUrl.resolver' : 'shell.banner.storedNone');
   const text = t(o.field === 'nodeUrl' ? 'shell.banner.storedNode' : 'shell.banner.storedIndexer', { url: shown(o.value), deployment: shown(o.deployment) });
   return { key: `stored-${o.field}`, tone: 'warn', class: 'banner-compact', testid: `banner-stored-${o.field === 'nodeUrl' ? 'node' : 'indexer'}`, text, link };
