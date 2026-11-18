@@ -93,7 +93,7 @@ The lifecycle rules of `contracts/orders/` apply with the KRON codec and limits:
   the KRON program, template hash + P2SH, with `id_type 2` and owner = the ask's id), exactly as the KCC-20 kinds
   (`docs/spec/matcher.md` section 4).
 
-Sizes (bytecode B / state B): KobAskKron 1,487 / 243, KobBidKron 1,456 / 252, KobCondAskKron 3,467 / 330,
+Sizes (bytecode B / state B): KobAskKron 1,487 / 243, KobBidKron 1,473 / 252, KobCondAskKron 3,467 / 330,
 KobCondBidKron 3,380 / 348, KobIfdBidKron 3,495 / 552, KobIfdAskKron 4,645 / 561 (the pair orders for KRON tokens: `KobPair` 2,960 / 447,
 `KobCondPair` 6,862 / 543, `KobIfdPair` 9,263 / 909, one template each for both families).
 

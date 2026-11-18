@@ -17,27 +17,27 @@ every network.
 | Template | Template hash | prefix / suffix |
 |---|---|---|
 | KobAsk | `070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c` | 1 / 1407 |
-| KobBid | `f5dc833403c1cdeb134ec8b5c31dcc5d2aa9c3905035c26820506859b90c64d8` | 1 / 2357 |
-| KobCondAsk | `81c45232ce30dc72a5aeae470feb4690c017d1c0e2e1f5275dc1db65e44f117a` | 1 / 3491 |
-| KobCondBid | `8c0e8f0694fbd5ac91de346d7921d58cb41b0fdc80ca669f1ff7b8d8f31542c3` | 1 / 4373 |
-| KobIfdBid | `6ffb9b53dd72b6a8d1602c93999e52853c6d69e97656211237f4377eaa5bb6ee` | 1 / 3255 |
-| KobIfdAsk | `001104cafcc7a1bc00b35773d6468a1990cae5827b7b1ad0276d3eb1dd5c8f66` | 1 / 4726 |
+| KobBid | `2f6079aed0be4c60632509761a407ba2545f0487a667dc228cfebeaacfd00d8d` | 1 / 2377 |
+| KobCondAsk | `209cf0daf867c690ef3bd79b6f814719f51697477bc8837eea0da04427483aaa` | 1 / 3491 |
+| KobCondBid | `aad44664cc02b48271b3e26f87404a04f610dd8823c16f11f3fa738437b7f987` | 1 / 4373 |
+| KobIfdBid | `3ea83cf4094fb389e4e4cc2c81b575c81213d8ad24844a9554983232e234f638` | 1 / 3255 |
+| KobIfdAsk | `812905a9016193c4aa23c7ebe947dd82cc0b8401996657a6bc7aaaee2dce7003` | 1 / 4726 |
 | KobPair | `d3d775de3dfb4091c8d3b631a018c89accac22565bf370e10d9172eb759a6ec8` | 1 / 3243 |
-| KobCondPair | `216cdcb583aaa08a104834f6ac214cf8869c1dc4321e8f4f2394e4b882cd34ff` | 1 / 7272 |
-| KobIfdPair | `1208cd408b3f06ad97d9a35aaa5e082d4a1dda8e79f50ea40bd872770d424315` | 1 / 8414 |
+| KobCondPair | `46fd3606270f2e790973f0280b837d4a9837d7a86cd3470ad0cc430e18d285e4` | 1 / 7272 |
+| KobIfdPair | `59bc8aec09b5b4d1d6907be3eceea63d148f4f4e6ff120a2ffa6a96818569e71` | 1 / 8414 |
 | KobCurveAsk | `1e9bee3b01f67f802dba564ada22d28ca5f5e2bbc0eaf60005d9a8665d46d8b9` | 1 / 2182 |
 | KobAskKron | `f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d` | 1 / 1243 |
-| KobBidKron | `7cb4f6abe8ab4282469fd3e70d3372122f9dbe6b0e03a5b192fc5c1393062582` | 1 / 1203 |
-| KobCondAskKron | `e9930d360eb9c124ea68bc47a8c0e91b25ff919dc5f91dbfc3f1a9e9c8a10579` | 1 / 3136 |
-| KobCondBidKron | `8aa82c81037a03820ed769623e6e3e33d130f48c0a2348db8d5ba1f87a85ba5b` | 1 / 3031 |
-| KobIfdBidKron | `644eeb9c0057cf8ef3489234a2d414ca9c69a1b42683438c8cbd64acd46b41ed` | 1 / 2942 |
-| KobIfdAskKron | `2557e020b41456a68e8d0fa8a43072012aca7d5c7aa653d74a2e0d22934a7a21` | 1 / 4083 |
+| KobBidKron | `4dc2420ddafe56fc71345252e27666b3397cfc47884de86c0dd5c03419e83dcf` | 1 / 1220 |
+| KobCondAskKron | `75ad2407fc2a61df87e40ddfd9c77f5ed14584ae2ceb628018d3f5cd05003204` | 1 / 3136 |
+| KobCondBidKron | `401b2e29586dcee7c253b9002e57dbd0bdf6240e596478f5c95ce9b6413a9c1d` | 1 / 3031 |
+| KobIfdBidKron | `10c1a47fe58714f679a8c33cd98fd900f974cdd1c1b41dad38fc7cbb01901a03` | 1 / 2942 |
+| KobIfdAskKron | `8e030d2490555677cbcbfa76b8bee84a1bab76abf1f433d8084f1e2124fc7dc8` | 1 / 4083 |
 | KobAskKronD0 | `f43ae142343fe54313e2f742931c76da11cb49e66d823280829a3f91ed227c2c` | 1 / 1243 |
-| KobBidKronD0 | `bdf2d39982a399f2a42fc893aec503fa043103909aea8365f5f56c731585f8ba` | 1 / 1203 |
-| KobCondAskKronD0 | `b66e1ca03bb35f0cf0be62c85e50536368b247d8dd65c88f7bf99d2f794d9616` | 1 / 3136 |
-| KobCondBidKronD0 | `9e2bac11bf1398637b2868b863f6f46f42bc3be5510e840a65cca9ae3bde014e` | 1 / 3031 |
-| KobIfdBidKronD0 | `c4742e78f68cdeb2f7fd9ad85debbedd8767b66d09100cbf00deccbf789e8e21` | 1 / 2942 |
-| KobIfdAskKronD0 | `7ae3d8b793c2c97aad575a50577c045b4c881e6777d4d63de7020246f3daf345` | 1 / 4083 |
+| KobBidKronD0 | `8a7ee676f706b1e762b7b7ccaa7977e58650f0432e5c9f62083370c774eb136b` | 1 / 1220 |
+| KobCondAskKronD0 | `b2b6fe249859902d1f82ff61621f5525926c8db032ceec4716c48105587c306a` | 1 / 3136 |
+| KobCondBidKronD0 | `82fce430931931fd2fe574345a01bc9bf8bf4402910b1740f0ae8085c99c3324` | 1 / 3031 |
+| KobIfdBidKronD0 | `ebc5bff8bae73fb07ed37cb15795d4e0ef7ebe17290e745b6645224ea2361947` | 1 / 2942 |
+| KobIfdAskKronD0 | `daf934fd6a1040ed15800ba944da929d3e12886bce1d0f00374c0a96202d6cae` | 1 / 4083 |
 
 The token programs are the reference artifacts too. Binaries embedding this record: see "Deployment
 records" in contracts/README.md.

@@ -17,7 +17,7 @@
 // scripts/build-argent.sh compiles it and publishes its SilverScript in
 // contracts/argent/examples-out/closed_icc_gate/. It is not a KOB contract.
 
-import "../KOBOrders/artifact.json" id "c4bfb61d870e18ccd1899ded9865a4abd55ad956ead37a42bb48c2cf8b896b3c";
+import "../KOBOrders/artifact.json" id "746888db8ca65ab011c6e7b88e7f153cc83eb6daf70b4966606ed390212c2868";
 
 state PriceGateState {
     pubkey owner;

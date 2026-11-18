@@ -196,7 +196,8 @@ contract KobBidKron(
         // below that, the crossing spread and the tip, is the matcher's.
         // used - allIn, a rising bid's headroom and the rounding, stays with
         // the maker.
-        int used = quoteOf(n, pMax + tip, scale - 1);
+        int rate = pMax + tip;
+        int used = quoteOf(n, rate, scale - 1);
         int allIn = quoteOf(n, p + tip, 0);
         int inValue = tx.inputs[self].value;
         int left = inValue - used;
@@ -225,14 +226,18 @@ contract KobBidKron(
         )));
         require(OpOutputCovenantId(self) == tokenCovId);
 
-        // Minimum fill. A fill takes at least minFill unless it ends the bid,
-        // because less than one minimum fill of buying power is left. Every
-        // fill moves deliveryCarrier of the escrow onto its delivery, so the
-        // minimum bounds the deliveries and carriers a filler can force on
-        // the maker.
+        // Minimum fill. A fill takes at least minFill unless it takes all the
+        // buying power left: after it, spare funds less than one base unit at
+        // the budget rate, spare < ceil((pMax + tip) / scale). The exemption
+        // is not "the bid ends" (less than one minimum fill left after the
+        // fill), or a tiny fill could end any bid funded for under two
+        // minimum fills. Every fill moves deliveryCarrier of the escrow onto
+        // its delivery, so the minimum bounds the deliveries and carriers a
+        // filler can force on the maker.
         require(minFill > 0);
-        bool canContinue = left - deliveryCarrier - reserve >= quoteOf(minFill, pMax + tip, scale - 1);
-        require(n >= minFill || !canContinue);
+        int spare = left - deliveryCarrier - reserve;
+        bool canContinue = spare >= quoteOf(minFill, rate, scale - 1);
+        require(n >= minFill || spare < (rate + scale - 1) / scale);
         if (tif == TIF_GTC && canContinue) {
             // The bid continues with the byte-identical script, the only
             // output bound to its covenant id. It holds exactly the unused

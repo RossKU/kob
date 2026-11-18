@@ -194,15 +194,15 @@ and the record's family is the family of the pair's base token A.
 | Code | Template | State bytes | Custody part | Pinned template hash |
 |---|---|---|---|---|
 | `0x01` | `KobAsk` | 276 | yes (`extensionCommitment`) | `070bb3b2…63b887c` |
-| `0x02` | `KobBid` | 321 (legacy 285) | no | `f5dc8334…90c64d8` |
-| `0x03` | `KobCondAsk` | 363 | yes (`extensionCommitment`) | `81c45232…44f117a` |
-| `0x04` | `KobCondBid` | 417 (legacy 381) | no | `8c0e8f06…31542c3` |
-| `0x05` | `KobIfdBid` | 585 | no | `6ffb9b53…a5bb6ee` |
-| `0x06` | `KobIfdAsk` | 621 (legacy 594) | yes (its exit's `extensionCommitment`) | `001104ca…d5c8f66` |
+| `0x02` | `KobBid` | 321 (legacy 285) | no | `2f6079ae…fd00d8d` |
+| `0x03` | `KobCondAsk` | 363 | yes (`extensionCommitment`) | `209cf0da…7483aaa` |
+| `0x04` | `KobCondBid` | 417 (legacy 381) | no | `aad44664…7b7f987` |
+| `0x05` | `KobIfdBid` | 585 | no | `3ea83cf4…234f638` |
+| `0x06` | `KobIfdAsk` | 621 (legacy 594) | yes (its exit's `extensionCommitment`) | `812905a9…dce7003` |
 | `0x07` | reserved | — | — | never reused: a record of this kind is refused |
 | `0x08` | `KobPair` (pair order, token A KCC-20) | 483 (legacy 447) | the custody of S (`sExt`) | `d3d775de…59a6ec8` |
-| `0x09` | `KobCondPair` (pair conditional / exit, token A KCC-20) | 579 (legacy 543) | the custody of S (`sExt`) | `216cdcb5…2cd34ff` |
-| `0x0a` | `KobIfdPair` (pair if-done entry, token A KCC-20) | 936 (legacy 909) | buy-first: the B escrow; sell-first: A, then the B prefund | `1208cd40…d424315` |
+| `0x09` | `KobCondPair` (pair conditional / exit, token A KCC-20) | 579 (legacy 543) | the custody of S (`sExt`) | `46fd3606…8d285e4` |
+| `0x0a` | `KobIfdPair` (pair if-done entry, token A KCC-20) | 936 (legacy 909) | buy-first: the B escrow; sell-first: A, then the B prefund | `59bc8aec…8569e71` |
 | `0x0b` | `KobCurveAsk` (stepped sell curve, KCC-20 only) | 214 to 216 + 8 per level | yes (`extensionCommitment`); unbound (`tokenCovId` 0): its token is the custody output's, a genesis of this transaction | `1e9bee3b…65d46d8b9` |
 
 KRON (family `0x02`), same kind codes:
@@ -210,15 +210,15 @@ KRON (family `0x02`), same kind codes:
 | Code | Template | State bytes | Custody part | Pinned template hash |
 |---|---|---|---|---|
 | `0x01` | `KobAskKron` | 243 | yes (token output only) | `f7274b79…ef8f76d` |
-| `0x02` | `KobBidKron` | 252 | no | `7cb4f6ab…3062582` |
-| `0x03` | `KobCondAskKron` | 330 | yes (token output only) | `e9930d36…8a10579` |
-| `0x04` | `KobCondBidKron` | 348 | no | `8aa82c81…a85ba5b` |
-| `0x05` | `KobIfdBidKron` | 552 | no | `644eeb9c…46b41ed` |
-| `0x06` | `KobIfdAskKron` | 561 | yes (token output only) | `2557e020…34a7a21` |
+| `0x02` | `KobBidKron` | 252 | no | `4dc2420d…9e83dcf` |
+| `0x03` | `KobCondAskKron` | 330 | yes (token output only) | `75ad2407…5003204` |
+| `0x04` | `KobCondBidKron` | 348 | no | `401b2e29…13a9c1d` |
+| `0x05` | `KobIfdBidKron` | 552 | no | `10c1a47f…1901a03` |
+| `0x06` | `KobIfdAskKron` | 561 | yes (token output only) | `8e030d24…4fc7dc8` |
 | `0x07` | reserved | — | — | refused |
 | `0x08` | `KobPair` (token A KRON; the same template as in family `0x01`) | 483 (legacy 447) | the custody of S (`sExt`) | `d3d775de…59a6ec8` |
-| `0x09` | `KobCondPair` (token A KRON; the same template) | 579 (legacy 543) | the custody of S (`sExt`) | `216cdcb5…2cd34ff` |
-| `0x0a` | `KobIfdPair` (token A KRON; the same template) | 936 (legacy 909) | buy-first: the B escrow; sell-first: A, then the B prefund | `1208cd40…d424315` |
+| `0x09` | `KobCondPair` (token A KRON; the same template) | 579 (legacy 543) | the custody of S (`sExt`) | `46fd3606…8d285e4` |
+| `0x0a` | `KobIfdPair` (token A KRON; the same template) | 936 (legacy 909) | buy-first: the B escrow; sell-first: A, then the B prefund | `59bc8aec…8569e71` |
 
 Codes `0x01` to `0x06` of family `0x02` also name the delivery id_type 0 builds of the KRON kinds (`KobAskKronD0` ..
 `KobIfdAskKronD0`, testnet only: the same state layouts, maker deliveries of KRON id_type 0, for a token program whose holders are
