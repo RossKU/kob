@@ -1,29 +1,36 @@
-//! Conformance tests of the token program `KForgeToken7214`: the token program of the KForge launchpad (kforge.xyz, mainnet
-//! and testnet-10, template `da96d352...`). It is the `KCC20` actor of upstream's published `KCC20PublicMint` app
-//! (`contracts/third-party/kcc20-reference/KCC20.public-mint.sil`, KOB's reviewed `Kcc20PublicMint`) built with 5 delegates and
-//! 6 token outputs instead of 2 and 3: `contracts/third-party/kforge-kcc20/KCC20.public-mint.6x6.sil`, seven lines apart from
-//! the vendored fixture, compiled by `scripts/build-contracts.sh` (silverc v1.0.0) into `contracts/artifacts/KForgeToken7214.json`,
-//! reproduces the 7,214-byte redeem scripts of the launchpad's token UTXOs byte for byte, and its body is the source KForge
-//! publishes (`kcc20_argent.sil`, blake2b-256 `35484116...`). Fixture of a real launch: `contracts/third-party/kforge-kcc20/observed.json`
-//! (the testnet-10 token genesis and the launch that moves the supply to the curve, and a mainnet sell back to a curve). The
-//! profile is in `crates/kob-protocol/data/programs.json` (`reviewed`, `networks: [mainnet, testnet-10]`, `minters: genesis-only`,
-//! default decimals 0, the KForge convention). The order grid on its holders: `kcc20_public_mint_tests.rs`; the review: `docs/spec/token-programs.md`
-//! section 6.
+//! Conformance tests of the token program `KForgeToken7214`: the token program of the KForge
+//! launchpad (kforge.xyz, mainnet and testnet-10, template `da96d352...`). It is the `KCC20` actor
+//! of upstream's published `KCC20PublicMint` app
+//! (`contracts/third-party/kcc20-reference/KCC20.public-mint.sil`, KOB's reviewed
+//! `Kcc20PublicMint`) built with 5 delegates and 6 token outputs instead of 2 and 3:
+//! `contracts/third-party/kforge-kcc20/KCC20.public-mint.6x6.sil`, seven lines apart from the
+//! vendored fixture, compiled by `scripts/build-contracts.sh` (silverc v1.0.0) into
+//! `contracts/artifacts/KForgeToken7214.json`, reproduces the 7,214-byte redeem scripts of the
+//! launchpad's token UTXOs byte for byte, and its body is the source KForge publishes
+//! (`kcc20_argent.sil`, blake2b-256 `35484116...`). Fixture of a real launch:
+//! `contracts/third-party/kforge-kcc20/observed.json` (the testnet-10 token genesis and the launch
+//! that moves the supply to the curve, and a mainnet sell back to a curve). The profile is in
+//! `crates/kob-protocol/data/programs.json` (`reviewed`, `networks: [mainnet, testnet-10]`,
+//! `minters: genesis-only`, default decimals 0, the KForge convention). The order grid on its
+//! holders: `kcc20_public_mint_tests.rs`; the review: `docs/spec/token-programs.md` section 6.
 //!
 //! What the reviewer checklist of `docs/spec/token-programs.md` (section 5) asks, item by item:
 //!
-//! 1-3. provenance, layout, witness: the artifact reproduces the observed redeem scripts, the cut is the KCC-1 actor-type handle
-//!      (34-byte prefix with the `gen__kcc20_template` context, constant per program: the program's own Sil template hash
-//!      `3c1a50ad...`, the value KForge's registry publishes), KOB's `kcc20-transfer` builder reproduces the observed token
-//!      inputs byte for byte (a key holder as leader, the curve's covenant-id custody as leader's delegate), the observed
-//!      transactions rebuild to their ids and the testnet-10 ones run in the engine;
-//! 4.   owners: custody (owner scheme 4) is released only with an input of its covenant; holders (scheme 0) only with their
-//!      key's signature of the input;
-//! 5.   conservation: a transfer neither mints nor burns; the genesis of the observed launch has one token output (fixed supply,
-//!      no companion in the token's group: the curve and the pool are their own covenants);
+//! 1-3. provenance, layout, witness: the artifact reproduces the observed redeem scripts, the cut
+//!      is the KCC-1 actor-type handle (34-byte prefix with the `gen__kcc20_template` context,
+//!      constant per program: the program's own Sil template hash `3c1a50ad...`, the value KForge's
+//!      registry publishes), KOB's `kcc20-transfer` builder reproduces the observed token inputs
+//!      byte for byte (a key holder as leader, the curve's covenant-id custody as leader's
+//!      delegate), the observed transactions rebuild to their ids and the testnet-10 ones run in
+//!      the engine;
+//! 4.   owners: custody (owner scheme 4) is released only with an input of its covenant; holders
+//!      (scheme 0) only with their key's signature of the input;
+//! 5.   conservation: a transfer neither mints nor burns; the genesis of the observed launch has
+//!      one token output (fixed supply, no companion in the token's group: the curve and the pool
+//!      are their own covenants);
 //! 6.   slots (6 / 6) and carrier floor (1 sompi) measured;
-//! 9.   (part) KOB orders on the program built and validated in the engine (`kob_orders`), and the mass and fee of a transfer at
-//!      the program's 6 / 6 against KOB's 3 / 3 standard.
+//! 9.   (part) KOB orders on the program built and validated in the engine (`kob_orders`), and the
+//!      mass and fee of a transfer at the program's 6 / 6 against KOB's 3 / 3 standard.
 //!
 //! Run: cargo test -p kob-tests --test program_kforgetoken7214 -- --nocapture
 

@@ -1,27 +1,35 @@
-//! Conformance tests of the token program `KaspaRocketToken11458`: the token program of the KaspaRocket launchpad
-//! (kasparocket.fun, mainnet and testnet-10, template `3d689d62...`). It is the `KCC20` actor of upstream's published `KCC20PublicMint` app
-//! (`contracts/third-party/kcc20-reference/KCC20.public-mint.sil`, KOB's reviewed `Kcc20PublicMint`) built with 9 delegates and
-//! 10 token outputs instead of 2 and 3: `contracts/third-party/kasparocket/KCC20.public-mint.10x10.sil`, seven lines apart from
-//! the vendored fixture, compiled by `scripts/build-contracts.sh` (silverc v1.0.0) into `contracts/artifacts/KaspaRocketToken11458.json`,
-//! reproduces the 11,458-byte redeem scripts of the launchpad's token UTXOs byte for byte. Fixture of a real launch:
-//! `contracts/third-party/kasparocket/observed.json` (genesis, the move of the supply into the launch's pool, the pool's genesis,
-//! the first buy). The profile is in `crates/kob-protocol/data/programs.json` (`reviewed`, `networks: [mainnet, testnet-10]`, `minters: genesis-only`, default decimals 3: the
-//! KaspaRocket convention). The order grid and the pair attacks on its holders: `kcc20_public_mint_tests.rs` and
-//! `audit_pair_sec_tests.rs`; the review: `docs/spec/token-programs.md` section 6.
+//! Conformance tests of the token program `KaspaRocketToken11458`: the token program of the
+//! KaspaRocket launchpad (kasparocket.fun, mainnet and testnet-10, template `3d689d62...`). It is
+//! the `KCC20` actor of upstream's published `KCC20PublicMint` app
+//! (`contracts/third-party/kcc20-reference/KCC20.public-mint.sil`, KOB's reviewed
+//! `Kcc20PublicMint`) built with 9 delegates and 10 token outputs instead of 2 and 3:
+//! `contracts/third-party/kasparocket/KCC20.public-mint.10x10.sil`, seven lines apart from the
+//! vendored fixture, compiled by `scripts/build-contracts.sh` (silverc v1.0.0) into
+//! `contracts/artifacts/KaspaRocketToken11458.json`, reproduces the 11,458-byte redeem scripts of
+//! the launchpad's token UTXOs byte for byte. Fixture of a real launch:
+//! `contracts/third-party/kasparocket/observed.json` (genesis, the move of the supply into the
+//! launch's pool, the pool's genesis, the first buy). The profile is in
+//! `crates/kob-protocol/data/programs.json` (`reviewed`, `networks: [mainnet, testnet-10]`,
+//! `minters: genesis-only`, default decimals 3: the KaspaRocket convention). The order grid and the
+//! pair attacks on its holders: `kcc20_public_mint_tests.rs` and `audit_pair_sec_tests.rs`; the
+//! review: `docs/spec/token-programs.md` section 6.
 //!
 //! What the reviewer checklist of `docs/spec/token-programs.md` (section 5) asks, item by item:
 //!
-//! 1-3. provenance, layout, witness: the artifact reproduces the observed redeem scripts, the cut is the KCC-1 actor-type handle
-//!      (34-byte prefix with the `gen__kcc20_template` context, constant per program: the program's own Sil template hash),
-//!      KOB's `kcc20-transfer` builder (`SigPlan::TokenLeader`) reproduces both observed token inputs byte for byte, the
-//!      observed transactions rebuild to their ids and run in the engine (the launch's LP_AMM input included);
-//! 4.   owners: custody (owner scheme 4) is released only with an input of its covenant; holders (scheme 0) only with their
-//!      key's signature of the input;
-//! 5.   conservation: a transfer neither mints nor burns; the genesis of the observed launch has one token output (fixed supply,
-//!      no companion in the token's group: the pool is its own covenant);
+//! 1-3. provenance, layout, witness: the artifact reproduces the observed redeem scripts, the cut
+//!      is the KCC-1 actor-type handle (34-byte prefix with the `gen__kcc20_template` context,
+//!      constant per program: the program's own Sil template hash), KOB's `kcc20-transfer` builder
+//!      (`SigPlan::TokenLeader`) reproduces both observed token inputs byte for byte, the observed
+//!      transactions rebuild to their ids and run in the engine (the launch's LP_AMM input
+//!      included);
+//! 4.   owners: custody (owner scheme 4) is released only with an input of its covenant; holders
+//!      (scheme 0) only with their key's signature of the input;
+//! 5.   conservation: a transfer neither mints nor burns; the genesis of the observed launch has
+//!      one token output (fixed supply, no companion in the token's group: the pool is its own
+//!      covenant);
 //! 6.   slots (10 / 10) and carrier floor (1 sompi) measured;
-//! 9.   (part) KOB orders on the program built and validated in the engine (`kob_orders`), and the mass and fee of a transfer at
-//!      the program's 10 / 10 against KOB's 3 / 3 standard.
+//! 9.   (part) KOB orders on the program built and validated in the engine (`kob_orders`), and the
+//!      mass and fee of a transfer at the program's 10 / 10 against KOB's 3 / 3 standard.
 //!
 //! Run: cargo test -p kob-tests --test program_kasparockettoken11458 -- --nocapture
 

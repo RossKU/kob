@@ -1,22 +1,27 @@
-//! Conformance tests of the token program `KForgeToken1785`: KForge's launchpad token program (testnet-10, template
-//! `5b136633...`), a pre-standard program with the KRON 46-byte state behind a one-byte entry-selector prefix whose holders are
-//! id_type 0 (a token-level signature in the signature column). Fixtures: `contracts/third-party/kforge/` (`program.bin`, a
-//! redeem script observed on testnet-10; `observed-transfer.json`, a real transfer). The profile is in
-//! `crates/kob-protocol/data/programs.json` (`pending-review`, `networks: [testnet-10]`); KOB's KRON order kinds serve it in
-//! their delivery id_type 0 builds (`*KronD0`, `contracts/orders/kron/README.md`).
+//! Conformance tests of the token program `KForgeToken1785`: KForge's launchpad token program
+//! (testnet-10, template `5b136633...`), a pre-standard program with the KRON 46-byte state behind
+//! a one-byte entry-selector prefix whose holders are id_type 0 (a token-level signature in the
+//! signature column). Fixtures: `contracts/third-party/kforge/` (`program.bin`, a redeem script
+//! observed on testnet-10; `observed-transfer.json`, a real transfer). The profile is in
+//! `crates/kob-protocol/data/programs.json` (`pending-review`, `networks: [testnet-10]`); KOB's
+//! KRON order kinds serve it in their delivery id_type 0 builds (`*KronD0`,
+//! `contracts/orders/kron/README.md`).
 //!
 //! What the reviewer checklist of `docs/spec/token-programs.md` (section 5) asks, item by item:
 //!
-//! 1-3. provenance, layout, witness: the profile derives from the bytes, KOB's `kron-columns` builder reproduces a real
-//!      transfer byte for byte, tampered witnesses are refused;
-//! 4.   owners: custody (id_type 2) is released only with the order covenant's input; holders are id_type 0 (the owner's
-//!      signature over the input's SIGHASH_ALL digest in the signature column) and address presence (id_type 3) is refused, so
-//!      the `*KronD0` order builds deliver to it;
-//! 5.   conservation and authority: no minting, no minter created, no burning on the transfer branch; every other selector
-//!      value refuses what branch 0 refuses (`other_selector_branches_move_nothing_branch_zero_refuses`);
+//! 1-3. provenance, layout, witness: the profile derives from the bytes, KOB's `kron-columns`
+//!      builder reproduces a real transfer byte for byte, tampered witnesses are refused;
+//! 4.   owners: custody (id_type 2) is released only with the order covenant's input; holders are
+//!      id_type 0 (the owner's signature over the input's SIGHASH_ALL digest in the signature
+//!      column) and address presence (id_type 3) is refused, so the `*KronD0` order builds deliver
+//!      to it;
+//! 5.   conservation and authority: no minting, no minter created, no burning on the transfer
+//!      branch; every other selector value refuses what branch 0 refuses
+//!      (`other_selector_branches_move_nothing_branch_zero_refuses`);
 //! 6.   slots (1 / 3) and carrier floor (1 sompi) measured;
-//! 9.   (part) the KOB builders' orders on the program, built and validated in the engine (`kob_orders_on_kforge`; the builder
-//!      scenarios over every program in `crates/kob-protocol/tests` run on it too).
+//! 9.   (part) the KOB builders' orders on the program, built and validated in the engine
+//!      (`kob_orders_on_kforge`; the builder scenarios over every program in
+//!      `crates/kob-protocol/tests` run on it too).
 //!
 //! Run: cargo test -p kob-tests --test program_kforgetoken1785 -- --nocapture
 

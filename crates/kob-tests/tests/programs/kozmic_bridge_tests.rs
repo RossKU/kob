@@ -1,14 +1,20 @@
-//! Kozmic on Kaspa mainnet (`contracts/third-party/kozmic/`): tokens of the published public-mint app's `KCC20` program whose
-//! genesis holds one `BridgeMint`, Kaspero Labs' ZK bridge minter, which KOB pins by its template hash as the `zk-bridge-minter`
-//! companion of `KCC20PublicMint` (`crates/kob-protocol/data/programs.json`). Fixture: `contracts/third-party/kozmic/observed.json`
-//! (kzUSDC `cc9957fe...`, the older kzUSDC instance `9753d77b...` and the Sepolia rehearsal Sepia.k `13af6019...`, all three on
-//! mainnet; a kzUSDC cell at the burn owner).
+//! Tests Kozmic on Kaspa mainnet (`contracts/third-party/kozmic/`): tokens of the published
+//! public-mint app's `KCC20` program whose genesis holds one `BridgeMint`, Kaspero Labs' ZK bridge
+//! minter, which KOB pins by its template hash as the `zk-bridge-minter` companion of
+//! `KCC20PublicMint` (`crates/kob-protocol/data/programs.json`). Fixture:
+//! `contracts/third-party/kozmic/observed.json` (kzUSDC `cc9957fe...`, the older kzUSDC instance
+//! `9753d77b...` and the Sepolia rehearsal Sepia.k `13af6019...`, all three on mainnet; a kzUSDC
+//! cell at the burn owner).
 //!
-//! * the pin is the observed `BridgeMint`'s cut, its context field names this program's `KCC20`, and its state names the bridge;
-//! * each genesis recomputes to its covenant id and verifies with the pin (the open check of the apps and the registry's check),
-//!   lists the minter as a mint authority without an allowance and with its bridge, and fails as contaminated without the pin;
-//! * the pin recognises the build, not the bridge: every instance verifies, whatever bridge it names (the apps say so);
-//! * a changed `BridgeMint`, one of another program, or one whose mints would carry another class than the token's is refused;
+//! * the pin is the observed `BridgeMint`'s cut, its context field names this program's `KCC20`,
+//!   and its state names the bridge;
+//! * each genesis recomputes to its covenant id and verifies with the pin (the open check of the
+//!   apps and the registry's check), lists the minter as a mint authority without an allowance and
+//!   with its bridge, and fails as contaminated without the pin;
+//! * the pin recognises the build, not the bridge: every instance verifies, whatever bridge it
+//!   names (the apps say so);
+//! * a changed `BridgeMint`, one of another program, or one whose mints would carry another class
+//!   than the token's is refused;
 //! * the cell at `Blake2b(6a)` is burned.
 
 use kaspa_consensus_core::hashing::covenant_id::covenant_id;
@@ -171,7 +177,7 @@ fn each_genesis_verifies_with_the_pin() {
 
 #[test]
 fn without_the_pin_each_genesis_is_contaminated() {
-    // the profile as it was before the pin (kUSDT's two pins only)
+    // the profile without the pin (kUSDT's two pins only)
     let mut before = profile().clone();
     before.genesis.companions.retain(|c| c.role != CompanionRole::ZkBridgeMinter);
     for key in KEYS {
