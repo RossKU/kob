@@ -7,27 +7,43 @@ export type SelectOption = DropdownOption;
 
 export interface FieldShellProps {
   label?: ComponentChildren;
-  /** at the right end of the label row (a balance, a shortcut); kept out of the `<label>` so it is not part of the control's name */
+  /**
+   * At the right end of the label row (a balance, a shortcut). It is kept out of the `<label>`, so
+   * it is not part of the control's name.
+   */
   labelAside?: ComponentChildren;
-  /** a "?" right after the label (kit/HelpTip.tsx): the field's explanation behind it, so the form shows only labels, boxes and errors */
+  /**
+   * A "?" right after the label (kit/HelpTip.tsx) with the field's explanation behind it, so the
+   * form shows only labels, boxes and errors.
+   */
   help?: ComponentChildren;
   hint?: ComponentChildren;
-  /** an error text puts the control into the invalid state (`aria-invalid`) and shows the message under it */
+  /**
+   * An error text puts the control into the invalid state (`aria-invalid`) and shows the message
+   * under it.
+   */
   error?: ComponentChildren | null;
-  /** id of the control (generated when missing) */
+  /** The id of the control. It is generated when missing. */
   id?: string;
   class?: string;
-  /** render prop: put `id`, `aria-describedby` and `aria-invalid` on the control; `labelId` is for a control that names itself by its label and more */
+  /**
+   * Render prop that puts `id`, `aria-describedby` and `aria-invalid` on the control. `labelId` is
+   * for a control that names itself by its label and more.
+   */
   children: (a: { id: string; labelId: string | undefined; describedBy: string | undefined; invalid: boolean }) => ComponentChildren;
 }
 
-/** Label + control + hint + error scaffolding for controls the kit does not render itself (checkboxes, custom pickers). */
 /**
- * A text in an element of its own, keyed by its content: a change renders a new element (a page translator such as Chrome's rewrites text nodes
- * in place, so a text node updated in place would keep the old translation). Anything but a string passes as it is.
+ * A text in an element of its own, keyed by its content. A change renders a new element, because
+ * a page translator such as Chrome's rewrites text nodes in place, so a text node updated in
+ * place would keep the old translation. Anything but a string passes as it is.
  */
 const keyed = (c: ComponentChildren): ComponentChildren => (typeof c === 'string' ? <span key={c}>{c}</span> : c);
 
+/**
+ * Label, control, hint and error scaffolding for controls the kit does not render itself
+ * (checkboxes, custom pickers).
+ */
 export function FieldShell(props: FieldShellProps) {
   const auto = useId();
   const id = props.id ?? `f${auto}`;
@@ -63,12 +79,15 @@ export interface FieldProps {
   help?: ComponentChildren;
   hint?: ComponentChildren;
   error?: ComponentChildren | null;
-  /** control kind (default `input`); `select` is the kit's Dropdown, which takes `value`, `onValue` and `disabled` */
+  /**
+   * The control kind (default `input`). `select` is the kit's Dropdown, which takes `value`,
+   * `onValue` and `disabled`.
+   */
   as?: 'input' | 'textarea' | 'select';
-  /** `select` only */
+  /** `select` only. */
   options?: SelectOption[];
   value?: string | number;
-  /** convenience: called with the new string value on `input`, and on a choice in a select */
+  /** Convenience: called with the new string value on `input`, and on a choice in a select. */
   onValue?: (value: string) => void;
   onInput?: (e: Event) => void;
   onChange?: (e: Event) => void;
@@ -90,15 +109,19 @@ export interface FieldProps {
   checked?: boolean;
   id?: string;
   class?: string;
-  /** forwarded to the CONTROL element (not the wrapper): `field-<intentFieldName>`, `order-price`, ... */
+  /**
+   * Forwarded to the CONTROL element, not the wrapper: `field-<intentFieldName>`, `order-price`,
+   * ...
+   */
   'data-testid'?: string;
-  /** trailing content next to the control (unit, "max" button) */
+  /** Trailing content next to the control (unit, "max" button). */
   suffix?: ComponentChildren;
 }
 
 /**
- * Label + input / textarea / select + hint + error. `data-testid` goes on the control itself so `page.getByTestId(...).fill(...)` works.
- * The value is controlled: pass `value` and `onValue` (string) or the raw `onInput`.
+ * Label, input / textarea / select, hint and error. `data-testid` goes on the control itself, so
+ * `page.getByTestId(...).fill(...)` works. The value is controlled: pass `value` and `onValue`
+ * (string) or the raw `onInput`.
  */
 export function Field(props: FieldProps) {
   const { label, labelAside, help, hint, error, as = 'input', options, onValue, onInput, onChange, suffix, class: cls, id, 'data-testid': testId, ...rest } = props;
@@ -191,7 +214,7 @@ export function Select(props: SelectProps) {
   return <Field {...props} as="select" />;
 }
 
-/** Checkbox with its label to the right; `data-testid` on the input. */
+/** A checkbox with its label to the right. `data-testid` goes on the input. */
 export function Checkbox(props: { checked: boolean; onChange: (checked: boolean) => void; label: ComponentChildren; hint?: ComponentChildren; disabled?: boolean; 'data-testid'?: string; id?: string }) {
   return (
     <FieldShell hint={props.hint} id={props.id}>

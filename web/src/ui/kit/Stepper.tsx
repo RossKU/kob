@@ -1,5 +1,6 @@
-// The signing stepper: how far a chain of signatures is (Create token: Prepare -> Create token; Merge all: Merge 1 of n ...), as numbered
-// circles joined by a line. A short run sits in a row, a long one in a column. It lives inside the flow's own card or dialog.
+// The signing stepper: how far a chain of signatures is (Create token: Prepare, then Create token;
+// Merge all: Merge 1 of n, and so on). It is numbered circles joined by a line. A short run sits in
+// a row and a long one in a column. It lives inside the flow's own card or dialog.
 import type { ComponentChildren, Ref } from 'preact';
 import { t } from '../../i18n';
 import { stepGlyph, stepperLayout, type StepperItem } from './stepper-model';
@@ -7,10 +8,10 @@ import './stepper.css';
 
 export interface StepperProps {
   steps: readonly StepperItem[];
-  /** the list's accessible name */
+  /** The list's accessible name. */
   label: string;
   layout?: 'row' | 'column';
-  /** more content under a step's label (a txid) */
+  /** More content under a step's label (a txid). */
   extra?: (index: number) => ComponentChildren;
   listRef?: Ref<HTMLOListElement>;
   'data-testid'?: string;
