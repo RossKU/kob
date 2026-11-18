@@ -1,23 +1,33 @@
-// Order-ticket form state <-> Intent mapping (pure: no DOM, no network; runs in node tests).
+// Order-ticket form state <-> Intent mapping. Pure: no DOM, no network, runs in node tests.
 //
-// The ticket keeps EVERY input as text (`values`, keyed by the intent path of the field: `price`, `stop`, `trail.step`, `exit.takeProfit` ...)
-// so what the user typed is never rewritten under their fingers; `buildIntent` parses the text into the bigint intents of
-// kob/intent-simple.ts and kob/intent-cond.ts and reports per-field problems. `formFromIntent` is the inverse (prefill, cancel-replace, tests).
+// The ticket keeps every input as text (`values`, keyed by the intent path of the field, such as
+// `price`, `stop`, `trail.step` or `exit.takeProfit`). What the user typed is never rewritten under
+// their fingers. `buildIntent` parses the text into the bigint intents of kob/intent-simple.ts and
+// kob/intent-cond.ts and reports per-field problems. `formFromIntent` is the inverse, used for
+// prefill, cancel-replace and tests.
 //
-// Units the user types (all converted here, nowhere else):
-//   * amounts (`amount`, `minFill`, `sliceAmount`, `exit.minFill`): TOKEN units with the token's decimals, converted exactly to base units (more
-//     decimals than the token has is an error, never a rounding);
-//   * prices and price distances: the QUOTE per whole token, converted to the state price (quote base units per whole token of `scale` base
-//     units: the identity for the wallet's scale 10^decimals) and rounded onto the tick in the direction that never makes the maker's limit worse
-//     (a sell rounds up, a buy rounds down). The quote is KAS (8 decimals, sompi) on a token's KAS market and token B (its decimals, base units
-//     of B) on a token/token pair A/B (`TicketCtx.quoteDecimals`): the pair ticket offers exactly the order types of the KAS ticket;
-//   * tips: ALWAYS KAS per whole token (sompi per whole token, also on a pair: tips, keeper tips and carriers are KAS), rounded to nearest (a tip
-//     is not a limit);
-//   * slippage / tolerance: percent (two decimals) -> basis points; durations: seconds or minutes -> `Duration` / DAA;
-//   * trigger threshold (`touch` fields): `min` (the order's minimum fill, the default), a preset percent of the order's own amount (`25%`,
-//     `50%`, `100%`, rounded up to whole base units) or a custom token amount.
-// Protocol rules (tick, 90-day limits, stop above take-profit ...) are the PLANNER's job (kob/plan.ts): this layer only refuses text that
-// cannot become a number and leaves everything optional undefined so the planner applies the wallet defaults of matcher.md section 10.
+// Units the user types. All are converted here and nowhere else.
+// - Amounts (`amount`, `minFill`, `sliceAmount`, `exit.minFill`) are token units with the token's
+//   decimals, converted exactly to base units. More decimals than the token has is an error, never
+//   a rounding.
+// - Prices and price distances are the quote per whole token. They convert to the state price
+//   (quote base units per whole token of `scale` base units, the identity for the wallet's scale
+//   10^decimals) and round onto the tick in the direction that never makes the maker's limit
+//   worse: a sell rounds up and a buy rounds down.
+// - The quote is KAS (8 decimals, sompi) on a token's KAS market. It is token B (its decimals, base
+//   units of B) on a token/token pair A/B (`TicketCtx.quoteDecimals`). The pair ticket offers
+//   exactly the order types of the KAS ticket.
+// - Tips are always KAS per whole token, also on a pair, because tips, keeper tips and carriers are
+//   KAS. They are in sompi per whole token and round to nearest, since a tip is not a limit.
+// - Slippage and tolerance are percent (two decimals), converted to basis points. Durations are
+//   seconds or minutes, converted to `Duration` or DAA.
+// - A trigger threshold (`touch` fields) is `min` (the order's minimum fill, the default), a preset
+//   percent of the order's own amount (`25%`, `50%`, `100%`, rounded up to whole base units) or a
+//   custom token amount.
+//
+// Protocol rules (tick, 90-day limits, stop above take-profit) are the planner's job (kob/plan.ts).
+// This layer only refuses text that cannot become a number. It leaves everything optional
+// undefined so the planner applies the wallet defaults of matcher.md section 10.
 import type { Intent } from '../../kob/plan';
 import type { CondExpiry, EntrySpec, ExitSpec, TrailSpec } from '../../kob/intent-cond';
 import type { Lifetime } from '../../kob/intent-simple';
@@ -29,22 +39,24 @@ import {
   UnitsError, fitsI64, formatPricePerToken, formatUnits, parseKas, parseUnits, pow10, roundToTick, safeRounding, tokenPriceToStatePrice, type Rounding,
 } from '../../kob/units';
 
-/** most levels of a repeat ladder (one transaction and one signature each) */
+/** Most levels of a repeat ladder. Each level costs one transaction and one signature. */
 export const MAX_LADDER_LEVELS = 20n;
-/** a limit ladder places 2 to 20 limit orders */
+/** A limit ladder places 2 to 20 limit orders. */
 export const MIN_LIMIT_LADDER_LEVELS = 2n;
 export const MAX_LIMIT_LADDER_LEVELS = 20n;
 
 /**
- * Trigger-threshold presets of the ticket (matcher.md 10.6): `min` = the order's minimum fill (the wallet default), or a percent of the order's
- * own amount. Any other text is a custom token amount.
+ * Trigger-threshold presets of the ticket (matcher.md 10.6). `min` is the order's minimum fill, the
+ * wallet default. The others are a percent of the order's own amount. Any other text is a custom
+ * token amount.
  */
 export const TOUCH_PRESETS = ['min', '25%', '50%', '100%'] as const;
 export const TOUCH_MIN = 'min';
 
 /**
- * Threshold in base units of a `touch` field text: `min` (null: the wallet default, the order's minimum fill), `N%` of `orderAmount` rounded up
- * (at least one base unit), or a token amount with `decimals`.
+ * Threshold in base units of a `touch` field text. `min` gives null, meaning the wallet default,
+ * the order's minimum fill. `N%` is that percent of `orderAmount`, rounded up to at least one base
+ * unit. Any other text is a token amount with `decimals`.
  */
 export function parseTouch(text: string, orderAmount: bigint | undefined, decimals: number): Parsed<bigint | null> {
   const s = text.trim();
@@ -56,13 +68,13 @@ export function parseTouch(text: string, orderAmount: bigint | undefined, decima
   }
   const pct = BigInt(m[1]!);
   if (pct < 1n || pct > 100n) return bad('range');
-  // no order size yet (the amount field has its own error): nothing to resolve against
+  // No order size yet. The amount field reports its own error, so there is nothing to resolve.
   if (orderAmount === undefined || orderAmount <= 0n) return bad('required');
   const amount = (orderAmount * pct + 99n) / 100n;
   return good(amount < 1n ? 1n : amount);
 }
 
-// ------------------------------------------------------------------------------------------------ vocabulary
+// ------------------------------------------------------------------------------- vocabulary
 
 export const ORDER_TYPES = [
   'limit', 'market', 'ioc', 'fok', 'streaming', 'close',
@@ -82,7 +94,7 @@ export const TYPE_GROUPS: readonly { group: TypeGroup; types: readonly OrderType
 
 export type Side = 'buy' | 'sell';
 
-/** Sides an order type can be placed on (close and TWAP only sell, DCA only buys: intent-simple.ts). */
+/** Sides an order type can be placed on. Close and TWAP only sell and DCA only buys. */
 export function sidesOf(type: OrderTypeId): readonly Side[] {
   return type === 'close' || type === 'twap' ? ['sell'] : type === 'dca' ? ['buy'] : ['buy', 'sell'];
 }
@@ -90,14 +102,14 @@ export function sidesOf(type: OrderTypeId): readonly Side[] {
 export const isIfdType = (t: OrderTypeId): boolean => t === 'ifd' || t === 'ifo' || t === 'repeatIfd' || t === 'repeatIfo';
 export const isCondType = (t: OrderTypeId): boolean => ['stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'].includes(t) || isIfdType(t);
 
-/** `amount`: a token amount typed in whole-token units with the token's decimals (stored as base units) */
+/** `amount` is a token amount typed in whole-token units, stored as base units. */
 export type FieldKind = 'amount' | 'int' | 'price' | 'delta' | 'tip' | 'kas' | 'percent' | 'seconds' | 'minutes' | 'datetime' | 'select' | 'bool' | 'touch';
 
 export interface FieldSpec {
   /** intent path of the field, key of `values` */
   id: string;
   kind: FieldKind;
-  /** the `data-testid` of the input (UI-COMMON: order-amount / order-price / order-tip, else field-<intent path>) */
+  /** The `data-testid` of the input: order-amount, order-price, order-tip, else field-<path>. */
   testid: string;
   options?: readonly string[];
 }
@@ -126,16 +138,18 @@ export const FIELDS: Readonly<Record<string, FieldSpec>> = Object.fromEntries(
     F('exit.minFill', 'amount'), F('exit.lifetime', 'select', ['gtc', 'gtd']), F('exit.lifetimeAt', 'datetime'),
     F('ladder.levels', 'int'), F('ladder.step', 'delta'), F('ladder.on', 'bool'), F('ladder.pct', 'percent'), F('ladder.end', 'price'),
     F('prefund', 'delta'), F('repeat.count', 'int'),
-    // where a buy's tokens go (orders/delivery.ts): Collected (the default), Each fill, Top-up with its tip per fill in KAS
+    // Where a buy's tokens go (orders/delivery.ts). The choices are Each fill, Collected and
+    // Top-up with its tip per fill in KAS.
     F('delivery', 'select', DELIVERY_CHOICES), F('topupTip', 'kas'),
   ].map((f) => [f.id, f]),
 );
 
-/** Wallet defaults of matcher.md section 10 / defaults.rs, shown as the prefilled value (an empty box always means "the default"). */
+/** Wallet defaults of matcher.md section 10 and defaults.rs, shown as the prefilled value. */
 export const FIELD_DEFAULTS: Readonly<Record<string, string>> = {
   lifetime: 'gtc',
-  // a crossing limit fills from the book from the wallet (kob/take.ts); a pair order has no such fill (its auction). An IOC, FOK or market
-  // order's `direct` default depends on its type: `fieldDefault`
+  // A crossing limit fills from the book from the wallet (kob/take.ts). A pair order has no such
+  // fill and uses its auction. The `direct` default of an IOC, FOK or market order depends on its
+  // type, see `fieldDefault`.
   crossing: 'take',
   life: '30',
   slippageBps: '3',
@@ -144,8 +158,8 @@ export const FIELD_DEFAULTS: Readonly<Record<string, string>> = {
   slipBps: '3',
   bandDaa: '30',
   'entry.bandDaa': '30',
-  // trigger (touch rule, matcher.md §4, §10.6): threshold = the order's minimum fill (founder 2026-10-03; presets 25% / 50% / 100% of the order,
-  // or a custom amount), R = 5 s
+  // Trigger (touch rule, matcher.md section 4 and 10.6). The threshold is the order's minimum fill,
+  // with presets of 25%, 50% and 100% of the order or a custom amount. R is 5 s.
   minTouch: TOUCH_MIN,
   minRestDaa: '5',
   'entry.minTouch': TOUCH_MIN,
@@ -162,61 +176,82 @@ export const FIELD_DEFAULTS: Readonly<Record<string, string>> = {
   stepDaa: '1',
 };
 
-// ------------------------------------------------------------------------------------------------ state
+// --------------------------------------------------------------------------------------- state
 
 export interface TicketForm {
   type: OrderTypeId;
   side: Side;
-  /** text of every field, by intent path; absent = empty */
+  /** Text of every field, by intent path. Absent means empty. */
   values: Record<string, string>;
   /**
-   * The amount boxes count KAS (a token's KAS market shown inverted, KAS/TOKEN: the shown pair's base is KAS). Every amount field (`amount`,
-   * `minFill`, `sliceAmount`, `exit.minFill`, a custom trigger threshold) is then typed in KAS and converted to the token's base units at the
-   * price of its own leg (`amountPriceOf`); prices and side stay native in the form. Absent / false = token units (the native convention).
+   * The amount boxes count KAS. That is a token's KAS market shown inverted as KAS/TOKEN, where the
+   * shown pair's base is KAS. Every amount field (`amount`, `minFill`, `sliceAmount`,
+   * `exit.minFill`, a custom trigger threshold) is then typed in KAS and converted to the token's
+   * base units at the price of its own leg (`amountPriceOf`). Prices and side stay native in the
+   * form. Absent or false means token units, the native convention.
    */
   kas?: boolean;
 }
 
 export interface TicketCtx {
-  /** the (base) token's decimals, order scale (base units per whole token, `10^decimals` capped at 10^9) and tick (quote units per whole token; 1) */
+  /**
+   * The (base) token's decimals, order scale and tick. The scale is base units per whole token,
+   * `10^decimals` capped at 10^9. The tick is in quote units per whole token, and is 1.
+   */
   decimals: number;
   scale: bigint;
   tick: bigint;
   /**
-   * decimals of the quote the prices are typed in: 8 (KAS, the default) or a pair's quote token B (prices in B base units per whole A). Set only on
-   * a token/token pair ticket: its presence makes the ticket a pair ticket (`isPairCtx`).
+   * Decimals of the quote the prices are typed in. It is 8 for KAS (the default) or a pair's quote
+   * token B (prices in B base units per whole A). Set only on a token/token pair ticket, where its
+   * presence makes the ticket a pair ticket (`isPairCtx`).
    */
   quoteDecimals?: number;
-  /** minutes WEST of UTC as `Date.getTimezoneOffset()` (0 = UTC): `datetime-local` text is wall-clock time of the browser */
+  /** Minutes west of UTC as `Date.getTimezoneOffset()`, 0 for UTC. Text is wall clock. */
   tzOffsetMin?: number;
-  /** measured DAA rate in milli-DAA per second (default 10 000 = 10 DAA/s) */
+  /** Measured DAA rate in milli-DAA per second. The default is 10 000, which is 10 DAA/s. */
   rateMilli?: number;
   /**
-   * the book's best prices (state prices, sompi per `scale` base units): the price a KAS amount of an order WITHOUT its own price (market,
-   * close) is converted at (`kas` forms only). `buy` = the best ask (what a buy meets), `sell` = the best bid.
+   * The book's best prices (state prices, sompi per `scale` base units). A KAS amount of an order
+   * without its own price (market, close) is converted at this price, in `kas` forms only. `buy`
+   * is the best ask, which is what a buy meets. `sell` is the best bid.
    */
   ref?: { buy?: bigint | null; sell?: bigint | null };
-  /** the family of the token's program: a KRON token's buys deliver at each fill, so its ticket has no Delivery choice. Absent: KCC-20. */
+  /**
+   * The family of the token's program. A KRON token's buys deliver at each fill, so its ticket has
+   * no Delivery choice. Absent means KCC-20.
+   */
   family?: 'kcc20' | 'kron';
-  /** a token pair: the family of the quote token B, which a pair sell receives (a KRON B: each fill). Absent: KCC-20. */
+  /**
+   * A token pair: the family of the quote token B, which a pair sell receives. A KRON B delivers at
+   * each fill. Absent means KCC-20.
+   */
   quoteFamily?: 'kcc20' | 'kron';
   /**
-   * The wallet's delivery settings (orders/delivery.ts): the default of Settings (absent: Collected) and, for Top-up, the receive threshold this
-   * wallet stored for the token (absent: the planner sets it from the price at the first top-up order).
+   * The wallet's delivery settings (orders/delivery.ts). `walletDefault` is the default of
+   * Settings, absent meaning Each fill. `threshold` is the receive threshold this wallet stored for
+   * the token, for Top-up. When it is absent the planner sets it from the price at the first top-up
+   * order.
    */
   delivery?: { walletDefault?: DeliveryChoice; threshold?: bigint };
 }
 
-/** The order types whose buys rest and deliver (KobBid, KobCondBid) and so choose their delivery; the sell side of an if-done buys back. */
+/**
+ * The order types whose buys rest and deliver (KobBid, KobCondBid) and so choose their delivery.
+ * The sell side of an if-done buys back.
+ */
 const DELIVERY_BUY_TYPES: readonly OrderTypeId[] = ['limit', 'dca', 'dutch', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'];
 
-/** The order types of a token pair whose SELLS rest and deliver token B (KobPair, KobCondPair asks). */
+/** The order types of a token pair whose sells rest and deliver token B (the pair asks). */
 const DELIVERY_PAIR_SELL_TYPES: readonly OrderTypeId[] = ['limit', 'twap', 'dutch', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'];
 
 /**
- * Whether the form's order chooses its delivery (bid-delivery-spec §10): a resting buy of a KCC-20 token (on a token pair too: a pair bid buys
- * A), a resting sell of a token pair whose B is KCC-20 (it receives B), and the buy-back exits of a sell-first IFD / IFO of a KAS market.
- * IOC, FOK, market orders, KRON tokens, repeating entries and the exits of pair if-done orders deliver at each fill, so they have no choice.
+ * Whether the form's order chooses its delivery (bid-delivery-spec section 10). These choose:
+ * - a resting buy of a KCC-20 token, also on a token pair, where a pair bid buys A;
+ * - a resting sell of a token pair whose B is KCC-20, which receives B;
+ * - the buy-back exits of a sell-first IFD or IFO of a KAS market.
+ * IOC, FOK, market orders, KRON tokens, repeating entries and the exits of pair if-done orders
+ * deliver at each fill, so they have no choice.
  */
 export function hasDeliveryChoice(form: Pick<TicketForm, 'type' | 'side'>, ctx?: Pick<TicketCtx, 'quoteDecimals' | 'family' | 'quoteFamily'>): boolean {
   if (isPairCtx(ctx) && form.side === 'sell') return ctx?.quoteFamily !== 'kron' && DELIVERY_PAIR_SELL_TYPES.includes(form.type);
@@ -225,12 +260,16 @@ export function hasDeliveryChoice(form: Pick<TicketForm, 'type' | 'side'>, ctx?:
   return form.side === 'buy' && DELIVERY_BUY_TYPES.includes(form.type);
 }
 
-/** The choices the ticket offers: a token pair has no "Added to one UTXO" (the spec defines no threshold price for a pair order). */
+/**
+ * The choices the ticket offers. A token pair has no "Added to one UTXO", because the spec defines
+ * no threshold price for a pair order.
+ */
 export const deliveryChoicesOf = (ctx?: Pick<TicketCtx, 'quoteDecimals'>): readonly DeliveryChoice[] => (isPairCtx(ctx) ? DELIVERY_CHOICES.filter((c) => c !== 'topup') : DELIVERY_CHOICES);
 
 /**
- * The delivery the form's order gets: the choice under Advanced, else the wallet default, else Each fill (a choice the ticket does not offer,
- * Added to one UTXO on a pair: Each fill); null when it has no choice.
+ * The delivery the form's order gets. It is the choice under Advanced, else the wallet default,
+ * else Each fill. A choice the ticket does not offer (Added to one UTXO on a pair) becomes Each
+ * fill. It is null when the order has no choice.
  */
 export function deliveryOf(form: Pick<TicketForm, 'type' | 'side' | 'values'>, ctx?: Pick<TicketCtx, 'quoteDecimals' | 'family' | 'quoteFamily' | 'delivery'>): DeliveryChoice | null {
   if (!hasDeliveryChoice(form, ctx)) return null;
@@ -239,20 +278,27 @@ export function deliveryOf(form: Pick<TicketForm, 'type' | 'side' | 'values'>, c
   return deliveryChoicesOf(ctx).includes(c) ? c : 'each';
 }
 
-/** A token/token pair ticket (the quote is a token B): a pair sell delivers B per fill, so it budgets its fills (`maxFills`) like a buy. */
+/**
+ * A token/token pair ticket, where the quote is a token B. A pair sell delivers B per fill, so it
+ * budgets its fills (`maxFills`) like a buy.
+ */
 export const isPairCtx = (ctx: Pick<TicketCtx, 'quoteDecimals'> | undefined): boolean => ctx?.quoteDecimals !== undefined;
 
-/** Whether an order of `side` budgets its delivery carriers (`maxFills`): a buy on any market, a sell on a pair (it receives token B). */
+/** Whether an order of `side` budgets its delivery carriers (`maxFills`): a buy or a pair sell. */
 const budgetsFills = (side: Side, ctx: Pick<TicketCtx, 'quoteDecimals'> | undefined): boolean => side === 'buy' || isPairCtx(ctx);
 
 /**
- * Whether a market order has the Fills box (`maxFills`, default 1 = one IOC transaction; more = a short-lived multi-fill auction, orders/simple.ts
- * `planAuction`): both sides of a KAS market, not with "all or nothing" (a FOK is one transaction) and not on a token pair (its market orders
- * stay one transaction for now).
+ * Whether a market order has the Fills box (`maxFills`). Its default of 1 is one IOC transaction,
+ * and more is a short-lived multi-fill auction (orders/simple.ts `planAuction`). Both sides of a
+ * KAS market have it. It is absent with "all or nothing", because a FOK is one transaction, and on
+ * a token pair, whose market orders stay one transaction.
  */
 const marketFills = (form: Pick<TicketForm, 'values'>, ctx: Pick<TicketCtx, 'quoteDecimals'> | undefined): boolean => !isPairCtx(ctx) && form.values.allOrNothing !== 'true';
 
-/** The default of a field for an order type: an IOC or market order goes to the executors, a FOK fills from the book (founder, 2026-11-17). */
+/**
+ * The default of a field for an order type. An IOC or market order goes to the executors and a FOK
+ * fills from the book.
+ */
 export function fieldDefault(id: string, type: OrderTypeId): string | undefined {
   if (id === 'direct') return type === 'fok' ? 'take' : 'order';
   return FIELD_DEFAULTS[id];
@@ -269,9 +315,11 @@ export function initialForm(type: OrderTypeId = 'limit', side: Side = 'sell', ka
 }
 
 /**
- * The fields a type or side change keeps: the amount (with an exact base amount kept for its box) and the order's own price when the new form
- * has one. Everything else (stops, exits, tip, lifetime, ladder, advanced options) starts again from the new form's defaults: a value typed for
- * one type or side (a buy's entry stop, an exit price, a tip) means something else, or nothing, on another and would be carried out of sight.
+ * The fields a type or side change keeps are the amount (with an exact base amount kept for its
+ * box) and the order's own price, when the new form has one. Everything else starts again from the
+ * new form's defaults. That covers stops, exits, tip, lifetime, ladder and advanced options. A
+ * value typed for one type or side means something else, or nothing, on another and would be
+ * carried out of sight.
  */
 const CARRIED = ['amount', 'price'];
 
@@ -289,52 +337,60 @@ function carryShared(from: TicketForm, next: TicketForm): TicketForm {
   return { ...next, values };
 }
 
-/** Switching the type keeps the amount and the price (when the new type has one), starts every other field from its default, fixes an impossible side. */
+/**
+ * Switching the type keeps the amount and the price when the new type has one. Every other field
+ * starts from its default, and an impossible side is fixed.
+ */
 export function switchType(form: TicketForm, type: OrderTypeId): TicketForm {
   if (type === form.type) return form;
   const side = sidesOf(type).includes(form.side) ? form.side : sidesOf(type)[0]!;
   return carryShared(form, initialForm(type, side, !!form.kas));
 }
 
-/** Switching the side keeps the amount and the price, and starts every other field from its default (see `CARRIED`). */
+/** Switching the side keeps the amount and the price. Every other field starts from its default. */
 export function setSide(form: TicketForm, side: Side): TicketForm {
   if (side === form.side || !sidesOf(form.type).includes(side)) return form;
   return carryShared(form, initialForm(form.type, side, !!form.kas));
 }
 
-/** What the user typed into a box. An exact base amount kept for that box (`setAmountBase`) is dropped: the typed text is the amount now. */
+/**
+ * What the user typed into a box. An exact base amount kept for that box (`setAmountBase`) is
+ * dropped, because the typed text is the amount now.
+ */
 export function setValue(form: TicketForm, id: string, value: string): TicketForm {
   const values = { ...form.values, [id]: value };
   delete values[id + BASE_SUFFIX];
   return { ...form, values };
 }
 
-// ------------------------------------------------------------------------------------------------ layout
+// ----------------------------------------------------------------------------------- layout
 
 export interface Layout {
-  /** always shown */
+  /** Always shown. */
   main: string[];
-  /** behind the "advanced" disclosure */
+  /** Behind the "advanced" disclosure. */
   advanced: string[];
 }
 
 const LIFE = ['lifetime', 'lifetimeAt'];
-/** the fields of a limit ladder (shown while the Ladder switch is on) */
+/** The fields of a limit ladder, shown while the Ladder switch is on. */
 export const LIMIT_LADDER = ['ladder.levels', 'ladder.pct', 'ladder.end'];
 const STOP_KNOBS = ['minTouch', 'minRestDaa', 'bandDaa', 'keeperTip'];
-/** trigger knobs of a stop entry / an exit stop (touch rule): shown for every trigger kind */
+/** Trigger knobs of a stop entry or an exit stop (touch rule), shown for every trigger kind. */
 const ENTRY_TRIGGER = ['entry.minTouch', 'entry.minRestDaa'];
 const EXIT_TRIGGER = ['exit.minTouch', 'exit.minRestDaa'];
 
 /**
- * Which fields the form shows for its type, side and current selections (conditional fields appear when their switch is on). `ctx` tells a pair
- * ticket (`isPairCtx`): its sells budget their fills too.
+ * Which fields the form shows for its type, side and current selections. Conditional fields appear
+ * when their switch is on. `ctx` tells a pair ticket (`isPairCtx`), whose sells budget their fills
+ * too.
  */
 export function layoutOf(form: TicketForm, ctx?: Pick<TicketCtx, 'quoteDecimals' | 'family' | 'quoteFamily' | 'delivery'>): Layout {
   const out = layoutOfType(form, ctx);
   const delivery = deliveryOf(form, ctx);
   if (delivery === null) return out;
-  // Delivery is the row after the priority tip; Top-up adds its tip. A Collected order is funded with one carrier, so it has no Fills box.
+  // Delivery is the row after the priority tip, and Top-up adds its tip. A Collected order is
+  // funded with one carrier, so it has no Fills box.
   const adv = out.advanced.filter((id) => !(delivery === 'collected' && id === 'maxFills'));
   const at = adv.indexOf('tip') + 1;
   adv.splice(at, 0, 'delivery', ...(delivery === 'topup' ? ['topupTip'] : []));
@@ -346,13 +402,15 @@ function layoutOfType(form: TicketForm, ctx?: Pick<TicketCtx, 'quoteDecimals'>):
   const buy = form.side === 'buy';
   const life = (): string[] => (v.lifetime === 'gtd' ? LIFE : ['lifetime']);
   const fills = budgetsFills(form.side, ctx) ? ['maxFills'] : [];
-  /** how long the exits of an if-done order live (GTC = 90 days idle from each exit's creation, or until a date) */
+  /** How long the exits of an if-done order live. GTC is 90 days idle from each exit's creation. */
   const exitLife = (): string[] => (v['exit.lifetime'] === 'gtd' ? ['exit.lifetime', 'exit.lifetimeAt'] : ['exit.lifetime']);
-  /** ladder: the step is asked once there is more than one level */
+  /** The step of a ladder is asked once there is more than one level. */
   const ladder = (): string[] => (Number((v['ladder.levels'] ?? '').trim()) > 1 ? ['ladder.levels', 'ladder.step'] : ['ladder.levels']);
-  // the priority tip is the first advanced option of every type (its default is fine for most orders)
-  // the minimum fill is an advanced option of every type (its default is shown in the disclosure; IOC / FOK / market orders: 1 base unit)
-  // a KAS market: the tip can be the executors' (kob/fill-tip.ts), and an immediate order fills from the book directly (kob/take.ts)
+  // The priority tip is the first advanced option of every type, and its default is fine for most
+  // orders. The minimum fill is an advanced option of every type. Its default is shown in the
+  // disclosure, and is 1 base unit for IOC, FOK and market orders.
+  // On a KAS market the tip can be the executors' (kob/fill-tip.ts), and an immediate order fills
+  // from the book directly (kob/take.ts).
   const kas = !isPairCtx(ctx);
   const tip = kas ? ['tip', 'tipAuto'] : ['tip'];
   const direct = kas ? ['direct'] : [];
@@ -400,15 +458,15 @@ function layoutOfType(form: TicketForm, ctx?: Pick<TicketCtx, 'quoteDecimals'>):
   }
 }
 
-/** Every field id an order type can show (any selection): to drop stale values when the type changes. */
+/** Every field id an order type can show, for any selection. Used to drop stale values. */
 export const specsOf = (ids: readonly string[]): FieldSpec[] => ids.map((i) => FIELDS[i]!).filter(Boolean);
 
-// ------------------------------------------------------------------------------------------------ parsing
+// ------------------------------------------------------------------------------------- parsing
 
 export type FieldErrorCode = 'required' | 'format' | 'precision' | 'positive' | 'range' | 'negative' | 'noRef';
 export interface FieldError { field: string; code: FieldErrorCode; params?: Record<string, string | number> }
 export interface BuildResult {
-  /** the intent for `planOrder`, null while any field is missing or malformed */
+  /** The intent for `planOrder`, null while any field is missing or malformed. */
   intent: Intent | null;
   errors: FieldError[];
 }
@@ -451,27 +509,31 @@ function parseScaled(text: string, scale: number): Parsed<bigint> {
   }
 }
 
-/** A token amount typed in whole-token units (at most `decimals` decimals) -> base units, exactly. */
+/** A token amount typed in whole-token units (at most `decimals` decimals) -> exact base units. */
 export const parseAmount = (text: string, decimals: number): Parsed<bigint> => parseScaled(text, decimals);
 
 /** Base units -> the token amount text the amount fields take (exact, trailing zeros trimmed). */
 export const formatAmount = (base: bigint, decimals: number): string => formatUnits(base, decimals);
 
 export interface PriceParse {
-  /** the state price (sompi per whole token of `scale` base units) after the tick rounding */
+  /** The state price (sompi per whole token of `scale` base units) after the tick rounding. */
   price: bigint;
-  /** the typed price is not on the tick / not a whole number of sompi per `scale` base units: `price` is the rounded one */
+  /**
+   * The typed price is not on the tick, or not a whole number of sompi per `scale` base units.
+   * `price` is then the rounded one.
+   */
   rounded: boolean;
 }
 
-/** What a price-like field is denominated in: the market's quote (KAS, or a pair's token B) or KAS (tips, always). */
+/** What a price-like field is denominated in: the market's quote or KAS (tips). */
 export type PriceUnit = 'quote' | 'kas';
 /** Decimals of the typed number of a price-like field. */
 export const unitDecimals = (ctx: Pick<TicketCtx, 'quoteDecimals'>, unit: PriceUnit = 'quote'): number => (unit === 'kas' ? 8 : ctx.quoteDecimals ?? 8);
 
 /**
- * Quote per token (text: KAS, or a pair's token B per whole A) -> the state price on the tick. `mode` 'safe' rounds in the direction that never
- * makes a limit worse for `side` (sell up, buy down); 'nearest' is for tips and distances. `unit` 'kas' reads KAS whatever the quote (tips).
+ * Quote per token (text: KAS, or a pair's token B per whole A) -> the state price on the tick.
+ * `mode` 'safe' rounds in the direction that never makes a limit worse for `side` (sell up, buy
+ * down). 'nearest' is for tips and distances. `unit` 'kas' reads KAS whatever the quote (tips).
  * Never returns a price that overflows the 64-bit state fields.
  */
 export function parsePrice(
@@ -485,12 +547,14 @@ export function parsePrice(
     return bad(unitsCode(e), { decimals: qd });
   }
   const rounding: Rounding = mode === 'safe' ? safeRounding(side) : 'nearest';
-  // sompi per `scale` base units: the identity when scale = 10^decimals (the wallet's scale); a token of more than 9 decimals quotes per 10^9
+  // Sompi per `scale` base units. This is the identity when scale = 10^decimals (the wallet's
+  // scale). A token of more than 9 decimals quotes per 10^9.
   const exact = perToken * ctx.scale;
   const whole = pow10(ctx.decimals);
   const floor = exact / whole;
   const price = tokenPriceToStatePrice(perToken, ctx.decimals, ctx.scale, rounding);
-  // limits and trail steps live on the tick; tips and gaps are plain quote units (the planner does not tick-check them); a tip is never on a tick
+  // Limits and trail steps live on the tick. Tips and gaps are plain quote units that the planner
+  // does not tick-check, and a tip is never on a tick.
   const tick = unit === 'kas' ? 1n : ctx.tick;
   const onTick = mode === 'exact' ? price : roundToTick(price, tick, rounding);
   const rounded = exact % whole !== 0n || (mode !== 'exact' && tick > 0n && floor % tick !== 0n) || (mode !== 'exact' && onTick !== floor);
@@ -499,11 +563,15 @@ export function parsePrice(
   return good({ price: onTick, rounded });
 }
 
-/** A state price (quote units per whole token of `scale` base units) -> quote per token text (exact, trailing zeros trimmed; KAS or token B). */
+/**
+ * A state price (quote units per whole token of `scale` base units) -> quote per token text, exact
+ * with trailing zeros trimmed (KAS or token B).
+ */
 export const formatPrice = (price: bigint, ctx: Pick<TicketCtx, 'decimals' | 'scale' | 'quoteDecimals'>, unit: PriceUnit = 'quote'): string => {
   const qd = unitDecimals(ctx, unit);
   if (qd === 8) return formatPricePerToken(price, ctx.decimals, ctx.scale);
-  // quote per whole token = price * 10^decimals / scale / 10^qd, shown with up to qd (at least 8) fraction digits, rounded half up like the KAS form
+  // Quote per whole token = price * 10^decimals / scale / 10^qd. It is shown with up to qd (at
+  // least 8) fraction digits, rounded half up like the KAS form.
   const digits = Math.max(qd, 8);
   const num = price * pow10(ctx.decimals) * pow10(digits);
   const den = ctx.scale * pow10(qd);
@@ -513,7 +581,10 @@ export const formatPrice = (price: bigint, ctx: Pick<TicketCtx, 'decimals' | 'sc
 /** Basis points -> the percent text of the percent fields. */
 export const formatPercent = (bps: bigint): string => formatUnits(bps, 2);
 
-/** `datetime-local` text (`2026-10-01T09:30`, wall clock of the browser) -> UTC unix seconds. `tzOffsetMin` = `Date.getTimezoneOffset()`. */
+/**
+ * `datetime-local` text (`YYYY-MM-DDThh:mm`, the browser's wall clock) -> UTC unix seconds.
+ * `tzOffsetMin` is `Date.getTimezoneOffset()`.
+ */
 export function parseLocalDateTime(text: string, tzOffsetMin = 0): Parsed<bigint> {
   const s = text.trim();
   if (s === '') return bad('required');
@@ -522,7 +593,7 @@ export function parseLocalDateTime(text: string, tzOffsetMin = 0): Parsed<bigint
   const [y, mo, d, h, mi, se] = [m[1]!, m[2]!, m[3]!, m[4]!, m[5]!, m[6] ?? '0'].map(Number) as [number, number, number, number, number, number];
   const ms = Date.UTC(y, mo - 1, d, h, mi, se);
   const back = new Date(ms);
-  // Date.UTC normalises 31 February to March: refuse impossible dates
+  // Date.UTC normalises 31 February to March, so impossible dates are refused.
   if (back.getUTCFullYear() !== y || back.getUTCMonth() !== mo - 1 || back.getUTCDate() !== d || h > 23 || mi > 59) return bad('format');
   return good(BigInt(Math.floor(ms / 1000)) + BigInt(tzOffsetMin) * 60n);
 }
@@ -534,7 +605,7 @@ export function formatLocalDateTime(unixSeconds: bigint, tzOffsetMin = 0): strin
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
-// ------------------------------------------------------------------------------------------------ intent builder
+// ------------------------------------------------------------------------------ intent builder
 
 class Reader {
   readonly errors: FieldError[] = [];
@@ -556,7 +627,7 @@ class Reader {
     if (!this.has(id) && !required) return undefined;
     return this.take(id, parseWhole(this.raw(id)), required);
   }
-  /** whole number >= 1 */
+  /** A whole number >= 1. */
   positive(id: string, required = true): bigint | undefined {
     const n = this.whole(id, required);
     if (n === 0n) {
@@ -565,7 +636,10 @@ class Reader {
     }
     return n;
   }
-  /** a token amount (whole-token units with the token's decimals; KAS converted at its leg's price in a `kas` form) in base units, at least one base unit */
+  /**
+   * A token amount in base units, at least one base unit. It is typed in whole-token units with
+   * the token's decimals. In a `kas` form it is KAS converted at its leg's price.
+   */
   amount(id: string, required = true): bigint | undefined {
     if (!this.has(id) && this.form.values[id + BASE_SUFFIX] === undefined && !required) return undefined;
     const n = this.take(id, amountBaseOf(this.form, this.ctx, id), required);
@@ -579,12 +653,16 @@ class Reader {
     if (!this.has(id) && !required) return undefined;
     return this.take(id, parsePrice(this.raw(id), side, this.ctx), required)?.price;
   }
-  /** a price distance (quote per token -> the state price, nearest; `onTick`: also on the tick, as a trail step must be); zero allowed unless `allowZero` is false */
+  /**
+   * A price distance (quote per token -> the state price, nearest). With `onTick` it is also on
+   * the tick, as a trail step must be. Zero is allowed unless `allowZero` is false.
+   */
   delta(id: string, required = false, allowZero = true, onTick = false): bigint | undefined {
     if (!this.has(id) && !required) return undefined;
     return this.take(id, parsePrice(this.raw(id), this.form.side, this.ctx, onTick ? 'nearest' : 'exact', allowZero), required)?.price;
   }
-  /** a tip: KAS per token (also on a pair) -> sompi per whole token of `scale` base units, exact; zero allowed */
+  /** A tip: KAS per token, also on a pair -> sompi per whole token of `scale` base units, exact.
+   * Zero is allowed. */
   tipKas(id: string): bigint | undefined {
     if (!this.has(id)) return undefined;
     return this.take(id, parsePrice(this.raw(id), this.form.side, this.ctx, 'exact', true, 'kas'), false)?.price;
@@ -593,24 +671,24 @@ class Reader {
     if (!this.has(id) && !required) return undefined;
     return this.take(id, parseScaled(this.raw(id), 8), required);
   }
-  /** percent with two decimals -> basis points */
+  /** Percent with two decimals -> basis points. */
   bps(id: string): bigint | undefined {
     if (!this.has(id)) return undefined;
     return this.take(id, parseScaled(this.raw(id), 2), false);
   }
-  /** seconds as a whole number */
+  /** Seconds as a whole number. */
   seconds(id: string): bigint | undefined {
     if (!this.has(id)) return undefined;
     return this.take(id, parseWhole(this.raw(id)), false);
   }
-  /** minutes, up to two decimals -> seconds (rounded up) */
+  /** Minutes, up to two decimals -> seconds, rounded up. */
   minutes(id: string, required = false): bigint | undefined {
     if (!this.has(id) && !required) return undefined;
     const p = parseScaled(this.raw(id), 2);
     const secs = this.take(id, p, required);
     return secs === undefined ? undefined : (secs * 60n + 99n) / 100n;
   }
-  /** DAA of a duration typed in seconds */
+  /** DAA of a duration typed in seconds. */
   daa(seconds: bigint | undefined): bigint | undefined {
     return seconds === undefined ? undefined : secondsToDaa({ daa: 0n, unixSeconds: 0n, rateMilli: this.ctx.rateMilli ?? 10_000 }, seconds);
   }
@@ -621,11 +699,15 @@ class Reader {
   bool(id: string): boolean {
     return this.raw(id) === 'true';
   }
-  /** trigger threshold in base units (`min`, a preset percent of `orderAmount`, or a token amount); empty or `min` = the wallet default */
+  /**
+   * Trigger threshold in base units: `min`, a preset percent of `orderAmount`, or a token amount.
+   * Empty or `min` is the wallet default.
+   */
   touch(id: string, orderAmount: bigint | undefined): bigint | undefined {
     if (!this.has(id)) return undefined;
     const s = this.raw(id);
-    // a custom threshold of a `kas` form is a KAS amount (presets are the order's own minimum fill or a share of it)
+    // A custom threshold of a `kas` form is a KAS amount. The presets are the order's own minimum
+    // fill or a share of it.
     if (this.form.kas && s !== TOUCH_MIN && !/%$/.test(s)) {
       const n = this.take(id, amountBaseOf(this.form, this.ctx, id), false);
       if (n === 0n) {
@@ -647,7 +729,7 @@ class Reader {
 
 const dropUndefined = <T extends object>(o: T): T => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
 
-/** Parses the form into the intent of its order type. `intent` is null whenever `errors` is non-empty. */
+/** Parses the form into the intent of its order type. `intent` is null while `errors` is set. */
 export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
   const r = new Reader(form, ctx);
   const side = form.side;
@@ -656,7 +738,8 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
 
   const amount = type === 'close' ? r.amount('amount', false) : r.amount('amount');
   const tip = r.tipKas('tip');
-  // empty = the wallet default (kob-wasm defaultMinFill / defaultMinFillIfd, 1 for immediate orders), shown in the disclosure
+  // Empty means the wallet default (kob-wasm defaultMinFill and defaultMinFillIfd, 1 for immediate
+  // orders), shown in the disclosure.
   const minFill = r.amount('minFill', false);
 
   const lifetimeSimple = (): Lifetime | undefined => {
@@ -691,7 +774,7 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
     life: sec('life'),
     ...(r.bool('allOrNothing') ? { allOrNothing: true } : {}),
   });
-  // shared knobs of a stop leg; empty = the wallet default of matcher.md 10.6
+  // Shared knobs of a stop leg. Empty means the wallet default of matcher.md 10.6.
   const stopKnobs = (p = '') => ({
     slipBps: undefined as number | undefined,
     bandDaa: r.daa(r.seconds(`${p}bandDaa`)),
@@ -708,7 +791,8 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
     }
     return Number(b);
   };
-  // the delivery of a resting buy (and of a sell-first if-done's exits): the choice, the wallet's default and stored threshold, a Top-up tip
+  // The delivery of a resting buy and of a sell-first if-done's exits. It carries the choice, the
+  // wallet's default and stored threshold, and a Top-up tip.
   const delivery = deliveryOf(form, ctx);
   const deliveryReq = (): { delivery?: DeliveryRequest } => {
     if (delivery === null) return {};
@@ -720,7 +804,7 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
     });
     return Object.keys(req).length ? { delivery: req } : {};
   };
-  /** a Collected order is funded with one delivery carrier: it has no Fills box */
+  /** A Collected order is funded with one delivery carrier, so it has no Fills box. */
   const fillsOf = (budgets: boolean): { maxFills?: bigint | undefined } => (budgets && delivery !== 'collected' ? { maxFills: r.positive('maxFills', false) } : {});
   const condCommon = () => ({
     amount: amount as bigint,
@@ -732,7 +816,8 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
     ...fillsOf(budgetsFills(side, ctx)),
     ...deliveryReq(),
   });
-  // lifetime of the exits (no day order: the exit is created later); empty = good till cancelled
+  // Lifetime of the exits. There is no day order, because the exit is created later. Empty means
+  // good till cancelled.
   const exitExpiry = (): Exclude<CondExpiry, { kind: 'day' }> | undefined => {
     if (r.pick('exit.lifetime', ['gtc', 'gtd'] as const) !== 'gtd') return undefined;
     const at = r.date('exit.lifetimeAt', true);
@@ -747,12 +832,14 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
     return dropUndefined({ step, gap, wait, expectedUpdates: expectedUpdates === undefined ? undefined : Number(expectedUpdates) });
   };
 
-  // a crossing limit fills from the book by default; a pair order has no such fill: its default (the auction)
+  // A crossing limit fills from the book by default. A pair order has no such fill and uses its
+  // default, the auction.
   const crossingOf = () => {
     const c = r.pick('crossing', ['take', 'auction', 'limit', 'reject'] as const) ?? 'take';
     return isPairCtx(ctx) && c === 'take' ? undefined : c;
   };
-  // an IOC, FOK or market order fills from the book when chosen (a FOK by default), else it is the order for executors (a KAS market only)
+  // An IOC, FOK or market order fills from the book when chosen (a FOK by default). Otherwise it
+  // is the order for executors, on a KAS market only.
   const takeOf = (): { take?: boolean } => (isPairCtx(ctx) ? {} : { take: (r.pick('direct', ['take', 'order'] as const) ?? fieldDefault('direct', type)) === 'take' });
 
   let intent: Record<string, unknown> | null = null;
@@ -816,7 +903,7 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
         price: r.price('price') as bigint,
         stop: r.price('entry.stop', side, false),
         bandDaa: r.daa(r.seconds('entry.bandDaa')),
-        // the trigger rule of a stop entry (a limit entry has no trigger)
+        // The trigger rule of a stop entry. A limit entry has no trigger.
         ...(r.has('entry.stop') ? { minTouch: r.touch('entry.minTouch', amount), minRestDaa: r.daa(r.seconds('entry.minRestDaa')) } : {}),
       });
       const exit: ExitSpec = dropUndefined({
@@ -846,7 +933,8 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
     else if (levels !== undefined && levels > 1n) r.delta('ladder.step', true, false, true);
   }
 
-  // a limit ladder: 2 to 20 levels, and either a step in percent or an end price (the end price wins when both are typed)
+  // A limit ladder has 2 to 20 levels and either a step in percent or an end price. The end price
+  // wins when both are typed.
   if (type === 'limit' && r.raw('ladder.on') === 'true') {
     const levels = r.whole('ladder.levels', true);
     if (levels !== undefined && (levels < MIN_LIMIT_LADDER_LEVELS || levels > MAX_LIMIT_LADDER_LEVELS)) r.err('ladder.levels', 'range');
@@ -861,9 +949,12 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
   return { intent: dropUndefined(intent) as unknown as Intent, errors: [] };
 }
 
-// ------------------------------------------------------------------------------------------------ intent -> form
+// ------------------------------------------------------------------------------ intent -> form
 
-/** Inverse of `buildIntent`: the form that produces `intent`. Amounts render as exact decimals; durations in the unit of their field. */
+/**
+ * Inverse of `buildIntent`: the form that produces `intent`. Amounts render as exact decimals and
+ * durations in the unit of their field.
+ */
 export function formFromIntent(intent: Intent, ctx: TicketCtx): TicketForm {
   const tz = ctx.tzOffsetMin ?? 0;
   const rate = BigInt(ctx.rateMilli ?? 10_000);
@@ -934,7 +1025,7 @@ export function formFromIntent(intent: Intent, ctx: TicketCtx): TicketForm {
       price('price', i.price); price('priceEnd', i.priceEnd); put('stepDaa', i.stepDaa); life(i.lifetime); from(i.activeFrom); put('maxFills', i.maxFills);
       if (i.duration) mins('duration', BigInt('seconds' in i.duration ? i.duration.seconds : (i.duration.daa * 1000n) / rate)); break;
     default: {
-      // conditional family
+      // The conditional family.
       expiry(i.expiry); from(i.activeFrom); if (i.carrier !== undefined) v.carrier = formatUnits(i.carrier, 8); put('maxFills', i.maxFills);
       if (i.stop !== undefined) price('stop', i.stop);
       if (i.limit !== undefined) price('limit', i.limit);
@@ -971,11 +1062,12 @@ export function formFromIntent(intent: Intent, ctx: TicketCtx): TicketForm {
   return { type: form.type, side, values: v };
 }
 
-// ------------------------------------------------------------------------------------------------ streaming: the price you saw
+// -------------------------------------------------------------- streaming: the price you saw
 
 /**
- * The quote a streaming order shows its user: the best price its side meets (a buy: the best ask, a sell: the best bid), as the text of the
- * "price you saw" box; null when that side of the book is empty.
+ * The quote a streaming order shows its user, as the text of the "price you saw" box. It is the
+ * best price its side meets: the best ask for a buy and the best bid for a sell. It is null when
+ * that side of the book is empty.
  */
 export function streamingQuoteText(side: Side, best: { ask: bigint | null; bid: bigint | null }, ctx: Pick<TicketCtx, 'decimals' | 'scale' | 'quoteDecimals'>): string | null {
   const p = side === 'buy' ? best.ask : best.bid;
@@ -983,9 +1075,10 @@ export function streamingQuoteText(side: Side, best: { ask: bigint | null; bid: 
 }
 
 /**
- * Keeps the streaming "price you saw" on the quote: while the box is empty or still holds the quote filled last (`auto`), it follows `quote`; a
- * price the user typed is left alone (emptying the box hands it back to the quote). Returns the form (the same object when nothing changes) and the
- * text auto-filled now (null: the box is the user's).
+ * Keeps the streaming "price you saw" on the quote. While the box is empty or still holds the
+ * quote filled last (`auto`), it follows `quote`. A price the user typed is left alone, and
+ * emptying the box hands it back to the quote. Returns the form (the same object when nothing
+ * changes) and the text auto-filled now (null when the box is the user's).
  */
 export function followQuote(form: TicketForm, quote: string | null, auto: string | null): { form: TicketForm; auto: string | null } {
   if (form.type !== 'streaming') return { form, auto: null };
@@ -996,9 +1089,12 @@ export function followQuote(form: TicketForm, quote: string | null, auto: string
   return { form: { ...form, values: { ...form.values, displayedPrice: quote } }, auto: quote };
 }
 
-// ------------------------------------------------------------------------------------------------ helpers for the component
+// ------------------------------------------------------------- helpers for the component
 
-/** Per-field summary for display under an input: the exact state price after rounding and whether rounding happened. */
+/**
+ * Per-field summary for display under an input: the exact state price after rounding, and whether
+ * rounding happened.
+ */
 export function priceInfo(text: string, side: Side, ctx: Pick<TicketCtx, 'decimals' | 'scale' | 'tick' | 'quoteDecimals'>): { price: bigint; perToken: string; rounded: boolean } | null {
   const p = parsePrice(text, side, ctx);
   return p.ok ? { price: p.value.price, perToken: formatPrice(p.value.price, ctx), rounded: p.value.rounded } : null;
@@ -1006,21 +1102,22 @@ export function priceInfo(text: string, side: Side, ctx: Pick<TicketCtx, 'decima
 
 export interface MaxAmountInput {
   side: Side;
-  /** free (P2PK-owned) tokens, base units */
+  /** Free (P2PK-owned) tokens, base units. */
   tokenBalance: bigint;
-  /** spendable KAS, sompi */
+  /** Spendable KAS, sompi. */
   kasBalance: bigint;
-  /** the order scale: base units per whole token */
+  /** The order scale: base units per whole token. */
   scale: bigint;
-  /** limit price incl. tip, sompi per whole token (all-in of a buy); 0 or absent = unknown */
+  /** Limit price including tip, sompi per whole token (all-in of a buy). 0 or absent is unknown. */
   allInPrice?: bigint;
-  /** carrier KAS per covenant UTXO */
+  /** Carrier KAS per covenant UTXO. */
   carrier: bigint;
 }
 
 /**
- * The most base units the balance can plausibly place (the planner does the exact funding check). Sell: the free token balance. Buy: the KAS
- * balance minus a reserve for carriers (delivery carriers and the network fee) at the all-in price, `floor(kas * scale / allIn)`.
+ * The most base units the balance can plausibly place. The planner does the exact funding check.
+ * Sell: the free token balance. Buy: the KAS balance minus a reserve for carriers (delivery
+ * carriers and the network fee), at the all-in price, `floor(kas * scale / allIn)`.
  */
 export function maxAmount(i: MaxAmountInput): bigint {
   if (i.side === 'sell') return i.tokenBalance;
@@ -1029,31 +1126,49 @@ export function maxAmount(i: MaxAmountInput): bigint {
   return i.kasBalance > reserve ? ((i.kasBalance - reserve) * i.scale) / i.allInPrice : 0n;
 }
 
-/** Errors worth showing under a field right away (the user typed something wrong) versus fields that are merely still empty. */
+/**
+ * Errors worth showing under a field right away (the user typed something wrong), versus fields
+ * that are merely still empty.
+ */
 export const visibleErrors = (errors: readonly FieldError[]): FieldError[] => errors.filter((e) => e.code !== 'required');
 export const isIncomplete = (errors: readonly FieldError[]): boolean => errors.some((e) => e.code === 'required');
 
-// ------------------------------------------------------------------------------------------------ KAS amounts (a KAS market shown inverted)
+// ---------------------------------------------------------- KAS amounts (a KAS market inverted)
 //
-// KAS/TOKEN is the token's own TOKEN/KAS book seen the other way round: its base, the left asset, is KAS. A `kas` form counts every amount in
-// KAS like any BASE/QUOTE market counts the base, and the order is still the native one: buying KAS is selling the token, and X KAS is
-// floor(X x scale / P) base units of the token at the price P of the amount's own leg (the limit price; the stop of a stop leg; the exit price of
-// an exit; the book's best price for an order without a price of its own, market and close). Rounding down means the KAS value of the order
-// never exceeds what was typed: a shown Sell spends at most the KAS typed (plus the tip), a shown Buy receives at most that (minus the tip).
+// KAS/TOKEN is the token's own TOKEN/KAS book seen the other way round, so its base, the left
+// asset, is KAS. A `kas` form counts every amount in KAS, as any BASE/QUOTE market counts the base.
+// The order is still the native one, because buying KAS is selling the token. X KAS is
+// floor(X x scale / P) base units of the token, at the price P of the amount's own leg:
+// - the limit price;
+// - the stop of a stop leg;
+// - the exit price of an exit;
+// - the book's best price for an order without a price of its own, market and close.
+// Rounding down means the KAS value of the order never exceeds what was typed. A shown Sell spends
+// at most the KAS typed (plus the tip), and a shown Buy receives at most that (minus the tip).
 
-/** Key suffix of an exact base amount kept for an amount box of a `kas` form (the box then shows that amount's KAS value). */
+/**
+ * Key suffix of an exact base amount kept for an amount box of a `kas` form. The box then shows
+ * that amount's KAS value.
+ */
 export const BASE_SUFFIX = '@base';
 
-/** The amount-like fields: typed in KAS in a `kas` form (a `touch` field only for a custom threshold). */
+/**
+ * The amount-like fields, typed in KAS in a `kas` form. A `touch` field is typed in KAS only for a
+ * custom threshold.
+ */
 export const AMOUNT_FIELD_IDS: readonly string[] = ['amount', 'minFill', 'sliceAmount', 'exit.minFill', 'minTouch', 'entry.minTouch', 'exit.minTouch'];
 
 /**
- * Where the conversion price of an amount comes from: the order's own price, a stop trigger, an exit price, the book; for a buy, which spends
- * the KAS typed, `allIn` (its own price plus the tip) and `worst` (the most a price that moves can reach, plus the tip).
+ * Where the conversion price of an amount comes from. It is the order's own price, a stop trigger,
+ * an exit price or the book. For a buy, which spends the KAS typed, it is `allIn` (its own price
+ * plus the tip) or `worst` (the most a price that moves can reach, plus the tip).
  */
 export type AmountBasis = 'own' | 'stop' | 'exit' | 'book' | 'allIn' | 'worst';
 
-/** The price field of an order type that sizes it (its limit, else its trigger); null = no price of its own (market, close: the book's price). */
+/**
+ * The price field of an order type that sizes it (its limit, else its trigger). Null means no price
+ * of its own (market, close), so the book's price is used.
+ */
 export function primaryPriceField(type: OrderTypeId): string | null {
   switch (type) {
     case 'market':
@@ -1068,14 +1183,20 @@ export function primaryPriceField(type: OrderTypeId): string | null {
 }
 
 /**
- * The state price (sompi per `scale` base units) a KAS amount of field `id` converts at, with where it comes from; null while that price is
- * missing or malformed (the price box reports its own problem) or, for an order without a price, while the book has none.
+ * The state price (sompi per `scale` base units) a KAS amount of field `id` converts at, with where
+ * it comes from. It is null while that price is missing or malformed (the price box reports its
+ * own problem) or, for an order without a price, while the book has none.
  *
- * A buy spends the KAS typed: its own amount converts at the MOST it can pay per token, the worst price its auction or stop can reach (a market
- * or close order: the book's best price moved by the slippage; streaming: the displayed price by the tolerance; a rising Dutch or a DCA: its end
- * price; a stop: the stop moved by its band; an OCO: the dearer of its take-profit and its stop's band) plus the tip, so the escrow it is built
- * with never spends more KAS than typed; a fill at a better price spends less and the rest returns. A sell receives KAS: its own price (the book's
- * for a market) is what it receives about.
+ * A buy spends the KAS typed. Its own amount converts at the most it can pay per token, which is
+ * the worst price its auction or stop can reach, plus the tip. That worst price is:
+ * - market or close order: the book's best price moved by the slippage;
+ * - streaming: the displayed price moved by the tolerance;
+ * - a rising Dutch or a DCA: its end price;
+ * - a stop: the stop moved by its band;
+ * - an OCO: the dearer of its take-profit and its stop's band.
+ * So the escrow it is built with never spends more KAS than typed. A fill at a better price
+ * spends less and the rest returns. A sell receives KAS, so its own price (the book's for a
+ * market) is what it receives about.
  */
 export function amountPriceOf(form: TicketForm, ctx: TicketCtx, id: string): { price: bigint; basis: AmountBasis } | null {
   const leg = legPriceOf(form, ctx, id);
@@ -1134,10 +1255,13 @@ export function amountPriceOf(form: TicketForm, ctx: TicketCtx, id: string): { p
   return { price: worst + tip, basis: worst !== leg.price ? 'worst' : 'allIn' };
 }
 
-/** The amounts of the order's own leg (an exit's amounts and the trigger thresholds convert at their own leg's price). */
+/**
+ * The amounts of the order's own leg. An exit's amounts and the trigger thresholds convert at
+ * their own leg's price.
+ */
 const OWN_AMOUNTS: readonly string[] = ['amount', 'minFill', 'sliceAmount'];
 
-/** The price of the leg an amount belongs to (`amountPriceOf` before a buy's worst price and tip). */
+/** The price of the leg an amount belongs to, before a buy's worst price and tip. */
 function legPriceOf(form: TicketForm, ctx: TicketCtx, id: string): { price: bigint; basis: AmountBasis } | null {
   const opp: Side = form.side === 'buy' ? 'sell' : 'buy';
   const v = form.values;
@@ -1146,7 +1270,8 @@ function legPriceOf(form: TicketForm, ctx: TicketCtx, id: string): { price: bigi
     return p.ok ? { price: p.value.price, basis } : null;
   };
   if (id === 'exit.minFill' || id === 'exit.minTouch') {
-    // the exit trades the other way, at its own price: the take-profit, else the stop (an exit stop's threshold: the stop)
+    // The exit trades the other way, at its own price: the take-profit, else the stop. An exit
+    // stop's threshold uses the stop.
     if (id === 'exit.minFill' && (v['exit.takeProfit'] ?? '').trim() !== '') return read('exit.takeProfit', opp, 'exit');
     return read('exit.stop', opp, 'exit');
   }
@@ -1166,8 +1291,9 @@ export const kasToBase = (sompi: bigint, price: bigint, scale: bigint): bigint =
 export const baseToKas = (base: bigint, price: bigint, scale: bigint): bigint => (scale > 0n ? (base * price) / scale : 0n);
 
 /**
- * The base units of amount field `id`: the token amount typed (native form); in a `kas` form the exact amount kept for the box, else the KAS
- * typed converted at the field's price. `noRef` when an order without a price has no book price to convert at.
+ * The base units of amount field `id`. In a native form it is the token amount typed. In a `kas`
+ * form it is the exact amount kept for the box, else the KAS typed converted at the field's price.
+ * `noRef` when an order without a price has no book price to convert at.
  */
 export function amountBaseOf(form: TicketForm, ctx: TicketCtx, id: string): Parsed<bigint> {
   if (!form.kas) return parseAmount(form.values[id] ?? '', ctx.decimals);
@@ -1180,15 +1306,19 @@ export function amountBaseOf(form: TicketForm, ctx: TicketCtx, id: string): Pars
   return good(kasToBase(sompi.value, p.price, ctx.scale));
 }
 
-/** The KAS text of `base` units of the token at the field's price (rounded down to the sompi); '' when there is no price to value it at. */
+/**
+ * The KAS text of `base` units of the token at the field's price, rounded down to the sompi. It is
+ * '' when there is no price to value it at.
+ */
 export function kasTextOf(form: TicketForm, ctx: TicketCtx, id: string, base: bigint): string {
   const p = amountPriceOf(form, ctx, id);
   return p ? formatUnits(baseToKas(base, p.price, ctx.scale), 8) : '';
 }
 
 /**
- * Sets amount field `id` to exactly `base` units of the token (Max, a prefilled amount, a flip of a filled form): a token form shows them, a
- * `kas` form keeps them exactly and shows their KAS value, so the order does not move by a KAS rounding.
+ * Sets amount field `id` to exactly `base` units of the token (Max, a prefilled amount, a flip of
+ * a filled form). A token form shows them. A `kas` form keeps them exactly and shows their KAS
+ * value, so the order does not move by a KAS rounding.
  */
 export function setAmountBase(form: TicketForm, id: string, base: bigint, ctx: TicketCtx): TicketForm {
   if (!form.kas) return setValue(form, id, formatAmount(base, ctx.decimals));
@@ -1196,8 +1326,9 @@ export function setAmountBase(form: TicketForm, id: string, base: bigint, ctx: T
 }
 
 /**
- * The same order with its amount boxes in the other unit (`kas` true: KAS; false: token units). Every amount that parses keeps its exact base
- * units (a box that does not parse is emptied, a preset threshold kept), so a flip never changes the order that is built.
+ * The same order with its amount boxes in the other unit (`kas` true is KAS, false is token
+ * units). Every amount that parses keeps its exact base units. A box that does not parse is
+ * emptied and a preset threshold is kept, so a flip never changes the order that is built.
  */
 export function reorientAmounts(form: TicketForm, kas: boolean, ctx: TicketCtx): TicketForm {
   if (!!form.kas === kas) return form;

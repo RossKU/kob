@@ -1,11 +1,15 @@
-// The order-entry form for one token: EVERY order type of docs/spec/order-types.md.
+// The order-entry form for one token. It covers every order type of docs/spec/order-types.md.
 //
-// A thin renderer: the form keeps text (`form-state.ts` turns it into an Intent), the planner (`kob/plan.ts`) validates it against the protocol and
-// wallet rules and builds the transaction. The ticket is the inputs and one button: the order's details are shown only in the final
-// confirmation (signer/summary.ts `receipt`). The button is enabled only for a built, error-free plan; a click plans the order again from the
-// state at the click, checks the built transaction silently (`ui/confirm/send.ts`: decoded and compared with the plan) and opens the final
-// confirmation, whose Confirm asks the wallet. Progress is the label of the button itself ("Confirm in KasWare...", "Sending..."); the result
-// is a card of the notifications at the top right.
+// A thin renderer. The form keeps text (`form-state.ts` turns it into an Intent). The planner
+// (`kob/plan.ts`) validates it against the protocol and wallet rules and builds the transaction.
+// The ticket is the inputs and one button. The order's details are shown only in the final
+// confirmation (signer/summary.ts `receipt`).
+//
+// The button is enabled only for a built, error-free plan. A click plans the order again from the
+// state at the click, checks the built transaction silently (`ui/confirm/send.ts`, decoded and
+// compared with the plan) and opens the final confirmation, whose Confirm asks the wallet.
+// Progress is the label of the button itself ("Confirm in KasWare...", "Sending..."). The result is
+// a card of the notifications at the top right.
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
@@ -62,61 +66,82 @@ import { rememberPairForm, takePairFlip } from './pair-flip';
 import './ticket.css';
 
 export interface OrderTicketProps {
-  /** the token traded (the BASE token A of a pair) */
+  /** The token traded (the BASE token A of a pair). */
   token: TokenInfo;
   /**
-   * a token/token pair A/B: the QUOTE token B. The ticket then offers exactly the same order types, prices are typed in B per whole A, amounts in A,
-   * tips stay KAS; the planner builds pair orders (KobPair / KobCondPair / KobIfdPair) against the pair environment (both tokens, the pair book).
-   * Absent = the token's KAS market.
+   * A token/token pair A/B: the QUOTE token B. The ticket then offers exactly the same order types.
+   * Prices are typed in B per whole A, amounts in A, and tips stay KAS. The planner builds pair
+   * orders (KobPair, KobCondPair, KobIfdPair) against the pair environment (both tokens, the pair
+   * book). Absent means the token's KAS market.
    */
   quote?: TokenInfo;
-  /** optional prefill from the book (click on a level) */
-  /** `price`: the state price (sompi per whole token); `amount`: base units */
+  /** Optional prefill from the book (a click on a level). */
+  /** `price` is the state price (sompi per whole token) and `amount` is in base units. */
   prefill?: { side?: 'buy' | 'sell'; price?: bigint; amount?: bigint; type?: OrderTypeId; /** a click counter: a new value re-applies an unchanged prefill (a re-click of the same price after the field was edited) */ seq?: number };
   /**
-   * the market is shown inverted (KAS/TOKEN): the ticket speaks the shown pair, whose base is KAS. The side buttons name the side of KAS (Buy = buy
-   * KAS = sell the token), prices are tokens per KAS and amounts are KAS, converted at the order's price (form-state.ts, KAS amounts). The order
-   * built is the native one; a flip of a filled form keeps it exactly (orientation.ts).
+   * The market is shown inverted (KAS/TOKEN), so the ticket speaks the shown pair, whose base is
+   * KAS. The side buttons name the side of KAS (Buy is buy KAS, which is sell the token). Prices
+   * are tokens per KAS, and amounts are KAS converted at the order's price (form-state.ts, KAS
+   * amounts). The order built is the native one. A flip of a filled form keeps it exactly
+   * (orientation.ts).
    */
   inverted?: boolean;
-  /** facts about the token(s) traded (the indexer's warnings, the program's powers: market/TokenBadges.tsx `TokenFacts`), shown above the notes next to the button */
+  /**
+   * Facts about the token(s) traded, shown above the notes next to the button. They are the
+   * indexer's warnings and the program's powers (market/TokenBadges.tsx `TokenFacts`).
+   */
   facts?: ComponentChildren;
 }
 
-/** Answers of the node or the checks that mean an order a take spends is gone: someone else took it first. */
+/** Answers of the node or the checks that mean the order a take spends is gone to someone else. */
 const LOST_RACE = new Set(['orphan', 'double-spend', 'inputs-changed', 'inputs-unconfirmed', 'input-unconfirmed', 'input-pending-spent']);
 
-/** A level that could not be planned at the click: the sentence, the raw builder text behind "Details", and the code of the status line. */
+/**
+ * A level that could not be planned at the click. It holds the sentence, the raw builder text
+ * behind "Details", and the code of the status line.
+ */
 interface PlanStop {
   text: string;
   raw?: string;
   code?: string;
 }
 
-/** One reason the order cannot be placed now (the slot above the button): `kind` is how the tests and the styles tell them apart, `testid` overrides the default one. */
+/**
+ * One reason the order cannot be placed now (the slot above the button). `kind` is how the tests
+ * and the styles tell them apart, and `testid` overrides the default one.
+ */
 interface Reason {
   code: string;
   text: string;
-  /** `warn`: the order can be placed, but not as it is meant (below the minimum order value: it is never listed); shown in the slot even while the button is on */
+  /**
+   * `warn`: the order can be placed, but not as it is meant (below the minimum order value, it is
+   * never listed). It is shown in the slot even while the button is on.
+   */
   kind: 'need' | 'field' | 'issue' | 'ladder' | 'warn';
   action?: 'retry';
   raw?: string;
   testid?: string;
 }
 
-/** Token-holding shortfalls: while the holdings are still being read they mean "not read yet", not "not enough". */
+/** Token-holding shortfalls. While the holdings are still being read they mean "not read yet". */
 const TOKEN_SHORT = new Set(['INSUFFICIENT_TOKENS', 'TOKEN_UTXOS_FRAGMENTED']);
 
 const sum = (xs: bigint[]): bigint => xs.reduce((a, b) => a + b, 0n);
 
-/** How long the sale after a merge waits for an environment that holds the merged UTXOs before the ticket gives the button back. */
+/**
+ * How long the sale after a merge waits for an environment that holds the merged UTXOs, before the
+ * ticket gives the button back.
+ */
 const SELL_AFTER_MERGE_MS = 30_000;
 
-/** A plan that takes longer than this shows its "Calculating..." indicator; a background re-plan on a tick is over before and shows nothing. */
+/**
+ * A plan that takes longer than this shows its "Calculating..." indicator. A background re-plan on
+ * a tick is over before and shows nothing.
+ */
 const PENDING_SHOW_MS = 500;
 const HELP_KEY = 'kob.ticket.help';
 
-/** `on` once it has been on for `ms` (false again the moment it goes off). */
+/** `on` once it has been on for `ms`, false again the moment it goes off. */
 function useDelayedFlag(on: boolean, ms: number): boolean {
   const [shown, setShown] = useState(false);
   useEffect(() => {
@@ -130,7 +155,10 @@ function useDelayedFlag(on: boolean, ms: number): boolean {
   return on && shown;
 }
 
-/** "Enter an amount" / "Enter a price" / "Enter a stop price": the instruction a disabled submit button carries for the first empty required field. */
+/**
+ * "Enter an amount", "Enter a price" or "Enter a stop price": the instruction a disabled submit
+ * button carries for the first empty required field.
+ */
 function enterTextOf(field: string, type: string, inverted: boolean): string {
   if (has(`ticket.enter.${field}`)) return t(`ticket.enter.${field}`);
   const label = t(inverted && has(`ticket.label.${field}.inv`) ? `ticket.label.${field}.inv` : labelKey(type, field));
@@ -139,55 +167,66 @@ function enterTextOf(field: string, type: string, inverted: boolean): string {
 
 export function OrderTicket(props: OrderTicketProps) {
   const { token, quote } = props;
-  // a pair is never shown inverted here: the pair page flips by swapping base and quote (another pair, another route)
+  // A pair is never shown inverted here. The pair page flips by swapping base and quote, which is
+  // another pair and another route.
   const inverted = !quote && !!props.inverted;
   const name = token.ticker;
-  /** the ticker the prices are in: KAS, or the pair's quote token B */
+  /** The ticker the prices are in: KAS, or the pair's quote token B. */
   const quoteTicker = quote ? quote.ticker : 'KAS';
   const services = useServices();
   const contended = useCongestion();
   const wallet = useWallet();
   const { indexer: indexerStatus } = useSystemStatus();
-  // the app is taking the market from the node (the indexer just went away): a guard that could not be read says that, the moment it lasts
+  // The app is taking the market from the node because the indexer just went away. A guard that
+  // could not be read says that, for as long as it lasts.
   const switching = useTradingStatus().code === 'switching';
   const tradable = token.tradable && token.program !== null && (!quote || (quote.tradable && quote.program !== null));
-  // the order scale of this token (10^decimals, at most 10^9; kob-wasm defaultScale): every price is per that many base units
+  // The order scale of this token (10^decimals, at most 10^9, kob-wasm defaultScale). Every price
+  // is per that many base units.
   const scale = 10n ** BigInt(Math.min(token.decimals, 9));
   const walletReady = !!wallet.info && !!wallet.adapter && !wallet.networkMismatch;
   const enabled = tradable && walletReady;
 
-  // a pair page just flipped (A/B -> B/A): the order typed there, as the same order on this pair (pair-flip.ts)
+  // A pair page just flipped (A/B to B/A). The order typed there becomes the same order on this
+  // pair (pair-flip.ts).
   const [carried] = useState<TicketForm | null>(() => (quote ? takePairFlip(token.covenantId, quote.covenantId, { base: quote.decimals, quote: token.decimals }) : null));
   const [form, setForm] = useState<TicketForm>(() => carried ?? initialForm('limit', props.prefill?.side ?? 'sell', inverted));
   useEffect(() => {
     if (quote) rememberPairForm(token.covenantId, quote.covenantId, form);
   }, [form]);
-  // the send flow of the order button: checking, the wallet's approval, sending, the result (one line under the button)
+  // The send flow of the order button: checking, the wallet's approval, sending and the result. It
+  // is one line under the button.
   const sender = useSend();
-  // from the click until the last transaction of it (a ladder: every level, each its own transaction signed in turn) is sent or stopped
+  // From the click until the last transaction of it is sent or stopped. A ladder sends every level,
+  // each its own transaction signed in turn.
   const [placing, setPlacing] = useState(false);
-  // a take (placeTake): the steps of its stepper, and the facts of the plan the click was for (shown while it runs)
+  // A take (placeTake): the steps of its stepper, and the facts of the plan the click was for. They
+  // are shown while it runs.
   const [takeRun, setTakeRun] = useState<StepperItem[] | null>(null);
   const [takeAtClick, setTakeAtClick] = useState<TakeFacts | null>(null);
-  // a ladder: the level being sent ("Level 2 of 3"), and how the whole ladder ended
+  // A ladder: the level being sent ("Level 2 of 3"), and how the whole ladder ended.
   const [ladderLead, setLadderLead] = useState<string | null>(null);
   const [ladderNote, setLadderNote] = useState<{ done: boolean; text: string } | null>(null);
-  // a sell ladder placed as one curve order or as separate orders (null: the default, one curve above 2 levels)
+  // A sell ladder placed as one curve order or as separate orders. Null is the default, which is
+  // one curve above 2 levels.
   const [placeAs, setPlaceAs] = useState<'curve' | 'separate' | null>(null);
-  // the level of a separate ladder being placed, for its stepper
+  // The level of a separate ladder being placed, for its stepper.
   const [ladderAt, setLadderAt] = useState<{ at: number; levels: number; failed?: boolean } | null>(null);
-  // what Max just did, in a sentence (cleared by the next edit)
+  // What Max just did, in a sentence. The next edit clears it.
   const [maxNote, setMaxNote] = useState<string | null>(null);
 
-  // one of the two environments is live: the token's KAS market, or the pair A/B (both tokens' UTXOs, the pair book, own pair orders)
-  // the book is verified on the node as deep as an order that walks it needs (a market / close / streaming / IOC / FOK order: its amount; `walkDepth` is set from the
-  // order built below, so the first read is the shallow one and a bigger order reads deeper once)
+  // One of the two environments is live: the token's KAS market, or the pair A/B (both tokens'
+  // UTXOs, the pair book, own pair orders).
+  // The book is verified on the node as deep as an order that walks it needs. That is a market,
+  // close, streaming, IOC or FOK order, and its amount sets the depth. `walkDepth` is set from the
+  // order built below, so the first read is the shallow one and a bigger order reads deeper once.
   const [walkDepth, setWalkDepth] = useState(0n);
   const kasEnv = useTicketEnv(token, enabled && !quote, walkDepth);
   const pairEnv = usePairTicketEnv(token, quote ?? token, enabled && !!quote, walkDepth);
   const { env: rawEnv, error: envError, errorSource: envSource, loading: envLoading, refresh, since, snapshot, stale, waiting } = quote ? pairEnv : kasEnv;
-  // the node clock, read every CLOCK_TICK_MS while an order can be placed (a visible page): a click plans with it projected to the click, with no
-  // round trip before the wallet is asked (review-check.ts rule 1)
+  // The node clock, read every CLOCK_TICK_MS while an order can be placed (a visible page). A click
+  // plans with it projected to the click, with no round trip before the wallet is asked
+  // (review-check.ts rule 1).
   const liveClock = useRef<{ clock: Clock; at: number } | null>(null);
   useEffect(() => {
     if (!enabled) return;
@@ -203,9 +242,11 @@ export function OrderTicket(props: OrderTicketProps) {
       clearInterval(h);
     };
   }, [enabled, services]);
-  // a market / close order whose start (the indexer's best price) is this far beyond another indexer's best price cannot be placed
+  // A market or close order cannot be placed when its start (the indexer's best price) is this far
+  // beyond another indexer's best price.
   const startTolerance = BigInt(services.config.marketStartToleranceBps);
-  // the best prices further indexers report for this market (none configured: empty): a KAS market's own books, a pair's from the two KAS books
+  // The best prices further indexers report for this market, empty when none is configured. For a
+  // KAS market these are its own books, and for a pair they come from the two KAS books.
   useFailoverState(services.failover); // on a backup indexer the references are the other indexers: this ticket re-reads them after a switch
   const verifiers = services.verifiers;
   const marketOf = rawEnv ? rawEnv.token : null;
@@ -227,10 +268,12 @@ export function OrderTicket(props: OrderTicketProps) {
   });
   const env = useMemo(() => (rawEnv ? withRefs(rawEnv, touches.data ?? { touches: [], unavailable: [] }) : null), [rawEnv, touches.data, startTolerance]);
   const rateMilli = env?.clock.rateMilli;
-  // the book's best prices: what a KAS amount of a market / close order converts at (an inverted market)
+  // The book's best prices. A KAS amount of a market or close order converts at them (an inverted
+  // market).
   const bestAsk = env?.book.asks[0]?.price ?? null;
   const bestBid = env?.book.bids[0]?.price ?? null;
-  // the delivery of a buy (kob/orders/delivery.ts): the wallet default of Settings and the receive threshold this wallet stored for the token
+  // The delivery of a buy (kob/orders/delivery.ts): the wallet default of Settings and the receive
+  // threshold this wallet stored for the token.
   const [walletDelivery] = useDeliveryPref();
   const family = token.program && isTokenProgram(token.program) ? CODEC_OF_PROGRAM[token.program] : undefined;
   const quoteFamily = quote?.program && isTokenProgram(quote.program) ? CODEC_OF_PROGRAM[quote.program] : undefined;
@@ -251,8 +294,8 @@ export function OrderTicket(props: OrderTicketProps) {
     }),
     [token.decimals, scale, token.tick, rateMilli, quote?.decimals, bestAsk, bestBid, family, quoteFamily, walletDelivery, storedThreshold],
   );
-  // a streaming order's "price you saw" is the quote its side meets (buy: the best ask, sell: the best bid): filled in and kept on the quote until
-  // the user types a price of their own
+  // A streaming order's "price you saw" is the quote its side meets (buy: the best ask, sell: the
+  // best bid). It is filled in and kept on the quote until the user types a price of their own.
   const streamQuote = form.type === 'streaming' ? streamingQuoteText(form.side, { ask: bestAsk, bid: bestBid }, ctx) : null;
   const autoQuote = useRef<string | null>(null);
   useEffect(() => {
@@ -260,24 +303,28 @@ export function OrderTicket(props: OrderTicketProps) {
     autoQuote.current = r.auto;
     if (r.form !== form) setForm(r.form);
   }, [form, streamQuote]);
-  // a flip of the market recounts the amount boxes in the shown base (KAS or the token) and keeps the order they build exactly
+  // A flip of the market recounts the amount boxes in the shown base (KAS or the token) and keeps
+  // the order they build exactly.
   useEffect(() => {
     setForm((f) => reorientAmounts(f, inverted, ctx));
   }, [inverted]);
   const built = useMemo(() => buildIntent(form, ctx), [form, ctx]);
   const ladderSet = useMemo(() => ladderOfForm(form, ctx), [form, ctx]);
   const limitSet = useMemo(() => limitLadderOfForm(form, ctx), [form, ctx]);
-  // a ladder places each level as one transaction: a crossing level is the auction (a take would leave its rest unplaced)
+  // A ladder places each level as one transaction. A crossing level is the auction, because a take
+  // would leave its rest unplaced.
   const planIntent = useMemo((): Intent | null => {
     const i = built.intent;
     return i && (ladderSet || limitSet) && i.type === 'limit' && i.crossing === 'take' ? { ...i, crossing: 'auction' } : i;
   }, [built.intent, ladderSet, limitSet]);
   const { plan, current, pending, editPending, crash } = useTicketPlan(enabled ? env : null, planIntent);
-  // after an edit of the form it shows at once; a re-plan on a tick (a new environment) shows it only if it takes longer than PENDING_SHOW_MS
+  // After an edit of the form it shows at once. A re-plan on a tick (a new environment) shows it
+  // only if it takes longer than PENDING_SHOW_MS.
   const slowPending = useDelayedFlag(pending, PENDING_SHOW_MS);
   const pendingShown = editPending || slowPending;
 
-  // prefill from the book: a price implies a limit-style form, a side the matching order type (a click on the book or the depth chart fills the price only and keeps the ticket's side)
+  // Prefill from the book. A price implies a limit-style form, and a side the matching order type.
+  // A click on the book or the depth chart fills the price only and keeps the ticket's side.
   const prefillKey = props.prefill ? `${props.prefill.seq ?? ''}|${props.prefill.type ?? ''}|${props.prefill.side ?? ''}|${props.prefill.price ?? ''}|${props.prefill.amount ?? ''}` : '';
   useEffect(() => {
     const p = props.prefill;
@@ -302,7 +349,8 @@ export function OrderTicket(props: OrderTicketProps) {
     return null;
   }, [ladderSet, limitSet, planIntent, ctx.tick]);
 
-  // a sell ladder of a KAS market that can be one curve order (KCC-20; prices that never fall), and whether it is placed so
+  // A sell ladder of a KAS market that can be one curve order (KCC-20, prices that never fall), and
+  // whether it is placed so.
   const curveIntent: CurveIntent | null = useMemo(
     () => (limitSet && ladder?.ok && form.side === 'sell' && !quote && token.family === 'kcc20' ? curveOfLadder(ladder, built.intent) : null),
     [limitSet, ladder, form.side, quote, token.family, built.intent],
@@ -313,44 +361,49 @@ export function OrderTicket(props: OrderTicketProps) {
   const errs = visibleErrors(built.errors).filter((e) => (form.values[e.field] ?? '') !== '');
   const ticker = token.ticker;
 
-  // balances the wallet can spend (the planner does the exact funding check)
+  // Balances the wallet can spend. The planner does the exact funding check.
   const tokenBalance = env ? heldAmount(env) : 0n;
-  // held units of this token the planner cannot spend (another owner type, another extension, a KRON minter UTXO); a key-owned holding with a
-  // borrow setting counts (option A)
+  // Held units of this token the planner cannot spend: another owner type, another extension, or a
+  // KRON minter UTXO. A key-owned holding with a borrow setting counts.
   const unusable = env ? unusableTokenHeld(env) : null;
-  // another market starts shallow again (declared before the effect that sets it, so a change of both in one pass ends with the set one)
+  // Another market starts shallow again. It is declared before the effect that sets it, so a change
+  // of both in one pass ends with the set one.
   useEffect(() => setWalkDepth(0n), [token.covenantId, quote?.covenantId]);
   const intentType = built.intent?.type;
   const intentAmount = (built.intent as { amount?: bigint } | null)?.amount;
   const li = built.intent?.type === 'limit' ? built.intent : null;
   const limitCrosses = !!li && li.crossing === 'take' && (li.side === 'buy' ? bestAsk !== null && li.price >= bestAsk : bestBid !== null && li.price <= bestBid);
   useEffect(() => {
-    // a crossing limit that fills from the book walks it too: as many of its orders verified as it may take
+    // A crossing limit that fills from the book walks it too, so as many of its orders are verified
+    // as it may take.
     const takes = intentType === 'limit' && limitCrosses;
     const walks = intentType === 'market' || intentType === 'streaming' || intentType === 'close' || intentType === 'fok' || intentType === 'ioc' || takes;
     const need = walks ? (intentAmount ?? (intentType === 'close' ? tokenBalance : 0n)) : 0n;
-    // only ever deeper for this market (a smaller amount keeps the book already read)
+    // Only ever deeper for this market. A smaller amount keeps the book already read.
     setWalkDepth((d) => (need > d ? need : d));
   }, [intentType, intentAmount, limitCrosses, intentType === 'close' ? tokenBalance : 0n]);
   const kasBalance = env ? sum(env.funding.map((u) => BigInt(u.amount))) : 0n;
   const pairPart = env && isPairEnv(env) ? env.pair : null;
-  /** a pair: the tip fields typed below what a netting fill needs (the order's own tip, and an if-done exit's) */
+  /** A pair: the tip fields typed below what a netting fill needs (the order's own, an exit's). */
   const lowTips = useMemo(() => (env && isPairEnv(env) ? lowPairTipFields(env, built.intent as Parameters<typeof lowPairTipFields>[1]) : []), [env, built.intent]);
-  /** a pair: the quote token B the wallet can spend (a buy pays in B) */
+  /** A pair: the quote token B the wallet can spend (a buy pays in B). */
   const quoteBalance = pairPart ? sum(pairPart.quoteTokenUtxos.map((u) => BigInt(u.state.amount))) : 0n;
   const refPrice = (() => {
     const own = parsePrice(form.values.price ?? form.values.displayedPrice ?? '', form.side, ctx);
     if (own.ok) return own.value.price;
     return env?.book.asks[0]?.price ?? env?.book.bids[0]?.price ?? 0n;
   })();
-  // what the inverted fields need to speak KAS: the price of the form (else the book's best), per whole token of `scale` base units
+  // What the inverted fields need to speak KAS: the price of the form (else the book's best), per
+  // whole token of `scale` base units.
   const ownPrice = parsePrice(form.values.price ?? form.values.displayedPrice ?? '', form.side, ctx).ok;
   const flip = { name, price: refPrice > 0n ? refPrice : null, ownPrice, scale, decimals: token.decimals };
   /**
-   * The largest buy the wallet can place at the form's price (or the book's best when it is empty): a binary search on the amount, each step planned
-   * by the real planner, so carriers, the network fee and the escrow rounding are exact; a small reserve stays in the wallet. A ladder searches the
-   * amount of ONE order such that all its orders together are affordable. Fields the planner cannot plan without (a missing stop ...) fall back to a
-   * conservative rule of thumb.
+   * The largest buy the wallet can place at the form's price, or at the book's best when it is
+   * empty. It is a binary search on the amount, each step planned by the real planner, so carriers,
+   * the network fee and the escrow rounding are exact. A small reserve stays in the wallet. A
+   * ladder searches the amount of one order such that all its orders together are affordable.
+   * Fields the planner cannot plan without (a missing stop) fall back to a conservative rule of
+   * thumb.
    */
   const maxBuy = (tip: bigint): bigint => {
     if (!env || refPrice <= 0n) return 0n;
@@ -358,7 +411,7 @@ export function OrderTicket(props: OrderTicketProps) {
       const f = setAmountBase(form, 'amount', amount, ctx);
       return (form.values.price ?? '') === '' && layoutOf(f, ctx).main.includes('price') ? setValue(f, 'price', formatPrice(refPrice, ctx)) : f;
     };
-    // the prices of a ladder do not depend on the amount: read them off a probe
+    // The prices of a ladder do not depend on the amount, so they are read off a probe.
     let prices: bigint[] = [refPrice];
     if (limitSet) {
       const probe = buildIntent(withAmount(1n), ctx).intent;
@@ -379,10 +432,13 @@ export function OrderTicket(props: OrderTicketProps) {
       },
     });
   };
-  /** What Max gives for the form as it is: a sell the whole token balance (split over the orders of a ladder); a buy is searched against the planner. */
+  /**
+   * What Max gives for the form as it is. A sell gives the whole token balance, split over the
+   * orders of a ladder. A buy is searched against the planner.
+   */
   const computeMax = (): bigint => {
     if (form.side === 'sell') return tokenBalance / BigInt(limitSet?.levels ?? 1);
-    // the form's own tip (read off the order at one base unit: the amount may still be empty)
+    // The form's own tip, read off the order at one base unit. The amount may still be empty.
     const probe = built.intent ?? buildIntent(setAmountBase(form, 'amount', 1n, ctx), ctx).intent;
     const tip = probe && 'tip' in probe && probe.tip ? probe.tip : 0n;
     return maxBuy(tip);
@@ -392,9 +448,11 @@ export function OrderTicket(props: OrderTicketProps) {
     setForm((f) => (n > 0n ? setAmountBase(f, 'amount', n, ctx) : setValue(f, 'amount', '')));
     setMaxNote(form.side === 'buy' && n <= 0n ? t('ticket.max.none') : null);
   };
-  // the amount slider: 0..100 % of Max, recomputed when anything but the amount changes (type, side, price, tip, balances, the book); a buy's
-  // search runs the planner, so it waits for typing to pause
-  // the Max of the slider with the form it was computed for: a stale one (another side, type or price) is never used
+  // The amount slider is 0..100 % of Max. It is recomputed when anything but the amount changes
+  // (type, side, price, tip, balances, the book). A buy's search runs the planner, so it waits for
+  // typing to pause.
+  // The Max of the slider is kept with the form it was computed for. A stale one (another side,
+  // type or price) is never used.
   const [sliderMax, setSliderMax] = useState<{ key: string; max: bigint | null } | null>(null);
   const { amount: _amount, [`amount${BASE_SUFFIX}`]: _amountBase, ...otherValues } = form.values;
   void _amount;
@@ -437,7 +495,7 @@ export function OrderTicket(props: OrderTicketProps) {
 
   const onChange = (id: string, value: string) => {
     edited();
-    // a tip typed by hand is the user's own: the executor tip option goes off
+    // A tip typed by hand is the user's own, so the executor tip option goes off.
     setForm((f) => {
       const g = setValue(f, id, value);
       return id === 'tip' && f.values.tipAuto === 'true' ? setValue(g, 'tipAuto', '') : g;
@@ -453,8 +511,9 @@ export function OrderTicket(props: OrderTicketProps) {
   };
 
   const shownPlan: OrderPlan | null = enabled && current ? plan : null;
-  // the executor tip option (kob/fill-tip.ts): the tip of a match of this order, measured on its placement (a take places none: the same
-  // order as a resting one is measured), written into the tip box while it is on
+  // The executor tip option (kob/fill-tip.ts) is the tip of a match of this order, measured on its
+  // placement. A take places none, so the same order as a resting one is measured. It is written
+  // into the tip box while the option is on.
   const tipAutoOn = form.values.tipAuto === 'true' && !quote;
   const autoTip = useMemo(() => {
     if (!tipAutoOn || !env || !shownPlan || !planIntent) return null;
@@ -470,7 +529,8 @@ export function OrderTicket(props: OrderTicketProps) {
     const text = formatPrice(autoTip.tip, ctx, 'kas');
     if ((form.values.tip ?? '') !== text) setForm((f) => (f.values.tipAuto === 'true' ? setValue(f, 'tip', text) : f));
   }, [autoTip, form.values.tip]);
-  // what a crossing order fills from the book: while a click runs, the one it was for; else the plan's (a new amount, price, side or book plans it again)
+  // What a crossing order fills from the book. While a click runs it is the one the click was for.
+  // Otherwise it is the plan's, planned again for a new amount, price, side or book.
   const takeFacts: TakeFacts | null = (placing && takeRun ? takeAtClick : null) ?? (!ladder && shownPlan?.take && shownPlan.ok ? shownPlan.take : null);
   const takeLines = takeFacts
     ? {
@@ -478,7 +538,8 @@ export function OrderTicket(props: OrderTicketProps) {
           amount: formatUnits(takeFacts.total.amount, token.decimals, { group: ',' }), ticker,
           price: takeFacts.total.amount > 0n ? formatKas((takeFacts.total.kas * takeFacts.scale) / takeFacts.total.amount, { group: ',' }) : '0',
         }),
-        // about: two significant digits (the final confirmation has the exact fee); on a narrow ticket it is cut first
+        // About two significant digits. The final confirmation has the exact fee. On a narrow
+        // ticket it is cut first.
         fee: t('ticket.take.fee', { fee: kasApprox(takeFacts.fee * BigInt(takeFacts.steps.length)) }),
         rest: takeFacts.rest > 0n
           ? t(takeFacts.restKind === 'limit' ? 'ticket.take.rest' : 'ticket.take.restNone', { amount: formatUnits(takeFacts.rest, token.decimals, { group: ',' }), ticker, price: formatKas(takeFacts.limit, { group: ',' }) })
@@ -487,7 +548,8 @@ export function OrderTicket(props: OrderTicketProps) {
     : null;
   const tipAutoNote = tipAutoOn ? (autoTip ? t('ticket.tipAuto.total', { kas: formatKas(autoTip.total, { group: ',' }) }) : t('ticket.tipAuto.unknown')) : undefined;
   const planErrors = shownPlan ? errors(shownPlan) : [];
-  // the delivery rows of Advanced: the choice in force, the program's default Top-up tip, and what Top-up costs at most (the shown plan's fills)
+  // The delivery rows of Advanced: the choice in force, the program's default Top-up tip, and what
+  // Top-up costs at most (the shown plan's fills).
   const delivery = deliveryOf(form, ctx);
   const planned = shownPlan ? planDelivery(shownPlan) : null;
   const carrier = env?.carrier ?? DEFAULT_CARRIER;
@@ -495,36 +557,43 @@ export function OrderTicket(props: OrderTicketProps) {
   const topupThreshold = planned?.delivery.choice === 'topup' ? planned.delivery.threshold : null;
   const [deliveryHelp, setDeliveryHelp] = useState(false);
   const deliverySubs: Record<string, { text: string; testid: string }> = {};
-  // one line under the select that follows the choice (Added to one UTXO: its tip and the tip total follow under the tip box)
-  // a pair sell receives token B: the line names it
+  // One line under the select that follows the choice. For Added to one UTXO, its tip and the tip
+  // total follow under the tip box.
+  // A pair sell receives token B, so the line names it.
   if (delivery) deliverySubs.delivery = { text: quote && form.side === 'sell' ? t(`ticket.delivery.hint.${delivery}.pairSell`, { quote: quote.ticker }) : t(`ticket.delivery.hint.${delivery}`), testid: 'order-delivery-note' };
   if (delivery === 'topup' && planned?.delivery.choice === 'topup') {
     const tip = BigInt(planned.delivery.fields.topupTip);
     const kas = formatKas(topupTipTotal(tip, planned.fills), { group: ',' });
     deliverySubs.topupTip = { text: planned.fills === 1n ? t('ticket.topup.total.one', { kas }) : t('ticket.topup.total.other', { kas, count: planned.fills.toString() }), testid: 'order-topup-total' };
   }
-  // under the amount box: what this amount costs (a buy) or yields (a sell) in the quote, from the book the planner sees; a fixed line, "—" when empty
-  // the USD display (Settings): a muted read-only "≈ $x" beside the estimate of a KAS-quoted order; the ticket's own figures and everything signed stay KAS
+  // Under the amount box: what this amount costs (a buy) or yields (a sell) in the quote, from the
+  // book the planner sees. It is a fixed line and shows "—" when empty.
+  // The USD display (Settings) is a muted read-only "≈ $x" beside the estimate of a KAS-quoted
+  // order. The ticket's own figures and everything signed stay KAS.
   const fiat = useFiat();
   const costText = useMemo(() => {
     const pv = env
       ? costPreview({ intent: built.intent, book: env.book, scale: env.token.scale, worstPrice: plan?.disclosure?.worstPrice ?? null, fee: quote ? null : plan?.disclosure?.fee ?? null, take: plan?.take ?? null })
       : ({ kind: 'empty' } as const);
-    // the figures without their unit: the unit stands once, in the units column under the amount's (TicketFields.tsx)
+    // The figures without their unit. The unit stands once, in the units column under the amount's
+    // (TicketFields.tsx).
     const text = costLine(
       pv,
       (v) => (quote ? formatUnits(v, quote.decimals, { group: ',' }) : formatKas(v, { group: ',' })),
       (v) => formatUnits(v, token.decimals, { group: ',' }),
       (key, params) => t(`ticket.cost.${key}`, params),
     );
-    // the dollars of the estimate: only a KAS quote has a price in dollars; the slot stays while USD is chosen, so nothing moves when a figure comes or goes
+    // The dollars of the estimate. Only a KAS quote has a price in dollars. The slot stays while
+    // USD is chosen, so nothing moves when a figure comes or goes.
     const usd = fiat && !quote ? { text: pv.kind === 'cost' ? `≈ ${usdTextFit(sompiToUsd(pv.estimate, fiat.rate), 11)}` : '', title: pv.kind === 'cost' ? kasTitleOf(formatKas(pv.estimate, { group: ',' }), fiat) : '' } : null;
     return { text, unit: pv.kind === 'empty' ? '' : pv.kind === 'thin' ? ticker : quote ? quote.ticker : 'KAS', usd };
   }, [env, built.intent, plan, quote, token.decimals, ticker, fiat]);
-  /** an amount of the market's quote (KAS, or a pair's token B) in words */
+  /** An amount of the market's quote (KAS, or a pair's token B) in words. */
   const quoteText = (v: bigint): string => (quote ? `${formatUnits(v, quote.decimals, { group: ',' })} ${quote.ticker}` : `${formatKas(v, { group: ',' })} KAS`);
-  // the LAST order of a limit ladder is the one furthest from the typed price: planned too, so a level that could never be placed is refused before the first is signed
-  // one curve order: its own plan (its errors stop the button; its carriers and fee are what placing it costs)
+  // The last order of a limit ladder is the one furthest from the typed price. It is planned too,
+  // so a level that could never be placed is refused before the first is signed.
+  // One curve order: its own plan. Its errors stop the button, and its carriers and fee are what
+  // placing it costs.
   const curvePlan = useMemo(() => {
     if (!enabled || !env || !asCurve || !curveIntent) return null;
     try {
@@ -533,7 +602,8 @@ export function OrderTicket(props: OrderTicketProps) {
       return null;
     }
   }, [enabled, env, asCurve, curveIntent]);
-  // a curve order: the KAS it locks (the order's and its custody's carriers, returned when it sells out or is cancelled) plus the network fee
+  // A curve order: the KAS it locks plus the network fee. It locks the order's and its custody's
+  // carriers, returned when it sells out or is cancelled.
   const curveCost = asCurve ? (curvePlan?.disclosure ? curvePlan.disclosure.kasLocked + (curvePlan.disclosure.fee ?? 0n) : null) : undefined;
   const footText = curveCost === undefined ? costText : curveCost === null ? { text: t('ticket.cost.dash'), unit: '', usd: null } : { text: formatKas(curveCost, { group: ',' }), unit: 'KAS', usd: null };
   const lastOrderErrors = useMemo(() => {
@@ -546,7 +616,8 @@ export function OrderTicket(props: OrderTicketProps) {
     }
   }, [enabled, env, limitSet, ladder, asCurve, curvePlan]);
   const ladderTot = useMemo(() => (shownPlan && ladder ? ladderTotals(shownPlan, ladder) : null), [shownPlan, ladder]);
-  // a ladder the wallet cannot pay for as a whole (each level alone may plan): the shortfall is an error and the button stays disabled
+  // A ladder the wallet cannot pay for as a whole (each level alone may plan). The shortfall is an
+  // error and the button stays disabled.
   const ladderFunds: { code: string; text: string }[] = [];
   if (env && ladder?.ok) {
     if (ladderTot && form.side === 'buy' && !quote && ladderTot.kasLocked > kasBalance) {
@@ -559,10 +630,12 @@ export function OrderTicket(props: OrderTicketProps) {
       ladderFunds.push({ code: 'quote', text: t('ticket.ladder.fundsQuote', { need: quoteText(limitLadderValues(ladder, 'buy', scale).total), have: quoteText(quoteBalance) }) });
     }
   }
-  // C5-10: a wallet not known to sign covenant inputs (every cancel needs one) passes a one-time test signature before its first order
+  // A wallet not known to sign covenant inputs (every cancel needs one) passes a one-time test
+  // signature before its first order.
   const gate = useCovenantSignGate(enabled ? env : null);
-  // too many UTXOs of the token for one sale: the ticket offers to merge just enough first, then places the sale (merge-before-sale.tsx). A
-  // single order of a KAS market only: a ladder's levels and a pair's quote token are planned apart
+  // Too many UTXOs of the token for one sale. The ticket offers to merge just enough first, then
+  // places the sale (merge-before-sale.tsx). This is for a single order of a KAS market only,
+  // because a ladder's levels and a pair's quote token are planned apart.
   const [sellAfterMerge, setSellAfterMerge] = useState<{ leaves: ReadonlySet<string>; at: number } | null>(null);
   const merge = useMergeBeforeSale({
     token, ticker: token.ticker, pubkey: wallet.info?.pubkey ?? null, env,
@@ -571,8 +644,9 @@ export function OrderTicket(props: OrderTicketProps) {
     onMerged: (leaves) => setSellAfterMerge({ leaves, at: Date.now() }),
     onStop: (text, raw) => sender.stop(text, raw, 'merge'),
   });
-  // a click that ended without its order (blocked, declined, refused by the node, a direct fill that lost its race every time) is also said at
-  // the top right in red, once the click is over (founder 2026-11-17); it is the only place it is said (2026-11-18: no red box in the ticket)
+  // A click that ended without its order (blocked, declined, refused by the node, or a direct fill
+  // that lost its race every time) is also said at the top right in red, once the click is over.
+  // That is the only place it is said. There is no red box in the ticket.
   useSendFailureToast(
     sender.status,
     placing,
@@ -581,12 +655,14 @@ export function OrderTicket(props: OrderTicketProps) {
   const canPlace =
     enabled && gate.ready && !!shownPlan && shownPlan.ok && planErrors.length === 0 && !!shownPlan.built && !pending && !placing && !sendBusy(sender.status) && !crash
     && (!ladder || ladder.ok) && lastOrderErrors.length === 0 && ladderFunds.length === 0 && !merge.running;
-  // the only thing in the way is that the sale needs more token UTXOs than one transaction takes, and a merge can help: the order button
-  // itself merges first, then places the sale (its label and the note above it say so)
+  // The only thing in the way is that the sale needs more token UTXOs than one transaction takes,
+  // and a merge can help. The order button itself merges first, then places the sale. Its label and
+  // the note above it say so.
   const mergeFirst =
     !!merge.offer && enabled && gate.ready && !!shownPlan && !pending && !placing && !sendBusy(sender.status) && !crash && !merge.running
     && planErrors.length > 0 && planErrors.every((i) => i.code === planErrors[0]!.code && MERGE_ANSWERS.has(i.code));
-  // an edit makes a reason the last click stopped for stale (a submitted order stays on the line until the next click)
+  // An edit makes a reason the last click stopped for stale. A submitted order stays on the line
+  // until the next click.
   const edited = () => {
     setMaxNote(null);
     setLadderNote(null);
@@ -595,15 +671,19 @@ export function OrderTicket(props: OrderTicketProps) {
     if (!placing && sender.status && sender.status.phase !== 'submitted') sender.clear();
   };
 
-  // an inverted market words the type where the native name / help speaks of buying or selling the token
+  // An inverted market words the type where the native name or help speaks of buying or selling the
+  // token.
   const typeKey = (id: OrderTypeId, part: 'name' | 'help'): string => (inverted && has(`ticket.type.${id}.${part}Inv`) ? `ticket.type.${id}.${part}Inv` : `ticket.type.${id}.${part}`);
   const typeName = t(typeKey(form.type, 'name'), { name });
   const typeHelp = t(typeKey(form.type, 'help'), { name });
-  // the side as the shown pair names it: buying KAS in KAS/TOKEN is selling the token
+  // The side as the shown pair names it. Buying KAS in KAS/TOKEN is selling the token.
   const shownSide: Side = inverted ? oppositeSide(form.side) : form.side;
   const sideName = t(shownSide === 'buy' ? 'common.side.buy' : 'common.side.sell');
 
-  /** one order of the ladder in words: the level, its prices (a limit ladder: side, amount, price and value) */
+  /**
+   * One order of the ladder in words: the level and its prices. A limit ladder adds side, amount,
+   * price and value.
+   */
   const ladderRow = (l: LadderLevel): string => {
     if (!limitSet) return ladderRepeatRow(l);
     const amount = (l.intent as { amount: bigint }).amount;
@@ -623,9 +703,11 @@ export function OrderTicket(props: OrderTicketProps) {
   const noRefs = (): References => ({ touches: [], unavailable: verifiers.map((v) => v.label) });
 
   /**
-   * The plan made at the click within the terms the ticket showed (`shown`, review-check.ts `withinTerms`): it is the order to sign, whatever its
-   * start price, coins or fee. A market / close order whose auction would end beyond the worst price shown is planned again with the slippage
-   * narrowed to end there; a touch already beyond it, or another order kind past its shown total, stops the order.
+   * The plan made at the click within the terms the ticket showed (`shown`, review-check.ts
+   * `withinTerms`). It is the order to sign, whatever its start price, coins or fee. A market or
+   * close order whose auction would end beyond the worst price shown is planned again with the
+   * slippage narrowed to end there. A touch already beyond it, or another order kind past its
+   * shown total, stops the order.
    */
   const keepTerms = (p: OrderPlan, intent: Intent, plan: (i: Intent) => OrderPlan, shown: OrderPlan | null): { p: OrderPlan; intent: Intent } | PlanStop => {
     if (!shown || withinTerms(shown, p)) return { p, intent };
@@ -643,34 +725,40 @@ export function OrderTicket(props: OrderTicketProps) {
   };
 
   /**
-   * Plans one order of the click (`index` of `levels`: a ladder places each level as its own transaction) at once, from the environment on hand
-   * when it is recent enough, with the node clock read now (an auction starts from it), within the terms the ticket showed (`shown`: the plan of
-   * a single order the button was enabled for); the signature then waits for the re-check against the state at the click (review-check.ts: the
-   * freshness rule), which runs alongside the send's own checks and may put its own plan of the order in place. A level that cannot be planned
-   * stops the click.
+   * Plans one order of the click at once. `index` is its place among `levels`, since a ladder
+   * places each level as its own transaction. It plans from the environment on hand when that is
+   * recent enough, with the node clock read now (an auction starts from it), within the terms the
+   * ticket showed (`shown`: the plan of a single order the button was enabled for). The signature
+   * then waits for the re-check against the state at the click (review-check.ts, the freshness
+   * rule). The re-check runs alongside the send's own checks and may put its own plan of the order
+   * in place. A level that cannot be planned stops the click.
    */
   const prepareLevel = async (intent0: Intent, index: number, levels: number, shown: OrderPlan | null, opts: { fresh?: boolean } = {}): Promise<(SendJob & { plan?: OrderPlan }) | PlanStop> => {
     let intent = intent0;
     const clickAt = Date.now();
     try {
-      // the environment: the first level takes the one on hand when its oldest part is at most REVIEW_CACHE_MS old, else a read started at most
-      // REVIEW_REUSE_MS before the click; a later level of a ladder reads everything after the click (the level before has just spent coins).
-      // A take (`fresh`) reads the book again right before it is built: the orders it spends must still be there
+      // The environment. The first level takes the one on hand when its oldest part is at most
+      // REVIEW_CACHE_MS old, else a read started at most REVIEW_REUSE_MS before the click. A later
+      // level of a ladder reads everything after the click, because the level before has just spent
+      // coins. A take (`fresh`) reads the book again right before it is built, because the orders
+      // it spends must still be there.
       const snap = index === 0 && !opts.fresh ? snapshot() : null;
       const cached = snap && clickAt - snap.at <= REVIEW_CACHE_MS ? snap : null;
       let base = cached ? cached.env : await (index === 0 ? (opts.fresh ? since(clickAt, ['market']) : since(clickAt - REVIEW_REUSE_MS)) : refresh());
       if (!base) return { text: t('ticket.reviewNoEnv') };
       let fromCache = !!cached;
-      // the node clock now: DAA times (an auction's start, a timed start, an IOC life, a day order) count from it, never from the clock of the
-      // environment on hand: the background clock projected to the click when it is fresh, else a read (a node slower than CLOCK_WAIT_MS: the
-      // clock on hand projected to now, review-check.ts `projectClock`)
+      // The node clock now. DAA times (an auction's start, a timed start, an IOC life, a day order)
+      // count from it, never from the clock of the environment on hand. That is the background
+      // clock projected to the click when it is fresh, else a read. A node slower than
+      // CLOCK_WAIT_MS gives the clock on hand projected to now (review-check.ts `projectClock`).
       let clock = liveClockAt(liveClock.current, clickAt)
         ?? (await reviewClock(() => readClock(services), base.clock, cached ? cached.clockAt : (snapshot()?.clockAt ?? clickAt), { waitMs: CLOCK_WAIT_MS })).clock;
       let refsNow = touches.data ?? noRefs();
       const planWith = (e: PlanEnv, refs: References, i: Intent = intent): OrderPlan => planOrder(withRefs({ ...e, clock }, refs), i);
       let p = planWith(base, refsNow);
       if ((!p.ok || !p.built || errors(p).length > 0) && fromCache) {
-        // the parts on hand cannot plan it (the holdings of a sell still being read, the book moved): plan from the state at the click instead
+        // The parts on hand cannot plan it (the holdings of a sell still being read, or the book
+        // moved), so plan from the state at the click instead.
         const fresh = await since(clickAt - REVIEW_REUSE_MS);
         if (!fresh) return { text: t('ticket.reviewNoEnv') };
         base = fresh;
@@ -681,8 +769,10 @@ export function OrderTicket(props: OrderTicketProps) {
       const firstError = errors(p)[0];
       if (!p.ok || !p.built || firstError) return { text: firstError ? issueText(firstError, issueCtx) : t('ticket.reviewChanged') };
       const env0 = base;
-      // an auction signed in a wallet whose last auction signature took longer than its window (confirm/signing-time.ts): planned with the clock
-      // later by the shortfall, the move a re-timing makes (only its times later); a plan that cannot be made so keeps the clock of the click
+      // An auction signed in a wallet whose last auction signature took longer than its window
+      // (confirm/signing-time.ts) is planned with the clock later by the shortfall. That is the
+      // move a re-timing makes, which only makes its times later. A plan that cannot be made so
+      // keeps the clock of the click.
       let shift = 0n;
       const extra = wallet.adapter ? firstAttemptLead(rememberedSigningMs(wallet.adapter.id), clock.rateMilli) : 0n;
       if (extra > 0n && auctionSubmitBy(p.states, clock.daa) !== null) {
@@ -699,22 +789,26 @@ export function OrderTicket(props: OrderTicketProps) {
       p = kept.p;
       intent = kept.intent;
       const planned = p;
-      // the re-check reads again only the parts that may no longer be the state at the click (review-check.ts rule 2; none when the environment was
-      // read after the click); the references of further indexers are always read again
+      // The re-check reads again only the parts that may no longer be the state at the click
+      // (review-check.ts rule 2). It reads none when the environment was read after the click. The
+      // references of further indexers are always read again.
       const toRead = fromCache ? stale(clickAt) : [];
       const settled = toRead.length === 0;
       const label = intent0.type === 'curve' ? t('ticket.ladder.curveLabel', { name }) : orderLabel(form.type, form.side, levels > 1 ? { level: index + 1, levels } : undefined, name);
       const openTokens = (quote ? [token, quote] : [token]).filter((x) => x.openList);
-      // the lines the final confirmation adds (an order below the minimum value, a price far through the market, contended blocks): worked out here, once, from this plan
+      // The lines the final confirmation adds (an order below the minimum value, a price far
+      // through the market, contended blocks). They are worked out here, once, from this plan.
       const notes = confirmNotes(planned, {
         plain: !quote && levels === 1, min: minOrderValueOf(indexerStatus.health), contended, issue: (i) => issueText(i, issueCtx),
         low: (n, source) => t(`ticket.minValue.${source}`, { value: formatKas(n.value, { group: ',' }), min: formatKas(n.min, { group: ',' }) }),
         busy: () => t('ticket.congestion'),
       });
-      // the same notes as codes and numbers for the private-key signer's confirmation, which words them itself
+      // The same notes as codes and numbers for the private-key signer's confirmation, which words
+      // them itself.
       const signerNotes = confirmSignerNotes(planned, { plain: !quote && levels === 1, min: minOrderValueOf(indexerStatus.health), contended });
-      // a take was planned on a book read just now and has no auction: no re-check, no re-timing, no following of the market (a lost race is
-      // the node's answer, and the take is planned again: placeTake)
+      // A take was planned on a book read just now and has no auction, so it has no re-check, no
+      // re-timing and no following of the market. A lost race is the node's answer, and the take is
+      // planned again (placeTake).
       if (planned.take) return { built: planned.built!, expected: expectedFromPlan(planned), label, openTokens, notes, signerNotes, submitByDaa: null, plan: planned };
       return {
         plan: planned,
@@ -722,7 +816,8 @@ export function OrderTicket(props: OrderTicketProps) {
         gate: !settled || verifiers.length > 0 ? recheck(planned, intent, clock, base.fees, settled ? base : null, clickAt, toRead, shown, label, openTokens, shift) : undefined,
         submitByDaa: auctionSubmitBy(planned.states, clock.daa),
         retime: retimer(env0, refsNow, intent, null, label, openTokens, shift + RETIME_LEAD_DAA),
-        // the open final confirmation follows the market and the clock: the same order planned again, as at a click now
+        // The open final confirmation follows the market and the clock: the same order planned
+        // again, as at a click now.
         replan: async () => {
           const again = await prepareLevel(intent0, index, levels, shown);
           return 'built' in again ? again : { stop: { code: again.code ?? 'plan', text: again.text } };
@@ -735,11 +830,14 @@ export function OrderTicket(props: OrderTicketProps) {
   };
 
   /**
-   * The re-check of a planned order (review-check.ts rule 2): the same intent planned against the environment at the click (`env`: the one on hand
-   * already is; else `parts` read again from REVIEW_REUSE_MS before the click on) and the references read now, with the clock and the fees of
-   * `planned`. The same transaction: kept; another one without an error and within the terms the ticket showed (`shown`): it replaces the plan
-   * (a moved book, coins replaced after a submission); an error or a broken term stops the order. `shift`: how much later than the click
-   * `clock` is (a slow wallet's auction, prepareLevel), where its re-timings start from.
+   * The re-check of a planned order (review-check.ts rule 2). It plans the same intent against the
+   * environment at the click and the references read now, with the clock and the fees of
+   * `planned`. The environment is `env` when the one on hand already is the one at the click, else
+   * `parts` read again from REVIEW_REUSE_MS before the click on. The same transaction is kept.
+   * Another one without an error and within the terms the ticket showed (`shown`) replaces the plan
+   * (a moved book, coins replaced after a submission). An error or a broken term stops the order.
+   * `shift` is how much later than the click `clock` is (a slow wallet's auction, prepareLevel),
+   * where its re-timings start from.
    */
   const recheck = async (
     planned: OrderPlan, intent: Intent, clock: Clock, fees: PlanEnv['fees'], env: PlanEnv | null, clickAt: number, parts: EnvWait[], shown: OrderPlan | null,
@@ -763,11 +861,14 @@ export function OrderTicket(props: OrderTicketProps) {
   };
 
   /**
-   * The re-timing of a planned order (`SendJob.retime`: a long read of the final confirmation, an auction start that passed while the wallet
-   * signed): the same intent planned on the same environment, references and fees, so with the same terms, inputs and fee, with the node clock now
-   * (plus `lead`, RETIME_LEAD_DAA more at each re-timing; at least the signing time the failed attempt measured plus RETIME_LEAD_DAA:
-   * confirm/signing-time.ts `retimeLead`) for its times. Only its times move, later: the signer and the app accept it without asking again
-   * (signer/retime.ts). The first `lead` is the shift the plan of the click had (`shift`, a slow wallet's) plus RETIME_LEAD_DAA.
+   * The re-timing of a planned order (`SendJob.retime`: a long read of the final confirmation, or
+   * an auction start that passed while the wallet signed). It plans the same intent on the same
+   * environment, references and fees, so with the same terms, inputs and fee. For its times it
+   * uses the node clock now plus `lead`. `lead` grows by RETIME_LEAD_DAA at each re-timing, and is
+   * at least the signing time the failed attempt measured plus RETIME_LEAD_DAA
+   * (confirm/signing-time.ts `retimeLead`). Only its times move, later, and the signer and the app
+   * accept it without asking again (signer/retime.ts). The first `lead` is the shift the plan of
+   * the click had (`shift`, a slow wallet's) plus RETIME_LEAD_DAA.
    */
   const retimer = (env: PlanEnv, refs: References, intent: Intent, fees: PlanEnv['fees'] | null, label: string, openTokens: SendJob['openTokens'], lead = RETIME_LEAD_DAA): SendJob['retime'] =>
     async (o) => {
@@ -784,7 +885,10 @@ export function OrderTicket(props: OrderTicketProps) {
       }
     };
 
-  /** One level: planned, checked and sent (an auction whose start passed while the wallet signed is re-timed by the send: SendStatus.tsx). */
+  /**
+   * One level: planned, checked and sent. An auction whose start passed while the wallet signed is
+   * re-timed by the send (SendStatus.tsx).
+   */
   const placeLevel = async (intent: Intent, index: number, levels: number, shown: OrderPlan | null): Promise<SendOutcome | null> => {
     const job = await prepareLevel(intent, index, levels, shown);
     if (!('built' in job)) {
@@ -794,8 +898,9 @@ export function OrderTicket(props: OrderTicketProps) {
     return sender.send(job);
   };
 
-  // after the merges: the sale is placed as by its button once the ticket has planned it on an environment that holds the merged UTXOs, and its
-  // usual final confirmation follows. A plan that cannot be placed then shows its reason instead, and so does one that never sees them
+      // After the merges, the sale is placed as by its button once the ticket has planned it on an
+      // environment that holds the merged UTXOs, and its usual final confirmation follows. A plan
+      // that cannot be placed then shows its reason instead, and so does one that never sees them.
   const sellReady = !!sellAfterMerge && !!env && current && env.tokenUtxos.some((u) => sellAfterMerge.leaves.has(`${u.transactionId}:${u.index}`));
   useEffect(() => {
     if (!sellAfterMerge) return;
@@ -805,7 +910,7 @@ export function OrderTicket(props: OrderTicketProps) {
       else sender.stop(t('ticket.merge.saleNotPlaced'), undefined, 'merge');
       return;
     }
-    // the merged coins never showed up: the sale is not placed, and the ticket says so (it used to give the button back in silence)
+    // The merged coins never showed up. The sale is not placed, and the ticket says so.
     const h = setTimeout(() => {
       setSellAfterMerge(null);
       sender.stop(t('ticket.merge.notVisible'), undefined, 'merge');
@@ -814,10 +919,12 @@ export function OrderTicket(props: OrderTicketProps) {
   }, [sellAfterMerge, sellReady]);
 
   /**
-   * A crossing order filled from the book (kob/take.ts): each take its own transaction, planned at its turn on the book read again right before,
-   * signed and sent before the next; then the rest rests at the limit (GTC / GTD / day) or is not placed (IOC, FOK, market). A take whose order
-   * is gone (a lost race) is planned again on a fresh book once; a second loss places the order on the book instead (a limit as its auction, an
-   * immediate order as its covenant order). The stepper says where it is.
+   * A crossing order filled from the book (kob/take.ts). Each take is its own transaction, planned
+   * at its turn on the book read again right before, signed and sent before the next. Then the
+   * rest rests at the limit (GTC, GTD or day) or is not placed (IOC, FOK, market). A take whose
+   * order is gone (a lost race) is planned again on a fresh book once. A second loss places the
+   * order on the book instead: a limit as its auction, an immediate order as its covenant order.
+   * The stepper says where it is.
    */
   const placeTake = async (intent0: Intent, shown: OrderPlan) => {
     const tk0 = shown.take!;
@@ -844,11 +951,13 @@ export function OrderTicket(props: OrderTicketProps) {
       setItem(at, { state: 'current', busy: true });
       let job = await prepareLevel(now, txs, 2, txs === 0 ? shown : null, { fresh: true });
       if ('built' in job && !job.plan?.take && !fallback) {
-        // nothing more to take now: the rest rests as a plain limit, or (IOC, FOK, market) it is not placed
+        // Nothing more to take now. The rest rests as a plain limit, or (IOC, FOK, market) it is
+        // not placed.
         if (!restsLimit) {
           items = items.slice(0, at);
           show();
-          // nothing at all was filled (the book moved since the plan): said, not a silent end of the click
+          // Nothing at all was filled (the book moved since the plan). That is said, not a silent
+          // end of the click.
           if (txs === 0) sender.stop(t('ticket.take.nothingNow'), undefined, 'take-empty');
           break;
         }
@@ -869,7 +978,7 @@ export function OrderTicket(props: OrderTicketProps) {
         at++;
         if (isTake) {
           left -= job.plan!.take!.amount;
-          // an estimate of fewer takes than happen: one more step
+          // An estimate of fewer takes than happen: one more step.
           if (left > 0n && at >= items.length && !restsLimit) items.push({ label: takeWord(at, at + 1), state: 'waiting', testid: `order-take-step-${at + 1}` });
           if (left > 0n && restsLimit && !items.some((x, k) => k >= at)) items.push({ label: t('ticket.take.stepRest'), state: 'waiting', testid: 'order-take-step-rest' });
           continue;
@@ -880,7 +989,8 @@ export function OrderTicket(props: OrderTicketProps) {
       const code = out.send.code ?? '';
       if (isTake && LOST_RACE.has(code) && races < 2) {
         races++;
-        // the order was gone: the book read again and taken again; a second loss places the order on the book
+        // The order was gone. The book is read again and taken again. A second loss places the
+        // order on the book.
         setItem(at, { state: 'current', note: t('ticket.take.retry') });
         if (races > 1) fallback = true;
         continue;
@@ -888,16 +998,19 @@ export function OrderTicket(props: OrderTicketProps) {
       setItem(at, { state: 'failed', busy: false });
       break;
     }
-    // steps estimated that never came (the book filled it sooner)
+    // Steps estimated that never came (the book filled it sooner).
     items = items.filter((x, k) => k < at || x.state !== 'waiting');
     show();
     return { done: left === 0n || (!restsLimit && txs > 0) };
   };
 
-  /** The order button: every level of the order in turn, each planned at its turn, checked and approved in the wallet; a level that stops ends it. */
+  /**
+   * The order button: every level of the order in turn, each planned at its turn, checked and
+   * approved in the wallet. A level that stops ends it.
+   */
   const place = async () => {
     if (!canPlace || !built.intent) return;
-    // a crossing order fills from the book: its own flow of takes and the rest
+    // A crossing order fills from the book: its own flow of takes and the rest.
     if (!ladder && shownPlan?.take) {
       setPlacing(true);
       setMaxNote(null);
@@ -914,18 +1027,21 @@ export function OrderTicket(props: OrderTicketProps) {
       void refresh().catch(() => null);
       return;
     }
-    // Top-up: every order of the click uses one receive threshold, the stored one or the one the shown plan set (the wallet's first top-up order
-    // of the token); it is stored once an order with it is submitted
+    // Top-up: every order of the click uses one receive threshold, the stored one or the one the
+    // shown plan set (the wallet's first top-up order of the token). It is stored once an order
+    // with it is submitted.
     const firstTopup = topupThreshold === null ? null : storedThreshold === undefined ? topupThreshold : null;
     const intents = (asCurve && curveIntent ? [curveIntent as Intent] : ladder?.ok ? ladder.levels.map((l) => l.intent) : [built.intent]).map((i) => (firstTopup !== null ? withThreshold(i, firstTopup) : i));
     const levels = intents.length;
-    // the terms the user saw: the plan the button was enabled for (a ladder's levels are planned each at its turn, each within the planner's rules)
+    // The terms the user saw: the plan the button was enabled for. A ladder's levels are planned
+    // each at its turn, each within the planner's rules.
     const shown = levels === 1 ? shownPlan : null;
     setPlacing(true);
     setMaxNote(null);
     setLadderNote(null);
     setLadderAt(null);
-    // the line of an earlier click goes: the button shows the click is running until the first check reports
+    // The line of an earlier click goes. The button shows the click is running until the first
+    // check reports.
     sender.clear();
     let placed = 0;
     try {
@@ -950,38 +1066,46 @@ export function OrderTicket(props: OrderTicketProps) {
       setLadderAt(levels > 1 ? { at: levels, levels } : null);
       if (asCurve) setLadderNote({ done: true, text: t('ticket.ladder.curveDone') });
       if (levels > 1) setLadderNote({ done: true, text: t('ticket.ladder.done', { levels }) });
-      // the order is placed: the next one starts empty (the price, type and side stay: the next click is usually a variation)
+      // The order is placed, so the next one starts empty. The price, type and side stay, because
+      // the next click is usually a variation.
       setForm((f) => setValue(f, 'amount', ''));
     } else if (placed > 0) {
       setLadderNote({ done: false, text: t('ticket.ladder.stopped', { placed, levels }) });
     }
-    // a failed read is already the environment's error, which the ticket shows: caught, so it is not also an unhandled rejection
+    // A failed read is already the environment's error, which the ticket shows. It is caught, so it
+    // is not also an unhandled rejection.
     void refresh().catch(() => null);
   };
 
   const issueCtx = { tokenDecimals: token.decimals, tokenTicker: ticker, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quote.ticker } : {}) };
-  // ---- the reasons the order cannot be placed (and nothing else): one fixed-height slot above the button. Warnings that never stop the order (a price
-  // far through the market, a low order value, the fills of a market order ...) are not shown on the ticket at all, so nothing appears, changes or
-  // disappears there on a tick and the button never moves; the final confirmation shows the order's terms.
+  // ---- The reasons the order cannot be placed, and nothing else: one fixed-height slot above the
+  // button. Warnings that never stop the order (a price far through the market, a low order value,
+  // the fills of a market order) are not shown on the ticket at all. So nothing appears, changes or
+  // disappears there on a tick and the button never moves. The final confirmation shows the
+  // order's terms.
   const reasons: Reason[] = [];
   if (!wallet.info) reasons.push({ code: 'wallet', text: t('ticket.need.wallet'), kind: 'need' });
   else if (wallet.networkMismatch) reasons.push({ code: 'network', text: t('ticket.need.network', { wallet: wallet.info.network, app: services.config.network }), kind: 'need' });
   if (enabled && envError) reasons.push({ code: 'env', text: t(`ticket.need.env.${envSource ?? 'other'}`), kind: 'need', action: 'retry', raw: envError });
   if (crash) reasons.push({ code: 'crash', text: t('ticket.need.crash'), kind: 'need', raw: crash });
-  // what the ticket is still reading, named (the order cannot be placed before; it is the moment the answers are in)
+  // What the ticket is still reading, named. The order cannot be placed before, and it is the
+  // moment the answers are in.
   const holdingsShort = waiting.includes('holdings') && planErrors.some((i) => TOKEN_SHORT.has(i.code));
   const stillReading: EnvWait[] = enabled && !envError ? (rawEnv ? (holdingsShort ? ['holdings'] : []) : waiting) : [];
   if (stillReading.length) reasons.push({ code: 'loading', text: t('ticket.need.loading', { what: stillReading.map((w) => t(`ticket.wait.${w}`)).join(', ') }), kind: 'need' });
   if (enabled && !gate.ready) reasons.push({ code: 'covenant', text: t('ticket.need.covenant'), kind: 'need' });
   if (enabled && maxNote) reasons.push({ code: 'max', text: maxNote, kind: 'need' });
   const issues = (shownPlan?.issues ?? []).filter((i) => !(holdingsShort && TOKEN_SHORT.has(i.code)));
-  // what is wrong in the form: a typed value that does not parse first, then what is still empty (the typed errors are also under their boxes)
+  // What is wrong in the form: a typed value that does not parse first, then what is still empty.
+  // The typed errors are also under their boxes.
   const typedErrors = visibleErrors(built.errors).filter((e) => (form.values[e.field] ?? '') !== '');
   for (const e of typedErrors) reasons.push({ code: `field-${e.field}`, text: `${t(labelKey(form.type, e.field))}: ${t(`ticket.err.${e.code}`, (e.params ?? {}) as Record<string, string | number>)}`, kind: 'field' });
-  // a required field that is simply EMPTY (untouched, or just reset after an order) is not an error: no text in the slot (the instruction is on the disabled button,
-  // `enterText` below); the slot's red text is for blocking errors only
+  // A required field that is simply empty (untouched, or just reset after an order) is not an
+  // error, so the slot shows no text. The instruction is on the disabled button (`enterText`
+  // below). The slot's red text is for blocking errors only.
   for (const i of issues.filter((x) => x.severity === 'error')) {
-    // too many UTXOs for one sale: when the order button merges first, a note says what that takes instead of the dead end
+    // Too many UTXOs for one sale. When the order button merges first, a note says what that takes
+    // instead of the dead end.
     if (MERGE_ANSWERS.has(i.code) && mergeFirst) {
       reasons.push({ code: i.code, text: merge.offer!, kind: 'need', testid: 'order-note-merge' });
       continue;
@@ -992,10 +1116,12 @@ export function OrderTicket(props: OrderTicketProps) {
   if (ladder && !ladder.ok) reasons.push({ code: 'ladder', text: ladder.errors.map((e) => t(`ticket.ladder.err.${e.code}`, { level: e.level ?? 1, field: e.field ?? '', max: 20 })).join(' '), kind: 'ladder', testid: 'order-ladder-errors' });
   for (const f of ladderFunds) reasons.push({ code: f.code, text: f.text, kind: 'ladder', testid: 'order-ladder-funds' });
   if (lastOrderErrors.length > 0) reasons.push({ code: 'ladder-last', text: lastOrderErrors.map((i) => t('ticket.ladder.lastLevel', { text: issueText(i, issueCtx) })).join(' '), kind: 'ladder', testid: 'order-ladder-last-errors' });
-  // the button is off for a reason nothing above names (the plan is still being made, a click is running): said too, so a disabled button always has its sentence
+  // The button is off for a reason nothing above names (the plan is still being made, a click is
+  // running). That is said too, so a disabled button always has its sentence.
   const busy = placing || sendBusy(sender.status) || merge.running || !!sellAfterMerge;
-  // what the click is doing, as the label of the button itself (the eye is on it): checking, the app's confirmation, the wallet's approval, sending. A ladder
-  // says its level first. The button keeps its size: only its text changes
+  // What the click is doing, as the label of the button itself (the eye is on it): checking, the
+  // app's confirmation, the wallet's approval, sending. A ladder says its level first. The button
+  // keeps its size and only its text changes.
   const phase = sender.status?.phase;
   const busyText = busy && !placing && !sendBusy(sender.status)
     ? merge.busy
@@ -1003,25 +1129,29 @@ export function OrderTicket(props: OrderTicketProps) {
     ? (ladderLead ? `${ladderLead} · ` : '')
       + t(sender.status?.waiting ? 'send.waitWallet' : phase === 'signing' ? 'send.signing' : phase === 'sending' ? 'send.sending' : phase === 'confirming' ? 'send.confirming' : 'send.checking', { wallet: wallet.info?.label || t('send.yourWallet') })
     : null;
-  // nothing but empty required fields is in the way: the disabled button itself says what to enter first ("Enter an amount": the first missing field)
+  // Nothing but empty required fields is in the way. The disabled button itself says what to enter
+  // first ("Enter an amount", the first missing field).
   const firstEmpty = isIncomplete(built.errors) ? built.errors.find((e) => e.code === 'required') : undefined;
   const enterText = !canPlace && !busy && reasons.length === 0 && firstEmpty ? enterTextOf(firstEmpty.field, form.type, inverted) : null;
   if (!canPlace && !busy && reasons.length === 0 && !enterText) reasons.push({ code: 'checking', text: t(pendingShown || pending ? 'ticket.pending' : 'ticket.need.checking'), kind: 'need' });
-  // an order worth less than the minimum order value is never listed, so it never fills (and locks its funds until cancelled): the order can still be placed,
-  // so it is a warning, said here before the click (the final confirmation says it again as a callout). Only a plain order of a KAS market: the rule is not measured
-  // for a ladder, a conditional or a pair order (ticket-notes.ts `minValueNote`)
+  // An order worth less than the minimum order value is never listed, so it never fills and locks
+  // its funds until cancelled. The order can still be placed, so this is a warning, said here
+  // before the click. The final confirmation says it again as a callout. It applies only to a plain
+  // order of a KAS market, because the rule is not measured for a ladder, a conditional or a pair
+  // order (ticket-notes.ts `minValueNote`).
   const lowValue = shownPlan && shownPlan.ok && planErrors.length === 0 && !quote && !ladder ? minValueNote(shownPlan, minOrderValueOf(indexerStatus.health).sompi) : null;
   if (lowValue) reasons.push({ code: 'min-value', text: t('ticket.warn.belowMin', { min: formatKas(lowValue.min, { group: ',' }) }), kind: 'warn', testid: 'order-warn-min-value' });
-  // a re-plan on a tick keeps the sentence of the plan it replaces for the moment it takes (no sentence flickers in and out of the slot); an order that can be
-  // placed shows its warnings only
+  // A re-plan on a tick keeps the sentence of the plan it replaces for the moment it takes, so no
+  // sentence flickers in and out of the slot. An order that can be placed shows its warnings only.
   const lastReasons = useRef<Reason[]>([]);
   const backgroundPlan = pending && !editPending;
   const ownReasons = busy ? [] : canPlace ? reasons.filter((r) => r.kind === 'warn') : reasons;
   const shownReasons = busy ? [] : backgroundPlan && lastReasons.current.length > 0 ? lastReasons.current : ownReasons;
   if (!backgroundPlan) lastReasons.current = ownReasons;
 
-  // the balance this order spends, shown at the right end of the amount label row (it is the Max button): a buy pays in the quote (KAS, or a
-  // pair's token B), a sell gives the token. The form's side is the native one, so an inverted view needs no case of its own.
+  // The balance this order spends, shown at the right end of the amount label row (it is the Max
+  // button). A buy pays in the quote (KAS, or a pair's token B), and a sell gives the token. The
+  // form's side is the native one, so an inverted view needs no case of its own.
   const spendBalance =
     form.side === 'buy'
       ? quote
@@ -1030,11 +1160,16 @@ export function OrderTicket(props: OrderTicketProps) {
       : { amount: formatUnits(tokenBalance, token.decimals, { group: ',' }), unit: ticker };
   const available = enabled && env ? spendBalance : undefined;
 
-  // the height of the whole Limit form (folded, no ladder, the field help off: the default), panel and footer included, for the market page: on two and three columns
-  // its row is at least that (a phone: the panel is that) tall (market.css --tk-fit), so the form does not scroll. Measured once per width (again once the fonts
-  // and the data are first in), never on what comes and goes in the form later (another type, a ladder, an expiry, a reason, the help): that never moves the page
-  // the field help under the inputs (the title row's "?" shows or hides it, kept in this browser): off at first on every width, so the form is its labels and
-  // boxes and fits the panel without scrolling (the --tk-fit measure below is taken on this default); the long text of a field is its tooltip meanwhile
+  // The height of the whole Limit form, for the market page. It is measured folded, with no ladder
+  // and the field help off (the default), with panel and footer included. On two and three columns
+  // its row is at least that tall (a phone: the panel is that tall, market.css --tk-fit), so the
+  // form does not scroll. It is measured once per width (again once the fonts and the data are
+  // first in), never on what comes and goes in the form later (another type, a ladder, an expiry,
+  // a reason, the help), because that never moves the page.
+  // The field help under the inputs (the title row's "?" shows or hides it, kept in this browser)
+  // is off at first on every width. So the form is its labels and boxes and fits the panel without
+  // scrolling (the --tk-fit measure below is taken on this default). The long text of a field is
+  // its tooltip meanwhile.
   const [helpOn, setHelpOn] = useState(() => {
     try {
       const kept = localStorage.getItem(HELP_KEY);
@@ -1072,8 +1207,9 @@ export function OrderTicket(props: OrderTicketProps) {
       if (!scroll || !formEl || !holder || tk.querySelector<HTMLDetailsElement>('.tk-advanced')?.open) return;
       const w = tk.clientWidth;
       if (w === fit.current.w) return;
-      // always the form with the field help off, the default: a reader who turned the help on gets a form that scrolls in the same panel, and the panel
-      // (so the row of the page) is the same whether the help is on or not (the class is put back before anything is painted)
+      // Always the form with the field help off, the default. A reader who turned the help on gets
+      // a form that scrolls in the same panel, so the panel (and the row of the page) is the same
+      // whether the help is on or not. The class is put back before anything is painted.
       const helpWasOn = !tk.classList.contains('tk-help-off');
       if (helpWasOn) tk.classList.add('tk-help-off');
       const top = scroll.getBoundingClientRect().top - scroll.scrollTop;
