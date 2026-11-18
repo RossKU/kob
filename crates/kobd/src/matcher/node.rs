@@ -703,6 +703,17 @@ impl<N: NodeApi + 'static> MultiSubmit<N> {
     }
 }
 
+/// The lower median of each bucket of non-empty `ests` (two nodes: the lower one). Each node's
+/// buckets are ordered, so the result's are too.
+fn median_estimate(ests: &[crate::fee::FeeEstimate]) -> crate::fee::FeeEstimate {
+    let pick = |f: fn(&crate::fee::FeeEstimate) -> f64| {
+        let mut v: Vec<f64> = ests.iter().map(f).collect();
+        v.sort_by(f64::total_cmp);
+        v[(v.len() - 1) / 2]
+    };
+    crate::fee::FeeEstimate { priority: pick(|e| e.priority), normal: pick(|e| e.normal), low: pick(|e| e.low) }
+}
+
 impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
     async fn server_info(&self) -> Result<ServerInfo, RpcError> {
         self.primary.server_info().await
@@ -746,8 +757,25 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
         self.primary.utxos_by_addresses(addresses).await
     }
 
+    /// Every node's estimate (each within 5 s), bucket by bucket the lower median, so no one node
+    /// sets the fee. A node that fails is left out. With none answering, the primary's error.
     async fn fee_estimate(&self) -> Result<crate::fee::FeeEstimate, RpcError> {
-        self.primary.fee_estimate().await
+        if self.others.is_empty() {
+            return self.primary.fee_estimate().await;
+        }
+        let ask = |n: std::sync::Arc<N>| async move {
+            tokio::time::timeout(Duration::from_secs(5), n.fee_estimate())
+                .await
+                .unwrap_or_else(|_| Err(RpcError::Timeout(Duration::from_secs(5))))
+        };
+        let all = std::iter::once(self.primary.clone()).chain(self.others.iter().map(|(_, n)| n.clone()));
+        let mut answers = futures_util::future::join_all(all.map(ask)).await.into_iter();
+        let first = answers.next().unwrap_or_else(|| Err(RpcError::Transport("no node".into())));
+        let ests: Vec<crate::fee::FeeEstimate> = std::iter::once(first.clone()).chain(answers).filter_map(Result::ok).collect();
+        if ests.is_empty() {
+            return first;
+        }
+        Ok(median_estimate(&ests))
     }
 
     async fn tip_timestamp_ms(&self) -> Result<u64, RpcError> {
@@ -921,6 +949,59 @@ mod tests {
         assert_eq!(r.dropped.len(), 1, "{r:?}");
         assert!(tr.txs.is_empty() && tr.spent_outpoints().is_empty(), "its inputs are free again");
         assert!(tr.backed_off(at).contains(&[9; 32]));
+    }
+
+    /// A node that answers only the fee estimate.
+    struct FeeNode(Result<crate::fee::FeeEstimate, RpcError>);
+
+    impl NodeApi for FeeNode {
+        async fn server_info(&self) -> Result<ServerInfo, RpcError> {
+            Err(RpcError::Node("unused".into()))
+        }
+        async fn dag_info(&self) -> Result<DagInfo, RpcError> {
+            Err(RpcError::Node("unused".into()))
+        }
+        async fn submit(&self, _tx: Value) -> Result<[u8; 32], RpcError> {
+            Err(RpcError::Node("unused".into()))
+        }
+        async fn chain_from(&self, _start_hash: &str) -> Result<ChainUpdate, RpcError> {
+            Ok(ChainUpdate::default())
+        }
+        async fn utxos_by_addresses(&self, _addresses: &[String]) -> Result<Vec<AddressUtxo>, RpcError> {
+            Ok(vec![])
+        }
+        async fn fee_estimate(&self) -> Result<crate::fee::FeeEstimate, RpcError> {
+            self.0.clone()
+        }
+    }
+
+    /// L8: with several nodes no one node sets the fee: bucket by bucket the lower median, a failing node left out.
+    #[tokio::test]
+    async fn the_fee_estimate_is_the_median_of_the_nodes() {
+        let e = |p: f64, n: f64, l: f64| Ok(crate::fee::FeeEstimate { priority: p, normal: n, low: l });
+        let down = || Err(RpcError::Transport("down".into()));
+        // one inflating primary among three: the middle one
+        let m = MultiSubmit::new(
+            FeeNode(e(9_000.0, 5_000.0, 1_000.0)),
+            vec![(1, FeeNode(e(200.0, 150.0, 100.0))), (2, FeeNode(e(300.0, 120.0, 100.0)))],
+            None,
+        );
+        assert_eq!(m.fee_estimate().await, e(300.0, 150.0, 100.0));
+        // two answers: the lower; a failing node is skipped
+        let m = MultiSubmit::new(
+            FeeNode(e(9_000.0, 5_000.0, 1_000.0)),
+            vec![(1, FeeNode(down())), (2, FeeNode(e(200.0, 150.0, 100.0)))],
+            None,
+        );
+        assert_eq!(m.fee_estimate().await, e(200.0, 150.0, 100.0));
+        // the primary down: the others decide
+        let m = MultiSubmit::new(FeeNode(down()), vec![(1, FeeNode(e(250.0, 150.0, 100.0)))], None);
+        assert_eq!(m.fee_estimate().await, e(250.0, 150.0, 100.0));
+        // none answers: the primary's error; a single node: exactly its estimate
+        let m = MultiSubmit::new(FeeNode(down()), vec![(1, FeeNode(down()))], None);
+        assert_eq!(m.fee_estimate().await, down());
+        let m: MultiSubmit<FeeNode> = MultiSubmit::new(FeeNode(e(9_000.0, 5_000.0, 1_000.0)), vec![], None);
+        assert_eq!(m.fee_estimate().await, e(9_000.0, 5_000.0, 1_000.0));
     }
 
     #[test]

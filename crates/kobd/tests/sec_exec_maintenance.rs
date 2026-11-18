@@ -1,0 +1,77 @@
+//! Security fix M9 (`kobd::maintenance`): a merge never puts the operator's funding into a token carrier. A KRON merge's
+//! funding input is only the presence and comes back whole; the merged carrier is what the merged carriers pay after the
+//! fee, or there is no merge.
+
+#[path = "matcher_common/mod.rs"]
+mod common;
+
+use std::collections::BTreeSet;
+
+use common::pair::*;
+use common::*;
+use kob_protocol::artifacts::TemplateId;
+use kob_protocol::tx::*;
+use kobd::maintenance::{tick, MaintKind, MaintenanceConfig, MaintenanceInput, OwnToken};
+use kobd::matcher::book::Clock;
+
+const K3: TemplateId = TemplateId::KronToken2433;
+
+/// An operator token UTXO of program `p` holding `amount` base units on a `carrier` sompi carrier.
+fn own(p: TemplateId, amount: i64, carrier: u64) -> OwnToken {
+    OwnToken {
+        program: p,
+        token: TokenUtxo { utxo: utxo(carrier, 900, Some(token_a(p))), state: tstate(p, amount, pk(MATCHER), false) },
+    }
+}
+
+fn input(tokens: Vec<OwnToken>, funding: Vec<KeyUtxo>) -> MaintenanceInput {
+    MaintenanceInput {
+        tokens,
+        orders: vec![],
+        clock: Clock { daa: NOW + 5, utc: UTC },
+        funding,
+        excluded: BTreeSet::new(),
+        excluded_outpoints: BTreeSet::new(),
+    }
+}
+
+fn change(j: &kobd::maintenance::MaintJob) -> u64 {
+    j.built.fee.change_output.map(|i| j.built.tx.outputs[i as usize].value).unwrap_or(0)
+}
+
+#[test]
+fn a_kron_merge_of_small_carriers_takes_nothing_from_the_funding() {
+    let cfg = MaintenanceConfig { sell: false, ..Default::default() };
+    // two junk KRON holdings on 0.5 KAS carriers: the merge would want a 10 KAS carrier
+    let tokens = vec![own(K3, 10, KAS / 2), own(K3, 20, KAS / 2)];
+    let r = tick(&input(tokens, vec![funding(50 * KAS), funding(3 * KAS)]), &cfg, &signer());
+    assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
+    let j = &r.jobs[0];
+    assert_eq!(j.kind, MaintKind::Merge);
+    assert!(j.validation.is_some());
+    let fee = j.built.fee.fee;
+    // the presence coin (3 KAS) comes back whole, the fee and the carrier out of the 1 KAS of carriers
+    assert!(change(j) >= 3 * KAS, "change {} below the funding", change(j));
+    let carrier = (KAS - fee) as i64 - (change(j) - 3 * KAS) as i64;
+    assert!(carrier > 0 && carrier as u64 <= KAS - fee, "carrier {carrier}, fee {fee}");
+    assert_eq!(j.released, KAS as i64 - carrier);
+    assert_eq!(j.profit, -(fee as i64), "the operator pays only the fee");
+    // carriers too small to pay a covenant output and the fee: no merge at all
+    let dust = COVENANT_OUTPUT_MIN / 2;
+    let r = tick(&input(vec![own(K3, 10, dust), own(K3, 20, dust)], vec![funding(50 * KAS)]), &cfg, &signer());
+    assert!(r.jobs.is_empty());
+    assert!(r.skipped.iter().any(|(_, why)| why.contains("cannot pay")), "{:?}", r.skipped);
+}
+
+#[test]
+fn a_merge_of_full_carriers_keeps_the_configured_carrier() {
+    let cfg = MaintenanceConfig { sell: false, ..Default::default() };
+    let r = tick(&input(vec![own(K3, 10, CARRIER), own(K3, 20, CARRIER)], vec![funding(3 * KAS)]), &cfg, &signer());
+    assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
+    assert_eq!(r.jobs[0].released, CARRIER as i64, "one 10 KAS carrier kept, one freed");
+    // KCC-20 (no funding input): the same rule
+    let r = tick(&input(vec![own(T8, 1, KAS), own(T8, 2, KAS)], vec![]), &cfg, &signer());
+    assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
+    let j = &r.jobs[0];
+    assert!(j.released > 0 && j.released < 2 * KAS as i64, "merged onto what the carriers pay: released {}", j.released);
+}

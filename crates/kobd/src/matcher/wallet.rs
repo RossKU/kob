@@ -220,6 +220,33 @@ fn check_permissions(path: &Path) -> Result<(), KeyError> {
     if mode & 0o077 != 0 {
         return Err(KeyError::Permissions(path.to_path_buf(), mode));
     }
+    check_owner_and_dir(path, &m)
+}
+
+/// Unix: the key file belongs to this account (or root), and its directory is not writable by
+/// group or others unless sticky (`/tmp`), so no other account can swap the file.
+#[cfg(unix)]
+fn check_owner_and_dir(path: &Path, m: &std::fs::Metadata) -> Result<(), KeyError> {
+    use std::os::unix::fs::MetadataExt;
+    let file_err = |s: String| KeyError::File(path.to_path_buf(), s);
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let me = unsafe { libc::geteuid() };
+    if m.uid() != me && m.uid() != 0 {
+        return Err(file_err(format!("owned by uid {}, not this account (uid {me}) or root; chown it", m.uid())));
+    }
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
+    let d = std::fs::metadata(dir).map_err(|e| file_err(format!("its directory: {e}")))?;
+    let dmode = d.mode() & 0o7777;
+    if dmode & 0o022 != 0 && dmode & 0o1000 == 0 {
+        return Err(file_err(format!(
+            "its directory {} is writable by group or others (mode {:o}): another account could replace the key; chmod go-w it",
+            dir.display(),
+            dmode & 0o777
+        )));
+    }
     Ok(())
 }
 
@@ -454,6 +481,8 @@ pub fn sddl_readable_by_others(sddl: &str, me: Option<&str>) -> Vec<String> {
 /// An ACL that cannot be read (no `icacls`, an error) and an account whose SID cannot be found
 /// (`whoami`) are refused too. This is the default on every build. `KOB_KEY_ACL_STRICT=0` makes
 /// each of these a warning.
+///
+/// The owner and the directory are not checked here (Unix checks both): the ACL decides who reads.
 #[cfg(not(unix))]
 fn check_permissions(path: &Path) -> Result<(), KeyError> {
     std::fs::metadata(path).map_err(|e| KeyError::File(path.to_path_buf(), e.to_string()))?;
@@ -594,6 +623,13 @@ mod tests {
             std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
             assert!(matches!(HotKey::from_file(&p), Err(KeyError::Permissions(..))));
             std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+            // L9: a directory other accounts may write is refused, unless sticky
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+            let e = HotKey::from_file(&p).unwrap_err().to_string();
+            assert!(e.contains("writable by group or others"), "{e}");
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o1777)).unwrap();
+            assert!(HotKey::from_file(&p).is_ok());
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
         assert_eq!(HotKey::load(Some(&p)).unwrap().pubkey(), pubkey_of(&[0x22; 32]).unwrap());
         std::fs::remove_dir_all(&dir).unwrap();

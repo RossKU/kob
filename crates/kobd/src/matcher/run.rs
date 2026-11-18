@@ -899,8 +899,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         let keeper_subsidy = match state_dir.as_deref().map(|d| SubsidyBudget::load(&d.join(SUBSIDY_FILE))) {
             Some(Ok(b)) => b,
             Some(Err(e)) => {
-                tracing::warn!(error = %e, "the keepers' subsidy window could not be read: it starts empty");
-                SubsidyBudget::default()
+                // Never a fresh budget at each restart: none until the file reads.
+                tracing::warn!(error = %e, "the keepers' subsidy window could not be read: no subsidy until it reads (fix or delete the file)");
+                SubsidyBudget::unreadable()
             }
             None => SubsidyBudget::default(),
         };
@@ -935,7 +936,18 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         for (t, job) in restored.txs {
             source.watch(t.txid);
             if let Some(j) = job {
-                keeper_inflight.insert(t.txid, j);
+                // A journaled job is a request the hot key would sign again. One that pays anyone
+                // but the operator is never replaced.
+                match crate::keepers::operator_only(&j.action, signer.pubkey()) {
+                    Ok(()) => {
+                        keeper_inflight.insert(t.txid, j);
+                    }
+                    Err(why) => tracing::warn!(
+                        txid = %kob_protocol::json::to_hex(&t.txid),
+                        %why,
+                        "in-flight journal: a keeper job that does not pay only the operator is dropped (never signed)"
+                    ),
+                }
             }
             tracker.restored.insert(t.txid);
             tracker.txs.insert(t.txid, t);
@@ -1061,6 +1073,11 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     continue;
                 }
             };
+            // The pause file again right before the submit.
+            if self.paused() {
+                rep.paused = true;
+                break;
+            }
             if spare.front().is_some_and(|f| job.spends.contains(&outpoint(&f.utxo))) {
                 spare.pop_front();
             }
@@ -1449,6 +1466,15 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
 
     async fn send(&mut self, t: Tracked, daa: u64, rep: &mut StepReport) {
         let txid = t.txid;
+        // The pause file again right before each submit: a step can take many seconds.
+        if self.paused() {
+            if !rep.paused {
+                tracing::warn!(txid = %kob_protocol::json::to_hex(&txid), "the pause file was set during the step: nothing more is submitted");
+            }
+            rep.paused = true;
+            self.tracker.topups.remove(&txid);
+            return;
+        }
         let kind = t.kind.clone();
         let (fee, fee_rate) = (t.fee, t.fee_rate);
         self.source.watch(txid);
@@ -1751,6 +1777,12 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         }
 
         if self.cfg.roles.keeper {
+            // A subsidy window that did not read allows nothing until it reads.
+            if let Some(d) = self.cfg.state_dir.as_deref().filter(|_| !self.cfg.dry_run) {
+                if self.keeper_subsidy.reread(&d.join(SUBSIDY_FILE)) {
+                    tracing::info!("the keepers' subsidy window reads again: subsidies resume");
+                }
+            }
             // This process's stuck kills and refunds go first. Their replacements keep their
             // inputs, and may take a funding UTXO.
             let spare: Vec<KeyUtxo> = funding.iter().filter(|k| !spent.contains(&outpoint(&k.utxo))).cloned().collect();

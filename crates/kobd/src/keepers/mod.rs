@@ -399,6 +399,10 @@ impl SubsidyAllowance {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubsidyBudget {
     spends: VecDeque<Spend>,
+    /// The saved window exists but did not read: nothing is left until it does
+    /// ([`SubsidyBudget::reread`]).
+    #[serde(skip)]
+    unreadable: bool,
 }
 
 /// DAA scores per second of the local clock (Kaspa's 10 blocks per second), for the window of a
@@ -466,8 +470,37 @@ impl SubsidyBudget {
         }
     }
 
-    /// Writes the window to `path` (atomically: a temporary file renamed over it).
+    /// The window of a saved file that did not read: no subsidy at all until
+    /// [`SubsidyBudget::reread`] reads it. A restart therefore never grants a fresh budget.
+    pub fn unreadable() -> SubsidyBudget {
+        SubsidyBudget { unreadable: true, ..SubsidyBudget::default() }
+    }
+
+    /// Whether the window is [`SubsidyBudget::unreadable`].
+    pub fn is_unreadable(&self) -> bool {
+        self.unreadable
+    }
+
+    /// An unreadable window loads `path` again. True when it reads now (and replaces this one).
+    pub fn reread(&mut self, path: &std::path::Path) -> bool {
+        if !self.unreadable {
+            return false;
+        }
+        match SubsidyBudget::load(path) {
+            Ok(b) => {
+                *self = b;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Writes the window to `path` (atomically: a temporary file renamed over it). An unreadable
+    /// window is never written over the file it could not read.
     pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
+        if self.unreadable {
+            return Err(format!("{}: not overwritten, it did not read", path.display()));
+        }
         let tmp = path.with_extension("json.tmp");
         let text = serde_json::to_string(self).map_err(|e| e.to_string())?;
         std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
@@ -485,6 +518,9 @@ impl SubsidyBudget {
 
     /// What the window ending at `daa` and `now` still allows.
     pub fn left(&self, cfg: &KeeperConfig, daa: u64, now: u64) -> u64 {
+        if self.unreadable {
+            return 0;
+        }
         cfg.subsidy_budget.saturating_sub(self.spent(cfg, daa, now))
     }
 
@@ -599,6 +635,28 @@ fn sweep_request(o: &ListedOrder, funding: Option<&KeyUtxo>, fee: &FeeOptions) -
     })
 }
 
+/// Checks that a keeper request pays only the operator (`operator`, the signer's key): every
+/// funding input is the operator's and the change (or, without one, where the builder sends it)
+/// is the operator's key.
+///
+/// A request read back from disk (the in-flight journal) that names another key is never signed.
+pub fn operator_only(action: &Action, operator: [u8; 32]) -> Result<(), String> {
+    let (funding, change, default) = match action {
+        // The refund builder's change without a key: the first funding input's.
+        Action::RefundOrder(r) => (&r.funding, r.change, r.funding.first().map(|f| f.pubkey)),
+        // The sweep builder's: the maker's.
+        Action::SweepOrder(r) => (&r.funding, r.change, Some(r.order.state.maker())),
+        _ => return Err("not a keeper request".into()),
+    };
+    if let Some(f) = funding.iter().find(|f| f.pubkey != operator) {
+        return Err(format!("a funding input pays to {}, not the operator's key", kob_protocol::json::to_hex(&f.pubkey)));
+    }
+    match change.or(default.filter(|_| !funding.is_empty())) {
+        Some(c) if c != operator => Err(format!("the change goes to {}, not the operator's key", kob_protocol::json::to_hex(&c))),
+        _ => Ok(()),
+    }
+}
+
 /// Builds, signs and validates a job.
 ///
 /// The budget table is exact over every generated shape. A budget one unit short is retried once
@@ -610,6 +668,7 @@ fn finish(
     validate: bool,
     funding: &[KeyUtxo],
 ) -> Result<(BuiltTx, SignedTx, Option<Validation>, i64), String> {
+    operator_only(&action, signer.pubkey())?;
     match finish_with(&action, signer, validate, funding, 0) {
         Err(e) if e.contains("ExceededCommittedScriptUnits") => {
             crate::matcher::lower::note_budget_slack("keeper job", &e);
@@ -727,9 +786,12 @@ pub fn reprice(
     if !kind.liveness() {
         return Err(format!("a {} is never replaced", kind.name()));
     }
+    // Checked before the operator's funding is added: the journaled request must already pay only
+    // the operator.
+    operator_only(action, signer.pubkey())?;
     let mut action = action.clone();
     if let (Action::RefundOrder(r), Some(f)) = (&mut action, extra) {
-        if r.funding.is_empty() && cfg.subsidy_max > 0 {
+        if r.funding.is_empty() && cfg.subsidy_max > 0 && f.pubkey == signer.pubkey() {
             r.funding.push(f.clone());
             r.change = r.change.or(Some(signer.pubkey()));
         }
@@ -1136,6 +1198,28 @@ mod tests {
         let text = serde_json::to_string(&b).unwrap();
         assert_eq!(serde_json::from_str::<SubsidyBudget>(&text).unwrap(), b);
         assert!(text.contains("[3000,7,300]"), "{text}");
+    }
+
+    /// L11: a saved window that does not parse grants no subsidy (not a fresh budget) until it reads, and is never
+    /// overwritten meanwhile.
+    #[test]
+    fn an_unreadable_window_allows_no_subsidy_until_it_reads() {
+        let c = cfg(100, 1_000);
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("keeper-subsidy.json");
+        std::fs::write(&p, b"{not json").unwrap();
+        assert!(SubsidyBudget::load(&p).is_err());
+        let mut b = SubsidyBudget::unreadable();
+        assert_eq!(b.left(&c, 10, 1), 0);
+        assert!(b.save(&p).is_err());
+        assert_eq!(std::fs::read(&p).unwrap(), b"{not json");
+        assert!(!b.reread(&p) && b.is_unreadable());
+        let mut ok = SubsidyBudget::default();
+        ok.charge(&c, 10, 1, 30);
+        ok.save(&p).unwrap();
+        assert!(b.reread(&p) && !b.is_unreadable());
+        assert_eq!(b.left(&c, 10, 1), 70);
+        assert!(!b.reread(&p), "a readable window is not read again");
     }
 
     #[test]
