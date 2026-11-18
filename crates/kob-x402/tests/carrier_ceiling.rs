@@ -1,7 +1,9 @@
-//! Regression: a kcc20 offer's `extra.token.carrier` (the KAS value of the merchant token output) is
-//! funded by the PAYER. It has a floor (`min_carrier_sompi`) AND a ceiling (`max_carrier_sompi`): the payer's builder
-//! and its preflight (the verifier's logic under the payer's policy) both refuse a merchant that quotes one base unit
-//! with a 500 KAS carrier, and the payer's own token-change carrier is capped independently.
+//! Tests that a kcc20 offer's `extra.token.carrier` (the KAS value of the merchant token output) is
+//! funded by the PAYER and has a floor (`min_carrier_sompi`) and a ceiling (`max_carrier_sompi`).
+//!
+//! The payer's builder and its preflight (the verifier's logic under the payer's policy) both
+//! refuse a merchant that quotes one base unit with a 500 KAS carrier, and the payer's own
+//! token-change carrier is capped independently.
 use std::collections::BTreeMap;
 
 use kaspa_addresses::{Address, Version};

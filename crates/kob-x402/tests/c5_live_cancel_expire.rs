@@ -1,21 +1,22 @@
-//! C5 liveness audit: the payer-side exits of a router intent (`build_cancel_intent`, `build_expire_intent`).
+//! Tests that the payer-side exits of a router intent (`build_cancel_intent`,
+//! `build_expire_intent`) cannot strand funds.
 //!
-//! 1. `build_cancel_intent` of a TOKEN intent with `lock: None` is accepted and builds a cancel that spends only
-//!    the intent. The `cancel` entry has `emits none`, so the intent covenant ends there, and the locked tokens
-//!    (owner scheme 0x04, owner = the intent's covenant id) can then never be spent again: the KCC-20 owner check is
-//!    `OpCovInputCount(owner) > 0`, and no UTXO of that covenant id exists any more. `build_expire_intent` refuses the
-//!    same input (`a token intent's expiry returns its locked tokens`); the cancel falls through its `_ => {}` arm.
-//!    The wasm / TS handle (`IntentHandle.lock?: ... | null`) makes the omission easy.
-//! 2. An intent whose own KAS is below the fee of its cancel / expiry can be neither cancelled nor expired:
-//!    `CancelIntent` has no funding input, the fee is taken from the intent UTXO only, and nothing in the SDK or
-//!    the verifier bounds `keeperValue` from below. (`docs/argent/argent.md`: the expiry of a token intent costs about
-//!    0.022-0.033 KAS.)
-//! 3. The router's `expire` is permissionless, but it pins only output j (the payer's KAS, at most EXPIRE_MAX_FEE
-//!    less) and the token output's SCRIPT; the VALUE of the token output (the lock carrier, default 1 KAS = ten
-//!    times EXPIRE_MAX_FEE) is not constrained, so any bot may expire the intent and keep most of the carrier.
+//! 1. `build_cancel_intent` of a TOKEN intent with `lock: None` is refused. The `cancel` entry has
+//!    `emits none`, so the intent covenant ends there, and the locked tokens (owner scheme 0x04,
+//!    owner = the intent's covenant id) could then never be spent again: the KCC-20 owner check is
+//!    `OpCovInputCount(owner) > 0`, and no UTXO of that covenant id exists any more.
+//!    `build_expire_intent` refuses the same input (`a token intent's expiry returns its locked
+//!    tokens`). The wasm / TS handle (`IntentHandle.lock?: ... | null`) makes the omission easy.
+//! 2. An intent whose own KAS is below the fee of its cancel / expiry can be neither cancelled nor
+//!    expired: `CancelIntent` has no funding input and the fee is taken from the intent UTXO only,
+//!    so the SDK or the verifier must bound `keeperValue` from below. (`docs/argent/argent.md`: the
+//!    expiry of a token intent costs about 0.022-0.033 KAS.)
+//! 3. The router's `expire` is permissionless, but it must pin the VALUE of the token output (the
+//!    lock carrier, default 1 KAS = ten times EXPIRE_MAX_FEE) as well as output j (the payer's KAS,
+//!    at most EXPIRE_MAX_FEE less) and the token output's SCRIPT; otherwise any bot may expire the
+//!    intent and keep most of the carrier.
 //!
-//! Each test fails on current code and passes once the stated fix lands.
-//! Run: cargo test -p kob-x402 --test c5_live_cancel_expire   (NOT run by the auditor: RAM)
+//! Run: cargo test -p kob-x402 --test c5_live_cancel_expire
 #![allow(clippy::too_many_arguments)]
 
 #[path = "../../kob-protocol/tests/common/mod.rs"]
@@ -107,8 +108,8 @@ fn t2k_opts() -> IntentOptions {
     IntentOptions { max_sell: Some(3 * WHOLE), ..IntentOptions::default() }
 }
 
-/// C5-4. A cancel of a token intent must carry the locked tokens or be refused by the builder.
-// C5: expected to fail until `build_cancel_intent` rejects `(Some(locked token), None)` like `build_expire_intent` does.
+/// A cancel of a token intent must carry the locked tokens or be refused by the builder.
+// The builder rejects `(Some(locked token), None)` like `build_expire_intent` does.
 #[test]
 fn c5_a_cancel_of_a_token_intent_without_its_lock_is_refused_not_built() {
     let f = fx();
@@ -130,10 +131,11 @@ fn c5_a_cancel_of_a_token_intent_without_its_lock_is_refused_not_built() {
     );
 }
 
-/// C5-5. The payer must be able to exit its intent whatever `keeperValue` it chose, or the SDK / verifier must refuse
-/// a value that cannot pay for the exit. Either a creation with a 0.01 KAS intent is refused, or its cancel builds.
-// C5: expected to fail until `prepare_intent` / `verify_intent` bound the intent's KAS from below (the cancel and expiry
-// fee of the largest token actor), or `CancelIntent` takes funding inputs.
+/// The payer must be able to exit its intent whatever `keeperValue` it chose, or the SDK / verifier
+/// must refuse a value that cannot pay for the exit. Either a creation with a 0.01 KAS intent is
+/// refused, or its cancel builds.
+// `prepare_intent` / `verify_intent` bound the intent's KAS from below (the cancel and expiry fee
+// of the largest token actor), or `CancelIntent` takes funding inputs.
 #[test]
 fn c5_an_intent_that_cannot_pay_for_its_own_exit_is_refused_or_cancellable() {
     let f = fx();
@@ -158,10 +160,11 @@ fn c5_an_intent_that_cannot_pay_for_its_own_exit_is_refused_or_cancellable() {
     }
 }
 
-/// C5-6. An expiry that keeps the lock carrier must be rejected by the router: the payer's KAS back at out j (at most
-/// EXPIRE_MAX_FEE less) and the tokens at out j + 1 are the only things the expirer owes, and it may keep only the fee.
-// C5: expected to fail until the router's `expire` pins the token output's value
-// (`tx.outputs[me + 1].value + EXPIRE_MAX_FEE >= tx.inputs[me + 1].value`, regenerate the router, new template pins).
+/// An expiry that keeps the lock carrier must be rejected by the router: the payer's KAS back at
+/// out j (at most EXPIRE_MAX_FEE less) and the tokens at out j + 1 are the only things the expirer
+/// owes, and it may keep only the fee.
+// The router's `expire` pins the token output's value (`tx.outputs[me + 1].value + EXPIRE_MAX_FEE
+// >= tx.inputs[me + 1].value`).
 #[test]
 fn c5_an_expirer_cannot_keep_the_lock_carrier() {
     let f = fx();

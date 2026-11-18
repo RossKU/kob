@@ -1,10 +1,10 @@
-//! Swap-and-pay (`extra.route`, `kob-swap-v1`): payer SDK -> verifier -> MockChain, with real KOB order
-//! UTXOs (bids of token A, asks of token B), plus the attack suite.
+//! Tests swap-and-pay (`extra.route`, `kob-swap-v1`): payer SDK -> verifier -> MockChain, with real
+//! KOB order UTXOs (bids of token A, asks of token B), plus the attack suite.
 //!
-//! Fixtures come from `kob-protocol/tests/common` (fixed keys, synthetic UTXO ids, the same order and
-//! token states as the protocol's golden vectors). Every accepted transaction is also run through
-//! `kob_protocol::verify::validate` (the script engine with enforced compute budgets, exact storage
-//! mass, fee floor).
+//! Fixtures come from `kob-protocol/tests/common` (fixed keys, synthetic UTXO ids, the same order
+//! and token states as the protocol's golden vectors). Every accepted transaction is also run
+//! through `kob_protocol::verify::validate` (the script engine with enforced compute budgets, exact
+//! storage mass, fee floor).
 #![allow(clippy::too_many_arguments)]
 
 #[path = "../../kob-protocol/tests/common/mod.rs"]
@@ -809,8 +809,9 @@ fn revoke_falls_back_to_a_payer_token_input() {
     assert!(revoke_swap(&f.policy, &p, &BTreeMap::new(), None).is_err(), "no local key, no revocation");
 }
 
-/// C5 X-10: a payer whose keys live in a wallet revokes the same way: the unsigned self-spend names the input and the
-/// signature the wallet makes (one SIGHASH_ALL request), and the signed result is the local-key revocation.
+/// A payer whose keys live in a wallet revokes the same way: the unsigned self-spend names the
+/// input and the signature the wallet makes (one SIGHASH_ALL request), and the signed result is the
+/// local-key revocation.
 #[test]
 fn a_wallet_revokes_with_the_unsigned_self_spend() {
     let f = fx();
@@ -828,8 +829,9 @@ fn a_wallet_revokes_with_the_unsigned_self_spend() {
         kob_protocol::verify::validate(&rev, &entries).expect("the wallet-signed revocation is valid");
         let (local, _) = revoke_swap(&f.policy, &p, &keys(), Some(300)).unwrap();
         assert_eq!(rev.id(), local.id(), "the same transaction as the local-key revocation");
-        // the reported id is the transaction's own (the KAS self-spend used to report the id of the transaction before its
-        // fee was taken out of the output, which a node answers differently)
+        // the reported id is the transaction's own (a KAS self-spend reports its final id, not the
+        // id of the transaction before its fee was taken out of the output, which a node answers
+        // differently)
         let mut again = local.clone();
         again.finalize();
         assert_eq!(again.id(), local.id(), "the revocation's id is current");
@@ -1701,8 +1703,9 @@ fn swap_funding_input_signature_must_use_sighash_all() {
 }
 
 /// A payer with a hundred small KAS coins: swap-and-pay spends the fewest coins, largest first, that pay the fee and the
-/// carriers. The batch builder spends every funding coin it is given, and the client used to pass all of them: past the
-/// verifier's 32-input bound no swap could be paid at all (TN10 soak 2026-10-06, a payer with 44 coins).
+/// carriers. The batch builder spends every funding coin it is given, so the client must not pass
+/// all of them: past the verifier's 32-input bound no swap could be paid at all (a payer with 44
+/// coins).
 #[test]
 fn a_payer_with_a_hundred_small_coins_spends_only_what_the_swap_needs() {
     let f = fx();

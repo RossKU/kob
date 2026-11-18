@@ -1,10 +1,10 @@
-//! End-to-end and attack tests of the KAS standard-native flow: merchant offer -> payer payment ->
-//! verification against a trusted (mock) chain -> submission -> acceptance, then one negative test per
-//! verifier rule. Every accepted transaction also runs through the script engine
+//! Tests the KAS standard-native flow end to end: merchant offer -> payer payment -> verification
+//! against a trusted (mock) chain -> submission -> acceptance, then one negative test per verifier
+//! rule. Every accepted transaction also runs through the script engine
 //! (`common::check_economics_and_scripts` inside `verify_native`).
 //!
-//! Replay (same transaction / same identifier twice) is a facilitator ledger concern and is tested in
-//! `kobd`; the verifier here is pure.
+//! Replay (same transaction / same identifier twice) is a facilitator ledger concern and is tested
+//! in `kobd`; the verifier here is pure.
 
 mod exact_support;
 

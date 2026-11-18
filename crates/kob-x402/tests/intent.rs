@@ -1,14 +1,15 @@
-//! Intent-based swap-and-pay (`kob-intent-v1`): payer SDK -> verifier -> MockChain (engine-validated),
-//! then the keeper's planner and builder execute the intent against the book.
+//! Tests intent-based swap-and-pay (`kob-intent-v1`): payer SDK -> verifier -> MockChain
+//! (engine-validated), then the keeper's planner and builder execute the intent against the book.
 //!
-//! Positive: KasToToken, TokenToKas and TokenSwap are created, verified, broadcast, executed and the
-//! merchant output is accepted; the planner skips an order lost to a conflict and the second execution
-//! settles WITHOUT a new payer signature; the payer cancels an unexecuted intent.
-//! Negative: an intent for another merchant, a payload replayed for another offer, terms or actor changed
-//! after signing, a creation the payer broadcast itself, a pay token on a program the router does not trade
-//! (KaspaCom's, pending review), a KRON token as the merchant asset, a KRON lock that is not above maxSell.
-//! Other programs: the 3/3 reference program (and a 3/3 token A sold for an 8/8 token B) and a KRON token A
-//! (sold into KobBidKrons, for KAS and for a KCC-20 token B) are paid, verified and executed the same way.
+//! Positive: KasToToken, TokenToKas and TokenSwap are created, verified, broadcast, executed and
+//! the merchant output is accepted; the planner skips an order lost to a conflict and the second
+//! execution settles WITHOUT a new payer signature; the payer cancels an unexecuted intent.
+//! Negative: an intent for another merchant, a payload replayed for another offer, terms or actor
+//! changed after signing, a creation the payer broadcast itself, a pay token on a program the
+//! router does not trade (KaspaCom's, pending review), a KRON token as the merchant asset, a KRON
+//! lock that is not above maxSell. Other programs: the 3/3 reference program (and a 3/3 token A
+//! sold for an 8/8 token B) and a KRON token A (sold into KobBidKrons, for KAS and for a KCC-20
+//! token B) are paid, verified and executed the same way.
 #![allow(clippy::too_many_arguments)]
 
 #[path = "../../kob-protocol/tests/common/mod.rs"]
@@ -634,9 +635,9 @@ fn intent_creation_payer_signatures_must_use_sighash_all() {
     assert_sighash_all_enforced(&f, &offer, &p, n);
 }
 
-/// A payer with a hundred small KAS coins creates an intent from the fewest coins, largest first, that pay it (the builder
-/// spends every funding coin it is given; with all of them the facilitator refused the creation: "input count must be
-/// 1..=32", TN10 soak 2026-10-06).
+/// A payer with a hundred small KAS coins creates an intent from the fewest coins, largest first,
+/// that pay it (the builder spends every funding coin it is given, and with all of them the
+/// facilitator refuses the creation: "input count must be 1..=32").
 #[test]
 fn a_payer_with_a_hundred_small_coins_creates_an_intent_from_the_largest_it_needs() {
     let mut f = fx();
