@@ -49,7 +49,10 @@ interface Waiting {
    * back too.
    */
   prep?: BuiltTx;
-  /** a step of this session: the frame is shown only when it asks (the session ended, or RETIME_SHOW_MS passed) */
+  /**
+   * A step of this session. The frame is shown only when it asks, because the session ended or
+   * RETIME_SHOW_MS passed.
+   */
   session?: string;
 }
 
@@ -85,11 +88,11 @@ export class SignerHost {
   private pub: Hex | null = null;
   private waiting: Waiting | null = null;
   private opening: Opening | null = null;
-  /** what the frame announced it can do (`hello`) */
+  /** What the frame announced it can do (`hello`). */
   private caps = new Set<SignerCap>();
-  /** the session the frame opened and has not closed, as far as this side knows */
+  /** The session the frame opened and has not closed, as far as this side knows. */
   private live: string | null = null;
-  /** sessions the frame ended before their plan was through */
+  /** Sessions the frame ended before their plan was through. */
   private closedEarly = new Set<string>();
   private seq = 0;
   /** The id of the request the frame signed last, which is what a re-timed request names. */
@@ -121,7 +124,8 @@ export class SignerHost {
         return;
       case 'session-opened': {
         const o = this.opening;
-        // a session this side no longer waits for (timed out, cancelled, another request): closed at once, so it is never usable
+        // A session this side no longer waits for, because it timed out, was cancelled or gave way
+        // to another request, is closed at once, so it is never usable.
         if (o?.id !== m.id) {
           this.post(toSigner({ type: 'session-close', sid: m.sid }));
           return;
@@ -135,7 +139,7 @@ export class SignerHost {
           this.live = null;
           if (m.reason !== 'done') this.closedEarly.add(m.sid);
         }
-        // a step of the ended session now asks the user: the frame is shown at once
+        // A step of the ended session now asks the user, so the frame is shown at once.
         if (this.waiting?.session === m.sid && this.waiting.show !== undefined) {
           clearTimeout(this.waiting.show);
           this.waiting.show = undefined;
@@ -179,7 +183,8 @@ export class SignerHost {
       case 'rejected': {
         const o = this.opening;
         if (o?.id === m.id) {
-          // rejected by the user: the run ends; refused as not a merge plan, or busy: the run asks once per transaction
+          // A rejection by the user, or a cancel, ends the run. When the frame refuses it as not a
+          // merge plan, or is busy, the run asks once per transaction.
           if (m.reason === 'user' || m.reason === 'cancelled') this.settleOpen(() => o.reject(new WalletError('rejected', REJECT_TEXT[m.reason][1])));
           else this.settleOpen(() => o.resolve(null));
           return;
@@ -209,8 +214,9 @@ export class SignerHost {
   }
 
   /**
-   * Shows the merge plan `plan` in the frame for one approval. Resolves with the session the frame opened, or null when the frame does not
-   * hold sessions or refuses this plan (then each transaction is approved on its own); rejects `rejected` when the user rejects it.
+   * Shows the merge plan `plan` in the frame for one approval. Resolves with the session the frame
+   * opened, or with null when the frame does not hold sessions or refuses this plan. Each
+   * transaction is then approved on its own. Rejects with `rejected` when the user rejects it.
    */
   openSession(plan: BuiltTx[], tokens: TokenHint[], timeoutMs = SIGN_TIMEOUT_MS): Promise<SigningSession | null> {
     if (!this.supports('merge-session')) return Promise.resolve(null);
@@ -228,7 +234,10 @@ export class SignerHost {
     });
   }
 
-  /** Whether the frame ended the session `sid` before its plan was through (a step off the plan, expiry, a rejection), not when done. */
+  /**
+   * Whether the frame ended the session `sid` before its plan was through, by a step off the plan,
+   * expiry or a rejection. A session ended when done does not count.
+   */
   endedEarly(sid: string): boolean {
     return this.closedEarly.has(sid);
   }
@@ -287,12 +296,13 @@ export class SignerHost {
         this.post(toSigner({ type: 'cancel', id }));
         this.settle(null, new WalletError('timeout', `Private key signer: no answer after ${Math.round(timeoutMs / 1000)}s.`));
       }, timeoutMs);
-      // a step of the live session only: once the frame closed it, a step is an ordinary request
+      // A step of the live session only. Once the frame closed it, a step is an ordinary request.
       const sid = session !== undefined && session === this.live ? session : undefined;
       const retimeOf = !sid && retime && this.lastSigned ? this.lastSigned : undefined;
       this.waiting = { id, resolve, reject, timer, shown: new Map([[built.tx.id, built]]), ...(sid ? { session: sid } : {}) };
-      // A re-timed request or a session step is signed without a prompt when the frame's check passes, so the frame is shown only if it is
-      // still waiting by then (a session step at once when the frame ends the session).
+      // A re-timed request or a session step is signed without a prompt when the frame's check
+      // passes, so the frame is shown only if it is still waiting by then. A session step shows it
+      // at once when the frame ends the session.
       if (retimeOf || sid) this.waiting.show = setTimeout(() => this.waiting?.id === id && this.events.onRequest?.(true), RETIME_SHOW_MS);
       else this.events.onRequest?.(true);
       this.post(toSigner({ type: 'sign', id, built, tokens, ...this.table(), ...(!sid && notes.length > 0 ? { notes } : {}), ...(retimeOf ? { retimeOf } : {}), ...(sid ? { session: sid } : {}), ...(!sid && locks?.length ? { locks } : {}) }));
