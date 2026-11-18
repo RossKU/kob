@@ -20,8 +20,9 @@ import { lockOpen, lockSharePercent, type VerifiedLock } from '../../kob/creator
 import { formatRowDate, rowTimeTitle } from '../kit/format';
 
 /**
- * The token's creator lock as its verified declaration states it (kob/creator-lock.ts): what the genesis locked, its share of the supply (when
- * the supply is proven) and the day it opens; after that day the same line says it is open (what is still locked is the chain's to tell).
+ * The token's creator lock as its verified declaration states it (kob/creator-lock.ts). The line
+ * gives what the genesis locked, its share of the supply when the supply is proven, and the day it
+ * opens. After that day the same line says it is open. What is still locked is the chain's to tell.
  */
 function creatorLockText(lock: VerifiedLock, decimals: number | null, ticker: string): string {
   const amount = `${decimals === null ? lock.amount : formatUnits(BigInt(lock.amount), decimals, { group: ',' })}${ticker ? ` ${ticker}` : ''}`;
@@ -48,7 +49,11 @@ export function IndexerProblems(props: { codes: string[] }) {
   );
 }
 
-/** The registry's template check of a registry token, behind "Status and checks": its template hash against the one pinned in this build, the verdict, the review and the slots. */
+/**
+ * The registry's template check of a registry token, behind "Status and checks". It shows the
+ * token's template hash against the one pinned in this build, the verdict, the review and the
+ * slots.
+ */
 function TemplateChecks(props: { detail: TemplateDetail }) {
   const d = props.detail;
   return (
@@ -71,9 +76,11 @@ function TemplateChecks(props: { detail: TemplateDetail }) {
 }
 
 /**
- * What a token page must say wherever it is read, never behind a tap: the shared-ticker note, the cross-check findings between the indexer and the
- * registry, the issuer powers, and why a token cannot be traded. The fact badges and the program / decimals lines are not here: they are badges
- * with their sentence as the tooltip and the tooltip of the token-family chip (token page header, pair facts).
+ * What a token page must say wherever it is read, never behind a tap. That is the shared-ticker
+ * note, the cross-check findings between the indexer and the registry, the issuer powers, and why
+ * a token cannot be traded. The fact badges and the program and decimals lines are not here. They
+ * are badges with their sentence as the tooltip, and the tooltip of the token-family chip (token
+ * page header, pair facts).
  */
 export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean }) {
   const r = props.row;
@@ -93,21 +100,25 @@ export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean }) 
 }
 
 /**
- * The token page's header: the market bar (MarketBar.tsx: picture and fingerprint, the pair selector, the flip and the star, the 24 h figures, the live state; one row) and the warnings that
- * must be seen. The "High risk" chip, which must not wait for a tap into the details, stays in the bar beside the star. The covenant id with its copy button, the name (and where its
- * facts come from), the link to kascov.io and the program chip are in the token's details card (`TokenDetails`). The title is for screen readers: the pair selector already names the token.
+ * The token page's header. It holds the market bar (MarketBar.tsx), which is one row with the
+ * picture and fingerprint, the pair selector, the flip and the star, the 24 h figures and the live
+ * state. It also holds the warnings that must be seen. The "High risk" chip must not wait for a
+ * tap into the details, so it stays in the bar beside the star. The covenant id with its copy
+ * button, the name and where its facts come from, the link to kascov.io and the program chip are
+ * in the token's details card (`TokenDetails`). The title is for screen readers, because the pair
+ * selector already names the token.
  */
 export function TokenHeader(props: {
   row: TokenRow;
-  /** another listed token uses this ticker */
+  /** Another listed token uses this ticker. */
   sharedTicker?: boolean;
-  /** the live state chip */
+  /** The live state chip. */
   badges?: ComponentChildren;
-  /** the star */
+  /** The star. */
   tools?: ComponentChildren;
-  /** the pair selector (`BTC / KAS`, `KAS / TUSD`; MarketBar.tsx) */
+  /** The pair selector (`BTC / KAS`, `KAS / TUSD`; MarketBar.tsx). */
   pair?: ComponentChildren;
-  /** the 24 h figures (MarketStats.tsx) */
+  /** The 24 h figures (MarketStats.tsx). */
   stats?: ComponentChildren;
 }) {
   const r = props.row;
@@ -130,13 +141,16 @@ export function TokenHeader(props: {
 }
 
 /**
- * Everything a token's chips leave out by default, one tap away (token page and pair page, under the token's facts): why it is marked "High risk", every fact
- * with its sentence (`Genesis not verified` and its reason included: a normal token shows no status chip for it), and where its name and decimals come
- * from when that is its on-chain declaration. Not a rating: nothing here says a token is safe. Renders nothing for a token with none of these.
+ * Everything a token's chips leave out by default, one tap away, on the token page and the pair
+ * page under the token's facts. It gives why the token is marked "High risk". It lists every fact
+ * with its sentence, `Genesis not verified` and its reason included, because a normal token shows
+ * no status chip for it. It also says where the token's name and decimals come from when that is
+ * its on-chain declaration. It is not a rating, and nothing here says a token is safe. It renders
+ * nothing for a token with none of these.
  */
 function TokenStatusDetails(props: { row: TokenRow; services: Pick<Services, 'registry' | 'kob'>; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null | undefined }) {
   const r = props.row;
-  // a token synthesised from the indexer has no registry template to compare with
+  // A token synthesised from the indexer has no registry template to compare with.
   const tpl = r.info && r.source === 'registry' ? templateDetail(r.info, props.services.registry, props.services.kob.templates()) : null;
   const risks = riskReasons(r);
   const stated = new Set(riskFactIds(r));
@@ -185,9 +199,12 @@ function TokenStatusDetails(props: { row: TokenRow; services: Pick<Services, 're
 }
 
 /**
- * The custody note of a token its genesis check found issued by a bridge (a BridgeMint KOB pins by its hash: kUSDT's federated one, Kozmic's ZK one): the
- * backing is on another chain, and nothing here can check it. It lists what the minter's state names (the signer set and guardian, or the bridge covenant),
- * unchecked, for a holder to compare with what the issuer publishes. Folded by default (founder 2026-11-05: it would fill the page), like "Status and checks".
+ * The custody note of a token whose genesis check found it issued by a bridge. KOB pins the
+ * BridgeMint by its hash, kUSDT's federated one and Kozmic's ZK one. The backing is on another
+ * chain, and nothing here can check it. The note lists what the minter's state names, the signer
+ * set and guardian or the bridge covenant. The list is unchecked, for a holder to compare with
+ * what the issuer publishes. It is folded by default, like "Status and checks", because it would
+ * fill the page.
  */
 function BridgeCustodyNote(props: { minter: BridgeMinter | undefined }) {
   const zk = props.minter?.kind === 'zk';
@@ -206,16 +223,23 @@ function BridgeCustodyNote(props: { minter: BridgeMinter | undefined }) {
   );
 }
 
-/** Token facts (bottom of the page): covenant id, program (what it runs and how that was established), issuance by a bridge, decimals, price scale, tick, open orders; a registry token's template checks are in "Status and checks". */
+/**
+ * Token facts at the bottom of the page: covenant id, program (what it runs and how that was
+ * established), issuance by a bridge, decimals, price scale, tick and open orders. A registry
+ * token's template checks are in "Status and checks".
+ */
 export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'registry' | 'kob'>; note?: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts'> | null; /** the row with KOB's own genesis check applied (a token page): what the status section is printed from */ checked?: TokenRow }) {
   const r = props.row;
-  // the token as the page names it (the header's row: the names and icons kascov.io adds are merged into it)
+  // The token as the page names it. It is the header's row, with the names and icons kascov.io adds
+  // merged into it.
   const named = props.checked ?? r;
   const g = (props.checked ?? r).genesis;
-  // from the genesis check only (the pinned BridgeMint in the token's genesis group), never from a name or a list
+  // This comes from the genesis check only, the pinned BridgeMint in the token's genesis group. It
+  // never comes from a name or a list.
   const bridge = g?.status === 'verified' && g.bridge === true;
   const minter = g?.status === 'verified' ? g.bridgeMinter : undefined;
-  // the creator lock its verified declaration states (asked by the page that shows the token; a known one is read here)
+  // The creator lock its verified declaration states. The page that shows the token asks for it,
+  // and a known one is read here.
   const lock = useDeclaration(r.covenantId, false)?.lock ?? null;
   return (
     <div class="mkt-details" data-testid="token-details">
@@ -224,7 +248,8 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
           compact
           items={[
             {
-              // the token's name and where it comes from (the registry, its declaration, this browser's issuance or kascov.io) with the link to kascov.io
+              // The token's name and where it comes from, with the link to kascov.io. The source is
+              // the registry, its declaration, this browser's issuance or kascov.io.
               label: t('market.token.name'),
               value: (
                 <span class="tk-name-line">
@@ -235,10 +260,11 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
                 </span>
               ),
             },
-            // the whole covenant id (the token's identity) with its copy button
+            // The whole covenant id, the token's identity, with its copy button.
             { label: t('market.token.covenantId'), value: <CopyText value={r.covenantId} short={false} data-testid="token-covenant-id" /> },
             {
-              // the program chip (its tooltip: the program as KOB pins it, where the decimals come from) with the program line
+              // The program chip, with the program line. Its tooltip gives the program as KOB pins
+              // it and where the decimals come from.
               label: t('market.program.label'),
               value: (
                 <span class="tk-program">
@@ -265,7 +291,8 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
             { label: t('market.token.decimals'), value: r.decimals ?? '-' },
             {
               label: t('market.token.scale'),
-              // the standard scale is 10^decimals, at most 10^9: a token of more than 9 decimals quotes per a part of a token
+              // The standard scale is 10^decimals, at most 10^9. A token of more than 9 decimals
+              // quotes per a part of a token.
               value:
                 r.scale === null
                   ? '-'
@@ -293,8 +320,9 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
 }
 
 /**
- * The facts of both tokens of a pair (bottom of the pair page, the same panel as a token market's): per token its title with the badges
- * and warnings, then the covenant id, decimals, price scale, tick, open orders and the program.
+ * The facts of both tokens of a pair, at the bottom of the pair page in the same panel as a token
+ * market's. Each token has its title with the badges and warnings, then the covenant id, decimals,
+ * price scale, tick, open orders and the program.
  */
 export function PairDetails(props: { rows: readonly TokenRow[]; shared?: ReadonlySet<string>; services: Pick<Services, 'registry' | 'kob'> }) {
   return (

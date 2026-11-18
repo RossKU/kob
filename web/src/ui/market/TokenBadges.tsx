@@ -4,10 +4,16 @@ import { Badge, Banner } from '../kit';
 import { type TokenInfo } from '../../kob/registry';
 import { hasIssuerControl, KNOWN_POWERS, riskFactIds, tokenLabel, tokenRiskCodes, type RiskCode, type TokenBadge, type TokenFactId, type TokenRow } from './token-model';
 
-/** What a row's facts are printed from: the facts, and (a token page) KOB's own genesis check, which adds a reason and the public mint to some of them. */
+/**
+ * What a row's facts are printed from. They are the facts and, on a token page, KOB's own genesis
+ * check, which adds a reason and the public mint to some of them.
+ */
 type FactRow = Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'> & Partial<Pick<TokenRow, 'genesis' | 'info'>>;
 
-/** The badge text of a fact. "Genesis not verified" says why when KOB's check could not be done; the mint allowance names its amount. */
+/**
+ * The badge text of a fact. "Genesis not verified" says why when KOB's check could not be done. The
+ * mint allowance names its amount.
+ */
 export function factLabel(r: FactRow, id: TokenFactId): string {
   const g = r.genesis;
   if (id === 'genesis_unverified' && g?.status === 'unavailable') return `${t('market.fact.genesis_unverified.label')}: ${t(`market.genesis.reason.${g.reason}`)}`;
@@ -18,11 +24,12 @@ export function factLabel(r: FactRow, id: TokenFactId): string {
   return t(`market.fact.${id}.label`);
 }
 
-/** The sentence of a fact (a tooltip, or printed behind "what is this?"). */
+/** The sentence of a fact, for a tooltip or printed behind "what is this?". */
 export function factText(r: FactRow, id: TokenFactId): string {
   const g = r.genesis;
   if (id === 'mint-authority') {
-    // a power of the program, not a fact about this token: whether a mint authority is still live is the registry's `live_minters` (or the indexer's warning)
+    // This is a power of the program and not a fact about this token. Whether a mint authority is
+    // still live is the registry's `live_minters`, or the indexer's warning.
     const live = r.facts.includes('live_mint_authority');
     const minters = r.info?.json?.genesis?.live_minters;
     return t(live ? 'market.fact.mint-authority.textLive' : minters && minters.length === 0 ? 'market.fact.mint-authority.textNone' : 'market.fact.mint-authority.text');
@@ -37,8 +44,10 @@ export function factText(r: FactRow, id: TokenFactId): string {
 }
 
 /**
- * The badge text of a fact as elements: the reason that "Genesis not verified" gets once KOB's check could not be done is a NEW element after the text that was
- * already there, never an edit of that text node (a page translator that replaced the node would show the translation of the old text: e2e/ui/translated.spec.ts).
+ * The badge text of a fact as elements. The reason that "Genesis not verified" gets once KOB's
+ * check could not be done is a new element after the text that was already there. It is never an
+ * edit of that text node. A page translator that replaced the node would show the translation of
+ * the old text (e2e/ui/translated.spec.ts).
  */
 export function FactLabel(props: { row: FactRow; id: TokenFactId }) {
   const g = props.row.genesis;
@@ -46,17 +55,25 @@ export function FactLabel(props: { row: FactRow; id: TokenFactId }) {
   return <>{factLabel(props.row, props.id)}</>;
 }
 
-/** The sentence of a fact as elements (the reason a check could not be done follows the sentence in an element of its own, as in `FactLabel`). */
+/**
+ * The sentence of a fact as elements. The reason a check could not be done follows the sentence in
+ * an element of its own, as in `FactLabel`.
+ */
 export function FactSentence(props: { row: FactRow; id: TokenFactId }) {
   const g = props.row.genesis;
   if ((props.id === 'genesis_unverified' || props.id === 'genesis_kascov') && g?.status === 'unavailable') return <>{t(`market.fact.${props.id}.text`)}<span>{` ${t(`market.genesis.reasonSentence.${g.reason}`)}`}</span></>;
   return <>{factText(props.row, props.id)}</>;
 }
 
-/** Facts are neutral, except KOB's own genesis result: a pass is green, a failure is a warning. */
+/**
+ * Facts are neutral, except KOB's own genesis result. A pass is green and a failure is a warning.
+ */
 const factTone = (id: TokenFactId): 'neutral' | 'ok' | 'warn' => (id === 'genesis_verified' ? 'ok' : id === 'genesis_failed' ? 'warn' : 'neutral');
 
-/** One status badge: `untradable`, with the reason (about the token's program) in its text and tooltip. */
+/**
+ * One status badge, `untradable`, with the reason about the token's program in its text and
+ * tooltip.
+ */
 export function StatusBadge(props: { badge: TokenBadge; 'data-testid'?: string }) {
   const b = props.badge;
   const reason = b.reason ? t(`market.reason.${b.reason}`) : undefined;
@@ -68,7 +85,10 @@ export function StatusBadge(props: { badge: TokenBadge; 'data-testid'?: string }
   );
 }
 
-/** The plain sentence for each reason a token is "High risk" (the facts' own sentences; the check's own words for a failed genesis). */
+/**
+ * The plain sentence for each reason a token is "High risk". They are the facts' own sentences,
+ * and the check's own words for a failed genesis.
+ */
 export function riskReasonText(r: FactRow, code: RiskCode): string {
   switch (code) {
     case 'genesis_failed': return factText(r, 'genesis_failed');
@@ -78,22 +98,30 @@ export function riskReasonText(r: FactRow, code: RiskCode): string {
   }
 }
 
-/** The reasons shown for a token's risk codes, one line each. The chip's panel and the details section both print these, so they never differ. */
+/**
+ * The reasons shown for a token's risk codes, one line each. The chip's panel and the details
+ * section both print these, so they never differ.
+ */
 export function riskReasons(r: FactRow & { powers?: readonly string[] }): { key: RiskCode; text: string }[] {
   return tokenRiskCodes({ facts: r.facts, powers: [...(r.powers ?? [])], ...(r.genesis ? { genesis: r.genesis } : {}) }).map((key) => ({ key, text: riskReasonText(r, key) }));
 }
 
 /**
- * The one "High risk" chip (warn tone) of a token whose own facts let someone dilute its supply or freeze / seize balances (token-model.ts `tokenRiskCodes`),
- * and its reason: a tap on the chip opens a small panel that lists them (a tooltip does not exist on a touch screen; the panel is fixed to the viewport so
- * a list row, which cuts what overflows it, does not cut it). A tap closes it again, as do Escape, a tap elsewhere and a scroll. Nothing for other tokens.
+ * The one "High risk" chip, warn tone, of a token whose own facts let someone dilute its supply or
+ * freeze or seize balances (token-model.ts `tokenRiskCodes`). It also gives the reason. A tap on
+ * the chip opens a small panel that lists them, because a tooltip does not exist on a touch
+ * screen. The panel is fixed to the viewport so that a list row, which cuts what overflows it,
+ * does not cut it. A tap closes it again, as do Escape, a tap elsewhere and a scroll. Nothing is
+ * shown for other tokens.
  */
 export function RiskChip(props: { row: Pick<TokenRow, 'covenantId' | 'facts' | 'powers'> & Partial<Pick<TokenRow, 'genesis'>> }) {
   const r = props.row;
   const codes = tokenRiskCodes(r);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const button = useRef<HTMLButtonElement>(null);
-  // a layout effect: the listeners must exist in the same frame the panel appears (a passive effect runs after the next paint, up to ~35 ms later, and an Escape or tap in between was lost)
+  // A layout effect, because the listeners must exist in the same frame the panel appears. A
+  // passive effect runs after the next paint, up to about 35 ms later, and an Escape or tap in
+  // between would be lost.
   useLayoutEffect(() => {
     if (!pos) return;
     const close = () => setPos(null);
@@ -143,7 +171,10 @@ export function RiskChip(props: { row: Pick<TokenRow, 'covenantId' | 'facts' | '
   );
 }
 
-/** The token-family chip (`KCC-20`); its tooltip names the program and where the decimals come from. Nothing for a row without a registry entry. */
+/**
+ * The token-family chip (`KCC-20`). Its tooltip names the program and where the decimals come
+ * from. Nothing is shown for a row without a registry entry.
+ */
 export function FamilyChip(props: { row: { info?: { family: 'kcc20' | 'kron' } | null }; /** more lines for the tooltip (the program, the decimals) */ note?: string | null }) {
   const info = props.row.info;
   if (!info) return null;
@@ -168,18 +199,25 @@ export function StatusBadges(props: { row: Pick<TokenRow, 'badges' | 'covenantId
   );
 }
 
-/** `TICKER (abcd...1234)`: never the ticker alone (a token outside the registry: `abcd...1234`). */
+/**
+ * `TICKER (abcd...1234)`. It is never the ticker alone. A token outside the registry gives
+ * `abcd...1234`.
+ */
 export function tokenTitle(row: Pick<TokenRow, 'ticker' | 'covenantId'> & { info?: TokenInfo | null }): string {
   return tokenLabel(row);
 }
 
-/** Translated name of one program power (an unknown power is shown as it came, already restricted to short lower-case words by the client). */
+/**
+ * The translated name of one program power. An unknown power is shown as it came, already
+ * restricted to short lower-case words by the client.
+ */
 export const powerName = (p: string): string => ((KNOWN_POWERS as readonly string[]).includes(p) ? t(`market.power.${p}`) : p);
 
 /**
- * Short note for a token whose ticker another listed token uses too: tickers are not unique, the covenant id is the identity. `block` renders a
- * paragraph (token page header), otherwise an inline line. Renders nothing for other tokens. The market list shows no such note: its rows tell tokens
- * apart by the fingerprint and the short covenant id.
+ * Short note for a token whose ticker another listed token uses too. Tickers are not unique, and
+ * the covenant id is the identity. `block` renders a paragraph, as in the token page header, and
+ * otherwise an inline line. It renders nothing for other tokens. The market list shows no such
+ * note, because its rows tell tokens apart by the fingerprint and the short covenant id.
  */
 export function SharedTickerNote(props: { shared: boolean; block?: boolean; 'data-testid'?: string }) {
   if (!props.shared) return null;
@@ -192,8 +230,10 @@ export function SharedTickerNote(props: { shared: boolean; block?: boolean; 'dat
 }
 
 /**
- * The shared-ticker note inside the market bar (MarketBar `note`): one muted line in the bar's top space, a warning sign and the short text, the full sentence as its tooltip.
- * It is out of the flow, so the bar has the same height with and without it. Renders nothing for other tokens.
+ * The shared-ticker note inside the market bar (MarketBar `note`). It is one muted line in the
+ * bar's top space, with a warning sign and the short text, and the full sentence as its tooltip.
+ * It is out of the flow, so the bar has the same height with and without it. It renders nothing
+ * for other tokens.
  */
 export function SharedTickerBarNote(props: { shared: boolean }) {
   if (!props.shared) return null;
@@ -205,13 +245,17 @@ export function SharedTickerBarNote(props: { shared: boolean }) {
 }
 
 /**
- * The facts of a token that "High risk" states (token-model.ts `riskFactIds`), each with its plain sentence: in the order ticket's panel (`compact`: the badges, the
- * sentences open on a tap, because a tooltip does not exist on a touch screen), or printed (`block`). No other fact is shown by default: the rest of a token's facts
- * (a pass, kascov's remark, a capped public mint, blacklist, an unverified genesis) are in the "Status and checks" section of its details. Several tokens (a pair)
- * name each token before its facts. Renders nothing without facts.
+ * The facts of a token that "High risk" states (token-model.ts `riskFactIds`), each with its plain
+ * sentence. In the order ticket's panel (`compact`) they are badges, and the sentences open on a
+ * tap, because a tooltip does not exist on a touch screen. Otherwise (`block`) they are printed.
+ * No other fact is shown by default. The rest of a token's facts are in the "Status and checks"
+ * section of its details. They are a pass, kascov's remark, a capped public mint, blacklist and
+ * an unverified genesis. Several tokens, as in a pair, name each token before its facts. It
+ * renders nothing without facts.
  */
 export function TokenFacts(props: { rows: readonly FactRow[]; compact?: boolean; 'data-testid'?: string }) {
-  // by default a token shows no status: only what "High risk" states is printed here (the order ticket's panel); every other fact is in the token's details
+  // By default a token shows no status. Only what "High risk" states is printed here, in the order
+  // ticket's panel. Every other fact is in the token's details.
   const rows = props.rows.map((r) => ({ ...r, facts: riskFactIds({ facts: r.facts, powers: [], ...(r.genesis ? { genesis: r.genesis } : {}) }) })).filter((r) => r.facts.length > 0);
   if (rows.length === 0) return null;
   const named = props.rows.length > 1;
@@ -252,7 +296,10 @@ export function TokenFacts(props: { rows: readonly FactRow[]; compact?: boolean;
   );
 }
 
-/** KOB's own genesis check of the token failed: a warning that must be seen on the page, not behind a tap, whatever a third party says. Nothing otherwise. */
+/**
+ * KOB's own genesis check of the token failed. This is a warning that must be seen on the page and
+ * not behind a tap, whatever a third party says. Nothing is shown otherwise.
+ */
 export function GenesisFailedBanner(props: { row: Pick<TokenRow, 'genesis'>; 'data-testid'?: string }) {
   const g = props.row.genesis;
   if (g?.status !== 'failed') return null;
@@ -263,7 +310,10 @@ export function GenesisFailedBanner(props: { row: Pick<TokenRow, 'genesis'>; 'da
   );
 }
 
-/** The program can freeze or seize balances: escrowed orders can fail or be lost at the issuer's discretion. Renders nothing for other tokens. */
+/**
+ * The program can freeze or seize balances, so escrowed orders can fail or be lost at the issuer's
+ * discretion. It renders nothing for other tokens.
+ */
 export function PowersWarning(props: { powers: readonly string[] | null | undefined; 'data-testid'?: string }) {
   if (!hasIssuerControl(props.powers)) return null;
   return (
