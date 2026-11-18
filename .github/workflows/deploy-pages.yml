@@ -377,14 +377,14 @@ jobs:
           cat "$RUNNER_TEMP/check.txt"
           { echo; echo "### Protection check (internal app)"; echo; echo '```'; cat "$RUNNER_TEMP/check.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
-      - name: Post-deploy check (headers of public/_headers, every file byte for byte)
+      - name: Post-deploy check (headers of public/_headers, every file byte for byte against the hashes recorded before the upload steps)
         if: matrix.internal == ''
         env:
           URL: ${{ steps.deploy.outputs.deployment-url }}
         run: |
           case "$URL" in https://*) ;; *) echo "::error::no https deployment URL from wrangler: \`$URL\`"; exit 1 ;; esac
           set +e
-          node scripts/check-pages.mjs "$URL" --dist dist > "$RUNNER_TEMP/check.txt" 2>&1
+          node scripts/check-pages.mjs "$URL" --hashes "$RUNNER_TEMP/deployed.sha256" > "$RUNNER_TEMP/check.txt" 2>&1
           rc=$?
           set -e
           cat "$RUNNER_TEMP/check.txt"

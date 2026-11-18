@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { noindexDist, pagesConfig, programRegistry, writeDeployment } from '../scripts/pages-config.mjs';
-import { checkPages, checkProtected } from '../scripts/check-pages.mjs';
+import { checkPages, checkProtected, parseHashes } from '../scripts/check-pages.mjs';
 import { ensureDomain, hostOf, pagesDevHost, zoneCandidates } from '../scripts/pages-domain.mjs';
 import { DEFAULT_REGISTRY_PATH } from '../registry-pin.mjs';
 import { resolveConfig, sanitizeLayer, type ConfigWarning } from '../src/config';
@@ -448,6 +448,20 @@ describe('check-pages: the deployed headers and files', () => {
     expect(lines.join('\n')).toContain('/index.html served bytes differ from the build');
   });
 
+  it('checks the files against recorded hashes, not against the directory as it is later', async () => {
+    const { createHash } = await import('node:crypto');
+    const sum = (f: string) => createHash('sha256').update(readFileSync(join(dist, f))).digest('hex');
+    const list = ['index.html', 'signer.html', 'assets/main-1.js', 'config.json'].map((f) => `${sum(f)}  web/dist/${f}`).join('\n');
+    const base = await serve(pagesHost(dist, HEADERS));
+    const good = await checkPages(base, { hashes: parseHashes(list), attempts: 1 });
+    expect(good.lines.filter((l) => l.startsWith('FAIL'))).toEqual([]);
+    expect(good.lines.join('\n')).toContain('all 4 built files are served byte for byte');
+    // the recorded hash of index.html is another one: what the host serves is not what was built
+    const bad = await checkPages(base, { hashes: parseHashes(list.replace(sum('index.html'), '0'.repeat(64))), attempts: 1 });
+    expect(bad.ok).toBe(false);
+    expect(bad.lines.join('\n')).toContain('/index.html served bytes differ from the build');
+  });
+
   it('fails when the host is unreachable', async () => {
     const { ok, lines } = await checkPages('http://127.0.0.1:9/', { attempts: 1 });
     expect(ok).toBe(false);
@@ -536,7 +550,7 @@ describe('the internal mainnet app: a preview of the mainnet project behind Clou
     expect(deploy).toContain('node scripts/check-pages.mjs --protected "${urls[@]}"');
     expect(deploy).toContain('ALIAS: ${{ steps.deploy.outputs.pages-deployment-alias-url }}');
     // the ordinary check (headers, files) runs for the other sites only: an Access login page is not the app
-    expect(deploy).toMatch(/- name: Post-deploy check \(headers of public\/_headers, every file byte for byte\)\n\s+if: matrix\.internal == ''/);
+    expect(deploy).toMatch(/- name: Post-deploy check \(headers of public\/_headers, every file byte for byte against the hashes recorded before the upload steps\)\n\s+if: matrix\.internal == ''/);
     // no custom domain for it (public is empty), and it is never given a public URL
     expect(deploy).toMatch(/Custom domain of the site[\s\S]*if: matrix\.public != ''/);
   });
