@@ -1,22 +1,38 @@
-//! KOB router payment intents through the production builders (`build::{build_create_intent,
-//! execute_intent, build_cancel_intent, build_expire_intent}`), validated by the rusty-kaspa v2.1.0 script engine with
-//! enforced compute budgets, the storage-mass commitment and the fee floor.
+//! Tests the KOB router payment intents through the production builders
+//! (`build::{build_create_intent, execute_intent, build_cancel_intent, build_expire_intent}`),
+//! validated by the rusty-kaspa v2.1.0 script engine with enforced compute budgets, the
+//! storage-mass commitment and the fee floor.
 //!
-//! The router reads every token under the program the intent's state names (open ICC handles), so every test runs on
-//! several token programs ([`RUNS`]): the 8/8 prototype, the 3/3 reference program KOB issues, a swap across the two,
-//! the published public-mint build of the reference (3/3; token A and token B), and the KRON programs (2,433 B and 2,732 B) for a KRON token A (`TokenToKasKron_*`, `TokenSwapKron_*`, sold into
-//! `KobBidKron`s; token B stays KCC-20).
+//! The router reads every token under the program the intent's state names (open ICC handles), so
+//! every test runs on several token programs ([`RUNS`]):
 //!
-//! Positive: every one of the 42 router actors (fill shapes, 12 of them with bought-custody legs) is created, executed
-//! and validated on every program pair that can run it (the 3/3 program has no room for a three-bid sell: the builders
-//! refuse it). Their KCC-20 bids cover the delivery modes: mode 1 (its first fill, and the custody legs of the `_c`
-//! actors), mode 2 (form 0) and mode 0 (`docs/design/bid-delivery-spec.md`, section 8). Each intent kind is
-//! cancelled by its payer (token intents take their locked tokens back in the same transaction), and expired by anyone
-//! from its deadline on. Negative: an execution whose merchant output or payer change is redirected after building, a
-//! cancel signed by another key, a cancel that leaves the lock behind (one that spends other tokens of the same token
-//! in its place: kob-tests' router harness, with its ablation), token B of another extension commitment than the intent names (the B pin), and a shape the orders do not fit are rejected (the router at the intent input, the builder for the last);
-//! a KRON intent that locks no more than it may sell is refused at creation (its change output would be empty). The
-//! covenant semantics of the router itself are covered exhaustively by `kob-tests/tests/argent_router_tests.rs`.
+//! * the 8/8 prototype;
+//! * the 3/3 reference program KOB issues, and a swap across the two;
+//! * the published public-mint build of the reference (3/3; token A and token B);
+//! * the KRON programs (2,433 B and 2,732 B) for a KRON token A (`TokenToKasKron_*`,
+//!   `TokenSwapKron_*`, sold into `KobBidKron`s; token B stays KCC-20).
+//!
+//! Positive: every one of the 42 router actors (fill shapes, 12 of them with bought-custody legs)
+//! is created, executed and validated on every program pair that can run it (the 3/3 program has no
+//! room for a three-bid sell: the builders refuse it). Their KCC-20 bids cover the delivery modes:
+//! mode 1 (its first fill, and the custody legs of the `_c` actors), mode 2 (form 0) and mode 0
+//! (`docs/design/bid-delivery-spec.md`, section 8). Each intent kind is cancelled by its payer
+//! (token intents take their locked tokens back in the same transaction), and expired by anyone
+//! from its deadline on.
+//!
+//! Negative, each rejected:
+//!
+//! * an execution whose merchant output or payer change is redirected after building;
+//! * a cancel signed by another key;
+//! * a cancel that leaves the lock behind (one that spends other tokens of the same token in its
+//!   place: kob-tests' router harness, with its ablation);
+//! * token B of another extension commitment than the intent names (the B pin);
+//! * a shape the orders do not fit (rejected by the builder; the others by the router at the intent
+//!   input).
+//!
+//! A KRON intent that locks no more than it may sell is refused at creation (its change output
+//! would be empty). The covenant semantics of the router itself are covered exhaustively by
+//! `kob-tests/tests/argent_router_tests.rs`.
 
 mod common;
 
@@ -546,8 +562,9 @@ fn the_payer_cancels_every_intent_kind() {
         let res = execute(&bad, &entries, true).unwrap();
         assert!(res[0].is_err(), "{name}: a cancel by another key must fail");
         if c.lock.is_some() {
-            // C5 X-1: the router itself refuses a token intent's cancel that leaves the lock behind (the cancel ends the
-            // covenant: tokens owned by the intent id could never move again), even signed by the payer
+            // The router itself refuses a token intent's cancel that leaves the lock behind (the
+            // cancel ends the covenant: tokens owned by the intent id could never move again), even
+            // signed by the payer.
             let tok_out = tx.outputs.iter().position(|o| o.covenant.is_some_and(|b| b.covenant_id.as_bytes() == TOK_A)).unwrap();
             let mut orphan = tx.clone();
             orphan.inputs.remove(1);
@@ -645,8 +662,9 @@ fn every_intent_is_expired_from_its_deadline() {
     );
 }
 
-/// C5 X-7: an intent's cancel and expiry take their fee from the intent's own KAS (no funding input), so an intent below
-/// `MIN_INTENT_VALUE` could be neither cancelled nor expired: the builder refuses to create one.
+/// An intent's cancel and expiry take their fee from the intent's own KAS (no funding input), so an
+/// intent below `MIN_INTENT_VALUE` could be neither cancelled nor expired: the builder refuses to
+/// create one.
 #[test]
 fn an_intent_too_small_to_exit_is_not_created() {
     let actor = Actor::by_name("TokenToKas_sell").unwrap();

@@ -1,10 +1,18 @@
-//! Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`; one template each for both sides and both families of A and B),
-//! engine-validated through the builders: creation (both custodies of a sell-first entry), cancel (strays of both tokens),
-//! refunds and kills, fills routed through the KAS books, netting of opposite pair orders (1 x 1, 2 x 2), conditional fills
-//! armed in the fill by evidence (two KAS-book fills, or a resting pair order), updates (arm, trail) in both evidence
-//! modes, an armed stop's auction, if-done fills, bookings and merges of both sides, for program pairs of every family mix.
-//! Every transaction runs every order covenant and token program in the rusty-kaspa v2.1.0 engine and pays the node's relay
-//! floor. Plus the builders' refusals and the maker-value checks (a maker never gets less than its terms).
+//! Tests the pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`) through the builders, with every
+//! transaction validated in the script engine.
+//!
+//! Each kind has one template for both sides and both families of A and B. Covered:
+//!
+//! * creation (both custodies of a sell-first entry) and cancel (strays of both tokens);
+//! * refunds and kills;
+//! * fills routed through the KAS books, and netting of opposite pair orders (1 x 1, 2 x 2);
+//! * conditional fills armed in the fill by evidence (two KAS-book fills, or a resting pair order);
+//! * updates (arm, trail) in both evidence modes, and an armed stop's auction;
+//! * if-done fills, and bookings and merges of both sides;
+//! * the builders' refusals and the maker-value checks (a maker never gets less than its terms).
+//!
+//! The program pairs cover every family mix. Every transaction runs every order covenant and token
+//! program in the rusty-kaspa v2.1.0 engine and pays the node's relay floor.
 
 mod common;
 
@@ -70,7 +78,7 @@ fn makers_get_at_least_their_terms() {
     assert!(token_at(&s, 1, pa, TOKEN_COV, pk(20), WHOLE), "the bid gets its A");
 }
 
-/// Builder refusals of what the covenants refuse (and of what the founder rules forbid).
+/// Builder refusals of what the covenants refuse (and of what the rules of the order kinds forbid).
 #[test]
 fn builders_refuse_what_the_covenants_refuse() {
     let (pa, pb) = (TemplateId::Kcc20Ref8x8, TemplateId::Kcc20Ref8x8);
@@ -155,9 +163,10 @@ fn builders_refuse_what_the_covenants_refuse() {
     );
 }
 
-/// The layout keeps every positional token output (a rest or a return at its custody's input index) right after the order
-/// inputs, whichever token it is of: a transaction whose SECOND token has an IOC return while its first token has several
-/// custodies without one used to leave an output slot reserved but never filled.
+/// The layout keeps every positional token output (a rest or a return at its custody's input index)
+/// right after the order inputs, whichever token it is of: a transaction whose SECOND token has an
+/// IOC return while its first token has several custodies without one leaves no output slot
+/// reserved but never filled.
 #[test]
 fn positional_outputs_of_any_token_leave_no_gap() {
     let p = TemplateId::Kcc20Ref8x8;

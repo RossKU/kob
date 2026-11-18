@@ -243,9 +243,9 @@ fn bid_budget_rules() {
     assert_eq!(e, 1_011 + 3 + 4 * 100 + 7);
 }
 
-/// The buying power as it was computed before it became O(1): the floor of `budget * scale / rate`,
-/// then a scan down one unit at a time to the first n the covenant's arithmetic accepts. It scans
-/// about `10^18` steps for a negative tip, so the tests below run it only on sane states.
+/// A reference buying power: the floor of `budget * scale / rate`, then a scan down one unit at a
+/// time to the first n the covenant's arithmetic accepts. It scans about `10^18` steps for a
+/// negative tip, so the tests below run it only on sane states.
 fn scan_buying_power(b: &BidState, value: i64) -> i64 {
     let Some(rate) = b.budget_rate().filter(|r| *r > 0) else { return 0 };
     let budget = value as i128 - b.delivery_carrier as i128 - b.reserve as i128;
@@ -271,8 +271,8 @@ fn assert_largest_funded(b: &BidState, value: i64, n: i64) {
 
 /// A bid the covenant can never fill has no buying power, and the answer comes at once: a negative
 /// tip (for which `used` fails at every n while the budget rate stays positive), a scale above
-/// `10^9` (where `quote_of` overflows) or not a power of ten, and i64-extreme numbers. Each of the
-/// first two used to scan down from about `10^18`, which hung the indexer and the web book.
+/// `10^9` (where `quote_of` overflows) or not a power of ten, and i64-extreme numbers. A scan down
+/// from about `10^18` would hang the indexer and the web book on the first two.
 #[test]
 fn buying_power_of_a_hostile_bid_is_zero_at_once() {
     let base = BidState { slope: 0, max_fill: 0, delivery_carrier: 0, reserve: 0, ..bid() };

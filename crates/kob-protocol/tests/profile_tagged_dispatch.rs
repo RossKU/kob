@@ -1,11 +1,12 @@
-//! Token programs with KCC-1 entry tags (`silverc` v1 dispatch), profiled read-only by `kob registry add-program`.
+//! Tests that token programs with KCC-1 entry tags (`silverc` v1 dispatch) are profiled read-only
+//! by `kob registry add-program`.
 //!
 //! Fixtures (public data):
-//! * `fixtures/kcc20-silverscript-e108d416.in1.redeem.hex`: the redeem script of input 1 of mainnet transaction
-//!   `e108d4161c14883e05940c933b616acbc119a0163e2380e16ef9782481d00f99`, a token of the SilverScript KCC20 example
-//!   (`kcc20.sil`);
-//! * `fixtures/kcc20-silverscript-4x5.artifact.json`: that example compiled by `silverc` v1 with `maxCovIns = 4`,
-//!   `maxCovOuts = 5` (its bytecode is the redeem script above, byte for byte).
+//! * `fixtures/kcc20-silverscript-e108d416.in1.redeem.hex`: the redeem script of input 1 of mainnet
+//!   transaction `e108d4161c14883e05940c933b616acbc119a0163e2380e16ef9782481d00f99`, a token of the
+//!   SilverScript KCC20 example (`kcc20.sil`);
+//! * `fixtures/kcc20-silverscript-4x5.artifact.json`: that example compiled by `silverc` v1 with
+//!   `maxCovIns = 4`, `maxCovOuts = 5` (its bytecode is the redeem script above, byte for byte).
 
 use kob_protocol::profile::{
     derive_profile, tag_dispatch, DeriveOptions, ProfileFile, ProgramInput, ProgramReview, SourceKind, WitnessScheme,

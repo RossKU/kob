@@ -1,6 +1,7 @@
-//! KRON family specifics of the builders, the sigscript layout and the `KOB1` record. The whole
-//! builder set on both real KRON programs is validated in `builders.rs`; this file pins what is
-//! different from KCC-20 and what the builders refuse.
+//! Tests the KRON family specifics of the builders, the sigscript layout and the `KOB1` record.
+//!
+//! The whole builder set on both real KRON programs is validated in `builders.rs`; this file pins
+//! what is different from KCC-20 and what the builders refuse.
 
 mod common;
 
@@ -231,8 +232,8 @@ fn placement_record_of_a_kron_order() {
     assert_eq!((*family, *template), (payload::FAMILY_KRON46, TemplateId::KobAskKron));
     // KRON custody part: the token output only (no extension commitment).
     assert_eq!(custody, &Some(Custody { token_output: 1, extension_commitment: [0; 32] }));
-    // Version 3: no template hash and no push opcodes; the version-2 record was output 2 + family 1 + kind 1 + template
-    // hash 32 + state length 2 + state + custody 2.
+    // Version 3: no template hash and no push opcodes; the version-2 record carried output 2 +
+    // family 1 + kind 1 + template hash 32 + state length 2 + state + custody 2.
     let v2_len = 4 + 1 + 3 + 2 + 1 + 1 + 32 + 2 + state.len() + 2;
     assert!(signed.tx.payload.len() + 32 + 19 < v2_len, "{} vs {v2_len}", signed.tx.payload.len());
     // The KCC-20 record of the same order also spells its custody's extension commitment.

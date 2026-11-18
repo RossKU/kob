@@ -1,5 +1,5 @@
-//! The delivery block of the bid-side and pair kinds (`docs/design/bid-delivery-spec.md` §2): both
-//! state layouts, their codec, golden vectors and the delivery rules.
+//! Tests the delivery block of the bid-side and pair kinds (`docs/design/bid-delivery-spec.md`
+//! §2): both state layouts, their codec, golden vectors and the delivery rules.
 //!
 //! The layouts do not depend on which one the pinned artifact has: the legacy layout is that of the
 //! templates before the block (the retired ones once the block is pinned), the delivery layout that
@@ -474,9 +474,9 @@ fn delivery_rules_of_delivering_orders() {
     }
 }
 
-/// S4: a mode-2 `topupTip` (and an entry's `exitTopupTip`) is below `COVENANT_OUTPUT_MIN`, so
-/// a filler cannot profit from making a fresh receive UTXO for each fill. With a 1 KAS carrier the
-/// carrier rule allows more; the cap refuses it at placement and on chain (the indexer's listing).
+/// A mode-2 `topupTip` (and an entry's `exitTopupTip`) is below `COVENANT_OUTPUT_MIN`, so a filler
+/// cannot profit from making a fresh receive UTXO for each fill. With a 1 KAS carrier the carrier
+/// rule allows more; the cap refuses it at placement and on chain (the indexer's listing).
 #[test]
 fn topup_tip_is_capped_below_a_fresh_receive_utxo() {
     assert_eq!(TOPUP_TIP_MAX, crate::tx::COVENANT_OUTPUT_MIN as i64 - 1);

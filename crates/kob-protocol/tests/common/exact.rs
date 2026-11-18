@@ -1,6 +1,9 @@
-//! Engine helpers for the tests that run new shapes before (or independently of) the committed compute-budget table:
-//! building with budgets measured in the engine, and patching a built transaction (an order input's state and the
-//! outputs derived from it) to show that a covenant, not only the builder, refuses a fill.
+//! Engine helpers for the tests that run shapes independently of the committed compute-budget
+//! table.
+//!
+//! They build with budgets measured in the engine, and patch a built transaction (an order input's
+//! state and the outputs derived from it) to show that a covenant, not only the builder, refuses a
+//! fill.
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;

@@ -1,9 +1,15 @@
-//! Pair order fixtures (`KobPair`, `KobCondPair`, `KobIfdPair`, each one template for both sides and both families): a
-//! pair A/B with A = `TOKEN_COV` (program `pa`) and B = `TOKEN_B` (program `pb`), both of scale `SCALE`, prices in B base
-//! units per whole A (`RATE` = one whole B per whole A). Every shape a matcher builds for a pair order: routes through the
-//! KAS books (a pair ASK's A sold to bids of A and its B bought from asks of B; a pair BID's B sold to bids of B and its A
-//! bought from asks of A), netting of opposite pair orders (1 x 1, 2 x 2), evidence-armed conditional fills and updates in
-//! both evidence modes, trailing, if-done fills, bookings and merges of both sides, refunds, kills, cancels.
+//! Pair order fixtures (`KobPair`, `KobCondPair`, `KobIfdPair`, each one template for both sides
+//! and both families).
+//!
+//! The pair A/B has A = `TOKEN_COV` (program `pa`) and B = `TOKEN_B` (program `pb`), both of scale
+//! `SCALE`, with prices in B base units per whole A (`RATE` = one whole B per whole A). The
+//! fixtures cover every shape a matcher builds for a pair order:
+//!
+//! * routes through the KAS books (a pair ASK's A sold to bids of A and its B bought from asks of
+//!   B; a pair BID's B sold to bids of B and its A bought from asks of A);
+//! * netting of opposite pair orders (1 x 1, 2 x 2);
+//! * evidence-armed conditional fills and updates in both evidence modes, and trailing;
+//! * if-done fills, bookings and merges of both sides, refunds, kills and cancels.
 #![allow(dead_code)]
 
 use kob_protocol::artifacts::TemplateId;
@@ -1229,9 +1235,10 @@ fn set_grid_inputs(
 
 /// Every `KobPair` / `KobCondPair` fill of the branch grid ([`pair_fill_grid`]) with a KCC-20 T in each delivery form
 /// ([`grid_forms`]), and the refund of each with a bought-custody, so the budget table measures every delivery role
-/// (`.m1`, `.m1c`, `.m2`, `.m2t`) at its worst branch. Not part of [`pair_branch_shapes`] (the mode-0 role space and the C6
-/// corpus): a shape the delivery rules refuse in a form (a booked exit's re-arming fill is mode 0, a top-up that is not
-/// its token's lowest-index delivery) does not build, and the table leaves it out.
+/// (`.m1`, `.m1c`, `.m2`, `.m2t`) at its worst branch. Not part of [`pair_branch_shapes`] (the
+/// mode-0 role space): a shape the delivery rules refuse in a form (a booked exit's re-arming fill
+/// is mode 0, a top-up that is not its token's lowest-index delivery) does not build, and the table
+/// leaves it out.
 pub fn pair_delivery_grid(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
     let mut v: Vec<(String, Action)> = vec![];
     for (name, a) in pair_fill_grid(pa, pb) {

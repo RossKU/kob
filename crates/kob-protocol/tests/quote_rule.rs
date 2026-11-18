@@ -1,10 +1,13 @@
-//! The protocol v3 quote rule through the builders AND the rusty-kaspa v2.1.0 engine: amounts in base units, prices per
-//! whole token (`scale` base units), every quote rounded in the maker's favour, the minimum fill of every kind, the
-//! covenant arithmetic's overflow limits and the repeat merge argument.
+//! Tests the protocol v3 quote rule through the builders AND the rusty-kaspa v2.1.0 engine.
 //!
-//! Where only the covenant can be shown to refuse (the builders refuse first), the test builds a valid transaction for a
-//! state the covenant accepts and patches the order input's state (its signing plan and its UTXO script, and every
-//! output derived from it) to the state under test: the engine must then fail that input, and only that state changed.
+//! Covered: amounts in base units, prices per whole token (`scale` base units), every quote rounded
+//! in the maker's favour, the minimum fill of every kind, the covenant arithmetic's overflow limits
+//! and the repeat merge argument.
+//!
+//! Where only the covenant can be shown to refuse (the builders refuse first), the test builds a
+//! valid transaction for a state the covenant accepts and patches the order input's state (its
+//! signing plan and its UTXO script, and every output derived from it) to the state under test: the
+//! engine must then fail that input, and only that state changed.
 
 mod common;
 

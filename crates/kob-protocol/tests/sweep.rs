@@ -1,8 +1,12 @@
-//! Strays (`matcher.md` §1.2): the maker's sweep IN PLACE (`SweepOrder`: the maker's `cancel` continues the order with the
-//! same script, a `SWEEP` record names the continuation) for every order kind, and foreign strays (tokens of another covenant
-//! id owned by the order id) returned to the maker by the maker's cancel and sweep and by a permissionless refund / kill.
-//! A mode-1 order's bought-custody is never swept (a claim moves it), and a cancel that ends the order must release it.
-//! Every transaction is validated in the rusty-kaspa v2.1.0 engine.
+//! Tests the strays of an order (`matcher.md` §1.2): the maker's sweep and the return of foreign
+//! strays.
+//!
+//! The maker's sweep goes IN PLACE (`SweepOrder`: the maker's `cancel` continues the order with the
+//! same script, and a `SWEEP` record names the continuation) for every order kind. Foreign strays
+//! (tokens of another covenant id owned by the order id) are returned to the maker by the maker's
+//! cancel and sweep and by a permissionless refund / kill. A mode-1 order's bought-custody is never
+//! swept (a claim moves it), and a cancel that ends the order must release it. Every transaction is
+//! validated in the rusty-kaspa v2.1.0 engine.
 
 mod common;
 
