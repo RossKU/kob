@@ -36,7 +36,7 @@ export function requestKeyProblem(req: unknown, keys: OwnKeys): string | null {
   const replace = r.replace as { order?: unknown } | null | undefined;
   if (replace) problems.push(bad('replacement order maker', makerOf(replace.order), own));
   // A cancel signs with the wallet key only, so the order must belong to the wallet.
-  // A claim signs the order's cancel and may place an order: both the wallet's.
+  // A claim signs the order's cancel and may place an order, and both are the wallet's.
   if (r.action === 'claimOrder') {
     const m = makerOf((r.order as { state?: unknown } | undefined)?.state);
     problems.push(m !== null && m !== keys.maker ? `the order to claim belongs to ${m.slice(0, 8)}..., not to the wallet` : null);
@@ -59,7 +59,7 @@ export function requestKeyProblem(req: unknown, keys: OwnKeys): string | null {
       if (m !== null && m !== keys.maker) problems.push(`an order to cancel belongs to ${m.slice(0, 8)}..., not to the wallet`);
     }
   }
-  // a take: the wallet receives what it buys and the change
+  // In a take, the wallet receives what it buys and the change.
   if (r.action === 'batch') problems.push(bad('taker key', asKey(r.taker), own));
   for (const f of (r.funding as { pubkey?: unknown }[] | undefined) ?? []) if (asKey(f.pubkey) !== null && !own.has(f.pubkey as Hex)) problems.push(`funding input of ${String(f.pubkey).slice(0, 8)}... is not a key of the connected wallet`);
   problems.push(bad('change key', asKey(r.change)));

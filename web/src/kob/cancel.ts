@@ -74,7 +74,10 @@ export interface OrderSnapshot {
   custody: TokenUtxo | null;
   /** A sell-first `KobIfdPair`'s B prefund custody, the second of `custodies`. */
   prefund?: TokenUtxo | null;
-  /** A mode-1 order's bought-custody (`bought > 0`): the maker's tokens, never sell custody. Cancel, refund and claim move it. */
+  /**
+   * A mode-1 order's bought-custody (`bought > 0`). It holds the maker's tokens and is never a sell
+   * custody. Cancel, refund and claim move it.
+   */
   boughtCustody?: TokenUtxo | null;
   /** Strays of the order's own token or tokens. A pair order has them of A and of B. */
   strays: TokenUtxo[];
@@ -157,8 +160,9 @@ export function secondTokenOf(st: OrderState): { covenantId: Hex; tplHash: Hex; 
 }
 
 /**
- * The token of an unbound curve's custody: the custody's covenant id when it is an output of the
- * curve's own transaction (its token's genesis, which an unbound curve never leaves), else null.
+ * Returns the token of an unbound curve's custody, or null. It is the custody's covenant id when
+ * the custody is an output of the curve's own transaction. That is its token's genesis, which an
+ * unbound curve never leaves.
  */
 export function unboundCustodyToken(snap: Pick<OrderSnapshot, 'order' | 'custody'>): Hex | null {
   const c = snap.custody;
@@ -212,7 +216,7 @@ export function snapshotFromOrderView(view: OrderView): OrderSnapshot {
     return u ? extensionOfState(u.state) : extOf(token, k >= 0 ? k : null);
   };
   const strays = split.own.map((s) => tokenUtxoFromView(s, view.covenant_id, custodyExt(s.token), famOf(s.token)));
-  // a bid's `custody` is its bought-custody too (kobd reads.rs)
+  // A bid's `custody` is its bought-custody too (kobd reads.rs).
   const bf = boughtOf(st);
   const bv = view.bought_custody?.utxo ?? (!pv && !cs.length ? (view.custody?.utxo ?? null) : null);
   const boughtCustody = bf && bv && !bv.spent && bv.token === bf.token ? tokenUtxoFromView(bv, view.covenant_id, bf.ext, 'kcc20') : null;
@@ -248,7 +252,7 @@ export interface UnprovenStray { outpoint: string; token: Hex; amount: bigint }
  * build its spend.
  */
 export function splitStrayViews(views: readonly TokenUtxoView[], st: OrderState, unboundToken: Hex | null = null): { own: TokenUtxoView[]; foreign: ForeignStrays[]; unproven: UnprovenStray[] } {
-  // an unbound curve names no token in its state: its own token is its custody's
+  // An unbound curve names no token in its state, so its own token is its custody's.
   const ownTokens = unboundToken ? [unboundToken] : ownTokensOf(st);
   const own: TokenUtxoView[] = [];
   const foreign: ForeignStrays[] = [];
@@ -416,7 +420,7 @@ export interface CancelPlan {
   foreignReturned?: { covenantId: Hex; amount: bigint; utxos: number }[];
   /** A sweep in place (`planSweep`): what returns and what stays for a later sweep. */
   sweep?: SweepSummary;
-  /** A claim (`planClaim`): what it moves. */
+  /** What a claim (`planClaim`) moves. */
   claim?: ClaimSummary;
 }
 
@@ -663,8 +667,8 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
   if (st.state.maker !== env.maker) {
     return { error: [issue('cancel.not-maker', 'error', 'this order belongs to another key: only its maker can cancel it', { covenantId: snap.covenantId })] };
   }
-  // an unbound curve (created in its token's genesis) names no token in its state: its token is its custody's, the output of
-  // the curve's own transaction (the builder refuses any other)
+  // An unbound curve, created in its token's genesis, names no token in its state. Its token is its
+  // custody's, which is the output of the curve's own transaction. The builder refuses any other.
   const isUnbound = curveFactsOf(st)?.unbound ?? false;
   const unbound = isUnbound ? unboundCustodyToken(snap) : null;
   const cs = custodiesOf(st).map((c) => (unbound ? { ...c, token: unbound } : c));
@@ -674,7 +678,8 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
   if ((cs[1]?.amount ?? 0n) > 0n && !snap.prefund) {
     return { error: [issue('cancel.prefund-missing', 'error', 'the order\'s prefund custody (its second token UTXO) is unknown: refresh the order from the indexer or node', { covenantId: snap.covenantId })] };
   }
-  // A mode-1 order's bought-custody goes back with the cancel (CL4); the builder takes it among the strays.
+  // A mode-1 order's bought-custody goes back with the cancel (CL4). The builder takes it among the
+  // strays.
   const bf = boughtOf(st);
   const bc = bf ? (snap.boughtCustody ?? null) : null;
   if (bf && !bc) {
@@ -802,8 +807,8 @@ export interface ReplacementSpec {
  * (`prepare(..., topUps)`). An extra wallet UTXO would push a stray out of the sweep, and the stray
  * would stay behind on the cancelled order's id.
  *
- * A top-up joins the plain custody in one output, so only plain UTXOs qualify: one with a borrow
- * setting would mix settings (the builder refuses it).
+ * A top-up joins the plain custody in one output, so only plain UTXOs qualify. One with a borrow
+ * setting would mix settings, which the builder refuses.
  */
 function pickTokens(pool: TokenUtxo[], token: Hex, amount: bigint, ext: Hex | null, maker: Hex, maxInputs: number, program: TokenProgram | null = null): TokenUtxo[] | null {
   const usable = pool.filter((t) => (!t.covenantId || t.covenantId === token) && isKeyOwned(t.state, program) && isPlainState(t.state) && t.state.owner === maker && extensionMatches(t.state, ext));
@@ -851,7 +856,8 @@ export function amendsInPlace(order: OrderSnapshot, rep: OrderState, extraTokens
   // keep exact. Strays stay where they are, so only a cancel-replace sweeps them.
   const foreign = (order.foreign ?? []).length > 0;
   if (isKind(old, 'KobBid')) return !order.strays.length && !foreign && !order.straysUnknown && (extraTokens?.length ?? 0) === 0 && AMEND_KEEPS_BID.every((k) => a[k] === b[k]);
-  // a curve is amended in place whatever its strays (its custody never moves); an unbound one is bound to its custody's token
+  // A curve is amended in place whatever its strays, because its custody never moves. An unbound
+  // one is bound to its custody's token.
   if (old.kind === 'KobCurveAsk') {
     if (!order.custody || (extraTokens?.length ?? 0) > 0) return false;
     const token = /^0{64}$/.test(a.tokenCovId!) ? order.custody.covenantId : a.tokenCovId;
@@ -919,13 +925,13 @@ export function planCancelReplace(env0: CancelEnv, order: OrderSnapshot, replace
   const only = retiredOnly(order);
   if (only) return only;
   if (rep.state.maker !== env.maker) return failed([issue('cancel.replacement-wrong-maker', 'error', 'the replacement must belong to the wallet key')], [order.covenantId]);
-  // an unbound curve's token is its custody's (its amend binds it)
+  // An unbound curve's token is its custody's, and its amend binds it.
   const oldToken = curveFactsOf(old)?.unbound ? (order.custody?.covenantId ?? tokenCovIdOf(old)) : tokenCovIdOf(old);
   if (tokenCovIdOf(rep) !== oldToken || quoteCovIdOf(rep) !== quoteCovIdOf(old)) {
     return failed([issue('cancel.replacement-wrong-token', 'error', 'the replacement must trade the same token (a pair order: the same pair) as the cancelled order')], [order.covenantId]);
   }
   if (!opts.noInPlace && amendsInPlace(order, rep, extraTokens)) return planAmendInPlace(env, order, replacement);
-  // the new order starts with nothing bought; the cancel returns the old bought-custody
+  // The new order starts with nothing bought. The cancel returns the old bought-custody.
   let newState = 'bought' in rep.state && big(String((rep.state as { bought?: string }).bought ?? '0')) !== 0n ? ({ ...rep, state: { ...rep.state, bought: '0' } } as OrderState) : rep;
   const armedNow = 'armed' in rep.state ? big((rep.state as { armed: string }).armed) : 0n;
   if (armedNow !== 0n) {
@@ -1210,11 +1216,11 @@ export function planSweep(env0: CancelEnv, snap: OrderSnapshot): CancelPlan {
 
 /** What a claim does besides sending the bought tokens to the wallet. */
 export interface ClaimSpec {
-  /** Claim and merge (CL2): the wallet's plain UTXOs of the bought token that join the claimed one. */
+  /** Claim and merge (CL2), the wallet's plain UTXOs of the bought token that join the claim. */
   merge?: TokenUtxo[];
-  /** Claim and place (CL3): an order that takes its custody from the claimed tokens (and `merge`). */
+  /** Claim and place (CL3), an order that takes its custody from the claimed tokens and `merge`. */
   place?: ReplacementSpec;
-  /** With `place`: the order ends and its KAS returns, instead of continuing with nothing bought. */
+  /** With `place`, the order ends and its KAS returns instead of continuing with nothing bought. */
   end?: boolean;
 }
 
@@ -1227,15 +1233,18 @@ export interface ClaimSummary {
   mergedUtxos: number;
   /** Base units the placed order takes into its custody. */
   placed: bigint;
-  /** Base units in the one plain UTXO the wallet gets (0 when the placed order takes everything). */
+  /** Base units in the one plain UTXO the wallet gets, 0 when the placed order takes everything. */
   toWallet: bigint;
-  /** KAS the continuing order gains: the carrier of its next bought-custody (0 when it ends). */
+  /** KAS the continuing order gains, the carrier of its next bought-custody (0 when it ends). */
   carrier: bigint;
   fee: bigint;
   ends: boolean;
 }
 
-/** Most wallet UTXOs a claim and merge can add: the token program's inputs less the bought-custody. */
+/**
+ * Returns the most wallet UTXOs a claim and merge can add, the token program's inputs less the
+ * bought-custody.
+ */
 export function claimMergeRoom(kob: KobWasm, st: OrderState): number {
   const bf = boughtOf(st);
   const t = bf ? ownTokenFacts(st).find((x) => x.covenantId === bf.token) : undefined;
@@ -1244,9 +1253,10 @@ export function claimMergeRoom(kob: KobWasm, st: OrderState): number {
 }
 
 /**
- * The maker's claim of a mode-1 order's bought-custody through its `cancel` (kob-protocol `ClaimOrder`, bid-delivery-spec §7).
- * The order continues with nothing bought (or ends, with a placement); the tokens reach the wallet as one plain UTXO, join
- * `merge` (CL2) or go into `place` (CL3), in one approval. A wallet KAS UTXO pays the next custody's carrier and the fee.
+ * Plans the maker's claim of a mode-1 order's bought-custody through its `cancel` (kob-protocol
+ * `ClaimOrder`, bid-delivery-spec §7). The order continues with nothing bought, or ends with a
+ * placement. In one approval the tokens reach the wallet as one plain UTXO, join `merge` (CL2) or
+ * go into `place` (CL3). A wallet KAS UTXO pays the next custody's carrier and the fee.
  */
 export function planClaim(env0: CancelEnv, snap: OrderSnapshot, spec: ClaimSpec = {}): CancelPlan {
   const env = withUrgency(env0, 'normal');
@@ -1290,7 +1300,8 @@ export function planClaim(env0: CancelEnv, snap: OrderSnapshot, spec: ClaimSpec 
   const claim: ClaimSummary = { token: bf.token, claimed: bf.amount, merged, mergedUtxos: merge.length, placed, toWallet, carrier: ends ? 0n : bf.carrier, fee: big(r.built.fee.fee), ends };
   return {
     ok: true, issues: r.issues, request: r.request, built: r.built, cancelIds: [cov],
-    // a continuing claim is no cancel; its continuation counts in the KAS locked and is not one of `orders` (the decoder checks it is the order with bought 0)
+    // A continuing claim is no cancel. Its continuation counts in the KAS locked and is not one of
+    // `orders`. The decoder checks that it is the order with `bought` 0.
     expected: withChange(env, r.built, {
       ...(ends ? { cancelIds: [cov] } : { cancelIds: [], claimIds: [cov] }), orders: place ? [place.order] : [], kasLocked, ...(place ? { tokensEscrowed: placed } : {}),
     }),

@@ -4,8 +4,8 @@
 // - `escrowedBalances(orders)` gives custody, strays, KAS escrow and KAS carriers per token, from
 //   live OrderViews and OrderSnapshots. A pair order counts its custody of A under A and of B
 //   under B, and its KAS under its base token A.
-// - A mode-1 order's bought-custody is the maker's own tokens ("bought, held by the order"): `bought`,
-//   never `custody`.
+// - A mode-1 order's bought-custody holds the maker's own tokens ("bought, held by the order"). It
+//   counts as `bought`, never as `custody`.
 // - `withFreeBalances(escrowed, utxos)` adds the free token balance owned by the maker's key. It
 //   also adds KRON tokens the key holds in a way KOB cannot spend (id_type 0 or 1).
 //
@@ -56,7 +56,7 @@ export interface TokenBalance {
    */
   notSpendable: bigint;
   escrowed: bigint;
-  /** Bought, held by the maker's mode-1 orders: the maker's own tokens, claimable. */
+  /** Tokens bought and held by the maker's mode-1 orders. They are the maker's own, claimable. */
   bought: bigint;
   boughtOrders: number;
   strays: bigint;
@@ -65,7 +65,8 @@ export interface TokenBalance {
   kasCarriers: bigint;
   orderCount: number;
   /**
-   * Held by the maker's creator lock (kob/creator-lock.ts): the maker's own tokens, not spendable before `until` (unix ms); not in `free`.
+   * Tokens held by the maker's creator lock (kob/creator-lock.ts). They are the maker's own but not
+   * spendable before `until` (unix ms), and they are not in `free`.
    */
   locked?: { amount: bigint; until: bigint };
 }
@@ -82,7 +83,10 @@ const isView = (o: Input): o is OrderView => 'covenant_id' in o;
 
 interface Normalised {
   covenantId: Hex;
-  /** The order's token (a pair order: A). An unbound curve's state names none (zero until its first fill or amend): it is its custody's. */
+  /**
+   * The order's token, A for a pair order. An unbound curve's state names none (zero until its
+   * first fill or amend), so its token is its custody's.
+   */
   token: Hex;
   state: OrderState;
   /** KAS of the order UTXO. */
@@ -90,12 +94,12 @@ interface Normalised {
   /** The known custody UTXOs with token, amount and KAS carrier. A pair order may have A and B. */
   custodies: { token: Hex; amount: bigint; kas: bigint }[];
   strays: { token: Hex; amount: bigint; kas: bigint }[];
-  /** The bought-custody (amount from the state; KAS from its UTXO when known). */
+  /** The bought-custody, its amount from the state and its KAS from its UTXO when known. */
   bought: { token: Hex; amount: bigint; kas: bigint } | null;
 }
 
 const ZERO_ID = '0'.repeat(64);
-/** The state's token, or `known` (the indexer's `token`, the custody's) where the state names none. */
+/** The state's token, or `known` (the indexer's `token`, the custody's) when the state has none. */
 function orderToken(state: OrderState, known: Hex | null): Hex {
   const t = tokenCovIdOf(state);
   return (t === ZERO_ID || !t) && known ? known : t;
@@ -108,7 +112,8 @@ function normalise(o: Input): Normalised | SkippedOrder {
     if (!o.state_known || !state) return { covenantId: o.covenant_id, reason: 'state-unknown' };
     if (!o.current || o.current.value == null) return { covenantId: o.covenant_id, reason: 'no-current-utxo' };
     const pv = pairOfView(o);
-    // a bid's `custody` is its bought-custody (kobd reads.rs): only an order with a sell custody counts it
+    // A bid's `custody` is its bought-custody (kobd reads.rs), so only an order with a sell custody
+    // counts it.
     const cus = pv
       ? pv.custodies.map((c) => c.utxo ?? null)
       : custodiesOf(state).length ? [o.custody?.utxo ?? null] : [];
@@ -146,7 +151,7 @@ export function escrowedBalancesDetailed(orders: Input[]): EscrowedResult {
     }
     const d = describeOrder(n.state);
     const token = n.token;
-    // a custody fact of an unbound curve names the zero id: it is the order's token
+    // A custody fact of an unbound curve names the zero id, which stands for the order's token.
     const tokenOfFact = (t: Hex): Hex => (t === ZERO_ID ? token : t);
     const row = (t: Hex): EscrowedBalance =>
       by.get(t) ?? (by.set(t, { token: t, custody: 0n, bought: 0n, boughtOrders: 0, strays: 0n, kasEscrow: 0n, kasCarriers: 0n, kasLocked: 0n, orders: 0 }).get(t) as EscrowedBalance);

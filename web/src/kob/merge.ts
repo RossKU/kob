@@ -5,9 +5,9 @@
 //   address presence, and carry the token's extension commitment. A KRON minter UTXO is never an
 //   input. An order's custody or stray is never an input, because the order's covenant id owns it.
 //   Neither is an outpoint the caller reserves. Inputs go smallest first, and ties go by outpoint.
-// - A KCC-20 borrow setting (scheme and guard) is kept: one tree per setting (`groupByBorrow`,
-//   plain first), and each merged output carries its group's setting. UTXOs of different settings
-//   never share a transaction.
+// - A KCC-20 borrow setting (scheme and guard) is kept. There is one tree per setting
+//   (`groupByBorrow`, plain first), and each merged output carries its group's setting. UTXOs of
+//   different settings never share a transaction.
 // - A merge is a tree of `sendTokens` transfers to the wallet key, planned level by level. Level 1
 //   groups the original UTXOs by the program's token inputs, 3 for KOB's standard KCC20Ref, so its
 //   transactions spend only settled coins. Each later level merges the outputs of the level before
@@ -16,15 +16,18 @@
 //   a valid state, and the next run plans from it.
 // - The target mode merges only as much as one placement needs. A placement takes at most
 //   `inputs` token UTXOs, so the merge stops once the `inputs` largest resulting UTXOs cover the
-//   amount: t transactions put the `inputs + t * (inputs - 1)` largest UTXOs into `inputs`.
+//   amount. With t transactions, the `inputs + t * (inputs - 1)` largest UTXOs end in `inputs`
+//   UTXOs.
 // - The merged output keeps the largest input carrier, at most the default 1 KAS carrier and at
 //   least the program's floor. The other carriers are freed and pay the fee, and the rest returns
 //   as KAS change. A wallet KAS UTXO is added only when they do not cover the fee, or for a KRON
 //   transfer, which needs a P2PK input of the owner.
 // - The fee uses the low urgency of the fee policy, as housekeeping (matcher.md 9).
-// - "Convert to plain" (`convert`) turns the wallet's holdings with a borrow setting into plain ones: one tree per setting, merged in
-//   that setting, whose last transaction sends the whole amount to the wallet key as a plain recipient output (a `sendTokens` with the
-//   key as its one recipient and no change). A setting held in one UTXO takes one transaction. Plain UTXOs are never inputs.
+// - "Convert to plain" (`convert`) turns the wallet's holdings with a borrow setting into plain
+//   ones. Each setting gets one tree, merged in that setting. Its last transaction sends the whole
+//   amount to the wallet key as a plain recipient output, which is a `sendTokens` with the key as
+//   its one recipient and no change. A setting held in one UTXO takes one transaction. Plain UTXOs
+//   are never inputs.
 //
 // A transaction above level 1 spends outputs that exist only once their transactions are
 // accepted. `planMerge` builds the whole tree against provisional outpoints, so the count, fee and
@@ -95,7 +98,7 @@ export interface MergeLink {
   level: number;
   /** The earlier links whose outputs this link spends, in input order. */
   parents: number[];
-  /** The output is plain: the last link of a conversion. Otherwise it keeps the inputs' borrow setting. */
+  /** The output is plain, as the last link of a conversion. Else it keeps the inputs' setting. */
   plain: boolean;
 }
 
@@ -106,7 +109,7 @@ export interface MergeNode<T> {
   parents: number[];
   /** The original UTXOs it spends. */
   fresh: T[];
-  /** Its output is plain: the last transaction of a conversion (`MergeOptions.convert`). */
+  /** Its output is plain, as the last transaction of a conversion (`MergeOptions.convert`). */
   plain?: boolean;
 }
 
@@ -127,9 +130,12 @@ export interface MergePlan {
   target: bigint | null;
   /** The number of mergeable UTXOs before the planned links. */
   before: number;
-  /** The number of borrow settings (one tree each) the planned links merge; 1 for plain UTXOs only. */
+  /** The number of borrow settings the planned links merge, one tree each. Plain alone is 1. */
   settings: number;
-  /** A conversion to plain (`MergeOptions.convert`): `before` counts the UTXOs with a borrow setting, and each tree ends in a plain UTXO. */
+  /**
+   * A conversion to plain (`MergeOptions.convert`). Then `before` counts the UTXOs with a borrow
+   * setting, and each tree ends in a plain UTXO.
+   */
   convert: boolean;
   /**
    * The number of mergeable UTXOs after them. The merged outputs count, because they merge again.
@@ -188,12 +194,12 @@ export function mergeCandidates(utxos: readonly TokenUtxo[], token: Pick<MergeTo
 }
 
 /**
- * Returns `sorted` (smallest first) per borrow setting, each in that order: the plain group first,
- * then the others by total, largest first. Only groups of two or more can merge.
+ * Returns `sorted` (smallest first) per borrow setting, each group in that order. The plain group
+ * comes first, then the others by total, largest first. Only groups of two or more can merge.
  */
 export const mergeableGroups = <T extends TokenUtxo>(sorted: readonly T[]): T[][] => groupByBorrow(sorted).filter((g) => g.length >= 2);
 
-/** The UTXOs a merge may take: those in a borrow setting group of two or more. */
+/** The number of UTXOs a merge may take, those in a borrow setting group of two or more. */
 export const mergeableCount = (sorted: readonly TokenUtxo[]): number => mergeableGroups(sorted).reduce((n, g) => n + g.length, 0);
 
 /**
@@ -276,18 +282,22 @@ export function targetSet<T extends { state: { amount: string } }>(sorted: reado
 /** What `planMergeShape` and `planMerge` take besides the UTXOs. */
 export interface MergeOptions {
   /**
-   * The target mode: merge only until the program's input count of largest UTXOs covers this
+   * The target mode. It merges only until the program's input count of largest UTXOs covers this
    * amount, in base units. Omitted, the merge is full.
    */
   target?: bigint;
   /**
-   * Convert to plain: the UTXOs with a borrow setting become plain ones (one per setting), plain UTXOs are left as they are. With
-   * `target`, only the settings needed for the plain UTXOs to hold that amount, largest first.
+   * Convert to plain. The UTXOs with a borrow setting become plain ones, one per setting, and plain
+   * UTXOs are left as they are. With `target`, only the settings needed for the plain UTXOs to hold
+   * that amount are converted, largest first.
    */
   convert?: boolean;
 }
 
-/** The planned tree before it is built, or the issue that stops it. `settings`: the borrow settings it merges, one tree each. */
+/**
+ * The planned tree before it is built, or the issue that stops it. `settings` counts the borrow
+ * settings it merges, one tree each.
+ */
 export type MergeShape = { ok: true; before: number; settings: number; nodes: MergeNode<TokenUtxo>[] } | { ok: false; before: number; issue: PlanIssue };
 
 /**
@@ -324,11 +334,11 @@ export function planMergeShape(token: MergeToken, utxos: readonly TokenUtxo[], m
       budget -= nodes.length;
     }
     if (!trees.length) return fail('merge.nothing', 'fewer than two token UTXOs of this token can be merged', { count: before });
-    // a UTXO alone in its borrow setting cannot merge, so it does not count as mergeable
+    // A UTXO alone in its borrow setting cannot merge, so it does not count as mergeable.
     return { ok: true, before: mergeableCount(cands), settings: trees.length, nodes: joinTrees(trees) };
   }
-  // The target mode merges in the one setting the sale spends: the first group (plain first) that
-  // holds the amount, as `selectTokens` picks it.
+  // The target mode merges in the one setting the sale spends. That is the first group (plain
+  // first) that holds the amount, as `selectTokens` picks it.
   const target = o.target;
   const group = groupByBorrow(cands).find((g) => g.reduce((n, u) => n + big(u.state.amount), 0n) >= target);
   const picked = group ? targetSet(group, slots, target) : ({ code: 'merge.short' } as const);
@@ -350,9 +360,11 @@ export function planMergeShape(token: MergeToken, utxos: readonly TokenUtxo[], m
 }
 
 /**
- * The conversion tree: per borrow setting (largest first), the tree that merges it in its setting, whose last node's output is plain. A
- * setting in one UTXO is one node. With `target`, only the settings the plain UTXOs need to hold it; without, every setting within
- * MAX_MERGE_TXS transactions (a setting that does not fit waits for the next run).
+ * Plans the conversion tree. Each borrow setting, largest first, gets a tree that merges it in its
+ * setting, and the tree's last node has a plain output. A setting in one UTXO is one node.
+ * - With `target`, it takes only the settings the plain UTXOs need to hold that amount.
+ * - Without, it takes every setting that fits in MAX_MERGE_TXS transactions. A setting that does
+ *   not fit waits for the next run.
  */
 function convertShape(cands: readonly TokenUtxo[], slots: number, target: bigint | null, fail: (code: string, message: string, params?: PlanIssue['params']) => MergeShape): MergeShape {
   const groups = groupByBorrow(cands);
@@ -425,9 +437,10 @@ export function buildMergeLink(
   const seed = kron ? ([...pool].reverse().find((f) => big(f.amount) >= ONE_KAS) ?? pool[0] ?? null) : null;
   if (kron && !seed) return { error: issue('merge.needs-funding', 'error', 'merging KRON tokens needs a KAS UTXO of the wallet in the transaction') };
   let used: KeyUtxo[] = seed ? [seed] : [];
-  // No recipient: the whole amount is the wallet's token change, which keeps the inputs' one borrow
-  // setting (the builder refuses inputs of different settings). A conversion's last link instead names the
-  // wallet key as its one recipient of the whole amount: a recipient output is plain, and there is no change.
+  // Without a recipient, the whole amount is the wallet's token change, which keeps the inputs' one
+  // borrow setting. The builder refuses inputs of different settings. A conversion's last link
+  // instead names the wallet key as its one recipient of the whole amount. A recipient output is
+  // plain, and there is no change.
   const make = (funding: KeyUtxo[]): SendTokensRequest => ({
     action: 'sendTokens',
     token: { covenantId: token.covenantId, program: token.program },
@@ -522,7 +535,7 @@ function summarizeMerge(links: MergeLink[], before: number, target: bigint | nul
     before,
     settings,
     convert,
-    // a conversion: the UTXOs with a borrow setting it leaves (each tree ends in a plain one)
+    // For a conversion, the UTXOs with a borrow setting it leaves. Each tree ends in a plain one.
     after: before - links.reduce((n, l) => n + l.inputs.length - 1, 0) - (convert ? links.filter((l) => l.plain).length : 0),
     merged: groups.reduce((n, g) => n + g.length, 0),
     freed: carriersIn - carriersKept - fee,

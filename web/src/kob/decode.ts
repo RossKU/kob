@@ -24,11 +24,11 @@
 //   outputs and bounded.
 // - An in-place amend (AMEND record, `recoverAmends`) or a sweep (SWEEP record, re-checked by
 //   sweep.ts `verify_sweep`, where the same script continues the order input's covenant id) is the
-//   only way an order's covenant id may continue, besides a claim (bid-delivery-spec §7: the maker's
-//   cancel of a mode-1 order continues it with only `bought` 0; its tokens go to the maker or into
-//   the order placed with it). Any other continuation, or a record that does not
-//   verify, is blocking. A sweep's token outputs are its strays returned to the maker, and anything
-//   to another key is blocking, as everywhere.
+//   only way an order's covenant id may continue, besides a claim (bid-delivery-spec §7). A claim
+//   is the maker's cancel of a mode-1 order that continues it with only `bought` set to 0. Its
+//   tokens go to the maker or into the order placed with it. Any other continuation, or a record
+//   that does not verify, is blocking. A sweep's token outputs are its strays returned to the
+//   maker, and anything to another key is blocking, as everywhere.
 // - A conditional order or stop entry that the tx arms or trails shows its trigger evidence
 //   (touch). The tx arms it by a fill of its unarmed stop leg or stop entry, or by `update`. The
 //   evidence is the input that its `ev` argument names and, for an ask, its custody `tk`. It is
@@ -173,7 +173,10 @@ export interface DecodedInput {
   /** P2SH redeem script hash of the input UTXO (null for P2PK) */
   redeemScriptHash: Hex | null;
   token: null | { ref: TokenRef; amount: bigint; owner: Hex; ownerScheme: number; leader: boolean; escrowOf: Hex | null; program: TokenProgram; witness: 'covenantId' | 'p2pk' | 'p2sh';
-    /** a token input the wallet's creator lock holds (owner scheme 0x03, the lock's hash): this unlock frees it */
+    /**
+     * a token input the wallet's creator lock holds (owner scheme 0x03, the lock's hash), which
+     * this unlock frees
+     */
     locked?: { until: bigint } };
   order: null | {
     kind: OrderKind; template: TemplateName; covenantId: Hex | null; entry: string;
@@ -240,16 +243,28 @@ export interface DecodedOrder {
    * script (same state, custody untouched)
    */
   sweptFrom?: number;
-  /** a claim (bid-delivery-spec §7): the order input this output continues with only `bought` set to 0 */
+  /**
+   * a claim (bid-delivery-spec §7): the order input this output continues with only `bought` set
+   * to 0
+   */
   claimedFrom?: number;
-  /** the order's delivery block, or the one an if-done entry commits for its exits; null for a kind without one */
+  /**
+   * the order's delivery block, or the one an if-done entry commits for its exits (null for a kind
+   * without one)
+   */
   delivery: DeliveryTerms | null;
 }
 
-/** A delivery block (bid-delivery-spec §2). `exit`: an if-done entry's `exit*` fields (`bought` 0). */
+/**
+ * A delivery block (bid-delivery-spec §2). With `exit` set it holds an if-done entry's `exit*`
+ * fields, and `bought` is 0.
+ */
 export interface DeliveryTerms { mode: bigint; recvThreshold: bigint; topupTip: bigint; bought: bigint; exit: boolean }
 
-/** A mode-1 order's bought-custody as its state pins it: token, template, commitment, amount, and the order's carrier. */
+/**
+ * A mode-1 order's bought-custody as its state pins it. That is the token, template, commitment and
+ * amount, and the order's carrier.
+ */
 export interface BoughtFacts { token: Hex; tplHash: Hex; ext: Hex; amount: bigint; carrier: bigint }
 
 /** An order UTXO spent by this tx. */
@@ -291,8 +306,8 @@ export interface DecodedSpend {
    */
   retired?: Hex;
   /**
-   * a mode-1 order's bought-custody this spend moves: its amount, its input (null when the tx does not spend it) and, for a
-   * claim, the output the order continues at
+   * a mode-1 order's bought-custody this spend moves: its amount, its input (null when the tx does
+   * not spend it) and, for a claim, the output the order continues at
    */
   bought?: { amount: bigint; input: number | null; continuesAt: number | null; toYou?: bigint; toOrder?: bigint };
 }
@@ -379,7 +394,10 @@ export interface TokenNet {
   toMaker: bigint;
   escrowed: bigint;
   toOthers: bigint;
-  /** the wallet's tokens its creator lock held, freed by this unlock (not in `fromWallet`: they were not free) */
+  /**
+   * the wallet's tokens its creator lock held, freed by this unlock (not in `fromWallet`, because
+   * they are not free)
+   */
   unlocked: bigint;
   /** toMaker - fromWallet: negative = the wallet's free balance drops */
   walletDelta: bigint;
@@ -405,8 +423,9 @@ export interface NetEffects {
 
 /**
  * `sweep` is the maker's sweep of an order's strays in place. The order continues unchanged and
- * only strays move. `unlock` spends the wallet's creator lock (its coin and the tokens it holds, kob/creator-lock.ts); `lock-coin` sends the
- * wallet's KAS to the address of its own open creator lock (the coin the unlock spends).
+ * only strays move. `unlock` spends the wallet's creator lock, meaning its coin and the tokens it
+ * holds (kob/creator-lock.ts). `lock-coin` sends the wallet's KAS to the address of its own open
+ * creator lock, which makes the coin the unlock spends.
  */
 export type SigningKind = 'create' | 'cancel' | 'cancel-replace' | 'cancel-position' | 'refund' | 'send' | 'sweep' | 'claim' | 'claim-merge' | 'claim-place' | 'take' | 'unlock' | 'lock-coin' | 'other';
 
@@ -423,7 +442,7 @@ export interface DecodedTakeFill {
   tip: bigint;
 }
 
-/** What a take does: the resting orders it fills and the wallet's trade. */
+/** What a take does, with the resting orders it fills and the wallet's trade. */
 export interface DecodedTake {
   /** the wallet's side: buy takes asks, sell takes bids */
   side: 'buy' | 'sell';
@@ -451,7 +470,10 @@ export interface SigningSummary {
   spends: DecodedSpend[];
   /** orders this tx arms or trails, with their trigger evidence (also on their `spends` entry) */
   triggers: DecodedTrigger[];
-  /** the wallet takes resting orders of other keys (a crossing order filled from the wallet), else null */
+  /**
+   * the wallet takes resting orders of other keys (a crossing order filled from the wallet), else
+   * null
+   */
   take: DecodedTake | null;
   payload: { records: PayloadRecord[]; legacy: boolean; note: string | null } | null;
   net: NetEffects;
@@ -484,7 +506,10 @@ export interface ExpectedSigning {
   tokensEscrowed?: bigint;
   /** covenant ids of orders spent by maker cancels / refunds */
   cancelIds?: Hex[];
-  /** an unbound curve amended in place: the token of its custody (order covenant id -> token), which the amend must name */
+  /**
+   * an unbound curve amended in place: the token of its custody (order covenant id -> token), which
+   * the amend must name
+   */
   binds?: Record<Hex, Hex>;
   /** covenant ids of orders swept in place (verified SWEEP records): they are not cancelled */
   sweepIds?: Hex[];
@@ -509,9 +534,10 @@ export interface ExpectedSigning {
   /** plain KAS payments to other keys the user asked for (sompi) */
   payments?: { pubkey: Hex; amount: bigint }[];
   /**
-   * a take (kob/take.ts): the wallet receives (buy) or delivers (sell) exactly `amount` base units of
-   * `token`, pays at most (buy) or gets at least (sell) `bound` KAS for them, the fee left out, and
-   * fills exactly the resting orders `orders` (covenant ids)
+   * a take (kob/take.ts), in which the wallet
+   * - receives (buy) or delivers (sell) exactly `amount` base units of `token`,
+   * - pays at most (buy) or gets at least (sell) `bound` KAS for them, the fee left out,
+   * - fills exactly the resting orders `orders` (covenant ids)
    */
   take?: { side: 'buy' | 'sell'; token: Hex; amount: bigint; bound: bigint; orders: Hex[] };
 }
@@ -548,9 +574,11 @@ export interface DecodeInput {
    */
   feePolicy?: Pick<FeePolicy, 'dynamic' | 'floor' | 'maxRate' | 'maxFeeSompi'>;
   /**
-   * The wallet's creator locks the caller knows of (a verified declaration, the private-key signer's hint): a plain KAS output to the address
-   * of one of them is the wallet's own lock coin (spent by its unlock) when the lock is the wallet key's and already open by `now`. Any other
-   * output to a script stays unknown (blocking). The unlock itself needs none of this: its plans name the lock.
+   * The wallet's creator locks the caller knows of, from a verified declaration or the private-key
+   * signer's hint. A plain KAS output to the address of one of them is the wallet's own lock coin,
+   * spent by its unlock, when the lock is the wallet key's and already open by `now`. Any other
+   * output to a script stays unknown, which blocks. The unlock itself needs none of this, because
+   * its plans name the lock.
    */
   locks?: readonly { until: U64; key: Hex }[];
   /** the wall clock (ms) the open locks are judged by (default Date.now()) */
@@ -631,7 +659,10 @@ export function boughtOf(os: OrderState): BoughtFacts | null {
   return { token: pair ? s.tCovId : s.tokenCovId, tplHash: pair ? s.tTplHash : s.tokenTplHash, ext: pair ? s.tExt : s.extensionCommitment, amount: d.bought, carrier: big(s.deliveryCarrier) };
 }
 
-/** A claim or an ending cancel of a mode-1 order (bid-delivery-spec §7); `output` the verified continuation, `why` its faults. */
+/**
+ * A claim or an ending cancel of a mode-1 order (bid-delivery-spec §7). `output` is the verified
+ * continuation, and `why` lists its faults.
+ */
 interface Claim { input: number; cov: Hex; b: BoughtFacts; output: number | null; custodyInput: number | null; wallet: number[]; why: string[] }
 
 function planSigner(p: SigPlan): Hex | null {
@@ -689,11 +720,15 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
    * the spent UTXOs)
    */
   const orderStates = new Map<number, OrderState>();
-  /** Per token covenant id: the borrow setting (`borrowKeyOf`) of every token input, and of the wallet's own ones. */
+  /**
+   * Per token covenant id, the borrow setting (`borrowKeyOf`) of every token input, and of the
+   * wallet's own ones.
+   */
   const inputBorrow = new Map<Hex, { all: Set<string>; maker: Set<string> }>();
   /**
-   * The creator locks whose coin an input spends (`creatorLock` plans), by input: derived by kob-wasm from the plan's terms (its script is
-   * checked against the spent UTXO below). A token input owned by one of them (owner scheme 0x03, its hash) is the wallet's when its key is.
+   * The creator locks whose coin an input spends (`creatorLock` plans), by input. kob-wasm derives
+   * each from the plan's terms, and its script is checked against the spent UTXO below. A token
+   * input owned by one of them (owner scheme 0x03, its hash) is the wallet's when its key is.
    */
   const lockOf = new Map<number, CreatorLockInfo>();
   built.plans.forEach((p, i) => {
@@ -726,13 +761,15 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       return { ...base, type: 'kas', ownedBy: plan.pubkey === maker ? 'maker' : 'other' };
     }
     if (plan.kind === 'creatorLock') {
-      // the KAS coin of a creator lock: the P2SH of the lock script of exactly the plan's terms; the wallet's when the lock's key is
+      // the KAS coin of a creator lock: the P2SH of the lock script of exactly the plan's terms,
+      // and the wallet's when the lock's key is
       const lock = lockOf.get(i) ?? null;
       mustMatch(lock?.scriptPublicKey ?? null, 'creator lock script of that key and time');
       const mine = plan.key.toLowerCase() === maker;
       if (!mine) add('unlock-invalid', `input ${i}: the creator lock is of another key (${shortId(plan.key)}), not the connected wallet`, { input: i, params: { reason: 'key' } });
       if (inp.utxo.covenantId) add('unlock-invalid', `input ${i}: a creator lock's coin is plain KAS, this one is bound to a covenant`, { input: i, params: { reason: 'coin' } });
-      // the node takes the spend only once its past median time passes the lock time, which must be at least the lock's
+      // the node takes the spend only once its past median time passes the lock time, which must be
+      // at least the lock's
       if (big(tx.lockTime) < big(plan.until)) add('unlock-invalid', `input ${i}: the transaction's lock time is before the lock's time: the node would never accept it`, { input: i, params: { reason: 'time' } });
       return { ...base, type: 'kas', ownedBy: mine ? 'maker' : 'other' };
     }
@@ -802,14 +839,16 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     }
     mustMatch(derivedSpk, `${plan.template} token script of the given state`);
     const covId = inp.utxo.covenantId ?? '';
-    // a p2sh/v1 owner (0x03) is the wallet's only as its own creator lock spent here (its coin an input of this transaction, its key the
-    // wallet's, no borrow setting): an unlock. Every other p2sh owner is another's.
+    // a p2sh/v1 owner (0x03) is the wallet's only as its own creator lock spent here, in an unlock.
+    // Its coin is an input of this transaction, its key is the wallet's, and it has no borrow
+    // setting. Every other p2sh owner is another's.
     const p2sh = isKcc20State(st) && st.owner_scheme === KCC20_SCHEME_P2SH;
     const holder = p2sh ? lockOwning(st.owner) : null;
     const lockedMine = !!holder && holder[1].key === maker && borrowKeyOf(st) === PLAIN_BORROW;
     const ownedBy: DecodedInput['ownedBy'] = isCovenantOwned(st) ? 'covenant' : p2sh ? (lockedMine ? 'maker' : 'other') : st.owner === maker ? 'maker' : 'other';
     if (plan.kind !== 'kronToken' && plan.witness.kind === 'p2sh') {
-      // the owner witness names the coin of the lock that owns the state: anything else never authorises (refused here, before the node does)
+      // the owner witness names the coin of the lock that owns the state. Anything else never
+      // authorises, and it is refused here, before the node does.
       if (!p2sh || !holder || holder[0] !== plan.witness.value) add('unlock-invalid', `input ${i}: the token input's owner witness does not name the coin of the creator lock that holds it`, { input: i, params: { reason: 'witness' } });
     } else if (p2sh) {
       add('unlock-invalid', `input ${i}: a token UTXO held by a script (owner scheme 3) is spent without naming its coin`, { input: i, params: { reason: 'witness' } });
@@ -828,7 +867,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     };
   }
 
-  // inputs of one token with different borrow settings never share a transaction (option A): the
+  // inputs of one token with different borrow settings never share a transaction, because the
   // change could not keep the setting of every input
   for (const [covId, seen] of inputBorrow) {
     if (seen.all.size > 1) add('token-state-mixed', `the token inputs of token ${shortId(covId)} carry different borrow settings: one transaction spends one setting only`, { params: { token: covId } });
@@ -853,10 +892,11 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   }
 
   // ------------------------------------------- takes: resting orders of other keys this tx fills
-  // A plain KobAsk / KobBid of another key spent by its own fill entry (KobAsk.settle, KobBid.fill,
-  // n > 0): the wallet is the taker. Its covenant enforces the fill: what its maker is due, its
-  // continuation and its custody's. Those outputs are the order's, not a payment of the wallet; what
-  // the wallet pays or gets for them is its net effect, checked against `expected.take`.
+  // When a plain KobAsk or KobBid of another key is spent by its own fill entry (KobAsk.settle or
+  // KobBid.fill, n > 0), the wallet is the taker. The order's covenant enforces the fill, which is
+  // what its maker is due, its continuation and its custody's. Those outputs are the order's, not
+  // a payment of the wallet. What the wallet pays or gets for them is its net effect, checked
+  // against `expected.take`.
   const takeFills: DecodedTakeFill[] = [];
   for (const d of inputs) {
     const plan = built.plans[d.index]!;
@@ -871,11 +911,17 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   }
   /** covenant ids of the orders taken: their continuations and custodies are theirs */
   const takenCovs = new Set(takeFills.map((f) => f.covenantId).filter((c): c is Hex => !!c));
-  /** the token the orders taken trade (a take of mixed tokens is refused below): the only token a take moves */
+  /**
+   * the token the orders taken trade, and the only token a take moves (a take of mixed tokens is
+   * refused below)
+   */
   const takeToken: Hex | null = takeFills.length ? ((orderStates.get(takeFills[0]!.input)!.state as unknown as Record<string, string>).tokenCovId ?? null) : null;
   const askMakers = new Set(takeFills.filter((f) => f.side === 'ask').map((f) => f.maker));
   const bidMakers = new Set(takeFills.filter((f) => f.side === 'bid').map((f) => f.maker));
-  /** inputs that belong to the orders taken (each order and its custody): not the wallet's, not released to it */
+  /**
+   * inputs that belong to the orders taken (each order and its custody), which are not the wallet's
+   * and not released to it
+   */
   const takenInputs = new Set<number>([
     ...takeFills.map((f) => f.input),
     ...inputs.filter((d) => d.token?.escrowOf && takenCovs.has(d.token.escrowOf)).map((d) => d.index),
@@ -934,8 +980,9 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   }
   const sweepByOutput = new Map(sweeps.map((s) => [s.output, s]));
   const sweepByInput = new Map(sweeps.map((s) => [s.input, s]));
-  // claims (bid-delivery-spec §7): the maker's cancel of a mode-1 order holding a bought-custody. A claim continues the order's
-  // covenant id with `bought` 0 only; an ending cancel must spend the custody (nothing else ever can)
+  // claims (bid-delivery-spec §7): the maker's cancel of a mode-1 order holding a bought-custody.
+  // A claim continues the order's covenant id with only `bought` set to 0. An ending cancel must
+  // spend the custody, which nothing else ever can.
   const claims = new Map<number, Claim>();
   const claimByOutput = new Map<number, Claim>();
   /** input `k` is exactly the bought-custody `b` of the order `cov` */
@@ -1126,7 +1173,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
    */
   function checkNewKasOrder(j: number, os: OrderState) {
     if (isPairKind(os.kind)) return;
-    // a curve: stricter than the protocol (a falling table, a tip at or above a level's price, levels that do not hold its amount)
+    // a curve is held stricter than the protocol. It refuses a falling table, a tip at or above a
+    // level's price, and levels that do not hold its amount.
     if (os.kind === 'KobCurveAsk') {
       const bad = curveProblems(os.state);
       if (bad.length) add('curve-terms-invalid', `output ${j}: the curve order's terms are refused: ${bad.join(', ')}`, { output: j });
@@ -1138,7 +1186,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     }
   }
 
-  // the addresses of the wallet's open creator locks the caller knows of: a plain output there is the wallet's lock coin
+  // the addresses of the wallet's open creator locks the caller knows of. A plain output there is
+  // the wallet's lock coin.
   const now = BigInt(Math.floor(input.now ?? Date.now()));
   const lockCoinSpks = new Map<string, { until: bigint }>();
   for (const l of input.locks ?? []) {
@@ -1230,7 +1279,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     }
     const cl = claimByOutput.get(j);
     if (cl) {
-      // checked above: the order's script with only bought 0, bound to its covenant id from its input
+      // checked above: the order's script with only `bought` set to 0, bound to its covenant id
+      // from its input
       const os = { ...orderStates.get(cl.input)!, state: { ...orderStates.get(cl.input)!.state, bought: '0' } } as OrderState;
       const description = describeOrder(os, kob);
       const locked = splitOrderValue(description, value);
@@ -1250,8 +1300,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       const ref = tokenRef(registry, tok.covenantId);
       const token = { ref, amount: big(st.amount), owner: st.owner, ownerScheme: ownerTypeOf(st), escrowOf: isCovenantOwned(st) ? st.owner : null };
       // A borrow setting is kept only on the wallet's own change, and only with the setting of every
-      // wallet input of that token (option A: the owner path spends such a holding, its change keeps
-      // the setting). On a recipient, a custody or any other output it stays blocking.
+      // wallet input of that token. The owner path spends such a holding, and its change keeps the
+      // setting. On a recipient, a custody or any other output it stays blocking.
       const keepsSetting =
         isKcc20State(st) && isKeyOwned(st) && st.owner === maker && inputBorrow.get(tok.covenantId)?.maker.size === 1 && inputBorrow.get(tok.covenantId)!.maker.has(borrowKeyOf(st));
       const unplain = keepsSetting ? null : unplainTokenState(st);
@@ -1293,13 +1343,15 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       add('payment-out', `output ${j}: ${formatKas(value)} KAS would be PAID to another key (${shortId(pk)})`, { output: j, params: { recipient: pk, amount: value } });
       return { ...blank, kind: 'payment-out', flagged: true, recipient: pk };
     }
-    // the coin of the wallet's own open creator lock: KAS only its key spends, now (the unlock returns it, less its fee, as change)
+    // the coin of the wallet's own open creator lock, KAS that only its key spends now. The unlock
+    // returns it, less its fee, as change.
     const coinOf = !out.covenant ? lockCoinSpks.get(out.scriptPublicKey) : undefined;
     if (coinOf) {
       add('lock-coin', `output ${j}: ${formatKas(value)} KAS go to the address of your creator lock (open since ${isoDate(coinOf.until)}): the unlock spends them and returns the rest`, { output: j, params: { amount: value, date: isoDate(coinOf.until) } });
       return { ...blank, kind: 'kas-change' };
     }
-    // the continuation of an order this tx fills (bound to its covenant id, which its covenant checks)
+    // the continuation of an order this tx fills, bound to its covenant id, which its covenant
+    // checks
     if (out.covenant && takenCovs.has(out.covenant.covenantId) && P2SH_RE.test(out.scriptPublicKey)) return { ...blank, kind: 'fill-continue' };
     add('output-unknown', `output ${j}: ${formatKas(value)} KAS would go to a script this app cannot identify${out.covenant ? ' (a covenant output)' : ''}`, { output: j });
     return { ...blank, kind: out.covenant ? 'unknown-covenant' : 'unknown', flagged: true };
@@ -1753,10 +1805,12 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       });
     }
   }
-  // where a claim's tokens go: your plain UTXO, or the custody of the one order placed here, which holds only the claimed token
+  // where a claim's tokens go: your plain UTXO, or the custody of the one order placed here, which
+  // holds only the claimed token
   const placed = orders.filter((o) => o.sweptFrom === undefined && o.claimedFrom === undefined && o.amendedFrom === undefined);
   for (const c of claims.values()) {
-    // an ending cancel: only where its tokens go is said (the generic checks hold them to you or to your new order)
+    // an ending cancel: only where its tokens go is said. The generic checks hold them to you or to
+    // your new order.
     const ending = c.output === null && !tx.outputs.some((o) => o.covenant?.covenantId === c.cov);
     const why = ending ? [] : [...c.why];
     if (!ending) for (const o of placed) {
@@ -1854,7 +1908,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     const outSum = sum(outs.map((o) => o.token!.amount));
     if (inSum !== outSum) add('token-unbalanced', `${ref.display}: on-chain amount ${inSum} goes in but ${outSum} comes out: tokens would be created or destroyed`, { params: { in: inSum, out: outSum } });
     if (!ref.tradable && ins.length + outs.length > 0) warnToken(id);
-    // the wallet's locked tokens an unlock spends were never free: they come in as `unlocked`, not out of the free balance
+    // the wallet's locked tokens an unlock spends are not free. They come in as `unlocked`, not out
+    // of the free balance.
     const fw = sum(ins.filter((d) => d.ownedBy === 'maker' && !d.token!.locked).map((d) => d.token!.amount));
     const unl = sum(ins.filter((d) => d.ownedBy === 'maker' && d.token!.locked).map((d) => d.token!.amount));
     const rel = sum(ins.filter((d) => d.ownedBy === 'covenant' && !takenInputs.has(d.index)).map((d) => d.token!.amount));
@@ -1886,7 +1941,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       return x.tokenCovId !== tokenId || big(x.scale) !== scale || (f.side === 'ask' ? 'buy' : 'sell') !== side;
     });
     if (mixed) add('take-orders', 'the orders this transaction fills trade different tokens, scales or sides: a take fills one side of one book');
-    // a take moves its own token only: no other token of the wallet goes in, none of any other token comes out
+    // a take moves its own token only. No other token of the wallet goes in, and none of any other
+    // token comes out.
     for (const d of inputs) {
       if (d.token && d.token.ref.covenantId !== tokenId) add('take-token', `input ${d.index}: a take of ${shortId(tokenId)} spends tokens of ${shortId(d.token.ref.covenantId)}`, { input: d.index, params: { token: d.token.ref.covenantId } });
     }
@@ -1988,7 +2044,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         poolStates.splice(i, 1);
       } else leftovers.push(e);
     }
-    // an order that differs from the plan in its delivery only: say which field (a top-up tip or threshold the user did not choose)
+    // an order that differs from the plan in its delivery only: say which field, such as a top-up
+    // tip or threshold the user did not choose
     const withoutDelivery = (o: OrderState) => {
       const st = { ...(o.state as unknown as Record<string, unknown>) };
       for (const k of DELIVERY_KEYS) delete st[k];
@@ -2037,7 +2094,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   const refunds = spends.filter((s) => s.action === 'refund');
   const sweptSpends = spends.filter((s) => s.action === 'sweep');
   const tokenOnly = spends.length === 0 && !createdOrders && tokens.length > 0;
-  // an unlock: the coin of a creator lock spent (with what it holds); a lock coin: the wallet's KAS to its open lock's address, nothing else
+  // an unlock spends the coin of a creator lock, with what it holds. A lock coin sends the wallet's
+  // KAS to its open lock's address, and nothing else.
   const unlocking = spends.length === 0 && !createdOrders && built.plans.some((p) => p.kind === 'creatorLock');
   const lockCoin = spends.length === 0 && !createdOrders && tokens.length === 0 && issues.some((x) => x.code === 'lock-coin');
   const kind: SigningKind = unlocking ? 'unlock' : lockCoin ? 'lock-coin' :claimSpends.length ? (createdOrders ? 'claim-place' : mergesWallet ? 'claim-merge' : 'claim') : placesBought ? 'claim-place' : take && !createdOrders && !cancels.length ? 'take' : createdOrders && cancels.length ? 'cancel-replace' : createdOrders ? 'create' : cancels.length > 1 ? 'cancel-position' : cancels.length === 1 ? 'cancel' : refunds.length ? 'refund' : sweptSpends.length ? 'sweep' : tokenOnly ? 'send' : 'other';
