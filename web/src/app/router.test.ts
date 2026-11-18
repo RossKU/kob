@@ -103,7 +103,8 @@ describe('router', () => {
     expect(parseHash(`#/market/${ID}/${'ab'.repeat(31)}`)).toEqual(tokenRoute(ID));
     expect(parseHash(routeToHash(pairRoute(ID, Q)))).toEqual(pairRoute(ID, Q));
     expect(navOf(pairRoute(ID, Q))).toBe('trade');
-    expect(parseHash(`#/market/xyz/${Q}`)).toMatchObject({ name: 'market', invalidToken: `xyz/${Q}` });
+    expect(parseHash(`#/market/xyz/${Q}`)).toMatchObject({ name: 'market', invalidToken: `xyz/${Q}`.slice(0, 20) }); // a banner echoes 20 id-like characters at most
+    expect(parseHash('#/market/%3Cb%3Ehi%3C/b%3E!!')).toEqual({ name: 'market', invalidToken: 'bhi' });
   });
 
   it('the activity page: every market, or the one its link names (a KAS book of one token, or a pair); anything else is every market', () => {

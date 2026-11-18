@@ -64,6 +64,9 @@ export type TicketPreset = (typeof TICKET_PRESETS)[number];
 const HEX64 = /^[0-9a-f]{64}$/i;
 const PAGES = ['create', 'settings', 'disclaimer', 'support'] as const;
 
+/** What a banner may echo of an invalid id from a link: plain id-like characters only, cut short (a link must not word the banner). */
+const echoed = (s: string): string => s.replace(/[^\w.%/-]/g, '').slice(0, 20);
+
 /** Parses a `location.hash` value (with or without the leading `#`). Never throws. */
 export function parseHash(hash: string): Route {
   let h = (hash ?? '').trim();
@@ -98,7 +101,7 @@ export function parseHash(hash: string): Route {
     // `#/market/<token>/kas` is the token's own KAS market.
     if (page === 'market' && HEX64.test(b) && q.toLowerCase() === 'kas') return { name: 'token', covenantId: b.toLowerCase(), ...(ticket ? { ticket } : {}), ...(amount ? { amount } : {}), ...(price ? { price } : {}) };
     if (HEX64.test(b) && HEX64.test(q) && b.toLowerCase() !== q.toLowerCase()) return { name: 'pair', base: b.toLowerCase(), quote: q.toLowerCase() };
-    return { name: 'market', invalidToken: `${b}/${q}`.slice(0, 80) };
+    return { name: 'market', invalidToken: echoed(`${b}/${q}`) };
   }
   if (page === 'market') {
     if (second === undefined) return { name: 'market' };
@@ -108,7 +111,7 @@ export function parseHash(hash: string): Route {
     } catch {
       /* keep the raw text */
     }
-    return HEX64.test(id) ? { name: 'token', covenantId: id.toLowerCase(), ...(ticket ? { ticket } : {}), ...(amount ? { amount } : {}), ...(price ? { price } : {}) } : { name: 'market', invalidToken: id.slice(0, 80) };
+    return HEX64.test(id) ? { name: 'token', covenantId: id.toLowerCase(), ...(ticket ? { ticket } : {}), ...(amount ? { amount } : {}), ...(price ? { price } : {}) } : { name: 'market', invalidToken: echoed(id) };
   }
   if (page === 'activity') {
     const market = activityMarketOf(query?.get('market') ?? '');
