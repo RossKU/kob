@@ -1,11 +1,11 @@
-//! Every builder's output validated through the rusty-kaspa v2.1.0 engine.
+//! Tests that every builder's output is valid in the rusty-kaspa v2.1.0 engine.
 //!
-//! For each scenario (all builder shapes on every supported token program, both families: the
-//! KCC-20 programs and the two real KRON programs): build with the
-//! committed budget table, sign with the fixture keys, finalize, then validate the signed
-//! transaction the way consensus does (enforced compute budgets, covenant context, storage-mass
-//! commitment, fee floor, sig-op cap, block limits). The tightened budgets must be minimal
-//! (budget - 1 rejects) and the table must cover them with at most one unit to spare.
+//! Each scenario (all builder shapes on every supported token program, in both families: the KCC-20
+//! programs and the two real KRON programs) is built with the committed budget table, signed with
+//! the fixture keys and finalized. The signed transaction is then validated the way consensus does:
+//! enforced compute budgets, covenant context, storage-mass commitment, fee floor, sig-op cap and
+//! block limits. The tightened budgets must be minimal (budget - 1 rejects) and the table must
+//! cover them with at most one unit to spare.
 
 mod common;
 

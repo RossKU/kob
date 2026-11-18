@@ -1,6 +1,8 @@
-//! `KobCurveAsk` through the protocol library (`docs/design/curve-ask-spec.md`): the state codec, the gates, the KOB1
-//! record, every builder shape on every KCC-20 program in the script engine, the creation inside the token's genesis
-//! (unbound, then bound by its first fill), and the default table.
+//! Tests `KobCurveAsk` through the protocol library (`docs/design/curve-ask-spec.md`).
+//!
+//! Covered: the state codec, the gates, the KOB1 record, every builder shape on every KCC-20
+//! program in the script engine, the creation inside the token's genesis (unbound, then bound by
+//! its first fill), and the default table.
 
 mod common;
 
@@ -383,7 +385,7 @@ fn quote_of_up(n: i64, p: i64) -> i64 {
     kob_protocol::state::quote_of(n, p, SCALE, kob_protocol::state::Round::Up).unwrap()
 }
 
-/// SEC-L2 (security review 2026-11-17): a refund request that names a curve is refused cleanly (a curve has no refund).
+/// A refund request that names a curve is refused cleanly (a curve has no refund).
 #[test]
 fn sec_refund_request_of_a_curve_is_refused() {
     use kob_protocol::build::RefundOrder;
@@ -404,8 +406,9 @@ fn sec_refund_request_of_a_curve_is_refused() {
     assert!(e.contains("no refund"), "{e}");
 }
 
-/// SEC-L1 (security review 2026-11-17), the default path: the curve default minFill is at most one level, so a small curve
-/// of the default shape takes fills from any position; the uncapped default (more than 8 levels) is refused by the gates.
+/// The default path: the curve default minFill is at most one level, so a small curve of the
+/// default shape takes fills from any position; the uncapped default (more than 8 levels) is
+/// refused by the gates.
 #[test]
 fn sec_default_min_fill_of_a_small_curve_is_within_one_level() {
     use kob_protocol::defaults::{curve_min_fill, default_min_fill};
@@ -432,7 +435,7 @@ fn sec_default_min_fill_of_a_small_curve_is_within_one_level() {
     assert!(at(7 * s.level_size + 1).is_ok() && at(7 * s.level_size + 2).is_err());
 }
 
-/// SEC S8: a level priced at the tip (it would sell for nothing) is refused.
+/// A level priced at the tip (it would sell for nothing) is refused.
 #[test]
 fn sec_a_level_at_the_tip_is_refused() {
     let s = curve(TemplateId::Kcc20Ref, 10);
@@ -440,7 +443,8 @@ fn sec_a_level_at_the_tip_is_refused() {
     assert!(CurveAskState { tip: s.table[0] - 1, ..s.clone() }.check_numbers().is_ok());
 }
 
-/// SEC S7: the amend of an unbound curve names the token of its custody, which the builder is given and checks.
+/// The amend of an unbound curve names the token of its custody, which the builder is given and
+/// checks.
 #[test]
 fn sec_unbound_amend_names_its_custodys_token() {
     let mut s = curve(TemplateId::Kcc20Ref, 10);

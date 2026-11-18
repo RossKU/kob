@@ -1,7 +1,10 @@
-//! Compute budgets of the `KobCurveAsk` roles (`KobCurveAsk.settle.rest@P`, `….settle.close@P`, `KobCurveAsk.cancel@P`),
-//! on every KCC-20 program, measured at the worst shape: 1,000 levels (the hash of the redeem script grows with the
-//! table), 8 levels crossed, each batch also padded with plain asks to the token slot limit (the stray scan). A smaller
-//! curve is over-provisioned, which costs no fee (a fill's fee is set by its size). `KOB_REGEN=1` merges these roles into
+//! Measures the compute budgets of the `KobCurveAsk` roles (`KobCurveAsk.settle.rest@P`,
+//! `KobCurveAsk.settle.close@P`, `KobCurveAsk.cancel@P`).
+//!
+//! They are measured on every KCC-20 program at the worst shape: 1,000 levels (the hash of the
+//! redeem script grows with the table), 8 levels crossed, each batch also padded with plain asks to
+//! the token slot limit (the stray scan). A smaller curve is over-provisioned, which costs no fee
+//! (a fill's fee is set by its size). `KOB_REGEN=1` merges these roles into
 //! `data/compute_budgets.json`; `budget_table.rs` leaves them to this file.
 
 mod common;

@@ -1,12 +1,20 @@
-//! In-place amend (AMEND record, payload version 4) and the change rule of the amend builders.
+//! Tests the in-place amend (AMEND record, payload version 4) and the change rule of the amend
+//! builders.
 //!
-//! The maker's `cancel` of a plain ask (SIGHASH_ALL, no output rule) continues the order's covenant id with new
-//! terms; the custody, owned by that id, never moves. Every shape is validated through the rusty-kaspa v2.1.0
-//! engine; the record is re-derived trusting nothing (`payload::verify_amend`) and every forgery is refused:
-//! another state than the output, terms that would move the custody (scale, quantity, token, maker), a second output
-//! carrying the id, a record next to a fill instead of the maker's cancel, a kind that is not a plain ask or bid.
-//! A plain bid (no custody: its quantity is its escrow) is amended the same way, keeping its token and scale.
-//! A mode-1 order's claim (bid-delivery-spec §7) is the same cancel continuing the order with bought = 0: CL1 to CL3.
+//! The maker's `cancel` of a plain ask (SIGHASH_ALL, no output rule) continues the order's covenant
+//! id with new terms; the custody, owned by that id, never moves. Every shape is validated through
+//! the rusty-kaspa v2.1.0 engine. The record is re-derived trusting nothing
+//! (`payload::verify_amend`) and every forgery is refused:
+//!
+//! * another state than the output;
+//! * terms that would move the custody (scale, quantity, token, maker);
+//! * a second output carrying the id;
+//! * a record next to a fill instead of the maker's cancel;
+//! * a kind that is not a plain ask or bid.
+//!
+//! A plain bid (no custody: its quantity is its escrow) is amended the same way, keeping its token
+//! and scale. A mode-1 order's claim (bid-delivery-spec §7) is the same cancel continuing the
+//! order with bought = 0: CL1 to CL3.
 
 mod common;
 

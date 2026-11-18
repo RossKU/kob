@@ -1,9 +1,9 @@
-//! Option A: key-owned KCC-20 holdings with a borrow setting (borrow scheme 0x01, 0x02 or 0x03) are
-//! spent on the owner path like plain ones (`docs/design/borrow-topup.md` section 6).
+//! Tests that key-owned KCC-20 holdings with a borrow setting (borrow scheme 0x01, 0x02 or 0x03)
+//! are spent on the owner path like plain ones (`docs/design/borrow-topup.md` section 6).
 //!
 //! Every transaction is validated in the rusty-kaspa v2.1.0 engine on every KCC-20 program: an ask
-//! placed from such a holding (plain custody, change with the same setting), a sale into a bid,
-//! and a merge that keeps the setting. The ablations check the refusals: mixed settings in one
+//! placed from such a holding (plain custody, change with the same setting), a sale into a bid, and
+//! a merge that keeps the setting. The ablations check the refusals: mixed settings in one
 //! transaction, a borrow-enabled change to another key, a borrow-enabled top-up next to a plain
 //! custody, and a borrow setting on anything but a key-owned holding.
 

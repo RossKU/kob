@@ -1,10 +1,11 @@
-//! C6 regressions (findings of the C6 fuzzers, `research/2026-09-29/planning/core/c6_unknowns.md`).
+//! Regression tests for the defects found by the C6 fuzzers.
 //!
-//! * C6-1: [`kob_protocol::tx::masses`] (and so `verify::validate`, `tx::finalize`, kob-wasm `masses` / `validate` /
-//!   `finalize`, the x402 verifiers' mass check) panicked with "attempt to divide by zero" inside rusty-kaspa's
-//!   KIP-9 storage-mass calculator on a transaction without inputs or with a zero-value output. Consensus refuses such a
-//!   transaction before it computes masses; the library must refuse it too, without a panic: its storage mass is
-//!   reported as beyond every limit.
+//! * C6-1: [`kob_protocol::tx::masses`] (and so `verify::validate`, `tx::finalize`, kob-wasm
+//!   `masses` / `validate` / `finalize`, the x402 verifiers' mass check) must not panic with
+//!   "attempt to divide by zero" inside rusty-kaspa's KIP-9 storage-mass calculator on a
+//!   transaction without inputs or with a zero-value output. Consensus refuses such a transaction
+//!   before it computes masses; the library must refuse it too, without a panic: its storage mass
+//!   is reported as beyond every limit.
 
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
 use kaspa_consensus_core::tx::{
