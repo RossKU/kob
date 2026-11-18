@@ -1,6 +1,8 @@
-// The common top of every market page: the market bar (one row: the token's picture and fingerprint, the pair as `BASE / QUOTE` where each side is a drop-down, the flip control, the
-// star, then the 24 h figures and the live state), the frame of a market while it loads, and the page's shell. The same markup for a token's KAS market and for a token pair, so the
-// page keeps its layout whichever quote is chosen.
+// The common top of every market page. It holds the market bar, the frame of a market while it
+// loads, and the page's shell. The market bar is one row with the token's picture and fingerprint,
+// the pair as `BASE / QUOTE` where each side is a drop-down, the flip control, the star, then the
+// 24 h figures and the live state. The markup is the same for a token's KAS market and for a token
+// pair, so the page keeps its layout whichever quote is chosen.
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
@@ -19,14 +21,18 @@ import type { TokenRow } from './token-model';
 /** A token as an option of the selector. */
 const choiceRow = (r: TokenRow) => ({ covenantId: r.covenantId, ticker: r.ticker, row: r });
 
-/** `BASE / QUOTE`, both sides selectable. `onChange` gets the new displayed pair (market-select.ts decides where it leads). */
+/**
+ * `BASE / QUOTE`, both sides selectable. `onChange` gets the new displayed pair (market-select.ts
+ * decides where it leads).
+ */
 export function PairSelector(props: { pair: DisplayedPair; rows: readonly TokenRow[]; onChange: (next: DisplayedPair) => void }) {
   const rows = props.rows.map(choiceRow);
   const label = (r: (typeof rows)[number]) => tokenTitle(r.row);
-  // a token without a ticker (the indexer's "") is named by its covenant id, like a token the list does not have
+  // A token without a ticker (the indexer's "") is named by its covenant id, like a token the list
+  // does not have.
   const tickerOf = (id: string): string => (id === KAS ? 'KAS' : props.rows.find((r) => r.covenantId.toLowerCase() === id)?.ticker || unregisteredId(id));
   const { left, right } = props.pair;
-  /** a side the list does not have (yet): its stand-in on the face */
+  /** A side the list does not have (yet). Its stand-in is on the face. */
   const stand = (v: string) => (v === KAS ? 'KAS' : v.slice(0, 8));
   return (
     <span class="pair-name pair-select" data-testid="market-pair" data-pair={`${tickerOf(left)}/${tickerOf(right)}`} data-left={left} data-right={right} role="group" aria-label={t('market.pair.label')}>
@@ -37,7 +43,10 @@ export function PairSelector(props: { pair: DisplayedPair; rows: readonly TokenR
   );
 }
 
-/** The market list's way to a token pair: two tokens (no KAS: a token's KAS market is its row), and the second choice opens the pair. The choices are covenant ids. */
+/**
+ * The market list's way to a token pair. It takes two tokens and no KAS, because a token's KAS
+ * market is its row. The second choice opens the pair. The choices are covenant ids.
+ */
 export function PairPicker(props: { rows: readonly TokenRow[] }) {
   const [base, setBase] = useState<string | null>(null);
   const [quote, setQuote] = useState<string | null>(null);
@@ -82,8 +91,10 @@ export function PairPicker(props: { rows: readonly TokenRow[] }) {
 }
 
 /**
- * The flip control, an icon-only button placed just left of the pair title: shows the market the other way round (a display flip for a token's KAS market,
- * a base/quote swap for a token pair). No visible text: the tooltip and the accessible name say "Flip pair" (`data-flip-to` names the pair it leads to).
+ * The flip control, an icon-only button placed just left of the pair title. It shows the market
+ * the other way round, as a display flip for a token's KAS market or a base/quote swap for a token
+ * pair. It has no visible text. The tooltip and the accessible name say "Flip pair", and
+ * `data-flip-to` names the pair it leads to.
  */
 export function FlipButton(props: { pair: string; pressed?: boolean; onClick: () => void }) {
   return (
@@ -109,24 +120,33 @@ export function FlipButton(props: { pair: string; pressed?: boolean; onClick: ()
 }
 
 /**
- * The market bar (review H-02 / H-10, founder 2026-11-11): ONE row of 56 to 64 px instead of a title block and a stats card. At the left the token's picture and fingerprint (the
- * fingerprint is the anti-spoofing signal, so it stays), the pair selector with the flip control, the star (and a risk chip where a token has one); then the 24 h figures
- * (`MarketStats`: last price with its change, high, low, the two volumes, trades), then the live state. The figures scroll sideways inside the bar where they do not fit (no visible
- * scrollbar, the page never scrolls sideways); a phone puts them on a row of their own under the pair, so its first row is `[icon] TICKER / QUOTE ▾ ★ [Live]`. The covenant id, the
- * name and the program are in the token's details card, not here.
+ * The market bar. It is one row of 56 to 64 px instead of a title block and a stats card.
+ * - At the left are the token's picture and fingerprint. The fingerprint is the anti-spoofing
+ *   signal, so it stays.
+ * - Then come the pair selector with the flip control, and the star, with a risk chip where a
+ *   token has one.
+ * - Then come the 24 h figures (`MarketStats`: last price with its change, high, low, the two
+ *   volumes and trades), and the live state.
+ * The figures scroll sideways inside the bar where they do not fit. There is no visible
+ * scrollbar, and the page never scrolls sideways. A phone puts them on a row of their own under
+ * the pair, so its first row is `[icon] TICKER / QUOTE ▾ ★ [Live]`. The covenant id, the name
+ * and the program are in the token's details card and not here.
  */
 export function MarketBar(props: {
-  /** the token's picture and fingerprint (two of them on a pair page) */
+  /** The token's picture and fingerprint, two of them on a pair page. */
   identity: ComponentChildren;
-  /** the pair selector and the flip control */
+  /** The pair selector and the flip control. */
   pair: ComponentChildren;
-  /** the star and the risk chips */
+  /** The star and the risk chips. */
   tools?: ComponentChildren;
-  /** the 24 h figures (`MarketStats`) */
+  /** The 24 h figures (`MarketStats`). */
   stats: ComponentChildren;
-  /** the live state chip */
+  /** The live state chip. */
   live?: ComponentChildren;
-  /** a one-line note in the top space of the bar (out of the flow: the bar keeps its height without it) */
+  /**
+   * A one-line note in the top space of the bar. It is out of the flow, so the bar keeps its height
+   * without it.
+   */
   note?: ComponentChildren;
 }) {
   return (
@@ -143,7 +163,10 @@ export function MarketBar(props: {
   );
 }
 
-/** A market's frame while its token is looked up: the bar and the cards with their headings in their places. The ticket comes as soon as the token is known; it waits for nothing else. */
+/**
+ * A market's frame while its token is looked up. It is the bar and the cards with their headings
+ * in their places. The ticket comes as soon as the token is known and waits for nothing else.
+ */
 export function MarketFrame(props: { 'data-testid'?: string; bookTitle: string }) {
   const big = useChartExpanded();
   return (
@@ -163,39 +186,47 @@ export function MarketFrame(props: { 'data-testid'?: string; bookTitle: string }
 }
 
 /**
- * The layout every market has: the market bar, notices, then the three columns on one row (order book with its Depth view | chart | ticket) and the facts below.
- * There is no panel of its own for the depth chart: it is the "Depth" view of the order book's panel at every width (BookTabs.tsx). A slot a market has no data for stays empty;
- * nothing moves.
+ * The layout every market has. It is the market bar and notices, then the three columns on one row
+ * (order book with its Depth view, chart and ticket), and the facts below. There is no panel of
+ * its own for the depth chart. It is the "Depth" view of the order book's panel at every width
+ * (BookTabs.tsx). A slot a market has no data for stays empty, so nothing moves.
  */
 export function MarketShell(props: {
   'data-testid': string;
   attrs?: Record<string, string>;
-  /** the market bar and what must be seen with it (warnings) */
+  /** The market bar and what must be seen with it (warnings). */
   header: ComponentChildren;
   notices?: ComponentChildren;
   book: ComponentChildren;
   chart: ComponentChildren;
   ticket: ComponentChildren;
-  /** the wallet's orders, fills and balances (OrdersView on this market): under the three columns, after the ticket on a phone */
+  /**
+   * The wallet's orders, fills and balances (OrdersView on this market). It sits under the three
+   * columns, and after the ticket on a phone.
+   */
   mine?: ComponentChildren;
-  /** the activity log of the market: the full width under the grid, above the facts */
+  /** The activity log of the market. It has the full width under the grid, above the facts. */
   activity?: ComponentChildren;
   details?: ComponentChildren;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const grid = useRef<HTMLDivElement>(null);
-  // the drag handle under the row (three columns, a fine pointer): it sets the row's height (RowResize.tsx)
+  // The drag handle under the row, with three columns and a fine pointer. It sets the row's height
+  // (RowResize.tsx).
   const resizable = useMedia('(min-width: 1200px) and (pointer: fine)');
-  // the chart's "Expand" choice (PriceChart's button): three columns, the chart takes the book's column too; otherwise the chart is taller (market.css)
+  // The chart's "Expand" choice (PriceChart's button). With three columns the chart takes the
+  // book's column too. Otherwise the chart is taller (market.css).
   const big = useChartExpanded();
-  // the Buy | Sell bar of a phone (the ticket is below the book and the chart): shown while the ticket's own Buy | Sell switch is off screen
-  // (founder 2026-11-12: not the whole ticket, so the rest of the ticket scrolled past the top still has the bar); the switch is watched once the ticket draws it (it renders late)
+  // The Buy | Sell bar of a phone, where the ticket is below the book and the chart. It is shown
+  // while the ticket's own Buy | Sell switch is off screen. It does not cover the whole ticket, so
+  // the rest of the ticket scrolled past the top still has the bar. The switch is watched once the
+  // ticket draws it, because it renders late.
   const [ticketAway, setTicketAway] = useState(true);
   useEffect(() => {
     const area = root.current?.querySelector('.mkt-area-ticket');
     if (!area || typeof IntersectionObserver === 'undefined') return;
     const seen = new Map<Element, boolean>();
-    // the sticky header covers the top of the screen: a switch under it is off screen too
+    // The sticky header covers the top of the screen, so a switch under it is off screen too.
     const head = document.querySelector<HTMLElement>('.app-header, header')?.offsetHeight ?? 0;
     const io = new IntersectionObserver(
       (entries) => {
@@ -222,14 +253,16 @@ export function MarketShell(props: {
       io.disconnect();
     };
   }, []);
-  // a press takes the ticket's side (its own switch is pressed, so the form and the ticket's state follow exactly as for a click there) and brings the ticket on screen
+  // A press takes the ticket's side and brings the ticket on screen. The ticket's own switch is
+  // pressed, so the form and the ticket's state follow exactly as for a click there.
   const jumpToTicket = (side: 'buy' | 'sell') => {
     const area = root.current?.querySelector<HTMLElement>('.mkt-area-ticket');
     if (!area) return;
     area.querySelector<HTMLElement>(`[data-testid="order-side-${side}"]`)?.click();
     const calm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     area.scrollIntoView({ behavior: calm ? 'auto' : 'smooth', block: 'start' });
-    // the amount box takes the cursor (a phone opens its keyboard); no scroll of its own, the one above already runs
+    // The amount box takes the cursor, so a phone opens its keyboard. There is no scroll of its
+    // own, because the one above already runs.
     area.querySelector<HTMLElement>('[data-testid="order-amount"]')?.focus({ preventScroll: true });
   };
   return (
