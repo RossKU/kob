@@ -262,7 +262,10 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
   let order: OrderState;
   let exitState: OrderState;
   let prefund: bigint | null = null;
-  /** sell-first: the delivery of the buy-back exits (bid-delivery-spec §10; a repeating entry's exits: each fill) */
+  /**
+   * sell-first: the delivery of the buy-back exits (bid-delivery-spec §10). A repeating entry's
+   * exits deliver at each fill.
+   */
   let exitDlv: ResolvedDelivery | null = null;
   // KAS on the order UTXO, itemised. The total is the state's own escrow (kob-wasm ifdBidEscrow or
   // ifdAskEscrow), and the builder refuses less.
@@ -323,7 +326,7 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
       prefund: str(prefund),
       exitCarrier: str(carrier),
       exitState: commitExit(env, { kind: kindFor('KobCondBid', tk.family), state: bidExit } as { kind: 'KobCondBid'; state: CondBidState }),
-      // the exits' delivery block, written into each exit with bought = 0 (a KRON entry: mode 0)
+      // The exits' delivery block, written into each exit with bought = 0. A KRON entry has mode 0.
       ...exitFieldsOf(tk.family === 'kcc20' ? exitDlv : { fields: { ...NO_DELIVERY } }),
     };
     order = { kind: kindFor('KobIfdAsk', tk.family), state: ask } as OrderState;
@@ -430,6 +433,6 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
     },
   };
   const plan = finishPlan(env, log, spec);
-  // a top-up exit pays its tip at most once per possible exit fill
+  // A top-up exit pays its tip at most once per possible exit fill.
   return exitDlv ? withDelivery(plan, { delivery: exitDlv, fills: ceilDiv(amount, exitMinFill > 0n ? exitMinFill : 1n) }) : plan;
 }

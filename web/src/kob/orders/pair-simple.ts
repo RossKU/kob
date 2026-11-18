@@ -73,7 +73,7 @@ interface Draft {
   activatesAt: bigint | null;
   notes: string[];
   pairNotes: string[];
-  /** a buy: what the user and the wallet asked for its delivery (orders/delivery.ts) */
+  /** for a buy, what the user and the wallet asked for its delivery (orders/delivery.ts) */
   delivery: DeliveryRequest | undefined;
   /** the tip is the default one (a Collected buy raises it for its later fills) */
   tipDefault: boolean;
@@ -128,9 +128,10 @@ function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
   const possible = ceilDiv(d.amount, minFill);
   const fills = d.fills ?? d.fillsRequested ?? defaultPairFills(possible);
   const dc = pairCarrierOf(env);
-  // The delivery of the token the order receives (a buy: A, a sell: B): a Collected pick (not the default) funds one carrier for every
-  // fill), and its default tip also pays the custody input of every later fill (orders/delivery.ts collectedPairTipExtra; the tip is KAS
-  // per whole A and the fills count A, on either side)
+  // The delivery of the token the order receives, A for a buy and B for a sell. A Collected pick,
+  // which is not the default, funds one carrier for every fill. Its default tip also pays the
+  // custody input of every later fill (orders/delivery.ts collectedPairTipExtra). The tip is KAS
+  // per whole A and the fills count A, on either side.
   const bought = d.side === 'buy' ? a : b;
   const dlv: ResolvedDelivery = resolvePairDelivery({ codec: bought.family, cls: d.tif === 0 && !d.immediate ? 'resting' : 'immediate', carrier: dc, scale: a.scale, minFill }, d.delivery, issues);
   if (hasError(issues)) return failedPairPlan(issues);
@@ -139,7 +140,8 @@ function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
     if (d.tipDefault) d.tip += collectedPairTipExtra(pairCollectedExtra(bought.program), a.scale, d.amount, minFill);
   }
   const collected = dlv.choice === 'collected';
-  // With fewer carriers than possible fills, the rest fills only in full after the partial fills (a Collected order is not limited).
+  // With fewer carriers than possible fills, the rest fills only in full after the partial fills. A
+  // Collected order is not limited.
   if (!collected && d.tif === 0 && d.interval === 0n && fills < possible) issues.push(pairIssue('PAIR_FILLS_LIMITED', { fills, partials: fills - 1n }));
   const tips = pairTipsOf(env);
   const draft = makePairState(env, {
@@ -157,7 +159,8 @@ function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
     order = withCustody(draft, escrow);
   }
   // At least the deliveries the protocol requires a new order to fund itself (kob-wasm
-  // pairFundedFills): for a resting order a partial fill and the fill of its rest. A Collected order: one (bid-delivery-spec §10).
+  // pairFundedFills), which for a resting order are a partial fill and the fill of its rest. A
+  // Collected order funds one (bid-delivery-spec §10).
   const funded = collected ? 1n : maxBig(fills, env.kob.pairFundedFills(order));
   const kas = pairKasLines(env, order, funded, dc);
   if (kas === null) return failedPairPlan([...issues, issue('TIP_TOO_LARGE', undefined, 'tip')]);
@@ -229,7 +232,8 @@ function planLimit(env: PairPlanEnv, i: LimitIntent): PairOrderPlan {
   // The crossing policy against the pair book. A KAS tip never makes a B price cross.
   const x = future ? { crossing: false, touch: null } : crossingTouch(env.book, i.side, i.price, 0n);
   if (x.crossing && x.touch !== null) {
-    // a pair order is not taken from the wallet (kob/take.ts is KAS books only): `take` is an auction
+    // A pair order is not taken from the wallet, because kob/take.ts serves KAS books only. `take`
+    // is an auction.
     const policy = i.crossing === 'take' || i.crossing === undefined ? 'auction' : i.crossing;
     const start = i.side === 'sell' ? (x.touch > i.price ? x.touch : i.price) : x.touch < i.price ? x.touch : i.price;
     if (policy === 'reject') {

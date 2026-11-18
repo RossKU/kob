@@ -319,7 +319,7 @@ export function condBidState(env: PlanEnv, b: CondBase & { deliveryCarrier: bigi
     rptPrice: '0',
     rptPre: '0',
     rptUntil: '0',
-    // the delivery block (bid-delivery-spec §2); a KRON bid is always mode 0
+    // The delivery block (bid-delivery-spec §2). A KRON bid is always mode 0.
     ...(tk.family === 'kcc20' && b.delivery ? b.delivery : NO_DELIVERY),
   };
 }

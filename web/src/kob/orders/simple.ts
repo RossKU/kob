@@ -52,7 +52,7 @@ interface Draft {
   priceEnd: bigint;
   decayStep: bigint;
   deadline: bigint | null;
-  /** bids: delivery carriers budgeted (a Collected bid is funded with one: `fundedFills`) */
+  /** bids: delivery carriers budgeted (a Collected bid is funded with one, see `fundedFills`) */
   fills: bigint;
   /** bids: what the user and the wallet asked for the delivery */
   delivery: DeliveryRequest | undefined;
@@ -178,7 +178,8 @@ function place(env: PlanEnv, d: Draft, pre: PlanIssue[]): OrderPlan {
     fills = fundedFills(dlv.choice, d.fills);
     if (dlv.choice === 'collected') d.notes.push('deliveryCollected');
     if (dlv.choice === 'topup') d.notes.push('deliveryTopup');
-    // The escrow of `amount` base units in at most `fills` fills, as the covenant consumes it (Collected: one carrier).
+    // The escrow of `amount` base units in at most `fills` fills, as the covenant consumes it. A
+    // Collected bid has one carrier.
     const escrow = env.kob.bidEscrow(order, d.amount, fills);
     if (escrow === null || !fitsI64(escrow)) return failedPlan([...issues, issue('AMOUNT_TOO_LARGE', undefined, 'amount')]);
     value = escrow;
@@ -219,8 +220,9 @@ export function restingFills(env: Pick<PlanEnv, 'kob' | 'token'>, amount: bigint
 // ---- limit
 
 /**
- * A sell curve (`KobCurveAsk`): one custody of `amount` sold along `table`, `levelSize` per level; the order carries the token carrier and
- * rests until sold out or cancelled (no expiry). The default minimum fill is worth 10 KAS at the first level.
+ * Plans a sell curve (`KobCurveAsk`), one custody of `amount` sold along `table`, `levelSize` per
+ * level. The order carries the token carrier and rests until sold out or cancelled, with no expiry.
+ * The default minimum fill is worth 10 KAS at the first level.
  */
 function planCurve(env: PlanEnv, i: CurveIntent): OrderPlan {
   const m = env.token;
@@ -236,7 +238,8 @@ function planCurve(env: PlanEnv, i: CurveIntent): OrderPlan {
   pre.push(...checkAmount(i.amount, m, 'amount', true));
   pre.push(...checkMarketBand(env.book, env.lastFillPrice, 'sell', i.table[0]!));
   pre.push(...checkSelfTrade(env.ownOrders, { side: 'sell', price: i.table[0]!, tip }));
-  // at most one level: one fill crosses at most 8 levels, so a larger minimum could leave the curve unfillable
+  // At most one level. One fill crosses at most 8 levels, so a larger minimum could leave the curve
+  // unfillable.
   const dflt = defaultMinFillFor(env, i.amount, i.table[0]!);
   const minFill = i.minFill ?? (dflt < i.levelSize ? dflt : i.levelSize);
   if (minFill > 7n * i.levelSize + 1n) return failedPlan([...pre, issue('MIN_FILL_INVALID', undefined, 'minFill')]);
@@ -283,8 +286,8 @@ function planLimit(env: PlanEnv, i: LimitIntent): OrderPlan {
   pre.push(...checkMarketBand(env.book, env.lastFillPrice, i.side, i.price));
   const x = future ? { crossing: false, touch: null } : crossingTouch(env.book, i.side, i.price, tip);
   if (x.crossing && x.touch !== null && i.crossing === 'take') {
-    // Filled now from the wallet (kob/take.ts), the rest rests as a plain limit at the user's price; a
-    // book with nothing it can take places it as an auction.
+    // Filled now from the wallet (kob/take.ts), the rest rests as a plain limit at the user's
+    // price. A book with nothing it can take places it as an auction.
     const t = tryTake(env, i.side, i.amount, i.price, tip, pre, { restKind: 'limit', rest: (e, amount) => planLimit(e, { ...i, amount, crossing: 'limit' }) });
     if (t) return t;
   }
@@ -331,7 +334,8 @@ function planLimit(env: PlanEnv, i: LimitIntent): OrderPlan {
  */
 function crossingBuy(env: PlanEnv, d: Draft, amount: bigint, bound: bigint, tip: bigint, minFill: bigint | undefined, wanted: bigint | undefined, pre: PlanIssue[]): OrderPlan {
   if (effectiveChoice({ codec: env.token.family, cls: d.cls }, d.delivery) === 'collected') {
-    // One carrier serves every fill of a Collected bid: no fills to budget, only the minimum fill limits them.
+    // One carrier serves every fill of a Collected bid. There are no fills to budget, and only the
+    // minimum fill limits them.
     const mf = minFill ?? defaultMinFillFor(env, amount, bound);
     const possible = mf > 0n ? ceilDiv(amount, mf) : 1n;
     const facts = fillsFacts(env, 'buy', amount, bound, tip, possible, null, pre, true);
@@ -351,8 +355,8 @@ function crossingBuy(env: PlanEnv, d: Draft, amount: bigint, bound: bigint, tip:
 }
 
 /**
- * A take of what crosses `limit` now (kob/take.ts), or null when the book has nothing to take (the
- * caller places the order as before). A self-trade, or a FOK the book cannot fill in one
+ * A take of what crosses `limit` now (kob/take.ts), or null when the book has nothing to take. On
+ * null the caller places the order instead. A self-trade, or a FOK the book cannot fill in one
  * transaction, is refused.
  */
 function tryTake(env: PlanEnv, side: 'sell' | 'buy', amount: bigint, limit: bigint, tip: bigint, pre: PlanIssue[], mode: TakeMode): OrderPlan | null {
@@ -385,7 +389,8 @@ function planImmediate(env: PlanEnv, i: IocIntent | FokIntent): OrderPlan {
   d.fills = 1n;
   d.notes.push(i.type === 'fok' ? 'fokAllOrNothing' : 'iocRemainderReturned');
   pre.push(...checkMarketBand(env.book, env.lastFillPrice, i.side, i.price));
-  // Direct fill: an IOC takes what crosses and places nothing more, a FOK all in one transaction or nothing.
+  // Direct fill. An IOC takes what crosses and places nothing more, and a FOK takes all in one
+  // transaction or nothing.
   if (i.take && !future) {
     const t = tryTake(env, i.side, i.amount, i.price, tip, pre, { restKind: 'none', fok: i.type === 'fok' });
     if (t) return t;
@@ -499,7 +504,7 @@ function planAuction(env: PlanEnv, r: AuctionRequest, pre: PlanIssue[]): OrderPl
 
   const end = auctionBound(r.side, touch, r.bps, env.token.tick);
   const d = blank(r.side, r.amount, touch, r.tip, r.minFill);
-  // a market order delivers at each fill, a multi-fill one too (bid-delivery-spec §10)
+  // A market order delivers at each fill, a multi-fill one too (bid-delivery-spec §10).
   d.cls = 'immediate';
   d.activeFrom = env.clock.daa + delay;
   d.slope = decaySlope(touch, end, auctionDaa, 1n);
@@ -560,7 +565,8 @@ function withBuyingPower(env: PlanEnv, p: OrderPlan): OrderPlan {
 
 function planMarket(env: PlanEnv, i: MarketIntent): OrderPlan {
   const pre: PlanIssue[] = [];
-  // Direct fill within the worst price the slippage allows, like an IOC (a FOK with all or nothing).
+  // Direct fill within the worst price the slippage allows, like an IOC, or a FOK with all or
+  // nothing.
   const touch = touchPrice(env.book, i.side);
   if (i.take && touch !== null) {
     const bps = i.slippageBps ?? SLIPPAGE_BPS;

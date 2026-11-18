@@ -105,7 +105,8 @@ export function committedExit(env: PlanEnv, entry: OrderState): AnyState {
   }
   if (baseKind(entry.kind) === 'KobIfdAsk') {
     const tail = '20' + '00'.repeat(32) + '08' + '00'.repeat(8) + '08' + '00'.repeat(8) + '08' + '00'.repeat(8);
-    // the delivery block the entry appends (bid-delivery-spec §2): exitMode, exitRecvThreshold, exitTopupTip, bought = 0; a KRON exit has none
+    // The delivery block the entry appends (bid-delivery-spec §2) is exitMode, exitRecvThreshold,
+    // exitTopupTip and bought = 0. A KRON exit has none.
     const e = entry.state as IfdAskState;
     const block = family === 'kron' ? '' : [e.exitMode, e.exitRecvThreshold, e.exitTopupTip, '0'].map((v) => '08' + i64le(BigInt(v ?? '0'))).join('');
     return env.kob.decodeState(kindFor('KobCondBid', family), e.exitState + tail + block);
