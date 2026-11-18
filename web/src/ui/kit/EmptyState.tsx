@@ -11,21 +11,22 @@ const PATHS: Record<EmptyIcon, string> = {
 };
 
 export interface EmptyStateProps {
-  /** a small line icon above the sentence (omitted: none) */
+  /** A small line icon above the sentence. Omitted means none. */
   icon?: EmptyIcon;
-  /** the ONE sentence: what is not there and why (or what to do) */
+  /** The ONE sentence: what is not there and why, or what to do. */
   children: ComponentChildren;
-  /** the primary action, when there is one (a Button) */
+  /** The primary action, when there is one (a Button). */
   action?: ComponentChildren;
-  /** tight padding, for a panel that only holds this (the market page's orders panel) */
+  /** Tight padding, for a panel that only holds this (the market page's orders panel). */
   compact?: boolean;
   class?: string;
   'data-testid'?: string;
 }
 
 /**
- * The one empty / disconnected state of the app (review M-12): an icon, one sentence, one primary action, centred on the same footprint everywhere (Portfolio, Activity, Create
- * token, the orders panel). `role=status` so a screen reader announces a state that appears after a load.
+ * The one empty / disconnected state of the app: an icon, one sentence and one primary action,
+ * centred on the same footprint everywhere (Portfolio, Activity, Create token, the orders panel).
+ * It has `role=status`, so a screen reader announces a state that appears after a load.
  */
 export function EmptyState(props: EmptyStateProps) {
   return (

@@ -11,13 +11,13 @@ export function useToasts(): readonly ToastItem[] {
   return list;
 }
 
-/** A swipe up of at least this many px (mostly vertical) dismisses a phone's toast. */
+/** A swipe up of at least this many px, mostly vertical, dismisses a phone's toast. */
 const SWIPE_UP_PX = 28;
 
 function ToastView({ item, phone }: { item: ToastItem; phone: boolean }) {
-  // a finger or the pointer on a phone's toast holds its timer; letting go starts it again
+  // A finger or the pointer on a phone's toast holds its timer. Letting go starts it again.
   const [held, setHeld] = useState(false);
-  // every merge of an identical message restarts the timer
+  // Every merge of an identical message restarts the timer.
   useEffect(() => {
     if (item.timeoutMs <= 0 || held) return;
     const id = setTimeout(() => toasts.dismiss(item.id), item.timeoutMs);
@@ -59,7 +59,10 @@ function ToastView({ item, phone }: { item: ToastItem; phone: boolean }) {
   );
 }
 
-/** How many cards other components put into the host (the send status, a flow: `.send-toast`); watched only while `on`. */
+/**
+ * How many cards other components put into the host (the send status, a flow: `.send-toast`). It is
+ * watched only while `on`.
+ */
 function useHostCards(host: { current: HTMLElement | null }, on: boolean): number {
   const [n, setN] = useState(0);
   useEffect(() => {
@@ -74,7 +77,10 @@ function useHostCards(host: { current: HTMLElement | null }, on: boolean): numbe
   return on ? n : 0;
 }
 
-/** Keeps `--toast-top` at the bottom edge of the sticky header, so the toasts hang just under it (a desktop's at the right, a phone's across). */
+/**
+ * Keeps `--toast-top` at the bottom edge of the sticky header, so the toasts hang just under it:
+ * a desktop's at the right, a phone's across.
+ */
 function useHeaderOffset(host: { current: HTMLElement | null }, on: boolean): void {
   useEffect(() => {
     const el = host.current;
@@ -94,11 +100,16 @@ function useHeaderOffset(host: { current: HTMLElement | null }, on: boolean): vo
 }
 
 /**
- * Mount ONCE (App does). Show messages with `showToast(text, tone)` from toast-store. A desktop or a tablet: every toast and the card of a send or a
- * flow at the top right just under the header, stacked, the running task's card on top (founder 2026-11-14: one place, never over the order ticket's
- * button). A phone (PHONE_TOAST_QUERY): at the
- * top just under the header, ONE at a time (a card another component put in the host first, else the newest error, else the newest toast) with a "+N"
- * chip for the rest, red while an error waits, which opens the bell; only the shown toast runs its timer (toast-store.ts `hostView`). styles.css `.toast-host`.
+ * Mount ONCE (App does). Show messages with `showToast(text, tone)` from toast-store.
+ * - A desktop or a tablet stacks every toast and the card of a send or a flow at the top right,
+ *   just under the header, with the running task's card on top. It is one place and never over
+ *   the order ticket's button.
+ * - A phone (PHONE_TOAST_QUERY) shows ONE at a time at the top, just under the header. That is a
+ *   card another component put in the host first, else the newest error, else the newest toast. A
+ *   "+N" chip stands for the rest and is red while an error waits, and it opens the bell. Only the
+ *   shown toast runs its timer (toast-store.ts `hostView`).
+ *
+ * The styles are styles.css `.toast-host`.
  */
 export function ToastHost() {
   const list = useToasts();
@@ -106,7 +117,8 @@ export function ToastHost() {
   const ref = useRef<HTMLDivElement>(null);
   const cards = useHostCards(ref, phone);
   useHeaderOffset(ref, true);
-  // on a phone a send / flow card (it may wait for the user's approval) is the one shown; the toasts wait behind it (an error first once it goes)
+  // On a phone a send / flow card is the one shown, as it may wait for the user's approval. The
+  // toasts wait behind it, an error first once it goes.
   const { shown, waiting, waitingError } = hostView(list, cards, phone);
   return (
     <div class="toast-host" aria-live="polite" data-testid="toast-host" {...(phone ? { 'data-phone': 'true' } : {})} ref={ref}>

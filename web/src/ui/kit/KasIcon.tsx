@@ -1,8 +1,16 @@
-// The Kaspa mark, for KAS as an asset (the Portfolio's Balances row): inline SVG, nothing to fetch (CSP: no external images).
-// Source: kaspa.org's own glyph, https://kaspa.org/icon.svg (the site's icon; "Kaspa logo / View logo assets" in its logo menu), fetched 2026-11-10; the same mark
-// is in kaspanet/rusty-kaspa (ISC licence) at wasm/examples/web/resources/kaspa.svg. kaspa.org states no licence for the mark itself: it is used here only
-// to name the KAS asset, as wallets and explorers do. Paths and colours (#6fc7ba disc, white K) are the file's; the viewBox is cropped to the disc itself (the file's has a margin of about 18% on every side), so the mark fills its box like a token's round avatar; the white disc behind shows through the cut-out K,
-// so it reads the same on a dark and a light page.
+// The Kaspa mark, for KAS as an asset (the Portfolio's Balances row). It is an inline SVG with
+// nothing to fetch, because the CSP allows no external images.
+//
+// The source is kaspa.org's own glyph, https://kaspa.org/icon.svg (the site's icon, in its logo
+// menu under "Kaspa logo / View logo assets"), fetched 2026-11-10. The same mark is in
+// kaspanet/rusty-kaspa (ISC licence) at wasm/examples/web/resources/kaspa.svg. kaspa.org states
+// no licence for the mark itself. It is used here only to name the KAS asset, as wallets and
+// explorers do.
+//
+// The paths and colours (#6fc7ba disc, white K) are the file's. The viewBox is cropped to the disc
+// itself, as the file's has a margin of about 18% on every side. The mark then fills its box like
+// a token's round avatar. The white disc behind shows through the cut-out K, so it reads the same
+// on a dark and a light page.
 
 /** The Kaspa mark at `size` px (default 26, the height of a token's icon in a table line). */
 export function KasIcon(props: { size?: number }) {

@@ -2,12 +2,12 @@ import { t } from '../../i18n';
 
 export interface SpinnerProps {
   large?: boolean;
-  /** accessible name (default: the translated "Loading...") */
+  /** The accessible name (default: the translated "Loading..."). */
   label?: string;
   'data-testid'?: string;
 }
 
-/** Inline busy indicator; `role=status` so screen readers announce it once. */
+/** Inline busy indicator with `role=status`, so screen readers announce it once. */
 export function Spinner(props: SpinnerProps) {
   return <span class={`spinner${props.large ? ' spinner-lg' : ''}`} role="status" aria-label={props.label ?? t('common.loading')} data-testid={props['data-testid']} />;
 }

@@ -3,24 +3,33 @@ import { useState } from 'preact/hooks';
 
 export interface SectionProps {
   title?: ComponentChildren;
-  /** a small muted line under the title (the header stays one row: the title and its subtitle at the left, the actions at the right) */
+  /**
+   * A small muted line under the title. The header stays one row, with the title and its subtitle
+   * at the left and the actions at the right.
+   */
   subtitle?: ComponentChildren;
-  /** right side of the header (buttons, badges) */
+  /** The right side of the header (buttons, badges). */
   actions?: ComponentChildren;
-  /** a "?" right after the title (kit/HelpTip.tsx) */
+  /** A "?" right after the title (kit/HelpTip.tsx). */
   help?: ComponentChildren;
   children?: ComponentChildren;
-  /** the body can be folded; the header text becomes the toggle */
+  /** The body can be folded, and the header text becomes the toggle. */
   collapsible?: boolean;
-  /** initial state of a collapsible section (default open) */
+  /** The initial state of a collapsible section (default open). */
   defaultOpen?: boolean;
-  /** shown after the title while a collapsible section is folded (one line, so a folded section stays small) */
+  /**
+   * Shown after the title while a collapsible section is folded. It is one line, so a folded
+   * section stays small.
+   */
   summary?: ComponentChildren;
   'data-testid'?: string;
   class?: string;
 }
 
-/** A titled card. Collapsible sections keep the body in the DOM (hidden), so tests and screen-reader search still find it. */
+/**
+ * A titled card. Collapsible sections keep the body in the DOM (hidden), so tests and screen-reader
+ * search still find it.
+ */
 export function Section(props: SectionProps) {
   const [open, setOpen] = useState(props.defaultOpen ?? true);
   const folded = props.collapsible && !open;

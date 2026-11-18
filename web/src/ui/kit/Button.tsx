@@ -8,8 +8,10 @@ export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost';
 export interface ButtonProps extends Omit<JSX.HTMLAttributes<HTMLButtonElement>, 'size' | 'loading'> {
   variant?: ButtonVariant;
   /**
-   * a press is being worked on: clicks are ignored (`aria-busy`; the button is NOT disabled, so its colours do not flicker on a quick refresh), and when it lasts
-   * longer than `SPINNER_DELAY_MS` a spinner takes the place of the label. The button never changes its size, so nothing beside it moves.
+   * A press is being worked on, so clicks are ignored (`aria-busy`). The button is NOT disabled,
+   * so its colours do not flicker on a quick refresh. When the work lasts longer than
+   * `SPINNER_DELAY_MS`, a spinner takes the place of the label. The button never changes its
+   * size, so nothing beside it moves.
    */
   loading?: boolean;
   small?: boolean;
@@ -19,13 +21,20 @@ export interface ButtonProps extends Omit<JSX.HTMLAttributes<HTMLButtonElement>,
   type?: 'button' | 'submit' | 'reset';
 }
 
-/** A refresh that finishes sooner than this shows no spinner at all (a flicker is worse than no cue). */
+/**
+ * A refresh that finishes sooner than this shows no spinner at all, because a flicker is worse than
+ * no cue.
+ */
 export const SPINNER_DELAY_MS = 300;
 
-/** Button. `data-testid`, `aria-*` and every other attribute are forwarded. Default type is `button` (never submits a form by accident). */
+/**
+ * Button. `data-testid`, `aria-*` and every other attribute are forwarded. The default type is
+ * `button`, so it never submits a form by accident.
+ */
 export function Button(props: ButtonProps) {
   const { variant = 'secondary', loading = false, small = false, block = false, children, disabled, type = 'button', class: cls, className, onClick, ...rest } = props as ButtonProps & { class?: string; className?: string };
-  // the spinner only after a while; it is drawn over the label (its space is the label's, kept), never beside it
+  // The spinner shows only after a while. It is drawn over the label, whose space is kept, and
+  // never beside it.
   const [spin, setSpin] = useState(false);
   useEffect(() => {
     if (!loading) return setSpin(false);
@@ -43,7 +52,7 @@ export function Button(props: ButtonProps) {
       disabled={disabled}
       aria-busy={loading ? 'true' : (rest as { 'aria-busy'?: 'true' | 'false' })['aria-busy']}
       onClick={(e) => {
-        // busy: the press is swallowed (a submit button must not submit either)
+        // Busy: the press is swallowed, so a submit button does not submit either.
         if (loading) return e.preventDefault();
         onClick?.(e);
       }}

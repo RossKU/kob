@@ -3,25 +3,35 @@ import { t } from '../../i18n';
 import { shortId } from './format';
 
 export interface CopyTextProps {
-  /** the full text that is copied (and shown in the tooltip) */
+  /** The full text that is copied, and shown in the tooltip. */
   value: string;
-  /** shown text: default is the shortened id; `false` shows the full value */
+  /** The shown text. The default is the shortened id, and `false` shows the full value. */
   short?: boolean;
-  /** shown text override (e.g. a shortened address that keeps its network prefix) */
+  /** Shown text override, for example a shortened address that keeps its network prefix. */
   text?: string;
-  /** how many leading characters the shortened text shows before its ellipsis (default 12) */
+  /** How many leading characters the shortened text shows before its ellipsis (default 12). */
   chars?: number;
-  /** when set, the shown text is a link to this URL, opened in a new tab (the transaction on the block explorer) */
+  /**
+   * When set, the shown text is a link to this URL, opened in a new tab (the transaction on the
+   * block explorer).
+   */
   href?: string | null;
-  /** the whole text, ending with an ellipsis (CSS) where there is no room for it, never shortened in the middle (a transaction id in a list or its details); the title has it whole */
+  /**
+   * Show the whole text, ending with an ellipsis (CSS) where there is no room for it. It is never
+   * shortened in the middle, as for a transaction id in a list or its details. The title has it
+   * whole.
+   */
   ellipsis?: boolean;
-  /** accessible name of the copy button */
+  /** The accessible name of the copy button. */
   label?: string;
   'data-testid'?: string;
   class?: string;
 }
 
-/** Writes `text` to the clipboard; falls back to a hidden textarea + execCommand where the async API is blocked (http, older browsers). */
+/**
+ * Writes `text` to the clipboard. Where the async API is blocked (an insecure context, older
+ * browsers), it falls back to a hidden textarea and `execCommand`.
+ */
 export async function copyToClipboard(text: string): Promise<boolean> {
   try {
     if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
@@ -29,13 +39,14 @@ export async function copyToClipboard(text: string): Promise<boolean> {
       return true;
     }
   } catch {
-    /* fall through to the legacy path */
+    /* Fall through to the legacy path. */
   }
   const before = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
   try {
     const ta = document.createElement('textarea');
     ta.value = text;
-    // the shim takes the focus for a moment: a popover that closes when the focus leaves it (shell/Popover.tsx) must not take that for a departure
+    // The shim takes the focus for a moment. A popover that closes when the focus leaves it
+    // (shell/Popover.tsx) must not take that for a departure.
     ta.setAttribute('data-copy-shim', '');
     ta.setAttribute('readonly', '');
     ta.style.position = 'fixed';
@@ -51,7 +62,10 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-/** Id / address shortened from its start (never in the middle) with a copy button. The full value is in `title` and in `data-value` (for tests). */
+/**
+ * An id or address shortened from its start, never in the middle, with a copy button. The full
+ * value is in `title` and in `data-value` (for tests).
+ */
 export function CopyText(props: CopyTextProps) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);

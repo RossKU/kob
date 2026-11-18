@@ -7,13 +7,16 @@ export interface ModalProps {
   title: ComponentChildren;
   onClose: () => void;
   children?: ComponentChildren;
-  /** footer buttons */
+  /** Footer buttons. */
   footer?: ComponentChildren;
-  /** wide layout (confirmation screens) */
+  /** Wide layout (confirmation screens). */
   large?: boolean;
-  /** false: Escape and a click on the backdrop do not close (a signing flow in progress) */
+  /**
+   * False means Escape and a click on the backdrop do not close it, as in a signing flow in
+   * progress.
+   */
   dismissable?: boolean;
-  /** hides the header close button (use with dismissable=false while busy) */
+  /** Hides the header close button. Use it with dismissable=false while busy. */
   hideClose?: boolean;
   'data-testid'?: string;
 }
@@ -21,8 +24,9 @@ export interface ModalProps {
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 /**
- * Modal dialog: `role=dialog`, focus moves into it, Tab is trapped, Escape and backdrop click close it (unless `dismissable=false`),
- * focus returns to the opener on close, and the page behind does not scroll. Render it conditionally: mounted = open.
+ * Modal dialog with `role=dialog`. The focus moves into it, Tab is trapped, and Escape and a
+ * backdrop click close it unless `dismissable=false`. The focus returns to the opener on close,
+ * and the page behind does not scroll. Render it conditionally, as mounted means open.
  */
 export function Modal(props: ModalProps) {
   const box = useRef<HTMLDivElement>(null);
@@ -40,7 +44,8 @@ export function Modal(props: ModalProps) {
     const auto = el?.querySelector<HTMLElement>('[data-autofocus]');
     if (auto) auto.focus();
     else {
-      // focusing the body would scroll a tall dialog past its title and close button: it opens at the top
+      // Focusing the body would scroll a tall dialog past its title and close button. It opens at
+      // the top.
       (el?.querySelector<HTMLElement>('.modal-body') ?? el)?.focus?.({ preventScroll: true });
       if (el?.parentElement) el.parentElement.scrollTop = 0;
     }

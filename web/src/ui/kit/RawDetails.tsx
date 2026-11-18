@@ -1,7 +1,10 @@
 import { tIssue, t, type Params } from '../../i18n';
 import { rawOf, withoutRaw } from '../../i18n/build-error';
 
-/** A raw technical text (builder / node / wallet refusal) kept out of the sentence and shown only on request, behind "Details". */
+/**
+ * A raw technical text (builder, node or wallet refusal) kept out of the sentence and shown only on
+ * request, behind "Details".
+ */
 export function RawDetails(props: { text: string | null | undefined; 'data-testid'?: string }) {
   if (!props.text) return null;
   return (
@@ -12,7 +15,10 @@ export function RawDetails(props: { text: string | null | undefined; 'data-testi
   );
 }
 
-/** One translated finding of the planning layers: a raw builder text inside it is replaced by a plain sentence and kept behind "Details". */
+/**
+ * One translated finding of the planning layers. A raw builder text inside it is replaced by a
+ * plain sentence and kept behind "Details".
+ */
 export function IssueLine(props: { prefix: string; issue: { code: string; message: string; params?: Params } }) {
   return (
     <>
