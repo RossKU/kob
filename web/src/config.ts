@@ -1,17 +1,27 @@
-// Application configuration. Layers, later wins:
-//   1. defaults (mainnet, no indexer, SDK public Resolver node, bundled registry, Kastle off)
-//   2. ./config.json          (optional, fetched next to the app; failure ignored)
-//   3. window.__KOB_CONFIG__  (injected by tests / the hosting page)
-//   4. localStorage `kob.settings` (the Settings screen)
-//   5. URL query `?indexer=&node=&network=&kastle=1`  ONLY when the merged config so far has `allowQueryOverrides: true`
-//      (default false: a link must not silently repoint the app at another indexer or node).
-// The deployment layers (2, 3) can also give each network its own servers (`networks`) and choose the default network by host name (`hostNetworks`,
-// see `deploymentNetwork`). The network in force: a link (when allowed) > a stored setting > `hostNetworks[location.hostname]` > the deployment's
-// `network` > mainnet.
-// `features.test` can only come from layer 3: it exposes the SDK to the test-only mock wallets and must never be switchable by a link,
-// a file next to the app, or a stored setting.
+// Application configuration. The layers are applied in this order, and a later one wins:
+// 1. Defaults: mainnet, no indexer, the SDK public Resolver node, the bundled registry and Kastle
+//    off.
+// 2. `./config.json`, optional and fetched next to the app. A failure is ignored.
+// 3. `window.__KOB_CONFIG__`, injected by tests or the hosting page.
+// 4. localStorage `kob.settings`, from the Settings screen.
+// 5. The URL query `?indexer=&node=&network=&kastle=1`. It applies only when the merged config so
+//    far has `allowQueryOverrides: true`. The default is false, so a link cannot silently repoint
+//    the app at another indexer or node.
 //
-// `mergeConfig` is pure; `loadConfig` reads the environment through injectable dependencies (no DOM access in the pure part).
+// The deployment layers (2 and 3) can also give each network its own servers (`networks`). They
+// can choose the default network by host name (`hostNetworks`, see `deploymentNetwork`). The
+// network in force is the first of these that is set:
+// - A link, when allowed.
+// - A stored setting.
+// - `hostNetworks[location.hostname]`.
+// - The deployment's `network`.
+// - Mainnet.
+//
+// `features.test` can only come from layer 3. It exposes the SDK to the test-only mock wallets, so
+// a link, a file next to the app or a stored setting must never be able to switch it.
+//
+// `mergeConfig` is pure. `loadConfig` reads the environment through injectable dependencies, so
+// the pure part has no DOM access.
 import { normalizeNetwork } from './data/kaspa-sdk';
 import { DEFAULT_FEES, FEE_MAX_KAS_MAX, FEE_MAX_RATE_MAX, FEE_MAX_RATE_MIN, parseMaxFeeKas, parseMaxRate, type FeeSettings } from './kob/fee-policy';
 
@@ -19,92 +29,142 @@ export type NetworkName = 'mainnet' | 'testnet-10';
 
 export interface AppConfig {
   network: NetworkName;
-  /** REST + WebSocket base of the indexer, e.g. `https://kob.example/`; '' = no indexer (orders/book unavailable) */
+  /**
+   * REST and WebSocket base of the indexer, e.g. `https://kob.example/`. '' means no indexer, so
+   * orders and the book are unavailable.
+   */
   indexerUrl: string;
   /**
-   * further indexers the key facts of a token (powers, market price scale, best prices) are cross-checked against (config.json / `__KOB_CONFIG__`, or a
-   * stored setting, which the bell then names on every page; a link must not add verifiers). Empty = a single indexer, unverified.
+   * Further indexers against which the key facts of a token are cross-checked: its powers, market
+   * price scale and best prices. They come from config.json or `__KOB_CONFIG__`, or from a stored
+   * setting, which the bell then names on every page. A link must not add verifiers. Empty means a
+   * single indexer, unverified.
    */
   extraIndexerUrls: string[];
-  /** wRPC (`ws://` / `wss://`) node, '' = a public node the SDK's resolvers name (data/public-node.ts); a mock-server base (`http://` / `https://`) only in test / dev builds */
+  /**
+   * wRPC (`ws://` or `wss://`) node. '' means a public node the SDK's resolvers name
+   * (data/public-node.ts). A mock-server base (`http://` or `https://`) is for test and dev builds
+   * only.
+   */
   nodeUrl: string;
-  /** token registry JSON: a relative path (bundled) or an http(s) URL */
+  /** Token registry JSON: a relative path (bundled) or an http(s) URL. */
   registryUrl: string;
-  /** `priorityFee`: pay the storage-inclusive fee instead of the node's relay floor (default off) */
+  /**
+   * `priorityFee`: pay the storage-inclusive fee instead of the node's relay floor (default off).
+   */
   features: { kastle: boolean; test: boolean; priorityFee: boolean };
   /**
-   * Dynamic priority fee (kob/fee-policy.ts): the rate each transaction pays comes from the node's fee estimate and the action's urgency instead of
-   * the relay floor. `dynamic: false` = always the floor; `maxRate` = highest rate in sompi per gram (floor 100); `maxFeeKas` = most one
-   * transaction pays in total, KAS (0 = no total cap).
+   * Dynamic priority fee (kob/fee-policy.ts). The rate each transaction pays comes from the node's
+   * fee estimate and the urgency of the action, instead of the relay floor. `dynamic: false` means
+   * always the floor. `maxRate` is the highest rate in sompi per gram (floor 100). `maxFeeKas` is
+   * the most one transaction pays in total, in KAS, and 0 means no total cap.
    */
   fees: FeeSettings;
-  /** honour `?indexer=&node=...` (default false) */
+  /** Honour `?indexer=&node=...` (default false). */
   allowQueryOverrides: boolean;
   /**
-   * Tokens that stand for a fiat currency (`{ "<covenant id>": "USD" }`): the first registry token marked `USD` is the app's USD reference (e.g. the TN10
-   * soak's TUSD, which tracks 1 USD worth of KAS). It only sets the landing screen (that token's market opens as TUSD/KAS like every other
-   * market); no ticker is ever renamed and there are no USD-only views.
-   * config.json / `__KOB_CONFIG__` only: a link or a stored setting must not mark a token as a dollar. Empty = every market TOKEN/KAS.
+   * Tokens that stand for a fiat currency (`{ "<covenant id>": "USD" }`). The first registry token
+   * marked `USD` is the app's USD reference, for example the TN10 soak's TUSD, which tracks 1 USD
+   * worth of KAS. It only sets the landing screen, and the market of that token opens as TUSD/KAS
+   * like every other market. No ticker is ever renamed and there are no USD-only views. It comes
+   * from config.json or `__KOB_CONFIG__` only, because a link or a stored setting must not mark a
+   * token as a dollar. Empty means every market is TOKEN/KAS.
    */
   quoteTokens: Record<string, QuoteCurrency>;
   /**
-   * The landing screen (empty hash): `landing` (default: the landing page, src/ui/landing: what KOB is, with its own nav and "Open the app" to `#/market`;
-   * a visitor arriving from outside sees it), `auto` (the USD token's market, <ticker>/KAS, when a USD reference token is configured, else the first
-   * tradable registry token's market, else the market list), `list`, `kas-usd` (the USD token's market), `usd:<covenant id>` (the pair page `<id>/<USD token>`) or `market:<covenant id>`
-   * (that token's market page). The market list stays at `#/market` (header navigation).
+   * The landing screen, for an empty hash. The values are:
+   * - `landing`, the default. It is the landing page in src/ui/landing, which says what KOB is and
+   *   has its own nav and an "Open the app" button to `#/market`. A visitor arriving from outside
+   *   sees it.
+   * - `auto`. It opens the market of the USD token, <ticker>/KAS, when a USD reference token is
+   *   configured. Otherwise it opens the market of the first tradable registry token, and
+   *   otherwise the market list.
+   * - `list`.
+   * - `kas-usd`, the market of the USD token.
+   * - `usd:<covenant id>`, the pair page `<id>/<USD token>`.
+   * - `market:<covenant id>`, the market page of that token.
+   *
+   * The market list stays at `#/market`, which the header navigation reaches.
    */
   home: HomeSetting;
   /**
-   * Block explorer base URL for transaction links (recent trades, My orders): `https://tn10.kaspa.stream` on testnet-10, `https://kaspa.stream` on mainnet
-   * (see `explorerTxUrl`). '' = that default for `network`. config.json / `__KOB_CONFIG__` only: a link or a stored setting must not repoint the links.
+   * Block explorer base URL for transaction links (recent trades, My orders). It is
+   * `https://tn10.kaspa.stream` on testnet-10 and `https://kaspa.stream` on mainnet (see
+   * `explorerTxUrl`). '' means that default for `network`. It comes from config.json or
+   * `__KOB_CONFIG__` only, because a link or a stored setting must not repoint the links.
    */
   explorerUrl: string;
   /**
-   * Where the market list gets token NAMES and ICONS from (data/kascov.ts): the base of a kascov.io-shaped data set, read as
-   * `<tokenNamesUrl>/<network>/tokens.json` (the creators' claimed ticker, name and image hash; KOB keeps no token list of its own). https only;
-   * '' turns the feature off (no request is made, the list is what the registry and the indexer give). Default `https://kascov.io/data`.
-   * config.json / `__KOB_CONFIG__` only: a link or a stored setting must not repoint it (docs/ops/web-hosting.md).
+   * Where the market list gets token names and icons from (data/kascov.ts). It is the base of a
+   * kascov.io-shaped data set, read as `<tokenNamesUrl>/<network>/tokens.json`. That file holds
+   * the ticker, name and image hash that the creators claim, and KOB keeps no token list of its
+   * own. https only. '' turns the feature off, so no request is made and the list is what the
+   * registry and the indexer give. The default is `https://kascov.io/data`. It comes from
+   * config.json or `__KOB_CONFIG__` only, because a link or a stored setting must not repoint it
+   * (docs/ops/web-hosting.md).
    */
   tokenNamesUrl: string;
   /**
-   * How far (basis points) the start of a market / close order (the best price of the indexer book) may be on the costly side of an independent
-   * reference (another indexer's best price, `extraIndexerUrls`) before the order cannot be placed. config.json / `__KOB_CONFIG__` only (a link or
-   * a stored setting must not loosen it); 10 to 5000, default 1000 (10 %).
+   * How far, in basis points, the start of a market or close order may be on the costly side of an
+   * independent reference before the order cannot be placed. The start is the best price of the
+   * indexer book. The reference is another indexer's best price (`extraIndexerUrls`). The range is
+   * 10 to 5000 and the default is 1000, which is 10 %. It comes from config.json or
+   * `__KOB_CONFIG__` only, because a link or a stored setting must not loosen it.
    */
   marketStartToleranceBps: number;
   /**
-   * The token-logo blocklist the app reads (data/logo-blocklist.ts): `GET <logoBlocklistUrl>` returns `{hidden: [covenant ids]}`, and a report is posted to the
-   * `logo-reports` route beside it. '' (default) = `<indexerUrl>/v1/logo-blocklist`. http(s) only. config.json / `__KOB_CONFIG__` only: a link or a stored
-   * setting must not repoint it. An indexer without the route is simply read as an empty list (logos show).
+   * The token-logo blocklist the app reads (data/logo-blocklist.ts). `GET <logoBlocklistUrl>`
+   * returns `{hidden: [covenant ids]}`, and a report is posted to the `logo-reports` route beside
+   * it. '' is the default and means `<indexerUrl>/v1/logo-blocklist`. http(s) only. It comes from
+   * config.json or `__KOB_CONFIG__` only, because a link or a stored setting must not repoint it.
+   * An indexer without the route is read as an empty list, so logos show.
    */
   logoBlocklistUrl: string;
   /**
-   * The IPFS gateway an `ipfs://` token logo is fetched through, as bytes (data/logos.ts): `<ipfsGatewayUrl>/<cid>`. https only; '' turns `ipfs://` logos off.
-   * Default `https://dweb.link/ipfs`. config.json / `__KOB_CONFIG__` only.
+   * The IPFS gateway an `ipfs://` token logo is fetched through, as bytes (data/logos.ts), at
+   * `<ipfsGatewayUrl>/<cid>`. https only. '' turns `ipfs://` logos off. The default is
+   * `https://dweb.link/ipfs`. It comes from config.json or `__KOB_CONFIG__` only.
    */
   ipfsGatewayUrl: string;
   /**
-   * Standalone mode (data/standalone.ts: the market from the node's blocks, no indexer): `manual` on from the start (the indexer is not asked for the
-   * market), `auto` fall back to it when the indexer cannot be used (default on), `autoReturn` go back to the indexer once it answers again (default on;
-   * off: the bell offers to). Any layer, the Settings screen included.
+   * Standalone mode (data/standalone.ts), the market from the node's blocks with no indexer. It
+   * applies on any layer, the Settings screen included. The fields are:
+   * - `manual`: on from the start, so the indexer is not asked for the market.
+   * - `auto`: fall back to it when the indexer cannot be used (default on).
+   * - `autoReturn`: go back to the indexer once it answers again (default on). When off, the bell
+   *   offers to.
    */
   standalone: StandaloneSettings;
   /**
-   * The network the deployment's top-level servers belong to (the `network` of config.json / `__KOB_CONFIG__`, else the default): its top-level
-   * `indexerUrl`, `nodeUrl`, `extraIndexerUrls`, `registryUrl`, `explorerUrl`, `logoBlocklistUrl`, `quoteTokens` and a market-bound `home` (the
-   * NETWORK_SERVER_FIELDS) are for THAT network. Computed, never read from a layer. It is also the default network, unless `hostNetworks` names one for the
-   * page's host. On another network X those fields come from `networks[X]` of the deployment (a field the entry leaves out is the default, never the
-   * top-level value); without `networks[X]` they are all the defaults: another network is never read through the first one's servers. What a stored
-   * setting or a link names itself still wins on any network.
+   * The network the deployment's top-level servers belong to. It is the `network` of config.json
+   * or `__KOB_CONFIG__`, else the default. Its top-level `indexerUrl`, `nodeUrl`,
+   * `extraIndexerUrls`, `registryUrl`, `explorerUrl`, `logoBlocklistUrl`, `quoteTokens` and a
+   * market-bound `home` (the NETWORK_SERVER_FIELDS) are for that network. It is computed and never
+   * read from a layer. It is also the default network, unless `hostNetworks` names one for the
+   * host of the page.
+   *
+   * On another network X those fields come from `networks[X]` of the deployment. A field the
+   * entry leaves out is the default, never the top-level value. Without `networks[X]` they are all
+   * the defaults, so another network is never read through the servers of the first one. What a
+   * stored setting or a link names itself still wins on any network.
    */
   deploymentNetwork: NetworkName;
-  /** The network this host defaults to: `hostNetworks` for the page's host, else `deploymentNetwork`. Computed, never read from a layer. The header switch clears a stored choice that equals it. */
+  /**
+   * The network this host defaults to: `hostNetworks` for the page's host, else
+   * `deploymentNetwork`. Computed, never read from a layer. The header switch clears a stored
+   * choice that equals it.
+   */
   hostNetwork: NetworkName;
-  /** The networks the deployment has servers for: `deploymentNetwork` and every network of `networks`. Computed, never read from a layer. */
+  /**
+   * The networks the deployment has servers for: `deploymentNetwork` and every network of
+   * `networks`. Computed, never read from a layer.
+   */
   serverNetworks: NetworkName[];
   /**
-   * The deployment pins its network: the header chip offers no switch (the chip is a plain label). config.json / `__KOB_CONFIG__` only (a link or a stored
-   * setting must not unlock or lock it); default false. It hides the header switch only: the Settings screen still saves a network.
+   * The deployment pins its network, so the header chip offers no switch and is a plain label. It
+   * comes from config.json or `__KOB_CONFIG__` only, because a link or a stored setting must not
+   * unlock or lock it. The default is false. It hides the header switch only, and the Settings
+   * screen still saves a network.
    */
   lockNetwork: boolean;
 }
@@ -124,7 +184,9 @@ export const CONFIG_JSON_PATH = './config.json';
 
 /** The token-names source of a deployment that sets none (`AppConfig.tokenNamesUrl`). */
 export const DEFAULT_TOKEN_NAMES_URL = 'https://kascov.io/data';
-/** The IPFS gateway of a deployment that sets none (`AppConfig.ipfsGatewayUrl`; no trailing slash). */
+/**
+ * The IPFS gateway of a deployment that sets none (`AppConfig.ipfsGatewayUrl`; no trailing slash).
+ */
 export const DEFAULT_IPFS_GATEWAY_URL = 'https://dweb.link/ipfs';
 
 export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
@@ -175,9 +237,11 @@ const RPC_SCHEMES = ['ws:', 'wss:', 'http:', 'https:'];
 const HTTP_SCHEMES = ['http:', 'https:'];
 
 /**
- * Trimmed absolute URL of an allowed scheme, without a trailing slash; null when invalid. '' is valid (= unset). A query string or a fragment is refused on every layer
- * (config.json is public and a secret in it would be served to everyone; the app appends paths to these URLs, which a query would break; one rule for a stored setting
- * and a link too).
+ * Trimmed absolute URL of an allowed scheme, without a trailing slash. It is null when invalid,
+ * and '' is valid and means unset. A query string or a fragment is refused on every layer. The
+ * reasons are that config.json is public and a secret in it would be served to everyone, that the
+ * app appends paths to these URLs and a query would break them, and that one rule serves a stored
+ * setting and a link too.
  */
 export function validateUrl(value: unknown, schemes: readonly string[] = RPC_SCHEMES): string | null {
   if (typeof value !== 'string') return null;
@@ -196,8 +260,10 @@ export function validateUrl(value: unknown, schemes: readonly string[] = RPC_SCH
 }
 
 /**
- * The form two spellings of one indexer share: scheme and host lower-cased, the scheme's default port dropped, trailing slashes of the path
- * removed (`https://IDX.example:443/` = `https://idx.example`). An unparsable value is its own key.
+ * The form two spellings of one indexer share. The scheme and host are lower-cased, the default
+ * port of the scheme is dropped and trailing slashes of the path are removed, so
+ * `https://IDX.example:443/` and `https://idx.example` are one key. An unparsable value is its own
+ * key.
  */
 export function indexerKey(url: string): string {
   try {
@@ -227,10 +293,15 @@ export const NETWORK_NAMES: readonly NetworkName[] = ['mainnet', 'testnet-10'];
 /** A network spelled exactly (the keys of `networks`, the values of `hostNetworks`), or null. */
 const exactNetwork = (v: unknown): NetworkName | null => ((NETWORK_NAMES as readonly unknown[]).includes(v) ? (v as NetworkName) : null);
 
-/** The fields that belong to one network: the top-level ones are `deploymentNetwork`'s, an entry of `networks` holds another network's. */
+/**
+ * The fields that belong to one network: the top-level ones are `deploymentNetwork`'s, an entry of
+ * `networks` holds another network's.
+ */
 export const NETWORK_SERVER_FIELDS = ['indexerUrl', 'extraIndexerUrls', 'nodeUrl', 'registryUrl', 'explorerUrl', 'logoBlocklistUrl', 'quoteTokens', 'home'] as const;
 const NETWORK_URL_FIELDS: readonly string[] = ['indexerUrl', 'extraIndexerUrls', 'nodeUrl', 'registryUrl', 'explorerUrl', 'logoBlocklistUrl'];
-/** One network's servers (an entry of `networks`): only fields that were present and valid are set. */
+/**
+ * One network's servers (an entry of `networks`): only fields that were present and valid are set.
+ */
 export type NetworkServers = Pick<ConfigPatch, (typeof NETWORK_SERVER_FIELDS)[number]>;
 
 /** The NETWORK_SERVER_FIELDS that `src` sets. */
@@ -239,13 +310,18 @@ function pickServers(src: ConfigPatch | AppConfig): NetworkServers {
   return Object.fromEntries(NETWORK_SERVER_FIELDS.filter((f) => r[f] !== undefined).map((f) => [f, r[f]])) as NetworkServers;
 }
 
-/** A host name of `hostNetworks`: labels of lower-case letters, digits and dashes (no port, path or wildcard). */
+/**
+ * A host name of `hostNetworks`: labels of lower-case letters, digits and dashes (no port, path or
+ * wildcard).
+ */
 const HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
 /** The form a host name is compared in: trimmed, lower-cased, without a trailing dot. */
 export const hostKey = (host: string): string => host.trim().toLowerCase().replace(/\.$/, '');
 
 
-/** `1` / `true` / `on` / `yes` -> true, `0` / `false` / `off` / `no` -> false, anything else -> null */
+/**
+ * `1` / `true` / `on` / `yes` -> true, `0` / `false` / `off` / `no` -> false, anything else -> null
+ */
 function parseFlag(v: unknown): boolean | null {
   if (typeof v === 'boolean') return v;
   if (typeof v !== 'string') return null;
@@ -282,7 +358,9 @@ export interface ConfigPatch {
   lockNetwork?: boolean;
   /** deployment only: the servers of each network (`networks`) */
   networks?: Partial<Record<NetworkName, NetworkServers>>;
-  /** deployment only: the default network of a host name (`hostNetworks`, keys in `hostKey` form) */
+  /**
+   * deployment only: the default network of a host name (`hostNetworks`, keys in `hostKey` form)
+   */
   hostNetworks?: Record<string, NetworkName>;
 }
 
@@ -351,7 +429,8 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
       }
     } else bad('features', 'features object');
   }
-  // fiat labels: only from the deployment (config.json / __KOB_CONFIG__), never from a link or a stored setting
+  // fiat labels: only from the deployment (config.json / __KOB_CONFIG__), never from a link or a
+  // stored setting
   const deployment = layer === 'config.json' || layer === '__KOB_CONFIG__';
   if ('quoteTokens' in raw) {
     if (!deployment) warnings.push({ layer, field: 'quoteTokens', message: 'only honoured in config.json / window.__KOB_CONFIG__, ignored' });
@@ -507,13 +586,17 @@ export interface ConfigLayers {
 }
 
 /**
- * A node, indexer or registry URL that this browser's stored settings (localStorage `kob.settings`) put in force instead of the deployment's: it applies to every
- * later visit, so the app says so on every page (`deployment`: what config.json / `__KOB_CONFIG__` / the defaults would have used).
+ * A node, indexer or registry URL that this browser's stored settings (localStorage
+ * `kob.settings`) put in force instead of the deployment's. It applies to every later visit, so
+ * the app says so on every page. `deployment` is what config.json, `__KOB_CONFIG__` or the
+ * defaults would have used.
  */
 export interface StoredOverride {
   /**
-   * `extraIndexerUrls`: the stored list of further indexers (`value` / `deployment`: the URLs joined by ', ') that the market start is checked
-   * against; `allowQueryOverrides`: a stored `true` that lets links repoint the node and the indexer (`value` 'true', `deployment` 'false').
+   * `extraIndexerUrls`: the stored list of further indexers that the market start is checked
+   * against. `value` and `deployment` are the URLs joined by ', '. `allowQueryOverrides`: a stored
+   * `true` that lets links repoint the node and the indexer, with `value` 'true' and `deployment`
+   * 'false'.
    */
   field: 'indexerUrl' | 'nodeUrl' | 'registryUrl' | 'extraIndexerUrls' | 'allowQueryOverrides';
   value: string;
@@ -552,9 +635,10 @@ function apply(base: AppConfig, p: ConfigPatch): AppConfig {
 }
 
 /**
- * `cfg` without the deployment's top-level servers (for another network than `deploymentNetwork`): the indexer, further indexers, node, registry, explorer,
- * logo blocklist, dollar token and a market-bound landing screen go back to the defaults (no indexer, the SDK's public node for the network, the bundled
- * registry, the explorer of the network).
+ * `cfg` without the deployment's top-level servers, for another network than `deploymentNetwork`.
+ * The indexer, further indexers, node, registry, explorer, logo blocklist, dollar token and a
+ * market-bound landing screen go back to the defaults. That means no indexer, the SDK's public
+ * node for the network, the bundled registry and the explorer of the network.
  */
 function withoutDeploymentServers(cfg: AppConfig): AppConfig {
   const bound = cfg.home.startsWith('usd:') || cfg.home.startsWith('market:');
@@ -578,7 +662,8 @@ export function resolveConfig(layers: ConfigLayers = {}): ResolvedConfig {
   const injected = sanitizeLayer('__KOB_CONFIG__', layers.injected, true, warnings);
   let top = apply({ ...DEFAULT_CONFIG, features: { ...DEFAULT_CONFIG.features }, fees: { ...DEFAULT_CONFIG.fees }, quoteTokens: { ...DEFAULT_CONFIG.quoteTokens }, standalone: { ...DEFAULT_CONFIG.standalone } }, {});
   top = apply(apply(top, file), injected);
-  // the top-level servers are the deployment network's; `networks` (field by field, __KOB_CONFIG__ over config.json) holds the others'
+  // The top-level servers are the deployment network's. `networks` holds the others', field by
+  // field, with `__KOB_CONFIG__` over config.json.
   const deploymentNetwork = top.network;
   const networks: Partial<Record<NetworkName, NetworkServers>> = {};
   for (const n of NETWORK_NAMES) if (file.networks?.[n] || injected.networks?.[n]) networks[n] = { ...file.networks?.[n], ...injected.networks?.[n] };
@@ -586,7 +671,10 @@ export function resolveConfig(layers: ConfigLayers = {}): ResolvedConfig {
   const host = layers.host ? hostKey(layers.host) : '';
   const hostNetwork = (host && Object.prototype.hasOwnProperty.call(hostNetworks, host) ? hostNetworks[host] : undefined) ?? deploymentNetwork;
   top = { ...top, deploymentNetwork, hostNetwork, serverNetworks: [deploymentNetwork, ...NETWORK_NAMES.filter((n) => n !== deploymentNetwork && networks[n])] };
-  /** The deployment's configuration on network `n`: the top-level servers on `deploymentNetwork`, else the defaults; then `networks[n]`. */
+  /**
+   * The deployment's configuration on network `n`: the top-level servers on `deploymentNetwork`,
+   * else the defaults; then `networks[n]`.
+   */
   const forNetwork = (n: NetworkName): AppConfig => {
     const on = { ...top, network: n };
     return apply(n === deploymentNetwork ? on : withoutDeploymentServers(on), networks[n] ?? {});
@@ -606,17 +694,20 @@ export function resolveConfig(layers: ConfigLayers = {}): ResolvedConfig {
       if (used.length) warnings.push({ layer: 'query', field: used.join(','), message: 'query overrides are disabled (allowQueryOverrides is false), ignored' });
     }
   }
-  // a stored setting or a link chose another network than the default: the deployment's servers of THAT network (never the default one's), and what the
-  // stored setting or the link names itself on top
+  // A stored setting or a link chose another network than the default. Use the deployment's
+  // servers of that network, never the default one's, and put on top what the stored setting or
+  // the link names itself.
   if (cfg.network !== deployment.network) {
     deployment = forNetwork(cfg.network);
     cfg = apply(apply(cfg, pickServers(deployment)), pickServers({ ...stored, ...queried }));
   }
-  // only a stored value that is still in force (a link did not replace it) and differs from the deployment's
+  // only a stored value that is still in force (a link did not replace it) and differs from the
+  // deployment's
   const storedOverrides: StoredOverride[] = (['indexerUrl', 'nodeUrl', 'registryUrl'] as const)
     .filter((f) => stored[f] !== undefined && stored[f] === cfg[f] && cfg[f] !== deployment[f])
     .map((f): StoredOverride => ({ field: f, value: cfg[f], deployment: deployment[f] }));
-  // the further indexers a stored setting names are the references of the market-start check: said like a stored indexer
+  // the further indexers a stored setting names are the references of the market-start check: said
+  // like a stored indexer
   const list = (xs: readonly string[]): string => xs.join(', ');
   if (stored.extraIndexerUrls !== undefined && list(cfg.extraIndexerUrls) !== list(deployment.extraIndexerUrls)) {
     storedOverrides.push({ field: 'extraIndexerUrls', value: list(cfg.extraIndexerUrls), deployment: list(deployment.extraIndexerUrls) });
@@ -629,7 +720,7 @@ export function resolveConfig(layers: ConfigLayers = {}): ResolvedConfig {
 
 export const mergeConfig = (layers: ConfigLayers = {}): AppConfig => resolveConfig(layers).config;
 
-// ------------------------------------------------------------------------------------------------ user settings (localStorage)
+// User settings (localStorage).
 
 export interface StorageLike {
   getItem(key: string): string | null;
@@ -637,7 +728,9 @@ export interface StorageLike {
   removeItem?(key: string): void;
 }
 
-/** The browser's localStorage, or null when unavailable or blocked (the accessor itself can throw). */
+/**
+ * The browser's localStorage, or null when unavailable or blocked (the accessor itself can throw).
+ */
 export function defaultStorage(): StorageLike | null {
   try {
     return typeof localStorage !== 'undefined' ? localStorage : null;
@@ -667,7 +760,10 @@ export interface UserSettings {
   standalone?: { manual?: boolean; auto?: boolean; autoReturn?: boolean };
 }
 
-/** Merges `patch` into the stored settings (validated: invalid fields are dropped). `null` values remove a field. */
+/**
+ * Merges `patch` into the stored settings (validated: invalid fields are dropped). `null` values
+ * remove a field.
+ */
 export function saveSettings(patch: Record<string, unknown>, storage: StorageLike | null = defaultStorage()): boolean {
   try {
     if (!storage) return false;
@@ -713,7 +809,7 @@ export function saveSettings(patch: Record<string, unknown>, storage: StorageLik
   }
 }
 
-// ------------------------------------------------------------------------------------------------ loadConfig
+// loadConfig.
 
 export interface LoadConfigDeps {
   fetch?: typeof fetch | null;
@@ -745,7 +841,10 @@ async function fetchConfigJson(deps: LoadConfigDeps): Promise<unknown> {
   }
 }
 
-/** Reads every layer from the environment (all injectable) and merges them; also reports what was ignored. */
+/**
+ * Reads every layer from the environment (all injectable) and merges them; also reports what was
+ * ignored.
+ */
 export async function loadConfigWithWarnings(deps: LoadConfigDeps = {}): Promise<ResolvedConfig> {
   const g = globalThis as { __KOB_CONFIG__?: unknown; location?: { search?: string; hostname?: string } };
   const layers: ConfigLayers = {
@@ -758,5 +857,8 @@ export async function loadConfigWithWarnings(deps: LoadConfigDeps = {}): Promise
   return resolveConfig(layers);
 }
 
-/** The merged application configuration (invalid values are silently ignored: see loadConfigWithWarnings). */
+/**
+ * The merged application configuration. Invalid values are silently ignored, see
+ * `loadConfigWithWarnings`.
+ */
 export const loadConfig = async (deps: LoadConfigDeps = {}): Promise<AppConfig> => (await loadConfigWithWarnings(deps)).config;
