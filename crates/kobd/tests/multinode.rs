@@ -1,7 +1,8 @@
-//! Several nodes (`rpc::multi`): the primary is the chain authority, windows of transaction bodies come from every node and
-//! are checked against the primary before they are applied. Mock nodes on one shared chain: one slow, one that does not know
-//! the newest blocks, and liars of several kinds. The database must equal a clean replay of the chain, a liar must be found
-//! and dropped, and nothing it altered may reach the database.
+//! Several nodes (`rpc::multi`): the primary is the chain authority, windows of transaction bodies
+//! come from every node and are checked against the primary before they are applied. Mock nodes on
+//! one shared chain: one slow, one that does not know the newest blocks, and liars of several
+//! kinds. The database must equal a clean replay of the chain, a liar must be found and dropped,
+//! and nothing it altered may reach the database.
 
 mod common;
 
@@ -487,9 +488,10 @@ async fn a_node_inflating_the_window_end_cannot_make_the_primary_fail() {
     assert_eq!(st[1].windows_ok, 3, "{:?}", st[1]);
 }
 
-/// A node whose answers claim a frame beyond the client's absolute limit (1 GiB) fails the window itself: it backs off
-/// and the window goes to the next node. Before, the claim was taken for the window's size: the window was split down to
-/// one chain block, asked for without a limit and offered to the same node again, forever, inside one step.
+/// A node whose answers claim a frame beyond the client's absolute limit (1 GiB) fails the window
+/// itself: it backs off and the window goes to the next node. The claim is not taken for the
+/// window's size, which would split the window down to one chain block, ask for it without a limit
+/// and offer it to the same node again, forever, inside one step.
 #[tokio::test]
 async fn a_node_claiming_an_oversized_frame_is_charged_and_its_windows_go_elsewhere() {
     let c = Ctx::new();

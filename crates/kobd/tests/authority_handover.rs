@@ -1,9 +1,10 @@
-//! A chain authority that stays reachable while its chain requests fail (`rpc::multi`, `MultiNode::authority_failing`;
-//! `indexer::follower`, *A failing chain authority*). Mock nodes on one shared chain: a primary whose VSPC and chain requests
-//! time out while its small calls answer hands the authority over to the other node, and the store catches up to a clean
-//! replay; a node whose chain does not continue the cursor, or one that lied, is never promoted; a single node is retried with
-//! the backoff and nothing is promoted; the old primary that recovers is a secondary again and takes the authority back only
-//! when the new one fails the same way.
+//! A chain authority that stays reachable while its chain requests fail (`rpc::multi`,
+//! `MultiNode::authority_failing`; `indexer::follower`, *A failing chain authority*). Mock nodes on
+//! one shared chain: a primary whose VSPC and chain requests time out while its small calls answer
+//! hands the authority over to the other node, and the store catches up to a clean replay; a node
+//! whose chain does not continue the cursor, or one that lied, is never promoted; a single node is
+//! retried with the backoff and nothing is promoted; the old primary that recovers is a secondary
+//! again and takes the authority back only when the new one fails the same way.
 
 mod common;
 
@@ -23,9 +24,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// A node whose chain requests (VSPC, chain hashes, the acceptance data) can time out while every small call answers (the
-/// incident of 2026-11-13: health and sink fine, chain requests reset or timed out), or that alters an output of the
-/// windows it serves (a liar).
+/// A node whose chain requests (VSPC, chain hashes, the acceptance data) can time out while every
+/// small call answers (health and sink fine, chain requests reset or timed out), or that alters an
+/// output of the windows it serves (a liar).
 struct Flaky {
     node: Arc<MockNode>,
     chain_down: AtomicBool,
@@ -210,10 +211,11 @@ fn grow(c: &Ctx, blocks: u64, salt: u64) {
     }
 }
 
-/// The incident of 2026-11-13: the primary's health and sink answer, its chain requests time out. After two of them in a row
-/// (and the stall, zero here) the other node is the chain authority, the store catches up to the tip on it and equals a clean
-/// replay. The swap is in the health (roles, `promoted`, the old primary cut off with a node alarm, the authority counter)
-/// and on the status line. Sequential steps and the parallel fetch alike.
+/// The primary's health and sink answer, its chain requests time out. After two of them in a row
+/// (and the stall, zero here) the other node is the chain authority, the store catches up to the
+/// tip on it and equals a clean replay. The swap is in the health (roles, `promoted`, the old
+/// primary cut off with a node alarm, the authority counter) and on the status line. Sequential
+/// steps and the parallel fetch alike.
 #[tokio::test]
 async fn a_primary_whose_chain_requests_time_out_hands_the_authority_to_the_other_node() {
     let _g = serial().await;
@@ -412,9 +414,10 @@ async fn a_submit_only_node_is_never_promoted() {
     assert!(kobd::rpc::judge::alarm_of(ua).is_some_and(|w| w.contains("chain requests keep failing")), "the primary's alarm");
 }
 
-/// The new authority's answers stay checked until the cursor moves (`MultiNode::settle`). Its chain hashes from the cursor
-/// continue it, but its VSPC answer from the same cursor removes 130 chain blocks: refused, nothing reverted. Before, the
-/// chain hashes ended the check and the VSPC answer was applied as a reorg.
+/// The new authority's answers stay checked until the cursor moves (`MultiNode::settle`). Its chain
+/// hashes from the cursor continue it, but its VSPC answer from the same cursor removes 130 chain
+/// blocks: refused, nothing reverted. The chain hashes alone do not end the check, so the VSPC
+/// answer is never applied as a reorg.
 #[tokio::test]
 async fn every_answer_from_the_handover_cursor_is_checked_not_only_the_first() {
     let _g = serial().await;
