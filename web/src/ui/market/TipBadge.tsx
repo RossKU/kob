@@ -1,17 +1,22 @@
-// A short warn badge with its full sentence behind it: a hover shows the sentence as a tooltip, and a tap or the keyboard (Enter / Space on the focused badge)
-// opens it as a small panel (a title tooltip does not exist on a touch screen). The panel is fixed to the viewport so a list row, which cuts what overflows
-// it, does not cut it. A tap on the badge closes it again, as do Escape, a tap elsewhere, a scroll and a resize. Same behaviour as the "High risk" chip.
+// A short warn badge with its full sentence behind it. A hover shows the sentence as a tooltip. A
+// tap, or the keyboard (Enter or Space on the focused badge), opens it as a small panel, because a
+// title tooltip does not exist on a touch screen. The panel is fixed to the viewport so that a
+// list row, which cuts what overflows it, does not cut it. A tap on the badge closes it again, as
+// do Escape, a tap elsewhere, a scroll and a resize. The behaviour is the same as the "High risk"
+// chip.
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 
 /**
- * `variant` 'warn' (default): the warning badge. 'tag': a small muted tag with a (?) (the summary cards' "Estimate (?)"): the same panel and behaviour, no space before it
- * (the caller places it).
+ * `variant` 'warn' is the default warning badge. 'tag' is a small muted tag with a (?), such as
+ * the summary cards' "Estimate (?)". It has the same panel and behaviour, and no space before it,
+ * because the caller places it.
  */
 export function TipBadge(props: { label: string; detail: string; 'data-testid': string; 'data-detail-testid': string; variant?: 'warn' | 'tag' }) {
   const tag = props.variant === 'tag';
   const [pos, setPos] = useState<{ left: number; top: number; scrollY: number } | null>(null);
   const button = useRef<HTMLButtonElement>(null);
-  // a layout effect: the listeners must exist in the same frame the panel appears (a passive effect runs after the next paint and an Escape or tap in between was lost)
+  // A layout effect, because the listeners must exist in the same frame the panel appears. A
+  // passive effect runs after the next paint, and an Escape or tap in between would be lost.
   useLayoutEffect(() => {
     if (!pos) return;
     const close = () => setPos(null);
@@ -27,8 +32,10 @@ export function TipBadge(props: { label: string; detail: string; 'data-testid': 
     };
     document.addEventListener('keydown', onKey);
     document.addEventListener('pointerdown', onDown);
-    // a scroll closes it (the panel is fixed to the viewport and would stay behind the badge), but the page's own scroll that already happened (an event
-    // still on its way when the badge was tapped) is not one: only a scroll that moved the page since the panel opened, or of another scroller, does
+    // A scroll closes it, because the panel is fixed to the viewport and would stay behind the
+    // badge. The page's own scroll that already happened, an event still on its way when the badge
+    // was tapped, is not one. Only a scroll that moved the page since the panel opened, or of
+    // another scroller, closes it.
     const onScroll = (e: Event) => {
       if (e.target === document && Math.abs(window.scrollY - pos.scrollY) < 1) return;
       close();

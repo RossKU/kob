@@ -14,33 +14,49 @@ function Stat(props: { label: string; value: string | null; title?: string | nul
 }
 
 /**
- * 24 h statistics strip (`/v1/stats`), the figures of the market bar (MarketBar.tsx): last price (coloured by the aggressor side) with its change, high, low, volume in the token and in KAS,
- * trades. One flat row of cells split by thin rules; where the bar has no room it scrolls sideways inside itself (market.css). A price rounded to the market's display decimals has the whole price as its title.
+ * The 24 h statistics strip (`/v1/stats`), the figures of the market bar (MarketBar.tsx). It shows
+ * the last price, coloured by the aggressor side, with its change, then high, low, the volume in
+ * the token and in KAS, and trades. It is one flat row of cells split by thin rules. Where the
+ * bar has no room it scrolls sideways inside itself (market.css). A price rounded to the market's
+ * display decimals has the whole price as its title.
  */
 export function MarketStats(props: {
   model: StatsModel;
-  /** display name of the token */
+  /** Display name of the token. */
   ticker: string;
-  /** shown as KAS/TOKEN: price unit TOKEN / KAS, volumes in KAS and in the token */
+  /** Shown as KAS/TOKEN, with price unit TOKEN / KAS and volumes in KAS and in the token. */
   inverted?: boolean;
   loading: boolean;
   unsupported: boolean;
-  /** the figures are let in: they fade in together */
+  /** The figures are let in, and they fade in together. */
   open?: boolean;
-  /** the KAS tiles are shown in USD (Settings, Display currency; stats-usd.ts): the unit and the volume label say USD */
+  /**
+   * The KAS tiles are shown in USD (Settings, Display currency; stats-usd.ts). The unit and the
+   * volume label say USD.
+   */
   usd?: boolean;
-  /** the tooltip tail of the last price (its KAS figure and the rate used) */
+  /** The tooltip tail of the last price: its KAS figure and the rate used. */
   lastTitle?: string | null;
-  /** a token pair BASE/QUOTE (`ticker` = BASE): the same tiles; `titles` say where each figure comes from */
+  /**
+   * A token pair BASE/QUOTE, where `ticker` is BASE. It has the same tiles, and `titles` say where
+   * each figure comes from.
+   */
   quoteTicker?: string;
-  /** tooltips of a pair's tiles by where their figure comes from (the exact figure of a volume is added in front) */
+  /**
+   * Tooltips of a pair's tiles by where their figure comes from. The exact figure of a volume is
+   * added in front.
+   */
   titles?: Partial<Record<'high' | 'low' | 'volume' | 'quoteVolume' | 'trades', string | null>>;
-  /** a pair: where the volume and trade tiles come from (`fills`, `fills-partial`, `candles`, `none`) */
+  /**
+   * A pair: where the volume and trade tiles come from (`fills`, `fills-partial`, `candles` or
+   * `none`).
+   */
   volumeSource?: string;
 }) {
   const tip = (exact: string | null | undefined, note: string | null | undefined): string | null => (exact && note ? `${exact} · ${note}` : (exact ?? note ?? null));
   const base = props.quoteTicker ? props.ticker : props.inverted ? 'KAS' : props.ticker;
-  // the label of the BASE volume tile: a flipped market's KAS volume reads USD when it is shown in dollars (the price unit above keeps KAS)
+  // The label of the BASE volume tile. A flipped market's KAS volume reads USD when it is shown in
+  // dollars, while the price unit above keeps KAS.
   const volumeBase = props.inverted && props.usd ? 'USD' : base;
   const quote = props.quoteTicker ?? (props.inverted ? props.ticker : props.usd ? 'USD' : 'KAS');
   const m = props.model;
