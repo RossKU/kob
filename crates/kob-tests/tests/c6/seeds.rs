@@ -1,7 +1,8 @@
-//! The seed corpus: every builder shape of the golden-vector fixtures on every token program, every pair order shape
-//! (plain, conditional, if-done, netting, both evidence modes, repeat merges) on mixed program pairs and every
-//! budget branch shape of the pair inputs, wide batches, and "one maker" variants of the multi-order batches (every order
-//! of the batch made by the same key, so a single output serving two orders shows up in that maker's books).
+//! Builds the seed corpus: every builder shape of the golden-vector fixtures on every token
+//! program, every pair order shape (plain, conditional, if-done, netting, both evidence modes,
+//! repeat merges) on mixed program pairs and every budget branch shape of the pair inputs, wide
+//! batches, and "one maker" variants of the multi-order batches (every order of the batch made by
+//! the same key, so a single output serving two orders shows up in that maker's books).
 
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::build::{build_with, Action};

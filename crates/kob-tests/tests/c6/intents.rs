@@ -1,8 +1,10 @@
-//! Router intent seeds: every one of the 18 KCC-20 router actors (fill shapes, on the 8/8 program; the 3/3 and KRON
-//! programs and the KRON actors run in `kob-protocol/tests/intent_builders.rs`) executed by a keeper against plain asks and bids
-//! (no signature at all: every input is a covenant), and every intent kind expired by anyone. The fixtures mirror
-//! `kob-protocol/tests/intent_builders.rs`; the intent UTXO and its lock carry a synthetic covenant id (the engine checks
-//! the covenant context of the spending transaction, not the history of its inputs).
+//! Builds the router intent seeds: every one of the 18 KCC-20 router actors (fill shapes, on the
+//! 8/8 program; the 3/3 and KRON programs and the KRON actors run in
+//! `kob-protocol/tests/intent_builders.rs`) executed by a keeper against plain asks and bids (no
+//! signature at all: every input is a covenant), and every intent kind expired by anyone. The
+//! fixtures mirror `kob-protocol/tests/intent_builders.rs`; the intent UTXO and its lock carry a
+//! synthetic covenant id (the engine checks the covenant context of the spending transaction, not
+//! the history of its inputs).
 
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::build::{
