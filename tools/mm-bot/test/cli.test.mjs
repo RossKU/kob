@@ -90,6 +90,9 @@ test('config: the defaults plus a token pass; bad values are listed together', (
   assert.ok(bad.some((p) => /network/.test(p)));
   assert.ok(bad.some((p) => /pin the token by its covenant id/.test(p)));
   assert.ok(bad.some((p) => /repriceThreshold must be below/.test(p)));
+  assert.ok(validate({ ...ok, reference: { ...ok.reference, pairAgreement: 0.006 } }).some((p) => /pairAgreement must be below half/.test(p)));
+  assert.ok(validate({ ...ok, reference: { ...ok.reference, pairAgreement: null } }).some((p) => /pairAgreement/.test(p)), 'off only with minVenues 3');
+  assert.deepEqual(validate({ ...ok, reference: { ...ok.reference, pairAgreement: null, minVenues: 3 } }), []);
   assert.ok(bad.some((p) => /must not exceed 100/.test(p)));
   const p = join(dir, 'cfg.json');
   writeFileSync(p, JSON.stringify({ network: 'testnet-10', keyFile: 'bot.key', dataDir: 'run', token: { covenantId: TOKEN, decimals: 6 } }));

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { parseBybit, parseCoinbaseMid, parseGate, parseKraken, parseKrakenMid, parseKucoin, parseMexc } from '../src/candles.mjs';
-import { closedWindow, combine, fairValueKas, median, oneMinuteJump, stableRate, venueVwap } from '../src/reference.mjs';
+import { closedWindow, combine, fairValueKas, median, oneMinuteJump, stableRate, usdtRate, venueVwap } from '../src/reference.mjs';
 
 const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
 // Bybit's response time; the minute 16:56 (1794848160 s) is still in progress
@@ -131,4 +131,28 @@ test('stable rate: live while fresh, then the fallback, else none', () => {
   assert.deepEqual(stableRate({ value: 0.9998, at: 0, source: 'kraken' }, 100_000, 300, 1), { value: 0.9998, source: 'kraken' });
   assert.deepEqual(stableRate({ value: 0.9998, at: 0, source: 'kraken' }, 400_000, 300, 1), { value: 1, source: 'fallback' });
   assert.deepEqual(stableRate(null, 0, 300, null), { value: null, source: 'none' });
+});
+
+test('two venues must agree within pairAgreement: one venue 1.9 % off idles the bot (sec-ops MM-1)', () => {
+  const R = { minVenues: 2, maxDeviation: 0.01, pairAgreement: 0.00125 };
+  const v = (vwap) => ({ fresh: true, vwap });
+  const off = combine({ bybit: { fresh: false }, gate: { fresh: false }, kucoin: v(0.025), mexc: v(0.025 * 1.019) }, R);
+  assert.equal(off.ok, false);
+  assert.match(off.reason, /only 2 venues and they differ by 1\.90%/);
+  assert.equal(combine({ kucoin: v(0.025), mexc: v(0.025 * 1.001) }, R).ok, true, 'two that agree');
+  // three venues: one bad venue cannot move the median past the others
+  const three = combine({ a: v(0.025), b: v(0.025), c: v(0.025 * 1.009) }, R);
+  assert.equal(three.ok, true);
+  close(three.kasUsd, 0.025);
+});
+
+test('USDT/USD: both sources asked; a reading far from 1 or two that disagree give no rate (sec-ops MM-2)', () => {
+  const o = { band: 0.01, agreement: 0.002 };
+  assert.deepEqual(usdtRate({ kraken: 1.015, coinbase: 1.0 }, o), { value: 1.0, source: 'coinbase' }, 'kraken 1.5 % off is refused');
+  assert.equal(usdtRate({ kraken: 1.004, coinbase: 0.999 }, o).value, null, 'two that differ by 0.5 %');
+  assert.match(usdtRate({ kraken: 1.004, coinbase: 0.999 }, o).reason, /differ by 0\.50%/);
+  close(usdtRate({ kraken: 1.0005, coinbase: 0.9995 }, o).value, 1.0);
+  assert.equal(usdtRate({ kraken: 1.015, coinbase: null }, o).value, null, 'one reading alone, out of the band');
+  assert.equal(usdtRate({ kraken: 0.999, coinbase: null }, o).value, 0.999);
+  assert.equal(usdtRate({}, o).reason, 'no reading');
 });

@@ -1,7 +1,7 @@
 // Market data over HTTP: venue candles, stablecoin rates and the reference snapshot.
 
 import { PARSERS, parseCoinbaseMid, parseKrakenMid } from './candles.mjs';
-import { combine, fairValueKas, oneMinuteJump, pegCheck, stableRate, venueVwap } from './reference.mjs';
+import { combine, usdtRate, fairValueKas, oneMinuteJump, pegCheck, stableRate, venueVwap } from './reference.mjs';
 
 const MIN_GAP_MS = 1_100;
 // margin after a minute's end before its candle counts as closed (clock skew)
@@ -70,12 +70,11 @@ export async function readReference(cfg, memory, nowMs = Date.now()) {
   const tokenPair = t.usdSource.startsWith('kraken:') ? t.usdSource.slice(7) : null;
   const wantCross = r.crossCheck?.enabled && nowMs - (memory.lastCrossCheck ?? 0) >= r.crossCheck.everySec * 1000;
   const pairs = [...new Set([r.usdtUsd.includes('kraken') ? 'USDTUSD' : null, tokenPair, wantCross ? 'USDCUSD' : null].filter(Boolean))];
-  const mids = await krakenMids(pairs, r.timeoutMs);
-  if (mids.USDTUSD > 0) memory.usdt = { value: mids.USDTUSD, at: nowMs, source: 'kraken' };
-  else if (r.usdtUsd.includes('coinbase')) {
-    const cb = await coinbaseMid('USDT-USD', r.timeoutMs);
-    if (cb > 0) memory.usdt = { value: cb, at: nowMs, source: 'coinbase' };
-  }
+  // every USDT/USD source is asked: one reading alone would scale three venues together
+  const [mids, cb] = await Promise.all([krakenMids(pairs, r.timeoutMs), r.usdtUsd.includes('coinbase') ? coinbaseMid('USDT-USD', r.timeoutMs) : null]);
+  const usdt = usdtRate({ kraken: mids.USDTUSD, coinbase: cb }, { band: r.usdtBand, agreement: r.usdtAgreement });
+  if (usdt.value > 0) memory.usdt = { value: usdt.value, at: nowMs, source: usdt.source };
+  else if (usdt.reason !== 'no reading') memory.usdt = null; // refused or in disagreement: no rate until they agree
   if (tokenPair && mids[tokenPair] > 0) memory.tokenUsd = { value: mids[tokenPair], at: nowMs, source: `kraken ${tokenPair}` };
   if (mids.USDCUSD > 0) memory.usdc = { value: mids.USDCUSD, at: nowMs, source: 'kraken USDCUSD' };
   const usdtUsd = stableRate(memory.usdt, nowMs, r.stableMaxAgeSec, null);
@@ -94,7 +93,8 @@ export async function readReference(cfg, memory, nowMs = Date.now()) {
   const freshPrimary = Object.values(venues).filter((v) => v.fresh).length;
   if (freshPrimary < r.fallbackBelow) Object.assign(venues, Object.fromEntries(await Promise.all(r.fallbackVenues.filter((n) => !venues[n]).map(view))));
 
-  const c = combine(venues, { minVenues: r.minVenues, maxDeviation: r.maxDeviation });
+  const c = combine(venues, { minVenues: r.minVenues, maxDeviation: r.maxDeviation, pairAgreement: r.pairAgreement });
+  if (!c.ok && usdt.value == null && usdt.reason !== 'no reading') c.reason = `${c.reason}; USDT/USD: ${usdt.reason}`;
   const snap = {
     at: nowMs, ok: c.ok, reason: c.reason ?? null, kasUsd: c.kasUsd, fair: null, tokenUsd, usdtUsd,
     venues: Object.fromEntries(Object.entries(venues).map(([n, v]) => [n, v.fresh ? { fresh: true, vwap: v.vwap, base: v.base } : { fresh: false, reason: v.reason }])),
