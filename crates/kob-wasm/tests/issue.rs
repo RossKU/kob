@@ -1,7 +1,9 @@
-//! Token issuance through the wasm API surface (`api::issue` / `api::issue_limits`): a KCC-23 creation comes back as two
-//! normal `BuiltTx` (`prep`, the preparation declaring the metadata, and `built`, the genesis spending its output 0); each signs
-//! with the shared signing split and passes `finalize` and the script-engine `validate`. Plus the KCC-23 readers
-//! (`api::kcc23_verify`, `api::kcc23_decode`).
+//! Tests token issuance through the wasm API surface (`api::issue` / `api::issue_limits`).
+//!
+//! A KCC-23 creation comes back as two normal `BuiltTx` (`prep`, the preparation declaring the
+//! metadata, and `built`, the genesis spending its output 0); each signs with the shared signing
+//! split and passes `finalize` and the script-engine `validate`. The KCC-23 readers
+//! (`api::kcc23_verify`, `api::kcc23_decode`) are tested too.
 
 use std::collections::BTreeMap;
 

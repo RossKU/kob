@@ -1,8 +1,12 @@
-//! Regression: the custody class of a token is derived from its PROGRAM's capabilities in the shipped
-//! registry, never from a label. A KaspaCom program (mint-authority, public-mint, burn) is `issuer-controlled`:
-//!  * `x402TokenOffer` cannot label it `unconditional` (and defaults to `issuer-controlled`);
-//!  * the payer side ignores the offer's own `custody` claim: an offer that lies is refused before anything is signed,
-//!    and an honest `issuer-controlled` offer needs the payer's explicit `allowIssuerControlled`.
+//! Tests that the custody class of a token is derived from its PROGRAM's capabilities in the
+//! shipped registry, never from a label.
+//!
+//! A KaspaCom program (mint-authority, public-mint, burn) is `issuer-controlled`:
+//!
+//! * `x402TokenOffer` cannot label it `unconditional` (and defaults to `issuer-controlled`);
+//! * the payer side ignores the offer's own `custody` claim: an offer that lies is refused before
+//!   anything is signed, and an honest `issuer-controlled` offer needs the payer's explicit
+//!   `allowIssuerControlled`.
 #![cfg(feature = "x402")]
 
 use kob_wasm::x402;
