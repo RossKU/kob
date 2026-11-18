@@ -113,7 +113,7 @@ function tokenOf(env: PairPlanEnv, covId: Hex): { market: TokenMarket; utxos: To
 
 /**
  * The maker's P2PK-owned UTXOs of `market` (same token, same extension for KCC-20), a KCC-20
- * borrow setting included (option A: one setting per selection, see `selectTokens`).
+ * borrow setting included. A selection takes one setting only (`selectTokens`).
  */
 export function usableUtxosOf(market: TokenMarket, maker: Hex, utxos: readonly TokenUtxo[]): TokenUtxo[] {
   return utxos.filter(
@@ -183,7 +183,10 @@ export interface PairStateParams {
   decayStep: bigint;
   /** the exact custody of S: the amount (ask) or the B escrow (bid), 0 while it is computed */
   custody: bigint;
-  /** the delivery block (bid-delivery-spec §2) of the token T the order receives; absent: each fill (mode 0) */
+  /**
+   * the delivery block (bid-delivery-spec §2) of the token T the order receives, absent for each
+   * fill (mode 0)
+   */
   delivery?: Required<DeliveryFields>;
 }
 
@@ -225,7 +228,10 @@ export interface CondPairParams {
   deliveryCarrier: bigint;
   /** an exit committed by an entry: 0 (the entry writes it). A placed order: its custody. */
   custody: bigint;
-  /** the delivery block (bid-delivery-spec §2) of the token T the order receives; absent: each fill (mode 0) */
+  /**
+   * the delivery block (bid-delivery-spec §2) of the token T the order receives, absent for each
+   * fill (mode 0)
+   */
   delivery?: Required<DeliveryFields>;
 }
 
@@ -285,7 +291,10 @@ export interface IfdPairParams {
   custody: bigint;
   rptAmount: bigint;
   exitState: Hex;
-  /** the delivery block the entry writes into its exits (bid-delivery-spec §2); absent: each fill (mode 0) */
+  /**
+   * the delivery block the entry writes into its exits (bid-delivery-spec §2), absent for each
+   * fill (mode 0)
+   */
   exitDelivery?: Required<ExitDeliveryFields>;
 }
 

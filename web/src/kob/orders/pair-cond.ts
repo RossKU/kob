@@ -80,8 +80,9 @@ function planPairLegs(env: PairPlanEnv, log: IssueLog, intent: LegsIntent, tip: 
     const c = crossingTouch(env.book, intent.side, legs.tpPrice, 0n);
     if (c.crossing && c.touch !== null) log.add(pairIssue('PAIR_TP_CROSSES', { touch: c.touch, ticker: b.ticker }, 'takeProfit'));
   }
-  // A buy's delivery: Each fill by default; a Collected pick adds to its default tip what pays the custody input of every later fill
-  // (a sell receives B, a buy A; the tip is KAS per whole A on either side)
+  // A buy's delivery is Each fill by default. A Collected pick adds to its default tip what pays
+  // the custody input of every later fill. A sell receives B and a buy A, and the tip is KAS per
+  // whole A on either side.
   const bought = sell ? b : env.token;
   let tipNow = tip;
   const dIssues: PlanIssue[] = [];
@@ -90,7 +91,8 @@ function planPairLegs(env: PairPlanEnv, log: IssueLog, intent: LegsIntent, tip: 
   if (log.failed) return failed(log);
   if (dlv.choice === 'collected' && intent.tip === undefined) tipNow = tip + collectedPairTipExtra(pairCollectedExtra(bought.program), env.token.scale, amount, minFill);
   const collected = dlv.choice === 'collected';
-  // KAS delivery carriers: one per budgeted fill, at most one per possible fill (a Collected order: one).
+  // KAS delivery carriers are one per budgeted fill, at most one per possible fill, and one for a
+  // Collected order.
   const possible = ceilDiv(amount, minFill);
   const fills = intent.maxFills ?? defaultPairFills(possible);
   if (fills < 1n || fills > possible) {

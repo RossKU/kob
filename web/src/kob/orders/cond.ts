@@ -141,15 +141,16 @@ function planLegs(env: PlanEnv, log: IssueLog, intent: LegsIntent, tip: bigint, 
       log.shared('MAX_FILLS_INVALID', undefined, 'maxFills');
       return failedPlan(log);
     }
-    // The delivery (bid-delivery-spec §10): a conditional buy rests until it fills, so it is Collected by default.
+    // The delivery (bid-delivery-spec §10). A conditional buy rests until it fills, so it is
+    // Collected by default.
     const dIssues: PlanIssue[] = [];
     dlv = resolveDelivery({ codec: tk.family, program: tk.program, cls: 'resting', carrier, scale: tk.scale, minFill, price: worstState }, intent.delivery, dIssues);
     log.add(...dIssues);
     if (log.failed) return failedPlan(log);
     funded = fundedFills(dlv.choice, fills);
     order = { kind: kindFor('KobCondBid', tk.family), state: condBidState(env, { ...base, deliveryCarrier: carrier, delivery: dlv.fields }, legs) } as CondSpecOrder;
-    // The escrow is the whole amount at the worst leg plus one carrier per fill (a Collected order: one), as kob-wasm
-    // condBidEscrow computes it (each fill's spend rounds down).
+    // The escrow is the whole amount at the worst leg plus one carrier per fill, or one for a
+    // Collected order, as kob-wasm condBidEscrow computes it. Each fill's spend rounds down.
     const escrow = env.kob.condBidEscrow(order, funded);
     if (escrow === null) {
       log.shared('AMOUNT_TOO_LARGE', undefined, 'amount');

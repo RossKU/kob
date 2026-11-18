@@ -90,7 +90,10 @@ function carrierIssues(env: PlanEnv, order: OrderState, tokenCarrier: bigint): P
 /** Decimal string of a bigint, the form order-state fields take. */
 export const str = (v: bigint): string => v.toString();
 
-/** The delivery block of an order that delivers at each fill (mode 0), and of a new order's `bought`. */
+/**
+ * The delivery block of an order that delivers at each fill (mode 0), and of a new order's
+ * `bought`.
+ */
 export const NO_DELIVERY: Readonly<Required<DeliveryFields>> = { mode: '0', recvThreshold: '0', topupTip: '0', bought: '0' };
 
 // ---- order states
@@ -159,7 +162,10 @@ export function makeAsk(env: PlanEnv, p: AskParams): OrderState {
 export interface BidParams extends Omit<AskParams, 'amount'> {
   reserve?: bigint;
   deliveryCarrier?: bigint;
-  /** The delivery block (bid-delivery-spec §2; orders/delivery.ts). Absent: each fill (mode 0). */
+  /**
+   * The delivery block (bid-delivery-spec §2, orders/delivery.ts). Absent means each fill
+   * (mode 0).
+   */
   delivery?: Required<DeliveryFields>;
 }
 
@@ -188,7 +194,8 @@ export function makeBid(env: PlanEnv, p: BidParams): OrderState {
     slope: str(p.slope ?? 0n),
     priceEnd: str(p.priceEnd ?? 0n),
     decayStep: str(p.decayStep ?? 1n),
-    // a KRON bid is always mode 0 (its twin has no delivery block; kob-wasm returns the fields as 0)
+    // A KRON bid is always mode 0. Its twin has no delivery block, and kob-wasm returns the fields
+    // as 0.
     ...(m.family === 'kcc20' && p.delivery ? p.delivery : NO_DELIVERY),
   };
   return { kind: kindFor('KobBid', m.family), state: st } as OrderState;
@@ -229,8 +236,8 @@ export const defaultMinFillFor = (env: Pick<PlanEnv, 'kob' | 'token'>, amount: b
 
 /**
  * The maker's P2PK-owned token UTXOs that can fund an order (same token and extension).
- * A KCC-20 holding with a borrow setting counts (option A). `selectTokens` picks from one setting
- * only and the change keeps it; the custody is always plain.
+ * A KCC-20 holding with a borrow setting counts. `selectTokens` picks from one setting only and the
+ * change keeps it. The custody is always plain.
  */
 export function usableTokenUtxos(env: Pick<PlanEnv, 'token' | 'maker' | 'tokenUtxos'>): TokenUtxo[] {
   const m = env.token;
@@ -244,15 +251,16 @@ export function usableTokenUtxos(env: Pick<PlanEnv, 'token' | 'maker' | 'tokenUt
 }
 
 /**
- * Why a held UTXO of this token cannot fund an order (the first check it fails), or null when it can:
- * an owner type the builders do not spend (a key hash, a script, ...), another extension commitment,
- * or a KRON minter UTXO.
+ * Why a held UTXO of this token cannot fund an order, by the first check it fails.
+ * - `owner`: an owner type the builders do not spend (a key hash, a script, ...).
+ * - `extension`: another extension commitment.
+ * - `minter`: a KRON minter UTXO.
  */
 export type UnusableReason = 'owner' | 'extension' | 'minter';
 
 /**
  * The token units the wallet holds that `usableTokenUtxos` skips, with the reason of the largest
- * such UTXO; null when every held unit is usable.
+ * such UTXO. It is null when every held unit is usable.
  */
 export function unusableTokenHeld(env: Pick<PlanEnv, 'token' | 'maker' | 'tokenUtxos'>): { amount: bigint; reason: UnusableReason } | null {
   const m = env.token;
@@ -344,7 +352,8 @@ function buildCreateAt(env: PlanEnv, spec: CreateSpec): CreateResult {
       tokens = selectTokens(usableTokenUtxos(env), spec.tokenAmount, Math.min(env.token.slots.inputs, MAX_TOKEN_INPUTS), env.token.program, { ...(env.token.family === 'kron' ? { changeCap: KRON_MAX_OUTPUT_AMOUNT } : {}), ...(env.freshTxids ? { fresh: env.freshTxids } : {}) });
     } catch (e) {
       if (e instanceof InsufficientFunds) {
-        // `needed` lets the sell ticket merge just enough for this amount (ui/ticket/OrderTicket.tsx).
+        // `needed` lets the sell ticket merge just enough for this amount
+        // (ui/ticket/OrderTicket.tsx).
         return fail(
           e.kind === 'fragmented'
             ? issue('TOKEN_UTXOS_FRAGMENTED', { max: e.maxInputs ?? 0, needed: e.needed })
@@ -504,7 +513,8 @@ export function makeDisclosure(env: PlanEnv, res: CreateResult, p: DescribeParam
     if (p.limitPrice !== null) allInTotal = env.kob.bidSpendAt(o, p.amount, p.limitPrice);
     notes.push('carrierReturned');
   } else if (o.kind === 'KobCurveAsk') {
-    // a curve: its custody sold level by level, every level rounded up (what a sell-out pays the maker, less the tip per level)
+    // A curve sells its custody level by level, each level rounded up. The total is what a sell-out
+    // pays the maker, less the tip per level.
     side = 'sell';
     const s = o.state;
     tip = BigInt(s.tip);
