@@ -85,7 +85,7 @@ pub fn host(url: &str) -> String {
 
 fn short(s: &str) -> String {
     let s = s.trim();
-    let mut out: String = s.chars().take(80).filter(|c| !c.is_control()).collect();
+    let mut out: String = kob_protocol::display::strip_bad(&s.chars().take(80).collect::<String>());
     if s.chars().count() > 80 {
         out.push('~');
     }

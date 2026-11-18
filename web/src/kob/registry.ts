@@ -24,6 +24,7 @@ import { PROGRAM_OF_REGISTRY_ID, TOKEN_PROGRAMS } from './programs.generated';
 import { extensionOfState, familyOfProgram, isKronState } from './token-state';
 import type { Hex, TokenProgram, TokenState } from './types';
 import type { KobWasm } from './wasm';
+import { badMask, hasBadChar, hasLookalike, replaceBad } from './display';
 
 /** Registry schema version this build reads. */
 export const REGISTRY_SCHEMA_VERSION = 1;
@@ -169,9 +170,8 @@ export type UntradableReason = (typeof UNTRADABLE_REASONS)[number];
 
 // ------------------------------------------------------------------------------------- text safety
 
-const BAD_CHAR = /[\u0000-\u001F\u007F-\u009F​-‏‪-‮⁠-⁤⁦-⁩﻿]/u;
-/** True if `s` has a control, bidi or zero-width character. */
-export const hasBadChar = (s: string): boolean => BAD_CHAR.test(s);
+/** True if `s` has an invisible or reordering character. The rule is shared with Rust: see display.ts. */
+export { hasBadChar, hasLookalike };
 
 /**
  * Makes untrusted free text (an indexer's error message) plain for display.
@@ -179,7 +179,8 @@ export const hasBadChar = (s: string): boolean => BAD_CHAR.test(s);
  * shown. Runs of white space become one space. The text is cut at `max` characters.
  */
 export function plainUntrusted(s: string, max = 300): string {
-  const kept = [...s].map((c) => (BAD_CHAR.test(c) ? (/\s/.test(c) ? ' ' : '') : c)).join('').replace(/\s+/g, ' ').trim();
+  const bad = badMask(s);
+  const kept = [...s].map((c, i) => (bad[i] ? (/\s/.test(c) ? ' ' : '') : c)).join('').replace(/\s+/g, ' ').trim();
   const chars = [...kept];
   return chars.length > max ? chars.slice(0, max).join('') + '…' : kept;
 }
@@ -224,7 +225,7 @@ export function normalizeTicker(ticker: string): string {
  * Control, zero-width and bidi characters become U+FFFD, and the length is capped.
  */
 export function sanitizeUntrusted(s: string, max = 32): string {
-  const cleaned = [...s].map((c) => (BAD_CHAR.test(c) ? '�' : c)).join('');
+  const cleaned = replaceBad(s, '\uFFFD');
   const chars = [...cleaned];
   return chars.length > max ? chars.slice(0, max).join('') + '…' : cleaned;
 }

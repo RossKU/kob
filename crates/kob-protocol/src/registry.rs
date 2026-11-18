@@ -820,12 +820,7 @@ pub fn parse_hex32(s: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-fn has_bad_char(s: &str) -> bool {
-    s.chars().any(|c| {
-        c.is_control()
-            || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
-    })
-}
+use crate::display::has_bad_char;
 
 impl Registry {
     /// Parse and fully validate (network not constrained).
