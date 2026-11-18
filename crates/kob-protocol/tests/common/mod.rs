@@ -1,8 +1,10 @@
-//! Deterministic fixtures: one request per builder shape (the golden-vector set), plus the token
-//! slot grid used to measure the compute-budget table. Keys are fixed (`[n; 32]`), UTXO ids are
-//! synthetic, covenant ids of existing orders are arbitrary (the engine checks the covenant
-//! context of the spending transaction, not the history of its inputs). Tips are the per-program
-//! defaults of `kob_protocol::defaults` (derived from measured fees).
+//! Deterministic fixtures for the protocol tests: one request per builder shape (the golden-vector
+//! set), plus the token slot grid used to measure the compute-budget table.
+//!
+//! Keys are fixed (`[n; 32]`), UTXO ids are synthetic, and covenant ids of existing orders are
+//! arbitrary (the engine checks the covenant context of the spending transaction, not the history
+//! of its inputs). Tips are the per-program defaults of `kob_protocol::defaults` (derived from
+//! measured fees).
 //!
 //! **KRON.** The fixtures are written once, for KCC-20 states, and take the token program as a
 //! parameter. For a KRON program the state-dependent parts follow the program (token template

@@ -1,19 +1,22 @@
-//! The default fee is exactly the relay floor of a rusty-kaspa v2.1.0 node, never below it.
+//! Tests that the default fee is exactly the relay floor of a rusty-kaspa v2.1.0 node, never below
+//! it.
 //!
-//! [`node_minimum_fee`] transcribes the node's check (it is `pub(crate)` in `kaspa-mining`, which this
-//! workspace does not depend on) from the v2.1.0 sources, with rusty-kaspa's own types:
+//! [`node_minimum_fee`] transcribes the node's check (it is `pub(crate)` in `kaspa-mining`, which
+//! this workspace does not depend on) from the v2.1.0 sources, with rusty-kaspa's own types:
 //!
-//! * `mining/src/mempool/validate_and_insert_transaction.rs:33`: the non-contextual masses come from
-//!   `consensus.calculate_transaction_non_contextual_masses`, i.e. (`consensus/src/consensus/mod.rs:689`,
-//!   `consensus/src/consensus/services.rs:133`) `MassCalculator::new(params.mass_per_tx_byte,
-//!   params.mass_per_script_pub_key_byte, params.storage_mass_parameter).calc_non_contextual_masses`;
-//! * `mining/src/mempool/config.rs`: `mempool_mass_cofactors = mempool_block_mass_limits.cofactors()`,
-//!   the node passing `config.block_mass_limits` (`kaspad/src/daemon.rs:651`), and
-//!   `DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE = 100_000` sompi per kilogram;
+//! * `mining/src/mempool/validate_and_insert_transaction.rs:33`: the non-contextual masses come
+//!   from `consensus.calculate_transaction_non_contextual_masses`, i.e.
+//!   (`consensus/src/consensus/mod.rs:689`, `consensus/src/consensus/services.rs:133`)
+//!   `MassCalculator::new(params.mass_per_tx_byte, params.mass_per_script_pub_key_byte,
+//!   params.storage_mass_parameter).calc_non_contextual_masses`;
+//! * `mining/src/mempool/config.rs`: `mempool_mass_cofactors =
+//!   mempool_block_mass_limits.cofactors()`, the node passing `config.block_mass_limits`
+//!   (`kaspad/src/daemon.rs:651`), and `DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE = 100_000` sompi per
+//!   kilogram;
 //! * `mining/src/mempool/check_transaction_standard.rs:67-86`: `fee_mass = max(compute_mass,
 //!   normalized_transient)`, storage mass is not part of it, and the fee must be at least
-//!   `minimum_required_transaction_relay_fee(fee_mass)` (`:95-110`: `mass * fee_per_kg / 1000`, the base
-//!   fee when that is 0, capped at `MAX_SOMPI`).
+//!   `minimum_required_transaction_relay_fee(fee_mass)` (`:95-110`: `mass * fee_per_kg / 1000`, the
+//!   base fee when that is 0, capped at `MAX_SOMPI`).
 //!
 //! The comparison runs on thousands of pseudo-random transaction shapes (versions 0 and 1, P2PK and
 //! P2SH inputs with large signature scripts, sig-op counts and compute budgets, covenant outputs,
@@ -222,9 +225,10 @@ fn every_builder_scenario_pays_exactly_the_nodes_floor() {
     assert!(exact > all / 3, "{exact} of {all} scenarios have change");
 }
 
-/// The standard-native vector of elldeeone's binding: the node's floor for it is 203600 (normalized transient 2036 grams).
-/// v1.0.0 paid 200000, below that floor (the live TN10 probe confirmed a v2.1.0 node refuses it); v1.0.1
-/// (`vectors/kaspa-x402-v1.0.1`) pays 300000 (see `crates/kob-x402/tests/interop_vectors.rs`).
+/// The standard-native vector of elldeeone's binding: the node's floor for it is 203600 (normalized
+/// transient 2036 grams).
+/// The vendored v1.0.1 vector (`vectors/kaspa-x402-v1.0.1`) pays 300000, above that floor (see
+/// `crates/kob-x402/tests/interop_vectors.rs`).
 #[test]
 fn relay_fee_arithmetic_matches_the_node() {
     assert_eq!(relay_fee_for_mass(2_036, MIN_FEE_RATE), 203_600);

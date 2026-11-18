@@ -1,9 +1,11 @@
-//! Branch fixtures (C6): one fill of every order kind in every branch combination the builders name in an input's
-//! compute-budget role (tif, TWAP / DCA, decay / rise, take-profit or stop leg, triggered / armed auction / armed whole
-//! band, rest / sell-out, stop entries), on one token program. The golden scenarios exercise most of them; these close
-//! the rest (a market or Dutch sell filled to the last base unit, the last TWAP slice or DCA fill, an armed stop selling out,
-//! a stop entry's final fill, ...), so the compute-budget table measures every role the builders can produce
-//! (`tests/budget_table.rs`).
+//! Branch fixtures: one fill of every order kind in every branch combination the builders name in
+//! an input's compute-budget role, on one token program.
+//!
+//! The branches are tif, TWAP / DCA, decay / rise, take-profit or stop leg, triggered / armed
+//! auction / armed whole band, rest / sell-out, and stop entries. The golden scenarios exercise
+//! most of them; these close the rest (a market or Dutch sell filled to the last base unit, the
+//! last TWAP slice or DCA fill, an armed stop selling out, a stop entry's final fill, ...), so the
+//! compute-budget table measures every role the builders can produce (`tests/budget_table.rs`).
 #![allow(dead_code)]
 
 use kob_protocol::artifacts::TemplateId;

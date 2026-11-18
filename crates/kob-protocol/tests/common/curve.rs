@@ -1,5 +1,5 @@
-//! `KobCurveAsk` fixtures (`docs/design/curve-ask-spec.md`): the curve, a taker's fills, a matcher cross with a bid
-//! of each delivery mode, the cancel, the amend and the creation.
+//! Fixtures for `KobCurveAsk` (`docs/design/curve-ask-spec.md`): the curve, a taker's fills, a
+//! matcher cross with a bid of each delivery mode, the cancel, the amend and the creation.
 
 use super::*;
 

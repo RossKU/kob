@@ -1,6 +1,8 @@
-//! The hex examples of `docs/spec/kob1-payload.md` ("Examples") are the golden vectors' payloads, rebuilt here with the
-//! builders and the encoder: a change of the payload format or of the fixtures that moves a byte fails this test until the
-//! document is updated with it.
+//! Tests that the hex examples of `docs/spec/kob1-payload.md` ("Examples") are the golden vectors'
+//! payloads.
+//!
+//! They are rebuilt here with the builders and the encoder: a change of the payload format or of
+//! the fixtures that moves a byte fails this test until the document is updated with it.
 
 mod common;
 

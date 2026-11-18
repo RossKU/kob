@@ -1,13 +1,21 @@
-//! A dump of every builder shape as JSON, for external replay tools (a red-team harness that attacks the exact bytes).
+//! Dumps every builder shape as JSON, for external replay tools (a red-team harness that attacks
+//! the exact bytes).
 //!
-//! Every builder scenario of the golden-vector set on every token program (with the delivery-mode scenarios, IOC / FOK ends
-//! of a mode-1 bid holding its bought-custody, and the claims CL1 to CL3), the pair scenarios and the pair delivery grid on the program pairs of
-//! `carrier_fees.rs`, at the default order carrier: built, signed with the fixture keys (`[n; 32]`, throwaway test keys that
-//! hold nothing on any network), budgets tightened and validated in the engine. Each record carries the request, the
-//! signed transaction in kaspa-wasm "safe JSON" (each input with the UTXO it spends: amount, script public key, DAA score,
-//! covenant id) and the same transaction and spent entries as rusty-kaspa's own serde form. `keys.json` lists the keys.
-//! The router intents are dumped by `intent_builders.rs` (`dump_router_intents`). `#[ignore]`d:
+//! The dump holds:
 //!
+//! * every builder scenario of the golden-vector set on every token program (with the delivery-mode
+//!   scenarios, IOC / FOK ends of a mode-1 bid holding its bought-custody, and the claims CL1 to
+//!   CL3);
+//! * the pair scenarios and the pair delivery grid on the program pairs of `carrier_fees.rs`.
+//!
+//! Each is built at the default order carrier, signed with the fixture keys (`[n; 32]`, throwaway
+//! test keys that hold nothing on any network), with budgets tightened, and validated in the
+//! engine. Each record carries the request, the signed transaction in kaspa-wasm "safe JSON" (each
+//! input with the UTXO it spends: amount, script public key, DAA score, covenant id) and the same
+//! transaction and spent entries as rusty-kaspa's own serde form. `keys.json` lists the keys. The
+//! router intents are dumped by `intent_builders.rs` (`dump_router_intents`).
+//!
+//! The test is `#[ignore]`d. Run it with:
 //! ```text
 //! KOB_TX_DUMP_DIR=target/kob-tx-dump cargo test -p kob-protocol --test tx_dump -- --ignored --nocapture
 //! ```

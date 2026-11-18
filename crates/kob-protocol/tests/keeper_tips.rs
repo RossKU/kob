@@ -1,17 +1,20 @@
-//! Derives the keeper tips from measured fees, in two tables:
+//! Tests that the keeper tips derive from measured fees, in two tables:
 //!
-//! * `data/keeper_tips.json`, per token program, for the KAS order kinds: the fee floor of every keeper transaction shape
-//!   (refunds, IOC / FOK kills, the close of an empty repeating entry) built as a funded keeper with its own change output
-//!   (the costlier shape), and, for arm and trail updates of conditionals and stop entries (always inside a matcher's
-//!   batch, next to the evidence fill), the MARGINAL fee the update adds to that batch (its input and continuation);
-//! * `data/pair_keeper_tips.json`, per program PAIR (`<A>+<B>`), for the pair kinds (`KobPair`, `KobCondPair`,
-//!   `KobIfdPair`): the same over the pair shapes on that pair (refunds and kills of every pair kind in every custody
-//!   state: an entry's two custodies, A only, a waiting entry's B rest only, nothing held; arm and trail updates of both
-//!   sides in both evidence modes, `common::pair::pair_refund_grid` / `pair_update_grid`). The pair kinds never raise the
-//!   KAS kinds' tips.
+//! * `data/keeper_tips.json`, per token program, for the KAS order kinds: the fee floor of every
+//!   keeper transaction shape (refunds, IOC / FOK kills, the close of an empty repeating entry)
+//!   built as a funded keeper with its own change output (the costlier shape), and, for arm and
+//!   trail updates of conditionals and stop entries (always inside a matcher's batch, next to the
+//!   evidence fill), the MARGINAL fee the update adds to that batch (its input and continuation);
+//! * `data/pair_keeper_tips.json`, per program PAIR (`<A>+<B>`), for the pair kinds (`KobPair`,
+//!   `KobCondPair`, `KobIfdPair`): the same over the pair shapes on that pair (refunds and kills of
+//!   every pair kind in every custody state: an entry's two custodies, A only, a waiting entry's B
+//!   rest only, nothing held; arm and trail updates of both sides in both evidence modes,
+//!   `common::pair::pair_refund_grid` / `pair_update_grid`). The pair kinds never raise the KAS
+//!   kinds' tips.
 //!
-//! The default tip is twice the largest fee, rounded up to 0.001 KAS ([`kob_protocol::defaults::tip_for_fee`]).
-//! `KOB_REGEN=1` rewrites both files; otherwise the committed tables must match.
+//! The default tip is twice the largest fee, rounded up to 0.001 KAS
+//! ([`kob_protocol::defaults::tip_for_fee`]). `KOB_REGEN=1` rewrites both files; otherwise the
+//! committed tables must match.
 
 mod common;
 
