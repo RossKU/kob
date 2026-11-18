@@ -1,24 +1,26 @@
-//! C5 liveness audit: "every state can be exited" for facilitator-held router intents (x402 `kob-intent-v1`).
+//! Every state of a facilitator-held router intent (x402 `kob-intent-v1`) can be exited.
 //!
-//! The facilitator promises (docs/spec/x402-swap-and-pay.md 17.7, "retrying until the expiry is accepted or the
-//! intent is spent otherwise") that an intent which ends without a payment is expired ON CHAIN by it, so the
-//! payer's KAS and locked tokens come back without the payer doing anything. Three ways the code leaves an
-//! on-chain intent behind with nobody scheduled to exit it (the payer's own `cancel` still works, but only if it
-//! kept its intent handle):
+//! The facilitator promises (docs/spec/x402-swap-and-pay.md 17.7, "retrying until the expiry is
+//! accepted or the intent is spent otherwise") that an intent which ends without a payment is
+//! expired ON CHAIN by it, so the payer's KAS and locked tokens come back without the payer doing
+//! anything. The payer's own `cancel` still works, but only if it kept its intent handle. Three
+//! cases must not leave an on-chain intent behind with nobody scheduled to exit it:
 //!
-//! 1. `drive_intent` gives up after `maxAttempts` executions (`facilitator/intent.rs`, "intent_not_executable:
-//!    N executions failed") WITHOUT creating an `ExpiryRecord`; the entry is `failed`, `drive_intent` returns
-//!    `Dead` before the deadline branch that creates the record, and `reconcile` only drives failed entries that
-//!    have one. The intent stays on chain for ever (and stays executable by any keeper).
-//! 2. The expiry window is anchored at the intent's deadline (`until_ms = deadline + 1 h`), not at the moment the
-//!    facilitator first looks at the intent: after an outage longer than an hour past the deadline the record is
-//!    created already out of date and `drive_expiry` answers `abandoned` WITHOUT ever submitting the expiry.
-//! 3. A creation that was seen and then vanishes from the UTXO set (a reorg that re-queues it) is reported as
-//!    `intent_spent` and the entry fails at once; the mempool is only consulted for creations never seen. When the
-//!    creation is mined again, the intent exists, nobody executes it and nobody expires it.
+//! 1. A give-up after `maxAttempts` executions (`facilitator/intent.rs`, "intent_not_executable:
+//!    N executions failed") must still create an `ExpiryRecord`. Without one the entry is `failed`,
+//!    `drive_intent` returns `Dead` before the deadline branch that creates the record, and
+//!    `reconcile` drives only failed entries that have one. The intent would stay on chain for
+//!    ever, executable by any keeper.
+//! 2. The expiry window is anchored at the intent's deadline (`until_ms = deadline + 1 h`), not at
+//!    the moment the facilitator first looks at the intent. After an outage longer than an hour
+//!    past the deadline the record would be created already out of date and `drive_expiry` would
+//!    answer `abandoned` without ever submitting the expiry.
+//! 3. A creation that was seen and then vanishes from the UTXO set (a reorg that re-queues it) must
+//!    not be reported as `intent_spent` with the entry failing at once: the mempool is consulted as
+//!    for a creation never seen. Otherwise, when the creation is mined again, the intent exists,
+//!    nobody executes it and nobody expires it.
 //!
-//! Every test below demonstrates the bug: it fails on current code and passes once the facilitator exits the state.
-//! Run: cargo test -p kobd --test c5_live_intent_expiry   (NOT run by the auditor: RAM)
+//! Run: cargo test -p kobd --test c5_live_intent_expiry
 #![allow(clippy::too_many_arguments)]
 
 #[path = "../../kob-protocol/tests/common/mod.rs"]
@@ -286,8 +288,8 @@ fn diag(r: &SettlementResponse) -> String {
 
 /// C5-1. The payer is told `intent_not_executable` (attempts exhausted) while its KAS and tokens sit in an intent on
 /// chain. The deadline passes, the facilitator is running, and nobody exits the intent.
-// C5: expected to fail until the max-attempts give-up (and every other `give_up` of an intent that may be on chain)
-// records an ExpiryRecord, so the reconcile loop expires the intent from its deadline on.
+// The max-attempts give-up (and every other `give_up` of an intent that may be on chain) records an
+// ExpiryRecord, so the reconcile loop expires the intent from its deadline on.
 #[test]
 fn c5_an_intent_given_up_after_max_attempts_is_still_expired_on_chain() {
     let w = world(1);
@@ -314,8 +316,8 @@ fn c5_an_intent_given_up_after_max_attempts_is_still_expired_on_chain() {
 /// C5-2. The facilitator was down (or its reconcile loop stalled) for more than `EXPIRY_WINDOW_MS` past the deadline.
 /// On the first reconcile the expiry record is created already expired and the outcome is `abandoned` without a
 /// single attempt: every intent that ended during the outage is left on chain.
-// C5: expected to fail until the retry window starts at the first reconcile that sees the intent (or is dropped), not at
-// the deadline.
+// The retry window starts at the first reconcile that sees the intent (or is dropped), not at the
+// deadline.
 #[test]
 fn c5_an_outage_longer_than_the_expiry_window_does_not_abandon_the_intent() {
     let w = world(10);
@@ -341,8 +343,8 @@ fn c5_an_outage_longer_than_the_expiry_window_does_not_abandon_the_intent() {
 /// C5-3. The creation is reorged out and re-queued by the node. The facilitator already saw it (`seen_daa`), so a
 /// missing intent UTXO is reported as "spent outside this facilitator" and the entry fails; the mempool is not asked.
 /// The creation is mined again: the intent exists with no one executing or expiring it.
-// C5: expected to fail until a missing intent whose creation is in the mempool (or whose creation output reads as
-// `Mempool`) keeps the entry waiting, exactly as for a creation that was never seen.
+// A missing intent whose creation is in the mempool (or whose creation output reads as `Mempool`)
+// keeps the entry waiting, exactly as for a creation that was never seen.
 #[test]
 fn c5_a_reorged_creation_that_is_requeued_does_not_fail_the_intent() {
     let w = world(10);

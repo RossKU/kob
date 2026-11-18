@@ -1,13 +1,17 @@
-//! C5 liveness audit, recovery: an order the gap reconciliation closed can be re-imported by its maker (fixed; the finding
-//! as reported follows).
+//! An order that the gap reconciliation closed can be re-imported by its maker.
 //!
-//! `kobd db rebase` (`recover::reconcile_open_orders`) closes every tracked order UTXO the node no longer has at the SAME
-//! script (`LogOp::CloseGap`, status `closed`, its custody rows marked spent) and only adopts a successor with the same script
-//! (practically only bids: every ask-side fill changes `amountLeft` and so the script). An ask that was partially filled inside
-//! the gap is therefore closed although it lives on under a new script. `docs/ops/executor.md` 7.4 / 7.5 then send the maker
-//! to `import-orders`, but `Processor::apply_op(LogOp::Import)` goes through `create_order`, which answers
-//! `duplicate_covenant` for any known covenant id (`order_exists`) and is reported as `already_known`: the order stays `closed`,
-//! has no current outpoint and no custody, is not listed (matcher / keepers) and cannot be cancelled from the view.
+//! `kobd db rebase` (`recover::reconcile_open_orders`) closes every tracked order UTXO the node no
+//! longer has at the same script (`LogOp::CloseGap`, status `closed`, its custody rows marked
+//! spent) and adopts a successor only with the same script. In practice only bids qualify,
+//! because every ask-side fill changes `amountLeft` and so the script. An ask that was partially
+//! filled inside the gap is therefore closed although it lives on under a new script.
+//!
+//! `docs/ops/executor.md` 7.4 and 7.5 then send the maker to `import-orders`.
+//! `Processor::apply_op(LogOp::Import)` goes through `create_order`, which answers
+//! `duplicate_covenant` for any known covenant id (`order_exists`) and is reported as
+//! `already_known`. The import must instead revive the order: otherwise it stays `closed`, has
+//! no current outpoint and no custody, is not listed (matcher, keepers) and cannot be cancelled
+//! from the view.
 
 mod common;
 
@@ -40,8 +44,8 @@ fn node_utxo(spk: &[u8], cov: Hash32, txid: Hash32, idx: u32, amount: u64) -> (S
 
 #[tokio::test]
 async fn an_ask_partially_filled_in_the_gap_can_be_imported_by_its_maker_after_the_rebase() {
-    // C5: `LogOp::Import` revives a known order whose every UTXO was closed by the gap (inserts the verified UTXO and custody,
-    // refreshes the state) instead of answering `already_known`.
+    // `LogOp::Import` revives a known order whose every UTXO was closed by the gap (inserts the
+    // verified UTXO and custody, refreshes the state) instead of answering `already_known`.
     let c = Ctx::new();
     let a = ask(MAKER_A, P250); // 10 whole tokens
     let create = c.w.create_tx(AnyState::KobAsk(a.clone()), CARRIER, MAKER_A, 10 * WHOLE);
@@ -193,8 +197,8 @@ async fn an_imported_exit_is_linked_to_its_known_entry() {
     assert!(cu.state.is_some(), "an imported order has its custody's holding row (proven state)");
 }
 
-/// Security review 2026-11-17 M6: with a cross-checking node, a rebase closes an order only when neither node has its output,
-/// and adopts a successor only when both report it.
+/// With a cross-checking node, a rebase closes an order only when neither node has its output, and
+/// adopts a successor only when both report it.
 #[tokio::test]
 async fn with_a_cross_checking_node_the_authority_alone_neither_closes_nor_adopts() {
     use kobd::rpc::multi::{MultiNode, NodeSpec};

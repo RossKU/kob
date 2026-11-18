@@ -1,19 +1,23 @@
-//! C5 liveness audit, indexer views: a trailing stop whose ratchet the indexer cannot derive loses its state.
+//! A trailing stop whose ratchet the indexer cannot derive must not lose its state.
 //!
-//! `processor::derive_after` proves a continuation by splicing candidate values into the spent script's mutable windows and
-//! comparing the P2SH. For a trailing `update` the candidate stop prices are `stop +- k * trailStep` for the multiples `k` the
-//! trigger evidence justifies PLUS a fixed `1..=64` (`trail_candidates`). The evidence prices come from `evidence_touch` over
-//! `rec.inputs[i].reveal`, and the extractor only reveals inputs that are TRACKED orders (`record.rs`: `order_utxo_daa(..)`).
-//! The covenant accepts ANY plain `KobBid` of the token as evidence (it checks the template, not a placement record), and
-//! `update` is permissionless. So a ratchet of more than 64 steps next to an evidence bid the indexer never saw (a raw
-//! covenant output without a KOB1 record, or any other order whose reveal was dropped) matches no candidate:
+//! `processor::derive_after` proves a continuation by splicing candidate values into the spent
+//! script's mutable windows and comparing the P2SH. For a trailing `update` the candidate stop
+//! prices are `stop +- k * trailStep` for the multiples `k` the trigger evidence justifies PLUS a
+//! fixed `1..=64` (`trail_candidates`). The evidence prices come from `evidence_touch` over
+//! `rec.inputs[i].reveal`, and the extractor only reveals inputs that are TRACKED orders
+//! (`record.rs`: `order_utxo_daa(..)`). The covenant accepts ANY plain `KobBid` of the token as
+//! evidence (it checks the template, not a placement record), and `update` is permissionless. So a
+//! ratchet of more than 64 steps next to an evidence bid the indexer never saw (a raw covenant
+//! output without a KOB1 record, or any other order whose reveal was dropped) matches no candidate:
 //! the continuation is stored with `state = NULL`, `order_state.state_known = 0`.
 //!
-//! Consequences (all checked below): the order is left out of `listed_orders` (matcher / keepers never see it), the view has no
-//! `state` (`snapshotFromOrderView` throws `state-unknown`), and `export_orders` falls back to `o.genesis_state`
-//! (`COALESCE(u.state, o.genesis_state)`), a script that no longer exists on chain, so a maker import verifies `not_found`.
-//! The web node-only fallback (`records.ts` `candidates`) cannot enumerate `stopPrice` either ("trailing stops are not
-//! enumerable"), so after such a ratchet no tool of the product can see or cancel the order from the indexer.
+//! Consequences (all checked below): the order is left out of `listed_orders` (matcher / keepers
+//! never see it), the view has no `state` (`snapshotFromOrderView` throws `state-unknown`), and
+//! `export_orders` falls back to `o.genesis_state` (`COALESCE(u.state, o.genesis_state)`), a script
+//! that no longer exists on chain, so a maker import verifies `not_found`. The web node-only
+//! fallback (`records.ts` `candidates`) cannot enumerate `stopPrice` either ("trailing stops are
+//! not enumerable"), so after such a ratchet no tool of the product can see or cancel the order
+//! from the indexer.
 
 mod common;
 
@@ -77,7 +81,7 @@ async fn a_ratchet_next_to_an_indexed_evidence_bid_keeps_its_proven_state() {
 
 #[tokio::test]
 async fn a_ratchet_next_to_an_unindexed_evidence_bid_keeps_its_proven_state() {
-    // C5: expected to fail until derive_after reads evidence prices from every revealed plain KobBid / KobAsk input (the
+    // `derive_after` reads evidence prices from every revealed plain KobBid / KobAsk input (the
     // template is pinned: reveal inputs by template, not only tracked orders), or enumerates k up to
     // (tpPrice - 1 - stop) / trailStep instead of 64.
     let c = Ctx::new();
@@ -89,8 +93,8 @@ async fn a_ratchet_next_to_an_unindexed_evidence_bid_keeps_its_proven_state() {
 
 #[tokio::test]
 async fn export_orders_never_emits_a_script_that_no_longer_exists() {
-    // C5: expected to fail with the same cause; once a state IS unknown, `export_orders` must not fall back to the genesis
-    // state (omit the order or flag it) because an import of that span can only report `not_found`.
+    // Same cause: once a state IS unknown, `export_orders` must not fall back to the genesis state
+    // (omit the order or flag it), because an import of that span can only report `not_found`.
     let c = Ctx::new();
     let (cov, expect) = ratchet(&c, false).await;
     let current = AnyState::KobCondAsk(expect).encode();
