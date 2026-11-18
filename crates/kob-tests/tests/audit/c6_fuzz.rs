@@ -1,13 +1,15 @@
-//! C6 value-conservation fuzzer (script level): builder-produced transactions of every order kind and batch shape,
-//! mutated structurally and run through the rusty-kaspa v2.1.0 script engine; every accepted mutant is checked by a
-//! value oracle (token supply per covenant id, each maker's value at its own worst all-in price, pair order quotes in both tokens,
-//! intent bounds, order continuations). See `c6/mod.rs`.
+//! Fuzzes value conservation at script level (C6): builder-produced transactions of every order
+//! kind and batch shape, mutated structurally and run through the rusty-kaspa v2.1.0 script engine;
+//! every accepted mutant is checked by a value oracle (token supply per covenant id, each maker's
+//! value at its own worst all-in price, pair order quotes in both tokens, intent bounds, order
+//! continuations). See `c6/mod.rs`.
 //!
-//! * `c6_seeds_are_valid_and_clean`: every seed builds, validates and passes the oracle (the oracle has no false
-//!   positive on the builders' own transactions).
-//! * `c6_fuzz_ci`: a CI-sized deterministic run (`KOB_C6_ITERS`, default 400) that must find nothing.
-//! * `c6_fuzz_long` (ignored): `KOB_C6_SECS` seconds (default 600) from `KOB_C6_SEED`, report to stdout and to
-//!   `KOB_C6_OUT` if set. Run it in release with one thread:
+//! * `c6_seeds_are_valid_and_clean`: every seed builds, validates and passes the oracle (the oracle
+//!   has no false positive on the builders' own transactions).
+//! * `c6_fuzz_ci`: a CI-sized deterministic run (`KOB_C6_ITERS`, default 400) that must find
+//!   nothing.
+//! * `c6_fuzz_long` (ignored): `KOB_C6_SECS` seconds (default 600) from `KOB_C6_SEED`, report to
+//!   stdout and to `KOB_C6_OUT` if set. Run it in release with one thread:
 //!   `cargo test --release -p kob-tests --test c6_fuzz -- --ignored --nocapture --test-threads 1`.
 
 #[path = "../../../kob-protocol/tests/common/mod.rs"]
@@ -395,19 +397,20 @@ fn c6_oracle_flags_pair_token_one_unit_short() {
     assert!(tried > 50 && flagged * 2 > tried, "the oracle is not exact on pair tokens: {flagged} of {tried}");
 }
 
-/// The twelve findings of the first pair-phase long run (seed 2026100601), replayed. All are "different world" mutants
-/// of a pair order's own terms (`orderState`):
-/// - a KobIfdPair sell-first entry whose limit is 0 or negative, auctioned from its stop: the covenant fills only at a
-///   positive quote, so the maker's worst is 1 (the oracle had valued it as "no fill possible");
-/// - a KobPair whose scale of A is negative: KobPair has no `scale > 0` check (finding NP64); only the maker can create
-///   such terms (builders and indexer refuse them), so the maker is left unvalued and counted (`INVALID_TERMS`).
+/// The twelve findings of the first pair-phase long run (seed 2026100601), replayed. All are
+/// "different world" mutants of a pair order's own terms (`orderState`):
+/// - a KobIfdPair sell-first entry whose limit is 0 or negative, auctioned from its stop: the
+///   covenant fills only at a positive quote, so the maker's worst is 1 (not "no fill possible");
+/// - a KobPair whose scale of A is negative: KobPair has no `scale > 0` check (finding NP64); only
+///   the maker can create such terms (builders and indexer refuse them), so the maker is left
+///   unvalued and counted (`INVALID_TERMS`).
 ///
 /// Each replay must leave the oracle clean.
 ///
-/// The op seeds are re-derived for the delivery block of the pair states (bid-delivery-spec section 2): the orderState
-/// op picks one of the integer fields of the decoded state, which now include mode, recvThreshold, topupTip, bought (or
-/// the exit fields), so eight of the original seeds picked another field. Each seed below makes the same mutation as the
-/// original one (same input, field, old and new value).
+/// The op seeds are chosen for the delivery block of the pair states (bid-delivery-spec section 2):
+/// the orderState op picks one of the integer fields of the decoded state, which include mode,
+/// recvThreshold, topupTip, bought (or the exit fields). Each seed below makes the mutation of its
+/// finding (same input, field, old and new value).
 #[test]
 fn c6_pair_long_run_regressions() {
     let keys = keys();

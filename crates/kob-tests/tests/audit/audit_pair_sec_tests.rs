@@ -1,22 +1,25 @@
-//! Pre-mainnet internal security audit (2026-10-12) of the pair templates (`contracts/orders/KobPair.sil`, `KobCondPair.sil`,
-//! `KobIfdPair.sil`) and of the trigger evidence of the KAS-quoted stops: reproducers for the suspicions of that review that
-//! were not refuted by reading the code, executed in the script engine against the templates compiled from source
-//! (`common/pair_harness.rs`).
+//! Tests the pair templates (`contracts/orders/KobPair.sil`, `KobCondPair.sil`, `KobIfdPair.sil`)
+//! and the trigger evidence of the KAS-quoted stops against two security findings. Each test is a
+//! reproducer of a suspicion that reading the code did not refute, executed in the script engine
+//! against the templates compiled from source (`common/pair_harness.rs`).
 //!
-//! - `AUD-EXT` (a finding, closed by the order template version after the audit): the trigger evidence of a stop compared
-//!   the evidence order's token covenant id and scale, never its KCC-20 extension commitment (nor that of the evidence
-//!   custody `tk`). Units of a covenant id with ANOTHER commitment (another token, which only its issuer can create in the
-//!   genesis) traded by resting orders armed a stop of the real token. In an UPDATE the stopped order spends no token, so
-//!   the one-commitment-per-transfer rule of the KCC-20 program does not tie the evidence to the order's own commitment.
-//!   The reproducers (pair stops: `KobCondPair` / `KobIfdPair` `rd` / `evLeg`, token A and token B, both evidence modes;
-//!   KAS-quoted stops: `KobCondAsk` `touchAsk` / `touch`, `KobCondBid` `touchBid` / `touch`, `KobIfdBid` `touchBid`,
-//!   `KobIfdAsk` `touchAsk`, in an update and in the fill that arms) were accepted by every input then. They are now
-//!   refused by the stopped order, and an update is otherwise valid (every other input accepts it), so the commitment
-//!   check alone refuses it.
-//! - `AUD-RB` (a check without an ablation entry): `KobIfdPair.sil` `require(rptAmount <= 1 || rptAmount - 1 < minFill)`
-//!   (the re-arm bound: while at least one minimum fill of re-arms is left a fill takes at most `rptAmount - 1`, so it is
-//!   booked) had no attack scenario. NIAUD-RB1 / RB2 are its witnesses (buy-first and sell-first), PIAUD-RB1 / RB2 the
-//!   honest twins (fewer than `minFill` re-arms left: an unbooked larger fill is fine).
+//! - `AUD-EXT` (a finding, closed by the order template version after the audit): the trigger
+//!   evidence of a stop compared the evidence order's token covenant id and scale, never its KCC-20
+//!   extension commitment (nor that of the evidence custody `tk`). Units of a covenant id with
+//!   ANOTHER commitment (another token, which only its issuer can create in the genesis) traded by
+//!   resting orders armed a stop of the real token. In an UPDATE the stopped order spends no token,
+//!   so the one-commitment-per-transfer rule of the KCC-20 program does not tie the evidence to the
+//!   order's own commitment. The reproducers (pair stops: `KobCondPair` / `KobIfdPair` `rd` /
+//!   `evLeg`, token A and token B, both evidence modes; KAS-quoted stops: `KobCondAsk` `touchAsk` /
+//!   `touch`, `KobCondBid` `touchBid` / `touch`, `KobIfdBid` `touchBid`, `KobIfdAsk` `touchAsk`, in
+//!   an update and in the fill that arms) are accepted by every input on a template without the
+//!   check. The stopped order refuses them, and an update is otherwise valid (every other input
+//!   accepts it), so the commitment check alone refuses it.
+//! - `AUD-RB` (a check without an ablation entry): `KobIfdPair.sil` `require(rptAmount <= 1 ||
+//!   rptAmount - 1 < minFill)` (the re-arm bound: while at least one minimum fill of re-arms is
+//!   left a fill takes at most `rptAmount - 1`, so it is booked) needs an attack scenario.
+//!   NIAUD-RB1 / RB2 are its witnesses (buy-first and sell-first), PIAUD-RB1 / RB2 the honest twins
+//!   (fewer than `minFill` re-arms left: an unbooked larger fill is fine).
 //!
 //! Run: cargo test -p kob-tests --test audit_pair_sec_tests -- --nocapture --test-threads=1
 
@@ -145,10 +148,10 @@ fn evidence_ext(e: &Ed, ev: [u8; 32], tok: [u8; 32]) -> [u8; 32] {
     }
 }
 
-/// The attack `e` (the evidence order of covenant `ev` trades token `tok` of another commitment) is refused by the
-/// stopped order at input `stop_in`; when `whole` (an update, every unit of `tok` moved: the transaction is otherwise
-/// valid) every other input accepts it, so the evidence's commitment check alone refuses it. Before the order template
-/// version after the audit 2026-10 every input accepted it (finding AUD-EXT).
+/// The attack `e` (the evidence order of covenant `ev` trades token `tok` of another commitment) is
+/// refused by the stopped order at input `stop_in`; when `whole` (an update, every unit of `tok`
+/// moved: the transaction is otherwise valid) every other input accepts it, so the evidence's
+/// commitment check alone refuses it. Without that check every input accepts it (finding AUD-EXT).
 fn assert_refused(r: &Run, e: &Ed, stop_in: usize, ev: [u8; 32], tok: [u8; 32], whole: bool) {
     assert_eq!(evidence_ext(e, ev, tok), OTHER_EXT, "{}: the evidence was not moved to the other commitment", e.name);
     if whole && !ph::ablating() {

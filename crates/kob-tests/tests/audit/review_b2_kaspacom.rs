@@ -1,11 +1,13 @@
-//! Review B2 (internal listing review): regression tests for KaspaCom's KCC20 0.2.5 token program
-//! (`contracts/third-party/kaspacom-kcc20/KCC20.placeholder.json`, template `911f0638...`, 25,552 B, 112-byte state at
-//! offset 1), run in rusty-kaspa v2.1.0's TxScriptEngine with the KIP-20 covenant context. The tests pin the program and
-//! its registry entry and assert the refusals the listing verdict relies on for holders and KOB escrow (owner scheme 4):
-//! owner authorisation of every transfer / burn input, conservation, output pinning, slot limits. `mint_by_owner` and
-//! `mint_public` were reviewed by reading; the review report itself is not part of this repository. Finding K-1
-//! (`set_public_mint_active` + a `transfer_delegator` input leaves one covenant output unchecked: the creator of a
-//! mint_policy 2 token mints past `max_supply` or plants a non-program covenant UTXO) is PoC'd in r_kc_05..r_kc_07.
+//! Tests KaspaCom's KCC20 0.2.5 token program
+//! (`contracts/third-party/kaspacom-kcc20/KCC20.placeholder.json`, template `911f0638...`, 25,552
+//! B, 112-byte state at offset 1), run in rusty-kaspa v2.1.0's TxScriptEngine with the KIP-20
+//! covenant context, for listing review B2. The tests pin the program and its registry entry and
+//! assert the refusals the listing verdict relies on for holders and KOB escrow (owner scheme 4):
+//! owner authorisation of every transfer / burn input, conservation, output pinning, slot limits.
+//! `mint_by_owner` and `mint_public` were reviewed by reading; the review report itself is not part
+//! of this repository. Finding K-1 (`set_public_mint_active` + a `transfer_delegator` input leaves
+//! one covenant output unchecked: the creator of a mint_policy 2 token mints past `max_supply` or
+//! plants a non-program covenant UTXO) is PoC'd in r_kc_05..r_kc_07.
 //!
 //! Run: cargo test -p kob-tests --test review_b2_kaspacom -- --nocapture --test-threads=1
 #![allow(clippy::needless_range_loop)]
