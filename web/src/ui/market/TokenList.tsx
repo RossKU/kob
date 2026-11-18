@@ -42,7 +42,8 @@ function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
   const { indexer, registry, kob } = useServices();
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
-  // `page`: the token's page, where a wallet that holds a token the indexer does not list yet can open its market
+  // `page` is the token's page, where a wallet that holds a token the indexer does not list yet can
+  // open its market.
   const [message, setMessage] = useState<{ tone: 'error' | 'info'; text: string; page?: string } | null>(null);
   const id = parseCovenantId(text);
 
@@ -107,7 +108,10 @@ function AddUnknownToken(props: { onFound: (v: IndexerTokenView) => void }) {
   );
 }
 
-/** A figure of a row: a skeleton while its row loads, `—` when there is none (the tooltip says why when the indexer could not answer). */
+/**
+ * A figure of a row. It is a skeleton while its row loads and `—` when there is none. The tooltip
+ * says why when the indexer could not answer.
+ */
 function Figure(props: { cell: Cell; entry: ListEntry; testid: string; cls?: string | undefined }) {
   const c = props.cell;
   const title = c.title ?? (c.text === null && props.entry.unavailable ? t('market.list.unavailable') : null);
@@ -125,8 +129,10 @@ function Figure(props: { cell: Cell; entry: ListEntry; testid: string; cls?: str
 }
 
 /**
- * The figure columns, in order: key, header, the class that hides it on a narrow screen (a phone keeps the price and the change: the market cap and the depth
- * would not fit a card beside the name, the covenant id and the badges). The market cap is a token's (a pair has no supply).
+ * The figure columns, in order. Each has a key, a header, and the class that hides it on a narrow
+ * screen. A phone keeps the price and the change, because the market cap and the depth would not
+ * fit a card beside the name, the covenant id and the badges. The market cap is a token's, since
+ * a pair has no supply.
  */
 const FIGURES: { key: Exclude<SortKey, 'market'>; label: (quote: string | null) => string; hint?: string; cls?: string; tokensOnly?: true }[] = [
   { key: 'last', label: (quote) => (quote ? t('market.col.lastIn', { quote }) : t('market.col.last')), hint: 'market.col.lastHint', cls: 'ml-last' },
@@ -139,7 +145,10 @@ const FIGURES: { key: Exclude<SortKey, 'market'>; label: (quote: string | null) 
 const TOKEN_FIGURES = FIGURES;
 const PAIR_FIGURES = FIGURES.filter((f) => !f.tokensOnly);
 
-/** A sortable column header: a button (keyboard and screen reader: `aria-sort` on the header cell). */
+/**
+ * A sortable column header. It is a button, with `aria-sort` on the header cell for keyboard and
+ * screen reader users.
+ */
 function SortHeader(props: { k: SortKey; label: string; hint?: string | undefined; sort: SortState; onSort: (k: SortKey) => void; right?: boolean; cls?: string | undefined }) {
   const state = ariaSort(props.sort, props.k);
   const cls = `${props.right ? 'right ' : ''}${props.cls ?? ''}`.trim();
@@ -155,12 +164,18 @@ function SortHeader(props: { k: SortKey; label: string; hint?: string | undefine
 
 const rowState = (e: ListEntry): string => (e.loading ? 'loading' : e.unavailable ? 'unavailable' : 'ready');
 
-/** The most rows of a batch that wait for the one above: a long batch is not slower than a short one. */
+/**
+ * The most rows of a batch that wait for the one above, so a long batch is not slower than a short
+ * one.
+ */
 const REVEAL_STEPS = 14;
-/** The placeholder rows while the list is held (the first figures are not in yet). */
+/** The placeholder rows while the list is held, before the first figures are in. */
 const SKELETON_ROWS = 8;
 
-/** A row's place while the list is held: as tall as a token's row, so nothing moves when the rows come. */
+/**
+ * A row's place while the list is held. It is as tall as a token's row, so nothing moves when the
+ * rows come.
+ */
 function SkeletonRow() {
   return (
     <tr class="ml-skel-row" data-testid="token-row-skeleton" aria-hidden="true">
@@ -186,15 +201,20 @@ function SkeletonRow() {
 const ROW_LEAVE_MS = 360;
 const reducedMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-/** A phone: the list is cards (market.css), and a card's star and eye are one "⋯" menu. */
+/** A phone. The list is cards (market.css), and a card's star and eye are one "⋯" menu. */
 const PHONE_LIST_QUERY = '(max-width: 759px)';
 
 function TokenTableRow({ row, entry, step, favorite, onFavorite, hidden, onHide, held, leaving, again }: { row: TokenRow; entry: ListEntry; step: number; favorite: boolean; onFavorite: (id: string) => void; hidden: boolean; onHide: (id: string) => void; held: boolean; leaving: boolean; again: '' | 'a' | 'b' }) {
-  // every row has the same three lines, so every row is as tall and the icons keep one pitch: line 1 the ticker (bold) and the name (one line, an ellipsis, the
-  // whole name in its title); line 2 the covenant id fragment with its copy button; line 3 the badges (one line, never wrapped). A token without a ticker is led by its name
+  // Every row has the same three lines, so every row is as tall and the icons keep one pitch.
+  // - Line 1 is the ticker (bold) and the name, on one line with an ellipsis and the whole name in
+  //   its title.
+  // - Line 2 is the covenant id fragment with its copy button.
+  // - Line 3 is the badges, on one line and never wrapped.
+  // A token without a ticker is led by its name.
   const headline = row.ticker || row.name || t('market.list.unnamed');
   const sub = row.ticker ? row.name : '';
-  // a phone: the star and the eye are behind one "⋯" (they took a third of a card's line), and the covenant id is short, the whole of it one tap away
+  // On a phone the star and the eye are behind one "⋯", because they took a third of a card's
+  // line. The covenant id is short, and the whole of it is one tap away.
   const phone = useMedia(PHONE_LIST_QUERY);
   const [menu, setMenu] = useState(false);
   const [idOpen, setIdOpen] = useState(false);
@@ -273,10 +293,16 @@ function PairTableRow({ pair, entry, onFavorite }: { pair: ListedPair; entry: Li
   );
 }
 
-/** What the list reads of a pair besides its two KAS markets: the 24 h pair volume and the depth within 2 % of the mid (either may be missing). */
+/**
+ * What the list reads of a pair besides its two KAS markets: the 24 h pair volume and the depth
+ * within 2 % of the mid. Either may be missing.
+ */
 interface PairFigures { volume: PairVolume | null; depth: PairDepth | null }
 
-/** One figure of the pair slots as its own slot: a pair whose figures are none leaves it unavailable. */
+/**
+ * One figure of the pair slots as its own slot. A pair whose figures are none leaves it
+ * unavailable.
+ */
 function sliceOf<T>(slots: Map<string, Slot<PairFigures | null>>, pick: (f: PairFigures) => T | null): Map<string, Slot<T | null>> {
   const out = new Map<string, Slot<T | null>>();
   for (const [k, s] of slots) out.set(k, s.state === 'ok' ? { state: 'ok', value: pick(s.value!) } : s);
@@ -292,39 +318,49 @@ const hasStats = (r: TokenRow): boolean => r.source !== 'kascov' && r.source !==
 const pairToken = (r: TokenRow): PairToken => ({ covenantId: r.covenantId, ticker: r.ticker, decimals: r.decimals ?? 0, scale: r.scale ?? 1n });
 
 /**
- * Market list: every token this build can trade as its KAS market (TOKEN/KAS: last price, 24 h change, 24 h KAS volume, market cap, spread, depth within
- * 2 % of the mid; the token's badges and its full token hash), sortable by every column (24 h volume first), searchable, add by covenant id. A phone shows the
- * name, the price and the change. A token pair is reached by the picker; the Favorites view lists the favourite tokens and pairs (BASE/QUOTE, the same columns without
- * the market cap), and only then is anything read for a pair.
+ * Market list. It shows every token this build can trade as its KAS market (TOKEN/KAS). The
+ * columns are the last price, the 24 h change, the 24 h KAS volume, the market cap, the spread
+ * and the depth within 2 % of the mid. A row also has the token's badges and its full token hash.
+ * It is sortable by every column, with 24 h volume first, searchable, and a token can be added by
+ * covenant id. A phone shows the name, the price and the change. A token pair is reached by the
+ * picker. The Favorites view lists the favourite tokens and pairs (BASE/QUOTE), with the same
+ * columns without the market cap. Only then is anything read for a pair.
  *
- * The rows arrive together: the list is held on placeholders until the first figures are in (at most LIST_HOLD_MS), then the first rows rise in, sorted, and
- * stay in their places while later figures arrive; a sort, a search or the end of the hold's late figures places them anew. One page shows the number of rows the
- * viewer picked, so only those rows load their icons; the search looks through every page, and a new sort, search or size starts at the first page.
+ * The rows arrive together. The list is held on placeholders until the first figures are in, for
+ * at most LIST_HOLD_MS. Then the first rows rise in, sorted, and stay in their places while later
+ * figures arrive. A sort, a search or the end of the hold's late figures places them anew. One
+ * page shows the number of rows the viewer picked, so only those rows load their icons. The
+ * search looks through every page, and a new sort, search or size starts at the first page.
  */
 export function TokenList(props: { invalidToken?: string }) {
   const { registry, indexer, kob, config, standalone } = useServices();
-  // USD display (Settings): the price, volume, market cap and depth of the token rows in dollars; null = KAS
+  // The USD display (Settings) shows the price, volume, market cap and depth of the token rows in
+  // dollars. Null means KAS.
   const fiat = useFiat();
-  // the KAS price whatever the display currency: the thin-book marker of the 24 h change ("under $100 within 2 %")
+  // The KAS price whatever the display currency, for the thin-book marker of the 24 h change
+  // ("under $100 within 2 %").
   const rate = useKasRate();
-  // standalone mode (data/standalone.ts): the list and its figures are what this page saw on the node since the mode started, read again as it sees more
+  // Standalone mode (data/standalone.ts). The list and its figures are what this page saw on the
+  // node since the mode started, read again as it sees more.
   const sa = useStandalone(standalone);
   const saKey = sa?.active ? `standalone:${sa.version}` : 'indexer';
   const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer, saKey]);
   const { favorites, change: changeFavorites } = useFavorites(config.network);
-  // the tokens the viewer hid from the list (hidden-tokens.ts)
+  // The tokens the viewer hid from the list (hidden-tokens.ts).
   const { hidden, toggle: toggleHiddenToken } = useHiddenTokens(config.network);
   const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
   // The list's filters are one menu (held-list.ts): the Favorites and the Hidden views, the
   // wallet's tokens and the tokens without a name.
   const [filters, setFilters] = useState<ListFilters>(NO_FILTERS);
   const { favorites: favoritesOnly, hidden: hiddenOnly, nameless: showNameless } = filters;
-  // a row the eye was pressed on leaves as it came in, reversed (`.ml-out`), then the list drops it
+  // A row the eye was pressed on leaves as it came in, reversed (`.ml-out`). Then the list drops
+  // it.
   const [leaving, setLeaving] = useState<ReadonlySet<string>>(() => new Set());
-  // once it is gone, the rows that stood below it rise in again from its place, one after the other, as the page's rows first did (`.ml-again-a` / `-b` in
-  // market.css: another animation name restarts the animation without remounting the row), instead of jumping up a place
+  // Once it is gone, the rows that stood below it rise in again from its place, one after the
+  // other, as the page's rows first did, instead of jumping up a place. Another animation name
+  // restarts the animation without remounting the row (`.ml-again-a` and `-b` in market.css).
   const [again, setAgain] = useState<{ from: number; n: number }>({ from: Number.POSITIVE_INFINITY, n: 0 });
-  // the live order counts of the favourite pairs: nothing is read for a pair until they are shown
+  // The live order counts of the favourite pairs. Nothing is read for a pair until they are shown.
   const readPairs = favoritesOnly && favorites.pairs.length > 0;
   const pairs = useAsync((signal) => (indexer && readPairs ? indexer.pairs(undefined, { signal }) : Promise.resolve(null)), [indexer, !!sa?.active, readPairs]);
   const [query, setQuery] = useState('');
@@ -338,10 +374,13 @@ export function TokenList(props: { invalidToken?: string }) {
     setGeneration((g) => g + 1);
   }, [saKey]);
 
-  // a token this build cannot trade is not listed (a direct link to it shows a short "not tradable" page)
-  // a token the registry does not list is named by its verified KCC-23 declaration (its ticker, name and decimals)
+  // A token this build cannot trade is not listed. A direct link to it shows a short "not tradable"
+  // page.
+  // A token the registry does not list is named by its verified KCC-23 declaration (its ticker,
+  // name and decimals).
   const declared = useDeclarationLookup();
-  // the names, icons and tokens kascov.io adds (kascov-merge.ts): only tokens of a program this build trades on this network; none of its facts
+  // The names, icons and tokens kascov.io adds (kascov-merge.ts). They cover only tokens of a
+  // program this build trades on this network, and none of its facts.
   const kascov = useKascov();
   const kascovTokens = kascov.status === 'ok' ? kascov.tokens : null;
   // The connected wallet's tokens (use-wallet-holdings.ts). Each one the lists do not name gets a
@@ -366,21 +405,24 @@ export function TokenList(props: { invalidToken?: string }) {
     if (!connected && filters.held) setFilters((f) => ({ ...f, held: false }));
   }, [connected, filters.held]);
   const listed = useMemo(() => (favoritesOnly ? listedPairs(favorites.pairs, rows, pairs.data) : []), [favoritesOnly, favorites.pairs, pairs.data, rows]);
-  // the Favorites view's tokens: a favourite no list names now keeps a row by its id, so its star can be taken off
+  // The Favorites view's tokens. A favourite no list names now keeps a row by its id, so its star
+  // can be taken off.
   const favoriteRows = useMemo(() => {
     if (!favoritesOnly) return [];
     const byId = new Map(rows.map((r) => [r.covenantId.toLowerCase(), r]));
     return favorites.tokens.map((id) => byId.get(id) ?? idOnlyRow(id));
   }, [favoritesOnly, favorites.tokens, rows]);
-  // the Hidden view's tokens: as the Favorites view, a hidden token no list names now keeps a row by its id, so it can be shown again
+  // The Hidden view's tokens. As in the Favorites view, a hidden token no list names now keeps a
+  // row by its id, so it can be shown again.
   const hiddenRows = useMemo(() => {
     if (!hiddenOnly) return [];
     const byId = new Map(rows.map((r) => [r.covenantId.toLowerCase(), r]));
     return hidden.map((id) => byId.get(id) ?? idOnlyRow(id));
   }, [hiddenOnly, hidden, rows]);
 
-  // the 24 h figures: one `/v1/stats` per listed token, and in the Favorites view one more for a token only a favourite names and one 24 h pair volume per pair, once
-  // the token list is in (a few calls at a time)
+  // The 24 h figures are one `/v1/stats` per listed token. In the Favorites view there is one more
+  // for a token only a favourite names, and one 24 h pair volume per pair. They are read once the
+  // token list is in, a few calls at a time.
   const ready = !indexer || tokens.data !== undefined || tokens.error !== null;
   const statKeys = useMemo(() => {
     if (!ready) return null;
@@ -398,8 +440,9 @@ export function TokenList(props: { invalidToken?: string }) {
       const p = byKey.get(key);
       if (!p || !pairHasDecimals(p)) return null;
       const [base, quote] = [pairToken(p.base), pairToken(p.quote)];
-      // the 24 h volume and the depth near the mid (the pair book), both orientations of the pair together (the pair page's figures): a book that cannot be read
-      // leaves only its own cell empty, and an orientation that cannot be read leaves the other's figure
+      // The 24 h volume and the depth near the mid come from the pair book, with both orientations
+      // of the pair together, as on the pair page. A book that cannot be read leaves only its own
+      // cell empty. An orientation that cannot be read leaves the other's figure.
       const soft = <T,>(e: unknown): T | null => {
         if (isAbort(e)) throw e;
         return null;
@@ -419,13 +462,15 @@ export function TokenList(props: { invalidToken?: string }) {
   const volumes = useMemo(() => sliceOf(pairFigures, (f) => f.volume), [pairFigures]);
   const depths = useMemo(() => sliceOf(pairFigures, (f) => f.depth), [pairFigures]);
 
-  // the first rows wait for the figures they are sorted by: the indexer's list, its stats and kascov's names, each at its own pace, would move them
+  // The first rows wait for the figures they are sorted by. The indexer's list, its stats and
+  // kascov's names, each at its own pace, would move them.
   const figuresIn = ready && statKeys !== null && statKeys.every((k) => (stats.get(k) ?? LOADING).state !== 'loading') && kascov.status !== 'loading';
   const open = useHeldUntil(figuresIn);
 
   const shownRows = useMemo(() => {
     const slotOf = (id: string): Slot<StatsView> => stats.get(id) ?? (indexer ? LOADING : NONE);
-    // tokens without metadata only on a search or on request, or as a favourite; a hidden token only on a search, as a favourite or in the Hidden view
+    // Tokens without metadata show only on a search, on request, or as a favourite. A hidden token
+    // shows only on a search, as a favourite or in the Hidden view.
     const visible = filterRows({ rows, favoriteRows, hiddenRows, hiddenIds: hiddenSet, heldIds: heldSet, filters, query });
     const byId = new Map(visible.map((r) => [r.covenantId, r]));
     const entries = visible.map((r) => (r.source === 'kascov' ? kascovEntry(r) : r.source === 'held' ? heldEntry(r) : tokenEntry(r, slotOf(r.covenantId), fiat, rate)));
@@ -441,7 +486,8 @@ export function TokenList(props: { invalidToken?: string }) {
     return sortEntries(entries, sort).map((e) => ({ entry: e, pair: byKey.get(e.key)! }));
   }, [listed, query, sort, stats, volumes, depths, indexer]);
 
-  // the rows' places: taken from the sort when something the viewer sees as a new list happens, kept while figures arrive
+  // The rows' places are taken from the sort when something the viewer sees as a new list happens.
+  // They are kept while figures arrive.
   const [pageSize, setPageSize] = useListPageSize();
   const viewKey = `${sort.key}:${sort.dir}|${query}|${showNameless ? 1 : 0}|${favoritesOnly ? 1 : 0}|${hiddenOnly ? 1 : 0}|${filters.held ? 1 : 0}`;
   const placedBy = `${viewKey}|${generation}|${figuresIn ? 1 : 0}|${open ? 1 : 0}`;
@@ -449,12 +495,13 @@ export function TokenList(props: { invalidToken?: string }) {
   const sortedIds = shownRows.map((r) => r.row.covenantId);
   placed.current = { by: placedBy, ids: placed.current.by === placedBy ? keepOrder(placed.current.ids, sortedIds) : sortedIds };
   const rowOf = new Map(shownRows.map((r) => [r.row.covenantId, r]));
-  // another sort, search or size starts at the first page
+  // Another sort, search or size starts at the first page.
   const [turned, setTurned] = useListPage(`${viewKey}|${pageSize}`);
   const pager = pageWindow(placed.current.ids.length, pageSize, turned);
   const windowRows = placed.current.ids.slice(pager.from, pager.to).map((id) => rowOf.get(id)!);
   const listTop = useRef<HTMLDivElement>(null);
-  // the placeholders are as tall as a page of rows: a page left scrolled down would otherwise open the list in its middle
+  // The placeholders are as tall as a page of rows. A page left scrolled down would otherwise open
+  // the list in its middle.
   useEffect(() => window.scrollTo(0, 0), []);
 
   const onSort = (k: SortKey) => setSort((s) => nextSort(s, k));
@@ -493,7 +540,7 @@ export function TokenList(props: { invalidToken?: string }) {
     ...(hidden.length > 0 || hiddenOnly ? [{ key: 'hidden' as FilterKey, label: t('market.hidden.show', { n: hidden.length }), testid: 'token-list-hidden' }] : []),
     ...(namelessCount > 0 || showNameless ? [{ key: 'nameless' as FilterKey, label: t('market.filter.nameless', { n: namelessCount }), testid: 'token-list-nameless' }] : []),
   ];
-  // the Favorites view with favourite pairs only has no empty token table above them
+  // The Favorites view with favourite pairs only has no empty token table above them.
   const noTokenTable = favoritesOnly && shownRows.length === 0 && shownPairs.length > 0;
 
   return (

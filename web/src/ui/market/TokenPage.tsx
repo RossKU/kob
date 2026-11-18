@@ -54,8 +54,10 @@ import './market.css';
 const TAPE_LIMIT = 50;
 
 /**
- * `#/market/<covenantId>`: an exchange layout. Title bar + 24 h stats; order book | price chart and depth | order ticket; the activity log of the market (ui/activity, full width);
- * token facts below. Live: the WebSocket feed (`book:` / `fills:`) triggers a debounced refetch, 5 s polling without it.
+ * `#/market/<covenantId>`: an exchange layout. It has a title bar with the 24 h stats, then the
+ * order book, the price chart and depth, and the order ticket. The activity log of the market
+ * (ui/activity) runs full width, with the token facts below. Live, the WebSocket feed (`book:` and
+ * `fills:`) triggers a debounced refetch. Without it the page polls every 5 s.
  */
 export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; amount?: string; price?: string }) {
   const services = useServices();
@@ -63,12 +65,15 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const { registry, indexer, kob, config } = services;
   const id = props.covenantId;
   const { favorites, change: changeFavorites } = useFavorites(config.network);
-  // standalone mode: the book, the trades and the figures come from the node, on top of what the page last read from the indexer (data/stream-carry.ts)
+  // Standalone mode: the book, the trades and the figures come from the node, on top of what the
+  // page last read from the indexer (data/stream-carry.ts).
   const sa = useStandalone(services.standalone);
   const standalone = sa?.active ? sa : null;
   const carry = standalone ? services.standalone?.carry ?? null : null;
-  // the close of a position (My orders): `?ticket=sell&amount=N` (buy first) opens the ticket on a market SELL of the N base units the position
-  // bought and has not sold yet, `?ticket=cover&amount=N` (sell first) on a market BUY of the N it sold; `?ticket=close` on "close (sell all)"
+  // The close of a position (My orders). `?ticket=sell&amount=N` is for a position bought first. It
+  // opens the ticket on a market SELL of the N base units the position bought and has not sold yet.
+  // `?ticket=cover&amount=N` is for a position sold first and opens a market BUY of the N it sold.
+  // `?ticket=close` opens "close (sell all)".
   const [prefill, setPrefill] = useState<{ side?: 'buy' | 'sell'; price?: bigint; amount?: bigint; type?: 'close' | 'market'; seq?: number } | undefined>(
     props.ticket === 'close'
       ? { side: 'sell', type: 'close' }
@@ -79,44 +84,57 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
             { side: 'sell', ...(props.amount ? { amount: BigInt(props.amount) } : {}), ...(props.price ? { price: BigInt(props.price) } : {}) }
           : undefined,
   );
-  // a limit sell that the link filled in (side, amount, price): said above the ticket until the book or the form replaces it (a link can name any price)
+  // A limit sell that the link filled in (side, amount, price). It is said above the ticket until
+  // the book or the form replaces it, because a link can name any price.
   const linkFilled = useRef(props.ticket === 'ask' ? prefill : undefined);
   const [liveKey, setLiveKey] = useState(0);
-  // bumps on a reorg / resync (history may have changed, not only grown): the chart reloads in full instead of fetching only its newest bars
+  // Bumps on a reorg or resync, when history may have changed and not only grown. The chart then
+  // reloads in full instead of fetching only its newest bars.
   const [resyncKey, setResyncKey] = useState(0);
-  // the chosen price grouping per orientation (steps of KAS per token natively, of tokens per KAS inverted)
+  // The chosen price grouping per orientation, in steps of KAS per token natively and of tokens per
+  // KAS inverted.
   const [groupIdxNative, setGroupIdxNative] = useState(0);
   const [groupIdxInv, setGroupIdxInv] = useState(0);
 
   const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer, !!standalone]);
-  // a token the registry does not list is named by its verified KCC-23 declaration (the selector, the title, the name)
+  // A token the registry does not list is named by its verified KCC-23 declaration (the selector,
+  // the title, the name).
   const declaredOf = useDeclarationLookup();
   const allRows = useMemo(() => buildTokenRows(registry, tokens.data ?? null, [], declaredOf), [registry, tokens.data, declaredOf]);
-  // the pair selector offers only tokens this build can trade
+  // The pair selector offers only tokens this build can trade.
   const choiceRows = useMemo(() => tradableRows(allRows, kob.templates()), [allRows, kob]);
-  // another listed token uses this ticker: a short note at the title and the ticket
+  // Another listed token uses this ticker, so the title and the ticket get a short note.
   const sharedTicker = useMemo(() => sharedTickerIds(choiceRows).has(id), [choiceRows, id]);
-  // the decimals entered for the token's first order (used only while no order tells the scale); per token
+  // The decimals entered for the token's first order, per token. They are used only while no order
+  // tells the scale.
   const [entered, setEntered] = useState<{ id: string; decimals: number } | null>(null);
   const enteredDecimals = entered && entered.id === id ? entered.decimals : null;
-  // the token however it is known, its synthesised TokenInfo where it has no registry entry, and how it is named (use-market-token.ts)
+  // The token however it is known, its synthesised TokenInfo where it has no registry entry, and
+  // how it is named (use-market-token.ts).
   const { row, headerRow, ticketInfo, open, held, pub, shown, onChain, kascovStatus } = useMarketToken(id, { rows: allRows, rowsLoading: tokens.loading, refreshKey: liveKey, decimals: enteredDecimals, declared: declaredOf });
 
-  // KOB's own genesis check of the token (once per token and session, data/genesis-check.ts): "Genesis verified", "Genesis check failed", or "Genesis not verified" with the
-  // reason, replacing kascov's remark; a token the registry verified is not checked. The result gates nothing.
+  // KOB's own genesis check of the token, once per token and session (data/genesis-check.ts). It
+  // gives "Genesis verified", "Genesis check failed", or "Genesis not verified" with the reason,
+  // and replaces kascov's remark. A token the registry verified is not checked. The result gates
+  // nothing.
   const genesisCheck = useGenesisCheck(headerRow ?? row ?? null);
   const checkedRow = useMemo(() => (headerRow ? applyGenesisCheck(headerRow, genesisCheck) : headerRow), [headerRow, genesisCheck]);
 
-  // the pair selector's rows: the tradable tokens, this token named as the page names it (a token no list names has no row of its own: it is added)
+  // The pair selector's rows are the tradable tokens, with this token named as the page names it. A
+  // token no list names has no row of its own and is added.
   const selectorRows = useMemo(() => withShownRows(choiceRows, [headerRow ?? row]), [choiceRows, headerRow, row]);
 
-  // one row per order (the levels are summed here, book-model.ts): a curve sell order's levels carry their `curve_level`, so the book can mark them
+  // One row per order, with the levels summed here (book-model.ts). A curve sell order's levels
+  // carry their `curve_level`, so the book can mark them.
   const book = useAsync((signal) => (indexer ? indexer.book(id, { depth: BOOK_FETCH_DEPTH, aggregate: false }, { signal }) : Promise.resolve(null)), [indexer, id]);
-  // the latest trades (the last price and the page's price precision; the list of trades is the activity log below): `/v1/trades`, or the fill events of an indexer without it
+  // The latest trades, for the last price and the page's price precision. The list of trades is the
+  // activity log below. They come from `/v1/trades`, or from the fill events of an indexer without
+  // it.
   const trades = useAsync(
     async (signal) => {
       if (!indexer) return null;
-      // the trades, the stats and the depth decorate the page: low fetch priority, the order ticket's reads get a connection first
+      // The trades, the stats and the depth decorate the page, so they get a low fetch priority.
+      // The order ticket's reads get a connection first.
       const v = await indexer.trades(id, { limit: TAPE_LIMIT }, { signal, priority: 'low' });
       if (v) return { kind: 'trades' as const, v };
       return { kind: 'fills' as const, v: await indexer.fills({ token: id, limit: TAPE_LIMIT }, { signal, priority: 'low' }) };
@@ -125,12 +143,14 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   );
   const stats = useAsync((signal) => (indexer ? indexer.stats(id, { signal, priority: 'low' }) : Promise.resolve(null)), [indexer, id]);
   const depth = useAsync((signal) => (indexer ? indexer.depth(id, { levels: 60 }, { signal, priority: 'low' }) : Promise.resolve(null)), [indexer, id]);
-  // the book and the 24 h strip show together, once for the page: the price precision and the last price of both come from the stats and the trades (the ticket waits for none
-  // of this, and a refresh or a notice after that is shown as it comes)
+  // The book and the 24 h strip show together, once for the page. The price precision and the last
+  // price of both come from the stats and the trades. The ticket waits for none of this, and a
+  // refresh or a notice after that is shown as it comes.
   const panelsOpen = useHeldUntil(settled(book) && settled(trades) && settled(stats));
 
-  // a live notice or a poll never aborts a pull in flight: it is folded into one pull right after it (`refresh`), so a slow indexer still gets its
-  // answers through and is never asked twice for the same thing; only the manual button aborts and restarts
+  // A live notice or a poll never aborts a pull in flight. It is folded into one pull right after
+  // it (`refresh`), so a slow indexer still gets its answers through and is never asked twice for
+  // the same thing. Only the manual button aborts and restarts.
   const refreshAll = (manual = false, full = false) => {
     for (const r of [book, trades, stats, depth]) {
       if (manual) r.reload();
@@ -140,7 +160,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     if (full) setResyncKey((k) => k + 1);
   };
   const mode = useLiveRefresh(services, [`book:${id}`, `fills:${id}`], (e) => !e.token || e.token === id, (full) => refreshAll(false, full));
-  // entering or leaving standalone mode: everything is read again from the other source (in full); in the mode, every change of what was seen too
+  // Entering or leaving standalone mode reads everything again from the other source, in full. In
+  // the mode, every change of what was seen does too.
   const saActive = !!standalone;
   const firstMode = useRef(true);
   useEffect(() => {
@@ -154,28 +175,35 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     if (standalone) refreshAll(false);
   }, [standalone?.version]);
 
-  // every book row carries its own scale; the market's is the token's standard scale (`10^decimals`, at most 10^9): prices per whole token. The
-  // decimals: the registry's, else the scale its orders set, else this browser's issuance of it, else 8 (the same rule as everywhere: never base units)
+  // Every book row carries its own scale. The market's is the token's standard scale
+  // (`10^decimals`, at most 10^9), so prices are per whole token. The decimals are the registry's,
+  // else the scale its orders set, else this browser's issuance of it, else 8. That is the same
+  // rule as everywhere, and never base units.
   const decimals = row?.decimals ?? shown?.decimals ?? 8;
   const scale = row?.scale ?? null;
   const bookScale = scale ?? 1n;
 
-  // orientation (orientation.ts): TOKEN/KAS natively (the default of every market, a USD reference token included), KAS/TOKEN inverted. Display only. Needs the scale.
+  // Orientation (orientation.ts). It is TOKEN/KAS natively, the default of every market, a USD
+  // reference token included, and KAS/TOKEN inverted. It is display only and needs the scale.
   const usdRef = services.config.quoteTokens[id.toLowerCase()] === 'USD';
   const [invertedChoice, toggleInverted, setInverted] = useInverted(marketKey('token', id), defaultInverted(usdRef));
   const canFlip = scale !== null;
   const inverted = invertedChoice && canFlip;
-  // the unit of every price and amount on the page: KOB's name of the token, else the creator's ticker (the same label rule as the list), else its covenant id
+  // The unit of every price and amount on the page. It is KOB's name of the token, else the
+  // creator's ticker (the same label rule as the list), else its covenant id.
   const name = headerRow?.ticker || shown?.ticker || '';
-  // the tab: `EXKCC/KAS · KOB` (a token still being looked up, or with no name, is named by its short id, never a whole covenant id), `Token not found` when nothing names it
+  // The tab title is `EXKCC/KAS · KOB`. A token still being looked up, or with no name, is named
+  // by its short id and never a whole covenant id. It is `Token not found` when nothing names it.
   useDocumentTitle(row || tokens.loading || held.loading || pub.loading ? marketPageTitle({ name: row ? name : null, id }, { name: 'KAS', id: 'kas' }) : pageTitle(t('market.token.notFound')));
 
-  // the book without grouping: the reference price of the page when there is neither a 24 h last price nor a trade
+  // The book without grouping. It gives the reference price of the page when there is neither a 24
+  // h last price nor a trade.
   const refMid = useMemo(() => {
     const m = book.data ? buildBookModel(book.data, { scale: bookScale, depth: 1 }) : null;
     return m ? m.mid : null;
   }, [book.data]);
-  // price grouping: the registry tick, or the step the visible prices sit on, then steps scaled to the price (its decade only, so they stay put)
+  // Price grouping uses the registry tick, or the step the visible prices sit on. The steps are
+  // then scaled to the price, by its decade only, so they stay put.
   const midDecade = refMid !== null && refMid > 0n ? refMid.toString().length : 0;
   const baseTick = useMemo(() => {
     if (row?.tick && row.tick > 0n) return row.tick;
@@ -188,7 +216,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     return d.kind === 'trades' ? tapeFromTrades(d.v, TAPE_LIMIT) : tapeFromFills(tradeRows(d.v.items, bookScale, TAPE_LIMIT), scale);
   }, [trades.data, scale]);
 
-  // one price precision for the whole page: from the last trade, else the book (native: KAS per token; inverted: tokens per KAS)
+  // One price precision for the whole page. It comes from the last trade, else the book. Natively
+  // that is KAS per token and inverted it is tokens per KAS.
   const refPrice = useMemo((): { price: bigint; basis: bigint } | null => {
     const s = stats.data;
     if (s && s.last && /^\d+$/.test(s.last) && /^[1-9]\d*$/.test(s.price_basis)) return { price: BigInt(s.last), basis: BigInt(s.price_basis) };
@@ -197,14 +226,19 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     if (refMid && scale) return { price: refMid, basis: scale };
     return null;
   }, [stats.data, tape, refMid, scale]);
-  // price decimals: the kit's one display rule (about 5 significant digits of the reference price, at most PRICE_DP_CAP decimals; not the token's tick, which can need 8 at 33 KAS), chosen
-  // once per market and shared by the book, the stats, the chart and the depth chart, so one price reads the same everywhere; the whole price is in the title where a cell shows less
+  // Price decimals follow the kit's one display rule. That is about 5 significant digits of the
+  // reference price and at most PRICE_DP_CAP decimals. The token's tick is not used, because it can
+  // need 8 at 33 KAS. They are chosen once per market and shared by the book, the stats, the chart
+  // and the depth chart, so one price reads the same everywhere. The whole price is in the title
+  // where a cell shows less.
   const refPerToken = useMemo(() => (refPrice ? basisToTokenSompi(refPrice.price, decimals, refPrice.basis) : null), [refPrice, decimals]);
   const dpNative = useMemo(() => displayPriceDp(refPerToken), [refPerToken]);
   const dpFlipped = useMemo(() => flipDp(refPrice ? tokensPerKas(refPrice.price, decimals, refPrice.basis) : null), [refPrice, decimals]);
   const dp = inverted ? dpFlipped : dpNative;
-  // the grouping steps (the book's selector) start at the display step of the kit's price rule (10^-dp KAS: 0.001 at 34 KAS), never at the token's tick (1 sompi reads 0.00000001): the steps
-  // are that and the three decades above it, each a multiple of the tick. Without a reference price they are the tick's and the decades scaled to the book's price.
+  // The grouping steps of the book's selector start at the display step of the kit's price rule,
+  // 10^-dp KAS, which is 0.001 at 34 KAS. They never start at the token's tick, because 1 sompi
+  // reads 0.00000001. The steps are that and the three decades above it, each a multiple of the
+  // tick. Without a reference price they are the tick's and the decades scaled to the book's price.
   const groups = useMemo(() => {
     if (refPerToken === null || !scale || scale <= 0n) return groupSizesAt(baseTick, midDecade ? 10n ** BigInt(midDecade - 1) * 2n : null);
     return displayGroupSizes(baseTick, dpNative, decimals, scale);
@@ -212,22 +246,26 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const groupIdx = Math.min(inverted ? groupIdxInv : groupIdxNative, groups.length - 1);
   const group = groups[groupIdx]!;
 
-  // the levels per side the card's height holds (book-rows.ts)
+  // The levels per side the card's height holds (book-rows.ts).
   const { rows: bookRows, fitRef: bookFit } = useBookRows();
-  // the grouped book (inverted: the steps are multiples of the displayed price step, `orientation.ts`)
+  // The grouped book. When inverted, the steps are multiples of the displayed price step
+  // (`orientation.ts`).
   const invMult = INVERTED_GROUP_MULTIPLIERS[Math.min(groupIdxInv, INVERTED_GROUP_MULTIPLIERS.length - 1)]!;
   const regroup = useMemo(() => (inverted && scale !== null ? invertedRegrouper({ decimals, scale, dp, mult: invMult }) : undefined), [inverted, scale, decimals, dp, invMult]);
   const freshModel = useMemo(
     () => (book.data ? buildBookModel(book.data, { scale: bookScale, depth: bookRows, group: inverted ? 0n : group, ...(regroup ? { regroup } : {}) }) : null),
     [book.data, bookScale, group, groupIdx, inverted, regroup, bookRows],
   );
-  // the live book as it is (a crossed book, matchers a moment behind, is drawn with a negative spread like any other)
+  // The live book as it is. A crossed book, with matchers a moment behind, is drawn with a negative
+  // spread like any other.
   const model = freshModel;
-  // the book's own decimals: the page's, or fewer for a coarser grouping (the selector is also the display precision: a step of 0.01 reads two decimals). A flipped book keeps the page's: its
-  // steps are multiples of the displayed price step, so its rows show the same decimals at every grouping
+  // The book's own decimals are the page's, or fewer for a coarser grouping. The selector is also
+  // the display precision, so a step of 0.01 reads two decimals. A flipped book keeps the page's.
+  // Its steps are multiples of the displayed price step, so its rows show the same decimals at
+  // every grouping.
   const groupDp = groupingPriceDp(group, decimals, scale);
   const bookDp = inverted ? dp : displayPriceDp(refPerToken, groupDp);
-  // a failed or late pull: the last good book stays, "stale since" says how old it is
+  // After a failed or late pull the last good book stays, and "stale since" says how old it is.
   const bookStaleSince = useStaleSince(book);
   const groupOptions = useMemo(
     () =>
@@ -237,9 +275,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     [inverted, groups, decimals, bookScale, dp],
   );
 
-  // the KAS price whatever the display currency: the thin-book marker of the 24 h change
+  // The KAS price whatever the display currency, for the thin-book marker of the 24 h change.
   const rate = useKasRate();
-  // the token's fixed total supply (the registry's genesis record, else kascov's): the thin-book threshold scales with the token's fully diluted value
+  // The token's fixed total supply, from the registry's genesis record, else kascov's. The
+  // thin-book threshold scales with the token's fully diluted value.
   const supplyUnits = useMemo(() => (row ? supplyOf(row)?.units ?? null : null), [row?.info, row?.kascov]);
   const sm = useMemo(() => (inverted ? statsModelFlipped(stats.data ?? null, decimals, dp, rate, supplyUnits) : statsModel(stats.data ?? null, decimals, dp, rate, supplyUnits)), [stats.data, decimals, dp, inverted, rate, supplyUnits]);
   const last = useMemo(() => {
@@ -250,9 +289,11 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     return { text: priceText(r.price!, decimals, tape!.basis ?? 0n, dp), side: r.side };
   }, [sm, tape, decimals, dp, inverted]);
   const statsForView = sm.last || !last ? sm : { ...sm, last: last.text, lastSide: last.side };
-  // the USD display (Settings): the KAS tiles of the strip in dollars (a flipped market's prices are tokens per KAS and stay; its KAS volume tile is dollars)
+  // The USD display (Settings). The KAS tiles of the strip show dollars. A flipped market's prices
+  // are tokens per KAS and stay, and its KAS volume tile is dollars.
   const fiat = useFiat();
-  // the depth chart is a view of the order book's panel at every width (an "Order book | Depth" switch)
+  // The depth chart is a view of the order book's panel at every width, an "Order book | Depth"
+  // switch.
   const bookPanel = useBookPanelView();
   const tapeLast = useMemo(() => {
     const r = tape?.rows.find((x) => x.price !== null);
@@ -265,7 +306,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
 
   const freshDepth = useMemo(() => {
     if (depth.data) return inverted ? depthFromViewFlipped(depth.data, decimals) : depthFromView(depth.data, decimals);
-    // no depth endpoint, or it failed: the depth of the book on screen
+    // With no depth endpoint, or when it failed, use the depth of the book on screen.
     if ((depth.data === null || (depth.data === undefined && depth.error)) && freshModel && scale) {
       const full = buildBookModel(book.data!, { scale, depth: 60 });
       return inverted ? depthFromBookFlipped(full, decimals, scale) : depthFromBook(full, decimals, scale);
@@ -309,8 +350,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     );
   }
 
-  // a registry token this build cannot trade (or an open-list token whose program it does not embed, or does not trade on this network) has
-  // no market page here
+  // A registry token this build cannot trade has no market page here. The same holds for an
+  // open-list token whose program it does not embed or does not trade on this network.
   if ((row.source === 'registry' && !row.tradable) || open.reason === 'program-unknown' || open.reason === 'program-ambiguous' || open.reason === 'program-unreviewed') {
     const reason = open.reason === 'program-unknown' || open.reason === 'program-ambiguous' || open.reason === 'program-unreviewed' ? t(`market.open.${open.reason}`) : row.reason ? t(`market.reason.${row.reason}`) : null;
     return <NotTradablePage ticker={row.ticker} covenantId={row.covenantId} reason={reason} />;
@@ -323,12 +364,15 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       {t(`market.live.${liveKind}`)}
     </Badge>
   );
-  // standalone mode with no resting orders of this market read from the indexer before (on from the start): the book holds only what the node showed since
+  // Standalone mode with no resting orders of this market read from the indexer before, so it is on
+  // from the start. The book holds only what the node showed since.
   const partialSince = standalone && carry?.ordersAt(id) == null ? standalone.sinceMs : null;
-  // an open-list token is traded in standalone mode only with decimals known without the indexer (its declaration or its program's default): the
-  // scale its orders seen since the mode started use is no evidence of the market's
+  // An open-list token is traded in standalone mode only with decimals known without the indexer,
+  // from its declaration or its program's default. The scale its orders seen since the mode started
+  // use is no evidence of the market's.
   const standaloneScaleBlocked = !!standalone && scaleNeedsIndexer(row, open.reason, carry?.scaleOf(id) != null);
-  // the pair selector: a change of side leads to another market; the same token with the other order is only a flip
+  // The pair selector. A change of side leads to another market. The same token with the other
+  // order is only a flip.
   const onPair = (next: DisplayedPair) => {
     const m = marketFor(next);
     if (m && m.route.name === 'token' && m.route.covenantId === id && m.inverted !== null) {
@@ -338,8 +382,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     openPair(next);
   };
 
-  // a click on the depth chart fills the ticket's price like a click on a book row (the side of the ticket stays); the price is computed with the clicked side's rounding (on a flipped market the chart's bid side
-  // is the native ask side, so there the other way round) at the price under the pointer, on the market's price step
+  // A click on the depth chart fills the ticket's price like a click on a book row. The side of the
+  // ticket stays. The price is computed at the price under the pointer, on the market's price step,
+  // with the clicked side's rounding. On a flipped market the chart's bid side is the native ask
+  // side, so the rounding is the other way round there.
   const onPickDepth = (side: 'bid' | 'ask', price: number) => {
     if (scale === null) return;
     const p = tokenDepthPick(side, price, { inverted, decimals, scale: bookScale, tick: baseTick });
@@ -349,7 +395,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     <DepthChart onPick={onPickDepth} fiat={inverted ? fiat : null} series={depthSeries} loading={!!indexer && depth.data === undefined && !depth.error} unavailable={!!depth.error && !!book.error && !depthSeries} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? t('market.stats.unitOf', { base: 'KAS', quote: name }) : t('market.stats.unitOf', { base: name, quote: 'KAS' })} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
   );
 
-  // the 24 h figures, in the market bar (the book and the strip show together, once for the page)
+  // The 24 h figures, in the market bar. The book and the strip show together, once for the page.
   const statsStrip = panelsOpen ? (
     <MarketStats open model={usdStrip?.model ?? statsForView} ticker={name} inverted={inverted} loading={!!indexer && stats.data === undefined && stats.loading} unsupported={stats.data === null && !!indexer}
       {...(usdStrip ? { usd: true, lastTitle: usdStrip.lastTitle, titles: usdStrip.titles } : {})} />

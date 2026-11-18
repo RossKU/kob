@@ -80,13 +80,12 @@ export function withHeldRows<R extends Pick<TokenRow, 'covenantId'>>(rows: reado
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------
-// the filters
+// ------------------------------------------------------------------------------------- the filters
 
 /**
- * The list's filters. `favorites` and `hidden` are views of their own and exclude each other;
- * `held` narrows whichever view is shown to the wallet's tokens; `nameless` lets the tokens without
- * a name into the main list and the Held view.
+ * The list's filters. `favorites` and `hidden` are views of their own and exclude each other.
+ * `held` narrows whichever view is shown to the wallet's tokens. `nameless` lets the tokens
+ * without a name into the main list and the Held view.
  */
 export interface ListFilters {
   favorites: boolean;
@@ -99,10 +98,7 @@ export type FilterKey = keyof ListFilters;
 
 export const NO_FILTERS: ListFilters = { favorites: false, hidden: false, held: false, nameless: false };
 
-/**
- * One filter switched; the Favorites and the Hidden views exclude each other, as their buttons did
- * before they were one menu.
- */
+/** Switches one filter. The Favorites and the Hidden views exclude each other. */
 export function toggleFilter(f: ListFilters, key: FilterKey): ListFilters {
   const next = { ...f, [key]: !f[key] };
   if (key === 'favorites' && next.favorites) next.hidden = false;
@@ -110,19 +106,19 @@ export function toggleFilter(f: ListFilters, key: FilterKey): ListFilters {
   return next;
 }
 
-/** How many filters are on: the number the menu's button shows. */
+/** How many filters are on, which is the number the menu's button shows. */
 export const activeFilters = (f: ListFilters): number => (Object.keys(f) as FilterKey[]).filter((k) => f[k]).length;
 
 export interface FilterInput<R extends TokenRow> {
-  /** the list's rows (registry, indexer, held, kascov.io) */
+  /** The list's rows (registry, indexer, held, kascov.io). */
   rows: readonly R[];
-  /** the Favorites view's rows (a favourite no list names keeps a row by its id) */
+  /** The Favorites view's rows. A favourite no list names keeps a row by its id. */
   favoriteRows: readonly R[];
-  /** the Hidden view's rows, the same way */
+  /** The Hidden view's rows, the same way. */
   hiddenRows: readonly R[];
-  /** the hidden tokens (lower-case covenant ids) */
+  /** The hidden tokens, as lower-case covenant ids. */
   hiddenIds: ReadonlySet<string>;
-  /** the tokens the wallet holds (lower-case covenant ids, `heldIds`) */
+  /** The tokens the wallet holds, as lower-case covenant ids (`heldIds`). */
   heldIds: ReadonlySet<string>;
   filters: ListFilters;
   query: string;
