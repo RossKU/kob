@@ -734,11 +734,14 @@ pub fn resolve_with(
     let i = indexer.iter().find(|t| t.cov == cov);
     let r = r.first().copied();
     // The declaration is asked for a token that the indexer marks declared, or does not list. The
-    // indexer lists a declared token without orders nowhere. It is one request, and a 404 is no
-    // declaration.
+    // indexer lists a declared token without orders nowhere. A signing command asks for it for
+    // every token without a registry entry: an indexer that marks a declared token undeclared
+    // would otherwise give it its own decimals (the proof cannot be forged, only withheld). It is
+    // one request, and a 404 is no declaration.
+    let signing = open.is_some_and(|o| !o.view) && r.is_none();
     let declared: Option<Declared> = match (declaration, i) {
         (Some(f), None) => f(&cov)?,
-        (Some(f), Some(t)) if t.declared => f(&cov)?,
+        (Some(f), Some(t)) if t.declared || signing => f(&cov)?,
         _ => None,
     };
     if r.is_none() && i.is_none() && declared.is_none() {
@@ -908,6 +911,27 @@ pub fn resolve_with(
     Ok(m)
 }
 
+/// Refuses a market whose decimals only the indexer tells when an order of it, confirmed on the
+/// node, uses another scale.
+///
+/// The decimals of a token without a registry entry, a declaration or a program default are the
+/// indexer's word (its token list or the scale of its market). An order's state, re-derived on the
+/// node, commits its scale. When the two disagree the indexer's decimals would read the amount
+/// and the price bound off by that factor (security review 2026-11-17, M12), so nothing is planned.
+pub fn check_order_scale(m: &TokenMarket, order_scale: i64) -> Result<(), String> {
+    let indexer_only = m.listing == Listing::Unlisted && matches!(m.decimals_from, DecimalsFrom::Lists | DecimalsFrom::Market);
+    if indexer_only && m.scale != order_scale {
+        return Err(format!(
+            "{}: the indexer gives it {} decimals ({} base units per whole token), but the order, checked on the node, uses {}              per whole token: nothing on chain confirms the indexer's decimals, so nothing is planned",
+            m.name(),
+            m.decimals,
+            m.scale,
+            order_scale
+        ));
+    }
+    Ok(())
+}
+
 /// A KCC-23 creation of a test token `DCL` with `decimals`.
 ///
 /// Its launch proof is `c.launch_proof()` and its covenant id is `c.genesis.covenant_id`.
@@ -1041,14 +1065,19 @@ mod tests {
             .unwrap_err()
             .contains("indexer's token list names 3"));
 
-        // A token that the indexer lists without a declaration is not asked for one (no request, no
-        // 404).
+        // A token that the indexer lists without a declaration: a view does not ask for one (no
+        // request, no 404). A signing command asks, so an indexer that hides the declaration
+        // cannot give the token other decimals (security review 2026-11-17, M12).
         let n = asked.get();
-        let plain = TokenFacts { declared: false, ..listed.clone() };
-        let m =
-            resolve_with(&key, &[], &[TokenFacts { market_scale: Some(Some(1000)), ..plain }], Some(&open(decl, held_d, &no_orders)))
-                .unwrap();
+        let plain = vec![TokenFacts { declared: false, market_scale: Some(Some(1000)), ..listed.clone() }];
+        let view = OpenToken { view: true, ..open(decl, held_d, &no_orders) };
+        let m = resolve_with(&key, &[], &plain, Some(&view)).unwrap();
         assert_eq!((asked.get(), m.decimals_from, m.decimals), (n, DecimalsFrom::Market, 3));
+        let e = resolve_with(&key, &[], &plain, Some(&open(decl, held_d, &no_orders))).unwrap_err();
+        assert_eq!(asked.get(), n + 1);
+        assert!(e.contains("scale conflict"), "{e}");
+        let m = resolve_with(&key, &[], &plain, Some(&open(&none, held_d, &no_orders))).unwrap();
+        assert_eq!((m.decimals_from, m.decimals), (DecimalsFrom::Market, 3));
 
         // 18 declared decimals: the scale is 10^9 and the decimals stay 18.
         let c18 = test_creation(18);
@@ -1057,6 +1086,27 @@ mod tests {
         let d18 = |id: &[u8; 32]| -> Result<Option<Declared>, String> { declared_from_proof(id, &p18).map(Some) };
         let m = resolve_with(&to_hex(&cov18), &[], &[], Some(&open(&d18, held_d, &no_orders))).unwrap();
         assert_eq!((m.decimals, m.scale), (18, 1_000_000_000));
+    }
+
+    #[test]
+    fn indexer_decimals_that_disagree_with_the_order_on_the_node_are_refused() {
+        let none = |_: &[u8; 32]| -> Result<Option<i64>, String> { Ok(None) };
+        // The indexer lists the token with 5 decimals; the order on the node uses 10^8.
+        let idx = vec![TokenFacts { decimals: Some(5), ..open_facts(9, TemplateId::Kcc20Ref) }];
+        let m = resolve_with(&to_hex(&[9; 32]), &[], &idx, Some(&OpenToken::new("testnet-10", &none))).unwrap();
+        assert_eq!((m.decimals_from, m.scale), (DecimalsFrom::Lists, 100_000));
+        let e = check_order_scale(&m, 100_000_000).unwrap_err();
+        assert!(e.contains("checked on the node") && e.contains("nothing is planned"), "{e}");
+        assert!(check_order_scale(&m, 100_000).is_ok());
+        // A registry entry's decimals are not the indexer's word.
+        let reg = vec![facts(9, "REG", 5, TemplateId::Kcc20Ref, 0xdd)];
+        let m = resolve_with("REG", &reg, &[], Some(&OpenToken::new("testnet-10", &none))).unwrap();
+        assert!(check_order_scale(&m, 100_000_000).is_ok());
+        // Nor the market's scale when it came from --decimals.
+        let open = OpenToken { entered: Some(5), ..OpenToken::new("testnet-10", &none) };
+        let m = resolve_with(&to_hex(&[9; 32]), &[], &[open_facts(9, TemplateId::Kcc20Ref)], Some(&open)).unwrap();
+        assert_eq!(m.decimals_from, DecimalsFrom::Entered);
+        assert!(check_order_scale(&m, 100_000_000).is_ok());
     }
 
     fn facts(cov: u8, ticker: &str, decimals: u32, program: TemplateId, ext: u8) -> TokenFacts {
