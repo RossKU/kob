@@ -1226,7 +1226,17 @@ fn own_tokens(s: &AnyState) -> Result<OwnTokens> {
 pub fn build_cancel_order(r: &CancelOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     let order = &r.order;
     let id = order.state.template_id();
-    // an unbound curve's token is its custody's
+    // an unbound curve's token is its custody's: the output of its genesis it owns (as its amend and first fill take it)
+    if let AnyState::KobCurveAsk(c) = &order.state {
+        if c.is_unbound() {
+            let Some(k) = &r.custody else {
+                return invalid("the cancel of an unbound curve needs its custody (its token is the custody's)");
+            };
+            if k.utxo.transaction_id != order.utxo.transaction_id {
+                return invalid("the custody of an unbound curve is the output of its genesis it owns, of exactly amountLeft");
+            }
+        }
+    }
     let named = match (&order.state, &r.custody) {
         (AnyState::KobCurveAsk(c), Some(k)) => AnyState::KobCurveAsk(curve_bound(c, k)),
         (s, _) => s.clone(),

@@ -1295,6 +1295,12 @@ fn curve_created_in_the_token_genesis() {
     s.outputs[2].covenant = Some(CovenantBinding { authorizing_input: 1, covenant_id: OTHER_COV });
     s.outputs[3].covenant = Some(CovenantBinding { authorizing_input: 1, covenant_id: OTHER_COV });
     run_bad(t, &named(s, "NB3 bound curve, another token's custody from its own transaction"), 0);
+
+    // PG5 the maker's cancel of the unbound curve: cancel(sig) reads the maker's key only, and the custody (genesis
+    // output 0, owned by the curve) moves with the curve input under its token's covenant id; NX3 another key's cancel
+    run_ok(t, &same_tx(named(cancel(&net, &f, &unbound, &f.maker, 1), "PG5 cancel of an unbound curve"), g, 2, 0));
+    let thief = keypair();
+    run_bad(t, &same_tx(named(cancel(&net, &f, &unbound, &thief, 1), "NX3 cancel of an unbound curve by another key"), g, 2, 0), 0);
 }
 
 // ---------------------------------------------------------------- look-alike holders (kob_v2_tests)

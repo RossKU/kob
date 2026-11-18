@@ -312,8 +312,26 @@ fn curve_created_in_its_token_genesis() {
     // the maker's cancel of the unbound curve
     let mut cancel = cancel_curve(&state);
     cancel.order = OrderUtxo { utxo: order.utxo.clone(), state: AnyState::KobCurveAsk(state.clone()) };
-    cancel.custody = Some(custody);
-    run("cancel of the unbound curve", &Action::CancelOrder(cancel));
+    cancel.custody = Some(custody.clone());
+    let signed = run("cancel of the unbound curve", &Action::CancelOrder(cancel.clone()));
+    // the custody's tokens go back to the maker under their own token's covenant id
+    let back = TokenState::user(tpl, state.total, creator, state.extension_commitment);
+    let back_spk = kob_protocol::tx::spk_to_string(&back.spk_with(kob_protocol::artifacts::token_template(tpl)));
+    assert!(
+        signed
+            .tx
+            .outputs
+            .iter()
+            .any(|o| o.script_public_key == back_spk && o.covenant.as_ref().is_some_and(|c| c.covenant_id == token)),
+        "the custody's tokens return to the maker"
+    );
+    // its token is the custody's: none, or one from another transaction, is refused
+    let mut none = cancel.clone();
+    none.custody = None;
+    assert!(build(&Action::CancelOrder(none)).unwrap_err().to_string().contains("needs its custody"));
+    let mut other = cancel;
+    other.custody = Some(TokenUtxo { utxo: Utxo { transaction_id: [0x77; 32], ..custody.utxo.clone() }, ..custody });
+    assert!(build(&Action::CancelOrder(other)).unwrap_err().to_string().contains("output of its genesis"));
 }
 
 #[test]
