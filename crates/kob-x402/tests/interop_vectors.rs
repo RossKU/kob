@@ -1,28 +1,30 @@
-//! Conformance against the elldeeone/kaspa-x402 v1.0.1 interoperability vectors, reproduced from
-//! Rust only (no TypeScript). The vectors are vendored unmodified under
+//! Tests conformance against the elldeeone/kaspa-x402 v1.0.1 interoperability vectors, reproduced
+//! from Rust only (no TypeScript). The vectors are vendored unmodified under
 //! `vectors/kaspa-x402-v1.0.1/` (see its `PROVENANCE.md`).
 //!
-//! Scope. KOB implements the `standard-native` profile (and its own `kcc20` / swap extensions), not the
-//! KIP-10 `additive` profile. The vectors are used where they exercise profile-independent code:
+//! Scope. KOB implements the `standard-native` profile (and its own `kcc20` / swap extensions), not
+//! the KIP-10 `additive` profile. The vectors are used where they exercise profile-independent
+//! code:
 //!
 //! * `exact/interop-v1.json`: both transaction-id derivations (the additive artifact is the only
 //!   published version-1 id vector, so it also proves that the pinned rusty-kaspa v2.1.0 hashes the
 //!   same way as the binding's), the payment-requirements canonical JSON and hash, the request
-//!   authorization digest and Schnorr signature, every expiry case that concerns standard-native, and
-//!   the finality ordering. The two additive-only expiry cases (`authorization_exceeds_challenge`,
-//!   `expired_challenge`) are not implemented and are skipped explicitly.
+//!   authorization digest and Schnorr signature, every expiry case that concerns standard-native,
+//!   and the finality ordering. The two additive-only expiry cases
+//!   (`authorization_exceeds_challenge`, `expired_challenge`) are not implemented and are skipped
+//!   explicitly.
 //! * `x402-http/exact-transaction.json`: header codecs (byte-identical re-encoding).
-//! * `exact/consensus-profiles.json`: the standard-native transaction (masses, fee, script units, ids)
-//!   and its mutation cases for the standard-native profile. The additive mutations
+//! * `exact/consensus-profiles.json`: the standard-native transaction (masses, fee, script units,
+//!   ids) and its mutation cases for the standard-native profile. The additive mutations
 //!   (`additive*`) are out of scope: KOB does not implement additive.
-//! * `negative/*.json` and `settlement-response/*.json`: the semantic negatives that concern the exact
-//!   envelope; each is mapped to our public `Reason` plus local `Diag` below. Vectors about batch
-//!   settlement or additive are not applicable and are named where skipped.
+//! * `negative/*.json` and `settlement-response/*.json`: the semantic negatives that concern the
+//!   exact envelope; each is mapped to our public `Reason` plus local `Diag` below. Vectors about
+//!   batch settlement or additive are not applicable and are named where skipped.
 //!
-//! The standard-native vector meets the relay floor of a rusty-kaspa v2.1.0 node since v1.0.1 (300000 sompi
-//! against 100 sompi per gram of `max(compute, normalized transient)` = 203600; v1.0.0 paid 200000, below
-//! it, which we reported): `consensus_profile_standard_native` asserts that, and that the vector passes the
-//! whole engine path of our verifier. The mutation cases are applied to a payment of the same geometry (same
+//! The standard-native vector meets the relay floor of a rusty-kaspa v2.1.0 node (300000 sompi
+//! against 100 sompi per gram of `max(compute, normalized transient)` = 203600):
+//! `consensus_profile_standard_native` asserts that, and that the vector passes the whole engine
+//! path of our verifier. The mutation cases are applied to a payment of the same geometry (same
 //! keys, input, amount and outputs) built by our payer, so that each mutation can be re-signed.
 
 mod exact_support;
@@ -450,9 +452,9 @@ fn consensus_profile_standard_native() {
     let units: Vec<u64> = outcomes.into_iter().map(|o| o.expect("the payer signature passes the script engine")).collect();
     assert_eq!(units, sn["scriptUnits"].as_array().unwrap().iter().map(|u| u.as_u64().unwrap()).collect::<Vec<_>>());
 
-    // engine validation through our verifier. The vector's fee (300000 since v1.0.1; v1.0.0 paid 200000) is at
-    // least the relay floor of a rusty-kaspa v2.1.0 node: 100 sompi per gram of max(compute 2036, 2 x size)
-    // = 203600 (storage mass, 63670 here, is not part of the node's floor). check_economics_and_scripts
+    // engine validation through our verifier. The vector's fee (300000) is at least the relay floor
+    // of a rusty-kaspa v2.1.0 node: 100 sompi per gram of max(compute 2036, 2 x size) = 203600
+    // (storage mass, 63670 here, is not part of the node's floor). check_economics_and_scripts
     // accepts exactly what the node relays, so the vector passes it.
     let env = Env::new();
     let op = &tx.inputs[0].previous_outpoint;

@@ -1,8 +1,10 @@
-//! The SIGHASH_ALL rule of payer signatures, parsed per owner scheme (`kob_x402::sighash`): every KCC-20 owner
-//! scheme (0x00 Schnorr P2PK, 0x01 hashed Schnorr key, 0x02 hashed ECDSA key, 0x03 P2SH authority, 0x04 covenant id)
-//! as leader and as delegator, on every token program, and the Schnorr P2PK funding input. The verifier-level
-//! cases (a correctly signed non-ALL transaction that the engine accepts) are in `kcc20.rs`, `swap.rs`, `intent.rs`
-//! and `exact_e2e.rs`; this file pins the parser itself.
+//! Tests the SIGHASH_ALL rule of payer signatures, parsed per owner scheme (`kob_x402::sighash`).
+//!
+//! Covered: every KCC-20 owner scheme (0x00 Schnorr P2PK, 0x01 hashed Schnorr key, 0x02 hashed
+//! ECDSA key, 0x03 P2SH authority, 0x04 covenant id) as leader and as delegator, on every token
+//! program, and the Schnorr P2PK funding input. The verifier-level cases (a correctly signed
+//! non-ALL transaction that the engine accepts) are in `kcc20.rs`, `swap.rs`, `intent.rs` and
+//! `exact_e2e.rs`; this file pins the parser itself.
 
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::script::push_data;

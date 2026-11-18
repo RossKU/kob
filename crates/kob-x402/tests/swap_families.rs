@@ -1,10 +1,11 @@
-//! Swap-and-pay across token families: a KRON token or a KaspaCom-template KCC-20 token as the pay
-//! asset, KRON bids and KCC-20 asks in one transaction, KaspaCom-template merchant tokens.
+//! Tests swap-and-pay across token families: a KRON token or a KaspaCom-template KCC-20 token as
+//! the pay asset, KRON bids and KCC-20 asks in one transaction, KaspaCom-template merchant tokens.
 //!
-//! Every accepted transaction is submitted to a `MockChain`, which runs each order covenant and each
-//! token program through the rusty-kaspa engine (enforced budgets, exact storage mass, fee floor).
-//! The world (tokens, order UTXOs, offers) is in `families_support`; nothing here special-cases a
-//! program: templates come from `kob_protocol::artifacts`, states from `TokenState`.
+//! Every accepted transaction is submitted to a `MockChain`, which runs each order covenant and
+//! each token program through the rusty-kaspa engine (enforced budgets, exact storage mass, fee
+//! floor). The world (tokens, order UTXOs, offers) is in `families_support`; nothing here
+//! special-cases a program: templates come from `kob_protocol::artifacts`, states from
+//! `TokenState`.
 #![allow(clippy::too_many_arguments)]
 
 #[path = "../../kob-protocol/tests/common/mod.rs"]

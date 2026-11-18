@@ -1,5 +1,6 @@
-//! Guard against cross-checkout artifact mixing (a shared `CARGO_TARGET_DIR` between worktrees): the `kob-x402` library
-//! under test and this test binary must come from the same checkout. See `families_support::assert_single_checkout`.
+//! Guards against cross-checkout artifact mixing (a shared `CARGO_TARGET_DIR` between worktrees):
+//! the `kob-x402` library under test and this test binary must come from the same checkout. See
+//! `families_support::assert_single_checkout`.
 #![allow(clippy::too_many_arguments)]
 
 #[path = "../../kob-protocol/tests/common/mod.rs"]
