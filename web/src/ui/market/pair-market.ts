@@ -1,13 +1,19 @@
-// View models of the market panels of a token pair page (`#/market/<base>/<quote>`): depth chart, chart candles, recent fills and 24 h figures, in
-// PAIR units (QUOTE per whole BASE). Pure and DOM-free; exact rationals / bigint for every figure, floats only for chart coordinates.
+// View models of the market panels of a token pair page (`#/market/<base>/<quote>`): the depth
+// chart, the chart candles, the recent fills and the 24 h figures, in pair units (QUOTE per whole
+// BASE). The module is pure and DOM-free. It uses exact rationals and bigint for every figure and
+// floats only for chart coordinates.
 //
-// The founder price rule: prices come ONLY from KAS-book fills. A pair fill (a pair order filled through the KAS route, by netting against an opposite
-// pair order or from inventory) is VOLUME only: it never makes a price, a candle, a last price or a 24 h high / low.
-//
-//   * Depth: the pair book's levels (direct pair orders, if-done entries, the route through the two KAS books) cumulated per side.
-//   * Candles: the indexer's pair candles (derived from the two KAS series) or, without them, the client-side ratio of the two KAS candle series.
-//   * Fills: `/v1/pairs/{base}/{quote}/fills`: amounts of BASE and QUOTE, counterparty and time; no price.
-//   * 24 h: last, change, high and low from the KAS-derived figures; volumes and the fill count from the pair fills (`volume_24h`).
+// Prices come only from KAS-book fills. A pair fill is a pair order filled through the KAS route,
+// by netting against an opposite pair order or from inventory. It is volume only. It never makes a
+// price, a candle, a last price or a 24 h high or low.
+// - Depth: the pair book's levels, cumulated per side. They are direct pair orders, if-done
+//   entries and the route through the two KAS books.
+// - Candles: the indexer's pair candles, derived from the two KAS series. Without them, the
+//   client-side ratio of the two KAS candle series.
+// - Fills: `/v1/pairs/{base}/{quote}/fills` gives amounts of BASE and QUOTE, counterparty and
+//   time, with no price.
+// - 24 h: last, change, high and low come from the KAS-derived figures. The volumes and the fill
+//   count come from the pair fills (`volume_24h`).
 import type { PairBookView, PairCandlesView, PairFillsView, PairLevelView, PairRateView } from '../../data/indexer-types';
 import { formatUnits } from '../../kob/units';
 import { cmpRational, ratToNumber, reduce, wholePrice, type PairToken, type Rational } from '../../kob/pair';
@@ -17,9 +23,12 @@ import { usdText } from './usd-model';
 
 export const DAY_MS = 86_400_000;
 
-// ------------------------------------------------------------------------------------------------ depth
+// ------------------------------------------------------------------------------------------- depth
 
-/** The pair book as a depth series (QUOTE per whole BASE, cumulative whole BASE). Null for a view of another pair. All levels of the view are used. */
+/**
+ * The pair book as a depth series, in QUOTE per whole BASE with cumulative whole BASE. It is null
+ * for a view of another pair. All levels of the view are used.
+ */
 export function pairDepthSeries(view: PairBookView, base: PairToken, quote: PairToken): DepthSeries | null {
   if (view.base !== base.covenantId || view.quote !== quote.covenantId) return null;
   const parse = (ls: readonly PairLevelView[]) =>
@@ -46,20 +55,23 @@ export function pairDepthSeries(view: PairBookView, base: PairToken, quote: Pair
   };
 }
 
-// ------------------------------------------------------------------------------------------------ pair candles (indexer, derived from the KAS series)
+// ------------------------------------------------------------------------------------ pair candles
 
 const decBig = (v: unknown): bigint | null => (typeof v === 'string' && /^\d+$/.test(v) ? BigInt(v) : null);
 
 /**
- * The indexer's pair candles (`/v1/pairs/{base}/{quote}/candles`, derived from the two KAS series: a pair fill never makes a price) as the ratio
- * candles of the chart and the stats: rates in QUOTE per whole BASE (exact), volume = the PAIR volume of the bucket (pair-order fills, whole BASE
- * and whole QUOTE, their count), `filled` when neither token traded in KAS in the bucket. Null for a view of another pair or without a basis.
+ * The indexer's pair candles (`/v1/pairs/{base}/{quote}/candles`) as the ratio candles of the
+ * chart and the stats. They are derived from the two KAS series, because a pair fill never makes a
+ * price. Rates are exact, in QUOTE per whole BASE. The volume is the pair volume of the bucket,
+ * meaning pair-order fills in whole BASE and whole QUOTE, and their count. `filled` is set when
+ * neither token traded in KAS in the bucket. The result is null for a view of another pair or
+ * without a basis.
  */
 export function pairRatioCandles(view: PairCandlesView, base: PairToken, quote: PairToken): RatioCandle[] | null {
   if (view.base !== base.covenantId || view.quote !== quote.covenantId) return null;
   const basis = decBig(view.price_basis) ?? 0n;
   if (basis <= 0n) return null;
-  // B base units per `basis` base units of A -> whole B per whole A
+  // B base units per `basis` base units of A become whole B per whole A.
   const whole = (r: PairRateView): Rational => reduce({ num: BigInt(r.num) * 10n ** BigInt(base.decimals), den: BigInt(r.den) * basis * 10n ** BigInt(quote.decimals) });
   return view.items
     .map((c) => ({
@@ -73,19 +85,25 @@ export function pairRatioCandles(view: PairCandlesView, base: PairToken, quote: 
     .sort((a, b) => a.t - b.t);
 }
 
-// ------------------------------------------------------------------------------------------------ 24 h figures
+// ------------------------------------------------------------------------------------ 24 h figures
 
-/** Where the volume tiles come from: the indexer's 24 h pair volume, the pair volume of the pair candles, or nothing. */
+/**
+ * Where the volume tiles come from: the indexer's 24 h pair volume, the pair volume of the pair
+ * candles, or nothing.
+ */
 export type PairStatsSource = 'fills' | 'candles' | 'none';
 
 export interface PairStatsOut {
   model: StatsModel;
   source: PairStatsSource;
-  /** the number of pair fills behind the volume tiles */
+  /** The number of pair fills behind the volume tiles. */
   fills: number;
 }
 
-/** The 24 h pair volume of `/v1/pairs/{base}/{quote}/fills` (`volume_24h`): base units of BASE and QUOTE, and the fill count. */
+/**
+ * The 24 h pair volume of `/v1/pairs/{base}/{quote}/fills` (`volume_24h`): base units of BASE and
+ * QUOTE, and the fill count.
+ */
 export interface PairVolume { a: bigint; b: bigint; fills: number }
 
 export const pairVolumeOf = (view: PairFillsView | null | undefined, base: PairToken, quote: PairToken): PairVolume | null =>
@@ -94,20 +112,25 @@ export const pairVolumeOf = (view: PairFillsView | null | undefined, base: PairT
     : null;
 
 /**
- * The stats strip of a pair. PRICES only from the KAS series: `last` / `changeBps` from the two tokens' 24 h KAS stats (usdStats), high / low from the
- * traded buckets of the candles in the 24 h before `refMs`. VOLUMES only from pair fills: the indexer's `volume_24h` (`volume`), else the pair volume
- * of the indexer's pair candles in the window (`pairCandles`), else none (the client-side ratio candles carry KAS volume, never pair volume).
+ * The stats strip of a pair. Prices come only from the KAS series. `last` and `changeBps` come
+ * from the two tokens' 24 h KAS stats (usdStats), and high and low from the traded buckets of the
+ * candles in the 24 h before `refMs`. Volumes come only from pair fills. They are the indexer's
+ * `volume_24h` (`volume`), else the pair volume of the indexer's pair candles in the window
+ * (`pairCandles`), else none. The client-side ratio candles carry KAS volume, never pair volume.
  */
 export function pairStatsModel(a: {
   last: Rational | null;
   changeBps: number | null;
   dp: number;
   candles: readonly RatioCandle[];
-  /** `candles` are the indexer's pair candles (their volume is the pair volume); false: the client-side ratio of the two KAS series */
+  /**
+   * `candles` are the indexer's pair candles, whose volume is the pair volume. False means the
+   * client-side ratio of the two KAS series.
+   */
   pairCandles: boolean;
-  /** the candle bucket length, ms */
+  /** The candle bucket length, ms. */
   intervalMs: number;
-  /** the newest chain time, unix ms (the end of the 24 h window) */
+  /** The newest chain time, unix ms, which is the end of the 24 h window. */
   refMs: number;
   volume: PairVolume | null;
   base: PairToken;
@@ -155,19 +178,27 @@ export function pairStatsModel(a: {
   return { model: m, source: 'none', fills: 0 };
 }
 
-// ------------------------------------------------------------------------------------------------ depth near the touch (market list)
+// ---------------------------------------------------------------------------- depth near the touch
 
-/** Levels per side the market list reads of a pair book (the server's page limit is 200 by default). */
+/**
+ * Levels per side the market list reads of a pair book. The server's page limit is 200 by default.
+ */
 export const PAIR_DEPTH_LEVELS = 100;
 
-/** The market list's depth of a pair: QUOTE base units within ±2 % of the mid; `atLeast` when the book is deeper than the levels read (a lower bound). */
+/**
+ * The market list's depth of a pair: QUOTE base units within ±2 % of the mid. `atLeast` is set
+ * when the book is deeper than the levels read, so the figure is a lower bound.
+ */
 export interface PairDepth { quote: bigint; atLeast: boolean }
 
 /**
- * What the pair book offers within 2 % of its mid, in QUOTE base units: the resting asks up to 2 % above the mid and the bids down to 2 % below it, every source
- * (a filler may net, route or fill from inventory, so all of them are fillable: pair-model.ts), each level worth `amount x price` (rounded down). The mid is the middle
- * of the best ask and the best bid; with one side only, that side's best price is the reference; none for an empty book. A view for another pair is null.
- * `levels`: how many levels per side the view was asked for; a side that came back full and still inside the band may hold more, so the figure is `atLeast`.
+ * What the pair book offers within 2 % of its mid, in QUOTE base units. It counts the resting asks
+ * up to 2 % above the mid and the bids down to 2 % below it, from every source. A filler may net,
+ * route or fill from inventory, so all of them are fillable (pair-model.ts). Each level is worth
+ * `amount x price`, rounded down. The mid is the middle of the best ask and the best bid. With one
+ * side only, that side's best price is the reference. There is none for an empty book. A view for
+ * another pair gives null. `levels` is how many levels per side the view was asked for. A side
+ * that came back full and still inside the band may hold more, so the figure is `atLeast`.
  */
 export function pairDepthOf(view: PairBookView | null | undefined, base: PairToken, quote: PairToken, levels = PAIR_DEPTH_LEVELS): PairDepth | null {
   if (!view || view.base !== base.covenantId || view.quote !== quote.covenantId) return null;
@@ -184,7 +215,7 @@ export function pairDepthOf(view: PairBookView | null | undefined, base: PairTok
   const ref: Rational | null =
     a0 && b0 ? reduce({ num: a0.num * b0.den + b0.num * a0.den, den: 2n * a0.den * b0.den }) : (a0 ?? b0 ?? null);
   if (!ref) return null;
-  // price <= ref x 1.02 (asks) / price >= ref x 0.98 (bids), exactly
+  // Exactly: price <= ref x 1.02 for asks, and price >= ref x 0.98 for bids.
   const above = (u: Rational): boolean => u.num * 100n * ref.den <= ref.num * 102n * u.den;
   const below = (u: Rational): boolean => u.num * 100n * ref.den >= ref.num * 98n * u.den;
   const side = (ls: readonly { unit: Rational; amount: bigint }[], inside: (u: Rational) => boolean, returned: number) => {
@@ -196,5 +227,8 @@ export function pairDepthOf(view: PairBookView | null | undefined, base: PairTok
   return { quote: a.value + b.value, atLeast: a.full || b.full };
 }
 
-/** A token of the pair whose last KAS-book fill is more than a day old, or that never traded: the chart only carries its last price. */
+/**
+ * A token of the pair whose last KAS-book fill is more than a day old, or that never traded. The
+ * chart only carries its last price.
+ */
 export const idleLeg = (lastTs: number | null | undefined, nowMs: number): boolean => lastTs === null || lastTs === undefined || nowMs - lastTs > DAY_MS;
