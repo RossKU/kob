@@ -29,6 +29,8 @@ export interface TokenDeclaration {
   website: string | null;
   x: string | null;
   telegram: string | null;
+  /** The name or symbol has a character drawn like a Latin letter (a warning, never a refusal; display.ts). */
+  lookalike?: boolean;
   /**
    * `lock`: a creator lock's redeem script (88 lowercase hex), taken only when it is exactly the template (kob/creator-lock.ts). What it holds
    * is `VerifiedDeclaration.lock`.
@@ -85,6 +87,7 @@ function tokenOf(v: unknown): TokenDeclaration {
     website: text(o.website, 2048),
     x: text(o.x, 256),
     telegram: text(o.telegram, 256),
+    lookalike: o.lookalike === true,
     lock: typeof o.lock === 'string' && parseLockScript(o.lock) ? o.lock.toLowerCase() : null,
     issues: Array.isArray(o.issues) ? o.issues.filter((i): i is string => typeof i === 'string') : [],
   };

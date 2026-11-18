@@ -263,7 +263,7 @@ struct IssueResult {
 
 /// Whether `s` has a character the registry refuses in display text.
 ///
-/// Those are control, zero-width and bidi control characters.
+/// Those are the invisible and reordering ones ([`kob_protocol::display`]).
 fn has_bad_char(s: &str) -> bool {
     kcc23::has_bad_char(s)
 }

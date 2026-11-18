@@ -62,6 +62,7 @@ pub mod budget;
 pub mod build;
 pub mod creator_lock;
 pub mod defaults;
+pub mod display;
 pub mod error;
 pub mod family;
 pub mod fee_estimate;

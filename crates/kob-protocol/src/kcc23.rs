@@ -368,14 +368,9 @@ pub fn check_launch(preparation: &Transaction, genesis: &Transaction) -> Result<
 // ------------------------------------------------------------------------------------------------
 // KOB token convention
 
-/// Characters refused in any displayed text: control, zero-width and bidi controls (the registry's
-/// rule).
-pub fn has_bad_char(s: &str) -> bool {
-    s.chars().any(|c| {
-        c.is_control()
-            || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
-    })
-}
+/// Characters refused in any displayed text: invisible and reordering characters (the registry's
+/// rule, shared with the web: [`crate::display`]).
+pub use crate::display::has_bad_char;
 
 fn text_ok(s: &str, max: usize) -> bool {
     !s.trim().is_empty() && s.chars().count() <= max && !has_bad_char(s)
@@ -586,6 +581,9 @@ pub struct TokenDeclaration {
     /// template (`crate::creator_lock::CreatorLock::parse`). What it holds is
     /// [`VerifiedDeclaration::lock`].
     pub lock: Option<String>,
+    /// Whether the `name` or `symbol` has a character drawn like a Latin letter
+    /// ([`crate::display::has_lookalike`]). A warning for display: the fields are still taken.
+    pub lookalike: bool,
     /// The fields present but not taken (`decimals: not an integer from 0 to 18`, ...).
     pub issues: Vec<String>,
 }
@@ -673,6 +671,7 @@ impl TokenDeclaration {
                 None
             }
         };
+        d.lookalike = d.name.iter().chain(d.symbol.iter()).any(|s| crate::display::has_lookalike(s));
         d.issues = issues;
         d
     }

@@ -653,8 +653,8 @@ impl IssueSpec {
     /// Validate every rule that does not need the transaction. Returns warnings.
     pub fn validate(&self) -> Result<Vec<String>> {
         let mut warnings = vec![];
-        if self.name.is_empty() || self.name.chars().count() > 64 || self.name.chars().any(char::is_control) {
-            return invalid("name must be 1..=64 characters without control characters");
+        if self.name.is_empty() || self.name.chars().count() > 64 || crate::display::has_bad_char(&self.name) {
+            return invalid("name must be 1..=64 characters without control, invisible or direction-changing characters");
         }
         if self.ticker.is_empty()
             || self.ticker.len() < 2

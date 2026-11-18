@@ -247,7 +247,9 @@ describe('validation (mirror of the Rust rules)', () => {
     doc.tokens[0].display = { website: 'https://ok.example', icon: 'ipfs://cid', kcc23: {} };
     expect(codes(doc)).toEqual([]);
     expect(hasBadChar('plain')).toBe(false);
-    expect(hasBadChar('a‍b')).toBe(true);
+    expect(hasBadChar('a\u200Bb')).toBe(true);
+    expect(hasBadChar('a\u061Cb')).toBe(true); // finding L7: Arabic letter mark, line separator, soft hyphen, fillers
+    expect(hasBadChar('a\u200Db')).toBe(false); // a joiner between two visible characters is an emoji sequence
   });
 
   it('rejects unknown fields at every level', () => {

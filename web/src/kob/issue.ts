@@ -20,6 +20,7 @@ import { schnorr } from '@noble/curves/secp256k1.js';
 import { atFloor, capForTotal, describeFee, rememberFeeChoice, withUrgency, type FeeContext, type RatePick } from './fee-policy';
 import type { PlanIssue } from './plan-types';
 import { normalizeTicker } from './registry';
+import { hasBadChar } from './display';
 import { curveMinFill, curveNumbers, curveSpecOfSale, curveTable, parseSale, type CurveNumbers, type CurveTable, type SaleForm } from './curve';
 import { LOCK_TIME_THRESHOLD, MAX_UNTIL } from './creator-lock';
 import type { AnyState, BuiltTx, Hex, Kcc20State, KeyUtxo, TokenUtxo, U64 } from './types';
@@ -327,12 +328,6 @@ export function formatUnits(value: bigint, decimals: number): string {
  */
 export { normalizeTicker };
 
-/**
- * Characters the registry refuses in display text: zero-width, bidi and control characters
- * (`registry.rs::has_bad_char`).
- */
-const BAD_CHARS = /[\p{Cc}​-‏‪-‮⁠-⁤⁦-⁩﻿]/u;
-
 const HEX32 = /^[0-9a-f]{64}$/;
 
 function isXOnlyKey(hex: Hex): boolean {
@@ -444,7 +439,7 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
   const name = form.name.trim();
   if (name === '') err('name.empty', 'Enter a token name.', 'name');
   else if ([...name].length > limits.name.maxLength) err('name.too_long', `The name is at most ${limits.name.maxLength} characters.`, 'name', { max: limits.name.maxLength });
-  else if (BAD_CHARS.test(name)) err('name.bad_chars', 'The name must not contain control, zero-width or direction-changing characters.', 'name');
+  else if (hasBadChar(name)) err('name.bad_chars', 'The name must not contain control, invisible or direction-changing characters.', 'name');
 
   // ticker
   const t = form.ticker;
@@ -591,7 +586,7 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
   const disp = (v: string, field: 'description' | 'website' | 'icon') => {
     const s = v.trim();
     if (s === '') return;
-    if ([...s].length > limits.maxDisplayChars || BAD_CHARS.test(s)) {
+    if ([...s].length > limits.maxDisplayChars || hasBadChar(s)) {
       err(`${field}.invalid`, `The ${field} is at most ${limits.maxDisplayChars} characters without control characters.`, field, { max: limits.maxDisplayChars });
     } else if (field === 'website' && !s.startsWith('https://')) {
       err('website.https', 'The website must be an https:// address.', field);
