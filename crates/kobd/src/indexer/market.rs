@@ -230,12 +230,17 @@ pub(crate) fn add_trade(out: &mut VecDeque<Candle>, t: &Trade, interval: i64) {
 
 // SQL.
 
-/// The fill events (`e`, of order `o`) that make prices (security review 2026-11-17 M5): every
-/// fill but a self-trade, however small. A self-trade is a fill whose transaction a key of the
-/// order's maker funded (a direct take of the maker's own order), or one with a fill of the other
-/// side of an order of the same maker (an executor crossing two orders of one maker; [`trade_of`]
-/// drops those, by the `maker` of the rows of a transaction). The trades, the candles, the last
-/// price and the 24 h statistics leave them out.
+/// The fill events (`e`, of order `o`) that make prices: every fill but a self-trade, however
+/// small.
+///
+/// A self-trade is either of these:
+/// - a fill whose transaction a key of the order's maker funded, i.e. a direct take of the
+///   maker's own order;
+/// - a fill in a transaction that also fills the other side with an order of the same maker, i.e.
+///   an executor crossing two orders of one maker. [`trade_of`] drops those, by the `maker` of the
+///   rows of a transaction.
+///
+/// The trades, the candles, the last price and the 24 h statistics leave them out.
 macro_rules! priced_fill {
     () => {
         "NOT EXISTS (SELECT 1 FROM scripts sc WHERE sc.id = e.executor_id AND length(sc.spk) = 36 AND substr(sc.spk, 1, 3) = x'000020' \
@@ -1043,9 +1048,9 @@ mod tests {
         assert_eq!(page.next_cursor, None);
     }
 
-    /// Security review 2026-11-17 M5: a self-trade (an executor crossing two orders of one maker, or
-    /// a maker's own direct take) makes no price: no trade, no candle, no last price. A small fill
-    /// of two makers (25 sompi here) does.
+    /// A self-trade makes no trade, candle or last price. That is an executor crossing two orders
+    /// of one maker, or a maker's own direct take. A small fill of two makers (25 sompi here)
+    /// does make a price.
     #[test]
     fn self_trades_make_no_price_and_small_fills_do() {
         let conn = crate::indexer::db::open_memory("testnet-10").unwrap();

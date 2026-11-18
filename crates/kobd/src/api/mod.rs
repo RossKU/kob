@@ -372,7 +372,7 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
     edge_cache::apply(&mut resp, &method, &path, &query, now_ms);
-    // no content sniffing of an answer (security review 2026-11-17 I6)
+    // No content sniffing of an answer.
     resp.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     if let Some(origin) = cors {
         if let Ok(v) = HeaderValue::from_str(&origin) {

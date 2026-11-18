@@ -64,7 +64,7 @@ impl<K: Hash + Eq + Clone> Limiter<K> {
 
     /// [`Limiter::check_reserving`] for a caller that may also draw on the reserve: above the
     /// `reserve` share it takes a token as usual, and below it only when `share` admits the draw
-    /// (the caller's own share of the reserve, X16). `share` is not called for a draw above the
+    /// (the caller's own share of the reserve). `share` is not called for a draw above the
     /// reserve or when the bucket is empty.
     pub fn check_tiered(&self, key: &K, now_ms: u64, reserve: f64, share: impl FnOnce() -> bool) -> Result<f64, u64> {
         self.take(key, self.default, now_ms, reserve, Some(share))

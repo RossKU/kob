@@ -343,11 +343,10 @@ const QUIET_FRACTION: f64 = 0.25;
 /// The share of a shared bucket only quiet clients may draw on.
 ///
 /// Busy clients stop when the bucket is half full, so a few dozen addresses at their per-client
-/// rate cannot empty it for everyone else. The audit finding is listed in
-/// `docs/security/AUDIT-2026-10.md`.
+/// rate cannot empty it for everyone else.
 const FAIR_RESERVE: f64 = 0.5;
 /// One quiet client takes at most `1 / RESERVE_SHARES` of a shared bucket's reserve, but at least
-/// [`MIN_SHARE_PER_SECOND`] (audit X16). A draw above the reserve is not counted.
+/// [`MIN_SHARE_PER_SECOND`]. A draw above the reserve is not counted.
 ///
 /// Without it, quiet-looking addresses at a quarter of their per-client rate could hold the reserve
 /// empty for everyone else: 20 of them for the payment bucket, 120 for the anonymous one (defaults).

@@ -22,8 +22,8 @@
 //!   ([`super::lean::live_order_holding`]), and so does the proof that a token has a program
 //!   (`holding_programs`).
 //! - **Rejects** (`rejects`) of final blocks beyond the newest [`KEEP_REJECTS`]: a refused
-//!   placement or an undecodable payload costs a fee, not lasting storage (security review
-//!   2026-11-17 L4). `/v1/health` keeps counting them all.
+//!   placement or an undecodable payload costs a fee, not lasting storage. `/v1/health` keeps
+//!   counting them all.
 //!
 //! Orders, events, fills, candles, pair fills and the activity totals are never touched. So the
 //! trades, candles, statistics, books, orders and their events read the same. A batch runs with the

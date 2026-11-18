@@ -3,11 +3,11 @@
 //! Half of the global bucket is kept for quiet clients (within a quarter of their own rate), so a
 //! few busy addresses at their own limit cannot drain it for everyone else. One quiet client takes
 //! at most `1 / RESERVE_SHARES` of that reserve, so many quiet-looking addresses cannot hold it
-//! empty either (audit X16).
+//! empty either.
 //!
 //! Memory is bounded. Idle client buckets expire after `bucket_ttl_secs`. When a table reaches
-//! `max_tracked_clients`, the buckets that have refilled the most (least state lost) are evicted. An address-spray flood can therefore
-//! only churn entries and never grow the table.
+//! `max_tracked_clients`, the buckets that have refilled the most (least state lost) are evicted.
+//! An address-spray flood can therefore only churn entries and never grow the table.
 //!
 //! The clock is injectable for tests.
 
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn quiet_clients_cannot_hold_the_reserve_empty_for_a_new_one() {
-        // X16. 20 a second per client (quiet within 5 a second), 50 a second for all. 20 addresses
+        // 20 a second per client (quiet within 5 a second), 50 a second for all. 20 addresses
         // at 5 a second each are quiet and together ask 100 a second. Each takes at most 1 a second
         // from the reserve, so a new client asking right after them still gets through.
         let (l, clock) = limiter(cfg(20.0, 20, 50.0, 100));

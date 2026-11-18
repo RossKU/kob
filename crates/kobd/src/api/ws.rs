@@ -263,7 +263,7 @@ impl WsRegistry {
         }
         let held = per.get(&key).copied().unwrap_or(0);
         // The last quarter of the pool is kept for clients with at most one socket, so a few
-        // addresses at their own cap cannot take it all (security review 2026-11-17 L2).
+        // addresses at their own cap cannot take it all.
         let crowded = self.0.total.load(Ordering::SeqCst) >= l.max_total - l.max_total / 4;
         if held >= l.max_per_ip || (crowded && held >= 2) {
             return Err(WsReject::PerIp);
@@ -513,7 +513,7 @@ mod tests {
         assert!(frames_for(&ev, &subs)[1]["data"]["price"].is_null());
     }
 
-    /// Security review 2026-11-17 L2: the last quarter of the pool is for clients with at most one socket.
+    /// The last quarter of the pool is for clients with at most one socket.
     #[test]
     fn the_last_quarter_of_the_pool_is_kept_for_new_clients() {
         let l = WsLimits { max_total: 8, max_per_ip: 8, prefix_bits: 64, max_per_site: 0, site_prefix_bits: 0 };

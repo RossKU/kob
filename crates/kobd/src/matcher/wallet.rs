@@ -623,7 +623,7 @@ mod tests {
             std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
             assert!(matches!(HotKey::from_file(&p), Err(KeyError::Permissions(..))));
             std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
-            // L9: a directory other accounts may write is refused, unless sticky
+            // A directory other accounts may write is refused, unless it is sticky.
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
             let e = HotKey::from_file(&p).unwrap_err().to_string();
             assert!(e.contains("writable by group or others"), "{e}");

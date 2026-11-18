@@ -227,8 +227,8 @@ fn has_live_role(conn: &Connection, cov: &Hash32, role: &str) -> DbResult<bool> 
         .exists(params![&cov.0[..], role])?)
 }
 
-/// Whether transaction `txid` spent a stray of order `cov` of `token` (L2: a look-alike named in
-/// place of the order's custody).
+/// Whether transaction `txid` spent a stray of order `cov` of `token`, that is a look-alike named
+/// in place of the order's custody.
 fn spent_stray_of(conn: &Connection, txid: &Hash32, cov: &Hash32, token: &Hash32) -> DbResult<bool> {
     Ok(conn
         .prepare_cached(concat!(
@@ -245,7 +245,7 @@ fn spent_stray_of(conn: &Connection, txid: &Hash32, cov: &Hash32, token: &Hash32
 const DEMOTED: &str = "demoted:";
 
 /// Makes every live `role` row of order `cov` of `token` that an earlier
-/// transaction created a stray (L2), and records each in `rejects` so that `revert_block` gives
+/// transaction created a stray, and records each in `rejects` so that `revert_block` gives
 /// the role back. Returns whether a row of this transaction may take the role: none of its rows
 /// has it yet.
 fn demote_role(
@@ -931,7 +931,7 @@ impl Processor {
             if created.contains(&t.owner) || spent_covs.contains(&t.owner) {
                 let hold = rec.holds.iter().find(|h| h.out == t.out);
                 let held = hold.map(|h| &h.state);
-                // L2: a fill may name an exact look-alike (a stray of the order, interchangeable by
+                // A fill may name an exact look-alike (a stray of the order, interchangeable by
                 // design) in place of the live custody, which then stays unspent. The new exact
                 // output is then the order's, and the old row, which no longer matches the order's
                 // state, becomes a stray (`demote_role`, undone by a revert).

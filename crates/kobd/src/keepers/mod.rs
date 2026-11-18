@@ -1200,8 +1200,8 @@ mod tests {
         assert!(text.contains("[3000,7,300]"), "{text}");
     }
 
-    /// L11: a saved window that does not parse grants no subsidy (not a fresh budget) until it reads, and is never
-    /// overwritten meanwhile.
+    /// A saved window that does not parse grants no subsidy, not a fresh budget, until it reads.
+    /// It is never overwritten meanwhile.
     #[test]
     fn an_unreadable_window_allows_no_subsidy_until_it_reads() {
         let c = cfg(100, 1_000);
