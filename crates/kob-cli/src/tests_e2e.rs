@@ -1,9 +1,9 @@
-//! End-to-end tests against a mock wRPC node, with no network.
+//! Tests `kob` end to end against a mock wRPC node, with no network.
 //!
 //! The fixtures are real orders built with kob-protocol, a kob-backup, an export file and indexer
 //! views on disk. The tests run `kob recover` (search, report, `--cancel --dry-run`, submit) and
-//! `kob sweep|cancel` on saved views (`--view`). Every signed transaction is re-validated in the rusty-kaspa engine
-//! from the file that the command wrote.
+//! `kob sweep|cancel` on saved views (`--view`). Every signed transaction is re-validated in the
+//! rusty-kaspa engine from the file that the command wrote.
 //!
 //! Amounts are base units and prices are sompi per whole token. The fixtures use `SCALE = 1000`
 //! base units per whole token, which is a token of three decimals.

@@ -1,4 +1,4 @@
-//! The CLI planner against the planner of the web wallet.
+//! Tests the CLI planner against the planner of the web wallet.
 //!
 //! The fixtures are those of `web/src/testing/fixtures.ts`:
 //! - Maker key 11..11, token 70..70 with extension ee..ee, 3 decimals and tick 100.
@@ -97,7 +97,7 @@ pub(super) fn env(m: &TokenMarket) -> Env {
         fee_mode: Default::default(),
         carrier: Some(C as u64),
         pair: None,
-        // The old tests pin mode 0; the delivery tests ask for the default themselves.
+        // The other tests pin mode 0; the delivery tests ask for the default themselves.
         delivery: super::delivery::Request { choice: Some(super::delivery::Choice::Each), ..Default::default() },
     }
 }

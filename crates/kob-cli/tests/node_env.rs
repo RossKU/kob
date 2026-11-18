@@ -1,6 +1,8 @@
-//! The `kob` binary (`kob-cli`) takes the node endpoint from `KOB_NODE_WRPC` when `--node` is not given (a URL with a
-//! password or an API key stays off the command line, which other local users see in `ps`), and its messages name the node
-//! redacted.
+//! Tests that the `kob` binary (`kob-cli`) takes the node endpoint from `KOB_NODE_WRPC` when
+//! `--node` is not given, and that its messages name the node redacted.
+//!
+//! A URL with a password or an API key stays off the command line, which other local users see in
+//! `ps`.
 
 use std::process::{Command, Stdio};
 

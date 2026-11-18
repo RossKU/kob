@@ -1,6 +1,8 @@
-//! The trading commands as a user runs them (the `kob` binary): a key on the command line is refused and never echoed,
-//! the network defaults to mainnet and a test network is chosen at run time, an unreachable node or indexer is reported with its URL redacted, and nothing is signed
-//! without `--yes` or a terminal.
+//! Tests the trading commands as a user runs them (the `kob` binary).
+//!
+//! Covered: a key on the command line is refused and never echoed; the network defaults to mainnet
+//! and a test network is chosen at run time; an unreachable node or indexer is reported with its
+//! URL redacted; nothing is signed without `--yes` or a terminal.
 
 use std::process::Command;
 

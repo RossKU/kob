@@ -1,6 +1,7 @@
-//! The help rule and the exit codes of the `kob` binary: an explicit `--help` prints on stdout and exits 0, a usage printed
-//! because of a mistake goes to stderr and exits 2, `kob help <command>` is `kob <command> --help`, and a mistake in the
-//! arguments is exit 2 on the views too. Nothing here contacts a node or an indexer.
+//! Tests the help rule and the exit codes of the `kob` binary: an explicit `--help` prints on
+//! stdout and exits 0, a usage printed because of a mistake goes to stderr and exits 2, `kob help
+//! <command>` is `kob <command> --help`, and a mistake in the arguments is exit 2 on the views too.
+//! Nothing here contacts a node or an indexer.
 
 use std::process::{Command, Stdio};
 

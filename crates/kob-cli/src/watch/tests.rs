@@ -1,4 +1,4 @@
-//! `kob watch` against a local server that speaks the WebSocket protocol of the executor.
+//! Tests `kob watch` against a local server that speaks the WebSocket protocol of the executor.
 //!
 //! The server also answers a few REST routes on the same port. The tests cover the frames, the
 //! debounced refetch of notices, the reconnect and the errors. The protocol is described in
