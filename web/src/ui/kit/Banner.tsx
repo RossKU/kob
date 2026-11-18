@@ -18,7 +18,10 @@ export interface BannerProps {
   class?: string;
 }
 
-/** Inline message. Errors and warnings use `role=alert` (announced at once), the rest `role=status`. */
+/**
+ * Inline message. Errors and warnings use `role=alert`, which is announced at once, and the rest
+ * use `role=status`.
+ */
 export function Banner(props: BannerProps) {
   const tone = props.tone ?? 'info';
   return (
