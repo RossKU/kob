@@ -33,7 +33,7 @@ import './balances.css';
 const BALANCE_SORT_KEYS = ['asset', 'available', 'inOrders', 'strays', 'kasLocked', 'value'] as const;
 type BalanceSortKey = (typeof BALANCE_SORT_KEYS)[number];
 
-/** The columns of the balances table: the asset, the figures, the buttons (no title). */
+/** The columns of the balances table: the asset, the figures and the buttons, with no title. */
 function balanceColumns(valueLabel: string, lockedLabel: string): (DtColumn<BalanceSortKey> | DtPlain)[] {
   return [
     { key: 'asset', label: t('orders.balances.asset'), kind: 'text', card: 'head' },
@@ -54,53 +54,77 @@ function BalancesSkeleton() {
   );
 }
 
-/** The panel until the list it is read with is in: its card and its heading, in their place. */
+/**
+ * The panel until the list it is read with is in. It shows its card and its heading in their place.
+ */
 export function BalancesFrame() {
   return <Section title={t('orders.balances.title')} subtitle={t('orders.balances.subtitle')} data-testid="balances-panel"><BalancesSkeleton /></Section>;
 }
 
 /**
- * The balances wallets do not show: tokens inside the wallet's sell orders (0x04 custody), stray tokens, KAS locked in orders, next to the free
- * amounts. Free amounts come from the node / token tracker, the rest from the wallet's live orders (indexer, or records resolved on the node).
- * Drawn in the shared table (kit/DataTable.tsx), KAS first.
+ * The balances wallets do not show: tokens inside the wallet's sell orders (0x04 custody), stray
+ * tokens and KAS locked in orders, next to the free amounts. Free amounts come from the node and
+ * the token tracker. The rest comes from the wallet's live orders, from the indexer or records
+ * resolved on the node. It is drawn in the shared table (kit/DataTable.tsx), KAS first.
  */
 export function BalancesPanel(props: {
   data: OrdersData;
-  /** the free balances are read again when this changes (each load of the list, not each background update of it) */
+  /**
+   * The free balances are read again when this changes. That is each load of the list, not each
+   * background update of it.
+   */
   version?: unknown;
   pubkey: Hex;
   canSign: boolean;
   onCancelToken(token: Hex): void;
-  /** outpoints held for open orders (never merged) */
+  /** Outpoints held for open orders, which are never merged. */
   reserved?: ReadonlySet<string>;
-  /** an action is being planned (its id) */
+  /** An action is being planned, given by its id. */
   busy?: string | null;
-  /** merge the wallet's plain UTXOs of a token into one */
+  /** Merge the wallet's plain UTXOs of a token into one. */
   onMergeToken?(token: Hex): void;
-  /** claim what the wallet's Collected buy orders of a token bought (one order: its dialog; several: one claim each) */
+  /**
+   * Claim what the wallet's Collected buy orders of a token bought. For one order it opens its
+   * dialog, and for several it makes one claim each.
+   */
   onClaimToken?(token: Hex): void;
-  /** turn the wallet's UTXOs of a token that carry a KCC-20 borrow setting into plain ones (the cell's button when the token has no Merge all; the Merge all dialog offers it otherwise) */
+  /**
+   * Turn the wallet's UTXOs of a token that carry a KCC-20 borrow setting into plain ones. The
+   * cell's button shows when the token has no Merge all. Otherwise the Merge all dialog offers it.
+   */
   onConvertToken?(token: Hex): void;
-  /** the page's balances (use-balances.ts): the free balances, combined with the orders and strays, and each token's value in KAS */
+  /**
+   * The page's balances (use-balances.ts): the free balances combined with the orders and strays,
+   * and each token's value in KAS.
+   */
   balances: WalletBalances;
-  /** only these tokens (a market page: its token, a pair's two); KAS always */
+  /** Only these tokens, as on a market page with its token or a pair's two. KAS is always shown. */
   onlyTokens?: ReadonlySet<Hex>;
-  /** kascov.io's picture of a token, for its icon */
+  /** kascov.io's picture of a token, for its icon. */
   iconOf?: (covenantId: string) => KascovMeta | null;
-  /** a market page's panel: no heading; the money figures are one line at the top (the page's summary cards are the account overview of the Portfolio page only) */
+  /**
+   * A market page's panel. It has no heading, and the money figures are one line at the top. The
+   * page's summary cards are the account overview of the Portfolio page only.
+   */
   compact?: boolean;
-  /** unlock what the wallet's creator lock of a token holds (its button shows once the lock is open) */
+  /**
+   * Unlock what the wallet's creator lock of a token holds. Its button shows once the lock is open.
+   */
   onUnlockToken?(token: Hex): void;
-  /** who can sign the unlock: the connected wallet, or only the CLI (a wallet that cannot sign its script input: a muted note instead) */
+  /**
+   * Who can sign the unlock, the connected wallet or only the CLI. For a wallet that cannot sign
+   * its script input, a muted note is shown instead.
+   */
   unlockBy?: 'wallet' | 'cli';
 }) {
   const services = useServices();
   const { registry } = services;
-  // the USD display (Settings): the KAS values in dollars (the money cell reads it itself; the Amount cells here take it); null = KAS
+  // The USD display (Settings) shows the KAS values in dollars. The money cell reads it itself, and
+  // the Amount cells here take it. Null means KAS.
   const fiat = useFiat();
   const valueLabel = t(fiat ? 'orders.col.valueUsd' : 'orders.col.valueKas');
   const lockedLabel = t(fiat ? 'market.balances.kasLockedUsd' : 'market.balances.kasLocked');
-  // the viewer's sort of the token rows (KAS stays on top); none: as the wallet lists them
+  // The viewer's sort of the token rows. KAS stays on top, and none means as the wallet lists them.
   const [sort, setSort] = useSortState<BalanceSortKey>('balances', BALANCE_SORT_KEYS);
   const sortCols = balanceColumns(valueLabel, lockedLabel);
   const { free, combined, valueOf } = props.balances;
@@ -124,35 +148,39 @@ export function BalancesPanel(props: {
     }
   });
 
-  // a token outside the registry is merged under the program the node verified its UTXOs under (the template's slots, the extension commitment its UTXOs share)
+  // A token outside the registry is merged under the program the node verified its UTXOs under.
+  // That gives the template's slots and the extension commitment its UTXOs share.
   const orderPrograms = useMemo(() => orderTokenPrograms(props.data.views), [props.data]);
   const unlisted = useMemo(() => (free.data ? { kob: services.kob, programs: free.data.programOf ?? free.data.programs } : undefined), [free.data, services.kob]);
-  // free token UTXOs a merge may take, per token (two or more)
+  // Free token UTXOs a merge may take, per token, when there are two or more.
   const mergeable = useMemo(
     () => (free.data ? mergeableCounts(free.data.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set(), unlisted) : new Map<Hex, number>()),
     [free.data, registry, props.pubkey, props.reserved, unlisted],
   );
 
-  // free token UTXOs with a borrow setting, per token ("Convert to plain")
+  // Free token UTXOs with a borrow setting, per token, for "Convert to plain".
   const convertible = useMemo(
     () => (free.data ? convertibleCounts(free.data.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set(), unlisted) : new Map<Hex, number>()),
     [free.data, registry, props.pubkey, props.reserved, unlisted],
   );
 
-  // about how much KAS Merge all frees, per token (shown on the button: the reason to press it)
+  // About how much KAS Merge all frees, per token. It is shown on the button as the reason to press
+  // it.
   const frees = useMemo(
     () => (free.data ? mergeAllFrees(free.data.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set(), unlisted) : new Map<Hex, bigint>()),
     [free.data, registry, props.pubkey, props.reserved, unlisted],
   );
 
-  // fixed decimals per column: the finest amount of the column, so every row shows the same number of decimals (decimal points line up)
-  // (a token of unknown decimals, no registry entry, shows its base units with no fraction)
+  // Fixed decimals per column, the finest amount of the column, so every row shows the same number
+  // of decimals and the decimal points line up. A token of unknown decimals, with no registry
+  // entry, shows its base units with no fraction.
   const cols = useMemo(
     () => balanceColumnFractions(combined?.tokens ?? [], (tok) => displayToken(registry, services.config.network, tok)?.decimals, unitsFraction),
     [combined, registry],
   );
 
-  // the figures of the table and the strip: at most 4 decimals (the whole amount is the title), the finest of each column on every row of it so the decimal points line up
+  // The figures of the table and the strip have at most 4 decimals, with the whole amount as the
+  // title. The finest of each column is used on every row of it so the decimal points line up.
   const cap = (n: number): number => Math.min(AMOUNT_FRACTION_MAX, n);
   const kasRow = combined?.kas;
   const dp = {
@@ -164,7 +192,8 @@ export function BalancesPanel(props: {
     value: Math.min(KAS_FRACTION_MAX, columnFraction([kasRow?.total, ...(combined?.tokens ?? []).map((b) => valueOf(b))], 8)),
   };
 
-  // the book's Refresh (an icon, the glyph spins while it reads): the button keeps its size, its words are its accessible name and tooltip
+  // The book's Refresh is an icon whose glyph spins while it reads. The button keeps its size, and
+  // its words are its accessible name and tooltip.
   const reading = free.loading && !!free.data;
   const refresh = (
     <Button small variant="ghost" class="bal-refresh" onClick={free.reload} title={t('common.refresh')} aria-label={t('common.refresh')} aria-busy={reading ? 'true' : undefined} data-testid="balances-refresh">
@@ -181,7 +210,8 @@ export function BalancesPanel(props: {
       data-testid="balances-panel"
     >
       {props.compact ? (
-        // the money figures, one line (the items wrap between each other, a figure never breaks), Refresh at the right end
+        // The money figures are one line. The items wrap between each other and a figure never
+        // breaks. Refresh is at the right end.
         <div class="bal-line" data-testid="portfolio-summary" data-currency={fiat ? 'usd' : 'kas'}>
           <div class="bal-items">
             <span class="bal-item">
@@ -209,7 +239,8 @@ export function BalancesPanel(props: {
         <Banner tone="warn" data-testid="balances-partial">{t('market.balances.partial', { sources: free.data.errors.map((e) => e.source).join(', ') })}</Banner>
       ) : null}
       {combined && free.data ? (
-        // the rows rise in as the lists of the other tabs do (.ml-in, market.css), once, when the tab is opened; a refresh of the figures keeps this box and does not replay it
+        // The rows rise in as the lists of the other tabs do (`.ml-in`, market.css), once, when the
+        // tab is opened. A refresh of the figures keeps this box and does not replay it.
         <div class="ml-in">
           <DataTable id="balances" grid="balances" label={t('orders.balances.tokens')} cols={sortCols} sort={sort} own={null} onSort={setSort} sortable={tokensOnShow.length > 1} data-testid="token-balances-table">
             {/* KAS first: what the wallet can spend, what its orders hold, and the KAS that rides on its token coins (counted in the total) */}
@@ -243,7 +274,8 @@ export function BalancesPanel(props: {
             ) : (
               shownTokens.map((b) => {
                 const info = registry.byCovenantId.get(b.token);
-                // shown in whole tokens also without a registry entry (app/token-display.ts: this browser's issuance, else 8 assumed decimals)
+                // Shown in whole tokens also without a registry entry (app/token-display.ts), on
+                // this browser's issuance, else 8 assumed decimals.
                 const shown = displayToken(registry, services.config.network, b.token)!;
                 const d = shown.decimals;
                 const label = tokenLabel(shown);
@@ -251,10 +283,12 @@ export function BalancesPanel(props: {
                 const mergeAs = props.onMergeToken && mergeable.has(b.token) ? mergeTokenFor(b.token, free.data!.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set(), unlisted) : null;
                 const showMerge = !!mergeAs;
                 const claimable = !!props.onClaimToken && b.bought > 0n;
-                // "Convert to plain" is in the Merge all dialog where that button shows; only a token with nothing to merge has it here (the cell keeps its width)
+                // "Convert to plain" is in the Merge all dialog where that button shows. Only a
+                // token with nothing to merge has it here, and the cell keeps its width.
                 const showConvert = !!props.onConvertToken && convertible.has(b.token) && !showMerge;
                 const program = info?.program ?? free.data!.programs.get(b.token) ?? orderPrograms.get(b.token) ?? null;
-                // the wallet's creator lock of the token: a sub-line under Available; once open, Unlock (or the CLI's command) in the action cell
+                // The wallet's creator lock of the token is a sub-line under Available. Once it is
+                // open, Unlock, or the CLI's command, is in the action cell.
                 const locked = b.locked && b.locked.amount > 0n ? b.locked : null;
                 const open = !!locked && unlockOpen(locked.until);
                 const showUnlock = open && !!props.onUnlockToken && props.unlockBy !== 'cli';
@@ -294,7 +328,8 @@ export function BalancesPanel(props: {
                       <DtCell k="inOrders" label={t('orders.balances.inOrders')} num data-testid="balance-escrowed">
                         <Amount kind="token" value={b.escrowed + b.bought} decimals={d} unit={false} fraction={dp.escrowed} group />
                         {b.bought > 0n ? (
-                          // tokens bought and held by Collected buy orders: the wallet's own, next to what is for sale
+                          // Tokens bought and held by Collected buy orders. They are the wallet's
+                          // own, next to what is for sale.
                           <>
                             {b.escrowed > 0n ? <div class="dt-sub" data-testid="balance-for-sale">{t('orders.balances.forSale', { amount: amountCell(b.escrowed, d).text })}</div> : null}
                             <div class="dt-sub" title={t('orders.balances.boughtHint')} data-testid="balance-bought">{t('orders.balances.bought', { amount: amountCell(b.bought, d).text })}</div>
@@ -337,7 +372,8 @@ export function BalancesPanel(props: {
                               </Button>
                             ) : null}
                             {mergeAs ? (
-                              // the count and the KAS freed are its tooltip (the confirmation states them again before signing)
+                              // The count and the KAS freed are its tooltip. The confirmation
+                              // states them again before signing.
                               <Button
                                 small
                                 disabled={!props.canSign || !!props.busy}
