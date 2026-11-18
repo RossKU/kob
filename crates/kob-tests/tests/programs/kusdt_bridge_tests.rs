@@ -1,15 +1,18 @@
-//! kUSDT on testnet-10 (`contracts/third-party/kusdt/`): a token of the published public-mint app's `KCC20` program whose genesis
-//! holds a `BridgeMint`, the federated bridge's minter, which KOB pins by its template hash as the `bridge-minter` companion of
-//! `KCC20PublicMint` (`crates/kob-protocol/data/programs.json`), and whose redemptions burn kUSDT to an `OP_RETURN` script hash.
-//! Fixture: `contracts/third-party/kusdt/observed.json` (the genesis group, the revealed `BridgeMint`, a redemption), and under
-//! `recovery_build` the deployment that superseded it (covenant `a1d9fd13...`: a newer `BridgeMint` with the signer-recovery path,
-//! a 250-byte state span, a second pin).
+//! Tests kUSDT on testnet-10 (`contracts/third-party/kusdt/`): a token of the published
+//! public-mint app's `KCC20` program whose genesis holds a `BridgeMint`, the federated bridge's
+//! minter, which KOB pins by its template hash as the `bridge-minter` companion of
+//! `KCC20PublicMint` (`crates/kob-protocol/data/programs.json`), and whose redemptions burn kUSDT
+//! to an `OP_RETURN` script hash. Fixture: `contracts/third-party/kusdt/observed.json` (the genesis
+//! group, the revealed `BridgeMint`, a redemption), and under `recovery_build` the deployment that
+//! superseded it (covenant `a1d9fd13...`: a newer `BridgeMint` with the signer-recovery path, a
+//! 250-byte state span, a second pin).
 //!
 //! * each pin is its observed covenant's cut, and its context field names this program's `KCC20`;
-//! * each genesis group verifies with its pin (the web app's open check: the unspent `TokenSeed` rebuilt from the creator's key),
-//!   lists it as a mint authority without an allowance, and fails as contaminated without the pin;
-//! * a `BridgeMint` that names another program is not recognised, and one whose mints would carry another extension
-//!   commitment than the token's is refused;
+//! * each genesis group verifies with its pin (the web app's open check: the unspent `TokenSeed`
+//!   rebuilt from the creator's key), lists it as a mint authority without an allowance, and fails
+//!   as contaminated without the pin;
+//! * a `BridgeMint` that names another program is not recognised, and one whose mints would carry
+//!   another extension commitment than the token's is refused;
 //! * the observed redemption's output 0 is the burn state its payload names.
 
 use kaspa_consensus_core::hashing::covenant_id::covenant_id;
