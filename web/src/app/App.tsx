@@ -1,4 +1,5 @@
-// Application shell: header, status bar, the wrong-network banner, the routed view, footer, toasts; or, at the empty hash by default, the landing page in its place.
+// The application shell. It holds the header, the status bar, the wrong-network banner, the routed
+// view, the footer and the toasts. At the empty hash, by default, the landing page takes its place.
 import { useEffect, useRef } from 'preact/hooks';
 import type { ConfigWarning, StoredOverride } from '../config';
 import { t } from '../i18n';
@@ -32,8 +33,9 @@ import { routeToHash, useRoute, type Route } from './router';
 import { Titled } from './page-title';
 
 /**
- * The empty hash inside the shell: an operator's explicit config `home` (a chart, a pair or the list). The default `landing` never gets here: the App
- * draws the landing page in place of the whole shell (`showsLanding`). The market list stays at `#/market`.
+ * The empty hash inside the shell, which shows an operator's explicit config `home`: a chart, a
+ * pair or the list. The default `landing` never gets here, because the App draws the landing page
+ * in place of the whole shell (`showsLanding`). The market list stays at `#/market`.
  */
 function HomeView() {
   const { config, registry } = useServices();
@@ -101,11 +103,13 @@ function RoutedView(props: { route: Route; warnings: ConfigWarning[] }) {
   }
 }
 
+/** The app: the landing page or the shell for the route, and the runners every page shares. */
 export function App(props: { warnings: ConfigWarning[]; storedOverrides?: StoredOverride[] }) {
   const services = useServices();
   const route = routeWithSupport(useRoute(), supportAddressOf(services.config.features));
 
-  // a new page moves the focus to its content (screen readers announce it, Tab continues from there), not on the first load and not from an open dialog
+  // A new page moves the focus to its content, so screen readers announce it and Tab continues from
+  // there. This does not happen on the first load or from an open dialog.
   const routeKey = routeToHash(route);
   const firstRoute = useRef(true);
   useEffect(() => {
@@ -117,8 +121,10 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
     document.getElementById('main')?.focus({ preventScroll: true });
   }, [routeKey]);
 
-  // KCC-23 declarations: the ones kept in this browser (re-verified), then those of the tokens the indexer marks as declared, and the program of
-  // every listed token; every view re-renders when one becomes known (the names, tickers and decimals it shows follow: app/token-display.ts)
+  // KCC-23 declarations are loaded here: the ones kept in this browser, verified again, then those
+  // of the tokens the indexer marks as declared, and the program of every listed token. Every view
+  // re-renders when one becomes known, and the names, tickers and decimals it shows follow
+  // (app/token-display.ts).
   useDeclarationsVersion();
   useEffect(() => {
     const { kob, indexer, config } = services;
@@ -128,13 +134,14 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
     indexer
       .tokens()
       .then((rows) => {
-        // the program each token is listed under (a fact of its scripts): a token of a program with default decimals is shown with them
-        // (KaspaRocket convention, app/token-display.ts)
+        // The program each token is listed under, a fact of its scripts. A token of a program with
+        // default decimals is shown with them (KaspaRocket convention, app/token-display.ts).
         const tpls = kob.templates();
         for (const r of rows) {
           if (!alive) break;
           if (r.template_hash) noteTokenProgram(config.network, r.covenant_id, tpls.find((t) => t.hash === r.template_hash && t.tokenSlots)?.name);
-          // the token's scale, else the one its first order set: what its amounts are read on where neither a declaration nor a program states its decimals
+          // The token's scale, else the one its first order set. Its amounts are read on it where
+          // neither a declaration nor a program states its decimals.
           const scale = r.scale ?? r.market_scale;
           if (typeof scale === 'number') noteMarketDecimals(config.network, r.covenant_id, exponentOf(scale));
           if (r.declaration) void loadDeclaration(kob, indexer, config.network, r.covenant_id);
@@ -147,13 +154,15 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
     };
   }, [services]);
 
-  // the token-logo blocklist (a logo that was reported is not loaded): read now and every 2 minutes. It fails OPEN: an indexer that cannot be reached, or has
-  // no such route, leaves the last known list (empty on a first visit) and logos show (data/logo-blocklist.ts)
+  // The token-logo blocklist, so a logo that was reported is not loaded. It is read now and every 2
+  // minutes. It fails open. An indexer that cannot be reached, or has no such route, leaves the
+  // last known list, which is empty on a first visit, and logos show (data/logo-blocklist.ts).
   const blocklistUrl = logoBlocklistUrlOf(services.config);
   useEffect(() => logoBlocklist.start(blocklistUrl), [blocklistUrl]);
 
-  // one socket for the whole app: the shell subscribes to the global channels, views add their own (book:<token>, fills:<token>); none while standalone
-  // mode is on by the setting (the indexer is not asked for the market)
+  // One socket for the whole app. The shell subscribes to the global channels, and views add their
+  // own (book:<token>, fills:<token>). There is none while the setting turns standalone mode on,
+  // because the indexer is then not asked for the market.
   const manualStandalone = useStandalone(services.standalone)?.reason === 'manual';
   useEffect(() => {
     const feed = services.feed;
@@ -162,13 +171,14 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
       feed.subscribe(['health', 'reorg']);
       feed.connect();
     } catch {
-      /* a browser without WebSocket: views fall back to polling */
+      /* A browser without WebSocket. Views fall back to polling. */
     }
     return () => feed.close();
   }, [services.feed, manualStandalone]);
 
-  // the empty hash with the default config `home`: the landing page, a full page in the shared frame (Frame.tsx: its own header row, the same
-  // footer) in place of the whole shell (tabs, bell, views); every other route shows the shell
+  // The empty hash with the default config `home` shows the landing page in place of the whole
+  // shell of tabs, bell and views. It is a full page in the shared frame (Frame.tsx), with its own
+  // header row and the same footer. Every other route shows the shell.
   const landing = showsLanding(route, services.config, services.registry.tokens);
 
   return (
@@ -190,7 +200,10 @@ export function App(props: { warnings: ConfigWarning[]; storedOverrides?: Stored
   );
 }
 
-/** The shell around every routed view: the skip link, the header (its bell lists the current status), the wrong-network banner, the view and the footer. */
+/**
+ * The shell around every routed view. It holds the skip link, the header whose bell lists the
+ * current status, the wrong-network banner, the view and the footer.
+ */
 function AppShell(props: { route: Route; routeKey: string; warnings: ConfigWarning[]; storedOverrides: StoredOverride[] }) {
   const { route, routeKey } = props;
   return (
