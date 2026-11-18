@@ -1,8 +1,11 @@
-// "Unlock" of a creator lock on the Portfolio (kob/creator-lock.ts): the tokens the wallet's lock holds, paid to the wallet once the lock is open.
-// The unlock spends a plain KAS coin at the lock's address (its input 0, signed by the wallet key) with the locked token UTXOs, lock time = the
-// lock's time; the node takes it once its past median time passes that time. A coin already there is spent; otherwise the run first sends one
-// (1 KAS from the wallet, largest coins first) and builds the unlock from its output 0 once the node lists it. Both go through <TxFlow>: every
-// check of the send (ui/confirm/send.ts) runs on each, and the wallet approves each.
+// "Unlock" of a creator lock on the Portfolio (kob/creator-lock.ts). It pays the tokens the
+// wallet's lock holds to the wallet once the lock is open. The unlock spends a plain KAS coin at
+// the lock's address, as input 0 signed by the wallet key, with the locked token UTXOs. Its lock
+// time is the lock's time, and the node takes it once its past median time passes that time. A coin
+// already there is spent. Otherwise the run first sends one, 1 KAS from the wallet with the largest
+// coins first, and builds the unlock from its output 0 once the node lists it. Both go through
+// <TxFlow>. Every check of the send (ui/confirm/send.ts) runs on each, and the wallet approves
+// each.
 import type { Services } from '../../app/services';
 import { readFees } from '../../app/env';
 import { pendingSpends } from '../../app/pending-spends';
@@ -21,35 +24,46 @@ import { spkToAddressFor } from './orders-data';
 import type { FlowStep } from './TxFlow';
 
 /**
- * The Unlock button shows this long after the lock's time by the wall clock: about the lag of the node's past median time. The press then asks the
- * node for its past median time and goes on only once it is past the lock's time, as `kob token unlock` does (the node decides finally).
+ * The Unlock button shows this long after the lock's time by the wall clock, which is about the lag
+ * of the node's past median time. The press then asks the node for its past median time and goes on
+ * only once it is past the lock's time, as `kob token unlock` does. The node decides finally.
  */
 export const UNLOCK_MARGIN_MS = 90_000;
 /** How long the unlock waits for the node to list the lock coin the run sent. */
 export const LOCK_COIN_TIMEOUT_MS = 60_000;
 
-/** Whether the lock is open by `now` (ms), with the margin. */
+/** Whether the lock is open by `now` in ms, with the margin. */
 export const unlockOpen = (until: bigint, now: number = Date.now()): boolean => until + BigInt(UNLOCK_MARGIN_MS) <= BigInt(Math.floor(now));
 
 /**
- * Whether the connected wallet can sign the unlock here: its coin is a script (P2SH) input, which a wallet that signs covenant inputs signs
- * (KasWare and Kaspire are proven on TN10; Kastle once its test signature passed); 'cli' otherwise (`kob token unlock`).
+ * Whether the connected wallet can sign the unlock here. Its coin is a script (P2SH) input, which a
+ * wallet that signs covenant inputs signs. KasWare and Kaspire are proven on TN10, and Kastle once
+ * its test signature passed. The answer is 'cli' otherwise (`kob token unlock`).
  */
 export function unlockSigner(adapter: Pick<WalletAdapter, 'id' | 'covenantSigning'> | null | undefined, pubkey: Hex | null | undefined): 'wallet' | 'cli' {
   if (!adapter || !pubkey) return 'cli';
   return adapter.covenantSigning === 'proven' || covenantSigningKnown(adapter, pubkey) === 'ok' ? 'wallet' : 'cli';
 }
 
-/** A built transaction as the plan of a flow step (nothing is cancelled; the send's decoder derives everything from the transaction). */
+/**
+ * A built transaction as the plan of a flow step. Nothing is cancelled, and the send's decoder
+ * derives everything from the transaction.
+ */
 const planOf = (built: BuiltTx): CancelPlan => ({ ok: true, issues: [], request: null, built, cancelIds: [], expected: {}, tokensReturned: 0n, kasReleased: 0n, fundingUsed: [] });
 
 export interface UnlockFlow {
   steps: FlowStep[];
-  /** the unlock built again once the lock coin the run sent is listed by the node (a run of two steps) */
+  /**
+   * The unlock built again once the lock coin the run sent is listed by the node, for a run of two
+   * steps.
+   */
   next?: (index: number, txids: readonly string[]) => Promise<FlowStep>;
 }
 
-/** The lock coins already at the lock's address on the node, largest first (none a transaction of this page is spending). */
+/**
+ * The lock coins already at the lock's address on the node, largest first. None is a transaction of
+ * this page spending it.
+ */
 async function coinsAt(s: Services, lock: CreatorLockInfo): Promise<Utxo[]> {
   const address = spkToAddressFor(s)(lock.scriptPublicKey);
   const found = await s.node.getUtxosByAddresses([address]);
@@ -59,12 +73,16 @@ async function coinsAt(s: Services, lock: CreatorLockInfo): Promise<Utxo[]> {
     .map((u) => ({ transactionId: u.transactionId, index: u.index, amount: u.amount, blockDaaScore: u.blockDaaScore }));
 }
 
-/** Plans the unlock of `h` for `pubkey`: one step when a coin is at the lock's address, else the lock coin and then the unlock. */
+/**
+ * Plans the unlock of `h` for `pubkey`. It is one step when a coin is at the lock's address, else
+ * the lock coin and then the unlock.
+ */
 export async function planUnlock(s: Services, pubkey: Hex, h: LockedHolding, ticker: string): Promise<UnlockFlow> {
   const me = pubkey.toLowerCase();
   if (h.key !== me) throw new Error(t('orders.unlock.notYours'));
   const lock = creatorLock(s.kob, { until: h.until, key: h.key });
-  // the node's clock, which the lock time is checked against (a node that does not say leaves it to the node's answer)
+  // The node's clock, which the lock time is checked against. A node that does not say leaves it to
+  // the node's answer.
   const median = s.node.getPastMedianTime ? await s.node.getPastMedianTime().catch(() => null) : null;
   if (median !== null && median < h.until) throw new Error(t('orders.unlock.notOpen', { minutes: String((h.until - median + 59_999n) / 60_000n) }));
   const terms = { until: h.until.toString(), key: h.key };
@@ -79,7 +97,8 @@ export async function planUnlock(s: Services, pubkey: Hex, h: LockedHolding, tic
   const coins = await coinsAt(s, lock);
   if (coins.length > 0) return { steps: [unlockStep(coins[0]!)] };
 
-  // no coin there: the wallet's KAS sends one first (the fewest of its largest coins that pay it and the fee)
+  // No coin there, so the wallet's KAS sends one first, the fewest of its largest coins that pay it
+  // and the fee.
   const funding: KeyUtxo[] = pendingSpends.without(await s.utxos.fundingFor(me));
   let coinTx: BuiltTx | null = null;
   for (let n = 1; n <= funding.length && !coinTx; n++) {

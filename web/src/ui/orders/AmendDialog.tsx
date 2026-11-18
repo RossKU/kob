@@ -15,21 +15,27 @@ import type { OrderRowModel } from './orders-model';
 export interface AmendDialogProps {
   row: OrderRowModel;
   kind: AmendKind;
-  /** current (proven) state of the order */
+  /** Current, proven state of the order. */
   state: OrderState;
   token: TokenInfo | undefined;
   pubkey: Hex;
   strays: readonly StrayView[];
   onClose(): void;
-  /** the atomic cancel + replace plan is built: hand it to the confirmation flow */
+  /** The atomic cancel + replace plan is built. Hand it to the confirmation flow. */
   onPlanned(plan: CancelPlan, snapshot: OrderSnapshot): void;
-  /** opens the full form (band, trigger rule, expiry, activation ...) re-planned as a cancel-replace; absent: no such link */
+  /**
+   * Opens the full form (band, trigger rule, expiry, activation and more), re-planned as a
+   * cancel-replace. When absent there is no such link.
+   */
   onMore?(): void;
 }
 
 type FieldKey = 'price' | 'stop' | 'stopLimit' | 'amount' | 'tip' | 'addKas';
 
-/** Minimal snapshot for the synchronous form validation (the builders only read the state, the KAS amount and the deadline). */
+/**
+ * Minimal snapshot for the synchronous form validation. The builders only read the state, the KAS
+ * amount and the deadline.
+ */
 function previewSnapshot(row: OrderRowModel, state: OrderState): OrderSnapshot {
   const amount = row.entry.view?.current?.value ?? row.entry.resolved?.order?.amount ?? '0';
   return {
@@ -39,15 +45,17 @@ function previewSnapshot(row: OrderRowModel, state: OrderState): OrderSnapshot {
 }
 
 /**
- * Amend form: new price, amount and tip for a plain limit; take-profit / stop prices for a conditional order. The result is ONE atomic
- * transaction (cancel + new order) that goes through the same pre-sign screen as everything else. An amended armed stop restarts unarmed.
+ * Amend form: new price, amount and tip for a plain limit, or take-profit and stop prices for a
+ * conditional order. The result is one atomic transaction (cancel + new order) that goes through
+ * the same pre-sign screen as everything else. An amended armed stop restarts unarmed.
  */
 export function AmendDialog(props: AmendDialogProps) {
   const services = useServices();
   const { row, kind, state, token } = props;
   const s = state.state as unknown as Record<string, string>;
   const sell = row.side === 'sell';
-  // the order's prices are sompi per whole token of its `scale` base units; amounts are base units of the token
+  // The order's prices are sompi per whole token of its `scale` base units. Amounts are base units
+  // of the token.
   const scale = BigInt(s.scale);
   const decimals = token?.decimals ?? 0;
   const hasTp = kind === 'limit' || (kind === 'cond' && BigInt(s.tpPrice) > 0n);
@@ -59,7 +67,8 @@ export function AmendDialog(props: AmendDialogProps) {
     () => ({
       price: priceText(kind === 'limit' ? BigInt(s.price) : BigInt(s.tpPrice)),
       stop: hasStop ? priceText(BigInt(s.stopPrice)) : '',
-      // the stop leg's worst price (stop-limit: its limit): kept fixed when typed, else the band keeps its percent and moves with the stop
+      // The stop leg's worst price, which is the limit of a stop-limit. It is kept fixed when
+      // typed. Otherwise the band keeps its percent and moves with the stop.
       stopLimit: hasStop ? priceText(stopWorstPrice(sell ? 'sell' : 'buy', BigInt(s.stopPrice), BigInt(s.slipBps))) : '',
       amount: 'amountLeft' in s ? formatUnits(BigInt(s.amountLeft), decimals) : '',
       tip: kasText(BigInt(s.tip)),
@@ -69,7 +78,8 @@ export function AmendDialog(props: AmendDialogProps) {
     [row.id],
   );
   const [form, setForm] = useState<Record<FieldKey, string>>(initial);
-  // a GTC can be renewed: the new order gets a fresh 90-day expiry (a GTC otherwise ends 90 days after its placement, fills or not)
+  // A GTC can be renewed. The new order gets a fresh 90-day expiry, while a GTC otherwise ends 90
+  // days after its placement, fills or not.
   const canRenew = row.expiry.kind === 'gtc';
   const [renew, setRenew] = useState(row.renewalDue && canRenew);
   const [busy, setBusy] = useState(false);
@@ -89,7 +99,8 @@ export function AmendDialog(props: AmendDialogProps) {
     }
   };
 
-  // only the fields the user actually changed are sent: an untouched price keeps its exact current value (no display rounding round trip)
+  // Only the fields the user actually changed are sent. An untouched price keeps its exact current
+  // value, with no display rounding round trip.
   const parsed = useMemo(() => {
     const errors: Partial<Record<FieldKey, string>> = {};
     const input: AmendInput = {};
@@ -159,7 +170,8 @@ export function AmendDialog(props: AmendDialogProps) {
     }
   };
 
-  // KAS per whole token (an order of a token nothing names: per the whole token of its price scale, `scale`, which My orders shows it with)
+  // KAS per whole token. For an order of a token nothing names, it is per the whole token of its
+  // price scale, `scale`, which My orders shows it with.
   const unit = t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' });
   const errText = (k: FieldKey, field: string): string | null => {
     if (parsed.errors[k]) return parsed.errors[k]!;

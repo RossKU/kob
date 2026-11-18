@@ -1,7 +1,9 @@
-// Replace form for the order kinds the quick amend form does not cover (trailing stops, IFD / IFO entries) and for every
-// knob of a conditional order (band, trigger rule, trailing, expiry, activation): the order is turned back into its ticket intent
-// (replace-intent.ts), edited in the ticket's own fields, re-planned by the ticket's planner, and the planned order becomes the replacement of ONE
-// atomic cancel + new order transaction. Nothing here signs: the plan goes to the confirmation flow of My orders.
+// Replace form for the order kinds the quick amend form does not cover, which are trailing stops
+// and IFD / IFO entries, and for every knob of a conditional order: band, trigger rule, trailing,
+// expiry and activation. The order is turned back into its ticket intent (replace-intent.ts),
+// edited in the ticket's own fields and re-planned by the ticket's planner. The planned order
+// becomes the replacement in one atomic cancel + new order transaction. Nothing here signs. The
+// plan goes to the confirmation flow of My orders.
 import { useMemo, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import type { StrayView } from '../../data/indexer-types';
@@ -28,22 +30,23 @@ import { replaceEnv, specOfPlan } from './replace-env';
 
 export interface ReplaceDialogProps {
   row: OrderRowModel;
-  /** current (proven) state of the order */
+  /** Current, proven state of the order. */
   state: OrderState;
   token: TokenInfo;
-  /** a pair order: its quote token B (prices typed in B per whole A, the pair environment) */
+  /** A pair order's quote token B. Prices are typed in B per whole A, in the pair environment. */
   quote?: TokenInfo;
   pubkey: Hex;
   strays: readonly StrayView[];
   onClose(): void;
-  /** the atomic cancel + replace plan is built: hand it to the confirmation flow */
+  /** The atomic cancel + replace plan is built. Hand it to the confirmation flow. */
   onPlanned(plan: CancelPlan, snapshot: OrderSnapshot): void;
 }
 
-// the planning environment of a replacement and the spec of its plan live in replace-env.ts (shared with the TN10 soak's pair amend)
+// The planning environment of a replacement and the spec of its plan live in replace-env.ts, shared
+// with the TN10 soak's pair amend.
 export { replaceEnv, specOfPlan } from './replace-env';
 
-/** KAS on the order UTXO now (the indexer's current output, else the node-resolved order). */
+/** KAS on the order UTXO now. It is the indexer's current output, else the node-resolved order. */
 const orderValueOf = (row: OrderRowModel): bigint | null => {
   const v = row.entry.view?.current?.value ?? row.entry.resolved?.order?.amount ?? null;
   return v === null ? null : BigInt(v);
@@ -52,12 +55,14 @@ const orderValueOf = (row: OrderRowModel): bigint | null => {
 export function ReplaceDialog(props: ReplaceDialogProps) {
   const services = useServices();
   const { row, state, token, quote } = props;
-  // a pair order re-plans against the pair environment (both tokens, the pair book); a KAS order against its token's market
+  // A pair order re-plans against the pair environment, with both tokens and the pair book. A KAS
+  // order re-plans against its token's market.
   const kasEnv = useTicketEnv(token, !quote);
   const pairEnv = usePairTicketEnv(token, quote ?? token, !!quote);
   const { env: rawEnv, error: envError, errorSource: envSource, refresh } = quote ? pairEnv : kasEnv;
   const rateMilli = rawEnv?.clock.rateMilli;
-  // the replaced order quotes per its own scale (base units per whole token; a pair order: per whole A): the form reads and writes its prices in it
+  // The replaced order quotes per its own scale, in base units per whole token or, for a pair
+  // order, per whole A. The form reads and writes its prices in it.
   const scale = scaleOf(state);
   const ctx: TicketCtx = useMemo(
     () => ({
@@ -79,7 +84,7 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
         services.kob,
       );
     },
-    // the clock only decides whether a future activation is kept: the first reading is enough
+    // The clock only decides whether a future activation is kept, so the first reading is enough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [state, row.typeKey, row.expiry.kind, services.kob, !!rawEnv],
   );
@@ -117,7 +122,8 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
     setNote(null);
     setServerIssues([]);
     try {
-      // re-plan on fresh chain data, then build the atomic cancel + replacement from the node's view of the order
+      // Re-plan on fresh chain data, then build the atomic cancel + replacement from the node's
+      // view of the order.
       const fresh = await refresh();
       if (!fresh) return setNote({ text: t('ticket.reviewNoEnv') });
       const p = planOrder(replaceEnv(fresh, row, state), built.intent);
