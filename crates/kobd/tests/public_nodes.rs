@@ -1,8 +1,9 @@
-//! Live: every node call of the executor over a public TN10 node (the Kaspa resolver, Borsh over TLS), through each of its
-//! three clients: the indexer's (`rpc::WrpcClient`), the matcher's and the keepers' (`matcher::node::WrpcNode`) and the x402
-//! facilitator's (`x402::node`). Read calls are checked for sense; the submissions send a transaction whose input does not
-//! exist, which the node refuses (nothing is spent, no key is used): the refusal proves the call reached the node and came
-//! back decoded.
+//! Live: every node call of the executor over a public TN10 node (the Kaspa resolver, Borsh over
+//! TLS), through each of its three clients: the indexer's (`rpc::WrpcClient`), the matcher's and
+//! the keepers' (`matcher::node::WrpcNode`) and the x402 facilitator's (`x402::node`). Read calls
+//! are checked for sense; the submissions send a transaction whose input does not exist, which the
+//! node refuses (nothing is spent, no key is used): the refusal proves the call reached the node
+//! and came back decoded.
 //!
 //!   cargo test -p kobd --test public_nodes -- --ignored --nocapture
 

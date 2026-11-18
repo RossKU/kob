@@ -1,6 +1,7 @@
-//! The activity totals (`GET /v1/stats`) through the real write path: a fill of a real transaction records its fee and the script
-//! that funded it (the record log's payer section), a reorg takes both back out of the totals, the same transaction accepted again
-//! puts them back, a rebuild from the record log gives the same totals, and a log of frames written before payers were recorded
+//! The activity totals (`GET /v1/stats`) through the real write path: a fill of a real transaction
+//! records its fee and the script that funded it (the record log's payer section), a reorg takes
+//! both back out of the totals, the same transaction accepted again puts them back, a rebuild from
+//! the record log gives the same totals, and a log of frames written before payers were recorded
 //! replays with every figure but the executors (unknown, not counted).
 
 mod common;
@@ -128,11 +129,13 @@ fn earned(v: &ActivityView) -> (String, i64, i64, String, i64, i64, String) {
     )
 }
 
-/// An ask and a bid cross in one executor's transaction (a partial fill of both): what the transaction leaves its sender is the bid's
-/// all-in spend minus the ask's all-in proceeds, hand-computed (4 whole tokens, scale 1 000): 4 x (2.60 + 0.001 tip) KAS released by the
-/// bid against 4 x (2.50 - 0.001 tip) KAS paid to the ask's maker = 0.408 KAS, of which 0.008 KAS are the two tips (the only figure the
-/// old `fees_paid` saw). The network fee is the transaction's own; a reorg takes all of it back, a rebuild from the record log gives it
-/// again, and a log of records without input values (before 2026-11-12) leaves the fee unknown and counted as such.
+/// An ask and a bid cross in one executor's transaction (a partial fill of both): what the
+/// transaction leaves its sender is the bid's all-in spend minus the ask's all-in proceeds,
+/// hand-computed (4 whole tokens, scale 1 000): 4 x (2.60 + 0.001 tip) KAS released by the bid
+/// against 4 x (2.50 - 0.001 tip) KAS paid to the ask's maker = 0.408 KAS, of which 0.008 KAS are
+/// the two tips. The network fee is the transaction's own; a reorg takes all of it back, a rebuild
+/// from the record log gives it again, and a log of records without input values leaves the fee
+/// unknown and counted as such.
 #[tokio::test]
 async fn a_crossing_pays_its_executor_the_spread_and_the_tips_and_its_fee_to_the_miners() {
     let dir = tempfile::tempdir().unwrap();
@@ -259,11 +262,12 @@ async fn the_lean_pruning_does_not_take_back_the_totals() {
     assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM meta WHERE k = 'pruning'", []), 0, "the key never outlives the pruning");
 }
 
-/// The network fee of a record without the node's input values (a frame written before 2026-11-12) is still known when every input
-/// spends an output the store recorded: here a second crossing funded by the first one's change (its other inputs are the orders and
-/// the custody). The first crossing's funding came from outside KOB: its fee stays unknown. Live, the node's values are used and the
-/// recorded ones must agree with them (the processor asserts it); a reorg of the second block un-spends the change, and its replay spends
-/// it again.
+/// The network fee of a record without the node's input values is still known when every input
+/// spends an output the store recorded: here a second crossing funded by the first one's change
+/// (its other inputs are the orders and the custody). The first crossing's funding came from
+/// outside KOB: its fee stays unknown. Live, the node's values are used and the recorded ones must
+/// agree with them (the processor asserts it); a reorg of the second block un-spends the change,
+/// and its replay spends it again.
 #[tokio::test]
 async fn a_fee_is_resolved_from_the_recorded_outputs_when_the_record_has_no_input_values() {
     let dir = tempfile::tempdir().unwrap();

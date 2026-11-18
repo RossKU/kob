@@ -1,10 +1,12 @@
-//! Read-only check of several nodes against live testnet-10 nodes: a window fetched from another node (`Full`, over `wss:`)
-//! verifies against the primary's acceptance data with real headers and real transactions (header hashes, transaction ids
-//! of v0 and v1 transactions, covenant bindings), and a tampered copy does not.
+//! Read-only check of several nodes against live testnet-10 nodes: a window fetched from another
+//! node (`Full`, over `wss:`) verifies against the primary's acceptance data with real headers and
+//! real transactions (header hashes, transaction ids of v0 and v1 transactions, covenant bindings),
+//! and a tampered copy does not.
 //!
 //! Environment:
-//! * `KOB_TN10_WRPC`               the primary, default `ws://127.0.0.1:18210` (a testnet-10 node of your own)
-//! * `KOB_TN10_WRPC_OTHER`         the other node, default a public TN10 node of the Kaspa resolver (`wss:`)
+//! * `KOB_TN10_WRPC`               the primary, default `ws://127.0.0.1:18210` (a node of your own)
+//! * `KOB_TN10_WRPC_OTHER`         the other node, default a public TN10 node of the Kaspa resolver
+//!                                 (`wss:`)
 //! * `KOB_SKIP_NETWORK_TESTS=1`    skip (offline runs)
 //! * `KOB_REQUIRE_NETWORK_TESTS=1` fail instead of skip when a node is unreachable
 

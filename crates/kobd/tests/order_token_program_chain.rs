@@ -1,8 +1,9 @@
-//! A wrong-length order placed through the chain: a consensus-valid genesis transaction (P2PK funding authorises the covenant
-//! genesis, covenant id recomputed, placement record in the payload) whose order state pins a supported token program with
-//! a prefix length that does not match it, mined into the mock node, followed by the real indexer (`Harness`), read back
-//! through `book::listed_orders` (the matcher's own view) and matched by the real `engine::tick`. The indexer does not list
-//! it, and the honest crossing next to it is matched every tick.
+//! A wrong-length order placed through the chain: a consensus-valid genesis transaction (P2PK
+//! funding authorises the covenant genesis, covenant id recomputed, placement record in the
+//! payload) whose order state pins a supported token program with a prefix length that does not
+//! match it, mined into the mock node, followed by the real indexer (`Harness`), read back through
+//! `book::listed_orders` (the matcher's own view) and matched by the real `engine::tick`. The
+//! indexer does not list it, and the honest crossing next to it is matched every tick.
 
 mod common;
 

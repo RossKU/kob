@@ -1,14 +1,16 @@
-//! An order the database recorded under a template this build does not pin is never listed nor offered to the matcher or
-//! the keepers (`docs/spec/template-retirement.md`).
+//! An order the database recorded under a template this build does not pin is never listed nor
+//! offered to the matcher or the keepers (`docs/spec/template-retirement.md`).
 //!
-//! A database carried over a template change (the TN10 soak keeps its indexer databases across builds) can hold live orders
-//! of an older template under today's contract name; when that template had today's state layout, the state decodes as
-//! today's kind. Every fill, kill or refund planned from today's template would spend a script that does not hash to the
-//! order's output: such an order is unknown to this build, like an order of any other template it does not pin. No read
-//! returns it: not the matcher's and keepers' live orders, not the public book, its counts and stats, not `/v1/orders`, and
-//! not `/v1/orders/{id}` (not found: the web wallet then resolves the order from its own placement record and marks it
-//! `old-template`). The one exception is an order under a RETIRED template of the cancel-only table (`kob_protocol::retired`):
-//! `/v1/orders/{id}` serves it, marked `cancel_only`, for its maker's cancel; it is still listed nowhere.
+//! A database carried over a template change (the TN10 soak keeps its indexer databases across
+//! builds) can hold live orders of an older template under today's contract name; when that
+//! template had today's state layout, the state decodes as today's kind. Every fill, kill or refund
+//! planned from today's template would spend a script that does not hash to the order's output:
+//! such an order is unknown to this build, like an order of any other template it does not pin. No
+//! read returns it: not the matcher's and keepers' live orders, not the public book, its counts and
+//! stats, not `/v1/orders`, and not `/v1/orders/{id}` (not found: the web wallet then resolves the
+//! order from its own placement record and marks it `old-template`). The one exception is an order
+//! under a RETIRED template of the cancel-only table (`kob_protocol::retired`): `/v1/orders/{id}`
+//! serves it, marked `cancel_only`, for its maker's cancel; it is still listed nowhere.
 
 mod common;
 

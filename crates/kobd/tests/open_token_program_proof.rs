@@ -1,6 +1,7 @@
-//! Audit 2026-10-30 V1 regression: one bare placement of another strict program must not lock an open-list token out as
-//! `program_ambiguous`. A program the chain proves (the token's holdings) wins, the conflicting placements are ignored and not
-//! listed; only when nothing proves a program do several claims stay ambiguous.
+//! One bare placement of another strict program must not lock an open-list token out as
+//! `program_ambiguous`. A program the chain proves (the token's holdings) wins, the conflicting
+//! placements are ignored and not listed; only when nothing proves a program do several claims stay
+//! ambiguous.
 
 mod common;
 
@@ -110,7 +111,7 @@ async fn several_claims_nothing_proves_stay_ambiguous() {
     assert_eq!(rows[0].candidate_templates.len(), 2);
 }
 
-// ---------------------------------------------------------------------------------------------- audit 2026-10-30 V2: KRON
+// ------------------------------------------------------------------------------------------ KRON
 
 fn kron_row(c: &Ctx, tokens: &TokenAllowlist) -> Vec<reads::TokenView> {
     let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
@@ -187,7 +188,7 @@ async fn several_programs_of_one_kron_token_are_all_proven_by_its_holdings() {
     }
 }
 
-// ---------------------------------------------------------------------------------------------- audit 2026-10-30 V4
+// ---------------------------------------------------------------------------------------- reorg
 
 #[tokio::test]
 async fn a_conflicting_bid_listed_before_the_proof_is_taken_out_of_the_book_and_comes_back_with_a_reorg() {

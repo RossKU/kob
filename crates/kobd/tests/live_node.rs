@@ -1,6 +1,7 @@
-//! Shape checks of `NodeChain` against a live read-only testnet-10 node (`KOB_TN10_WRPC`, default `ws://127.0.0.1:18210`).
-//! Read-only: the only write attempted is a `submitTransaction` of a transaction whose inputs do not
-//! exist, which the node refuses. Skipped when `KOB_SKIP_NETWORK_TESTS=1`.
+//! Shape checks of `NodeChain` against a live read-only testnet-10 node (`KOB_TN10_WRPC`, default
+//! `ws://127.0.0.1:18210`). Read-only: the only write attempted is a `submitTransaction` of a
+//! transaction whose inputs do not exist, which the node refuses. Skipped when
+//! `KOB_SKIP_NETWORK_TESTS=1`.
 
 use std::time::Duration;
 

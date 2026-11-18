@@ -1,7 +1,8 @@
-//! Catch-up throughput against a live testnet-10 node, read only: the follower starts several hours behind the sink and
-//! catches up for a fixed time with 1, 2, 4 and 8 windows fetched at once (`fetch_parallel`), each run from the same
-//! start into its own temporary database (the production write path: file database and record log). Prints the
-//! sustained MB/s and transactions/s of what was applied (`docs/ops/executor.md`, Part B 3, *Parallel fetch*).
+//! Catch-up throughput against a live testnet-10 node, read only: the follower starts several hours
+//! behind the sink and catches up for a fixed time with 1, 2, 4 and 8 windows fetched at once
+//! (`fetch_parallel`), each run from the same start into its own temporary database (the production
+//! write path: file database and record log). Prints the sustained MB/s and transactions/s of what
+//! was applied (`docs/ops/executor.md`, Part B 3, *Parallel fetch*).
 //!
 //! Ignored by default (it moves hundreds of MB):
 //! `cargo test --release -p kobd --test tn10_capacity -- --ignored --nocapture`

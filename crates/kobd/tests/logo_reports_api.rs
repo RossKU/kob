@@ -1,5 +1,6 @@
-//! The token-logo blocklist on a real socket next to a running indexer: a report hides the logo, the administrator's subcommand (a separate process,
-//! writing the same database file) restores it, and the list the web app reads follows. Also: the feature is off by default.
+//! The token-logo blocklist on a real socket next to a running indexer: a report hides the logo,
+//! the administrator's subcommand (a separate process, writing the same database file) restores it,
+//! and the list the web app reads follows. Also: the feature is off by default.
 
 use kobd::config::IndexerConfig;
 use kobd::indexer::Indexer;

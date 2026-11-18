@@ -1,5 +1,5 @@
-//! `kobd logo-reports`: the administrator's side of the token-logo blocklist, run as the binary against a database file
-//! (next to a running executor it is a short write to the same file).
+//! `kobd logo-reports`: the administrator's side of the token-logo blocklist, run as the binary
+//! against a database file (next to a running executor it is a short write to the same file).
 
 use kobd::hex::Hash32;
 use kobd::indexer::db::open_writer;
