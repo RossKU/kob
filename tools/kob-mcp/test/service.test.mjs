@@ -198,6 +198,19 @@ test('token create: sell on a curve passes the sale flags; the sale options need
   assert.match((await svc.write('kob_token_create', { ...args, keep_percent: 1.234 })).reason, /^BAD_ARGUMENT/);
 });
 
+test('token create: lock_until locks the kept share (a curve\'s kept part, else keep_percent, default all)', async () => {
+  const t = setup();
+  const svc = new KobService(t.cfg);
+  const base = { name: 'Test MCP', ticker: 'TMCL', decimals: 0, supply: '1000', fund_utxo: `${"aa".repeat(32)}:1:5000000000` };
+  assert.equal((await svc.write('kob_token_create', { ...base, lock_until: '+90d', keep_percent: 20 })).status, 'plan');
+  const dry = t.calls().find((c) => c.includes('create'));
+  for (const [k, v] of [['--lock-until', '+90d'], ['--keep', '20']]) assert.equal(dry[dry.indexOf(k) + 1], v, k);
+  assert.equal((await svc.write('kob_token_create', { ...base, ticker: 'TMCM', lock_until: '2030-01-01' })).status, 'plan');
+  assert.match((await svc.write('kob_token_create', { ...base, lock_until: 'next year' })).reason, /^BAD_ARGUMENT: lock_until/);
+  assert.match((await svc.write('kob_token_create', { ...base, keep_percent: 20 })).reason, /^BAD_ARGUMENT: keep_percent/);
+  assert.match((await svc.write('kob_token_create', { ...base, sell: 'curve', lock_until: '+90d' })).reason, /^BAD_ARGUMENT: lock_until locks the kept share/);
+});
+
 test('fee estimate signs nothing and stores no plan', async () => {
   const t = setup();
   const svc = new KobService(t.cfg);

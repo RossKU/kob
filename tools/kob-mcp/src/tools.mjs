@@ -57,7 +57,9 @@ export const TOOLS = [
     { name: z.string(), ticker: z.string().describe('2 to 12 of A-Z 0-9'), decimals: z.number().int().min(0).max(18),
       supply: z.string().describe('the total supply in base units, e.g. "1000000000" for 1,000 tokens of 6 decimals'),
       program: z.enum(['public-mint', '3x3']).optional(), description: z.string().optional(), website: z.string().optional(), image: z.string().optional(),
-      carrier: kasAmount.optional(), fund_utxo: z.string().optional().describe('TXID:INDEX:AMOUNT_SOMPI; found on the node when left out'), confirm }, 'write'],
+      carrier: kasAmount.optional(), fund_utxo: z.string().optional().describe('TXID:INDEX:AMOUNT_SOMPI; found on the node when left out'),
+      lock_until: z.string().optional().describe('lock the kept share on chain until then: "+90d", "+12h", "2027-01-31" (UTC) or unix ms; nobody can move it before'),
+      keep_percent: z.number().optional().describe('with lock_until: the percent of the supply locked (default 100), the rest stays free'), confirm }, 'write'],
   ['kob_send', 'Send to the primary wallet', `Send KAS or a token to an address on the withdrawal allow-list (the primary wallet); any other address is refused.${WRITE_NOTE}`,
     { asset: z.string().describe('"KAS", or a token ticker / covenant id'), to: z.string().describe('an allow-listed address'), amount: z.string().describe('"2.5KAS", or a token amount with its unit'), confirm }, 'write'],
 ];

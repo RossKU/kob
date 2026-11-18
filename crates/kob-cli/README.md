@@ -126,6 +126,7 @@ transaction's mass. A plan above it is refused, nothing is signed, and the comma
 | `kob recover --from FILE` | find your orders on a node from a backup or export, and cancel them (`--cancel`) |
 | `kob token create` | create a fixed-supply KCC-20 token, optionally selling it at one price or on a curve |
 | `kob token resume <DIR>` | send a creation whose genesis did not go out |
+| `kob token unlock <TOKEN|DIR>` | release a creator lock (`--lock-until`) after its time |
 | `kob token verify-declaration <PROOF>` | check a KCC-23 launch proof |
 | `kob registry validate\|verify-genesis\|programs` | token registry and token-program tools (`add-program` is `kob-maint`, the maintainers' binary, not part of the release) |
 
@@ -307,6 +308,9 @@ kob token create --name "Test USD" --ticker TUSD --decimals 6 --supply 100000000
   `--sell curve [--levels 100] [--total 10000KAS] [--multiple 5]` puts a curve (no expiry) in the
   genesis. `--keep PERCENT` of the share stays in the wallet. One confirmation (or `--yes`) covers
   everything.
+- `--lock-until +90d` (or a date `YYYY-MM-DD`, UTC) locks the kept share on chain until then: the
+  `--keep` part with `--sell`, else `--keep` percent of the share (default all of it). Nobody, the
+  key included, can move it before; `kob token unlock <TOKEN|DIR>` releases it afterwards.
 - Drop `--dry-run` and add `--yes` to submit (the public nodes are used unless `--node` or
   `KOB_NODE_WRPC` names one).
 - `--program public-mint` (default) is what kascov.io lists as KCC-20. `--program 3x3` is cheaper

@@ -263,6 +263,10 @@ export class KobService {
     const carrier = a.carrier ? toSompi(px(a.carrier, 'carrier')) : 1_000_000_000n;
     argv.push('--carrier', String(carrier));
     // After creation: keep everything (default), or sell on a curve created in the genesis (its own UTXO, its custody, a kept share).
+    // lock_until locks the kept share on chain (the curve's kept part, else keep_percent of the supply, default all of it).
+    const lock = a.lock_until === undefined ? null
+      : need(/^(\+\d{1,5}[dhm]|\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?Z)?|\d{13,16})$/, a.lock_until, 'lock_until (+90d, a date YYYY-MM-DD or unix ms)');
+    if (lock) argv.push('--lock-until', lock);
     let outputs = 1n;
     if (a.sell === 'curve') {
       argv.push('--sell', 'curve');
@@ -275,8 +279,16 @@ export class KobService {
       if (a.total) argv.push('--total', px(a.total, 'total'));
       if (a.multiple) argv.push('--multiple', need(/^\d{1,6}(\.\d{1,3})?$/, a.multiple, 'multiple'));
       outputs = keep > 0 ? 3n : 2n;
-    } else if (a.keep_percent !== undefined || a.levels !== undefined || a.total || a.multiple) {
-      throw new Refusal('BAD_ARGUMENT: keep_percent, levels, total and multiple go with sell: "curve"');
+      if (lock && keep === 0) throw new Refusal('BAD_ARGUMENT: lock_until locks the kept share: give keep_percent');
+    } else if (a.levels !== undefined || a.total || a.multiple || (a.keep_percent !== undefined && !lock)) {
+      throw new Refusal('BAD_ARGUMENT: keep_percent, levels, total and multiple go with sell: "curve" (keep_percent also with lock_until)');
+    } else if (lock && a.keep_percent !== undefined) {
+      const keep = a.keep_percent;
+      if (!(Number.isFinite(keep) && keep > 0 && keep <= 100 && Math.abs(keep * 100 - Math.round(keep * 100)) < 1e-9)) {
+        throw new Refusal('BAD_ARGUMENT: keep_percent is above 0 and at most 100, two decimals at most');
+      }
+      argv.push('--keep', String(keep));
+      if (keep < 100) outputs = 2n;
     }
     return { argv, create: { carrier, locked: carrier * outputs } };
   }

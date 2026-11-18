@@ -35,7 +35,7 @@ What KCC-23 itself specifies (section 3 of the spec; KOB follows it as written):
 
 The fields below are **KOB's convention**, not part of KCC-23. The first three are the ones the KCC-23 example uses; the rest are
 KOB's choice (kept short: the payload is paid for in mass). KOB writes them in this order, compact (no whitespace), leaving out
-the optional ones that are not set (the order is `name`, `symbol`, `decimals`, `description`, `image`, `image_hash`, `website`, `x`, `telegram`):
+the optional ones that are not set (the order is `name`, `symbol`, `decimals`, `description`, `image`, `image_hash`, `website`, `x`, `telegram`, `lock`):
 
 | Field | Type | KOB writes | A KOB reader takes |
 |---|---|---|---|
@@ -48,6 +48,7 @@ the optional ones that are not set (the order is `name`, `symbol`, `decimals`, `
 | `website` | string, optional | an `https://` address, at most 512 characters | the same rule |
 | `x` | string, optional | `https://x.com/<handle>`, handle 1..=15 of `A-Z a-z 0-9 _` (the CLI and the app turn `@handle` into this) | the same rule |
 | `telegram` | string, optional | `https://t.me/<handle>`, handle 5..=32 of `A-Z a-z 0-9 _` | the same rule |
+| `lock` | string, optional | a creator lock's redeem script, 88 lowercase hex characters (*Creator lock* below) | the exact template only, else dropped; what it holds is verified against the genesis |
 
 * A reader takes each field on its own: a field of the wrong type or out of range is dropped (and named in the reader's
   `issues`), unknown fields are ignored, and a declaration without a usable `decimals` leaves the token's decimals undeclared.
@@ -208,6 +209,34 @@ Whether the issued tokens can be found again depends on whether the genesis name
      extension commitment other than zero or an amount the issuer no longer knows has no such path. Once found, spending the
      output (a send to oneself will do) makes it known to every indexer, because a transfer names the states it creates.
 
+### Creator lock
+
+A creation can lock the share its creator keeps until a calendar time (web: *After creation, Lock my share until*; CLI
+`--lock-until`). No contract or template changes: the KCC-20 programs already authorise an owner of scheme `0x03`
+(`p2sh/v1`) when the transaction spends an input whose script public key is the P2SH of that owner (the owner witness is
+that input's index). The locked genesis output's owner is the P2SH hash of the 44-byte redeem script
+
+```text
+OP_DATA_8 <until: u64 LE, unix ms> OP_CHECKLOCKTIMEVERIFY OP_DATA_32 <x-only key> OP_CHECKSIG
+```
+
+(`kob_protocol::creator_lock`; Kaspa's `OP_CHECKLOCKTIMEVERIFY` pops its operand). `until` is at or above the consensus
+`LOCK_TIME_THRESHOLD` (5 x 10^11), so it is a time compared with the node's past median time, not a DAA score; borrowing
+is disabled on the output. The declaration publishes the script as `"lock": "<88 hex>"`, the last member KOB writes.
+
+* **Verification.** A reader takes `lock` only when it is exactly this template (any other script, a DAA-score lock time or a
+  key off the curve is not a lock, and is named in `issues`). `LaunchProof::verify` then finds the genesis outputs it holds
+  from the states the genesis names (`KOBG`, each proven against the output's script under a pinned program): the amount,
+  the outputs, the supply. A lock that holds no output is not shown. The web app shows "Creator lock: <amount> (<pct> of
+  supply) until <date>" on the token's page.
+* **Unlock.** One transaction spends the locked output(s) and a plain KAS UTXO at the lock's P2SH address (the *lock coin*,
+  input 0: signature of the key and the script, a non-final sequence), with lock time `until`; the tokens go to the key. The
+  node takes it once its past median time is past `until`. Without a coin at the address the unlocker first sends one (1 KAS,
+  returned as the unlock's change). An earlier lock time, a final sequence, another key, a missing coin, and a merge or
+  transfer that takes the locked output as a delegate or on the borrow path are refused by the scripts
+  (`crates/kob-tests/tests/kcc20/creator_lock_tests.rs`). The builders of every other command refuse a scheme-0x03 token
+  input. The indexer lists the locked output under its owner (`GET /v1/token-utxos?owner=<p2sh hash>`).
+
 ## 4. Reading a token's facts
 
 * **Launch proof** (`kob-kcc23-proof/1`, `kcc23::LaunchProof`): `{format, covenantId, preparation, genesis}`, each transaction in
@@ -267,5 +296,6 @@ Whether the issued tokens can be found again depends on whether the genesis name
 * The executor lists a token in `GET /v1/tokens` once an order names it (a genesis output is a P2SH whose program it cannot see), so
   a declared token without any order is not marked there yet and other browsers show it as before until its first order. The proof
   is still served by `GET /v1/tokens/{id}/declaration`.
+* A creator lock is a cliff (all at once); a vesting schedule would need several locks or a program.
 * Field names are a convention: other ecosystem tools may pick other names for the optional fields (`image` vs `logo` vs `icon`). A reader
   ignores fields it does not know; KOB names only what it writes.
