@@ -2548,6 +2548,7 @@ async fn creator_locks_are_listed_by_key() {
         proof_tx(&kcc23_wire(t, false)).unwrap()
     }
     let mut covs = vec![];
+    let mut gens = vec![];
     for (tag, l) in [(1u8, Some(lock)), (2, None)] {
         let plan = launch(tag, l);
         let (prep, gen) = (&plan.prep.tx, &plan.genesis.tx);
@@ -2562,12 +2563,40 @@ async fn creator_locks_are_listed_by_key() {
         )
         .unwrap();
         covs.push(d[0]);
+        gens.push(gen.id().as_bytes());
+    }
+    // the genesis outputs as holdings (unspent), as the indexer records a KOB creation's
+    let holding = |txid: [u8; 32], idx: i64, spent: bool| {
+        intern(&e.w, &covs[0].0).unwrap();
+        intern(&e.w, &[0x99; 32]).unwrap();
+        e.w.execute(
+            "INSERT OR REPLACE INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, \
+             created_block, created_daa, spent_block, spent_txid) VALUES (?1, ?2, (SELECT id FROM ids WHERE h = ?3), 'KCC20PublicMint', 1, \
+             (SELECT id FROM ids WHERE h = ?4), 3, 200, 100000000, x'00', 'owned', 9, 990, ?5, ?6)",
+            rusqlite::params![&txid[..], idx, &covs[0].0[..], &[0x99u8; 32][..], spent.then_some(10i64), spent.then_some(vec![0x98u8; 32])],
+        )
+        .unwrap();
+    };
+    for idx in 0..4 {
+        holding(gens[0], idx, false);
     }
     let app = router(e.state.clone());
     let (s, v) = get(&app, &format!("/v1/creator-locks?key={}", kob_protocol::json::to_hex(&key))).await;
     assert_eq!(s, StatusCode::OK);
     let items = v["items"].as_array().unwrap();
     assert_eq!(items.len(), 1, "{v}");
+    assert_eq!(items[0]["genesis_txid"], kob_protocol::json::to_hex(&gens[0]));
+    // its locked outputs spent (unlocked): no longer listed
+    let locked: Vec<i64> = items[0]["outputs"].as_array().unwrap().iter().map(|o| o["index"].as_i64().unwrap()).collect();
+    assert!(!locked.is_empty());
+    for idx in &locked {
+        holding(gens[0], *idx, true);
+    }
+    let (_, gone) = get(&app, &format!("/v1/creator-locks?key={}", kob_protocol::json::to_hex(&key))).await;
+    assert!(gone["items"].as_array().unwrap().is_empty(), "a spent lock is not listed: {gone}");
+    for idx in &locked {
+        holding(gens[0], *idx, false);
+    }
     assert_eq!(items[0]["covenant_id"], covs[0].to_hex());
     assert_eq!((items[0]["until"].as_str(), items[0]["amount"].as_str()), (Some("1900000000000"), Some("200")));
     assert_eq!(items[0]["authority"], kob_protocol::json::to_hex(&lock.authority()));

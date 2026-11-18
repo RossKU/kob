@@ -638,8 +638,9 @@ pub fn compact_legacy(conn: &Connection, limit: usize) -> DbResult<usize> {
 /// The declared creator locks of `key` (`kob_protocol::creator_lock`), at most `limit`: each
 /// declaration whose preparation holds the key's lock script tail (`b0 20 <key> ac`, as the hex the
 /// declaration's `lock` carries) is verified again, and kept when its lock, verified against the
-/// genesis, opens to `key`. One scan of the stored preparations, no extra table: a store of any
-/// age answers.
+/// genesis, opens to `key`, and still holds tokens: one of its locked genesis outputs is an unspent
+/// holding (`token_holdings`). A lock whose outputs were all spent (unlocked, or a spent row the
+/// pruning removed) is not listed. One scan of the stored preparations, no extra table.
 pub fn creator_locks(conn: &Connection, key: &[u8; 32], limit: usize) -> DbResult<Vec<kcc23::VerifiedDeclaration>> {
     let tail = format!("b020{}ac\"", kob_protocol::json::to_hex(key));
     // a row an earlier build wrote holds the whole proof, whose payload is hex of the declaration's text
@@ -657,7 +658,7 @@ pub fn creator_locks(conn: &Connection, key: &[u8; 32], limit: usize) -> DbResul
         let Ok(id) = <[u8; 32]>::try_from(id.as_slice()) else { continue };
         let Some(json) = proof_json(conn, &Hash32(id))? else { continue };
         let Ok(v) = serde_json::from_str::<LaunchProof>(&json).map_err(|e| e.to_string()).and_then(|p| p.verify()) else { continue };
-        if v.lock.as_ref().is_some_and(|l| l.key == *key) {
+        if v.lock.as_ref().is_some_and(|l| l.key == *key) && lock_holds(conn, &v)? {
             out.push(v);
             if out.len() >= limit {
                 break;
@@ -665,6 +666,18 @@ pub fn creator_locks(conn: &Connection, key: &[u8; 32], limit: usize) -> DbResul
         }
     }
     Ok(out)
+}
+
+/// Whether a verified creator lock still holds tokens: one of its genesis outputs is an unspent holding.
+fn lock_holds(conn: &Connection, v: &kcc23::VerifiedDeclaration) -> DbResult<bool> {
+    let Some(l) = &v.lock else { return Ok(false) };
+    let mut st = conn.prepare_cached("SELECT 1 FROM token_holdings WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?;
+    for o in &l.outputs {
+        if st.exists(params![&v.genesis_txid[..], o.index as i64])? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Whether the indexer holds a declaration for a covenant id.

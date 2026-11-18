@@ -1089,6 +1089,10 @@ lock as `LaunchProof::verify` found it against the genesis (`docs/spec/token-met
   "program": "KCC20PublicMint", "extensionCommitment": "<64 hex>", "supply": "1000"}]}
 ```
 
+Only a lock that still holds tokens is listed: one of its locked genesis outputs (`outputs`) is an unspent holding (3.14). A lock
+whose outputs were all spent (unlocked and claimed) is left out, and so is one whose outputs the indexer never recorded as holdings
+(a genesis that did not name its outputs' states, 3.14). `outputs` and `amount` are what the genesis locked, not what is left.
+
 A hint: a client verifies the launch proof itself (3.5). The locked UTXOs still unspent are
 `GET /v1/token-utxos?owner=<authority>&token=<covenant_id>` (3.14). One scan of the stored declarations, no index.
 
