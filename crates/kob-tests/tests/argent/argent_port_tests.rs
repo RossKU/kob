@@ -1,10 +1,13 @@
-//! The size of a 1:1 Argent port of a hand-written order (docs/argent/argent-feedback.md, item 10).
+//! Measures the size of a 1:1 Argent port of a hand-written order (docs/argent/argent-feedback.md,
+//! item 10).
 //!
-//! `contracts/research/argent/port/kob_ask_port.ag` is `contracts/orders/KobAsk.sil` ported 1:1 to Argent (the body verbatim, plus
-//! the `emits next: KobAsk[0..=1]` / `become` Argent requires); `scripts/build-argent.sh` publishes its generated
-//! SilverScript under `contracts/research/argent/port-out/`. This test compiles the hand-written order and the port with the same
-//! constructor arguments and attributes the difference in bytes: each generated check and each body check it duplicates
-//! is removed from the source on its own and the compiled size is measured again. Run with `--nocapture` for the table.
+//! `contracts/research/argent/port/kob_ask_port.ag` is `contracts/orders/KobAsk.sil` ported 1:1 to
+//! Argent (the body verbatim, plus the `emits next: KobAsk[0..=1]` / `become` Argent requires);
+//! `scripts/build-argent.sh` publishes its generated SilverScript under
+//! `contracts/research/argent/port-out/`. This test compiles the hand-written order and the port
+//! with the same constructor arguments and attributes the difference in bytes: each generated check
+//! and each body check it duplicates is removed from the source on its own and the compiled size is
+//! measured again. Run with `--nocapture` for the table.
 
 #[path = "../common/mod.rs"]
 mod common;
