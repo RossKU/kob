@@ -6,18 +6,23 @@ import { Amount, Badge, Button, CopyText, Section, Table, unitsFraction } from '
 import { tokenLabel } from '../market/token-model';
 
 /**
- * Stray tokens: token UTXOs someone sent to one of your orders from outside the protocol. They are inert (never liquidity) and only a spend of that
- * order by its maker moves them: the maker's SWEEP (the order lives on, unchanged) or its cancel. Foreign strays (another token than the order
- * trades) go back too when the indexer proved their state; once the order is terminated nothing can move a stray any more: it is lost.
+ * Stray tokens are token UTXOs someone sent to one of your orders from outside the protocol. They
+ * are inert and never liquidity. Only a spend of that order by its maker moves them, which is the
+ * maker's sweep (the order lives on, unchanged) or its cancel. Foreign strays, of another token
+ * than the order trades, go back too when the indexer proved their state. Once the order is
+ * terminated nothing can move a stray any more, and it is lost.
  */
 export function StraysPanel(props: {
   strays: StrayView[];
-  /** the tokens of each order (its token; a pair order also its quote token B), by order id: a stray of another token is foreign; unknown orders are not judged */
+  /**
+   * The tokens of each order, by order id. That is its token and, for a pair order, also its quote
+   * token B. A stray of another token is foreign, and unknown orders are not judged.
+   */
   orderTokens?: ReadonlyMap<string, readonly string[]>;
-  /** live orders of the wallet a sweep can spend (by order id) */
+  /** Live orders of the wallet that a sweep can spend, by order id. */
   sweepableOrders?: ReadonlySet<string>;
   canSign?: boolean;
-  /** the id of an action being prepared */
+  /** The id of an action being prepared. */
   busy?: string | null;
   onSweep?: (orderId: string) => void;
 }) {
@@ -25,7 +30,8 @@ export function StraysPanel(props: {
   const list = props.strays.filter((s) => !s.spent);
   if (!list.length) return null;
   const sweepOffered = new Set<string>();
-  // one fixed number of decimals for the quantity column: the finest amount of its rows (decimal points line up)
+  // One fixed number of decimals for the quantity column, the finest amount of its rows, so the
+  // decimal points line up.
   const shown = (id: string) => displayToken(registry, config.network, id)!;
   const qtyFraction = list.reduce((m, s) => Math.max(m, unitsFraction(BigInt(s.state?.amount ?? s.amount), shown(s.token).decimals)), 0);
   return (
@@ -45,8 +51,9 @@ export function StraysPanel(props: {
           {list.map((s) => {
             const amount = BigInt(s.state?.amount ?? s.amount);
             const tokens = props.orderTokens?.get(s.owner);
-            // a stray of another token than the order trades (a pair order: neither of its two): foreign. A sweep or cancel returns it when its
-            // state and program are proven; without them nothing can build its spend
+            // A stray of another token than the order trades is foreign. For a pair order that
+            // means neither of its two. A sweep or cancel returns it when its state and program are
+            // proven. Without them nothing can build its spend.
             const foreign = !!s.foreign || (!!tokens && !tokens.includes(s.token));
             const unproven = foreign && (!s.program || !s.state);
             const live = !s.lost && (props.sweepableOrders?.has(s.owner) ?? false);

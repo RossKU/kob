@@ -1,5 +1,6 @@
-// Planning of Claim, Claim and merge, Claim and sell of what a mode-1 order bought (bid-delivery-spec §7, §10). Only PLANS: the
-// transaction goes through <TxFlow> like a cancel.
+// Planning of Claim, Claim and merge, and Claim and sell of what a mode-1 order bought
+// (bid-delivery-spec §7, §10). It only plans. The transaction goes through <TxFlow> like a
+// cancel.
 import { buildCancelEnv, tokenMarketOf } from '../../app/env';
 import type { Services } from '../../app/services';
 import type { StrayView } from '../../data/indexer-types';
@@ -15,23 +16,35 @@ import type { Hex, TokenUtxo } from '../../kob/types';
 import { snapshotFor } from './actions';
 import type { OrderEntry } from './orders-model';
 
-/** A claim fee at or above this, with wallet UTXOs merged, gets the "merge fewer" hint (B5: up to 0.42 KAS on heavy programs). */
+/**
+ * A claim fee at or above this, with wallet UTXOs merged, gets the "merge fewer" hint. The fee
+ * reaches 0.42 KAS on heavy programs.
+ */
 export const HEAVY_CLAIM_FEE = 10_000_000n;
 
-/** What the claim dialog plans with: the node-confirmed order, the cancel env and the wallet's plain UTXOs of the bought token. */
+/**
+ * What the claim dialog plans with: the node-confirmed order, the cancel env and the wallet's plain
+ * UTXOs of the bought token.
+ */
 export interface ClaimContext {
   snapshot: OrderSnapshot;
   env: CancelEnv;
-  /** plain wallet UTXOs of the bought token that may join a claim and merge, smallest first */
+  /** Plain wallet UTXOs of the bought token that may join a claim and merge, smallest first. */
   wallet: TokenUtxo[];
-  /** most of them one claim takes */
+  /** The most of them one claim takes. */
   room: number;
   token: TokenInfo | undefined;
-  /** the bought token's market scale (base units per whole token of a sell's price); null without a registry token */
+  /**
+   * The bought token's market scale, in base units per whole token of a sell's price. Null without
+   * a registry token.
+   */
   scale: bigint | null;
 }
 
-/** The plain wallet UTXOs a claim may merge: the maker's, of the bought token and its commitment, not reserved, smallest first. */
+/**
+ * The plain wallet UTXOs a claim may merge. They are the maker's, of the bought token and its
+ * commitment, not reserved, smallest first.
+ */
 export function mergeCandidates(utxos: readonly TokenUtxo[], maker: Hex, token: Hex, ext: Hex | null, reserved: ReadonlySet<string> = new Set()): TokenUtxo[] {
   return utxos
     .filter((u) => (u.covenantId ?? token) === token && u.state.owner === maker && isPlainState(u.state) && extensionMatches(u.state, ext) && !reserved.has(`${u.transactionId}:${u.index}`))
@@ -49,8 +62,9 @@ export async function prepareClaim(s: Services, pubkey: Hex, entry: OrderEntry, 
 }
 
 /**
- * The limit sell a claim and sell places: a GTC `KobAsk` of `amount` (default: everything claimed) at `price` (sompi per whole token
- * of the token's scale), its custody on the claimed tokens' commitment. Null without a registry token or a clock.
+ * The limit sell a claim and sell places. It is a GTC `KobAsk` of `amount`, by default everything
+ * claimed, at `price` in sompi per whole token of the token's scale, with its custody on the
+ * claimed tokens' commitment. It is null without a registry token or a clock.
  */
 export function claimAskSpec(s: Pick<Services, 'kob' | 'registry'>, ctx: ClaimContext, price: bigint, amount?: bigint): ReplacementSpec | null {
   const bf = boughtOf(ctx.snapshot.order.state);
@@ -70,14 +84,17 @@ export type ClaimChoice =
   | { kind: 'merge'; count: number }
   | { kind: 'sell'; place: ReplacementSpec; end: boolean };
 
-/** Plans the picked claim; a merge takes the `count` smallest wallet UTXOs (the dust first). */
+/** Plans the picked claim. A merge takes the `count` smallest wallet UTXOs, the dust first. */
 export function planClaimChoice(ctx: ClaimContext, choice: ClaimChoice): CancelPlan {
   if (choice.kind === 'merge') return planClaim(ctx.env, ctx.snapshot, { merge: ctx.wallet.slice(0, Math.max(0, Math.min(choice.count, ctx.room))) });
   if (choice.kind === 'sell') return planClaim(ctx.env, ctx.snapshot, { place: choice.place, end: choice.end });
   return planClaim(ctx.env, ctx.snapshot);
 }
 
-/** A claim and sell that would sell into the order's own bid while it stays open (a self-trade). */
+/**
+ * A claim and sell that would sell into the order's own bid while it stays open, which is a
+ * self-trade.
+ */
 export function sellCrossesOwnBid(ctx: ClaimContext, askPrice: bigint, end: boolean): boolean {
   if (end) return false;
   const st = ctx.snapshot.order.state;
@@ -88,8 +105,9 @@ export function sellCrossesOwnBid(ctx: ClaimContext, askPrice: bigint, end: bool
 }
 
 /**
- * Claims of several orders (Claim all), one transaction each with the funding of the others left out, so the sends do not
- * spend one KAS UTXO twice. Failures are returned as plans with their issues.
+ * Claims of several orders (Claim all), one transaction each with the funding of the others left
+ * out, so the sends do not spend one KAS UTXO twice. Failures are returned as plans with their
+ * issues.
  */
 export async function planClaimMany(s: Services, pubkey: Hex, entries: readonly OrderEntry[], strays: readonly StrayView[] | null): Promise<{ plans: CancelPlan[]; failed: { id: Hex; error: unknown }[] }> {
   const plans: CancelPlan[] = [];
