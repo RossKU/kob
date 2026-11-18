@@ -1,5 +1,6 @@
-// The pieces of a sortable list: the header button of a column, the narrow-card control ("Sort: column, direction": cards have no header), the stored choice.
-// The state, the click cycle and the comparison are in sort.ts. Used by the Portfolio's tables and the activity log.
+// The pieces of a sortable list: the header button of a column, the narrow-card control ("Sort:
+// column, direction", as cards have no header) and the stored choice. The state, the click cycle
+// and the comparison are in sort.ts. The Portfolio's tables and the activity log use them.
 import type { ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
 import { t } from '../../i18n';
@@ -8,7 +9,10 @@ import './sort.css';
 
 const STORE_PREFIX = 'kob.sort.';
 
-/** The viewer's sort of the list stored under `name`, kept in this browser (a blocked storage keeps it for the visit); none = the list's own order. */
+/**
+ * The viewer's sort of the list stored under `name`, kept in this browser. A blocked storage keeps
+ * it for the visit. None means the list's own order.
+ */
 export function useSortState<K extends string>(name: string, keys: readonly K[]): [SortState<K> | null, (s: SortState<K> | null) => void] {
   const [state, setState] = useState<SortState<K> | null>(() => {
     try {
@@ -23,25 +27,31 @@ export function useSortState<K extends string>(name: string, keys: readonly K[])
       if (s) localStorage.setItem(STORE_PREFIX + name, JSON.stringify(s));
       else localStorage.removeItem(STORE_PREFIX + name);
     } catch {
-      /* blocked storage */
+      /* Blocked storage. */
     }
   };
   return [state, set];
 }
 
-/** A stable text of the state, for the key of a list's page (another sort starts at the first page). */
+/**
+ * A stable text of the state, for the key of a list's page, so another sort starts at the first
+ * page.
+ */
 export const sortKeyOf = (s: SortState | null): string => (s ? `${s.key}:${s.dir}` : '-');
 
 export { ariaSortOf };
 
-/** A column header you can press: a real button (the cell around it carries `aria-sort`, `ariaSortOf`). `own`: the column the list's own order stands for. */
+/**
+ * A column header you can press: a real button. The cell around it carries `aria-sort`
+ * (`ariaSortOf`). `own` is the column the list's own order stands for.
+ */
 export function SortButton<K extends string>(props: {
   id: string;
   col: SortColumn<K>;
   state: SortState<K> | null;
   own: SortColumn<K> | null;
   onSort: (s: SortState<K> | null) => void;
-  /** the label, where it is not the column's (a shorter one) */
+  /** The label, where it is not the column's, for example a shorter one. */
   children?: ComponentChildren;
 }) {
   const aria = ariaSortOf(props.state, props.col.key, props.own);
@@ -65,7 +75,8 @@ export function SortButton<K extends string>(props: {
 const dirText = (d: SortDir) => t(d === 'asc' ? 'common.sort.asc' : 'common.sort.desc');
 
 /**
- * Where a list is cards (no header): `Sort [column v] [up/down]`, in the pill style of the rows control. It reads and writes the same state as the headers.
+ * Where a list is cards (no header): `Sort [column v] [up/down]`, in the pill style of the rows
+ * control. It reads and writes the same state as the headers.
  */
 export function SortControl<K extends string>(props: {
   id: string;

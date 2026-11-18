@@ -1,10 +1,14 @@
 import type { ComponentChildren } from 'preact';
 
 /**
- * Splits a price unit "KAS per TUSD" at its first " per " into the quote ("KAS", full size) and the "per TUSD" part (smaller, `.unit-per`, styles in styles.css). The words stay
- * in one inline run with the same spaces, so a screen reader reads one phrase and a copied selection is the plain text. A text without " per " is returned as it is; a closing
- * parenthesis after the unit ("Price (KAS per TUSD)") stays outside the small part. `single`: for free-running row values, only when one word follows "per" (a ticker), so
- * "one update per 5 min at most" is left alone.
+ * Splits a price unit "KAS per TUSD" at its first " per " into the quote ("KAS", full size) and
+ * the "per TUSD" part (smaller, `.unit-per`, styles in styles.css). The words stay in one inline
+ * run with the same spaces, so a screen reader reads one phrase and a copied selection is the
+ * plain text.
+ * - A text without " per " is returned as it is.
+ * - A closing parenthesis after the unit ("Price (KAS per TUSD)") stays outside the small part.
+ * - With `single`, for free-running row values, it splits only when one word follows "per", a
+ *   ticker, so "one update per 5 min at most" is left alone.
  */
 export function unitParts(text: string, single = false): ComponentChildren {
   const at = text.indexOf(' per ');
@@ -15,8 +19,9 @@ export function unitParts(text: string, single = false): ComponentChildren {
   const per = close < 0 ? rest : rest.slice(0, close);
   const tail = close < 0 ? '' : rest.slice(close);
   if (single && /\s.*\S/.test(per.slice(4))) return text;
-  // one element keyed by the whole text: when the text changes while the page is machine-translated (a market flip), the unit is re-created and translated afresh
-  // (app/translation-safe.ts: texts that change must not stay loose text nodes beside elements)
+  // One element keyed by the whole text. When the text changes while the page is machine-translated
+  // (a market flip), the unit is re-created and translated afresh (app/translation-safe.ts). Texts
+  // that change must not stay loose text nodes beside elements.
   return (
     <span key={text}>
       {text.slice(0, at)}{' '}<span class="unit-per">{per}</span>{tail}

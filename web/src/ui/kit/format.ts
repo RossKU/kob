@@ -1,10 +1,11 @@
-// Display formatting shared by the UI kit and the views. Pure and bigint-safe (never `Number` for sompi or token amounts): every function
-// delegates to kob/units.ts, which does exact integer arithmetic.
+// Display formatting shared by the UI kit and the views. It is pure and bigint-safe, and never
+// uses `Number` for sompi or token amounts. Every function delegates to kob/units.ts, which does
+// exact integer arithmetic.
 import { formatKas, formatPricePerToken, formatTokenAmount, formatUnits, pow10, SOMPI_PER_KAS } from '../../kob/units';
 
 /**
- * An id shortened from its start: its first `chars` characters, then an ellipsis
- * (`753894e5…`). Transaction ids and wallet addresses are never cut in the middle (founder rule).
+ * An id shortened from its start: its first `chars` characters, then an ellipsis (`753894e5…`).
+ * Transaction ids and wallet addresses are never cut in the middle.
  */
 export function shortId(id: string, chars = 8): string {
   const s = String(id);
@@ -12,7 +13,10 @@ export function shortId(id: string, chars = 8): string {
   return `${s.slice(0, chars)}…`;
 }
 
-/** Address form: the network prefix and the start of the body, then an ellipsis (`kaspa:qq776pwutf…`). */
+/**
+ * Address form: the network prefix and the start of the body, then an ellipsis
+ * (`kaspa:qq776pwutf…`).
+ */
 export function shortAddress(address: string, chars = 12): string {
   const i = address.indexOf(':');
   if (i < 0) return shortId(address, chars);
@@ -23,7 +27,10 @@ export function shortAddress(address: string, chars = 12): string {
 /** KAS text of a sompi amount: up to 8 decimals, trailing zeros trimmed. */
 export const kasText = (sompi: bigint): string => formatKas(sompi);
 
-/** `sompi` rounded half up to `digits` significant digits, as KAS ("0.034" for 3,382,400 sompi): an approximate figure ("fee ~0.034 KAS"). */
+/**
+ * `sompi` rounded half up to `digits` significant digits, as KAS ("0.034" for 3,382,400 sompi).
+ * It is an approximate figure ("fee ~0.034 KAS").
+ */
 export function kasApprox(sompi: bigint, digits = 2): string {
   if (sompi <= 0n) return formatKas(0n);
   const len = sompi.toString().length;
@@ -39,8 +46,9 @@ export const tokenText = (base: bigint, decimals: number): string => formatToken
 export const tokenTextShort = (base: bigint, decimals: number, maxFraction = 4): string => formatUnits(base, decimals, { maxFraction });
 
 /**
- * A state price (sompi per whole token of `scale` base units) as KAS per WHOLE token. Normally 8 fractional digits; a price too small for that
- * (rounds to 0) gets more digits so a real price never displays as zero.
+ * A state price (sompi per whole token of `scale` base units) as KAS per WHOLE token. It shows 8
+ * fractional digits normally. A price too small for that, which would round to 0, gets more digits
+ * so a real price never displays as zero.
  */
 export function pricePerTokenText(price: bigint, decimals: number, scale: bigint): string {
   if (scale <= 0n) return kasText(price);
@@ -49,34 +57,43 @@ export function pricePerTokenText(price: bigint, decimals: number, scale: bigint
   return t;
 }
 
-/** The wallet's scale of a token: base units per whole token, `10^decimals` capped at 10^9 (kob-wasm `defaultScale`). */
+/**
+ * The wallet's scale of a token: base units per whole token, `10^decimals` capped at 10^9 (kob-wasm
+ * `defaultScale`).
+ */
 export const scaleOfDecimals = (decimals: number): bigint => pow10(Math.min(Math.max(decimals, 0), 9));
 
-/** Signed KAS text: `+1.5` / `-0.25` / `0`. */
+/** Signed KAS text: `+1.5`, `-0.25` or `0`. */
 export function signedKasText(sompi: bigint): string {
   return sompi > 0n ? `+${kasText(sompi)}` : kasText(sompi);
 }
 
-/** `kas` sompi, `token` base units, `price` a state price (sompi per whole token of `scale` base units) shown as KAS per whole token */
+/**
+ * What an amount is. `kas` is sompi, `token` is base units, and `price` is a state price (sompi
+ * per whole token of `scale` base units) shown as KAS per whole token.
+ */
 export type AmountKind = 'kas' | 'token' | 'price';
 
 export interface AmountSpec {
   kind: AmountKind;
   value: bigint | null | undefined;
-  /** token decimals (token, price) */
+  /** Token decimals (token, price). */
   decimals?: number;
-  /** the price's scale: base units per whole token of its denominator (price; default 10^decimals capped at 10^9) */
+  /**
+   * The price's scale: base units per whole token of its denominator (price). The default is
+   * 10^decimals capped at 10^9.
+   */
   scale?: bigint;
-  /** show at most this many fractional digits (token) */
+  /** Show at most this many fractional digits (token). */
   maxFraction?: number;
   /**
-   * show EXACTLY this many fractional digits (trailing zeros kept, half-up rounding): the fixed precision of a table column, so decimal
-   * points line up. Wins over `maxFraction`.
+   * Show EXACTLY this many fractional digits, with trailing zeros kept and half-up rounding. It is
+   * the fixed precision of a table column, so decimal points line up. It wins over `maxFraction`.
    */
   fraction?: number;
 }
 
-/** The plain text an `<Amount>` renders; `—` for a missing value. */
+/** The plain text an `<Amount>` renders. It is `—` for a missing value. */
 export function amountText(a: AmountSpec): string {
   if (a.value === null || a.value === undefined) return '—';
   if (a.fraction !== undefined) {
@@ -99,19 +116,26 @@ export function amountText(a: AmountSpec): string {
   }
 }
 
-/** Thousands grouping of the integer part of a plain decimal string (display only; never fed back to a parser). */
+/**
+ * Thousands grouping of the integer part of a plain decimal string. It is for display only and
+ * never fed back to a parser.
+ */
 export function groupDigits(text: string, sep = ','): string {
   const m = /^(-?)(\d+)(\.\d+)?$/.exec(text);
   if (!m) return text;
   return `${m[1]}${m[2].replace(/\B(?=(\d{3})+(?!\d))/g, sep)}${m[3] ?? ''}`;
 }
 
-// ------------------------------------------------------------------------------------------------ fixed-decimal columns
+// ---- Fixed-decimal columns
 //
-// A column of numbers lines up only when every row shows the same number of decimals. The helpers below derive that count ONCE per market /
-// view / column (from the tick, the token's decimals, or the finest value shown) and format every row with it, trailing zeros kept.
+// A column of numbers lines up only when every row shows the same number of decimals. The helpers
+// below derive that count ONCE per market, view and column, from the tick, the token's decimals or
+// the finest value shown. They format every row with it, trailing zeros kept.
 
-/** Number of trailing decimal zeros of a non-negative integer (0 for 0 and for numbers not divisible by 10). */
+/**
+ * The number of trailing decimal zeros of a non-negative integer. It is 0 for 0 and for numbers not
+ * divisible by 10.
+ */
 export function trailingZeros(n: bigint): number {
   if (n <= 0n) return 0;
   let z = 0;
@@ -123,7 +147,10 @@ export function trailingZeros(n: bigint): number {
   return z;
 }
 
-/** `value` base units with exactly `fraction` fractional digits (half-up; zero-padded when `fraction` exceeds `decimals`), thousands grouped. */
+/**
+ * `value` base units with exactly `fraction` fractional digits, half-up and thousands grouped.
+ * It is zero-padded when `fraction` exceeds `decimals`.
+ */
 export function fixedUnits(value: bigint, decimals: number, fraction: number, group = ','): string {
   const f = Math.max(0, Math.trunc(fraction));
   if (f >= decimals) {
@@ -134,19 +161,28 @@ export function fixedUnits(value: bigint, decimals: number, fraction: number, gr
   return formatUnits(value, decimals, { maxFraction: f, trim: false, group });
 }
 
-/** KAS per whole token of a state price (sompi per `scale` base units), exactly `fraction` fractional digits, thousands grouped. */
+/**
+ * KAS per whole token of a state price (sompi per `scale` base units), with exactly `fraction`
+ * fractional digits, thousands grouped.
+ */
 export function fixedPricePerToken(price: bigint, decimals: number, scale: bigint, fraction: number, group = ','): string {
   if (scale <= 0n) return fixedUnits(price, 8, fraction, group);
   return formatPricePerToken(price, decimals, scale, { maxFraction: Math.max(0, fraction), trim: false, group });
 }
 
-/** The fraction digits an amount of `decimals` needs to be shown exactly: `decimals` minus its trailing zeros (0..decimals). */
+/**
+ * The fraction digits an amount of `decimals` needs to be shown exactly: `decimals` minus its
+ * trailing zeros (0..decimals).
+ */
 export function unitsFraction(value: bigint, decimals: number): number {
   if (value <= 0n) return 0;
   return Math.max(0, decimals - trailingZeros(value));
 }
 
-/** The finest fraction any of the values needs (a column of amounts: the shared fixed decimals). 0 for no values. */
+/**
+ * The finest fraction any of the values needs, as the shared fixed decimals of an amount column. It
+ * is 0 for no values.
+ */
 export function columnFraction(values: Iterable<bigint | null | undefined>, decimals: number): number {
   let f = 0;
   for (const v of values) if (v !== null && v !== undefined) f = Math.max(f, unitsFraction(v < 0n ? -v : v, decimals));
@@ -154,7 +190,10 @@ export function columnFraction(values: Iterable<bigint | null | undefined>, deci
 }
 
 
-/** Fixed fraction digits of a KAS column whose values are multiples of `tick` sompi (8 minus the tick's trailing zeros); 8 without a tick. */
+/**
+ * Fixed fraction digits of a KAS column whose values are multiples of `tick` sompi: 8 minus the
+ * tick's trailing zeros. It is 8 without a tick.
+ */
 export function tickKasFraction(tick: bigint | null | undefined): number {
   return tick && tick > 0n ? unitsFraction(tick, 8) : 8;
 }
@@ -163,34 +202,48 @@ export const PRICE_FRACTION_MIN = 2;
 export const PRICE_FRACTION_MAX = 10;
 
 /**
- * Fixed fraction digits of a KAS-per-token price column from the market's tick (sompi per whole token of `scale` base units): the fewest digits
- * that show every tick-aligned price exactly, bounded to [min, max]. Null when there is no tick (the caller falls back to a precision from the
- * price magnitude).
+ * Fixed fraction digits of a KAS-per-token price column from the market's tick (sompi per whole
+ * token of `scale` base units). They are the fewest digits that show every tick-aligned price
+ * exactly, bounded to [min, max]. The result is null when there is no tick, and the caller then
+ * falls back to a precision from the price magnitude.
  */
 export function tickPriceFraction(tick: bigint | null | undefined, decimals: number, scale: bigint | null | undefined, min = PRICE_FRACTION_MIN, max = PRICE_FRACTION_MAX): number | null {
   if (!tick || tick <= 0n || !scale || scale <= 0n) return null;
-  // price per token = tick * 10^decimals / (scale * 1e8) KAS: find the smallest f with that value * 10^f an integer
+  // Price per token is tick * 10^decimals / (scale * 1e8) KAS. Find the smallest f for which that
+  // value * 10^f is an integer.
   const num = tick * pow10(decimals);
   const den = scale * SOMPI_PER_KAS;
   for (let f = 0; f <= max; f++) if ((num * pow10(f)) % den === 0n) return Math.min(max, Math.max(min, f));
   return max;
 }
 
-// ------------------------------------------------------------------------------------------------ amount columns that never cut digits
+// ---- Amount columns that never cut digits
 
-/** Characters a numeric cell of the order book shows without cutting a digit (its narrowest column, desktop and phone). */
+/**
+ * Characters a numeric cell of the order book shows without cutting a digit: its narrowest column,
+ * on desktop and phone.
+ */
 export const CELL_CHARS = 10;
 
-/** One cell of an amount column: the text shown and, when that text is not the exact amount, the exact amount for the tooltip. */
+/**
+ * One cell of an amount column: the text shown and, when that text is not the exact amount, the
+ * exact amount for the tooltip.
+ */
 export interface AmountCell {
   text: string;
-  /** the exact amount (thousands grouped, trailing zeros trimmed, with the unit when given); null when `text` is already exact */
+  /**
+   * The exact amount, with thousands grouped, trailing zeros trimmed and the unit when given. Null
+   * when `text` is already exact.
+   */
   exact: string | null;
 }
 
 const COMPACT: readonly [string, number][] = [['T', 12], ['B', 9], ['M', 6], ['K', 3]];
 
-/** A whole-number compact form: `56.61M` for 56,609,953.4 (two decimals, half up), `1,234.57T` beyond the largest suffix. */
+/**
+ * A whole-number compact form: `56.61M` for 56,609,953.4 (two decimals, half up), `1,234.57T`
+ * beyond the largest suffix.
+ */
 function compactUnits(value: bigint, decimals: number): string {
   const whole = value / pow10(decimals);
   for (const [suffix, exp] of COMPACT) {
@@ -199,7 +252,7 @@ function compactUnits(value: bigint, decimals: number): string {
   return formatUnits(value, decimals, { maxFraction: 2, trim: false, group: ',' });
 }
 
-/** Whether a column text reads as exactly `value` (no `<`, no suffix, no rounded-away digit). */
+/** Whether a column text reads as exactly `value`: no `<`, no suffix and no rounded-away digit. */
 function shownExactly(text: string, value: bigint, decimals: number): boolean {
   const m = /^(\d+)(?:\.(\d+))?$/.exec(text.replace(/,/g, ''));
   if (!m) return false;
@@ -208,7 +261,10 @@ function shownExactly(text: string, value: bigint, decimals: number): boolean {
   return BigInt(m[1]!) * pow10(decimals) + BigInt(frac.padEnd(decimals, '0') || '0') === value;
 }
 
-/** `fixedUnits`, except a positive amount that rounds to zero shows as `<0.01` (never a plain zero for something that is there). */
+/**
+ * `fixedUnits`, except a positive amount that rounds to zero shows as `<0.01`, never a plain zero
+ * for something that is there.
+ */
 function fixedOrBelow(value: bigint, decimals: number, fraction: number): string {
   const t = fixedUnits(value, decimals, fraction);
   if (value > 0n && /^[0.,]+$/.test(t)) return fraction > 0 ? `<0.${'0'.repeat(fraction - 1)}1` : '<1';
@@ -216,10 +272,16 @@ function fixedOrBelow(value: bigint, decimals: number, fraction: number): string
 }
 
 /**
- * The texts of an amount column (`values` in base units of `decimals`) that fit `width` characters WITHOUT cutting a digit: the column's own fixed
- * decimals (`fraction`, default: the finest amount shown) when every row fits; else fewer decimals for the whole column, so the largest amount keeps
- * every whole digit (a positive amount that would read 0 shows `<0.001`); else, when even the whole digits do not fit, compact K / M / B / T
- * (`56.61M`). A text that is not the exact amount carries the exact amount (`exact`) for the tooltip. Null values show `—`.
+ * The texts of an amount column (`values` in base units of `decimals`) that fit `width`
+ * characters WITHOUT cutting a digit.
+ * - When every row fits, they use the column's own fixed decimals (`fraction`, default the finest
+ *   amount shown).
+ * - Otherwise the whole column gets fewer decimals, so the largest amount keeps every whole digit.
+ *   A positive amount that would read 0 shows `<0.001`.
+ * - When even the whole digits do not fit, the column uses compact K / M / B / T (`56.61M`).
+ *
+ * A text that is not the exact amount carries the exact amount (`exact`) for the tooltip. Null
+ * values show `—`.
  */
 export function fitAmountColumn(values: readonly (bigint | null | undefined)[], decimals: number, o: { fraction?: number; width?: number; unit?: string; minFraction?: number } = {}): AmountCell[] {
   const width = o.width ?? CELL_CHARS;
@@ -236,19 +298,24 @@ export function fitAmountColumn(values: readonly (bigint | null | undefined)[], 
   if (longest(full) <= width) return values.map((v) => cell(v, full));
   const small = Math.min(fraction, o.minFraction ?? 2);
   const intLen = longest((v) => fixedUnits(v, decimals, 0));
-  // `<0.001` takes one character more than `0.001`: a one-digit column keeps room for it
+  // `<0.001` takes one character more than `0.001`, so a one-digit column keeps room for it.
   const f = Math.min(fraction, Math.max(0, width - Math.max(intLen, 2) - 1));
-  // the whole digits fit with at least two decimals (or every decimal the column has): fewer decimals for the whole column
+  // The whole digits fit with at least two decimals, or with every decimal the column has. The
+  // whole column gets fewer decimals.
   if (intLen <= width && f >= small) return values.map((v) => cell(v, (x) => fixedOrBelow(x, decimals, f)));
-  // else thousands and up are compact, smaller amounts keep two decimals
+  // Otherwise thousands and up are compact, and smaller amounts keep two decimals.
   return values.map((v) => cell(v, (x) => (x >= pow10(decimals + 3) ? compactUnits(x, decimals) : fixedOrBelow(x, decimals, small))));
 }
 
 /**
- * `fitAmountColumn` for a column already formatted as decimal text with ONE number of decimals (a price column: `25,300,000.00`): the same
- * texts when they fit `width`, else fewer decimals (down to none: `2,165,696` reads better than `2.17M`) or K / M / B when even the whole
- * digits do not fit (`25.30B`), `exact` = the original text. Texts that are not plain numbers (`—`)
- * pass unchanged.
+ * `fitAmountColumn` for a column already formatted as decimal text with ONE number of decimals,
+ * such as a price column (`25,300,000.00`).
+ * - It gives the same texts when they fit `width`.
+ * - Otherwise it uses fewer decimals, down to none, because `2,165,696` reads better than
+ *   `2.17M`.
+ * - When even the whole digits do not fit, it uses K / M / B (`25.30B`).
+ *
+ * `exact` is the original text. Texts that are not plain numbers (`—`) pass unchanged.
  */
 export function fitDecimalTexts(texts: readonly string[], o: { width?: number; unit?: string } = {}): AmountCell[] {
   const width = o.width ?? CELL_CHARS;
@@ -262,26 +329,35 @@ export function fitDecimalTexts(texts: readonly string[], o: { width?: number; u
 
 const SUBSCRIPT = '₀₁₂₃₄₅₆₇₈₉';
 
-/** The digits of a number `compactZeros` shortened, for its tooltip; nothing for one it left as it is. */
+/**
+ * The digits of a number `compactZeros` shortened, for its tooltip. It is nothing for a number it
+ * left as it is.
+ */
 export const zerosTitle = (text: string | null | undefined): string | undefined => (text && compactZeros(text) !== text ? text : undefined);
 
 /**
- * A number with four or more zeros after its point, for a CARD that is read on its own
- * (never in a table or a strip: a column of figures keeps one notation, as `0.000835` beside `0.0₄85` cannot be compared by eye): `0.00002547` reads `0.0₄2547` (the subscript counts the zeros). For display only: the
- * book keeps its digits, as its rows are compared by eye, and the ticket and the final confirmation keep theirs. Text around the number stays as it is.
+ * A number with four or more zeros after its point, for a CARD that is read on its own.
+ * `0.00002547`
+ * reads `0.0₄2547`, where the subscript counts the zeros. Tables and strips never use it, because
+ * a column of figures keeps one notation and `0.000835` beside `0.0₄85` cannot be compared by
+ * eye.
+ * It is for display only. The book keeps its digits, and the ticket and the final confirmation
+ * keep theirs. Text around the number stays as it is.
  */
 export const compactZeros = (text: string): string =>
   text.replace(/(^|[^\d.,])0\.(0{4,})(?=[1-9])/g, (_m, before: string, zeros: string) => `${before}0.0${[...String(zeros.length)].map((d) => SUBSCRIPT[Number(d)]).join('')}`);
 
-// ------------------------------------------------------------------------------------------------ one time format
+// ---- One time format
 
 const pad2 = (n: number): string => String(n).padStart(2, '0');
 const clock = (d: Date, seconds: boolean): string => `${pad2(d.getHours())}:${pad2(d.getMinutes())}${seconds ? `:${pad2(d.getSeconds())}` : ''}`;
 const dateOf = (d: Date): string => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 
 /**
- * The one time format of every table and log row (founder, 2026-11-11): today `HH:MM:SS`, any other day `YYYY-MM-DD HH:MM`; 24-hour, in the viewer's zone, never the
- * reader's locale order (`11/10/26` reads as two different days). `nowMs` is the clock of the page (a prop in tests). A missing time reads `—`.
+ * The one time format of every table and log row: today `HH:MM:SS`, any other day
+ * `YYYY-MM-DD HH:MM`. It is 24-hour, in the viewer's zone, and never the reader's locale order,
+ * because `11/10/26` reads as two different days. `nowMs` is the clock of the page, a prop in
+ * tests. A missing time reads `—`.
  */
 export function formatRowTime(ms: number | null | undefined, nowMs: number = Date.now()): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms)) return '—';
@@ -291,7 +367,8 @@ export function formatRowTime(ms: number | null | undefined, nowMs: number = Dat
 }
 
 /**
- * The time of a CARD (a phone's list row): `MM-DD HH:MM` within the current year (today included), `YYYY-MM-DD HH:MM` before; 24-hour, in the viewer's zone. A missing time reads `—`.
+ * The time of a CARD (a phone's list row): `MM-DD HH:MM` within the current year, today included,
+ * and `YYYY-MM-DD HH:MM` before. It is 24-hour, in the viewer's zone. A missing time reads `—`.
  */
 export function formatRowTimeShort(ms: number | null | undefined, nowMs: number = Date.now()): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms)) return '—';
@@ -300,7 +377,10 @@ export function formatRowTimeShort(ms: number | null | undefined, nowMs: number 
   return `${d.getFullYear() === new Date(nowMs).getFullYear() ? date.slice(5) : date} ${clock(d, false)}`;
 }
 
-/** The full timestamp with the viewer's zone, for the `title` of a row time: `2026-11-10 22:35:02 GMT+9`. */
+/**
+ * The full timestamp with the viewer's zone, for the `title` of a row time: `YYYY-MM-DD HH:MM:SS
+ * GMT+9`.
+ */
 export function rowTimeTitle(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms)) return '';
   const d = new Date(ms);
@@ -308,23 +388,27 @@ export function rowTimeTitle(ms: number | null | undefined): string {
   return `${dateOf(d)} ${clock(d, true)}${zone ? ` ${zone}` : ''}`;
 }
 
-/** `formatRowTimeShort` of a unix-seconds time; null reads `—`. */
+/** `formatRowTimeShort` of a unix-seconds time. Null reads `—`. */
 export const formatRowTimeShortUnix = (unix: number | bigint | null | undefined, nowMs: number = Date.now()): string => (unix === null || unix === undefined ? '—' : formatRowTimeShort(Number(unix) * 1000, nowMs));
 
-/** `formatRowTime` of a unix-seconds time (the tables of the Portfolio); null reads `—`. */
+/** `formatRowTime` of a unix-seconds time, for the tables of the Portfolio. Null reads `—`. */
 export const formatRowTimeUnix = (unix: number | bigint | null | undefined, nowMs: number = Date.now()): string => (unix === null || unix === undefined ? '—' : formatRowTime(Number(unix) * 1000, nowMs));
 
-/** The day alone of a time, `2026-11-10` (a date column, e.g. when a supporter first gave); a missing time reads `—`. */
+/**
+ * The day alone of a time, `YYYY-MM-DD`, for a date column such as when a supporter first gave. A
+ * missing time reads `—`.
+ */
 export const formatRowDate = (ms: number | null | undefined): string => (ms === null || ms === undefined || !Number.isFinite(ms) ? '—' : dateOf(new Date(ms)));
 
 /** `rowTimeTitle` of a unix-seconds time. */
 export const rowTimeTitleUnix = (unix: number | bigint | null | undefined): string => (unix === null || unix === undefined ? '' : rowTimeTitle(Number(unix) * 1000));
 
-// ------------------------------------------------------------------------------------------------ one price display rule
+// ---- One price display rule
 
 /**
- * Fraction digits that show a price with about `significant` significant digits (min 2, max 10). Chosen once per market from a reference
- * price, so every row of a column has the same number of decimals (tabular alignment).
+ * Fraction digits that show a price with about `significant` significant digits (min 2, max 10).
+ * They are chosen once per market from a reference price, so every row of a column has the same
+ * number of decimals and the column aligns.
  */
 export function priceDecimals(refPerTokenSompi: bigint | null, significant = 5): number {
   if (refPerTokenSompi === null || refPerTokenSompi <= 0n) return 4;
@@ -332,7 +416,7 @@ export function priceDecimals(refPerTokenSompi: bigint | null, significant = 5):
   let dp: number;
   if (intPart > 0n) dp = significant - intPart.toString().length;
   else {
-    // leading zeros after the point: 0.0025 KAS = 250000 sompi -> 8 - 6 = 2 zeros
+    // Leading zeros after the point: 0.0025 KAS is 250000 sompi, so 8 - 6 = 2 zeros.
     const zeros = 8 - refPerTokenSompi.toString().length;
     dp = zeros + significant;
   }
@@ -340,26 +424,38 @@ export function priceDecimals(refPerTokenSompi: bigint | null, significant = 5):
 }
 
 
-/** Most fraction digits a price is ever displayed with (founder, 2026-11-11); the exact price stays in the `title`. */
+/** Most fraction digits a price is ever displayed with. The exact price stays in the `title`. */
 export const PRICE_DP_CAP = 6;
 /** Significant digits a displayed price shows. */
 export const PRICE_SIGNIFICANT_DIGITS = 5;
 
 /**
- * Fraction digits of a displayed price (KAS per whole token): the digits that show about five significant digits of the market's reference price (`priceDecimals`, market-model.ts:
- * 33.4 KAS -> 3, 0.025 KAS -> 6), at most `PRICE_DP_CAP`. `refPerTokenSompi`: the market's reference price (last trade, else mid) in sompi per whole token (null: 4 digits).
- * `grouping`: the fraction digits of the price grouping in force (the book's selector); a coarser grouping shows fewer digits, a finer one never more than the rule above.
- * Chosen once per market and shared by the book, the chart axis, the stats and the tables, so the same price reads the same everywhere.
+ * Fraction digits of a displayed price (KAS per whole token). They show about five significant
+ * digits of the market's reference price (`priceDecimals`, market-model.ts), for example 33.4 KAS
+ * gives 3 and 0.025 KAS gives 6, and are at most `PRICE_DP_CAP`.
+ * - `refPerTokenSompi` is the market's reference price (last trade, else mid) in sompi per whole
+ *   token. Null gives 4 digits.
+ * - `grouping` is the fraction digits of the price grouping in force, the book's selector. A
+ *   coarser grouping shows fewer digits, and a finer one never more than the rule above.
+ *
+ * The digits are chosen once per market and shared by the book, the chart axis, the stats and the
+ * tables, so the same price reads the same everywhere.
  */
 export function displayPriceDp(refPerTokenSompi: bigint | null | undefined, grouping?: number | null): number {
   const sig = Math.min(PRICE_DP_CAP, priceDecimals(refPerTokenSompi ?? null, PRICE_SIGNIFICANT_DIGITS));
   return grouping === undefined || grouping === null ? sig : Math.max(0, Math.min(sig, Math.trunc(grouping)));
 }
 
-/** The fraction digits a price grouping step shows exactly (the book's selector: a step of 0.01 reads two decimals), at most `PRICE_DP_CAP`; the `grouping` of `displayPriceDp`. */
+/**
+ * The fraction digits a price grouping step shows exactly, at most `PRICE_DP_CAP`. A step of 0.01
+ * reads two decimals in the book's selector. It is the `grouping` of `displayPriceDp`.
+ */
 export const groupingPriceDp = (group: bigint, decimals: number, scale: bigint | null | undefined): number | null => tickPriceFraction(group, decimals, scale, 0, PRICE_DP_CAP);
 
-/** The one `displayPriceDp` of a column that holds several markets' prices (the Portfolio tables): the finest any of them needs, so every decimal point lines up. */
+/**
+ * The one `displayPriceDp` of a column that holds several markets' prices (the Portfolio tables).
+ * It is the finest any of them needs, so every decimal point lines up.
+ */
 export function columnPriceDp(refsPerTokenSompi: Iterable<bigint | null | undefined>): number {
   let dp = 0;
   let any = false;
@@ -371,10 +467,16 @@ export function columnPriceDp(refsPerTokenSompi: Iterable<bigint | null | undefi
   return any ? dp : displayPriceDp(null);
 }
 
-/** A price (sompi per `basis` base units) as KAS per whole token with exactly `dp` fraction digits (grouped): what a table cell shows; its title is `exactPriceText`. */
+/**
+ * A price (sompi per `basis` base units) as KAS per whole token with exactly `dp` fraction digits,
+ * grouped. A table cell shows it, and its title is `exactPriceText`.
+ */
 export const displayPriceText = (price: bigint, decimals: number, basis: bigint, dp: number): string => fixedPricePerToken(price, decimals, basis, dp);
 
-/** The same price in full (every digit, trailing zeros trimmed, thousands grouped): the `title` of a rounded price cell. */
+/**
+ * The same price in full: every digit, trailing zeros trimmed, thousands grouped. It is the `title`
+ * of a rounded price cell.
+ */
 export function exactPriceText(price: bigint, decimals: number, basis: bigint): string {
   if (basis <= 0n) return formatKas(price, { group: ',' });
   return formatPricePerToken(price, decimals, basis, { maxFraction: 18, group: ',' });
