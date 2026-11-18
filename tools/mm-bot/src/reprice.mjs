@@ -1,8 +1,12 @@
-// The reprice decision: amend in place past the threshold; cancel only where an amend cannot work. Never on a timer.
+// The reprice decision: amend in place past the threshold, and cancel only where an amend cannot
+// work. It never reprices on a timer.
 
 import { bidCost, orderValue } from './ladder.mjs';
 
-/** The cycle's actions: cancels, then amends, then placements (only what the free inventory covers now). */
+/**
+ * The cycle's actions: cancels, then amends, then placements (only what the free inventory covers
+ * now).
+ */
 export function planActions(targets, orders, ctx) {
   const { fair, scale, q } = ctx;
   const minValue = Math.floor(q.minOrderKas * 1e8);
@@ -45,7 +49,7 @@ export function planActions(targets, orders, ctx) {
         cancels.push({ kind: 'cancel', id: o.id, side, level: t.level, reason: 'order too small for its level; to be placed again' });
         continue;
       }
-      // `off` follows a config or skew change on the same threshold
+      // `off` follows a config or skew change on the same threshold.
       const moved = Math.abs(fair / o.quotedFair - 1);
       const off = Math.abs(t.price / o.price - 1);
       if (Math.max(moved, off) <= q.repriceThreshold || t.price === o.price) continue;

@@ -15,16 +15,16 @@ test('a retired token: cancel every order, then merge, then done; never a place 
   let p = retiredPlan(live, 3, 0, 180_000);
   assert.deepEqual(p.actions.map((a) => a.kind), ['cancel', 'cancel']);
   assert.equal(p.done, false);
-  // the cancels are sent: not again until the resend time
+  // The cancels are sent: not again until the resend time.
   p = retiredPlan(live.map((o) => ({ ...o, cancelSentAt: 0 })), 3, 60_000, 180_000);
   assert.deepEqual(p.actions, []);
   p = retiredPlan(live.map((o) => ({ ...o, cancelSentAt: 0 })), 3, 200_000, 180_000);
   assert.equal(p.actions.length, 2, 'a cancel not seen after the resend time is sent again');
-  // no order left: merge the returned UTXOs
+  // No order left: merge the returned UTXOs.
   p = retiredPlan([], 4, 0, 180_000);
   assert.deepEqual(p.actions.map((a) => a.kind), ['merge']);
   assert.equal(p.done, false);
-  // one UTXO, no order: done
+  // One UTXO, no order: done.
   assert.deepEqual(retiredPlan([], 1, 0, 180_000), { actions: [], done: true });
   assert.deepEqual(retiredPlan([], 0, 0, 180_000), { actions: [], done: true });
   for (const n of [0, 1, 5]) for (const a of retiredPlan([order('c')], n, 0, 1).actions) assert.ok(['cancel', 'merge'].includes(a.kind));

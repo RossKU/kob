@@ -76,7 +76,10 @@ export function fundChecks(x) {
   return out;
 }
 
-/** Alerts due now (on a change, every remindMin while not ok, "funds received" on recovery); updates `memory`. */
+/**
+ * Alerts due now (on a change, every remindMin while not ok, "funds received" on recovery); updates
+ * `memory`.
+ */
 export function alertsToSend(checks, memory, nowMs, remindMin) {
   const out = [];
   for (const c of checks) {

@@ -1,4 +1,5 @@
-// A stand-in kob CLI: FAKE_KOB_MODE ok | plan-error | submit-fail | usage | chain (a ledger in FAKE_KOB_CHAIN); calls go to FAKE_KOB_LOG.
+// A stand-in kob CLI: FAKE_KOB_MODE ok | plan-error | submit-fail | usage | chain (a ledger in
+// FAKE_KOB_CHAIN). Calls go to FAKE_KOB_LOG.
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
@@ -13,7 +14,7 @@ if (mode === 'usage') {
   process.exit(2);
 }
 if (args[0] === 'cancel' && args.includes('--view')) {
-  // a cancel per saved view, checked on the node only (no indexer): one document each
+  // A cancel per saved view, checked on the node only (no indexer): one document each.
   const items = JSON.parse(readFileSync(args[args.indexOf('--view') + 1], 'utf8')).items ?? [];
   for (const v of items) {
     process.stdout.write(JSON.stringify({ action: `cancel ${v.covenant_id}`, network: 'testnet-10', plan: {}, issues: [], transaction: { txid: tx, fee: '427000' }, new_covenant_ids: [],

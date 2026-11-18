@@ -11,7 +11,10 @@ export function resolveSizing(capitalUsd, q, tokenUsd, kasUsd) {
   };
 }
 
-/** The `quotes` config with the cycle's sizes filled in (what ladder.mjs, inventory.mjs and funds.mjs take). */
+/**
+ * The `quotes` config with the cycle's sizes filled in (what ladder.mjs, inventory.mjs and
+ * funds.mjs take).
+ */
 export const sizedQuotes = (capitalUsd, q, tokenUsd, kasUsd) => ({ ...q, ...resolveSizing(capitalUsd, q, tokenUsd, kasUsd) });
 
 /** A share of the capital base, in percent. */

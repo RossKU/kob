@@ -1,4 +1,5 @@
-// Modes: QUOTING, IDLE (reference, jump, peg, fee-cap, cooldown) and STOPPING. Only the operator stops the bot.
+// Modes: QUOTING, IDLE (reference, jump, peg, fee-cap, cooldown) and STOPPING. Only the operator
+// stops the bot.
 
 export const QUOTING = 'QUOTING';
 export const IDLE = 'IDLE';
@@ -7,12 +8,15 @@ export const STOPPING = 'STOPPING';
 /** The UTC day of a timestamp, `YYYY-MM-DD`. */
 export const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 
-/** A fresh mode record: the bot starts in IDLE and must see a steady reference for the cool-down before it quotes. */
+/**
+ * A fresh mode record: the bot starts in IDLE and must see a steady reference for the cool-down
+ * before it quotes.
+ */
 export function initialMode(nowMs) {
   return { mode: IDLE, reason: 'cooldown', since: nowMs, steadySince: null, feeDay: null };
 }
 
-/** The next mode from { stop, refOk, jump, feeBlocked, pegOk }; `pull`: cancel every quote. */
+/** The next mode from { stop, refOk, jump, feeBlocked, pegOk }. `pull` means cancel every quote. */
 export function nextMode(prev, input, cfg, nowMs) {
   const day = utcDay(nowMs);
   const to = (mode, reason, extra = {}) => {
@@ -31,7 +35,7 @@ export function nextMode(prev, input, cfg, nowMs) {
 
   if (input.stop || prev.mode === STOPPING) return to(STOPPING, 'operator');
 
-  // the fee cap holds until the UTC day rolls over, whatever the reference does
+  // The fee cap holds until the UTC day rolls over, whatever the reference does.
   if (prev.reason === 'fee-cap' && prev.feeDay === day) return to(IDLE, 'fee-cap');
   if (input.feeBlocked) return to(IDLE, 'fee-cap', { feeDay: day, steadySince: null });
 
@@ -41,7 +45,8 @@ export function nextMode(prev, input, cfg, nowMs) {
 
   if (prev.mode === QUOTING) return to(QUOTING, null, { steadySince: prev.steadySince ?? nowMs });
 
-  // idle with the reason cleared: wait until the reference has been fresh and steady for the cool-down
+  // Idle with the reason cleared: wait until the reference has been fresh and steady for the
+  // cool-down.
   const steadySince = prev.reason === 'cooldown' && prev.steadySince != null ? prev.steadySince : nowMs;
   if (nowMs - steadySince >= cfg.resumeAfterSec * 1000) return to(QUOTING, null, { steadySince });
   return to(IDLE, 'cooldown', { steadySince });

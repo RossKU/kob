@@ -1,4 +1,5 @@
-// Whole cycles against a stand-in CLI with a small ledger (fake-kob.mjs "chain") and a stubbed fetch; no network.
+// Whole cycles against a stand-in CLI with a small ledger (fake-kob.mjs "chain") and a stubbed
+// fetch, with no network.
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,7 +18,9 @@ let kasUsd = 0.025; // what every venue trades at; the tests move it
 let venuesDown = false;
 let indexerDown = false;
 
-/** Raw kline responses of each venue at `kasUsd`, the last 8 minutes, the newest still in progress. */
+/**
+ * Raw kline responses of each venue at `kasUsd`, the last 8 minutes, the newest still in progress.
+ */
 function venueResponse(url) {
   const now = Date.now();
   const minute = Math.floor(now / 60_000) * 60_000;
@@ -57,7 +60,7 @@ function stubFetch(chainFile) {
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), 'mm-bot-cycle-'));
   const chainFile = join(dir, 'chain.json');
-  // 30,000 KAS and 600 tokens in 2 UTXOs (a merge is due before the first ask)
+  // 30,000 KAS and 600 tokens in 2 UTXOs (a merge is due before the first ask).
   writeFileSync(chainFile, JSON.stringify({ maker: MAKER, token: TOKEN, kasFree: 30_000e8, tokenFree: 600e6, tokenUtxos: 2, orders: {}, ended: {}, n: 0 }));
   process.env.FAKE_KOB_LOG = join(dir, 'calls.log');
   process.env.FAKE_KOB_MODE = 'chain';
@@ -83,8 +86,8 @@ test('a full life: idle, merge, quote both sides, hold, amend on a move, pull on
   venuesDown = false;
   const { bot, chain, calls, dir } = setup();
 
-  // cycle 1: the bot starts IDLE/cooldown; with resumeAfterSec 0 it quotes at once: the bids are placed, and the token's
-  // 2 free UTXOs are merged before any ask
+  // Cycle 1: the bot starts IDLE/cooldown. With resumeAfterSec 0 it quotes at once: the bids are
+  // placed, and the token's 2 free UTXOs are merged before any ask.
   assert.equal(bot.state.mode.mode, 'IDLE');
   await bot.cycle();
   assert.equal(bot.state.mode.mode, 'QUOTING');
@@ -93,40 +96,41 @@ test('a full life: idle, merge, quote both sides, hold, amend on a move, pull on
   assert.equal(c.tokenUtxos, 1, 'merged');
   assert.ok(calls().some((a) => a[0] === 'merge'));
 
-  // cycle 2: the asks
+  // Cycle 2: the asks.
   await bot.cycle();
   c = chain();
   const asks = Object.values(c.orders).filter((o) => o.side === 1);
   assert.equal(asks.length, 3);
-  // fair = 1 / 0.025 = 40 KAS; a 1 % spread: level 0 ask at 40 x 1.005, bid at 40 x 0.995; 15 % of 1000 USD = 150 tokens a level
+  // fair = 1 / 0.025 = 40 KAS. With a 1 % spread, the level 0 ask is at 40 x 1.005 and the bid at
+  // 40 x 0.995. 15 % of 1000 USD = 150 tokens a level.
   assert.deepEqual(asks.map((o) => o.price).sort(), [4020000000, 4040000000, 4060000000]);
   assert.ok(asks.every((o) => o.amount === 150e6));
   const bidPrices = Object.values(c.orders).filter((o) => o.side === 2).map((o) => o.price).sort();
   assert.deepEqual(bidPrices, [3940000000, 3960000000, 3980000000]);
   const ids = Object.keys(c.orders).sort();
 
-  // nothing moved: nothing is sent
+  // Nothing moved: nothing is sent.
   const before = calls().length;
   await bot.cycle();
   assert.equal(calls().length, before, 'no timer-driven amends');
 
-  // KAS/USD down 0.2 % (fair up 0.2 %): still under the 0.25 % threshold
+  // KAS/USD down 0.2 % (fair up 0.2 %): still under the 0.25 % threshold.
   kasUsd = 0.025 / 1.002;
   await bot.cycle();
   assert.equal(calls().length, before);
 
-  // down 0.4 %: every order is amended in place; the ids stay
+  // Down 0.4 %: every order is amended in place and the ids stay.
   kasUsd = 0.025 / 1.004;
   await bot.cycle();
   const amends = calls().slice(before);
   assert.equal(amends.length, 6);
   assert.ok(amends.every((a) => a[0] === 'replace'));
   assert.deepEqual(Object.keys(chain().orders).sort(), ids, 'amended in place: same covenant ids');
-  // a cycle later the amends are seen and nothing more is sent
+  // A cycle later the amends are seen and nothing more is sent.
   await bot.cycle();
   assert.equal(calls().length, before + 6);
 
-  // the venues go dark: IDLE/reference and every quote pulled
+  // The venues go dark: IDLE/reference and every quote pulled.
   venuesDown = true;
   await bot.cycle();
   assert.equal(`${bot.state.mode.mode}/${bot.state.mode.reason}`, 'IDLE/reference');
@@ -134,7 +138,7 @@ test('a full life: idle, merge, quote both sides, hold, amend on a move, pull on
   await bot.cycle();
   assert.equal(bot.state.mode.mode, 'IDLE', 'never stops by itself');
 
-  // the venues come back: cool-down, then quoting again
+  // The venues come back: cool-down, then quoting again.
   venuesDown = false;
   await bot.cycle();
   await bot.cycle();
@@ -143,19 +147,19 @@ test('a full life: idle, merge, quote both sides, hold, amend on a move, pull on
   await bot.cycle();
   assert.ok(Object.keys(chain().orders).length >= 5);
 
-  // the operator's STOP: everything is cancelled, then the cycle reports "stopped"
+  // The operator's STOP: everything is cancelled, then the cycle reports "stopped".
   writeFileSync(paths(dir).stop, 'stop');
   let r = await bot.cycle();
   assert.equal(bot.state.mode.mode, 'STOPPING');
   assert.equal(Object.keys(chain().orders).length, 0);
   r = await bot.cycle();
   assert.equal(r, 'stopped');
-  // the next start, once the STOP file is gone, begins in IDLE/cooldown, not STOPPING
+  // The next start, once the STOP file is gone, begins in IDLE/cooldown, not STOPPING.
   rmSync(paths(dir).stop);
   const again = new Bot(bot.cfg);
   assert.equal(`${again.state.mode.mode}/${again.state.mode.reason}`, 'IDLE/cooldown');
 
-  // the logs: a fee ledger, an actions log and a status snapshot
+  // The logs: a fee ledger, an actions log and a status snapshot.
   assert.ok(bot.state.fees.txs > 0);
   assert.equal(bot.state.fees.sompi, bot.state.fees.txs * 500000);
   const actions = readFileSync(paths(dir).actions, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
@@ -203,7 +207,7 @@ test('STOP with the indexer down: the quotes are cancelled from the saved views 
     assert.equal(blind.length, 1, 'one kob cancel --view --yes');
     assert.ok(ids.every((id) => bot.state.orders[id].pending?.kind === 'cancel'));
     assert.equal(bot.state.mode.mode, 'STOPPING');
-    // the next failed cycle does not send the cancels again within orderVisibleTimeoutSec
+    // The next failed cycle does not send the cancels again within orderVisibleTimeoutSec.
     await assert.rejects(bot.cycle(), /fetch failed/);
     assert.equal(calls().filter((a) => a[0] === 'cancel' && a.includes('--view')).length, 1);
   } finally {

@@ -4,11 +4,13 @@ import { PARSERS, parseCoinbaseMid, parseKrakenMid } from './candles.mjs';
 import { combine, usdtRate, fairValueKas, oneMinuteJump, pegCheck, stableRate, venueVwap } from './reference.mjs';
 
 const MIN_GAP_MS = 1_100;
-// margin after a minute's end before its candle counts as closed (clock skew)
+// Margin after a minute's end before its candle counts as closed (clock skew).
 const CLOSE_MARGIN_MS = 3_000;
 const USER_AGENT = 'kob-mm-bot/0.1';
 
-/** The venue endpoints: [url builder for a symbol, quote currency, KAS/USDT and KAS/USDC symbols]. */
+/**
+ * The venue endpoints: [url builder for a symbol, quote currency, KAS/USDT and KAS/USDC symbols].
+ */
 const VENUES = {
   bybit: { url: (s) => `https://api.bybit.com/v5/market/kline?category=spot&symbol=${s}&interval=1&limit=8`, usdt: 'KASUSDT', usdc: 'KASUSDC' },
   kucoin: {
@@ -66,11 +68,11 @@ export async function readReference(cfg, memory, nowMs = Date.now()) {
   const t = cfg.token;
   memory.history ??= [];
 
-  // the stablecoin rates: USDT/USD for the USDT venues, and the token's own USD rate
+  // The stablecoin rates: USDT/USD for the USDT venues, and the token's own USD rate.
   const tokenPair = t.usdSource.startsWith('kraken:') ? t.usdSource.slice(7) : null;
   const wantCross = r.crossCheck?.enabled && nowMs - (memory.lastCrossCheck ?? 0) >= r.crossCheck.everySec * 1000;
   const pairs = [...new Set([r.usdtUsd.includes('kraken') ? 'USDTUSD' : null, tokenPair, wantCross ? 'USDCUSD' : null].filter(Boolean))];
-  // every USDT/USD source is asked: one reading alone would scale three venues together
+  // Every USDT/USD source is asked: one reading alone would scale three venues together.
   const [mids, cb] = await Promise.all([krakenMids(pairs, r.timeoutMs), r.usdtUsd.includes('coinbase') ? coinbaseMid('USDT-USD', r.timeoutMs) : null]);
   const usdt = usdtRate({ kraken: mids.USDTUSD, coinbase: cb }, { band: r.usdtBand, agreement: r.usdtAgreement });
   if (usdt.value > 0) memory.usdt = { value: usdt.value, at: nowMs, source: usdt.source };
@@ -80,7 +82,7 @@ export async function readReference(cfg, memory, nowMs = Date.now()) {
   const usdtUsd = stableRate(memory.usdt, nowMs, r.stableMaxAgeSec, null);
   const tokenUsd = t.usdSource === 'fixed' ? { value: t.usdFallback, source: 'fixed' } : stableRate(memory.tokenUsd, nowMs, r.stableMaxAgeSec, t.usdFallback);
 
-  // the venues' candles, in parallel (each venue is its own host)
+  // The venues' candles, in parallel (each venue is its own host).
   const opts = { nowMs: nowMs - CLOSE_MARGIN_MS, windowMin: r.windowMin, maxCandleAgeSec: r.maxCandleAgeSec };
   const view = async (name) => {
     const v = VENUES[name];
@@ -113,7 +115,7 @@ export async function readReference(cfg, memory, nowMs = Date.now()) {
     memory.history = [];
   }
 
-  // the cross-check against the thin KAS/USDC books: logged only, it never sets the price
+  // The cross-check against the thin KAS/USDC books: logged only, it never sets the price.
   if (wantCross && snap.ok) {
     memory.lastCrossCheck = nowMs;
     const usdc = stableRate(memory.usdc, nowMs, r.stableMaxAgeSec, null).value;

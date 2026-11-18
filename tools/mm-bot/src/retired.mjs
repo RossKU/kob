@@ -1,6 +1,9 @@
 // Retired token instances: recovery only.
 
-/** Cancel the orders (again after resendAfterMs), then merge; done with no order and at most one UTXO. */
+/**
+ * Cancel the orders (again after resendAfterMs), then merge; done with no order and at most one
+ * UTXO.
+ */
 export function retiredPlan(live, freeUtxos, nowMs, resendAfterMs) {
   const actions = live
     .filter((o) => !(o.cancelSentAt != null && nowMs - o.cancelSentAt < resendAfterMs))

@@ -1,4 +1,5 @@
-// The reprice decision: amend in place only on a real move, cancel+place only where an amend cannot do it.
+// The reprice decision: amend in place only on a real move, cancel+place only where an amend cannot
+// do it.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildLadder } from '../src/ladder.mjs';
@@ -102,7 +103,7 @@ test('a changed spread is followed on the same threshold, without a fair-value m
   const a = planActions(buildLadder(37.5, BUDGET, wider, SCALE), orders, { fair: 37.5, scale: SCALE, free: FREE, q: wider });
   assert.equal(a.length, 4);
   assert.ok(a.every((x) => x.kind === 'amend' && /from its target/.test(x.reason)));
-  // a change smaller than the threshold is left alone
+  // A change smaller than the threshold is left alone.
   const near = { ...Q, spreadPct: 1.2 };
   assert.deepEqual(planActions(buildLadder(37.5, BUDGET, near, SCALE), orders, { fair: 37.5, scale: SCALE, free: FREE, q: near }), []);
 });
