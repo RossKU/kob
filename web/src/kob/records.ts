@@ -845,7 +845,7 @@ export async function resolveRecord(
     transactionId: u.transactionId, index: u.index, amount: u.amount, blockDaaScore: u.blockDaaScore, covenantId: record.covenantId, state,
   });
   const live = async (u: NodeUtxo, state: OrderState, changed: boolean): Promise<ResolvedRecord> => {
-    const c = await findCustody(kob, ask, record, state);
+    const c = await findCustody(kob, ask, record, state, u.transactionId);
     return { ...result('live', asOrder(u, state), c.utxo, changed, c.issue), ...(c.prefund ? { prefund: c.prefund } : {}) };
   };
 
@@ -893,6 +893,7 @@ async function findCustody(
   ask: (spks: string[]) => Promise<NodeUtxo[]>,
   record: PlacementRecord,
   state: OrderState,
+  orderTx: Hex,
 ): Promise<{ utxo: TokenUtxo | null; prefund: TokenUtxo | null; issue: ResolvedRecord['custodyIssue'] }> {
   const cs = custodiesOf(state).filter((c, k) => c.amount > 0n || k === 0);
   if (!cs.length || cs[0]!.amount <= 0n) return { utxo: null, prefund: null, issue: null };
@@ -908,8 +909,11 @@ async function findCustody(
     if (family === 'kcc20' && !ext) return { utxo: null, issue: 'no-extension' };
     const st = custodyState(family, c.amount, record.covenantId, ext);
     const spk = kob.tokenScriptPublicKey(program, st);
-    // an unbound curve names no token (zero): its custody script, owned by the curve alone, is enough
-    const u = (await ask([spk])).find((x) => (c.token === ZERO_TOKEN ? !!x.covenantId : x.covenantId === c.token) && x.scriptPublicKey === spk);
+    // an unbound curve names no token (zero): its custody is the output of its own transaction (its token's genesis) at that script,
+    // and its token is that output's covenant id
+    const mine = (x: NodeUtxo): boolean =>
+      c.token === ZERO_TOKEN ? !!x.covenantId && x.transactionId.toLowerCase() === orderTx.toLowerCase() : x.covenantId === c.token;
+    const u = (await ask([spk])).find((x) => mine(x) && x.scriptPublicKey === spk);
     if (!u) return { utxo: null, issue: 'not-found' };
     return { utxo: { transactionId: u.transactionId, index: u.index, amount: u.amount, blockDaaScore: u.blockDaaScore, covenantId: u.covenantId, state: st }, issue: null };
   };

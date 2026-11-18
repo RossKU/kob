@@ -157,6 +157,15 @@ export function secondTokenOf(st: OrderState): { covenantId: Hex; tplHash: Hex; 
 }
 
 /**
+ * The token of an unbound curve's custody: the custody's covenant id when it is an output of the
+ * curve's own transaction (its token's genesis, which an unbound curve never leaves), else null.
+ */
+export function unboundCustodyToken(snap: Pick<OrderSnapshot, 'order' | 'custody'>): Hex | null {
+  const c = snap.custody;
+  return c?.covenantId && c.transactionId.toLowerCase() === snap.order.transactionId.toLowerCase() ? c.covenantId : null;
+}
+
+/**
  * Turns an indexer `OrderView` into a snapshot. It needs the decoded `state` of the current UTXO,
  * `current`, and the custody UTXOs the state holds. The token states of custodies and strays are
  * taken from the view (`state`) or rebuilt from owner, amount and extension commitment. A pair
@@ -654,10 +663,12 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
   if (st.state.maker !== env.maker) {
     return { error: [issue('cancel.not-maker', 'error', 'this order belongs to another key: only its maker can cancel it', { covenantId: snap.covenantId })] };
   }
-  // an unbound curve (created in its token's genesis) names no token in its state: its token is its custody's
-  const unbound = curveFactsOf(st)?.unbound ? (snap.custody?.covenantId ?? null) : null;
+  // an unbound curve (created in its token's genesis) names no token in its state: its token is its custody's, the output of
+  // the curve's own transaction (the builder refuses any other)
+  const isUnbound = curveFactsOf(st)?.unbound ?? false;
+  const unbound = isUnbound ? unboundCustodyToken(snap) : null;
   const cs = custodiesOf(st).map((c) => (unbound ? { ...c, token: unbound } : c));
-  if ((cs[0]?.amount ?? 0n) > 0n && !snap.custody) {
+  if (((cs[0]?.amount ?? 0n) > 0n && !snap.custody) || (isUnbound && !unbound)) {
     return { error: [issue('cancel.custody-missing', 'error', 'the order\'s custody token UTXO is unknown: refresh the order from the indexer or node', { covenantId: snap.covenantId })] };
   }
   if ((cs[1]?.amount ?? 0n) > 0n && !snap.prefund) {

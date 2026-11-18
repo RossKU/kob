@@ -185,3 +185,52 @@ describe('amend of a curve', () => {
     expect(buildReplacement(u, 'curve', { curve: { minFill: 8n * BigInt(t.levelSize) } }).issues.map((i) => i.code)).toContain('curve-min-fill-reach');
   });
 });
+
+describe('an unbound curve on the node (its custody the genesis output of its token)', () => {
+  // the genesis on a fake node, and the indexer's view of its curve: the custody under the token's covenant id
+  async function world() {
+    const { FakeChain, orderViewOf, snapshotOfRecovered, tokenUtxoView } = await import('../testing/chain-fixtures');
+    const g = genesisWithCurve();
+    const chain = new FakeChain();
+    chain.applyTx(g.built.tx);
+    const snap0 = snapshotOfRecovered(kob.recoverOrders(g.built.tx)[0]!);
+    const token = g.token.covenantId;
+    const custody = tokenUtxoView({ ...snap0.custody!, covenantId: token }, 'custody', { token });
+    const view = orderViewOf(kob, snap0, { side: 1, token, custody: { expected_amount: snap0.custody!.state.amount, utxo: custody, ok: true } });
+    return { g, chain, snap0, token, view };
+  }
+
+  it('is confirmed under its custody token and cancelled (the snapshot check named the zero token before)', async () => {
+    const { testAddress, signAndValidate, nodeFactsOf } = await import('../testing/chain-fixtures');
+    const { planCancel, snapshotFromOrderView } = await import('./cancel');
+    const { confirmSnapshotOnNode } = await import('./node-verify');
+    const { decodeSigning } = await import('./decode');
+    const w = await world();
+    const confirmed = await confirmSnapshotOnNode(kob, w.chain, snapshotFromOrderView(w.view), testAddress);
+    expect(confirmed.custody?.covenantId).toBe(w.token);
+    expect(confirmed.custody?.transactionId).toBe(w.g.built.tx.id);
+    const c = planCancel({ kob, maker, funding: [], tokenUtxos: [], clock: { daa: 78_000_000n } }, confirmed);
+    expect(c.issues.filter((i) => i.severity === 'error')).toEqual([]);
+    expect(c.ok).toBe(true);
+    expect(c.tokensReturned).toBe(900n * SCALE);
+    signAndValidate(kob, c.built!, ['33'.repeat(32)]);
+    const s = decodeSigning({ kob, built: c.built!, maker, registry: null, expected: c.expected, nodeInputs: nodeFactsOf(c.built!) });
+    expect(s.blocking).toEqual([]);
+  });
+
+  it('a custody from another transaction (a look-alike of another token at the same script) is neither confirmed nor cancelled', async () => {
+    const { testAddress } = await import('../testing/chain-fixtures');
+    const { planCancel, snapshotFromOrderView } = await import('./cancel');
+    const { confirmSnapshotOnNode } = await import('./node-verify');
+    const w = await world();
+    const other = 'cd'.repeat(32);
+    const out0 = w.g.built.tx.outputs[0]!;
+    w.chain.add({ transactionId: 'ab'.repeat(32), index: 0, amount: out0.value, scriptPublicKey: out0.scriptPublicKey, covenantId: other });
+    const claimed = snapshotFromOrderView(w.view);
+    const fake = { ...claimed, custody: { ...claimed.custody!, transactionId: 'ab'.repeat(32), index: 0, covenantId: other } };
+    await expect(confirmSnapshotOnNode(kob, w.chain, fake, testAddress)).rejects.toMatchObject({ code: 'node-mismatch' });
+    const c = planCancel({ kob, maker, funding: [], tokenUtxos: [], clock: { daa: 78_000_000n } }, fake);
+    expect(c.ok).toBe(false);
+    expect(c.issues.map((i) => i.code)).toContain('cancel.custody-missing');
+  });
+});

@@ -9,8 +9,8 @@
 // id, blocks the action.
 import type { NodeApi } from '../data/node';
 import type { OrderSnapshot } from './cancel';
-import { SnapshotError, ownTokenFacts } from './cancel';
-import { custodiesOf } from './order-facts';
+import { SnapshotError, ownTokenFacts, unboundCustodyToken } from './cancel';
+import { curveFactsOf, custodiesOf } from './order-facts';
 import type { Hex, TokenProgram, TokenState, TokenUtxo, TxInputJson } from './types';
 import type { KobWasm } from './wasm';
 
@@ -170,9 +170,13 @@ export interface SnapshotCheck {
 /** Derives the outpoints a snapshot must have on the node and the check of the node's answer. */
 export function snapshotCheck(kob: KobWasm, snap: OrderSnapshot): SnapshotCheck {
   const st = snap.order.state;
-  const own = ownTokenFacts(st);
+  // An unbound curve (created in its token's genesis) names no token in its state: its token is its
+  // custody's, an output of the curve's own transaction, and the node must hold that custody under
+  // that token. A custody from another transaction stays under the zero id, which no node confirms.
+  const bind = curveFactsOf(st)?.unbound ? unboundCustodyToken(snap) : null;
+  const own = ownTokenFacts(st).map((t) => (bind ? { ...t, covenantId: bind } : t));
   const tplOf = (token: Hex | null | undefined): Hex => own.find((t) => t.covenantId === token)?.tplHash ?? own[0]!.tplHash;
-  const cs = custodiesOf(st);
+  const cs = custodiesOf(st).map((c) => (bind ? { ...c, token: bind } : c));
   // An order under a retired template, which can only be cancelled, sits at that template's script.
   const orderSpk = snap.retired ? kob.retiredScriptPublicKey(snap.retired, st) : kob.scriptPublicKey(st);
   // Each custody is on its own token's program. The first is custodies[0] and the prefund is

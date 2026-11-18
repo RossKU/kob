@@ -52,3 +52,42 @@ describe('verifyBook: a curve', () => {
     expect(kept[1]!.amount_left).toBe(curveFactsOf(w.curve.order.state)!.levelSize.toString());
   });
 });
+
+describe('verifyBook: an unbound curve (made in its token genesis, its custody genesis output 0)', () => {
+  it('is kept under its custody token, and is not this market\'s with a custody from another transaction', async () => {
+    const { issueRaw } = await import('../kob/issue');
+    const { curveTable } = await import('../kob/curve');
+    const { snapshotOfRecovered, tokenUtxoView } = await import('../testing/chain-fixtures');
+    const SCALE = 100_000_000n;
+    const sell = 900n * SCALE;
+    const t = curveTable(kob, { amount: sell, levels: 10, total: 100n * SCALE, multipleMilli: 5000n, scale: SCALE });
+    const g = issueRaw(kob, {
+      name: 'Curve Token', ticker: 'CRV', decimals: 8, supply: (1000n * SCALE).toString(),
+      holders: [{ owner: '0'.repeat(64), ownerScheme: 4, amount: sell.toString() }, { owner: MAKER.pk, ownerScheme: 0, amount: (100n * SCALE).toString() }],
+      funding: [{ transactionId: '07'.repeat(32), index: 1, amount: (500n * SCALE).toString(), blockDaaScore: '5000', pubkey: MAKER.pk }],
+      network: 'testnet-10',
+      curve: { custody: 0, levelSize: t.levelSize.toString(), table: t.table.map(String), minFill: '1' },
+    } as never);
+    const chain = new FakeChain();
+    chain.applyTx(g.built.tx);
+    const curve = snapshotOfRecovered(kob.recoverOrders(g.built.tx)[0]!);
+    const token = g.token.covenantId;
+    const st = curve.order.state.state as unknown as Record<string, string>;
+    const market = { covenantId: token, templateHash: st.tokenTplHash!, extensionCommitment: st.extensionCommitment! };
+    const viewWith = (custody: OrderSnapshot['custody']) =>
+      orderViewOf(kob, curve, { side: 1, token, expiry_daa: null, custody: { expected_amount: curve.custody!.state.amount, utxo: tokenUtxoView(custody!, 'custody', { token: custody!.covenantId! }), ok: true } });
+    const run = async (v: OrderView) => {
+      const deps: BookVerifyDeps = { kob, node: chain, indexer: { order: async () => v }, toAddress: testAddress, market };
+      return verifyBook(deps, book(rowsOf(curve, 2)));
+    };
+    const own = await run(viewWith({ ...curve.custody!, covenantId: token }));
+    expect(own.dropped).toEqual([]);
+    expect(own.view.asks).toHaveLength(2);
+    // a look-alike at the custody's script in another transaction, of the market's token as the indexer claims
+    const out0 = g.built.tx.outputs[0]!;
+    chain.add({ transactionId: 'ab'.repeat(32), index: 0, amount: out0.value, scriptPublicKey: out0.scriptPublicKey, covenantId: token });
+    const other = await run(viewWith({ ...curve.custody!, transactionId: 'ab'.repeat(32), index: 0, covenantId: token }));
+    expect(other.view.asks).toHaveLength(0);
+    expect(other.dropped.length).toBeGreaterThan(0);
+  });
+});

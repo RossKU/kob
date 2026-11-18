@@ -3,6 +3,7 @@
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
 import { clickConnectOption, gotoOrders } from '../helpers/env';
+import { runFlow } from '../helpers/orders';
 import { confirmReceipt, readReceipt } from '../helpers/ticket';
 
 const KAS = 100_000_000n;
@@ -91,6 +92,16 @@ test.describe('Create token: after creation', () => {
     await expect(bal.getByTestId('balance-escrowed')).toContainText('900,000', { timeout: 15_000 });
     await expect(bal).not.toContainText('raw amount');
     await expect(page.getByTestId(`balance-row-${'0'.repeat(64)}`)).toHaveCount(0);
+    // its cancel from Open orders: an unbound curve's token is its custody's (genesis output 0), which the node confirms under that token;
+    // the 900,000 CURV come back to alice
+    await gotoOrders(page, 'open');
+    await page.getByTestId(`order-cancel-${ids[2]}`).click();
+    const [cancelled] = await runFlow(page, mock, null, { steps: 1 });
+    expect(cancelled!.submission.closed).toEqual([{ covenantId: ids[2], entry: 'cancel', status: 'cancelled' }]);
+    const back = cancelled!.submission.token_outputs
+      .filter((o) => o.role === 'owned' && o.owner === TEST_KEYS.alice.pubkey)
+      .reduce((n, o) => n + BigInt(o.amount), 0n);
+    expect(back).toBe(900_000n * 100_000_000n);
   });
 
   test('sells at one price: the token keeps a share, and the result opens the ticket on the sale', async ({ appPage: page, mock }) => {
