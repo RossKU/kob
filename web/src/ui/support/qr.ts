@@ -1,18 +1,22 @@
-// A QR code as one SVG path (pure, tested in qr.test.ts). The modules come from qrcode-generator; the SVG is drawn by SupportPage.tsx as elements, so no
-// markup string is ever parsed (CSP and Trusted Types as everywhere else in the app).
+// A QR code as one SVG path. It is pure and tested in qr.test.ts. The modules come from
+// qrcode-generator. SupportPage.tsx draws the SVG as elements, so no markup string is ever parsed,
+// which keeps CSP and Trusted Types as everywhere else in the app.
 import qrcode from 'qrcode-generator';
 
-/** The light margin the standard asks for, in modules: wallets need it to find the code on a dark page. */
+/**
+ * The light margin the standard asks for, in modules. Wallets need it to find the code on a dark
+ * page.
+ */
 export const QR_QUIET_ZONE = 4;
 
 export interface QrPath {
-  /** width and height in modules, the quiet zone included */
+  /** Width and height in modules, the quiet zone included. */
   size: number;
-  /** the dark modules, in module units */
+  /** The dark modules, in module units. */
   path: string;
 }
 
-/** `text` as a QR code of error correction level M, the version as small as it fits. */
+/** `text` as a QR code of error correction level M, with the version as small as it fits. */
 export function qrPath(text: string): QrPath {
   const qr = qrcode(0, 'M');
   qr.addData(text, 'Byte');
