@@ -1,10 +1,18 @@
-// Pre-sign model of a TOKEN ISSUANCE (genesis) transaction and, for a creation under KCC-23, of its preparation (the first transaction: the
-// wallet's coins to its own output 0 and change, the payload declaring the token details; the genesis spends that output 0). The preparation
-// must pay nothing but the wallet, and its declaration must state the claimed name, ticker and decimals. The order decoder (kob/decode.ts) cannot describe a genesis: its outputs are brand-new
-// covenants of a token that has no inputs yet. So this module re-derives what the transaction does from `built.tx` + kob-wasm alone and compares
-// it with what the planner claims (`IssueToken`): every token output must carry exactly the script `tokenScriptPublicKey(program, state)` of the
-// claimed state, be bound to the claimed covenant id, hold the claimed carrier; the amounts must add up to the supply; nothing else may leave the
-// wallet except change to its own key; the fee is re-derived from inputs minus outputs. Any disagreement is a BLOCKING finding.
+// Pre-sign model of a token issuance (genesis) transaction. For a creation under KCC-23 it also
+// covers the preparation, the first transaction. The preparation moves the wallet's coins to its
+// own output 0 and change, with a payload declaring the token details, and the genesis spends that
+// output 0. The preparation must pay nothing but the wallet, and its declaration must state the
+// claimed name, ticker and decimals.
+//
+// The order decoder (kob/decode.ts) cannot describe a genesis, because its outputs are brand-new
+// covenants of a token that has no inputs yet. So this module re-derives what the transaction does
+// from `built.tx` and kob-wasm alone and compares it with what the planner claims (`IssueToken`):
+// - every token output must carry exactly the script `tokenScriptPublicKey(program, state)` of the
+//   claimed state, be bound to the claimed covenant id and hold the claimed carrier;
+// - the amounts must add up to the supply;
+// - nothing else may leave the wallet except change to its own key;
+// - the fee is re-derived from inputs minus outputs.
+// Any disagreement is a blocking finding.
 import { issuedTokenUtxos, spendsPreparation, type IssueCurve, type IssueToken } from '../../kob/issue';
 import { curveNumbersOfState, curveProblems, tablePreview } from '../../kob/curve';
 import { decodeDeclaration } from '../../kob/kcc23';
@@ -23,36 +31,53 @@ const GROUP = { group: ',' };
 const kas = (v: bigint): string => `${formatKas(v, GROUP)} KAS`;
 const short = (h: string): string => (h.length > 12 ? `${h.slice(0, 4)}...${h.slice(-4)}` : h);
 const p2pkSpk = (pk: Hex): string => `000020${pk}ac`;
-/** More than this in fees for a genesis is never legitimate (a 8-output genesis costs a few hundredths of a KAS). */
+/**
+ * More than this in fees for a genesis is never legitimate (an 8-output genesis costs a few
+ * hundredths of a KAS).
+ */
 const MAX_FEE = 100_000_000n;
 
 export interface IssuanceInput {
   kob: KobWasm;
   built: BuiltTx;
   /**
-   * the creation's KCC-23 preparation (the genesis spends its output 0): its inputs are the wallet's coins, its outputs the wallet's own (the
-   * genesis funding, change), its payload the declaration, which must state the claimed name, ticker and decimals. Absent: a bare genesis.
+   * The creation's KCC-23 preparation (the genesis spends its output 0). Its inputs are the
+   * wallet's coins, its outputs the wallet's own (the genesis funding, change), and its payload the
+   * declaration, which must state the claimed name, ticker and decimals. Absent means a bare
+   * genesis.
    */
   prep?: BuiltTx;
-  /** the wallet signs both transactions of a creation under one approval (`signChain`); false: it asks once per transaction (said as info) */
+  /**
+   * The wallet signs both transactions of a creation under one approval (`signChain`). False means
+   * it asks once per transaction (said as info).
+   */
   oneApproval?: boolean;
-  /** a saved creation finished later: the preparation is signed already, only the genesis is asked for (said as info) */
+  /**
+   * A saved creation finished later. The preparation is signed already and only the genesis is
+   * asked for (said as info).
+   */
   resumed?: boolean;
   token: IssueToken;
   /**
-   * the curve the genesis places ("Sell on a curve"): its output must carry exactly the script of this unbound state, made by this wallet, of the
-   * issued program and commitment, bound to its own covenant, and its custody must be the claimed holder owned by it with exactly its amount
+   * The curve the genesis places ("Sell on a curve"). Its output must carry exactly the script of
+   * this unbound state, made by this wallet, of the issued program and commitment, bound to its own
+   * covenant. Its custody must be the claimed holder, owned by it, with exactly its amount.
    */
   curve?: IssueCurve;
-  /** "Sell at one price": the sell order the wallet places after the creation (not part of these transactions; shown in the summary only) */
+  /**
+   * "Sell at one price": the sell order the wallet places after the creation. It is not part of
+   * these transactions and is shown in the summary only.
+   */
   askSale?: { sell: bigint; price: bigint };
-  /** the wallet's x-only public key */
+  /** The wallet's x-only public key. */
   maker: Hex;
-  /** the fee rate and where it came from (`feeDisclosureOf(built)`) */
+  /** The fee rate and where it came from (`feeDisclosureOf(built)`). */
   fee?: FeeDisclosure | null;
   /**
-   * the wallet's fee policy: a declared fee rate above max(maxRate, floor) (the floor when the policy is off) is blocking, and with a dynamic policy the
-   * 1 KAS sanity ceiling is raised to the policy's per-transaction cap (never lowered). Absent = the fixed ceiling, no rate check.
+   * The wallet's fee policy. A declared fee rate above max(maxRate, floor) is blocking, where the
+   * floor stands in when the policy is off. With a dynamic policy the 1 KAS sanity ceiling is
+   * raised to the policy's per-transaction cap, never lowered. Absent means the fixed ceiling and
+   * no rate check.
    */
   feePolicy?: Pick<FeePolicy, 'dynamic' | 'floor' | 'maxRate' | 'maxFeeSompi'>;
   tr?: Translate;
@@ -60,7 +85,10 @@ export interface IssuanceInput {
 
 const row = (id: string, label: string, value: string, tone: Row['tone'] = 'normal', detail?: string): Row => ({ id, label, value, tone, ...(detail ? { detail } : {}) });
 
-/** Verifies the genesis transaction (and the creation's preparation when given) and returns the confirmation model (same shape as the order screens). */
+/**
+ * Verifies the genesis transaction (and the creation's preparation when given) and returns the
+ * confirmation model, in the same shape as the order screens.
+ */
 export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = []): ConfirmModel {
   const tr = i.tr ?? t;
   const { kob, built, token } = i;
@@ -70,10 +98,12 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   const block = (code: string, params?: Params, extra: Partial<Finding> = {}) =>
     findings.push({ code, severity: 'blocking', message: code, ...(params ? { params } : {}), text: tr(`confirm.issue.finding.${code}`, params), ...extra });
   const warn = (code: string, params?: Params) => findings.push({ code, severity: 'warning', message: code, ...(params ? { params } : {}), text: tr(`confirm.issue.finding.${code}`, params) });
-  // `textKey`: the dictionary key of the text when it differs from the code (a count has a `.one` and an `.other` text)
+  // `textKey` is the dictionary key of the text when it differs from the code (a count has a `.one`
+  // and an `.other` text).
   const info = (textKey: string, params?: Params, code: string = textKey) => findings.push({ code, severity: 'info', message: code, ...(params ? { params } : {}), text: tr(`confirm.issue.finding.${textKey}`, params) });
 
-  // ---- inputs: only the wallet's own P2PK KAS (of the preparation and of the genesis, which spends the preparation's output 0)
+  // ---- Inputs: only the wallet's own P2PK KAS, of the preparation and of the genesis, which
+  // spends the preparation's output 0.
   const ownInputs = (b: BuiltTx) => {
     let sum = 0n;
     b.tx.inputs.forEach((inp, n) => {
@@ -89,7 +119,8 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   };
   const genesisIn = ownInputs(built);
   const prep = i.prep ?? null;
-  // the wallet's coins: the preparation's inputs (the genesis's one input is the preparation's output 0, the wallet's own meanwhile)
+  // The wallet's coins are the preparation's inputs. The genesis's one input is the preparation's
+  // output 0, the wallet's own meanwhile.
   let kasIn = genesisIn;
   let prepFee = 0n;
   let prepChange = 0n;
@@ -105,7 +136,8 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     const prepOut = prep.tx.outputs.reduce((a, o) => a + BigInt(o.value), 0n);
     prepFee = kasIn - prepOut;
     if (prepFee < 0n || prepFee !== BigInt(prep.fee.fee)) block('fee', { fee: kas(prepFee), declared: kas(BigInt(prep.fee.fee)) });
-    // the declaration: KCC-23 with the claimed name, ticker and decimals (what the token will say about itself on chain, forever)
+    // The declaration: KCC-23 with the claimed name, ticker and decimals. It is what the token will
+    // say about itself on chain, forever.
     try {
       declared = decodeDeclaration(kob, prep.tx.payload);
     } catch {
@@ -114,15 +146,16 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     const d = declared?.token;
     if (!d || d.name !== token.name || d.symbol !== token.ticker || d.decimals !== token.decimals) block('declaration');
   }
-  // ---- a creator lock: only as the declaration states it (its script, parsed by kob-wasm), of this wallet's key: the outputs its hash owns
-  // (owner scheme 0x03, no borrow setting) are the wallet's share, locked until its time. Anything else of scheme 0x03 is another's.
+  // ---- A creator lock: only as the declaration states it (its script, parsed by kob-wasm), of
+  // this wallet's key. The outputs its hash owns (owner scheme 0x03, no borrow setting) are the
+  // wallet's share, locked until its time. Anything else of scheme 0x03 is another's.
   const lock: CreatorLockInfo | null = (() => {
     const l = lockOfScript(kob, declared?.token.lock ?? null);
     return l && l.key === maker ? l : null;
   })();
   const lockedForYou = (o: IssueToken['outputs'][number]): boolean => !!lock && o.ownerScheme === 3 && o.owner === lock.authority && o.borrowScheme === 0;
 
-  // ---- token outputs: exactly what the planner claims
+  // ---- Token outputs: exactly what the planner claims.
   const claimed = issuedTokenUtxos({ built, token });
   const tokenIdx = new Set(token.outputs.map((o) => o.index));
   const curve = i.curve ?? null;
@@ -148,7 +181,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     if (o.owner === maker && o.ownerScheme === 0) toMaker += BigInt(o.amount);
     else if (lockedForYou(o)) lockedToMaker += BigInt(o.amount);
   });
-  // ---- the curve: re-derived from its claimed state, never trusted
+  // ---- The curve: re-derived from its claimed state, never trusted.
   if (curve) {
     const st = curve.state.state;
     const out = tx.outputs[curve.output];
@@ -166,7 +199,8 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
       st.maker === maker && st.tokenCovId === zero && st.tokenTplHash === token.templateHash && st.extensionCommitment === token.extensionCommitment &&
       BigInt(st.amountLeft) === BigInt(st.total) && !!custody && custody.owner === curve.covenantId && custody.ownerScheme === 4 && custody.borrowScheme === 0 &&
       BigInt(custody.amount) === BigInt(st.amountLeft) && BigInt(out.value) === BigInt(curve.carrier) &&
-      // stricter than the protocol: a table that never falls, a tip below every level, the token's own scale
+      // Stricter than the protocol: a table that never falls, a tip below every level, the token's
+      // own scale.
       curveProblems(st, token.decimals).length === 0;
     if (!ok) block('curve', { output: curve.output });
     else carriers += BigInt(out.value);
@@ -179,7 +213,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   const tpl = kob.templates().find((x) => x.name === token.program);
   if (!tpl || tpl.hash !== token.templateHash) block('template');
 
-  // ---- everything else must be change back to the wallet
+  // ---- Everything else must be change back to the wallet.
   let change = prepChange;
   tx.outputs.forEach((out, n) => {
     if (tokenIdx.has(n) || (curve && n === curve.output)) return;
@@ -187,7 +221,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     else change += BigInt(out.value);
   });
 
-  // ---- fee: the genesis's, plus the preparation's
+  // ---- Fee: the genesis's, plus the preparation's.
   const totalOut = tx.outputs.reduce((a, o) => a + BigInt(o.value), 0n);
   const genesisFee = genesisIn - totalOut;
   const fee = genesisFee + prepFee;
@@ -206,7 +240,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     }
   }
 
-  // ---- disclosure findings
+  // ---- Disclosure findings.
   warn('unaudited');
   const othersAll = token.outputs.filter((o) => !(o.owner === maker && o.ownerScheme === 0) && !(curve && o.owner === curve.covenantId && o.ownerScheme === 4) && !lockedForYou(o));
   const lockDate = lock ? formatRowDate(Number(lock.until)) : '';
@@ -242,7 +276,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
       }),
     ],
   });
-  // the curve: one sell order of the wallet, created with the token
+  // The curve: one sell order of the wallet, created with the token.
   if (curve) {
     const st = curve.state.state;
     const total = BigInt(st.total);
@@ -266,7 +300,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
       ],
     });
   }
-  // the declaration (KCC-23): what the token says about itself on chain, committed to by its id
+  // The declaration (KCC-23): what the token says about itself on chain, committed to by its id.
   if (prep && declared) {
     const d = declared.token;
     const opt = (id: string, v: string | null) => (v ? [row(`declare-${id}`, tr(`confirm.issue.declare.${id}`), v, 'muted')] : []);
@@ -296,7 +330,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   const feeDisc = i.fee ?? null;
   sections.push({ id: 'fee', title: tr('confirm.section.fee'), rows: [row('fee', tr('confirm.fee.network'), kas(fee), 'normal', tr('confirm.fee.hint')), ...(feeDisc?.rows ?? [])] });
   const delta = change - kasIn;
-  // the net effect first: what the wallet gains and loses
+  // The net effect first: what the wallet gains and loses.
   sections.unshift({
     id: 'net', title: tr('confirm.section.net'),
     rows: [
@@ -306,7 +340,8 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     ],
   });
 
-  // the wallet's coins are the preparation's inputs; its outputs (the genesis funding, change) follow the genesis's
+  // The wallet's coins are the preparation's inputs. Its outputs (the genesis funding, change)
+  // follow the genesis's.
   const inTx = prep ?? built;
   const advanced: AdvancedModel = {
     txid: tx.id,
@@ -328,7 +363,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     payload: declared ? [declared.json] : [],
   };
 
-  // ---- the short summary: the same verified figures, the explanations behind a "?"
+  // ---- The short summary: the same verified figures, with the explanations behind a "?".
   const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
   const line = (r: Row) => `${r.label}: ${r.value}${r.detail ? ` (${r.detail})` : ''}`;
   const brief: BriefRow[] = [

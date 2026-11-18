@@ -1,4 +1,5 @@
-// Pure helpers of the signing flow: the stage stepper, how a failure is classified (neutral / retry / re-plan) and explorer links.
+// Pure helpers of the signing flow: the stage stepper, how a failure is classified (neutral, retry
+// or re-plan) and explorer links.
 import { t } from '../../i18n';
 import { explorerTxUrl as configTxUrl, parseNetwork } from '../../config';
 import { signFlowText } from '../../i18n/issue-text';
@@ -17,13 +18,13 @@ export function stepStates(current: SignStage | null): { stage: FlowStage; state
 }
 
 export type FailureKind =
-  /** the user declined in the wallet: neutral, nothing happened */
+  /** The user declined in the wallet. Neutral, nothing happened. */
   | 'rejected'
-  /** nothing was broadcast and the same transaction may be tried again */
+  /** Nothing was broadcast and the same transaction may be tried again. */
   | 'retry'
-  /** the inputs changed or the transaction is invalid: it must be built again from fresh data */
+  /** The inputs changed or the transaction is invalid. It must be built again from fresh data. */
   | 'replan'
-  /** the node already has exactly this transaction: treat it as submitted */
+  /** The node already has exactly this transaction. Treat it as submitted. */
   | 'known';
 
 export interface Failure {
@@ -31,12 +32,13 @@ export interface Failure {
   code: string;
   stage: string;
   text: string;
-  /** the raw technical text (wallet / node / library), shown only behind "Details" */
+  /** The raw technical text (wallet, node or library), shown only behind "Details". */
   raw?: string;
 }
 
-// `genesis-pending`: a creation whose preparation went out and whose genesis did not: never signed again here, the Create token page sends the saved
-// genesis (wallet/create.ts `resumeCreation`)
+// `genesis-pending` is a creation whose preparation went out and whose genesis did not. It is never
+// signed again here, and the Create token page sends the saved genesis (wallet/create.ts
+// `resumeCreation`).
 const REPLAN_CODES = new Set(['orphan', 'double-spend', 'fee', 'script', 'invalid', 'validation', 'network-mismatch', 'account-changed', 'inputs-changed', 'inputs-unconfirmed', 'clock-moved', 'genesis-pending']);
 
 /** Classifies whatever `signAndSubmit` threw. Never throws. */
@@ -52,7 +54,10 @@ export function classifyFailure(e: unknown): Failure {
   return { kind: 'retry', code: 'other', stage: 'unknown', text: t('confirm.failedOther', undefined), raw };
 }
 
-/** Block-explorer page of a transaction (kaspa.stream, `config.explorerUrl` overrides the base), or null for an unknown network or a malformed id. */
+/**
+ * Block-explorer page of a transaction (kaspa.stream, `config.explorerUrl` overrides the base).
+ * Null for an unknown network or a malformed id.
+ */
 export function explorerTxUrl(network: string, txid: string, explorerUrl = ''): string | null {
   const n = parseNetwork(network);
   return n ? configTxUrl({ network: n, explorerUrl }, txid) : null;

@@ -1,12 +1,20 @@
-// The PRE-SIGN CONFIRMATION SCREEN of a token creation (the Create token page). Order actions have none (ui/confirm/send.ts): a genesis creates a
-// token whose facts can never change, so this dialog decodes the built transactions with the issuance verifier (the KCC-23 preparation and
-// the genesis spending it), shows the WHOLE effect in plain words (a short summary first, the risk and the wallet notes one line each with their full
-// text behind a "?", every verified section under "All details"), blocks signing on any blocking finding, asks for an explicit
-// acknowledgement, then runs `signAndSubmitCreation` (wallet/create.ts: one approval for the private-key signer; an extension wallet signs and
-// sends the preparation, then is asked for the genesis once its wallet node sees the preparation) with the signing stepper (Prepare, Create token), and reports the
-// accepted genesis. A creation whose preparation went out but whose genesis did not (declined, not visible in time, refused) closes this
-// screen as `pending`: the Create token page finishes it (its record, data/creations.ts) on this same screen (`resume`): the creation planned
-// again from the record and checked as a fresh one, only the genesis signed (`finishCreation`).
+// The pre-sign confirmation screen of a token creation (the Create token page). Order actions have
+// none (ui/confirm/send.ts). A genesis creates a token whose facts can never change, so this
+// dialog decodes the built transactions with the issuance verifier (the KCC-23 preparation and the
+// genesis spending it). It then:
+// - shows the whole effect in plain words: a short summary first, the risk and the wallet notes
+//   one line each with their full text behind a "?", and every verified section under "All
+//   details";
+// - blocks signing on any blocking finding and asks for an explicit acknowledgement;
+// - runs `signAndSubmitCreation` (wallet/create.ts) with the signing stepper (Prepare, Create
+//   token). The private-key signer gets one approval. An extension wallet signs and sends the
+//   preparation, then is asked for the genesis once its wallet node sees the preparation;
+// - reports the accepted genesis.
+//
+// A creation whose preparation went out but whose genesis did not (declined, not visible in time,
+// refused) closes this screen as `pending`. The Create token page finishes it from its record
+// (data/creations.ts) on this same screen (`resume`). The creation is planned again from the
+// record and checked as a fresh one, and only the genesis is signed (`finishCreation`).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { readClock } from '../../app/env';
@@ -36,29 +44,38 @@ export type ConfirmResult =
   | { status: 'cancelled' }
   | { status: 'submitted'; txid: string; records: PlacementRecord[] }
   | { status: 'failed'; message: string; code?: string }
-  /** the preparation is on chain, the genesis is not: the creation record finishes it (`declined`: the wallet did not sign the genesis) */
+  /**
+   * The preparation is on chain and the genesis is not. The creation record finishes it
+   * (`declined`: the wallet did not sign the genesis).
+   */
   | { status: 'pending'; message: string; declined?: boolean };
 
 export interface ConfirmSignProps {
-  /** the unsigned genesis transaction to decode, show, sign and broadcast */
+  /** The unsigned genesis transaction to decode, show, sign and broadcast. */
   built: BuiltTx;
-  /** i18n key or literal heading of the action */
+  /** An i18n key or literal heading of the action. */
   title: string;
-  /** label stored in the records of the transaction */
+  /** Label stored in the records of the transaction. */
   label?: string;
-  /** the token facts the planner claims: a genesis has no token inputs, so they are verified against the transaction */
+  /**
+   * The token facts the planner claims. A genesis has no token inputs, so they are verified against
+   * the transaction.
+   */
   issue: { token: IssueToken; curve?: IssueCurve; askSale?: { sell: string; price: string } };
   /**
-   * a creation under KCC-23: the preparation the genesis (`built`) spends, with what it declares; signed with the genesis (one approval where
-   * the wallet can give it) and sent first. Absent: a bare genesis (signAndSubmit).
+   * A creation under KCC-23: the preparation the genesis (`built`) spends, with what it declares.
+   * It is signed with the genesis (one approval where the wallet can give it) and sent first.
+   * Absent means a bare genesis (signAndSubmit).
    */
   creation?: { prep: BuiltTx; declaration: IssueDeclaration; docs: IssueDocs };
   /**
-   * finishes this saved creation instead (`creation` and `built` are it planned again, wallet/create.ts `checkSavedCreation`): its preparation is
-   * signed already, only the genesis is asked for. Closes as `failed` with the code when the coin is spent or the record does not check out.
+   * Finishes this saved creation instead (`creation` and `built` are it planned again,
+   * wallet/create.ts `checkSavedCreation`). Its preparation is signed already, and only the genesis
+   * is asked for. Closes as `failed` with the code when the coin is spent or the record does not
+   * check out.
    */
   resume?: CreationRecord;
-  /** called once when the flow ends (cancelled, submitted or failed) */
+  /** Called once when the flow ends (cancelled, submitted or failed). */
   onClose(result: ConfirmResult): void;
 }
 
@@ -97,7 +114,7 @@ function SectionView(props: { section: Section }) {
 
 const findingText = (f: Finding): string => f.text ?? issueText(f);
 
-/** The short summary: one row per fact, its explanation behind a "?" beside the label. */
+/** The short summary: one row per fact, with its explanation behind a "?" beside the label. */
 function Brief(props: { rows: BriefRow[] }) {
   return (
     <section class="cf-brief" data-testid="confirm-brief" aria-labelledby="cf-brief-title">
@@ -126,7 +143,10 @@ function Brief(props: { rows: BriefRow[] }) {
   );
 }
 
-/** what the wallet asks and shows: the codes of the creation's wallet notes (one line on the screen, the full text behind its "?") */
+/**
+ * What the wallet asks and shows: the codes of the creation's wallet notes (one line on the screen,
+ * the full text behind its "?").
+ */
 const WALLET_CODES = ['walletTwice', 'resumed', 'walletBlind'];
 
 function FindingList(props: { items: Finding[]; testid: string; class: string }) {
@@ -152,9 +172,15 @@ export function ConfirmSign(props: ConfirmSignProps) {
   const [ack, setAck] = useState(false);
   const [phase, setPhase] = useState<Phase>('review');
   const [stage, setStage] = useState<SignStage | null>(null);
-  /** a creation with a wallet that asks once per transaction: which approval it shows now (confirm.chain.*) */
+  /**
+   * A creation with a wallet that asks once per transaction: which approval it shows now
+   * (confirm.chain.*).
+   */
   const [chainNote, setChainNote] = useState<'prep' | 'wait' | 'genesis' | null>(null);
-  /** a creation: which of its two transactions the stages are of, and whether the node took the preparation (the stepper) */
+  /**
+   * A creation: which of its two transactions the stages are of, and whether the node took the
+   * preparation (the stepper).
+   */
   const [chainAt, setChainAt] = useState<{ step: CreationStep | null; waiting: boolean; prepSent: boolean; tried: boolean }>({ step: null, waiting: false, prepSent: !!props.resume?.prepSent, tried: false });
   const [failure, setFailure] = useState<Failure | null>(null);
   const [txid, setTxid] = useState<string | null>(null);
@@ -178,30 +204,34 @@ export function ConfirmSign(props: ConfirmSignProps) {
 
   const model: ConfirmModel = useMemo(() => {
     const notices = describeInputsForWallet(built, wallet.info?.id).notices;
-    // the fee rate, its bucket and the notes (fallback to the minimum, caps): what the dynamic fee policy decided for this transaction
+    // The fee rate, its bucket and the notes (fallback to the minimum, caps): what the dynamic fee
+    // policy decided for this transaction.
     const fee = feeDisclosureOf(built);
-    // a dynamic fee is several times the relay floor in a busy market: the verifier's sanity ceiling follows the policy's own per-transaction cap
+    // A dynamic fee is several times the relay floor in a busy market. The verifier's sanity
+    // ceiling follows the policy's own per-transaction cap.
     const feePolicy = services.fees?.policy;
     const creation = props.creation ? { prep: props.creation.prep, oneApproval: !!wallet.adapter?.signChain, resumed: !!props.resume } : {};
     const ask = props.issue.askSale ? { askSale: { sell: BigInt(props.issue.askSale.sell), price: BigInt(props.issue.askSale.price) } } : {};
     return buildIssuanceModel({ kob, built, token: props.issue.token, ...(props.issue.curve ? { curve: props.issue.curve } : {}), ...ask, maker, fee, ...creation, ...(feePolicy ? { feePolicy } : {}) }, notices);
   }, [built, props.issue, props.creation, maker, wallet.info?.id]);
 
-  // problems that are not about the transaction itself
+  // Problems that are not about the transaction itself.
   const extraBlocking: Finding[] = [];
   if (!wallet.info || !wallet.adapter) extraBlocking.push({ code: 'no-wallet', severity: 'blocking', message: 'no wallet', text: t('confirm.noWallet') });
   else if (phase !== 'submitted' && [...built.sign, ...(props.creation?.prep.sign ?? [])].some((s) => s.pubkey !== wallet.info!.pubkey)) {
-    // the plan spends coins of the key it was built for: after an account switch this screen must not sign it (the plan is stale)
+    // The plan spends coins of the key it was built for. After an account switch this screen must
+    // not sign it, because the plan is stale.
     const planned = [...built.sign, ...(props.creation?.prep.sign ?? [])].find((s) => s.pubkey !== wallet.info!.pubkey)!.pubkey;
     extraBlocking.push({ code: 'account-changed', severity: 'blocking', message: 'account changed', text: t('confirm.accountChanged', { planned: shortId(planned), now: shortId(wallet.info.pubkey) }) });
   } else if (wallet.networkMismatch) {
     extraBlocking.push({ code: 'network', severity: 'blocking', message: 'network', text: t('confirm.networkMismatch', { wallet: wallet.info.network, app: config.network }) });
   }
   const blocking = [...extraBlocking, ...model.blocking];
-  // the wallet's notes go on the wallet line; the rest (holders of other keys, fee notes) is in the summary's "?" and in the details
+  // The wallet's notes go on the wallet line. The rest (holders of other keys, fee notes) is in the
+  // summary's "?" and in the details.
   const walletInfo = model.info.filter((f) => WALLET_CODES.includes(f.code));
   const otherInfo = model.info.filter((f) => !WALLET_CODES.includes(f.code));
-  /** "Unaudited token program" (and how many other risk notes are behind the "?") */
+  /** "Unaudited token program", and how many other risk notes are behind the "?". */
   const riskWords = (): string => {
     const audited = model.warnings.some((w) => w.code === 'unaudited');
     const rest = model.warnings.length - (audited ? 1 : 0);
@@ -221,7 +251,8 @@ export function ConfirmSign(props: ConfirmSignProps) {
   );
 
   const afterAccepted = async (id: string): Promise<void> => {
-    // the node keeps listing these inputs until the transaction is in a block (no plan of this page may pick them meanwhile); records saved
+    // The node keeps listing these inputs until the transaction is in a block, so no plan of this
+    // page may pick them meanwhile. Records are saved.
     const { records } = await recordAccepted(services, wallet, built, id, props.label);
     if (!alive.current) return;
     result.current = { txid: id, records };
@@ -246,7 +277,8 @@ export function ConfirmSign(props: ConfirmSignProps) {
       const onStage = (s: SignStage) => alive.current && setStage(s);
       const addressOf = inputAddressOf(services);
       if (props.resume) {
-        // a saved creation: planned and checked again inside, the genesis signed once the node lists the coin of the first step
+        // A saved creation: planned and checked again inside. The genesis is signed once the node
+        // lists the coin of the first step.
         const rec = props.resume;
         setChainAt((c) => ({ ...c, tried: true }));
         const id = await finishCreation({
@@ -275,7 +307,8 @@ export function ConfirmSign(props: ConfirmSignProps) {
             setChainNote(info?.step === 'genesis' ? (info.waiting ? 'wait' : 'genesis') : 'prep');
           },
           record: { token: props.issue.token, declaration: c.declaration, docs: c.docs, ...(props.issue.curve ? { curve: props.issue.curve } : {}), ...(props.issue.askSale ? { askSale: props.issue.askSale } : {}) },
-          // the preparation spends the wallet's coins even if the genesis then fails: no plan of this page may pick them meanwhile
+          // The preparation spends the wallet's coins even if the genesis then fails, so no plan of
+          // this page may pick them meanwhile.
           onPrepSent: (prep) => {
             if (alive.current) setChainAt((c) => ({ ...c, prepSent: true }));
             pendingSpends.add(prep.tx.inputs);
@@ -291,7 +324,8 @@ export function ConfirmSign(props: ConfirmSignProps) {
     } catch (e) {
       if (!alive.current) return;
       setChainNote(null);
-      // the preparation is on chain but the token is not: never signed again here, the Create token page finishes it
+      // The preparation is on chain but the token is not. It is never signed again here, and the
+      // Create token page finishes it.
       if (e instanceof SignFlowError && e.code === 'genesis-pending') {
         const declined = e.cause instanceof SignFlowError && e.cause.rejectedByUser;
         finish({ status: 'pending', message: e.message, ...(declined ? { declined: true } : {}) });
@@ -303,14 +337,15 @@ export function ConfirmSign(props: ConfirmSignProps) {
       }
       const f = classifyFailure(e);
       if (f.kind === 'known') {
-        // the node already holds exactly this transaction (a double click, a retry after a lost answer): it IS submitted
+        // The node already holds exactly this transaction (a double click, or a retry after a lost
+        // answer). It is submitted.
         await afterAccepted(built.tx.id);
         return;
       }
       setFailure(f);
       setPhase('review');
       setStage(null);
-      // an acknowledgement belongs to one attempt: the user looks again before signing again
+      // An acknowledgement belongs to one attempt. The user looks again before signing again.
       setAck(false);
     }
   };

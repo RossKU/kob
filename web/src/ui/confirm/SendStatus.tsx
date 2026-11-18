@@ -1,20 +1,29 @@
-// The send flow of an order action as a hook (`useSend`) and its one-line status (`SendStatusLine`): checking -> the final confirmation ->
-// waiting for the wallet -> sending -> submitted (txid, explorer link, then whether the network took it into a block), or one line saying why
-// nothing was sent.
+// The send flow of an order action as a hook (`useSend`) and its one-line status
+// (`SendStatusLine`). The flow runs checking, the final confirmation, waiting for the wallet,
+// sending, and submitted (txid, explorer link, then whether the network took it into a block). Or
+// it ends with one line saying why nothing was sent.
 //
-// The final confirmation is the one place the order's details are shown: the private-key signer's table (signer/summary.ts, decoded from the
-// transaction: the net effect on the wallet, what is locked, the fee, then each order with its token and terms). The signer shows it in its own
-// frame (its Approve signs); for an external wallet the app shows the same table and its "Continue in wallet" hands the transaction to the
-// wallet, whose own popup follows. A user may read it for a while: an auction whose start passed by the time it is signed
-// (`clock-moved`, wallet/sign.ts) is re-timed (`SendJob.retime`: the same terms, later times, the start at least as much later as the failed
-// signature took; the wallet's last signing time also delays its next auction's first start: signing-time.ts) and signed again, which the
-// private-key signer does without asking again when nothing the user confirmed got worse (signer/retime.ts); the app re-times an external
-// wallet's auction confirmed later than RETIME_AFTER_MS before it hands it over (an updated popup only if something got worse).
+// The final confirmation is the one place the order's details are shown. It is the private-key
+// signer's table (signer/summary.ts, decoded from the transaction): the net effect on the wallet,
+// what is locked, the fee, then each order with its token and terms. The signer shows it in its
+// own frame, and its Approve signs. For an external wallet the app shows the same table, and its
+// "Continue in wallet" hands the transaction to the wallet, whose own popup follows.
 //
-// While the confirmation is open it follows the market and the clock (`SendJob.replan`, every LIVE_MS): each plan is checked as strictly as the
-// first and put in place of the shown one, so what is approved is what is shown. The private-key signer takes it as an update and checks it
-// itself (signer/core.ts); the app's popup flashes the changed figures, says so and holds its button for UPDATE_HOLD_MS when one is worse for
-// the user than what was shown. Their times are said from the node clock ("in 28 s").
+// A user may read the confirmation for a while. An auction whose start passed by the time it is
+// signed (`clock-moved`, wallet/sign.ts) is re-timed and signed again. A re-timing
+// (`SendJob.retime`) keeps the same terms and moves the times later. The start moves at least as
+// much later as the failed signature took. The wallet's last signing time also delays its next
+// auction's first start (signing-time.ts). The private-key signer signs the re-timed order without
+// asking again when nothing the user confirmed got worse (signer/retime.ts). The app re-times an
+// external wallet's auction confirmed later than RETIME_AFTER_MS before it hands it over, and shows
+// an updated popup only if something got worse.
+//
+// While the confirmation is open it follows the market and the clock (`SendJob.replan`, every
+// LIVE_MS). Each plan is checked as strictly as the first and put in place of the shown one, so
+// what is approved is what is shown. The private-key signer takes it as an update and checks it
+// itself (signer/core.ts). The app's popup flashes the changed figures, says so, and holds its
+// button for UPDATE_HOLD_MS when one is worse for the user than what was shown. Their times are
+// said from the node clock ("in 28 s").
 import { createPortal } from 'preact/compat';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
@@ -42,61 +51,71 @@ export type SendPhase = 'checking' | 'confirming' | 'signing' | 'sending' | 'sub
 
 export interface SendStatus {
   phase: SendPhase;
-  /** blocked / rejected / failed: the one sentence */
+  /** Blocked, rejected or failed: the one sentence. */
   text?: string;
-  /** failed: the raw wallet / node text, behind "Details" */
+  /** Failed: the raw wallet or node text, behind "Details". */
   raw?: string | undefined;
-  /** blocked / failed: the finding or failure code */
+  /** Blocked or failed: the finding or failure code. */
   code?: string;
-  /** submitted */
+  /** Submitted. */
   txid?: string;
-  /** submitted: whether the network has taken it into a block yet */
+  /** Submitted: whether the network has taken it into a block yet. */
   confirmed?: 'waiting' | 'confirmed' | 'unconfirmed';
-  /** confirming: the table the popup shows, and whether it is the updated one of a re-timed order */
+  /** Confirming: the table the popup shows, and whether it is the updated one of a re-timing. */
   table?: SignerSummary;
-  /** confirming: the extension commitment of each open-list token of the order and where it came from (`openTokenIdentity`) */
+  /**
+   * Confirming: the extension commitment of each open-list token of the order and where it came
+   * from (`openTokenIdentity`).
+   */
   identity?: Row[];
-  /** confirming: the wallet the transaction goes to next (the popup's header) */
+  /** Confirming: the wallet the transaction goes to next (the popup's header). */
   walletLabel?: string;
   updated?: boolean;
-  /** confirming: the job's non-blocking notes (SendJob.notes), as they were when the confirmation opened */
+  /** Confirming: the job's non-blocking notes (SendJob.notes) when the confirmation opened. */
   notes?: string[];
-  /** confirming: the cells (`cellTexts` keys) the last plan changed (they flash), and its count */
+  /** Confirming: the cells (`cellTexts` keys) the last plan changed, which flash, and its count. */
   changed?: string[];
   rev?: number;
-  /** confirming: the button is held until then (ms; a plan worse for the user than what was shown) */
+  /** Confirming: the button is held until then, in ms, after a plan worse than the shown one. */
   holdUntil?: number;
-  /** confirming: the node's DAA score now (projected), for the times of the table */
+  /** Confirming: the node's DAA score now (projected), for the times of the table. */
   daa?: bigint | null;
-  /** signing: the wallet is not asked yet: a coin of this transaction is an output of the one just sent, not yet visible to the wallet's node */
+  /**
+   * Signing: the wallet is not asked yet. A coin of this transaction is an output of the one just
+   * sent, which the wallet's node does not see yet.
+   */
   waiting?: boolean;
 }
 
 export type SendOutcome = { status: 'submitted'; txid: string; records: PlacementRecord[] } | { status: 'stopped'; send: SendStatus };
 
-/** how long the status waits for the transaction to show up in a block */
+/** How long the status waits for the transaction to show up in a block. */
 const ACCEPTANCE_TIMEOUT_MS = 90_000;
-/** how long the line of a transaction the network accepted stays */
+/** How long the line of a transaction the network accepted stays. */
 export const ACCEPTED_CLEAR_MS = 60_000;
-/** an auction confirmed in the app's popup later than this after the popup opened is planned again with the current clock before the wallet gets it */
+/**
+ * An auction confirmed in the app's popup later than this after the popup opened is planned again
+ * with the current clock before the wallet gets it.
+ */
 export const RETIME_AFTER_MS = 1_000;
-/** how often the open final confirmation plans the order again (the market and the clock now) */
+/** How often the open final confirmation plans the order again (the market and the clock now). */
 export const LIVE_MS = 1_500;
-/** how long the button of the app's popup is held after a plan worse for the user than what was shown */
+/** How long the app popup's button is held after a plan worse for the user than the shown one. */
 export const UPDATE_HOLD_MS = 500;
-/** how often the node clock is read again for the times of the open confirmation (projected at 10 DAA a second in between) */
+/** How often the node clock is read again for the open confirmation's times (10 DAA/s between). */
 const CLOCK_READ_MS = 5_000;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** The texts of a table by cell (what changes between two plans is told by it). */
+/** The texts of a table by cell. What changes between two plans is told by it. */
 export function cellTexts(s: SignerSummary): Map<string, string> {
   const out = new Map<string, string>();
   s.lines.forEach((l, i) => out.set(`l:${i}`, `${l.label}=${l.value}`));
   out.set('fee', s.fee);
   const order = (o: SummaryOrder, key: string) => {
     out.set(`${key}:title`, o.title);
-    // a start or an expiry moves with every plan: said afresh from the clock, not counted as a change
+    // A start or an expiry moves with every plan. It is said afresh from the clock and is not
+    // counted as a change.
     o.rows.forEach((r, j) => out.set(`${key}:r:${j}`, r.daa ? `${r.label}=@` : `${r.label}=${r.value}`));
     if (o.exit) order(o.exit, `${key}:x`);
   };
@@ -114,19 +133,22 @@ export const sendBusy = (s: SendStatus | null): boolean => !!s && BUSY.has(s.pha
 
 export interface Sender {
   status: SendStatus | null;
-  /** checks, asks the wallet, sends; resolves once the node accepted the transaction (its block is awaited in the background) or it stopped */
+  /**
+   * Checks, asks the wallet, and sends. It resolves once the node accepted the transaction (its
+   * block is awaited in the background) or it stopped.
+   */
   send(job: SendJob): Promise<SendOutcome>;
-  /** shows a reason the caller itself stopped for (a plan that cannot be made) */
+  /** Shows a reason the caller itself stopped for (a plan that cannot be made). */
   stop(text: string, raw?: string, code?: string): void;
   clear(): void;
-  /** the user's answer to the final confirmation the app shows (an external wallet) */
+  /** The user's answer to the final confirmation the app shows (an external wallet). */
   decide(ok: boolean): void;
 }
 
 export function useSend(): Sender {
   const services = useServices();
   const wallet = useWallet();
-  // the latest wallet session: a ladder sends several transactions from one click
+  // The latest wallet session. A ladder sends several transactions from one click.
   const session = useRef(wallet);
   session.current = wallet;
   const [status, setStatus] = useState<SendStatus | null>(null);
@@ -140,11 +162,13 @@ export function useSend(): Sender {
       abort.current.abort();
     };
   }, []);
-  // a status belongs to one send: a later one (the next level of a ladder) is never overwritten by an earlier one still waiting for its block
+  // A status belongs to one send. A later one (the next level of a ladder) is never overwritten by
+  // an earlier one still waiting for its block.
   const set = (id: number, s: SendStatus | null) => {
     if (alive.current && seq.current === id) setStatus(s);
   };
-  // the open popup's answer, and the decoding the user confirmed last (a re-timed order of it needs no second confirmation)
+  // The open popup's answer, and the decoding the user confirmed last. A re-timed order of it needs
+  // no second confirmation.
   const answer = useRef<((ok: boolean) => void) | null>(null);
   const confirmedLast = useRef<SigningSummary | null>(null);
   useEffect(() => () => answer.current?.(false), []);
@@ -153,8 +177,9 @@ export function useSend(): Sender {
     summaryLines(decoded, signerTokenHints(services.kob, j.built, session.current.info?.pubkey ?? null, services.registry, services.config.network), services.kob);
 
   /**
-   * Plans `job` again every LIVE_MS while `running()`, checks each plan as strictly as the first (`checkBeforeSigning`) and hands each that passes
-   * to `onPlan`; a plan that cannot be made or does not pass is skipped (the shown one stays).
+   * Plans `job` again every LIVE_MS while `running()`. It checks each plan as strictly as the first
+   * (`checkBeforeSigning`) and hands each that passes to `onPlan`. A plan that cannot be made or
+   * does not pass is skipped, and the shown one stays.
    */
   const follow = (job: SendJob, running: () => boolean, onPlan: (j: SendJob, decoded: SigningSummary) => void): void => {
     if (!job.replan) return;
@@ -176,7 +201,10 @@ export function useSend(): Sender {
     })();
   };
 
-  /** The node's DAA score every second while `running()` (read every CLOCK_READ_MS, projected in between), for the times of the confirmation. */
+  /**
+   * The node's DAA score every second while `running()`, for the times of the confirmation. It is
+   * read every CLOCK_READ_MS and projected in between.
+   */
   const followClock = (running: () => boolean, onDaa: (daa: bigint) => void): void => {
     void (async () => {
       let base: { daa: bigint; at: number } | null = null;
@@ -196,8 +224,10 @@ export function useSend(): Sender {
   };
 
   /**
-   * The final confirmation of an external wallet's job: the popup, and at a late Confirm of an auction its re-timed job (accepted without asking
-   * again when nothing got worse, else shown once more). The job to hand to the wallet, or the status it stopped with.
+   * The final confirmation of an external wallet's job: the popup, and at a late Confirm of an
+   * auction its re-timed job. The re-timed job is accepted without asking again when nothing got
+   * worse, else shown once more. Returns the job to hand to the wallet, or the status it stopped
+   * with.
    */
   const confirmInApp = async (id: number, job: SendJob, decoded: SigningSummary): Promise<SendJob | SendStatus> => {
     let current = job;
@@ -205,7 +235,8 @@ export function useSend(): Sender {
     if (job.retimed && confirmedLast.current && sameOrBetter(confirmedLast.current, shown)) return job;
     let updated = false;
     for (;;) {
-      // the popup follows the market and the clock while it is open: what Continue hands over is what it shows
+      // The popup follows the market and the clock while it is open, so what Continue hands over is
+      // what it shows.
       let plannedAt = Date.now();
       let open = true;
       let baseline = shown;
@@ -219,7 +250,7 @@ export function useSend(): Sender {
         current = j;
         shown = d;
         plannedAt = Date.now();
-        // the table follows every plan (its times too); only the figures that changed flash
+        // The table follows every plan, its times too. Only the figures that changed flash.
         view = {
           ...view, table, identity: identityOf(j, d), changed, rev: (view.rev ?? 0) + (changed.length ? 1 : 0), updated: !!view.updated || worse,
           holdUntil: worse ? Date.now() + UPDATE_HOLD_MS : (view.holdUntil ?? 0),
@@ -237,8 +268,9 @@ export function useSend(): Sender {
       open = false;
       if (!ok) return { phase: 'rejected', code: 'cancelled', text: t('send.cancelled') };
       set(id, { phase: 'checking' });
-      // a popup that follows the market is as fresh as its last plan (re-timed only when that is older than two rounds); one that does not is
-      // re-timed when confirmed later than RETIME_AFTER_MS
+      // A popup that follows the market is as fresh as its last plan, and is re-timed only when
+      // that is older than two rounds. One that does not follow is re-timed when confirmed later
+      // than RETIME_AFTER_MS.
       if (!current.retime || current.submitByDaa == null || Date.now() - plannedAt <= (current.replan ? 2 * LIVE_MS : RETIME_AFTER_MS)) break;
       const next = await current.retime();
       if ('stop' in next) return { phase: 'blocked', ...next.stop };
@@ -263,7 +295,8 @@ export function useSend(): Sender {
     };
     set(id, { phase: 'checking' });
     const w = session.current;
-    // the node's clock read alongside the check: the private-key signer is told it before the request (its first view says "in 90 d", not a bare DAA score)
+    // The node's clock is read alongside the check. The private-key signer is told it before the
+    // request, so its first view says "in 90 d" and not a bare DAA score.
     const clock0 = w.adapter?.id === 'local-key' ? readClock(services).then((c) => ({ daa: c.daa, at: Date.now() }), () => null) : null;
     let checked;
     try {
@@ -272,10 +305,11 @@ export function useSend(): Sender {
       return stopped({ phase: 'blocked', code: 'check-failed', text: t('send.checkFailed'), raw: e instanceof Error ? e.message : String(e) });
     }
     if ('blocked' in checked) return stopped({ phase: 'blocked', ...checked.blocked });
-    // the job checked (the ticket's re-check may have put the plan of the state at the click in its place) is the one signed
+    // The job checked is the one signed. The ticket's re-check may have put the plan of the state
+    // at the click in its place.
     let final = checked.job;
-    // the final confirmation: the private-key signer shows it in its frame, for any other wallet the app shows it first (unless the user confirmed
-    // it in the app before: a merge run)
+    // The final confirmation. The private-key signer shows it in its frame. For any other wallet
+    // the app shows it first, unless the user confirmed it in the app before (a merge run).
     if (w.adapter!.id !== 'local-key' && !final.preconfirmed) {
       const confirmed = await confirmInApp(id, final, checked.decoded);
       if ('phase' in confirmed) return stopped(confirmed);
@@ -283,14 +317,17 @@ export function useSend(): Sender {
     }
     let txid: string;
     for (let attempt = 0; ; attempt++) {
-      // the private-key signer follows the market and the clock while the user reads (its own check decides how each update is shown)
+      // The private-key signer follows the market and the clock while the user reads. Its own check
+      // decides how each update is shown.
       const jobs = new Map<string, SendJob>([[final.built.tx.id, final]]);
       let reading = true;
-      // the signing time of an auction (signing-time.ts): from the hand-over of the transaction signed to the clock check after its signature
+      // The signing time of an auction (signing-time.ts): from the hand-over of the transaction
+      // signed to the clock check after its signature.
       const timer = new SigningTimer();
       const walletId = w.adapter!.id;
       const live: LiveSigning | null =
-        // a session step is not followed while it waits: the frame signs it at once or shows it as a new request
+        // A session step is not followed while it waits. The frame signs it at once or shows it as
+        // a new request.
         walletId === 'local-key' && !final.retimed && !final.session
           ? {
               attach: (to) => {
@@ -305,7 +342,8 @@ export function useSend(): Sender {
           : null;
       const attempt0 = final;
       const signedJob = (): SendJob => (live?.signed ? (jobs.get(live.signed.tx.id) ?? attempt0) : attempt0);
-      // how long the auction signed took, kept for this wallet's next first attempt; undefined when it is no auction or was never handed over
+      // How long the auction signed took, kept for this wallet's next first attempt. It is
+      // undefined when the order is no auction or was never handed over.
       const signingTime = (): number | undefined => {
         const j = signedJob();
         const ms = j.submitByDaa != null ? timer.since(j.built.tx.id) : null;
@@ -314,9 +352,12 @@ export function useSend(): Sender {
         return ms;
       };
       try {
-        // no `inputAddress`: `checkBeforeSigning` has just re-read every input on the node (the decoder stops any it does not confirm); a second
-        // read would only add a round trip before the wallet's popup. `addressOf`: an input spending the change of a transaction this page sent
-        // moments ago (a ladder's next level, an order right after another) waits until the wallet's own node sees it (wallet/visibility.ts)
+        // There is no `inputAddress`. `checkBeforeSigning` has just re-read every input on the node
+        // (the decoder stops any it does not confirm), and a second read would only add a round
+        // trip before the wallet's popup.
+        // `addressOf` is for an input spending the change of a transaction this page sent moments
+        // ago (a ladder's next level, an order right after another). It waits until the wallet's
+        // own node sees it (wallet/visibility.ts).
         const first = clock0 ? await Promise.race([clock0, sleep(LIVE_MS).then(() => null)]) : null;
         const res = await signAndSubmit({
           kob: services.kob, node: services.node, adapter: w.adapter!, built: final.built, network: services.config.network,
@@ -331,7 +372,7 @@ export function useSend(): Sender {
           onWait: (waiting) => set(id, { phase: 'signing', ...(waiting ? { waiting: true } : {}) }),
           onStage: (s) => {
             if (s === 'signing') timer.handed(attempt0.built.tx.id);
-            // the clock check after the signature has just passed
+            // The clock check after the signature has just passed.
             if (s === 'submitting') signingTime();
             if (s !== 'signing') reading = false;
             set(id, { phase: s === 'signing' ? 'signing' : 'sending' });
@@ -343,18 +384,20 @@ export function useSend(): Sender {
         break;
       } catch (e) {
         reading = false;
-        // what was signed (an update of the request) is what a re-timing starts from
+        // What was signed (an update of the request) is what a re-timing starts from.
         if (live?.signed) final = jobs.get(live.signed.tx.id) ?? final;
         const f = classifyFailure(e);
         if (f.kind === 'rejected') return stopped({ phase: 'rejected', code: f.code, text: f.text });
-        // the node already holds exactly this transaction (a double click, a retry after a lost answer): it IS submitted
+        // The node already holds exactly this transaction (a double click, or a retry after a lost
+        // answer). It is submitted.
         if (f.kind === 'known') {
           txid = final.built.tx.id;
           break;
         }
-        // the auction's start passed while it was signed: the same order with later times, checked and signed again (the private-key signer
-        // signs it without a prompt: signer/retime.ts); nothing was sent. Its new start leaves at least the time this signature took
-        // (signing-time.ts `retimeLead`), which the wallet's next order starts from too
+        // The auction's start passed while it was signed. The same order with later times is
+        // checked and signed again, and nothing was sent. The private-key signer signs it without a
+        // prompt (signer/retime.ts). Its new start leaves at least the time this signature took
+        // (signing-time.ts `retimeLead`), which the wallet's next order starts from too.
         const signingMs = f.code === 'clock-moved' ? signingTime() : undefined;
         if (f.code !== 'clock-moved' || !final.retime || attempt >= CLOCK_RETRIES) return stopped({ phase: 'failed', code: f.code, text: f.text, raw: f.raw });
         set(id, { phase: 'checking' });
@@ -377,7 +420,8 @@ export function useSend(): Sender {
         ok = false;
       }
       set(id, { phase: 'submitted', txid, confirmed: ok ? 'confirmed' : 'unconfirmed' });
-      // an accepted transaction's line goes after ACCEPTED_CLEAR_MS (unless a later send replaced it); an unconfirmed one or an error stays
+      // An accepted transaction's line goes after ACCEPTED_CLEAR_MS, unless a later send replaced
+      // it. An unconfirmed one or an error stays.
       if (ok) setTimeout(() => set(id, null), ACCEPTED_CLEAR_MS);
     })();
     return { status: 'submitted', txid, records };
@@ -397,9 +441,11 @@ export function useSend(): Sender {
 }
 
 /**
- * How often an auction whose start passed by the time it was signed (`clock-moved`) is re-timed and signed again before the reason is shown:
- * each attempt gives it a longer lead (RETIME_LEAD_DAA, 3 s more each time, and at least the time the failed signature took plus that:
- * signing-time.ts `retimeLead`), so a slow link or a slow approver in the wallet gets there within a few.
+ * How often an auction whose start passed by the time it was signed (`clock-moved`) is re-timed
+ * and signed again before the reason is shown. Each attempt gives it a longer lead
+ * (RETIME_LEAD_DAA, 3 s more each time, and at least the time the failed signature took plus
+ * that, see signing-time.ts `retimeLead`). So a slow link or a slow approver in the wallet gets
+ * there within a few attempts.
  */
 const CLOCK_RETRIES = 3;
 
@@ -407,7 +453,10 @@ const PHASE_TEXT: Record<'checking' | 'confirming' | 'signing' | 'sending', stri
   checking: 'send.checking', confirming: 'send.confirming', signing: 'send.signing', sending: 'send.sending',
 };
 
-/** One order of the table: its title, token and terms (an if-done entry's committed exit nested below), as the signer frame draws it. */
+/**
+ * One order of the table: its title, token and terms, as the signer frame draws it. An if-done
+ * entry's committed exit is nested below it.
+ */
 function OrderTable(props: { order: SummaryOrder; testid: string; cell: string; live: Live }) {
   const o = props.order;
   return (
@@ -433,7 +482,10 @@ interface Live {
   daa: bigint | null;
 }
 
-/** A start or an expiry: "in 28 s" from the clock, the DAA score below; the row's own text without a clock. */
+/**
+ * A start or an expiry: "in 28 s" from the clock, with the DAA score below. Without a clock it is
+ * the row's own text.
+ */
 function TimeValue(props: { daa: bigint; value: string; now: bigint | null }) {
   if (props.now === null) return <span key={props.value}>{props.value}</span>;
   const rel = untilWords(props.daa, props.now, {
@@ -452,13 +504,14 @@ function TimeValue(props: { daa: bigint; value: string; now: bigint | null }) {
 }
 
 /**
- * The final confirmation the app shows before an external wallet gets the transaction: the private-key signer's table (the net effect, what is
- * locked, the fee, each order's terms), and Cancel / Continue in wallet.
+ * The final confirmation the app shows before an external wallet gets the transaction. It is the
+ * private-key signer's table (the net effect, what is locked, the fee, each order's terms) with
+ * Cancel and Continue in wallet.
  */
 function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }) {
   const st = props.status;
   const s = st.table!;
-  // held after a plan worse for the user: re-rendered when the hold ends
+  // Held after a plan worse for the user: re-rendered when the hold ends.
   const [, tick] = useState(0);
   const held = (st.holdUntil ?? 0) > Date.now();
   useEffect(() => {
@@ -467,11 +520,11 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
     return () => clearTimeout(timer);
   }, [st.holdUntil, held]);
   const changed = new Set(st.changed ?? []);
-  // a changed cell flashes: its class carries the plan's count, so the next change restarts it
+  // A changed cell flashes. Its class carries the plan's count, so the next change restarts it.
   const live: Live = { flash: (cell) => (changed.has(cell) ? ` send-changed send-changed-${(st.rev ?? 0) % 2}` : ''), daa: st.daa ?? null };
   return (
     <Modal
-      // "Confirm order" is what this screen is; the wallet it goes to next is the subtitle
+      // "Confirm order" is what this screen is, and the wallet it goes to next is the subtitle.
       title={<><span>{t('send.confirmTitle')}</span>{st.walletLabel ? <span class="send-via" data-testid="confirm-order-via">{t('send.via', { wallet: st.walletLabel })}</span> : null}</>}
       onClose={() => props.onAnswer(false)}
       data-testid="confirm-order"
@@ -531,8 +584,9 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
 }
 
 /**
- * One compact line: progress, the submitted transaction, or why nothing was sent. `lead` prefixes it (a ladder's "Level 2 of 3"). It also holds
- * the final confirmation popup of an external wallet while the send waits for it, unless `popup` is false (the caller opens it).
+ * One compact line: progress, the submitted transaction, or why nothing was sent. `lead` prefixes
+ * it (a ladder's "Level 2 of 3"). It also holds the final confirmation popup of an external wallet
+ * while the send waits for it, unless `popup` is false (the caller opens it).
  */
 export function SendStatusLine(props: { sender: Sender; lead?: string | null; popup?: boolean; 'data-testid'?: string }) {
   const { config } = useServices();
@@ -578,10 +632,12 @@ export function SendStatusLine(props: { sender: Sender; lead?: string | null; po
 }
 
 /**
- * The red toast of a send that stopped (notify/failure-toast.ts): once the action using `sender` is over (`busy` false: a retry within it, a
- * direct fill's lost race taken again, raises none), a stopped status other than the app's own Cancel raises ONE error toast "<heading>: <reason>"
- * at the top right (identical ones are counted on it, kit/toast-store.ts). A later send of the same sender that goes through takes it away.
- * For a sender whose status is shown in a form (the order ticket); a flow's card shows its own failure.
+ * The red toast of a send that stopped (notify/failure-toast.ts). Once the action using `sender`
+ * is over (`busy` false, so a retry within it or a direct fill's lost race taken again raises
+ * none), a stopped status other than the app's own Cancel raises one error toast
+ * "<heading>: <reason>" at the top right. Identical ones are counted on it (kit/toast-store.ts). A
+ * later send of the same sender that goes through takes it away. It is for a sender whose status
+ * is shown in a form (the order ticket). A flow's card shows its own failure.
  */
 export function useSendFailureToast(status: SendStatus | null, busy: boolean, heading: string): void {
   const said = useRef<SendStatus | null>(null);
@@ -600,10 +656,13 @@ export function useSendFailureToast(status: SendStatus | null, busy: boolean, he
 }
 
 /**
- * The send status inside a form (the order ticket): what a click is doing, in the flow of the form, never over it. Why a click stopped is not
- * shown here (founder 2026-11-18: the red box broke the ticket's layout): the red toast at the top right says it (`useSendFailureToast`); the
- * stopped line stays in the document, hidden, as the state of the last click (its phase and code). A submitted transaction is not shown here
- * either: `SendStatusToast` with `only="submitted"` carries it to the notifications. The final confirmation popup of an external wallet opens over the page.
+ * The send status inside a form (the order ticket): what a click is doing, in the flow of the
+ * form, never over it. Why a click stopped is not shown here, because a red box broke the
+ * ticket's layout. The red toast at the top right says it (`useSendFailureToast`). The stopped
+ * line stays in the document, hidden, as the state of the last click (its phase and code). A
+ * submitted transaction is not shown here either: `SendStatusToast` with `only="submitted"`
+ * carries it to the notifications. The final confirmation popup of an external wallet opens over
+ * the page.
  */
 export function SendStatusInline(props: { sender: Sender; lead?: string | null; 'data-testid'?: string }) {
   const s = props.sender.status;
@@ -620,18 +679,20 @@ export function SendStatusInline(props: { sender: Sender; lead?: string | null; 
 }
 
 /**
- * The send status as a card of the notifications at the top right (the toast host, kit/Toast.tsx), the same structure as theirs: what an order click is
- * doing, the submitted transaction, or why nothing was sent. The form under it never moves. Dismissed with its x once the send is over (an accepted
- * order's card goes by itself a minute after its block); without a host (a page with no app shell) it is shown in place. `only="submitted"`: the
- * card carries the submitted transaction alone (its id, Copy, and then whether a block took it); the progress and the reasons are the form's
- * (`SendStatusInline`).
+ * The send status as a card of the notifications at the top right (the toast host,
+ * kit/Toast.tsx), with the same structure as theirs. It shows what an order click is doing, the
+ * submitted transaction, or why nothing was sent. The form under it never moves. The card is
+ * dismissed with its x once the send is over. An accepted order's card goes by itself a minute
+ * after its block. Without a host (a page with no app shell) it is shown in place.
+ * `only="submitted"` makes the card carry the submitted transaction alone (its id, Copy, and then
+ * whether a block took it). The progress and the reasons are the form's (`SendStatusInline`).
  */
 export function SendStatusToast(props: { sender: Sender; lead?: string | null; only?: 'submitted'; 'data-testid'?: string }) {
   const [host, setHost] = useState<HTMLElement | null>(null);
   useEffect(() => setHost(document.querySelector<HTMLElement>('[data-testid="toast-host"]')), []);
   const s = props.sender.status;
   if (!s || (props.only === 'submitted' && s.phase !== 'submitted')) return null;
-  // a transaction the network has not taken into a block after the wait is not a success yet
+  // A transaction the network has not taken into a block after the wait is not a success yet.
   const tone = s.phase === 'blocked' || s.phase === 'failed' ? 'error' : s.phase === 'submitted' ? (s.confirmed === 'unconfirmed' ? 'warn' : 'ok') : 'info';
   const card = (
     <div class={`toast toast-${tone} send-toast`} data-testid="send-toast">

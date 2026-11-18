@@ -1,22 +1,24 @@
-// The stepper of a token creation (KCC-23: the preparation, then the genesis): while it is signed on the confirmation screen
-// (ConfirmSign.tsx, from the chain runner's stages), and for a creation not finished, from its record (data/creations.ts) on the Create token page.
+// The stepper of a token creation (KCC-23: the preparation, then the genesis). It shows while the
+// creation is signed on the confirmation screen (ConfirmSign.tsx, from the chain runner's stages).
+// For a creation not finished it shows from its record (data/creations.ts) on the Create token
+// page.
 import { t } from '../../i18n';
 import type { StepperItem } from '../kit/stepper-model';
 import type { CreationStep } from '../../wallet/create';
 import type { SignStage } from '../../wallet/sign';
 
 export interface CreationProgress {
-  /** the chain runner's stage, null before the first signature */
+  /** The chain runner's stage, null before the first signature. */
   stage: SignStage | null;
-  /** which transaction the stage is of */
+  /** Which transaction the stage is of. */
   step: CreationStep | null;
-  /** the wallet is not asked yet: its node does not see the preparation */
+  /** The wallet is not asked yet, because its node does not see the preparation. */
   waiting?: boolean;
-  /** the node took the preparation */
+  /** The node took the preparation. */
   prepSent: boolean;
-  /** the wallet signs both on one approval (the private-key signer) */
+  /** The wallet signs both on one approval (the private-key signer). */
   oneApproval?: boolean;
-  /** the flow stopped at the step it was on */
+  /** The flow stopped at the step it was on. */
   stopped?: 'declined' | 'failed' | null;
 }
 
@@ -51,21 +53,27 @@ export function creationStepperItems(p: CreationProgress): StepperItem[] {
 }
 
 export interface PendingCreation {
-  /** the record says the node took the preparation */
+  /** The record says the node took the preparation. */
   prepSent: boolean;
-  /** the record holds the genesis signed */
+  /** The record holds the genesis signed. */
   signed: boolean;
-  /** "Finish the creation" runs */
+  /** "Finish the creation" runs. */
   resuming: boolean;
-  /** what the wallet is asked for meanwhile (IssueView's resume note): its node catching up, or the genesis */
+  /**
+   * What the wallet is asked for meanwhile (IssueView's resume note): its node catching up, or the
+   * genesis.
+   */
   note: 'wait' | 'genesis' | null;
-  /** the last attempt failed */
+  /** The last attempt failed. */
   failed: boolean;
 }
 
-/** Prepare, Create token: for a creation not finished, from its record, so a page opened later shows the step it stopped at. */
+/**
+ * Prepare, Create token: for a creation not finished, from its record. A page opened later shows
+ * the step it stopped at.
+ */
 export function pendingCreationItems(r: PendingCreation): StepperItem[] {
-  // the wallet is asked for the genesis only once the preparation is on the node
+  // The wallet is asked for the genesis only once the preparation is on the node.
   const prepDone = r.prepSent || (r.resuming && r.note !== null);
   const prep: StepperItem = prepDone
     ? { ...prepItem(), state: 'done' }
