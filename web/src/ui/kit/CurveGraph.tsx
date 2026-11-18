@@ -1,16 +1,17 @@
-// A stepped sell curve as a small step line: price against the share sold (kob/curve.ts `curveSteps`). The sold part is muted, the rest
-// carries the sell colour with a light area under it. Theme tokens only (curve-graph.css).
+// A stepped sell curve as a small step line: price against the share sold (kob/curve.ts
+// `curveSteps`). The sold part is muted, and the rest carries the sell colour with a light area
+// under it. It uses theme tokens only (curve-graph.css).
 import type { CurveStep } from '../../kob/curve';
 import { stepGeometry } from '../../kob/curve';
 import './curve-graph.css';
 
 export interface CurveGraphProps {
   steps: readonly CurveStep[];
-  /** the accessible name, e.g. "Price by share sold" */
+  /** The accessible name, for example "Price by share sold". */
   label: string;
-  /** under the graph: the left and right ends of the x axis ("0% sold", "100%") */
+  /** Under the graph: the left and right ends of the x axis ("0% sold", "100%"). */
   axis?: [string, string];
-  /** viewBox size; the SVG scales to its container's width */
+  /** The viewBox size. The SVG scales to its container's width. */
   width?: number;
   height?: number;
   'data-testid'?: string;

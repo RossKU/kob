@@ -6,16 +6,21 @@ export interface TabItem<Id extends string = string> {
   id: Id;
   label: ComponentChildren;
   'data-testid'?: string;
-  /** the accessible name where the label is shortened */
+  /** The accessible name where the label is shortened. */
   'aria-label'?: string;
 }
 
-/** Tab strip (`role=tablist`). The underline of the active tab is a mark that slides between the tabs (slide-indicator.ts). The caller renders the panel of the active tab (give it `role="tabpanel"`). Arrow keys move between tabs. */
+/**
+ * Tab strip (`role=tablist`). The underline of the active tab is a mark that slides between the
+ * tabs (slide-indicator.ts). The caller renders the panel of the active tab and gives it
+ * `role="tabpanel"`. Arrow keys move between tabs.
+ */
 export function Tabs<Id extends string = string>(props: { tabs: TabItem<Id>[]; active: Id; onChange: (id: Id) => void; 'aria-label': string }) {
   const strip = useRef<HTMLDivElement>(null);
   const ind = useRef<HTMLSpanElement>(null);
   useSlideIndicator(strip, ind, '[aria-selected="true"]', 'underline');
-  // a strip that scrolls sideways (the tabs do not fit one line): the active tab is brought into view, inside the strip only (the page does not move)
+  // A strip that scrolls sideways, because the tabs do not fit one line, brings the active tab
+  // into view inside the strip only. The page does not move.
   useEffect(() => {
     const el = strip.current;
     const b = el?.querySelector<HTMLElement>('[aria-selected="true"]');

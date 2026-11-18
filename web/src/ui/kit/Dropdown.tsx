@@ -1,7 +1,12 @@
-// The app's one drop-down, in place of the browser's: its list looks the same in both themes and on every system, and the same as the asset picker, which shares the panel
-// and its styles (market/AssetPicker.tsx adds a search on top). The face is a button; the focus goes to the list while it is open and back to the button after. The panel
-// is fixed to the window and lives outside the page's cards, so nothing cuts it: in the body, or in the dialog the button is in (a modal dialog hides the rest of the page
-// from a screen reader, and stands above what is in the body). The keys and the placing are in dropdown-model.ts.
+// The app's one drop-down, in place of the browser's. Its list looks the same in both themes and
+// on every system, and the same as the asset picker, which shares the panel and its styles
+// (market/AssetPicker.tsx adds a search on top). The face is a button. The focus goes to the list
+// while it is open and back to the button after.
+//
+// The panel is fixed to the window and lives outside the page's cards, so nothing cuts it. It is
+// in the body, or in the dialog the button is in, because a modal dialog hides the rest of the
+// page from a screen reader and stands above what is in the body. The keys and the placing are in
+// dropdown-model.ts.
 import type { RefObject } from 'preact';
 import { createPortal } from 'preact/compat';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'preact/hooks';
@@ -11,8 +16,9 @@ import { dropdownKey, flatOptions, isGroup, panelHeight, placePanel, startIndex,
 const MIN_PANEL_WIDTH = 200;
 
 /**
- * The panel of a button: where it stands, what closes it (a press outside, a change of page), and that it follows the button when the page, a dialog or the window moves.
- * `want` is the size the panel would like, from the button's width.
+ * The panel of a button: where it stands, what closes it (a press outside, a change of page), and
+ * that it follows the button when the page, a dialog or the window moves. `want` is the size the
+ * panel would like, from the button's width.
  */
 export function usePickerPanel(face: RefObject<HTMLElement>, panel: RefObject<HTMLElement>, want: (faceWidth: number) => { width: number; height: number }) {
   const [place, setPlace] = useState<PanelPlace | null>(null);
@@ -31,24 +37,25 @@ export function usePickerPanel(face: RefObject<HTMLElement>, panel: RefObject<HT
     if (refocus) face.current?.focus({ preventScroll: true });
   };
 
-  // a layout effect: the listeners are there in the frame the panel appears
+  // A layout effect, so the listeners are there in the frame the panel appears.
   useLayoutEffect(() => {
     if (!open) return;
     const onDown = (e: Event) => {
       const el = e.target as Element;
       if (panel.current?.contains(el) || face.current?.contains(el)) return;
       close(true);
-      // the press that closes the list is spent on it: the dialog behind does not take it for a press on its backdrop as well
+      // The press that closes the list is spent on it. The dialog behind does not take it for a
+      // press on its backdrop as well.
       if (el.classList?.contains('modal-backdrop')) el.addEventListener('mousedown', (m) => m.stopImmediatePropagation(), { capture: true, once: true });
     };
     const follow = () => setPlace(fit());
-    // the list's own scroll moves nothing
+    // The list's own scroll moves nothing.
     const onScroll = (e: Event) => {
       if (!panel.current?.contains(e.target as Node)) follow();
     };
     const onHash = () => close(false);
     document.addEventListener('pointerdown', onDown);
-    // capturing: the scroll of a dialog or a card does not bubble
+    // Capturing, because the scroll of a dialog or a card does not bubble.
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', follow);
     window.addEventListener('hashchange', onHash);
@@ -66,7 +73,7 @@ export function usePickerPanel(face: RefObject<HTMLElement>, panel: RefObject<HT
     open,
     show,
     close,
-    /** where the panel is rendered */
+    /** Where the panel is rendered. */
     host: (): Element => face.current?.closest('[role="dialog"]') ?? document.body,
     style: place ? { left: px(place.left), width: px(place.width), maxHeight: px(place.maxHeight), top: px(place.top), bottom: px(place.bottom) } : undefined,
   };
@@ -74,20 +81,20 @@ export function usePickerPanel(face: RefObject<HTMLElement>, panel: RefObject<HT
 
 export interface DropdownProps {
   value: string;
-  /** options, and groups of options, in the order they are shown */
+  /** Options, and groups of options, in the order they are shown. */
   options: readonly DropdownEntry[];
   onChange: (value: string) => void;
-  /** id of the button: what a `<label for>` names (generated when missing) */
+  /** The id of the button, which a `<label for>` names. It is generated when missing. */
   id?: string;
-  /** id of the visible label */
+  /** The id of the visible label. */
   labelledBy?: string;
-  /** the accessible name where no label is on screen */
+  /** The accessible name where no label is on screen. */
   label?: string;
   describedBy?: string;
   invalid?: boolean;
   disabled?: boolean;
   title?: string;
-  /** on the button; its panel and options take `<id>-panel` and `<id>-option-<value>` */
+  /** On the button. Its panel and options take `<id>-panel` and `<id>-option-<value>`. */
   'data-testid'?: string;
 }
 
@@ -170,7 +177,7 @@ export function Dropdown(props: DropdownProps) {
     );
   });
 
-  // the name is the label and the value, what a screen reader says for a native control
+  // The name is the label and the value, which is what a screen reader says for a native control.
   const name = props.labelledBy ? { 'aria-labelledby': `${props.labelledBy} ${id}` } : { 'aria-label': `${props.label ?? ''}: ${text}` };
   const listName = props.labelledBy ? { 'aria-labelledby': props.labelledBy } : { 'aria-label': props.label };
   return (

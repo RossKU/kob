@@ -5,7 +5,7 @@ import { useSlideIndicator } from './slide-indicator';
 export interface SegmentedOption<V extends string = string> {
   value: V;
   label: ComponentChildren;
-  /** `buy` / `sell` colour the selected segment green / red */
+  /** `buy` and `sell` colour the selected segment green and red. */
   tone?: 'buy' | 'sell';
   disabled?: boolean;
   'data-testid'?: string;
@@ -15,14 +15,19 @@ export interface SegmentedProps<V extends string = string> {
   options: SegmentedOption<V>[];
   value: V;
   onChange: (value: V) => void;
-  /** accessible name of the group (required: there is no visible label) */
+  /** The accessible name of the group. It is required, as there is no visible label. */
   'aria-label': string;
   block?: boolean;
   disabled?: boolean;
   'data-testid'?: string;
 }
 
-/** Radio-group toggle (buy / sell, order type families). Arrow keys move the selection; `data-testid` of each option goes on its button. The selected pill is a mark that slides between the options (slide-indicator.ts), the colour of a `buy` / `sell` option comes with it (`data-tone`). */
+/**
+ * Radio-group toggle (buy / sell, order type families). Arrow keys move the selection, and the
+ * `data-testid` of each option goes on its button. The selected pill is a mark that slides between
+ * the options (slide-indicator.ts). The colour of a `buy` or `sell` option comes with it
+ * (`data-tone`).
+ */
 export function Segmented<V extends string = string>(props: SegmentedProps<V>) {
   const ref = useRef<HTMLDivElement>(null);
   const ind = useRef<HTMLSpanElement>(null);
@@ -33,7 +38,7 @@ export function Segmented<V extends string = string>(props: SegmentedProps<V>) {
     const next = enabled[(i + dir + enabled.length) % enabled.length];
     if (next) {
       props.onChange(next.value);
-      // focus follows the selection (roving tabindex)
+      // Focus follows the selection (roving tabindex).
       queueMicrotask(() => ref.current?.querySelector<HTMLButtonElement>('button[aria-checked="true"]')?.focus());
     }
   };
