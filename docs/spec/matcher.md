@@ -769,6 +769,13 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
   of the stop's owner to the band. No covenant-only fix exists: the covenant cannot tell a genesis UTXO from a
   continuation, so it cannot require that the evidence order was visible. This was found in an internal review on
   2026-11-17 and is accepted as a known limit.
+- The trailing ratchet is free to move for the same reason (audit F5, open). A trailing stop's ratchet is capped only by
+  `tpPrice` (`KobCondAsk`, `KobCondPair` trailing legs and their KRON twins), so an invisible evidence order of `minTouch` can
+  ratchet a sell trail toward the market, or past it, at no cost: a forced exit within the band, or a stop that no longer
+  protects; never theft. The fix is a maker-set ratchet ceiling (`trailMax`, one 8-byte state field), a template change
+  that re-pins those kinds and `KobIfdBid` / `KobIfdPair`. Decision 2026-11-18: deferred to the first template generation
+  after mainnet (the 2026-11-18 generation did not carry it). Until then the wallet can cap the trail with a take-profit and
+  recommend `minTouch` 100 %.
 - Once armed, a stop is only a limit bounded by its band (§2.1). A quote placed beyond the stop to
   trigger it must rest there for R, open to every matcher, before its fill counts; the threshold
   sets how much of it must trade.
