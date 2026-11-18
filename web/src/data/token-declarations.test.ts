@@ -2,7 +2,7 @@
 // prefers it to the registry's snapshot and flags any disagreement; an open-list token takes its scale from it.
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  adoptDeclaration, declarationConflicts, declaredToken, loadDeclaration, resetDeclarationsForTests, restoreDeclarations, subscribeDeclarations,
+  MAX_PARALLEL_READS, adoptDeclaration, declarationConflicts, declaredToken, loadDeclaration, resetDeclarationsForTests, restoreDeclarations, subscribeDeclarations,
 } from './token-declarations';
 import { decimalsNote, decimalsOrigin, displayToken } from '../app/token-display';
 import { buildTokenRows, unknownRow } from '../ui/market/token-model';
@@ -84,6 +84,27 @@ describe('declarations: verified before use', () => {
     expect(a).toEqual(b);
     expect(a?.decimals).toBe(2);
     expect(await loadDeclaration(kob, null, NET, 'aa'.repeat(32), null)).toBeNull(); // no source
+  });
+});
+
+describe('declarations: a cold start of many tokens', () => {
+  it('asks each token once (callers of one token share the read) and at most MAX_PARALLEL_READS at a time', async () => {
+    let active = 0;
+    let peak = 0;
+    const asked: string[] = [];
+    const source = {
+      declaration: async (id: string) => {
+        asked.push(id);
+        peak = Math.max(peak, ++active);
+        await new Promise((r) => setTimeout(r, 2));
+        active--;
+        return null;
+      },
+    };
+    const ids = Array.from({ length: 31 }, (_, i) => i.toString(16).padStart(64, '0'));
+    await Promise.all([...ids, ...ids].map((id) => loadDeclaration(kob, source, NET, id, null)));
+    expect(asked.length).toBe(31); // before the cap the peak was 31 at once
+    expect(peak).toBe(MAX_PARALLEL_READS);
   });
 });
 

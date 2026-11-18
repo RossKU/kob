@@ -41,6 +41,20 @@ const NONE_TTL_MS = 60_000;
 type Entry = { decl: DeclaredToken } | { none: number };
 const memo = new Map<string, Entry>();
 const inflight = new Map<string, Promise<DeclaredToken | null>>();
+/** At most this many indexer reads at once: a cold start of a list of declared tokens asks one by one, not all in one burst. */
+export const MAX_PARALLEL_READS = 4;
+let reading = 0;
+const waiting: Array<() => void> = [];
+async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (reading >= MAX_PARALLEL_READS) await new Promise<void>((r) => waiting.push(r));
+  reading++;
+  try {
+    return await fn();
+  } finally {
+    reading--;
+    waiting.shift()?.();
+  }
+}
 const listeners = new Set<() => void>();
 let loadedFrom: StorageLike | null | undefined;
 
@@ -146,7 +160,7 @@ export async function loadDeclaration(kob: KobWasm, source: DeclarationSource | 
   if (running) return running;
   const p = (async () => {
     try {
-      const proof = await source.declaration!(id);
+      const proof = await withSlot(() => source.declaration!(id));
       if (proof === null) {
         memo.set(key, { none: Date.now() });
         return null;
