@@ -454,7 +454,7 @@ async fn a_junk_declaration_payload_stays_out_of_the_record_log() {
 
 #[path = "kcc23_bounds_tests.rs"]
 mod bounds;
-
+/// Beyond MAX_CANDIDATES the oldest unnamed candidates go, inside the window too.
 /// Security review 2026-11-17 L5: beyond MAX_CANDIDATES the oldest unnamed candidates go, inside the window too.
 #[test]
 fn the_candidates_are_capped_oldest_first() {
