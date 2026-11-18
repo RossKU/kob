@@ -403,6 +403,32 @@ pub fn custody_targets(state: &AnyState, covenant_id: [u8; 32], ext: Option<[u8;
     Ok(out)
 }
 
+/// The state with its token named, as the custody lookups and the builders read it.
+///
+/// An unbound curve (created in its token's genesis, `tokenCovId` zero) names no token: it takes
+/// its custody's. That custody is the output of the curve's own transaction (its genesis) that the
+/// view names, as its amend, first fill and cancel take it (`current` is the curve's outpoint
+/// transaction, which an unbound curve never leaves). Any other state is returned as it is.
+pub fn named_state(
+    state: &AnyState,
+    current: Option<[u8; 32]>,
+    custody: Option<&crate::inputs::TokenView>,
+) -> Result<AnyState, String> {
+    match state {
+        AnyState::KobCurveAsk(c) if c.is_unbound() => {
+            let k = custody.ok_or("the view names no custody for this unbound curve (its token is its custody's)")?;
+            if current != Some(k.txid) {
+                return Err(
+                    "the view's custody of this unbound curve is not an output of the curve's own transaction (its token's genesis)"
+                        .into(),
+                );
+            }
+            Ok(AnyState::KobCurveAsk(kob_protocol::state::CurveAskState { token_cov_id: k.token, ..c.clone() }))
+        }
+        s => Ok(s.clone()),
+    }
+}
+
 /// Status of one order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
@@ -600,8 +626,18 @@ pub fn search(
     let spks: Vec<ScriptPublicKey> = targets.iter().flatten().map(|(_, s, _)| s.clone()).collect();
     let at = if spks.is_empty() { Default::default() } else { lookup(node, network, &spks)? };
     for (f, t) in found.iter_mut().zip(targets) {
+        // An unbound curve names no token: its custody is the output of its own transaction (its
+        // token's genesis) at the custody script, and its token is that output's covenant id.
+        let unbound_in = match &f.live {
+            Some((u, AnyState::KobCurveAsk(c))) if c.is_unbound() => Some(u.txid),
+            _ => None,
+        };
         for (k, (st, spk, token)) in t.into_iter().enumerate() {
-            let hit = at.get(&spk_bytes(&spk)).and_then(|v| v.iter().find(|u| u.covenant_id == Some(token))).cloned();
+            let mine = |u: &&crate::wrpc::NodeUtxo| match unbound_in {
+                Some(txid) => u.txid == txid && u.covenant_id.is_some(),
+                None => u.covenant_id == Some(token),
+            };
+            let hit = at.get(&spk_bytes(&spk)).and_then(|v| v.iter().find(mine)).cloned();
             let c = match hit {
                 Some(u) => Custody::Verified(u, st),
                 None => Custody::Missing(st),

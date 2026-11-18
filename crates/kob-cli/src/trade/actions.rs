@@ -139,13 +139,15 @@ fn cov_arg(s: &str) -> Result<[u8; 32], String> {
 /// They are its token, or the two tokens of a pair order.
 fn markets_of(c: &Common, live: &Live) -> Result<Vec<TokenMarket>, String> {
     let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, c.indexer.as_deref())?;
-    let toks: Vec<[u8; 32]> = match live.order.state.pair_tokens() {
+    // an unbound curve trades its custody's token
+    let named = live.named();
+    let toks: Vec<[u8; 32]> = match named.pair_tokens() {
         Some(p) => vec![p.a.cov_id, p.b.cov_id],
-        None => vec![live.order.state.token_cov_id()],
+        None => vec![named.token_cov_id()],
     };
     // A token without a registry entry uses the scale of its listed orders, else the scale of
     // this order, which is the one of its base token.
-    let (own_token, own_scale) = (live.order.state.token_cov_id(), live.order.state.scale());
+    let (own_token, own_scale) = (named.token_cov_id(), named.scale());
     let order_scale = |cov: &[u8; 32]| -> Result<Option<i64>, String> {
         let listed = match c.indexer.as_deref() {
             Some(u) => data::order_scale(u, cov)?,
@@ -168,7 +170,7 @@ fn markets_of(c: &Common, live: &Live) -> Result<Vec<TokenMarket>, String> {
     // A commitment that no source names is the one that the own state of the order, read from the
     // node, carries for the token.
     for m in ms.iter_mut().filter(|m| m.ext_source == market::ExtSource::Unknown) {
-        let s = &live.order.state;
+        let s = &named;
         let own = s.custody_ext(m.cov).or_else(|| (s.token_cov_id() == m.cov).then(|| s.extension_commitment()).flatten());
         if let Some(e) = own {
             m.ext = e;

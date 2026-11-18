@@ -145,7 +145,12 @@ type Custody = (ScriptPublicKey, [u8; 32], ([u8; 32], u32));
 /// The indexer's view of a row's order and the scripts to look up, or why there is none.
 fn claim_of(indexer: &str, network: &str, m: &TokenMarket, cov: &[u8; 32]) -> Result<Claim, &'static str> {
     let v = http::get_ok(indexer, &format!("/v1/orders/{}", to_hex(cov)), INDEXER_TIMEOUT).map_err(|_| "unproven")?;
-    let parsed = inputs::parse(&v, "indexer order", network).map_err(|_| "unproven")?;
+    claim_from(&v, network, m, cov)
+}
+
+/// The claim of the indexer's order view `v` (see `claim_of`).
+fn claim_from(v: &Value, network: &str, m: &TokenMarket, cov: &[u8; 32]) -> Result<Claim, &'static str> {
+    let parsed = inputs::parse(v, "indexer order", network).map_err(|_| "unproven")?;
     let view = parsed.views.into_iter().next().ok_or("unproven")?;
     if view.covenant_id != *cov {
         return Err("changed");
@@ -164,6 +169,8 @@ fn claim_of(indexer: &str, network: &str, m: &TokenMarket, cov: &[u8; 32]) -> Re
     let custody = match (targets.first(), &view.custody) {
         (None, _) => None,
         (Some(_), None) => return Err("unproven"),
+        // and it is the output of its own transaction (its genesis): a stray the indexer names is not its custody
+        (Some(_), Some(cv)) if unbound && cv.txid != txid => return Err("other-market"),
         (Some((_, spk, token)), Some(cv)) => Some((spk.clone(), if unbound { m.cov } else { *token }, (cv.txid, cv.index))),
     };
     Ok(Claim { cov: *cov, state, outpoint: (txid, index), ospk, custody })
@@ -680,5 +687,45 @@ mod tests {
         assert_eq!(curve_levels_left(&c), [(0, 10, 100), (1, 20, 100), (2, 30, 150)]);
         c.amount_left = 180;
         assert_eq!(curve_levels_left(&c), [(1, 20, 30), (2, 30, 150)]);
+    }
+
+    /// An unbound curve (created in its token's genesis) is claimed under its custody's token only
+    /// with the custody of its own transaction: a look-alike from another one is not this market's.
+    #[test]
+    fn an_unbound_curves_custody_is_the_output_of_its_own_transaction() {
+        let t = token_template(P);
+        let c = CurveAskState {
+            maker: [0x11; 32],
+            token_cov_id: [0; 32],
+            token_tpl_hash: t.hash,
+            tpl_prefix_len: t.prefix.len() as i64,
+            tpl_suffix_len: t.suffix.len() as i64,
+            scale: 1000,
+            min_fill: 1,
+            tip: 0,
+            active_from: 0,
+            level_size: 100,
+            total: 200,
+            amount_left: 200,
+            extension_commitment: EXT,
+            table: vec![10, 20],
+        };
+        let cov = [0x40; 32];
+        let view = |custody_tx: u8| {
+            json!({
+                "covenant_id": to_hex(&cov), "template_hash": to_hex(&kob_protocol::artifacts::template(TemplateId::KobCurveAsk).hash),
+                "status": "open", "state_known": true, "state": serde_json::to_value(AnyState::KobCurveAsk(c.clone())).unwrap(),
+                "current": {"txid": to_hex(&[0x41; 32]), "index": 2, "value": "100000000"}, "current_daa": 1000,
+                "extension_commitment": to_hex(&EXT), "strays": [],
+                "custody": {"ok": true, "utxo": {
+                    "txid": to_hex(&[custody_tx; 32]), "index": 0, "token": to_hex(&TOKEN), "owner": to_hex(&cov), "amount": "200",
+                    "value": "100000000", "role": "custody", "created_daa": 1000, "spent": false, "settled": true,
+                }},
+            })
+        };
+        let claim = claim_from(&view(0x41), "testnet-10", &market(), &cov).ok().expect("claimed");
+        let (_, token, outpoint) = claim.custody.expect("its custody");
+        assert_eq!((token, outpoint), (TOKEN, ([0x41; 32], 0)));
+        assert_eq!(claim_from(&view(0x42), "testnet-10", &market(), &cov).err(), Some("other-market"));
     }
 }

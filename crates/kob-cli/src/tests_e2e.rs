@@ -1265,3 +1265,87 @@ fn pair_orders_cancel_from_views_and_recover_with_two_custodies() {
     assert_eq!(node.lock().unwrap().submitted.len(), 2, "the two cancels from views; the recover dry run sends nothing");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// An unbound curve (created in its token's genesis: `tokenCovId` zero, its custody genesis output 0) is cancelled from
+/// its indexer view and from a backup record: its token is its custody's, which must sit in the curve's own transaction.
+/// The tokens go back to the maker under that token's covenant id, engine-validated. A custody from another
+/// transaction is refused, nothing built.
+#[test]
+fn an_unbound_curve_is_cancelled_from_its_view_and_its_backup() {
+    const CV: [u8; 32] = [0xc5; 32];
+    let (h, pl, sl) = tok_fields(P);
+    let curve = kob_protocol::state::CurveAskState {
+        maker: pk(1),
+        token_cov_id: [0; 32],
+        token_tpl_hash: h,
+        tpl_prefix_len: pl,
+        tpl_suffix_len: sl,
+        scale: SCALE,
+        min_fill: SCALE,
+        tip: 0,
+        active_from: 0,
+        level_size: 5 * SCALE,
+        total: 10 * SCALE,
+        amount_left: 10 * SCALE,
+        extension_commitment: EXT,
+        table: vec![250_000_000, 260_000_000],
+    };
+    let st = AnyState::KobCurveAsk(curve.clone());
+    let tpl = template(TemplateId::KobCurveAsk).hash;
+    // the genesis 0xd1: output 0 the custody (of TOKEN, owned by the curve), output 2 the curve
+    let custody_spk = owned(P, 10 * SCALE, CV).spk_with(token_template(P));
+    let mut utxos = vec![
+        node_utxo(&st.spk(), 0xd1, 2, CARRIER, Some(CV)),
+        node_utxo(&custody_spk, 0xd1, 0, CARRIER, Some(TOKEN)),
+        node_utxo(&p2pk_spk(&pk(1)), 0x91, 0, 50 * KAS, None),
+    ];
+    // a look-alike of the custody in another transaction (a stray someone sent the curve)
+    utxos.push(node_utxo(&custody_spk, 0xd2, 0, CARRIER, Some(TOKEN_B)));
+    let (url, node) = mock::start(utxos);
+    let dir = tmp("unbound-curve");
+    let custody_view = |tag: u8, token: [u8; 32]| {
+        let mut c = tview(P, token, tag, 10 * SCALE, CV, false, true);
+        c["role"] = json!("custody");
+        c
+    };
+    let doc = view(CV, tpl, any_json(&st), (0xd1, 2), CARRIER, Some(custody_view(0xd1, TOKEN)), vec![]);
+    let c = prep(&opts(order::Op::Cancel, &url), &doc, 1).ok().expect("built");
+    assert!(c.disclosure.contains("the custody (10000 units)"), "{}", c.disclosure);
+    let back = TokenState::user(P, 10 * SCALE, pk(1), EXT).spk_with(token_template(P));
+    let o = c.built.tx.outputs.iter().find(|o| o.script_public_key == spk_to_string(&back)).expect("the tokens back to the maker");
+    assert_eq!(o.covenant.as_ref().map(|x| x.covenant_id), Some(TOKEN), "under the custody's token");
+    let out = dir.join("out");
+    let file = write(&dir, "curve.json", &doc);
+    assert_eq!(run_op(order::Op::Cancel, &url, &file, &format!("--yes --out-dir {}", out.display())), 0);
+    assert_eq!(node.lock().unwrap().submitted.len(), 1);
+    let s = signed_from(out.join(format!("{}.cancel.json", to_hex(&CV))).to_str().unwrap());
+    assert_eq!(s.tx.inputs.len(), 2, "the curve and its custody (its carrier pays the fee)");
+
+    // the custody the view names sits in another transaction: refused
+    let other = view(CV, tpl, any_json(&st), (0xd1, 2), CARRIER, Some(custody_view(0xd2, TOKEN_B)), vec![]);
+    let (status, reason) = why(prep(&opts(order::Op::Cancel, &url), &other, 1));
+    assert_eq!(status, "refused");
+    assert!(reason.contains("own transaction"), "{reason}");
+
+    // `kob recover --cancel` from a backup: the custody is the output of the curve's own transaction at its script
+    let mut r = record(CV, "KobCurveAsk", tpl, &hex_state(&st), pk(1));
+    r["ext"] = json!(to_hex(&EXT));
+    let backup = write(
+        &dir,
+        "backup.json",
+        &json!({"format": "kob-backup", "version": 1, "network": NET, "exportedAt": "2026-10-02T00:00:00Z", "records": [r], "txs": {}}),
+    );
+    let a = recover::parse_args(&v(&format!(
+        "--from {} --node {url} --network {NET} --maker {} --cancel --dry-run --key-file {}",
+        backup.display(),
+        to_hex(&pk(1)),
+        keyf(1)
+    )))
+    .unwrap();
+    let report = recover::execute(&a).unwrap().0;
+    let b = by_cov(&report, CV);
+    assert_eq!(b["custody"]["status"], "verified", "{b}");
+    assert_eq!(b["custody"]["outpoint"], json!(crate::common::outpoint_str(&[0xd1; 32], 0)), "{b}");
+    assert_eq!(b["cancel"]["status"], "signed", "{b}");
+    let _ = std::fs::remove_dir_all(dir);
+}

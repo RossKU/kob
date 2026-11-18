@@ -158,13 +158,22 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
         ))));
     }
     let order_spk = script.spk(state)?;
+    // A cancel reads an unbound curve under its custody's token (the output of its own genesis).
+    // The order's script and the builder keep the state as it is on chain.
+    let named = match a.op {
+        Op::Cancel => match crate::recover::named_state(state, Some(cur_txid), v.custody.as_ref()) {
+            Ok(s) => s,
+            Err(e) => return Ok(Err(refuse(e))),
+        },
+        Op::Sweep => state.clone(),
+    };
     let own_program = state
         .token_tpl_hash()
         .and_then(|h| token_template_by_hash(&h))
         .map(|t| t.id)
         .ok_or("the order's token program is not supported")?;
-    let b_token = b_token(state)?;
-    let own = state.token_cov_id();
+    let b_token = b_token(&named)?;
+    let own = named.token_cov_id();
     // The scripts to look up: the order, its custody (cancel) and every usable stray.
     let mut left: Vec<Value> = vec![];
     let mut cands: Vec<(TokenView, TemplateId, TokenState, ScriptPublicKey)> = vec![];
@@ -191,7 +200,7 @@ pub(crate) fn prepare(v: &View, a: &Opts, maker_key: [u8; 32]) -> Result<Result<
     // order: the `custody` of the view and, for the B prefund of a sell-first entry,
     // `pair.custodies[1]`. Each is under the program of its token.
     let program_of = |t: [u8; 32]| if t == own { Some(own_program) } else { b_token.filter(|b| b.0 == t).map(|b| b.1) };
-    let targets = if a.op == Op::Cancel { custody_targets(state, cov, v.ext)? } else { vec![] };
+    let targets = if a.op == Op::Cancel { custody_targets(&named, cov, v.ext)? } else { vec![] };
     let mut custody_views: Vec<(TokenView, TokenState, ScriptPublicKey)> = vec![];
     for (k, (target, target_spk, token)) in targets.into_iter().enumerate() {
         let view = if k == 0 { &v.custody } else { &v.custody_b };

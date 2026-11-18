@@ -482,6 +482,19 @@ pub struct Live {
     pub genesis_daa: Option<i64>,
 }
 
+impl Live {
+    /// The order's state with its token named: an unbound curve takes its custody's token (the
+    /// output of its own genesis, which `live_order` confirmed), any other state is as it is.
+    pub fn named(&self) -> AnyState {
+        match (&self.order.state, self.custody.as_ref().and_then(|k| k.utxo.covenant_id)) {
+            (AnyState::KobCurveAsk(c), Some(token)) if c.is_unbound() => {
+                AnyState::KobCurveAsk(kob_protocol::state::CurveAskState { token_cov_id: token, ..c.clone() })
+            }
+            (s, _) => s.clone(),
+        }
+    }
+}
+
 /// The bought-custody a mode-1 order holds: its state, script and token (`None` without one).
 pub(crate) fn bought_target(
     state: &AnyState,
@@ -524,23 +537,26 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
     }
     let tpl = order_template(&view.template_hash).ok_or("the order's template is not pinned by this build")?;
     let ospk = order_spk(tpl, &state)?;
+    // An unbound curve is read under its custody's token, the output of its own genesis; `Live`
+    // keeps the state as it is on chain (its amend binds it).
+    let named = crate::recover::named_state(&state, Some(txid), view.custody.as_ref())?;
     // The custodies and the own strays.
-    let targets = crate::recover::custody_targets(&state, *cov, view.ext)?;
-    let bought_target = bought_target(&state, *cov)?;
+    let targets = crate::recover::custody_targets(&named, *cov, view.ext)?;
+    let bought_target = bought_target(&named, *cov)?;
     let mut spks = vec![ospk.clone()];
     spks.extend(targets.iter().map(|t| t.1.clone()));
     spks.extend(bought_target.iter().map(|t| t.1.clone()));
-    let own_tokens: Vec<[u8; 32]> = match state.pair_tokens() {
+    let own_tokens: Vec<[u8; 32]> = match named.pair_tokens() {
         Some(p) => vec![p.a.cov_id, p.b.cov_id],
-        None => vec![state.token_cov_id()],
+        None => vec![named.token_cov_id()],
     };
     let program_of = |t: [u8; 32]| -> Option<kob_protocol::artifacts::TemplateId> {
-        match state.pair_tokens() {
+        match named.pair_tokens() {
             Some(p) => {
                 let k = if p.a.cov_id == t { p.a } else { p.b };
                 kob_protocol::artifacts::token_template_by_hash(&k.tpl_hash).map(|x| x.id)
             }
-            None => state.token_tpl_hash().and_then(|h| kob_protocol::artifacts::token_template_by_hash(&h)).map(|x| x.id),
+            None => named.token_tpl_hash().and_then(|h| kob_protocol::artifacts::token_template_by_hash(&h)).map(|x| x.id),
         }
     };
     let mut stray_cands = vec![];
