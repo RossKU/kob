@@ -253,6 +253,7 @@ export class KobService {
   }
 
   async buildCreate(a) {
+    const px = (v, w) => need(RE.kasAmount, v, w);
     const argv = ['token', 'create', '--name', text(a.name, 'name', 64), '--ticker', need(/^[A-Z0-9]{2,12}$/, a.ticker, 'ticker'),
       '--decimals', String(a.decimals), '--supply', need(/^[1-9]\d{0,38}$/, a.supply, 'supply (base units)')];
     if (a.program) argv.push('--program', a.program);
@@ -261,10 +262,26 @@ export class KobService {
     if (a.image) argv.push('--image', text(a.image, 'image', 256));
     const carrier = a.carrier ? toSompi(px(a.carrier, 'carrier')) : 1_000_000_000n;
     argv.push('--carrier', String(carrier));
-    return { argv, create: { carrier } };
+    // After creation: keep everything (default), or sell on a curve created in the genesis (its own UTXO, its custody, a kept share).
+    let outputs = 1n;
+    if (a.sell === 'curve') {
+      argv.push('--sell', 'curve');
+      const keep = a.keep_percent ?? 0;
+      if (!(Number.isFinite(keep) && keep >= 0 && keep < 100 && Number.isInteger(Math.round(keep * 100)) && Math.abs(keep * 100 - Math.round(keep * 100)) < 1e-9)) {
+        throw new Refusal('BAD_ARGUMENT: keep_percent is 0 to 99.99, two decimals at most');
+      }
+      if (keep > 0) argv.push('--keep', String(keep));
+      if (a.levels !== undefined) argv.push('--levels', need(/^\d{1,4}$/, String(a.levels), 'levels'));
+      if (a.total) argv.push('--total', px(a.total, 'total'));
+      if (a.multiple) argv.push('--multiple', need(/^\d{1,6}(\.\d{1,3})?$/, a.multiple, 'multiple'));
+      outputs = keep > 0 ? 3n : 2n;
+    } else if (a.keep_percent !== undefined || a.levels !== undefined || a.total || a.multiple) {
+      throw new Refusal('BAD_ARGUMENT: keep_percent, levels, total and multiple go with sell: "curve"');
+    }
+    return { argv, create: { carrier, locked: carrier * outputs } };
   }
 
-  /** The funding UTXO of a creation: given, or the smallest that covers the carrier and 1 KAS of fees. */
+  /** The funding UTXO of a creation: given, or the smallest that covers the carriers and 1 KAS of fees. */
   async fundingFor(a, carrier) {
     const maker = await this.makerKey();
     if (a.fund_utxo) {
@@ -313,7 +330,7 @@ export class KobService {
   /** A dry run of a write: { ok, doc, spend, fee, error }. */
   async dryRun(tool, built, a, planDir) {
     if (built.create) {
-      const fund = built.fund ?? await this.fundingFor(a, built.create.carrier);
+      const fund = built.fund ?? await this.fundingFor(a, built.create.locked);
       built.fund = fund;
       const r = await this.runCreate(built.argv, fund, planDir, false);
       if (r.code !== 0) return { ok: false, error: `CLI_REFUSED (exit ${r.code}): ${r.stderr}` };

@@ -186,6 +186,18 @@ test('token create: the plan counts the carrier and both fees; the confirm sends
   assert.equal(sent[sent.indexOf('--fund-utxo') + 1].startsWith(`${'aa'.repeat(32)}:1:5000000000:`), true);
 });
 
+test('token create: sell on a curve passes the sale flags; the sale options need sell curve', async () => {
+  const t = setup();
+  const svc = new KobService(t.cfg);
+  const args = { name: 'Test MCP', ticker: 'TMCV', decimals: 2, supply: '100000', fund_utxo: `${"aa".repeat(32)}:1:5000000000`, sell: 'curve', keep_percent: 10, levels: 50, total: '500KAS' };
+  const p = await svc.write('kob_token_create', args);
+  assert.equal(p.status, 'plan');
+  const dry = t.calls().find((c) => c.includes('create'));
+  for (const [k, v] of [['--sell', 'curve'], ['--keep', '10'], ['--levels', '50'], ['--total', '500KAS']]) assert.equal(dry[dry.indexOf(k) + 1], v, k);
+  assert.match((await svc.write('kob_token_create', { ...args, sell: undefined })).reason, /^BAD_ARGUMENT: keep_percent/);
+  assert.match((await svc.write('kob_token_create', { ...args, keep_percent: 1.234 })).reason, /^BAD_ARGUMENT/);
+});
+
 test('fee estimate signs nothing and stores no plan', async () => {
   const t = setup();
   const svc = new KobService(t.cfg);
