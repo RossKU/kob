@@ -1,7 +1,8 @@
-//! C6 differential tests, Rust <-> covenant: for every arithmetic rule the builders mirror, random inputs
-//! (boundaries and near-overflow included) are built by the production builders and the boundary the Rust code
-//! computes is probed in the rusty-kaspa v2.1.0 engine: the covenant must accept exactly the Rust boundary value and
-//! refuse one unit worse (for the maker). Every probe moves one number of the builder's own transaction:
+//! Differential tests between the Rust builders and the covenants (C6): for every arithmetic rule
+//! the builders mirror, random inputs (boundaries and near-overflow included) are built by the
+//! production builders and the boundary the Rust code computes is probed in the rusty-kaspa v2.1.0
+//! engine: the covenant must accept exactly the Rust boundary value and refuse one unit worse (for
+//! the maker). Every probe moves one number of the builder's own transaction:
 //!
 //! | rule | probe |
 //! |---|---|
@@ -15,10 +16,10 @@
 //! | pair order quote at t: ask B delivery ceil(n * p(t) / scale(A)), bid release floor(n * p(t) / scale(A)), KAS tip | the maker's B delivery (exact, minus one); the builder's release |
 //! | activation, trigger rest time (minRestDaa), TWAP interval (CSV) | the lock time; the input sequence |
 //!
-//! Amounts are base units at random scales (powers of ten); every rule mirrors the covenants' `quoteOf` exactly (split
-//! multiplication, ceil for what a maker receives, floor for what it pays: [`quote`], cross-checked against
-//! `kob_protocol::state::quote_of` and the per-kind helpers) and most fills are not a multiple of the scale (the rounding
-//! paths; counted per rule).
+//! Amounts are base units at random scales (powers of ten); every rule mirrors the covenants'
+//! `quoteOf` exactly (split multiplication, ceil for what a maker receives, floor for what it pays:
+//! [`quote`], cross-checked against `kob_protocol::state::quote_of` and the per-kind helpers) and
+//! most fills are not a multiple of the scale (the rounding paths; counted per rule).
 //!
 //! `KOB_C6_DIFF_CASES` (default 25) random cases per rule, `KOB_C6_SEED`.
 
@@ -1617,9 +1618,9 @@ fn matcher_fallback(role: &str) -> kob_protocol::Result<u16> {
         .ok_or_else(|| kob_protocol::Error::MissingBudget(role.to_string()))
 }
 
-/// C6-2: every role the builders produce for a valid fill is in the committed compute-budget table (before the fix 152 roles
-/// were missing and the library's own `build` refused them with `MissingBudget`; the matcher survived on its fallback,
-/// which is also checked to be sufficient for whatever the table lacks).
+/// Every role the builders produce for a valid fill is in the committed compute-budget table (a
+/// role missing from it makes the library's own `build` refuse with `MissingBudget`; the matcher
+/// survives on its fallback, which is also checked to be sufficient for whatever the table lacks).
 #[test]
 fn c6_budget_table_covers_every_fill_branch() {
     let keys = keys();
@@ -1895,11 +1896,12 @@ fn c6_wallet_vectors_are_current() {
 
 // ------------------------------------------------------------------------------------------------ C6-5 / C6-6
 
-/// C6-5 / C6-6 (fixed 2026-10-02): `update` of an if-done stop entry requires an amount to fill (a repeating entry whose
-/// amount all sits in its exits used to be armable for the keeper's tip, although the merge bringing it back resets `armed`) and the
-/// stop on the limit's side (an entry whose stop is beyond its limit used to be armable although `fill` / `settle` can
-/// never fill it). The builder refuses both arms; a transaction made anyway (the builder's own arm of a one-token entry,
-/// re-pointed at the empty or inverted entry and its armed continuation) is refused by the covenant, while the same
+/// `update` of an if-done stop entry requires an amount to fill (a repeating entry whose amount all
+/// sits in its exits must not be armable for the keeper's tip, although the merge bringing it back
+/// resets `armed`) and the stop on the limit's side (an entry whose stop is beyond its limit must
+/// not be armable, because `fill` / `settle` can never fill it). The builder refuses both arms; a
+/// transaction made anyway (the builder's own arm of a one-token entry, re-pointed at the empty or
+/// inverted entry and its armed continuation) is refused by the covenant, while the same
 /// re-pointing with the original state is accepted.
 #[test]
 fn c6_5_an_empty_or_inverted_stop_entry_cannot_be_armed() {

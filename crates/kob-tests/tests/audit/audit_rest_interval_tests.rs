@@ -1,16 +1,20 @@
-//! Regression tests of the audit 2026-10-29 finding F1: a NEGATIVE `interval` in the state of a trigger-evidence order.
+//! Tests that a trigger-evidence order with a NEGATIVE `interval` in its state cannot arm a stop
+//! (finding F1).
 //!
-//! Every stop reader (`KobCondAsk` / `KobCondBid` / `KobIfdAsk` / `KobIfdBid` `touchAsk` / `touchBid` / `touch`, `KobCondPair` /
-//! `KobIfdPair` `rd` / `evLeg`, and the KRON twins) computes the evidence quote's exposure as `UTXO DAA + interval`, where the
-//! interval is read out of the evidence order's own state, and requires `tx.daa >= exposed + minRestDaa`. The evidence
-//! templates (`KobAsk`, `KobBid`, `KobPair`) never validate their own initial state, so an order built with a raw transaction
-//! can carry `interval = -10^12`: the rest time `minRestDaa` then counted as zero and the stop could be armed by a quote that
-//! had just been created. The readers now `require(iv >= 0)` before the addition (a new order template version, see
-//! `docs/spec/template-retirement.md`). These tests are the PoC of the audit turned around: every such arm update must be
-//! REFUSED by the stopped order, and so must a sign flip of any other state field a reader reads.
+//! Every stop reader (`KobCondAsk` / `KobCondBid` / `KobIfdAsk` / `KobIfdBid` `touchAsk` /
+//! `touchBid` / `touch`, `KobCondPair` / `KobIfdPair` `rd` / `evLeg`, and the KRON twins) computes
+//! the evidence quote's exposure as `UTXO DAA + interval`, where the interval is read out of the
+//! evidence order's own state, and requires `tx.daa >= exposed + minRestDaa`. The evidence
+//! templates (`KobAsk`, `KobBid`, `KobPair`) never validate their own initial state, so an order
+//! built with a raw transaction can carry `interval = -10^12`. Without a check the rest time
+//! `minRestDaa` then counts as zero and the stop can be armed by a quote that has just been
+//! created. The readers `require(iv >= 0)` before the addition (see
+//! `docs/spec/template-retirement.md`). These tests are the proof of concept turned around: every
+//! such arm update must be REFUSED by the stopped order, and so must a sign flip of any other state
+//! field a reader reads.
 //!
-//! The honest controls (evidence one DAA old with `interval` 0) are refused by the rest time as before, and the honest
-//! update (the evidence rested) is accepted.
+//! The honest controls (evidence one DAA old with `interval` 0) are refused by the rest time, and
+//! the honest update (the evidence rested) is accepted.
 //!
 //! Run: cargo test --release -p kob-tests --test audit_rest_interval_tests -- --nocapture --test-threads=1
 
@@ -233,9 +237,10 @@ fn flip_battery(r: &Run, tag: &str, honest: &Ed, stopped: [u8; 32], evs: &[[u8; 
 // ---------------------------------------------------------------- the rest time of the evidence
 
 /// One arm update `honest` (stopped order of covenant `stopped`, evidence orders `evs`):
-///  * C1: the evidence UTXOs are one DAA old, `interval` 0: refused by the stopped order (the rest time works);
-///  * A1: the same with `interval` = -10^12 in the state of the evidence order(s): now REFUSED by the stopped order (every
-///    input accepted it before the readers required `interval >= 0`);
+///  * C1: the evidence UTXOs are one DAA old, `interval` 0: refused by the stopped order (the rest
+///    time works);
+///  * A1: the same with `interval` = -10^12 in the state of the evidence order(s): REFUSED by the
+///    stopped order (every input would accept it if the readers did not require `interval >= 0`);
 ///  * C2: A1 with the custody of the evidence ask / pair also fresh: refused;
 ///  * the sign flip battery.
 fn rest_case(r: &Run, tag: &str, honest: Ed, stopped: [u8; 32], evs: &[[u8; 32]]) {

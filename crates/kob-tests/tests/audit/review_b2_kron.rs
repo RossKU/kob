@@ -1,10 +1,12 @@
-//! Review B2 (internal listing review): regression tests for the two pinned KRON token programs
-//! (`contracts/adapters/kron/templates/kron_token_{2433,2732}.bin`, real bytes) and for the KOB-side mitigations
-//! the listing verdict relies on. Engine: rusty-kaspa v2.1.0 `TxScriptEngine` with the KIP-20 covenant context.
-//! Every engine test runs on BOTH templates and asserts the observed outcome: `ACCEPTED` = the engine let the
-//! transaction through, `REJECTED` = it did not. The review report itself is not part of this repository.
+//! Tests the two pinned KRON token programs for listing review B2
+//! (`contracts/adapters/kron/templates/kron_token_{2433,2732}.bin`, real bytes) and the KOB-side
+//! mitigations the listing verdict relies on. Engine: rusty-kaspa v2.1.0 `TxScriptEngine` with the
+//! KIP-20 covenant context. Every engine test runs on BOTH templates and asserts the observed
+//! outcome: `ACCEPTED` = the engine let the transaction through, `REJECTED` = it did not. The
+//! review report itself is not part of this repository.
 //!
-//! Program as reconstructed in the review (both templates, one entry, every covenant token input runs all of it):
+//! Program as reconstructed in the review (both templates, one entry, every covenant token input
+//! runs all of it):
 //!   n_out = len(owners)/32 in 1..=5; n_in = OpCovInputCount(own cov) in 1..=4; OpCovOutputCount == n_out
 //!   for i < n_in: state_i = last 2433/2732 bytes of the sigscript of covenant input i; auth by state_i.type:
 //!       0 checkSig(sigs[65i..], owner)  1 inSpk(wits[i]) == P2SH(owner)  2 inCovId(wits[i]) == owner
@@ -14,9 +16,10 @@
 //!   if !self.is_minter: sum_in == sum_out and no output minter flag (a minter input skips both checks)
 //!   2732 only: witness index in [0, nIns), type-2 owner != 0^32, input amount <= 1e9, output type in 0..=3.
 //!
-//! Differences to an earlier unrun draft of these tests: token outputs are bound to a TOKEN input (a binding to a
-//! non-covenant input is a genesis and fails the covenant context), SINGLE|ANYONECANPAY is 0x84 (0x83 is not a valid
-//! Kaspa sighash type), plus the genesis-check, signer and order-genesis tests.
+//! Notes on the transactions: token outputs are bound to a TOKEN input (a binding to a non-covenant
+//! input is a genesis and fails the covenant context), and SINGLE|ANYONECANPAY is 0x84 (0x83 is not
+//! a valid Kaspa sighash type). The file also holds the genesis-check, signer and order-genesis
+//! tests.
 //!
 //! Run: cargo test -p kob-tests --test review_b2_kron -- --nocapture --test-threads=1
 #![allow(clippy::needless_range_loop)]
@@ -646,8 +649,9 @@ fn r_kr_13_genesis_check_covers_the_kron_shapes() {
         let (cid, outs) = genesis(&k, &[(0, k.redeem(&curve))]);
         let r = verify_genesis(tpl, &cid, &txid, auth, &outs).expect("clean KRON genesis");
         assert_eq!((r.outputs, r.supply), (1, 1_000_000_000));
-        // clean but with a minter output: accepted; the report carries no minter information (gap G-1 of the review:
-        // a genesis minter is a live mint authority and the registry cannot see it from the report)
+        // clean but with a minter output: accepted; the report carries no minter information
+        // (a gap of the review: a genesis minter is a live mint authority and the registry cannot
+        // see it from the report)
         let (cid, outs) = genesis(&k, &[(0, k.redeem(&curve)), (1, k.redeem(&minter([0xc1; 32], T_COVID, 0)))]);
         let r = verify_genesis(tpl, &cid, &txid, auth, &outs).expect("genesis with a minter");
         println!(

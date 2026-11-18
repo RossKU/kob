@@ -1,22 +1,25 @@
-//! C4 security verification (internal review of KOB's own covenants, 2026-10-02): regression tests for the property
-//! cells the other suites did not cover. The review itself (property x contract matrix, findings) is the internal
-//! report `c4_security.md`; the properties are numbered as there.
+//! Tests the security properties of KOB's own covenants that the other suites do not cover (C4).
+//! The internal report `c4_security.md` holds the property x contract matrix and the findings; the
+//! properties are numbered as there.
 //!
-//! * **P8 resource bounds** (static): every hand-unrolled bounded scan of the 15 order templates (the stray guards)
-//!   visits EVERY slot below its cap, each line indexing its own slot. Since the cost pass the
-//!   scans are written out one line per slot (`if (cnt > k) { ... OpCovInputIdx(token, k) ... }`): a missing or
-//!   duplicated line would leave a token input or output unscanned behind `require(cnt <= CAP)`, which no engine test
-//!   of a small batch notices.
-//! * **P5 time** (engine, every builder shape of both families and every pair order shape of the four family mixes): each CLTV rule
-//!   (`tx.daa >= x`, SilverScript `OpWithin(0, LOCK_TIME_THRESHOLD)` + `OP_CHECKLOCKTIMEVERIFY`) is "not earlier than"
-//!   only and cannot be met by a builder that (a) switches the lock time to the other type (a unix-ms time lock that
-//!   is numerically above every DAA bound), or (b) finalises the order input (sequence `u64::MAX`, which makes
-//!   consensus ignore the lock time); and each CSV rule (`this.ageDaa >= x`: TWAP / DCA slices, the trailing wait)
-//!   cannot be met with the sequence-lock disable bit or a shorter relative lock. The router's `tx.time >= deadline`
-//!   expiry is checked the same way (a DAA lock time, a finalised intent input).
+//! * **P8 resource bounds** (static): every hand-unrolled bounded scan of the 15 order templates
+//!   (the stray guards) visits EVERY slot below its cap, each line indexing its own slot. The scans
+//!   are written out one line per slot (`if (cnt > k) { ... OpCovInputIdx(token, k) ... }`): a
+//!   missing or duplicated line would leave a token input or output unscanned behind `require(cnt
+//!   <= CAP)`, which no engine test of a small batch notices.
+//! * **P5 time** (engine, every builder shape of both families and every pair order shape of the
+//!   four family mixes): each CLTV rule (`tx.daa >= x`, SilverScript `OpWithin(0,
+//!   LOCK_TIME_THRESHOLD)` + `OP_CHECKLOCKTIMEVERIFY`) is "not earlier than" only and cannot be met
+//!   by a builder that (a) switches the lock time to the other type (a unix-ms time lock that is
+//!   numerically above every DAA bound), or (b) finalises the order input (sequence `u64::MAX`,
+//!   which makes consensus ignore the lock time); and each CSV rule (`this.ageDaa >= x`: TWAP / DCA
+//!   slices, the trailing wait) cannot be met with the sequence-lock disable bit or a shorter
+//!   relative lock. The router's `tx.time >= deadline` expiry is checked the same way (a DAA lock
+//!   time, a finalised intent input).
 //!
-//! Every negative is checked input by input: exactly the inputs whose script carries the rule fail, everything else
-//! (P2PK funding re-signed, token programs) still passes, so a failure is the time rule and not a broken transaction.
+//! Every negative is checked input by input: exactly the inputs whose script carries the rule fail,
+//! everything else (P2PK funding re-signed, token programs) still passes, so a failure is the time
+//! rule and not a broken transaction.
 //! Run: cargo test -p kob-tests --test c4_security_tests -- --nocapture --test-threads=1
 
 #[path = "../common/mod.rs"]
@@ -459,17 +462,19 @@ fn c4_p5_router_expiry_cannot_be_moved_earlier() {
 
 // ================================================================================================ P4: router cancel
 
-/// P4 router token intents (finding F2 of the review, fixed 2026-10-02). A token intent's `cancel` must spend the locked
-/// tokens in the same transaction (the cancel ends the intent covenant; tokens owned by its id could never move
-/// afterwards). The router requires the payer's signature and the lock as the one token input of the locked token, at
-/// input j + 1, read under the intent's token handle (open ICC): owned by this intent's id with KCC-20 owner_scheme 0x04
-/// or KRON id_type 2. Run on the 8/8 and 3/3 KCC-20 programs and on both KRON programs (whose key-held tokens are
-/// authorised by a P2PK input of the owner, which the forger adds):
+/// P4 router token intents (finding F2). A token intent's `cancel` must spend the locked tokens in
+/// the same transaction (the cancel ends the intent covenant; tokens owned by its id could never
+/// move afterwards). The router requires the payer's signature and the lock as the one token input
+/// of the locked token, at input j + 1, read under the intent's token handle (open ICC): owned by
+/// this intent's id with KCC-20 owner_scheme 0x04 or KRON id_type 2. Run on the 8/8 and 3/3 KCC-20
+/// programs and on both KRON programs (whose key-held tokens are authorised by a P2PK input of the
+/// owner, which the forger adds):
 /// - the honest cancel (`build_cancel_intent`, the lock at j + 1, tokens back to the payer) passes;
 /// - KOB's builder refuses a "lock" that the intent does not own;
-/// - a payer-signed cancel whose input j + 1 is another token UTXO of the same token (here the payer's own key-held
-///   tokens), leaving the lock behind, is refused by the router (before the fix it passed: only the position was checked),
-///   and accepted by the actor with the two owner lines of its cancel removed (ablation).
+/// - a payer-signed cancel whose input j + 1 is another token UTXO of the same token (here the
+///   payer's own key-held tokens), leaving the lock behind, is refused by the router (a check of
+///   the position alone would pass it), and accepted by the actor with the two owner lines of its
+///   cancel removed (ablation).
 #[test]
 fn c4_router_token_cancel_checks_the_lock_owner() {
     use kaspa_txscript::pay_to_script_hash_script;
@@ -700,13 +705,14 @@ fn router_state_args(state: &IntentState, fam: Family, ext: [u8; 32]) -> Vec<sil
     args
 }
 
-/// Finding AUD-RT of the audit 2026-10 (closed with the router of the order template version after it). A token intent's
-/// `cancel` read its lock (input j + 1) for the owner, the owner type, the amount and the commitment, but not for the
-/// rest of what every other entry requires of it (`own_tokens` / `own_kron`): the KCC-20 borrow scheme and the KRON
-/// `is_minter` flag. Now a payer-signed cancel whose lock is borrow-enabled (KCC-20) or a minter UTXO (KRON) is refused by
-/// the router at the intent input; the same actor without the new line of its cancel (ablation) accepts it at that input.
-/// Such a lock cannot be built by KOB (the builders refuse non-plain token UTXOs), so the transaction is edited after an
-/// honest build. Run on the 8/8 and 3/3 KCC-20 programs and on both KRON programs.
+/// Finding AUD-RT. A token intent's `cancel` reads its lock (input j + 1) for the owner, the owner
+/// type, the amount and the commitment, and also for the rest of what every other entry requires of
+/// it (`own_tokens` / `own_kron`): the KCC-20 borrow scheme and the KRON `is_minter` flag. A
+/// payer-signed cancel whose lock is borrow-enabled (KCC-20) or a minter UTXO (KRON) is refused by
+/// the router at the intent input; the same actor without that line of its cancel (ablation)
+/// accepts it at that input. Such a lock cannot be built by KOB (the builders refuse non-plain
+/// token UTXOs), so the transaction is edited after an honest build. Run on the 8/8 and 3/3 KCC-20
+/// programs and on both KRON programs.
 #[test]
 fn aud_rt_router_token_cancel_refuses_a_minter_or_borrow_enabled_lock() {
     use kaspa_txscript::pay_to_script_hash_script;
