@@ -18,6 +18,8 @@ import type { Family, Hex, KronState, TokenProgram, TokenState, Kcc20State, U64 
 
 /** KCC-20 `owner_scheme` of a key-held state. */
 export const KCC20_SCHEME_P2PK = 0;
+/** KCC-20 `owner_scheme` of a `p2sh/v1` owner: Blake2b of a redeem script (a creator lock, kob/creator-lock.ts). */
+export const KCC20_SCHEME_P2SH = 3;
 /** KCC-20 `owner_scheme` of a state owned by a covenant id. */
 export const KCC20_SCHEME_COVID = 4;
 /** KRON `id_type` of a pubkey owner with a token-level signature. */

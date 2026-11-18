@@ -71,3 +71,10 @@
 .issue-curve-numbers { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 0; }
 .issue-curve-numbers dt { color: var(--muted, #666); font-size: 0.8rem; }
 .issue-curve-numbers dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* "Lock my share until": one row under the choices (label with its "?", the choice, a date, the day it opens) */
+.issue-lock { margin-top: 12px; }
+.issue-lock-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.issue-lock-row label { font-weight: 600; }
+.issue-lock-select { width: auto; min-width: 140px; }
+.issue-lock-date { width: auto; }

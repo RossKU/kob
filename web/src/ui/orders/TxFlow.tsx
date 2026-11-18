@@ -34,6 +34,8 @@ export interface FlowStep {
    * app's own final confirmation, and the wallet still asks for its approval
    */
   preconfirmed?: boolean;
+  /** the wallet's creator locks a lock coin of this step pays to (ui/confirm/send.ts `SendJob.locks`) */
+  locks?: readonly { until: string; key: string }[];
 }
 
 export type StepState = 'pending' | 'preparing' | 'sending' | 'submitted' | 'cancelled' | 'failed';
@@ -190,7 +192,7 @@ export function TxFlow(props: TxFlowProps) {
         return end();
       }
       const sid = live.current?.sid;
-      const out = await sender.send({ built: step.plan.built, expected: step.plan.expected, label: step.label, ...(step.preconfirmed ? { preconfirmed: true } : {}), ...(sid ? { session: sid } : {}) });
+      const out = await sender.send({ built: step.plan.built, expected: step.plan.expected, label: step.label, ...(step.preconfirmed ? { preconfirmed: true } : {}), ...(sid ? { session: sid } : {}), ...(step.locks?.length ? { locks: step.locks } : {}) });
       checkSession();
       if (out.status !== 'submitted') {
         st[i] = out.send.phase === 'rejected' ? 'cancelled' : 'failed';

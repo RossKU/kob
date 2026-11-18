@@ -55,6 +55,8 @@ export function combineBalances(o: {
   strays: readonly StrayView[];
   /** the token program of each token (decides which KRON key-held type is spendable); absent: the family default */
   programs?: ReadonlyMap<Hex, TokenProgram>;
+  /** what the wallet's creator locks hold, per token (a token held only so still has its row) */
+  locked?: readonly { token: Hex; amount: bigint; until: bigint }[];
 }): CombinedBalances {
   // views: the separate stray list is authoritative; snapshots (resolved from a node) never know strays
   const noStrays = o.liveOrders.map((v) => ('covenant_id' in v ? { ...v, strays: undefined } : { ...v, strays: [] }));
@@ -67,7 +69,14 @@ export function combineBalances(o: {
     const cur = by.get(token) ?? { token, free: 0n, notSpendable: 0n, escrowed: 0n, bought: 0n, boughtOrders: 0, strays: 0n, kasLocked: 0n, kasEscrow: 0n, kasCarriers: 0n, orderCount: 0 };
     by.set(token, { ...cur, strays: t.recoverable });
   }
-  const tokens = [...by.values()].filter((b) => b.free > 0n || b.notSpendable > 0n || b.escrowed > 0n || b.bought > 0n || b.strays > 0n || b.kasLocked > 0n || b.orderCount > 0).sort((a, b) => (a.token < b.token ? -1 : a.token > b.token ? 1 : 0));
+  for (const l of o.locked ?? []) {
+    if (l.amount <= 0n) continue;
+    const cur = by.get(l.token) ?? { token: l.token, free: 0n, notSpendable: 0n, escrowed: 0n, bought: 0n, boughtOrders: 0, strays: 0n, kasLocked: 0n, kasEscrow: 0n, kasCarriers: 0n, orderCount: 0 };
+    // one lock per token (its declaration names one); the earliest time stands for several
+    const was = cur.locked;
+    by.set(l.token, { ...cur, locked: { amount: (was?.amount ?? 0n) + l.amount, until: was && was.until < l.until ? was.until : l.until } });
+  }
+  const tokens = [...by.values()].filter((b) => b.free > 0n || b.notSpendable > 0n || b.escrowed > 0n || b.bought > 0n || b.strays > 0n || b.kasLocked > 0n || b.orderCount > 0 || (b.locked?.amount ?? 0n) > 0n).sort((a, b) => (a.token < b.token ? -1 : a.token > b.token ? 1 : 0));
   const kas = kasBalanceSummary(o.freeKas, tokens);
   const onTokens = o.freeTokens.filter((u) => u.state.owner === o.maker).reduce((s, u) => s + big(u.amount), 0n);
   return { tokens, kas: { ...kas, onTokens, total: kas.total + onTokens }, lostStrayTokens: lost };

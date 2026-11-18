@@ -4,6 +4,8 @@
 // A proof may come from anyone (the indexer, a list, a file). `verifyLaunchProof` recomputes both
 // transaction ids and the covenant id, so a supplier can withhold a declaration but never forge
 // one. Decoding alone binds nothing.
+import { verifiedLockOf, parseLockScript, type VerifiedLock } from './creator-lock';
+import { isTokenProgram } from './programs.generated';
 import type { Hex } from './types';
 import { KobError, type KobWasm } from './wasm';
 
@@ -27,6 +29,11 @@ export interface TokenDeclaration {
   website: string | null;
   x: string | null;
   telegram: string | null;
+  /**
+   * `lock`: a creator lock's redeem script (88 lowercase hex), taken only when it is exactly the template (kob/creator-lock.ts). What it holds
+   * is `VerifiedDeclaration.lock`.
+   */
+  lock: Hex | null;
   /** Fields present but not taken, for example "decimals: not an integer from 0 to 18". */
   issues: string[];
 }
@@ -39,6 +46,11 @@ export interface VerifiedDeclaration {
   /** The JSON text exactly as committed. */
   json: string;
   token: TokenDeclaration;
+  /**
+   * The declared creator lock verified against the genesis: what it holds and until when. Null without a `lock`, or when it holds nothing
+   * there (named in `token.issues`).
+   */
+  lock: VerifiedLock | null;
 }
 
 interface RawKcc23 {
@@ -73,6 +85,7 @@ function tokenOf(v: unknown): TokenDeclaration {
     website: text(o.website, 2048),
     x: text(o.x, 256),
     telegram: text(o.telegram, 256),
+    lock: typeof o.lock === 'string' && parseLockScript(o.lock) ? o.lock.toLowerCase() : null,
     issues: Array.isArray(o.issues) ? o.issues.filter((i): i is string => typeof i === 'string') : [],
   };
 }
@@ -99,6 +112,7 @@ export function verifyLaunchProof(kob: KobWasm, proof: unknown): VerifiedDeclara
     genesisTxid: hex32(out.genesisTxid),
     json: typeof out.json === 'string' ? out.json : '',
     token: tokenOf(out.token),
+    lock: verifiedLockOf(out.lock, isTokenProgram),
   };
 }
 

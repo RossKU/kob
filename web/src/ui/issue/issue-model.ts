@@ -11,7 +11,7 @@ import type { PlanIssue } from '../../kob/plan-types';
 import type { KobWasm } from '../../kob/wasm';
 import { curveNumbersOfState } from '../../kob/curve';
 import type { CreationRecord } from '../../data/creations';
-import type { PlannedSale } from '../../kob/issue';
+import type { IssueLock, PlannedSale } from '../../kob/issue';
 import type { Hex } from '../../kob/types';
 import { groupDigits, shortId } from '../kit/format';
 
@@ -50,6 +50,47 @@ export interface IssueUiState {
   telegram: string;
   /** "After creation": keep all, sell at one price, sell on a curve */
   sale: SaleUi;
+  /** "Lock my share until": none, a number of days, or a date */
+  lock: LockUi;
+}
+
+/** The lock choices: none, a number of days from the choice, or a date (YYYY-MM-DD, the start of that day in the viewer's zone). */
+export const LOCK_DAYS = ['30', '90', '180', '365'] as const;
+export type LockChoice = 'none' | (typeof LOCK_DAYS)[number] | 'date';
+
+/** "Lock my share until" as chosen: `until` (unix ms) is fixed when a number of days is chosen, so the plan does not move with the clock. */
+export interface LockUi {
+  choice: LockChoice;
+  /** YYYY-MM-DD of the date input */
+  date: string;
+  /** unix ms of a number of days, decimal text; '' otherwise */
+  until: string;
+}
+
+const DAY_MS = 86_400_000;
+
+/** The time `days` days from `now`, rounded up to the whole minute (unix ms). */
+export function lockUntilIn(days: number, now: number = Date.now()): string {
+  return String(Math.ceil((now + days * DAY_MS) / 60_000) * 60_000);
+}
+
+/** A choice of the lock as its UI state. */
+export function chooseLock(choice: LockChoice, prev: LockUi, now: number = Date.now()): LockUi {
+  if (choice === 'none' || choice === 'date') return { ...prev, choice, until: '' };
+  return { ...prev, choice, until: lockUntilIn(Number(choice), now) };
+}
+
+/**
+ * The planner's `lockUntil` (unix ms, decimal text) of the choice: '' for none; a date is the start of that day in the viewer's zone; a missing or
+ * unreadable date gives '0', which the validator refuses (`lock.invalid`).
+ */
+export function lockUntilOf(l: LockUi): string {
+  if (l.choice === 'none') return '';
+  if (l.choice !== 'date') return l.until;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(l.date.trim());
+  if (!m) return '0';
+  const ms = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+  return Number.isFinite(ms) && ms > 0 ? String(ms) : '0';
 }
 
 /**
@@ -65,7 +106,7 @@ export function emptySaleUi(): SaleUi {
 }
 
 export function emptyUiState(): IssueUiState {
-  return { program: 'public-mint', name: '', ticker: '', decimals: '8', supply: '', extras: [], carrier: '', description: '', icon: '', imageHash: '', imageFile: '', website: '', x: '', telegram: '', sale: emptySaleUi() };
+  return { program: 'public-mint', name: '', ticker: '', decimals: '8', supply: '', extras: [], carrier: '', description: '', icon: '', imageHash: '', imageFile: '', website: '', x: '', telegram: '', sale: emptySaleUi(), lock: { choice: 'none', date: '', until: '' } };
 }
 
 // ------------------------------------------------------------------------------------------------ small filters
@@ -164,6 +205,7 @@ export function formToIssueForm(state: IssueUiState, walletKey: Hex | null): Iss
     ...(state.x.trim() ? { x: state.x.trim() } : {}),
     ...(state.telegram.trim() ? { telegram: state.telegram.trim() } : {}),
     ...(state.sale.mode !== 'keep' ? { sale: saleFormOf(state.sale) } : {}),
+    ...(state.lock && lockUntilOf(state.lock) !== '' ? { lockUntil: lockUntilOf(state.lock) } : {}),
   };
 }
 
@@ -362,6 +404,8 @@ export interface HolderView {
   isWallet: boolean;
   /** the custody of the curve this genesis places */
   isCurve?: boolean;
+  /** the wallet's share held by the creation's creator lock: opens at `lockedUntil` (unix ms) */
+  lockedUntil?: bigint;
 }
 
 export interface ReviewSummary {
@@ -378,12 +422,15 @@ export interface ReviewSummary {
   fee: bigint;
   program: string;
   outputCount: number;
+  /** the creator lock: what it holds and when it opens (unix ms); null for none */
+  lock: { amount: bigint; human: string; until: bigint } | null;
 }
 
-export function holderViews(token: Pick<IssueToken, 'outputs' | 'decimals'>, walletKey: Hex | null, curveId?: Hex | null): HolderView[] {
+export function holderViews(token: Pick<IssueToken, 'outputs' | 'decimals'>, walletKey: Hex | null, curveId?: Hex | null, lock?: Pick<IssueLock, 'authority' | 'key' | 'until'> | null): HolderView[] {
   const me = walletKey?.toLowerCase() ?? null;
   return token.outputs.map((o) => ({
     ...(curveId && o.ownerScheme === 4 && o.owner === curveId ? { isCurve: true } : {}),
+    ...(lock && o.ownerScheme === 3 && o.owner === lock.authority && lock.key === me ? { lockedUntil: BigInt(lock.until) } : {}),
     index: o.index,
     owner: o.owner,
     ownerShort: shortId(o.owner, 14),
@@ -395,8 +442,11 @@ export function holderViews(token: Pick<IssueToken, 'outputs' | 'decimals'>, wal
 }
 
 /** What the review shows before the pre-sign screen: from the plan, so the numbers are the ones that will be signed. */
-export function reviewSummary(plan: Pick<IssuePlan, 'token' | 'fee' | 'curve'>, walletKey: Hex | null): ReviewSummary {
+export function reviewSummary(plan: Pick<IssuePlan, 'token' | 'fee' | 'curve' | 'lock'>, walletKey: Hex | null): ReviewSummary {
   const { token } = plan;
+  const holders = holderViews(token, walletKey, plan.curve?.covenantId ?? null, plan.lock ?? null);
+  const locked = holders.filter((h) => h.lockedUntil !== undefined);
+  const lockAmount = locked.reduce((a, h) => a + h.amount, 0n);
   const supply = BigInt(token.supply);
   const carrierEach = BigInt(token.carrier);
   return {
@@ -405,12 +455,13 @@ export function reviewSummary(plan: Pick<IssuePlan, 'token' | 'fee' | 'curve'>, 
     decimals: token.decimals,
     supplyBase: supply,
     supplyHuman: humanAmount(supply, token.decimals),
-    holders: holderViews(token, walletKey, plan.curve?.covenantId ?? null),
+    holders,
     carrierEach,
     carrierTotal: carrierEach * BigInt(token.outputs.length) + (plan.curve ? BigInt(plan.curve.carrier) : 0n),
     fee: plan.fee,
     program: token.program,
     outputCount: token.outputs.length + (plan.curve ? 1 : 0),
+    lock: locked.length && plan.lock ? { amount: lockAmount, human: humanAmount(lockAmount, token.decimals), until: BigInt(plan.lock.until) } : null,
   };
 }
 
@@ -443,7 +494,7 @@ function prepTxidOf(docs: IssuePlan['docs']): string | null {
 }
 
 /** Rows and file contents of the result panel. Throws when the docs do not describe the issued token (`registryEntryFromIssue`). */
-export function resultViewModel(plan: Pick<IssuePlan, 'token' | 'docs'>, txid: string, walletKey: Hex | null = null): ResultViewModel {
+export function resultViewModel(plan: Pick<IssuePlan, 'token' | 'docs'> & Partial<Pick<IssuePlan, 'lock'>>, txid: string, walletKey: Hex | null = null): ResultViewModel {
   const entry = registryEntryFromIssue(plan.token, plan.docs);
   return {
     rows: [
@@ -454,7 +505,7 @@ export function resultViewModel(plan: Pick<IssuePlan, 'token' | 'docs'>, txid: s
       { id: 'templateHash', value: plan.token.templateHash, copy: true },
       { id: 'extension', value: plan.token.extensionCommitment, copy: true },
     ],
-    holders: holderViews(plan.token, walletKey),
+    holders: holderViews(plan.token, walletKey, null, plan.lock ?? null),
     registryEntryJson: jsonText(entry),
     registryEntryFile: registryEntryFileName(plan.token.ticker),
     supplyJson: jsonText(plan.docs.supply),

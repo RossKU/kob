@@ -625,8 +625,11 @@ export interface TxJson {
 
 /** One argument of a covenant entry call: an int, bytes or a signature. */
 export type SigArg = { kind: 'int' | 'bytes'; value: string } | { kind: 'sig'; value: Hex };
-/** The owner witness of a token input: a covenant id or a P2PK key. */
-export type SigWitness = { kind: 'covenantId' } | { kind: 'p2pk'; value: Hex };
+/**
+ * The owner witness of a token input: a covenant id, a P2PK key, or (`p2sh`, owner scheme 0x03) the index of the input whose script public
+ * key is the P2SH of the owner (a creator lock's coin, kob/creator-lock.ts). A `p2sh` token input carries no signature of its own.
+ */
+export type SigWitness = { kind: 'covenantId' } | { kind: 'p2pk'; value: Hex } | { kind: 'p2sh'; value: number };
 /** How one input is signed. */
 export type SigPlan =
   | { kind: 'p2pk'; pubkey: Hex }
@@ -642,7 +645,12 @@ export type SigPlan =
    * The maker's `cancel(sig)` of an order under a retired template. `retired` is that template's
    * hash and `template` is the current kind of the same state layout. There is no other entry.
    */
-  | { kind: 'retiredCancel'; template: TemplateName; retired: Hex; state: Hex; maker: Hex };
+  | { kind: 'retiredCancel'; template: TemplateName; retired: Hex; state: Hex; maker: Hex }
+  /**
+   * The KAS coin of a creator lock (kob/creator-lock.ts): `push(sig65) push(script)`, a SIGHASH_ALL signature of `key`; the
+   * transaction's lock time is at least `until` (unix ms).
+   */
+  | { kind: 'creatorLock'; until: U64; key: Hex };
 
 /** One template of the cancel-only table (kob-wasm `retiredTemplates`). Only its maker cancels. */
 export interface RetiredTemplateInfo { kind: TemplateName; hash: Hex; label: string; retiredBy: string; lastRelease: string; entries: string[] }

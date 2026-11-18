@@ -523,6 +523,41 @@ export class TokenTracker {
     }
   }
 
+  /**
+   * The unspent token UTXOs a creator lock holds (kob/creator-lock.ts: owner scheme 0x03, owner = the lock's `authority`, no borrow setting),
+   * verified on the node like any other candidate: the locked genesis outputs its verified declaration names, and what the indexer lists for
+   * that owner (`GET /v1/token-utxos?owner=<authority>&token=`: tokens anyone sent to the lock later). Read-only; largest amount first.
+   * Throws when the node cannot be asked.
+   */
+  async lockedTokenUtxos(lock: { covenantId: Hex; program: TokenProgram; authority: Hex; extensionCommitment: Hex; genesis?: { txid: Hex; outputs: readonly { index: number; amount: U64 }[] } }): Promise<TokenUtxo[]> {
+    const id = lock.covenantId.toLowerCase();
+    const owner = lock.authority.toLowerCase();
+    const zero = '0'.repeat(64);
+    const held = (s: TokenState): boolean => !isKronState(s) && s.owner.toLowerCase() === owner && s.owner_scheme === 3 && s.borrow_scheme === 0 && s.borrow_guard === zero;
+    const candidates: TrackedToken[] = [];
+    for (const o of lock.genesis?.outputs ?? []) {
+      const state: TokenState = { amount: o.amount, owner, owner_scheme: 3, borrow_scheme: 0, borrow_guard: zero, extension_commitment: lock.extensionCommitment };
+      const c = sanitizeTracked({ transactionId: lock.genesis!.txid, index: o.index, tokenCovId: id, program: lock.program, state, carrier: '0', addedAt: this.now() }, this.now());
+      if (c) candidates.push(c);
+    }
+    let views: TokenUtxoView[] | null = null;
+    try {
+      views = this.indexer ? await this.indexer.tokenUtxos({ owner, token: id, spent: false }) : null;
+    } catch {
+      views = null;
+    }
+    for (const v of views ?? []) {
+      if (v.spent || !v.state || v.token.toLowerCase() !== id || !held(v.state)) continue;
+      const c = sanitizeTracked({ transactionId: v.txid, index: v.index, tokenCovId: id, program: lock.program, state: v.state, carrier: v.value, addedAt: this.now() }, this.now());
+      if (c) candidates.push(c);
+    }
+    const byClaim = new Map<string, TrackedToken>();
+    for (const c of candidates) byClaim.set(`${outpointKey(c.transactionId, c.index)}:${c.state.amount}`, c);
+    if (byClaim.size === 0) return [];
+    const { verified } = await this.verifyOnNode([...byClaim.values()], true);
+    return [...verified.values()].map(({ program: _p, ...u }) => u as TokenUtxo).sort(byAmountDesc);
+  }
+
   /** The indexer's holdings of an owner, any token (views without a state, or of a program this build does not pin, are left out). */
   private async allFromIndexer(me: Hex): Promise<TrackedToken[]> {
     if (!this.indexer) return [];

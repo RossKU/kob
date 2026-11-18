@@ -6,6 +6,7 @@
 import type { CreationRecord } from '../data/creations';
 import { issueRaw, type IssueResult, type IssueSpec } from '../kob/issue';
 import { decodeDeclaration } from '../kob/kcc23';
+import { lockOfScript } from '../kob/creator-lock';
 import type { Hex } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 
@@ -37,15 +38,24 @@ export function specOfRecord(kob: KobWasm, rec: CreationRecord): IssueSpec | str
   const feeRate = rec.genesisBuilt?.fee?.feeRate;
   const c = rec.curve;
   const opt = <K extends string>(k: K, v: string | null) => (v ? ({ [k]: v } as Record<K, string>) : {});
+  // a creator lock: the holder its hash owns was planned as the funding key's (kob-wasm turns it into the lock's)
+  let lock: { holder: number; until: string; key: Hex } | null = null;
+  if (d.lock) {
+    const l = lockOfScript(kob, d.lock);
+    const holder = l ? t.outputs.findIndex((o) => o.ownerScheme === 3 && o.owner === l.authority) : -1;
+    if (!l || holder < 0) return 'the declared creator lock holds no output of the token';
+    lock = { holder, until: l.until, key: l.key };
+  }
   return {
     name: d.name, ticker: d.symbol, decimals: d.decimals, supply: t.supply,
-    holders: t.outputs.map((o, i) => ({ owner: c && i === c.custody ? '00'.repeat(32) : o.owner, ownerScheme: o.ownerScheme, amount: o.amount, ...(o.borrowScheme !== 0 ? { borrowScheme: o.borrowScheme, borrowGuard: o.borrowGuard } : {}) })),
+    holders: t.outputs.map((o, i) => ({ owner: c && i === c.custody ? '00'.repeat(32) : lock && i === lock.holder ? lock.key : o.owner, ownerScheme: lock && i === lock.holder ? 0 : o.ownerScheme, amount: o.amount, ...(o.borrowScheme !== 0 ? { borrowScheme: o.borrowScheme, borrowGuard: o.borrowGuard } : {}) })),
     extensionCommitment: t.extensionCommitment, carrier: t.carrier, ...(feeRate ? { feeRate } : {}), funding, ...(changeTo ? { changeTo } : {}),
     ...(t.outputs.some((o) => o.borrowScheme !== 0) ? { allowBorrow: true } : {}),
     ...opt('description', d.description), ...opt('icon', d.image), ...(d.image ? opt('imageHash', d.imageHash) : {}), ...opt('website', d.website),
     ...opt('x', d.x), ...opt('telegram', d.telegram), network: rec.network, program,
     // a curve placed in the genesis: its terms from its recorded state (kob-wasm writes its custody's owner)
     ...(c ? { curve: { custody: c.custody, levelSize: c.state.state.levelSize, table: c.state.state.table, minFill: c.state.state.minFill, tip: c.state.state.tip, activeFrom: c.state.state.activeFrom, carrier: c.carrier } } : {}),
+    ...(lock ? { lock: { holder: lock.holder, until: lock.until } } : {}),
   };
 }
 

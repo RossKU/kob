@@ -26,6 +26,8 @@ import { countText, tCount } from './plural';
 import { balanceColumnFractions, unreviewedProgram } from './balances-model';
 import { convertibleCounts, mergeAllFrees, mergeTokenFor, mergeableCounts } from './merge-model';
 import type { OrdersData } from './orders-data';
+import { formatRowDate, rowTimeTitle } from '../kit/format';
+import { unlockOpen } from './unlock';
 import './balances.css';
 
 const BALANCE_SORT_KEYS = ['asset', 'available', 'inOrders', 'strays', 'kasLocked', 'value'] as const;
@@ -87,6 +89,10 @@ export function BalancesPanel(props: {
   iconOf?: (covenantId: string) => KascovMeta | null;
   /** a market page's panel: no heading; the money figures are one line at the top (the page's summary cards are the account overview of the Portfolio page only) */
   compact?: boolean;
+  /** unlock what the wallet's creator lock of a token holds (its button shows once the lock is open) */
+  onUnlockToken?(token: Hex): void;
+  /** who can sign the unlock: the connected wallet, or only the CLI (a wallet that cannot sign its script input: a muted note instead) */
+  unlockBy?: 'wallet' | 'cli';
 }) {
   const services = useServices();
   const { registry } = services;
@@ -247,6 +253,11 @@ export function BalancesPanel(props: {
                 // "Convert to plain" is in the Merge all dialog where that button shows; only a token with nothing to merge has it here (the cell keeps its width)
                 const showConvert = !!props.onConvertToken && convertible.has(b.token) && !showMerge;
                 const program = info?.program ?? free.data!.programs.get(b.token) ?? null;
+                // the wallet's creator lock of the token: a sub-line under Available; once open, Unlock (or the CLI's command) in the action cell
+                const locked = b.locked && b.locked.amount > 0n ? b.locked : null;
+                const open = !!locked && unlockOpen(locked.until);
+                const showUnlock = open && !!props.onUnlockToken && props.unlockBy !== 'cli';
+                const showCli = open && props.unlockBy === 'cli';
                 return (
                   <DtGroup key={b.token} data-testid={`balance-row-${b.token}`}>
                     <DtRow>
@@ -273,6 +284,11 @@ export function BalancesPanel(props: {
                             {t('orders.balances.notSpendable', { amount: amountCell(b.notSpendable, d).text })}
                           </div>
                         ) : null}
+                        {locked ? (
+                          <div class="dt-sub" title={`${t(open ? 'orders.balances.lockedOpenHint' : 'orders.balances.lockedHint')} ${rowTimeTitle(Number(locked.until))}`} data-testid="balance-locked">
+                            {t(open ? 'orders.balances.lockedOpen' : 'orders.balances.locked', { amount: amountCell(locked.amount, d).text, date: formatRowDate(Number(locked.until)) })}
+                          </div>
+                        ) : null}
                       </DtCell>
                       <DtCell k="inOrders" label={t('orders.balances.inOrders')} num data-testid="balance-escrowed">
                         <Amount kind="token" value={b.escrowed + b.bought} decimals={d} unit={false} fraction={dp.escrowed} group />
@@ -290,8 +306,23 @@ export function BalancesPanel(props: {
                         {valueOf(b) !== null ? <MoneyCell kas={valueOf(b)!} unit={false} fraction={dp.value} /> : <span class="dt-muted" title={t('orders.balances.noPrice')}>—</span>}
                       </DtCell>
                       <DtCell k="act" card="action">
-                        {showMerge || showConvert || b.orderCount > 0 || claimable ? (
+                        {showMerge || showConvert || b.orderCount > 0 || claimable || showUnlock || showCli ? (
                           <span class="dt-act">
+                            {showUnlock ? (
+                              <Button
+                                small
+                                disabled={!props.canSign || !!props.busy}
+                                loading={props.busy === `unlock-${b.token}`}
+                                title={t('orders.unlock.hint', { amount: amountCell(locked!.amount, d).text, ticker: shown.ticker })}
+                                onClick={() => props.onUnlockToken!(b.token)}
+                                data-testid={`balance-unlock-${b.token}`}
+                              >
+                                {t('orders.unlock.button')}
+                              </Button>
+                            ) : null}
+                            {showCli ? (
+                              <span class="small muted" title={`kob token unlock ${b.token}`} data-testid={`balance-unlock-cli-${b.token}`}>{t('orders.unlock.cli')}</span>
+                            ) : null}
                             {claimable ? (
                               <Button
                                 small

@@ -71,6 +71,11 @@ export interface SendJob {
    * without a prompt while its own check finds it within the plan the user allowed; every check above still runs
    */
   session?: string | undefined;
+  /**
+   * the wallet's creator locks this transaction pays a lock coin to (kob/creator-lock.ts, from their verified declarations): the decoder takes
+   * a plain output to one of them, open and of the wallet key, as the wallet's own; the private-key signer gets them as its hint
+   */
+  locks?: readonly { until: string; key: string }[] | undefined;
 }
 
 /** The registry plus the job's open-list tokens: what its transaction is decoded against and its tokens' identities are checked with. */
@@ -150,7 +155,7 @@ export async function checkBeforeSigning(services: Services, wallet: WalletFacts
   const registry = registryOfJob(services.registry, job);
   // a dynamic fee is several times the relay floor in a busy market: the decoder's sanity ceiling follows the policy's own per-transaction cap
   const feePolicy = services.fees?.policy;
-  const summary = decodeSigning({ kob: services.kob, built, maker: wallet.info!.pubkey, registry, expected: final.expected, nodeInputs: facts, ...(feePolicy ? { feePolicy } : {}) });
+  const summary = decodeSigning({ kob: services.kob, built, maker: wallet.info!.pubkey, registry, expected: final.expected, nodeInputs: facts, ...(feePolicy ? { feePolicy } : {}), ...(job.locks?.length ? { locks: job.locks } : {}) });
   const found: Finding | undefined = [...summary.blocking, ...openTokenIdentity(summary, registry).blocking][0];
   if (found) return { blocked: { code: found.code, text: found.text ?? issueText(found) } };
   if (!summary.ok) return { blocked: { code: 'decode', text: t('send.decodeFailed') } };

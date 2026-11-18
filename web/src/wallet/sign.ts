@@ -14,7 +14,7 @@ import { NodeError, describeNodeError } from '../data/node-error';
 import { markOwnAction } from '../data/fresh';
 import { confirmInputsOnNode } from '../kob/node-verify';
 import { normalizeNetwork, spkStringToAddress, type KaspaSdk } from '../data/kaspa-sdk';
-import type { SignerNote } from '../signer/protocol';
+import type { LockHint, SignerNote } from '../signer/protocol';
 import { WalletError, type WalletAdapter, type LiveSigning } from './types';
 import { awaitVisible, freshInputs, needsVisibility, noteSent } from './visibility';
 
@@ -92,6 +92,8 @@ export interface SignAndSubmitArgs {
   signerNotes?: SignerNote[];
   /** a step of the wallet's one-approval session (`SignOptions.session`): every check here still runs */
   session?: string;
+  /** the wallet's creator locks a lock coin of this transaction pays to (`SignOptions.locks`) */
+  locks?: LockHint[];
   /**
    * the transaction may be replaced while the user reads it (`SignOptions.live`): `submitByOf` gives the `submitByDaa` of a replacement the
    * wallet signed, which is then the one finalized, checked and sent
@@ -243,7 +245,7 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
   const sleep = a.visibility?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   for (let n = 1; ; n++) {
     try {
-      sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}), ...(a.clockDaa !== undefined ? { clockDaa: a.clockDaa } : {}), ...(a.signerNotes?.length ? { signerNotes: a.signerNotes } : {}), ...(a.live ? { live: a.live.signing } : {}), ...(a.session ? { session: a.session } : {}) });
+      sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}), ...(a.clockDaa !== undefined ? { clockDaa: a.clockDaa } : {}), ...(a.signerNotes?.length ? { signerNotes: a.signerNotes } : {}), ...(a.locks?.length ? { locks: a.locks } : {}), ...(a.live ? { live: a.live.signing } : {}), ...(a.session ? { session: a.session } : {}) });
       break;
     } catch (e) {
       // the wallet's own node has not seen a coin of it yet after all (a slow relay): asked again a moment later, at most UNKNOWN_ATTEMPTS times

@@ -15,6 +15,21 @@ import { decimalsNote } from '../../app/token-display';
 import { FamilyChip, GenesisFailedBanner, PowersWarning, RiskChip, SharedTickerBarNote, SharedTickerNote, FactLabel, FactSentence, StatusBadges, powerName, riskReasons, tokenTitle } from './TokenBadges';
 import { riskFactIds, templateDetail, type TemplateDetail, type TokenRow } from './token-model';
 import type { BridgeMinter } from '../../data/genesis-check';
+import { useDeclaration } from '../../app/use-declaration';
+import { lockOpen, lockSharePercent, type VerifiedLock } from '../../kob/creator-lock';
+import { formatRowDate, rowTimeTitle } from '../kit/format';
+
+/**
+ * The token's creator lock as its verified declaration states it (kob/creator-lock.ts): what the genesis locked, its share of the supply (when
+ * the supply is proven) and the day it opens; after that day the same line says it is open (what is still locked is the chain's to tell).
+ */
+function creatorLockText(lock: VerifiedLock, decimals: number | null, ticker: string): string {
+  const amount = `${decimals === null ? lock.amount : formatUnits(BigInt(lock.amount), decimals, { group: ',' })}${ticker ? ` ${ticker}` : ''}`;
+  const pct = lockSharePercent(lock.amount, lock.supply);
+  const date = formatRowDate(Number(lock.until));
+  const key = lockOpen(lock.until) ? 'market.token.creatorLockOpen' : 'market.token.creatorLockValue';
+  return pct === null ? t(`${key}NoShare`, { amount, date }) : t(key, { amount, pct, date });
+}
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */
 export function IndexerProblems(props: { codes: string[] }) {
@@ -200,6 +215,8 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
   // from the genesis check only (the pinned BridgeMint in the token's genesis group), never from a name or a list
   const bridge = g?.status === 'verified' && g.bridge === true;
   const minter = g?.status === 'verified' ? g.bridgeMinter : undefined;
+  // the creator lock its verified declaration states (asked by the page that shows the token; a known one is read here)
+  const lock = useDeclaration(r.covenantId, false)?.lock ?? null;
   return (
     <div class="mkt-details" data-testid="token-details">
       <Section title={t('market.token.info')} class="mkt-card">
@@ -239,6 +256,11 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
                 </span>
               ),
               show: bridge,
+            },
+            {
+              label: t('market.token.creatorLock'),
+              value: lock ? <span title={rowTimeTitle(Number(lock.until))} data-testid="token-creator-lock">{creatorLockText(lock, r.decimals, r.ticker)}</span> : null,
+              show: !!lock,
             },
             { label: t('market.token.decimals'), value: r.decimals ?? '-' },
             {

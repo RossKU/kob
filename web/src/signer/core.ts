@@ -266,7 +266,8 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
       }
       let summary: SignerSummary;
       try {
-        summary = summarize(kob, m.built, pub, hintsOf(m));
+        // the app's lock hints only let a coin to this key's own open creator lock be recognised (summary.ts `summarize`)
+        summary = summarize(kob, m.built, pub, hintsOf(m), m.locks, wallNow());
       } catch {
         endLive();
         post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));

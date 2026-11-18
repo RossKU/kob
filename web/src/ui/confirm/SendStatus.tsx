@@ -325,6 +325,7 @@ export function useSend(): Sender {
           ...(final.retimed ? { retime: true } : {}),
           ...(final.signerNotes?.length ? { signerNotes: [...final.signerNotes] } : {}),
           ...(final.session ? { session: final.session } : {}),
+          ...(final.locks?.length ? { locks: final.locks.map((l) => ({ until: l.until, key: l.key })) } : {}),
           ...(live ? { live: { signing: live, submitByOf: (b) => jobs.get(b.tx.id)?.submitByDaa ?? undefined } } : {}),
           addressOf: inputAddressOf(services),
           onWait: (waiting) => set(id, { phase: 'signing', ...(waiting ? { waiting: true } : {}) }),

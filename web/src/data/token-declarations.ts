@@ -11,6 +11,7 @@
 //     simply undeclared; the display falls back as before (app/token-display.ts).
 import { defaultStorage, type StorageLike } from '../config';
 import { verifyLaunchProof, type VerifiedDeclaration } from '../kob/kcc23';
+import type { VerifiedLock } from '../kob/creator-lock';
 import type { Hex } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 
@@ -29,8 +30,12 @@ export interface DeclaredToken {
   x: string | null;
   telegram: string | null;
   preparationTxid: Hex;
+  /** the genesis's id (the locked outputs of a creator lock are its outputs) */
+  genesisTxid?: Hex;
   /** the JSON text as committed */
   json: string;
+  /** the declared creator lock, verified against the genesis (what it holds, until when); null for none */
+  lock?: VerifiedLock | null;
 }
 
 const KEY = 'kob.declarations.v1';
@@ -73,7 +78,7 @@ function factsOf(v: VerifiedDeclaration): DeclaredToken {
   const d = v.token;
   return {
     covenantId: v.covenantId, name: d.name, symbol: d.symbol, decimals: d.decimals, description: d.description, image: d.image, imageHash: d.imageHash, website: d.website,
-    x: d.x, telegram: d.telegram, preparationTxid: v.preparationTxid, json: v.json,
+    x: d.x, telegram: d.telegram, preparationTxid: v.preparationTxid, genesisTxid: v.genesisTxid, json: v.json, lock: v.lock,
   };
 }
 
@@ -138,6 +143,14 @@ export function declaredToken(network: string, covenantId: Hex | null | undefine
   const e = memo.get(k(network, covenantId));
   if (!e) return undefined;
   return 'decl' in e ? e.decl : null;
+}
+
+/** Every verified declaration known on `network` (memory, and the proofs kept in this browser once restored). */
+export function knownDeclarations(network: string): DeclaredToken[] {
+  const out: DeclaredToken[] = [];
+  const prefix = `${network}:`;
+  for (const [key, e] of memo) if (key.startsWith(prefix) && 'decl' in e) out.push(e.decl);
+  return out;
 }
 
 /** What `loadDeclaration` reads from: an indexer (or anything) that serves launch proofs. */

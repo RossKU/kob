@@ -6,10 +6,11 @@ import type { IssuePlan } from '../../kob/issue';
 import type { Hex } from '../../kob/types';
 import { Banner, Button, CopyText, copyToClipboard, friendlyErrorText, kasText, KeyValueList, RawDetails, Section } from '../kit';
 import { downloadText } from './download';
+import { formatRowDate } from '../kit/format';
 import { humanAmount, resultViewModel } from './issue-model';
 
 export interface ResultPanelProps {
-  plan: Pick<IssuePlan, 'token' | 'docs'> & Partial<Pick<IssuePlan, 'curve' | 'sale'>>;
+  plan: Pick<IssuePlan, 'token' | 'docs'> & Partial<Pick<IssuePlan, 'curve' | 'sale' | 'lock'>>;
   txid: string;
   walletKey: Hex | null;
   /** the wallet-owned token outputs could not be saved in the token tracker */
@@ -60,7 +61,7 @@ export function ResultPanel(props: ResultPanelProps) {
         <ul class="issue-holder-list" data-testid="issue-result-holders">
           {vm.holders.map((h) => (
             <li key={h.index} class="wrap-anywhere">
-              {t('issue.result.holder', { index: h.index, owner: h.isWallet ? t('issue.summary.you') : h.ownerShort, amount: `${h.human} ${plan.token.ticker}` })}
+              {t('issue.result.holder', { index: h.index, owner: h.isWallet ? t('issue.summary.you') : h.lockedUntil !== undefined ? t('issue.summary.holderLocked', { date: formatRowDate(Number(h.lockedUntil)) }) : h.ownerShort, amount: `${h.human} ${plan.token.ticker}` })}
             </li>
           ))}
         </ul>

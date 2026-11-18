@@ -49,9 +49,11 @@ import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
 import { pendingCreationItems } from '../confirm/creation-steps';
 import { Banner, Button, CurveGraph, EmptyState, ErrorBanner, Field, FieldShell, HelpTip, KeyValueList, RawDetails, Section, Segmented, Spinner, Stepper, friendlyErrorText, kasText, shortId, showToast, useAsync } from '../kit';
 import { formatUnits as baseUnitsText } from '../../kob/issue';
+import { formatRowDate } from '../kit/format';
 import {
   defaultCarrierText, emptyUiState, filterDecimals, filterOwner, filterTicker, formToIssueForm, groupByField, modelIssues, parseDecimalsText, remainingText,
   humanAmount, linkedSaleFields, saleOfRecord, reviewSummary, salePreview, shortfallOf, supplyPreview, walletRowIncluded, type IssueUiState, type SaleUi,
+  LOCK_DAYS, chooseLock, lockUntilOf, type LockChoice,
 } from './issue-model';
 import { hashImageFile } from './image-file';
 import { ResultPanel } from './ResultPanel';
@@ -62,7 +64,7 @@ import './issue.css';
 type Phase =
   | { kind: 'form' }
   | { kind: 'confirm'; plan: IssueResult & Pick<IssuePlan, 'sale'>; resume?: CreationRecord }
-  | { kind: 'result'; plan: Pick<IssuePlan, 'token' | 'docs' | 'curve' | 'sale'>; txid: string; trackFailed: boolean };
+  | { kind: 'result'; plan: Pick<IssuePlan, 'token' | 'docs' | 'curve' | 'sale' | 'lock'>; txid: string; trackFailed: boolean };
 /** `finish`: the covenant id of the creation the notice offers to finish (the same action as its banner) */
 type Notice = { tone: 'info' | 'error'; text: string; finish?: Hex } | null;
 
@@ -344,6 +346,7 @@ export function IssueView() {
   };
 
   const setSale = (patch: Partial<SaleUi>) => setState((s) => ({ ...s, sale: { ...s.sale, ...patch } }));
+  const setLock = (choice: LockChoice) => setState((s) => ({ ...s, lock: chooseLock(choice, s.lock) }));
 
   const another = () => {
     setState(emptyUiState());
@@ -839,7 +842,49 @@ export function IssueView() {
             )}
           </div>
         )}
+        {renderLock()}
       </Section>
+    );
+  }
+
+  /** "Lock my share until": one compact row under the choices (what it locks and how it opens are behind its "?"). */
+  function renderLock() {
+    const l = state.lock;
+    const until = lockUntilOf(l);
+    const err = errorOf('lock', l.choice === 'none' ? '' : 'x');
+    const today = formatRowDate(Date.now());
+    return (
+      <div class="issue-lock" data-testid="issue-lock">
+        <div class="issue-lock-row">
+          <span class="help-title">
+            <label for="issue-lock-choice">{t('issue.lock.label')}</label>
+            <HelpTip label={t('issue.lock.label')} data-testid="issue-lock-help">
+              <p>{t(state.sale.mode === 'keep' ? 'issue.lock.helpKeep' : 'issue.lock.helpSale')}</p>
+              <p>{t('issue.lock.helpHow')}</p>
+              <p>{t('issue.lock.helpUnlock')}</p>
+            </HelpTip>
+          </span>
+          <select id="issue-lock-choice" class="select issue-lock-select" value={l.choice} onChange={(e) => setLock((e.currentTarget as HTMLSelectElement).value as LockChoice)} data-testid="issue-lock-choice">
+            <option value="none">{t('issue.lock.none')}</option>
+            {LOCK_DAYS.map((d) => <option key={d} value={d}>{t('issue.lock.days', { days: d })}</option>)}
+            <option value="date">{t('issue.lock.date')}</option>
+          </select>
+          {l.choice === 'date' ? (
+            <input
+              type="date"
+              class="input issue-lock-date"
+              min={today}
+              value={l.date}
+              aria-label={t('issue.lock.date')}
+              aria-invalid={err ? 'true' : undefined}
+              onInput={(e) => setState((s) => ({ ...s, lock: { ...s.lock, date: (e.currentTarget as HTMLInputElement).value } }))}
+              data-testid="issue-lock-date"
+            />
+          ) : null}
+          {l.choice !== 'none' && /^\d+$/.test(until) && until !== '0' ? <span class="small muted" data-testid="issue-lock-until">{t('issue.lock.until', { date: formatRowDate(Number(until)) })}</span> : null}
+        </div>
+        {err ? <p class="field-error" data-testid="issue-lock-error">{err}</p> : null}
+      </div>
     );
   }
 
@@ -1060,7 +1105,7 @@ export function IssueView() {
                   <ul class="issue-holder-list">
                     {summary.holders.map((h) => (
                       <li key={h.index} class="wrap-anywhere">
-                        {t('issue.summary.holder', { owner: h.isWallet ? t('issue.summary.you') : h.isCurve ? t('issue.summary.holderCurve') : shortId(h.owner, 14), amount: `${h.human} ${summary.ticker}` })}
+                        {t('issue.summary.holder', { owner: h.isWallet ? t('issue.summary.you') : h.isCurve ? t('issue.summary.holderCurve') : h.lockedUntil !== undefined ? t('issue.summary.holderLocked', { date: formatRowDate(Number(h.lockedUntil)) }) : shortId(h.owner, 14), amount: `${h.human} ${summary.ticker}` })}
                       </li>
                     ))}
                   </ul>
@@ -1068,6 +1113,7 @@ export function IssueView() {
                 'data-testid': 'issue-summary-holders',
               },
               ...(plan.status === 'ready' && plan.plan.sale ? [{ label: t('issue.summary.sale'), value: saleSummaryText(plan.plan), 'data-testid': 'issue-summary-sale' }] : []),
+              ...(summary.lock ? [{ label: t('issue.summary.lock'), value: t('issue.summary.lockValue', { amount: `${summary.lock.human} ${summary.ticker}`, date: formatRowDate(Number(summary.lock.until)) }), 'data-testid': 'issue-summary-lock' }] : []),
               { label: t('issue.summary.program'), value: <code>{summary.program}</code> },
               {
                 label: t('issue.summary.carriers'),

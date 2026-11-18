@@ -181,6 +181,11 @@ export default {
   'market.token.tick': 'Tick',
   'market.token.perToken': 'per {ticker}',
   'market.token.openOrders': 'Open orders',
+  'market.token.creatorLock': 'Creator lock',
+  'market.token.creatorLockValue': '{amount} ({pct}% of supply) until {date}',
+  'market.token.creatorLockValueNoShare': '{amount} until {date}',
+  'market.token.creatorLockOpen': '{amount} ({pct}% of supply) until {date} (open)',
+  'market.token.creatorLockOpenNoShare': '{amount} until {date} (open)',
   'market.token.openOrdersUnknown': 'unknown (the indexer has not been read)',
   'market.token.openOrdersValue': '{asks} asks, {bids} bids',
 

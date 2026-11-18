@@ -2,7 +2,7 @@
 // confirmation screen. They broadcast nothing of their own; the one exception is `announce`: an adapter may hand the wallet's own node a
 // transaction KOB already finalized, validated and sent to its node (wallet/visibility.ts). Proven on TN10 in tools/wallet-gate (RESULTS.md).
 import type { BuiltTx, Hex, InputSignature, TxJson } from '../kob/types';
-import type { GenesisClaim, SignerNote } from '../signer/protocol';
+import type { GenesisClaim, LockHint, SignerNote } from '../signer/protocol';
 
 /** Browser extension wallets (discovered on `window`). */
 export type ExtensionWalletId = 'kasware' | 'kaspire' | 'kastle';
@@ -146,6 +146,11 @@ export interface SignOptions {
    * private-key signer words them itself under its table and says they are the app's; other wallets show nothing of them
    */
   signerNotes?: SignerNote[];
+  /**
+   * the wallet's creator locks the transaction pays a lock coin to (kob/creator-lock.ts): the private-key signer recognises an output to the
+   * address of one of its own open locks only with this hint (and checks it itself); other wallets ignore it
+   */
+  locks?: LockHint[];
 }
 
 export class WalletError extends Error {

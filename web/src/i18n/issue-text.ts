@@ -114,6 +114,7 @@ declare('kas', {
   'kas-released': ['released'],
   'payment-out': ['amount'],
   'take-price': ['kas', 'bound'],
+  'lock-coin': ['amount'],
   'funds.insufficient': ['need', 'have'],
   'cancel.insufficient-funds': ['shortfall'],
 });

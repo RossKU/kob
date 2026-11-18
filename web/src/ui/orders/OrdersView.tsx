@@ -38,6 +38,7 @@ import { AutoRefundToggle } from './AutoRefund';
 import { listCreations } from '../../data/creations';
 import { acquiredTokens, logoGate } from '../../data/logo-gate';
 import { BalancesFrame, BalancesPanel } from './BalancesPanel';
+import { planUnlock, unlockSigner } from './unlock';
 import { OrderRow, type OrderRowActions } from './OrderRow';
 import { PositionCard } from './PositionCard';
 import { RecoverPanel } from './RecoverPanel';
@@ -445,6 +446,16 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     startFlow(t(ask.convert ? 'orders.convert.heading' : 'orders.merge.heading', { ticker: ask.ticker }), run.steps, { next: run.next, ...(run.session ? { session: run.session } : {}) });
   };
 
+  /** Balances' Unlock: what the wallet's open creator lock of a token holds (with a lock coin first when its address holds none: ui/orders/unlock.ts). */
+  const unlockToken = (token: Hex) =>
+    void guarded(`unlock-${token}`, async () => {
+      const h = balances.free.data?.locked?.find((x) => x.token === token);
+      if (!pubkey || !h) return;
+      const ticker = tickerOrId(shownToken(token)?.ticker ?? '', token);
+      const run = await planUnlock(services, pubkey, h, ticker);
+      startFlow(t('orders.unlock.heading', { ticker }), run.steps, run.next ? { next: run.next } : {});
+    });
+
   /** Balances' Claim: the dialog for one order, else one claim per order in one flow. */
   const claimToken = (token: Hex) => {
     const holders = rows.filter((r) => r.canClaim && r.bought?.token === token);
@@ -801,6 +812,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                 onMergeToken={mergeToken}
                 onClaimToken={claimToken}
                 onConvertToken={(token) => mergeToken(token, true)}
+                onUnlockToken={unlockToken}
+                unlockBy={unlockSigner(wallet.adapter, wallet.info.pubkey)}
                 balances={balances}
                 iconOf={iconOf}
                 {...(embed ? { compact: true } : {})}

@@ -59,6 +59,15 @@ export interface GenesisClaim {
 }
 
 /**
+ * The app's hint of a creator lock of this key (kob/creator-lock.ts): its time (unix ms) and key. The frame takes it only to recognise a plain
+ * KAS output to the lock's address as this key's own lock coin, and only for a lock of the frame's own key that is open by the frame's clock
+ * (decode.ts `locks`); it names nothing else.
+ */
+export interface LockHint { until: string; key: Hex }
+/** the most lock hints of a request */
+export const MAX_LOCKS = 8;
+
+/**
  * A hint of the app about the order, as a code and numbers (never text): the frame words it itself (notes.ts) and says it is the app's, not
  * verified by the signer. Sompi amounts are decimal strings (they can pass 2^53); `bps` are basis points.
  */
@@ -110,7 +119,7 @@ export type SignerToApp =
 
 export type AppToSigner =
   /** `retimeOf`: the request the user just confirmed, planned again with a later clock: signed without asking again when nothing they approved got worse (retime.ts) */
-  | { p: typeof SIGNER_PROTOCOL; type: 'sign'; id: string; built: BuiltTx; tokens: TokenHint[]; registry?: RegistryRow[]; notes?: SignerNote[]; retimeOf?: string; prep?: BuiltTx; genesis?: GenesisClaim; session?: string }
+  | { p: typeof SIGNER_PROTOCOL; type: 'sign'; id: string; built: BuiltTx; tokens: TokenHint[]; registry?: RegistryRow[]; notes?: SignerNote[]; retimeOf?: string; prep?: BuiltTx; genesis?: GenesisClaim; session?: string; locks?: LockHint[] }
   /** a merge plan to allow on one screen (the frame derives and enforces the terms itself: signer/session.ts) */
   | { p: typeof SIGNER_PROTOCOL; type: 'session-open'; id: string; plan: BuiltTx[]; tokens: TokenHint[]; registry?: RegistryRow[] }
   /** the app is done with the session (only ever reduces what the frame may sign) */
@@ -191,6 +200,11 @@ const isClaim = (v: unknown): v is GenesisClaim =>
       isIndex(o.borrowScheme, 256) && HEX32.test(String(o.borrowGuard)),
   );
 
+/** Lock hints: at most MAX_LOCKS, each a unix-ms time (a decimal string) and an x-only key. */
+const isLocks = (v: unknown): v is LockHint[] =>
+  Array.isArray(v) && v.length > 0 && v.length <= MAX_LOCKS &&
+  v.every((l) => isObj(l) && hasKeys(l, ['until', 'key']) && typeof l.until === 'string' && /^[1-9][0-9]{0,15}$/.test(l.until) && HEX32.test(String(l.key)));
+
 /** The app's registry table (table.ts): rows of a covenant id, a printable ticker and decimals, no covenant id twice. */
 const isTable = (v: unknown): v is RegistryRow[] =>
   Array.isArray(v) && v.length <= MAX_TABLE &&
@@ -237,7 +251,9 @@ export function parseAppMessage(data: unknown): AppToSigner | null {
   if (!isObj(data) || data.p !== SIGNER_PROTOCOL || typeof data.type !== 'string') return null;
   switch (data.type) {
     case 'sign':
-      if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens', 'registry', 'notes', 'retimeOf', 'prep', 'genesis', 'session']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
+      if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens', 'registry', 'notes', 'retimeOf', 'prep', 'genesis', 'session', 'locks']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
+      // lock hints: a plain request only (never a creation or a session step)
+      if (data.locks !== undefined && (!isLocks(data.locks) || data.prep !== undefined || data.session !== undefined)) return null;
       // a session step is a plain request: never a re-timed one, a creation or one with the app's notes
       if (data.session !== undefined && (typeof data.session !== 'string' || !SID.test(data.session) || data.retimeOf !== undefined || data.prep !== undefined || data.genesis !== undefined || data.notes !== undefined)) return null;
       if (data.retimeOf !== undefined && (typeof data.retimeOf !== 'string' || !ID.test(data.retimeOf))) return null;
@@ -256,6 +272,7 @@ export function parseAppMessage(data: unknown): AppToSigner | null {
         ...(data.retimeOf !== undefined ? { retimeOf: data.retimeOf as string } : {}), ...(data.prep !== undefined ? { prep: data.prep as BuiltTx } : {}),
         ...(data.genesis !== undefined ? { genesis: data.genesis as GenesisClaim } : {}),
         ...(data.session !== undefined ? { session: data.session as string } : {}),
+        ...(data.locks !== undefined ? { locks: (data.locks as LockHint[]).map((l) => ({ until: String(l.until), key: l.key })) } : {}),
       };
     case 'session-open':
       if (!hasKeys(data, ['p', 'type', 'id', 'plan', 'tokens', 'registry']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;

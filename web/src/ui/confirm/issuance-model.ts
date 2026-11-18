@@ -8,6 +8,8 @@
 import { issuedTokenUtxos, spendsPreparation, type IssueCurve, type IssueToken } from '../../kob/issue';
 import { curveNumbersOfState, curveProblems, tablePreview } from '../../kob/curve';
 import { decodeDeclaration } from '../../kob/kcc23';
+import { lockOfScript, type CreatorLockInfo } from '../../kob/creator-lock';
+import { formatRowDate } from '../kit/format';
 import type { BuiltTx, Hex } from '../../kob/types';
 import type { KobWasm } from '../../kob/wasm';
 import { formatKas, formatTokenAmount } from '../../kob/units';
@@ -112,6 +114,13 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     const d = declared?.token;
     if (!d || d.name !== token.name || d.symbol !== token.ticker || d.decimals !== token.decimals) block('declaration');
   }
+  // ---- a creator lock: only as the declaration states it (its script, parsed by kob-wasm), of this wallet's key: the outputs its hash owns
+  // (owner scheme 0x03, no borrow setting) are the wallet's share, locked until its time. Anything else of scheme 0x03 is another's.
+  const lock: CreatorLockInfo | null = (() => {
+    const l = lockOfScript(kob, declared?.token.lock ?? null);
+    return l && l.key === maker ? l : null;
+  })();
+  const lockedForYou = (o: IssueToken['outputs'][number]): boolean => !!lock && o.ownerScheme === 3 && o.owner === lock.authority && o.borrowScheme === 0;
 
   // ---- token outputs: exactly what the planner claims
   const claimed = issuedTokenUtxos({ built, token });
@@ -120,6 +129,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   let minted = 0n;
   let carriers = 0n;
   let toMaker = 0n;
+  let lockedToMaker = 0n;
   token.outputs.forEach((o, k) => {
     const out = tx.outputs[o.index];
     const st = claimed[k]!.state;
@@ -136,6 +146,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     if (out.covenant?.covenantId !== token.covenantId) block('outputCovenant', { output: o.index });
     if (BigInt(out.value) !== BigInt(token.carrier)) block('outputCarrier', { output: o.index });
     if (o.owner === maker && o.ownerScheme === 0) toMaker += BigInt(o.amount);
+    else if (lockedForYou(o)) lockedToMaker += BigInt(o.amount);
   });
   // ---- the curve: re-derived from its claimed state, never trusted
   if (curve) {
@@ -197,7 +208,9 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
 
   // ---- disclosure findings
   warn('unaudited');
-  const othersAll = token.outputs.filter((o) => !(o.owner === maker && o.ownerScheme === 0) && !(curve && o.owner === curve.covenantId && o.ownerScheme === 4));
+  const othersAll = token.outputs.filter((o) => !(o.owner === maker && o.ownerScheme === 0) && !(curve && o.owner === curve.covenantId && o.ownerScheme === 4) && !lockedForYou(o));
+  const lockDate = lock ? formatRowDate(Number(lock.until)) : '';
+  if (lockedToMaker > 0n) info('lockedForYou', { date: lockDate });
   if (othersAll.length > 0) info(othersAll.length === 1 ? 'holdersOther.one' : 'holdersOther.other', { count: othersAll.length }, 'holdersOther');
   info('walletBlind');
   if (prep && i.resumed) info('resumed');
@@ -223,8 +236,9 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
       ...token.outputs.map((o, k) => {
         const mine = o.owner === maker && o.ownerScheme === 0;
         const onCurve = !!curve && o.owner === curve.covenantId && o.ownerScheme === 4;
-        return row(`holder-${k}`, tr('confirm.issue.holder', { n: k + 1 }), amountText(BigInt(o.amount)), mine || onCurve ? 'good' : 'warn',
-          mine ? tr('confirm.issue.holderYou') : onCurve ? tr('confirm.issue.holderCurve') : tr('confirm.issue.holderOther', { owner: short(o.owner), scheme: o.ownerScheme }));
+        const locked = lockedForYou(o);
+        return row(`holder-${k}`, tr('confirm.issue.holder', { n: k + 1 }), amountText(BigInt(o.amount)), mine || onCurve || locked ? 'good' : 'warn',
+          mine ? tr('confirm.issue.holderYou') : onCurve ? tr('confirm.issue.holderCurve') : locked ? tr('confirm.issue.holderLocked', { date: lockDate }) : tr('confirm.issue.holderOther', { owner: short(o.owner), scheme: o.ownerScheme }));
       }),
     ],
   });
@@ -265,6 +279,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
         row('declare-symbol', tr('confirm.issue.ticker'), d.symbol ?? ''),
         row('declare-decimals', tr('confirm.issue.decimals'), String(d.decimals ?? '')),
         ...opt('description', d.description), ...opt('image', d.image), ...opt('imageHash', d.imageHash), ...opt('website', d.website), ...opt('x', d.x), ...opt('telegram', d.telegram),
+        ...(lock ? [row('declare-lock', tr('confirm.issue.declare.lock'), tr('confirm.issue.declare.lockValue', { date: lockDate }), 'muted')] : []),
       ],
     });
   }
@@ -320,6 +335,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     { ...row('create', tr('confirm.brief.create'), amountText(supply), 'normal', tr('confirm.brief.createDetail', { name: token.name, decimals })), help: [tr('confirm.kind.issueIntro')] },
     { ...row('keep', tr('confirm.brief.keep'), amountText(toMaker), 'good'), help: [cap(tr('confirm.issue.netTokenHint'))] },
   ];
+  if (lockedToMaker > 0n) brief.push({ ...row('lock', tr('confirm.brief.lock'), amountText(lockedToMaker), 'good', tr('confirm.brief.lockDetail', { date: lockDate })), help: [tr('confirm.issue.lockNote')] });
   if (curve) {
     const st = curve.state.state;
     const n = curveNumbersOfState(st);

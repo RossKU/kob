@@ -64,6 +64,10 @@ export interface TokenBalance {
   kasEscrow: bigint;
   kasCarriers: bigint;
   orderCount: number;
+  /**
+   * Held by the maker's creator lock (kob/creator-lock.ts): the maker's own tokens, not spendable before `until` (unix ms); not in `free`.
+   */
+  locked?: { amount: bigint; until: bigint };
 }
 
 /** An order that could not be counted, with the reason. */

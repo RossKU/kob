@@ -7,6 +7,8 @@ import { decodeSigning, type DecodedOrder, type SigningKind, type SigningSummary
 import { spendsPreparation } from '../kob/issue';
 import { curveNumbersOfState, curveProblems, tablePreview } from '../kob/curve';
 import { decodeDeclaration } from '../kob/kcc23';
+import { lockOfScript } from '../kob/creator-lock';
+import { formatRowDate } from '../ui/kit/format';
 import { baseKind, isMultiFillMarket, type OrderDescription } from '../kob/order-facts';
 import { DEFAULT_BID_FILLS } from '../kob/orders/common';
 import { longId, type TokenInfo, type TokenRegistry } from '../kob/registry';
@@ -16,7 +18,7 @@ import type { KobWasm } from '../kob/wasm';
 import { RAW_TOKEN_DECIMALS, t } from '../i18n';
 import { formatRowTime } from '../ui/kit/format';
 import { auctionSeconds, orderRows, orderTitle, orderTypeCode, type Fmt, type MarketFillsFacts } from '../ui/confirm/confirm-model';
-import type { GenesisClaim, TokenHint } from './protocol';
+import type { GenesisClaim, LockHint, TokenHint } from './protocol';
 import { div, kasWords, tokensPerKasWords, tokenWords, type Rounding } from './words';
 
 export interface SummaryLine {
@@ -70,6 +72,8 @@ const TITLE: Record<SigningKind, string> = {
   'claim-merge': 'signer.kind.claimMerge',
   'claim-place': 'signer.kind.claimPlace',
   take: 'signer.kind.take',
+  unlock: 'signer.kind.unlock',
+  'lock-coin': 'signer.kind.lockCoin',
   other: 'signer.kind.other',
 };
 
@@ -398,6 +402,8 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     const amount = (v: bigint) => `${formatTokenAmount(v, hint ? hint.decimals : RAW_TOKEN_DECIMALS)}${unitOf(hint)}`;
     if (tok.walletDelta !== 0n) lines.push({ label, value: signed(tok.walletDelta, amount), dir: tok.walletDelta < 0n ? 'out' : 'in' });
     if (tok.toOthers > 0n) lines.push({ label: t('signer.net.tokensToOthers', { token: label }), value: amount(tok.toOthers), dir: 'out' });
+    // an unlock: what the wallet's creator lock held (the line above says it comes to this key)
+    if (tok.unlocked > 0n) lines.push({ label: t('signer.net.unlocked', { token: label }), value: amount(tok.unlocked), dir: null });
   }
   const merged = mergedTokens(s);
   for (const m of merged ?? []) {
@@ -450,9 +456,12 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   return { title: t(merged ? 'signer.kind.merge' : retiredCancel ? 'signer.kind.cancelRetired' : (TITLE[s.kind] ?? TITLE.other)), lines, orders, fee: kas(k.fee), ...(s.inputs.length > s.signatures ? { unsignedKas: true } : {}), ...problemsOf(found), decoded: s };
 }
 
-/** Decodes `built` for `maker` (the signer's own key) and summarises it. Throws when the decoder does. */
-export function summarize(kob: KobWasm, built: BuiltTx, maker: Hex, hints: TokenHint[]): SignerSummary {
-  return summaryLines(decodeSigning({ kob, built, maker, registry: null }), hints, kob, true);
+/**
+ * Decodes `built` for `maker` (the signer's own key) and summarises it. Throws when the decoder does. `locks`: the app's hint of this key's
+ * creator locks, so a lock coin to one is recognised; the decoder takes only a lock of this key that is open by `now` (the frame's clock).
+ */
+export function summarize(kob: KobWasm, built: BuiltTx, maker: Hex, hints: TokenHint[], locks?: readonly LockHint[], now?: number): SignerSummary {
+  return summaryLines(decodeSigning({ kob, built, maker, registry: null, ...(locks?.length ? { locks } : {}), ...(now !== undefined ? { now } : {}) }), hints, kob, true);
 }
 
 /**
@@ -473,6 +482,9 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
   });
   if (prep.tx.outputs.some((o) => o.covenant || o.scriptPublicKey !== own)) throw new Error('pays another key');
   const decl = decodeDeclaration(kob, prep.tx.payload).token;
+  // a creator lock the declaration states (its script parsed by kob-wasm) of this key: the outputs its hash owns are this key's share, locked
+  const declaredLock = lockOfScript(kob, decl.lock);
+  const lock = declaredLock && declaredLock.key === maker ? declaredLock : null;
   const prepIn = prep.tx.inputs.reduce((a, i) => a + BigInt(i.utxo.amount), 0n);
   const prepOut = prep.tx.outputs.reduce((a, o) => a + BigInt(o.value), 0n);
   const prepFee = prepIn - prepOut;
@@ -482,6 +494,7 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
   const verified = new Set<number>();
   let supply = 0n;
   let toMaker = 0n;
+  let lockedToMaker = 0n;
   // a claimed curve (the genesis's sell order of this key): its output is exactly the script of its unbound state, alone in its own covenant
   // group, made by this key, of the claimed program and commitment, and its custody is the claimed token output it owns with exactly its amount
   let curveLines: SummaryLine[] = [];
@@ -533,6 +546,7 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
       verified.add(o.index);
       supply += BigInt(o.amount);
       if (o.owner === maker && o.ownerScheme === 0) toMaker += BigInt(o.amount);
+      else if (lock && o.ownerScheme === 3 && o.owner === lock.authority && o.borrowScheme === 0) lockedToMaker += BigInt(o.amount);
     }
   }
   // the custody of this key's own curve is not "to others"
@@ -559,7 +573,8 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
           { label: t('signer.declare.supply'), value: `${formatTokenAmount(supply, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: null },
           { label: t('signer.declare.toYou'), value: `+${formatTokenAmount(toMaker, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: 'in' as const },
           ...(onCurve > 0n ? [{ label: t('signer.declare.onCurve'), value: `${formatTokenAmount(onCurve, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: null }] : []),
-          ...(supply > toMaker + onCurve ? [{ label: t('signer.declare.toOthers'), value: `${formatTokenAmount(supply - toMaker - onCurve, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: 'out' as const }] : []),
+          ...(lockedToMaker > 0n ? [{ label: t('signer.declare.locked', { date: formatRowDate(Number(lock!.until)) }), value: `${formatTokenAmount(lockedToMaker, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: null }] : []),
+          ...(supply > toMaker + onCurve + lockedToMaker ? [{ label: t('signer.declare.toOthers'), value: `${formatTokenAmount(supply - toMaker - onCurve - lockedToMaker, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: 'out' as const }] : []),
           ...curveLines,
         ]
       : []),

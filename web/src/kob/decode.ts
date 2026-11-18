@@ -48,6 +48,7 @@
 // The Schnorr digests in `built.sign` are produced by kob-wasm. TypeScript cannot recompute them,
 // and `kob.finalize` verifies signatures against them.
 import { curveProblems } from './curve';
+import { creatorLock, type CreatorLockInfo } from './creator-lock';
 import type { WalletId } from '../wallet/types';
 import {
   baseKind, custodiesOf, describeOrder, familyOfKind, formatKas, formatUnits, isOrderKind, isPairKind, kindFor, big, orderKindOfTemplate, pairFactsOf,
@@ -58,12 +59,12 @@ import { declaredRateLimit, type FeePolicy } from './fee-policy';
 import { displayName, longId, type TokenRegistry } from './registry';
 import type {
   BuiltTx, FeeMode, Hex, OrderKind, OrderState, PairEvidence, PairTriggerRule, Payload, PayloadRecord, RecoveredAmend, RecoveredOrder, SigArg, SigPlan, TemplateName,
-  TokenProgram, TokenState, TxInputJson, TxOutputJson,
+  TokenProgram, TokenState, TxInputJson, TxOutputJson, U64,
 } from './types';
 import type { NodeInputFacts } from './node-verify';
 import { outpointKey } from './node-verify';
 import { CODEC_OF_PROGRAM, isTokenProgram } from './programs.generated';
-import { KCC20_SCHEME_COVID, PLAIN_BORROW, borrowKeyOf, extensionOfState, isCovenantOwned, isKcc20State, isKeyOwned, ownerTypeOf, programOfHash } from './token-state';
+import { KCC20_SCHEME_COVID, KCC20_SCHEME_P2SH, PLAIN_BORROW, borrowKeyOf, extensionOfState, isCovenantOwned, isKcc20State, isKeyOwned, ownerTypeOf, programOfHash } from './token-state';
 import { recoverSweeps, type RecoveredSweep } from './sweep';
 import type { KobWasm } from './wasm';
 
@@ -105,11 +106,11 @@ export const SIGNING_ISSUE_CODES = [
   'expected-tokens-escrowed', 'expected-cancel-ids', 'expected-max-fee', 'input-unconfirmed', 'token-state-unplain', 'token-state-mixed', 'pair-token-mismatch', 'pair-family-mismatch',
   'pair-terms-invalid', 'order-terms-invalid', 'expected-quote-escrowed', 'trigger-evidence-invalid', 'trigger-rule-unmet', 'sweep-invalid', 'expected-sweep-ids', 'sweep-custody-spent',
   'retired-not-cancel', 'claim-invalid', 'bought-custody-lost', 'expected-claim-ids', 'expected-delivery', 'curve-terms-invalid',
-  'take-amount', 'take-price', 'take-orders', 'take-token',
+  'take-amount', 'take-price', 'take-orders', 'take-token', 'unlock-invalid',
   // warnings
   'inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records',
   // info
-  'payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed', 'take-fills',
+  'payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed', 'take-fills', 'unlock-tokens', 'lock-coin',
 ] as const;
 /** The code of a signing finding. */
 export type SigningIssueCode = (typeof SIGNING_ISSUE_CODES)[number];
@@ -121,7 +122,7 @@ const LEVEL: Record<SigningIssueCode, IssueLevel> = Object.fromEntries(
     c,
     (['inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records'] as string[]).includes(c)
       ? 'warning'
-      : (['payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed', 'take-fills'] as string[]).includes(c)
+      : (['payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed', 'take-fills', 'unlock-tokens', 'lock-coin'] as string[]).includes(c)
         ? 'info'
         : 'blocking',
   ]),
@@ -171,7 +172,9 @@ export interface DecodedInput {
   ownedBy: 'maker' | 'covenant' | 'other';
   /** P2SH redeem script hash of the input UTXO (null for P2PK) */
   redeemScriptHash: Hex | null;
-  token: null | { ref: TokenRef; amount: bigint; owner: Hex; ownerScheme: number; leader: boolean; escrowOf: Hex | null; program: TokenProgram; witness: 'covenantId' | 'p2pk' };
+  token: null | { ref: TokenRef; amount: bigint; owner: Hex; ownerScheme: number; leader: boolean; escrowOf: Hex | null; program: TokenProgram; witness: 'covenantId' | 'p2pk' | 'p2sh';
+    /** a token input the wallet's creator lock holds (owner scheme 0x03, the lock's hash): this unlock frees it */
+    locked?: { until: bigint } };
   order: null | {
     kind: OrderKind; template: TemplateName; covenantId: Hex | null; entry: string;
     /**
@@ -376,6 +379,8 @@ export interface TokenNet {
   toMaker: bigint;
   escrowed: bigint;
   toOthers: bigint;
+  /** the wallet's tokens its creator lock held, freed by this unlock (not in `fromWallet`: they were not free) */
+  unlocked: bigint;
   /** toMaker - fromWallet: negative = the wallet's free balance drops */
   walletDelta: bigint;
   /** human amounts (decimals applied when the token is registered) */
@@ -400,9 +405,10 @@ export interface NetEffects {
 
 /**
  * `sweep` is the maker's sweep of an order's strays in place. The order continues unchanged and
- * only strays move.
+ * only strays move. `unlock` spends the wallet's creator lock (its coin and the tokens it holds, kob/creator-lock.ts); `lock-coin` sends the
+ * wallet's KAS to the address of its own open creator lock (the coin the unlock spends).
  */
-export type SigningKind = 'create' | 'cancel' | 'cancel-replace' | 'cancel-position' | 'refund' | 'send' | 'sweep' | 'claim' | 'claim-merge' | 'claim-place' | 'take' | 'other';
+export type SigningKind = 'create' | 'cancel' | 'cancel-replace' | 'cancel-position' | 'refund' | 'send' | 'sweep' | 'claim' | 'claim-merge' | 'claim-place' | 'take' | 'unlock' | 'lock-coin' | 'other';
 
 /** A resting order of another key that this transaction fills, the wallet being the taker. */
 export interface DecodedTakeFill {
@@ -541,6 +547,14 @@ export interface DecodeInput {
    * Absent means the fixed bounds and no rate check.
    */
   feePolicy?: Pick<FeePolicy, 'dynamic' | 'floor' | 'maxRate' | 'maxFeeSompi'>;
+  /**
+   * The wallet's creator locks the caller knows of (a verified declaration, the private-key signer's hint): a plain KAS output to the address
+   * of one of them is the wallet's own lock coin (spent by its unlock) when the lock is the wallet key's and already open by `now`. Any other
+   * output to a script stays unknown (blocking). The unlock itself needs none of this: its plans name the lock.
+   */
+  locks?: readonly { until: U64; key: Hex }[];
+  /** the wall clock (ms) the open locks are judged by (default Date.now()) */
+  now?: number;
 }
 
 // ---------------------------------------------------------------------------------- script helpers
@@ -559,6 +573,12 @@ function tokenRef(reg: TokenRegistry | null | undefined, covenantId: Hex): Token
   if (!t) return { covenantId, ticker: null, decimals: null, display: longId(covenantId), inRegistry: false, tradable: false };
   return { covenantId, ticker: t.ticker, decimals: t.decimals, display: displayName(t), inRegistry: true, tradable: t.tradable };
 }
+
+/** A unix-ms time as its UTC day, `2026-12-31` (a lock's time in a finding). */
+const isoDate = (ms: bigint): string => {
+  const d = new Date(Number(ms));
+  return Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 10) : String(ms);
+};
 
 const human = (ref: TokenRef, amount: bigint): string => (ref.decimals === null ? `on-chain amount ${amount}` : `${formatUnits(amount, ref.decimals)} ${ref.ticker}`);
 
@@ -626,6 +646,8 @@ function planSigner(p: SigPlan): Hex | null {
     case 'kronToken': return p.signer ?? null;
     // the maker's cancel of an order under a retired template: the maker's SIGHASH_ALL signature
     case 'retiredCancel': return p.maker;
+    // the coin of a creator lock: a signature of its key
+    case 'creatorLock': return p.key;
   }
 }
 
@@ -669,6 +691,21 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   const orderStates = new Map<number, OrderState>();
   /** Per token covenant id: the borrow setting (`borrowKeyOf`) of every token input, and of the wallet's own ones. */
   const inputBorrow = new Map<Hex, { all: Set<string>; maker: Set<string> }>();
+  /**
+   * The creator locks whose coin an input spends (`creatorLock` plans), by input: derived by kob-wasm from the plan's terms (its script is
+   * checked against the spent UTXO below). A token input owned by one of them (owner scheme 0x03, its hash) is the wallet's when its key is.
+   */
+  const lockOf = new Map<number, CreatorLockInfo>();
+  built.plans.forEach((p, i) => {
+    if (p.kind !== 'creatorLock') return;
+    try {
+      lockOf.set(i, creatorLock(kob, { until: p.until, key: p.key }));
+    } catch {
+      /* no lock of those terms: the input's script matches nothing (blocking below) */
+    }
+  });
+  /** the lock input whose authority owns a p2sh/v1 state, if any */
+  const lockOwning = (owner: Hex): [number, CreatorLockInfo] | null => [...lockOf].find(([, l]) => l.authority === owner) ?? null;
 
   // ---------------------------------------------------------------- inputs
   const inputs: DecodedInput[] = tx.inputs.map((inp, i) => decodeInput(i, inp, built.plans[i], built.roles[i]));
@@ -687,6 +724,17 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     if (plan.kind === 'p2pk') {
       mustMatch(p2pkSpk(plan.pubkey), 'P2PK script of that key');
       return { ...base, type: 'kas', ownedBy: plan.pubkey === maker ? 'maker' : 'other' };
+    }
+    if (plan.kind === 'creatorLock') {
+      // the KAS coin of a creator lock: the P2SH of the lock script of exactly the plan's terms; the wallet's when the lock's key is
+      const lock = lockOf.get(i) ?? null;
+      mustMatch(lock?.scriptPublicKey ?? null, 'creator lock script of that key and time');
+      const mine = plan.key.toLowerCase() === maker;
+      if (!mine) add('unlock-invalid', `input ${i}: the creator lock is of another key (${shortId(plan.key)}), not the connected wallet`, { input: i, params: { reason: 'key' } });
+      if (inp.utxo.covenantId) add('unlock-invalid', `input ${i}: a creator lock's coin is plain KAS, this one is bound to a covenant`, { input: i, params: { reason: 'coin' } });
+      // the node takes the spend only once its past median time passes the lock time, which must be at least the lock's
+      if (big(tx.lockTime) < big(plan.until)) add('unlock-invalid', `input ${i}: the transaction's lock time is before the lock's time: the node would never accept it`, { input: i, params: { reason: 'time' } });
+      return { ...base, type: 'kas', ownedBy: mine ? 'maker' : 'other' };
     }
     if (plan.kind === 'entry') {
       let state: ReturnType<KobWasm['decodeState']> | null = null;
@@ -754,17 +802,28 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     }
     mustMatch(derivedSpk, `${plan.template} token script of the given state`);
     const covId = inp.utxo.covenantId ?? '';
-    const ownedBy: DecodedInput['ownedBy'] = isCovenantOwned(st) ? 'covenant' : st.owner === maker ? 'maker' : 'other';
+    // a p2sh/v1 owner (0x03) is the wallet's only as its own creator lock spent here (its coin an input of this transaction, its key the
+    // wallet's, no borrow setting): an unlock. Every other p2sh owner is another's.
+    const p2sh = isKcc20State(st) && st.owner_scheme === KCC20_SCHEME_P2SH;
+    const holder = p2sh ? lockOwning(st.owner) : null;
+    const lockedMine = !!holder && holder[1].key === maker && borrowKeyOf(st) === PLAIN_BORROW;
+    const ownedBy: DecodedInput['ownedBy'] = isCovenantOwned(st) ? 'covenant' : p2sh ? (lockedMine ? 'maker' : 'other') : st.owner === maker ? 'maker' : 'other';
+    if (plan.kind !== 'kronToken' && plan.witness.kind === 'p2sh') {
+      // the owner witness names the coin of the lock that owns the state: anything else never authorises (refused here, before the node does)
+      if (!p2sh || !holder || holder[0] !== plan.witness.value) add('unlock-invalid', `input ${i}: the token input's owner witness does not name the coin of the creator lock that holds it`, { input: i, params: { reason: 'witness' } });
+    } else if (p2sh) {
+      add('unlock-invalid', `input ${i}: a token UTXO held by a script (owner scheme 3) is spent without naming its coin`, { input: i, params: { reason: 'witness' } });
+    }
     const seen = inputBorrow.get(covId) ?? { all: new Set<string>(), maker: new Set<string>() };
     seen.all.add(borrowKeyOf(st));
     if (ownedBy === 'maker' && isKeyOwned(st)) seen.maker.add(borrowKeyOf(st));
     inputBorrow.set(covId, seen);
-    const witness: 'covenantId' | 'p2pk' = plan.kind === 'kronToken' ? (isCovenantOwned(st) ? 'covenantId' : 'p2pk') : plan.witness.kind;
+    const witness: 'covenantId' | 'p2pk' | 'p2sh' = plan.kind === 'kronToken' ? (isCovenantOwned(st) ? 'covenantId' : 'p2pk') : plan.witness.kind;
     return {
       ...base, type: 'token', ownedBy,
       token: {
         ref: tokenRef(registry, covId), amount: big(st.amount), owner: st.owner, ownerScheme: ownerTypeOf(st), leader: plan.kind === 'tokenLeader',
-        escrowOf: isCovenantOwned(st) ? st.owner : null, program: plan.template, witness,
+        escrowOf: isCovenantOwned(st) ? st.owner : null, program: plan.template, witness, ...(lockedMine ? { locked: { until: big(holder![1].until) } } : {}),
       },
     };
   }
@@ -1079,6 +1138,18 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     }
   }
 
+  // the addresses of the wallet's open creator locks the caller knows of: a plain output there is the wallet's lock coin
+  const now = BigInt(Math.floor(input.now ?? Date.now()));
+  const lockCoinSpks = new Map<string, { until: bigint }>();
+  for (const l of input.locks ?? []) {
+    if (l.key.toLowerCase() !== maker || big(l.until) > now) continue;
+    try {
+      lockCoinSpks.set(creatorLock(kob, l).scriptPublicKey, { until: big(l.until) });
+    } catch {
+      /* not a lock: its address is not recognised */
+    }
+  }
+
   const orders: DecodedOrder[] = [];
   const outputs: DecodedOutput[] = tx.outputs.map((out, j) => decodeOutput(j, out));
 
@@ -1221,6 +1292,12 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       }
       add('payment-out', `output ${j}: ${formatKas(value)} KAS would be PAID to another key (${shortId(pk)})`, { output: j, params: { recipient: pk, amount: value } });
       return { ...blank, kind: 'payment-out', flagged: true, recipient: pk };
+    }
+    // the coin of the wallet's own open creator lock: KAS only its key spends, now (the unlock returns it, less its fee, as change)
+    const coinOf = !out.covenant ? lockCoinSpks.get(out.scriptPublicKey) : undefined;
+    if (coinOf) {
+      add('lock-coin', `output ${j}: ${formatKas(value)} KAS go to the address of your creator lock (open since ${isoDate(coinOf.until)}): the unlock spends them and returns the rest`, { output: j, params: { amount: value, date: isoDate(coinOf.until) } });
+      return { ...blank, kind: 'kas-change' };
     }
     // the continuation of an order this tx fills (bound to its covenant id, which its covenant checks)
     if (out.covenant && takenCovs.has(out.covenant.covenantId) && P2SH_RE.test(out.scriptPublicKey)) return { ...blank, kind: 'fill-continue' };
@@ -1777,14 +1854,20 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     const outSum = sum(outs.map((o) => o.token!.amount));
     if (inSum !== outSum) add('token-unbalanced', `${ref.display}: on-chain amount ${inSum} goes in but ${outSum} comes out: tokens would be created or destroyed`, { params: { in: inSum, out: outSum } });
     if (!ref.tradable && ins.length + outs.length > 0) warnToken(id);
-    const fw = sum(ins.filter((d) => d.ownedBy === 'maker').map((d) => d.token!.amount));
+    // the wallet's locked tokens an unlock spends were never free: they come in as `unlocked`, not out of the free balance
+    const fw = sum(ins.filter((d) => d.ownedBy === 'maker' && !d.token!.locked).map((d) => d.token!.amount));
+    const unl = sum(ins.filter((d) => d.ownedBy === 'maker' && d.token!.locked).map((d) => d.token!.amount));
     const rel = sum(ins.filter((d) => d.ownedBy === 'covenant' && !takenInputs.has(d.index)).map((d) => d.token!.amount));
     const toMaker = sum(outs.filter((o) => o.kind === 'token-change').map((o) => o.token!.amount));
     const esc = sum(outs.filter((o) => o.kind === 'custody').map((o) => o.token!.amount));
     const oth = sum(outs.filter((o) => o.kind === 'token-out' || o.kind === 'unknown-covenant').map((o) => o.token!.amount));
     const delta = toMaker - fw;
+    if (unl > 0n) {
+      const until = ins.find((d) => d.token!.locked)!.token!.locked!.until;
+      add('unlock-tokens', `${human(ref, unl)} your creator lock held until ${isoDate(until)} become yours, free to move`, { params: { amount: human(ref, unl), date: isoDate(until) } });
+    }
     tokens.push({
-      ref, fromWallet: fw, released: rel, toMaker, escrowed: esc, toOthers: oth, walletDelta: delta,
+      ref, fromWallet: fw, released: rel, toMaker, escrowed: esc, toOthers: oth, unlocked: unl, walletDelta: delta,
       human: { fromWallet: human(ref, fw), released: human(ref, rel), toMaker: human(ref, toMaker), escrowed: human(ref, esc), toOthers: human(ref, oth), walletDelta: (delta < 0n ? '-' : '') + human(ref, delta < 0n ? -delta : delta) },
     });
   }
@@ -1954,7 +2037,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   const refunds = spends.filter((s) => s.action === 'refund');
   const sweptSpends = spends.filter((s) => s.action === 'sweep');
   const tokenOnly = spends.length === 0 && !createdOrders && tokens.length > 0;
-  const kind: SigningKind = claimSpends.length ? (createdOrders ? 'claim-place' : mergesWallet ? 'claim-merge' : 'claim') : placesBought ? 'claim-place' : take && !createdOrders && !cancels.length ? 'take' : createdOrders && cancels.length ? 'cancel-replace' : createdOrders ? 'create' : cancels.length > 1 ? 'cancel-position' : cancels.length === 1 ? 'cancel' : refunds.length ? 'refund' : sweptSpends.length ? 'sweep' : tokenOnly ? 'send' : 'other';
+  // an unlock: the coin of a creator lock spent (with what it holds); a lock coin: the wallet's KAS to its open lock's address, nothing else
+  const unlocking = spends.length === 0 && !createdOrders && built.plans.some((p) => p.kind === 'creatorLock');
+  const lockCoin = spends.length === 0 && !createdOrders && tokens.length === 0 && issues.some((x) => x.code === 'lock-coin');
+  const kind: SigningKind = unlocking ? 'unlock' : lockCoin ? 'lock-coin' :claimSpends.length ? (createdOrders ? 'claim-place' : mergesWallet ? 'claim-merge' : 'claim') : placesBought ? 'claim-place' : take && !createdOrders && !cancels.length ? 'take' : createdOrders && cancels.length ? 'cancel-replace' : createdOrders ? 'create' : cancels.length > 1 ? 'cancel-position' : cancels.length === 1 ? 'cancel' : refunds.length ? 'refund' : sweptSpends.length ? 'sweep' : tokenOnly ? 'send' : 'other';
   if (createdOrders && !payload) add('no-order-records', 'orders are created but the payload carries no KOB1 records');
   // an order under a retired template is only cancelled: no replacement, sweep or anything else in
   // the same transaction

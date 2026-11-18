@@ -6,7 +6,7 @@
 import type { BuiltTx, Hex, InputSignature } from '../kob/types';
 import { normalizeNetwork, pubkeyToAddress, type KaspaSdk } from '../data/kaspa-sdk';
 import type { RegistryRow } from '../signer/table';
-import { toSigner, parseSignerMessage, type AppToSigner, type GenesisClaim, type RejectReason, type SignerCap, type SignerNote, type TokenHint } from '../signer/protocol';
+import { toSigner, parseSignerMessage, type AppToSigner, type GenesisClaim, type RejectReason, type SignerCap, type SignerNote, type TokenHint, type LockHint } from '../signer/protocol';
 import { SIGN_TIMEOUT_MS } from './sigs';
 import { WalletError, type SignOptions, type SigningSession, type WalletAdapter, type WalletInfo } from './types';
 
@@ -278,7 +278,7 @@ export class SignerHost {
    * Asks the frame to show `built` and sign it once the user approves there. `retime` marks a
    * request that re-times the one signed last (retime.ts).
    */
-  sign(built: BuiltTx, tokens: TokenHint[], timeoutMs = SIGN_TIMEOUT_MS, retime = false, notes: SignerNote[] = [], session?: string): Promise<InputSignature[]> {
+  sign(built: BuiltTx, tokens: TokenHint[], timeoutMs = SIGN_TIMEOUT_MS, retime = false, notes: SignerNote[] = [], session?: string, locks?: LockHint[]): Promise<InputSignature[]> {
     if (!this.pub) return Promise.reject(new WalletError('other', 'The private key signer holds no key: connect again.'));
     if (this.waiting || this.opening) return Promise.reject(new WalletError('other', 'The private key signer is busy with another request.'));
     const id = `r${Date.now().toString(36)}${(++this.seq).toString(36)}`;
@@ -295,7 +295,7 @@ export class SignerHost {
       // still waiting by then (a session step at once when the frame ends the session).
       if (retimeOf || sid) this.waiting.show = setTimeout(() => this.waiting?.id === id && this.events.onRequest?.(true), RETIME_SHOW_MS);
       else this.events.onRequest?.(true);
-      this.post(toSigner({ type: 'sign', id, built, tokens, ...this.table(), ...(!sid && notes.length > 0 ? { notes } : {}), ...(retimeOf ? { retimeOf } : {}), ...(sid ? { session: sid } : {}) }));
+      this.post(toSigner({ type: 'sign', id, built, tokens, ...this.table(), ...(!sid && notes.length > 0 ? { notes } : {}), ...(retimeOf ? { retimeOf } : {}), ...(sid ? { session: sid } : {}), ...(!sid && locks?.length ? { locks } : {}) }));
     });
   }
 
@@ -437,7 +437,7 @@ export function createLocalKeyAdapter(deps: LocalKeyDeps): WalletAdapter {
       // it.
       if (opts.clockDaa !== undefined) host.clock(opts.clockDaa);
       host.registryTable = deps.registryTable?.();
-      const pending = host.sign(built, deps.tokenHints?.(built) ?? [], opts.timeoutMs, opts.retime === true, opts.signerNotes, opts.session);
+      const pending = host.sign(built, deps.tokenHints?.(built) ?? [], opts.timeoutMs, opts.retime === true, opts.signerNotes, opts.session, opts.locks);
       opts.live?.attach({ replace: (b) => host.update(b, deps.tokenHints?.(b) ?? []), clock: (daa) => host.clock(daa) });
       const sigs = await pending;
       // The transaction signed: the request, or the update of it that the frame showed last.

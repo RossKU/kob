@@ -21,6 +21,7 @@ import { atFloor, capForTotal, describeFee, rememberFeeChoice, withUrgency, type
 import type { PlanIssue } from './plan-types';
 import { normalizeTicker } from './registry';
 import { curveMinFill, curveNumbers, curveTable, parseSale, type CurveNumbers, type CurveTable, type SaleForm } from './curve';
+import { LOCK_TIME_THRESHOLD, MAX_UNTIL } from './creator-lock';
 import type { AnyState, BuiltTx, Hex, Kcc20State, KeyUtxo, TokenUtxo, U64 } from './types';
 import { KobError, type KobWasm } from './wasm';
 
@@ -111,6 +112,11 @@ export interface IssueSpec {
   program?: '3x3' | 'public-mint';
   /** A `KobCurveAsk` created in this genesis, unbound: holder `custody` (owner zero, scheme 0x04) is its custody. */
   curve?: IssueCurveSpec;
+  /**
+   * A creator lock (kob/creator-lock.ts): holder `holder` (the funding key's, scheme 0) becomes the lock's (owner scheme 0x03, its P2SH
+   * hash), opening at `until` (unix ms) to the funding key; the declaration carries it as `lock`.
+   */
+  lock?: { holder: number; until: U64 };
 }
 
 /** The curve of an `IssueSpec` (kob-wasm fills the maker, the token fields, `total` and `amountLeft`). */
@@ -218,6 +224,16 @@ export interface IssueDeclaration {
   funding: U64;
 }
 
+/** The creator lock a creation declares (kob-wasm `issue` `lock`), and the holder it owns. */
+export interface IssueLock {
+  /** unix ms */
+  until: U64;
+  key: Hex;
+  script: Hex;
+  authority: Hex;
+  holder: number;
+}
+
 /** The two planned transactions of an issuance, with the token and its documents. */
 export interface IssueResult {
   /** Step 1: the preparation, declaring the metadata (KCC-23). */
@@ -229,6 +245,8 @@ export interface IssueResult {
   docs: IssueDocs;
   /** the curve this genesis places ("Sell on a curve") */
   curve?: IssueCurve;
+  /** the creator lock this creation declares ("Lock my share until") */
+  lock?: IssueLock;
   warnings: string[];
 }
 
@@ -382,6 +400,11 @@ export interface IssueForm {
    * The sale takes the wallet's share; what is kept is a separate output of the wallet.
    */
   sale?: SaleForm;
+  /**
+   * "Lock my share until": a unix time in milliseconds (decimal text), empty or absent for none. It locks what the wallet keeps (with a sale:
+   * the kept share; without: the wallet's share) on chain until then (kob/creator-lock.ts).
+   */
+  lockUntil?: string;
 }
 
 /** A blank form with the default decimals. */
@@ -595,6 +618,13 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
     }
   }
 
+  // "Lock my share until": a unix-ms time in the future (the consensus reads a lock time below 5 x 10^11 as a DAA score)
+  const lockUntil = (form.lockUntil ?? '').trim();
+  if (lockUntil !== '') {
+    if (!/^\d{1,16}$/.test(lockUntil) || BigInt(lockUntil) < LOCK_TIME_THRESHOLD || BigInt(lockUntil) > MAX_UNTIL) err('lock.invalid', 'Choose the date your share opens.', 'lock');
+    else if (BigInt(lockUntil) <= BigInt(Date.now())) err('lock.past', 'The date your share opens must be in the future.', 'lock');
+  }
+
   return { issues, parsed: ok && supply !== null ? { supply, holders, carrier } : null };
 }
 
@@ -602,15 +632,18 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
  * Bytes of the declaration a form makes (codec byte included).
  * KOB's fields in KOB's order, as kob-protocol `TokenMetadata::json` writes them.
  */
-export function metadataBytes(form: Pick<IssueForm, 'name' | 'ticker' | 'decimals' | 'description' | 'icon' | 'imageHash' | 'website' | 'x' | 'telegram'>): number {
+export function metadataBytes(form: Pick<IssueForm, 'name' | 'ticker' | 'decimals' | 'description' | 'icon' | 'imageHash' | 'website' | 'x' | 'telegram' | 'lockUntil'>): number {
   const opt = (k: string, v: string | null | undefined) => (v && v.trim() ? `,"${k}":${JSON.stringify(v.trim())}` : '');
   const x = form.x ? socialUrl('x', form.x) : null;
   const telegram = form.telegram ? socialUrl('telegram', form.telegram) : null;
   const json =
     `{"name":${JSON.stringify(form.name.trim())},"symbol":${JSON.stringify(form.ticker)},"decimals":${Number.isInteger(form.decimals) ? form.decimals : 0}` +
-    `${opt('description', form.description)}${opt('image', form.icon)}${opt('image_hash', form.imageHash?.toLowerCase())}${opt('website', form.website)}${opt('x', x)}${opt('telegram', telegram)}}`;
+    `${opt('description', form.description)}${opt('image', form.icon)}${opt('image_hash', form.imageHash?.toLowerCase())}${opt('website', form.website)}${opt('x', x)}${opt('telegram', telegram)}${opt('lock', form.lockUntil?.trim() ? LOCK_SCRIPT_PLACEHOLDER : '')}}`;
   return 1 + new TextEncoder().encode(json).length;
 }
+
+/** A creator lock's script in the declaration: 88 hex characters, whatever its terms (only its length is measured). */
+const LOCK_SCRIPT_PLACEHOLDER = '0'.repeat(88);
 
 /** Token inputs / outputs per transfer of the program the form issues. */
 export function slotsOf(form: Pick<IssueForm, 'program'>, limits: IssueLimits): { maxTokenInputs: number; maxTokenOutputs: number } {
@@ -763,6 +796,20 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
       sale = { mode: 'ask', sell: p.sell, keep: p.keep, output: at, total: p.total, price: p.price };
     }
   }
+  // "Lock my share until": the share the wallet keeps (a sale's kept part, inserted right after the part for sale; else the wallet's share)
+  let lock: IssueSpec['lock'];
+  const lockUntil = (form.lockUntil ?? '').trim();
+  if (lockUntil !== '') {
+    let holder: number;
+    if (sale) {
+      if (sale.keep <= 0n) throw new IssueFormError([issue('lock.no_keep', 'Keep a share in your wallet to lock it: everything goes on sale.', 'lock')]);
+      holder = sale.output + 1;
+    } else {
+      holder = holders.findIndex((h) => h.owner === maker && h.ownerScheme === 0);
+      if (holder < 0) throw new IssueFormError([issue('lock.no_share', 'Your wallet receives no tokens to lock: give it a share of the supply.', 'lock')]);
+    }
+    lock = { holder, until: lockUntil };
+  }
   // a curve's own UTXO carries KAS too (the token carrier)
   const outputs = BigInt(holders.length + (curve ? 1 : 0));
 
@@ -809,6 +856,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
     ...(form.telegram && socialUrl('telegram', form.telegram) ? { telegram: socialUrl('telegram', form.telegram)! } : {}),
     network: opts.network,
     ...(curve ? { curve } : {}),
+    ...(lock ? { lock } : {}),
   };
   for (;;) {
     let spec: IssueSpec = { ...base, funding: candidates.slice(0, count) };

@@ -6,7 +6,7 @@ import type { OrderView, StrayView } from '../../data/indexer-types';
 import type { OrderSnapshot } from '../../kob/cancel';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex, TokenProgram, TokenUtxo } from '../../kob/types';
-import { noteTokenProgram } from '../../data/token-declarations';
+import { knownDeclarations, noteTokenProgram, restoreDeclarations } from '../../data/token-declarations';
 import { toError } from '../kit/hooks';
 import { combineBalances, type CombinedBalances } from './balances-model';
 
@@ -21,7 +21,45 @@ export interface FreeBalances {
   programs: Map<Hex, TokenProgram>;
   /** the program of every token read (registry tokens and `programs`) */
   programOf?: Map<Hex, TokenProgram>;
+  /** the wallet's tokens its creator locks hold (`loadLockedHoldings`), read with `anyToken` */
+  locked?: LockedHolding[];
   errors: BalanceError[];
+}
+
+/** The tokens a creator lock of the wallet holds (kob/creator-lock.ts), verified on the node: not spendable before `until`. */
+export interface LockedHolding {
+  token: Hex;
+  program: TokenProgram;
+  /** unix ms */
+  until: bigint;
+  key: Hex;
+  authority: Hex;
+  utxos: TokenUtxo[];
+  /** base units */
+  amount: bigint;
+}
+
+/**
+ * The wallet's locked tokens: for every verified declaration known in this browser (memory, and the proofs kept here) whose creator lock is the
+ * wallet key's, the UTXOs the lock holds, verified on the node (data/token-tracker.ts `lockedTokenUtxos`: the locked genesis outputs and what
+ * the indexer lists for the lock's owner). A token whose lock holds nothing any more (unlocked) is left out.
+ */
+export async function loadLockedHoldings(s: Pick<Services, 'kob' | 'tracker' | 'config'>, pubkey: Hex): Promise<LockedHolding[]> {
+  const network = s.config?.network;
+  if (!network || typeof s.tracker.lockedTokenUtxos !== 'function') return [];
+  restoreDeclarations(s.kob);
+  const me = pubkey.toLowerCase();
+  const mine = knownDeclarations(network).filter((d) => d.lock && d.lock.key === me && d.genesisTxid);
+  const out: LockedHolding[] = [];
+  for (const d of mine) {
+    const l = d.lock!;
+    const utxos = await s.tracker.lockedTokenUtxos({
+      covenantId: d.covenantId, program: l.program, authority: l.authority, extensionCommitment: l.extensionCommitment, genesis: { txid: d.genesisTxid!, outputs: l.outputs },
+    });
+    const amount = utxos.reduce((a, u) => a + BigInt(u.state.amount), 0n);
+    if (amount > 0n) out.push({ token: d.covenantId, program: l.program, until: BigInt(l.until), key: l.key, authority: l.authority, utxos, amount });
+  }
+  return out;
 }
 
 /**
@@ -47,7 +85,8 @@ export async function loadFreeBalances(s: Services, pubkey: Hex, tokens: readonl
   ).then((lists) => lists.flat());
   const read = new Set(tokens.filter((t) => t.program).map((t) => t.covenantId));
   const heldP = o.anyToken ? s.tracker.heldTokens(pubkey, { skip: read }).catch((e) => (fail('tokens', e), [])) : Promise.resolve([]);
-  const [kasFree, freeTokens, held] = await Promise.all([kasP, tokensP, heldP]);
+  const lockedP = o.anyToken ? loadLockedHoldings(s, pubkey).catch((e) => (fail('tokens', e), [] as LockedHolding[])) : Promise.resolve([] as LockedHolding[]);
+  const [kasFree, freeTokens, held, locked] = await Promise.all([kasP, tokensP, heldP, lockedP]);
   const programs = new Map<Hex, TokenProgram>();
   for (const u of held) if (!read.has(u.covenantId)) programs.set(u.covenantId, u.program);
   // the program the node verified each held token under: the display of a token without a registry entry takes its program's default decimals
@@ -55,7 +94,8 @@ export async function loadFreeBalances(s: Services, pubkey: Hex, tokens: readonl
   if (network) for (const [id, p] of programs) noteTokenProgram(network, id, p);
   const programOf = new Map<Hex, TokenProgram>(programs);
   for (const t of tokens) if (t.program) programOf.set(t.covenantId, t.program);
-  return { kasFree, freeTokens: [...freeTokens, ...held.map(({ program: _p, ...u }) => u)], programs, programOf, errors };
+  for (const l of locked) if (!programOf.has(l.token)) programOf.set(l.token, l.program);
+  return { kasFree, freeTokens: [...freeTokens, ...held.map(({ program: _p, ...u }) => u)], programs, programOf, ...(locked.length ? { locked } : {}), errors };
 }
 
 /**
@@ -71,5 +111,6 @@ export function combineFreeBalances(free: FreeBalances, o: { maker: Hex; liveOrd
     liveOrders: o.liveOrders,
     strays: o.strays,
     ...(free.programOf ? { programs: free.programOf } : {}),
+    ...(free.locked?.length ? { locked: free.locked } : {}),
   });
 }
