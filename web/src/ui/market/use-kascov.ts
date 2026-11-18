@@ -1,9 +1,14 @@
-// The token names and icons list as component state (data/kascov.ts). A view that needs names or icons (the market list, a token page) calls this; the
-// refresh policy lives here and in the client:
-//   * fetch when the view is shown; while it stays visible, again only when the list is older than `KASCOV_REFRESH_MS` (2 minutes);
-//   * nothing while the tab is hidden (the timer stops; coming back fetches only if the list is stale) and nothing after the view is left;
-//   * every view shares one request and one in-memory cache (the client); a failure backs off up to 10 minutes and keeps the list shown so far;
-//   * a list kascov did not rebuild (`generated_at_ms` unchanged) is the same object: the view does not render again.
+// The token names and icons list as component state (data/kascov.ts). A view that needs names or
+// icons, such as the market list or a token page, calls this. The refresh policy lives here and
+// in the client:
+// - Fetch when the view is shown. While it stays visible, fetch again only when the list is older
+//   than `KASCOV_REFRESH_MS` (2 minutes).
+// - Do nothing while the tab is hidden. The timer stops, and coming back fetches only if the list
+//   is stale. Do nothing after the view is left.
+// - Every view shares one request and one in-memory cache (the client). A failure backs off up to
+//   10 minutes and keeps the list shown so far.
+// - A list kascov did not rebuild (`generated_at_ms` unchanged) is the same object, so the view
+//   does not render again.
 import { useEffect, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { kascov, kascovNetwork, type KascovClient, type KascovResult, type KascovToken } from '../../data/kascov';
@@ -18,7 +23,10 @@ const OFF: KascovState = { status: 'off' };
 const LOADING: KascovState = { status: 'loading' };
 const UNAVAILABLE: KascovState = { status: 'unavailable' };
 
-/** `base` empty or a network kascov does not serve: `off` (no request is ever made). */
+/**
+ * With `base` empty or a network kascov does not serve, the state is `off` and no request is ever
+ * made.
+ */
 export function useKascov(client: KascovClient = kascov): KascovState {
   const { config } = useServices();
   const net = kascovNetwork(config.network);

@@ -1,7 +1,9 @@
-// A KCC-20 token that neither the registry nor the indexer lists (no order of it was ever placed): its market page is offered only from the
-// wallet's own token UTXOs of it that the node confirms (`kob/open-token.ts` `findHeldToken`, `heldTokenView`). The program candidates are the
-// ones this browser stores (an issuance made here, transfers built here, an import) and those of the wallet's node-confirmed holdings (a token
-// bought elsewhere); the node check is `TokenTracker.tokenUtxosFor`.
+// A KCC-20 token that neither the registry nor the indexer lists, because no order of it was ever
+// placed. Its market page is offered only from the wallet's own token UTXOs of it that the node
+// confirms (`kob/open-token.ts` `findHeldToken`, `heldTokenView`). The program candidates are
+// the ones this browser stores, from an issuance made here, transfers built here or an import,
+// and those of the wallet's node-confirmed holdings, such as a token bought elsewhere. The node
+// check is `TokenTracker.tokenUtxosFor`.
 import { useMemo } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { findHeldToken, type HeldTokenIssue } from '../../kob/open-token';
@@ -11,12 +13,15 @@ import { unknownRow, type TokenRow } from './token-model';
 
 export interface HeldTokenState {
   row: TokenRow | null;
-  /** why the wallet's holdings do not make the token tradable here (null while loading, without a wallet, or with a row) */
+  /**
+   * Why the wallet's holdings do not make the token tradable here. Null while loading, without a
+   * wallet, or with a row.
+   */
   reason: HeldTokenIssue | null;
   loading: boolean;
 }
 
-/** `active`: the token is in neither list (the lists have loaded). */
+/** `active` means the token is in neither list, and the lists have loaded. */
 export function useHeldToken(covenantId: Hex, active: boolean): HeldTokenState {
   const { kob, registry, tracker, config } = useServices();
   const pubkey = useWallet().info?.pubkey ?? null;

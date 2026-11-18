@@ -1,7 +1,9 @@
-// Loads what the trading of an OPEN-LIST token needs (kob/open-token.ts): the scales of its open orders and, for a KCC-20 token whose indexer row has
-// no extension commitment, the commitment of one of its listed orders. Registry tokens are not touched. For a KCC-20 token the wallet's own
-// node-verified token UTXOs of it are read too: their commitments cross-check the indexer's pick (audit A1-2, `info.extension`). A token without
-// orders takes the decimals the user entered for its first order (`decimals`); a book that cannot be read never lets them stand in for the
+// Loads what the trading of an open-list token needs (kob/open-token.ts). That is the scales of
+// its open orders and, for a KCC-20 token whose indexer row has no extension commitment, the
+// commitment of one of its listed orders. Registry tokens are not touched. For a KCC-20 token the
+// wallet's own node-verified token UTXOs of it are read too. Their commitments cross-check the
+// indexer's pick (`info.extension`). A token without orders takes the decimals the user entered
+// for its first order (`decimals`). A book that cannot be read never lets them stand in for the
 // scale of orders that may exist.
 import { issuedToken } from '../../data/issued-decimals';
 import { noteMarketDecimals, noteTokenProgram, type DeclaredToken } from '../../data/token-declarations';
@@ -15,16 +17,22 @@ import { useAsync } from '../kit';
 import type { TokenRow } from './token-model';
 
 export interface OpenTokenState {
-  /** tradable TokenInfo synthesised from the indexer (null for registry tokens and while loading / failed) */
+  /**
+   * A tradable TokenInfo synthesised from the indexer. Null for registry tokens and while loading
+   * or failed.
+   */
   info: TokenInfo | null;
-  /** why the token cannot be traded here (open-list tokens only) */
+  /** Why the token cannot be traded here, for open-list tokens only. */
   reason: OpenTokenIssue | null;
   loading: boolean;
 }
 
 const NONE: OpenTokenState = { info: null, reason: null, loading: false };
 
-/** `refreshKey` changes when the book moved: the scales are read again (coalesced). `decimals`: entered for a first order (used only without orders). */
+/**
+ * `refreshKey` changes when the book moved, so the scales are read again (coalesced). `decimals`
+ * is entered for a first order and is used only without orders.
+ */
 export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: number | null = null, declared: DeclaredToken | null = null): OpenTokenState {
   const { indexer, kob, registry, tracker, config } = useServices();
   const pubkey = useWallet().info?.pubkey ?? null;
@@ -39,7 +47,8 @@ export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: num
         const orders = await indexer.orders({ token: view.covenant_id, status: 'active', limit: 20 }, { signal }).catch(() => null);
         ext = orders?.items.find((o) => o.extension_commitment)?.extension_commitment ?? null;
       }
-      // the wallet's own holdings of a KCC-20 token, each confirmed by the node (a failure leaves the pick unchecked, never blocks the page)
+      // The wallet's own holdings of a KCC-20 token, each confirmed by the node. A failure leaves
+      // the pick unchecked and never blocks the page.
       const program = kob.templates().find((t) => t.hash === view.template_hash && t.tokenSlots)?.name as TokenProgram | undefined;
       noteTokenProgram(config.network, view.covenant_id, program);
       const holdings =
@@ -61,7 +70,8 @@ export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: num
     });
     return r.ok ? { info: r.info, reason: null, loading: false } : { info: null, reason: r.reason, loading: false };
   }, [view, facts.data, facts.error, facts.loading, kob, registry, decimals, config.network, row?.source, declared]);
-  // what is shown with no order at hand reads the token as this market trades it (app/token-display.ts)
+  // What is shown with no order at hand reads the token as this market trades it
+  // (app/token-display.ts).
   const known = state.info;
   useEffect(() => {
     if (known) noteMarketDecimals(config.network, known.covenantId, known.decimals);

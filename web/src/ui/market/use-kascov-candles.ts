@@ -1,8 +1,12 @@
-// kascov.io's candles of the tokens behind the chart's optional third-party line, as component state (data/kascov-candles.ts). The policy:
-//   * NOTHING is requested while the line is off (`enabled` false) or the market has no tokens to ask for; turning it on asks once, turning it off or leaving the page aborts;
-//   * while it is on, again only when the answer is older than `KASCOV_CANDLES_REFRESH_MS` (2 minutes) and only while the tab is visible (the timer stops when hidden; coming
-//     back asks at once if the answer is stale); a failed ask is retried at the same pace, never faster;
-//   * another token, network or bucket aborts the request in flight and drops what was shown: a line is never drawn for another market.
+// kascov.io's candles of the tokens behind the chart's optional third-party line, as component
+// state (data/kascov-candles.ts). The policy is:
+// - Nothing is requested while the line is off (`enabled` false) or the market has no tokens to
+//   ask for. Turning it on asks once. Turning it off or leaving the page aborts.
+// - While it is on, it asks again only when the answer is older than `KASCOV_CANDLES_REFRESH_MS`
+//   (2 minutes) and only while the tab is visible. The timer stops when hidden, and coming back
+//   asks at once if the answer is stale. A failed ask is retried at the same pace, never faster.
+// - Another token, network or bucket aborts the request in flight and drops what was shown. A line
+//   is never drawn for another market.
 import { useEffect, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { fetchKascovCandles, type KascovBucket, type KascovCandle } from '../../data/kascov-candles';
@@ -14,7 +18,7 @@ export type KascovLine =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'unavailable' }
-  /** one candle list per asked token, in the order asked */
+  /** One candle list per asked token, in the order asked. */
   | { status: 'ok'; legs: readonly (readonly KascovCandle[])[] };
 
 type Held = { key: string; line: KascovLine };

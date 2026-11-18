@@ -1,6 +1,8 @@
-// KOB's own genesis check of the token a page shows (data/genesis-check.ts), run when the page opens: once per token per session (the checker's cache).
-// A row whose genesis the registry verified has nothing to check. The result never gates anything: it replaces the genesis fact of the row
-// (token-model.ts `applyGenesisCheck`): "Genesis verified" (KOB's own fact), "Genesis check failed", or "Genesis not verified" with the reason.
+// KOB's own genesis check of the token a page shows (data/genesis-check.ts). It runs when the page
+// opens, once per token per session because of the checker's cache. A row whose genesis the
+// registry verified has nothing to check. The result never gates anything. It replaces the
+// genesis fact of the row (token-model.ts `applyGenesisCheck`): "Genesis verified", which is KOB's
+// own fact, "Genesis check failed", or "Genesis not verified" with the reason.
 import { useEffect, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import type { Services } from '../../app/services';
@@ -11,7 +13,7 @@ import type { TokenRow } from './token-model';
 
 const checkers = new WeakMap<object, GenesisChecker>();
 
-/** The session's checker for a services object (the wasm facade it verifies with). */
+/** The session's checker for a services object, which is the wasm facade it verifies with. */
 export function genesisCheckerFor(services: Pick<Services, 'kob'>): GenesisChecker {
   let c = checkers.get(services.kob);
   if (!c) {
@@ -21,7 +23,10 @@ export function genesisCheckerFor(services: Pick<Services, 'kob'>): GenesisCheck
   return c;
 }
 
-/** Whether the row's genesis line is open (not verified by the registry): only those tokens are checked. */
+/**
+ * Whether the row's genesis line is open, meaning not verified by the registry. Only those tokens
+ * are checked.
+ */
 export const needsGenesisCheck = (row: Pick<TokenRow, 'facts'> | null | undefined): boolean =>
   !!row && (row.facts.includes('genesis_unverified') || row.facts.includes('genesis_kascov'));
 
@@ -39,7 +44,8 @@ export function useGenesisCheck(row: Pick<TokenRow, 'covenantId' | 'facts' | 'in
 
   useEffect(() => {
     if (!enabled || !id) return;
-    // the request is not cancelled when the page is left: it is bounded by its timeouts and its answer is the session's cache for the token
+    // The request is not cancelled when the page is left. It is bounded by its timeouts, and its
+    // answer is the session's cache for the token.
     let live = true;
     void checker.check(services.config.network ?? '', id, { kascovBase: base, programHint: hint }).then((check) => {
       if (live) setResult({ id, check });

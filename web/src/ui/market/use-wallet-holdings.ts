@@ -10,15 +10,15 @@ import type { HeldTokenUtxo } from '../../data/token-tracker';
 import { useAsync } from '../kit';
 
 export interface WalletHoldings {
-  /** null without a connected wallet; empty while it is read or when it could not be */
+  /** Null without a connected wallet. Empty while it is read or when it could not be. */
   holdings: readonly HeldTokenUtxo[] | null;
-  /** a wallet is connected on this network */
+  /** A wallet is connected on this network. */
   connected: boolean;
 }
 
 const NONE: readonly HeldTokenUtxo[] = [];
 
-/** `reloadKey`: a new value reads the holdings again (the list's refresh). */
+/** `reloadKey`: a new value reads the holdings again, as the list's refresh does. */
 export function useWalletHoldings(reloadKey: unknown): WalletHoldings {
   const { tracker, config } = useServices();
   const wallet = useWallet();
