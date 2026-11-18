@@ -1,12 +1,14 @@
-//! An order's pinned token program must be one the builders can spend it with: the template hash AND the prefix / suffix
-//! lengths the state names, of the family its kind trades. A KAS-kind order whose lengths do not match its program decodes,
-//! and its placement record encodes, but `kob_protocol::build` refuses every transaction that spends it. Two layers keep such
-//! an order from stalling the matcher:
+//! An order's pinned token program must be one the builders can spend it with: the template hash
+//! AND the prefix / suffix lengths the state names, of the family its kind trades. A KAS-kind order
+//! whose lengths do not match its program decodes, and its placement record encodes, but
+//! `kob_protocol::build` refuses every transaction that spends it. Two layers keep such an order
+//! from stalling the matcher:
 //!
 //! * the sanity gate (`kobd::sanity::check`) resolves the programs as the builders do
 //!   (`kob_protocol::build::order_programs`): the order is never listed or planned;
-//! * the engine: a lowering refusal that names the order at fault (`order of leg <i>: ...`) quarantines that order for this
-//!   and later ticks and plans the rest again, instead of dropping the plan's honest fills.
+//! * the engine: a lowering refusal that names the order at fault (`order of leg <i>: ...`)
+//!   quarantines that order for this and later ticks and plans the rest again, instead of dropping
+//!   the plan's honest fills.
 
 #[path = "matcher_common/mod.rs"]
 mod common;

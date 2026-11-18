@@ -1,7 +1,7 @@
 //! Regression: the backfill of the stop entries' books, which runs at every open, commits once.
 //!
-//! It refreshed every live if-done entry in a book with one autocommit (one sync) each, and summed
-//! each entry's fills. With 10^5 entries a restart took minutes.
+//! It must not refresh every live if-done entry in a book with one autocommit (one sync) each, and
+//! sum each entry's fills: with 10^5 entries a restart would take minutes.
 
 use kobd::indexer::db::{backfill_stop_entry_books, open_memory};
 use std::sync::atomic::{AtomicUsize, Ordering};

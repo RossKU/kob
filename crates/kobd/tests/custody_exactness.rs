@@ -1,12 +1,13 @@
-//! Regression: a token output owned by an order id is that order's custody only if it is exactly the
-//! custody the covenant rules require; any other same-owner output is a stray.
+//! Regression: a token output owned by an order id is that order's custody only if it is exactly
+//! the custody the covenant rules require; any other same-owner output is a stray.
 //!
-//! The ask covenants only guard token INPUTS (`noStrays`), never outputs, so a taker who fills an order can add an extra token
-//! output owned by the order id (the engine accepts it, `World::resign(.., true)` runs the whole transaction). The indexer used
-//! to store every such output as `custody`: the ask then had two custody rows and was dropped from the matcher's book, a bid that
-//! owns no tokens was rejected by `custody_ok`, and an if-done exit was unlisted so its stop never fired. Now the custody is the
-//! one output of exactly `amountLeft`, plain, of the order's own token; everything else is a stray (listed, shown
-//! by `/v1/strays`, never liquidity).
+//! The ask covenants only guard token INPUTS (`noStrays`), never outputs, so a taker who fills an
+//! order can add an extra token output owned by the order id (the engine accepts it,
+//! `World::resign(.., true)` runs the whole transaction). Storing every such output as `custody`
+//! would give the ask two custody rows and drop it from the matcher's book, a bid that owns no
+//! tokens would be rejected by `custody_ok`, and an if-done exit would be unlisted so its stop
+//! never fired. So the custody is the one output of exactly `amountLeft`, plain, of the order's own
+//! token; everything else is a stray (listed, shown by `/v1/strays`, never liquidity).
 
 mod common;
 
@@ -92,8 +93,8 @@ async fn a_hostile_taker_cannot_delist_an_ask_with_an_extra_token_output() {
     assert_eq!(stray_count(&c), 1, "the wallet is told to sweep it");
     let v = view(&c, &cov).custody.expect("ask custody view");
     assert!(v.ok, "{v:?}");
-    // the maker's list (the wallet's My orders) carries the same custody and strays for the live order (W-12); a list
-    // without a maker filter stays lean
+    // the maker's list (the wallet's My orders) carries the same custody and strays for the live
+    // order; a list without a maker filter stays lean
     let g = c.hs.ingest.lock().unwrap();
     let rc = ReadCtx { node_daa: Some(c.daa()), settle_depth_daa: 100, now_unix: None };
     let mine = OrderFilter { maker: Some(pk(MAKER_A).to_vec()), ..Default::default() };

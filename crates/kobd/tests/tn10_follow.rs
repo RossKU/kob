@@ -1,11 +1,12 @@
-//! Read-only integration test against a live testnet-10 node (v2.1.0 with `--utxoindex`, JSON wRPC).
+//! Read-only integration test against a live testnet-10 node (v2.1.0 with `--utxoindex`, JSON
+//! wRPC).
 //!
 //! It checks what mocks cannot: that the wire schema the indexer decodes matches the node, that a
-//! real `High` batch (with covenant transactions from other projects) is processed without
-//! errors, and that the follower keeps up with new chain blocks.
+//! real `High` batch (with covenant transactions from other projects) is processed without errors,
+//! and that the follower keeps up with new chain blocks.
 //!
 //! Environment:
-//! * `KOB_TN10_WRPC`               endpoint, default `ws://127.0.0.1:18210` (a testnet-10 node of your own)
+//! * `KOB_TN10_WRPC`               endpoint, default `ws://127.0.0.1:18210` (a node of your own)
 //! * `KOB_SKIP_NETWORK_TESTS=1`    skip (offline runs)
 //! * `KOB_REQUIRE_NETWORK_TESTS=1` fail instead of skip when the node is unreachable
 //! * `KOB_TN10_FOLLOW_BLOCKS`      new chain blocks to wait for after catching up (default 3)

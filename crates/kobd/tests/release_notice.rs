@@ -1,7 +1,8 @@
-//! The update notice (`kobd::indexer::release`): every placement carries the release of the build that wrote it (the
-//! RELEASE record, `docs/spec/kob1-payload.md`); the indexer reports a release newer than its own once it has seen it on 3
-//! accepted placements of at least 2 makers, in `/v1/health` (`newer_release_seen`), the status line and the metrics. One
-//! maker, or this build's own release, never raises it; the placements are listed exactly as any other.
+//! The update notice (`kobd::indexer::release`): every placement carries the release of the build
+//! that wrote it (the RELEASE record, `docs/spec/kob1-payload.md`); the indexer reports a release
+//! newer than its own once it has seen it on 3 accepted placements of at least 2 makers, in
+//! `/v1/health` (`newer_release_seen`), the status line and the metrics. One maker, or this build's
+//! own release, never raises it; the placements are listed exactly as any other.
 
 mod common;
 

@@ -1,8 +1,10 @@
-//! Stopping: a graceful stop (Ctrl+C, SIGTERM; on Windows Ctrl+Break and the console's close) ends the process within a few
-//! seconds even when the node does not answer, and leaves the database flushed.
+//! Stopping: a graceful stop (Ctrl+C, SIGTERM; on Windows Ctrl+Break and the console's close) ends
+//! the process within a few seconds even when the node does not answer, and leaves the database
+//! flushed.
 //!
-//! The in-process tests give the follower and the runner a node that never answers; the process test starts the real binary
-//! against a TCP port that accepts and says nothing, and stops it the way an operator does.
+//! The in-process tests give the follower and the runner a node that never answers; the process
+//! test starts the real binary against a TCP port that accepts and says nothing, and stops it the
+//! way an operator does.
 
 #[path = "matcher_common/mod.rs"]
 mod common;
@@ -44,8 +46,8 @@ impl NodeApi for Silent {
     }
 }
 
-/// The runner is asked to stop while its step waits for a node that does not answer: it returns after the grace period, not
-/// after the node's request timeout (it used to look at the stop only between steps, and not at all during the first).
+/// The runner is asked to stop while its step waits for a node that does not answer: it returns
+/// after the grace period, not after the node's request timeout.
 #[tokio::test]
 async fn the_runner_stops_while_a_step_waits_for_the_node() {
     let cfg = RunConfig { roles: Roles { matcher: true, keeper: false }, ..RunConfig::default() };
@@ -185,9 +187,8 @@ fn ask_to_stop(child: &std::process::Child) -> bool {
     unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child.id()) != 0 }
 }
 
-/// `kobd --executor` against a node that accepts the connection and never answers: a stop asked for while the first step
-/// waits for it (the signal used to kill the process on the spot there, and later ones were swallowed until the node's
-/// request timeout) ends the process cleanly within a few seconds.
+/// `kobd --executor` against a node that accepts the connection and never answers: a stop asked for
+/// while the first step waits for it ends the process cleanly within a few seconds.
 #[test]
 fn the_binary_stops_within_seconds_when_the_node_is_silent() {
     use std::io::{BufRead, BufReader};

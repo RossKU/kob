@@ -1,5 +1,5 @@
-//! Audit 2026-10-30 E1, listing: a stop a keeper could arm only into a dust continuation is not listed; orders no keeper updates are
-//! not affected by their tip.
+//! Listing: a stop a keeper could arm only into a dust continuation is not listed; orders no keeper
+//! updates are not affected by their tip.
 
 mod common;
 

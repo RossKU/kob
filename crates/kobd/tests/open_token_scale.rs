@@ -1,7 +1,9 @@
-//! Audit 2026-10-29 F3: what `GET /v1/tokens` says about an open-list token (no registry entry) is not whatever the first order
-//! placements claim. A KaspaRocket-program token has the program convention of 3 decimals (scale 1000): an order at another scale is
-//! not listed, so it can not become the token's `market_scale` beside decimals the clients refuse to trade against; and placements that
-//! name several programs for one covenant id replace nothing: the token is listed as ambiguous, with no program.
+//! What `GET /v1/tokens` says about an open-list token (no registry entry) is not whatever the
+//! first order placements claim. A KaspaRocket-program token has the program convention of 3
+//! decimals (scale 1000): an order at another scale is not listed, so it can not become the token's
+//! `market_scale` beside decimals the clients refuse to trade against; and placements that name
+//! several programs for one covenant id replace nothing: the token is listed as ambiguous, with no
+//! program.
 //!
 //! Run: cargo test -p kobd --test open_token_scale
 

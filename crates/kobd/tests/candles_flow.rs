@@ -1,5 +1,6 @@
-//! The maintained candle aggregates through the real write path: fills of real transactions, a reorg that takes them out, the same
-//! transactions accepted again, and a rebuild from the record log all leave the charts equal to what the fills say.
+//! The maintained candle aggregates through the real write path: fills of real transactions, a
+//! reorg that takes them out, the same transactions accepted again, and a rebuild from the record
+//! log all leave the charts equal to what the fills say.
 
 mod common;
 
