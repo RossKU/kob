@@ -1,5 +1,6 @@
-// A KAS-per-token price (a state price: sompi per whole token of `scale` base units) as dollars, for the text cells of the Portfolio's tables (the Amount component does the
-// same for the cells it draws). Pure.
+// A KAS-per-token price as dollars, for the text cells of the Portfolio's tables. The price is a
+// state price, in sompi per whole token of `scale` base units. The Amount component does the same
+// for the cells it draws. This module is pure.
 import { kasPerTokenToUsd, usdText, type Fiat } from '../../app/fiat';
 import { pow10, SOMPI_PER_KAS } from '../../kob/units';
 

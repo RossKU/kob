@@ -1,5 +1,6 @@
-// What the orders list shows, in which order: positions (an entry with its exits) as one card, every other order as a row; tabs for active / history.
-// Pure: built from the merged entries (orders-model.ts) and the grouped positions (kob/positions.ts).
+// What the orders list shows, and in which order. A position, an entry with its exits, is one card.
+// Every other order is a row. The tabs are active and history. It is pure and built from the merged
+// entries (orders-model.ts) and the grouped positions (kob/positions.ts).
 import type { Position } from '../../kob/positions';
 import type { Hex } from '../../kob/types';
 import type { OrderEntry, OrderRowModel } from './orders-model';
@@ -11,8 +12,9 @@ export type ListItem =
 export type ListTab = 'active' | 'history' | 'all';
 
 /**
- * Entries are newest first; the first encountered member of a multi-order position emits the card for the whole position. Single-order positions
- * and orders without a position (records the indexer does not know) are plain rows.
+ * Entries are newest first. The first encountered member of a multi-order position emits the card
+ * for the whole position. Single-order positions and orders without a position, such as records the
+ * indexer does not know, are plain rows.
  */
 export function buildListItems(entries: readonly OrderEntry[], positions: readonly Position[]): ListItem[] {
   const known = new Set(entries.map((e) => e.id));
@@ -39,7 +41,10 @@ export function buildListItems(entries: readonly OrderEntry[], positions: readon
 
 export const itemMemberIds = (item: ListItem): Hex[] => (item.type === 'single' ? [item.id] : item.memberIds);
 
-/** An item is active while any member can still act (live), or when a member's fate is not known (it needs the user's attention). */
+/**
+ * An item is active while any member can still act (live), or when a member's fate is not known and
+ * it needs the user's attention.
+ */
 export function itemIsActive(item: ListItem, rows: ReadonlyMap<Hex, OrderRowModel>): boolean {
   return itemMemberIds(item).some((id) => {
     const r = rows.get(id);
@@ -57,7 +62,10 @@ export function tabCounts(items: readonly ListItem[], rows: ReadonlyMap<Hex, Ord
   return { active, history: items.length - active, all: items.length };
 }
 
-/** Live, cancellable orders of a token (or of all tokens when `token` is null): what "cancel all" acts on. */
+/**
+ * Live, cancellable orders of a token, or of all tokens when `token` is null. This is what "cancel
+ * all" acts on.
+ */
 export function cancellableIds(rows: readonly OrderRowModel[], token: Hex | null): Hex[] {
   return rows.filter((r) => r.canCancel && (token === null || r.token === token)).map((r) => r.id);
 }
