@@ -1,11 +1,15 @@
-// Colour theme: dark or light, chosen with the header toggle and remembered in localStorage; the default follows the OS preference (dark when
-// the browser does not say). The theme is the `data-theme` attribute of <html>; styles.css defines the palette of both.
+// Colour theme: dark or light, chosen with the header toggle and remembered in localStorage. The
+// default follows the OS preference, and is dark when the browser does not say. The theme is the
+// `data-theme` attribute of <html>, and styles.css defines the palette of both.
 import { useEffect, useState } from 'preact/hooks';
 
 export type Theme = 'dark' | 'light';
 export const THEME_KEY = 'kob.theme';
 
-/** A stored choice wins; otherwise the OS preference (`prefersLight` true -> light); unknown -> dark (the screenshot-ready default). */
+/**
+ * A stored choice wins. Otherwise the OS preference applies (`prefersLight` true gives light), and
+ * an unknown one gives dark, the screenshot-ready default.
+ */
 export function initialTheme(stored: string | null | undefined, prefersLight: boolean | null): Theme {
   if (stored === 'dark' || stored === 'light') return stored;
   return prefersLight === true ? 'light' : 'dark';
@@ -28,7 +32,7 @@ function osPrefersLight(): boolean | null {
     if (matchMedia('(prefers-color-scheme: light)').matches) return true;
     if (matchMedia('(prefers-color-scheme: dark)').matches) return false;
   } catch {
-    /* no media queries */
+    /* No media queries. */
   }
   return null;
 }
@@ -41,13 +45,16 @@ function apply(t: Theme): void {
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t === 'dark' ? '#070707' : '#fafafa');
 }
 
-/** Applies the stored / preferred theme (call once before the first render, so the page never flashes the other palette). */
+/**
+ * Applies the stored or preferred theme. Call it once before the first render, so the page never
+ * flashes the other palette.
+ */
 export function initTheme(): Theme {
   let stored: string | null = null;
   try {
     stored = storage()?.getItem(THEME_KEY) ?? null;
   } catch {
-    /* blocked storage */
+    /* Blocked storage. */
   }
   current = initialTheme(stored, osPrefersLight());
   apply(current);
@@ -65,7 +72,7 @@ export function setTheme(t: Theme): void {
   try {
     storage()?.setItem(THEME_KEY, t);
   } catch {
-    /* blocked storage: the choice lasts for this page */
+    /* Blocked storage: the choice lasts for this page. */
   }
   for (const l of [...listeners]) l(t);
 }

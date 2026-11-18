@@ -1,4 +1,5 @@
-// The footer's facts (pure, tested in frame-model.test.ts): which links it shows on which page, and whether it carries the chart library's attribution.
+// The footer's facts (pure, tested in frame-model.test.ts): which links it shows on which page,
+// and whether it carries the chart library's attribution.
 import { APP_HASH, EXECUTOR_URL, publicApiUrl, REPO_URL } from '../landing/landing-model';
 
 /** Which page the frame is on: the landing page (no charts, no app links) or the app shell. */
@@ -13,15 +14,24 @@ export interface FooterLink {
   testid?: string;
   /** Its tooltip. */
   title?: string;
-  /** `site`: the links of the row (the landing page's, the app's compact line); `app`: kept for a divided group of further app links (none now). */
+  /**
+   * `site` is the links of the row: the landing page's and the app's compact line. `app` is kept
+   * for a divided group of further app links, and there are none now.
+   */
   group: 'site' | 'app';
 }
 
 /**
- * The footer's links. The landing page's full row: App, GitHub, Run an executor, when the deployment has an indexer its Public API, when there is a donation
- * address Support (`support`), and the Disclaimer. An app page has ONE compact line (review L-04) with only the essential ones: GitHub, Support (when there is
- * a donation address) and the Disclaimer; the security policy link is the footer's own (FooterView). The rest (App, Run an executor, Public API) is on the
- * landing page, and Settings is a tab of the header.
+ * The footer's links.
+ * - The landing page's full row has App, GitHub, Run an executor, the Public API when the
+ *   deployment has an indexer, Support (`support`) when there is a donation address, and the
+ *   Disclaimer.
+ * - An app page has ONE compact line with only the essential ones: GitHub, Support when there is
+ *   a donation address, and the Disclaimer. The security policy link is the footer's own
+ *   (FooterView).
+ *
+ * The rest (App, Run an executor, Public API) is on the landing page, and Settings is a tab of
+ * the header.
  */
 export function footerLinks(context: FrameContext, indexerUrl: string | null | undefined, support = false): FooterLink[] {
   const api = publicApiUrl(indexerUrl);
@@ -39,7 +49,8 @@ export function footerLinks(context: FrameContext, indexerUrl: string | null | u
 }
 
 /**
- * The chart library's attribution ("Charts by TradingView Lightweight Charts™", its Apache-2.0 NOTICE and TradingView's condition): on every app page,
- * any of which can show a chart; not on the landing page, which has none.
+ * The chart library's attribution ("Charts by TradingView Lightweight Charts™", its Apache-2.0
+ * NOTICE and TradingView's condition). It is on every app page, any of which can show a chart. It
+ * is not on the landing page, which has none.
  */
 export const showsChartNotice = (context: FrameContext): boolean => context === 'app';

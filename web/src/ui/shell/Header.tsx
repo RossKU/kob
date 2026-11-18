@@ -17,16 +17,21 @@ import { useSystemStatus } from './StatusProvider';
 
 const NAV = [
   { name: 'market', href: '#/market', key: 'shell.nav.market', testid: 'nav-market' },
-  // always there (the tab bar never shifts between pages); its address is the last market's own, else the first listed one (NavLinks)
+  // Always there, so the tab bar never shifts between pages. Its address is the last market's own,
+  // else the first listed one (NavLinks).
   { name: 'trade', href: '#/market', key: 'shell.nav.trade', testid: 'nav-trade' },
-  // Market, Trade and Portfolio side by side (founder, 2026-11-11): the trading pages first, the network-wide log after them
+  // Market, Trade and Portfolio sit side by side: the trading pages first, the network-wide log
+  // after them.
   { name: 'portfolio', href: '#/portfolio', key: 'shell.nav.portfolio', testid: 'nav-portfolio' },
   { name: 'activity', href: '#/activity', key: 'shell.nav.activity', testid: 'nav-activity' },
   { name: 'create', href: '#/create', key: 'shell.nav.create', testid: 'nav-create' },
   { name: 'settings', href: '#/settings', key: 'shell.nav.settings', testid: 'nav-settings' },
 ] as const;
 
-/** Subtle mark next to the network badge after a DEEP chain re-organisation (a routine shallow one shows nothing); the tooltip says what happened. */
+/**
+ * A subtle mark next to the network badge after a DEEP chain re-organisation. A routine shallow one
+ * shows nothing. The tooltip says what happened.
+ */
 function ReorgIndicator() {
   const { deepReorgs } = useSystemStatus();
   const shown = useReorgNotice(deepReorgs.count);
@@ -48,7 +53,10 @@ function MenuIcon() {
   );
 }
 
-/** `trade`: where the Trade tab leads (tradeTarget: the last market opened, else the first listed one, else the list). */
+/**
+ * `trade` is where the Trade tab leads (tradeTarget): the last market opened, else the first listed
+ * one, else the list.
+ */
 function NavLinks(props: { active: ReturnType<typeof navOf>; trade: string }) {
   return (
     <>
@@ -61,7 +69,10 @@ function NavLinks(props: { active: ReturnType<typeof navOf>; trade: string }) {
   );
 }
 
-/** The phone menu: the tabs, the theme toggle, what the network chip and the words open review mean, and the status lines. It closes on every navigation. */
+/**
+ * The phone menu: the tabs, the theme toggle, what the network chip and the words open review mean,
+ * and the status lines. It closes on every navigation.
+ */
 function Menu(props: { active: ReturnType<typeof navOf>; network: string; trade: string }) {
   return (
     <Popover
@@ -88,9 +99,13 @@ function Menu(props: { active: ReturnType<typeof navOf>; network: string; trade:
 }
 
 /**
- * Top bar, ONE row. The wide row (when it fits): the brand, the tabs, then the network chip (with the status as a dot in it), the wallet button (or the
- * connected address chip and its menu), the theme toggle and the bell. The narrow row (a phone, or a row that does not fit): the logo, the shortened network
- * chip, one "Connect" button (or the connected address), the bell and, last, a menu button (the tabs, the theme toggle, the network and status explanation).
+ * Top bar, ONE row.
+ * - The wide row, when it fits, has the brand, the tabs, the network chip (with the status as a dot
+ *   in it), the wallet button (or the connected address chip and its menu), the theme toggle and
+ *   the bell.
+ * - The narrow row, on a phone or when the wide row does not fit, has the logo, the shortened
+ *   network chip, one "Connect" button (or the connected address), the bell and, last, a menu
+ *   button (the tabs, the theme toggle, the network and status explanation).
  */
 export function Header(props: { route: Route; warnings: ConfigWarning[]; storedOverrides: StoredOverride[] }) {
   const { config, registry } = useServices();
@@ -100,7 +115,7 @@ export function Header(props: { route: Route; warnings: ConfigWarning[]; storedO
   const active = navOf(props.route);
   const trade = tradeTarget(useLastMarket(config.network, props.route), registry);
   const wallet = useWallet().info;
-  // what the wide row holds: when it changes, a row that did not fit is tried again (narrow.ts)
+  // What the wide row holds. When it changes, a row that did not fit is tried again (narrow.ts).
   useSqueezeCheck(inner, narrow, `${wallet?.address ?? ''}|${wallet?.network ?? ''}`);
   const { brandName, centred } = useHeaderLayout(inner, narrow);
   return (
