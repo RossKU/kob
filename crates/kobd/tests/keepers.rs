@@ -648,6 +648,45 @@ fn a_mode1_bid_without_bought_tokens_refunds_as_before() {
     assert!(!pays_token(&r.jobs[0], T3, WHOLE, 2));
 }
 
+/// I5: a refund of a mode-1 bid with a bought-custody needs that custody to be the only input of its token, so two such
+/// refunds of one token, or one beside a custody-free bid refund of the same token, cannot share a transaction. The keeper
+/// builds one transaction per refund: three expired bids of one token make three jobs, each with at most its own custody.
+#[test]
+fn mode1_refunds_of_one_token_are_transactions_of_their_own() {
+    let orders = vec![mode1_bid(1, 4 * WHOLE, Some(4 * WHOLE)), mode1_bid(2, 3 * WHOLE, Some(3 * WHOLE)), mode1_bid(3, 0, None)];
+    let r = keep_with(orders, EXPIRY as u64, &KeeperConfig::default(), false, 3);
+    let got = kinds(&r);
+    assert_eq!(got.len(), 3, "{:?}", r.skipped);
+    for n in 1..=3 {
+        assert!(got.contains(&(JobKind::Refund, cid(n))), "{got:?}");
+    }
+    let ids: BTreeSet<[u8; 32]> = r.jobs.iter().map(|j| j.signed.tx.id).collect();
+    assert_eq!(ids.len(), 3, "three transactions");
+    for j in &r.jobs {
+        let tokens: Vec<_> = j
+            .built
+            .tx
+            .inputs
+            .iter()
+            .filter(|i| i.utxo.covenant_id.is_some_and(|c| c != j.order))
+            .map(|i| i.utxo.covenant_id)
+            .collect();
+        let held = if j.order == cid(1) {
+            Some(4 * WHOLE)
+        } else if j.order == cid(2) {
+            Some(3 * WHOLE)
+        } else {
+            None
+        };
+        assert_eq!(tokens.len(), usize::from(held.is_some()), "only its own custody, if any: {:?}", j.order);
+        assert!(j.spends.iter().all(|op| !ids.contains(&op.0)), "no job spends another's output");
+        if let Some(a) = held {
+            let maker = if j.order == cid(1) { 1 } else { 2 };
+            assert!(pays_token(j, T3, a, maker), "the custody goes to its maker");
+        }
+    }
+}
+
 /// Without the exact bought-custody the covenant refuses the refund, so no job is built.
 #[test]
 fn a_mode1_bid_refund_needs_the_exact_bought_custody() {
