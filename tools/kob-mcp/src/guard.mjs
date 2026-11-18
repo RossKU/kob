@@ -2,7 +2,7 @@
 
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { kas, utcDay } from './units.mjs';
+import { big, kas, utcDay } from './units.mjs';
 
 /**
  * A JSON-lines ledger of what each write takes out of the wallet. A send first writes `reserve`; the outcome writes
@@ -89,6 +89,18 @@ export class Ledger {
     return sum;
   }
 
+  /** Base units of token `cov` that left the wallet on the UTC day `day` (reserves not released). */
+  tokensOutOn(day, cov) {
+    const byId = new Map();
+    for (const e of this.entries()) {
+      if (e.kind === 'reserve') byId.set(e.id, e.day === day ? big(e.tokens?.[cov]) : 0n);
+      else if (e.kind === 'release' && byId.has(e.id)) byId.set(e.id, 0n);
+    }
+    let sum = 0n;
+    for (const v of byId.values()) sum += v;
+    return sum;
+  }
+
   /** Token creations on the UTC day `day` that were not released (sent, or with an unknown outcome). */
   launchesOn(day) {
     const ids = new Set();
@@ -109,6 +121,51 @@ export function capRefusals({ spend, fee }, caps, spentToday) {
   }
   if (fee > caps.maxFee) out.push(`MAX_FEE: the fee ${kas(fee)} KAS is above the ${kas(caps.maxFee)} KAS cap`);
   return out;
+}
+
+/** The tokens a planned transaction takes out of the wallet: { covenant id: base units }, from its net effect. */
+export function tokenOutflows(doc) {
+  const out = {};
+  for (const [cov, n] of Object.entries(doc?.transaction?.net?.tokens ?? {})) {
+    const v = big(n);
+    if (v < 0n) out[cov.toLowerCase()] = String(-v);
+  }
+  return out;
+}
+
+/**
+ * The token caps a write would break. `outs`: tokenOutflows; `outToday(cov)`: base units out today; `holding(cov)`: the
+ * wallet's free holding confirmed on the node (null when not confirmed), read only for tokens without their own cap.
+ */
+export async function tokenCapRefusals(outs, caps, outToday, holding) {
+  const refusals = [];
+  for (const [cov, s] of Object.entries(outs)) {
+    const out = BigInt(s);
+    const today = outToday(cov);
+    const own = caps.byToken.get(cov);
+    if (own) {
+      if (out > own.perTx) refusals.push(`TOKEN_PER_TX_CAP: ${out} base units of ${cov} leave the wallet, above its ${own.perTx} per transaction`);
+      if (today + out > own.perDay) refusals.push(`TOKEN_DAILY_CAP: ${today} base units of ${cov} left today + ${out} is above its ${own.perDay} per day`);
+      continue;
+    }
+    if (caps.perTxPct == null) {
+      refusals.push(`TOKEN_CAP: ${cov} has no cap in limits.tokens and limits.tokenDefault is off`);
+      continue;
+    }
+    const free = await holding(cov);
+    if (free == null) {
+      refusals.push(`TOKEN_CAP: the wallet's holding of ${cov} is not confirmed on the node; set its cap in limits.tokens`);
+      continue;
+    }
+    const day = free + today; // the holding at the start of the UTC day, less what came in
+    if (out * 100n > caps.perTxPct * day) {
+      refusals.push(`TOKEN_PER_TX_CAP: ${out} base units of ${cov} leave the wallet, above ${caps.perTxPct}% of the day's holding ${day}`);
+    }
+    if ((today + out) * 100n > caps.perDayPct * day) {
+      refusals.push(`TOKEN_DAILY_CAP: ${today} base units of ${cov} left today + ${out} is above ${caps.perDayPct}% of the day's holding ${day}`);
+    }
+  }
+  return refusals;
 }
 
 export const killSwitchOn = (cfg) => existsSync(cfg.killSwitchFile);

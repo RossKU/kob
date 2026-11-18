@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Audit } from './audit.mjs';
-import { Ledger, allowListed, bandCheck, capRefusals, killSwitchOn, today } from './guard.mjs';
+import { Ledger, allowListed, bandCheck, capRefusals, killSwitchOn, today, tokenCapRefusals, tokenOutflows } from './guard.mjs';
 import { Indexer } from './indexer.mjs';
 import { Kob } from './kob.mjs';
 import { big, kas, toSompi } from './units.mjs';
@@ -385,9 +385,11 @@ export class KobService {
       if (!d.ok) throw new Refusal(d.error);
       const day = today();
       const spentToday = this.ledger.spentOn(day);
-      const caps = capRefusals(d, this.cfg.caps, spentToday);
+      d.tokens = built.create ? {} : tokenOutflows(d.doc);
+      const caps = [...capRefusals(d, this.cfg.caps, spentToday),
+        ...await tokenCapRefusals(d.tokens, this.cfg.caps.tokens, (c) => this.ledger.tokensOutOn(day, c), (c) => this.freeHolding(c))];
       const limits = { perTxKas: kas(this.cfg.caps.perTx), perDayKas: kas(this.cfg.caps.perDay), spentTodayKas: kas(spentToday), maxFeeKas: kas(this.cfg.caps.maxFee) };
-      const summary = { ...this.summary(d.doc, d), priceBand: band?.note ?? null, limits };
+      const summary = { ...this.summary(d.doc, d), tokensOut: d.tokens, priceBand: band?.note ?? null, limits };
       if (caps.length) throw new Refusal(caps.join('; '), { cause: summary });
       if (estimate) {
         log('estimate', { spend: String(d.spend), fee: String(d.fee) });
@@ -421,7 +423,7 @@ export class KobService {
   }
 
   async send(tool, built, args, planId, d, day, summary, log) {
-    this.ledger.reserve(planId, day, d.spend, { tool });
+    this.ledger.reserve(planId, day, d.spend, { tool, ...(Object.keys(d.tokens ?? {}).length ? { tokens: d.tokens } : {}) });
     let doc = null;
     let failure = null;
     let ambiguous = false;
@@ -465,6 +467,12 @@ export class KobService {
       action: summary.action,
       spentTodayKas: kas(this.ledger.spentOn(day)),
     };
+  }
+
+  /** The wallet's free holding of a token as confirmed on the node (kob balances), base units; null when not confirmed. */
+  async freeHolding(cov) {
+    const row = ((await this.balances().catch(() => null))?.tokens ?? []).find((t) => String(t.token).toLowerCase() === cov);
+    return row?.free_verified === true ? big(row.free) : null;
   }
 
   /** The price band of a limit price or take bound, with the token's decimals for books whose scale is capped at 10^9. */

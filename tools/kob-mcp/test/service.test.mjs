@@ -249,3 +249,33 @@ test('claim and delivery: refused unless the CLI help names them; offered when i
     delete process.env.FAKE_KOB_FEATURES;
   }
 });
+
+test('token outflows are capped: a share of the confirmed holding by default (MCP-2)', async () => {
+  const t = setup({ mode: 'auto', limits: { perTxKas: 2, perDayKas: 4 } }); // the wallet holds 1,000 TUSD
+  const svc = new KobService(t.cfg);
+  const sell = (amount) => svc.write('kob_place_limit', { token: 'TUSD', side: 'sell', amount, price: '0.25KAS' });
+  const huge = await sell('1000000TUSD');
+  assert.match(huge.reason, /^TOKEN_PER_TX_CAP/, 'the KAS caps see only the carrier and the fee; the token cap refuses');
+  assert.match((await sell('300TUSD')).reason, /^TOKEN_PER_TX_CAP/, 'above 25 % of the holding');
+  assert.equal((await sell('250TUSD')).status, 'submitted');
+  assert.equal((await sell('250TUSD')).status, 'submitted', '500 of the day\'s 1,000');
+  assert.match((await sell('1TUSD')).reason, /^TOKEN_DAILY_CAP/);
+  assert.equal(t.yesCalls().length, 2);
+  // a sale into a buy order and a token send count too
+  assert.match((await svc.write('kob_take', { id: 'ab'.repeat(32), amount: '1TUSD', min_price: '0.2KAS' })).reason, /^TOKEN_DAILY_CAP/);
+  assert.match((await svc.write('kob_send', { asset: 'TUSD', to: PRIMARY, amount: '1TUSD' })).reason, /^TOKEN_DAILY_CAP/);
+});
+
+test('token outflows: an own cap per token; an unconfirmed holding is refused', async () => {
+  const id = '55'.repeat(32);
+  const t = setup({ mode: 'auto', limits: { tokens: { [id]: { perTx: '50000000000', perDay: '60000000000' } } } });
+  const svc = new KobService(t.cfg);
+  const sell = (amount) => svc.write('kob_place_limit', { token: 'TUSD', side: 'sell', amount, price: '0.25KAS' });
+  assert.match((await sell('501TUSD')).reason, /^TOKEN_PER_TX_CAP/);
+  assert.equal((await sell('500TUSD')).status, 'submitted');
+  assert.match((await sell('101TUSD')).reason, /^TOKEN_DAILY_CAP/);
+  const u = setup({ mode: 'auto' });
+  writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify({ n: 0, kasFree: 1000e8, tusdFree: 1000e8, tusdVerified: false, orders: {}, book: { best_bid: '24000000', best_ask: '26000000', last_fill: '25000000' } }));
+  assert.match((await new KobService(u.cfg).write('kob_place_limit', { token: 'TUSD', side: 'sell', amount: '1TUSD', price: '0.25KAS' })).reason, /^TOKEN_CAP: the wallet's holding/);
+  assert.equal(u.yesCalls().length, 0);
+});

@@ -16,8 +16,8 @@ const kasAmount = z.string().describe('KAS with its unit: "0.25KAS" or "25000000
 const confirm = z.string().optional().describe('the planId of the plan you are confirming; leave out to get a plan (nothing is signed)');
 
 const WRITE_NOTE = ' Without confirm it only plans (a dry run) and returns a planId with the fee and the KAS that would leave the'
-  + ' wallet; call again with the same arguments and confirm=planId to sign and send. The local limits (per transaction, per'
-  + ' day, fee) and the kill switch are checked both times.';
+  + ' wallet; call again with the same arguments and confirm=planId to sign and send. The local limits (KAS and tokens per transaction'
+  + ' and per day, fee) and the kill switch are checked both times.';
 
 /** Tool specs: [name, title, description, input shape, kind]. kind: read | write. */
 export const TOOLS = [

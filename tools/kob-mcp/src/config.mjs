@@ -21,6 +21,11 @@ export const DEFAULTS = {
     maxFeeKas: 1, // the most network fee of one transaction (a token creation: of both)
     priceBandPct: 25, // a limit price or take bound this far from the last fill (else the mid) is refused; null: off
     launchesPerDay: 3, // token creations per UTC day
+    // Tokens that leave the wallet (a send, the escrow of a sell, a sale into a buy order), from the dry run's net effect.
+    // Per token: { "<covenant id>": { perTx, perDay } } in base units; any other token: a share of the wallet's free
+    // holding confirmed on the node at the start of the UTC day (free now + what left today). null: only listed tokens.
+    tokens: {},
+    tokenDefault: { perTxPct: 25, perDayPct: 50 },
   },
   withdrawTo: [], // the only addresses kob_send may pay (the primary wallet)
   killSwitchFile: null, // while this file exists every write is refused; null: <dataDir>/STOP
@@ -90,6 +95,23 @@ export function checkConfig(c, baseDir, env = process.env) {
     }
   }
   if (c.limits.priceBandPct != null && (!/^\d+(\.\d+)?$/.test(String(c.limits.priceBandPct)) || !(Number(c.limits.priceBandPct) > 0))) errs.push('limits.priceBandPct must be a number above 0, or null');
+  const tokenCaps = { byToken: new Map(), perTxPct: null, perDayPct: null };
+  for (const [id, v] of Object.entries(c.limits.tokens ?? {})) {
+    if (!/^[0-9a-fA-F]{64}$/.test(id)) { errs.push(`limits.tokens: ${id} is not a covenant id (64 hex)`); continue; }
+    const cap = {};
+    for (const k of ['perTx', 'perDay']) {
+      if (!/^\d{1,39}$/.test(String(v?.[k] ?? ''))) errs.push(`limits.tokens.${id}.${k} must be a whole number of base units`);
+      else cap[k] = BigInt(v[k]);
+    }
+    tokenCaps.byToken.set(id.toLowerCase(), cap);
+  }
+  if (c.limits.tokenDefault != null) {
+    for (const k of ['perTxPct', 'perDayPct']) {
+      const p = c.limits.tokenDefault[k];
+      if (!Number.isInteger(p) || p < 0 || p > 100) errs.push(`limits.tokenDefault.${k} must be a whole number 0..100`);
+      else tokenCaps[k] = BigInt(p);
+    }
+  }
   if (!Number.isInteger(c.limits.launchesPerDay) || c.limits.launchesPerDay < 0) errs.push('limits.launchesPerDay must be a whole number, 0 or more');
   const prefix = c.network === 'mainnet' ? 'kaspa:' : 'kaspatest:';
   const withdrawTo = (c.withdrawTo ?? []).map((a) => String(a).trim().toLowerCase());
@@ -105,7 +127,7 @@ export function checkConfig(c, baseDir, env = process.env) {
     kobCliArgs: (c.kobCliArgs ?? []).map(String),
     dataDir,
     killSwitchFile: abs(c.killSwitchFile) ?? join(dataDir, 'STOP'),
-    caps: { perTx: lim.perTxKas, perDay: lim.perDayKas, maxFee: lim.maxFeeKas },
+    caps: { perTx: lim.perTxKas, perDay: lim.perDayKas, maxFee: lim.maxFeeKas, tokens: tokenCaps },
   };
 }
 
