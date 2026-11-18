@@ -172,7 +172,7 @@ export function walletDriver(name, env, { mock = null } = {}) {
       mock: true,
       expectedAddress: null,
       async setup(ctx) {
-        const cfg = await installMockWallet(ctx, name, mock.secretKey);
+        const cfg = await installMockWallet(ctx, name, mock.secretKey, mock.config);
         this.expectedAddress = cfg.addresses['testnet-10'];
         this.pubkey = cfg.pubkey;
         return {};
@@ -403,10 +403,14 @@ export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir, { expe
   const t0 = Date.now();
   const screen = tid(h, 'confirm-screen');
   await screen.waitFor({ timeout: 90_000 });
-  await tid(h, 'confirm-summary').waitFor({ timeout: 60_000 });
+  // since fce3f29ea the screen opens with a short summary (`confirm-brief`); the verified sections (`confirm-summary` ...) are under All
+  // details (`confirm-details`), opened here so the record holds the whole text
+  await tid(h, 'confirm-summary').waitFor({ state: 'attached', timeout: 60_000 });
+  const details = h.page.locator('[data-testid="confirm-details"] > summary');
+  if ((await details.count()) && (await tid(h, 'confirm-details').getAttribute('open')) === null) await details.first().click().catch(() => {});
   await sleep(300);
   const kind = await h.page.locator('[data-testid="confirm-screen"] .cf').getAttribute('data-kind').catch(() => null);
-  const summary = collapse(await tid(h, 'confirm-summary').innerText().catch(() => ''));
+  const summary = collapse(await tid(h, 'confirm-summary').textContent().catch(() => ''));
   const fullText = await screen.innerText().catch(() => '');
   const screenshots = [await shot(h.page, shotDir, `${label}-confirm`)];
   if (await tid(h, 'confirm-blocking').count()) throw new Error(`the confirmation screen shows BLOCKING findings: ${collapse(await tid(h, 'confirm-blocking').innerText())}`);

@@ -41,9 +41,9 @@ export async function mockWalletConfig(wallet, secretKey) {
   };
 }
 
-/** Injects the mock wallet into every page of `ctx` (before any page script). Returns the wallet config (address, pubkey). */
-export async function installMockWallet(ctx, wallet, secretKey) {
-  const config = await mockWalletConfig(wallet, secretKey);
+/** Injects the mock wallet into every page of `ctx` (before any page script), `overrides` on top of its config. Returns the wallet config (address, pubkey). */
+export async function installMockWallet(ctx, wallet, secretKey, overrides = {}) {
+  const config = { ...(await mockWalletConfig(wallet, secretKey)), ...overrides };
   const { mockWalletInitScript } = await mockWallets();
   await ctx.addInitScript({ content: mockWalletInitScript(config) });
   return config;

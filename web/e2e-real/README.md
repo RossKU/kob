@@ -3,7 +3,8 @@
 Drives the built KOB web app with the REAL released wallet extensions (KasWare, Kaspire, Kastle: versions pinned in
 `tools/wallet-gate/lib/extension-pins.mjs`; the results tables below name the build each run used) against a testnet-10 node of your own (`KOB_TN10_WRPC`, default `ws://127.0.0.1:18210`; `NODE_WS` in
 `.env` overrides it) and proves, per wallet: issue a token of the default program (the published public-mint build, 3 / 3 slots), place and cancel the main order types, amend an order,
-merge the token's UTXOs and read My orders / Balances, with every accepted transaction checked on the node independently of the app.
+merge the token's UTXOs and read My orders / Balances, and the Create token features (a creator share lock and its Unlock, a sell curve in the
+genesis, Linear and Chromatic, a Collected buy filled from a curve and its Claim), with every accepted transaction checked on the node independently of the app.
 Test money only. On demand only: CI never runs it (it needs extensions, funded keys and a node; `.github/workflows/ci.yml` says so).
 
 `--mock` runs the SAME scenarios, selectors and checks offline against the mock stack of `web/e2e` (mock indexer + mock node that runs every
@@ -12,7 +13,8 @@ on any machine. It proves nothing about the real extensions, their popups or a r
 
 **Status.** The scenarios are ported to the current UI and protocol (base-unit amounts, the current ticket with its one order button and
 inline status line, the My orders flows without a confirmation screen, the compact header wallet chip) and run offline with `--mock` ("Verified offline" below) and on TN10 with the real KasWare and Kaspire ("TN10 run of
-2026-10-20" below: every scenario PASS; "TN10 run of 2026-11-14": KasWare 0.11.5 and Kaspire 0.5.31, issue, limit, amend, cells, merge PASS); Kastle 2.61.0 cannot connect to the app (its provider script throws under the app's Trusted Types).
+2026-10-20" below: every scenario PASS; "TN10 run of 2026-11-14": KasWare 0.11.5 and Kaspire 0.5.31, issue, limit, amend, cells, merge PASS; "TN10 run of
+2026-11-19": the same builds, lock, curve, claim, chromatic, unlock PASS with both, issue and limit again); Kastle 2.61.0 cannot connect to the app (its provider script throws under the app's Trusted Types).
 
 ## Run
 
@@ -31,7 +33,7 @@ node e2e-real/run.mjs --mock                          # node-only, like the TN10
 node e2e-real/run.mjs --mock --indexer                # with the mock indexer: market scenario and position cards
 ```
 
-Flags: `--wallet kasware,kaspire,kastle|all` (default all), `--only <ids>` (default all: `limit,ladder,amend,ioc,stop,oco,ifd,pair,market,fill,cells,merge,balances`;
+Flags: `--wallet kasware,kaspire,kastle|all` (default all), `--only <ids>` (default all, in this order: `lock,limit,ladder,amend,ioc,stop,oco,ifd,pair,market,fill,curve,claim,chromatic,cells,merge,balances,unlock`;
 the issuance always runs first), `--indexer [url]` (TN10: that indexer, or `INDEXER_URL` of `.env`; `--mock`: the mock's), `--skip-issue` (TN10:
 reuse the tokens of the previous run of that wallet from `out/token-<wallet>.json`, with its tracker entries and placement records), `--headless`
 (Chromium `--headless=new`: works for Kaspire, KasWare needs a headed browser; `--mock` is always headless), `--keep-open`, `--rebuild` (rebuild
@@ -80,6 +82,11 @@ row does not have is empty at once, never a 30 s locator wait). A failed scenari
 | cells | Three limit sells of 1 token (@ 50, 51, 52 KAS) are placed and cancelled one by one: every cancel releases a separate token UTXO, so the wallet holds three cells for the merge scenario that follows. |
 | merge | My orders > Balances: `orders-merge-token-<A>` ("Merge all", its tooltip "Merge your n UTXOs of this token into one: about +x KAS back. ...") -> `merge-all-dialog`, whose `merge-all-summary` must say "Merge your n TICKER UTXOs into one: T transactions" with T = ceil((n - 1) / 2) -> `merge-all-confirm` -> one flow of T transactions, one wallet approval each; the last merge's single token output is unspent on the node and holds the whole supply, and the button is gone. |
 | balances | Balances panel: for A and B free = 1,000,000, nothing in orders, no strays; no order left live. |
+| lock | Runs first (its time runs during the rest). Create token, keep all, "Lock my share until" a date: the lock UI offers whole days or a date (the start of that day in the viewer's zone), so the app page gets a time zone (`GMT+hh:mm`, DevTools `Emulation.setTimezoneOverride`) whose next midnight is about 6 minutes away while the creation is planned and signed. Checks: the confirmation names the lock, the KCC-23 declaration has `lock` and its script pushes the lock time, the result panel shows the locked holder, Portfolio > Balances shows "locked until" and NO Unlock before the lock time. TN10 only, in a second page of the same wallet with the test hook (`features.test`) and its clock moved past the lock time: Unlock shows, the press asks the node's past median time and is refused (nothing sent); with that check taken out (`window.__kob.services.node.getPastMedianTime` replaced by the harness) the lock coin (1 KAS to the lock's P2SH) is signed and accepted, the unlock (lock time = the lock's time) is signed by the wallet and must be refused by the node; the locked genesis output stays unspent. |
+| curve | Create token, "Sell on a curve", Linear (10% kept, 10 levels, 40 KAS if sold out, last level 5x): the curve is made unbound in the genesis; Open orders shows one Curve row "Level 1 / 10", Balances 900,000 in orders. The app refuses a buy into the wallet's own curve ("would trade against your own order"), so the counterparty (DEV key, in-page signer, as `market`) creates the same curve and the wallet places a crossing Collected limit buy of two levels at 1.15x the first level's price ("Plain limit" crossing, minimum fill one level): an executor on the network fills one level of the curve into it (`--mock`: the mock fills both). Then `claim`, then the buy, the counterparty's curve and the wallet's own curve are cancelled (the own one against its genesis, its 900,000 back as tracked tokens). Needs an indexer with an executor. |
+| claim | Inside `curve`: Balances' Claim of the tokens the buy collected, the claim dialog (amount, network fee, carrier), one approval; the claim's covenant outputs unspent on the node, one level of tokens tracked as the wallet's from the claim, the buy still open with nothing bought. |
+| chromatic | Create token, "Sell on a curve", Chromatic (10% kept, 1 octave: 13 levels, top 2x the first, 20 KAS if sold out): the form says "13, top 2x first", the last level is 2x the first, Open orders "Level 1 / 13"; cancelled against the genesis, 900,000 back. |
+| unlock | Runs last: waits for the lock time + 95 s (the app shows Unlock 90 s after it), Unlock on Balances, one flow (the lock coin of the early check, or a new one first), the locked genesis output spent, the whole supply tracked as the wallet's from the unlock, "locked until" gone. A press the app refuses because the node's past median time is still before the lock time is tried again every 20 s (up to 10 minutes). `--mock` moves the page clock instead of waiting. |
 
 Covenant-signing gate: a wallet the app does not know to sign covenant inputs (Kastle) is asked once for a test signature before its first order
 (`order-covenant-check`); the run approves it. A wallet the app then refuses (`order-covenant-unsupported`) fails the order scenarios with the
@@ -89,7 +96,8 @@ At the end of each wallet, any order still live is cancelled (best effort, recor
 
 ## Files
 
-* `run.mjs` CLI, preflight, per-wallet flow, summary table. `scenarios.mjs` the scenarios and node checks. `driver.mjs` node checker (official
+* `run.mjs` CLI, preflight, per-wallet flow, summary table. `scenarios.mjs` the order scenarios and node checks. `create.mjs` the Create token
+  scenarios (lock, unlock, curve, claim, chromatic). `driver.mjs` node checker (official
   SDK), wallet drivers (real extensions or mock wallets), app driver (connect, the order button, My orders flows, the issuance confirmation screen).
 * `mock.mjs` the `--mock` mode: mock stack in-process on a free port with an empty chain, the mock wallet page script (transpiled from
   `src/testing/mock-wallets.ts` with vite's oxc transform, so plain Node 22 runs it), the mock node checker.
@@ -250,6 +258,84 @@ The private-key signer is not gated (it signs offline). Kaspire 0.5.31 (headless
 gate with 1.5 s): its `signPskt` looks no input up on any node (background script), its `pushTx` and `getUtxoEntries` do not fit
 the gate (wallet/kaspire.ts); windows 2.6, 2.8 and 2.6 s apart, every creation accepted (preparations 2211878ec960...,
 7067c454b158..., 8f1cd0347e3d...).
+
+## TN10 run of 2026-11-19 (KasWare 0.11.5, Kaspire 0.5.31, the Create token features of 06ff310ed)
+
+The features added after 2026-11-14 (creator lock and Unlock, a curve sale in the genesis with the Linear and Chromatic shapes, the Claim of a
+Collected buy, and the curve cancel of 57e0736fb), with the same throw-away wallets, the DEV key as the counterparty, and the indexer of a live
+soak on the same TN10 (`INDEXER_URL`, an executor at commit 38e414d81, one before master). `--mock` first (both wallets, every scenario PASS),
+then Kaspire `--headless` and KasWare headed; token outputs at 1 KAS (`issue-carrier`). Several runs: the table gives the passing one of each.
+
+| Wallet | issue | lock | limit | curve | claim | chromatic | unlock |
+|---|---|---|---|---|---|---|---|
+| KasWare 0.11.5 | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Kaspire 0.5.31 | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+
+| Wallet | Step | Transaction |
+|---|---|---|
+| KasWare | issue A (genesis) | 0fcacd2d06ee9ec9769a7f5bc50fa4d5eb8b29513f93dc62857992d7e420978b |
+| KasWare | lock: genesis, the whole supply locked until 23:14:00Z | 81530f9c8d33305fa742eab6dc0f8dad655fb1098accf14b01defcbde3e04b0d |
+| KasWare | lock: the early lock coin (1 KAS to the lock), accepted | 90dc53095dff6c938d46883e6a670a292454b5560b5f3c5937fcce438949ab50 |
+| KasWare | lock: the early unlock, signed by KasWare, refused by the node: "transaction input #0 is not finalized" | (not accepted) |
+| KasWare | unlock, 151 s after the lock time (first press) | 98aa196cb85e31bef00df83cd3eccc3a2fd01eb0a29586ecb1a662189207b177 |
+| KasWare | limit sell / its cancel | 4bc6ae9f8fc39791345ce832df153ceea03c3d1763f17f6f94a22e6e85522308 / 91bd4c746daa250c5a664db5d07302ce6aa835b0428728dbe9a02673e939d27f |
+| KasWare | limit buy / its cancel | 66e383326bae8ee536312c0eef7b71d13bea155cfc06951bcee75f6506678221 / e4b7dec78d2f9746b34ef732d5faa884c62e147f915d08e79ca8844e29ee6e4b |
+| KasWare | own Linear curve (genesis) / its cancel | 000ee9c5ecf674100ad50a36c25d47ec8bf006e869801803c6907baeb37e68af / fb0df22294da0d04f0632797f2538aa067f46889b990463cc264a09946174dae |
+| KasWare | counterparty curve (DEV, genesis) | 123be050e50b3d206a2adf51ec3b59fb9565fd01cf5ba3eca806ede5052294d3 |
+| KasWare | Collected buy (180,000 @ 0.0000201), one level filled by the executor in 36 s | daca46b033bcbdb6a5f5de7723a684b684f3e6c40f1b60849bcb2137db5af185 |
+| KasWare | claim (90,000 to the wallet, fee 0.014948 KAS) | 7ffa787111b524361ff89a1bd0181534c179880035785efa97dc24cee92bec6c |
+| KasWare | cancel of the buy / of the counterparty curve | 789b637ea6ef06f4705e590903e14ad4127e0ce67c4f27552ede4bc13b9f1f64 / 7b7a2b11c3d6837065525ad30d51a64a3638beb7cde01b7c4c019ff5dd236660 |
+| KasWare | Chromatic curve (genesis, 13 levels) / its cancel | aa6ae9024a56e55ac7439610086b68ed439c4f0cce3a81bce322114bba74133a / fe927fe9af52ffde9b2d0ba177a0d99018bc939c32f7bee7125ede766d28bf24 |
+| Kaspire | issue A (genesis) | 62bb65171b46cd1e3e4a6679e33dea37aa9034939b13c4f53a85c84a2343eaa9 |
+| Kaspire | lock: genesis, locked until 23:02:00Z | e79884ce50df364f90d515ae423063f2e577d3290b31c8e3809a60b8a0de7ff6 |
+| Kaspire | lock: the early lock coin, accepted | 1b2f7117a7f3ec43b5618294607334de931d95606fc61f0027e6d0d625889a6b |
+| Kaspire | lock: the early unlock, signed by Kaspire, refused by the node: "transaction input #0 is not finalized" | (not accepted) |
+| Kaspire | unlock, 150 s after the lock time (third press: the app refused the first two, the node's clock was still before the lock time) | 5ad4b92675011d3b8ccbde89bb778902a1de426617bfce8362df31c33cfdddd7 |
+| Kaspire | limit sell, cancel, limit buy, cancel | 47a85cf2cd..., b5fd812c67..., 24cade4dca..., c44c55c3a1... |
+| Kaspire | own Linear curve (genesis) / its cancel | cb2f103a523b7c6b83ae1c622e646fbcade0291c822eb0c0eb6cbb088aa13854 / a7bd03b7818c55b19b1bcc0df92fb22de329b306054766042809656dc98e373e |
+| Kaspire | counterparty curve (DEV, genesis) | 5d7be4bb885eb937aafa827a7e8ccf9137a71e6509233b0e3cefc70a4ed2da93 |
+| Kaspire | Collected buy, one level filled by the executor in 47 s | f4d268e9a4d8389d6e5fd38bf4bbc7411065dae4e527e0eae61480895d479358 |
+| Kaspire | claim (90,000 to the wallet, fee 0.015188 KAS) | 99184469f309c60c385f4e993c0a0af6aa25790a4143b7079aa166634a3619c0 |
+| Kaspire | cancel of the buy / of the counterparty curve | 368ae363afca59d88bd9cd9f6228a192948a3ede25d38acc4bc811bf32bbbe83 / b87cd2d40dda27cff148e5b5c4542f535be7bc4ec39ed6a94aedf0637291d837 |
+| Kaspire | Chromatic curve (genesis) / its cancel | 2001f60391accbefe087cc40242c20289f3ccb653c1919fbb87a616f51f00fa3 / aa2ca92e70... |
+
+KasWare `limit` passed in its fourth run (`--skip-issue --only limit`). Before it: the first stopped on the ticket field lookup (harness,
+below); in the second and third KasWare's Sign window stayed on its loading spinner (a placement at 23:22Z, a cancel at 23:28Z: the
+app's wallet timeout), and a buy that reached the node (e7c919eb744bbf1c0a301327af9fb76f1f6e62e3ef33d864190f1cd7af115f40) never
+showed its transaction id on the ticket within 4 minutes; every order those runs left was cancelled by the run's sweep (the indexer lists
+all of token A's orders cancelled). The same KasWare had signed every step of the lock, curve, claim and unlock runs minutes before, and
+the next run passed: a slow wallet node is the likely cause (0.11.5 looks the inputs up on its own node before it shows Sign), not proven.
+
+Findings (app; nothing changed in web/src):
+
+* **The Unlock button comes before the node takes the unlock.** The Portfolio shows Unlock 90 s after the lock time
+  (`UNLOCK_MARGIN_MS`), but TN10's past median time ran 127 to 130 s behind the wall clock (getBlockDagInfo, sampled at 22:35Z): a press at
+  +95 to +125 s is refused by the app's own node-clock check (Kaspire: two refusals, then the unlock at +150 s). Safe (nothing is sent),
+  but the user is offered Unlock and then told no.
+* **That refusal shows the wrong sentence.** The app's text is "Not open yet on the network: the node clock is N min before the lock time.
+  Try again then." (`orders.unlock.notOpen`), but the Portfolio banner shows the generic builder sentence "its time terms do not fit the
+  current time (expiry, start or lock time)", the real one only under Details: `describeActionError` passes every message through
+  `i18n/build-error.ts`, whose `/expir|lock ?time|deadline/` rule matches "lock time".
+* **An unbound curve read from its placement record names the zero token.** KasWare: right after the genesis, Open orders listed the
+  wallet's curve "from your records" (before the indexer had it) as "0.000017 KAS per 0000…0000", amount "900,000 / 900,000 0000…0000";
+  read from the indexer (the Kaspire run, the counterparty's curves) it names the ticker.
+* **The market page shows a just-cancelled order for a moment.** A second after the limit sell's cancel was accepted (Portfolio no longer
+  listed it live), the token's market page still showed it under Open orders (1) as "unknown", "record only", with a Cancel button, while
+  the book and Token details said no orders (both wallets); 40 s later it was gone. Cosmetic.
+* **A locked token outside the registry reads "(unsupported program)".** Portfolio > Balances, locked tokens of earlier runs (not in the
+  run's test registry): "(unsupported program)" under the ticker, though they are the public-mint program; unlocked tokens outside the
+  registry do not say so.
+* **A Collected buy's amount left counts its carrier.** After one level (90,000) of a 180,000 Collected buy at 0.0000201 KAS was filled,
+  Open orders showed "~139,751.2438" left (the escrow's 1 KAS delivery carrier counted as buying power) beside "90,000 in the order".
+
+Harness changes: Create token's program text is read behind its "?" and the confirmation's verified sections under All details (since
+fce3f29ea); token outputs carry 1 KAS (`issue-carrier`; the TN10 default is 10 KAS, which each token UTXO keeps); the ticket's fields are
+looked for inside the ticket (the market page's Open orders panel has its own `order-amount` cells: the stale row above made the lookup
+ambiguous); a creation whose genesis was not sent is finished with "Finish the creation"; the counterparty's in-page signer skips its
+KasWare-0.11.5 input check on TN10 (it asks the mock's HTTP node, so every preparation was refused); a flow that ends "Done" with a step the
+node refused is read from its card; Balances is polled without re-opening the tab every few seconds (each opening reloads it, which takes
+longer than that on TN10 with many token UTXOs). KasWare's onboarding once stopped on CreateHDWalletScreen and once its browser closed
+during it: run again, it passed. The `fill` scenario was not run: `kob take --yes` now also needs `--token`.
 
 ## What still needs a live run (TN10, the owner's machine)
 

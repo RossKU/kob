@@ -41,7 +41,7 @@ export function buildTestRegistry(entries) {
 // ------------------------------------------------------------------------------------------------ step / scenario plumbing
 
 /** Runs `fn(rec)` as a scenario: collects steps, turns a throw into a failed scenario with screenshots (a `Skip` into a skipped one). */
-async function scenario(rc, name, fn) {
+export async function scenario(rc, name, fn) {
   const rec = { name, ok: false, skipped: null, error: null, steps: [], startedAt: Date.now() };
   try {
     await fn(rec);
@@ -77,7 +77,7 @@ async function scenario(rc, name, fn) {
   return rec;
 }
 
-async function closeDialogs(h) {
+export async function closeDialogs(h) {
   for (const id of ['confirm-close', 'confirm-cancel', 'amend-cancel', 'replace-cancel']) {
     const b = tid(h, id);
     if (await b.count()) await b.first().click({ timeout: 3000 }).catch(() => {});
@@ -97,7 +97,7 @@ const compactRaw = (raw) => {
     return String(raw).slice(0, 4000);
   }
 };
-const popupView = (popups) =>
+export const popupView = (popups) =>
   popups.map((p) => ({
     url: p.url,
     clicked: p.result?.clicked ?? null,
@@ -111,14 +111,14 @@ const popupView = (popups) =>
   }));
 
 /** The record of one signed transaction for the result file. */
-const stepOf = (name, s) => ({
+export const stepOf = (name, s) => ({
   name, txid: s.txid, kind: s.kind, summary: s.summary, shownAs: s.shownAs || undefined, acks: s.acks.length ? s.acks : undefined, receipts: s.receipts?.length ? s.receipts : undefined,
   popups: popupView(s.popups), screenshots: s.screenshots, appStatus: s.appStatus, signMs: s.signMs ?? undefined, ms: s.totalMs,
   gapsMs: s.gapsMs, sentTxids: s.sentTxids, pushTx: s.pushTx?.length ? s.pushTx : undefined,
 });
 
 /** Node check of one accepted tx: every P2SH output is unspent. */
-async function verifyCreated(rc, tx, txid, label) {
+export async function verifyCreated(rc, tx, txid, label) {
   const outs = outputsOf(rc.node, tx).filter((o) => o.p2sh && o.address);
   const checks = [];
   for (const o of outs) {
@@ -130,8 +130,23 @@ async function verifyCreated(rc, tx, txid, label) {
   return checks;
 }
 
+/**
+ * Node check of an accepted tx whose inputs the run cannot name the address of (they were created by someone else's transaction): every output
+ * with an address the node lists is looked for, at least one (a covenant output, or the wallet's own KAS) must be unspent.
+ */
+export async function verifyAccepted(rc, tx, txid, label) {
+  const checks = [];
+  for (const o of outputsOf(rc.node, tx).filter((x) => x.address && (x.p2sh || x.address === rc.address))) {
+    const w = await rc.node.waitOutpoint(o.address, txid, o.index, true, 30_000);
+    checks.push({ what: `${label}: output ${short(txid)}:${o.index}${o.p2sh ? ' (covenant)' : ' (wallet)'}`, unspent: w.ok, ms: w.ms });
+    if (w.ok) break;
+  }
+  if (!checks.some((c) => c.unspent)) throw new Error(`node check failed: no output of ${txid} is unspent on the node: ${JSON.stringify(checks)}`);
+  return checks;
+}
+
 /** Node check of a cancel / amend tx: the covenant outpoints it spent (created by `createdBy`) are gone, its own P2SH outputs exist. */
-async function verifySpent(rc, tx, txid, createdBy, what = 'cancel') {
+export async function verifySpent(rc, tx, txid, createdBy, what = 'cancel') {
   const checks = [];
   const created = new Map();
   for (const [ptxid, ptx] of createdBy) for (const o of outputsOf(rc.node, ptx)) if (o.p2sh && o.address) created.set(`${ptxid}:${o.index}`, o.address);
@@ -153,10 +168,10 @@ async function verifySpent(rc, tx, txid, createdBy, what = 'cancel') {
   return checks;
 }
 
-const bodyText = async (h) => collapse(await h.page.innerText('body').catch(() => ''));
+export const bodyText = async (h) => collapse(await h.page.innerText('body').catch(() => ''));
 
 /** localStorage placement records of the connected key: `{ covenantId: record }`. */
-async function readRecords(h) {
+export async function readRecords(h) {
   return h.page.evaluate(() => {
     const out = {};
     for (let i = 0; i < localStorage.length; i++) {
@@ -168,7 +183,7 @@ async function readRecords(h) {
 }
 
 /** The token UTXOs the app's tracker remembers for the wallet (localStorage `kob.tokens.v1.testnet-10.<pubkey>`). */
-async function trackedTokens(h) {
+export async function trackedTokens(h) {
   return h.page.evaluate(() => {
     const out = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -207,12 +222,17 @@ async function issueOne(rc, r, which) {
   // the program is under Advanced (folded)
   await tid(h, 'issue-advanced').getByRole('button').first().click();
   if ((await tid(h, 'issue-program-public-mint').getAttribute('aria-checked')) !== 'true') await tid(h, 'issue-program-public-mint').click();
-  const program = collapse(await tid(h, 'issue-fixed-program').innerText().catch(() => ''));
+  // the program's text sits behind its "?" (kit/HelpTip, since fce3f29ea): opened, read, closed
+  await tid(h, 'issue-program-help').click();
+  const program = collapse(await tid(h, 'issue-fixed-program').innerText({ timeout: 10_000 }).catch(() => ''));
+  await tid(h, 'issue-program-help').click().catch(() => {});
   if (!/KCC20PublicMint\b/.test(program)) throw new Error(`the issuance screen does not plan the default public-mint program: "${program}"`);
   await tid(h, 'issue-name').fill(`KOB real ${rc.name} ${which}`);
   await tid(h, 'issue-ticker').fill(ticker);
   await tid(h, 'issue-decimals').fill('8');
   await tid(h, 'issue-supply').fill(String(SUPPLY));
+  // 1 KAS per token output (Advanced > Carrier; the TN10 default is 10 KAS, which the token UTXO keeps)
+  await tid(h, 'issue-carrier').fill('1');
   const review = tid(h, 'issue-review');
   for (let i = 0; i < 60 && !(await review.isEnabled()); i++) await sleep(1000);
   if (!(await review.isEnabled())) throw new Error(`issue review stays disabled: ${collapse(await tid(h, 'issue-view').innerText().catch(() => bodyText(h))).slice(0, 700)}`);
@@ -267,11 +287,12 @@ export async function issueTokens(rc, { withPair }) {
 /** The `data-testid` of a ticket field (form-state.ts `FIELDS`): amount / price / tip have the short order-* ids, the rest `field-<intent path>`. */
 const fieldTestId = (id) => (id === 'amount' ? 'order-amount' : id === 'price' ? 'order-price' : id === 'tip' ? 'order-tip' : `field-${id}`);
 
-async function fillFields(h, values) {
+export async function fillFields(h, values) {
   for (const [id, value] of Object.entries(values)) {
-    const loc = tid(h, fieldTestId(id));
+    // inside the ticket: an order row on the same page (the market's Open orders panel) has its own `order-amount` / `order-price` cells
+    const loc = tid(h, 'order-ticket').getByTestId(fieldTestId(id));
     try {
-      await loc.waitFor({ state: 'attached', timeout: 10_000 });
+      await loc.waitFor({ state: 'attached', timeout: 45_000 });
     } catch {
       throw new Error(`the ticket has no field "${id}" (${fieldTestId(id)}) for this order type`);
     }
@@ -310,7 +331,7 @@ async function passCovenantGate(rc) {
 }
 
 /** Opens the KAS market of token A (or the pair A/B with `pair`) and waits for the ticket. */
-async function openTicket(rc, { pair = false } = {}) {
+export async function openTicket(rc, { pair = false } = {}) {
   const { h } = rc;
   const route = pair ? `#/market/${rc.token.tokenId}/${rc.tokenB.tokenId}` : `#/market/${rc.token.tokenId}`;
   await goto(h, route);
@@ -326,7 +347,7 @@ async function openTicket(rc, { pair = false } = {}) {
  * Fills the order ticket until its order button is enabled. spec: { type, side, fields: {intent path: value}, pair?, expectSummary?: RegExp }.
  * Passes the covenant check when shown. Returns how to press the button.
  */
-async function fillTicket(rc, spec) {
+export async function fillTicket(rc, spec) {
   const { h } = rc;
   await openTicket(rc, { pair: !!spec.pair });
   const ticket = tid(h, 'order-ticket');
@@ -353,7 +374,7 @@ async function fillTicket(rc, spec) {
 }
 
 /** Place through the ticket, sign, verify on the node. Returns the step record plus what the cancel needs. */
-async function place(rc, r, label, spec) {
+export async function place(rc, r, label, spec) {
   const before = new Set(Object.keys(await readRecords(rc.h)));
   const t = await fillTicket(rc, spec);
   // what is ordered is said by the app's final confirmation (title, net effect, the order's terms), checked BEFORE it goes to the wallet:
@@ -379,7 +400,7 @@ async function place(rc, r, label, spec) {
 // ------------------------------------------------------------------------------------------------ My orders
 
 /** Opens My orders afresh (the view is re-mounted, no flow of an earlier action stays on it) and waits for the rows of `wantIds`. */
-async function openOrders(rc, wantIds = [], { timeoutMs = 90_000, tab = 'open' } = {}) {
+export async function openOrders(rc, wantIds = [], { timeoutMs = 90_000, tab = 'open' } = {}) {
   const { h } = rc;
   // the Portfolio shows one tab at a time (`#/portfolio/<tab>`): Balances, Open orders (the live ones, with their actions), Order history
   // (the ended ones, with their status). A row is found only on its tab; the Balances rows only on Balances.
@@ -408,7 +429,7 @@ async function openOrders(rc, wantIds = [], { timeoutMs = 90_000, tab = 'open' }
  * have (a limit has no stop, an indexer row no source badge) is '' at once. (Reading each cell through a locator waited Playwright's 30 s
  * default for every absent one: a row was read over a minute, its `data-live` from the first render, and a 90 s poll became one read.)
  */
-async function rowView(h, id) {
+export async function rowView(h, id) {
   return h.page.evaluate((id) => {
     const row = document.querySelector(`[data-testid="order-row-${id}"]`);
     if (!row) return { id, listed: false };
@@ -421,17 +442,17 @@ async function rowView(h, id) {
 }
 
 /** Order statuses that end an order (orders-model.ts); `unknown` is a row whose node verdict has not come yet. */
-const ENDED = new Set(['filled', 'cancelled', 'refunded', 'killed', 'closed']);
+export const ENDED = new Set(['filled', 'cancelled', 'refunded', 'killed', 'closed']);
 
 /** An order that ended (filled, killed, refunded ... by someone else) before this run acted on it: `views` says how. */
-class OrderEnded extends Error {
+export class OrderEnded extends Error {
   constructor(views) {
     super(`the order ended before the run could act on it: ${JSON.stringify(views)}`);
     this.views = views;
   }
 }
 
-const clickRefresh = async (h) => {
+export const clickRefresh = async (h) => {
   const refresh = tid(h, 'orders-refresh');
   if (await refresh.count()) await refresh.click().catch(() => {});
 };
@@ -440,7 +461,7 @@ const clickRefresh = async (h) => {
  * Waits until every one of `ids` is live in My orders (refreshing): a fresh placement may first show as `unknown` (the list comes before the
  * node's verdict on the placement record) or not at all (the indexer has not seen it). Throws `OrderEnded` when one of them has ended.
  */
-async function waitLive(rc, ids, timeoutMs = 60_000) {
+export async function waitLive(rc, ids, timeoutMs = 60_000) {
   const { h } = rc;
   const t0 = Date.now();
   for (;;) {
@@ -455,7 +476,7 @@ async function waitLive(rc, ids, timeoutMs = 60_000) {
 }
 
 /** Waits until none of `ids` is live in My orders (refreshing), returns the final row views. */
-async function waitNotLive(rc, ids, timeoutMs = 90_000) {
+export async function waitNotLive(rc, ids, timeoutMs = 90_000) {
   const { h } = rc;
   const t0 = Date.now();
   for (;;) {
@@ -469,7 +490,7 @@ async function waitNotLive(rc, ids, timeoutMs = 90_000) {
 }
 
 /** Token amounts the app's tracker holds from `txid` (a cancel / merge output), base units, for `token`. */
-async function trackedFrom(h, txid, token) {
+export async function trackedFrom(h, txid, token) {
   await sleep(1000);
   const items = (await trackedTokens(h)).filter((x) => x.txid === txid && x.token === token);
   return { items, total: items.reduce((a, x) => a + BigInt(x.amount ?? 0), 0n) };
@@ -479,7 +500,7 @@ async function trackedFrom(h, txid, token) {
  * Cancels through My orders: the row's cancel (or the position card's, when the indexer groups an IFD), the flow's confirmation screen, the
  * node check, the tokens released to the wallet (tracked by the app), the order leaving the live list.
  */
-async function cancelStep(rc, r, label, { placed, covenantIds, position = false, tokensBack = null }) {
+export async function cancelStep(rc, r, label, { placed, covenantIds, position = false, tokensBack = null, looseSpent = false }) {
   const { h } = rc;
   await openOrders(rc, covenantIds);
   const rows = await waitLive(rc, covenantIds);
@@ -498,7 +519,9 @@ async function cancelStep(rc, r, label, { placed, covenantIds, position = false,
   const step = { ...stepOf(`cancel ${label}`, s), ordersBefore: rows, balancesPanelBeforeCancel: balancesPanel };
   step.screenshots.unshift(shot1);
   r.steps.push(step);
-  step.verify = await verifySpent(rc, s.submitted, s.txid, placed);
+  // `looseSpent`: the order's current UTXO is another party's transaction (an executor's fill), whose outputs the run never saw: the cancel is
+  // checked by its own outputs on the node instead (`verifyAccepted`)
+  step.verify = looseSpent ? await verifySpent(rc, s.submitted, s.txid, placed).catch((e) => { if (!/spends none/.test(String(e?.message))) throw e; return verifyAccepted(rc, s.submitted, s.txid, `cancel ${label}`); }) : await verifySpent(rc, s.submitted, s.txid, placed);
   if (tokensBack) {
     // tokens released from custody come back as a wallet-owned token UTXO of the cancel tx: the app's tracker (each entry re-verified on the node) must hold them
     const got = await trackedFrom(h, s.txid, tokensBack.token);
@@ -536,7 +559,7 @@ async function placeAndCancel(rc, r, label, spec, { position = false, tokensBack
 }
 
 /** The Balances panel of My orders: free / in orders / strays of a token (whole tokens, exact `data-value`s) and the KAS lines. */
-async function balanceRow(rc, token, { timeoutMs = 60_000 } = {}) {
+export async function balanceRow(rc, token, { timeoutMs = 60_000 } = {}) {
   const { h } = rc;
   const row = tid(h, `balance-row-${token}`);
   if (!(await tid(h, 'portfolio-panel-balances').count())) await openOrders(rc, [], { tab: 'balances' });
@@ -557,10 +580,10 @@ async function balanceRow(rc, token, { timeoutMs = 60_000 } = {}) {
   }, token);
 }
 
-const num = (s) => Number(String(s ?? '').replace(/,/g, ''));
+export const num = (s) => Number(String(s ?? '').replace(/,/g, ''));
 
 /** Polls the Balances panel until `pred(row)` holds (the free / escrowed figures follow the node with a delay). */
-async function waitBalance(rc, token, pred, what, timeoutMs = 90_000) {
+export async function waitBalance(rc, token, pred, what, timeoutMs = 90_000) {
   const t0 = Date.now();
   let b = null;
   for (;;) {

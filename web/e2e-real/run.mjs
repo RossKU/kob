@@ -1,6 +1,7 @@
 // REAL-wallet run on Kaspa testnet-10: drives the built KOB web app with the released KasWare / Kaspire / Kastle extensions against a TN10 node and
 // proves, per wallet: issue a 3 / 3 token, then place and cancel the main order types (limit GTC sell + buy, amend, IOC, stop, OCO, IFD, pair limit
-// sell + buy, market against a counterparty when an indexer is configured), merge the token's UTXOs and check My orders / Balances; every accepted
+// sell + buy, market against a counterparty when an indexer is configured), merge the token's UTXOs and check My orders / Balances, and the Create
+// token features (creator lock and Unlock, Linear and Chromatic curve sales, the Claim of a Collected buy: create.mjs); every accepted
 // transaction is verified on the node independently of the app.
 //
 //   node e2e-real/run.mjs [--wallet kasware,kaspire,kastle|all] [--only limit,amend,...] [--indexer [url]] [--headless] [--keep-open]
@@ -21,7 +22,11 @@ import { fund, TN10_NODE } from './fund.mjs';
 import { startAppServer, DIST_REAL, REGISTRY_PATH } from './server.mjs';
 import { KAS, NodeChecker, WALLET_LABELS, connectWallet, kasBalance, openApp, retryOnce, walletDriver, writeJson } from './driver.mjs';
 import { MOCK_KEY_OF, MockNodeChecker, startMock } from './mock.mjs';
-import { SCENARIOS, buildTestRegistry, issueTokens, snapshotTracker, sweepOpenOrders } from './scenarios.mjs';
+import { SCENARIOS as ORDER_SCENARIOS, buildTestRegistry, issueTokens, snapshotTracker, sweepOpenOrders } from './scenarios.mjs';
+import { claimResult, runChromatic, runCurve, runLock, runUnlock } from './create.mjs';
+
+// the order scenarios, with the Create token ones around them: the lock first (its time runs while the rest runs), its unlock last
+const SCENARIOS = [['lock', runLock], ...ORDER_SCENARIOS.filter(([id]) => !['cells', 'merge', 'balances'].includes(id)), ['curve', runCurve], ['claim', claimResult], ['chromatic', runChromatic], ...ORDER_SCENARIOS.filter(([id]) => ['cells', 'merge', 'balances'].includes(id)), ['unlock', runUnlock]];
 
 export const SKIP = 77;
 const argv = process.argv.slice(2);
@@ -124,7 +129,8 @@ function counterpartyFactory({ env, mock, server, appConfig, mockBrowser }) {
   return async () => {
     const browser = mockBrowser ?? (await chromium.launch({ headless: true, executablePath: process.env.KOB_CHROME_PATH || undefined }));
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    const drv = walletDriver('kasware', env, { mock: { secretKey: secret.toLowerCase() } });
+    // on TN10 the in-page signer has no node of its own to look inputs up on (its KasWare 0.11.5 input check asks the mock's HTTP node)
+    const drv = walletDriver('kasware', env, { mock: { secretKey: secret.toLowerCase(), config: MOCK ? {} : { checkInputs: false } } });
     drv.label = 'counterparty (DEV key, in-page signer)';
     await drv.setup(ctx);
     if (MOCK) await mock.giveKas(MOCK_KEY_OF.dev, 50, 2);
@@ -178,7 +184,7 @@ async function runWallet(name, env, node, server, { mock, mockBrowser, indexerUr
     result.balanceKas = Number(bal) / 1e8;
 
     rc = {
-      ctx, drv, node, server, result, name, env, address: conn.address, indexer: !!indexerUrl, indexerUrl,
+      ctx, drv, node, server, result, name, env, address: conn.address, indexer: !!indexerUrl, indexerUrl, appConfig, mock, extraTokens: [],
       openCounterparty: counterpartyFactory({ env, mock, server, appConfig, mockBrowser }),
       get h() { return h; }, set h(v) { h = v; },
     };
@@ -188,19 +194,20 @@ async function runWallet(name, env, node, server, { mock, mockBrowser, indexerUr
       if (!(await h.page.getByTestId('wallet-address').count())) await connectWallet(h, ctx, drv);
     };
     const setRegistry = async () => {
-      const reg = buildTestRegistry([rc.token?.registryEntry, rc.tokenB?.registryEntry]);
+      const reg = buildTestRegistry([rc.token?.registryEntry, rc.tokenB?.registryEntry, ...rc.extraTokens.map((t) => t.registryEntry)]);
       server.setRegistry(reg);
       writeJson(`registry-tn10.test.${name}.json`, reg);
       if (MOCK) {
         // the mock (indexer and node in one process) books orders only for tokens it knows: it learns the issued tokens as the real indexer
         // learns them from its registry. A real node needs nothing of the kind.
-        for (const t of [rc.token, rc.tokenB].filter(Boolean)) {
+        for (const t of [rc.token, rc.tokenB, ...rc.extraTokens].filter(Boolean)) {
           const e = t.registryEntry;
           await mock.registerToken({ ticker: e.ticker, covenant_id: e.covenant_id, program: e.template_id === 'kcc20-ref-3x3' ? 'KCC20Ref' : 'KCC20PublicMint', extension_commitment: e.extension_commitment, decimals: e.decimals, template_id: e.template_id, standing: 'official' });
         }
       }
       await reconnect();
     };
+    rc.setRegistry = setRegistry;
 
     // issue the tokens (or reuse the ones of the previous run)
     const withPair = ONLY.includes('pair');
