@@ -1,7 +1,15 @@
-// The token/token book of a pair: asks above (best at the bottom), the spread row (the token book's: the last price, then mid and spread), bids below; columns price, amount, total
-// (QUOTE), like the token book's. Three sources are drawn apart, by a bar at the row's left edge and not by a word on every row (review M-09): `direct` (resting pair orders), `entry`
-// (if-done pair entries resting at their limit) and `route` (`via KAS`: implied through the two KAS books in one transaction; its price in italics); the legend under the book says
-// it once and a row's title names its source. A click on a level fills the pair ticket's price only (the ticket keeps its side); the price is rounded for the clicked side.
+// The token/token book of a pair. The asks are above, with the best at the bottom. The spread row
+// is the token book's, with the last price, then mid and spread. The bids are below. The columns
+// are price, amount and total (QUOTE), like the token book's.
+//
+// Three sources are drawn apart, by a bar at the row's left edge and not by a word on every row:
+// - `direct`: resting pair orders.
+// - `entry`: if-done pair entries resting at their limit.
+// - `route`, `via KAS`: implied through the two KAS books in one transaction. Its price is in
+//   italics.
+// The legend under the book says it once, and a row's title names its source. A click on a level
+// fills the pair ticket's price only, and the ticket keeps its side. The price is rounded for the
+// clicked side.
 import { t } from '../../i18n';
 import { unitParts } from '../kit';
 import { spreadLine, type PairBookModel, type PairLevelRow } from './pair-model';
@@ -11,18 +19,25 @@ export interface PairBookProps {
   base: string;
   quote: string;
   onPick?: (row: PairLevelRow) => void;
-  /** slots per side (the levels the card holds: book-rows.ts; the model is built for as many) */
+  /** Slots per side, the levels the card holds (book-rows.ts). The model is built for as many. */
   rows?: number;
-  /** goes on the asks' side: the page measures it to know how many levels fit */
+  /** Goes on the asks' side. The page measures it to know how many levels fit. */
   fitRef?: (el: HTMLElement | null) => void;
-  /** the pair's last price (the two KAS markets' implied price), shown in the spread row like the token book's */
+  /**
+   * The pair's last price, which is the two KAS markets' implied price. It is shown in the spread
+   * row like the token book's.
+   */
   last?: string | null;
 }
 
-/** The price as a plain number: no thousands separators, no padding zeros (the column shows fixed decimals). */
+/**
+ * The price as a plain number, with no thousands separators and no padding zeros. The column shows
+ * fixed decimals.
+ */
 export const plainPrice = (text: string): string => text.replace(/,/g, '').replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 
-// the hint of a level's source; a count of orders has a `.one` and an `.other` text (the route's has no count)
+// The hint of a level's source. A count of orders has a `.one` and an `.other` text, and the
+// route's has no count.
 const HINT: Record<string, string> = { direct: 'pair.book.directHint', entry: 'pair.book.entryHint', route: 'pair.book.routeHint' };
 const hintKey = (source: string, orders: number): string => {
   const key = HINT[source] ?? 'pair.book.directHint';

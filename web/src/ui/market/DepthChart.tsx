@@ -8,7 +8,10 @@ import { depthGeometry, type DepthSeries } from './market-model';
 const HEIGHT = 160; // the least height (market.css: the depth chart's box floor on three columns, where the panel's height is the ticket's row split with the chart; elsewhere the box is 240 px): the drawing follows its box
 const AXIS = 18; // room for the price labels under the plot
 
-/** Width and height of an element, following resizes (width 0 until mounted, height at least HEIGHT). */
+/**
+ * Width and height of an element, following resizes. The width is 0 until mounted, and the height
+ * is at least HEIGHT.
+ */
 function useSize(): [RefObject<HTMLDivElement>, number, number] {
   const ref = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: HEIGHT });
@@ -26,17 +29,26 @@ function useSize(): [RefObject<HTMLDivElement>, number, number] {
 }
 
 const fmtPrice = (v: number, dp: number) => formatNumber(v, { minimumFractionDigits: dp, maximumFractionDigits: dp });
-/** The tooltip's cumulative amount: a fixed number of decimals per market (not per hover position), thousands grouped, never compact. */
+/**
+ * The tooltip's cumulative amount. It has a fixed number of decimals per market, not per hover
+ * position, thousands grouped, and is never compact.
+ */
 const fmtFixed = (v: number, dp: number) => formatNumber(v, { minimumFractionDigits: dp, maximumFractionDigits: dp });
-/** Axis / summary amounts: whole above 100, two decimals above 0.01, three significant digits below it (a pair of a high-priced token trades fractions of a token). */
+/**
+ * Axis and summary amounts. They are whole above 100, with two decimals above 0.01 and three
+ * significant digits below it. A pair of a high-priced token trades fractions of a token.
+ */
 const fmtAmount = (v: number) =>
   v > 0 && v < 0.01 ? formatNumber(v, { maximumSignificantDigits: 3 }) : formatNumber(v, { notation: v >= 100_000 ? 'compact' : 'standard', maximumFractionDigits: v >= 100 ? 0 : 2 });
 
 /**
- * Depth chart: cumulative bids (left, green) and asks (right, red) around the mid price, step areas with a soft gradient, a subtle grid,
- * price and amount axes, a hover read-out. Drawn in SVG at the panel's pixel width (crisp text at any size). With `onPick` a click takes the price under
- * the pointer and the side of the mid it is on (the page turns that into the ticket's prefill, as a click on a book row does); the chart is a pointer
- * convenience, the book's rows stay the keyboard path, so the drawing is not a control for assistive technology.
+ * Depth chart. It shows cumulative bids (left, green) and asks (right, red) around the mid price,
+ * as step areas with a soft gradient, a subtle grid, price and amount axes and a hover read-out.
+ * It is drawn in SVG at the panel's pixel width, so the text is crisp at any size. With `onPick` a
+ * click takes the price under the pointer and the side of the mid it is on. The page turns that
+ * into the ticket's prefill, as a click on a book row does. The chart is a pointer convenience.
+ * The book's rows stay the keyboard path, so the drawing is not a control for assistive
+ * technology.
  */
 export function DepthChart(props: { /** the USD display in force and the series is in KAS (a flipped KAS/TOKEN market): the cumulative KAS is shown as dollars, with the KAS figure in the read-out; null: as is */ fiat?: Fiat | null; series: DepthSeries | null; loading: boolean; ticker: string; /** the unit of the price axis: KAS natively, the token when inverted */ priceUnit?: string; /** shown as KAS/TOKEN */ inverted?: boolean; dp: number; /** fixed decimals of the cumulative amount in the hover read-out (token decimals / tick of the market); default 2 */ amountDp?: number; source: 'depth' | 'book'; /** the data could not be loaded (not an empty book) */ unavailable?: boolean; /** a click on the chart: the price on its axis at the pointer and the side of the mid (left bid, right ask) */ onPick?: (side: 'bid' | 'ask', price: number) => void }) {
   const [ref, width, height] = useSize();
@@ -44,7 +56,8 @@ export function DepthChart(props: { /** the USD display in force and the series 
   const s = props.series;
   const plotH = height - AXIS;
   const g = s && width > 0 ? depthGeometry(s, width, plotH) : null;
-  // the cumulative amount of a flipped market is KAS: dollars when the USD display is in force (a float of whole KAS is display only)
+  // The cumulative amount of a flipped market is KAS. It is dollars when the USD display is in
+  // force. A float of whole KAS is display only.
   const fiat = props.fiat ?? null;
   const usdOfKas = (kas: number): string => sompiToUsdCompact(BigInt(Math.round(kas * 1e8)), fiat!);
   const amountText = (v: number): string => (fiat ? usdOfKas(v) : fmtAmount(v));
@@ -72,7 +85,7 @@ export function DepthChart(props: { /** the USD display in force and the series 
     if (!at || !g || !s) return;
     const { x, price, side } = at;
     const pts = side === 'bid' ? s.bids : s.asks;
-    // the cumulative amount available at this price: every level at least as good as it
+    // The cumulative amount available at this price: every level at least as good as it.
     let cum = 0;
     for (const p of pts) if (side === 'bid' ? p.price >= price : p.price <= price) cum = p.cum;
     const y = plotH - (cum / g.yMax) * plotH;
@@ -102,7 +115,8 @@ export function DepthChart(props: { /** the USD display in force and the series 
               </g>
             ))}
             {g.xTicks.map((tk) => {
-              // a label near an edge is anchored inside the plot (a centred one would be cut off by the panel)
+              // A label near an edge is anchored inside the plot. A centred one would be cut off by
+              // the panel.
               const anchor = tk.x < 36 ? 'start' : tk.x > width - 36 ? 'end' : 'middle';
               return (
                 <g key={`x${tk.value}`}>

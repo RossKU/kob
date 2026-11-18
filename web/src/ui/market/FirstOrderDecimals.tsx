@@ -1,5 +1,7 @@
-// The decimals of a token's first order: no order of the token exists, so nothing tells its price scale (it declares no decimals on chain). One
-// field, prefilled only with the decimals of a token issued in this browser; the user confirms them. Once an order exists its scale decides.
+// The decimals of a token's first order. No order of the token exists, so nothing tells its price
+// scale, because it declares no decimals on chain. There is one field, prefilled only with the
+// decimals of a token issued in this browser, and the user confirms them. Once an order exists its
+// scale decides.
 import { useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { MAX_OPEN_DECIMALS, parseOpenDecimals } from '../../kob/open-token';

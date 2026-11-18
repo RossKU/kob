@@ -1,18 +1,22 @@
-// The picture of a covenant id (app/fingerprint.ts) and the identity block of a token: its icon beside that picture, so a token is recognised at a
-// glance and two tokens with one ticker cannot be mistaken. The picture is inline SVG built from the cells (no image to fetch, nothing to trust); its
-// tooltip and accessible name are the three words.
+// The picture of a covenant id (app/fingerprint.ts) and the identity block of a token, which is
+// its icon beside that picture. A token is recognised at a glance, and two tokens with one ticker
+// cannot be mistaken. The picture is inline SVG built from the cells. There is no image to fetch
+// and nothing to trust. Its tooltip and accessible name are the three words.
 import { fingerprint } from '../../app/fingerprint';
 import { t } from '../../i18n';
 import { TokenIcon } from './TokenIcon';
 import type { TokenRow } from './token-model';
 
-/** Tile of the spec: 100 x 132, 5 x 7 cells of 16 inside a padding of 10, dots of radius 6.4 (accent 7.36), corner radius 16. */
+/**
+ * Tile of the spec: 100 x 132, 5 x 7 cells of 16 inside a padding of 10, dots of radius 6.4 (accent
+ * 7.36), corner radius 16.
+ */
 const W = 100;
 const H = 132;
 const PAD = 10;
 const CELL = 16;
 
-/** The fingerprint tile; `height` is its height in px (the width follows the 100 : 132 tile). */
+/** The fingerprint tile. `height` is its height in px, and the width follows the 100 : 132 tile. */
 export function Fingerprint(props: { covenantId: string; height?: number; 'data-testid'?: string }) {
   const f = fingerprint(props.covenantId);
   const height = props.height ?? 40;
@@ -39,7 +43,11 @@ export function Fingerprint(props: { covenantId: string; height?: number; 'data-
   );
 }
 
-/** Icon and fingerprint side by side: `md` (list rows), `sm` (26 px, a line of a table on the Portfolio page) or `bar` (the market bar: 32 px, smaller on a phone); the sizes are in market.css, which also narrows them on a phone. */
+/**
+ * Icon and fingerprint side by side, in one of three sizes. `md` is for list rows. `sm` is 26 px,
+ * a line of a table on the Portfolio page. `bar` is the market bar, 32 px and smaller on a phone.
+ * The sizes are in market.css, which also narrows them on a phone.
+ */
 export function IdentityBlock(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'>; size?: 'sm' | 'md' | 'bar'; 'data-testid'?: string; /** wallet views: see TokenIcon */ scope?: 'wallet' }) {
   return (
     <span class={`idb idb-${props.size ?? 'md'}`} data-testid={props['data-testid'] ?? `identity-${props.row.covenantId}`}>

@@ -2,7 +2,10 @@ import { t } from '../../i18n';
 import { Banner } from '../kit';
 import { shortCovenantId } from './token-model';
 
-/** The short page a direct link to a token this build cannot trade leads to: no market, no ticket (such a token is not listed or offered anywhere). */
+/**
+ * The short page a direct link to a token this build cannot trade leads to. It has no market and
+ * no ticket, because such a token is not listed or offered anywhere.
+ */
 export function NotTradablePage(props: { ticker: string; covenantId: string; reason: string | null }) {
   const name = props.ticker === '' ? shortCovenantId(props.covenantId) : `${props.ticker} (${shortCovenantId(props.covenantId)})`;
   return (
