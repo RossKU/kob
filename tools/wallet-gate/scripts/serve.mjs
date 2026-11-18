@@ -1,4 +1,5 @@
-// Tiny static server for the gate page (no dependencies). Serves ONLY: web/, lib/, artifacts/, state/, vendor/kaspa-web/.
+// Tiny static server for the gate page, without dependencies.
+// It serves only web/, lib/, artifacts/, state/ and vendor/kaspa-web/.
 //   node scripts/serve.mjs [port]      -> http://localhost:8787/
 // http://localhost is a secure context, so wallet extensions inject their providers.
 import { createServer } from 'node:http';

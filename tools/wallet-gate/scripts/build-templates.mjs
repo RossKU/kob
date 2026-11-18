@@ -1,6 +1,6 @@
-// DEV-ONLY (needs silverc v1.0.0): compiles the BidOrder template with sentinel constructor args so
-// setup.mjs / the page can patch `maker` and `tokenCovId` (both 32-byte pushes) without silverc.
-// usage: node scripts/build-templates.mjs <path-to-silverc>
+// Dev-only (needs silverc v1.0.0). Compiles the BidOrder template with sentinel constructor args,
+// so setup.mjs and the page can patch `maker` and `tokenCovId` (both 32-byte pushes) without
+// silverc. Usage: node scripts/build-templates.mjs <path-to-silverc>
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';

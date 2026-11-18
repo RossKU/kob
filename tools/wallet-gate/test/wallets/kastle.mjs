@@ -1,16 +1,25 @@
-// Real-wallet driver: Kastle (Forbole Chrome extension, window.kastle) on Kaspa testnet-10.
+// Real-wallet driver for Kastle (Forbole Chrome extension, window.kastle) on Kaspa testnet-10.
 //   node test/wallets/kastle.mjs [--fresh] [--setup] [--headless] [--only T2,T3] [--port 8803]
-// What it does (everything real, nothing mocked):
-//   1. downloads the pinned RELEASED build from the Chrome Web Store (id oambclflhjfppdmkghokjmpppmaebego; version + sha256 in
-//      lib/extension-pins.mjs, another build is refused), unpacks the CRX, records version + sha256 (cache: vendor/kastle/, gitignored)
-//   2. launches Playwright's bundled Chromium (branded Chrome >= 137 ignores --load-extension) with a persistent profile,
-//      onboards Kastle through its UI by importing WALLET_MNEMONIC_KASTLE (generated into .env if missing, never printed)
-//   3. connects the gate page (http://localhost:<port>/), switches Kastle to testnet-10, runs scripts/setup.mjs for its address
-//   4. runs T1 (plain P2PK), T2 and T3 with kastleVariant plain / empty-script / redeem-script; for every wallet popup it
-//      records screenshot + innerText + the "raw transaction details" panel, approves it, and records the result
-//   5. writes out/wallet-kastle.json (+ screenshots in out/screens/kastle/)
-//   --fresh    delete the browser profile first (forces a new UI onboarding; the mnemonic stays the same)
-//   --setup    force a new scripts/setup.mjs run even if the setup file still has unspent items
+//
+// Everything is real, nothing is mocked:
+// 1. Download the pinned released build from the Chrome Web Store (id
+//    oambclflhjfppdmkghokjmpppmaebego). Version and sha256 are in lib/extension-pins.mjs and
+//    another build is refused. Unpack the CRX and record its version and sha256 (cache:
+//    vendor/kastle/, gitignored).
+// 2. Launch Playwright's bundled Chromium with a persistent profile, because branded Chrome >= 137
+//    ignores --load-extension. Onboard Kastle through its UI by importing WALLET_MNEMONIC_KASTLE
+//    (generated into .env if missing, never printed).
+// 3. Connect the gate page (http://localhost:<port>/), switch Kastle to testnet-10 and run
+//    scripts/setup.mjs for its address.
+// 4. Run T1 (plain P2PK), T2 and T3 with kastleVariant plain, empty-script and redeem-script. For
+//    every wallet popup, record a screenshot, innerText and the "raw transaction details" panel,
+//    approve it and record the result.
+// 5. Write out/wallet-kastle.json (screenshots go to out/screens/kastle/).
+//
+// Options:
+//   --fresh    Delete the browser profile first (forces a new UI onboarding; the mnemonic stays the
+//              same).
+//   --setup    Force a new scripts/setup.mjs run even if the setup file still has unspent items.
 import { mkdirSync, existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, ROOT, OUT, EXTENSIONS, ensurePinnedCrx, loadEnv, upsertEnv, shot, startServer, launchWithExtension, extensionId, runSetup, runGateTest, saveResults } from './common.mjs';
@@ -69,7 +78,8 @@ const text = async (p) => (await p.innerText('body').catch(() => '')).trim();
 
 /** Onboards Kastle by importing the mnemonic (only if the profile has no wallet yet). */
 async function onboardIfNeeded(ctx, extId, env) {
-  // opening popup.html on a profile with no wallet makes the background worker open /onboarding tab(s) (a few seconds later)
+  // Opening popup.html on a profile with no wallet makes the background worker open /onboarding
+  // tabs a few seconds later.
   const probe = await ctx.newPage();
   await probe.goto(`chrome-extension://${extId}/popup.html`);
   const onb = () => ctx.pages().filter((x) => x.url().includes('#/onboarding'));
@@ -98,7 +108,10 @@ async function onboardIfNeeded(ctx, extId, env) {
   return true;
 }
 
-/** Runs `start()` (which kicks off a wallet request without awaiting the result) and drives the popup it opens. */
+/**
+ * Runs `start()` (which kicks off a wallet request without awaiting the result) and drives the
+ * popup it opens.
+ */
 async function drivePopup(ctx, env, label, screens, start, { approve = true, rawDetails = false } = {}) {
   const known = new Set(ctx.pages());
   start();
@@ -212,7 +225,8 @@ try {
     const opts = { skip: 0, kastleVariant: variant, popup: 'unknown', displayed: '(see popupTexts in wallet-kastle.json)', note: 'kastle driver run' };
     let popInfo;
     const pending = page.evaluate(([id, opts]) => window.__gate.runTest(id, opts).then(({ unsignedTxJson, ...r }) => r), [id, opts]);
-    // drive the popup that runTest triggers (start() is a no-op: the request is already in flight)
+    // Drive the popup that runTest triggers.
+    // start() is a no-op, because the request is already in flight.
     popInfo = await drivePopup(ctx, env, label, screens, () => {}, { rawDetails: true, approve: true });
     popInfo.test = id; popInfo.variant = variant;
     popups.push(popInfo);

@@ -1,11 +1,12 @@
-// Generates the DEV key (funds the setup) and stores it in the gitignored .env.
+// Generates the dev key (it funds the setup) and stores it in the gitignored .env.
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import kaspa from '../lib/node-kaspa.mjs';
 import { ENV_PATH, loadEnv, upsertEnv } from '../lib/env.mjs';
 
 const env = loadEnv();
-// simulated-wallet key (used only by test/e2e-devkey.mjs and test/page-mock.mjs; a local key standing in for a wallet)
+// The simulated-wallet key is a local key that stands in for a wallet.
+// Only test/e2e-devkey.mjs and test/page-mock.mjs use it.
 if (!env.SIM_WALLET_PRIVATE_KEY) {
   const sk = randomBytes(32).toString('hex');
   const p = new kaspa.PrivateKey(sk);

@@ -1,5 +1,5 @@
 // Tx v1 (Toccata) construction helpers on top of an injected kaspa-wasm namespace `k`
-// (node: vendor/kaspa-node, browser: vendor/kaspa-web). No node built-ins used.
+// (node: vendor/kaspa-node, browser: vendor/kaspa-web). It uses no node built-ins.
 import { hex, unhex } from './script.mjs';
 
 export const TX_VERSION = 1;
@@ -10,8 +10,13 @@ const MASS_PER_SPK_BYTE = 10n;
 
 /**
  * Plan format (plain data, wallet-independent):
- *   { inputs:[{ txid, index, amount:bigint, spk:hex, covenantId?:hex, address?, daa?:bigint, isCoinbase?, budget:int, sigscript?:hex }],
- *     outputs:[{ value:bigint, spk:hex, covenant?:{ auth:int, id:hex } }], lockTime?:bigint }
+ *
+ *   {
+ *     inputs: [{ txid, index, amount: bigint, spk: hex, covenantId?: hex, address?, daa?: bigint,
+ *                isCoinbase?, budget: int, sigscript?: hex }],
+ *     outputs: [{ value: bigint, spk: hex, covenant?: { auth: int, id: hex } }],
+ *     lockTime?: bigint,
+ *   }
  */
 
 /** transaction_estimated_serialized_size (consensus/core/src/mass) for a v1 tx. */
@@ -33,7 +38,7 @@ export function planComputeMass(plan, sigscriptLens) {
   const budget = plan.inputs.reduce((a, i) => a + BigInt(i.budget), 0n);
   return { size, compute: size + spk * MASS_PER_SPK_BYTE + budget * GRAMS_PER_BUDGET };
 }
-/** Node policy floor: 100 sompi * max(compute mass, 2 * size); +3% margin, rounded up. */
+/** Node policy floor: 100 sompi * max(compute mass, 2 * size), plus a 3% margin, rounded up. */
 export function minFee(plan, sigscriptLens, marginPct = 3n) {
   const { size, compute } = planComputeMass(plan, sigscriptLens);
   const base = (compute > 2n * size ? compute : 2n * size) * MIN_FEE_PER_GRAM;
@@ -69,13 +74,18 @@ export function toWasmTx(k, plan) {
   });
 }
 
-/** Signature script of a plain P2PK input: <push 65: sig+sighash>. `createInputSignature` already returns it. */
+/**
+ * Signature script of a plain P2PK input: <push 65: sig+sighash>.
+ * `createInputSignature` already returns it.
+ */
 export function signP2pkInput(k, tx, index, privateKey, sighash = k.SighashType.All) {
   return k.createInputSignature(tx, index, privateKey, sighash); // hex of 0x41 || sig64 || sighashByte
 }
 
-/** Extracts the 65-byte (sig64 + sighash) signature from a wallet-produced signature script.
- *  Accepts <sig>, <sig><redeem>, <...><sig><...>: the FIRST 65-byte push is taken. */
+/**
+ * Extracts the 65-byte (sig64 + sighash) signature from a wallet-produced signature script.
+ * Accepts <sig>, <sig><redeem> and <...><sig><...>. The FIRST 65-byte push is taken.
+ */
 export function extractSig65(parsePushes, sigscriptHex) {
   const pushes = parsePushes(unhex(sigscriptHex));
   const cand = pushes.filter((p) => p.length === 65);
@@ -96,7 +106,10 @@ export function selectUtxos(utxos, need) {
   throw new Error(`insufficient funds: have ${sum}, need ${need}`);
 }
 
-/** Normalises an RPC utxo entry (from getUtxosByAddresses; wasm UtxoEntryReference) into a plan input. */
+/**
+ * Normalises an RPC utxo entry (from getUtxosByAddresses, a wasm UtxoEntryReference) into a plan
+ * input.
+ */
 export function utxoToInput(e, budget) {
   const u = e.entry ?? e;
   return {
@@ -109,7 +122,7 @@ export function utxoToInput(e, budget) {
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Connects a wasm RpcClient (JSON wRPC). nodeWs empty -> public Resolver. */
+/** Connects a wasm RpcClient (JSON wRPC). An empty nodeWs uses the public Resolver. */
 export async function connectRpc(k, nodeWs, networkId = 'testnet-10') {
   const opts = nodeWs
     ? { url: nodeWs, networkId, encoding: k.Encoding.SerdeJson }
@@ -124,7 +137,10 @@ export async function utxosOf(rpc, address) {
   return r.entries;
 }
 
-/** Waits until outpoint `txid:index` shows up in the UTXO set of `address` (i.e. the tx was accepted). */
+/**
+ * Waits until outpoint `txid:index` shows up in the UTXO set of `address`, which means the tx was
+ * accepted.
+ */
 export async function waitAccepted(rpc, address, txid, index = 0, timeoutMs = 120000) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {

@@ -1,8 +1,8 @@
-// Pure-JS (no wasm, no node built-ins) script + SilverScript ABI helpers.
-// Mirrors kaspa-txscript ScriptBuilder (add_data / add_i64 / add_data_with_push_opcode) and
+// Pure-JS script and SilverScript ABI helpers (no wasm, no node built-ins).
+// They mirror kaspa-txscript ScriptBuilder (add_data, add_i64, add_data_with_push_opcode) and
 // silverscript-abi (encode_entry_sig_script, encode_runtime_state_script) for the ABI subset
-// that KOB uses: int, bool, byte, bytes, pubkey, sig, fixed_bytes, arrays, struct arrays.
-// Runs unchanged in node and in the browser.
+// that KOB uses: int, bool, byte, bytes, pubkey, sig, fixed_bytes, arrays and struct arrays.
+// They run unchanged in node and in the browser.
 
 export const hex = (u8) => Array.from(u8, (b) => b.toString(16).padStart(2, '0')).join('');
 export function unhex(s) {
@@ -21,7 +21,10 @@ export function concat(...parts) {
 export const eq = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 // ---- numbers -------------------------------------------------------------------------------
-/** serialize_i64(v, size): little-endian sign-magnitude; size=undefined -> minimal script number. */
+/**
+ * serialize_i64(v, size): little-endian sign-magnitude.
+ * size=undefined gives the minimal script number.
+ */
 export function serializeI64(value, size) {
   let v = BigInt(value);
   const neg = v < 0n;
@@ -125,7 +128,10 @@ function arrayPayload(item, values, what) {
 }
 
 export class Abi {
-  /** @param artifact parsed silverc artifact JSON; @param contractName key in artifact.contracts */
+  /**
+   * @param artifact Parsed silverc artifact JSON.
+   * @param contractName Key in artifact.contracts.
+   */
   constructor(artifact, contractName) {
     this.artifact = artifact;
     this.name = contractName;
@@ -162,7 +168,7 @@ export class Abi {
       case 'fixed_array': case 'dynamic_array': {
         if (ty.kind === 'fixed_array' && value.length !== ty.len) throw new Error(`${name}: expected ${ty.len} items`);
         if (ty.item.kind === 'struct') {
-          // struct arrays are pushed field-wise: for each field, one dynamic array of that field
+          // Struct arrays are pushed field-wise: one dynamic array per field.
           return concat(...this.structFields(ty.item.name).map((f) =>
             this.pushArg(f.name, { kind: 'dynamic_array', item: f.type }, value.map((o) => o[f.name]))));
         }
@@ -171,8 +177,10 @@ export class Abi {
       default: throw new Error('unsupported arg type ' + ty.kind);
     }
   }
-  /** args (by ABI param order) -> the signature-script prefix: pushed args, then 4-byte dispatch tag.
-   *  The caller appends pushData(redeemScript). */
+  /**
+   * Turns args (in ABI param order) into the signature-script prefix: the pushed args, then the
+   * 4-byte dispatch tag. The caller appends pushData(redeemScript).
+   */
   argsAndTag(entryName, args) {
     const e = this.entry(entryName);
     if (e.params.length !== args.length) throw new Error(`${entryName}: expected ${e.params.length} args, got ${args.length}`);
@@ -184,7 +192,10 @@ export class Abi {
   sigscript(entryName, args, redeemScript) {
     return concat(this.argsAndTag(entryName, args), pushData(redeemScript));
   }
-  /** Runtime-state span bytes (each leaf pushed with an explicit OP_DATAn). values keyed by field name. */
+  /**
+   * Runtime-state span bytes, with each leaf pushed with an explicit OP_DATAn.
+   * `values` is keyed by field name.
+   */
   encodeState(values) {
     const parts = this.contract.runtime_state.fields.map((f) => {
       if (!(f.name in values)) throw new Error('missing state field ' + f.name);

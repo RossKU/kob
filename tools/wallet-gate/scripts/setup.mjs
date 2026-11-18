@@ -1,7 +1,9 @@
-// Setup for the wallet gate (run once per wallet under test):
-//   node scripts/setup.mjs --wallet-address kaspatest:q...   [--label kasware] [--tokens 4] [--bids 4] [--funds 3]
+// Sets up the wallet gate. Run it once per wallet under test:
+//   node scripts/setup.mjs --wallet-address kaspatest:q...   [--label kasware] [--tokens 4]
+//     [--bids 4] [--funds 3]
 //   node scripts/setup.mjs --wallet-pubkey <64 hex x-only>   ...
-// Needs .env with DEV_PRIVATE_KEY (see scripts/keygen.mjs) funded on TN10. Writes state/setup-<pubkey>.json.
+// It needs .env with DEV_PRIVATE_KEY (see scripts/keygen.mjs) funded on TN10.
+// It writes state/setup-<pubkey>.json.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import kaspa from '../lib/node-kaspa.mjs';
@@ -19,7 +21,7 @@ if (!walletPubkey && (args['wallet-address'] || env.WALLET_ADDRESS)) walletPubke
 if (!walletPubkey || !/^[0-9a-f]{64}$/i.test(walletPubkey)) throw new Error('give --wallet-address kaspatest:q... or --wallet-pubkey <64 hex> (Schnorr x-only key of the wallet account)');
 walletPubkey = walletPubkey.toLowerCase();
 
-// serialize concurrent setups: they all spend the dev key's UTXOs
+// Serialize concurrent setups, because they all spend the dev key's UTXOs.
 import { mkdirSync as _mk, rmSync as _rm } from 'node:fs';
 const LOCK = join(ROOT, 'state', '.setup.lock');
 _mk(join(ROOT, 'state'), { recursive: true });

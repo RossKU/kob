@@ -1,5 +1,6 @@
-// OFFLINE self-check (no network, no wallet): verifies encoders against kaspa-wasm's ScriptBuilder,
-// contract templates, tx shapes, fee formula and sigscript/signature placement using a local key.
+// Offline self-check (no network, no wallet) using a local key. It verifies the encoders against
+// kaspa-wasm's ScriptBuilder, the contract templates, the tx shapes, the fee formula and the
+// sigscript and signature placement.
 //   node test/selfcheck.mjs
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -51,7 +52,7 @@ ok('BidOrder patching: maker + tokenCovId land in the redeem script', () => {
   assert.ok(!h.includes(C.SENTINEL_MAKER) && !h.includes(C.SENTINEL_TOKCOV));
 });
 
-// fake setup + UTXOs
+// Fake setup and UTXOs.
 const setup = { walletPubkey: W, walletAddress: walletAddr, tokenCovId: TOKCOV, extHex: C.EXT_HEX, tokenUnits: '1000', tokens: [], bids: [] };
 const bid = C.bidRedeem(bidT, { maker: W, tokenCovId: TOKCOV });
 const tokRedeem = C.kcc20Redeem(abiK, C.kcc20State({ amount: 1000, owner: W, ext: C.EXT_HEX }));
@@ -82,7 +83,8 @@ for (const t of tests) {
       assert.ok(S.eq(pushes[0], sig65) && S.eq(pushes[2], bid.redeem));
     }
     if (t.id === 'T3') {
-      // amounts[8], owners[32], owner_scheme[1] (0x01 0x00), borrow_scheme[1], guard[32], ext[32], witness[66], tag[4], redeem[2915]
+      // Field sizes: amounts[8], owners[32], owner_scheme[1] (0x01 0x00), borrow_scheme[1],
+      // guard[32], ext[32], witness[66], tag[4], redeem[2915].
       assert.deepEqual(pushes.map((p) => p.length), [8, 32, 1, 1, 32, 32, 66, 4, 2915]);
       assert.equal(pushes[6][0], 0x00);
       assert.ok(S.eq(pushes[6].slice(1), sig65));

@@ -1,7 +1,7 @@
-// Drives the REAL gate page in headless Chrome against TN10, with a MOCK KasWare (window.kasware) that signs with the
-// local SIM key through kaspa-wasm. Verifies the page logic (build -> wallet sign -> extract -> assemble -> broadcast -> accept)
-// without any real wallet. Real-wallet runs use test/wallets/*.mjs.
-//   node test/page-mock.mjs
+// Drives the real gate page in headless Chrome against TN10, with a mock KasWare (window.kasware)
+// that signs with the local SIM key through kaspa-wasm.
+// It verifies the page logic (build, wallet sign, extract, assemble, broadcast, accept) without any
+// real wallet. Real-wallet runs use test/wallets/*.mjs.
 import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,7 +21,7 @@ try {
   page.on('console', (m) => { if (m.type() === 'error') console.log('[page error]', m.text()); });
   page.on('pageerror', (e) => console.log('[pageerror]', e.message));
   await page.addInitScript(({ sk, pub, addr }) => {
-    // mock KasWare: signs input(s) with the local key via the page's kaspa-wasm
+    // Mock KasWare: signs the inputs with the local key via the page's kaspa-wasm.
     window.kasware = {
       requestAccounts: async () => [addr], getNetwork: async () => 'testnet-10', switchNetwork: async () => 'testnet-10',
       getPublicKey: async () => pub, getVersion: async () => 'mock-1.0',

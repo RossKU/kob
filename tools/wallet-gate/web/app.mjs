@@ -117,7 +117,11 @@ async function pickUtxo(id, skip = 0) {
   return null;
 }
 
-/** Runs one test end-to-end. opts: { skip, sighashType, kastleVariant, kaspireMode, popup, displayed, note, useWalletTx, recipient } */
+/**
+ * Runs one test end-to-end.
+ * opts: { skip, sighashType, kastleVariant, kaspireMode, popup, displayed, note, useWalletTx,
+ * recipient }
+ */
 async function runTest(id, opts = {}) {
   if (!G.adapter || !G.wallet) throw new Error('connect a wallet first');
   if (!G.ctx) throw new Error('no setup loaded for this wallet key');
@@ -214,11 +218,12 @@ async function runTest(id, opts = {}) {
 }
 
 async function recipientDefault() {
-  // "new owner" for T3 = the dev pubkey when the server exposes it, else a fixed dummy x-only key
+  // The new owner for T3 is the dev pubkey when the server exposes it.
+  // Otherwise it is a fixed dummy x-only key.
   try { const c = await (await fetch('/api/config')).json(); if (c.recipientPubkey) return c.recipientPubkey; } catch { /* ignore */ }
   return '5b'.repeat(32);
 }
-// key-order independent JSON (wallets may re-serialise with sorted keys)
+// JSON that does not depend on key order, because wallets may re-serialise with sorted keys.
 const stable = (v) => JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([p], [q]) => (p < q ? -1 : 1))) : x));
 const safeParse = (x) => { try { return typeof x === 'string' ? JSON.parse(x) : x; } catch { return null; } };
 

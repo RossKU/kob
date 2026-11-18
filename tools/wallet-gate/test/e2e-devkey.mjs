@@ -1,6 +1,8 @@
-// LIVE end-to-end on TN10 with a LOCAL key standing in for the wallet (no browser, no wallet):
-//   setup (if needed) -> T1 P2PK spend, T2 BidOrder.cancel, T3 KCC-20 transfer -> submit -> wait for acceptance.
-// Proves the tx shapes / sigscript assembly the page will broadcast are valid on the real network.
+// Live end-to-end test on TN10 with a local key standing in for the wallet (no browser, no wallet).
+// It runs setup (if needed), then T1 P2PK spend, T2 BidOrder.cancel and T3 KCC-20 transfer, submits
+// them and waits for acceptance.
+// It proves that the tx shapes and sigscript assembly the page will broadcast are valid on the real
+// network.
 //   node test/e2e-devkey.mjs [--fresh]
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

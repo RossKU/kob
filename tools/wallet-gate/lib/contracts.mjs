@@ -1,4 +1,4 @@
-// KOB wallet-gate contract helpers: KCC-20 reference token + BidOrder (SilverScript v1.0.0).
+// KOB wallet-gate contract helpers: the KCC-20 reference token and BidOrder (SilverScript v1.0.0).
 // Pure JS except where a kaspa-wasm namespace `k` is passed in (P2SH script hashing).
 import { Abi, concat, eq, hex, unhex, kcc20Redeem, kcc20State, OWNER_P2PK_SCHNORR } from './script.mjs';
 
@@ -81,7 +81,7 @@ export function pubkeyOfAddress(k, address) {
 
 export { kcc20Redeem, kcc20State, OWNER_P2PK_SCHNORR, concat, eq, hex, unhex };
 
-/** Sigscript builders -------------------------------------------------------------------------*/
+// ---- sigscript builders ---------------------------------------------------
 
 /** BidOrder.cancel(sig s): <sig65> <tag> <redeem>. sig65 = 64B schnorr + sighash byte. */
 export function bidCancelSigscript(bid, sig65) {
@@ -92,7 +92,10 @@ export function bidCancelArgsAndTag(bid, sig65) {
   return bid.abi.argsAndTag('cancel', [sig65]);
 }
 
-/** KCC-20 `transfer(State[] next_states, bytes witness)` with owner scheme 0x00: witness = 0x00 || sig65. */
+/**
+ * KCC-20 `transfer(State[] next_states, bytes witness)` with owner scheme 0x00.
+ * The witness is 0x00 || sig65.
+ */
 export function kcc20TransferArgs(nextStates, sig65) {
   return [nextStates, concat(Uint8Array.of(0x00), sig65)];
 }
