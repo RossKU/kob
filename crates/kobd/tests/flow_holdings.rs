@@ -1,5 +1,6 @@
-//! Token holdings (`GET /v1/token-utxos`): user-to-user transfers of tokens in both families, spends, reorgs,
-//! order custody and strays, tokens outside the allowlist (tracked too, not maintained), the record log, and the `scale` listing rule on real orders.
+//! Token holdings (`GET /v1/token-utxos`): user-to-user transfers of tokens in both families,
+//! spends, reorgs, order custody and strays, tokens outside the allowlist (tracked too, not
+//! maintained), the record log, and the `scale` listing rule on real orders.
 
 mod common;
 
@@ -319,10 +320,12 @@ async fn the_operators_own_kron_tokens_are_read_for_maintenance() {
     own_tokens_for_maintenance(Family::Kron).await;
 }
 
-/// A token genesis has no transfer leader, so the issuer's outputs used to be known to the issuing browser only: from another
-/// browser (or the CLI) the issuer could neither list nor sell them. The genesis names its states in its payload
-/// (`kob_protocol::genesis_states`): the indexer lists each output whose P2SH proves its state, to the owner and by token, from the
-/// block the genesis is in, and the first spend (a send of the very state the indexer served) is followed like any holding.
+/// A token genesis has no transfer leader, so without more only the issuing browser would know the
+/// issuer's outputs: from another browser (or the CLI) the issuer could neither list nor sell them.
+/// The genesis names its states in its payload (`kob_protocol::genesis_states`): the indexer lists
+/// each output whose P2SH proves its state, to the owner and by token, from the block the genesis
+/// is in, and the first spend (a send of the very state the indexer served) is followed like any
+/// holding.
 #[tokio::test]
 async fn the_outputs_of_a_token_genesis_are_the_owners_holdings_from_the_first_block() {
     use kob_protocol::issue::{build_creation, FundingUtxo, Holder, IssueSpec};

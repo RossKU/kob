@@ -1,8 +1,10 @@
-//! The published public-mint build of the KCC-20 reference (`KCC20PublicMint`: the `KCC20` actor of upstream's
-//! `KCC20PublicMint` app, its holders' state opening with the context `gen__kcc20_template`) through the chain: an ask and a
-//! bid on such a token are created, indexed, listed for the matcher (whose tick plans their crossing) and filled; the
-//! indexer proves the token outputs of the fill under the program and records the custody chain. Nothing in the executor
-//! names the program: it is one more embedded template (its KCC-1 actor-type handle) with its record-log code.
+//! The published public-mint build of the KCC-20 reference (`KCC20PublicMint`: the `KCC20` actor of
+//! upstream's `KCC20PublicMint` app, its holders' state opening with the context
+//! `gen__kcc20_template`) through the chain: an ask and a bid on such a token are created, indexed,
+//! listed for the matcher (whose tick plans their crossing) and filled; the indexer proves the
+//! token outputs of the fill under the program and records the custody chain. Nothing in the
+//! executor names the program: it is one more embedded template (its KCC-1 actor-type handle) with
+//! its record-log code.
 
 mod common;
 

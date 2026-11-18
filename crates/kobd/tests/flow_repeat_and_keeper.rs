@@ -1,13 +1,17 @@
 //! Repeat entries and keeper updates, on the real script engine:
 //!
-//! * a fill of a repeating entry larger than the re-arms it has left is refused while at least one minimum fill of them is
-//!   left (the builder and the covenant): the fill of the re-arms left is booked, so no re-arm is lost; with fewer left
-//!   than a minimum fill (or none) the fill is not booked;
-//! * a booked exit's `rptUntil` counts from the entry UTXO's DAA, whatever time argument the filler passes;
-//! * a keeper's tip of a conditional bid (trailing buy stop) never comes out of what buying its amount needs;
-//! * a trailing ratchet by the smaller of two qualifying fills of one transaction moves the stop by fewer steps, never past
-//!   what the fills justify, and the next ratchet after `trailWait` reaches the justified level (the bound of a keeper's
-//!   choice of evidence, `docs/spec/matcher.md` §4.5).
+//! * a fill of a repeating entry larger than the re-arms it has left is refused while at least one
+//!   minimum fill of them is left (the builder and the covenant): the fill of the re-arms left is
+//!   booked, so no re-arm is lost; with fewer left than a minimum fill (or none) the fill is not
+//!   booked;
+//! * a booked exit's `rptUntil` counts from the entry UTXO's DAA, whatever time argument the filler
+//!   passes;
+//! * a keeper's tip of a conditional bid (trailing buy stop) never comes out of what buying its
+//!   amount needs;
+//! * a trailing ratchet by the smaller of two qualifying fills of one transaction moves the stop by
+//!   fewer steps, never past what the fills justify, and the next ratchet after `trailWait` reaches
+//!   the justified level (the bound of a keeper's choice of evidence, `docs/spec/matcher.md`
+//!   §4.5).
 
 mod common;
 

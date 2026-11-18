@@ -1,6 +1,6 @@
-//! If-done orders (IFD / IFO) on both sides, exits booked without a new placement record, the repeat cycles
-//! (`rptAmount`, `rptUntil`, entry <-> exit merges, empty repeating entries, close) and a stop entry triggered by the resting
-//! fill of its own transaction.
+//! If-done orders (IFD / IFO) on both sides, exits booked without a new placement record, the
+//! repeat cycles (`rptAmount`, `rptUntil`, entry <-> exit merges, empty repeating entries, close)
+//! and a stop entry triggered by the resting fill of its own transaction.
 
 mod common;
 

@@ -1,10 +1,12 @@
-//! KaspaRocket's token program (`KaspaRocketToken11458`: the `KCC20` actor of upstream's `KCC20PublicMint` app built with 10
-//! token inputs / 10 token outputs, an 11,458-byte redeem script per token input) through the chain: an ask and a bid on such a
-//! token are created, indexed, listed for the matcher (whose tick plans their crossing) and filled; the indexer proves the
-//! token outputs of the fill under the program and records the custody chain; and a plain transfer at the program's full
-//! 10 / 10 (ten 11.5 KB token inputs, ten outputs) is followed: every output is proven under the program and the inputs are
-//! spent. Nothing in the executor names the program: it is one more embedded template (its KCC-1 actor-type handle) with its
-//! record-log code.
+//! KaspaRocket's token program (`KaspaRocketToken11458`: the `KCC20` actor of upstream's
+//! `KCC20PublicMint` app built with 10 token inputs / 10 token outputs, an 11,458-byte redeem
+//! script per token input) through the chain: an ask and a bid on such a token are created,
+//! indexed, listed for the matcher (whose tick plans their crossing) and filled; the indexer proves
+//! the token outputs of the fill under the program and records the custody chain; and a plain
+//! transfer at the program's full 10 / 10 (ten 11.5 KB token inputs, ten outputs) is followed:
+//! every output is proven under the program and the inputs are spent. Nothing in the executor names
+//! the program: it is one more embedded template (its KCC-1 actor-type handle) with its record-log
+//! code.
 
 mod common;
 

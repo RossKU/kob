@@ -697,8 +697,8 @@ fn assert_no_repeated_failure(node: &MockNode) {
 #[tokio::test]
 async fn a_follower_behind_a_flood_pages_through_a_backlog_it_cannot_fetch_at_once() {
     let c = Ctx::new();
-    // 80 blocks of 40 noise transactions (3,200 in all) with orders in between, behind a link that carries
-    // 150 transactions per request: the whole backlog in one batch (the old follower's request) never arrives
+    // 80 blocks of 40 noise transactions (3,200 in all) with orders in between, behind a link that
+    // carries 150 transactions per request: the whole backlog in one batch never arrives
     let mut salt = 0;
     let mut creates = vec![];
     for i in 0..80u64 {

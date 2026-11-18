@@ -447,9 +447,9 @@ async fn a_sweep_record_on_anything_but_the_same_order_is_refused() {
     let _ = oi;
 }
 
-/// L2 for an ask: a fill that names an exact look-alike of the custody (a stray of the exact amount: the contract takes either)
-/// leaves the custody unspent. The continuation's custody is the order's and the old one a stray, so the ask stays liquidity; the
-/// maker's cancel sweeps both.
+/// For an ask, a fill that names an exact look-alike of the custody (a stray of the exact amount:
+/// the contract takes either) leaves the custody unspent. The continuation's custody is the order's
+/// and the old one a stray, so the ask stays liquidity; the maker's cancel sweeps both.
 #[tokio::test]
 async fn a_fill_naming_a_look_alike_of_the_custody_keeps_the_ask_and_strays_the_old_one() {
     let c = Ctx::new();
