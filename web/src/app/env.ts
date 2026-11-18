@@ -163,7 +163,10 @@ export interface MarketPart {
   dropped: DroppedBookOrder[];
   bookUnavailable: boolean;
   lastFillPrice: bigint | null;
-  /** The node-confirmed UTXOs of the book's orders, by covenant id in lower case (what a take spends). */
+  /**
+   * The node-confirmed UTXOs of the book's orders, by covenant id in lower case. A take spends
+   * them.
+   */
   orders?: ReadonlyMap<string, BookOrderUtxo>;
 }
 
@@ -278,8 +281,8 @@ export function assemblePlanEnv(
   const guardsUnavailable: ('own-orders' | 'book')[] = [];
   if (parts.market.bookUnavailable) guardsUnavailable.push('book');
   if (parts.holdings && parts.holdings.ownOrders === null) guardsUnavailable.push('own-orders');
-  // An order this page has just taken (its outpoint spent by a transaction not yet in a block) is
-  // gone: out of the book and of what can be taken.
+  // An order this page has just taken, its outpoint spent by a transaction not yet in a block, is
+  // gone. It is out of the book and of what can be taken.
   const orders = new Map<string, BookOrderUtxo>();
   const taken = new Set<string>();
   for (const [k, o] of parts.market.orders ?? []) {
@@ -350,7 +353,7 @@ export function dropPendingSpends<E extends PlanEnv>(e: E): E {
   const funding = pendingSpends.funding(e.funding, e.maker);
   const tokenUtxos = pendingSpends.tokens(e.tokenUtxos, e.maker, e.token.covenantId);
   const pair = isPairEnv(e) ? { ...e.pair, quoteTokenUtxos: pendingSpends.tokens(e.pair.quoteTokenUtxos, e.maker, e.pair.quote.covenantId) } : null;
-  // the transactions sent since `e` was read make fresh coins too
+  // The transactions sent since `e` was read make fresh coins too.
   const fresh = freshTxids();
   const sameFresh = fresh.size === (e.freshTxids?.size ?? 0) && [...fresh].every((id) => e.freshTxids!.has(id));
   if (funding === e.funding && tokenUtxos === e.tokenUtxos && sameFresh && (!pair || pair.quoteTokenUtxos === (e as unknown as PairPlanEnv).pair.quoteTokenUtxos)) return e;

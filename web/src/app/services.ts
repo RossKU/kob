@@ -117,7 +117,7 @@ function noIndexer(): IndexerApi {
  */
 export async function createServices(config: AppConfig, o: CreateServicesOverrides = {}): Promise<Services> {
   const fetchFn = o.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
-  // no node URL: the resolvers are asked for a public node while the wasm modules load
+  // Without a node URL, the resolvers are asked for a public node while the wasm modules load.
   if (!o.node && config.nodeUrl.trim() === '') void publicNodePicker().pick(config.network);
   const [kob, sdk] = await Promise.all([
     o.kob ? Promise.resolve(o.kob) : loadKob(),

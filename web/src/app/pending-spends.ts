@@ -12,9 +12,9 @@
 // exactly because it built the transaction.
 //
 // Their token outputs back to the key, a placement's token change or a merge's output, count the
-// same way: the token reader lists only what the node verifies, so without them the next order of a
+// same way. The token reader lists only what the node verifies. Without them the next order of a
 // sell ladder, or the sale after a merge, would be planned without the tokens the last transaction
-// returned (TN10 2026-11-14: "you hold 0" at level 3).
+// returned.
 //
 // The preparation output 0 of an unfinished token creation (data/creations.ts) is reserved for its
 // genesis. While its record exists it never funds anything else, on any page; the Create token page
@@ -40,7 +40,7 @@ interface OwnOutput {
 
 interface OwnToken {
   utxo: TokenUtxo;
-  /** the key that owns it */
+  /** The key that owns it. */
   pubkey: string;
   scriptPublicKey: string;
   until: number;
@@ -101,8 +101,8 @@ export class PendingSpends {
   }
 
   /**
-   * The token outputs of a transaction the node accepted that belong to `pubkey` by itself: the
-   * caller derived each state from the built transaction and checked that the output's script
+   * Adds the token outputs of a transaction the node accepted that belong to `pubkey` by itself.
+   * The caller derived each state from the built transaction and checked that the output's script
    * commits to it (data/token-tracker.ts `trackFromBuilt`). They are token UTXOs of that key until
    * the node lists them.
    */
