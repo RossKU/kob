@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadKobNode } from './wasm.node';
 import {
-  curveNumbers, curveProblems, curveSteps, defaultSalePrice, tablePreview, curveTable, currentLevel, defaultSaleForm, keepPercentText, levelSizes, parsePercent, parseSale, saleSplit, stepGeometry,
+  CHROMATIC_MAX_OCTAVES, curveNumbers, curveProblems, curveSpecOfSale, curveSteps, defaultSalePrice, tablePreview, curveTable, currentLevel, defaultSaleForm, keepPercentText, levelSizes, parsePercent, parseSale, saleSplit, stepGeometry,
 } from './curve';
 
 const kob = loadKobNode();
@@ -113,6 +113,52 @@ describe('sale split ("Keep in my wallet")', () => {
     expect(parseSale({ ...f, mode: 'ask', levels: 'x', multiple: 'x', price: '2.5' }, 10n, 0)).toMatchObject({ issues: [], parsed: { sell: 10n, price: 250_000_000n, total: 25n * KAS } });
     expect(parseSale({ ...f, mode: 'ask', price: '' }, 10n, 0).issues.map((i) => i.code)).toEqual(['sale.price.invalid']);
     expect(defaultSalePrice(1_000_000n * WHOLE, SCALE)).toBe(1_000_000n);
+  });
+});
+
+describe('chromatic curve (one semitone per level)', () => {
+  const chromatic = (amount: bigint, scale: bigint, octaves: number, total = 10_000n * KAS) =>
+    curveTable(kob, { amount, levels: 12 * octaves + 1, total, multipleMilli: 5000n, scale, shape: 'chromatic', octaves });
+
+  it('is the protocol table: the same vector as crates/kob-protocol/tests/curve.rs and the CLI', () => {
+    const t = chromatic(2_500_000_000n, 100n, 1);
+    expect(t.table).toEqual([27634n, 29278n, 31018n, 32863n, 34817n, 36888n, 39081n, 41405n, 43867n, 46475n, 49239n, 52167n, 55268n]);
+    expect(t.realised).toBeLessThanOrEqual(10_000n * KAS);
+  });
+
+  it('doubles every 12 levels over 1 to 8 octaves, the top 2^octaves times the start', () => {
+    for (let n = 1; n <= CHROMATIC_MAX_OCTAVES; n++) {
+      const t = chromatic(1_000_000n * WHOLE, SCALE, n);
+      expect(t.table).toHaveLength(12 * n + 1);
+      for (let i = 12; i < t.table.length; i++) expect(t.table[i]).toBe(2n * t.table[i - 12]!);
+      for (let i = 1; i < t.table.length; i++) expect(t.table[i]! > t.table[i - 1]!).toBe(true);
+      expect(t.table[12 * n]).toBe(t.table[0]! << BigInt(n));
+      expect(t.realised).toBeLessThanOrEqual(10_000n * KAS);
+    }
+  });
+
+  it('has fewer levels when the amount is small, and refuses 0 or 9 octaves', () => {
+    expect(chromatic(7n, 1n, 1, 700n * KAS).table).toHaveLength(7);
+    expect(() => chromatic(100n, 1n, 0)).toThrow(/octaves/);
+    expect(() => chromatic(100n, 1n, 9)).toThrow(/octaves/);
+  });
+
+  it('validates the octaves of the sale form and builds its spec (levels and multiple not used)', () => {
+    const f = { ...defaultSaleForm(), mode: 'curve' as const, shape: 'chromatic' as const };
+    const ok = parseSale(f, 1_000n * WHOLE, 8);
+    expect(ok.issues).toEqual([]);
+    expect(ok.parsed).toMatchObject({ mode: 'curve', shape: 'chromatic', octaves: 2, levels: 25, total: 10_000n * KAS });
+    expect(parseSale({ ...f, octaves: '8', levels: 'x', multiple: 'x' }, 1_000n * WHOLE, 8).parsed).toMatchObject({ octaves: 8, levels: 97 });
+    const codes = (octaves: string) => parseSale({ ...f, octaves }, 1_000n * WHOLE, 8).issues.map((i) => [i.code, i.field]);
+    for (const bad of ['0', '9', 'x', '', '1.5', '-1']) expect(codes(bad)).toEqual([['sale.octaves.invalid', 'sale.octaves']]);
+    // the spec gives the same table as a direct call
+    const spec = curveSpecOfSale(ok.parsed!, SCALE);
+    expect(spec).toMatchObject({ shape: 'chromatic', octaves: 2, levels: 25 });
+    expect(curveTable(kob, spec).table).toEqual(chromatic(1_000n * WHOLE, SCALE, 2).table);
+    // a linear sale ignores the octaves; a one-price sale is never chromatic
+    expect(parseSale({ ...f, shape: 'linear', octaves: 'x' }, 1_000n * WHOLE, 8).parsed).toMatchObject({ shape: 'linear', octaves: 0, levels: 100 });
+    expect(parseSale({ ...f, mode: 'ask', octaves: 'x', price: '1' }, 10n, 0).parsed).toMatchObject({ shape: 'linear' });
+    expect(curveSpecOfSale(parseSale({ ...f, shape: 'linear' }, 1_000n * WHOLE, 8).parsed!, SCALE).shape).toBeUndefined();
   });
 });
 

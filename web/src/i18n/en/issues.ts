@@ -269,6 +269,7 @@ export default {
   'issues.sale.price.invalid': 'Enter the price per token in KAS.',
   'issues.sale.levels.invalid': 'Levels is a whole number from 1 to {max}.',
   'issues.sale.multiple.invalid': 'The last level is at least the first (1 or more).',
+  'issues.sale.octaves.invalid': 'Octaves is a whole number from 1 to {max}.',
   'issues.holders.too_many': 'At most {max} holders can receive tokens in the issuance.',
   'issues.holders.consolidation': 'With {holders} holders, moving these token outputs together later takes several transfers of at most {maxInputs} inputs each.',
   'issues.holders.sum_mismatch': 'The holders receive {holders} in total, but the supply is {supply}.',

@@ -13,7 +13,7 @@ import {
 } from './issue';
 import type { KeyUtxo } from './types';
 import { decodeDeclaration, verifyLaunchProof } from './kcc23';
-import { defaultSaleForm, type SaleForm } from './curve';
+import { curveTable, defaultSaleForm, type SaleForm } from './curve';
 
 const kob = loadKobNode();
 const limits: IssueLimits = issueLimits(kob);
@@ -586,6 +586,16 @@ describe('"After creation": a sale', () => {
     ]);
     expect(plan.token.outputs[1]!.owner).toBe(maker);
     expect(plan.curve!.state.state.table).toHaveLength(50);
+    signAndValidate(plan);
+  });
+
+  it('sells on a chromatic curve: the genesis curve holds the protocol chromatic table', () => {
+    const plan = planIssue(kob, form({ supply: '1000000', sale: sale({ mode: 'curve', shape: 'chromatic', octaves: '3', keepPct: '10' }) }), opts());
+    const sell = 900_000n * 100_000_000n;
+    const want = curveTable(kob, { amount: sell, levels: 37, total: 10_000n * KAS, multipleMilli: 5000n, scale: 100_000_000n, shape: 'chromatic', octaves: 3 });
+    expect(plan.curve!.state.state.table).toEqual(want.table.map(String));
+    expect(plan.curve!.state.state.levelSize).toBe(want.levelSize.toString());
+    expect(plan.sale!.curve!.numbers).toMatchObject({ levels: 37, first: want.table[0], last: want.table[0]! << 3n });
     signAndValidate(plan);
   });
 

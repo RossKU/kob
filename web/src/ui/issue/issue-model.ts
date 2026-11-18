@@ -4,7 +4,7 @@ import {
   formatUnits, parseDecimal, registryEntryFromIssue, type IssueForm, type IssueLimits, type IssuePlan, type IssueProgramChoice, type IssueToken,
 } from '../../kob/issue';
 import {
-  curveNumbers, curveSteps, curveTable, defaultSaleForm, defaultSalePrice, keepPercentText, parsePercent, parseSale, saleSplit,
+  curveNumbers, curveSpecOfSale, curveSteps, curveTable, defaultSaleForm, defaultSalePrice, keepPercentText, parsePercent, parseSale, saleSplit,
   type CurveNumbers, type CurveStep, type ParsedSale, type SaleForm,
 } from '../../kob/curve';
 import type { PlanIssue } from '../../kob/plan-types';
@@ -283,7 +283,7 @@ export function salePreview(kob: KobWasm, state: IssueUiState): SalePreview | nu
   let curveError: string | null = null;
   if (parsed && parsed.mode === 'curve') {
     try {
-      const t = curveTable(kob, { amount: parsed.sell, levels: parsed.levels, total: parsed.total, multipleMilli: parsed.multipleMilli, scale });
+      const t = curveTable(kob, curveSpecOfSale(parsed, scale));
       curve = { steps: curveSteps(t.levelSize, t.table, parsed.sell), numbers: curveNumbers(t, parsed.sell, scale) };
     } catch (e) {
       curveError = e instanceof Error ? e.message : String(e);

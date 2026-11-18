@@ -6,10 +6,18 @@ import type { PlanIssue } from './plan-types';
 import type { CurveAskState, I64 } from './types';
 import { KobError, type KobWasm } from './wasm';
 
-/** The UI defaults (spec §7): 100 levels, 10,000 KAS if sold out, last level 5x the first, keep 0%. */
-export const CURVE_DEFAULTS = { levels: '100', totalKas: '10000', multiple: '5', keepPct: '0' } as const;
+/** The UI defaults (spec §7): 100 levels, 10,000 KAS if sold out, last level 5x the first, keep 0%; a chromatic curve 2 octaves. */
+export const CURVE_DEFAULTS = { levels: '100', totalKas: '10000', multiple: '5', keepPct: '0', octaves: '2' } as const;
 /** Gates: 1 to 1,000 levels. */
 export const CURVE_MAX_LEVELS = 1000;
+/** A chromatic curve spans 1 to 8 octaves (`defaults::CHROMATIC_MAX_OCTAVES`): 12 x octaves + 1 levels. */
+export const CHROMATIC_MAX_OCTAVES = 8;
+
+/**
+ * The table's shape (`defaults::CurveShape`): linear is geometric from the first level to `multiple` times it over `levels`; chromatic
+ * climbs one semitone (2^(1/12)) per level over `octaves` octaves, every 12 levels exactly double.
+ */
+export type CurveShape = 'linear' | 'chromatic';
 /** A fill touches at most 8 levels (spec §3). */
 export const CURVE_MAX_CROSS = 8;
 
@@ -26,6 +34,9 @@ export interface CurveSpec {
   /** base units per whole token */
   scale: bigint;
   tip?: bigint;
+  /** default linear; chromatic takes `octaves` (1 to 8) and does not use `levels` and `multipleMilli` */
+  shape?: CurveShape;
+  octaves?: number;
 }
 
 /** `defaults::curve_table`: base units per level, sompi per whole token per level, and what a sell-out pays. */
@@ -68,6 +79,7 @@ export function curveTable(kob: KobWasm, spec: CurveSpec): CurveTable {
           multipleMilli: spec.multipleMilli.toString(),
           scale: spec.scale.toString(),
           tip: (spec.tip ?? 0n).toString(),
+          ...(spec.shape === 'chromatic' ? { shape: 'chromatic', octaves: spec.octaves ?? 0 } : {}),
         }),
       ),
     ) as { levelSize: I64; table: I64[]; realised: I64 };
@@ -325,12 +337,15 @@ export interface SaleForm {
   totalKas: string;
   /** last level / first level */
   multiple: string;
+  /** a curve's shape; a chromatic one takes `octaves` (1 to 8) in place of levels and multiple */
+  shape: CurveShape;
+  octaves: string;
   /** a one-price sale: KAS per whole token */
   price: string;
 }
 
 export function defaultSaleForm(): SaleForm {
-  return { mode: 'keep', keepPct: CURVE_DEFAULTS.keepPct, amount: '', levels: CURVE_DEFAULTS.levels, totalKas: CURVE_DEFAULTS.totalKas, multiple: CURVE_DEFAULTS.multiple, price: '' };
+  return { mode: 'keep', keepPct: CURVE_DEFAULTS.keepPct, amount: '', levels: CURVE_DEFAULTS.levels, totalKas: CURVE_DEFAULTS.totalKas, multiple: CURVE_DEFAULTS.multiple, shape: 'linear', octaves: CURVE_DEFAULTS.octaves, price: '' };
 }
 
 /** A sale form after parsing. */
@@ -339,12 +354,21 @@ export interface ParsedSale {
   /** base units for sale and kept */
   sell: bigint;
   keep: bigint;
+  /** a chromatic curve: 12 x octaves + 1 */
   levels: number;
   /** sompi if sold out */
   total: bigint;
   multipleMilli: bigint;
+  shape: CurveShape;
+  /** a chromatic curve's octaves (0 otherwise) */
+  octaves: number;
   /** a one-price sale: sompi per whole token */
   price: bigint;
+}
+
+/** The curve spec of a parsed curve sale at `scale`. */
+export function curveSpecOfSale(p: ParsedSale, scale: bigint): CurveSpec {
+  return { amount: p.sell, levels: p.levels, total: p.total, multipleMilli: p.multipleMilli, scale, ...(p.shape === 'chromatic' ? { shape: 'chromatic', octaves: p.octaves } : {}) };
 }
 
 const issue = (code: string, message: string, field: string, params?: PlanIssue['params']): PlanIssue => ({ code, severity: 'error', message, field: `sale.${field}`, ...(params ? { params } : {}) });
@@ -381,7 +405,13 @@ export function parseSale(f: SaleForm, share: bigint | null, decimals: number): 
   }
   let levels = 1;
   let multipleMilli = 1000n;
-  if (f.mode === 'curve') {
+  const shape: CurveShape = f.mode === 'curve' && f.shape === 'chromatic' ? 'chromatic' : 'linear';
+  let octaves = 0;
+  if (shape === 'chromatic') {
+    octaves = /^\d$/.test(f.octaves.trim()) ? Number(f.octaves.trim()) : Number.NaN;
+    if (!(octaves >= 1 && octaves <= CHROMATIC_MAX_OCTAVES)) issues.push(issue('sale.octaves.invalid', `Octaves is a whole number from 1 to ${CHROMATIC_MAX_OCTAVES}.`, 'octaves', { max: CHROMATIC_MAX_OCTAVES }));
+    else levels = 12 * octaves + 1;
+  } else if (f.mode === 'curve') {
     levels = /^\d{1,4}$/.test(f.levels.trim()) ? Number(f.levels.trim()) : Number.NaN;
     if (!(levels >= 1 && levels <= CURVE_MAX_LEVELS)) issues.push(issue('sale.levels.invalid', `Levels is a whole number from 1 to ${CURVE_MAX_LEVELS}.`, 'levels', { max: CURVE_MAX_LEVELS }));
     const m = parseDecimal(f.multiple, 3);
@@ -390,7 +420,7 @@ export function parseSale(f: SaleForm, share: bigint | null, decimals: number): 
   }
   if (issues.length || sell === null || share === null || 'error' in total) return { issues, parsed: null };
   const sold = f.mode === 'ask' ? (sell * price + (10n ** BigInt(decimals) - 1n)) / 10n ** BigInt(decimals) : total.value;
-  return { issues, parsed: { mode: f.mode, sell, keep: share - sell, levels, total: sold, multipleMilli, price } };
+  return { issues, parsed: { mode: f.mode, sell, keep: share - sell, levels, total: sold, multipleMilli, shape, octaves, price } };
 }
 
 /** The default one price of a sale: 10,000 KAS over the amount (sompi per whole token, at least 1). */

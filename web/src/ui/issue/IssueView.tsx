@@ -40,6 +40,7 @@ import { inputAddressOf, recordAccepted } from '../confirm/send';
 import { expectedOutputs } from '../../wallet/sign';
 import type { BuiltTx, Hex } from '../../kob/types';
 import type { PlanIssue } from '../../kob/plan-types';
+import type { CurveShape } from '../../kob/curve';
 import { isKeyOwned } from '../../kob/token-state';
 import type { Services } from '../../app/services';
 import { ConnectBar } from '../shell/WalletButton';
@@ -749,6 +750,7 @@ export function IssueView() {
       </label>
     );
     const n = sale?.curve?.numbers ?? null;
+    const chromatic = u.shape === 'chromatic';
     return (
       <Section title={t('issue.section.after')} data-testid="issue-after">
         <div class="issue-after-options" role="radiogroup" aria-label={t('issue.section.after')}>
@@ -804,8 +806,28 @@ export function IssueView() {
               </div>
             ) : (
               <>
+                <div class="issue-lock-row" data-testid="sale-shape-row">
+                  <span class="help-title">
+                    <strong>{t('issue.sale.shape')}</strong>
+                    <HelpTip label={t('issue.sale.shape')} data-testid="sale-shape-help">{t('issue.sale.shape.hint')}</HelpTip>
+                  </span>
+                  <Segmented<CurveShape>
+                    aria-label={t('issue.sale.shape')}
+                    value={u.shape}
+                    onChange={(v) => setSale({ shape: v })}
+                    options={[
+                      { value: 'linear', label: t('issue.sale.shape.linear'), 'data-testid': 'sale-shape-linear' },
+                      { value: 'chromatic', label: t('issue.sale.shape.chromatic'), 'data-testid': 'sale-shape-chromatic' },
+                    ]}
+                    data-testid="sale-shape"
+                  />
+                </div>
                 <div class="issue-grid issue-grid-3">
-                  <Field label={t('issue.sale.levels')} value={u.levels} onValue={(v) => setSale({ levels: v.trim() })} error={errOf('levels')} inputMode="numeric" data-testid="sale-levels" />
+                  {chromatic ? (
+                    <Field label={t('issue.sale.octaves')} value={u.octaves} onValue={(v) => setSale({ octaves: v.trim() })} error={errOf('octaves')} inputMode="numeric" data-testid="sale-octaves" />
+                  ) : (
+                    <Field label={t('issue.sale.levels')} value={u.levels} onValue={(v) => setSale({ levels: v.trim() })} error={errOf('levels')} inputMode="numeric" data-testid="sale-levels" />
+                  )}
                   <Field
                     label={t('issue.sale.total')}
                     value={u.totalKas}
@@ -815,15 +837,23 @@ export function IssueView() {
                     suffix={<span class="muted">KAS</span>}
                     data-testid="sale-total"
                   />
-                  <Field
-                    label={t('issue.sale.multiple')}
-                    value={u.multiple}
-                    onValue={(v) => setSale({ multiple: v.trim() })}
-                    error={errOf('multiple')}
-                    inputMode="decimal"
-                    suffix={<span class="muted">{t('issue.sale.multiple.suffix')}</span>}
-                    data-testid="sale-multiple"
-                  />
+                  {chromatic ? (
+                    // the levels and the top of the octaves typed (12 x N + 1 levels, the top 2^N times the first)
+                    <div class="issue-sale-total" data-testid="sale-octaves-range">
+                      <span class="small muted">{t('issue.sale.levels')}</span>
+                      <strong>{sale?.parsed?.octaves ? t('issue.sale.octaves.range', { levels: sale.parsed.levels, times: 2 ** sale.parsed.octaves }) : '-'}</strong>
+                    </div>
+                  ) : (
+                    <Field
+                      label={t('issue.sale.multiple')}
+                      value={u.multiple}
+                      onValue={(v) => setSale({ multiple: v.trim() })}
+                      error={errOf('multiple')}
+                      inputMode="decimal"
+                      suffix={<span class="muted">{t('issue.sale.multiple.suffix')}</span>}
+                      data-testid="sale-multiple"
+                    />
+                  )}
                 </div>
                 {sale?.curveError ? <p class="field-error" data-testid="sale-curve-error">{friendlyErrorText(sale.curveError)}</p> : null}
                 {sale?.curve && n ? (

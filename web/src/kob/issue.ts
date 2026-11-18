@@ -20,7 +20,7 @@ import { schnorr } from '@noble/curves/secp256k1.js';
 import { atFloor, capForTotal, describeFee, rememberFeeChoice, withUrgency, type FeeContext, type RatePick } from './fee-policy';
 import type { PlanIssue } from './plan-types';
 import { normalizeTicker } from './registry';
-import { curveMinFill, curveNumbers, curveTable, parseSale, type CurveNumbers, type CurveTable, type SaleForm } from './curve';
+import { curveMinFill, curveNumbers, curveSpecOfSale, curveTable, parseSale, type CurveNumbers, type CurveTable, type SaleForm } from './curve';
 import { LOCK_TIME_THRESHOLD, MAX_UNTIL } from './creator-lock';
 import type { AnyState, BuiltTx, Hex, Kcc20State, KeyUtxo, TokenUtxo, U64 } from './types';
 import { KobError, type KobWasm } from './wasm';
@@ -785,7 +785,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
     if (p.mode === 'curve') {
       let table: CurveTable;
       try {
-        table = curveTable(kob, { amount: p.sell, levels: p.levels, total: p.total, multipleMilli: p.multipleMilli, scale });
+        table = curveTable(kob, curveSpecOfSale(p, scale));
       } catch (e) {
         throw new IssueFormError([issue('sale.curve.invalid', e instanceof Error ? e.message : String(e))]);
       }
