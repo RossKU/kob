@@ -1,18 +1,19 @@
-// The boot screen's mark (BootMark.tsx): KAS is the sun, eight tokens are planets on one slow orbit, and one trade at a time
-// runs as a light from a token into KAS and out to another token; the token it reaches sends the next one (a relay).
-// Coordinates are in units where the drawing spans SPAN across, centred on KAS; angle 0 is the top, clockwise.
+// The boot screen's mark (BootMark.tsx): KAS is the sun, and eight tokens are planets on one slow
+// orbit. One trade at a time runs as a light from a token into KAS and out to another token. The
+// token it reaches sends the next one, as a relay. Coordinates are in units where the drawing
+// spans SPAN across, centred on KAS. Angle 0 is the top, clockwise.
 
 export const SPAN = 170;
-/** radius of the Kaspa icon */
+/** The radius of the Kaspa icon. */
 export const CORE = 30;
-/** radius of the planets' orbit */
+/** The radius of the planets' orbit. */
 export const ORBIT = 50;
 export const PLANETS = 8;
-/** seconds per revolution of the planets */
+/** Seconds per revolution of the planets. */
 export const PERIOD = 24;
-/** seconds one trade takes, token to KAS to token */
+/** Seconds one trade takes, token to KAS to token. */
 export const LEG = 1.05;
-/** seconds between a trade landing and the next one leaving */
+/** Seconds between a trade landing and the next one leaving. */
 export const PAUSE = 0.12;
 
 export type Point = [number, number];
@@ -23,7 +24,10 @@ export function planetAt(i: number, t: number, r = ORBIT): Point {
   return [Math.sin(a) * r, -Math.cos(a) * r];
 }
 
-/** The next planet a trade goes to from `from`: any other one, the one straight across less often. `rnd` returns [0, 1). */
+/**
+ * The next planet a trade goes to from `from`: any other one, and the one straight across less
+ * often. `rnd` returns [0, 1).
+ */
 export function nextPlanet(from: number, rnd: () => number): number {
   for (;;) {
     const b = Math.floor(rnd() * PLANETS) % PLANETS;
@@ -46,14 +50,20 @@ const bent = (a: Point, b: Point): Point => {
 };
 const rim = (p: Point): Point => [(p[0] / ORBIT) * (CORE + 3), (p[1] / ORBIT) * (CORE + 3)];
 
-/** The two curves of a trade at time `t`: token `a` to the rim of KAS, and the rim to token `b` (each over u in [0, 1]). */
+/**
+ * The two curves of a trade at time `t`: token `a` to the rim of KAS, and the rim to token `b`.
+ * Each runs over u in [0, 1].
+ */
 export function tradeCurves(a: number, b: number, t: number): [(u: number) => Point, (u: number) => Point] {
   const pa = planetAt(a, t), pb = planetAt(b, t), ia = rim(pa), ib = rim(pb);
   const c1 = bent(pa, ia), c2 = bent(ib, pb);
   return [(u) => quad(pa, c1, ia, u), (u) => quad(ib, c2, pb, u)];
 }
 
-/** Where the light of a trade is at eased progress `e` in [0, 1] (the first half goes in, the second goes out). */
+/**
+ * Where the light of a trade is at eased progress `e` in [0, 1]. The first half goes in and the
+ * second half goes out.
+ */
 export function lightAt(curves: [(u: number) => Point, (u: number) => Point], e: number): Point {
   return e < 0.5 ? curves[0](e * 2) : curves[1]((e - 0.5) * 2);
 }

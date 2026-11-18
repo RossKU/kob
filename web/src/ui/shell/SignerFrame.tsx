@@ -1,8 +1,12 @@
-// The private-key signer frame (signer.html) in the app: `<iframe sandbox="allow-scripts">` WITHOUT allow-same-origin, so it runs in an opaque
-// origin and this page's scripts can read neither its DOM nor its memory. Mounted while a private-key session exists (removing it forgets the
-// key), shown for the key entry and for each signing request, hidden in between. Messages go through `SignerHost` (wallet/local-key.ts). The
-// frame is as tall as its content (it reports its height), up to what the viewport leaves below the frame's top (less SIGNER_BOTTOM_PX); beyond
-// that it scrolls (the frame's Approve then waits until every part was seen: signer/main.ts).
+// The private-key signer frame (signer.html) in the app: `<iframe sandbox="allow-scripts">`
+// WITHOUT allow-same-origin, so it runs in an opaque origin and this page's scripts can read
+// neither its DOM nor its memory. It is mounted while a private-key session exists, and removing
+// it forgets the key. It is shown for the key entry and for each signing request, and hidden in
+// between. Messages go through `SignerHost` (wallet/local-key.ts).
+//
+// The frame is as tall as its content, which it reports as its height, up to what the viewport
+// leaves below the frame's top (less SIGNER_BOTTOM_PX). Beyond that it scrolls, and the frame's
+// Approve then waits until every part was seen (signer/main.ts).
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { fromSigner } from '../../signer/protocol';
@@ -13,22 +17,28 @@ export type SignerMode = 'closed' | 'connect' | 'hidden' | 'sign';
 
 export interface SignerFrameProps {
   mode: SignerMode;
-  /** the host of the mounted frame (null after unmount) */
+  /** The host of the mounted frame. It is null after unmount. */
   onHost(host: SignerHost | null): void;
   events: SignerHostEvents;
-  /** the user closed the panel */
+  /** The user closed the panel. */
   onClose(): void;
 }
 
 export const SIGNER_URL = `${import.meta.env.BASE_URL}signer.html`;
 
-/** The app's theme for the frame's URL: a change of the fragment reaches the frame without a reload (a reload would forget the key). */
+/**
+ * The app's theme for the frame's URL. A change of the fragment reaches the frame without a reload,
+ * which would forget the key.
+ */
 const themeFragment = (): string => {
   const theme = document.documentElement.dataset.theme;
   return theme === 'dark' || theme === 'light' ? `#theme=${theme}` : '';
 };
 
-/** What the panel takes of the viewport below the frame (the layer's bottom padding and the box's border). */
+/**
+ * What the panel takes of the viewport below the frame: the layer's bottom padding and the box's
+ * border.
+ */
 const SIGNER_BOTTOM_PX = 14;
 
 export function SignerFrame(props: SignerFrameProps) {
@@ -47,7 +57,8 @@ function SignerPanel(props: SignerFrameProps) {
     watch.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     return () => watch.disconnect();
   }, []);
-  // where the frame starts in the viewport (the layer's top padding and the panel's head; measured, as fonts and widths vary)
+  // Where the frame starts in the viewport: the layer's top padding and the panel's head. It is
+  // measured, as fonts and widths vary.
   const frameTop = (): number => Math.ceil(frame.current?.getBoundingClientRect().top ?? 72);
   const [viewport, setViewport] = useState(() => window.innerHeight);
   useEffect(() => {

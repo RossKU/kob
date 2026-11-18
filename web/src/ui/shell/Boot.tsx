@@ -20,13 +20,16 @@ const errorText = (e: unknown): string => {
   return String(e);
 };
 
-/** Clear boot failure page: what happened, technical details, retry, and a reset of the saved settings (a bad setting can prevent a start). */
+/**
+ * A clear boot failure page: what happened, technical details, retry, and a reset of the saved
+ * settings, as a bad setting can prevent a start.
+ */
 export function BootError(props: { error: unknown; onRetry: () => void }) {
   const resetSettings = () => {
     try {
       localStorage.removeItem(SETTINGS_KEY);
     } catch {
-      /* storage blocked: retry anyway */
+      /* Storage is blocked: retry anyway. */
     }
     props.onRetry();
   };
