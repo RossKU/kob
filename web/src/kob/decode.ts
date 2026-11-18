@@ -638,7 +638,10 @@ function splitOrderValue(d: OrderDescription, value: bigint): LockedKas {
 
 const DELIVERY_KEYS = ['mode', 'recvThreshold', 'topupTip', 'bought', 'exitMode', 'exitRecvThreshold', 'exitTopupTip'] as const;
 
-/** The delivery block of an order state; null for asks, `KobIfdBid` and every KRON twin. */
+/**
+ * The delivery block of an order state. `KobIfdAsk` and `KobIfdPair` give their exit's block
+ * (`exit: true`). Other asks, `KobIfdBid` and every KRON twin give null.
+ */
 export function deliveryOf(os: OrderState): DeliveryTerms | null {
   if (familyOfKind(os.kind) === 'kron') return null;
   const s = os.state as unknown as Record<string, string | undefined>;
