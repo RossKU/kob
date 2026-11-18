@@ -1,7 +1,14 @@
-// The activity log's type icons (KOB's own outline set: 24 viewBox, stroke 2, round caps and joins), bare on every page. Shape AND colour tell the kinds apart (never
-// colour alone): placed = a square with a plus (white-ish on dark, gray on light), fill = two opposite arrows (green: the taker bought, red: the taker sold), cancel = a
-// circle with a cross (muted), refund / kill / expiry = an undo arrow (amber), stop armed / triggered = a target (amber). Each icon has an
-// accessible name; the colours are the `--act-*` variables of activity.css (both themes).
+// The activity log's type icons. They are KOB's own outline set with a 24 viewBox, stroke 2 and
+// round caps and joins, and they are bare on every page. Shape AND colour tell the kinds apart,
+// never colour alone.
+// - Placed is a square with a plus, white-ish on dark and gray on light.
+// - Fill is two opposite arrows, green when the taker bought and red when the taker sold.
+// - Cancel is a circle with a cross, muted.
+// - Refund, kill and expiry are an undo arrow, amber.
+// - Stop armed and stop triggered are a target, amber.
+//
+// Each icon has an accessible name. The colours are the `--act-*` variables of activity.css, in
+// both themes.
 import type { ComponentChildren } from 'preact';
 import { t } from '../../i18n';
 import type { ActivityKind } from './activity-model';
@@ -30,7 +37,7 @@ const PATHS: Record<ActivityKind, ComponentChildren> = {
   ),
 };
 
-/** The accessible name of a kind's icon (a fill names the taker's side). */
+/** The accessible name of a kind's icon. A fill names the taker's side. */
 export function kindLabel(kind: ActivityKind, side?: 'buy' | 'sell' | null): string {
   if (kind === 'fill') return t(side === 'sell' ? 'activity.kind.fillSell' : side === 'buy' ? 'activity.kind.fillBuy' : 'activity.kind.fill');
   return t(`activity.kind.${kind}`);
@@ -58,7 +65,7 @@ export function KindGlyph(props: { kind: ActivityKind; size?: number; label?: st
   );
 }
 
-/** The icon in its colour (rows and the legend). */
+/** The icon in its colour, for rows and the legend. */
 export function KindIcon(props: { kind: ActivityKind; side?: 'buy' | 'sell' | null; small?: boolean }) {
   const tone = props.kind === 'fill' ? (props.side === 'sell' ? 'sell' : 'buy') : props.kind;
   return (

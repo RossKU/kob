@@ -1,9 +1,15 @@
-// The activity log's live data (Preact): an ActivityStore per market filter, fed by the WebSocket feed and polls.
-//   * fills: a `fill` notice (`fills` / `fills:<token>`; a pair: its two tokens' `book:` notices) triggers a debounced read of the newest page
-//     (useLiveRefresh); without the socket the same read runs every POLL_MS;
-//   * placements: the indexer sends no notice for them (phase 2: an `events` channel), so they are polled every POLL_MS while they are shown;
-//   * standalone mode: what the page saw on the node, read again whenever it changes ("since HH:MM", nothing older);
-//   * the chain's DAA score (the confirmation pies) from the feed's `health` frames, else from the records' own confirmations.
+// The activity log's live data (Preact): an ActivityStore per market filter, fed by the WebSocket
+// feed and polls.
+// - Fills: a `fill` notice (`fills` or `fills:<token>`, and for a pair its two tokens' `book:`
+//   notices) triggers a debounced read of the newest page (useLiveRefresh). Without the socket the
+//   same read runs every POLL_MS.
+// - Placements: the indexer sends no notice for them, so they are polled every POLL_MS while they
+//   are shown.
+// - Standalone mode: what the page saw on the node, read again whenever it changes ("since
+//   HH:MM", nothing older).
+// - The chain's DAA score, for the confirmation pies, comes from the feed's `health` frames, else
+//   from the records' own confirmations.
+//
 // A reorg or a reconnect reads everything again from the newest page.
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
@@ -16,30 +22,35 @@ import { useStandalone } from '../shell/standalone';
 import { marketKeyOf, type ActivityKind, type ActivityRow, type MarketFilter, type OrderFacts } from './activity-model';
 import { ActivityStore } from './activity-store';
 
-/** Polls of the placements (and of the fills while the socket is down), ms. */
+/** Polls of the placements, and of the fills while the socket is down, in ms. */
 export const POLL_MS = 10_000;
 
 export interface ActivityData {
   rows: ActivityRow[];
   order: (id: Hex) => OrderFacts | null | undefined;
-  /** the first read is running and nothing is in yet */
+  /** The first read is running and nothing is in yet. */
   loading: boolean;
-  /** the first read is running, whatever is in */
+  /** The first read is running, whatever is in. */
   firstRead: boolean;
-  /** the first read failed (later failures keep the rows and try again on the next notice or poll) */
+  /**
+   * The first read failed. Later failures keep the rows and try again on the next notice or poll.
+   */
   error: Error | null;
   retry(): void;
   mode: LiveMode | 'standalone';
-  /** standalone mode: since when the page has been watching the node */
+  /** Standalone mode: since when the page has been watching the node. */
   sinceMs: number | null;
-  /** standalone mode: the rows before this time (ms) are what the indexer gave this page before the mode (kept), null: none are */
+  /**
+   * Standalone mode: the rows before this time (ms) are what the indexer gave this page before the
+   * mode, and were kept. Null means none are.
+   */
   keptUntilMs: number | null;
   hasOlder: boolean;
   loadingOlder: boolean;
   loadOlder(): void;
-  /** the chain's DAA score when last reported */
+  /** The chain's DAA score when last reported. */
   chain: { daa: number; atMs: number } | null;
-  /** looks up the orders of these rows (the Wallet column) */
+  /** Looks up the orders of these rows (the Wallet column). */
   want(ids: readonly Hex[]): void;
 }
 
@@ -48,8 +59,9 @@ export function useActivity(o: {
   kinds: ReadonlySet<ActivityKind>;
   pairFills?: { base: Hex; quote: Hex; view: PairFillsView | null | undefined } | null;
   /**
-   * the list is on screen (default true): off screen nothing is read (a notice or a poll is remembered and read once it is shown), so a log below the
-   * fold of a token page never takes a connection the order ticket needs
+   * The list is on screen (default true). Off screen nothing is read, and a notice or a poll is
+   * remembered and read once the list is shown. A log below the fold of a token page therefore
+   * never takes a connection the order ticket needs.
    */
   onScreen?: boolean;
 }): ActivityData {
@@ -67,8 +79,10 @@ export function useActivity(o: {
   const kindsRef = useRef(o.kinds);
   kindsRef.current = o.kinds;
 
-  // the market's price scale of a token: its standard scale when its decimals are known (registry, declaration, program default, issuance); a token
-  // shown with assumed decimals waits for its orders' own scale (the Wallet column's lookups)
+  // The market's price scale of a token is its standard scale when its decimals are known
+  // (registry,
+  // declaration, program default, issuance). A token shown with assumed decimals waits for its
+  // orders' own scale, from the Wallet column's lookups.
   const tokenScale = useMemo(
     () => (token: Hex): bigint | null => {
       const info = displayToken(registry, config.network, token);
@@ -79,15 +93,16 @@ export function useActivity(o: {
 
   const store = useMemo(
     () => new ActivityStore(o.market, { indexer: services.indexer, standalone, carry: services.standalone?.carry ?? null, pairFills: o.pairFills ?? null }, tokenScale, () => setTick((n) => n + 1)),
-    // a new market filter, source or reset starts over
+    // A new market filter, source or reset starts over.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, services.indexer, standalone, tokenScale, resetKey],
   );
   useEffect(() => () => store.dispose(), [store]);
   useEffect(() => store.setPairFills(o.pairFills ?? null), [store, o.pairFills?.view]);
 
-  // one read at a time per store; a notice during a read is folded into one more read right after it (of the store current then: a read of a
-  // store that was replaced meanwhile, e.g. standalone mode starting while the indexer hangs, never blocks the new one)
+  // One read runs at a time per store. A notice during a read is folded into one more read right
+  // after it, of the store current then. A read of a store that was replaced meanwhile, such as
+  // standalone mode starting while the indexer hangs, never blocks the new one.
   const storeRef = useRef(store);
   storeRef.current = store;
   const flight = useRef<{ store: ActivityStore; busy: boolean; again: boolean } | null>(null);
@@ -95,7 +110,9 @@ export function useActivity(o: {
   const onScreenRef = useRef(onScreen);
   onScreenRef.current = onScreen;
   const missed = useRef(false);
-  /** the next read replaces the newest page (a reorg or a reconnect), see ActivityStore.readNewest */
+  /**
+   * The next read replaces the newest page (a reorg or a reconnect). See ActivityStore.readNewest.
+   */
   const replaceNext = useRef(false);
   const read = (asReplace = false) => {
     if (asReplace) replaceNext.current = true;
@@ -132,20 +149,20 @@ export function useActivity(o: {
       });
   };
 
-  // shown again after a notice or a poll was missed (or before the first read): read now
+  // Shown again after a notice or a poll was missed, or before the first read: read now.
   useEffect(() => {
     if (onScreen && missed.current) read();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onScreen]);
 
-  // the first read of this store
+  // The first read of this store.
   useEffect(() => {
     setLoading(true);
     setError(null);
     read();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store]);
-  // placements switched on: their first page
+  // Placements switched on: their first page.
   useEffect(() => {
     if (placed && store.ordersCursor === undefined && !loading) read();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -157,19 +174,20 @@ export function useActivity(o: {
     services,
     channels,
     (e) => m.kind === 'all' || !e.token || (m.kind === 'token' ? e.token === m.token : e.token === m.base || e.token === m.quote),
-    // a reorg or a reconnect: the newest page again, what it no longer lists is dropped; the list is never emptied and rebuilt (no flicker)
+    // After a reorg or a reconnect the newest page is read again and what it no longer lists is
+    // dropped. The list is never emptied and rebuilt, so it does not flicker.
     (full) => read(full),
     POLL_MS,
   );
-  // the placements have no notice: polled while shown and the socket carries the fills
+  // The placements have no notice, so they are polled while shown. The socket carries the fills.
   useInterval(() => read(), POLL_MS, placed && mode === 'live' && !standalone);
-  // standalone: every change of what was seen
+  // Standalone: every change of what was seen.
   useEffect(() => {
     if (standalone) read();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sa?.version]);
 
-  // the chain's DAA score from the feed's health frames
+  // The chain's DAA score from the feed's health frames.
   useEffect(() => {
     const feed = standalone ? null : services.feed;
     if (!feed) return;

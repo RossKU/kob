@@ -1,6 +1,10 @@
-// The activity log's rows, built to stay still while the list is live: each row is a keyed, memoized component whose cells render again only when
-// what they show changed (ActivityStore keeps an unchanged row's object); rows sit at fixed heights and move by a transform when a row arrives above
-// them (no layout shift); the confirmation cell follows the chain on its own, from one shared one-second clock, and renders only when its value changes.
+// The activity log's rows, built to stay still while the list is live.
+// - Each row is a keyed, memoized component whose cells render again only when what they show
+//   changed. ActivityStore keeps an unchanged row's object.
+// - Rows sit at fixed heights and move by a transform when a row arrives above them, so nothing
+//   shifts in the layout.
+// - The confirmation cell follows the chain on its own from one shared one-second clock, and
+//   renders only when its value changes.
 import { kasPerTokenToUsd, kasTitleOf, rateTitle, sompiToUsd, usdText, usdTextFit, type Fiat } from '../../app/fiat';
 import { navigate, pairRoute, tokenRoute } from '../../app/router';
 import { memo } from 'preact/compat';
@@ -13,22 +17,25 @@ import { TokenIcon } from '../market/TokenIcon';
 import { SETTLE_DAA, amountCell, confirmationsAt, daaNow, marketKeyOf, walletBody, type ActivityRow, type MarketRef } from './activity-model';
 import { KindIcon, kindLabel } from './ActivityIcons';
 
-/** How tokens and markets are named (one object per registry and network, so the rows' props stay equal between renders). */
+/**
+ * How tokens and markets are named. It is one object per registry and network, so the rows' props
+ * stay equal between renders.
+ */
 export interface RowFormat {
   nameOf(token: Hex): string;
   decimalsOf(token: Hex): number;
   marketText(m: MarketRef): string;
   explorerHost: string;
-  /** the USD display in force (Settings): the KAS value line and the price are dollars; null = KAS */
+  /** The USD display in force (Settings): the KAS value line and price are dollars. Null is KAS. */
   fiat: Fiat | null;
 }
 
-// ------------------------------------------------------------------------------------------------ the shared clock
+// ---- The shared clock
 
 const tickers = new Set<() => void>();
 let timer: ReturnType<typeof setInterval> | null = null;
 
-/** Calls `fn` every second while subscribed; one interval for every cell of every log. */
+/** Calls `fn` every second while subscribed. One interval serves every cell of every log. */
 function onTick(fn: () => void): () => void {
   tickers.add(fn);
   timer ??= setInterval(() => tickers.forEach((f) => f()), 1000);
@@ -41,7 +48,10 @@ function onTick(fn: () => void): () => void {
   };
 }
 
-/** The confirmation cell: the count and its pie up to SETTLE_DAA, then ✓. Re-renders itself (not its row) when the count it shows changes. */
+/**
+ * The confirmation cell: the count and its pie up to SETTLE_DAA, then ✓. It re-renders itself,
+ * not its row, when the count it shows changes.
+ */
 const ConfCell = memo(function ConfCell(props: { daa: number; confirmations: number | null; settled: boolean; chainDaa: number | null; chainAt: number | null }) {
   const at = () => confirmationsAt(props, daaNow(props.chainDaa !== null && props.chainAt !== null ? { daa: props.chainDaa, atMs: props.chainAt } : null, Date.now()));
   const [conf, setConf] = useState(at);
@@ -75,7 +85,7 @@ const ConfCell = memo(function ConfCell(props: { daa: number; confirmations: num
   );
 });
 
-// ------------------------------------------------------------------------------------------------ rows
+// ---- Rows
 
 /** The rows' places while the first rows are held: as tall as a row, with its columns. */
 export function RowsSkeleton(props: { rows: number }) {
@@ -99,30 +109,34 @@ export function RowsSkeleton(props: { rows: number }) {
 
 export interface RowProps {
   row: ActivityRow;
-  /** the row's place in the list: its offset (a transform, never a layout change) */
+  /** The row's place in the list: its offset, applied as a transform, never a layout change. */
   i: number;
   fresh: boolean;
-  /** one of the first rows, on their way in */
+  /** One of the first rows, on their way in. */
   rise: boolean;
   href: string | null;
-  /** the order owners' addresses, newline-separated ('' while none is known) */
+  /** The order owners' addresses, newline-separated. It is '' while none is known. */
   addrs: string;
-  /** an owner is still being looked up */
+  /** An owner is still being looked up. */
   pending: boolean;
   chainDaa: number | null;
   chainAt: number | null;
-  /** today's date (the time column shows HH:MM:SS today, YYYY-MM-DD HH:MM before: the kit's `formatRowTime`) */
+  /**
+   * Today's date. The time column shows HH:MM:SS for today and YYYY-MM-DD HH:MM before, as the
+   * kit's `formatRowTime` does.
+   */
   today: string;
-  /** the fraction digits of the whole Price column (`logPriceDp`: one number, so the decimal points line up) */
+  /** The fraction digits of the whole Price column (`logPriceDp`), so decimal points line up. */
   priceDp: number;
   fmt: RowFormat;
 }
 
-/** One row: a link to the transaction (new tab), keyed by its txid; moves to its place by a transform. */
+/** One row: a link to the transaction in a new tab, keyed by its txid. It moves by a transform. */
 export const ActivityRowView = memo(function ActivityRowView(props: RowProps) {
   const r = props.row;
   const kindText = r.kinds.length > 1 ? r.kinds.map((k) => kindLabel(k, r.side)).join(' + ') : kindLabel(r.kind, r.side);
-  // the full timestamp with the zone (the time cell shows the short form); a placement's time is estimated from its DAA score, a row without any shows the score
+  // The full timestamp with the zone, where the time cell shows the short form. A placement's time
+  // is estimated from its DAA score, and a row without any shows the score.
   const fullTime = r.timeMs !== null ? `${rowTimeTitle(r.timeMs)}${r.timeEstimated ? ` (${t('activity.timeEstimated')})` : ''}` : `DAA ${r.daa}`;
   const amount = amountOf(r, props.fmt);
   const label = t('activity.rowLabel', {
@@ -150,7 +164,10 @@ export const ActivityRowView = memo(function ActivityRowView(props: RowProps) {
   );
 });
 
-/** The cells of a row: rendered again only when what they show changed (not when the row moves or stops flashing). */
+/**
+ * The cells of a row, rendered again only when what they show changed. A row that moves or stops
+ * flashing does not change them.
+ */
 const RowCells = memo(
   function RowCells(props: RowProps & { fullTime: string }) {
     const r = props.row;
@@ -197,17 +214,21 @@ const RowCells = memo(
   (a, b) => a.row === b.row && a.addrs === b.addrs && a.pending === b.pending && a.chainDaa === b.chainDaa && a.chainAt === b.chainAt && a.today === b.today && a.priceDp === b.priceDp && a.fmt === b.fmt && a.fullTime === b.fullTime,
 );
 
-/** The amount cell's two lines: the token amount and its KAS value (a pair: the B amount; a pair placement: its side); the exact figures go to the titles. */
+/**
+ * The amount cell's two lines: the token amount and its KAS value. A pair shows the B amount and a
+ * pair placement shows its side. The exact figures go to the titles.
+ */
 function amountOf(r: ActivityRow, fmt: RowFormat): { text: string; sub: string; subTitle: string | null; exact: string | null } {
   const token = r.amount?.token ?? null;
   const a = r.amount && token ? amountCell(r.amount.units, fmt.decimalsOf(token)) : null;
   const text = a && token ? `${a.text} ${fmt.nameOf(token)}` : '—';
   let sub = '';
   let subTitle: string | null = null;
-  // a pair placement keeps its side on the second line (its quote amount is there to turn the row round on the other orientation's page)
+  // A pair placement keeps its side on the second line. Its quote amount is there to turn the row
+  // round on the other orientation's page.
   if (r.kind === 'placed' && r.pairSide) sub = t(r.pairSide === 'ask' ? 'activity.pairAsk' : 'activity.pairBid');
   else if (r.value?.kind === 'kas' && fmt.fiat) {
-    // dollars, the exact KAS figure and the rate in the tooltip
+    // Dollars, with the exact KAS figure and the rate in the tooltip.
     sub = usdTextFit(sompiToUsd(r.value.sompi, fmt.fiat.rate), 16);
     subTitle = kasTitleOf(formatKas(r.value.sompi, { group: ',' }), fmt.fiat);
   } else if (r.value?.kind === 'kas') {
@@ -222,7 +243,10 @@ function amountOf(r: ActivityRow, fmt: RowFormat): { text: string; sub: string; 
   return { text, sub, subTitle, exact: a?.exact && token ? `${a.exact} ${fmt.nameOf(token)}` : null };
 }
 
-/** One token icon for a KAS book, `A / B` for a pair (the tickers in the cell's title and the row's label). It leads to that market; the rest of the row to the transaction. */
+/**
+ * One token icon for a KAS book, and `A / B` for a pair, with the tickers in the cell's title and
+ * the row's label. It leads to that market, and the rest of the row leads to the transaction.
+ */
 function MarketIcons(props: { market: MarketRef; nameOf: (t: Hex) => string; label: string }) {
   const m = props.market;
   const icon = (id: Hex) => <TokenIcon row={{ covenantId: id, ticker: props.nameOf(id), kascov: null }} size={22} anonymous />;
@@ -255,8 +279,9 @@ function MarketIcons(props: { market: MarketRef; nameOf: (t: Hex) => string; lab
 }
 
 /**
- * KAS per whole token with the column's fixed decimals (`dp`: the display rule, one number for the whole column); a ladder shows its range. The cell's title has the exact price (every
- * digit). With `fiat`: dollars per whole token, and `title` carries the exact KAS price and the rate.
+ * KAS per whole token with the column's fixed decimals (`dp`, the display rule, one number for the
+ * whole column). A ladder shows its range. The cell's title has the exact price, every digit. With
+ * `fiat` it is dollars per whole token, and `title` carries the exact KAS price and the rate.
  */
 function priceRange(p: { low: bigint; high: bigint; scale: bigint }, decimals: number, dp: number, fiat: Fiat | null = null): { text: string; title: string } {
   const one = (x: bigint) => displayPriceText(x, decimals, p.scale, dp);
@@ -264,7 +289,7 @@ function priceRange(p: { low: bigint; high: bigint; scale: bigint }, decimals: n
   const kas = p.low === p.high ? one(p.low) : `${one(p.low)}–${one(p.high)}`;
   const kasExact = p.low === p.high ? exact(p.low) : `${exact(p.low)}–${exact(p.high)}`;
   if (!fiat) return { text: kas, title: kasExact };
-  // KAS per whole token = price x 10^decimals / (scale x 1e8)
+  // KAS per whole token is price x 10^decimals / (scale x 1e8).
   const usd = (x: bigint) => usdText(kasPerTokenToUsd({ num: x * pow10(decimals), den: (p.scale > 0n ? p.scale : 1n) * 100_000_000n }, fiat.rate));
   const text = p.low === p.high ? usd(p.low) : `${usd(p.low)}–${usd(p.high)}`;
   return { text, title: `${kasExact} KAS · ${rateTitle(fiat)}` };
