@@ -1,6 +1,6 @@
-//! The fuzz loop: deterministic seeds, mutation chains replayable from (base seed, [(operator, operator seed)]),
-//! a growing corpus of accepted mutants, and greedy minimisation of every finding to the shortest chain that still
-//! shows it.
+//! Runs the fuzz loop: deterministic seeds, mutation chains replayable from (base seed, [(operator,
+//! operator seed)]), a growing corpus of accepted mutants, and greedy minimisation of every finding
+//! to the shortest chain that still shows it.
 
 use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};

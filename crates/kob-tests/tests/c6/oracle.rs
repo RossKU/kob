@@ -1,24 +1,25 @@
-//! C6 "unknown unknowns": a structural mutation fuzzer over builder-produced KOB transactions with a
-//! value-conservation oracle (see `c6_fuzz.rs` for the entry points and `research/.../c6_unknowns.md` for the
-//! report).
+//! The transaction model, the consensus check and the value-conservation oracle of the C6 "unknown
+//! unknowns" fuzzer, a structural mutation fuzzer over builder-produced KOB transactions (see
+//! `c6_fuzz.rs` for the entry points and `research/.../c6_unknowns.md` for the report).
 //!
-//! * [`MTx`] is a transaction kept at the level of the library's signing plans: every input is its UTXO plus its
-//!   [`SigPlan`] (template, state, entry, arguments, KCC-20 next states, KRON witnesses), so a mutant is re-signed
-//!   with the fixture keys and re-assembled by the production code ([`SigPlan::sigscript`]) after every mutation.
-//!   A mutation that breaks a signature therefore never hides behind the signature: the mutant is what its signers
-//!   would sign.
-//! * [`accept`] is consensus as far as it concerns a single transaction: duplicate inputs, zero / overflowing
-//!   outputs, the KIP-9 masses within the block limits, the covenant context (bindings, genesis ids) and every
-//!   input script in the rusty-kaspa v2.1.0 engine. The fee floor and the compute budgets are not checked (an
-//!   attacker pays any fee and commits any budget).
-//! * [`oracle`] values every party of an accepted mutant: per token covenant id the supply, per maker the change of
-//!   its KAS and tokens valued at the order's own worst all-in price for fills in base units with the covenants'
-//!   exact rounding (at least `ceil(n * rate / scale)` for what a maker receives, at most `floor(n * rate / scale)` for
-//!   what it pays; refund and keeper tips allowed), per pair order maker both tokens (an ask receives at least the ceil
-//!   of the quote token B, a bid pays at most the floor of it; custodies of both tokens are the maker's) and the KAS tip
-//!   (rounded down), per intent the payer's bounds and the merchant's amount, and per
-//!   order covenant the continuation (one output, same template, only the mutable windows changed, monotone
-//!   transitions, arming only next to a fill).
+//! * [`MTx`] is a transaction kept at the level of the library's signing plans: every input is its
+//!   UTXO plus its [`SigPlan`] (template, state, entry, arguments, KCC-20 next states, KRON
+//!   witnesses), so a mutant is re-signed with the fixture keys and re-assembled by the production
+//!   code ([`SigPlan::sigscript`]) after every mutation. A mutation that breaks a signature
+//!   therefore never hides behind the signature: the mutant is what its signers would sign.
+//! * [`accept`] is consensus as far as it concerns a single transaction: duplicate inputs, zero /
+//!   overflowing outputs, the KIP-9 masses within the block limits, the covenant context (bindings,
+//!   genesis ids) and every input script in the rusty-kaspa v2.1.0 engine. The fee floor and the
+//!   compute budgets are not checked (an attacker pays any fee and commits any budget).
+//! * [`oracle`] values every party of an accepted mutant: per token covenant id the supply, per
+//!   maker the change of its KAS and tokens valued at the order's own worst all-in price for fills
+//!   in base units with the covenants' exact rounding (at least `ceil(n * rate / scale)` for what a
+//!   maker receives, at most `floor(n * rate / scale)` for what it pays; refund and keeper tips
+//!   allowed), per pair order maker both tokens (an ask receives at least the ceil of the quote
+//!   token B, a bid pays at most the floor of it; custodies of both tokens are the maker's) and the
+//!   KAS tip (rounded down), per intent the payer's bounds and the merchant's amount, and per order
+//!   covenant the continuation (one output, same template, only the mutable windows changed,
+//!   monotone transitions, arming only next to a fill).
 
 #![allow(dead_code)]
 // index loops over parallel per-token vectors read clearer than zipped iterators; `What` is a short-lived per-UTXO

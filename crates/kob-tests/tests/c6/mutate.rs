@@ -1,7 +1,8 @@
-//! Structural mutation operators over [`MTx`]. Every operator is deterministic in its RNG, returns a short
-//! description of what it did (None when it does not apply), and has a "smart" variant that keeps the transaction's
-//! internal references consistent (binding authorising inputs, the index arguments of the order entries, the order of
-//! the KCC-20 / KRON next states) so the mutant gets past the plumbing and reaches the economic checks.
+//! Structural mutation operators over [`MTx`]. Every operator is deterministic in its RNG, returns
+//! a short description of what it did (None when it does not apply), and has a "smart" variant that
+//! keeps the transaction's internal references consistent (binding authorising inputs, the index
+//! arguments of the order entries, the order of the KCC-20 / KRON next states) so the mutant gets
+//! past the plumbing and reaches the economic checks.
 
 use kaspa_consensus_core::tx::{CovenantBinding, ScriptPublicKey, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_consensus_core::Hash;
