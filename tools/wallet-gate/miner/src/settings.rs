@@ -1,6 +1,8 @@
-//! Miner settings: CLI flag > environment > settings file > default. The settings file (JSON) is `MINER_CONFIG`, else
-//! `tn10-miner.json` next to the executable when it exists; the miner re-reads it when it changes (watermarks, duty cycle, poll,
-//! threads, round time apply at once; backend and GPU options need a restart).
+//! Miner settings: CLI flag > environment > settings file > default.
+//!
+//! The settings file (JSON) is `MINER_CONFIG`, else `tn10-miner.json` next to the executable when
+//! it exists. The miner re-reads it when it changes. Watermarks, duty cycle, poll, threads and
+//! round time apply at once. Backend and GPU options need a restart.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -16,7 +18,7 @@ pub const SOMPI_PER_KAS: f64 = 100_000_000.0;
 pub enum BackendKind {
     Cpu,
     Gpu,
-    /// the GPU when the build has it and a device opens, else the CPU
+    /// The GPU when the build has it and a device opens, else the CPU.
     Auto,
 }
 
@@ -34,11 +36,13 @@ impl std::str::FromStr for BackendKind {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GpuOptions {
-    /// device index (as `tn10-miner gpu-list` prints it) or a case-insensitive name substring; default: the first GPU
+    /// Device index (as `tn10-miner gpu-list` prints it) or a case-insensitive name substring.
+    /// Default: the first GPU.
     pub device: Option<String>,
-    /// fixed nonces per dispatch; default: auto-tuned so that one dispatch takes `dispatch_ms`
+    /// Fixed nonces per dispatch. Default: auto-tuned so that one dispatch takes `dispatch_ms`.
     pub global: Option<usize>,
-    /// work-group size; default 128 (RTX 3060 Laptop sweep: 64 / 128 ~92 MH/s, driver choice ~86, 512 ~66)
+    /// Work-group size. Default 128.
+    /// On an RTX 3060 Laptop, 64 and 128 gave ~92 MH/s, the driver's choice ~86 and 512 ~66.
     pub local: Option<usize>,
     pub dispatch_ms: u64,
 }
@@ -71,7 +75,8 @@ pub struct FileSettings {
     pub duty_window_sec: Option<u64>,
     pub poll_sec: Option<u64>,
     pub maturity_daa: Option<u64>,
-    /// address(es) whose spendable balance the watermarks apply to (comma separated); default: the pay address(es)
+    /// Address(es) whose spendable balance the watermarks apply to (comma separated). Default: the
+    /// pay address(es).
     pub balance_address: Option<String>,
     pub gpu: Option<GpuFile>,
 }
@@ -82,7 +87,7 @@ pub struct Settings {
     pub threads: usize,
     pub round_ms: u64,
     pub throttle: ThrottleConfig,
-    /// balance poll interval (idle and while mining)
+    /// Balance poll interval (idle and while mining).
     pub poll: Duration,
     pub maturity_daa: u64,
     pub balance_addresses: Option<Vec<String>>,
@@ -100,7 +105,9 @@ fn kas_to_sompi(name: &str, k: f64) -> Result<u64> {
     Ok((k * SOMPI_PER_KAS).round() as u64)
 }
 
-/// Resolve settings from `env` (a lookup, so tests need no process environment), the file and an optional CLI backend.
+/// Resolves settings from `env`, the file and an optional CLI backend.
+///
+/// `env` is a lookup, so tests need no process environment.
 pub fn resolve(env: &dyn Fn(&str) -> Option<String>, file: &FileSettings, cli_backend: Option<BackendKind>) -> Result<Settings> {
     fn pick<T: std::str::FromStr>(env: &dyn Fn(&str) -> Option<String>, var: &str, file: Option<T>) -> Result<Option<T>>
     where
@@ -169,7 +176,8 @@ pub fn resolve(env: &dyn Fn(&str) -> Option<String>, file: &FileSettings, cli_ba
     })
 }
 
-/// The settings file in effect: `MINER_CONFIG`, else `tn10-miner.json` next to the executable if it exists.
+/// The settings file in effect: `MINER_CONFIG`, else `tn10-miner.json` next to the executable if it
+/// exists.
 pub fn settings_path(env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
     if let Some(p) = env("MINER_CONFIG").filter(|s| !s.trim().is_empty()) {
         return Some(PathBuf::from(p));

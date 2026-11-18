@@ -1,17 +1,19 @@
-//! Intermittent mining: mine in bursts while the watched balance is low, idle otherwise, never above a duty cycle.
+//! Intermittent mining: mine in bursts while the watched balance is low and idle otherwise.
 //!
-//! Hysteresis on the spendable balance: a burst starts when it falls below `low` and ends when it reaches `high` (between the two the
-//! current state holds). Independently, the fraction of time spent mining over the last `window` never exceeds `max_duty`. Without
-//! watermarks the miner mines continuously (subject to the duty cap), as before.
+//! The balance rule has hysteresis on the spendable balance. A burst starts when it falls below
+//! `low` and ends when it reaches `high`. Between the two the current state holds.
+//!
+//! Independently, the fraction of time spent mining over the last `window` never exceeds
+//! `max_duty`. Without watermarks the miner mines continuously (subject to the duty cap).
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ThrottleConfig {
-    /// (low, high) in sompi: start a burst below `low`, stop at or above `high`
+    /// (low, high) in sompi: start a burst below `low`, stop at or above `high`.
     pub watermarks: Option<(u64, u64)>,
-    /// 0 < max_duty <= 1
+    /// 0 < max_duty <= 1.
     pub max_duty: f64,
     pub window: Duration,
 }
@@ -24,26 +26,26 @@ impl Default for ThrottleConfig {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reason {
-    /// no watermarks: always mine
+    /// No watermarks: always mine.
     Continuous,
-    /// a burst: the balance fell below `low` and has not reached `high` yet
+    /// A burst: the balance fell below `low` and has not reached `high` yet.
     Burst,
-    /// the balance is at or above `high`, or has not fallen below `low` since
+    /// The balance is at or above `high`, or has not fallen below `low` since.
     BalanceOk,
-    /// the duty-cycle cap is reached
+    /// The duty-cycle cap is reached.
     DutyCap,
-    /// watermarks set but no balance read yet
+    /// Watermarks are set but no balance has been read yet.
     Unknown,
 }
 
 pub struct Throttle {
     pub cfg: ThrottleConfig,
-    /// hysteresis state of the balance rule (true = in a burst)
+    /// Hysteresis state of the balance rule (true = in a burst).
     burst: bool,
     balance_known: bool,
-    /// closed mining intervals inside the window, oldest first
+    /// Closed mining intervals inside the window, oldest first.
     done: VecDeque<(Instant, Instant)>,
-    /// start of the current mining interval
+    /// Start of the current mining interval.
     open: Option<Instant>,
 }
 
@@ -52,7 +54,8 @@ impl Throttle {
         Self { cfg, burst: false, balance_known: false, done: VecDeque::new(), open: None }
     }
 
-    /// Feed a fresh balance reading (sompi). Returns Some(true/false) when the burst state changed.
+    /// Feeds a fresh balance reading (sompi).
+    /// Returns Some(true/false) when the burst state changed.
     pub fn observe_balance(&mut self, spendable: u64) -> Option<bool> {
         self.balance_known = true;
         let (low, high) = self.cfg.watermarks?;
@@ -67,7 +70,8 @@ impl Throttle {
 
     /// Mining time inside the window ending at `now`.
     pub fn mined_in_window(&self, now: Instant) -> Duration {
-        // (an Instant earlier than the window may not exist shortly after boot: then everything counts)
+        // An Instant earlier than the window may not exist shortly after boot.
+        // Then everything counts.
         let from = now.checked_sub(self.cfg.window);
         let clip = |(a, b): (Instant, Instant)| b.saturating_duration_since(from.map_or(a, |f| a.max(f)));
         let closed: Duration = self.done.iter().map(|&iv| clip(iv)).sum();
@@ -89,7 +93,8 @@ impl Throttle {
         if balance.0
             && let Some(budget) = self.duty_budget(now)
         {
-            // a paused miner resumes only with a useful budget left (not one template per few ms at the cap)
+            // A paused miner resumes only with a useful budget left, not one template per few ms at
+            // the cap.
             let need = if self.is_mining() { Duration::ZERO } else { self.resume_min() };
             if budget.is_zero() || budget < need {
                 return (false, Reason::DutyCap);
@@ -118,7 +123,9 @@ impl Throttle {
         self.open.is_some()
     }
 
-    /// The duty budget a paused miner needs before it resumes: min(5 s, a quarter of the allowed mining time per window).
+    /// The duty budget a paused miner needs before it resumes.
+    ///
+    /// It is min(5 s, a quarter of the allowed mining time per window).
     pub fn resume_min(&self) -> Duration {
         self.cfg.window.mul_f64(self.cfg.max_duty / 4.0).min(Duration::from_secs(5))
     }
@@ -183,9 +190,11 @@ mod tests {
         assert_eq!(t.decide(t0 + s(24)), (true, Reason::Continuous));
         assert_eq!(t.decide(t0 + s(25)), (false, Reason::DutyCap));
         t.set_mining(t0 + s(25), false);
-        // the 25 s burst stays inside the window until t0+125: capped until the oldest mining slides out
+        // The 25 s burst stays inside the window until t0+125.
+        // So it is capped until the oldest mining slides out.
         assert_eq!(t.decide(t0 + s(60)), (false, Reason::DutyCap));
-        // at t0+104 the window [4, 104] holds 21 s: a 4 s budget is below the 5 s needed to resume
+        // At t0+104 the window [4, 104] holds 21 s.
+        // So a 4 s budget is below the 5 s needed to resume.
         assert_eq!(t.duty_budget(t0 + s(104)), Some(s(4)));
         assert_eq!(t.decide(t0 + s(104)), (false, Reason::DutyCap));
         assert!((t.duty(t0 + s(110)) - 0.15).abs() < 1e-9); // [10, 25) still inside

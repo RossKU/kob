@@ -1,13 +1,19 @@
-//! One mining job per block template: everything a nonce search needs, derived from the header by rusty-kaspa (the source of truth
-//! for the pre-PoW hash, the matrix, the target and the cSHAKE256 states) and laid out the way the OpenCL kernel reads it.
+//! One mining job per block template: everything a nonce search needs.
+//!
+//! rusty-kaspa derives the data from the header and is the source of truth for the pre-PoW hash,
+//! the matrix, the target and the cSHAKE256 states. The data is laid out the way the OpenCL kernel
+//! reads it.
 
 use kaspa_consensus_core::{Hash, hashing, header::Header};
 use kaspa_math::Uint256;
 use kaspa_pow::{State, matrix::Matrix};
 
-/// `kaspa_hashes::PowHash::INITIAL_STATE` (rusty-kaspa v2.1.0, crypto/hashes/src/pow_hashers.rs): the cSHAKE256("ProofOfWorkHash")
-/// state with the padding of the 80-byte message folded in (word 10 ^= 0x04, word 16 ^= 1 << 63). The constant is private upstream;
-/// `tests::host_data_reproduces_kaspa_pow` proves this copy against `PowHash` and `State::calculate_pow`.
+/// The cSHAKE256("ProofOfWorkHash") state with the 80-byte message padding folded in.
+///
+/// It is a copy of `kaspa_hashes::PowHash::INITIAL_STATE` (rusty-kaspa v2.1.0,
+/// crypto/hashes/src/pow_hashers.rs), which is private upstream. The padding is word 10 ^= 0x04 and
+/// word 16 ^= 1 << 63. `tests::host_data_reproduces_kaspa_pow` proves the copy against `PowHash`
+/// and `State::calculate_pow`.
 pub const POW_INIT: [u64; 25] = [
     1242148031264380989,
     3008272977830772284,
@@ -36,7 +42,9 @@ pub const POW_INIT: [u64; 25] = [
     196324915476054915,
 ];
 
-/// `kaspa_hashes::KHeavyHash::INITIAL_STATE`: cSHAKE256("HeavyHash") with the padding of the 32-byte message folded in.
+/// The cSHAKE256("HeavyHash") state with the 32-byte message padding folded in.
+///
+/// It is a copy of `kaspa_hashes::KHeavyHash::INITIAL_STATE`.
 pub const HEAVY_INIT: [u64; 25] = [
     4239941492252378377,
     8746723911537738262,
@@ -66,14 +74,17 @@ pub const HEAVY_INIT: [u64; 25] = [
 ];
 
 pub struct Job {
-    /// kaspa_pow's own state: the CPU backend searches with it and every nonce of any backend is verified with it before submit
+    /// The `kaspa_pow` state.
+    ///
+    /// The CPU backend searches with it, and every nonce of any backend is verified with it before
+    /// submit.
     pub state: State,
-    /// hash_override_nonce_time(header, 0, 0) as little-endian u64 words
+    /// `hash_override_nonce_time(header, 0, 0)` as little-endian u64 words.
     pub pre_pow: [u64; 4],
     pub timestamp: u64,
-    /// Matrix::generate(pre_pow_hash), 64 x 64 nibbles, row-major
+    /// `Matrix::generate(pre_pow_hash)`: 64 x 64 nibbles, row-major.
     pub matrix: Vec<u8>,
-    /// Uint256::from_compact_target_bits(bits), little-endian u64 words
+    /// `Uint256::from_compact_target_bits(bits)` as little-endian u64 words.
     pub target: [u64; 4],
 }
 
@@ -94,7 +105,7 @@ impl Job {
         self.state.check_pow(nonce).0
     }
 
-    /// kaspa_pow's pow value of `nonce`, little-endian words.
+    /// kaspa_pow's pow value of `nonce`, as little-endian words.
     pub fn pow(&self, nonce: u64) -> [u64; 4] {
         self.state.calculate_pow(nonce).0
     }
@@ -108,9 +119,11 @@ fn le_words(h: &Hash) -> [u64; 4] {
     w
 }
 
-/// The 4096 matrix nibbles, row-major. `kaspa_pow::matrix::Matrix` keeps its `[[u16; 64]; 64]` private; its derived `Debug` prints
-/// `Matrix([[a, b, ...], ...])` in row-major order, which is a stable, safe way to read the elements without re-implementing
-/// `Matrix::generate` (xoshiro256++ draws plus the rank-64 rejection loop).
+/// The 4096 matrix nibbles, row-major.
+///
+/// `kaspa_pow::matrix::Matrix` keeps its `[[u16; 64]; 64]` private. Its derived `Debug` prints
+/// `Matrix([[a, b, ...], ...])` in row-major order, which reads the elements safely without
+/// re-implementing `Matrix::generate` (xoshiro256++ draws plus the rank-64 rejection loop).
 pub fn matrix_nibbles(m: &Matrix) -> Vec<u8> {
     let s = format!("{m:?}");
     let v: Vec<u8> = s
@@ -126,7 +139,8 @@ pub fn matrix_nibbles(m: &Matrix) -> Vec<u8> {
     v
 }
 
-/// A synthetic header with fixed fields (benchmarks, tests); `seed` varies the pre-PoW hash, `bits` the target.
+/// A synthetic header with fixed fields, for benchmarks and tests.
+/// `seed` varies the pre-PoW hash and `bits` the target.
 pub fn synthetic_header(seed: u8, bits: u32) -> Header {
     use kaspa_consensus_core::header::CompressedParents;
     use kaspa_math::Uint192;
@@ -155,9 +169,12 @@ pub(crate) mod tests {
         synthetic_header(seed, bits)
     }
 
-    /// The kernel's arithmetic in plain Rust, fed with exactly the data the host uploads (Job + POW_INIT / HEAVY_INIT). Not used for
-    /// mining: it proves on any CI machine (no GPU) that the host-side data reproduce kaspa_pow, so a GPU mismatch can only be the
-    /// kernel itself (covered by `gpu::tests` where an OpenCL device exists).
+    /// The kernel's arithmetic in plain Rust, fed with exactly the data the host uploads
+    /// (Job + POW_INIT / HEAVY_INIT).
+    ///
+    /// It is not used for mining. It proves on any CI machine (no GPU) that the host-side data
+    /// reproduces kaspa_pow, so a GPU mismatch can only be the kernel itself (covered by
+    /// `gpu::tests` where an OpenCL device exists).
     #[allow(clippy::needless_range_loop)] // indexed like the kernel on purpose
     pub fn kernel_mirror(job: &Job, nonce: u64) -> [u64; 4] {
         let mut s = POW_INIT;
@@ -215,7 +232,8 @@ pub(crate) mod tests {
 
     #[test]
     fn target_words_and_compare_match_check_pow() {
-        // 0x1f0fffff: target ~2^244, about one nonce in 4096 passes; find some and compare both verdicts on passes and misses
+        // 0x1f0fffff gives a target of about 2^244, so about one nonce in 4096 passes.
+        // Find some and compare both verdicts on passes and misses.
         let job = Job::new(&header(9, 0x1f0fffff));
         let (mut pass, mut fail) = (0, 0);
         for nonce in 0..100_000u64 {
@@ -233,7 +251,7 @@ pub(crate) mod tests {
         let m = matrix_nibbles(&Matrix::generate(pre));
         assert_eq!(m.len(), 4096);
         assert!(m.iter().all(|&x| x < 16));
-        // different templates, different matrices
+        // Different templates give different matrices.
         let pre2 = hashing::header::hash_override_nonce_time(&header(4, 0x1e7fffff), 0, 0);
         assert_ne!(m, matrix_nibbles(&Matrix::generate(pre2)));
     }

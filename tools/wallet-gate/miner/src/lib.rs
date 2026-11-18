@@ -1,9 +1,11 @@
 //! tn10-miner: a standalone Kaspa testnet-10 miner that funds test addresses (the KOB soak's bank).
 //!
-//! Backends: CPU threads running `kaspa_pow::State::check_pow`, or (feature `gpu`) the OpenCL kHeavyHash kernel in
-//! `kernels/kheavyhash.cl`; every nonce a backend reports is re-verified with kaspa_pow before submitBlock. Optional intermittent
-//! mining (`throttle`): bursts only while the watched spendable balance is below a low watermark, up to a high one, under a
-//! duty-cycle cap.
+//! Backends: CPU threads running `kaspa_pow::State::check_pow`, or (feature `gpu`) the OpenCL
+//! kHeavyHash kernel in `kernels/kheavyhash.cl`. Every nonce a backend reports is re-verified with
+//! kaspa_pow before submitBlock.
+//!
+//! Optional intermittent mining (`throttle`) mines in bursts only while the watched spendable
+//! balance is below a low watermark, up to a high one, under a duty-cycle cap.
 
 pub mod cpu;
 #[cfg(feature = "gpu")]
@@ -15,7 +17,7 @@ pub mod run;
 pub mod settings;
 pub mod throttle;
 
-/// splitmix64 finalizer
+/// The splitmix64 finalizer.
 pub fn mix64(mut x: u64) -> u64 {
     x ^= x >> 33;
     x = x.wrapping_mul(0xFF51_AFD7_ED55_8CCD);

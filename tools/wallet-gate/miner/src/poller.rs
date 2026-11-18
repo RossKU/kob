@@ -1,9 +1,12 @@
-//! Background balance reads for intermittent mining, on their own node connection, so that a slow full UTXO listing (~30 s for the
-//! soak bank's 78k coinbase UTXOs over the internet) never stalls the nonce search.
+//! Background balance reads for intermittent mining, on their own node connection.
 //!
-//! The full listing (exact spendable) is only needed while our own coinbase may still be immature: at the first read, while mining,
-//! and for a while after (`recent`, set by the mining loop). Otherwise the cheap total (getBalanceByAddress) is the spendable
-//! balance, as long as nothing else pays coinbase to the watched address.
+//! A slow full UTXO listing (~30 s for the soak bank's 78k coinbase UTXOs over the internet) must
+//! never stall the nonce search, so the reads run on their own connection.
+//!
+//! The full listing (exact spendable) is only needed while our own coinbase may still be immature:
+//! at the first read, while mining, and for a while after (`recent`, set by the mining loop).
+//! Otherwise the cheap total (getBalanceByAddress) is the spendable balance, as long as nothing
+//! else pays coinbase to the watched address.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -19,7 +22,7 @@ pub struct PollCtl {
     pub addrs: Vec<String>,
     pub maturity_daa: u64,
     pub poll: Duration,
-    /// mining now or recently: list the UTXOs instead of reading the total
+    /// Mining now or recently: list the UTXOs instead of reading the total.
     pub recent: bool,
 }
 
@@ -75,7 +78,7 @@ impl Poller {
         f(&mut self.ctl.lock().unwrap());
     }
 
-    /// Read again now (e.g. after a settings change).
+    /// Reads again now (e.g. after a settings change).
     pub fn kick(&self) {
         self.kick.notify_one();
     }

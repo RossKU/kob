@@ -1,7 +1,10 @@
-//! The mining loop against a mock wRPC JSON node: getBlockTemplate -> search -> kaspa_pow verify -> submitBlock, and intermittent
-//! mining driven by the mock's UTXO set (getBlockDagInfo / getUtxosByAddresses).
+//! Tests the mining loop against a mock wRPC JSON node.
 //!
-//! The backend follows the build: CPU without `--features gpu`; with it, `auto` (the GPU where an OpenCL device exists, else CPU).
+//! - getBlockTemplate -> search -> kaspa_pow verify -> submitBlock.
+//! - Intermittent mining driven by the mock's UTXO set (getBlockDagInfo / getUtxosByAddresses).
+//!
+//! The backend follows the build. It is the CPU without `--features gpu`. With it, it is `auto`
+//! (the GPU where an OpenCL device exists, else the CPU).
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -19,7 +22,7 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
 const KAS: u64 = 100_000_000;
-/// ~1 in 4096 nonces pass
+/// About 1 in 4096 nonces pass.
 const BITS: u32 = 0x1f0f_ffff;
 const VIRTUAL_DAA: u64 = 1_000_000;
 
@@ -28,12 +31,12 @@ struct Mock {
     templates: Vec<(Instant, Header)>,
     accepted: Vec<(Instant, u64)>,
     bad: Vec<String>,
-    /// KAS credited per accepted block, as a coinbase UTXO `coinbase_age` DAA old at query time
+    /// KAS credited per accepted block, as a coinbase UTXO `coinbase_age` DAA old at query time.
     reward: u64,
     coinbase_age: u64,
-    /// an extra immature coinbase that must never count
+    /// An extra immature coinbase that must never count.
     immature: u64,
-    /// a plain UTXO present from the start
+    /// A plain UTXO present from the start.
     plain: u64,
     listings: usize,
     totals: usize,
@@ -51,7 +54,7 @@ fn reply(m: &Mutex<Mock>, method: &str, params: &Value) -> Value {
         "submitBlock" => {
             let raw: RpcRawHeader = serde_json::from_value(params["block"]["header"].clone()).unwrap();
             let got = Header::try_from(&raw).unwrap();
-            // the submitted header is a template header with only the nonce changed
+            // The submitted header is a template header with only the nonce changed.
             let tpl = m.templates.iter().rev().map(|(_, h)| h).find(|h| {
                 let mut t = (*h).clone();
                 t.nonce = got.nonce;
@@ -157,8 +160,9 @@ async fn template_found_verify_submit_loop() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn intermittent_bursts_follow_the_spendable_balance() {
-    // start: 50 KAS plain + 10000 KAS immature coinbase (must not count) -> below low (100): burst. Every accepted block adds a
-    // mature 30 KAS coinbase; at >= 200 KAS (6 blocks) the burst must end and the miner must stop asking for templates.
+    // Start: 50 KAS plain + 10000 KAS immature coinbase (must not count) -> below low (100): burst.
+    // Every accepted block adds a mature 30 KAS coinbase. At >= 200 KAS (6 blocks) the burst must
+    // end and the miner must stop asking for templates.
     let mock = Arc::new(Mutex::new(Mock {
         reward: 30 * KAS,
         coinbase_age: 5000,
@@ -174,7 +178,7 @@ async fn intermittent_bursts_follow_the_spendable_balance() {
     assert!(m.bad.is_empty(), "{:?}", m.bad);
     assert!(sum.accepted >= 5, "the burst mined up to the high watermark: {}", sum.accepted);
     assert_eq!(sum.bursts, 1);
-    // the moment the balance reached 200 KAS: the 5th accepted block (50 + 5 * 30)
+    // The moment the balance reached 200 KAS: the 5th accepted block (50 + 5 * 30).
     let reached = m.accepted[4].0;
     let last_template = m.templates.last().unwrap().0;
     assert!(
@@ -182,7 +186,7 @@ async fn intermittent_bursts_follow_the_spendable_balance() {
         "templates must stop within one poll + one round after the high watermark: {:?}",
         last_template.duration_since(reached)
     );
-    // and it stayed idle for the rest of the run
+    // And it stayed idle for the rest of the run.
     assert!(t0.elapsed() >= Duration::from_secs(8));
     assert!(Instant::now().duration_since(last_template) > Duration::from_secs(3));
     assert!(sum.mining < Duration::from_secs(6), "mined {:?} of 8 s", sum.mining);
@@ -196,7 +200,8 @@ async fn idle_while_the_balance_is_high() {
     let sum = mine(url, s, 0, Duration::from_secs(3)).await;
     assert_eq!(mock.lock().unwrap().templates.len(), 0);
     assert_eq!((sum.accepted, sum.templates, sum.bursts), (0, 0, 0));
-    // one full UTXO listing at start, then only the cheap total (no coinbase of ours can be immature)
+    // One full UTXO listing at start, then only the cheap total (no coinbase of ours can be
+    // immature).
     let m = mock.lock().unwrap();
     assert_eq!(m.listings, 1);
     assert!(m.totals >= 1, "totals {}", m.totals);
@@ -206,12 +211,13 @@ async fn idle_while_the_balance_is_high() {
 async fn duty_cycle_caps_continuous_mining() {
     let mock = Arc::new(Mutex::new(Mock::default()));
     let url = serve(mock.clone()).await;
-    // continuous, but at most 30 % of a 4 s window
+    // Continuous, but at most 30 % of a 4 s window.
     let s = settings_from(r#"{"threads":1,"roundMs":200,"maxDuty":0.3,"dutyWindowSec":4}"#);
     let sum = mine(url, s, 0, Duration::from_secs(7)).await;
-    // the duty counts the whole mining state (templates, search, submits): templates come from t=0 to 1.2 s, then none until the
-    // 0.3 s resume budget is back at t=4.3 (the first burst slides out of the window), then again
-    // (t=0 is the first template: opening a GPU backend compiles the kernel first)
+    // The duty counts the whole mining state (templates, search, submits). Templates come from t=0
+    // to 1.2 s, then none until the 0.3 s resume budget is back at t=4.3 (the first burst slides
+    // out of the window), then again. (t=0 is the first template: opening a GPU backend compiles
+    // the kernel first.)
     let t0 = mock.lock().unwrap().templates[0].0;
     let at: Vec<f64> = mock.lock().unwrap().templates.iter().map(|(t, _)| t.duration_since(t0).as_secs_f64()).collect();
     assert!(at.iter().any(|&x| x < 1.2), "{at:?}");
