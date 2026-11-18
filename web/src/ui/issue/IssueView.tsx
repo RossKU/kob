@@ -1,14 +1,29 @@
-// Token issuance (`kob token create` in the browser): a fixed-supply KCC-20 token on the KCC-20 reference program, by default the published
-// public-mint build `KCC20PublicMint` (3 / 3, no minter) or, chosen under Advanced, the standalone 3 / 3 build `KCC20Ref`. Form -> live validation ->
-// debounced `planIssue` -> summary -> the issuance pre-sign screen (ConfirmSign: the KCC-23 preparation and the genesis, one confirmation) ->
-// tracker + result panel with the registry entry. A creation whose genesis did not go out (data/creations.ts) is offered again at the top:
-// sent as it is when its genesis is signed, finished with one more wallet approval when it is not (the second approval was declined, or the
-// page closed between the two: wallet/create.ts `finishCreation`). The record is untrusted: before the wallet is asked, the creation is planned
-// again from it and checked as a fresh one, and shown on the same confirmation screen (`checkSavedCreation`).
-// All protocol logic is in kob/issue.ts (kob-wasm); this view only collects strings and renders findings.
+// Token issuance (`kob token create` in the browser): a fixed-supply KCC-20 token on the KCC-20
+// reference program. The default is the published public-mint build `KCC20PublicMint` (3 / 3, no
+// minter). Advanced offers the standalone 3 / 3 build `KCC20Ref`.
+//
+// The flow is:
+// - A form with live validation.
+// - A debounced `planIssue` and a summary.
+// - The issuance pre-sign screen (ConfirmSign), with the KCC-23 preparation and the genesis under
+//   one confirmation.
+// - The tracker and the result panel with the registry entry.
+//
+// A creation whose genesis did not go out (data/creations.ts) is offered again at the top. It is
+// sent as it is when its genesis is signed. It is finished with one more wallet approval when it
+// is not, because the second approval was declined or the page closed between the two
+// (wallet/create.ts `finishCreation`). The record is untrusted. Before the wallet is asked, the
+// creation is planned again from it, checked as a fresh one and shown on the same confirmation
+// screen (`checkSavedCreation`).
+//
+// All protocol logic is in kob/issue.ts (kob-wasm). This view only collects strings and renders
+// findings.
 import { useEffect, useMemo, useState } from 'preact/hooks';
 
-/** The app's phone breakpoint (market.css: max-width 759px), where the gate shows the one Connect of the header. */
+/**
+ * The app's phone breakpoint (market.css, max-width 759px), where the gate shows the header's one
+ * Connect.
+ */
 const PHONE_QUERY = '(max-width: 759px)';
 function usePhoneWidth(): boolean {
   const q = () => typeof matchMedia === 'function' && matchMedia(PHONE_QUERY).matches;
@@ -61,19 +76,29 @@ import { ResultPanel } from './ResultPanel';
 import { useIssuePlan } from './use-issue-plan';
 import './issue.css';
 
-/** `resume`: the confirmation finishes this saved creation (`plan` is it, planned again) */
+/**
+ * `resume` means the confirmation finishes this saved creation. `plan` is that creation, planned
+ * again.
+ */
 type Phase =
   | { kind: 'form' }
   | { kind: 'confirm'; plan: IssueResult & Pick<IssuePlan, 'sale'>; resume?: CreationRecord }
   | { kind: 'result'; plan: Pick<IssuePlan, 'token' | 'docs' | 'curve' | 'sale' | 'lock'>; txid: string; trackFailed: boolean };
-/** `finish`: the covenant id of the creation the notice offers to finish (the same action as its banner) */
+/**
+ * `finish` is the covenant id of the creation the notice offers to finish, the same action as its
+ * banner.
+ */
 type Notice = { tone: 'info' | 'error'; text: string; finish?: Hex } | null;
 
-/** Remembers the token outputs of the genesis in the tracker (a genesis has no token leader, so `trackFromBuilt` does not cover it). */
+/**
+ * Remembers the token outputs of the genesis in the tracker. A genesis has no token leader, so
+ * `trackFromBuilt` does not cover it.
+ */
 function trackIssued(services: Services, plan: Pick<IssueResult, 'built' | 'token'>): boolean {
   let ok = true;
   for (const u of issuedTokenUtxos(plan)) {
-    // only plain key-owned outputs can be tracked: custody / hash-owned holders are the receiver's business
+    // Only plain key-owned outputs can be tracked. Custody and hash-owned holders are the
+    // receiver's business.
     if (!isKeyOwned(u.state)) continue;
     try {
       const added = services.tracker.add(u.state.owner, {
@@ -93,6 +118,7 @@ function trackIssued(services: Services, plan: Pick<IssueResult, 'built' | 'toke
   return ok;
 }
 
+/** The Create page: a form that plans, confirms and sends the issuance of a fixed-supply token. */
 export function IssueView() {
   const services = useServices();
   const wallet = useWallet();
@@ -103,13 +129,15 @@ export function IssueView() {
   const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
   const [phase, setPhase] = useState<Phase>({ kind: 'form' });
   const [notice, setNotice] = useState<Notice>(null);
-  // a failed creation, or one whose token step was not sent (its details are on chain): also a red toast at the top right
+  // A failed creation, or one whose token step was not sent, also gets a red toast at the top
+  // right. Its details are on chain.
   useEffect(() => {
     if (notice && (notice.tone === 'error' || notice.finish)) showToast(failureText(t(notice.tone === 'error' ? 'issue.failed.title' : 'issue.toast.notFinished'), notice.text), 'error');
   }, [notice]);
   const [retry, setRetry] = useState(0);
   const [fileError, setFileError] = useState<string | null>(null);
-  // a small preview of the picked picture (an object URL of the file the browser already holds; nothing is uploaded), released when it is replaced or the view goes away
+  // A small preview of the picked picture. It is an object URL of the file the browser already
+  // holds, and nothing is uploaded. It is released when it is replaced or the view goes away.
   const [preview, setPreview] = useState<string | null>(null);
   useEffect(() => () => void (preview && URL.revokeObjectURL(preview)), [preview]);
 
@@ -117,7 +145,8 @@ export function IssueView() {
   const set = (patch: Partial<IssueUiState>) => setState((s) => ({ ...s, ...patch }));
   const touch = (f: string) => setTouched((s) => (s.has(f) ? s : new Set(s).add(f)));
 
-  // the picture file the creator picked: the browser hashes its bytes (nothing is uploaded); an unusable file leaves the hash as it was
+  // The picture file the creator picked. The browser hashes its bytes and uploads nothing. An
+  // unusable file leaves the hash as it was.
   const pickImage = async (input: HTMLInputElement) => {
     const file = input.files?.[0];
     if (!file) return;
@@ -132,7 +161,7 @@ export function IssueView() {
     }
   };
 
-  // ---- limits (older wasm bindings do not export issue: say so instead of crashing)
+  // ---- Limits. Older wasm bindings do not export issue, so say so instead of crashing.
   const limitsResult = useMemo<{ limits: IssueLimits | null; error: string | null }>(() => {
     try {
       return { limits: issueLimits(kob), error: null };
@@ -142,9 +171,11 @@ export function IssueView() {
   }, [kob]);
   const limits = limitsResult.limits;
 
-  // the one plain line on what the program can do, from its registry template's powers (the creation makes no minter: a public-mint program's
-  // mint power has no holder); nothing when the registry does not describe the program
-  // (`powers`: an authority holds powers over the tokens, a warning that stays on the page; the plain fixed-supply line is in the title's help)
+  // The one plain line on what the program can do, from its registry template's powers. The
+  // creation makes no minter, so a public-mint program's mint power has no holder. Nothing shows
+  // when the registry does not describe the program. `powers` means an authority holds powers over
+  // the tokens, a warning that stays on the page. The plain fixed-supply line is in the title's
+  // help.
   const fixedLine = useMemo<{ text: string; powers: boolean } | null>(() => {
     if (!limits) return null;
     const id = state.program === '3x3' ? limits.registryTemplateId : limits.publicMint.registryTemplateId;
@@ -158,24 +189,26 @@ export function IssueView() {
   const usable = pubkey !== null && !wallet.networkMismatch;
   const registryTickers = useMemo(() => services.registry.tokens.map((x) => x.ticker), [services.registry]);
 
-  // ---- creations of this wallet whose genesis did not go out (read below)
+  // ---- Creations of this wallet whose genesis did not go out (read below).
   const [pending, setPending] = useState<CreationRecord[]>([]);
 
-  // ---- funding
+  // ---- Funding
   const funding = useAsync(async () => (usable && pubkey ? services.utxos.fundingFor(pubkey) : null), [pubkey, usable, retry]);
-  // the preparation output of a creation left unfinished stays reserved for its genesis (sent again from the banner below), never new funding
+  // The preparation output of a creation left unfinished stays reserved for its genesis, sent again
+  // from the banner below. It is never new funding.
   const reserved = useMemo(() => new Set(pubkey ? listCreations(config.network, pubkey).map((r) => `${r.prepTxid}:0`) : []), [pubkey, config.network, retry, phase.kind]);
-  // and a coin a transaction of this page just spent is not funding either (the node lists it until a block holds that transaction)
+  // A coin a transaction of this page just spent is not funding either, because the node lists it
+  // until a block holds that transaction.
   const fundingList = useMemo(
     () => (usable && pubkey ? (funding.data ? pendingSpends.without(funding.data).filter((u) => !reserved.has(`${u.transactionId}:${u.index}`)) : null) : null),
     [usable, pubkey, funding.data, reserved],
   );
   const spendable = fundingList ? fundingList.reduce((s, u) => s + BigInt(u.amount), 0n) : null;
 
-  // ---- form -> findings
+  // ---- Form to findings
   const form = useMemo(() => {
     const f = formToIssueForm(state, pubkey);
-    // a blank one price is the default shown in its field (10,000 KAS over the amount)
+    // A blank one price is the default shown in its field (10,000 KAS over the amount).
     if (f.sale?.mode === 'ask' && f.sale.price.trim() === '') {
       const p = salePreview(kob, state)?.defaultPrice;
       if (p) return { ...f, sale: { ...f.sale, price: baseUnitsText(p, 8) } };
@@ -186,12 +219,13 @@ export function IssueView() {
   const decimals = parseDecimalsText(state.decimals);
   const findings = useMemo<PlanIssue[]>(() => (limits ? validateIssueForm(form, limits, registryTickers) : []), [form, limits, registryTickers]);
   const own = useMemo(() => modelIssues(state, pubkey, 0), [state, pubkey]);
-  // "After creation": the split, and a curve's table, graph and numbers, while the form is typed
+  // "After creation": the split, and a curve's table, graph and numbers, while the form is typed.
   const sale = useMemo(() => salePreview(kob, state), [kob, state]);
   const saleBlocked = !!sale && (sale.issues.length > 0 || sale.curveError !== null || (state.sale.mode !== 'keep' && !sale.parsed));
   const blocked = findings.some((i) => i.severity === 'error') || own.some((i) => i.severity === 'error') || saleBlocked;
 
-  // ---- fee policy: the node's estimate (a cached read that never fails: no estimate = the floor)
+  // ---- Fee policy: the node's estimate. It is a cached read that never fails, and no estimate
+  // means the floor.
   const fees = useAsync(async () => readFees(services), [retry]);
 
   const plan = useIssuePlan({
@@ -202,12 +236,13 @@ export function IssueView() {
     funding: fundingList,
     fees: fees.data ?? null,
     registryTickers,
-    // a creation left unfinished comes first: no new one is planned beside it (its coin is reserved, and two "Review and sign" would confuse)
+    // A creation left unfinished comes first, and no new one is planned beside it. Its coin is
+    // reserved, and two "Review and sign" buttons would confuse.
     enabled: limits !== null && !blocked && usable && phase.kind === 'form' && pending.length === 0,
     retry,
   });
 
-  // ---- rendering helpers
+  // ---- Rendering helpers
   const ctx = { tokenDecimals: Number.isNaN(decimals) ? undefined : decimals, tokenTicker: form.ticker || undefined };
   const say = (i: PlanIssue) => issueText(i, ctx);
   const byField = groupByField(findings, walletRow);
@@ -224,16 +259,21 @@ export function IssueView() {
   const summary = plan.status === 'ready' ? reviewSummary(plan.plan, pubkey) : null;
   const canReview = plan.status === 'ready' && phase.kind === 'form' && pending.length === 0;
 
-  // ---- creations of this wallet whose genesis did not go out: offered again (a genesis already on chain finishes them silently)
+  // ---- Creations of this wallet whose genesis did not go out are offered again. A genesis already
+  // on chain finishes them silently.
   const [resuming, setResuming] = useState<string | null>(null);
   const [resumeError, setResumeError] = useState<{ id: string; text: string } | null>(null);
-  // a creation that failed, or stopped part way, is said at the top right in red too (founder 2026-11-17); the notice and the banner keep the details
+  // A creation that failed, or stopped part way, is said at the top right in red too. The notice
+  // and the banner keep the details.
   useEffect(() => {
     if (resumeError) showToast(failureText(t('issue.failed.title'), friendlyErrorText(resumeError.text)), 'error');
   }, [resumeError]);
-  /** what the wallet is asked for while a creation is finished (confirm.chain.*) */
+  /** What the wallet is asked for while a creation is finished (confirm.chain.*). */
   const [resumeNote, setResumeNote] = useState<'wait' | 'genesis' | null>(null);
-  /** creations that cannot be finished: the first step's coin was spent elsewhere, or the record does not check out; only forgetting is left */
+  /**
+   * Creations that cannot be finished: the first step's coin was spent elsewhere, or the record
+   * does not check out. Only forgetting is left.
+   */
   const [stopped, setStopped] = useState<ReadonlyMap<string, 'spent' | 'invalid'>>(new Map());
   const stop = (id: string, code: string | undefined) => {
     const why = code === CREATION_SPENT ? 'spent' : code === CREATION_INVALID ? 'invalid' : null;
@@ -247,7 +287,8 @@ export function IssueView() {
     adoptDeclaration(kob, config.network, rec.token.covenantId, rec.docs.launchProof);
     removeCreation(config.network, rec.covenantId);
     setPending((xs) => xs.filter((x) => x.covenantId !== rec.covenantId));
-    // the curve the genesis placed: its placement record (as an accepted creation saves it), and the result's line
+    // The curve the genesis placed: its placement record, as an accepted creation saves it, and the
+    // result's line.
     if (rec.curve) void recordAccepted(services, wallet, { tx: genesisTx(rec), sign: [] } as unknown as BuiltTx, txid).catch(() => undefined);
     const sale = saleOfRecord(rec);
     if (show) setPhase({ kind: 'result', plan: { token: rec.token, docs: rec.docs, ...(rec.curve ? { curve: rec.curve } : {}), ...(sale ? { sale } : {}) }, txid, trackFailed });
@@ -260,7 +301,8 @@ export function IssueView() {
     const recs = listCreations(config.network, pubkey);
     setPending(recs);
     let alive = true;
-    // a record whose genesis is already on chain (the page died after sending it) is finished, not offered; only one that plans again exactly
+    // A record whose genesis is already on chain, because the page died after sending it, is
+    // finished and not offered. Only one that plans again exactly is offered.
     void (async () => {
       for (const rec of recs) {
         try {
@@ -269,7 +311,7 @@ export function IssueView() {
           const found = await services.node.getUtxosByAddresses([outs[0]!.address]);
           if (alive && found.some((u) => u.transactionId === rec.genesisTxid && u.index === 0)) completed(rec, rec.genesisTxid, false);
         } catch {
-          /* offered as it is */
+          /* Offered as it is. */
         }
       }
     })();
@@ -283,7 +325,8 @@ export function IssueView() {
     try {
       if (!pubkey || (!genesisSigned(rec) && !wallet.adapter)) throw new Error(t('issue.pending.needWallet'));
       if (!genesisSigned(rec)) {
-        // the wallet signs: planned again, checked, then the confirmation screen (it runs `finishCreation`)
+        // The wallet signs. It is planned again and checked, then the confirmation screen runs
+        // `finishCreation`.
         setPhase({ kind: 'confirm', plan: checkSavedCreation(kob, rec, pubkey, services.fees?.policy), resume: rec });
         return;
       }
@@ -299,7 +342,7 @@ export function IssueView() {
     } finally {
       setResuming(null);
       setResumeNote(null);
-      // the attempt may have sent the first step: the record says so, and its stepper follows
+      // The attempt may have sent the first step. The record says so, and its stepper follows.
       if (pubkey) setPending(listCreations(config.network, pubkey));
     }
   };
@@ -314,7 +357,7 @@ export function IssueView() {
     const resumed = phase.kind === 'confirm' ? phase.resume : undefined;
     if (resumed && r.status === 'submitted') return completed(resumed, r.txid, true);
     if (resumed && r.status === 'failed') {
-      // spent elsewhere, or the record no longer checks out: said on its banner
+      // Spent elsewhere, or the record no longer checks out. The banner says so.
       stop(resumed.covenantId, r.code);
       setResumeError({ id: resumed.covenantId, text: r.message });
       setPhase({ kind: 'form' });
@@ -323,10 +366,12 @@ export function IssueView() {
     }
     if (r.status === 'submitted') {
       const trackFailed = !trackIssued(services, current);
-      // the issuer's own decimals, ticker and name: they prefill (never set) the decimals of the token's first order in this browser, and name the
-      // token, marked unverified, wherever the registry does not (app/token-display.ts)
+      // The issuer's own decimals, ticker and name prefill, and never set, the decimals of the
+      // token's first order in this browser. They also name the token, marked unverified, wherever
+      // the registry does not (app/token-display.ts).
       rememberIssuedToken(config.network, current.token.covenantId, { decimals: current.token.decimals, ticker: current.token.ticker, name: current.token.name });
-      // the token's facts as it recorded them on chain: shown at once, without waiting for an indexer (verified like any proof)
+      // The token's facts as it recorded them on chain are shown at once, without waiting for an
+      // indexer. They are verified like any proof.
       adoptDeclaration(kob, config.network, current.token.covenantId, current.docs.launchProof);
       setNotice(null);
       setPhase({ kind: 'result', plan: current, txid: r.txid, trackFailed });
@@ -334,8 +379,8 @@ export function IssueView() {
     }
     setPhase({ kind: 'form' });
     setRetry((n) => n + 1); // the spent UTXOs may have changed: read the funding again (and the creations left unfinished)
-    // `pending`: the first step is on chain, the token is not: its record is offered below ("Finish the creation")
-    // the creation to finish is offered at the top: brought into view
+    // `pending` means the first step is on chain and the token is not. Its record is offered below
+    // ("Finish the creation"), and the creation to finish is brought into view at the top.
     if (r.status === 'pending') setTimeout(() => document.querySelector('[data-testid="issue-pending"]')?.scrollIntoView({ block: 'center' }), 0);
     setNotice(
       r.status === 'failed'
@@ -358,7 +403,7 @@ export function IssueView() {
     setRetry((n) => n + 1);
   };
 
-  // ---- result
+  // ---- Result
   if (phase.kind === 'result') {
     return (
       <div class="issue-page stack" data-testid="issue-view">
@@ -700,9 +745,13 @@ export function IssueView() {
     </div>
   );
 
-  // ---------------------------------------------------------------------------------------------- parts: plain render functions, not components (a component type created per render would remount its inputs and lose focus)
+  // ---- Parts. These are plain render functions, not components, because a component type created
+  // per render would remount its inputs and lose focus.
 
-  /** The notice's own "Finish the creation": the same action as the banner of the creation left unfinished. */
+  /**
+   * The notice's own "Finish the creation": the same action as the banner of the creation left
+   * unfinished.
+   */
   function renderNoticeFinish() {
     const rec = notice?.finish ? pending.find((x) => x.covenantId === notice.finish) : undefined;
     if (!rec || stopped.has(rec.covenantId)) return undefined;
@@ -731,7 +780,10 @@ export function IssueView() {
     return t('issue.summary.saleAsk', { ...words, price: kasText(s.price ?? 0n) });
   }
 
-  /** "After creation": keep all, sell at one price, sell on a curve; a curve's fields, graph and numbers. */
+  /**
+   * "After creation": keep all, sell at one price, or sell on a curve, with a curve's fields, graph
+   * and numbers.
+   */
   function renderSale() {
     const u = state.sale;
     const linked = linkedSaleFields(state);
@@ -838,7 +890,8 @@ export function IssueView() {
                     data-testid="sale-total"
                   />
                   {chromatic ? (
-                    // the levels and the top of the octaves typed (12 x N + 1 levels, the top 2^N times the first)
+                    // The levels and the top of the octaves typed: 12 x N + 1 levels, the top 2^N
+                    // times the first.
                     <div class="issue-sale-total" data-testid="sale-octaves-range">
                       <span class="small muted">{t('issue.sale.levels')}</span>
                       <strong>{sale?.parsed?.octaves ? t('issue.sale.octaves.range', { levels: sale.parsed.levels, times: 2 ** sale.parsed.octaves }) : '-'}</strong>
@@ -877,7 +930,10 @@ export function IssueView() {
     );
   }
 
-  /** "Lock my share until": one compact row under the choices (what it locks and how it opens are behind its "?"). */
+  /**
+   * "Lock my share until": one compact row under the choices. What it locks and how it opens are
+   * behind its "?".
+   */
   function renderLock() {
     const l = state.lock;
     const until = lockUntilOf(l);
@@ -1015,7 +1071,8 @@ export function IssueView() {
 
   function renderWalletGate() {
     if (!wallet.info) {
-      // the kit's one disconnected state (review M-12): a sentence and the connect buttons as its action; the notes about a missing extension sit under it
+      // The kit's one disconnected state: a sentence with the connect buttons as its action. The
+      // notes about a missing extension sit under it.
       return (
         <div class="stack-sm" data-testid="issue-connect">
           <EmptyState
@@ -1023,8 +1080,9 @@ export function IssueView() {
             class="empty-state-wide"
             data-testid="issue-connect-state"
             action={
-              // a phone, or a desktop with no extension detected: the one Connect of the header (the extension if there is one, else the private key entry);
-              // a desktop with extensions: a button for each, and the private key beside them
+              // On a phone, or a desktop with no extension detected, there is the header's one
+              // Connect, which is the extension if there is one, else the private key entry. A
+              // desktop with extensions gets a button for each, and the private key beside them.
               phoneWidth || wallet.detected.length === 0 ? (
                 <ConnectBar gate />
               ) : (
@@ -1067,7 +1125,7 @@ export function IssueView() {
         </Banner>
       );
     }
-    // the balance itself is beside the Summary heading: here only its loading and its error
+    // The balance itself is beside the Summary heading. Only its loading and its error are here.
     if (!(funding.loading && spendable === null) && !funding.error) return null;
     return (
       <div class="row issue-funds" data-testid="issue-funds">
@@ -1084,7 +1142,7 @@ export function IssueView() {
   }
 
   function renderPlanArea() {
-    // nothing is planned while a creation is left unfinished (the hint under the button says why)
+    // Nothing is planned while a creation is left unfinished. The hint under the button says why.
     if (phase.kind === 'form' && pending.length > 0) return null;
     if (plan.status === 'pending') {
       return (
@@ -1161,4 +1219,7 @@ export function IssueView() {
   }
 }
 
-/** The fixed-supply explanation block: what the token can and cannot do, and the reference program's unaudited status. */
+/**
+ * The fixed-supply explanation block: what the token can and cannot do, and the reference program's
+ * unaudited status.
+ */

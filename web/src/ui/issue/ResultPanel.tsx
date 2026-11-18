@@ -1,4 +1,5 @@
-// The panel shown after an accepted issuance: identifiers, the registry entry to submit by pull request, downloads.
+// The panel shown after an accepted issuance: identifiers, the registry entry to submit by pull
+// request, and downloads.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
@@ -9,15 +10,17 @@ import { downloadText } from './download';
 import { formatRowDate } from '../kit/format';
 import { humanAmount, resultViewModel } from './issue-model';
 
+/** What the result panel needs from the accepted issuance. */
 export interface ResultPanelProps {
   plan: Pick<IssuePlan, 'token' | 'docs'> & Partial<Pick<IssuePlan, 'curve' | 'sale' | 'lock'>>;
   txid: string;
   walletKey: Hex | null;
-  /** the wallet-owned token outputs could not be saved in the token tracker */
+  /** The wallet-owned token outputs could not be saved in the token tracker. */
   trackFailed: boolean;
   onAnother(): void;
 }
 
+/** Shows the identifiers, the registry entry and the downloads of an accepted issuance. */
 export function ResultPanel(props: ResultPanelProps) {
   const { plan, txid } = props;
   const [copied, setCopied] = useState<'idle' | 'ok' | 'failed'>('idle');
@@ -28,7 +31,8 @@ export function ResultPanel(props: ResultPanelProps) {
   try {
     vm = resultViewModel(plan, txid, props.walletKey);
   } catch (e) {
-    // the docs did not describe the token: never hand out a registry entry that could point at another token
+    // The docs did not describe the token, so never hand out a registry entry that could point at
+    // another token.
     return (
       <Section title={t('issue.result.title')} data-testid="issue-result">
         <Banner tone="error" title={t('issue.failed.title')} data-testid="issue-result-error">
@@ -92,7 +96,10 @@ export function ResultPanel(props: ResultPanelProps) {
     </div>
   );
 
-  /** "After creation": the curve is on the book already; a one-price sale is the next step (the ticket, prefilled). */
+  /**
+   * "After creation": the curve is on the book already. A one-price sale is the next step, in the
+   * prefilled ticket.
+   */
   function renderSale() {
     const s = plan.sale;
     if (!s) return null;
