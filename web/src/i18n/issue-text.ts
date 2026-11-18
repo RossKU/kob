@@ -1,8 +1,16 @@
-// Translated sentences for findings (planner issues, pre-sign findings, cancel / issuance / registry codes, wallet and node errors).
+// Translated sentences for findings. These are planner issues, pre-sign findings, cancel,
+// issuance and registry codes, and wallet and node errors.
 //
-// Dictionary keys are `issues.<code>` (en/issues.ts) with plain `{name}` placeholders. This module turns the raw params of a finding
-// into display strings first (sompi -> "1.5 KAS", token base units -> "12.5 TICK", basis points -> "12.50", direction words -> plain
-// words, 64-hex ids -> "abcd...1234") so the dictionaries stay free of number formatting. DOM-free: it runs in node tests.
+// Dictionary keys are `issues.<code>` (en/issues.ts) with plain `{name}` placeholders. This module
+// first turns the raw params of a finding into display strings, so the dictionaries stay free of
+// number formatting. The conversions are:
+// - sompi to "1.5 KAS".
+// - Token base units to "12.5 TICK".
+// - Basis points to "12.50".
+// - Direction words to plain words.
+// - 64-hex ids to "abcd...1234".
+//
+// The module is DOM-free and runs in node tests.
 import { has, t, tokenAmountText, type Params } from './index';
 import { nodeReason } from '../data/node-error';
 import { COND_ISSUE_CATALOG } from '../kob/orders/cond-issues';
@@ -14,37 +22,54 @@ export interface IssueLike {
   code: string;
   message: string;
   params?: Params;
-  /** decoder findings carry the input / output index on the issue itself: merged into the params as `{input}` / `{output}` */
+  /**
+   * Decoder findings carry the input and output index on the issue itself. They are merged into the
+   * params as `{input}` and `{output}`.
+   */
   input?: number;
   output?: number;
-  /** form findings carry the field (`holders[2].owner`): the holder number is merged into the params as `{holder}` (1-based) */
+  /**
+   * Form findings carry the field (`holders[2].owner`). The holder number is merged into the params
+   * as `{holder}` (1-based).
+   */
   field?: string;
-  /** registry findings carry the JSON path: merged as `{path}` */
+  /** Registry findings carry the JSON path, which is merged as `{path}`. */
   path?: string;
 }
 
 export interface IssueTextContext {
-  /** decimals of the token the finding is about (token amounts are base units) */
+  /** Decimals of the token the finding is about. Token amounts are base units. */
   tokenDecimals?: number;
   tokenTicker?: string;
   /**
-   * a token/token pair A/B (the pair ticket): the quote token B. Prices of the findings are then B base units per whole A, shown with B's decimals
-   * (and B's ticker where the sentence does not name it); amounts of the PAIR_* findings are of the token their `{ticker}` names (A or B).
+   * A token/token pair A/B (the pair ticket): the quote token B. Prices of the findings are then B
+   * base units per whole A, shown with the decimals of B and with the ticker of B where the
+   * sentence does not name it. Amounts of the PAIR_* findings are of the token their `{ticker}`
+   * names, A or B.
    */
   quoteDecimals?: number;
   quoteTicker?: string;
 }
 
 /**
- * kas: sompi; bps: basis points; token: base units of the finding's token; price: a price per whole token (sompi, or on a pair B base units, shown
- * with B's ticker); pairPrice: a PAIR_* price (B base units per whole A, number only: the sentence names {ticker}); pairToken: a PAIR_* amount of
- * the token `{ticker}` names (number only).
+ * The formats of a param:
+ * - `kas`: sompi.
+ * - `bps`: basis points.
+ * - `token`: base units of the finding's token.
+ * - `price`: a price per whole token. It is in sompi, or on a pair in B base units, shown with
+ *   B's ticker.
+ * - `pairPrice`: a PAIR_* price, in B base units per whole A. It is the number only, because the
+ *   sentence names {ticker}.
+ * - `pairToken`: a PAIR_* amount of the token `{ticker}` names, the number only.
  */
 type Fmt = 'kas' | 'bps' | 'token' | 'price' | 'pairPrice' | 'pairToken' | 'quoteToken';
 
-// ------------------------------------------------------------------------------------------------ which params are what
+// Which params are what.
 
-/** `code.param` -> format. The `{x:kas}` / `{x:bps}` placeholders of the two planner catalogues are read from their English messages. */
+/**
+ * `code.param` to format. The `{x:kas}` and `{x:bps}` placeholders of the two planner catalogues
+ * are read from their English messages.
+ */
 const FORMATS = new Map<string, Fmt>();
 
 function readCatalog(cat: Record<string, { message: string }>): void {
@@ -59,8 +84,9 @@ function declare(fmt: Fmt, entries: Record<string, string[]>): void {
   for (const [code, names] of Object.entries(entries)) for (const n of names) FORMATS.set(`${code}.${n}`, fmt);
 }
 
-// prices per whole token: sompi on a KAS market, B base units per whole A on a pair (the planner's shared codes keep their meaning on a pair).
-// Declared after the catalogues: a `{x:kas}` price of a catalogue message is a price here.
+// Prices per whole token: sompi on a KAS market, B base units per whole A on a pair. The planner's
+// shared codes keep their meaning on a pair. This is declared after the catalogues, because a
+// `{x:kas}` price of a catalogue message is a price here.
 declare('price', {
   PRICE_NOT_ON_TICK: ['below', 'above'],
   PRICE_AGGRESSIVE_VS_MARKET: ['reference'],
@@ -80,7 +106,8 @@ declare('price', {
   COND_PREFUND_SHORT: ['needed', 'given'],
 });
 
-// the pair planner's own codes: prices B base units per whole A, amounts of the token their {ticker} names
+// The pair planner's own codes: prices in B base units per whole A, and amounts of the token their
+// {ticker} names.
 declare('pairPrice', {
   PAIR_MARKETABLE_AUCTION: ['touch'],
   PAIR_MARKETABLE_LIMIT_FILLS_AT_LIMIT: ['touch'],
@@ -93,7 +120,7 @@ declare('pairPrice', {
   PAIR_TP_NOT_PROFITABLE: ['profitPerToken'],
   PAIR_PREFUND_SHORT: ['needed', 'given'],
 });
-// amounts of the quote token B of a pair order
+// Amounts of the quote token B of a pair order.
 declare('quoteToken', {
   'expected-quote-escrowed': ['expected', 'actual'],
 });
@@ -103,7 +130,8 @@ declare('pairToken', {
   PAIR_KRON_DELIVERY_TOO_LARGE: ['max'],
 });
 
-// sompi params the catalogue messages print plainly (KAS amounts of the other catalogues)
+// Sompi params the catalogue messages print plainly, which are the KAS amounts of the other
+// catalogues.
 declare('kas', {
   'fee-mismatch': ['derived', 'declared'],
   'fee-excessive': ['fee', 'moved'],
@@ -119,7 +147,7 @@ declare('kas', {
   'cancel.insufficient-funds': ['shortfall'],
 });
 
-// token amounts in base units (shown with the token's decimals when the caller knows them)
+// Token amounts in base units, shown with the token's decimals when the caller knows them.
 declare('token', {
   'sweep.later-extension': ['amount'],
   'sweep.later-slots': ['amount'],
@@ -150,13 +178,16 @@ declare('token', {
   'expected-tokens-escrowed': ['expected', 'actual'],
 });
 
-/** Words the planners pass as params in English; localised through `issues.term.*`. Only the params named here are looked up. */
+/**
+ * Words the planners pass as params in English; localised through `issues.term.*`. Only the params
+ * named here are looked up.
+ */
 const TERM_PARAMS = new Set(['direction', 'side', 'counterparty']);
 const TERM_KEYS: Record<string, string> = {
   below: 'below', above: 'above', 'at or below': 'atOrBelow', 'at or above': 'atOrAbove', buy: 'buy', sell: 'sell', bids: 'bids', asks: 'asks',
 };
 
-// ------------------------------------------------------------------------------------------------ formatting
+// Formatting.
 
 const toBig = (v: string | number | bigint): bigint | null => {
   if (typeof v === 'bigint') return v;
@@ -166,7 +197,7 @@ const toBig = (v: string | number | bigint): bigint | null => {
 
 const HEX64 = /^[0-9a-f]{64}$/i;
 const OUTPOINT = /^([0-9a-f]{64}):(\d+)$/i;
-// an id in a sentence: its start, then an ellipsis (never cut in the middle)
+// An id in a sentence: its start, then an ellipsis. It is never cut in the middle.
 const shortHex = (s: string): string => `${s.slice(0, 8)}…`;
 
 function formatToken(b: bigint, ctx: IssueTextContext, token: string | null = null): string {
@@ -175,7 +206,7 @@ function formatToken(b: bigint, ctx: IssueTextContext, token: string | null = nu
   return ctx.tokenTicker ? `${amount} ${ctx.tokenTicker}` : amount;
 }
 
-/** DAA runs at ~10 per second (matcher.md); "about 3 h 20 min". */
+/** DAA runs at about 10 per second (matcher.md), so a duration reads like "about 3 h 20 min". */
 function formatWait(seconds: bigint): string {
   if (seconds < 60n) return t('issues.dur.lt');
   const d = seconds / 86_400n;
@@ -187,15 +218,19 @@ function formatWait(seconds: bigint): string {
 }
 
 /**
- * The findings carry the state price (per `scale` base units, the standard scale `10^min(decimals, 9)`): for a token of more than 9 decimals
- * that is a part of a token, so the sentence's "per token" needs the price of `10^decimals` base units.
+ * The findings carry the state price, per `scale` base units, where the standard scale is
+ * `10^min(decimals, 9)`. For a token of more than 9 decimals that is a part of a token, so the
+ * sentence's "per token" needs the price of `10^decimals` base units.
  */
 function perWholeToken(b: bigint, ctx: IssueTextContext): bigint {
   const d = ctx.tokenDecimals ?? 0;
   return d > 9 ? b * 10n ** BigInt(d - 9) : b;
 }
 
-/** A price per whole token: KAS on a KAS market, the quote token B on a pair (B base units per whole A). */
+/**
+ * A price per whole token: KAS on a KAS market, the quote token B on a pair (B base units per whole
+ * A).
+ */
 function formatPrice(raw: bigint, ctx: IssueTextContext): string {
   const b = perWholeToken(raw, ctx);
   if (ctx.quoteDecimals === undefined) return `${formatKas(b)} KAS`;
@@ -203,7 +238,10 @@ function formatPrice(raw: bigint, ctx: IssueTextContext): string {
   return ctx.quoteTicker ? `${amount} ${ctx.quoteTicker}` : amount;
 }
 
-/** An amount of the pair token `ticker` names (A or B), number only; base units when its decimals are unknown. */
+/**
+ * An amount of the pair token `ticker` names (A or B), number only; base units when its decimals
+ * are unknown.
+ */
 function formatPairToken(b: bigint, ticker: unknown, ctx: IssueTextContext): string {
   const decimals = ticker !== undefined && ticker === ctx.quoteTicker ? ctx.quoteDecimals : ticker !== undefined && ticker === ctx.tokenTicker ? ctx.tokenDecimals : undefined;
   return decimals === undefined ? tokenAmountText(null, b) : formatTokenAmount(b, decimals);
@@ -232,12 +270,16 @@ function formatParam(code: string, name: string, v: string | number | bigint, ct
   return String(v);
 }
 
-/** Display params of a finding: formatted raw params + the merged index / field context + derived values. */
+/**
+ * Display params of a finding: the formatted raw params, the merged index and field context, and
+ * derived values.
+ */
 function displayParams(code: string, issue: Pick<IssueLike, 'message' | 'params' | 'input' | 'output' | 'field' | 'path'>, ctx: IssueTextContext): Params {
   const raw = issue.params ?? {};
   const out: Params = {};
   for (const [k, v] of Object.entries(raw)) out[k] = formatParam(code, k, v, ctx, raw);
-  // defaults that a sentence may use when the finding did not carry them: the English detail of the finding itself
+  // Defaults that a sentence may use when the finding did not carry them: the English detail of the
+  // finding itself.
   if (!('message' in out)) out.message = issue.message;
   if (!('reason' in out)) out.reason = issue.message;
   if (issue.input !== undefined) out.input = String(issue.input);
@@ -248,9 +290,10 @@ function displayParams(code: string, issue: Pick<IssueLike, 'message' | 'params'
   if (holder && !('holder' in out)) out.holder = String(Number(holder[1]) + 1);
   else if (!('holder' in out)) out.holder = '?';
 
-  // derived values
+  // Derived values.
   if (code === 'cancel.insufficient-tokens') {
-    // with `have`: need = total the replacement needs; without: need is already the shortfall
+    // With `have`, need is the total the replacement needs. Without it, need is already the
+    // shortfall.
     const need = toBig(raw.need ?? 0);
     const have = raw.have !== undefined ? toBig(raw.have) : null;
     if (need !== null) out.short = formatToken(have !== null && need > have ? need - have : need, ctx);
@@ -263,23 +306,29 @@ function displayParams(code: string, issue: Pick<IssueLike, 'message' | 'params'
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ API
+// API.
 
 /**
- * Translated sentence for a finding. Falls back to the English `issue.message` when no `issues.<code>` key exists.
- * Amount params are formatted by (code, param): KAS sompi -> "1.5 KAS", token base units -> `ctx.tokenDecimals` (+ `ctx.tokenTicker`) or
- * "N base units"; `input` / `output` / `field` / `path` of the finding are merged into the params.
+ * Translated sentence for a finding. It falls back to the English `issue.message` when no
+ * `issues.<code>` key exists. Amount params are formatted by code and param. KAS sompi becomes
+ * "1.5 KAS", and token base units use `ctx.tokenDecimals` and `ctx.tokenTicker` or read "N base
+ * units". `input`, `output`, `field` and `path` of the finding are merged into the params.
  */
 export function issueText(issue: IssueLike, ctx: IssueTextContext = {}): string {
-  // the price-band findings against the last trade price (an empty book) have their own sentence: `issues.last.<code>`
+  // The price-band findings against the last trade price, for an empty book, have their own
+  // sentence: `issues.last.<code>`.
   const base = `issues.${issue.code}`;
   const key = issue.params?.basis === 'last' && has(`issues.last.${issue.code}`) ? `issues.last.${issue.code}` : base;
   if (!has(key)) return issue.message;
-  // a raw builder / node text is replaced by a plain sentence (the UI shows the raw text behind "Details", kit RawDetails)
+  // A raw builder or node text is replaced by a plain sentence. The UI shows the raw text behind
+  // "Details" (kit RawDetails).
   return t(key, displayParams(issue.code, withoutRaw(issue), ctx));
 }
 
-/** Same for a keyed message without an issue object, e.g. `keyedText('wallet', 'rejected')`, `keyedText('untradable', reason)`. */
+/**
+ * Same for a keyed message without an issue object, e.g. `keyedText('wallet', 'rejected')` and
+ * `keyedText('untradable', reason)`.
+ */
 export function keyedText(prefix: string, code: string, params?: Params, fallback?: string): string {
   const key = `issues.${prefix}.${code}`;
   if (!has(key)) return fallback ?? key;
@@ -294,8 +343,10 @@ export interface SignFlowErrorLike {
 }
 
 /**
- * Friendly sentence for a `SignFlowError` (wallet/sign.ts): wallet stages use `issues.signflow.<code>`, the broadcast stage (`submitting`)
- * uses the node error codes `issues.node.<code>`. `{reason}` of node errors is the node's own reason, extracted from the raw text.
+ * Friendly sentence for a `SignFlowError` (wallet/sign.ts). Wallet stages use
+ * `issues.signflow.<code>`, and the broadcast stage (`submitting`) uses the node error codes
+ * `issues.node.<code>`. `{reason}` of node errors is the node's own reason, extracted from the raw
+ * text.
  */
 export function signFlowText(e: SignFlowErrorLike): string {
   if (e.stage === 'submitting') {

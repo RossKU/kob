@@ -12,7 +12,8 @@ export default {
   'orders.tab.history': 'Order history ({count})',
   'orders.tab.fills': 'Trade history ({count})',
   'orders.tab.fillsShort': 'Trades ({count})',
-  // the same tabs on a phone, where the four must stand on one line (the full words stay their accessible names)
+  // The same tabs on a phone, where the four must stand on one line. The full words stay their
+  // accessible names.
   'orders.tab.openShort': 'Open ({count})',
   'orders.tab.historyShort': 'History ({count})',
   'orders.settings.title': 'Strays, automatic refunds and recovery',
@@ -400,7 +401,8 @@ export default {
   'orders.flow.submitted.other': 'Submitted: {count} orders spent.',
   'orders.flow.preparing': 'Waiting for the previous transaction, then building the next one…',
   'orders.merge.button': 'Merge all',
-  // the button's tooltip has the count and the KAS freed (the confirmation states them again, also on a phone)
+  // The button's tooltip has the count and the KAS freed. The confirmation states them again, also
+  // on a phone.
   'orders.merge.hint': 'Merge your {count} UTXOs of this token into one, at most {max} per transaction: {txs}, each approved in your wallet, freeing their carriers\' KAS',
   'orders.merge.hintFrees': 'Merge your {count} UTXOs of this token into one: about +{kas} KAS back. At most {max} per transaction: {txs}, each approved in your wallet',
   'orders.merge.heading': 'Merge {ticker} UTXOs',
@@ -642,7 +644,8 @@ export default {
   'orders.pair.triggerBuy': 'arms on fills implying a rate at or above {stop}: a resting buy of {base} and sell of {quote} filled together (each rested {seconds} s), or a resting {base} pair buy at or above the stop',
   'orders.fills.amountIn': 'Amount ({unit})',
 
-  // a count with its noun, one / other (ui/orders/plural.ts: countText); sentences take the whole phrase as one parameter
+  // A count with its noun, one or other (ui/orders/plural.ts countText). Sentences take the whole
+  // phrase as one parameter.
   'orders.n.order.one': '{n} order',
   'orders.n.order.other': '{n} orders',
   'orders.n.utxo.one': '{n} stray token UTXO',

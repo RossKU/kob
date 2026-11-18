@@ -1,5 +1,7 @@
-// The landing page (src/ui/landing): what opens at the empty hash for a visitor arriving from outside. The page reads the same on every network: only the
-// chip names the network, and the disclaimer's tail has one key per network (`.testnet-10` / `.mainnet`; landing-model.ts picks it).
+// The landing page (src/ui/landing), which opens at the empty hash for a visitor arriving from
+// outside. The page reads the same on every network. Only the chip names the network, and the
+// disclaimer's tail has one key per network (`.testnet-10` and `.mainnet`), which landing-model.ts
+// picks.
 export default {
   'landing.nav.label': 'Landing page',
   'landing.github': 'GitHub',
@@ -19,7 +21,7 @@ export default {
 
   'landing.bleed.label': 'The KOB mark: sell orders above buy orders',
   'landing.bleed.title': 'Real orders only.',
-  // two lines on a tablet or a desktop (one string each), one flowing paragraph on a phone
+  // Two lines on a tablet or a desktop, one string each, and one flowing paragraph on a phone.
   'landing.bleed.body.l1': 'Every bar is an order with its funds locked on Kaspa —',
   'landing.bleed.body.l2': 'no indicative quotes, and anyone can check it on-chain.',
 

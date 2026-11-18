@@ -18,7 +18,8 @@ export default {
   'market.col.depthIn': 'Depth ±2% ({quote})',
   'market.col.depthHint': 'How much can trade without moving the price more than 2%: the resting asks up to 2% above the mid price plus the resting bids down to 2% below it. Without a bid or an ask, around the one that exists.',
   'market.list.priceTitle': '{price} ({unit})',
-  // the optional third-party price from kascov.io, a line of the price cell's tooltip (kascov-overlay.ts); the percent is kascov's price against KOB's own
+  // The optional third-party price from kascov.io, a line of the price cell's tooltip
+  // (kascov-overlay.ts). The percent is kascov's price against KOB's own.
   'market.list.kascovLine': 'kascov: {price} {unit}',
   'market.list.kascovLinePct': 'kascov: {price} {unit} ({percent})',
   'market.list.unavailable': 'Unavailable from the indexer',
@@ -239,7 +240,8 @@ export default {
   'market.token.standaloneUnknownBody': 'Standalone mode lists the tokens the indexer gave this page before it started and the tokens whose orders this page saw on your node since {time}. The token {id} is neither, so it cannot be opened here without the indexer; it may still exist and trade. It opens again once the indexer is back.',
   'market.ticket.standaloneScale': 'Standalone mode: this token has no known declaration and its program no default decimals, so its decimals cannot be checked without the indexer. It can be traded again once the indexer is back.',
   'market.book.error': 'The order book could not be loaded',
-  // below 1200 px the depth chart has no panel of its own: the book's panel switches between the book and the depth chart
+  // Below 1200 px the depth chart has no panel of its own. The book's panel switches between the
+  // book and the depth chart.
   'market.book.view': 'Order book panel view',
   'market.book.view.book': 'Order book',
   'market.book.view.depth': 'Depth',
@@ -317,7 +319,8 @@ export default {
   'market.chart.off': 'No indexer is configured, so there is no price history.',
   'market.chart.error': 'The price history could not be loaded',
 
-  // the optional kascov.io price line of the chart (kascov-overlay.ts): third party, off by default, asked for only while on
+  // The optional kascov.io price line of the chart (kascov-overlay.ts). It is third party, off by
+  // default, and asked for only while on.
   'market.chart.kascov': 'kascov price (third-party)',
   'market.chart.kascov.legend': 'kascov {price}',
   'market.chart.kascov.unavailable': 'kascov unavailable',
@@ -326,7 +329,8 @@ export default {
   'market.chart.kascov.none.pair': 'kascov has no price for one of these tokens',
   'market.chart.kascov.none.list': 'kascov prices are not available right now',
 
-  // drawing tools of the price chart (chart-drawings.ts): kept in this browser per market, never sent anywhere
+  // Drawing tools of the price chart (chart-drawings.ts). They are kept in this browser per market
+  // and never sent anywhere.
   'market.chart.draw.tools': 'Drawing tools',
   'market.chart.draw.button': 'Draw',
   'market.chart.draw.sheet': 'Drawing tools and colours',
@@ -353,7 +357,7 @@ export default {
   'market.chart.draw.listTrend': 'Trend line from {from} to {to} ({color})',
   'market.chart.draw.listXline': 'Extended line from {from} to {to} ({color})',
   'market.chart.draw.listBox': 'Box from {from} to {to} ({color})',
-  // the swatches: the colour of the next drawing (and of what the recolour tool is clicked on)
+  // The swatches: the colour of the next drawing, and of what the recolour tool is clicked on.
   'market.chart.draw.colors': 'Drawing colour',
   'market.chart.draw.colorNow': 'Drawing colour: {color}',
   'market.chart.draw.colorHint': 'Sets the colour of the next drawing; with the recolour tool, the colour of the drawing you click.',
@@ -369,7 +373,8 @@ export default {
   'market.depth.asks': 'Asks',
   'market.depth.tip': '{price} {priceUnit} · {amount} {ticker} cumulative',
   'market.depth.tipUsd': '{price} {priceUnit} · {amount} cumulative',
-  // a click on the chart prefills the ticket like a click on a book row (the chart is a pointer convenience: the book's rows are the keyboard path)
+  // A click on the chart prefills the ticket like a click on a book row. The chart is a pointer
+  // convenience, and the book's rows are the keyboard path.
   'market.depth.pickHint': 'Click to use this price in the ticket',
   'market.depth.empty': 'No orders in the book.',
   'market.depth.unavailable': 'The book could not be loaded.',
@@ -407,7 +412,8 @@ export default {
   'market.fact.public-mint.text': 'Its program lets anyone create more of this token.',
   'market.fact.blacklist.label': 'Can blacklist',
   'market.fact.blacklist.text': 'Its program lets the issuer block addresses from moving this token.',
-  // the genesis line (token-model.ts applyGenesisCheck / withKascovRemark): kascov's remark in the list, KOB's own check on the token page
+  // The genesis line (token-model.ts applyGenesisCheck and withKascovRemark): kascov's remark in
+  // the list, and KOB's own check on the token page.
   'market.fact.genesis_kascov.label': 'Verified by kascov',
   'market.fact.genesis_kascov.text':
     "kascov.io, a third-party explorer, says it checked this token's history. KOB has not checked it itself yet: open the token and KOB runs its own check.",
@@ -465,7 +471,8 @@ export default {
 
   'market.open.title': 'Token {id}',
   'market.open.fullId': 'Full covenant id:',
-  // the decimals of an open-list market and where they come from (app/token-display.ts decimalsOrigin)
+  // The decimals of an open-list market and where they come from (app/token-display.ts
+  // decimalsOrigin).
   'market.open.decimals.declared': "Amounts are whole tokens of {decimals} decimals, as its creator declared at creation (the creator's own claim, not checked); the price step is 1 sompi.",
   'market.open.decimals.program': 'Amounts are whole tokens of {decimals} decimals, the {source} for the tokens of its program (the token declares no decimals on chain); the price step is 1 sompi.',
   'market.open.decimals.scale': 'Amounts are whole tokens of {decimals} decimals, the price scale its first order set (the token declares no decimals on chain); the price step is 1 sompi.',
@@ -513,7 +520,8 @@ export default {
   'market.chart.unitOf': '{quote} per {base}',
   'market.token.scaleValue': "per 1 {ticker} ({decimals} decimals)",
   'market.token.scaleValuePart': "per {part} {ticker}; prices are shown per whole token",
-  // token logos: where the picture comes from, and the report (data/logos.ts, data/logo-blocklist.ts)
+  // Token logos: where the picture comes from, and the report (data/logos.ts,
+  // data/logo-blocklist.ts).
   'market.logo.title': 'Logo',
   'market.logo.show': 'Show logo',
   'market.logo.show.title': 'Show logo: loads the picture from {host}, which then sees your IP address',

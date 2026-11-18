@@ -1,4 +1,5 @@
-// The order ticket (ui/ticket). Keys `ticket.*`; planner findings are in `issues.*`, the send status line in `send.*`.
+// The order ticket (ui/ticket). Keys `ticket.*`; planner findings are in `issues.*`, the send
+// status line in `send.*`.
 export default {
   'ticket.title': 'Order ticket',
   'ticket.side': 'Buy or sell',
@@ -480,7 +481,8 @@ export default {
   'ticket.disc.entryStop': 'Entry stop trigger',
   'ticket.disc.entryTrigger': 'Entry trigger rule',
   'ticket.disc.exitTrigger': 'Exit stop trigger rule',
-  // token/token pairs (prices in the quote token B per whole A; tips, carriers and fees in KAS)
+  // Token/token pairs. Prices are in the quote token B per whole A, and tips, carriers and fees are
+  // in KAS.
   'ticket.disc.pairEscrowA': 'Base tokens locked in the order',
   'ticket.disc.pairEscrowB': 'Quote tokens locked in the order',
   'ticket.disc.pairPrefundB': 'Quote tokens for the buy-backs (prefund)',

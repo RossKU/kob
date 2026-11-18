@@ -1,4 +1,5 @@
-// Builder and node refusals in plain words (i18n/build-error.ts); the raw text stays behind "Details".
+// Builder and node refusals in plain words (i18n/build-error.ts). The raw text stays behind
+// "Details".
 export default {
   'build.insufficient-funds': 'there is not enough free KAS in the wallet to pay for it',
   'build.not-yet-refundable': 'the order cannot be refunded yet (from DAA {daa})',

@@ -1,4 +1,5 @@
-// The private-key signer (signer.html, a sandboxed frame) and its entry point in the app. Keys `signer.*`.
+// The private-key signer (signer.html, a sandboxed frame) and its entry point in the app. Keys
+// `signer.*`.
 export default {
   'signer.recommend': 'A browser extension wallet is recommended.',
   'signer.signHead': 'Sign with your key',
@@ -95,9 +96,11 @@ export default {
   'signer.net.tokenProgram': '{id} ({decimals} decimals, {source})',
   'signer.net.tokenIssued': '{ticker} ({id}, unverified)',
   'signer.net.tokenDeclared': '{ticker} ({id}, declared on chain, unverified)',
-  // a token the app lists: its ticker and decimals are the app's word, which this frame cannot check (audit 2026-10-30 G7)
+  // A token the app lists. Its ticker and decimals are the app's word, which this frame cannot
+  // check.
   'signer.net.tokenListed': '{ticker} ({id}, {decimals} decimals as the app lists them)',
-  // the app's hints (notes.ts): fixed sentences of this frame from codes and numbers of the app; the signer has not verified them
+  // The app's hints (notes.ts) are fixed sentences of this frame, built from codes and numbers of
+  // the app. The signer has not verified them.
   'signer.hint.label': 'The app adds (not verified by this signer):',
   'signer.hint.minValue.default': 'Worth {value} KAS, under the usual {min} KAS minimum order value: it will not be listed, so it will not fill. Cancel it in Portfolio.',
   'signer.hint.minValue.indexer': 'Worth {value} KAS, under the indexer minimum of {min} KAS: it will not be listed, so it will not fill. Cancel it in Portfolio.',
@@ -134,7 +137,7 @@ export default {
   'signer.flip.type.dutch': 'Dutch auction',
   'signer.flip.type.rising': 'rising-bid auction',
   'signer.approve': 'Approve',
-  // a one-approval merge session (session.ts): the frame's own terms of the plan it decoded
+  // A one-approval merge session (session.ts): the frame's own terms of the plan it decoded.
   'signer.allow': 'Allow',
   'signer.session.title': 'Merge {ticker} UTXOs without asking each time',
   'signer.session.titleToken': 'Merge token UTXOs without asking each time',

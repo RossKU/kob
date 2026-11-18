@@ -1,4 +1,5 @@
-// Strings of ui/confirm: the token-issuance confirmation screen, the silent pre-sign checks and the decoded-order vocabulary. Keys `confirm.*`. Findings of the decoder are in `issues.*`.
+// Strings of ui/confirm: the token-issuance confirmation screen, the silent pre-sign checks and the
+// decoded-order vocabulary. Keys are `confirm.*`. Findings of the decoder are in `issues.*`.
 export default {
   'confirm.ack': 'I checked this screen. My wallet popup will not show these details.',
   'confirm.blockingTitle': 'Do not sign this transaction',
@@ -23,7 +24,8 @@ export default {
   'confirm.kind.issue': "Create a new token",
   'confirm.kind.issueIntro': 'Creates a fixed-supply token in two transactions: the first records its details on chain, the second creates the token. The supply can never change.',
 
-  // the short summary of a creation, and its two one-line notes (each with its full text behind a "?")
+  // The short summary of a creation, and its two one-line notes, each with its full text behind a
+  // "?".
   'confirm.brief.title': 'What you sign',
   'confirm.brief.create': 'Creates',
   'confirm.brief.createDetail': '{name}, {decimals} decimals, fixed supply',
@@ -218,7 +220,8 @@ export default {
   'confirm.stage.finalizing': 'Checking the signatures',
   'confirm.stage.validating': 'Running the contract scripts',
   'confirm.stage.submitting': 'Sending to the network',
-  // a creation with a wallet that asks once per transaction (wallet/create.ts): which of the two approvals the wallet shows now
+  // A creation with a wallet that asks once per transaction (wallet/create.ts). Which of the two
+  // approvals the wallet shows now.
   'confirm.chain.prep': 'Step 1 of 2: approve the transaction that records the token details in your wallet.',
   'confirm.chain.wait': 'Step 1 of 2 sent. Waiting until your wallet can see it...',
   'confirm.chain.genesis': 'Step 2 of 2: approve the token creation in your wallet.',

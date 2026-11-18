@@ -1,4 +1,5 @@
-// The disclaimer page (#/disclaimer, src/ui/shell/DisclaimerPage.tsx). It reads the same on every network.
+// The disclaimer page (#/disclaimer, src/ui/shell/DisclaimerPage.tsx). It reads the same on every
+// network.
 export default {
   'legal.title': 'Disclaimer',
   'legal.updated': 'Last updated 2026-11-09',

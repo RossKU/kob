@@ -1,11 +1,13 @@
-// The send flow of an order action and its one-line status (ui/confirm/send.ts, SendStatus.tsx). Keys `send.*`; decoder findings are in `issues.*`.
+// The send flow of an order action and its one-line status (ui/confirm/send.ts, SendStatus.tsx).
+// Keys are `send.*`. Decoder findings are in `issues.*`.
 export default {
   'send.checking': 'Checking the order...',
   'send.confirming': 'Confirm the order...',
   'send.continueInWallet': 'Continue in wallet',
   'send.cancelled': 'Cancelled. Nothing was sent.',
   'send.signing': 'Confirm in {wallet}...',
-  // the visibility gate (wallet/visibility.ts): the coin this transaction spends is the change of the one just sent, not yet seen by the wallet
+  // The visibility gate (wallet/visibility.ts). The coin this transaction spends is the change of
+  // the one just sent, and the wallet has not seen it yet.
   'send.waitWallet': 'Waiting until {wallet} sees your last transaction...',
   'send.yourWallet': 'your wallet',
   'send.confirmTitle': 'Confirm order',
@@ -21,7 +23,8 @@ export default {
   'send.inputsUnavailable': 'The node could not confirm your coins. Nothing was sent; try again.',
   'send.decodeFailed': 'The transaction could not be read back. Nothing was sent.',
   'send.checkFailed': 'The order could not be checked. Nothing was sent; try again.',
-  // the heading of the red toast of a click that ended without its order (notify/failure-toast.ts): "<heading>: <reason>"
+  // The heading of the red toast of a click that ended without its order (notify/failure-toast.ts),
+  // shown as "<heading>: <reason>".
   'send.failed.order': 'Order not sent',
   'send.failed.take': 'Fill from the book stopped',
   'send.failed.merge': 'Merge stopped',
