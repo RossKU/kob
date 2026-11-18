@@ -1,21 +1,30 @@
-// The signing pipeline of a TOKEN CREATION (KCC-23, two transactions): the preparation declaring the metadata, then the genesis spending its
-// output 0. Both go through the chain runner (chain.ts): per transaction, the wallet signs every input -> kob.finalize verifies each signature
-// and assembles the scripts -> kob.validate runs the script engine; then the node.
+// The signing pipeline of a token creation (KCC-23), which is two transactions. The preparation
+// declares the metadata, and the genesis spends its output 0.
 //
-//   * One approval where the wallet can give it: the private-key signer shows both transactions on one confirmation (`signChain`), both are
-//     signed before anything is sent.
-//   * An extension wallet signs one transaction per request, and looks every input up on its own node (KasWare 0.11.5): the genesis spends an
-//     output nobody broadcast until the preparation is sent. So the preparation is signed and SENT first; the wallet is asked for the genesis once
-//     that output is visible to its node (visibility.ts). Declining the second request leaves the preparation on chain: its output 0 (the
-//     genesis's carriers and fee) stays an ordinary coin of the wallet, and only the first step's network fee is spent.
-//   * The genesis is planned before anything is signed: a version 1 transaction id does not depend on signature scripts or compute budgets, so
-//     the outpoint it spends is known, and tightening the preparation's budgets at finalize keeps it.
-//   * A creation record (data/creations.ts) is written once the preparation is signed and validated, before it is sent; it holds the genesis
-//     as planned and, once signed, signed. It is removed once the genesis is accepted. If the page dies in between, the user declines the
-//     second approval, or the node refuses the genesis, the Create token page finishes it later (`finishCreation`).
-//   * The record is untrusted input (anything that writes this origin's localStorage can plant one): `finishCreation` never signs its stored
-//     genesis. It plans the creation again (creation-replan.ts), checks that plan as a fresh one (issuance-model.ts) and the preparation's
-//     output 0 on the node, and signs the plan.
+// Both go through the chain runner (chain.ts). For each transaction the wallet signs every input,
+// `kob.finalize` verifies each signature and assembles the scripts, and `kob.validate` runs the
+// script engine. Then it goes to the node.
+//
+// - One approval where the wallet can give it. The private-key signer shows both transactions on
+//   one confirmation (`signChain`), and both are signed before anything is sent.
+// - An extension wallet signs one transaction per request, and looks every input up on its own
+//   node (KasWare 0.11.5). The genesis spends an output nobody broadcast until the preparation is
+//   sent. So the preparation is signed and sent first, and the wallet is asked for the genesis
+//   once that output is visible to its node (visibility.ts). Declining the second request leaves
+//   the preparation on chain. Its output 0, the genesis's carriers and fee, stays an ordinary coin
+//   of the wallet, and only the first step's network fee is spent.
+// - The genesis is planned before anything is signed. A version 1 transaction id does not depend
+//   on signature scripts or compute budgets, so the outpoint it spends is known, and tightening the
+//   preparation's budgets at finalize keeps it.
+// - A creation record (data/creations.ts) is written once the preparation is signed and
+//   validated, before it is sent. It holds the genesis as planned and, once signed, as signed. It
+//   is removed once the genesis is accepted. If the page dies in between, the user declines the
+//   second approval or the node refuses the genesis, the Create token page finishes it later
+//   (`finishCreation`).
+// - The record is untrusted input, because anything that writes this origin's localStorage can
+//   plant one. `finishCreation` never signs its stored genesis. It plans the creation again
+//   (creation-replan.ts), checks that plan as a fresh one (issuance-model.ts) and checks the
+//   preparation's output 0 on the node. Then it signs the plan.
 import type { NodeApi } from '../data/node';
 import { NodeError, describeNodeError } from '../data/node-error';
 import { genesisSigned, markPrepSent, removeCreation, saveCreation, type CreationRecord } from '../data/creations';
@@ -31,45 +40,60 @@ import type { WalletAdapter } from './types';
 import { noteSent } from './visibility';
 import type { GenesisClaim } from '../signer/protocol';
 
+/** The step of a creation a stage belongs to. */
 export type CreationStep = 'prep' | 'genesis';
 
+/** What a creation stage reports beyond its stage. */
 export interface CreationStageInfo {
   txid?: string;
   step?: CreationStep;
-  /** waiting until the wallet's node sees the preparation (the wallet is not asked for the genesis yet) */
+  /**
+   * Waiting until the wallet's node sees the preparation. The wallet is not asked for the genesis
+   * yet.
+   */
   waiting?: boolean;
 }
 
+/** The inputs of `signAndSubmitCreation`. */
 export interface CreationArgs {
   kob: KobWasm;
   node: NodeApi;
   adapter: WalletAdapter;
-  /** step 1: the preparation */
+  /** Step 1, the preparation. */
   prep: BuiltTx;
-  /** step 2: the genesis, spending `prep`'s output 0 */
+  /** Step 2, the genesis, spending `prep`'s output 0. */
   built: BuiltTx;
   network: string;
-  /** script public key -> address of the app's network (the visibility gate asks the node by address) */
+  /**
+   * Maps a script public key to an address of the app's network. The visibility gate asks the node
+   * by address.
+   */
   addressOf: (spk: string) => string;
-  /** what the creation record keeps to resume and to show the result */
+  /** What the creation record keeps to resume and to show the result. */
   record: { token: IssueToken; declaration: IssueDeclaration; docs: IssueDocs; curve?: IssueCurve; askSale?: { sell: string; price: string } };
-  /** the creator's key (the record's owner) */
+  /** The creator's key, which owns the record. */
   maker: string;
   onStage?: (stage: SignStage, info?: CreationStageInfo) => void;
-  /** the node took the preparation (its inputs are spent from now on, whatever becomes of the genesis): the caller records that at once */
+  /**
+   * Called when the node took the preparation. Its inputs are spent from then on, whatever becomes
+   * of the genesis, so the caller records that at once.
+   */
   onPrepSent?: (prep: SignedTx) => void;
   timeoutMs?: number;
-  /** default true when the adapter can `refresh` */
+  /** The default is true when the adapter can `refresh`. */
   checkWallet?: boolean;
-  /** default true; only tests turn it off */
+  /** The default is true, and only tests turn it off. */
   validate?: boolean;
   tighten?: boolean;
-  /** where the creation record goes (default: localStorage; null: none) */
+  /** Where the creation record goes. The default is localStorage, and null keeps none. */
   storage?: StorageLike | null;
-  /** how often and how long apart the genesis is offered while the node has not yet seen the preparation (default 5 x 1500 ms) */
+  /**
+   * How often and how far apart the genesis is offered while the node has not yet seen the
+   * preparation. The default is 5 times, 1500 ms apart.
+   */
   genesisAttempts?: number;
   genesisRetryMs?: number;
-  /** the chain runner's waits (chain.ts): tests shorten them */
+  /** The chain runner's waits (chain.ts). Tests shorten them. */
   visibleTimeoutMs?: number;
   visiblePollMs?: number;
   settleMs?: number;
@@ -78,20 +102,24 @@ export interface CreationArgs {
   now?: () => number;
 }
 
+/** What a finished creation sent. */
 export interface CreationResult {
   prepTxid: string;
-  /** the genesis */
+  /** The genesis. */
   txid: string;
   prepSigned: SignedTx;
   signed: SignedTx;
-  /** both fees, sompi */
+  /** Both fees, in sompi. */
   fee: bigint;
 }
 
-/** Node answers that say a transaction was not taken (the others leave it open). */
+/** Node answers that say a transaction was not taken. The others leave it open. */
 const DEFINITE = new Set<string>(['orphan', 'double-spend', 'fee', 'script', 'invalid', 'network-mismatch']);
 
-/** What the genesis's token outputs are claimed to hold, for a wallet that checks them (the private-key signer). */
+/**
+ * What the genesis's token outputs are claimed to hold, for a wallet that checks them. That is the
+ * private-key signer.
+ */
 export function genesisClaimOf(token: IssueToken, curve?: IssueCurve): GenesisClaim {
   return {
     program: token.program,
@@ -102,8 +130,10 @@ export function genesisClaimOf(token: IssueToken, curve?: IssueCurve): GenesisCl
 }
 
 /**
- * The creation could not be finished now, but its preparation is on chain: a SignFlowError `genesis-pending` (never signed again on the
- * confirmation screen; the Create token page finishes it). Its message says why: declined, the wallet could not see the first step, or the node.
+ * The error when the creation could not be finished now but its preparation is on chain. It is a
+ * SignFlowError `genesis-pending`. It is never signed again on the confirmation screen, and the
+ * Create token page finishes it. Its message says why: declined, the wallet could not see the
+ * first step, or the node.
  */
 function genesisPending(prepTxid: string, e: unknown): SignFlowError {
   const first = `The token details were recorded on chain (transaction ${prepTxid.slice(0, 16)}...), but the token itself was not created`;
@@ -119,6 +149,10 @@ function genesisPending(prepTxid: string, e: unknown): SignFlowError {
   return new SignFlowError('submitting', err, `${first}: the node did not take the token's creation: ${err.message} ${after}`, 'genesis-pending');
 }
 
+/**
+ * Signs and sends both transactions of a token creation, keeping a creation record in between.
+ * Once the preparation is sent, every failure is a SignFlowError `genesis-pending`.
+ */
 export async function signAndSubmitCreation(a: CreationArgs): Promise<CreationResult> {
   const { prep, built } = a;
   const stage = (s: SignStage, info?: CreationStageInfo) => {
@@ -159,7 +193,7 @@ export async function signAndSubmitCreation(a: CreationArgs): Promise<CreationRe
       ...(a.unknownRetryMs !== undefined ? { unknownRetryMs: a.unknownRetryMs } : {}),
       ...(a.sleep ? { sleep: a.sleep } : {}),
       ...(a.now ? { now: a.now } : {}),
-      // the record first: from here on the page may die between the two
+      // The record comes first, because from here on the page may die between the two.
       onSigned: (signed) => {
         const rec: CreationRecord = {
           ...base, prep: signed[0]!.tx, ...(signed[1] ? { genesis: signed[1].tx } : {}), prepSent, ...(prepSentAt !== undefined ? { prepSentAt } : {}),
@@ -185,13 +219,15 @@ export async function signAndSubmitCreation(a: CreationArgs): Promise<CreationRe
   } catch (e) {
     const sentSteps = e instanceof ChainError ? e.sent : prepSent ? 1 : 0;
     if (sentSteps >= 1) throw genesisPending(prep.tx.id, e);
-    // nothing went out. A definite refusal of the preparation, or an answer that cannot be trusted: the record is of no use. An unclear failure
-    // (the connection) keeps it: the preparation may be in
+    // Nothing went out. After a definite refusal of the preparation, or an answer that cannot be
+    // trusted, the record is of no use. An unclear failure, such as the connection, keeps it,
+    // because the preparation may be in.
     if (e instanceof SignFlowError && e.stage === 'submitting') {
       const cause = e.cause;
       if (e.code === 'txid-mismatch' || (cause instanceof NodeError && DEFINITE.has(cause.code))) removeCreation(a.network, base.covenantId, storage);
     } else if (saved) {
-      // signed and recorded but failed before the send (cannot happen after a successful record today): nothing went out
+      // Signed and recorded but failed before the send, which cannot happen after a successful
+      // record. Nothing went out.
       removeCreation(a.network, base.covenantId, storage);
     }
     if (e instanceof ChainError) throw new SignFlowError(e.stage, e.cause, e.message, e.code);
@@ -199,18 +235,24 @@ export async function signAndSubmitCreation(a: CreationArgs): Promise<CreationRe
   }
 }
 
+/** How `resumeCreation` sends a saved creation. */
 export interface FinishOptions {
   storage?: StorageLike | null;
-  /** genesis offers while the node does not see the preparation (default 3 x 1500 ms) */
+  /**
+   * The genesis offers while the node does not see the preparation. The default is 3 times, 1500
+   * ms apart.
+   */
   attempts?: number;
   retryMs?: number;
   sleep?: (ms: number) => Promise<void>;
 }
 
 /**
- * Finishes a saved creation whose genesis is signed: sends its preparation again (a node that has it, or has it in a block, refuses it: that
- * is fine) and its signed genesis as it is. Nothing is signed. The record is removed once the genesis is accepted. Throws a SignFlowError
- * (`genesis-pending`) otherwise.
+ * Finishes a saved creation whose genesis is signed. Nothing is signed.
+ *
+ * It sends its preparation again, and a node that has it, or has it in a block, refuses it, which
+ * is fine. Then it sends its signed genesis as it is. The record is removed once the genesis is
+ * accepted. Otherwise it throws a SignFlowError `genesis-pending`.
  */
 export async function resumeCreation(node: NodeApi, rec: CreationRecord, opts: FinishOptions = {}): Promise<string> {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -219,7 +261,7 @@ export async function resumeCreation(node: NodeApi, rec: CreationRecord, opts: F
   try {
     await sendTx(node, rec.prep);
   } catch {
-    /* already in a block, or spent: the genesis decides */
+    /* Already in a block, or spent. The genesis decides. */
   }
   try {
     await sendTxRetrying(node, rec.genesis, opts.attempts ?? 3, opts.retryMs ?? 1500, sleep);
@@ -230,14 +272,15 @@ export async function resumeCreation(node: NodeApi, rec: CreationRecord, opts: F
   return rec.genesisTxid;
 }
 
+/** The inputs of `finishCreation`. */
 export interface FinishArgs extends FinishOptions {
   kob: KobWasm;
   node: NodeApi;
-  /** the wallet of the record's key (it signs the genesis when the record holds none signed) */
+  /** The wallet of the record's key. It signs the genesis when the record holds none signed. */
   adapter: WalletAdapter;
-  /** that wallet's x-only key: a record of another key is refused */
+  /** That wallet's x-only key. A record of another key is refused. */
   maker: string;
-  /** the wallet's fee policy: the fee checks of a fresh creation (ConfirmSign) */
+  /** The wallet's fee policy, for the fee checks of a fresh creation (ConfirmSign). */
   feePolicy?: IssuanceInput['feePolicy'];
   network: string;
   rec: CreationRecord;
@@ -247,7 +290,10 @@ export interface FinishArgs extends FinishOptions {
   checkWallet?: boolean;
   validate?: boolean;
   tighten?: boolean;
-  /** how long the preparation, sent again, may take to be listed by the node (default 60 s, polled every 1 s) */
+  /**
+   * How long the preparation, sent again, may take to be listed by the node. The default is 60 s,
+   * polled every 1 s.
+   */
   prepWaitMs?: number;
   prepPollMs?: number;
   visibleTimeoutMs?: number;
@@ -257,14 +303,23 @@ export interface FinishArgs extends FinishOptions {
   now?: () => number;
 }
 
-/** The coin the genesis spends is gone (spent by another transaction): the creation cannot be finished. */
+/**
+ * The code when the coin the genesis spends is gone, spent by another transaction. The creation
+ * cannot be finished.
+ */
 export const CREATION_SPENT = 'creation-spent';
-/** The saved record does not plan into a valid creation of this wallet: nothing is signed or sent. */
+/**
+ * The code when the saved record does not plan into a valid creation of this wallet. Nothing is
+ * signed or sent.
+ */
 export const CREATION_INVALID = 'creation-invalid';
 
 /**
- * Plans a saved creation again and checks it as a fresh one: the plan to sign, or a SignFlowError `creation-invalid` (nothing signed). The
- * stored genesis is never used: the plan must reproduce the record's ids and token, and pass every blocking check of the issuance screen.
+ * Plans a saved creation again and checks it as a fresh one. It returns the plan to sign, or
+ * throws a SignFlowError `creation-invalid` with nothing signed.
+ *
+ * The stored genesis is never used. The plan must reproduce the record's ids and token, and pass
+ * every blocking check of the issuance screen.
  */
 export function checkSavedCreation(kob: KobWasm, rec: CreationRecord, maker: string, feePolicy?: IssuanceInput['feePolicy']): IssueResult {
   const invalid = (why: string) => new SignFlowError('signing', null, `This saved creation is not valid (${why}). Nothing was signed or sent. Forget it.`, CREATION_INVALID);
@@ -278,27 +333,34 @@ export function checkSavedCreation(kob: KobWasm, rec: CreationRecord, maker: str
 }
 
 /**
- * Finishes a saved creation (the Create token page, "Finish the creation"). A signed genesis is sent as it is (`resumeCreation`). An unsigned
- * one needs the wallet once: when the preparation's output 0 is in the node's UTXO set it is signed and sent at once; otherwise the saved
- * preparation is sent again and its output awaited first. A preparation the node refuses for good while its output is not listed means the
- * coin was spent elsewhere: SignFlowError `creation-spent` (only forgetting the record is left). The record is planned again and checked first
- * (`checkSavedCreation`): a record that does not check out is SignFlowError `creation-invalid`. Returns the genesis txid.
+ * Finishes a saved creation, for "Finish the creation" on the Create token page. It returns the
+ * genesis txid.
+ *
+ * The record is planned again and checked first (`checkSavedCreation`). A record that does not
+ * check out is a SignFlowError `creation-invalid`.
+ *
+ * A signed genesis is sent as it is (`resumeCreation`). An unsigned one needs the wallet once. When
+ * the preparation's output 0 is in the node's UTXO set, it is signed and sent at once. Otherwise
+ * the saved preparation is sent again and its output awaited first. A preparation the node refuses
+ * for good while its output is not listed means the coin was spent elsewhere. That is a
+ * SignFlowError `creation-spent`, and only forgetting the record is left.
  */
 export async function finishCreation(a: FinishArgs): Promise<string> {
   const { node, rec } = a;
   const sleep = a.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const now = a.now ?? Date.now;
-  // planned again from the record's facts; its stored genesis is never signed
+  // Planned again from the record's facts. Its stored genesis is never signed.
   const plan = checkSavedCreation(a.kob, rec, a.maker, a.feePolicy);
   if (genesisSigned(rec)) return resumeCreation(node, rec, a);
   const built: BuiltTx = plan.built;
-  // the coin the genesis spends, as the NODE lists it: the wallet's own key, the planned amount
+  // The coin the genesis spends, as the node lists it, with the wallet's own key and the planned
+  // amount.
   const out0 = plan.prep.tx.outputs[0]!;
   const address = a.addressOf(out0.scriptPublicKey);
   const listed = async (): Promise<boolean> =>
     (await node.getUtxosByAddresses([address])).some((u) => u.transactionId === rec.prepTxid && u.index === 0 && BigInt(u.amount) === BigInt(out0.value));
 
-  // the preparation's output 0 must be on the node before the wallet is asked
+  // The preparation's output 0 must be on the node before the wallet is asked.
   let sentAt = rec.prepSentAt ?? rec.createdAt;
   if (!(await listed().catch(() => false))) {
     try {
@@ -308,12 +370,13 @@ export async function finishCreation(a: FinishArgs): Promise<string> {
       if (err instanceof NodeError && DEFINITE.has(err.code) && !(await listed().catch(() => false))) {
         throw new SignFlowError('submitting', err, 'The coin of the first step was spent, so this creation cannot be finished. Start a new one.', CREATION_SPENT);
       }
-      // the connection, or a refusal while the output is listed after all (it reached a block meanwhile): try again later
+      // The connection failed, or the node refused while the output is listed after all because
+      // it reached a block meanwhile. Unless it is listed now, try again later.
       if (!(await listed().catch(() => false))) throw genesisPending(rec.prepTxid, err);
     }
     sentAt = now();
     markPrepSent(rec.network, rec.covenantId, a.storage, sentAt);
-    // handed to the wallet's node too, where the wallet can take it (visibility.ts)
+    // It is handed to the wallet's node too, where the wallet can take it (visibility.ts).
     void noteSent(a.adapter, rec.prep, a.now ? { now: a.now } : {});
     const wait = a.prepWaitMs ?? 60_000;
     const poll = a.prepPollMs ?? 1000;
@@ -352,7 +415,8 @@ export async function finishCreation(a: FinishArgs): Promise<string> {
       }
     },
   }).catch((e: unknown) => {
-    // declined, or not visible yet: the record stays as it was (finish again later); the rest says what happened
+    // Declined, or not visible yet. The record stays as it was, to finish again later, and the
+    // error says what happened.
     if (e instanceof ChainError) throw new SignFlowError(e.stage, e.cause, e.message, e.code);
     throw e;
   });
