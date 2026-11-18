@@ -1,8 +1,13 @@
-// The private-key signer's logic, without DOM (signer/main.ts is the page around it; unit tests drive it directly).
+// The private-key signer's logic, without DOM. signer/main.ts is the page around it, and unit
+// tests drive it directly.
 //
-// The key is parsed into the official SDK's `PrivateKey` (its bytes live in wasm memory) and held in this closure only: never in storage, never in
-// a message, never in an error text. `forget()` frees it. Signing happens only through `approve(id)`, which the page calls from a trusted click on
-// its own button: a request from the app alone never produces a signature.
+// The key is parsed into the official SDK's `PrivateKey`, whose bytes live in wasm memory. It is
+// held in this closure only, never in storage, a message or an error text. `forget()` frees it.
+// The pending request is signed only through `approve(id)`, which the page calls from a trusted
+// click on its own button. Two kinds of request are signed in `receive` without a new click: a
+// re-timed request on which nothing the user approved got worse, and the next link of a merge
+// session the user allowed. Both rest on an approval the user gave before and on this frame's
+// own checks. So a request from the app alone never produces a signature.
 import type { KaspaSdk, SdkPrivateKey } from '../data/kaspa-sdk';
 import type { BuiltTx, Hex, InputSignature } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
@@ -13,6 +18,7 @@ import { RETIME_MAX_COUNT, RETIME_WINDOW_MS, sameOrBetter } from './retime';
 import type { RegistryRow } from './table';
 import { trustedHints } from './trusted-hints';
 
+/** The error for key text that is not a private key. Its message never contains the input. */
 export class SignerKeyError extends Error {
   constructor() {
     super('This is not a valid private key: 64 hex characters (32 bytes) are expected.');
@@ -26,76 +32,116 @@ interface FullPrivateKey extends SdkPrivateKey {
   free?(): void;
 }
 
+/** The request on screen, waiting for the user's Approve or Reject. */
 export interface PendingRequest {
   id: string;
-  /** what Approve signs: the request, or the update of it shown last */
+  /** What Approve signs, which is the request or the update of it shown last. */
   built: BuiltTx;
   summary: SignerSummary;
   /**
-   * how the last change came: `new` (the request), `silent` (an update that this frame's decoding finds no worse for the user than what they
-   * were shown: the figures follow in place), `shown` (an update that is worse somewhere: shown as updated, Approve held for a moment)
+   * How the last change came.
+   * - `new` is the request.
+   * - `silent` is an update that this frame's decoding finds no worse for the user than what they
+   *   were shown. The figures follow in place.
+   * - `shown` is an update that is worse somewhere. It is shown as updated, and Approve is held
+   *   for a moment.
    */
   change: 'new' | 'silent' | 'shown';
-  /** what an update is compared with: the request as first shown, or the last update shown as such */
+  /** What an update is compared with: the request as first shown, or the last update shown. */
   baseline: SignerSummary;
-  /** the app's hints (protocol.ts `SignerNote`, validated): worded by the frame, never blocking; fixed with the request, an update keeps them */
+  /**
+   * The app's hints (protocol.ts `SignerNote`), validated. The frame words them, and they never
+   * block. They are fixed with the request, and an update keeps them.
+   */
   notes: SignerNote[];
-  /** a token creation: the KCC-23 preparation `built` spends output 0 of, signed with it on the one approval */
+  /**
+   * For a token creation, the KCC-23 preparation whose output 0 `built` spends. It is signed with
+   * `built` on the one approval.
+   */
   prep?: BuiltTx;
-  /** a merge plan to allow once (session.ts): the terms this frame derived from it; Approve signs nothing, it opens the session */
+  /**
+   * For a merge plan to allow once (session.ts), the terms this frame derived from it. Approve then
+   * signs nothing and opens the session.
+   */
   session?: SessionTerms;
 }
 
+/** What the signer core needs from its page. */
 export interface SignerCoreDeps {
   sdk: KaspaSdk;
   kob: KobWasm;
   post(m: SignerToApp): void;
-  /** ms clock (tests; the page passes its monotonic clock): re-time windows and session expiry */
+  /**
+   * A clock in ms for re-time windows and session expiry. The page passes its monotonic clock, and
+   * tests pass their own.
+   */
   now?: () => number;
-  /** wall clock in ms (tests): a session also expires on it */
+  /** A wall clock in ms, for tests. A session also expires on it. */
   wallNow?: () => number;
-  /** random bytes for a session id (tests) */
+  /** Random bytes for a session id, for tests. */
   random?: (n: number) => Uint8Array;
-  /** the hash of the registry table pinned into this bundle (table.ts); without it every registry hint is shown as unverified */
+  /**
+   * The hash of the registry table pinned into this bundle (table.ts). Without it every registry
+   * hint is shown as unverified.
+   */
   registryHash?: string;
 }
 
+/** The signer's logic as the page drives it. */
 export interface SignerCore {
-  /** parses and holds the key; posts `connected`. Throws `SignerKeyError` (whose text never contains the input). */
+  /**
+   * Parses and holds the key, and posts `connected`. It throws `SignerKeyError`, whose text never
+   * contains the input.
+   */
   importKey(text: string): Hex;
   hasKey(): boolean;
   pubkey(): Hex | null;
-  /** frees the key and drops a pending request (rejected as cancelled); posts `forgotten` */
+  /** Frees the key, drops a pending request as cancelled, and posts `forgotten`. */
   forget(): void;
   /**
-   * a validated app message: a `sign` request becomes the pending request to show (returned), anything else is handled here. A request that
-   * re-times the one the user confirmed last (`retimeOf`, within RETIME_WINDOW_MS) is signed at once when this frame's own decoding finds that
-   * nothing the user approved got worse (retime.ts `sameOrBetter`); else it is shown like any request. An `update` of the pending request
-   * replaces what it shows and what Approve signs (returned with its `change`); `clock` is the page's (null here).
+   * Handles a validated app message.
+   *
+   * A `sign` request becomes the pending request to show, which is returned. Anything else is
+   * handled here. A request that re-times the one the user confirmed last (`retimeOf`, within
+   * RETIME_WINDOW_MS) is signed at once when this frame's own decoding finds that nothing the user
+   * approved got worse (retime.ts `sameOrBetter`). Otherwise it is shown like any request. An
+   * `update` of the pending request replaces what it shows and what Approve signs, and is returned
+   * with its `change`. `clock` is the page's, so it gives null here.
    */
   receive(m: AppToSigner): PendingRequest | null;
   pending(): PendingRequest | null;
-  /** signs the pending request `id` (ONLY from the user's click in the signer page); posts `signed`, or `rejected` when it cannot */
+  /**
+   * Signs the pending request `id`, called only from the user's click in the signer page. It posts
+   * `signed`, or `rejected` when it cannot sign.
+   */
   approve(id: string): boolean;
   reject(id: string, reason?: RejectReason): void;
-  /** the live session (tests and the page): its id, the transactions it still covers and when it expires */
+  /**
+   * The live session, for tests and the page. It gives its id, the transactions it still covers and
+   * when it expires.
+   */
   session(): { sid: string; left: number; expiresAt: number } | null;
 }
 
 const KEY_TEXT = /^(?:0x)?([0-9a-fA-F]{64})$/;
 
+/** Creates the signer core. It holds no key until `importKey`. */
 export function createSignerCore(deps: SignerCoreDeps): SignerCore {
   const { sdk, kob, post } = deps;
-  // the hints of a request as the frame may show them: a registry label only when the app's table is the pinned one (table.ts)
+  // The hints of a request as the frame may show them. A registry label shows only when the app's
+  // table is the pinned one (table.ts).
   const hintsOf = (m: { tokens: TokenHint[]; registry?: RegistryRow[] }): TokenHint[] => trustedHints(m.tokens, m.registry, deps.registryHash);
   let key: FullPrivateKey | null = null;
   let pub: Hex | null = null;
   let pending: PendingRequest | null = null;
-  // the request the user confirmed last (its decoding and when): the only one a re-timed request may stand in for
-  // `summary` is what the USER approved (never a re-timed one: each re-time is compared with it, so small differences cannot add up over many re-times); `retimes` how many
-  // transactions were signed without asking on this approval
+  // The request the user confirmed last, with its decoding and when. It is the only one a re-timed
+  // request may stand in for.
+  // - `summary` is what the user approved, never a re-timed one. Each re-time is compared with it,
+  //   so small differences cannot add up over many re-times.
+  // - `retimes` counts the transactions signed without asking on this approval.
   let approved: { id: string; summary: SignerSummary; at: number; retimes: number } | null = null;
-  // the one-approval merge session the user allowed (session.ts), in this closure only: never stored, never sent
+  // The one-approval merge session the user allowed (session.ts). It lives in this closure only and
+  // is never stored or sent.
   let session: SessionState | null = null;
   const now = deps.now ?? Date.now;
   const wallNow = deps.wallNow ?? Date.now;
@@ -121,10 +167,14 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
     pub = null;
   };
 
-  /** signs `built`: the signatures, and the id kob-wasm's finalize gives the signed transaction (what the node will name it) */
+  /**
+   * Signs `built` with SIGHASH_ALL. It returns the signatures and the id kob-wasm's finalize gives
+   * the signed transaction, which is what the node will name it.
+   */
   const signWithId = (built: BuiltTx): { sigs: InputSignature[]; txid: Hex } => {
-    // the SDK computes each digest from the transaction itself; kob-wasm `finalize` then checks them against the request's digests and the
-    // script engine runs the result: a request whose digests or scripts do not belong to this transaction is refused, not signed blindly
+    // The SDK computes each digest from the transaction itself. kob-wasm `finalize` then checks
+    // them against the request's digests, and the script engine runs the result. So a request
+    // whose digests or scripts do not belong to this transaction is refused, not signed blindly.
     const tx = sdk.Transaction.deserializeFromSafeJSON(JSON.stringify(built.tx));
     const sigs = built.sign.map((req) => {
       const push = sdk.createInputSignature(tx, req.inputIndex, key!, sdk.SighashType.All);
@@ -192,8 +242,9 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         return null;
       }
       if (m.type === 'update') {
-        // only the request on screen, until it is approved or rejected; an update this frame cannot read, or for another key, is dropped;
-        // a creation is never updated
+        // Only the request on screen is updated, until it is approved or rejected. An update this
+        // frame cannot read, or one for another key, is dropped. A creation or a session screen is
+        // never updated.
         if (!pending || pending.id !== m.id || !pub || pending.prep || pending.session || m.built.sign.some((s) => s.pubkey !== pub)) return null;
         let next: SignerSummary;
         try {
@@ -214,7 +265,8 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         return null;
       }
       if (m.type === 'session-open') {
-        // one session at a time: a new plan ends the old session, and it is allowed or not on its own screen
+        // One session at a time. A new plan ends the old session, and it is allowed or not on its
+        // own screen.
         endSession('closed');
         const hints = hintsOf(m);
         let terms: SessionTerms;
@@ -239,19 +291,20 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         pending = { id: m.id, built: m.plan[0]!, summary, change: 'new', baseline: summary, notes: [], session: terms };
         return pending;
       }
-      // a request this frame refuses outright while a session is live ends the session too
+      // A request this frame refuses outright while a session is live ends the session too.
       const endLive = () => {
         if (session) endSession(m.session !== undefined && m.session === session.sid ? 'refused' : 'closed');
       };
-      // every requested signature must be this key's: the signer never signs for another key's input
+      // Every requested signature must be this key's. The signer never signs for another key's
+      // input.
       if ([...m.built.sign, ...(m.prep?.sign ?? [])].some((s) => s.pubkey !== pub)) {
         endLive();
         post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
         return null;
       }
       if (m.prep) {
-        // a token creation: the preparation and the genesis checked and shown together (summary.ts `creationSummary`), one approval; never a
-        // session step
+        // A token creation. The preparation and the genesis are checked and shown together
+        // (summary.ts `creationSummary`) under one approval. It is never a session step.
         endLive();
         let summary: SignerSummary;
         try {
@@ -266,7 +319,8 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
       }
       let summary: SignerSummary;
       try {
-        // the app's lock hints only let a coin to this key's own open creator lock be recognised (summary.ts `summarize`)
+        // The app's lock hints only let a coin to this key's own open creator lock be recognised
+        // (summary.ts `summarize`).
         summary = summarize(kob, m.built, pub, hintsOf(m), m.locks, wallNow());
       } catch {
         endLive();
@@ -274,8 +328,9 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         return null;
       }
       if (session) {
-        // a step of the session: signed without a prompt only when it is exactly the next link of the plan the user allowed; anything else
-        // (another session id, no session id, any deviation) ends the session and is shown for confirmation as usual
+        // A step of the session is signed without a prompt only when it is exactly the next link
+        // of the plan the user allowed. Anything else ends the session and is shown for
+        // confirmation as usual. That covers another session id, no session id and any deviation.
         const live = session;
         let facts: MergeFacts | null = null;
         let why: ReturnType<typeof admitStep> = 'deviates';
@@ -286,7 +341,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
           }
           why = facts ? admitStep(live, facts, now(), wallNow()) : 'deviates';
         } catch {
-          // a check that throws refuses: the session ends and the request is shown as usual
+          // A check that throws refuses. The session ends and the request is shown as usual.
           facts = null;
           why = 'deviates';
         }
@@ -308,7 +363,8 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
       }
       const base = m.retimeOf !== undefined && approved && approved.id === m.retimeOf && now() - approved.at <= RETIME_WINDOW_MS && approved.retimes < RETIME_MAX_COUNT ? approved : null;
       if (base && summary.problems === 0 && sameOrBetter(base.summary.decoded, summary.decoded)) {
-        // the transaction the user confirmed, planned again with a later clock: the same terms, so their confirmation covers it
+        // The transaction the user confirmed, planned again with a later clock. Its terms are the
+        // same or better, so their confirmation covers it.
         let sigs: InputSignature[];
         try {
           sigs = sign(m.built);
@@ -326,12 +382,14 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
     pending: () => pending,
     approve(id) {
       if (!pending || pending.id !== id || !key || !pub) return false;
-      // a finding the decoder blocks signing on is never signed here, whatever asks: the page's Approve is off for it too (audit 2026-10-29 S2)
+      // A request with a finding the decoder blocks signing on is never signed here, whatever
+      // asks. The page's Approve is off for it too.
       if (pending.summary.problems > 0) return false;
       const req = pending;
       pending = null;
       if (req.session) {
-        // the user allowed the plan: nothing is signed now; the session id is minted here and binds the steps to this plan, this key, this frame
+        // The user allowed the plan, and nothing is signed now. The session id is minted here and
+        // binds the steps to this plan, this key and this frame.
         const sid = [...random(16)].map((b) => b.toString(16).padStart(2, '0')).join('');
         session = openState(sid, pub, req.session, now(), wallNow());
         post(toApp({ type: 'session-opened', id, sid, txs: req.session.links.length, feeMax: req.session.feeMax.toString(), expiresInMs: req.session.ttlMs }));
@@ -340,21 +398,22 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
       let sigs: InputSignature[];
       let prepSigs: InputSignature[] | undefined;
       try {
-        // a creation: the preparation first, then the genesis spending it (each checked by finalize and the script engine)
+        // For a creation, the preparation is signed first, then the genesis spending it. Each is
+        // checked by finalize and the script engine.
         prepSigs = req.prep ? sign(req.prep) : undefined;
         sigs = sign(req.built);
       } catch {
         post(toApp({ type: 'rejected', id, reason: 'invalid' }));
         return false;
       }
-      // a creation is never what a re-timed request stands in for
+      // A creation is never what a re-timed request stands in for.
       approved = req.prep ? null : { id, summary: req.summary, at: now(), retimes: 0 };
       post(toApp({ type: 'signed', id, txid: req.built.tx.id, signatures: sigs, ...(prepSigs ? { prepSignatures: prepSigs } : {}) }));
       return true;
     },
     reject(id, reason = 'user') {
       if (pending?.id !== id) return;
-      // rejecting any request ends the session (the session screen says so)
+      // Rejecting any request ends the session, as the session screen says.
       endSession('rejected');
       drop(reason);
     },
