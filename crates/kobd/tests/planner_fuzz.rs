@@ -1,10 +1,14 @@
-//! Regression: planner fuzz with SANE-looking but differently distributed books than `matcher_fuzz`:
-//! bids in every delivery mode (mode-1 custodies, mode-2 receive UTXOs and tips), mixed minimum fills (1 base unit up to 7 whole tokens) and amounts that are not multiples of a whole token (the
-//! minimum-fill rule and the maker-favour rounding), one token at two scales (two books of one market), wide tip range
-//! (tips larger than the spread), many equal prices, larger books (up to 40 orders), more IOC / FOK, `maxFill` caps and TWAP
-//! intervals. Every plan must be engine-valid and satisfy `check_invariants` (no partial FOK, no stray, one
-//! input per covenant id, at most 8 token inputs, profit >= 1). A panic or a violated invariant is reported
-//! with its seed.
+//! Regression: planner fuzz with sane-looking but differently distributed books than
+//! `matcher_fuzz`.
+//!
+//! The books have bids in every delivery mode (mode-1 custodies, mode-2 receive UTXOs and tips),
+//! mixed minimum fills (1 base unit up to 7 whole tokens) and amounts that are not multiples of a
+//! whole token (the minimum-fill rule and the maker-favour rounding), one token at two scales (two
+//! books of one market), a wide tip range (tips larger than the spread), many equal prices, larger
+//! books (up to 40 orders), more IOC / FOK, `maxFill` caps and TWAP intervals. Every plan must be
+//! engine-valid and satisfy `check_invariants` (no partial FOK, no stray, one input per covenant
+//! id, at most 8 token inputs, profit >= 1). A panic or a violated invariant is reported with its
+//! seed.
 //!
 //! `KOB_AUDIT_ITERS` (default 60), `KOB_AUDIT_SEED`.
 

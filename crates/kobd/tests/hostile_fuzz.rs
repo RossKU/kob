@@ -1,13 +1,15 @@
 //! Regression: adversarial-value fuzz of the matcher and keeper ticks.
 //!
-//! The existing `matcher_fuzz` draws sane parameters (prices 2.40..2.60, tips, amounts and minimum fills). This one
-//! takes valid orders of every kind (the three pair kinds included) and overwrites random numeric state fields with extremes (0, +-1,
-//! huge, `i64::MIN/MAX`), the way a hostile maker can: `AnyState::decode` accepts any `i64`. Every
-//! tick runs under `catch_unwind`; panic sites, engine-invalid plans and unprofitable transactions are
-//! collected. Environment: `KOB_AUDIT_ITERS` (default 150), `KOB_AUDIT_SEED`.
+//! The existing `matcher_fuzz` draws sane parameters (prices 2.40..2.60, tips, amounts and minimum
+//! fills). This one takes valid orders of every kind (the three pair kinds included) and overwrites
+//! random numeric state fields with extremes (0, +-1, huge, `i64::MIN/MAX`), the way a hostile
+//! maker can: `AnyState::decode` accepts any `i64`. Every tick runs under `catch_unwind`; panic
+//! sites, engine-invalid plans and unprofitable transactions are collected. Environment:
+//! `KOB_AUDIT_ITERS` (default 150), `KOB_AUDIT_SEED`.
 //!
-//! The state numbers are gated by `kobd::sanity` before the planner sees them, so no panic site may remain (a panic caught
-//! by the tick's own last-line `catch_unwind` still counts as a site here) and every transaction is profitable and engine-valid.
+//! The state numbers are gated by `kobd::sanity` before the planner sees them, so no panic site may
+//! remain (a panic caught by the tick's own last-line `catch_unwind` still counts as a site here)
+//! and every transaction is profitable and engine-valid.
 
 #[path = "matcher_common/mod.rs"]
 mod common;
@@ -98,7 +100,8 @@ fn mutate<S: Serialize + DeserializeOwned>(s: &S, r: &mut Rng, pct: u64) -> Opti
         }
         let is_int = obj[&k].as_str().is_some_and(|s| s.len() <= 20 && s.parse::<i64>().is_ok());
         if is_int && r.chance(pct) {
-            // every field, `amountLeft` included: a huge one used to make candidate generation linear in it
+            // Every field, `amountLeft` included: a huge one makes candidate generation linear in
+            // it.
             let v = r.pick(&EXTREMES);
             obj.insert(k, serde_json::Value::String(v.to_string()));
         }

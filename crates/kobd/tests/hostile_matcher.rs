@@ -1,13 +1,17 @@
-//! Regression: hostile numeric order state must never crash, stall or blind the matcher.
+//! Regression tests that hostile numeric order state never crashes, stalls or blinds the matcher.
 //!
-//! * `slope != 0` with `decayStep = 0` used to divide by zero in `matcher::candidate` and end `kobd --executor`.
-//! * A zero quantity divisor (a bid with a tip keeps a positive all-in) used to divide by zero in `planner::walk`; an if-done
-//!   exit inherited its parent's listing without a look at its own numbers. Today a bid's `minFill` must be positive (its
-//!   termination rule reads one minimum fill of buying power) and `scale` a power of ten in `1..=10^9`.
-//! * A huge `amountLeft` (9e10) on a bid-side order used to make candidate generation linear in it on every tick.
+//! * `slope != 0` with `decayStep = 0` must not divide by zero in `matcher::candidate` and end
+//!   `kobd --executor`.
+//! * A zero quantity divisor (a bid with a tip keeps a positive all-in) must not divide by zero in
+//!   `planner::walk`. An if-done exit must not inherit its parent's listing without a look at its
+//!   own numbers. A bid's `minFill` must be positive (its termination rule reads one minimum fill
+//!   of buying power) and `scale` a power of ten in `1..=10^9`.
+//! * A huge `amountLeft` (9e10) on a bid-side order must not make candidate generation linear in it
+//!   on every tick.
 //!
-//! Fixed by the numeric gate `kobd::sanity` (at listing, in the book read, in the candidate generator), closed forms instead
-//! of count-down loops, a per-tick time budget and a `catch_unwind` per book with quarantine of the guilty order.
+//! The defences are the numeric gate `kobd::sanity` (at listing, in the book read, in the candidate
+//! generator), closed forms instead of count-down loops, a per-tick time budget and a
+//! `catch_unwind` per book with quarantine of the guilty order.
 
 #[path = "matcher_common/mod.rs"]
 mod common;
@@ -22,7 +26,8 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn a_zero_min_fill_bid_is_quarantined_and_the_rest_of_the_book_still_trades() {
-    // v3: the zero divisor of old (a zero lot size) is gone; a bid's `minFill = 0` is what the covenant refuses instead
+    // v3: there is no zero lot size to divide by; a bid's `minFill = 0` is what the covenant
+    // refuses instead.
     let mut b0 = bid(2, P260, T3);
     b0.min_fill = 0;
     b0.tip = 1_000_000;
@@ -54,7 +59,8 @@ fn a_bid_scale_that_is_not_a_power_of_ten_is_quarantined() {
 
 #[test]
 fn a_huge_amount_left_costs_one_tick_no_time() {
-    // used to be 150 to 260 s per tick at a remaining quantity of 9e10 (and effectively infinite with a 1 sompi stop leg)
+    // A remaining quantity of 9e10 (and effectively infinite with a 1 sompi stop leg) must cost no
+    // time per tick.
     for amount in [1i64 << 33, 1 << 40, i64::MAX, 90_000_000_000] {
         let mut c = cond_bid(1, P250, P245, amount.min(1 << 40), T3);
         c.tip = 0;

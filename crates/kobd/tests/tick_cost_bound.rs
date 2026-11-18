@@ -1,14 +1,16 @@
 //! Regression: the CPU an attacker can force on the operator's tick is bounded.
 //!
-//! `plan_book` was about O(n^3) per allocation and repeated for every fill of the plan; 1 000 bids and 1 000 asks all crossing
-//! at a loss cost 48 s per tick. Now the planner keeps the best `max_candidates_per_group` candidates per (class, side), keeps its
-//! token-slot accounting incrementally and stops at a wall-clock budget.
+//! `plan_book` must not be about O(n^3) per allocation repeated for every fill of the plan: 1 000
+//! bids and 1 000 asks all crossing at a loss must stay cheap. The planner keeps the best
+//! `max_candidates_per_group` candidates per (class, side), keeps its token-slot accounting
+//! incrementally and stops at a wall-clock budget. An expired order whose `refundTip` cannot cover
+//! the refund fee must not be built, signed and engine-validated on every tick.
 //!
-//! The bounds are stated in work, not time ([`TickReport::work`], [`kobd::matcher::batch::PlanWork`]): the allocation
-//! passes and candidate pairs the planner ran, and that no plan ran into its book budget. Those counts are the same on every
-//! machine, so a regression fails on a fast one and a slow CI runner does not fail a fixed planner (the wall-clock bounds
-//! these tests had failed on windows-latest only). The times are printed for information.
-//! An expired order whose `refundTip` cannot cover the refund fee was built, signed and engine-validated on every tick.
+//! The bounds are stated in work, not time ([`TickReport::work`],
+//! [`kobd::matcher::batch::PlanWork`]): the allocation passes and candidate pairs the planner ran,
+//! and that no plan ran into its book budget. Those counts are the same on every machine, so a
+//! regression fails on a fast one and a slow CI runner does not fail a fixed planner. The times are
+//! printed for information.
 
 #[path = "matcher_common/mod.rs"]
 mod common;
@@ -68,7 +70,7 @@ fn a_thousand_crossing_pairs_at_a_loss_are_planned_within_the_budget() {
     let rep = tick(&inp, &budgeted(cfg()), &Families::default(), &signer());
     let took = t0.elapsed();
     println!("matcher tick, {n} bids + {n} asks all crossing at a loss: {took:?}, {} tx", rep.prepared.len());
-    // was 48.6 s before the fix
+    // without the fix this took 48.6 s
     assert_work(&rep, "1000 x 1000 at a loss", WORK_LOSS);
     for p in &rep.prepared {
         assert!(p.accounting.profit >= 0, "never a losing batch");
@@ -113,7 +115,7 @@ fn unprofitable_refunds_are_not_built_and_are_remembered() {
     // a zero tip is below the fee floor: rejected before any transaction is built
     assert!(rep.skipped.iter().all(|(_, why)| why.contains("does not cover the fee")), "{:?}", rep.skipped);
     println!("keeper tick over {n} dust-refund orders: {cold:?}");
-    // the work bound: nothing was built, signed or validated (the regression built every one of them on every tick)
+    // the work bound: nothing was built, signed or validated (without the fix every one is built)
     assert!(rep.unprofitable.is_empty() && rep.failed.is_empty(), "built: {:?} {:?}", rep.unprofitable, rep.failed);
 
     // a tip above the floor but below the real fee is built once, then remembered per (order, outpoint)
@@ -199,15 +201,18 @@ fn pair_orders_crossing_each_other_are_planned_within_the_budget() {
     check_pair(&rep, &inp);
 }
 
-/// Regression (found by the test port): 300 untipped pair asks and 300 untipped pair bids that cross each other made the global
-/// planner spend its whole 5 s book budget on every batch and build nothing, although the 200 plain KAS orders of the same
-/// view cross each other with a profit. Fixed: the route takes no more pair orders per direction than the KAS books can fill,
-/// a netting group is bounded by the token slots and pays for itself or nets nothing, and the profit step judges a netting
-/// group as one unit. A large pair book must not starve the plain crossings: the plain crossings are built, no plan runs into
-/// its book budget, and the planner's work stays within a bound stated in allocation passes, candidate pairs and netting
-/// steps. Checked against the fixes undone one by one (2026-10-06): the profit step judging netted orders one by one again
-/// gives 1,298 allocation passes (bound 1,000), the netting group unbounded by the token slots 10.1 M netting steps (bound
-/// 2.6 M; 57 s against 6 s, all other counts unchanged), and with all three fixes undone every plan runs into its 30 s book
+/// 300 untipped pair asks and 300 untipped pair bids that cross each other must not make the global
+/// planner spend its whole 5 s book budget on every batch and build nothing, although the 200 plain
+/// KAS orders of the same view cross each other with a profit. The route takes no more pair orders
+/// per direction than the KAS books can fill, a netting group is bounded by the token slots and
+/// pays for itself or nets nothing, and the profit step judges a netting group as one unit. A large
+/// pair book must not starve the plain crossings: the plain crossings are built, no plan runs into
+/// its book budget, and the planner's work stays within a bound stated in allocation passes,
+/// candidate pairs and netting steps. Checked against the fixes undone one by one: the profit step
+/// judging netted orders one by one again gives 1,298 allocation passes (bound 1,000), the netting
+/// group unbounded by the token slots 10.1 M netting steps (bound 2.6 M; 57 s against 6 s, all
+/// other counts unchanged), and with all three fixes undone every plan runs into its 30 s book
+/// budget (`cut_short` 4 of 5): each fails this test, by count and not by time.
 /// budget (`cut_short` 4 of 5): each fails this test, by count and not by time.
 #[test]
 fn a_big_untipped_pair_book_does_not_starve_the_plain_crossings() {

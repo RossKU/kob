@@ -1,13 +1,16 @@
-//! Protocol v3 (no lots) planner rules, each engine-validated through the tick runner (`common::run`: both families,
-//! `check_invariants`; `common::pair::run_pair` for pair orders):
+//! Tests the protocol v3 (no lots) planner rules, each engine-validated through the tick runner
+//! (`common::run`: both families, `check_invariants`; `common::pair::run_pair` for pair orders).
 //!
-//! * the minimum fill (`minFill`): no fill below it unless the fill takes the order's rest (a `KobBid`: unless the fill ends
-//!   the bid, less than one minimum fill of buying power left), and `maxFill` (TWAP / DCA) caps a fill;
-//! * the profit test reads the exact rounded KAS of every leg (a bid pays `floor(n × (p + tip) / scale)`, an ask receives
-//!   `ceil(n × (p − tip) / scale)`): a crossing whose spread per whole token is positive but whose fill is too small for the
-//!   rounding is not planned, and `plan.margin` is the sum of the exact rounded leg values;
-//! * a pair ASK routed through the KAS books buys exactly `ceil(n × rate / scale)` of B when the asks' minimum fills allow it, and more (the excess, to
-//!   its maker's delivery) only when an ask's minimum fill forces it.
+//! * The minimum fill (`minFill`): no fill below it unless the fill takes the order's rest (a
+//!   `KobBid`: unless the fill ends the bid, less than one minimum fill of buying power left), and
+//!   `maxFill` (TWAP / DCA) caps a fill.
+//! * The profit test reads the exact rounded KAS of every leg (a bid pays `floor(n × (p + tip) /
+//!   scale)`, an ask receives `ceil(n × (p − tip) / scale)`): a crossing whose spread per whole
+//!   token is positive but whose fill is too small for the rounding is not planned, and
+//!   `plan.margin` is the sum of the exact rounded leg values.
+//! * A pair ASK routed through the KAS books buys exactly `ceil(n × rate / scale)` of B when the
+//!   asks' minimum fills allow it, and more (the excess, to its maker's delivery) only when an
+//!   ask's minimum fill forces it.
 
 #[path = "matcher_common/mod.rs"]
 mod common;
