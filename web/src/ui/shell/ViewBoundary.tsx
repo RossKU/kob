@@ -4,7 +4,10 @@ import { Banner, Button, RawDetails } from '../kit';
 
 interface State { error: Error | null }
 
-/** Catches a render error of one view so the header, status bar and navigation stay usable; `resetKey` (the route) clears the error. */
+/**
+ * Catches a render error of one view so the header, status bar and navigation stay usable.
+ * `resetKey` (the route) clears the error.
+ */
 export class ViewBoundary extends Component<{ children?: ComponentChildren; resetKey: string }, State> {
   state: State = { error: null };
   private lastKey = this.props.resetKey;
@@ -14,7 +17,7 @@ export class ViewBoundary extends Component<{ children?: ComponentChildren; rese
   }
 
   componentDidCatch(error: unknown): void {
-    // keep the trace in the console for bug reports; the page shows a readable message
+    // Keep the trace in the console for bug reports. The page shows a readable message.
     console.error('view crashed', error);
   }
 

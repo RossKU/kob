@@ -14,8 +14,9 @@ import { isPhoneBrowser } from './platform';
 import { useNarrow } from './narrow';
 
 /**
- * The address in the chip: its network prefix, then the start of the body and an ellipsis ("kaspatest:qq776pwutf…"), never cut in the
- * middle. A phone shows the start of the body alone ("qq776pwu…"); the network is the chip's word.
+ * The address in the chip: its network prefix, then the start of the body and an ellipsis
+ * ("kaspatest:qq776pwutf…"), never cut in the middle. A phone shows the start of the body alone
+ * ("qq776pwu…"), as the network is the chip's word.
  */
 export const chipAddress = (address: string, narrow = false): string => {
   const colon = address.indexOf(':');
@@ -23,10 +24,16 @@ export const chipAddress = (address: string, narrow = false): string => {
   return narrow ? shortId(body, 8) : shortAddress(address, 12);
 };
 
-/** How the wallet is connected, for the chip's wallet icon (never a label of the address: "Private key" next to it reads as a key). */
+/**
+ * How the wallet is connected, for the chip's wallet icon. It is never a label of the address, as
+ * "Private key" next to it reads as a key.
+ */
 const connectedWith = (id: string, label: string): string => t('shell.wallet.connectedVia', { wallet: id === 'local-key' ? t('shell.wallet.viaLocalKey') : label });
 
-/** The mark of a wallet in the chooser: its initial on a tile (a key for the private key entry); a colour of its own keeps the rows apart at a glance. */
+/**
+ * The mark of a wallet in the chooser: its initial on a tile (a key for the private key entry). A
+ * colour of its own keeps the rows apart at a glance.
+ */
 const MARK_TONES: Record<string, string> = { kasware: '#2c9e77', kaspire: '#7a5af8', kastle: '#c2410c' };
 function WalletMark(props: { id: string; label: string }) {
   if (props.id === 'local-key') {
@@ -38,12 +45,13 @@ function WalletMark(props: { id: string; label: string }) {
     );
   }
   return (
-    // the letter is drawn by CSS (data-initial): it is a picture, not text, so it is not part of the row's name
+    // The letter is drawn by CSS (data-initial). It is a picture, not text, so it is not part of
+    // the row's name.
     <span class="wallet-mark wallet-mark-tile" data-initial={props.label.slice(0, 1)} style={{ background: MARK_TONES[props.id] ?? 'var(--surface-3)' }} aria-hidden="true" />
   );
 }
 
-/** The chevron of the wallet chip: it is a menu. */
+/** The chevron of the wallet chip, which is a menu. */
 function Caret() {
   return (
     <svg class="wallet-caret" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -53,16 +61,21 @@ function Caret() {
 }
 
 /**
- * Wallet area of the header. Not connected: one "Connect" button (ConnectBar). Connected: ONE chip with the address (shortened) as its text, a small wallet icon
- * whose tooltip says how it is connected, and the wallet's network ONLY when it differs from the app's (the header's network chip already names the app's). A
- * press opens a small menu under it (review L-06 / M-14): the full address and how it is connected, Copy address, the address on the block explorer, Disconnect.
+ * Wallet area of the header.
+ * - Not connected, it is one "Connect" button (ConnectBar).
+ * - Connected, it is ONE chip with the address (shortened) as its text, a small wallet icon whose
+ *   tooltip says how it is connected, and the wallet's network ONLY when it differs from the
+ *   app's, which the header's network chip already names.
+ *
+ * A press opens a small menu under the chip: the full address and how it is connected, Copy
+ * address, the address on the block explorer, and Disconnect.
  */
 export function WalletButton() {
   const w = useWallet();
   const narrow = useNarrow();
   const addressUrl = useAddressUrl();
   const [copied, setCopied] = useState(false);
-  // the "Copied" cue ends by itself; the timer is cleared with the chip
+  // The "Copied" cue ends by itself. The timer is cleared with the chip.
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
 
@@ -128,12 +141,16 @@ export function WalletButton() {
 
 /**
  * Not connected: ONE button, "Connect", on every width, and no menu in front of it.
- *  - an extension wallet detected (KasWare, Kaspire): a minimal pick (a dialog with one button each) between the extensions and the private key
- *    entry, the extensions first (founder 2026-11-11: the key entry itself recommends an extension); where the browser cannot run the signer, one
- *    extension connects at once and two or more are picked between;
- *  - none (every phone browser): it opens the private key entry, the sandboxed signer frame (SignerFrame.tsx), straight away, with its one line of caution
- *    there. There is no "no wallet detected" step. Where the browser cannot run the signer (it cannot check what the signer shows) the button says why.
- * The separate "Private key" button of the header is gone; on a desktop the private key mode is reachable from Settings too. The key is typed into the
+ * - With an extension wallet detected (KasWare, Kaspire), it opens a minimal pick, a dialog with
+ *   one button each, between the extensions and the private key entry. The extensions come first,
+ *   as the key entry itself recommends an extension. Where the browser cannot run the signer, one
+ *   extension connects at once and two or more are picked between.
+ * - With none (every phone browser), it opens the private key entry, the sandboxed signer frame
+ *   (SignerFrame.tsx), straight away, with its one line of caution there. There is no "no wallet
+ *   detected" step. Where the browser cannot run the signer, because it cannot check what the
+ *   signer shows, the button says why.
+ *
+ * On a desktop the private key mode is reachable from Settings too. The key is typed into the
  * signer frame, never into this page.
  */
 export function ConnectBar(props: { gate?: boolean } = {}) {
@@ -141,18 +158,21 @@ export function ConnectBar(props: { gate?: boolean } = {}) {
   const w = useWallet();
   const narrow = useNarrow();
   const [dialog, setDialog] = useState<'wallets' | 'key' | null>(null);
-  // the GitHub Pages mirror offers no private key (app/mirror.ts): Connect without an extension says why, as where the browser cannot run the signer
+  // The GitHub Pages mirror offers no private key (app/mirror.ts). Connect without an extension
+  // says why, as where the browser cannot run the signer.
   const keyAllowed = privateKeySigningAllowed();
   const supported = keyAllowed && visibilityCheckSupported();
   const phone = isPhoneBrowser();
-  // the private key is an option beside the extensions wherever the signer runs: then even one extension is picked, not connected at once
+  // The private key is an option beside the extensions wherever the signer runs. Then even one
+  // extension is picked, not connected at once.
   const only = w.detected.length === 1 && !supported ? w.detected[0]! : null;
   const choose = w.detected.length > 1 || (w.detected.length > 0 && supported);
   const noExtension = w.detected.length === 0;
 
   const connectOne = (id: Parameters<typeof w.connect>[0]) => void w.connect(id).then(() => setDialog(null));
-  // a click before the first look for extensions is over (they inject a moment after the page loads) waits for it, then decides: "no wallet" is never
-  // taken from a list that has not been filled yet, so a user who has an extension is not sent to the private key entry
+  // A click before the first look for extensions is over waits for it, then decides. Extensions
+  // inject a moment after the page loads. "No wallet" is never taken from a list that has not been
+  // filled yet, so a user who has an extension is not sent to the private key entry.
   const [waiting, setWaiting] = useState(false);
   const decide = () => {
     if (only) void w.connect(only.id);
@@ -169,8 +189,10 @@ export function ConnectBar(props: { gate?: boolean } = {}) {
     setWaiting(false);
     decide();
   }, [waiting, w.discovered, w.detected]);
-  // no extension: the button opens the private key entry, and is named for it (the tests and the page's own scripts find it by that name)
-  // the pages' gates (`gate`: the Portfolio's, the Create token page's) are the same button and action, with their own test ids (the header's are on the same page)
+  // With no extension, the button opens the private key entry and is named for it. The tests and
+  // the page's own scripts find it by that name. The pages' gates (`gate`: the Portfolio's, the
+  // Create token page's) are the same button and action, with their own test ids. The header's are
+  // on the same page.
   const testid = props.gate
     ? only ? `issue-connect-${only.id}` : choose ? 'issue-connect-choose' : 'issue-connect-local-key'
     : narrow ? 'wallet-connect' : only ? `wallet-connect-${only.id}` : choose ? 'wallet-connect' : 'wallet-connect-local-key';
@@ -180,7 +202,8 @@ export function ConnectBar(props: { gate?: boolean } = {}) {
       <Button
         small
         variant="primary"
-        // the one Connect of the app, the header's and the pages': the landing page's pill (styles.css .btn-pill), the same size and colours in both themes
+        // The one Connect of the app, the header's and the pages': the landing page's pill
+        // (styles.css .btn-pill), the same size and colours in both themes.
         data-testid={testid}
         loading={w.connecting || waiting}
         onClick={onConnect}

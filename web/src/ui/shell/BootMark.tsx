@@ -1,5 +1,6 @@
-// The boot screen's animated mark (boot-mark-model.ts): the Kaspa icon with eight tokens orbiting it and a relay of trades through KAS.
-// Decorative (aria-hidden): the boot screen's text says what is happening. With reduced motion it draws one still frame.
+// The boot screen's animated mark (boot-mark-model.ts): the Kaspa icon with eight tokens orbiting
+// it and a relay of trades through KAS. It is decorative (aria-hidden), as the boot screen's text
+// says what is happening. With reduced motion it draws one still frame.
 import { useEffect, useRef } from 'preact/hooks';
 import { CORE, LEG, ORBIT, PAUSE, PLANETS, SPAN, easeInOut, lightAt, nextPlanet, planetAt, tradeCurves } from './boot-mark-model';
 import { KASPA_ICON_INNER, KASPA_ICON_PATH, KASPA_ICON_RADIUS } from './kaspa-icon';
