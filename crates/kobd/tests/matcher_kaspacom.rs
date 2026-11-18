@@ -1,6 +1,7 @@
-//! The matcher on KaspaCom's third-party KCC20 (25.5 KB program in every token input): sweeps are bounded by the transaction size
-//! budget and the block mass limits, not by a fixed count, and everything it builds runs in the engine with the table budgets.
-//! No KaspaCom-specific code exists: the program is one more strict-list template.
+//! Tests the matcher on KaspaCom's third-party KCC20 (25.5 KB program in every token input). Sweeps
+//! are bounded by the transaction size budget and the block mass limits, not by a fixed count, and
+//! everything the matcher builds runs in the engine with the table budgets. No KaspaCom-specific
+//! code exists: the program is one more strict-list template.
 
 #[path = "matcher_common/mod.rs"]
 mod common;

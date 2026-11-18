@@ -1,15 +1,18 @@
-//! Crossed books at the TN10 soak's real shapes (`tools/soak/config.example.json`): TUSD, TETH and TBTC, all KCC-20 8x8 with 8
-//! decimals; TUSD ~23.8 KAS, TETH ~3,000 TUSD, TBTC ~100,000 TUSD; the pair markets TETH/TUSD and TBTC/TUSD (the web's
-//! `#/market/TBTC/TUSD`, "BTCUSD") settling through the two KAS books; 5 and 20 USD pair orders (`pairUsd` 3..20), untipped
-//! (the web planners' default), wallet-default minimum fills (10 KAS worth; a pair order's: 10 KAS of A); the market maker's
-//! ladder of 6 levels per side, 2 bps inside then every 4 bps, at its largest level size.
+//! Tests crossed books at the TN10 soak's real shapes (`tools/soak/config.example.json`). The
+//! tokens are TUSD, TETH and TBTC, all KCC-20 8x8 with 8 decimals; TUSD ~23.8 KAS, TETH ~3,000
+//! TUSD, TBTC ~100,000 TUSD. The pair markets are TETH/TUSD and TBTC/TUSD (the web's
+//! `#/market/TBTC/TUSD`, "BTCUSD"), settling through the two KAS books. The orders are 5 and 20 USD
+//! pair orders (`pairUsd` 3..20), untipped (the web planners' default), with wallet-default minimum
+//! fills (10 KAS worth; a pair order's: 10 KAS of A), and the market maker's ladder of 6 levels per
+//! side, 2 bps inside then every 4 bps, at its largest level size.
 //!
-//! Owner report 2026-10-06: "クロスマッチで、逆ザヤがあってもマッチが動かない" (seen on BTCUSD). Root cause: a netting of crossed
-//! pair orders valued its token surplus at the best plain KAS bid without asking whether that bid could take it. A 20 USD pair
-//! crossing by 1 % leaves 0.2 TUSD of surplus; every wallet KAS bid has a minimum fill of 10 KAS (~0.42 TUSD), so the surplus
-//! could never be sold and went to the pair ask's delivery. The netting was admitted on that phantom income, took both pair
-//! orders before the walks, and the batch earned 0 KAS: nothing was built, although the pair bid alone routes through the two
-//! KAS books at a profit.
+//! A netting of crossed pair orders must value its token surplus only at a plain KAS bid that can
+//! take it (reported on BTCUSD: the crossed book did not match despite a reverse spread). A 20 USD
+//! pair crossing by 1 % leaves 0.2 TUSD of surplus; every wallet KAS bid has a minimum fill of 10
+//! KAS (~0.42 TUSD), so the surplus can never be sold and goes to the pair ask's delivery. Valued
+//! at the best bid anyway, the netting would be admitted on that phantom income, take both pair
+//! orders before the walks, and the batch would earn 0 KAS: nothing would be built, although the
+//! pair bid alone routes through the two KAS books at a profit.
 
 #[path = "matcher_common/mod.rs"]
 mod common;
@@ -200,7 +203,7 @@ fn untipped_pair_orders_without_kas_books_earn_the_matcher_nothing() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-// Surplus inventory (owner decision 2026-10-06, `PlannerConfig::inventory`): an untipped crossed pair match with no KAS bid
+// Surplus inventory (`PlannerConfig::inventory`): an untipped crossed pair match with no KAS bid
 // able to take its surplus earns no KAS. Under the opt-in policy the operator takes the surplus into its own key (the pair
 // ask keeps exactly its floor: `KobPair.sil`, `tOut >= ceil`) and counts its policy value as income.
 
@@ -356,7 +359,8 @@ fn a_surplus_a_kas_bid_takes_is_sold_not_kept() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-// The carrier of the kept output (owner 2026-10-06: "small enough that there is no penalty"). `InventoryPolicy::keep_carrier`
+// The carrier of the kept output (a small amount, so that there is no penalty).
+// `InventoryPolicy::keep_carrier`
 // (default `KEEP_CARRIER`, 2 KAS) is the KAS locked on the operator's inventory output until the owner sells it; the order
 // outputs keep their own carriers.
 

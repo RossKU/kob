@@ -1,15 +1,15 @@
-//! A batch that loses its race over one order input backs off that order alone; the other orders of the batch are planned
-//! again at once:
+//! Tests that a batch that loses its race over one order input backs off that order alone, and the
+//! other orders of the batch are planned again at once:
 //!
-//! * the node refuses the batch because an input is already spent in a block the book has not shown yet (an orphan, no
-//!   outpoint named): the runner asks the node which order inputs are still unspent and backs off only the order whose
-//!   input is gone;
-//! * the batch reached the mempool, but another transaction spending one of its inputs was accepted instead: once the book
-//!   no longer lists that input and the node confirms it spent, the batch is dropped before `pending_timeout` and only the
-//!   owner of that input backs off;
-//! * before planning, the runner asks the node which listed orders it still holds: an order spent in a block the book has
-//!   not reached yet (the book lags the chain by the indexer's lag) is left out, so no batch is refused over it (the soak of
-//!   2026-10-11 lost about five batches in six that way, and every crossing in them waited a tick each time).
+//! * The node refuses the batch because an input is already spent in a block the book has not shown
+//!   yet (an orphan, no outpoint named): the runner asks the node which order inputs are still
+//!   unspent and backs off only the order whose input is gone.
+//! * The batch reached the mempool, but another transaction spending one of its inputs was accepted
+//!   instead: once the book no longer lists that input and the node confirms it spent, the batch is
+//!   dropped before `pending_timeout` and only the owner of that input backs off.
+//! * Before planning, the runner asks the node which listed orders it still holds: an order spent
+//!   in a block the book has not reached yet (the book lags the chain by the indexer's lag) is left
+//!   out, so no batch is refused over it and no crossing waits a tick for it.
 
 #[path = "matcher_common/mod.rs"]
 mod common;

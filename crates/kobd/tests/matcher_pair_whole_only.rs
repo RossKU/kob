@@ -1,6 +1,7 @@
-//! A pair order (`KobPair` / `KobCondPair`) whose order UTXO funds no more delivery carriers than the fill of everything left
-//! can only be filled in full: a partial fill must leave a continuation that funds its carrier and tip. The planner matches
-//! such an order only in full (`PairInfo::part_cap`), never plans a partial fill the builder refuses, and the other books
+//! Tests a pair order (`KobPair` / `KobCondPair`) whose order UTXO funds no more delivery carriers
+//! than the fill of everything left: it can only be filled in full, because a partial fill must
+//! leave a continuation that funds its carrier and tip. The planner matches such an order only in
+//! full (`PairInfo::part_cap`), never plans a partial fill the builder refuses, and the other books
 //! of the tick keep their fills.
 
 #[path = "matcher_common/mod.rs"]

@@ -1,7 +1,11 @@
-//! `KobCurveAsk` in the matcher (`docs/design/curve-ask-spec.md`): one fill per curve per transaction over at most 8
-//! levels, each crossed level at least its price, levels in table order, the curve's minimum fill over the whole fill,
-//! a larger buy chained over several transactions, a bid of each delivery mode; keepers and x402 quotes leave curves
-//! alone. Every transaction is engine-validated.
+//! Tests `KobCurveAsk` in the matcher (`docs/design/curve-ask-spec.md`). The tests cover:
+//!
+//! * One fill per curve per transaction over at most 8 levels, each crossed level at least its
+//!   price, levels in table order, and the curve's minimum fill over the whole fill.
+//! * A larger buy chained over several transactions, and a bid of each delivery mode.
+//! * Keepers and x402 quotes leave curves alone.
+//!
+//! Every transaction is engine-validated.
 
 #[path = "matcher_common/mod.rs"]
 mod common;

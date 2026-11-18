@@ -1,8 +1,9 @@
-//! Bid delivery modes in the matcher (`docs/design/bid-delivery-spec.md` §4, §6): a mode-1 bid's fills spend and grow
-//! its bought-custody (one token input, counted by the planner), a mode-2 bid's fill tops up the maker's receive UTXO
-//! only when its `topupTip` pays the measured extra fee, one top-up per token at its lowest-index delivering leg, form 1
-//! when the slots or the threshold forbid it, and the successors of a chained step are the next step's inputs. Every
-//! transaction is validated in the rusty-kaspa v2.1.0 engine.
+//! Tests the bid delivery modes in the matcher (`docs/design/bid-delivery-spec.md` §4, §6). A
+//! mode-1 bid's fills spend and grow its bought-custody (one token input, counted by the planner).
+//! A mode-2 bid's fill tops up the maker's receive UTXO only when its `topupTip` pays the measured
+//! extra fee, with one top-up per token at its lowest-index delivering leg, and uses form 1 when
+//! the slots or the threshold forbid it. The successors of a chained step are the next step's
+//! inputs. Every transaction is validated in the rusty-kaspa v2.1.0 engine.
 
 #[path = "matcher_common/mod.rs"]
 mod common;
@@ -82,7 +83,8 @@ fn a_chained_step_lists_the_grown_bought_custody() {
     assert!(o.custody_ok(), "the continuation lists exactly its bought-custody");
 }
 
-/// A mode-2 fill tops up the maker's receive UTXO when the tip pays the measured extra fee; with a tip one sompi short
+/// of it, or at a fee rate the default tip does not pay, the fill delivers a new receive UTXO (form
+/// 1).
 /// of it, or at a fee rate the default tip no longer pays, the fill delivers a new receive UTXO (form 1).
 #[test]
 fn a_top_up_only_when_the_tip_pays_its_extra_fee() {

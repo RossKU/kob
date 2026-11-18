@@ -1,10 +1,13 @@
-//! The matcher at the wallet's default order carrier (`DEFAULT_ORDER_CARRIER`, 1 KAS) on the widest token program, KaspaRocket's
-//! 10 / 10 `KaspaRocketToken11458`: the orders are placed with 1 KAS on every covenant UTXO (the ask's order UTXO and custody, the
-//! bid's `deliveryCarrier`), so a fill's token and order outputs are small cells whose KIP-9 storage mass (`4 × 10^12 / carrier`
-//! each) is the limit that binds, not the relay fee or the compute mass. At 1 KAS every shape the matcher builds stays within the
-//! 500,000 block storage limit and the full 10-delivery batches go out as one transaction; below it (0.5 KAS here) a first plan over
-//! the limit is lowered (the engine scales the batch down by the overrun and plans again): fewer fills per transaction, never an
-//! invalid or an unmined transaction.
+//! Tests the matcher at the wallet's default order carrier (`DEFAULT_ORDER_CARRIER`, 1 KAS) on the
+//! widest token program, KaspaRocket's 10 / 10 `KaspaRocketToken11458`.
+//!
+//! The orders are placed with 1 KAS on every covenant UTXO (the ask's order UTXO and custody, the
+//! bid's `deliveryCarrier`), so a fill's token and order outputs are small cells whose KIP-9
+//! storage mass (`4 × 10^12 / carrier` each) is the limit that binds, not the relay fee or the
+//! compute mass. At 1 KAS every shape the matcher builds stays within the 500,000 block storage
+//! limit and the full 10-delivery batches go out as one transaction. Below it (0.5 KAS here) a
+//! first plan over the limit is lowered (the engine scales the batch down by the overrun and plans
+//! again): fewer fills per transaction, never an invalid or an unmined transaction.
 
 mod common;
 

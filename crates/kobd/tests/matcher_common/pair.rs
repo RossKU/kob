@@ -1,7 +1,8 @@
-//! Pair order fixtures for the matcher tests: pair orders of token A (program `pa`) and token B (program `pb`) — `KobPair`
-//! asks and bids, `KobCondPair` conditionals, `KobIfdPair` entries — with their exact custodies, plain KAS orders of both
-//! tokens, and the checks every transaction that fills pair orders must pass. Prices are base units of B per whole A
-//! (`RATE` = one whole B per whole A); both tokens have the scale `SCALE`.
+//! Pair order fixtures for the matcher tests: pair orders of token A (program `pa`) and token B
+//! (program `pb`) (`KobPair` asks and bids, `KobCondPair` conditionals, `KobIfdPair` entries) with
+//! their exact custodies, plain KAS orders of both tokens, and the checks every transaction that
+//! fills pair orders must pass. Prices are base units of B per whole A (`RATE` = one whole B per
+//! whole A); both tokens have the scale `SCALE`.
 #![allow(dead_code)]
 
 use std::collections::BTreeSet;

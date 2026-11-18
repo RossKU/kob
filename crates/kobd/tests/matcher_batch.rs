@@ -1,11 +1,13 @@
-//! The global batch (`docs/spec/matcher.md` §3): one transaction fills several token books, pair orders and every
-//! order class at once; the planner is a pure function of the view; a book set larger than one transaction is split at the
-//! physical limits, most profitable first; large books are planned without candidate caps within the tick budget. Every
-//! transaction is built by `kob_protocol` and validated in the rusty-kaspa v2.1.0 script engine (the covenants and token
+//! Tests the global batch (`docs/spec/matcher.md` §3): one transaction fills several token books,
+//! pair orders and every order class at once; the planner is a pure function of the view; a book
+//! set larger than one transaction is split at the physical limits, most profitable first; large
+//! books are planned without candidate caps within the tick budget. Every transaction is built by
+//! `kob_protocol` and validated in the rusty-kaspa v2.1.0 script engine (the covenants and token
 //! programs are the reference).
 //!
-//! `KOB_FUZZ_ITERS` / `KOB_FUZZ_SEED` steer the mixed-batch fuzz; the 10 000-orders-per-side measurement is `#[ignore]`d
-//! (`cargo test -p kobd --test matcher_batch -- --ignored --nocapture`).
+//! `KOB_FUZZ_ITERS` / `KOB_FUZZ_SEED` steer the mixed-batch fuzz; the 10 000-orders-per-side
+//! measurement is `#[ignore]`d (`cargo test -p kobd --test matcher_batch -- --ignored
+//! --nocapture`).
 
 #[path = "matcher_common/mod.rs"]
 mod common;

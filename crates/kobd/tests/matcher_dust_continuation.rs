@@ -1,6 +1,6 @@
-//! Audit 2026-10-30 E1 regression: a stop whose `keeperTip` leaves a continuation below the covenant-output bound must not
-//! freeze the book it sits in. The planner never attaches such an arming update, the builder names an update it refuses, and the
-//! rest of the book keeps matching.
+//! Regression: a stop whose `keeperTip` leaves a continuation below the covenant-output bound must
+//! not freeze the book it sits in. The planner never attaches such an arming update, the builder
+//! names an update it refuses, and the rest of the book keeps matching.
 
 #[path = "matcher_common/mod.rs"]
 mod common;

@@ -1,17 +1,23 @@
-//! Weighted work selection among competing executors (`docs/spec/matcher.md` §3.6, `matcher::select`).
+//! Tests the weighted work selection among competing executors (`docs/spec/matcher.md` §3.6,
+//! `matcher::select`).
 //!
-//! * A simulated race: two and three executors plan the same shared book every tick (one view, the same DAA score), submit
-//!   in a random order to a mempool that takes the first transaction spending an input and refuses the others (`DoubleSpend`
-//!   / `MissingInput`, a chained step whose parent was refused included), and the book moves by the transactions it took.
-//!   The deterministic reference planner against the weighted selection: lost transactions per submitted transaction, the
-//!   fills of the lost ones, the latency of the crossings (`--nocapture` prints the numbers).
-//! * No starvation: at the lowest share every crossing is filled within `max_defer_daa` of its listing.
-//! * The priority classes and the reference planner inside a unit: a unit with an immediate order is always planned, and a
-//!   planned unit's fills are exactly the reference planner's fills of that unit alone.
+//! * A simulated race: two and three executors plan the same shared book every tick (one view, the
+//!   same DAA score), submit in a random order to a mempool that takes the first transaction
+//!   spending an input and refuses the others (`DoubleSpend` / `MissingInput`, a chained step whose
+//!   parent was refused included), and the book moves by the transactions it took. The
+//!   deterministic reference planner against the weighted selection: lost transactions per
+//!   submitted transaction, the fills of the lost ones, the latency of the crossings (`--nocapture`
+//!   prints the numbers).
+//! * No starvation: at the lowest share every crossing is filled within `max_defer_daa` of its
+//!   listing.
+//! * The priority classes and the reference planner inside a unit: a unit with an immediate order
+//!   is always planned, and a planned unit's fills are exactly the reference planner's fills of
+//!   that unit alone.
 //! * A seed reproduces the tick (matcher and keepers); different seeds select differently.
 //!
-//! `KOB_SELECT_DEBUG=1` prints every simulated tick (the selection, the orders waiting for 30 DAA or more, the transactions);
-//! `explore_selection_parameters` (ignored) measures the exponent, the minimum share and the smoothing.
+//! `KOB_SELECT_DEBUG=1` prints every simulated tick (the selection, the orders waiting for 30 DAA
+//! or more, the transactions); `explore_selection_parameters` (ignored) measures the exponent, the
+//! minimum share and the smoothing.
 
 #[path = "matcher_common/mod.rs"]
 mod common;

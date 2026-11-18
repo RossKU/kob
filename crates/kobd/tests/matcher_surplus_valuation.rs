@@ -1,12 +1,14 @@
-//! The surplus-inventory valuation (`PlannerConfig::inventory`) and the accounting of what the operator keeps.
+//! Tests the surplus-inventory valuation (`PlannerConfig::inventory`) and the accounting of what
+//! the operator keeps.
 //!
-//! * A plain KAS bid values a surplus only for an amount its own quantity rules accept (at least its minimum fill, or all
-//!   it has left): a bid that could never take the surplus (its minimum fill is above it) does not value it, whatever it
-//!   quotes, and `minAmount` never lowers the bound below that rule. Otherwise a bid quoting any price could make the
-//!   operator sign batches whose KAS accounting is negative (it pays the whole fee) for a surplus worth almost nothing.
-//! * The KAS the accounting credits to the operator's own token outputs (`operator_token_kas_out`, computed from the plan)
-//!   equals what the built transaction puts on token outputs owned by the operator key, and a kept surplus is exactly the
-//!   operator's token output.
+//! * A plain KAS bid values a surplus only for an amount its own quantity rules accept (at least
+//!   its minimum fill, or all it has left): a bid that could never take the surplus (its minimum
+//!   fill is above it) does not value it, whatever it quotes, and `minAmount` never lowers the
+//!   bound below that rule. Otherwise a bid quoting any price could make the operator sign batches
+//!   whose KAS accounting is negative (it pays the whole fee) for a surplus worth almost nothing.
+//! * The KAS the accounting credits to the operator's own token outputs (`operator_token_kas_out`,
+//!   computed from the plan) equals what the built transaction puts on token outputs owned by the
+//!   operator key, and a kept surplus is exactly the operator's token output.
 
 #[path = "matcher_common/mod.rs"]
 mod common;

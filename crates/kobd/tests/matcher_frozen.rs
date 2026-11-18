@@ -1,6 +1,7 @@
-//! Matcher: an engine pre-simulation that the TOKEN program rejects (a frozen or blacklisted balance) flags the order it can be
-//! attributed to instead of stalling the book; an order-covenant failure does not. The validator is injected (no real freezable
-//! program is on the strict list): it fails the input a token program would.
+//! Tests that an engine pre-simulation that the TOKEN program rejects (a frozen or blacklisted
+//! balance) flags the order it can be attributed to instead of stalling the book, while an
+//! order-covenant failure does not. The validator is injected (no real freezable program is on the
+//! strict list): it fails the input a token program would.
 
 #[path = "matcher_common/mod.rs"]
 mod common;
