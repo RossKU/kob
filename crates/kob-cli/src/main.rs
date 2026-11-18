@@ -22,6 +22,7 @@ mod recover;
 mod registry;
 mod tls;
 mod token;
+mod token_sale;
 mod tokens;
 mod trade;
 mod watch;

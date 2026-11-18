@@ -52,10 +52,11 @@ Defaults (the wallet's, `docs/spec/matcher.md` §10):
 Guards (also the wallet's): tick, value and 90-day bounds, self-trade, the FOK depth check, price-band warnings, and:
 
 - **Crossing limits.** A limit that crosses the book becomes an auction by default (`--crossing auction|limit|reject`).
-- **Market start.** The start of a market / close auction is the indexer's best price, and nothing independent checks it.
-  Every market or close **sell** needs `--ack-market-start` on its own command line (`--yes` is not enough), unless
-  `--floor-price P` bounds it: the auction then never goes below P (the bound is max(slippage bound, P)). A market buy needs
-  it when it is worth 100 KAS or more or is far above the last fill.
+- **Market start.** Every order in the KAS book is looked up on the node first (best price first, up to 18 rows a side);
+  an order only the indexer lists is left out (`BOOK_ORDERS_DROPPED`), so a market / close auction starts at a node-confirmed
+  price (`MARKET_START_CONFIRMED`). A start far from the last fill still needs `--ack-market-start` on its own command line
+  (`--yes` is not enough), or for a sell `--floor-price P` (the bound is max(slippage bound, P)). On a pair book, which is
+  not checked, every market or close sell needs it (or `--floor-price`), and so does a buy worth 100 KAS or more.
 - **Indexer checks.** Self-trade and book checks need the indexer; `--ack-no-guards` places the order when it cannot answer.
 - Every UTXO the indexer names is looked up on the node before it is spent.
 - The token outputs a command's own transaction creates (its token change) are recorded locally (`$KOB_STATE_DIR`, else
@@ -268,13 +269,17 @@ The bound:
   bounds at once, the bound of the other side (`--min-price` on a fill that buys, exit 2 once the order is read) and a
   bound without a unit. Without `--yes` the bound is optional: the plan, shown before the prompt, gives the order's price
   at the lock time, the tip, what you pay or receive per token and in total, and the bound (or none).
+- **`--yes` needs a token pin.** `--token <covenant id>` names the token you mean to trade; the order's state, checked on
+  the node, must trade it, or nothing is signed (exit 1). Without it (exit 2 with `--yes`) an indexer could list another
+  token's order id in this token's book. A token that only the indexer gives decimals to is also refused when the order on
+  the node uses another scale.
 - **No `--slippage`.** `--slippage` of `kob place` bounds an auction relative to a reference price. A take has no
   reference to slip from but the order itself, which is what can change: put your margin into the bound (for an order shown
   at 0.25 KAS that you accept up to 1 % worse, `--max-price 0.2525KAS`).
 
 ```sh
-kob take <id> --amount 4TUSD --max-price 0.26KAS --yes --json   # buy from a sell order, at most 0.26 KAS per TUSD
-kob take <id> --amount 4TUSD --min-price 0.24KAS --yes --json   # sell into a buy order, at least 0.24 KAS per TUSD
+kob take <id> --amount 4TUSD --max-price 0.26KAS --token <TUSD id> --yes --json   # buy, at most 0.26 KAS per TUSD
+kob take <id> --amount 4TUSD --min-price 0.24KAS --token <TUSD id> --yes --json   # sell, at least 0.24 KAS per TUSD
 kob take <id> --amount 4TUSD --max-price 0.26KAS --dry-run      # show the plan and check the bound, sign nothing
 ```
 
@@ -589,7 +594,10 @@ declaration. Both are signed at once; the genesis is sent right after the prepar
 | Option | Meaning |
 |---|---|
 | `--name`, `--ticker`, `--decimals` | required: name (1..=64 chars), ticker (2..=12 of A-Z 0-9), decimals (0..=18) |
-| `--fund-utxo TXID:INDEX:AMOUNT:OWNER` | required, repeatable, all of one key; AMOUNT in sompi; OWNER a 64-hex x-only key or a P2PK address |
+| `--fund-utxo TXID:INDEX:AMOUNT:OWNER` | repeatable, all of one key; AMOUNT in sompi; OWNER a 64-hex x-only key or a P2PK address. Without it the key's plain KAS UTXOs on the node fund it, the fewest that cover it, largest first (a dry run then reads the node) |
+| `--sell price|curve`, `--keep PERCENT` | after creation, as the web app (default: keep everything). The sale takes the funding key's share; `--keep` of it (0 to 100, default 0) stays in the wallet as its own output |
+| `--price P` | `--sell price`: KAS per whole token (default 10,000 KAS over the amount). A limit sell (GTC) sent right after the genesis, spending its output and the preparation's change; saved as `sell_order.json` |
+| `--levels N`, `--total KAS`, `--multiple M` | `--sell curve`: a `KobCurveAsk` in the genesis (unbound, no expiry); defaults 100, 10000KAS, 5 |
 | `--supply UNITS` | total supply in base units; must equal the sum of the holders. Without `--holder` it all goes to the funding key |
 | `--holder OWNER:SCHEME:AMOUNT[:BORROW_SCHEME:GUARD]` | repeatable, one token output each (OWNER 64-hex, `self` or an address) |
 | `--program` | `public-mint` (default), `3x3`, `kasparocket-testnet` (testnet-10 only); `8x8-prototype` is no longer issued (a usage error) |
@@ -607,7 +615,9 @@ declaration. Both are signed at once; the genesis is sent right after the prepar
   less, but other indexers (kascov.io) do not recognise the token, and the plan says so. Measured on testnet-10 on
   2026-11-04: issuance 0.00415 KAS for both; a 1 -> 1 transfer 0.00901 KAS (public-mint) against 0.00678 KAS (3x3). Tokens
   already issued as 3 / 3 stay tradable.
-- **Dry run.** `--dry-run` builds and verifies everything offline and never submits. With a key it signs and runs every
+- **One approval.** The creation and its sale are planned and signed before the one confirmation (or `--yes`).
+- **Dry run.** `--dry-run` builds and verifies everything offline (unless it reads the node for automatic funding or the
+  clock of `--sell price`) and never submits. With a key it signs and runs every
   input in the script engine; without it the transactions stay unsigned and script execution is skipped (the output says
   so). Nothing is written unless `--out-dir` is given.
 - **Submitting.** Without `--dry-run`, a key is required (`--key-file`, `--key-env` or `$KOB_KEY`). The node is `--node`, else `$KOB_NODE_WRPC`, else the public nodes,
