@@ -231,10 +231,16 @@ function fillRowOf(txid: Hex, evs: EventView[], ctx: RowContext): ActivityRow | 
   };
 }
 
-/** What an order placed: `initial_amount`, else (an index that has none, or 0) what was filled plus what is left. */
-function placedAmount(o: OrderView): bigint | null {
+/**
+ * What an order placed: `initial_amount`, else (an index that has none, or 0, as for every bid: its quantity is its escrow) what was filled plus what
+ * is left. An ended bid has nothing left to read: only one that ended by a fill (`filled`: less than one minimum fill of buying power left) placed
+ * about what it filled; for any other end (closed partly filled, cancelled, refunded) the placed amount is unknown, never the filled one, which
+ * would read as 100 % filled.
+ */
+export function placedAmount(o: OrderView): bigint | null {
   const init = big(o.initial_amount);
   if (init !== null && init > 0n) return init;
+  if (o.contract.startsWith('KobBid') && o.status !== 'open' && o.status !== 'partial' && o.status !== 'filled') return null;
   const filled = big(o.filled_amount) ?? 0n;
   const left = big(o.pair ? o.pair.amount_left : o.amount_left) ?? 0n;
   return filled + left > 0n ? filled + left : init;

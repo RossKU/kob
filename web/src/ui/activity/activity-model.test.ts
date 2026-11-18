@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { EventView, OrderView, PairFillView } from '../../data/indexer-types';
 import {
   ACTIVITY_DEPTH, AVAILABLE_KINDS, DEFAULT_PREFS, PREFS_KEY, SETTLE_DAA, amountCell, confirmationsAt, daaNow, filterRows, fillRows, heldView, inMarket, logHasNext, logPage, logPriceDp, mergePairFills, mergeRows, orientRow, pairFillEvent, parsePrefs,
-  placedRows, priceRefOf, readPrefs, rowHref, rowMakers, shownKinds, walletBody, writePrefs,
+  placedAmount, placedRows, priceRefOf, readPrefs, rowHref, rowMakers, shownKinds, walletBody, writePrefs,
   type ActivityRow, type OrderFacts, type RowContext,
 } from './activity-model';
 import { formatRowTime } from '../kit/format';
@@ -120,6 +120,16 @@ describe('placements: one row per placement transaction', () => {
     const o = order({ covenant_id: 'd1'.repeat(32), contract: 'KobPair', price: null, pair: { base: T, quote: U, side: 'bid' } as OrderView['pair'] });
     const [r] = placedRows([o], ctxOf());
     expect(r).toMatchObject({ market: { kind: 'pair', base: T, quote: U }, pairSide: 'bid', side: 'buy', amount: { token: T, units: 100_000_000n }, value: null, price: null });
+  });
+
+  it('a bid (no initial amount): filled + left while live or ended by a fill; unknown, never the filled amount (100 %), once closed partly filled or cancelled', () => {
+    const bid = (o: Partial<OrderView>) => order({ covenant_id: BID, contract: 'KobBid', side: 2, initial_amount: null, ...o });
+    expect(placedAmount(bid({ status: 'partial', filled_amount: '22', amount_left: '978' }))).toBe(1000n);
+    expect(placedAmount(bid({ status: 'filled', filled_amount: '1000', amount_left: '0' }))).toBe(1000n);
+    expect(placedAmount(bid({ status: 'closed', filled_amount: '22', amount_left: '0' }))).toBeNull();
+    expect(placedAmount(bid({ status: 'cancelled', filled_amount: '22', amount_left: '0' }))).toBeNull();
+    expect(placedAmount(order({ covenant_id: ASK, status: 'cancelled', filled_amount: '22', amount_left: '0' }))).toBe(100_000_000n);
+    expect(placedRows([bid({ status: 'closed', filled_amount: '22', amount_left: '0' })], ctxOf())[0]!.amount).toBeNull();
   });
 
   it('an order without its placement transaction is not listed', () => {

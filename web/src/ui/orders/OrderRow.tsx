@@ -26,7 +26,7 @@ import type { EventView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
 import { OrderFills, filledAmountOf } from './OrderFills';
 import { GTC_RULE, type OrderRowModel, type OrderStatusUi } from './orders-model';
-import { bidSpentByFills, filledAmount, orderEnded, orderTotalKas, placedUnix } from './orders-sort';
+import { bidSpentByFills, filledAmount, orderEnded, orderTotalKas, placedUnix, statusText } from './orders-sort';
 import { amountCell, longDate, priceDpOf, tokenUnit, type AmountText } from './cells';
 import { tCount } from './plural';
 import { unlistedHint, unlistedText } from './unlisted';
@@ -324,7 +324,7 @@ export function OrderRow(props: OrderRowProps) {
   );
   cells.status = (
     <DtCell k="status" label={t('orders.col.status')} card="status" class="or-status">
-      <Badge tone={STATUS_TONE[row.status]}>{t(`orders.status.${row.status}`)}</Badge>
+      <Badge tone={STATUS_TONE[row.status]}>{statusText(row)}</Badge>
       {attention ? (
         <span class="or-warn" title={t('orders.line.attention')} aria-label={t('orders.line.attention')} role="img">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -374,7 +374,7 @@ export function OrderRow(props: OrderRowProps) {
             </a>
           ) : null}
           <Badge tone={row.side === 'buy' ? 'ok' : 'bad'} data-testid="order-side">{t(`common.side.${row.side}`)}</Badge>
-          <Badge tone={STATUS_TONE[row.status]} data-testid="order-status">{t(`orders.status.${row.status}`)}</Badge>
+          <Badge tone={STATUS_TONE[row.status]} data-testid="order-status">{statusText(row)}</Badge>
           {row.expired && row.live ? <Badge tone="warn" data-testid="order-expired">{t('orders.expired')}</Badge> : null}
           {row.armed === true ? <Badge tone="info" data-testid="order-armed">{t('orders.armed')}</Badge> : null}
           {row.armed === false && row.live ? <Badge tone="neutral">{t('orders.waitingTrigger')}</Badge> : null}

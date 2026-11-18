@@ -49,6 +49,11 @@ export function filledAmount(row: OrderRowModel): bigint | null {
   return row.amountTotal > row.amountLeft ? row.amountTotal - row.amountLeft : 0n;
 }
 
+/** The status word of an order: `closed` with something filled is "closed, partly filled" (a bid an older covenant let a fill below its minimum end early). */
+export function statusText(row: OrderRowModel): string {
+  return row.status === 'closed' && (filledAmount(row) ?? 0n) > 0n ? t('orders.status.closedPartial') : t(`orders.status.${row.status}`);
+}
+
 /** The filled part of an order in hundredths of a percent (null: a KAS budget, which has no amount to compare). */
 export function filledPermyriad(row: OrderRowModel): number | null {
   const total = row.amountTotal;
@@ -115,6 +120,6 @@ export function orderSortValue(
     case 'total':
       return orderTotalKas(row, ctx.avgOf(row));
     case 'status':
-      return t(`orders.status.${row.status}`);
+      return statusText(row);
   }
 }

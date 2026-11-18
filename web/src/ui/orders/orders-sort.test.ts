@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { OrderRowModel } from './orders-model';
-import { bidSpentByFills, filledAmount, filledPermyriad, orderEnded, orderSortValue, orderTotalKas } from './orders-sort';
+import { bidSpentByFills, filledAmount, filledPermyriad, orderEnded, orderSortValue, orderTotalKas, statusText } from './orders-sort';
 
 const SCALE = 100_000_000n;
 interface Over {
@@ -26,6 +26,15 @@ const row = (o: Over = {}): OrderRowModel =>
     budget: o.budget ? { placed: null, left: null } : null,
     entry: { view: o.filled === null ? null : { filled_amount: o.filled ?? '0' } },
   }) as unknown as OrderRowModel;
+
+describe('the status word', () => {
+  it('a closed order with fills reads "closed, partly filled" (a bid an older covenant let a short fill end), never "filled"', () => {
+    const b = { status: 'closed' as const, total: null, left: 0n, budget: true };
+    expect(statusText(row({ ...b, filled: '22' }))).toBe('closed, partly filled');
+    expect(statusText(row({ ...b, filled: '0' }))).toBe('closed');
+    expect(statusText(row({ status: 'filled', total: null, filled: '22' }))).toBe('filled');
+  });
+});
 
 describe('the filled part of an order', () => {
   it('reads the indexer filled_amount: a cancelled order that filled 1 of 4.9458 is 20 %, not 100 % (amount_left is 0 once it ended)', () => {

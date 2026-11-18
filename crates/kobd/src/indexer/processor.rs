@@ -58,7 +58,7 @@ use crate::tokens::{ListingInput, ListingRules, TokenAllowlist};
 use kob_protocol::artifacts::{template, TemplateId};
 use kob_protocol::family::Family;
 use kob_protocol::payload::{self, Record};
-use kob_protocol::state::{rpt_until, AnyState, Booking, IfdAskState, IfdBidState, IfdPairState, PairEvidence};
+use kob_protocol::state::{rpt_until, AnyState, BidState, Booking, IfdAskState, IfdBidState, IfdPairState, PairEvidence};
 use kob_protocol::tx::{CovenantJson, TxInputJson, TxJson, TxOutputJson, UtxoJson};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::json;
@@ -2062,6 +2062,13 @@ impl Processor {
                                     }
                                 }
                             }
+                            // A bid an older covenant let a fill below its minimum end early (see
+                            // [`bid_ended_short`]): it reads `closed`, not `filled`.
+                            if let (false, Some(AnyState::KobBid(b) | AnyState::KobBidKron(b))) = (continues, s.before.as_ref()) {
+                                if bid_ended_short(b, v, n) {
+                                    detail["ended_short"] = json!(true);
+                                }
+                            }
                         }
                     }
                     if let Some(next) = rec.outputs.iter().find(|o| o.cov.is_some_and(|(_, c)| c == s.cov)) {
@@ -2707,8 +2714,25 @@ const LAST_EVENT_SQL: &str =
     concat!("SELECT block_seq, daa FROM order_events WHERE order_id = ", order_of!("?1"), " ORDER BY id DESC LIMIT 1");
 
 /// The newest closing event of an order, one seek of `order_events_closes`.
-const CLOSING_EVENT_SQL: &str =
-    concat!("SELECT kind, amount FROM order_events WHERE order_id = ", order_of!("?1"), " AND closes = 1 ORDER BY id DESC LIMIT 1");
+const CLOSING_EVENT_SQL: &str = concat!(
+    "SELECT kind, amount, json_extract(kob_dtext(detail), '$.ended_short') FROM order_events WHERE order_id = ",
+    order_of!("?1"),
+    " AND closes = 1 ORDER BY id DESC LIMIT 1"
+);
+
+/// A terminal fill of `n` from a bid escrow of `value` sompi that took less than `minFill` while the
+/// bid could still fund one more base unit at its budget rate: `left - carrier - reserve >=
+/// ceil((pMax + tip) / scale)`, `left = value - used(n)`. The current covenants refuse it (a fill
+/// below `minFill` must take all the buying power left); older ones allowed it whenever less than one
+/// minimum fill was left after it, so a tiny fill could end a bid funded for under two minimum fills
+/// and return the rest. Such a bid ended partly filled.
+pub(crate) fn bid_ended_short(b: &BidState, value: i64, n: i64) -> bool {
+    if n <= 0 || n >= b.min_fill {
+        return false;
+    }
+    let (Some(used), Some(unit)) = (b.used(n), b.used(1)) else { return false };
+    value.checked_sub(used).and_then(|l| l.checked_sub(b.carrier_reserve())?.checked_sub(b.reserve)).is_some_and(|spare| spare >= unit)
+}
 
 /// Base units filled from one order: the sum of its fill events, saturating at `i64::MAX`.
 fn filled_amount(conn: &Connection, cov: &Hash32) -> DbResult<i64> {
@@ -2775,13 +2799,15 @@ fn refresh_with(conn: &Connection, cov: &Hash32, how: Filled) -> DbResult<()> {
     let last: Option<(i64, i64)> =
         conn.prepare_cached(LAST_EVENT_SQL)?.query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
     // Only a closed order reads its closing event: an open one has none to find.
-    let closing: Option<(String, Option<i64>)> = match tip {
+    let closing: Option<(String, Option<i64>, Option<i64>)> = match tip {
         Some(_) => None,
-        None => conn.prepare_cached(CLOSING_EVENT_SQL)?.query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?))).optional()?,
+        None => conn.prepare_cached(CLOSING_EVENT_SQL)?.query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?,
     };
     let status = match (&tip, closing.as_ref().map(|c| c.0.as_str())) {
         (Some(_), _) if filled > 0 => "partial",
         (Some(_), _) => "open",
+        // A bid that a fill below its minimum ended early is closed, partly filled.
+        (None, Some("fill")) if closing.as_ref().is_some_and(|c| c.2 == Some(1)) => "closed",
         (None, Some("fill")) => "filled",
         (None, Some("cancel")) => "cancelled",
         (None, Some("refund")) => "refunded",
@@ -3658,6 +3684,51 @@ mod tests {
         // A recovery operation (block 0) writes an output the node verified as unspent.
         p.insert_utxo(&conn, &cov, &spent, 0, 3_000, &[0, 0], None, 0, 95).unwrap();
         assert_eq!(row(&spent), (None, 3_000, 0));
+    }
+
+    /// A fill below `minFill` that left buying power for one more base unit ended a bid early (an
+    /// older covenant's exemption); one that took all the buying power did not.
+    #[test]
+    fn a_bid_ended_by_a_short_fill_is_flagged() {
+        // built by hand: the testkit's bid() reads the embedded artifacts' pinned hashes
+        let b = BidState {
+            maker: [2; 32], token_cov_id: [0x70; 32], token_tpl_hash: [0; 32], tpl_prefix_len: 0, tpl_suffix_len: 0,
+            extension_commitment: [0xee; 32], scale: 1_000, min_fill: 1_000, price: 250_000_000, tip: 100_000, tif: 0,
+            active_from: 0, expiry_daa: 400_000_000, refund_tip: 0, reserve: 0, delivery_carrier: 1_000_000_000, interval: 0,
+            max_fill: 0, slope: 0, price_end: 0, decay_step: 1_000, mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        };
+        let (n, unit) = (10, b.used(1).unwrap());
+        let all = b.used(n).unwrap() + b.carrier_reserve() + b.reserve;
+        assert!(bid_ended_short(&b, all + unit, n), "one more base unit was fundable");
+        assert!(!bid_ended_short(&b, all + unit - 1, n), "the fill took all the buying power");
+        assert!(!bid_ended_short(&b, all + 100 * unit, b.min_fill), "a fill of minFill is never short");
+    }
+
+    /// A bid whose closing fill was flagged short reads `closed` (partly filled), not `filled`.
+    #[test]
+    fn a_bid_ended_short_reads_closed() {
+        let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
+        conn.execute_batch("INSERT INTO ids (id, h) VALUES (1, zeroblob(32)), (2, randomblob(32));").unwrap();
+        for (k, detail, want) in [(1u8, r#"{"input":0,"ended_short":true}"#, "closed"), (2, r#"{"input":0}"#, "filled")] {
+            let cov = Hash32([k; 32]);
+            conn.execute(
+                "INSERT INTO orders (id, covenant_id, contract, template_id, family, side, token_id, in_book, genesis_state, genesis_block, \
+                 genesis_daa, listed) VALUES (?2, ?1, 'KobBid', 1, 1, 2, 2, 1, zeroblob(8), 1, 1, 1)",
+                params![&cov.0[..], k as i64],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, amount, closes, detail) \
+                 VALUES (?1, 2, 2, 2, x'01', 0, 'fill', 22, 1, ?2)",
+                params![k as i64, detail],
+            )
+            .unwrap();
+            refresh_order_state(&conn, &cov).unwrap();
+            let (status, filled): (String, i64) = conn
+                .query_row("SELECT status, filled_amount FROM order_state WHERE order_id = ?1", [k as i64], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap();
+            assert_eq!((status.as_str(), filled), (want, 22));
+        }
     }
 
     /// A node's DAA score or time stamp above `i64::MAX` is stored as `i64::MAX`, not wrapped to a

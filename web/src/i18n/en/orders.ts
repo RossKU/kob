@@ -125,6 +125,7 @@ export default {
   'orders.status.refunded': 'refunded',
   'orders.status.killed': 'expired (IOC/FOK)',
   'orders.status.closed': 'closed',
+  'orders.status.closedPartial': 'closed, partly filled',
   'orders.status.unknown': 'unknown',
   'orders.expired': 'expired: refund pending',
   'orders.armed': 'triggered',

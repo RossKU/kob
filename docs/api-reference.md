@@ -161,7 +161,7 @@ lists the omitted ones).
 | `cancelled` | Ended by a cancel. |
 | `refunded` | Ended by a refund (soft expiry, idle, or a keeper). |
 | `killed` | IOC / FOK: the unfilled rest was returned (by the same transaction or by a keeper). |
-| `closed` | Ended by something the indexer could not classify, or closed by gap reconciliation. |
+| `closed` | Ended by something the indexer could not classify, or closed by gap reconciliation; also a bid that an older covenant let a fill below its minimum end while it could still buy (closed, partly filled: the rest went back to the maker; the fill event's `detail.ended_short` is `true`). |
 | `active` | **Filter only**: `open` or `partial`. Never a stored status. |
 
 A filter value outside this list is `400` ("status must be one of open, partial, filled, cancelled, refunded, killed, closed,
