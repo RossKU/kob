@@ -1,13 +1,14 @@
 // The safeguards: the spending ledger, the caps, the withdrawal allow-list, the kill switch and the price band.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { kas, utcDay } from './units.mjs';
 
 /**
- * A JSON-lines ledger of the KAS each write takes out of the wallet. A send first writes `reserve`; the outcome writes
- * `settle` (the spend the CLI reported) or `release` (nothing was sent). A reserve with neither (a crash, a timeout)
- * keeps counting: unknown outcomes count as spent.
+ * A JSON-lines ledger of what each write takes out of the wallet. A send first writes `reserve`; the outcome writes
+ * `settle` (the spend the CLI reported; `outcome: "unknown"` when the reply was lost) or `release` (the CLI said nothing
+ * was sent). A reserve with neither (a crash) and an unknown outcome keep counting until the UTC day rolls.
+ * A torn line (a crash while writing) is skipped.
  */
 export class Ledger {
   constructor(file) {
@@ -16,20 +17,59 @@ export class Ledger {
 
   entries() {
     if (!existsSync(this.file)) return [];
-    return readFileSync(this.file, 'utf8').split(/\r?\n/).filter((l) => l.trim()).map((l) => JSON.parse(l));
+    const out = [];
+    for (const l of readFileSync(this.file, 'utf8').split(/\r?\n/)) {
+      if (!l.trim()) continue;
+      try {
+        out.push(JSON.parse(l));
+      } catch {
+        // a torn line: a reserve torn by a crash was never followed by a send
+      }
+    }
+    return out;
   }
 
   append(e) {
     mkdirSync(dirname(this.file), { recursive: true });
-    appendFileSync(this.file, `${JSON.stringify({ ts: new Date().toISOString(), ...e })}\n`);
+    appendFileSync(this.file, `${this.endsTorn() ? '\n' : ''}${JSON.stringify({ ts: new Date().toISOString(), ...e })}\n`);
+  }
+
+  /** The file's last byte is not a newline (a torn line): the next entry starts a new line. */
+  endsTorn() {
+    if (!existsSync(this.file)) return false;
+    const size = statSync(this.file).size;
+    if (!size) return false;
+    const fd = openSync(this.file, 'r');
+    try {
+      const b = Buffer.alloc(1);
+      readSync(fd, b, 0, 1, size - 1);
+      return b[0] !== 0x0a;
+    } finally {
+      closeSync(fd);
+    }
   }
 
   reserve(id, day, spend, meta = {}) {
     this.append({ kind: 'reserve', id, day, spend: String(spend), ...meta });
   }
 
-  settle(id, spend, txids) {
-    this.append({ kind: 'settle', id, spend: String(spend), txids });
+  settle(id, spend, txids, outcome) {
+    this.append({ kind: 'settle', id, spend: String(spend), txids, ...(outcome ? { outcome } : {}) });
+  }
+
+  /** Sends of the UTC day `day` whose outcome is unknown (a lost reply, a crash): they count as spent. */
+  unknownOn(day) {
+    const byId = new Map();
+    for (const e of this.entries()) {
+      if (e.kind === 'reserve') byId.set(e.id, { id: e.id, day: e.day, tool: e.tool, spend: e.spend, txids: [], open: true });
+      else if (byId.has(e.id)) {
+        const v = byId.get(e.id);
+        v.open = e.kind === 'settle' && e.outcome === 'unknown';
+        if (e.txids) v.txids = e.txids;
+        if (e.spend != null) v.spend = e.spend;
+      }
+    }
+    return [...byId.values()].filter((v) => v.day === day && v.open).map(({ id, tool, spend, txids }) => ({ id, tool, spendKas: kas(BigInt(spend)), txids }));
   }
 
   release(id, reason) {

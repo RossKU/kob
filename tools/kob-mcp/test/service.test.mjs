@@ -123,7 +123,38 @@ test('arguments that would read as options or units without a unit are refused',
   assert.equal(t.calls().filter((a) => a[0] !== 'balances').length, 0);
 });
 
-test('a failed submission releases its reservation', async () => {
+test('a send whose reply is lost counts toward the cap (MCP-1)', async () => {
+  const t = setup({ mode: 'auto', limits: { perTxKas: 20, perDayKas: 30 } });
+  process.env.FAKE_KOB_SUBMIT_LOST = '1';
+  const buy = { token: 'TUSD', side: 'buy', amount: '40TUSD', price: '0.25KAS' }; // 10 + 1 + fee
+  try {
+    const svc = new KobService(t.cfg);
+    for (let i = 0; i < 2; i++) {
+      const r = await svc.write('kob_place_limit', buy);
+      assert.equal(r.status, 'failed');
+      assert.equal(r.counted, true);
+    }
+    assert.match((await svc.write('kob_place_limit', buy)).reason, /^DAILY_CAP/);
+    assert.equal(t.yesCalls().length, 2, 'the third send is refused before signing');
+    const s = await svc.status();
+    assert.equal(s.today.spentKas, '22.001');
+    assert.equal(s.today.unknownOutcomes.length, 2);
+    assert.equal(s.today.unknownOutcomes[0].txids.length, 1, 'the planned txid, to look up');
+  } finally {
+    delete process.env.FAKE_KOB_SUBMIT_LOST;
+  }
+});
+
+test('the ledger skips a torn line and the next entry starts a new line (MCP-5)', async () => {
+  const t = setup({ mode: 'auto' });
+  const svc = new KobService(t.cfg);
+  writeFileSync(svc.ledger.file, '{"ts":"2026-11-17T00:00:00.000Z","kind":"rese');
+  assert.equal((await svc.write('kob_place_limit', place)).status, 'submitted');
+  assert.equal((await svc.status()).today.spentKas, '1.5005');
+  assert.deepEqual(svc.ledger.entries().map((e) => e.kind), ['reserve', 'settle']);
+});
+
+test('a node rejection releases its reservation', async () => {
   const t = setup({ mode: 'auto' });
   process.env.FAKE_KOB_SUBMIT_FAIL = '1';
   try {

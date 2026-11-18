@@ -36,7 +36,8 @@ A write first returns its dry-run plan and a `planId`; it is sent only when the 
 
 ## Safeguards
 
-- Caps on the KAS that leaves the wallet: per transaction, per UTC day, and the fee per transaction.
+- Caps on the KAS that leaves the wallet: per transaction, per UTC day, and the fee per transaction. A send whose outcome
+  is unknown (a lost reply) counts until the day rolls; `kob_status` lists it with its txid.
 - At most 3 token creations a day (`launchesPerDay`).
 - A price more than 25 % worse than the last fill is refused.
 - `kob_send` pays only your own addresses (`withdrawTo`).

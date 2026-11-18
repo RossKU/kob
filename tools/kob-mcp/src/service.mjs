@@ -168,7 +168,8 @@ export class KobService {
       wallet,
       killSwitch: killSwitchOn(this.cfg) ? 'ON: every write is refused (remove the STOP file to resume)' : 'off',
       today: { day, spentKas: kas(spent), leftKas: kas(caps.perDay > spent ? caps.perDay - spent : 0n),
-        launches: this.ledger.launchesOn(day), launchesPerDay: this.cfg.limits.launchesPerDay },
+        launches: this.ledger.launchesOn(day), launchesPerDay: this.cfg.limits.launchesPerDay,
+        unknownOutcomes: this.ledger.unknownOn(day) },
       cli: { claim: this.features.claim ? 'kob claim: offered' : 'kob claim: not in this CLI build (kob_claim is not registered)',
         delivery: this.features.delivery ? '--delivery: offered' : '--delivery: not in this CLI build (kob_place_limit has no delivery argument)' },
     };
@@ -426,22 +427,29 @@ export class KobService {
     let ambiguous = false;
     if (built.create) {
       const r = await this.runCreate(built.argv, built.fund, join(this.cfg.dataDir, 'creations', `${planId}-sent`), true);
-      if (r.code !== 0) { failure = `exit ${r.code}: ${r.stderr}`; ambiguous = /genesis|resume/i.test(r.stderr); } else doc = r.doc;
+      if (r.code !== 0) { failure = `exit ${r.code}: ${r.stderr}`; ambiguous = /genesis|resume/i.test(r.stderr) || !sentNothing(r.stderr); } else doc = r.doc;
     } else {
       const extra = this.cfg.cli.priorityFee ? ['--priority-fee'] : [];
       const r = await this.kob.exec([...built.argv, ...extra, '--yes']);
       doc = r.json;
+      // Only a refusal the CLI states came before the submit (or the node's rejection) releases the spend; a lost reply,
+      // a crash or an unreadable result counts until the UTC day rolls.
       if (r.timedOut) { failure = 'the CLI timed out: the outcome is unknown, check kob_orders / kob_balances'; ambiguous = true; } else if (r.code !== 0) {
         failure = `exit ${r.code}: ${r.stderr || 'no output'}`;
-        ambiguous = Boolean(doc?.links?.some((l) => l.status === 'submitted'));
-      } else if (!doc?.links && doc?.result?.status !== 'submitted') { failure = `not submitted: ${r.stderr || 'no result'}`; }
+        ambiguous = Boolean(doc?.links?.some((l) => l.status === 'submitted')) || !sentNothing(r.stderr);
+      } else if (!doc?.links && doc?.result?.status !== 'submitted') { failure = `not submitted: ${r.stderr || 'no result'}`; ambiguous = !sentNothing(r.stderr); }
     }
     const txids = doc?.links ? doc.links.filter((l) => l.status === 'submitted').map((l) => l.txid) : doc?.result?.txids ?? (doc?.result?.txid ? [doc.result.txid] : []);
     if (failure) {
-      if (ambiguous || txids.length) this.ledger.settle(planId, d.spend, txids);
-      else this.ledger.release(planId, failure);
+      const counted = ambiguous || txids.length > 0;
+      if (counted) {
+        // the planned transaction's id, to look up by hand
+        const known = txids.length ? txids : [doc?.transaction?.txid].filter(Boolean);
+        this.ledger.settle(planId, d.spend, known, 'unknown');
+      } else this.ledger.release(planId, failure);
       log('failed', { planId, error: this.redact(failure), txids });
-      return { status: 'failed', planId, reason: this.redact(failure), txids, counted: ambiguous || txids.length > 0 };
+      return { status: 'failed', planId, reason: this.redact(failure), txids, counted,
+        ...(counted ? { note: 'the outcome is unknown: the spend counts toward today\'s cap; check kob_orders / kob_balances before trying again' } : {}) };
     }
     const actual = spendOf(doc);
     const spend = built.create ? d.spend : actual.spend;
@@ -483,6 +491,16 @@ export class KobService {
   redactArgs(a) {
     return JSON.parse(this.redact(JSON.stringify(a ?? {})));
   }
+}
+
+/**
+ * The CLI's last error line says nothing was sent: a refusal before signing or submitting, a failed engine validation, or
+ * the node's explicit rejection. Anything else after `--yes` started (a lost reply, a socket error) may have been sent.
+ */
+export function sentNothing(stderr) {
+  const lines = String(stderr ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const last = [...lines].reverse().find((l) => /^error\b/i.test(l)) ?? lines.at(-1) ?? '';
+  return /nothing signed|nothing submitted|nothing sent|not signed: pass --yes|engine validation failed|node rejected the request/i.test(last);
 }
 
 /** "TAKE_PRICE_ABOVE_MAX: " or "TAKE_PRICE_BELOW_MIN: " from the CLI's stderr text, else "". */

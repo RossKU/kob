@@ -24,10 +24,12 @@ function sign(action, net, plan = {}, ids = [], apply = () => {}, issues = []) {
   if (issues.some((i) => i.severity === 'error')) { process.stderr.write('error: the plan has errors: nothing signed\n'); print(doc, 1); }
   if (dry) { process.stderr.write('dry run: nothing signed or submitted\n'); print(doc); }
   if (!yes) { process.stderr.write('not signed: pass --yes to sign and submit\n'); print(doc, 1); }
-  if (process.env.FAKE_KOB_SUBMIT_FAIL) { process.stderr.write('error: submission failed: orphan\n'); print(doc, 1); }
+  if (process.env.FAKE_KOB_SUBMIT_FAIL) { process.stderr.write('error: submit: node rejected the request: orphan\n'); print(doc, 1); }
   c.n += 1;
   c.kasFree += net;
   apply();
+  // the node took it and the reply was lost (kob-cli flow.rs: the plan with result null, exit 1)
+  if (process.env.FAKE_KOB_SUBMIT_LOST) { process.stderr.write('error: submit: socket: timed out\n'); print(doc, 1); }
   print({ ...doc, result: { status: 'submitted', txid: doc.transaction.txid, fee: String(FEE), covenant_ids: ids, file: null, engine_validated: true } });
 }
 
