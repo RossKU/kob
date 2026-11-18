@@ -1,4 +1,4 @@
-//! Minimal wRPC JSON client: one request, one response (no subscriptions, so no notifications arrive).
+//! Minimal wRPC JSON client: one request, one response, no subscriptions and so no notifications.
 
 use std::time::{Duration, Instant};
 
@@ -26,13 +26,14 @@ pub struct Rpc {
 /// Plain KAS of some addresses per the node's UTXO index.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Balance {
-    /// non-coinbase UTXOs plus coinbase UTXOs at least `maturity` DAA old (covenant-bound UTXOs excluded)
+    /// Non-coinbase UTXOs plus coinbase UTXOs at least `maturity` DAA old (covenant-bound UTXOs
+    /// excluded).
     pub spendable: u64,
-    /// coinbase UTXOs younger than the maturity
+    /// Coinbase UTXOs younger than the maturity.
     pub immature: u64,
     pub utxos: usize,
     pub virtual_daa: u64,
-    /// from a full UTXO listing (else: the getBalanceByAddress total)
+    /// True when the value comes from a full UTXO listing, false for the getBalanceByAddress total.
     pub listed: bool,
 }
 
@@ -59,7 +60,8 @@ pub struct UtxoRow {
     pub utxo_entry: UtxoLite,
 }
 
-/// The fields of `RpcUtxoEntry` the balance needs (the script, the outpoint and the address are skipped while parsing).
+/// The fields of `RpcUtxoEntry` the balance needs.
+/// The script, the outpoint and the address are skipped while parsing.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UtxoLite {
@@ -122,7 +124,9 @@ impl Rpc {
         r.get("balance").and_then(Value::as_u64).ok_or_else(|| anyhow!("bad balance response: {r}"))
     }
 
-    /// Total KAS of `addrs` per the node (getBalanceByAddress: every UTXO, immature coinbase included). Cheap.
+    /// Total KAS of `addrs` per the node (getBalanceByAddress).
+    ///
+    /// It counts every UTXO, immature coinbase included, and is cheap.
     pub async fn total(&mut self, addrs: &[String]) -> Result<u64> {
         let mut t = 0;
         for a in addrs {
@@ -136,8 +140,10 @@ impl Rpc {
         r.get("virtualDaaScore").and_then(Value::as_u64).ok_or_else(|| anyhow!("bad getBlockDagInfo response"))
     }
 
-    /// Spendable plain KAS of `addrs`: the UTXOs of the node's index, coinbase outputs only once `maturity` DAA old. One full UTXO
-    /// listing (tens of MB for a coinbase-dust address).
+    /// Spendable plain KAS of `addrs`: the UTXOs of the node's index, with coinbase outputs only
+    /// once `maturity` DAA old.
+    ///
+    /// It needs one full UTXO listing (tens of MB for a coinbase-dust address).
     pub async fn spendable(&mut self, addrs: &[String], maturity: u64) -> Result<Balance> {
         let virtual_daa = self.virtual_daa().await?;
         let text = self.call_text("getUtxosByAddresses", json!({ "addresses": addrs })).await?;
@@ -183,7 +189,7 @@ mod tests {
         let r: UtxosResponse = serde_json::from_str(&text).unwrap();
         let b = tally(r.params.entries.iter().map(|r| &r.utxo_entry), 10_000, 1000);
         assert_eq!((b.spendable, b.immature, b.utxos), (500, 200, 3));
-        // an entry without covenantId (older nodes) parses as plain
+        // An entry without covenantId (older nodes) parses as plain.
         let r: UtxoRow =
             serde_json::from_value(json!({ "utxoEntry": { "amount": 1, "blockDaaScore": 0, "isCoinbase": false } })).unwrap();
         assert!(r.utxo_entry.covenant_id.is_none());

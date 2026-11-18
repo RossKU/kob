@@ -1,5 +1,8 @@
-//! OpenCL backend (feature `gpu`): the kHeavyHash kernel of `kernels/kheavyhash.cl` over the nonce space, host data from `Job`
-//! (rusty-kaspa), every reported nonce re-verified with kaspa_pow before it leaves this module.
+//! OpenCL backend (feature `gpu`): the kHeavyHash kernel of `kernels/kheavyhash.cl` over the nonce
+//! space.
+//!
+//! The host data comes from `Job` (rusty-kaspa). Every reported nonce is re-verified with kaspa_pow
+//! before it leaves this module.
 
 use std::fmt::Display;
 use std::ptr;
@@ -21,7 +24,7 @@ use crate::job::{HEAVY_INIT, Job, POW_INIT};
 pub use crate::settings::GpuOptions;
 
 pub const KERNEL_SOURCE: &str = include_str!("../kernels/kheavyhash.cl");
-/// must match MAX_RESULTS in the kernel
+/// Capacity of the result buffer. It must match MAX_RESULTS in the kernel.
 const MAX_RESULTS: usize = 16;
 const MIN_GLOBAL: usize = 1 << 14;
 const MAX_GLOBAL: usize = 1 << 26;
@@ -55,15 +58,15 @@ pub struct Gpu {
     target: Buffer<cl_ulong>,
     nonces: Buffer<cl_ulong>,
     count: Buffer<cl_uint>,
-    // the context must outlive the buffers and the queue (dropped last)
+    // The context must outlive the buffers and the queue, so it is dropped last.
     context: Context,
     opts: GpuOptions,
-    /// nonces per dispatch (current; auto-tuned unless fixed)
+    /// Nonces per dispatch (current). Auto-tuned unless fixed.
     pub global: usize,
     granule: usize,
-    /// smoothed wall time of one dispatch
+    /// Smoothed wall time of one dispatch.
     pub dispatch_time: Duration,
-    /// nonces the kernel reported that kaspa_pow rejected (must stay 0)
+    /// Nonces the kernel reported that kaspa_pow rejected. It must stay 0.
     pub false_positives: u64,
 }
 
@@ -91,7 +94,7 @@ impl Gpu {
             .map_err(|e| anyhow!("OpenCL kernel build failed: {e}"))?;
         let mine = cl(Kernel::create(&program, "mine_nonces"), "kernel mine_nonces")?;
         let hash = cl(Kernel::create(&program, "hash_nonces"), "kernel hash_nonces")?;
-        // SAFETY: plain device allocations without a host pointer
+        // SAFETY: plain device allocations without a host pointer.
         let (mut pow_init, mut heavy_init, pre_pow, matrix, target, nonces, count) = unsafe {
             (
                 cl(Buffer::<cl_ulong>::create(&context, CL_MEM_READ_ONLY, 25, ptr::null_mut()), "buffer")?,
@@ -103,7 +106,7 @@ impl Gpu {
                 cl(Buffer::<cl_uint>::create(&context, CL_MEM_READ_WRITE, 1, ptr::null_mut()), "buffer")?,
             )
         };
-        // SAFETY: blocking writes from live slices of the buffers' element type and length
+        // SAFETY: blocking writes from live slices of the buffers' element type and length.
         unsafe {
             cl(queue.enqueue_write_buffer(&mut pow_init, CL_BLOCKING, 0, &POW_INIT, &[]), "write")?;
             cl(queue.enqueue_write_buffer(&mut heavy_init, CL_BLOCKING, 0, &HEAVY_INIT, &[]), "write")?;
@@ -133,7 +136,7 @@ impl Gpu {
     }
 
     fn load(&mut self, job: &Job) -> Result<()> {
-        // SAFETY: blocking writes from live slices of the buffers' element type and length
+        // SAFETY: blocking writes from live slices of the buffers' element type and length.
         unsafe {
             cl(self.queue.enqueue_write_buffer(&mut self.pre_pow, CL_BLOCKING, 0, &job.pre_pow, &[]), "write")?;
             cl(self.queue.enqueue_write_buffer(&mut self.matrix, CL_BLOCKING, 0, &job.matrix, &[]), "write")?;
@@ -142,8 +145,10 @@ impl Gpu {
         Ok(())
     }
 
-    /// NVIDIA's OpenCL busy-spins a CPU core inside every blocking wait. Sleep through most of the expected kernel time, then poll
-    /// the event with short sleeps, so the host thread costs next to no CPU while the GPU works.
+    /// NVIDIA's OpenCL busy-spins a CPU core inside every blocking wait.
+    ///
+    /// This sleeps through most of the expected kernel time, then polls the event with short
+    /// sleeps, so the host thread costs next to no CPU while the GPU works.
     fn wait_quietly(&self, ev: &Event) -> Result<()> {
         let expect = self.dispatch_time.mul_f64(0.85);
         if expect > Duration::from_millis(1) {
@@ -161,12 +166,13 @@ impl Gpu {
         }
     }
 
-    /// One dispatch of `global` nonces from `base`; the nonces the kernel reports (unverified).
+    /// One dispatch of `global` nonces from `base`. Returns the nonces the kernel reports
+    /// (unverified).
     fn dispatch(&mut self, timestamp: u64, base: u64, global: usize) -> Result<Vec<u64>> {
         let t0 = Instant::now();
         let zero: [cl_uint; 1] = [0];
-        // SAFETY: the kernel arguments match `mine_nonces` in type and order; `zero` outlives the write (blocking read below, same
-        // in-order queue)
+        // SAFETY: the kernel arguments match `mine_nonces` in type and order. `zero` outlives the
+        // write (blocking read below, same in-order queue).
         let ev = unsafe {
             cl(self.queue.enqueue_write_buffer(&mut self.count, CL_NON_BLOCKING, 0, &zero, &[]), "write")?;
             let mut k = ExecuteKernel::new(&self.mine);
@@ -188,7 +194,7 @@ impl Gpu {
         cl(self.queue.flush(), "flush")?;
         self.wait_quietly(&ev)?;
         let mut count: [cl_uint; 1] = [0];
-        // SAFETY: blocking reads into live slices of the buffers' element type
+        // SAFETY: blocking reads into live slices of the buffers' element type.
         unsafe { cl(self.queue.enqueue_read_buffer(&self.count, CL_BLOCKING, 0, &mut count, &[]), "read")? };
         let n = (count[0] as usize).min(MAX_RESULTS);
         let mut found = vec![0u64; n];
@@ -210,7 +216,9 @@ impl Gpu {
         self.global = round_to(g.clamp(MIN_GLOBAL, MAX_GLOBAL), self.granule);
     }
 
-    /// Search until a nonce kaspa_pow accepts is found, or `deadline` (checked between dispatches).
+    /// Searches until kaspa_pow accepts a nonce or `deadline` passes.
+    ///
+    /// The deadline is checked between dispatches.
     pub fn search(&mut self, job: &Job, deadline: Instant, hashes: &AtomicU64) -> Result<Option<u64>> {
         self.load(job)?;
         let mut base = crate::mix64(crate::random_seed());
@@ -219,8 +227,9 @@ impl Gpu {
             let t0 = Instant::now();
             let found = self.dispatch(job.timestamp, base, global)?;
             self.retune(t0.elapsed());
-            // the kernel stops early once a winner is known; work-items run roughly in global-id order, so the furthest winner is a fair
-            // count of the nonces actually tried (the full dispatch would overstate the rate on easy targets)
+            // The kernel stops early once a winner is known, and work-items run roughly in
+            // global-id order. So the furthest winner is a fair count of the nonces actually tried.
+            // The full dispatch would overstate the rate on easy targets.
             let tried = found.iter().map(|n| n.wrapping_sub(base) + 1).max().unwrap_or(global as u64);
             hashes.fetch_add(tried.min(global as u64), Ordering::Relaxed);
             base = base.wrapping_add(global as u64);
@@ -235,11 +244,13 @@ impl Gpu {
         Ok(None)
     }
 
-    /// The kernel's pow value of `n` nonces from `base` (test kernel `hash_nonces`, same code path as mining).
+    /// The kernel's pow value of `n` nonces from `base`.
+    ///
+    /// It uses the test kernel `hash_nonces`, which shares the code path of mining.
     pub fn hash_batch(&mut self, job: &Job, base: u64, n: usize) -> Result<Vec<[u64; 4]>> {
         self.load(job)?;
-        // SAFETY: device allocation without host pointer; kernel arguments match `hash_nonces`; blocking read into a slice of the
-        // buffer's exact length
+        // SAFETY: device allocation without a host pointer. The kernel arguments match
+        // `hash_nonces`. The blocking read goes into a slice of the buffer's exact length.
         let mut flat = vec![0u64; n * 4];
         unsafe {
             let out = cl(Buffer::<cl_ulong>::create(&self.context, CL_MEM_WRITE_ONLY, n * 4, ptr::null_mut()), "buffer")?;
@@ -262,12 +273,14 @@ impl Gpu {
         Ok(flat.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect())
     }
 
-    /// Raw kernel throughput: `secs` of back-to-back dispatches at a fixed `global` against an unreachable target; hashes per second.
+    /// Raw kernel throughput in hashes per second.
+    ///
+    /// It runs `secs` of back-to-back dispatches at a fixed `global` against an unreachable target.
     pub fn bench(&mut self, job: &Job, global: usize, secs: f64) -> Result<f64> {
         self.load(job)?;
         let mut base = 0u64;
         let mut done = 0u64;
-        // one warm-up dispatch (first-launch costs, a dispatch-time estimate for the quiet wait)
+        // One warm-up dispatch (first-launch costs, a dispatch-time estimate for the quiet wait).
         self.dispatch_time = Duration::ZERO;
         self.dispatch(job.timestamp, base, global)?;
         let t0 = Instant::now();
@@ -294,8 +307,9 @@ mod tests {
     use super::*;
     use crate::job::tests::{header, le_leq};
 
-    /// Runs where an OpenCL GPU exists; prints why it is skipped elsewhere (CI). Set TN10_MINER_REQUIRE_GPU=1 to make a missing
-    /// device a failure instead.
+    /// Runs where an OpenCL GPU exists and prints why it is skipped elsewhere (CI).
+    ///
+    /// Set TN10_MINER_REQUIRE_GPU=1 to make a missing device a failure instead.
     fn gpu() -> Option<Gpu> {
         match Gpu::open(GpuOptions::default()) {
             Ok(g) => {
@@ -328,7 +342,8 @@ mod tests {
     #[test]
     fn kernel_finds_exactly_what_kaspa_pow_accepts() {
         let Some(mut g) = gpu() else { return };
-        // ~1 in 4096 nonces pass: compare the kernel's winners of one dispatch with an exhaustive kaspa_pow scan of the same range
+        // About 1 in 4096 nonces pass. Compare the kernel's winners of one dispatch with an
+        // exhaustive kaspa_pow scan of the same range.
         let job = Job::new(&header(77, 0x1f0fffff));
         let base = 5_000_000u64;
         let n = 1usize << 16;
@@ -337,7 +352,7 @@ mod tests {
         let h = g.hash_batch(&job, base, n).unwrap();
         let kernel_pass: Vec<u64> = (0..n).filter(|&i| le_leq(&h[i], &job.target)).map(|i| base + i as u64).collect();
         assert_eq!(kernel_pass, expect);
-        // and the mining kernel reports winners only from that set, verified
+        // The mining kernel reports winners only from that set, and they are verified.
         let hashes = AtomicU64::new(0);
         let found = g.search(&job, Instant::now() + Duration::from_secs(5), &hashes).unwrap().expect("a nonce");
         assert!(job.verify(found));

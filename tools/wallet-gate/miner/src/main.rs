@@ -1,4 +1,5 @@
-//! tn10-miner: standalone Kaspa testnet-10 miner (CPU threads or an OpenCL GPU), optionally intermittent. See README.md.
+//! tn10-miner: a standalone Kaspa testnet-10 miner (CPU threads or an OpenCL GPU), optionally
+//! intermittent. See README.md.
 //!
 //!   tn10-miner [--backend cpu|gpu|auto] [ADDR[,ADDR]...]     mine (pay addresses from the args or WALLET)
 //!   tn10-miner balance ADDR...                              balance and spendable (coinbase-matured) KAS per address
@@ -27,7 +28,7 @@ fn bench(args: &[String]) -> Result<()> {
         None => FileSettings::default(),
     };
     let s = settings::resolve(&*env, &file, None)?;
-    // bits 0x03000001: target 1, no nonce passes; pure throughput
+    // Bits 0x03000001: target 1, no nonce passes. Pure throughput.
     let job = Job::new(&synthetic_header(1, 0x0300_0001));
     match what {
         "cpu" => {
@@ -41,7 +42,7 @@ fn bench(args: &[String]) -> Result<()> {
         "gpu" => {
             let mut g = tn10_miner::gpu::Gpu::open(s.gpu.clone())?;
             let hashes = AtomicU64::new(0);
-            // auto-tune (or the fixed global) exactly as mining does, then measure
+            // Auto-tune (or use the fixed global) exactly as mining does, then measure.
             g.search(&job, Instant::now() + Duration::from_secs(2), &hashes)?;
             hashes.store(0, Ordering::Relaxed);
             let t0 = Instant::now();

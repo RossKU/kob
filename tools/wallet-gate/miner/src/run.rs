@@ -1,7 +1,11 @@
-//! The mining loop: getBlockTemplate -> nonce search (CPU or GPU) -> kaspa_pow verification -> submitBlock, gated by the throttle.
+//! The mining loop, gated by the throttle.
 //!
-//! The block is kept as the raw JSON the node returned (never round-tripped through typed transactions) and only `header.nonce` is
-//! replaced, so tx version, compute budget, covenant fields, gas etc. are exactly what the node produced.
+//! Each round runs getBlockTemplate, a nonce search (CPU or GPU), kaspa_pow verification and
+//! submitBlock.
+//!
+//! The block is kept as the raw JSON the node returned (never round-tripped through typed
+//! transactions) and only `header.nonce` is replaced. So tx version, compute budget, covenant
+//! fields, gas and the rest are exactly what the node produced.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -94,15 +98,15 @@ pub fn process_env() -> EnvLookup {
 pub struct RunConfig {
     pub node: String,
     pub wallets: Vec<String>,
-    /// stop after this many accepted blocks (0 = unlimited)
+    /// Stop after this many accepted blocks (0 = unlimited).
     pub max_blocks: u64,
     pub settings: Settings,
-    /// re-read on change (hot settings)
+    /// Re-read on change (hot settings).
     pub settings_file: Option<PathBuf>,
     pub env: EnvLookup,
     pub cli_backend: Option<BackendKind>,
     pub report_every: Duration,
-    /// stop after this long (tests); None = run until max_blocks
+    /// Stop after this long (tests). None = run until max_blocks.
     pub max_runtime: Option<Duration>,
 }
 
@@ -112,10 +116,10 @@ pub struct Summary {
     pub accepted: u64,
     pub rejected: u64,
     pub hashes: u64,
-    /// wall time spent searching
+    /// Wall time spent searching.
     pub mining: Duration,
     pub elapsed: Duration,
-    /// nonces a backend reported that kaspa_pow then rejected (never submitted)
+    /// Nonces a backend reported that kaspa_pow then rejected (never submitted).
     pub verify_failures: u64,
     pub bursts: u64,
     pub templates: u64,
@@ -180,7 +184,7 @@ pub async fn run(cfg: RunConfig) -> Result<Summary> {
             break;
         }
 
-        // hot settings
+        // Hot settings.
         if let Some(p) = &cfg.settings_file {
             let now_stamp = mtime(p);
             if now_stamp != stamp {
@@ -208,8 +212,9 @@ pub async fn run(cfg: RunConfig) -> Result<Summary> {
             }
         }
 
-        // balance (only with watermarks)
-        // (a background poller on its own connection: a full UTXO listing can take ~30 s and must not stall the search)
+        // Balance (only with watermarks).
+        // A background poller on its own connection reads it, because a full UTXO listing can take
+        // ~30 s and must not stall the search.
         if throttle.cfg.watermarks.is_none() {
             poller = None;
         }
@@ -218,7 +223,8 @@ pub async fn run(cfg: RunConfig) -> Result<Summary> {
             poller = Some(Poller::spawn(cfg.node.clone(), ctl));
         }
         if let Some(p) = poller.as_mut() {
-            // our coinbase can be immature while mining and for twice the maturity time after (TN10: 10 DAA/s)
+            // Our coinbase can be immature while mining and for twice the maturity time after
+            // (TN10: 10 DAA/s).
             let quiet = Duration::from_secs_f64(s.maturity_daa as f64 / 10.0 * 2.0).max(Duration::from_secs(60));
             let recent = throttle.is_mining() || last_mined.is_some_and(|t| t.elapsed() < quiet);
             p.update(|c| c.recent = recent);
@@ -328,7 +334,7 @@ pub async fn run(cfg: RunConfig) -> Result<Summary> {
             (rep_hashes, rep_mining) = (h, m);
         }
         let Some(nonce) = found else { continue };
-        // every nonce of every backend passes kaspa_pow on the CPU before it is submitted
+        // Every nonce of every backend passes kaspa_pow on the CPU before it is submitted.
         if !job.verify(nonce) {
             sum.verify_failures += 1;
             eprintln!("[miner] nonce {nonce:#018x} failed kaspa_pow verification; not submitted (total {})", sum.verify_failures);
