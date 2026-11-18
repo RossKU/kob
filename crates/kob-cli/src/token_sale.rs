@@ -39,6 +39,9 @@ pub struct SaleArgs {
     pub total: Option<String>,
     /// `--multiple M`: a curve's last level over its first.
     pub multiple: Option<String>,
+    /// `--lock-until`, resolved to unix ms: the kept share is locked until then
+    /// (`crate::token_lock`).
+    pub lock_until: Option<u64>,
 }
 
 impl SaleArgs {
@@ -60,10 +63,16 @@ impl SaleArgs {
         let curve_only = [("--levels", &self.levels), ("--total", &self.total), ("--multiple", &self.multiple)];
         let given = |xs: &[(&'static str, &Option<String>)]| xs.iter().find(|(_, v)| v.is_some()).map(|(k, _)| *k);
         match self.mode.as_deref() {
-            None => match given(&[("--keep", &self.keep), ("--price", &self.price)]).or_else(|| given(&curve_only)) {
-                Some(k) => Err(format!("{k} goes with --sell price|curve (without --sell the wallet keeps everything)")),
-                None => Ok(()),
-            },
+            None => {
+                let keep = if self.lock_until.is_some() { None } else { given(&[("--keep", &self.keep)]) };
+                match keep.or_else(|| given(&[("--price", &self.price)])).or_else(|| given(&curve_only)) {
+                    Some(k) => Err(format!(
+                        "{k} goes with --sell price|curve{} (without --sell the wallet keeps everything)",
+                        if k == "--keep" { " or --lock-until" } else { "" }
+                    )),
+                    None => Ok(()),
+                }
+            }
             Some("price") => match given(&curve_only) {
                 Some(k) => Err(format!("{k} is for --sell curve")),
                 None => Ok(()),

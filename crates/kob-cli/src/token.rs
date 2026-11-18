@@ -47,7 +47,7 @@ their owners from the genesis on, so the holder's key finds and spends them from
 USAGE
   kob token create --name <NAME> --ticker <TICKER> --decimals <N> [--fund-utxo <TXID:INDEX:AMOUNT:OWNER>...]
                   [--supply <UNITS>] [--holder <OWNER:SCHEME:AMOUNT[:BORROW_SCHEME:GUARD]>...]
-                  [--sell price|curve [--keep PERCENT] [sale options]]
+                  [--sell price|curve [--keep PERCENT] [sale options]] [--lock-until WHEN]
                   [--key-file <PATH> | --key-env <NAME>] [--out-dir <DIR>] [--yes | --dry-run] [--node ws://HOST:PORT]
 
 REQUIRED
@@ -71,6 +71,11 @@ AFTER CREATION (as the web app's Create token; default: the wallet keeps everyth
   --keep PERCENT        the share kept in the wallet as its own output (0 to 100, default 0)
                         One confirmation (or --yes) covers the creation and the sale. A dry run with --sell price
                         reads the node's clock.
+  --lock-until WHEN     lock the kept share on chain until WHEN: +90d, +12h, +15m, YYYY-MM-DD (00:00 UTC),
+                        YYYY-MM-DDTHH:MMZ or unix ms. With --sell it is the --keep part; without --sell, --keep PERCENT
+                        of the share (default all of it), the rest stays free. Nobody, the key included, can move it
+                        before then (a P2SH owner `<until> OP_CHECKLOCKTIMEVERIFY <key> OP_CHECKSIG`, published in the
+                        declaration as `lock`); afterwards `kob token unlock` releases it to the key.
 
 SUPPLY
   --holder              initial holder, repeatable, one token output each. OWNER = 64-hex | `self` (the funding
@@ -452,6 +457,9 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
             "--node" => a.node = Some(val("--node")?),
             "--program" => a.program = IssueProgram::parse(&val("--program")?).map_err(|e| e.to_string())?,
             k if crate::token_sale::SALE_FLAGS.contains(&k) => a.sale.set(k, val(k)?),
+            "--lock-until" => {
+                a.sale.lock_until = Some(crate::token_lock::parse_lock_until(&val("--lock-until")?, crate::token_lock::now_ms())?)
+            }
             other => return Err(format!("unknown argument `{other}` (see `kob token create --help`)")),
         }
     }
@@ -604,7 +612,8 @@ pub fn run_issue(args: &[String]) -> i32 {
 
 /// The creation and its sale, planned: the spec, the sale, the creation, the limit sell of a
 /// one-price sale, and how many of the funding candidates it spends.
-type Planned = (IssueSpec, Option<crate::token_sale::Sale>, CreationPlan, Option<(TokenMarket, Plan)>, usize);
+type Planned =
+    (IssueSpec, Option<crate::token_sale::Sale>, CreationPlan, Option<(TokenMarket, Plan)>, usize, Option<crate::token_lock::Locked>);
 
 /// Plans the creation with the fewest of `pool` (largest first) that pay for it and, with `--sell
 /// price`, for its limit sell. `spare` are the same candidates as UTXOs of the node (automatic
@@ -617,6 +626,7 @@ fn plan_creation(a: &IssueArgs, pool: &[FundArg], spare: &[KeyUtxo], clock: Opti
         let more = n < pool.len();
         let mut spec = to_spec_with(a, &pool[..n])?;
         let sale = crate::token_sale::apply(&mut spec, &a.sale, funder)?;
+        let locked = crate::token_lock::apply_lock(&mut spec, &a.sale, sale.as_ref(), funder)?;
         let plan = match build_creation(&spec) {
             Ok(p) => p,
             Err(IssueError::InsufficientFunds { .. }) if more => continue,
@@ -632,7 +642,7 @@ fn plan_creation(a: &IssueArgs, pool: &[FundArg], spare: &[KeyUtxo], clock: Opti
             }
             _ => None,
         };
-        return Ok((spec, sale, plan, ask, n));
+        return Ok((spec, sale, plan, ask, n, locked));
     }
     Err("no funding UTXO".into())
 }
@@ -664,7 +674,7 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
         a.fund.clone()
     };
     let clock = if price_sale { Some(crate::trade::data::clock(node)?) } else { None };
-    let (spec, sale, mut plan, ask, used) = plan_creation(a, &pool, &spare, clock)?;
+    let (spec, sale, mut plan, ask, used, locked) = plan_creation(a, &pool, &spare, clock)?;
     let signer = match (sk, key_pk) {
         (Some(sk), Some(pk)) => {
             if pk != spec.funding[0].owner_pubkey {
@@ -728,6 +738,16 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
         println!("funding      {used} UTXO(s) of the key on the node, {kas} sompi (picked automatically, largest first)");
     }
     print_sale(&plan, sale.as_ref(), ask.as_ref(), ask_tx);
+    if let Some(l) = &locked {
+        println!(
+            "lock         {} base units (output {}) locked until {} ({} ms), opening to {}; release it then with `kob token unlock`",
+            l.amount,
+            l.at,
+            crate::token_lock::utc(l.lock.until),
+            l.lock.until,
+            hex(&l.lock.key)
+        );
+    }
     println!(
         "verified     KCC-23 binding, covenant group, exact scripts, supply, mass, owner scheme 0x04 self-test{}",
         if report.scripts_executed {
@@ -1497,5 +1517,69 @@ mod tests {
         assert_eq!(run_resume(&v(&format!("{} --node {url} --network testnet-10", dry.display()))), 1);
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(dry);
+    }
+
+    /// `--lock-until` without `--sell` locks `--keep` percent of the share (the rest stays free) and
+    /// declares the lock; `kob token unlock <DIR>` refuses before the node's median time passes it,
+    /// then sends a lock coin and the unlock (lock time = the lock's time) under one --yes.
+    #[test]
+    fn a_creator_lock_is_declared_and_released_by_unlock() {
+        use kob_protocol::creator_lock::CreatorLock;
+        let (kf, pk) = key33("klock");
+        let dir = std::env::temp_dir().join(format!("kob-create-lock-{}", std::process::id()));
+        let cmd = format!(
+            "--name Lock --ticker LCK --decimals 0 --fund-utxo {TX}:0:10000000000:{} --supply 1000 --keep 20 --lock-until 2030-01-01 \
+             --dry-run --network testnet-10 --key-file {kf} --out-dir {}",
+            hex(&pk),
+            dir.display()
+        );
+        assert_eq!(run_issue(&v(&cmd)), 0);
+        assert!(parse_issue_args(&v(&format!("{} --supply 100 --keep 10", base()))).unwrap_err().contains("or --lock-until"));
+        let until = 1_893_456_000_000u64; // 2030-01-01T00:00:00Z
+        let lock = CreatorLock::new(until, pk).unwrap();
+        let proof: kob_protocol::kcc23::LaunchProof =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("launch_proof.json")).unwrap()).unwrap();
+        let decl = proof.verify().unwrap();
+        assert_eq!(decl.token.lock.as_deref(), Some(lock.script_hex().as_str()));
+        let held = decl.lock.clone().unwrap();
+        assert_eq!((held.amount, held.supply), (200, Some(1000)));
+        // the node: the locked genesis output and a KAS UTXO of the key for the lock coin
+        let g: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("creation.json")).unwrap()).unwrap();
+        let gtx = hex_array::<32>(g["genesis_txid"].as_str().unwrap()).unwrap();
+        let (index, state) = held.states()[0].clone();
+        let tspk = kob_protocol::state::TokenState::Kcc20(state).spk_with(kob_protocol::artifacts::token_template(held.program));
+        let pspk = kob_protocol::issue::p2pk_script(&pk);
+        let node_utxo =
+            |spk: &kaspa_consensus_core::tx::ScriptPublicKey, txid: [u8; 32], index: u32, amount: u64, cov: Option<[u8; 32]>| {
+                crate::wrpc::NodeUtxo {
+                    address: Some(crate::common::address_of(spk, "testnet-10").unwrap()),
+                    txid,
+                    index,
+                    amount,
+                    spk: crate::common::spk_bytes(spk),
+                    daa: 990_000,
+                    coinbase: false,
+                    covenant_id: cov,
+                }
+            };
+        let (url, state) = crate::wrpc::mock::start(vec![
+            node_utxo(&tspk, gtx, index, 1_000_000_000, Some(decl.covenant_id)),
+            node_utxo(&pspk, [5; 32], 0, 5_000_000_000, None),
+        ]);
+        let unlock = format!("{} --node {url} --network testnet-10 --key-file {kf} --yes", dir.display());
+        state.lock().unwrap().median = until - 60_000;
+        assert_eq!(crate::token_lock::run_unlock(&v(&unlock)), 1, "still locked");
+        assert!(state.lock().unwrap().submitted.is_empty());
+        state.lock().unwrap().median = until + 1;
+        assert_eq!(crate::token_lock::run_unlock(&v(&unlock)), 0);
+        let sent = state.lock().unwrap().submitted.clone();
+        assert_eq!(sent.len(), 2, "the lock coin, then the unlock");
+        let coin_out = &sent[0]["outputs"][0]["scriptPublicKey"];
+        assert!(coin_out.to_string().contains(&hex(&lock.authority())), "the coin pays the lock's address: {coin_out}");
+        assert_eq!(sent[1]["lockTime"].to_string().trim_matches('"'), until.to_string());
+        let ins = sent[1]["inputs"].as_array().unwrap();
+        assert_eq!(ins[1]["previousOutpoint"]["transactionId"], hex(&gtx));
+        assert_ne!(ins[0]["sequence"].to_string().trim_matches('"'), u64::MAX.to_string());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

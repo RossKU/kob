@@ -482,6 +482,8 @@ pub mod mock {
         pub network: String,
         /// What `getFeeEstimate` answers (none: an error, as a node without the method).
         pub fee_estimate: Option<Value>,
+        /// The past median time (unix ms) `getBlockDagInfo` reports.
+        pub median: u64,
     }
 
     /// Start a mock node; it serves connections until the test process ends.
@@ -524,7 +526,7 @@ pub mod mock {
                                     json!({"id": id, "method": method, "params": {"entries": entries}})
                                 }
                                 "getBlockDagInfo" => {
-                                    json!({"id": id, "method": method, "params": {"virtualDaaScore": s.daa, "network": s.network}})
+                                    json!({"id": id, "method": method, "params": {"virtualDaaScore": s.daa, "network": s.network, "pastMedianTime": s.median}})
                                 }
                                 "getFeeEstimate" if s.fee_estimate.is_some() => {
                                     json!({"id": id, "method": method, "params": s.fee_estimate.clone()})

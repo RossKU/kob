@@ -22,6 +22,7 @@ mod recover;
 mod registry;
 mod tls;
 mod token;
+mod token_lock;
 mod token_sale;
 mod tokens;
 mod trade;
@@ -74,6 +75,7 @@ TOKENS AND REGISTRY
   kob token create [OPTIONS]   create a fixed-supply KCC-20 token: KCC-23 declaration, then the genesis (`kob token create --help`);
                                submits only with --yes or a terminal's confirmation; --dry-run stops before submitting
   kob token resume <DIR>       send a creation whose genesis did not go out (`kob token resume --help`)
+  kob token unlock <TOKEN|DIR> release a creator lock's tokens after its time (`kob token unlock --help`)
   kob token verify-declaration <PROOF>
                                check a KCC-23 launch proof from any source and print the declaration
   kob registry validate <tokens.json> [--network NET]   check a token registry file
@@ -102,11 +104,12 @@ GLOBAL OPTIONS (`kob <command> --help` lists the ones a command takes)
 
 /// Help of `kob token`.
 const TOKEN_USAGE: &str = "\
-kob token: create a KCC-20 token, send a creation that did not go out, check a launch proof
+kob token: create a KCC-20 token, send a creation that did not go out, release a creator lock, check a launch proof
 
 USAGE
   kob token create [OPTIONS]            create a fixed-supply KCC-20 token: KCC-23 declaration, then the genesis
   kob token resume <DIR>                send a creation whose genesis did not go out
+  kob token unlock <TOKEN|DIR>          release a creator lock's tokens after its time (--lock-until)
   kob token verify-declaration <PROOF>  check a KCC-23 launch proof from any source and print the declaration
 
   `kob token <subcommand> --help` (or `kob help token <subcommand>`) prints the help of one of them.
@@ -194,6 +197,7 @@ fn dispatch(args: &[String]) -> i32 {
         // Removed spellings are usage errors (exit 2) that name what replaces them.
         ["token", "issue", ..] => removed("kob token issue", "kob token create"),
         ["token", "resume", rest @ ..] => token::run_resume(&args[2..2 + rest.len()]),
+        ["token", "unlock", rest @ ..] => token_lock::run_unlock(&args[2..2 + rest.len()]),
         ["token", "verify-declaration", rest @ ..] => token::run_verify_declaration(&args[2..2 + rest.len()]),
         ["token", rest @ ..] if rest.is_empty() || help::wants_help(&rest[..1]) => {
             help::help_or_usage(rest, &[TOKEN_USAGE], true).unwrap_or(2)
