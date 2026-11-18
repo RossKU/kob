@@ -253,7 +253,7 @@ depth, trades, books, holdings, strays, pairs, the order list, fills, token even
 1,000). WebSockets are capped per client address and in all (`docs/api.md`). Past a limit the answer is 429 with `Retry-After`. Two
 consequences: visitors behind one carrier-grade NAT address share one bucket (a market list reads one `/v1/stats` per token), and a
 flood spread over many addresses can drain the global bucket; half of it is kept for quiet clients (within a quarter of their own
-rate), so they still get through. If that happens, add rules at Cloudflare in
+rate, each taking at most 1/256 of it, at least 1/s), so they still get through. If that happens, add rules at Cloudflare in
 front of the tunnel instead of raising the limits: a rate-limiting rule for the heavy paths (`/v1/candles/`, `/v1/stats/`,
 `/v1/depth/`, `/v1/trades/`, `/v1/books/`, `/v1/pairs`) and Bot Fight Mode. What the free plan allows changes; check the dashboard.
 

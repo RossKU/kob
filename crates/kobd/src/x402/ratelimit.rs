@@ -50,7 +50,7 @@ impl<K: Hash + Eq + Clone> Limiter<K> {
     ///
     /// When the bucket is empty it returns `Err(retry_after_seconds)`, which is at least 1.
     pub fn check_with(&self, key: &K, rate: Rate, now_ms: u64) -> Result<(), u64> {
-        self.take(key, rate, now_ms, 0.0).map(|_| ())
+        self.take(key, rate, now_ms, 0.0, None::<fn() -> bool>).map(|_| ())
     }
 
     /// Takes one token for `key` at the default rate and returns the share of the burst left.
@@ -59,10 +59,18 @@ impl<K: Hash + Eq + Clone> Limiter<K> {
     /// the burst, 0..1. The last `reserve` of a shared bucket is for callers that ask with a
     /// smaller reserve.
     pub fn check_reserving(&self, key: &K, now_ms: u64, reserve: f64) -> Result<f64, u64> {
-        self.take(key, self.default, now_ms, reserve)
+        self.take(key, self.default, now_ms, reserve, None::<fn() -> bool>)
     }
 
-    fn take(&self, key: &K, rate: Rate, now_ms: u64, reserve: f64) -> Result<f64, u64> {
+    /// [`Limiter::check_reserving`] for a caller that may also draw on the reserve: above the
+    /// `reserve` share it takes a token as usual, and below it only when `share` admits the draw
+    /// (the caller's own share of the reserve, X16). `share` is not called for a draw above the
+    /// reserve or when the bucket is empty.
+    pub fn check_tiered(&self, key: &K, now_ms: u64, reserve: f64, share: impl FnOnce() -> bool) -> Result<f64, u64> {
+        self.take(key, self.default, now_ms, reserve, Some(share))
+    }
+
+    fn take(&self, key: &K, rate: Rate, now_ms: u64, reserve: f64, share: Option<impl FnOnce() -> bool>) -> Result<f64, u64> {
         let mut map = self.buckets.lock().unwrap_or_else(|p| p.into_inner());
         if !map.contains_key(key) && map.len() >= self.max_keys {
             map.retain(|_, (b, r)| refilled(b, r, now_ms) < r.burst as f64);
@@ -75,7 +83,8 @@ impl<K: Hash + Eq + Clone> Limiter<K> {
         b.tokens = refilled(b, r, now_ms).min(r.burst as f64);
         b.last_ms = now_ms.max(b.last_ms);
         let need = 1.0 + reserve.clamp(0.0, 1.0) * r.burst as f64;
-        if b.tokens >= need.min(r.burst as f64).max(1.0) {
+        let below = b.tokens >= 1.0 && b.tokens < need.min(r.burst as f64).max(1.0);
+        if b.tokens >= need.min(r.burst as f64).max(1.0) || (below && share.is_some_and(|f| f())) {
             b.tokens -= 1.0;
             Ok(b.tokens / (r.burst as f64).max(1.0))
         } else if r.per_second <= 0.0 {
@@ -149,6 +158,29 @@ mod tests {
             assert!(l.check_reserving(&(), 0, 0.0).is_ok());
         }
         assert!(l.check_reserving(&(), 0, 0.0).is_err());
+    }
+
+    #[test]
+    fn a_draw_on_the_reserve_needs_the_callers_share() {
+        let l = Limiter::new(Rate::new(10, 1.0), 10);
+        let mut asked = 0;
+        // Above the reserve the share is not asked.
+        for _ in 0..5 {
+            assert!(l
+                .check_tiered(&(), 0, 0.5, || {
+                    asked += 1;
+                    true
+                })
+                .is_ok());
+        }
+        assert_eq!(asked, 0);
+        // Below it only a granted share takes a token.
+        assert!(l.check_tiered(&(), 0, 0.5, || false).is_err());
+        for _ in 0..5 {
+            assert!(l.check_tiered(&(), 0, 0.5, || true).is_ok());
+        }
+        // An empty bucket refuses without asking.
+        assert!(l.check_tiered(&(), 0, 0.5, || panic!("asked with an empty bucket")).is_err());
     }
 
     #[test]

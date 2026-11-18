@@ -897,6 +897,33 @@ async fn busy_clients_cannot_drain_the_shared_bucket_for_quiet_ones() {
 }
 
 #[tokio::test]
+async fn quiet_addresses_cannot_hold_the_reserve_empty_for_a_new_client() {
+    // X16. 25 a second shared, 10 a second per client (quiet within 2.5 a second). 20 addresses
+    // at 2.5 a second each are quiet, and together ask 50 a second: without a per-client share of
+    // the reserve they would keep the shared bucket empty. Each may take only 1 a second from the
+    // reserve, so a new client asking right after them (every 2 s) always gets through.
+    let a = app_with(r#","rateLimit":{"perIp":{"burst":30,"perSecond":10},"anonymous":{"burst":100,"perSecond":25}}"#);
+    let (mut new_refused, mut quiet_ok) = (0, 0);
+    for tick in 0..300u64 {
+        a.fx.clock.set(START_MS + tick * 100);
+        if tick % 4 == 0 {
+            for h in 0..20 {
+                if send(&a.app, get("/supported"), &format!("10.3.0.{}", h + 1)).await.0 == StatusCode::OK {
+                    quiet_ok += 1;
+                }
+            }
+        }
+        if tick % 20 == 0 {
+            let ip = format!("10.4.0.{}", tick / 20 + 1);
+            new_refused += u32::from(send(&a.app, get("/supported"), &ip).await.0 != StatusCode::OK);
+        }
+    }
+    assert_eq!(new_refused, 0, "quiet addresses held the shared reserve empty");
+    // The 20 addresses were held below their 1,500 asks: the reserve was shared.
+    assert!(quiet_ok < 20 * 75, "the quiet addresses were not limited at all: {quiet_ok}");
+}
+
+#[tokio::test]
 async fn a_forwarded_header_from_an_untrusted_peer_does_not_change_the_client() {
     // With no trusted proxy, the default, the socket peer is the client whatever the headers say.
     let a = app_with(r#","rateLimit":{"perIp":{"burst":3,"perSecond":0.001}}"#);

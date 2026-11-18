@@ -1,7 +1,9 @@
 //! Token-bucket rate limiting with one bucket per client, one per IPv6 site and one global bucket.
 //!
 //! Half of the global bucket is kept for quiet clients (within a quarter of their own rate), so a
-//! few busy addresses at their own limit cannot drain it for everyone else.
+//! few busy addresses at their own limit cannot drain it for everyone else. One quiet client takes
+//! at most `1 / RESERVE_SHARES` of that reserve, so many quiet-looking addresses cannot hold it
+//! empty either (audit X16).
 //!
 //! Memory is bounded. Idle client buckets expire after `bucket_ttl_secs`. When a table reaches
 //! `max_tracked_clients`, the buckets that have refilled the most (least state lost) are evicted. An address-spray flood can therefore
@@ -107,6 +109,13 @@ struct Clients {
 const QUIET_FRACTION: f64 = 0.25;
 /// The share of the global bucket only quiet clients may draw on.
 const FAIR_RESERVE: f64 = 0.5;
+/// One quiet client takes at most this fraction of the reserve's rate and tokens, but at least
+/// [`MIN_SHARE_PER_SECOND`] (burst 2). At the defaults (500 a second, quiet at 5 a second) 100
+/// quiet addresses could hold the reserve empty; with the share it takes 256. A draw above the
+/// reserve is not counted.
+const RESERVE_SHARES: f64 = 256.0;
+/// What a quiet client may always take from the reserve, tokens per second.
+const MIN_SHARE_PER_SECOND: f64 = 1.0;
 
 /// The per-client, per-site and global rate limiter.
 pub struct RateLimiter {
@@ -117,6 +126,8 @@ pub struct RateLimiter {
     quiet: Mutex<Clients>,
     /// IPv6 site buckets (`ipv6_site_prefix_bits`). The table is bounded like the client table.
     sites: Mutex<Clients>,
+    /// Each quiet client's share of the global reserve ([`RESERVE_SHARES`]).
+    shares: Mutex<Clients>,
     global: Mutex<Bucket>,
 }
 
@@ -136,6 +147,7 @@ impl RateLimiter {
             clients: Mutex::new(Clients { map: HashMap::new(), last_sweep_ns: now }),
             quiet: Mutex::new(Clients { map: HashMap::new(), last_sweep_ns: now }),
             sites: Mutex::new(Clients { map: HashMap::new(), last_sweep_ns: now }),
+            shares: Mutex::new(Clients { map: HashMap::new(), last_sweep_ns: now }),
             global: Mutex::new(global),
         }
     }
@@ -151,13 +163,14 @@ impl RateLimiter {
     /// first, then the site bucket, then the global bucket. A request that fails an earlier
     /// bucket does not reach the global one, so a client that is already limited cannot drain the
     /// share of everybody else. A busy client (above a quarter of its own rate) takes from the
-    /// global bucket only while it is more than half full.
+    /// global bucket only while it is more than half full, and a quiet one takes from the lower half
+    /// only within its share of it.
     pub fn check_cost(&self, ip: IpAddr, cost: u32) -> Result<(), Duration> {
         let now = self.clock.now_ns();
         let cost = cost.max(1) as f64;
         let mut quiet = true;
+        let key = rate_key(ip, self.cfg.ipv6_prefix_bits);
         if self.cfg.per_ip_rps > 0.0 {
-            let key = rate_key(ip, self.cfg.ipv6_prefix_bits);
             let burst = self.cfg.per_ip_burst.max(1) as f64;
             {
                 let mut c = self.clients.lock().unwrap_or_else(|e| e.into_inner());
@@ -187,9 +200,26 @@ impl RateLimiter {
         }
         if self.cfg.global_rps > 0.0 {
             let burst = self.cfg.global_burst.max(1) as f64;
-            let reserve = if quiet { 0.0 } else { (burst * FAIR_RESERVE).floor() };
+            let line = (burst * FAIR_RESERVE).floor();
+            let rate = self.cfg.global_rps;
             let mut g = self.global.lock().unwrap_or_else(|e| e.into_inner());
-            g.take_reserving(now, self.cfg.global_rps, burst, cost, reserve).map_err(secs)?;
+            if !quiet || self.cfg.per_ip_rps <= 0.0 {
+                let reserve = if quiet { 0.0 } else { line };
+                g.take_reserving(now, rate, burst, cost, reserve).map_err(secs)?;
+            } else if g.take_reserving(now, rate, burst, cost, line).is_err() {
+                // A draw on the reserve: only within this client's share of it, and only when the
+                // bucket can serve it (the share is not spent on a refusal).
+                let need = cost.clamp(1.0, burst.max(1.0));
+                if g.tokens < need {
+                    return Err(secs((need - g.tokens) / rate));
+                }
+                let (srate, sburst) = ((rate / RESERVE_SHARES).max(MIN_SHARE_PER_SECOND), (line / RESERVE_SHARES).floor().max(2.0));
+                let mut sh = self.shares.lock().unwrap_or_else(|e| e.into_inner());
+                self.maintain(&mut sh, now, &key, srate, sburst);
+                let b = sh.map.entry(key).or_insert_with(|| Bucket::full(sburst, now));
+                b.take(now, srate, sburst, cost).map_err(secs)?;
+                g.take_reserving(now, rate, burst, cost, 0.0).map_err(secs)?;
+            }
         }
         Ok(())
     }
@@ -347,14 +377,41 @@ mod tests {
                     let _ = l.check(ip(&format!("3.3.3.{i}")));
                 }
             }
-            // two a second: within a quarter of its own rate
-            if n % 5 == 0 {
+            // once a second: within a quarter of its own rate, and within its share of the reserve
+            if n % 10 == 0 {
                 quiet_refused += u32::from(l.check(ip("9.9.9.9")).is_err());
             }
         }
         assert_eq!(quiet_refused, 0, "a quiet client was refused while busy clients drained the global bucket");
         // a busy client is refused once half the global bucket is left
         assert!(l.check(ip("3.3.3.0")).is_err());
+    }
+
+    #[test]
+    fn quiet_clients_cannot_hold_the_reserve_empty_for_a_new_one() {
+        // X16. 20 a second per client (quiet within 5 a second), 50 a second for all. 20 addresses
+        // at 5 a second each are quiet and together ask 100 a second. Each takes at most 1 a second
+        // from the reserve, so a new client asking right after them still gets through.
+        let (l, clock) = limiter(cfg(20.0, 20, 50.0, 100));
+        let (mut new_refused, mut quiet_ok) = (0, 0);
+        for tick in 0..300u32 {
+            clock.advance(Duration::from_millis(100));
+            if tick % 2 == 0 {
+                for i in 0..20 {
+                    quiet_ok += u32::from(l.check(ip(&format!("4.4.4.{i}"))).is_ok());
+                }
+            }
+            if tick % 20 == 0 {
+                new_refused += u32::from(l.check(ip(&format!("5.5.5.{}", tick / 20))).is_err());
+            }
+        }
+        assert_eq!(new_refused, 0, "quiet clients held the global reserve empty");
+        assert!(quiet_ok < 20 * 150, "the quiet clients were not limited at all: {quiet_ok}");
+        // The share is not spent above the reserve: a fresh limiter serves a quiet client's burst.
+        let (l, _c) = limiter(cfg(20.0, 20, 50.0, 100));
+        for _ in 0..10 {
+            assert!(l.check(ip("6.6.6.6")).is_ok());
+        }
     }
 
     #[test]

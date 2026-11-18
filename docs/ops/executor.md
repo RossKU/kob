@@ -2010,8 +2010,9 @@ stall or drain any executor:
   The expensive `POST /invoices/{id}/pay` draws on a bucket of its own (`rateLimit.invoicePay`, burst 200, 50/s) instead of the
   anonymous one, so a flood of payments cannot starve `/supported` or the invoice reads, nor the reverse. Half of each shared bucket
   is kept for quiet clients: a client above a quarter of its `perIp` rate (and half its burst) takes from a shared bucket only while
-  it is more than half full, so a few dozen busy addresses cannot empty it for the quiet ones (a flood from thousands of addresses
-  can; that is a job for the network edge). **The client address is the TCP peer.** A forwarded header (`clientIpHeader`:
+  it is more than half full, so a few dozen busy addresses cannot empty it for the quiet ones, and a quiet client takes from that
+  lower half at most 1/256 of the bucket's rate (at least 1/s, burst 2), so quiet-looking addresses need 256 of them (50 for the
+  payment bucket) to hold it empty (a flood from thousands of addresses can; that is a job for the network edge). **The client address is the TCP peer.** A forwarded header (`clientIpHeader`:
   `x-forwarded-for` by default, `cf-connecting-ip` behind Cloudflare) is believed only when the peer is in `trustedProxies`, which is
   empty by default: from any other peer every forwarding header is ignored, so a client cannot pick its own bucket. Behind a reverse
   proxy or CDN on the same host or network, list its addresses in `trustedProxies`, otherwise every request counts as the proxy

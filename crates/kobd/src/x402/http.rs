@@ -84,6 +84,10 @@ pub struct AppState {
     anonymous_limiter: Limiter<()>,
     /// The bucket of the expensive `POST /invoices/{id}/pay` alone.
     pay_limiter: Limiter<()>,
+    /// Each client's share of the anonymous bucket's reserve (see [`RESERVE_SHARES`]).
+    anonymous_share: Limiter<IpAddr>,
+    /// Each client's share of the payment bucket's reserve.
+    pay_share: Limiter<IpAddr>,
     ipv6_bits: u8,
     ipv6_site_bits: u8,
     merchant_limiter: Limiter<String>,
@@ -121,6 +125,8 @@ impl AppState {
             site_limiter: Limiter::new(c.rate_limit.per_site.rate(), 100_000),
             anonymous_limiter: Limiter::new(c.rate_limit.anonymous.rate(), 1),
             pay_limiter: Limiter::new(c.rate_limit.invoice_pay.rate(), 1),
+            anonymous_share: Limiter::new(reserve_share(c.rate_limit.anonymous.rate()), 100_000),
+            pay_share: Limiter::new(reserve_share(c.rate_limit.invoice_pay.rate()), 100_000),
             ipv6_bits: c.ipv6_prefix_bits,
             ipv6_site_bits: c.ipv6_site_prefix_bits,
             merchant_limiter: Limiter::new(c.rate_limit.per_merchant.rate(), 10_000),
@@ -340,6 +346,21 @@ const QUIET_FRACTION: f64 = 0.25;
 /// rate cannot empty it for everyone else. The audit finding is listed in
 /// `docs/security/AUDIT-2026-10.md`.
 const FAIR_RESERVE: f64 = 0.5;
+/// One quiet client takes at most `1 / RESERVE_SHARES` of a shared bucket's reserve, but at least
+/// [`MIN_SHARE_PER_SECOND`] (audit X16). A draw above the reserve is not counted.
+///
+/// Without it, quiet-looking addresses at a quarter of their per-client rate could hold the reserve
+/// empty for everyone else: 20 of them for the payment bucket, 120 for the anonymous one (defaults).
+/// With it, that takes 50 and 256.
+const RESERVE_SHARES: f64 = 256.0;
+/// What a quiet client may always take from a reserve, requests per second (burst 2).
+const MIN_SHARE_PER_SECOND: f64 = 1.0;
+
+/// A client's share of the reserve of a shared bucket of `rate` ([`RESERVE_SHARES`]).
+fn reserve_share(rate: Rate) -> Rate {
+    let burst = (rate.burst as f64 * FAIR_RESERVE / RESERVE_SHARES).floor().max(2.0) as u32;
+    Rate::new(burst, (rate.per_second / RESERVE_SHARES).max(MIN_SHARE_PER_SECOND))
+}
 
 /// Which shared bucket a request without a merchant key draws on.
 #[derive(Clone, Copy)]
@@ -355,7 +376,8 @@ enum Shared {
 /// It takes a token from the client's bucket, its IPv6 site's bucket, then the bucket all of them
 /// share. Each is charged only once the narrower ones passed, so a client that is already limited
 /// cannot drain the shared ones. A busy client, above a quarter of its per-client rate, takes from
-/// the shared bucket only while it is more than half full.
+/// the shared bucket only while it is more than half full; a quiet one takes from the lower half
+/// only within its share of it ([`RESERVE_SHARES`]).
 fn ip_check(st: &AppState, req: &Request) -> Result<(), Response> {
     ip_check_for(st, req, Shared::Anonymous)
 }
@@ -369,12 +391,17 @@ fn ip_check_for(st: &AppState, req: &Request, shared: Shared) -> Result<(), Resp
     if st.ipv6_site_bits > 0 && addr.is_ipv6() {
         st.site_limiter.check(&rate_key(addr, st.ipv6_site_bits), now).map_err(limited)?;
     }
-    let reserve = if st.quiet_limiter.check(&key, now).is_ok() { 0.0 } else { FAIR_RESERVE };
-    let bucket = match shared {
-        Shared::Anonymous => &st.anonymous_limiter,
-        Shared::InvoicePay => &st.pay_limiter,
+    let quiet = st.quiet_limiter.check(&key, now).is_ok();
+    let (bucket, share) = match shared {
+        Shared::Anonymous => (&st.anonymous_limiter, &st.anonymous_share),
+        Shared::InvoicePay => (&st.pay_limiter, &st.pay_share),
     };
-    bucket.check_reserving(&(), now, reserve).map(|_| ()).map_err(limited)
+    let taken = if quiet {
+        bucket.check_tiered(&(), now, FAIR_RESERVE, || share.check(&key, now).is_ok())
+    } else {
+        bucket.check_reserving(&(), now, FAIR_RESERVE)
+    };
+    taken.map(|_| ()).map_err(limited)
 }
 
 fn killed_response(st: &AppState) -> Response {
