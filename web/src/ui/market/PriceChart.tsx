@@ -1,18 +1,36 @@
-// Candlestick chart with a volume histogram (TradingView Lightweight Charts, Apache-2.0: the library's attribution logo stays on the chart
-// and the footer carries its NOTICE with a link to TradingView). The library is loaded on demand (its own chunk) so the rest of the app
-// does not pay for it; the panel keeps its size while it loads (skeleton) and when there is nothing to draw (empty state).
+// Candlestick chart with a volume histogram. It uses TradingView Lightweight Charts (Apache-2.0).
+// The library's attribution logo stays on the chart, and the footer carries its NOTICE with a link
+// to TradingView. The library is loaded on demand in its own chunk, so the rest of the app does
+// not pay for it. The panel keeps its size while it loads (skeleton) and when there is nothing to
+// draw (empty state).
 //
-// Drawing tools (horizontal line, trend line, extended line, box, recolour, delete): the library has none, so they are a series primitive of its plugin API
-// (chart-drawings-primitive.ts) with the model and the browser storage in chart-drawings.ts. While a tool is on, a transparent layer over the plot area (the
-// price and time axes stay free) takes the clicks and taps; with no tool on, there is no layer and the chart pans and zooms as before. Drawings stay in this
-// browser, per market. The extended line is a tool of its own rather than a toggle: every tool is one pressed button that ends with the drawing it places, a
-// toggle would be a second kind of control (a state to read off the toolbar) and would let a drawing change kind. Colours: one button beside the tools shows the current colour
-// and opens a small palette of six swatches that sets the colour of the NEXT drawing (remembered); the recolour tool, which works like the delete tool, gives the clicked drawing the selected colour. A click on a
-// drawing with no tool on cannot select it: there is no layer then, and the plot belongs to the chart's pan and zoom. The header is ONE row: the interval switch on the left, the tools and the colour button on the right (what does not fit scrolls sideways inside the tools' row on
-// a phone; the colour button stays outside the scroller so its palette is not clipped). On a touch screen (`pointer: coarse`) the drawing tools and the colours sit behind ONE "Draw" button that opens a small
-// sheet (they do not scroll away behind an edge any more); the intervals and Expand stay in the row. The legend is a row of its own above the plot, never over it (the OHLC read-out with the volume and its unit, then
-// the unit of the price). Its height never depends on the live values: one line with an ellipsis on the read-out (the unit does not shrink; a phone drops the price unit, which the market bar names); a row
-// that grew and shrank with every tick would move everything below it. Prices are shown with the market's display decimals (the kit's price rule), the axis, the crosshair and the legend alike.
+// Drawing tools: horizontal line, trend line, extended line, box, recolour and delete. The library
+// has none, so they are a series primitive of its plugin API (chart-drawings-primitive.ts). The
+// model and the browser storage are in chart-drawings.ts. Drawings stay in this browser, per
+// market.
+// - While a tool is on, a transparent layer over the plot area takes the clicks and taps. The
+//   price and time axes stay free. With no tool on, there is no layer and the chart pans and
+//   zooms as usual. So a click on a drawing with no tool on cannot select it.
+// - The extended line is a tool of its own and not a toggle. Every tool is one pressed button
+//   that ends with the drawing it places. A toggle would be a second kind of control and would
+//   let a drawing change kind.
+// - One button beside the tools shows the current colour. It opens a palette of six swatches that
+//   sets the colour of the next drawing, and the choice is remembered. The recolour tool works
+//   like the delete tool and gives the clicked drawing the selected colour.
+//
+// Layout:
+// - The header is one row. The interval switch is on the left. The tools and the colour button
+//   are on the right. What does not fit scrolls sideways inside the tools' row on a phone. The
+//   colour button stays outside the scroller so its palette is not clipped.
+// - On a touch screen (`pointer: coarse`) the drawing tools and the colours sit behind one "Draw"
+//   button that opens a small sheet. The intervals and Expand stay in the row.
+// - The legend is a row of its own above the plot, never over it. It shows the OHLC read-out with
+//   the volume and its unit, then the unit of the price. Its height never depends on the live
+//   values. The read-out is one line with an ellipsis, and the unit does not shrink. A phone drops
+//   the price unit, which the market bar names. A row that grew and shrank with every tick would
+//   move everything below it.
+// - Prices are shown with the market's display decimals (the kit's price rule), on the axis, the
+//   crosshair and the legend alike.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { kascovBucketFor } from '../../data/kascov-candles';
@@ -43,15 +61,24 @@ type Lw = typeof import('lightweight-charts');
 let lwPromise: Promise<Lw> | null = null;
 const loadLw = (): Promise<Lw> => (lwPromise ??= import('lightweight-charts'));
 
-/** Below this width of the chart's panel the drawing tools are behind the Draw button (the full row needs about 465 px beside the intervals). */
+/**
+ * Below this width of the chart's panel the drawing tools are behind the Draw button. The full row
+ * needs about 465 px beside the intervals.
+ */
 const NARROW_PANEL_PX = 480;
 const INTERVAL_KEY = 'kob.chart.interval';
 const COLOR_KEY = 'kob.chart.draw.color';
 const KASCOV_KEY = 'kob.chart.kascov';
-/** The kascov logo, a static file of this app (public/kascov-logo.svg), never loaded from kascov.io. */
+/**
+ * The kascov logo, a static file of this app (public/kascov-logo.svg). It is never loaded from
+ * kascov.io.
+ */
 const KASCOV_LOGO_URL = `${import.meta.env.BASE_URL}kascov-logo.svg`;
 
-/** The viewer's choice of the optional kascov line (off unless they turned it on), kept in this browser. */
+/**
+ * The viewer's choice of the optional kascov line, off unless they turned it on, kept in this
+ * browser.
+ */
 function storedKascov(): boolean {
   try {
     return localStorage.getItem(KASCOV_KEY) === '1';
@@ -61,7 +88,9 @@ function storedKascov(): boolean {
 }
 
 const MID_KEY = 'kob.chart.mid';
-/** The viewer's choice of the book's mid line (on unless they turned it off), kept in this browser. */
+/**
+ * The viewer's choice of the book's mid line, on unless they turned it off, kept in this browser.
+ */
 function storedMid(): boolean {
   try {
     return localStorage.getItem(MID_KEY) !== '0';
@@ -75,7 +104,7 @@ function storedColor(): DrawingColor {
     const v = localStorage.getItem(COLOR_KEY);
     if (isDrawingColor(v)) return v;
   } catch {
-    /* no storage */
+    /* No storage. */
   }
   return DEFAULT_COLOR;
 }
@@ -85,7 +114,7 @@ function storedInterval(): CandleInterval {
     const v = localStorage.getItem(INTERVAL_KEY);
     if (v && (CANDLE_INTERVALS as readonly string[]).includes(v)) return v as CandleInterval;
   } catch {
-    /* no storage */
+    /* No storage. */
   }
   return '5m';
 }
@@ -96,7 +125,7 @@ const cssVar = (name: string, fallback: string): string => {
   return v || fallback;
 };
 
-/** `#rrggbb` -> `rgba(r,g,b,a)`; other colour syntaxes come back unchanged. */
+/** Turns `#rrggbb` into `rgba(r,g,b,a)`. Other colour syntaxes come back unchanged. */
 function alpha(color: string, a: number): string {
   const m = /^#([0-9a-f]{6})$/i.exec(color);
   if (!m) return color;
@@ -118,27 +147,35 @@ function palette() {
 
 const localeOf = () => 'en-US';
 
-/** Last-resort values of the swatches' tokens (as in styles.css, dark theme), for a page where the tokens are not there. */
+/**
+ * Last-resort values of the swatches' tokens, as in styles.css for the dark theme, for a page where
+ * the tokens are not there.
+ */
 const SWATCH_FALLBACK: Record<DrawingColor, string> = { muted: '#b2b2b2', buy: '#2ebd85', sell: '#f6465d', info: '#79b4ff', warn: '#f2b350', accent: '#b48cf0' };
 
-/** The drawings' colours, from the theme's tokens: the swatches, the delete tool's hot colour, and the surface for the price tag's text and the dots. */
+/**
+ * The drawings' colours, from the theme's tokens. They are the swatches, the delete tool's hot
+ * colour, and the surface for the price tag's text and the dots.
+ */
 function drawingColors(): DrawingColors {
   const paint = Object.fromEntries(DRAWING_COLORS.map((c) => [c, cssVar(COLOR_TOKEN[c], SWATCH_FALLBACK[c])])) as Record<DrawingColor, string>;
-  // the default grey stays a little soft, as the tools always drew it
+  // The default grey stays a little soft.
   if (paint.muted.startsWith('#')) paint.muted = alpha(paint.muted, 0.85);
   return { swatch: (c) => paint[c], hot: cssVar('--sell', '#f6465d'), surface: cssVar('--surface', '#141414') };
 }
 
 type Tool = 'hline' | 'trend' | 'xline' | 'box' | 'paint' | 'erase';
-/** The tools that place a drawing with two clicks (the first point, then the second). */
+/** The tools that place a drawing with two clicks, the first point and then the second. */
 type TwoPoint = 'trend' | 'xline' | 'box';
 const isTwoPoint = (t: Tool | null): t is TwoPoint => t === 'trend' || t === 'xline' || t === 'box';
 const TOOLS: readonly Tool[] = ['hline', 'trend', 'xline', 'box', 'paint', 'erase'];
 
 /**
- * A pair chart: BASE over QUOTE (two tokens; the USD reference token as QUOTE reads as USD). Prices come only from the KAS series: with
- * `pairCandles` the indexer's pair candles (`/v1/pairs/{base}/{quote}/candles`, derived from the two KAS series; the volume bars are the pair
- * volume), else, or when the indexer does not serve them, the client-side ratio of the two tokens' KAS candles (usd-model.ts).
+ * A pair chart: BASE over QUOTE, two tokens. The USD reference token as QUOTE reads as USD. Prices
+ * come only from the KAS series. With `pairCandles` it uses the indexer's pair candles
+ * (`/v1/pairs/{base}/{quote}/candles`), derived from the two KAS series, and the volume bars are
+ * the pair volume. Otherwise, or when the indexer does not serve them, it uses the client-side
+ * ratio of the two tokens' KAS candles (usd-model.ts).
  */
 export interface UsdChartSpec {
   base: { token: string; decimals: number };
@@ -148,42 +185,60 @@ export interface UsdChartSpec {
 
 export interface PriceChartProps {
   indexer: IndexerApi | null;
-  /** the market's token (with `usd`: the chart's identity, `<base>/<quote>`) */
+  /** The market's token. With `usd` it is the chart's identity, `<base>/<quote>`. */
   token: string;
   decimals: number;
   ticker: string;
-  /** price decimals of this market (tabular, same as the stats) */
+  /** Price decimals of this market (tabular, the same as the stats). */
   dp: number;
-  /** bumps on every live refresh: only the bars since the newest one are read (candle-feed.ts) */
+  /** Bumps on every live refresh. Only the bars since the newest one are read (candle-feed.ts). */
   refreshKey: number;
-  /** bumps on a reorg / resync: the next refresh reads the full series again */
+  /** Bumps on a reorg or resync. The next refresh reads the full series again. */
   resyncKey?: number;
-  /** draw the pair price (BASE over QUOTE through the two KAS books) instead of the token's KAS book */
+  /**
+   * Draws the pair price (BASE over QUOTE through the two KAS books) instead of the token's KAS
+   * book.
+   */
   usd?: UsdChartSpec;
-  /** the quote asset's name of a `usd` ratio chart (a token/token pair chart; `USD` for the USD reference token) */
+  /**
+   * The quote asset's name of a `usd` ratio chart: a token/token pair chart, or `USD` for the USD
+   * reference token.
+   */
   quoteTicker?: string;
-  /** draw a KAS book the other way round (orientation.ts): 1/price, high and low swap, volume in the other asset. Display only. */
+  /**
+   * Draws a KAS book the other way round (orientation.ts): `1/price`, high and low swap, volume in
+   * the other asset. Display only.
+   */
   inverted?: boolean;
   /**
-   * The tokens kascov.io may price for this chart, with their decimals: ONE for a token's market, BASE then QUOTE for a pair. Given only when kascov prices every one of them
-   * (data/kascov.ts `priced`); without it the chart has no kascov toggle. Third party and optional: kascov-overlay.ts.
+   * The tokens kascov.io may price for this chart, with their decimals. It is one token for a
+   * token's market and BASE then QUOTE for a pair. It is given only when kascov prices every one
+   * of them (data/kascov.ts `priced`). Without it the chart has no kascov toggle. The line is
+   * third party and optional (kascov-overlay.ts).
    */
   kascov?: readonly { token: string; decimals: number }[];
-  /** Without `kascov`: why kascov has no price here (kascov-overlay.ts `kascovChartGate`). The toggle is then shown disabled, with the reason as its tooltip. Neither given: kascov is off, no toggle. */
+  /**
+   * Without `kascov`: why kascov has no price here (kascov-overlay.ts `kascovChartGate`). The
+   * toggle is then shown disabled, with the reason as its tooltip. When neither is given, kascov
+   * is off and there is no toggle.
+   */
   kascovWhy?: KascovWhy;
 }
 
 interface Series {
   bars: ChartBar[];
   volumes: VolumeBar[];
-  /** OHLC texts of bar i */
+  /** OHLC texts of bar i. */
   text: (i: number) => { o: string; h: string; l: string; c: string } | null;
 }
 const NO_SERIES: Series = { bars: [], volumes: [], text: () => null };
 
 interface Legend { o: string; h: string; l: string; c: string; v: string; /** the whole volume, for its title */ vExact: string; up: boolean; /** the kascov price at this bar, when the line is on and has one */ k: string | null; /** the book's mid at this bar (mid-line.ts) */ m: string | null }
 
-/** Price panel: interval switch (1m / 5m / 1h / 1d, remembered), candles with the previous close carried across empty buckets, volume below. */
+/**
+ * The price panel. It has an interval switch (1m, 5m, 1h, 1d, remembered), candles with the
+ * previous close carried across empty buckets, and the volume below.
+ */
 export function PriceChart(props: PriceChartProps) {
   const [interval, setIntervalState] = useState<CandleInterval>(storedInterval);
   const setInterval = (v: CandleInterval) => {
@@ -191,14 +246,15 @@ export function PriceChart(props: PriceChartProps) {
     try {
       localStorage.setItem(INTERVAL_KEY, v);
     } catch {
-      /* no storage */
+      /* No storage. */
     }
   };
   const { indexer, token, usd } = props;
   const inverted = !!props.inverted;
   const usdKey = usd ? `${usd.base.token}/${usd.quote.token}` : '';
-  // the series on screen and what it was loaded for: a live refresh reads only the bars since its newest one; a change of source, interval
-  // or a reorg / resync (`resyncKey`) reads the full series
+  // The series on screen and what it was loaded for. A live refresh reads only the bars since its
+  // newest one. A change of source, interval or a reorg or resync (`resyncKey`) reads the full
+  // series.
   const cache = useRef<{ key: string; resync: number; view: ChartView | null; quotes: QuotesView | null } | null>(null);
   const resync = props.resyncKey ?? 0;
   const candles = useAsync(
@@ -208,7 +264,7 @@ export function PriceChart(props: PriceChartProps) {
       const key = `${token}|${usdKey}|${interval}`;
       const c = cache.current;
       const same = c && c.key === key && c.resync === resync;
-      // the mid line of a token's KAS book, read beside its candles at the same interval
+      // The mid line of a token's KAS book, read beside its candles at the same interval.
       const [view, quotes] = await Promise.all([
         loadCandles(indexer, src, interval, same ? c.view : null, signal),
         'token' in src ? loadQuotes(indexer, token, interval, same ? c.quotes : null, signal, MAX_BARS) : Promise.resolve(null),
@@ -219,7 +275,7 @@ export function PriceChart(props: PriceChartProps) {
     [indexer, token, usdKey, interval],
     { refreshKey: props.refreshKey },
   );
-  // an answer for another interval is not shown while the new one loads
+  // An answer for another interval is not shown while the new one loads.
   const current = candles.data && candles.data.interval === interval ? candles.data : undefined;
   const series: Series = useMemo(() => {
     const view = current?.view;
@@ -251,7 +307,8 @@ export function PriceChart(props: PriceChartProps) {
     return { ...ratioSeries(rc), text: (i) => (rc[i] ? { o: p(rc[i]!.o), h: p(rc[i]!.h), l: p(rc[i]!.l), c: p(rc[i]!.c) } : null) };
   }, [current, interval, props.decimals, props.dp, usdKey, inverted]);
 
-  // the book's mid per bar, at the candles' price basis; null: no line (no quotes, or none with both sides)
+  // The book's mid per bar, at the candles' price basis. Null means no line, because there are no
+  // quotes or none with both sides.
   const mid = useMemo(() => {
     const q = current?.quotes;
     const view = current?.view;
@@ -275,7 +332,8 @@ export function PriceChart(props: PriceChartProps) {
           ? 'empty'
           : 'ready';
 
-  // the optional kascov.io line (third party, off by default): asked for only while it is on and the market has a kascov price (kascov-overlay.ts, use-kascov-candles.ts)
+  // The optional kascov.io line is third party and off by default. It is asked for only while it is
+  // on and the market has a kascov price (kascov-overlay.ts, use-kascov-candles.ts).
   const kascovLegs = props.kascov ?? [];
   const kascovKey = kascovLegs.map((l) => `${l.token}:${l.decimals}`).join('/');
   const kascovAvail = kascovLegs.length > 0 && kascovLegs.length === (usd ? 2 : 1);
@@ -285,7 +343,7 @@ export function PriceChart(props: PriceChartProps) {
     try {
       localStorage.setItem(MID_KEY, v ? '1' : '0');
     } catch {
-      /* no storage */
+      /* No storage. */
     }
   };
   const [kascovOn, setKascovOnState] = useState<boolean>(storedKascov);
@@ -294,16 +352,17 @@ export function PriceChart(props: PriceChartProps) {
     try {
       localStorage.setItem(KASCOV_KEY, v ? '1' : '0');
     } catch {
-      /* no storage */
+      /* No storage. */
     }
   };
-  // shown whenever kascov is on for the deployment; without a price it is faded and does nothing (the remembered choice stays as it was and takes effect on a priced market)
+  // The button is shown whenever kascov is on for the deployment. Without a price it is faded and
+  // does nothing. The remembered choice stays and takes effect on a priced market.
   const kascovBtn = kascovAvail || props.kascovWhy !== undefined;
   const kascovReason = t(`market.chart.kascov.none.${props.kascovWhy ?? (usd ? 'pair' : 'token')}`);
   const kascovShown = kascovAvail && kascovOn;
   const kascovIds = useMemo(() => kascovLegs.map((l) => l.token), [kascovKey]);
   const kascovLine = useKascovCandles({ enabled: kascovShown, ids: kascovIds, bucket: kascovBucketFor(interval) });
-  // the line on KOB's own bars: one price (or none) per bar
+  // The line on KOB's own bars, with one price or none per bar.
   const overlayValues = useMemo(() => {
     if (!kascovShown || kascovLine.status !== 'ok' || kascovLine.legs.length !== kascovLegs.length) return null;
     const legs = kascovLine.legs.map((candles, i) => ({ candles, decimals: kascovLegs[i]!.decimals }));
@@ -331,7 +390,7 @@ export function PriceChart(props: PriceChartProps) {
     return { ...x, v: compactText(vol), vExact: vol.toLocaleString(localeOf(), { maximumFractionDigits: 8 }), up: b.close >= b.open, k: k ? overlayPriceText(k) : null, m: midOn ? (mid?.text(i) ?? null) : null };
   };
 
-  // create the chart once the library is there and the panel has something to draw
+  // Create the chart once the library is there and the panel has something to draw.
   useEffect(() => {
     if (state !== 'ready' || chartRef.current || !boxRef.current) return;
     let disposed = false;
@@ -347,12 +406,15 @@ export function PriceChart(props: PriceChartProps) {
           timeScale: { borderColor: pal.border, timeVisible: true, secondsVisible: false, rightOffset: 4, barSpacing: 7 },
           crosshair: { mode: lw.CrosshairMode.Normal },
         });
-        // the optional kascov line goes in FIRST: a series added later is drawn over it, so KOB's candles and volume are always in front. It never takes part in the price scale's
-        // auto-fit (a far-off third-party price must not squash KOB's candles), and it has no price tag, price line or crosshair dot.
+        // The optional kascov line goes in first. A series added later is drawn over it, so KOB's
+        // candles and volume are always in front. It never takes part in the price scale's
+        // auto-fit, so a far-off third-party price cannot squash KOB's candles. It has no price
+        // tag, price line or crosshair dot.
         const kascovSeries = chart.addSeries(lw.LineSeries, {
           color: pal.text, lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null,
         });
-        // the book's mid: thin, dashed and muted, under the candles; it takes part in the auto-fit (it is KOB's own price), with no tag or price line
+        // The book's mid is thin, dashed and muted, under the candles. It takes part in the
+        // auto-fit, because it is KOB's own price. It has no tag or price line.
         const midLine = chart.addSeries(lw.LineSeries, {
           color: alpha(pal.text, 0.7), lineWidth: 1, lineStyle: lw.LineStyle.Dashed, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
         });
@@ -366,7 +428,9 @@ export function PriceChart(props: PriceChartProps) {
           setLegend(i === undefined || i === null ? null : legendOf.current(Math.round(i)));
         });
         const drawingsPrim = new DrawingsPrimitive(drawingColors, (drawn, visible, at) => {
-          // what the last paint placed: the drawings with a position on the chart, and the ones touching the plot (a test reads these; a drawing panned off screen is placed but not visible)
+          // What the last paint placed. They are the drawings with a position on the chart and the
+          // ones touching the plot. A test reads these. A drawing panned off screen is placed but
+          // not visible.
           panelRef.current?.setAttribute('data-drawn', String(drawn));
           panelRef.current?.setAttribute('data-drawn-visible', String(visible));
           panelRef.current?.setAttribute('data-drawn-at', at);
@@ -390,7 +454,7 @@ export function PriceChart(props: PriceChartProps) {
     [],
   );
 
-  // data, formats and colours
+  // Data, formats and colours.
   useEffect(() => {
     const c = chartRef.current;
     if (!c || !libReady) return;
@@ -409,7 +473,9 @@ export function PriceChart(props: PriceChartProps) {
       layout: { background: { color: pal.bg }, textColor: pal.text },
       grid: { vertLines: { color: pal.grid }, horzLines: { color: pal.grid } },
       rightPriceScale: { borderColor: pal.border },
-      // the axis reads dates on day-level ticks and 24-hour times on intraday ones (chart-time.ts); the labels the library asks for are kept in `data-axis-ticks` (what the axis says, for the tests)
+      // The axis reads dates on day-level ticks and 24-hour times on intraday ones (chart-time.ts).
+      // The labels the library asks for are kept in `data-axis-ticks`, which is what the axis says,
+      // for the tests.
       timeScale: { borderColor: pal.border, tickMarkFormatter: (time: Time, type: number) => noteTick(tickLabel(Number(time), interval, type, localeOf())) },
       localization: { locale: localeOf(), timeFormatter: (time: Time) => crosshairLabel(Number(time), interval, localeOf()) },
     });
@@ -417,7 +483,8 @@ export function PriceChart(props: PriceChartProps) {
       upColor: pal.up, downColor: pal.down, wickUpColor: pal.up, wickDownColor: pal.down, priceFormat: { type: 'price', precision: props.dp, minMove },
     });
     const muted = alpha(pal.text.startsWith('#') ? pal.text : '#8b94a3', 0.35);
-    // a token pair draws no candle for a bucket where neither token traded: a pair has no price of its own to carry; a token's market carries its close, muted
+    // A token pair draws no candle for a bucket where neither token traded, because a pair has no
+    // price of its own to carry. A token's market carries its close, muted.
     const bars: (CandlestickData<Time> | WhitespaceData<Time>)[] = series.bars.map(({ filled, ...b }) =>
       filled
         ? props.usd
@@ -428,7 +495,7 @@ export function PriceChart(props: PriceChartProps) {
     const vols: HistogramData<Time>[] = series.volumes.map((v) => ({ time: v.time as UTCTimestamp, value: v.value, color: alpha(v.up ? pal.up : pal.down, 0.45) }));
     c.candles.setData(bars);
     c.volume.setData(vols);
-    // a new interval (or token) starts at the newest ~120 bars; a live refresh keeps the user's zoom
+    // A new interval or token starts at the newest ~120 bars. A live refresh keeps the user's zoom.
     const key = `${token}:${usdKey}:${interval}:${inverted ? 'i' : 'n'}`;
     if (fitKey.current !== key && bars.length) {
       fitKey.current = key;
@@ -437,7 +504,8 @@ export function PriceChart(props: PriceChartProps) {
     c.drawings.refresh();
   }, [libReady, series, props.dp, theme, interval, token, inverted]);
 
-  // the kascov line: its prices on KOB's bars (none while it is off or loading), in the muted text colour of the theme
+  // The kascov line has its prices on KOB's bars, none while it is off or loading, in the muted
+  // text colour of the theme.
   useEffect(() => {
     const c = chartRef.current;
     if (!c || !libReady) return;
@@ -445,7 +513,7 @@ export function PriceChart(props: PriceChartProps) {
     c.kascov.setData(overlayValues ? lineData(overlayValues, series.bars.map((b) => b.time)).map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) : []);
   }, [libReady, overlayValues, series, props.dp, theme]);
 
-  // the mid line, in the theme's muted colour
+  // The mid line, in the theme's muted colour.
   useEffect(() => {
     const c = chartRef.current;
     if (!c || !libReady) return;
@@ -453,7 +521,8 @@ export function PriceChart(props: PriceChartProps) {
     c.mid.setData(mid && midOn ? mid.points.map((p) => ({ ...p, time: p.time as UTCTimestamp })) : []);
   }, [libReady, mid, midOn, props.dp, theme]);
 
-  // ---- drawings: stored per network and market (and orientation), shown by the primitive, edited by the tools
+  // Drawings are stored per network and market, and per orientation. The primitive shows them and
+  // the tools edit them.
   const network = useServices().config.network;
   const market = drawingsMarket(token, inverted);
   const storeKey = `${network}|${market}`;
@@ -468,12 +537,12 @@ export function PriceChart(props: PriceChartProps) {
     try {
       localStorage.setItem(COLOR_KEY, c);
     } catch {
-      /* no storage */
+      /* No storage. */
     }
   };
   const [inset, setInset] = useState({ r: 0, b: 0 });
   const pointer = useRef('mouse');
-  // another market (or network, or orientation): its own drawings
+  // Another market, network or orientation has its own drawings.
   useEffect(() => {
     if (loadedFor.current === storeKey) return;
     loadedFor.current = storeKey;
@@ -497,12 +566,12 @@ export function PriceChart(props: PriceChartProps) {
       overlay: { pending: isTwoPoint(toolOn) ? pending : null, pendingKind: isTwoPoint(toolOn) ? toolOn : 'trend', cursor: null, color, hover: null, hoverColor: toolOn === 'paint' ? color : null },
     });
   }, [libReady, drawings, pending, toolOn, color]);
-  // the bar grid the drawings' times are placed on: the first bar's time and the interval
+  // The bar grid the drawings' times are placed on: the first bar's time and the interval.
   useEffect(() => {
     const b = series.bars;
     chartRef.current?.drawings.set({ grid: b.length ? { t0: b[0]!.time, step: INTERVAL_MS[interval] / 1000 } : null });
   }, [libReady, series, interval]);
-  // Esc: first drops the first point of a two-point drawing, then leaves the tool
+  // Esc first drops the first point of a two-point drawing, then leaves the tool.
   useEffect(() => {
     if (!toolOn) return;
     const onKey = (e: KeyboardEvent) => {
@@ -513,7 +582,8 @@ export function PriceChart(props: PriceChartProps) {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [toolOn, pending]);
-  // the layer takes the plot area only: the axes beside and under it keep their own pointer handling
+  // The layer takes the plot area only. The axes beside and under it keep their own pointer
+  // handling.
   useEffect(() => {
     const c = chartRef.current;
     if (!toolOn || !c) return;
@@ -524,8 +594,9 @@ export function PriceChart(props: PriceChartProps) {
     ro.observe(boxRef.current);
     return () => ro.disconnect();
   }, [toolOn, series]);
-  // Expand chart (the page's grid follows: chart-expand.ts, market.css). Esc restores it, unless it already means something else: a drawing tool is on (it leaves the tool),
-  // a pop-up is open (it closes), or another handler took the key
+  // Expand chart. The page's grid follows (chart-expand.ts, market.css). Esc restores it, unless it
+  // already means something else: a drawing tool is on and Esc leaves the tool, a pop-up is open
+  // and Esc closes it, or another handler took the key.
   const expanded = useChartExpanded();
   useEffect(() => {
     if (!expanded) return;
@@ -594,11 +665,15 @@ export function PriceChart(props: PriceChartProps) {
   };
 
   const shown = legend ?? legendOf.current(series.bars.length - 1);
-  // the volume's unit: the token (a flipped market's volume bars are KAS); a pair chart's volume is in its base token
+  // The volume's unit is the token. A flipped market's volume bars are KAS. A pair chart's volume
+  // is in its base token.
   const volUnit = inverted ? 'KAS' : props.ticker;
-  // a touch screen: the drawing tools and the colours are behind one "Draw" button (a sheet), so no row of them scrolls away behind an edge
-  // The same where the chart's panel is narrow (a narrow window with a mouse): the row of tools would not fit beside the intervals, so the one Draw button stands in for it whatever the pointer.
-  // Measured on the panel (not the window: the panel is 500 px on 1280 and 330 on a phone), before the first paint, so the row never flashes.
+  // On a touch screen the drawing tools and the colours are behind one "Draw" button, a sheet, so
+  // no row of them scrolls away behind an edge. The same holds where the chart's panel is narrow,
+  // such as a narrow window with a mouse. The row of tools would not fit beside the intervals, so
+  // the one Draw button stands in for it whatever the pointer. The width is measured on the panel
+  // and not the window, because the panel is 500 px on 1280 and 330 on a phone. It is measured
+  // before the first paint, so the row never flashes.
   const touch = useMedia('(pointer: coarse)');
   const [panelWidth, setPanelWidth] = useState(0);
   useLayoutEffect(() => {
@@ -612,7 +687,10 @@ export function PriceChart(props: PriceChartProps) {
     return () => ro.disconnect();
   }, []);
   const coarse = touch || (panelWidth > 0 && panelWidth < NARROW_PANEL_PX);
-  /** The drawing tools (and the clear-all button): the same buttons in the desktop row and in the touch sheet, where a pick closes the sheet so the chart is free to draw on. */
+/**
+ * The drawing tools and the clear-all button. They are the same buttons in the desktop row and in
+ * the touch sheet. In the sheet a pick closes it, so the chart is free to draw on.
+ */
   const toolButtons = (pick: boolean) => (
     <>
       {TOOLS.map((k) => (
@@ -642,7 +720,10 @@ export function PriceChart(props: PriceChartProps) {
       </button>
     </>
   );
-  /** The six swatches of the drawing colour: in the desktop palette a pick closes it; in the touch sheet it stays open (a colour, then a tool). */
+/**
+ * The six swatches of the drawing colour. In the desktop palette a pick closes it. In the touch
+ * sheet it stays open, for a colour and then a tool.
+ */
   const swatches = (pick: boolean) => (
     <div class="chart-swatches" role="group" aria-label={t('market.chart.draw.colors')} data-testid="chart-swatches">
       {DRAWING_COLORS.map((c) => (
