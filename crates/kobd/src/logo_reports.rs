@@ -172,7 +172,7 @@ fn would_hide(conn: &Connection, id: &Hash32, now_ms: i64, cooldown_ms: i64) -> 
         .optional()?;
     Ok(match row {
         None => true,
-        Some((state, restored)) => state == "restored" && !restored.is_some_and(|at| now_ms < at.saturating_add(cooldown_ms)),
+        Some((state, restored)) => state == "restored" && restored.is_none_or(|at| now_ms >= at.saturating_add(cooldown_ms)),
     })
 }
 

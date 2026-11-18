@@ -528,7 +528,7 @@ mod tests {
         held.push(reg.try_acquire(b, &l).unwrap());
         assert!(matches!(reg.try_acquire(c, &l), Err(WsReject::Total)));
         held.pop();
-        assert!(matches!(reg.try_acquire(b, &l), Ok(_)), "b holds one again");
+        assert!(reg.try_acquire(b, &l).is_ok(), "b holds one again");
     }
 
     #[test]
