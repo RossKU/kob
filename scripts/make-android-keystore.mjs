@@ -1,23 +1,30 @@
 #!/usr/bin/env node
-// Creates the release signing key of the Android app (once, by the maintainer) and prints the steps that store it as the GitHub
-// repository secrets android.yml / release.yml sign with.
+// Creates the release signing key of the Android app (once, by the maintainer) and prints the steps
+// that store it as the GitHub repository secrets android.yml and release.yml sign with.
 //
-//   node scripts/make-android-keystore.mjs [--out <dir>] [--alias kob-release] [--repo RossKU/kob] [--keytool <path>]
-//   node scripts/make-android-keystore.mjs --steps [--out <dir>]     print the steps again for an existing keystore
+//   node scripts/make-android-keystore.mjs [--out <dir>] [--alias kob-release] [--repo RossKU/kob]
+//        [--keytool <path>]
+//   node scripts/make-android-keystore.mjs --steps [--out <dir>]
+//        print the steps again for an existing keystore
 //
-// Why: Android installs an update only over an app signed with the SAME key. With this key in the secrets, every release and
-// every CI build of the app carries one signature, so a new APK installs over the old one and keeps the app's data (the operator
-// key and its funds). Without it, the APK is signed with a throwaway debug key and cannot be updated in place.
+// Why: Android installs an update only over an app signed with the SAME key. With this key in the
+// secrets, every release and every CI build of the app carries one signature, so a new APK installs
+// over the old one and keeps the app's data (the operator key and its funds). Without it, the APK
+// is signed with a throwaway debug key and cannot be updated in place.
 //
-// What it writes (default folder: ~/.kob/android-signing, outside every repository; it refuses a folder inside this one):
+// It writes these files, by default into ~/.kob/android-signing (outside every repository; it
+// refuses a folder inside this one):
 //   kob-release.jks             the keystore (PKCS12, RSA 4096, valid 30 years)
 //   kob-release.password.txt    its password, which is also the key's (random; no trailing newline)
 //   kob-release.jks.b64.txt     the keystore as one line of base64, for the secret ANDROID_KEYSTORE_B64
-// It never prints a password, and never commits anything (*.jks, *.keystore, *.p12 are in .gitignore). BACK THE FOLDER UP (a
-// password manager, an offline copy): if the keystore is lost, installed apps can only be replaced by uninstalling them, which
-// deletes their operator keys. Keep it private: anyone holding it can sign an APK that updates yours.
 //
-// Needs a JDK's `keytool` (on PATH, in JAVA_HOME, or Android Studio's bundled one) and Node >= 18.
+// It never prints a password and never commits anything (*.jks, *.keystore and *.p12 are in
+// .gitignore). BACK THE FOLDER UP (a password manager, an offline copy). If the keystore is lost,
+// installed apps can only be replaced by uninstalling them, which deletes their operator keys.
+// Keep it private: anyone holding it can sign an APK that updates yours.
+//
+// It needs a JDK's `keytool` (on PATH, in JAVA_HOME, or Android Studio's bundled one) and Node >=
+// 18.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -83,12 +90,13 @@ const inside = (dir, p) => {
 };
 
 function restrict(file) {
-  // best effort: owner-only (POSIX modes are set at creation; on Windows the user profile is already private, this tightens it)
+  // Best effort: owner-only. POSIX modes are set at creation; on Windows the user profile is
+  // already private and this tightens it.
   if (process.platform !== 'win32') return;
   try {
     execFileSync('icacls', [file, '/inheritance:r', '/grant:r', `${os.userInfo().username}:F`], { stdio: 'ignore' });
   } catch {
-    /* the profile folder's own ACL still applies */
+    /* The profile folder's own ACL still applies. */
   }
 }
 
@@ -147,7 +155,10 @@ const b64 = path.join(dir, 'kob-release.jks.b64.txt');
 const keytool = findKeytool(o.keytool);
 if (!keytool) fail('keytool not found: install a JDK 17 (or Android Studio) and put its bin folder on PATH, or pass --keytool <path>');
 
-/** The certificate's SHA-256 fingerprint (public), read with the password from the file through the environment. */
+/**
+ * The certificate's SHA-256 fingerprint (public), read with the password from the file through the
+ * environment.
+ */
 function fingerprint() {
   const text = execFileSync(keytool, ['-list', '-v', '-keystore', jks, '-alias', alias, '-storepass:env', 'KOB_KS_PASS'], {
     env: { ...process.env, KOB_KS_PASS: fs.readFileSync(pass, 'utf8') },
@@ -174,7 +185,8 @@ for (const f of [jks, pass, b64]) {
 fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 
 const password = crypto.randomBytes(24).toString('base64url'); // 192 bits, URL-safe characters only
-// the password reaches keytool through the environment, never the command line (which other accounts can list)
+// The password reaches keytool through the environment, never the command line (which other
+// accounts can list).
 const env = { ...process.env, KOB_KS_PASS: password };
 try {
   fs.writeFileSync(pass, password, { flag: 'wx', mode: 0o600 });
@@ -196,7 +208,7 @@ try {
   );
   fs.writeFileSync(b64, fs.readFileSync(jks).toString('base64'), { flag: 'wx', mode: 0o600 });
 } catch (e) {
-  // leave nothing half-made behind: a half keystore would block the next run
+  // Leave nothing half-made behind: a half keystore would block the next run.
   for (const f of [jks, pass, b64]) fs.rmSync(f, { force: true });
   const why = e.stderr ? String(e.stderr).trim() : e.message;
   fail(`keytool failed: ${why}`);

@@ -1,15 +1,21 @@
 #!/usr/bin/env node
-// Every 64-hex constant in the files that pin build outputs must be a hash the generated artifacts carry.
+// Every 64-hex constant in the files that pin build outputs must be a hash the generated artifacts
+// carry.
 //
 //   node scripts/check-pins.mjs [repo root]      exit 1 if a constant matches no generated artifact
 //
-// Known hashes: every 64-hex string and every 32-byte array in contracts/artifacts, contracts/argent, contracts/research,
-// contracts/deploy and contracts/third-party (the outputs scripts/build-contracts.sh and scripts/build-deploy.sh
-// reproduce, plus the vendored third-party artifacts they list), except the Argent sources (`.ag`, written by hand) and
-// the pin files among them (contracts/argent/examples): a pin never vouches for itself. Pin files: the Rust pin tables, the TS SDK
-// constants, the token-program profiles, the router generator head, the Argent examples, the registry's template hashes and the docs. In
-// registry/tokens.json only the values of `*hash*` keys are build outputs; transaction ids and the other
-// chain data there are not, and are skipped. Run it after scripts/build-contracts.sh --check (CI does).
+// Known hashes are every 64-hex string and every 32-byte array in contracts/artifacts,
+// contracts/argent, contracts/research, contracts/deploy and contracts/third-party. These are the
+// outputs that scripts/build-contracts.sh and scripts/build-deploy.sh reproduce, plus the vendored
+// third-party artifacts they list. Two things are excluded: the Argent sources (`.ag`, written by
+// hand) and the pin files among them (contracts/argent/examples). A pin never vouches for itself.
+//
+// Pin files are the Rust pin tables, the TS SDK constants, the token-program profiles, the router
+// generator head, the Argent examples, the registry's template hashes and the docs. In
+// registry/tokens.json only the values of `*hash*` keys are build outputs. Transaction ids and the
+// other chain data there are not, and are skipped.
+//
+// Run it after scripts/build-contracts.sh --check (CI does).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,13 +45,15 @@ const collect = (v, src) => {
     for (const m of v.matchAll(HEX64)) add(m[0], src);
   }
 };
-// A pin file is never also a source of known hashes: its constants would then match themselves. The Argent examples are pin
-// files (below); their generated outputs (contracts/argent/examples-out) are the source.
+// A pin file is never also a source of known hashes, because its constants would then match
+// themselves. The Argent examples are pin files (below). Their generated outputs
+// (contracts/argent/examples-out) are the source.
 const PIN_DIRS = ['contracts/argent/examples/'];
 const outputs = ['contracts/artifacts', 'contracts/argent', 'contracts/research', 'contracts/deploy', 'contracts/third-party']
   .flatMap((d) => walk(path.join(root, d)))
   .filter((f) => !PIN_DIRS.some((p) => rel(f).startsWith(p)))
-  // Argent sources are inputs written by hand, not generated outputs: a hash they quote is known only through the artifact built from them
+  // Argent sources are inputs written by hand, not generated outputs. A hash they quote is known
+  // only through the artifact built from them.
   .filter((f) => !f.endsWith('.ag'));
 for (const f of outputs) {
   if (f.endsWith('.bin')) continue;
@@ -57,7 +65,7 @@ for (const f of outputs) {
 // 2. Constants in the pin files.
 const pinFiles = [
   'crates/kob-protocol/src/artifacts.rs',
-  // the token-program profiles: every 64-hex value there is a template hash
+  // The token-program profiles: every 64-hex value there is a template hash.
   'crates/kob-protocol/data/programs.json',
   'crates/kob-protocol/src/router.rs',
   'packages/kob-x402/src/types.ts',
@@ -65,7 +73,8 @@ const pinFiles = [
   'README.md',
   'contracts/README.md',
   ...walk(path.join(root, 'contracts/argent/examples')).map(rel),
-  // docs/reports holds test reports: their 64-hex values are transaction ids (chain evidence), not build-output pins
+  // docs/reports holds test reports: their 64-hex values are transaction ids (chain evidence), not
+  // build-output pins.
   ...walk(path.join(root, 'docs')).filter((f) => f.endsWith('.md')).map(rel).filter((f) => !f.startsWith('docs/reports/')),
 ];
 let checked = 0;

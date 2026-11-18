@@ -1,18 +1,21 @@
-// Writes the deployment record of a network (called by scripts/build-deploy.sh from the repo root; see
-// that script).
+// Writes the deployment record of a network. scripts/build-deploy.sh calls it from the repo root.
 //
 //   node scripts/lib/deploy.mjs <network> <out dir>
 //
-// No template depends on a network or a genesis (a stop is armed by a fill in the same transaction), so a
-// deployment deploys the reference artifacts under contracts/artifacts unchanged. The record lists them (name,
-// artifact, template hash, prefix / suffix lengths) so that a binary built for the network (cargo feature
-// deploy-<network>) can check what it embeds. Writes <out dir>/deployment.json and <out dir>/DEPLOYMENT.md.
+// No template depends on a network or a genesis (a stop is armed by a fill in the same
+// transaction), so a deployment deploys the reference artifacts under contracts/artifacts
+// unchanged. The record lists them (name, artifact, template hash, prefix and suffix lengths), so
+// that a binary built for the network (cargo feature deploy-<network>) can check what it embeds. It
+// writes <out dir>/deployment.json and <out dir>/DEPLOYMENT.md.
 //
-// When registry/tokens.json is the registry OF THIS NETWORK (its `network` field; today: mainnet), the record also
-// pins it: path, sha256 of its bytes (line endings normalised to LF, as SHA256SUMS hashes them), its strict
-// template list (the token programs the build supports) and its token entries with their genesis-check fact (the registry
-// is a snapshot of facts: no listing state, no standing). A deploy-mainnet binary embeds the same file and checks the pin,
-// so a changed registry makes the record stale.
+// When registry/tokens.json is the registry of this network (its `network` field), the record also
+// pins it:
+// - its path,
+// - the sha256 of its bytes (line endings normalised to LF, as SHA256SUMS hashes them),
+// - its strict template list (the token programs the build supports),
+// - its token entries with their genesis-check fact.
+// The registry is a snapshot of facts, with no listing state and no standing. A deploy-mainnet
+// binary embeds the same file and checks the pin, so a changed registry makes the record stale.
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 
@@ -25,12 +28,14 @@ if (!/^[a-z0-9-]+$/.test(network || '')) die(`bad network ${network}`);
 const readLf = (f) => fs.readFileSync(f, 'utf8').replace(/\r/g, '');
 const toHex = (b) => Buffer.from(b).toString('hex');
 
-// The KOB order kinds (the KOB1 kind codes 0x01..0x06 and 0x08..0x0b; 0x07, a retired receipt kind, is unused): the six
-// plain, conditional and if-done kinds in both families, the three pair templates that serve both (KobPair, KobCondPair, KobIfdPair)
-// and the KCC-20 curve (KobCurveAsk).
+// The KOB order kinds: the KOB1 kind codes 0x01..0x06 and 0x08..0x0b. Code 0x07, a retired receipt
+// kind, is unused. They are the six plain, conditional and if-done kinds in both families, the
+// three pair templates that serve both (KobPair, KobCondPair, KobIfdPair) and the KCC-20 curve
+// (KobCurveAsk).
 const KINDS = ['KobAsk', 'KobBid', 'KobCondAsk', 'KobCondBid', 'KobIfdBid', 'KobIfdAsk'];
-// A test network also gets the delivery id_type 0 builds of the KRON kinds (`*KronD0`, for token programs whose holders are
-// id_type 0: KForge on testnet-10); the mainnet record does not list them (kob_protocol::artifacts::deployed_order_kinds).
+// A test network also gets the delivery id_type 0 builds of the KRON kinds (`*KronD0`, for token
+// programs whose holders are id_type 0: KForge on testnet-10). The mainnet record does not list
+// them (kob_protocol::artifacts::deployed_order_kinds).
 const names = [
   ...KINDS,
   'KobPair',
@@ -54,7 +59,8 @@ const templates = names.map((name) => {
     suffix_len: bytecode.length - state_span.offset - state_span.len,
   };
 });
-// The token registry of this network, when the repository ships one (registry/tokens.json is the mainnet registry).
+// The token registry of this network, when the repository ships one (registry/tokens.json is the
+// mainnet registry).
 const REGISTRY = 'registry/tokens.json';
 let registry = null;
 if (fs.existsSync(REGISTRY)) {
@@ -71,9 +77,11 @@ if (fs.existsSync(REGISTRY)) {
     };
   }
 }
-// The default indexer of a build for this network (the official index-only server; `null` until its address is decided): set by
-// editing `indexer_url` in the committed record, which this script carries over (so `--check` reproduces it). Same rule as
-// kob_protocol::artifacts::check_indexer_url: https on mainnet, a host, no credentials, query or fragment.
+// The default indexer of a build for this network (the official index-only server, `null` until its
+// address is decided). It is set by editing `indexer_url` in the committed record, which this
+// script carries over, so `--check` reproduces it. The rule is the same as
+// kob_protocol::artifacts::check_indexer_url: https on mainnet, a host, no credentials, query or
+// fragment.
 let indexerUrl = null;
 const previous = `contracts/deploy/${network}/deployment.json`;
 if (fs.existsSync(previous)) {
