@@ -1,20 +1,28 @@
-// The numbers of the signer's sentence at a reader's precision (summary.ts): exact where the value is short, else a few significant digits,
-// rounded in the direction that never makes the order look better than it is (an "at least" rounds down, an "at most" up). Pure.
+// The numbers of the signer's sentences at a reader's precision (summary.ts). Pure.
+//
+// A value is exact where it is short, else a few significant digits. It rounds in the direction
+// that never makes the order look better than it is, so an "at least" rounds down and an "at most"
+// rounds up.
 
+/** The direction a figure rounds in. */
 export type Rounding = 'down' | 'up' | 'nearest';
 
 const group = (int: string): string => int.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
 /**
- * `v` in units of 10^-`decimals` as text: the integer digits always, then at most enough fraction digits for `sig` significant digits in all
- * (no more than `decimals`), rounded as `mode` says; trailing zeros are cut unless `fixed` fraction digits are asked for. Grouped by thousands.
+ * Formats `v` in units of 10^-`decimals` as text, grouped by thousands.
+ *
+ * It always shows the integer digits. Then it shows at most enough fraction digits for `sig`
+ * significant digits in all, and no more than `decimals`, rounded as `mode` says. Trailing zeros
+ * are cut unless `fixed` fraction digits are asked for.
  */
 export function decimalText(v: bigint, decimals: number, o: { sig?: number; fixed?: number; mode?: Rounding } = {}): string {
   const neg = v < 0n;
   let a = neg ? -v : v;
   const unit = 10n ** BigInt(decimals);
   const intDigits = (a / unit).toString().length;
-  // the fraction digits kept: a fixed count, else what `sig` significant digits leave after the integer part (or after the leading zeros)
+  // The fraction digits kept. That is a fixed count, else what `sig` significant digits leave
+  // after the integer part, or after the leading zeros.
   let keep: number;
   if (o.fixed !== undefined) keep = Math.min(o.fixed, decimals);
   else {
@@ -38,34 +46,46 @@ export function decimalText(v: bigint, decimals: number, o: { sig?: number; fixe
   return `${neg ? '−' : ''}${group(int)}${frac ? `.${frac}` : ''}`;
 }
 
-/** KAS (sompi) as a reader counts it: two decimals from 1 KAS on ("24.00"), two significant digits below ("0.0022"). */
+/**
+ * Formats sompi as KAS the way a reader counts it. It shows two decimals from 1 KAS on ("24.00")
+ * and two significant digits below ("0.0022").
+ */
 export const kasWords = (sompi: bigint, mode: Rounding = 'nearest'): string => {
   const abs = sompi < 0n ? -sompi : sompi;
   return abs >= 100_000_000n ? decimalText(sompi, 8, { fixed: 2, mode }) : decimalText(sompi, 8, { sig: 2, mode });
 };
 
-/** A token amount (base units of `decimals`): exact when short, else six significant digits. */
+/** Formats a token amount in base units of `decimals`, exact when short, else to six digits. */
 export const tokenWords = (units: bigint, decimals: number, mode: Rounding = 'nearest'): string => decimalText(units, decimals, { sig: 6, mode });
 
-/** Extra fraction digits of the ratios below (a price per KAS of a dear token is far below one base unit). */
+/**
+ * Extra fraction digits of the ratios below. A price per KAS of a dear token is far below one base
+ * unit.
+ */
 const RATIO_DIGITS = 12;
 
-/** A price per whole token (sompi per `scale` base units, a token of `decimals`) as KAS per whole token, six significant digits. */
+/**
+ * Formats a price as KAS per whole token, to six significant digits. The price is sompi per `scale`
+ * base units of a token of `decimals`.
+ */
 export function kasPerTokenWords(price: bigint, scale: bigint, decimals: number, mode: Rounding = 'nearest'): string {
-  // sompi per whole token, with RATIO_DIGITS more digits
+  // Sompi per whole token, with RATIO_DIGITS more digits.
   const num = price * 10n ** BigInt(decimals) * 10n ** BigInt(RATIO_DIGITS);
   return decimalText(div(num, scale, mode), 8 + RATIO_DIGITS, { sig: 6, mode });
 }
 
-/** The same price the other way round: whole tokens per KAS (an inverted market's price), six significant digits. */
+/**
+ * Formats the same price the other way round, as whole tokens per KAS, to six significant digits.
+ * This is an inverted market's price.
+ */
 export function tokensPerKasWords(price: bigint, scale: bigint, decimals: number, mode: Rounding = 'nearest'): string {
   if (price <= 0n) return '0';
-  // base units per KAS = 1e8 * scale / price, with RATIO_DIGITS more digits
+  // Base units per KAS are 1e8 * scale / price, with RATIO_DIGITS more digits.
   const num = 100_000_000n * scale * 10n ** BigInt(RATIO_DIGITS);
   return decimalText(div(num, price, mode), decimals + RATIO_DIGITS, { sig: 6, mode });
 }
 
-/** `a / b` rounded as `mode` says (b > 0). */
+/** Divides `a` by `b`, rounded as `mode` says. `b` must be positive. */
 export function div(a: bigint, b: bigint, mode: Rounding): bigint {
   const q = a / b;
   const r = a % b;
@@ -75,12 +95,16 @@ export function div(a: bigint, b: bigint, mode: Rounding): bigint {
   return q;
 }
 
-/** DAA scores per second (the network's nominal rate: the frame says times from a clock it does not verify, so the nominal rate is enough). */
+/**
+ * DAA scores per second, the network's nominal rate. The frame says times from a clock it does not
+ * verify, so the nominal rate is enough.
+ */
 export const DAA_PER_SECOND = 10n;
 
 /**
- * How far DAA score `target` is from `now`, as a reader says it: "now" when it is reached, else "in 28 s", "in 5 min", "in 3 h", "in 12 d"
- * (`words`: the sentences of each step, the caller's dictionary).
+ * Says how far DAA score `target` is from `now`, as a reader says it. It is "now" when it is
+ * reached, else "in 28 s", "in 5 min", "in 3 h" or "in 12 d". `words` holds the sentences of each
+ * step, from the caller's dictionary.
  */
 export function untilWords(target: bigint, now: bigint, words: { now: string; s(n: number): string; min(n: number): string; h(n: number): string; d(n: number): string }): string {
   const sec = Number((target - now) / DAA_PER_SECOND);

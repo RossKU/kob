@@ -1,12 +1,17 @@
-// The private-key signer page (signer.html). The app loads it in `<iframe sandbox="allow-scripts">` without allow-same-origin: this document
-// runs in an opaque origin, so the app's scripts can neither read this DOM (the key field) nor this memory (the key), and this page has no
-// storage at all. It talks to the app only through the validated messages of protocol.ts, and signs only after a trusted click on its own
-// Approve button, shown next to its own decoding of the request.
+// The private-key signer page (signer.html).
 //
-// While the user reads, the app may send the same request planned again (a later clock, the market now): the table follows in place, each
-// changed figure flashing, and Approve signs what is shown. An update worse for the user than what they were shown says so and holds Approve
-// for UPDATE_HOLD_MS (core.ts). The times of the table are said from the app's clock ("in 28 s", the DAA score below), a display only. The
-// frame reports its content height so the app sizes it to its content.
+// The app loads it in `<iframe sandbox="allow-scripts">` without allow-same-origin. This document
+// runs in an opaque origin, so the app's scripts can read neither this DOM, which holds the key
+// field, nor this memory, which holds the key. This page has no storage at all. It talks to the
+// app only through the validated messages of protocol.ts. It signs only after a trusted click on
+// its own Approve button, shown next to its own decoding of the request.
+//
+// While the user reads, the app may send the same request planned again, with a later clock or
+// the market now. The table follows in place, each changed figure flashes, and Approve signs what
+// is shown. An update worse for the user than what they were shown says so and holds Approve for
+// UPDATE_HOLD_MS (core.ts). The times of the table are said from the app's clock, as "in 28 s"
+// with the DAA score below, for display only. The frame reports its content height so that the
+// app sizes it to its content.
 import './signer.css';
 import { loadKaspaSdk } from '../data/kaspa-sdk';
 import { loadKob } from '../kob/wasm.browser';
@@ -19,22 +24,30 @@ import type { SignerSummary, SummaryOrder } from './summary';
 import { DAA_PER_SECOND, untilWords } from './words';
 import { privateKeySigningAllowed, showFrameGuard } from '../app/mirror';
 
-/** the app's origin: the origin of this page's URL (this document's own origin is opaque, "null") */
+/** The origin of this page's URL, the app's. This document's own origin is opaque ("null"). */
 const APP_ORIGIN = new URL(location.href).origin;
 /**
- * an Approve button that appears under the pointer is not clickable at once (a click meant for the app must not land on it). The visibility
- * check holds it too (every part of the request fully on screen for SEEN_MIN_MS, 400 ms, after the frame is shown), so this is the floor after
- * the request arrives; it is longer than a double click.
+ * The delay before Approve becomes clickable after the request arrives. An Approve button that
+ * appears under the pointer is not clickable at once, so a click meant for the app cannot land on
+ * it. The visibility check holds it too, with every part of the request fully on screen for
+ * SEEN_MIN_MS (400 ms) after the frame is shown. So this is the floor, and it is longer than a
+ * double click.
  */
 const APPROVE_DELAY_MS = 500;
-/** how long Approve is held after an update that is worse for the user (no figure may change under a click about to land) */
+/**
+ * How long Approve is held after an update that is worse for the user, so that no figure changes
+ * under a click about to land.
+ */
 const UPDATE_HOLD_MS = 500;
-/** how long a changed figure flashes */
+/** How long a changed figure flashes. */
 const FLASH_MS = 1200;
 
 const root = document.getElementById('signer') as HTMLElement;
 
-/** The app's theme, from the fragment of this page's URL (the app changes it without a reload): colours only, two fixed palettes (signer.css), else the OS's. */
+/**
+ * Applies the app's theme from the fragment of this page's URL, which the app changes without a
+ * reload. It sets colours only, one of two fixed palettes (signer.css), else the OS's.
+ */
 function applyTheme(): void {
   const m = /^#theme=(dark|light)$/.exec(location.hash);
   if (m) document.documentElement.dataset.theme = m[1]!;
@@ -52,7 +65,8 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string,
 
 const show = (...nodes: Node[]) => root.replaceChildren(...nodes);
 
-// the frame's content height, for the app to size the frame to it (up to the viewport; beyond that the frame scrolls)
+// The frame's content height, for the app to size the frame to it. That is up to the viewport, and
+// beyond it the frame scrolls.
 let lastHeight = -1;
 const reportHeight = () => {
   const px = Math.ceil(root.getBoundingClientRect().height);
@@ -62,7 +76,7 @@ const reportHeight = () => {
 };
 if (typeof ResizeObserver !== 'undefined') new ResizeObserver(reportHeight).observe(root);
 
-/** the app's clock (display only): its DAA score and when it came, for the times of the table */
+/** The app's clock, as its DAA score and when it came, for the times of the table. Display only. */
 let clock: { daa: bigint; at: number } | null = null;
 const daaNow = (): bigint | null => (clock ? clock.daa + (BigInt(Math.floor(performance.now() - clock.at)) * DAA_PER_SECOND) / 1000n : null);
 const until = (daa: bigint, now: bigint): string =>
@@ -78,7 +92,7 @@ function post(m: SignerToApp): void {
   window.parent.postMessage(m, APP_ORIGIN);
 }
 
-// ------------------------------------------------------------------------------------------------ views
+// --- Views ---
 
 function connectView(core: SignerCore): void {
   const input = el('input', {
@@ -103,7 +117,7 @@ function connectView(core: SignerCore): void {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') go();
   });
-  // what the key is, what forgets it and which key to use: said before the user pastes anything
+  // What the key is, what forgets it and which key to use, said before the user pastes anything.
   const guide = el('ul', { class: 'guide muted', 'data-testid': 'signer-guide' }, el('li', {}, t('signer.guide.what')), el('li', {}, t('signer.guide.caution')));
   show(el('div', { class: 'row' }, input, button), error, guide);
   input.focus();
@@ -114,26 +128,37 @@ function idleView(core: SignerCore): void {
   show(el('p', { class: 'muted', 'data-testid': 'signer-idle' }, t('signer.idle', { key: `${pk.slice(0, 8)}…${pk.slice(-8)}` })));
 }
 
-/** why Approve waits: a sentence a person can act on, and (small) the counts behind it for whoever is asked to report the problem */
+/**
+ * Why Approve waits. It is a sentence a person can act on, and in small print the counts behind it
+ * for whoever is asked to report the problem.
+ */
 interface Why {
   text: string;
   counts: string;
 }
 
-/** a part counts as fully on screen from this intersection ratio (sub-pixel layout keeps some exact fits just below 1) */
+/**
+ * A part counts as fully on screen from this intersection ratio. Sub-pixel layout keeps some exact
+ * fits just below 1.
+ */
 const FULL = 0.98;
 
 /**
- * Chromium's IntersectionObserver v2 tells whether an element is really visible (not covered, not transparent, not transformed); its ratio tells
- * whether it is clipped. `onChange(true)` once every part of the summary has been fully visible for a moment and the buttons are now (seen.ts):
- * a page that clips the frame down to its buttons gets no approval.
+ * Watches whether the request is really on screen.
+ *
+ * Chromium's IntersectionObserver v2 tells whether an element is really visible, meaning not
+ * covered, not transparent and not transformed. Its ratio tells whether it is clipped.
+ * `onChange(true)` comes once every part of the summary has been fully visible for a moment and
+ * the buttons are visible now (seen.ts). So a page that clips the frame down to its buttons gets
+ * no approval.
  */
 function watchRequest(parts: Element[], buttons: Element, onChange: (ready: boolean) => void, onWhy?: (why: Why | null) => void): () => void {
   if (!visibilityCheckSupported()) {
     onChange(false); // no visibility check in this browser: never approvable (the app does not offer the private key here)
     return () => undefined;
   }
-  // what the browser last reported per element, only to say why Approve waits (display only: the decision is the tracker's)
+  // What the browser last reported per element, only to say why Approve waits. It is display only,
+  // and the decision is the tracker's.
   const last = new Map<Element, { visible: boolean | undefined; ratio: number }>();
   const why = (): Why => {
     const b = last.get(buttons);
@@ -166,7 +191,7 @@ function watchRequest(parts: Element[], buttons: Element, onChange: (ready: bool
   );
   for (const p of parts) io.observe(p);
   io.observe(buttons);
-  // a part that stays visible sends no further entry: its time is counted here
+  // A part that stays visible sends no further entry, so its time is counted here.
   const timer = setInterval(() => {
     const ready = tracker.ready(now());
     onChange(ready);
@@ -180,13 +205,19 @@ function watchRequest(parts: Element[], buttons: Element, onChange: (ready: bool
 
 let stopVisibility: () => void = () => undefined;
 
-/** The cells of a request's table by key (what an update fills in place), and the time cells (said from the clock every second). */
+/**
+ * The cells of a request's table by key, which an update fills in place, and the time cells, which
+ * are said from the clock every second.
+ */
 interface Cells {
   text: Map<string, HTMLElement>;
   times: { el: HTMLElement; daa: bigint; value: string }[];
 }
 
-/** A time cell: "in 28 s" from the clock, the DAA score below; without a clock the row's own text. */
+/**
+ * A time cell. It says "in 28 s" from the clock with the DAA score below, or without a clock the
+ * row's own text.
+ */
 function timeCell(cells: Cells, key: string, value: string, daa: string): HTMLElement {
   const dd = el('dd', { 'data-daa': daa });
   cells.text.set(key, dd);
@@ -210,7 +241,10 @@ function fillTime(dd: HTMLElement, daa: bigint, value: string): void {
   } else dd.replaceChildren(el('span', { class: 'rel' }, rel), el('span', { class: 'daa' }, small));
 }
 
-/** One order the request creates or amends: its title, token and terms (an if-done entry's committed exit nested below). */
+/**
+ * One order the request creates or amends, with its title, token and terms. An if-done entry's
+ * committed exit is nested below.
+ */
 function orderView(o: SummaryOrder, testid: string, cells: Cells, key: string): HTMLElement {
   const rows = el('dl', { class: 'lines' });
   o.rows.forEach((r, j) => {
@@ -226,7 +260,7 @@ function orderView(o: SummaryOrder, testid: string, cells: Cells, key: string): 
   return el('section', { class: 'order', 'data-testid': testid }, h2, token, rows, ...(o.exit ? [orderView(o.exit, `${testid}-exit`, cells, `${key}:x`)] : []));
 }
 
-/** The shape of a table: an update with the same shape is filled in place, any other is drawn anew. */
+/** The shape of a table. An update of the same shape is filled in place, any other drawn anew. */
 const shapeOf = (s: SignerSummary): string => {
   const order = (o: SummaryOrder): string => `[${o.rows.map((r) => `${r.label}${r.daa ? '@' : ''}`).join('|')}${o.exit ? order(o.exit) : ''}]`;
   return [s.lines.map((l) => `${l.label}/${l.dir ?? ''}`).join('|'), s.problems, ...s.orders.map(order)].join('#');
@@ -248,7 +282,10 @@ function textsOf(s: SignerSummary): Map<string, { value: string; daa?: string }>
   return out;
 }
 
-/** A changed figure flashes (a background, never an opacity: the visibility check counts opacity). */
+/**
+ * Flashes a changed figure. It uses a background and never an opacity, because the visibility
+ * check counts opacity.
+ */
 function flash(e: HTMLElement): void {
   e.classList.remove('changed');
   void e.offsetWidth;
@@ -256,10 +293,13 @@ function flash(e: HTMLElement): void {
   setTimeout(() => e.classList.remove('changed'), FLASH_MS);
 }
 
-/** The request on screen: what an update fills in place. */
+/** The request on screen, which an update fills in place. */
 let onScreen: { id: string; shape: string; cells: Cells; hold(): void } | null = null;
 
-/** An update of the request on screen: filled in place when its table has the same shape, else drawn anew (seen again before Approve). */
+/**
+ * Shows an update of the request on screen. It is filled in place when its table has the same
+ * shape, else drawn anew and seen again before Approve.
+ */
 function updateView(core: SignerCore, req: PendingRequest): void {
   const v = onScreen;
   if (!v || v.id !== req.id || v.shape !== shapeOf(req.summary)) {
@@ -275,7 +315,7 @@ function updateView(core: SignerCore, req: PendingRequest): void {
         time.daa = BigInt(next.daa);
         time.value = next.value;
         cell.setAttribute('data-daa', next.daa);
-        // a time moves with every plan: said afresh, not flashed
+        // A time moves with every plan, so it is said afresh and not flashed.
         fillTime(cell, time.daa, time.value);
       }
     } else if (cell.textContent !== next.value) {
@@ -283,11 +323,12 @@ function updateView(core: SignerCore, req: PendingRequest): void {
       flash(cell);
     }
   }
-  // a change worse for the user: the changed figures flash (above) and Approve waits a moment; no banner over the table, it would move Approve
+  // On a change worse for the user, the changed figures flash (above) and Approve waits a moment.
+  // There is no banner over the table, because it would move Approve.
   if (req.change === 'shown') v.hold();
 }
 
-/** Every second: the times of the request on screen, from the clock. */
+/** Every second, says the times of the request on screen from the clock. */
 setInterval(() => {
   if (onScreen) for (const x of onScreen.cells.times) fillTime(x.el, x.daa, x.value);
 }, 1000);
@@ -305,14 +346,17 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   const fee = el('dd', { 'data-testid': 'signer-fee' }, s.fee);
   cells.text.set('fee', fee);
   list.append(el('div', { class: 'line fee' }, el('dt', {}, t('signer.fee')), fee));
-  // the KAS of the order UTXOs, custodies and strays this transaction spends is not covered by the wallet's signature: it is the node's word (S1, accepted: the user chooses the node)
+  // The KAS of the order UTXOs, custodies and strays this transaction spends is not covered by the
+  // wallet's signature. It is the node's word, which is accepted because the user chooses the node.
   if (s.unsignedKas) list.append(el('div', { class: 'line fee muted', 'data-testid': 'signer-unsigned-kas' }, el('dt', {}, t('signer.unsignedKas'))));
   const reject = el('button', { type: 'button', 'data-testid': 'signer-reject' }, t('signer.reject'));
-  // a merge session's screen: Allow opens it (nothing is signed by that click), the fixed line says what still asks
+  // On a merge session's screen, Allow opens the session and that click signs nothing. The fixed
+  // line says what still asks.
   const approve = el('button', { type: 'button', class: 'primary', disabled: '', 'data-testid': 'signer-approve' }, t(req.session ? 'signer.allow' : 'signer.approve'));
   const sessionNote = req.session ? [el('p', { class: 'muted', 'data-testid': 'signer-session-note' }, t('signer.session.note'))] : [];
   const actions = el('div', { class: 'row end' }, reject, approve);
-  // why Approve still waits, once it has waited a while (the visibility check: an overlay, a zoom or a cut-off frame keeps it disabled)
+  // Why Approve still waits, once it has waited a while. The visibility check keeps it disabled
+  // under an overlay, a zoom or a cut-off frame.
   const waitText = el('p', { class: 'muted' }, '');
   const waitCounts = el('p', { class: 'muted small', 'data-testid': 'signer-wait-counts' }, '');
   const waitWhy = el('div', { 'data-testid': 'signer-wait-why' }, waitText, waitCounts);
@@ -323,7 +367,8 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   const orders = s.orders.map((o, i) => orderView(o, `signer-order-${i}`, cells, `o:${i}`));
   const problems = s.problems > 0 ? [el('p', { class: 'error', 'data-testid': 'signer-problems' }, t(s.problems === 1 ? 'signer.problems.one' : 'signer.problems.other', { count: s.problems, codes: s.problemCodes.join(', ') }))] : [];
   if (!visibilityCheckSupported()) problems.push(el('p', { class: 'error', 'data-testid': 'signer-unsupported' }, t('signer.unsupported')));
-  // the app's hints: under the signer's own rows and orders, muted, never part of what Approve waits for
+  // The app's hints go under the signer's own rows and orders, muted. They are never part of what
+  // Approve waits for.
   const hints = noteSentences(req.notes);
   const hintsView = hints.length
     ? [el('div', { class: 'app-hints', 'data-testid': 'signer-app-hints' }, el('p', {}, t('signer.hint.label')), el('ul', {}, ...hints.map((h) => el('li', { 'data-testid': 'signer-app-hint' }, h))))]
@@ -332,7 +377,8 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   let visible = false;
   let heldUntil = 0;
   const update = () => {
-    // a finding the decoder blocks signing on keeps Approve off (the app's confirmation screen refuses the same transaction): reject it
+    // A finding the decoder blocks signing on keeps Approve off, so the user can only reject. The
+    // app's confirmation screen refuses the same transaction.
     approve.disabled = !(delayOver && visible && performance.now() >= heldUntil && s.problems === 0);
   };
   setTimeout(() => {
@@ -345,10 +391,13 @@ function requestView(core: SignerCore, req: PendingRequest): void {
     setTimeout(update, UPDATE_HOLD_MS + 10);
   };
   if (req.change === 'shown') hold();
-  // every part of the summary: the title, each line, each order's title, token and terms, the problems note
-  // the lines are observed by their label and value, not by the row: a row's box touches its neighbours', and on a phone with a fractional
-  // device pixel ratio the browser reported rows as covered by the next one (Android Chrome 2026-10-23: "lines seen 2/5, covered parts 3"), which
-  // kept Approve disabled; the label and value sit inside the row's padding, so only a real overlay covers them, and every word must still show
+  // Every part of the summary is watched: the title, each line, each order's title, token and
+  // terms, and the problems note.
+  //
+  // The lines are observed by their label and value, not by the row. A row's box touches its
+  // neighbours'. On a phone with a fractional device pixel ratio, the browser can report rows as
+  // covered by the next one, which would keep Approve disabled. The label and value sit inside the
+  // row's padding, so only a real overlay covers them, and every word must still show.
   const cellsOf = (root: Element): Element[] => [...root.querySelectorAll(':scope > .line > dt, :scope > .line > dd')];
   const parts: Element[] = [title, ...cellsOf(list), ...orders.flatMap((o) => [...o.querySelectorAll('h2, p.token'), ...o.querySelectorAll('.line > dt, .line > dd')]), ...sessionNote, ...problems];
   stopVisibility = watchRequest(
@@ -359,8 +408,9 @@ function requestView(core: SignerCore, req: PendingRequest): void {
       update();
     },
     (w) => {
-      // once shown, the line keeps its place (only its visibility changes): a frame that shrank the moment Approve opens would move under the
-      // pointer and be reported not visible again, so the click would land on a disabled button
+      // Once shown, the line keeps its place and only its visibility changes. A frame that shrank
+      // the moment Approve opens would move under the pointer and be reported not visible again,
+      // so the click would land on a disabled button.
       const show = approve.disabled && performance.now() - shownAt > 3000 && w !== null;
       if (show) {
         waitWhy.hidden = false;
@@ -371,7 +421,8 @@ function requestView(core: SignerCore, req: PendingRequest): void {
     },
   );
   approve.addEventListener('click', (e) => {
-    // only a real user click on this button signs (the app cannot click into this cross-origin frame; synthetic events are not trusted)
+    // Only a real user click on this button signs. The app cannot click into this cross-origin
+    // frame, and synthetic events are not trusted.
     if (!e.isTrusted || approve.disabled) return;
     stopVisibility();
     onScreen = null;
@@ -388,11 +439,11 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   show(title, list, ...orders, ...hintsView, ...sessionNote, ...problems, actions, waitWhy);
 }
 
-// ------------------------------------------------------------------------------------------------ boot
+// --- Boot ---
 
 async function boot(): Promise<void> {
-  // a mirror whose host cannot send this page's header policy (sandbox, frame-ancestors 'self'; app/mirror.ts): no key entry at all, framed or
-  // not; only the reason and a link to the app (outside any frame)
+  // A mirror host that cannot send this page's header policy (app/mirror.ts) gets no key entry,
+  // framed or not. It shows only the reason and a link to the app, outside any frame.
   if (!privateKeySigningAllowed()) {
     showFrameGuard(document, root, new URL('./', location.href).href, { title: t('signer.mirrorOffTitle'), body: t('signer.mirrorOff'), link: t('signer.mirrorOpenApp') });
     return;
@@ -403,7 +454,8 @@ async function boot(): Promise<void> {
   }
   show(el('p', { class: 'muted' }, t('signer.loading')));
   const [sdk, kob] = await Promise.all([loadKaspaSdk(), loadKob()]);
-  // the frame's own monotonic clock: re-time windows and a session's expiry never follow the app's clock or a change of the system time
+  // The frame's own monotonic clock. Re-time windows and a session's expiry never follow the app's
+  // clock or a change of the system time.
   const core = createSignerCore({ sdk, kob, post, registryHash: __KOB_REGISTRY_TABLE_HASH__, now: () => performance.now() });
   window.addEventListener('message', (e) => {
     if (!fromParent(e, window.parent, APP_ORIGIN)) return;

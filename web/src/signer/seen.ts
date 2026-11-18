@@ -1,15 +1,20 @@
-// What the signer page has really shown of a request before its Approve button may be used (no DOM here: signer/main.ts feeds it the
-// IntersectionObserver v2 entries, unit tests feed it directly).
+// What the signer page has really shown of a request before its Approve button may be used.
 //
-// The frame's visibility check alone looks at the Approve button: a page that frames the signer can clip the frame (a small box with
-// `overflow: hidden`, the frame moved up inside it) so that only the buttons show, and draw its own summary above them. So every part of the
-// summary (the title, each line, each order's title, token and terms) must have been fully on screen and unoccluded for `minMs` at some time
-// since the request appeared, and the buttons must be so now. A long summary is read by scrolling the frame; nothing the app does can mark a
-// part as seen without showing it.
+// There is no DOM here. signer/main.ts feeds it the IntersectionObserver v2 entries, and unit
+// tests feed it directly.
+//
+// A visibility check of the Approve button alone is not enough. A page that frames the signer can
+// clip the frame so that only the buttons show, and draw its own summary above them. It would put
+// the frame in a small box with `overflow: hidden` and move it up inside. So every part of the
+// summary must have been fully on screen and unoccluded for `minMs` at some time since the request
+// appeared, and the buttons must be so now. The parts are the title, each line, and each order's
+// title, token and terms. A long summary is read by scrolling the frame. Nothing the app does can
+// mark a part as seen without showing it.
 
 /**
- * Whether this browser reports real visibility (IntersectionObserver v2, Chromium). Without it the frame cannot tell a clipped or covered
- * frame from a shown one, so the private-key signer is not offered and never approves there.
+ * Tells whether this browser reports real visibility (IntersectionObserver v2, Chromium). Without
+ * it the frame cannot tell a clipped or covered frame from a shown one, so the private-key signer
+ * is not offered there and never approves.
  */
 export function visibilityCheckSupported(g: { IntersectionObserver?: unknown; IntersectionObserverEntry?: unknown } = globalThis): boolean {
   const proto = (g.IntersectionObserverEntry as { prototype?: unknown } | undefined)?.prototype;
@@ -19,6 +24,7 @@ export function visibilityCheckSupported(g: { IntersectionObserver?: unknown; In
 /** How long a part must stay fully visible to count as seen. */
 export const SEEN_MIN_MS = 400;
 
+/** Tracks which parts of a request have been seen and whether the buttons are visible now. */
 export class SeenTracker {
   private readonly since = new Map<string, number | null>();
   private readonly seen = new Set<string>();
@@ -28,7 +34,10 @@ export class SeenTracker {
     for (const p of parts) this.since.set(p, null);
   }
 
-  /** A part became fully visible (`true`) or stopped being so (`false`) at `now`. Unknown parts are ignored. */
+  /**
+   * Records that a part became fully visible (`true`) or stopped being so (`false`) at `now`.
+   * Unknown parts are ignored.
+   */
   part(id: string, fully: boolean, now: number): void {
     if (!this.since.has(id)) return;
     const s = this.since.get(id)!;
@@ -40,7 +49,7 @@ export class SeenTracker {
     }
   }
 
-  /** The buttons became fully visible or stopped being so. */
+  /** Records that the buttons became fully visible or stopped being so. */
   buttons(fully: boolean, now: number): void {
     if (fully) this.buttonsSince ??= now;
     else this.buttonsSince = null;
@@ -52,14 +61,14 @@ export class SeenTracker {
     return s !== null && s !== undefined && now - s >= this.minMs;
   }
 
-  /** Every part has been seen and the buttons are visible now (for `minMs`). */
+  /** Tells whether every part has been seen and the buttons have been visible for `minMs` now. */
   ready(now: number): boolean {
     if (this.buttonsSince === null || now - this.buttonsSince < this.minMs) return false;
     for (const id of this.since.keys()) if (!this.partSeen(id, now)) return false;
     return true;
   }
 
-  /** The parts not seen yet (tests, diagnostics). */
+  /** The parts not seen yet, for tests and diagnostics. */
   missing(now: number): string[] {
     return [...this.since.keys()].filter((id) => !this.partSeen(id, now));
   }
