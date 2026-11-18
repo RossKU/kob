@@ -1,12 +1,14 @@
-// A crossing order filled directly from the wallet: the user is the taker of a kob-wasm `batch`
-// (the CLI's `kob take`, crates/kob-cli trade/actions.rs). No executor is involved: each resting
-// order is filled at its own price, an ask is paid its price less its tip (the tip is the taker's
-// to keep), a bid pays its price plus its tip, and the user pays only the network fee.
+// A crossing order filled directly from the wallet. The user is the taker of a kob-wasm `batch`,
+// as with the CLI's `kob take` (crates/kob-cli trade/actions.rs).
 //
-// `planTake` picks the crossing orders of the node-confirmed book (`PlanEnv.bookOrders`), best price
-// first and never beyond the user's limit, as many as one transaction's token slots allow, and
-// builds that transaction. More orders are taken by later transactions, each planned at its turn
-// (ui/ticket/OrderTicket.tsx). What no transaction can take rests as a plain limit.
+// No executor is involved. Each resting order is filled at its own price. An ask is paid its price
+// less its tip, and the tip is the taker's to keep. A bid pays its price plus its tip. The user
+// pays only the network fee.
+//
+// `planTake` picks the crossing orders of the node-confirmed book (`PlanEnv.bookOrders`), best
+// price first and never beyond the user's limit. It takes as many as one transaction's token slots
+// allow, and builds that transaction. Later transactions take more orders, each planned at its
+// turn (ui/ticket/OrderTicket.tsx). What no transaction can take rests as a plain limit.
 import type { BookOrder, BookOrderUtxo, BookView, OrderPlan, PlanEnv, PlanIssue, TakeFacts, TakeFill, TakeStep } from './plan-types';
 import type { BuiltTx, KeyUtxo, TokenUtxo } from './types';
 import { baseKind, describeOrder } from './order-facts';
@@ -19,23 +21,29 @@ import { KRON_MAX_OUTPUT_AMOUNT } from './token-state';
 import { carrierOf, issue, str, usableTokenUtxos } from './orders/common';
 import { ceilDiv } from './units';
 
-/** The lock time of a taker: the node's DAA less this (the matchers' margin, CLI `LOCK_MARGIN_DAA`). */
+/**
+ * The margin of a taker's lock time, which is the node's DAA less this. It is the matchers'
+ * margin, CLI `LOCK_MARGIN_DAA`.
+ */
 export const TAKE_LOCK_MARGIN_DAA = 10n;
-/** At most this many take transactions are planned for one order; what is left rests. */
+/** The most take transactions planned for one order. What is left rests. */
 export const MAX_TAKE_STEPS = 6;
 
 /** One crossing order and what this order can take of it. */
 interface Taken {
   fill: TakeFill;
   utxo: BookOrderUtxo;
-  /** less than the order holds: its continuation must be a minable output */
+  /** Less than the order holds, so its continuation must be a minable output. */
   partial: boolean;
 }
 
 /** The lock time a take is built with. */
 export const takeLockTime = (env: Pick<PlanEnv, 'clock'>): bigint => (env.clock.daa > TAKE_LOCK_MARGIN_DAA ? env.clock.daa - TAKE_LOCK_MARGIN_DAA : 0n);
 
-/** How many resting orders one take transaction fills: a buy's asks are token inputs, a sell's bids token outputs (one more is its change). */
+/**
+ * How many resting orders one take transaction fills. A buy's asks are token inputs. A sell's bids
+ * are token outputs, and one more output is its change.
+ */
 export function takesPerTx(env: Pick<PlanEnv, 'token'>, side: 'buy' | 'sell'): number {
   const s = env.token.slots;
   return side === 'buy' ? Math.max(1, Math.min(s.inputs, MAX_TOKEN_INPUTS)) : Math.max(1, s.outputs - 1);
@@ -44,9 +52,10 @@ export function takesPerTx(env: Pick<PlanEnv, 'token'>, side: 'buy' | 'sell'): n
 const big = (v: string | number | bigint | undefined | null): bigint => (v === undefined || v === null ? 0n : BigInt(v));
 
 /**
- * What the user can take of one resting order at `lock`, at most `want` base units, or null when it
- * cannot be taken: not a plain order of the opposite side, the user's own, not active, past its
- * expiry, beyond the limit, or a fill its quantity rules refuse.
+ * What the user can take of one resting order at `lock`, at most `want` base units. It is null
+ * when the order cannot be taken. That is when it is not a plain order of the opposite side, is the
+ * user's own, is not active, is past its expiry or beyond the limit, or when its quantity rules
+ * refuse the fill.
  */
 function pickOf(env: PlanEnv, o: BookOrderUtxo, listed: bigint, side: 'buy' | 'sell', limit: bigint, want: bigint, lock: bigint): { fill: TakeFill; partial: boolean } | null {
   const st = o.order.state;
@@ -64,7 +73,7 @@ function pickOf(env: PlanEnv, o: BookOrderUtxo, listed: bigint, side: 'buy' | 's
   if (d.activeFrom > lock || (d.expiryDaa > 0n && lock >= d.expiryDaa)) return null;
   const utxoDaa = big(o.order.blockDaaScore);
   const a = d.auction;
-  // a schedule fills once per interval since its UTXO, at most maxFill a time
+  // A schedule fills once per interval since its UTXO, at most maxFill a time.
   if (a && a.interval > 0n && lock < utxoDaa + a.interval) return null;
   let price: bigint | null;
   try {
@@ -73,12 +82,13 @@ function pickOf(env: PlanEnv, o: BookOrderUtxo, listed: bigint, side: 'buy' | 's
     price = null;
   }
   if (price === null || price <= 0n) return null;
-  // the taker pays an ask its price less its tip, a bid pays the taker its price plus its tip
+  // The taker pays an ask its price less its tip. A bid pays the taker its price plus its tip.
   const net = side === 'buy' ? price - d.tip : price + d.tip;
   if (side === 'buy' ? net > limit : net < limit) return null;
   let avail: bigint;
   try {
-    // a bid's escrow buys more than its amount (its unused delivery carriers buy too): it is taken for the amount the book lists
+    // A bid's escrow buys more than its amount, because its unused delivery carriers buy too. It
+    // is taken for the amount the book lists.
     avail = side === 'buy' ? big(o.custody!.state.amount) : env.kob.bidBuyingPower(st, big(o.order.amount));
   } catch {
     return null;
@@ -87,7 +97,7 @@ function pickOf(env: PlanEnv, o: BookOrderUtxo, listed: bigint, side: 'buy' | 's
   if (avail <= 0n) return null;
   let n = want < avail ? want : avail;
   if (a && a.maxFill > 0n && n > a.maxFill) n = a.maxFill;
-  // a FOK order fills whole or not at all
+  // A FOK order fills whole or not at all.
   if (d.tif === 'fok' && n !== avail) return null;
   try {
     if (!env.kob.fillOk(st, n, big(o.order.amount))) return null;
@@ -119,7 +129,10 @@ function rowsOf(env: PlanEnv, side: 'buy' | 'sell'): { u: BookOrderUtxo; listed:
   return out;
 }
 
-/** The crossing orders the book offers to `amount`, best first, grouped into transactions of `takesPerTx`. */
+/**
+ * The crossing orders the book offers to `amount`, best first, grouped into transactions of
+ * `takesPerTx`.
+ */
 export function takeSteps(env: PlanEnv, side: 'buy' | 'sell', limit: bigint, amount: bigint): { steps: Taken[][]; rest: bigint } {
   const lock = takeLockTime(env);
   const per = takesPerTx(env, side);
@@ -139,7 +152,10 @@ export function takeSteps(env: PlanEnv, side: 'buy' | 'sell', limit: bigint, amo
 
 const stepOf = (p: Taken[]): TakeStep => ({ fills: p.map((x) => x.fill), amount: p.reduce((s, x) => s + x.fill.amount, 0n), kas: p.reduce((s, x) => s + x.fill.kas, 0n) });
 
-/** The most KAS a buy pays for `amount` at `limit` (rounded up), the least a sell receives (rounded down). */
+/**
+ * The most KAS a buy pays for `amount` at `limit`, rounded up, or the least a sell receives,
+ * rounded down.
+ */
 export function takeBound(side: 'buy' | 'sell', amount: bigint, limit: bigint, scale: bigint): bigint {
   return side === 'buy' ? ceilDiv(amount * limit, scale) : (amount * limit) / scale;
 }
@@ -171,7 +187,10 @@ const legOf = (p: Taken) => {
 
 const INSUFFICIENT_RE = /insufficient funds: need (\d+) sompi, have (\d+) sompi/;
 
-/** The take transaction of `picks`, funded from the wallet, or the reason it cannot be built. */
+/**
+ * Builds the take transaction of `picks`, funded from the wallet, or gives the reason it cannot be
+ * built.
+ */
 function buildTake(env: PlanEnv, side: 'buy' | 'sell', picks: Taken[]): { built: BuiltTx; request: TakeRequest; carrier: bigint } | { issue: PlanIssue } {
   const amount = picks.reduce((s, x) => s + x.fill.amount, 0n);
   const kas = picks.reduce((s, x) => s + x.fill.kas, 0n);
@@ -189,7 +208,8 @@ function buildTake(env: PlanEnv, side: 'buy' | 'sell', picks: Taken[]): { built:
       throw e;
     }
   }
-  // a buy pays the makers and the carrier of its token output; a sell only the fee (its token inputs' KAS comes back)
+  // A buy pays the makers and the carrier of its token output. A sell pays only the fee, because
+  // its token inputs' KAS comes back.
   const need = side === 'buy' ? kas + carrier : 0n;
   const mk = (funding: KeyUtxo[]): TakeRequest => ({
     action: 'batch', lockTime: str(takeLockTime(env)), legs: picks.map(legOf), updates: [], takerTokens, taker: env.maker, takerTokenCarrier: str(carrier),
@@ -225,7 +245,8 @@ function buildTake(env: PlanEnv, side: 'buy' | 'sell', picks: Taken[]): { built:
 }
 
 /**
- * The book without the orders `ids` (lower-case covenant ids): an order taken, or being taken, is no
+ * The book without the orders `ids` (lower-case covenant ids): an order taken, or being taken, is
+ * no
  * liquidity. The levels are summed again from the orders left.
  */
 export function bookWithout(book: BookView, ids: ReadonlySet<string>): BookView {
@@ -249,10 +270,16 @@ export function bookWithout(book: BookView, ids: ReadonlySet<string>): BookView 
   return { ...book, asks: a.levels, bids: b.levels, ...(a.orders ? { askOrders: a.orders } : {}), ...(b.orders ? { bidOrders: b.orders } : {}) };
 }
 
-/** The result of `planTake`: the plan of the first transaction, or why nothing can be taken (the caller places the order another way). */
+/**
+ * The result of `planTake`. It is the plan of the first transaction, or why nothing can be taken,
+ * and the caller then places the order another way.
+ */
 export type TakeOutcome = { plan: OrderPlan } | { none: PlanIssue | null };
 
-/** How a take ends: the rest rests as a limit (`rest` plans it), or it is not placed; a FOK fills all in one transaction or nothing. */
+/**
+ * How a take ends. The rest rests as a limit, which `rest` plans, or it is not placed. A FOK fills
+ * all in one transaction or nothing.
+ */
 export interface TakeMode {
   restKind: 'limit' | 'none';
   rest?: (env: PlanEnv, amount: bigint) => OrderPlan | null;
@@ -260,7 +287,8 @@ export interface TakeMode {
 }
 
 /**
- * Plans the first take transaction of a `side` order of `amount` at `limit`, with the facts of every
+ * Plans the first take transaction of a `side` order of `amount` at `limit`, with the facts of
+ * every
  * later one and of the rest. `mode.rest(env, amount)` plans what is left as a resting order against
  * the book without the orders taken. The transaction builds with fewer orders when one fills more
  * than it can carry (never a FOK, which is refused instead).
@@ -268,13 +296,13 @@ export interface TakeMode {
 export function planTake(env: PlanEnv, side: 'buy' | 'sell', amount: bigint, limit: bigint, pre: PlanIssue[], mode: TakeMode): TakeOutcome {
   const { steps, rest: left } = takeSteps(env, side, limit, amount);
   if (!steps.length) return { none: mode.fok ? issue('TAKE_FOK_UNFILLED', { amount }) : null };
-  // all or nothing: the whole amount in one transaction
+  // All or nothing, so the whole amount goes in one transaction.
   if (mode.fok && (left > 0n || steps.length > 1)) return { none: issue('TAKE_FOK_UNFILLED', { amount }) };
   let first = steps[0]!;
   let built: { built: BuiltTx; request: TakeRequest; carrier: bigint } | null = null;
   let failure: PlanIssue | null = null;
-  // a transaction too big for its limits builds with one order less, down to one; a partial fill it refuses (the order's rest would be dust: KIP-9) is
-  // not taken at all
+  // A transaction too big for its limits builds with one order less, down to one. A partial fill
+  // it refuses, because the order's rest would be dust under KIP-9, is not taken at all.
   const refused = new Set<Taken>();
   while (first.length > 0) {
     const r = buildTake(env, side, first);
@@ -283,7 +311,7 @@ export function planTake(env: PlanEnv, side: 'buy' | 'sell', amount: bigint, lim
       break;
     }
     failure = r.issue;
-    // funds or tokens short: fewer orders do not help; a FOK cannot take fewer
+    // With funds or tokens short, fewer orders do not help. A FOK cannot take fewer.
     if (r.issue.code !== 'BUILD_REJECTED' || mode.fok) break;
     const last = first[first.length - 1]!;
     if (last.partial) refused.add(last);
@@ -291,7 +319,7 @@ export function planTake(env: PlanEnv, side: 'buy' | 'sell', amount: bigint, lim
   }
   if (!built) return { none: failure };
   const all = [first, ...steps.slice(1)].map((st) => st.filter((x) => !refused.has(x)));
-  // the orders dropped from the first transaction are taken by the next one
+  // The next transaction takes the orders dropped from the first.
   if (first.length < steps[0]!.length) all.splice(1, 0, steps[0]!.slice(first.length).filter((x) => !refused.has(x)));
   const stepFacts = all.filter((s) => s.length > 0).map(stepOf);
   const totalAmount = stepFacts.reduce((s, x) => s + x.amount, 0n);
@@ -320,7 +348,10 @@ export function planTake(env: PlanEnv, side: 'buy' | 'sell', amount: bigint, lim
   };
 }
 
-/** Retries the build at the fee floor when the funds cannot pay the policy's rate (as `buildCreate` does). */
+/**
+ * Retries the build at the fee floor when the funds cannot pay the policy's rate, as `buildCreate`
+ * does.
+ */
 export function planTakeAtFloor(env: PlanEnv, ...a: Parameters<typeof planTake> extends [PlanEnv, ...infer R] ? R : never): TakeOutcome {
   const r = planTake(env, ...a);
   if ('plan' in r || r.none?.code !== 'INSUFFICIENT_KAS') return r;

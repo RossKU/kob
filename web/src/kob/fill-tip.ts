@@ -1,11 +1,12 @@
-// The executor tip that makes an order fill at any spread (the ticket's "Tip executors" option).
+// The executor tip that makes an order fill at any spread, the ticket's "Tip executors" option.
 //
-// An executor fills an order only when what it earns (the spread and the tips) pays the match
-// transaction's network fee. A spread thinner than that fee never fills. The tip here is the fee of
-// a match of this very order, measured by building one now: the planned order (its placement's own
-// outputs) matched one to one with an opposite order of the same price at the minimum fill. Times
-// TIP_FEE_MARGIN_PCT, spread over the order's whole amount: one fill of the whole order pays its
-// match (founder, 2026-11-17). A small partial fill pays less than its match and may wait.
+// An executor fills an order only when what it earns, the spread and the tips, pays the match
+// transaction's network fee. A spread thinner than that fee never fills. The tip here is the fee
+// of a match of this very order, measured by building one now. The planned order, from its
+// placement's own outputs, is matched one to one with an opposite order of the same price at the
+// minimum fill. That fee times TIP_FEE_MARGIN_PCT is spread over the order's whole amount, so one
+// fill of the whole order pays its match. A small partial fill pays less than its match and may
+// wait.
 import type { OrderPlan, PlanEnv } from './plan-types';
 import type { KeyUtxo, OrderState, TokenUtxo } from './types';
 import { baseKind } from './order-facts';
@@ -19,9 +20,11 @@ export const TIP_FEE_MARGIN_PCT = 125n;
 const DUMMY = (n: number): string => n.toString(16).padStart(2, '0').repeat(32);
 
 /**
- * The network fee of one match of the planned order (`plan.states[0]`, a plain KobAsk or KobBid of
- * a KAS market) at its minimum fill, built now at the plan's fee rate, in sompi. A one-order fill
- * when the match does not build; null when neither does.
+ * The network fee in sompi of one match of the planned order at its minimum fill, built now at the
+ * plan's fee rate. The order is `plan.states[0]`, a plain KobAsk or KobBid of a KAS market.
+ *
+ * When the match does not build, it measures a one-order fill instead. It returns null when
+ * neither builds.
  */
 export function measureMatchFee(env: PlanEnv, plan: OrderPlan): bigint | null {
   const st = plan.states[0];
@@ -58,7 +61,7 @@ export function measureMatchFee(env: PlanEnv, plan: OrderPlan): bigint | null {
       return null;
     }
   };
-  // the match: an opposite order of the same price at the minimum fill, its own UTXO
+  // The match is an opposite order of the same price at the minimum fill, on its own UTXO.
   const exp = BigInt(s.expiryDaa ?? '0');
   const common = { minFill: n, price, expiryDaa: exp };
   let other: OrderState;
@@ -75,22 +78,26 @@ export function measureMatchFee(env: PlanEnv, plan: OrderPlan): bigint | null {
   }
   const match = feeOf({ ...base, legs: k === 'KobAsk' ? [otherLeg, ownLeg] : [ownLeg, otherLeg], takerTokens: [], taker: env.maker });
   if (match !== null) return match;
-  // one order filled by a taker (an executor with inventory)
+  // One order filled by a taker, an executor with inventory.
   const takerTokens: TokenUtxo[] = k === 'KobBid'
     ? [{ transactionId: DUMMY(0xf4), index: 0, amount: str(env.carrier ?? 100_000_000n), blockDaaScore: str(daa), covenantId: env.token.covenantId, state: keyState(env.token.family, n, env.maker, env.token.extensionCommitment, env.token.program) }]
     : [];
   return feeOf({ ...base, legs: [ownLeg], takerTokens, taker: env.maker });
 }
 
-/** Sompi per whole token that pay `fee` x TIP_FEE_MARGIN_PCT on one fill of `amount` base units (rounded up). */
+/**
+ * The sompi per whole token that pay `fee` x TIP_FEE_MARGIN_PCT on one fill of `amount` base
+ * units, rounded up.
+ */
 export function tipForFee(fee: bigint, amount: bigint, scale: bigint): bigint {
   if (fee <= 0n || amount <= 0n) return 0n;
   return ceilDiv(fee * TIP_FEE_MARGIN_PCT * scale, 100n * amount);
 }
 
 /**
- * The tip of the plan's order (sompi per whole token) over its whole amount (a buy: the amount its budget buys at the limit), and what it pays
- * in all, about the measured fee x TIP_FEE_MARGIN_PCT; null when it cannot be measured.
+ * The tip of the plan's order in sompi per whole token, over its whole amount, and what it pays in
+ * all. For a buy the amount is what its budget buys at the limit. The total is about the measured
+ * fee x TIP_FEE_MARGIN_PCT. It is null when the fee cannot be measured.
  */
 export function executorTip(env: PlanEnv, plan: OrderPlan): { tip: bigint; fee: bigint; total: bigint } | null {
   const fee = measureMatchFee(env, plan);

@@ -1,21 +1,35 @@
-// Stepped sell curve (`KobCurveAsk`, docs/design/curve-ask-spec.md): the default table (kob-wasm `curveTable`), the sale split of a
-// creation ("Keep in my wallet" %), the form's validation, the graph model (price against the sold %, a step line) and the numbers shown
-// beside it. The table arithmetic is Rust's; this file only maps text to the spec and the table to what the UI draws.
+// The stepped sell curve (`KobCurveAsk`, docs/design/curve-ask-spec.md). This file holds:
+// - the default table (kob-wasm `curveTable`),
+// - the sale split of a creation ("Keep in my wallet" %),
+// - the form's validation,
+// - the graph model, a step line of price against the sold %,
+// - the numbers shown beside it.
+//
+// The table arithmetic is Rust's. This file only maps text to the spec and the table to what the UI
+// draws.
 import { parseDecimal } from './issue';
 import type { PlanIssue } from './plan-types';
 import type { CurveAskState, I64 } from './types';
 import { KobError, type KobWasm } from './wasm';
 
-/** The UI defaults (spec §7): 100 levels, 10,000 KAS if sold out, last level 5x the first, keep 0%; a chromatic curve 2 octaves. */
+/**
+ * The UI defaults (spec §7). They are 100 levels, 10,000 KAS if sold out, a last level 5x the
+ * first and keep 0%. A chromatic curve spans 2 octaves.
+ */
 export const CURVE_DEFAULTS = { levels: '100', totalKas: '10000', multiple: '5', keepPct: '0', octaves: '2' } as const;
-/** Gates: 1 to 1,000 levels. */
+/** The most levels of a curve. A curve has 1 to 1,000. */
 export const CURVE_MAX_LEVELS = 1000;
-/** A chromatic curve spans 1 to 8 octaves (`defaults::CHROMATIC_MAX_OCTAVES`): 12 x octaves + 1 levels. */
+/**
+ * The most octaves of a chromatic curve, which spans 1 to 8 (`defaults::CHROMATIC_MAX_OCTAVES`).
+ * It has 12 x octaves + 1 levels.
+ */
 export const CHROMATIC_MAX_OCTAVES = 8;
 
 /**
- * The table's shape (`defaults::CurveShape`): linear is geometric from the first level to `multiple` times it over `levels`; chromatic
- * climbs one semitone (2^(1/12)) per level over `octaves` octaves, every 12 levels exactly double.
+ * The table's shape (`defaults::CurveShape`).
+ * - `linear` is geometric from the first level to `multiple` times it over `levels`.
+ * - `chromatic` climbs one semitone (2^(1/12)) per level over `octaves` octaves, so every 12
+ *   levels exactly double.
  */
 export type CurveShape = 'linear' | 'chromatic';
 /** A fill touches at most 8 levels (spec §3). */
@@ -23,23 +37,29 @@ export const CURVE_MAX_CROSS = 8;
 
 const SOMPI = 100_000_000n;
 
-/** The requested curve (`defaults::CurveSpec`), base units and sompi. */
+/** The requested curve (`defaults::CurveSpec`), in base units and sompi. */
 export interface CurveSpec {
   amount: bigint;
   levels: number;
-  /** sompi if sold out */
+  /** Sompi if sold out. */
   total: bigint;
-  /** last level / first level, in thousandths (5x = 5000) */
+  /** The last level over the first, in thousandths, so 5x is 5000. */
   multipleMilli: bigint;
-  /** base units per whole token */
+  /** Base units per whole token. */
   scale: bigint;
   tip?: bigint;
-  /** default linear; chromatic takes `octaves` (1 to 8) and does not use `levels` and `multipleMilli` */
+  /**
+   * The shape, linear by default. A chromatic curve takes `octaves` (1 to 8) and does not use
+   * `levels` and `multipleMilli`.
+   */
   shape?: CurveShape;
   octaves?: number;
 }
 
-/** `defaults::curve_table`: base units per level, sompi per whole token per level, and what a sell-out pays. */
+/**
+ * The table of `defaults::curve_table`. It holds the base units per level, the sompi per whole
+ * token of each level, and what a sell-out pays.
+ */
 export interface CurveTable {
   levelSize: bigint;
   table: bigint[];
@@ -89,17 +109,20 @@ export function curveTable(kob: KobWasm, spec: CurveSpec): CurveTable {
 
 const curveJson = (s: CurveAskState) => JSON.stringify({ kind: 'KobCurveAsk', state: s });
 
-/** The most base units `budget` sompi buy from the curve in one fill (at most 8 levels). */
+/**
+ * The most base units `budget` sompi buy from the curve in one fill, which crosses at most 8
+ * levels.
+ */
 export function curveMaxForBudget(kob: KobWasm, s: CurveAskState, budget: bigint): bigint {
   return wrap('curveMaxForBudget', () => BigInt(rawCurve(kob).curveMaxForBudget(curveJson(s), budget.toString())));
 }
 
-/** The most one fill takes from here (the rest of 8 levels). */
+/** The most one fill takes from here, which is the rest of 8 levels. */
 export function curveMaxFill(kob: KobWasm, s: CurveAskState): bigint {
   return wrap('curveMaxFill', () => BigInt(rawCurve(kob).curveMaxFill(curveJson(s))));
 }
 
-/** The maker's proceeds (sompi) of a fill of `n`; null past 8 levels or the table. */
+/** The maker's proceeds in sompi of a fill of `n`. It is null past 8 levels or past the table. */
 export function curveProceeds(kob: KobWasm, s: CurveAskState, n: bigint): bigint | null {
   return wrap('curveProceeds', () => {
     const v = rawCurve(kob).curveProceeds(curveJson(s), n.toString());
@@ -107,14 +130,17 @@ export function curveProceeds(kob: KobWasm, s: CurveAskState, n: bigint): bigint
   });
 }
 
-// ------------------------------------------------------------------------------------------------ levels and numbers
+// --- Levels and numbers ---
 
-/** Base units of each level: `levelSize`, the last one what is left of `total`. */
+/** The base units of each level. Each is `levelSize`, and the last is what is left of `total`. */
 export function levelSizes(levelSize: bigint, levels: number, total: bigint): bigint[] {
   return Array.from({ length: levels }, (_, i) => (i + 1 < levels ? levelSize : total - BigInt(levels - 1) * levelSize));
 }
 
-/** The levels left of a curve holding `left` base units: table index, price and the size left in it, the current first. */
+/**
+ * The levels left of a curve holding `left` base units, the current one first. Each gives its
+ * table index, its price and the size left in it.
+ */
 export function curveLevelsLeft(levelSize: bigint, table: readonly bigint[], total: bigint, left: bigint): { level: number; price: bigint; amount: bigint }[] {
   const out: { level: number; price: bigint; amount: bigint }[] = [];
   const sold = total - left;
@@ -128,12 +154,18 @@ export function curveLevelsLeft(levelSize: bigint, table: readonly bigint[], tot
   return out;
 }
 
-/** Sompi the levels left pay if they all sell: each level's open part at its price, rounded up per level (what the covenant pays the maker). */
+/**
+ * The sompi the levels left pay if they all sell. Each level's open part counts at its price,
+ * rounded up per level, which is what the covenant pays the maker.
+ */
 export function curveRestKas(levelSize: bigint, table: readonly bigint[], total: bigint, left: bigint, scale: bigint): bigint {
   return curveLevelsLeft(levelSize, table, total, left).reduce((a, l) => a + (scale > 0n ? (l.amount * l.price + scale - 1n) / scale : 0n), 0n);
 }
 
-/** First, last, average and "Total if sold out" of a curve's whole table (its state). */
+/**
+ * The first, last and average price and "Total if sold out" of a curve's whole table, from its
+ * state.
+ */
 export function curveNumbersOfState(s: Pick<CurveAskState, 'levelSize' | 'table' | 'total' | 'scale'>): CurveNumbers {
   const table = s.table.map((p) => BigInt(p));
   const total = BigInt(s.total);
@@ -142,9 +174,12 @@ export function curveNumbersOfState(s: Pick<CurveAskState, 'levelSize' | 'table'
 }
 
 /**
- * The table of an amended curve (spec §5: the amend keeps `total` and `amountLeft`, may change `levelSize` and the table): the levels
- * already sold keep the new current price (nothing fills them again), the rest rise geometrically from `now` to `last` (whole sompi,
- * never falling). Null when the level size gives more than 1,000 levels or a price is not positive.
+ * The table of an amended curve. Per spec §5, the amend keeps `total` and `amountLeft`, and may
+ * change `levelSize` and the table.
+ *
+ * The levels already sold take the new current price, since nothing fills them again. The rest
+ * rise geometrically from `now` to `last` in whole sompi and never fall. It returns null when the
+ * level size gives more than 1,000 levels or a price is not positive.
  */
 export function amendCurveTable(a: { total: bigint; amountLeft: bigint; levelSize: bigint; now: bigint; last: bigint }): { levelSize: bigint; table: bigint[] } | null {
   const { total, amountLeft, levelSize, now, last } = a;
@@ -168,11 +203,21 @@ export function amendCurveTable(a: { total: bigint; amountLeft: bigint; levelSiz
 }
 
 /**
- * What the wallet refuses in a curve's state, stricter than the protocol (which only asks every price >= tip and > 0): a table that falls
- * anywhere, a tip at or above any level's price, a level size or total the table cannot hold, an amount left above the total, no minimum fill,
- * and, with the token's decimals, a scale other than 10^min(decimals, 9). Empty when the curve is sound.
+ * What the wallet refuses in a curve's state, as the `CurveProblem` codes `curveProblems`
+ * returns. It is stricter than the protocol, which only asks that every price is at least the tip
+ * and above 0. It refuses:
+ * - a table that is empty, too long, has a price that is not positive, or falls anywhere,
+ * - a tip at or above any level's price,
+ * - a level size or total the table cannot hold,
+ * - an amount left above the total,
+ * - no minimum fill, or one larger than a fill can reach,
+ * - with the token's decimals, a scale other than 10^min(decimals, 9),
+ * - a negative start.
+ *
+ * It returns an empty list when the curve is sound.
  */
 export type CurveProblem = 'table' | 'falls' | 'tip' | 'levelSize' | 'total' | 'amountLeft' | 'minFill' | 'scale' | 'activeFrom';
+/** Lists the problems of a curve's state, as the type above describes them. */
 export function curveProblems(s: Pick<CurveAskState, 'table' | 'tip' | 'levelSize' | 'total' | 'amountLeft' | 'minFill' | 'scale' | 'activeFrom'>, decimals?: number): CurveProblem[] {
   const out: CurveProblem[] = [];
   const num = (v: unknown): bigint | null => {
@@ -196,7 +241,8 @@ export function curveProblems(s: Pick<CurveAskState, 'table' | 'tip' | 'levelSiz
   if (size === null || size <= 0n) out.push('levelSize');
   else if (total === null || total <= 0n || total > size * n || total <= size * (n - 1n)) out.push('total');
   if (left === null || left <= 0n || (total !== null && left > total)) out.push('amountLeft');
-  // one fill crosses at most 8 levels: from any position it reaches 7 levels + 1 base unit, so a larger minimum can leave the curve unfillable
+  // One fill crosses at most 8 levels. From any position it reaches 7 levels + 1 base unit, so a
+  // larger minimum can leave the curve unfillable.
   if (minFill === null || minFill < 1n || (size !== null && size > 0n && minFill > (BigInt(CURVE_MAX_CROSS) - 1n) * size + 1n)) out.push('minFill');
   if (scale === null || scale <= 0n || (decimals !== undefined && scale !== 10n ** BigInt(Math.min(decimals, 9)))) out.push('scale');
   const af = num(s.activeFrom);
@@ -204,35 +250,44 @@ export function curveProblems(s: Pick<CurveAskState, 'table' | 'tip' | 'levelSiz
   return out;
 }
 
-/** The default minimum fill of a curve: the amount worth 10 KAS at its first level (kob-wasm `defaultMinFill`), at most one level. */
+/**
+ * The default minimum fill of a curve. It is the amount worth 10 KAS at its first level (kob-wasm
+ * `defaultMinFill`), at most one level.
+ */
 export function curveMinFill(kob: KobWasm, amount: bigint, firstPrice: bigint, levelSize: bigint, scale: bigint): bigint {
   const m = kob.defaultMinFill(amount, firstPrice, scale);
   return m < levelSize ? m : levelSize > 0n ? levelSize : 1n;
 }
 
-/** A short preview of a table: the first three levels, then the last two ("1 · 2 · 3 … 9 · 10"); `fmt` prints one price. */
+/**
+ * A short preview of a table, the first three levels and then the last two, as in
+ * "1 · 2 · 3 … 9 · 10". A table of up to 6 levels is shown whole. `fmt` prints one price.
+ */
 export function tablePreview(table: readonly bigint[], fmt: (p: bigint) => string): string {
   if (table.length <= 6) return table.map(fmt).join(' · ');
   return `${table.slice(0, 3).map(fmt).join(' · ')} … ${table.slice(-2).map(fmt).join(' · ')}`;
 }
 
-/** The current level of a state: (total − amountLeft) / levelSize. */
+/** The current level of a state, (total − amountLeft) / levelSize. */
 export function currentLevel(s: Pick<CurveAskState, 'total' | 'amountLeft' | 'levelSize'>): number {
   return Number((BigInt(s.total) - BigInt(s.amountLeft)) / BigInt(s.levelSize));
 }
 
+/** The numbers shown beside a curve. */
 export interface CurveNumbers {
   levels: number;
-  /** sompi per whole token */
+  /** Sompi per whole token. */
   first: bigint;
   last: bigint;
-  /** what a sell-out pays per whole token on average (rounded) */
+  /** What a sell-out pays per whole token on average, rounded. */
   average: bigint;
-  /** sompi if sold out (level by level, rounded up per level) */
+  /** Sompi if sold out, level by level and rounded up per level. */
   total: bigint;
 }
 
-/** First, last and average price and "Total if sold out" of a table over `amount` base units. */
+/**
+ * The first, last and average price and "Total if sold out" of a table over `amount` base units.
+ */
 export function curveNumbers(t: CurveTable, amount: bigint, scale: bigint): CurveNumbers {
   const n = t.table.length;
   return {
@@ -244,9 +299,12 @@ export function curveNumbers(t: CurveTable, amount: bigint, scale: bigint): Curv
   };
 }
 
-// ------------------------------------------------------------------------------------------------ the graph
+// --- The graph ---
 
-/** One step of the line: the share sold before and after the level (0..1), its price (sompi per whole token), sold already or not. */
+/**
+ * One step of the line. It gives the share sold before and after the level (0..1), its price in
+ * sompi per whole token, and whether it is sold already.
+ */
 export interface CurveStep {
   level: number;
   from: number;
@@ -256,8 +314,8 @@ export interface CurveStep {
 }
 
 /**
- * The steps of a table over `total` base units; levels below `amountLeft` (sold) are marked. Many levels are merged into at most `maxSteps`
- * drawn steps only for display (each keeps its first level's price), so a 1,000-level curve stays a light SVG.
+ * The steps of a table over `total` base units, one per level. A level whose whole size is sold,
+ * given `amountLeft`, is marked as sold.
  */
 export function curveSteps(levelSize: bigint, table: readonly bigint[], total: bigint, amountLeft: bigint = total): CurveStep[] {
   const sizes = levelSizes(levelSize, table.length, total);
@@ -273,22 +331,26 @@ export function curveSteps(levelSize: bigint, table: readonly bigint[], total: b
   return out;
 }
 
-/** SVG geometry of a step line in a `w` x `h` box (price 0 at the bottom, the top level at `top` of the height). */
+/**
+ * The SVG geometry of a step line in a `w` x `h` box. Price 0 is at the bottom, and the top level
+ * sits at `top` of the height.
+ */
 export interface StepGeometry {
-  /** the whole line */
+  /** The whole line. */
   path: string;
-  /** the sold part (empty when nothing is sold) and the rest */
+  /** The sold part, empty when nothing is sold, and the rest. */
   soldPath: string;
   openPath: string;
-  /** the filled area under the unsold part */
+  /** The filled area under the unsold part. */
   area: string;
-  /** x of the boundary between sold and unsold, null when nothing is sold */
+  /** The x of the boundary between sold and unsold, or null when nothing is sold. */
   soldX: number | null;
   maxPrice: bigint;
 }
 
 const f2 = (x: number) => (Math.round(x * 100) / 100).toString();
 
+/** Draws `steps` as a step line in a `w` x `h` box. */
 export function stepGeometry(steps: readonly CurveStep[], w: number, h: number, top = 0.9): StepGeometry {
   const maxPrice = steps.reduce((m, s) => (s.price > m ? s.price : m), 0n);
   const y = (p: bigint) => (maxPrice > 0n ? h - (Number(p) / Number(maxPrice)) * h * top : h);
@@ -299,22 +361,31 @@ export function stepGeometry(steps: readonly CurveStep[], w: number, h: number, 
   return { path: line(steps), soldPath: sold.length ? line(sold) : '', openPath: open.length ? line(open) : '', area, soldX: sold.length ? sold[sold.length - 1]!.to * w : null, maxPrice };
 }
 
-// ------------------------------------------------------------------------------------------------ the creation's sale
+// --- The creation's sale ---
 
-/** "Keep in my wallet" percent text -> basis points (0..10000, at most two decimals). */
+/**
+ * Parses the "Keep in my wallet" percent text into basis points, 0..10000 with at most two
+ * decimals.
+ */
 export function parsePercent(text: string): { bps: bigint } | { error: 'syntax' | 'range' } {
   const p = parseDecimal(text.trim() === '' ? '0' : text, 2);
   if ('error' in p) return { error: 'syntax' };
   return p.value > 10_000n ? { error: 'range' } : { bps: p.value };
 }
 
-/** The share for sale and the share kept, from a keep percent of `share` (sale rounded down to a base unit). */
+/**
+ * The share for sale and the share kept, from a keep percent of `share`. The sale rounds down to a
+ * base unit.
+ */
 export function saleSplit(share: bigint, keepBps: bigint): { sell: bigint; keep: bigint } {
   const sell = (share * (10_000n - keepBps)) / 10_000n;
   return { sell, keep: share - sell };
 }
 
-/** The keep percent text (at most two decimals, trailing zeros dropped) of selling `sell` of `share`. */
+/**
+ * The keep percent text of selling `sell` of `share`, with at most two decimals and trailing zeros
+ * dropped.
+ */
 export function keepPercentText(share: bigint, sell: bigint): string {
   if (share <= 0n) return '0';
   const keep = share - (sell < 0n ? 0n : sell > share ? share : sell);
@@ -324,26 +395,32 @@ export function keepPercentText(share: bigint, sell: bigint): string {
   return frac ? `${whole}.${frac}` : whole.toString();
 }
 
-/** What the user types for a curve (and a one-price sale): text, so an emptied field is representable. */
+/**
+ * What the user types for a curve or a one-price sale. It is text, so an emptied field is
+ * representable.
+ */
 export interface SaleForm {
-  /** 'keep' | 'ask' (one KobAsk) | 'curve' */
+  /** `keep`, `ask` for one KobAsk, or `curve`. */
   mode: 'keep' | 'ask' | 'curve';
   keepPct: string;
-  /** whole tokens for sale (linked to keepPct) */
+  /** Whole tokens for sale, linked to keepPct. */
   amount: string;
-  /** a curve */
+  /** For a curve. */
   levels: string;
-  /** KAS if sold out (a one-price sale: amount x price) */
+  /** KAS if sold out. For a one-price sale it is amount x price. */
   totalKas: string;
-  /** last level / first level */
+  /** The last level over the first. */
   multiple: string;
-  /** a curve's shape; a chromatic one takes `octaves` (1 to 8) in place of levels and multiple */
+  /**
+   * A curve's shape. A chromatic one takes `octaves` (1 to 8) in place of levels and multiple.
+   */
   shape: CurveShape;
   octaves: string;
-  /** a one-price sale: KAS per whole token */
+  /** For a one-price sale, KAS per whole token. */
   price: string;
 }
 
+/** The sale form with the UI defaults, set to keep everything. */
 export function defaultSaleForm(): SaleForm {
   return { mode: 'keep', keepPct: CURVE_DEFAULTS.keepPct, amount: '', levels: CURVE_DEFAULTS.levels, totalKas: CURVE_DEFAULTS.totalKas, multiple: CURVE_DEFAULTS.multiple, shape: 'linear', octaves: CURVE_DEFAULTS.octaves, price: '' };
 }
@@ -351,18 +428,18 @@ export function defaultSaleForm(): SaleForm {
 /** A sale form after parsing. */
 export interface ParsedSale {
   mode: 'ask' | 'curve';
-  /** base units for sale and kept */
+  /** Base units for sale and kept. */
   sell: bigint;
   keep: bigint;
-  /** a chromatic curve: 12 x octaves + 1 */
+  /** For a chromatic curve it is 12 x octaves + 1. */
   levels: number;
-  /** sompi if sold out */
+  /** Sompi if sold out. */
   total: bigint;
   multipleMilli: bigint;
   shape: CurveShape;
-  /** a chromatic curve's octaves (0 otherwise) */
+  /** A chromatic curve's octaves, or 0 otherwise. */
   octaves: number;
-  /** a one-price sale: sompi per whole token */
+  /** For a one-price sale, sompi per whole token. */
   price: bigint;
 }
 
@@ -374,8 +451,9 @@ export function curveSpecOfSale(p: ParsedSale, scale: bigint): CurveSpec {
 const issue = (code: string, message: string, field: string, params?: PlanIssue['params']): PlanIssue => ({ code, severity: 'error', message, field: `sale.${field}`, ...(params ? { params } : {}) });
 
 /**
- * Validates a sale of `share` base units (the wallet's share of the supply). `amount` wins over `keepPct` when both are set (the view keeps
- * them linked); an empty amount means `keepPct` of the share.
+ * Validates a sale of `share` base units, the wallet's share of the supply. `amount` wins over
+ * `keepPct` when both are set, because the view keeps them linked. An empty amount means `keepPct`
+ * of the share.
  */
 export function parseSale(f: SaleForm, share: bigint | null, decimals: number): { issues: PlanIssue[]; parsed: ParsedSale | null } {
   const issues: PlanIssue[] = [];
@@ -423,14 +501,17 @@ export function parseSale(f: SaleForm, share: bigint | null, decimals: number): 
   return { issues, parsed: { mode: f.mode, sell, keep: share - sell, levels, total: sold, multipleMilli, shape, octaves, price } };
 }
 
-/** The default one price of a sale: 10,000 KAS over the amount (sompi per whole token, at least 1). */
+/**
+ * The default one price of a sale, 10,000 KAS over the amount. It is in sompi per whole token and
+ * at least 1.
+ */
 export function defaultSalePrice(sell: bigint, scale: bigint): bigint {
   if (sell <= 0n) return 1n;
   const p = (BigInt(CURVE_DEFAULTS.totalKas) * SOMPI * scale) / sell;
   return p > 0n ? p : 1n;
 }
 
-/** KAS text of sompi. */
+/** Formats sompi as KAS text. */
 export const kasOf = (sompi: bigint): string => {
   const w = sompi / SOMPI;
   const fr = (sompi % SOMPI).toString().padStart(8, '0').replace(/0+$/, '');

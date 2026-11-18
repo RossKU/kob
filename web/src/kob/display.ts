@@ -1,10 +1,12 @@
 /**
- * Which characters a displayed name, ticker or text may hold (security finding L7).
+ * Which characters a displayed name, ticker or text may hold.
  *
  * The definition is one file, `crates/kob-protocol/data/display-chars.json`, which the Rust side
- * (`kob-protocol/src/display.rs`) reads too; the cases in it run in both test suites. See the Rust
- * module for the rules: refuse what draws nothing or reorders, keep emoji joiners, selectors and
- * flag tags in their place, flag (never refuse) look-alikes.
+ * (`kob-protocol/src/display.rs`) reads too. The cases in it run in both test suites. The Rust
+ * module has the rules:
+ * - refuse what draws nothing or reorders,
+ * - keep emoji joiners, selectors and flag tags in their place,
+ * - flag look-alikes, and never refuse them.
  */
 import table from '../../../crates/kob-protocol/data/display-chars.json';
 
@@ -25,7 +27,7 @@ const isVs = (c: number): boolean => c >= VS_LO && c <= VS_HI;
 const isTag = (c: number): boolean => c >= TAG_LO && c <= TAG_HI;
 const visible = (c: number): boolean => !isSpace(c) && c !== ZWJ && !isVs(c) && !isTag(c) && !inRanges(REFUSE, c);
 
-/** For each character (code point) of `s`: whether it is refused. */
+/** Tells for each character (code point) of `s` whether it is refused. */
 export function badMask(s: string): boolean[] {
   const cs = [...s].map((c) => c.codePointAt(0)!);
   const bad = new Array<boolean>(cs.length).fill(false);
@@ -49,16 +51,19 @@ export function badMask(s: string): boolean[] {
   return bad;
 }
 
-/** True if `s` has an invisible or reordering character (control, format, filler, stray joiner, selector or tag). */
+/**
+ * True if `s` has an invisible or reordering character, such as a control, format or filler
+ * character, or a stray joiner, selector or tag.
+ */
 export const hasBadChar = (s: string): boolean => badMask(s).some(Boolean);
 
-/** `s` with each refused character replaced by `with` (default: removed). */
+/** `s` with each refused character replaced by `replacement`. By default they are removed. */
 export function replaceBad(s: string, replacement = ''): string {
   const bad = badMask(s);
   return [...s].map((c, i) => (bad[i] ? replacement : c)).join('');
 }
 
-/** True if `s` has a character drawn like a Latin letter: a warning, never a refusal. */
+/** True if `s` has a character drawn like a Latin letter. It is a warning, never a refusal. */
 export const hasLookalike = (s: string): boolean => [...s].some((c) => LOOK_CHARS.has(c.codePointAt(0)!) || inRanges(LOOK_RANGES, c.codePointAt(0)!));
 
 /** The shared test cases of the table. */
