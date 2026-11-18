@@ -35,7 +35,7 @@ import './order-line.css';
 
 const STATUS_TONE: Record<OrderStatusUi, Tone> = { open: 'ok', partial: 'info', filled: 'neutral', cancelled: 'neutral', refunded: 'neutral', killed: 'neutral', closed: 'neutral', unknown: 'warn' };
 
-/** The cells of a row in the order of its table (the keys are the columns': orders-sort.ts). */
+/** The cells of a row in the order of its table. The keys are the columns' (orders-sort.ts). */
 const OPEN_CELLS = ['time', 'market', 'type', 'side', 'price', 'amount', 'total', 'filled', 'status', 'act', 'toggle'] as const;
 const HISTORY_CELLS = ['time', 'market', 'type', 'side', 'price', 'amount', 'total', 'avg', 'filled', 'status', 'toggle'] as const;
 
@@ -43,41 +43,69 @@ export interface OrderRowActions {
   onCancel(row: OrderRowModel): void;
   onAmend(row: OrderRowModel): void;
   onRefund(row: OrderRowModel): void;
-  /** the maker's sweep of the order's strays in place (the order continues unchanged) */
+  /** The maker's sweep of the order's strays in place. The order continues unchanged. */
   onSweep(row: OrderRowModel): void;
-  /** Claim, Claim and merge, Claim and sell of what a mode-1 order bought (the order stays open) */
+  /**
+   * Claim, Claim and merge, and Claim and sell of what a mode-1 order bought. The order stays open.
+   */
   onClaim?(row: OrderRowModel): void;
 }
 
 export interface OrderRowProps {
   row: OrderRowModel;
   token: TokenInfo | undefined;
-  /** the wallet is connected on the app's network: signing actions are enabled */
+  /** The wallet is connected on the app's network, so signing actions are enabled. */
   canSign: boolean;
   actions: OrderRowActions;
-  /** an action on this order is being prepared (the buttons show a spinner) */
+  /** An action on this order is being prepared, and the buttons show a spinner. */
   busy?: boolean;
-  /** rendered as an exit of a position (indented) */
+  /** Rendered as an exit of a position, indented. */
   nested?: boolean;
-  /** loads the order's events (fill history on demand); absent (no indexer): no fill history */
+  /**
+   * Loads the order's events, which is the fill history on demand. Absent when there is no indexer,
+   * and then there is no fill history.
+   */
   loadEvents?: (id: Hex, signal: AbortSignal) => Promise<EventView[]>;
-  /** wall-clock mapping of DAA scores: the line's placement time (none: no time) */
+  /**
+   * Wall-clock mapping of DAA scores, for the line's placement time. Without it there is no time.
+   */
   clock?: Clock | null;
-  /** a market page's panel: the details are drawn only once opened, and never open by themselves (the warning mark stays on the line) */
+  /**
+   * A market page's panel. The details are drawn only once opened and never open by themselves. The
+   * warning mark stays on the line.
+   */
   compact?: boolean;
-  /** kascov.io's picture of a token, for its icon (none: a letter on the token's colour) */
+  /**
+   * kascov.io's picture of a token, for its icon. Without it the icon is a letter on the token's
+   * colour.
+   */
   iconOf?: (covenantId: string) => KascovMeta | null;
-  /** which table the row is in: Open orders (the buttons) or Order history (the average fill price); default Open orders */
+  /**
+   * Which table the row is in, Open orders with the buttons or Order history with the average fill
+   * price. The default is Open orders.
+   */
   columns?: 'open' | 'history';
-  /** the average fill price of the order (history; null: none, undefined: not read yet) */
+  /**
+   * The average fill price of the order in history. Null means none and undefined means not read
+   * yet.
+   */
   avg?: bigint | null;
-  /** the fixed decimals of the table's price columns (`priceDpOf` of every row of the table: the decimal points line up); absent: this order's own */
+  /**
+   * The fixed decimals of the table's price columns (`priceDpOf` of every row of the table), so the
+   * decimal points line up. When absent, this order's own.
+   */
   priceDp?: number;
-  /** the fixed decimals of the table's Total column (KAS); absent: as it is, at most 4 */
+  /**
+   * The fixed decimals of the table's Total column in KAS. When absent, it is shown as it is, at
+   * most 4.
+   */
   kasDp?: number;
 }
 
-/** An order that needs the reader: its details open by themselves (a warning, a renewal, an expiry, a source other than the indexer). */
+/**
+ * An order that needs the reader. Its details open by themselves for a warning, a renewal, an
+ * expiry or a source other than the indexer.
+ */
 export function needsAttention(row: OrderRowModel): boolean {
   return (
     row.unfundable || row.possiblyFrozen || !!row.unlisted || (!!row.cancelBlocked && row.cancelBlocked !== 'old-template') || row.custodyOk === false ||
@@ -85,62 +113,80 @@ export function needsAttention(row: OrderRowModel): boolean {
   );
 }
 
-/** What the one line of an order says (OrderRow), from its model: the time, the price of a pair order, the filled part and the value in KAS (a KAS price is drawn by its cell, with the table's decimals). */
+/**
+ * What the one line of an order says (OrderRow), from its model. It shows the time, the price of a
+ * pair order, the filled part and the value in KAS. A KAS price is drawn by its cell, with the
+ * table's decimals.
+ */
 function lineFacts(row: OrderRowModel, tk: TokenInfo | undefined, b: TokenInfo | undefined, clock: Clock | null | undefined, avg: bigint | null | undefined) {
   const decimals = tk?.decimals ?? RAW_TOKEN_DECIMALS;
   const unix = placedUnix(row, clock);
   const time = timeText(unix);
   const pairPrice = (v: bigint | null | undefined): string => (v === null || v === undefined || !row.pair ? '—' : pairPriceText(v, row, tk, b));
   const total = row.amountTotal;
-  // what the fills took (the indexer's `filled_amount`; `amount_left` is 0 for every ended order, so total - left would read a cancelled partial fill as 100 %)
+  // What the fills took, from the indexer's `filled_amount`. `amount_left` is 0 for every ended
+  // order, so total - left would read a cancelled partial fill as 100 %.
   const filled = total !== null ? filledAmount(row) : null;
   const pct = total !== null && total > 0n && filled !== null ? Math.min(100, Number((filled * 100n) / total)) : null;
-  // a token nobody named shows its short id in the unit slot, never the long hex (cells.ts)
+  // A token nobody named shows its short id in the unit slot, never the long hex (cells.ts).
   const unit = tokenUnit(tk?.ticker, row.token);
   const amountTotalText = total !== null ? amountCell(total, decimals) : null;
   const filledAmountText = filled !== null ? amountCell(filled, decimals) : null;
-  // a buy order that holds a KAS budget has no amount to show: the line says so in two words (the amount follows from the price; the details say it in full)
+  // A buy order that holds a KAS budget has no amount to show. The line says so in two words, since
+  // the amount follows from the price, and the details say it in full.
   const budget = !(total !== null && filled !== null);
-  // a plain KAS bid: its budget in KAS (the placed one when this browser placed it, else what is left), and how much of it the fills have spent
+  // A plain KAS bid shows its budget in KAS, the placed one when this browser placed it and else
+  // what is left, and how much of it the fills have spent.
   const bud = row.budget;
-  // what the fills spent when the placement is not in this browser: the filled tokens at their average price (Order history reads it)
+  // What the fills spent when the placement is not in this browser: the filled tokens at their
+  // average price, which Order history reads.
   const spentByFills = bidSpentByFills(row, avg);
   const budgetSpent = bud && bud.placed !== null && bud.left !== null ? bud.placed - bud.left : spentByFills;
   const budgetSpentText = budgetSpent !== null ? amountCell(budgetSpent, 8) : null;
-  // the Amount column of a bid, never "0 KAS budget": the placed budget; else what is left while there is some; else, for an order that is over, the KAS it spent; else just the words
+  // The Amount column of a bid never reads "0 KAS budget". It shows the placed budget, else what is
+  // left while there is some, else, for an order that is over, the KAS it spent, else just the
+  // words.
   const budgetShown: { text: AmountText; unit: string; hint: string } | null =
     bud && bud.placed !== null ? { text: amountCell(bud.placed, 8), unit: t('orders.budgetUnit'), hint: t('orders.budgetPlacedHint') }
     : bud && bud.left !== null && bud.left > 0n ? { text: amountCell(bud.left, 8), unit: t('orders.budgetLeftUnit'), hint: t('orders.budgetLeftHint') }
     : bud && spentByFills !== null ? { text: amountCell(spentByFills, 8), unit: t('orders.budgetSpentUnit'), hint: t('orders.budgetSpentOnlyHint') }
     : null;
-  // how much of the budget is spent: of the placed budget, else 100 % for a bid that filled
+  // How much of the budget is spent. It is a share of the placed budget, else 100 % for a bid that
+  // filled.
   const budgetPct = bud && budgetSpent !== null && bud.placed !== null && bud.placed > 0n ? Number((budgetSpent * 100n) / bud.placed) : bud && row.status === 'filled' ? 100 : null;
-  // an open order: its initial amount at its limit price; an ended one: what traded (the filled amount at the average fill price)
+  // An open order shows its initial amount at its limit price. An ended one shows what traded,
+  // which is the filled amount at the average fill price.
   const valueKas = orderTotalKas(row, avg);
   return { unix, time, timeTip: timeTitle(unix), price: pairPrice(row.price), pct, unit, valueKas, budget, budgetShown, budgetSpentText, budgetPct, amountTotalText, filledAmountText, avgText: pairPrice(avg) };
 }
 
 const localDate = longDate;
 
-/** A token the registry does not list is named by 8 + 8 hex of its covenant id (a 4 + 4 fragment can be copied by another token). */
+/**
+ * A token the registry does not list is named by 8 + 8 hex of its covenant id, because a 4 + 4
+ * fragment can be copied by another token.
+ */
 const shortId = longId;
 
 /**
- * A price of a pair order: B base units per `row.scale` base units of A, shown per whole A (`value x 10^decimals(A) / scale`) when A is known, in B
- * (its decimals) when B is known; raw base units of B when B is not in the registry, per `scale` base units of A when A is not.
+ * A price of a pair order, which is B base units per `row.scale` base units of A. It is shown per
+ * whole A (`value x 10^decimals(A) / scale`) when A is known, in B (its decimals) when B is known,
+ * as raw base units of B when B is not in the registry, and per `scale` base units of A when A is
+ * not.
  */
 function pairPriceText(value: bigint, row: OrderRowModel, a: TokenInfo | undefined, b: TokenInfo | undefined): string {
   const aName = a?.ticker ?? (row.token ? shortId(row.token) : '?');
-  // whole tokens; a token of unknown decimals on the assumed 8 (never "base units")
+  // Whole tokens. A token of unknown decimals is on the assumed 8, never "base units".
   const perA = row.scale > 0n ? statePriceToTokenPrice(value, a?.decimals ?? RAW_TOKEN_DECIMALS, row.scale, 'nearest') : value;
-  // "X B per A", never the pair notation "A/B" (it reads as A per B)
+  // "X B per A", never the pair notation "A/B", which reads as A per B.
   if (!b) return `${unitsText(perA, RAW_TOKEN_DECIMALS, ',')} ${shortId(row.pair!.quote)} per ${aName}`;
   return `${unitsText(perA, b.decimals, ',')} ${b.ticker} per ${aName}`;
 }
 
 /**
- * A state price of the order (sompi per whole token of `row.scale` base units) as KAS per whole token; per `scale` base units without the token. A pair
- * order's prices are in its quote token B per whole A (`quote`).
+ * A state price of the order, in sompi per whole token of `row.scale` base units, as KAS per whole
+ * token. Without the token it is per `scale` base units. A pair order's prices are in its quote
+ * token B per whole A (`quote`).
  */
 function PriceCell(p: { row: OrderRowModel; token: TokenInfo | undefined; quote?: TokenInfo | undefined; value: bigint | null; dp: number; testid?: string }) {
   const tk = p.token;
@@ -171,7 +217,10 @@ function ExpiryText({ row }: { row: OrderRowModel }) {
   return <>{'—'}</>;
 }
 
-/** The pair, what the order holds of each token, and the trigger rule of a pair stop (the B side comes from the registry; else its short id). */
+/**
+ * The pair, what the order holds of each token, and the trigger rule of a pair stop. The B side
+ * comes from the registry, else its short id.
+ */
 function pairItems(row: OrderRowModel, a: TokenInfo | undefined, b: TokenInfo | undefined) {
   const x = row.pair!;
   const aName = a?.ticker ?? (row.token ? shortId(row.token) : '?');
@@ -208,24 +257,29 @@ function pairItems(row: OrderRowModel, a: TokenInfo | undefined, b: TokenInfo | 
   ];
 }
 
-/** One order: type in plain words, side, all-in price, amount, status, expiry / renewal / refund, custody flag, placement tx, and the actions. */
+/**
+ * One order with its type in plain words, side, all-in price, amount, status, expiry, renewal and
+ * refund, custody flag, placement tx and actions.
+ */
 export function OrderRow(props: OrderRowProps) {
   const { row, token, canSign, actions } = props;
   const { registry, config } = useServices();
   const txUrl = useTxUrl();
   const placementUrl = txUrl(row.placementTx);
-  // a token the registry does not list is shown on this browser's issuance of it, else on 8 assumed decimals (app/token-display.ts)
+  // A token the registry does not list is shown on this browser's issuance of it, else on 8 assumed
+  // decimals (app/token-display.ts).
   const bToken = row.pair ? displayToken(registry, config.network, row.pair.quote, undefined, row.pair.quoteScale) : undefined;
   const tk = token;
 
   const disabledReason = !canSign ? t('orders.actions.needWallet') : undefined;
   const cancelHint = row.canCancel ? undefined : row.cancelBlocked ? t(`orders.cancelBlocked.${row.cancelBlocked}`) : t('orders.actions.cannotCancel');
-  // strays of a live order the wallet can spend: the maker's sweep returns them while the order lives on
-  // (an order under an older contract version is only cancelled: no sweep)
+  // Strays of a live order the wallet can spend. The maker's sweep returns them while the order
+  // lives on. An order under an older contract version is only cancelled, with no sweep.
   const canSweep = row.live && row.canCancel && row.strayCount > 0 && !row.cancelOnly;
   const attention = needsAttention(row);
-  // the details a viewer opened or closed stay so across refreshes; an order that comes to need the reader later (a renewal due, an expiry, a warning after a refresh)
-  // opens its details then, unless the viewer has closed them
+  // The details a viewer opened or closed stay so across refreshes. An order that comes to need the
+  // reader later opens its details then, unless the viewer has closed them. That happens for a
+  // renewal due, an expiry or a warning after a refresh.
   const openKey = `order:${row.id}`;
   const [open, setOpenState] = useOpenRow(openKey, attention && !props.compact);
   const setOpen = (v: boolean) => setOpenState(v);
@@ -233,9 +287,12 @@ export function OrderRow(props: OrderRowProps) {
     if (attention && !props.compact && !hasOpenChoice(openKey)) setOpen(true);
   }, [attention]);
   const line = lineFacts(row, tk, bToken, props.clock, props.avg);
-  // the USD display: a KAS-per-token price of the table's cells in dollars (a pair price is a price in another token: never converted)
+  // The USD display turns a KAS-per-token price of the table's cells into dollars. A pair price is
+  // a price in another token and is never converted.
   const fiat = useFiat();
-  // the table's price columns: the same fixed decimals in every row (`priceDp`, the finest of the table), the exact price in the cell's title; this order's own where no table gives one
+  // The table's price columns have the same fixed decimals in every row (`priceDp`, the finest of
+  // the table), with the exact price in the cell's title. Where no table gives one, this order's
+  // own is used.
   const ownDp = priceDpOf([row.price, row.stopPrice, row.allInPrice, row.auctionStart, row.auction?.currentPrice, props.avg].map((price) => ({ price, decimals: tk?.decimals ?? RAW_TOKEN_DECIMALS, scale: row.scale })));
   const dp = props.priceDp ?? ownDp;
   const priceFigure = (value: bigint | null | undefined, text: string) =>
@@ -246,13 +303,14 @@ export function OrderRow(props: OrderRowProps) {
     );
   const marketText = tk && row.pair ? `${tk.ticker}/${bToken?.ticker ?? shortId(row.pair.quote)}` : tk ? `${tk.ticker}/KAS` : row.token ? longId(row.token) : '—';
   const cancellable = !row.oldTemplate && (row.live || row.status === 'unknown');
-  // what a mode-1 order bought and holds, in the bought token (a pair order's T may be B)
+  // What a mode-1 order bought and holds, in the bought token. A pair order's T may be B.
   const boughtTk = row.bought && row.pair && row.bought.token === row.pair.quote ? bToken : tk;
   const boughtText = row.bought ? amountCell(row.bought.amount, boughtTk?.decimals ?? RAW_TOKEN_DECIMALS).text : null;
   const boughtUnit = row.bought ? tokenUnit(boughtTk?.ticker, row.bought.token).text : '';
   const claimHint = row.bought ? t('orders.claim.hint', { amount: boughtText!, ticker: boughtUnit }) : undefined;
 
-  // a curve's level: under its price in the table; a phone card says "Curve 4/20" on its "Sell · type" line
+  // A curve's level is under its price in the table. A phone card says "Curve 4/20" on its "Sell ·
+  // type" line.
   const curveLevel = row.curve ? (row.curve.priceNow === null ? t('curve.row.soldOut') : t('curve.row.level', { level: row.curve.level + 1, levels: row.curve.levels })) : null;
   const cells: Record<string, JSX.Element> = {};
   cells.time = (
@@ -440,7 +498,8 @@ export function OrderRow(props: OrderRowProps) {
         flow
         items={[
           ...(row.pair ? pairItems(row, tk, bToken) : []),
-          // an auction's bound is its END price (the worst it can fill at), never labelled a limit; its start is only the expected price
+          // An auction's bound is its END price, the worst it can fill at, and is never labelled a
+          // limit. Its start is only the expected price.
           {
             label: t(row.curve ? 'curve.details.now' : row.auctionStart !== null ? 'orders.worstPrice' : 'orders.limitPrice'),
             value: <PriceCell row={row} token={tk} quote={bToken} value={row.price} dp={ownDp} />,
@@ -449,7 +508,8 @@ export function OrderRow(props: OrderRowProps) {
           },
           { label: t('orders.startPrice'), value: <PriceCell row={row} token={tk} quote={bToken} value={row.auctionStart} dp={ownDp} />, 'data-testid': 'order-start-price', show: row.auctionStart !== null },
           { label: t('orders.stopPrice'), value: <PriceCell row={row} token={tk} quote={bToken} value={row.stopPrice} dp={ownDp} />, 'data-testid': 'order-stop', show: row.stopPrice !== null },
-          // the price with the tip: only when there is a tip (else it repeats the price); an auction's is the worst too, never what was paid
+          // The price with the tip is shown only when there is a tip, as it would otherwise repeat
+          // the price. An auction's is the worst too, never what was paid.
           {
             label: t(row.auctionStart !== null ? 'orders.worstAllIn' : 'orders.allIn'),
             value: <PriceCell row={row} token={tk} value={row.allInPrice} dp={ownDp} />,
@@ -491,7 +551,8 @@ export function OrderRow(props: OrderRowProps) {
             ),
             show: !!row.budget && row.budget.left !== null,
           },
-          // what a phone's card leaves out of its lines: the average fill price (Order history) and the filled part with its unit
+          // What a phone's card leaves out of its lines: the average fill price (Order history) and
+          // the filled part with its unit.
           { label: t(fiat ? 'orders.col.avgPriceUsd' : 'orders.col.avgPrice'), value: <span data-testid="order-avg">{priceFigure(props.avg, line.avgText)}</span>, show: props.columns === 'history' },
           {
             label: t('orders.col.filled'),
@@ -546,7 +607,7 @@ export function OrderRow(props: OrderRowProps) {
       {props.loadEvents && filledAmountOf(row) > 0n ? <OrderFills row={row} token={tk} quote={bToken} network={config.network} loadEvents={props.loadEvents} /> : null}
 
       {row.oldTemplate ? (
-        // nothing in this build can spend it: no Cancel button, one line why
+        // Nothing in this build can spend it, so there is no Cancel button and one line says why.
         <p class="small muted" style="margin-top:8px" data-testid={`order-old-template-why-${row.id}`}>{t('orders.oldTemplate.noCancel')}</p>
       ) : row.live || row.status === 'unknown' ? (
         <div class="order-actions" style="margin-top:8px">
