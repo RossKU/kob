@@ -1,19 +1,25 @@
-// The blocks a node announces, as the transactions kob-wasm reads (standalone mode, data/standalone.ts). Two sources give the same shape:
-//   * wRPC `block-added` notifications of the official SDK (data/node-rpc.ts): 64-bit values as bigint, script public keys as `version + script` hex
-//     strings (or `{ version, script }`), the covenant binding of an output as `{ authorizingInput, covenantId }`, the transaction id in `verboseData`;
-//   * the offline mock node's `GET /node/blocks` (data/node-http.ts): the same layout with 64-bit values as decimal strings.
-// A node does not send the UTXO entries of the inputs: every input carries an empty entry here (`covenantId: null`, amount 0). That is all kob-wasm
-// `recoverOrders` needs (the outpoints, the outputs and their covenant bindings; the covenant id of a genesis is re-derived from the authorising
-// outpoint, a continuation can never derive to it), and nothing built from such a transaction is ever signed: every order seen this way is confirmed
-// on the node before it is shown (data/standalone.ts).
+// The blocks a node announces, as the transactions kob-wasm reads, for standalone mode
+// (data/standalone.ts). Two sources give the same shape:
+// - wRPC `block-added` notifications of the official SDK (data/node-rpc.ts). 64-bit values are
+//   bigint, and script public keys are `version + script` hex strings or `{ version, script }`.
+//   The covenant binding of an output is `{ authorizingInput, covenantId }`, and the transaction
+//   id is in `verboseData`.
+// - The offline mock node's `GET /node/blocks` (data/node-http.ts), the same layout with 64-bit
+//   values as decimal strings.
+// A node does not send the UTXO entries of the inputs, so every input carries an empty entry here
+// (`covenantId: null`, amount 0). That is all kob-wasm `recoverOrders` needs: the outpoints, the
+// outputs and their covenant bindings. The covenant id of a genesis is re-derived from the
+// authorising outpoint, and a continuation can never derive to it. Nothing built from such a
+// transaction is ever signed, and every order seen this way is confirmed on the node before it is
+// shown (data/standalone.ts).
 import type { Hex, TxInputJson, TxJson, TxOutputJson } from '../kob/types';
 import { joinSpkString } from './kaspa-sdk';
 
-/** One block as the stream reads it: its transactions (ids known), newest DAA score and time. */
+/** One block as the stream reads it: its transactions with known ids, its DAA score and time. */
 export interface StreamBlock {
   hash: Hex;
   daaScore: bigint;
-  /** block header time, ms since the epoch (0 when the source does not say) */
+  /** The block header time in ms since the epoch, 0 when the source does not say. */
   timestampMs: number;
   transactions: TxJson[];
 }
@@ -23,7 +29,10 @@ const HASH = /^[0-9a-f]{64}$/;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 
-/** A 64-bit value of either source (bigint, decimal string, safe number) as a decimal string; null when it is none of them. */
+/**
+ * A 64-bit value of either source (bigint, decimal string, safe number) as a decimal string. Null
+ * when it is none of them.
+ */
 function dec(v: unknown): string | null {
   if (typeof v === 'bigint') return v >= 0n ? v.toString() : null;
   if (typeof v === 'number') return Number.isSafeInteger(v) && v >= 0 ? String(v) : null;
@@ -31,7 +40,7 @@ function dec(v: unknown): string | null {
   return null;
 }
 
-/** A hash of either source (hex string, or an SDK `Hash` with `toString`), lower case; null otherwise. */
+/** A hash of either source (hex string or an SDK `Hash` with `toString`), lower case, else null. */
 function hash(v: unknown): Hex | null {
   const s = typeof v === 'string' ? v : isObj(v) && typeof v.toString === 'function' ? String(v.toString()) : null;
   if (s === null) return null;
@@ -82,8 +91,9 @@ function output(v: unknown): TxOutputJson | null {
 }
 
 /**
- * A transaction of a block notification (either source) as `TxJson`, with empty input UTXO entries; null when it cannot be read whole (an id that
- * is not given, an unreadable input or output: such a transaction is skipped, never half read).
+ * A transaction of a block notification of either source as `TxJson`, with empty input UTXO
+ * entries. Null when it cannot be read whole, as with a missing id or an unreadable input or
+ * output. Such a transaction is skipped, never half read.
  */
 export function txJsonOfBlockTx(v: unknown): TxJson | null {
   if (!isObj(v)) return null;
@@ -104,7 +114,10 @@ export function txJsonOfBlockTx(v: unknown): TxJson | null {
 /** Coinbase transactions (subnetwork 01) pay miners and never carry a KOB1 record. */
 export const isCoinbaseTx = (tx: Pick<TxJson, 'subnetworkId'>): boolean => tx.subnetworkId.startsWith('01');
 
-/** A block notification (`{ header, transactions, verboseData }`, either source) as a `StreamBlock`; null when it has no readable header. */
+/**
+ * A block notification of either source (`{ header, transactions, verboseData }`) as a
+ * `StreamBlock`, without coinbase transactions. Null when it has no readable header.
+ */
 export function streamBlockOf(v: unknown): StreamBlock | null {
   if (!isObj(v) || !isObj(v.header) || !Array.isArray(v.transactions)) return null;
   const h = v.header;

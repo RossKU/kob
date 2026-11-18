@@ -1,25 +1,33 @@
-// The market data of standalone mode (data/standalone.ts): trades, candles, 24 h figures and depth built from what the browser saw since the mode
-// started: the fills of KOB orders in the node's new blocks (kob/stream-orders.ts `fillOf`, each counted once the node shows one of its
-// transaction's outputs) and the partial book (data/stream-book.ts). The views have the indexer's response shapes (`/v1/trades`, `/v1/candles`,
-// `/v1/stats`, `/v1/depth`) and its rules (crates/kobd/src/indexer/market.rs, the mock's mock/market.mjs): every price is sompi per
-// `price_basis` base units (the token's standard scale when the registry knows its decimals, else the scale of the first order seen of it), a trade
-// groups the fills of one transaction on one token, priced at the resting side's amount-weighted price, its side the aggressor's, its amount and
-// quote the asks' (the bids' when no ask filled). Nothing older than the mode is in them: the views that show them say "since HH:MM".
+// The market data of standalone mode (data/standalone.ts): trades, candles, 24 h figures and
+// depth, built from what the browser saw since the mode started.
+//
+// The sources are the fills of KOB orders in the node's new blocks (kob/stream-orders.ts
+// `fillOf`), each counted once the node shows one of its transaction's outputs, and the partial
+// book (data/stream-book.ts). The views have the indexer's response shapes (`/v1/trades`,
+// `/v1/candles`, `/v1/stats`, `/v1/depth`) and its rules (crates/kobd/src/indexer/market.rs, the
+// mock's mock/market.mjs).
+// - Every price is sompi per `price_basis` base units. That is the token's standard scale when the
+//   registry knows its decimals, else the scale of the first order seen of it.
+// - A trade groups the fills of one transaction on one token. It is priced at the resting side's
+//   amount-weighted price, and its side is the aggressor's. Its amount and quote are the asks',
+//   or the bids' when no ask filled.
+// Nothing older than the mode is in them, and the views that show them say "since HH:MM".
 import type { BookView, CandleInterval, CandlesView, DepthView, LevelView, StatsView, TradesView } from './indexer-types';
 import { depth2pctSides } from './depth-band';
 import type { StreamFill } from '../kob/stream-orders';
 import type { Hex } from '../kob/types';
 
+/** The length of a candle bucket per interval, in ms. */
 export const INTERVAL_MS: Record<CandleInterval, number> = { '1m': 60_000, '5m': 300_000, '1h': 3_600_000, '1d': 86_400_000 };
 const DAY_MS = 86_400_000;
-/** Most fills kept per token (the oldest are forgotten). */
+/** Most fills kept per token. The oldest are forgotten. */
 export const MAX_FILLS_PER_TOKEN = 5_000;
 
 /** A fill the node confirmed, with when it happened. */
 export interface SeenFill extends StreamFill {
-  /** order of arrival (trade ids) */
+  /** The order of arrival, used as trade ids. */
   seq: number;
-  /** block time, ms */
+  /** The block time, in ms. */
   ts: number;
   daa: bigint;
 }
@@ -28,7 +36,7 @@ interface Trade { id: number; txid: Hex; ts: number; daa: bigint; price: bigint;
 
 const perBasis = (price: bigint, scale: bigint, basis: bigint): bigint => (price * basis) / (scale > 0n ? scale : 1n);
 
-/** The trades of a token's fills (ascending), prices per `basis`. */
+/** The trades of a token's fills, ascending, with prices per `basis`. */
 export function tradesOfFills(fills: readonly SeenFill[], basis: bigint): Trade[] {
   const groups = new Map<Hex, { id: number; txid: Hex; ts: number; daa: bigint; fills: number; sides: Map<'sell' | 'buy', { amount: bigint; quote: bigint; weighted: bigint; first: number }> }>();
   for (const f of fills) {
@@ -48,7 +56,7 @@ export function tradesOfFills(fills: readonly SeenFill[], basis: bigint): Trade[
     const ask = g.sides.get('sell');
     const bid = g.sides.get('buy');
     const vol = ask ?? bid!;
-    // the resting side: the one seen first (asks on a tie); the aggressor took it
+    // The resting side is the one seen first, the asks on a tie. The aggressor took it.
     const resting = ask && bid ? (ask.first <= bid.first ? 'sell' : 'buy') : ask ? 'sell' : 'buy';
     const r = resting === 'sell' ? ask! : bid!;
     if (vol.amount === 0n || r.amount === 0n) continue;
@@ -57,7 +65,7 @@ export function tradesOfFills(fills: readonly SeenFill[], basis: bigint): Trade[
   return out.sort((a, b) => a.id - b.id);
 }
 
-/** `/v1/trades/{token}`: newest first, `before` = a trade id. */
+/** `/v1/trades/{token}`: newest first, with `before` a trade id. */
 export function tradesView(token: Hex, fills: readonly SeenFill[], basis: bigint, q: { limit?: number; before?: number | string } = {}): TradesView {
   const limit = Math.max(1, Math.min(q.limit ?? 50, 500));
   const before = q.before === undefined || q.before === null ? null : Number(q.before);
@@ -70,7 +78,10 @@ export function tradesView(token: Hex, fills: readonly SeenFill[], basis: bigint
   };
 }
 
-/** `/v1/candles/{token}`: OHLCV per bucket, ascending, empty buckets omitted; `from` / `to` bound the bucket start; the first or last `limit`. */
+/**
+ * `/v1/candles/{token}`: OHLCV per bucket, ascending, with empty buckets omitted. `from` and `to`
+ * bound the bucket start. The result is the first `limit` bars from `from`, else the last.
+ */
 export function candlesView(token: Hex, fills: readonly SeenFill[], basis: bigint, q: { interval: CandleInterval; from?: number; to?: number; limit?: number }): CandlesView {
   const ms = INTERVAL_MS[q.interval];
   const limit = Math.max(1, Math.min(q.limit ?? 500, 1500));
@@ -114,7 +125,10 @@ function mergedSide(levels: readonly LevelView[], basis: bigint, side: 'sell' | 
 
 const levelsOf = (rows: BookView['asks']): LevelView[] => rows.filter((r): r is LevelView => 'orders' in r);
 
-/** `/v1/stats/{token}`: the 24 h window ending now (only fills seen since the mode started) and the top of the partial book (`book`: aggregated). */
+/**
+ * `/v1/stats/{token}`: the 24 h window ending now, with only the fills seen since the mode
+ * started, and the top of the partial book. `book` is aggregated.
+ */
 export function statsView(token: Hex, fills: readonly SeenFill[], basis: bigint, book: BookView, nowMs: number): StatsView {
   const trades = tradesOfFills(fills, basis);
   const last = trades[trades.length - 1] ?? null;
@@ -149,7 +163,10 @@ export function statsView(token: Hex, fills: readonly SeenFill[], basis: bigint,
   };
 }
 
-/** `/v1/depth/{token}`: the partial book (aggregated) merged by per-basis price, best first, with cumulative amount and quote. */
+/**
+ * `/v1/depth/{token}`: the aggregated partial book merged by per-basis price, best first, with
+ * cumulative amount and quote.
+ */
 export function depthView(token: Hex, book: BookView, basis: bigint, nowMs: number, daa: bigint, levels = 50): DepthView {
   const side = (rows: BookView['asks'], s: 'sell' | 'buy') => {
     let cumAmount = 0n;
