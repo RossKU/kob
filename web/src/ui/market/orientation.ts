@@ -33,8 +33,8 @@ import {
 
 // ------------------------------------------------------------------------------- remembered choice
 
-// The prefix carries a version. The stored choice is read afresh and the keys of the earlier
-// prefix are removed once, so a browser that cached the old labelling starts clean.
+// The prefix carries a version. The keys of the earlier prefix are removed once, so a stored
+// choice always reads in the current labelling.
 const KEY_PREFIX = 'kob.flip.v2:';
 const LEGACY_PREFIX = 'kob.flip.v1:';
 
