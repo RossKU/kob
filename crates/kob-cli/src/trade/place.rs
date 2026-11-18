@@ -859,7 +859,7 @@ pub fn env_sized(
 
 /// The decimals of an unlisted token that come from the indexer, against the scales of the orders
 /// the node confirms (`book_check`). The indexer reading every amount and price with decimals the
-/// orders on the node do not use is refused (security review 2026-11-17, M12).
+/// orders on the node do not use is refused.
 fn decimals_check(a: &TokenMarket, v: &super::book_check::VerifiedBook) -> Result<Option<Issue>, String> {
     let other = v.other_scales.iter().max_by_key(|(s, n)| (**n, std::cmp::Reverse(**s)));
     if let Some((s, n)) = other.filter(|(_, n)| **n > v.confirmed) {
