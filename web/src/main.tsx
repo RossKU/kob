@@ -1,5 +1,6 @@
-// Entry point: config -> language -> boot screen -> services (wasm engine, SDK, node, indexer, registry) -> providers -> App.
-// A failure anywhere in that chain shows a clear error page with details and a retry (never a blank page).
+// Entry point. The chain is config, language, boot screen, services (wasm engine, SDK, node,
+// indexer, registry), providers, then App. A failure anywhere in that chain shows a clear error
+// page with details and a retry, never a blank page.
 import { render } from 'preact';
 import './styles.css';
 import { App } from './app/App';
@@ -15,14 +16,15 @@ import { installTranslationSafety } from './app/translation-safe';
 import { frameGuardOn, isFramed, showFrameGuard } from './app/mirror';
 import { t } from './i18n';
 
-// before anything renders: the only Trusted Types policy (csp.mjs), letting just the chart's attribution logo reach a DOM sink
+// before anything renders: the only Trusted Types policy (csp.mjs), letting just the chart's
+// attribution logo reach a DOM sink
 installTrustedTypesPolicy();
 // a machine-translated page must not keep showing stale texts (app/translation-safe.ts)
 installTranslationSafety();
 
 declare global {
   interface Window {
-    /** test hook, present only when `features.test` is on */
+    /** Test hook, present only when `features.test` is on. */
     __kob?: { services: Services };
   }
 }
@@ -46,7 +48,7 @@ async function boot(): Promise<void> {
     const { config, warnings, storedOverrides } = await loadConfigWithWarnings();
     applyNetworkToHead(config.network);
     const services = await createServices(config);
-    // amounts of tokens in sentences: whole tokens, as the pages show them (never "base units")
+    // Amounts of tokens in sentences are whole tokens, as the pages show them, never "base units".
     installTokenAmounts(services.registry, config.network);
     if (config.features.test) window.__kob = { services };
     render(<Root services={services} warnings={warnings} storedOverrides={storedOverrides} />, root);
@@ -56,7 +58,8 @@ async function boot(): Promise<void> {
   }
 }
 
-// a mirror whose host cannot send frame-ancestors (app/mirror.ts): inside a frame, the page shows only a notice and a link to open it on its own
+// A mirror whose host cannot send frame-ancestors (app/mirror.ts). Inside a frame, the page shows
+// only a notice and a link to open it on its own.
 if (frameGuardOn() && isFramed()) {
   initTheme();
   showFrameGuard(document, root, location.href, { title: t('shell.frame.title'), body: t('shell.frame.body'), link: t('shell.frame.link') });
