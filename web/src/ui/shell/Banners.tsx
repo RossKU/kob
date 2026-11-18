@@ -8,7 +8,10 @@ import { useSystemStatus } from './StatusProvider';
 import { useStandalone } from './standalone';
 import { statusEntries, type StatusEntry } from './status-entries';
 
-/** The one banner of the shell: a wallet on another network than the app's stops the user from signing, so it stays on the page as one line (a press unfolds it). */
+/**
+ * The one banner of the shell. A wallet on another network than the app's stops the user from
+ * signing, so the banner stays on the page as one line, and a press unfolds it.
+ */
 export function NetworkMismatchBanner() {
   const { config } = useServices();
   const wallet = useWallet();
@@ -43,7 +46,10 @@ export function useStatusEntries(warnings: readonly ConfigWarning[], storedOverr
   });
 }
 
-/** One entry of the current status. `onNavigate`: a link to a page of the app was followed. */
+/**
+ * One entry of the current status. `onNavigate` is called when a link to a page of the app was
+ * followed.
+ */
 export function StatusBanner(props: { entry: StatusEntry; onNavigate: () => void }) {
   const { standalone } = useServices();
   const e = props.entry;

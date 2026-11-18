@@ -14,7 +14,10 @@ const nodeLevelOf = (node: SystemStatus['node']): Level => (node.reachable === u
 const nodeTextOf = (node: SystemStatus['node']): string => (node.reachable === undefined ? t('shell.status.nodeChecking') : node.reachable ? t('shell.status.nodeOk') : t('shell.status.nodeDown'));
 const indexerTextOf = (a: SystemStatus['indexer']['assessment']): string => t(`shell.health.${a.code}`, { lag: formatLag(a.lagSeconds) });
 
-/** Whether trading works and how (trading-status.ts), from the live status, the standalone mode and the failover; with the line that says it. */
+/**
+ * Whether trading works and how (trading-status.ts), from the live status, the standalone mode and
+ * the failover, with the line that says it.
+ */
 export function useTradingStatus(): { level: TradingLevel; code: TradingCode; text: string } {
   const { node, indexer } = useSystemStatus();
   const { standalone, failover } = useServices();
@@ -27,9 +30,10 @@ export function useTradingStatus(): { level: TradingLevel; code: TradingCode; te
 }
 
 /**
- * The status lines: whether trading works and how, node reachability + virtual DAA and indexer health (state, lag). Each text that changes is the only
- * content of its own element (app/translation-safe.ts: a machine-translated page would otherwise keep showing the first value). In the status popover of the
- * header and in the phone menu.
+ * The status lines: whether trading works and how, node reachability with the virtual DAA, and
+ * indexer health (state, lag). Each text that changes is the only content of its own element
+ * (app/translation-safe.ts), as a machine-translated page would otherwise keep showing the first
+ * value. They are in the status popover of the header and in the phone menu.
  */
 export function StatusLines() {
   const { node, indexer } = useSystemStatus();
@@ -56,9 +60,13 @@ export function StatusLines() {
 }
 
 /**
- * What the status dot inside the header's network chip says: whether trading works (trading-status.ts: green the indexer, yellow the node / a backup /
- * lagging / switching, red the node unreachable) as its level, the node and indexer levels and the indexer's code for the tests and the page's own
- * scripts, and the one-line summary for its tooltip. While it is not green the bell keeps one calm line of it (status-entries.ts).
+ * What the status dot inside the header's network chip says.
+ * - Whether trading works (trading-status.ts) as its level: green is the indexer, yellow is the
+ *   node, a backup, lagging or switching, and red is the node unreachable.
+ * - The node and indexer levels, and the indexer's code, for the tests and the page's own scripts.
+ * - The one-line summary for its tooltip.
+ *
+ * While it is not green the bell keeps one calm line of it (status-entries.ts).
  */
 export interface StatusSummary {
   level: Level;

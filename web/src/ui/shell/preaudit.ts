@@ -1,6 +1,8 @@
-// The open review notice (its names here keep the older word, so a dismissal stays remembered): the specification is not final and no review can show the code is free of bugs, so the app says so on every page (footer, header badge) and, until dismissed,
-// in the current status of the bell. A dismissal is remembered in localStorage; blocked storage never breaks the page (the notice then shows again on the
-// next visit, which is the safe direction).
+// The open review notice. Its names here keep the word `preaudit`, so a stored dismissal stays
+// remembered. The specification is not final and no review can show the code is free of bugs, so
+// the app says so on every page (footer, header badge) and, until dismissed, in the current status
+// of the bell. A dismissal is remembered in localStorage. Blocked storage never breaks the page.
+// The notice then shows again on the next visit, which is the safe direction.
 import { useState } from 'preact/hooks';
 
 export const PREAUDIT_KEY = 'kob.preAudit.dismissed.v1';
@@ -17,7 +19,9 @@ function defaultStore(): Store | null {
   }
 }
 
-/** True when the visitor dismissed the notice before. Any storage failure counts as "not dismissed". */
+/**
+ * True when the visitor dismissed the notice before. Any storage failure counts as "not dismissed".
+ */
 export function isPreAuditDismissed(store: Store | null = defaultStore()): boolean {
   try {
     return store?.getItem(PREAUDIT_KEY) === '1';
@@ -26,7 +30,10 @@ export function isPreAuditDismissed(store: Store | null = defaultStore()): boole
   }
 }
 
-/** Remembers the dismissal; returns false when the storage refused (the notice is still hidden for this page view). */
+/**
+ * Remembers the dismissal. It returns false when the storage refused, and the notice is then still
+ * hidden for this page view.
+ */
 export function dismissPreAudit(store: Store | null = defaultStore()): boolean {
   try {
     if (!store) return false;
