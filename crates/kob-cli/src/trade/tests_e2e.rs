@@ -475,8 +475,12 @@ fn cancel_take_and_refund() {
     assert_eq!(run(actions, w.args(0x22, &format!("{} --amount 0.5TST --max-price 3KAS --token {TOKEN_HEX} --yes", to_hex(&a)))), 1);
     // An amount that does not read, with no unit, is a usage error with code 2, as in `place`.
     assert_eq!(run(actions, w.args(0x22, &format!("{} --amount 4 --max-price 3KAS --token {TOKEN_HEX} --yes", to_hex(&a)))), 2);
-    assert_eq!(run(actions, w.args(0x22, "not-an-id --amount 4TST --max-price 3KAS --token {TOKEN_HEX} --yes")), 2);
-    assert_eq!(run(actions, w.args(0x22, &format!("{} --max-price 3KAS --token {TOKEN_HEX} --yes", to_hex(&a)))), 2, "--amount is required");
+    assert_eq!(run(actions, w.args(0x22, &format!("not-an-id --amount 4TST --max-price 3KAS --token {TOKEN_HEX} --yes"))), 2);
+    assert_eq!(
+        run(actions, w.args(0x22, &format!("{} --max-price 3KAS --token {TOKEN_HEX} --yes", to_hex(&a)))),
+        2,
+        "--amount is required"
+    );
     // The maker cancels the ask, and the custody and the KAS come back.
     assert_eq!(run(crate::trade::actions::run_cancel, w.args(0x11, &to_hex(&a))), 1, "no --yes: refused");
     assert_eq!(run(crate::trade::actions::run_cancel, w.args(0x11, &format!("{} --yes", to_hex(&a)))), 0);
@@ -1529,7 +1533,13 @@ fn every_trading_command_refuses_a_fee_above_the_ceiling_unless_allowed() {
     let cases: Vec<Case> = vec![
         ("place", crate::trade::place::run, 0x11, "limit --token TST --side sell --amount 10TST --price 3KAS".into(), ".place.json"),
         ("replace", crate::trade::actions::run_replace, 0x11, format!("{} --price 3.1KAS", to_hex(&a)), ".replace.json"),
-        ("take", crate::trade::actions::run_take, 0x22, format!("{} --amount 4TST --max-price 4KAS --token {TOKEN_HEX}", to_hex(&a)), ".take.json"),
+        (
+            "take",
+            crate::trade::actions::run_take,
+            0x22,
+            format!("{} --amount 4TST --max-price 4KAS --token {TOKEN_HEX}", to_hex(&a)),
+            ".take.json",
+        ),
         ("cancel", crate::trade::actions::run_cancel, 0x11, to_hex(&c), ".cancel.json"),
         ("send", crate::trade::actions::run_send, 0x11, format!("KAS {to} 2.5KAS"), ".json"),
     ];
