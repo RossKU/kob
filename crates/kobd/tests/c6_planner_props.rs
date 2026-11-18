@@ -1,18 +1,22 @@
-//! C6 planner property tests: random global books (two tokens of different programs, plain orders of both,
-//! pair orders A / B (the three kinds, both sides, including pair market auctions), market orders, stops, if-done entries, TWAP / DCA, bids in every
-//! delivery mode (mode-1 bought-custodies, mode-2 receive UTXOs and tips), makers with several
-//! orders), and hostile variants of them. For every tick:
+//! C6 planner property tests: random global books and hostile variants of them. A book has two
+//! tokens of different programs, plain orders of both, pair orders A / B (the three kinds, both
+//! sides, including pair market auctions), market orders, stops, if-done entries, TWAP / DCA, bids
+//! in every delivery mode (mode-1 bought-custodies, mode-2 receive UTXOs and tips), and makers with
+//! several orders. For every tick:
 //!
-//! * no panic (the tick runs under `catch_unwind`);
-//! * every prepared transaction passed the rusty-kaspa v2.1.0 engine;
-//! * every prepared transaction passes the C6 value oracle (`kob-tests/tests/c6/oracle.rs`): no maker receives less
-//!   than its terms at its worst all-in price, the supply of every token is conserved, every order continuation keeps
-//!   its template and immutable terms, one input per covenant id;
-//! * the tick is deterministic: the same input gives the same transactions, and a permuted listing gives the same
-//!   transactions (the planner ranks by price, tip and age, never by listing position).
+//! * No panic (the tick runs under `catch_unwind`).
+//! * Every prepared transaction passed the rusty-kaspa v2.1.0 engine.
+//! * Every prepared transaction passes the C6 value oracle (`kob-tests/tests/c6/oracle.rs`): no
+//!   maker receives less than its terms at its worst all-in price, the supply of every token is
+//!   conserved, every order continuation keeps its template and immutable terms, one input per
+//!   covenant id.
+//! * The tick is deterministic: the same input gives the same transactions, and a permuted listing
+//!   gives the same transactions (the planner ranks by price, tip and age, never by listing
+//!   position).
 //!
-//! `KOB_C6_BOOKS` (default 40) books, `KOB_C6_SEED`; `KOB_C6_DUMP=<dir>` writes every prepared builder request there
-//! (JSON `Action`s: planner-shaped seeds for the C6 mutation fuzzer, `KOB_C6_EXTRA_SEEDS`).
+//! `KOB_C6_BOOKS` (default 40) books, `KOB_C6_SEED`; `KOB_C6_DUMP=<dir>` writes every prepared
+//! builder request there (JSON `Action`s: planner-shaped seeds for the C6 mutation fuzzer,
+//! `KOB_C6_EXTRA_SEEDS`).
 
 #[path = "matcher_common/mod.rs"]
 mod common;

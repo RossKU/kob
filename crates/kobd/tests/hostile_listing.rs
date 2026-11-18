@@ -1,6 +1,8 @@
-//! Regression: an order whose numbers the covenant refuses is indexed (status, cancel) but never listed.
+//! Regression: an order whose numbers the covenant refuses is indexed (status, cancel) but not
+//! listed.
 //!
-//! `slope != 0` with `decayStep = 0` decodes and used to be listed; the matcher then divided by zero and the process died.
+//! `slope != 0` with `decayStep = 0` decodes but must not be listed: the matcher would divide by
+//! zero and the process would die.
 
 mod common;
 
@@ -55,8 +57,9 @@ async fn a_decay_step_zero_ask_is_indexed_but_not_listed() {
 /// Regression: a bid whose budget the covenant can never evaluate (a negative tip, or a scale above `10^9` where `quoteOf`
 /// overflows) is indexed with no buying power, at once, and never listed.
 ///
-/// The buying power of such a bid used to scan down one base unit at a time from about `10^18`: the indexer hung on the
-/// placement (and again after every restart), and so did every reader of the bid.
+/// The buying power of such a bid is not scanned down one base unit at a time from about `10^18`:
+/// that would hang the indexer on the placement (and again after every restart), and every reader
+/// of the bid.
 #[tokio::test]
 async fn a_bid_whose_budget_never_evaluates_is_indexed_at_once_and_not_listed() {
     let c = Ctx::new();

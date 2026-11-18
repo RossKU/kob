@@ -1,5 +1,6 @@
-//! Audit 2026-10-30 I7 (b): a declaration section rode on any transaction that was relevant to KOB, so a token transfer or stray send
-//! carrying a 16 KiB `0x00{..}` payload put those 16 KiB into the permanent record log for the price of its fee. The section is logged
+//! Regression: a declaration section must not be logged just because it rode on a transaction
+//! relevant to KOB. A token transfer or stray send carrying a 16 KiB `0x00{..}` payload must not
+//! put those 16 KiB into the permanent record log for the price of its fee. The section is logged
 //! only when it binds; the payload stays a database candidate like any other.
 
 mod common;

@@ -1,10 +1,10 @@
 //! Regression: a fill costs the indexer the same however many fills its order already had.
 //!
-//! Every spend refreshed the order's `order_state` row by summing all its fill events, and the tip
-//! read and the closing-event read walked all its UTXOs and events. A maker filling its own big ask
-//! one unit at a time thus cost the follower about two reads per earlier fill on every fill, which
-//! is quadratic in the fills. Now the filled amount is a running total, the tip is read through the
-//! partial index of the unspent UTXOs, and only a closed order reads its closing event.
+//! A spend must not refresh the order's `order_state` row by summing all its fill events, and the
+//! tip read and the closing-event read must not walk all its UTXOs and events: a maker filling its
+//! own big ask one unit at a time would cost the follower about two reads per earlier fill on every
+//! fill, which is quadratic in the fills. The filled amount is a running total, the tip is read
+//! through the partial index of the unspent UTXOs, and only a closed order reads its closing event.
 //!
 //! The work is counted in SQLite page reads of the writer connection, which are the same on every
 //! machine.

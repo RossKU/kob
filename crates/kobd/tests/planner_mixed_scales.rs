@@ -1,11 +1,14 @@
-//! Planner fuzz over books with mixed SCALES: orders of one token at scales 1, 100, 1,000, 1,000,000 and 10^9 base units per
-//! whole token sit in separate books of one market (their prices are per whole token, comparable only at the same scale);
-//! amounts, minimum fills and `maxFill` caps in base units (whole tokens or not, minimum fills from 1 base unit to 7 whole
-//! tokens), a wide tip range, many equal prices, larger books (up to 40 orders), IOC / FOK and TWAP intervals, on every KCC-20
-//! program. Every plan must be engine-valid and satisfy `check_invariants` (no partial FOK, no stray, one input per covenant
-//! id, at most 8 token inputs, every fill within its quantity rules, profit >= 1), AND the compute-budget table must be exact
-//! for every shape it produces: the one-unit slack safety net of the lowering never fires (it fired for 0.6-1% of the books
-//! of the v2.6 lot-geometry variant of this fuzz on Kcc20Ref4x5 before the table was generated over mixed batches).
+//! Planner fuzz over books with mixed scales.
+//!
+//! Orders of one token at scales 1, 100, 1,000, 1,000,000 and 10^9 base units per whole token sit
+//! in separate books of one market (their prices are per whole token, comparable only at the same
+//! scale). Amounts, minimum fills and `maxFill` caps are in base units (whole tokens or not,
+//! minimum fills from 1 base unit to 7 whole tokens), with a wide tip range, many equal prices,
+//! larger books (up to 40 orders), IOC / FOK and TWAP intervals, on every KCC-20 program. Every
+//! plan must be engine-valid and satisfy `check_invariants` (no partial FOK, no stray, one input
+//! per covenant id, at most 8 token inputs, every fill within its quantity rules, profit >= 1), and
+//! the compute-budget table must be exact for every shape it produces: the one-unit slack safety
+//! net of the lowering never fires.
 //!
 //! `KOB_MIXED_ITERS` (default 200), `KOB_MIXED_SEED`.
 
