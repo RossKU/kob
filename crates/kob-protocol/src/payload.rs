@@ -2095,7 +2095,9 @@ mod tests {
             assert!(check_order_state(fam, TemplateId::KobBid, &bad, true).is_err());
             assert!(check_order_state(fam, TemplateId::KobBid, &bad, false).is_err());
         }
-        let topup = span(&|b| (b.mode, b.recv_threshold, b.topup_tip) = (2, 1, b.delivery_carrier));
+        let topup = span(&|b| (b.mode, b.recv_threshold, b.topup_tip) = (2, 1, crate::state::TOPUP_TIP_MAX));
+        let over = span(&|b| (b.mode, b.recv_threshold, b.topup_tip) = (2, 1, crate::state::TOPUP_TIP_MAX + 1));
+        assert!(check_order_state(fam, TemplateId::KobBid, &over, true).is_err());
         assert!(check_order_state(fam, TemplateId::KobBid, &topup, true).is_ok());
     }
 }
