@@ -132,7 +132,8 @@ export default {
   'issue.pending.title': 'Creation of {ticker} not finished',
   'issue.pending.body': "The details of {ticker} were signed{sent} but the token itself was not created. The KAS of that first step is still in your wallet. Send the creation again (no new signature), or keep the KAS and forget it.",
   'issue.pending.sent': ' and recorded on chain',
-  // the genesis is not signed yet (the second approval was declined, or the page closed): the wallet asks once more
+  // The genesis is not signed yet, because the second approval was declined or the page closed. The
+  // wallet asks once more.
   'issue.pending.bodyUnsigned': "The details of {ticker} are recorded on chain but the token itself was not created. Finish the creation (your wallet asks once more), or keep the KAS and forget it.",
   'issue.pending.bodyUnsent': "The details of {ticker} were signed but may not have reached the network, and the token itself was not created. Finish the creation (it is sent again, then your wallet asks once more), or keep the KAS and forget it.",
   'issue.pending.window': "Finish it within 72 hours of the first step: after that, other apps may no longer show the token's name, ticker and decimals.",

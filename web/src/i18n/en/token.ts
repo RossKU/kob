@@ -1,4 +1,5 @@
-// How a token is named and its amounts are said where the facts are the chain's (app/token-display.ts): never "base units".
+// How a token is named and its amounts are said where the facts are the chain's
+// (app/token-display.ts). Never "base units".
 export default {
   'token.note.declared': 'declared, bound by ancestry',
   'token.note.declaredTitle': "Its name, ticker and decimals ({decimals}) are a declaration recorded on chain (KCC-23) and bound to the token by ancestry: it sits in a transaction whose output the token's creation spent, so whoever funded that coin chose it, which is not always the creator. Nobody has checked it, and no list has reviewed this token.",

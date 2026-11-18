@@ -1,7 +1,8 @@
-// Builder (kob-wasm / kob-protocol) and node refusals in the user's words (C5 R-3). The raw English text of a refusal is a developer message
-// ("token-holding order: custody token UTXO required"): the UI shows a translated sentence for the refusals a wallet user can meet and keeps
-// the raw text behind "Details" (kit `RawDetails`). Unknown refusals get a generic sentence; nothing raw is shown inline.
-// DOM-free: runs in node tests.
+// Builder (kob-wasm and kob-protocol) and node refusals in the user's words. The raw English text
+// of a refusal is a developer message, such as "token-holding order: custody token UTXO required".
+// The UI shows a translated sentence for the refusals a wallet user can meet and keeps the raw text
+// behind "Details" (kit `RawDetails`). Unknown refusals get a generic sentence, and nothing raw is
+// shown inline. The module is DOM-free and runs in node tests.
 import { t, type Params } from './index';
 
 interface Rule {
@@ -48,8 +49,9 @@ export function buildErrorText(raw: string): string {
 }
 
 /**
- * Finding codes whose param carries a raw builder / node text, and which param: the sentence gets the translated `buildErrorText` in its
- * place and the raw text is shown behind "Details".
+ * Finding codes whose param carries a raw builder or node text, and which param it is. The
+ * sentence gets the translated `buildErrorText` in its place, and the raw text is shown behind
+ * "Details".
  */
 export const RAW_PARAM: Readonly<Record<string, string>> = {
   BUILD_REJECTED: 'reason',
@@ -65,7 +67,10 @@ export function rawOf(issue: { code: string; message: string; params?: Params })
   return v !== undefined ? String(v) : issue.message;
 }
 
-/** The finding with its raw param replaced by the translated sentence (for display; `rawOf` of the original goes behind "Details"). */
+/**
+ * The finding with its raw param replaced by the translated sentence, for display. `rawOf` of the
+ * original goes behind "Details".
+ */
 export function withoutRaw<I extends { code: string; message: string; params?: Params }>(issue: I): I {
   const p = RAW_PARAM[issue.code];
   const raw = rawOf(issue);

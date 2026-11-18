@@ -1,10 +1,13 @@
-// Findings the user can see: planner catalogues (common-issues.ts, cond-issues.ts), the pre-sign decoder (decode.ts), cancel / refund planners
-// (cancel.ts), the issuance form (issue.ts), the token registry, wallet and node errors. Key = `issues.<code>`.
+// Findings the user can see. They come from the planner catalogues (common-issues.ts,
+// cond-issues.ts), the pre-sign decoder (decode.ts), the cancel and refund planners (cancel.ts),
+// the issuance form (issue.ts), the token registry, and wallet and node errors. The key is
+// `issues.<code>`.
 //
-// Placeholders are plain `{name}`: `issueText` (issue-text.ts) pre-formats the params (`{x:kas}` sompi -> "1.5 KAS", token amounts, direction words,
-// shortened ids) before they reach the sentence. `issues-coverage.test.ts` fails when a code of any catalogue has no key here or in ja.
+// Placeholders are plain `{name}`. `issueText` (issue-text.ts) pre-formats the params before they
+// reach the sentence. That covers `{x:kas}` sompi as "1.5 KAS", token amounts, direction words and
+// shortened ids. `issues-coverage.test.ts` fails when a code of any catalogue has no key here.
 export default {
-  // ================================================================ formatting helpers (used by issue-text.ts)
+  // Formatting helpers (used by issue-text.ts).
   'issues.where.input': 'Input {n}: ',
   'issues.where.output': 'Output {n}: ',
   'issues.term.below': 'below',
@@ -20,7 +23,7 @@ export default {
   'issues.dur.m': '{m} min',
   'issues.dur.lt': 'less than a minute',
 
-  // ================================================================ order planners: shared catalogue (ISSUE_CATALOG)
+  // Order planners: the shared catalogue (ISSUE_CATALOG).
   'issues.INTENT_UNKNOWN_TYPE': 'Unknown order type "{type}".',
   'issues.SIDE_INVALID': 'This order type cannot be placed on the {side} side.',
   'issues.AMOUNT_NOT_POSITIVE': 'Enter an amount greater than zero.',
@@ -65,7 +68,7 @@ export default {
   'issues.TAKE_NOW': 'Your limit crosses the book: it fills now from {orders} resting order(s) at their prices. No executor; you pay only the network fee.',
   'issues.PRICE_AGGRESSIVE_VS_MARKET': 'Your price is {percent}% through the market ({reference}). Check for a typing error.',
   'issues.PRICE_FAR_FROM_MARKET': 'Your price is {percent}% from the market ({reference}): unlikely to fill soon.',
-  // the book is empty: the reference is the last trade price (finding param basis = 'last')
+  // The book is empty, so the reference is the last trade price (finding param basis = 'last').
   'issues.last.PRICE_AGGRESSIVE_VS_MARKET': 'Your price is {percent}% through the last trade price ({reference}). Check for a typing error.',
   'issues.last.PRICE_FAR_FROM_MARKET': 'Your price is {percent}% from the last trade price ({reference}): unlikely to fill soon.',
   'issues.GUARDS_UNAVAILABLE': "Could not read the token's guard data; try again in a moment.",
@@ -89,7 +92,7 @@ export default {
   'issues.BUILD_REJECTED': 'The protocol refused this order: {reason}',
   'issues.PLAN_MISMATCH': 'The built transaction does not match the planned order ({reason}). Not signing.',
 
-  // ================================================================ order planners: conditional catalogue (COND_ISSUE_CATALOG)
+  // Order planners: the conditional catalogue (COND_ISSUE_CATALOG).
   'issues.COND_LEGS_MISSING': 'A conditional order needs a take-profit or a stop.',
   'issues.COND_TP_STOP_ORDER': 'The take-profit must be {direction} the stop.',
   'issues.COND_STOP_LIMIT_BEYOND_STOP': 'A {side} stop-limit price must not be {direction} the stop.',
@@ -121,7 +124,7 @@ export default {
   'issues.COND_PREFUND_SHORT': 'The prefund does not cover the worst buy-back: needs {needed} per token, you gave {given}.',
   'issues.COND_REPEAT_COUNT_INVALID': 'The repeat count must be at least 1 (no repeat: plain IFD).',
 
-  // ================================================================ pre-sign screen (SIGNING_ISSUE_CODES of decode.ts)
+  // Pre-sign screen (SIGNING_ISSUE_CODES of decode.ts).
   // blocking
   'issues.malformed-built': 'Malformed transaction: inputs, signing plans and roles do not match. Do not sign it.',
   'issues.recover-failed': 'A placement record does not verify: the orders this transaction creates cannot be trusted.',
@@ -187,7 +190,7 @@ export default {
   'issues.expected-delivery': 'An order\'s delivery differs from what you chose ({fields}). Not signing.',
   'issues.bought-claimed': 'Input {input}: the order\'s bought tokens are claimed; the order continues at output {output}.',
 
-  // ================================================================ wallet-popup notices (describeInputsForWallet)
+  // Wallet-popup notices (describeInputsForWallet).
   'issues.walletnotice.blind-tokens': 'Your wallet cannot show token amounts, order prices or where tokens go. Check this screen, not the wallet popup.',
   'issues.walletnotice.kasware-spend': 'KasWare shows KAS amounts and a generic "Spend" output, no token amount and no owner change.',
   'issues.walletnotice.kaspire-covenant': 'Kaspire warns about a covenant or non-standard input it cannot verify: expected here, and it says nothing about tokens.',
@@ -196,7 +199,7 @@ export default {
   'issues.walletnotice.covenant-inputs-unsigned': '{inputs} covenant or token input(s) are released by their scripts: the wallet does not sign them, but they still move.',
   'issues.walletnotice.no-signature': 'This transaction needs no wallet signature: the contracts authorise it themselves.',
 
-  // ================================================================ cancel / cancel-replace / refund (cancel.ts)
+  // Cancel, cancel-replace and refund (cancel.ts).
   'issues.cancel.build-failed': 'The transaction could not be built. Details: {message}',
   'issues.cancel.custody-missing': 'The custody token UTXO of this order is unknown. Refresh and try again.',
   'issues.cancel.prefund-missing': 'The prefund custody (second token UTXO) of this order is unknown. Refresh and try again.',
@@ -241,7 +244,7 @@ export default {
   'issues.snapshot.node-mismatch': 'The node does not confirm this order\'s UTXOs (the indexer data differs). Nothing was built.',
   'issues.snapshot.old-template': 'Placed with an older contract version this app cannot build for.',
 
-  // ================================================================ token issuance form (issue.ts)
+  // Token issuance form (issue.ts).
   'issues.name.empty': 'Enter a token name.',
   'issues.name.too_long': 'The name is at most {max} characters.',
   'issues.name.bad_chars': 'The name must not contain control, zero-width or direction-changing characters.',
@@ -299,7 +302,7 @@ export default {
   'issues.maker.invalid': 'The wallet key is not a valid 32-byte public key. Reconnect your wallet.',
   'issues.funds.insufficient': 'Not enough KAS: the issuance locks {need} as carriers in the token outputs (returned when the tokens are spent or consolidated) and also needs the network fee. Your wallet has {have} spendable.',
 
-  // ================================================================ token registry
+  // Token registry.
   'issues.json': 'The token registry is not valid JSON ({path}).',
   'issues.unknown-field': 'The token registry contains a field this app does not know ({path}).',
   'issues.wrong-type': 'A value in the token registry has the wrong type ({path}).',
@@ -335,7 +338,7 @@ export default {
   'issues.verify.decimals-mismatch': 'The indexer reports different decimals.',
   'issues.verify.scale-mismatch': 'The indexer lists another price scale than the token decimals give.',
 
-  // ================================================================ wallet and signing flow
+  // Wallet and signing flow.
   'issues.wallet.rejected': 'You declined the request in your wallet. Nothing was sent.',
   'issues.wallet.timeout': 'The wallet did not answer in time: check it for a pending request and try again.',
   'issues.wallet.no-signature': 'No valid signature from the wallet; nothing was sent. Try another wallet or update this one.',
@@ -372,7 +375,8 @@ export default {
   'issues.node.other': 'The node reported an error: {reason}',
 
   'issues.CARRIER_BELOW_FLOOR': 'The carrier ({carrier}) is below {floor}, the minimum for this token output.',
-  // ---- pair orders (token/token A/B: prices {touch} / {reference} / ... in B per whole A, {ticker} names the token a sentence is about)
+  // Pair orders (token/token A/B). Prices {touch}, {reference} and so on are in B per whole A, and
+  // {ticker} names the token a sentence is about.
   'issues.PAIR_SAME_TOKEN': 'A pair needs two different tokens.',
   'issues.PAIR_NOTIONAL_TOO_LARGE': "The order value in {ticker} is too large for the protocol: lower the amount or the price.",
   'issues.PAIR_MARKETABLE_AUCTION': 'Your limit crosses the pair book: it fills immediately as a taker, auctioning from {touch} {ticker} per token to your limit; any rest stays at your limit.',

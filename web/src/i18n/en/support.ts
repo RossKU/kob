@@ -1,4 +1,6 @@
-// The Support page (#/support, src/ui/support/SupportPage.tsx). Written for mainnet on every deployment: the donation address is a mainnet one. The contributors' titles are data, in support-model.ts.
+// The Support page (#/support, src/ui/support/SupportPage.tsx). It is written for mainnet on every
+// deployment, and the donation address is a mainnet one. The contributors' titles are data in
+// support-model.ts.
 export default {
   'support.title': 'Support',
   'support.volunteers': 'KOB is built and run by volunteers. If it is useful to you and you would like to help, you can send a donation to the address below.',

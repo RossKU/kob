@@ -1,5 +1,5 @@
 export default {
-  // one short line in front of a long explanation (the full text sits behind "Learn more")
+  // One short line in front of a long explanation. The full text sits behind "Learn more".
   'settings.learnMore': 'Learn more',
   'settings.key.short': 'Sign with a key held in this tab instead of a wallet extension.',
   'settings.icons.short': 'Names and icons come from a token list service, as declared by each creator.',
