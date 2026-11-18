@@ -1,6 +1,8 @@
-// "Find a token you created earlier" (Settings > Token tracker): the issuance outputs of a token created before its genesis named their states
-// (docs/spec/token-metadata.md, 3) are known to the browser that created them and to nobody else. The issuer can say what the state is (the amount
-// the creation gave their key), and the node confirms it: the script of the state either holds the output or it does not.
+// "Find a token you created earlier" (Settings > Token tracker). The issuance outputs of a token
+// created before its genesis named their states (docs/spec/token-metadata.md, 3) are known to the
+// browser that created them and to nobody else. The issuer can say what the state is, which is the
+// amount the creation gave their key, and the node confirms it. The script of the state either
+// holds the output or it does not.
 import type { TokenTracker, TrackedToken } from '../../data/token-tracker';
 import { loadDeclaration, type DeclaredToken } from '../../data/token-declarations';
 import type { Hex } from '../../kob/types';
@@ -9,20 +11,23 @@ import { tryParseUnits } from '../../kob/units';
 
 export type RecoverResult =
   | { kind: 'found'; found: TrackedToken[] }
-  /** `id`: not a covenant id; `amount`: not an amount of the token's decimals; `decimals`: the token declares none, ask for them; `none`: the node holds no such output */
+  /**
+   * `id`: not a covenant id. `amount`: not an amount of the token's decimals. `decimals`: the token
+   * declares none, so ask for them. `none`: the node holds no such output.
+   */
   | { kind: 'error'; code: 'id' | 'amount' | 'decimals' | 'none' };
 
 export interface RecoverDeps {
   kob: KobWasm;
   tracker: Pick<TokenTracker, 'recoverIssued'>;
-  /** where a declaration is asked for (the indexer) */
+  /** Where a declaration is asked for, which is the indexer. */
   declarations: Parameters<typeof loadDeclaration>[1];
   network: string;
-  /** looks the declaration up (tests); default: the indexer's, verified */
+  /** Looks the declaration up, replaced in tests. The default is the indexer's, verified. */
   declaration?: (id: Hex) => Promise<DeclaredToken | null>;
 }
 
-/** Decimals the user typed (a whole number 0..18), else null. */
+/** Decimals the user typed, as a whole number from 0 to 18, else null. */
 export function parseDecimalsInput(text: string): number | null {
   const s = text.trim();
   if (!/^\d{1,2}$/.test(s)) return null;
@@ -31,8 +36,9 @@ export function parseDecimalsInput(text: string): number | null {
 }
 
 /**
- * Looks for the issuance outputs of `idText` that gave `pubkey` `amountText` tokens (whole tokens, as the create form showed it). The decimals
- * are the token's declared ones, else `decimalsText` (asked when the token declares none).
+ * Looks for the issuance outputs of `idText` that gave `pubkey` `amountText` tokens, in whole
+ * tokens as the create form showed it. The decimals are the token's declared ones, else
+ * `decimalsText`, which is asked when the token declares none.
  */
 export async function recoverIssuedToken(d: RecoverDeps, pubkey: Hex, idText: string, amountText: string, decimalsText = ''): Promise<RecoverResult> {
   const id = idText.trim().toLowerCase();

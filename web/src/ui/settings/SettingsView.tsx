@@ -28,10 +28,13 @@ import { changedFields, changesServers, clearKobStorage, configWithForm, describ
 
 const reload = () => window.location.reload();
 
-/** A count in a sentence: the singular or the plural key (no "(s)"). */
+/** A count in a sentence, using the singular or the plural key. It never writes "(s)". */
 const tCount = (base: string, count: number) => t(`${base}.${count === 1 ? 'one' : 'other'}`, { count });
 
-/** A fold inside a card (the card's Save button stays below it): the header text is the toggle, the body stays in the DOM, hidden, like the kit's collapsible Section. */
+/**
+ * A fold inside a card. The card's Save button stays below it. The header text is the toggle, and
+ * the body stays in the DOM, hidden, like the kit's collapsible Section.
+ */
 function Fold(props: { title: string; children: ComponentChildren; 'data-testid'?: string }) {
   const [open, setOpen] = useState(false);
   return (
@@ -46,7 +49,8 @@ function Fold(props: { title: string; children: ComponentChildren; 'data-testid'
 
 function ConnectionSettings() {
   const { config, standalone } = useServices();
-  // the settings in force: the page's, then what this form saved (the standalone switches as the mode follows them now)
+  // The settings in force are the page's, then what this form saved. The standalone switches follow
+  // the mode as it is now.
   const [base, setBase] = useState<AppConfig>(() => (standalone ? { ...config, standalone: { ...config.standalone, ...standalone.prefs } } : config));
   const [form, setForm] = useState<SettingsForm>(() => formFromConfig(base));
   const [ack, setAck] = useState(false);
@@ -60,14 +64,16 @@ function ConnectionSettings() {
   };
   const err = (code: string | undefined) => (code ? t(`settings.error.${code}`) : null);
 
-  // servers saved in this browser (the banner on every page says so): one click gives the site's own back
+  // Servers saved in this browser, which the banner on every page says. One click gives the site's
+  // own back.
   const [storedServers, setStoredServers] = useState(() => storedServerFields(readSettings()));
   const save = () => {
     if (!v.ok) return;
     const ok = saveSettings(settingsPatch(v.clean, changes));
     setSaved(ok ? 'ok' : 'failed');
     setStoredServers(storedServerFields(readSettings()));
-    // the standalone switches apply at once (data/standalone.ts); saved, they also apply on the next visit
+    // The standalone switches apply at once (data/standalone.ts). Once saved, they also apply on
+    // the next visit.
     if (ok) standalone?.setPrefs({ manual: v.clean.standaloneManual, auto: v.clean.standaloneAuto, autoReturn: v.clean.standaloneAutoReturn });
     if (ok) setBase((b) => configWithForm(b, v.clean));
   };
@@ -161,7 +167,11 @@ function ConnectionSettings() {
   );
 }
 
-/** Everything for an operator or a power user, folded: the registry and its template hashes, the token tracker, the indexer cross-check (the servers are in the connection card, saved with its Save button). */
+/**
+ * Everything for an operator or a power user, folded: the registry and its template hashes, the
+ * token tracker and the indexer cross-check. The servers are in the connection card, saved with its
+ * Save button.
+ */
 function AdvancedSettings() {
   return (
     <Section title={t('settings.advanced.title')} collapsible defaultOpen={false} class="settings-advanced" data-testid="settings-advanced">
@@ -178,8 +188,9 @@ function AdvancedSettings() {
 }
 
 /**
- * The display currency (app/currency-pref.ts): KAS, or approximate USD for the values the viewer reads. Applies at once, kept in this browser; the order book, the
- * ticket and everything signed stay in KAS (the explanation says so).
+ * The display currency (app/currency-pref.ts), either KAS or approximate USD for the values the
+ * viewer reads. It applies at once and is kept in this browser. The order book, the ticket and
+ * everything signed stay in KAS, and the explanation says so.
  */
 function DisplayCurrencySettings() {
   const [currency, setCurrency] = useDisplayCurrency();
@@ -207,9 +218,11 @@ function DisplayCurrencySettings() {
 }
 
 /**
- * The default delivery of buy orders (kob/orders/delivery.ts): Collected (the default), Each fill or Top-up. Applies at once, kept in this browser;
- * the ticket's Advanced options pick another one per order. Below it, read-only, the Top-up receive threshold of each token this wallet set at its
- * first top-up order, with a reset (the next top-up order of the token sets it again from its price).
+ * The default delivery of buy orders (kob/orders/delivery.ts): Collected, which is the default,
+ * Each fill or Top-up. It applies at once and is kept in this browser. The ticket's Advanced
+ * options pick another one per order. Below it, read-only, is the Top-up receive threshold of each
+ * token this wallet set at its first top-up order, with a reset. The next top-up order of the token
+ * sets it again from its price.
  */
 function DeliverySettings() {
   const [choice, setChoice] = useDeliveryPref();
@@ -258,8 +271,10 @@ function DeliverySettings() {
 }
 
 /**
- * Token names and icons of the market list: where they come from and the viewer's two choices (on by default, per browser): load icons at all, and load
- * logos from the address a token's creator gave (the creator's site then sees the viewer's IP address; data/logos.ts).
+ * Token names and icons of the market list. It says where they come from and offers the viewer's
+ * two choices, both on by default and per browser. The first is to load icons at all. The second is
+ * to load logos from the address a token's creator gave, and the creator's site then sees the
+ * viewer's IP address (data/logos.ts).
  */
 function TokenIconsSettings() {
   const { config } = useServices();
@@ -279,11 +294,15 @@ function TokenIconsSettings() {
   );
 }
 
-/** The private key mode, now that the header has one Connect button: a desktop with an extension wallet reaches it here (a browser without one is taken to it by Connect). */
+/**
+ * The private key mode. The header has one Connect button, so a desktop with an extension wallet
+ * reaches it here. A browser without one is taken to it by Connect.
+ */
 function PrivateKeySettings() {
   const w = useWallet();
   const supported = visibilityCheckSupported();
-  // the GitHub Pages mirror (app/mirror.ts): no private key option, one line in its place says why
+  // On the GitHub Pages mirror (app/mirror.ts) there is no private key option, and one line in its
+  // place says why.
   if (!privateKeySigningAllowed()) {
     return (
       <Section title={t('settings.key.title')} data-testid="settings-private-key-section">
@@ -310,12 +329,12 @@ function Versions() {
   try {
     kobV = kob.version();
   } catch {
-    /* reported by the boot screen */
+    /* Reported by the boot screen. */
   }
   try {
     sdkV = (sdk as unknown as { version?: () => string }).version?.() ?? '?';
   } catch {
-    /* the SDK build may not expose it */
+    /* The SDK build may not expose it. */
   }
   return (
     <Section title={t('settings.versions.title')} data-testid="settings-versions">
@@ -395,7 +414,10 @@ function RegistrySummary() {
   );
 }
 
-/** A tracked token output's amount in whole tokens with its name (app/token-display.ts: also for a token the registry does not list, marked). */
+/**
+ * A tracked token output's amount in whole tokens with its name (app/token-display.ts). It also
+ * covers a token the registry does not list, marked.
+ */
 function TrackedAmount(props: { utxo: TrackedToken }) {
   const { registry, config } = useServices();
   const tk = displayToken(registry, config.network, props.utxo.tokenCovId)!;
@@ -414,7 +436,7 @@ function TrackerSettings() {
   const [rev, setRev] = useState(0);
   const [text, setText] = useState('');
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string; raw?: string } | null>(null);
-  // "Find a token you created earlier"
+  // "Find a token you created earlier".
   const [findId, setFindId] = useState('');
   const [findAmount, setFindAmount] = useState('');
   const [findDecimals, setFindDecimals] = useState('');
@@ -453,7 +475,7 @@ function TrackerSettings() {
         setFindMessage({ tone: 'error', text: t(key[r.code]) });
       }
     } catch (e) {
-      // a node or network failure: the plain sentence first, the raw text behind "Details"
+      // A node or network failure gets the plain sentence first and the raw text behind "Details".
       const raw = toError(e).message;
       setFindMessage({ tone: 'error', text: friendlyErrorText(raw), raw });
     } finally {

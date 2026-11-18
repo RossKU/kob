@@ -1,5 +1,6 @@
-// Settings form <-> stored settings (pure). The stored layer is validated again by config.ts (`saveSettings`), so this module only decides what
-// the form shows, which fields are invalid, what changed, and whether a change points the app at other servers.
+// Settings form <-> stored settings. This module is pure. The stored layer is validated again by
+// config.ts (`saveSettings`), so this module only decides what the form shows, which fields are
+// invalid, what changed, and whether a change points the app at other servers.
 import { parseNetwork, validateRegistryUrl, validateUrl, type AppConfig, type NetworkName } from '../../config';
 
 export interface SettingsForm {
@@ -9,15 +10,20 @@ export interface SettingsForm {
   registryUrl: string;
   kastle: boolean;
   priorityFee: boolean;
-  /** `fees.dynamic`: pay the node's current fee estimate per action instead of the relay minimum */
+  /**
+   * `fees.dynamic`: pay the node's current fee estimate per action instead of the relay minimum.
+   */
   dynamicFee: boolean;
-  /** standalone mode (data/standalone.ts): always on; fall back to it when the indexer is down; return to the indexer when it is back */
+  /**
+   * Standalone mode (data/standalone.ts): always on, fall back to it when the indexer is down, and
+   * return to the indexer when it is back.
+   */
   standaloneManual: boolean;
   standaloneAuto: boolean;
   standaloneAutoReturn: boolean;
 }
 
-/** The flags of the form that are saved as they are (no server, no validation). */
+/** The flags of the form that are saved as they are, with no server and no validation. */
 export type SettingsFlag = 'kastle' | 'priorityFee' | 'dynamicFee' | 'standaloneManual' | 'standaloneAuto' | 'standaloneAutoReturn';
 
 export type SettingsField = 'network' | 'indexerUrl' | 'nodeUrl' | 'registryUrl';
@@ -37,8 +43,9 @@ export const formFromConfig = (c: AppConfig): SettingsForm => ({
 });
 
 /**
- * The settings in force once `f` is saved: what the next change is measured against (a switch saved and then turned back is a change again; the standalone
- * switches apply at once, the rest on the next load).
+ * The settings in force once `f` is saved. The next change is measured against them, so a switch
+ * saved and then turned back is a change again. The standalone switches apply at once and the rest
+ * on the next load.
  */
 export const configWithForm = (c: AppConfig, f: SettingsForm): AppConfig => ({
   ...c,
@@ -54,11 +61,17 @@ export const configWithForm = (c: AppConfig, f: SettingsForm): AppConfig => ({
 export interface SettingsValidation {
   ok: boolean;
   errors: Partial<Record<SettingsField, SettingsErrorCode>>;
-  /** normalised values (trimmed URLs without a trailing slash); only meaningful when `ok` */
+  /**
+   * Normalised values, with trimmed URLs and no trailing slash. They are only meaningful when `ok`
+   * is set.
+   */
   clean: SettingsForm;
 }
 
-/** URL fields accept ws / wss / http / https (a node) or http / https (indexer, registry); '' clears the indexer and the node (SDK resolver). */
+/**
+ * URL fields accept ws / wss / http / https for a node and http / https for the indexer and
+ * registry. '' clears the indexer and the node, so the SDK resolver applies.
+ */
 export function validateSettings(f: SettingsForm): SettingsValidation {
   const errors: SettingsValidation['errors'] = {};
   const network = parseNetwork(f.network);
@@ -79,7 +92,7 @@ export function validateSettings(f: SettingsForm): SettingsValidation {
   };
 }
 
-/** Fields whose value differs from the running configuration (compared after normalisation). */
+/** Fields whose value differs from the running configuration, compared after normalisation. */
 export function changedFields(current: AppConfig, form: SettingsForm): (SettingsField | SettingsFlag)[] {
   const v = validateSettings(form).clean;
   const out: (SettingsField | SettingsFlag)[] = [];
@@ -96,13 +109,16 @@ export function changedFields(current: AppConfig, form: SettingsForm): (Settings
   return out;
 }
 
-/** A change of any server the app talks to (needs the "wrong data" acknowledgement before saving). */
+/**
+ * A change of any server the app talks to. It needs the "wrong data" acknowledgement before saving.
+ */
 export const changesServers = (fields: readonly string[]): boolean => fields.some((f) => f === 'indexerUrl' || f === 'nodeUrl' || f === 'registryUrl');
 
 /**
- * The object handed to `saveSettings` (network + URLs + Kastle, priority-fee and dynamic-fee flags; `features.test` can never be stored).
- * `only`: just these fields (`changedFields`): ticking a checkbox must not pin the deployment's servers in this browser, where a later change of the
- * site's own servers would no longer apply.
+ * The object handed to `saveSettings`: network, URLs and the Kastle, priority-fee and dynamic-fee
+ * flags. `features.test` can never be stored. `only` limits it to these fields (`changedFields`).
+ * Ticking a checkbox must not pin the deployment's servers in this browser, where a later change of
+ * the site's own servers would no longer apply.
  */
 export function settingsPatch(clean: SettingsForm, only?: readonly string[]): Record<string, unknown> {
   const all = {
@@ -127,25 +143,33 @@ export function settingsPatch(clean: SettingsForm, only?: readonly string[]): Re
 
 const SERVER_KEYS = ['network', 'indexerUrl', 'nodeUrl', 'registryUrl', 'extraIndexerUrls', 'allowQueryOverrides'] as const;
 
-/** The server fields this browser has saved (they override the site's own for every visit; the global banners name them). */
+/**
+ * The server fields this browser has saved. They override the site's own for every visit, and the
+ * global banners name them.
+ */
 export function storedServerFields(stored: unknown): string[] {
   if (!stored || typeof stored !== 'object') return [];
   return SERVER_KEYS.filter((f) => (stored as Record<string, unknown>)[f] !== undefined);
 }
 
-/** `saveSettings` patch that drops the saved network and servers: the site's own apply again after a reload. */
+/**
+ * The `saveSettings` patch that drops the saved network and servers, so the site's own apply again
+ * after a reload.
+ */
 export const resetServersPatch = (): Record<string, null> => Object.fromEntries(SERVER_KEYS.map((k) => [k, null]));
 
-// ------------------------------------------------------------------------------------------------ local data
+// Local data.
 
-/** Storage with enumerable keys (the browser's localStorage). */
+/** Storage with enumerable keys, such as the browser's localStorage. */
 export interface EnumerableStorage {
   readonly length: number;
   key(index: number): string | null;
   removeItem(key: string): void;
 }
 
-/** Every key this app owns (`kob.` prefix: settings, placement records, tracked tokens). */
+/**
+ * Every key this app owns, with the `kob.` prefix: settings, placement records and tracked tokens.
+ */
 export function kobStorageKeys(storage: Pick<EnumerableStorage, 'length' | 'key'>): string[] {
   const keys: string[] = [];
   for (let i = 0; i < storage.length; i++) {
@@ -155,7 +179,7 @@ export function kobStorageKeys(storage: Pick<EnumerableStorage, 'length' | 'key'
   return keys;
 }
 
-/** Removes every app key; returns them. Other sites' data (there is none on this origin) and unrelated keys are left alone. */
+/** Removes every app key and returns them. Unrelated keys are left alone. */
 export function clearKobStorage(storage: EnumerableStorage): string[] {
   const keys = kobStorageKeys(storage);
   for (const k of keys) storage.removeItem(k);

@@ -1,11 +1,15 @@
-// The wallet's delivery settings for buy orders (kob/orders/delivery.ts, bid-delivery-spec §10), kept per browser in localStorage:
-// - `kob.delivery`: the default delivery of buy orders (`collected`, `topup`; absent: Each fill). Chosen under Settings, applies at once; the ticket's
-//   Advanced options can still pick another one per order.
-// - `kob.delivery.threshold.<wallet key>.<token covenant id>.<extension commitment>`: the receive threshold of Top-up for that token, set at the
-//   wallet's first top-up order of it and reused by every later one. It changes only when the user resets it (Settings).
+// The wallet's delivery settings for buy orders (kob/orders/delivery.ts, bid-delivery-spec §10),
+// kept per browser in localStorage.
+// - `kob.delivery` is the default delivery of buy orders (`collected` or `topup`, and Each fill
+//   when absent). It is chosen under Settings and applies at once. The ticket's Advanced options
+//   can still pick another one per order.
+// - `kob.delivery.threshold.<wallet key>.<token covenant id>.<extension commitment>` is the receive
+//   threshold of Top-up for that token. It is set at the wallet's first top-up order of it and
+//   reused by every later one. It changes only when the user resets it in Settings.
 //
-// The stored values are a convenience, not authority: without storage the page works the same (Each fill, and a threshold from each order's
-// price) and a choice lasts until the page is closed.
+// The stored values are a convenience and not authority. Without storage the page works the same,
+// with Each fill and a threshold from each order's price, and a choice lasts until the page is
+// closed.
 import { useEffect, useState } from 'preact/hooks';
 import { isDeliveryChoice, type DeliveryChoice } from '../../kob/orders/delivery';
 
@@ -27,7 +31,10 @@ const browserStore = (): ListStore | null => {
 const listeners = new Set<(c: DeliveryChoice) => void>();
 let memory: DeliveryChoice | null = null;
 
-/** The stored default: Collected or Top-up when the stored value says so, Each fill otherwise or if unreadable. */
+/**
+ * The stored default. It is Collected or Top-up when the stored value says so, and Each fill
+ * otherwise or if unreadable.
+ */
 export function readDeliveryPref(store: Store | null = browserStore()): DeliveryChoice {
   try {
     const v = store?.getItem(DELIVERY_PREF_KEY);
@@ -39,7 +46,10 @@ export function readDeliveryPref(store: Store | null = browserStore()): Delivery
 
 const current = (): DeliveryChoice => memory ?? readDeliveryPref();
 
-/** Stores the default and tells every open view. False when the browser refused the write. */
+/**
+ * Stores the default and tells every open view. It returns false when the browser refused the
+ * write.
+ */
 export function writeDeliveryPref(c: DeliveryChoice, store: Store | null = browserStore()): boolean {
   memory = c;
   for (const l of listeners) l(c);
@@ -64,12 +74,12 @@ export function useDeliveryPref(): [DeliveryChoice, (c: DeliveryChoice) => void]
   return [c, (v) => void writeDeliveryPref(v)];
 }
 
-/** Forgets the in-page value. For tests. */
+/** Forgets the in-page value, for tests. */
 export function resetDeliveryPrefMemory(): void {
   memory = null;
 }
 
-// ------------------------------------------------------------------------------------------------ receive thresholds
+// Receive thresholds.
 
 /** What a stored threshold is for. */
 export interface ThresholdKey {
@@ -79,7 +89,7 @@ export interface ThresholdKey {
 }
 /** A stored threshold with what Settings shows of its token. */
 export interface StoredThreshold extends ThresholdKey {
-  /** base units of the token */
+  /** Base units of the token. */
   threshold: bigint;
   ticker: string;
   decimals: number;
@@ -102,7 +112,10 @@ function parse(key: string, raw: string | null): StoredThreshold | null {
   }
 }
 
-/** The stored threshold of a token for this wallet, or undefined (none yet, unreadable storage). */
+/**
+ * The stored threshold of a token for this wallet, or undefined when there is none yet or the
+ * storage is unreadable.
+ */
 export function readThreshold(k: ThresholdKey, store: Store | null = browserStore()): bigint | undefined {
   try {
     const key = thresholdKey(k);
@@ -113,8 +126,8 @@ export function readThreshold(k: ThresholdKey, store: Store | null = browserStor
 }
 
 /**
- * Stores the threshold of the wallet's first top-up order of a token. An existing value is kept (it changes only by a reset). True when this
- * call stored it.
+ * Stores the threshold of the wallet's first top-up order of a token. An existing value is kept,
+ * because it changes only by a reset. It returns true when this call stored it.
  */
 export function rememberThreshold(t: StoredThreshold, store: Store | null = browserStore()): boolean {
   if (t.threshold <= 0n) return false;
@@ -127,12 +140,12 @@ export function rememberThreshold(t: StoredThreshold, store: Store | null = brow
   }
 }
 
-/** Forgets a stored threshold: the next top-up order of the token sets it again from its price. */
+/** Forgets a stored threshold. The next top-up order of the token sets it again from its price. */
 export function resetThreshold(k: ThresholdKey, store: Store | null = browserStore()): void {
   try {
     store?.removeItem(thresholdKey(k));
   } catch {
-    // nothing stored, nothing to forget
+    // Nothing stored, so there is nothing to forget.
   }
 }
 
