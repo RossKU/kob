@@ -39,6 +39,14 @@ test.describe('market data', () => {
     // the book's mid line (/v1/quotes) and its read-out in the legend
     await expect(chart).toHaveAttribute('data-mid', '1');
     await expect(page.getByTestId('chart-mid')).toContainText(/Mid\s*\d+\.\d+/);
+    // the mid line can be hidden and shown again (remembered in this browser)
+    if (SHOTS) await page.getByTestId('price-chart').screenshot({ path: test.info().outputPath('chart-mid-on.png') });
+    await page.getByTestId('chart-mid-toggle').click();
+    await expect(page.getByTestId('chart-mid-toggle')).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.getByTestId('chart-mid')).toHaveCount(0);
+    if (SHOTS) await page.getByTestId('price-chart').screenshot({ path: test.info().outputPath('chart-mid-off.png') });
+    await page.getByTestId('chart-mid-toggle').click();
+    await expect(page.getByTestId('chart-mid')).toContainText(/Mid\s*\d+\.\d+/);
     // the TradingView attribution stays on the chart and in the footer
     await expect(chart.locator('a[href*="tradingview.com"]')).toHaveCount(1);
     await expect(page.getByTestId('footer-chart-notice')).toContainText('TradingView');

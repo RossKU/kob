@@ -60,6 +60,16 @@ function storedKascov(): boolean {
   }
 }
 
+const MID_KEY = 'kob.chart.mid';
+/** The viewer's choice of the book's mid line (on unless they turned it off), kept in this browser. */
+function storedMid(): boolean {
+  try {
+    return localStorage.getItem(MID_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
 function storedColor(): DrawingColor {
   try {
     const v = localStorage.getItem(COLOR_KEY);
@@ -269,6 +279,15 @@ export function PriceChart(props: PriceChartProps) {
   const kascovLegs = props.kascov ?? [];
   const kascovKey = kascovLegs.map((l) => `${l.token}:${l.decimals}`).join('/');
   const kascovAvail = kascovLegs.length > 0 && kascovLegs.length === (usd ? 2 : 1);
+  const [midOn, setMidOnState] = useState<boolean>(storedMid);
+  const setMidOn = (v: boolean) => {
+    setMidOnState(v);
+    try {
+      localStorage.setItem(MID_KEY, v ? '1' : '0');
+    } catch {
+      /* no storage */
+    }
+  };
   const [kascovOn, setKascovOnState] = useState<boolean>(storedKascov);
   const setKascovOn = (v: boolean) => {
     setKascovOnState(v);
@@ -309,7 +328,7 @@ export function PriceChart(props: PriceChartProps) {
     if (!x || !b) return null;
     const vol = series.volumes[i]?.value ?? 0;
     const k = overlayValues?.[i];
-    return { ...x, v: compactText(vol), vExact: vol.toLocaleString(localeOf(), { maximumFractionDigits: 8 }), up: b.close >= b.open, k: k ? overlayPriceText(k) : null, m: mid?.text(i) ?? null };
+    return { ...x, v: compactText(vol), vExact: vol.toLocaleString(localeOf(), { maximumFractionDigits: 8 }), up: b.close >= b.open, k: k ? overlayPriceText(k) : null, m: midOn ? (mid?.text(i) ?? null) : null };
   };
 
   // create the chart once the library is there and the panel has something to draw
@@ -431,8 +450,8 @@ export function PriceChart(props: PriceChartProps) {
     const c = chartRef.current;
     if (!c || !libReady) return;
     c.mid.applyOptions({ color: alpha(palette().text, 0.7), priceFormat: { type: 'price', precision: props.dp, minMove: 10 ** -props.dp } });
-    c.mid.setData(mid ? mid.points.map((p) => ({ ...p, time: p.time as UTCTimestamp })) : []);
-  }, [libReady, mid, props.dp, theme]);
+    c.mid.setData(mid && midOn ? mid.points.map((p) => ({ ...p, time: p.time as UTCTimestamp })) : []);
+  }, [libReady, mid, midOn, props.dp, theme]);
 
   // ---- drawings: stored per network and market (and orientation), shown by the primitive, edited by the tools
   const network = useServices().config.network;
@@ -691,6 +710,13 @@ export function PriceChart(props: PriceChartProps) {
           )}
           {/* the size of the chart: outside the tools' scroller, so a phone never scrolls it away */}
           <div class="chart-tools chart-size">
+            {mid ? (
+              <button type="button" aria-pressed={midOn ? 'true' : 'false'} aria-label={t('market.chart.midToggle')} title={t('market.chart.midToggle')} data-testid="chart-mid-toggle" onClick={() => setMidOn(!midOn)}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-dasharray="3 3" aria-hidden="true">
+                  <path d="M3 12h18" />
+                </svg>
+              </button>
+            ) : null}
             {kascovBtn ? (
               <button type="button" aria-pressed={kascovShown ? 'true' : 'false'} aria-disabled={kascovAvail ? undefined : 'true'} aria-label={t('market.chart.kascov')} title={kascovAvail ? t('market.chart.kascov') : kascovReason} data-testid="chart-kascov-toggle" onClick={() => (kascovAvail ? setKascovOn(!kascovOn) : undefined)}>
                 {/* kascov.io logo, used with the KOB founder's approval; source: https://kascov.io/ (its <link rel=icon> SVG, public/kascov-logo.svg, served from our own origin) */}

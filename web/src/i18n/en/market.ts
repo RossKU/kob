@@ -311,6 +311,7 @@ export default {
   'market.chart.c': 'C',
   'market.chart.v': 'Vol',
   'market.chart.mid': 'Mid',
+  'market.chart.midToggle': 'Mid line (between best bid and best ask)',
   'market.chart.empty': 'No trades yet: the chart starts with the first trade.',
   'market.chart.unsupported': 'This indexer does not serve price history yet.',
   'market.chart.off': 'No indexer is configured, so there is no price history.',
