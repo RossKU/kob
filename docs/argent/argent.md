@@ -351,7 +351,8 @@ the ask's `extensionCommitment`; `docs/argent/argent-feedback.md` item 6): its b
 (the input index, the sum of the base units sold into the bids and the take of a resting last ask are written out where
 they are used), which makes room for the two token handles. `swap2_c` sits exactly at the 244-item limit (its custody leg is written
 inline: as a helper it overflows by one item). argentc refuses an entry over the limit, so every shape
-compiling is the check.
+compiling is the check; `router_actor_stack_headroom` (`argent_router_tests`) fails by name for an actor that no longer fits
+and prints each one's headroom in extra live bindings (2026-11-18: `swap2_c` 6, `swap2` 13, every other actor 26 or more).
 
 `n` is the number of token base units sold into a bid (any amount; the bid enforces its own minimum
 fill). How much an ask gives follows from `amount` (the last ask

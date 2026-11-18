@@ -404,6 +404,9 @@ enum Router {
     /// One edit of the generated source of any actor: (entry, needle, replacement); the needle must occur exactly once
     /// in that entry (the bid-delivery ablations: a custody check or a mode-1 delivery rule removed).
     Edit(&'static str, &'static str, &'static str),
+    /// The leader entry of any actor with `k` extra bindings that live through it (declared first, read last): the
+    /// probe of its stack headroom (`router_actor_stack_headroom`).
+    Pad(usize),
 }
 /// Text of `entry <name>(` up to (not including) the next `entry ` line.
 fn entry_range(s: &str, name: &str) -> (usize, usize) {
@@ -479,6 +482,17 @@ fn router_src(name: &str, r: Router) -> String {
             ablate(&s, "expire", &[("        require(gen__token_mine_state.amount == lock_amount);\n", String::new())])
         }
         Router::Edit(entry, needle, with) => ablate(&s, entry, &[(needle, with.to_string())]),
+        Router::Pad(k) => {
+            let entry = name.split_once('_').expect("actor names are <Router>_<entry>").1;
+            let (a, b) = entry_range(&s, entry);
+            let region = &s[a..b];
+            let body = "    ) {\n";
+            let open = region.find(body).expect("the entry's body") + body.len();
+            let close = region.rfind("\n    }\n").expect("the entry's end") + 1;
+            let decls: String = (0..k).map(|i| format!("        int gen__pad_{i} = {i};\n")).collect();
+            let uses: String = (0..k).map(|i| format!("        require(gen__pad_{i} == {i});\n")).collect();
+            format!("{}{}{}{}{}{}", &s[..a], &region[..open], decls, &region[open..close], uses, &s[a + close..])
+        }
         Router::ExpireNoLockExtension => {
             assert_eq!(name, "TokenToKas_sell");
             ablate(
@@ -1206,6 +1220,63 @@ fn router_shapes() -> Vec<(String, bool, bool)> {
 }
 
 // ---------------------------------------------------------------- tests: positive
+
+/// The constructor arguments of any router actor (the values do not change its stack).
+fn actor_args(name: &str) -> Vec<ArtifactValue> {
+    let (k, p) = ([1u8; 32], [2u8; 32]);
+    if name.starts_with("KasToToken_") {
+        vec![bytes(&k), bytes(&p), bytes(&TOKEN_B.as_bytes()), tok_handle(), int(WHOLE), int(1), int(1), bytes(&EXT), int(DEADLINE)]
+    } else if name.starts_with("TokenToKas_") {
+        vec![bytes(&k), bytes(&p), bytes(&TOKEN_A.as_bytes()), tok_handle(), int(1), int(1), int(1), bytes(&EXT), int(DEADLINE)]
+    } else {
+        let (a, b) = (TOKEN_A.as_bytes(), TOKEN_B.as_bytes());
+        vec![
+            bytes(&k),
+            bytes(&p),
+            bytes(&a),
+            tok_handle(),
+            bytes(&b),
+            tok_handle(),
+            int(1),
+            int(1),
+            int(1),
+            bytes(&EXT),
+            bytes(&EXT),
+            int(DEADLINE),
+        ]
+    }
+}
+
+/// I3: every router actor still compiles under the 244-item stack limit, and its leader entry's headroom is measured as the
+/// most extra bindings that live through the entry and still compile (`Router::Pad`), printed as `STACK <actor>: headroom`.
+/// `TokenSwap_swap2_c` is the tightest (6 on 2026-11-18; its custody leg is inlined for that reason, `docs/argent/argent.md`):
+/// a compiler or router change that pushes any actor over fails here by name.
+#[test]
+fn router_actor_stack_headroom() {
+    let compiles =
+        |name: &str, k: usize| match compile_contract(&router_src(name, Router::Pad(k)), &actor_args(name), CompileOptions::default())
+        {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{e:?}")),
+        };
+    const PROBE: usize = 245;
+    for (name, _, _) in router_shapes() {
+        compiles(&name, 0).unwrap_or_else(|e| panic!("{name}: the shipped actor no longer fits the stack limit: {e}"));
+        let e = compiles(&name, PROBE).expect_err("the probe adds live bindings");
+        assert!(e.contains("StackTooLarge"), "{name}: the probe fails on the stack limit, not on {e}");
+        // the largest k that compiles: lo compiles, hi does not
+        let (mut lo, mut hi) = (0, PROBE);
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if compiles(&name, mid).is_ok() {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        println!("STACK {name}: headroom {lo} of 244");
+    }
+}
 
 #[test]
 fn router_artifacts_link_the_published_handles() {
