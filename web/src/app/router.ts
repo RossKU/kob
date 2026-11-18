@@ -55,7 +55,10 @@ export type RouteName = Route['name'];
 
 /** Order-ticket presets a link may ask for. */
 export const TICKET_PRESETS = ['close', 'cover', 'sell', 'ask'] as const;
-/** Presets that carry an amount (`&amount=N`, in base units); `ask` (a limit sell, the first sale of a token just created) also a price (`&price=P`, sompi per whole token). */
+/**
+ * Presets that carry an amount (`&amount=N`, in base units). `ask`, a limit sell and the first sale
+ * of a token just created, also carries a price (`&price=P`, sompi per whole token).
+ */
 const AMOUNT_PRESETS: readonly TicketPreset[] = ['cover', 'sell', 'ask'];
 const takesAmount = (p: TicketPreset | undefined): boolean => p !== undefined && AMOUNT_PRESETS.includes(p);
 /** One order-ticket preset. */
@@ -64,7 +67,10 @@ export type TicketPreset = (typeof TICKET_PRESETS)[number];
 const HEX64 = /^[0-9a-f]{64}$/i;
 const PAGES = ['create', 'settings', 'disclaimer', 'support'] as const;
 
-/** What a banner may echo of an invalid id from a link: plain id-like characters only, cut short (a link must not word the banner). */
+/**
+ * What a banner may echo of an invalid id from a link, plain id-like characters only and cut short.
+ * A link must not word the banner.
+ */
 const echoed = (s: string): string => s.replace(/[^\w.%/-]/g, '').slice(0, 20);
 
 /** Parses a `location.hash` value (with or without the leading `#`). Never throws. */

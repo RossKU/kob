@@ -107,7 +107,9 @@ export interface VerifiedBook {
   dropped: DroppedBookOrder[];
   /** Rows behind the verified depth, left out of `view` and never looked at. */
   beyond: number;
-  /** The node-confirmed UTXOs of the orders kept, by covenant id in lower case (what a take spends). */
+  /**
+   * The node-confirmed UTXOs of the orders kept, by covenant id in lower case. A take spends them.
+   */
   orders: Map<string, BookOrderUtxo>;
 }
 
@@ -158,9 +160,11 @@ function judge(
   if (confirmed instanceof SnapshotError) return confirmed.code === 'node-mismatch' ? 'not-on-node' : 'unproven';
   try {
     const d = describeOrder(confirmed.order.state, deps.kob);
-    // a curve sell order: its rows are its remaining levels; one created in its token's genesis names no token until its first fill (its custody's)
+    // A curve sell order's rows are its remaining levels. One created in its token's genesis names
+    // no token until its first fill, and its token is its custody's.
     const curve = curveFactsOf(confirmed.order.state);
-    // an unbound curve's custody is the one in its own transaction: another token's stray the indexer names does not make it this token's ask
+    // An unbound curve's custody is the one in its own transaction. Another token's stray that the
+    // indexer names does not make it this token's ask.
     if (curve?.unbound && confirmed.custody && confirmed.custody.transactionId.toLowerCase() !== confirmed.order.transactionId.toLowerCase()) return 'other-market';
     if (confirmed.covenantId !== row.covenant_id || d.side !== side || d.price !== BigInt(row.price)) return 'changed';
     const m = deps.market;
@@ -217,10 +221,13 @@ function judge(
  */
 type Verdict =
   | DroppedBookOrder['reason'] | 'expired' | 'inactive'
-  /** `levels`: a curve's remaining levels as its confirmed state has them (table index -> price and size left) */
+  /**
+   * `levels` holds a curve's remaining levels as its confirmed state has them (table index -> price
+   * and size left).
+   */
   | { amount: bigint | null; cap: bigint; tip: bigint; minFill: bigint; levels?: Map<number, { price: bigint; amount: bigint }> };
 
-/** The remaining levels of a curve state holding `left` base units (table index -> price, size left). */
+/** The remaining levels of a curve state holding `left` base units (index -> price, size left). */
 const levelsLeftOf = (c: NonNullable<ReturnType<typeof curveFactsOf>>, left: bigint): Map<number, { price: bigint; amount: bigint }> =>
   new Map(curveLevelsLeft(c.levelSize, c.table, c.total, left).map((l) => [l.level, { price: l.price, amount: l.amount }]));
 
@@ -267,7 +274,10 @@ export async function confirmOrders(
   return out;
 }
 
-/** The verdict of each row, with the node-confirmed snapshot. Rejects only when the node cannot be asked. */
+/**
+ * The verdict of each row, with the node-confirmed snapshot. Rejects only when the node cannot be
+ * asked.
+ */
 async function checkRows(deps: BookVerifyDeps, rows: readonly { row: BookOrderView; side: 'sell' | 'buy' }[]): Promise<{ v: Verdict; snap: OrderSnapshot | null }[]> {
   const got = await confirmOrders(deps, rows.map((r) => r.row));
   return got.map((g, i) => (g ? { v: judge(deps, rows[i]!.row, rows[i]!.side, g.claimed, g.confirmed), snap: g.confirmed instanceof SnapshotError ? null : g.confirmed } : { v: 'unproven', snap: null }));
@@ -308,8 +318,9 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
   const inScale = deps.inScale ?? (() => true);
   const sides = (['sell', 'buy'] as const).map((side) => {
     const rows = side === 'sell' ? view.asks : view.bids;
-    // One row per order. The indexer listing an order N times does not count it N times. A curve is checked by its lowest level's row (its
-    // current level, whose price its state names); its other levels follow from the confirmed state.
+    // One row per order. The indexer listing an order N times does not count it N times. A curve is
+    // checked by its lowest level's row, its current level, whose price its state names. Its other
+    // levels follow from the confirmed state.
     const seenIds = new Set<string>();
     const lowest = new Map<string, number>();
     for (const row of rows) if (isOrderRow(row) && row.curve_level != null) lowest.set(row.covenant_id, Math.min(lowest.get(row.covenant_id) ?? row.curve_level, row.curve_level));
@@ -346,9 +357,10 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
       const { v, snap } = verdicts[i]!;
       if (typeof v === 'object' && snap) orders.set(b.row.covenant_id.toLowerCase(), { covenantId: snap.covenantId, order: snap.order, custody: snap.custody });
       if (typeof v === 'object' && b.row.curve_level != null) {
-        // A curve sell order: one row per remaining level, checked once. Its levels stay rows of their own (each at its price), within the custody
-        // the node holds.
-        // a level row counts only at the price its confirmed state gives that level, at most the size left in it
+        // A curve sell order has one row per remaining level and is checked once. Its levels stay
+        // rows of their own, each at its price, within the custody the node holds. A level row
+        // counts only at the price its confirmed state gives that level, and at most the size left
+        // in it.
         const [tip, minFill] = [v.tip.toString(), v.minFill.toString()];
         b.s.confirmed++;
         for (const lv of b.s.rows.filter((x): x is BookOrderView => isOrderRow(x) && x.covenant_id === b.row.covenant_id)) {
@@ -391,7 +403,8 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
   // word and stay out. A side with nothing confirmed has none, because all of them were dropped.
   const same = (rows: readonly (LevelView | BookOrderView)[], kept: readonly BookOrderView[]) => rows.length === kept.length && rows.every((r, i) => r === kept[i]);
   const [a, b] = sides as [(typeof sides)[number], (typeof sides)[number]];
-  // a curve's levels join the kept rows when its first is confirmed: back into price order (stable)
+  // A curve's levels join the kept rows when its first is confirmed, so the rows go back into price
+  // order with a stable sort.
   for (const x of sides) {
     if (!x.kept.some((k) => k.curve_level != null)) continue;
     const at = new Map(x.kept.map((k, i) => [k, i]));

@@ -9,7 +9,10 @@ import { pendingSpends } from './pending-spends';
 import type { Services } from './services';
 
 const ownTxListeners = new Set<() => void>();
-/** Calls `f` after the wallet's own transaction was accepted (a placement, an amend, a cancel): the order lists reload. Returns the unsubscribe. */
+/**
+ * Calls `f` once the wallet's own transaction is accepted (a placement, an amend, a cancel), so the
+ * order lists reload. Returns the unsubscribe.
+ */
 export function onOwnTxAccepted(f: () => void): () => void {
   ownTxListeners.add(f);
   return () => void ownTxListeners.delete(f);
@@ -64,7 +67,7 @@ export async function commitAccepted(a: CommitArgs): Promise<PlacementRecord[]> 
   }
   try {
     const tracked = a.services.tracker.trackFromBuilt(a.services.kob, a.built, a.maker, a.txid);
-    // The token reader lists only what the node verifies: until a block holds them, these outputs
+    // The token reader lists only what the node verifies. Until a block holds them, these outputs
     // are the wallet's through the page's pending spends, so the next order can spend them.
     pendingSpends.addTokens(
       tracked.map((x) => ({
@@ -80,7 +83,7 @@ export async function commitAccepted(a: CommitArgs): Promise<PlacementRecord[]> 
     try {
       f();
     } catch {
-      /* a listener must not break the commit */
+      /* A listener must not break the commit. */
     }
   }
   return saved;
