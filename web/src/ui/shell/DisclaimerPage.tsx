@@ -1,4 +1,5 @@
-// `#/disclaimer`: what KOB is and what it is not, linked from the footer of every page. The text is in src/i18n/en/legal.ts.
+// `#/disclaimer`: what KOB is and what it is not, linked from the footer of every page. The text
+// is in src/i18n/en/legal.ts.
 import { t } from '../../i18n';
 import { siteName } from '../landing/landing-model';
 

@@ -2,9 +2,12 @@ import { t, has } from '../../i18n';
 import type { StatusSummary } from './StatusBar';
 
 /**
- * The network, the status and the open review notice as ONE small chip of the header ("● testnet-10 · open review"; a narrow window shortens the network,
- * "tn10"). The dot says whether trading works (StatusBar.tsx: green the indexer, yellow the node / a backup / lagging / switching, red the node unreachable; the lines are in the chip's panel, NetworkSwitch.tsx). The
- * words keep their own test ids; the tooltip says them in full (the notice in the bell and the footer say it again on the page).
+ * The network, the status and the open review notice as ONE small chip of the header
+ * ("● testnet-10 · open review"). A narrow window shortens the network ("tn10"). The dot says
+ * whether trading works (StatusBar.tsx): green is the indexer, yellow is the node, a backup,
+ * lagging or switching, and red is the node unreachable. The lines are in the chip's panel
+ * (NetworkSwitch.tsx). The words keep their own test ids. The tooltip says them in full, and the
+ * notice in the bell and the footer say it again on the page.
  */
 export function NetworkChip(props: { network: string; short?: boolean; /** the status as a dot in the chip: absent where the page has no status (the landing page) */ status?: StatusSummary }) {
   const mainnet = props.network === 'mainnet';

@@ -4,7 +4,10 @@ import { indexerTrust } from '../../data/indexer-crosscheck';
 import { Badge } from '../kit';
 import { useFailoverState } from './failover';
 
-/** How many indexers back the data: one (answers are not cross-checked) or several (a disagreement is shown). Settings panel; the footer shows the short form. */
+/**
+ * How many indexers back the data: one, so answers are not cross-checked, or several, so a
+ * disagreement is shown. It is the Settings panel, and the footer shows the short form.
+ */
 export function IndexerTrust() {
   const { indexer, failover } = useServices();
   useFailoverState(failover); // re-render on a switch: the verifiers are those of the indexer in use

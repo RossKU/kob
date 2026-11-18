@@ -1,4 +1,5 @@
-// Whether the page runs in a phone or tablet browser (extension wallets do not exist there). A user-agent guess used only to word a hint. Pure.
+// Whether the page runs in a phone or tablet browser, where extension wallets do not exist. It is a
+// user-agent guess used only to word a hint. Pure.
 export interface NavigatorLike {
   userAgent?: string;
   platform?: string;

@@ -1,30 +1,44 @@
-// A small popover for the header: a button that toggles a panel under it. No dependency; keyboard accessible (the panel follows the button in the tab
-// order, Escape closes it and puts the focus back on the button, so does moving the focus out of it), closes on a press outside and on every navigation
-// (a hash change). `anchor: 'header'` makes the panel as wide as the header and hang under it (the phone menu); otherwise it hangs under the button.
+// A small popover for the header: a button that toggles a panel under it. It has no dependency and
+// is keyboard accessible. The panel follows the button in the tab order. Escape closes it and puts
+// the focus back on the button, and so does moving the focus out of it. It closes on a press
+// outside and on every navigation (a hash change). `anchor: 'header'` makes the panel as wide as
+// the header and hang under it (the phone menu). Otherwise it hangs under the button.
 import type { ComponentChildren } from 'preact';
 import { useId, useLayoutEffect, useRef, useState } from 'preact/hooks';
 
 export interface PopoverProps {
-  /** accessible name of the button and of the panel */
+  /** The accessible name of the button and of the panel. */
   label: string;
-  /** the button's content */
+  /** The button's content. */
   trigger: ComponentChildren;
-  /** extra attributes of the button (data-testid, data-level, title ...) */
+  /** Extra attributes of the button (data-testid, data-level, title ...). */
   triggerAttrs?: Record<string, string | number | boolean | undefined>;
   triggerClass?: string;
   anchor?: 'self' | 'header';
-  /** the panel's align under the button: the end of the row by default */
+  /** The panel's align under the button. The default is the end of the row. */
   align?: 'start' | 'end';
   panelTestId?: string;
-  /** an extra class of the panel (the bell's list is wider than a menu) */
+  /** An extra class of the panel (the bell's list is wider than a menu). */
   panelClass?: string;
-  /** extra attributes of the wrapper that holds the button and the panel (a test id of the whole control, data-* of its state) */
+  /**
+   * Extra attributes of the wrapper that holds the button and the panel (a test id of the whole
+   * control, data-* of its state).
+   */
   wrapAttrs?: Record<string, string | number | boolean | undefined>;
-  /** a tap on a link inside the panel closes it, also when the link leads to the page already open (no hash change then) */
+  /**
+   * A tap on a link inside the panel closes it, also when the link leads to the page already open
+   * and there is no hash change.
+   */
   closeOnLink?: boolean;
-  /** a click on an element marked `data-pick` inside the panel closes it and puts the focus back on the button (a choice list that is done after one pick) */
+  /**
+   * A click on an element marked `data-pick` inside the panel closes it and puts the focus back on
+   * the button. It is for a choice list that is done after one pick.
+   */
   closeOnPick?: boolean;
-  /** the panel; a function gets `close`, which closes it and puts the focus back on the button (a Close button, a Done) */
+  /**
+   * The panel. A function gets `close`, which closes the panel and puts the focus back on the
+   * button (a Close button, a Done).
+   */
   children: ComponentChildren | ((close: () => void) => ComponentChildren);
 }
 
@@ -33,7 +47,8 @@ export function Popover(props: PopoverProps) {
   const id = `hp-${useId()}`;
   const wrap = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
-  // a layout effect: the listeners are on as soon as the panel is in the page (a post-paint effect can lag behind a fast Escape)
+  // A layout effect, so the listeners are on as soon as the panel is in the page. A post-paint
+  // effect can lag behind a fast Escape.
   useLayoutEffect(() => {
     if (!open) return;
     const onDown = (e: Event) => {
@@ -65,7 +80,8 @@ export function Popover(props: PopoverProps) {
       {...props.wrapAttrs}
       onFocusOut={(e) => {
         const next = (e as FocusEvent).relatedTarget as Node | null;
-        // the clipboard fallback's textarea (kit/CopyText.tsx) holds the focus for an instant: not a departure
+        // The clipboard fallback's textarea (kit/CopyText.tsx) holds the focus for an instant. That
+        // is not a departure.
         if (next && !wrap.current?.contains(next) && !(next as HTMLElement).hasAttribute?.('data-copy-shim')) setOpen(false);
       }}
     >

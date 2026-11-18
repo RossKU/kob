@@ -7,18 +7,24 @@ import { Popover } from './Popover';
 import { StatusLines, useStatusSummary } from './StatusBar';
 
 /**
- * The header's network chip as a control (founder, 2026-11-11: switch the network from the header, like other DEXes): the chip ("● testnet-10 · open review",
- * the dot is the node and indexer status) is the button of a small panel that gives the status lines, lists the two networks (the current one marked), says
- * what the chip's tooltip says (the open review notice) and that the page reloads (and that mainnet uses real funds). Choosing the other one saves it like the
- * Settings screen does (network only) and reloads, because the network is fixed at load. A deployment that pins its network (`lockNetwork`) has the status
- * lines and the notice in the panel but no choice; a browser with saved servers gets the reason and the way to Settings instead of a switch (network-switch.ts
- * says why).
+ * The header's network chip as a control, so the network can be switched from the header. The
+ * chip ("● testnet-10 · open review", the dot being the node and indexer status) is the button
+ * of
+ * a small panel. The panel gives the status lines, lists the two networks with the current one
+ * marked, says what the chip's tooltip says (the open review notice) and that the page reloads
+ * (and that mainnet uses real funds). Choosing the other network saves it as the Settings screen
+ * does (network only) and reloads, because the network is fixed at load.
+ *
+ * A deployment that pins its network (`lockNetwork`) has the status lines and the notice in the
+ * panel but no choice. A browser with saved servers gets the reason and the way to Settings
+ * instead of a switch (network-switch.ts says why).
  */
 export function NetworkSwitch(props: { config: AppConfig; short?: boolean; narrow: boolean }) {
   const { config } = props;
   const status = useStatusSummary();
   const [failed, setFailed] = useState(false);
-  // the saved servers are read again on every render and at the choice itself: Settings can have saved some since the header was drawn
+  // The saved servers are read again on every render and at the choice itself, as Settings can have
+  // saved some since the header was drawn.
   const [, recheck] = useState(0);
   const state = networkSwitchState(config);
   const chip = <NetworkChip network={config.network} short={props.short} status={status} />;
@@ -30,7 +36,8 @@ export function NetworkSwitch(props: { config: AppConfig; short?: boolean; narro
     window.location.reload();
   };
   const blockedFields = state.kind === 'blocked' ? state.fields : null;
-  // the deployment has servers for `serverNetworks` only (config.ts): the note says so when the other network is not among them
+  // The deployment has servers for `serverNetworks` only (config.ts). The note says so when the
+  // other network is not among them.
   const home = config.network;
   const losesServers = config.serverNetworks.includes(home) && !config.serverNetworks.includes(otherNetwork(home)) && config.indexerUrl !== '';
   const statusBlock = (
@@ -39,7 +46,7 @@ export function NetworkSwitch(props: { config: AppConfig; short?: boolean; narro
       <StatusLines />
     </div>
   );
-  // a pinned network: the status and the notice, nothing to choose
+  // A pinned network shows the status and the notice, with nothing to choose.
   const choice = pinned ? null : (
     <>
       <div class="net-options" role="group" aria-label={t('netswitch.title')}>

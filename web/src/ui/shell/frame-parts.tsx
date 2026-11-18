@@ -1,5 +1,7 @@
-// The pieces of the frame that need no services (no contexts of the app: they are data in, markup out):
-// the brand lockup, the theme toggle, the skip link, the header row and the footer drawn from its data. Frame.tsx re-exports them and adds the footer that reads them from the services.
+// The pieces of the frame that need no services. They use no contexts of the app: data in, markup
+// out. They are the brand lockup, the theme toggle, the skip link, the header row and the footer
+// drawn from its data. Frame.tsx re-exports them and adds the footer that reads them from the
+// services.
 import type { ComponentChildren, Ref } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { t } from '../../i18n';
@@ -10,7 +12,10 @@ import { showsChartNotice } from './frame-model';
 import { SECURITY_POLICY_URL } from './preaudit';
 import { useTheme } from './theme';
 
-/** Logo: the favicon's design (public/favicon.svg), fixed brand colours on a dark tile in both themes (not theme variables). */
+/**
+ * Logo: the favicon's design (public/favicon.svg), in fixed brand colours on a dark tile in both
+ * themes. It does not use theme variables.
+ */
 export function Logo() {
   return (
     <svg class="brand-mark" viewBox="0 0 512 512" aria-hidden="true" focusable="false">
@@ -28,7 +33,7 @@ export function Logo() {
   );
 }
 
-/** GitHub's mark (the landing page's header and its GitHub buttons). */
+/** GitHub's mark, for the landing page's header and its GitHub buttons. */
 export function GitHubIcon(props: { class?: string }) {
   return (
     <svg class={props.class} width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
@@ -40,7 +45,7 @@ export function GitHubIcon(props: { class?: string }) {
   );
 }
 
-/** Sun (switch to light) / moon (switch to dark) icon of the theme toggle. */
+/** The sun (switch to light) or moon (switch to dark) icon of the theme toggle. */
 function ThemeIcon(props: { dark: boolean }) {
   return props.dark ? (
     <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -54,7 +59,9 @@ function ThemeIcon(props: { dark: boolean }) {
   );
 }
 
-/** The theme toggle: an icon button in the header row, an icon and its label in the phone menu. */
+/**
+ * The theme toggle: an icon button in the header row, and an icon with its label in the phone menu.
+ */
 export function ThemeToggle(props: { withLabel?: boolean }) {
   const [theme, setTheme] = useTheme();
   const dark = theme === 'dark';
@@ -77,8 +84,10 @@ export function ThemeToggle(props: { withLabel?: boolean }) {
 }
 
 /**
- * The brand lockup: the logo and the name. Where the row has no room for the name, styles.css clips it to 1 px (still read by screen readers, and measured
- * by narrow.ts), never `display: none`. `label` replaces the accessible name (the landing page's "KOB, back to the top").
+ * The brand lockup: the logo and the name. Where the row has no room for the name, styles.css
+ * clips it to 1 px, so screen readers still read it and narrow.ts can measure it. It is never
+ * `display: none`. `label` replaces the accessible name (the landing page's "KOB, back to the
+ * top").
  */
 export function Brand(props: { testid: string; href?: string; onClick?: (e: Event) => void; label?: string; class?: string }) {
   return (
@@ -89,7 +98,10 @@ export function Brand(props: { testid: string; href?: string; onClick?: (e: Even
   );
 }
 
-/** "Skip to content": off screen until it has the keyboard focus; a hash link would be a route here, so it moves the focus itself. */
+/**
+ * "Skip to content": off screen until it has the keyboard focus. A hash link would be a route here,
+ * so it moves the focus itself.
+ */
 export function SkipLink() {
   return (
     <a
@@ -106,7 +118,10 @@ export function SkipLink() {
   );
 }
 
-/** True once the page is scrolled more than `px`: the header gets its blurred bar (see-through at the top of the page). */
+/**
+ * True once the page is scrolled more than `px`. The header then gets its blurred bar, see-through
+ * at the top of the page.
+ */
 export function useScrolled(px = 8): boolean {
   const [scrolled, setScrolled] = useState(() => typeof window !== 'undefined' && window.scrollY > px);
   useEffect(() => {
@@ -118,7 +133,10 @@ export function useScrolled(px = 8): boolean {
   return scrolled;
 }
 
-/** The header row of every page: the brand first, then the page's own contents (`children`). See-through at the top, a blurred bar once scrolled. */
+/**
+ * The header row of every page: the brand first, then the page's own contents (`children`). It is
+ * see-through at the top and a blurred bar once scrolled.
+ */
 export function SiteHeader(props: {
   context: FrameContext;
   brand: ComponentChildren;
@@ -126,7 +144,7 @@ export function SiteHeader(props: {
   innerRef?: Ref<HTMLDivElement>;
   layout?: 'narrow' | 'wide';
   brandName?: boolean;
-  /** the app's wide row with its tabs in the true centre (narrow.ts useHeaderLayout) */
+  /** The app's wide row with its tabs in the true centre (narrow.ts useHeaderLayout). */
   centred?: boolean;
   testid?: string;
 }) {
@@ -149,28 +167,40 @@ export function SiteHeader(props: {
   );
 }
 
-/** A version worth showing: a real release number, not the 0.0.0 placeholder of an unreleased build (nor an unknown one). */
+/**
+ * A version worth showing: a real release number, not the 0.0.0 placeholder of an unreleased build
+ * and not an unknown one.
+ */
 export const releasedVersion = (v: string): boolean => /^\d+\.\d+\.\d+/.test(v) && !/^0\.0\.0(?![.\d])/.test(v);
 
 export const EXTERNAL = { target: '_blank', rel: 'noopener noreferrer' } as const;
 
-/** What a footer shows: the page it is on, the sentences of its network, its links, the versions line and (the app only) the indexer trust badge. */
+/**
+ * What a footer shows: the page it is on, the sentences of its network, its links, the versions
+ * line and, for the app only, the indexer trust badge.
+ */
 export interface FooterData {
   context: FrameContext;
   net: LandingNetworkText;
   links: FooterLink[];
   versions: string;
-  /** the app's indexer trust (data/indexer-crosscheck.ts): a badge linking to Settings; absent on the landing page */
+  /**
+   * The app's indexer trust (data/indexer-crosscheck.ts): a badge linking to Settings. It is absent
+   * on the landing page.
+   */
   trust?: string;
   brandOnClick?: (e: Event) => void;
   brandLabel?: string;
 }
 
 /**
- * The footer from its data alone (no services): the app's and the landing page's.
- * The landing page keeps the full footer: the brand, the tagline, the links and the network's disclaimer paragraph. An app page gets ONE
- * compact line (review L-04): the brand, the version, the open review lead, a few links (the Disclaimer, the security policy, GitHub), the indexer trust and the
- * chart library's attribution. The paragraph's words are on the Disclaimer page and the landing page, one link away.
+ * The footer from its data alone, with no services: the app's and the landing page's.
+ * - The landing page keeps the full footer: the brand, the tagline, the links and the network's
+ *   disclaimer paragraph.
+ * - An app page gets ONE compact line: the brand, the version, the open review lead, a few links
+ *   (the Disclaimer, the security policy, GitHub), the indexer trust and the chart library's
+ *   attribution. The paragraph's words are on the Disclaimer page and the landing page, one link
+ *   away.
  */
 export function FooterView(props: FooterData) {
   const app = props.context === 'app';
