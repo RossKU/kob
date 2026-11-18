@@ -170,7 +170,7 @@ export interface SnapshotCheck {
 /** Derives the outpoints a snapshot must have on the node and the check of the node's answer. */
 export function snapshotCheck(kob: KobWasm, snap: OrderSnapshot): SnapshotCheck {
   const st = snap.order.state;
-  // An unbound curve (created in its token's genesis) names no token in its state: its token is its
+  // An unbound curve, created in its token's genesis, names no token in its state. Its token is its
   // custody's, an output of the curve's own transaction, and the node must hold that custody under
   // that token. A custody from another transaction stays under the zero id, which no node confirms.
   const bind = curveFactsOf(st)?.unbound ? unboundCustodyToken(snap) : null;

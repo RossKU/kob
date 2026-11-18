@@ -9,18 +9,18 @@ import type { KeyUtxo, TokenProgram, TokenUtxo } from './types';
  */
 export const DEFAULT_FEE_RESERVE = 5_000_000n;
 /**
- * The most KAS inputs one placement uses; beyond it the wallet must consolidate first. It keeps the
- * fee and the signing small: a P2PK input weighs about 1,120 compute mass, so the per-transaction
- * compute limit (500,000) alone would allow several hundred.
+ * The most KAS inputs one placement uses. Beyond it the wallet must consolidate first. The bound
+ * keeps the fee and the signing small. A P2PK input weighs about 1,120 compute mass, so the
+ * per-transaction compute limit (500,000) alone would allow several hundred.
  */
 export const MAX_FUNDING_INPUTS = 50;
 
 /**
  * The most token inputs of one token that the spare-slot fill of `selectTokens` takes a placement
  * to. It equals the slots of KOB's standard program, KCC20Ref 3 by 3. The spare slots of a larger
- * program are not filled, because every extra input only adds fee: a sell placement with 8 token
- * inputs weighs about 105,000 (within the per-transaction limits, 500,000 compute), with 3 under
- * 60,000 (simple.test.ts). The covering set itself may still use every slot.
+ * program are not filled, because every extra input only adds fee. A sell placement with 8 token
+ * inputs weighs about 105,000, within the per-transaction limit of 500,000 compute, and with 3 it
+ * weighs under 60,000 (simple.test.ts). The covering set itself may still use every slot.
  */
 export const MAX_SPARE_TOKEN_INPUTS = 3;
 
@@ -31,8 +31,8 @@ export type InsufficientKind = 'kas' | 'tokens' | 'fragmented' | 'mixed';
  * Thrown by `selectFunding` and `selectTokens`.
  * For `kind` 'kas' and 'tokens' the balance is short by `shortfall`. For 'fragmented' the balance
  * suffices but needs more inputs than one transaction may carry (`maxInputs`), so the UTXOs must be
- * merged first. For 'mixed' the token balance suffices, but no one borrow setting holds enough:
- * tokens of different settings never share a transaction.
+ * merged first. For 'mixed' the token balance suffices, but no one borrow setting holds enough.
+ * Tokens of different settings never share a transaction.
  */
 export class InsufficientFunds extends Error {
   readonly kind: InsufficientKind;
@@ -89,8 +89,8 @@ const desc = <T extends { amount: string; transactionId: string; index: number }
 export function selectFunding(
   utxos: KeyUtxo[], needSompi: bigint, reserve: bigint = DEFAULT_FEE_RESERVE, maxInputs: number = MAX_FUNDING_INPUTS, fresh?: ReadonlySet<string>,
 ): KeyUtxo[] {
-  // Settled coins first: a coin of a transaction sent moments ago makes the wallet wait until its
-  // node sees it. It is spent only when the others cannot cover the target.
+  // Settled coins go first. A coin of a transaction sent moments ago makes the wallet wait until
+  // its node sees it, so it is spent only when the others cannot cover the target.
   const settled = fresh?.size ? utxos.filter((u) => !fresh.has(u.transactionId.toLowerCase())) : utxos;
   if (settled.length < utxos.length && settled.length > 0) {
     try {
@@ -216,8 +216,8 @@ function selectInGroup(
   program: TokenProgram | null,
   opts: { spare?: boolean; changeCap?: bigint; fresh?: ReadonlySet<string> },
 ): TokenUtxo[] {
-  // Settled UTXOs first, as for the funding: one of a transaction sent moments ago covers the amount
-  // only when the others cannot, and never rides along as a spare extra.
+  // Settled UTXOs go first, as for the funding. One of a transaction sent moments ago covers the
+  // amount only when the others cannot, and never rides along as a spare extra.
   const isFresh = (u: TokenUtxo) => !!opts.fresh?.has(u.transactionId.toLowerCase());
   const settled = opts.fresh?.size ? utxos.filter((u) => !isFresh(u)) : utxos;
   let cover: TokenUtxo[] | null = null;
