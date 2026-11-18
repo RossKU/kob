@@ -337,6 +337,11 @@ describe('display and ticker skeletons', () => {
     expect(displayName(tst)).not.toContain(tst.name);
   });
 
+  it('normalizeTicker ignores characters that show nothing (soft hyphen, fillers, tags, selectors)', () => {
+    const hid = ['\u00AD', '\u061C', '\u3164', '\u2800', '\uFE0F', '\u{E0041}'];
+    for (const c of hid) expect(normalizeTicker('KRON' + c)).toBe(normalizeTicker('KRON'));
+  });
+
   it('normalizeTicker matches the Rust homoglyph rule', () => {
     expect(normalizeTicker('KRON')).toBe('KR0N');
     expect(normalizeTicker('kr0n')).toBe('KR0N');

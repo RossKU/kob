@@ -201,6 +201,9 @@ const CONFUSABLE_LATIN: Readonly<Record<string, string>> = {
   'Օ': 'O', 'Ս': 'U',
 };
 
+/** Combining marks, format characters (soft hyphen, ALM, tags), hangul and braille fillers and variation selectors: nothing shows, so a ticker with one reads as the one without. */
+const INVISIBLE_IN_TICKER = /[\p{M}\p{Cf}\u115F\u1160\u180E\u2800\u3164\uFFA0\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/gu;
+
 /**
  * Homoglyph skeleton of a ticker or name, for what the app shows and finds, never for a refusal.
  * It serves the search (`kr0n` finds `KRON`), the "another token uses this ticker" note
@@ -211,7 +214,7 @@ const CONFUSABLE_LATIN: Readonly<Record<string, string>> = {
  * Latin, then RN -> M, VV -> W, O -> 0, I and L -> 1, S -> 5, B -> 8.
  */
 export function normalizeTicker(ticker: string): string {
-  const upper = ticker.normalize('NFKC').normalize('NFD').replace(/\p{M}/gu, '').toUpperCase().normalize('NFKC');
+  const upper = ticker.normalize('NFKC').normalize('NFD').replace(INVISIBLE_IN_TICKER, '').toUpperCase().normalize('NFKC');
   const latin = [...upper].map((c) => CONFUSABLE_LATIN[c] ?? c).join('');
   return [...latin.replace(/RN/g, 'M').replace(/VV/g, 'W')].map((c) => (c === 'O' ? '0' : c === 'I' || c === 'L' ? '1' : c === 'S' ? '5' : c === 'B' ? '8' : c)).join('');
 }
