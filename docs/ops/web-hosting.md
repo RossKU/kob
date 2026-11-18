@@ -206,7 +206,8 @@ page fills it from a file the creator picks, `docs/spec/token-metadata.md` 2). S
   which posts to the repository variable `KOB_LOGO_REPORT_URL` (the public indexer's `/v1/logo-reports` address; unset: the workflow only comments that the report
   waits for manual review). The indexer needs `[logo_reports] enabled = true` (`docs/ops/chart-server.md`, `docs/api-reference.md` 3.19 and 3.20).
 * **Privacy.** The creator's host (and an IPFS gateway) sees the visitor's IP address, the time, and that this token's logo was looked at, and the host
-  decides what it sends. KOB's own host sees nothing of this.
+  decides what it sends. KOB's own host sees nothing of this. The same holds in the wallet views (Balances, My orders, fills): the tokens a wallet holds
+  are looked up at kascov.io and the gateway or the creator's host, so the set of covenant ids they see can identify the address.
 
 ### KOB's own genesis check: more external sources (a token page only)
 
