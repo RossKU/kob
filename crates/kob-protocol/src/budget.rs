@@ -62,9 +62,11 @@ pub fn topup_extra(program: crate::artifacts::TemplateId) -> Option<u64> {
     topup_extra_table().get(program.name()).copied()
 }
 
-/// The default `topupTip` of a mode-2 order (bid-delivery-spec §10):
-/// `min(deliveryCarrier, ceil(1.25 × topup_extra[program]))`, at most [`crate::state::TOPUP_TIP_MAX`]
-/// (S4), `None` when the program has no top-up.
+/// The default `topupTip` of a mode-2 order (bid-delivery-spec §10).
+///
+/// `None` when the program has no top-up. Otherwise it is
+/// `min(deliveryCarrier, ceil(1.25 × topup_extra[program]))`, at most
+/// [`crate::state::TOPUP_TIP_MAX`].
 pub fn default_topup_tip(program: crate::artifacts::TemplateId, delivery_carrier: i64) -> Option<i64> {
     let extra = topup_extra(program)?;
     let tip = i64::try_from((extra.saturating_mul(5)).div_ceil(4)).unwrap_or(i64::MAX);

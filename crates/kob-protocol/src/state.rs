@@ -138,7 +138,7 @@ pub const MODE_ACCUMULATE: i64 = 1;
 /// Delivery mode 2 (*top-up*): a filler may add the tokens to the maker's receive UTXO.
 pub const MODE_TOPUP: i64 = 2;
 /// The largest `topupTip` (and `exitTopupTip`) the gate accepts: just below
-/// [`crate::tx::COVENANT_OUTPUT_MIN`] (0.08 KAS), audit S4.
+/// [`crate::tx::COVENANT_OUTPUT_MIN`] (0.08 KAS).
 ///
 /// A form-2 fill takes any receive UTXO of the maker's key, also one the filler made a moment
 /// ago with 0 units. Its KAS (`v`) then rides on the delivery to the maker, so the filler gains
@@ -3008,7 +3008,7 @@ impl AnyState {
     ///
     /// - `mode` is 0, 1 or 2. Modes 0 and 1 have `recvThreshold = topupTip = 0`; mode 2 has
     ///   `recvThreshold > 0` and `0 <= topupTip <= deliveryCarrier` (an exit block: the exit's
-    ///   carrier) and `topupTip <= TOPUP_TIP_MAX` (S4).
+    ///   carrier) and `topupTip <= TOPUP_TIP_MAX`.
     /// - A KRON delivery is mode 0: the KRON twins, a pair order buying a KRON token, and the exits
     ///   of a pair entry that deliver a KRON token.
     /// - Modes 0 and 2 have `bought = 0`, mode 1 `bought >= 0`; with `placement` (a new order, a
