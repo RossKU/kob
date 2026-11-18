@@ -1,11 +1,14 @@
-// View model of the ticket's DISCLOSURE panel: `OrderPlan` (+ the conditional summary) -> rows of plain strings and i18n keys.
-// Everything shown derives from the planned state and the built transaction (`plan.disclosure`, `plan.built`), never from the form text:
-// what the user reads here is what the confirmation screen will then re-derive from the transaction itself.
-// Pure and DOM-free (unit-tested); the component only renders rows with `t(labelKey)`.
+// View model of the ticket's disclosure panel: `OrderPlan` (plus the conditional summary) -> rows
+// of plain strings and i18n keys. Everything shown derives from the planned state and the built
+// transaction (`plan.disclosure`, `plan.built`), never from the form text. What the user reads here
+// is what the confirmation screen will then re-derive from the transaction itself. Pure and
+// DOM-free (unit-tested). The component only renders rows with `t(labelKey)`.
 //
-// A token/token pair A/B (`DisclosureCtx.quote`): prices are B per whole A, the all-in total is an amount of B (a sell receives at least, a buy
-// pays at most: the covenant's rounding), tips, carriers, reserves and fees stay KAS, and the pair rows (`pair`) add the B escrow and the
-// pair trigger rule (two KAS books or a resting pair order). Prices are never derived from pair fills.
+// On a token/token pair A/B (`DisclosureCtx.quote`) prices are B per whole A. The all-in total is
+// an amount of B: a sell receives at least it and a buy pays at most it, by the covenant's
+// rounding. Tips, carriers, reserves and fees stay KAS. The pair rows (`pair`) add the B escrow
+// and the pair trigger rule (two KAS books or a resting pair order). Prices are never derived from
+// pair fills.
 import { gtcRenewalUnix, formatLocal, formatUtc } from '../../kob/daa';
 import type { CondSummary } from '../../kob/orders/cond-common';
 import { planDelivery, topupTipTotal } from '../../kob/orders/delivery';
@@ -15,14 +18,20 @@ import { formatKas, formatPricePerToken, formatTokenAmount, formatUnits, pow10 }
 export interface DisclosureCtx {
   ticker: string;
   decimals: number;
-  /** the order scale: base units per whole token (the denominator of every price) */
+  /** The order scale: base units per whole token (the denominator of every price). */
   scale: bigint;
   clock: Clock;
-  /** a token/token pair: the quote token B the prices are in (B per whole `ticker`); absent = KAS */
+  /**
+   * A token/token pair: the quote token B the prices are in (B per whole `ticker`). Absent means
+   * KAS.
+   */
   quote?: { ticker: string; decimals: number };
 }
 
-/** The pair facts of a pair plan the panel shows: the planner's `PairDisclosure` (kob/orders/pair*.ts, exact rounded amounts from kob-wasm). */
+/**
+ * The pair facts of a pair plan the panel shows: the planner's `PairDisclosure`
+ * (kob/orders/pair*.ts), with exact rounded amounts from kob-wasm.
+ */
 export type PairFacts = PairDisclosure;
 
 export type Tone = 'normal' | 'primary' | 'muted' | 'warn';
@@ -32,70 +41,79 @@ export type Txt = string | { key: string; params: Record<string, string> };
 const tx = (key: string, params: Record<string, string> = {}): Txt => ({ key, params });
 
 export interface DisclosureRow {
-  /** stable id: `data-testid="disc-<id>"` */
+  /** Stable id: `data-testid="disc-<id>"`. */
   id: string;
   labelKey: string;
   labelParams?: Record<string, string>;
-  /** main value, e.g. "2.5 EXKCC / KAS" */
+  /** Main value, for example "2.5 EXKCC / KAS". */
   value: Txt;
-  /** second line */
+  /** Second line. */
   detail?: Txt;
   tone: Tone;
 }
 
 export interface CarrierRow {
   kind: string;
-  /** i18n key of the label (`ticket.carrier.<kind>`) */
+  /** The i18n key of the label (`ticket.carrier.<kind>`). */
   labelKey: string;
   count: number;
   each: string;
   total: string;
-  /** stays in a UTXO the wallet owns (not locked) */
+  /** Stays in a UTXO the wallet owns (not locked). */
   kept: boolean;
 }
 
 export interface TimeRow {
   id: string;
-  /** i18n key: `ticket.time.<kind>` */
+  /** The i18n key: `ticket.time.<kind>`. */
   labelKey: string;
   unix: bigint;
   utc: string;
   local: string;
-  /** an extra sentence key with the renewal date etc. */
+  /** An extra sentence key with the renewal date and the like. */
   extra?: { labelKey: string; unix: bigint; utc: string; local: string };
 }
 
 export interface NoteRow {
-  /** the planner's tag */
+  /** The planner's tag. */
   tag: string;
-  /** i18n key `ticket.note.<tag>` */
+  /** The i18n key `ticket.note.<tag>`. */
   key: string;
   params: Record<string, string>;
 }
 
 export interface DisclosureModel {
   side: 'sell' | 'buy';
-  /** the amount in token units, e.g. "5.25" */
+  /** The amount in token units, for example "5.25". */
   tokenAmount: string;
-  /** the smallest fill (unless a fill takes everything left) in token units with the ticker, e.g. "0.4 EXKCC" */
+  /**
+   * The smallest fill (unless a fill takes everything left) in token units with the ticker, for
+   * example "0.4 EXKCC".
+   */
   minFill: string;
-  /** the trigger threshold of a stop (token units with the ticker), null for kinds without a trigger */
+  /**
+   * The trigger threshold of a stop (token units with the ticker). Null for kinds without a
+   * trigger.
+   */
   minTouch: string | null;
   ticker: string;
   price: DisclosureRow[];
   carriers: CarrierRow[];
-  /** total KAS leaving the spendable balance into covenants, excluding the network fee */
+  /** Total KAS leaving the spendable balance into covenants, excluding the network fee. */
   kasLocked: string;
-  /** tokens moved into custody (sell side), null for buys */
+  /** Tokens moved into custody (sell side). Null for buys. */
   tokensEscrowed: string | null;
   fee: string | null;
-  /** refund / keeper tips reserved inside the order */
+  /** Refund and keeper tips reserved inside the order. */
   reserves: DisclosureRow[];
   times: TimeRow[];
-  /** type-specific figures: trailing, keeper, repeat, exit legs */
+  /** Type-specific figures: trailing, keeper, repeat, exit legs. */
   extras: DisclosureRow[];
   notes: NoteRow[];
-  /** a token/token pair: the quote token's ticker and the pair rows (B escrow, pair trigger rule); null on a KAS market */
+  /**
+   * A token/token pair: the quote token's ticker and the pair rows (B escrow, pair trigger rule).
+   * Null on a KAS market.
+   */
   pair: { quoteTicker: string; rows: DisclosureRow[] } | null;
 }
 
@@ -104,7 +122,10 @@ export const kasText = (sompi: bigint): string => `${formatKas(sompi, GROUP)} KA
 
 /** The quote ticker of the market (KAS, or a pair's token B). */
 const quoteOf = (c: DisclosureCtx): string => c.quote?.ticker ?? 'KAS';
-/** A state price (quote units per whole token of `scale` base units) in quote per whole token: KAS, or B per whole A (B's decimals, exact). */
+/**
+ * A state price (quote units per whole token of `scale` base units) in quote per whole token: KAS,
+ * or B per whole A (B's decimals, exact).
+ */
 const perToken = (price: bigint, c: DisclosureCtx): string => {
   if (!c.quote) return formatPricePerToken(price, c.decimals, c.scale, GROUP);
   const digits = Math.max(c.quote.decimals, 0);
@@ -114,11 +135,14 @@ const perToken = (price: bigint, c: DisclosureCtx): string => {
 };
 /** A KAS price per whole token (a tip on every market). */
 const kasPerToken = (price: bigint, c: DisclosureCtx): string => formatPricePerToken(price, c.decimals, c.scale, GROUP);
-/** base units -> "1.25 EXKCC" */
+/** Base units -> "1.25 EXKCC". */
 const tokens = (amount: bigint, c: DisclosureCtx): string => `${formatTokenAmount(amount, c.decimals, GROUP)} ${c.ticker}`;
-/** base units of the quote token B -> "1.25 EXUSD" */
+/** Base units of the quote token B -> "1.25 EXUSD". */
 const quoteTokens = (amount: bigint, q: NonNullable<DisclosureCtx['quote']>): string => `${formatTokenAmount(amount, q.decimals, GROUP)} ${q.ticker}`;
-/** "2.5 EXKCC / KAS" or, on a pair, "2.5 EXKCC / EXUSD" (a state price per whole token of `scale` base units). */
+/**
+ * "2.5 EXKCC / KAS" or, on a pair, "2.5 EXKCC / EXUSD" (a state price per whole token of `scale`
+ * base units).
+ */
 const quotePrice = (price: bigint, c: DisclosureCtx): string => `${perToken(price, c)} ${quoteOf(c)}`;
 
 function priceValue(price: bigint, c: DisclosureCtx): { value: Txt } {
@@ -128,7 +152,7 @@ function priceValue(price: bigint, c: DisclosureCtx): { value: Txt } {
 function priceRow(id: string, labelKey: string, price: bigint, c: DisclosureCtx, tone: Tone = 'normal', labelParams?: Record<string, string>): DisclosureRow {
   return { id, labelKey, ...(labelParams ? { labelParams } : {}), tone, ...priceValue(price, c) };
 }
-/** A KAS price per whole token (tips: KAS on every market). */
+/** A KAS price per whole token (tips are KAS on every market). */
 function kasPriceRow(id: string, labelKey: string, price: bigint, c: DisclosureCtx, tone: Tone = 'normal'): DisclosureRow {
   return { id, labelKey, tone, value: `${kasPerToken(price, c)} KAS per ${c.ticker}` };
 }
@@ -174,7 +198,10 @@ const carrierRow = (l: CarrierLine): CarrierRow => ({
   kept: l.kept === true,
 });
 
-/** how long the exits live: until cancelled (90 days idle from each exit's creation) or until the chosen date */
+/**
+ * How long the exits live: until cancelled (90 days idle from each exit's creation) or until the
+ * chosen date.
+ */
 function exitLifetimeRow(x: NonNullable<CondSummary['exit']>): DisclosureRow {
   if (x.expiry === 'gtd' && x.expiryUnixSeconds !== null) {
     return { id: 'exitLifetime', labelKey: 'ticket.disc.exitLifetime', tone: 'normal', value: tx('ticket.val.exitGtd', { utc: formatUtc(x.expiryUnixSeconds), local: formatLocal(x.expiryUnixSeconds) }) };
@@ -243,20 +270,26 @@ function extrasOf(cond: CondSummary | null, c: DisclosureCtx): DisclosureRow[] {
   return out;
 }
 
-/** Builds the panel model. Null when the plan has no disclosure (it failed before a transaction was built). */
+/**
+ * Builds the panel model. Null when the plan has no disclosure (it failed before a transaction was
+ * built).
+ */
 export function buildDisclosureModel(plan: OrderPlan, ctx: DisclosureCtx): DisclosureModel | null {
   const d = plan.disclosure;
   if (!d) return null;
   const cond = (plan as OrderPlan & { cond?: CondSummary | null }).cond ?? null;
   const price: DisclosureRow[] = [];
   const buy = d.side === 'buy';
-  // a market / auction order's limit IS its worst price: show "expected" and "worst" instead of the same number twice
+  // A market or auction order's limit is its worst price. Show "expected" and "worst" instead of
+  // the same number twice.
   const boundOnly = d.expectedPrice !== null && d.worstPrice !== null && d.worstPrice === d.limitPrice;
   if (d.limitPrice !== null && !boundOnly) price.push(priceRow('limit', 'ticket.disc.limit', d.limitPrice, ctx));
   if (d.tip > 0n) price.push(kasPriceRow('tip', 'ticket.disc.tip', d.tip, ctx, 'muted'));
-  // without a tip the all-in price is the bound shown above (the limit, or the worst price of an auction / a stop): not the same number twice
+  // Without a tip the all-in price is the bound shown above (the limit, or the worst price of an
+  // auction or a stop), so it is not shown as the same number twice.
   if (d.allInPrice !== null && d.tip > 0n) price.push(priceRow('allInPrice', buy ? 'ticket.disc.allInPay' : 'ticket.disc.allInReceive', d.allInPrice, ctx, 'primary'));
-  // the total by the covenant's quote rule: a sell receives at least (rounded up), a buy pays at most (rounded down); on a pair an amount of B
+  // The total by the covenant's quote rule: a sell receives at least (rounded up), a buy pays at
+  // most (rounded down). On a pair it is an amount of B.
   if (d.allInTotal !== null) {
     price.push({ id: 'allInTotal', labelKey: buy ? 'ticket.disc.totalPay' : 'ticket.disc.totalReceive', tone: 'primary', value: ctx.quote ? quoteTokens(d.allInTotal, ctx.quote) : kasText(d.allInTotal) });
   }
@@ -264,10 +297,12 @@ export function buildDisclosureModel(plan: OrderPlan, ctx: DisclosureCtx): Discl
   if (d.worstPrice !== null && (boundOnly || d.worstPrice !== d.limitPrice)) price.push(priceRow('worst', 'ticket.disc.worst', d.worstPrice, ctx, 'warn'));
 
   const reserves: DisclosureRow[] = [];
-  // R-13: paid only to whoever refunds the order after its expiry; it returns to you with a cancel or the last fill
+  // Paid only to whoever refunds the order after its expiry. It returns to you with a cancel or the
+  // last fill.
   if (d.refundTip > 0n) reserves.push({ id: 'refundTip', labelKey: 'ticket.disc.refundTip', tone: 'muted', value: kasText(d.refundTip), detail: tx('ticket.disc.refundTipHint') });
   if (d.keeperTip > 0n) reserves.push({ id: 'keeperTip', labelKey: 'ticket.disc.keeperTip', tone: 'muted', value: kasText(d.keeperTip) });
-  // the delivery of a buy (orders/delivery.ts): its name, and a Top-up's tip per fill with the most it can pay
+  // The delivery of a buy (orders/delivery.ts): its name, and a Top-up's tip per fill with the most
+  // it can pay.
   const delivery = planDelivery(plan);
   if (delivery) {
     reserves.push({ id: 'delivery', labelKey: 'ticket.disc.delivery', tone: 'muted', value: tx(`ticket.short.delivery.${delivery.delivery.choice}`) });
@@ -287,7 +322,8 @@ export function buildDisclosureModel(plan: OrderPlan, ctx: DisclosureCtx): Discl
     if (seen.has(tag)) continue;
     seen.add(tag);
     const params = noteParams(tag, d, cond, ctx, pairFacts);
-    // a sentence that quotes a number the plan does not have is left out rather than shown with a hole
+    // A sentence that quotes a number the plan does not have is left out rather than shown with a
+    // hole.
     if ((NOTE_REQUIRES[tag] ?? []).some((k) => params[k] === undefined || params[k] === '')) continue;
     notes.push({ tag, key: `ticket.note.${tag}`, params });
   }
@@ -312,11 +348,18 @@ export function buildDisclosureModel(plan: OrderPlan, ctx: DisclosureCtx): Discl
 }
 
 /**
- * The pair rows (exact rounded amounts of the planner's `PairDisclosure`): A and B moved into custody (an ask's A, a bid's B escrow, a sell-first
- * entry's A and B prefund), the B the whole amount is guaranteed at its worst price (a sell receives at least, a buy pays at most) and at the
- * expected price, the B of one minimum fill, the KAS tip prefunded, what each exit of an if-done entry holds, and the trigger rule of a pair stop:
- * it arms when the two KAS books imply a rate beyond the stop (a resting order of each token on the costly side, each rested `minRestDaa` and
- * filled together) or when a resting pair order at or beyond the stop is filled.
+ * The pair rows (exact rounded amounts of the planner's `PairDisclosure`):
+ * - A and B moved into custody (an ask's A, a bid's B escrow, a sell-first entry's A and B
+ *   prefund);
+ * - the B the whole amount is guaranteed at its worst price (a sell receives at least, a buy pays
+ *   at most) and at the expected price;
+ * - the B of one minimum fill;
+ * - the KAS tip prefunded;
+ * - what each exit of an if-done entry holds;
+ * - the trigger rule of a pair stop.
+ * A pair stop arms when the two KAS books imply a rate beyond the stop (a resting order of each
+ * token on the costly side, each rested `minRestDaa` and filled together) or when a resting pair
+ * order at or beyond the stop is filled.
  */
 function pairRows(p: PairFacts | null, c: DisclosureCtx): DisclosureRow[] {
   const q = c.quote;
@@ -365,7 +408,10 @@ function pairRows(p: PairFacts | null, c: DisclosureCtx): DisclosureRow[] {
   return out;
 }
 
-/** Numbers some type-specific sentences quote (`{stop}`, `{count}`, ...). Unknown tags get no params. */
+/**
+ * Numbers some type-specific sentences quote (`{stop}`, `{count}`, and so on). Unknown tags get no
+ * params.
+ */
 function noteParams(tag: string, d: Disclosure, cond: CondSummary | null, c: DisclosureCtx, pair: PairFacts | null = null): Record<string, string> {
   const p: Record<string, string> = { ticker: c.ticker };
   if (pair && c.quote) {
@@ -440,7 +486,9 @@ function noteParams(tag: string, d: Disclosure, cond: CondSummary | null, c: Dis
   return p;
 }
 
-/** Parameters a note sentence quotes: the note is dropped when the plan cannot supply one of them. */
+/**
+ * Parameters a note sentence quotes. The note is dropped when the plan cannot supply one of them.
+ */
 export const NOTE_REQUIRES: Readonly<Record<string, readonly string[]>> = {
   stopTrigger: ['exposure', 'volume'],
   stopAuction: ['auction', 'slippage'],
@@ -466,10 +514,16 @@ export const NOTE_REQUIRES: Readonly<Record<string, readonly string[]>> = {
   pairExitCustody: ['quote'],
 };
 
-/** The note tags of the pair planner (`PairDisclosure.notes`): their sentences name the quote token B (`{quote}`). */
+/**
+ * The note tags of the pair planner (`PairDisclosure.notes`). Their sentences name the quote token
+ * B (`{quote}`).
+ */
 export const PAIR_NOTE_TAGS = ['pairPricesFromKasBooks', 'pairTipKas', 'pairRoute', 'pairNetting', 'pairInventory', 'pairAuction', 'pairTrigger', 'pairExitCustody'] as const;
 
-/** Every note tag the planners can emit: the i18n key `ticket.note.<tag>` must exist for each (checked by the coverage test). */
+/**
+ * Every note tag the planners can emit. The i18n key `ticket.note.<tag>` must exist for each
+ * (checked by the coverage test).
+ */
 export const NOTE_TAGS = [
   'gtc', 'dayOrder', 'gtd', 'auction', 'marketable', 'fokAllOrNothing', 'iocRemainderReturned', 'marketFills', 'market', 'streaming', 'close', 'twap', 'dca', 'dutch', 'rising',
   'carrierReturned', 'stopTrigger', 'stopAuction', 'triggerExposure', 'stopLimitMayNotFill', 'trailing', 'takeProfitLeg', 'oco', 'partialFillsKeepLegs', 'keeperReserve',

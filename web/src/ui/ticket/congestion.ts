@@ -1,9 +1,14 @@
-// The congestion note of the final confirmation (pure part): whether blocks are contended, read from the node's fee estimate at most once per CONGESTION_POLL_MS.
-// The rule is `isContended` (kob/fee-policy.ts: the executor's reading of `getFeeEstimate`). The note only informs: it never changes a rate, never switches
-// the Settings toggle ("Pay the priority fee") and is never asked per transaction. A node without an estimate, or one that errors, says nothing.
+// The congestion note of the final confirmation (pure part): whether blocks are contended, read
+// from the node's fee estimate at most once per CONGESTION_POLL_MS. The rule is `isContended`
+// (kob/fee-policy.ts, the executor's reading of `getFeeEstimate`). The note only informs. It
+// never changes a rate, never switches the Settings toggle ("Pay the priority fee") and is never
+// asked per transaction. A node without an estimate, or one that errors, says nothing.
 import { isContended, type FeeEstimate } from '../../kob/fee-policy';
 
-/** The ticket asks the node for the estimate this often while it is shown (and the page is visible); never in the background, never on an idle page. */
+/**
+ * The ticket asks the node for the estimate this often while it is shown (and the page is visible).
+ * Never in the background, never on an idle page.
+ */
 export const CONGESTION_POLL_MS = 30_000;
 
 export class CongestionProbe {
@@ -24,8 +29,9 @@ export class CongestionProbe {
   }
 
   /**
-   * Whether blocks are contended. Asks the node only when the last ask is `everyMs` old (any caller, however often it comes: a remounted ticket reuses the
-   * answer); concurrent callers share one ask. Never rejects: a failed or missing estimate is "not contended".
+   * Whether blocks are contended. Asks the node only when the last ask is `everyMs` old, for any
+   * caller however often it comes, so a remounted ticket reuses the answer. Concurrent callers
+   * share one ask. Never rejects: a failed or missing estimate is "not contended".
    */
   probe(): Promise<boolean> {
     if (this.inflight) return this.inflight;

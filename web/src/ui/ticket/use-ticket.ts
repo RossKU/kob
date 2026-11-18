@@ -1,11 +1,17 @@
-// Data hooks of the order ticket: the planning environment kept fresh in the background, and the debounced plan.
+// Data hooks of the order ticket: the planning environment kept fresh in the background, and the
+// debounced plan.
 //
-// Responsiveness: typing only re-plans against the environment already on hand (synchronous), it never waits for the network. The environment is
-// read in parts that are kept fresh separately (app/env.ts): the MARKET (book per order, newest trade) as soon as the ticket is shown, with or
-// without a wallet, and on every book notice; the COINS (node clock, spendable KAS, fees: the node only, fast) and the HOLDINGS (token UTXOs, own
-// resting orders: the indexer) once a wallet is connected, every ENV_REFRESH_MS, on a fill of one of the wallet's orders and after every
-// submission. The ticket plans as soon as the market and the coins are there; holdings still being read count as none (a sell waits for them, a buy
-// does not), and Review re-checks against them before anything can be signed (OrderTicket, the freshness rule below).
+// Responsiveness: typing only re-plans against the environment already on hand (synchronous). It
+// never waits for the network. The environment is read in parts that are kept fresh separately
+// (app/env.ts):
+// - The market (book per order, newest trade) is read as soon as the ticket is shown, with or
+//   without a wallet, and on every book notice.
+// - The coins (node clock, spendable KAS, fees: the node only, fast) and the holdings (token
+//   UTXOs, own resting orders: the indexer) are read once a wallet is connected. They are read
+//   every ENV_REFRESH_MS, on a fill of one of the wallet's orders and after every submission.
+// The ticket plans as soon as the market and the coins are there. Holdings still being read count
+// as none: a sell waits for them and a buy does not. Review re-checks against them before anything
+// can be signed (OrderTicket, the freshness rule below).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import type { Services } from '../../app/services';
@@ -21,13 +27,18 @@ import { useLiveRefresh } from '../market/live';
 import { envErrorSource, type EnvErrorSource } from './env-error';
 
 export const PLAN_DEBOUNCE_MS = 300;
-/** every part of the environment is re-read at least this often (UTXOs and the book move; feed events also trigger reads); paused on a hidden page */
+/**
+ * Every part of the environment is re-read at least this often. UTXOs and the book move, and feed
+ * events also trigger reads. Reads are paused on a hidden page.
+ */
 export const ENV_REFRESH_MS = 20_000;
 
 /**
- * Serialises a load: one run at a time; every call made during a run shares ONE follow-up run that starts after it ends, so its result
- * reflects state read after the call. A feed that fires faster than a load takes never starves the result (each run completes and is shown).
- * Runs are timed by their START (when their reads began): `since(t)` waits only as long as needed for a result read at or after `t`.
+ * Serialises a load: one run at a time. Every call made during a run shares one follow-up run that
+ * starts after it ends, so its result reflects state read after the call. A feed that fires
+ * faster than a load takes never starves the result, because each run completes and is shown. Runs
+ * are timed by their start (when their reads began), and `since(t)` waits only as long as needed
+ * for a result read at or after `t`.
  */
 export class Serialized<T> {
   private running: { p: Promise<T>; at: number } | null = null;
@@ -58,8 +69,9 @@ export class Serialized<T> {
   }
 
   /**
-   * A result whose run started at or after `t`: the newest one when it qualifies (at once), else the run in flight when it started at or after `t`,
-   * else a new run (or the follow-up already queued). Never a result read before `t`.
+   * A result whose run started at or after `t`. It is the newest one when it qualifies (at once),
+   * else the run in flight when it started at or after `t`, else a new run (or the follow-up
+   * already queued). Never a result read before `t`.
    */
   since(t: number): Promise<T> {
     const l = this.last;
@@ -73,7 +85,7 @@ export class Serialized<T> {
     return this.last;
   }
 
-  /** A read is running or queued (a change is known to be on its way). */
+  /** A read is running or queued, so a change is known to be on its way. */
   busy(): boolean {
     return !!this.running || !!this.next;
   }
@@ -94,33 +106,48 @@ export class Serialized<T> {
   }
 }
 
-/** A part of the environment the ticket is still waiting for (no answer yet): the status line says which. */
+/**
+ * A part of the environment the ticket is still waiting for (no answer yet). The status line says
+ * which.
+ */
 export type EnvWait = 'market' | 'coins' | 'holdings' | 'pair';
 
 /** What the order ticket reads its environment through. */
 export interface TicketEnv {
-  /** the environment of the newest parts (null until the market and the coins are there); holdings not read yet count as none */
+  /**
+   * The environment of the newest parts. Null until the market and the coins are there. Holdings
+   * not read yet count as none.
+   */
   env: PlanEnv | null;
-  /** parts not read yet */
+  /** Parts not read yet. */
   waiting: EnvWait[];
-  /** a part could not be read (node unreachable ...): the message and a retry */
+  /** A part could not be read (node unreachable, for example): the message and a retry. */
   error: string | null;
-  /** where `error` came from: the node, the indexer or neither (a token whose decimals disagree ...) */
+  /**
+   * Where `error` came from: the node, the indexer or neither (a token whose decimals disagree).
+   */
   errorSource: EnvErrorSource | null;
   loading: boolean;
-  /** every part read again, starting now: the result reflects state read after the call (after a submission, a retry) */
+  /**
+   * Every part read again, starting now. The result reflects state read after the call (after a
+   * submission, a retry).
+   */
   refresh(): Promise<PlanEnv | null>;
   /**
-   * A complete environment (holdings included) whose `parts` (default: all) were read at or after `t` (`Serialized.since`); the other parts as
-   * they are on hand.
+   * A complete environment (holdings included) whose `parts` (default: all) were read at or after
+   * `t` (`Serialized.since`). The other parts are as they are on hand.
    */
   since(t: number, parts?: readonly EnvWait[]): Promise<PlanEnv | null>;
   /**
-   * The environment of the parts on hand, assembled NOW (so the spends of a submission made since are already left out), with the start of its
-   * oldest read (`at`), the end of its node read (`clockAt`: when its clock was read) and whether the holdings are in.
+   * The environment of the parts on hand, assembled now, so the spends of a submission made since
+   * are already left out. It comes with the start of its oldest read (`at`), the end of its node
+   * read (`clockAt`, when its clock was read) and whether the holdings are in.
    */
   snapshot(): { env: PlanEnv; at: number; clockAt: number; complete: boolean } | null;
-  /** the parts on hand that may no longer be the state at `clickAt` (review-check.ts `partCurrent`): the re-check reads only these */
+  /**
+   * The parts on hand that may no longer be the state at `clickAt` (review-check.ts `partCurrent`).
+   * The re-check reads only these.
+   */
   stale(clickAt: number): EnvWait[];
 }
 
@@ -131,7 +158,10 @@ interface PartState<T> {
   loading: boolean;
 }
 
-/** One part of the environment: a `Serialized` load per `deps` (a result of an earlier generation is dropped), its newest value as state. */
+/**
+ * One part of the environment: a `Serialized` load per `deps` (a result of an earlier generation is
+ * dropped), with its newest value as state.
+ */
 function usePart<T>(load: (() => Promise<T>) | null, deps: unknown[]): [Serialized<T> | null, PartState<T>] {
   const [state, setState] = useState<PartState<T>>({ value: null, error: null, source: null, loading: false });
   const gen = useRef(0);
@@ -166,8 +196,9 @@ function usePart<T>(load: (() => Promise<T>) | null, deps: unknown[]): [Serializ
 }
 
 /**
- * The depth the book is verified to for an order that walks it: `amount` rounded up to a power of two (0: the order does not walk the book). The steps keep
- * the market part from being read again at every digit typed.
+ * The depth the book is verified to for an order that walks it. It is `amount` rounded up to a
+ * power of two, and 0 when the order does not walk the book. The steps keep the market part from
+ * being read again at every digit typed.
  */
 export function depthBucket(amount: bigint): bigint {
   if (amount <= 0n) return 0n;
@@ -180,8 +211,9 @@ const quiet = (r: Serialized<unknown> | null): void => void r?.run().catch(() =>
 const factsOf = (r: Serialized<unknown> | null, noticeAt: number): PartFacts => ({ at: r?.latest()?.at ?? null, busy: !!r?.busy(), noticeAt });
 
 /**
- * When the newest notice that concerns a part arrived (0: none), recorded the moment it arrives, before the feed's debounce starts its read: a change
- * known but not read yet makes the part stale (review-check.ts `partCurrent`). A reorg or a resync concerns every part.
+ * When the newest notice that concerns a part arrived, 0 for none. It is recorded the moment it
+ * arrives, before the feed's debounce starts its read. A change known but not read yet makes the
+ * part stale (review-check.ts `partCurrent`). A reorg or a resync concerns every part.
  */
 function useNoticeClock(feed: Services['feed']): { stamp(): void; at(): number } {
   const at = useRef(0);
@@ -196,8 +228,9 @@ function useNoticeClock(feed: Services['feed']): { stamp(): void; at(): number }
 const maybe = <T,>(r: Serialized<T> | null, f: (r: Serialized<T>) => Promise<T>): Promise<T | null> => (r ? f(r) : Promise.resolve(null));
 
 /**
- * Keeps the environment of (wallet, token)'s KAS market (see the head of this file). `enabled` false (no wallet, wrong network, untradable token)
- * keeps only the market part, read once (so a wallet that connects plans at once), and stops every wallet read.
+ * Keeps the environment of (wallet, token)'s KAS market (see the head of this file). With
+ * `enabled` false (no wallet, wrong network, untradable token) it keeps only the market part, read
+ * once so that a wallet that connects plans at once, and stops every wallet read.
  */
 export function useTicketEnv(token: TokenInfo, enabled: boolean, depth: bigint = 0n): TicketEnv {
   const services = useServices();
@@ -206,13 +239,15 @@ export function useTicketEnv(token: TokenInfo, enabled: boolean, depth: bigint =
   const market = useMemo(() => (tradable ? tokenMarketOf(services, token) : null), [services, token.covenantId, tradable]);
   const wallet = enabled && pubkey && market ? { pubkey } : null;
 
-  // the book is verified as deep as the order being planned walks it (a market / close order: its amount), in steps so that typing does not read again at every digit
+  // The book is verified as deep as the order being planned walks it (a market or close order: its
+  // amount). It deepens in steps, so that typing does not read again at every digit.
   const bucket = depthBucket(depth);
   const [marketRun, marketState] = usePart<MarketPart>(market ? () => readMarketPart(services, market, bucket > 0n ? { depth: bucket } : {}) : null, [services, market, bucket]);
   const [coinsRun, coinsState] = usePart<CoinsPart>(wallet ? () => readCoinsPart(services, wallet) : null, [services, wallet?.pubkey]);
   const [holdRun, holdState] = usePart<HoldingsPart>(wallet && market ? () => readHoldingsPart(services, wallet, token, market) : null, [services, wallet?.pubkey, market]);
 
-  // a wallet that connects (or comes back) reads the market again too: the part read without one may be minutes old
+  // A wallet that connects (or comes back) reads the market again too, because the part read
+  // without one may be minutes old.
   useEffect(() => {
     if (wallet) void marketRun?.since(Date.now() - 5_000).catch(() => undefined);
   }, [!!wallet]);
@@ -224,7 +259,8 @@ export function useTicketEnv(token: TokenInfo, enabled: boolean, depth: bigint =
     quiet(marketRun);
     walletParts();
   }, ENV_REFRESH_MS, !!wallet);
-  // the book moved: the market part; a fill of one of the wallet's orders: its coins and holdings too (a payout, a smaller order)
+  // The book moved: the market part. A fill of one of the wallet's orders: its coins and holdings
+  // too (a payout, a smaller order).
   const own = useRef<Set<string>>(new Set());
   own.current = new Set((holdState.value?.ownOrders ?? []).map((o) => o.covenantId.toLowerCase()));
   const bookNotice = useNoticeClock(services.feed);
@@ -247,7 +283,8 @@ export function useTicketEnv(token: TokenInfo, enabled: boolean, depth: bigint =
   );
   const since = useCallback(
     async (t: number, parts: readonly EnvWait[] = ['market', 'coins', 'holdings']): Promise<PlanEnv | null> => {
-      // never a read older than a change known since \`t\`: one that started after the newest notice concerning the part and this page's newest submission
+      // Never a read older than a change known since `t`: one that started after the newest notice
+      // concerning the part and this page's newest submission.
       const one = <T,>(r: Serialized<T> | null, part: EnvWait, noticeAt: number): Promise<T | null> =>
         maybe(r, (x) => {
           const l = x.latest();
@@ -271,7 +308,8 @@ export function useTicketEnv(token: TokenInfo, enabled: boolean, depth: bigint =
   }, [marketRun, coinsRun, holdRun, assemble]);
   const stale = useCallback(
     (clickAt: number): EnvWait[] => {
-      // the book's notices and the fills of the wallet's own orders are what would have started a newer read
+      // The book's notices and the fills of the wallet's own orders are what would have started a
+      // newer read.
       const ctx = { liveSince: services.feed?.liveSince([`book:${token.covenantId}`, `fills:${token.covenantId}`]) ?? null, lastSubmitAt: pendingSpends.lastAddedAt };
       const parts: [EnvWait, Serialized<unknown> | null, number][] = [['market', marketRun, bookNotice.at()], ['coins', coinsRun, ownNotice.at()], ['holdings', holdRun, ownNotice.at()]];
       return parts.filter(([, r, n]) => !partCurrent(factsOf(r, n), clickAt, ctx)).map(([k]) => k);
@@ -285,8 +323,9 @@ export function useTicketEnv(token: TokenInfo, enabled: boolean, depth: bigint =
 }
 
 /**
- * Keeps a PairPlanEnv for (wallet, base A, quote B): both tokens' UTXOs, the pair book, own pair orders of the pair (app/env.ts `buildPairPlanEnv`),
- * read as one part. A change of either token's book (`book:<A>`, `book:<B>`: a pair order notifies both) refreshes it.
+ * Keeps a PairPlanEnv for (wallet, base A, quote B): both tokens' UTXOs, the pair book, and the
+ * own pair orders of the pair (app/env.ts `buildPairPlanEnv`), read as one part. A change of
+ * either token's book (`book:<A>`, `book:<B>`, since a pair order notifies both) refreshes it.
  */
 export function usePairTicketEnv(base: TokenInfo, quote: TokenInfo, enabled: boolean, depth: bigint = 0n): TicketEnv {
   const services = useServices();
@@ -327,19 +366,28 @@ export function usePairTicketEnv(base: TokenInfo, quote: TokenInfo, enabled: boo
 
 export interface TicketPlan {
   plan: OrderPlan | null;
-  /** the plan belongs to the current form and environment (false while a re-plan is pending) */
+  /** The plan belongs to the current form and environment. False while a re-plan is pending. */
   current: boolean;
-  /** a re-plan is waiting for the debounce or running */
+  /** A re-plan is waiting for the debounce or running. */
   pending: boolean;
-  /** the pending re-plan answers an edit of the form (a user action), not only a new environment (a tick): only that one may show "Calculating..." at once */
+  /**
+   * The pending re-plan answers an edit of the form (a user action), not only a new environment (a
+   * tick). Only that one may show "Calculating..." at once.
+   */
   editPending: boolean;
-  /** planOrder threw: a bug, shown as an error (planners report user problems as issues) */
+  /**
+   * `planOrder` threw. That is a bug, shown as an error, because planners report user problems as
+   * issues.
+   */
   crash: string | null;
 }
 
 const key = (i: Intent | null): string => (i === null ? '' : JSON.stringify(i, (_k, v) => (typeof v === 'bigint' ? `${v}n` : v)));
 
-/** Plans `intent` against `env`, 300 ms after the last change of the intent; an environment refresh re-plans at once. */
+/**
+ * Plans `intent` against `env`, 300 ms after the last change of the intent. An environment refresh
+ * re-plans at once.
+ */
 export function useTicketPlan(env: PlanEnv | null, intent: Intent | null): TicketPlan {
   const k = useMemo(() => key(intent), [intent]);
   const [out, setOut] = useState<{ plan: OrderPlan | null; k: string; envId: PlanEnv | null; crash: string | null }>({ plan: null, k: '', envId: null, crash: null });

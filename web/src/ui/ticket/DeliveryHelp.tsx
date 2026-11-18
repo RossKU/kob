@@ -1,9 +1,12 @@
-// "What's this?" of the ticket's Delivery row: the three deliveries of a buy (kob/orders/delivery.ts), as the founder-reviewed mock-up shows
-// them (a buy of 30 filled three times by 10), played step by step in the three lanes at once (delivery-help-steps.ts): the empty order, three
-// fills, the order ends. A play / pause button and step buttons drive it; it plays when it opens, or opens paused on the final state with
-// reduced motion. The drawing is inline SVG built in JSX (no markup strings), animated by CSS classes and keyframes of ticket.css (`.dh-*`), in
-// the app's colour tokens (light and dark). Each lane is its own drawing, so on a phone the lanes stack. The choice in force is highlighted.
-// A Modal: Escape and the close button close it (the timer stops), focus returns to the link.
+// "What's this?" of the ticket's Delivery row: the three deliveries of a buy
+// (kob/orders/delivery.ts), as the mock-up shows them (a buy of 30 filled three times by 10). They
+// are played step by step in the three lanes at once (delivery-help-steps.ts): the empty order,
+// three fills, the order ends. A play / pause button and step buttons drive it. It plays when it
+// opens, or opens paused on the final state with reduced motion. The drawing is inline SVG built in
+// JSX (no markup strings), animated by CSS classes and keyframes of ticket.css (`.dh-*`), in the
+// app's colour tokens (light and dark). Each lane is its own drawing, so on a phone the lanes
+// stack. The choice in force is highlighted. It is a Modal: Escape and the close button close it
+// (the timer stops), and focus returns to the link.
 import { useEffect, useId, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import type { DeliveryChoice } from '../../kob/orders/delivery';
@@ -31,7 +34,7 @@ const prefersReducedMotion = (): boolean => {
   }
 };
 
-/** A UTXO box with its amount; a new amount pops (`key` restarts the keyframes). */
+/** A UTXO box with its amount. A new amount pops (`key` restarts the keyframes). */
 function Box(props: { x: number; y: number; w?: number; label: string; cls?: string; pop?: boolean }) {
   const w = props.w ?? W;
   return (
@@ -71,7 +74,8 @@ function Lane(props: { mode: DeliveryChoice; on: boolean; step: number }) {
       </>
     );
   } else if (m === 'collected') {
-    // one custody in the order that counts up in place, then moves down into the wallet as one UTXO when the order ends
+    // One custody in the order that counts up in place, then moves down into the wallet as one UTXO
+    // when the order ends.
     drawing = (
       <>
         <g class={`dh-step dh-cust-g ${step >= 1 ? 'dh-show' : 'dh-hide'}${ended ? ' dh-moved' : ''}`}>
@@ -84,7 +88,7 @@ function Lane(props: { mode: DeliveryChoice; on: boolean; step: number }) {
       </>
     );
   } else {
-    // one wallet UTXO that each fill adds to, for a tip
+    // One wallet UTXO that each fill adds to, for a tip.
     drawing = (
       <>
         <line key={`a${step}`} class={at(step, 1, 'dh-flow dh-step') + (step >= 1 && !ended ? ' dh-flash' : '')} x1={120} y1={ORDER_Y + H} x2={MID + W / 2} y2={WALLET_Y - 2} marker-end={`url(#${arrow})`} />
@@ -121,10 +125,10 @@ function Lane(props: { mode: DeliveryChoice; on: boolean; step: number }) {
   );
 }
 
-/** The dialog. `selected`: the delivery the ticket has in force (highlighted). */
+/** The dialog. `selected` is the delivery the ticket has in force (highlighted). */
 export function DeliveryHelp(props: { selected: DeliveryChoice; onClose: () => void }) {
   const [s, setS] = useState<StepState>(() => initialSteps(prefersReducedMotion()));
-  // one timer per shown step while playing; closing the dialog (unmount) or pausing clears it
+  // One timer per shown step while playing. Closing the dialog (unmount) or pausing clears it.
   useEffect(() => {
     if (!s.playing) return;
     const h = setTimeout(() => setS(tick), delayOf(s.step));

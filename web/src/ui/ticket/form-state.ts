@@ -106,7 +106,7 @@ export const isCondType = (t: OrderTypeId): boolean => ['stopMarket', 'stopLimit
 export type FieldKind = 'amount' | 'int' | 'price' | 'delta' | 'tip' | 'kas' | 'percent' | 'seconds' | 'minutes' | 'datetime' | 'select' | 'bool' | 'touch';
 
 export interface FieldSpec {
-  /** intent path of the field, key of `values` */
+  /** The intent path of the field, the key of `values`. */
   id: string;
   kind: FieldKind;
   /** The `data-testid` of the input: order-amount, order-price, order-tip, else field-<path>. */

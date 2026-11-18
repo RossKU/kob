@@ -1,37 +1,44 @@
-// The amount slider under the ticket's amount box, the width of the ticket: 0..100 % of Max in 1 % steps. Tick marks at 0 / 25 / 50 / 75 / 100 % with
-// their labels in one row directly under the track, aligned to the ticks; the labels are the buttons that set that point (amount-slider.ts). While the
-// thumb is dragged it snaps to a tick within +-3 % and a small bubble above it reads the value; the filled track is the colour of the side (green for a
-// buy, red for a sell). Keyboard: the range takes the arrow keys (1 %), Home / End, Page Up / Page Down move it by 25 %. The thumb's touch target is 44 px on
-// a phone. Percent of Max is what it always was (of the available balance, or of the KAS budget when buying).
+// The amount slider under the ticket's amount box, the width of the ticket: 0..100 % of Max in 1 %
+// steps. Tick marks at 0, 25, 50, 75 and 100 % have their labels in one row directly under the
+// track, aligned to the ticks. The labels are the buttons that set that point (amount-slider.ts).
+// While the thumb is dragged it snaps to a tick within +-3 % and a small bubble above it reads the
+// value. The filled track is the colour of the side (green for a buy, red for a sell). Keyboard:
+// the range takes the arrow keys (1 %), and Home / End and Page Up / Page Down move it by 25 %.
+// The thumb's touch target is 44 px on a phone. Percent of Max is of the available balance, or of
+// the KAS budget when buying.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { PAGE_STEP, SLIDER_POINTS, pickAmount, picked, pointEnabled, snapPct, trackPercent, type SliderMemory } from './amount-slider';
 
 export interface AmountSliderProps {
-  /** what Max gives now (base units); null while it is not known (no wallet, no environment, being computed) */
+  /**
+   * What Max gives now (base units). Null while it is not known (no wallet, no environment, being
+   * computed).
+   */
   max: bigint | null;
-  /** the amount of the box (base units), null when empty or malformed */
+  /** The amount of the box (base units). Null when empty or malformed. */
   amount: bigint | null;
-  /** the order's own minimum fill (base units), null = the default */
+  /** The order's own minimum fill (base units). Null means the default. */
   minFill: bigint | null;
-  /** the amount text of `base` units in the box's unit, for the screen reader */
+  /** The amount text of `base` units in the box's unit, for the screen reader. */
   describe(base: bigint): string;
-  /** sets the amount (null: empties the box) */
+  /** Sets the amount (null empties the box). */
   onPick(base: bigint | null): void;
-  /** the side of the order: the filled track is green for a buy, red for a sell */
+  /** The side of the order: the filled track is green for a buy, red for a sell. */
   side?: 'buy' | 'sell';
   disabled?: boolean;
 }
 
 export function AmountSlider(p: AmountSliderProps) {
   const off = !!p.disabled || p.max === null || p.max <= 0n;
-  // the thumb keeps its position through ticks: it is converted from the amount once, when the amount changes (amount-slider.ts `trackPercent`)
+  // The thumb keeps its position through ticks. It is converted from the amount once, when the
+  // amount changes (amount-slider.ts `trackPercent`).
   const memory = useRef<SliderMemory | null>(null);
   memory.current = trackPercent(memory.current, p.amount, p.max);
   const pct = memory.current.pct;
   const [dragging, setDragging] = useState(false);
   const drag = useRef(false);
-  // the pointer is released anywhere, also off the thumb or after the finger left the page
+  // The pointer is released anywhere, also off the thumb or after the finger left the page.
   useEffect(() => {
     const end = () => {
       if (!drag.current) return;
@@ -73,7 +80,7 @@ export function AmountSlider(p: AmountSliderProps) {
           onInput={(e) => {
             const input = e.currentTarget as HTMLInputElement;
             let v = Number(input.value);
-            // magnetic: only while the thumb is dragged (the keyboard moves by exact steps)
+            // Magnetic: only while the thumb is dragged (the keyboard moves by exact steps).
             if (drag.current) {
               const s = snapPct(v);
               if (s !== v) {

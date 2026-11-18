@@ -1,5 +1,6 @@
-// The covenant-signing gate of the order tickets (C5-10): a wallet not known to sign covenant inputs is asked once for a test signature before its
-// first order (wallet/covenant-probe.ts). Placement stays blocked until the wallet passed; a wallet that cannot sign a cancel is refused for good.
+// The covenant-signing gate of the order tickets. A wallet not known to sign covenant inputs is
+// asked once for a test signature before its first order (wallet/covenant-probe.ts). Placement
+// stays blocked until the wallet passed. A wallet that cannot sign a cancel is refused for good.
 import { useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { t } from '../../i18n';
@@ -9,9 +10,9 @@ import type { JSX } from 'preact';
 import { Banner, Button } from '../kit';
 
 export interface CovenantGate {
-  /** orders may be placed with the connected wallet */
+  /** Orders may be placed with the connected wallet. */
   ready: boolean;
-  /** the banner to render (null when ready or no wallet) */
+  /** The banner to render. Null when ready or no wallet. */
   element: JSX.Element | null;
 }
 
