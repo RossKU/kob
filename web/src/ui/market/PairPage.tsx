@@ -1,15 +1,22 @@
-// `#/market/<base>/<quote>`: a token/token pair A/B (BASE/QUOTE, e.g. BTC/USDT). The page shows the pair book of
-// `GET /v1/pairs/{base}/{quote}/book` (resting pair orders = direct levels, if-done pair entries resting at their limit = entry levels, quotes
-// through the two KAS books = route levels, "via KAS") and the unified order ticket with B as its quote (every order type of the KAS ticket, prices
-// in B per whole A, tips KAS), and the same panels as a token market in the same places: 24 h strip, chart, depth chart (of the pair book), the
-// pair's recent fills and the facts of both tokens (pair-market.ts). A token is resolved as on its own page (use-market-token.ts): no registry entry is needed,
-// and a token the page cannot trade yet says why (pair-model.ts `pairSideOf`).
+// `#/market/<base>/<quote>`: a token/token pair A/B, with BASE/QUOTE such as BTC/USDT. The page
+// shows the pair book of `GET /v1/pairs/{base}/{quote}/book`. Its levels are:
+// - direct levels, the resting pair orders
+// - entry levels, the if-done pair entries resting at their limit
+// - route levels, the quotes through the two KAS books, shown as "via KAS"
+// It also shows the unified order ticket with B as its quote. The ticket has every order type of
+// the KAS ticket, with prices in B per whole A and tips in KAS. The page has the same panels as a
+// token market in the same places: the 24 h strip, the chart, the depth chart of the pair book,
+// the pair's recent fills and the facts of both tokens (pair-market.ts). A token is resolved as on
+// its own page (use-market-token.ts). No registry entry is needed, and a token the page cannot
+// trade yet says why (pair-model.ts `pairSideOf`).
 //
-// The founder price rule: prices come only from KAS-book fills. The chart is the indexer's pair candles (derived from the two KAS series) or the
-// client-side ratio of the two KAS candle series; last / change / high / low are KAS-derived; pair fills are VOLUME only (the volume tiles and the
-// fills list, which has no price column). Flip = swap of base and quote (another pair): every panel follows. Live: `book:<base>` and `book:<quote>`
-// trigger a debounced refetch (5 s polling without the socket). An indexer without the pair routes (404 / 405 / 501) shows "pair book unavailable"
-// and still lets the user place orders.
+// Prices come only from KAS-book fills. The chart is the indexer's pair candles, derived from the
+// two KAS series, or the client-side ratio of the two KAS candle series. Last, change, high and
+// low are KAS-derived. Pair fills are volume only, in the volume tiles and the fills list, which
+// has no price column. A flip swaps base and quote, which is another pair, and every panel
+// follows. Live, `book:<base>` and `book:<quote>` trigger a debounced refetch, with 5 s polling
+// without the socket. An indexer without the pair routes (404, 405 or 501) shows "pair book
+// unavailable" and still lets the user place orders.
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { OrdersView } from '../orders/OrdersView';
@@ -72,16 +79,18 @@ export function PairPage(props: { base: string; quote: string }) {
   const { favorites, change: changeFavorites } = useFavorites(config.network);
   const standalone = useStandalone(services.standalone)?.active === true;
   const [liveKey, setLiveKey] = useState(0);
-  // bumps on a reorg / resync: the chart reloads in full (TokenPage)
+  // Bumps on a reorg or resync. The chart reloads in full (TokenPage).
   const [resyncKey, setResyncKey] = useState(0);
   const [prefill, setPrefill] = useState<{ price: bigint; seq: number } | undefined>(undefined);
   const tokenList = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer, standalone]);
   const declared = useDeclarationLookup();
   const rows = useMemo(() => buildTokenRows(registry, tokenList.data ?? null, [], declared), [registry, tokenList.data, declared]);
   const choiceRows = useMemo(() => tradableRows(rows, kob.templates()), [rows, kob]);
-  // listed tokens that share a ticker with another listed token: a short note at each token's facts and at the ticket
+  // Listed tokens that share a ticker with another listed token. Each token's facts and the ticket
+  // get a short note.
   const shared = useMemo(() => sharedTickerIds(choiceRows), [choiceRows]);
-  // each token as its own page resolves it; no decimals are entered here, a first order is placed on the token's page
+  // Each token as its own page resolves it. No decimals are entered here, and a first order is
+  // placed on the token's page.
   const sideOptions = { rows, rowsLoading: tokenList.loading, refreshKey: liveKey, decimals: null, declared };
   const baseToken = useMarketToken(props.base, sideOptions);
   const quoteToken = useMarketToken(props.quote, sideOptions);
@@ -91,19 +100,23 @@ export function PairPage(props: { base: string; quote: string }) {
   const quoteInfo = quoteSide.state === 'ready' ? quoteSide.info : null;
   const baseRow = baseToken.headerRow;
   const quoteRow = quoteToken.headerRow;
-  // a token a federated bridge issues (its genesis holds the minter KOB pins, kUSDT's BridgeMint) is the quote: shown as the base, the page turns the
-  // pair round once its check says so (the book is the same either way, mergeOrientations); the history entry is replaced, so Back does not loop
+  // A token a federated bridge issues is the quote. Its genesis holds the minter KOB pins,
+  // kUSDT's BridgeMint. It is shown as the base, and the page turns the pair round once its check
+  // says so. The book is the same either way (mergeOrientations). The history entry is replaced,
+  // so Back does not loop.
   const baseGenesis = useGenesisCheck(baseRow ?? null);
   const quoteGenesis = useGenesisCheck(quoteRow ?? null);
   useEffect(() => {
     if (bridgeQuoteFlip(baseGenesis, quoteGenesis)) replaceRoute(pairRoute(props.quote, props.base));
   }, [baseGenesis, quoteGenesis, props.base, props.quote]);
-  // the two tokens are always among the choices, also when no list names them
+  // The two tokens are always among the choices, also when no list names them.
   const selectorRows = useMemo(() => withShownRows(choiceRows, [baseRow, quoteRow]), [choiceRows, baseRow, quoteRow]);
-  // the tab: `BASE/QUOTE · KOB` by the tickers the page shows (a token without one: its short id, never a whole covenant id)
+  // The tab is `BASE/QUOTE · KOB`, by the tickers the page shows. A token without one is named by
+  // its short id and never a whole covenant id.
   useDocumentTitle(marketPageTitle({ name: baseRow?.ticker, id: props.base }, { name: quoteRow?.ticker, id: props.quote }));
 
-  // the book of BASE/QUOTE with the resting orders of QUOTE/BASE turned round (pair-model.ts mergeOrientations): one book whichever way the pair is shown
+  // The book of BASE/QUOTE with the resting orders of QUOTE/BASE turned round (pair-model.ts
+  // `mergeOrientations`). It is one book whichever way the pair is shown.
   const book = useAsync(
     (signal) =>
       indexer
@@ -125,28 +138,32 @@ export function PairPage(props: { base: string; quote: string }) {
       if (full) setResyncKey((k) => k + 1);
     },
   );
-  // keyed on what they read: an open-list token's TokenInfo is a new object after every live refresh, and the chart must not reload for that alone
+  // Keyed on what they read. An open-list token's TokenInfo is a new object after every live
+  // refresh, and the chart must not reload for that alone.
   const base = useMemo(() => (baseInfo ? pairToken(baseInfo) : null), [baseInfo?.covenantId, baseInfo?.ticker, baseInfo?.decimals]);
   const quote = useMemo(() => (quoteInfo ? pairToken(quoteInfo) : null), [quoteInfo?.covenantId, quoteInfo?.ticker, quoteInfo?.decimals]);
-  // the levels per side the card's height holds (book-rows.ts)
+  // The levels per side the card's height holds (book-rows.ts).
   const { rows: bookRows, fitRef: bookFit } = useBookRows();
   const model = useMemo(() => (book.data && base && quote ? buildPairBook(book.data, base, quote, bookRows) : null), [book.data, base, quote, bookRows]);
 
-  // last price and 24 h change: the two tokens' KAS stats (the pair price is implied through the two KAS markets)
+  // Last price and 24 h change come from the two tokens' KAS stats. The pair price is implied
+  // through the two KAS markets.
   const key = `${props.base}/${props.quote}`;
   const stats = useAsync(
     async (signal) => {
       if (!indexer || !baseInfo || !quoteInfo) return null;
       const [b, q] = await Promise.all([indexer.stats(props.base, { signal, priority: 'low' }), indexer.stats(props.quote, { signal, priority: 'low' })]);
-      // the end of the 24 h window: the newest chain time the indexer reports (the wall clock when it reports none)
+      // The end of the 24 h window is the newest chain time the indexer reports. It is the wall
+      // clock when it reports none.
       const ts = Math.max(b?.ts ?? 0, q?.ts ?? 0);
       return { key, ...usdStats({ stats: b, decimals: baseInfo.decimals }, { stats: q, decimals: quoteInfo.decimals }), refMs: ts > 0 ? ts : Date.now(), baseLastTs: b?.last_ts ?? null, quoteLastTs: q?.last_ts ?? null };
     },
     [indexer, props.base, props.quote, baseInfo?.covenantId, quoteInfo?.covenantId, baseInfo?.decimals, quoteInfo?.decimals],
     { refreshKey: liveKey },
   );
-  // 24 h high / low: the indexer's pair candles (derived from the two KAS series), else the client-side ratio of the two KAS candle series; a live
-  // refresh reads only the bars since the newest one (candle-feed.ts), a reorg / resync the full window
+  // 24 h high and low come from the indexer's pair candles, derived from the two KAS series, else
+  // from the client-side ratio of the two KAS candle series. A live refresh reads only the bars
+  // since the newest one (candle-feed.ts). A reorg or resync reads the full window.
   const pairCandles = useRef<{ key: string; resync: number; view: ChartView | null } | null>(null);
   const candles = useAsync(
     async (signal) => {
@@ -155,7 +172,7 @@ export function PairPage(props: { base: string; quote: string }) {
       const prev = c && c.key === key && c.resync === resyncKey ? c.view : null;
       let view = await loadCandles(indexer, { base: props.base, quote: props.quote, pairCandles: true }, CANDLE_INTERVAL, prev, signal, CANDLE_LIMIT);
       const fromIndexer = view?.kind === 'pair' ? pairRatioCandles(view.pc, base, quote) : null;
-      // pair candles this build cannot read: the two KAS series
+      // Pair candles this build cannot read: use the two KAS series.
       if (view?.kind === 'pair' && !fromIndexer) view = await loadCandles(indexer, { base: props.base, quote: props.quote }, CANDLE_INTERVAL, null, signal, CANDLE_LIMIT);
       pairCandles.current = { key, resync: resyncKey, view };
       if (fromIndexer) return { key, pair: true, candles: fromIndexer };
@@ -172,8 +189,9 @@ export function PairPage(props: { base: string; quote: string }) {
     [indexer, props.base, props.quote, base, quote],
     { refreshKey: liveKey },
   );
-  // the pair's fills (volume only: amounts of A and B, counterparty, time) and the indexer's 24 h pair volume
-  // both orientations (activity-model.ts mergePairFills): the volume and the log count the orders of QUOTE/BASE too
+  // The pair's fills are volume only: amounts of A and B, counterparty and time. The indexer's 24 h
+  // pair volume comes with them. Both orientations are merged (activity-model.ts `mergePairFills`),
+  // so the volume and the log count the orders of QUOTE/BASE too.
   const fills = useAsync(
     (signal) =>
       indexer
@@ -187,11 +205,12 @@ export function PairPage(props: { base: string; quote: string }) {
     refreshKey: liveKey,
   });
 
-  // the book and the 24 h strip show together, once for the page (TokenPage); the ticket waits for none of this. Their reads wait for the two tokens
+  // The book and the 24 h strip show together, once for the page (TokenPage). The ticket waits for
+  // none of this. Their reads wait for the two tokens.
   const tokensIn = !!base && !!quote;
   const panelsOpen = useHeldUntil(tokensIn && settled(book) && settled(stats) && settled(fills), tokensIn);
 
-  // a result of the other orientation (right after a flip) is never used
+  // A result of the other orientation, right after a flip, is never used.
   const cur = stats.data && stats.data.key === key ? stats.data : undefined;
   const cc = candles.data && candles.data.key === key ? candles.data : undefined;
   const last = cur?.last ?? null;
@@ -215,11 +234,13 @@ export function PairPage(props: { base: string; quote: string }) {
         : null,
     [base, quote, last, change, dp, cc, cur, fills.data],
   );
-  // the activity log reads this pair's fills from here (the route is heavy: never read twice); a read that ended without an answer is `null`, so the log does not wait for it
+  // The activity log reads this pair's fills from here, because the route is heavy and never read
+  // twice. A read that ended without an answer is `null`, so the log does not wait for it.
   const fillsView = settled(fills) ? (fills.data ?? null) : undefined;
   const pairFillsSrc = useMemo(() => ({ base: props.base, quote: props.quote, view: fillsView }), [props.base, props.quote, fillsView]);
   const depthSeries = useMemo(() => (book.data && base && quote ? pairDepthSeries(book.data, base, quote) : null), [book.data, base, quote]);
-  // the depth chart is a view of the order book's panel at every width (an "Order book | Depth" switch)
+  // The depth chart is a view of the order book's panel at every width, an "Order book | Depth"
+  // switch.
   const bookPanel = useBookPanelView();
 
   const sides = [baseSide, quoteSide];
@@ -262,7 +283,8 @@ export function PairPage(props: { base: string; quote: string }) {
     );
   }
   if (!baseInfo || !quoteInfo || !base || !quote || !pairStats) return <MarketFrame bookTitle={t('pair.book.title')} data-testid="pair-loading" />;
-  // a leg that has not traded for a day only carries its last price: the chart then shows the other leg's moves, which the page says
+  // A leg that has not traded for a day only carries its last price. The chart then shows the other
+  // leg's moves, which the page says.
   const idleBase = !!cur && idleLeg(cur.baseLastTs, cur.refMs);
   const idleQuote = !!cur && idleLeg(cur.quoteLastTs, cur.refMs);
   const idleNote = idleBase && idleQuote
@@ -278,7 +300,8 @@ export function PairPage(props: { base: string; quote: string }) {
   const statsLoading = !!indexer && ((stats.data === undefined && stats.loading) || (candles.data === undefined && candles.loading) || (fills.data === undefined && fills.loading));
   const unavailable = !!indexer && book.data === null && !book.loading && !book.error;
   const onPick = (row: PairLevelRow) => setPrefill((q) => ({ price: pickOf(row, base).price, seq: (q?.seq ?? 0) + 1 }));
-  // a click on the depth chart fills the ticket's price like a click on a book row (the ticket keeps its side) at the price under the pointer
+  // A click on the depth chart fills the ticket's price like a click on a book row, at the price
+  // under the pointer. The ticket keeps its side.
   const onPickDepth = (side: 'bid' | 'ask', price: number) => {
     const p = pairDepthPick(side, price, base, quote);
     if (p) setPrefill((q) => ({ price: p.price, seq: (q?.seq ?? 0) + 1 }));
@@ -320,7 +343,8 @@ export function PairPage(props: { base: string; quote: string }) {
                 <FlipButton
                   pair={`${quoteInfo.ticker}/${baseInfo.ticker}`}
                   onClick={() => {
-                    // the ticket of the other pair takes the order across: the side turns over, amounts and prices are converted (pair-flip.ts)
+                    // The ticket of the other pair takes the order across. The side turns over, and
+                    // amounts and prices are converted (pair-flip.ts).
                     requestPairFlip(props.base, props.quote);
                     navigate(pairRoute(props.quote, props.base));
                   }}
