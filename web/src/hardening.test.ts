@@ -40,6 +40,9 @@ describe('strict Content-Security-Policy and framing protection', () => {
     expect(h).toMatch(/X-Content-Type-Options: nosniff/);
     expect(h).toMatch(/X-Frame-Options: DENY/);
     expect(h).toMatch(/Referrer-Policy: no-referrer/);
+    expect(h).toMatch(/Strict-Transport-Security: max-age=\d+/);
+    expect(h).toMatch(/Cross-Origin-Opener-Policy: same-origin-allow-popups/);
+    expect(h).toMatch(/Permissions-Policy: camera=\(\)/);
   });
 
   it('the README documents the deployment headers and the connect-src pin', () => {

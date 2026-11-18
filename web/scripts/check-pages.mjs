@@ -6,13 +6,15 @@
 //   node scripts/check-pages.mjs --protected <url> [<url> ...]     (the internal mainnet app: unauthenticated requests must meet Cloudflare Access, never the app)
 //
 // * `/`: Content-Security-Policy equal to CSP_HEADER of csp.mjs (with `frame-ancestors 'none'`), X-Frame-Options DENY,
-//   X-Content-Type-Options nosniff, Referrer-Policy no-referrer.
+//   X-Content-Type-Options nosniff, Referrer-Policy no-referrer, Strict-Transport-Security, Cross-Origin-Opener-Policy, Permissions-Policy.
 // * `/signer.html` and `/signer` (Cloudflare Pages serves the page under both): the signer's own policy (SIGNER_CSP_HEADER:
 //   sandbox, `frame-ancestors 'self'`) and X-Frame-Options SAMEORIGIN, never the app's `frame-ancestors 'none'` / DENY (the app
 //   could not frame its signer).
 // * a file under `/assets/`: Access-Control-Allow-Origin `*` (the sandboxed signer loads its bundle cross-origin).
 // * with --dist: every built file (except the host's own `_headers` / `_redirects`) is fetched and its sha256 compared with the
 //   local file, so a host that rewrites pages (an injected analytics script, minification, an old deployment) is caught.
+// * with --hashes <sha256sum list>: the same, against the hashes recorded when the bundle was built (before any third-party step ran), not
+//   against the directory as it is by then.
 // Redirects are followed (Pages sends `/index.html` to `/`). Prints one line per check; exits 1 when any fails.
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -37,12 +39,23 @@ export function distFiles(dir) {
   return out.sort();
 }
 
+/** The hashes of a `sha256sum` list of the files under a `dist/` directory, as a map of URL paths (`/assets/x.js`) to sha256. */
+export function parseHashes(text) {
+  const out = new Map();
+  const re = /^([0-9a-f]{64})\s+\*?(?:.*?\/)?dist(\/.*)$/;
+  for (const line of text.split(/\r?\n/)) {
+    const m = re.exec(line);
+    if (m) out.set(m[2], m[1]);
+  }
+  return out;
+}
+
 /**
  * Runs the checks against `base`. `fetchFn` is injectable (tests); `attempts` / `delayMs` cover a deployment that is not reachable yet
  * (only the first request is retried: a wrong header on a reachable deployment is a failure, not a delay).
  * @returns {Promise<{ ok: boolean, lines: string[] }>}
  */
-export async function checkPages(base, { dist, fetchFn = fetch, attempts = 6, delayMs = 5000 } = {}) {
+export async function checkPages(base, { dist, hashes, fetchFn = fetch, attempts = 6, delayMs = 5000 } = {}) {
   const root = new URL(base.endsWith('/') ? base : base + '/');
   const lines = [];
   let ok = true;
@@ -78,6 +91,10 @@ export async function checkPages(base, { dist, fetchFn = fetch, attempts = 6, de
     expect('/', index, 'x-frame-options', 'DENY');
     expect('/', index, 'x-content-type-options', 'nosniff');
     expect('/', index, 'referrer-policy', 'no-referrer');
+    expect('/', index, 'strict-transport-security', 'max-age=31536000');
+    expect('/', index, 'cross-origin-opener-policy', 'same-origin-allow-popups');
+    if (!index.headers.get('permissions-policy')) fail('/ permissions-policy: none');
+    else pass('/ permissions-policy present');
   }
 
   for (const path of ['/signer.html', '/signer']) {
@@ -93,7 +110,7 @@ export async function checkPages(base, { dist, fetchFn = fetch, attempts = 6, de
     expect(path, res, 'x-frame-options', 'SAMEORIGIN');
   }
 
-  const files = dist ? distFiles(resolve(dist)).filter((f) => !HOST_FILES.has(f.slice(1))) : [];
+  const files = (hashes ? [...hashes.keys()] : dist ? distFiles(resolve(dist)) : []).filter((f) => !HOST_FILES.has(f.slice(1))).sort();
   const asset = files.find((f) => f.startsWith('/assets/') && f.endsWith('.js')) ?? (await firstScript(index));
   if (!asset) fail('no file under /assets/ to check Access-Control-Allow-Origin on');
   else {
@@ -102,12 +119,12 @@ export async function checkPages(base, { dist, fetchFn = fetch, attempts = 6, de
     else expect(asset, res, 'access-control-allow-origin', '*');
   }
 
-  if (dist) {
+  if (hashes || dist) {
     let same = 0;
     for (const f of files) {
       const res = await get(f);
       const body = Buffer.from(await res.arrayBuffer());
-      const want = sha256(readFileSync(join(resolve(dist), ...f.slice(1).split('/'))));
+      const want = hashes ? hashes.get(f) : sha256(readFileSync(join(resolve(dist), ...f.slice(1).split('/'))));
       if (res.status !== 200) fail(`${f} answered HTTP ${res.status}`);
       else if (sha256(body) !== want) fail(`${f} served bytes differ from the build (sha256 ${sha256(body)}, built ${want})`);
       else same++;
@@ -184,13 +201,14 @@ async function main(argv) {
     console.log(ok ? 'every URL is behind Cloudflare Access' : 'PROTECTION CHECK FAILED');
     return ok ? 0 : 1;
   }
-  const base = argv.find((a) => !a.startsWith('--') && argv[argv.indexOf(a) - 1] !== '--dist');
+  const base = argv.find((a) => !a.startsWith('--') && !['--dist', '--hashes'].includes(argv[argv.indexOf(a) - 1]));
   const i = argv.indexOf('--dist');
+  const h = argv.indexOf('--hashes');
   if (!base || !/^https?:\/\//.test(base)) {
-    console.error('usage: node scripts/check-pages.mjs <base url> [--dist dist]');
+    console.error('usage: node scripts/check-pages.mjs <base url> [--dist dist | --hashes <sha256sum list>]');
     return 2;
   }
-  const { ok, lines } = await checkPages(base, { dist: i >= 0 ? argv[i + 1] : undefined });
+  const { ok, lines } = await checkPages(base, { dist: i >= 0 ? argv[i + 1] : undefined, hashes: h >= 0 ? parseHashes(readFileSync(argv[h + 1], 'utf8')) : undefined });
   for (const l of lines) console.log(l);
   console.log(ok ? `${base}: every check passed` : `${base}: CHECK FAILED`);
   return ok ? 0 : 1;
