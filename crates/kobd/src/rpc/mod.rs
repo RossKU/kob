@@ -424,6 +424,12 @@ pub struct WrpcConfig {
     /// catches up. The other calls keep their own connection, so a small call never waits behind a
     /// large batch.
     pub vspc_connections: usize,
+    /// Connections for the small calls (every call but the VSPC batches), one request in flight
+    /// each. The first is always there. The others open only while that many small calls are in
+    /// flight at once, as the follower's chain proofs are: the merged blocks and lane proofs of a
+    /// batch go out together (`indexer::follower::PROOF_FETCHES`). 1 (the default) keeps every small
+    /// call on one connection, one after another.
+    pub small_connections: usize,
     /// The node's Borsh wRPC endpoint. With VSPC connections of its own, the windows of transaction
     /// bodies and the accepted transaction ids travel in Borsh over it, which is a fraction of
     /// their JSON size ([`borsh`]). Every other call stays JSON on `url`.
@@ -438,6 +444,7 @@ impl WrpcConfig {
             connect_timeout: Duration::from_secs(15),
             max_message_bytes: MAX_MESSAGE_BYTES,
             vspc_connections: 0,
+            small_connections: 1,
             borsh_url: None,
         }
     }
@@ -473,11 +480,14 @@ type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type Conn = (Ws, String);
 type Slot = tokio::sync::Mutex<Option<Conn>>;
 
-/// JSON wRPC client: one request in flight per connection, one connection for the small calls plus
-/// `vspc_connections` for VSPC batches. Reconnects lazily after any failure.
+/// JSON wRPC client: one request in flight per connection, `small_connections` for the small calls
+/// plus `vspc_connections` for VSPC batches. Reconnects lazily after any failure.
 pub struct WrpcClient {
     cfg: WrpcConfig,
     conn: Slot,
+    /// The small calls' connections beyond `conn`, used while it is busy.
+    small: Vec<Slot>,
+    next_small: std::sync::atomic::AtomicUsize,
     vspc: Vec<Slot>,
     next_vspc: std::sync::atomic::AtomicUsize,
     next_id: std::sync::atomic::AtomicU64,
@@ -522,14 +532,37 @@ enum Reply<'a> {
 impl WrpcClient {
     pub fn new(cfg: WrpcConfig) -> Self {
         let vspc = (0..cfg.vspc_connections).map(|_| Slot::new(None)).collect();
+        let small = (1..cfg.small_connections.max(1)).map(|_| Slot::new(None)).collect();
         let node = std::sync::Mutex::new(cfg.url.clone());
         WrpcClient {
             cfg,
             conn: Slot::new(None),
+            small,
+            next_small: std::sync::atomic::AtomicUsize::new(0),
             vspc,
             next_vspc: std::sync::atomic::AtomicUsize::new(0),
             next_id: std::sync::atomic::AtomicU64::new(1),
             node,
+        }
+    }
+
+    /// A connection for a small call: the first idle one in order, so the further ones open only
+    /// while calls overlap, else the next in turn.
+    async fn small_slot(&self) -> tokio::sync::MutexGuard<'_, Option<Conn>> {
+        if self.small.is_empty() {
+            return self.conn.lock().await;
+        }
+        if let Ok(g) = self.conn.try_lock() {
+            return g;
+        }
+        for s in &self.small {
+            if let Ok(g) = s.try_lock() {
+                return g;
+            }
+        }
+        match self.next_small.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % (self.small.len() + 1) {
+            0 => self.conn.lock().await,
+            k => self.small[k - 1].lock().await,
         }
     }
 
@@ -592,8 +625,8 @@ impl WrpcClient {
 
     /// [`WrpcClient::call_raw_within`] whose answer may be at most `cap` bytes.
     ///
-    /// The small calls share one connection, and a connection opened with another limit is
-    /// replaced first. So a call with another limit costs a reconnect. Only the UTXO queries have
+    /// The small calls share `small_connections` (one by default), and a connection opened with
+    /// another limit is replaced first. So a call with another limit costs a reconnect. Only the UTXO queries have
     /// one, and they are rare outside the Executor's own client (`matcher::node`).
     async fn call_raw_capped(
         &self,
@@ -618,13 +651,13 @@ impl WrpcClient {
                 Reply::Json(_) => Err(RpcError::Decode("a JSON answer to a Borsh request".into())),
             };
             let wire = Wire::Borsh { frame: Box::new(move |id| enc.frame(id)) };
-            return self.call_on(self.conn.lock().await, wire, timeout, cap, parse).await;
+            return self.call_on(self.small_slot().await, wire, timeout, cap, parse).await;
         }
         let parse = |p: Reply<'_>| match p {
             Reply::Json(p) => Ok(p.to_string()),
             Reply::Borsh { .. } => Err(RpcError::Decode("a Borsh answer to a JSON request".into())),
         };
-        self.call_on(self.conn.lock().await, Wire::Json { method, params }, timeout, cap, parse).await
+        self.call_on(self.small_slot().await, Wire::Json { method, params }, timeout, cap, parse).await
     }
 
     /// The Borsh endpoint the VSPC connections use, if any. `None` means JSON, and also means VSPC

@@ -71,6 +71,7 @@ use crate::rpc::proof::{ChainProof, ChainProofConfig, ProofError};
 use crate::rpc::types::{RawVspcResponse, VspcBatch, VspcRequest};
 use crate::rpc::window::{BatchWindow, WindowPlan};
 use crate::rpc::{ChainSource, NodeErrorKind, Origin, RpcError, WindowRequest};
+use futures_util::StreamExt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
@@ -207,6 +208,8 @@ struct Committed {
     by_window: bool,
     t_fetch: Duration,
     t_parse: Duration,
+    /// The chain proofs, and for a window from another node its comparison with the primary.
+    t_check: Duration,
     /// The blue score of its last chain block, when known. Prefetched windows learn it.
     end_blue: Option<u64>,
     /// It is one of the windows fetched ahead. The sequential window learns nothing from it.
@@ -255,6 +258,30 @@ const LEAN_IDLE_EVERY: Duration = Duration::from_secs(30);
 /// more than this many DAA, a minute at 10 blocks a second, it catches up first with every step of
 /// the follower going to the chain, and the pruning waits.
 const LEAN_MAX_LAG_DAA: u64 = 600;
+
+/// Chain-proof requests of one batch in flight at once: the merged blocks of its transactions that
+/// can matter to KOB, and the lanes new at the anchor.
+///
+/// Each is a round trip to the primary, about 0.3 s to a remote node. Asked one after another, the
+/// merged blocks alone cost a window of the TN10 soak (32 chain blocks, 4 s of chain, 5 or more
+/// such blocks) 2 s or more, after its parallel fetch: the follower ran at 1 to 1.5 times chain
+/// speed whatever `fetch_parallel` was, and fell behind after every restart.
+///
+/// The node clients of the indexer have as many connections for the small calls
+/// (`rpc::WrpcConfig::small_connections`), since a connection carries one request at a time.
+pub const PROOF_FETCHES: usize = 8;
+
+/// `ask` of each of `items`, at most `limit` in flight, the answers in the order of `items`.
+///
+/// Nothing is asked before the stream is polled. Dropping it cancels what is in flight, so a
+/// caller that stops at a failure asks for nothing more.
+fn asked_in_order<T, F, Fut>(items: impl IntoIterator<Item = T>, limit: usize, ask: F) -> impl futures_util::Stream<Item = Fut::Output>
+where
+    F: FnMut(T) -> Fut,
+    Fut: std::future::Future,
+{
+    futures_util::stream::iter(items).map(ask).buffered(limit.max(1))
+}
 
 /// Whether a step failure is routine and not worth a warning.
 ///
@@ -708,10 +735,12 @@ impl<S: ChainSource> Follower<S> {
             }
         };
         let t_fetch = t0.elapsed();
+        let t_check0 = std::time::Instant::now();
         let raw = match self.prove(cursor.hash, raw, Origin::PRIMARY).await {
             Ok(r) => r,
             Err(o) => return o,
         };
+        let t_check = t_check0.elapsed();
         let batch = match tokio::task::spawn_blocking(move || raw.into_batch()).await.expect("parse task panicked") {
             Ok(b) => b,
             Err(e) => {
@@ -720,7 +749,7 @@ impl<S: ChainSource> Follower<S> {
                 return StepOutcome::Retry(msg);
             }
         };
-        let t_parse = t0.elapsed() - t_fetch;
+        let t_parse = t0.elapsed().saturating_sub(t_fetch + t_check);
         if plan.by_window() && batch.added.is_empty() {
             self.record_fetch(&batch, t_fetch);
             // The next chain block lies beyond the window, or the stripped head held all of them.
@@ -738,8 +767,15 @@ impl<S: ChainSource> Follower<S> {
             self.chain_answered();
             return StepOutcome::Widened { window };
         }
-        let committed =
-            Committed { start: cursor.hash, by_window: plan.by_window(), t_fetch, t_parse, end_blue: None, prefetched: false };
+        let committed = Committed {
+            start: cursor.hash,
+            by_window: plan.by_window(),
+            t_fetch,
+            t_parse,
+            t_check,
+            end_blue: None,
+            prefetched: false,
+        };
         self.commit(batch, committed).await
     }
 
@@ -798,21 +834,19 @@ impl<S: ChainSource> Follower<S> {
         });
         match head {
             Head::Ready { start, raw, sink_blue, end_blue, elapsed, origin } => {
-                let raw = match self.prove(start, raw, origin).await {
-                    Ok(r) => r,
-                    Err(o) => {
-                        self.prefetch.lock().await.discard();
-                        return o;
-                    }
-                };
-                if !origin.trusted {
-                    // A window from another node: what no hash covers is taken from the primary
-                    // where it can matter.
-                    if let Err(why) = self.confirm_with_primary(start, &raw, origin).await {
-                        self.prefetch.lock().await.discard();
-                        tracing::warn!(reason = %why, "window from another node not applied; one step from the cursor");
-                        return self.step_sequential().await;
-                    }
+                // A window from another node: what no hash covers is taken from the primary where
+                // it can matter, while the proofs run.
+                let t_check0 = std::time::Instant::now();
+                let (raw, proved, confirmed) = self.check_batch(start, raw, origin, !origin.trusted).await;
+                let t_check = t_check0.elapsed();
+                if let Err(o) = proved {
+                    self.prefetch.lock().await.discard();
+                    return o;
+                }
+                if let Err(why) = confirmed {
+                    self.prefetch.lock().await.discard();
+                    tracing::warn!(reason = %why, "window from another node not applied; one step from the cursor");
+                    return self.step_sequential().await;
                 }
                 let waited = t0.elapsed();
                 let batch = match tokio::task::spawn_blocking(move || raw.into_batch()).await.expect("parse task panicked") {
@@ -824,7 +858,7 @@ impl<S: ChainSource> Follower<S> {
                         return StepOutcome::Retry(msg);
                     }
                 };
-                let t_parse = t0.elapsed() - waited;
+                let t_parse = t0.elapsed().saturating_sub(waited);
                 // Within `prefetch_min_lag_blue` of the sink after this window: plan nothing more,
                 // apply what is fetched or in flight, then take single steps, see
                 // `Prefetch::finish`.
@@ -835,7 +869,7 @@ impl<S: ChainSource> Follower<S> {
                 if let Some(eb) = end_blue {
                     self.health.update(|h| h.lag_blue = Some(sink_blue.saturating_sub(eb)));
                 }
-                let committed = Committed { start, by_window: true, t_fetch: elapsed, t_parse, end_blue, prefetched: true };
+                let committed = Committed { start, by_window: true, t_fetch: elapsed, t_parse, t_check, end_blue, prefetched: true };
                 let out = self.commit(batch, committed).await;
                 if !matches!(out, StepOutcome::Applied { .. }) {
                     self.prefetch.lock().await.discard();
@@ -866,7 +900,29 @@ impl<S: ChainSource> Follower<S> {
     /// (`ChainSource::chain_refused`) and the step is retried. A proof the node could not serve
     /// is retried without blame.
     async fn prove(&self, start: Hash32, raw: RawVspcResponse, origin: Origin) -> Result<RawVspcResponse, StepOutcome> {
-        let Some(proof) = self.proof.clone() else { return Ok(raw) };
+        let (raw, proved, _) = self.check_batch(start, raw, origin, false).await;
+        proved.map(|()| raw)
+    }
+
+    /// The chain proofs of a batch `raw` from `start` ([`Follower::prove`]) and, with `confirm`,
+    /// its comparison with the primary ([`Follower::confirm_with_primary`]), run at once.
+    ///
+    /// Both only read `raw` and ask the primary, so a window from another node waits for the
+    /// longer of the two, not for their sum: each is a few round trips, about 0.3 s each to a
+    /// remote node. A batch whose local checks (headers, proof of work, ids) fail is not compared.
+    /// The first result is that of the proofs, the second that of the comparison (`Ok` when not
+    /// asked for).
+    async fn check_batch(
+        &self,
+        start: Hash32,
+        raw: RawVspcResponse,
+        origin: Origin,
+        confirm: bool,
+    ) -> (RawVspcResponse, Result<(), StepOutcome>, Result<(), String>) {
+        let Some(proof) = self.proof.clone() else {
+            let confirmed = if confirm { self.confirm_with_primary(start, &raw, origin).await } else { Ok(()) };
+            return (raw, Ok(()), confirmed);
+        };
         let p = proof.clone();
         let (raw, plan) = tokio::task::spawn_blocking(move || {
             let r = p.lock().unwrap_or_else(|e| e.into_inner()).check_local(start, &raw);
@@ -874,16 +930,39 @@ impl<S: ChainSource> Follower<S> {
         })
         .await
         .expect("proof task panicked");
-        let r = match plan {
-            Ok(None) => Ok(()),
-            Ok(Some(plan)) => match self.prove_lanes(&proof, plan).await {
-                Ok(()) => self.prove_scripts(&proof, &raw).await,
-                Err(e) => Err(e),
-            },
-            Err(e) => Err(e),
+        let plan = match plan {
+            Ok(p) => p,
+            Err(e) => {
+                let verdict = self.proof_verdict(&proof, origin, Err(e));
+                return (raw, verdict, Ok(()));
+            }
         };
+        let proved = async {
+            match plan {
+                None => Ok(()),
+                Some(plan) => match self.prove_lanes(&proof, plan).await {
+                    Ok(()) => self.prove_scripts(&proof, &raw).await,
+                    Err(e) => Err(e),
+                },
+            }
+        };
+        let confirmed = async {
+            if confirm {
+                self.confirm_with_primary(start, &raw, origin).await
+            } else {
+                Ok(())
+            }
+        };
+        let (proved, confirmed) = tokio::join!(proved, confirmed);
+        let verdict = self.proof_verdict(&proof, origin, proved);
+        (raw, verdict, confirmed)
+    }
+
+    /// What a chain proof's result `r` makes of the step: nothing (`Ok`), or a retry after a proof
+    /// the node could not serve, or after a refusal that reports the node behind `origin`.
+    fn proof_verdict(&self, proof: &Mutex<ChainProof>, origin: Origin, r: Result<(), ProofError>) -> Result<(), StepOutcome> {
         match r {
-            Ok(()) => Ok(raw),
+            Ok(()) => Ok(()),
             Err(ProofError::Unavailable(why)) => {
                 let msg = format!("chain proof unavailable: {why}");
                 tracing::warn!(reason = %why, "a chain proof could not be fetched: the batch waits");
@@ -919,12 +998,11 @@ impl<S: ChainSource> Follower<S> {
         }
         let anchor = lock().anchor().map(|a| a.hash).unwrap_or(plan.parent);
         let unknown = lock().unknown_lanes(&plan);
-        for lane in unknown {
-            let p = self
-                .source
-                .lane_proof(anchor, Hash32(lane.as_bytes()))
-                .await
-                .map_err(|e| unavailable("a lane proof at the cursor", e))?;
+        let mut asked = std::pin::pin!(asked_in_order(unknown.iter().copied(), PROOF_FETCHES, |lane| {
+            self.source.lane_proof(anchor, Hash32(lane.as_bytes()))
+        }));
+        for lane in unknown.iter().copied() {
+            let p = asked.next().await.expect("one answer per lane").map_err(|e| unavailable("a lane proof at the cursor", e))?;
             lock().learn_lane(lane, &p)?;
         }
         let expected = lock().expected(&plan)?;
@@ -940,6 +1018,10 @@ impl<S: ChainSource> Follower<S> {
     /// The signature scripts of the batch's transactions that can matter to KOB
     /// (`super::trust`): each merged block holding one is fetched once and checked
     /// (`ChainProof::check_merged_block`).
+    ///
+    /// The blocks are asked for [`PROOF_FETCHES`] at a time and checked in order as they arrive.
+    /// One after another, a busy batch (a block a second holding a KOB transaction on the TN10
+    /// soak) waited a round trip per block and held the follower to about chain speed.
     async fn prove_scripts(&self, proof: &Mutex<ChainProof>, raw: &RawVspcResponse) -> Result<(), ProofError> {
         let keys = super::trust::WindowKeys::of(&raw.chain_block_accepted_transactions);
         let ctx = self
@@ -960,12 +1042,15 @@ impl<S: ChainSource> Follower<S> {
                 by_block.entry(m).or_default().push(t);
             }
         }
-        for (m, txs) in by_block {
-            let block =
-                self.source.block(m, true).await.map_err(|e| ProofError::Unavailable(format!("merged block {m}: {e}")))?.ok_or_else(
-                    || ProofError::Refused(format!("the node does not know {m}, the merged block of its own transaction")),
-                )?;
-            proof.lock().unwrap_or_else(|e| e.into_inner()).check_merged_block(m, &block, &txs)?;
+        let mut asked = std::pin::pin!(asked_in_order(by_block.keys().copied(), PROOF_FETCHES, |m| self.source.block(m, true)));
+        for (&m, txs) in &by_block {
+            let block = asked
+                .next()
+                .await
+                .expect("one answer per merged block")
+                .map_err(|e| ProofError::Unavailable(format!("merged block {m}: {e}")))?
+                .ok_or_else(|| ProofError::Refused(format!("the node does not know {m}, the merged block of its own transaction")))?;
+            proof.lock().unwrap_or_else(|e| e.into_inner()).check_merged_block(m, &block, txs)?;
         }
         Ok(())
     }
@@ -1104,6 +1189,7 @@ impl<S: ChainSource> Follower<S> {
                         prefetched = c.prefetched,
                         fetch_ms = c.t_fetch.as_millis() as u64,
                         parse_ms = c.t_parse.as_millis() as u64,
+                        check_ms = c.t_check.as_millis() as u64,
                         commit_ms = t_commit.as_millis() as u64,
                         "applied batch"
                     );
@@ -1112,6 +1198,7 @@ impl<S: ChainSource> Follower<S> {
                         added = a.added,
                         removed = a.removed_hashes,
                         fetch_ms = c.t_fetch.as_millis() as u64,
+                        check_ms = c.t_check.as_millis() as u64,
                         "applied batch"
                     );
                 }
@@ -1416,8 +1503,68 @@ impl<S: ChainSource> Follower<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::retry_is_routine;
+    use super::{asked_in_order, retry_is_routine, PROOF_FETCHES};
     use crate::rpc::multi::TIPS_DIFFER;
+    use futures_util::StreamExt;
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    use std::time::Duration;
+
+    /// The proof requests of a batch: at most `PROOF_FETCHES` at once, the answers in the order
+    /// of the requests whatever order they arrive in, and far less time than one after another.
+    #[tokio::test(start_paused = true)]
+    async fn proof_requests_go_out_together_and_answer_in_order() {
+        let (now, peak) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let n = 40usize;
+        let t0 = tokio::time::Instant::now();
+        let got: Vec<usize> = asked_in_order(0..n, PROOF_FETCHES, |i| {
+            let (now, peak) = (&now, &peak);
+            async move {
+                peak.fetch_max(now.fetch_add(1, SeqCst) + 1, SeqCst);
+                // Later requests answer sooner.
+                tokio::time::sleep(Duration::from_millis(10 * (n - i) as u64)).await;
+                now.fetch_sub(1, SeqCst);
+                i
+            }
+        })
+        .collect()
+        .await;
+        assert_eq!(got, (0..n).collect::<Vec<_>>());
+        assert_eq!(peak.load(SeqCst), PROOF_FETCHES);
+        // One after another: 8.2 s. At once, about the slowest of each group in flight.
+        let one_by_one: u64 = (1..=n as u64).map(|k| 10 * k).sum();
+        assert!(t0.elapsed() < Duration::from_millis(one_by_one / 4), "{:?}", t0.elapsed());
+        // One request: a round trip, as before.
+        let t1 = tokio::time::Instant::now();
+        let one: Vec<u8> = asked_in_order([7u8], PROOF_FETCHES, |x| async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            x
+        })
+        .collect()
+        .await;
+        assert_eq!((one, t1.elapsed()), (vec![7], Duration::from_millis(300)));
+    }
+
+    /// Nothing is asked before the first answer is wanted, and a caller that stops at a failure
+    /// (it drops the stream) asks for nothing more.
+    #[tokio::test(start_paused = true)]
+    async fn a_proof_that_stops_asks_for_nothing_more() {
+        let asked = AtomicUsize::new(0);
+        let mut s = std::pin::pin!(asked_in_order(0..100usize, 4, |i| {
+            let asked = &asked;
+            async move {
+                asked.fetch_add(1, SeqCst);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                i
+            }
+        }));
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(asked.load(SeqCst), 0, "nothing before the stream is polled");
+        assert_eq!(s.next().await, Some(0));
+        let after_first = asked.load(SeqCst);
+        assert!(after_first <= 5, "{after_first}");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(asked.load(SeqCst), after_first, "an idle stream asks for nothing more");
+    }
 
     #[test]
     fn differing_tips_warn_only_when_they_repeat() {
@@ -1435,14 +1582,31 @@ mod tests {
         use super::super::*;
         use crate::rpc::proof::tests::{fixture, Fixture, MAINNET, TN10};
         use crate::rpc::types::{AddressUtxo, ChainHashes, DagInfo, ServerInfo};
+        use std::sync::atomic::Ordering::SeqCst;
 
         struct Recorded {
             fx: Fixture,
             tamper: fn(&mut RawVspcResponse),
             refused: Mutex<Vec<String>>,
+            /// The round trip of each proof request (`getBlock`, `getSeqCommitLaneProof`).
+            delay: Duration,
+            /// Proof requests in flight now, and the most seen at once.
+            in_flight: std::sync::atomic::AtomicUsize,
+            peak: std::sync::atomic::AtomicUsize,
         }
 
         impl Recorded {
+            /// One proof request: in flight for the round trip.
+            async fn round_trip(&self) {
+                use std::sync::atomic::Ordering::SeqCst;
+                let now = self.in_flight.fetch_add(1, SeqCst) + 1;
+                self.peak.fetch_max(now, SeqCst);
+                if !self.delay.is_zero() {
+                    tokio::time::sleep(self.delay).await;
+                }
+                self.in_flight.fetch_sub(1, SeqCst);
+            }
+
             fn last(&self) -> (Hash32, u64) {
                 let r = self.fx.raw();
                 let b = r.chain_block_accepted_transactions.last().unwrap();
@@ -1506,6 +1670,7 @@ mod tests {
                 block: Hash32,
                 lane: Hash32,
             ) -> Result<kaspa_rpc_core::GetSeqCommitLaneProofResponse, RpcError> {
+                self.round_trip().await;
                 let p = self
                     .fx
                     .proofs
@@ -1518,6 +1683,7 @@ mod tests {
                 }
             }
             async fn block(&self, hash: Hash32, _txs: bool) -> Result<Option<kaspa_consensus_core::block::Block>, RpcError> {
+                self.round_trip().await;
                 if hash.0 == self.fx.merged.header.hash.as_bytes() {
                     return Ok(Some(self.fx.merged.clone()));
                 }
@@ -1532,10 +1698,25 @@ mod tests {
             text: &str,
             tamper: fn(&mut RawVspcResponse),
         ) -> (Follower<Recorded>, Arc<Recorded>, Arc<Mutex<Ingest>>, Arc<HealthState>) {
+            follower_with(text, tamper, Duration::ZERO)
+        }
+
+        fn follower_with(
+            text: &str,
+            tamper: fn(&mut RawVspcResponse),
+            delay: Duration,
+        ) -> (Follower<Recorded>, Arc<Recorded>, Arc<Mutex<Ingest>>, Arc<HealthState>) {
             let fx = fixture(text);
             let network = fx.network.clone();
             let start = fx.start;
-            let source = Arc::new(Recorded { fx, tamper, refused: Mutex::new(vec![]) });
+            let source = Arc::new(Recorded {
+                fx,
+                tamper,
+                refused: Mutex::new(vec![]),
+                delay,
+                in_flight: Default::default(),
+                peak: Default::default(),
+            });
             let conn = crate::indexer::db::open_memory(&network).unwrap();
             let ingest =
                 Arc::new(Mutex::new(Ingest::new(conn, crate::testkit::processor(), None).with_config(crate::testkit::wide_window())));
@@ -1582,6 +1763,34 @@ mod tests {
                 assert_eq!((p.blocks_total, p.refused_total), (0, 1));
                 assert!(health.snapshot().status_line().contains("chain proofs refused 1"));
             }
+        }
+
+        /// The proofs of a batch wait one round trip per kind of request, not one per request: the
+        /// lanes new at the anchor go out together (two on the mainnet fixture), as the lanes at the
+        /// batch's end and the merged blocks do. One by one, a batch waited a round trip per lane at
+        /// the anchor and per merged block.
+        #[tokio::test(start_paused = true)]
+        async fn the_proof_requests_of_a_batch_go_out_together() {
+            let rtt = Duration::from_millis(300);
+            for text in [MAINNET, TN10] {
+                let (f, src, ingest, health) = follower_with(text, |_| {}, rtt);
+                let lanes = src.fx.proofs.len();
+                let t0 = tokio::time::Instant::now();
+                let o = f.step().await;
+                let took = t0.elapsed();
+                assert!(matches!(o, StepOutcome::Applied { .. }), "{o:?}");
+                assert_eq!(cursor(&ingest), src.last().0);
+                let p = health.snapshot().chain_proof.unwrap();
+                assert_eq!(p.refused_total, 0);
+                assert!(src.refused.lock().unwrap().is_empty());
+                // The anchor's header, the lanes at the anchor, the lanes at the end, and the
+                // merged blocks when the batch holds a transaction that can matter to KOB.
+                let rounds = 3 + u32::from(p.merged_blocks_total > 0);
+                assert!(took >= rtt * rounds && took < rtt * (rounds + 1), "{took:?} for {rounds} round trips, {lanes} lanes");
+                assert!(src.peak.load(SeqCst) >= lanes, "the lanes were asked together");
+            }
+            // The mainnet fixture has two lanes: one by one they took a round trip more.
+            assert_eq!(fixture(MAINNET).proofs.len(), 2);
         }
     }
 }

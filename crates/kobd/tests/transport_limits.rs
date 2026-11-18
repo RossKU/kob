@@ -324,3 +324,65 @@ async fn a_small_node_call_refuses_an_answer_above_its_own_limit() {
     assert!(utxos.is_empty());
     server.abort();
 }
+
+/// The small calls of a node client go out together on `small_connections` connections, one request in flight each: the
+/// follower's chain proofs ask for the merged blocks and lane proofs of a batch at once (`PROOF_FETCHES`). The further
+/// connections open only while calls overlap, so one call at a time keeps one connection. With the default single
+/// connection the same calls wait one after another, as every proof request did before (one round trip each).
+#[tokio::test]
+async fn small_node_calls_overlap_on_their_own_connections() {
+    use kobd::rpc::{ChainSource, WrpcClient, WrpcConfig};
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    use tokio_tungstenite::tungstenite::Message;
+    const RTT: Duration = Duration::from_millis(300);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let conns = Arc::new(AtomicUsize::new(0));
+    let seen = conns.clone();
+    // Every request is answered after a round trip, with its id and a blue score.
+    let server = tokio::spawn(async move {
+        loop {
+            let Ok((s, _)) = listener.accept().await else { return };
+            seen.fetch_add(1, SeqCst);
+            tokio::spawn(async move {
+                let Ok(mut ws) = tokio_tungstenite::accept_async(s).await else { return };
+                while let Some(Ok(Message::Text(t))) = ws.next().await {
+                    let req: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
+                    tokio::time::sleep(RTT).await;
+                    let answer = serde_json::json!({ "id": req["id"], "params": { "blueScore": 7 } });
+                    if ws.send(Message::text(answer.to_string())).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    let calls = |client: Arc<WrpcClient>, n: usize| async move {
+        let t0 = Instant::now();
+        let all = futures_util::future::join_all((0..n).map(|_| {
+            let c = client.clone();
+            async move { c.sink_blue_score().await.unwrap() }
+        }))
+        .await;
+        assert!(all.iter().all(|b| *b == 7));
+        t0.elapsed()
+    };
+    let mut cfg = WrpcConfig::new(format!("ws://{addr}"));
+    cfg.small_connections = 4;
+    let pooled = Arc::new(WrpcClient::new(cfg.clone()));
+    // One call at a time: one connection.
+    calls(pooled.clone(), 1).await;
+    calls(pooled.clone(), 1).await;
+    assert_eq!(conns.load(SeqCst), 1);
+    // Eight at once over four connections: two round trips (and the three new connections).
+    let took = calls(pooled.clone(), 8).await;
+    assert!(took >= RTT * 2 && took < RTT * 4, "{took:?}");
+    assert_eq!(conns.load(SeqCst), 4);
+    // One connection, as before: a round trip per call.
+    cfg.small_connections = 1;
+    let single = Arc::new(WrpcClient::new(cfg));
+    let took = calls(single, 8).await;
+    assert!(took >= RTT * 8, "{took:?}");
+    assert_eq!(conns.load(SeqCst), 5);
+    server.abort();
+}

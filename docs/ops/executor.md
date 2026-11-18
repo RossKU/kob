@@ -3092,8 +3092,11 @@ transaction that can matter to KOB must match its merged block, whose transactio
 A batch that fails is refused, logged, not applied, and its node is given up (a public node) or alarmed (a named one). The
 difficulty floor is a heuristic against trivial `bits`, not the node's difficulty adjustment; on testnet-10 the proof of
 work itself is cheap. Cost: one kHeavyHash per chain block, one lane proof call per lane per batch, `Full` verbosity
-(about 1-4 % more bytes than `High`), one `getBlock` per merged block holding a KOB transaction. Left to the node: a lane
-other than the native one that a batch hides entirely (until it next shows up), and the spent outputs attached to inputs.
+(about 1-4 % more bytes than `High`), one `getBlock` per merged block holding a KOB transaction. The calls of a batch go
+out together, 8 at a time over as many connections, and a window from another node is compared with the primary
+meanwhile, so a batch waits a few round trips to the primary, not one per merged block (one by one, about 0.3 s each to a
+remote node, they held the follower to 1-1.5x chain speed on the TN10 soak). Left to the node: a lane other than the
+native one that a batch hides entirely (until it next shows up), and the spent outputs attached to inputs.
 
 Run a rusty-kaspa v2.1.0 node with `--utxoindex` (funding lookup), `--retention-period-days=7`,
 `--disable-upnp`, RPC on loopback only, never `--unsaferpc` (the recommended setup), or use public nodes (*Public nodes*

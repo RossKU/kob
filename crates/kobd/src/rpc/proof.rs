@@ -41,8 +41,11 @@
 //! # Cost
 //!
 //! One kHeavyHash and one header hash per chain block, one id hash per transaction, and one lane
-//! proof per lane per batch, a call of about 1 KB. No thread of its own: the follower runs the
-//! CPU part on its blocking pool, as it parses a batch.
+//! proof per lane per batch, a call of about 1 KB, and one `getBlock` per merged block that holds a
+//! transaction that can matter to KOB. No thread of its own: the follower runs the CPU part on its
+//! blocking pool, as it parses a batch. The calls of a batch go out together
+//! (`indexer::follower::PROOF_FETCHES` at once), so a batch waits about one round trip per kind of
+//! call (the anchor, its lanes, the lanes at the end, the merged blocks), not one per call.
 
 use crate::hex::Hash32;
 use crate::rpc::types::{ChainBlockHeader, RawVspcResponse, Tx};

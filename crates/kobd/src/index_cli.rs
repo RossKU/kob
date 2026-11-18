@@ -477,6 +477,9 @@ fn wrpc(cfg: &IndexerConfig, url: &str, vspc_connections: usize) -> Arc<WrpcClie
     let mut w = WrpcConfig::new(url.to_string());
     w.request_timeout = std::time::Duration::from_secs(cfg.rpc_timeout_secs);
     w.vspc_connections = vspc_connections;
+    // The chain proofs of a batch ask for its merged blocks and lane proofs together, one connection
+    // each, opened only while they overlap (`indexer::follower::PROOF_FETCHES`).
+    w.small_connections = crate::indexer::follower::PROOF_FETCHES;
     // Borsh only on VSPC connections of their own. With none, VSPC shares the JSON connection.
     w.borsh_url = cfg.borsh_url_of(url).filter(|_| vspc_connections > 0);
     if let Some(b) = &w.borsh_url {
