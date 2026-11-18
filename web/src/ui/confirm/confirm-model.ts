@@ -1,9 +1,12 @@
-// Decoded-order vocabulary shared by the issuance screen, the silent pre-sign checks (send.ts) and the signer frame: the rows and title of one
-// decoded order (`orderRows`, `orderTitle`), token labels and amounts, the open-token identity check, and the row / finding shapes they produce.
-// It is not the model of an order confirmation screen: orders are no longer confirmed on a screen of their own.
+// Decoded-order vocabulary shared by the issuance screen, the silent pre-sign checks (send.ts) and
+// the signer frame. It holds the rows and title of one decoded order (`orderRows`, `orderTitle`),
+// token labels and amounts, the open-token identity check, and the row and finding shapes they
+// produce. It is not the model of an order confirmation screen, because orders are not confirmed
+// on a screen of their own.
 //
-// Pure and DOM-free. Text comes through an injected translator (`tr`, default the app's `t`) so it is unit-tested and the renderers stay thin.
-// All amounts arrive as bigint and are formatted exactly (units.ts).
+// Pure and DOM-free. Text comes through an injected translator (`tr`, default the app's `t`), so it
+// is unit-tested and the renderers stay thin. All amounts arrive as bigint and are formatted
+// exactly (units.ts).
 import type { SigningKind, SigningSummary, LockedKas, TokenRef } from '../../kob/decode';
 import { curveNumbersOfState, curveRestKas, tablePreview } from '../../kob/curve';
 import type { WalletNotice } from '../../kob/decode';
@@ -28,7 +31,10 @@ export interface Row {
   tone: Tone;
 }
 
-/** A row of the short summary at the top of a creation's confirmation; `help`: the explanation behind its "?" (sentences). */
+/**
+ * A row of the short summary at the top of a creation's confirmation. `help` is the explanation
+ * behind its "?".
+ */
 export interface BriefRow extends Row {
   help?: string[];
 }
@@ -36,12 +42,12 @@ export interface BriefRow extends Row {
 export interface Section {
   id: 'issue' | 'curve' | 'declare' | 'spend' | 'locked' | 'back' | 'fee' | 'net';
   title: string;
-  /** one explaining sentence under the title */
+  /** One explaining sentence under the title. */
   note?: string;
   rows: Row[];
   /**
-   * the gross wallet flows (`spend`: the wallet's inputs, `back`: its change): the screen shows them folded under "Wallet inputs and change",
-   * after the net effect and the orders
+   * The gross wallet flows (`spend`: the wallet's inputs, `back`: its change). The screen shows
+   * them folded under "Wallet inputs and change", after the net effect and the orders.
    */
   fold?: boolean;
 }
@@ -50,7 +56,7 @@ export interface AdvancedInput { index: number; text: string; willSign: boolean 
 export interface AdvancedOutput { index: number; text: string; flagged: boolean }
 export interface AdvancedModel {
   txid: string;
-  /** a token creation: the id of its KCC-23 preparation (`txid` is the genesis) */
+  /** A token creation: the id of its KCC-23 preparation (`txid` is the genesis). */
   prepTxid?: string;
   signatures: number;
   fee: { paid: string; declared: string; minimum: string; mode: 'relay' | 'priority'; feeMass: number; priorityMass: number; storageMass: number };
@@ -59,7 +65,10 @@ export interface AdvancedModel {
   payload: string[];
 }
 
-/** A finding of the decoder (`SigningIssue`) or of the issuance check; `text` (when set) is already translated, else the UI translates by `code`. */
+/**
+ * A finding of the decoder (`SigningIssue`) or of the issuance check. `text`, when set, is already
+ * translated. Otherwise the UI translates by `code`.
+ */
 export interface Finding {
   code: string;
   severity: 'blocking' | 'warning' | 'info';
@@ -78,13 +87,17 @@ export interface ConfirmModel {
   blocking: Finding[];
   warnings: Finding[];
   info: Finding[];
-  /** the decoder found nothing that must stop the user (the UI still needs the explicit acknowledgement) */
+  /**
+   * The decoder found nothing that must stop the user. The UI still needs the explicit
+   * acknowledgement.
+   */
   canSign: boolean;
   notices: WalletNotice[];
   advanced: AdvancedModel;
   /**
-   * a token creation: the short summary shown first (what is created, what the wallet keeps, what goes on sale, the network fees, the KAS locked),
-   * every figure from the verified transaction; the sections hold the full detail
+   * A token creation: the short summary shown first. It says what is created, what the wallet
+   * keeps, what goes on sale, the network fees and the KAS locked. Every figure comes from the
+   * verified transaction, and the sections hold the full detail.
    */
   brief?: BriefRow[];
 }
@@ -93,12 +106,18 @@ const GROUP = { group: ',' };
 const kas = (v: bigint): string => `${formatKas(v, GROUP)} KAS`;
 const short = (h: string): string => (h.length > 12 ? `${h.slice(0, 4)}...${h.slice(-4)}` : h);
 const DAA_PER_SECOND = 10;
-/** Exit orders committed inside an entry carry a "never" expiry (2^62); anything past two years is not a date. */
+/**
+ * Exit orders committed inside an entry carry a "never" expiry (2^62). Anything past two years is
+ * not a date.
+ */
 const FAR_FUTURE_DAA = 2n * 365n * 86_400n * BigInt(DAA_PER_SECOND);
 
-// ------------------------------------------------------------------------------------------------ open-list token identity (A1-2)
+// ------------------------------------------------------------------- open-list token identity
 
-/** Covenant ids of every token the transaction names: order tokens (a pair: both), spent orders, token movements. */
+/**
+ * Covenant ids of every token the transaction names: order tokens (a pair: both), spent orders and
+ * token movements.
+ */
 export function tokensOf(summary: SigningSummary): Set<Hex> {
   const ids = new Set<Hex>();
   const add = (d: OrderDescription | null | undefined): void => {
@@ -119,15 +138,18 @@ export function tokensOf(summary: SigningSummary): Set<Hex> {
 type CheckedOpenToken = TokenInfo & { extension: NonNullable<TokenInfo['extension']> };
 
 /**
- * Audit A1-2: an open-list KCC-20 token's extension commitment is the indexer's pick, and the decoder only checks the transaction against it. The
- * screen shows the commitment and where it came from, so the user can check it (a token's identity is its covenant id AND this commitment); a
- * commitment known without the indexer (the registry's genesis-verified entry, the wallet's node-verified holdings) that differs is blocking.
+ * An open-list KCC-20 token's extension commitment is the indexer's pick, and the decoder only
+ * checks the transaction against it. The screen shows the commitment and where it came from, so
+ * the user can check it, because a token's identity is its covenant id and this commitment. A
+ * commitment known without the indexer (the registry's genesis-verified entry, the wallet's
+ * node-verified holdings) that differs is blocking.
  */
 export function openTokenIdentity(summary: SigningSummary, registry: TokenRegistry | null, tr: Translate = t): { rows: Row[]; blocking: Finding[] } {
   const rows: Row[] = [];
   const blocking: Finding[] = [];
   const tokens = [...tokensOf(summary)].map((id) => registry?.byCovenantId.get(id));
-  // a first order: the scale is the one the user entered (no order of the token tells one yet), shown with its decimals
+  // A first order. The scale is the one the user entered, because no order of the token tells one
+  // yet. It is shown with its decimals.
   for (const info of tokens) {
     if (!info || info.openList !== true || info.openScale !== 'entered') continue;
     const token = longId(info.covenantId);
@@ -163,28 +185,41 @@ export function openTokenIdentity(summary: SigningSummary, registry: TokenRegist
   return { rows, blocking };
 }
 
-// ------------------------------------------------------------------------------------------------ token labels
+// ------------------------------------------------------------------------------- token labels
 
-/** The identity line of a token: `TICKER (abcd...1234)` where it has a ticker, else its covenant id. Never the ticker alone, always the id. */
+/**
+ * The identity line of a token: `TICKER (abcd...1234)` where it has a ticker, else its covenant
+ * id. Never the ticker alone, always the id.
+ */
 export function tokenLabel(ref: TokenRef, tr: Translate = t, registry?: TokenRegistry | null): string {
   const info = registry?.byCovenantId.get(ref.covenantId);
-  // a token no pinned entry names shows 8 + 8 hex of its id, not the 4 + 4 fragment; a ticker that is only its id is said once
+  // A token no pinned entry names shows 8 + 8 hex of its id, not the 4 + 4 fragment. A ticker that
+  // is only its id is said once.
   if (info && !info.openList) return tr('confirm.token.label', { ticker: info.ticker, id: short(info.covenantId) });
   const id = longId(ref.covenantId);
   const ticker = info?.ticker ?? ref.ticker;
   return ticker && ticker !== id ? tr('confirm.token.label', { ticker, id }) : id;
 }
 
-/** A token amount in whole tokens: of its decimals when known (a hint, the scale of its order), else its raw amount, said so. */
+/**
+ * A token amount in whole tokens, of its decimals when known (a hint, the scale of its order),
+ * else its raw amount, said so.
+ */
 export function tokenAmountText(ref: TokenRef, amount: bigint, tr: Translate = t): string {
   return ref.decimals === null
     ? tr('token.amount.assumed', { amount: formatTokenAmount(amount, RAW_TOKEN_DECIMALS, GROUP), token: ref.ticker ?? longId(ref.covenantId) })
     : `${formatTokenAmount(amount, ref.decimals, GROUP)} ${ref.ticker ?? longId(ref.covenantId)}`;
 }
 
-/** The decimals a price or an amount of `ref` is shown with: its own, else none (i18n RAW_TOKEN_DECIMALS). */
+/**
+ * The decimals a price or an amount of `ref` is shown with: its own, else none (i18n
+ * RAW_TOKEN_DECIMALS).
+ */
 const decimalsOf = (ref: TokenRef): number => ref.decimals ?? RAW_TOKEN_DECIMALS;
-/** `ref` read on the scale its order names, where nothing else states its decimals: what the order quotes per. */
+/**
+ * `ref` read on the scale its order names, where nothing else states its decimals: what the order
+ * quotes per.
+ */
 const onScale = (ref: TokenRef, scale: bigint): TokenRef => (ref.decimals === null ? { ...ref, decimals: decimalsOfScale(scale) } : ref);
 
 function refOf(registry: TokenRegistry | null | undefined, covenantId: Hex): TokenRef {
@@ -194,19 +229,23 @@ function refOf(registry: TokenRegistry | null | undefined, covenantId: Hex): Tok
     : { covenantId, ticker: null, decimals: null, display: '', inRegistry: false, tradable: false };
 }
 
-// ------------------------------------------------------------------------------------------------ order descriptions
+// ----------------------------------------------------------------------------- order descriptions
 
-/** The order type as the user knows it, re-derived from the state fields (a tx cannot claim one type and carry another). */
+/**
+ * The order type as the user knows it, re-derived from the state fields. A tx cannot claim one type
+ * and carry another.
+ */
 export function orderTypeCode(d: OrderDescription, dayDeadline: bigint | null = null): string {
   const a = d.auction;
-  // a pair order has the type of the KAS kind it mirrors (its card names the pair)
+  // A pair order has the type of the KAS kind it mirrors. Its card names the pair.
   switch (baseKind(d.kind)) {
     case 'KobAsk':
     case 'KobBid':
     case 'KobPair': {
       if (d.tif === 'fok') return a ? 'marketFok' : 'fok';
       if (d.tif === 'ioc') return a ? 'market' : 'ioc';
-      // a market order of several fills: the market auction resting for its short life (orders/simple.ts planAuction)
+      // A market order of several fills: the market auction resting for its short life
+      // (orders/simple.ts planAuction).
       if (isMultiFillMarket(d)) return 'marketFills';
       if (a && a.interval > 0n) return d.side === 'sell' ? 'twap' : 'dca';
       if (a && a.slope > 0n) return d.side === 'sell' ? 'dutch' : 'rising';
@@ -244,7 +283,7 @@ export interface Fmt {
   ref: TokenRef;
   clock: Clock | null;
   time: (unix: bigint) => string;
-  /** resolves other tokens (a pair order's quote token B) */
+  /** Resolves other tokens (a pair order's quote token B). */
   registry?: TokenRegistry | null;
 }
 
@@ -253,10 +292,14 @@ const secondsOf = (daa: bigint): string => (Number(daa) / DAA_PER_SECOND).toStri
 const row = (id: string, label: string, value: string, tone: Tone = 'normal', detail?: string): Row => ({ id, label, value, tone, ...(detail ? { detail } : {}) });
 
 /**
- * A state price (sompi per whole token of `d.scale` base units) as KAS per whole token when the token's decimals are known; else as sompi per
- * `scale` base units. The detail names the scale when it is not the token's own `10^decimals` (a token of more than 9 decimals).
+ * A state price (sompi per whole token of `d.scale` base units) as KAS per whole token when the
+ * token's decimals are known, else as sompi per `scale` base units. The detail names the scale
+ * when it is not the token's own `10^decimals` (a token of more than 9 decimals).
  */
-/** A price DELTA (sompi per `scale` base units) as the bare KAS amount per whole token (the template prints the unit), e.g. a trailing step. */
+/**
+ * A price delta (sompi per `scale` base units) as the bare KAS amount per whole token, for example
+ * a trailing step. The template prints the unit.
+ */
 function kasPerToken(price: bigint, d: OrderDescription, f: Fmt): string {
   return d.scale <= 0n ? formatKas(price, GROUP) : formatPricePerToken(price, decimalsOf(f.ref), d.scale, GROUP);
 }
@@ -264,7 +307,7 @@ function kasPerToken(price: bigint, d: OrderDescription, f: Fmt): string {
 function priceText(price: bigint, d: OrderDescription, f: Fmt): { value: string; detail?: string } {
   if (d.scale <= 0n) return { value: `${formatKas(price, GROUP)} KAS` };
   return {
-    // "X KAS per TOKEN" (whole tokens), never the pair notation "X TOKEN / KAS"
+    // "X KAS per TOKEN" (whole tokens), never the pair notation "X TOKEN / KAS".
     value: f.tr('confirm.f.perUnit', { price: formatPricePerToken(price, decimalsOf(f.ref), d.scale, GROUP), unit: 'KAS', per: f.ref.ticker ?? longId(f.ref.covenantId) }),
   };
 }
@@ -272,11 +315,13 @@ function priceText(price: bigint, d: OrderDescription, f: Fmt): { value: string;
 const approxTime = (daa: bigint, f: Fmt): string | null => (f.clock ? f.time(daaToUnix(f.clock, daa)) : null);
 
 /**
- * A price of a pair order. The state price is B base units per `d.scale` base units of A (scale = 10^min(decimals(A), 9)); with A's decimals known
- * it is shown per WHOLE A (`price x 10^decimals(A) / scale`, the ticket's own conversion), in B when B's decimals are known, else raw base units of B.
- * Without A's decimals it stays per `scale` base units of A and the detail says so.
+ * A price of a pair order. The state price is B base units per `d.scale` base units of A, where
+ * scale = 10^min(decimals(A), 9). With A's decimals known it is shown per whole A (`price x
+ * 10^decimals(A) / scale`, the ticket's own conversion), in B when B's decimals are known, else in
+ * raw base units of B. Without A's decimals it stays per `scale` base units of A and the detail
+ * says so.
  */
-/** The bare amount of a pair price (the unit follows as "B per A"): whole B. */
+/** The bare amount of a pair price, whole B. The unit follows as "B per A". */
 const pairNumber = (ref: TokenRef, amount: bigint): string => formatTokenAmount(amount, decimalsOf(ref), GROUP);
 const bUnit = (ref: TokenRef): string => ref.ticker ?? longId(ref.covenantId);
 
@@ -289,11 +334,18 @@ function pairPriceText(price: bigint, d: OrderDescription, f: Fmt): { value: str
 }
 
 /**
- * The pair rows of a pair order (KobPair, KobCondPair, KobIfdPair), from the state alone: which token it sells for which, what it holds of each token
- * (an ask's A, a bid's B escrow, a sell-first entry's A and B prefund), what the whole amount guarantees at the order's own price (a sell receives at
- * least `ceil(n x price / scale(A))` of B, a buy pays at most `floor(...)`), the KAS tip and carriers, and the trigger rule of a pair stop: it arms
- * when the two KAS books imply a rate beyond the stop (a resting order of each token on the costly side, each rested and filled together), or when a
- * resting pair order at or beyond the stop is filled. A pair order never routes by itself: a matcher may net it, route it or fill it from inventory.
+ * The pair rows of a pair order (KobPair, KobCondPair, KobIfdPair), from the state alone. They say:
+ * - which token it sells for which;
+ * - what it holds of each token (an ask's A, a bid's B escrow, a sell-first entry's A and B
+ *   prefund);
+ * - what the whole amount guarantees at the order's own price (a sell receives at least
+ *   `ceil(n x price / scale(A))` of B, a buy pays at most `floor(...)`);
+ * - the KAS tip and carriers;
+ * - the trigger rule of a pair stop.
+ * A pair stop arms when the two KAS books imply a rate beyond the stop (a resting order of each
+ * token on the costly side, each rested and filled together), or when a resting pair order at or
+ * beyond the stop is filled. A pair order never routes by itself. A matcher may net it, route it
+ * or fill it from inventory.
  */
 function pairRows(d: OrderDescription, f: Fmt): Row[] {
   const { tr } = f;
@@ -305,7 +357,8 @@ function pairRows(d: OrderDescription, f: Fmt): Row[] {
   rows.push(row('pairPair', tr('confirm.f.pairPair'), tr(d.side === 'sell' ? 'confirm.f.pairSells' : 'confirm.f.pairBuys', { base: aName, quote: bName })));
   if (x.escrowA > 0n) rows.push(row('pairEscrowA', tr('confirm.f.pairEscrowA'), tokenAmountText(f.ref, x.escrowA, tr)));
   if (x.escrowB > 0n) rows.push(row('pairEscrowB', tr(x.kind === 'KobIfdPair' && d.side === 'sell' ? 'confirm.f.pairPrefundB' : 'confirm.f.pairEscrowB'), tokenAmountText(bRef, x.escrowB, tr)));
-  // the whole amount at the order's own bound: a resting / auction pair order (KobPair); a conditional or an entry is described by its legs
+  // The whole amount at the order's own bound: a resting or auction pair order (KobPair). A
+  // conditional order or an entry is described by its legs.
   if (x.kind === 'KobPair' && d.amountLeft !== null && d.scale > 0n) {
     const bound = x.priceEnd ?? x.price;
     if (bound > 0n) {
@@ -327,20 +380,27 @@ function pairRows(d: OrderDescription, f: Fmt): Row[] {
 }
 
 /**
- * What the caller knows of an order beyond its state: its value, the KAS it locks, a day order's deadline, and for a multi-fill market buy the
- * fills its escrow budgets (signer/summary.ts `bidAmountOf`) with the delivery carrier each one pays.
+ * What the caller knows of an order beyond its state: its value, the KAS it locks, a day order's
+ * deadline, and for a multi-fill market buy the fills its escrow budgets (signer/summary.ts
+ * `bidAmountOf`) with the delivery carrier each one pays.
  */
 export interface OrderExtra { value: bigint | null; locked: LockedKas | null; deadline: bigint | null; fills?: MarketFillsFacts | null }
 
 /**
- * A multi-fill market buy as its escrow reads (signer/summary.ts `marketFillsOf`): the fills the escrow budgets with the delivery carrier each
- * pays; `amount` the quantity the escrow was sized for and `maxReceive` the most the escrow lets the fills deliver (kob-wasm `bidBuyingPower`:
- * a bid's quantity is its KAS, so the carrier of a fill that does not happen buys tokens too); `minFillLimit` the count is the most the minimum
- * fill allows for that amount (`ceil(amount / minFill)`), so a larger Fills value the user typed was cut to it.
+ * A multi-fill market buy as its escrow reads (signer/summary.ts `marketFillsOf`).
+ * - `count` and `carrier`: the fills the escrow budgets and the delivery carrier each pays.
+ * - `amount`: the quantity the escrow was sized for.
+ * - `maxReceive`: the most the escrow lets the fills deliver (kob-wasm `bidBuyingPower`). A bid's
+ *   quantity is its KAS, so the carrier of a fill that does not happen buys tokens too.
+ * - `minFillLimit`: the count is the most the minimum fill allows for that amount
+ *   (`ceil(amount / minFill)`), so a larger Fills value the user typed was cut to it.
  */
 export interface MarketFillsFacts { count: bigint; carrier: bigint; amount?: bigint; maxReceive?: bigint; minFillLimit?: boolean }
 
-/** Seconds a decaying auction takes to fall from its start price to its bound (null when it does not decay to a positive bound). */
+/**
+ * Seconds a decaying auction takes to fall from its start price to its bound. Null when it does not
+ * decay to a positive bound.
+ */
 export function auctionSeconds(d: OrderDescription): string | null {
   const a = d.auction;
   if (!a || a.slope <= 0n || a.priceEnd <= 0n) return null;
@@ -348,8 +408,14 @@ export function auctionSeconds(d: OrderDescription): string | null {
   return (Math.ceil(steps) / DAA_PER_SECOND).toString();
 }
 
-/** Rows that describe one order state: quantity, prices (all-in), timing, auction, trigger, entry, repeat. */
-/** A curve's rows: its amount, levels and level size, first, last and average price, what the rest pays if it sells, tip, minimum fill, the table. */
+/**
+ * Rows that describe one order state: quantity, prices (all-in), timing, auction, trigger, entry,
+ * repeat.
+ */
+/**
+ * A curve's rows: its amount, levels and level size, first, last and average price, what the rest
+ * pays if it sells, tip, minimum fill, and the table.
+ */
 function curveRows(d: OrderDescription, c: NonNullable<OrderDescription['curve']>, f: Fmt): Row[] {
   const { tr } = f;
   const p = (x: bigint) => priceText(x, d, f).value;
@@ -374,33 +440,35 @@ export function orderRows(d: OrderDescription, extra: OrderExtra, f0: Fmt): Row[
   const f: Fmt = { ...f0, ref: onScale(f0.ref, d.scale) };
   const { tr } = f;
   if (d.curve) return curveRows(d, d.curve, f);
-  // a pair order: its prices are B per whole A, its tip KAS per whole A (never part of its B price)
+  // A pair order: its prices are B per whole A. Its tip is KAS per whole A and never part of its B
+  // price.
   const pair = !!d.pair;
   const rows: Row[] = pair ? pairRows(d, f) : [];
   const sell = d.side === 'sell';
   const p = (price: bigint) => (pair ? pairPriceText(price, d, f) : priceText(price, d, f));
   const tip = pair ? 0n : d.tip;
 
-  // quantity
+  // Quantity.
   if (d.amountLeft !== null) {
     rows.push(row('amount', tr('confirm.f.amount'), tokenAmountText(f.ref, d.tokenAmount ?? d.amountLeft, tr)));
   } else if (extra.locked) {
-    // a plain bid is a KAS budget: how much that buys depends on the price
+    // A plain bid is a KAS budget, so how much that buys depends on the price.
     const budget = extra.locked.escrow;
     rows.push(row('budget', tr('confirm.f.budget'), kas(budget), 'normal', tr('confirm.f.budgetAmount')));
   }
-  // the smallest fill unless a fill takes everything left (the order's anti-dust rule)
+  // The smallest fill, unless a fill takes everything left (the order's anti-dust rule).
   rows.push(row('minFill', tr('confirm.f.minFill'), tokenAmountText(f.ref, d.minFill, tr), 'muted', tr('confirm.f.minFillHint')));
 
-  // prices
+  // Prices.
   const isCond = d.trigger !== null;
   if (d.price > 0n) {
     const x = p(d.price);
     const label = d.entry ? tr('confirm.f.entryLimit') : isCond ? tr('confirm.f.takeProfit') : d.auction && d.auction.slope > 0n ? tr('confirm.f.startPrice') : tr('confirm.f.limit');
     rows.push(row('price', label, x.value, 'normal', x.detail));
-    // an auction (market, marketable limit, Dutch) only guarantees its END price: the covenant fills at max(priceEnd, price - slope * t) for a
-    // sell, min(...) for a buy, so the all-in guarantee is derived from `priceEnd` and labelled the worst price (matcher.md 10.2); the start is
-    // only what the order is expected to get at the touch
+    // An auction (market, marketable limit, Dutch) only guarantees its END price. The covenant
+    // fills at max(priceEnd, price - slope * t) for a sell and min(...) for a buy. So the all-in
+    // guarantee is derived from `priceEnd` and labelled the worst price (matcher.md 10.2). The
+    // start is only what the order is expected to get at the touch.
     const decays = !!d.auction && d.auction.slope > 0n; // priceEnd 0 decays to 0: the worst price IS 0
     const bound = decays ? d.auction!.priceEnd : d.price;
     const allIn = sell ? (bound > tip ? bound - tip : 0n) : bound + tip;
@@ -415,12 +483,13 @@ export function orderRows(d: OrderDescription, extra: OrderExtra, f0: Fmt): Row[
     rows.push(row('tip', tr('confirm.f.tip'), x.value, 'muted', x.detail));
   }
   if (pair && d.tip > 0n) {
-    // KAS per whole A, prefunded on the order UTXO and released to the filler per fill (rounded down): never taken from the B
+    // KAS per whole A, prefunded on the order UTXO and released to the filler per fill (rounded
+    // down). It is never taken from the B.
     const x = priceText(d.tip, d, f);
     rows.push(row('tip', tr('confirm.f.tip'), x.value, 'muted', tr('confirm.f.pairTipHint')));
   }
 
-  // auctions and schedules
+  // Auctions and schedules.
   const a = d.auction;
   if (a) {
     if (a.interval > 0n) {
@@ -435,18 +504,20 @@ export function orderRows(d: OrderDescription, extra: OrderExtra, f0: Fmt): Row[
   if (d.tif === 'fok') rows.push(row('tif', tr('confirm.f.tif'), tr('confirm.f.tifFok')));
   if (isMultiFillMarket(d)) rows.push(...marketFillsRows(d, extra, f));
 
-  // trigger legs
+  // Trigger legs.
   const trg = d.trigger;
   if (trg && trg.stopPrice > 0n) {
     const s = p(trg.stopPrice);
     rows.push(row('stop', tr('confirm.f.stop'), s.value, 'warn', s.detail));
-    // the worst fill after the trigger: the band's end (sell: stop - band, buy: stop + band; multiply first, as the covenant). A stop is NOT a
-    // guaranteed price: it fills inside the band or not at all (matcher.md 10.6), as the ticket's stopWorst row says
+    // The worst fill after the trigger is the band's end (sell: stop - band, buy: stop + band,
+    // multiplied first as the covenant does). A stop is not a guaranteed price. It fills inside the
+    // band or not at all (matcher.md 10.6), as the ticket's stopWorst row says.
     const worst = p(stopWorstPrice(sell ? 'sell' : 'buy', trg.stopPrice, trg.slipBps));
     rows.push(row('stopWorst', tr('confirm.f.stopWorst'), worst.value, 'warn', tr(sell ? 'confirm.f.stopWorstSell' : 'confirm.f.stopWorstBuy')));
     rows.push(row('band', tr('confirm.f.band'), tr('confirm.f.bandValue', { percent: (Number(trg.slipBps) / 100).toString(), seconds: secondsOf(trg.bandDaa) })));
-    // the direction of the trigger: a sell stop arms on a resting SELL quoting at or below it, a buy stop on a resting BUY at or above it (a pair
-    // stop: the pair trigger rule row above)
+    // The direction of the trigger. A sell stop arms on a resting SELL quoting at or below it, and
+    // a buy stop on a resting BUY at or above it. For a pair stop see the pair trigger rule row
+    // above.
     if (!pair) rows.push(row('exposure', tr('confirm.f.exposure'), tr(sell ? 'confirm.f.exposureValueSell' : 'confirm.f.exposureValueBuy', { amount: tokenAmountText(f.ref, trg.minTouch, tr), seconds: secondsOf(trg.minRestDaa) })));
     if (trg.keeperTip > 0n) rows.push(row('keeperTip', tr('confirm.f.keeperTip'), kas(trg.keeperTip), 'muted'));
     if (trg.trailStep > 0n) {
@@ -457,7 +528,7 @@ export function orderRows(d: OrderDescription, extra: OrderExtra, f0: Fmt): Row[
     rows.push(row('armed', tr('confirm.f.armed'), trg.armed > 0n ? tr('confirm.f.armedYes') : tr('confirm.f.armedNo'), 'muted'));
   }
 
-  // if-done entry
+  // If-done entry.
   const e = d.entry;
   if (e) {
     if (e.entryStop > 0n) {
@@ -465,7 +536,8 @@ export function orderRows(d: OrderDescription, extra: OrderExtra, f0: Fmt): Row[
       rows.push(row('entryStop', tr('confirm.f.entryStop'), s.value, 'warn', tr('confirm.f.entryStopDetail', { seconds: secondsOf(e.bandDaa) })));
       if (!pair) rows.push(row('entryExposure', tr('confirm.f.exposure'), tr(sell ? 'confirm.f.exposureValueSell' : 'confirm.f.exposureValueBuy', { amount: tokenAmountText(f.ref, e.minTouch, tr), seconds: secondsOf(e.minRestDaa) })));
     }
-    // what whoever arms the stop entry may take from the order's KAS (the covenant lets it take up to this much: audit 2026-10-30 G1)
+    // What whoever arms the stop entry may take from the order's KAS. The covenant lets it take up
+    // to this much.
     if (e.entryStop > 0n && e.keeperTip > 0n) rows.push(row('keeperTip', tr('confirm.f.keeperTip'), kas(e.keeperTip), 'muted'));
     if (e.exitCarrier > 0n) rows.push(row('exitCarrier', tr('confirm.f.exitCarrier'), kas(e.exitCarrier), 'muted'));
     if (e.deliveryCarrier > 0n && !pair) rows.push(row('deliveryCarrier', tr('confirm.f.deliveryCarrier'), kas(e.deliveryCarrier), 'muted'));
@@ -474,7 +546,8 @@ export function orderRows(d: OrderDescription, extra: OrderExtra, f0: Fmt): Row[
       const cycle = d.amountLeft ?? 0n;
       const repeats = cycle > 0n ? (e.rptAmount - 1n) / cycle : 0n;
       const cycleText = tokenAmountText(f.ref, cycle, tr);
-      // the wallet's "unlimited" is a count so large that only the 90-day bound ends it: say so instead of printing the sentinel
+      // The wallet's "unlimited" is a count so large that only the 90-day bound ends it. Say so
+      // instead of printing the sentinel.
       const shown = repeats >= UNLIMITED_REPEAT_COUNT ? `${tr('ticket.val.repeatUnlimited')} (${tr('ticket.val.repeatCycle', { amount: cycleText })})` : tr('confirm.f.repeatValue', { count: repeats.toString(), amount: cycleText });
       rows.push(row('repeat', tr('confirm.f.repeat'), repeats > 0n ? shown : tr('confirm.f.repeatNone'), 'warn'));
     }
@@ -487,10 +560,11 @@ export function orderRows(d: OrderDescription, extra: OrderExtra, f0: Fmt): Row[
 }
 
 /**
- * A multi-fill market order: it keeps trading within its worst price across several transactions (a buy: up to the fills its escrow budgets),
- * and what is not filled returns after its expiry, refunded by anyone for the refund tip (or cancelled by the maker). A buy deposits one delivery
- * carrier per budgeted fill: an unused one returns with the refund or a cancel, a used one rides on the tokens it delivered (freed by a merge or
- * a sale). A sell budgets no carrier per fill.
+ * A multi-fill market order keeps trading within its worst price across several transactions (a
+ * buy: up to the fills its escrow budgets). What is not filled returns after its expiry, refunded
+ * by anyone for the refund tip or cancelled by the maker. A buy deposits one delivery carrier per
+ * budgeted fill. An unused one returns with the refund or a cancel, and a used one rides on the
+ * tokens it delivered (freed by a merge or a sale). A sell budgets no carrier per fill.
  */
 function marketFillsRows(d: OrderDescription, extra: OrderExtra, f: Fmt): Row[] {
   const { tr } = f;
@@ -503,7 +577,8 @@ function marketFillsRows(d: OrderDescription, extra: OrderExtra, f: Fmt): Row[] 
   }
   const x = extra.fills;
   if (x && x.minFillLimit && n !== null && n > 0n && d.minFill > 0n) {
-    // the Fills value is cut to what the minimum fill allows: said, not left to look like a smaller request
+    // The Fills value is cut to what the minimum fill allows. That is said, so it does not look
+    // like a smaller request.
     rows.push(row('fillsLimit', tr('confirm.f.fillsLimit'), tr('confirm.f.fillsLimitValue', { fills: n.toString(), minFill: tokenAmountText(f.ref, d.minFill, tr) }), 'muted', tr('confirm.f.fillsLimitHint')));
   }
   if (x && x.maxReceive !== undefined && x.amount !== undefined && x.maxReceive > x.amount) {
@@ -512,7 +587,7 @@ function marketFillsRows(d: OrderDescription, extra: OrderExtra, f: Fmt): Row[] 
   return rows;
 }
 
-/** Activation, expiry / day deadline, refund tip and the order value. */
+/** Activation, expiry or day deadline, refund tip and the order value. */
 function timingRows(d: OrderDescription, extra: { value: bigint | null; deadline: bigint | null }, f: Fmt): Row[] {
   const { tr } = f;
   const rows: Row[] = [];
@@ -524,9 +599,11 @@ function timingRows(d: OrderDescription, extra: { value: bigint | null; deadline
     const at = extra.deadline;
     rows.push(row('deadline', tr('confirm.f.dayDeadline'), `${formatUtc(at)} / ${formatLocal(at)}`, 'warn'));
   } else if (d.expiryDaa > 0n) {
-    // an if-done exit's GTC expiry (`GTC_EXIT_EXPIRY_DAA`, 2^62: 90 days idle from the exit's creation) or one years ahead of the clock. Without
-    // a clock (the signer frame, the app before its clock loads) only the sentinel range is told apart: today's DAA scores are above
-    // FAR_FUTURE_DAA as numbers, and every plain GTC order read as an exit's expiry. The DAA score is shown then.
+    // An if-done exit's GTC expiry (`GTC_EXIT_EXPIRY_DAA`, 2^62: 90 days idle from the exit's
+    // creation) or an expiry two years or more ahead of the clock. Without a clock (the signer
+    // frame, the app before its clock loads) only the sentinel range is told apart. Today's DAA
+    // scores are above FAR_FUTURE_DAA as numbers, so comparing with it would read every plain GTC
+    // order as an exit's expiry. The DAA score is shown then.
     if (d.expiryDaa >= 1n << 60n || (f.clock !== null && d.expiryDaa >= f.clock.daa + FAR_FUTURE_DAA)) {
       rows.push(row('expiry', tr('confirm.f.expiry'), tr('confirm.f.expiryExit'), 'muted'));
     } else {
@@ -534,7 +611,8 @@ function timingRows(d: OrderDescription, extra: { value: bigint | null; deadline
       rows.push(row('expiry', tr('confirm.f.expiry'), at ? tr('confirm.f.expiryAround', { time: at }) : tr('confirm.f.daa', { daa: d.expiryDaa.toString() }), 'muted', tr('confirm.f.expiryHint')));
     }
   }
-  // R-13: the refund tip is paid only to whoever refunds the order after its expiry; a cancel or the last fill returns it to the maker
+  // The refund tip is paid only to whoever refunds the order after its expiry. A cancel or the last
+  // fill returns it to the maker.
   if (d.refundTip > 0n) rows.push(row('refundTip', tr('confirm.f.refundTip'), kas(d.refundTip), 'muted', tr('confirm.f.refundTipHint')));
   if (extra.value !== null) rows.push(row('value', tr('confirm.f.orderValue'), kas(extra.value), 'muted'));
   return rows;

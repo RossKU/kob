@@ -1,19 +1,29 @@
-// Disclosure of the fee RATE on the pre-sign screen (pure view model; the component only renders the rows and findings).
+// Disclosure of the fee rate on the pre-sign screen. It is a pure view model, and the component
+// only renders the rows and findings.
 //
-// The fee in KAS is already a row of the confirmation ("Network fee"); this adds what the dynamic fee policy (kob/fee-policy.ts) decided: the rate in sompi per
-// gram, which urgency / node bucket it came from and how long the node expects that to take, and a clear note whenever the wallet paid the minimum rate because
-// no estimate was available (or the policy is off, or the wallet could not afford more) or the rate was held back by the maximum rate / the per-transaction cap.
+// The fee in KAS is already a row of the confirmation ("Network fee"). This adds what the dynamic
+// fee policy (kob/fee-policy.ts) decided: the rate in sompi per gram, which urgency or node bucket
+// it came from, and how long the node expects that to take. It also adds a clear note whenever the
+// wallet paid the minimum rate because no estimate was available (or the policy is off, or the
+// wallet could not afford more), or the rate was held back by the maximum rate or the
+// per-transaction cap.
 import { feeChoiceOf, type FeeChoice, type Urgency } from '../../kob/fee-policy';
 import { formatKas } from '../../kob/units';
 import { t, type Params } from '../../i18n';
 import type { Finding, Row, Translate } from './confirm-model';
 
 export interface FeeDisclosureInput {
-  /** what the planner decided for this transaction (`feeChoiceOf(built)`); null for a transaction planned elsewhere */
+  /**
+   * What the planner decided for this transaction (`feeChoiceOf(built)`). Null for a transaction
+   * planned elsewhere.
+   */
   choice: FeeChoice | null;
-  /** the rate the built transaction was built at (`built.fee.feeRate`), sompi per gram: the fallback when there is no choice */
+  /**
+   * The rate the built transaction was built at (`built.fee.feeRate`), sompi per gram. It is the
+   * fallback when there is no choice.
+   */
   rate: bigint | null;
-  /** the fee of the built transaction, sompi */
+  /** The fee of the built transaction, sompi. */
   fee: bigint;
 }
 
@@ -26,7 +36,7 @@ export interface FeeDisclosure {
 const GROUP = { group: ',' };
 const kasText = (v: bigint): string => formatKas(v, GROUP);
 
-/** "under a second", "about 40 seconds", "about 5 minutes", "about 2 hours" */
+/** "under a second", "about 40 seconds", "about 5 minutes", "about 2 hours". */
 export function timeText(seconds: number, tr: Translate = t): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '';
   if (seconds < 1) return tr('fees.time.subSecond');
@@ -40,7 +50,10 @@ export const urgencyText = (u: Urgency, tr: Translate = t): string => tr(`fees.u
 
 const finding = (code: string, severity: Finding['severity'], text: string, params?: Params): Finding => ({ code, severity, message: code, ...(params ? { params } : {}), text });
 
-/** Rows and findings for the fee rate of one transaction. Never throws; an empty disclosure when there is nothing to say (no rate known). */
+/**
+ * Rows and findings for the fee rate of one transaction. Never throws. It is empty when there is
+ * nothing to say (no rate known).
+ */
 export function feeDisclosure(i: FeeDisclosureInput, tr: Translate = t): FeeDisclosure {
   const out: FeeDisclosure = { rows: [], warnings: [], info: [] };
   const c = i.choice;
@@ -53,7 +66,7 @@ export function feeDisclosure(i: FeeDisclosureInput, tr: Translate = t): FeeDisc
     return out;
   }
 
-  // the rate row: what and where it came from
+  // The rate row: what and where it came from.
   let detail: string;
   if (c.source === 'estimate') {
     const bucket = c.bucketFeerate !== undefined ? tr('fees.rate.bucket', { feerate: roundTo(c.bucketFeerate, 2) }) : '';
@@ -63,13 +76,13 @@ export function feeDisclosure(i: FeeDisclosureInput, tr: Translate = t): FeeDisc
   }
   out.rows.push({ id: 'fee-rate', label: tr('fees.rate.label'), value: rateText, detail, tone: c.source === 'floor' && c.reason !== 'disabled' ? 'warn' : 'normal' });
 
-  // the node's time estimate (for the bucket the rate came from)
+  // The node's time estimate (for the bucket the rate came from).
   if (c.source === 'estimate' && c.estimatedSeconds !== undefined) {
     const time = timeText(c.estimatedSeconds, tr);
     if (time) out.rows.push({ id: 'fee-speed', label: tr('fees.speed.label'), value: tr('fees.speed.value', { time }), tone: 'normal' });
   }
 
-  // notes
+  // Notes.
   if (c.source === 'floor') {
     if (c.reason === 'disabled') out.info.push(finding('fee-policy-off', 'info', tr('fees.note.off', { rate: rate.toString() })));
     else if (c.reason === 'funds') out.warnings.push(finding('fee-floor-funds', 'warning', tr('fees.note.funds', { rate: rate.toString() })));
