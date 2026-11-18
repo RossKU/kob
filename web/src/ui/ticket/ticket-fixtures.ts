@@ -1,16 +1,22 @@
-// Test helpers of the ticket: one valid form per order type and side, priced around the default test book (asks from 2.50, bids from 2.45 KAS per token).
+// Test helpers of the ticket: one valid form per order type and side, priced around the default
+// test book (asks from 2.50, bids from 2.45 KAS per token).
 import { level, makeEnv, market8x8, type EnvOptions } from '../../testing/fixtures';
 import type { BookView, PlanEnv } from '../../kob/plan-types';
 import { initialForm, type OrderTypeId, type Side, type TicketCtx, type TicketForm } from './form-state';
 
-// 8 decimals (scale 1e8: prices are sompi per whole token), tick 100 sompi per token (the mock registry's EXKCC)
+// 8 decimals (scale 1e8: prices are sompi per whole token), tick 100 sompi per token (the mock
+// registry's EXKCC).
 export const MARKET = market8x8({ decimals: 8, tick: 100 });
 export const CTX: TicketCtx = { decimals: 8, scale: 100_000_000n, tick: 100n };
-// a token of 12 decimals: its orders quote per 10^9 base units (the scale cap), so KAS per token and the state price differ
+// A token of 12 decimals: its orders quote per 10^9 base units (the scale cap), so KAS per token
+// and the state price differ.
 /** One whole token of MARKET: 10^8 base units. */
 export const TOKEN = 100_000_000n;
 
-/** The default test book in MARKET's units: best ask 2.50, best bid 2.45 KAS per token, 5 / 10 / 20 tokens per level. */
+/**
+ * The default test book in MARKET's units: best ask 2.50, best bid 2.45 KAS per token, 5 / 10 / 20
+ * tokens per level.
+ */
 export function ticketBook(): BookView {
   return {
     asks: [level(250_000_000n, 5n * TOKEN, 2), level(252_000_000n, 10n * TOKEN, 3), level(260_000_000n, 20n * TOKEN, 4)],
@@ -19,8 +25,9 @@ export function ticketBook(): BookView {
 }
 
 /**
- * A PlanEnv for MARKET: 1,000 KAS, 100 tokens in one UTXO and the default book (each overridable), with a further indexer that reports the same
- * best prices (an independent reference for the start of market / close orders).
+ * A PlanEnv for MARKET: 1,000 KAS, 100 tokens in one UTXO and the default book (each overridable),
+ * with a further indexer that reports the same best prices (an independent reference for the start
+ * of market / close orders).
  */
 export const ticketEnv = (o: EnvOptions = {}): PlanEnv => {
   const env = makeEnv({ market: MARKET, tokenAmounts: [100n * TOKEN], book: ticketBook(), ...o });
@@ -36,7 +43,10 @@ export const form = (type: OrderTypeId, side: Side, values: Record<string, strin
   return { ...f, values: { ...f.values, ...values } };
 };
 
-/** One valid form per type and side, priced around the default test book (asks from 2.50, bids from 2.45 KAS per token); amounts in tokens. */
+/**
+ * One valid form per type and side, priced around the default test book (asks from 2.50, bids from
+ * 2.45 KAS per token). Amounts are in tokens.
+ */
 export const CASES: [string, OrderTypeId, Side, Record<string, string>][] = [
   ['limit sell', 'limit', 'sell', { amount: '5', price: '2.6' }],
   ['limit buy', 'limit', 'buy', { amount: '5', price: '2.3' }],

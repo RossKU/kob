@@ -1,4 +1,5 @@
-// The input fields of the ticket, rendered from the layout of `form-state.ts`. Thin: every rule (parsing, rounding, which fields exist) lives there.
+// The input fields of the ticket, rendered from the layout of `form-state.ts`. It is thin: every
+// rule (parsing, rounding, which fields exist) lives there.
 import { Fragment, type ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
 import { has, t } from '../../i18n';
@@ -18,55 +19,90 @@ export interface TicketFieldsProps {
   ctx: TicketCtx;
   ticker: string;
   ids: string[];
-  /** parse errors of non-empty fields (the caller filters out "required") */
+  /** Parse errors of non-empty fields. The caller filters out "required". */
   errors: FieldError[];
   onChange(id: string, value: string): void;
-  /** Max: fills the amount with the largest the balance allows (the "Available" figure of the amount label row is its button) */
+  /**
+   * Max: fills the amount with the largest the balance allows. The "Available" figure of the amount
+   * label row is its button.
+   */
   onMax?: () => void;
-  /** "Available 988.41 KAS": the balance this order spends, one right-aligned line under the amount box; a tap does `onMax` */
+  /**
+   * "Available 988.41 KAS": the balance this order spends, one right-aligned line under the amount
+   * box. A tap does `onMax`.
+   */
   available?: { amount: string; unit: string };
-  /** a sell: held units the wallet cannot spend here, one muted line under Available (the reason is its tooltip) */
+  /**
+   * A sell: held units the wallet cannot spend here, one muted line under Available. The reason is
+   * its tooltip.
+   */
   unusable?: { text: string; reason: string };
-  /** the 0..100 % of Max slider under the amount field */
+  /** The 0..100 % of Max slider under the amount field. */
   slider?: AmountSliderProps;
   disabled?: boolean;
-  /** a market order: its price row stays, disabled ("Market price"), before the slippage box */
+  /** A market order: its price row stays, disabled ("Market price"), before the slippage box. */
   marketPrice?: boolean;
   /**
-   * the market is shown inverted (KAS/TOKEN, orientation.ts): the PRICE inputs take tokens per KAS (`name` per KAS). The form still keeps native text
-   * (KAS per token): what is typed is converted on input, rounded the way that never makes the limit worse, and the unit hint says what the order is.
+   * The market is shown inverted (KAS/TOKEN, orientation.ts), so the price inputs take tokens per
+   * KAS (`name` per KAS). The form still keeps native text (KAS per token). What is typed is
+   * converted on input and rounded the way that never makes the limit worse, and the unit hint says
+   * what the order is.
    */
   flip?: FlipCtx;
-  /** a token/token pair: the ticker of the quote token B the prices are typed in (B per whole `ticker`); absent = KAS. Tips stay KAS. */
+  /**
+   * A token/token pair: the ticker of the quote token B the prices are typed in (B per whole
+   * `ticker`). Absent means KAS. Tips stay KAS.
+   */
   quoteTicker?: string;
-  /** a pair: the tip fields whose typed tip is below what a netting fill needs (pair-common `pairTipBelowDefault`): a hint says a crossing order may wait */
+  /**
+   * A pair: the tip fields whose typed tip is below what a netting fill needs (pair-common
+   * `pairTipBelowDefault`). A hint says a crossing order may wait.
+   */
   lowTips?: readonly string[];
-  /** the value an empty select shows when its default is not static (Delivery: the wallet default of Settings) */
+  /**
+   * The value an empty select shows when its default is not static (Delivery: the wallet default of
+   * Settings).
+   */
   defaults?: Readonly<Record<string, string>>;
-  /** what an empty box shows as its placeholder when its default is not static (the Top-up tip of the token's program) */
+  /**
+   * What an empty box shows as its placeholder when its default is not static (the Top-up tip of
+   * the token's program).
+   */
   placeholders?: Readonly<Record<string, string>>;
-  /** one muted line under a field (Delivery: what Collected means; Top-up tip: the tip total) */
+  /** One muted line under a field (Delivery: what Collected means. Top-up tip: the tip total). */
   subs?: Readonly<Record<string, { text: string; testid: string }>>;
-  /** the options a select offers when they depend on the ticket (Bought tokens on a token pair: no "Added to one UTXO") */
+  /**
+   * The options a select offers when they depend on the ticket (Bought tokens on a token pair: no
+   * "Added to one UTXO").
+   */
   options?: Readonly<Record<string, readonly string[]>>;
-  /** something at the right end of a select's label row (Delivery: its "What's this?" link) */
+  /** Something at the right end of a select's label row (Delivery: its "What's this?" link). */
   asides?: Readonly<Record<string, ComponentChildren>>;
-  /** the executor tip option: what the tip it set pays in all (one line under it) */
+  /** The executor tip option: what the tip it set pays in all, one line under it. */
   tipAutoNote?: string;
 }
 
-/** What the fields need to speak the shown (inverted) market: the token's name, its scale and a KAS price per whole token to turn amounts into KAS. */
+/**
+ * What the fields need to speak the shown (inverted) market: the token's name, its scale, and a KAS
+ * price per whole token to turn amounts into KAS.
+ */
 export interface FlipCtx {
   name: string;
-  /** a reference price (the state price: sompi per whole token of `scale` base units): the form's own price when it parses, else the best in the book; null when there is none */
+  /**
+   * A reference price (the state price: sompi per whole token of `scale` base units). It is the
+   * form's own price when it parses, else the best in the book, and null when there is none.
+   */
   price?: bigint | null;
-  /** `price` is the form's own price (else the book's) */
+  /** `price` is the form's own price (else the book's). */
   ownPrice?: boolean;
   scale?: bigint;
   decimals?: number;
 }
 
-/** Exit legs of an if-done order are on the OPPOSITE side of the entry: their prices round the other way. */
+/**
+ * Exit legs of an if-done order are on the opposite side of the entry, so their prices round the
+ * other way.
+ */
 export const sideOfField = (form: TicketForm, id: string): Side => (id.startsWith('exit.') && id !== 'exit.tip' && id !== 'exit.minFill' ? (form.side === 'buy' ? 'sell' : 'buy') : form.side);
 
 export const labelKey = (type: string, id: string): string => (has(`ticket.label.${id}.${type}`) ? `ticket.label.${id}.${type}` : `ticket.label.${id}`);
@@ -77,7 +113,7 @@ function errorText(e: FieldError): string {
   return t(`ticket.err.${e.code}`, (e.params ?? {}) as Record<string, string | number>);
 }
 
-/** A field hint on one line (CSS ellipsis); the full text is the tooltip. */
+/** A field hint on one line (CSS ellipsis). The full text is the tooltip. */
 function Help(props: { text: string }) {
   return <span class="tk-help" title={props.text}>{props.text}</span>;
 }
@@ -87,9 +123,11 @@ const STOP_DOCS_URL = 'https://github.com/RossKU/kob/blob/master/docs/user-guide
 const helpOf = (text: string | undefined): ComponentChildren => (text ? <Help text={text} /> : undefined);
 
 /**
- * The ONE short line under a KAS amount box (a `kas` form): the token amount the order is built with and, where it matters, the KAS it stands
- * for. A price the user typed converts exactly ("= 8.6169 TUSD at your price"); a buy's KAS is the most it spends (the worst price plus the tip),
- * a sell's what it receives about at the book. Or what is still missing to know it; null when there is nothing to say yet.
+ * The one short line under a KAS amount box (a `kas` form): the token amount the order is built
+ * with and, where it matters, the KAS it stands for. A price the user typed converts exactly ("=
+ * 8.6169 TUSD at your price"). A buy's KAS is the most it spends (the worst price plus the tip),
+ * and a sell's is what it receives about at the book. When the value is not known it says what is
+ * still missing. It is null when there is nothing to say yet.
  */
 export function kasHintText(form: TicketForm, ctx: TicketCtx, id: string, ticker: string): { text: string; base?: bigint } | null {
   const base = amountBaseOf(form, ctx, id);
@@ -98,7 +136,8 @@ export function kasHintText(form: TicketForm, ctx: TicketCtx, id: string, ticker
   const tokens = tokenWords(base.value, ctx.decimals);
   if (!p) return { text: t('ticket.kasAmt.kept', { tokens, ticker }), base: base.value };
   if (p.basis === 'own' || p.basis === 'stop' || p.basis === 'exit') return { text: t(`ticket.kasAmt.at.${p.basis}`, { tokens, ticker }), base: base.value };
-  // a buy spends at most the KAS typed (rounded up, never looks cheaper); a sell at the book receives about it
+  // A buy spends at most the KAS typed (rounded up, so it never looks cheaper). A sell at the book
+  // receives about it.
   const atMost = p.basis !== 'book';
   const key = atMost ? 'ticket.kasAmt.spendsAtMost' : form.side === 'buy' ? 'ticket.kasAmt.spendsAbout' : 'ticket.kasAmt.receivesAbout';
   return { text: t(key, { tokens, ticker, kas: kasWords(baseToKas(base.value, p.price, ctx.scale), atMost ? 'up' : 'nearest') }), base: base.value };
@@ -113,25 +152,34 @@ function KasAmountHint(props: { form: TicketForm; ctx: TicketCtx; id: string; ti
 export function TicketFields(props: TicketFieldsProps) {
   const { form, ctx, ticker } = props;
   /**
-   * The long help of a field (what the "?" of the title row shows under it): an inverted market has its own wording where the native help speaks of buying
-   * or selling the token; a market order's Fills box has its own on either view (it speaks of transactions, not of a limit's escrow). The plain amount help
-   * says what the label and the unit beside the box say: it is not shown.
+   * The long help of a field (what the "?" of the title row shows under it). An inverted market has
+   * its own wording where the native help speaks of buying or selling the token. A market order's
+   * Fills box has its own on either view, because it speaks of transactions, not of a limit's
+   * escrow. The plain amount help says what the label and the unit beside the box say, so it is
+   * not shown.
    */
   const helpOf0 = (id: string): string | undefined => {
     const helpKey = props.quoteTicker && has(`ticket.help.${id}.pair`) ? `ticket.help.${id}.pair` : (id === 'maxFills' || id === 'direct') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
     return helpKey !== 'ticket.help.amount' && has(helpKey) ? t(helpKey, { ticker, quote: props.quoteTicker ?? 'KAS', local: formatLocalTime(nextUtcMidnight(Date.now())) }) : undefined;
   };
-  /** the text an amount box shows: the KAS value of an exact amount kept for it (a `kas` form), else what was typed */
+  /**
+   * The text an amount box shows: the KAS value of an exact amount kept for it (a `kas` form), else
+   * what was typed.
+   */
   const amountText = (id: string): string => {
     const kept = form.values[id + BASE_SUFFIX];
     return form.kas && kept !== undefined ? kasTextOf(form, ctx, id, BigInt(kept)) : form.values[id] ?? '';
   };
-  /** the unit of an amount box: KAS in a `kas` form, else the token */
+  /** The unit of an amount box: KAS in a `kas` form, else the token. */
   const amountUnit = form.kas ? 'KAS' : ticker;
   const errOf = (id: string) => props.errors.find((e) => e.field === id);
-  // what the user typed in an inverted price box (the form's own text is the converted native price): kept while it still produces the form's text
+  // What the user typed in an inverted price box (the form's own text is the converted native
+  // price). It is kept while it still produces the form's text.
   const [typed, setTyped] = useState<Record<string, string>>({});
-  /** a market order has no price of its own: its price row stays, disabled, saying "Market price", so the rows (and the button) do not move between Limit and Market (the usual exchange layout) */
+  /**
+   * A market order has no price of its own. Its price row stays, disabled, saying "Market price",
+   * so the rows (and the button) do not move between Limit and Market (the usual exchange layout).
+   */
   const marketPriceRow = (
     <Field
       key="marketPrice"
@@ -149,11 +197,12 @@ export function TicketFields(props: TicketFieldsProps) {
         if (!spec) return null;
         const value = form.values[id] ?? '';
         const e = errOf(id);
-        // the inverted market drops "(per token)": the unit next to the box says what the amount is
+        // The inverted market drops "(per token)", because the unit next to the box says what the
+        // amount is.
         const label = t(props.flip && has(`ticket.label.${id}.inv`) ? `ticket.label.${id}.inv` : labelKey(form.type, id));
         const help = helpOf0(id);
         const phKey = has(`ticket.ph.${id}.${form.type}`) ? `ticket.ph.${id}.${form.type}` : props.quoteTicker && has(`ticket.ph.${id}.pair`) ? `ticket.ph.${id}.pair` : `ticket.ph.${id}`;
-        // a token without decimals takes whole numbers: its amount box says "0", not "0.0"
+        // A token without decimals takes whole numbers, so its amount box says "0", not "0.0".
         const wholeAmount = spec.kind === 'amount' && !form.kas && ctx.decimals === 0 && phKey === 'ticket.ph.amount';
         const defaultHint = value === '' && FIELD_DEFAULTS[id] === undefined && has(phKey) ? (wholeAmount ? t('ticket.amountWholePh') : t(phKey)) : undefined;
         const common = { label, error: e ? errorText(e) : null, 'data-testid': spec.testid, disabled: props.disabled };
@@ -172,7 +221,8 @@ export function TicketFields(props: TicketFieldsProps) {
           );
         }
         if (spec.kind === 'select') {
-          // a pair order is never filled from the wallet: its crossing choices start at the auction
+          // A pair order is never filled from the wallet, so its crossing choices start at the
+          // auction.
           const pairNoTake = !!props.quoteTicker && id === 'crossing';
           return (
             <FieldShell key={id} label={label} labelAside={props.asides?.[id]} hint={subLine ? <>{subLine}{helpOf(help)}</> : helpOf(help)} error={common.error}>
@@ -193,7 +243,8 @@ export function TicketFields(props: TicketFieldsProps) {
           );
         }
         if (spec.kind === 'touch') {
-          // trigger threshold: presets (the order's minimum fill / 25% / 50% / 100% of its own amount) plus a custom token amount, all in the one text value
+          // Trigger threshold: presets (the order's minimum fill, 25%, 50% or 100% of its own
+          // amount) plus a custom token amount, all in the one text value.
           const shown = value === '' && form.values[id + BASE_SUFFIX] === undefined ? (FIELD_DEFAULTS[id] ?? TOUCH_MIN) : value;
           const preset = (TOUCH_PRESETS as readonly string[]).includes(shown) ? shown : '';
           const order = amountBaseOf(form, ctx, 'amount');
@@ -249,7 +300,8 @@ export function TicketFields(props: TicketFieldsProps) {
         }
 
         const flipped = props.flip && spec.kind === 'price' ? props.flip : null;
-        // the help of a price box speaks of KAS per token: an inverted box says what the order is in its own hint instead
+        // The help of a price box speaks of KAS per token. An inverted box says what the order is
+        // in its own hint instead.
         const helpShown = flipped ? undefined : help;
         let hint: ComponentChildren = helpOf(helpShown);
         let suffix: ComponentChildren = undefined;
@@ -266,9 +318,10 @@ export function TicketFields(props: TicketFieldsProps) {
         }
         let inputMode: 'decimal' | 'numeric' = 'decimal';
         if (spec.kind === 'price' || spec.kind === 'delta' || spec.kind === 'tip') {
-          // a price is shown per KAS in the inverted market; a tip or a distance is an amount of KAS per token, which it says in words; always
-          // "X per Y", never the pair notation "TOKEN / KAS" (it reads as tokens per KAS)
-          // a pair prices in its quote token B; a tip is KAS on every market
+          // A price is shown per KAS in the inverted market. A tip or a distance is an amount of
+          // KAS per token, which it says in words. It is always "X per Y", never the pair notation
+          // "TOKEN / KAS", because that reads as tokens per KAS. A pair prices in its quote token
+          // B, and a tip is KAS on every market.
           const quote = spec.kind === 'tip' ? 'KAS' : props.quoteTicker ?? 'KAS';
           suffix = <span class="tk-unit">{unitParts(flipped ? t('ticket.unit.per', { unit: flipped.name, per: 'KAS' }) : props.flip ? t('ticket.flip.tipUnit', { name: props.flip.name }) : t('ticket.unit.per', { unit: quote, per: ticker }))}</span>;
           if (props.flip && spec.kind === 'tip' && value !== '') {
@@ -316,7 +369,8 @@ export function TicketFields(props: TicketFieldsProps) {
           );
         }
         if (spec.kind === 'amount') {
-          // an amount counts the base of the shown pair: the token natively (whole-token units, its decimals), KAS in a `kas` form
+          // An amount counts the base of the shown pair: the token natively (whole-token units, its
+          // decimals), KAS in a `kas` form.
           suffix = <span class="tk-unit">{amountUnit}</span>;
           inputMode = 'decimal';
           if (form.kas) {
@@ -329,7 +383,7 @@ export function TicketFields(props: TicketFieldsProps) {
             );
           }
         }
-        // the balance this order spends is the Max button, at the right end of the label row
+        // The balance this order spends is the Max button, at the right end of the label row.
         const availableBtn = id === 'amount' && props.onMax && props.available ? (
           <button type="button" class="tk-available" onClick={props.onMax} disabled={props.disabled} title={t('ticket.max.aria')} data-testid="order-available">
             <span class="tk-avail-label">{t('ticket.available')}</span>{' '}
@@ -364,9 +418,11 @@ export function TicketFields(props: TicketFieldsProps) {
     }
   };
   /**
-   * A field with its long help as the tooltip (`title`): the help under the fields is off unless the title row's "?" asks for it, so what stays is the
-   * tooltip over the label and the box. `display: contents` (ticket.css) keeps the wrapper out of the layout: the form's gap and the field's own rows are
-   * untouched. An inverted price box has no help of its own (its hint says what the order is); a trigger threshold adds its trade-off.
+   * A field with its long help as the tooltip (`title`). The help under the fields is off unless
+   * the title row's "?" asks for it, so what stays is the tooltip over the label and the box.
+   * `display: contents` (ticket.css) keeps the wrapper out of the layout, so the form's gap and the
+   * field's own rows are untouched. An inverted price box has no help of its own, because its hint
+   * says what the order is. A trigger threshold adds its trade-off.
    */
   const withTip = (id: string, node: ComponentChildren): ComponentChildren => {
     const spec = FIELDS[id];

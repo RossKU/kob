@@ -1,12 +1,16 @@
-// The DISCLOSURE panel: what a planned order costs and does, from `buildDisclosureModel` (derived from the planned state and the built
-// transaction, never from the form). Thin renderer; the replace dialog of My orders shows it (the order ticket shows it only in the confirmation).
+// The disclosure panel: what a planned order costs and does, from `buildDisclosureModel` (derived
+// from the planned state and the built transaction, never from the form). It is a thin renderer.
+// The replace dialog of My orders shows it, and the order ticket shows it only in the confirmation.
 import type { ComponentChildren } from 'preact';
 import { t } from '../../i18n';
 import type { DisclosureModel, DisclosureRow, TimeRow, Txt } from './disclosure-model';
 
 const text = (v: Txt | undefined): string => (v === undefined ? '' : typeof v === 'string' ? v : t(v.key, v.params));
 
-/** One row of a disclosure list (label, value, optional detail line): shared by the order ticket of a KAS market and of a token pair. */
+/**
+ * One row of a disclosure list (label, value, optional detail line), shared by the order ticket of
+ * a KAS market and of a token pair.
+ */
 export function DiscRow(props: { testid: string; label: string; value: ComponentChildren; detail?: ComponentChildren; tone?: string }) {
   return (
     <div class={`tk-row tk-${props.tone ?? 'normal'}`} data-testid={props.testid}>

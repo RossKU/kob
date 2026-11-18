@@ -1,11 +1,16 @@
-// Repeat ladder (several levels): one repeat IFD / IFO intent expands to N intents whose entry and exit prices are shifted by k * step.
+// Repeat ladder (several levels): one repeat IFD or IFO intent expands to N intents whose entry and
+// exit prices are shifted by k * step.
 //
-// The protocol has no "ladder" order: every level is its own repeat order (its own covenant, its own transaction). This module is the pure
-// part: it validates the ladder and produces the intents; the ticket plans and signs them one after the other (nothing is batched).
-//   * buy-first levels go DOWN from the entry price, sell-first levels go UP (the usual grid: each level waits one step further from the market);
-//   * every price of a level (entry, entry stop, exit take-profit, exit stop, exit stop-limit) shifts by the same amount, so the exit keeps its
-//     distance from the entry and the profit per whole token is identical on every level;
-//   * the step is on the tick (the form rounds it), so a shifted price stays on the tick whenever the original one is.
+// The protocol has no "ladder" order. Every level is its own repeat order, with its own covenant
+// and its own transaction. This module is the pure part: it validates the ladder and produces the
+// intents. The ticket plans and signs them one after the other, and nothing is batched.
+// - Buy-first levels go down from the entry price and sell-first levels go up. This is the usual
+//   grid, where each level waits one step further from the market.
+// - Every price of a level (entry, entry stop, exit take-profit, exit stop, exit stop-limit)
+//   shifts by the same amount. So the exit keeps its distance from the entry, and the profit per
+//   whole token is identical on every level.
+// - The step is on the tick (the form rounds it), so a shifted price stays on the tick whenever
+//   the original one is.
 import type { Intent } from '../../kob/plan';
 import type { LimitIntent } from '../../kob/intent-simple';
 import type { ExitSpec, RepeatIfdIntent, RepeatIfoIntent } from '../../kob/intent-cond';
@@ -18,19 +23,24 @@ export type RepeatIntent = RepeatIfdIntent | RepeatIfoIntent;
 export type LadderErrorCode = 'notRepeat' | 'levels' | 'step' | 'tick' | 'price' | 'same' | 'collapse';
 export interface LadderError {
   code: LadderErrorCode;
-  /** 1-based level the problem is at (absent for the whole ladder) */
+  /** The 1-based level the problem is at. Absent for the whole ladder. */
   level?: number;
   field?: string;
 }
 
 export interface LadderLevel {
-  /** 1-based; level 1 is the typed order itself */
+  /** 1-based. Level 1 is the typed order itself. */
   level: number;
-  /** the price shift of this level versus level 1, sompi per whole token (negative buy-first) */
+  /**
+   * The price shift of this level versus level 1, sompi per whole token (negative for buy-first).
+   */
   shift: bigint;
-  /** the order of this level (a repeat IFD / IFO of a repeat ladder, a plain limit of a limit ladder) */
+  /**
+   * The order of this level: a repeat IFD or IFO of a repeat ladder, a plain limit of a limit
+   * ladder.
+   */
   intent: Intent;
-  /** entry limit price, sompi per whole token */
+  /** Entry limit price, sompi per whole token. */
   entryPrice: bigint;
   exitTakeProfit: bigint | null;
   exitStop: bigint | null;
@@ -40,19 +50,19 @@ export interface LadderResult {
   ok: boolean;
   levels: LadderLevel[];
   errors: LadderError[];
-  /** base units over all levels (each level: the `amount` of one cycle) */
+  /** Base units over all levels (each level: the `amount` of one cycle). */
   totalAmount: bigint;
 }
 
 export interface LadderSetting {
   levels: number;
-  /** price distance between two levels, sompi per whole token (> 0) */
+  /** Price distance between two levels, sompi per whole token (> 0). */
   step: bigint;
 }
 
 /**
- * The ladder the form asks for: null when it is off (levels empty / 1), not a repeat type, or its numbers do not parse (the form reports
- * those through `buildIntent`).
+ * The ladder the form asks for. It is null when it is off (levels empty or 1), not a repeat type,
+ * or its numbers do not parse (the form reports those through `buildIntent`).
  */
 export function ladderOfForm(form: TicketForm, ctx: TicketCtx): LadderSetting | null {
   if (form.type !== 'repeatIfd' && form.type !== 'repeatIfo') return null;
@@ -65,7 +75,10 @@ export function ladderOfForm(form: TicketForm, ctx: TicketCtx): LadderSetting | 
 
 const shiftPrice = (p: bigint | undefined, by: bigint): bigint | undefined => (p === undefined ? undefined : p + by);
 
-/** Expands `intent` into `levels` repeat intents (level 1 = `intent`). Pure; every violation is reported, nothing throws. */
+/**
+ * Expands `intent` into `levels` repeat intents (level 1 is `intent`). Pure. Every violation is
+ * reported and nothing throws.
+ */
 export function expandLadder(intent: Intent, levels: number, step: bigint, tick: bigint): LadderResult {
   const errors: LadderError[] = [];
   if (!isRepeatIntent(intent)) return { ok: false, levels: [], errors: [{ code: 'notRepeat' }], totalAmount: 0n };
@@ -111,18 +124,23 @@ export function expandLadder(intent: Intent, levels: number, step: bigint, tick:
 export const isRepeatIntent = (i: Intent): i is RepeatIntent => (i as { type?: string }).type === 'repeatIfd' || (i as { type?: string }).type === 'repeatIfo';
 
 export interface LadderTotals {
-  /** base units over all levels */
+  /** Base units over all levels. */
   amount: bigint;
-  /** KAS leaving the spendable balance into covenants over all levels, excluding network fees (sompi) */
+  /**
+   * KAS leaving the spendable balance into covenants over all levels, excluding network fees
+   * (sompi).
+   */
   kasLocked: bigint;
-  /** tokens moved into custody over all levels, base units */
+  /** Tokens moved into custody over all levels, base units. */
   tokens: bigint;
 }
 
 /**
- * Budget of the whole ladder from the plan of level 1: carriers, reserves and prefund do not depend on the shift (an exit moves with its
- * entry, so the sell-first prefund is the same), only the escrow of a buy-first entry does (the amount at the price of each level: its shift is
- * negative, `amount * shift / scale` rounded toward zero). An estimate: every level is planned again, exactly, right before it is signed.
+ * Budget of the whole ladder from the plan of level 1. Carriers, reserves and prefund do not depend
+ * on the shift, because an exit moves with its entry, so the sell-first prefund is the same. Only
+ * the escrow of a buy-first entry does, since it is the amount at the price of each level. Its
+ * shift is negative, `amount * shift / scale` rounded toward zero. It is an estimate: every level
+ * is planned again, exactly, right before it is signed.
  */
 export function ladderTotals(level1: OrderPlan, ladder: LadderResult): LadderTotals | null {
   const d = level1.disclosure;
@@ -137,16 +155,22 @@ export function ladderTotals(level1: OrderPlan, ladder: LadderResult): LadderTot
   return { amount: ladder.totalAmount, kasLocked: kas, tokens: d.tokensEscrowed * BigInt(ladder.levels.length) };
 }
 
-// ------------------------------------------------------------------------------------------------ limit ladder
+// ----------------------------------------------------------------------------- limit ladder
 //
-// Several plain limit orders of the same size at stepped prices, same side. Nothing is a new order kind: every level is a normal, independent limit
-// order with its own transaction and signature (the builder creates one order per transaction), so a cancelled or filled level never touches another.
-//   * `pct`: each level is `bps` basis points from the previous one, buy ladders go DOWN, sell ladders go UP (compounded, on the tick);
-//   * `end`: the levels are evenly spaced from the start price to `end` (either direction).
+// Several plain limit orders of the same size at stepped prices, on the same side. Nothing is a
+// new order kind. Every level is a normal, independent limit order with its own transaction and
+// signature (the builder creates one order per transaction), so a cancelled or filled level never
+// touches another.
+// - `pct`: each level is `bps` basis points from the previous one. Buy ladders go down and sell
+//   ladders go up, compounded and on the tick.
+// - `end`: the levels are evenly spaced from the start price to `end`, in either direction.
 
 export type LimitLadderSetting = { levels: number } & ({ mode: 'pct'; bps: bigint } | { mode: 'end'; end: bigint });
 
-/** The limit ladder the form asks for; null when it is off, not a limit, or its numbers do not parse (`buildIntent` reports those). */
+/**
+ * The limit ladder the form asks for. It is null when it is off, not a limit, or its numbers do not
+ * parse (`buildIntent` reports those).
+ */
 export function limitLadderOfForm(form: TicketForm, ctx: TicketCtx): LimitLadderSetting | null {
   if (form.type !== 'limit' || form.values['ladder.on'] !== 'true') return null;
   const lv = parseWhole(form.values['ladder.levels'] ?? '');
@@ -162,8 +186,10 @@ export function limitLadderOfForm(form: TicketForm, ctx: TicketCtx): LimitLadder
 }
 
 /**
- * The prices of a limit ladder, level 1 = `start`. Rounded on the tick the way that never makes a limit worse (buy down, sell up). Returns an error
- * instead when the ladder cannot be built: a price at or below zero, levels that collapse onto the same tick, an end equal to the start.
+ * The prices of a limit ladder, level 1 = `start`. They are rounded on the tick the way that never
+ * makes a limit worse (buy down, sell up). It returns an error instead when the ladder cannot be
+ * built: a price at or below zero, levels that collapse onto the same tick, or an end equal to the
+ * start.
  */
 export function limitLadderPrices(start: bigint, side: 'buy' | 'sell', set: LimitLadderSetting, tick: bigint): { prices: bigint[] } | { error: LadderError } {
   const rounding = safeRounding(side);
@@ -188,7 +214,10 @@ export function limitLadderPrices(start: bigint, side: 'buy' | 'sell', set: Limi
   return { prices };
 }
 
-/** Expands a limit intent into one limit intent per price of the ladder (level 1 = the typed order). Pure; every violation is reported, nothing throws. */
+/**
+ * Expands a limit intent into one limit intent per price of the ladder (level 1 is the typed
+ * order). Pure. Every violation is reported and nothing throws.
+ */
 export function expandLimitLadder(intent: Intent, set: LimitLadderSetting, tick: bigint): LadderResult {
   if (intent.type !== 'limit') return { ok: false, levels: [], errors: [{ code: 'notRepeat' }], totalAmount: 0n };
   if (!Number.isInteger(set.levels) || BigInt(set.levels) < MIN_LIMIT_LADDER_LEVELS || BigInt(set.levels) > MAX_LIMIT_LADDER_LEVELS) {
@@ -207,7 +236,10 @@ export function expandLimitLadder(intent: Intent, set: LimitLadderSetting, tick:
   return { ok: true, levels, errors: [], totalAmount: BigInt(set.levels) * intent.amount };
 }
 
-/** Quote value of every level at its own price (`amount x price / scale`; a buy rounds down, a sell up, like the covenant) and their sum. */
+/**
+ * Quote value of every level at its own price (`amount x price / scale`, a buy rounds down and a
+ * sell up, like the covenant) and their sum.
+ */
 export function limitLadderValues(ladder: LadderResult, side: 'buy' | 'sell', scale: bigint): { values: bigint[]; total: bigint } {
   const values = ladder.levels.map((l) => quoteOf((l.intent as { amount: bigint }).amount, l.entryPrice, scale, side === 'sell' ? 'up' : 'down'));
   return { values, total: values.reduce((a, b) => a + b, 0n) };

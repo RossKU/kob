@@ -1,5 +1,6 @@
-// The planner's warnings the ticket shows as one-line notes next to the order button. They never stop the order and need no click (the order
-// goes from the button straight to the wallet, 4c318276); only errors disable the button. Pure and DOM-free.
+// The planner's warnings the ticket shows as one-line notes next to the order button. They never
+// stop the order and need no click, because the order goes from the button straight to the
+// wallet. Only errors disable the button. Pure and DOM-free.
 import { isKind } from '../../kob/order-facts';
 import type { OrderPlan, PlanIssue } from '../../kob/plan-types';
 import type { OrderState } from '../../kob/types';
@@ -7,22 +8,35 @@ import { quoteOf } from '../../kob/units';
 import type { SignerNote } from '../../signer/protocol';
 
 /**
- * What the ticket notes: a price far through the market (a typing error), a market reference that disagrees with the last fill, book orders
- * the node does not hold (left out of the price the order starts from), a high slippage, a
- * day order about to end, a limit that crosses the market (it fills at the limit, the difference goes to the matcher), the conditional orders'
- * market checks (every `COND_*` warning, and the pair planner's take-profit twin) and a stop on a token whose genesis was not verified. The pair
- * planner's own spellings of the price and reference codes are the same warnings on a pair.
+ * What the ticket notes:
+ * - a price far through the market (a typing error);
+ * - a market reference that disagrees with the last fill;
+ * - book orders the node does not hold (left out of the price the order starts from);
+ * - a high slippage;
+ * - a day order about to end;
+ * - a limit that crosses the market (it fills at the limit, the difference goes to the matcher);
+ * - the conditional orders' market checks (every `COND_*` warning, and the pair planner's
+ *   take-profit twin);
+ * - a stop on a token whose genesis was not verified.
+ * The pair planner's own spellings of the price and reference codes are the same warnings on a
+ * pair.
  */
 const NOTE_CODES: ReadonlySet<string> = new Set([
   'PRICE_AGGRESSIVE_VS_MARKET', 'MARKET_REFERENCE_DIVERGES', 'SLIPPAGE_HIGH', 'DAY_ORDER_ENDS_SOON', 'MARKETABLE_LIMIT_FILLS_AT_LIMIT', 'STOP_EVIDENCE_GENESIS_UNVERIFIED',
   'PAIR_PRICE_AGGRESSIVE_VS_MARKET', 'PAIR_MARKET_REFERENCE_DIVERGES', 'PAIR_MARKETABLE_LIMIT_FILLS_AT_LIMIT', 'PAIR_TP_CROSSES', 'PAIR_TP_NOT_PROFITABLE',
 ]);
 
-/** A warning of the plan that the ticket notes (an error is never a note: it is the red line that disables the button). */
+/**
+ * A warning of the plan that the ticket notes. An error is never a note: it is the red line that
+ * disables the button.
+ */
 export const isTicketNote = (i: Pick<PlanIssue, 'code' | 'severity'>): boolean =>
   i.severity === 'warning' && (NOTE_CODES.has(i.code) || i.code.startsWith('COND_'));
 
-/** The notes of a plan's findings, in the planner's order, one per code and wording (an entry and an exit leg can raise the same one). */
+/**
+ * The notes of a plan's findings, in the planner's order, one per code and wording (an entry and an
+ * exit leg can raise the same one).
+ */
 export function ticketNotes(issues: readonly PlanIssue[]): PlanIssue[] {
   const seen = new Set<string>();
   const out: PlanIssue[] = [];
@@ -36,19 +50,23 @@ export function ticketNotes(issues: readonly PlanIssue[]): PlanIssue[] {
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ minimum order value
+// ----------------------------------------------------------------------- minimum order value
 
 /**
- * The executor's default minimum order value, in sompi (1 KAS): `ListingRules::min_order_value_sompi` in crates/kobd/src/tokens.rs. An order
- * worth less is indexed (status, cancel) but never listed (`unlisted_reason: "order_value_below_minimum"`), so it is in no book and never fills.
- * Each operator can set another value under `[rules]` of the executor config; `/v1/health` reports the executor's own (`min_order_value_sompi`,
- * docs/api.md section 3.1) and the web app follows it, assuming this default only for an executor that does not (see {@link minOrderValueOf}).
+ * The executor's default minimum order value, in sompi (1 KAS):
+ * `ListingRules::min_order_value_sompi` in crates/kobd/src/tokens.rs. An order worth less is
+ * indexed (status, cancel) but never listed (`unlisted_reason: "order_value_below_minimum"`), so it
+ * is in no book and never fills. Each operator can set another value under `[rules]` of the
+ * executor config. `/v1/health` reports the executor's own (`min_order_value_sompi`, docs/api.md
+ * section 3.1) and the web app follows it. It assumes this default only for an executor that does
+ * not report one (see {@link minOrderValueOf}).
  */
 export const DEFAULT_MIN_ORDER_VALUE_SOMPI = 100_000_000n;
 
 /**
- * The minimum order value to warn at: the indexer's, when `/v1/health` reports it (`min_order_value_sompi`, sompi as a decimal string or a safe
- * integer; executors from 0.1.0 do), else the executor default. `source` says which one it is, so the note can say that the number is only the default.
+ * The minimum order value to warn at. It is the indexer's when `/v1/health` reports it
+ * (`min_order_value_sompi`, sompi as a decimal string or a safe integer), else the executor
+ * default. `source` says which one it is, so the note can say that the number is only the default.
  */
 export function minOrderValueOf(health: unknown): { sompi: bigint; source: 'indexer' | 'default' } {
   const v = health && typeof health === 'object' ? (health as { min_order_value_sompi?: unknown }).min_order_value_sompi : undefined;
@@ -66,9 +84,11 @@ const bigOrNull = (v: unknown): bigint | null => {
 };
 
 /**
- * The value the executor's listing rule measures for a plain KAS order (kobd `ListingRules::evaluate`): a sell's amount at its quote,
- * `quoteOf(amountLeft, price, scale)` rounded down (kob-protocol `quote_exact`); a bid's KAS escrow (`carrier`: the whole value of its order UTXO).
- * `null` when the rule does not measure it here (a conditional, stop, if-done or pair order) or the state is not readable.
+ * The value the executor's listing rule measures for a plain KAS order (kobd
+ * `ListingRules::evaluate`). For a sell it is the amount at its quote,
+ * `quoteOf(amountLeft, price, scale)` rounded down (kob-protocol `quote_exact`). For a bid it is
+ * the KAS escrow (`carrier`: the whole value of its order UTXO). It is `null` when the rule does
+ * not measure it here (a conditional, stop, if-done or pair order) or the state is not readable.
  */
 export function listingValueOf(state: OrderState, carrier: bigint): bigint | null {
   if (isKind(state, 'KobBid')) return carrier >= 0n ? carrier : null;
@@ -86,9 +106,10 @@ export interface MinValueNote {
 }
 
 /**
- * The note for an order worth less than the minimum (`value < min`: a value equal to it is listed), from a plan of ONE plain order; `null` when the
- * order is worth the minimum or more, or its value is not known (no plan, a conditional / stop / pair order, several orders). Never an error: the
- * order can still be placed, and cancelled from My orders.
+ * The note for an order worth less than the minimum (`value < min`, since a value equal to it is
+ * listed), from a plan of one plain order. It is `null` when the order is worth the minimum or
+ * more, or its value is not known (no plan, a conditional, stop or pair order, several orders). It
+ * is never an error: the order can still be placed, and cancelled from My orders.
  */
 export function minValueNote(plan: Pick<OrderPlan, 'states' | 'request'> | null, min: bigint): MinValueNote | null {
   if (!plan || plan.states.length !== 1 || !plan.request) return null;
@@ -98,16 +119,23 @@ export function minValueNote(plan: Pick<OrderPlan, 'states' | 'request'> | null,
   return value !== null && value < min ? { value, min } : null;
 }
 
-// ------------------------------------------------------------------------------------------------ the final confirmation's notes
+// ---------------------------------------------------------- the final confirmation's notes
 
-/** The planner's codes of a price far through the market (a typing error): a token's KAS market and a pair. */
+/**
+ * The planner's codes of a price far through the market (a typing error): a token's KAS market and
+ * a pair.
+ */
 const PRICE_FAR_CODES: ReadonlySet<string> = new Set(['PRICE_AGGRESSIVE_VS_MARKET', 'PAIR_PRICE_AGGRESSIVE_VS_MARKET']);
 
 /**
- * The notes the final confirmation shows (SendStatus.tsx), one short line each and only when they apply, computed once from the plan of the click:
- * an order worth less than the minimum order value (the indexer never lists it, so it never fills; a plain order only), a price far through the
- * market, and contended blocks while the priority fee is off (congestion.ts). They never stop the order. The ticket itself shows none of them (7510c498:
- * nothing there appears or changes on a tick).
+ * The notes the final confirmation shows (SendStatus.tsx), one short line each and only when they
+ * apply, computed once from the plan of the click:
+ * - an order worth less than the minimum order value (the indexer never lists it, so it never
+ *   fills; a plain order only);
+ * - a price far through the market;
+ * - contended blocks while the priority fee is off (congestion.ts).
+ * They never stop the order. The ticket itself shows none of them, so nothing there appears or
+ * changes on a tick.
  */
 export function confirmNotes(
   plan: Pick<OrderPlan, 'states' | 'request' | 'issues'> | null,
@@ -124,9 +152,10 @@ export function confirmNotes(
 }
 
 /**
- * The same notes as codes and numbers for the private-key signer's confirmation (signer/protocol.ts `SignerNote`): the frame words them itself,
- * so nothing here is text. The price note carries the percentage only (the pair market's reference is in another unit; the frame states none).
- * Computed once with {@link confirmNotes}, from the same plan, under the same rules.
+ * The same notes as codes and numbers for the private-key signer's confirmation (signer/protocol.ts
+ * `SignerNote`). The frame words them itself, so nothing here is text. The price note carries the
+ * percentage only, because the pair market's reference is in another unit and the frame states
+ * none. Computed once with {@link confirmNotes}, from the same plan, under the same rules.
  */
 export function confirmSignerNotes(
   plan: Pick<OrderPlan, 'states' | 'request' | 'issues'> | null,

@@ -1,12 +1,16 @@
-// The flip of a token/token pair page (A/B -> B/A) carries the order being typed across: the pair page flips by opening the other pair (another
-// route, a fresh ticket), and without this the new ticket started empty on its default side, so a flip never turned Buy into Sell.
+// The flip of a token/token pair page (A/B -> B/A) carries the order being typed across. The pair
+// page flips by opening the other pair (another route, a fresh ticket). Without this carry-over the
+// new ticket would start empty on its default side, so a flip would never turn Buy into Sell.
 //
-// The same order seen from B/A: buying A with B is selling B for A. So the side turns over, every price p (B per whole A) becomes 1/p (A per
-// whole B), and an amount of A becomes the amount of B it is worth at the order's own price: N_B = N_A x p, rounded down to B's smallest unit.
-// A tip (KAS per whole base token traded) is re-expressed per whole B: t / p. Fields that have no exact counterpart on the other side (price
-// distances: trailing steps and gaps, a ladder step, a prefund; an exit's minimum fill and custom trigger thresholds) are left to their defaults,
-// and the ticket says so. Prices are rounded to the decimals the other pair's quote can take; the planner then rounds each limit the way that
-// never makes it worse, as for any typed price. Pure, DOM-free; the hand-over between the two pages is the small module state at the bottom.
+// The same order seen from B/A: buying A with B is selling B for A. So the side turns over, every
+// price p (B per whole A) becomes 1/p (A per whole B), and an amount of A becomes the amount of B
+// it is worth at the order's own price: N_B = N_A x p, rounded down to B's smallest unit. A tip
+// (KAS per whole base token traded) is re-expressed per whole B: t / p. Fields that have no exact
+// counterpart on the other side are left to their defaults, and the ticket says so. They are
+// price distances (trailing steps and gaps, a ladder step, a prefund), an exit's minimum fill, and
+// custom trigger thresholds. Prices are rounded to the decimals the other pair's quote can take.
+// The planner then rounds each limit the way that never makes it worse, as for any typed price.
+// Pure and DOM-free. The hand-over between the two pages is the small module state at the bottom.
 import { formatRational, parseDecimal, reduce, significantDp, type Rational } from '../../kob/pair';
 import { FIELDS, initialForm, layoutOf, primaryPriceField, sidesOf, type OrderTypeId, type Side, type TicketForm } from './form-state';
 
@@ -16,7 +20,10 @@ const DROPPED_IDS = new Set(['exit.minFill']);
 /** Amount fields converted at the order's own price (counted in the base of the pair). */
 const CONVERTED_AMOUNTS = new Set(['amount', 'minFill', 'sliceAmount']);
 
-/** The order type on the other side: TWAP only sells and DCA only buys (each is the other seen from B/A); close (sell everything) becomes a market buy. */
+/**
+ * The order type on the other side. TWAP only sells and DCA only buys (each is the other seen from
+ * B/A), and close (sell everything) becomes a market buy.
+ */
 function flippedType(type: OrderTypeId, side: Side): OrderTypeId {
   if (sidesOf(type).includes(side)) return type;
   if (type === 'twap') return 'dca';
@@ -24,21 +31,24 @@ function flippedType(type: OrderTypeId, side: Side): OrderTypeId {
   return 'market';
 }
 
-/** Layout context of a pair ticket (the flipped form is a pair form too: its sells budget their fills). */
+/**
+ * Layout context of a pair ticket (the flipped form is a pair form too: its sells budget their
+ * fills).
+ */
 const PAIR_CTX = { quoteDecimals: 0 };
 
 const textOf = (r: Rational, dp: number, mode: 'down' | 'nearest'): string => formatRational(r, dp, mode, 0);
 
 export interface FlipDecimals {
-  /** decimals of the pair's base token A (the quote of the flipped pair) */
+  /** Decimals of the pair's base token A (the quote of the flipped pair). */
   base: number;
-  /** decimals of the pair's quote token B (the base of the flipped pair) */
+  /** Decimals of the pair's quote token B (the base of the flipped pair). */
   quote: number;
 }
 
 /**
- * The form of the pair A/B as the same order on B/A (see the header). `dec` names the decimals of A and B. The result is a form of B/A in its
- * own units: amounts of B, prices of A per whole B.
+ * The form of the pair A/B as the same order on B/A (see the header). `dec` names the decimals of A
+ * and B. The result is a form of B/A in its own units: amounts of B, prices of A per whole B.
  */
 export function flipPairForm(form: TicketForm, dec: FlipDecimals): TicketForm {
   const side: Side = form.side === 'buy' ? 'sell' : 'buy';
@@ -57,7 +67,7 @@ export function flipPairForm(form: TicketForm, dec: FlipDecimals): TicketForm {
       const r = parseDecimal(text);
       if (!r || r.num === 0n) continue;
       const inv = reduce({ num: r.den, den: r.num });
-      // the flipped pair takes prices with at most A's decimals
+      // The flipped pair takes prices with at most A's decimals.
       const s = textOf(inv, Math.min(significantDp(inv, 8, 2, 12), dec.base), 'nearest');
       if (parseDecimal(s)?.num) values[id] = s;
       continue;
@@ -80,7 +90,7 @@ export function flipPairForm(form: TicketForm, dec: FlipDecimals): TicketForm {
   return { type, side, values };
 }
 
-// ------------------------------------------------------------------------------------------------ hand-over between the two pair pages
+// ------------------------------------------------------- hand-over between the two pair pages
 
 const lastForms = new Map<string, TicketForm>();
 let pending: { from: string; to: string } | null = null;
@@ -97,8 +107,8 @@ export function requestPairFlip(base: string, quote: string): void {
 }
 
 /**
- * The ticket of the pair base/quote opening: the order typed on quote/base just before a flip, as a form of this pair, or null (once: the
- * request is consumed).
+ * The ticket of the pair base/quote opening: the order typed on quote/base just before a flip, as
+ * a form of this pair, or null. The request is consumed, so it is returned once.
  */
 export function takePairFlip(base: string, quote: string, dec: FlipDecimals): TicketForm | null {
   const p = pending;
