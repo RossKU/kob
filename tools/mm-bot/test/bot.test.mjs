@@ -15,6 +15,7 @@ const MAKER = 'a1d9fd1347128011ad0036b077949d63274d5d3b8ac8351776c30c945ef2c2fb'
 
 let kasUsd = 0.025; // what every venue trades at; the tests move it
 let venuesDown = false;
+let indexerDown = false;
 
 /** Raw kline responses of each venue at `kasUsd`, the last 8 minutes, the newest still in progress. */
 function venueResponse(url) {
@@ -37,6 +38,7 @@ function stubFetch(chainFile) {
     const u = String(url);
     const json = (body, status = 200) => ({ ok: status === 200, status, json: async () => body });
     if (u.startsWith('http://indexer.test')) {
+      if (indexerDown) throw new Error('fetch failed');
       const c = JSON.parse(readFileSync(chainFile, 'utf8'));
       const view = (id, o, status) => ({ covenant_id: id, contract: o.side === 1 ? 'KobAsk' : 'KobBid', side: o.side, token: c.token, scale: 1_000_000,
         price: String(o.price), amount_left: String(o.side === 1 ? o.amount : Math.floor((o.value - 1e8) * 1e6 / o.price)), current: { txid: o.txid, index: 0, value: String(o.value) }, status });
@@ -179,4 +181,49 @@ test('one side without inventory idles alone, with a deposit message; the other 
   const asks = bot.state.last.funds.find((f) => f.key === 'asks');
   assert.equal(asks.level, 'idle');
   assert.match(asks.message, /^Insufficient TUSDC6 \(0101.*\): asks need 45% = 450 USD = 450 TUSDC6, 0 TUSDC6 \(0%\) held; deposit 450 TUSDC6 to kaspatest:qzsanlgngufgqyddqqmtqau5n43jwn2a8w9vsdghwmpse9z77tp0kmzydclw7 to resume asks\.$/);
+});
+
+test('STOP with the indexer down: the quotes are cancelled from the saved views through the node (sec-ops MM-4)', { timeout: 60_000 }, async () => {
+  kasUsd = 0.025;
+  venuesDown = false;
+  indexerDown = false;
+  const { bot, chain, calls } = setup();
+  await bot.cycle();
+  await bot.cycle();
+  await bot.cycle(); // the views of all six quotes are saved
+  const ids = Object.keys(chain().orders).sort();
+  assert.equal(ids.length, 6);
+  const saved = JSON.parse(readFileSync(paths(bot.cfg.dataDir).views, 'utf8')).items.map((v) => v.covenant_id).sort();
+  assert.deepEqual(saved, ids);
+  indexerDown = true;
+  try {
+    writeFileSync(bot.p.stop, 'stop\n');
+    await assert.rejects(bot.cycle(), /fetch failed/);
+    const blind = calls().filter((a) => a[0] === 'cancel' && a.includes('--view'));
+    assert.equal(blind.length, 1, 'one kob cancel --view --yes');
+    assert.ok(ids.every((id) => bot.state.orders[id].pending?.kind === 'cancel'));
+    assert.equal(bot.state.mode.mode, 'STOPPING');
+    // the next failed cycle does not send the cancels again within orderVisibleTimeoutSec
+    await assert.rejects(bot.cycle(), /fetch failed/);
+    assert.equal(calls().filter((a) => a[0] === 'cancel' && a.includes('--view')).length, 1);
+  } finally {
+    indexerDown = false;
+    rmSync(bot.p.stop, { force: true });
+  }
+});
+
+test('the indexer down while quoting normally: nothing is cancelled blind', { timeout: 60_000 }, async () => {
+  kasUsd = 0.025;
+  venuesDown = false;
+  indexerDown = false;
+  const { bot, calls } = setup();
+  await bot.cycle();
+  await bot.cycle();
+  indexerDown = true;
+  try {
+    await assert.rejects(bot.cycle(), /fetch failed/);
+    assert.equal(calls().filter((a) => a[0] === 'cancel').length, 0, 'no pull is due');
+  } finally {
+    indexerDown = false;
+  }
 });

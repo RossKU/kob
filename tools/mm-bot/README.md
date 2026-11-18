@@ -26,6 +26,9 @@ node bin/mm-bot.mjs once   --config config.json          # one cycle (add --dry-
 
 - **Stop:** the STOP file, `stop`, or Ctrl-C/SIGTERM. The bot cancels every quote, waits until none is listed, and exits.
   Delete the STOP file to start again.
+- **Indexer down.** When a pull is due and the wallet or indexer read fails, the bot cancels from its last saved views
+  (`<dataDir>/order-views.json`, `kob cancel --view`: checked on the node). An order amended, filled or placed since that
+  read waits for the indexer, with an error alert.
 - **It never stops by itself.** Every safety condition makes it IDLE: quotes pulled, nothing new sent, and it resumes on
   its own. Errors are retried with a backoff (15 s doubling to 5 min).
 - One bot per `dataDir`.

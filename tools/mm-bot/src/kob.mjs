@@ -121,6 +121,16 @@ export class Kob {
     return this.sign(['cancel', id]);
   }
 
+  /** Cancels every order of a saved page of indexer views (`kob cancel --view`: checked on the node, no indexer):
+   * { ok, ids (cancels sent or planned), fee, error }. */
+  async cancelViews(file) {
+    const r = await this.exec(['cancel', '--view', file, ...(this.cfg.cli.priorityFee ? ['--priority-fee'] : []), this.dryRun ? '--dry-run' : '--yes']);
+    const sent = r.docs.filter((d) => this.dryRun || d?.result?.status === 'submitted');
+    const ids = sent.map((d) => /^cancel ([0-9a-f]{64})/.exec(d.action ?? '')?.[1]).filter(Boolean);
+    const fee = sent.reduce((s, d) => s + Number(d.result?.fee ?? d.transaction?.fee ?? 0), 0);
+    return { ok: r.code === 0, ids, fee, txids: sent.map((d) => d.result?.txid).filter(Boolean), error: r.code === 0 ? null : `exit ${r.code}: ${r.stderr || 'no output'}` };
+  }
+
   merge(tokenId) {
     return this.sign(['merge', tokenId]);
   }
