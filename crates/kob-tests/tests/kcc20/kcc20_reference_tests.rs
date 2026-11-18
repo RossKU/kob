@@ -1,20 +1,25 @@
-//! The KCC-20 reference program as merged upstream (argent-lang/kcc20-reference `c8a0871`, vendored in
-//! `contracts/third-party/kcc20-reference/`, see `UPSTREAM.md` there) and its two builds:
+//! Tests the KCC-20 reference program as merged upstream (argent-lang/kcc20-reference `c8a0871`,
+//! vendored in `contracts/third-party/kcc20-reference/`, see `UPSTREAM.md` there) and its two
+//! builds:
 //!
-//!   standalone    `contracts/kcc20/KCC20Ref.sil`: `kcc20.ag` as a single-actor app, the program KOB vendors (its
-//!                 slot-limit variants, `KCC20P2`, `KCC20Opt` and `KOBToken` derive from it); state 1+112 B
-//!   public mint   `KCC20.public-mint.sil`: the `KCC20` actor of upstream's `KCC20PublicMint` app, the only build
-//!                 upstream publishes; state 1+145 B (compiler-owned `gen__kcc20_template` first), template-checked reads
+//! - standalone: `contracts/kcc20/KCC20Ref.sil`, `kcc20.ag` as a single-actor app and the program
+//!   KOB vendors (its slot-limit variants, `KCC20P2`, `KCC20Opt` and `KOBToken` derive from it);
+//!   state 1+112 B.
+//! - public mint: `KCC20.public-mint.sil`, the `KCC20` actor of upstream's `KCC20PublicMint` app
+//!   and the only build upstream publishes; state 1+145 B (the compiler-owned `gen__kcc20_template`
+//!   first), template-checked reads.
 //!
 //! Executed in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20 covenant context. What it pins:
 //!   - the vendored files are the upstream blobs (sha256), and `KCC20Ref.sil` names that commit;
-//!   - both builds compile with KOB's silverc to the template hashes recorded in `UPSTREAM.md`, with the same dispatch tags;
-//!   - per-transaction capacity: with the public-mint build every holder input checks that the leader is a `KCC20`, and a
-//!     `KCC20` leader takes at most 2 delegates and 3 outputs, so no transaction carries more than 3 token inputs or 3 token
-//!     outputs of one token; a 16-holder batch through any other leader is refused by every holder. The standalone build
-//!     has the same 3 / 3 bounds on its own leader, but its delegator does not check the leader, so a program that the
-//!     token's genesis placed in the covenant family can lead 16 standalone holders (`kcc20_opt_tests.rs`,
-//!     `reference_delegator_accepts_any_lineage_leader`).
+//!   - both builds compile with KOB's silverc to the template hashes recorded in `UPSTREAM.md`,
+//!     with the same dispatch tags;
+//!   - per-transaction capacity: with the public-mint build every holder input checks that the
+//!     leader is a `KCC20`, and a `KCC20` leader takes at most 2 delegates and 3 outputs, so no
+//!     transaction carries more than 3 token inputs or 3 token outputs of one token; a 16-holder
+//!     batch through any other leader is refused by every holder. The standalone build has the same
+//!     3 / 3 bounds on its own leader, but its delegator does not check the leader, so a program
+//!     that the token's genesis placed in the covenant family can lead 16 standalone holders
+//!     (`kcc20_opt_tests.rs`, `reference_delegator_accepts_any_lineage_leader`).
 //!
 //! Run: cargo test --release -p kob-tests --test kcc20_reference_tests -- --nocapture
 

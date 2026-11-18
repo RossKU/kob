@@ -1,5 +1,7 @@
-//! KCC-2 conformance: kaspanet/kccs `main` 411b41b `kcc-0002/vectors/authority-schemes.json` (vendored unmodified in
-//! `crates/kob-tests/vectors/kcc2/`, see PROVENANCE.md there) executed against KOB's off-chain implementation:
+//! Runs the KCC-2 conformance vectors (kaspanet/kccs `main` 411b41b,
+//! `kcc-0002/vectors/authority-schemes.json`, vendored unmodified in
+//! `crates/kob-tests/vectors/kcc2/`, see PROVENANCE.md there) executed against KOB's off-chain
+//! implementation:
 //!
 //! | Vector section | KOB code under test |
 //! |---|---|
@@ -7,7 +9,8 @@
 //! | approval_checks | `kcc2::{signature_approval, p2sh_approval, covenant_approval}` |
 //! | registry_checks | `kcc2::classify`, the issuance owner-scheme set (the x402 owner-proof parser: `crates/kob-x402/tests/sighash.rs`) |
 //!
-//! The same cases are executed in KOB's KCC-20 programs by `kcc20_conformance_tests::kcc2_authority_vectors_in_kcc20_programs`.
+//! The same cases are executed in KOB's KCC-20 programs by
+//! `kcc20_conformance_tests::kcc2_authority_vectors_in_kcc20_programs`.
 //!
 //! Run: cargo test -p kob-tests --test kcc2_conformance_tests -- --nocapture
 
@@ -165,11 +168,12 @@ fn kcc2_registry_checks() {
     }
 }
 
-/// Tracking test for the upstream KCC-20 reference program (argent-lang/kcc20-reference `master` `c8a0871`, pull request #1
-/// merged on 2026-10-07): its `p2pkh_hash` is the unkeyed `blake3(public_key)` (`OP_BLAKE3`), which is KCC-2's `Hash(pubkey)`
-/// after #30. If upstream re-vendoring ever brings a keyed form (`OP_BLAKE3_WITH_KEY`, a `PublicKeyHash` key) back, or
-/// the provenance commit moves, this fails and `docs/spec/kcc-conformance.md` section 4 must be revisited (template
-/// hashes, registry, Argent KOBToken, budgets, tips, vectors, deploy files, retirement).
+/// Tracking test for the upstream KCC-20 reference program (argent-lang/kcc20-reference `master`
+/// `c8a0871`, pull request #1): its `p2pkh_hash` is the unkeyed `blake3(public_key)`
+/// (`OP_BLAKE3`), which is KCC-2's `Hash(pubkey)` after #30. If upstream re-vendoring ever brings a
+/// keyed form (`OP_BLAKE3_WITH_KEY`, a `PublicKeyHash` key) back, or the provenance commit moves,
+/// this fails and `docs/spec/kcc-conformance.md` section 4 must be revisited (template hashes,
+/// registry, Argent KOBToken, budgets, tips, vectors, deploy files, retirement).
 #[test]
 fn kcc20_programs_use_the_unkeyed_p2pkh_hash() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

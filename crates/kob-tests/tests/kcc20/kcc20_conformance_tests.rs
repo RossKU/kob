@@ -1,28 +1,34 @@
-//! KCC-20 conformance: kaspanet/kccs `main` `3fbec52` (#31) `kcc-0020/vectors/conformance.json` (vendored unmodified in
-//! `crates/kob-tests/vectors/kcc20/`, see PROVENANCE.md there) executed against KOB's reference KCC-20 build
-//! (`contracts/kcc20/KCC20Ref.sil`, 3 token inputs / 3 outputs, the program KOB issues) and the 8/8 slot-limit
-//! prototype (`contracts/prototypes/kcc20/variants/KCC20Ref_8x8.sil`), in rusty-kaspa v2.1.0's TxScriptEngine
-//! with KIP-20 covenant context. The optional batch-leader holder (`contracts/prototypes/kcc20/p2/KCC20Opt.sil`, 3/3, not issued)
-//! runs the same vectors twice: `KCC20Opt-off` (batch leader disabled, `B_TPL` all zeros) and `KCC20Opt-on` (the
-//! `KCC20Batch` template committed); see `kcc20_opt_tests.rs`.
+//! Runs the KCC-20 conformance vectors (kaspanet/kccs `main` `3fbec52` (#31),
+//! `kcc-0020/vectors/conformance.json`, vendored unmodified in `crates/kob-tests/vectors/kcc20/`,
+//! see PROVENANCE.md there) against KOB's reference KCC-20 build (`contracts/kcc20/KCC20Ref.sil`, 3
+//! token inputs / 3 outputs, the program KOB issues) and the 8/8 slot-limit prototype
+//! (`contracts/prototypes/kcc20/variants/KCC20Ref_8x8.sil`), in rusty-kaspa v2.1.0's TxScriptEngine
+//! with KIP-20 covenant context. The optional batch-leader holder
+//! (`contracts/prototypes/kcc20/p2/KCC20Opt.sil`, 3/3, not issued) runs the same vectors twice:
+//! `KCC20Opt-off` (batch leader disabled, `B_TPL` all zeros) and `KCC20Opt-on` (the `KCC20Batch`
+//! template committed); see `kcc20_opt_tests.rs`.
 //!
 //! What is checked, per vector section:
-//!   state_record / dispatch / state_encoding / transfer_arguments  byte-exact against the compiled artifacts and the
-//!                                                                  silverscript-abi encoder (offline checks)
-//!   standard_transfer                                              every case executed as a real transaction; a matching
-//!                                                                  accept control passes, each case changes only the listed fields
-//!   owner_witness                                                  witness layouts for schemes 00-04 executed with real keys,
-//!                                                                  P2PKH hash vectors recomputed (unkeyed BLAKE3)
-//!   borrow_witness / hash_chain                                    layouts, the 3-link chain recomputed, one accepted borrow per scheme
-//!   borrowed_receive                                               all 17 cases executed (negative thresholds act as zero)
 //!
-//! The vectors' signatures and public keys are placeholder byte patterns ("signature checks are stipulated to
-//! succeed"). Where a case needs a signature to verify, this harness builds the SAME structure with real keys (same
-//! witness layout, same lengths, same state fields except the key material); the placeholder-only bytes are asserted
-//! against the layout instead. Hash-chain cases keep the vector's revealed links and swap only the one-time key.
+//! - state_record, dispatch, state_encoding, transfer_arguments: byte-exact against the compiled
+//!   artifacts and the silverscript-abi encoder (offline checks).
+//! - standard_transfer: every case is executed as a real transaction; a matching accept control
+//!   passes, and each case changes only the listed fields.
+//! - owner_witness: witness layouts for schemes 00-04 are executed with real keys, and the P2PKH
+//!   hash vectors are recomputed (unkeyed BLAKE3).
+//! - borrow_witness, hash_chain: the layouts, the 3-link chain recomputed, one accepted borrow per
+//!   scheme.
+//! - borrowed_receive: all 17 cases are executed (negative thresholds act as zero).
 //!
-//! Slot limits: the vector `over-max-token-inputs` (4 inputs vs max 3) applies to the 3/3 reference. For the 8/8 variant it
-//! is ADAPTED: 4 inputs are accepted and 9 inputs are rejected (counted as `adapted` in the summary).
+//! The vectors' signatures and public keys are placeholder byte patterns ("signature checks are
+//! stipulated to succeed"). Where a case needs a signature to verify, this harness builds the SAME
+//! structure with real keys (same witness layout, same lengths, same state fields except the key
+//! material); the placeholder-only bytes are asserted against the layout instead. Hash-chain cases
+//! keep the vector's revealed links and swap only the one-time key.
+//!
+//! Slot limits: the vector `over-max-token-inputs` (4 inputs vs max 3) applies to the 3/3
+//! reference. For the 8/8 variant it is ADAPTED: 4 inputs are accepted and 9 inputs are rejected
+//! (counted as `adapted` in the summary).
 //!
 //! Run: cargo test --release -p kob-tests --test kcc20_conformance_tests -- --nocapture --test-threads=1
 

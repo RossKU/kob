@@ -1,23 +1,30 @@
-//! Genesis check of tokens issued the way upstream recommends for its published `KCC20PublicMint` app (argent-lang/
-//! kcc20-reference `c8a0871`, README "Deployment and genesis"): a genesis group of one `PublicMint` (the advertised supply as
-//! its allowance) and `TokenSeed` seeds, with or without pre-minted `KCC20` holders.
+//! Tests the genesis check of tokens issued the way upstream recommends for its published
+//! `KCC20PublicMint` app (argent-lang/kcc20-reference `c8a0871`, README "Deployment and genesis"):
+//! a genesis group of one `PublicMint` (the advertised supply as its allowance) and `TokenSeed`
+//! seeds, with or without pre-minted `KCC20` holders.
 //!
-//! Real fixtures, executed in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20 covenant context: the actors are the programs
-//! of upstream's published artifact (`contracts/third-party/kcc20-reference/public-mint.artifact.json`,
-//! `kob_protocol::public_mint`), the holders KOB's pinned handle of the `KCC20` actor (`TemplateId::Kcc20PublicMint`).
+//! Real fixtures, executed in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20 covenant context: the
+//! actors are the programs of upstream's published artifact
+//! (`contracts/third-party/kcc20-reference/public-mint.artifact.json`,
+//! `kob_protocol::public_mint`), the holders KOB's pinned handle of the `KCC20` actor
+//! (`TemplateId::Kcc20PublicMint`).
 //!
-//!   - the genesis transaction passes the covenant context (one genesis group), and `verify_genesis` accepts it: the minters'
-//!     allowance and the pre-minted amount are reported (max supply = supply + mint_allowance);
-//!   - the genesis minter mints in the engine: the minted output is a holder of KOB's pinned template, the minter continues
-//!     with the allowance less the amount, and the minted-so-far figure follows from the live minter's `remaining`;
-//!     a seed creates a zero-amount holder; the two holders then transfer as `KCC20` holders of the token;
-//!   - why the template fields are checked: a genesis minter whose `gen__kcc20_template` names another program mints that
-//!     program (here an anyone-can-spend script carrying the token's covenant id) in the engine, and `verify_genesis`
-//!     refuses it; so are minters without allowance semantics, a second extension commitment, foreign scripts, and the app's
-//!     actors in a genesis of another program;
-//!   - the registry record (`kob registry verify-genesis` over chain evidence): `mint_allowance`, and C2 (live mint
-//!     authority) is undetermined while a minter lives, `[]` for a genesis of holders and seeds only; a recorded live minter gives
-//!     the derived warning `live_mint_authority`.
+//!   - the genesis transaction passes the covenant context (one genesis group), and
+//!     `verify_genesis` accepts it: the minters' allowance and the pre-minted amount are reported
+//!     (max supply = supply + mint_allowance);
+//!   - the genesis minter mints in the engine: the minted output is a holder of KOB's pinned
+//!     template, the minter continues with the allowance less the amount, and the minted-so-far
+//!     figure follows from the live minter's `remaining`; a seed creates a zero-amount holder; the
+//!     two holders then transfer as `KCC20` holders of the token;
+//!   - why the template fields are checked: a genesis minter whose `gen__kcc20_template` names
+//!     another program mints that program (here an anyone-can-spend script carrying the token's
+//!     covenant id) in the engine, and `verify_genesis` refuses it; so are minters without
+//!     allowance semantics, a second extension commitment, foreign scripts, and the app's actors in
+//!     a genesis of another program;
+//!   - the registry record (`kob registry verify-genesis` over chain evidence): `mint_allowance`,
+//!     and C2 (live mint authority) is undetermined while a minter lives, `[]` for a genesis of
+//!     holders and seeds only; a recorded live minter gives the derived warning
+//!     `live_mint_authority`.
 //!
 //! Run: cargo test --release -p kob-tests --test kcc20_public_mint_genesis_tests -- --nocapture
 

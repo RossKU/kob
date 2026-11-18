@@ -1,8 +1,8 @@
-//! KOB proposal P2: KCC-20 batch leader (`contracts/prototypes/kcc20/p2/KCC20Batch.sil`) with the P2 holder
-//! program (`contracts/prototypes/kcc20/p2/KCC20P2.sil`: the reference 3/3 program plus a two-entry leader
-//! allowlist), executed with KOB v2 orders in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20
-//! covenant context and script-unit metering. Compared against the 3/3 reference and the 16/16
-//! variant.
+//! Tests KOB proposal P2: the KCC-20 batch leader (`contracts/prototypes/kcc20/p2/KCC20Batch.sil`)
+//! with the P2 holder program (`contracts/prototypes/kcc20/p2/KCC20P2.sil`: the reference 3/3
+//! program plus a two-entry leader allowlist), executed with KOB v2 orders in rusty-kaspa v2.1.0's
+//! TxScriptEngine with KIP-20 covenant context and script-unit metering. Compared against the 3/3
+//! reference and the 16/16 variant.
 //! Run: cargo test --release -p kob-tests --test kcc20_p2_tests -- --nocapture --test-threads=1
 #![allow(dead_code, clippy::needless_range_loop)]
 

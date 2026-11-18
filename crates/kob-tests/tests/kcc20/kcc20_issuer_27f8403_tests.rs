@@ -1,17 +1,23 @@
-//! The issuers of argent-lang/kcc20-reference `27f8403` (`PublicMint`, `TokenSeed`: the `c8a0871` issuers plus the owner-signed
-//! entry `rebalance_value`), next to the `c8a0871` ones the genesis check has accepted since 2026-10-13. Real fixtures,
-//! executed in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20 covenant context: the programs are the vendored upstream
-//! artifacts (`contracts/third-party/kcc20-reference/`, `kob_protocol::public_mint`), the holders KOB's pinned handle.
+//! Tests the issuers of argent-lang/kcc20-reference `27f8403` (`PublicMint`, `TokenSeed`: the
+//! `c8a0871` issuers plus the owner-signed entry `rebalance_value`), next to the `c8a0871` ones the
+//! genesis check also accepts. Real fixtures, executed in rusty-kaspa v2.1.0's TxScriptEngine with
+//! KIP-20 covenant context: the programs are the vendored upstream artifacts
+//! (`contracts/third-party/kcc20-reference/`, `kob_protocol::public_mint`), the holders KOB's
+//! pinned handle.
 //!
-//!   - a genesis built with either build's issuers verifies and reports which build it is (`GenesisReport::issuer`, the
-//!     registry record's `issuer`); holders only have none; the registry record validates;
-//!   - tampered genesis fail: a changed issuer program, a foreign or the other build's template field, a mix of the two builds,
-//!     the issuers under another program;
-//!   - what `rebalance_value` can and cannot do, in the engine: with the owner's signature it recreates the very same cell (the
-//!     state and so the allowance are untouched) at any value; it is refused without that signature, for another transaction, with
-//!     a changed state or script, with a second or an unbound output, with a holder created beside it and with another input of
-//!     the covenant id; the `c8a0871` issuers have no such entry; the successor still mints or creates like the original;
-//!   - the indexer's reading of issuer calls (`created_holder`) works for the new issuers and sees no holder in a rebalance.
+//!   - a genesis built with either build's issuers verifies and reports which build it is
+//!     (`GenesisReport::issuer`, the registry record's `issuer`); holders only have none; the
+//!     registry record validates;
+//!   - tampered genesis fail: a changed issuer program, a foreign or the other build's template
+//!     field, a mix of the two builds, the issuers under another program;
+//!   - what `rebalance_value` can and cannot do, in the engine: with the owner's signature it
+//!     recreates the very same cell (the state and so the allowance are untouched) at any value; it
+//!     is refused without that signature, for another transaction, with a changed state or script,
+//!     with a second or an unbound output, with a holder created beside it and with another input
+//!     of the covenant id; the `c8a0871` issuers have no such entry; the successor still mints or
+//!     creates like the original;
+//!   - the indexer's reading of issuer calls (`created_holder`) works for the new issuers and sees
+//!     no holder in a rebalance.
 //!
 //! Run: cargo test --release -p kob-tests --test kcc20_issuer_27f8403_tests -- --nocapture
 
