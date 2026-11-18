@@ -21,7 +21,9 @@
 //!   best such bid as a taker. The rest comes back as one token UTXO.
 //! - **Merge** runs otherwise, when the operator holds at least `min_utxos` token UTXOs of one
 //!   token. As many as the program takes become one. A listed inventory token's merge goes on
-//!   `keep_carrier`. The other carriers return to the funding pool.
+//!   `keep_carrier`. The other carriers return to the funding pool. The merged carrier comes out of
+//!   the merged carriers alone, lowered to what they pay after the fee (or no merge), never out of
+//!   the operator's funding.
 //!
 //! Both are bounded per tick (`max_jobs`). They are built with the `kob_protocol` builders (a taker
 //! `Batch`, `SendTokens`), signed with the hot key and validated in the script engine before
@@ -404,6 +406,36 @@ fn merge_action(
     })
 }
 
+/// The carrier of a merge's token UTXO: `want`, lowered so the merged inputs' own carriers
+/// (`carriers_in`) pay it and the fee (`fee_at(carrier)`, an unsigned build).
+///
+/// The operator's funding never adds to it: a KRON merge's funding input is only the presence, and
+/// its change returns it whole. So a junk token sent to the operator never gets a carrier out of
+/// the operator's KAS. An error when the carriers cannot pay a carrier of at least
+/// `COVENANT_OUTPUT_MIN` and the fee.
+fn merge_carrier(want: u64, carriers_in: i64, fee_at: impl Fn(u64) -> Result<u64, String>) -> Result<u64, String> {
+    let have = u64::try_from(carriers_in).unwrap_or(0);
+    let short = || format!("the inputs' carriers ({have} sompi) cannot pay the merged carrier and the fee");
+    // The fee at a carrier the inputs surely pay (an unfunded build fails when they do not).
+    let mut carrier = want.min(have / 2);
+    for _ in 0..3 {
+        if carrier < kob_protocol::tx::COVENANT_OUTPUT_MIN {
+            return Err(short());
+        }
+        let fee = fee_at(carrier)?;
+        let fit = want.min(have.saturating_sub(fee));
+        if fit == carrier {
+            return Ok(carrier);
+        }
+        carrier = fit;
+    }
+    // Settled at the last carrier tried only if it pays.
+    match fee_at(carrier) {
+        Ok(fee) if carrier >= kob_protocol::tx::COVENANT_OUTPUT_MIN && carrier.saturating_add(fee) <= have => Ok(carrier),
+        _ => Err(short()),
+    }
+}
+
 /// Plans, builds, signs and validates the maintenance jobs of a snapshot.
 ///
 /// Per token (by covenant id) it builds a sale when one pays, else a merge, at most `max_jobs` in
@@ -529,8 +561,18 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
         if job.is_none() && cfg.merge && utxos.len() >= cfg.min_utxos.max(2) {
             // A merge of inventory leaves it on the inventory carrier
             // (`InventoryPolicy::keep_carrier`).
-            let carrier = if held_inventory { cfg.inventory.keep_carrier } else { cfg.token_carrier };
-            let action = priced(merge_action(&g, &utxos, held, &funding, operator, carrier, cfg), cfg, |_| None);
+            let want = if held_inventory { cfg.inventory.keep_carrier } else { cfg.token_carrier };
+            let merged = merge_carrier(want, carriers_in, |c| {
+                let a = priced(merge_action(&g, &utxos, held, &funding, operator, c, cfg), cfg, |_| None);
+                build_with(&a, &budgets).map(|b| b.fee.fee).map_err(|e| e.to_string())
+            });
+            let (carrier, action) = match merged {
+                Ok(c) => (c, priced(merge_action(&g, &utxos, held, &funding, operator, c, cfg), cfg, |_| None)),
+                Err(why) => {
+                    report.skipped.push((g.0, format!("merge: {why}")));
+                    continue;
+                }
+            };
             match build_sign(&action, signer, cfg.validate) {
                 Ok((built, signed, validation)) => {
                     let profit = operator_kas(&built, &funding, &utxos, carrier);

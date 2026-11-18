@@ -61,6 +61,10 @@ pub enum Retirement {
     /// kinds that embed them changed with them. Retired by `0714451`; the last commit
     /// carrying these is `d12b28e1`.
     BidDelivery,
+    /// A bid fill below `minFill` takes all the buying power left: the KRON kinds that changed
+    /// with `KobBidKron` (their KCC-20 twins are [`Retirement::BidDelivery`]). Retired by
+    /// `71a6c32`; the last commit carrying these is `1652c9ac`.
+    BidMinFill,
 }
 
 impl Retirement {
@@ -70,6 +74,7 @@ impl Retirement {
             Retirement::BidRefund => "acf39cf",
             Retirement::F1 => "da35841",
             Retirement::BidDelivery => "0714451",
+            Retirement::BidMinFill => "71a6c32",
         }
     }
 
@@ -79,6 +84,7 @@ impl Retirement {
             Retirement::BidRefund => "59d9ea30",
             Retirement::F1 => "60a4d11",
             Retirement::BidDelivery => "d12b28e1",
+            Retirement::BidMinFill => "1652c9ac",
         }
     }
 }
@@ -240,11 +246,21 @@ retired_table![
     (KobPair, BidDelivery, "c95c9234"),
     (KobCondPair, BidDelivery, "0d9918cc"),
     (KobIfdPair, BidDelivery, "43c721c5"),
+    (KobBidKron, BidMinFill, "7cb4f6ab"),
+    (KobCondAskKron, BidMinFill, "e9930d36"),
+    (KobCondBidKron, BidMinFill, "8aa82c81"),
+    (KobIfdBidKron, BidMinFill, "644eeb9c"),
+    (KobIfdAskKron, BidMinFill, "2557e020"),
+    (KobBidKronD0, BidMinFill, "bdf2d399"),
+    (KobCondAskKronD0, BidMinFill, "b66e1ca0"),
+    (KobCondBidKronD0, BidMinFill, "9e2bac11"),
+    (KobIfdBidKronD0, BidMinFill, "c4742e78"),
+    (KobIfdAskKronD0, BidMinFill, "7ae3d8b7"),
 ];
 
 /// The full template hashes of [`TABLE`], in its order: the hashes the retired orders were placed
 /// under. Each is recomputed from its bytes on load.
-const HASHES: [&str; 39] = [
+const HASHES: [&str; 49] = [
     "b995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3",
     "770314aa3391b20333c98037343f538f1903002362f31bd599abfca16aa67247",
     "26042aff0dc58c2cbaa0efd166c38944942d75524cc55033dde80502c4558166",
@@ -284,6 +300,16 @@ const HASHES: [&str; 39] = [
     "c95c92344f08c42992699b0e467cf32fe573dda9b879250438d60a13cab4a9c6",
     "0d9918cc8f99bf46baf9f4544a413129aae5881b1e97326f69208057e441b98a",
     "43c721c5190432b1788ca4f79ab56c180f6ee2f9d958bb1cdd8ebeb64831a087",
+    "7cb4f6abe8ab4282469fd3e70d3372122f9dbe6b0e03a5b192fc5c1393062582",
+    "e9930d360eb9c124ea68bc47a8c0e91b25ff919dc5f91dbfc3f1a9e9c8a10579",
+    "8aa82c81037a03820ed769623e6e3e33d130f48c0a2348db8d5ba1f87a85ba5b",
+    "644eeb9c0057cf8ef3489234a2d414ca9c69a1b42683438c8cbd64acd46b41ed",
+    "2557e020b41456a68e8d0fa8a43072012aca7d5c7aa653d74a2e0d22934a7a21",
+    "bdf2d39982a399f2a42fc893aec503fa043103909aea8365f5f56c731585f8ba",
+    "b66e1ca03bb35f0cf0be62c85e50536368b247d8dd65c88f7bf99d2f794d9616",
+    "9e2bac11bf1398637b2868b863f6f46f42bc3be5510e840a65cca9ae3bde014e",
+    "c4742e78f68cdeb2f7fd9ad85debbedd8767b66d09100cbf00deccbf789e8e21",
+    "7ae3d8b793c2c97aad575a50577c045b4c881e6777d4d63de7020246f3daf345",
 ];
 
 fn load() -> std::result::Result<Vec<RetiredTemplate>, String> {
@@ -393,7 +419,7 @@ mod tests {
     #[test]
     fn the_table_loads_and_is_not_pinned() {
         self_check().unwrap();
-        assert_eq!(retired().len(), 39);
+        assert_eq!(retired().len(), 49);
         for r in retired() {
             // the span of the kind's legacy layout: a kind with the delivery block is longer today
             assert_eq!(r.layout, StateLayout::Legacy, "{}", r.label());
@@ -426,6 +452,22 @@ mod tests {
             "KobIfdPair 43c721c5",
         ] {
             assert!(retired().iter().any(|r| r.label() == label), "{label}");
+        }
+        // the minimum-fill re-pin: every KRON kind of TN10 generation 0506de663e7837a3 that changed (KobAskKron did not)
+        for label in [
+            "KobBidKron 7cb4f6ab",
+            "KobCondAskKron e9930d36",
+            "KobCondBidKron 8aa82c81",
+            "KobIfdBidKron 644eeb9c",
+            "KobIfdAskKron 2557e020",
+            "KobBidKronD0 bdf2d399",
+            "KobCondAskKronD0 b66e1ca0",
+            "KobCondBidKronD0 9e2bac11",
+            "KobIfdBidKronD0 c4742e78",
+            "KobIfdAskKronD0 7ae3d8b7",
+        ] {
+            let r = retired().iter().find(|r| r.label() == label).unwrap_or_else(|| panic!("{label}"));
+            assert_eq!(r.retirement, Retirement::BidMinFill, "{label}");
         }
     }
 

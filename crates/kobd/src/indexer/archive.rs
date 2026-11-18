@@ -21,6 +21,9 @@
 //!   the spent holdings of that window. The custody of a live order stays
 //!   ([`super::lean::live_order_holding`]), and so does the proof that a token has a program
 //!   (`holding_programs`).
+//! - **Rejects** (`rejects`) of final blocks beyond the newest [`KEEP_REJECTS`]: a refused
+//!   placement or an undecodable payload costs a fee, not lasting storage (security review
+//!   2026-11-17 L4). `/v1/health` keeps counting them all.
 //!
 //! Orders, events, fills, candles, pair fills and the activity totals are never touched. So the
 //! trades, candles, statistics, books, orders and their events read the same. A batch runs with the
@@ -48,6 +51,9 @@ use super::db::{meta_get, meta_set, DbResult};
 use super::lean::{cutoffs, live_order_holding, LeanReport};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::time::{Duration, Instant};
+
+/// The newest rejects an archive store keeps.
+pub const KEEP_REJECTS: i64 = 100_000;
 
 /// The `meta` key of the first chain block whose spent UTXO rows a batch has not visited yet.
 pub const MARK_KEY: &str = "archive_seq";
@@ -110,7 +116,7 @@ pub fn prune(
     let start_mark: i64 = meta_get(&tx, MARK_KEY)?.and_then(|v| v.parse().ok()).unwrap_or(1).max(1);
     let mut mark = start_mark;
     let mut left = cfg.rows_per_batch;
-    let (mut amends_more, mut holdings_more) = (true, true);
+    let (mut amends_more, mut holdings_more, mut rejects_more) = (true, true, true);
     loop {
         let mut progressed = false;
         // 1. Orders with a UTXO row spent in the next stretch of final blocks: delete their final
@@ -207,7 +213,19 @@ pub fn prune(
             progressed |= n > 0;
             holdings_more = n >= want;
         }
-        rep.more = mark < final_seq || amends_more || holdings_more;
+        // 4. Rejects of final blocks beyond the newest KEEP_REJECTS.
+        let want = cfg.step_rows.min(left);
+        if want > 0 && rejects_more {
+            let n = tx.execute(
+                "DELETE FROM rejects WHERE id IN (SELECT id FROM rejects WHERE block_seq < ?1                  AND id <= (SELECT MAX(id) FROM rejects) - ?2 ORDER BY id LIMIT ?3)",
+                params![final_seq, KEEP_REJECTS, want as i64],
+            )?;
+            rep.rows += n;
+            left = left.saturating_sub(n);
+            progressed |= n > 0;
+            rejects_more = n >= want;
+        }
+        rep.more = mark < final_seq || amends_more || holdings_more || rejects_more;
         if !progressed || !rep.more || left == 0 || started.elapsed() >= cfg.budget {
             break;
         }

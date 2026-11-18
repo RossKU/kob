@@ -531,16 +531,29 @@ pub fn revert(conn: &Connection, seq: i64) -> DbResult<usize> {
     Ok(n)
 }
 
-/// Deletes the candidates accepted before DAA `before` that no stored declaration names.
+/// Most candidates kept: beyond it the oldest go first (security review 2026-11-17 L5). At
+/// [`MAX_CANDIDATE_BYTES`] each that is at most 256 MiB; a KOB preparation is a few hundred bytes.
+pub const MAX_CANDIDATES: i64 = 8_192;
+
+/// Deletes the candidates accepted before DAA `before` that no stored declaration names, and the
+/// oldest of those beyond [`MAX_CANDIDATES`].
 ///
 /// Only declarations of the stored chain blocks, the reorg window, count.
 pub fn prune(conn: &Connection, before: u64) -> DbResult<usize> {
-    Ok(conn
-        .prepare_cached(
-            "DELETE FROM kcc23_candidates WHERE daa < ?1 AND NOT EXISTS (SELECT 1 FROM kcc23_declarations d JOIN blocks b \
-             ON b.seq = d.genesis_block WHERE d.preparation_txid = kcc23_candidates.txid)",
-        )?
-        .execute([before as i64])?)
+    const UNNAMED: &str = "NOT EXISTS (SELECT 1 FROM kcc23_declarations d JOIN blocks b ON b.seq = d.genesis_block \
+                           WHERE d.preparation_txid = kcc23_candidates.txid)";
+    let mut n =
+        conn.prepare_cached(&format!("DELETE FROM kcc23_candidates WHERE daa < ?1 AND {UNNAMED}"))?.execute([before as i64])?;
+    let count: i64 = conn.prepare_cached("SELECT COUNT(*) FROM kcc23_candidates")?.query_row([], |r| r.get(0))?;
+    if count > MAX_CANDIDATES {
+        n += conn
+            .prepare_cached(&format!(
+                "DELETE FROM kcc23_candidates WHERE txid IN \
+                 (SELECT txid FROM kcc23_candidates WHERE {UNNAMED} ORDER BY daa, txid LIMIT ?1)"
+            ))?
+            .execute([count - MAX_CANDIDATES])?;
+    }
+    Ok(n)
 }
 
 /// The launch proof (JSON, `kob-kcc23-proof/1`) the indexer holds for a covenant id.

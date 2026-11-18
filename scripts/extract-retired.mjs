@@ -28,6 +28,11 @@ const GENERATIONS = [
   // retired by the bid delivery re-pin (docs/design/bid-delivery-spec.md: the delivery block of the buy-side kinds); d12b28e1 is the
   // last commit carrying them. Their state is the legacy layout (no delivery block); the KRON kinds did not change.
   ['d12b28e1', ['KobBid', 'KobCondAsk', 'KobCondBid', 'KobIfdBid', 'KobIfdAsk', 'KobPair', 'KobCondPair', 'KobIfdPair']],
+  // retired by the bid minimum-fill rule (71a6c32: a fill below minFill takes all the buying power): the KRON kinds of the TN10
+  // generation 0506de663e7837a3 that changed with KobBidKron; 1652c9ace is the last commit carrying them. (Their KCC-20 twins are the
+  // delivery row above; the delivery templates of 1652c9ace itself were never deployed.)
+  ['1652c9ace', ['KobBidKron', 'KobCondAskKron', 'KobCondBidKron', 'KobIfdBidKron', 'KobIfdAskKron', 'KobBidKronD0', 'KobCondAskKronD0',
+    'KobCondBidKronD0', 'KobIfdBidKronD0', 'KobIfdAskKronD0']],
 ];
 
 let bad = 0;

@@ -1,5 +1,8 @@
 //! Token-bucket rate limiting with one bucket per client, one per IPv6 site and one global bucket.
 //!
+//! Half of the global bucket is kept for quiet clients (within a quarter of their own rate), so a
+//! few busy addresses at their own limit cannot drain it for everyone else.
+//!
 //! Memory is bounded. Idle client buckets expire after `bucket_ttl_secs`. When a table reaches
 //! `max_tracked_clients`, the buckets that have refilled the most (least state lost) are evicted. An address-spray flood can therefore
 //! only churn entries and never grow the table.
@@ -77,15 +80,20 @@ impl Bucket {
     ///
     /// On failure it returns the seconds until the tokens are available.
     fn take(&mut self, now: u64, rate: f64, burst: f64, cost: f64) -> Result<(), f64> {
+        self.take_reserving(now, rate, burst, cost, 0.0)
+    }
+
+    /// [`Bucket::take`] that leaves at least `reserve` tokens in the bucket.
+    fn take_reserving(&mut self, now: u64, rate: f64, burst: f64, cost: f64, reserve: f64) -> Result<(), f64> {
         let cost = cost.clamp(1.0, burst.max(1.0));
         let elapsed = now.saturating_sub(self.last_ns) as f64 / 1e9;
         self.tokens = (self.tokens + elapsed * rate).min(burst);
         self.last_ns = now;
-        if self.tokens >= cost {
+        if self.tokens - cost >= reserve {
             self.tokens -= cost;
             Ok(())
         } else {
-            Err(((cost - self.tokens) / rate).max(0.0))
+            Err(((cost + reserve - self.tokens) / rate).max(0.0))
         }
     }
 }
@@ -95,11 +103,18 @@ struct Clients {
     last_sweep_ns: u64,
 }
 
+/// A client is quiet while it stays within this share of its own rate, and half its burst.
+const QUIET_FRACTION: f64 = 0.25;
+/// The share of the global bucket only quiet clients may draw on.
+const FAIR_RESERVE: f64 = 0.5;
+
 /// The per-client, per-site and global rate limiter.
 pub struct RateLimiter {
     cfg: RateLimitConfig,
     clock: Arc<dyn Clock>,
     clients: Mutex<Clients>,
+    /// Each client's quiet allowance ([`QUIET_FRACTION`] of its rate, half its burst).
+    quiet: Mutex<Clients>,
     /// IPv6 site buckets (`ipv6_site_prefix_bits`). The table is bounded like the client table.
     sites: Mutex<Clients>,
     global: Mutex<Bucket>,
@@ -119,6 +134,7 @@ impl RateLimiter {
             cfg,
             clock,
             clients: Mutex::new(Clients { map: HashMap::new(), last_sweep_ns: now }),
+            quiet: Mutex::new(Clients { map: HashMap::new(), last_sweep_ns: now }),
             sites: Mutex::new(Clients { map: HashMap::new(), last_sweep_ns: now }),
             global: Mutex::new(global),
         }
@@ -134,17 +150,26 @@ impl RateLimiter {
     /// A candles or stats query costs more than a health check. The client bucket is charged
     /// first, then the site bucket, then the global bucket. A request that fails an earlier
     /// bucket does not reach the global one, so a client that is already limited cannot drain the
-    /// share of everybody else.
+    /// share of everybody else. A busy client (above a quarter of its own rate) takes from the
+    /// global bucket only while it is more than half full.
     pub fn check_cost(&self, ip: IpAddr, cost: u32) -> Result<(), Duration> {
         let now = self.clock.now_ns();
         let cost = cost.max(1) as f64;
+        let mut quiet = true;
         if self.cfg.per_ip_rps > 0.0 {
             let key = rate_key(ip, self.cfg.ipv6_prefix_bits);
             let burst = self.cfg.per_ip_burst.max(1) as f64;
-            let mut c = self.clients.lock().unwrap_or_else(|e| e.into_inner());
-            self.maintain(&mut c, now, &key, self.cfg.per_ip_rps, burst);
-            let b = c.map.entry(key).or_insert_with(|| Bucket::full(burst, now));
-            b.take(now, self.cfg.per_ip_rps, burst, cost).map_err(secs)?;
+            {
+                let mut c = self.clients.lock().unwrap_or_else(|e| e.into_inner());
+                self.maintain(&mut c, now, &key, self.cfg.per_ip_rps, burst);
+                let b = c.map.entry(key).or_insert_with(|| Bucket::full(burst, now));
+                b.take(now, self.cfg.per_ip_rps, burst, cost).map_err(secs)?;
+            }
+            let (rate, burst) = (self.cfg.per_ip_rps * QUIET_FRACTION, (burst * 0.5).max(1.0));
+            let mut q = self.quiet.lock().unwrap_or_else(|e| e.into_inner());
+            self.maintain(&mut q, now, &key, rate, burst);
+            let b = q.map.entry(key).or_insert_with(|| Bucket::full(burst, now));
+            quiet = b.take(now, rate, burst, cost).is_ok();
         }
         // An IPv6 site shares one more bucket, so rotating through the /64s of one allocation does
         // not multiply the budget.
@@ -162,8 +187,9 @@ impl RateLimiter {
         }
         if self.cfg.global_rps > 0.0 {
             let burst = self.cfg.global_burst.max(1) as f64;
+            let reserve = if quiet { 0.0 } else { (burst * FAIR_RESERVE).floor() };
             let mut g = self.global.lock().unwrap_or_else(|e| e.into_inner());
-            g.take(now, self.cfg.global_rps, burst, cost).map_err(secs)?;
+            g.take_reserving(now, self.cfg.global_rps, burst, cost, reserve).map_err(secs)?;
         }
         Ok(())
     }
@@ -306,6 +332,29 @@ mod tests {
         for i in 2..6 {
             assert!(l.check(ip(&format!("2.2.2.{i}"))).is_ok(), "{i}");
         }
+    }
+
+    #[test]
+    fn busy_clients_cannot_drain_the_global_bucket_for_quiet_ones() {
+        // 20 a second per client, 100 a second for all: ten busy clients at their own limit would
+        // take it all. They stop at half the global bucket; a quiet client still gets through.
+        let (l, clock) = limiter(cfg(20.0, 20, 100.0, 100));
+        let mut quiet_refused = 0;
+        for n in 0..50 {
+            clock.advance(Duration::from_millis(100));
+            for i in 0..10 {
+                for _ in 0..2 {
+                    let _ = l.check(ip(&format!("3.3.3.{i}")));
+                }
+            }
+            // two a second: within a quarter of its own rate
+            if n % 5 == 0 {
+                quiet_refused += u32::from(l.check(ip("9.9.9.9")).is_err());
+            }
+        }
+        assert_eq!(quiet_refused, 0, "a quiet client was refused while busy clients drained the global bucket");
+        // a busy client is refused once half the global bucket is left
+        assert!(l.check(ip("3.3.3.0")).is_err());
     }
 
     #[test]

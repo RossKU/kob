@@ -70,7 +70,7 @@ const BASE: i64 = IVS[0];
 /// The version of the trade price rule the stored rows were built with (`meta.candles_rule`).
 ///
 /// [`backfill`] rebuilds the rows built with another one.
-const PRICE_RULE: &str = "2";
+const PRICE_RULE: &str = "3";
 
 /// Whether this store maintains aggregates.
 ///
@@ -338,7 +338,8 @@ pub fn backfill(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Backfill
         return Ok(report);
     }
     // The trade price rule changed. Rule 2 takes the age of an amended order from the DAA of its
-    // latest amend, not of its placement. Every token's rows are rebuilt from the fills. Nothing is
+    // latest amend, not of its placement. Rule 3 leaves out self-trades
+    // (`market::priced_fill!`). Every token's rows are rebuilt from the fills. Nothing is
     // deleted first: a token's rows are replaced in one transaction ([`rebuild`]), so a reader sees
     // the old rows until the new ones commit, and never an empty or half-built chart.
     let stale_rule = meta_get(conn, "candles_rule")?.as_deref() != Some(PRICE_RULE);

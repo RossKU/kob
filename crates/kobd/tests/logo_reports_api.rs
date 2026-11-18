@@ -70,6 +70,15 @@ async fn off_by_default() {
 async fn a_report_hides_and_the_administrators_subcommand_restores_next_to_the_running_indexer() {
     let dir = tempfile::tempdir().unwrap();
     let idx = Indexer::open(config(dir.path(), true)).unwrap();
+    // only an indexed token can be reported: ID has a KCC-23 declaration
+    rusqlite::Connection::open(dir.path().join("data").join("index.sqlite3"))
+        .unwrap()
+        .execute(
+            "INSERT INTO kcc23_declarations (covenant_id, proof, preparation_txid, genesis_txid, genesis_block, genesis_daa) \
+             VALUES (?1, 'x', zeroblob(32), zeroblob(32), 0, 0)",
+            [&kobd::hex::decode(ID).unwrap()[..]],
+        )
+        .unwrap();
     let state = idx.api_state().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

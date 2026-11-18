@@ -2265,6 +2265,19 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     async fn utxos_by_addresses(&self, addresses: &[String]) -> Result<Vec<AddressUtxo>, RpcError> {
         self.primary().utxos_by_addresses(addresses).await
     }
+    /// The cross-checking node's answer; an error when it gives none in time.
+    async fn cross_check_utxos(&self, addresses: &[String]) -> Result<Option<Vec<AddressUtxo>>, RpcError> {
+        let Some(j) = self.cross_node() else { return Ok(None) };
+        let other = self.board.shown(j);
+        match tokio::time::timeout(CROSS_CHECK_STEP_TIMEOUT, self.nodes[j].utxos_by_addresses(addresses)).await {
+            Ok(Ok(v)) => Ok(Some(v)),
+            Ok(Err(e)) => Err(RpcError::Node(format!("the cross-checking node {other} could not list the outputs: {e}"))),
+            Err(_) => Err(RpcError::Node(format!(
+                "the cross-checking node {other} did not list the outputs within {} s",
+                CROSS_CHECK_STEP_TIMEOUT.as_secs()
+            ))),
+        }
+    }
     /// Whether the authority knows the block.
     ///
     /// With a cross-checking node, "unknown" counts only when that node does not know the block

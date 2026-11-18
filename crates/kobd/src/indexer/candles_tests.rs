@@ -42,7 +42,8 @@ fn add_order(conn: &Connection, cov: u8, tok: u8, scale: i64, genesis_block: i64
             scale,
             genesis_block,
             genesis_daa,
-            ids(conn, &[0x01]).unwrap()
+            // one maker per order: two orders of one maker in a transaction are a self-trade
+            ids(conn, &[0x01, cov]).unwrap()
         ],
     )
     .unwrap();
@@ -265,7 +266,7 @@ fn a_large_history_is_charted_in_milliseconds_and_equals_the_reference() {
         "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 299) \
          INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, scale, price, in_book, genesis_state, \
                              genesis_block, genesis_daa, listed, origin) \
-         SELECT CAST(printf('%032d', i) AS BLOB), 'KobBid', ?1, 1, 2, ?3, ?2, CASE WHEN i % 2 = 0 THEN 100000000 ELSE 1000 END, 1000, 1, x'00', \
+         SELECT CAST(printf('%032d', i) AS BLOB), 'KobBid', ?1, 1, 2, ?3 * 1000 + i, ?2, CASE WHEN i % 2 = 0 THEN 100000000 ELSE 1000 END, 1000, 1, x'00', \
                 1, 10 + i, 1, 'chain' FROM n",
         params![pinned_id, token_id, maker_id],
     )

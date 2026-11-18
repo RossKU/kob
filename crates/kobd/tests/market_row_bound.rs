@@ -115,7 +115,7 @@ fn streamed_candles_equal_the_candles_of_every_trade() {
     // the reference: every fill read into memory, grouped into trades, bucketed
     let rows: Vec<market::FillRow> = conn
         .prepare(
-            "SELECT e.id, e.txid, e.ts, e.daa, e.side, e.amount, e.price, o.scale, o.genesis_daa FROM order_events e \
+            "SELECT e.id, e.txid, e.ts, e.daa, e.side, e.amount, e.price, o.scale, o.genesis_daa, o.maker_id FROM order_events e \
              JOIN orders o ON o.id = e.order_id WHERE e.kind = 'fill' AND e.token_id = (SELECT id FROM ids WHERE h = ?1)",
         )
         .unwrap()
@@ -130,6 +130,7 @@ fn streamed_candles_equal_the_candles_of_every_trade() {
                 price: r.get(6)?,
                 scale: r.get(7)?,
                 since_daa: r.get(8)?,
+                maker: r.get(9)?,
             })
         })
         .unwrap()

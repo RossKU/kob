@@ -1981,7 +1981,8 @@ stall or drain any executor:
   says when the window was cut). Candles (KAS and pair) stream every fill of their window through the same index and hold only
   the newest `limit` candles, so a chart always reaches back to the first trade of its window (a row cap there cut the charts at
   the 20 000th newest fill: `tests/market_row_bound.rs`). Scanning routes (candles, stats, depth, trades, books, strays, holdings,
-  pairs) cost `api.rate_limit.heavy_route_cost` (5) bucket tokens; a client that is already limited does not drain the global bucket;
+  pairs, the order list, fills, token events) cost `api.rate_limit.heavy_route_cost` (5) bucket tokens; a client that is already
+  limited does not drain the global bucket, and a busy one (above a quarter of its own rate) stops at half of it;
   `api.rate_limit.ipv6_prefix_bits` (64) can be set to 48 against an attacker rotating addresses through a large prefix, and the
   /64s of one IPv6 site (`api.rate_limit.ipv6_site_prefix_bits`, 48; 0 = off) also share a site bucket
   (`per_site_rps` 100, `per_site_burst` 300), so rotating through the /64s of one allocation cannot drain the global bucket; a
@@ -3012,8 +3013,9 @@ Sources, in order: `--key-file PATH` / `$KOB_OPERATOR_KEY_FILE`, a systemd crede
 `kob-operator-key` (`$CREDENTIALS_DIRECTORY`, tmpfs), `$KOB_OPERATOR_KEY` (hex; removed from the
 environment once read; it still works, but the error of a missing key no longer suggests it: "no operator key: give --key-file PATH (or
 KOB_OPERATOR_KEY_FILE), a systemd credential `kob-operator-key`, or run `kobd setup`, which makes one"). A key file holds 64 hex characters and must be mode `0600` or `0400` (the
-process refuses group- or world-accessible files; on Windows it refuses a file another account can read, unless
-`KOB_KEY_ACL_STRICT=0`, which turns the refusal into a warning; quickstart 5). A key file inside the data directory is refused
+process refuses group- or world-accessible files, a file of another account (root aside) and a directory that group or others may
+write unless sticky; on Windows it refuses a file another account can read, unless
+`KOB_KEY_ACL_STRICT=0`, which turns the refusal into a warning, and checks neither owner nor directory; quickstart 5). A key file inside the data directory is refused
 too (a rebuild deletes the data directory, and the key would go with it). The key's own copy is wiped from memory when the
 process drops it (on exit); copies made by the libraries that parse it and sign with it are not, so treat the machine's
 memory (swap, crash dumps) as holding the key. `kobd setup` generates a key with the OS CSPRNG into a new file that is owner-only before the secret is written (Quick start).

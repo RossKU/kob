@@ -240,15 +240,13 @@ pub async fn pair_candles(State(app): State<Arc<App>>, Path((base, quote)): Path
     }
     let n = limit(&q, "limit", 500, 1500)?;
     let tokens = app.state.tokens.clone();
-    let v = app
-        .state
-        .pool
-        .with(move |c| {
-            let decimals = (reads::token_decimals(c, &tokens, &base)?, reads::token_decimals(c, &tokens, &quote)?);
-            crate::indexer::pairs::pair_candles(c, &base, &quote, decimals, &interval, iv, from, to, n)
-        })
-        .await?;
-    json_ok(v)
+    // cached as the token candles are (security review 2026-11-17 L3)
+    let key = format!("pair-candles {base} {quote} {interval} {from:?} {to:?} {n}");
+    cached(&app, key, move |c| {
+        let decimals = (reads::token_decimals(c, &tokens, &base)?, reads::token_decimals(c, &tokens, &quote)?);
+        crate::indexer::pairs::pair_candles(c, &base, &quote, decimals, &interval, iv, from, to, n)
+    })
+    .await
 }
 
 /// `GET /v1/pairs/{base}/{quote}/fills?limit=&before=`: the pair-order fills, newest first, and
@@ -295,10 +293,17 @@ pub async fn orders(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult 
     };
     let n = limit(&q, "limit", 50, app.state.cfg.max_page_size)?;
     let ctx = app.ctx();
+    // through the response cache by the parsed filter: junk parameters do not defeat it (security
+    // review 2026-11-17 M1)
+    let key = format!("orders {maker:?} {token:?} {status:?} {cursor:?} {n} {:?} {:?}", ctx.node_daa, ctx.now_unix);
     let filter = OrderFilter { maker, token, status };
-    let mut v = app.state.pool.with(move |c| reads::orders(c, &ctx, &filter, n, cursor)).await?;
-    v.items = v.items.into_iter().map(|o| o.with_warnings(|t| app.state.tokens.warnings_for(t))).collect();
-    json_ok(v)
+    let tokens = app.state.tokens.clone();
+    cached(&app, key, move |c| {
+        let mut v = reads::orders(c, &ctx, &filter, n, cursor)?;
+        v.items = v.items.into_iter().map(|o| o.with_warnings(|t| tokens.warnings_for(t))).collect();
+        Ok(v)
+    })
+    .await
 }
 
 /// `GET /v1/orders/{covenant_id}/events`: the events of one order.
@@ -335,8 +340,8 @@ pub async fn fills(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
     let before = opt_i64(&q, "before")?;
     let n = limit(&q, "limit", 50, app.state.cfg.max_page_size)?;
     let ctx = app.ctx();
-    let v = app.state.pool.with(move |c| reads::fills(c, &ctx, token.as_ref(), side, before, n)).await?;
-    json_ok(v)
+    let key = format!("fills {token:?} {side:?} {before:?} {n} {:?} {:?}", ctx.node_daa, ctx.now_unix);
+    cached(&app, key, move |c| reads::fills(c, &ctx, token.as_ref(), side, before, n)).await
 }
 
 /// `GET /v1/strays?maker=&limit=`: the stray token UTXOs, newest first.
@@ -557,9 +562,29 @@ struct LogoReportBody {
 pub async fn logo_report(
     State(app): State<Arc<App>>,
     axum::Extension(client): axum::Extension<super::ClientIp>,
+    headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> ApiResult {
     let logo = app.state.logo.clone().ok_or_else(|| ApiError::not_found("no such route"))?;
+    // JSON only: a cross-site form or a `no-cors` fetch (text/plain) cannot send it
+    let json = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("application/json"));
+    if !json {
+        return Err(ApiError::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type", "the body must be application/json"));
+    }
+    // a browser's page must be the app's (`[logo_reports] origins`, else a single `cors_allow_origin`)
+    if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
+        let allowed: Vec<&str> = match logo.origins() {
+            [] => app.state.cfg.cors_allow_origin.as_deref().filter(|o| *o != "*").into_iter().collect(),
+            list => list.iter().map(String::as_str).collect(),
+        };
+        let ok = origin.to_str().is_ok_and(|o| allowed.iter().any(|a| a.trim_end_matches('/').eq_ignore_ascii_case(o)));
+        if !ok {
+            return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden_origin", "logo reports are not accepted from this origin"));
+        }
+    }
     let b: LogoReportBody = serde_json::from_slice(&body).map_err(|_| {
         ApiError::bad_request("the body must be JSON {\"covenant_id\": 64 hex, \"reason\": \"illegal\"|\"impersonation\"|\"other\", \"source\"?: \"github\", \"ref\"?: issue number}")
     })?;
@@ -586,6 +611,9 @@ pub async fn logo_report(
             let mut e = ApiError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "too many logo reports; try again later");
             e.retry_after = Some(secs);
             Err(e)
+        }
+        Err(crate::logo_reports::ReportError::UnknownToken) => {
+            Err(ApiError::new(StatusCode::NOT_FOUND, "unknown_token", "no token with that covenant id is indexed"))
         }
         Err(crate::logo_reports::ReportError::Db(e)) => Err(e.into()),
     }

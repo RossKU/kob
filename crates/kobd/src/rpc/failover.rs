@@ -466,6 +466,10 @@ impl<S: ChainSource> ChainSource for Failover<S> {
         let a = addresses.to_vec();
         self.inner.call(move |s| async move { s.utxos_by_addresses(&a).await }).await.1
     }
+    async fn cross_check_utxos(&self, addresses: &[String]) -> Result<Option<Vec<AddressUtxo>>, RpcError> {
+        let a = addresses.to_vec();
+        self.inner.call(move |s| async move { s.cross_check_utxos(&a).await }).await.1
+    }
     async fn block_exists(&self, hash: Hash32) -> Result<bool, RpcError> {
         self.inner.call(move |s| async move { s.block_exists(hash).await }).await.1
     }

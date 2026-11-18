@@ -1004,10 +1004,12 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
         let last_daa: i64 = r.get(16)?;
         // A taker in flight or a TWAP order between its slices is not in the book. The aggregated
         // levels leave it out the same way.
-        let levels = resting_levels(&contract, raw_state.clone(), utxo_daa.unwrap_or(last_daa), price, remaining, now);
+        let mut levels = resting_levels(&contract, raw_state.clone(), utxo_daa.unwrap_or(last_daa), price, remaining, now);
         if levels.is_empty() {
             return Ok(None);
         }
+        // a curve (up to 1,000 levels): only its best `depth` can be shown
+        best_levels(&mut levels, side, depth);
         let scale: Option<i64> = r.get(6)?;
         let state = tip_state(&contract, raw_state);
         let auction = state.as_ref().zip(utxo_daa).and_then(|(s, d)| auction_of(s, d, ctx.node_daa));
@@ -1053,19 +1055,57 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
         };
         Ok(Some(rows))
     })?;
-    let mut out: Vec<(i64, i64, BookOrderView)> =
-        rows.filter_map(Result::transpose).collect::<rusqlite::Result<Vec<_>>>()?.into_iter().flatten().collect();
     // Best first by the quote now per base unit (an auction moves away from its limit). The SQL
-    // order (age, covenant id) breaks ties.
-    out.sort_by(|(qa, sa, _), (qb, sb, _)| {
-        let o = (*qa as i128 * *sb as i128).cmp(&(*qb as i128 * *sa as i128));
-        if side == 1 {
-            o
-        } else {
-            o.reverse()
+    // order (age, covenant id) breaks ties: the sort is stable, and the rows kept by a trim stay
+    // ahead of the later ones. At most a few times `depth` rows are held.
+    let sort = |out: &mut Vec<(i64, i64, BookOrderView)>| {
+        out.sort_by(|(qa, sa, _), (qb, sb, _)| {
+            let o = (*qa as i128 * *sb as i128).cmp(&(*qb as i128 * *sa as i128));
+            if side == 1 {
+                o
+            } else {
+                o.reverse()
+            }
+        })
+    };
+    let trim_at = depth.saturating_mul(4).max(256);
+    let mut out: Vec<(i64, i64, BookOrderView)> = vec![];
+    for r in rows {
+        if let Some(v) = r? {
+            out.extend(v);
+            if out.len() > trim_at {
+                sort(&mut out);
+                out.truncate(depth);
+            }
         }
-    });
+    }
+    sort(&mut out);
     Ok(out.into_iter().take(depth).map(|(_, _, v)| v).collect())
+}
+
+/// Keeps the levels of one order at its best `depth` prices, when it has more: the first `depth`
+/// levels of the whole side are then exact.
+fn best_prices(levels: &mut Vec<(Option<usize>, i64, Option<i64>)>, side: i64, depth: usize) {
+    if levels.len() > depth {
+        levels.sort_by(|a, b| if side == 1 { a.1.cmp(&b.1) } else { b.1.cmp(&a.1) });
+        let mut distinct = 0;
+        let cut = levels.iter().enumerate().position(|(i, l)| {
+            distinct += usize::from(i == 0 || levels[i - 1].1 != l.1);
+            distinct > depth
+        });
+        if let Some(k) = cut {
+            levels.truncate(k);
+        }
+    }
+}
+
+/// Keeps the best `depth` levels of one order (best first by price, the curve's level order on a
+/// tie), when it has more.
+fn best_levels(levels: &mut Vec<(Option<usize>, i64, Option<i64>)>, side: i64, depth: usize) {
+    if levels.len() > depth {
+        levels.sort_by(|a, b| if side == 1 { a.1.cmp(&b.1) } else { b.1.cmp(&a.1) });
+        levels.truncate(depth);
+    }
 }
 
 /// One aggregated level before it is rendered: `((price, scale), (amount, orders, estimated))`.
@@ -1084,7 +1124,13 @@ pub(crate) type RawBookLevel = ((i64, i64), (i128, i64, bool));
 /// that slice, an auction at its current price. [`book_side_levels`] renders the first `depth`
 /// levels. The 24 h statistics read the ones near the touch without a string per level. Either
 /// way it is one scan of the live orders of the token.
-pub(crate) fn book_side_sorted(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64) -> DbResult<Vec<RawBookLevel>> {
+pub(crate) fn book_side_sorted(
+    conn: &Connection,
+    ctx: &ReadCtx,
+    token: &Hash32,
+    side: i64,
+    top: Option<usize>,
+) -> DbResult<Vec<RawBookLevel>> {
     let now = book_daa(conn, ctx)?;
     let live = fillable_now(now, ctx.now_unix);
     let pinned = pinned_template();
@@ -1098,7 +1144,10 @@ pub(crate) fn book_side_sorted(conn: &Connection, ctx: &ReadCtx, token: &Hash32,
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(rusqlite::params![token.0.to_vec(), side], |r| {
         let (price, remaining): (i64, Option<i64>) = (r.get(0)?, r.get(2)?);
-        let level = resting_levels(&r.get::<_, String>(4)?, r.get(5)?, r.get(6)?, price, remaining, now);
+        let mut level = resting_levels(&r.get::<_, String>(4)?, r.get(5)?, r.get(6)?, price, remaining, now);
+        if let Some(d) = top {
+            best_prices(&mut level, side, d);
+        }
         Ok((level, r.get::<_, i64>(1)?, r.get::<_, i64>(3)?))
     })?;
     // Maps (price, scale) to (amount, orders, estimated). A curve adds each remaining level's size
@@ -1126,7 +1175,7 @@ pub(crate) fn book_side_sorted(conn: &Connection, ctx: &ReadCtx, token: &Hash32,
 }
 
 fn book_side_levels(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64, depth: usize) -> DbResult<Vec<LevelView>> {
-    Ok(book_side_sorted(conn, ctx, token, side)?
+    Ok(book_side_sorted(conn, ctx, token, side, Some(depth))?
         .into_iter()
         .take(depth)
         .map(|((price, scale), (amount, orders, estimated))| LevelView {
@@ -1806,7 +1855,8 @@ pub struct CurveView {
     /// Created in its token's genesis and not yet filled or amended: `tokenCovId` is zero in the
     /// state, and `token` is its custody's.
     pub unbound: bool,
-    /// The remaining levels, the current first.
+    /// The remaining levels, the current first: at most [`CURVE_VIEW_LEVELS`] (the state has them
+    /// all).
     pub remaining: Vec<CurveLevelView>,
 }
 
@@ -1819,6 +1869,9 @@ pub struct CurveLevelView {
     /// Base units left in the level.
     pub amount: String,
 }
+
+/// The most remaining levels a [`CurveView`] lists, so an order list of 1,000-level curves stays light.
+pub const CURVE_VIEW_LEVELS: usize = 50;
 
 /// The [`CurveView`] of a curve state.
 pub fn curve_view(s: &AnyState) -> Option<CurveView> {
@@ -1833,6 +1886,7 @@ pub fn curve_view(s: &AnyState) -> Option<CurveView> {
         unbound: c.is_unbound(),
         remaining: crate::model::curve_levels(c)
             .into_iter()
+            .take(CURVE_VIEW_LEVELS)
             .map(|(l, p, a)| CurveLevelView { level: l as i64, price: p.to_string(), amount: a.to_string() })
             .collect(),
     })
