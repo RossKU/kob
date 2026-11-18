@@ -1014,7 +1014,8 @@ the caller submits itself, which `payInvoiceWithIntent` applies to its success).
 
 Under a per-invoice lock: a payment whose transaction is already an attempt of the invoice resumes (an
 identical retry); otherwise a payment while an attempt is in flight is refused as `invoice_pending`
-(retryable), one after an accepted attempt is a **duplicate** (`invoice_paid`), and one at or after
+(retryable; an attempt the node has not seen for a minute whose inputs were spent by another transaction is
+failed first, so a payer double-spending its own payment cannot block the invoice), one after an accepted attempt is a **duplicate** (`invoice_paid`), and one at or after
 `expiresAt` is **late** (`invoice_expired`). A refused payment is never broadcast by the facilitator. It is
 verified first (a forged one is just rejected) and kept as evidence with the output it would pay the
 merchant (or its intent outpoint), and the facilitator keeps watching that output: when a refused payment

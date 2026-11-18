@@ -523,7 +523,7 @@ impl Facilitator {
     /// Whether the chain knows the creation of an intent entry.
     ///
     /// It does when the intent output is accepted or spent, or the creation is in the mempool.
-    fn creation_seen(&self, e: &Entry) -> std::result::Result<bool, ChainError> {
+    pub(super) fn creation_seen(&self, e: &Entry) -> std::result::Result<bool, ChainError> {
         let Some(rec) = e.intent.as_ref() else { return Ok(false) };
         if rec.seen_daa.is_some() || !rec.executions.is_empty() {
             return Ok(true);
@@ -585,7 +585,7 @@ impl Facilitator {
         Ok(self.ledger.update(txid, self.clock.now_ms(), f)?)
     }
 
-    fn give_up(&self, e: &Entry, reason: String) -> Drive {
+    pub(super) fn give_up(&self, e: &Entry, reason: String) -> Drive {
         if let Some(r) = e.intent.as_ref() {
             self.chain.unwatch_spend(&r.facts.outpoint());
         }

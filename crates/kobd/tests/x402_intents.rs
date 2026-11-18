@@ -5,6 +5,7 @@
 //!   fill, the facilitator re-plans and settles WITHOUT a new payer signature;
 //! * an expired invoice refuses a payment and reports it as late once it reaches the chain anyway;
 //! * a second payment of a paid invoice is a duplicate, reported when it reaches the chain;
+//! * an attempt whose input the payer spent elsewhere does not block the invoice;
 //! * a payment for another merchant (or another offer) is refused;
 //! * an invoice intent that outlives the invoice is refused; one the book cannot execute is expired at the invoice's end;
 //! * the Rust payer's intent retry (`pay_intent_with_retry`) re-sends the one creation until it executes and stops,
@@ -455,6 +456,36 @@ fn a_second_payment_of_a_paid_invoice_is_a_duplicate() {
     assert_eq!(s.status, InvoiceState::Paid);
     let dup = s.extra_payments.iter().find(|x| x.transaction == hex(&tx.id().as_bytes())).unwrap();
     assert_eq!(dup.observed, "accepted");
+}
+
+#[test]
+fn a_double_spent_invoice_payment_does_not_block_the_invoice() {
+    let w = world();
+    let offer = w.kas_offer(KAS, MERCHANT);
+    let id = w.invoice(vec![offer.clone()], 600_000);
+    // the first payment is broadcast and not accepted yet
+    let first = w.pay_kas(&offer, &id, 0);
+    let first_tx = kob_x402::safe_tx::SafeTx::parse(&first.payload.transaction, 1 << 20).unwrap().to_consensus().unwrap().tx;
+    w.fac.set_settle_wait(Duration::from_millis(50));
+    assert_eq!(diag(&w.fac.pay_invoice(&id, first)), "settlement_pending");
+    assert_eq!(w.status(&id).status, InvoiceState::Pending);
+    // it leaves the mempool with its input unspent: it may still be sent again, so it still blocks
+    w.chain.evict_mempool();
+    w.clock.set(NOW_MS + 61_000);
+    let second = w.pay_kas(&offer, &id, 1);
+    assert_eq!(diag(&w.fac.pay_invoice(&id, second.clone())), "invoice_pending");
+    // the payer spends that input back to itself: the first payment can never settle and no longer blocks
+    let f0 = &w.funds.funding[0].utxo;
+    w.chain.spend_externally(&Outpoint::new(f0.transaction_id, f0.index));
+    w.fac.set_settle_wait(Duration::from_secs(5));
+    let r = with_miner(&w, || w.fac.pay_invoice(&id, second));
+    assert!(r.success, "{r:?}");
+    let e = w.ledger.get(&hex(&first_tx.id().as_bytes())).unwrap();
+    assert_eq!(e.state, State::Failed);
+    assert!(e.reason.as_deref().unwrap().contains("spent by another transaction"), "{:?}", e.reason);
+    let s = w.status(&id);
+    assert_eq!(s.status, InvoiceState::Paid);
+    assert!(s.extra_payments.iter().any(|x| x.kind == "released" && x.transaction == e.txid));
 }
 
 #[test]
