@@ -1,15 +1,17 @@
-//! The facilitator settles intent-based swap-and-pay (`kob-intent-v1`) and invoices end to end on its
-//! in-memory chain (every transaction engine-validated on submit; a miner thread accepts the mempool).
+//! The facilitator settles intent-based swap-and-pay (`kob-intent-v1`) and invoices end to end on
+//! its in-memory chain (every transaction engine-validated on submit; a miner thread accepts the
+//! mempool).
 //!
-//! * an intent is created (the payer signs once), its first execution loses an order to a conflicting
-//!   fill, the facilitator re-plans and settles WITHOUT a new payer signature;
+//! * an intent is created (the payer signs once), its first execution loses an order to a
+//!   conflicting fill, the facilitator re-plans and settles WITHOUT a new payer signature;
 //! * an expired invoice refuses a payment and reports it as late once it reaches the chain anyway;
 //! * a second payment of a paid invoice is a duplicate, reported when it reaches the chain;
 //! * an attempt whose input the payer spent elsewhere does not block the invoice;
 //! * a payment for another merchant (or another offer) is refused;
-//! * an invoice intent that outlives the invoice is refused; one the book cannot execute is expired at the invoice's end;
-//! * the Rust payer's intent retry (`pay_intent_with_retry`) re-sends the one creation until it executes and stops,
-//!   without re-signing, when only a new signature could pay.
+//! * an invoice intent that outlives the invoice is refused; one the book cannot execute is expired
+//!   at the invoice's end;
+//! * the Rust payer's intent retry (`pay_intent_with_retry`) re-sends the one creation until it
+//!   executes and stops, without re-signing, when only a new signature could pay.
 #![allow(clippy::too_many_arguments)]
 
 #[path = "../../kob-protocol/tests/common/mod.rs"]
@@ -646,8 +648,9 @@ fn a_paused_facilitator_broadcasts_no_intent_execution_or_expiry() {
     assert!(w.chain.submit_count() > submits);
 }
 
-/// C5 X-8: an expiry that waits in the mempool is replaced (replace-by-fee) at the high rate a minute later: the new one
-/// pays more within EXPIRE_MAX_FEE, takes the old one's place, and ends the intent.
+/// An expiry that waits in the mempool is replaced (replace-by-fee) at the high rate a minute
+/// later: the new one pays more within EXPIRE_MAX_FEE, takes the old one's place, and ends the
+/// intent.
 #[test]
 fn a_waiting_expiry_is_replaced_at_the_high_rate() {
     let w = world();

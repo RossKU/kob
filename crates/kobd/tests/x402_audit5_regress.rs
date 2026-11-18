@@ -1,4 +1,5 @@
-//! Regression tests of the round-5 x402 audit fixes (audit 2026-10-30 X14, X15, X18, X17) and their obvious bypasses. Offline.
+//! Regression tests of the x402 facilitator's X14, X15, X17 and X18 findings and their obvious
+//! bypasses. Offline.
 #![allow(clippy::too_many_arguments, clippy::type_complexity, dead_code, unused_imports)]
 
 #[path = "../../kob-protocol/tests/common/mod.rs"]
@@ -346,8 +347,8 @@ fn merchant_token_spk(offer: &PaymentRequirements) -> ScriptPublicKey {
 // ====================================================================================================================
 // X14 candidate: one merchant output credited to two intents (the payer's cancel of both intents in ONE transaction)
 //
-// Since review p6 (F1) a cancel settles no intent at all: only an execution pays the merchant, at the output the router pins.
-// So the merged cancel's merchant outputs back neither intent, one output or two.
+// A cancel settles no intent at all: only an execution pays the merchant, at the output the router
+// pins. So the merged cancel's merchant outputs back neither intent, one output or two.
 // ====================================================================================================================
 
 /// Two cancels of two TokenToKas intents (token A1 and token A2, so each lock is the first input of its own covenant group) in one

@@ -1,11 +1,14 @@
-//! Refused invoice payments kept as evidence are bounded (2026-10-06).
+//! Refused invoice payments kept as evidence are bounded.
 //!
-//! `POST /invoices/<id>/pay` is unauthenticated. A payment to an expired (or paid) invoice is refused, verified and kept as
-//! evidence with the merchant output it would pay, so the reconcile can report it if the payer broadcasts it anyway. Before
-//! the fix every refused payment with a new txid was kept and the WHOLE record rewritten (with an fsync) each time: one
-//! funded output gave endless fee variants, so the store grew quadratically and the reconcile watch list without bound.
-//! Now a refused payment is kept once per funding (the same spent outputs) (fee variants of one funding conflict: at most one can confirm) and at
-//! most `maxExtraPaymentsPerInvoice` per invoice; nothing more is written.
+//! `POST /invoices/<id>/pay` is unauthenticated. A payment to an expired (or paid) invoice is
+//! refused, verified and kept as evidence with the merchant output it would pay, so the reconcile
+//! can report it if the payer broadcasts it anyway.
+//!
+//! A refused payment is kept once per funding (the same spent outputs; fee variants of one funding
+//! conflict, so at most one can confirm) and at most `maxExtraPaymentsPerInvoice` per invoice;
+//! nothing more is written. Without that bound, one funded output would give endless fee variants,
+//! each rewriting the WHOLE record (with an fsync), so the store would grow quadratically and the
+//! reconcile watch list without bound.
 
 #[path = "../../kob-protocol/tests/common/mod.rs"]
 mod common;

@@ -1,11 +1,13 @@
-//! An intent spent outside the facilitator settles only on the output the router fixes for the merchant (review p6, F1).
+//! An intent spent outside the facilitator settles only on the output the router fixes for the
+//! merchant.
 //!
-//! Offline: an in-memory chain whose submit runs the real script engine, the real verifier and the real facilitator, with the
-//! spend reports the chain follower gives `kobd --executor`.
+//! Offline: an in-memory chain whose submit runs the real script engine, the real verifier and the
+//! real facilitator, with the spend reports the chain follower gives `kobd --executor`.
 //!
-//! The payer's `cancel` checks only the payer's signature, so it can share a transaction with anything that pays the merchant's
-//! own money back to the merchant: the payout of the merchant's own `KobAsk`, the refund of the merchant's own `KobBid`, or a token
-//! delivery into the merchant's `KobBid`. None of those may settle the payment. An execution by another keeper still does.
+//! The payer's `cancel` checks only the payer's signature, so it can share a transaction with
+//! anything that pays the merchant's own money back to the merchant: the payout of the merchant's
+//! own `KobAsk`, the refund of the merchant's own `KobBid`, or a token delivery into the merchant's
+//! `KobBid`. None of those may settle the payment. An execution by another keeper still does.
 #![allow(clippy::type_complexity)]
 
 #[path = "../../kob-protocol/tests/common/mod.rs"]

@@ -1,7 +1,8 @@
-//! The x402 ledger and invoice store on a full disk: a record whose write fails is cut back off the file and the
-//! operation fails, so the next record starts on a clean line and every acknowledged record survives a restart. A file
-//! whose last line was written whole but does not parse (a partial record with a complete one glued after it) refuses to
-//! open instead of being dropped as an unfinished write.
+//! The x402 ledger and invoice store on a full disk: a record whose write fails is cut back off the
+//! file and the operation fails, so the next record starts on a clean line and every acknowledged
+//! record survives a restart. A file whose last line was written whole but does not parse (a
+//! partial record with a complete one glued after it) refuses to open instead of being dropped as
+//! an unfinished write.
 //!
 //! The full-disk tests need a small tmpfs and skip themselves without it:
 //! `mount -t tmpfs -o size=2m tmpfs /mnt/kob-small && KOB_SMALL_TMPFS=/mnt/kob-small cargo test -p kobd --test
