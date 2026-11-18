@@ -1,5 +1,7 @@
-// Rows per page and paging of the Portfolio's lists (Open orders, Order history, Fills). The lists are read whole (orders-data.ts: every open order, the history
-// up to HISTORY_PAGES pages; the fills of every order that filled), so a page is a slice of what is loaded: the tab counts stay the totals.
+// Rows per page and paging of the Portfolio's lists (Open orders, Order history and Fills). The
+// lists are read whole (orders-data.ts: every open order, the history up to HISTORY_PAGES pages,
+// and the fills of every order that filled). A page is therefore a slice of what is loaded, and the
+// tab counts stay the totals.
 import { useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { Button } from '../kit';
@@ -13,7 +15,7 @@ const ROWS_KEY = 'kob.portfolio.rows';
 /** A stored size, or the default for anything else. */
 export const portfolioRowsOf = (raw: string | null | undefined): PortfolioPageSize => PORTFOLIO_PAGE_SIZES.find((n) => String(n) === raw) ?? DEFAULT_PORTFOLIO_ROWS;
 
-/** The viewer's rows per page, kept in this browser (a blocked storage keeps it for the visit). */
+/** The viewer's rows per page, kept in this browser. A blocked storage keeps it for the visit. */
 export function usePortfolioRows(): [PortfolioPageSize, (n: PortfolioPageSize) => void] {
   const [size, setSize] = useState<PortfolioPageSize>(() => {
     try {
@@ -27,19 +29,22 @@ export function usePortfolioRows(): [PortfolioPageSize, (n: PortfolioPageSize) =
     try {
       localStorage.setItem(ROWS_KEY, String(n));
     } catch {
-      /* blocked storage */
+      /* Blocked storage. */
     }
   };
   return [size, set];
 }
 
-/** The slice of `items` on page `page` (of `size` rows) and its window. */
+/** The slice of `items` on page `page`, of `size` rows, and its window. */
 export function pageOf<T>(items: readonly T[], size: number, page: number): { rows: T[]; window: PageWindow } {
   const window = pageWindow(items.length, size, page);
   return { rows: items.slice(window.from, window.to), window };
 }
 
-/** `‹ Newer   1–20 of 134   Older ›`, right-aligned under the list; nothing while the list is one page. `id`: the prefix of its test ids. */
+/**
+ * The pager `‹ Newer 1–20 of 134 Older ›`, right-aligned under the list. It shows nothing
+ * while the list is one page. `id` is the prefix of its test ids.
+ */
 export function PortfolioPager(props: { id: string; window: PageWindow; total: number; onPage: (page: number) => void }) {
   const w = props.window;
   if (w.pages <= 1) return null;

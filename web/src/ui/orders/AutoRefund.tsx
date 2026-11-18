@@ -1,4 +1,5 @@
-// The app-wide runner of the automatic refund (auto-refund.ts) and its opt-in toggle (shown in My orders).
+// The app-wide runner of the automatic refund (auto-refund.ts) and its opt-in toggle, which is
+// shown in My orders.
 import { useEffect, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { t } from '../../i18n';
@@ -14,7 +15,10 @@ function useAutoRefundSetting(): boolean {
   return on;
 }
 
-/** Mounted once in the app shell: refunds the connected wallet's due orders while the opt-in is on. Renders nothing. */
+/**
+ * Mounted once in the app shell. It refunds the connected wallet's due orders while the opt-in is
+ * on, and renders nothing.
+ */
 export function AutoRefundRunner() {
   const services = useServices();
   const wallet = useWallet();
@@ -28,7 +32,7 @@ export function AutoRefundRunner() {
 export function AutoRefundToggle() {
   const on = useAutoRefundSetting();
   return (
-    // no wrap: on a phone the long text must stay beside its checkbox, not drop below it
+    // No wrap. On a phone the long text must stay beside its checkbox and not drop below it.
     <label class="row small ord-check" style="gap:8px;flex-wrap:nowrap;align-items:flex-start" data-testid="orders-auto-refund-label">
       <input type="checkbox" checked={on} onChange={(e) => setAutoRefund((e.currentTarget as HTMLInputElement).checked)} data-testid="orders-auto-refund" />
       <span>{t('orders.autoRefund.toggle')}</span>
