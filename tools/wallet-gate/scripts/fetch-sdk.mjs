@@ -1,6 +1,8 @@
-// Downloads the OFFICIAL rusty-kaspa v2.1.0 wasm SDK (GitHub release asset) into vendor/.
-// Note: the npm package "kaspa-wasm" is stale (0.13.0, 2023) and has no tx v1 / covenants.
-// The x402 SDK and the wallet tests load this copy and hand it payer keys: it is pinned exactly like web/scripts/fetch-sdk.mjs.
+// Downloads the official rusty-kaspa v2.1.0 wasm SDK (GitHub release asset) into vendor/.
+// The npm package "kaspa-wasm" is not used, because it is stale (0.13.0) and has no tx v1 or
+// covenants.
+// The x402 SDK and the wallet tests load this copy and hand it payer keys, so it is pinned exactly
+// like web/scripts/fetch-sdk.mjs.
 import { mkdirSync, writeFileSync, existsSync, rmSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
@@ -10,13 +12,14 @@ import { unzipSync } from 'fflate';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const URL_ = 'https://github.com/kaspanet/rusty-kaspa/releases/download/v2.1.0/kaspa-wasm32-sdk-v2.1.0.zip';
 const VENDOR = join(ROOT, 'vendor');
-// Supply-chain pin: the sha256 of the official v2.1.0 release zip (the same value as web/scripts/fetch-sdk.mjs). A download that
-// does not hash to this value is REFUSED (nothing is unpacked). Updating the SDK means updating both constants in a reviewed
-// commit, never accepting whatever the network returned.
+// Supply-chain pin: the sha256 of the official v2.1.0 release zip (the same value as in
+// web/scripts/fetch-sdk.mjs). A download with another hash is refused and nothing is unpacked.
+// Updating the SDK means updating both constants in a reviewed commit, never accepting whatever the
+// network returned.
 export const EXPECTED_SHA256 = 'ba674e109ff5dd8bedc4dc2ee8a5ecdf4b600b1178a541d77888ec58310b6124';
-// The tree the pinned zip unpacks to: sha256 over the lines "<sha256 of the file>  <path>\n" of every file under kaspa-node/ and
-// kaspa-web/, sorted by path. An already extracted vendor/ is used only when it still hashes to this (a file changed, added or
-// removed there is refused, not loaded).
+// The tree the pinned zip unpacks to: sha256 over the lines "<sha256 of the file> <path>\n" of
+// every file under kaspa-node/ and kaspa-web/, sorted by path. An already extracted vendor/ is used
+// only when it still hashes to this. A file changed, added or removed there is refused, not loaded.
 export const EXPECTED_TREE_SHA256 = '81d931353ae0bd090e338be36bcd9d95800d336851532c4bbdba29a08c6ca603';
 
 function treeSha256() {

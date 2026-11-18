@@ -1,7 +1,9 @@
 // Wallet adapters for the gate page. Each adapter exposes:
-//   id, label, detect() -> bool, connect() -> { address, pubkey (x-only hex), network, version, raw }
-//   signInput0(test, opts) -> { signedTxJson?, walletSigscript?, request, response }   (asks the wallet to sign ONLY input 0)
-// Signing never broadcasts; the page broadcasts through the node RPC.
+//   id, label, detect() -> bool,
+//   connect() -> { address, pubkey (x-only hex), network, version, raw }
+//   signInput0(test, opts) -> { signedTxJson?, walletSigscript?, request, response }
+//     (asks the wallet to sign ONLY input 0)
+// Signing never broadcasts. The page broadcasts through the node RPC.
 
 const normPub = (p) => {
   if (typeof p !== 'string') throw new Error('wallet returned no public key');
@@ -26,7 +28,7 @@ export const kasware = {
   async connect() {
     const p = window.kasware;
     const accounts = await p.requestAccounts();
-    // KasWare 0.10.0 reports TN10 as 'kaspa_testnet_10' (verified live), not 'testnet-10'
+    // KasWare 0.10.0 reports TN10 as 'kaspa_testnet_10', not 'testnet-10'.
     const normNet = (n) => (n === 'kaspa_testnet_10' ? 'testnet-10' : n);
     let network = normNet(await p.getNetwork());
     if (network !== 'testnet-10') { try { await p.switchNetwork('testnet-10'); } catch (e) { /* reported below */ } network = normNet(await p.getNetwork()); }
@@ -88,9 +90,11 @@ export const kastle = {
     try { version = await p.request('kas:get_version'); } catch { /* optional */ }
     return { address: acc.address, pubkey: normPub(acc.publicKey), network, version: String(version), raw: acc };
   },
-  // opts.kastleVariant: 'empty-script' (scriptHex "": documented workaround, returns only the signature push)
-  //                     'redeem-script' (scriptHex = redeem: wallet emits <sig><push redeem>, we still take the signature)
-  //                     'plain' (no scripts: expected to leave P2SH inputs unsigned - issue #353)
+  // opts.kastleVariant:
+  //   'empty-script'  - scriptHex "" (documented workaround), returns only the signature push.
+  //   'redeem-script' - scriptHex = redeem. The wallet emits <sig><push redeem>, and we still take
+  //                     the signature.
+  //   'plain'         - no scripts. Expected to leave P2SH inputs unsigned (issue #353).
   async signInput0(test, opts = {}) {
     const variant = opts.kastleVariant ?? (test.kind === 'p2pk' ? 'plain' : 'empty-script');
     let scripts;
@@ -102,7 +106,7 @@ export const kastle = {
   },
 };
 
-// ---------------------------------------------------------------- KIP-12 announced providers (draft)
+// -------------------------------------------------------------- KIP-12 announced providers (draft)
 export const kip12 = {
   providers: [],
   discover() {

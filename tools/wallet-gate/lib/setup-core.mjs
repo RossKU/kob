@@ -1,7 +1,9 @@
-// Setup core: one TN10 transaction (funded + signed by the DEV key) that creates, for a wallet user's pubkey W:
+// Setup core: one TN10 transaction, funded and signed by the dev key, that creates these outputs
+// for a wallet user's pubkey W:
 //   * N KCC-20 token UTXOs (reference template, fixed supply = N * tokenUnits, owner scheme 0x00 = W,
-//     borrow disabled, 0x04 enabled in the template's config), all in ONE covenant group (same covenant id);
-//   * M BidOrder UTXOs whose maker key is W (each its own covenant id, holding a little KAS);
+//     borrow disabled, 0x04 enabled in the template's config), all in ONE covenant group (same
+//     covenant id).
+//   * M BidOrder UTXOs whose maker key is W (each with its own covenant id, holding a little KAS).
 //   * K plain P2PK UTXOs paying W's address (for test T1 and fees).
 import * as S from './script.mjs';
 import * as C from './contracts.mjs';
@@ -39,7 +41,8 @@ export async function runSetup({
   const tokenRedeem = C.kcc20Redeem(tokenAbi, tokenStateFor(walletPubkey));
   const tokenSpk = C.p2shSpk(k, tokenRedeem);
   const tokenOuts = Array.from({ length: tokens }, () => ({ value: tokenCarrier, spk: tokenSpk.script }));
-  // token covenant id = H(genesis outpoint, authorised outputs) ; computed from a temp tx to feed the bids
+  // The token covenant id is H(genesis outpoint, authorised outputs).
+  // It is computed from a temp tx to feed the bids.
   const tmpTx = T.toWasmTx(k, { inputs, outputs: tokenOuts });
   tmpTx.populateGenesisCovenants([{ authorizingInput: 0, outputs: tokenOuts.map((_, i) => i) }]);
   const tokenCovId = tmpTx.outputs[0].covenant.covenantId.toString();

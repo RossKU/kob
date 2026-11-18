@@ -1,6 +1,7 @@
-// Wallet-independent test flows T1/T2/T3 (used by the browser page and by the node self-check/e2e).
-// A "test" object carries: plan, unsigned wasm tx, the redeem script, and how to assemble the final sigscript
-// from a 65-byte (sig64 + sighash) signature returned by whatever signed input 0.
+// Wallet-independent test flows T1/T2/T3, shared by the browser page and the node tests.
+// A "test" object carries the plan, the unsigned wasm tx, the redeem script, and how to assemble
+// the final sigscript from a 65-byte (sig64 + sighash) signature returned by whatever signed input
+// 0.
 import * as S from './script.mjs';
 import * as C from './contracts.mjs';
 import * as T from './txbuild.mjs';
@@ -8,7 +9,10 @@ import * as T from './txbuild.mjs';
 export const SIGHASH_ALL = 1; // wallet-facing sighash type (KasWare/Kaspire numbering: 1 = SIGHASH_ALL)
 export const BUDGET = { p2pk: 15, cancel: 20, transfer: 30 }; // > measured 10 / 10 / 13 (harness), cheap headroom
 
-/** Rebuilds redeem scripts from a setup file and checks they hash to the P2SH addresses recorded by setup. */
+/**
+ * Rebuilds redeem scripts from a setup file and checks that they hash to the P2SH addresses
+ * recorded by setup.
+ */
 export function deriveContext(k, setup, kcc20Artifact, bidTemplate) {
   const tokenAbi = C.loadToken(kcc20Artifact);
   const tokenState = C.kcc20State({ amount: setup.tokenUnits, owner: setup.walletPubkey, ext: setup.extHex });
@@ -26,7 +30,10 @@ export function deriveContext(k, setup, kcc20Artifact, bidTemplate) {
 
 const dummySig65 = () => new Uint8Array(65).fill(1);
 
-/** T1: plain P2PK spend of `utxoEntry` (wallet's own UTXO) back to itself, v1 tx with computeBudget. */
+/**
+ * T1: plain P2PK spend of `utxoEntry` (the wallet's own UTXO) back to itself.
+ * It is a v1 tx with computeBudget.
+ */
 export function buildT1(k, ctx, walletUtxo) {
   const inp = T.utxoToInput(walletUtxo, BUDGET.p2pk);
   const spk = C.p2pkScriptHex(ctx.setup.walletPubkey);
@@ -36,7 +43,10 @@ export function buildT1(k, ctx, walletUtxo) {
   return finishTest(k, { id: 'T1', name: 'P2PK spend, tx v1 + computeBudget', plan, fee, kind: 'p2pk', outAddress: ctx.setup.walletAddress, outIndex: 0 });
 }
 
-/** T2: BidOrder.cancel(sig) - covenant (P2SH) input signed by the wallet key; funds return to the wallet. */
+/**
+ * T2: BidOrder.cancel(sig). The covenant (P2SH) input is signed by the wallet key and the funds
+ * return to the wallet.
+ */
 export function buildT2(k, ctx, bidEntry, bidUtxo) {
   const inp = T.utxoToInput(bidUtxo, BUDGET.cancel);
   const redeem = ctx.bid.redeem;
@@ -49,7 +59,7 @@ export function buildT2(k, ctx, bidEntry, bidUtxo) {
     id: 'T2', name: 'BidOrder.cancel(sig): covenant input', plan, fee, kind: 'bid-cancel', redeem,
     outAddress: ctx.setup.walletAddress, outIndex: 0,
     assemble: (sig65) => S.hex(C.bidCancelSigscript(ctx.bid, sig65)),
-    // Kaspire ordered-args template (wallet emits args + redeem itself)
+    // Kaspire ordered-args template: the wallet emits the args and the redeem script itself.
     kaspire: {
       scriptHex: S.hex(redeem),
       signatureScript: { mode: 'ordered-args', args: [{ type: 'signature', prefixHex: '' }, { type: 'data', hex: S.hex(ctx.bid.abi.dispatchTag('cancel')) }] },
@@ -57,7 +67,10 @@ export function buildT2(k, ctx, bidEntry, bidUtxo) {
   });
 }
 
-/** T3: KCC-20 transfer of a token UTXO owned by the wallet key to `recipientPubkey` (owner witness = 0x00 || sig). */
+/**
+ * T3: KCC-20 transfer of a token UTXO owned by the wallet key to `recipientPubkey`.
+ * The owner witness is 0x00 || sig.
+ */
 export function buildT3(k, ctx, tokenUtxo, recipientPubkey) {
   const inp = T.utxoToInput(tokenUtxo, BUDGET.transfer);
   if (!inp.covenantId) throw new Error('token UTXO has no covenantId (not a covenant UTXO?)');
@@ -81,7 +94,8 @@ export function buildT3(k, ctx, tokenUtxo, recipientPubkey) {
       signatureScript: {
         mode: 'ordered-args',
         args: [
-          // next_states pushed field-wise (one array payload per field), then witness = 0x00 || <sig>, then dispatch tag
+          // next_states is pushed field-wise (one array payload per field), then the witness
+          // (0x00 || <sig>), then the dispatch tag.
           ...fields.map((f) => ({ type: 'data', hex: hexOf(fieldPayload(abi, f, next)) })),
           { type: 'signature', prefixHex: '00' },
           { type: 'data', hex: S.hex(abi.dispatchTag('transfer')) },
@@ -92,7 +106,7 @@ export function buildT3(k, ctx, tokenUtxo, recipientPubkey) {
 }
 
 function fieldPayload(abi, f, next) {
-  // same bytes as Abi.pushArg pushes for `dynamic_array of f.type`, minus the push opcode
+  // The same bytes as Abi.pushArg pushes for `dynamic_array of f.type`, minus the push opcode.
   const parts = next.map((st) => {
     const v = st[f.name];
     return payloadOf(f.type, v);
@@ -132,7 +146,10 @@ export function finalize(t, sig65) {
   return { tx: t.tx, sigscript: ss };
 }
 
-/** Signature from a wallet-signed tx (safe JSON string): first 65-byte push, or 0x00||sig (66) for KCC-20 witnesses. */
+/**
+ * Signature from a wallet-signed tx (safe JSON string).
+ * It is the first 65-byte push, or 0x00||sig (66 bytes) for KCC-20 witnesses.
+ */
 export function sigFromSignedTx(signedTxJson, index = 0) {
   const obj = typeof signedTxJson === 'string' ? JSON.parse(signedTxJson) : signedTxJson;
   const ss = obj.inputs?.[index]?.signatureScript;

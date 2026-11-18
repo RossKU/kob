@@ -1,10 +1,21 @@
-// REAL-wallet driver: KasWare (Chrome extension, official Chrome Web Store build) vs the KOB wallet gate, TN10.
-//   node test/wallets/kasware.mjs [--headless] [--keep-open] [--only T1,T2] [--no-variants] [--repeat N]
-// Flow: fetch+unpack the official CRX at the pinned version / sha256 (lib/extension-pins.mjs; cached in vendor/ext-kasware) -> Playwright bundled Chromium + persistent profile
-//   -> import WALLET_MNEMONIC_KASWARE (.env, generated if absent, never printed) -> switch KasWare to Testnet 10
-//   -> scripts/setup.mjs for the wallet address (only if state file missing / UTXOs used up) -> serve gate page
-//   -> connect (approve popup) -> T1/T2/T3 via window.__gate.runTest, capturing + approving each KasWare popup.
-// Writes out/wallet-kasware.json and screenshots under out/screens/kasware/. Needs Chromium: npx playwright-core install chromium
+// Real-wallet driver for KasWare (Chrome extension, official Chrome Web Store build) against the
+// KOB wallet gate on TN10.
+//   node test/wallets/kasware.mjs [--headless] [--keep-open] [--only T1,T2]
+//     [--no-variants] [--repeat N]
+//
+// Flow:
+// 1. Fetch and unpack the official CRX at the pinned version and sha256 (lib/extension-pins.mjs,
+//    cached in vendor/ext-kasware).
+// 2. Start Playwright's bundled Chromium with a persistent profile.
+// 3. Import WALLET_MNEMONIC_KASWARE (from .env, generated if absent, never printed) and switch
+//    KasWare to Testnet 10.
+// 4. Run scripts/setup.mjs for the wallet address, only if the state file is missing or its UTXOs
+//    are used up.
+// 5. Serve the gate page and connect (approve popup).
+// 6. Run T1/T2/T3 through window.__gate.runTest, capturing and approving each KasWare popup.
+//
+// It writes out/wallet-kasware.json and screenshots under out/screens/kasware/.
+// It needs Chromium: npx playwright-core install chromium
 import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import kaspa from '../../lib/node-kaspa.mjs';
@@ -43,7 +54,8 @@ function walletSecrets() {
   if (!env.WALLET_MNEMONIC_KASWARE) { upsertEnv({ WALLET_MNEMONIC_KASWARE: kaspa.Mnemonic.random(12).phrase }); env = loadEnv(); }
   const phrase = env.WALLET_MNEMONIC_KASWARE;
   const xprv = new kaspa.XPrv(new kaspa.Mnemonic(phrase).toSeed());
-  // KasWare default keyring path (verified against the address the UI shows): m/44'/111111'/0'/0/0, Schnorr P2PK
+  // KasWare's default keyring path is m/44'/111111'/0'/0/0 (Schnorr P2PK).
+  // It matches the address the UI shows.
   const address = xprv.derivePath("m/44'/111111'/0'/0/0").toXPub().toPublicKey().toAddress('testnet-10').toString();
   return { words: phrase.split(' '), address };
 }
@@ -96,7 +108,10 @@ async function findPopup(ctx, timeoutMs) {
   return null;
 }
 
-/** Runs `startFn()` (returns a promise), waits for the KasWare approval popup, captures it, clicks approve. */
+/**
+ * Runs `startFn()` (returns a promise), waits for the KasWare approval popup, captures it and
+ * clicks approve.
+ */
 async function withApproval(ctx, label, startFn, { approve = true, timeoutMs = 60000 } = {}) {
   const resP = startFn();
   let settled = false;
@@ -115,7 +130,7 @@ async function withApproval(ctx, label, startFn, { approve = true, timeoutMs = 6
     info.text = text;
     info.summary = collapse(text).slice(0, 600);
     info.screenshot = await shot(pop, 'kasware', label.replace(/[^\w-]+/g, '_') + '-popup');
-    // extra detail: expand anything scrollable? capture the full scroll height too
+      // Also capture the full scroll height of anything scrollable.
     info.scrollHeight = await pop.evaluate(() => document.documentElement.scrollHeight).catch(() => null);
     popups.push(info);
     log(`popup [${label}]: ${info.summary.slice(0, 200)}`);
@@ -135,9 +150,10 @@ async function withApproval(ctx, label, startFn, { approve = true, timeoutMs = 6
 }
 
 
-// ------------------------------------------------------------------ negative control (node only, no wallet)
-// Proves the TN10 node really executes the covenant scripts: same tx shapes as T2/T3, but signed by a WRONG key and
-// assembled exactly like the wallet flow. Expected: the node REJECTS (otherwise "accepted" in T2/T3 would be vacuous).
+// --------------------------------------------------------- negative control (node only, no wallet)
+// Proves the TN10 node really executes the covenant scripts. It uses the same tx shapes as T2/T3,
+// signed by a WRONG key and assembled exactly like the wallet flow. Expected result: the node
+// REJECTS the tx. Otherwise "accepted" in T2/T3 would prove nothing.
 async function negativeControl(setup) {
   const env = loadEnv();
   const rpc = await T.connectRpc(kaspa, env.NODE_WS);
@@ -195,7 +211,7 @@ try {
   log('KasWare on TN10:', meta.walletTabAfterTn10.slice(0, 160));
   if (!/kaspatest:/.test(meta.walletTabAfterTn10)) throw new Error('KasWare did not switch to a testnet address');
 
-  // setup for the derived address (idempotent; reuse the state file when it exists)
+  // Set up the derived address. This is idempotent: the state file is reused when it exists.
   const setupFile = (pk) => join(ROOT, 'state', `setup-${pk}.json`);
   let setupState = null;
   try {
@@ -237,7 +253,8 @@ try {
         await gate.evaluate(() => window.__gate.loadSetup(window.__gate.wallet.pubkey));
         continue;
       }
-      // the popup is only known after the run starts, so patch the record (page copy + returned copy)
+      // The popup is only known after the run starts.
+      // So patch the record, both the page copy and the returned copy.
       const popupAppeared = info.appeared ? 'yes' : 'no';
       const displayed = info.appeared ? info.summary : '(no popup appeared)';
       rec = { ...rec, label, popupAppeared, popupDisplayed: displayed, popupClicked: info.clicked ?? null, popupScreenshot: info.screenshot ?? null, options: { ...rec.options, popup: popupAppeared, displayed } };

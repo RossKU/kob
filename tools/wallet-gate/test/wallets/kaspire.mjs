@@ -1,9 +1,18 @@
-// Real-wallet automation: Kaspire (HUB21 Chrome MV3 extension, window.kaspire) on Kaspa testnet-10.
-//   node test/wallets/kaspire.mjs [--headed] [--resetup] [--no-repeat] [--only T1,T2,T3] [--port 8802]
-// Flow: unpack the released extension -> Playwright bundled Chromium (persistent profile) -> import a fresh test
-// mnemonic (WALLET_MNEMONIC_KASPIRE in .env, generated on first run) -> switch to TN10 through the wallet UI ->
-// open the gate page -> connect (approve popup) -> scripts/setup.mjs for the wallet address -> run T1/T2/T3 through
-// window.__gate.runTest while capturing + approving every Kaspire approval window. Results: out/wallet-kaspire.json.
+// Real-wallet driver for Kaspire (HUB21 Chrome MV3 extension, window.kaspire) on Kaspa testnet-10.
+//   node test/wallets/kaspire.mjs [--headed] [--resetup] [--no-repeat] [--only T1,T2,T3]
+//     [--port 8802]
+//
+// Flow:
+// 1. Unpack the released extension.
+// 2. Start Playwright's bundled Chromium with a persistent profile.
+// 3. Import a fresh test mnemonic (WALLET_MNEMONIC_KASPIRE in .env, generated on first run).
+// 4. Switch to TN10 through the wallet UI.
+// 5. Open the gate page and connect (approve popup).
+// 6. Run scripts/setup.mjs for the wallet address.
+// 7. Run T1/T2/T3 through window.__gate.runTest, capturing and approving every Kaspire approval
+//    window.
+//
+// Results go to out/wallet-kaspire.json.
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,7 +29,8 @@ const ONLY = opt('only', 'T1,T2,T3').split(',');
 const VAULT_PASSWORD = 'kob-gate-kaspire-throwaway-2026'; // throwaway TN10 test wallet only
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// the pinned release (lib/extension-pins.mjs: version, zip URL and sha256, shared with web/e2e-real)
+// The pinned release (version, zip URL and sha256) comes from lib/extension-pins.mjs.
+// web/e2e-real shares it.
 const SOURCE_URL = EXTENSIONS.kaspire.zipUrl;
 const ZIP = join(ROOT, 'vendor', 'kaspire', SOURCE_URL.split('/').pop());
 const EXT_DIR = join(ROOT, 'vendor', EXTENSIONS.kaspire.vendorDir);
@@ -36,7 +46,7 @@ async function ensureExtension() {
   }
   const sha = createHash('sha256').update(readFileSync(ZIP)).digest('hex');
   if (sha !== EXPECT_SHA) throw new Error(`extension zip sha256 mismatch: ${sha}`);
-  // an unpacked copy of another version (an older pin) is replaced
+  // An unpacked copy of another version is replaced.
   const unpacked = existsSync(join(EXT_DIR, 'manifest.json')) ? JSON.parse(readFileSync(join(EXT_DIR, 'manifest.json'), 'utf8')).version : null;
   if (unpacked !== EXTENSIONS.kaspire.version) {
     rmSync(EXT_DIR, { recursive: true, force: true });
@@ -53,7 +63,8 @@ async function ensureExtension() {
   return { version, sha256: sha };
 }
 
-// deterministic id of the unpacked extension (manifest "key"): first 16 bytes of sha256(DER pubkey), hex mapped to a-p
+// Deterministic id of the unpacked extension, derived from the manifest "key".
+// It is the first 16 bytes of sha256(DER pubkey), with each hex digit mapped to a-p.
 function extIdFromKey() {
   const key = JSON.parse(readFileSync(join(EXT_DIR, 'manifest.json'), 'utf8')).key;
   const h = createHash('sha256').update(Buffer.from(key, 'base64')).digest('hex').slice(0, 32);
@@ -86,7 +97,9 @@ async function capture(p, label) {
   return rec;
 }
 
-/** Runs `work` (a promise) while capturing and approving every Kaspire approval window that appears. */
+/**
+ * Runs `work` (a promise) while capturing and approving every Kaspire approval window that appears.
+ */
 async function drive(ctx, work, label, { approve = true } = {}) {
   let done = false;
   const settled = work.then((v) => ({ ok: v }), (e) => ({ err: e })).finally(() => { done = true; });
@@ -120,7 +133,7 @@ async function drive(ctx, work, label, { approve = true } = {}) {
   return { result: r, popups: got };
 }
 
-// ------------------------------------------------------------------ wallet onboarding via the extension UI
+// ---------------------------------------------------------- wallet onboarding via the extension UI
 async function onboard(ctx, extId, mnemonic) {
   const w = await ctx.newPage();
   await w.goto(`chrome-extension://${extId}/wallet.html`);
@@ -142,7 +155,7 @@ async function onboard(ctx, extId, mnemonic) {
     await w.click('#unlock, button:has-text("UNLOCK")');
     await w.waitForSelector('#network', { timeout: 30000 });
   }
-  // switch to TN10 in the wallet UI (so the provider reports testnet-10 from the start)
+  // Switch to TN10 in the wallet UI, so the provider reports testnet-10 from the start.
   const label = (await w.textContent('#network')) ?? '';
   if (!/TN10/i.test(label)) {
     await w.click('#network');
@@ -255,7 +268,8 @@ try {
       for (const [tag, o] of variants) {
         const r = await runOne(id, o, tag);
         if (r.result === 'PASS') { passing[id] = { opts: o, tag }; break; }
-        // wallet rejected before signing the ordered-args request: continue to the next variant; otherwise still try the rest
+        // The wallet rejected before signing the ordered-args request.
+        // Continue to the next variant, and otherwise still try the rest.
       }
     }
     // ---- repeat every passing test once more
@@ -264,9 +278,10 @@ try {
     }
   }
 
-  // ---- extras (informational): variants that do not consume UTXOs + wallet-tx broadcast + request/response diff
+  // ---- extras (informational)
+  // These are variants that consume no UTXOs, a wallet-tx broadcast and a request/response diff.
   if (!flag('no-extras')) {
-    // 1) what does Kaspire change between the request tx and the returned tx? (no broadcast)
+    // 1) Compare the request tx with the returned tx to see what Kaspire changes (no broadcast).
     const pd = await drive(ctx, page.evaluate(async () => {
       const G = window.__gate; const F = await import('/lib/flows.mjs'); const T = await import('/lib/txbuild.mjs');
       const diff = (x, y, path = '') => {
@@ -292,13 +307,14 @@ try {
     extra.requestVsResponseDiff = pd.result.ok ?? { error: String(pd.result.err) };
     console.log('request vs response diff:', JSON.stringify(extra.requestVsResponseDiff).slice(0, 800));
 
-    // 2) wallet-mode variants, signing only (no broadcast, no UTXO consumed)
+    // 2) Wallet-mode variants, signing only (no broadcast, no UTXO consumed).
     for (const id of ['T2', 'T3'].filter((x) => ONLY.includes(x))) {
       for (const [tag, o] of [['wrap-signature', { kaspireMode: 'wrap-signature' }], ['none', { kaspireMode: 'none' }]]) {
         await runOne(id, { ...o, broadcast: false }, tag + '-signonly');
       }
     }
-    // 3) broadcast the WALLET-RETURNED tx (with our sigscript swapped in; sigscripts are equal anyway)
+    // 3) Broadcast the wallet-returned tx with our sigscript swapped in.
+    //    The sigscripts are equal anyway.
     for (const id of ['T2', 'T3'].filter((x) => ONLY.includes(x))) await runOne(id, { kaspireMode: 'ordered-args', useWalletTx: true }, 'ordered-args+walletTx');
   }
 } catch (e) {

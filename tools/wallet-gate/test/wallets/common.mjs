@@ -1,7 +1,9 @@
-// Shared helpers for real-wallet automation drivers (test/wallets/<wallet>.mjs).
-// A driver: launches Playwright Chromium with the wallet extension loaded in a persistent profile, imports a test
-// mnemonic (from .env, never printed), switches the wallet to testnet-10, opens the gate page, runs setup for the
-// wallet address, then calls window.__gate.runTest('T1'|'T2'|'T3', opts) while approving the wallet popups.
+// Shared helpers for the real-wallet drivers (test/wallets/<wallet>.mjs).
+//
+// A driver launches Playwright Chromium with the wallet extension loaded in a persistent profile.
+// It imports a test mnemonic (from .env, never printed), switches the wallet to testnet-10 and
+// opens the gate page. It runs setup for the wallet address, then calls
+// window.__gate.runTest('T1'|'T2'|'T3', opts) while approving the wallet popups.
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
@@ -28,8 +30,9 @@ export async function startServer(port) {
 }
 
 /**
- * Launches Chromium with an unpacked extension in a persistent profile (extensions need a headed or new-headless browser).
- * NOTE: branded Chrome >= 137 ignores --load-extension; use Playwright's bundled Chromium (npx playwright-core install chromium).
+ * Launches Chromium with an unpacked extension in a persistent profile.
+ * Extensions need a headed or new-headless browser. Branded Chrome >= 137 ignores --load-extension,
+ * so use Playwright's bundled Chromium (npx playwright-core install chromium).
  */
 export async function launchWithExtension({ extensionDir, profileName, headless = false, extraArgs = [] }) {
   const userDataDir = join(ROOT, '.browser-profiles', profileName);
@@ -49,7 +52,10 @@ export async function extensionId(ctx, timeoutMs = 20000) {
   return new URL(sw.url()).host;
 }
 
-/** Runs scripts/setup.mjs for a wallet address (spends dev funds; serialized by a lock). Returns the setup JSON. */
+/**
+ * Runs scripts/setup.mjs for a wallet address and returns the setup JSON.
+ * It spends dev funds and is serialized by a lock.
+ */
 export function runSetup(address, label) {
   const r = spawnSync(process.execPath, [join(ROOT, 'scripts', 'setup.mjs'), '--wallet-address', address, '--label', label], { encoding: 'utf8', cwd: ROOT });
   process.stdout.write(r.stdout ?? '');
@@ -73,10 +79,14 @@ export function saveResults(name, obj) {
 }
 
 /**
- * Makes `unpackedDir` hold the pinned CRX build of `wallet` (EXTENSIONS in lib/extension-pins.mjs) and `crxPath` the CRX file itself.
- * The cache is reused only when the CRX file has the pinned sha256 and the unpacked manifest has the pinned version. Otherwise the CRX is
- * downloaded and refused (nothing written or unpacked) unless its sha256 and manifest version equal the pin; a new release needs the
- * pin moved first. Returns { version, sha256, bytes, source, redirectedTo }.
+ * Makes `unpackedDir` hold the pinned CRX build of `wallet` (EXTENSIONS in lib/extension-pins.mjs)
+ * and `crxPath` the CRX file itself.
+ *
+ * The cache is reused only when the CRX file has the pinned sha256 and the unpacked manifest has
+ * the pinned version. Otherwise the CRX is downloaded and refused (nothing written or unpacked)
+ * unless its sha256 and manifest version equal the pin. A new release needs the pin moved first.
+ *
+ * Returns { version, sha256, bytes, source, redirectedTo }.
  */
 export async function ensurePinnedCrx(wallet, { unpackedDir, crxPath, log = console.log }) {
   const spec = EXTENSIONS[wallet];

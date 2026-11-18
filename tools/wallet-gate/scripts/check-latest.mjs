@@ -1,16 +1,27 @@
-// Daily, KEYLESS drift check of the wallet extensions the real-wallet runs are pinned to (lib/extension-pins.mjs).
+// Daily keyless check of the wallet extensions that the real-wallet runs are pinned to.
 //
 //   node tools/wallet-gate/scripts/check-latest.mjs [--json] [--out <file>] [--write-baseline]
 //
-// Downloads the newest KasWare CRX (the Chrome Web Store endpoint always serves the newest) and looks up the newest Kaspire extension
-// release on GitHub (GITHUB_TOKEN is used when set), then compares version and sha256 with the pins. On a difference it prints a markdown
-// report: the new version, a diff of the provider method names and a diff of refusal-like strings in the background script / service
-// worker, old pinned build against new build. A text diff is a prompt to look, not proof.
+// It downloads the newest KasWare CRX (the Chrome Web Store endpoint always serves the newest
+// build). It looks up the newest Kaspire extension release on GitHub (GITHUB_TOKEN is used when
+// set). Version and sha256 are compared with the pins in lib/extension-pins.mjs.
 //
-// Exit code: 0 everything equals the pins, 1 a wallet drifted, 2 a download / parse error.
-// KasWare's store serves only the newest build, so the pinned build's method list and strings are kept in wallet-baseline.json (next to
-// this script; regenerate it with --write-baseline after moving a pin). Kaspire's pinned zip is downloaded for the diff.
-// Everything downloaded is untrusted data: it is hashed and read as text, never executed, imported or written to disk. Node built-ins only.
+// On a difference it prints a markdown report with these parts:
+// - The new version.
+// - A diff of the provider method names.
+// - A diff of refusal-like strings in the background script or service worker, old pinned build
+//   against new build.
+// A text diff is a prompt to look, not proof.
+//
+// Exit code: 0 when everything equals the pins, 1 when a wallet drifted, 2 on a download or parse
+// error.
+//
+// The store serves only the newest KasWare build, so the pinned build's method list and strings are
+// kept in wallet-baseline.json next to this script. Regenerate it with --write-baseline after
+// moving a pin. The pinned Kaspire zip is downloaded for the diff.
+//
+// Everything downloaded is untrusted data. It is hashed and read as text, never executed, imported
+// or written to disk. Only Node built-ins are used.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,9 +36,12 @@ const MAX_STRINGS = 1000; // per wallet, kept in the baseline and the diff
 const MAX_STRING_LEN = 160;
 const MAX_LIST_IN_REPORT = 60;
 
-// ------------------------------------------------------------------------------------------------ zip (central directory)
+// ------------------------------------------------------------------------- zip (central directory)
 
-/** Reads a zip into `{ name: Buffer }` (stored and deflated entries). Throws on anything it does not understand. */
+/**
+ * Reads a zip into `{ name: Buffer }` (stored and deflated entries).
+ * Throws on anything it does not understand.
+ */
 function unzip(buf) {
   const b = Buffer.from(buf);
   let eocd = -1;
@@ -62,16 +76,20 @@ function unzip(buf) {
   return files;
 }
 
-// ------------------------------------------------------------------------------------------------ extraction (text only)
+// -------------------------------------------------------------------------- extraction (text only)
 
 const text = (files, name) => (files[name] ? files[name].toString('utf8') : '');
 
-/** Distinct string literals of `src` that look like a refusal / error message, sorted, length- and count-capped. */
+/**
+ * Distinct string literals of `src` that look like a refusal or error message.
+ * The result is sorted and capped in string length and in count.
+ */
 function refusalStrings(src) {
   const out = new Set();
   for (const m of src.matchAll(/"((?:[^"\\\n]|\\.){8,400})"|'((?:[^'\\\n]|\\.){8,400})'|`((?:[^`\\]|\\.){8,400})`/g)) {
     const s = (m[1] ?? m[2] ?? m[3]).replace(/\$\{[^}]*\}/g, '#').replace(/\s+/g, ' ').trim(); // a template placeholder becomes #
-    // a real message starts with a letter, has a space and no code punctuation (a mis-paired quote in minified code yields fragments)
+    // A real message starts with a letter, has a space and has no code punctuation.
+    // A mis-paired quote in minified code would otherwise yield fragments.
     if (REFUSAL.test(s) && /^[A-Za-z]/.test(s) && /\s/.test(s) && !/[{};]|=>/.test(s)) out.add(s.length > MAX_STRING_LEN ? s.slice(0, MAX_STRING_LEN) + '...' : s);
   }
   return [...out].sort().slice(0, MAX_STRINGS);
@@ -79,7 +97,10 @@ function refusalStrings(src) {
 
 const JS_KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'constructor']);
 
-/** Method names of the injected provider: `this.x = async (...)` style (KasWare) or class methods `[async] x(...) {` (Kaspire). */
+/**
+ * Method names of the injected provider.
+ * KasWare uses the `this.x = async (...)` style and Kaspire uses class methods `[async] x(...) {`.
+ */
 function methodNames(src) {
   const out = new Set();
   for (const m of src.matchAll(/this\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\(|function|[A-Za-z_$][\w$]*\s*=>)/g)) out.add(m[1]);
@@ -90,7 +111,8 @@ function methodNames(src) {
 function describe(wallet, files, sha256) {
   const version = packageVersion(files);
   if (!version) throw new Error(`${wallet}: no manifest version in the package`);
-  // the version ends up in an issue title: only a plain dotted version is accepted from a download
+  // The version ends up in an issue title.
+  // So only a plain dotted version is accepted from a download.
   if (!/^\d{1,5}(\.\d{1,5}){0,3}$/.test(String(version))) throw new Error(`${wallet}: unexpected manifest version ${JSON.stringify(String(version).slice(0, 40))}`);
   if (wallet === 'kasware') {
     return { version, sha256, methods: methodNames(text(files, 'extensionPageScript.js')), strings: refusalStrings(text(files, 'extensionServiceWorker.js')) };
@@ -98,7 +120,7 @@ function describe(wallet, files, sha256) {
   return { version, sha256, methods: methodNames(text(files, 'inpage.js')), strings: refusalStrings(text(files, 'background.js')) };
 }
 
-// ------------------------------------------------------------------------------------------------ downloads
+// --------------------------------------------------------------------------------------- downloads
 
 async function get(url, headers = {}) {
   const res = await fetch(url, { redirect: 'follow', headers: { 'user-agent': 'wallet-drift-check', ...headers } });
@@ -116,7 +138,10 @@ async function fetchKaspireZip(url) {
   return describe('kaspire', unzip(pkg), sha256Hex(pkg));
 }
 
-/** The newest Kaspire release that carries an extension zip (the newest release overall is often an Android build only). */
+/**
+ * The newest Kaspire release that carries an extension zip.
+ * The newest release overall is often an Android build only.
+ */
 async function newestKaspireAsset() {
   const headers = { accept: 'application/vnd.github+json', ...(process.env.GITHUB_TOKEN ? { authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) };
   const releases = JSON.parse((await get(KASPIRE_RELEASES, headers)).toString('utf8'));
@@ -134,7 +159,7 @@ async function newestKaspireAsset() {
 }
 const cmp = (a, b) => a.reduce((d, n, i) => d || n - b[i], 0);
 
-// ------------------------------------------------------------------------------------------------ report
+// ------------------------------------------------------------------------------------------ report
 
 const listDiff = (oldL, newL) => {
   const o = new Set(oldL), n = new Set(newL);
@@ -179,7 +204,7 @@ function markdown(entries) {
   return lines.join('\n');
 }
 
-// ------------------------------------------------------------------------------------------------ main
+// -------------------------------------------------------------------------------------------- main
 
 async function main() {
   const argv = process.argv.slice(2);
@@ -204,7 +229,7 @@ async function main() {
   try {
     baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
   } catch {
-    /* no baseline: the report says so */
+    /* No baseline: the report says so. */
   }
   const entries = [];
 
@@ -220,7 +245,7 @@ async function main() {
       const o = await fetchKaspireZip(EXTENSIONS.kaspire.zipUrl);
       if (o.sha256 === EXTENSIONS.kaspire.zipSha256) kpOld = o;
     } catch {
-      /* fall back to the baseline */
+      /* Fall back to the baseline. */
     }
     kpOld ??= baseline.kaspire?.sha256 === EXTENSIONS.kaspire.zipSha256 ? baseline.kaspire : null;
   }

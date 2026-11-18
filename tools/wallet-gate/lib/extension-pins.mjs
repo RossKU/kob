@@ -1,16 +1,25 @@
-// The released wallet extensions the real-wallet runs use, pinned by version and sha256. Shared by the wallet-gate drivers
-// (test/wallets/*.mjs) and the web real-wallet runs (web/e2e-real/common.mjs), so the two always load the same builds.
-// Node built-ins only (no package import): web/e2e-real imports this file without the wallet-gate node_modules.
+// The released wallet extensions that the real-wallet runs use, pinned by version and sha256.
+// The wallet-gate drivers (test/wallets/*.mjs) and the web real-wallet runs
+// (web/e2e-real/common.mjs) share it, so both always load the same builds.
+// It uses Node built-ins only, because web/e2e-real imports it without the wallet-gate
+// node_modules.
 import { createHash } from 'node:crypto';
 
 /**
- * Where each wallet comes from. `vendorDir` is the unpacked copy inside the wallet-gate vendor cache (tools/wallet-gate/vendor/); the
- * download URLs are the Chrome Web Store update endpoint for the CRX builds and the release zip for Kaspire.
+ * Where each wallet comes from.
  *
- * Every wallet is pinned: `version` is the manifest version the runs use, and a download must have the sha256 below
- * (`crxSha256` for the CRX file, `zipSha256` for the zip). The Chrome Web Store endpoint always serves the newest release,
- * so when a wallet publishes a new version the download is refused until the pin is moved here (new version and sha256,
- * after looking at the release; scripts/check-latest.mjs reports a newer release daily, see its header). An unpacked copy is used only when its manifest version equals the pin.
+ * `vendorDir` is the unpacked copy inside the wallet-gate vendor cache (tools/wallet-gate/vendor/).
+ * The download URLs are the Chrome Web Store update endpoint for the CRX builds and the release zip
+ * for Kaspire.
+ *
+ * Every wallet is pinned. `version` is the manifest version the runs use. A download must have the
+ * sha256 below (`crxSha256` for the CRX file, `zipSha256` for the zip).
+ *
+ * The Chrome Web Store endpoint always serves the newest release. When a wallet publishes a new
+ * version, the download is refused until the pin is moved here (new version and sha256, after
+ * looking at the release). scripts/check-latest.mjs reports a newer release daily, see its header.
+ *
+ * An unpacked copy is used only when its manifest version equals the pin.
  */
 export const EXTENSIONS = {
   kasware: {
