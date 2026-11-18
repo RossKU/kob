@@ -239,6 +239,12 @@ export async function startMockServer(opts = {}) {
     if (get && path === '/v1/tokens') return ok(V.tokensView(chain));
     // the token-logo blocklist of an executor with [logo_reports] enabled (docs/api.md 3.20): nothing is hidden
     if (get && path === '/v1/logo-blocklist') return ok({ hidden: [], updated_ms: 0 });
+    // creator locks (docs/api-reference.md 3.24): a hint only, the web verifies each declaration itself
+    if (get && path === '/v1/creator-locks') {
+      const items = [];
+      for (const [id, proof] of chain.declarations) if (JSON.stringify(proof).includes('"lock"')) items.push({ covenant_id: id });
+      return ok({ items });
+    }
     if (get && (m = /^\/v1\/tokens\/([^/]+)\/declaration$/.exec(path))) {
       const id = V.parseHash('covenant_id', m[1]);
       const proof = chain.declarations.get(id);
