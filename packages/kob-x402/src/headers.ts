@@ -1,10 +1,11 @@
-// PAYMENT-REQUIRED / PAYMENT-SIGNATURE / PAYMENT-RESPONSE: base64 (standard alphabet, padded) of the canonical JSON.
+// PAYMENT-REQUIRED, PAYMENT-SIGNATURE and PAYMENT-RESPONSE are the base64 (standard alphabet,
+// padded) of the canonical JSON.
 
 import { canonicalJson } from './canonical.ts';
 import { KobX402Error } from './errors.ts';
 import type { PaymentPayload, PaymentRequired, SettlementResponse } from './types.ts';
 
-/** Largest encoded header value accepted (bytes of the base64 text). */
+/** Largest encoded header value accepted, in bytes of the base64 text. */
 export const MAX_HEADER_BYTES = 256 * 1024;
 const B64 = /^[A-Za-z0-9+/]*={0,2}$/;
 

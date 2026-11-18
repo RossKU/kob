@@ -1,29 +1,42 @@
-// Fee rates of the payer's transactions: the same dynamic policy as the executor's (crates/kobd/src/fee.rs, docs/ops/
-// executor.md "Fee policy"). The node (rusty-kaspa `getFeeEstimate`) answers sompi-per-gram buckets: a priority bucket
-// (sub-second inclusion), normal buckets (the first: sub-minute) and low buckets (the first: sub-hour). A payment pays the
-// bucket of its urgency, `ceil(bucket)` clamped to `[floor, maxRate]` (the floor wins over a lower maxRate); without an
-// estimate it pays the floor. A transaction that cannot be built at the rate is rebuilt once at the floor: the policy prices
-// a payment, it never makes a payable one impossible.
+// Fee rates of the payer's transactions. It is the same dynamic policy as the executor's
+// (crates/kobd/src/fee.rs, docs/ops/executor.md "Fee policy"). The node (rusty-kaspa
+// `getFeeEstimate`) answers sompi-per-gram buckets:
+// - A priority bucket, for sub-second inclusion.
+// - Normal buckets, of which the first is sub-minute.
+// - Low buckets, of which the first is sub-hour.
+//
+// A payment pays the bucket of its urgency. The rate is `ceil(bucket)` clamped to
+// `[floor, maxRate]`, and the floor wins over a lower `maxRate`. Without an estimate it pays the
+// floor. A transaction that cannot be built at the rate is rebuilt once at the floor. So the
+// policy prices a payment and never makes a payable one impossible.
 
-/** The relay floor: the least fee rate a node relays, sompi per gram (kob-protocol `MIN_FEE_RATE`). */
+/**
+ * The relay floor: the least fee rate a node relays, sompi per gram (kob-protocol `MIN_FEE_RATE`).
+ */
 export const MIN_FEE_RATE = 100;
 
 /** How soon a transaction should be accepted (the executor's `Urgency`). */
 export type FeeUrgency = 'low' | 'normal' | 'high';
 
-/** The node's estimate, sompi per gram: the priority bucket, the first normal and the first low bucket. */
+/**
+ * The node's estimate in sompi per gram: the priority bucket, the first normal bucket and the first
+ * low bucket.
+ */
 export interface NodeFeeEstimate {
   priority: number;
   normal: number;
   low: number;
 }
 
-/** A fixed rate, or a function asked before each transaction (undefined: the builders' floor). */
+/**
+ * A fixed rate, or a function asked before each transaction. Undefined means the builders' floor.
+ */
 export type FeeRateSource = number | undefined | (() => number | undefined | Promise<number | undefined>);
 
 /**
- * Parses a `getFeeEstimate` answer (`{ estimate: { priorityBucket: { feerate }, normalBuckets: [...], lowBuckets: [...] } }`,
- * or the inner `estimate`). An empty normal or low list takes the next faster bucket. Every rate must be finite and positive.
+ * Parses a `getFeeEstimate` answer, `{ estimate: { priorityBucket: { feerate }, normalBuckets:
+ * [...], lowBuckets: [...] } }`, or the inner `estimate`. An empty normal or low list takes the
+ * next faster bucket. Every rate must be finite and positive.
  */
 export function parseFeeEstimate(v: unknown): NodeFeeEstimate {
   const o = (v ?? {}) as Record<string, unknown>;
@@ -44,8 +57,9 @@ export function parseFeeEstimate(v: unknown): NodeFeeEstimate {
 }
 
 /**
- * The rate of an urgency from an estimate: `ceil(bucket)` clamped to `[floor, max(floor, maxRate)]` (defaults: the relay floor,
- * no cap). Without an estimate (`undefined`) the floor. Accepts a parsed estimate or a raw `getFeeEstimate` answer.
+ * The rate of an urgency from an estimate. It is `ceil(bucket)` clamped to
+ * `[floor, max(floor, maxRate)]`, with the relay floor and no cap as defaults. Without an estimate
+ * (`undefined`) it is the floor. It accepts a parsed estimate or a raw `getFeeEstimate` answer.
  */
 export function feeRateFromEstimate(
   estimate: NodeFeeEstimate | unknown | undefined,
@@ -66,7 +80,10 @@ function isParsed(v: unknown): v is NodeFeeEstimate {
   return typeof o?.priority === 'number' && typeof o?.normal === 'number' && typeof o?.low === 'number';
 }
 
-/** The rate a source names now (a function is asked; undefined = the builders' floor). Must be a positive integer. */
+/**
+ * The rate a source names now. A function is asked, and undefined means the builders' floor. It
+ * must be a positive integer.
+ */
 export async function resolveFeeRate(src: FeeRateSource): Promise<number | undefined> {
   const r = typeof src === 'function' ? await src() : src;
   if (r === undefined) return undefined;
@@ -74,7 +91,10 @@ export async function resolveFeeRate(src: FeeRateSource): Promise<number | undef
   return r;
 }
 
-/** Builds at `rate`; when that throws and the rate is above the floor, builds once more at the floor (the floor's error stands). */
+/**
+ * Builds at `rate`. When that throws and the rate is above the floor, builds once more at the
+ * floor, and the floor's error stands.
+ */
 export function withFeeFloor<T>(rate: number | undefined, floor: number | undefined, build: (rate: number | undefined) => T): T {
   const f = floor ?? MIN_FEE_RATE;
   try {

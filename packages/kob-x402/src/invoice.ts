@@ -1,17 +1,26 @@
-// Invoices (`kob-invoice-v1`): the x402 requirements of one sale, the merchant's reference and an expiry, served by the
-// facilitator at `GET /invoices/<id>` (the URL a QR code carries; no QR rendering here).
+// Invoices (`kob-invoice-v1`): the x402 requirements of one sale, the merchant's reference and an
+// expiry. The facilitator serves one at `GET /invoices/<id>`, the URL a QR code carries. This
+// module renders no QR code.
 //
-// Merchant: `newInvoice` builds one, `InvoiceClient.create` registers it (API key), `status` / `awaitPaid` read its
-// invoice-level status. Payer: `fetchInvoice` loads it from its URL and checks that it hashes to the id in the URL (the
-// URL is self-verifying), then pays one of its `accepts` (any profile; `payInvoiceWithIntent` for an intent route) with
-// `InvoiceClient.pay` (`POST /invoices/<id>/pay`, no API key). One invoice is paid once: a duplicate or late payment is
-// refused before broadcast (`invoice_paid` / `invoice_expired`) and kept as evidence by the facilitator.
+// The merchant side has three calls:
+// - `newInvoice` builds an invoice.
+// - `InvoiceClient.create` registers it with an API key.
+// - `status` and `awaitPaid` read its invoice-level status.
 //
-// A KAS-only invoice can also be paid by any wallet through the `kaspa:<address>?amount=<KAS>` URI (`kaspaUri`); the
-// facilitator does not see such a payment, so the merchant watches its address instead of the invoice status.
+// The payer side loads the invoice with `fetchInvoice` from its URL and checks that it hashes to
+// the id in the URL, so the URL is self-verifying. It then pays one of its `accepts`, of any
+// profile, with `InvoiceClient.pay` (`POST /invoices/<id>/pay`, no API key). Use
+// `payInvoiceWithIntent` for an intent route. One invoice is paid once. A duplicate or late
+// payment is refused before broadcast (`invoice_paid`, `invoice_expired`) and kept as evidence by
+// the facilitator.
 //
-// `KobX402Client.payInvoice` pays any entry (native, kcc20, swap-and-pay, intent) under the client's limits, retries without
-// paying twice and verifies the settlement; `verifyInvoiceSettlement` is the check for a caller that submits a payment itself.
+// Any wallet can pay a KAS-only invoice through the `kaspa:<address>?amount=<KAS>` URI
+// (`kaspaUri`). The facilitator does not see such a payment, so the merchant watches its address
+// instead of the invoice status.
+//
+// `KobX402Client.payInvoice` pays any entry (native, kcc20, swap-and-pay, intent) under the
+// client's limits, retries without paying twice and verifies the settlement.
+// `verifyInvoiceSettlement` is the check for a caller that submits a payment itself.
 
 import { canonicalHashHex, canonicalJson } from './canonical.ts';
 import { kcc20Custody, verifySettlement } from './client.ts';
@@ -25,7 +34,7 @@ import type { Invoice, InvoiceStatus, NetworkId, PaymentPayload, PaymentRequirem
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const HEX64 = /^[0-9a-f]{64}$/;
 
-/** `YYYY-MM-DDTHH:MM:SS.mmmZ` of unix milliseconds (the binding's timestamp form). */
+/** `YYYY-MM-DDTHH:MM:SS.mmmZ` of unix milliseconds, the binding's timestamp form. */
 export function isoMs(ms: number): string {
   return new Date(ms).toISOString();
 }
@@ -56,7 +65,9 @@ export function invoiceIdFromUrl(url: string): string {
   return m[1]!.toLowerCase();
 }
 
-/** The `kaspa:` payment URI of a KAS invoice (its first plain `standard-native` entry), or `null`. */
+/**
+ * The `kaspa:` payment URI of a KAS invoice (its first plain `standard-native` entry), or `null`.
+ */
 export function kaspaUri(inv: Invoice): string | null {
   const r = inv.accepts.find((a) => a.asset === ASSET_KAS && a.extra?.route === undefined && a.extra?.profile === 'standard-native');
   if (!r) return null;
@@ -73,7 +84,10 @@ export interface InvoiceClientOptions {
   /** Merchant API key (`create` only). */
   apiKey?: string;
   timeoutMs?: number;
-  /** `pay` observes the settlement: give it the facilitator's settle wait and some margin. Default 60 s. */
+  /**
+   * `pay` observes the settlement, so give it the facilitator's settle wait and some margin.
+   * Default 60 s.
+   */
   payTimeoutMs?: number;
   fetch?: FetchLike;
   allowInsecureHttp?: boolean;
@@ -130,8 +144,9 @@ export class InvoiceClient {
   }
 
   /**
-   * Polls the status until the invoice is `paid` or `expired` (or `timeoutMs` passes: the last status). A `failed`
-   * status keeps polling: the invoice can still be paid until it expires.
+   * Polls the status until the invoice is `paid` or `expired`, or until `timeoutMs` passes, and
+   * then returns the last status. A `failed` status keeps polling, because the invoice can still
+   * be paid until it expires.
    */
   async awaitPaid(id: string, o: { timeoutMs?: number; intervalMs?: number; signal?: AbortSignal } = {}): Promise<InvoiceStatus> {
     const until = Date.now() + (o.timeoutMs ?? 120_000);
@@ -142,7 +157,10 @@ export class InvoiceClient {
     }
   }
 
-  /** Payer: settles one payment of the invoice (no API key). Returns the settlement whatever its outcome. */
+  /**
+   * Payer: settles one payment of the invoice (no API key). Returns the settlement whatever its
+   * outcome.
+   */
   async pay(id: string, payload: PaymentPayload): Promise<SettlementResponse> {
     const r = await this.#call<SettlementResponse>('POST', `/invoices/${id}/pay`, payload, false, this.#o.payTimeoutMs ?? 60_000);
     if (r === null || typeof r !== 'object' || typeof r.success !== 'boolean') {
@@ -194,8 +212,9 @@ export interface FetchedInvoice {
 }
 
 /**
- * Payer: loads an invoice from its URL (`.../invoices/<id>`) and checks it: it hashes to the id of the URL, it is an
- * invoice of this version, unexpired at `nowMs` (with the Rust checks when `wasm` provides them).
+ * Payer: loads an invoice from its URL (`.../invoices/<id>`) and checks it. It must hash to the id
+ * of the URL, be an invoice of this version and be unexpired at `nowMs`. The Rust checks run too
+ * when `wasm` provides them.
  */
 export async function fetchInvoice(
   url: string,
@@ -228,10 +247,10 @@ export async function fetchInvoice(
 }
 
 /**
- * The lifetime of an intent paying `inv` through `requirements`, created at `nowMs`: the wanted lifetime (default 5 min),
- * at most the offer's `maxTimeoutSeconds`, and never past the invoice's expiry. The authorization expires, and the
- * router intent's `deadline` (from which anyone may expire the intent and return the payer's funds) lies, at
- * `nowMs + lifetime`.
+ * The lifetime of an intent paying `inv` through `requirements`, created at `nowMs`. It is the
+ * wanted lifetime (default 5 min), at most the offer's `maxTimeoutSeconds`, and never past the
+ * invoice's expiry. The authorization expires at `nowMs + lifetime`, and so does the `deadline` of
+ * the router intent, from which anyone may expire the intent and return the payer's funds.
  */
 export function intentLifetimeMs(inv: FetchedInvoice, requirements: { maxTimeoutSeconds: number }, nowMs: number, wantedMs?: number): number {
   const left = inv.expiresAtMs - nowMs;
@@ -240,10 +259,15 @@ export function intentLifetimeMs(inv: FetchedInvoice, requirements: { maxTimeout
 }
 
 /**
- * Checks what `InvoiceClient.pay` answered for `payment` (a payment of `inv`): the payment was built for this invoice (request
- * hash = the invoice id) and for one of its entries, and the settlement is a success for exactly it: its signed transaction
- * (an intent payment: its creation in `extensions.kob.intent.creation`, the execution in `transaction`), the entry's amount and
- * network, and a kcc20 entry's custody class. Throws `invalid_settlement` otherwise.
+ * Checks what `InvoiceClient.pay` answered for `payment`, a payment of `inv`. The payment must
+ * have been built for this invoice (request hash equal to the invoice id) and for one of its
+ * entries. The settlement must be a success for exactly it, which means:
+ * - Its signed transaction. For an intent payment that is the creation in
+ *   `extensions.kob.intent.creation`, and the execution is in `transaction`.
+ * - The entry's amount and network.
+ * - For a kcc20 entry, the custody class.
+ *
+ * It throws `invalid_settlement` otherwise.
  */
 export function verifyInvoiceSettlement(s: SettlementResponse, inv: Pick<FetchedInvoice, 'id' | 'invoice'>, payment: { paymentPayload: PaymentPayload; transactionId: string }): void {
   const p = payment.paymentPayload;
