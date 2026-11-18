@@ -49,7 +49,9 @@ fn vectors() -> Golden {
     let mut transactions = vec![];
     let mut states = vec![];
     let mut payloads = vec![];
-    for (name, action) in common::scenarios().into_iter().chain(common::scenarios_kron()).chain(kron_2732()).chain(pair_vectors()).chain(curve_vectors()) {
+    for (name, action) in
+        common::scenarios().into_iter().chain(common::scenarios_kron()).chain(kron_2732()).chain(pair_vectors()).chain(curve_vectors())
+    {
         let built = build(&action).unwrap_or_else(|e| panic!("{name}: {e}"));
         let signatures = sign_locally(&built, &keys).unwrap();
         let opts = FinalizeOptions { tighten_budgets: true };

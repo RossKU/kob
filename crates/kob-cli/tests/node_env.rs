@@ -33,8 +33,14 @@ fn token_run(sub: &str, env: Option<&str>, extra: &[&str]) -> (std::path::PathBu
     let n = RUNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let cwd = std::env::temp_dir().join(format!("kob-node-env-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&cwd).unwrap();
-    std::fs::write(cwd.join("key.hex"), format!("{SK}
-")).unwrap();
+    std::fs::write(
+        cwd.join("key.hex"),
+        format!(
+            "{SK}
+"
+        ),
+    )
+    .unwrap();
     let mut cmd = Command::new(BIN);
     cmd.current_dir(&cwd);
     cmd.args(["token", sub, "--name", "Test", "--ticker", "TEST", "--decimals", "8", "--supply", "5", "--network", "testnet-10"])

@@ -972,7 +972,18 @@ impl GenesisDraft {
             outputs.push(o);
             placed
         });
-        Ok(GenesisDraft { program, curve, spec_ext: spec.extension_commitment, states, outputs, inputs, entries, change_spk, covenant_id, budget })
+        Ok(GenesisDraft {
+            program,
+            curve,
+            spec_ext: spec.extension_commitment,
+            states,
+            outputs,
+            inputs,
+            entries,
+            change_spk,
+            covenant_id,
+            budget,
+        })
     }
 
     /// The transaction with placeholder signatures (their final size) and the given change.
@@ -1105,7 +1116,9 @@ pub fn build_genesis(spec: &IssueSpec) -> Result<GenesisPlan> {
         masses(&measured, &draft.entries)
     };
     if let Err(e) = limit_mass.check_tx_limits(spec.mass_margin_percent) {
-        return Err(IssueError::Verify(format!("genesis: {e} (storage mass grows with more or smaller outputs: raise the carrier or issue fewer outputs)")));
+        return Err(IssueError::Verify(format!(
+            "genesis: {e} (storage mass grows with more or smaller outputs: raise the carrier or issue fewer outputs)"
+        )));
     }
     Ok(GenesisPlan {
         tx,
@@ -1520,8 +1533,14 @@ impl GenesisPlan {
         }
         if let Some(c) = &self.curve {
             let Some(o) = self.tx.outputs.get(c.output) else { return fail("the curve output is missing".into()) };
-            let id = covenant_id(self.tx.inputs[0].previous_outpoint, [(c.output as u32, &TransactionOutput { covenant: None, ..o.clone() })].into_iter());
-            if o.script_public_key != c.state.spk() || id != c.covenant_id || o.covenant != Some(CovenantBinding { authorizing_input: 0, covenant_id: id }) {
+            let id = covenant_id(
+                self.tx.inputs[0].previous_outpoint,
+                [(c.output as u32, &TransactionOutput { covenant: None, ..o.clone() })].into_iter(),
+            );
+            if o.script_public_key != c.state.spk()
+                || id != c.covenant_id
+                || o.covenant != Some(CovenantBinding { authorizing_input: 0, covenant_id: id })
+            {
                 return fail("the curve output is not the genesis of its own group".into());
             }
             let h = &self.states[c.custody];
@@ -1562,7 +1581,9 @@ impl GenesisPlan {
         }
         let (compute, storage, size, fee_mass, limit_mass) = masses(&measured, &self.entries);
         if let Err(e) = limit_mass.check_tx_limits(self.spec.mass_margin_percent) {
-            return fail(format!("genesis: {e} (storage mass grows with more or smaller outputs: raise the carrier or issue fewer outputs)"));
+            return fail(format!(
+                "genesis: {e} (storage mass grows with more or smaller outputs: raise the carrier or issue fewer outputs)"
+            ));
         }
         let min_fee = crate::tx::relay_fee_for_mass(fee_mass, self.spec.fee_rate);
         if self.fee < min_fee.min(self.spec.fee.unwrap_or(u64::MAX)) {
@@ -2094,7 +2115,11 @@ mod tests {
         let mut s = spec(holders, MAX_GENESIS_OUTPUTS as u64);
         s.funding = vec![funding(1_000 * 100_000_000, key().1)];
         let g = build_genesis(&s).unwrap();
-        println!("STORAGE 64 x 10 KAS: {} (budget {})", g.storage_mass, crate::tx::tx_mass_budget(DEFAULT_MASS_MARGIN_PERCENT).storage);
+        println!(
+            "STORAGE 64 x 10 KAS: {} (budget {})",
+            g.storage_mass,
+            crate::tx::tx_mass_budget(DEFAULT_MASS_MARGIN_PERCENT).storage
+        );
         // a genesis over the margin names the dimension
         let holders: Vec<Holder> = (0..20).map(|i| Holder::new([i as u8 + 1; 32], 0, 1)).collect();
         let mut s = spec(holders, 20);

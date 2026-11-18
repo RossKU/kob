@@ -318,7 +318,8 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
         let ext = ext.and_then(h32).unwrap_or([0; 32]);
         // A mode-1 order's bought-custody is the order's, never a stray: it is served apart
         // ([`bought_custodies`]).
-        let (bought, own): (Vec<OwnedToken>, Vec<OwnedToken>) = tokens.remove(&cov).unwrap_or_default().into_iter().partition(|t| t.bought);
+        let (bought, own): (Vec<OwnedToken>, Vec<OwnedToken>) =
+            tokens.remove(&cov).unwrap_or_default().into_iter().partition(|t| t.bought);
         // exactly one proven row, as [`bought_custodies`] (the view fails closed on more)
         let bought_custody = match <[OwnedToken; 1]>::try_from(bought) {
             Ok([t]) => t.proven.map(|state| TokenUtxo { utxo: t.utxo, state }),

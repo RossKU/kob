@@ -220,7 +220,11 @@ impl Token {
     }
     /// Enabled `KCC20Opt` committing to the `slots`-slot `KCC20Batch` build.
     fn opt_n(slots: usize) -> Self {
-        let mut t = Self::from_art(&format!("KCC20Opt + {slots}-slot leader"), compile_opt_n(true, slots, ref_args()), Some(batch_template_n(slots)));
+        let mut t = Self::from_art(
+            &format!("KCC20Opt + {slots}-slot leader"),
+            compile_opt_n(true, slots, ref_args()),
+            Some(batch_template_n(slots)),
+        );
         t.lead_slots = slots;
         t
     }
@@ -1286,7 +1290,9 @@ fn capacity(net: &Net, s: &Scn, n: usize, lead_bytes: usize, lead_idx: Option<us
     let res = execute(&tx, &entries).expect("ctx");
     let budgets: Vec<u16> = res
         .iter()
-        .map(|r| r.as_ref().map(|u| u16::try_from(u.saturating_sub(FREE_UNITS).div_ceil(UNITS_PER_BUDGET)).expect("budget")).unwrap_or(0))
+        .map(|r| {
+            r.as_ref().map(|u| u16::try_from(u.saturating_sub(FREE_UNITS).div_ceil(UNITS_PER_BUDGET)).expect("budget")).unwrap_or(0)
+        })
         .collect();
     let (tx, entries) = build(net, s, &budgets);
     let res = execute(&tx, &entries).expect("ctx");
@@ -1373,7 +1379,13 @@ fn opt_batch_capacity() {
     };
     let (n100, why100) = max_at(true);
     let (n90, why90) = max_at(false);
-    println!("CAP max N = {n100} at the limits (N = {} is over: {}); {n90} within 90% (N = {} is over: {})", n100 + 1, why100.join(", "), n90 + 1, why90.join(", "));
+    println!(
+        "CAP max N = {n100} at the limits (N = {} is over: {}); {n90} within 90% (N = {} is over: {})",
+        n100 + 1,
+        why100.join(", "),
+        n90 + 1,
+        why90.join(", ")
+    );
     // each limit on its own: linear in N between N = 16 and the largest fitting row
     let (f, b) = (&caps[&16], &caps[&n100]);
     let per = |name: &str, a: u64, z: u64, limit: u64| {

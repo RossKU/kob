@@ -2801,7 +2801,9 @@ fn refresh_with(conn: &Connection, cov: &Hash32, how: Filled) -> DbResult<()> {
     // Only a closed order reads its closing event: an open one has none to find.
     let closing: Option<(String, Option<i64>, Option<i64>)> = match tip {
         Some(_) => None,
-        None => conn.prepare_cached(CLOSING_EVENT_SQL)?.query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?,
+        None => {
+            conn.prepare_cached(CLOSING_EVENT_SQL)?.query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?
+        }
     };
     let status = match (&tip, closing.as_ref().map(|c| c.0.as_str())) {
         (Some(_), _) if filled > 0 => "partial",
@@ -3692,10 +3694,31 @@ mod tests {
     fn a_bid_ended_by_a_short_fill_is_flagged() {
         // built by hand: the testkit's bid() reads the embedded artifacts' pinned hashes
         let b = BidState {
-            maker: [2; 32], token_cov_id: [0x70; 32], token_tpl_hash: [0; 32], tpl_prefix_len: 0, tpl_suffix_len: 0,
-            extension_commitment: [0xee; 32], scale: 1_000, min_fill: 1_000, price: 250_000_000, tip: 100_000, tif: 0,
-            active_from: 0, expiry_daa: 400_000_000, refund_tip: 0, reserve: 0, delivery_carrier: 1_000_000_000, interval: 0,
-            max_fill: 0, slope: 0, price_end: 0, decay_step: 1_000, mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+            maker: [2; 32],
+            token_cov_id: [0x70; 32],
+            token_tpl_hash: [0; 32],
+            tpl_prefix_len: 0,
+            tpl_suffix_len: 0,
+            extension_commitment: [0xee; 32],
+            scale: 1_000,
+            min_fill: 1_000,
+            price: 250_000_000,
+            tip: 100_000,
+            tif: 0,
+            active_from: 0,
+            expiry_daa: 400_000_000,
+            refund_tip: 0,
+            reserve: 0,
+            delivery_carrier: 1_000_000_000,
+            interval: 0,
+            max_fill: 0,
+            slope: 0,
+            price_end: 0,
+            decay_step: 1_000,
+            mode: 0,
+            recv_threshold: 0,
+            topup_tip: 0,
+            bought: 0,
         };
         let (n, unit) = (10, b.used(1).unwrap());
         let all = b.used(n).unwrap() + b.carrier_reserve() + b.reserve;
@@ -3725,7 +3748,9 @@ mod tests {
             .unwrap();
             refresh_order_state(&conn, &cov).unwrap();
             let (status, filled): (String, i64) = conn
-                .query_row("SELECT status, filled_amount FROM order_state WHERE order_id = ?1", [k as i64], |r| Ok((r.get(0)?, r.get(1)?)))
+                .query_row("SELECT status, filled_amount FROM order_state WHERE order_id = ?1", [k as i64], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
                 .unwrap();
             assert_eq!((status.as_str(), filled), (want, 22));
         }

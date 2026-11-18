@@ -298,8 +298,11 @@ fn a_retired_order_of_a_delivering_kind_is_cancelled_through_its_legacy_span() {
     assert_eq!((r.state_len, template(r.kind).state_len), (b.legacy_len, b.len()));
     let p = program_of(r.kind);
     let (state, value) = order_of(r.kind, p);
-    let built = build_cancel_order(&cancel(order(70, value, O, 1_000, state.clone()), Some(r.hash), vec![], vec![]), &kob_protocol::budget::lookup)
-        .unwrap();
+    let built = build_cancel_order(
+        &cancel(order(70, value, O, 1_000, state.clone()), Some(r.hash), vec![], vec![]),
+        &kob_protocol::budget::lookup,
+    )
+    .unwrap();
     match &built.plans[0] {
         SigPlan::RetiredCancel { state: span, .. } => assert_eq!(span.len(), b.legacy_len),
         other => panic!("{other:?}"),
@@ -325,6 +328,9 @@ fn a_retired_order_of_a_delivering_kind_is_cancelled_through_its_legacy_span() {
         x.mode = kob_protocol::state::MODE_ACCUMULATE;
     }
     assert!(r.encode_state(&accumulate).is_err());
-    assert!(build_cancel_order(&cancel(order(70, value, O, 1_000, accumulate), Some(r.hash), vec![], vec![]), &kob_protocol::budget::lookup)
-        .is_err());
+    assert!(build_cancel_order(
+        &cancel(order(70, value, O, 1_000, accumulate), Some(r.hash), vec![], vec![]),
+        &kob_protocol::budget::lookup
+    )
+    .is_err());
 }

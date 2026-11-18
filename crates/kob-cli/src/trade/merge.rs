@@ -415,7 +415,11 @@ pub fn run(args: &[String]) -> i32 {
             };
             spent.extend(link.funding.iter().map(|f| outpoint(&f.utxo)));
             if let Some(m) = ceiling.violation_of(&link.built) {
-                return Err(format!("link {} of {total}: {m} [{}] (earlier links were submitted; run kob merge again)", k + 1, crate::feecap::CODE));
+                return Err(format!(
+                    "link {} of {total}: {m} [{}] (earlier links were submitted; run kob merge again)",
+                    k + 1,
+                    crate::feecap::CODE
+                ));
             }
             let file = format!("{}.merge-{}.json", to_hex(&m.cov), k + 1);
             let sent = sign_validate_send(&link.built, &signer, c.out_dir.as_deref(), &file, summary.clone(), false, node, &c.network)

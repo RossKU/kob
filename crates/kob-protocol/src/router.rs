@@ -38,9 +38,9 @@ use std::sync::OnceLock;
 use kaspa_consensus_core::tx::ScriptPublicKey;
 use kaspa_txscript::pay_to_script_hash_script;
 use serde::{Deserialize, Serialize};
-use silverscript_abi::{ArtifactValue, SilAbiArtifact, encode_contract_entry_sig_script, encode_runtime_state_script};
+use silverscript_abi::{encode_contract_entry_sig_script, encode_runtime_state_script, ArtifactValue, SilAbiArtifact};
 
-use crate::artifacts::{TemplateId, template};
+use crate::artifacts::{template, TemplateId};
 use crate::error::{Error, Result};
 use crate::family::Family;
 use crate::json::to_hex;
@@ -888,7 +888,13 @@ impl IntentState {
                 .ok_or_else(|| Error::Invalid(format!("{}: state field {k} names no known token program", actor.name)))
         };
         // The lock's extension commitment: a KCC-20 token A pins it, a KRON one has none.
-        let ext = || -> Result<[u8; 32]> { if actor.shape.a_family == Family::Kcc20 { key("lock_extension") } else { Ok([0u8; 32]) } };
+        let ext = || -> Result<[u8; 32]> {
+            if actor.shape.a_family == Family::Kcc20 {
+                key("lock_extension")
+            } else {
+                Ok([0u8; 32])
+            }
+        };
         let st = match actor.shape.kind {
             IntentKind::KasToToken => IntentState::KasToToken {
                 payer: key("payer")?,
@@ -1116,7 +1122,7 @@ mod tests {
                 // KRON sell has no token B.
                 // The custody legs fit: the lock and two custodies are three token A inputs.
                 assert_eq!(fits3, !(s.a_family == Family::Kcc20 && s.bids == 3), "{} on {}", a.name, p3.name());
-                assert_eq!(a.token_slots().0.0, usize::from(s.kind.locks_tokens()) + a.custody, "{}", a.name);
+                assert_eq!(a.token_slots().0 .0, usize::from(s.kind.locks_tokens()) + a.custody, "{}", a.name);
             }
             if pa.is_some() {
                 assert!(!a.fits(Some(Kcc20KaspaCom025), pb), "{}", a.name);

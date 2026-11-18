@@ -58,16 +58,16 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{BudgetFn, Token, check_custody, check_custody_ext, check_token_input, holder_change, nb, one_borrow, pos, token_witness};
+use super::{check_custody, check_custody_ext, check_token_input, holder_change, nb, one_borrow, pos, token_witness, BudgetFn, Token};
 use crate::artifacts::TemplateId;
-use crate::error::{Error, Result, invalid};
+use crate::error::{invalid, Error, Result};
 use crate::family::Family;
 use crate::payload::{self, Record};
-use crate::router::{Actor, EXPIRE_MAX_FEE, FillArgs, IntentKind, IntentState, MIN_INTENT_VALUE, cancel_args, expire_args, fill_args};
+use crate::router::{cancel_args, expire_args, fill_args, Actor, FillArgs, IntentKind, IntentState, EXPIRE_MAX_FEE, MIN_INTENT_VALUE};
 use crate::script::p2pk_spk;
-use crate::state::{AskState, BidState, OrderState, Round, TIF_FOK, TIF_GTC, TokenState, quote_of};
+use crate::state::{quote_of, AskState, BidState, OrderState, Round, TokenState, TIF_FOK, TIF_GTC};
 use crate::tx::{
-    Arg, BuiltTx, Draft, FeeOptions, KeyUtxo, OrderUtxo, SEQUENCE_NONFINAL, SigPlan, TokenUtxo, Utxo, Witness, check_key,
+    check_key, Arg, BuiltTx, Draft, FeeOptions, KeyUtxo, OrderUtxo, SigPlan, TokenUtxo, Utxo, Witness, SEQUENCE_NONFINAL,
 };
 
 /// Index of the intent output in a creation transaction.
@@ -823,7 +823,7 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
     let ka = r.asks.len();
     let kb = r.bids.len();
     let a0 = kb + ka; // first token input
-    // The bids' bought-custodies follow the lock (token A inputs a0 + 1 ..), then the ask escrows.
+                      // The bids' bought-custodies follow the lock (token A inputs a0 + 1 ..), then the ask escrows.
     let c = actor.custody;
     let custody_base = if kind == IntentKind::TokenSwap { a0 + 1 + c } else { a0 };
     let bid_kind = TemplateId::KobBid.in_family(fam_a);

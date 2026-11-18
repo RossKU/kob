@@ -877,7 +877,9 @@ fn run_ops(op: crate::order::Op, args: &[String], usage_text: &str) -> i32 {
     if p.has("--all") {
         let listed = c.need_indexer().and_then(|ix| super::views::fetch_orders(ix, &signer.pubkey, None, false));
         match listed {
-            Ok(items) => sources.extend(items.iter().filter_map(|o| o["covenant_id"].as_str()).map(|id| Source::Id(id.to_string(), false))),
+            Ok(items) => {
+                sources.extend(items.iter().filter_map(|o| o["covenant_id"].as_str()).map(|id| Source::Id(id.to_string(), false)))
+            }
             Err(e) => {
                 eprintln!("error: {e}");
                 code = 1;

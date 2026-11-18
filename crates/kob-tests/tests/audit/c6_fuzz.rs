@@ -440,4 +440,3 @@ fn c6_pair_long_run_regressions() {
         }
     }
 }
-

@@ -40,7 +40,8 @@ use kaspa_addresses::Address;
 use kaspa_consensus_core::tx::{Transaction, UtxoEntry};
 use kaspa_txscript::pay_to_address_script;
 use kob_protocol::build::{
-    build_batch, build_send_tokens, route_batch, Batch, BidDelivery, Leg, Payment, SendTokens, SwapRoute, TokenPayee, TokenRecipient, TokenRef,
+    build_batch, build_send_tokens, route_batch, Batch, BidDelivery, Leg, Payment, SendTokens, SwapRoute, TokenPayee, TokenRecipient,
+    TokenRef,
 };
 use kob_protocol::payload::Record;
 use kob_protocol::state::{AskState, BidState, TokenState};

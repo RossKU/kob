@@ -95,7 +95,10 @@ pub fn pair(maker: u8, ask: bool, pa: TemplateId, pb: TemplateId, price: i64) ->
         amount_left: 10 * WHOLE,
         custody: 10 * WHOLE,
         s_ext: if ask { ext_for(pa) } else { ext_for(pb) },
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     };
     if !ask {
         s.custody = s.bid_escrow(s.amount_left, 4).unwrap();
@@ -255,7 +258,10 @@ pub fn cond_pair_ask(maker: u8, pa: TemplateId, pb: TemplateId) -> CondPairState
         rpt_pre: 0,
         rpt_until: 0,
         s_ext: p.s_ext,
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     }
 }
 
@@ -372,7 +378,9 @@ pub fn ifd_pair(maker: u8, buy: bool, pa: TemplateId, pb: TemplateId) -> IfdPair
         custody: 0,
         rpt_amount: 0,
         exit_state: IfdPairState::commit_exit(&exit),
-        exit_mode: 0, exit_recv_threshold: 0, exit_topup_tip: 0,
+        exit_mode: 0,
+        exit_recv_threshold: 0,
+        exit_topup_tip: 0,
     };
     s.custody = s.b_custody_needed().unwrap();
     s
@@ -1155,7 +1163,10 @@ fn grid_bought(t: TemplateId, tok: [u8; 32], c: [u8; 32], b: i64, ext: [u8; 32])
 fn grid_receive(tok: [u8; 32], maker: [u8; 32], have: i64, thr: i64, ext: [u8; 32]) -> TokenUtxo {
     let mut g = [0u8; 32];
     g[..8].copy_from_slice(&thr.to_le_bytes());
-    TokenUtxo { utxo: utxo(0xb8, 3 * KAS, 1_000, Some(tok)), state: TokenState::user(Family::Kcc20, have, maker, ext).with_borrow((1, g)) }
+    TokenUtxo {
+        utxo: utxo(0xb8, 3 * KAS, 1_000, Some(tok)),
+        state: TokenState::user(Family::Kcc20, have, maker, ext).with_borrow((1, g)),
+    }
 }
 
 /// The delivery block of form `f`: (mode, recvThreshold, topupTip, bought).

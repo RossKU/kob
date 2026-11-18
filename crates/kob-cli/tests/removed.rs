@@ -26,8 +26,21 @@ fn kob(args: &[&str]) -> (i32, String) {
 fn create(extra: &[&str]) -> (i32, String) {
     let fund = format!("{TX}:0:5000000000:{PK}");
     let mut a = vec![
-        "token", "create", "--name", "Test", "--ticker", "TEST", "--decimals", "8", "--supply", "5", "--network", "testnet-10",
-        "--dry-run", "--fund-utxo", &fund,
+        "token",
+        "create",
+        "--name",
+        "Test",
+        "--ticker",
+        "TEST",
+        "--decimals",
+        "8",
+        "--supply",
+        "5",
+        "--network",
+        "testnet-10",
+        "--dry-run",
+        "--fund-utxo",
+        &fund,
     ];
     a.extend(extra);
     kob(&a)

@@ -856,7 +856,8 @@ fn custody_problems(actor: &str, src: &str) -> Vec<String> {
     let c = custody_legs_of(actor);
     let (grp, book, handle) =
         if actor.starts_with("TokenSwap") { ("token_a_group", "bids", "token_a_type") } else { ("token", "book", "token_type") };
-    let decls: Vec<usize> = (1..=9).filter(|m| src.contains(&format!("KCC20State gen__{grp}_cust{m}_state = readInputStateWithTemplate("))).collect();
+    let decls: Vec<usize> =
+        (1..=9).filter(|m| src.contains(&format!("KCC20State gen__{grp}_cust{m}_state = readInputStateWithTemplate("))).collect();
     if decls != (1..=c).collect::<Vec<_>>() {
         p.push(format!("{actor}: observes custody inputs {decls:?}, its name declares {c}"));
     }
@@ -933,5 +934,8 @@ fn c4_router_custody_legs_check_every_custody() {
     let ext = "        require(gen__token_a_group_cust1_state.extension_commitment == gen__bids1_bid_state.extensionCommitment);\n";
     assert!(sw.contains(ext), "generated router changed: {ext}");
     assert!(!custody_problems("TokenSwap_swap2_c", &sw.replace(ext, "")).is_empty(), "a dropped swap check must be flagged");
-    assert!(!custody_problems("TokenSwap_swap2_c", &read("TokenSwap_swap2")).is_empty(), "a swap twin without its custody must be flagged");
+    assert!(
+        !custody_problems("TokenSwap_swap2_c", &read("TokenSwap_swap2")).is_empty(),
+        "a swap twin without its custody must be flagged"
+    );
 }

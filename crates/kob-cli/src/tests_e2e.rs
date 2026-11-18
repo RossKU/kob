@@ -582,8 +582,8 @@ fn amount_left_hint_finds_a_partial_fill_the_fallback_misses() {
     // Arguments. `--yes` belongs to `--cancel` and excludes `--dry-run`.
     let e = recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --yes")).unwrap_err();
     assert!(e.contains("belong to --cancel"), "{e}");
-    let e =
-        recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key-file k.txt --yes --dry-run")).unwrap_err();
+    let e = recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key-file k.txt --yes --dry-run"))
+        .unwrap_err();
     assert!(e.contains("exclude each other"), "{e}");
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key-file k.txt -y")).unwrap().yes);
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --amount-left abc")).is_err());
@@ -683,12 +683,7 @@ fn keyf(n: u8) -> String {
 
 /// The options of `prepare` at the relay floor.
 fn opts(op: order::Op, url: &str) -> order::Opts {
-    order::Opts {
-        op,
-        node: url.to_string(),
-        network: NET.to_string(),
-        fee: FeeOptions { fee_rate: None, fee_mode: FeeMode::Relay },
-    }
+    order::Opts { op, node: url.to_string(), network: NET.to_string(), fee: FeeOptions { fee_rate: None, fee_mode: FeeMode::Relay } }
 }
 
 /// The sweep or cancel of the view `doc` for `maker`, built and not signed; `Err` is a skip or a refusal.
@@ -1013,7 +1008,8 @@ fn input_formats_and_bad_input() {
         None
     )
     .is_err());
-    let k = recover::parse_args_with(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key-env MY_KEY"), None).unwrap();
+    let k =
+        recover::parse_args_with(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key-env MY_KEY"), None).unwrap();
     assert_eq!(k.key, Some(crate::token::KeySource::Env("MY_KEY".into())));
     assert!(
         recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --dry-run")).is_err(),
@@ -1023,7 +1019,9 @@ fn input_formats_and_bad_input() {
     let want = kob_protocol::artifacts::deployment_network().unwrap_or("mainnet");
     assert_eq!(recover::parse_args(&v("--from a.json --node ws://x:1")).unwrap().network, want);
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --network moon")).is_err());
-    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --fee-rate 5 --cancel --key-file k.txt")).is_err());
+    assert!(
+        recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --fee-rate 5 --cancel --key-file k.txt")).is_err()
+    );
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --bogus")).is_err());
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --lots 3")).is_err(), "no lot flags remain");
     let _ = std::fs::remove_dir_all(dir);

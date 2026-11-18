@@ -243,7 +243,11 @@ impl CurveAskState {
         let (h, len) = match b[at] {
             op @ 0x01..=0x4b => (1, op as usize),
             0x4c => (2, *b.get(at + 1).ok_or_else(|| err("truncated table push"))? as usize),
-            0x4d => (3, u16::from_le_bytes([*b.get(at + 1).unwrap_or(&0), *b.get(at + 2).ok_or_else(|| err("truncated table push"))?]) as usize),
+            0x4d => (
+                3,
+                u16::from_le_bytes([*b.get(at + 1).unwrap_or(&0), *b.get(at + 2).ok_or_else(|| err("truncated table push"))?])
+                    as usize,
+            ),
             op => return Err(err(format!("the table is not a data push ({op:#04x})"))),
         };
         if b.len() != at + h + len || len == 0 || len % 8 != 0 || push_header(len)?.len() != h {
@@ -307,10 +311,7 @@ impl CurveAskState {
         }
         let cap = (self.table.len() as i128) * (self.level_size as i128);
         if self.amount_left <= 0 || self.amount_left > self.total || (self.total as i128) > cap {
-            return e(format!(
-                "needs 0 < amountLeft ({}) <= total ({}) <= nLevels·levelSize ({cap})",
-                self.amount_left, self.total
-            ));
+            return e(format!("needs 0 < amountLeft ({}) <= total ({}) <= nLevels·levelSize ({cap})", self.amount_left, self.total));
         }
         if self.tip < 0 {
             return e(format!("tip must be >= 0, got {}", self.tip));

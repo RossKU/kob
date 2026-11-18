@@ -37,7 +37,9 @@ use secp256k1::{Keypair, Secp256k1, SecretKey};
 use silverscript_abi::{ArtifactValue, SilAbiArtifact};
 use silverscript_lang::compiler::CompileOptions;
 
-use common::{bytecode, compile_contract, compiled_template_parts_and_hash, encode_entry_sig_script, push_redeem_script, state_layout};
+use common::{
+    bytecode, compile_contract, compiled_template_parts_and_hash, encode_entry_sig_script, push_redeem_script, state_layout,
+};
 
 const KAS: i64 = 100_000_000;
 const TOKEN_COV: Hash = Hash::from_bytes([0x70; 32]);
@@ -237,14 +239,35 @@ enum Wit {
 }
 #[derive(Clone)]
 enum Role {
-    Call { art: SilAbiArtifact, entry: &'static str, args: Vec<ArtifactValue>, name: &'static str },
-    TokLeader { redeem: Vec<u8>, next: Vec<ArtifactValue>, wit: Wit },
-    TokDelegate { redeem: Vec<u8>, wit: Wit },
-    P2pk { kp: Keypair },
+    Call {
+        art: SilAbiArtifact,
+        entry: &'static str,
+        args: Vec<ArtifactValue>,
+        name: &'static str,
+    },
+    TokLeader {
+        redeem: Vec<u8>,
+        next: Vec<ArtifactValue>,
+        wit: Wit,
+    },
+    TokDelegate {
+        redeem: Vec<u8>,
+        wit: Wit,
+    },
+    P2pk {
+        kp: Keypair,
+    },
     /// An order entry whose one argument is the key's SIGHASH_ALL signature (cancel).
-    CallSig { art: SilAbiArtifact, entry: &'static str, kp: Keypair },
+    CallSig {
+        art: SilAbiArtifact,
+        entry: &'static str,
+        kp: Keypair,
+    },
     /// A crafted input: this signature script as it is.
-    RawSs { ss: Vec<u8>, name: &'static str },
+    RawSs {
+        ss: Vec<u8>,
+        name: &'static str,
+    },
 }
 #[derive(Clone)]
 struct Inp {
@@ -444,7 +467,13 @@ fn bad_at(t: &Token, s: &Scn, expect: usize, only: bool) {
         println!("ABLATION-PASS {} @{} all_inputs_ok={}", s.name, t.name, res.iter().all(|r| r.is_ok()));
         return;
     }
-    assert!(r.is_err(), "{} @{}: expected input {expect} ({}) to REJECT but it passed", s.name, t.name, role_name(&s.inputs[expect].role));
+    assert!(
+        r.is_err(),
+        "{} @{}: expected input {expect} ({}) to REJECT but it passed",
+        s.name,
+        t.name,
+        role_name(&s.inputs[expect].role)
+    );
     let others: Vec<String> = res.iter().enumerate().filter(|(i, r)| *i != expect && r.is_err()).map(|(i, _)| i.to_string()).collect();
     if only {
         assert!(others.is_empty(), "{} @{}: inputs {} also reject: {res:?}", s.name, t.name, others.join(","));
@@ -760,15 +789,33 @@ fn modes_fill_positive() {
         let c0 = ok(&f.t, &sell(&f, "PM0a mode 0 continuing fill: new plain UTXO of n", &p0, v0(), n, 0, Lead::Seller));
         ok(&f.t, &sell(&f, "PM0b mode 0 ignores form (form 7)", &p0, v0(), n, 7, Lead::Seller));
         ok(&f.t, &sell(&f, "PM0c mode 0 ending fill: the remainder rides on the delivery", &p0, v0(), 10_000, 0, Lead::Seller));
-        ok(&f.t, &sell(&f, "PM0d mode 0 IOC ending fill: the remainder goes to the refund slot", &p0.tif(IOC), v0(), n, 0, Lead::Seller));
+        ok(
+            &f.t,
+            &sell(&f, "PM0d mode 0 IOC ending fill: the remainder goes to the refund slot", &p0.tif(IOC), v0(), n, 0, Lead::Seller),
+        );
         ok(&f.t, &cross(&f, "PM0e mode 0 bid x ask", &p0, v0(), n, 0, Lead::Seller));
 
         // mode 1
-        let c1a = ok(&f.t, &sell(&f, "PM1a mode 1 first fill creates the bought-custody (form ignored: 2)", &p1, v0(), n, 2, Lead::Seller));
+        let c1a =
+            ok(&f.t, &sell(&f, "PM1a mode 1 first fill creates the bought-custody (form ignored: 2)", &p1, v0(), n, 2, Lead::Seller));
         let p1b = p1.bought(4_000);
         let c1b = ok(&f.t, &sell(&f, "PM1b mode 1 later fill continues the bought-custody", &p1b, v1, n, 0, Lead::Custody(DC)));
-        let c1c = ok(&f.t, &sell(&f, "PM1c mode 1 ending fill: bought + n to the maker as one plain UTXO", &p1b, v1, 6_000, 0, Lead::Custody(DC)));
-        ok(&f.t, &sell(&f, "PM1d mode 1 IOC ending fill with a custody: plain bought + n and the refund slot", &p1b.tif(IOC), v1, n, 0, Lead::Custody(DC)));
+        let c1c = ok(
+            &f.t,
+            &sell(&f, "PM1c mode 1 ending fill: bought + n to the maker as one plain UTXO", &p1b, v1, 6_000, 0, Lead::Custody(DC)),
+        );
+        ok(
+            &f.t,
+            &sell(
+                &f,
+                "PM1d mode 1 IOC ending fill with a custody: plain bought + n and the refund slot",
+                &p1b.tif(IOC),
+                v1,
+                n,
+                0,
+                Lead::Custody(DC),
+            ),
+        );
         ok(&f.t, &sell(&f, "PM1e mode 1 IOC first fill ends: plain n, no custody", &p1.tif(IOC), v0(), n, 0, Lead::Seller));
         ok(&f.t, &sell(&f, "PM1f mode 1 first fill that buys everything: plain n", &p1, v0(), 10_000, 0, Lead::Seller));
         ok(&f.t, &cross(&f, "PM1g mode 1 bid x ask, first fill", &p1, v0(), n, 0, Lead::Seller));
@@ -779,13 +826,36 @@ fn modes_fill_positive() {
         // mode 2
         let c2a = ok(&f.t, &sell(&f, "PM2a mode 2 form 0: new plain UTXO", &p2, v0(), n, 0, Lead::Seller));
         let c2b = ok(&f.t, &sell(&f, "PM2b mode 2 form 1: new receive UTXO", &p2, v0(), n, 1, Lead::Seller));
-        let c2c = ok(&f.t, &sell(&f, "PM2c mode 2 form 2: top-up, the filler keeps topupTip", &p2, v0(), n, 2, Lead::Recv(r, CARRIER)));
-        ok(&f.t, &sell(&f, "PM2d mode 2 form 2 ending top-up: the remainder rides on the receive UTXO", &p2, v0(), 10_000, 2, Lead::Recv(r, CARRIER)));
+        let c2c =
+            ok(&f.t, &sell(&f, "PM2c mode 2 form 2: top-up, the filler keeps topupTip", &p2, v0(), n, 2, Lead::Recv(r, CARRIER)));
+        ok(
+            &f.t,
+            &sell(
+                &f,
+                "PM2d mode 2 form 2 ending top-up: the remainder rides on the receive UTXO",
+                &p2,
+                v0(),
+                10_000,
+                2,
+                Lead::Recv(r, CARRIER),
+            ),
+        );
         ok(&f.t, &sell(&f, "PM2e mode 2 form 1 ending fill (IOC): refund slot", &p2.tif(IOC), v0(), n, 1, Lead::Seller));
         ok(&f.t, &sell(&f, "PM2f mode 2 form 2 ending top-up (IOC): refund slot", &p2.tif(IOC), v0(), n, 2, Lead::Recv(r, CARRIER)));
         ok(&f.t, &sell(&f, "PM2g mode 2 form 0 ending fill", &p2, v0(), 10_000, 0, Lead::Seller));
         ok(&f.t, &sell(&f, "PM2h mode 2 form 1 ending fill", &p2, v0(), 10_000, 1, Lead::Seller));
-        ok(&f.t, &sell(&f, "PM2i top-up of a receive UTXO with a higher threshold (3,000)", &p2, v0(), 4_000, 2, Lead::Recv(recv(7_000, &m, 3_000), CARRIER)));
+        ok(
+            &f.t,
+            &sell(
+                &f,
+                "PM2i top-up of a receive UTXO with a higher threshold (3,000)",
+                &p2,
+                v0(),
+                4_000,
+                2,
+                Lead::Recv(recv(7_000, &m, 3_000), CARRIER),
+            ),
+        );
         ok(&f.t, &sell(&f, "PM2j top-up of a receive UTXO holding 0 units", &p2, v0(), n, 2, Lead::Recv(recv(0, &m, THR), CARRIER)));
         ok(&f.t, &cross(&f, "PM2k mode 2 bid x ask, top-up", &p2, v0(), n, 2, Lead::Recv(r, CARRIER)));
         ok(&f.t, &cross(&f, "PM2l mode 2 bid x ask, form 1", &p2, v0(), n, 1, Lead::Seller));
@@ -828,11 +898,20 @@ fn modes_accumulate_lifecycle() {
         assert_eq!(v1, v_after_first(4));
         let p4 = p.bought(4_000);
         assert_eq!(s1.outputs[1].script_public_key, spk_of(&bid(&f, &p4)));
-        let s2 = sell(&f, "PL2 fill 2 (3 whole): the custody continues with 7,000, no carrier leaves", &p4, v1, 3_000, 0, Lead::Custody(DC));
+        let s2 = sell(
+            &f,
+            "PL2 fill 2 (3 whole): the custody continues with 7,000, no carrier leaves",
+            &p4,
+            v1,
+            3_000,
+            0,
+            Lead::Custody(DC),
+        );
         ok(&f.t, &s2);
         let v2 = s2.outputs[1].value as i64;
         assert_eq!(v2, v1 - spend(3));
-        let s3 = sell(&f, "PL3 fill 3 (3 whole) ends the order: 10,000 to the maker", &p.bought(7_000), v2, 3_000, 0, Lead::Custody(DC));
+        let s3 =
+            sell(&f, "PL3 fill 3 (3 whole) ends the order: 10,000 to the maker", &p.bought(7_000), v2, 3_000, 0, Lead::Custody(DC));
         ok(&f.t, &s3);
         assert_eq!(s3.outputs[0].script_public_key, f.t.spk(&plain(10_000, &pk(&f.maker))));
     }
@@ -864,13 +943,15 @@ fn modes_fill_negatives() {
         set_tok_out(&f, &mut s, 0, 1, 0, recv(n, &m, THR));
         bad_only(&f.t, &s, 0);
         // the mode-2 shape of a top-up on a mode-0 order (no carrier taken, the filler keeps topupTip)
-        let mut s = sell(&f, "NM03 mode 0 order, top-up of the maker's receive UTXO (form 2)", &p2, v0(), n, 2, Lead::Recv(r, CARRIER));
+        let mut s =
+            sell(&f, "NM03 mode 0 order, top-up of the maker's receive UTXO (form 2)", &p2, v0(), n, 2, Lead::Recv(r, CARRIER));
         s.inputs[0] = call(&bid(&f, &p0), "fill", fill_args(n, 1, 2), "bid.fill", v0(), BID_COV);
         s.outputs[1].script_public_key = spk_of(&bid(&f, &p0));
         bad_only(&f.t, &s, 0);
         // the same two on a mode-0 order whose state carries mode 2's fields anyway (placement does not check them on chain)
         let p0x = BidP { thr: THR, ttip: TT, ..p0 };
-        let mut s = sell(&f, "NM02b mode 0 order with recvThreshold set, receive-state delivery (form 1)", &p0x, v0(), n, 1, Lead::Seller);
+        let mut s =
+            sell(&f, "NM02b mode 0 order with recvThreshold set, receive-state delivery (form 1)", &p0x, v0(), n, 1, Lead::Seller);
         set_tok_out(&f, &mut s, 0, 1, 0, recv(n, &m, THR));
         bad_only(&f.t, &s, 0);
         let mut s = sell(&f, "NM03b mode 0 order with recvThreshold set, top-up (form 2)", &p2, v0(), n, 2, Lead::Recv(r, CARRIER));
@@ -890,7 +971,8 @@ fn modes_fill_negatives() {
         let mut s = sell(&f, "NM07 mode 2 top-up taking 1 sompi more than topupTip", &p2, v0(), n, 2, Lead::Recv(r, CARRIER));
         shift(&mut s, 1, 3, 1);
         bad_only(&f.t, &s, 0);
-        let mut s = sell(&f, "NM07b mode 2 form 1 continuation 1 sompi short (more than the carrier taken)", &p2, v0(), n, 1, Lead::Seller);
+        let mut s =
+            sell(&f, "NM07b mode 2 form 1 continuation 1 sompi short (more than the carrier taken)", &p2, v0(), n, 1, Lead::Seller);
         shift(&mut s, 1, 3, 1);
         bad_only(&f.t, &s, 0);
 
@@ -907,7 +989,8 @@ fn modes_fill_negatives() {
         let mut s = sell(&f, "NF04 mode 2 form 1 delivering a plain state", &p2, v0(), n, 0, Lead::Seller);
         set_args(&mut s, fill_args(n, 1, 1));
         bad_only(&f.t, &s, 0);
-        let mut s = sell(&f, "NF05 mode 2 form 1 receive UTXO with a lower threshold than recvThreshold", &p2, v0(), n, 1, Lead::Seller);
+        let mut s =
+            sell(&f, "NF05 mode 2 form 1 receive UTXO with a lower threshold than recvThreshold", &p2, v0(), n, 1, Lead::Seller);
         set_tok_out(&f, &mut s, 0, 1, 0, recv(n, &m, 10));
         bad_only(&f.t, &s, 0);
         let mut s = sell(&f, "NF06 mode 2 form 1 receive UTXO for another key", &p2, v0(), n, 1, Lead::Seller);
@@ -924,17 +1007,30 @@ fn modes_fill_negatives() {
         let p2b = p2.bought(5);
         bad_only(&f.t, &sell(&f, "NS04 mode 2 order with bought 5, form 1", &p2b, v0(), n, 1, Lead::Seller), 0);
         let p1n = p1.bought(-5);
-        let mut s = sell(&f, "NS05 mode 1 order with bought -5: first fill delivers a custody of n - 5", &p1, v0(), n, 0, Lead::Seller);
+        let mut s =
+            sell(&f, "NS05 mode 1 order with bought -5: first fill delivers a custody of n - 5", &p1, v0(), n, 0, Lead::Seller);
         s.inputs[0] = call(&bid(&f, &p1n), "fill", fill_args(n, 1, 0), "bid.fill", v0(), BID_COV);
         set_tok_out(&f, &mut s, 0, 1, 0, custody(n - 5, BID_COV));
         s.outputs[1].script_public_key = spk_of(&bid(&f, &p1n.bought(n - 5)));
         set_tok_out(&f, &mut s, 2, 1, 1, plain(10_000 - n + 5, &tk));
         bad_only(&f.t, &s, 0);
         let p2t0 = BidP { thr: 0, ..p2 };
-        bad_only(&f.t, &sell(&f, "NS06 mode 2 recvThreshold 0, form 1 (a receive UTXO of threshold 0)", &p2t0, v0(), n, 1, Lead::Seller), 0);
         bad_only(
             &f.t,
-            &sell(&f, "NS07 mode 2 recvThreshold 0, top-up of a threshold-10 receive UTXO", &p2t0, v0(), n, 2, Lead::Recv(recv(7_000, &m, 10), CARRIER)),
+            &sell(&f, "NS06 mode 2 recvThreshold 0, form 1 (a receive UTXO of threshold 0)", &p2t0, v0(), n, 1, Lead::Seller),
+            0,
+        );
+        bad_only(
+            &f.t,
+            &sell(
+                &f,
+                "NS07 mode 2 recvThreshold 0, top-up of a threshold-10 receive UTXO",
+                &p2t0,
+                v0(),
+                n,
+                2,
+                Lead::Recv(recv(7_000, &m, 10), CARRIER),
+            ),
             0,
         );
         let p2big = BidP { ttip: DC + 1, ..p2 };
@@ -948,7 +1044,8 @@ fn modes_fill_negatives() {
         bad_only(&f.t, &s, 0);
         // a 1-unit UTXO of the order's id stands in for the custody (the real one would be stranded)
         let mut s = later("NC02 a 1-unit UTXO of the order's id named as the custody");
-        s.inputs[1] = tok_leader(&f.t, DC, &custody(1, BID_COV), &[custody(4_000 + n, BID_COV), plain(10_000 - n - 3_999, &tk)], Wit::CovId);
+        s.inputs[1] =
+            tok_leader(&f.t, DC, &custody(1, BID_COV), &[custody(4_000 + n, BID_COV), plain(10_000 - n - 3_999, &tk)], Wit::CovId);
         set_tok_out(&f, &mut s, 2, 1, 1, plain(10_000 - n - 3_999, &tk));
         bad_only(&f.t, &s, 0);
         let mut s = later("NC03 continuing fill delivers bought + n to the maker's key");
@@ -1012,7 +1109,15 @@ fn modes_fill_negatives() {
         // a dust fill (n < minFill) that leaves buying power: with a custody no carrier is reserved, so the half carrier
         // left after the fill still buys about 200 base units, and the fill does not take all the buying power
         let vd = quote(500, P250 + TIP, SCALE - 1) + DC / 2;
-        let mut s = sell(&f, "NC16 a 500-unit fill (minFill 1,000) leaves half a carrier of buying power", &p1b.tif(IOC), vd, 500, 0, Lead::Custody(DC));
+        let mut s = sell(
+            &f,
+            "NC16 a 500-unit fill (minFill 1,000) leaves half a carrier of buying power",
+            &p1b.tif(IOC),
+            vd,
+            500,
+            0,
+            Lead::Custody(DC),
+        );
         s.inputs[0] = call(&bid(&f, &p1b), "fill", fill_args(500, 1, 0), "bid.fill", vd, BID_COV);
         bad_only(&f.t, &s, 0);
         // the seller keeps the bought tokens: the custody continues with n, the order with bought = n
@@ -1022,7 +1127,15 @@ fn modes_fill_negatives() {
         s.outputs[1].script_public_key = spk_of(&bid(&f, &p1b.bought(n)));
         bad_only(&f.t, &s, 0);
         // a terminal fill with a refund slot: the released custody keeps its KAS
-        let mut s = sell(&f, "NC18 IOC ending fill with a refund: the custody released with 1 sompi less KAS", &p1b.tif(IOC), v1, n, 0, Lead::Custody(DC));
+        let mut s = sell(
+            &f,
+            "NC18 IOC ending fill with a refund: the custody released with 1 sompi less KAS",
+            &p1b.tif(IOC),
+            v1,
+            n,
+            0,
+            Lead::Custody(DC),
+        );
         shift(&mut s, 0, 2, 1);
         bad_only(&f.t, &s, 0);
 
@@ -1126,7 +1239,15 @@ fn modes_stray_guard() {
         }
         // a top-up with a stray of the order's id next to the receive UTXO
         let r = recv(7_000, &pk(&f.maker), THR);
-        let mut s = sell(&f, "NG06 top-up with a stray of the order's id as a delegate", &BidP::new(&f.maker, 2), v0(), n, 2, Lead::Recv(r, CARRIER));
+        let mut s = sell(
+            &f,
+            "NG06 top-up with a stray of the order's id as a delegate",
+            &BidP::new(&f.maker, 2),
+            v0(),
+            n,
+            2,
+            Lead::Recv(r, CARRIER),
+        );
         s.inputs.insert(3, tok_delegate(&f.t, CARRIER, &custody(5, BID_COV), Wit::CovId));
         set_tok_out(&f, &mut s, 2, 1, 1, plain(10_000 - n + 5, &tk));
         s.outputs[3].value += CARRIER as u64;
@@ -1233,9 +1354,17 @@ fn modes_refund_cancel_claim() {
         bad_only(&f.t, &refund("NR04 refund that keeps the custody owned by the dead order", Some((have, have, DC))), 0);
         bad_only(&f.t, &refund("NR05 refund that releases the custody borrow-enabled", Some((have, recv(4_000, &m, THR), DC))), 0);
         // the custody input is not the order's custody (a 1-unit UTXO of the order's id)
-        bad_only(&f.t, &refund("NR06 refund naming a 1-unit UTXO of the order's id as the custody", Some((custody(1, BID_COV), plain(1, &m), DC))), 0);
+        bad_only(
+            &f.t,
+            &refund(
+                "NR06 refund naming a 1-unit UTXO of the order's id as the custody",
+                Some((custody(1, BID_COV), plain(1, &m), DC)),
+            ),
+            0,
+        );
         // one unit of the custody to another key
-        let mut s = refund("NR07 refund that releases bought - 1 to the maker and 1 unit to another key", Some((have, plain(3_999, &m), DC)));
+        let mut s =
+            refund("NR07 refund that releases bought - 1 to the maker and 1 unit to another key", Some((have, plain(3_999, &m), DC)));
         if let Role::TokLeader { next, .. } = &mut s.inputs[1].role {
             next.push(plain(1, &o).val());
         }
@@ -1256,7 +1385,10 @@ fn modes_refund_cancel_claim() {
         s.inputs.push(p2pk_in(&f.taker, KAS));
         bad_only(&f.t, &s, 0);
         // a 10,000-unit stray of the order's id named as the custody (bought 4,000): 4,000 to the maker, 6,000 to another key
-        let mut s = refund("NR12 refund naming a 10,000-unit stray of the order's id as the custody", Some((custody(10_000, BID_COV), plain(4_000, &m), DC)));
+        let mut s = refund(
+            "NR12 refund naming a 10,000-unit stray of the order's id as the custody",
+            Some((custody(10_000, BID_COV), plain(4_000, &m), DC)),
+        );
         if let Role::TokLeader { next, .. } = &mut s.inputs[1].role {
             next.push(plain(6_000, &o).val());
         }
@@ -1302,7 +1434,11 @@ fn modes_refund_cancel_claim() {
             close(
                 Scn {
                     name: name.into(),
-                    inputs: vec![cancel_in(&b1, v1, BID_COV, kp), tok_leader(&f.t, DC, &have, &[plain(4_000, &m)], Wit::CovId), p2pk_in(&f.maker, 2 * KAS)],
+                    inputs: vec![
+                        cancel_in(&b1, v1, BID_COV, kp),
+                        tok_leader(&f.t, DC, &have, &[plain(4_000, &m)], Wit::CovId),
+                        p2pk_in(&f.maker, 2 * KAS),
+                    ],
                     outputs: vec![out(v1 + DC, spk_of(&fresh), Some((0, BID_COV))), tok_out(&f.t, DC, &plain(4_000, &m), 1)],
                 },
                 &f.maker,
@@ -1582,7 +1718,11 @@ fn modes_ordering_and_slots() {
             )
         };
         ok(&f.t, &eight(false, "PO08 a top-up by the bid at input 1 (output 0 a KAS output)"));
-        bad_only(&f.t, &eight(true, "NO08 one bid: the receive UTXO's successor at output 0, the bid's output 1 a copy of its state"), 1);
+        bad_only(
+            &f.t,
+            &eight(true, "NO08 one bid: the receive UTXO's successor at output 0, the bid's output 1 a copy of its state"),
+            1,
+        );
 
         // O5 a refund-carrying terminal bid (IOC, input 0) next to a GTC mode-2 bid (input 1): only the terminal bid may top up
         let pr = BidP::new(&f.maker, 2).tif(IOC);
@@ -1754,6 +1894,9 @@ fn modes_budgets_and_layout() {
             c2c.fee as i64 - c2b.fee as i64,
             x2c.fee as i64 - x2b.fee as i64
         );
-        println!("FEE @{}: bid x ask mode 0 {} sompi; compute mass mode 0 {} transient {}", f.t.name, x0.fee, c0.compute, c0.transient);
+        println!(
+            "FEE @{}: bid x ask mode 0 {} sompi; compute mass mode 0 {} transient {}",
+            f.t.name, x0.fee, c0.compute, c0.transient
+        );
     }
 }

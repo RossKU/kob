@@ -1425,7 +1425,19 @@ impl Ed {
         swap_key(&mut self.sighash_types, a, b);
         swap_key(&mut self.raw_sigscripts, a, b);
         swap_key(&mut self.dlv_in, a, b);
-        let bl: BTreeSet<usize> = self.borrow_leaders.iter().map(|&k| if k == a { b } else if k == b { a } else { k }).collect();
+        let bl: BTreeSet<usize> = self
+            .borrow_leaders
+            .iter()
+            .map(|&k| {
+                if k == a {
+                    b
+                } else if k == b {
+                    a
+                } else {
+                    k
+                }
+            })
+            .collect();
         self.borrow_leaders = bl;
         for o in self.tx.outputs.iter_mut() {
             if let Some(c) = o.covenant.as_mut() {

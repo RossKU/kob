@@ -57,7 +57,8 @@ pub fn take_curve(s: &CurveAskState, n: i64) -> Batch {
 /// A matcher crosses a bid of maker B (at 2.70 KAS + tip, funded for `n`, delivery `dlv`) with the curve.
 pub fn cross_curve(s: &CurveAskState, n: i64, bs: BidState, dlv: Option<BidDelivery>) -> Batch {
     let v = bs.escrow(n, 1).expect("escrow") as u64;
-    let mut b = batch(vec![Leg::Bid { order: order(43, v, cov(0xb4), 1_000, bs), amount: n, t: None, delivery: dlv }, curve_leg(s, n)]);
+    let mut b =
+        batch(vec![Leg::Bid { order: order(43, v, cov(0xb4), 1_000, bs), amount: n, t: None, delivery: dlv }, curve_leg(s, n)]);
     b.change = Some(pk(MATCHER));
     b.funding = vec![key_utxo(44, MATCHER, 10 * KAS)];
     b

@@ -920,8 +920,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kob-token-keys-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join(tag);
-        std::fs::write(&p, format!("{hex}
-")).unwrap();
+        std::fs::write(
+            &p,
+            format!(
+                "{hex}
+"
+            ),
+        )
+        .unwrap();
         p.display().to_string()
     }
     const TX: &str = "0707070707070707070707070707070707070707070707070707070707070707";
@@ -1155,8 +1161,7 @@ mod tests {
             format!("--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:1:5000000000:{PK} --supply 1 --network testnet-10");
         assert!(parse_issue_args(&v(&format!("{base} --dry-run --yes"))).unwrap_err().contains("exclude each other"));
         assert!(parse_issue_args(&v(&format!("{base} --dry-run -y"))).is_err());
-        let a = parse_issue_args(&v(&format!("{base} --node ws://x:1 --key-file {} --yes", key_file("kpk", PK))))
-        .unwrap();
+        let a = parse_issue_args(&v(&format!("{base} --node ws://x:1 --key-file {} --yes", key_file("kpk", PK)))).unwrap();
         assert!(a.yes && !a.dry_run);
     }
 

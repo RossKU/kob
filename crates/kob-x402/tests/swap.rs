@@ -1778,7 +1778,12 @@ fn custody_quote(bid: &OrderUtxo<BidState>, cust: &TokenUtxo) -> Quote {
 
 fn add_token_input(tx: &mut Transaction, entries: &mut Vec<UtxoEntry>, plans: &mut Vec<SigPlan>, t: &TokenUtxo) {
     let tid = kaspa_consensus_core::tx::TransactionId::from_bytes(t.utxo.transaction_id);
-    tx.inputs.push(TransactionInput::new_with_compute_budget(kaspa_consensus_core::tx::TransactionOutpoint::new(tid, t.utxo.index), vec![], 0, 10));
+    tx.inputs.push(TransactionInput::new_with_compute_budget(
+        kaspa_consensus_core::tx::TransactionOutpoint::new(tid, t.utxo.index),
+        vec![],
+        0,
+        10,
+    ));
     entries.push(UtxoEntry::new(
         t.utxo.amount,
         t.state.spk_with(token_template(T)),
@@ -1802,7 +1807,8 @@ fn x1_a_swap_through_a_mode_1_bids_bought_custody_verifies_and_the_engine_accept
     let prep = f.prepare(&offer, &quote, &f.funds(false));
     assert!(prep.built.tx.inputs.iter().any(|i| (i.transaction_id, i.index) == (cust.utxo.transaction_id, cust.utxo.index)));
     let p = prep.complete(&prep.sign_with(&keys()).unwrap()).unwrap();
-    let (v, facts) = kob_x402::swap::verify_swap_facts(&f.ctx(), &offer, &p.payload, RH).unwrap_or_else(|e| panic!("verification failed: {e}"));
+    let (v, facts) =
+        kob_x402::swap::verify_swap_facts(&f.ctx(), &offer, &p.payload, RH).unwrap_or_else(|e| panic!("verification failed: {e}"));
     assert_eq!(facts.legs[0].custody, Some(op(&cust.utxo)));
     assert_eq!(facts.payer_spent, 3 * WHOLE as u64);
     assert_eq!(v.order_inputs, vec![op(&bid.utxo)]);
@@ -1829,7 +1835,8 @@ fn x1_a_custody_bid_without_its_custody_input_is_rejected() {
     let (bid, cust) = custody_bid(&f, 44, 0xc3, 0, 5, 0);
     let offer = f.kas_offer(KAS);
     let prep = f.prepare(&offer, &custody_quote(&bid, &cust), &f.funds(false));
-    let at = prep.built.tx.inputs.iter().position(|i| i.index == cust.utxo.index && i.transaction_id == cust.utxo.transaction_id).unwrap();
+    let at =
+        prep.built.tx.inputs.iter().position(|i| i.index == cust.utxo.index && i.transaction_id == cust.utxo.transaction_id).unwrap();
     let p = attack(&prep, |tx, entries, plans| {
         tx.inputs.remove(at);
         entries.remove(at);

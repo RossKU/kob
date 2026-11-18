@@ -6370,7 +6370,10 @@ fn dm_delivery_rules_negative() {
         bad(dm_fill(&f, &k(CondBP { topup_tip: -1, ..mode2.clone() })).0, &format!("DM2-10 form {form}: topupTip < 0"));
     }
     // form 0 reads neither field: a mode-2 order with recvThreshold 0 still fills by a new plain UTXO
-    run_ok(n, &with_name(dm_fill(&f, &DmK::new(CondBP { recv_threshold: 0, ..mode2.clone() }, 4)).0, "DM2 form 0 ignores recvThreshold"));
+    run_ok(
+        n,
+        &with_name(dm_fill(&f, &DmK::new(CondBP { recv_threshold: 0, ..mode2.clone() }, 4)).0, "DM2 form 0 ignores recvThreshold"),
+    );
 
     // mode 1, the first fill: the delivery is the custody of n with the carrier
     let (mut s, ix) = dm_fill(&f, &DmK::new(fresh1.clone(), 4));
@@ -6449,13 +6452,19 @@ fn dm_delivery_rules_negative() {
     bad(s, "DM2-29 top-up of a plain UTXO of the maker (borrow disabled)");
     let (mut s, ix) = dm_fill(&f, &k2);
     let e = &s.inputs[ix.tok].entry;
-    s.inputs[ix.tok].entry = UtxoEntry::new(e.amount, ScriptPublicKey::new(0, vec![OpTrue].into()), e.block_daa_score, false, e.covenant_id);
+    s.inputs[ix.tok].entry =
+        UtxoEntry::new(e.amount, ScriptPublicKey::new(0, vec![OpTrue].into()), e.block_daa_score, false, e.covenant_id);
     bad(s, "DM2-30 top-up: the receive UTXO is not the P2SH of the script it pushes");
     let (mut s, ix) = dm_fill(&f, &k2);
-    dm_set_d(&f, &mut s, ix.lead, &recv.with(|r| {
-        r.amount += 4 * WHOLE;
-        r.guard = thr_guard(DM_THR + 1);
-    }));
+    dm_set_d(
+        &f,
+        &mut s,
+        ix.lead,
+        &recv.with(|r| {
+            r.amount += 4 * WHOLE;
+            r.guard = thr_guard(DM_THR + 1);
+        }),
+    );
     bad(s, "DM2-31 top-up: the successor's threshold changed");
     let (mut s, ix) = dm_fill(&f, &k2);
     let cont = ix.cont.unwrap();
@@ -6473,7 +6482,13 @@ fn dm_delivery_rules_negative() {
     s.outputs[0].value = DM_RECV_KAS as u64;
     rebalance(&mut s, &ix);
     bad(s, "DM2-34 top-up ends with an escrow short of the tip (rem + KAS on D < 0)");
-    run_ok(n, &with_name(dm_fill(&f, &DmK { v: Some(4 * (end.worst() + end.tip) + DM_TT), ..short.clone() }).0, "DM2 top-up ends, escrow exactly price + tip"));
+    run_ok(
+        n,
+        &with_name(
+            dm_fill(&f, &DmK { v: Some(4 * (end.worst() + end.tip) + DM_TT), ..short.clone() }).0,
+            "DM2 top-up ends, escrow exactly price + tip",
+        ),
+    );
     // the token program: a top-up must raise the receive UTXO above its threshold (spec section 6.6), the builder uses form 1
     let (s, ix) = dm_fill(&f, &DmK { recv: Some(recv.with(|r| r.guard = thr_guard(4 * WHOLE))), ..k2.clone() });
     run_bad(n, &with_name(s, "DM2-35 top-up of n <= the receive UTXO's threshold (token program)"), ix.lead);
@@ -6567,7 +6582,8 @@ fn dm_stray_guard() {
     run_bad(n, &with_name(s, "DM3-04 the named custody is borrow-enabled"), 0);
     let (mut s, ix) = dm_fill(&f, &DmK::new(held.clone(), 4));
     let e = &s.inputs[ix.tok].entry;
-    s.inputs[ix.tok].entry = UtxoEntry::new(e.amount, ScriptPublicKey::new(0, vec![OpTrue].into()), e.block_daa_score, false, e.covenant_id);
+    s.inputs[ix.tok].entry =
+        UtxoEntry::new(e.amount, ScriptPublicKey::new(0, vec![OpTrue].into()), e.block_daa_score, false, e.covenant_id);
     run_bad(n, &with_name(s, "DM3-05 the named custody is not the P2SH of the script it pushes"), 0);
     // the fill names the taker's tokens: the custody is then an unnamed input of the order's id
     let (mut s, ix) = dm_fill(&f, &DmK::new(held.clone(), 4));
@@ -6729,7 +6745,15 @@ fn dm_batch(f: &Fx, legs: &[DmLeg], name: &str) -> Scn {
         } else {
             (TSt::plain(nn, &cp.maker), cp.dc)
         };
-        inputs.push(call(&condb(&f.net, cp), "settle", vec![nb(nn), iv(tok as i64), iv(0), iv(0), iv(0), iv(l.form)], "condb.settle", v, c, 2_000));
+        inputs.push(call(
+            &condb(&f.net, cp),
+            "settle",
+            vec![nb(nn), iv(tok as i64), iv(0), iv(0), iv(0), iv(l.form)],
+            "condb.settle",
+            v,
+            c,
+            2_000,
+        ));
         outputs.push(t_out(t, d_kas, &d, k));
         ds.push(d);
         let next = CondBP { qty: cp.qty - l.n, bought: if cp.mode == 1 { cp.bought + nn } else { 0 }, ..cp.clone() };
@@ -6755,7 +6779,11 @@ fn dm_ordering_rules() {
     let leg = |cp: CondBP, form: i64, c: u8| DmLeg { cp, n: 2, form, c };
     run_ok(
         n,
-        &dm_batch(&f, &[leg(dm_cp(ma, 2, 0), 2, 0xe1), leg(dm_cp(mb, 1, 3 * WHOLE), 0, 0xe2)], "DM5 top-up first + a mode-1 order with a custody"),
+        &dm_batch(
+            &f,
+            &[leg(dm_cp(ma, 2, 0), 2, 0xe1), leg(dm_cp(mb, 1, 3 * WHOLE), 0, 0xe2)],
+            "DM5 top-up first + a mode-1 order with a custody",
+        ),
     );
     run_ok(
         n,
@@ -6766,7 +6794,10 @@ fn dm_ordering_rules() {
         ),
     );
     run_ok(n, &dm_batch(&f, &[leg(dm_cp(ma, 2, 0), 2, 0xe1), leg(dm_cp(mb, 2, 0), 1, 0xe2)], "DM5 top-up first + a new receive UTXO"));
-    run_ok(n, &dm_batch(&f, &[leg(dm_cp(ma, 1, 3 * WHOLE), 0, 0xe1), leg(dm_cp(mb, 0, 0), 0, 0xe2)], "DM5 custody first, mode 0 second"));
+    run_ok(
+        n,
+        &dm_batch(&f, &[leg(dm_cp(ma, 1, 3 * WHOLE), 0, 0xe1), leg(dm_cp(mb, 0, 0), 0, 0xe2)], "DM5 custody first, mode 0 second"),
+    );
     // the topped-up order is the token's lowest-index delivering order: its delivery is the leader's first output
     let s = dm_batch(&f, &[leg(dm_cp(ma, 0, 0), 0, 0xe1), leg(dm_cp(mb, 2, 0), 2, 0xe2)], "DM5-01 top-up behind another delivery");
     run_bad(n, &s, 2);
@@ -6970,7 +7001,10 @@ fn dm_ifd_exit_fields() {
     // an exit of mode 1 then buys back into its own custody and ends with one plain UTXO
     let x = ip.exit.with_qty(4);
     let xv = ask_all_in(4, ip.price, ip.tip) + 4 * ip.prefund + ip.exit_carrier;
-    run_ok(n, &with_name(dm_fill(&f, &DmK { v: Some(xv), ..DmK::new(x.clone(), 2) }).0, "DM8 the mode-1 exit buys 2 of 4 into its custody"));
+    run_ok(
+        n,
+        &with_name(dm_fill(&f, &DmK { v: Some(xv), ..DmK::new(x.clone(), 2) }).0, "DM8 the mode-1 exit buys 2 of 4 into its custody"),
+    );
     let x2 = CondBP { qty: 2, bought: 2 * WHOLE, ..x.clone() };
     let xv2 = xv - bid_all_in(2, x.tp, x.tip) - DC;
     run_ok(n, &with_name(dm_fill(&f, &DmK { v: Some(xv2), ..DmK::new(x2, 2) }).0, "DM8 the mode-1 exit ends: 4 whole to the maker"));

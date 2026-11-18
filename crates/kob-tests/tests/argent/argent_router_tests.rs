@@ -2266,8 +2266,8 @@ fn t2k_multi(f: &Fx, p: &T2Km, name: &str) -> Scn {
 /// outputs, then the refund `tail`.
 fn keeper_out(f: &Fx, inputs: &[Inp], outs: &mut Vec<TransactionOutput>, at: Option<usize>, tail: Vec<TransactionOutput>) {
     let total_in: i64 = inputs.iter().map(|i| i.entry.amount as i64).sum();
-    let others: i64 =
-        outs.iter().enumerate().filter(|(i, _)| Some(*i) != at).map(|(_, o)| o.value as i64).sum::<i64>() + tail.iter().map(|o| o.value as i64).sum::<i64>();
+    let others: i64 = outs.iter().enumerate().filter(|(i, _)| Some(*i) != at).map(|(_, o)| o.value as i64).sum::<i64>()
+        + tail.iter().map(|o| o.value as i64).sum::<i64>();
     let keeper = out(total_in - others - FEE, p2pk_spk(&pk(&f.keeper)), None);
     match at {
         Some(i) => outs[i] = keeper,
@@ -3405,22 +3405,13 @@ fn router_bid_delivery_modes() {
     // ---- the custody entries
     run(vec![mode_leg(0, 4, false, 1, 2)], "D2a A->KAS via sell_c: custody of 2000, rests (custody of 6000)");
     run(vec![mode_leg(0, 3, true, 1, 2)], "D2b A->KAS via sell_c_out: custody of 2000, ends (5000 plain to the maker)");
-    run(
-        vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 4, false, 0, 0)],
-        "D2c A->KAS via sell2_c: custody bid ends, mode-0 bid rests",
-    );
+    run(vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 4, false, 0, 0)], "D2c A->KAS via sell2_c: custody bid ends, mode-0 bid rests");
     run(
         vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 4, false, 1, 0)],
         "D2d A->KAS via sell2_c: custody bid ends, mode-1 first fill rests",
     );
-    run(
-        vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 3, true, 2, 0)],
-        "D2e A->KAS via sell2_c_out: custody bid and mode-2 bid end",
-    );
-    run(
-        vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 4, false, 1, 1)],
-        "D2f A->KAS via sell2_cc: custody bid ends, custody bid rests",
-    );
+    run(vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 3, true, 2, 0)], "D2e A->KAS via sell2_c_out: custody bid and mode-2 bid end");
+    run(vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 4, false, 1, 1)], "D2f A->KAS via sell2_cc: custody bid ends, custody bid rests");
     run(vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 3, true, 1, 5)], "D2g A->KAS via sell2_cc_out: both custody bids end");
     // the payer's bound counts what the payer sells, never the custody's units
     let mut p = t2km(&f, vec![mode_leg(0, 4, false, 1, 2)]);
@@ -3579,7 +3570,9 @@ fn router_bid_custody_checks() {
             "extension_commitment == gen__",
         ),
     ];
-    for (actor, shape, grp, at) in [("TokenToKas_sell_c", "sell_c", "token", 2usize), ("TokenSwap_swap2_c", "swap2_c", "token_a_group", 5)] {
+    for (actor, shape, grp, at) in
+        [("TokenToKas_sell_c", "sell_c", "token", 2usize), ("TokenSwap_swap2_c", "swap2_c", "token_a_group", 5)]
+    {
         let src = router_src(actor, Router::Shipped);
         for (label, stand_in, line) in cases.iter() {
             let mk = |router: Router| {

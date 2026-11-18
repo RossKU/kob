@@ -695,7 +695,11 @@ fn x1_a_custody_actor_sells_into_a_bid_through_its_bought_custody() {
     f.chain.mine(1);
     let book = BookView { asks: vec![], bids: vec![(bid.clone(), Some(cust.clone()))] };
     let ex = build_execution(&facts, &book, &BTreeSet::new(), NOW, &f.keeper()).unwrap().expect("the custody bid executes the intent");
-    let spends = |t: &TokenUtxo| ex.tx.inputs.iter().any(|i| (i.previous_outpoint.transaction_id.as_bytes(), i.previous_outpoint.index) == (t.utxo.transaction_id, t.utxo.index));
+    let spends = |t: &TokenUtxo| {
+        ex.tx.inputs.iter().any(|i| {
+            (i.previous_outpoint.transaction_id.as_bytes(), i.previous_outpoint.index) == (t.utxo.transaction_id, t.utxo.index)
+        })
+    };
     assert!(spends(&cust), "the execution spends the bought-custody");
     kob_protocol::verify::validate(&ex.tx, &ex.entries).expect("engine validation");
     f.chain.submit(&ex.tx).unwrap_or_else(|e| panic!("execution submit: {e:?}"));

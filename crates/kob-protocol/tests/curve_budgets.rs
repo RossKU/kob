@@ -108,7 +108,10 @@ fn curve_budgets_are_generated_exact_and_current() {
             if pass {
                 assert!(res.iter().all(|r| r.is_ok()), "{role} at {b} ({shape}): {res:?}");
             } else {
-                assert!(at.iter().any(|i| matches!(&res[*i], Err(e) if e.contains("ExceededCommittedScriptUnits"))), "{role}: {b} is enough");
+                assert!(
+                    at.iter().any(|i| matches!(&res[*i], Err(e) if e.contains("ExceededCommittedScriptUnits"))),
+                    "{role}: {b} is enough"
+                );
             }
         }
     }

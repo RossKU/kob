@@ -224,7 +224,9 @@ pub fn parse_args_with(args: &[String], fallback_key: Option<KeySource>) -> Resu
         return Err("--cancel needs a key: give --key-file PATH or --key-env NAME, or set the environment variable KOB_KEY".into());
     }
     if !a.cancel && (a.key.is_some() || a.dry_run || a.yes || a.out_dir.is_some() || a.priority_fee || a.allow_high_fee) {
-        return Err("--key-file, --key-env, --yes, --dry-run, --priority-fee, --allow-high-fee and --out-dir belong to --cancel".into());
+        return Err(
+            "--key-file, --key-env, --yes, --dry-run, --priority-fee, --allow-high-fee and --out-dir belong to --cancel".into()
+        );
     }
     if a.yes && a.dry_run {
         return Err("--yes and --dry-run exclude each other".into());

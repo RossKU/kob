@@ -33,8 +33,11 @@ fn help_lists_add_program_and_mistakes_are_exit_2() {
 /// A program already embedded in this build is recognised from its redeem script: nothing to add, and nothing is written.
 #[test]
 fn add_program_derives_the_profile_of_an_embedded_program_from_its_bytes() {
-    let hex = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../kob-protocol/tests/fixtures/kcc20-silverscript-e108d416.in1.redeem.hex"))
-        .unwrap();
+    let hex = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../kob-protocol/tests/fixtures/kcc20-silverscript-e108d416.in1.redeem.hex"
+    ))
+    .unwrap();
     // A program with entry tags that no builder serves: described, never listed, never written.
     let (code, out, err) = maint(&["add-program", hex.trim(), "--name", "SilverKcc20", "--json"]);
     assert_eq!(code, 0, "{err}");

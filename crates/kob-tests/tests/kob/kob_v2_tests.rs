@@ -1637,7 +1637,9 @@ fn add_ev(f: &Fx, s: &mut Scn, e: &Ev) -> (i64, i64) {
         let v = bp.funded(n);
         let mut inp = match e.mode {
             EvMode::Fill => call(&art, "fill", vec![nb(n), iv(ei as i64 + 1), iv(t_arg), iv(0)], "ev.bid.fill", v, e.cov, e.daa),
-            EvMode::Refund => call(&art, "refund", (0..refund_params(&art)).map(|_| iv(0)).collect(), "ev.bid.refund", v, e.cov, e.daa),
+            EvMode::Refund => {
+                call(&art, "refund", (0..refund_params(&art)).map(|_| iv(0)).collect(), "ev.bid.refund", v, e.cov, e.daa)
+            }
             EvMode::RefundPush => refund_push_ev(&art, n, v, e.cov, e.daa),
             EvMode::Cancel => call(&art, "cancel", vec![Arg::SigPos(f.maker_c, 0x01)], "ev.bid.cancel", v, e.cov, e.daa),
             EvMode::ZeroFill => call(&art, "fill", vec![nb(0), iv(ei as i64 + 1), iv(t_arg), iv(0)], "ev.bid.fill0", v, e.cov, e.daa),
@@ -4882,7 +4884,14 @@ fn v3_min_fill() {
     let v = bp.funded(600);
     run_ok(n, &with_name(s6_value(&f, &bp, 600, v, P245, 0), "V3B09+ bid: a 600 fill below minFill that takes all the buying power"));
     assert!(v - bp.used(599) - DC >= (P245 + TIP + SCALE - 1) / SCALE, "fixture: one more base unit is funded");
-    run_bad(n, &with_name(s6_value(&f, &bp, 599, v, P245, 0), "V3B09 bid: a 599 fill below minFill that leaves one base unit of buying power"), 0);
+    run_bad(
+        n,
+        &with_name(
+            s6_value(&f, &bp, 599, v, P245, 0),
+            "V3B09 bid: a 599 fill below minFill that leaves one base unit of buying power",
+        ),
+        0,
+    );
     run_bad(
         n,
         &with_name(s6_with(&f, &bp, MIN_FILL - 1, 10 * TOK, P245, 0), "V3B01 bid: a 999 fill below minFill that does not end the bid"),

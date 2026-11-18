@@ -54,7 +54,13 @@ fn parse_multiple(v: &str) -> Result<u64, String> {
 }
 
 /// The curve of the command line: its table and its state.
-pub fn curve_of(p: &Parsed, m: &TokenMarket, maker: [u8; 32], held: i64, clock: &Clock) -> Result<(CurveTable, CurveAskState), String> {
+pub fn curve_of(
+    p: &Parsed,
+    m: &TokenMarket,
+    maker: [u8; 32],
+    held: i64,
+    clock: &Clock,
+) -> Result<(CurveTable, CurveAskState), String> {
     let unit = m.unit();
     let amount = match p.get("--amount") {
         Some(v) => parse_token_amount(v, &unit, "--amount")?,
@@ -114,7 +120,12 @@ pub fn lines(t: &CurveTable, s: &CurveAskState, m: &TokenMarket, carrier: i64) -
     vec![
         "order: KobCurveAsk".into(),
         format!("amount: {}", units::tokens(s.total as i128, &u)),
-        format!("levels: {} of {} each (the last {})", s.levels(), units::tokens(s.level_size as i128, &u), units::tokens((s.total - (s.levels() as i64 - 1) * s.level_size) as i128, &u)),
+        format!(
+            "levels: {} of {} each (the last {})",
+            s.levels(),
+            units::tokens(s.level_size as i128, &u),
+            units::tokens((s.total - (s.levels() as i64 - 1) * s.level_size) as i128, &u)
+        ),
         format!("first level: {}; last level: {}", price(s.table[0]), price(*s.table.last().expect("a level"))),
         format!("sold out (each level bought whole): {}", units::kas(t.realised as i128)),
         format!("tip: {} per token, taken from every level", super::place::tip_per_whole(s.tip, m)),
@@ -187,7 +198,7 @@ pub fn run(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests_plan::{env, market, maker, CLOCK, MAKER_SK, TOK};
+    use super::super::tests_plan::{env, maker, market, CLOCK, MAKER_SK, TOK};
     use super::*;
     use kob_protocol::artifacts::TemplateId;
 
@@ -197,7 +208,8 @@ mod tests {
     fn a_curve_is_planned_signed_and_recovered() {
         let m = market(TemplateId::Kcc20Ref);
         let e = env(&m);
-        let args: Vec<String> = ["--token", "TST", "--levels", "50", "--total", "1000KAS", "--multiple", "4"].iter().map(|x| x.to_string()).collect();
+        let args: Vec<String> =
+            ["--token", "TST", "--levels", "50", "--total", "1000KAS", "--multiple", "4"].iter().map(|x| x.to_string()).collect();
         let p = parse(&args, VALUE_FLAGS, BOOL_FLAGS).unwrap();
         let (t, s) = curve_of(&p, &m, maker(), 100 * TOK, &CLOCK).unwrap();
         assert_eq!((s.total, s.levels(), s.level_size, s.amount_left), (100 * TOK, 50, 2 * TOK, 100 * TOK));

@@ -58,7 +58,10 @@ fn curve_state_codec_matches_the_compiler() {
         ] {
             v.insert(k.to_string(), silverscript_abi::ArtifactValue::Int(x));
         }
-        v.insert("table".into(), silverscript_abi::ArtifactValue::Array(s.table.iter().map(|p| silverscript_abi::ArtifactValue::Int(*p)).collect()));
+        v.insert(
+            "table".into(),
+            silverscript_abi::ArtifactValue::Array(s.table.iter().map(|p| silverscript_abi::ArtifactValue::Int(*p)).collect()),
+        );
         let want = silverscript_abi::encode_runtime_state_script(&t.artifact, &t.contract().runtime_state, &v).unwrap();
         assert_eq!(enc, want, "{levels} levels: the hand codec is the compiler's");
         assert_eq!(CurveAskState::decode(&enc).unwrap(), s);
@@ -100,15 +103,34 @@ fn curve_record_round_trips() {
             let bytes = payload::encode(&[r.clone()]).unwrap();
             let back = payload::decode(&bytes).unwrap().unwrap();
             assert_eq!(back.records, vec![r]);
-            println!("ORDER record of a {levels}-level curve{}: payload {} B (state {} B)", if unbound { " (unbound)" } else { "" }, bytes.len(), s.encode().len());
+            println!(
+                "ORDER record of a {levels}-level curve{}: payload {} B (state {} B)",
+                if unbound { " (unbound)" } else { "" },
+                bytes.len(),
+                s.encode().len()
+            );
             // AMEND of the curve, and an amend that would leave it unbound is refused
-            let a = Record::amend(0, 0, &AnyState::KobCurveAsk(CurveAskState { tip: TIP, token_cov_id: TOKEN_COV, ..s.clone() }), None);
+            let a =
+                Record::amend(0, 0, &AnyState::KobCurveAsk(CurveAskState { tip: TIP, token_cov_id: TOKEN_COV, ..s.clone() }), None);
             let ab = payload::encode(&[a.clone()]).unwrap();
             assert_eq!(payload::decode(&ab).unwrap().unwrap().records, vec![a]);
             let prev = AnyState::KobCurveAsk(s.clone());
-            assert!(payload::check_amend_terms(&prev, &AnyState::KobCurveAsk(CurveAskState { token_cov_id: [0; 32], ..s.clone() })).is_err());
-            assert!(payload::check_amend_terms(&prev, &AnyState::KobCurveAsk(CurveAskState { amount_left: s.amount_left - 1, token_cov_id: TOKEN_COV, ..s.clone() })).is_err());
-            assert!(payload::check_amend_terms(&prev, &AnyState::KobCurveAsk(CurveAskState { table: s.table.iter().map(|p| p + 1).collect(), token_cov_id: TOKEN_COV, ..s.clone() })).is_ok());
+            assert!(payload::check_amend_terms(&prev, &AnyState::KobCurveAsk(CurveAskState { token_cov_id: [0; 32], ..s.clone() }))
+                .is_err());
+            assert!(payload::check_amend_terms(
+                &prev,
+                &AnyState::KobCurveAsk(CurveAskState { amount_left: s.amount_left - 1, token_cov_id: TOKEN_COV, ..s.clone() })
+            )
+            .is_err());
+            assert!(payload::check_amend_terms(
+                &prev,
+                &AnyState::KobCurveAsk(CurveAskState {
+                    table: s.table.iter().map(|p| p + 1).collect(),
+                    token_cov_id: TOKEN_COV,
+                    ..s.clone()
+                })
+            )
+            .is_ok());
         }
     }
 }
@@ -127,7 +149,10 @@ fn curve_gates() {
         ("a negative tip", CurveAskState { tip: -1, ..ok.clone() }),
         ("a price below the tip", CurveAskState { tip: ok.table[0] + 1, ..ok.clone() }),
         ("a zero price", CurveAskState { table: [vec![0], ok.table[1..].to_vec()].concat(), ..ok.clone() }),
-        ("levelSize·max/scale at 2^62", CurveAskState { level_size: 1 << 40, total: 1 << 40, amount_left: 1 << 40, table: vec![1 << 32], ..ok.clone() }),
+        (
+            "levelSize·max/scale at 2^62",
+            CurveAskState { level_size: 1 << 40, total: 1 << 40, amount_left: 1 << 40, table: vec![1 << 32], ..ok.clone() },
+        ),
         ("minFill 0", CurveAskState { min_fill: 0, ..ok.clone() }),
         ("activeFrom < 0", CurveAskState { active_from: -1, ..ok.clone() }),
         ("scale 3", CurveAskState { scale: 3, ..ok.clone() }),
@@ -139,7 +164,9 @@ fn curve_gates() {
         }
     }
     // several curves of one token, unbound: the gates allow both
-    assert!(kob_protocol::build::check_new_order(&AnyState::KobCurveAsk(CurveAskState { token_cov_id: [0; 32], ..ok.clone() })).is_ok());
+    assert!(
+        kob_protocol::build::check_new_order(&AnyState::KobCurveAsk(CurveAskState { token_cov_id: [0; 32], ..ok.clone() })).is_ok()
+    );
     // a KRON program is refused
     let (h, p, x) = tok_fields(TemplateId::KronToken2433);
     let k = CurveAskState { token_tpl_hash: h, tpl_prefix_len: p, tpl_suffix_len: x, extension_commitment: [0; 32], ..ok };
@@ -207,7 +234,10 @@ fn curve_created_in_its_token_genesis() {
         table: table.table.clone(),
     };
     let funding = vec![FundingUtxo {
-        outpoint: kaspa_consensus_core::tx::TransactionOutpoint { transaction_id: kaspa_consensus_core::tx::TransactionId::from_bytes([0x5a; 32]), index: 0 },
+        outpoint: kaspa_consensus_core::tx::TransactionOutpoint {
+            transaction_id: kaspa_consensus_core::tx::TransactionId::from_bytes([0x5a; 32]),
+            index: 0,
+        },
         amount: 1_000 * KAS,
         owner_pubkey: creator,
     }];
@@ -252,7 +282,13 @@ fn curve_created_in_its_token_genesis() {
     let gid = g.tx.id().as_bytes();
     let token = g.covenant_id.as_bytes();
     let order = OrderUtxo {
-        utxo: Utxo { transaction_id: gid, index: placed.output as u32, amount: carrier(), block_daa_score: 1_000, covenant_id: Some(placed.covenant_id.as_bytes()) },
+        utxo: Utxo {
+            transaction_id: gid,
+            index: placed.output as u32,
+            amount: carrier(),
+            block_daa_score: 1_000,
+            covenant_id: Some(placed.covenant_id.as_bytes()),
+        },
         state: state.clone(),
     };
     let custody = TokenUtxo {
@@ -263,7 +299,10 @@ fn curve_created_in_its_token_genesis() {
     b.legs = vec![Leg::CurveAsk { order: order.clone(), custody: custody.clone(), amount: 5 * WHOLE }];
     let signed = run("first fill of the unbound curve", &Action::Batch(b.clone()));
     let bound = CurveAskState { token_cov_id: token, amount_left: state.total - 5 * WHOLE, ..state.clone() };
-    assert!(signed.tx.outputs.iter().any(|o| o.script_public_key == kob_protocol::tx::spk_to_string(&bound.spk())), "the continuation is bound");
+    assert!(
+        signed.tx.outputs.iter().any(|o| o.script_public_key == kob_protocol::tx::spk_to_string(&bound.spk())),
+        "the continuation is bound"
+    );
     // a custody from another transaction is refused by the builder
     let mut other = b.clone();
     if let Leg::CurveAsk { custody, .. } = &mut other.legs[0] {
@@ -291,14 +330,25 @@ fn curve_default_table() {
         let t = curve_table(&spec).unwrap();
         let n = t.table.len();
         let sizes: Vec<i64> = (0..n).map(|i| if i + 1 < n { t.level_size } else { amount - (n as i64 - 1) * t.level_size }).collect();
-        let real: i64 = sizes.iter().zip(&t.table).map(|(s, p)| kob_protocol::state::quote_of(*s, *p, SCALE, kob_protocol::state::Round::Up).unwrap()).sum();
+        let real: i64 = sizes
+            .iter()
+            .zip(&t.table)
+            .map(|(s, p)| kob_protocol::state::quote_of(*s, *p, SCALE, kob_protocol::state::Round::Up).unwrap())
+            .sum();
         assert_eq!(real, t.realised);
         assert!(t.realised <= total && t.table.windows(2).all(|w| w[0] <= w[1]));
         // as close as whole prices allow: one more sompi on the top level overshoots
         let top = quote_of_up(sizes[n - 1], t.table[n - 1] + 1) - quote_of_up(sizes[n - 1], t.table[n - 1]);
         assert!(t.realised + top > total || top == 0, "{amount} {levels}: {} of {total} with room on the top level", t.realised);
         let ratio = *t.table.last().unwrap() as f64 / t.table[0] as f64;
-        println!("{amount} in {levels} levels for {total}: {n} levels of {}, {} .. {} (x{ratio:.4}), realised {} ({} short)", t.level_size, t.table[0], t.table[n - 1], t.realised, total - t.realised);
+        println!(
+            "{amount} in {levels} levels for {total}: {n} levels of {}, {} .. {} (x{ratio:.4}), realised {} ({} short)",
+            t.level_size,
+            t.table[0],
+            t.table[n - 1],
+            t.realised,
+            total - t.realised
+        );
         // deterministic
         assert_eq!(curve_table(&spec).unwrap(), t);
     }

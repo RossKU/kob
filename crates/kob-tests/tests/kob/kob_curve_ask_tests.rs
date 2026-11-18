@@ -36,7 +36,9 @@ use secp256k1::{Keypair, Secp256k1, SecretKey};
 use silverscript_abi::{ArtifactValue, SilAbiArtifact};
 use silverscript_lang::compiler::CompileOptions;
 
-use common::{bytecode, compile_contract, compiled_template_parts_and_hash, encode_entry_sig_script, push_redeem_script, state_layout};
+use common::{
+    bytecode, compile_contract, compiled_template_parts_and_hash, encode_entry_sig_script, push_redeem_script, state_layout,
+};
 
 const KAS: i64 = 100_000_000;
 const TOKEN_COV: Hash = Hash::from_bytes([0x70; 32]);
@@ -352,13 +354,34 @@ enum Wit {
 }
 #[derive(Clone)]
 enum Role {
-    Call { art: SilAbiArtifact, entry: &'static str, args: Vec<ArtifactValue>, name: &'static str },
+    Call {
+        art: SilAbiArtifact,
+        entry: &'static str,
+        args: Vec<ArtifactValue>,
+        name: &'static str,
+    },
     /// The order's cancel: the key's signature of sighash type `ht`.
-    Cancel { art: SilAbiArtifact, kp: Keypair, ht: u8 },
-    TokLeader { redeem: Vec<u8>, next: Vec<ArtifactValue>, wit: Wit },
-    TokDelegate { redeem: Vec<u8>, wit: Wit },
-    P2pk { kp: Keypair },
-    Raw { ss: Vec<u8>, name: &'static str },
+    Cancel {
+        art: SilAbiArtifact,
+        kp: Keypair,
+        ht: u8,
+    },
+    TokLeader {
+        redeem: Vec<u8>,
+        next: Vec<ArtifactValue>,
+        wit: Wit,
+    },
+    TokDelegate {
+        redeem: Vec<u8>,
+        wit: Wit,
+    },
+    P2pk {
+        kp: Keypair,
+    },
+    Raw {
+        ss: Vec<u8>,
+        name: &'static str,
+    },
 }
 #[derive(Clone)]
 struct Inp {
@@ -561,7 +584,13 @@ fn run_bad(t: &Token, s: &Scn, expect: usize) {
         println!("ABLATION-PASS {} @{} all_inputs_ok={}", s.name, t.name, res.iter().all(|r| r.is_ok()));
         return;
     }
-    assert!(r.is_err(), "{} @{}: expected input {expect} ({}) to REJECT but it passed", s.name, t.name, role_name(&s.inputs[expect].role));
+    assert!(
+        r.is_err(),
+        "{} @{}: expected input {expect} ({}) to REJECT but it passed",
+        s.name,
+        t.name,
+        role_name(&s.inputs[expect].role)
+    );
     let others: Vec<String> = res.iter().enumerate().filter(|(i, r)| *i != expect && r.is_err()).map(|(i, _)| i.to_string()).collect();
     println!(
         "NEGATIVE {} @{}  [REJECTED at in[{expect}] {}: {:?}]{}",
@@ -597,7 +626,13 @@ fn fill_with(net: &Net, f: &Fx, p: &CurveP, n: i64, pay: Option<i64>) -> Scn {
     let taker = pk(&f.taker);
     let pay = pay.unwrap_or_else(|| curve_cost(p, n).expect("fill within the cap"));
     let rest = p.amount_left - n;
-    let name = format!("buy {n} at sold {} of {} ({} levels, {} touched)", p.total - p.amount_left, p.total, p.table.len(), levels_touched(p, n));
+    let name = format!(
+        "buy {n} at sold {} of {} ({} levels, {} touched)",
+        p.total - p.amount_left,
+        p.total,
+        p.table.len(),
+        levels_touched(p, n)
+    );
     let funding = 2000 * KAS;
     if rest <= 0 {
         return Scn {
@@ -700,7 +735,11 @@ fn cancel(net: &Net, f: &Fx, p: &CurveP, signer: &Keypair, ht: u8) -> Scn {
     Scn {
         name: format!("cancel of {} left", p.amount_left),
         inputs: vec![
-            Inp { entry: utxo(CARRIER, spk_of(&net.curve(p)), Some(a)), role: Role::Cancel { art: net.curve(p), kp: *signer, ht }, outpoint: None },
+            Inp {
+                entry: utxo(CARRIER, spk_of(&net.curve(p)), Some(a)),
+                role: Role::Cancel { art: net.curve(p), kp: *signer, ht },
+                outpoint: None,
+            },
             tok_in(t, &custody(p.amount_left, a), Some(&[plain(p.amount_left, &to)]), Wit::CovId),
             p2pk_in(&f.maker, KAS),
         ],
@@ -991,7 +1030,13 @@ fn curve_negatives() {
     let mut lowp = p.clone();
     lowp.tip = TIP;
     lowp.table[0] = TIP / 2;
-    let s = fill_with(&net, &f, &lowp, 3 * TOK, Some(quote_at(TOK, lowp.table[1] - TIP, SCALE, true).unwrap() - quote_at(2 * TOK, TIP / 2, SCALE, false).unwrap()));
+    let s = fill_with(
+        &net,
+        &f,
+        &lowp,
+        3 * TOK,
+        Some(quote_at(TOK, lowp.table[1] - TIP, SCALE, true).unwrap() - quote_at(2 * TOK, TIP / 2, SCALE, false).unwrap()),
+    );
     run_bad(t, &named(s, "NC22 a level below the tip"), 0);
     // NC24 a negative tip (the maker's field): every level pays price + |tip|
     let mut nt = p.clone();
@@ -1034,7 +1079,11 @@ fn curve_custody_negatives() {
     // NK1 a look-alike custody (another template with the custody's state and the token's covenant id), sold out
     let mut s = fill(&net, &f, &p.left(4 * TOK), 4 * TOK);
     let fake = fake_holder(t, &t.redeem(&custody(4 * TOK, a)));
-    s.inputs[1] = Inp { entry: utxo(CARRIER, pay_to_script_hash_script(&fake), Some(TOKEN_COV)), role: Role::Raw { ss: push(&fake), name: "holder.lookalike" }, outpoint: None };
+    s.inputs[1] = Inp {
+        entry: utxo(CARRIER, pay_to_script_hash_script(&fake), Some(TOKEN_COV)),
+        role: Role::Raw { ss: push(&fake), name: "holder.lookalike" },
+        outpoint: None,
+    };
     s.outputs[1].covenant = Some(CovenantBinding { authorizing_input: 1, covenant_id: TOKEN_COV });
     run_bad(t, &named(s, "NK1 look-alike custody"), 0);
     // NK2 a planted non-P2SH UTXO of the token's covenant id that pushes a genuine custody redeem
@@ -1205,7 +1254,12 @@ fn curve_created_in_the_token_genesis() {
     let genesis = Scn {
         name: "PG1 token genesis with the curve in one transaction".into(),
         inputs: vec![creator_in],
-        outputs: vec![to_token(o_custody), to_token(o_keep), o_curve, out(funding - 3 * CARRIER - NET_FEE / 10, p2pk_spk(&creator), None)],
+        outputs: vec![
+            to_token(o_custody),
+            to_token(o_keep),
+            o_curve,
+            out(funding - 3 * CARRIER - NET_FEE / 10, p2pk_spk(&creator), None),
+        ],
         lock_time: NOW,
     };
     run_ok(t, &genesis);
@@ -1219,7 +1273,10 @@ fn curve_created_in_the_token_genesis() {
     let g = [0x66; 32];
     run_ok(t, &same_tx(named(fill(&net, &f, &unbound, 3 * TOK), "PG2 first fill binds"), g, 2, 0));
     run_ok(t, &named(fill(&net, &f, &bound(97 * TOK), 4 * TOK), "PG3 bound continuation"));
-    run_ok(t, &same_tx(named(fill(&net, &f, &unbound.left(100 * TOK), 100 * TOK - 84 * TOK), "PG4 first fill of an unbound curve"), g, 2, 0));
+    run_ok(
+        t,
+        &same_tx(named(fill(&net, &f, &unbound.left(100 * TOK), 100 * TOK - 84 * TOK), "PG4 first fill of an unbound curve"), g, 2, 0),
+    );
 
     // NB1 the custody from another transaction; NB2 the continuation left unbound; NB3 a bound curve, another token's
     // custody from the continuation's own transaction (the taker of the fill before planted it)
@@ -1229,7 +1286,8 @@ fn curve_created_in_the_token_genesis() {
     run_bad(t, &named(s, "NB2 continuation left unbound"), 0);
     let b = bound(97 * TOK);
     let mut s = same_tx(fill(&net, &f, &b, 4 * TOK), [0x67; 32], 1, 4);
-    let mut other = tok_in(t, &custody(97 * TOK, CURVE_COV), Some(&[custody(93 * TOK, CURVE_COV), plain(4 * TOK, &pk(&f.taker))]), Wit::CovId);
+    let mut other =
+        tok_in(t, &custody(97 * TOK, CURVE_COV), Some(&[custody(93 * TOK, CURVE_COV), plain(4 * TOK, &pk(&f.taker))]), Wit::CovId);
     other.entry = utxo(CARRIER, other.entry.script_public_key.clone(), Some(OTHER_COV));
     other.outpoint = s.inputs[1].outpoint;
     s.inputs[1] = other;

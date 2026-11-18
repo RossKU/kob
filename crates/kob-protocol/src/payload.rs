@@ -1090,7 +1090,10 @@ fn verify_token_genesis(tx: &TxJson, k: usize, o: usize) -> Result<[u8; 32]> {
         .enumerate()
         .filter(|(_, x)| x.covenant.as_ref() == Some(cov))
         .map(|(j, x)| {
-            Ok((j as u32, TransactionOutput { value: x.value, script_public_key: spk_from_string(&x.script_public_key)?, covenant: None }))
+            Ok((
+                j as u32,
+                TransactionOutput { value: x.value, script_public_key: spk_from_string(&x.script_public_key)?, covenant: None },
+            ))
         })
         .collect::<Result<_>>()?;
     let op = TransactionOutpoint { transaction_id: TransactionId::from_bytes(inp.transaction_id), index: inp.index };

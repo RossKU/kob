@@ -705,10 +705,8 @@ fn mode_two_tops_up_the_receive_utxo() {
         let ext = ext_for(tp);
         let x = pair_mode(pair(MAKER_A, ask, pa, pb, RATE), MODE_TOPUP);
         let t = x.t_out_min(4 * WHOLE, x.price).unwrap();
-        let recv = |thr: i64| TokenUtxo {
-            utxo: utxo(0xb8, BOUGHT_KAS, 1_000, Some(tok)),
-            state: receive_state(have, pk(MAKER_A), thr, ext),
-        };
+        let recv =
+            |thr: i64| TokenUtxo { utxo: utxo(0xb8, BOUGHT_KAS, 1_000, Some(tok)), state: receive_state(have, pk(MAKER_A), thr, ext) };
         let mut batch = if ask { route_ask(x.clone(), pa, pb, 4) } else { route_bid(x.clone(), pa, pb, 4) };
         batch.legs[0] = with_delivery(batch.legs[0].clone(), None, Some(&recv(RECV_THR)), Some(2));
         let s = run(&format!("top-up ask={ask}"), &Action::Batch(batch));

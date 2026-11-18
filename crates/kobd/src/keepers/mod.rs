@@ -957,7 +957,9 @@ pub fn tick_with_subsidy(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Sig
                 } else if !bought_ok(o) {
                     // A mode-1 order's refund releases its bought-custody whole; without the exact one the
                     // covenant refuses it.
-                    report.skipped.push((id, format!("{}: the bought-custody is missing or does not hold the order's bought", kind.name())));
+                    report
+                        .skipped
+                        .push((id, format!("{}: the bought-custody is missing or does not hold the order's bought", kind.name())));
                 } else {
                     attempt = Some((
                         kind,

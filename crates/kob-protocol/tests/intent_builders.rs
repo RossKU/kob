@@ -21,14 +21,14 @@
 mod common;
 
 use kaspa_consensus_core::tx::{Transaction, UtxoEntry};
-use kob_protocol::Family;
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::build::*;
-use kob_protocol::router::{ACTORS, Actor, EXPIRE_MAX_FEE, IntentKind, IntentState};
+use kob_protocol::router::{Actor, IntentKind, IntentState, ACTORS, EXPIRE_MAX_FEE};
 use kob_protocol::script::p2pk_spk;
 use kob_protocol::state::*;
 use kob_protocol::tx::*;
 use kob_protocol::verify::{execute, validate};
+use kob_protocol::Family;
 
 use common::*;
 

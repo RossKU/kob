@@ -183,7 +183,10 @@ pub fn bid(maker: u8, price: i64) -> BidState {
         slope: 0,
         price_end: 0,
         decay_step: 1_000,
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     }
 }
 
@@ -256,7 +259,10 @@ pub fn cond_bid(maker: u8) -> CondBidState {
         rpt_price: 0,
         rpt_pre: 0,
         rpt_until: 0,
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     }
 }
 
@@ -330,7 +336,9 @@ pub fn ifd_ask(maker: u8) -> IfdAskState {
         amount_left: 10 * WHOLE,
         rpt_amount: 0,
         exit_state: IfdAskState::commit_exit(&ifda_exit(maker)),
-        exit_mode: 0, exit_recv_threshold: 0, exit_topup_tip: 0,
+        exit_mode: 0,
+        exit_recv_threshold: 0,
+        exit_topup_tip: 0,
     }
 }
 

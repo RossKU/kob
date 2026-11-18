@@ -1469,7 +1469,7 @@ pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
             let cov = order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
             if c.utxo.transaction_id != order.utxo.transaction_id
                 || c.state.owner() != cov
-                || c.state.amount() as i64 != prev.amount_left
+                || c.state.amount() != prev.amount_left
             {
                 return invalid("the custody of an unbound curve is the output of its genesis it owns, of exactly amountLeft");
             }
@@ -4304,7 +4304,9 @@ fn build_batch_pass(batch: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pa
         };
         let p = match leg {
             Leg::Ask { order, custody, t, .. } => plan_ask(&cx, order, custody, *t, &mut exts)?,
-            Leg::CurveAsk { order, custody, .. } => plan_curve_ask(&cx, order, custody, &mut exts).map_err(|e| leg_fill_error(i, e))?,
+            Leg::CurveAsk { order, custody, .. } => {
+                plan_curve_ask(&cx, order, custody, &mut exts).map_err(|e| leg_fill_error(i, e))?
+            }
             Leg::Bid { order, t, delivery, .. } => plan_bid(&cx, order, *t, delivery.as_ref(), forms[i], &mut exts, &mut refunds[i])?,
             Leg::CondAsk { order, custody, leg: cond_leg, evidence: ev, t, merge, .. } => {
                 plan_cond_ask(&cx, order, custody, *cond_leg, *ev, *t, merge.as_ref(), &mut exts)?

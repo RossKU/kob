@@ -1208,7 +1208,9 @@ pub fn plan_executions(
                 let need = pay + f.merchant_value as i64 + fee_reserve + fillers((shape.asks + 1).saturating_sub(queued))
                     - f.intent.amount as i64;
                 for bid_legs in
-                    bid_sweeps(&bids, shape.bids, actor.custody, shape.last_bid_rests, (*max_sell_a).min(lock_amt), need.max(1)).into_iter().take(4)
+                    bid_sweeps(&bids, shape.bids, actor.custody, shape.last_bid_rests, (*max_sell_a).min(lock_amt), need.max(1))
+                        .into_iter()
+                        .take(4)
                 {
                     out.push(base(ask_legs.clone(), bid_legs, 0));
                 }

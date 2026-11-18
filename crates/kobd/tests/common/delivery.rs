@@ -430,8 +430,7 @@ pub fn refund_releasing(c: &Ctx, order: &OrderUtxo<AnyState>, custody: &TokenUtx
     let AnyState::KobBid(s) = &order.state else { panic!("a bid") };
     let cov = order.utxo.covenant_id.unwrap();
     let mut b = draft(lock);
-    let entry =
-        SigPlan::Entry { template: TemplateId::KobBid, state: order.state.encode(), entry: "refund".into(), args: vec![] };
+    let entry = SigPlan::Entry { template: TemplateId::KobBid, state: order.state.encode(), entry: "refund".into(), args: vec![] };
     add_input(&mut b, &order.utxo, spk_to_string(&order.state.spk()), entry, None);
     let release = plain(custody.state.amount(), MAKER_A);
     let lead = SigPlan::TokenLeader {

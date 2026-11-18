@@ -63,7 +63,6 @@ pub enum Retirement {
     BidDelivery,
 }
 
-
 impl Retirement {
     /// The commit that retired the templates.
     pub fn retired_by(self) -> &'static str {
@@ -136,7 +135,12 @@ impl RetiredTemplate {
     /// A state with a delivery block field set has no legacy span, and fails.
     pub fn encode_state(&self, s: &AnyState) -> Result<Vec<u8>> {
         if s.template_id() != self.kind {
-            return Err(Error::Invalid(format!("{}: a {} state is not a {} state", self.label(), s.template_id().name(), self.kind.name())));
+            return Err(Error::Invalid(format!(
+                "{}: a {} state is not a {} state",
+                self.label(),
+                s.template_id().name(),
+                self.kind.name()
+            )));
         }
         s.try_encode_layout(self.layout).map_err(|e| Error::Invalid(format!("{}: {e}", self.label())))
     }
