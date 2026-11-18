@@ -4838,7 +4838,7 @@ fn cond_sell_out(f: &Fx, cp: &CondP, pay_delta: i64) -> Scn {
     s
 }
 
-/// minFill in every kind: a fill below minFill that does not take the rest (KobBid: that does not end the bid)
+/// minFill in every kind: a fill below minFill that does not take the rest (KobBid: all its buying power)
 /// is refused; exactly minFill, and a smaller fill that takes everything left, are accepted.
 #[test]
 fn v3_min_fill() {
@@ -4859,16 +4859,30 @@ fn v3_min_fill() {
     // ---- KobBid (minFill 1000)
     let bp = BidP::new(pk(&f.maker_b), P245);
     run_ok(n, &with_name(s6_with(&f, &bp, MIN_FILL, 10 * TOK, P245, 0), "V3B01+ bid: a fill of exactly minFill, the bid continues"));
-    // 1500 funded, 600 bought: 900 of buying power is left, less than one minimum fill, so the bid ends
+    // 1500 funded, 600 bought: 900 of buying power is left, less than one minimum fill, so the bid would end. A fill
+    // below minFill must take all the buying power, so this one is refused (on chain: KobBid 242aaae3, minFill the
+    // whole amount, ended by a 2.2 % fill and a 97.8 % refund)
     let v = bp.funded(1_500);
     assert!(v - bp.used(600) - DC < bp.used(bp.min_fill), "fixture: less than one minimum fill left");
-    run_ok(
+    run_bad(
         n,
         &with_name(
             s6_value(&f, &bp, 600, v, P245, 0),
-            "V3B01+ bid: a 600 fill below minFill ends a bid left with less than one minimum fill",
+            "V3B08 bid: a 600 fill below minFill that ends a bid but leaves 900 of buying power",
         ),
+        0,
     );
+    // the 242aaae3 shape: a bid funded for exactly one minimum fill (all or none). A 2.2 % fill is refused, the
+    // whole fill accepted
+    let v = bp.funded(MIN_FILL);
+    run_bad(n, &with_name(s6_value(&f, &bp, 22, v, P245, 0), "V3B08b bid funded for one minimum fill: a 22 fill (2.2 %)"), 0);
+    run_ok(n, &with_name(s6_value(&f, &bp, MIN_FILL, v, P245, 0), "V3B08+ bid funded for one minimum fill: the whole fill"));
+    // a fill below minFill that takes all the buying power is accepted; one base unit less is refused (the budget
+    // rate 245,100,000 sompi per 1,000 base units funds one base unit with 245,100 sompi)
+    let v = bp.funded(600);
+    run_ok(n, &with_name(s6_value(&f, &bp, 600, v, P245, 0), "V3B09+ bid: a 600 fill below minFill that takes all the buying power"));
+    assert!(v - bp.used(599) - DC >= (P245 + TIP + SCALE - 1) / SCALE, "fixture: one more base unit is funded");
+    run_bad(n, &with_name(s6_value(&f, &bp, 599, v, P245, 0), "V3B09 bid: a 599 fill below minFill that leaves one base unit of buying power"), 0);
     run_bad(
         n,
         &with_name(s6_with(&f, &bp, MIN_FILL - 1, 10 * TOK, P245, 0), "V3B01 bid: a 999 fill below minFill that does not end the bid"),

@@ -3672,9 +3672,12 @@ fn plan_bid(
     // fill moves (none once the bought-custody exists).
     let min_used = need(state.used(state.min_fill), "the bid budget of one minimum fill")?;
     let can_continue = left.checked_sub(dp.resv).and_then(|x| x.checked_sub(state.reserve)).is_some_and(|x| x >= min_used);
-    if n < state.min_fill && can_continue {
+    // The minimum-fill exemption: a smaller fill must take all the buying power left (less than one
+    // base unit of budget beyond the reserve and the carrier).
+    let Some(exhausted) = state.exhausted(left) else { return invalid("the bid budget of one base unit overflows") };
+    if n < state.min_fill && !exhausted {
         return invalid(format!(
-            "leg {i}: a bid fill of {n} is below minFill {} while the bid could continue (only its last fill may be smaller)",
+            "leg {i}: a bid fill of {n} is below minFill {} and does not take all the bid's buying power",
             state.min_fill
         ));
     }

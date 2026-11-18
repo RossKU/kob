@@ -220,11 +220,20 @@ fn bid_budget_rules() {
     assert_eq!(b.buying_power(value), 1_000);
     assert_eq!(b.buying_power(value - 1), 999);
     assert!(b.used(b.buying_power(value - 1) + 1).unwrap() > value - 1 - 107);
-    // the minimum fill: n >= minFill unless the bid cannot continue after the fill
+    // the minimum fill: n >= minFill unless the fill takes all the buying power left
     assert!(b.fill_ok(300, value));
     assert!(!b.fill_ok(299, value)); // leaves 1011 - 303 = 708 >= used(300) = 304: it continues, so too small
     let small = 107 + b.used(400).unwrap();
-    assert!(b.fill_ok(200, small)); // leaves less than one minimum fill: a terminating fill of any size
+    // 200 of 400 ends the bid (202 left beyond the carrier and reserve, under used(300) = 304) but leaves buying
+    // power, so it is too small (KobBid 242aaae3)
+    assert!(!b.can_continue(small - b.used(200).unwrap()));
+    assert!(!b.fill_ok(200, small));
+    // with minFill 500 (above the 400 left), the fills that take all of it: 400 leaves 0, 399 leaves 1 sompi, less
+    // than one base unit (ceil(1011 / 1000) = 2); 398 leaves 2, which funds one more unit
+    let b5 = BidState { min_fill: 500, ..b.clone() };
+    assert_eq!(b5.exhausted(small - b5.used(399).unwrap()), Some(true));
+    assert!(b5.fill_ok(400, small) && b5.fill_ok(399, small));
+    assert!(!b5.fill_ok(398, small) && !b5.fill_ok(200, small));
     assert!(!b.fill_ok(0, value));
     // a terminating fill may use the budget down to the reserve: used(n) <= value - reserve = 1111,
     // n <= 1098

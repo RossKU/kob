@@ -1696,6 +1696,18 @@ impl BidState {
             _ => false,
         }
     }
+    /// Whether a fill that leaves `left` in the escrow took all the bid's buying power: the rest
+    /// funds less than one base unit at the budget rate, `left − carrier − reserve <
+    /// (pMax + tip + scale − 1) / scale` (`KobBid.sil`, the minimum-fill exemption). `None` where
+    /// the covenant's sum overflows or `scale` is not positive, which fails the fill.
+    pub fn exhausted(&self, left: i64) -> Option<bool> {
+        if self.scale <= 0 {
+            return None;
+        }
+        let one = self.budget_rate()?.checked_add(self.scale - 1)? / self.scale;
+        let spare = left.checked_sub(self.carrier_reserve())?.checked_sub(self.reserve)?;
+        Some(spare < one)
+    }
     /// Remaining buying power of an escrow of `value` sompi.
     ///
     /// It is the largest n with `used(n) <= value − carrier − reserve` (the carrier as
@@ -1734,13 +1746,15 @@ impl BidState {
     /// The covenant's rules for a fill of n of an escrow of `value`.
     ///
     /// They are `n > 0`, `maxFill`, `used(n)` leaves at least the reserve, and `n >= minFill`
-    /// unless the bid then cannot continue. They also require `minFill > 0`.
+    /// unless the fill takes all the buying power left ([`BidState::exhausted`]). They also
+    /// require `minFill > 0`.
     pub fn fill_ok(&self, n: i64, value: i64) -> bool {
         if n <= 0 || self.min_fill <= 0 || (self.max_fill != 0 && n > self.max_fill) {
             return false;
         }
         let Some(left) = self.used(n).and_then(|u| value.checked_sub(u)) else { return false };
-        left >= self.reserve && (n >= self.min_fill || !self.can_continue(left))
+        let Some(exhausted) = self.exhausted(left) else { return false };
+        left >= self.reserve && (n >= self.min_fill || exhausted)
     }
     /// Escrow for `amount` base units delivered in at most `fills` fills.
     ///

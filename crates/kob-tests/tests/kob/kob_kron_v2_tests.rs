@@ -5281,7 +5281,7 @@ fn v3_quote_mirror() {
 }
 
 /// minFill: a fill of at least minFill base units unless it takes everything left (asks, conditional, if-done) or, for
-/// a bid, unless the bid terminates because less than one minimum fill of buying power is left; KobBid needs
+/// a bid, unless it takes all the buying power left (less than one base unit funded after it); KobBid needs
 /// minFill > 0.
 #[test]
 fn v3_min_fill() {
@@ -5309,15 +5309,27 @@ fn v3_min_fill_body(f: &Fx) {
     );
     let zero = BidP { min_fill: 0, ..BidP::new(pk(&f.maker_b), P245) };
     run_bad(n, &with_name(s6_with(f, &zero, 4_000, 10_000, P245, 0), "V3B02 bid with minFill 0 is unfillable"), 0);
-    // less than one minimum fill of buying power left after the fill: a fill below minFill may end the bid
+    // less than one minimum fill of buying power left after the fill ends the bid, but a fill below minFill must
+    // still take all the buying power (on chain: KobBid 242aaae3 ended by a 2.2 % fill)
     let v = bp.used(1_000) + DC + bp.used(1_500) - 1;
-    run_ok(
+    run_bad(
         n,
         &with_name(
             s6_v(f, &bp, 1_000, v, P245, 0),
-            "V3B03+ bid fill below minFill (1,000) that ends the bid: less than one minimum fill of buying power left",
+            "V3B08 bid fill below minFill (1,000) that ends the bid but leaves 1,499 of buying power",
         ),
+        0,
     );
+    // a bid funded for exactly one minimum fill (all or none): a 2.2 % fill is refused, the whole fill accepted
+    let v = bp.used(1_500) + DC;
+    run_bad(n, &with_name(s6_v(f, &bp, 33, v, P245, 0), "V3B08b bid funded for one minimum fill: a 33 fill (2.2 %)"), 0);
+    run_ok(n, &with_name(s6_v(f, &bp, 1_500, v, P245, 0), "V3B08+ bid funded for one minimum fill: the whole fill"));
+    // a fill below minFill that takes all the buying power is accepted; one base unit less is refused
+    // (budget rate 245,100,000 sompi per 1,000 base units: one base unit is 245,100 sompi)
+    let v = bp.used(1_000) + DC;
+    run_ok(n, &with_name(s6_v(f, &bp, 1_000, v, P245, 0), "V3B09+ bid fill below minFill (1,000) that takes all the buying power"));
+    assert!(v - bp.used(999) - DC >= (P245 + TIP + SCALE - 1) / SCALE, "fixture: one more base unit is funded");
+    run_bad(n, &with_name(s6_v(f, &bp, 999, v, P245, 0), "V3B09 bid fill below minFill (999) that leaves one base unit of buying power"), 0);
     // canContinue compares with the ceil budget of one minimum fill: at a rate with a remainder one sompi less is not enough
     let odd = BidP { min_fill: 1_500, price: P245 + ODD, ..BidP::new(pk(&f.maker_b), P245) };
     assert_eq!(odd.used(1_500), quote_of(1_500, odd.price + odd.tip, SCALE, false).unwrap() + 1);

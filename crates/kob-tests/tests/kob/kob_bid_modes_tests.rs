@@ -1009,10 +1009,10 @@ fn modes_fill_negatives() {
         let mut s = later("NC15 a borrow-enabled UTXO of the order's id named as the custody");
         s.inputs[1] = tok_leader(&f.t, DC, &cb, &[custody(4_000 + n, BID_COV), plain(10_000 - n, &tk)], Wit::CovId);
         bad_only(&f.t, &s, 0);
-        // a dust fill (n < minFill) that ends an order which can still buy a minimum fill: with a custody no carrier is
-        // reserved, so the escrow left (one minimum fill and half a carrier) keeps the order alive
-        let vd = quote(500, P250 + TIP, SCALE - 1) + quote(SCALE, P250 + TIP, SCALE - 1) + DC / 2;
-        let mut s = sell(&f, "NC16 a 500-unit fill (minFill 1,000) ends an order that can still buy a minimum fill", &p1b.tif(IOC), vd, 500, 0, Lead::Custody(DC));
+        // a dust fill (n < minFill) that leaves buying power: with a custody no carrier is reserved, so the half carrier
+        // left after the fill still buys about 200 base units, and the fill does not take all the buying power
+        let vd = quote(500, P250 + TIP, SCALE - 1) + DC / 2;
+        let mut s = sell(&f, "NC16 a 500-unit fill (minFill 1,000) leaves half a carrier of buying power", &p1b.tif(IOC), vd, 500, 0, Lead::Custody(DC));
         s.inputs[0] = call(&bid(&f, &p1b), "fill", fill_args(500, 1, 0), "bid.fill", vd, BID_COV);
         bad_only(&f.t, &s, 0);
         // the seller keeps the bought tokens: the custody continues with n, the order with bought = n

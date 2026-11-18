@@ -185,7 +185,7 @@ covenant id (owner scheme `0x04`). Amounts are token base units and prices are s
 "Amounts, prices and rounding"). Prices are all-in limits enforced by the scripts, rounded in the maker's
 favour: a bid pays at most `floor(n × (price + tip) / scale)` for n base units, an ask receives at least
 `ceil(n × (price − tip) / scale)`; every fill respects the order's minimum fill `minFill` (n >= minFill
-unless it takes all that is left, or for a bid unless it ends the bid). The
+unless it takes all that is left, for a bid all its buying power left). The
 crossing spread belongs to whoever builds the transaction, which in a swap-and-pay transaction is the
 payer (it stays in the payer's KAS change). Order programs are identified by their pinned template
 hash (`KobBid`, `KobAsk`, `KobBidKron`, `KobAskKron`; see `kob1-payload.md`), and the order's

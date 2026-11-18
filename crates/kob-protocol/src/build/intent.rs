@@ -574,8 +574,12 @@ fn bid_mode_rules(state: &BidState, n: i64, value: i64) -> Result<(i64, bool)> {
     let resv = if custody { 0 } else { state.delivery_carrier };
     let one = super::need(state.used(state.min_fill), "bid minimum fill")?;
     let can_continue = left - resv - state.reserve >= one;
-    if n < state.min_fill && can_continue {
-        return invalid(format!("a bid fill of {n} base units is below the minimum fill {} and does not end the bid", state.min_fill));
+    let Some(exhausted) = state.exhausted(left) else { return invalid("the bid budget of one base unit overflows") };
+    if n < state.min_fill && !exhausted {
+        return invalid(format!(
+            "a bid fill of {n} base units is below the minimum fill {} and does not take all the bid's buying power",
+            state.min_fill
+        ));
     }
     Ok((resv, can_continue))
 }

@@ -94,7 +94,8 @@ pub struct Cand {
     /// Smallest fill that ends the order and is therefore exempt from `min_fill`.
     ///
     /// It is `amountLeft`. For a `KobBid` it is the smallest fill after which less than one
-    /// minimum fill of buying power is left. `i64::MAX` means no fill within `cap` ends the order.
+    /// minimum fill of buying power is left and that is at least `minFill` or takes all the buying
+    /// power ([`bid_rest_from`]). `i64::MAX` means no fill within `cap` ends the order.
     pub rest_from: i64,
     /// Most base units of a fill that does not end the order, which is a fill below `rest_from`.
     ///
@@ -593,14 +594,18 @@ pub fn token_program(s: &AnyState) -> Option<TemplateId> {
     kob_protocol::artifacts::token_template_by_hash(&s.token_tpl_hash()?).filter(|t| t.family == s.family()).map(|t| t.id)
 }
 
-/// Smallest fill in `1..=cap` after which the bid with escrow `v` can no longer continue.
+/// Smallest fill in `1..=cap` that ends the bid with escrow `v` and keeps its minimum fill.
 ///
-/// After such a fill less than one minimum fill of buying power is left. That is the covenant's
-/// termination, and it is exempt from `minFill`. Returns `i64::MAX` when every fill within `cap`
-/// leaves the bid able to continue. `can_continue(v − used(n))` only turns false as `n` grows, so a
-/// bisection finds the fill.
+/// After a fill that ends the bid less than one minimum fill of buying power is left (the
+/// covenant's termination). Such a fill must still take `minFill`, unless it takes all the buying
+/// power left ([`BidState::exhausted`]). Returns `i64::MAX` when no fill within `cap` is both.
+/// Each condition only turns true as `n` grows, so a bisection finds the fill.
 pub fn bid_rest_from(s: &BidState, v: i64, cap: i64) -> i64 {
-    let ends = |n: i64| s.used(n).and_then(|u| v.checked_sub(u)).is_none_or(|left| !s.can_continue(left));
+    let ends = |n: i64| {
+        s.used(n)
+            .and_then(|u| v.checked_sub(u))
+            .is_none_or(|left| !s.can_continue(left) && (n >= s.min_fill || s.exhausted(left) == Some(true)))
+    };
     if cap <= 0 || !ends(cap) {
         return i64::MAX;
     }

@@ -103,9 +103,10 @@ refuse more): a pair order whose KRON amount or custody exceeds that is refused.
 
 - asks, conditional orders, if-done entries and every pair order (both sides): a fill takes `n ≥ minFill` unless it takes
   everything left (`n = amountLeft`);
-- `KobBid` (its quantity is its escrow): `n ≥ minFill` unless the bid terminates because less than one minimum fill of
-  buying power is left (`left − deliveryCarrier − reserve < quoteOf(minFill, pMax + tip)` rounded up); a `KobBid`
-  requires `minFill > 0`.
+- `KobBid` (its quantity is its escrow): `n ≥ minFill` unless the fill takes all the buying power left, so that what
+  remains cannot fund one more base unit at the budget rate (`left − deliveryCarrier − reserve < ⌈(pMax + tip)/scale⌉`);
+  a fill that merely ends the bid (less than one minimum fill of buying power left after it) is no exemption, or a tiny
+  fill could end any bid funded for under two minimum fills; a `KobBid` requires `minFill > 0`.
 
 Why: every fill of a bid-side order (`KobBid`, `KobCondBid`, `KobIfdBid`, the exits of `KobIfdAsk`, every pair order's
 delivery) moves a `deliveryCarrier` (1 KAS by default) from the maker's funds onto a new token UTXO, every fill of an

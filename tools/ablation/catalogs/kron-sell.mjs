@@ -1082,9 +1082,25 @@ export const mutations = [
     id: 'V3-B-minfill',
     file: 'KobBidKron',
     test: T_MIN,
-    expect: ['V3B01'],
-    note: 'n >= minFill unless the bid ends (less than one minimum fill of buying power left)',
-    edits: [del('        require(n >= minFill || !canContinue);\n')],
+    expect: ['V3B01', 'V3B08', 'V3B08b', 'V3B09'],
+    note: 'minFill: n >= minFill unless the fill takes all the buying power left (less than one base unit funded after it)',
+    edits: [del('        require(n >= minFill || spare < (rate + scale - 1) / scale);\n')],
+  },
+  {
+    id: 'V3-B-minfill-end',
+    file: 'KobBidKron',
+    test: T_MIN,
+    expect: ['V3B08', 'V3B08b', 'V3B09'],
+    note: 'the pre-fix rule (exempt whenever the bid ends, less than one minimum fill left) lets a small fill end a bid funded for under two minimum fills (KobBid 242aaae3 on testnet-10)',
+    edits: [rep('        require(n >= minFill || spare < (rate + scale - 1) / scale);', '        require(n >= minFill || !canContinue);')],
+  },
+  {
+    id: 'V3-B-minfill-one',
+    file: 'KobBidKron',
+    test: T_MIN,
+    expect: ['V3B09'],
+    note: 'the exemption is strict: a fill that leaves exactly one base unit of buying power is not exempt (< -> <=)',
+    edits: [rep('spare < (rate + scale - 1) / scale', 'spare <= (rate + scale - 1) / scale')],
   },
   {
     id: 'V3-B-minfill0',
@@ -1100,7 +1116,7 @@ export const mutations = [
     test: T_MIN,
     expect: ['V3B04'],
     note: 'canContinue compares with the ceil budget of one minimum fill (c = scale - 1 -> 0)',
-    edits: [rep('quoteOf(minFill, pMax + tip, scale - 1)', 'quoteOf(minFill, pMax + tip, 0)')],
+    edits: [rep('quoteOf(minFill, rate, scale - 1)', 'quoteOf(minFill, rate, 0)')],
   },
   {
     id: 'V3-B-floor',
@@ -1116,7 +1132,7 @@ export const mutations = [
     test: T_RND,
     expect: ['V3B06'],
     note: 'the escrow is consumed at the ceil budget (used c = scale - 1 -> 0)',
-    edits: [rep('int used = quoteOf(n, pMax + tip, scale - 1);', 'int used = quoteOf(n, pMax + tip, 0);')],
+    edits: [rep('int used = quoteOf(n, rate, scale - 1);', 'int used = quoteOf(n, rate, 0);')],
   },
   // ---- protocol v3: KobCondAskKron
   {

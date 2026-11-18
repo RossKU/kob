@@ -219,8 +219,9 @@ receives at least `⌈n·p/scale(A)⌉` of B, a `KobPair` bid pays exactly `⌊n
   and tip); the other pair kinds pay `deliveryCarrier` (an entry also `exitCarrier`) and the tip from their UTXO as well,
   and the builders fund nothing else for them;
 - **minimum fill**: asks, conditional orders, if-done entries and every pair order `n ≥ minFill` unless `n = amountLeft`;
-  a `KobBid` `n ≥ minFill` unless the fill leaves it less than one minimum fill of buying power (it then terminates:
-  `left − deliveryCarrier − reserve < ⌈minFill·(pMax + tip)/scale⌉`, `left` = escrow − consumed budget). This bounds a
+  a `KobBid` `n ≥ minFill` unless the fill takes all its buying power (`left − deliveryCarrier − reserve <
+  ⌈(pMax + tip)/scale⌉`, `left` = escrow − consumed budget: not one more base unit is fundable); a fill of at least
+  `minFill` that leaves less than one minimum fill of buying power (`< ⌈minFill·(pMax + tip)/scale⌉`) ends it. This bounds a
   non-repeating order to `⌈amount / minFill⌉` fills; a repeating if-done entry re-opens the "takes everything left"
   exception after every merge, so its fills (and exits) can be as small as the re-armed amount (bounded per cycle, not over
   the entry's life). A `KobBid`'s quantity, FOK completeness and GTC end are exact in value terms: it ends with less than
@@ -1107,7 +1108,7 @@ custodies (genuine holder of the token's program, owned by the exit id, exactly 
 
 - Never include a stray or a second UTXO of the same order.
 - Never exceed 8 token inputs of one token per transaction (KRON 4), nor any token's program slots.
-- Never fill an order below its `minFill` unless the fill takes everything left (a `KobBid`: unless it terminates).
+- Never fill an order below its `minFill` unless the fill takes everything left (a `KobBid`: all its buying power).
 - Never fill a booked exit's take-profit before its `rptUntil` without its entry's merge, never
   put an entry next to its exit's stop-leg fill or its exit's `update`, and never merge two exits into one entry in one
   transaction (§6.1).
@@ -1351,7 +1352,7 @@ tick. Planning time with pair books is not measured.
 - IOC / FOK refunded within one block after the kill time.
 - Auctions filled at the first tick at which they pay, each leg priced at the earliest profitable tick of its batch
   (§3.3), never below its origin and never at a loss.
-- Every fill at least the order's `minFill` unless it takes everything left (a `KobBid`: unless it terminates); every
+- Every fill at least the order's `minFill` unless it takes everything left (a `KobBid`: all its buying power); every
   amount the covenants check recomputed with their rounding (`quoteOf`).
 - Touch trigger (§4): stops, trailing stops and stop entries armed or ratcheted only in a batch that
   fills qualifying evidence (arm-in-fill or `update` next to the evidence fill); never from a

@@ -661,9 +661,12 @@ fn a_bid_holding_its_bought_custody_reserves_no_carrier() {
         assert_eq!(b.buying_power(2_000), power, "mode {mode} bought {bought}: buying power of 2,000 sompi");
         // 1,005 sompi left after a fill: one more minimum fill (10 sompi) only without a carrier
         assert_eq!(b.can_continue(1_005), cont, "mode {mode} bought {bought}: can continue");
-        // minFill 2 (20 sompi): a fill of 1 from 1,020 leaves 1,010, which funds another minimum fill only without a
-        // carrier, so the short fill is allowed exactly when the bid cannot continue
-        assert_eq!(BidState { min_fill: 2, ..b.clone() }.fill_ok(1, 1_020), !cont, "mode {mode} bought {bought}: minimum fill");
+        // minFill 2 (20 sompi): a fill of 1 from 1,020 leaves 1,010, which funds one more base unit beyond a carrier,
+        // so the short fill is refused in every mode; from 1,019 it leaves 9 sompi beyond a carrier (less than one
+        // unit), so it takes all the buying power exactly when the budget keeps a carrier
+        let m2 = BidState { min_fill: 2, ..b.clone() };
+        assert!(!m2.fill_ok(1, 1_020), "mode {mode} bought {bought}: minimum fill");
+        assert_eq!(m2.fill_ok(1, 1_019), !cont, "mode {mode} bought {bought}: a short fill that takes everything");
     }
     // with a reserve the carrier-free budget still keeps it
     let b = BidState { mode: 1, bought: 5, reserve: 300, ..base };
