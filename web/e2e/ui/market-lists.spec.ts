@@ -641,14 +641,14 @@ test.describe('a phone', () => {
     await shot(page, 'market-390-menu');
     await page.keyboard.press('Escape');
     await expect(page.getByTestId(`token-favorite-${base}`)).toBeHidden();
-    // the covenant id is the short form; a tap opens the whole id, a second one closes it, and the copy button is still there
+    // the covenant id is the 12 + 12 form; a tap opens the whole id, a second one closes it, and the copy button is still there
     const hash = page.getByTestId(`token-hash-${base}`);
-    await expect(hash).toHaveText(`${base.slice(0, 4)}…${base.slice(-4)}`);
+    await expect(hash).toHaveText(`${base.slice(0, 12)}…${base.slice(-12)}`);
     await page.getByTestId(`token-hash-${base}-toggle`).click();
     await expect(hash).toHaveText(base);
     expect(await sideways(page)).toBeLessThanOrEqual(0);
     await page.getByTestId(`token-hash-${base}-toggle`).click();
-    await expect(hash).toHaveText(`${base.slice(0, 4)}…${base.slice(-4)}`);
+    await expect(hash).toHaveText(`${base.slice(0, 12)}…${base.slice(-12)}`);
     await expect(page.getByTestId(`token-hash-${base}-copy`)).toBeVisible();
     await shot(page, 'market-390');
 

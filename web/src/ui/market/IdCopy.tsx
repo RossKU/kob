@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { copyToClipboard } from '../kit/CopyText';
-import { shortId as covenantFragment, wideId } from '../../kob/registry';
+import { wideId } from '../../kob/registry';
 
 /**
- * A covenant id with its copy button. `compact` (a phone's list row, review M-02): the short id `e5e5…e5e5`, a tap on it opens the whole id (wrapped, over the lines it needs) and a second tap closes it again; the
+ * A covenant id with its copy button. `compact` (a phone's list row, review M-02): the 12 + 12 hex id (as wide as the desktop row), a tap on it opens the whole id (wrapped, over the lines it needs) and a second tap closes it again; the
  * copy button copies the whole id either way. `expanded` / `onToggle` are the row's, so the row's line can grow with it.
  */
 export function IdCopy(props: { value: string; 'data-testid'?: string; compact?: boolean; expanded?: boolean; onToggle?: () => void }) {
@@ -23,7 +23,7 @@ export function IdCopy(props: { value: string; 'data-testid'?: string; compact?:
     <span class="ml-id">
       {props.compact ? (
         <button type="button" class="ml-id-toggle" aria-expanded={props.expanded ? 'true' : 'false'} aria-label={t(props.expanded ? 'market.id.collapse' : 'market.id.expand')} onClick={props.onToggle} data-testid={props['data-testid'] ? `${props['data-testid']}-toggle` : undefined}>
-          <code class="mono" title={props.value} data-value={props.value} data-testid={props['data-testid']}>{props.expanded ? props.value : covenantFragment(props.value)}</code>
+          <code class="mono" title={props.value} data-value={props.value} data-testid={props['data-testid']}>{props.expanded ? props.value : wideId(props.value)}</code>
         </button>
       ) : (
         <code class="mono" title={props.value} data-value={props.value} data-testid={props['data-testid']}>{wideId(props.value)}</code>
