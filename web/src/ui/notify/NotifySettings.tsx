@@ -1,4 +1,5 @@
-// Settings section "Notifications": in-app on/off, browser notifications on/off (the browser permission is requested here, from the click), per-kind switches.
+// Settings section "Notifications". It has in-app on/off, browser notifications on/off and
+// per-kind switches. The browser permission is requested here, from the click.
 import { useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { NOTIFY_KINDS } from '../../kob/notifications';

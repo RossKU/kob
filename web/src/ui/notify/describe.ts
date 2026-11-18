@@ -1,4 +1,5 @@
-// Text of one notification: the event's plain params rendered with i18n at DISPLAY time, plus where it links to.
+// Text of one notification. The event's plain params are rendered with i18n at display time. The
+// result also says where the notification links to.
 import { t } from '../../i18n';
 import { displayToken } from '../../app/token-display';
 import { amountCell, isUnnamed } from '../orders/cells';
@@ -11,7 +12,10 @@ import type { TokenRegistry } from '../../kob/registry';
 import { kasText, pricePerTokenText, scaleOfDecimals, shortId, tokenText } from '../kit/format';
 import { shortId as covenantFragment } from '../../kob/registry';
 
-/** `what` of a `reorg` event: the kinds of change a chain re-organisation can make to an own order (each has a `notify.ev.reorg.<what>.body`). */
+/**
+ * `what` of a `reorg` event, the kinds of change a chain re-organisation can make to an own order.
+ * Each has a `notify.ev.reorg.<what>.body`.
+ */
 export const REORG_WHATS = ['fill', 'cancelled', 'refunded', 'killed', 'gone'] as const;
 
 export interface DescribedEvent { title: string; body: string; href: string }
@@ -19,18 +23,21 @@ export interface DescribedEvent { title: string; body: string; href: string }
 const NO_REGISTRY: Pick<TokenRegistry, 'byCovenantId'> = { byCovenantId: new Map() };
 
 /**
- * `registry` and `network` resolve a token id to its ticker and decimals the way every other view does (app/token-display.ts: the registry, else the token's
- * KCC-23 declaration, its program's or market's decimals, this browser's issuance); a token none of them names shows its short id, and its amount in raw
- * base units while nothing states its decimals. The same text is used by the bell list and the toast.
+ * Describes one event as display text and a link target.
+ * `registry` and `network` resolve a token id to its ticker and decimals the way every other view
+ * does (app/token-display.ts). That order is the registry, else the token's KCC-23 declaration,
+ * else its program's or market's decimals, else this browser's issuance. A token none of them
+ * names shows its short id, and its amount in raw base units while nothing states its decimals.
+ * The bell list and the toast use the same text.
  */
 export function describeEvent(e: NotificationEvent, registry: Pick<TokenRegistry, 'byCovenantId'> | null, fiat: Fiat | null = null, network = ''): DescribedEvent {
   const info = e.token ? displayToken(registry ?? NO_REGISTRY, network, e.token) : undefined;
-  // displayToken names an unnamed token by its long id: a notification says it short
+  // `displayToken` names an unnamed token by its long id, and a notification says it short.
   const named = !!info && !isUnnamed(info.ticker, e.token);
   const token = named ? info.ticker : e.token ? covenantFragment(e.token) : '?';
   const side = e.side ? t(`notify.side.${e.side}`) : '';
   const p = e.params;
-  // amounts are base units (decimal strings): shown in token units when the token is known
+  // Amounts are base units as decimal strings, shown in token units when the token is known.
   const amountText = (v: string | number | undefined): string => {
     if (v === undefined) return '0';
     try {
@@ -49,7 +56,8 @@ export function describeEvent(e: NotificationEvent, registry: Pick<TokenRegistry
     try {
       const raw = BigInt(String(p.amount ?? '0'));
       amount = amountCell(raw, e.token ? (info?.decimals ?? 0) : 8).text; // the figure the portfolio shows: at most 4 decimals, grouped
-      // the KAS amount always leads; while the USD display is in force it is followed by its dollar estimate (a token's amount is never converted)
+      // The KAS amount always leads. While the USD display is in force it is followed by its dollar
+      // estimate. A token's amount is never converted.
       if (fiat && !e.token) usd = usdText(sompiToUsd(raw, fiat.rate));
     } catch {
       amount = String(p.amount ?? '');
@@ -62,9 +70,10 @@ export function describeEvent(e: NotificationEvent, registry: Pick<TokenRegistry
     if ((REORG_WHATS as readonly string[]).includes(what)) bodyKey = `notify.ev.reorg.${what}.body`;
     let price = '';
     try {
-      // the order's own price: sompi per whole token of the token's scale (an unknown token: per its scale's base units)
+      // The order's own price is sompi per whole token of the token's scale. For an unknown token
+      // it is per its scale's base units.
       if (p.price !== undefined && info && named && fiat) {
-        // KAS per whole token = price x 10^decimals / (scale x 1e8)
+        // KAS per whole token = price x 10^decimals / (scale x 1e8).
         const scale = scaleOfDecimals(info.decimals);
         price = `${usdText(kasPerTokenToUsd({ num: BigInt(String(p.price)) * pow10(info.decimals), den: scale * 100_000_000n }, fiat.rate))} per ${info.ticker}`;
       } else if (p.price !== undefined) price = info && named ? `${pricePerTokenText(BigInt(String(p.price)), info.decimals, scaleOfDecimals(info.decimals))} KAS per ${info.ticker}` : t('notify.reorg.perScale', { price: kasText(BigInt(String(p.price))) });

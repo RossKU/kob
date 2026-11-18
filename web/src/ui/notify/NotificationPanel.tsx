@@ -1,9 +1,15 @@
-// The notification centre: the bell of the header and the panel it opens under itself (a popover like the network chip's, review L-06; on a phone as wide as
-// the header): the current status (what holds now, ui/shell/status-entries.ts), then the notifications (the app's own, system-notices.ts, with or without a
-// wallet; then the wallet's, newest first; mark all read, clear, the x402 invoice watch box, a link to Settings). The current status does not depend on
-// the notifications: it is there with them off or no wallet connected, and Clear does not touch it; its worst tone colours the bell.
-// The panel always lists what the bell counts (TN10 2026-10-17: a badge "5" opened a panel that only said the notifications were off); whether
-// new ones are collected is one line above the list, with its switch.
+// The notification centre. It is the bell of the header and the panel the bell opens under itself.
+// The panel is a popover like the network chip's, and on a phone it is as wide as the header.
+// The panel lists the current status first, meaning what holds now (ui/shell/status-entries.ts).
+// Then it lists the notifications:
+// - the app's own, from system-notices.ts, with or without a wallet,
+// - the wallet's, newest first,
+// - mark all read, clear, the x402 invoice watch box and a link to Settings.
+// The current status does not depend on the notifications. It is there with them off or no wallet
+// connected, and Clear does not touch it. Its worst tone colours the bell.
+// The panel always lists what the bell counts, so a badge never opens a panel that only says the
+// notifications are off. One line above the list says whether new ones are collected, with its
+// switch.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { useFiat } from '../../app/use-fiat';
@@ -22,7 +28,11 @@ import { useNotify } from './NotifyProvider';
 import type { SystemNotice } from './system-notices';
 import './notify.css';
 
-/** The bell is shown even while the notifications are off (the dialog then offers "Turn on"): set false to hide it until the user enables them in Settings, unless there is a current status to read. */
+/**
+ * The bell is shown even while the notifications are off, and the dialog then offers "Turn on".
+ * Set it to false to hide the bell until the user enables them in Settings, unless there is a
+ * current status to read.
+ */
 export const SHOW_BELL_WHEN_OFF = true;
 
 function BellIcon() {
@@ -34,8 +44,9 @@ function BellIcon() {
   );
 }
 
-// A tap on a notification marks that one read and leaves the panel open (several can be read in a row); only the arrow at its right goes to the
-// page it is about. A text link inside the body took taps meant for the body on Android (Chrome moves a near-miss onto a link).
+// A tap on a notification marks that one read and leaves the panel open, so several can be read in
+// a row. Only the arrow at its right goes to the page it is about. A text link inside the body
+// would take taps meant for the body on Android, because Chrome moves a near-miss onto a link.
 function Item(props: { e: NotificationEvent; onNavigate: () => void }) {
   const { registry, config } = useServices();
   const n = useNotify();
@@ -58,7 +69,10 @@ function Item(props: { e: NotificationEvent; onNavigate: () => void }) {
   );
 }
 
-/** One notification of the app itself (the market switched to the node, or back): a tap marks it read; it leads nowhere. */
+/**
+ * One notification of the app itself, such as the market switching to the node. A tap marks it
+ * read and leads nowhere.
+ */
 function SystemItem(props: { e: SystemNotice }) {
   const n = useNotify();
   const e = props.e;
@@ -108,12 +122,16 @@ function InvoiceWatch() {
   );
 }
 
-/** The panel's content: `close` closes the popover (a link followed, the Close button) and puts the focus back on the bell. */
+/**
+ * The panel's content. `close` closes the popover when a link is followed or the Close button is
+ * pressed, and puts the focus back on the bell.
+ */
 export function NotificationPanel(props: { status: readonly StatusEntry[]; close: () => void }) {
   const n = useNotify();
   const close = props.close;
   const body = useRef<HTMLDivElement>(null);
-  // an entry that left took the focus with it (its dismiss button, "Use the indexer again"): it stays in the panel, or Escape and Tab would stop working here
+  // An entry that left takes the focus with it, such as its dismiss button or "Use the indexer
+  // again". The focus stays in the panel, or Escape and Tab would stop working here.
   const count = props.status.length;
   useEffect(() => {
     if (document.activeElement === document.body) body.current?.focus({ preventScroll: true });
@@ -134,7 +152,8 @@ export function NotificationPanel(props: { status: readonly StatusEntry[]; close
           </section>
         ) : null}
         {!n.settings.enabled ? (
-          // off: nothing new is collected; what was collected before is still listed below
+          // Off means nothing new is collected, and what was collected before is still listed
+          // below.
           <div class="row notify-off" data-testid="notify-disabled">
             <span class="small muted">{t('notify.offLine')}</span>
             <Button small variant="primary" onClick={() => n.update({ enabled: true })} data-testid="notify-enable">{t('notify.turnOn')}</Button>
@@ -171,7 +190,10 @@ export function NotificationPanel(props: { status: readonly StatusEntry[]; close
   );
 }
 
-/** Header bell with the unread badge, coloured by the worst of the current status and of an unread error a flow held back; opens the panel under it. */
+/**
+ * The header bell with the unread badge. Its colour is the worst of the current status and of an
+ * unread error a flow held back. It opens the panel under it.
+ */
 export function NotifyBell(props: { warnings: ConfigWarning[]; storedOverrides: StoredOverride[] }) {
   const n = useNotify();
   const status = useStatusEntries(props.warnings, props.storedOverrides);
@@ -181,7 +203,8 @@ export function NotifyBell(props: { warnings: ConfigWarning[]; storedOverrides: 
   const notifications = n.unread > 0 ? t('notify.bell.unread', { count: n.unread }) : t('notify.bell');
   const label = current ? `${notifications}. ${current}` : notifications;
   return (
-    // one item of the header's tools: the row's measured width (narrow.ts) sums them, so the live region must not count as one
+    // One item of the header's tools. The row's measured width (narrow.ts) sums them, so the live
+    // region must not count as one.
     <span class="notify-bell-item">
       <Popover
         label={label}
