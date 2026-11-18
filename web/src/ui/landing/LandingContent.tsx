@@ -1,8 +1,10 @@
-// The landing page's content: the hero, how it works, the decoded signature, bots, the trust model and the final call to action, under the shared frame's
-// header row. It takes what it needs as props (the network and the footer) and reads nothing from the app's services; LandingPage.tsx gives it the configured
-// network and the app's footer.
-// The founder's approved design (prototype E), rebuilt as components: the motion is in use-reveal.ts, the look in landing.css (dark / light follow the
-// app's theme, `data-theme` on <html>). No inline script or HTML string: CSP and Trusted Types as everywhere else in the app.
+// The landing page's content. It holds the hero, how it works, the decoded signature, bots, the
+// trust model and the final call to action, under the shared frame's header row.
+// It takes what it needs as props (the network and the footer) and reads nothing from the app's
+// services. LandingPage.tsx gives it the configured network and the app's footer.
+// The motion is in use-reveal.ts and the look in landing.css. Dark and light follow the app's
+// theme, `data-theme` on <html>. There is no inline script or HTML string, so CSP and Trusted
+// Types hold as everywhere else in the app.
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef } from 'preact/hooks';
 import { appTitle, useDocumentTitle } from '../../app/page-title';
@@ -23,14 +25,14 @@ function ArrowIcon() {
   );
 }
 
-/** Scrolls back to the top (the brand): a hash link would be a route here. */
+/** Scrolls back to the top. The brand uses it because a hash link would be a route here. */
 export function toTop(e: Event) {
   e.preventDefault();
   const smooth = !(typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches);
   window.scrollTo({ top: 0, behavior: smooth ? 'smooth' : 'auto' });
 }
 
-/** One line of a big heading: it rises out of its own clip (`d` = its delay step). */
+/** One line of a big heading. It rises out of its own clip, and `d` is its delay step. */
 function Ln(props: { d?: 1 | 2 | 3; class?: string; children: ComponentChildren; hidden?: boolean }) {
   const cls = ['lp-ln', props.d ? `lp-d${props.d}` : '', props.class ?? ''].filter(Boolean).join(' ');
   return (
@@ -54,8 +56,12 @@ function Ctas(props: { class?: string }) {
   );
 }
 
-/** The landing page's header: the shared frame's row (the app's height, column, brand and controls) with GitHub, the network chip, "Open the app" and the
- *  theme toggle (the app's, one stored preference). A phone keeps the brand, the chip, "Open the app" and the toggle (GitHub is in the hero and the footer). */
+/**
+ * The landing page's header, which is the shared frame's row with the app's height, column, brand
+ * and controls. It adds GitHub, the network chip, "Open the app" and the theme toggle, which is
+ * the app's one stored preference. A phone keeps the brand, the chip, "Open the app" and the
+ * toggle, since GitHub is in the hero and the footer.
+ */
 function Nav(props: { network: string }) {
   const tight = useMedia(TIGHT_QUERY);
   return (
@@ -96,9 +102,10 @@ function Row(props: { k: string; v: string; vClass: string; children: ComponentC
 }
 
 /**
- * The closing heading keeps its two lines ("The book" / "is open."), whatever font the viewer's system gives it: the page brings no font of its own, and a
- * wider fallback than Inter Display used to break each line in two. Each line is unwrapped (landing.css); where the widest one does not fit beside the
- * mark, the heading's type shrinks until it does.
+ * Keeps the closing heading on its two lines ("The book" / "is open."), whatever font the
+ * viewer's system gives it. The page brings no font of its own, and a wider fallback than Inter
+ * Display would break each line in two. Each line is unwrapped (landing.css). Where the widest
+ * one does not fit beside the mark, the heading's type shrinks until it does.
  */
 function useFitLines(head: { current: HTMLDivElement | null }) {
   useEffect(() => {
@@ -107,7 +114,8 @@ function useFitLines(head: { current: HTMLDivElement | null }) {
     if (!el || !h2) return;
     let seen = '';
     const fit = (force: boolean) => {
-      // the mark beside the heading is sized by the window (vw) while the row stops growing at its maximum, so the window's width counts too
+      // The mark beside the heading is sized by the window (vw) and the row stops growing at its
+      // maximum, so the window's width counts too.
       const key = `${el.clientWidth}/${window.innerWidth}`;
       if (!force && key === seen) return;
       seen = key;
@@ -129,7 +137,7 @@ function useFitLines(head: { current: HTMLDivElement | null }) {
   }, []);
 }
 
-/** The bots section's terminal for `network`: commands only (a dry run), the shape of a script's or an agent's loop. */
+/** The bots section's terminal for `network`. It shows commands only, as a dry run. */
 function botExample(network: string): string {
   return [
     `$ kob book TUSD --network ${network} --json`,
@@ -143,7 +151,8 @@ function botExample(network: string): string {
 }
 
 /**
- * The page. `network` is the deployment's (the app's config); `footer` is the page's footer (LandingPage.tsx: the app's).
+ * The page. `network` is the deployment's network from the app's config. `footer` is the page's
+ * footer, which LandingPage.tsx takes from the app.
  */
 export function LandingContent(props: { network: string; footer: ComponentChildren }) {
   const { network } = props;
@@ -156,8 +165,9 @@ export function LandingContent(props: { network: string; footer: ComponentChildr
   const site = siteName(typeof location === 'undefined' ? '' : location.hostname);
   const net = landingNetworkText(network as NetworkName, site);
 
-  // the page's own background behind overscroll (the body is the app's otherwise); it opens at its top, and the app page a link leads to opens at
-  // its top too (a hash change keeps the scroll position, and this page is much taller than the app's)
+  // The page has its own background behind overscroll, while the body is the app's. It opens at
+  // its top, and so does the app page a link leads to. A hash change keeps the scroll position
+  // and this page is much taller than the app's.
   useEffect(() => {
     document.body.classList.add('lp-body');
     window.scrollTo(0, 0);

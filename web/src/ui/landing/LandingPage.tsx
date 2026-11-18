@@ -1,6 +1,9 @@
-// The landing page of a deployment with the app: what opens at the empty hash (config `home`, default `landing`) for a visitor arriving from outside. A full page
-// in the app's frame (Frame.tsx: the same header row, here with GitHub, the network chip, "Open the app" -> `#/market` and the theme toggle, and the same footer)
-// in place of the app's tabs, banners and views; every other route shows the app shell. The content is LandingContent.tsx.
+// The landing page of a deployment with the app. It opens at the empty hash for a visitor
+// arriving from outside, when config `home` is `landing`, which is the default.
+// It is a full page in the app's frame (Frame.tsx), in place of the app's tabs, banners and views.
+// The frame has the same header row, here with GitHub, the network chip, "Open the app" (to
+// `#/market`) and the theme toggle, and the same footer. Every other route shows the app shell.
+// The content is LandingContent.tsx.
 import { useServices } from '../../app/context';
 import { t } from '../../i18n';
 import { SiteFooter } from '../shell/Frame';
