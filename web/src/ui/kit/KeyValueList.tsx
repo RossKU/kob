@@ -3,15 +3,17 @@ import type { ComponentChildren } from 'preact';
 export interface KeyValueItem {
   label: ComponentChildren;
   value: ComponentChildren;
-  /** put on the value element */
+  /** Put on the value element. */
   'data-testid'?: string;
-  /** skip the row when false */
+  /** Skip the row when false. */
   show?: boolean;
 }
 
 /**
- * `<dl>` of label / value rows (definition list semantics, two columns on wide screens, stacked on a phone). `flow`: on a wide card the rows run in two or
- * three label / value groups side by side (a container query on the card), so a short list does not leave the right of the card empty.
+ * `<dl>` of label / value rows, with definition list semantics. It has two columns on wide
+ * screens and is stacked on a phone. With `flow`, a wide card runs the rows in two or three
+ * label / value groups side by side (a container query on the card), so a short list does not
+ * leave the right of the card empty.
  */
 export function KeyValueList(props: { items: KeyValueItem[]; compact?: boolean; flow?: boolean; 'data-testid'?: string }) {
   const list = (

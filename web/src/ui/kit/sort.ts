@@ -1,9 +1,13 @@
-// Sorting the lists and tables of the app by a column (the Portfolio's tables, the activity log): one state, one comparison, one click cycle.
-//   state     null = the list's own order (newest first); else the column and the direction
-//   clicks    a column's header: first its natural direction (numbers and times: largest first; text: A to Z), second the other way, third the own order again
-//   values    numbers and bigints are compared as numbers, text with its numbers read as numbers ("TUSD2" before "TUSD10"), an empty value ("—", null) is last
-//             in either direction
-// Pure functions; the header button, the narrow-card control and the stored choice are in SortHeader.tsx.
+// Sorting the lists and tables of the app by a column (the Portfolio's tables, the activity log):
+// one state, one comparison, one click cycle.
+// - State: null is the list's own order (newest first), else the column and the direction.
+// - Clicks on a column's header: first its natural direction (numbers and times largest first,
+//   text A to Z), second the other way, third the own order again.
+// - Values: numbers and bigints are compared as numbers. Text is compared with its numbers read as
+//   numbers ("TUSD2" before "TUSD10"). An empty value ("—", null) is last in either direction.
+//
+// These are pure functions. The header button, the narrow-card control and the stored choice are
+// in SortHeader.tsx.
 
 export type SortDir = 'asc' | 'desc';
 
@@ -18,7 +22,7 @@ export type SortValue = number | bigint | string | null | undefined;
 export interface SortColumn<K extends string = string> {
   key: K;
   label: string;
-  /** numbers and times start with the largest first, text from A */
+  /** Numbers and times start with the largest first, text from A. */
   kind: 'number' | 'time' | 'text';
 }
 
@@ -28,8 +32,9 @@ export const firstDir = (kind: SortColumn['kind']): SortDir => (kind === 'text' 
 const other = (d: SortDir): SortDir => (d === 'asc' ? 'desc' : 'asc');
 
 /**
- * The state after a click on `col`'s header. `own` is the column the list's own order stands for (the time, newest first): while nothing is chosen a click on it
- * goes the other way round (the own order already is its natural direction).
+ * The state after a click on `col`'s header. `own` is the column the list's own order stands for
+ * (the time, newest first). While nothing is chosen, a click on it goes the other way round, as
+ * the own order already is its natural direction.
  */
 export function nextSort<K extends string>(cur: SortState<K> | null, col: SortColumn<K>, own: SortColumn<K> | null = null): SortState<K> | null {
   const eff: SortState<K> | null = cur ?? (own ? { key: own.key, dir: firstDir(own.kind) } : null);
@@ -38,7 +43,10 @@ export function nextSort<K extends string>(cur: SortState<K> | null, col: SortCo
   return null;
 }
 
-/** A choice in the narrow-card control (a column or its direction): the state, or null where it is the list's own order. */
+/**
+ * A choice in the narrow-card control (a column or its direction): the state, or null where it is
+ * the list's own order.
+ */
 export function chooseSort<K extends string>(key: K, dir: SortDir, own: SortColumn<K> | null): SortState<K> | null {
   return own && key === own.key && dir === firstDir(own.kind) ? null : { key, dir };
 }
@@ -53,7 +61,10 @@ export const isEmptySortValue = (v: SortValue): v is null | undefined | '' => v 
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
-/** Two values that are not empty, ascending: numbers by value (a bigint with a number too), text by the collator; a number before a text. */
+/**
+ * Two values that are not empty, ascending: numbers by value (a bigint with a number too), text by
+ * the collator, and a number before a text.
+ */
 export function compareSortValues(a: SortValue, b: SortValue): number {
   const an = typeof a === 'number' || typeof a === 'bigint';
   const bn = typeof b === 'number' || typeof b === 'bigint';
@@ -63,8 +74,9 @@ export function compareSortValues(a: SortValue, b: SortValue): number {
 }
 
 /**
- * `rows` ordered by `value(row, key)` in the state's direction; stable (equal values keep the list's own order), empty values last in either direction.
- * No state: the rows as they are (the same array).
+ * `rows` ordered by `value(row, key)` in the state's direction. The sort is stable, so equal
+ * values keep the list's own order, and empty values are last in either direction. With no state
+ * it returns the rows as they are (the same array).
  */
 export function sortBy<T, K extends string>(rows: readonly T[], state: SortState<K> | null, value: (row: T, key: K) => SortValue): readonly T[] {
   if (!state) return rows;
@@ -79,7 +91,10 @@ export function sortBy<T, K extends string>(rows: readonly T[], state: SortState
   return keyed.map((k) => k.row);
 }
 
-/** An amount of base units as a number comparable across tokens of different decimals: units x 10^(18 - decimals) (decimals past 18: the units cut down). */
+/**
+ * An amount of base units as a number comparable across tokens of different decimals: units x
+ * 10^(18 - decimals). With decimals past 18, the units are cut down.
+ */
 export function scaledUnits(units: bigint, decimals: number): bigint {
   return decimals <= 18 ? units * 10n ** BigInt(18 - decimals) : units / 10n ** BigInt(decimals - 18);
 }

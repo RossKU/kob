@@ -1,4 +1,5 @@
-// WCAG 2 contrast of a text on its background, from colours as `getComputedStyle` gives them (e2e/ui/contrast.spec.ts is the gate; pure, no DOM).
+// WCAG 2 contrast of a text on its background, from colours as `getComputedStyle` gives them. It is
+// pure and has no DOM. e2e/ui/contrast.spec.ts is the gate.
 
 /** The least contrast of a normal-size text (WCAG AA). */
 export const MIN_TEXT_CONTRAST = 4.5;
@@ -15,13 +16,19 @@ const OPAQUE_WHITE: Rgba = { r: 255, g: 255, b: 255, a: 1 };
 
 const clamp = (v: number, hi: number): number => Math.min(hi, Math.max(0, v));
 
-/** A channel or alpha as written: a number on `unit` (255 for a channel, 1 for alpha) or a percentage of it. */
+/**
+ * A channel or alpha as written: a number on `unit` (255 for a channel, 1 for alpha) or a
+ * percentage of it.
+ */
 const part = (s: string, unit: number): number => {
   const v = Number.parseFloat(s);
   return s.endsWith('%') ? (v / 100) * unit : v;
 };
 
-/** `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`, `rgba()`, `color(srgb ...)` (what a browser computes a `color-mix()` to) and `transparent`; null for anything else. */
+/**
+ * Parses `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`, `rgba()`, `color(srgb ...)` (what a
+ * browser computes a `color-mix()` to) and `transparent`. It returns null for anything else.
+ */
 export function parseColor(text: string): Rgba | null {
   const s = text.trim().toLowerCase();
   if (s === 'transparent') return { r: 0, g: 0, b: 0, a: 0 };
@@ -67,8 +74,9 @@ export function contrast(a: Rgba, b: Rgba): number {
 }
 
 /**
- * The contrast of a text colour on a stack of background colours, nearest first (an element's own background, then its parents', up to the page; a browser's
- * canvas is white under them). A colour that cannot be read gives NaN, which fails any `>=` check.
+ * The contrast of a text colour on a stack of background colours, nearest first: an element's own
+ * background, then its parents', up to the page. A browser's canvas is white under them. A colour
+ * that cannot be read gives NaN, which fails any `>=` check.
  */
 export function textContrast(color: string, backgrounds: readonly string[]): number {
   const fg = parseColor(color);

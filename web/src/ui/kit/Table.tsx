@@ -1,16 +1,19 @@
 import type { ComponentChildren } from 'preact';
 
 export interface TableProps {
-  /** put `<thead>` / `<tbody>` (or plain `<tr>`s) inside */
+  /** Put `<thead>` and `<tbody>`, or plain `<tr>`s, inside. */
   children?: ComponentChildren;
-  /** visible caption above the table (also the accessible name) */
+  /** A visible caption above the table, which is also the accessible name. */
   caption?: ComponentChildren;
   dense?: boolean;
   'data-testid'?: string;
   class?: string;
 }
 
-/** Table inside a horizontally scrollable wrapper (the page itself never scrolls sideways on a phone). Numeric cells: `class="right num"`. */
+/**
+ * Table inside a horizontally scrollable wrapper, so the page itself never scrolls sideways on a
+ * phone. Numeric cells use `class="right num"`.
+ */
 export function Table(props: TableProps) {
   return (
     <div class={`table-wrap${props.class ? ` ${props.class}` : ''}`}>
@@ -22,7 +25,7 @@ export function Table(props: TableProps) {
   );
 }
 
-/** A full-width row for an empty / loading / error state inside a `<tbody>`. */
+/** A full-width row for an empty, loading or error state inside a `<tbody>`. */
 export function TableMessage(props: { colSpan: number; children?: ComponentChildren; 'data-testid'?: string }) {
   return (
     <tr>
