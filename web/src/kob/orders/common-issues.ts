@@ -44,7 +44,7 @@ export const ISSUE_CATALOG = {
   // ---- delivery (bid-delivery-spec §10)
   DELIVERY_TOPUP_UNAVAILABLE: e('error', 'Adding to one UTXO is not available for this order. Choose Collected or Each fill.'),
   DELIVERY_TOPUP_FALLBACK: e('info', 'Adding to one UTXO is not available for this order: it uses Collected.'),
-  TOPUP_TIP_INVALID: e('error', 'The tip per added fill must be between 0 and the delivery carrier ({max:kas}).'),
+  TOPUP_TIP_INVALID: e('error', 'The tip per added fill must be between 0 and {max:kas} (at most the delivery carrier, and below 0.08 KAS).'),
   TOPUP_TIP_LOW: e('warning', 'A tip per added fill below {tip:kas} may not pay for adding: such fills arrive as new UTXOs.'),
   // ---- time
   EXPIRY_TOO_SOON: e('error', 'The expiry must be later than the moment the order becomes active.'),

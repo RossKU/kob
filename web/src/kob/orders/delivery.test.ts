@@ -9,11 +9,12 @@ import { KAS, TOK, consensusCheck, kob, makeEnv, market3x3, market8x8, marketKro
 import type { SimpleIntent } from '../intent-simple';
 import { planDelivery, planSimple } from './simple';
 import {
-  RECV_THRESHOLD_SOMPI, choiceOfMode, defaultTopupTip, deliveryFixed, effectiveChoice, fundedFills, orderRecvThreshold, programTopupTip, resolveDelivery, topupOffer,
+  RECV_THRESHOLD_SOMPI, TOPUP_TIP_MAX, choiceOfMode, defaultTopupTip, deliveryFixed, effectiveChoice, fundedFills, orderRecvThreshold, programTopupTip, resolveDelivery, topupOffer,
   topupTipTotal, walletThreshold, type DeliveryOrder,
 } from './delivery';
 import type { PlanIssue } from '../plan-types';
 import { TOKEN_PROGRAMS } from '../programs.generated';
+import { COVENANT_OUTPUT_MIN } from './common';
 
 const K = kob();
 const P = 250_000_000n; // 2.5 KAS per whole token
@@ -79,17 +80,29 @@ describe('the top-up tip (bid-delivery-spec §10)', () => {
     expect(topupTipTotal(744_250n, 3n)).toBe(2_232_750n);
   });
 
-  it('a tip above the carrier or below 0 is refused, one below the default warns, up to the carrier is accepted', () => {
-    const run = (topupTip: bigint) => {
+  it('a tip above the cap or below 0 is refused, one below the default warns, up to the cap is accepted', () => {
+    const run = (topupTip: bigint, carrier = DC) => {
       const pre: PlanIssue[] = [];
-      const r = resolveDelivery(order(), { choice: 'topup', topupTip }, pre);
-      return { r, codes: codes(pre) };
+      const r = resolveDelivery(order({ carrier }), { choice: 'topup', topupTip }, pre);
+      return { r, codes: codes(pre), pre };
     };
     expect(run(DC + 1n).codes).toEqual(['TOPUP_TIP_INVALID']);
     expect(run(-1n).codes).toEqual(['TOPUP_TIP_INVALID']);
     expect(run(744_249n).codes).toEqual(['TOPUP_TIP_LOW']);
-    expect(run(DC)).toMatchObject({ codes: [], r: { fields: { topupTip: DC.toString() } } });
     expect(run(744_250n)).toMatchObject({ codes: [], r: { fields: { topupTip: '744250' } } });
+    // S4: below COVENANT_OUTPUT_MIN (0.08 KAS) even with a 1 KAS carrier, as kob-protocol's check_delivery
+    expect(TOPUP_TIP_MAX).toBe(COVENANT_OUTPUT_MIN - 1n);
+    expect(DC > TOPUP_TIP_MAX).toBe(true);
+    expect(run(TOPUP_TIP_MAX)).toMatchObject({ codes: [], r: { fields: { topupTip: TOPUP_TIP_MAX.toString() } } });
+    expect(run(TOPUP_TIP_MAX + 1n).codes).toEqual(['TOPUP_TIP_INVALID']);
+    expect(run(TOPUP_TIP_MAX + 1n).pre[0]).toMatchObject({ params: { max: TOPUP_TIP_MAX } });
+    expect(run(DC).codes).toEqual(['TOPUP_TIP_INVALID']);
+    // the default never exceeds the cap, on every program
+    for (const p of TOKEN_PROGRAMS) {
+      const t = programTopupTip(p.name, DC);
+      if (t !== null) expect(t <= TOPUP_TIP_MAX, p.name).toBe(true);
+    }
+    expect(defaultTopupTip(DC, 100_000_000n)).toBe(TOPUP_TIP_MAX);
   });
 });
 
@@ -166,9 +179,9 @@ describe('plans with a delivery (signed and validated by the script engine)', ()
     expect(BigInt(p.request!.value)).toBe(K.bidEscrow(p.states[0]!, 10n * TOK, 3n));
     expect(p.disclosure!.notes).toContain('deliveryTopup');
     expect(planDelivery(p)).toMatchObject({ delivery: { choice: 'topup', threshold: 2_000n }, fills: 3n });
-    // a stored threshold and a raised tip
-    const q = planValid(limitBuy({ delivery: { choice: 'topup', threshold: 1_000n, topupTip: DC } }));
-    expect(bidOf(q)).toMatchObject({ recvThreshold: '1000', topupTip: DC.toString() });
+    // a stored threshold and a tip raised to the cap (S4: below 0.08 KAS)
+    const q = planValid(limitBuy({ delivery: { choice: 'topup', threshold: 1_000n, topupTip: TOPUP_TIP_MAX } }));
+    expect(bidOf(q)).toMatchObject({ recvThreshold: '1000', topupTip: TOPUP_TIP_MAX.toString() });
     // the threshold is capped at minFill - 1
     expect(bidOf(planValid(limitBuy({ minFill: 1_200n, delivery: { choice: 'topup' } })))).toMatchObject({ recvThreshold: '1199' });
   });

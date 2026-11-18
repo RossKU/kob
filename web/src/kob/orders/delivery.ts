@@ -72,13 +72,24 @@ export interface DeliveryOrder {
 export const deliveryFixed = (o: Pick<DeliveryOrder, 'codec' | 'cls'>): boolean => o.codec !== 'kcc20' || o.cls !== 'resting';
 
 /**
- * The default top-up tip per fill (bid-delivery-spec §10): `min(deliveryCarrier, ceil(1.25 × topup_extra))`, so a filler that
- * tops up is paid its extra relay fee with a margin. Null when the program has no top-up extra.
+ * The largest top-up tip (kob-protocol `state::TOPUP_TIP_MAX`, audit S4): just below the 0.08 KAS a token output carries at
+ * least (`COVENANT_OUTPUT_MIN`). A filler may top up a receive UTXO it made itself with 0 units; its KAS then goes to the maker,
+ * so above this tip a fresh receive UTXO per fill would pay the filler. The indexer does not list an order over it.
+ */
+export const TOPUP_TIP_MAX = 7_999_999n;
+
+/** The most tip an order with `carrier` may set: the carrier, and at most `TOPUP_TIP_MAX`. */
+export const topupTipMax = (carrier: bigint): bigint => (carrier < TOPUP_TIP_MAX ? carrier : TOPUP_TIP_MAX);
+
+/**
+ * The default top-up tip per fill (bid-delivery-spec §10): `min(deliveryCarrier, ceil(1.25 × topup_extra))`, at most
+ * `TOPUP_TIP_MAX`, so a filler that tops up is paid its extra relay fee with a margin. Null when the program has no top-up extra.
  */
 export function defaultTopupTip(carrier: bigint, extra: bigint | null): bigint | null {
   if (extra === null) return null;
   const tip = ceilDiv(extra * 5n, 4n);
-  return tip < carrier ? tip : carrier;
+  const max = topupTipMax(carrier);
+  return tip < max ? tip : max;
 }
 
 /** `defaultTopupTip` of a program by name (programs.generated.ts). */
@@ -135,7 +146,7 @@ const EACH: Required<DeliveryFields> = { mode: '0', recvThreshold: '0', topupTip
  * The delivery of an order from what the user and the wallet asked for (bid-delivery-spec §10). Problems are added to `pre`:
  * - a top-up the user chose that the order cannot have is an error (`DELIVERY_TOPUP_UNAVAILABLE`); a top-up that is only the
  *   wallet default falls back to Each fill with a note (`DELIVERY_TOPUP_FALLBACK`);
- * - a top-up tip below 0 or above the delivery carrier is an error (`TOPUP_TIP_INVALID`); one below the default warns
+ * - a top-up tip below 0 or above `topupTipMax` (the carrier, and below 0.08 KAS) is an error (`TOPUP_TIP_INVALID`); one below the default warns
  *   (`TOPUP_TIP_LOW`: a filler may not top up for it, the fill then arrives as a new UTXO).
  */
 export function resolveDelivery(o: DeliveryOrder, r: DeliveryRequest | undefined, pre: PlanIssue[]): ResolvedDelivery {
@@ -149,7 +160,8 @@ export function resolveDelivery(o: DeliveryOrder, r: DeliveryRequest | undefined
       choice = 'each';
     } else {
       const tip = r?.topupTip ?? offer.defaultTip;
-      if (tip < 0n || tip > o.carrier) pre.push(issue('TOPUP_TIP_INVALID', { max: o.carrier }, 'topupTip'));
+      const max = topupTipMax(o.carrier);
+      if (tip < 0n || tip > max) pre.push(issue('TOPUP_TIP_INVALID', { max }, 'topupTip'));
       else if (tip < offer.defaultTip) pre.push(issue('TOPUP_TIP_LOW', { tip: offer.defaultTip }, 'topupTip'));
       return { choice, fields: { mode: '2', recvThreshold: offer.recvThreshold.toString(), topupTip: tip.toString(), bought: '0' }, threshold: offer.threshold };
     }

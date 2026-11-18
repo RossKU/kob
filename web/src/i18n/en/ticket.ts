@@ -275,7 +275,7 @@ export default {
   'ticket.help.price': '{quote} per {ticker}, rounded to the price step in your favour.',
   'ticket.help.lifetime': 'GTC lasts 90 days from placement (renew before day 85 in Portfolio). A day order ends by 00:00 UTC ({local} for you).',
   'ticket.help.delivery': 'Each fill (default): a new UTXO per fill. Collected: fills stay in the order and arrive as one UTXO when it ends; one carrier. Add to one UTXO: each fill is added to one UTXO in your wallet for a small tip.',
-  'ticket.help.topupTip': 'Paid per fill to whoever adds it to your UTXO, out of the carrier of that fill. Default: the extra fee of such a fill for this token plus 25%; at most the carrier.',
+  'ticket.help.topupTip': 'Paid per fill to whoever adds it to your UTXO, out of the carrier of that fill. Default: the extra fee of such a fill for this token plus 25%; at most the carrier, and below 0.08 KAS.',
   'ticket.dhelp.link': "What's this?",
   'ticket.dhelp.title': "Bought tokens: where they go",
   'ticket.dhelp.intro': "A buy of 30, filled three times by 10.",
