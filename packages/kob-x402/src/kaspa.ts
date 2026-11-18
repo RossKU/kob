@@ -1,9 +1,10 @@
-// Thin helpers over the OFFICIAL kaspa-wasm v2.1.0 SDK (rusty-kaspa release zip; `npm run fetch-sdk` in
-// tools/wallet-gate, vendored to tools/wallet-gate/vendor/kaspa-node). The npm package `kaspa-wasm` is stale
-// (0.13.0, no tx v1 / covenants): never depend on it.
+// Thin helpers over the official kaspa-wasm v2.1.0 SDK. It is the rusty-kaspa release zip, which
+// `npm run fetch-sdk` in tools/wallet-gate vendors to `tools/wallet-gate/vendor/kaspa-node`. The
+// npm package `kaspa-wasm` is stale, at 0.13.0 without tx v1 and covenants, so never depend on
+// it.
 //
-// The SDK is NEVER imported at module top level: callers pass a `KaspaSdk` (any object with the members below), or
-// load the vendored build with `loadKaspaNodeSdk(dir)` at run time.
+// The SDK is never imported at module top level. Callers pass a `KaspaSdk`, which is any object
+// with the members below, or load the vendored build with `loadKaspaNodeSdk(dir)` at run time.
 
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -38,8 +39,9 @@ export interface KaspaSdk {
 }
 
 /**
- * The nodejs build of the pinned SDK (the official v2.1.0 release zip, `kaspa-wasm32-sdk/nodejs/kaspa/`, which `fetch-sdk` unpacks to
- * `vendor/kaspa-node`): sha256 over the lines "<sha256 of the file>  <path>\n" of its files, sorted by path.
+ * The tree hash of the nodejs build of the pinned SDK, the official v2.1.0 release zip
+ * (`kaspa-wasm32-sdk/nodejs/kaspa/`), which `fetch-sdk` unpacks to `vendor/kaspa-node`. It is the
+ * sha256 over the lines "<sha256 of the file>  <path>\n" of its files, sorted by path.
  */
 export const KASPA_NODE_SDK_TREE_SHA256 = '47d2c6d448693f2b0d52fea4e46328940996bcccddfb849d48da05825d5bcf89';
 
@@ -56,14 +58,18 @@ export function sdkTreeSha256(dir: string): string {
 }
 
 export interface LoadSdkOptions {
-  /** The tree hash the directory must have (default `KASPA_NODE_SDK_TREE_SHA256`); `null` loads an unpinned build (a custom SDK). */
+  /**
+   * The tree hash the directory must have (default `KASPA_NODE_SDK_TREE_SHA256`). `null` loads an
+   * unpinned build, a custom SDK.
+   */
   expectedTreeSha256?: string | null;
 }
 
 /**
- * Loads the vendored nodejs build of the official SDK (CommonJS) at call time. The directory is hashed first and refused unless it
- * is the pinned build: `fetch-sdk` checks the pin only when it runs, and a file changed in the vendor copy afterwards would
- * otherwise be loaded (and it sees the payer's keys).
+ * Loads the vendored nodejs build of the official SDK (CommonJS) at call time. The directory is
+ * hashed first and refused unless it is the pinned build. `fetch-sdk` checks the pin only when it
+ * runs, and a file changed in the vendor copy afterwards would otherwise be loaded, and it sees
+ * the payer's keys.
  */
 export function loadKaspaNodeSdk(vendorDir: string, options: LoadSdkOptions = {}): KaspaSdk {
   const expected = options.expectedTreeSha256 === undefined ? KASPA_NODE_SDK_TREE_SHA256 : options.expectedTreeSha256;
@@ -86,7 +92,7 @@ export function loadKaspaNodeSdk(vendorDir: string, options: LoadSdkOptions = {}
   }
 }
 
-/** `kaspa:testnet-10` -> `testnet-10` (RpcClient networkId). */
+/** `kaspa:testnet-10` to `testnet-10`, the RpcClient networkId. */
 export function rpcNetworkId(network: NetworkId): string {
   return network === 'kaspa:mainnet' ? 'mainnet' : 'testnet-10';
 }
@@ -97,7 +103,7 @@ export function addressNetwork(network: NetworkId): string {
 }
 
 export interface ConnectOptions {
-  /** wRPC JSON url, e.g. `ws://127.0.0.1:18210`. Empty: the public Resolver. */
+  /** wRPC JSON url, e.g. `ws://127.0.0.1:18210`. Empty means the public Resolver. */
   url?: string;
   network: NetworkId;
   timeoutMs?: number;
@@ -178,9 +184,10 @@ export async function virtualDaaScore(rpc: KaspaRpc): Promise<string | undefined
 }
 
 /**
- * A chain context over a connected RpcClient: KAS UTXOs by address, the virtual DAA score. Token UTXOs and KOB
- * orders are owned through covenants (P2SH), so they cannot be found by the payer's address: pass `tokens` and
- * `orders` sources (an indexer) for the kcc20 and swap-and-pay profiles.
+ * A chain context over a connected RpcClient, with KAS UTXOs by address and the virtual DAA
+ * score. Token UTXOs and KOB orders are owned through covenants (P2SH), so they cannot be found
+ * by the payer's address. Pass `tokens` and `orders` sources, such as an indexer, for the kcc20
+ * and swap-and-pay profiles.
  */
 export function rpcContextProvider(
   rpc: KaspaRpc,
@@ -208,7 +215,7 @@ export function rpcContextProvider(
   };
 }
 
-/** Submits a signed safe-JSON transaction over RPC (used by `KobX402Client.revoke`). */
+/** Submits a signed safe-JSON transaction over RPC, for `KobX402Client.revoke`. */
 export function rpcSubmitter(sdk: KaspaSdk, rpc: KaspaRpc): (safeJsonTx: string) => Promise<string> {
   return async (safeJsonTx) => {
     if (!sdk.Transaction || !rpc.submitTransaction) throw new KobX402Error('unsupported', 'this kaspa-wasm build cannot submit transactions');

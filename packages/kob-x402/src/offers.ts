@@ -1,8 +1,9 @@
-// Offers: parsing a 402, classifying and selecting an entry (payer side), building entries from configuration
-// (server side).
+// Offers. The payer side parses a 402 and classifies and selects an entry. The server side builds
+// entries from configuration.
 //
-// Payer rule of the HTTP profile: select a supported Kaspa entry and skip everything else (other schemes,
-// networks, assets, profiles, foreign extensions) instead of rejecting the envelope.
+// The payer rule of the HTTP profile is to select a supported Kaspa entry and skip everything else
+// (other schemes, networks, assets, profiles, foreign extensions) instead of rejecting the
+// envelope.
 
 import { decodePaymentRequired } from './headers.ts';
 import { KobX402Error } from './errors.ts';
@@ -39,14 +40,16 @@ export function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
-/** Canonical positive-or-zero uint64 decimal (no sign, no leading zeros). */
+/** Canonical positive-or-zero uint64 decimal, with no sign and no leading zeros. */
 export function parseU64(s: unknown): bigint | null {
   if (typeof s !== 'string' || !/^(0|[1-9][0-9]*)$/.test(s)) return null;
   const v = BigInt(s);
   return v <= U64_MAX ? v : null;
 }
 
-/** "0.5" KAS -> "50000000" sompi. Rejects more than 8 decimals and non-decimal input. */
+/**
+ * Converts "0.5" KAS to "50000000" sompi. It rejects more than 8 decimals and non-decimal input.
+ */
 export function kasToSompi(kas: string): string {
   const m = /^(0|[1-9][0-9]*)(?:\.([0-9]{1,8}))?$/.exec(kas.trim());
   if (!m) throw new KobX402Error('bad_request', `not a KAS amount: ${kas}`);
@@ -55,11 +58,11 @@ export function kasToSompi(kas: string): string {
   return v.toString();
 }
 
-// ---------------------------------------------------------------------------------------------- parsing (payer)
+// Parsing (payer).
 
 /**
- * Parses a 402: the `PAYMENT-REQUIRED` header value (base64) or the JSON body (text or value). Only the envelope is
- * validated; entries stay untouched (foreign entries are legal).
+ * Parses a 402 from the `PAYMENT-REQUIRED` header value (base64) or the JSON body (text or value).
+ * Only the envelope is validated. Entries stay untouched, because foreign entries are legal.
  */
 export function parsePaymentRequired(input: string | unknown): PaymentRequired {
   let v: unknown = input;
@@ -78,7 +81,7 @@ export function parsePaymentRequired(input: string | unknown): PaymentRequired {
   return v as unknown as PaymentRequired;
 }
 
-// ------------------------------------------------------------------------------------------- classification
+// Classification.
 
 export interface ClassifiedOffer {
   requirements: PaymentRequirements;
@@ -93,13 +96,13 @@ export interface ClassifiedOffer {
   network: NetworkId;
   finality: Finality;
   custody?: Custody;
-  /** Swap-and-pay: assets the payer may pay with (covenant ids, or `KAS`). */
+  /** Swap-and-pay: assets the payer may pay with, as covenant ids or `KAS`. */
   payAssets: string[];
 }
 
 /**
- * Classifies one `accepts` entry; `null` for everything this SDK does not pay (foreign, additive, malformed, no `upfront` payment
- * flow, unknown critical route).
+ * Classifies one `accepts` entry. It returns `null` for everything this SDK does not pay: foreign,
+ * additive or malformed entries, a missing `upfront` payment flow, and an unknown critical route.
  */
 export function classifyOffer(entry: unknown, index = 0): ClassifiedOffer | null {
   if (!isRecord(entry) || entry.scheme !== SCHEME_EXACT) return null;
@@ -111,7 +114,8 @@ export function classifyOffer(entry: unknown, index = 0): ClassifiedOffer | null
   if (typeof entry.maxTimeoutSeconds !== 'number' || !Number.isSafeInteger(entry.maxTimeoutSeconds) || entry.maxTimeoutSeconds <= 0) return null;
   const extra = entry.extra;
   if (!isRecord(extra) || extra.binding !== BINDING_EXACT || extra.transactionEncoding !== TX_ENCODING) return null;
-  // binding 1.0.0: every exact offer states the upfront flow explicitly; an omitted flow, `authorization` or `escrow` is not paid
+  // Binding 1.0.0: every exact offer states the upfront flow explicitly. An omitted flow,
+  // `authorization` or `escrow` is not paid.
   if (extra.paymentFlow !== PAYMENT_FLOW_UPFRONT) return null;
   if (typeof extra.payToScriptPublicKey !== 'string' || !HEX.test(extra.payToScriptPublicKey)) return null;
   const finality = extra.finality;
@@ -143,7 +147,8 @@ export function classifyOffer(entry: unknown, index = 0): ClassifiedOffer | null
     const r = extra.route as Partial<RouteExtra>;
     if (!isRecord(r) || !Array.isArray(r.payAssets) || r.payAssets.length === 0) return null;
     if (r.binding === BINDING_SWAP) kind = 'swap';
-    // intent mode: only for the intent program this SDK recognizes (x402-swap-and-pay.md 17.1), and only as a critical route
+    // Intent mode applies only to the intent program this SDK recognizes (x402-swap-and-pay.md
+    // 17.1), and only as a critical route.
     else if (r.binding === BINDING_INTENT && r.router === ROUTER_ARTIFACT_ID && r.critical === true) kind = 'intent';
     else return null;
     for (const p of r.payAssets) {
@@ -166,29 +171,42 @@ export function classifyOffer(entry: unknown, index = 0): ClassifiedOffer | null
   return out;
 }
 
-// ---------------------------------------------------------------------------------------------- selection
+// Selection.
 
 export interface PayerCapabilities {
   network: NetworkId;
-  /** The payer holds only KAS: no kcc20 entries, and swap-and-pay only through routes that accept KAS. */
+  /**
+   * The payer holds only KAS. That means no kcc20 entries, and swap-and-pay only through routes
+   * that accept KAS.
+   */
   kasOnly?: boolean;
-  /** KCC-20 balances the payer holds, by covenant id, in base units. A token that is absent (or zero) is not held. */
+  /**
+   * KCC-20 balances the payer holds, by covenant id, in base units. A token that is absent or zero
+   * is not held.
+   */
   tokens?: Record<string, string | bigint>;
   /** Accept `custody: "issuer-controlled"` tokens as the merchant asset (default false). */
   allowIssuerControlled?: boolean;
   /** Allow swap-and-pay (default true unless `kasOnly`); `false` also excludes its intent mode. */
   allowSwap?: boolean;
   /**
-   * Allow the intent mode of swap-and-pay (`kob-intent-v1`: the payer signs a router intent once and the facilitator
-   * executes it). Default true; the client still pays an intent only with `intentTerms` and a `maxPay` bound.
+   * Allow the intent mode of swap-and-pay (`kob-intent-v1`), where the payer signs a router intent
+   * once and the facilitator executes it. Default true. The client still pays an intent only with
+   * `intentTerms` and a `maxPay` bound.
    */
   allowIntent?: boolean;
-  /** Per merchant asset ceiling on the offered amount (`KAS` in sompi, tokens in base units); an offer above it is skipped. */
+  /**
+   * Per merchant asset ceiling on the offered amount (`KAS` in sompi, tokens in base units). An
+   * offer above it is skipped.
+   */
   maxAmount?: Record<string, string | bigint>;
 }
 
 export interface SelectedOffer extends ClassifiedOffer {
-  /** Swap-and-pay: the asset the payer will pay with (first of the offer's `payAssets` it can pay: `KAS`, or a held token). */
+  /**
+   * Swap-and-pay: the asset the payer will pay with. It is the first of the offer's `payAssets` the
+   * payer can pay, `KAS` or a held token.
+   */
   payAsset?: string;
 }
 
@@ -202,15 +220,19 @@ function held(caps: PayerCapabilities, asset: string): bigint {
   }
 }
 
-/** The pay assets of a swap entry this payer can pay with, in the entry's order: `KAS`, and the tokens it holds (unless KAS-only). */
+/**
+ * The pay assets of a swap entry this payer can pay with, in the entry's order: `KAS`, and the
+ * tokens it holds unless KAS-only.
+ */
 export function payableAssets(o: ClassifiedOffer, caps: PayerCapabilities): string[] {
   if (o.kind !== 'swap' && o.kind !== 'intent') return [];
   return o.payAssets.filter((a) => a === ASSET_KAS || (!caps.kasOnly && held(caps, a) > 0n));
 }
 
 /**
- * Preference class: standard-native, then kcc20, then swap routes that pay KAS, then swap routes that pay a token, then
- * the intent mode (which locks the payer's worst case until it is executed) in the same order.
+ * Preference class, in this order: standard-native, kcc20, swap routes that pay KAS, then swap
+ * routes that pay a token. The intent mode follows in the same order. It locks the payer's worst
+ * case until it is executed.
  */
 function rank(o: ClassifiedOffer): number {
   if (o.kind === 'native') return 0;
@@ -218,7 +240,7 @@ function rank(o: ClassifiedOffer): number {
   return (o.kind === 'intent' ? 2 : 0) + (o.receives === 'kas' ? 2 : 3);
 }
 
-/** Every entry the payer can pay, best first (stable within a class: the server's order). */
+/** Every entry the payer can pay, best first. Entries of a class keep the server's order. */
 export function rankOffers(pr: PaymentRequired, caps: PayerCapabilities): SelectedOffer[] {
   const out: SelectedOffer[] = [];
   pr.accepts.forEach((entry, i) => {
@@ -235,7 +257,7 @@ export function rankOffers(pr: PaymentRequired, caps: PayerCapabilities): Select
     } else {
       if (caps.allowSwap === false) return;
       if (o.kind === 'intent' && caps.allowIntent === false) return;
-      // KAS is always payable; a token only when the payer holds it (and is not KAS-only)
+      // KAS is always payable. A token is payable only when the payer holds it and is not KAS-only.
       const payAsset = payableAssets(o, caps)[0];
       if (payAsset === undefined) return;
       out.push({ ...o, payAsset });
@@ -244,12 +266,12 @@ export function rankOffers(pr: PaymentRequired, caps: PayerCapabilities): Select
   return out.map((o, i) => ({ o, i })).sort((a, b) => rank(a.o) - rank(b.o) || a.i - b.i).map((x) => x.o);
 }
 
-/** The best entry the payer can pay, or `null` (never throws on foreign entries). */
+/** The best entry the payer can pay, or `null`. It never throws on foreign entries. */
 export function selectOffer(pr: PaymentRequired, caps: PayerCapabilities): SelectedOffer | null {
   return rankOffers(pr, caps)[0] ?? null;
 }
 
-// ------------------------------------------------------------------------------------------ building (server)
+// Building (server).
 
 export interface BuildOfferContext {
   wasm: KobWasm;
@@ -273,7 +295,10 @@ function checkAsset(asset: string | undefined): string {
 /** The extension commitment of a KRON token: none, all zero. */
 const KRON_EXTENSION = '0'.repeat(64);
 
-/** Builds one `accepts` entry from a configuration spec; every Rust-derived value comes through `KobWasm`. */
+/**
+ * Builds one `accepts` entry from a configuration spec. Every Rust-derived value comes through
+ * `KobWasm`.
+ */
 export function buildOffer(spec: OfferSpec, ctx: BuildOfferContext): PaymentRequirements {
   checkAmount(spec.amount);
   const finality = spec.finality ?? ctx.finality;
@@ -301,7 +326,7 @@ export function buildOffer(spec: OfferSpec, ctx: BuildOfferContext): PaymentRequ
     extra.token = tokenExtra(asset, spec.token);
   } else if (spec.kind === 'swap') {
     if (spec.payAssets.length === 0) throw new KobX402Error('bad_request', 'a swap offer needs at least one pay asset');
-    // one entry per asset: a second one with other pins would never be the one a verifier applies
+    // One entry per asset. A second one with other pins would never be the one a verifier applies.
     const ids = spec.payAssets.map((p) => (p.asset === ASSET_KAS ? ASSET_KAS : p.asset.toLowerCase()));
     if (new Set(ids).size !== ids.length) throw new KobX402Error('bad_request', 'a pay asset is listed twice');
     if (spec.receive === 'kcc20') {
@@ -319,7 +344,8 @@ export function buildOffer(spec: OfferSpec, ctx: BuildOfferContext): PaymentRequ
           return { asset: ASSET_KAS };
         }
         const id = checkAsset(p.asset);
-        // a KRON token has no extension commitment: all zero when the configuration names the program and the family
+        // A KRON token has no extension commitment, so it is all zero when the configuration names
+        // the program and the family.
         const extension = p.extensionCommitment ?? (p.family === 'kron' ? KRON_EXTENSION : undefined);
         const pinned = p.templateHash && extension ? { templateHash: p.templateHash, extensionCommitment: extension } : ctx.wasm.resolveToken(ctx.network, id);
         return { asset: id, templateHash: p.templateHash ?? pinned.templateHash, extensionCommitment: p.extensionCommitment ?? pinned.extensionCommitment };

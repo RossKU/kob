@@ -1,5 +1,5 @@
-// Errors of the SDK. `code` is a stable machine-readable label; `diagnostic` / `reason` / `retryable` / `details`
-// carry what a facilitator reported in `extensions.kaspa`.
+// Errors of the SDK. `code` is a stable machine-readable label. `diagnostic`, `reason`,
+// `retryable` and `details` carry what a facilitator reported in `extensions.kaspa`.
 
 import type { IntentHandle, IntentPayResult } from './wasm.ts';
 import type { AttemptSummary } from './retry.ts';
@@ -42,28 +42,34 @@ export class KobX402Error extends Error {
   code: ErrorCode;
   diagnostic: string | undefined;
   reason: string | undefined;
-  /** True when the caller may call again (a fresh call re-quotes and re-signs; the SDK never re-sends a payment). */
+  /**
+   * True when the caller may call again. A fresh call re-quotes and re-signs, and the SDK never
+   * re-sends a payment.
+   */
   retryable: boolean;
   details: unknown;
   paymentId: string | undefined;
   transactionId: string | undefined;
   status: number | undefined;
   /**
-   * Set by `payInvoiceWithIntent` when the submission failed after the creation was signed: the signed intent payment
-   * (`payment.intent` is the handle `cancelIntent` needs). The facilitator may already have broadcast the creation, so
-   * keep it and cancel / reconcile the intent; never assume nothing was sent.
+   * Set by `payInvoiceWithIntent` when the submission failed after the creation was signed. It is
+   * the signed intent payment, and `payment.intent` is the handle `cancelIntent` needs. The
+   * facilitator may already have broadcast the creation, so keep it and cancel or reconcile the
+   * intent. Never assume nothing was sent.
    */
   payment: IntentPayResult | undefined;
   /**
-   * Set when the client retried (`retry`): every attempt it signed, in order, with how each ended. The last one is the
-   * attempt this error is about; earlier ones were failed by the facilitator (their inputs released) and share the
-   * payment's anchor with it, so at most one of them can ever be accepted.
+   * Set when the client retried (`retry`): every attempt it signed, in order, with how each ended.
+   * The last one is the attempt this error is about. Earlier ones were failed by the facilitator,
+   * which released their inputs, and they share the payment's anchor with it. So at most one of
+   * them can ever be accepted.
    */
   attempts: AttemptSummary[] | undefined;
   /**
-   * Set by `KobX402Client` when an intent payment did not end in a verified settlement: the intent its signed creation makes
-   * (also stored as `ArtifactRecord.intent`). The facilitator may have broadcast the creation: cancel the intent with it once
-   * its deadline passed (`cancelIntent`), or let the facilitator (or anyone, `expireIntent`) expire it.
+   * Set by `KobX402Client` when an intent payment did not end in a verified settlement. It is the
+   * intent its signed creation makes, also stored as `ArtifactRecord.intent`. The facilitator may
+   * have broadcast the creation. Cancel the intent with it once its deadline passed
+   * (`cancelIntent`), or let the facilitator, or anyone through `expireIntent`, expire it.
    */
   intent: IntentHandle | undefined;
 

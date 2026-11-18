@@ -1,22 +1,31 @@
-// The retry rules of one x402 payment (docs/spec/x402-retry.md), the same as the Rust `kob_x402::client::retry` (the
-// classification is compared with the wasm build's `retryDecision` in test/retry-wasm.test.ts).
+// The retry rules of one x402 payment (docs/spec/x402-retry.md). They are the same as the Rust
+// `kob_x402::client::retry`. `test/retry-wasm.test.ts` compares the classification with the
+// `retryDecision` of the wasm build.
 //
-//   resend  : the outcome is unknown (no answer, timeout, 5xx, `settlement_pending`, `node_unavailable`) or the same signed
-//             payment may still succeed (`rate_limited`, `intent_not_executable`): send the SAME artifact again (same payment
-//             id, same transaction). The paywall and the facilitator answer an identical retry from memory / their ledger, so
-//             a payment that went through while its answer was lost is found, never paid again.
-//   rebuild : the facilitator failed the attempt and released its inputs (`order_conflict`, the node refused it, the
-//             authorization expired): build a NEW attempt from the chain state of the moment (a fresh quote), held again to
-//             every limit and preflighted, under a fresh payment id, and spending the payment's ANCHOR (an input of the first
-//             attempt the payer owns), so that any two attempts of one payment exclude each other on chain.
-//   stop    : retrying cannot succeed (a policy refusal, an invalid offer, a payment id conflict, anything unknown).
+// The step after a failure is one of three:
+// - `resend`. The outcome is unknown (no answer, timeout, 5xx, `settlement_pending`,
+//   `node_unavailable`) or the same signed payment may still succeed (`rate_limited`,
+//   `intent_not_executable`). Send the same artifact again, with the same payment id and the same
+//   transaction. The paywall and the facilitator answer an identical retry from memory or their
+//   ledger. So a payment that went through while its answer was lost is found and never paid
+//   again.
+// - `rebuild`. The facilitator failed the attempt and released its inputs (`order_conflict`, the
+//   node refused it, the authorization expired). Build a new attempt from the chain state of the
+//   moment, with a fresh quote. It is held again to every limit and preflighted, and gets a fresh
+//   payment id. It spends the payment's anchor, an input of the first attempt that the payer owns,
+//   so any two attempts of one payment exclude each other on chain.
+// - `stop`. Retrying cannot succeed, as for a policy refusal, an invalid offer, a payment id
+//   conflict or anything unknown.
 
 export type RetryStep = 'resend' | 'rebuild' | 'stop';
 
 /** Diagnostics after which the same signed payment is sent again. */
 export const RESEND_DIAGNOSTICS: readonly string[] = ['settlement_pending', 'node_unavailable', 'rate_limited', 'intent_not_executable', 'invoice_pending'];
 
-/** Diagnostics of an attempt the facilitator failed (its inputs released) that a new attempt may get past. */
+/**
+ * Diagnostics of an attempt the facilitator failed (its inputs released) that a new attempt may get
+ * past.
+ */
 export const REBUILD_DIAGNOSTICS: readonly string[] = [
   'order_conflict',
   'order_not_spendable',
@@ -28,7 +37,10 @@ export const REBUILD_DIAGNOSTICS: readonly string[] = [
   'expired',
 ];
 
-/** The step after a failure with `diagnostic` and its `retryable` flag (`internal` follows the flag; anything unlisted stops). */
+/**
+ * The step after a failure with `diagnostic` and its `retryable` flag. `internal` follows the flag,
+ * and anything unlisted stops.
+ */
 export function classifyFailure(diagnostic: string | undefined, retryable: boolean): RetryStep {
   if (diagnostic === undefined) return 'stop';
   if (RESEND_DIAGNOSTICS.includes(diagnostic)) return 'resend';
@@ -38,9 +50,10 @@ export function classifyFailure(diagnostic: string | undefined, retryable: boole
 }
 
 /**
- * The step after an HTTP answer to a paid request that is not a verified success. `status` 0 = no answer (connection error,
- * timeout). No answer, a 5xx and a 2xx without a settlement leave the outcome unknown: resend. A 402 and a 409 follow the
- * diagnostic; a 429 resends; any other 4xx stops.
+ * The step after an HTTP answer to a paid request that is not a verified success. `status` 0
+ * means no answer (connection error or timeout). No answer, a 5xx and a 2xx without a settlement
+ * leave the outcome unknown, so resend. A 402 and a 409 follow the diagnostic. A 429 resends. Any
+ * other 4xx stops.
  */
 export function classifyStatus(status: number, diagnostic: string | undefined, retryable: boolean): RetryStep {
   if (status === 0 || (status >= 200 && status < 300) || status === 429) return 'resend';
@@ -51,16 +64,25 @@ export function classifyStatus(status: number, diagnostic: string | undefined, r
   return 'stop';
 }
 
-/** Bounds of the retry of one payment. `retry: false` on the client is `{ attempts: 1, resends: 0 }`. */
+/**
+ * Bounds of the retry of one payment. `retry: false` on the client is
+ * `{ attempts: 1, resends: 0 }`.
+ */
 export interface RetryOptions {
   /** Signed attempts at most, the first included (default 3; 1 = never rebuild). */
   attempts?: number;
   /** Re-sends of one signed attempt at most (default 4; 0 = never re-send). */
   resends?: number;
-  /** First backoff step in ms (default 500); it doubles per step up to `maxDelayMs` (default 8000), with equal jitter. */
+  /**
+   * First backoff step in ms (default 500). It doubles per step up to `maxDelayMs` (default 8000),
+   * with equal jitter.
+   */
   baseDelayMs?: number;
   maxDelayMs?: number;
-  /** Overall budget in ms from the first paid send (default 120000), further capped by the offer's `maxTimeoutSeconds`. */
+  /**
+   * Overall budget in ms from the first paid send (default 120000), further capped by the offer's
+   * `maxTimeoutSeconds`.
+   */
   budgetMs?: number;
   /** Uniform draw in [0, 1) for the jitter (default Math.random). */
   random?: () => number;
@@ -86,7 +108,7 @@ function nonNegInt(name: string, v: number | undefined, dflt: number, min = 0): 
   return v;
 }
 
-/** The policy of `options` (`false`: one attempt, no re-send). */
+/** The policy of `options`. `false` means one attempt and no re-send. */
 export function retryPolicy(options: RetryOptions | false | undefined): RetryPolicy {
   const o = options === false ? { attempts: 1, resends: 0 } : (options ?? {});
   return {
@@ -100,7 +122,10 @@ export function retryPolicy(options: RetryOptions | false | undefined): RetryPol
   };
 }
 
-/** Backoff before step `n` (1-based): half of the exponential step fixed, half scaled by `unit` (the Rust `delay_ms`). */
+/**
+ * Backoff before step `n` (1-based). Half of the exponential step is fixed and half is scaled by
+ * `unit` (the Rust `delay_ms`).
+ */
 export function backoffMs(p: Pick<RetryPolicy, 'baseDelayMs' | 'maxDelayMs'>, n: number, unit: number): number {
   const exp = Math.min(p.baseDelayMs * 2 ** Math.min(Math.max(n - 1, 0), 20), p.maxDelayMs);
   const u = Number.isFinite(unit) ? Math.min(Math.max(unit, 0), 1) : 0.5;
@@ -118,7 +143,7 @@ export function outpointKey(o: { txid: string; index: number }): string {
   return `${o.txid.toLowerCase()}:${o.index}`;
 }
 
-/** One attempt as the error / receipt report it. */
+/** One attempt as the error or receipt reports it. */
 export interface AttemptSummary {
   paymentId: string;
   transactionId: string;

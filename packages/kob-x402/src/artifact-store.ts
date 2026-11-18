@@ -1,6 +1,7 @@
-// Durable record of signed payment artifacts. The client saves the signed artifact BEFORE it discloses it (the
-// paid retry), so a crash between signing and the response can never lose a payment that a merchant may already
-// hold: after a restart the caller lists the records, reconciles them (was the transaction accepted?) or revokes.
+// Durable record of signed payment artifacts. The client saves the signed artifact before it
+// discloses it in the paid retry. So a crash between signing and the response can never lose a
+// payment that a merchant may already hold. After a restart the caller lists the records and
+// either reconciles them (was the transaction accepted?) or revokes them.
 
 import { mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -12,17 +13,22 @@ import type { IntentHandle } from './wasm.ts';
 export type ArtifactStatus =
   /** Signed and stored, not yet sent. */
   | 'signed'
-  /** Sent; the outcome is unknown (network error, missing or invalid response): the merchant may hold a valid payment. */
+  /**
+   * Sent, and the outcome is unknown (network error, missing or invalid response). The merchant may
+   * hold a valid payment.
+   */
   | 'pending'
   /** The merchant returned a valid settlement for exactly this transaction. */
   | 'settled'
-  /** The merchant reported a failure (see `failure`); the transaction may still have been broadcast. */
+  /**
+   * The merchant reported a failure (see `failure`). The transaction may still have been broadcast.
+   */
   | 'rejected'
   /** The payer spent one of the inputs back to itself. */
   | 'revoked'
   /**
-   * An earlier attempt of a payment whose later attempt settled: the later one spent the payment's anchor (an input every
-   * attempt spends), so this one can never be accepted.
+   * An earlier attempt of a payment whose later attempt settled. The later one spent the payment's
+   * anchor, an input every attempt spends, so this one can never be accepted.
    */
   | 'superseded';
 
@@ -46,21 +52,33 @@ export interface ArtifactRecord {
   failure?: { diagnostic?: string; retryable?: boolean; message?: string; details?: unknown };
   revokeTransactionId?: string;
   note?: string;
-  /** Attempt number of the payment (1 = the first signed one; a retry that rebuilt the payment counts up). */
+  /**
+   * Attempt number of the payment, 1 for the first signed one. A retry that rebuilt the payment
+   * counts up.
+   */
   attempt?: number;
-  /** The payment id of the attempt this one replaces (a rebuild after that one failed). */
+  /**
+   * The payment id of the attempt this one replaces, after that one failed and the payment was
+   * rebuilt.
+   */
   replaces?: string;
-  /** `txid:index` of the payment's anchor: an input of the first attempt the payer owns, spent by every attempt. */
+  /**
+   * `txid:index` of the payment's anchor: an input of the first attempt the payer owns, spent by
+   * every attempt.
+   */
   anchor?: string;
   /**
-   * Intent payments (`kind: 'intent'`): the intent the signed creation makes, the handle `cancelIntent` / `expireIntent` take.
-   * Stored before the creation is disclosed: the facilitator may broadcast it even when no answer comes back.
+   * Intent payments (`kind: 'intent'`): the intent the signed creation makes, which is the handle
+   * `cancelIntent` and `expireIntent` take. It is stored before the creation is disclosed, because
+   * the facilitator may broadcast it even when no answer comes back.
    */
   intent?: IntentHandle;
 }
 
 export interface ArtifactStore {
-  /** Must resolve only once the record is durable. A rejection aborts the payment before disclosure. */
+  /**
+   * Must resolve only once the record is durable. A rejection aborts the payment before disclosure.
+   */
   save(record: ArtifactRecord): Promise<void>;
   /** Merges `patch` into the record (and bumps `updatedAtMs`). */
   update(paymentId: string, patch: Partial<Omit<ArtifactRecord, 'paymentId'>>): Promise<ArtifactRecord>;
@@ -75,8 +93,9 @@ function assertId(id: string): void {
 }
 
 /**
- * A payment id names one signed transaction. Saving another transaction under an id that already holds an artifact would
- * destroy the only record of a payment the merchant may hold, so it is refused; updates of the same transaction pass.
+ * A payment id names one signed transaction. Saving another transaction under an id that already
+ * holds an artifact would destroy the only record of a payment the merchant may hold, so it is
+ * refused. Updates of the same transaction pass.
  */
 function assertNotOverwriting(existing: ArtifactRecord | undefined, next: ArtifactRecord): void {
   if (existing && existing.transactionId !== next.transactionId) {
@@ -115,7 +134,10 @@ export class MemoryArtifactStore implements ArtifactStore {
   }
 }
 
-/** One JSON file per payment id under `dir` (mode 0600), written to a temp file, fsynced and renamed into place. */
+/**
+ * One JSON file per payment id under `dir` (mode 0600), written to a temp file, fsynced and renamed
+ * into place.
+ */
 export class FileArtifactStore implements ArtifactStore {
   #dir: string;
   #ready: Promise<unknown> | undefined;

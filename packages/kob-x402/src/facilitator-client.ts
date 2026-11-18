@@ -1,9 +1,13 @@
-// HTTP client of the facilitator: GET /supported, POST /verify, POST /settle (binding facilitator profile,
-// `spec/facilitator-profile.md`). API key in the `Authorization: Bearer` header (configurable), per-call timeouts,
-// bounded response bodies. Retries happen only for NETWORK errors (connection failure, timeout) on calls that are
-// safe to repeat: /supported and /verify always; /settle never by default (its outcome after a network error is
-// ambiguous; the facilitator is idempotent on txid+requestHash, so a caller that re-sends the same signed artifact
-// is safe, but the SDK does not decide that on its own).
+// HTTP client of the facilitator: GET /supported, POST /verify and POST /settle (binding
+// facilitator profile, `spec/facilitator-profile.md`). The API key goes in the
+// `Authorization: Bearer` header, which is configurable. Calls have per-call timeouts and bounded
+// response bodies.
+//
+// Retries happen only for network errors (connection failure, timeout) on calls that are safe to
+// repeat. /supported and /verify always retry. /settle never retries by default, because its
+// outcome after a network error is ambiguous. The facilitator is idempotent on txid and
+// `requestHash`, so a caller that re-sends the same signed artifact is safe, but the SDK does not
+// decide that on its own.
 
 import { KobX402Error } from './errors.ts';
 import type { FacilitatorRequest, SettlementResponse, SupportedResponse, VerifyResponse } from './types.ts';
@@ -16,18 +20,30 @@ export interface FacilitatorOptions {
   /** Base URL, e.g. `http://127.0.0.1:8402`. */
   url: string;
   apiKey?: string;
-  /** Header carrying the key. Default `authorization` (sent as `Bearer <key>`); any other name sends the bare key. */
+  /**
+   * Header carrying the key. Default `authorization` (sent as `Bearer <key>`); any other name sends
+   * the bare key.
+   */
   apiKeyHeader?: string;
-  /** Per attempt. Default 10 s (settle observes finality: pass a longer value there via `settleTimeoutMs`). */
+  /**
+   * Per attempt. Default 10 s. Settle observes finality, so pass a longer value there via
+   * `settleTimeoutMs`.
+   */
   timeoutMs?: number;
   settleTimeoutMs?: number;
   /** Extra attempts after a network error on /supported and /verify. Default 2. */
   retries?: number;
-  /** Also retry /settle after a network error (same body: idempotent by txid+requestHash). Default false. */
+  /**
+   * Also retry /settle after a network error, with the same body, which is idempotent by txid and
+   * `requestHash`. Default false.
+   */
   retrySettle?: boolean;
   retryDelayMs?: number;
   fetch?: FetchLike;
-  /** Allow a plain-http facilitator URL that is not loopback (a private network you control). Default false: https only. */
+  /**
+   * Allow a plain-http facilitator URL that is not loopback, such as a private network. Default
+   * false: https only.
+   */
   allowInsecureHttp?: boolean;
 }
 
@@ -59,7 +75,10 @@ export class FacilitatorClient implements Facilitator {
     return this.#call<VerifyResponse>('POST', '/verify', req, this.#o.timeoutMs ?? 10_000, true);
   }
 
-  /** Any answer that is a settlement object (`success` present) is returned, whatever the HTTP status. */
+  /**
+   * Any answer that is a settlement object (`success` present) is returned, whatever the HTTP
+   * status.
+   */
   async settle(req: FacilitatorRequest): Promise<SettlementResponse> {
     const r = await this.#call<SettlementResponse>('POST', '/settle', req, this.#o.settleTimeoutMs ?? 30_000, this.#o.retrySettle === true, true);
     if (r === null || typeof r !== 'object' || typeof r.success !== 'boolean') {

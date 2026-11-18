@@ -1,10 +1,14 @@
-// Transport policy of the payer and facilitator clients: a signed payment and the facilitator API key
-// travel over https. Plain http is accepted for loopback hosts (local development, an in-process test server) and
-// when the caller opts in explicitly (`allowInsecureHttp`, e.g. a private network the operator controls).
+// Transport policy of the payer and facilitator clients. A signed payment and the facilitator API
+// key travel over https. Plain http is accepted for loopback hosts, such as local development or
+// an in-process test server. It is also accepted when the caller opts in explicitly with
+// `allowInsecureHttp`, for example for a private network the operator controls.
 
 import { KobX402Error } from './errors.ts';
 
-/** True for `localhost`, `*.localhost`, 127.0.0.0/8 and `::1` (the host part of a URL, IPv6 without brackets or with). */
+/**
+ * True for `localhost`, `*.localhost`, 127.0.0.0/8 and `::1`. It takes the host part of a URL, IPv6
+ * with or without brackets.
+ */
 export function isLoopbackHost(hostname: string): boolean {
   const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (h === 'localhost' || h.endsWith('.localhost')) return true;
@@ -14,8 +18,9 @@ export function isLoopbackHost(hostname: string): boolean {
 }
 
 /**
- * Throws unless `url` is https, or http to a loopback host, or `allowInsecureHttp` is set. Other schemes are always refused.
- * `what` names the URL in the message ("the resource URL", "the facilitator URL").
+ * Throws unless `url` is https, http to a loopback host, or `allowInsecureHttp` is set. Other
+ * schemes are always refused. `what` names the URL in the message, such as "the resource URL" or
+ * "the facilitator URL".
  */
 export function assertSecureUrl(url: string | URL, what: string, allowInsecureHttp = false): void {
   let u: URL;
