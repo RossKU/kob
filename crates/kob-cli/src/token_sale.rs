@@ -18,7 +18,7 @@ use crate::trade::plan::{plan_order, Clock, Crossing, Env, Intent, Lifetime, Lim
 use crate::trade::units::{parse_kas, parse_kas_price, TokenUnit};
 
 /// The flags of the sale, each taking a value.
-pub const SALE_FLAGS: [&str; 6] = ["--sell", "--keep", "--price", "--levels", "--total", "--multiple"];
+pub const SALE_FLAGS: [&str; 8] = ["--sell", "--keep", "--price", "--levels", "--total", "--multiple", "--shape", "--octaves"];
 
 /// What a sell-out realises by default, and what a one-price sale asks for its amount when no
 /// `--price` is given: 10,000 KAS (the web's defaults).
@@ -39,6 +39,9 @@ pub struct SaleArgs {
     pub total: Option<String>,
     /// `--multiple M`: a curve's last level over its first.
     pub multiple: Option<String>,
+    /// `--shape linear|chromatic` and `--octaves N` of a curve.
+    pub shape: Option<String>,
+    pub octaves: Option<String>,
     /// `--lock-until`, resolved to unix ms: the kept share is locked until then
     /// (`crate::token_lock`).
     pub lock_until: Option<u64>,
@@ -53,6 +56,8 @@ impl SaleArgs {
             "--price" => &mut self.price,
             "--levels" => &mut self.levels,
             "--total" => &mut self.total,
+            "--shape" => &mut self.shape,
+            "--octaves" => &mut self.octaves,
             _ => &mut self.multiple,
         };
         *slot = Some(value);
@@ -60,7 +65,13 @@ impl SaleArgs {
 
     /// Refuses a mode other than `price` and `curve`, and a flag that does not apply to the mode.
     pub fn check(&self) -> Result<(), String> {
-        let curve_only = [("--levels", &self.levels), ("--total", &self.total), ("--multiple", &self.multiple)];
+        let curve_only = [
+            ("--levels", &self.levels),
+            ("--total", &self.total),
+            ("--multiple", &self.multiple),
+            ("--shape", &self.shape),
+            ("--octaves", &self.octaves),
+        ];
         let given = |xs: &[(&'static str, &Option<String>)]| xs.iter().find(|(_, v)| v.is_some()).map(|(k, _)| *k);
         match self.mode.as_deref() {
             None => {
@@ -161,6 +172,8 @@ pub fn apply(spec: &mut IssueSpec, s: &SaleArgs, funder: [u8; 32]) -> Result<Opt
             if let Some(v) = &s.multiple {
                 c.multiple_milli = crate::trade::curve::parse_multiple(v)?;
             }
+            let linear = [("--levels", &s.levels), ("--multiple", &s.multiple)].into_iter().find(|(_, v)| v.is_some()).map(|(f, _)| f);
+            crate::trade::curve::apply_shape(&mut c, s.shape.as_deref(), s.octaves.as_deref(), linear)?;
             let t = curve_table(&c).map_err(|e| e.to_string())?;
             let program = Program::of(spec.program).map_err(|e| e.to_string())?;
             let state = CurveAskState {

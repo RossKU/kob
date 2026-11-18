@@ -56,7 +56,7 @@ KINDS
                  if-done options: [--entry-stop P] (a stop entry), [--limit P] (the exit stop-limit), [--exit-tip T],
                  [--exit-min-fill AMOUNT] [--exit-min-touch AMOUNT] [--exit-slippage BPS], a trailing exit stop with
                  --trail-step P --trail-gap P [--trail-wait DURATION] [--trail-updates N]
-  curve          [--levels N] [--total KAS] [--multiple M]: one sell whose price steps up level by level
+  curve          [--levels N] [--total KAS] [--multiple M] [--shape chromatic --octaves N]: one sell whose price steps up level by level
                  (`kob place curve --help`)
   pair-limit     limit with --quote TOKEN_B (every kind takes --quote: the order trades TOKEN for TOKEN_B, a KobPair /
                  KobCondPair / KobIfdPair; prices are TOKEN_B per whole TOKEN, the tips stay KAS)

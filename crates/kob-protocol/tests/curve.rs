@@ -326,7 +326,7 @@ fn curve_default_table() {
         (7, 100, 70 * KAS as i64, 5_000),
         (100 * WHOLE, 1_000, 10_000 * KAS as i64, 10_000),
     ] {
-        let spec = CurveSpec { amount, levels, total, multiple_milli: mult, scale: SCALE, tip: 0 };
+        let spec = CurveSpec { amount, levels, total, multiple_milli: mult, scale: SCALE, ..CurveSpec::defaults(amount, SCALE) };
         let t = curve_table(&spec).unwrap();
         let n = t.table.len();
         let sizes: Vec<i64> = (0..n).map(|i| if i + 1 < n { t.level_size } else { amount - (n as i64 - 1) * t.level_size }).collect();
@@ -442,3 +442,40 @@ fn sec_unbound_amend_names_its_custodys_token() {
     a.amended = AnyState::KobCurveAsk(CurveAskState { token_cov_id: [0x77; 32], ..bound });
     assert!(build(&Action::AmendOrder(a.clone())).unwrap_err().to_string().contains("token of its custody"));
 }
+
+/// The chromatic shape: one semitone per level, `12·octaves + 1` levels, every 12 levels exactly
+/// double the price, the top `2^octaves` times the first; the total sets the start; the edges.
+/// The vector is the one the web test checks through kob-wasm (`web/src/kob/curve.test.ts`).
+#[test]
+fn chromatic_tables_climb_one_semitone_per_level() {
+    use kob_protocol::defaults::{CurveShape, SEMITONES};
+    for octaves in 1..=8u32 {
+        let spec = CurveSpec::chromatic(1_000_000 * 100_000_000, 100_000_000, octaves);
+        assert_eq!(spec.shape, CurveShape::Chromatic);
+        let t = curve_table(&spec).unwrap();
+        assert_eq!(t.table.len(), 12 * octaves as usize + 1);
+        for i in 12..t.table.len() {
+            assert_eq!(t.table[i], 2 * t.table[i - 12], "octave {octaves} level {i}");
+        }
+        assert_eq!(*t.table.last().unwrap(), t.table[0] << octaves);
+        assert!(t.table.windows(2).all(|w| w[0] < w[1]));
+        // a semitone up, within the integer rounding of the start
+        for k in 1..12 {
+            let want = (t.table[0] as u128 * SEMITONES[k]) >> 40;
+            assert!((t.table[k] as i128 - want as i128).abs() <= (SEMITONES[k] >> 40) as i128 + 1, "level {k}");
+        }
+        assert!(t.realised <= spec.total && t.realised > spec.total - spec.total / 1000, "{} of {}", t.realised, spec.total);
+    }
+    let v = curve_table(&CurveSpec::chromatic(2_500_000_000, 100, 1)).unwrap();
+    assert_eq!((v.level_size, v.realised), (192_307_693, VECTOR_REALISED));
+    assert_eq!(v.table, VECTOR);
+    // edges: 0 and 9 octaves, fewer base units than levels (fewer levels, the octaves still exact where they reach)
+    assert!(curve_table(&CurveSpec::chromatic(1_000, 100, 0)).is_err());
+    assert!(curve_table(&CurveSpec::chromatic(1_000, 100, 9)).is_err());
+    let small = curve_table(&CurveSpec::chromatic(5, 1, 1)).unwrap();
+    assert_eq!(small.table.len(), 5);
+    assert!(curve_table(&CurveSpec { total: 1, ..CurveSpec::chromatic(1_000_000, 1, 8) }).is_err(), "a start below 1 sompi");
+}
+
+const VECTOR_REALISED: i64 = 999_999_998_632;
+const VECTOR: [i64; 13] = [27_634, 29_278, 31_018, 32_863, 34_817, 36_888, 39_081, 41_405, 43_867, 46_475, 49_239, 52_167, 55_268];

@@ -18,13 +18,17 @@ pub const USAGE: &str = "\
 kob place curve: sell along a stepped price curve (one order, one custody; the price rises level by level)
 
 USAGE
-  kob place curve --token TOKEN [--amount AMOUNT] [--levels N] [--total KAS] [--multiple M] [options]
+  kob place curve --token TOKEN [--amount AMOUNT] [--levels N] [--total KAS] [--multiple M] [--shape linear|chromatic [--octaves N]] [options]
 
   --amount AMOUNT   what the curve sells (default: every token of TOKEN this wallet holds)
   --levels N        price levels, 1 to 1000 (default 100; fewer when the amount is small)
   --total KAS       what a sell-out realises, e.g. 10000KAS (default 10000KAS): the prices are rounded so that a
                     sell-out bought level by level pays at most this, as close to it as whole sompi allow
   --multiple M      the last level's price over the first's (default 5; geometric steps; 1 = one flat price)
+  --shape S         linear (the default: --levels and --multiple) or chromatic: each level one semitone (2^(1/12),
+                    about +5.95 %) above the one below, as Kaspa's emission falls one semitone a month
+  --octaves N       chromatic: the range, 1 to 8 octaves (default 2): 12 x N + 1 levels, the start level included,
+                    the top exactly 2^N times the start; --total sets the start
   --tip T           KAS per whole token taken from every level (default 0)
   --min-fill A      smallest fill (default: worth 10 KAS at the first level)
   --active-from W   no fill before WHEN (2026-10-20T00:00Z or daa:N)
@@ -34,9 +38,56 @@ USAGE
 A fill crosses at most 8 levels. The curve has no expiry: it sells until it is sold out or you cancel it.
 ";
 
-const VALUE_FLAGS: &[&str] =
-    &["--token", "--amount", "--levels", "--total", "--multiple", "--tip", "--min-fill", "--active-from", "--carrier", "--decimals"];
+const VALUE_FLAGS: &[&str] = &[
+    "--token",
+    "--amount",
+    "--levels",
+    "--total",
+    "--multiple",
+    "--shape",
+    "--octaves",
+    "--tip",
+    "--min-fill",
+    "--active-from",
+    "--carrier",
+    "--decimals",
+];
 const BOOL_FLAGS: &[&str] = &["--ack-no-guards", "--ack-market-start"];
+
+/// `--shape` and `--octaves` on `spec`: linear (the default) keeps `--levels` and `--multiple`;
+/// chromatic takes `--octaves` (1 to 8, default 2) and refuses those two.
+pub(crate) fn apply_shape(
+    spec: &mut CurveSpec,
+    shape: Option<&str>,
+    octaves: Option<&str>,
+    linear_given: Option<&str>,
+) -> Result<(), String> {
+    use kob_protocol::defaults::{CurveShape, CHROMATIC_MAX_OCTAVES, DEFAULT_CHROMATIC_OCTAVES};
+    match shape.unwrap_or("linear") {
+        "linear" => match octaves {
+            Some(_) => Err("--octaves is for --shape chromatic".into()),
+            None => Ok(()),
+        },
+        "chromatic" => {
+            if let Some(f) = linear_given {
+                return Err(format!("{f} is for the linear shape (a chromatic curve's levels come from --octaves)"));
+            }
+            let n = match octaves {
+                None => DEFAULT_CHROMATIC_OCTAVES,
+                Some(v) => v
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|n| (1..=CHROMATIC_MAX_OCTAVES).contains(n))
+                    .ok_or_else(|| format!("--octaves must be a whole number from 1 to {CHROMATIC_MAX_OCTAVES}, got `{v}`"))?,
+            };
+            spec.shape = CurveShape::Chromatic;
+            spec.octaves = n;
+            spec.levels = 12 * n as usize + 1;
+            Ok(())
+        }
+        o => Err(format!("--shape must be linear or chromatic, got `{o}`")),
+    }
+}
 
 /// `--multiple` in thousandths (`5`, `2.5`).
 pub(crate) fn parse_multiple(v: &str) -> Result<u64, String> {
@@ -80,6 +131,8 @@ pub fn curve_of(
     if let Some(v) = p.get("--tip") {
         spec.tip = units::parse_kas_price(v, &unit, m.scale, "--tip", true)?;
     }
+    let linear = ["--levels", "--multiple"].into_iter().find(|f| p.get(f).is_some());
+    apply_shape(&mut spec, p.get("--shape"), p.get("--octaves"), linear)?;
     let t = curve_table(&spec).map_err(|e| e.to_string())?;
     let min_fill = match p.get("--min-fill") {
         Some(v) => parse_token_amount(v, &unit, "--min-fill")?,
@@ -236,5 +289,24 @@ mod tests {
         assert!(parse_multiple("0.9").is_err());
         assert!(parse_multiple("1.0001").is_err());
         assert!(parse_multiple("x").is_err());
+    }
+
+    /// --shape chromatic: 12 x N + 1 levels, each 12 doubling; the protocol table, as the web gets it through kob-wasm.
+    #[test]
+    fn a_chromatic_shape_takes_octaves_and_refuses_the_linear_knobs() {
+        let mut s = CurveSpec::defaults(2_500_000_000, 100);
+        apply_shape(&mut s, Some("chromatic"), Some("1"), None).unwrap();
+        let t = curve_table(&s).unwrap();
+        assert_eq!(
+            t.table,
+            vec![27_634, 29_278, 31_018, 32_863, 34_817, 36_888, 39_081, 41_405, 43_867, 46_475, 49_239, 52_167, 55_268]
+        );
+        let mut d = CurveSpec::defaults(1_000_000, 1);
+        apply_shape(&mut d, Some("chromatic"), None, None).unwrap();
+        assert_eq!((d.octaves, d.levels), (2, 25));
+        assert!(apply_shape(&mut d, Some("chromatic"), Some("9"), None).is_err());
+        assert!(apply_shape(&mut d, Some("chromatic"), Some("2"), Some("--levels")).unwrap_err().contains("linear shape"));
+        assert!(apply_shape(&mut d, None, Some("2"), None).unwrap_err().contains("--shape chromatic"));
+        assert!(apply_shape(&mut d, Some("sine"), None, None).is_err());
     }
 }

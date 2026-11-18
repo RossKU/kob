@@ -68,6 +68,9 @@ AFTER CREATION (as the web app's Create token; default: the wallet keeps everyth
     --levels N          price levels, 1 to 1000 (default 100)
     --total KAS         what a sell-out realises (default 10000KAS)
     --multiple M        the last level's price over the first's (default 5)
+    --shape chromatic   each level one semitone (2^(1/12), about +5.95 %) above the one below, as Kaspa's emission falls
+      --octaves N       one semitone a month; N octaves (1 to 8, default 2): 12 x N + 1 levels, the top 2^N times the
+                        start, --total sets the start (instead of --levels and --multiple)
   --keep PERCENT        the share kept in the wallet as its own output (0 to 100, default 0)
                         One confirmation (or --yes) covers the creation and the sale. A dry run with --sell price
                         reads the node's clock.
