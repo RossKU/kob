@@ -1,8 +1,9 @@
-//! Keepers (`docs/spec/matcher.md` §5, §11): IOC / FOK kill in the first block that allows it, soft-expiry and idle
-//! refunds, repeating entries, stray handling; never an arm or a trail (matchers arm stops inside the
-//! batches that fill their evidence, `matcher_scenarios.rs`); the pair kinds (`KobPair`, `KobCondPair`, `KobIfdPair`) are refunded,
-//! killed and swept like the KAS kinds, a sell-first entry with both its custodies. Every job is validated through the rusty-kaspa
-//! v2.1.0 engine.
+//! Keepers (`docs/spec/matcher.md` §5, §11): IOC / FOK kill in the first block that allows it,
+//! soft-expiry and idle refunds, repeating entries, stray handling; never an arm or a trail
+//! (matchers arm stops inside the batches that fill their evidence, `matcher_scenarios.rs`); the
+//! pair kinds (`KobPair`, `KobCondPair`, `KobIfdPair`) are refunded, killed and swept like the KAS
+//! kinds, a sell-first entry with both its custodies. Every job is validated through the
+//! rusty-kaspa v2.1.0 engine.
 
 #[path = "matcher_common/mod.rs"]
 mod common;
@@ -648,9 +649,10 @@ fn a_mode1_bid_without_bought_tokens_refunds_as_before() {
     assert!(!pays_token(&r.jobs[0], T3, WHOLE, 2));
 }
 
-/// I5: a refund of a mode-1 bid with a bought-custody needs that custody to be the only input of its token, so two such
-/// refunds of one token, or one beside a custody-free bid refund of the same token, cannot share a transaction. The keeper
-/// builds one transaction per refund: three expired bids of one token make three jobs, each with at most its own custody.
+/// A refund of a mode-1 bid with a bought-custody needs that custody to be the only input of its
+/// token, so two such refunds of one token, or one beside a custody-free bid refund of the same
+/// token, cannot share a transaction. The keeper builds one transaction per refund: three expired
+/// bids of one token make three jobs, each with at most its own custody.
 #[test]
 fn mode1_refunds_of_one_token_are_transactions_of_their_own() {
     let orders = vec![mode1_bid(1, 4 * WHOLE, Some(4 * WHOLE)), mode1_bid(2, 3 * WHOLE, Some(3 * WHOLE)), mode1_bid(3, 0, None)];

@@ -1,7 +1,8 @@
-//! Keeper liveness under fee pressure (`docs/ops/executor.md`, fee policy): a kill or refund whose refund tip pays it at the
-//! floor but not at its urgency's rate is topped up from the operator's own funding (bounded by `subsidy_max`, the total cap
-//! and the highest rate; the maker's outputs never change), and a kill or refund of this process that stays unaccepted is
-//! rebuilt at a higher rate and replaced with `submitTransactionReplacement`, a bounded number of times, never a
+//! Keeper liveness under fee pressure (`docs/ops/executor.md`, fee policy): a kill or refund whose
+//! refund tip pays it at the floor but not at its urgency's rate is topped up from the operator's
+//! own funding (bounded by `subsidy_max`, the total cap and the highest rate; the maker's outputs
+//! never change), and a kill or refund of this process that stays unaccepted is rebuilt at a higher
+//! rate and replaced with `submitTransactionReplacement`, a bounded number of times, never a
 //! transaction this process did not submit.
 
 #[path = "matcher_common/mod.rs"]
@@ -355,8 +356,8 @@ async fn a_stuck_kill_is_replaced_at_a_higher_rate_at_most_k_times() {
     assert_eq!(r.keeper_replaced, 2);
     let m = kobd::matcher::run::metrics_text(&r, &r.last.clone());
     assert!(m.contains("kob_keeper_replaced_total 2"), "{m}");
-    // 600 DAA after the first submission the node is asked (a resend): it still holds it, so it stays tracked (audit
-    // 2026-11-11 M-2: a transaction a mempool holds is never forgotten)
+    // 600 DAA after the first submission the node is asked (a resend): it still holds it, so it
+    // stays tracked (a transaction a mempool holds is never forgotten)
     node.0.lock().unwrap().submit_replies.push_back(Err("transaction aa is already in the mempool".into()));
     node.set_daa(KILL_DAA + 600);
     r.step().await.unwrap();
@@ -371,10 +372,11 @@ async fn a_stuck_kill_is_replaced_at_a_higher_rate_at_most_k_times() {
     assert_eq!(r.tracker.dropped_total, 1);
 }
 
-/// Audit 2026-11-11 M-3: a restart (a kill) does not forget what the mempool holds. The kill submitted before it comes back from
-/// the in-flight journal as a submission without a verdict (its inputs reserved, its order busy), the first step resends it and
-/// the node's "already in the mempool" settles it, and it can still be replaced at a higher rate (its keeper job is in the
-/// journal too). The keepers' subsidy window and the start count survive as well.
+/// A restart (a kill) does not forget what the mempool holds. The kill submitted before it comes
+/// back from the in-flight journal as a submission without a verdict (its inputs reserved, its
+/// order busy), the first step resends it and the node's "already in the mempool" settles it, and
+/// it can still be replaced at a higher rate (its keeper job is in the journal too). The keepers'
+/// subsidy window and the start count survive as well.
 #[tokio::test]
 async fn a_restart_keeps_what_is_in_flight_and_can_still_replace_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -387,7 +389,7 @@ async fn a_restart_keeps_what_is_in_flight_and_can_still_replace_it() {
     let rep = r.step().await.unwrap();
     assert_eq!(rep.submitted.len(), 1);
     let (t0, rate0, spends0) = tracked(&r);
-    // a subsidy charged before the restart stays in the window after it (audit 2026-11-11 L-2)
+    // a subsidy charged before the restart stays in the window after it
     let kc = r.cfg.keeper.clone();
     let now = kobd::matcher::book::utc_now();
     r.keeper_subsidy.charge(&kc, KILL_DAA, now, 12_345);

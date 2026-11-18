@@ -1,9 +1,9 @@
-//! The executor end to end, in both token families (KCC-20 and KRON): synthetic chain data built with
-//! the kob-protocol builders goes through the indexer (follower, processor, SQLite), and the matcher and
-//! keepers plan against the indexed book (`IndexerSource`), every transaction validated in the
-//! rusty-kaspa v2.1.0 script engine. Acceptance, finality and reorg rollback come from the indexer's own
-//! chain follower: the test node refuses `getVirtualChainFromBlockV2`, so a second follower in the runner
-//! would fail these tests.
+//! The executor end to end, in both token families (KCC-20 and KRON): synthetic chain data built
+//! with the kob-protocol builders goes through the indexer (follower, processor, SQLite), and the
+//! matcher and keepers plan against the indexed book (`IndexerSource`), every transaction validated
+//! in the rusty-kaspa v2.1.0 script engine. Acceptance, finality and reorg rollback come from the
+//! indexer's own chain follower: the test node refuses `getVirtualChainFromBlockV2`, so a second
+//! follower in the runner would fail these tests.
 
 mod common;
 
@@ -488,9 +488,10 @@ async fn a_lagging_indexer_stops_planning_until_it_catches_up() {
     assert!(!rep.book_stale && rep.built.len() == 1, "{rep:?}");
 }
 
-/// After a restart the store is where the last run left it: until the follower reports it caught up (`following`), the
-/// matcher, the keepers and the maintenance jobs plan nothing (the TN10 soak's restarts submitted maintenance sells over a
-/// stale store and lost them to `MissingInput`), and no funding is reported (not `0`: unknown).
+/// After a restart the store is where the last run left it: until the follower reports it caught up
+/// (`following`), the matcher, the keepers and the maintenance jobs plan nothing (maintenance sells
+/// over a stale store would be lost to `MissingInput`), and no funding is reported (not `0`:
+/// unknown).
 #[tokio::test]
 async fn nothing_is_planned_until_the_indexer_has_caught_up() {
     use kobd::indexer::status::{FollowerState, HealthState};
@@ -704,13 +705,13 @@ async fn run_indexes_matches_and_shuts_down_cleanly() {
         let prom = std::fs::read_to_string(&metrics).unwrap();
         assert!(prom.contains("kob_matcher_submitted_total 1"), "{prom}");
         assert!(prom.contains("kob_matcher_rejected_total 0") && prom.contains("kob_matcher_book_stale 0"), "{prom}");
-        // the Executor's part of /v1/health and /v1/metrics (audit 2026-11-11 M-16)
+        // the Executor's part of /v1/health and /v1/metrics
         let h = health.snapshot();
         let ex = h.executor.expect("the runner reports to the health");
         assert_eq!((ex.submitted_total, ex.pending), (1, 1));
         assert!(ex.last_submit_unix.is_some() && ex.funds_sompi.is_some());
         assert!(h.executor_metrics.contains("kob_matcher_submitted_total 1"));
-        // the pending fill is in the in-flight journal for the next start (audit 2026-11-11 M-3)
+        // the pending fill is in the in-flight journal for the next start
         assert_eq!(ex.journal_entries, 1);
         let journal = std::fs::read_to_string(dir.path().join("data").join(kobd::matcher::journal::FILE_NAME)).unwrap();
         assert!(journal.lines().any(|l| l.contains("\"op\":\"add\"")), "{journal}");

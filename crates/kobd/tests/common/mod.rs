@@ -1,6 +1,6 @@
 #![allow(dead_code)]
-//! Shared helpers of the flow tests: a world (real builders and artifacts) plus an indexer harness; `pair`: the pair-order
-//! fixtures.
+//! Shared helpers of the flow tests: a world (real builders and artifacts) plus an indexer harness;
+//! `pair`: the pair-order fixtures.
 
 pub mod pair;
 

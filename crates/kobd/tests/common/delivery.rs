@@ -1,8 +1,10 @@
 #![allow(dead_code)]
-//! Bid delivery fixtures (`docs/design/bid-delivery-spec.md`): the transactions of a mode-1 or mode-2 bid, built with the protocol
-//! builders as a mode-0 fill, refund or cancel and patched to the delivery-mode shape of spec sections 4, 5 and 7 (the outputs and
-//! states the covenant pins, the KAS each part carries, and the entry arguments). The indexer runs no script, so a patched
-//! transaction is signed again without engine validation; what the indexer reads of it is exactly what a valid one shows.
+//! Bid delivery fixtures (`docs/design/bid-delivery-spec.md`): the transactions of a mode-1 or
+//! mode-2 bid, built with the protocol builders as a mode-0 fill, refund or cancel and patched to
+//! the delivery-mode shape of spec sections 4, 5 and 7 (the outputs and states the covenant pins,
+//! the KAS each part carries, and the entry arguments). The indexer runs no script, so a patched
+//! transaction is signed again without engine validation; what the indexer reads of it is exactly
+//! what a valid one shows.
 //!
 //! Included with `#[path = "common/delivery.rs"] mod delivery;` next to `mod common;`.
 

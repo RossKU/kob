@@ -1,7 +1,9 @@
-//! Pair-order fixtures of the indexer flow tests (`KobPair`, `KobCondPair`, `KobIfdPair`): a pair A/B of the world's two
-//! tokens (A of family `fa`, B of family `fb`: `TOKEN_COV` / `T3` for KCC-20, `TOKEN_COV_KRON` / `K3` for KRON), both of
-//! scale `SCALE`, prices in B base units per whole A (`RATE` = one whole B per whole A). Orders are created with the real
-//! `CreateOrder` builder (custodies of either token drawn from synthetic maker coins) and filled with `build_batch` legs.
+//! Pair-order fixtures of the indexer flow tests (`KobPair`, `KobCondPair`, `KobIfdPair`): a pair
+//! A/B of the world's two tokens (A of family `fa`, B of family `fb`: `TOKEN_COV` / `T3` for
+//! KCC-20, `TOKEN_COV_KRON` / `K3` for KRON), both of scale `SCALE`, prices in B base units per
+//! whole A (`RATE` = one whole B per whole A). Orders are created with the real `CreateOrder`
+//! builder (custodies of either token drawn from synthetic maker coins) and filled with
+//! `build_batch` legs.
 
 use super::*;
 use kob_protocol::artifacts::TemplateId;
