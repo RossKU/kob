@@ -1,11 +1,13 @@
-// One market page, one pair selector: the header shows the pair as `BASE / QUOTE` and each side is a drop-down of assets (KAS and the tokens). This file is the
-// pure part: which pair a market route displays, what a changed selector leads to, and which assets a side may offer. Display only: the market routes
-// are the same as before (`#/market/<token>` = the token's KAS book, shown TOKEN/KAS or flipped KAS/TOKEN; `#/market/<base>/<quote>` = a token pair).
+// One market page, one pair selector. The header shows the pair as `BASE / QUOTE`, and each side
+// is a drop-down of assets (KAS and the tokens). This file is the pure part. It decides which pair
+// a market route displays, what a changed selector leads to, and which assets a side may offer. It
+// is display only. The market routes are `#/market/<token>`, the token's KAS book shown TOKEN/KAS
+// or flipped KAS/TOKEN, and `#/market/<base>/<quote>`, a token pair.
 import { pairRoute, tokenRoute, type Route } from '../../app/router';
 import { filterTokens, type TokenRow } from './token-model';
 
 export const KAS = 'kas';
-/** `kas` or a token's covenant id (lower case). */
+/** `kas` or a token's covenant id in lower case. */
 export type AssetId = string;
 
 export interface DisplayedPair {
@@ -13,14 +15,17 @@ export interface DisplayedPair {
   right: AssetId;
 }
 
-/** The pair a market shows: `TOKEN/KAS` natively, `KAS/TOKEN` inverted; a token pair as routed (BASE/QUOTE; its swap is a route). */
+/**
+ * The pair a market shows: `TOKEN/KAS` natively, `KAS/TOKEN` inverted, and a token pair as routed
+ * (BASE/QUOTE, where its swap is a route).
+ */
 export function displayedPair(base: string, quote: string | null, inverted: boolean): DisplayedPair {
   const b = base.toLowerCase();
   if (quote !== null) return { left: b, right: quote.toLowerCase() };
   return inverted ? { left: KAS, right: b } : { left: b, right: KAS };
 }
 
-/** A selector changed: the new pair. Picking the asset that sits on the other side swaps the two sides. */
+/** A selector changed, giving the new pair. Picking the asset on the other side swaps the sides. */
 export function changePair(cur: DisplayedPair, side: 'left' | 'right', next: AssetId): DisplayedPair {
   const a = next.toLowerCase();
   const other = side === 'left' ? cur.right : cur.left;
@@ -29,7 +34,8 @@ export function changePair(cur: DisplayedPair, side: 'left' | 'right', next: Ass
 }
 
 /**
- * Where a pair leads: the token's own KAS market (with the orientation to remember: `true` = KAS/TOKEN) or the token pair. KAS/KAS is no market (null).
+ * Where a pair leads. It is the token's own KAS market, with the orientation to remember (`true`
+ * means KAS/TOKEN), or the token pair. KAS/KAS is no market and gives null.
  */
 export function marketFor(p: DisplayedPair): { route: Route; inverted: boolean | null } | null {
   if (p.left === KAS && p.right === KAS) return null;
@@ -39,17 +45,18 @@ export function marketFor(p: DisplayedPair): { route: Route; inverted: boolean |
 }
 
 export interface AssetChoice {
-  /** `kas` or the covenant id */
+  /** `kas` or the covenant id. */
   value: AssetId;
-  /** the drop-down entry (tokens: ticker and short id) */
+  /** The drop-down entry. For tokens it is the ticker and short id. */
   label: string;
-  /** what the closed selector shows */
+  /** What the closed selector shows. */
   short: string;
 }
 
 /**
- * The assets one side offers: KAS and every token of `rows` (the tokens this build can trade: any two of them make a pair, registered or not). The asset
- * on the other side is never offered (swap with the flip control).
+ * The assets one side offers. They are KAS and every token of `rows`, which are the tokens this
+ * build can trade. Any two of them make a pair, registered or not. The asset on the other side is
+ * never offered, and the flip control swaps them.
  */
 export function assetChoices<T extends { covenantId: string; ticker: string }>(
   rows: readonly T[], other: AssetId, label: (r: T) => string,
@@ -65,13 +72,19 @@ export function assetChoices<T extends { covenantId: string; ticker: string }>(
   return out;
 }
 
-/** The second line of a picker's row: the token's name, nothing when there is none or it only repeats the ticker (KASPERO / Kaspero). */
+/**
+ * The second line of a picker's row: the token's name. It is empty when there is none or it only
+ * repeats the ticker (KASPERO / Kaspero).
+ */
 export const pickerName = (name: string | null | undefined, ticker: string): string => (name && name.trim().toLowerCase() !== ticker.trim().toLowerCase() ? name : '');
 
-/** The most choices a picker lists at once: the search narrows the rest. */
+/** The most choices a picker lists at once. The search narrows the rest. */
 export const PICKER_ROWS = 50;
 
-/** The choices a picker's search leaves: the tokens by ticker, name or covenant id (`filterTokens`, over `rows`), KAS by its name. An empty search leaves all. */
+/**
+ * The choices a picker's search leaves. Tokens match by ticker, name or covenant id
+ * (`filterTokens`, over `rows`) and KAS by its name. An empty search leaves all.
+ */
 export function filterChoices(choices: readonly AssetChoice[], rows: readonly TokenRow[], query: string): AssetChoice[] {
   const q = query.trim().toLowerCase();
   if (!q) return [...choices];

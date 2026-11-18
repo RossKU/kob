@@ -1,13 +1,19 @@
-// The market page's 24 h strip in USD (Settings, Display currency; app/fiat.ts): the last price, the 24 h high and low and the 24 h volume in KAS become dollars, as the
-// strip of a token's KAS market (TOKEN/KAS, not flipped) reads them. The change, the spread, the trade count and the volume in the token stay as they are (ratios and
-// token units). Each converted tile keeps its KAS figure in its tooltip, with the rate used. The order book, the chart and the ticket are not touched.
+// The market page's 24 h strip in USD (Settings, Display currency; app/fiat.ts). The last price,
+// the 24 h high and low and the 24 h volume in KAS become dollars, as the strip of a token's KAS
+// market (TOKEN/KAS, not flipped) reads them. The change, the spread, the trade count and the
+// volume in the token stay as they are, because they are ratios and token units. Each converted
+// tile keeps its KAS figure in its tooltip, with the rate used. The order book, the chart and the
+// ticket are not touched.
 import { kasPerTokenToUsd, rateTitle, sompiToUsd, usdText, usdTextFit, type Fiat } from '../../app/fiat';
 import { t } from '../../i18n';
 import type { StatsView } from '../../data/indexer-types';
 import { kasPerToken } from './orientation';
 import { basisOf, bigOrNull, type StatsModel } from './market-model';
 
-/** The last trade as the tape reads it (price in sompi per `basis` base units): the strip's last price when the stats have none. */
+/**
+ * The last trade as the tape reads it, with its price in sompi per `basis` base units. It is the
+ * strip's last price when the stats have none.
+ */
 export interface TapeLast {
   price: bigint;
   basis: bigint;
@@ -15,7 +21,7 @@ export interface TapeLast {
 
 export interface UsdStats {
   model: StatsModel;
-  /** tooltips of the converted tiles: the KAS figure and the rate used */
+  /** Tooltips of the converted tiles: the KAS figure and the rate used. */
   lastTitle: string | null;
   titles: { high: string | null; low: string | null; quoteVolume: string | null; volume?: string | null };
 }
@@ -24,8 +30,9 @@ export interface UsdStats {
 const VOLUME_CHARS = 10;
 
 /**
- * `base` (the KAS strip, `statsModel`) with its KAS tiles in dollars. `ticker` names the token for the tooltips ("0.0123 KAS per TICKER"). A tile with no figure stays
- * empty. `tapeLast`: the last trade of the tape, used for the last price only when the stats carry none.
+ * `base` (the KAS strip, `statsModel`) with its KAS tiles in dollars. `ticker` names the token for
+ * the tooltips ("0.0123 KAS per TICKER"). A tile with no figure stays empty. `tapeLast` is the
+ * last trade of the tape, used for the last price only when the stats carry none.
  */
 export function usdStatsModel(base: StatsModel, v: StatsView | null, decimals: number, fiat: Fiat, ticker: string, tapeLast: TapeLast | null = null): UsdStats {
   const basis = v ? basisOf(v.price_basis) : null;
@@ -59,8 +66,10 @@ export function usdStatsModel(base: StatsModel, v: StatsView | null, decimals: n
 }
 
 /**
- * The strip of a FLIPPED market (KAS/TOKEN, `statsModelFlipped`) in USD: its last, high and low are tokens per KAS (a ratio, not a KAS value) and stay, and so do the change, the trades and
- * the volume in the token; the 24 h volume in KAS (the BASE tile) becomes dollars with the KAS figure and the rate in its tooltip.
+ * The strip of a flipped market (KAS/TOKEN, `statsModelFlipped`) in USD. Its last, high and low
+ * are tokens per KAS, a ratio and not a KAS value, and they stay. So do the change, the trades and
+ * the volume in the token. The 24 h volume in KAS, the BASE tile, becomes dollars with the KAS
+ * figure and the rate in its tooltip.
  */
 export function usdFlippedStatsModel(base: StatsModel, v: StatsView | null, fiat: Fiat): UsdStats {
   const qv = v ? bigOrNull(v.quote_volume_24h) : null;

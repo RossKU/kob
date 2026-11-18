@@ -1,14 +1,20 @@
-// Which picture a token shows and where it comes from (data/logos.ts has the rules). The order:
-//
-//   1. the viewer turned icons off, or the token is on the blocklist (a report hid its logo): no picture, no request;
-//   2. kascov.io's saved copy, when its bytes hash to what the creator committed to ('checked');
-//   3. only if the viewer allows creator sites (Settings): the picture address of the token's KCC-23 declaration (`image`, or the older `logo`), then the one
-//      kascov.io lists for it. When the declaration carries an `image_hash` (the SHA-256 of the file) the bytes are compared with it first:
-//        - `ipfs://` fetched as bytes through the gateway: equal -> 'verified'; a different file -> 'mismatch'; no hash -> 'ipfs';
-//        - `https://` read in CORS mode: equal -> 'verified' (a blob); different -> 'mismatch'; not readable (no CORS header, the usual case) or
-//          no hash -> a plain <img> the page cannot read or check ('creator');
-//      In a wallet view (`scope: 'wallet'`) an https address loads only for a token the user acquired or chose to show (data/logo-gate.ts): else 'withheld'.
-//   4. none: the letter avatar (with the note, for 'mismatch', that the picture at the creator's address is not the one the creation record names).
+// Which picture a token shows and where it comes from (data/logos.ts has the rules). The order is:
+// 1. The viewer turned icons off, or the token is on the blocklist because a report hid its logo.
+//    There is no picture and no request.
+// 2. kascov.io's saved copy, when its bytes hash to what the creator committed to ('checked').
+// 3. Only if the viewer allows creator sites (Settings): the picture address of the token's
+//    KCC-23 declaration (`image`, or `logo`), then the one kascov.io lists for it. When the
+//    declaration carries an `image_hash`, the SHA-256 of the file, the bytes are compared with it
+//    first.
+//    - `ipfs://` is fetched as bytes through the gateway. Equal gives 'verified', a different file
+//      gives 'mismatch', and no hash gives 'ipfs'.
+//    - `https://` is read in CORS mode. Equal gives 'verified' (a blob) and different gives
+//      'mismatch'. Not readable, which is the usual case with no CORS header, or no hash gives a
+//      plain <img> the page cannot read or check ('creator').
+//    In a wallet view (`scope: 'wallet'`) an https address loads only for a token the user
+//    acquired or chose to show (data/logo-gate.ts). Otherwise the state is 'withheld'.
+// 4. None: the letter avatar. For 'mismatch' it comes with the note that the picture at the
+//    creator's address is not the one the creation record names.
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { useCreatorImagePref, useIconPref } from '../../app/icon-pref';
@@ -21,15 +27,29 @@ import { declaredToken } from '../../data/token-declarations';
 
 export type TokenLogo =
   | { state: 'off' | 'hidden' | 'pending' | 'none' }
-  /** wallet view, creator-hosted https logo of a token the user did not acquire: nothing is requested; the letter shows with a "Show logo" control */
+  /**
+   * A wallet view, with a creator-hosted https logo of a token the user did not acquire. Nothing is
+   * requested, and the letter shows with a "Show logo" control.
+   */
   | { state: 'withheld'; host: string }
-  /** `checked`: bytes that hash to the creator's committed hash (kascov.io's copy); `ipfs`: bytes from the gateway, compared with the CID where that is possible */
+  /**
+   * `checked` is bytes that hash to the creator's committed hash (kascov.io's copy). `ipfs` is
+   * bytes from the gateway, compared with the CID where that is possible.
+   */
   | { state: 'checked' | 'ipfs'; src: string }
-  /** bytes from the creator's address that hash to the `image_hash` of the token's creation record */
+  /**
+   * Bytes from the creator's address that hash to the `image_hash` of the token's creation record.
+   */
   | { state: 'verified'; src: string }
-  /** the picture at the creator's address is NOT the file the creation record's `image_hash` names: the letter is shown, with a note */
+  /**
+   * The picture at the creator's address is not the file the creation record's `image_hash` names.
+   * The letter is shown, with a note.
+   */
   | { state: 'mismatch'; host: string }
-  /** an <img> straight from the creator's site: not checked, that site sees the viewer's IP address */
+  /**
+   * An <img> straight from the creator's site. It is not checked, and that site sees the viewer's
+   * IP address.
+   */
   | { state: 'creator'; src: string; host: string };
 
 export interface LogoSubject {
@@ -37,7 +57,7 @@ export interface LogoSubject {
   kascov?: { imageHash: string | null; imageUrl: string | null } | null | undefined;
 }
 
-/** Whether a report hid this token's logo; the component re-renders when the blocklist changes. */
+/** Whether a report hid this token's logo. The component re-renders when the blocklist changes. */
 export function useLogoHidden(covenantId: string): boolean {
   const [, setN] = useState(0);
   useEffect(() => logoBlocklist.subscribe(() => setN((n) => n + 1)), []);
@@ -54,8 +74,9 @@ const hostOf = (r: LogoRef, gateway: string): string => {
 };
 
 /**
- * The logo of a token. `active`: the icon is on screen (nothing is fetched before). Returns the state to draw and `failed()` for an <img> that did not load
- * (the next candidate address is tried, then the letter).
+ * The logo of a token. `active` means the icon is on screen, and nothing is fetched before. It
+ * returns the state to draw and `failed()` for an <img> that did not load. The next candidate
+ * address is then tried, then the letter.
  */
 export function useTokenLogo(row: LogoSubject, active: boolean, scope?: 'wallet'): { logo: TokenLogo; failed: () => void } {
   const { config } = useServices();
@@ -70,12 +91,13 @@ export function useTokenLogo(row: LogoSubject, active: boolean, scope?: 'wallet'
   const hash = row.kascov?.imageHash ?? null;
   const decl = declaredToken(config.network, covenantId);
   const declared = decl?.image ?? null;
-  // the creator's commitment to the file: the declaration's `image_hash` (a token without one is shown as before, unchecked)
+  // The creator's commitment to the file is the declaration's `image_hash`. A token without one is
+  // shown unchecked.
   const committed = asImageHash(decl?.imageHash);
   const claimed = row.kascov?.imageUrl ?? null;
   const blocked = !iconsOn || hidden;
 
-  // 2. kascov.io's checked copy
+  // 2. kascov.io's checked copy.
   const checkKey = `${net}|${covenantId}|${hash}|${base}`;
   const [checked, setChecked] = useState<{ key: string; src: string | null } | null>(null);
   useEffect(() => {
@@ -92,12 +114,12 @@ export function useTokenLogo(row: LogoSubject, active: boolean, scope?: 'wallet'
   }, [blocked, active, checkKey, net, hash, base, covenantId, claimed]);
   const checkedHere = checked?.key === checkKey ? checked : null;
 
-  // 3. the creator's address: the declaration's first, then the one kascov.io lists
+  // 3. The creator's address: the declaration's first, then the one kascov.io lists.
   const candidates = useMemo(() => {
     const out: LogoRef[] = [];
     for (const raw of [declared, claimed]) {
       const r = parseLogoRef(raw);
-      // an https SVG is shown only from checked bytes: without a committed hash it is skipped
+      // An https SVG is shown only from checked bytes. Without a committed hash it is skipped.
       if (r && r.kind === 'https' && r.svg && committed === null) continue;
       if (r && !out.some((x) => refKey(x) === refKey(r))) out.push(r);
     }
@@ -109,11 +131,11 @@ export function useTokenLogo(row: LogoSubject, active: boolean, scope?: 'wallet'
   const next = () => setTried({ key: candKey, n: n + 1 });
   const advance = () => setTried((t) => ({ key: candKey, n: (t.key === candKey ? t.n : 0) + 1 }));
   const next0 = !blocked && active && creatorOn && checkedHere !== null && checkedHere.src === null ? candidates[n] : undefined;
-  // a wallet view asks a creator's host nothing for a token the user did not acquire
+  // A wallet view asks a creator's host nothing for a token the user did not acquire.
   const withheld = next0 && withholdsLogo(scope, allowed, next0.kind) ? next0 : null;
   const cur = withheld ? undefined : next0;
 
-  // 3a. ipfs:// through the gateway (compared with the committed hash when there is one)
+  // 3a. ipfs:// through the gateway, compared with the committed hash when there is one.
   const gateway = config.ipfsGatewayUrl;
   const ipfsKey = cur?.kind === 'ipfs' ? `${gateway}|${refKey(cur)}|${committed ?? ''}` : null;
   const [ipfs, setIpfs] = useState<{ key: string; src: string | null; mismatch: boolean } | null>(null);
@@ -133,7 +155,8 @@ export function useTokenLogo(row: LogoSubject, active: boolean, scope?: 'wallet'
   }, [ipfsKey]);
   const ipfsHere = ipfs !== null && ipfs.key === ipfsKey ? ipfs : null;
 
-  // 3b. https:// with a committed hash: read the bytes and compare; unreadable falls back to the unchecked <img>
+  // 3b. https:// with a committed hash: read the bytes and compare. Unreadable falls back to the
+  // unchecked <img>.
   const httpsKey = cur?.kind === 'https' && committed !== null ? `${cur.url}|${committed}` : null;
   const [https, setHttps] = useState<{ key: string; out: HttpsOutcome } | null>(null);
   useEffect(() => {
@@ -142,7 +165,7 @@ export function useTokenLogo(row: LogoSubject, active: boolean, scope?: 'wallet'
     void httpsChecker.check(cur.url, committed).then((out) => {
       if (!live) return;
       setHttps({ key: httpsKey, out });
-      // an SVG that cannot be read is never shown unchecked
+      // An SVG that cannot be read is never shown unchecked.
       if (out.kind === 'refused' || (out.kind === 'unreadable' && cur.svg)) advance();
     });
     return () => {
