@@ -1,5 +1,7 @@
-// The legend above the market list, collapsed behind one small info control: what the picture beside a token is, what "via kascov" says and (behind a tap,
-// not a tooltip) what each badge means, so no row repeats it. The attribution stays on screen as a short label next to the control ("names via kascov").
+// The legend above the market list, collapsed behind one small info control. It says what the
+// picture beside a token is and what "via kascov" says. Behind a tap, not a tooltip, it says what
+// each badge means, so no row repeats it. The attribution stays on screen as a short label next to
+// the control ("names via kascov").
 import { useState } from 'preact/hooks';
 import { FINGERPRINT_ALGORITHM } from '../../app/fingerprint';
 import { t } from '../../i18n';

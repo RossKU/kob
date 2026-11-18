@@ -1,13 +1,17 @@
-// A covenant id, shortened (12 + 12 hex, 96 bits: the picture beside it carries about 35 bits and the name and ticker are free to copy, so this is the identity) with an icon-only copy
-// button. The full id is the tooltip, the `data-value` and what the button copies (the token's details card prints the whole id).
+// A covenant id, shortened to 12 + 12 hex (96 bits), with an icon-only copy button. The picture
+// beside it carries about 35 bits, and the name and ticker are free to copy, so this is the
+// identity. The full id is the tooltip, the `data-value` and what the button copies. The token's
+// details card prints the whole id.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { copyToClipboard } from '../kit/CopyText';
 import { wideId } from '../../kob/registry';
 
 /**
- * A covenant id with its copy button. `compact` (a phone's list row, review M-02): the 12 + 12 hex id (as wide as the desktop row), a tap on it opens the whole id (wrapped, over the lines it needs) and a second tap closes it again; the
- * copy button copies the whole id either way. `expanded` / `onToggle` are the row's, so the row's line can grow with it.
+ * A covenant id with its copy button. `compact` is a phone's list row. It shows the 12 + 12 hex id,
+ * as wide as the desktop row. A tap on it opens the whole id, wrapped over the lines it needs, and
+ * a second tap closes it again. The copy button copies the whole id either way. `expanded` and
+ * `onToggle` are the row's, so the row's line can grow with it.
  */
 export function IdCopy(props: { value: string; 'data-testid'?: string; compact?: boolean; expanded?: boolean; onToggle?: () => void }) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');

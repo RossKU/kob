@@ -1,9 +1,9 @@
 // The market list's filters in one menu ("Filter ▾"): the Favorites and the Hidden views, the
-// wallet's own tokens, and the tokens without a name. They were separate buttons above and below
-// the list; one menu takes less room on a phone and says how many are on. The panel is the kit's
-// drop-down panel (kit/Dropdown.tsx `usePickerPanel`): fixed to the window, so neither the card
-// nor the table cuts it, and it never widens the page. Each entry is a checkbox of the menu; a
-// choice closes the menu, as the row's "⋯" menu does.
+// wallet's own tokens, and the tokens without a name. One menu takes less room on a phone and
+// says how many filters are on. The panel is the kit's drop-down panel (kit/Dropdown.tsx
+// `usePickerPanel`). It is fixed to the window, so neither the card nor the table cuts it, and it
+// never widens the page. Each entry is a checkbox of the menu. A choice closes the menu, as the
+// row's "⋯" menu does.
 import { createPortal } from 'preact/compat';
 import { useLayoutEffect, useRef } from 'preact/hooks';
 import { t } from '../../i18n';
@@ -13,15 +13,15 @@ import { activeFilters, type FilterKey, type ListFilters } from './held-list';
 export interface FilterItem {
   key: FilterKey;
   label: string;
-  /** the entry keeps the test id its button had (`token-list-favorites`, ...) */
+  /** The entry keeps the test id its button had (`token-list-favorites`, ...). */
   testid: string;
 }
 
 export interface ListFilterMenuProps {
   filters: ListFilters;
   /**
-   * the entries the menu offers now, in order (one that would change nothing is left out by the
-   * caller)
+   * The entries the menu offers now, in order. The caller leaves out one that would change
+   * nothing.
    */
   items: readonly FilterItem[];
   onToggle: (key: FilterKey) => void;

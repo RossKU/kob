@@ -1,7 +1,12 @@
-// The small muted marker next to the name of a token the registry does not list (app/token-display.ts): "unverified" when its name and decimals come from this
-// browser's issuance of it, "decimals assumed 8" when nothing states them; "facts disagree" when its registry entry and its declaration differ. The tooltip says why.
-// Nothing for an agreeing registry token, and nothing for a token that only rests on its KCC-23 declaration ("declared, bound by ancestry"): that is the normal
-// case of a token the registry does not list, so it shows no status; its explanation is in the token's details (TokenHeader.tsx `TokenStatusDetails`).
+// The small muted marker next to the name of a token the registry does not list
+// (app/token-display.ts). The tooltip says why.
+// - "unverified" when its name and decimals come from this browser's issuance of it.
+// - "decimals assumed 8" when nothing states them.
+// - "facts disagree" when its registry entry and its declaration differ.
+// There is nothing for an agreeing registry token. There is also nothing for a token that only
+// rests on its KCC-23 declaration ("declared, bound by ancestry"). That is the normal case of a
+// token the registry does not list, so it shows no status. Its explanation is in the token's
+// details (TokenHeader.tsx `TokenStatusDetails`).
 import { decimalsNote } from '../../app/token-display';
 import type { TokenInfo } from '../../kob/registry';
 

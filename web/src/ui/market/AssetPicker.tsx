@@ -1,7 +1,10 @@
-// A searchable choice of one asset: a plain drop-down does not scale past a few dozen tokens and has no search. The face is a button; the panel holds a search by
-// ticker, name or covenant id and the matching tokens, each with its short id (tickers are not unique, the id is the identity). The value is always a covenant id (or
-// `kas`). Keyboard: arrows and Enter in the search, Escape closes and puts the focus back on the face. The panel and its rows are the kit's drop-down (kit/Dropdown.tsx):
-// fixed to the viewport and in the body, so a card or a row that cuts what overflows it cannot cut it and it never widens the page.
+// A searchable choice of one asset. A plain drop-down does not scale past a few dozen tokens and
+// has no search. The face is a button. The panel holds a search by ticker, name or covenant id and
+// the matching tokens, each with its short id, because tickers are not unique and the id is the
+// identity. The value is always a covenant id, or `kas`. Keyboard: arrows and Enter in the search,
+// and Escape closes and puts the focus back on the face. The panel and its rows are the kit's
+// drop-down (kit/Dropdown.tsx). They are fixed to the viewport and in the body, so a card or a row
+// that cuts what overflows it cannot cut it and it never widens the page.
 import type { ComponentChildren } from 'preact';
 import { createPortal } from 'preact/compat';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
@@ -13,14 +16,14 @@ import type { TokenRow } from './token-model';
 export interface AssetPickerProps {
   value: string | null;
   choices: readonly AssetChoice[];
-  /** the rows behind the choices: what the search looks through */
+  /** The rows behind the choices, which the search looks through. */
   rows: readonly TokenRow[];
-  /** the accessible name */
+  /** The accessible name. */
   label: string;
-  /** the face while nothing is chosen, or when the value is no choice */
+  /** The face while nothing is chosen, or when the value is no choice. */
   placeholder: ComponentChildren;
   onChange: (value: string) => void;
-  /** a new number opens the panel (a first choice leads to the second) */
+  /** A new number opens the panel. A first choice leads to the second. */
   openKey?: number;
   'data-testid': string;
 }
@@ -61,7 +64,7 @@ export function AssetPicker(props: AssetPickerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.openKey]);
 
-  // a layout effect: the focus is there in the frame the panel appears
+  // A layout effect, so the focus is there in the frame the panel appears.
   useLayoutEffect(() => {
     if (open) search.current?.focus({ preventScroll: true });
   }, [open]);
@@ -139,7 +142,7 @@ export function AssetPicker(props: AssetPickerProps) {
                     aria-selected={i === active ? 'true' : 'false'}
                     data-value={c.value}
                     data-testid={`${id}-option-${c.value}`}
-                    // the search keeps the focus: a press on a choice is not a blur of the panel
+                    // The search keeps the focus. A press on a choice is not a blur of the panel.
                     onPointerDown={(e) => e.preventDefault()}
                     onPointerMove={() => i !== active && setActive(i)}
                     onClick={() => pick(c)}

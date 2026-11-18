@@ -1,6 +1,9 @@
 import { t } from '../../i18n';
 
-/** A star that marks a token or a pair as a favourite (favorites.ts). `name`: what it is about, for the title and the screen reader. */
+/**
+ * A star that marks a token or a pair as a favourite (favorites.ts). `name` is what it is about,
+ * for the title and the screen reader.
+ */
 export function FavoriteStar(props: { on: boolean; name: string; onToggle: () => void; 'data-testid': string }) {
   const what = t(props.on ? 'market.favorite.remove' : 'market.favorite.add', { name: props.name });
   return (
@@ -12,7 +15,10 @@ export function FavoriteStar(props: { on: boolean; name: string; onToggle: () =>
   );
 }
 
-/** The eye beside the star: hides a token from the market list in this browser, or (pressed, in the Hidden view) shows it there again (hidden-tokens.ts). */
+/**
+ * The eye beside the star. It hides a token from the market list in this browser. When pressed,
+ * in the Hidden view, it shows the token there again (hidden-tokens.ts).
+ */
 export function HideToggle(props: { hidden: boolean; name: string; onToggle: () => void; 'data-testid': string }) {
   const what = t(props.hidden ? 'market.hide.undo' : 'market.hide.add', { name: props.name });
   return (
