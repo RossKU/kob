@@ -606,7 +606,11 @@ pub fn escrowed(views: &[Value]) -> (BTreeMap<[u8; 32], Escrowed>, Vec<Skipped>)
             skipped.push((cov, "no-current-utxo"));
             continue;
         };
-        let token = s.token_cov_id();
+        // An unbound KobCurveAsk (placed in its token's genesis) names no token in its state: the
+        // view's `token` is its custody's.
+        let view_token = hex32(o.get("token"));
+        let bind = |t: [u8; 32]| if t == [0; 32] { view_token.unwrap_or(t) } else { t };
+        let token = bind(s.token_cov_id());
         by.entry(token).or_default().orders += 1;
         let utxo_rows: Vec<&Value> = match o.get("pair").filter(|p| !p.is_null()) {
             Some(p) => p
@@ -629,6 +633,7 @@ pub fn escrowed(views: &[Value]) -> (BTreeMap<[u8; 32], Escrowed>, Vec<Skipped>)
         }
         // A custody that the view does not show counts what the state says it must hold.
         for (t, amount) in s.custodies() {
+            let t = bind(t);
             if !seen.contains(&t) {
                 by.entry(t).or_default().custody += amount as i128;
             }
@@ -870,6 +875,40 @@ mod tests {
         ]);
         assert!(by.is_empty());
         assert_eq!(skipped, vec![("aa".to_string(), "terminal"), ("bb".to_string(), "state-unknown")]);
+    }
+
+    /// An unbound curve (placed in its token's genesis, `tokenCovId` zero) counts under its custody's token, as the view
+    /// names it: in orders, its KAS locked and one order (TN10: `kob balances` showed 800 in a curve as orders 0).
+    #[test]
+    fn an_unbound_curve_counts_under_its_custody_token() {
+        let tok = [7u8; 32];
+        let c = kob_protocol::state::CurveAskState {
+            maker: [1; 32],
+            token_cov_id: [0; 32],
+            token_tpl_hash: [2; 32],
+            tpl_prefix_len: 1,
+            tpl_suffix_len: 1,
+            scale: 1,
+            min_fill: 1,
+            tip: 0,
+            active_from: 0,
+            level_size: 100,
+            total: 800,
+            amount_left: 800,
+            extension_commitment: [0; 32],
+            table: vec![10; 8],
+        };
+        let view = json!({
+            "covenant_id": "cc", "status": "open", "state_known": true, "token": to_hex(&tok),
+            "state": serde_json::to_value(AnyState::KobCurveAsk(c)).unwrap(),
+            "current": {"value": "100000000"},
+            "custody": {"utxo": {"token": to_hex(&tok), "amount": "800", "value": "20000000", "spent": false}},
+        });
+        let (by, skipped) = escrowed(&[view]);
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(by.keys().collect::<Vec<_>>(), [&tok], "nothing under the zero id");
+        let e = &by[&tok];
+        assert_eq!((e.custody, e.orders, e.kas_carriers, e.kas_escrow), (800, 1, 120_000_000, 0));
     }
 
     fn facts(cov: u8, ticker: &str, declared: bool) -> TokenFacts {
