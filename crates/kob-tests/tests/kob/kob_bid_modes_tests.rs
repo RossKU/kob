@@ -946,7 +946,8 @@ fn s4_a_fresh_receive_utxo_per_fill() {
         assert!(made.storage <= storage_limit, "the making transaction fits a block: storage {}", made.storage);
         let f_make = made.fee as i64;
         let p2 = BidP::new(&f.maker, 2);
-        let form1 = ok(&f.t, &sell(&f, "S4b the same fill delivering a new receive UTXO (form 1)", &p2, v0(), n, 1, Lead::Seller)).fee as i64;
+        let form1 =
+            ok(&f.t, &sell(&f, "S4b the same fill delivering a new receive UTXO (form 1)", &p2, v0(), n, 1, Lead::Seller)).fee as i64;
         let mut gains = vec![];
         for (tip, name) in [
             (DC, "S4c top-up of the fresh receive UTXO, topupTip = deliveryCarrier (the contract's bound)"),
