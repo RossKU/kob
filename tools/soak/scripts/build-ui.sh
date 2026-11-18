@@ -5,7 +5,8 @@
 #
 #   tools/soak/scripts/build-ui.sh [<kob-wasm web bindings dir, default crates/kob-wasm/pkg-tn10>]
 #
-# The registry the app loads is the file serve-ui.mjs serves (tools/soak/run/registry/tokens.json); the build does not embed it.
+# The registry the app loads is the file serve-ui.mjs serves (tools/soak/run/registry/tokens.json). The signer frame pins the table of
+# KOB_SIGNER_REGISTRY, optional: unset, the repository's registry/tokens.json (the one CI builds with).
 # `UI_OUT=<dir under the repository>` builds elsewhere (a staging copy while the soak keeps serving run/web-dist).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
@@ -27,6 +28,12 @@ if [ "${OS:-}" = "Windows_NT" ]; then
 else
   ln -s "$ROOT/web/node_modules" "$STAGE/node_modules"
 fi
+# The staged vite config sits outside the repository, so its default registry path would not resolve: name the file here.
+if [ -z "${KOB_SIGNER_REGISTRY:-}" ]; then
+  KOB_SIGNER_REGISTRY=$ROOT/registry/tokens.json
+  command -v cygpath >/dev/null && KOB_SIGNER_REGISTRY=$(cygpath -m "$KOB_SIGNER_REGISTRY")
+fi
+export KOB_SIGNER_REGISTRY
 rm -rf "$OUT"
 (cd "$STAGE" && node node_modules/vite/bin/vite.js build --outDir "$ROOT/$OUT" --emptyOutDir)
 echo "UI built into $OUT"
