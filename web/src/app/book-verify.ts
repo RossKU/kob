@@ -160,6 +160,8 @@ function judge(
     const d = describeOrder(confirmed.order.state, deps.kob);
     // a curve sell order: its rows are its remaining levels; one created in its token's genesis names no token until its first fill (its custody's)
     const curve = curveFactsOf(confirmed.order.state);
+    // an unbound curve's custody is the one in its own transaction: another token's stray the indexer names does not make it this token's ask
+    if (curve?.unbound && confirmed.custody && confirmed.custody.transactionId.toLowerCase() !== confirmed.order.transactionId.toLowerCase()) return 'other-market';
     if (confirmed.covenantId !== row.covenant_id || d.side !== side || d.price !== BigInt(row.price)) return 'changed';
     const m = deps.market;
     if (m) {

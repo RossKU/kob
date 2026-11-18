@@ -276,7 +276,8 @@ function curveReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOption
   if (!t) return fail([...issues, issue('curve-too-many-levels', 'error', 'this level size gives more than 1,000 levels', 'levelSize')]);
   // an unbound curve names its token on its amend: the custody's
   const unbound = /^0{64}$/.test(s.tokenCovId);
-  const bind = unbound ? snap.custody?.covenantId ?? null : null;
+  // the genesis custody sits in the curve's own transaction (the covenant checks it): a stray of another token named as the custody does not bind it
+  const bind = unbound && snap.custody?.transactionId.toLowerCase() === snap.order.transactionId.toLowerCase() ? snap.custody.covenantId ?? null : null;
   if (unbound && !bind) return fail([...issues, issue('curve-custody-unknown', 'error', 'the curve\'s tokens are not found yet: refresh and try again')]);
   const next: CurveAskState = {
     ...s, levelSize: str(t.levelSize), table: t.table.map(str), tip: str(tip), minFill: str(minFill), ...(bind ? { tokenCovId: bind } : {}),
