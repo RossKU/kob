@@ -1,6 +1,7 @@
-//! Delivery-mode attacks (docs/design/bid-delivery-spec.md) on every honest delivery shape of `shapes.rs`: mode-1 fills
-//! (first, later, ending, IOC / FOK ends), top-ups (form 2) and new receive UTXOs (form 1), refunds that release a
-//! bought-custody, claims (CL1 to CL3), pair delivery fills and refunds, and the router's bought-custody legs.
+//! Tests delivery-mode attacks (docs/design/bid-delivery-spec.md) on every honest delivery shape of
+//! `shapes.rs`: mode-1 fills (first, later, ending, IOC / FOK ends), top-ups (form 2) and new
+//! receive UTXOs (form 1), refunds that release a bought-custody, claims (CL1 to CL3), pair
+//! delivery fills and refunds, and the router's bought-custody legs.
 //!
 //! | Id | Attack |
 //! |---|---|
@@ -17,10 +18,12 @@
 //! | DLV-11 | a refund that drops the custody, sends it elsewhere, cuts its KAS or moves its slot |
 //! | DLV-12 | an ending fill that leaves the custody behind |
 //!
-//! Each attempt must be refused, or is a designed note by an explicit rule (`rt::classify`, `rt::ALLOW`). Maker-signed
-//! claims attacked from the maker's own seat (DLV-10) are notes: the maker's `cancel` signature authorises any outputs.
+//! Each attempt must be refused, or is a designed note by an explicit rule (`rt::classify`,
+//! `rt::ALLOW`). Maker-signed claims attacked from the maker's own seat (DLV-10) are notes: the
+//! maker's `cancel` signature authorises any outputs.
 //!
-//! The existing tests per attack id (hand-built scenarios, ablation, pre-sign) are mapped in docs/security/redteam-coverage.md.
+//! The existing tests per attack id (hand-built scenarios, ablation, pre-sign) are mapped in
+//! docs/security/redteam-coverage.md.
 //!
 //! Run: cargo test -p kob-tests --test redteam_delivery_tests -- --nocapture --test-threads=2 (the pair tests: add --ignored)
 

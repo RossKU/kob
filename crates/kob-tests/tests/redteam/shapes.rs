@@ -1,7 +1,8 @@
-//! The honest shapes the red-team suites attack: every builder shape of the tx dump (`kob-protocol/tests/tx_dump.rs`:
-//! the golden-vector scenarios on every token program, with the delivery-mode scenarios on the KCC-20 programs, and the
-//! pair scenarios), the pair delivery grid, the claim shapes (CL1 to CL3 of a bought-custody), IOC ends of a mode-1 bid
-//! holding its custody, and the router intents (create and execute) of every actor on every program pair that runs it,
+//! The honest shapes the red-team suites attack: every builder shape of the tx dump
+//! (`kob-protocol/tests/tx_dump.rs`: the golden-vector scenarios on every token program, with the
+//! delivery-mode scenarios on the KCC-20 programs, and the pair scenarios), the pair delivery grid,
+//! the claim shapes (CL1 to CL3 of a bought-custody), IOC ends of a mode-1 bid holding its custody,
+//! and the router intents (create and execute) of every actor on every program pair that runs it,
 //! the 12 bought-custody (`_c`) actors included.
 #![allow(dead_code)]
 

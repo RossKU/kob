@@ -1,13 +1,17 @@
-//! The kaspa-redteam library attacks (OUT-01..04, FEE-01, IN-01..02, SIG-01..02, FAM-10, BOR-01) and the token-amount
-//! attack TOK-01 on every honest shape of `shapes.rs`, from the taker, matcher and keeper seats (see `rt.rs`).
+//! Runs the kaspa-redteam library attacks (OUT-01..04, FEE-01, IN-01..02, SIG-01..02, FAM-10,
+//! BOR-01) and the token-amount attack TOK-01 on every honest shape of `shapes.rs`, from the taker,
+//! matcher and keeper seats (see `rt.rs`).
 //!
-//! FAM-10 and BOR-01 run on every token build here (kaspa-redteam reads only the KCC-20 reference program): a stray of
-//! every token of the transaction owned by each covenant input, and every custody with borrowing on.
+//! FAM-10 and BOR-01 run on every token build here (kaspa-redteam reads only the KCC-20 reference
+//! program): a stray of every token of the transaction owned by each covenant input, and every
+//! custody with borrowing on.
 //!
-//! Each test prints its coverage matrix (`RT|attack|template|program|judged|refused|notes|findings|dropped|by_target`) and fails
-//! on any finding, after writing its replay file (`KOB_RT_FINDINGS`, default `<tmp>/kob-rt-findings`).
+//! Each test prints its coverage matrix
+//! (`RT|attack|template|program|judged|refused|notes|findings|dropped|by_target`) and fails on any
+//! finding, after writing its replay file (`KOB_RT_FINDINGS`, default `<tmp>/kob-rt-findings`).
 //!
-//! The existing tests per attack id (hand-built scenarios, ablation, pre-sign) are mapped in docs/security/redteam-coverage.md.
+//! The existing tests per attack id (hand-built scenarios, ablation, pre-sign) are mapped in
+//! docs/security/redteam-coverage.md.
 //!
 //! Run: cargo test -p kob-tests --test redteam_library_tests -- --nocapture --test-threads=2 (the pair tests: add --ignored)
 
