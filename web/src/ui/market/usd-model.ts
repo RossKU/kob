@@ -1,47 +1,55 @@
-// Token/token pair figures through the KAS books (the pair page `#/market/<base>/<quote>`; with the configured USD quote token as QUOTE, e.g. the TN10 soak's
-// TUSD, 1 TUSD = 1 USD worth of KAS, the pair reads as BASE/USD). Pure and DOM-free; exact rationals (kob/pair.ts) for every price, floats only for chart
-// coordinates.
+// Token/token pair figures through the KAS books, for the pair page `#/market/<base>/<quote>`.
+// The configured USD quote token, such as the TN10 soak's TUSD, is worth 1 USD of KAS, so with it
+// as QUOTE the pair reads as BASE/USD. The module is pure and DOM-free. It uses exact rationals
+// (kob/pair.ts) for every price and floats only for chart coordinates.
 //
-// Conversion method (the same pair math as the pair book, implied through the two KAS books):
+// Conversion method, the same pair math as the pair book, implied through the two KAS books:
 //
 //   price(B in Q) = KAS per whole B / KAS per whole Q
 //
-// Candles are converted bucket by bucket on ONE time grid (the indexer's candle buckets of the chosen interval): both legs are taken from the
-// same bucket, a bucket without trades of a leg carries that leg's previous close (gap filling), so the rate used for a bucket is always the
-// time-aligned Q/KAS price of that bucket, never a later or an average one. Per bucket, with B = the base leg and Q = the quote leg:
+// Candles are converted bucket by bucket on one time grid, the indexer's candle buckets of the
+// chosen interval. Both legs are taken from the same bucket. A bucket without trades of a leg
+// carries that leg's previous close (gap filling). So the rate used for a bucket is always the
+// time-aligned Q/KAS price of that bucket, never a later or an average one. Per bucket, with B the
+// base leg and Q the quote leg:
 //
 //   open  = B.open / Q.open             close = B.close / Q.close
 //   high  = max(open, close, B.high / Q.mid, B.mid / Q.low)
 //   low   = min(open, close, B.low / Q.mid,  B.mid / Q.high)
 //
-// where mid is the leg's volume-weighted price of the bucket (quote volume / volume), its close when it did not trade. Each leg's extreme is taken
-// at the other leg's typical price of the same bucket. A bucket is "filled" (drawn muted, no trades) only when neither leg traded in it.
+// Here mid is the leg's volume-weighted price of the bucket, quote volume over volume, or its
+// close when it did not trade. Each leg's extreme is taken at the other leg's typical price of the
+// same bucket. A bucket is "filled", drawn muted with no trades, only when neither leg traded in
+// it.
 import type { StatsView } from '../../data/indexer-types';
 import { cmpRational, formatRational, ratToNumber, reduce, significantDp, type Rational } from '../../kob/pair';
 import { pow10, SOMPI_PER_KAS } from '../../kob/units';
 import { PRICE_DP_CAP, PRICE_SIGNIFICANT_DIGITS } from '../kit/format';
 import { fillCandleGaps, type Candle, type ChartBar, type VolumeBar } from './market-model';
 
-/** A KAS-priced leg: indexer candles of a token (prices = sompi per `basis` base units). */
+/** A KAS-priced leg: indexer candles of a token, with prices in sompi per `basis` base units. */
 export interface TokenLeg {
   candles: readonly Candle[];
   decimals: number;
   basis: bigint;
 }
 export interface RatioCandle {
-  /** bucket start, unix ms */
+  /** Bucket start, unix ms. */
   t: number;
   o: Rational;
   h: Rational;
   l: Rational;
   c: Rational;
-  /** volume of the BASE leg in whole units */
+  /** Volume of the BASE leg in whole units. */
   volume: number;
-  /** the same volume in whole QUOTE units, converted at the bucket's volume-weighted rate (BASE mid / QUOTE mid) */
+  /**
+   * The same volume in whole QUOTE units, converted at the bucket's volume-weighted rate (BASE mid
+   * / QUOTE mid).
+   */
   quoteVolume: number;
-  /** trades of the BASE leg's KAS market in the bucket */
+  /** Trades of the BASE leg's KAS market in the bucket. */
   trades: number;
-  /** neither leg traded in the bucket (both carried) */
+  /** Neither leg traded in the bucket, so both were carried. */
   filled: boolean;
 }
 
@@ -61,7 +69,7 @@ interface LegBucket {
   c: Rational;
   mid: Rational;
   filled: boolean;
-  /** the bucket's volume (base units) and KAS turnover (sompi) */
+  /** The bucket's volume in base units and KAS turnover in sompi. */
   volume: bigint;
   quote: bigint;
   trades: number;
@@ -72,7 +80,8 @@ function legBuckets(leg: TokenLeg, intervalMs: number, until: number, maxBars: n
   const k = (p: bigint) => kasPerToken(p, leg.decimals, leg.basis);
   for (const c of fillCandleGaps(leg.candles, intervalMs, { until, maxBars })) {
     if (c.o <= 0n || c.h <= 0n || c.l <= 0n || c.c <= 0n) continue;
-    // volume-weighted price of the bucket: quote (sompi) per volume (base units) -> KAS per whole token
+    // Volume-weighted price of the bucket: quote (sompi) per volume (base units), as KAS per whole
+    // token.
     const mid = !c.filled && c.volume > 0n && c.quote > 0n ? reduce({ num: c.quote * pow10(leg.decimals), den: c.volume * SOMPI_PER_KAS }) : k(c.c);
     out.set(c.t, { o: k(c.o), h: k(c.h), l: k(c.l), c: k(c.c), mid, filled: c.filled, volume: c.volume, quote: c.quote, trades: c.filled ? 0 : c.trades });
   }
@@ -81,14 +90,17 @@ function legBuckets(leg: TokenLeg, intervalMs: number, until: number, maxBars: n
 
 export interface RatioOptions {
   intervalMs: number;
-  /** extend both legs with carried buckets up to this time (unix ms); default: the newest candle */
+  /**
+   * Extend both legs with carried buckets up to this time (unix ms). The default is the newest
+   * candle.
+   */
   until?: number;
   maxBars?: number;
 }
 
 /**
- * BASE / QUOTE candles on the common bucket grid (see the method at the top). Buckets before either leg's first trade are left out (there is no
- * price to divide by).
+ * BASE / QUOTE candles on the common bucket grid (see the method at the top). Buckets before
+ * either leg's first trade are left out, because there is no price to divide by.
  */
 export function ratioCandles(base: TokenLeg, quote: TokenLeg, o: RatioOptions): RatioCandle[] {
   const maxBars = Math.max(1, o.maxBars ?? 2000);
@@ -113,7 +125,7 @@ export function ratioCandles(base: TokenLeg, quote: TokenLeg, o: RatioOptions): 
   return out.slice(-maxBars);
 }
 
-/** Chart series of ratio candles (time in UTC seconds, prices as floats). */
+/** Chart series of ratio candles, with time in UTC seconds and prices as floats. */
 export function ratioSeries(candles: readonly RatioCandle[]): { bars: ChartBar[]; volumes: VolumeBar[] } {
   const bars: ChartBar[] = [];
   const volumes: VolumeBar[] = [];
@@ -125,19 +137,22 @@ export function ratioSeries(candles: readonly RatioCandle[]): { bars: ChartBar[]
   return { bars, volumes };
 }
 
-/** Fraction digits of a pair or USD price: the kit's display rule (about 5 significant digits, at most `PRICE_DP_CAP`, at least 2). */
+/**
+ * Fraction digits of a pair or USD price. It follows the kit's display rule of about 5 significant
+ * digits, at most `PRICE_DP_CAP` and at least 2.
+ */
 export const usdDp = (ref: Rational | null): number => (ref ? Math.min(PRICE_DP_CAP, significantDp(ref, PRICE_SIGNIFICANT_DIGITS, 2, 10)) : 4);
 
 /** Exact text of a USD price with `dp` digits, thousands grouped. */
 export const usdText = (r: Rational, dp: number): string => formatRational(r, dp, 'nearest', dp, ',');
 
-// ------------------------------------------------------------------------------------------------ 24 h figures
+// ------------------------------------------------------------------------------------ 24 h figures
 
 export interface UsdStats {
   last: Rational | null;
-  /** price 24 h ago (the ratio of both legs' 24 h opens) */
+  /** The price 24 h ago, the ratio of both legs' 24 h opens. */
   open: Rational | null;
-  /** change in basis points (signed) */
+  /** The change in basis points, signed. */
   changeBps: number | null;
 }
 
@@ -148,8 +163,9 @@ const statPrice = (s: StatsView | null | undefined, field: 'last' | 'open_24h', 
 };
 
 /**
- * Last price and 24 h change in USD from the two legs' `/v1/stats`. Each leg's last trade is its newest; the ratio of the
- * two is the newest implied price (the legs' last trades can be minutes apart in a thin market: the chart's time-aligned candles are the history).
+ * Last price and 24 h change in USD from the two legs' `/v1/stats`. Each leg's last trade is its
+ * newest. The ratio of the two is the newest implied price. The legs' last trades can be minutes
+ * apart in a thin market, and the chart's time-aligned candles are the history.
  */
 export function usdStats(base: { stats: StatsView | null; decimals: number }, quote: { stats: StatsView | null; decimals: number }): UsdStats {
   const q = { last: statPrice(quote.stats, 'last', quote.decimals), open: statPrice(quote.stats, 'open_24h', quote.decimals) };
@@ -160,9 +176,12 @@ export function usdStats(base: { stats: StatsView | null; decimals: number }, qu
   return { last, open, changeBps };
 }
 
-// ------------------------------------------------------------------------------------------------ the USD quote token and the landing screen
+// ------------------------------------------------------ the USD quote token and the landing screen
 
-/** The app's USD quote token: the first registry token the config marks `USD` (config `quoteTokens`), or null (no USD views). */
+/**
+ * The app's USD quote token: the first registry token the config marks `USD` (config
+ * `quoteTokens`), or null when there are no USD views.
+ */
 export function usdTokenOf<T extends { covenantId: string }>(quoteTokens: Readonly<Record<string, string>>, tokens: readonly T[]): T | null {
   return tokens.find((x) => quoteTokens[x.covenantId.toLowerCase()] === 'USD') ?? null;
 }
@@ -170,10 +189,16 @@ export function usdTokenOf<T extends { covenantId: string }>(quoteTokens: Readon
 export type HomeTarget = { name: 'pair'; base: string; quote: string } | { name: 'token'; covenantId: string } | { name: 'market' } | { name: 'landing' };
 
 /**
- * The landing screen of config `home`: `landing` (the default: the landing page, src/ui/landing), `list`, `kas-usd`, `usd:<id>`, `market:<id>`, or `auto` = KAS/USD when a USD quote token is configured, else the
- * market page (chart) of the first tradable registry token, else the list. KAS/USD is the USD token's own KAS book shown inverted (a native market with
- * its book, trades and ticket: the token page, whose default orientation for a USD token is KAS/USD), not a derived route. `usd:<id>` is that token in USD:
- * the tradable pair page `<id>/<USD token>` (needs the USD token); `market:<id>` a registry token: otherwise `auto` applies.
+ * The landing screen of config `home`. The values are `landing` (the default, the landing page in
+ * src/ui/landing), `list`, `kas-usd`, `usd:<id>`, `market:<id>` and `auto`.
+ * - `kas-usd` is the USD token's own market page, a native market with its book, trades and
+ *   ticket. It is not a derived route.
+ * - `usd:<id>` is that token in USD, the tradable pair page `<id>/<USD token>`. It needs the USD
+ *   token.
+ * - `market:<id>` is the market page of a registry token.
+ * - `auto` is the USD token's market page when a USD quote token is configured. Otherwise it is
+ *   the market page of the first tradable registry token, else the list.
+ * A value that cannot apply, such as an unknown token, falls back to `auto`.
  */
 export function resolveHome(home: string, usdToken: string | null, tokens: readonly { covenantId: string; tradable: boolean }[]): HomeTarget {
   const known = (id: string) => tokens.some((x) => x.covenantId === id);
