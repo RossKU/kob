@@ -1,9 +1,13 @@
-//! Every pair order shape the `kob-protocol` builders produce (`pair_scenarios`: creation, cancels with strays of both
-//! tokens, refunds and kills, routes through the KAS books, netting of opposite pair orders, conditional legs armed in
-//! both evidence modes, updates (arm, trail), if-done fills of both sides, bookings and repeat merges), on the four
-//! family mixes of a pair A/B, executed in the script engine against the pair templates compiled from source
-//! (`common/pair_harness.rs`). Every input of every shape must pass. Under an ablation run a rejected shape prints
+//! Tests that every pair order shape the `kob-protocol` builders produce passes the script engine
+//! on the four family mixes of a pair A/B.
+//!
+//! The shapes come from `pair_scenarios`: creation, cancels with strays of both tokens, refunds and
+//! kills, routes through the KAS books, netting of opposite pair orders, conditional legs armed in
+//! both evidence modes, updates (arm, trail), if-done fills of both sides, bookings and repeat
+//! merges. They execute against the pair templates compiled from source (`common/pair_harness.rs`).
+//! Every input of every shape must pass. Under an ablation run a rejected shape prints
 //! `ABLATION-POS-FAIL` (a weakened contract that refuses an honest shape).
+//!
 //! Run: cargo test -p kob-tests --test kob_pair_shapes_tests -- --nocapture --test-threads=1
 
 #[path = "../common/mod.rs"]

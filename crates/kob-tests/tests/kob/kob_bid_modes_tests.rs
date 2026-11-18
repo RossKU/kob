@@ -1,15 +1,22 @@
-//! KobBid delivery modes (docs/design/bid-delivery-spec.md, sections 1 to 7 and 9) in whole transactions through the script
-//! engine, on the reference 3 / 3 program (`KCC20Ref`) and the published public-mint build (`KCC20PublicMint`); the stray
-//! scan per slot on the 8 / 8 variant (`KCC20Ref_8x8`).
+//! Whole-transaction tests of the KobBid delivery modes (docs/design/bid-delivery-spec.md, sections
+//! 1 to 7 and 9) through the script engine.
 //!
-//! Mode 0 new, mode 1 accumulate (bought-custody), mode 2 top-up (forms 0 / 1 / 2). Every mode x form continuing and ending,
-//! the refund slot of a terminal fill, the stray guard with the bought-custody excluded, the refund entry that returns the
-//! custody, the claim shapes CL1..CL4 of section 7 through `cancel`, the ordering rules of section 6 (what the token program
-//! refuses, the orders accept), the slot budget of a 3 / 3 program, script size, state layout and sig-op bound.
+//! They run on the reference 3 / 3 program (`KCC20Ref`) and the published public-mint build
+//! (`KCC20PublicMint`); the stray scan per slot runs on the 8 / 8 variant (`KCC20Ref_8x8`).
 //!
-//! Output lines follow the ablation protocol (tools/ablation): `NEGATIVE <id> ... @<program>  [REJECTED ...]` for an
-//! attack, and under `KOB_ABLATION` `ABLATION-PASS <id> ... @<program> all_inputs_ok=<bool>` when it is accepted and
-//! `ABLATION-POS-FAIL <id> ...` when a positive scenario is rejected. Scenario ids are the first word of each name.
+//! Covered:
+//! - Mode 0 new, mode 1 accumulate (bought-custody), mode 2 top-up (forms 0 / 1 / 2): every mode x
+//!   form continuing and ending.
+//! - The refund slot of a terminal fill, the stray guard with the bought-custody excluded, the
+//!   refund entry that returns the custody.
+//! - The claim shapes CL1..CL4 of section 7 through `cancel`.
+//! - The ordering rules of section 6 (what the token program refuses, the orders accept).
+//! - The slot budget of a 3 / 3 program, script size, state layout and sig-op bound.
+//!
+//! Output lines follow the ablation protocol (tools/ablation): `NEGATIVE <id> ... @<program>
+//! [REJECTED ...]` for an attack, and under `KOB_ABLATION` `ABLATION-PASS <id> ... @<program>
+//! all_inputs_ok=<bool>` when it is accepted and `ABLATION-POS-FAIL <id> ...` when a positive
+//! scenario is rejected. Scenario ids are the first word of each name.
 //!
 //! Run: cargo test -p kob-tests --test kob_bid_modes_tests -- --nocapture --test-threads=1
 #![allow(dead_code)]

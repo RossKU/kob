@@ -1,19 +1,25 @@
-//! `KobPair` (contracts/orders/KobPair.sil, one template for both sides and both token families) security suite, executed in
-//! the script engine against the template compiled from source (`common/pair_harness.rs`; an ablation run executes the
-//! mutated covenant everywhere it appears).
+//! Security suite of `KobPair` (contracts/orders/KobPair.sil, one template for both sides and both
+//! token families), executed in the script engine against the template compiled from source
+//! (`common/pair_harness.rs`; an ablation run executes the mutated covenant everywhere it appears).
 //!
-//! A pair order of A/B (A = `TOKEN_COV` on program `pa`, B = `TOKEN_B` on `pb`, both of scale 1,000 = `WHOLE`): side ASK
-//! sells A (its custody S = A) for B (T), side BID pays B out of its escrow custody (S = B) for A (T). The order enforces
-//! only its own terms: the ASK receives at least the ceil of B, the BID pays EXACTLY the floor of B and receives exactly n
-//! of A, the custody is exact, strays of both tokens are refused, the outputs are positional. Positives are honest
-//! `kob-protocol` builds (routes through the KAS books, netting with opposite pair orders, inventory fills where the
-//! matcher's own tokens are the counterparty, decay, TWAP / DCA, refunds, cancels) on the four family mixes; attacks are
-//! honest builds edited input by input (`ph::Ed`) or raw patches of the finished transaction (planted inputs), each
-//! REJECTED by the order's own input, on the two mixed pairs (KCC-20/KRON and KRON/KCC-20: every family is S and T of
-//! some side). Checks that exist once per token family carry a family suffix: `sk` / `sr` (the custody S is KCC-20 /
-//! KRON), `tk` / `tr` (the bought token T).
+//! A pair order of A/B (A = `TOKEN_COV` on program `pa`, B = `TOKEN_B` on `pb`, both of scale 1,000
+//! = `WHOLE`): side ASK sells A (its custody S = A) for B (T), side BID pays B out of its escrow
+//! custody (S = B) for A (T). The order enforces only its own terms:
+//! - the ASK receives at least the ceil of B;
+//! - the BID pays EXACTLY the floor of B and receives exactly n of A;
+//! - the custody is exact, strays of both tokens are refused, the outputs are positional.
 //!
-//! Scenario ids: `PP..` positives, `NP..` attacks (the first whitespace token of the name; tools/ablation/catalogs/pair.mjs).
+//! Positives are honest `kob-protocol` builds (routes through the KAS books, netting with opposite
+//! pair orders, inventory fills where the matcher's own tokens are the counterparty, decay, TWAP /
+//! DCA, refunds, cancels) on the four family mixes. Attacks are honest builds edited input by input
+//! (`ph::Ed`) or raw patches of the finished transaction (planted inputs), each REJECTED by the
+//! order's own input, on the two mixed pairs (KCC-20/KRON and KRON/KCC-20: every family is S and T
+//! of some side). Checks that exist once per token family carry a family suffix: `sk` / `sr` (the
+//! custody S is KCC-20 / KRON), `tk` / `tr` (the bought token T).
+//!
+//! Scenario ids: `PP..` positives, `NP..` attacks (the first whitespace token of the name;
+//! tools/ablation/catalogs/pair.mjs).
+//!
 //! Run: cargo test -p kob-tests --test kob_pair_tests -- --nocapture --test-threads=1
 
 #[path = "../common/mod.rs"]
@@ -50,8 +56,9 @@ pub const NR: i64 = 4 * WHOLE + 1;
 
 // ---------------------------------------------------------------- fixtures
 
-/// The two mixed pairs (each family as A and as B) on the 8 / 8 KCC-20 program, then on the published public-mint build (3 / 3,
-/// audit AUD-PM; a scenario beyond its token slots is skipped there, `SKIP-SLOTS`), then on KaspaRocket's 10 / 10 build of it.
+/// The two mixed pairs (each family as A and as B) on the 8 / 8 KCC-20 program, then on the
+/// published public-mint build (3 / 3, AUD-PM; a scenario beyond its token slots is skipped there,
+/// `SKIP-SLOTS`), then on KaspaRocket's 10 / 10 build of it.
 pub fn mixed() -> [(TemplateId, TemplateId); 6] {
     let m = family_mixes();
     let pm = mixed_pairs_pm();
@@ -719,7 +726,7 @@ fn pair_fake_quotes() {
 // ---------------------------------------------------------------- the custody (identity, codec), planted inputs
 
 /// Every input and output of token `tok` with the extension commitment `ext` (consistent for the token program: one
-/// commitment per transfer). Audit 2026-10-13: the witness of the custody commitment check.
+/// commitment per transfer). It is the witness of the custody commitment check.
 fn reclass_ext(e: &mut Ed, tok: [u8; 32], ext: [u8; 32]) {
     for i in 0..e.entries.len() {
         if ph::cov_of(&e.entries[i]) == Some(tok) {

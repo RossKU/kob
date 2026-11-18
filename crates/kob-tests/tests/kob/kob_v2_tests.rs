@@ -1,11 +1,14 @@
-//! KOB protocol v3 harness (amounts in base units): KobAsk / KobBid / KobCondAsk / KobIfdBid with the reference
-//! KCC-20 (argent kcc20-reference c8a0871), executed in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20
-//! covenant context and script-unit metering.
+//! Tests of the KOB protocol v3 orders (KobAsk, KobBid, KobCondAsk, KobIfdBid) with amounts in base
+//! units, run against the reference KCC-20 (argent kcc20-reference c8a0871).
 //!
-//! Amounts are token base units (any amount); prices and tips are sompi per whole token (`SCALE` base
-//! units). Every order executes at its own all-in limit or better, rounded in the maker's favour
-//! (quoteOf: up for what a maker receives, down for what a maker pays); the crossing spread and the
-//! tips are the matcher's. Contract sources are read from `contracts/orders/`.
+//! The tests execute in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20 covenant context and
+//! script-unit metering. Contract sources are read from `contracts/orders/`.
+//!
+//! Amounts are token base units (any amount). Prices and tips are sompi per whole token (`SCALE`
+//! base units). Every order executes at its own all-in limit or better, rounded in the maker's
+//! favour (quoteOf: up for what a maker receives, down for what a maker pays). The crossing spread
+//! and the tips are the matcher's.
+//!
 //! Run: cargo test --release -p kob-tests --test kob_v2_tests -- --nocapture --test-threads=1
 
 #[path = "../common/mod.rs"]
@@ -257,7 +260,7 @@ enum EvMode {
     ZeroFill,
     /// a look-alike: a P2SH script carrying a real order's state under another template
     Forged,
-    /// H1: a KobBid refund whose sigscript starts with 0x08 || n (before the fix, its `custIn` pushed as 8 bytes)
+    /// H1: a KobBid refund whose sigscript starts with 0x08 || n (its `custIn` pushed as 8 bytes)
     RefundPush,
     /// the real redeem script pushed by an input whose script public key is not its P2SH
     NotP2sh,
@@ -279,7 +282,8 @@ struct Ev {
     token: Hash,
     cov: Hash,
     mode: EvMode,
-    /// the fill argument n an ask evidence claims (0: its amount; audit NAU-A09 claims more than the ask holds)
+    /// the fill argument n an ask evidence claims (0: its amount; NAU-A09 claims more than the ask
+    /// holds)
     claim: i64,
 }
 impl Ev {
@@ -1817,7 +1821,7 @@ struct IfdKnobs {
     tip: i64,
     exit_terms: Option<CondP>,
     value: Option<i64>,
-    /// any other change to the entry (audit: hostile fields)
+    /// any other change to the entry (hostile fields)
     edit: Option<fn(&mut IfdP)>,
 }
 impl IfdKnobs {
@@ -3069,10 +3073,11 @@ fn touch_battery(f: &Fx, kind: Kind) {
         "04",
         "TWAP/DCA evidence: its slice opened R - 1 DAA before (the interval counts)",
     );
-    // Audit 2026-10-29 F1: the evidence order's own state is untrusted, so a NEGATIVE interval (which would cancel the UTXO's age
-    // and switch the rest time off) is refused: exposure R DAA short, interval -1 / -R / -10^12 with a UTXO one DAA old. The sign of
-    // activeFrom and slope flipped on an evidence that rested one DAA too short must not help either (a negated quote or scale builds no
-    // transaction in this harness; the sign battery of audit_rest_interval_tests covers them).
+    // The evidence order's own state is untrusted, so a NEGATIVE interval (which would cancel the
+    // UTXO's age and switch the rest time off) is refused: exposure R DAA short, interval -1 / -R /
+    // -10^12 with a UTXO one DAA old. The sign of activeFrom and slope flipped on an evidence that
+    // rested one DAA too short must not help either (a negated quote or scale builds no transaction
+    // in this harness; the sign battery of audit_rest_interval_tests covers them).
     bad(
         &good.with(|e| {
             e.daa = NOW - R + 1;
@@ -3402,7 +3407,7 @@ fn v2_touch_ifd_fill_3x3() {
 fn v2_touch_ifd_arm_3x3() {
     touch_battery(&fx(), Kind::IfdArm);
 }
-// The same batteries on the published public-mint build (KCC20PublicMint, 3 / 3, tradable since 41b7fdb; audit AUD-PM): the
+// The same batteries on the published public-mint build (KCC20PublicMint, 3 / 3; AUD-PM): the
 // scenarios that fit its slots.
 fn fx_pm() -> Fx {
     Fx {
@@ -5459,12 +5464,13 @@ fn merge_far(f: &Fx, k: usize, amount: i64) -> Scn {
     s
 }
 
-// ---------------------------------------------------------------- audit completion (2026-10-13)
+// ---- witness scenarios for the AU-A / AU-B catalog entries
 //
-// Witnesses for the KobAsk / KobBid checks that no attack scenario reached before (tools/ablation, the AU-A / AU-B entries
-// of the kcc20-sell catalog). Each NAU-A* (ask) / NAU-B* (bid) scenario is refused by the committed contracts and accepted
-// by every input once the one check it names is removed (unless the catalog marks it input-only or defence in depth).
-// Planted inputs (a UTXO carrying the token's covenant id that no token program created) follow the pair suite's NP25 /
+// Witnesses for the KobAsk / KobBid checks that the other scenarios do not reach (tools/ablation,
+// the AU-A / AU-B entries of the kcc20-sell catalog). Each NAU-A* (ask) / NAU-B* (bid) scenario is
+// refused by the committed contracts and accepted by every input once the one check it names is
+// removed (unless the catalog marks it input-only or defence in depth). Planted inputs (a UTXO
+// carrying the token's covenant id that no token program created) follow the pair suite's NP25 /
 // NP26: consensus cannot produce them, the order must refuse them anyway.
 
 /// A KCC-20 holder redeem script with a free borrow scheme and extension commitment.

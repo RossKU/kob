@@ -1,20 +1,28 @@
-//! KOB protocol v2 on the real KaspaCom KCC20 program (kcc20-tx-builder 0.2.5, Apache-2.0, vendored under
-//! `contracts/third-party/kaspacom-kcc20/`, embedded in `kob-protocol` as `TemplateId::Kcc20KaspaCom025`:
-//! 112-byte KCC-20 state, 8 token inputs / 8 token outputs, 25.5 KB program that every token input reveals).
+//! Tests of the KOB protocol v2 orders on the real KaspaCom KCC20 program.
 //!
-//! The v2 orders (KobAsk / KobBid) are driven through the `kob-protocol` builders exactly as a client does
-//! (build -> sign with fixture keys -> finalize with budgets tightened to the engine-measured minimum ->
-//! `verify::validate_signed`: scripts under the enforced compute budgets, covenant context, storage-mass
-//! commitment, relay fee floor, sig-op cap, block mass limits) and every transaction is checked with its
-//! exact budgets (budget - 1 rejects on every metered input).
+//! The program is kcc20-tx-builder 0.2.5 (Apache-2.0), vendored under
+//! `contracts/third-party/kaspacom-kcc20/` and embedded in `kob-protocol` as
+//! `TemplateId::Kcc20KaspaCom025`: 112-byte KCC-20 state, 8 token inputs / 8 token outputs, 25.5 KB
+//! program that every token input reveals.
 //!
-//! The committed compute-budget table (`data/compute_budgets.json`) has no rows for this program yet, so the
-//! budgets are measured here per transaction: pass 1 builds with a generous budget, the engine measures every
-//! input, pass 2 rebuilds with the measured per-role budgets (the way the table generator works).
+//! The v2 orders (KobAsk / KobBid) are driven through the `kob-protocol` builders exactly as a
+//! client does (build -> sign with fixture keys -> finalize with budgets tightened to the
+//! engine-measured minimum -> `verify::validate_signed`: scripts under the enforced compute
+//! budgets, covenant context, storage-mass commitment, relay fee floor, sig-op cap, block mass
+//! limits). Every transaction is checked with its exact budgets (budget - 1 rejects on every
+//! metered input).
 //!
-//! Scenarios: ask create + partial fill, sweeps of 1..=8 asks (the largest sweep the token slots and block
-//! mass allow, measured), sell into two bids, cancel (ask, bid), refund after expiry (ask, bid).
-//! Run: cargo test --release -p kob-tests --test kob_kaspacom_v2_tests -- --nocapture --test-threads=1
+//! The committed compute-budget table (`data/compute_budgets.json`) has no rows for this program
+//! yet, so the budgets are measured here per transaction: pass 1 builds with a generous budget, the
+//! engine measures every input, pass 2 rebuilds with the measured per-role budgets (the way the
+//! table generator works).
+//!
+//! Scenarios: ask create + partial fill, sweeps of 1..=8 asks (the largest sweep the token slots
+//! and block mass allow, measured), sell into two bids, cancel (ask, bid), refund after expiry
+//! (ask, bid).
+//!
+//! Run: cargo test --release -p kob-tests --test kob_kaspacom_v2_tests -- --nocapture
+//! --test-threads=1
 
 use std::collections::BTreeMap;
 
