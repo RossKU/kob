@@ -4,6 +4,8 @@ import { test } from 'node:test';
 import { KobService } from '../src/service.mjs';
 import { PRIMARY, setup } from './helpers.mjs';
 
+const TUSD = '55'.repeat(32);
+
 const place = { token: 'TUSD', side: 'buy', amount: '2TUSD', price: '0.25KAS' };
 
 test('confirm mode: a write only plans; the confirm with the same arguments sends once', async () => {
@@ -98,12 +100,12 @@ test('take: a bound is required, and a worse price is refused by the CLI before 
   const t = setup({ mode: 'auto' });
   const svc = new KobService(t.cfg);
   const id = 'ab'.repeat(32);
-  assert.match((await svc.write('kob_take', { id, amount: '1TUSD' })).reason, /^PRICE_BOUND_REQUIRED/);
-  assert.match((await svc.write('kob_take', { id, amount: '1TUSD', max_price: '0.3KAS', min_price: '0.2KAS' })).reason, /^PRICE_BOUND_REQUIRED/);
-  const r = await svc.write('kob_take', { id, amount: '1TUSD', max_price: '0.2KAS' });
+  assert.match((await svc.write('kob_take', { id, token: TUSD, amount: '1TUSD' })).reason, /^PRICE_BOUND_REQUIRED/);
+  assert.match((await svc.write('kob_take', { id, token: TUSD, amount: '1TUSD', max_price: '0.3KAS', min_price: '0.2KAS' })).reason, /^PRICE_BOUND_REQUIRED/);
+  const r = await svc.write('kob_take', { id, token: TUSD, amount: '1TUSD', max_price: '0.2KAS' });
   assert.match(r.reason, /TAKE_PRICE_ABOVE_MAX/);
   assert.equal(t.yesCalls().length, 0);
-  const ok = await svc.write('kob_take', { id, amount: '1TUSD', max_price: '0.27KAS' });
+  const ok = await svc.write('kob_take', { id, token: TUSD, amount: '1TUSD', max_price: '0.27KAS' });
   assert.equal(ok.status, 'submitted');
 });
 
@@ -210,10 +212,10 @@ test('take: the bound refusal is read in both CLI forms (JSON issue, or stderr t
   const t = setup({ mode: 'auto' });
   const svc = new KobService(t.cfg);
   const id = 'ab'.repeat(32);
-  assert.match((await svc.write('kob_take', { id, amount: '1TUSD', max_price: '0.2KAS' })).reason, /^CLI_REFUSED \(exit 1\): TAKE_PRICE_ABOVE_MAX /);
+  assert.match((await svc.write('kob_take', { id, token: TUSD, amount: '1TUSD', max_price: '0.2KAS' })).reason, /^CLI_REFUSED \(exit 1\): TAKE_PRICE_ABOVE_MAX /);
   process.env.FAKE_KOB_TAKE_UNBUILT = '1';
   try {
-    const r = await new KobService(t.cfg).write('kob_take', { id, amount: '1TUSD', max_price: '0.2KAS' });
+    const r = await new KobService(t.cfg).write('kob_take', { id, token: TUSD, amount: '1TUSD', max_price: '0.2KAS' });
     assert.match(r.reason, /^CLI_REFUSED \(exit 1\): TAKE_PRICE_ABOVE_MAX: error: this fill pays/);
   } finally {
     delete process.env.FAKE_KOB_TAKE_UNBUILT;
@@ -262,7 +264,7 @@ test('token outflows are capped: a share of the confirmed holding by default (MC
   assert.match((await sell('1TUSD')).reason, /^TOKEN_DAILY_CAP/);
   assert.equal(t.yesCalls().length, 2);
   // a sale into a buy order and a token send count too
-  assert.match((await svc.write('kob_take', { id: 'ab'.repeat(32), amount: '1TUSD', min_price: '0.2KAS' })).reason, /^TOKEN_DAILY_CAP/);
+  assert.match((await svc.write('kob_take', { id: 'ab'.repeat(32), token: TUSD, amount: '1TUSD', min_price: '0.2KAS' })).reason, /^TOKEN_DAILY_CAP/);
   assert.match((await svc.write('kob_send', { asset: 'TUSD', to: PRIMARY, amount: '1TUSD' })).reason, /^TOKEN_DAILY_CAP/);
 });
 
@@ -278,4 +280,17 @@ test('token outflows: an own cap per token; an unconfirmed holding is refused', 
   writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify({ n: 0, kasFree: 1000e8, tusdFree: 1000e8, tusdVerified: false, orders: {}, book: { best_bid: '24000000', best_ask: '26000000', last_fill: '25000000' } }));
   assert.match((await new KobService(u.cfg).write('kob_place_limit', { token: 'TUSD', side: 'sell', amount: '1TUSD', price: '0.25KAS' })).reason, /^TOKEN_CAP: the wallet's holding/);
   assert.equal(u.yesCalls().length, 0);
+});
+
+test('take: the token is required and pinned (sec-ops M15)', async () => {
+  const t = setup({ mode: 'auto' });
+  const svc = new KobService(t.cfg);
+  const id = 'ab'.repeat(32);
+  assert.match((await svc.write('kob_take', { id, amount: '1TUSD', max_price: '0.27KAS' })).reason, /^BAD_ARGUMENT: token/);
+  assert.match((await svc.write('kob_take', { id, token: 'TUSD', amount: '1TUSD', max_price: '0.27KAS' })).reason, /^BAD_ARGUMENT: token/);
+  assert.match((await svc.write('kob_take', { id, token: '66'.repeat(32), amount: '1TUSD', max_price: '0.27KAS' })).reason, /^CLI_REFUSED.*another token/);
+  assert.equal((await svc.write('kob_take', { id, token: TUSD, amount: '1TUSD', max_price: '0.27KAS' })).status, 'submitted');
+  const sent = t.yesCalls()[0];
+  assert.equal(sent[sent.indexOf('--token') + 1], TUSD);
+  assert.ok(t.calls().some((a) => a[0] === 'take' && a.includes('--dry-run') && a.includes('--token')));
 });

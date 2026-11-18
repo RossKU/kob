@@ -171,7 +171,7 @@
     },
     {
       "name": "kob_take",
-      "description": "Take a resting order within a required price bound"
+      "description": "Take a resting order of a named token within a required price bound"
     },
     {
       "name": "kob_merge",

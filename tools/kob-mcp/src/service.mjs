@@ -215,12 +215,12 @@ export class KobService {
         if ((a.max_price == null) === (a.min_price == null)) {
           throw new Refusal('PRICE_BOUND_REQUIRED: give exactly one of max_price (you buy from a sell order) or min_price (you sell into a buy order)');
         }
-        const argv = ['take', need(RE.id, a.id, 'id').toLowerCase(), '--amount', amt(a.amount, 'amount')];
+        // the token is pinned: the CLI refuses an order whose node-verified state trades another token
+        const tok = need(RE.id, a.token, 'token (the covenant id of the token the order trades)').toLowerCase();
+        const argv = ['take', need(RE.id, a.id, 'id').toLowerCase(), '--token', tok, '--amount', amt(a.amount, 'amount')];
         if (a.max_price) argv.push('--max-price', px(a.max_price, 'max_price'));
         else argv.push('--min-price', px(a.min_price, 'min_price'));
-        const o = await this.indexer.tryGet(`/v1/orders/${a.id.toLowerCase()}`);
-        const band = o?.token ? { side: a.max_price ? 'buy' : 'sell', price: toSompi(a.max_price ?? a.min_price), token: o.token } : null;
-        return { argv, band };
+        return { argv, band: { side: a.max_price ? 'buy' : 'sell', price: toSompi(a.max_price ?? a.min_price), token: tok } };
       }
       case 'kob_merge':
         return { argv: ['merge', need(RE.token, a.token, 'token')] };

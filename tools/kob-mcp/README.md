@@ -28,7 +28,7 @@ Config: [config.example.json](config.example.json) (defaults in [src/config.mjs]
 
 - Read: `kob_status`, `kob_tokens`, `kob_book`, `kob_stats`, `kob_candles`, `kob_balances`, `kob_orders`, `kob_order`,
   `kob_fee_estimate`.
-- Write: `kob_place_limit`, `kob_replace`, `kob_cancel`, `kob_take` (price bound required), `kob_merge`, `kob_claim`,
+- Write: `kob_place_limit`, `kob_replace`, `kob_cancel`, `kob_take` (token id and price bound required), `kob_merge`, `kob_claim`,
   `kob_token_create`, `kob_send`.
 
 A write first returns its dry-run plan and a `planId`; it is sent only when the same call comes back with

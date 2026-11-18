@@ -85,6 +85,7 @@ switch (args[0]) {
     break;
   }
   case 'take': {
+    if (val('--token') !== TUSD) { process.stderr.write('error: the order trades another token than --token: nothing signed\n'); process.exit(1); }
     if (yes && !val('--max-price') && !val('--min-price')) { process.stderr.write('error: a price bound is required when the confirmation is skipped\n'); process.exit(2); }
     const price = Number(c.book.best_ask);
     const amount = units(val('--amount'));
