@@ -84,9 +84,9 @@ AMOUNTS (always with a unit; never rounded)
 
 SAFETY
   --ack-no-guards       place even when the indexer could not answer for the self-trade / book checks
-  --ack-market-start    accept a market / close auction start the CLI cannot check against an independent reference
-                        (the start is the indexer's best price: every market / close sell needs it, or --floor-price;
-                        a buy when it is worth 100 KAS or more or far above the last fill)
+  --ack-market-start    accept a market / close auction start far from the last fill (the KAS book is checked on the
+                        node, so the start is a confirmed order); on a pair book, which the node does not check, every
+                        market / close sell needs it, or --floor-price, and a buy worth 100 KAS or more
   --floor-price P       a market / close sell never fills below P (the bound is max(slippage bound, P))
   GTC orders end after 90 days idle (renew with `kob replace <id> --renew`).
 
@@ -653,8 +653,9 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<Pl
     let carrier = carrier_arg(p)?;
     // A sell, and a sell-first entry, holds tokens of A. A pair buy holds B, and a sell-first
     // pair entry holds a B prefund.
+    let depth = p.get("--amount").and_then(|v| parse_token_amount(v, &a.unit(), "--amount").ok()).unwrap_or(0);
     let needs = Needs { a: side == Side::Sell, b: b.is_some() && (side == Side::Buy || if_done) };
-    let (mut env, mut notes) = env_of(c, &a, b.as_ref(), needs, maker)?;
+    let (mut env, mut notes) = env_sized(c, &a, b.as_ref(), needs, maker, depth)?;
     notes.extend(found);
     env.carrier = carrier;
     env.guards_acknowledged = p.has("--ack-no-guards");
@@ -703,6 +704,19 @@ pub fn env_of(
     b: Option<&TokenMarket>,
     needs: Needs,
     maker: [u8; 32],
+) -> Result<(Env, Vec<Issue>), String> {
+    env_sized(c, a, b, needs, maker, 0)
+}
+
+/// [`env_of`] for a plan of `depth` base units of A: the KAS book is checked on the node until it
+/// is covered.
+pub fn env_sized(
+    c: &Common,
+    a: &TokenMarket,
+    b: Option<&TokenMarket>,
+    needs: Needs,
+    maker: [u8; 32],
+    depth: i64,
 ) -> Result<(Env, Vec<Issue>), String> {
     let node = c.need_node()?.to_string();
     let indexer = c.need_indexer()?.to_string();
@@ -768,12 +782,28 @@ pub fn env_of(
             }
         });
     }
+    let mut book_verified = false;
     let (book, own, last_fill, pair) = match b {
         None => {
-            let book = data::book(&indexer, a).unwrap_or_else(|_| {
-                guards.push("book".to_string());
-                Default::default()
-            });
+            // The KAS book holds only the orders the node confirms (`book_check`), so a market,
+            // close or crossing order starts at a real order's price. A node that cannot be asked
+            // fails the plan; it never falls back to the indexer's word.
+            let probe = a.listing == market::Listing::Unlisted
+                && matches!(a.decimals_from, market::DecimalsFrom::Lists | market::DecimalsFrom::Market);
+            let book = match super::book_check::verified_book(&indexer, &node, &c.network, a, clock.daa, depth, probe)? {
+                Some(v) => {
+                    if probe {
+                        notes.extend(decimals_check(a, &v)?);
+                    }
+                    notes.extend(super::book_check::dropped_issue(&v));
+                    book_verified = true;
+                    v.book
+                }
+                None => {
+                    guards.push("book".to_string());
+                    Default::default()
+                }
+            };
             let own = data::own_orders(&indexer, a, &maker).unwrap_or_else(|_| {
                 guards.push("own-orders".to_string());
                 vec![]
@@ -814,6 +844,7 @@ pub fn env_of(
         guards_acknowledged: false,
         last_fill,
         market_start_ack: false,
+        book_verified,
         funding,
         token_utxos,
         fee_rate: c.fee_rate,
@@ -823,6 +854,47 @@ pub fn env_of(
         delivery: Default::default(),
     };
     Ok((env, notes))
+}
+
+/// The decimals of an unlisted token that come from the indexer, against the scales of the orders
+/// the node confirms (`book_check`). The indexer reading every amount and price with decimals the
+/// orders on the node do not use is refused (security review 2026-11-17, M12).
+fn decimals_check(a: &TokenMarket, v: &super::book_check::VerifiedBook) -> Result<Option<Issue>, String> {
+    let other = v.other_scales.iter().max_by_key(|(s, n)| (**n, std::cmp::Reverse(**s)));
+    if let Some((s, n)) = other.filter(|(_, n)| **n > v.confirmed) {
+        return Err(format!(
+            "{}: its decimals ({}, {} base units per whole token) come from the indexer, but {n} of its orders confirmed on the \
+             node use {s} base units per whole token and {} use the indexer's: refused (the indexer's decimals disagree with \
+             the orders on the node)",
+            a.name(),
+            a.decimals,
+            a.scale,
+            v.confirmed
+        ));
+    }
+    Ok(Some(if v.confirmed == 0 {
+        Issue {
+            code: "TOKEN_DECIMALS_UNCHECKED",
+            severity: Severity::Warning,
+            message: format!(
+                "{}: its decimals ({}) come from the indexer, and no order on the node confirms them (no registry entry, no \
+                 KCC-23 declaration): check them yourself, every amount and price reads with them",
+                a.name(),
+                a.decimals
+            ),
+        }
+    } else {
+        Issue {
+            code: "TOKEN_DECIMALS_CHECKED",
+            severity: Severity::Info,
+            message: format!(
+                "{}: its decimals ({}) from the indexer match the scale of {} of its orders confirmed on the node",
+                a.name(),
+                a.decimals,
+                v.confirmed
+            ),
+        }
+    }))
 }
 
 /// The units of the tokens of the plan.

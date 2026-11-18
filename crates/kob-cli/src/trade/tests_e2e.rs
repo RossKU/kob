@@ -786,35 +786,88 @@ fn an_unlisted_token_commitment_must_match_the_wallets_holdings() {
     assert_eq!(w.submitted(), 3);
 }
 
-/// A market sell whose start is only the best bid of the indexer does not go on `--yes` alone.
+/// A market sell starts at the best bid the node confirms; a bid that only the indexer lists is
+/// left out of the book (security review 2026-11-17, M13).
 ///
-/// It needs `--ack-market-start` every time, or a floor price of the user. The same holds for
-/// `close`.
+/// A start far below the last fill still needs `--ack-market-start`, or a floor price of the
+/// user. The same holds for `close`.
 #[test]
-fn a_market_sell_needs_the_start_acknowledged_or_a_floor() {
-    let w = world("marketsell", &[]);
-    w.indexer_state.lock().unwrap().routes.insert(
-        format!("/v1/books/{}?depth=100&aggregate=false", to_hex(&TOKEN)),
-        json!({"token": to_hex(&TOKEN), "aggregated": false, "asks": [],
-               "bids": [{"covenant_id": to_hex(&[0xb1; 32]), "price": "250000000", "amount_left": "40000", "scale": 1000}]}),
-    );
+fn a_market_sell_starts_at_a_node_confirmed_bid() {
+    let real = [0xb1; 32];
+    let w = world("marketsell", &[(AnyState::KobBid(bid(pk(0x22))), real, 0x40, 100 * KAS)]);
+    let book = |bids: Value| {
+        w.indexer_state.lock().unwrap().routes.insert(
+            format!("/v1/books/{}?depth=100&aggregate=false", to_hex(&TOKEN)),
+            json!({"token": to_hex(&TOKEN), "aggregated": false, "asks": [], "bids": bids}),
+        );
+    };
+    let row = |cov: [u8; 32], price: &str| json!({"covenant_id": to_hex(&cov), "price": price, "amount_left": "40000", "scale": 1000});
     let place = crate::trade::place::run;
     let sell = "market --token TST --side sell --amount 1TST --yes";
+    // Only a phantom bid: nothing the node confirms, so there is no start to sell at.
+    book(json!([row([0xb2; 32], "250000000")]));
+    assert_eq!(run(place, w.args(0x11, sell)), 1);
+    assert_eq!(w.submitted(), 0);
+    // The phantom above the real bid is left out; the sell starts at the real 2 KAS.
+    book(json!([row([0xb2; 32], "250000000"), row(real, "200000000")]));
+    assert_eq!(run(place, w.args(0x11, sell)), 0);
+    assert_eq!(w.submitted(), 1);
+    let codes = w.issue_codes(".place.json");
+    assert!(codes.iter().any(|c| c == "MARKET_START_CONFIRMED") && codes.iter().any(|c| c == "BOOK_ORDERS_DROPPED"), "{codes:?}");
+    let AnyState::KobAsk(a) = &recover_orders(&w.signed(".place.json").tx).unwrap()[0].order else { panic!() };
+    assert_eq!(a.price, 200_000_000);
+    // A last fill at 3 KAS: a start 33 % below it waits for the acknowledgement or a floor.
+    let fill = json!({"items": [{"price": "300000000"}], "price_basis": "1000"});
+    w.indexer_state.lock().unwrap().routes.insert(format!("/v1/trades/{}?limit=1", to_hex(&TOKEN)), fill);
     assert_eq!(run(place, w.args(0x11, sell)), 1);
     assert_eq!(run(place, w.args(0x11, "close --token TST --amount 1TST --yes")), 1);
-    assert_eq!(w.submitted(), 0);
-    assert_eq!(run(place, w.args(0x11, &format!("{sell} --ack-market-start"))), 0);
     assert_eq!(w.submitted(), 1);
-    assert!(w.issue_codes(".place.json").iter().any(|c| c == "MARKET_START_UNVERIFIED_ACKNOWLEDGED"));
-    // The acknowledgement is per command, so the next sell asks again.
-    assert_eq!(run(place, w.args(0x11, sell)), 1);
-    assert_eq!(run(place, w.args(0x11, &format!("{sell} --floor-price 2.45KAS"))), 0);
+    assert_eq!(run(place, w.args(0x11, &format!("{sell} --ack-market-start"))), 0);
     assert_eq!(w.submitted(), 2);
-    let AnyState::KobAsk(a) = &recover_orders(&w.signed(".place.json").tx).unwrap()[0].order else { panic!() };
-    assert_eq!((a.price, a.price_end), (250_000_000, 245_000_000));
+    assert!(w.issue_codes(".place.json").iter().any(|c| c == "MARKET_START_ACKNOWLEDGED"));
     // A floor names the bound of a sell only.
     assert_eq!(run(place, w.args(0x11, "market --token TST --side buy --amount 1TST --floor-price 2KAS --yes")), 1);
     assert_eq!(w.submitted(), 2);
+}
+
+/// A market buy starts at the best ask the node confirms: a cheaper phantom ask that only the
+/// indexer lists is left out (security review 2026-11-17, M13).
+#[test]
+fn a_market_buy_skips_a_phantom_ask() {
+    let real = [0xa1; 32];
+    let w = world("marketbuy", &[(AnyState::KobAsk(ask(pk(0x11), 5 * SCALE, 1_000_000 + 77_000_000)), real, 0x50, 2 * KAS)]);
+    w.indexer_state.lock().unwrap().routes.insert(
+        format!("/v1/books/{}?depth=100&aggregate=false", to_hex(&TOKEN)),
+        json!({"token": to_hex(&TOKEN), "aggregated": false, "bids": [], "asks": [
+            {"covenant_id": to_hex(&[0xa2; 32]), "price": "100000000", "amount_left": "5000", "scale": 1000},
+            {"covenant_id": to_hex(&real), "price": "300000000", "amount_left": "5000", "scale": 1000}]}),
+    );
+    assert_eq!(run(crate::trade::place::run, w.args(0x22, "market --token TST --side buy --amount 1TST --yes")), 0);
+    assert!(w.issue_codes(".place.json").iter().any(|c| c == "BOOK_ORDERS_DROPPED"));
+    let AnyState::KobBid(b) = &recover_orders(&w.signed(".place.json").tx).unwrap()[0].order else { panic!() };
+    assert_eq!(b.price, 300_000_000);
+}
+
+/// Decimals of an unlisted token that only the indexer names are checked against the scale of
+/// its orders on the node: an indexer that says 5 where the orders use 10^3 is refused (security
+/// review 2026-11-17, M12).
+#[test]
+fn indexer_decimals_that_the_orders_on_the_node_contradict_are_refused() {
+    let real = [0xb1; 32];
+    let w = world("decimals", &[(AnyState::KobBid(bid(pk(0x22))), real, 0x40, 100 * KAS)]);
+    w.indexer_state.lock().unwrap().routes.insert(
+        format!("/v1/books/{}?depth=100&aggregate=false", to_hex(&TOKEN)),
+        json!({"token": to_hex(&TOKEN), "aggregated": false, "asks": [],
+               "bids": [{"covenant_id": to_hex(&real), "price": "200000000", "amount_left": "40000", "scale": 1000}]}),
+    );
+    let place = crate::trade::place::run;
+    let sell = "limit --token TST --side sell --amount 1TST --price 3KAS --yes";
+    w.indexer_state.lock().unwrap().routes.get_mut("/v1/tokens").unwrap()["tokens"][0]["decimals"] = json!(5);
+    assert_eq!(run(place, w.args(0x11, sell)), 1);
+    assert_eq!(w.submitted(), 0);
+    w.indexer_state.lock().unwrap().routes.get_mut("/v1/tokens").unwrap()["tokens"][0]["decimals"] = json!(3);
+    assert_eq!(run(place, w.args(0x11, sell)), 0);
+    assert!(w.issue_codes(".place.json").iter().any(|c| c == "TOKEN_DECIMALS_CHECKED"));
 }
 
 const TOKEN_B: [u8; 32] = [0x71; 32];
@@ -843,6 +896,7 @@ fn planned(intent: crate::trade::plan::Intent, pair: bool) -> (AnyState, u64) {
         guards_acknowledged: false,
         last_fill: None,
         market_start_ack: true,
+        book_verified: false,
         funding: vec![KeyUtxo { utxo: utxo(1, 1000 * KAS, None), pubkey: pk(0x11) }],
         token_utxos: vec![TokenUtxo { utxo: utxo(2, 2 * KAS, Some(TOKEN)), state: user_token(pk(0x11), 100 * SCALE) }],
         fee_rate: None,
