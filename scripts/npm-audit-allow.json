@@ -1,0 +1,10 @@
+{
+  "about": "npm advisories accepted by scripts/npm-audit.mjs (CI job deps), each with its reason, as .cargo/deny.toml does for RustSec. Remove an entry when its fix is released.",
+  "allow": [
+    {
+      "id": "GHSA-fc5q-39xc-vjpf",
+      "dirs": ["web"],
+      "reason": "picomatch ReDoS, no patched release (<=4.0.7), dev-only via vite/vitest/@preact/preset-vite; remove when fixed"
+    }
+  ]
+}

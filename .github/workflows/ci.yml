@@ -301,8 +301,11 @@ jobs:
         with:
           node-version: 22
       - name: npm audit (web, packages/kob-x402, tools/wallet-gate)
+        # web through scripts/npm-audit.mjs: the advisories accepted in scripts/npm-audit-allow.json, each with its reason
         run: |
-          for d in web packages/kob-x402 tools/wallet-gate; do
+          echo "== web"
+          node scripts/npm-audit.mjs web
+          for d in packages/kob-x402 tools/wallet-gate; do
             echo "== $d"
             (cd "$d" && npm audit --package-lock-only --audit-level=high)
           done
