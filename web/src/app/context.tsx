@@ -1,4 +1,5 @@
-// Preact contexts shared by every view: services (data layer), wallet session, per-wallet record store.
+// The Preact contexts every view shares: the services (data layer), the wallet session and the
+// per-wallet record store.
 import { createContext, type ComponentChildren } from 'preact';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { LocalStorageRecordStore, MemoryRecordStore, type RecordStore } from '../kob/records';
@@ -13,44 +14,58 @@ import { privateKeySigningAllowed } from './mirror';
 import type { Services } from './services';
 import { watchWallet, type WalletNotice } from './wallet-events';
 
-// ------------------------------------------------------------------------------------------------ services
+// --- Services ---
 
+/** The context that carries the app's services. */
 export const ServicesContext = createContext<Services | null>(null);
 
+/** The app's services. It throws outside a `ServicesContext.Provider`. */
 export function useServices(): Services {
   const s = useContext(ServicesContext);
   if (!s) throw new Error('useServices outside <ServicesContext.Provider>');
   return s;
 }
 
-// ------------------------------------------------------------------------------------------------ wallet session
+// --- Wallet session ---
 
+/** The wallet session every view reads. */
 export interface WalletSession {
-  /** installed wallets (extensions inject late: this list grows) */
+  /** The installed wallets. Extensions inject late, so this list grows. */
   detected: WalletAdapter[];
-  /** the first look for installed wallets is over: one was found, or DISCOVERY_WAIT_MS passed. Until then "no wallet detected" is not an answer (Connect waits). */
+  /**
+   * Set once the first look for installed wallets is over, because one was found or
+   * DISCOVERY_WAIT_MS passed. Until then "no wallet detected" is not an answer, and Connect waits.
+   */
   discovered: boolean;
   adapter: WalletAdapter | null;
   info: WalletInfo | null;
-  /** wallet network differs from the app network (trading must be blocked) */
+  /** The wallet network differs from the app network, so trading must be blocked. */
   networkMismatch: boolean;
   connecting: boolean;
   error: string | null;
-  /** counts every change of the wallet's key or network after connect: state bound to an older value is stale */
+  /**
+   * Counts every change of the wallet's key or network after connect. State bound to an older value
+   * is stale.
+   */
   epoch: number;
-  /** the last account / network change the wallet reported (in the bell's current status until dismissed or the next connect) */
+  /**
+   * The last account or network change the wallet reported. It stays in the bell's current status
+   * until dismissed or until the next connect.
+   */
   notice: WalletNotice | null;
   dismissNotice(): void;
   connect(id: WalletId): Promise<void>;
-  /** opens the private-key signer frame (the key is typed there, never into this page) */
+  /** Opens the private-key signer frame. The key is typed there, never into this page. */
   openPrivateKey(): void;
   disconnect(): void;
-  /** placement records of the connected key (memory store when not connected) */
+  /** The placement records of the connected key, a memory store when not connected. */
   records: RecordStore;
 }
 
+/** The context that carries the wallet session. */
 export const WalletContext = createContext<WalletSession | null>(null);
 
+/** The wallet session. It throws outside a `WalletProvider`. */
 export function useWallet(): WalletSession {
   const w = useContext(WalletContext);
   if (!w) throw new Error('useWallet outside <WalletProvider>');
@@ -65,9 +80,13 @@ const safeStorage = (): Storage | null => {
   }
 };
 
-/** How long Connect waits for an extension that has not injected yet, ms, before it takes "none" as the answer (the private key entry). */
+/**
+ * How long Connect waits in ms for an extension that has not injected yet, before it takes "none"
+ * as the answer and offers the private key entry.
+ */
 export const DISCOVERY_WAIT_MS = 1500;
 
+/** Holds the wallet session and the private-key signer frame for its children. */
 export function WalletProvider(props: { services: Services; children: ComponentChildren }) {
   const { config } = props.services;
   const [detected, setDetected] = useState<WalletAdapter[]>([]);
@@ -81,8 +100,10 @@ export function WalletProvider(props: { services: Services; children: ComponentC
   const infoRef = useRef<WalletInfo | null>(null);
   infoRef.current = info;
 
-  // Kaspire: `ordered-args` where the plan is just [signature, dispatch tag] (the wallet then emits the very script kob-wasm assembles: an independent check of the ABI
-  // encoding), else `wrap-signature`; finalize verifies every signature either way (real Kaspire 0.5.1 accepts both on TN10)
+  // Kaspire signs with `ordered-args` where the plan is just [signature, dispatch tag], else with
+  // `wrap-signature`. With `ordered-args` the wallet emits the very script kob-wasm assembles, an
+  // independent check of the ABI encoding. Finalize verifies every signature either way. Kaspire
+  // 0.5.1 accepts both on TN10.
   const kob = props.services.kob;
   useEffect(() => {
     const stop = watchWallets(
@@ -99,7 +120,8 @@ export function WalletProvider(props: { services: Services; children: ComponentC
     };
   }, [config.features.kastle, kob]);
 
-  // ---- the private-key signer frame (wallet/local-key.ts, ui/shell/SignerFrame.tsx): mounted while its session lives, removing it forgets the key
+  // The private-key signer frame (wallet/local-key.ts, ui/shell/SignerFrame.tsx). It is mounted
+  // while its session lives, and removing it forgets the key.
   const [signerMode, setSignerMode] = useState<SignerMode>('closed');
   const hostRef = useRef<SignerHost | null>(null);
   const { sdk, registry } = props.services;
@@ -182,7 +204,8 @@ export function WalletProvider(props: { services: Services; children: ComponentC
     else if (signerMode === 'connect') setSignerMode('closed');
   };
 
-  // Account and network changes after connect: see wallet-events.ts. Listeners live exactly as long as the session.
+  // Account and network changes after connect (wallet-events.ts). Listeners live exactly as long
+  // as the session.
   useEffect(() => {
     if (!adapter) return;
     return watchWallet({

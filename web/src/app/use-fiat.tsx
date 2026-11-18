@@ -1,5 +1,8 @@
-// The views' side of the optional USD display (app/fiat.ts decides, app/kas-price.ts fetches): which currency a value is shown in right now, the one-line note that
-// says so, and the loop that keeps the price fresh while USD is chosen.
+// The views' side of the optional USD display. app/fiat.ts decides and app/kas-price.ts fetches.
+// This file holds:
+// - which currency a value is shown in right now,
+// - the one-line note that says so,
+// - the loop that keeps the price fresh while USD is chosen.
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { onVisibilityChange } from '../ui/kit/hooks';
 import { useServices } from './context';
@@ -16,7 +19,10 @@ function usePriceSnapshot(): PriceSnapshot {
   return snap;
 }
 
-/** What is shown now: KAS, USD, or KAS with the reason USD is not in force. Re-judged as the quote ages. */
+/**
+ * What is shown now: KAS, USD, or KAS with the reason USD is not in force. It is judged again as
+ * the quote ages.
+ */
 export function useFiatState(): FiatState {
   const { config } = useServices();
   const [currency] = useDisplayCurrency();
@@ -25,7 +31,10 @@ export function useFiatState(): FiatState {
   return useMemo(() => resolveFiat({ currency, feed: snap, nowMs: snap.nowMs, testnet }), [currency, snap, testnet]);
 }
 
-/** The USD display in force, or null (show KAS). Stable while the quote does not change, so a view that memoises on it is not redone every tick. */
+/**
+ * The USD display in force, or null to show KAS. It is stable while the quote does not change, so a
+ * view that memoises on it is not redone every tick.
+ */
 export function useFiat(): Fiat | null {
   const f = fiatOf(useFiatState());
   const quote = f?.quote;
@@ -34,8 +43,12 @@ export function useFiat(): Fiat | null {
 }
 
 /**
- * The KAS price (USD per KAS) for a figure that needs it whatever the display currency (the thin-book marker of the market views: "under $100"): the fresh quote's rate,
- * else null (never a stale or guessed one). Mounting the view keeps the price loop running (`kasPrice.want`) although KAS is shown. Stable while the quote does not change.
+ * The KAS price in USD per KAS, for a figure that needs it whatever the display currency. One is
+ * the thin-book marker of the market views, "under $100".
+ *
+ * It is the fresh quote's rate, else null, and never a stale or guessed one. Mounting the view
+ * keeps the price loop running (`kasPrice.want`) although KAS is shown. It is stable while the
+ * quote does not change.
  */
 export function useKasRate(): Rate | null {
   const snap = usePriceSnapshot();
@@ -45,16 +58,22 @@ export function useKasRate(): Rate | null {
   return useMemo(() => f?.rate ?? null, [quote]);
 }
 
-/** The USD display in force right now, read outside a component (a toast that is made when an event arrives); null = KAS. */
+/**
+ * The USD display in force right now, read outside a component, such as for a toast made when an
+ * event arrives. Null means KAS.
+ */
 export function currentFiat(testnet: boolean, nowMs = Date.now()): Fiat | null {
   return fiatOf(resolveFiat({ currency: readCurrencyPref(), feed: kasPrice.snapshot, nowMs, testnet }));
 }
 
-/** The loop that reads the price: mounted once for the app, running only while USD is the display currency or a market view wants the rate. */
+/**
+ * The loop that reads the price. It is mounted once for the app, and runs only while USD is the
+ * display currency or a market view wants the rate.
+ */
 export function KasPriceFeed() {
   const { indexer } = useServices();
   const [currency] = useDisplayCurrency();
-  // also while a market view wants the rate for its thin-book marker (`useKasRate`)
+  // It also runs while a market view wants the rate for its thin-book marker (`useKasRate`).
   const [wanted, setWanted] = useState(() => kasPrice.isWanted);
   useEffect(() => {
     setWanted(kasPrice.isWanted);
@@ -69,9 +88,12 @@ export function KasPriceFeed() {
 }
 
 /**
- * The one muted line under a view that shows values: what the USD is (the source, how old, "an estimate, not a quote", and on testnet that its KAS has no value),
- * or why KAS is shown although USD was chosen. Nothing while KAS is the display currency. What the USD is is said in Settings only (`full`, founder 2026-11-11:
- * not on every page); a page says only why it shows KAS although USD was chosen.
+ * The one muted line under a view that shows values. Nothing shows while KAS is the display
+ * currency.
+ *
+ * With `full`, which only Settings sets, it says what the USD is: the source, how old it is, "an
+ * estimate, not a quote", and on testnet that its KAS has no value. Any other page says only why it
+ * shows KAS although USD was chosen.
  */
 export function FiatNote(props: { class?: string; full?: boolean }) {
   const s = useFiatState();
