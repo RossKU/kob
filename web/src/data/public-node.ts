@@ -1,11 +1,15 @@
-// The public node of an app with no node URL configured: asked of the community resolvers the SDK's `Resolver` uses, several at once.
-// The SDK asks them one after another, and a resolver that does not answer holds it for about 20 s (TN10 2026-11-17: 5 of the 16 hung,
-// 3 answered an error), so the Portfolio's balances waited 20-40 s for the node. Here a few are asked at once, one more every STAGGER_MS, and
-// the first that names a wss:// node wins; the others are aborted. The node it names is no more trusted than the SDK's pick (the same
-// resolvers). The pick is kept for the browser session (PICK_TTL_MS) so a reload connects at once; a node that fails is forgotten.
+// The public node of an app with no node URL configured. It is asked of the community resolvers
+// the SDK's `Resolver` uses, several at once.
+//
+// The SDK asks them one after another, and a resolver that does not answer holds it for about
+// 20 s. So the Portfolio's balances could wait 20-40 s for the node. Here a few are asked at once,
+// and one more every STAGGER_MS. The first that names a wss:// node wins, and the others are
+// aborted. The node it names is no more trusted than the SDK's pick, because the resolvers are the
+// same. The pick is kept for the browser session (PICK_TTL_MS), so a reload connects at once. A
+// node that fails is forgotten.
 import { normalizeNetwork } from './kaspa-sdk';
 
-/** The resolvers of the SDK's built-in list (kaspa-wasm `Resolver`, its default `[[group]]` entries). */
+/** The resolvers of the SDK's built-in list, the default `[[group]]` of kaspa-wasm `Resolver`. */
 export const PUBLIC_RESOLVERS: readonly string[] = [
   ...['eric', 'maxim', 'sean', 'troy'].map((n) => `https://${n}.kaspa.stream`),
   ...['john', 'mike', 'paul', 'alex'].map((n) => `https://${n}.kaspa.red`),
@@ -19,22 +23,27 @@ export const START_AT_ONCE = 4;
 export const STAGGER_MS = 300;
 /** One resolver's answer is given up after this long. */
 export const RESOLVER_TIMEOUT_MS = 4_000;
-/** How long a picked node is reused (this browser session). */
+/** How long a picked node is reused within this browser session. */
 export const PICK_TTL_MS = 10 * 60_000;
 
 const STORE_KEY = 'kob.node.picked';
 
+/** Picks a public node for a network from the resolvers. */
 export interface PublicNodePicker {
-  /** a wss:// node for `network`, or null when no resolver answered (the caller falls back to the SDK's Resolver) */
+  /**
+   * A wss:// node for `network`, or null when no resolver answered. The caller then falls back to
+   * the SDK's Resolver.
+   */
   pick(network: string): Promise<string | null>;
-  /** the node failed: the next pick asks the resolvers again */
+  /** Records that the node failed, so the next pick asks the resolvers again. */
   forget(url: string): void;
 }
 
+/** Options of `createPublicNodePicker`. */
 export interface PickerOptions {
   fetch?: (url: string, init: { signal: AbortSignal }) => Promise<{ ok: boolean; json(): Promise<unknown> }>;
   resolvers?: readonly string[];
-  /** where the pick is kept; null = memory only */
+  /** Where the pick is kept. Null keeps it in memory only. */
   storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null;
   now?: () => number;
   random?: () => number;
@@ -43,7 +52,7 @@ export interface PickerOptions {
   timeoutMs?: number;
 }
 
-/** The node URL of one resolver answer (`{"url": "wss://..."}`), or null. */
+/** The node URL of one resolver answer (`{"url": "wss://..."}`), or null. Only wss:// is taken. */
 export function nodeUrlOfAnswer(body: unknown): string | null {
   const url = (body as { url?: unknown } | null)?.url;
   if (typeof url !== 'string' || url.length > 512) return null;
@@ -63,6 +72,7 @@ const sessionStore = (): PickerOptions['storage'] => {
   }
 };
 
+/** Makes a picker that keeps its pick in session storage. */
 export function createPublicNodePicker(o: PickerOptions = {}): PublicNodePicker {
   const fetchFn = o.fetch ?? ((url, init) => fetch(url, { ...init, cache: 'no-store', credentials: 'omit' }));
   const resolvers = o.resolvers ?? PUBLIC_RESOLVERS;
@@ -81,7 +91,7 @@ export function createPublicNodePicker(o: PickerOptions = {}): PublicNodePicker 
         const v = JSON.parse(storage.getItem(STORE_KEY) ?? 'null') as typeof memory;
         if (v && typeof v.network === 'string' && typeof v.at === 'number' && nodeUrlOfAnswer(v) === v.url) k = v;
       } catch {
-        /* unreadable: ask */
+        /* Unreadable, so ask. */
       }
     }
     return k && k.network === network && now() - k.at < PICK_TTL_MS && now() >= k.at ? k.url : null;
@@ -91,7 +101,7 @@ export function createPublicNodePicker(o: PickerOptions = {}): PublicNodePicker 
     try {
       storage?.setItem(STORE_KEY, JSON.stringify(memory));
     } catch {
-      /* memory only */
+      /* Memory only. */
     }
   };
 

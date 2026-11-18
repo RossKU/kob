@@ -1,6 +1,8 @@
-// `NodeApi` over the official kaspa-wasm SDK `RpcClient` (wRPC, JSON encoding): a testnet-10 node of your own (e.g. `ws://127.0.0.1:18210`),
-// any other wRPC node, or the SDK's public `Resolver` when no URL is configured. Submission ALWAYS goes through node RPC: the REST
-// endpoint drops the per-input compute budget of tx v1, which the covenants need.
+// `NodeApi` over the official kaspa-wasm SDK `RpcClient` (wRPC). The node is a testnet-10 node of
+// your own (such as `ws://127.0.0.1:18210`) or any other wRPC node, reached with JSON encoding.
+// When no URL is configured it is a public node, reached with Borsh encoding. Submission always
+// goes through node RPC, because the REST endpoint drops the per-input compute budget of tx v1,
+// which the covenants need.
 import { parseFeeEstimate, type FeeEstimate } from '../kob/fee-policy';
 import type { Hex, TxJson } from '../kob/types';
 import type { BlockSubscription, NodeApi, NodeInfo, NodeUtxo } from './node';
@@ -9,18 +11,26 @@ import type { PublicNodePicker } from './public-node';
 import { joinSpkString, normalizeNetwork, spkStringToAddress, type KaspaSdk, type SdkRpcClient, type SdkUtxoEntryReference } from './kaspa-sdk';
 import { NodeError, describeNodeError, isConnectionError, rawErrorText } from './node-error';
 
-// ------------------------------------------------------------------------------------------------ DAA rate
+// --- DAA rate ---
 
-/** The least span a DAA rate is measured over (matcher.md 10.10: "over the last hour"). Blocks arrive as a Poisson process: over 20 s
- * the rate is off by up to 7 % (1 sigma), and that error is extrapolated over a day (day order) or 90 days (GTD, timed activation);
- * over an hour it is 0.5 %, and the node's own window (`nodeDaaRate`, many hours) is tighter still. */
+/**
+ * The least span a DAA rate is measured over (matcher.md 10.10, "over the last hour").
+ *
+ * Blocks arrive as a Poisson process. Over 20 s the rate is off by up to 7 % (1 sigma), and that
+ * error is extrapolated over a day (day order) or 90 days (GTD, timed activation). Over an hour it
+ * is 0.5 %, and the node's own window (`nodeDaaRate`, many hours) is tighter still.
+ */
 export const DAA_RATE_MIN_SPAN_MS = 3_600_000;
 
 /**
- * Sliding history of (virtual DAA, wall-clock) samples -> measured DAA advance in milli-DAA per second: the fallback when the node does
- * not give its own long window (`nodeDaaRate`). `kob.dayOrder` needs the measured rate to turn "00:00 UTC" into a DAA score
- * (matcher.md 10.10); the nominal 10 DAA/s is used until a rate is known. `rateMilli()` is null until the history spans `minSpanMs`
- * (an hour by default: a rate from seconds or minutes of samples is noise).
+ * Measures the DAA advance in milli-DAA per second from a sliding history of (virtual DAA,
+ * wall-clock) samples.
+ *
+ * It is the fallback when the node does not give its own long window (`nodeDaaRate`).
+ * `kob.dayOrder` needs the measured rate to turn "00:00 UTC" into a DAA score (matcher.md 10.10),
+ * and the nominal 10 DAA/s is used until a rate is known. `rateMilli()` is null until the history
+ * spans `minSpanMs`, an hour by default, because a rate from seconds or minutes of samples is
+ * noise.
  */
 export class DaaRateEstimator {
   private samples: { daa: bigint; tMs: number }[] = [];
@@ -35,7 +45,8 @@ export class DaaRateEstimator {
     const last = this.samples[this.samples.length - 1];
     if (last) {
       if (tMs - last.tMs < this.minIntervalMs) {
-        // too close to the previous sample: keep the newer reading only if it is not older (DAA never runs backwards in a stable DAG)
+        // Too close to the previous sample. Keep the newer reading only if it is not older, because
+        // DAA never runs backwards in a stable DAG.
         if (tMs >= last.tMs && daa >= last.daa) this.samples[this.samples.length - 1] = { daa, tMs };
         return;
       }
@@ -70,9 +81,11 @@ const NODE_RATE_TTL_MS = 10 * 60_000;
 const asBig = (v: bigint | number | undefined): bigint | null => (typeof v === 'bigint' ? v : typeof v === 'number' && Number.isFinite(v) ? BigInt(Math.trunc(v)) : null);
 
 /**
- * The DAA rate the node itself measured, in milli-DAA per second: the DAA scores and timestamps of the headers of its pruning point and
- * of its selected tip (`sink`), hours apart. Null when the node does not give them (an older SDK, a fake) or they span less than
- * `minSpanMs`; then the wallet's own samples (`DaaRateEstimator`, an hour at least) or the nominal 10 DAA/s are used.
+ * The DAA rate the node itself measured, in milli-DAA per second. It comes from the DAA scores and
+ * timestamps of the headers of its pruning point and of its selected tip (`sink`), hours apart.
+ * Null when the node does not give them, as with an older SDK or a fake, or they span less than
+ * `minSpanMs`. The wallet's own samples (`DaaRateEstimator`, an hour at least) or the nominal
+ * 10 DAA/s are used then.
  */
 export async function nodeDaaRate(
   dag: { sink?: string; pruningPointHash?: string },
@@ -91,7 +104,7 @@ export async function nodeDaaRate(
   return Number(((d1 - d0) * 1_000_000n) / spanMs);
 }
 
-// ------------------------------------------------------------------------------------------------ utxo mapping
+// --- UTXO mapping ---
 
 const covenantIdOf = (e: SdkUtxoEntryReference): Hex | null => {
   const c = e.entry?.covenantId ?? e.covenantId;
@@ -100,7 +113,10 @@ const covenantIdOf = (e: SdkUtxoEntryReference): Hex | null => {
   return /^[0-9a-f]{64}$/.test(s) ? s : null;
 };
 
-/** SDK `UtxoEntryReference` -> `NodeUtxo`. The SDK does not always attach the address: derive it from the script then. */
+/**
+ * Turns an SDK `UtxoEntryReference` into a `NodeUtxo`. The SDK does not always attach the
+ * address, and then it is derived from the script.
+ */
 export function mapUtxoEntry(sdk: KaspaSdk, network: string, e: SdkUtxoEntryReference): NodeUtxo {
   const spk = joinSpkString(e.scriptPublicKey.version, e.scriptPublicKey.script);
   return {
@@ -115,32 +131,40 @@ export function mapUtxoEntry(sdk: KaspaSdk, network: string, e: SdkUtxoEntryRefe
   };
 }
 
-// ------------------------------------------------------------------------------------------------ the node
+// --- The node ---
 
+/** The connection state of a `KaspaRpcNode`. */
 export type RpcNodeStatus = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'closed';
 
+/** Options of `KaspaRpcNode`. */
 export interface KaspaRpcNodeOptions {
   sdk: KaspaSdk;
-  /** network the app is configured for; `connect` fails if the node is on another one */
+  /** The network the app is configured for. `connect` fails if the node is on another one. */
   network: string;
-  /** `ws://` / `wss://` wRPC endpoint; '' = the SDK's public Resolver */
+  /** The `ws://` or `wss://` wRPC endpoint. An empty string means a public node. */
   url?: string;
   connectTimeoutMs?: number;
-  /** extra time on top of `connectTimeoutMs` before the connect attempt is abandoned by force, ms */
+  /** Extra time on top of `connectTimeoutMs` before the connect attempt is dropped by force, ms. */
   connectGraceMs?: number;
-  /** hard limit of one RPC call (a socket that died silently never answers), ms */
+  /** The hard limit of one RPC call in ms, because a socket that died silently never answers. */
   callTimeoutMs?: number;
-  /** how long a call waits for the SDK's automatic reconnect before failing */
+  /** How long a call waits for the SDK's automatic reconnect before failing. */
   reconnectWaitMs?: number;
-  /** wall clock, ms since the epoch */
+  /** The wall clock, in ms since the epoch. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   estimator?: DaaRateEstimator;
-  /** with no URL: races the public resolvers for a node (data/public-node.ts) instead of the SDK's one-by-one Resolver, which it falls back to */
+  /**
+   * With no URL, it races the public resolvers for a node (data/public-node.ts). Without it, or
+   * when it finds none, the SDK's one-by-one Resolver is used.
+   */
   publicNode?: PublicNodePicker;
 }
 
-/** Rejects with an `unavailable` NodeError when `p` does not settle in time (the SDK's own timeouts do not cover every path, e.g. a Resolver lookup). */
+/**
+ * Rejects with an `unavailable` NodeError when `p` does not settle in time. The SDK's own
+ * timeouts do not cover every path, such as a Resolver lookup.
+ */
 function timed<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   let t: ReturnType<typeof setTimeout>;
   const limit = new Promise<never>((_, rej) => {
@@ -150,11 +174,12 @@ function timed<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 }
 
 const DISCONNECT_WAIT_MS = 3_000;
-/** The connect timeout of a node the resolvers named (another one is picked after it). */
+/** The connect timeout of a node the resolvers named. Another one is picked after it. */
 const PICKED_CONNECT_MS = 8_000;
 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/** The node client over wRPC. */
 export class KaspaRpcNode implements NodeApi {
   readonly kind = 'rpc' as const;
   private readonly sdk: KaspaSdk;
@@ -168,16 +193,22 @@ export class KaspaRpcNode implements NodeApi {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly estimator: DaaRateEstimator;
   private readonly publicNode: PublicNodePicker | null;
-  /** the node's own long-window rate (`nodeDaaRate`) and when it was read */
+  /** The node's own long-window rate (`nodeDaaRate`) and when it was read. */
   private nodeRate: { milli: number | null; atMs: number } | null = null;
   private rpc: SdkRpcClient | null = null;
   private connecting: Promise<NodeInfo> | null = null;
   private state: RpcNodeStatus = 'idle';
   private readonly listeners = new Set<(s: RpcNodeStatus) => void>();
-  /** block subscribers (standalone mode) and the client whose `block-added` notifications feed them */
+  /**
+   * Block subscribers, for standalone mode, and the client whose `block-added` notifications feed
+   * them.
+   */
   private readonly blockSubs = new Set<{ onBlock: (b: StreamBlock) => void; onGap?: (() => void) | undefined }>();
   private blockRpc: SdkRpcClient | null = null;
-  /** the link dropped since the blocks were last subscribed: the next `connect` subscribes again and reports a gap */
+  /**
+   * Whether the link dropped since the blocks were last subscribed. The next `connect` then
+   * subscribes again and reports a gap.
+   */
   private blocksStale = false;
   private readonly onBlockAdded = (ev?: unknown): void => {
     const data = (ev as { data?: { block?: unknown } } | undefined)?.data;
@@ -187,7 +218,7 @@ export class KaspaRpcNode implements NodeApi {
       try {
         s.onBlock(b);
       } catch {
-        /* a subscriber's bug must not stop the others */
+        /* A subscriber's bug must not stop the others. */
       }
     }
   };
@@ -210,7 +241,10 @@ export class KaspaRpcNode implements NodeApi {
     return this.state;
   }
 
-  /** Connection state changes (`connected` / `disconnected`, the latter is followed by the SDK's automatic reconnect). */
+  /**
+   * Calls `cb` on connection state changes. A `disconnected` is followed by the SDK's automatic
+   * reconnect.
+   */
   onStatus(cb: (s: RpcNodeStatus) => void): () => void {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);
@@ -223,7 +257,7 @@ export class KaspaRpcNode implements NodeApi {
       try {
         cb(s);
       } catch {
-        /* a listener must not break the connection handling */
+        /* A listener must not break the connection handling. */
       }
     }
   }
@@ -240,7 +274,8 @@ export class KaspaRpcNode implements NodeApi {
     const { sdk } = this;
     await this.dispose();
     this.setState('connecting');
-    // a public node named by the resolvers: picked here (several asked at once), else by the SDK's Resolver
+    // A public node named by the resolvers is picked here, with several asked at once, else by the
+    // SDK's Resolver.
     const picked = !this.url && this.publicNode ? await this.publicNode.pick(this.network).catch(() => null) : null;
     if (this.state === 'closed') throw new NodeError('unavailable', 'The node connection was closed.');
     const cfg = this.url
@@ -249,7 +284,8 @@ export class KaspaRpcNode implements NodeApi {
         picked
         ? { url: picked, networkId: this.network, encoding: sdk.Encoding.Borsh }
         : { resolver: new sdk.Resolver(), networkId: this.network, encoding: sdk.Encoding.Borsh };
-    // a picked node that does not come up is left sooner: the next attempt asks the resolvers again
+    // A picked node that does not come up is left sooner. The next attempt asks the resolvers
+    // again.
     const connectMs = picked ? Math.min(this.connectTimeoutMs, PICKED_CONNECT_MS) : this.connectTimeoutMs;
     let rpc: SdkRpcClient;
     try {
@@ -261,7 +297,8 @@ export class KaspaRpcNode implements NodeApi {
     rpc.addEventListener('connect', () => {
       if (this.state === 'closed') return;
       this.setState('connected');
-      // the SDK's automatic reconnect does not restore the node's subscriptions: subscribe again, and the subscribers learn they may have missed blocks
+      // The SDK's automatic reconnect does not restore the node's subscriptions. Subscribe again,
+      // and the subscribers learn they may have missed blocks.
       if (this.blocksStale && this.blockRpc === rpc && this.blockSubs.size) {
         this.blocksStale = false;
         void this.resubscribe(rpc);
@@ -277,7 +314,8 @@ export class KaspaRpcNode implements NodeApi {
       await timed(rpc.connect({ blockAsyncConnect: true, timeoutDuration: connectMs }), connectMs + this.connectGraceMs, 'connect');
       const info = await this.info();
       this.setState('connected');
-      // a new client after a lost link: the block subscribers follow it (and may have missed blocks)
+      // A new client after a lost link. The block subscribers follow it and may have missed
+      // blocks.
       if (this.blockSubs.size && this.blockRpc !== rpc) void this.resubscribe(rpc);
       return info;
     } catch (e) {
@@ -288,7 +326,10 @@ export class KaspaRpcNode implements NodeApi {
     }
   }
 
-  /** Reads the dag info, checks the network and records a clock sample. Assumes a connected client. */
+  /**
+   * Reads the dag info, checks the network and records a clock sample. It assumes a connected
+   * client.
+   */
   private async info(): Promise<NodeInfo> {
     const rpc = this.rpc;
     if (!rpc) throw new NodeError('unavailable', 'Not connected to a node.');
@@ -308,12 +349,15 @@ export class KaspaRpcNode implements NodeApi {
     try {
       serverVersion = (await timed(rpc.getServerInfo(), this.callTimeoutMs, 'getServerInfo')).serverVersion;
     } catch {
-      /* optional */
+      /* Optional. */
     }
     return { network: net, virtualDaaScore: dag.virtualDaaScore.toString(), serverVersion, daaRateMilli: await this.rateMilli(rpc, dag) };
   }
 
-  /** The DAA rate over a long window: the node's own (re-read every 10 minutes), else the wallet's samples over an hour, else null. */
+  /**
+   * The DAA rate over a long window. That is the node's own, read again every 10 minutes, else the
+   * wallet's samples over an hour, else null.
+   */
   private async rateMilli(rpc: SdkRpcClient, dag: { sink?: string; pruningPointHash?: string }): Promise<number | null> {
     const now = this.now();
     if (this.nodeRate === null || now - this.nodeRate.atMs >= NODE_RATE_TTL_MS) {
@@ -341,10 +385,11 @@ export class KaspaRpcNode implements NodeApi {
       /* ignore */
     }
     try {
-      // bounded: a client whose connect hung (a dead resolver) must not keep the next attempt, or the failure report, waiting for its disconnect
+      // Bounded, because a client whose connect hung, as on a dead resolver, must not keep the next
+      // attempt or the failure report waiting for its disconnect.
       await timed(rpc.disconnect(), DISCONNECT_WAIT_MS, 'disconnect');
     } catch {
-      /* already down */
+      /* Already down. */
     }
   }
 
@@ -355,7 +400,10 @@ export class KaspaRpcNode implements NodeApi {
     this.nodeRate = null;
   }
 
-  /** A connected client: connects on first use, then waits for the SDK's automatic reconnect after a drop. */
+  /**
+   * A connected client. It connects on first use, then waits for the SDK's automatic reconnect
+   * after a drop.
+   */
   private async ready(): Promise<SdkRpcClient> {
     if (this.state === 'closed') throw new NodeError('unavailable', 'The node connection was closed.');
     if (!this.rpc) await this.connect();
@@ -368,13 +416,13 @@ export class KaspaRpcNode implements NodeApi {
       if (rpc.isConnected) return rpc;
       await this.sleep(100);
     }
-    // the automatic retry did not bring the link back in time: start over once
+    // The automatic retry did not bring the link back in time. Start over once.
     await this.connect();
     if (this.rpc?.isConnected) return this.rpc;
     throw new NodeError('unavailable', 'The node connection was lost and could not be restored.');
   }
 
-  /** Runs an idempotent read; on a dropped link waits for the reconnect and retries once. */
+  /** Runs an idempotent read. On a dropped link it waits for the reconnect and retries once. */
   private async read<T>(fn: (rpc: SdkRpcClient) => Promise<T>): Promise<T> {
     let rpc = await this.ready();
     try {
@@ -413,7 +461,10 @@ export class KaspaRpcNode implements NodeApi {
     return res.entries.map((e) => mapUtxoEntry(this.sdk, this.network, e));
   }
 
-  /** `getFeeEstimate`: null on any failure (an older node without the method, a dropped link, an unreadable answer): the fee policy then pays the floor. */
+  /**
+   * `getFeeEstimate`, null on any failure, such as an older node without the method, a dropped
+   * link or an unreadable answer. The fee policy then pays the floor.
+   */
   async getFeeEstimate(): Promise<FeeEstimate | null> {
     try {
       const raw = await this.read((rpc) => {
@@ -427,8 +478,9 @@ export class KaspaRpcNode implements NodeApi {
   }
 
   /**
-   * Follows the node's new blocks (`subscribeBlockAdded`): every `block-added` notification is handed over as a `StreamBlock`. After a lost link the
-   * subscription is made again on the restored client and `onGap` says that blocks may have been missed meanwhile.
+   * Follows the node's new blocks (`subscribeBlockAdded`). Every `block-added` notification is
+   * handed over as a `StreamBlock`. After a lost link the subscription is made again on the
+   * restored client, and `onGap` says that blocks may have been missed meanwhile.
    */
   async subscribeBlocks(onBlock: (b: StreamBlock) => void, onGap?: () => void): Promise<BlockSubscription> {
     const rpc = await this.ready();
@@ -457,7 +509,7 @@ export class KaspaRpcNode implements NodeApi {
       try {
         old.removeEventListener?.('block-added', this.onBlockAdded);
       } catch {
-        /* the old client is gone */
+        /* The old client is gone. */
       }
     }
     this.blockRpc = rpc;
@@ -488,11 +540,14 @@ export class KaspaRpcNode implements NodeApi {
     try {
       if (rpc.isConnected && typeof rpc.unsubscribeBlockAdded === 'function') await timed(rpc.unsubscribeBlockAdded(), DISCONNECT_WAIT_MS, 'unsubscribeBlockAdded');
     } catch {
-      /* the link is gone: nothing to unsubscribe */
+      /* The link is gone, so there is nothing to unsubscribe. */
     }
   }
 
-  /** Subscribes again on `rpc` (a restored link) and tells every subscriber that blocks may have been missed. A failure is a gap too. */
+  /**
+   * Subscribes again on `rpc`, a restored link, and tells every subscriber that blocks may have
+   * been missed. A failure is a gap too.
+   */
   private async resubscribe(rpc: SdkRpcClient): Promise<void> {
     try {
       if (this.blockRpc === rpc) await timed(rpc.subscribeBlockAdded!(), this.callTimeoutMs, 'subscribeBlockAdded');
@@ -522,7 +577,8 @@ export class KaspaRpcNode implements NodeApi {
       return r.transactionId;
     } catch (e) {
       const err = describeNodeError(e);
-      // NOT retried: after a dropped link the node may have accepted it. Say so instead of inviting a blind resubmit.
+      // Not retried, because after a dropped link the node may have accepted it. Say so instead of
+      // inviting a blind resubmit.
       if (err.code === 'unavailable') {
         throw new NodeError('unavailable', 'The connection dropped while sending. The transaction may or may not have been accepted: check before sending again.', err.raw);
       }
