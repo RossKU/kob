@@ -1,6 +1,8 @@
-// The logo of a token in its details: where the picture comes from (checked or not), "Logo hidden after a report" for a hidden one, and the "Report logo" action.
-// A report hides the logo for everyone until the operator of the indexer reviews it (data/logo-blocklist.ts); the dialog also links to the GitHub form, which
-// feeds the same list. KOB stores no picture, so reporting is the way a logo is taken down.
+// The logo of a token in its details. It says where the picture comes from, checked or not,
+// "Logo hidden after a report" for a hidden one, and offers the "Report logo" action. A report
+// hides the logo for everyone until the operator of the indexer reviews it
+// (data/logo-blocklist.ts). The dialog also links to the GitHub form, which feeds the same list.
+// KOB stores no picture, so reporting is the way a logo is taken down.
 import { useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { githubReportUrl, logoBlocklist, logoBlocklistUrlOf, logoReportsUrlOf, LOGO_REASONS, reportLogo, type LogoReason, type ReportResult } from '../../data/logo-blocklist';
@@ -23,7 +25,8 @@ function ReportDialog(props: { covenantId: string; onClose: () => void }) {
     setBusy(false);
     setResult(r);
     if (r.ok) {
-      // this viewer's own report hides the logo for this viewer at once; the list is read again for everybody else's view of it
+      // This viewer's own report hides the logo for this viewer at once. The list is read again for
+      // everybody else's view of it.
       logoBlocklist.hideLocally(props.covenantId);
       void logoBlocklist.refresh(listUrl);
     }
@@ -73,7 +76,10 @@ function ReportDialog(props: { covenantId: string; onClose: () => void }) {
   );
 }
 
-/** What a token's details say about its logo; nothing for a token with no logo to speak of (letter only). */
+/**
+ * What a token's details say about its logo. Nothing for a token with no logo to speak of, which
+ * has a letter only.
+ */
 export function LogoSection(props: { row: Pick<TokenRow, 'covenantId' | 'kascov'> }) {
   const { logo } = useTokenLogo(props.row, true);
   const [open, setOpen] = useState(false);

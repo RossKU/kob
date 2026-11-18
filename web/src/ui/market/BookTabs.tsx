@@ -1,6 +1,8 @@
-// The depth chart has no panel of its own at any width (founder, 2026-11-11): the order book's panel holds both, an "Order book | Depth" switch in its header (the choice remembered in
-// this browser). The book is only hidden behind the depth chart (visibility, its body keeps its size and its state), never unmounted, so the panel does not change
-// height and the book is as it was when it comes back; the depth chart is mounted while it is shown, so it measures the body it fills.
+// The depth chart has no panel of its own at any width. The order book's panel holds both, with an
+// "Order book | Depth" switch in its header. The choice is remembered in this browser. The book is
+// only hidden behind the depth chart (visibility), and its body keeps its size and its state. It
+// is never unmounted, so the panel does not change height and the book is as it was when it comes
+// back. The depth chart is mounted while it is shown, so it measures the body it fills.
 import type { ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
 import { t } from '../../i18n';
@@ -14,7 +16,7 @@ function storedView(): BookPanelView {
   try {
     if (localStorage.getItem(VIEW_KEY) === 'depth') return 'depth';
   } catch {
-    /* no storage */
+    /* No storage. */
   }
   return 'book';
 }
@@ -27,7 +29,7 @@ export function useBookPanelView(): { view: BookPanelView; setView: (v: BookPane
     try {
       localStorage.setItem(VIEW_KEY, v);
     } catch {
-      /* no storage */
+      /* No storage. */
     }
   };
   return { view, setView };
@@ -51,10 +53,16 @@ export function BookViewSwitch(props: { view: BookPanelView; onChange: (v: BookP
   );
 }
 
-/** The class of the panel's section: what market.css keys the switch's header and the depth overlay on. */
+/**
+ * The class of the panel's section. market.css keys the switch's header and the depth overlay on
+ * it.
+ */
 export const bookPanelClass = (view: BookPanelView): string => `mkt-area-book mkt-card book-tabbed${view === 'depth' ? ' is-depth' : ''}`;
 
-/** The panel's body: the book (hidden while the depth chart is shown) and, over it, the depth chart filling the body. */
+/**
+ * The panel's body: the book, hidden while the depth chart is shown, and over it the depth chart
+ * filling the body.
+ */
 export function BookPanelBody(props: { view: BookPanelView; depth: ComponentChildren; children: ComponentChildren }) {
   const showDepth = props.view === 'depth';
   return (

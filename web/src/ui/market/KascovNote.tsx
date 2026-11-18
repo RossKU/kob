@@ -1,10 +1,14 @@
-// The small muted notes of a row whose words came from kascov.io (in the style of TokenNote): where the name and ticker come from, and a disagreement
-// with what KOB derived (short warn badges, see KascovMismatch). Nothing for a row kascov added nothing visible to.
+// The small muted notes of a row whose words came from kascov.io, in the style of TokenNote. They
+// say where the name and ticker come from, and a disagreement with what KOB derived, as short warn
+// badges (see KascovMismatch). There is nothing for a row kascov added nothing visible to.
 import { t } from '../../i18n';
 import { TipBadge } from './TipBadge';
 import type { TokenRow } from './token-model';
 
-/** `compact` (list rows): the source is the small marker "via kascov", the sentence is its tooltip and the legend above the list says it once. */
+/**
+ * `compact` is for list rows. The source is the small marker "via kascov", the sentence is its
+ * tooltip, and the legend above the list says it once.
+ */
 export function KascovNote(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'decimals' | 'kascov'>; compact?: boolean }) {
   const { covenantId, kascov: k } = props.row;
   if (!k) return null;
@@ -26,12 +30,17 @@ export function KascovNote(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' 
   );
 }
 
-/** Whether kascov.io disagrees with KOB about the ticker or the decimals of a row (what `KascovMismatch` shows). */
+/**
+ * Whether kascov.io disagrees with KOB about the ticker or the decimals of a row, which is what
+ * `KascovMismatch` shows.
+ */
 export const hasKascovMismatch = (row: Pick<TokenRow, 'kascov'>): boolean => !!row.kascov && (row.kascov.tickerDiffers || row.kascov.decimalsDiffers);
 
 /**
- * The disagreements with KOB as short warn badges: "ticker differs", "decimals differ". The full sentence, with kascov's value and KOB's, is each badge's
- * tooltip and, on a tap or the keyboard, a small panel (TipBadge). A list row shows them on its badge line (the name line cuts what does not fit).
+ * The disagreements with KOB as short warn badges: "ticker differs" and "decimals differ". The
+ * full sentence, with kascov's value and KOB's, is each badge's tooltip. On a tap or the keyboard
+ * it is a small panel (TipBadge). A list row shows them on its badge line, because the name line
+ * cuts what does not fit.
  */
 export function KascovMismatch(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'decimals' | 'kascov'> }) {
   const { covenantId, decimals, kascov: k, ticker } = props.row;
