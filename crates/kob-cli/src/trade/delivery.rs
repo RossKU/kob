@@ -221,10 +221,17 @@ pub fn resolve(o: &Order, r: &Request, issues: &mut Vec<Issue>) -> Resolved {
                 );
             }
             let tip = r.tip.unwrap_or(default);
-            if tip < 0 || tip > o.carrier {
+            // At most the carrier, and below 0.08 KAS (S4): a larger tip pays a filler to make a new
+            // receive UTXO for each fill.
+            let max = o.carrier.min(kob_protocol::state::TOPUP_TIP_MAX);
+            if tip < 0 || tip > max {
                 issues.push(error(
                     "TOPUP_TIP_INVALID",
-                    format!("--topup-tip must be 0 to the delivery carrier ({})", units::kas(o.carrier as i128)),
+                    format!(
+                        "--topup-tip must be 0 to {} (the delivery carrier, and below {}: a larger tip pays a filler to make a new receive UTXO for each fill)",
+                        units::kas(max as i128),
+                        units::kas(kob_protocol::tx::COVENANT_OUTPUT_MIN as i128)
+                    ),
                 ));
             } else if tip < default {
                 issues.push(warning(
@@ -365,6 +372,15 @@ mod tests {
         let mut v = vec![];
         resolve(&order(Class::Resting), &Request { tip: Some(200_000_000), ..r.clone() }, &mut v);
         assert_eq!(v[0].code, "TOPUP_TIP_INVALID");
+        // S4: below 0.08 KAS even with a 1 KAS carrier.
+        let max = kob_protocol::state::TOPUP_TIP_MAX;
+        let mut v = vec![];
+        resolve(&order(Class::Resting), &Request { tip: Some(max + 1), ..r.clone() }, &mut v);
+        assert_eq!(v[0].code, "TOPUP_TIP_INVALID");
+        let mut v = vec![];
+        let d = resolve(&order(Class::Resting), &Request { tip: Some(max), ..r.clone() }, &mut v);
+        assert!(v.is_empty(), "{v:?}");
+        assert_eq!(d.topup_tip, max);
         // A pair order never gets one-utxo.
         let mut v = vec![];
         // With a price the pair rule alone refuses it (a pair order has none in practice).
