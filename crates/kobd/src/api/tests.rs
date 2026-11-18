@@ -2513,3 +2513,67 @@ async fn quotes_serve_the_sampled_top_of_the_book() {
         assert_eq!(s, StatusCode::BAD_REQUEST, "{q}");
     }
 }
+
+/// `GET /v1/creator-locks?key=`: the declared creator locks of a key, verified against their genesis;
+/// another key, and a declaration without a lock, list nothing.
+#[tokio::test]
+async fn creator_locks_are_listed_by_key() {
+    use crate::indexer::kcc23::{apply, proof_tx, DeclSection};
+    use crate::testkit::{kcc23_txid, kcc23_wire};
+    use kob_protocol::creator_lock::CreatorLock;
+    use kob_protocol::issue::{build_creation, FundingUtxo, Holder, IssueSpec};
+    let e = env(|_| {});
+    seed_all(&e.w);
+    let key = kob_protocol::tx::pubkey_of(&[0x41; 32]).unwrap();
+    let launch = |tag: u8, lock: Option<CreatorLock>| {
+        let funding = FundingUtxo {
+            outpoint: kaspa_consensus_core::tx::TransactionOutpoint {
+                transaction_id: kaspa_consensus_core::tx::TransactionId::from_bytes([tag; 32]),
+                index: 0,
+            },
+            amount: 500 * 100_000_000,
+            owner_pubkey: key,
+        };
+        let mut holders = vec![Holder::new(key, 0, 800)];
+        if let Some(l) = &lock {
+            holders.push(Holder::new(l.authority(), 0x03, 200));
+        }
+        let total = holders.iter().map(|h| h.amount).sum();
+        let mut spec = IssueSpec::new("Locked", "LOCK", 0, total, holders, vec![funding]);
+        spec.lock = lock;
+        build_creation(&spec).unwrap()
+    };
+    let lock = CreatorLock::new(1_900_000_000_000, key).unwrap();
+    fn ptx(t: &kaspa_consensus_core::tx::Transaction) -> kob_protocol::kcc23::ProofTx {
+        proof_tx(&kcc23_wire(t, false)).unwrap()
+    }
+    let mut covs = vec![];
+    for (tag, l) in [(1u8, Some(lock)), (2, None)] {
+        let plan = launch(tag, l);
+        let (prep, gen) = (&plan.prep.tx, &plan.genesis.tx);
+        apply(&e.w, 9, 990, &kcc23_txid(prep), &DeclSection { tx: ptx(prep), preparation: true, binds: vec![], refs: vec![] })
+            .unwrap();
+        let d = apply(
+            &e.w,
+            9,
+            990,
+            &kcc23_txid(gen),
+            &DeclSection { tx: ptx(gen), preparation: false, binds: vec![ptx(prep)], refs: vec![] },
+        )
+        .unwrap();
+        covs.push(d[0]);
+    }
+    let app = router(e.state.clone());
+    let (s, v) = get(&app, &format!("/v1/creator-locks?key={}", kob_protocol::json::to_hex(&key))).await;
+    assert_eq!(s, StatusCode::OK);
+    let items = v["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{v}");
+    assert_eq!(items[0]["covenant_id"], covs[0].to_hex());
+    assert_eq!((items[0]["until"].as_str(), items[0]["amount"].as_str()), (Some("1900000000000"), Some("200")));
+    assert_eq!(items[0]["authority"], kob_protocol::json::to_hex(&lock.authority()));
+    let other = kob_protocol::tx::pubkey_of(&[0x42; 32]).unwrap();
+    let (_, v) = get(&app, &format!("/v1/creator-locks?key={}", kob_protocol::json::to_hex(&other))).await;
+    assert!(v["items"].as_array().unwrap().is_empty());
+    let (s, _) = get(&app, "/v1/creator-locks").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+}

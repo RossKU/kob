@@ -235,7 +235,8 @@ is disabled on the output. The declaration publishes the script as `"lock": "<88
   returned as the unlock's change). An earlier lock time, a final sequence, another key, a missing coin, and a merge or
   transfer that takes the locked output as a delegate or on the borrow path are refused by the scripts
   (`crates/kob-tests/tests/kcc20/creator_lock_tests.rs`). The builders of every other command refuse a scheme-0x03 token
-  input. The indexer lists the locked output under its owner (`GET /v1/token-utxos?owner=<p2sh hash>`).
+  input. The indexer lists the locked output under its owner (`GET /v1/token-utxos?owner=<p2sh hash>`) and a key's locks
+  (`GET /v1/creator-locks?key=`), which the web Portfolio reads to find them (each declaration verified there again).
 
 ## 4. Reading a token's facts
 

@@ -221,6 +221,11 @@ export interface IndexerApi {
    */
   tokenUtxos(q: TokenUtxosQuery, o?: RequestOptions): Promise<TokenUtxoView[] | null>;
   /**
+   * `GET /v1/creator-locks?key=`: the tokens whose declaration locks a share for `key` (their covenant ids). A hint only: the caller loads and
+   * verifies each declaration itself (data/token-declarations.ts). Null on an indexer without the route.
+   */
+  creatorLocks?(key: Hex, o?: RequestOptions): Promise<{ covenant_id: Hex }[] | null>;
+  /**
    * Market data (M5): `GET /v1/trades|candles|stats|depth/{token}`. Each resolves to `null` when the indexer answers 404 / 405 / 501 (an indexer
    * without the route, or a token it does not know): the views show "no data" and fall back where they can (trades -> `/v1/fills`, depth -> the book).
    */
@@ -487,6 +492,15 @@ export class HttpIndexer implements IndexerApi {
       throw e;
     }
     return out;
+  }
+
+  async creatorLocks(key: Hex, o?: RequestOptions): Promise<{ covenant_id: Hex }[] | null> {
+    const r = await this.getOptional<{ items?: { covenant_id?: unknown }[] }>('/v1/creator-locks', { key: assertHash('key', key) }, o);
+    if (!r) return null;
+    return (Array.isArray(r.items) ? r.items : [])
+      .map((i) => i?.covenant_id)
+      .filter((c): c is string => typeof c === 'string' && /^[0-9a-f]{64}$/.test(c))
+      .map((covenant_id) => ({ covenant_id }));
   }
 
   /** GET that maps "route not served" (404 / 405 / 501) to null. */

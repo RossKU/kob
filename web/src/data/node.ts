@@ -46,6 +46,11 @@ export interface NodeApi {
    */
   getFeeEstimate?(): Promise<FeeEstimate | null>;
   /**
+   * The node's past median time (unix ms): a transaction with a time lock time is accepted once it is past that time (a creator lock's unlock).
+   * Null when the node does not say. Optional.
+   */
+  getPastMedianTime?(): Promise<bigint | null>;
+  /**
    * Follows the node's new blocks (wRPC `block-added`; the mock node: `GET /node/blocks`) for standalone mode (data/standalone.ts): `onBlock` gets every
    * block from now on, `onGap` is called when blocks may have been missed (the link dropped and came back). Rejects when the node cannot be asked.
    * Optional: a node without it has no standalone mode.

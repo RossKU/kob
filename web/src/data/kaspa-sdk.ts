@@ -66,6 +66,8 @@ export interface SdkConnectOptions {
 export interface SdkBlockDagInfo {
   network: string;
   virtualDaaScore: bigint;
+  /** the past median time (unix ms) the node checks a lock time against */
+  pastMedianTime?: bigint;
   /** the selected tip (2.1.0: `sink`) and the pruning point, hex block hashes: the ends of the node's long DAA-rate window */
   sink?: string;
   pruningPointHash?: string;

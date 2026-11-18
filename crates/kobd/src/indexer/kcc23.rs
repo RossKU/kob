@@ -635,6 +635,38 @@ pub fn compact_legacy(conn: &Connection, limit: usize) -> DbResult<usize> {
     Ok(done)
 }
 
+/// The declared creator locks of `key` (`kob_protocol::creator_lock`), at most `limit`: each
+/// declaration whose preparation holds the key's lock script tail (`b0 20 <key> ac`, as the hex the
+/// declaration's `lock` carries) is verified again, and kept when its lock, verified against the
+/// genesis, opens to `key`. One scan of the stored preparations, no extra table: a store of any
+/// age answers.
+pub fn creator_locks(conn: &Connection, key: &[u8; 32], limit: usize) -> DbResult<Vec<kcc23::VerifiedDeclaration>> {
+    let tail = format!("b020{}ac\"", kob_protocol::json::to_hex(key));
+    // a row an earlier build wrote holds the whole proof, whose payload is hex of the declaration's text
+    let legacy = kob_protocol::json::to_hex(tail.as_bytes());
+    let ids: Vec<Vec<u8>> = {
+        let mut st = conn.prepare_cached(
+            "SELECT d.covenant_id FROM kcc23_declarations d LEFT JOIN kcc23_txs t ON t.txid = d.preparation_txid \
+             WHERE instr(t.tx, ?1) > 0 OR (d.proof != '' AND instr(d.proof, ?2) > 0) ORDER BY d.genesis_block, d.covenant_id",
+        )?;
+        let v = st.query_map(params![tail.as_bytes(), legacy], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        v
+    };
+    let mut out = vec![];
+    for id in ids {
+        let Ok(id) = <[u8; 32]>::try_from(id.as_slice()) else { continue };
+        let Some(json) = proof_json(conn, &Hash32(id))? else { continue };
+        let Ok(v) = serde_json::from_str::<LaunchProof>(&json).map_err(|e| e.to_string()).and_then(|p| p.verify()) else { continue };
+        if v.lock.as_ref().is_some_and(|l| l.key == *key) {
+            out.push(v);
+            if out.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Whether the indexer holds a declaration for a covenant id.
 pub fn declared(conn: &Connection, covenant_id: &Hash32) -> DbResult<bool> {
     Ok(conn.prepare_cached("SELECT 1 FROM kcc23_declarations WHERE covenant_id = ?1")?.exists([&covenant_id.0[..]])?)

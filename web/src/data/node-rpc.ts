@@ -390,6 +390,12 @@ export class KaspaRpcNode implements NodeApi {
     }
   }
 
+  async getPastMedianTime(): Promise<bigint | null> {
+    const dag = await this.read((rpc) => rpc.getBlockDagInfo());
+    const t = dag.pastMedianTime;
+    return typeof t === 'bigint' ? t : typeof t === 'number' ? BigInt(t) : null;
+  }
+
   async getClock(): Promise<{ daa: bigint; unixSeconds: bigint; rateMilli: number | null }> {
     const t0 = this.now();
     const dag = await this.read((rpc) => rpc.getBlockDagInfo());

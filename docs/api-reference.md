@@ -78,6 +78,7 @@ only when `[api] metrics = true` (the default), the KAS price route (25) only wh
 | 25 | `GET /v1/price/kas-usd` (only with `[api] usd_price`) | [3.22](#322-get-v1pricekas-usd) | 1 | no (own cache) |
 | 26 | `POST /v1/logo-reports` (only with `[logo_reports] enabled`) | [3.19](#319-post-v1logo-reports) | 1 | no |
 | 27 | `GET /v1/logo-blocklist` (only with `[logo_reports] enabled`) | [3.20](#320-get-v1logo-blocklist) | 1 | no |
+| 28 | `GET /v1/creator-locks?key=` | [3.24](#324-get-v1creator-lockskey) | H | no |
 
 ## 2. Conventions
 
@@ -1076,6 +1077,20 @@ curl -s "$API/v1/quotes/$TOKEN?interval=1h&limit=24"
 An item is `[t, bid, ask]`, ascending: the bucket start (unix ms) and the last values in it, sompi per `price_basis` base units, `null` for an
 empty side. Only buckets with a change are listed, so carry a value forward to the next item. The first item is the value in force at the start
 of the window, at its bucket.
+
+### 3.24 `GET /v1/creator-locks?key=`
+
+The tokens whose KCC-23 declaration locks a share for `key` (a 64-hex x-only key or a P2PK address; `limit`, default 50), each with its
+lock as `LaunchProof::verify` found it against the genesis (`docs/spec/token-metadata.md`, *Creator lock*):
+
+```json
+{"items": [{"covenant_id": "<64 hex>", "genesis_txid": "<64 hex>", "symbol": "LCK", "until": "1900000000000", "key": "<64 hex>",
+  "script": "<88 hex>", "authority": "<64 hex>", "amount": "200", "outputs": [{"index": 1, "amount": "200"}],
+  "program": "KCC20PublicMint", "extensionCommitment": "<64 hex>", "supply": "1000"}]}
+```
+
+A hint: a client verifies the launch proof itself (3.5). The locked UTXOs still unspent are
+`GET /v1/token-utxos?owner=<authority>&token=<covenant_id>` (3.14). One scan of the stored declarations, no index.
 
 ## 4. WebSocket
 

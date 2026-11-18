@@ -180,6 +180,36 @@ pub async fn token_declaration(State(app): State<Arc<App>>, Path(id): Path<Strin
     }
 }
 
+/// `GET /v1/creator-locks?key=`: the tokens whose KCC-23 declaration locks a share for `key` (an
+/// x-only key in hex or a P2PK address), each with its lock as `LaunchProof::verify` found it
+/// against the genesis (`until`, `authority`, `amount`, `outputs`, `supply`, `program`). A client
+/// that relies on one verifies the token's launch proof itself
+/// (`GET /v1/tokens/{covenant_id}/declaration`). The locked UTXOs still unspent are
+/// `GET /v1/token-utxos?owner=<authority>&token=<covenant_id>`.
+pub async fn creator_locks(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
+    let key: [u8; 32] = q
+        .get("key")
+        .map(|s| parse_owner(s))
+        .transpose()?
+        .ok_or_else(|| ApiError::bad_request("key is required"))?
+        .try_into()
+        .map_err(|_| ApiError::bad_request("key must be 32 bytes"))?;
+    let n = limit(&q, "limit", 50, app.state.cfg.max_page_size)?;
+    let v = app.state.pool.with(move |c| crate::indexer::kcc23::creator_locks(c, &key, n)).await?;
+    let items: Vec<Value> = v
+        .into_iter()
+        .filter_map(|d| {
+            let l = d.lock?;
+            let mut lock = serde_json::to_value(&l).ok()?;
+            lock["covenant_id"] = json!(Hash32(d.covenant_id).to_hex());
+            lock["genesis_txid"] = json!(Hash32(d.genesis_txid).to_hex());
+            lock["symbol"] = json!(d.token.symbol);
+            Some(lock)
+        })
+        .collect();
+    json_ok(json!({ "items": items }))
+}
+
 /// `GET /v1/books/{token}?depth=&aggregate=`: the KAS book of a token. Pair orders are not in it.
 pub async fn book(State(app): State<Arc<App>>, Path(token): Path<String>, Query(q): Params) -> ApiResult {
     let token = parse_hash("token", &token)?;

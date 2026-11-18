@@ -31,6 +31,9 @@ use crate::trade::opts;
 use crate::trade::units::{tokens, TokenUnit};
 
 const DAY_MS: u64 = 86_400_000;
+/// A token's declaration the indexer does not have yet (a genesis just sent) is asked again this often, this far apart.
+const DECLARATION_ATTEMPTS: u32 = 6;
+const DECLARATION_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Now, unix ms.
 pub fn now_ms() -> u64 {
@@ -230,10 +233,21 @@ fn load(arg: &str, indexer: Option<&str>) -> Result<Source, String> {
         let cov = kob_protocol::json::hex32(arg).map_err(|_| format!("`{arg}` is neither a token id (64 hex) nor a directory"))?;
         let indexer = indexer.ok_or("give the token's creation directory, or --indexer to read its launch proof")?;
         let p = format!("/v1/tokens/{}/declaration", to_hex(&cov));
-        match crate::trade::http::get(indexer, &p, crate::trade::data::INDEXER_TIMEOUT)? {
-            (200, v) => v,
-            (404, _) => return Err(format!("the indexer has no declaration of {}: give the creation's directory", to_hex(&cov))),
-            (status, _) => return Err(format!("indexer {p}: HTTP {status}")),
+        // a genesis just sent reaches the indexer a few seconds later: a 404 is asked again for half a minute
+        let mut attempt = 0;
+        loop {
+            match crate::trade::http::get(indexer, &p, crate::trade::data::INDEXER_TIMEOUT)? {
+                (200, v) => break v,
+                (404, _) if attempt < DECLARATION_ATTEMPTS => {
+                    if attempt == 0 {
+                        eprintln!("waiting for the indexer to have the token's declaration ...");
+                    }
+                    attempt += 1;
+                    std::thread::sleep(DECLARATION_RETRY);
+                }
+                (404, _) => return Err(format!("the indexer has no declaration of {}: give the creation's directory", to_hex(&cov))),
+                (status, _) => return Err(format!("indexer {p}: HTTP {status}")),
+            }
         }
     };
     let proof: LaunchProof = serde_json::from_value(proof).map_err(|e| format!("launch proof: {e}"))?;

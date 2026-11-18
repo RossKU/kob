@@ -265,6 +265,38 @@ describe('the form and the Portfolio', () => {
     expect(r.holders.map((h) => [h.isWallet, h.lockedUntil])).toEqual([[true, undefined], [false, BigInt(until)]]);
   });
 
+  it('a lock the indexer names is found without a visit to the token page, after its declaration verifies', async () => {
+    const { loadLockedHoldings } = await import('../ui/orders/balances-data');
+    const p = plan();
+    const network = 'testnet-10';
+    const asked: string[] = [];
+    const indexer = {
+      creatorLocks: async (key: string) => (asked.push(key), [{ covenant_id: p.token.covenantId }, { covenant_id: 'cd'.repeat(32) }]),
+      declaration: async (id: string) => (id === p.token.covenantId ? p.docs.launchProof : null),
+    };
+    const seen: string[] = [];
+    const tracker = {
+      lockedTokenUtxos: async (l: { covenantId: string }) => {
+        seen.push(l.covenantId);
+        const o = p.token.outputs[0]!;
+        return [{ transactionId: '09'.repeat(32), index: 0, amount: '1000000000', blockDaaScore: '1', covenantId: p.token.covenantId, state: { amount: o.amount } }];
+      },
+    };
+    const store = new Map<string, string>();
+    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) };
+    const g = globalThis as { localStorage?: unknown };
+    const before = g.localStorage;
+    g.localStorage = storage;
+    try {
+      const held = await loadLockedHoldings({ kob, tracker, config: { network }, indexer } as never, maker);
+      expect(asked).toEqual([maker]);
+      expect(seen).toEqual([p.token.covenantId]);
+      expect(held.map((h) => [h.token, h.until])).toEqual([[p.token.covenantId, BigInt(until)]]);
+    } finally {
+      g.localStorage = before;
+    }
+  });
+
   it('a token held only by its lock still has its row, the locked amount apart from Available', async () => {
     const { combineBalances } = await import('../ui/orders/balances-model');
     const token = 'ab'.repeat(32);

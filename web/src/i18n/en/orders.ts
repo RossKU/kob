@@ -243,6 +243,7 @@ export default {
   'orders.unlock.coinStep': 'Send 1 KAS to the lock',
   'orders.unlock.submitted': 'Unlock of {ticker} sent.',
   'orders.unlock.notYours': 'This creator lock is not of your wallet key.',
+  'orders.unlock.notOpen': 'Not open yet on the network: the node clock is {minutes} min before the lock time. Try again then.',
   'orders.unlock.noKas': 'Not enough KAS to fund the unlock (about 1 KAS).',
   'orders.unlock.notAccepted': 'The KAS sent to the lock is not on the network yet: try Unlock again in a moment.',
   'orders.claim.allHint': 'Claims what {count} buy orders bought: one approval each. The orders stay open.',

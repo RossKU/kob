@@ -234,6 +234,7 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         .route("/v1/strays", get(rest::strays))
         .route("/v1/token-events", get(rest::token_events))
         .route("/v1/token-utxos", get(rest::token_utxos))
+        .route("/v1/creator-locks", get(rest::creator_locks))
         .route("/v1/trades/{token}", get(rest::trades))
         .route("/v1/candles/{token}", get(rest::candles))
         .route("/v1/quotes/{token}", get(rest::quotes))
@@ -313,7 +314,7 @@ impl tower_http::compression::predicate::Predicate for JsonAboveMin {
 /// are the candles, quotes, stats, depth, trades, books, token UTXOs, strays, pairs, fills, token
 /// events and the order list. One order and its events are a light read by id.
 fn route_cost(path: &str, heavy: u32) -> u32 {
-    const HEAVY: [&str; 11] = [
+    const HEAVY: [&str; 12] = [
         "/v1/candles/",
         "/v1/quotes/",
         "/v1/stats",
@@ -321,6 +322,7 @@ fn route_cost(path: &str, heavy: u32) -> u32 {
         "/v1/trades/",
         "/v1/books/",
         "/v1/token-utxos",
+        "/v1/creator-locks",
         "/v1/strays",
         "/v1/pairs",
         "/v1/fills",

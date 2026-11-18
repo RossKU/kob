@@ -6,7 +6,7 @@ import type { OrderView, StrayView } from '../../data/indexer-types';
 import type { OrderSnapshot } from '../../kob/cancel';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex, TokenProgram, TokenUtxo } from '../../kob/types';
-import { knownDeclarations, noteTokenProgram, restoreDeclarations } from '../../data/token-declarations';
+import { knownDeclarations, loadDeclaration, noteTokenProgram, restoreDeclarations } from '../../data/token-declarations';
 import { toError } from '../kit/hooks';
 import { combineBalances, type CombinedBalances } from './balances-model';
 
@@ -40,15 +40,20 @@ export interface LockedHolding {
 }
 
 /**
- * The wallet's locked tokens: for every verified declaration known in this browser (memory, and the proofs kept here) whose creator lock is the
+ * The wallet's locked tokens. The indexer names the tokens whose declaration locks a share for the key (`GET /v1/creator-locks`): their
+ * declarations are loaded and verified here, so a lock shows without a visit to the token's page. Then, for every verified declaration known in
+ * this browser (memory, and the proofs kept here) whose creator lock is the
  * wallet key's, the UTXOs the lock holds, verified on the node (data/token-tracker.ts `lockedTokenUtxos`: the locked genesis outputs and what
  * the indexer lists for the lock's owner). A token whose lock holds nothing any more (unlocked) is left out.
  */
-export async function loadLockedHoldings(s: Pick<Services, 'kob' | 'tracker' | 'config'>, pubkey: Hex): Promise<LockedHolding[]> {
+export async function loadLockedHoldings(s: Pick<Services, 'kob' | 'tracker' | 'config'> & Partial<Pick<Services, 'indexer'>>, pubkey: Hex): Promise<LockedHolding[]> {
   const network = s.config?.network;
   if (!network || typeof s.tracker.lockedTokenUtxos !== 'function') return [];
   restoreDeclarations(s.kob);
   const me = pubkey.toLowerCase();
+  // the indexer's hint: each named declaration is verified before it counts (a wrong or missing hint only hides a lock, it never makes one)
+  const named = s.indexer?.creatorLocks ? await s.indexer.creatorLocks(me).catch(() => null) : null;
+  for (const n of named ?? []) await loadDeclaration(s.kob, s.indexer ?? null, network, n.covenant_id).catch(() => null);
   const mine = knownDeclarations(network).filter((d) => d.lock && d.lock.key === me && d.genesisTxid);
   const out: LockedHolding[] = [];
   for (const d of mine) {

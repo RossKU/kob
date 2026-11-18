@@ -20,8 +20,11 @@ import type { LockedHolding } from './balances-data';
 import { spkToAddressFor } from './orders-data';
 import type { FlowStep } from './TxFlow';
 
-/** The lock counts as open this long after its time by the wall clock: the node's past median time lags it (the node decides finally). */
-export const UNLOCK_MARGIN_MS = 5 * 60_000;
+/**
+ * The Unlock button shows this long after the lock's time by the wall clock: about the lag of the node's past median time. The press then asks the
+ * node for its past median time and goes on only once it is past the lock's time, as `kob token unlock` does (the node decides finally).
+ */
+export const UNLOCK_MARGIN_MS = 90_000;
 /** How long the unlock waits for the node to list the lock coin the run sent. */
 export const LOCK_COIN_TIMEOUT_MS = 60_000;
 
@@ -61,6 +64,9 @@ export async function planUnlock(s: Services, pubkey: Hex, h: LockedHolding, tic
   const me = pubkey.toLowerCase();
   if (h.key !== me) throw new Error(t('orders.unlock.notYours'));
   const lock = creatorLock(s.kob, { until: h.until, key: h.key });
+  // the node's clock, which the lock time is checked against (a node that does not say leaves it to the node's answer)
+  const median = s.node.getPastMedianTime ? await s.node.getPastMedianTime().catch(() => null) : null;
+  if (median !== null && median < h.until) throw new Error(t('orders.unlock.notOpen', { minutes: String((h.until - median + 59_999n) / 60_000n) }));
   const terms = { until: h.until.toString(), key: h.key };
   const locks = [terms];
   const fee = { feeRate: pickFor(await readFees(s), 'normal').rate.toString() };
