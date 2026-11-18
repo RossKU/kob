@@ -25,6 +25,7 @@ export class Indexer {
   constructor(url, timeoutMs = 15_000) {
     this.url = url;
     this.timeoutMs = timeoutMs;
+    this.views = {}; // token -> the raw views of the last liveOrders read (kob cancel --view reads them without the indexer)
   }
 
   async get(path) {
@@ -37,13 +38,15 @@ export class Indexer {
   /** The maker's live plain limit orders of one token (asks and bids on the KAS book). */
   async liveOrders(maker, token) {
     const out = [];
+    const raw = [];
     let cursor = null;
     for (let page = 0; page < 10; page++) {
       const body = await this.get(`/v1/orders?maker=${maker}&status=active&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
-      for (const v of body?.items ?? []) if (v.token === token) out.push(orderOf(v));
+      for (const v of body?.items ?? []) if (v.token === token) { out.push(orderOf(v)); raw.push(v); }
       cursor = body?.next_cursor;
       if (!cursor) break;
     }
+    this.views[token] = raw;
     return out;
   }
 

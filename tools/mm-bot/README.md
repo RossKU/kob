@@ -26,6 +26,9 @@ node bin/mm-bot.mjs once   --config config.json          # one cycle (add --dry-
 
 - **Stop:** the STOP file, `stop`, or Ctrl-C/SIGTERM. The bot cancels every quote, waits until none is listed, and exits.
   Delete the STOP file to start again.
+- **Indexer down.** When a pull is due and the wallet or indexer read fails, the bot cancels from its last saved views
+  (`<dataDir>/order-views.json`, `kob cancel --view`: checked on the node). An order amended, filled or placed since that
+  read waits for the indexer, with an error alert.
 - **It never stops by itself.** Every safety condition makes it IDLE: quotes pulled, nothing new sent, and it resumes on
   its own. Errors are retried with a backoff (15 s doubling to 5 min).
 - One bot per `dataDir`.
@@ -37,7 +40,8 @@ picks the mode, and quotes or pulls its quotes.
 
 - **Reference.** For Bybit, KuCoin and Gate (KAS/USDT, times Kraken USDT/USD) and Kraken KAS/USD: a VWAP of the last 5
   closed 1-minute candles. Median of the venues; a venue more than 1 % off the median, stale or silent is dropped; MEXC is
-  a fallback. Fewer than 2 venues: IDLE.
+  a fallback. Fewer than 2 venues: IDLE; exactly 2 must agree within `pairAgreement` (0.125 %). USDT/USD is asked of
+  Kraken and Coinbase: a reading more than 1 % from 1, or two more than 0.2 % apart, gives no rate.
 - **Fair value** = token USD / KAS USD; token USD is Kraken's USDC/USD (fallback 1.0). KAS/USDT is used because it
   trades about USD 1 million a day per venue against USD 5k to 75k for KAS/USDC; the USDC books are only cross-checked
   in the log.
@@ -106,9 +110,11 @@ One JSON file; omitted fields take the default; relative paths are relative to t
 | `reference.fallbackVenues` | mexc | used below 3 fresh primaries |
 | `reference.minVenues` | `2` | fewer: IDLE |
 | `reference.maxDeviation` | `0.01` | outlier distance from the median |
+| `reference.pairAgreement` | `0.00125` | 2 venues further apart: IDLE (below half the spread) |
 | `reference.maxCandleAgeSec` | `120` | older newest candle: stale |
 | `reference.timeoutMs` | `10000` | per request |
-| `reference.usdtUsd` | kraken, coinbase | USDT/USD sources |
+| `reference.usdtUsd` | kraken, coinbase | USDT/USD sources, all asked |
+| `reference.usdtAgreement`, `usdtBand` | `0.002`, `0.01` | sources further apart, or a reading further from 1: no rate |
 | `reference.stableMaxAgeSec` | `300` | max age of a stablecoin rate |
 | `reference.crossCheck` | on, 300 s | KAS/USDC log-only check |
 | `quotes.levels` | `3` | levels per side |
@@ -164,7 +170,7 @@ guard against a runaway, not an expected cost.
 - A maker is filled when the price moves against it; the 5-minute VWAP lags fast moves, and quotes rest between cycles.
 - The bridge is not monitored: a bridge pause, a closed deposit route or a Circle blacklist would not move USDC/USD, so
   the bot would keep quoting. Watch the bridge and stop the bot if the backing is in doubt.
-- Exchanges that agree on a wrong price are followed; one bad venue is not.
+- Exchanges that agree on a wrong price are followed; one bad venue is not (with 2 venues, only within `pairAgreement`).
 - KOB, the CLI and this bot are pre-release and unaudited, and the CLI's JSON may change: pin the CLI version and dry-run
   after every upgrade.
 - The key is a hot key that signs without asking; keep on it only what the bot needs.

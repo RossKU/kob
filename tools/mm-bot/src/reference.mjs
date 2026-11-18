@@ -45,8 +45,11 @@ export function venueVwap(candles, usdRate, { nowMs, windowMin, maxCandleAgeSec 
   };
 }
 
-/** The median of the fresh venues, outliers past maxDeviation dropped; ok only with minVenues left. */
-export function combine(venues, { minVenues, maxDeviation }) {
+/**
+ * The median of the fresh venues, outliers past maxDeviation dropped; ok only with minVenues left. With only two left the
+ * median is their midpoint, which one bad venue moves: they must agree within pairAgreement.
+ */
+export function combine(venues, { minVenues, maxDeviation, pairAgreement = null }) {
   const dropped = [];
   const fresh = [];
   for (const [name, v] of Object.entries(venues)) {
@@ -66,7 +69,35 @@ export function combine(venues, { minVenues, maxDeviation }) {
   if (kept.length < minVenues) {
     return { ok: false, kasUsd: null, used: kept.map(([n]) => n), dropped, reason: `${kept.length} venue(s) within ${(maxDeviation * 100).toFixed(2)}% of the median, need ${minVenues}` };
   }
+  if (kept.length === 2 && pairAgreement != null) {
+    const [a, b] = kept.map(([, p]) => p).sort((x, y) => x - y);
+    if (b / a - 1 > pairAgreement) {
+      return { ok: false, kasUsd: null, used: kept.map(([n]) => n), dropped,
+        reason: `only 2 venues and they differ by ${((b / a - 1) * 100).toFixed(2)}%, more than ${(pairAgreement * 100).toFixed(3)}%` };
+    }
+  }
   return { ok: true, kasUsd: median(kept.map(([, p]) => p)), used: kept.map(([n]) => n), dropped };
+}
+
+/**
+ * USDT/USD from the sources' fresh readings ({ kraken, coinbase }): a reading outside 1 +- band is refused; two that
+ * differ by more than agreement give no rate. { value, source } or { value: null, reason }.
+ */
+export function usdtRate(readings, { band, agreement }) {
+  const ok = [];
+  const bad = [];
+  for (const [source, v] of Object.entries(readings)) {
+    if (!(v > 0)) continue;
+    if (Math.abs(v - 1) > band) bad.push(`${source} ${v.toFixed(5)} outside 1 +- ${band}`);
+    else ok.push([source, v]);
+  }
+  if (!ok.length) return { value: null, reason: bad.join('; ') || 'no reading' };
+  if (ok.length > 1) {
+    const vs = ok.map(([, v]) => v);
+    const d = Math.max(...vs) / Math.min(...vs) - 1;
+    if (d > agreement) return { value: null, reason: `${ok.map(([s, v]) => `${s} ${v.toFixed(5)}`).join(' and ')} differ by ${(d * 100).toFixed(2)}%` };
+  }
+  return { value: ok.reduce((s, [, v]) => s + v, 0) / ok.length, source: ok.map(([s]) => s).join('+') };
 }
 
 /** The token's fair value in KAS per whole token: (token USD value) / (KAS USD price). */

@@ -20,7 +20,9 @@
 //!
 //! - A payment whose transaction is already an attempt of the invoice resumes (an identical retry).
 //! - Otherwise, when an attempt is accepted, the payment is a **duplicate**.
-//! - When an attempt is in flight, the payment is refused as pending (retryable).
+//! - When an attempt is in flight, the payment is refused as pending (retryable). An attempt the
+//!   chain does not know whose inputs were spent by another transaction (the payer double-spent
+//!   it) is failed first, so it cannot block the invoice.
 //! - At or after `expiresAt`, the payment is **late**.
 //!
 //! A refused payment is verified first (a forged one is just rejected). It is kept as evidence
@@ -37,26 +39,31 @@
 //! fails the operation. On open, an unfinished last line (no newline) is dropped, and any other
 //! line that does not parse refuses to start.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use kob_x402::chain::{Outpoint, OutputStatus};
+use kob_x402::chain::{ChainError, Outpoint, OutputStatus, SpentBy};
 use kob_x402::common::iso_from_ms;
 use kob_x402::error::{Diag, Reason, Result, X402Error};
 use kob_x402::invoice::{ExtraPayment, Invoice, InvoiceAttempt, InvoicePayment, InvoiceState, InvoiceStatus};
 use kob_x402::safe_tx::{spk_from_hex, spk_to_hex};
 use kob_x402::wire::{
-    hex, FacilitatorRequest, PaymentPayload, PaymentRequirements, Profile, SettlementResponse, BINDING_INTENT, BINDING_SWAP,
+    hex, parse_hash32, FacilitatorRequest, PaymentPayload, PaymentRequirements, Profile, SettlementResponse, BINDING_INTENT,
+    BINDING_SWAP,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::{error, warn};
 
-use super::{Facilitator, Metrics};
-use crate::x402::ledger::State;
+use super::{payer_spk, Facilitator, Metrics};
+use crate::x402::ledger::{Entry, State};
+
+/// A live attempt is read as double-spent only this long after its last change, so a settle or a
+/// reconcile (every 30 s) has seen an acceptance first.
+const SPENT_ELSEWHERE_MIN_AGE_MS: u64 = 60_000;
 
 /// The invoice an invoice payment settles for.
 pub struct InvoiceCtx {
@@ -612,7 +619,10 @@ impl Facilitator {
         )
         .ok()
         .map(|p| hex(&p.tx.id().as_bytes()));
-        let entries = self.ledger.entries_of_invoice(&id);
+        let mut entries = self.ledger.entries_of_invoice(&id);
+        if self.fail_spent_elsewhere(&entries) {
+            entries = self.ledger.entries_of_invoice(&id);
+        }
         let mine = this_tx.as_ref().is_some_and(|t| entries.iter().any(|e| &e.txid == t && e.state != State::Failed));
         if !mine {
             if let Some(paid) = entries.iter().find(|e| e.state == State::Accepted) {
@@ -634,12 +644,75 @@ impl Facilitator {
         Ok(self.settle_for(&rec.merchant, &req, Some(&ctx)))
     }
 
+    /// Fails the live attempts of an invoice that can never settle: the chain does not know them
+    /// and none of their inputs is the payer's any more, so another transaction spent them.
+    ///
+    /// Without this a payer who double-spends its own payment blocks the invoice for the grace
+    /// periods. A direct payment is released and still watched, as an ambiguous one is. True when
+    /// an attempt was failed.
+    fn fail_spent_elsewhere(&self, entries: &[Entry]) -> bool {
+        let now = self.clock.now_ms();
+        let mut failed = false;
+        for e in entries.iter().filter(|e| matches!(e.state, State::Pending | State::Broadcast | State::Ambiguous)) {
+            let Some(txid) = parse_hash32(&e.txid) else { continue };
+            let Some(_g) = self.locks.try_lock(txid) else { continue };
+            // re-read under the lock
+            let Some(e) = self.ledger.get(&e.txid).filter(|x| x.state == e.state) else { continue };
+            if !matches!(self.spent_elsewhere(&e, now), Ok(true)) {
+                continue;
+            }
+            warn!("x402: invoice attempt {} is unknown to the node and its inputs were spent elsewhere; failing it", e.txid);
+            if e.is_intent() {
+                self.give_up(&e, "intent_spent: an input of the creation was spent by another transaction".into());
+                failed = true;
+            } else if self.release(
+                &e,
+                now,
+                "an input was spent by another transaction (not in the mempool, not on chain); outpoints released",
+            ) {
+                self.chain.untrack(&txid);
+                failed = true;
+            }
+        }
+        failed
+    }
+
+    /// See [`Self::fail_spent_elsewhere`]. Any doubt (a node error, no payer address, an accepted
+    /// past) answers false.
+    fn spent_elsewhere(&self, e: &Entry, now: u64) -> std::result::Result<bool, ChainError> {
+        if e.accepted_daa.is_some() || now.saturating_sub(e.updated_ms) < SPENT_ELSEWHERE_MIN_AGE_MS {
+            return Ok(false);
+        }
+        let (Some(spk), Some(txid)) = (payer_spk(e), parse_hash32(&e.txid)) else { return Ok(false) };
+        let seen = match e.intent.as_ref() {
+            // a spender the tracker reported is for the intent's drive to judge
+            Some(r) => self.creation_seen(e)? || matches!(self.chain.spent_by(&r.facts.outpoint()), SpentBy::Spent { .. }),
+            None if e.is_intent() => true,
+            None => self.chain_seen(e, None)?,
+        };
+        if seen {
+            return Ok(false);
+        }
+        // The payer's funding input is one of them: still unspent, it is listed here. An output of
+        // the transaction itself (its change) would mean it was accepted.
+        let consumed: HashSet<Outpoint> = e.consumed_outpoints().into_iter().collect();
+        Ok(!self.chain.utxos_of(&spk)?.iter().any(|(o, _)| consumed.contains(o) || o.txid == txid))
+    }
+
     /// Fails an `ambiguous` direct payment the node does not know, which releases its outpoints.
     ///
     /// For an invoice payment it also keeps watching the merchant output as a `released` extra
     /// payment, so a late acceptance is still reported. Returns true when the entry was failed.
     pub(super) fn release_ambiguous(&self, e: &crate::x402::ledger::Entry, now: u64) -> bool {
-        let reason = "ambiguous: unknown to the node after the grace period (not in the mempool, merchant output not on chain); outpoints released";
+        self.release(
+            e,
+            now,
+            "ambiguous: unknown to the node after the grace period (not in the mempool, merchant output not on chain); outpoints released",
+        )
+    }
+
+    /// Fails a direct payment with `reason`; an invoice payment stays watched as `released`.
+    fn release(&self, e: &crate::x402::ledger::Entry, now: u64, reason: &str) -> bool {
         if self.ledger.transition(&e.txid, State::Failed, Some(reason.into()), now).is_err() {
             return false;
         }

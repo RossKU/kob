@@ -29,7 +29,7 @@
 //! Settlement is the execution's merchant output at the required finality. The intent ends without
 //! a payment in these cases:
 //!
-//! - Its deadline (the authorization's expiry, capped by an invoice's) passes with no execution
+//! - Its deadline (the authorization's expiry, never later than an invoice's) passes with no execution
 //!   in flight (`intent_expired`).
 //! - It is spent outside this facilitator by anything but an execution that pays the merchant at
 //!   the router-pinned output, such as the payer's cancel (`intent_spent`).
@@ -387,15 +387,22 @@ impl Facilitator {
         }
 
         // (2) verification and the dry run
-        let (v, mut facts) = kob_x402::intent::verify_intent(&self.ctx(), &req.payment_requirements, &req.payment_payload, &rh)?;
+        let (v, facts) = kob_x402::intent::verify_intent(&self.ctx(), &req.payment_requirements, &req.payment_payload, &rh)?;
         self.check_spendable_now(&v)?;
         if parsed_id != Some(v.txid) {
             drop(guard.take());
             guard = Some(self.locks.lock(v.txid));
         }
         self.check_not_expired(&v)?;
+        // The covenant stays executable by anyone until its own deadline, so an intent that
+        // outlives the invoice could pay after the invoice reads expired. Refuse it.
         if let Some(i) = inv {
-            facts.deadline_ms = facts.deadline_ms.min(i.expires_ms);
+            if facts.deadline_ms > i.expires_ms {
+                return Err(X402Error::payload(
+                    Diag::AuthorizationExceedsMaxTimeout,
+                    "the intent's authorization expires later than the invoice; sign it to expire by the invoice's expiresAt",
+                ));
+            }
         }
         let book = (rt.book)().map_err(|e| unavailable(format!("the book is not available: {e}")))?;
         let lock_time = self.lock_time(rt).map_err(|e| unavailable(e.to_string()))?;
@@ -516,7 +523,7 @@ impl Facilitator {
     /// Whether the chain knows the creation of an intent entry.
     ///
     /// It does when the intent output is accepted or spent, or the creation is in the mempool.
-    fn creation_seen(&self, e: &Entry) -> std::result::Result<bool, ChainError> {
+    pub(super) fn creation_seen(&self, e: &Entry) -> std::result::Result<bool, ChainError> {
         let Some(rec) = e.intent.as_ref() else { return Ok(false) };
         if rec.seen_daa.is_some() || !rec.executions.is_empty() {
             return Ok(true);
@@ -578,7 +585,7 @@ impl Facilitator {
         Ok(self.ledger.update(txid, self.clock.now_ms(), f)?)
     }
 
-    fn give_up(&self, e: &Entry, reason: String) -> Drive {
+    pub(super) fn give_up(&self, e: &Entry, reason: String) -> Drive {
         if let Some(r) = e.intent.as_ref() {
             self.chain.unwatch_spend(&r.facts.outpoint());
         }

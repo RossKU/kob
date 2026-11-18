@@ -39,7 +39,7 @@ const VALUE_FLAGS: &[&str] =
 const BOOL_FLAGS: &[&str] = &["--ack-no-guards", "--ack-market-start"];
 
 /// `--multiple` in thousandths (`5`, `2.5`).
-fn parse_multiple(v: &str) -> Result<u64, String> {
+pub(crate) fn parse_multiple(v: &str) -> Result<u64, String> {
     let bad = || format!("--multiple must be a number of at most 3 decimals and at least 1, got `{v}`");
     let (int, frac) = v.split_once('.').unwrap_or((v, ""));
     if frac.len() > 3 || int.is_empty() || !int.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit()) {

@@ -274,6 +274,9 @@ pub struct Env {
     pub last_fill: Option<i64>,
     /// The user acknowledged the market-start findings.
     pub market_start_ack: bool,
+    /// The KAS book holds only orders confirmed on the node (`book_check`), so the start of a
+    /// market or close auction is a real order's price.
+    pub book_verified: bool,
     /// The maker's plain KAS UTXOs.
     pub funding: Vec<KeyUtxo>,
     /// The maker's token UTXOs (a pair: of A).
@@ -1961,7 +1964,7 @@ pub(crate) fn plan_market(env: &Env, i: &MarketIntent) -> Plan {
             bps: i.slippage_bps.unwrap_or(SLIPPAGE_BPS),
             all_or_nothing: i.all_or_nothing,
             notes: vec!["market"],
-            source: "the indexer order book",
+            source: if env.book_verified { "the order book, checked on the node" } else { "the indexer order book" },
             floor: i.floor,
         },
         vec![],
@@ -2012,7 +2015,7 @@ pub(crate) fn plan_close(env: &Env, i: &CloseIntent) -> Plan {
             bps: i.slippage_bps.unwrap_or(SLIPPAGE_BPS),
             all_or_nothing: i.all_or_nothing,
             notes: vec!["market", "close"],
-            source: "the indexer order book",
+            source: if env.book_verified { "the order book, checked on the node" } else { "the indexer order book" },
             floor: i.floor,
         },
         vec![],
@@ -3499,19 +3502,23 @@ pub(crate) fn env_issues(env: &Env) -> Vec<Issue> {
 
 /// The findings about the start of a market or close auction.
 ///
-/// The start is the best price of the indexer, which the node cannot confirm. The CLI has no
-/// reference independent of that indexer, because the last fill comes from it too. These wait for
+/// A KAS book checked on the node (`env.book_verified`) starts at a confirmed order's price.
+/// Otherwise (a pair book) the start is the best price of the indexer, and the CLI has no
+/// reference independent of it, because the last fill comes from it too. These wait for
 /// `--ack-market-start`:
-/// - A start far on the costly side of the last fill.
-/// - A sell, whatever its value, because a wrong bid sells at its price. The user's own
-///   `--floor-price` bounds it and removes the wait.
-/// - A buy worth 100 KAS or more.
+/// - A start far on the costly side of the last fill (also with a checked book).
+/// - With an unchecked book, a sell, whatever its value, because a wrong bid sells at its price.
+///   The user's own `--floor-price` bounds it and removes the wait.
+/// - With an unchecked book, a buy worth 100 KAS or more.
 pub(crate) fn market_start_issues(env: &Env, plan: &Plan, floor: Option<i64>) -> Vec<Issue> {
     let Some(d) = &plan.disclosure else { return vec![] };
     let Some(start) = d.expected_price.filter(|s| *s > 0) else { return vec![] };
     let buy = d.side == Side::Buy;
     let dir = if buy { "above" } else { "below" };
     let ack = env.market_start_ack;
+    let verified = env.book_verified && env.pair.is_none();
+    let whose =
+        if verified { "a node-confirmed order's price" } else { "the indexer's best price and cannot be checked against the node" };
     if let Some(r) = env.last_fill.filter(|r| *r > 0) {
         let gap = if buy { start as i128 - r as i128 } else { r as i128 - start as i128 };
         if gap > 0 {
@@ -3526,12 +3533,24 @@ pub(crate) fn market_start_issues(env: &Env, plan: &Plan, floor: Option<i64>) ->
                     error(
                         "MARKET_START_VS_LAST_FILL",
                         format!(
-                            "the auction starts at {start} per token, {bps} bps {dir} the last fill ({r}); the start is the indexer's best price and cannot be checked against the node: check it, then --ack-market-start"
+                            "the auction starts at {start} per token, {bps} bps {dir} the last fill ({r}); the start is {whose}: check it, then --ack-market-start"
                         ),
                     )
                 }];
             }
         }
+    }
+    if verified {
+        return vec![match floor.filter(|_| !buy) {
+            Some(f) => info(
+                "MARKET_START_FLOOR",
+                format!("the auction start ({start}) is the best bid the node confirms; your floor ({f}) bounds the price the order accepts"),
+            ),
+            None => info(
+                "MARKET_START_CONFIRMED",
+                format!("the auction start ({start}) is the best {} the node confirms", if buy { "ask" } else { "bid" }),
+            ),
+        }];
     }
     if !buy {
         return vec![match (floor, ack) {

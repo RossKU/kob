@@ -28,10 +28,13 @@ export const DEFAULTS = {
     fallbackVenues: ['mexc'],
     fallbackBelow: 3, // add the fallback venues when fewer primary venues are fresh
     minVenues: 2,
-    maxDeviation: 0.01, // drop a venue this far from the median
+    maxDeviation: 0.01, // drop a venue this far from the median (3 or more venues: one cannot move the median past the others)
+    pairAgreement: 0.00125, // with only 2 venues they must agree this closely (below half the spread), else IDLE
     maxCandleAgeSec: 120, // a venue whose newest closed candle ended longer ago is stale
     timeoutMs: 10_000,
-    usdtUsd: ['kraken', 'coinbase'], // sources of USDT/USD, in order
+    usdtUsd: ['kraken', 'coinbase'], // sources of USDT/USD: every one is asked
+    usdtAgreement: 0.002, // two USDT/USD readings further apart give no rate (IDLE for the USDT venues)
+    usdtBand: 0.01, // a USDT/USD reading further than this from 1 is refused
     stableMaxAgeSec: 300, // a USDT/USD or token USD reading older than this is not used
     crossCheck: { enabled: true, everySec: 300, venues: ['mexc', 'kucoin', 'bybit'], warnDeviation: 0.01 },
   },
@@ -127,6 +130,9 @@ export function validate(cfg) {
   num(r.windowMin, 'reference.windowMin', { min: 1, max: 60, int: true });
   num(r.minVenues, 'reference.minVenues', { min: 1, max: 10, int: true });
   num(r.maxDeviation, 'reference.maxDeviation', { min: 0.0001, max: 0.2 });
+  if (r.pairAgreement != null) num(r.pairAgreement, 'reference.pairAgreement', { min: 0, max: 0.2 });
+  num(r.usdtAgreement, 'reference.usdtAgreement', { min: 0, max: 0.05 });
+  num(r.usdtBand, 'reference.usdtBand', { min: 0.001, max: 0.1 });
   num(r.maxCandleAgeSec, 'reference.maxCandleAgeSec', { min: 30, max: 3600 });
   num(r.timeoutMs, 'reference.timeoutMs', { min: 1000, max: 60_000 });
   const known = ['bybit', 'kucoin', 'gate', 'kraken', 'mexc'];
@@ -150,6 +156,7 @@ export function validate(cfg) {
   num(q.askCarrierMinKas, 'quotes.askCarrierMinKas', { min: 0.1 });
   num(q.mergeAboveUtxos, 'quotes.mergeAboveUtxos', { min: 1, max: 3, int: true });
   if (half + ((q.levels - 1) * q.levelStepPct) / 100 >= 1) p.push('quotes: the outermost bid would be at or below zero');
+  if (r.pairAgreement == null ? r.minVenues < 3 : r.pairAgreement >= half) p.push('reference.pairAgreement must be below half of quotes.spreadPct (as a fraction), or two venues can move the fair value past the best quote');
   if (q.repriceThreshold >= half) p.push('quotes.repriceThreshold must be below half of quotes.spreadPct (as a fraction), or a quote can drift through the fair value');
   if (q.skew?.enabled) {
     num(q.skew.maxShift, 'quotes.skew.maxShift', { min: 0, max: 0.5 });

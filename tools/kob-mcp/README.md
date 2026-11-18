@@ -28,15 +28,18 @@ Config: [config.example.json](config.example.json) (defaults in [src/config.mjs]
 
 - Read: `kob_status`, `kob_tokens`, `kob_book`, `kob_stats`, `kob_candles`, `kob_balances`, `kob_orders`, `kob_order`,
   `kob_fee_estimate`.
-- Write: `kob_place_limit`, `kob_replace`, `kob_cancel`, `kob_take` (price bound required), `kob_merge`, `kob_claim`,
-  `kob_token_create`, `kob_send`.
+- Write: `kob_place_limit`, `kob_replace`, `kob_cancel`, `kob_take` (token id and price bound required), `kob_merge`, `kob_claim`,
+  `kob_token_create` (`sell: "curve"` puts the new supply on a sell curve in the genesis, `keep_percent` of it kept), `kob_send`.
 
 A write first returns its dry-run plan and a `planId`; it is sent only when the same call comes back with
 `confirm: "<planId>"` within 5 minutes (or at once in `"mode": "auto"`, still within the limits).
 
 ## Safeguards
 
-- Caps on the KAS that leaves the wallet: per transaction, per UTC day, and the fee per transaction.
+- Caps on the KAS that leaves the wallet: per transaction, per UTC day, and the fee per transaction. A send whose outcome
+  is unknown (a lost reply) counts until the day rolls; `kob_status` lists it with its txid.
+- Caps on the tokens that leave the wallet (sends, sells, sales into buy orders): `limits.tokens` per covenant id in base
+  units, else 25 % per transaction and 50 % per day of the holding confirmed on the node (`limits.tokenDefault`).
 - At most 3 token creations a day (`launchesPerDay`).
 - A price more than 25 % worse than the last fill is refused.
 - `kob_send` pays only your own addresses (`withdrawTo`).

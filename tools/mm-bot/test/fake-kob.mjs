@@ -12,6 +12,15 @@ if (mode === 'usage') {
   process.stderr.write('error: the amount needs a unit\n');
   process.exit(2);
 }
+if (args[0] === 'cancel' && args.includes('--view')) {
+  // a cancel per saved view, checked on the node only (no indexer): one document each
+  const items = JSON.parse(readFileSync(args[args.indexOf('--view') + 1], 'utf8')).items ?? [];
+  for (const v of items) {
+    process.stdout.write(JSON.stringify({ action: `cancel ${v.covenant_id}`, network: 'testnet-10', plan: {}, issues: [], transaction: { txid: tx, fee: '427000' }, new_covenant_ids: [],
+      result: dry ? null : { status: 'submitted', txid: tx, fee: '427000', covenant_ids: [], file: null, engine_validated: true } }));
+  }
+  process.exit(0);
+}
 if (mode === 'chain') chain();
 if (args[0] === 'balances') {
   process.stdout.write(JSON.stringify({ maker: 'ef'.repeat(32), kas: { free: '100000000000', locked: '0', total: '100000000000' },

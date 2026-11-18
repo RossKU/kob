@@ -1,13 +1,14 @@
 // The safeguards: the spending ledger, the caps, the withdrawal allow-list, the kill switch and the price band.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { kas, utcDay } from './units.mjs';
+import { big, kas, utcDay } from './units.mjs';
 
 /**
- * A JSON-lines ledger of the KAS each write takes out of the wallet. A send first writes `reserve`; the outcome writes
- * `settle` (the spend the CLI reported) or `release` (nothing was sent). A reserve with neither (a crash, a timeout)
- * keeps counting: unknown outcomes count as spent.
+ * A JSON-lines ledger of what each write takes out of the wallet. A send first writes `reserve`; the outcome writes
+ * `settle` (the spend the CLI reported; `outcome: "unknown"` when the reply was lost) or `release` (the CLI said nothing
+ * was sent). A reserve with neither (a crash) and an unknown outcome keep counting until the UTC day rolls.
+ * A torn line (a crash while writing) is skipped.
  */
 export class Ledger {
   constructor(file) {
@@ -16,20 +17,59 @@ export class Ledger {
 
   entries() {
     if (!existsSync(this.file)) return [];
-    return readFileSync(this.file, 'utf8').split(/\r?\n/).filter((l) => l.trim()).map((l) => JSON.parse(l));
+    const out = [];
+    for (const l of readFileSync(this.file, 'utf8').split(/\r?\n/)) {
+      if (!l.trim()) continue;
+      try {
+        out.push(JSON.parse(l));
+      } catch {
+        // a torn line: a reserve torn by a crash was never followed by a send
+      }
+    }
+    return out;
   }
 
   append(e) {
     mkdirSync(dirname(this.file), { recursive: true });
-    appendFileSync(this.file, `${JSON.stringify({ ts: new Date().toISOString(), ...e })}\n`);
+    appendFileSync(this.file, `${this.endsTorn() ? '\n' : ''}${JSON.stringify({ ts: new Date().toISOString(), ...e })}\n`);
+  }
+
+  /** The file's last byte is not a newline (a torn line): the next entry starts a new line. */
+  endsTorn() {
+    if (!existsSync(this.file)) return false;
+    const size = statSync(this.file).size;
+    if (!size) return false;
+    const fd = openSync(this.file, 'r');
+    try {
+      const b = Buffer.alloc(1);
+      readSync(fd, b, 0, 1, size - 1);
+      return b[0] !== 0x0a;
+    } finally {
+      closeSync(fd);
+    }
   }
 
   reserve(id, day, spend, meta = {}) {
     this.append({ kind: 'reserve', id, day, spend: String(spend), ...meta });
   }
 
-  settle(id, spend, txids) {
-    this.append({ kind: 'settle', id, spend: String(spend), txids });
+  settle(id, spend, txids, outcome) {
+    this.append({ kind: 'settle', id, spend: String(spend), txids, ...(outcome ? { outcome } : {}) });
+  }
+
+  /** Sends of the UTC day `day` whose outcome is unknown (a lost reply, a crash): they count as spent. */
+  unknownOn(day) {
+    const byId = new Map();
+    for (const e of this.entries()) {
+      if (e.kind === 'reserve') byId.set(e.id, { id: e.id, day: e.day, tool: e.tool, spend: e.spend, txids: [], open: true });
+      else if (byId.has(e.id)) {
+        const v = byId.get(e.id);
+        v.open = e.kind === 'settle' && e.outcome === 'unknown';
+        if (e.txids) v.txids = e.txids;
+        if (e.spend != null) v.spend = e.spend;
+      }
+    }
+    return [...byId.values()].filter((v) => v.day === day && v.open).map(({ id, tool, spend, txids }) => ({ id, tool, spendKas: kas(BigInt(spend)), txids }));
   }
 
   release(id, reason) {
@@ -46,6 +86,18 @@ export class Ledger {
     }
     let sum = 0n;
     for (const v of byId.values()) if (v.day === day) sum += v.spend;
+    return sum;
+  }
+
+  /** Base units of token `cov` that left the wallet on the UTC day `day` (reserves not released). */
+  tokensOutOn(day, cov) {
+    const byId = new Map();
+    for (const e of this.entries()) {
+      if (e.kind === 'reserve') byId.set(e.id, e.day === day ? big(e.tokens?.[cov]) : 0n);
+      else if (e.kind === 'release' && byId.has(e.id)) byId.set(e.id, 0n);
+    }
+    let sum = 0n;
+    for (const v of byId.values()) sum += v;
     return sum;
   }
 
@@ -69,6 +121,51 @@ export function capRefusals({ spend, fee }, caps, spentToday) {
   }
   if (fee > caps.maxFee) out.push(`MAX_FEE: the fee ${kas(fee)} KAS is above the ${kas(caps.maxFee)} KAS cap`);
   return out;
+}
+
+/** The tokens a planned transaction takes out of the wallet: { covenant id: base units }, from its net effect. */
+export function tokenOutflows(doc) {
+  const out = {};
+  for (const [cov, n] of Object.entries(doc?.transaction?.net?.tokens ?? {})) {
+    const v = big(n);
+    if (v < 0n) out[cov.toLowerCase()] = String(-v);
+  }
+  return out;
+}
+
+/**
+ * The token caps a write would break. `outs`: tokenOutflows; `outToday(cov)`: base units out today; `holding(cov)`: the
+ * wallet's free holding confirmed on the node (null when not confirmed), read only for tokens without their own cap.
+ */
+export async function tokenCapRefusals(outs, caps, outToday, holding) {
+  const refusals = [];
+  for (const [cov, s] of Object.entries(outs)) {
+    const out = BigInt(s);
+    const today = outToday(cov);
+    const own = caps.byToken.get(cov);
+    if (own) {
+      if (out > own.perTx) refusals.push(`TOKEN_PER_TX_CAP: ${out} base units of ${cov} leave the wallet, above its ${own.perTx} per transaction`);
+      if (today + out > own.perDay) refusals.push(`TOKEN_DAILY_CAP: ${today} base units of ${cov} left today + ${out} is above its ${own.perDay} per day`);
+      continue;
+    }
+    if (caps.perTxPct == null) {
+      refusals.push(`TOKEN_CAP: ${cov} has no cap in limits.tokens and limits.tokenDefault is off`);
+      continue;
+    }
+    const free = await holding(cov);
+    if (free == null) {
+      refusals.push(`TOKEN_CAP: the wallet's holding of ${cov} is not confirmed on the node; set its cap in limits.tokens`);
+      continue;
+    }
+    const day = free + today; // the holding at the start of the UTC day, less what came in
+    if (out * 100n > caps.perTxPct * day) {
+      refusals.push(`TOKEN_PER_TX_CAP: ${out} base units of ${cov} leave the wallet, above ${caps.perTxPct}% of the day's holding ${day}`);
+    }
+    if ((today + out) * 100n > caps.perDayPct * day) {
+      refusals.push(`TOKEN_DAILY_CAP: ${today} base units of ${cov} left today + ${out} is above ${caps.perDayPct}% of the day's holding ${day}`);
+    }
+  }
+  return refusals;
 }
 
 export const killSwitchOn = (cfg) => existsSync(cfg.killSwitchFile);

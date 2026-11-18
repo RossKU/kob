@@ -1,6 +1,6 @@
 // The cycle: reference, wallet and orders, reconcile, mode, actions, funds. Only the operator ends the loop.
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { addressOfXOnly } from './address.mjs';
 import { readReference } from './feeds.mjs';
 import { alertsToSend, fmtAmount, fundChecks } from './funds.mjs';
@@ -113,13 +113,21 @@ export class Bot {
     const snap = stop ? { ok: false, reason: 'stopping', jump: 0, used: [], dropped: [], venues: {} } : await readReference(c, this.refMemory, now);
     if (!stop) this.logReference(snap);
 
-    const bal = await this.kob.balances(c.token.covenantId);
+    let bal;
+    let orders;
+    try {
+      bal = await this.kob.balances(c.token.covenantId);
+      this.maker = bal.maker;
+      this.address ??= addressOfXOnly(bal.maker, c.network);
+      orders = await this.reconcile(now);
+    } catch (e) {
+      // the wallet or the indexer does not answer: a pull that is due goes through the node from the saved views
+      await this.blindPull(stop, snap, now, e);
+      throw e;
+    }
     if (bal.token.decimals != null && bal.token.decimals !== c.token.decimals) {
       throw new Error(`the CLI reports ${bal.token.decimals} decimals for the token, the config says ${c.token.decimals}: fix token.decimals`);
     }
-    this.maker = bal.maker;
-    this.address ??= addressOfXOnly(bal.maker, c.network);
-    const orders = await this.reconcile(now);
     await this.recordFills();
 
     const gate = feeGate(feesToday(this.state, now), c.safety);
@@ -183,10 +191,54 @@ export class Bot {
     }
   }
 
+  /**
+   * The reads failed and the mode says pull (STOP, no reference, a jump, the peg): cancel the bot's orders from the last
+   * saved indexer views with `kob cancel --view`, which checks each on the node and needs no indexer. An order amended,
+   * filled or placed since that view is refused as stale and waits for the indexer.
+   */
+  async blindPull(stop, snap, now, cause) {
+    const c = this.cfg;
+    const mode = nextMode(this.state.mode, { stop, refOk: snap.ok, jump: snap.jump ?? 0, feeBlocked: false, pegOk: snap.peg?.ok ?? true }, c.safety, now);
+    if (!mode.pull) return;
+    const timeout = c.safety.orderVisibleTimeoutSec * 1000;
+    const due = Object.entries(this.state.orders).filter(([, s]) => s.pending?.kind !== 'cancel' || now - s.pending.since > timeout);
+    if (!due.length) return;
+    const { changed: _c, pull: _p, ...rec } = mode;
+    this.state.mode = rec;
+    if (!existsSync(this.p.views)) {
+      this.alert('error', 'blind-pull', `Quotes are due to be pulled (${mode.reason ?? mode.mode}) but the wallet or indexer read failed (${cause.message}) and no order view is saved: cancel ${due.length} order(s) by hand.`, {}, mode);
+      this.save();
+      return;
+    }
+    this.log.info(`pull ${due.length} quote(s) without the indexer (${cause.message}): kob cancel --view ${this.p.views}`);
+    const r = await this.kob.cancelViews(this.p.views);
+    this.log.action({ type: 'blind-cancel', reason: mode.reason ?? mode.mode, ids: r.ids, txids: r.txids, fee: r.fee, error: r.error });
+    if (!this.dryRun) {
+      if (r.fee) addFee(this.state, 'cancel', r.fee);
+      for (const id of r.ids) if (this.state.orders[id]) this.state.orders[id].pending = { kind: 'cancel', since: now, txid: null };
+    }
+    const left = due.length - r.ids.length;
+    this.alert(left ? 'error' : 'warn', 'blind-pull', `Quotes pulled without the indexer (${mode.reason ?? mode.mode}): ${r.ids.length} cancel(s) sent through the node${left ? `; ${left} order(s) could not be cancelled from the saved views (${r.error ?? 'stale'}): check them by hand` : ''}.`, {}, mode);
+    this.save();
+  }
+
+  /** The last indexer views of the bot's live orders, for kob cancel --view (written only when they change). */
+  saveViews() {
+    if (this.dryRun) return;
+    const items = this.idx.views[this.cfg.token.covenantId] ?? [];
+    const text = `${JSON.stringify({ items }, null, 1)}\n`;
+    try {
+      if (existsSync(this.p.views) && readFileSync(this.p.views, 'utf8') === text) return;
+    } catch { /* rewrite */ }
+    writeFileSync(`${this.p.views}.tmp`, text);
+    renameSync(`${this.p.views}.tmp`, this.p.views);
+  }
+
   /** Syncs the state file with the indexer and returns the live orders; an unknown order is adopted to be cancelled. */
   async reconcile(now) {
     const c = this.cfg;
     const live = await this.idx.liveOrders(this.maker, c.token.covenantId);
+    this.saveViews();
     const byId = new Map(live.map((o) => [o.id, o]));
     const timeout = c.safety.orderVisibleTimeoutSec * 1000;
     for (const [id, s] of Object.entries(this.state.orders)) {

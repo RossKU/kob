@@ -16,8 +16,8 @@ const kasAmount = z.string().describe('KAS with its unit: "0.25KAS" or "25000000
 const confirm = z.string().optional().describe('the planId of the plan you are confirming; leave out to get a plan (nothing is signed)');
 
 const WRITE_NOTE = ' Without confirm it only plans (a dry run) and returns a planId with the fee and the KAS that would leave the'
-  + ' wallet; call again with the same arguments and confirm=planId to sign and send. The local limits (per transaction, per'
-  + ' day, fee) and the kill switch are checked both times.';
+  + ' wallet; call again with the same arguments and confirm=planId to sign and send. The local limits (KAS and tokens per transaction'
+  + ' and per day, fee) and the kill switch are checked both times.';
 
 /** Tool specs: [name, title, description, input shape, kind]. kind: read | write. */
 export const TOOLS = [
@@ -48,7 +48,8 @@ export const TOOLS = [
     { id, price: kasAmount.optional(), amount: tokenAmount.optional(), tip: kasAmount.optional(), renew: z.boolean().optional(), confirm }, 'write'],
   ['kob_cancel', 'Cancel an order', `Cancel one of your live orders; its tokens and KAS come back to the wallet.${WRITE_NOTE}`, { id, confirm }, 'write'],
   ['kob_take', 'Take an order', `Fill a resting order yourself. A price bound is required: max_price when you buy from a sell order, min_price when you sell into a buy order; a worse price is refused before signing.${WRITE_NOTE}`,
-    { id, amount: tokenAmount, max_price: kasAmount.optional(), min_price: kasAmount.optional(), confirm }, 'write'],
+    { id, token: z.string().regex(/^[0-9a-fA-F]{64}$/).describe('the covenant id of the token you mean to trade; an order of another token is refused'),
+      amount: tokenAmount, max_price: kasAmount.optional(), min_price: kasAmount.optional(), confirm }, 'write'],
   ['kob_merge', 'Merge token UTXOs', `Merge your UTXOs of one token into one (a sell needs at most 3 token inputs).${WRITE_NOTE}`, { token, confirm }, 'write'],
   ['kob_claim', 'Claim bought tokens', `Take what a collected buy order bought: alone, merged with your UTXOs, or sold at once (needs a CLI with kob claim).${WRITE_NOTE}`,
     { id, merge: z.boolean().optional(), sell_price: kasAmount.optional(), sell_amount: tokenAmount.optional(), end: z.boolean().optional().describe('end the buy order and return its KAS'), confirm }, 'write'],

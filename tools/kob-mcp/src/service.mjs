@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Audit } from './audit.mjs';
-import { Ledger, allowListed, bandCheck, capRefusals, killSwitchOn, today } from './guard.mjs';
+import { Ledger, allowListed, bandCheck, capRefusals, killSwitchOn, today, tokenCapRefusals, tokenOutflows } from './guard.mjs';
 import { Indexer } from './indexer.mjs';
 import { Kob } from './kob.mjs';
 import { big, kas, toSompi } from './units.mjs';
@@ -168,7 +168,8 @@ export class KobService {
       wallet,
       killSwitch: killSwitchOn(this.cfg) ? 'ON: every write is refused (remove the STOP file to resume)' : 'off',
       today: { day, spentKas: kas(spent), leftKas: kas(caps.perDay > spent ? caps.perDay - spent : 0n),
-        launches: this.ledger.launchesOn(day), launchesPerDay: this.cfg.limits.launchesPerDay },
+        launches: this.ledger.launchesOn(day), launchesPerDay: this.cfg.limits.launchesPerDay,
+        unknownOutcomes: this.ledger.unknownOn(day) },
       cli: { claim: this.features.claim ? 'kob claim: offered' : 'kob claim: not in this CLI build (kob_claim is not registered)',
         delivery: this.features.delivery ? '--delivery: offered' : '--delivery: not in this CLI build (kob_place_limit has no delivery argument)' },
     };
@@ -214,12 +215,12 @@ export class KobService {
         if ((a.max_price == null) === (a.min_price == null)) {
           throw new Refusal('PRICE_BOUND_REQUIRED: give exactly one of max_price (you buy from a sell order) or min_price (you sell into a buy order)');
         }
-        const argv = ['take', need(RE.id, a.id, 'id').toLowerCase(), '--amount', amt(a.amount, 'amount')];
+        // the token is pinned: the CLI refuses an order whose node-verified state trades another token
+        const tok = need(RE.id, a.token, 'token (the covenant id of the token the order trades)').toLowerCase();
+        const argv = ['take', need(RE.id, a.id, 'id').toLowerCase(), '--token', tok, '--amount', amt(a.amount, 'amount')];
         if (a.max_price) argv.push('--max-price', px(a.max_price, 'max_price'));
         else argv.push('--min-price', px(a.min_price, 'min_price'));
-        const o = await this.indexer.tryGet(`/v1/orders/${a.id.toLowerCase()}`);
-        const band = o?.token ? { side: a.max_price ? 'buy' : 'sell', price: toSompi(a.max_price ?? a.min_price), token: o.token } : null;
-        return { argv, band };
+        return { argv, band: { side: a.max_price ? 'buy' : 'sell', price: toSompi(a.max_price ?? a.min_price), token: tok } };
       }
       case 'kob_merge':
         return { argv: ['merge', need(RE.token, a.token, 'token')] };
@@ -252,6 +253,7 @@ export class KobService {
   }
 
   async buildCreate(a) {
+    const px = (v, w) => need(RE.kasAmount, v, w);
     const argv = ['token', 'create', '--name', text(a.name, 'name', 64), '--ticker', need(/^[A-Z0-9]{2,12}$/, a.ticker, 'ticker'),
       '--decimals', String(a.decimals), '--supply', need(/^[1-9]\d{0,38}$/, a.supply, 'supply (base units)')];
     if (a.program) argv.push('--program', a.program);
@@ -260,10 +262,26 @@ export class KobService {
     if (a.image) argv.push('--image', text(a.image, 'image', 256));
     const carrier = a.carrier ? toSompi(px(a.carrier, 'carrier')) : 1_000_000_000n;
     argv.push('--carrier', String(carrier));
-    return { argv, create: { carrier } };
+    // After creation: keep everything (default), or sell on a curve created in the genesis (its own UTXO, its custody, a kept share).
+    let outputs = 1n;
+    if (a.sell === 'curve') {
+      argv.push('--sell', 'curve');
+      const keep = a.keep_percent ?? 0;
+      if (!(Number.isFinite(keep) && keep >= 0 && keep < 100 && Number.isInteger(Math.round(keep * 100)) && Math.abs(keep * 100 - Math.round(keep * 100)) < 1e-9)) {
+        throw new Refusal('BAD_ARGUMENT: keep_percent is 0 to 99.99, two decimals at most');
+      }
+      if (keep > 0) argv.push('--keep', String(keep));
+      if (a.levels !== undefined) argv.push('--levels', need(/^\d{1,4}$/, String(a.levels), 'levels'));
+      if (a.total) argv.push('--total', px(a.total, 'total'));
+      if (a.multiple) argv.push('--multiple', need(/^\d{1,6}(\.\d{1,3})?$/, a.multiple, 'multiple'));
+      outputs = keep > 0 ? 3n : 2n;
+    } else if (a.keep_percent !== undefined || a.levels !== undefined || a.total || a.multiple) {
+      throw new Refusal('BAD_ARGUMENT: keep_percent, levels, total and multiple go with sell: "curve"');
+    }
+    return { argv, create: { carrier, locked: carrier * outputs } };
   }
 
-  /** The funding UTXO of a creation: given, or the smallest that covers the carrier and 1 KAS of fees. */
+  /** The funding UTXO of a creation: given, or the smallest that covers the carriers and 1 KAS of fees. */
   async fundingFor(a, carrier) {
     const maker = await this.makerKey();
     if (a.fund_utxo) {
@@ -312,7 +330,7 @@ export class KobService {
   /** A dry run of a write: { ok, doc, spend, fee, error }. */
   async dryRun(tool, built, a, planDir) {
     if (built.create) {
-      const fund = built.fund ?? await this.fundingFor(a, built.create.carrier);
+      const fund = built.fund ?? await this.fundingFor(a, built.create.locked);
       built.fund = fund;
       const r = await this.runCreate(built.argv, fund, planDir, false);
       if (r.code !== 0) return { ok: false, error: `CLI_REFUSED (exit ${r.code}): ${r.stderr}` };
@@ -384,9 +402,11 @@ export class KobService {
       if (!d.ok) throw new Refusal(d.error);
       const day = today();
       const spentToday = this.ledger.spentOn(day);
-      const caps = capRefusals(d, this.cfg.caps, spentToday);
+      d.tokens = built.create ? {} : tokenOutflows(d.doc);
+      const caps = [...capRefusals(d, this.cfg.caps, spentToday),
+        ...await tokenCapRefusals(d.tokens, this.cfg.caps.tokens, (c) => this.ledger.tokensOutOn(day, c), (c) => this.freeHolding(c))];
       const limits = { perTxKas: kas(this.cfg.caps.perTx), perDayKas: kas(this.cfg.caps.perDay), spentTodayKas: kas(spentToday), maxFeeKas: kas(this.cfg.caps.maxFee) };
-      const summary = { ...this.summary(d.doc, d), priceBand: band?.note ?? null, limits };
+      const summary = { ...this.summary(d.doc, d), tokensOut: d.tokens, priceBand: band?.note ?? null, limits };
       if (caps.length) throw new Refusal(caps.join('; '), { cause: summary });
       if (estimate) {
         log('estimate', { spend: String(d.spend), fee: String(d.fee) });
@@ -420,28 +440,35 @@ export class KobService {
   }
 
   async send(tool, built, args, planId, d, day, summary, log) {
-    this.ledger.reserve(planId, day, d.spend, { tool });
+    this.ledger.reserve(planId, day, d.spend, { tool, ...(Object.keys(d.tokens ?? {}).length ? { tokens: d.tokens } : {}) });
     let doc = null;
     let failure = null;
     let ambiguous = false;
     if (built.create) {
       const r = await this.runCreate(built.argv, built.fund, join(this.cfg.dataDir, 'creations', `${planId}-sent`), true);
-      if (r.code !== 0) { failure = `exit ${r.code}: ${r.stderr}`; ambiguous = /genesis|resume/i.test(r.stderr); } else doc = r.doc;
+      if (r.code !== 0) { failure = `exit ${r.code}: ${r.stderr}`; ambiguous = /genesis|resume/i.test(r.stderr) || !sentNothing(r.stderr); } else doc = r.doc;
     } else {
       const extra = this.cfg.cli.priorityFee ? ['--priority-fee'] : [];
       const r = await this.kob.exec([...built.argv, ...extra, '--yes']);
       doc = r.json;
+      // Only a refusal the CLI states came before the submit (or the node's rejection) releases the spend; a lost reply,
+      // a crash or an unreadable result counts until the UTC day rolls.
       if (r.timedOut) { failure = 'the CLI timed out: the outcome is unknown, check kob_orders / kob_balances'; ambiguous = true; } else if (r.code !== 0) {
         failure = `exit ${r.code}: ${r.stderr || 'no output'}`;
-        ambiguous = Boolean(doc?.links?.some((l) => l.status === 'submitted'));
-      } else if (!doc?.links && doc?.result?.status !== 'submitted') { failure = `not submitted: ${r.stderr || 'no result'}`; }
+        ambiguous = Boolean(doc?.links?.some((l) => l.status === 'submitted')) || !sentNothing(r.stderr);
+      } else if (!doc?.links && doc?.result?.status !== 'submitted') { failure = `not submitted: ${r.stderr || 'no result'}`; ambiguous = !sentNothing(r.stderr); }
     }
     const txids = doc?.links ? doc.links.filter((l) => l.status === 'submitted').map((l) => l.txid) : doc?.result?.txids ?? (doc?.result?.txid ? [doc.result.txid] : []);
     if (failure) {
-      if (ambiguous || txids.length) this.ledger.settle(planId, d.spend, txids);
-      else this.ledger.release(planId, failure);
+      const counted = ambiguous || txids.length > 0;
+      if (counted) {
+        // the planned transaction's id, to look up by hand
+        const known = txids.length ? txids : [doc?.transaction?.txid].filter(Boolean);
+        this.ledger.settle(planId, d.spend, known, 'unknown');
+      } else this.ledger.release(planId, failure);
       log('failed', { planId, error: this.redact(failure), txids });
-      return { status: 'failed', planId, reason: this.redact(failure), txids, counted: ambiguous || txids.length > 0 };
+      return { status: 'failed', planId, reason: this.redact(failure), txids, counted,
+        ...(counted ? { note: 'the outcome is unknown: the spend counts toward today\'s cap; check kob_orders / kob_balances before trying again' } : {}) };
     }
     const actual = spendOf(doc);
     const spend = built.create ? d.spend : actual.spend;
@@ -457,6 +484,12 @@ export class KobService {
       action: summary.action,
       spentTodayKas: kas(this.ledger.spentOn(day)),
     };
+  }
+
+  /** The wallet's free holding of a token as confirmed on the node (kob balances), base units; null when not confirmed. */
+  async freeHolding(cov) {
+    const row = ((await this.balances().catch(() => null))?.tokens ?? []).find((t) => String(t.token).toLowerCase() === cov);
+    return row?.free_verified === true ? big(row.free) : null;
   }
 
   /** The price band of a limit price or take bound, with the token's decimals for books whose scale is capped at 10^9. */
@@ -483,6 +516,16 @@ export class KobService {
   redactArgs(a) {
     return JSON.parse(this.redact(JSON.stringify(a ?? {})));
   }
+}
+
+/**
+ * The CLI's last error line says nothing was sent: a refusal before signing or submitting, a failed engine validation, or
+ * the node's explicit rejection. Anything else after `--yes` started (a lost reply, a socket error) may have been sent.
+ */
+export function sentNothing(stderr) {
+  const lines = String(stderr ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const last = [...lines].reverse().find((l) => /^error\b/i.test(l)) ?? lines.at(-1) ?? '';
+  return /nothing signed|nothing submitted|nothing sent|not signed: pass --yes|engine validation failed|node rejected the request/i.test(last);
 }
 
 /** "TAKE_PRICE_ABOVE_MAX: " or "TAKE_PRICE_BELOW_MIN: " from the CLI's stderr text, else "". */

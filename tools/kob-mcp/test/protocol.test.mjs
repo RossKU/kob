@@ -28,6 +28,7 @@ test('stdio: tools are listed and called; a write plans, then sends on confirm',
     const takeTool = tools.find((x) => x.name === 'kob_take');
     assert.equal(takeTool.annotations.destructiveHint, true);
     assert.ok(takeTool.inputSchema.properties.max_price);
+    assert.ok(takeTool.inputSchema.required.includes('token'));
     assert.equal(tools.find((x) => x.name === 'kob_book').annotations.readOnlyHint, true);
     assert.equal(names.includes('kob_claim'), false, 'this CLI has no kob claim');
     assert.equal(tools.find((x) => x.name === 'kob_place_limit').inputSchema.properties.delivery, undefined);
@@ -55,7 +56,7 @@ test('stdio: tools are listed and called; a write plans, then sends on confirm',
     const okSend = body(await client.callTool({ name: 'kob_send', arguments: { asset: 'KAS', to: PRIMARY, amount: '1KAS' } }));
     assert.equal(okSend.status, 'plan');
 
-    const bad = await client.callTool({ name: 'kob_take', arguments: { id: 'ab'.repeat(32), amount: '1TUSD' } });
+    const bad = await client.callTool({ name: 'kob_take', arguments: { id: 'ab'.repeat(32), token: '55'.repeat(32), amount: '1TUSD' } });
     assert.equal(bad.isError, true);
     assert.match(body(bad).reason, /^PRICE_BOUND_REQUIRED/);
   } finally {

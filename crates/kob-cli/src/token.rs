@@ -15,13 +15,16 @@ use std::time::Duration;
 use kaspa_addresses::{Address, Version};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kob_protocol::issue::{
-    build_creation, hex, hex_array, p2pk_script, rpc_transaction_json, CreationPlan, FundingUtxo, Holder, IssueProgram, IssueSpec,
-    DEFAULT_CARRIER, DEFAULT_FEE_RATE, EXTENSION_FIXED_SUPPLY,
+    build_creation, hex, hex_array, p2pk_script, rpc_transaction_json, CreationPlan, FundingUtxo, Holder, IssueError, IssueProgram,
+    IssueSpec, DEFAULT_CARRIER, DEFAULT_FEE_RATE, EXTENSION_FIXED_SUPPLY,
 };
 use kob_protocol::kcc23;
+use kob_protocol::tx::{BuiltTx, KeyUtxo};
 use secp256k1::{Keypair, Secp256k1, SecretKey};
 use serde_json::{json, Value};
 
+use crate::trade::market::TokenMarket;
+use crate::trade::plan::{Clock, Plan, Severity};
 use crate::wrpc;
 
 /// Usage text of `kob token create`.
@@ -42,15 +45,32 @@ their owners from the genesis on, so the holder's key finds and spends them from
 `kob send`, the web app) without any file of this run.
 
 USAGE
-  kob token create --name <NAME> --ticker <TICKER> --decimals <N> --fund-utxo <TXID:INDEX:AMOUNT:OWNER>...
+  kob token create --name <NAME> --ticker <TICKER> --decimals <N> [--fund-utxo <TXID:INDEX:AMOUNT:OWNER>...]
                   [--supply <UNITS>] [--holder <OWNER:SCHEME:AMOUNT[:BORROW_SCHEME:GUARD]>...]
+                  [--sell price|curve [--keep PERCENT] [sale options]]
                   [--key-file <PATH> | --key-env <NAME>] [--out-dir <DIR>] [--yes | --dry-run] [--node ws://HOST:PORT]
 
 REQUIRED
   --name, --ticker      display name (1..=64 chars) and ticker (2..=12 of A-Z 0-9)
   --decimals            0..=18 (informational; every amount is in base units)
+
+FUNDING
   --fund-utxo           funding UTXO of the preparation, repeatable, all of one key; OWNER = 64-hex x-only pubkey or
                         a kaspa address (P2PK Schnorr). AMOUNT is in sompi.
+                        Without it the key's plain KAS UTXOs on the node fund the creation: the fewest that cover it,
+                        largest first (the key is then needed, also for --dry-run, which then reads the node).
+
+AFTER CREATION (as the web app's Create token; default: the wallet keeps everything)
+  --sell price          sell the funding key's share at one price: a limit sell (GTC) sent right after the genesis,
+                        spending the genesis output and the preparation's change
+    --price P           KAS per whole token, e.g. 0.01KAS (default: 10000 KAS over the amount for sale)
+  --sell curve          sell it on a stepped curve (a KobCurveAsk created in the genesis, no expiry)
+    --levels N          price levels, 1 to 1000 (default 100)
+    --total KAS         what a sell-out realises (default 10000KAS)
+    --multiple M        the last level's price over the first's (default 5)
+  --keep PERCENT        the share kept in the wallet as its own output (0 to 100, default 0)
+                        One confirmation (or --yes) covers the creation and the sale. A dry run with --sell price
+                        reads the node's clock.
 
 SUPPLY
   --holder              initial holder, repeatable, one token output each. OWNER = 64-hex | `self` (the funding
@@ -198,6 +218,8 @@ pub struct IssueArgs {
     pub node: Option<String>,
     /// The issued program.
     pub program: IssueProgram,
+    /// "After creation": the sale flags.
+    pub sale: crate::token_sale::SaleArgs,
 }
 
 const ADDRESS_PREFIXES: [&str; 4] = ["kaspa", "kaspatest", "kaspasim", "kaspadev"];
@@ -353,6 +375,7 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
         allow_high_fee: false,
         node: None,
         program: IssueProgram::default(),
+        sale: Default::default(),
     };
     let (mut have_name, mut have_ticker, mut have_decimals) = (false, false, false);
     let mut image_hash: Option<String> = None;
@@ -428,6 +451,7 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
             "--allow-high-fee" => a.allow_high_fee = true,
             "--node" => a.node = Some(val("--node")?),
             "--program" => a.program = IssueProgram::parse(&val("--program")?).map_err(|e| e.to_string())?,
+            k if crate::token_sale::SALE_FLAGS.contains(&k) => a.sale.set(k, val(k)?),
             other => return Err(format!("unknown argument `{other}` (see `kob token create --help`)")),
         }
     }
@@ -438,9 +462,7 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
         return Err("--image-file / --image-hash need --image (the picture's address)".into());
     }
     a.image_hash = image_hash;
-    if a.fund.is_empty() {
-        return Err("at least one --fund-utxo is required".into());
-    }
+    a.sale.check()?;
     if a.holders.is_empty() && a.supply.is_none() {
         return Err("give --supply and/or at least one --holder".into());
     }
@@ -453,6 +475,11 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
     }
     if !a.dry_run && a.key.is_none() {
         return Err("a key is required unless --dry-run (an unsigned transaction cannot be submitted): give --key-file PATH or --key-env NAME, or set the environment variable KOB_KEY".into());
+    }
+    if a.fund.is_empty() && a.key.is_none() {
+        return Err(
+            "give --fund-utxo, or the key whose KAS UTXOs on the node fund the creation (--key-file PATH or --key-env NAME)".into()
+        );
     }
     a.network = crate::common::resolve_network(&a.network)?;
     a.node = Some(crate::wrpc::node_for(a.node.take(), &a.network));
@@ -471,9 +498,15 @@ pub(crate) fn read_key(src: &KeySource) -> Result<SecretKey, String> {
 }
 
 /// Build the library spec from parsed arguments (resolving `self` holders against the funding key).
+#[cfg(test)]
 pub fn to_spec(a: &IssueArgs) -> Result<IssueSpec, String> {
-    let funder = a.fund[0].owner;
-    if a.fund.iter().any(|f| f.owner != funder) {
+    to_spec_with(a, &a.fund)
+}
+
+/// [`to_spec`] funded by `fund` (`--fund-utxo`, or what the node holds for the key).
+pub fn to_spec_with(a: &IssueArgs, fund: &[FundArg]) -> Result<IssueSpec, String> {
+    let funder = fund.first().ok_or("no funding UTXO")?.owner;
+    if fund.iter().any(|f| f.owner != funder) {
         return Err("all --fund-utxo entries must belong to the same key".into());
     }
     let holders: Vec<Holder> = if a.holders.is_empty() {
@@ -491,7 +524,7 @@ pub fn to_spec(a: &IssueArgs) -> Result<IssueSpec, String> {
             .collect()
     };
     let supply = a.supply.unwrap_or_else(|| holders.iter().map(|h| h.amount).sum());
-    let funding = a.fund.iter().map(|f| FundingUtxo { outpoint: f.outpoint, amount: f.amount, owner_pubkey: f.owner }).collect();
+    let funding = fund.iter().map(|f| FundingUtxo { outpoint: f.outpoint, amount: f.amount, owner_pubkey: f.owner }).collect();
     let mut spec = IssueSpec::new(&a.name, &a.ticker, a.decimals, supply, holders, funding);
     spec.extension_commitment = a.extension_commitment;
     spec.carrier = a.carrier;
@@ -569,17 +602,90 @@ pub fn run_issue(args: &[String]) -> i32 {
     }
 }
 
-fn issue(a: &IssueArgs) -> Result<(), String> {
-    let spec = to_spec(a)?;
-    let mut plan = build_creation(&spec).map_err(|e| e.to_string())?;
-    if let Some(src) = &a.key {
-        let sk = read_key(src)?;
-        let pk = Keypair::from_secret_key(&Secp256k1::new(), &sk).x_only_public_key().0.serialize();
-        if pk != spec.funding[0].owner_pubkey {
-            return Err("the signing key does not own the funding UTXO".into());
-        }
-        plan.sign(&sk).map_err(|e| e.to_string())?;
+/// The creation and its sale, planned: the spec, the sale, the creation, the limit sell of a
+/// one-price sale, and how many of the funding candidates it spends.
+type Planned = (IssueSpec, Option<crate::token_sale::Sale>, CreationPlan, Option<(TokenMarket, Plan)>, usize);
+
+/// Plans the creation with the fewest of `pool` (largest first) that pay for it and, with `--sell
+/// price`, for its limit sell. `spare` are the same candidates as UTXOs of the node (automatic
+/// funding): those the creation leaves fund the limit sell beyond the preparation's change.
+/// `--fund-utxo` is used whole.
+fn plan_creation(a: &IssueArgs, pool: &[FundArg], spare: &[KeyUtxo], clock: Option<Clock>) -> Result<Planned, String> {
+    let funder = pool.first().ok_or("no funding UTXO")?.owner;
+    let first = if spare.is_empty() { pool.len() } else { 1 };
+    for n in first..=pool.len() {
+        let more = n < pool.len();
+        let mut spec = to_spec_with(a, &pool[..n])?;
+        let sale = crate::token_sale::apply(&mut spec, &a.sale, funder)?;
+        let plan = match build_creation(&spec) {
+            Ok(p) => p,
+            Err(IssueError::InsufficientFunds { .. }) if more => continue,
+            Err(e) => return Err(e.to_string()),
+        };
+        let ask = match (&sale, clock) {
+            (Some(s), Some(c)) if s.price.is_some() => {
+                let (m, p) = crate::token_sale::plan_ask(&plan, s, funder, spare.get(n..).unwrap_or_default(), c, a.fee_rate)?;
+                if crate::token_sale::short_of_kas(&p) && more {
+                    continue;
+                }
+                Some((m, p))
+            }
+            _ => None,
+        };
+        return Ok((spec, sale, plan, ask, n));
     }
+    Err("no funding UTXO".into())
+}
+
+fn issue(a: &IssueArgs) -> Result<(), String> {
+    let sk = a.key.as_ref().map(read_key).transpose()?;
+    let key_pk = sk.map(|k| Keypair::from_secret_key(&Secp256k1::new(), &k).x_only_public_key().0.serialize());
+    let price_sale = a.sale.mode.as_deref() == Some("price");
+    let auto = a.fund.is_empty();
+    let node = a.node.as_deref().ok_or("no node")?;
+    if auto || price_sale {
+        wrpc::check_node_network(node, &a.network, Duration::from_secs(30))?;
+    }
+    // Automatic funding: the key's plain KAS UTXOs on the node, largest first.
+    let spare: Vec<KeyUtxo> = if auto {
+        let pk = key_pk.ok_or("give --fund-utxo, or the key whose KAS UTXOs fund the creation")?;
+        let mut u = crate::common::maker_funding(node, &a.network, &pk)?;
+        u.sort_by(|x, y| y.utxo.amount.cmp(&x.utxo.amount));
+        if u.is_empty() {
+            return Err(format!("the key {} holds no spendable KAS on the node", hex(&pk)));
+        }
+        u
+    } else {
+        vec![]
+    };
+    let pool: Vec<FundArg> = if auto {
+        spare.iter().map(|k| FundArg { outpoint: k.utxo.outpoint(), amount: k.utxo.amount, owner: k.pubkey }).collect()
+    } else {
+        a.fund.clone()
+    };
+    let clock = if price_sale { Some(crate::trade::data::clock(node)?) } else { None };
+    let (spec, sale, mut plan, ask, used) = plan_creation(a, &pool, &spare, clock)?;
+    let signer = match (sk, key_pk) {
+        (Some(sk), Some(pk)) => {
+            if pk != spec.funding[0].owner_pubkey {
+                return Err("the signing key does not own the funding UTXO".into());
+            }
+            plan.sign(&sk).map_err(|e| e.to_string())?;
+            Some(crate::common::Signer { secret: sk.secret_bytes(), pubkey: pk })
+        }
+        _ => None,
+    };
+    // The limit sell is signed and run in the script engine now, before the one confirmation.
+    let ask_tx = match &ask {
+        Some((_, p)) => {
+            let b = crate::token_sale::ask_built(p)?;
+            if let Some(s) = &signer {
+                crate::common::sign_validate_send(b, s, None, "", Value::Null, true, node, &a.network)?;
+            }
+            Some(b)
+        }
+        None => None,
+    };
     let report = plan.verify().map_err(|e| e.to_string())?;
     let g = &plan.genesis;
 
@@ -617,6 +723,11 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
         report.size
     );
     println!("total fee    {} sompi", plan.total_fee());
+    if auto {
+        let kas: u64 = pool[..used].iter().map(|f| f.amount).sum();
+        println!("funding      {used} UTXO(s) of the key on the node, {kas} sompi (picked automatically, largest first)");
+    }
+    print_sale(&plan, sale.as_ref(), ask.as_ref(), ask_tx);
     println!(
         "verified     KCC-23 binding, covenant group, exact scripts, supply, mass, owner scheme 0x04 self-test{}",
         if report.scripts_executed {
@@ -647,6 +758,9 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
             return Err(format!("the {what}: {m} [{}]", crate::feecap::CODE));
         }
     }
+    if let Some(m) = ask_tx.and_then(|b| ceiling.violation_of(b)) {
+        return Err(format!("the sell order: {m} [{}]", crate::feecap::CODE));
+    }
     // A submitting run asks first, by the rule of every submitting command: `--yes`, or a
     // terminal, else nothing is written or sent. It then always keeps the signed transactions,
     // because `kob token resume` sends them.
@@ -654,7 +768,15 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
         crate::trade::opts::confirm_with(
             a.yes,
             &a.network,
-            &format!("the creation of {} (the preparation, then the genesis {})", g.spec.ticker, g.txid()),
+            &match ask_tx {
+                Some(b) => format!(
+                    "the creation of {} (the preparation, the genesis {}, then the sell order {})",
+                    g.spec.ticker,
+                    g.txid(),
+                    hex(&b.tx.id)
+                ),
+                None => format!("the creation of {} (the preparation, then the genesis {})", g.spec.ticker, g.txid()),
+            },
         )?;
     }
     let dir = match (&a.out_dir, a.dry_run) {
@@ -681,7 +803,7 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
     // `kob place` and `kob merge` can spend them before the indexer has the genesis. The indexer
     // lists them to their owner from the genesis payload (`GET /v1/token-utxos`), so this record
     // only bridges the lag of the indexer.
-    let funder = a.fund[0].owner;
+    let funder = spec.funding[0].owner_pubkey;
     let token: [u8; 32] = g.covenant_id.as_bytes();
     let own: Vec<([u8; 32], u32, kob_protocol::state::TokenState)> = g
         .states
@@ -707,7 +829,80 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
         &token,
         &crate::recent::IssuedFacts { decimals: u32::from(g.spec.decimals), symbol: g.spec.ticker.clone(), name: g.spec.name.clone() },
     );
+    if let (Some(b), Some(s)) = (ask_tx, &signer) {
+        submit_sale(b, s, &dir, node, &a.network, &hex(g.covenant_id.as_bytes().as_slice()))?;
+    }
     Ok(())
+}
+
+/// The plan lines of the sale.
+fn print_sale(
+    plan: &CreationPlan,
+    sale: Option<&crate::token_sale::Sale>,
+    ask: Option<&(TokenMarket, Plan)>,
+    ask_tx: Option<&BuiltTx>,
+) {
+    let Some(s) = sale else { return };
+    let Ok(m) = crate::token_sale::market_of(plan) else { return };
+    let kept = crate::trade::units::tokens(s.keep as i128, &m.unit());
+    match (&s.curve, ask) {
+        (Some((t, st)), _) => {
+            println!("after        sell on a curve (output {} is its custody), {kept} kept in the wallet", s.at);
+            let carrier = plan.genesis.curve.as_ref().and_then(|c| plan.genesis.tx.outputs.get(c.output)).map_or(0, |o| o.value);
+            for l in crate::trade::curve::lines(t, st, &m, carrier as i64) {
+                println!("             {l}");
+            }
+            if let Some(c) = &plan.genesis.curve {
+                println!("             curve covenant id {}", hex(c.covenant_id.as_bytes().as_slice()));
+            }
+        }
+        (None, Some((m, p))) => {
+            println!("after        sell at one price (output {}), {kept} kept in the wallet", s.at);
+            for l in crate::trade::place::plan_lines(p, m, None) {
+                println!("             {l}");
+            }
+            for i in &p.issues {
+                println!(
+                    "             {}: {} [{}]",
+                    if i.severity == Severity::Warning { "warning" } else { "note" },
+                    i.message,
+                    i.code
+                );
+            }
+            if let Some(b) = ask_tx {
+                println!("sell order   {}  (sent right after the genesis, fee {} sompi)", hex(&b.tx.id), b.fee.fee);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Sends the limit sell of a one-price sale right after the genesis, retried while the node has
+/// not yet seen the genesis. It is kept in `dir` as `sell_order.json`.
+fn submit_sale(b: &BuiltTx, s: &crate::common::Signer, dir: &Path, node: &str, network: &str, cov: &str) -> Result<(), String> {
+    let mut last = String::new();
+    for attempt in 1..=GENESIS_ATTEMPTS {
+        match crate::common::sign_validate_send(b, s, Some(dir), "sell_order.json", json!({"token": cov}), false, node, network) {
+            Ok(sent) => {
+                println!("submitted    sell order {}", sent.txid);
+                for c in &b.covenants {
+                    println!("order covenant id {}", hex(&c.covenant_id));
+                }
+                return Ok(());
+            }
+            Err(e) => {
+                last = e;
+                if attempt < GENESIS_ATTEMPTS {
+                    std::thread::sleep(GENESIS_RETRY);
+                }
+            }
+        }
+    }
+    Err(format!(
+        "the token was created, but its sell order was not accepted ({last}): it is saved in {}; or place it with `kob place \
+         limit --token {cov} --side sell ...`",
+        dir.join("sell_order.json").display()
+    ))
 }
 
 /// How often the genesis is offered to the node, and the pause between attempts.
@@ -1163,6 +1358,98 @@ mod tests {
         assert!(parse_issue_args(&v(&format!("{base} --dry-run -y"))).is_err());
         let a = parse_issue_args(&v(&format!("{base} --node ws://x:1 --key-file {} --yes", key_file("kpk", PK)))).unwrap();
         assert!(a.yes && !a.dry_run);
+    }
+
+    /// The key 33..33, a file holding it, and its x-only public key.
+    fn key33(tag: &str) -> (String, [u8; 32]) {
+        let sk = "3333333333333333333333333333333333333333333333333333333333333333";
+        let pk = Keypair::from_secret_key(&Secp256k1::new(), &SecretKey::from_slice(&hex_array::<32>(sk).unwrap()).unwrap())
+            .x_only_public_key()
+            .0
+            .serialize();
+        (key_file(tag, sk), pk)
+    }
+
+    #[test]
+    fn sale_flags_parse_and_refuse_what_does_not_apply() {
+        let a = parse_issue_args(&v(&format!("{} --supply 100 --sell curve --keep 12.5 --levels 10", base()))).unwrap();
+        assert_eq!(
+            (a.sale.mode.as_deref(), a.sale.keep.as_deref(), a.sale.levels.as_deref()),
+            (Some("curve"), Some("12.5"), Some("10"))
+        );
+        assert!(parse_issue_args(&v(&format!("{} --supply 100 --keep 10", base()))).unwrap_err().contains("goes with --sell"));
+        assert!(parse_issue_args(&v(&format!("{} --supply 100 --sell price --multiple 2", base()))).is_err());
+        assert!(parse_issue_args(&v(&format!("{} --supply 100 --sell auction", base()))).is_err());
+        // Without --fund-utxo a key is needed, to find its UTXOs on the node.
+        let no_fund = "--name X --ticker XX --decimals 0 --supply 1 --dry-run --network testnet-10";
+        assert!(parse_issue_args_with(&v(no_fund), None).unwrap_err().contains("--fund-utxo"));
+        let (kf, _) = key33("kauto");
+        assert!(parse_issue_args_with(&v(&format!("{no_fund} --key-file {kf}")), None).unwrap().fund.is_empty());
+    }
+
+    /// `--sell curve`: the genesis holds the curve, its custody and the kept share; a dry run is
+    /// offline.
+    #[test]
+    fn a_curve_sale_is_created_in_the_genesis() {
+        let (kf, pk) = key33("kcurve");
+        let dir = std::env::temp_dir().join(format!("kob-issue-curve-{}", std::process::id()));
+        let cmd = format!(
+            "--name Curve --ticker CRV --decimals 2 --fund-utxo {TX}:0:10000000000:{} --supply 100000 --sell curve --keep 10 \
+             --levels 20 --dry-run --network testnet-10 --key-file {kf} --out-dir {}",
+            hex(&pk),
+            dir.display()
+        );
+        assert_eq!(run_issue(&v(&cmd)), 0);
+        let tx: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("genesis_tx.json")).unwrap()).unwrap();
+        // The custody (90 %), the kept share (10 %) and the curve.
+        assert_eq!(tx["outputs"].as_array().unwrap().len(), 3);
+        let sup: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("supply.json")).unwrap()).unwrap();
+        assert_eq!(sup["total_supply"], "100000");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Without --fund-utxo the key's UTXOs on the node fund the creation, the fewest, largest
+    /// first; `--sell price` sends a limit sell right after the genesis, spending the genesis output
+    /// for sale; one --yes covers the three.
+    #[test]
+    fn automatic_funding_and_a_one_price_sale_send_three_transactions() {
+        let (kf, pk) = key33("kprice");
+        let spk = kob_protocol::issue::p2pk_script(&pk);
+        let utxo = |tag: u8, amount: u64| crate::wrpc::NodeUtxo {
+            address: Some(crate::common::address_of(&spk, "testnet-10").unwrap()),
+            txid: [tag; 32],
+            index: 0,
+            amount,
+            spk: crate::common::spk_bytes(&spk),
+            daa: 990_000,
+            coinbase: false,
+            covenant_id: None,
+        };
+        let (url, state) = crate::wrpc::mock::start(vec![utxo(1, 300_000_000), utxo(2, 5_000_000_000), utxo(3, 2_000_000_000)]);
+        let dir = std::env::temp_dir().join(format!("kob-create-sale-{}", std::process::id()));
+        let cmd = format!(
+            "--name Sale --ticker SALE --decimals 0 --supply 1000 --sell price --price 2KAS --keep 20 --network testnet-10 \
+             --key-file {kf} --node {url} --out-dir {} --yes",
+            dir.display()
+        );
+        assert_eq!(run_issue(&v(&cmd)), 0);
+        let sent = state.lock().unwrap().submitted.clone();
+        assert_eq!(sent.len(), 3, "preparation, genesis, sell order");
+        // The largest UTXO alone funds the creation.
+        assert_eq!(sent[0]["inputs"].as_array().unwrap().len(), 1);
+        assert_eq!(sent[0]["inputs"][0]["previousOutpoint"]["transactionId"], hex(&[2; 32]));
+        let ids: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("creation.json")).unwrap()).unwrap();
+        let spends = |tx: &Value, id: &Value, i: u64| {
+            tx["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|x| &x["previousOutpoint"]["transactionId"] == id && x["previousOutpoint"]["index"] == i)
+        };
+        assert!(spends(&sent[2], &ids["genesis_txid"], 0), "the sell spends the genesis output for sale");
+        assert!(spends(&sent[2], &ids["preparation_txid"], 1), "and the preparation's change");
+        assert!(dir.join("sell_order.json").exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A submitting run sends the preparation, then the genesis. `resume` sends the pair again.

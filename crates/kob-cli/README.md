@@ -115,7 +115,7 @@ transaction's mass. A plan above it is refused, nothing is signed, and the comma
 | `kob sweep <ID>...` | return an order's strays to you; the order continues in place (`--all`: every live order of the key; `--view FILE`: from saved indexer views) |
 | `kob claim <ID> [--merge | --sell --price P]` | take what a collected buy order (`--delivery collected`, not the default) bought: alone, with your UTXOs, or sold in the same transaction |
 | `kob refund <ID>` | refund an ended order; any key may send it and keeps the refund tip, less the fee |
-| `kob take <ID> --amount A` | fill a resting order as the taker (`--max-price` / `--min-price`; one is required with `--yes`) |
+| `kob take <ID> --amount A` | fill a resting order as the taker (`--max-price` / `--min-price` and `--token <covenant id>` are required with `--yes`) |
 | `kob send <TOKEN\|KAS> <TO> <AMOUNT>` | send a token or KAS |
 | `kob merge <TOKEN>` | merge your UTXOs of one token into one |
 | `kob book <TOKEN> [--quote B] [--depth N]` | the order book on KAS or of a pair (depth default 20, max 500) |
@@ -124,7 +124,7 @@ transaction's mass. A plan above it is refused, nothing is signed, and the comma
 | `kob tokens [SEARCH] [--all]` | tokens with a KOB market; `--all` adds kascov.io's list |
 | `kob watch fills\|book\|order\|health` | follow the live feed (read-only) |
 | `kob recover --from FILE` | find your orders on a node from a backup or export, and cancel them (`--cancel`) |
-| `kob token create` | create a fixed-supply KCC-20 token |
+| `kob token create` | create a fixed-supply KCC-20 token, optionally selling it at one price or on a curve |
 | `kob token resume <DIR>` | send a creation whose genesis did not go out |
 | `kob token verify-declaration <PROOF>` | check a KCC-23 launch proof |
 | `kob registry validate\|verify-genesis\|programs` | token registry and token-program tools (`add-program` is `kob-maint`, the maintainers' binary, not part of the release) |
@@ -176,9 +176,11 @@ Defaults match the web wallet: a minimum fill worth 10 KAS, a 1 KAS carrier per 
 tip 0. A pair order (`--quote`) with no `--tip` carries the keeper tip of the pair over its amount.
 Every option per kind: [REFERENCE.md](REFERENCE.md#order-kinds-every-option).
 
-**Market sells need an extra flag.** The auction starts at the indexer's best price, which nothing
-independent checks. A `market` or `close` sell needs `--ack-market-start` on its own command line
-(`--yes` is not enough), or `--floor-price P`.
+**Market orders start at a node-confirmed price.** Every order in the KAS book is looked up on the
+node before planning, and orders only the indexer lists are left out (`BOOK_ORDERS_DROPPED`). A
+start far from the last fill still needs `--ack-market-start` (or `--floor-price P` for a sell). On a
+pair book, which is not checked, every `market` or `close` sell needs `--ack-market-start` or
+`--floor-price P`, and so does a buy worth 100 KAS or more.
 
 **A take with `--yes` needs a price bound.** `kob take` fills a resting order at the order's terms
 at the transaction's lock time. The maker can amend the order before you sign, and a Dutch ask or a
@@ -188,7 +190,9 @@ sell); without `--yes` the bound is optional. The price compared is what this fi
 whole token: the order's price at the signed lock time, less its tip when you buy and plus its tip
 when you sell (you are the executor and keep the tip). A worse price is refused before signing,
 with exit 1 and the reason `TAKE_PRICE_ABOVE_MAX` / `TAKE_PRICE_BELOW_MIN` in `issues`. There
-is no `--slippage` for a take: put your margin into the bound.
+is no `--slippage` for a take: put your margin into the bound. With `--yes` it also needs
+`--token <covenant id>`, the token you mean to trade: an order whose node-checked state trades another
+token is refused, so an indexer cannot hand you a look-alike order under the real token's book.
 
 ## Examples
 
@@ -219,8 +223,8 @@ kob replace <covenant id> --amount 20TUSD --renew $N
 kob cancel <covenant id> <covenant id> $N
 kob refund <covenant id> $N
 kob take <covenant id> --amount 4TUSD $N                          # shows the price and asks
-kob take <covenant id> --amount 4TUSD --max-price 0.26KAS --yes $N # buy from a sell order, at most 0.26 KAS
-kob take <covenant id> --amount 4TUSD --min-price 0.24KAS --yes $N # sell into a buy order, at least 0.24 KAS
+kob take <covenant id> --amount 4TUSD --max-price 0.26KAS --token <TUSD id> --yes $N # buy, at most 0.26 KAS
+kob take <covenant id> --amount 4TUSD --min-price 0.24KAS --token <TUSD id> --yes $N # sell, at least 0.24 KAS
 # send and merge
 kob send KAS  kaspatest:qq... 2.5KAS $N
 kob send TUSD kaspatest:qq... 12.5TUSD $N
@@ -260,7 +264,7 @@ kob watch health                                # indexer progress; a health lin
 |---|---|
 | 0 | done, `--dry-run` stopped after the plan, or a view was printed |
 | 1 | the command ran but did not do its work: node / indexer / plan error, a take whose price is worse than its bound, or a refusal to sign (no `--yes`, or a declined prompt) |
-| 2 | usage: unknown option, malformed argument (e.g. an amount without a unit, `--depth 0`), no key, `--key` (removed), a removed spelling, `--yes` with `--dry-run`, `kob take --yes` without `--max-price` / `--min-price` |
+| 2 | usage: unknown option, malformed argument (e.g. an amount without a unit, `--depth 0`), no key, `--key` (removed), a removed spelling, `--yes` with `--dry-run`, `kob take --yes` without `--max-price` / `--min-price` or `--token` |
 
 `--help` prints on stdout and exits 0. A usage printed because of a mistake (`kob place` with no
 arguments) goes to stderr and exits 2. The reason is on stderr (`error: ...` or `not signed: ...`)
@@ -293,9 +297,16 @@ kob token create --name "Test USD" --ticker TUSD --decimals 6 --supply 100000000
   --network testnet-10 --key-file $HOME/.kob/maker.key --out-dir ./tusd-creation --dry-run
 ```
 
-- Required: `--name`, `--ticker` (2 to 12 of A-Z 0-9), `--decimals` (0 to 18), at least one
-  `--fund-utxo` (amount in sompi), and `--supply` and/or `--holder`. The supply is in base units
-  (here 1,000,000 TUSD), all to the funding key by default.
+- Required: `--name`, `--ticker` (2 to 12 of A-Z 0-9), `--decimals` (0 to 18), and `--supply`
+  and/or `--holder`. The supply is in base units (here 1,000,000 TUSD), all to the funding key by
+  default.
+- Funding: `--fund-utxo` (amount in sompi), or none: the key's KAS UTXOs on the node, the fewest
+  that cover it, largest first.
+- After creation, as the web app: the wallet keeps everything by default. `--sell price [--price P]`
+  sends a limit sell (GTC) right after the genesis (default price: 10,000 KAS over the amount).
+  `--sell curve [--levels 100] [--total 10000KAS] [--multiple 5]` puts a curve (no expiry) in the
+  genesis. `--keep PERCENT` of the share stays in the wallet. One confirmation (or `--yes`) covers
+  everything.
 - Drop `--dry-run` and add `--yes` to submit (the public nodes are used unless `--node` or
   `KOB_NODE_WRPC` names one).
 - `--program public-mint` (default) is what kascov.io lists as KCC-20. `--program 3x3` is cheaper

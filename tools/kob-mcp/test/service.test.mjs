@@ -4,6 +4,8 @@ import { test } from 'node:test';
 import { KobService } from '../src/service.mjs';
 import { PRIMARY, setup } from './helpers.mjs';
 
+const TUSD = '55'.repeat(32);
+
 const place = { token: 'TUSD', side: 'buy', amount: '2TUSD', price: '0.25KAS' };
 
 test('confirm mode: a write only plans; the confirm with the same arguments sends once', async () => {
@@ -98,12 +100,12 @@ test('take: a bound is required, and a worse price is refused by the CLI before 
   const t = setup({ mode: 'auto' });
   const svc = new KobService(t.cfg);
   const id = 'ab'.repeat(32);
-  assert.match((await svc.write('kob_take', { id, amount: '1TUSD' })).reason, /^PRICE_BOUND_REQUIRED/);
-  assert.match((await svc.write('kob_take', { id, amount: '1TUSD', max_price: '0.3KAS', min_price: '0.2KAS' })).reason, /^PRICE_BOUND_REQUIRED/);
-  const r = await svc.write('kob_take', { id, amount: '1TUSD', max_price: '0.2KAS' });
+  assert.match((await svc.write('kob_take', { id, token: TUSD, amount: '1TUSD' })).reason, /^PRICE_BOUND_REQUIRED/);
+  assert.match((await svc.write('kob_take', { id, token: TUSD, amount: '1TUSD', max_price: '0.3KAS', min_price: '0.2KAS' })).reason, /^PRICE_BOUND_REQUIRED/);
+  const r = await svc.write('kob_take', { id, token: TUSD, amount: '1TUSD', max_price: '0.2KAS' });
   assert.match(r.reason, /TAKE_PRICE_ABOVE_MAX/);
   assert.equal(t.yesCalls().length, 0);
-  const ok = await svc.write('kob_take', { id, amount: '1TUSD', max_price: '0.27KAS' });
+  const ok = await svc.write('kob_take', { id, token: TUSD, amount: '1TUSD', max_price: '0.27KAS' });
   assert.equal(ok.status, 'submitted');
 });
 
@@ -123,7 +125,38 @@ test('arguments that would read as options or units without a unit are refused',
   assert.equal(t.calls().filter((a) => a[0] !== 'balances').length, 0);
 });
 
-test('a failed submission releases its reservation', async () => {
+test('a send whose reply is lost counts toward the cap (MCP-1)', async () => {
+  const t = setup({ mode: 'auto', limits: { perTxKas: 20, perDayKas: 30 } });
+  process.env.FAKE_KOB_SUBMIT_LOST = '1';
+  const buy = { token: 'TUSD', side: 'buy', amount: '40TUSD', price: '0.25KAS' }; // 10 + 1 + fee
+  try {
+    const svc = new KobService(t.cfg);
+    for (let i = 0; i < 2; i++) {
+      const r = await svc.write('kob_place_limit', buy);
+      assert.equal(r.status, 'failed');
+      assert.equal(r.counted, true);
+    }
+    assert.match((await svc.write('kob_place_limit', buy)).reason, /^DAILY_CAP/);
+    assert.equal(t.yesCalls().length, 2, 'the third send is refused before signing');
+    const s = await svc.status();
+    assert.equal(s.today.spentKas, '22.001');
+    assert.equal(s.today.unknownOutcomes.length, 2);
+    assert.equal(s.today.unknownOutcomes[0].txids.length, 1, 'the planned txid, to look up');
+  } finally {
+    delete process.env.FAKE_KOB_SUBMIT_LOST;
+  }
+});
+
+test('the ledger skips a torn line and the next entry starts a new line (MCP-5)', async () => {
+  const t = setup({ mode: 'auto' });
+  const svc = new KobService(t.cfg);
+  writeFileSync(svc.ledger.file, '{"ts":"2026-11-17T00:00:00.000Z","kind":"rese');
+  assert.equal((await svc.write('kob_place_limit', place)).status, 'submitted');
+  assert.equal((await svc.status()).today.spentKas, '1.5005');
+  assert.deepEqual(svc.ledger.entries().map((e) => e.kind), ['reserve', 'settle']);
+});
+
+test('a node rejection releases its reservation', async () => {
   const t = setup({ mode: 'auto' });
   process.env.FAKE_KOB_SUBMIT_FAIL = '1';
   try {
@@ -153,6 +186,18 @@ test('token create: the plan counts the carrier and both fees; the confirm sends
   assert.equal(sent[sent.indexOf('--fund-utxo') + 1].startsWith(`${'aa'.repeat(32)}:1:5000000000:`), true);
 });
 
+test('token create: sell on a curve passes the sale flags; the sale options need sell curve', async () => {
+  const t = setup();
+  const svc = new KobService(t.cfg);
+  const args = { name: 'Test MCP', ticker: 'TMCV', decimals: 2, supply: '100000', fund_utxo: `${"aa".repeat(32)}:1:5000000000`, sell: 'curve', keep_percent: 10, levels: 50, total: '500KAS' };
+  const p = await svc.write('kob_token_create', args);
+  assert.equal(p.status, 'plan');
+  const dry = t.calls().find((c) => c.includes('create'));
+  for (const [k, v] of [['--sell', 'curve'], ['--keep', '10'], ['--levels', '50'], ['--total', '500KAS']]) assert.equal(dry[dry.indexOf(k) + 1], v, k);
+  assert.match((await svc.write('kob_token_create', { ...args, sell: undefined })).reason, /^BAD_ARGUMENT: keep_percent/);
+  assert.match((await svc.write('kob_token_create', { ...args, keep_percent: 1.234 })).reason, /^BAD_ARGUMENT/);
+});
+
 test('fee estimate signs nothing and stores no plan', async () => {
   const t = setup();
   const svc = new KobService(t.cfg);
@@ -179,10 +224,10 @@ test('take: the bound refusal is read in both CLI forms (JSON issue, or stderr t
   const t = setup({ mode: 'auto' });
   const svc = new KobService(t.cfg);
   const id = 'ab'.repeat(32);
-  assert.match((await svc.write('kob_take', { id, amount: '1TUSD', max_price: '0.2KAS' })).reason, /^CLI_REFUSED \(exit 1\): TAKE_PRICE_ABOVE_MAX /);
+  assert.match((await svc.write('kob_take', { id, token: TUSD, amount: '1TUSD', max_price: '0.2KAS' })).reason, /^CLI_REFUSED \(exit 1\): TAKE_PRICE_ABOVE_MAX /);
   process.env.FAKE_KOB_TAKE_UNBUILT = '1';
   try {
-    const r = await new KobService(t.cfg).write('kob_take', { id, amount: '1TUSD', max_price: '0.2KAS' });
+    const r = await new KobService(t.cfg).write('kob_take', { id, token: TUSD, amount: '1TUSD', max_price: '0.2KAS' });
     assert.match(r.reason, /^CLI_REFUSED \(exit 1\): TAKE_PRICE_ABOVE_MAX: error: this fill pays/);
   } finally {
     delete process.env.FAKE_KOB_TAKE_UNBUILT;
@@ -217,4 +262,47 @@ test('claim and delivery: refused unless the CLI help names them; offered when i
   } finally {
     delete process.env.FAKE_KOB_FEATURES;
   }
+});
+
+test('token outflows are capped: a share of the confirmed holding by default (MCP-2)', async () => {
+  const t = setup({ mode: 'auto', limits: { perTxKas: 2, perDayKas: 4 } }); // the wallet holds 1,000 TUSD
+  const svc = new KobService(t.cfg);
+  const sell = (amount) => svc.write('kob_place_limit', { token: 'TUSD', side: 'sell', amount, price: '0.25KAS' });
+  const huge = await sell('1000000TUSD');
+  assert.match(huge.reason, /^TOKEN_PER_TX_CAP/, 'the KAS caps see only the carrier and the fee; the token cap refuses');
+  assert.match((await sell('300TUSD')).reason, /^TOKEN_PER_TX_CAP/, 'above 25 % of the holding');
+  assert.equal((await sell('250TUSD')).status, 'submitted');
+  assert.equal((await sell('250TUSD')).status, 'submitted', '500 of the day\'s 1,000');
+  assert.match((await sell('1TUSD')).reason, /^TOKEN_DAILY_CAP/);
+  assert.equal(t.yesCalls().length, 2);
+  // a sale into a buy order and a token send count too
+  assert.match((await svc.write('kob_take', { id: 'ab'.repeat(32), token: TUSD, amount: '1TUSD', min_price: '0.2KAS' })).reason, /^TOKEN_DAILY_CAP/);
+  assert.match((await svc.write('kob_send', { asset: 'TUSD', to: PRIMARY, amount: '1TUSD' })).reason, /^TOKEN_DAILY_CAP/);
+});
+
+test('token outflows: an own cap per token; an unconfirmed holding is refused', async () => {
+  const id = '55'.repeat(32);
+  const t = setup({ mode: 'auto', limits: { tokens: { [id]: { perTx: '50000000000', perDay: '60000000000' } } } });
+  const svc = new KobService(t.cfg);
+  const sell = (amount) => svc.write('kob_place_limit', { token: 'TUSD', side: 'sell', amount, price: '0.25KAS' });
+  assert.match((await sell('501TUSD')).reason, /^TOKEN_PER_TX_CAP/);
+  assert.equal((await sell('500TUSD')).status, 'submitted');
+  assert.match((await sell('101TUSD')).reason, /^TOKEN_DAILY_CAP/);
+  const u = setup({ mode: 'auto' });
+  writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify({ n: 0, kasFree: 1000e8, tusdFree: 1000e8, tusdVerified: false, orders: {}, book: { best_bid: '24000000', best_ask: '26000000', last_fill: '25000000' } }));
+  assert.match((await new KobService(u.cfg).write('kob_place_limit', { token: 'TUSD', side: 'sell', amount: '1TUSD', price: '0.25KAS' })).reason, /^TOKEN_CAP: the wallet's holding/);
+  assert.equal(u.yesCalls().length, 0);
+});
+
+test('take: the token is required and pinned (sec-ops M15)', async () => {
+  const t = setup({ mode: 'auto' });
+  const svc = new KobService(t.cfg);
+  const id = 'ab'.repeat(32);
+  assert.match((await svc.write('kob_take', { id, amount: '1TUSD', max_price: '0.27KAS' })).reason, /^BAD_ARGUMENT: token/);
+  assert.match((await svc.write('kob_take', { id, token: 'TUSD', amount: '1TUSD', max_price: '0.27KAS' })).reason, /^BAD_ARGUMENT: token/);
+  assert.match((await svc.write('kob_take', { id, token: '66'.repeat(32), amount: '1TUSD', max_price: '0.27KAS' })).reason, /^CLI_REFUSED.*another token/);
+  assert.equal((await svc.write('kob_take', { id, token: TUSD, amount: '1TUSD', max_price: '0.27KAS' })).status, 'submitted');
+  const sent = t.yesCalls()[0];
+  assert.equal(sent[sent.indexOf('--token') + 1], TUSD);
+  assert.ok(t.calls().some((a) => a[0] === 'take' && a.includes('--dry-run') && a.includes('--token')));
 });

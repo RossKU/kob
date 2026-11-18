@@ -90,6 +90,7 @@ pub(super) fn env(m: &TokenMarket) -> Env {
         guards_acknowledged: false,
         last_fill: None,
         market_start_ack: true,
+        book_verified: false,
         funding: vec![key_utxo(1, 1000 * KAS)],
         token_utxos: vec![token_utxo(m, 2, 100 * TOK)],
         fee_rate: None,

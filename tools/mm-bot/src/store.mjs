@@ -7,6 +7,7 @@ import { initialMode } from './modes.mjs';
 export const paths = (dataDir) => ({
   state: join(dataDir, 'state.json'),
   stop: join(dataDir, 'STOP'),
+  views: join(dataDir, 'order-views.json'), // the last indexer views of the bot's live orders
   pid: join(dataDir, 'mm-bot.pid'),
   log: join(dataDir, 'logs', 'mm-bot.log'),
   actions: join(dataDir, 'logs', 'actions.jsonl'),
