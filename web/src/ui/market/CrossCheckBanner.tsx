@@ -6,17 +6,19 @@ import { Banner, useAsync } from '../kit';
 import { useFailoverState } from '../shell/failover';
 
 /**
- * With two or more indexers configured (`extraIndexerUrls`) the key facts of the token (powers, market price scale, best ask / bid) are read from each and
- * compared; any disagreement or unreachable verifier is shown. With a single indexer nothing is checked here (the footer says "single indexer,
- * unverified"). `refreshKey` re-runs the check when the book moved (coalesced: never two checks in flight).
+ * With two or more indexers configured (`extraIndexerUrls`) the key facts of the token are read
+ * from each and compared. They are the powers, the market price scale and the best ask and bid.
+ * Any disagreement or unreachable verifier is shown. With a single indexer nothing is checked
+ * here, and the footer says "single indexer, unverified". `refreshKey` re-runs the check when the
+ * book moved. The checks are coalesced, so there are never two in flight.
  */
-/** A finding's value as said: a market's price scale (a power of ten) as its decimals, never as a count of base units. */
 const shown = (code: string, v: string | null | undefined): string => (v == null ? '' : code === 'market-scale-differs' && /^10*$/.test(v) ? String(v.length - 1) : v);
 
 export function CrossCheckBanner(props: { token: Hex; refreshKey?: number }) {
   const services = useServices();
   const { indexer } = services;
-  // on a backup indexer the primary (while it answers) and the other further indexers are the references: the set changes with the failover state
+  // On a backup indexer the primary, while it answers, and the other further indexers are the
+  // references. The set changes with the failover state.
   const fo = useFailoverState(services.failover);
   const verifiers = services.verifiers;
   const res = useAsync(

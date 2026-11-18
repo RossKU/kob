@@ -1,6 +1,9 @@
-// "Market trades": the recent fills of this market under the order ticket, newest first (time, price coloured by the aggressor's side, amount). It is drawn from the tape the page already reads
-// (`/v1/trades`, or the fill events): no read of its own. It lives in the room the row's drag handle (RowResize.tsx) gives the ticket's column under the ticket card, and shows only when there
-// are at least 132 px of it (market.css, a container query on the panel's own height); below that the panel is not drawn and the ticket fills the column as before.
+// "Market trades": the recent fills of this market under the order ticket, newest first, with
+// time, price coloured by the aggressor's side, and amount. It is drawn from the tape the page
+// already reads (`/v1/trades`, or the fill events), so it has no read of its own. It lives in the
+// room the row's drag handle (RowResize.tsx) gives the ticket's column under the ticket card. It
+// shows only when there are at least 132 px of it (market.css, a container query on the panel's
+// own height). Below that the panel is not drawn and the ticket fills the column.
 import { t } from '../../i18n';
 import { formatUnits } from '../../kob/units';
 import { amountText, priceText, tapeTime, type Tape } from './market-model';
@@ -9,11 +12,14 @@ import { flippedPriceText, oppositeSide } from './orientation';
 export function MarketTrades(props: {
   tape: Tape | undefined;
   decimals: number;
-  /** price decimals of the shown orientation */
+  /** Price decimals of the shown orientation. */
   dp: number;
-  /** shown as KAS/TOKEN: prices are tokens per KAS, amounts KAS, the side the other way round */
+  /**
+   * Shown as KAS/TOKEN, so prices are tokens per KAS, amounts are KAS and the side is the other way
+   * round.
+   */
   inverted?: boolean;
-  /** display name of the token */
+  /** Display name of the token. */
   ticker: string;
 }) {
   const { tape } = props;
