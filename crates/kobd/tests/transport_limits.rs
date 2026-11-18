@@ -1,14 +1,16 @@
-//! Transport-level bounds of the read API and the x402 HTTP server (added 2026-10-06). Each test runs the
-//! scenario against short configured deadlines and shows the bound holds.
+//! Transport-level bounds of the read API and the x402 HTTP server. Each test runs the scenario
+//! against short configured deadlines and shows the bound holds.
 //!
-//! - read API: header-read deadline and connection caps (slow-header connections used to be held forever);
-//! - x402: a per-address connection cap (one host used to hold every slot of the global cap) and a write-stall deadline
-//!   (a client pipelining requests without reading used to park its slot forever);
+//! - read API: a header-read deadline and connection caps (a slow-header connection is not held
+//!   forever);
+//! - x402: a per-address connection cap (one host cannot hold every slot of the global cap) and a
+//!   write-stall deadline (a client pipelining requests without reading cannot park its slot
+//!   forever);
 //! - read API: IPv6 /64 rotation inside one site does not exhaust the global bucket;
-//! - WebSocket: a session that only auto-answers server Pings is closed at the idle limit, one sending `{"op":"ping"}`
-//!   stays.
-//! - node client: a small call refuses an answer above its own limit (16 MiB) as the frame header arrives; a UTXO query
-//!   takes it.
+//! - WebSocket: a session that only auto-answers server Pings is closed at the idle limit, one
+//!   sending `{"op":"ping"}` stays;
+//! - node client: a small call refuses an answer above its own limit (16 MiB) as the frame header
+//!   arrives; a UTXO query takes it.
 
 use axum::body::Body;
 use axum::extract::ConnectInfo;

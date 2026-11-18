@@ -1,8 +1,10 @@
-//! A store whose cursor the node pruned (a downtime longer than the node's retention) does not halt at the gap for good: the
-//! follower moves it to the node's pruning point, with the orders it holds reconciled with the node's UTXO set, and follows
-//! from there (`kobd::indexer::recovery`). The skipped chain is reported in the health.
+//! A store whose cursor the node pruned (a downtime longer than the node's retention) does not halt
+//! at the gap for good: the follower moves it to the node's pruning point, with the orders it holds
+//! reconciled with the node's UTXO set, and follows from there (`kobd::indexer::recovery`). The
+//! skipped chain is reported in the health.
 //!
-//! The same recovery serves the fast start's stores (`tests/fast_start.rs`); these are the normal start's.
+//! The same recovery serves the fast start's stores (`tests/fast_start.rs`); these are the normal
+//! start's.
 
 use std::time::{Duration, Instant};
 
@@ -77,10 +79,11 @@ fn node_utxo(spk: &[u8], cov: Hash32, tx: &SignedTx) -> (String, AddressUtxo) {
     )
 }
 
-/// The store follows the chain, stops, and the node prunes past its cursor before the next start. The follower used to halt
-/// there for good (state `gap`, nothing indexed, the operator's `kobd db rebase`); it now continues from the node's pruning point:
-/// the order the node still holds stays open, the one it no longer holds is closed with reason `gap`, an order created after
-/// the pruning point is indexed, and the health says that a stretch of chain was skipped.
+/// The store follows the chain, stops, and the node prunes past its cursor before the next start.
+/// The follower does not halt there (state `gap`, nothing indexed): it continues from the node's
+/// pruning point. The order the node still holds stays open, the one it no longer holds is closed
+/// with reason `gap`, an order created after the pruning point is indexed, and the health says that
+/// a stretch of chain was skipped.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_store_whose_cursor_the_node_pruned_follows_from_the_new_pruning_point() {
     let dir = tempfile::tempdir().unwrap();

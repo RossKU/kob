@@ -1,9 +1,11 @@
-//! Fast start (`kobd::faststart`): the first start of `run` trades on a store that follows the chain from the node's
-//! sink while the normal store indexes the history, then hands over to the normal one.
+//! Fast start (`kobd::faststart`): the first start of `run` trades on a store that follows the
+//! chain from the node's sink while the normal store indexes the history, then hands over to the
+//! normal one.
 //!
-//! The mock node serves both followers; the normal store's node client is gated (it applies nothing until the test opens
-//! the gate), so "the matcher plans on the tip store" and "the matcher plans on the full store" are told apart by which orders
-//! they can see: the book created before the start is in the full store only.
+//! The mock node serves both followers; the normal store's node client is gated (it applies nothing
+//! until the test opens the gate), so "the matcher plans on the tip store" and "the matcher plans
+//! on the full store" are told apart by which orders they can see: the book created before the
+//! start is in the full store only.
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -381,9 +383,10 @@ fn only_an_enabled_first_start_at_the_pruning_point_is_a_fast_start() {
     assert_eq!(faststart::plan(&cfg), Plan::Normal);
 }
 
-/// The node moves its pruning point past the full store's cursor before the store has applied anything (a live finding on
-/// testnet-10: a start at the pruning point is hit by the node pruning its oldest data): the full store restarts from the new
-/// pruning point instead of halting at a gap for good, and the fast start still hands over.
+/// The node moves its pruning point past the full store's cursor before the store has applied
+/// anything (a start at the pruning point is hit by the node pruning its oldest data): the full
+/// store restarts from the new pruning point instead of halting at a gap for good, and the fast
+/// start still hands over.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_full_store_whose_start_the_node_pruned_restarts_from_the_new_pruning_point() {
     let dir = tempfile::tempdir().unwrap();

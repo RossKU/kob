@@ -1,6 +1,7 @@
-//! Node URLs that carry credentials: every flag that takes one has an environment (or configuration-file) alternative, so the
-//! URL need not be on the command line (`ps` shows arguments to every local user), and what the process prints names the node
-//! by its redacted URL (scheme, host and port).
+//! Node URLs that carry credentials: every flag that takes one has an environment (or
+//! configuration-file) alternative, so the URL need not be on the command line (`ps` shows
+//! arguments to every local user), and what the process prints names the node by its redacted URL
+//! (scheme, host and port).
 
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;

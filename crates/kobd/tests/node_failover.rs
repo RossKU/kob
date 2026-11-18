@@ -1,10 +1,12 @@
-//! The Indexer's node failover (`rpc::failover`): the configured node first, the fallback (in production the public pair)
-//! when it stops answering, and back once it is healthy. Mock nodes: one chain served by both tiers (the database must equal
-//! a clean replay across both switches), a fallback whose chain diverges deep below the cursor (refused, nothing applied, the
-//! cursor stays), one that diverges by a shallow reorg (applied as any reorg), and one that does not know the cursor (never
-//! switched to). And the pair's health watch (`rpc::multi`, `rpc::judge`): both nodes of a pair are judged the same way, a
-//! named node that is behind or on another network raises an alarm and a cross-checking one is cut off until it recovers; a
-//! public node (a resolver entry) that is behind or on another network is replaced, the authority as well as the
+//! The Indexer's node failover (`rpc::failover`): the configured node first, the fallback (in
+//! production the public pair) when it stops answering, and back once it is healthy. Mock nodes:
+//! one chain served by both tiers (the database must equal a clean replay across both switches), a
+//! fallback whose chain diverges deep below the cursor (refused, nothing applied, the cursor
+//! stays), one that diverges by a shallow reorg (applied as any reorg), and one that does not know
+//! the cursor (never switched to). And the pair's health watch (`rpc::multi`, `rpc::judge`): both
+//! nodes of a pair are judged the same way, a named node that is behind or on another network
+//! raises an alarm and a cross-checking one is cut off until it recovers; a public node (a resolver
+//! entry) that is behind or on another network is replaced, the authority as well as the
 //! cross-checking one.
 
 mod common;
@@ -401,10 +403,11 @@ async fn a_public_node_that_is_behind_or_on_another_network_is_replaced_whicheve
     a.push_empty(20);
     b.push_empty(20);
     let m = pair(("resolver", &a), ("resolver:2", &b));
-    // One health check on the test's task, no follower request: a request also starts the watch on a task of its own, and a
-    // mock answers the same whichever host its entry stands for, so a second check that ran after the replacement was
-    // resolved judged the mock's answer as the new host's and replaced that one too (CI, 2026-11-11). A real client always
-    // asks the entry's current node, and a report about a node the entry no longer uses changes nothing (`rpc::judge::act`).
+    // One health check on the test's task, no follower request: a request also starts the watch on
+    // a task of its own, and a mock answers the same whichever host its entry stands for, so a
+    // second check that ran after the replacement was resolved would judge the mock's answer as the
+    // new host's and replace that one too. A real client always asks the entry's current node, and
+    // a report about a node the entry no longer uses changes nothing (`rpc::judge::act`).
     m.check_health().await;
     let st = m.board().snapshot();
     assert_eq!(st[1].replaced, 1, "{st:?}");
@@ -476,10 +479,10 @@ async fn a_node_that_over_reports_its_daa_never_evicts_its_honest_partner() {
     }
 }
 
-/// Audit round 3 R3-M-2: an authority that over-reports its DAA over its real sink is held to account. The DAG denies the
-/// lead: its sink, a block the honest node places in its own DAG too, is far below the virtual DAA score it reports, as both of
-/// them report that block. Two checks in a row are a contradiction, it is given up, and the honest node is the authority at
-/// once (never suspect meanwhile).
+/// An authority that over-reports its DAA over its real sink is held to account. The DAG denies the
+/// lead: its sink, a block the honest node places in its own DAG too, is far below the virtual DAA
+/// score it reports, as both of them report that block. Two checks in a row are a contradiction, it
+/// is given up, and the honest node is the authority at once (never suspect meanwhile).
 #[tokio::test(flavor = "multi_thread")]
 async fn an_authority_whose_lead_the_dag_denies_is_replaced() {
     use kobd::rpc::resolver;
@@ -508,10 +511,11 @@ fn test_clock() -> (Arc<AtomicU64>, impl Fn() -> std::time::Instant + Send + Syn
     (offset, move || t0 + Duration::from_secs(o.load(Ordering::Relaxed)))
 }
 
-/// Audit round 3 R3-M-2 (the founder: "nodes must be compared by the tip structure", "block time is a lie"): an authority whose
-/// sink stands still while it still reports synced never confirms a lead (it cannot learn the other node's blocks). Its sink
-/// has not changed for two minutes of the local monotonic clock while the other node's advances: it stopped advancing, and it
-/// is given up like a node that lags. No block timestamp is read. Both standing still (the network stalls) is nothing.
+/// Nodes are compared by the tip structure, not by block time. An authority whose sink stands still
+/// while it still reports synced never confirms a lead (it cannot learn the other node's blocks).
+/// Its sink has not changed for two minutes of the local monotonic clock while the other node's
+/// advances: it stopped advancing, and it is given up like a node that lags. No block timestamp is
+/// read. Both standing still (the network stalls) is nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_frozen_authority_whose_sink_stands_still_is_given_up() {
     use kobd::rpc::resolver;
@@ -549,9 +553,10 @@ async fn a_frozen_authority_whose_sink_stands_still_is_given_up() {
     assert_eq!(resolver::replacements("resolver") + resolver::replacements("resolver:2"), before);
 }
 
-/// Audit round 4 R4-L-3: a named cross-checking node whose sink stands still keeps its "stopped advancing" alarm for as long as
-/// it stays frozen, through the lag streak's refutation (its claims are never learned) that used to end it, and the alarm ends
-/// once its sink moves again (the alarm ends at the first fine check here, after a minute of them in production).
+/// A named cross-checking node whose sink stands still keeps its "stopped advancing" alarm for as
+/// long as it stays frozen, through the lag streak's refutation (its claims are never learned), and
+/// the alarm ends once its sink moves again (the alarm ends at the first fine check here, after a
+/// minute of them in production).
 #[tokio::test]
 async fn a_named_frozen_node_keeps_its_alarm_while_it_stays_frozen() {
     let _g = pair_serial().await;
@@ -597,9 +602,10 @@ async fn a_named_frozen_node_keeps_its_alarm_while_it_stays_frozen() {
     kobd::rpc::judge::set_alarm_clear_after(kobd::rpc::judge::ALARM_CLEAR_AFTER);
 }
 
-/// Audit round 4 R4-L-4: a node seen for the first time (here one that answers again after a while) has no vote on whether the
-/// chain advances until its sink has been seen to change: during a network stall (neither sink moves) the node that stood
-/// still longer is not judged frozen next to it. Once the newcomer's sink moves and the other's does not, it is.
+/// A node seen for the first time (here one that answers again after a while) has no vote on
+/// whether the chain advances until its sink has been seen to change: during a network stall
+/// (neither sink moves) the node that stood still longer is not judged frozen next to it. Once the
+/// newcomer's sink moves and the other's does not, it is.
 #[tokio::test]
 async fn a_node_seen_for_the_first_time_does_not_count_as_advancing() {
     let _g = pair_serial().await;
