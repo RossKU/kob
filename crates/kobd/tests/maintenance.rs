@@ -1,7 +1,8 @@
-//! Operator maintenance (`kobd::maintenance`): the operator's own token UTXOs (earlier routes kept the
-//! remainder of their purchases of B there; tokens may still reach the operator's key), a 10 KAS carrier each, are merged,
-//! freeing the carriers, or sold into a bid the matcher's tick left when that pays more than the fee; per token, bounded per
-//! tick, never touching what pending transactions spend. Every job is engine-validated.
+//! Operator maintenance (`kobd::maintenance`): the operator's own token UTXOs (earlier routes kept
+//! the remainder of their purchases of B there; tokens may still reach the operator's key), a 10
+//! KAS carrier each, are merged, freeing the carriers, or sold into a bid the matcher's tick left
+//! when that pays more than the fee; per token, bounded per tick, never touching what pending
+//! transactions spend. Every job is engine-validated.
 
 #[path = "matcher_common/mod.rs"]
 mod common;

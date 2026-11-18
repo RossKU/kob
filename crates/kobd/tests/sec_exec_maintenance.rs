@@ -1,6 +1,6 @@
-//! Security fix M9 (`kobd::maintenance`): a merge never puts the operator's funding into a token carrier. A KRON merge's
-//! funding input is only the presence and comes back whole; the merged carrier is what the merged carriers pay after the
-//! fee, or there is no merge.
+//! Security test of the maintenance jobs (`kobd::maintenance`): a merge never puts the operator's
+//! funding into a token carrier. A KRON merge's funding input is only the presence and comes back
+//! whole; the merged carrier is what the merged carriers pay after the fee, or there is no merge.
 
 #[path = "matcher_common/mod.rs"]
 mod common;

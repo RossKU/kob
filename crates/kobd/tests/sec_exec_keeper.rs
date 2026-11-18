@@ -1,6 +1,6 @@
-//! Security fixes of the keepers and the runner (M8, L10, L11): a keeper request read back from the in-flight journal is
-//! signed only when it pays the operator alone; the pause file is checked again right before each submit; an unreadable
-//! subsidy window grants no subsidy.
+//! Security tests of the keepers and the runner: a keeper request read back from the in-flight
+//! journal is signed only when it pays the operator alone; the pause file is checked again right
+//! before each submit; an unreadable subsidy window grants no subsidy.
 
 #[path = "matcher_common/mod.rs"]
 mod common;
@@ -55,8 +55,9 @@ fn refund_of(a: &mut Action) -> &mut kob_protocol::build::RefundOrder {
     }
 }
 
-/// M8: `reprice` signs a journaled request only when every funding input and the change are the operator's. A request with
-/// no funding and someone else's change never gets the operator's spare coin.
+/// `reprice` signs a journaled request only when every funding input and the change are the
+/// operator's. A request with no funding and someone else's change never gets the operator's spare
+/// coin.
 #[test]
 fn a_replacement_never_pays_change_or_funding_to_another_key() {
     let j = kill();
@@ -170,8 +171,8 @@ fn tracked(j: &Job) -> Tracked {
     }
 }
 
-/// M8: at a restart a journaled keeper job whose request pays another key is dropped (its transaction is still followed);
-/// the operator's own is kept.
+/// At a restart a journaled keeper job whose request pays another key is dropped (its transaction
+/// is still followed); the operator's own is kept.
 #[test]
 fn a_journaled_job_that_pays_another_key_is_dropped_at_the_start() {
     let j = kill();
@@ -199,7 +200,8 @@ fn a_journaled_job_that_pays_another_key_is_dropped_at_the_start() {
     }
 }
 
-/// L10: the pause file set during a step (here while the step reads its funding) stops the submits that follow.
+/// The pause file set during a step (here while the step reads its funding) stops the submits that
+/// follow.
 #[tokio::test]
 async fn a_pause_set_during_the_step_stops_its_submits() {
     let dir = tempfile::tempdir().unwrap();
@@ -222,7 +224,8 @@ async fn a_pause_set_during_the_step_stops_its_submits() {
     assert!(rep.submitted.is_empty() && r.tracker.txs.is_empty());
 }
 
-/// L11: a subsidy window file that does not parse grants no subsidy at the start (not a fresh budget), and is kept as is.
+/// A subsidy window file that does not parse grants no subsidy at the start (not a fresh budget),
+/// and is kept as is.
 #[test]
 fn a_corrupt_subsidy_window_grants_nothing_at_the_start() {
     let dir = tempfile::tempdir().unwrap();

@@ -1,5 +1,5 @@
-//! Audit 2026-10-30 E2 regression: a node-level `Rejected` names no order, so the batch is searched by halves across ticks
-//! instead of backing off every order of it.
+//! Regression for E2 (`docs/security/AUDIT-2026-10.md`): a node-level `Rejected` names no order, so
+//! the batch is searched by halves across ticks instead of backing off every order of it.
 
 #[path = "matcher_common/mod.rs"]
 mod common;

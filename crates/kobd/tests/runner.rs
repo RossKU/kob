@@ -245,8 +245,9 @@ async fn unknown_submit_outcome_survives_repeated_transport_errors_until_the_nod
     assert_eq!(node.submits(), 3);
     assert_eq!(r.tracker.txs.len(), 1);
     assert!(r.tracker.txs.values().all(|t| t.unconfirmed));
-    // never accepted: not given up at the pending timeout while nobody knows (audit 2026-11-11 M-2): the node may hold it, and
-    // forgetting it would free its inputs for a batch the node refuses; resent until the node answers
+    // never accepted: not given up at the pending timeout while nobody knows: the node may hold it,
+    // and forgetting it would free its inputs for a batch the node refuses; resent until the node
+    // answers
     node.0.lock().unwrap().submit_replies.push_back(Err("transport: down".into()));
     node.0.lock().unwrap().daa = NOW + 5 + 700;
     let rep = r.step().await.unwrap();
@@ -393,7 +394,7 @@ fn estimate(priority: f64, normal: f64, low: f64) -> Value {
 #[tokio::test]
 async fn the_tick_is_priced_from_the_node_estimate_and_falls_back_to_the_floor() {
     let node = MockNode::new(NOW + 5);
-    // the soak's congestion of 10-02
+    // a fee estimate in a congested period
     node.0.lock().unwrap().fee = Some(estimate(250.4, 194.0, 115.0));
     let cfg = RunConfig {
         roles: M,
@@ -484,8 +485,9 @@ async fn a_lost_race_lowers_the_share_and_the_bound_still_plans_the_crossing() {
     assert!(m.contains("kob_select_units_total"), "{m}");
 }
 
-/// Audit 2026-11-11 M-2: a mempool double spend that names the operator's own funding coin (a transaction this process does not
-/// track holds it) backs off no order: the coin is set aside and the next step plans the same crossing over the other coin.
+/// A mempool double spend that names the operator's own funding coin (a transaction this process
+/// does not track holds it) backs off no order: the coin is set aside and the next step plans the
+/// same crossing over the other coin.
 #[tokio::test]
 async fn a_funding_coin_a_mempool_transaction_holds_is_set_aside_not_the_orders() {
     let node = MockNode::new(NOW + 5);
@@ -519,8 +521,9 @@ async fn a_funding_coin_a_mempool_transaction_holds_is_set_aside_not_the_orders(
     assert!(r.tracker.held.is_empty());
 }
 
-/// Audit 2026-11-11 M-14: the local clock is compared with the chain's; beyond the bound the day orders near their deadline are
-/// not filled (whichever clock is right, a fill could fall after the maker's deadline), and the alarm is in the metrics.
+/// The local clock is compared with the chain's; beyond the bound the day orders near their
+/// deadline are not filled (whichever clock is right, a fill could fall after the maker's
+/// deadline), and the alarm is in the metrics.
 #[tokio::test]
 async fn a_day_order_near_its_deadline_is_left_alone_while_the_clock_is_off() {
     let now_ms = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
@@ -543,7 +546,7 @@ async fn a_day_order_near_its_deadline_is_left_alone_while_the_clock_is_off() {
     let rep = r.step().await.unwrap();
     assert!(rep.built.is_empty(), "the day order is left alone");
     assert!(r.clock_alarm() && r.clock_skew.is_some_and(|s| (44..=46).contains(&s)), "{:?}", r.clock_skew);
-    // audit round 4 R4-L-5: two minutes ahead, far beyond the bound, is judged at the first sample after the start
+    // two minutes ahead, far beyond the bound, is judged at the first sample after the start
     node.0.lock().unwrap().tip_ms = Some(now_ms() - 120_000);
     let mut r = runner(node.clone(), b, M);
     r.cfg.dry_run = true;
@@ -568,9 +571,10 @@ async fn a_day_order_near_its_deadline_is_left_alone_while_the_clock_is_off() {
     assert!(!r.clock_alarm());
 }
 
-/// The founder: "block time is a lie". One node's timestamp never decides: a sample takes the node tip nearest the local
-/// clock (a node an hour off, or one that stopped advancing, is outvoted by one that agrees), and the median of the samples
-/// is judged, so one odd block (a single lying sample) neither raises the alarm nor holds day orders back.
+/// Block time is not trusted. One node's timestamp never decides: a sample takes the node tip
+/// nearest the local clock (a node an hour off, or one that stopped advancing, is outvoted by one
+/// that agrees), and the median of the samples is judged, so one odd block (a single lying sample)
+/// neither raises the alarm nor holds day orders back.
 #[test]
 fn a_lying_block_timestamp_neither_raises_the_clock_alarm_nor_holds_day_orders() {
     use kobd::matcher::run::{chain_skew_secs, median};
@@ -585,8 +589,9 @@ fn a_lying_block_timestamp_neither_raises_the_clock_alarm_nor_holds_day_orders()
     assert_eq!(median(&v(&[])), None);
 }
 
-/// Audit round 4 R4-L-5: the alarm does not blame the local clock when every node is behind it and the chain stands still (a
-/// stall or a partition): a sample grows with the local time then, while a clock that is merely off keeps it level.
+/// The alarm does not blame the local clock when every node is behind it and the chain stands still
+/// (a stall or a partition): a sample grows with the local time then, while a clock that is merely
+/// off keeps it level.
 #[test]
 fn the_clock_alarm_names_the_nodes_when_the_chain_stands_still() {
     use kobd::matcher::run::{clock_cause, ClockCause};
@@ -608,8 +613,9 @@ fn the_clock_alarm_names_the_nodes_when_the_chain_stands_still() {
     assert!(ClockCause::ClockAhead.describe(120).contains("set it: NTP"));
 }
 
-/// Audit round 2 R2-M-2: a batch carries the deadline of the day order it fills, and a resend is checked against it: once the
-/// deadline is within the clock margin, the batch is not sent again (counted in the metrics), its inputs stay reserved.
+/// A batch carries the deadline of the day order it fills, and a resend is checked against it: once
+/// the deadline is within the clock margin, the batch is not sent again (counted in the metrics),
+/// its inputs stay reserved.
 #[tokio::test]
 async fn a_batch_past_a_day_orders_deadline_is_not_sent_again() {
     let node = MockNode::new(NOW + 5);
@@ -632,8 +638,8 @@ async fn a_batch_past_a_day_orders_deadline_is_not_sent_again() {
     assert!(m.contains("kob_matcher_resend_dropped_total 1"), "{m}");
 }
 
-/// Audit round 2 R2-L-7: with `report_funds` off (a read API other hosts can reach) the balance is left out of what the book
-/// source serves (`/v1/health`, `/v1/metrics`), and the rest stays.
+/// With `report_funds` off (a read API other hosts can reach) the balance is left out of what the
+/// book source serves (`/v1/health`, `/v1/metrics`), and the rest stays.
 #[test]
 fn the_funding_series_are_left_out_for_a_public_listener() {
     let m = "# HELP kob_matcher_funding_sompi x\n# TYPE kob_matcher_funding_sompi gauge\nkob_matcher_funding_sompi 5\n\
@@ -655,8 +661,8 @@ impl kobd::matcher::run::BookSource for Halted {
     }
 }
 
-/// Audit 2026-11-11 M-4: a halted indexer (or a dead read API) ends the runner with an error once it lasts (so a supervisor
-/// restarts the process), at once for a dead API.
+/// A halted indexer (or a dead read API) ends the runner with an error once it lasts (so a
+/// supervisor restarts the process), at once for a dead API.
 #[tokio::test]
 async fn a_halted_book_source_ends_the_run_with_an_error() {
     for (now, wait) in [(true, std::time::Duration::from_secs(3600)), (false, std::time::Duration::from_millis(300))] {

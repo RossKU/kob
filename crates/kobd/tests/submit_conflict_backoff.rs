@@ -1,7 +1,8 @@
-//! A mempool double spend of one input of a matcher batch (an order's maker cancels it just before the matcher submits: the
-//! book is read from accepted blocks only) makes the node refuse the whole transaction. Only the order whose input the
-//! node names backs off; the other orders of the batch did nothing wrong and are planned again at once. A refusal that
-//! names no order's input still backs off every order of the transaction.
+//! A mempool double spend of one input of a matcher batch (an order's maker cancels it just before
+//! the matcher submits: the book is read from accepted blocks only) makes the node refuse the whole
+//! transaction. Only the order whose input the node names backs off; the other orders of the batch
+//! did nothing wrong and are planned again at once. A refusal that names no order's input still
+//! backs off every order of the transaction.
 
 #[path = "matcher_common/mod.rs"]
 mod common;
