@@ -531,8 +531,10 @@ pub fn revert(conn: &Connection, seq: i64) -> DbResult<usize> {
     Ok(n)
 }
 
-/// Most candidates kept: beyond it the oldest go first (security review 2026-11-17 L5). At
-/// [`MAX_CANDIDATE_BYTES`] each that is at most 256 MiB; a KOB preparation is a few hundred bytes.
+/// Most candidates kept. Beyond it the oldest go first.
+///
+/// At [`MAX_CANDIDATE_BYTES`] each that is at most 256 MiB. A KOB preparation is a few hundred
+/// bytes.
 pub const MAX_CANDIDATES: i64 = 8_192;
 
 /// Deletes the candidates accepted before DAA `before` that no stored declaration names, and the

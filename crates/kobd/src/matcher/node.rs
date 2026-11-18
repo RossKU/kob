@@ -975,7 +975,8 @@ mod tests {
         }
     }
 
-    /// L8: with several nodes no one node sets the fee: bucket by bucket the lower median, a failing node left out.
+    /// With several nodes no one node sets the fee. Each bucket is the lower median of the nodes,
+    /// and a failing node is left out.
     #[tokio::test]
     async fn the_fee_estimate_is_the_median_of_the_nodes() {
         let e = |p: f64, n: f64, l: f64| Ok(crate::fee::FeeEstimate { priority: p, normal: n, low: l });

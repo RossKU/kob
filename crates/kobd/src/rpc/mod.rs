@@ -77,9 +77,10 @@ pub const MAX_MESSAGE_BYTES: usize = 1 << 30;
 /// The UTXO queries and the windows keep their own limits.
 pub const SMALL_CALL_MAX_BYTES: usize = 16 << 20;
 
-/// The largest acceptance-data answer (`getVirtualChainFromBlock` with transaction ids), 64 MiB:
-/// a cross-check window is tens to hundreds of KB, and a catch-up of hours stays far below it
-/// (security review 2026-11-17 L6: one node could make the client buffer 1 GiB).
+/// The largest acceptance-data answer (`getVirtualChainFromBlock` with transaction ids), 64 MiB.
+///
+/// A cross-check window is tens to hundreds of KB, and a catch-up of hours stays far below it.
+/// Without this cap one node could make the client buffer 1 GiB.
 pub const CHAIN_IDS_MAX_BYTES: usize = 64 << 20;
 
 /// A transport error that is the request's size limit ([`RpcError::TooLarge`]), else
@@ -167,8 +168,7 @@ pub trait ChainSource: Send + Sync + 'static {
         self.sink_blue_score()
     }
     /// The cross-checking node's unspent outputs of the given addresses, when this source has one
-    /// (`None`: a single node). A rebase closes an order only when neither node has its output
-    /// (security review 2026-11-17 M6).
+    /// (`None`: a single node). A rebase closes an order only when neither node has its output.
     fn cross_check_utxos(&self, addresses: &[String]) -> impl Future<Output = Result<Option<Vec<AddressUtxo>>, RpcError>> + Send {
         async move {
             let _ = addresses;

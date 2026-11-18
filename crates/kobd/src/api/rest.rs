@@ -270,7 +270,7 @@ pub async fn pair_candles(State(app): State<Arc<App>>, Path((base, quote)): Path
     }
     let n = limit(&q, "limit", 500, 1500)?;
     let tokens = app.state.tokens.clone();
-    // cached as the token candles are (security review 2026-11-17 L3)
+    // Cached as the token candles are.
     let key = format!("pair-candles {base} {quote} {interval} {from:?} {to:?} {n}");
     cached(&app, key, move |c| {
         let decimals = (reads::token_decimals(c, &tokens, &base)?, reads::token_decimals(c, &tokens, &quote)?);
@@ -323,8 +323,7 @@ pub async fn orders(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult 
     };
     let n = limit(&q, "limit", 50, app.state.cfg.max_page_size)?;
     let ctx = app.ctx();
-    // through the response cache by the parsed filter: junk parameters do not defeat it (security
-    // review 2026-11-17 M1)
+    // Cached by the parsed filter, so junk parameters do not defeat the cache.
     let key = format!("orders {maker:?} {token:?} {status:?} {cursor:?} {n} {:?} {:?}", ctx.node_daa, ctx.now_unix);
     let filter = OrderFilter { maker, token, status };
     let tokens = app.state.tokens.clone();

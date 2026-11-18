@@ -566,8 +566,7 @@ pub async fn reconcile_open_orders<S: ChainSource>(
     let addrs: Vec<String> = addr_of.values().cloned().collect();
     let utxos = fetch_utxos(source, &addrs).await?;
     // With a cross-checking node, an output either node has is kept, and only an output both
-    // report is adopted: the authority alone neither closes nor adopts (security review
-    // 2026-11-17 M6).
+    // report is adopted. The authority alone neither closes nor adopts.
     let mut cross: Option<HashSet<(Hash32, u32)>> = None;
     for chunk in addrs.chunks(50) {
         if let Some(v) = source.cross_check_utxos(chunk).await? {

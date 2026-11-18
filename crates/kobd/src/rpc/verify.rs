@@ -398,7 +398,7 @@ mod tests {
 
     /// A different chain block less than `deep_daa` below the newest chain block both report is
     /// lag (`at_tip`). A deeper one, a different accepted set, or a deep reorg seen by one side only
-    /// are contradictions of agreed history. Blocks only the authority reports are not kept (H1).
+    /// are contradictions of agreed history. Blocks only the authority reports are not kept.
     #[test]
     fn a_disagreement_near_the_tip_is_lag_and_a_deep_one_a_contradiction() {
         const DEEP: u64 = 100;
@@ -422,7 +422,7 @@ mod tests {
         // ends at position 5, so a differing block at 4 is the tip.
         let a = agreement(&raw(&long), &ids(&[1, 2, 3, 4, 99, 6]), DEEP);
         assert_eq!((a.keep, a.at_tip), (4, true));
-        // H1: the other node is behind. Only what both report is kept, the rest waits.
+        // The other node is behind. Only what both report is kept, the rest waits.
         let a = agreement(&raw(&[1, 2, 3]), &ids(&[1, 2]), DEEP);
         assert_eq!((a.keep, a.contradiction, a.at_tip), (2, None, false));
         let a = agreement(&raw(&[1, 2, 3, 99]), &ids(&[1, 2, 3]), DEEP);

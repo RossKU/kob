@@ -10,7 +10,7 @@
 //! [`check`] is the gate every order state passes before it is listed, planned or kept. It checks:
 //!
 //! - the delivery rules (`kob_protocol::state::AnyState::check_delivery`, with the `topupTip`
-//!   cap of audit S4),
+//!   cap),
 //! - the protocol's numeric gate (`kob_protocol::state::AnyState::check_numbers`: `scale` a power
 //!   of ten in `1..=10^9`, every full fill worth less than `2^62` quote units),
 //! - the covenant's own acceptance rules (`minFill >= 0`, a bid's `minFill > 0`, `tip >= 0`,
@@ -470,8 +470,8 @@ pub fn check(state: &AnyState) -> Result<(), String> {
         }
     }
     if c.0.is_ok() && state.check_delivery(false).is_err() {
-        // The delivery rules (bid-delivery-spec §2), the `topupTip` cap of S4 included: an order
-        // placed before the cap, or a continuation of one, is not listed or planned either.
+        // The delivery rules of bid-delivery-spec §2, the `topupTip` cap included. An order over
+        // the cap, or a continuation of one, is not listed or planned, whenever it was placed.
         c.fail("delivery", "outside_the_delivery_rules");
     }
     if c.0.is_ok() && kob_protocol::build::order_programs(state).is_err() {

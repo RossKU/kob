@@ -63,7 +63,7 @@
 //! block at every position and the same accepted transactions in it.
 //!
 //! Only what both report is applied. Chain blocks the other node does not report yet wait for the
-//! next poll (H1 of the 2026-11 review: they used to be applied unvouched).
+//! next poll.
 //!
 //! - The authority alone never makes the store rewind or halt. Its `cannot find header` or
 //!   `retention root` about the cursor, and its "unknown" for a stored block in the walk back,
@@ -2999,7 +2999,7 @@ mod tests {
         let (a, b) = (super::super::resolver::endpoint("resolver").unwrap(), super::super::resolver::endpoint("resolver:2").unwrap());
 
         // The other node is a block behind. Nothing is contradicted, and only the blocks both
-        // report apply (H1). The third waits for the next poll.
+        // report apply. The third waits for the next poll.
         let m = pair(Fixed::new(&[1, 2, 3], Ok(&[])), Fixed::new(&[], Ok(&[1, 2])));
         assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 2);
         assert_eq!(m.board.snapshot()[1].disagreements, 0);
@@ -3156,7 +3156,7 @@ mod tests {
     }
 
     /// B: the cross-checking node does not know a cursor the authority continues deep: a
-    /// contradiction (H1), settled by a third node. Near the tip it is only lag, and the answers
+    /// contradiction, settled by a third node. Near the tip it is only lag, and the answers
     /// wait.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]

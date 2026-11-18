@@ -75,8 +75,9 @@ const fn public(secs: u32) -> Policy {
     Policy::Public { secs, stale: 0 }
 }
 
-/// A query component as the handler reads it: `+` is a space and `%XX` a byte (security review
-/// 2026-11-17 L1: `t%6F=` is `to=`).
+/// A query component as the handler reads it: `+` is a space and `%XX` a byte.
+///
+/// So `t%6F=` is `to=`, as the handler sees it.
 fn decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
@@ -215,7 +216,7 @@ mod tests {
             let (old, now) = (NOW - 86_400_000, NOW);
             assert_eq!(get(p, &format!("to={old}&to={now}")), open, "a repeated `to`: the handler reads the last one");
             assert_eq!(get(p, &format!("to={now}&to={old}")), open, "a repeated `to` is never cached long");
-            // the handler decodes the keys: `t%6F` is a second `to` (security review 2026-11-17 L1)
+            // The handler decodes the keys, so `t%6F` is a second `to`.
             assert_eq!(get(p, &format!("to={old}&t%6F={now}")), open, "an encoded repeated `to`");
             assert_eq!(get(p, &format!("%74o={old}")), closed, "an encoded `to` alone is read as `to`");
             assert_eq!(get(p, "to=1%2B2"), open, "a value that decodes to no number");
