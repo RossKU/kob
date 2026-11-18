@@ -259,7 +259,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for i in $(seq 1 120); do
+          for i in $(seq 1 240); do
             run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&per_page=1" --jq '.workflow_runs[0] | "\(.status) \(.conclusion)"')
             echo "ci: $run"
             case "$run" in
@@ -268,7 +268,7 @@ jobs:
             esac
             sleep 30
           done
-          echo "::error::ci did not finish within an hour"; exit 1
+          echo "::error::ci did not finish within two hours"; exit 1
 
       # the deployment: config.json from the repository variables
       - name: config.json from the repository variables
