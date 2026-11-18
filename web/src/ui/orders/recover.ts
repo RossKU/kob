@@ -1,8 +1,10 @@
-// Recover: export / import of the maker's placement records (the fallback that keeps cancel working when the indexer disappears).
-// Two formats, both re-validated with kob-wasm on import (kob/records.ts): the indexer's maker-recovery file and the fuller KOB backup.
+// Recover: export and import of the maker's placement records. It is the fallback that keeps cancel
+// working when the indexer disappears. There are two formats, both re-validated with kob-wasm on
+// import (kob/records.ts): the indexer's maker-recovery file and the fuller KOB backup.
 //
-// The placing transactions are not stored by the app (records only), so the KOB backup written here carries records WITHOUT their tx
-// (`txid` / `output` null): importBackup then applies the same semantic checks as for an indexer file (template, canonical state, maker).
+// The app does not store the placing transactions, only records. The KOB backup written here
+// therefore carries records without their tx (`txid` and `output` null). `importBackup` then
+// applies the same semantic checks as for an indexer file: template, canonical state and maker.
 import {
   exportBackup, exportIndexerRecovery, importBackup, importIndexerRecovery, type ImportResult, type PlacementRecord, type RecordStore,
 } from '../../kob/records';
@@ -17,7 +19,7 @@ export function recoveryFileText(records: readonly PlacementRecord[], network: s
   return jsonText(exportIndexerRecovery([...records], network));
 }
 
-/** KOB backup text: every record of the network, without placing txs (see file header). */
+/** KOB backup text with every record of the network, without placing txs (see file header). */
 export function backupFileText(records: readonly PlacementRecord[], network: string, now: Date | number = new Date()): string {
   const bare = records.map((r) => ({ ...r, txid: null, output: null }));
   return jsonText(exportBackup(bare, {}, network, now));
@@ -25,7 +27,7 @@ export function backupFileText(records: readonly PlacementRecord[], network: str
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** Which format a parsed file is (by its marker fields), or null. */
+/** Which format a parsed file is, by its marker fields, or null. */
 export function detectImportKind(json: unknown): ImportKind | null {
   if (!isObj(json)) return null;
   if (json.format === 'kob-backup') return 'kob-backup';
@@ -51,11 +53,14 @@ export function parseImport(text: string, kob: KobWasm, o: { network: string; ma
 
 export interface ApplyResult {
   added: number;
-  /** already stored (same covenant id): the stored record wins, it may carry more facts (placing tx, label) */
+  /**
+   * Already stored, with the same covenant id. The stored record wins, because it may carry more
+   * facts, such as the placing tx and label.
+   */
   kept: number;
 }
 
-/** Stores the accepted records; an existing record of the same order is kept as it is. */
+/** Stores the accepted records. An existing record of the same order is kept as it is. */
 export async function applyImport(store: RecordStore, result: ImportResult): Promise<ApplyResult> {
   const have = new Set((await store.list()).map((r) => r.covenantId));
   let added = 0;

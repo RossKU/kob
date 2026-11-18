@@ -1,8 +1,11 @@
-// The wallet's balances on the Portfolio page, read once for the page: the free balances (node, token tracker), combined with the live orders and the
-// strays (balances-data.ts), and each held token's last price (the indexer's stats), so the summary strip over the tabs and the Balances tab show the
-// same figures. A token without a last price has no value in KAS (null): the total then counts KAS and the priced tokens, and says so.
-// The free balances are read as soon as the key is known, beside the list (not after it), and a reload of the list reads them again coalesced:
-// a refresh never aborts a read in flight (on a busy market the list reloads every few seconds, and the first read would never get through).
+// The wallet's balances on the Portfolio page, read once for the page. They are the free balances
+// (node and token tracker) combined with the live orders and the strays (balances-data.ts), and
+// each held token's last price from the indexer's stats. The summary strip over the tabs and the
+// Balances tab therefore show the same figures. A token without a last price has no value in KAS
+// (null). The total then counts KAS and the priced tokens, and says so. The free balances are read
+// as soon as the key is known, beside the list and not after it. A reload of the list reads them
+// again, coalesced. A refresh never aborts a read in flight, because on a busy market the list
+// reloads every few seconds and the first read would never get through.
 import { useMemo, useRef } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import type { Hex } from '../../kob/types';
@@ -14,7 +17,8 @@ import type { OrdersData } from './orders-data';
 
 export function useWalletBalances(data: OrdersData | null, pubkey: Hex | undefined, version: unknown) {
   const services = useServices();
-  // each load of the list after the first (not each background update of it): a coalesced re-read
+  // Each load of the list after the first, and not each background update of it, gives a coalesced
+  // re-read.
   const loads = useRef<{ last: unknown; n: number }>({ last: null, n: 0 });
   const v = version ?? data;
   if (v !== loads.current.last) {
@@ -46,7 +50,11 @@ export function useWalletBalances(data: OrdersData | null, pubkey: Hex | undefin
     },
     [tokenKey, !!services.indexer],
   );
-  /** A token balance's value in KAS (sompi) at its market's last price: free, in orders, strays and locked by its creator lock (the wallet's, later); null without a last price. */
+  /**
+   * A token balance's value in KAS (sompi) at its market's last price. It covers free tokens,
+   * tokens in orders, strays and tokens locked by its creator lock, which is the wallet's. It is
+   * null without a last price.
+   */
   const valueOf = (b: TokenBalance): bigint | null => {
     const p = prices.data?.get(b.token);
     return p ? quoteOf(b.free + b.escrowed + b.bought + b.strays + (b.locked?.amount ?? 0n), p.last, p.basis, 'down') : null;
