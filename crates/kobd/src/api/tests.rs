@@ -735,7 +735,7 @@ where
     }
 }
 
-/// Security review 2026-11-17 L2: with one named CORS origin, a WebSocket from another site's page is refused; one without
+/// With one named CORS origin, a WebSocket from another site's page is refused; one without
 /// `Origin` (a script) or from the app is served.
 #[tokio::test]
 async fn a_websocket_from_another_sites_page_is_refused() {
@@ -2371,7 +2371,7 @@ async fn cors_allows_the_post_of_a_report() {
     assert_eq!(resp.headers().get("access-control-expose-headers").unwrap(), "retry-after");
 }
 
-/// Security review 2026-11-17 M3: a hostile page cannot make its visitors' browsers hide logos, and random ids neither use the
+/// A hostile page cannot make its visitors' browsers hide logos, and random ids neither use the
 /// day's quota nor grow the blocklist.
 #[tokio::test]
 async fn a_report_must_be_json_from_the_apps_origin_and_name_an_indexed_token() {

@@ -207,8 +207,9 @@ fn offline_match_from_a_kron_snapshot_file() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// Audit round 4 R4-L-6: a configuration file that does not parse, or is missing, is a mistake a restart does not cure: exit
-/// status 2, which the sample systemd unit (RestartPreventExitStatus=2) and kobd-supervise.cmd do not start again.
+/// A configuration file that does not parse, or is missing, is a mistake a restart does not cure:
+/// exit status 2, which the sample systemd unit (RestartPreventExitStatus=2) and kobd-supervise.cmd
+/// do not start again.
 #[test]
 fn a_configuration_that_is_missing_or_does_not_parse_exits_with_2() {
     let dir = tempfile::tempdir().unwrap();

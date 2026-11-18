@@ -250,7 +250,7 @@ fn the_lean_pruning_keeps_a_live_orders_custody_and_no_pruning_takes_a_program_b
     assert_eq!(programs(&c), before);
 }
 
-/// Security review 2026-11-17 L4: an archive store keeps the newest KEEP_REJECTS rejects; the window's stay.
+/// An archive store keeps the newest KEEP_REJECTS rejects; the window's stay.
 #[test]
 fn the_rejects_beyond_the_newest_are_pruned_once_final() {
     let mut c = store();

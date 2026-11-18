@@ -1,6 +1,7 @@
-//! The log of the real binary: `--log-file` writes a copy of the log to a file (the console keeps it, a pipe included, so
-//! `journalctl` and `docker logs` see it), a console that is not a terminal gets no ANSI colour codes, every start names the
-//! funding address, and the log lines have kaspad's shape (UTC time to the millisecond, the level, no module path).
+//! The log of the real binary: `--log-file` writes a copy of the log to a file (the console keeps
+//! it, a pipe included, so `journalctl` and `docker logs` see it), a console that is not a terminal
+//! gets no ANSI colour codes, every start names the funding address, and the log lines have
+//! kaspad's shape (UTC time to the millisecond, the level, no module path).
 
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
@@ -155,11 +156,11 @@ fn withdraw_without_a_configuration_or_with_a_bad_amount_sends_nothing() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("--amount"), "{}", String::from_utf8_lossy(&o.stderr));
 }
 
-/// Audit round 4 R4-L-7: a console that stops taking the log (a closed pipe: `kobd --executor 2>&1 | tee x` after `tee`
-/// ended) never takes the executor down. stdout and stderr are one pipe whose reading end is closed before the start: every
-/// console write fails. tracing-subscriber reports a failed write with `eprintln!` (fmt_layer.rs), which panics when stderr
-/// fails too: before the fix the process died at its first log line. Now the console is dropped after the first failure,
-/// with one warning in the log file, and the executor goes on logging there.
+/// A console that stops taking the log (a closed pipe: `kobd --executor 2>&1 | tee x` after `tee`
+/// ended) never takes the executor down. stdout and stderr are one pipe whose reading end is closed
+/// before the start: every console write fails. tracing-subscriber reports a failed write with
+/// `eprintln!` (fmt_layer.rs), which panics when stderr fails too. So the console is dropped after
+/// the first failure, with one warning in the log file, and the executor goes on logging there.
 #[test]
 fn a_closed_console_pipe_never_takes_the_executor_down() {
     let (port, _node) = silent_node();
