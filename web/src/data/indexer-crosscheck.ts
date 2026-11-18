@@ -1,28 +1,43 @@
-// Cross-checking indexers. KOB is open source: anyone can run an indexer, including a dishonest one, so one indexer is never trusted blindly when more
-// than one is configured (config `extraIndexerUrls`). The key facts a UI decision rests on are read from each indexer and compared: the token's
-// powers, the scale of an open-list token's market (`market_scale`: it sets the price scale of new orders), and the best ask / bid of the book. A
-// disagreement is surfaced as a warning; nothing is silently averaged or "voted".
+// Cross-checking indexers.
+//
+// KOB is open source, so anyone can run an indexer, including a dishonest one. One indexer is
+// never trusted blindly when more than one is configured (config `extraIndexerUrls`). The key
+// facts a UI decision rests on are read from each indexer and compared:
+// - the token's powers,
+// - the scale of an open-list token's market (`market_scale`), which sets the price scale of new
+//   orders,
+// - the best ask and bid of the book.
+// A disagreement is surfaced as a warning. Nothing is silently averaged or "voted".
 import type { Hex } from '../kob/types';
 import type { IndexerApi } from './indexer';
 
+/** The key facts of one token as one indexer reports them. */
 export interface IndexerFacts {
-  /** the token as this indexer lists it (null: not listed); `marketScale` undefined when the indexer does not report it */
+  /**
+   * The token as this indexer lists it, null when not listed. `marketScale` is undefined when the
+   * indexer does not report it.
+   */
   token: { powers: string[]; marketScale?: number | null } | null;
   bestAsk: bigint | null;
   bestBid: bigint | null;
 }
 
+/** What a cross-check found. */
 export type CrossCheckCode = 'powers-differ' | 'market-scale-differs' | 'best-ask-differs' | 'best-bid-differs' | 'token-missing' | 'unreachable';
 
+/** One disagreement or failure of a verifier, with both values where there are two. */
 export interface CrossCheckFinding {
   code: CrossCheckCode;
-  /** label (URL) of the indexer that disagrees / failed */
+  /** The label (URL) of the indexer that disagrees or failed. */
   other: string;
   primary?: string;
   otherValue?: string;
 }
 
-/** A best price is "different" when the two prices are further apart than this (bps of the larger): book lag alone must not raise the alarm. */
+/**
+ * A best price is "different" when the two prices are further apart than this, in bps of the
+ * larger. Book lag alone must not raise the alarm.
+ */
 export const PRICE_TOLERANCE_BPS = 200n;
 
 const same = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && [...a].sort().join(',') === [...b].sort().join(',');
@@ -64,13 +79,17 @@ export async function readFacts(api: Pick<IndexerApi, 'tokens' | 'book'>, covena
   };
 }
 
+/** The findings of a cross-check and how many verifiers answered. */
 export interface CrossCheckResult {
-  /** verifiers that answered */
+  /** Verifiers that answered. */
   checked: number;
   findings: CrossCheckFinding[];
 }
 
-/** Compares the primary indexer with every verifier. An unreachable verifier is reported (`unreachable`), never counted as agreement. */
+/**
+ * Compares the primary indexer with every verifier. An unreachable verifier is reported
+ * (`unreachable`), never counted as agreement.
+ */
 export async function crossCheckIndexers(
   primary: Pick<IndexerApi, 'tokens' | 'book'>,
   verifiers: readonly { label: string; api: Pick<IndexerApi, 'tokens' | 'book'> }[],
@@ -95,14 +114,19 @@ export async function crossCheckIndexers(
   return { checked, findings };
 }
 
+/** How many independent indexers back the data shown. */
 export type IndexerTrust = 'none' | 'single' | 'multi';
 
-/** How many independent indexers back the data shown: none, one (unverified) or several (cross-checked). */
+/**
+ * How many independent indexers back the data shown: none, one (unverified) or several
+ * (cross-checked).
+ */
 export const indexerTrust = (hasPrimary: boolean, verifiers: number): IndexerTrust => (!hasPrimary ? 'none' : verifiers > 0 ? 'multi' : 'single');
 
 /**
- * The best ask / bid of a market as each verifier reports it (`toBook` turns an indexer book into the planner's units, e.g. `bookFromIndexer`):
- * references for the start of a market order that do not come from the primary indexer. A verifier that fails is left out.
+ * The best ask and bid of a market as each verifier reports it. They are references for the start
+ * of a market order that do not come from the primary indexer. `toBook` turns an indexer book
+ * into the planner's units, as `bookFromIndexer` does. A verifier that fails is left out.
  */
 export async function readReferenceTouches<B extends { asks: { price: bigint }[]; bids: { price: bigint }[] }>(
   verifiers: readonly { label: string; api: Pick<IndexerApi, 'book'> }[],
@@ -124,7 +148,10 @@ export async function readReferenceTouches<B extends { asks: { price: bigint }[]
   return out.filter((x): x is { label: string; bestAsk: bigint | null; bestBid: bigint | null } => x !== null);
 }
 
-/** The references further indexers give for a market start: the touches of those that answered, and the labels of those that did not. */
+/**
+ * The references further indexers give for a market start. They are the touches of those that
+ * answered, and the labels of those that did not.
+ */
 export interface References {
   touches: { label: string; bestAsk: bigint | null; bestBid: bigint | null }[];
   unavailable: string[];
@@ -133,8 +160,8 @@ export interface References {
 type Touch = { bestAsk: bigint | null; bestBid: bigint | null };
 
 /**
- * Reads `read` from every verifier: a verifier that fails (or answers no book for a market another one has) is reported in `unavailable`, never
- * left out silently.
+ * Reads `read` from every verifier. A verifier that fails, or answers no book for a market another
+ * one has, is reported in `unavailable` and never left out silently.
  */
 async function collect(
   verifiers: readonly { label: string; api: Pick<IndexerApi, 'book'> }[],
@@ -147,7 +174,7 @@ async function collect(
   };
 }
 
-/** The best ask / bid of a KAS market as each verifier reports it, and the verifiers that did not answer. */
+/** The best ask and bid of a KAS market per verifier, and the verifiers that did not answer. */
 export function readReferences<B extends { asks: { price: bigint }[]; bids: { price: bigint }[] }>(
   verifiers: readonly { label: string; api: Pick<IndexerApi, 'book'> }[],
   covenantId: Hex,
@@ -162,8 +189,10 @@ export function readReferences<B extends { asks: { price: bigint }[]; bids: { pr
 }
 
 /**
- * The touches of a pair A/B (B base units per whole A) each verifier's two KAS books imply: buying A with B starts at A's ask over B's bid, selling
- * A for B at A's bid over B's ask (`impliedPairRate`). A verifier that does not answer for both books is reported unavailable.
+ * The touches of a pair A/B, in B base units per whole A, that each verifier's two KAS books
+ * imply (`impliedPairRate`). Buying A with B starts at A's ask over B's bid. Selling A for B
+ * starts at A's bid over B's ask. A verifier that does not answer for both books is reported
+ * unavailable.
  */
 export function readPairReferences<B extends { asks: { price: bigint }[]; bids: { price: bigint }[] }>(
   verifiers: readonly { label: string; api: Pick<IndexerApi, 'book'> }[],

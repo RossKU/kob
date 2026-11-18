@@ -1,14 +1,19 @@
 // Response shapes of the KOB indexer read API (`/v1`, crates/kobd, docs/ops/executor.md Part B 5).
 //
-// Conventions of the API: JSON, snake_case keys, ids/hashes/keys lower-case hex, every sompi and token amount a DECIMAL STRING, DAA scores /
-// counts / scales plain numbers. Protocol v3 (docs/ops/executor.md 5.0): quantities are token base units, prices and tips sompi per whole token
-// (`scale` base units of the order's token). Every chain-derived view carries `confirmations` and `settled` (>= settle_depth_daa). The API is being extended
-// on branch m3/indexer (state, custody, strays, auction, repeat, refund_due_daa ...): every field added after the M3 part-1 commit is
-// optional here, and the client tolerates its absence. Fields marked PROPOSED are requirements the web app places on the indexer.
+// Conventions of the API:
+// - JSON with snake_case keys. Ids, hashes and keys are lower-case hex.
+// - Every sompi and token amount is a decimal string. DAA scores, counts and scales are plain
+//   numbers.
+// - Protocol v3 (docs/ops/executor.md 5.0) gives quantities in token base units, and prices and
+//   tips in sompi per whole token, which is `scale` base units of the order's token.
+// - Every chain-derived view carries `confirmations` and `settled` (>= settle_depth_daa).
+// Fields that not every indexer serves are optional here, and the client tolerates their absence.
 import type { AnyState, Family, Hex, TokenState } from '../kob/types';
 
+/** One page of a cursor-paged list. */
 export interface Page<T> { items: T[]; next_cursor: string | null }
 
+/** `GET /v1/health`: the indexer's sync state against its node. */
 export interface HealthView {
   state: 'starting' | 'following' | 'catching_up' | 'node_unavailable' | 'gap' | string;
   ok: boolean;
@@ -16,163 +21,237 @@ export interface HealthView {
   node_version?: string | null;
   cursor_hash?: Hex | null;
   cursor_daa: number;
-  /** node virtual DAA score at the last poll */
+  /** The node's virtual DAA score at the last poll. */
   node_daa: number | null;
   lag_daa: number | null;
   lag_seconds: number | null;
   settle_depth_daa: number;
   last_error?: string | null;
   alarms?: unknown[];
-  /** the store holds every order the node's history still shows (false: a fast start in progress, or a store that began late); absent on older executors */
+  /**
+   * Whether the store holds every order the node's history still shows. It is false during a fast
+   * start or for a store that began late. Older executors omit it.
+   */
   book_complete?: boolean;
-  /** where this store's history begins when it does not begin at the node's pruning point; absent for a store that read the whole retained history */
+  /**
+   * Where this store's history begins, when that is not the node's pruning point. Absent for a
+   * store that read the whole retained history.
+   */
   history_from_daa?: number;
-  /** the KOB1 payload version the executor reads and writes (docs/api.md section 3.1); absent on older executors */
+  /**
+   * The KOB1 payload version the executor reads and writes (docs/api.md section 3.1). Older
+   * executors omit it.
+   */
   payload_version?: number;
 }
 
-/** Capabilities of a token's program template that can act on holders or supply. `freeze` and `seize` put escrowed orders at the issuer's discretion. */
+/**
+ * Capabilities of a token's program template that can act on holders or supply. `freeze` and
+ * `seize` put escrowed orders at the issuer's discretion.
+ */
 export type TokenPower = 'mint-authority' | 'public-mint' | 'burn' | 'freeze' | 'seize' | 'blacklist';
 
+/** One item of `GET /v1/tokens`. */
 export interface IndexerTokenView {
-  /** the registry ticker; an EMPTY string for a token that is not in the registry (show the short covenant id instead) */
+  /**
+   * The registry ticker. It is an empty string for a token that is not in the registry, which the
+   * UI shows by its short covenant id instead.
+   */
   ticker: string;
   covenant_id: Hex;
   template_hash: Hex | null;
   extension_commitment: Hex | null;
   /**
-   * order placements name SEVERAL token programs for this covenant id and the indexer, which holds no token output, names none (`template_hash` is null,
-   * `candidate_templates` lists the claims): the program is proven from a token output the node confirms, or the token is not traded here. Absent otherwise.
+   * Set when order placements name several token programs for this covenant id. The indexer holds
+   * no token output, so it names none: `template_hash` is null and `candidate_templates` lists the
+   * claims. The program is then proven from a token output the node confirms, or the token is not
+   * traded here. Absent otherwise.
    */
   program_ambiguous?: boolean;
   candidate_templates?: Hex[];
-  /** the token's standard scale (`10^decimals`, at most 10^9): an order is listed only when its `scale` equals it; null without decimals */
+  /**
+   * The token's standard scale, `10^decimals` and at most 10^9. An order is listed only when its
+   * `scale` equals it. Null without decimals.
+   */
   scale?: number | null;
   /**
-   * a token without decimals: the scale of its earliest order, open or ended (the scale its first order set, which stays the market's after every
-   * order of it has ended); null with decimals and before any order; absent on older executors
+   * For a token without decimals, the scale of its earliest order, open or ended. The first
+   * order sets it, and it stays the market's after every order of it has ended. Null with decimals
+   * and before any order. Older executors omit it.
    */
   market_scale?: number | null;
   decimals: number | null;
   open_asks: number;
   open_bids: number;
-  /** template capabilities (empty for most tokens); unknown values are dropped by the client */
+  /** Template capabilities, empty for most tokens. The client drops unknown values. */
   powers?: string[];
-  /** facts the indexer derives from the registry's genesis record (matcher.md 1.2a): `genesis_unverified`, `live_mint_authority`; absent on older executors */
+  /**
+   * Facts the indexer derives from the registry's genesis record (matcher.md 1.2a), namely
+   * `genesis_unverified` and `live_mint_authority`. Older executors omit it.
+   */
   warnings?: string[];
-  /** the audited program template of the token, null when unknown */
+  /** The audited program template of the token, null when unknown. */
   template_id?: string | null;
-  /** `kcc20` | `kron` */
   family?: 'kcc20' | 'kron';
-  /** the indexer holds a KCC-23 declaration of the token (`GET /v1/tokens/{id}/declaration`, verified by the client); absent on older executors */
+  /**
+   * Set when the indexer holds a KCC-23 declaration of the token
+   * (`GET /v1/tokens/{id}/declaration`, which the client verifies). Older executors omit it.
+   */
   declaration?: true;
 }
 
 /**
- * An aggregated level: orders with the same state `price` AND `scale` (`price` is sompi per `scale` base units; `amount` base units summed,
- * `amount_estimated` when it holds a bid, whose amount is its buying power).
+ * An aggregated level of orders with the same state `price` and `scale`. `price` is sompi per
+ * `scale` base units and `amount` is the summed base units. `amount_estimated` is set when the
+ * level holds a bid, whose amount is its buying power.
  */
 export interface LevelView { price: string; amount: string; amount_estimated: boolean; orders: number; scale: number }
 
 /** `OrderView.curve`: a stepped sell curve as `GET /v1/orders/{id}` serves it. */
 export interface CurveView {
-  /** the current level (table index) */
+  /** The current level, as a table index. */
   level: number;
   levels: number;
-  /** base units per level, and in all */
+  /** Base units per level, and in all. */
   level_size: string;
   total: string;
-  /** sompi per whole token of the current level; null when sold out */
+  /** Sompi per whole token of the current level. Null when sold out. */
   price_now: string | null;
-  /** the most one fill takes from here (the rest of 8 levels), base units */
+  /** The most one fill takes from here, the rest of 8 levels, in base units. */
   max_fill: string;
-  /** created in its token's genesis and not yet filled or amended (`state.tokenCovId` is zero; `token` is the custody's) */
+  /**
+   * Created in its token's genesis and not yet filled or amended. `state.tokenCovId` is zero and
+   * `token` is the custody's.
+   */
   unbound: boolean;
-  /** the levels left, the current first */
+  /** The levels left, the current one first. */
   remaining: { level: number; price: string; amount: string }[];
 }
 
+/** One order row of an unaggregated `GET /v1/books/{token}`. */
 export interface BookOrderView {
   covenant_id: Hex; contract: string; maker: Hex | null; price: string;
-  /** priority tip, sompi per whole token */
+  /** Priority tip, sompi per whole token. */
   tip: string | null;
-  /** smallest fill (base units) */
+  /** Smallest fill, in base units. */
   min_fill: string | null;
   scale: number | null;
-  /** base units left (a bid: its buying power, `amount_estimated`) */
+  /** Base units left. For a bid it is its buying power, and `amount_estimated` is set. */
   amount_left: string | null;
   amount_estimated: boolean;
   status: string; cur_value: string | null; expiry_daa: number | null; expired: boolean; genesis_daa: number;
   confirmations: number | null; settled: boolean;
-  /** the current price of an auction (decay / rise) at the node's DAA score, else `price`; absent on older executors */
+  /**
+   * The current price of a decay or rise auction at the node's DAA score, else `price`. Older
+   * executors omit it.
+   */
   quote?: string | null;
-  /** see `OrderView.possibly_frozen` (the server omits such orders from the book, so this is normally false / absent) */
+  /**
+   * See `OrderView.possibly_frozen`. The server omits such orders from the book, so this is
+   * normally false or absent.
+   */
   possibly_frozen?: boolean;
-  /** a `KobCurveAsk` level (its table index): one row per remaining level, all with the curve's `covenant_id` */
+  /**
+   * A `KobCurveAsk` level, as its table index. There is one row per remaining level, all with the
+   * curve's `covenant_id`.
+   */
   curve_level?: number;
 }
 
 /**
- * Where a level of a pair book comes from (docs/ops/executor.md 5.4): `direct` = resting `KobPair` orders, `entry` = `KobIfdPair` entries resting at
- * their limit (a stop entry once armed), `route` = quotes implied through the two KAS books (indicative: no minimum fills, rounding or fees).
+ * Where a level of a pair book comes from (docs/ops/executor.md 5.4).
+ * - `direct`: resting `KobPair` orders.
+ * - `entry`: `KobIfdPair` entries resting at their limit, including a stop entry once armed.
+ * - `route`: quotes implied through the two KAS books. They are indicative, without minimum fills,
+ *   rounding or fees.
  */
 export type PairLevelSource = 'direct' | 'entry' | 'route';
 /**
- * One level of `GET /v1/pairs/{base}/{quote}/book`: price = price_num / price_den QUOTE base units per BASE base unit (exact rational),
- * `amount` in BASE base units (decimal strings).
+ * One level of `GET /v1/pairs/{base}/{quote}/book`. The price is the exact rational
+ * `price_num / price_den` QUOTE base units per BASE base unit. `amount` is in BASE base units. All
+ * are decimal strings. The app adds `reversed` (ui/market/pair-model.ts `mergeOrientations`) to a
+ * level of the other orientation's book, whose price it inverted.
  */
-/** `reversed`: added by the app (ui/market/pair-model.ts `mergeOrientations`): a level of the other orientation's book, its price inverted. */
 export interface PairLevelView { source: PairLevelSource; price_num: string; price_den: string; amount: string; orders: number; reversed?: true }
-/** `GET /v1/pairs/{base}/{quote}/book`: asks = buy BASE with QUOTE (ascending), bids = sell BASE for QUOTE (descending). */
+/**
+ * `GET /v1/pairs/{base}/{quote}/book`. Asks buy BASE with QUOTE, ascending. Bids sell BASE for
+ * QUOTE, descending.
+ */
 export interface PairBookView { base: Hex; quote: Hex; daa_score: number; asks: PairLevelView[]; bids: PairLevelView[] }
 /**
- * One entry of `GET /v1/pairs?token=` (an oriented pair with at least one listed live pair order): live `KobPair` asks / bids, sell-first / buy-first
- * `KobIfdPair` entries, live `KobCondPair` orders (stops, take-profits, OCO, exits).
+ * One entry of `GET /v1/pairs?token=`, an oriented pair with at least one listed live pair order.
+ * It counts:
+ * - live `KobPair` asks and bids,
+ * - sell-first and buy-first `KobIfdPair` entries,
+ * - live `KobCondPair` orders, meaning stops, take-profits, OCO and exits.
  */
 export interface PairSummaryView { base: Hex; quote: Hex; direct_asks: number; direct_bids: number; entry_asks: number; entry_bids: number; conditionals: number }
 
-/** An exact rate of a pair candle: `value` = floor(num / den) B base units per `price_basis` base units of A. */
+/**
+ * An exact rate of a pair candle. `value` = floor(num / den) B base units per `price_basis` base
+ * units of A.
+ */
 export interface PairRateView { value: string; num: string; den: string }
-/** One pair candle derived from the two KAS series (never from pair fills): o = open(A)/open(B), c = close(A)/close(B), h = high(A)/low(B), l = low(A)/high(B). */
+/**
+ * One pair candle, derived from the two KAS series and never from pair fills.
+ * - o = open(A) / open(B)
+ * - c = close(A) / close(B)
+ * - h = high(A) / low(B)
+ * - l = low(A) / high(B)
+ */
 export interface PairCandleView {
-  /** bucket start, unix ms (UTC) */
+  /** Bucket start, unix ms (UTC). */
   t: number;
   o: PairRateView; h: PairRateView; l: PairRateView; c: PairRateView;
-  /** whether A / B traded in KAS in the bucket (false: that side carries its last close forward) */
+  /** Whether A and B traded in KAS in the bucket. A side that did not carries its last close on. */
   a_traded: boolean; b_traded: boolean;
-  /** pair volume of the bucket (pair-order fills): base units of A and of B, and their count */
+  /** Pair volume of the bucket from pair-order fills, in base units of A and B, and the count. */
   pair_volume_a: string; pair_volume_b: string; pair_fills: number;
 }
-/** `GET /v1/pairs/{base}/{quote}/candles`: rates B base units per `price_basis` base units of A (A's KAS price basis). */
+/**
+ * `GET /v1/pairs/{base}/{quote}/candles`. Rates are B base units per `price_basis` base units of
+ * A, which is A's KAS price basis.
+ */
 export interface PairCandlesView {
   base: Hex; quote: Hex; interval: CandleInterval;
   price_basis: string; quote_price_basis: string;
   decimals: number | null; quote_decimals: number | null;
-  /** always `kas_books` */
+  /** Always `kas_books`. */
   price_source: string;
   items: PairCandleView[];
 }
-/** How a pair fill was filled: `route` (the tx also filled KAS-book orders of A or B), `netting` (an opposite pair order), `inventory` (the filler's tokens). */
+/**
+ * How a pair fill was filled.
+ * - `route`: the transaction also filled KAS-book orders of A or B.
+ * - `netting`: against an opposite pair order.
+ * - `inventory`: from the filler's own tokens.
+ */
 export type PairCounterparty = 'route' | 'netting' | 'inventory';
-/** One pair-order fill (volume only: `price_source` is always `none`, a pair fill never sets a price). */
+/**
+ * One pair-order fill. It counts as volume only. `price_source` is always `none`, because a pair
+ * fill never sets a price.
+ */
 export interface PairFillView {
   id: number; txid: Hex; ts: number; daa: number;
-  /** added by the app (activity-model.ts `mergePairFills`): the pair of the filled order when it is not the view's (the other orientation) */
+  /**
+   * The pair of the filled order, added by the app (activity-model.ts `mergePairFills`) when it is
+   * the other orientation of the view's pair.
+   */
   base?: Hex; quote?: Hex;
-  /** the filled pair order and its kind */
+  /** The filled pair order and its kind. */
   order: Hex; contract: string;
-  /** `ask` (the order sold A) or `bid` (it bought A) */
+  /** `ask` when the order sold A, `bid` when it bought A. */
   side: 'ask' | 'bid';
-  /** base units of A filled; base units of B the maker received (ask) or paid (bid) */
+  /** Base units of A filled, and base units of B the maker received (ask) or paid (bid). */
   amount_a: string; amount_b: string | null;
-  /** the order's quote at the fill (B per whole A, `a_scale` base units) and per A base unit */
+  /** The order's quote at the fill, as B per whole A (`a_scale` base units) and per A base unit. */
   price: string | null; price_num: string | null; price_den: string | null; a_scale: number;
   tip_kas: string | null;
   counterparty: PairCounterparty | string;
   price_source: string;
   confirmations: number | null; settled: boolean;
 }
-/** `GET /v1/pairs/{base}/{quote}/fills`: newest first, the 24 h pair volume. */
+/** `GET /v1/pairs/{base}/{quote}/fills`, newest first, with the 24 h pair volume. */
 export interface PairFillsView {
   base: Hex; quote: Hex;
   volume_24h: { amount_a: string; amount_b: string; fills: number };
@@ -180,56 +259,69 @@ export interface PairFillsView {
   next_cursor: string | null;
 }
 
-/** A custody of a pair order (`OrderView.pair.custodies`, record order: a sell-first entry's A, then its B prefund). */
+/**
+ * A custody of a pair order (`OrderView.pair.custodies`). They come in record order, so a
+ * sell-first entry lists its A, then its B prefund.
+ */
 export interface PairCustodyView {
   token: Hex;
-  /** `base` (A) or `quote` (B) */
+  /** `base` for A, `quote` for B. */
   role: 'base' | 'quote' | string;
   expected_amount: string;
-  /** single-order lookups and the live orders of a `maker=` list */
+  /** Served by single-order lookups and for the live orders of a `maker=` list. */
   utxo?: TokenUtxoView | null;
   ok?: boolean;
 }
-/** The `pair` object of a pair order's `GET /v1/orders/{id}` view (prices B base units per whole A). */
+/**
+ * The `pair` object of a pair order's `GET /v1/orders/{id}` view, with prices in B base units per
+ * whole A.
+ */
 export interface PairOrderView {
   base: Hex; quote: Hex;
   base_family: Family | null; quote_family: Family | null;
   base_template_hash: Hex; quote_template_hash: Hex;
   base_scale: number; quote_scale: number;
-  /** `ask` (sells A; a sell-first entry) or `bid` (buys A; a buy-first entry) */
+  /** `ask` sells A, as a sell-first entry does. `bid` buys A, as a buy-first entry does. */
   side: 'ask' | 'bid';
-  /** KobPair: its price (a decay's start); KobIfdPair: the entry limit; KobCondPair: the take-profit / limit leg (null without one) */
+  /**
+   * The price of a KobPair (a decay's start), the entry limit of a KobIfdPair, or the take-profit
+   * or limit leg of a KobCondPair (null without one).
+   */
   price: string | null; price_num: string | null; price_den: string | null;
-  /** KobCondPair: the stop; KobIfdPair: the entry stop (absent otherwise) */
+  /** The stop of a KobCondPair or the entry stop of a KobIfdPair. Absent otherwise. */
   stop_price?: string | null;
-  /** the auction price now, else `price` */
+  /** The auction price now, else `price`. */
   quote_now: string | null;
-  /** base units of A still to trade (null once closed) */
+  /** Base units of A still to trade. Null once closed. */
   amount_left: string | null;
-  /** sell-first entry: the B prefund per whole A */
+  /** The B prefund per whole A of a sell-first entry. */
   prefund?: string | null;
-  /** KAS on each token delivery */
+  /** KAS on each token delivery. */
   delivery_carrier: string;
   custodies: PairCustodyView[];
 }
 
-/** `detail.pair` of a pair fill event (no price is ever recorded from it: `price_source` none). */
+/** `detail.pair` of a pair fill event. No price is ever recorded from it (`price_source` none). */
 export interface PairEventDetail {
   side: 'ask' | 'bid'; base: Hex; quote: Hex; a_scale: number;
   amount_a: string; amount_b: string | null;
   price: string | null; price_num: string | null; price_den: string | null;
   tip_kas: string | null; counterparty: PairCounterparty | string; price_source: string;
 }
-/** `detail.evidence` of a pair conditional's arm / trail / triggered fill: mode 0 two KAS-book fills (quotes `a`, `b`), mode 1 a resting KobPair (`price`). */
+/**
+ * `detail.evidence` of a pair conditional's arm, trail or triggered fill. Mode 0 is two KAS-book
+ * fills with quotes `a` and `b`. Mode 1 is a resting KobPair at `price`.
+ */
 export interface PairEvidenceDetail { mode: 0 | 1 | number; inputs?: number[]; orders?: (Hex | null)[]; a?: string; b?: string; price?: string }
 
+/** `GET /v1/books/{token}`: levels or single orders of one token's book. */
 export interface BookView {
   token: Hex;
   aggregated: boolean;
   node_daa: number | null;
-  /** ascending by price */
+  /** Ascending by price. */
   asks: (LevelView | BookOrderView)[];
-  /** descending by price */
+  /** Descending by price. */
   bids: (LevelView | BookOrderView)[];
 }
 
@@ -237,90 +329,125 @@ export type OrderStatus = 'open' | 'partial' | 'filled' | 'cancelled' | 'refunde
 
 export interface OutpointView { txid: Hex; index: number; value: string | null }
 
+/** A token UTXO as the indexer serves it. */
 export interface TokenUtxoView {
   txid: Hex; index: number; token: Hex; owner: Hex;
-  /** token base units */
+  /** Token base units. */
   amount: string;
-  /** KAS carrier (sompi) */
+  /** KAS carrier, in sompi. */
   value: string;
-  /** `owned` (held by a user key: KCC-20 scheme 0, KRON address presence) | `custody` (an order's exact custody) | `stray` (sent to an order id from outside) */
+  /**
+   * One of:
+   * - `owned`: held by a user key (KCC-20 scheme 0, or KRON address presence),
+   * - `custody`: an order's exact custody,
+   * - `stray`: sent to an order id from outside.
+   */
   role: string;
   created_daa: number; spent: boolean; spent_txid: Hex | null;
-  /** the decoded token state of either family (needed to spend the UTXO); the app can also rebuild custody states from owner + amount (+ extension commitment) */
+  /**
+   * The decoded token state of either family, which spending the UTXO needs. The app can also
+   * rebuild custody states from the owner, the amount and the extension commitment.
+   */
   state?: TokenState;
-  /** token program family of the UTXO's token */
+  /** Token program family of the UTXO's token. */
   family?: Family;
   /**
-   * kob-wasm token program name (`KCC20Ref_8x8`, `KronToken2433`, ...): the program the indexer proved `state` under (also on stray views, where it
-   * is what moving a FOREIGN stray needs); `template_hash`: `GET /v1/token-utxos` only
+   * The kob-wasm token program name (`KCC20Ref_8x8`, `KronToken2433`, ...) the indexer proved
+   * `state` under. Stray views carry it too, because moving a foreign stray needs it.
+   * `template_hash` is served by `GET /v1/token-utxos` only.
    */
   program?: string;
   template_hash?: Hex;
-  /** a stray of a token other than the order's own (a pair order: neither of its two): a FOREIGN stray (matcher.md 1.2) */
+  /**
+   * A foreign stray (matcher.md 1.2), of a token other than the order's own. For a pair order it
+   * is neither of its two tokens.
+   */
   foreign?: boolean;
-  /** `owner_scheme` (KCC-20) or `id_type` (KRON) of the state */
+  /** `owner_scheme` (KCC-20) or `id_type` (KRON) of the state. */
   owner_kind?: number;
-  /** the state span, hex: `GET /v1/token-utxos` only */
+  /** The state span as hex. Served by `GET /v1/token-utxos` only. */
   state_hex?: Hex;
   confirmations: number | null; settled: boolean;
 }
 
+/** The auction of an order with a moving price. */
 export interface AuctionView {
-  /** `pair_*`: a pair order's auction (decaying ask, rising bid, triggered stop, stop entry); its prices are B base units per whole A, not KAS prices */
+  /**
+   * `pair_*` kinds are a pair order's auctions: a decaying ask, a rising bid, a triggered stop or
+   * a stop entry. Their prices are B base units per whole A, not KAS prices.
+   */
   kind: 'decay' | 'rise' | 'stop' | 'entry' | 'pair_decay' | 'pair_rise' | 'pair_stop' | 'pair_entry';
   origin_daa: number; start_price: string; end_price: string; current_price: string; elapsed_daa: number; complete: boolean;
 }
 
+/** The repeat link of an entry or exit order. */
 export interface RepeatView {
   role: 'entry' | 'exit';
-  /** entry: `rptAmount` (1 + base units of re-arms left; 0 = no repeat) and the base units it can still re-arm */
+  /**
+   * For an entry, `rptAmount` and the base units it can still re-arm. `rptAmount` is 1 + the base
+   * units of re-arms left, and 0 means no repeat.
+   */
   rpt_amount?: string | null; rearm_amount?: string | null;
   parent?: Hex | null; rpt_until?: string | null;
-  /** exit: the entry's rate returned on a merge, sompi per whole token */
+  /** For an exit, the entry's rate returned on a merge, in sompi per whole token. */
   rpt_price?: string | null;
 }
 
+/** An order's custody and whether it holds the expected amount. */
 export interface CustodyView { expected_amount: string | null; utxo: TokenUtxoView | null; ok: boolean }
 
+/** `GET /v1/orders/{id}` and the items of `GET /v1/orders`. */
 export interface OrderView {
   covenant_id: Hex;
-  /** KobAsk | KobBid | KobCondAsk | KobCondBid | KobIfdBid | KobIfdAsk (KRON: ...Kron) | KobPair | KobCondPair | KobIfdPair */
+  /**
+   * KobAsk, KobBid, KobCondAsk, KobCondBid, KobIfdBid or KobIfdAsk (KRON: ...Kron), or KobPair,
+   * KobCondPair or KobIfdPair.
+   */
   contract: string;
   template_hash: Hex;
   family: number;
-  /** 1 sells the token, 2 buys the token */
+  /** 1 sells the token, 2 buys the token. */
   side: 1 | 2;
   maker: Hex | null;
   token: Hex | null;
   token_template_hash: Hex | null;
   extension_commitment?: Hex | null;
-  /** base units per whole token (the price denominator) */
+  /** Base units per whole token, the price denominator. */
   scale: number | null;
-  /** smallest fill, base units */
+  /** Smallest fill, in base units. */
   min_fill: string | null;
-  /** sompi per whole token */
+  /** Sompi per whole token. */
   price: string | null; tip: string | null; tif: number | null;
   expiry_daa: number | null; active_from: number | null;
-  /** bids: the budget rate `pMax + tip` (sompi per whole token) at which a fill consumes the escrow */
+  /**
+   * For bids, the budget rate `pMax + tip` (sompi per whole token) at which a fill consumes the
+   * escrow.
+   */
   in_book: boolean; budget_rate: string | null; reserve: string | null;
-  /** base units at placement (a bid: its buying power then) */
+  /** Base units at placement. For a bid it is its buying power then. */
   initial_amount: string | null;
   listed: boolean; unlisted_reason: string | null;
   origin: string;
   parent: Hex | null;
   genesis: { txid: Hex | null; out: number | null; block_seq: number; daa: number; confirmations: number | null; settled: boolean };
   status: OrderStatus;
-  /** base units filled so far */
+  /** Base units filled so far. */
   filled_amount: string;
-  /** base units left (a bid: its buying power, `amount_estimated`); null once closed */
+  /**
+   * Base units left. For a bid it is its buying power, and `amount_estimated` is set. Null once
+   * closed.
+   */
   amount_left: string | null;
   amount_estimated: boolean;
-  /** current outpoint of the covenant UTXO (what a cancel spends) */
+  /** The current outpoint of the covenant UTXO, which a cancel spends. */
   current: OutpointView | null;
   state_known: boolean;
-  /** decoded state of the CURRENT utxo (`{kind, state}`, 64-bit fields as strings) when proven */
+  /** The decoded state of the current UTXO, if proven, as `{kind, state}` with 64-bit strings. */
   state?: AnyState | null;
-  /** an order without a current state (closed, or not proven): its placement state, for showing its type and terms only */
+  /**
+   * The placement state of an order without a current state, because it is closed or not proven.
+   * It is for showing its type and terms only.
+   */
   placed_state?: AnyState | null;
   current_daa?: number | null;
   deadline?: number | null;
@@ -330,55 +457,72 @@ export interface OrderView {
   auction?: AuctionView | null;
   quote?: string | null;
   repeat?: RepeatView | null;
-  /** asks: the sell custody; a non-pair bid holding bought tokens: its bought-custody (the same view as `bought_custody`) */
+  /**
+   * The sell custody of an ask. For a non-pair bid holding bought tokens it is its bought-custody,
+   * the same view as `bought_custody`.
+   */
   custody?: CustodyView;
-  /** delivering kinds: `wallet` (mode 0), `order` (mode 1), `topup` (mode 2); absent on older executors */
+  /**
+   * The delivery of a delivering kind: `wallet` (mode 0), `order` (mode 1) or `topup` (mode 2).
+   * Older executors omit it.
+   */
   delivery?: 'wallet' | 'order' | 'topup';
   delivery_mode?: number;
-  /** mode 1: base units in the bought-custody now ("0" after a claim) */
+  /** Mode 1: the base units in the bought-custody now, "0" after a claim. */
   bought?: string;
   topup_tip?: string;
   recv_threshold?: string;
-  /** mode 1: the bought-custody, checked against `bought` */
+  /** Mode 1: the bought-custody, checked against `bought`. */
   bought_custody?: CustodyView;
   strays?: TokenUtxoView[];
   last_block: number; last_daa: number; confirmations: number | null; settled: boolean;
   expired: boolean;
   children?: Hex[];
   /**
-   * Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`) only: the pair, side, prices (B base units per whole A) and custodies (their `price` / `quote`
-   * are null; the tip is KAS). `orders?token=` lists a pair order under both its tokens.
+   * The pair, side, prices (B base units per whole A) and custodies of a pair order (`KobPair`,
+   * `KobCondPair`, `KobIfdPair`). Such an order has a null `price` and `quote`, and its tip is KAS.
+   * `orders?token=` lists a pair order under both its tokens.
    */
   pair?: PairOrderView | null;
-  /** a `KobCurveAsk` (docs/design/curve-ask-spec.md): its levels from the current state; absent for other kinds */
+  /** The levels of a `KobCurveAsk` (docs/design/curve-ask-spec.md) from the current state. */
   curve?: CurveView;
-  /** the executor's pre-simulation of the order's next fill failed (the token program may have frozen / blacklisted it or its owner): the order is NOT in the book depth; absent on older executors */
+  /**
+   * Set when the executor's pre-simulation of the order's next fill failed. The token program may
+   * have frozen or blacklisted the order or its owner. Such an order is not in the book depth.
+   * Older executors omit it.
+   */
   possibly_frozen?: boolean;
-  /** warnings of the order's token(s) (`genesis_unverified`, matcher.md 1.2a), as on `/v1/tokens`; absent on older executors */
+  /**
+   * Warnings of the order's tokens, such as `genesis_unverified` (matcher.md 1.2a), as on
+   * `/v1/tokens`. Older executors omit it.
+   */
   warnings?: string[];
   /**
-   * the order is under a RETIRED template of the cancel-only table (`template_hash` names it): only its maker's cancel is built; served by the
-   * single-order view only (absent otherwise and on older executors, which answer 404 for it)
+   * Set when the order is under a retired template of the cancel-only table, named by
+   * `template_hash`. Only its maker's cancel is built. Only the single-order view serves it.
+   * Older executors answer 404 for such an order.
    */
   cancel_only?: boolean;
 }
 
+/** One event of `GET /v1/orders/{id}/events` and `GET /v1/fills`. */
 export interface EventView {
   id: number; covenant_id: Hex; block_seq: number; daa: number; ts: number; txid: Hex; tx_pos: number;
-  /** fill | cancel | refund | genesis | arm | trail | ... */
+  /** fill, cancel, refund, genesis, arm, trail, ... */
   kind: string;
-  /** `amount`: base units filled (a fill event) */
+  /** `amount` is the base units filled by a fill event. */
   token: Hex | null; side: number | null; amount: string | null; price: string | null; payout: string | null; closes: boolean;
   detail: unknown; confirmations: number | null; settled: boolean;
 }
 
+/** One item of `GET /v1/strays`. */
 export interface StrayView extends TokenUtxoView { order_status: string | null; maker: Hex | null; lost: boolean }
 
 /** WebSocket frames: `{channel, type, data}` feed messages and `{type, data}` control replies. */
 export type WsChannel = 'health' | 'reorg' | 'fills' | `fills:${string}` | `book:${string}` | `order:${string}`;
 export interface WsFrame { channel?: string; type: string; data?: unknown }
 
-// ------------------------------------------------------------------------------------------------ additions (data layer)
+// --- Additions of the data layer ---
 
 /** `/v1/token-events` item: first sighting of a token identity. */
 export interface TokenEventView {
@@ -393,14 +537,18 @@ export interface TokenEventView {
 /** Body of every non-2xx answer: `{"error":{"code":..,"message":..}}`. */
 export interface ApiErrorBody { error: { code: string; message: string } }
 
-/** `fill` frame data of the WebSocket feed (`FillNotice` of the indexer). `price`, `amount` and `payout` are decimal strings, as in REST (a 64-bit value above 2^53 is not a safe JSON number). */
+/**
+ * `fill` frame data of the WebSocket feed, the indexer's `FillNotice`. `price`, `amount` and
+ * `payout` are decimal strings as in REST, because a 64-bit value above 2^53 is not a safe JSON
+ * number.
+ */
 export interface FillNoticeView {
   order: Hex;
   token: Hex | null;
-  /** 1: an ask (sell) was filled, 2: a bid (buy) was filled */
+  /** 1 when an ask (sell) was filled, 2 when a bid (buy) was filled. */
   side: number;
   price: string | null;
-  /** base units filled */
+  /** Base units filled. */
   amount: string;
   payout: string | null;
   txid: Hex;
@@ -408,22 +556,27 @@ export interface FillNoticeView {
   daa: number;
 }
 
-/** `book:<token>` / `order:<id>` notice frames: clients refetch the REST resource. */
+/** `book:<token>` and `order:<id>` notice frames. Clients refetch the REST resource. */
 export interface BookNotice { token: Hex; cursor_daa: number }
 export interface OrderNotice { covenant_id: Hex; cursor_daa: number }
-/** `health` channel: `cursor` frames per committed batch, `health` frames on the server's keepalive tick. */
+/** `health` channel: a `cursor` frame per committed batch, a `health` frame per keepalive tick. */
 export interface HealthCursorNotice { cursor_hash: Hex | null; cursor_daa: number; added_blocks: number; reverted_blocks: number }
 export interface HealthTickNotice { state: string; cursor_daa: number; node_daa: number | null; lag_daa: number | null }
 export interface ReorgNotice { reverted_blocks: number; added_blocks: number; cursor_daa: number }
 
-// ------------------------------------------------------------------------------------------------ market data (M5: trades, candles, stats, depth)
+// --- Market data: trades, candles, stats, depth ---
 //
-// Every price below is sompi per `price_basis` token base units (`price_basis` = the token's standard scale `10^decimals`, i.e. sompi per whole
-// token, when the registry knows its decimals; else the scale of the token's first order). KAS per whole token = price / 1e8 * 10^decimals /
-// price_basis. Amounts are token base units, quotes sompi, all as decimal strings; timestamps unix ms. Every view also carries `decimals` (null
-// without a registry entry).
+// Every price below is sompi per `price_basis` token base units. `price_basis` is the token's
+// standard scale `10^decimals`, so sompi per whole token, when the registry knows its decimals.
+// Otherwise it is the scale of the token's first order.
+// KAS per whole token = price / 1e8 * 10^decimals / price_basis.
+// Amounts are token base units and quotes are sompi, all as decimal strings. Timestamps are unix
+// ms. Every view also carries `decimals`, null without a registry entry.
 
-/** One trade = every fill event of one transaction on one token; priced at the resting side's VWAP, `side` is the AGGRESSOR's. */
+/**
+ * One trade, made of every fill event of one transaction on one token. It is priced at the
+ * resting side's VWAP, and `side` is the aggressor's.
+ */
 export interface TradeView {
   id: number;
   txid: Hex;
@@ -438,7 +591,7 @@ export interface TradeView {
   settled: boolean;
 }
 
-/** `GET /v1/trades/{token}?limit=&before=` (newest first). */
+/** `GET /v1/trades/{token}?limit=&before=`, newest first. */
 export interface TradesView {
   token: Hex;
   price_basis: string;
@@ -449,8 +602,9 @@ export interface TradesView {
 
 export type CandleInterval = '1m' | '5m' | '1h' | '1d';
 
+/** One candle of `GET /v1/candles/{token}`. */
 export interface CandleView {
-  /** bucket start, unix ms (UTC) */
+  /** Bucket start, unix ms (UTC). */
   t: number;
   o: string;
   h: string;
@@ -461,7 +615,10 @@ export interface CandleView {
   trades: number;
 }
 
-/** `GET /v1/quotes/{token}`: the top of the book per bucket with a change, `[t, bid, ask]` (sompi per `price_basis`; null: empty side), ascending. */
+/**
+ * `GET /v1/quotes/{token}`: the top of the book per bucket with a change, ascending. Each item is
+ * `[t, bid, ask]` in sompi per `price_basis`, with null for an empty side.
+ */
 export interface QuotesView {
   token: Hex;
   interval: CandleInterval;
@@ -470,7 +627,10 @@ export interface QuotesView {
   items: [number, string | null, string | null][];
 }
 
-/** `GET /v1/candles/{token}?interval=&from=&to=&limit=` (ascending; buckets without trades are omitted). */
+/**
+ * `GET /v1/candles/{token}?interval=&from=&to=&limit=`, ascending. Buckets without trades are
+ * omitted.
+ */
 export interface CandlesView {
   token: Hex;
   interval: CandleInterval;
@@ -480,17 +640,26 @@ export interface CandlesView {
 }
 
 /**
- * `GET /v1/stats?since=`: the store's activity totals over the range from `since` (unix ms, rounded down to the minute by the server; null: all time)
- * to the newest block (docs/api-reference.md 3.21). An indexer of schema 10 answers every figure (`executors`: the distinct scripts that funded the
- * range's fills, those it recorded); an earlier one has `traders` and `fees_paid` null beyond its scan caps and `executors` always null. `kas_locked`
- * (sompi) is the live order UTXOs now, whatever the range.
+ * `GET /v1/stats?since=`: the store's activity totals from `since` to the newest block
+ * (docs/api-reference.md 3.21).
  *
- * The executors' side of the range (an older indexer has none of these fields: null): `executor_income` is what the KOB transactions left to the executors that
- * sent them (crossing spread, auction margins, keeper tips) before network fees, summed over the transactions whose income is known (`executor_income_txs`;
- * `executor_income_unknown_txs` are not counted, nor the `executor_income_own_trade_txs` in which an executor traded for itself: an inventory buy or sale, a
- * taker); it can be NEGATIVE. `tips_paid` is the priority-tip sum; `fees_paid` is the same value, deprecated. `miner_fees`
- * are the network fees of those transactions, over the ones whose fee is known (`miner_fee_txs`, `miner_fee_unknown_txs`). `executor_net` is income minus fee over
- * the transactions where both are known (`executor_net_txs`); it can be negative, and the page does not show it yet.
+ * `since` is unix ms, rounded down to the minute by the server, or null for all time. An indexer
+ * of schema 10 answers every figure. Its `executors` are the distinct scripts that funded the
+ * range's fills, those it recorded. An earlier one has `traders` and `fees_paid` null beyond its
+ * scan caps, and `executors` always null. `kas_locked` (sompi) is the live order UTXOs now,
+ * whatever the range.
+ *
+ * The executors' side of the range is null on an older indexer that lacks these fields.
+ * - `executor_income` is what the KOB transactions left to the executors that sent them, before
+ *   network fees. It covers crossing spread, auction margins and keeper tips. It sums the
+ *   transactions whose income is known (`executor_income_txs`). It leaves out the
+ *   `executor_income_unknown_txs` and the `executor_income_own_trade_txs`, in which an executor
+ *   traded for itself as an inventory buy or sale or as a taker. It can be negative.
+ * - `tips_paid` is the priority-tip sum. `fees_paid` is the same value, deprecated.
+ * - `miner_fees` are the network fees of those transactions, over the ones whose fee is known
+ *   (`miner_fee_txs`, `miner_fee_unknown_txs`).
+ * - `executor_net` is income minus fee over the transactions where both are known
+ *   (`executor_net_txs`). It can be negative, and the page does not show it.
  */
 export interface ActivityStatsView {
   since: number | null;
@@ -498,25 +667,31 @@ export interface ActivityStatsView {
   orders: number;
   traders: number | null;
   executors: number | null;
-  /** deprecated: the tip sum, the same as `tips_paid` */
+  /** Deprecated. The tip sum, the same as `tips_paid`. */
   fees_paid: string | null;
   tips_paid: string | null;
-  /** sompi, signed decimal */
+  /** Sompi, signed decimal. */
   executor_income: string | null;
   executor_income_txs: number | null;
   executor_income_unknown_txs: number | null;
-  /** executor transactions in which the sender traded for itself: not in `executor_income` (an older indexer: null) */
+  /**
+   * Executor transactions in which the sender traded for itself, not counted in
+   * `executor_income`. Null on an older indexer.
+   */
   executor_income_own_trade_txs: number | null;
   miner_fees: string | null;
   miner_fee_txs: number | null;
   miner_fee_unknown_txs: number | null;
-  /** sompi, signed decimal */
+  /** Sompi, signed decimal. */
   executor_net: string | null;
   executor_net_txs: number | null;
   kas_locked: string;
 }
 
-/** `GET /v1/stats/{token}`: rolling 24 h relative to the newest chain block time, plus the book top. Missing values are null. */
+/**
+ * `GET /v1/stats/{token}`: rolling 24 h relative to the newest chain block time, plus the book
+ * top. Missing values are null.
+ */
 export interface StatsView {
   token: Hex;
   price_basis: string;
@@ -539,29 +714,35 @@ export interface StatsView {
   open_asks: number | null;
   open_bids: number | null;
   /**
-   * sompi: what the resting asks up to 2 % above the mid and the resting bids down to 2 % below it are worth (one side only: around that side's best price);
-   * null for an empty book; absent on older executors
+   * Sompi worth of the resting asks up to 2 % above the mid and the resting bids down to 2 %
+   * below it. With one side only, it is measured around that side's best price. Null for an empty
+   * book. Older executors omit it.
    */
   depth_2pct_quote?: string | null;
   /**
-   * sompi: the two parts of `depth_2pct_quote` (the bids down to 2 % below the reference price, the asks up to 2 % above it; both bounds inclusive); "0" for a missing side
-   * or an empty book; absent on older executors (no thin-book marker then)
+   * The two parts of `depth_2pct_quote` in sompi: the bids down to 2 % below the reference price
+   * and the asks up to 2 % above it, both bounds inclusive. "0" for a missing side or an empty
+   * book. Older executors omit them, and then there is no thin-book marker.
    */
   depth_2pct_bid_sompi?: string | null;
   depth_2pct_ask_sompi?: string | null;
 }
 
+/** One level of `GET /v1/depth/{token}`. */
 export interface DepthLevelView {
   price: string;
   amount: string;
   orders: number;
   cum_amount: string;
   cum_quote: string;
-  /** bid amounts are upper bounds when set (a bid's amount is its buying power) */
+  /** When set, bid amounts are upper bounds, because a bid's amount is its buying power. */
   estimated: boolean;
 }
 
-/** `GET /v1/depth/{token}?levels=`: the listed book merged by per-basis price, best first, with cumulative sums. */
+/**
+ * `GET /v1/depth/{token}?levels=`: the listed book merged by per-basis price, best first, with
+ * cumulative sums.
+ */
 export interface DepthView {
   token: Hex;
   price_basis: string;

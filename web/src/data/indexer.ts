@@ -1,9 +1,15 @@
-// Client of the KOB indexer read API (crates/kobd, `/v1`): typed REST access (`HttpIndexer`) and the WebSocket feed
-// (`IndexerFeed`, `/v1/ws`). The indexer is a CONVENIENCE and an aggregator, never an authority for anything the wallet signs: the
-// pre-sign screen re-derives everything from the transaction itself. So every failure here is a typed, recoverable error.
+// Client of the KOB indexer read API (crates/kobd, `/v1`). It has typed REST access
+// (`HttpIndexer`) and the WebSocket feed (`IndexerFeed`, `/v1/ws`).
 //
-// Conventions of the API: JSON, snake_case, ids/keys lower-case hex, sompi as DECIMAL STRINGS (see `sompi()` for bigint), errors as
-// `{"error":{"code","message"}}`, rate limiting as 429 (+ Retry-After), busy database as 503 (+ Retry-After).
+// The indexer is a convenience and an aggregator, never an authority for anything the wallet
+// signs. The pre-sign screen re-derives everything from the transaction itself. So every failure
+// here is a typed, recoverable error.
+//
+// Conventions of the API:
+// - JSON with snake_case keys. Ids and keys are lower-case hex.
+// - Sompi are decimal strings (`sompi()` turns one into a bigint).
+// - Errors are `{"error":{"code","message"}}`.
+// - Rate limiting is a 429 and a busy database a 503, both with Retry-After.
 import type {
   BookView, EventView, HealthView, IndexerTokenView, OrderView, Page, StrayView, TokenEventView, TokenUtxoView, WsFrame,
   FillNoticeView, BookNotice, OrderNotice, ReorgNotice, HealthCursorNotice, HealthTickNotice,
@@ -16,12 +22,18 @@ import { plainUntrusted } from '../kob/registry';
 import { BYPASS_PARAM, bypassValue, isLiveRoute, recentOwnAction } from './fresh';
 import { adaptKasUsd, type KasUsdQuote } from './kas-price';
 
-/** Largest indexer response body read (bytes); a longer one is refused, not parsed (default of `HttpIndexerOptions.maxBodyBytes`). */
+/**
+ * The largest indexer response body read, in bytes. A longer one is refused, not parsed. It is the
+ * default of `HttpIndexerOptions.maxBodyBytes`.
+ */
 export const MAX_INDEXER_BODY_BYTES = 8 * 1024 * 1024;
 
 class BodyTooLarge extends Error {}
 
-/** The body as text, refusing (BodyTooLarge) one longer than `max` bytes: by Content-Length up front, else while it streams. */
+/**
+ * The body as text. One longer than `max` bytes is refused with BodyTooLarge, by Content-Length up
+ * front, else while it streams.
+ */
 async function readCapped(res: Response, max: number): Promise<string> {
   const declared = Number(res.headers.get('content-length') ?? NaN);
   if (Number.isFinite(declared) && declared > max) {
@@ -55,15 +67,20 @@ async function readCapped(res: Response, max: number): Promise<string> {
   return new TextDecoder().decode(all);
 }
 
-// ------------------------------------------------------------------------------------------------ errors and helpers
+// --- Errors and helpers ---
 
+/** What kind of failure an `IndexerError` is. */
 export type IndexerErrorKind = 'http' | 'network' | 'timeout' | 'aborted' | 'parse' | 'bad-request';
 
+/** Every failure of an indexer read. */
 export class IndexerError extends Error {
   readonly kind: IndexerErrorKind;
-  /** HTTP status (0 when there was no response) */
+  /** The HTTP status, 0 when there was no response. */
   readonly status: number;
-  /** the API's error code (`not_found`, `rate_limited`, `db_busy`, ...) or a synthetic one (`network`, `timeout`, `aborted`, ...) */
+  /**
+   * The API's error code (`not_found`, `rate_limited`, `db_busy`, ...), or a synthetic one
+   * (`network`, `timeout`, `aborted`, ...).
+   */
   readonly code: string;
   readonly retryAfterSec?: number;
   constructor(kind: IndexerErrorKind, status: number, code: string, message: string, retryAfterSec?: number) {
@@ -74,13 +91,19 @@ export class IndexerError extends Error {
     this.code = code;
     this.retryAfterSec = retryAfterSec;
   }
-  /** worth retrying later (rate limit, busy, overloaded, timeout, network) as opposed to a request the server refused */
+  /**
+   * Whether the request is worth retrying later, after a rate limit, a busy or overloaded server, a
+   * timeout or a network failure. A request the server refused is not.
+   */
   get transient(): boolean {
     return this.kind === 'network' || this.kind === 'timeout' || this.status === 429 || this.status === 503 || this.status === 504 || this.status >= 500;
   }
 }
 
-/** Sompi decimal string -> bigint. Throws on anything but an unsigned decimal integer (never coerces through `number`). */
+/**
+ * Turns a sompi decimal string into a bigint. It throws on anything but an unsigned decimal
+ * integer, and never coerces through `number`.
+ */
 export function sompi(v: string | number | bigint): bigint {
   if (typeof v === 'bigint') return v;
   if (typeof v === 'number') {
@@ -91,6 +114,7 @@ export function sompi(v: string | number | bigint): bigint {
   return BigInt(v);
 }
 
+/** `sompi` that passes null and undefined through as null. */
 export const sompiOrNull = (v: string | number | bigint | null | undefined): bigint | null => (v === null || v === undefined ? null : sompi(v));
 
 const HASH = /^[0-9a-f]{64}$/i;
@@ -103,24 +127,28 @@ function assertHex(what: string, v: string): string {
   return v.toLowerCase();
 }
 
-// ------------------------------------------------------------------------------------------------ REST client
+// --- REST client ---
 
+/** Options of one indexer read. */
 export interface RequestOptions {
   signal?: AbortSignal;
-  /** overrides the client's default timeout, ms */
+  /** Overrides the client's default timeout, in ms. */
   timeoutMs?: number;
   /**
-   * the browser's fetch priority: `low` for what only decorates the page (chart, stats, depth, tape), so the reads an order needs get a connection
-   * first when a slow indexer has every one of them busy (a browser opens about six per host over HTTP/1.1)
+   * The browser's fetch priority. `low` is for what only decorates the page, such as the chart,
+   * stats, depth and tape. The reads an order needs then get a connection first when a slow
+   * indexer has every one busy. A browser opens about six per host over HTTP/1.1.
    */
   priority?: 'high' | 'low' | 'auto';
   /**
-   * read past any cache between the app and the indexer (a CDN keeps a live read for a second or more): adds the bypass parameter `_nc`. Left out, a live route is
-   * read this way for a while after the user's own action (data/fresh.ts), so what the action changed shows at once.
+   * Reads past any cache between the app and the indexer, by adding the bypass parameter `_nc`. A
+   * CDN keeps a live read for a second or more. Left out, a live route is read this way for a
+   * while after the user's own action (data/fresh.ts), so what the action changed shows at once.
    */
   fresh?: boolean;
 }
 
+/** The filters of `GET /v1/orders`. */
 export interface OrdersQuery {
   maker?: Hex;
   token?: Hex;
@@ -128,33 +156,40 @@ export interface OrdersQuery {
   limit?: number;
   cursor?: string;
 }
+/** The filters of `GET /v1/fills`. */
 export interface FillsQuery {
   token?: Hex;
   side?: 'ask' | 'bid' | 'sell' | 'buy' | 1 | 2;
   limit?: number;
-  /** id of the oldest fill already seen (paging backwards) */
+  /** The id of the oldest fill already seen, for paging backwards. */
   before?: number | string;
 }
+/** The filters of `GET /v1/token-utxos`. */
 export interface TokenUtxosQuery {
-  /** x-only public key of the owner (or an order covenant id: custody and strays); absent: every holder of `token` (the indexer needs one of the two) */
+  /**
+   * The x-only public key of the owner, or an order covenant id for its custody and strays.
+   * Absent, every holder of `token` is listed. The indexer needs one of the two.
+   */
   owner?: Hex;
   token?: Hex;
   spent?: boolean;
   limit?: number;
-  /** follow `next_cursor` up to this many pages (default 10) */
+  /** Follow `next_cursor` up to this many pages (default 10). */
   maxPages?: number;
 }
 
+/** The paging of `GET /v1/trades/{token}` and of the pair fills. */
 export interface TradesQuery {
   limit?: number;
-  /** a trade id (exclusive): paging backwards */
+  /** A trade id, exclusive, for paging backwards. */
   before?: number | string;
 }
+/** The range of a candle read. */
 export interface CandlesQuery {
   interval: CandleInterval;
-  /** unix ms, inclusive */
+  /** Unix ms, inclusive. */
   from?: number;
-  /** unix ms, exclusive */
+  /** Unix ms, exclusive. */
   to?: number;
   limit?: number;
 }
@@ -164,10 +199,13 @@ export const CANDLE_INTERVALS: readonly CandleInterval[] = ['1m', '5m', '1h', '1
 const count = (v: unknown): number | null => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null);
 const sompiOf = (v: unknown): string | null => (typeof v === 'string' && /^\d+$/.test(v) ? v : null);
 
-/** A signed sompi decimal string (an executor's income and net can be negative: "-1500"). */
+/** A signed sompi decimal string. An executor's income and net can be negative ("-1500"). */
 const signedSompiOf = (v: unknown): string | null => (typeof v === 'string' && /^-?\d+$/.test(v) ? v : null);
 
-/** The activity totals as the summary reads them: a field of another shape is null (shown as a dash), and no `orders` or `kas_locked` means it is not this route. */
+/**
+ * The activity totals as the summary reads them. A field of another shape is null, shown as a
+ * dash. Without `orders` or `kas_locked` the answer is not this route's.
+ */
 function adaptActivity(r: Record<string, unknown>): ActivityStatsView | null {
   const orders = count(r.orders);
   const locked = sompiOf(r.kas_locked);
@@ -193,87 +231,112 @@ function adaptActivity(r: Record<string, unknown>): ActivityStatsView | null {
   };
 }
 
-/** HTTP answers that mean "this indexer does not serve that route" (an older build): the market-data readers resolve to null on them. */
+/**
+ * HTTP answers that mean "this indexer does not serve that route", as from an older build. The
+ * market-data readers resolve to null on them.
+ */
 const isUnsupported = (e: unknown): boolean => e instanceof IndexerError && (e.status === 404 || e.status === 405 || e.status === 501);
 
+/** The indexer reads the app uses. */
 export interface IndexerApi {
   health(o?: RequestOptions): Promise<HealthView>;
   tokens(o?: RequestOptions): Promise<IndexerTokenView[]>;
   /**
-   * `GET /v1/tokens/{id}/declaration`: the token's KCC-23 launch proof (`kob-kcc23-proof/1`), or null when the indexer holds none or does not
-   * serve the route. Never trusted as it is: the caller verifies it against the covenant id (data/token-declarations.ts).
+   * `GET /v1/tokens/{id}/declaration`: the token's KCC-23 launch proof (`kob-kcc23-proof/1`), or
+   * null when the indexer holds none or does not serve the route. It is never trusted as it is.
+   * The caller verifies it against the covenant id (data/token-declarations.ts).
    */
   declaration?(covenantId: Hex, o?: RequestOptions): Promise<unknown | null>;
   book(token: Hex, q?: { depth?: number; aggregate?: boolean }, o?: RequestOptions): Promise<BookView>;
-  /** null when the indexer does not know the covenant id (yet: a fresh placement needs a few seconds) */
+  /**
+   * Null when the indexer does not know the covenant id, or not yet, because a fresh placement
+   * needs a few seconds.
+   */
   order(id: Hex, o?: RequestOptions): Promise<OrderView | null>;
   orders(q?: OrdersQuery, o?: RequestOptions): Promise<Page<OrderView>>;
-  /** follows `next_cursor` until exhausted or `maxPages` (default 20) */
+  /** Follows `next_cursor` until exhausted or `maxPages` (default 20). */
   allOrders(q?: Omit<OrdersQuery, 'cursor'>, o?: RequestOptions & { maxPages?: number }): Promise<OrderView[]>;
   orderEvents(id: Hex, q?: { after?: number | string; limit?: number }, o?: RequestOptions): Promise<Page<EventView> | null>;
   fills(q?: FillsQuery, o?: RequestOptions): Promise<Page<EventView>>;
   strays(q?: { maker?: Hex; limit?: number }, o?: RequestOptions): Promise<StrayView[]>;
   tokenEvents(q?: { token?: Hex; limit?: number }, o?: RequestOptions): Promise<TokenEventView[]>;
   /**
-   * `GET /v1/token-utxos?owner=&token=&spent=` (proven token holdings of either family, decoded state included; follows `next_cursor`). An indexer
-   * without the endpoint (404 / 501 / 405) resolves to `null` (never an error toast); callers fall back to the local token tracker. The indexer
-   * cannot list issuance (genesis) outputs and may list a holding the chain has since spent: callers verify every UTXO on the node.
+   * `GET /v1/token-utxos?owner=&token=&spent=`, the proven token holdings of either family with
+   * their decoded state. It follows `next_cursor`. An indexer without the endpoint (404, 501 or
+   * 405) resolves to `null`, never an error toast, and callers fall back to the local token
+   * tracker. The indexer cannot list issuance (genesis) outputs and may list a holding the chain
+   * has since spent, so callers verify every UTXO on the node.
    */
   tokenUtxos(q: TokenUtxosQuery, o?: RequestOptions): Promise<TokenUtxoView[] | null>;
   /**
-   * `GET /v1/creator-locks?key=`: the tokens whose declaration locks a share for `key` (their covenant ids). A hint only: the caller loads and
-   * verifies each declaration itself (data/token-declarations.ts). Null on an indexer without the route.
+   * `GET /v1/creator-locks?key=`: the covenant ids of the tokens whose declaration locks a share
+   * for `key`. It is a hint only. The caller loads and verifies each declaration itself
+   * (data/token-declarations.ts). Null on an indexer without the route.
    */
   creatorLocks?(key: Hex, o?: RequestOptions): Promise<{ covenant_id: Hex }[] | null>;
   /**
-   * Market data (M5): `GET /v1/trades|candles|stats|depth/{token}`. Each resolves to `null` when the indexer answers 404 / 405 / 501 (an indexer
-   * without the route, or a token it does not know): the views show "no data" and fall back where they can (trades -> `/v1/fills`, depth -> the book).
+   * Market data, `GET /v1/trades|candles|stats|depth/{token}`. Each resolves to `null` when the
+   * indexer answers 404, 405 or 501, for a missing route or a token it does not know. The views
+   * then show "no data" and fall back where they can, trades to `/v1/fills` and depth to the book.
    */
   trades(token: Hex, q?: TradesQuery, o?: RequestOptions): Promise<TradesView | null>;
   candles(token: Hex, q: CandlesQuery, o?: RequestOptions): Promise<CandlesView | null>;
-  /** `GET /v1/quotes/{token}` (the chart's mid line); null on an indexer without the route. Optional: other sources have no quotes. */
+  /**
+   * `GET /v1/quotes/{token}`, the chart's mid line. Null on an indexer without the route. It is
+   * optional, because other sources have no quotes.
+   */
   quotes?(token: Hex, q: CandlesQuery, o?: RequestOptions): Promise<QuotesView | null>;
   stats(token: Hex, o?: RequestOptions): Promise<StatsView | null>;
   depth(token: Hex, q?: { levels?: number }, o?: RequestOptions): Promise<DepthView | null>;
   /**
-   * `GET /v1/stats?since=<unix ms>`: the store's activity totals (orders placed, traders, what the executors earned and paid the miners, KAS locked; all time without `since`).
-   * Resolves to `null` on an indexer without the route (404 / 405 / 501) or an answer of another shape: the Activity summary keeps its dash.
+   * `GET /v1/stats?since=<unix ms>`: the store's activity totals, all time without `since`. They
+   * are the orders placed, the traders, what the executors earned and paid the miners, and the KAS
+   * locked. It resolves to `null` on an indexer without the route (404, 405 or 501) or an answer
+   * of another shape, and the Activity summary keeps its dash.
    */
   activity(q?: { since?: number }, o?: RequestOptions): Promise<ActivityStatsView | null>;
   /**
-   * Token/token pairs (docs/ops/executor.md 5.4; oriented: base A, quote B): `GET /v1/pairs/{base}/{quote}/book?depth=` (levels of source `direct` =
-   * resting KobPair orders, `entry` = KobIfdPair entries at their limit, `route` = quotes implied through the two KAS books; prices quote base units
-   * per base base unit), `GET /v1/pairs?token=` (pairs with live pair orders), `/candles` (derived from the two KAS series: a pair fill never makes
-   * a price) and `/fills` (pair-order fills: volume only, with `volume_24h`). Each resolves to `null` when the indexer does not serve the route
-   * (404 / 405 / 501): the pair view says "unavailable" and still lets the user place orders. Malformed rows are dropped (data/pair-api.ts).
+   * Token/token pairs (docs/ops/executor.md 5.4), oriented with base A and quote B.
+   * - `GET /v1/pairs/{base}/{quote}/book?depth=`: levels of source `direct` (resting KobPair
+   *   orders), `entry` (KobIfdPair entries at their limit) and `route` (quotes implied through the
+   *   two KAS books). Prices are quote base units per base base unit.
+   * - `GET /v1/pairs?token=`: the pairs with live pair orders.
+   * - `/candles`: derived from the two KAS series, because a pair fill never makes a price.
+   * - `/fills`: pair-order fills, volume only, with `volume_24h`.
+   * Each resolves to `null` when the indexer does not serve the route (404, 405 or 501). The pair
+   * view then says "unavailable" and still lets the user place orders. Malformed rows are dropped
+   * (data/pair-api.ts).
    */
   pairBook(base: Hex, quote: Hex, q?: { depth?: number }, o?: RequestOptions): Promise<PairBookView | null>;
   pairs(token?: Hex, o?: RequestOptions): Promise<PairSummaryView[] | null>;
   pairCandles(base: Hex, quote: Hex, q: CandlesQuery, o?: RequestOptions): Promise<PairCandlesView | null>;
   pairFills(base: Hex, quote: Hex, q?: TradesQuery, o?: RequestOptions): Promise<PairFillsView | null>;
   /**
-   * `GET /v1/price/kas-usd` (data/kas-price.ts): the KAS price in USD the indexer fetched, with its time and source. Resolves to `null` when the indexer does
-   * not serve the route (404 / 405 / 501: an older build, or one with `usd_price` off) or answers another shape: the USD display is then unavailable (the app
-   * shows KAS). A 503 (no price yet) and a network error are errors. Absent on an indexer object that predates it (also unavailable).
+   * `GET /v1/price/kas-usd` (data/kas-price.ts): the KAS price in USD the indexer fetched, with
+   * its time and source. It resolves to `null` when the indexer does not serve the route (404,
+   * 405 or 501), as for an older build or one with `usd_price` off, or answers another shape. The
+   * USD display is then unavailable, and the app shows KAS. A 503 (no price yet) and a network
+   * error are errors. An `IndexerApi` without this method is also unavailable.
    */
   kasUsd?(o?: RequestOptions): Promise<KasUsdQuote | null>;
 }
 
+/** Options of `HttpIndexer`. */
 export interface HttpIndexerOptions {
-  /** base URL, e.g. `https://kob.example` (no trailing slash needed) */
+  /** The base URL, such as `https://kob.example`. A trailing slash is not needed. */
   baseUrl: string;
   fetch?: typeof fetch;
-  /** default per-request timeout, ms (default 10 s) */
+  /** The default per-request timeout in ms (default 10 s). */
   timeoutMs?: number;
-  /** retries after 429 / 503-with-Retry-After (default 2) */
+  /** Retries after a 429, or a 503 with Retry-After (default 2). */
   maxRetries?: number;
-  /** upper bound of one backoff wait, ms (default 10 s) */
+  /** The upper bound of one backoff wait in ms (default 10 s). */
   maxBackoffMs?: number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-  /** how long a "token-utxos is unsupported" answer is remembered, ms (default 5 min) */
+  /** How long a "token-utxos is unsupported" answer is remembered, in ms (default 5 min). */
   unsupportedTtlMs?: number;
   now?: () => number;
-  /** largest response body read, bytes (default `MAX_INDEXER_BODY_BYTES`) */
+  /** The largest response body read, in bytes (default `MAX_INDEXER_BODY_BYTES`). */
   maxBodyBytes?: number;
 }
 
@@ -291,6 +354,7 @@ const abortableSleep = (ms: number, signal?: AbortSignal) =>
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 
+/** The REST client of one indexer. */
 export class HttpIndexer implements IndexerApi {
   private readonly base: string;
   private readonly f: typeof fetch;
@@ -327,7 +391,10 @@ export class HttpIndexer implements IndexerApi {
     return `${this.base}${path}${s ? '?' + s : ''}`;
   }
 
-  /** One GET with timeout, caller cancellation and 429 / 503 backoff. Returns status + parsed body. */
+  /**
+   * One GET with a timeout, caller cancellation and backoff on 429 and 503. Returns the status and
+   * the parsed body.
+   */
   private async request(url: string, o: RequestOptions = {}): Promise<{ status: number; body: unknown }> {
     for (let attempt = 0; ; attempt++) {
       const ctl = new AbortController();
@@ -412,7 +479,8 @@ export class HttpIndexer implements IndexerApi {
   }
 
   async book(token: Hex, q: { depth?: number; aggregate?: boolean } = {}, o?: RequestOptions) {
-    // bids that can no longer fund one base unit come back with amount 0: they are not liquidity and never enter the book (they stay in the maker's orders)
+    // Bids that can no longer fund one base unit come back with amount 0. They are not liquidity
+    // and never enter the book, but they stay in the maker's orders.
     return dropEmptyRows(await this.get<BookView>(`/v1/books/${assertHash('token', token)}`, { depth: q.depth, aggregate: q.aggregate }, o));
   }
 
@@ -503,7 +571,7 @@ export class HttpIndexer implements IndexerApi {
       .map((covenant_id) => ({ covenant_id }));
   }
 
-  /** GET that maps "route not served" (404 / 405 / 501) to null. */
+  /** GET that maps "route not served" (404, 405 or 501) to null. */
   private async getOptional<T>(path: string, query: Record<string, string | number | boolean | undefined>, o?: RequestOptions): Promise<T | null> {
     try {
       return await this.get<T>(path, query, o);
@@ -544,7 +612,10 @@ export class HttpIndexer implements IndexerApi {
     return r && Array.isArray(r.bids) && Array.isArray(r.asks) ? dropZeroDepthLevels(r) : null;
   }
 
-  /** the path of a pair route: both ids hex32 and different (`base == quote` is a 400 of the server: refused here already) */
+  /**
+   * The path of a pair route, with both ids hex32 and different. The server answers 400 for
+   * `base == quote`, so that is refused here already.
+   */
   private pairPath(base: Hex, quote: Hex, tail: string): string {
     const b = assertHash('base', base);
     const q = assertHash('quote', quote);
@@ -581,8 +652,11 @@ const POWER = /^[a-z0-9-]{1,32}$/;
 const WARNING = /^[a-z0-9_-]{1,32}$/;
 
 /**
- * A `/v1/tokens` item made safe to render: `powers` is a list of short lower-case words (anything else is dropped), `ticker` is a string (empty when
- * the token is not in the registry). An older executor's `standing` (a registry judgement KOB no longer makes) is dropped: nothing acts on it.
+ * Makes a `/v1/tokens` item safe to render.
+ * - `powers` and `warnings` become lists of short lower-case words, and anything else is dropped.
+ * - `ticker` becomes a string, empty when the token is not in the registry.
+ * - An older executor's `standing`, a registry judgement KOB does not make, is dropped, because
+ *   nothing acts on it.
  */
 export function normalizeTokenView(v: IndexerTokenView): IndexerTokenView {
   const out: IndexerTokenView = { ...v };
@@ -590,7 +664,7 @@ export function normalizeTokenView(v: IndexerTokenView): IndexerTokenView {
   delete (out as { standing?: unknown }).standing;
   if (v.declaration !== undefined && v.declaration !== true) delete out.declaration;
   if (v.powers !== undefined) out.powers = Array.isArray(v.powers) ? [...new Set(v.powers.filter((p): p is string => typeof p === 'string' && POWER.test(p)))] : [];
-  // warnings are short lower-case words too (the UI renders the ones it knows)
+  // Warnings are short lower-case words too. The UI renders the ones it knows.
   if (v.warnings !== undefined) out.warnings = Array.isArray(v.warnings) ? [...new Set(v.warnings.filter((p): p is string => typeof p === 'string' && WARNING.test(p)))] : [];
   return out;
 }
@@ -603,21 +677,25 @@ function parseRetryAfter(v: string | null): number | undefined {
 
 function httpError(status: number, body: unknown, retryAfterSec?: number): IndexerError {
   const err = (body as { error?: { code?: unknown; message?: unknown } } | null)?.error;
-  // the indexer's own words are shown to the user: a short plain code, and a message without control / bidi / zero-width characters
+  // The indexer's own words are shown to the user. They are a short plain code, and a message
+  // without control, bidi or zero-width characters.
   const code = typeof err?.code === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(err.code) ? err.code : `http_${status}`;
   const said = typeof err?.message === 'string' ? plainUntrusted(err.message) : '';
   const message = said || `The indexer answered HTTP ${status}.`;
   return new IndexerError('http', status, code, message, retryAfterSec);
 }
 
-/** `https://host/base` -> `wss://host/base/v1/ws` (and http -> ws); a ws(s) URL just gets the path appended. */
+/**
+ * Turns `https://host/base` into `wss://host/base/v1/ws`, and http into ws. A ws or wss URL just
+ * gets the path appended.
+ */
 export function toFeedUrl(base: string): string {
   const b = base.trim().replace(/\/+$/, '');
   const ws = b.replace(/^http(s?):/i, (_m, s: string) => `ws${s}:`);
   return `${ws}/v1/ws`;
 }
 
-// ------------------------------------------------------------------------------------------------ WebSocket feed
+// --- WebSocket feed ---
 
 /** Channel names accepted by the server (`api/ws.rs`). */
 export function isValidChannel(c: string): boolean {
@@ -636,19 +714,25 @@ export interface WebSocketLike {
 }
 export type WebSocketCtor = new (url: string) => WebSocketLike;
 
+/** The connection state of an `IndexerFeed`. */
 export type FeedStatus = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed';
 
+/** Notices were missed, so the app must read again what it shows. */
 export interface ResyncEvent {
-  /** `server`: the server told us we fell behind; `reconnect`: the socket was down, events were missed */
+  /**
+   * `server` when the server said the client fell behind, `reconnect` when the socket was down and
+   * events were missed.
+   */
   reason: 'server' | 'reconnect';
   missedEvents?: number;
 }
 
+/** The events an `IndexerFeed` emits, by name. */
 export interface FeedEventMap {
   status: { status: FeedStatus; attempt: number };
   open: { reconnect: boolean };
   close: { code: number | null; reason: string; willReconnect: boolean };
-  /** every well-formed frame, before dispatch */
+  /** Every well-formed frame, before dispatch. */
   frame: WsFrame;
   health: { type: string; data: HealthCursorNotice | HealthTickNotice };
   reorg: ReorgNotice;
@@ -657,25 +741,30 @@ export interface FeedEventMap {
   order: OrderNotice;
   resync: ResyncEvent;
   subscribed: { channels: string[]; errors: string[] };
-  /** socket errors and server `error` frames; the feed keeps running */
+  /** Socket errors and server `error` frames. The feed keeps running. */
   error: { message: string };
 }
 
+/** Options of `IndexerFeed`. */
 export interface IndexerFeedOptions {
-  /** the indexer BASE url (http/https/ws/wss); `/v1/ws` is appended */
+  /** The indexer's base URL (http, https, ws or wss). `/v1/ws` is appended. */
   url: string;
   webSocket?: WebSocketCtor;
   backoffBaseMs?: number;
   backoffMaxMs?: number;
-  /** jitter source in [0,1) */
+  /** The jitter source, in [0,1). */
   random?: () => number;
-  /** client keepalive `{"op":"ping"}` interval, ms (the server drops sockets idle for 60 s); 0 disables */
+  /**
+   * The client keepalive `{"op":"ping"}` interval in ms. The server drops sockets idle for 60 s.
+   * 0 disables it.
+   */
   pingIntervalMs?: number;
 }
 
 const WS_OPEN = 1;
 const CHANNELS_PER_MESSAGE = 24; // the server caps one message at 4 KiB; a channel name is at most 71 chars
 
+/** The indexer's WebSocket feed, which reconnects and re-subscribes by itself. */
 export class IndexerFeed {
   private wsUrl: string;
   private readonly Ctor: WebSocketCtor;
@@ -691,7 +780,10 @@ export class IndexerFeed {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private readonly handlers = new Map<string, Set<(v: never) => void>>();
-  /** channel -> since when the server has confirmed it on the open socket without a gap (`liveSince`) */
+  /**
+   * For each channel, since when the server has confirmed it on the open socket without a gap
+   * (`liveSince`).
+   */
   private readonly live = new Map<string, number>();
 
   constructor(o: IndexerFeedOptions) {
@@ -713,7 +805,7 @@ export class IndexerFeed {
     return this.wsUrl;
   }
 
-  /** currently wanted channels */
+  /** The channels wanted now. */
   channels(): string[] {
     return [...this.wanted].sort();
   }
@@ -730,7 +822,7 @@ export class IndexerFeed {
       try {
         (cb as (x: FeedEventMap[E]) => void)(v);
       } catch {
-        /* a subscriber's bug must not tear the feed down */
+        /* A subscriber's bug must not tear the feed down. */
       }
     }
   }
@@ -741,7 +833,7 @@ export class IndexerFeed {
     this.emit('status', { status: s, attempt: this.attempt });
   }
 
-  /** Starts (or resumes) the connection; idempotent. */
+  /** Starts or resumes the connection. It is idempotent. */
   connect(): void {
     if (this.state === 'closed') this.state = 'idle';
     if (this.ws || this.retryTimer || this.state === 'connecting' || this.state === 'open') return;
@@ -768,7 +860,8 @@ export class IndexerFeed {
       this.sendSubscribe([...this.wanted]);
       this.startPing();
       this.emit('open', { reconnect });
-      // events published while the socket was down are gone: the app must refetch what it shows
+      // Events published while the socket was down are gone, so the app must refetch what it
+      // shows.
       if (reconnect) this.emit('resync', { reason: 'reconnect' });
     };
     ws.onmessage = (ev) => {
@@ -826,7 +919,10 @@ export class IndexerFeed {
     }
   }
 
-  /** Adds channels (sent now if the socket is open, and re-sent after every reconnect). Throws on an invalid name. */
+  /**
+   * Adds channels. They are sent now if the socket is open, and again after every reconnect. It
+   * throws on an invalid name.
+   */
   subscribe(channels: string[]): void {
     for (const c of channels) if (!isValidChannel(c)) throw new Error(`invalid feed channel: ${c}`);
     const fresh = channels.filter((c) => !this.wanted.has(c.toLowerCase()));
@@ -841,9 +937,12 @@ export class IndexerFeed {
   }
 
   /**
-   * Since when every one of `channels` has been delivering its notices without a gap: the server confirmed it on the socket that is open now and
-   * has not reported dropped notices since (a resync restarts it). Null while the socket is not open or a channel is not confirmed. A read started
-   * after this moment is current until the next notice of these channels.
+   * Since when every one of `channels` has been delivering its notices without a gap.
+   *
+   * The server confirmed each on the socket that is open now and has not reported dropped notices
+   * since. A resync restarts the time. Null while the socket is not open or a channel is not
+   * confirmed. A read started after this moment is current until the next notice of these
+   * channels.
    */
   liveSince(channels: readonly string[]): number | null {
     if (this.state !== 'open') return null;
@@ -856,7 +955,7 @@ export class IndexerFeed {
     return since;
   }
 
-  /** Resolves once the socket is open (immediately if it already is). */
+  /** Resolves once the socket is open, at once if it already is. */
   whenOpen(timeoutMs = 10_000): Promise<void> {
     if (this.state === 'open') return Promise.resolve();
     return new Promise((resolve, reject) => {
@@ -886,7 +985,7 @@ export class IndexerFeed {
     const ch = frame.channel ?? '';
     switch (frame.type) {
       case 'resync': {
-        // notices were dropped: nothing is known to be complete before now
+        // Notices were dropped, so nothing is known to be complete before now.
         const now = Date.now();
         for (const c of this.live.keys()) this.live.set(c, now);
         const missed = (frame.data as { missed_events?: number } | undefined)?.missed_events;
@@ -895,7 +994,8 @@ export class IndexerFeed {
       }
       case 'subscribed': {
         const d = (frame.data ?? {}) as { channels?: string[]; errors?: string[] };
-        // the server lists every channel of the session: the first listing on this socket starts its unbroken run of notices
+        // The server lists every channel of the session. The first listing on this socket starts
+        // its unbroken run of notices.
         for (const c of d.channels ?? []) if (typeof c === 'string' && !this.live.has(c.toLowerCase())) this.live.set(c.toLowerCase(), Date.now());
         this.emit('subscribed', { channels: d.channels ?? [], errors: d.errors ?? [] });
         return;
@@ -925,9 +1025,12 @@ export class IndexerFeed {
   }
 
   /**
-   * Points the feed at another indexer (failover, data/indexer-failover.ts): the socket to the old one is dropped without a reconnect attempt to it, the
-   * wanted channels are subscribed on the new one, and the first open there reports a reconnect with a resync (what the app shows came from another
-   * indexer: every live view reads again). Before `connect()` only the address changes.
+   * Points the feed at another indexer, for failover (data/indexer-failover.ts).
+   *
+   * The socket to the old one is dropped without a reconnect attempt to it. The wanted channels
+   * are subscribed on the new one. The first open there reports a reconnect with a resync, because
+   * what the app shows came from another indexer, so every live view reads again. Before
+   * `connect()` only the address changes.
    */
   retarget(url: string): void {
     const next = toFeedUrl(url);
@@ -946,7 +1049,7 @@ export class IndexerFeed {
       try {
         ws.close(1000, 'indexer changed');
       } catch {
-        /* already closed */
+        /* Already closed. */
       }
     }
     this.attempt = 0;
@@ -967,7 +1070,7 @@ export class IndexerFeed {
       try {
         ws.close(1000, 'client closed');
       } catch {
-        /* already closed */
+        /* Already closed. */
       }
     }
     this.setStatus('closed');
