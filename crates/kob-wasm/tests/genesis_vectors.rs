@@ -1,5 +1,6 @@
-//! `verifyGenesis` over recorded mainnet and testnet-10 token geneses (`crates/kob-protocol/vectors/genesis-open.json`: the genesis group
-//! of real tokens as the web app hands it to kob-wasm, with the verdict), and the same data tampered.
+//! Tests `verifyGenesis` over recorded mainnet and testnet-10 token geneses
+//! (`crates/kob-protocol/vectors/genesis-open.json`: the genesis group of real tokens as the web
+//! app hands it to kob-wasm, with the verdict), and the same data tampered.
 
 use kob_wasm::api::verify_genesis;
 use serde_json::{json, Value};

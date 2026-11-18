@@ -1,5 +1,6 @@
-//! `api::build` of a `claimOrder` (bid-delivery-spec §7): the JSON entry the web app uses builds the maker's claim, and
-//! with `ownKeys` the order maker, the change key and a placed order's maker must be the wallet's.
+//! Tests `api::build` of a `claimOrder` (bid-delivery-spec §7): the JSON entry the web app uses
+//! builds the maker's claim, and with `ownKeys` the order maker, the change key and a placed
+//! order's maker must be the wallet's.
 use kob_protocol::artifacts::{token_template, TemplateId};
 use kob_protocol::build::{Action, ClaimOrder, Replacement};
 use kob_protocol::state::{AnyState, AskState, BidState, TokenState, MODE_ACCUMULATE};

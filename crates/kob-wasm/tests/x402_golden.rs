@@ -1,11 +1,11 @@
-//! Golden vectors of the x402 wasm bindings.
+//! Tests the golden vectors of the x402 wasm bindings.
 //!
 //! `crates/kob-x402/vectors/golden/x402-payments.json` holds requests and the exact results of the
 //! `kob_wasm::x402` functions (KAS, KCC-20 and swap-and-pay payments, the wallet flow, preflight,
 //! revocation, requirement builders, hashes and digests) for deterministic keys and fixtures. This
 //! test regenerates them and compares with the committed file (`KOB_REGEN=1` rewrites it); the node
-//! test `packages/kob-x402/test/wasm-golden.test.ts` replays every request through the wasm build and
-//! must reproduce the same bytes.
+//! test `packages/kob-x402/test/wasm-golden.test.ts` replays every request through the wasm build
+//! and must reproduce the same bytes.
 //!
 //! Schnorr signing is deterministic (`sign_schnorr_no_aux_rand`), so the vectors are stable.
 
@@ -505,8 +505,8 @@ fn x402_golden_vectors_are_current() {
     assert_eq!(committed, fresh, "x402 golden vectors drifted: review, then regenerate with KOB_REGEN=1");
 }
 
-/// Audit A1-3: the payer cap of a native payment is required (no default to the offer amount, as `PayOptions::new`),
-/// and an offer above it is refused.
+/// A1-3: the payer cap of a native payment is required (no default to the offer amount, as
+/// `PayOptions::new`), and an offer above it is refused.
 #[test]
 fn pay_native_requires_the_payer_cap() {
     let req_native = json!({ "network": "kaspa:testnet-10", "amount": "50000000", "payTo": address(MERCHANT), "maxTimeoutSeconds": 60, "finality": "accepted" });

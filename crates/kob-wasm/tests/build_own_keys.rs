@@ -1,6 +1,8 @@
-//! Regression: the builders do not tie a destination key to a signer key. `api::build` takes an optional
-//! `"ownKeys"` list (the wallet's x-only keys): every key an action pays back to the user (order maker, change,
-//! token change, taker, replacement maker) must then be one of them.
+//! Tests that the builders do not tie a destination key to a signer key.
+//!
+//! `api::build` takes an optional `"ownKeys"` list (the wallet's x-only keys): every key an action
+//! pays back to the user (order maker, change, token change, taker, replacement maker) must then be
+//! one of them.
 use kob_wasm::api;
 use serde_json::{json, Value};
 
