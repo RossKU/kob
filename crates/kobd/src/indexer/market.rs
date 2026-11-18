@@ -32,6 +32,11 @@
 //! volume is in `pair_fills` (`indexer::pairs`). The KAS-book counterparties of a routed pair fill
 //! are ordinary KAS fills of their own tokens.
 //!
+//! # Prints that make no price
+//!
+//! A fill under the store's minimum value and a self-trade are left out of every view here
+//! (`priced_fill!`), so one base unit traded with oneself cannot move the chart or `last`.
+//!
 //! # Price basis
 //!
 //! Prices are sompi per `price_basis` token base units. The basis is the standard scale of the
@@ -44,7 +49,7 @@
 use crate::hex::Hash32;
 use crate::indexer::db::DbResult;
 use crate::indexer::reads::{self, BookSide, ReadCtx};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
 
@@ -66,6 +71,8 @@ pub struct FillRow {
     /// The DAA at which the order's terms of this fill were set: its placement, or its latest
     /// in-place amend before the fill.
     pub since_daa: i64,
+    /// The order's maker (`ids.id`), if known.
+    pub maker: Option<i64>,
 }
 
 /// A trade, see the module docs. Amounts are in base units and sompi, the price is per basis.
@@ -106,7 +113,20 @@ fn side_sums(rows: &[&FillRow], basis: i128) -> (i128, i128, i128, i64) {
 }
 
 /// Builds the trade of the fills of one transaction (all of one token). `None` when nothing moved.
+///
+/// The fills of a maker with fills on both sides of the transaction are a self-trade and left out
+/// (`priced_fill!`).
 pub fn trade_of(fills: &[FillRow], basis: i128) -> Option<Trade> {
+    let both = |m: Option<i64>| {
+        m.is_some() && fills.iter().any(|f| f.maker == m && f.side == 1) && fills.iter().any(|f| f.maker == m && f.side == 2)
+    };
+    let kept: Vec<FillRow>;
+    let fills = if fills.iter().any(|f| both(f.maker)) {
+        kept = fills.iter().filter(|f| !both(f.maker)).cloned().collect();
+        kept.as_slice()
+    } else {
+        fills
+    };
     let first = fills.first()?;
     let asks: Vec<&FillRow> = fills.iter().filter(|f| f.side == 1).collect();
     let bids: Vec<&FillRow> = fills.iter().filter(|f| f.side == 2).collect();
@@ -210,12 +230,55 @@ pub(crate) fn add_trade(out: &mut VecDeque<Candle>, t: &Trade, interval: i64) {
 
 // SQL.
 
+/// The `meta` key of the KAS a fill must move to make a price: the listing rule
+/// `min_order_value_sompi` ([`set_price_min_fill`]); a store without it: 0.
+pub const PRICE_MIN_FILL_KEY: &str = "price_min_fill_sompi";
+
+/// Sets the KAS a fill must move to make a price ([`PRICE_MIN_FILL_KEY`]).
+///
+/// A change rebuilds the candles at the next backfill (`candles::backfill`).
+pub fn set_price_min_fill(conn: &Connection, sompi: i64) -> DbResult<()> {
+    let v = sompi.max(0).to_string();
+    if super::db::meta_get(conn, PRICE_MIN_FILL_KEY)?.as_deref() != Some(v.as_str()) {
+        super::db::meta_set(conn, PRICE_MIN_FILL_KEY, &v)?;
+    }
+    Ok(())
+}
+
+/// The fill events (`e`, of order `o`) that make prices (security review 2026-11-17 M5): worth at
+/// least [`PRICE_MIN_FILL_KEY`] sompi at their quote, and not a self-trade. A self-trade is a fill
+/// whose transaction a key of the order's maker funded (a direct take of the maker's own order),
+/// or one with a fill of the other side of an order of the same maker (an executor crossing two
+/// orders of one maker; [`trade_of`] drops those, by the `maker` of the rows of a transaction).
+/// The trades, the candles, the last price and the 24 h statistics leave the others out.
+macro_rules! priced_fill {
+    () => {
+        "e.amount * e.price >= COALESCE((SELECT CAST(m.v AS INTEGER) FROM meta m WHERE m.k = 'price_min_fill_sompi'), 0) * COALESCE(o.scale, 1) \
+         AND NOT EXISTS (SELECT 1 FROM scripts sc WHERE sc.id = e.executor_id AND length(sc.spk) = 36 AND substr(sc.spk, 1, 3) = x'000020' \
+           AND substr(sc.spk, 36, 1) = x'ac' AND substr(sc.spk, 4, 32) = (SELECT mk.h FROM ids mk WHERE mk.id = o.maker_id))"
+    };
+}
+
 /// The select of the fill events of a token (`?1`), with the scale and the terms DAA of each order.
-pub(crate) const FILL_SELECT: &str =
+///
+/// Only the fills that make prices (`priced_fill!`).
+pub(crate) const FILL_SELECT: &str = concat!(
     "SELECT e.id, e.txid, e.ts, e.daa, e.side, e.amount, e.price, COALESCE(o.scale, 1), \
-     COALESCE((SELECT a.daa FROM order_events a WHERE a.order_id = e.order_id AND a.kind = 'amend' AND a.id < e.id ORDER BY a.id DESC LIMIT 1), o.genesis_daa) \
+     COALESCE((SELECT a.daa FROM order_events a WHERE a.order_id = e.order_id AND a.kind = 'amend' AND a.id < e.id ORDER BY a.id DESC LIMIT 1), o.genesis_daa), \
+     o.maker_id \
      FROM order_events e JOIN orders o ON o.id = e.order_id \
-     WHERE e.kind = 'fill' AND e.token_id = (SELECT id FROM ids WHERE h = ?1) AND e.amount IS NOT NULL AND e.amount > 0 AND e.price IS NOT NULL AND e.side IN (1, 2)";
+     WHERE e.kind = 'fill' AND e.token_id = (SELECT id FROM ids WHERE h = ?1) AND e.amount IS NOT NULL AND e.amount > 0 AND e.price IS NOT NULL AND e.side IN (1, 2) AND ",
+    priced_fill!()
+);
+
+/// The time of the newest fill of a token (`?1`) that makes a price, before `?2`.
+const NEWEST_PRICED: &str = concat!(
+    "SELECT e.ts FROM order_events e JOIN orders o ON o.id = e.order_id \
+     WHERE e.kind = 'fill' AND e.token_id = (SELECT id FROM ids WHERE h = ?1) AND e.ts < ?2 AND e.amount > 0 AND e.price IS NOT NULL \
+     AND e.side IN (1, 2) AND ",
+    priced_fill!(),
+    " ORDER BY e.ts DESC LIMIT 1"
+);
 
 /// Reads a [`FillRow`] from a row of [`FILL_SELECT`].
 pub(crate) fn fill_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<FillRow> {
@@ -229,6 +292,7 @@ pub(crate) fn fill_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<FillRow> {
         price: r.get(6)?,
         scale: r.get(7)?,
         since_daa: r.get(8)?,
+        maker: r.get(9)?,
     })
 }
 
@@ -391,6 +455,11 @@ fn newest_fill_ts(conn: &Connection, token: &Hash32) -> DbResult<Option<i64>> {
     )?)
 }
 
+/// The time of the newest fill of `token` before `before` (ms) that makes a price (`priced_fill!`).
+fn newest_priced_ts(conn: &Connection, token: &Hash32, before: i64) -> DbResult<Option<i64>> {
+    Ok(conn.prepare_cached(NEWEST_PRICED)?.query_row(params![token.0.to_vec(), before], |r| r.get(0)).optional()?)
+}
+
 /// The newest KAS trade time of the token in ms, if any.
 ///
 /// Pair fills carry no KAS price and are excluded.
@@ -416,14 +485,21 @@ pub fn candle_series(
 
 /// The price, per `basis`, of the last KAS trade of `token` before `ts` (ms), if any.
 pub fn last_trade_price_before(conn: &Connection, token: &Hash32, basis: i128, ts: i64) -> DbResult<Option<i128>> {
-    let last: Option<i64> = conn.query_row(
-        "SELECT MAX(ts) FROM order_events WHERE kind = 'fill' AND token_id = (SELECT id FROM ids WHERE h = ?1) AND price IS NOT NULL AND ts < ?2",
-        params![token.0.to_vec(), ts],
-        |r| r.get(0),
-    )?;
-    let Some(t) = last else { return Ok(None) };
-    let (trades, _) = window_trades(conn, token, t, t + 1, basis)?;
-    Ok(trades.last().map(|t| t.price))
+    Ok(last_trade_before(conn, token, basis, ts)?.map(|t| t.price))
+}
+
+/// The last trade of `token` before `ts` (ms). A block time whose fills are all self-trades
+/// makes none, so it looks further back (a few times at most).
+fn last_trade_before(conn: &Connection, token: &Hash32, basis: i128, mut ts: i64) -> DbResult<Option<Trade>> {
+    for _ in 0..16 {
+        let Some(t) = newest_priced_ts(conn, token, ts)? else { return Ok(None) };
+        let (trades, _) = window_trades(conn, token, t, t + 1, basis)?;
+        if let Some(last) = trades.into_iter().last() {
+            return Ok(Some(last));
+        }
+        ts = t;
+    }
+    Ok(None)
 }
 
 /// The newest chain block time, in ms, that the indexer has recorded an event for.
@@ -710,8 +786,8 @@ fn depth_bands(bids: &[(i128, i128)], asks: &[(i128, i128)]) -> Option<(i128, i1
 }
 
 fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbResult<Touch> {
-    let asks = reads::book_side_sorted(conn, ctx, token, 1)?;
-    let bids = reads::book_side_sorted(conn, ctx, token, 2)?;
+    let asks = reads::book_side_sorted(conn, ctx, token, 1, None)?;
+    let bids = reads::book_side_sorted(conn, ctx, token, 2, None)?;
     let price = |l: &reads::RawBookLevel| per_basis(l.0 .0, l.0 .1, basis);
     // Levels are in book order (exact price per base unit, best first), so the first one is the
     // best and the band is a prefix.
@@ -731,13 +807,10 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
     let basis = price_basis(conn, token, decimals)?;
     let now = ctx.window_end(newest_event_ts(conn)?);
     let (mut last, mut last_ts, mut last_side) = (None, None, None);
-    if let Some(newest) = newest_fill_ts(conn, token)? {
-        let (tail, _) = window_trades(conn, token, newest, newest + 1, basis)?;
-        if let Some(t) = tail.last() {
-            last = Some(t.price);
-            last_ts = Some(t.ts);
-            last_side = Some(if t.buy { "buy" } else { "sell" });
-        }
+    if let Some(t) = last_trade_before(conn, token, basis, i64::MAX)? {
+        last = Some(t.price);
+        last_ts = Some(t.ts);
+        last_side = Some(if t.buy { "buy" } else { "sell" });
     }
     let (window, window_truncated) = match now {
         Some(n) => window_trades(conn, token, n - DAY_MS, n + 1, basis)?,
@@ -928,7 +1001,7 @@ mod tests {
     /// A fill of `amount` base units at `price` sompi per whole token of 100 base units (scale
     /// 100). The basis is 100.
     fn f(id: i64, tx: u8, ts: i64, side: i64, amount: i64, price: i64, gdaa: i64) -> FillRow {
-        FillRow { id, txid: vec![tx; 32], ts, daa: ts / 100, side, amount, price, scale: 100, since_daa: gdaa }
+        FillRow { id, txid: vec![tx; 32], ts, daa: ts / 100, side, amount, price, scale: 100, since_daa: gdaa, maker: None }
     }
 
     #[test]
@@ -984,6 +1057,58 @@ mod tests {
         let page = trades(&conn, &ctx, &token, None, next.parse().ok(), 5).unwrap();
         assert_eq!(page.items.iter().map(|t| (t.fills, t.amount.as_str())).collect::<Vec<_>>(), [(3, "30")]);
         assert_eq!(page.next_cursor, None);
+    }
+
+    /// Security review 2026-11-17 M5: a self-trade (an executor crossing two orders of one maker, or
+    /// a maker's own direct take) and a fill under the store's minimum value make no price: no
+    /// trade, no candle, no last price.
+    #[test]
+    fn self_trades_and_fills_under_the_minimum_value_make_no_price() {
+        let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
+        let token = Hash32([0x51; 32]);
+        let (alice, bob) = ([0xa1u8; 32], [0xb0u8; 32]);
+        for h in [&token.0[..], &[0u8][..], &alice[..], &bob[..]] {
+            conn.execute("INSERT INTO ids (h) VALUES (?1)", [h]).unwrap();
+        }
+        // ask 1 and bid 2 of alice, bid 3 of bob; scale 100, so 10 base units at 250 is 25 sompi
+        for (cov, side, maker) in [(1u8, 1, alice), (2, 2, alice), (3, 2, bob)] {
+            conn.execute(
+                "INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, scale, in_book, genesis_state, genesis_block, genesis_daa, listed) \
+                 VALUES (?1, 'KobAsk', (SELECT id FROM ids WHERE h = x'00'), 1, ?2, (SELECT id FROM ids WHERE h = ?3), (SELECT id FROM ids WHERE h = ?4), 100, 1, x'00', 1, 1, 1)",
+                rusqlite::params![vec![cov], side, &maker[..], &token.0[..]],
+            )
+            .unwrap();
+        }
+        // alice's key funded tx 0xcc
+        let p2pk = [&[0u8, 0, 0x20][..], &alice[..], &[0xac]].concat();
+        conn.execute("INSERT INTO scripts (id, spk) VALUES (7, ?1)", [&p2pk]).unwrap();
+        let fill = |tx: u8, ts: i64, cov: u8, side: i64, price: i64, executor: Option<i64>| {
+            conn.execute(
+                "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, executor_id) \
+                 VALUES ((SELECT id FROM orders WHERE covenant_id = ?1), ?2, ?2, ?3, ?4, 0, 'fill', (SELECT id FROM ids WHERE h = ?5), ?6, 10, ?7, ?8)",
+                rusqlite::params![vec![cov], ts / 1_000, ts, vec![tx; 32], &token.0[..], side, price, executor],
+            )
+            .unwrap();
+        };
+        fill(0xaa, 1_000, 1, 1, 250, None); // alice's ask taken by bob's bid: a trade
+        fill(0xaa, 1_000, 3, 2, 260, None);
+        fill(0xbb, 2_000, 1, 1, 900, None); // alice's ask crossed with alice's bid
+        fill(0xbb, 2_000, 2, 2, 900, None);
+        fill(0xcc, 3_000, 1, 1, 950, Some(7)); // alice takes her own ask directly
+        let ctx = ReadCtx { node_daa: None, settle_depth_daa: 100, now_unix: None };
+        let prices = |conn: &Connection| {
+            trades(conn, &ctx, &token, None, None, 10).unwrap().items.iter().map(|t| t.price.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(prices(&conn), ["250"]);
+        let s = stats(&conn, &ctx, &token, None).unwrap();
+        assert_eq!((s.last.as_deref(), s.trades_24h), (Some("250"), 1));
+        assert_eq!(scan_candles(&conn, &token, 100, 60_000, 0, 60_000, 10).unwrap().len(), 1);
+        // a store whose listing rule asks 1 KAS: 25 sompi make no price
+        set_price_min_fill(&conn, 100_000_000).unwrap();
+        assert!(prices(&conn).is_empty());
+        assert_eq!(stats(&conn, &ctx, &token, None).unwrap().last, None);
+        set_price_min_fill(&conn, 25).unwrap();
+        assert_eq!(prices(&conn), ["250"]);
     }
 
     #[test]

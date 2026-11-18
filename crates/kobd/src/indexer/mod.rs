@@ -162,6 +162,8 @@ impl Indexer {
         let writer = lock::WriterLock::acquire(&cfg)?;
         let tokens = load_tokens(&cfg)?;
         let conn = db::open_writer_with(&cfg.db_path(), &cfg.network, cfg.lean)?;
+        // the KAS a fill must move to make a price (market::priced_fill)
+        market::set_price_min_fill(&conn, cfg.rules.min_order_value_sompi)?;
         if !cfg.lean && cfg.archive_pruning {
             // The index that the archive pruning reads. It takes a few seconds once, on a store of
             // millions of holdings.
@@ -503,6 +505,8 @@ pub fn replay_from_log(cfg: &IndexerConfig) -> Result<ReplayReport, IndexerError
             None => {
                 let tokens = load_tokens(cfg)?;
                 let conn = db::open_writer(&cfg.db_path(), &cfg.network)?;
+                // the KAS a fill must move to make a price (market::priced_fill)
+                market::set_price_min_fill(&conn, cfg.rules.min_order_value_sompi)?;
                 let new = Ingest::new(conn, processor(cfg, tokens), None).with_config(ingest_config(cfg));
                 new.init_cursor(&ingest::Cursor { hash: rec.start, daa: 0 })?;
                 ing.insert(new)
@@ -555,6 +559,8 @@ pub fn replay_onto_database(cfg: &IndexerConfig) -> Result<ForwardReport, Indexe
         )));
     }
     let conn = db::open_writer(&cfg.db_path(), &cfg.network)?;
+    // the KAS a fill must move to make a price (market::priced_fill)
+    market::set_price_min_fill(&conn, cfg.rules.min_order_value_sompi)?;
     let from = ingest::records_next_n(&conn)?;
     if from == 0 {
         return Err(IndexerError::Config(
@@ -687,6 +693,8 @@ fn apply_frames(
 /// own and no log, so nothing is appended.
 fn apply_frames_from(cfg: &IndexerConfig, tokens: Arc<TokenAllowlist>, from: u64) -> Result<(), IndexerError> {
     let conn = db::open_writer(&cfg.db_path(), &cfg.network)?;
+    // the KAS a fill must move to make a price (market::priced_fill)
+    market::set_price_min_fill(&conn, cfg.rules.min_order_value_sompi)?;
     let mut ing = Ingest::new(conn, processor(cfg, tokens), None).with_config(ingest_config(cfg));
     apply_frames(&mut ing, &cfg.records_dir(), from, None, false)?;
     Ok(())
