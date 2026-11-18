@@ -1,14 +1,24 @@
-// The drag handle under the trading row (book | chart | ticket; three columns, a fine pointer): a horizontal separator that sets the row's height (founder, 2026-11-11). The row is never shorter
-// than its ticket's fit (`--tk-fit`, so the ticket has no empty room) and never taller than a screen's worth under the header and the market bar (with a floor of 400 px of room above the fit, so a
-// short window can still be dragged). The height is `--mkt-row-h` on the grid (market.css gives the row that as its least height); the chart's box, the book's levels and the room under the ticket
-// (Market trades) follow. Drag, ArrowUp / ArrowDown in 16 px steps, Home / End for the ends, double-click or Enter reset to the default. The choice is kept in this browser (clamped again on load and
-// whenever the window or the ticket's fit changes). Live data never moves it: nothing here reads the book or the ticket's content.
+// The drag handle under the trading row, which has the book, the chart and the ticket in three
+// columns, with a fine pointer. It is a horizontal separator that sets the row's height. The row
+// is never shorter than its ticket's fit (`--tk-fit`), so the ticket has no empty room. It is
+// never taller than a screen's worth under the header and the market bar. There is a floor of
+// 400 px of room above the fit, so a short window can still be dragged. The height is
+// `--mkt-row-h` on the grid, and market.css gives the row that as its least height. The chart's
+// box, the book's levels and the room under the ticket (Market trades) follow it.
+//
+// Keys and pointer:
+// - Drag, or ArrowUp and ArrowDown in 16 px steps.
+// - Home and End go to the ends.
+// - Double-click or Enter resets to the default.
+// The choice is kept in this browser. It is clamped again on load and whenever the window or the
+// ticket's fit changes. Live data never moves it, because nothing here reads the book or the
+// ticket's content.
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 
 const KEY = 'kob.market.rowH';
 const STEP = 16;
-/** the least room the handle allows beyond the ticket's fit when the window is short */
+/** The least room the handle allows beyond the ticket's fit when the window is short. */
 const SLACK = 400;
 const REM_TICKET = 34;
 
@@ -25,7 +35,7 @@ function store(v: number | null): void {
     if (v === null) localStorage.removeItem(KEY);
     else localStorage.setItem(KEY, String(Math.round(v)));
   } catch {
-    /* no storage */
+    /* No storage. */
   }
 }
 
@@ -38,7 +48,10 @@ function bounds(grid: HTMLElement): { min: number; max: number } {
   return { min, max: Math.max(min + SLACK, Math.floor(window.innerHeight - top)) };
 }
 
-/** `grid` returns the `.mkt-grid` element; renders the handle (a grid item placed over the gap under the first row). */
+/**
+ * `grid` returns the `.mkt-grid` element. It renders the handle, a grid item placed over the gap
+ * under the first row.
+ */
 export function RowResize(props: { grid: () => HTMLElement | null }) {
   const [chosen, setChosen] = useState<number | null>(stored);
   const [range, setRange] = useState<{ min: number; max: number; now: number }>({ min: 0, max: 0, now: 0 });
@@ -46,9 +59,12 @@ export function RowResize(props: { grid: () => HTMLElement | null }) {
   const latest = useRef<number | null>(chosen);
   latest.current = chosen;
 
-  /** The row as it is drawn now (the book's card spans it). */
+  /** The row as it is drawn now. The book's card spans it. */
   const actual = (grid: HTMLElement): number => grid.querySelector<HTMLElement>('.mkt-area-book')?.getBoundingClientRect().height ?? 0;
-  /** Clamp the choice to the bounds of now, apply it to the grid, and publish the numbers the handle's aria values read. */
+  /**
+   * Clamps the choice to the bounds of now, applies it to the grid, and publishes the numbers the
+   * handle's aria values read.
+   */
   const sync = () => {
     const grid = props.grid();
     if (!grid) return;
@@ -67,7 +83,8 @@ export function RowResize(props: { grid: () => HTMLElement | null }) {
     const grid = props.grid();
     if (!grid) return;
     window.addEventListener('resize', sync);
-    // the ticket measures its form after the page is drawn (`--tk-fit`, set on the grid's style): the bounds are read again then
+    // The ticket measures its form after the page is drawn (`--tk-fit`, set on the grid's style).
+    // The bounds are read again then.
     const mo = new MutationObserver(sync);
     mo.observe(grid, { attributes: true, attributeFilter: ['style'] });
     sync();
@@ -105,7 +122,7 @@ export function RowResize(props: { grid: () => HTMLElement | null }) {
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {
-      /* already released */
+      /* Already released. */
     }
   };
   const onKey = (e: KeyboardEvent) => {
