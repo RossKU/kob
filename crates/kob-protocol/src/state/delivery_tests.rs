@@ -474,6 +474,56 @@ fn delivery_rules_of_delivering_orders() {
     }
 }
 
+/// S4: a mode-2 `topupTip` (and an entry's `exitTopupTip`) is below `COVENANT_OUTPUT_MIN`, so
+/// a filler cannot profit from making a fresh receive UTXO for each fill. With a 1 KAS carrier the
+/// carrier rule allows more; the cap refuses it at placement and on chain (the indexer's listing).
+#[test]
+fn topup_tip_is_capped_below_a_fresh_receive_utxo() {
+    assert_eq!(TOPUP_TIP_MAX, crate::tx::COVENANT_OUTPUT_MIN as i64 - 1);
+    let kas = 100_000_000;
+    for s in delivering_states() {
+        let n = s.template_id().name();
+        let s = match s {
+            AnyState::KobBid(x) => AnyState::KobBid(BidState { delivery_carrier: kas, ..x }),
+            AnyState::KobCondBid(x) => AnyState::KobCondBid(CondBidState { delivery_carrier: kas, ..x }),
+            AnyState::KobPair(x) => AnyState::KobPair(PairState { delivery_carrier: kas, ..x }),
+            AnyState::KobCondPair(x) => AnyState::KobCondPair(CondPairState { delivery_carrier: kas, ..x }),
+            _ => unreachable!(),
+        };
+        for placement in [true, false] {
+            assert_eq!(with_block(&s, d(2, 1, TOPUP_TIP_MAX, 0)).check_delivery(placement), Ok(()), "{n}");
+            for tip in [TOPUP_TIP_MAX + 1, kas] {
+                let e = with_block(&s, d(2, 1, tip, 0)).check_delivery(placement).unwrap_err();
+                assert!(e.contains("fresh receive UTXO"), "{n} tip {tip}: {e}");
+            }
+        }
+    }
+    // The exits of an if-done entry: their carrier is the entry's committed exit carrier.
+    for entry in [compiled(TemplateId::KobIfdAsk), compiled(TemplateId::KobIfdPair)] {
+        let entry = match entry {
+            AnyState::KobIfdAsk(x) => AnyState::KobIfdAsk(IfdAskState { rpt_amount: 0, ..x }),
+            AnyState::KobIfdPair(x) => AnyState::KobIfdPair(IfdPairState { a_family: 1, b_family: 1, rpt_amount: 0, ..x }),
+            _ => unreachable!(),
+        };
+        let carrier = match &entry {
+            AnyState::KobIfdAsk(x) => x.exit().expect("a committed exit").delivery_carrier,
+            AnyState::KobIfdPair(x) => x.exit().expect("a committed exit").delivery_carrier,
+            _ => unreachable!(),
+        };
+        let n = entry.template_id().name();
+        assert_eq!(with_block(&entry, d(2, 1, carrier.min(TOPUP_TIP_MAX), 0)).check_delivery(true), Ok(()), "{n}");
+        let e = with_block(&entry, d(2, 1, TOPUP_TIP_MAX + 1, 0)).check_delivery(true).unwrap_err();
+        assert!(e.contains("topupTip"), "{n}: {e}");
+    }
+    // The wallet default stays below the cap on every program with a top-up.
+    for (name, extra) in crate::budget::topup_extra_table() {
+        let t = TemplateId::from_name(name).expect("a pinned program");
+        let tip = crate::budget::default_topup_tip(t, kas).expect("a top-up");
+        assert!(tip <= TOPUP_TIP_MAX, "{name}: default {tip}");
+        assert_eq!(tip as u64, (extra * 5).div_ceil(4), "{name}: not capped");
+    }
+}
+
 /// A KRON delivery is mode 0: a pair order buying a KRON token, a KRON twin, and the exits of an
 /// entry that deliver a KRON token; a repeating entry's exits are mode 0.
 #[test]
@@ -497,7 +547,7 @@ fn kron_deliveries_and_repeating_entries_are_mode_zero() {
         let carrier = ia.exit().unwrap().delivery_carrier;
         let once = AnyState::KobIfdAsk(IfdAskState { rpt_amount: 0, ..ia.clone() });
         assert_eq!(with_block(&once, d(1, 0, 0, 0)).check_delivery(true), Ok(()));
-        assert_eq!(with_block(&once, d(2, 9, carrier, 0)).check_delivery(true), Ok(()));
+        assert_eq!(with_block(&once, d(2, 9, carrier.min(TOPUP_TIP_MAX), 0)).check_delivery(true), Ok(()));
         assert!(with_block(&once, d(2, 9, carrier + 1, 0)).check_delivery(true).unwrap_err().contains("topupTip"));
         let repeating = AnyState::KobIfdAsk(IfdAskState { rpt_amount: 10, ..ia });
         assert_eq!(with_block(&repeating, d(0, 0, 0, 0)).check_delivery(true), Ok(()));

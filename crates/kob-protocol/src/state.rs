@@ -137,6 +137,17 @@ pub const MODE_NEW: i64 = 0;
 pub const MODE_ACCUMULATE: i64 = 1;
 /// Delivery mode 2 (*top-up*): a filler may add the tokens to the maker's receive UTXO.
 pub const MODE_TOPUP: i64 = 2;
+/// The largest `topupTip` (and `exitTopupTip`) the gate accepts: just below
+/// [`crate::tx::COVENANT_OUTPUT_MIN`] (0.08 KAS), audit S4.
+///
+/// A form-2 fill takes any receive UTXO of the maker's key, also one the filler made a moment
+/// ago with 0 units. Its KAS (`v`) then rides on the delivery to the maker, so the filler gains
+/// `topupTip - v - f_make - f_extra` per fill: `f_make` the fee of making it (shared when many are
+/// made in one transaction), `f_extra` the measured extra fee of a top-up (`data/topup_extra.json`,
+/// above 0). A token output carries at least `COVENANT_OUTPUT_MIN` (KIP-9: a smaller one needs the
+/// credit of inputs as small, which cost the same storage mass to make), so with `topupTip` below
+/// it the gain is negative for any batching. The contracts accept up to `deliveryCarrier`.
+pub const TOPUP_TIP_MAX: i64 = crate::tx::COVENANT_OUTPUT_MIN as i64 - 1;
 
 /// The delivery block of a delivering order, in state order: `mode`, `recvThreshold`,
 /// `topupTip`, `bought` (all `int`; `bought` is mutable and last).
@@ -2927,6 +2938,13 @@ fn check_mode(what: &str, d: &Delivery, carrier: i64, kron: bool) -> Result<(), 
         if d.topup_tip < 0 || d.topup_tip > carrier {
             return Err(format!("{what}: mode 2 needs 0 <= topupTip <= deliveryCarrier ({carrier}), got {}", d.topup_tip));
         }
+        if d.topup_tip > TOPUP_TIP_MAX {
+            return Err(format!(
+                "{what}: mode 2 needs topupTip below {} sompi (a filler would profit from a fresh receive UTXO per fill), got {}",
+                crate::tx::COVENANT_OUTPUT_MIN,
+                d.topup_tip
+            ));
+        }
     } else if d.recv_threshold != 0 || d.topup_tip != 0 {
         return Err(format!("{what}: modes 0 and 1 have recvThreshold = topupTip = 0, got {} and {}", d.recv_threshold, d.topup_tip));
     }
@@ -2990,7 +3008,7 @@ impl AnyState {
     ///
     /// - `mode` is 0, 1 or 2. Modes 0 and 1 have `recvThreshold = topupTip = 0`; mode 2 has
     ///   `recvThreshold > 0` and `0 <= topupTip <= deliveryCarrier` (an exit block: the exit's
-    ///   carrier).
+    ///   carrier) and `topupTip <= TOPUP_TIP_MAX` (S4).
     /// - A KRON delivery is mode 0: the KRON twins, a pair order buying a KRON token, and the exits
     ///   of a pair entry that deliver a KRON token.
     /// - Modes 0 and 2 have `bought = 0`, mode 1 `bought >= 0`; with `placement` (a new order, a

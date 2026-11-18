@@ -917,6 +917,63 @@ fn modes_accumulate_lifecycle() {
     }
 }
 
+/// S4 (closed by the gate, not the contract): a form-2 fill accepts a receive UTXO that its filler made a moment earlier for the
+/// maker's key, with 0 units and little KAS (`v`: `COVENANT_OUTPUT_MIN` alone fills a block's storage mass, so a little more).
+/// That KAS rides on the delivery to the maker, and the filler keeps `topupTip`. Per fill it gains `topupTip - v - f_make - f_extra` (`f_make`: the fee
+/// of making the UTXO; `f_extra`: a top-up's fee over a form-1 fill). The gain is positive at the contract's bound
+/// (`topupTip = deliveryCarrier`, 1 KAS here) and negative at the gate's cap (`state::TOPUP_TIP_MAX`), even with `f_make = 0`.
+#[test]
+fn s4_a_fresh_receive_utxo_per_fill() {
+    let v = kob_protocol::tx::COVENANT_OUTPUT_MIN as i64 + 1_000_000;
+    let storage_limit = kob_protocol::tx::BLOCK_STORAGE_LIMIT;
+    let cap = kob_protocol::state::TOPUP_TIP_MAX;
+    assert!(cap < kob_protocol::tx::COVENANT_OUTPUT_MIN as i64 && v < DC);
+    for t in tokens() {
+        let f = fx(t);
+        let (m, tk) = (pk(&f.maker), pk(&f.taker));
+        let n = 3_000;
+        let fresh = recv(0, &m, THR);
+        let mine = plain(10_000, &tk);
+        let make = close(
+            Scn {
+                name: "S4a the filler makes a 0-unit receive UTXO for the maker's key from its own tokens".into(),
+                inputs: vec![tok_leader(&f.t, CARRIER, &mine, &[fresh, mine], Wit::P2pk(f.taker)), p2pk_in(&f.taker, 5 * KAS)],
+                outputs: vec![tok_out(&f.t, v, &fresh, 0), tok_out(&f.t, CARRIER, &mine, 0)],
+            },
+            &f.taker,
+        );
+        let made = ok(&f.t, &make);
+        assert!(made.storage <= storage_limit, "the making transaction fits a block: storage {}", made.storage);
+        let f_make = made.fee as i64;
+        let p2 = BidP::new(&f.maker, 2);
+        let form1 = ok(&f.t, &sell(&f, "S4b the same fill delivering a new receive UTXO (form 1)", &p2, v0(), n, 1, Lead::Seller)).fee as i64;
+        let mut gains = vec![];
+        for (tip, name) in [
+            (DC, "S4c top-up of the fresh receive UTXO, topupTip = deliveryCarrier (the contract's bound)"),
+            (cap, "S4d top-up of the fresh receive UTXO, topupTip at the gate's cap"),
+        ] {
+            let s = sell(&f, name, &BidP { ttip: tip, ..p2 }, v0(), n, 2, Lead::Recv(fresh, v));
+            // the delivery is the fresh UTXO grown by n, with its KAS (and the rounding) for the maker
+            assert_eq!(s.outputs[0].script_public_key, f.t.spk(&recv(n, &m, THR)), "{name}");
+            assert!(s.outputs[0].value as i64 >= v, "{name}");
+            // the continuation keeps the escrow less the price and the tip: the filler takes topupTip
+            assert_eq!(s.outputs[1].value as i64, v0() - quote(n, P250 + TIP, SCALE - 1) - tip, "{name}");
+            let c = ok(&f.t, &s);
+            assert!(c.storage <= storage_limit, "{name}: fits a block, storage {}", c.storage);
+            let f_extra = c.fee as i64 - form1;
+            assert!(f_extra > 0, "{name}: a top-up costs more relay fee than a new delivery");
+            gains.push(tip - v - f_make - f_extra);
+            assert!(cap - v - f_extra < 0, "{name}: negative without the making fee too");
+        }
+        println!(
+            "S4 @{}: v {v} f_make {f_make} sompi; filler gain per fill at topupTip = deliveryCarrier {} sompi, at the cap {} sompi",
+            f.t.name, gains[0], gains[1]
+        );
+        assert!(gains[0] > 0, "the contract's bound pays the filler: the gate must cap the tip");
+        assert!(gains[1] < 0, "the gate's cap does not pay it");
+    }
+}
+
 // ================================================================ negatives of the fill
 
 /// What the fill refuses: the modes do not leak into each other, the form, the hostile state fields, the bought-custody

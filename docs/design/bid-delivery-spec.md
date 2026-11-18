@@ -59,8 +59,8 @@ Exit states written by the entries:
 Unchanged states: `KobAsk` (276), `KobCondAsk`, `KobIfdBid`, every KRON twin.
 
 Placement (`check_new_order`, KOB1 record): `bought == 0`; `mode` in {0, 1, 2}; mode 0 and 1: `recvThreshold == 0` and
-`topupTip == 0`; mode 2: `recvThreshold > 0` and `0 <= topupTip <= deliveryCarrier`; mode 0 required for `tif != GTC` (wallet
-rule, not a contract rule), for a KRON delivery and for repeating entries. The KOB1 record format and kind codes do not
+`topupTip == 0`; mode 2: `recvThreshold > 0` and `0 <= topupTip <= deliveryCarrier`, and the gate's cap `topupTip < 0.08 KAS`
+(section 12); mode 0 required for `tif != GTC` (wallet rule, not a contract rule), for a KRON delivery and for repeating entries. The KOB1 record format and kind codes do not
 change; only the state lengths of the table above. An in-place amend may not change `mode`, `recvThreshold`, `topupTip` or
 `bought`.
 
@@ -216,7 +216,8 @@ Frozen router shape [spec, C4]:
   back to 0. Decision 2026-11-17 (founder): the default returns to mode 0; it had been 1 for resting orders. The contracts do not change.
 - **Pair tip.** The raise of the default pair tip for the custody input of later fills (`ceil(1.25 × extra)` per later fill) applies
   only when the user picks mode 1; at the mode-0 default the pair tip is the plain default.
-- **Tip.** `topupTip = min(deliveryCarrier, ceil(1.25 × topup_extra[program]))`. The user may raise it up to `deliveryCarrier`.
+- **Tip.** `topupTip = min(deliveryCarrier, ceil(1.25 × topup_extra[program]))`. The user may raise it up to `deliveryCarrier`,
+  and below 0.08 KAS (section 12).
 - **Threshold.** `RECV_THRESHOLD_SOMPI = 500,000,000`. At the wallet's first mode-2 order for a (token, extension commitment):
   `T = max(1, ceil(RECV_THRESHOLD_SOMPI × scale / price))`, `price` = the order's limit price in sompi per whole token (pair
   orders: the KAS-book price used for the default pair minimum fill; without one, mode 2 is not offered). `T` is stored per
@@ -260,6 +261,14 @@ The prototypes and `tests/design/` are reference only: no package edits them, an
 
 ## 12. Known limitations
 
+- **The contracts accept any `topupTip <= deliveryCarrier`; the gate caps it (audit S4).** A form-2 fill takes any receive
+  UTXO of the maker's key, also one its filler made with 0 units. Per fill the filler then gains
+  `topupTip - v - f_make - f_extra`: `v` the KAS of that UTXO, which rides on `D` to the maker and is at least
+  `COVENANT_OUTPUT_MIN` (0.08 KAS, KIP-9; less only with the credit of inputs as small, which cost as much to make); `f_make` its share of the fee of the transaction that made it (many can share one);
+  `f_extra` the measured extra fee of a top-up (`topup_extra.json`, 0.006 to 0.051 KAS). `check_delivery` therefore requires
+  `topupTip <= TOPUP_TIP_MAX = COVENANT_OUTPUT_MIN - 1`: the gain is negative for any `f_make`. A new order over it is refused
+  (CLI, web, KOB1 record) and the indexer does not list one (`bad_state:delivery`); the maker cancels it. Every wallet default is
+  below it. A `require` in the templates waits for the next re-pin.
 - **No top-up through the router or an x402 swap.** The router delivers a mode-2 bid leg as form 0, plain `n` to the
   maker (section 8), and the x402 swap verifier refuses a borrow-enabled token input, so a receive UTXO is never topped up on
   those paths. A top-up is a matcher fill only (section 6); the mode-2 order itself stays fillable through both.
