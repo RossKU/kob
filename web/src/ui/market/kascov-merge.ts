@@ -1,20 +1,38 @@
-// The market list completed from kascov.io (data/kascov.ts): which of its tokens the list may show, and how its names and icons join the rows KOB already
-// has. Pure.
+// The market list completed from kascov.io (data/kascov.ts). It decides which of its tokens the
+// list may show and how its names and icons join the rows KOB already has. Pure.
 //
-// The rule, in one place: KOB decides WHAT is listed and every fact about it; kascov only supplies words and a picture.
+// The rule, in one place: KOB decides what is listed and every fact about it. kascov only
+// supplies words and a picture.
 //
-//   * WHICH TOKENS. A token kascov knows that KOB's own sources do not (no registry entry, nothing on the KOB indexer: no order names it yet) is added only
-//     if the program hash kascov names for it is one of the programs this build pins (`kob.templates()`, from crates/kob-protocol/data/programs.json) and
-//     trades on this network (`programAllowed`: the profile's `networks` and, on mainnet, its review). kascov's `review` and `alive` are not
-//     read. Such a token is a row with no orders; opening it goes through the same checks as any token (the token page re-derives everything from the
-//     indexer or the wallet's node-verified holdings, kob/open-token.ts). A token kascov names without a program hash (the 46-byte KRON family) is never
-//     added from kascov: it appears when the registry or the indexer lists it, as before.
-//   * WHICH WORDS. A row KOB already names keeps its ticker and name. Where it has none, kascov's claim fills the gap and the row says where it came from
-//     (`kascov.usedTicker` / `usedName`). If kascov's ticker or declared decimals differ from what KOB derived, KOB's stand and the row carries a note.
-//     A row whose program hash KOB knows and kascov contradicts is not touched at all: kascov is describing another program.
-//   * WHICH REMARK. kascov's `status: "verified"` is shown as a small chip "Verified by kascov" in place of "Genesis not verified" (third party, labelled: kascov
-//     checked the token's history, KOB has not yet; a token page runs KOB's own check and replaces it). It is no fact and changes no warning.
-//   * WHICH ICON. Every matched row may carry the hash and sources of an icon; whether it is shown is decided by the bytes (data/kascov.ts).
+// Which tokens:
+// - A token kascov knows that KOB's own sources do not is added. That means no registry entry and
+//   nothing on the KOB indexer, so no order names it yet.
+// - It is added only if the program hash kascov names for it is one of the programs this build
+//   pins (`kob.templates()`, from crates/kob-protocol/data/programs.json) and trades on this
+//   network. `programAllowed` decides that from the profile's `networks` and, on mainnet, its
+//   review. kascov's `review` and `alive` are not read.
+// - Such a token is a row with no orders. Opening it goes through the same checks as any token.
+//   The token page re-derives everything from the indexer or the wallet's node-verified holdings
+//   (kob/open-token.ts).
+// - A token kascov names without a program hash, the 46-byte KRON family, is never added from
+//   kascov. It appears when the registry or the indexer lists it.
+//
+// Which words:
+// - A row KOB already names keeps its ticker and name.
+// - Where it has none, kascov's claim fills the gap and the row says where it came from
+//   (`kascov.usedTicker` and `usedName`).
+// - If kascov's ticker or declared decimals differ from what KOB derived, KOB's stand and the row
+//   carries a note.
+// - A row whose program hash KOB knows and kascov contradicts is not touched at all, because
+//   kascov is describing another program.
+//
+// Which remark: kascov's `status: "verified"` is shown as a small chip "Verified by kascov" in
+// place of "Genesis not verified". It is third party and labelled. kascov checked the token's
+// history and KOB has not yet. A token page runs KOB's own check and replaces the chip. The remark
+// is no fact and changes no warning.
+//
+// Which icon: every matched row may carry the hash and sources of an icon. The bytes decide
+// whether it is shown (data/kascov.ts).
 import type { IndexerTokenView } from '../../data/indexer-types';
 import type { KascovToken } from '../../data/kascov';
 import type { DeclaredToken } from '../../data/token-declarations';
@@ -25,8 +43,9 @@ import type { TemplateInfo } from '../../kob/types';
 import { unknownRow, withKascovRemark, type KascovMeta, type TokenRow } from './token-model';
 
 /**
- * Whether a token of program hash `hash` is one this build can trade on `network`: the hash is a pinned token program (not an order template) and the
- * program is enabled for the network. No hash (kascov does not name the program of the token) is not enough.
+ * Whether a token of program hash `hash` is one this build can trade on `network`. The hash must
+ * be a pinned token program, not an order template, and the program must be enabled for the
+ * network. No hash, when kascov does not name the program of the token, is not enough.
  */
 export function kascovTradable(hash: string | null | undefined, network: string | null | undefined, templates: readonly TemplateInfo[]): boolean {
   if (!hash) return false;
@@ -36,20 +55,23 @@ export function kascovTradable(hash: string | null | undefined, network: string 
 
 export interface KascovMergeContext {
   network: string | null | undefined;
-  /** `kob.templates()` */
+  /** `kob.templates()`. */
   templates: readonly TemplateInfo[];
   registry: TokenRegistry;
-  /** verified KCC-23 declarations known so far (they name a kascov-only row before kascov does) */
+  /** Verified KCC-23 declarations known so far. They name a kascov-only row before kascov does. */
   declared?: ((covenantId: string) => DeclaredToken | null | undefined) | undefined;
-  /** covenant ids KOB's own sources know but the list does not show (an indexer token of a program this build does not trade): never added from kascov */
+  /**
+   * Covenant ids KOB's own sources know but the list does not show, such as an indexer token of a
+   * program this build does not trade. They are never added from kascov.
+   */
   known?: ReadonlySet<string> | undefined;
 }
 
 const rowHash = (r: Pick<TokenRow, 'info' | 'index'>): string | null => r.info?.templateHash || r.index?.template_hash || null;
 
 /**
- * `row` with kascov's words and icon laid under KOB's own. `noTicker`: the row's ticker is a stand-in (the covenant id a page shows for a token without
- * one), so kascov's may take its place.
+ * `row` with kascov's words and icon laid under KOB's own. `noTicker` means the row's ticker is a
+ * stand-in, the covenant id a page shows for a token without one, so kascov's may take its place.
  */
 function enrich(row: TokenRow, k: KascovToken, noTicker = false): TokenRow {
   const usedTicker = (row.ticker === '' || noTicker) && k.ticker !== null;
@@ -64,8 +86,9 @@ function enrich(row: TokenRow, k: KascovToken, noTicker = false): TokenRow {
 }
 
 /**
- * One row (a token page's) with kascov's words and icon, when kascov lists it and does not name another program than the row's. `standIn`: the row's
- * ticker when it is only the covenant id shown for a token without a ticker.
+ * One row, a token page's, with kascov's words and icon. It applies when kascov lists the token
+ * and does not name another program than the row's. `standIn` is the row's ticker when it is only
+ * the covenant id shown for a token without a ticker.
  */
 export function applyKascov(row: TokenRow, tokens: readonly KascovToken[] | null | undefined, standIn?: string): TokenRow {
   const k = tokens?.find((x) => x.covenantId === row.covenantId.toLowerCase());
@@ -75,8 +98,9 @@ export function applyKascov(row: TokenRow, tokens: readonly KascovToken[] | null
 }
 
 /**
- * The icon facts kascov.io has for one token (its checked picture), for a line that shows a token's icon outside the market list (the Portfolio page):
- * none when kascov does not list the token or names another program than the registry's. Words and facts stay KOB's.
+ * The icon facts kascov.io has for one token, its checked picture. It serves a line that shows a
+ * token's icon outside the market list, such as the Portfolio page. It gives none when kascov does
+ * not list the token or names another program than the registry's. Words and facts stay KOB's.
  */
 export function kascovIconOf(tokens: readonly KascovToken[] | null | undefined, covenantId: string, templateHash: string | null | undefined): KascovMeta | null {
   const k = tokens?.find((x) => x.covenantId === covenantId.toLowerCase());
@@ -87,7 +111,10 @@ export function kascovIconOf(tokens: readonly KascovToken[] | null | undefined, 
   };
 }
 
-/** A row for a token only kascov names: no registry entry, no indexer view, no orders (`openAsks` / `openBids` unknown, never 0). */
+/**
+ * A row for a token only kascov names: no registry entry, no indexer view and no orders. `openAsks`
+ * and `openBids` are unknown, never 0.
+ */
 function kascovOnlyRow(k: KascovToken, ctx: KascovMergeContext): TokenRow {
   const tpl = ctx.templates.find((x) => x.hash === k.templateHash && x.tokenSlots)!;
   const view: IndexerTokenView = {
@@ -99,9 +126,11 @@ function kascovOnlyRow(k: KascovToken, ctx: KascovMergeContext): TokenRow {
 }
 
 /**
- * The row of one token only kascov names (`source: 'kascov'`), for the token's own page: the same row the list shows, built only when kascov names the
- * token and the program hash it names is one this build pins and trades on `network` (`kascovTradable`). Null otherwise (kascov does not know the token,
- * names no program, or a program this build does not trade). Its facts are KOB's: the page re-derives them from the indexer and the node.
+ * The row of one token only kascov names (`source: 'kascov'`), for the token's own page. It is the
+ * same row the list shows. It is built only when kascov names the token and the program hash it
+ * names is one this build pins and trades on `network` (`kascovTradable`). Otherwise it is null,
+ * which covers kascov not knowing the token, naming no program, or naming a program this build
+ * does not trade. Its facts are KOB's. The page re-derives them from the indexer and the node.
  */
 export function kascovRowOf(covenantId: string, tokens: readonly KascovToken[] | null | undefined, ctx: KascovMergeContext): TokenRow | null {
   const k = tokens?.find((x) => x.covenantId === covenantId.toLowerCase());
@@ -109,8 +138,9 @@ export function kascovRowOf(covenantId: string, tokens: readonly KascovToken[] |
 }
 
 /**
- * The rows KOB has, named and pictured from kascov where it has them, plus the kascov-only tokens this build can trade (appended, by name). `tokens`
- * null/empty (kascov down, not loaded yet, a network it does not serve) returns `rows` unchanged. Nothing is removed.
+ * The rows KOB has, named and pictured from kascov where it has them, plus the kascov-only tokens
+ * this build can trade, appended by name. When `tokens` is null or empty, because kascov is down,
+ * not loaded yet or does not serve the network, it returns `rows` unchanged. Nothing is removed.
  */
 export function mergeKascov(rows: readonly TokenRow[], tokens: readonly KascovToken[] | null | undefined, ctx: KascovMergeContext): TokenRow[] {
   if (!tokens || tokens.length === 0) return [...rows];
@@ -120,7 +150,7 @@ export function mergeKascov(rows: readonly TokenRow[], tokens: readonly KascovTo
     const k = byId.get(r.covenantId.toLowerCase());
     if (!k) return r;
     const mine = rowHash(r);
-    // both sides name a program and they differ: the entry is about something else
+    // Both sides name a program and they differ, so the entry is about something else.
     return mine && k.templateHash && mine !== k.templateHash ? r : enrich(r, k);
   });
   const added = tokens

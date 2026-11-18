@@ -1,45 +1,65 @@
-// View model of the order book: indexer levels -> display rows with cumulative depth, spread and mid price. Pure, bigint arithmetic only.
+// View model of the order book. It turns indexer levels into display rows with cumulative depth,
+// spread and mid price. The module is pure and uses bigint arithmetic only.
 //
-// Price convention (protocol v3, docs/ops/executor.md 5.2): an indexer level's `price` is sompi per `scale` base units of the token (its `scale`,
-// a number), its `amount` base units. The book shows prices per whole token of the token's standard scale (`10^decimals`, the wallet's scale);
-// a row of another scale (an open-list token's orders may differ) is converted to it for display (rounded to the nearest sompi).
+// Price convention (protocol v3, docs/ops/executor.md 5.2): an indexer level's `price` is sompi
+// per `scale` base units of the token, where `scale` is a number, and its `amount` is in base
+// units. The book shows prices per whole token of the token's standard scale (`10^decimals`, the
+// wallet's scale). A row of another scale, as an open-list token's orders may have, is converted
+// to it for display and rounded to the nearest sompi.
 import type { BookOrderView, LevelView } from '../../data/indexer-types';
 import type { Rational } from '../../kob/pair';
 import { quoteOf, roundDiv } from '../../kob/units';
 
 export interface BookRow {
-  /** sompi per whole token (the market's scale) */
+  /** Sompi per whole token, in the market's scale. */
   price: bigint;
-  /** base units */
+  /** Base units. */
   amount: bigint;
   orders: number;
-  /** the level's amount is an estimate (bid budgets, unproven states): shown with a marker */
+  /**
+   * The level's amount is an estimate (bid budgets, unproven states). It is shown with a marker.
+   */
   estimated: boolean;
-  /** base units from the best price up to and including this level */
+  /** Base units from the best price up to and including this level. */
   cumAmount: bigint;
-  /** sompi of KAS value from the best price up to and including this level (each level's `amount x price / scale`, rounded down) */
+  /**
+   * Sompi of KAS value from the best price up to and including this level, summing each level's
+   * `amount x price / scale` rounded down.
+   */
   cumValue: bigint;
-  /** cumulative depth relative to the deeper side, 0..100 (bar width) */
+  /** Cumulative depth relative to the deeper side, 0 to 100, as the bar width. */
   depthPct: number;
-  /** the INVERTED price (tokens per KAS) of a level grouped in the inverted view: shown instead of the inverse of `price` (see `orientation.ts`) */
+  /**
+   * The inverted price (tokens per KAS) of a level grouped in the inverted view. It is shown
+   * instead of the inverse of `price` (see `orientation.ts`).
+   */
   inv?: Rational;
-  /** the curve levels (table indexes) at this level: a curve sell order's levels are book levels like any other, marked */
+  /**
+   * The curve levels (table indexes) at this level. A curve sell order's levels are book levels
+   * like any other, and marked.
+   */
   curve?: number[];
 }
 
 export interface BookModel {
-  /** best (lowest) price first: the order of the depth accumulation */
+  /** Best (lowest) price first, which is the order of the depth accumulation. */
   asks: BookRow[];
-  /** best (highest) price first */
+  /** Best (highest) price first. */
   bids: BookRow[];
-  /** asks in display order: highest price at the top, best ask directly above the spread */
+  /**
+   * Asks in display order. The highest price is at the top and the best ask is directly above the
+   * spread.
+   */
   asksDisplay: BookRow[];
-  /** the touch: the best ask / bid of the UNGROUPED levels (grouping rounds asks up and bids down, so the grouped rows would widen the spread and move the mid) */
+  /**
+   * The touch, which is the best ask or bid of the ungrouped levels. Grouping rounds asks up and
+   * bids down, so the grouped rows would widen the spread and move the mid.
+   */
   bestAsk: bigint | null;
   bestBid: bigint | null;
-  /** best ask - best bid, ungrouped (negative for a crossed book) */
+  /** Best ask minus best bid, ungrouped. Negative for a crossed book. */
   spread: bigint | null;
-  /** spread relative to the mid price in basis points, rounded down */
+  /** The spread relative to the mid price in basis points, rounded down. */
   spreadBps: number | null;
   mid: bigint | null;
   totalAskAmount: bigint;
@@ -49,12 +69,15 @@ export interface BookModel {
 }
 
 /**
- * One price level: `price` sompi per whole token of the market's scale, `amount` base units. `value`: the KAS (sompi) the level's orders are worth at their OWN prices (`amount x price / scale`
- * per ungrouped level, rounded down, summed over a group): a grouped level's `price` is its worst price, so `amount x price` would overstate it. Absent: `amount x price / scale`.
+ * One price level. `price` is sompi per whole token of the market's scale and `amount` is in base
+ * units. `value` is the KAS, in sompi, the level's orders are worth at their own prices. It is
+ * `amount x price / scale` per ungrouped level, rounded down and summed over a group. A grouped
+ * level's `price` is its worst price, so `amount x price` would overstate it. When `value` is
+ * absent the value is `amount x price / scale`.
  */
 export interface Level { price: bigint; amount: bigint; orders: number; estimated: boolean; inv?: Rational; value?: bigint; curve?: number[] }
 
-/** Merges the curve marks of two levels (none stays absent). */
+/** Merges the curve marks of two levels. None stays absent. */
 export const mergeCurve = (a: number[] | undefined, b: number[] | undefined): number[] | undefined => (a || b ? [...(a ?? []), ...(b ?? [])] : undefined);
 
 const isOrder = (r: LevelView | BookOrderView): r is BookOrderView => 'covenant_id' in r;
@@ -67,16 +90,19 @@ const parseBig = (v: unknown): bigint | null => {
 };
 
 /**
- * Aggregated levels (or per-order entries, grouped by price) -> levels in sompi per whole token of `scale` base units (the market's scale; a row
- * of another scale is converted). Malformed rows are dropped, never guessed, and so are levels of amount 0 (a bid whose escrow no longer funds a
- * base unit: it is not liquidity, it stays in its maker's orders).
+ * Turns aggregated levels, or per-order entries grouped by price, into levels in sompi per whole
+ * token of `scale` base units. `scale` is the market's scale, and a row of another scale is
+ * converted. Malformed rows are dropped and never guessed. So are levels of amount 0, such as a
+ * bid whose escrow no longer funds a base unit. That is not liquidity and it stays in its maker's
+ * orders.
  */
 export function levelsFromView(rows: readonly (LevelView | BookOrderView)[], scale: bigint): Level[] {
   const by = new Map<bigint, Level>();
   for (const r of rows) {
     const p = parseBig(r.price);
     if (p === null || p <= 0n) continue;
-    // a row quotes per its own scale: the same whole token unless an order chose another (converted to the market's scale)
+    // A row quotes per its own scale. It is the same whole token unless an order chose another,
+    // which is converted to the market's scale.
     const rowScale = parseBig(r.scale) ?? scale;
     const price = rowScale === scale || rowScale <= 0n ? p : roundDiv(p * scale, rowScale);
     if (price <= 0n) continue;
@@ -85,7 +111,8 @@ export function levelsFromView(rows: readonly (LevelView | BookOrderView)[], sca
     let estimated: boolean;
     let curve: number[] | undefined;
     if (isOrder(r)) {
-      // one row per remaining level of a curve order (`curve_level`): all its rows count as one order
+      // One row per remaining level of a curve order (`curve_level`). All its rows count as one
+      // order.
       if (typeof r.curve_level === 'number') curve = [r.curve_level];
       const left = parseBig(r.amount_left);
       amount = left ?? 0n;
@@ -120,21 +147,32 @@ function accumulate(levels: Level[], max: bigint, scale: bigint): BookRow[] {
 }
 
 export interface BookModelOptions {
-  /** the market's scale: base units per whole token (prices are per that many base units; default 1) */
+  /**
+   * The market's scale in base units per whole token. Prices are per that many base units. The
+   * default is 1.
+   */
   scale?: bigint;
-  /** show at most this many levels per side (default 15) */
+  /** Show at most this many levels per side. The default is 15. */
   depth?: number;
-  /** price aggregation step (sompi per whole token): asks round UP, bids DOWN to a multiple of it; 0 / 1 / absent = no grouping */
+  /**
+   * Price aggregation step in sompi per whole token. Asks round up and bids down to a multiple of
+   * it. 0, 1 or absent means no grouping.
+   */
   group?: bigint;
-  /** replaces the native grouping: a grouping in another orientation (the inverted view groups on tokens per KAS; `orientation.ts`) */
+  /**
+   * Replaces the native grouping with a grouping in another orientation. The inverted view groups
+   * on tokens per KAS (`orientation.ts`).
+   */
   regroup?: (levels: Level[], side: 'ask' | 'bid') => Level[];
 }
 
-// ------------------------------------------------------------------------------------------------ price aggregation (tick grouping)
+// ------------------------------------------------------------------------------- price aggregation
 
 /**
- * The grouped price of a level: asks round UP, bids DOWN to a multiple of `group`. The grouped row therefore shows the worst price of its
- * orders (a click on an ask group fills the price of a buy that reaches every order in it; a bid group that of a sell that reaches every bid in it).
+ * The grouped price of a level. Asks round up and bids down to a multiple of `group`. The grouped
+ * row therefore shows the worst price of its orders. A click on an ask group fills the price of a
+ * buy that reaches every order in it. A click on a bid group fills the price of a sell that
+ * reaches every bid in it.
  */
 export function groupPrice(price: bigint, group: bigint, side: 'ask' | 'bid'): bigint {
   if (group <= 1n) return price;
@@ -143,7 +181,7 @@ export function groupPrice(price: bigint, group: bigint, side: 'ask' | 'bid'): b
   return (q + 1n) * group;
 }
 
-/** Merges levels onto grouped prices (amounts and orders add up, estimates stay marked). */
+/** Merges levels onto grouped prices. Amounts and orders add up, and estimates stay marked. */
 export function groupLevels<L extends { price: bigint; amount: bigint; orders: number; estimated: boolean; value?: bigint; curve?: number[] }>(levels: readonly L[], group: bigint, side: 'ask' | 'bid'): Level[] {
   const by = new Map<bigint, Level>();
   for (const l of levels) {
@@ -166,21 +204,26 @@ const gcd = (a: bigint, b: bigint): bigint => {
   return a;
 };
 
-/** The finest step the visible prices sit on (their gcd), 1 without prices: a tick for tokens whose registry entry has none. */
+/**
+ * The finest step the visible prices sit on, their gcd. It is 1 without prices. It gives a tick for
+ * tokens whose registry entry has none.
+ */
 export function inferTick(prices: readonly bigint[]): bigint {
   let g = 0n;
   for (const p of prices) if (p > 0n) g = gcd(g, p);
   return g > 0n ? g : 1n;
 }
 
-/** Grouping choices: 1x, 10x, 100x, 1000x the tick (sompi per whole token). */
+/** Grouping choices: 1x, 10x, 100x and 1000x the tick (sompi per whole token). */
 export const GROUP_MULTIPLIERS = [1n, 10n, 100n, 1000n] as const;
 export const groupSizes = (tick: bigint): bigint[] => GROUP_MULTIPLIERS.map((m) => m * (tick > 0n ? tick : 1n));
 
 /**
- * Grouping choices that mean something at the market's price: the tick (no grouping), then the powers of ten near 1/100,000, 1/10,000 and
- * 1/1,000 of `ref` (a reference price, same unit), each a multiple of the tick. A price of 2,165,695.81 KAS per token on a 1-sompi tick offers
- * 10, 100 and 1,000 KAS, not 0.0000001 .. 0.00001. Without a reference price: `groupSizes`.
+ * Grouping choices that mean something at the market's price. They are the tick, which means no
+ * grouping, then the powers of ten near 1/100,000, 1/10,000 and 1/1,000 of `ref`, a reference
+ * price in the same unit. Each is a multiple of the tick. A price of 2,165,695.81 KAS per token on
+ * a 1-sompi tick offers 10, 100 and 1,000 KAS, not 0.0000001 to 0.00001. Without a reference
+ * price use `groupSizes`.
  */
 export function groupSizesAt(tick: bigint, ref: bigint | null): bigint[] {
   const t = tick > 0n ? tick : 1n;
@@ -197,14 +240,17 @@ export function groupSizesAt(tick: bigint, ref: bigint | null): bigint[] {
 }
 
 /**
- * The grouping steps of a token's book on the kit's price rule: the display step (10^-`dp` KAS per whole token, `dp` = `displayPriceDp`: 0.001 at 34 KAS, 0.000001 at 0.025 KAS) and the
- * three decades above it, each rounded up to a multiple of the tick. A step finer than the display decimals would read as the same price twice, so the tick (1 sompi: 0.00000001) is not offered
- * where it is finer than that. `scale`: base units the book's state prices are per; `decimals`: the token's.
+ * The grouping steps of a token's book on the kit's price rule. They are the display step and the
+ * three decades above it, each rounded up to a multiple of the tick. The display step is
+ * 10^-`dp` KAS per whole token, with `dp` from `displayPriceDp`. That is 0.001 at 34 KAS and
+ * 0.000001 at 0.025 KAS. A step finer than the display decimals would read as the same price
+ * twice, so the tick (1 sompi, 0.00000001) is not offered where it is finer than that. `scale` is
+ * the base units the book's state prices are per, and `decimals` is the token's.
  */
 export function displayGroupSizes(tick: bigint, dp: number, decimals: number, scale: bigint): bigint[] {
   const t = tick > 0n ? tick : 1n;
   const unit = 10n ** BigInt(Math.max(0, decimals));
-  // 10^-dp KAS = 10^(8-dp) sompi per whole token; a state price is sompi per `scale` base units
+  // 10^-dp KAS is 10^(8-dp) sompi per whole token. A state price is sompi per `scale` base units.
   const perToken = 10n ** BigInt(Math.max(0, 8 - dp));
   let step = (perToken * scale + unit - 1n) / unit;
   if (step < t) step = t;
@@ -217,7 +263,8 @@ export function buildBookModel(view: { asks: readonly (LevelView | BookOrderView
   const depth = Math.max(1, o.depth ?? 15);
   const group = o.group ?? 0n;
   const grouped = (ls: Level[], side: 'ask' | 'bid'): Level[] => (o.regroup ? o.regroup(ls, side) : groupLevels(ls, group, side));
-  // the levels as the book holds them: the touch, spread and mid come from these; grouping (rounding asks up and bids down) only shapes the rows
+  // The levels as the book holds them. The touch, spread and mid come from these. Grouping, which
+  // rounds asks up and bids down, only shapes the rows.
   const withValue = (ls: Level[]): Level[] => ls.map((l) => ({ ...l, value: quoteOf(l.amount, l.price, scale, 'down') }));
   const rawAsks = withValue(levelsFromView(view.asks, scale));
   const rawBids = withValue(levelsFromView(view.bids, scale));
@@ -250,29 +297,32 @@ export function buildBookModel(view: { asks: readonly (LevelView | BookOrderView
   };
 }
 
-// ------------------------------------------------------------------------------------------------ depth chart geometry
+// ---------------------------------------------------------------------------- depth chart geometry
 
 export interface DepthChartGeometry {
   width: number;
   height: number;
-  /** SVG path data of the bid / ask areas (closed to the baseline); empty string without data */
+  /**
+   * SVG path data of the bid and ask areas, closed to the baseline. An empty string without data.
+   */
   bidPath: string;
   askPath: string;
   hasData: boolean;
-  /** lowest / highest price on the x axis (sompi per whole token) */
+  /** Lowest and highest price on the x axis (sompi per whole token). */
   priceMin: bigint | null;
   priceMax: bigint | null;
-  /** x position of the mid price, 0..width */
+  /** The x position of the mid price, 0 to width. */
   midX: number | null;
-  /** the deeper side's cumulative amount (base units): the y axis */
+  /** The deeper side's cumulative amount in base units, which is the y axis. */
   maxAmount: bigint;
 }
 
 const fx = (n: number): string => (Math.round(n * 100) / 100).toString();
 
 /**
- * Step-area depth chart. The x axis spans the worst bid to the worst ask, the y axis the deeper side's cumulative amount; positions are
- * computed from bigint ratios so no precision is lost for large prices. Bids grow to the left of the spread, asks to the right.
+ * Step-area depth chart. The x axis spans the worst bid to the worst ask. The y axis is the deeper
+ * side's cumulative amount. Positions are computed from bigint ratios, so no precision is lost for
+ * large prices. Bids grow to the left of the spread and asks to the right.
  */
 export function depthChartGeometry(m: BookModel, width = 320, height = 120): DepthChartGeometry {
   const empty: DepthChartGeometry = { width, height, bidPath: '', askPath: '', hasData: false, priceMin: null, priceMax: null, midX: null, maxAmount: 0n };
@@ -281,7 +331,7 @@ export function depthChartGeometry(m: BookModel, width = 320, height = 120): Dep
   let lo = prices.reduce((a, b) => (b < a ? b : a));
   let hi = prices.reduce((a, b) => (b > a ? b : a));
   if (hi === lo) {
-    // a single price: give it a symmetric window so the chart is not a line
+    // A single price gets a symmetric window, so the chart is not a line.
     const pad = lo / 100n > 0n ? lo / 100n : 1n;
     lo -= pad;
     hi += pad;
