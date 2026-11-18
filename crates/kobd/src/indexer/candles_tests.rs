@@ -429,7 +429,7 @@ fn a_rule_rebuild_never_leaves_a_reader_without_the_old_rows() {
         // The rule marker of the older build: every token is rebuilt, one transaction each.
         conn.execute("DELETE FROM meta WHERE k = 'candles_rule'", []).unwrap();
         assert_eq!(backfill(&conn, &tokens).unwrap().tokens, 2);
-        assert_eq!(meta_get(&conn, "candles_rule").unwrap().as_deref(), Some(price_rule(&conn).unwrap().as_str()));
+        assert_eq!(meta_get(&conn, "candles_rule").unwrap().as_deref(), Some(PRICE_RULE));
         // Marked: the next start has nothing to do.
         assert_eq!(backfill(&conn, &tokens).unwrap(), Backfill::default());
     }

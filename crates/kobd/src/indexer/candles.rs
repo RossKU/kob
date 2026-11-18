@@ -72,13 +72,6 @@ const BASE: i64 = IVS[0];
 /// [`backfill`] rebuilds the rows built with another one.
 const PRICE_RULE: &str = "3";
 
-/// The rule marker of this store: [`PRICE_RULE`] and the KAS a fill must move to make a price
-/// (`market::PRICE_MIN_FILL_KEY`), so a change of either rebuilds the rows.
-pub(crate) fn price_rule(conn: &Connection) -> DbResult<String> {
-    let min = meta_get(conn, super::market::PRICE_MIN_FILL_KEY)?.unwrap_or_else(|| "0".into());
-    Ok(format!("{PRICE_RULE}:{min}"))
-}
-
 /// Whether this store maintains aggregates.
 ///
 /// That is `meta.candles = on`, which is set when the store is opened as an archive and never on a
@@ -99,7 +92,7 @@ pub fn configure(conn: &Connection, lean: bool) -> DbResult<()> {
     } else if meta_get(conn, "candles")?.as_deref() != Some("on") {
         // A store that had no aggregates: whatever rows it gets are built by the current rule.
         meta_set(conn, "candles", "on")?;
-        meta_set(conn, "candles_rule", &price_rule(conn)?)?;
+        meta_set(conn, "candles_rule", PRICE_RULE)?;
     }
     Ok(())
 }
@@ -345,12 +338,11 @@ pub fn backfill(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Backfill
         return Ok(report);
     }
     // The trade price rule changed. Rule 2 takes the age of an amended order from the DAA of its
-    // latest amend, not of its placement. Rule 3 leaves out fills under the store's minimum value and
-    // self-trades (`market::PRICE_MIN_FILL_KEY`, part of the rule marker). Every token's rows are rebuilt from the fills. Nothing is
+    // latest amend, not of its placement. Rule 3 leaves out self-trades
+    // (`market::priced_fill!`). Every token's rows are rebuilt from the fills. Nothing is
     // deleted first: a token's rows are replaced in one transaction ([`rebuild`]), so a reader sees
     // the old rows until the new ones commit, and never an empty or half-built chart.
-    let rule = price_rule(conn)?;
-    let stale_rule = meta_get(conn, "candles_rule")?.as_deref() != Some(rule.as_str());
+    let stale_rule = meta_get(conn, "candles_rule")?.as_deref() != Some(PRICE_RULE);
     // Fills written or reverted by a build that did not maintain the aggregates cannot be trusted,
     // so all of them are rebuilt.
     let now = newest_event(conn)?.to_string();
@@ -383,7 +375,7 @@ pub fn backfill(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Backfill
     meta_set(conn, "candles_event", &now)?;
     // Every token is rebuilt by the rule, so an interrupted run starts over with the rule unmarked.
     if stale_rule {
-        meta_set(conn, "candles_rule", &rule)?;
+        meta_set(conn, "candles_rule", PRICE_RULE)?;
     }
     Ok(report)
 }

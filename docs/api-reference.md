@@ -779,9 +779,8 @@ curl -s "$API/v1/token-utxos?owner=$KEY&token=$TOKEN&limit=100"
 Trades of a token in KAS, **newest first**: all the fills of one transaction on one token form one trade. Only KAS-book fills
 make prices (a pair fill never enters trades). Heavy.
 
-A fill makes no price (no trade, candle, `last` or 24 h figure) when it moved less than the indexer's `min_order_value_sompi`
-(default 1 KAS) at its quote, or is a self-trade: its transaction was funded by the order's maker key, or it fills the other side
-of another order of the same maker.
+A self-trade makes no price (no trade, candle, `last` or 24 h figure): a fill whose transaction the order's maker key funded, or
+one of a maker with fills on both sides of the transaction. Every other fill counts, however small.
 
 | Param | Type | Default | Meaning |
 |---|---|---|---|

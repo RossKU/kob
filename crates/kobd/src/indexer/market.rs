@@ -34,7 +34,7 @@
 //!
 //! # Prints that make no price
 //!
-//! A fill under the store's minimum value and a self-trade are left out of every view here
+//! A self-trade is left out of every view here
 //! (`priced_fill!`), so one base unit traded with oneself cannot move the chart or `last`.
 //!
 //! # Price basis
@@ -230,31 +230,15 @@ pub(crate) fn add_trade(out: &mut VecDeque<Candle>, t: &Trade, interval: i64) {
 
 // SQL.
 
-/// The `meta` key of the KAS a fill must move to make a price: the listing rule
-/// `min_order_value_sompi` ([`set_price_min_fill`]); a store without it: 0.
-pub const PRICE_MIN_FILL_KEY: &str = "price_min_fill_sompi";
-
-/// Sets the KAS a fill must move to make a price ([`PRICE_MIN_FILL_KEY`]).
-///
-/// A change rebuilds the candles at the next backfill (`candles::backfill`).
-pub fn set_price_min_fill(conn: &Connection, sompi: i64) -> DbResult<()> {
-    let v = sompi.max(0).to_string();
-    if super::db::meta_get(conn, PRICE_MIN_FILL_KEY)?.as_deref() != Some(v.as_str()) {
-        super::db::meta_set(conn, PRICE_MIN_FILL_KEY, &v)?;
-    }
-    Ok(())
-}
-
-/// The fill events (`e`, of order `o`) that make prices (security review 2026-11-17 M5): worth at
-/// least [`PRICE_MIN_FILL_KEY`] sompi at their quote, and not a self-trade. A self-trade is a fill
-/// whose transaction a key of the order's maker funded (a direct take of the maker's own order),
-/// or one with a fill of the other side of an order of the same maker (an executor crossing two
-/// orders of one maker; [`trade_of`] drops those, by the `maker` of the rows of a transaction).
-/// The trades, the candles, the last price and the 24 h statistics leave the others out.
+/// The fill events (`e`, of order `o`) that make prices (security review 2026-11-17 M5): every
+/// fill but a self-trade, however small. A self-trade is a fill whose transaction a key of the
+/// order's maker funded (a direct take of the maker's own order), or one with a fill of the other
+/// side of an order of the same maker (an executor crossing two orders of one maker; [`trade_of`]
+/// drops those, by the `maker` of the rows of a transaction). The trades, the candles, the last
+/// price and the 24 h statistics leave them out.
 macro_rules! priced_fill {
     () => {
-        "e.amount * e.price >= COALESCE((SELECT CAST(m.v AS INTEGER) FROM meta m WHERE m.k = 'price_min_fill_sompi'), 0) * COALESCE(o.scale, 1) \
-         AND NOT EXISTS (SELECT 1 FROM scripts sc WHERE sc.id = e.executor_id AND length(sc.spk) = 36 AND substr(sc.spk, 1, 3) = x'000020' \
+        "NOT EXISTS (SELECT 1 FROM scripts sc WHERE sc.id = e.executor_id AND length(sc.spk) = 36 AND substr(sc.spk, 1, 3) = x'000020' \
            AND substr(sc.spk, 36, 1) = x'ac' AND substr(sc.spk, 4, 32) = (SELECT mk.h FROM ids mk WHERE mk.id = o.maker_id))"
     };
 }
@@ -1060,10 +1044,10 @@ mod tests {
     }
 
     /// Security review 2026-11-17 M5: a self-trade (an executor crossing two orders of one maker, or
-    /// a maker's own direct take) and a fill under the store's minimum value make no price: no
-    /// trade, no candle, no last price.
+    /// a maker's own direct take) makes no price: no trade, no candle, no last price. A small fill
+    /// of two makers (25 sompi here) does.
     #[test]
-    fn self_trades_and_fills_under_the_minimum_value_make_no_price() {
+    fn self_trades_make_no_price_and_small_fills_do() {
         let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
         let token = Hash32([0x51; 32]);
         let (alice, bob) = ([0xa1u8; 32], [0xb0u8; 32]);
@@ -1103,12 +1087,6 @@ mod tests {
         let s = stats(&conn, &ctx, &token, None).unwrap();
         assert_eq!((s.last.as_deref(), s.trades_24h), (Some("250"), 1));
         assert_eq!(scan_candles(&conn, &token, 100, 60_000, 0, 60_000, 10).unwrap().len(), 1);
-        // a store whose listing rule asks 1 KAS: 25 sompi make no price
-        set_price_min_fill(&conn, 100_000_000).unwrap();
-        assert!(prices(&conn).is_empty());
-        assert_eq!(stats(&conn, &ctx, &token, None).unwrap().last, None);
-        set_price_min_fill(&conn, 25).unwrap();
-        assert_eq!(prices(&conn), ["250"]);
     }
 
     #[test]
