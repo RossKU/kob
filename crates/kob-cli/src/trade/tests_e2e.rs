@@ -33,6 +33,8 @@ const TOKEN: [u8; 32] = [0x70; 32];
 const EXT: [u8; 32] = [0xee; 32];
 const P: TemplateId = TemplateId::Kcc20Ref;
 const SCALE: i64 = 1000;
+/// `TOKEN` as hex, the pin of `kob take --token`.
+const TOKEN_HEX: &str = "7070707070707070707070707070707070707070707070707070707070707070";
 
 fn pk(n: u8) -> [u8; 32] {
     pubkey_of(&[n; 32]).unwrap()
@@ -460,21 +462,21 @@ fn cancel_take_and_refund() {
         world("act", &[(ask_state, a, 0x10, 2 * KAS), (AnyState::KobBid(bid_state), b, 0x20, bid_value), (expired, e, 0x30, 2 * KAS)]);
     let actions = crate::trade::actions::run_take;
     // The taker buys 4 tokens from the ask. It pays 4 x 3 KAS to the maker and receives 4 tokens.
-    assert_eq!(run(actions, w.args(0x22, &format!("{} --amount 4TST --max-price 3KAS --yes", to_hex(&a)))), 0);
+    assert_eq!(run(actions, w.args(0x22, &format!("{} --amount 4TST --max-price 3KAS --token {TOKEN_HEX} --yes", to_hex(&a)))), 0);
     let s = w.signed(".take.json");
     assert_eq!(paid_to(&s, &maker), 12 * KAS);
     assert!(spent_from(&s, &taker) > 12 * KAS);
     // The taker sells 2 tokens into the bid and receives about 2 x 2 KAS.
-    assert_eq!(run(actions, w.args(0x22, &format!("{} --amount 2TST --min-price 2KAS --yes", to_hex(&b)))), 0);
+    assert_eq!(run(actions, w.args(0x22, &format!("{} --amount 2TST --min-price 2KAS --token {TOKEN_HEX} --yes", to_hex(&b)))), 0);
     let s = w.signed(".take.json");
     assert!(paid_to(&s, &taker) > 3 * KAS, "{}", paid_to(&s, &taker));
     // The maker cannot take its own order, and the protocol refuses a fill below the minimum fill.
-    assert_eq!(run(actions, w.args(0x11, &format!("{} --amount 4TST --max-price 3KAS --yes", to_hex(&a)))), 1);
-    assert_eq!(run(actions, w.args(0x22, &format!("{} --amount 0.5TST --max-price 3KAS --yes", to_hex(&a)))), 1);
+    assert_eq!(run(actions, w.args(0x11, &format!("{} --amount 4TST --max-price 3KAS --token {TOKEN_HEX} --yes", to_hex(&a)))), 1);
+    assert_eq!(run(actions, w.args(0x22, &format!("{} --amount 0.5TST --max-price 3KAS --token {TOKEN_HEX} --yes", to_hex(&a)))), 1);
     // An amount that does not read, with no unit, is a usage error with code 2, as in `place`.
-    assert_eq!(run(actions, w.args(0x22, &format!("{} --amount 4 --max-price 3KAS --yes", to_hex(&a)))), 2);
-    assert_eq!(run(actions, w.args(0x22, "not-an-id --amount 4TST --max-price 3KAS --yes")), 2);
-    assert_eq!(run(actions, w.args(0x22, &format!("{} --max-price 3KAS --yes", to_hex(&a)))), 2, "--amount is required");
+    assert_eq!(run(actions, w.args(0x22, &format!("{} --amount 4 --max-price 3KAS --token {TOKEN_HEX} --yes", to_hex(&a)))), 2);
+    assert_eq!(run(actions, w.args(0x22, "not-an-id --amount 4TST --max-price 3KAS --token {TOKEN_HEX} --yes")), 2);
+    assert_eq!(run(actions, w.args(0x22, &format!("{} --max-price 3KAS --token {TOKEN_HEX} --yes", to_hex(&a)))), 2, "--amount is required");
     // The maker cancels the ask, and the custody and the KAS come back.
     assert_eq!(run(crate::trade::actions::run_cancel, w.args(0x11, &to_hex(&a))), 1, "no --yes: refused");
     assert_eq!(run(crate::trade::actions::run_cancel, w.args(0x11, &format!("{} --yes", to_hex(&a)))), 0);
@@ -527,39 +529,44 @@ fn take_refuses_a_price_worse_than_its_bound_before_signing() {
     let take = crate::trade::actions::run_take;
     let t = |key: u8, rest: String| run(take, w.args(key, &rest));
     // --yes without a bound is a usage mistake, refused before the node is asked for anything.
-    assert_eq!(t(0x22, format!("{} --amount 4TST --yes", to_hex(&a))), 2);
+    assert_eq!(t(0x22, format!("{} --amount 4TST --token {TOKEN_HEX} --yes", to_hex(&a))), 2);
     // Both bounds, or the bound of the other side, are usage mistakes too.
-    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 3KAS --min-price 3KAS --yes", to_hex(&a))), 2);
-    assert_eq!(t(0x22, format!("{} --amount 4TST --min-price 3KAS --yes", to_hex(&a))), 2);
-    assert_eq!(t(0x22, format!("{} --amount 2TST --max-price 2KAS --yes", to_hex(&b))), 2);
-    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 3 --yes", to_hex(&a))), 2, "the price needs a unit");
+    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 3KAS --min-price 3KAS --token {TOKEN_HEX} --yes", to_hex(&a))), 2);
+    assert_eq!(t(0x22, format!("{} --amount 4TST --min-price 3KAS --token {TOKEN_HEX} --yes", to_hex(&a))), 2);
+    assert_eq!(t(0x22, format!("{} --amount 2TST --max-price 2KAS --token {TOKEN_HEX} --yes", to_hex(&b))), 2);
+    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 3 --token {TOKEN_HEX} --yes", to_hex(&a))), 2, "the price needs a unit");
+    assert_eq!(w.submitted(), 0);
+    // --yes without a token pin is a usage mistake too, and a pin of another token is refused.
+    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 3KAS --yes", to_hex(&a))), 2);
+    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 3KAS --token 70 --yes", to_hex(&a))), 2);
+    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 3KAS --token {} --yes", to_hex(&a), to_hex(&[0x71; 32]))), 1);
     assert_eq!(w.submitted(), 0);
     // A price over the bound is refused (exit 1) and nothing is signed or written.
-    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 2.99KAS --yes", to_hex(&a))), 1);
+    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 2.99KAS --token {TOKEN_HEX} --yes", to_hex(&a))), 1);
     assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 2.99KAS --dry-run", to_hex(&a))), 1);
     assert_eq!(w.submitted(), 0);
     assert!(!w.dir.join("out").exists(), "nothing written before signing");
     // The sell side mirror: a bid at 2 KAS is refused below a 2.01 KAS minimum.
-    assert_eq!(t(0x22, format!("{} --amount 2TST --min-price 2.01KAS --yes", to_hex(&b))), 1);
+    assert_eq!(t(0x22, format!("{} --amount 2TST --min-price 2.01KAS --token {TOKEN_HEX} --yes", to_hex(&b))), 1);
     assert_eq!(w.submitted(), 0);
     // The Dutch ask at its price at the lock time, 3.01 KAS, is within a 3.05 KAS bound (dry run).
     assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 3.05KAS --dry-run", to_hex(&d))), 0);
     // A node that lags by 500 DAA signs an earlier lock time, at which the ask asks 3.51 KAS.
     w.node_state.lock().unwrap().daa = 999_500;
-    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 3.05KAS --yes", to_hex(&d))), 1);
+    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 3.05KAS --token {TOKEN_HEX} --yes", to_hex(&d))), 1);
     w.node_state.lock().unwrap().daa = 1_000_000;
     assert_eq!(w.submitted(), 0);
     // The maker raises the ask to 3.1 KAS after the taker saw 3 KAS: refused.
     let raised = AnyState::KobAsk(AskState { price: 310_000_000, ..ask(maker, 10 * SCALE, 1_000_000 + 77_000_000) });
     swap_order(&w, &raised, a, 0x10, 2 * KAS);
-    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 3KAS --yes", to_hex(&a))), 1);
+    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 3KAS --token {TOKEN_HEX} --yes", to_hex(&a))), 1);
     assert_eq!(w.submitted(), 0);
     // Back at 3 KAS, exactly the bound: signed and submitted, paying 4 x 3 KAS.
     swap_order(&w, &AnyState::KobAsk(ask(maker, 10 * SCALE, 1_000_000 + 77_000_000)), a, 0x10, 2 * KAS);
-    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 3KAS --yes", to_hex(&a))), 0);
+    assert_eq!(t(0x22, format!("{} --amount 4TST --max-price 3KAS --token {TOKEN_HEX} --yes", to_hex(&a))), 0);
     assert_eq!(paid_to(&w.signed(".take.json"), &maker), 12 * KAS);
     // The bid at exactly its 2 KAS minimum is signed too.
-    assert_eq!(t(0x22, format!("{} --amount 2TST --min-price 2KAS --yes", to_hex(&b))), 0);
+    assert_eq!(t(0x22, format!("{} --amount 2TST --min-price 2KAS --token {TOKEN_HEX} --yes", to_hex(&b))), 0);
     assert_eq!(w.submitted(), 2);
 }
 
@@ -1468,7 +1475,7 @@ fn every_trading_command_refuses_a_fee_above_the_ceiling_unless_allowed() {
     let cases: Vec<Case> = vec![
         ("place", crate::trade::place::run, 0x11, "limit --token TST --side sell --amount 10TST --price 3KAS".into(), ".place.json"),
         ("replace", crate::trade::actions::run_replace, 0x11, format!("{} --price 3.1KAS", to_hex(&a)), ".replace.json"),
-        ("take", crate::trade::actions::run_take, 0x22, format!("{} --amount 4TST --max-price 4KAS", to_hex(&a)), ".take.json"),
+        ("take", crate::trade::actions::run_take, 0x22, format!("{} --amount 4TST --max-price 4KAS --token {TOKEN_HEX}", to_hex(&a)), ".take.json"),
         ("cancel", crate::trade::actions::run_cancel, 0x11, to_hex(&c), ".cancel.json"),
         ("send", crate::trade::actions::run_send, 0x11, format!("KAS {to} 2.5KAS"), ".json"),
     ];

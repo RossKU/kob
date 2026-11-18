@@ -175,6 +175,9 @@ fn markets_of(c: &Common, live: &Live) -> Result<Vec<TokenMarket>, String> {
             m.ext_source = market::ExtSource::Order;
         }
     }
+    for m in ms.iter().filter(|m| m.cov == own_token) {
+        market::check_order_scale(m, own_scale)?;
+    }
     Ok(ms)
 }
 
@@ -1293,7 +1296,7 @@ pub const TAKE_USAGE: &str = "\
 kob take: fill a resting order as the taker, at its own price (an Executor's fill transaction with one order)
 
 USAGE
-  kob take <COVENANT_ID> --amount AMOUNT [--max-price P | --min-price P] [--carrier KAS] [options]
+  kob take <COVENANT_ID> --amount AMOUNT [--token TOKEN_ID] [--max-price P | --min-price P] [--carrier KAS] [options]
 
   An order that sells (a limit / IOC / FOK / Dutch sell, a take-profit sell, a sell-first entry): you pay the maker its
   price less its tip in KAS from your KAS UTXOs (the tip is the executor's, and here you are the executor) and receive
@@ -1310,17 +1313,56 @@ PRICE BOUND
                   settles at: the order's price at the signed lock time, less its tip (buying) or plus its tip
                   (selling); the network fee is not in it. A worse price is refused before signing. The maker can
                   amend an order and an auction moves with the lock time, so --yes needs a bound.
+
+TOKEN PIN
+  --token ID      the covenant id (64 hex) of the token you mean to trade. The order's state, checked on the node,
+                  must trade it, or nothing is signed: an order id listed under another token's book is refused.
+                  Required with --yes.
 ";
+
+/// The token pin of `kob take`: `--token` as a covenant id, required with `--yes`.
+fn take_token_pin(p: &Parsed) -> Result<Option<[u8; 32]>, String> {
+    match p.get("--token") {
+        Some(v) => kob_protocol::registry::parse_hex32(v)
+            .map(Some)
+            .ok_or_else(|| format!("--token `{v}`: give the token's covenant id (64 hex)")),
+        None if p.has("--yes") => {
+            Err("a token pin is required when the confirmation is skipped: with --yes give --token <covenant id>".into())
+        }
+        None => Ok(None),
+    }
+}
+
+/// Refuses an order whose node-checked state trades a token other than `pin`.
+fn check_take_token(pin: Option<[u8; 32]>, state: &AnyState) -> Result<(), String> {
+    let Some(want) = pin else { return Ok(()) };
+    let has = match state.pair_tokens() {
+        Some(p) => vec![p.a.cov_id, p.b.cov_id],
+        None => vec![state.token_cov_id()],
+    };
+    if has.contains(&want) {
+        return Ok(());
+    }
+    Err(format!(
+        "--token {}: the order (checked on the node) trades {}, not the token you named: refused, nothing signed",
+        to_hex(&want),
+        has.iter().map(|c| to_hex(c)).collect::<Vec<_>>().join(" / ")
+    ))
+}
 
 /// Runs `kob take`.
 pub fn run_take(args: &[String]) -> i32 {
-    let flags = ["--amount", "--carrier", bound::MAX_FLAG, bound::MIN_FLAG];
-    let (p, c, signer) = match ctx_checked(args, &flags, &[], TAKE_USAGE, |p| bound::parse_bound(p).map(|_| ())) {
+    let flags = ["--amount", "--carrier", "--token", bound::MAX_FLAG, bound::MIN_FLAG];
+    let (p, c, signer) = match ctx_checked(args, &flags, &[], TAKE_USAGE, |p| {
+        bound::parse_bound(p)?;
+        take_token_pin(p).map(|_| ())
+    }) {
         Ok(x) => x,
         Err(code) => return code,
     };
     let r = (|| -> Result<(Ready, Units), Fail> {
         let price_bound = bound::parse_bound(&p).map_err(usage)?;
+        let pin = take_token_pin(&p).map_err(usage)?;
         let [id] = p.pos.as_slice() else { return Err(usage("give exactly one covenant id")) };
         let cov = cov_arg(id).map_err(usage)?;
         let node = c.need_node()?;
@@ -1329,6 +1371,7 @@ pub fn run_take(args: &[String]) -> i32 {
         if live.order.state.maker() == signer.pubkey {
             return Err("this is your own order: a self-trade only pays fees (cancel or amend it instead)".into());
         }
+        check_take_token(pin, &live.order.state)?;
         let ms = markets_of(&c, &live)?;
         let m = &ms[0];
         let amount = parse_token_amount(p.get("--amount").ok_or_else(|| usage("--amount is required"))?, &m.unit(), "--amount")
