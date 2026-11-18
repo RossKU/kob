@@ -1,23 +1,39 @@
-//! KOB protocol v3 harness, BUY side, KRON family: KobCondBidKron (buy-stop / buy-stop-limit / trailing buy /
-//! limit / OCO, buy auctions, keeper tips, repeat exits) and KobIfdAskKron (sell-first IFD/IFO entry with partial
-//! fills, stop entries, minFill and repeat IFD, each fill creating a fresh KobCondBidKron exit), triggered by a plain
-//! KobAskKron / KobBidKron fill in the same transaction (touch), executed in rusty-kaspa v2.1.0's TxScriptEngine against
-//! the REAL KRON token program bytes (both pinned templates, 2,433 B and 2,732 B).
+//! Buy-side tests of the KOB protocol v3 orders on the KRON token family, run against the real KRON
+//! token program bytes.
 //!
-//! Amounts are base units of the token (no lots); prices and tips are sompi per WHOLE token (`scale` base units);
-//! quote values follow the covenants' quoteOf (exact split multiplication, rounded in the maker's favour: up for what a
-//! maker receives, down for what a maker pays). The fixtures use scale 1000 (a 3-decimal token), so the protocol v2
-//! numbers carry over: a price per old lot is a price per whole token, and an old fill of k lots is k * 1000 base units.
+//! Covered orders:
+//! - KobCondBidKron: buy-stop, buy-stop-limit, trailing buy, limit, OCO, buy auctions, keeper tips
+//!   and repeat exits.
+//! - KobIfdAskKron: sell-first IFD/IFO entry with partial fills, stop entries, minFill and repeat
+//!   IFD, each fill creating a fresh KobCondBidKron exit.
 //!
-//! Port of kob_v2_buy_tests.rs (every scenario id of the KCC-20 buy suite is kept, KCC-20 token semantics replaced by
-//! KRON's), plus the KRON token attack set of the v1 adapter suite applied to the buy-side contracts, plus the protocol
-//! v3 checks (minimum fill, rounding, tip, overflow, the repeat merge argument -(k * 2^53 + m) and its 0x08 checks, the
-//! update parent guard). KRON allows 4 token inputs and 5 token outputs per transaction (the orders' stray scan bound is
-//! 4). Ablation runs: KOB_ABLATION=1 KOB_ABLATION_SRC=<dir with a mutated <Name>.sil> reports ABLATION-PASS lines instead
-//! of failing when an attack transaction is accepted because the check under test was removed. KRON token semantics: one
-//! entry, no leader/delegator; every token input carries the same next-state columns; one witness byte per token input
-//! points at the authorising input (id_type 2: the input carrying the owner covenant id; id_type 3: a P2PK input
-//! of the owner); custody = id_type 2 owner = order covenant id, is_minter 0; maker/taker deliveries id_type 3.
+//! Both are triggered by a plain KobAskKron / KobBidKron fill in the same transaction (touch). They
+//! execute in rusty-kaspa v2.1.0's TxScriptEngine against both pinned templates (2,433 B and 2,732
+//! B).
+//!
+//! Amounts are base units of the token (no lots). Prices and tips are sompi per WHOLE token
+//! (`scale` base units). Quote values follow the covenants' quoteOf (exact split multiplication,
+//! rounded in the maker's favour: up for what a maker receives, down for what a maker pays). The
+//! fixtures use scale 1000 (a 3-decimal token), so a price per lot is a price per whole token and a
+//! fill of k lots is k * 1000 base units.
+//!
+//! The file ports kob_v2_buy_tests.rs (every scenario id of the KCC-20 buy suite is kept, with KRON
+//! token semantics) and adds:
+//! - the KRON token attack set of the v1 adapter suite, applied to the buy-side contracts;
+//! - the protocol v3 checks: minimum fill, rounding, tip, overflow, the repeat merge argument -(k *
+//!   2^53 + m) and its 0x08 checks, and the update parent guard.
+//!
+//! KRON allows 4 token inputs and 5 token outputs per transaction (the orders' stray scan bound is
+//! 4). KRON token semantics: one entry, no leader/delegator; every token input carries the same
+//! next-state columns; one witness byte per token input points at the authorising input (id_type 2:
+//! the input carrying the owner covenant id; id_type 3: a P2PK input of the owner). Custody is
+//! id_type 2 owned by the order covenant id with is_minter 0. Maker and taker deliveries are
+//! id_type 3.
+//!
+//! Ablation runs: KOB_ABLATION=1 KOB_ABLATION_SRC=<dir with a mutated <Name>.sil> reports
+//! ABLATION-PASS lines instead of failing when an attack transaction is accepted because the check
+//! under test was removed.
+//!
 //! Run: cargo test -p kob-tests --test kob_kron_v2_buy_tests -- --nocapture --test-threads=1
 #![allow(dead_code)]
 #![allow(clippy::needless_borrows_for_generic_args, clippy::needless_range_loop)]
@@ -2869,10 +2885,11 @@ fn touch_battery(f: &Fx, kind: Kind) {
         "04",
         "TWAP/DCA evidence: its slice opened R - 1 DAA before (the interval counts)",
     );
-    // Audit 2026-10-29 F1: the evidence order's own state is untrusted, so a NEGATIVE interval (which would cancel the UTXO's age
-    // and switch the rest time off) is refused: exposure R DAA short, interval -1 / -R / -10^12 with a UTXO one DAA old. The sign of
-    // activeFrom and slope flipped on an evidence that rested one DAA too short must not help either (a negated quote or scale builds no
-    // transaction in this harness; the sign battery of audit_rest_interval_tests covers them).
+    // The evidence order's own state is untrusted, so a NEGATIVE interval (which would cancel the
+    // UTXO's age and switch the rest time off) is refused: exposure R DAA short, interval -1 / -R /
+    // -10^12 with a UTXO one DAA old. The sign of activeFrom and slope flipped on an evidence that
+    // rested one DAA too short must not help either (a negated quote or scale builds no transaction
+    // in this harness; the sign battery of audit_rest_interval_tests covers them).
     bad(
         &good.with(|e| {
             e.daa = NOW - R + 1;
@@ -3836,7 +3853,8 @@ fn buy_repeat_attacks(f: &Fx) {
         "NRPB30 look-alike exit with another rptPre (prefund - 1) re-arms the entry",
         2,
     );
-    // an underfunded look-alike (1000 sompi) sells out: the old floor (entry + exit - proceeds) fell below the entry's own value
+    // an underfunded look-alike (1000 sompi) sells out: the entry would keep (entry + exit -
+    // proceeds), which is below the entry's own value
     let mut s = rpta_merge(f, &MergeBKnobs::new(f, 6 * TOK, 4 * TOK, 4 * TOK));
     let x_value = s.inputs[0].entry.amount as i64;
     s.inputs[0].entry.amount = 1_000;
@@ -4385,11 +4403,12 @@ fn kron_v2_buy_v3_merge_push() {
     }
 }
 
-/// The KRON twin of `kob_v2_buy_tests::empty_repeating_ifda_refund_is_refused`: the refund (settle nb = 0) of an EMPTY
-/// repeating KobIfdAskKron entry with a zero-amount token UTXO owned by the entry's id as its custody used to pin no
-/// output, so its KAS could be paid to any output. The refund now requires tokens held: the
-/// entry (input 0) refuses it whatever the token program makes of the custody; the empty entry ends by `close()` (RPB8)
-/// and an entry holding tokens is still refunded to the maker (R1).
+/// The KRON twin of `kob_v2_buy_tests::empty_repeating_ifda_refund_is_refused`: the refund (settle
+/// nb = 0) of an EMPTY repeating KobIfdAskKron entry with a zero-amount token UTXO owned by the
+/// entry's id as its custody would pin no output, so its KAS could be paid to any output. The
+/// refund requires tokens held: the entry (input 0) refuses it whatever the token program makes of
+/// the custody; the empty entry ends by `close()` (RPB8) and an entry holding tokens is still
+/// refunded to the maker (R1).
 #[test]
 fn kron_empty_repeating_ifda_refund_is_refused() {
     for tpl in TPLS {
@@ -4417,7 +4436,7 @@ fn kron_empty_repeating_ifda_refund_is_refused() {
                 p2pk_in(&f.taker, 10 * KAS),
             ],
             outputs: vec![
-                // output self: every carrier minus refundTip (what the old refund required), to the taker
+                // output self: every carrier minus refundTip, to the taker
                 out(3 * CARRIER - REFUND_TIP, p2pk_spk(&taker_pk), None),
                 out(CARRIER / 4, tspk(k, 0, &taker_pk, T_ADDR), Some((1, TOKEN_COV))),
                 out(10 * KAS - CARRIER / 4 - NET_FEE, p2pk_spk(&taker_pk), None),
@@ -4430,15 +4449,16 @@ fn kron_empty_repeating_ifda_refund_is_refused() {
     }
 }
 
-// ---------------------------------------------------------------- audit completion (2026-10-13)
+// ---- witness scenarios for the AU-KCB / AU-KIA catalog entries
 //
-// Witnesses for the KobCondBidKron / KobIfdAskKron checks that no attack scenario reached before (tools/ablation, the
-// AU-KCB / AU-KIA entries of the kron-buy catalog). Each NAU-KCB* (conditional buy) / NAU-KIA* (if-done ask) scenario is
-// refused by the committed contracts and accepted by every input once the check its catalog entry names is removed
-// (unless the entry marks it input-only or defence in depth). Planted inputs (a UTXO carrying the token's covenant id
-// that no token program created) follow the pair suite's NP25 / NP26: consensus cannot produce them, the order must
-// refuse them anyway. Hostile fields (a maker-set parameter out of range) are witnessed by the transaction the removal
-// would admit, even where it only favours the maker.
+// Witnesses for the KobCondBidKron / KobIfdAskKron checks that the other scenarios do not reach
+// (tools/ablation, the AU-KCB / AU-KIA entries of the kron-buy catalog). Each NAU-KCB* (conditional
+// buy) / NAU-KIA* (if-done ask) scenario is refused by the committed contracts and accepted by
+// every input once the check its catalog entry names is removed (unless the entry marks it
+// input-only or defence in depth). Planted inputs (a UTXO carrying the token's covenant id that no
+// token program created) follow the pair suite's NP25 / NP26: consensus cannot produce them, the
+// order must refuse them anyway. Hostile fields (a maker-set parameter out of range) are witnessed
+// by the transaction the removal would admit, even where it only favours the maker.
 
 /// The UTXO of input k carries covenant id c.
 fn set_cov(s: &mut Scn, k: usize, c: Option<Hash>) {

@@ -63,7 +63,7 @@ fn committed_artifacts_match_sources() {
     }
 }
 
-/// Audit H1 class. A trigger-evidence reader (KobCondPair, KobIfdPair, the conditional kinds) takes the
+/// H1 class. A trigger-evidence reader (KobCondPair, KobIfdPair, the conditional kinds) takes the
 /// evidence input's signature script to start with `0x08` + 8 bytes, the fill amount `nb` of the
 /// evidence template's fill (`settle` of the asks and the pair, `fill` of the bids). No other entry of an
 /// evidence template may take an `int` or a `byte[8]` first parameter, so no other spend of an evidence

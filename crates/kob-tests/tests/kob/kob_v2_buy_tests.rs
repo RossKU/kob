@@ -1,8 +1,13 @@
-//! KOB protocol v2.2 harness, BUY side: KobCondBid (buy-stop / buy-stop-limit / trailing buy / OCO)
-//! and KobIfdAsk (sell-first IFD/IFO entry with partial fills, each creating a fresh KobCondBid exit), triggered by a
-//! plain KobAsk / KobBid fill in the same transaction (touch, v2.6), with the reference KCC-20, executed in rusty-kaspa
+//! Buy-side tests of the KOB protocol v2.2 orders, run against the reference KCC-20 in rusty-kaspa
 //! v2.1.0's TxScriptEngine.
-//! Every order executes at its own all-in limit or better. Helpers are copied from kob_v2_tests.rs.
+//!
+//! Covered orders:
+//! - KobCondBid: buy-stop, buy-stop-limit, trailing buy and OCO.
+//! - KobIfdAsk: sell-first IFD/IFO entry with partial fills, each creating a fresh KobCondBid exit.
+//!
+//! Both are triggered by a plain KobAsk / KobBid fill in the same transaction (touch, v2.6). Every
+//! order executes at its own all-in limit or better. The helpers are copied from kob_v2_tests.rs.
+//!
 //! Run: cargo test --release -p kob-tests --test kob_v2_buy_tests -- --nocapture --test-threads=1
 #![allow(dead_code)]
 
@@ -237,7 +242,7 @@ enum EvMode {
     ZeroFill,
     /// a look-alike: a P2SH script carrying a real order's state under another template
     Forged,
-    /// H1: a KobBid refund whose sigscript starts with 0x08 || n (before the fix, its `custIn` pushed as 8 bytes)
+    /// H1: a KobBid refund whose sigscript starts with 0x08 || n (its `custIn` pushed as 8 bytes)
     RefundPush,
     /// the real redeem script pushed by an input whose script public key is not its P2SH
     NotP2sh,
@@ -2703,10 +2708,11 @@ fn touch_battery(f: &Fx, kind: Kind) {
         "04",
         "TWAP/DCA evidence: its slice opened R - 1 DAA before (the interval counts)",
     );
-    // Audit 2026-10-29 F1: the evidence order's own state is untrusted, so a NEGATIVE interval (which would cancel the UTXO's age
-    // and switch the rest time off) is refused: exposure R DAA short, interval -1 / -R / -10^12 with a UTXO one DAA old. The sign of
-    // activeFrom and slope flipped on an evidence that rested one DAA too short must not help either (a negated quote or scale builds no
-    // transaction in this harness; the sign battery of audit_rest_interval_tests covers them).
+    // The evidence order's own state is untrusted, so a NEGATIVE interval (which would cancel the
+    // UTXO's age and switch the rest time off) is refused: exposure R DAA short, interval -1 / -R /
+    // -10^12 with a UTXO one DAA old. The sign of activeFrom and slope flipped on an evidence that
+    // rested one DAA too short must not help either (a negated quote or scale builds no transaction
+    // in this harness; the sign battery of audit_rest_interval_tests covers them).
     bad(
         &good.with(|e| {
             e.daa = NOW - R + 1;
@@ -2958,8 +2964,8 @@ fn v2_buy_touch_ifd_fill_3x3() {
 fn v2_buy_touch_ifd_arm_3x3() {
     touch_battery(&fx(), Kind::IfdArm);
 }
-/// The touch batteries on the published public-mint build (KCC20PublicMint, 3 / 3, tradable since 41b7fdb; audit AUD-PM):
-/// the scenarios that fit its slots.
+/// The touch batteries on the published public-mint build (KCC20PublicMint, 3 / 3; AUD-PM): the
+/// scenarios that fit its slots.
 fn fx_pm() -> Fx {
     Fx {
         net: Net::with_token(Token::pinned(kob_protocol::artifacts::TemplateId::Kcc20PublicMint)),
@@ -3744,7 +3750,8 @@ fn v2_buy_repeat_ifd_attacks() {
         "NRPB30 look-alike exit with another rptPre (prefund - 1) re-arms the entry",
         2,
     );
-    // an underfunded look-alike (1000 sompi) sells out: the old floor (entry + exit - proceeds) fell below the entry's own value
+    // an underfunded look-alike (1000 sompi) sells out: the entry would keep (entry + exit -
+    // proceeds), which is below the entry's own value
     let mut s = rpta_merge(&f, &MergeBKnobs::new(&f, 6, 4, 4));
     let x_value = s.inputs[0].entry.amount as i64;
     s.inputs[0].entry.amount = 1_000;
@@ -4559,17 +4566,18 @@ fn v2_buy_fix_pass_regressions() {
     run_ok(n, &fx_low_stop_b(&f, 100, 0));
 }
 
-// ================================================================ refund of an empty repeating KobIfdAsk entry (2026-10-06)
+// ---- refund of an empty repeating KobIfdAsk entry
 
-/// The refund (settle nb = 0) of an EMPTY repeating KobIfdAsk entry (amountLeft 0, no custody, waiting for its exits)
-/// used to accept a ZERO-amount token UTXO owned by the entry's covenant id as its "custody" and then pinned no output
-/// (the token output is pinned only when outAmount > 0), so after the soft expiry / 90-day idle bound the entry's KAS
-/// value could be paid to any output instead of `close()` paying the maker minus refundTip. The KCC-20 reference program
-/// accepts zero-amount outputs with any owner, so such a UTXO is cheap to make (SR1a).
+/// The refund (settle nb = 0) of an EMPTY repeating KobIfdAsk entry (amountLeft 0, no custody,
+/// waiting for its exits) must not accept a ZERO-amount token UTXO owned by the entry's covenant id
+/// as its "custody". Such a custody would pin no output (the token output is pinned only when
+/// outAmount > 0), so after the soft expiry / 90-day idle bound the entry's KAS value could be paid
+/// to any output instead of `close()` paying the maker minus refundTip. The KCC-20 reference
+/// program accepts zero-amount outputs with any owner, so such a UTXO is cheap to make (SR1a).
 ///
-/// The refund now requires tokens held (`amountLeft > 0`): the empty-entry refund is refused, the empty entry still ends
-/// by `close()` paying the maker, and the refund of an entry holding tokens still returns them (and its carriers) to the
-/// maker.
+/// The refund requires tokens held (`amountLeft > 0`): the empty-entry refund is refused, the empty
+/// entry still ends by `close()` paying the maker, and the refund of an entry holding tokens still
+/// returns them (and its carriers) to the maker.
 #[test]
 fn empty_repeating_ifda_refund_is_refused() {
     let f = fx();
@@ -4674,15 +4682,16 @@ fn empty_repeating_ifda_refund_is_refused() {
     run_bad(n, &refund(taker_pk, "SR1g refund of a repeating entry holding tokens, paid to anyone else"), 0);
 }
 
-// ---------------------------------------------------------------- audit completion (2026-10-13)
+// ---- witness scenarios for the AU-CB / AU-IA catalog entries
 //
-// Witnesses for the KobCondBid / KobIfdAsk checks that no attack scenario reached before (tools/ablation, the AU-CB /
-// AU-IA entries of the kcc20-buy catalog). Each NAU-CB* (conditional buy) / NAU-IA* (sell-first entry) scenario is
-// refused by the committed contracts and accepted by every input once the one check it names is removed (unless the
-// catalog marks it input-only or defence in depth). Planted inputs (a UTXO carrying the token's covenant id that no
-// token program created) follow the pair suite's NP25 / NP26: consensus cannot produce them, the order must refuse
-// them anyway. Hostile fields (a maker-set parameter out of range) are witnessed whenever some transaction becomes
-// acceptable without the check, even a maker-favourable one.
+// Witnesses for the KobCondBid / KobIfdAsk checks that the other scenarios do not reach
+// (tools/ablation, the AU-CB / AU-IA entries of the kcc20-buy catalog). Each NAU-CB* (conditional
+// buy) / NAU-IA* (sell-first entry) scenario is refused by the committed contracts and accepted by
+// every input once the one check it names is removed (unless the catalog marks it input-only or
+// defence in depth). Planted inputs (a UTXO carrying the token's covenant id that no token program
+// created) follow the pair suite's NP25 / NP26: consensus cannot produce them, the order must
+// refuse them anyway. Hostile fields (a maker-set parameter out of range) are witnessed whenever
+// some transaction becomes acceptable without the check, even a maker-favourable one.
 
 /// A KCC-20 holder redeem script with a free borrow scheme and extension commitment.
 fn tok_redeem_x(t: &Token, amount: i64, owner: &[u8; 32], scheme: u8, borrow: u8, ext: &[u8; 32]) -> Vec<u8> {

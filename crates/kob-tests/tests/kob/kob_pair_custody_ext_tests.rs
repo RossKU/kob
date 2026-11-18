@@ -1,18 +1,24 @@
-//! The custody of a pair order is pinned by its KCC-20 extension commitment (`KobPair.sil`, `KobCondPair.sil`,
-//! `KobIfdPair.sil`), executed in the script engine against the templates compiled from source (`common/pair_harness.rs`).
+//! Tests that the custody of a pair order is pinned by its KCC-20 extension commitment
+//! (`KobPair.sil`, `KobCondPair.sil`, `KobIfdPair.sil`).
 //!
-//! A KCC-20 token is (covenant id, program, extension commitment): units of the same covenant id with another commitment
-//! are another token (only its issuer can create them, in its genesis). A pair order's custody is read by covenant id,
-//! program, owner (the order's id), owner scheme / borrow-disabled and its exact amount, and since 2026-10-07 by the
-//! commitment its state names: `sExt` of a `KobPair` / `KobCondPair` (the custody of S), `aExt` / `bExt` of a `KobIfdPair`
-//! (its A custody, its B escrow or prefund, and the custody of an exit it merges). An order handed a custody of exactly
-//! its amount but another commitment (owned by the order's id: anyone holding such units can send them there) would
-//! otherwise refund / return those units to its maker and leave the real custody owned by an ended covenant.
+//! They execute in the script engine against the templates compiled from source
+//! (`common/pair_harness.rs`).
 //!
-//! Every honest refund, fill and merge of the pair grids (`fx::pair::pair_branch_shapes`, `pair_scenarios`) on the family
-//! mixes with a KCC-20 token runs as a positive; then, for every token group whose inputs are all custodies of pair orders,
-//! the same transaction with every input and output of that group of another commitment (consistent for the token
-//! program) is refused at the input of every pair order that holds one of those custodies.
+//! A KCC-20 token is (covenant id, program, extension commitment): units of the same covenant id
+//! with another commitment are another token (only its issuer can create them, in its genesis). A
+//! pair order's custody is read by covenant id, program, owner (the order's id), owner scheme /
+//! borrow-disabled and its exact amount, and by the commitment its state names: `sExt` of a
+//! `KobPair` / `KobCondPair` (the custody of S), `aExt` / `bExt` of a `KobIfdPair` (its A custody,
+//! its B escrow or prefund, and the custody of an exit it merges). An order handed a custody of
+//! exactly its amount but another commitment (owned by the order's id: anyone holding such units
+//! can send them there) would otherwise refund / return those units to its maker and leave the real
+//! custody owned by an ended covenant.
+//!
+//! Every honest refund, fill and merge of the pair grids (`fx::pair::pair_branch_shapes`,
+//! `pair_scenarios`) on the family mixes with a KCC-20 token runs as a positive. Then, for every
+//! token group whose inputs are all custodies of pair orders, the same transaction with every input
+//! and output of that group of another commitment (consistent for the token program) is refused at
+//! the input of every pair order that holds one of those custodies.
 //!
 //! Run: cargo test -p kob-tests --test kob_pair_custody_ext_tests -- --nocapture
 

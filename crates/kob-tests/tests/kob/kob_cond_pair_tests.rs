@@ -1,17 +1,24 @@
-//! `KobCondPair` (contracts/orders/KobCondPair.sil) security suite, executed in the script engine against the template
-//! compiled from source (`common/pair_harness.rs`). This file owns everything of `KobCondPair` EXCEPT the repeat-IFD
-//! merge checks (the suite agent of `kob_ifd_pair_tests.rs` owns those): the KobPair-style settlement of a leg fill
-//! (ceil / floor, exact custody, the stray guards of both tokens on every path, output aliasing), the trigger evidence
-//! (both modes), trailing, the auction, OCO, refunds / cancels / kills, update encodings and keeperTip, overflow, and the
-//! C1 fake-quote attacks read as evidence.
+//! Security suite of `KobCondPair` (contracts/orders/KobCondPair.sil), executed in the script
+//! engine against the template compiled from source (`common/pair_harness.rs`).
 //!
-//! The order A/B: A = `TOKEN_COV` (program `pa`), B = `TOKEN_B` (`pb`), scale 1,000 = `WHOLE`. Side ASK sells A (S = A)
-//! with a sell stop below the market and a take-profit above it; side BID holds a B escrow (S = B) and buys A with a buy
-//! stop above the market and a limit below it. Positives are honest `kob-protocol` builds on all four family mixes;
-//! attacks are honest builds edited input by input (`ph::Ed`, `Run::bad`) or patched after assembly, each REJECTED by the
-//! order's own input, on the two mixed pairs (and per family where a check is per family).
+//! The file covers everything of `KobCondPair` except the repeat-IFD merge checks, which
+//! `kob_ifd_pair_tests.rs` owns:
+//! - the KobPair-style settlement of a leg fill (ceil / floor, exact custody, the stray guards of
+//!   both tokens on every path, output aliasing);
+//! - the trigger evidence (both modes), trailing, the auction, OCO, refunds / cancels / kills,
+//!   update encodings and keeperTip, overflow;
+//! - the C1 fake-quote attacks read as evidence.
 //!
-//! Scenario ids: `PC..` positives, `NC..` attacks. Run: cargo test -p kob-tests --test kob_cond_pair_tests -- --nocapture --test-threads=1
+//! The order pair is A/B: A = `TOKEN_COV` (program `pa`), B = `TOKEN_B` (`pb`), scale 1,000 =
+//! `WHOLE`. Side ASK sells A (S = A) with a sell stop below the market and a take-profit above it.
+//! Side BID holds a B escrow (S = B) and buys A with a buy stop above the market and a limit below
+//! it. Positives are honest `kob-protocol` builds on all four family mixes. Attacks are honest
+//! builds edited input by input (`ph::Ed`, `Run::bad`) or patched after assembly, each REJECTED by
+//! the order's own input, on the two mixed pairs (and per family where a check is per family).
+//!
+//! Scenario ids: `PC..` positives, `NC..` attacks.
+//!
+//! Run: cargo test -p kob-tests --test kob_cond_pair_tests -- --nocapture --test-threads=1
 
 #[path = "../common/mod.rs"]
 mod common;
@@ -178,7 +185,7 @@ pub fn mixes() -> Vec<(TemplateId, TemplateId)> {
 }
 /// KCC-20 / KCC-20 on the 3 / 3 program.
 pub const KK33: (TemplateId, TemplateId) = (TemplateId::Kcc20Ref, TemplateId::Kcc20Ref);
-/// KCC-20 / KCC-20 on the public-mint build (audit AUD-PM).
+/// KCC-20 / KCC-20 on the public-mint build (AUD-PM).
 pub const KKPM: (TemplateId, TemplateId) = (TemplateId::Kcc20PublicMint, TemplateId::Kcc20PublicMint);
 /// KCC-20 / KCC-20 on KaspaRocket's 10 / 10 build of the public-mint actor.
 pub const KKKR: (TemplateId, TemplateId) = (TemplateId::KaspaRocketToken11458, TemplateId::KaspaRocketToken11458);
@@ -1365,7 +1372,7 @@ fn crest(ask: bool, pa: TemplateId, pb: TemplateId) -> CondPairState {
 }
 
 /// Every input and output of token `tok` with the extension commitment `ext` (consistent for the token program: one
-/// commitment per transfer). Audit 2026-10-13: the witness of the custody commitment check.
+/// commitment per transfer). It is the witness of the custody commitment check.
 fn reclass_ext(e: &mut Ed, tok: [u8; 32], ext: [u8; 32]) {
     for i in 0..e.entries.len() {
         if ph::cov_of(&e.entries[i]) == Some(tok) {

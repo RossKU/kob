@@ -1,6 +1,8 @@
-//! `registry/tokens.json` cross-checked against the pinned programs it describes: every template's hash, prefix/suffix/state
-//! lengths, slot limits and escrow owner types must equal what the committed artifacts, the pinned KRON program bytes and the
-//! order contracts say. The validator itself is unit-tested in `kob_protocol::registry`.
+//! Cross-checks `registry/tokens.json` against the pinned programs it describes.
+//!
+//! Every template's hash, prefix/suffix/state lengths, slot limits and escrow owner types must
+//! equal what the committed artifacts, the pinned KRON program bytes and the order contracts say.
+//! The validator itself is unit-tested in `kob_protocol::registry`.
 
 #[path = "../common/mod.rs"]
 mod common;
@@ -167,9 +169,10 @@ fn shipped_registry_templates_match_the_pinned_programs() {
         assert_eq!((p.slots.0 as u32, p.slots.1 as u32), (t.max_token_inputs, t.max_token_outputs), "{}: slots", t.id);
         assert_eq!(p.family, t.family, "{}: family", t.id);
     }
-    // the KRON family of the 2026-09-29 census (templates A and B): seven graduated tokens and KDIST, facts only: identity
-    // checked against a chain UTXO; genesis check 2026-10-03: every genesis output checked on mainnet data (C1), no live mint
-    // authority (C2), so no derived warning. The registry makes no judgement of them (no listing state, no official flag)
+    // The KRON family (templates A and B): seven graduated tokens and KDIST, facts only: identity
+    // checked against a chain UTXO; every genesis output checked on mainnet data (C1), no live mint
+    // authority (C2), so no derived warning. The registry makes no judgement of them (no listing
+    // state, no official flag).
     let kron: Vec<_> = r.tokens.iter().filter(|t| t.family == Family::Kron).collect();
     assert_eq!(kron.len(), 8);
     assert!(kron.iter().all(|t| t.verified

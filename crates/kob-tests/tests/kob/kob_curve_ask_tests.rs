@@ -1,13 +1,17 @@
-//! KobCurveAsk (docs/design/curve-ask-spec.md) in whole transactions through the script engine: fills inside one level
-//! and across up to 8, the derived level, per-level rounding, minFill, a matcher cross with a KobBid, the cancel, the
-//! creation inside the token's genesis (unbound) and every attack the contract refuses.
+//! Whole-transaction tests of KobCurveAsk (docs/design/curve-ask-spec.md) through the script
+//! engine.
 //!
-//! The token program is `KOB_KCC20_PROGRAM` (default the reference 3 / 3; `KCC20PublicMint`, `KaspaRocketToken11458`,
-//! `KForgeToken7214`); the stray scan per slot runs on `KCC20Ref_8x8`.
+//! Covered: fills inside one level and across up to 8, the derived level, per-level rounding,
+//! minFill, a matcher cross with a KobBid, the cancel, the creation inside the token's genesis
+//! (unbound) and every attack the contract refuses.
 //!
-//! Output lines follow the ablation protocol (tools/ablation, suite `curve-ask`): `NEGATIVE <id> ... @<program>` for a
-//! refused attack, under `KOB_ABLATION` `ABLATION-PASS <id> ... all_inputs_ok=<bool>` when it is accepted and
-//! `ABLATION-POS-FAIL <id> ...` when a positive scenario is refused.
+//! The token program is `KOB_KCC20_PROGRAM` (default the reference 3 / 3; `KCC20PublicMint`,
+//! `KaspaRocketToken11458`, `KForgeToken7214`). The stray scan per slot runs on `KCC20Ref_8x8`.
+//!
+//! Output lines follow the ablation protocol (tools/ablation, suite `curve-ask`): `NEGATIVE <id>
+//! ... @<program>` for a refused attack, under `KOB_ABLATION` `ABLATION-PASS <id> ...
+//! all_inputs_ok=<bool>` when it is accepted and `ABLATION-POS-FAIL <id> ...` when a positive
+//! scenario is refused.
 //!
 //! Run: cargo test -p kob-tests --test kob_curve_ask_tests -- --nocapture --test-threads=1
 #![allow(dead_code)]
@@ -1358,7 +1362,7 @@ fn fake_holder(t: &Token, real: &[u8]) -> Vec<u8> {
     v
 }
 
-// ---------------------------------------------------------------- security review 2026-11-17 (branch sec-contracts-curve)
+// ---------------------------------------------------------------- placement gates
 
 /// The placement gates of a curve (`CurveAskState::check_numbers`, spec section 5) on the scenario's numbers.
 fn sec_state(p: &CurveP) -> kob_protocol::state::CurveAskState {
@@ -1380,9 +1384,10 @@ fn sec_state(p: &CurveP) -> kob_protocol::state::CurveAskState {
     }
 }
 
-/// SEC-L1 (security review 2026-11-17). A fill crosses at most 8 levels and takes at least minFill: the gates now refuse
-/// a minFill above 7 levels + 1 (what one fill always reaches), and at that bound the worst position still takes a fill
-/// in the engine: after a purchase that stops one base unit short of a level's end, a fill of 7 levels + 1.
+/// A fill crosses at most 8 levels and takes at least minFill: the gates refuse a minFill above 7
+/// levels + 1 (what one fill always reaches), and at that bound the worst position still takes a
+/// fill in the engine: after a purchase that stops one base unit short of a level's end, a fill of
+/// 7 levels + 1.
 #[test]
 fn sec_curve_min_fill_beyond_the_cross_cap() {
     let f = fx();

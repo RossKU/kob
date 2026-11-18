@@ -1,19 +1,26 @@
-//! KOB protocol v3 harness, KRON family, SELL side: KobAskKron / KobBidKron / KobCondAskKron / KobIfdBidKron (stops armed
-//! by a plain fill in the same transaction, touch) executed against the REAL KRON token program bytes (the two pinned
-//! mainnet templates, 2,433 B and 2,732 B) in rusty-kaspa v2.1.0's TxScriptEngine with KIP-20 covenant context and
-//! script-unit metering. Port of kob_v2_tests.rs (same scenario ids and structure; every scenario of the KCC-20 suite
-//! exists here) plus the KRON-specific custody / token-program attacks
-//! applied to the v2 orders.
+//! Sell-side tests of the KOB protocol v3 orders on the KRON token family, run against the real
+//! KRON token program bytes.
 //!
-//! Amounts are base units of the token (SCALE = 1000 base units per whole token, a 3-decimal token), prices and tips
-//! sompi per whole token; every quote is the covenants' quoteOf, rounded in the maker's favour (ceil where the maker
-//! receives, floor where it pays).
+//! The orders are KobAskKron, KobBidKron, KobCondAskKron and KobIfdBidKron (stops armed by a plain
+//! fill in the same transaction, touch). They execute in rusty-kaspa v2.1.0's TxScriptEngine with
+//! KIP-20 covenant context and script-unit metering, against the two pinned mainnet templates
+//! (2,433 B and 2,732 B). The file ports kob_v2_tests.rs with the same scenario ids and structure
+//! (every scenario of the KCC-20 suite exists here) and adds the KRON-specific custody and
+//! token-program attacks applied to the v2 orders.
 //!
-//! KRON vs KCC-20: no leader/delegator (every token input runs the full check on the same next-state
-//! columns), custody = id_type 2 owned by the order covenant id with is_minter 0, maker/taker held tokens
-//! and deliveries = id_type 3 (address presence: the owner's P2PK input must be in the tx, so takers that
-//! hand in tokens add a P2PK input), at most 4 token inputs and 5 token outputs per tx.
+//! Amounts are base units of the token (SCALE = 1000 base units per whole token, a 3-decimal
+//! token). Prices and tips are sompi per whole token. Every quote is the covenants' quoteOf,
+//! rounded in the maker's favour (ceil where the maker receives, floor where it pays).
+//!
+//! KRON differs from KCC-20 as follows:
+//! - No leader/delegator: every token input runs the full check on the same next-state columns.
+//! - Custody is id_type 2 owned by the order covenant id with is_minter 0.
+//! - Maker and taker held tokens and deliveries are id_type 3 (address presence: the owner's P2PK
+//!   input must be in the tx, so takers that hand in tokens add a P2PK input).
+//! - At most 4 token inputs and 5 token outputs per transaction.
+//!
 //! Every test loops over both pinned templates (2433 primary, 2732).
+//!
 //! Run: cargo test -p kob-tests --test kob_kron_v2_tests -- --nocapture --test-threads=1
 
 // Harness style (same as the other suites): explicit `&` on byte-slice arguments, index loops over
@@ -315,7 +322,8 @@ struct Ev {
     token: Hash,
     cov: Hash,
     mode: EvMode,
-    /// the fill argument n an ask evidence claims (0: its amount; audit NAU-KA09 claims more than the ask holds)
+    /// the fill argument n an ask evidence claims (0: its amount; NAU-KA09 claims more than the ask
+    /// holds)
     claim: i64,
 }
 impl Ev {
@@ -418,7 +426,8 @@ struct IfdP {
     rpt: i64,
     /// stop entry: smallest evidence fill (base units)
     min_touch: i64,
-    /// scale, activeFrom, delivery and exit carriers (default SCALE, 0, DC, EC; the audit scenarios set hostile values)
+    /// scale, activeFrom, delivery and exit carriers (default SCALE, 0, DC, EC; the NAU scenarios
+    /// set hostile values)
     scale: i64,
     active_from: i64,
     dc: i64,
@@ -1755,7 +1764,8 @@ struct IfdKnobs {
     next_rpt: Option<i64>,
     exit_rpt: Option<([u8; 32], i64, i64)>,
     terminate: bool,
-    /// audit: a change to the entry (hostile fields), and its escrow value (default: ifd_value of amountLeft)
+    /// a change to the entry (hostile fields), and its escrow value (default: ifd_value of
+    /// amountLeft)
     edit: Option<fn(&mut IfdP)>,
     value: Option<i64>,
 }
@@ -3136,10 +3146,11 @@ fn touch_battery(f: &Fx, kind: Kind) {
         "04",
         "TWAP/DCA evidence: its slice opened R - 1 DAA before (the interval counts)",
     );
-    // Audit 2026-10-29 F1: the evidence order's own state is untrusted, so a NEGATIVE interval (which would cancel the UTXO's age
-    // and switch the rest time off) is refused: exposure R DAA short, interval -1 / -R / -10^12 with a UTXO one DAA old. The sign of
-    // activeFrom and slope flipped on an evidence that rested one DAA too short must not help either (a negated quote or scale builds no
-    // transaction in this harness; the sign battery of audit_rest_interval_tests covers them).
+    // The evidence order's own state is untrusted, so a NEGATIVE interval (which would cancel the
+    // UTXO's age and switch the rest time off) is refused: exposure R DAA short, interval -1 / -R /
+    // -10^12 with a UTXO one DAA old. The sign of activeFrom and slope flipped on an evidence that
+    // rested one DAA too short must not help either (a negated quote or scale builds no transaction
+    // in this harness; the sign battery of audit_rest_interval_tests covers them).
     bad(
         &good.with(|e| {
             e.daa = NOW - R + 1;
@@ -5867,14 +5878,15 @@ fn v3_merge_limits_body(f: &Fx) {
     run_ok(n, &s);
 }
 
-// ---------------------------------------------------------------- audit completion (2026-10-13)
+// ---- witness scenarios for the AU-KA / AU-KB / AU-KCA / AU-KIB catalog entries
 //
-// Witnesses for the KobAskKron / KobBidKron / KobCondAskKron / KobIfdBidKron checks that no attack scenario reached
-// before (tools/ablation, the AU-KA / AU-KB / AU-KCA / AU-KIB entries of the kron-sell catalog). Each NAU-K* scenario is
-// refused by the committed contracts and accepted by every input once the one check it names is removed (unless the
-// catalog marks it input-only or defence in depth), on both pinned KRON templates. Planted inputs (a UTXO carrying the
-// token's covenant id that no token program created) follow the pair suite's NP25 / NP26: consensus cannot produce
-// them, the order must refuse them anyway.
+// Witnesses for the KobAskKron / KobBidKron / KobCondAskKron / KobIfdBidKron checks that the other
+// scenarios do not reach (tools/ablation, the AU-KA / AU-KB / AU-KCA / AU-KIB entries of the
+// kron-sell catalog). Each NAU-K* scenario is refused by the committed contracts and accepted by
+// every input once the one check it names is removed (unless the catalog marks it input-only or
+// defence in depth), on both pinned KRON templates. Planted inputs (a UTXO carrying the token's
+// covenant id that no token program created) follow the pair suite's NP25 / NP26: consensus cannot
+// produce them, the order must refuse them anyway.
 
 /// One whole token of the fixtures' token (SCALE base units).
 const TOK: i64 = SCALE;
@@ -6865,7 +6877,7 @@ fn v3_audit_ifd_bid_kron() {
         v3_audit_ifd_bid_kron_body(&fx_with(tpl));
     }
 }
-/// Push-only filler of exactly `len` bytes (audit: the look-alike exit template).
+/// Push-only filler of exactly `len` bytes (for the look-alike exit template).
 fn audit_filler(mut len: usize) -> Vec<u8> {
     let mut v = vec![];
     while len > 0 {

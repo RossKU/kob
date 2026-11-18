@@ -1,20 +1,26 @@
-//! The custody of a KCC-20 ask-side order is pinned by its extension commitment (`KobAsk.sil`, `KobCondAsk.sil`:
-//! `extensionCommitment`, the last state field; `KobIfdAsk.sil`: the commitment of its committed exit), executed in the
-//! script engine against the templates compiled from source (`common/pair_harness.rs`, `Subs::compile_asks`: KobAsk,
-//! KobCondAsk, KobCondBid, KobIfdAsk and KobIfdBid, each against the compiled templates it embeds).
+//! Tests that the custody of a KCC-20 ask-side order is pinned by its extension commitment
+//! (`KobAsk.sil`, `KobCondAsk.sil`: `extensionCommitment`, the last state field; `KobIfdAsk.sil`:
+//! the commitment of its committed exit).
 //!
-//! A KCC-20 token is (covenant id, program, extension commitment): units of the same covenant id with another commitment
-//! are another token (only its issuer can create them, in its genesis). An ask's custody is read by covenant id, program,
-//! owner (the order's id), owner scheme / borrow-disabled and its exact amount, and since 2026-10-07 by the commitment its
-//! state names. An order handed a custody of exactly its amount but another commitment (owned by the order's id: anyone
-//! holding such units can send them there) would otherwise refund or return those units to its maker (refund, IOC end,
-//! a sell-out fill) and leave the real custody owned by an ended covenant. A buy-first entry (`KobIfdBid`) writes its own
-//! `extensionCommitment` into every exit it creates and merges only an exit that carries it.
+//! They execute in the script engine against the templates compiled from source
+//! (`common/pair_harness.rs`, `Subs::compile_asks`: KobAsk, KobCondAsk, KobCondBid, KobIfdAsk and
+//! KobIfdBid, each against the compiled templates it embeds).
 //!
-//! Every honest scenario of the KAS-book fixtures (creation, fills, refunds, IOC / FOK ends, conditional legs, updates
-//! next to their evidence, if-done fills and repeat merges) and every branch shape runs as a positive; then, for every
-//! token group that holds the custody of an ask-side order settling in the transaction (not its maker's cancel), the same
-//! transaction with every input and output of that group of another commitment (consistent for the token program) is
+//! A KCC-20 token is (covenant id, program, extension commitment): units of the same covenant id
+//! with another commitment are another token (only its issuer can create them, in its genesis). An
+//! ask's custody is read by covenant id, program, owner (the order's id), owner scheme /
+//! borrow-disabled and its exact amount, and by the commitment its state names. An order handed a
+//! custody of exactly its amount but another commitment (owned by the order's id: anyone holding
+//! such units can send them there) would otherwise refund or return those units to its maker
+//! (refund, IOC end, a sell-out fill) and leave the real custody owned by an ended covenant. A
+//! buy-first entry (`KobIfdBid`) writes its own `extensionCommitment` into every exit it creates
+//! and merges only an exit that carries it.
+//!
+//! Every honest scenario of the KAS-book fixtures (creation, fills, refunds, IOC / FOK ends,
+//! conditional legs, updates next to their evidence, if-done fills and repeat merges) and every
+//! branch shape runs as a positive. Then, for every token group that holds the custody of an
+//! ask-side order settling in the transaction (not its maker's cancel), the same transaction with
+//! every input and output of that group of another commitment (consistent for the token program) is
 //! refused at the input of every such order.
 //!
 //! Run: cargo test -p kob-tests --test kob_ask_custody_ext_tests -- --nocapture

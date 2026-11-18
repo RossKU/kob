@@ -1,14 +1,20 @@
-//! The cancel-only table (`kob_protocol::retired`, `docs/spec/template-retirement.md`): the maker's cancel of an order under a
-//! RETIRED template, executed in the rusty-kaspa script engine against that template's own bytecode.
+//! Tests of the cancel-only table (`kob_protocol::retired`, `docs/spec/template-retirement.md`):
+//! the maker's cancel of an order under a RETIRED template, executed in the rusty-kaspa script
+//! engine against that template's own bytecode.
 //!
-//! For every retired template of the table (the bid re-version `acf39cf`: `KobBid` b995661f and its KRON twins, the conditional,
-//! if-done and pair kinds that embed it and their delivery-0 builds; the F1 generation `da35841`; the bid delivery re-pin
-//! `0714451`, whose templates have the legacy state layout of their kind; the KRON kinds of the minimum-fill re-pin `71a6c32`): an
-//! order of its kind, on a program of its family,
-//! is cancelled with `CancelOrder::retired`. The order input is the retired template's P2SH (the bytes
-//! of `crates/kob-protocol/data/retired`, read here from disk), its `cancel(sig)` validates, and the custody, the strays and
-//! the order's KAS go back to the maker. A signature of anyone else, or the redeem script of another retired template of the
-//! same kind, is refused by the engine; the builders refuse a replacement, records and a hash outside the table.
+//! The table has these retired templates:
+//! - the bid re-version `acf39cf`: `KobBid` b995661f and its KRON twins, the conditional, if-done
+//!   and pair kinds that embed it, and their delivery-0 builds;
+//! - the F1 generation `da35841`;
+//! - the bid delivery re-pin `0714451`, whose templates have the legacy state layout of their kind;
+//! - the KRON kinds of the minimum-fill re-pin `71a6c32`.
+//!
+//! For each of them an order of its kind, on a program of its family, is cancelled with
+//! `CancelOrder::retired`. The order input is the retired template's P2SH (the bytes of
+//! `crates/kob-protocol/data/retired`, read here from disk), its `cancel(sig)` validates, and the
+//! custody, the strays and the order's KAS go back to the maker. A signature of anyone else, or the
+//! redeem script of another retired template of the same kind, is refused by the engine. The
+//! builders refuse a replacement, records and a hash outside the table.
 //!
 //! Run: cargo test --release -p kob-tests --test retired_cancel_tests
 

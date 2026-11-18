@@ -1,4 +1,6 @@
-//! KobIfdPair (contracts/orders/KobIfdPair.sil) attack suite, and the repeat / merge checks of its exit KobCondPair.
+//! Attack suite of `KobIfdPair` (contracts/orders/KobIfdPair.sil) and the repeat / merge checks of
+//! its exit `KobCondPair`.
+//!
 //! Run: cargo test -p kob-tests --test kob_ifd_pair_tests -- --nocapture --test-threads=1
 
 #[path = "../common/mod.rs"]
@@ -1524,7 +1526,7 @@ fn ifd_refund_rules() {
 // ---------------------------------------------------------------- the custody marks (heldGx) and the template sources (pinTok)
 
 /// Every input and output of token `tok` with the extension commitment `ext` (consistent for the token program: one
-/// commitment per transfer). Audit 2026-10-13: the witness of the custody commitment check.
+/// commitment per transfer). It is the witness of the custody commitment check.
 fn reclass_ext(e: &mut Ed, tok: [u8; 32], ext: [u8; 32]) {
     for i in 0..e.entries.len() {
         if ph::cov_of(&e.entries[i]) == Some(tok) {
