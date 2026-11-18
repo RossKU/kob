@@ -723,7 +723,7 @@ mod tests {
                 }},
             })
         };
-        let claim = claim_from(&view(0x41), "testnet-10", &market(), &cov).ok().expect("claimed");
+        let claim = claim_from(&view(0x41), "testnet-10", &market(), &cov).expect("claimed");
         let (_, token, outpoint) = claim.custody.expect("its custody");
         assert_eq!((token, outpoint), (TOKEN, ([0x41; 32], 0)));
         assert_eq!(claim_from(&view(0x42), "testnet-10", &market(), &cov).err(), Some("other-market"));
