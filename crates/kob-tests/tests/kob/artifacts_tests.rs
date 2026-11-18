@@ -62,3 +62,53 @@ fn committed_artifacts_match_sources() {
         assert_eq!(fresh.structs, committed.structs, "{name}: structs differ");
     }
 }
+
+/// Audit H1 class. A trigger-evidence reader (KobCondPair, KobIfdPair, the conditional kinds) takes the
+/// evidence input's signature script to start with `0x08` + 8 bytes, the fill amount `nb` of the
+/// evidence template's fill (`settle` of the asks and the pair, `fill` of the bids). No other entry of an
+/// evidence template may take an `int` or a `byte[8]` first parameter, so no other spend of an evidence
+/// order can start like a fill and be read as one. The fills are checked to take `byte[8]` first, so the
+/// check cannot pass without looking at them.
+#[test]
+fn evidence_templates_only_the_fill_starts_with_an_8_byte_push() {
+    use kob_protocol::artifacts::{template, TemplateId};
+    use silverscript_abi::TypeArtifact;
+    // The evidence templates of crates/kob-protocol/src/artifacts.rs (`evidence_refs` and the conditional
+    // kinds' plain-order refs), with the D0 builds the D0 conditional kinds read.
+    let evidence = [
+        (TemplateId::KobAsk, "settle"),
+        (TemplateId::KobAskKron, "settle"),
+        (TemplateId::KobAskKronD0, "settle"),
+        (TemplateId::KobBid, "fill"),
+        (TemplateId::KobBidKron, "fill"),
+        (TemplateId::KobBidKronD0, "fill"),
+        (TemplateId::KobPair, "settle"),
+    ];
+    let eight = |t: &TypeArtifact| matches!(t, TypeArtifact::Int | TypeArtifact::FixedBytes { len: 8 });
+    for (tid, fill) in evidence {
+        let entries = &template(tid).contract().entries;
+        let f = entries.get(fill).unwrap_or_else(|| panic!("{}: no `{fill}` entry", tid.name()));
+        assert_eq!(
+            f.params.first().map(|p| &p.ty),
+            Some(&TypeArtifact::FixedBytes { len: 8 }),
+            "{}: `{fill}` must take byte[8] first",
+            tid.name()
+        );
+        assert!(entries.len() >= 2, "{}: the fill and at least the cancel", tid.name());
+        for (name, e) in entries {
+            if name == fill {
+                continue;
+            }
+            if let Some(p) = e.params.first() {
+                assert!(
+                    !eight(&p.ty),
+                    "{}: entry `{name}` takes {:?} `{}` first, so its signature script can start like a fill",
+                    tid.name(),
+                    p.ty,
+                    p.name
+                );
+            }
+            println!("POSITIVE {}::{name}: first parameter {:?}, not an 8-byte push", tid.name(), e.params.first().map(|p| &p.ty));
+        }
+    }
+}

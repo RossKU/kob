@@ -1957,3 +1957,142 @@ fn modes_budgets_and_layout() {
         );
     }
 }
+
+// ================================================================ i64 edges and the look-alike bought-custody
+
+/// Replaces the token state of token input `k` (its UTXO script and the redeem it pushes).
+fn set_tok_in(f: &Fx, s: &mut Scn, k: usize, st: St) {
+    let rd = f.t.redeem(&st);
+    let e = &s.inputs[k].entry;
+    s.inputs[k].entry = UtxoEntry::new(e.amount, pay_to_script_hash_script(&rd), e.block_daa_score, false, e.covenant_id);
+    match &mut s.inputs[k].role {
+        Role::TokLeader { redeem, .. } | Role::TokDelegate { redeem, .. } => *redeem = rd,
+        _ => panic!("{}: input {k} is not a token input", s.name),
+    }
+}
+/// The inputs that reject `s`.
+fn rejecting(t: &Token, s: &Scn) -> Vec<usize> {
+    let (tx, entries) = build(t, s, &[]);
+    execute(&tx, &entries).expect("ctx").iter().enumerate().filter(|(_, r)| r.is_err()).map(|(i, _)| i).collect()
+}
+
+/// The totals of a fill are i64 sums (KobBid: `total = bought + n` in mode 1, `total = have + n` in a top-up). A sum past
+/// i64::MAX is refused and nothing is delivered. The shapes are honest fills of n = 3,000 with the bought-custody or the
+/// receive UTXO holding i64::MAX - n + 1 (`plan` cannot compute that delivery, so the honest shape is built for a small
+/// amount and the amounts are replaced); the delivery claims i64::MAX, the largest amount a state can hold.
+#[test]
+fn modes_i64_edges() {
+    for t in tokens() {
+        let f = fx(t);
+        let m = pk(&f.maker);
+        let n = 3_000;
+        let big = i64::MAX - n + 1;
+        // mode 1, later fill: bought + n overflows
+        let p1 = BidP::new(&f.maker, 1);
+        let v1 = v_after_first(4);
+        let mut s = sell(
+            &f,
+            "NI01 mode 1 later fill, bought + n past i64::MAX (refused by the bid and the token program)",
+            &p1.bought(4_000),
+            v1,
+            n,
+            0,
+            Lead::Custody(DC),
+        );
+        s.inputs[0] = call(&bid(&f, &p1.bought(big)), "fill", fill_args(n, 1, 0), "bid.fill", v1, BID_COV);
+        set_tok_in(&f, &mut s, 1, custody(big, BID_COV));
+        set_tok_out(&f, &mut s, 0, 1, 0, custody(i64::MAX, BID_COV));
+        bad(&f.t, &s, 0);
+        if !ablation() {
+            assert_eq!(rejecting(&f.t, &s), vec![0, 1], "{}: the bid and the token leader reject", s.name);
+        }
+        // mode 2, top-up: have + n overflows
+        let mut s = sell(
+            &f,
+            "NI02 mode 2 top-up, have + n past i64::MAX (refused by the bid and the token program)",
+            &BidP::new(&f.maker, 2),
+            v0(),
+            n,
+            2,
+            Lead::Recv(recv(7_000, &m, THR), CARRIER),
+        );
+        set_tok_in(&f, &mut s, 1, recv(big, &m, THR));
+        set_tok_out(&f, &mut s, 0, 1, 0, recv(i64::MAX, &m, THR));
+        bad(&f.t, &s, 0);
+        if !ablation() {
+            assert_eq!(rejecting(&f.t, &s), vec![0, 1], "{}: the bid and the token leader reject", s.name);
+        }
+    }
+}
+
+/// A look-alike of the bought-custody at the contract level. A mode-1 bid holding `bought` keeps its custody C (KAS DC).
+/// Anyone can make L, the same token state (owner the bid's covenant id, scheme 4, amount == bought) with less KAS (the
+/// covenant minimum), from their own tokens. A fill naming L as tokIn is accepted: the bid knows its custody by the exact
+/// state, not by its outpoint or KAS. Known limit: C stays inert, the next fills continue L's successor, and the ending
+/// fill pays the maker bought + n with L's KAS, not C's. After the end C is stranded: it is owned by a covenant id with no
+/// UTXO left, so no entry of the bid can authorise it, and the token program refuses a spend of C with no input of that
+/// id. The attacker pays L's `bought` tokens; the maker loses C's KAS less L's (asserted against the honest chain).
+#[test]
+fn modes_lookalike_custody_less_kas() {
+    let lmin = kob_protocol::tx::COVENANT_OUTPUT_MIN as i64;
+    assert!(lmin < DC);
+    for t in tokens() {
+        let f = fx(t);
+        let (m, tk) = (pk(&f.maker), pk(&f.taker));
+        let n = 3_000;
+        let p4 = BidP::new(&f.maker, 1).bought(4_000);
+        let v1 = v_after_first(4);
+        // fill 2 names L (4,000 for the bid's id, lmin sompi), not C (4,000, DC): accepted
+        let s2 = sell(
+            &f,
+            "PK01 fill 2 names the look-alike L (C's exact state, KAS = the covenant minimum), not C",
+            &p4,
+            v1,
+            n,
+            0,
+            Lead::Custody(lmin),
+        );
+        assert_eq!(s2.inputs[1].entry.amount as i64, lmin);
+        assert_eq!(s2.inputs[1].entry.script_public_key, f.t.spk(&custody(4_000, BID_COV)), "L has C's exact state");
+        ok(&f.t, &s2);
+        // C is not an input: the custody that continues is L's successor, with L's KAS (and the rounding)
+        assert_eq!(s2.outputs[0].script_public_key, f.t.spk(&custody(7_000, BID_COV)));
+        let d2 = s2.outputs[0].value as i64;
+        assert!(d2 < DC, "the grown custody carries L's KAS, less than C's");
+        let v2 = s2.outputs[1].value as i64;
+        assert_eq!(v2, v1 - spend(3));
+        // the ending fill continues L's successor; C is not in it and no UTXO of the bid's id is left
+        let s3 = sell(
+            &f,
+            "PK02 fill 3 ends the order from L's successor: 10,000 to the maker, C not spent",
+            &p4.bought(7_000),
+            v2,
+            n,
+            0,
+            Lead::Custody(d2),
+        );
+        ok(&f.t, &s3);
+        assert_eq!(s3.outputs[0].script_public_key, f.t.spk(&plain(10_000, &m)));
+        let c_spk = f.t.spk(&custody(4_000, BID_COV));
+        assert!(s3.inputs.iter().all(|i| i.entry.script_public_key != c_spk), "C is not an input of the ending fill");
+        assert!(s3.outputs.iter().all(|o| o.covenant.map(|c| c.covenant_id) != Some(BID_COV)), "no UTXO of the bid's id is left");
+        // the honest chain (fill 2 names C): the maker's ending delivery carries exactly DC - lmin more
+        let h2 = sell(&f, "honest fill 2", &p4, v1, n, 0, Lead::Custody(DC));
+        let h3 = sell(&f, "honest fill 3", &p4.bought(7_000), v2, n, 0, Lead::Custody(h2.outputs[0].value as i64));
+        assert_eq!(h3.outputs[0].value as i64 - s3.outputs[0].value as i64, DC - lmin, "the maker loses C's KAS less L's");
+        // after the end: C spent with no input of the bid's id (no order is left to authorise it) is refused by the token
+        let s = close(
+            Scn {
+                name: "NK01 after the end, C moved to the taker with no input of the bid's id (C is stranded)".into(),
+                inputs: vec![tok_leader(&f.t, DC, &custody(4_000, BID_COV), &[plain(4_000, &tk)], Wit::CovId), p2pk_in(&f.taker, KAS)],
+                outputs: vec![tok_out(&f.t, DC, &plain(4_000, &tk), 0)],
+            },
+            &f.taker,
+        );
+        bad_only(&f.t, &s, 0);
+        println!(
+            "LOOKALIKE @{}: C (4,000 units, {DC} sompi) stranded; the maker's ending delivery carries {} sompi, {} with C",
+            f.t.name, s3.outputs[0].value, h3.outputs[0].value
+        );
+    }
+}

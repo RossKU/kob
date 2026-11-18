@@ -1515,7 +1515,12 @@ pub fn m2_form1(c: &ModeCase, mut e: Ed) -> Ed {
 /// Mode 2, form 2 of an honest partial fill: the maker's receive UTXO of `M_HAVE` units (threshold `thr`, KAS `M_KAS`)
 /// becomes T's first input (the leader, borrow path) and the named T input; output i is that UTXO grown by n with its KAS;
 /// the order leaves `M_TIP` (to the matcher's change) instead of a carrier. Returns (ed, the receive UTXO's input).
-pub fn m2_topup(c: &ModeCase, mut e: Ed, thr: i64) -> (Ed, usize) {
+pub fn m2_topup(c: &ModeCase, e: Ed, thr: i64) -> (Ed, usize) {
+    m2_topup_tip(c, e, thr, M_TIP)
+}
+
+/// [`m2_topup`] with topupTip `tip` (the order leaves `tip` to the matcher's change).
+pub fn m2_topup_tip(c: &ModeCase, mut e: Ed, thr: i64, tip: i64) -> (Ed, usize) {
     let i = c.order(&e);
     let t = c.t_out(&e, i);
     let first = e.first_token_input(c.tok);
@@ -1529,17 +1534,51 @@ pub fn m2_topup(c: &ModeCase, mut e: Ed, thr: i64) -> (Ed, usize) {
         // no carrier leaves the order: output i carries the receive UTXO's KAS
         e.set_value(i, (M_KAS as i64 + dv - c.dc) as u64);
         let kv = e.value(k) as i64;
-        e.set_value(k, (kv + c.dc - M_TIP) as u64);
+        e.set_value(k, (kv + c.dc - tip) as u64);
     } else {
         // an ending top-up: output i keeps the order's KAS and the receive UTXO's, less topupTip
-        e.set_value(i, (dv + M_KAS as i64 - M_TIP) as u64);
+        let v = dv + M_KAS as i64 - tip;
+        assert!(v >= 0, "{}: output i of an ending top-up", e.name);
+        e.set_value(i, v as u64);
     }
     let ch = e.change_out();
-    let cv = e.value(ch);
-    e.set_value(ch, cv + M_TIP as u64);
+    let cv = e.value(ch) as i64;
+    e.set_value(ch, (cv + tip) as u64);
     c.set_form(&mut e, i, 2);
-    c.set_mode(&mut e, i, 2, M_THR, M_TIP, 0, 0);
+    c.set_mode(&mut e, i, 2, M_THR, tip, 0, 0);
     (e, first)
+}
+
+/// Moves the order of `c` to a new last input L, its delivery to output L: a plain input of the matcher (1 KAS) and a
+/// plain output of the matcher (1 KAS) take its old index, so outputs below L are free, and the other T outputs move above
+/// L (the delivery stays T's first output, the successor of a top-up). Inputs and outputs are padded to
+/// one count first (padding outputs funded from the change). Entry arguments name other inputs and stay. Returns (ed, L,
+/// the old index).
+pub fn order_last(c: &ModeCase, mut e: Ed) -> (Ed, usize, usize) {
+    let mut tag = 0xbcu8;
+    while e.tx.inputs.len() < e.tx.outputs.len() {
+        e.add_p2pk_input(MATCHER, tag);
+        tag += 1;
+    }
+    while e.tx.outputs.len() < e.tx.inputs.len() {
+        let k = e.add_plain_output(0, MATCHER);
+        e.fund_out(k, KAS as i64);
+    }
+    let i = c.order(&e);
+    let l = e.add_p2pk_input(MATCHER, 0xbb);
+    assert_eq!(e.add_plain_output(KAS, MATCHER), l, "{}: one count", e.name);
+    e.swap_inputs(i, l);
+    e.swap_outputs(i, l);
+    // the delivery stays T's first output (a top-up's successor): T outputs below L move to the end, a funded plain
+    // output of the matcher takes each index
+    for k in e.tok_outs_of(c.tok).into_iter().filter(|k| *k < l) {
+        let j = e.add_plain_output(0, MATCHER);
+        e.swap_outputs(k, j);
+        e.fund_out(k, KAS as i64);
+    }
+    assert_eq!(c.order(&e), l);
+    assert_eq!(e.tok_outs_of(c.tok).first(), Some(&l), "{}: the delivery is T's first output", e.name);
+    (e, l, i)
 }
 
 /// DLV-07 on an honest two-order build (MAKER_A's orders `c.oid`, which tops up the receive UTXO, and `oid2`, form 1 and
@@ -1600,6 +1639,49 @@ pub fn mode_battery(r: &Run, c: &ModeCase, sh: &ModeShapes, pfx: &str) {
     ok(&topup);
     let (topend, _) = m2_topup(c, (sh.end)(&id("PM08 mode 2 form 2 ending fill")), M_THR);
     ok(&topend);
+    // An ending top-up with topupTip at its bound, deliveryCarrier (the contract refuses more: NM86, NM87). The order
+    // leaves deliveryCarrier to the filler and output i keeps the rest: the order's KAS and the receive UTXO's, less the tip
+    // and deliveryCarrier. Nothing is created: what output i loses, the change gains.
+    let (topmax, _) = m2_topup_tip(c, (sh.end)(&id("PM12 mode 2 form 2 ending fill, topupTip = deliveryCarrier")), M_THR, c.dc);
+    {
+        let i = c.order(&topmax);
+        let (vi, vo) = (
+            topmax.entries.iter().map(|x| x.amount as i64).sum::<i64>(),
+            topmax.tx.outputs.iter().map(|o| o.value as i64).sum::<i64>(),
+        );
+        let (ve, vt) = (
+            topend.entries.iter().map(|x| x.amount as i64).sum::<i64>(),
+            topend.tx.outputs.iter().map(|o| o.value as i64).sum::<i64>(),
+        );
+        assert_eq!((vi, vo), (ve, vt), "{}: the same KAS in and out as PM08", topmax.name);
+        assert_eq!(
+            topend.value(i) as i64 - topmax.value(i) as i64,
+            c.dc - M_TIP,
+            "{}: output i gives up deliveryCarrier - M_TIP more than PM08",
+            topmax.name
+        );
+        assert_eq!(
+            topmax.value(topmax.change_out()) as i64 - topend.value(topend.change_out()) as i64,
+            c.dc - M_TIP,
+            "{}: the filler gets deliveryCarrier - M_TIP more than PM08",
+            topmax.name
+        );
+    }
+    ok(&topmax);
+    // DLV-07 with one order: moved to input L (PM13, the move alone passes), the order tops up the receive UTXO, whose real
+    // successor (the leader's first authorised output) is output i0 < L, the order's old index, while the order's output L
+    // is a copy of the receive state grown by n. The matcher pays the successor's units (a gain of M_THR + 1) and its KAS.
+    let (moved, l, i0) = order_last(c, topup.clone().named(&id("PM13 mode 2 form 2 by the order at a later input")));
+    ok(&moved);
+    let mut e =
+        moved.clone().named(&id("NM85 one order: the receive UTXO's successor at a lower output, output i a copy of its state"));
+    e.tok_out.insert(i0, (c.tok, c.recv(M_HAVE + M_THR + 1, MAKER_A, M_THR)));
+    assert_eq!(e.tok_outs_of(c.tok).first(), Some(&i0), "{}: the successor is T's first output", e.name);
+    let mt = c.matcher_t(&e);
+    e.add_out_amount(mt, -(M_HAVE + M_THR + 1));
+    // the successor keeps the receive UTXO's KAS (from the change), so the token program has nothing to refuse
+    e.fund_out(i0, M_KAS as i64 - KAS as i64);
+    r.bad(&e, l);
     let mut e = m1_later(c, (sh.part)(&id("PM09 mode 1 later fill, the custody before the T counterparty")), b);
     let (j, first) = (c.t_in(&e, c.order(&e)), e.first_token_input(c.tok));
     e.swap_inputs(first, j);
@@ -1871,6 +1953,18 @@ pub fn mode_battery(r: &Run, c: &ModeCase, sh: &ModeShapes, pfx: &str) {
     let rs = c.recv(M_HAVE, MAKER_A, M_THR).redeem_with(token_template(c.prog));
     let e = topup.clone().named(&id("NM79 top-up of a planted receive UTXO (not P2SH, genuine redeem bytes)"));
     r.bad_patched(&e, i, &|tx, en| plant_input(tx, en, li, c.tok, &rs, false));
+
+    // ---- mode 2, form 2, the ending fill: topupTip is at most deliveryCarrier (PM12 the bound)
+    let i = c.order(&topend);
+    let (e, _) = m2_topup_tip(c, (sh.end)(&id("NM86 ending top-up with topupTip = deliveryCarrier + 1")), M_THR, c.dc + 1);
+    bad(&e);
+    let whole = topend.entries[i].amount as i64;
+    assert!(whole > c.dc, "the order holds more KAS than deliveryCarrier");
+    let (e, _) = m2_topup_tip(c, (sh.end)(&id("NM87 ending top-up with topupTip = the order's whole KAS")), M_THR, whole);
+    bad(&e);
+    let mut e = topmax.clone().named(&id("NM88 ending top-up at topupTip = deliveryCarrier, output i one sompi short"));
+    e.fund_out(i, -1);
+    bad(&e);
 }
 
 /// A KRON T is delivered new: modes 1 and 2 refuse every fill (names `<pfx>NM9.`).
