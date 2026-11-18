@@ -261,7 +261,11 @@ impl WsRegistry {
         if self.0.total.load(Ordering::SeqCst) >= l.max_total {
             return Err(WsReject::Total);
         }
-        if per.get(&key).copied().unwrap_or(0) >= l.max_per_ip {
+        let held = per.get(&key).copied().unwrap_or(0);
+        // The last quarter of the pool is kept for clients with at most one socket, so a few
+        // addresses at their own cap cannot take it all (security review 2026-11-17 L2).
+        let crowded = self.0.total.load(Ordering::SeqCst) >= l.max_total - l.max_total / 4;
+        if held >= l.max_per_ip || (crowded && held >= 2) {
             return Err(WsReject::PerIp);
         }
         if let Some(s) = site {
@@ -294,7 +298,26 @@ impl Drop for WsGuard {
 }
 
 /// Handler of `GET /v1/ws`: refuses a connection over a cap, else upgrades it to a session.
-pub async fn handler(State(app): State<Arc<App>>, Extension(ClientIp(ip)): Extension<ClientIp>, ws: WebSocketUpgrade) -> Response {
+pub async fn handler(
+    State(app): State<Arc<App>>,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
+    headers: axum::http::HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
+    // A browser page of another site: refused when the API names its one origin
+    // (`cors_allow_origin`; `*` or none admits every origin).
+    if let (Some(origin), Some(allowed)) =
+        (headers.get(axum::http::header::ORIGIN), app.state.cfg.cors_allow_origin.as_deref().filter(|o| *o != "*"))
+    {
+        if !origin.to_str().is_ok_and(|o| o.eq_ignore_ascii_case(allowed.trim_end_matches('/'))) {
+            return ApiError::new(
+                StatusCode::FORBIDDEN,
+                "forbidden_origin",
+                "WebSocket connections are not accepted from this origin",
+            )
+            .into_response();
+        }
+    }
     let guard = match app.ws.try_acquire(ip, &WsLimits::of(&app.state.cfg)) {
         Ok(g) => g,
         Err(WsReject::Total) => {
@@ -488,6 +511,24 @@ mod tests {
         assert!(d["side"].is_u64() && d["daa"].is_u64());
         ev.fills[1].price = None;
         assert!(frames_for(&ev, &subs)[1]["data"]["price"].is_null());
+    }
+
+    /// Security review 2026-11-17 L2: the last quarter of the pool is for clients with at most one socket.
+    #[test]
+    fn the_last_quarter_of_the_pool_is_kept_for_new_clients() {
+        let l = WsLimits { max_total: 8, max_per_ip: 8, prefix_bits: 64, max_per_site: 0, site_prefix_bits: 0 };
+        let reg = WsRegistry::default();
+        let (a, b, c) = ("10.0.0.1".parse().unwrap(), "10.0.0.2".parse().unwrap(), "10.0.0.3".parse().unwrap());
+        let mut held = vec![];
+        while let Ok(g) = reg.try_acquire(a, &l) {
+            held.push(g);
+        }
+        assert_eq!(held.len(), 6, "one client stops at three quarters");
+        held.push(reg.try_acquire(b, &l).unwrap());
+        held.push(reg.try_acquire(b, &l).unwrap());
+        assert!(matches!(reg.try_acquire(c, &l), Err(WsReject::Total)));
+        held.pop();
+        assert!(matches!(reg.try_acquire(b, &l), Ok(_)), "b holds one again");
     }
 
     #[test]

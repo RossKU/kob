@@ -735,6 +735,34 @@ where
     }
 }
 
+/// Security review 2026-11-17 L2: with one named CORS origin, a WebSocket from another site's page is refused; one without
+/// `Origin` (a script) or from the app is served.
+#[tokio::test]
+async fn a_websocket_from_another_sites_page_is_refused() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let e = env(|c| c.cors_allow_origin = Some("https://kob.example".into()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(serve_listener(listener, e.state.clone(), async move {
+        let _ = stop_rx.await;
+    }));
+    let with_origin = |o: Option<&str>| {
+        let mut r = format!("ws://{addr}/v1/ws").into_client_request().unwrap();
+        if let Some(o) = o {
+            r.headers_mut().insert("origin", o.parse().unwrap());
+        }
+        r
+    };
+    assert!(tokio_tungstenite::connect_async(with_origin(Some("https://evil.example"))).await.is_err());
+    for o in [None, Some("https://kob.example")] {
+        let (mut ws, _) = tokio_tungstenite::connect_async(with_origin(o)).await.unwrap();
+        ws.close(None).await.unwrap();
+    }
+    let _ = stop_tx.send(());
+    let _ = server.await;
+}
+
 #[tokio::test]
 async fn websocket_end_to_end() {
     use tokio_tungstenite::tungstenite::Message as M;
@@ -2201,8 +2229,18 @@ fn logo_env(cfg: crate::config::LogoReportsConfig, tweak: impl FnOnce(&mut ApiCo
     let e = env(tweak);
     let now = Arc::new(std::sync::atomic::AtomicI64::new(1_000_000));
     let clock = now.clone();
+    // tokens 1..=20 are indexed (a KCC-23 declaration each); others are unknown
+    let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
+    for n in 1..=20u8 {
+        conn.execute(
+            "INSERT INTO kcc23_declarations (covenant_id, proof, preparation_txid, genesis_txid, genesis_block, genesis_daa) \
+             VALUES (?1, 'x', zeroblob(32), zeroblob(32), 0, 0)",
+            [&[n; 32][..]],
+        )
+        .unwrap();
+    }
     let logo = Arc::new(crate::logo_reports::LogoReports::with_connection(
-        crate::indexer::db::open_memory("testnet-10").unwrap(),
+        conn,
         cfg,
         64,
         Box::new(move || clock.load(std::sync::atomic::Ordering::SeqCst)),
@@ -2239,6 +2277,7 @@ async fn a_report_hides_the_logo_at_once_and_the_blocklist_serves_it() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(v, serde_json::json!({"hidden": [h(7)], "updated_ms": 1_000_000}));
     assert_eq!(hd.get("cache-control").unwrap(), "public, max-age=5");
+    assert_eq!(hd.get("x-content-type-options").unwrap(), "nosniff");
     // A GitHub report of the same token (upper-case hex), from another client: still hidden.
     let gh = format!("{{\"covenant_id\":\"{}\",\"reason\":\"other\",\"source\":\"github\",\"ref\":12}}", h(7).to_uppercase());
     let (s, _, v) = post_from(&app, &gh, "10.1.1.2").await;
@@ -2330,6 +2369,52 @@ async fn cors_allows_the_post_of_a_report() {
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     assert_eq!(resp.headers().get("access-control-allow-methods").unwrap(), "GET, POST, OPTIONS");
     assert_eq!(resp.headers().get("access-control-expose-headers").unwrap(), "retry-after");
+}
+
+/// Security review 2026-11-17 M3: a hostile page cannot make its visitors' browsers hide logos, and random ids neither use the
+/// day's quota nor grow the blocklist.
+#[tokio::test]
+async fn a_report_must_be_json_from_the_apps_origin_and_name_an_indexed_token() {
+    let e =
+        logo_env(crate::config::LogoReportsConfig { origins: vec!["https://kob.example".into()], max_per_day: 2, ..enabled() }, |c| {
+            c.cors_allow_origin = Some("*".into())
+        });
+    let app = router(e.state.clone());
+    // a `no-cors` fetch sends text/plain
+    let mut req = Request::builder().method("POST").uri("/v1/logo-reports").header("content-type", "text/plain");
+    req = req.header("origin", "https://kob.example");
+    let mut req = req.body(Body::from(report_body(1, "other"))).unwrap();
+    req.extensions_mut().insert(peer("10.1.1.1"));
+    assert_eq!(app.clone().oneshot(req).await.unwrap().status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    // another site's page, or a sandboxed one
+    for o in ["https://evil.example", "null"] {
+        let (s, _, v) = post_with(&app, &report_body(1, "other"), "10.1.1.1", &[("origin", o)]).await;
+        assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::FORBIDDEN, Some("forbidden_origin")), "{o}");
+    }
+    // a token the indexer does not know
+    let (s, _, v) = post_from(&app, &report_body(99, "other"), "10.1.1.1").await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::NOT_FOUND, Some("unknown_token")));
+    // the app's page and a script (no Origin) are accepted; a token already hidden does not use the day's quota
+    assert_eq!(
+        post_with(&app, &report_body(1, "other"), "10.1.1.2", &[("origin", "https://kob.example")]).await.2["result"],
+        "hidden"
+    );
+    assert_eq!(post_from(&app, &report_body(1, "illegal"), "10.1.1.3").await.2["result"], "hidden");
+    assert_eq!(post_from(&app, &report_body(2, "other"), "10.1.1.4").await.0, StatusCode::OK);
+    assert_eq!(post_from(&app, &report_body(3, "other"), "10.1.1.5").await.0, StatusCode::TOO_MANY_REQUESTS, "two new hides a day");
+    assert_eq!(post_from(&app, &report_body(2, "other"), "10.1.1.6").await.0, StatusCode::OK, "a hidden token is still reported");
+    let (_, _, v) = get_from(&app, "/v1/logo-blocklist", "127.0.0.1", &[]).await;
+    assert_eq!(v["hidden"], serde_json::json!([h(1), h(2)]));
+    // without `origins`, a single `cors_allow_origin` is the app's; `*` admits no browser
+    let e = logo_env(enabled(), |c| c.cors_allow_origin = Some("https://kob.example".into()));
+    let app = router(e.state.clone());
+    assert_eq!(post_with(&app, &report_body(4, "other"), "10.1.1.1", &[("origin", "https://kob.example")]).await.0, StatusCode::OK);
+    let e = logo_env(enabled(), |c| c.cors_allow_origin = Some("*".into()));
+    let app = router(e.state.clone());
+    assert_eq!(
+        post_with(&app, &report_body(4, "other"), "10.1.1.1", &[("origin", "https://kob.example")]).await.0,
+        StatusCode::FORBIDDEN
+    );
 }
 
 // The KAS/USD price route (`api::price`): a mocked upstream, no network.

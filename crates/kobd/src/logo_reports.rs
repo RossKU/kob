@@ -23,9 +23,13 @@
 //!
 //! # Abuse bounds
 //!
-//! - A report costs the reporting client one of `per_client_per_hour` and the server one of
-//!   `max_per_day`. A flood from many addresses can hide at most that many tokens a day, and the
-//!   operator restores them.
+//! - A report costs the reporting client one of `per_client_per_hour`. A report that newly hides
+//!   a logo costs the server one of `max_per_day`. A flood from many addresses can hide at most
+//!   that many tokens a day, and the operator restores them.
+//! - Only a token the indexer knows (an order trades it, it has a holding or a KCC-23
+//!   declaration) can be reported, so random ids neither use the quota nor grow the blocklist.
+//! - The body must be `application/json` (a cross-site form or `no-cors` fetch cannot send it),
+//!   and a browser's `Origin` must be one of `origins`.
 //! - The request body is at most 1 KiB.
 //! - The report table keeps its newest [`MAX_REPORT_ROWS`] rows.
 
@@ -148,6 +152,28 @@ pub fn open(path: &Path, network: &str) -> DbResult<Connection> {
     }
     conn.execute_batch(SCHEMA)?;
     Ok(conn)
+}
+
+/// Whether the indexer knows `id` as a token: an order trades it, it has a holding, or it has a
+/// KCC-23 declaration.
+pub fn token_indexed(conn: &Connection, id: &Hash32) -> DbResult<bool> {
+    Ok(crate::indexer::record::token_known(conn, id)?
+        || conn
+            .prepare_cached("SELECT 1 FROM holding_programs WHERE token_id = (SELECT id FROM ids WHERE h = ?1) LIMIT 1")?
+            .exists([&id.0[..]])?
+        || conn.prepare_cached("SELECT 1 FROM kcc23_declarations WHERE covenant_id = ?1")?.exists([&id.0[..]])?)
+}
+
+/// Whether a report of `id` at `now_ms` would newly hide its logo: it is not listed, or it was
+/// restored and the cooldown is over.
+fn would_hide(conn: &Connection, id: &Hash32, now_ms: i64, cooldown_ms: i64) -> DbResult<bool> {
+    let row: Option<(String, Option<i64>)> = conn
+        .query_row("SELECT state, restored_ms FROM logo_blocklist WHERE covenant_id = ?1", [&id.0[..]], |x| Ok((x.get(0)?, x.get(1)?)))
+        .optional()?;
+    Ok(match row {
+        None => true,
+        Some((state, restored)) => state == "restored" && !restored.is_some_and(|at| now_ms < at.saturating_add(cooldown_ms)),
+    })
 }
 
 /// Files `r` at `now_ms`, in one write transaction. See the module documentation for the rules.
@@ -422,6 +448,8 @@ pub fn import(conn: &mut Connection, doc: &serde_json::Value) -> Result<(usize, 
 pub enum ReportError {
     /// Over a limit; retry after this many seconds.
     Limited(u64),
+    /// The covenant id is not a token the indexer knows.
+    UnknownToken,
     /// A database error.
     Db(DbError),
 }
@@ -443,7 +471,8 @@ impl Limiter {
         Limiter { clients: HashMap::new(), day: VecDeque::new() }
     }
 
-    fn admit(&mut self, key: IpAddr, now: i64, per_client_per_hour: u32, max_per_day: u32) -> Result<(), u64> {
+    /// Admits a report of `key`: its hourly budget, and one of the day's hides when it hides.
+    fn admit(&mut self, key: IpAddr, now: i64, per_client_per_hour: u32, max_per_day: u32, hides: bool) -> Result<(), u64> {
         while self.day.front().is_some_and(|t| now - t >= DAY_MS) {
             self.day.pop_front();
         }
@@ -454,7 +483,7 @@ impl Limiter {
             !q.is_empty()
         });
         let secs = |ms: i64| (ms.max(0) as u64).div_ceil(1000).max(1);
-        if self.day.len() >= max_per_day as usize {
+        if hides && self.day.len() >= max_per_day as usize {
             return Err(secs(self.day.front().map_or(DAY_MS, |t| t + DAY_MS - now)));
         }
         let q = self.clients.get(&key);
@@ -462,7 +491,9 @@ impl Limiter {
             return Err(secs(q.and_then(|q| q.front()).map_or(HOUR_MS, |t| t + HOUR_MS - now)));
         }
         self.clients.entry(key).or_default().push_back(now);
-        self.day.push_back(now);
+        if hides {
+            self.day.push_back(now);
+        }
         Ok(())
     }
 }
@@ -507,20 +538,31 @@ impl LogoReports {
         }
     }
 
+    /// The origins whose pages may file a report (`[logo_reports] origins`).
+    pub fn origins(&self) -> &[String] {
+        &self.cfg.origins
+    }
+
     /// Files a report from `client` (the guard's client address).
     ///
     /// It is blocking, because it writes to the database. Call it from a blocking task.
     pub fn report(&self, client: IpAddr, r: &Report) -> Result<Filed, ReportError> {
         let now = (self.now_ms)();
         let key = crate::api::client_ip::rate_key(client, self.ipv6_prefix_bits);
+        let cooldown_ms = i64::try_from(self.cfg.cooldown_secs).unwrap_or(i64::MAX / 2).saturating_mul(1000);
+        // one connection for the checks and the write, so both see the same state
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        if !token_indexed(&conn, &r.covenant_id).map_err(ReportError::Db)? {
+            return Err(ReportError::UnknownToken);
+        }
+        let hides = would_hide(&conn, &r.covenant_id, now, cooldown_ms).map_err(ReportError::Db)?;
         self.limiter
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .admit(key, now, self.cfg.per_client_per_hour, self.cfg.max_per_day)
+            .admit(key, now, self.cfg.per_client_per_hour, self.cfg.max_per_day, hides)
             .map_err(ReportError::Limited)?;
-        let cooldown_ms = i64::try_from(self.cfg.cooldown_secs).unwrap_or(i64::MAX / 2).saturating_mul(1000);
-        let filed =
-            file_report(&mut self.conn.lock().unwrap_or_else(|e| e.into_inner()), r, now, cooldown_ms).map_err(ReportError::Db)?;
+        let filed = file_report(&mut conn, r, now, cooldown_ms).map_err(ReportError::Db)?;
+        drop(conn);
         *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
         Ok(filed)
     }
@@ -712,22 +754,27 @@ admin_token_file = \"x\""
         let ip = |n: u8| IpAddr::from([10, 0, 0, n]);
         let mut l = Limiter::new();
         for i in 0..5 {
-            l.admit(ip(1), i * 1000, 5, 7).unwrap();
+            l.admit(ip(1), i * 1000, 5, 7, true).unwrap();
         }
         // The sixth within the hour: wait until the first leaves the window.
-        assert_eq!(l.admit(ip(1), 10_000, 5, 7), Err(3_590));
+        assert_eq!(l.admit(ip(1), 10_000, 5, 7, true), Err(3_590));
         // Another client has its own budget, until the day's total is used.
-        l.admit(ip(2), 11_000, 5, 7).unwrap();
-        l.admit(ip(2), 12_000, 5, 7).unwrap();
-        assert_eq!(l.admit(ip(3), 13_000, 5, 7), Err(86_387), "the day's total is spent: the first report leaves in a day");
+        l.admit(ip(2), 11_000, 5, 7, true).unwrap();
+        l.admit(ip(2), 12_000, 5, 7, true).unwrap();
+        assert_eq!(l.admit(ip(3), 13_000, 5, 7, true), Err(86_387), "the day's total is spent: the first report leaves in a day");
         // An hour later the first client may report again. The total is still counted over the
         // day.
-        assert!(l.admit(ip(1), HOUR_MS + 1, 5, 7).is_err(), "the total is still spent");
-        assert!(l.admit(ip(1), DAY_MS + 1, 5, 7).is_ok());
+        assert!(l.admit(ip(1), HOUR_MS + 1, 5, 7, true).is_err(), "the total is still spent");
+        assert!(l.admit(ip(1), DAY_MS + 1, 5, 7, true).is_ok());
+        // The day is full again; a report that hides nothing (its token is hidden already) is still
+        // admitted, and not counted.
+        assert!(l.admit(ip(4), DAY_MS + 2, 5, 7, true).is_err());
+        assert!(l.admit(ip(4), DAY_MS + 2, 5, 7, false).is_ok());
+        assert_eq!(l.day.len(), 7);
         // A refused request is not remembered.
         let mut l = Limiter::new();
         for _ in 0..1000 {
-            let _ = l.admit(ip(9), 0, 0, 5);
+            let _ = l.admit(ip(9), 0, 0, 5, true);
         }
         assert!(l.day.is_empty() && l.clients.is_empty());
     }
@@ -736,8 +783,15 @@ admin_token_file = \"x\""
     fn the_service_hides_at_once_serves_a_cached_list_and_drops_it_on_a_write() {
         let now = Arc::new(std::sync::atomic::AtomicI64::new(1_000_000));
         let clock = now.clone();
+        let conn = open_memory("testnet-10").unwrap();
+        conn.execute(
+            "INSERT INTO kcc23_declarations (covenant_id, proof, preparation_txid, genesis_txid, genesis_block, genesis_daa) \
+             VALUES (?1, 'x', zeroblob(32), zeroblob(32), 0, 0)",
+            [&A.0[..]],
+        )
+        .unwrap();
         let svc = LogoReports::with_connection(
-            open_memory("testnet-10").unwrap(),
+            conn,
             LogoReportsConfig { enabled: true, ..Default::default() },
             64,
             Box::new(move || clock.load(std::sync::atomic::Ordering::SeqCst)),
@@ -745,6 +799,8 @@ admin_token_file = \"x\""
         let ip = IpAddr::from([10, 0, 0, 1]);
         let body = |s: &LogoReports| serde_json::from_slice::<serde_json::Value>(&s.blocklist_body().unwrap()).unwrap();
         assert_eq!(body(&svc), json!({"hidden": [], "updated_ms": 0}));
+        // only an indexed token can be reported
+        assert!(matches!(svc.report(ip, &rep(B, Reason::Illegal)), Err(ReportError::UnknownToken)));
         assert_eq!(svc.report(ip, &rep(A, Reason::Illegal)).unwrap(), Filed::Hidden);
         assert_eq!(body(&svc), json!({"hidden": [A.to_hex()], "updated_ms": 1_000_000}), "a report drops the cached list");
         // The operator's change reaches clients within the cache time.
