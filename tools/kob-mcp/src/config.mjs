@@ -21,9 +21,10 @@ export const DEFAULTS = {
     maxFeeKas: 1, // the most network fee of one transaction (a token creation: of both)
     priceBandPct: 25, // a limit price or take bound this far from the last fill (else the mid) is refused; null: off
     launchesPerDay: 3, // token creations per UTC day
-    // Tokens that leave the wallet (a send, the escrow of a sell, a sale into a buy order), from the dry run's net effect.
-    // Per token: { "<covenant id>": { perTx, perDay } } in base units; any other token: a share of the wallet's free
-    // holding confirmed on the node at the start of the UTC day (free now + what left today). null: only listed tokens.
+    // Tokens that leave the wallet (a send, the escrow of a sell, a sale into a buy order), from
+    // the dry run's net effect. Per token: { "<covenant id>": { perTx, perDay } } in base units.
+    // Any other token gets a share of the wallet's free holding confirmed on the node at the start
+    // of the UTC day (free now + what left today). null: only listed tokens.
     tokens: {},
     tokenDefault: { perTxPct: 25, perDayPct: 50 },
   },
@@ -42,7 +43,8 @@ function merge(base, over) {
   return out;
 }
 
-// KOB_MCP_* variables (the Claude Desktop extension's form) override the file; empty ones are ignored.
+// KOB_MCP_* variables (the Claude Desktop extension's form) override the file. Empty ones are
+// ignored.
 const ENV = {
   KOB_MCP_NETWORK: (c, v) => { c.network = v; },
   KOB_MCP_KOB_CLI: (c, v) => { c.kobCli = v; },
@@ -57,7 +59,10 @@ const ENV = {
   KOB_MCP_WITHDRAW_TO: (c, v) => { c.withdrawTo = v.split(/[\s,]+/).filter(Boolean); },
 };
 
-/** Reads and checks the config (the file, then KOB_MCP_* overrides); relative paths are relative to the file. */
+/**
+ * Reads and checks the config (the file, then KOB_MCP_* overrides); relative paths are relative to
+ * the file.
+ */
 export function loadConfig(file, env = process.env) {
   let raw = {};
   if (file) {
@@ -131,7 +136,7 @@ export function checkConfig(c, baseDir, env = process.env) {
   };
 }
 
-/** What kob_status shows: never the key path. */
+/** What kob_status shows. It never shows the key path. */
 export function publicConfig(c) {
   return {
     network: c.network,

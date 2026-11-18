@@ -1,13 +1,16 @@
-// The safeguards: the spending ledger, the caps, the withdrawal allow-list, the kill switch and the price band.
+// The safeguards: the spending ledger, the caps, the withdrawal allow-list, the kill switch and the
+// price band.
 
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { big, kas, utcDay } from './units.mjs';
 
 /**
- * A JSON-lines ledger of what each write takes out of the wallet. A send first writes `reserve`; the outcome writes
- * `settle` (the spend the CLI reported; `outcome: "unknown"` when the reply was lost) or `release` (the CLI said nothing
- * was sent). A reserve with neither (a crash) and an unknown outcome keep counting until the UTC day rolls.
+ * A JSON-lines ledger of what each write takes out of the wallet.
+ *
+ * A send first writes `reserve`. The outcome then writes `settle` (the spend the CLI reported;
+ * `outcome: "unknown"` when the reply was lost) or `release` (the CLI said nothing was sent). A
+ * reserve with neither (a crash) and an unknown outcome keep counting until the UTC day rolls.
  * A torn line (a crash while writing) is skipped.
  */
 export class Ledger {
@@ -23,7 +26,7 @@ export class Ledger {
       try {
         out.push(JSON.parse(l));
       } catch {
-        // a torn line: a reserve torn by a crash was never followed by a send
+        // A torn line: a reserve torn by a crash was never followed by a send.
       }
     }
     return out;
@@ -57,7 +60,10 @@ export class Ledger {
     this.append({ kind: 'settle', id, spend: String(spend), txids, ...(outcome ? { outcome } : {}) });
   }
 
-  /** Sends of the UTC day `day` whose outcome is unknown (a lost reply, a crash): they count as spent. */
+  /**
+   * Sends of the UTC day `day` whose outcome is unknown (a lost reply, a crash): they count as
+   * spent.
+   */
   unknownOn(day) {
     const byId = new Map();
     for (const e of this.entries()) {
@@ -89,7 +95,9 @@ export class Ledger {
     return sum;
   }
 
-  /** Base units of token `cov` that left the wallet on the UTC day `day` (reserves not released). */
+  /**
+   * Base units of token `cov` that left the wallet on the UTC day `day` (reserves not released).
+   */
   tokensOutOn(day, cov) {
     const byId = new Map();
     for (const e of this.entries()) {
@@ -101,7 +109,9 @@ export class Ledger {
     return sum;
   }
 
-  /** Token creations on the UTC day `day` that were not released (sent, or with an unknown outcome). */
+  /**
+   * Token creations on the UTC day `day` that were not released (sent, or with an unknown outcome).
+   */
   launchesOn(day) {
     const ids = new Set();
     for (const e of this.entries()) {
@@ -123,7 +133,10 @@ export function capRefusals({ spend, fee }, caps, spentToday) {
   return out;
 }
 
-/** The tokens a planned transaction takes out of the wallet: { covenant id: base units }, from its net effect. */
+/**
+ * The tokens a planned transaction takes out of the wallet: { covenant id: base units }, from its
+ * net effect.
+ */
 export function tokenOutflows(doc) {
   const out = {};
   for (const [cov, n] of Object.entries(doc?.transaction?.net?.tokens ?? {})) {
@@ -134,8 +147,10 @@ export function tokenOutflows(doc) {
 }
 
 /**
- * The token caps a write would break. `outs`: tokenOutflows; `outToday(cov)`: base units out today; `holding(cov)`: the
- * wallet's free holding confirmed on the node (null when not confirmed), read only for tokens without their own cap.
+ * The token caps a write would break.
+ * `outs` is tokenOutflows, `outToday(cov)` the base units out today and `holding(cov)` the wallet's
+ * free holding confirmed on the node (null when not confirmed), read only for tokens without
+ * their own cap.
  */
 export async function tokenCapRefusals(outs, caps, outToday, holding) {
   const refusals = [];
@@ -182,17 +197,18 @@ function fraction(x) {
 }
 
 /**
- * The price band, in exact integers: `price` is sompi per whole token (10^decimals base units); the book's prices are
- * sompi per `book.scale` base units (10^min(decimals, 9)). The reference is the last fill, else the mid of the best bid
- * and ask. A buy above ref x (1 + band) or a sell below ref x (1 - band) is refused. No reference or no decimals: passes,
- * with a note.
+ * The price band, in exact integers.
+ * `price` is sompi per whole token (10^decimals base units). The book's prices are sompi per
+ * `book.scale` base units (10^min(decimals, 9)). The reference is the last fill, else the mid of
+ * the best bid and ask. A buy above ref x (1 + band) or a sell below ref x (1 - band) is refused.
+ * With no reference or no decimals it passes, with a note.
  */
 export function bandCheck({ side, price, book, bandPct, decimals }) {
   if (bandPct == null) return { ok: true, note: 'price band off' };
   const last = book?.last_fill != null ? BigInt(book.last_fill) : null;
   const bid = book?.best_bid != null ? BigInt(book.best_bid) : null;
   const ask = book?.best_ask != null ? BigInt(book.best_ask) : null;
-  // the reference as num / den sompi per `scale` base units (a mid keeps its half sompi)
+  // The reference as num / den sompi per `scale` base units (a mid keeps its half sompi).
   const [num, den] = last != null ? [last, 1n] : bid != null && ask != null ? [bid + ask, 2n] : [null, 1n];
   if (num == null || num <= 0n) return { ok: true, note: 'no last fill and no two-sided book: the price band was not checked' };
   if (book?.scale == null || decimals == null) return { ok: true, note: "the token's decimals are unknown: the price band was not checked" };
@@ -201,7 +217,8 @@ export function bandCheck({ side, price, book, bandPct, decimals }) {
   const [pn, pd] = fraction(bandPct);
   const what = last != null ? 'last fill' : 'mid';
   const refText = `${kas((num * whole) / (den * scale))} KAS per whole token (${what})`;
-  // price ? ref x (1 +- pn / (100 pd)), both sides multiplied by den x scale x 100 pd
+  // Compare price with ref x (1 +- pn / (100 pd)). Both sides are multiplied by den x scale x 100
+  // pd.
   const lhs = price * den * scale * 100n * pd;
   const ref = num * whole;
   if (side === 'buy' && lhs > ref * (100n * pd + pn)) {

@@ -82,7 +82,10 @@ async function readTool(svc, name, args) {
   }
 }
 
-/** The tools this CLI build supports: kob_claim and the delivery argument only when its help names them. */
+/**
+ * The tools this CLI build supports: kob_claim and the delivery argument only when its help names
+ * them.
+ */
 export function toolsFor(features) {
   const out = [];
   for (const [name, title, description, shape, kind] of TOOLS) {

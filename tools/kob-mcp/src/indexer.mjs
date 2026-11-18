@@ -8,7 +8,7 @@ export class Indexer {
     this.timeoutMs = timeoutMs;
   }
 
-  /** The JSON body, null on 404; throws on other errors. */
+  /** The JSON body, or null on 404. Throws on other errors. */
   async get(path) {
     const res = await fetch(`${this.url}${path}`, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(this.timeoutMs) });
     if (res.status === 404) return null;

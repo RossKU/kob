@@ -59,7 +59,7 @@ test('per-transaction and daily caps refuse before signing; the ledger keeps the
   const b = await svc.write('kob_place_limit', { ...place, amount: '200TUSD' });
   assert.match(b.reason, /^DAILY_CAP/);
   assert.equal(t.yesCalls().length, 1);
-  // a new server on the same data directory sees what was spent
+  // A new server on the same data directory sees what was spent.
   const c = await new KobService(t.cfg).write('kob_place_limit', { ...place, amount: '200TUSD' });
   assert.match(c.reason, /^DAILY_CAP/);
 });
@@ -288,7 +288,7 @@ test('token outflows are capped: a share of the confirmed holding by default (MC
   assert.equal((await sell('250TUSD')).status, 'submitted', '500 of the day\'s 1,000');
   assert.match((await sell('1TUSD')).reason, /^TOKEN_DAILY_CAP/);
   assert.equal(t.yesCalls().length, 2);
-  // a sale into a buy order and a token send count too
+  // A sale into a buy order and a token send count too.
   assert.match((await svc.write('kob_take', { id: 'ab'.repeat(32), token: TUSD, amount: '1TUSD', min_price: '0.2KAS' })).reason, /^TOKEN_DAILY_CAP/);
   assert.match((await svc.write('kob_send', { asset: 'TUSD', to: PRIMARY, amount: '1TUSD' })).reason, /^TOKEN_DAILY_CAP/);
 });

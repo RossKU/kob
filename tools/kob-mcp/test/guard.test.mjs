@@ -31,7 +31,7 @@ test('ledger: reserves count until released; settle replaces the amount; days ar
   l.release('b', 'not sent');
   assert.equal(l.spentOn('2026-11-17'), 7n * KAS);
   assert.equal(l.spentOn('2026-11-16'), 99n * KAS);
-  // a second reader of the same file (a restarted server) sees the same total
+  // A second reader of the same file (a restarted server) sees the same total.
   assert.equal(new Ledger(l.file).spentOn('2026-11-17'), 7n * KAS);
 });
 
@@ -57,17 +57,18 @@ test('price band: a buy far above or a sell far below the reference is refused',
 });
 
 test('price band: exact at any number of decimals, a half-sompi mid and a fractional band', () => {
-  // 12 decimals: the book's scale stops at 10^9, so 25,000,000 sompi per 10^9 base units is 250 KAS per whole token
+  // 12 decimals: the book's scale stops at 10^9, so 25,000,000 sompi per 10^9 base units is 250 KAS
+  // per whole token.
   const b12 = { last_fill: '25000000', scale: 1_000_000_000 };
   assert.equal(bandCheck({ side: 'buy', price: 312_50000000n, book: b12, bandPct: 25, decimals: 12 }).ok, true);
   assert.match(bandCheck({ side: 'buy', price: 312_50000001n, book: b12, bandPct: 25, decimals: 12 }).reason, /250 KAS per whole token/);
   assert.equal(bandCheck({ side: 'sell', price: 187_50000000n, book: b12, bandPct: 25, decimals: 12 }).ok, true);
   assert.equal(bandCheck({ side: 'sell', price: 187_49999999n, book: b12, bandPct: 25, decimals: 12 }).ok, false);
-  // 18 decimals: 1 sompi per 10^9 base units is 10^9 sompi (10 KAS) per whole token
+  // 18 decimals: 1 sompi per 10^9 base units is 10^9 sompi (10 KAS) per whole token.
   const b18 = { last_fill: '1', scale: 1_000_000_000 };
   assert.equal(bandCheck({ side: 'buy', price: 1_250_000_000n, book: b18, bandPct: 25, decimals: 18 }).ok, true);
   assert.equal(bandCheck({ side: 'buy', price: 1_250_000_001n, book: b18, bandPct: 25, decimals: 18 }).ok, false);
-  // 0 decimals, a mid of 3 and 4 sompi (3.5), a 2.5 % band: the buy limit is 3.5875 sompi
+  // 0 decimals, a mid of 3 and 4 sompi (3.5), a 2.5 % band: the buy limit is 3.5875 sompi.
   const b0 = { last_fill: null, best_bid: '3', best_ask: '4', scale: 1 };
   assert.equal(bandCheck({ side: 'buy', price: 3n, book: b0, bandPct: '2.5', decimals: 0 }).ok, true);
   assert.equal(bandCheck({ side: 'buy', price: 4n, book: b0, bandPct: '2.5', decimals: 0 }).ok, false);

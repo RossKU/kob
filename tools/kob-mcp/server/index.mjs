@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// kob-mcp over stdio: node server/index.mjs --config <file> (or KOB_MCP_CONFIG). Logs go to stderr only.
+// kob-mcp over stdio: node server/index.mjs --config <file> (or KOB_MCP_CONFIG).
+// Logs go to stderr only.
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { loadConfig } from '../src/config.mjs';

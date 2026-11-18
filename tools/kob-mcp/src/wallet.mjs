@@ -1,4 +1,5 @@
-// The wallet's address, and a plain KAS UTXO to fund a token creation (JSON wRPC; the key is never read here).
+// The wallet's address, and a plain KAS UTXO to fund a token creation.
+// It talks JSON wRPC, and the key is never read here.
 
 const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
 const GENERATORS = [0x98f2bc8e61n, 0x79b76d99e2n, 0xf33e5fb3c4n, 0xae2eabe2a8n, 0x1e4f43e470n];
@@ -71,8 +72,8 @@ export async function withNode(url, fn, timeoutMs = 20_000) {
 }
 
 /**
- * The smallest plain, mature UTXO of the key worth at least `needSompi` that no mempool transaction spends:
- * `{ txid, index, amount }` (amount a BigInt), or null.
+ * The smallest plain, mature UTXO of the key worth at least `needSompi` that no mempool transaction
+ * spends: `{ txid, index, amount }` (amount a BigInt), or null.
  */
 export async function pickFundingUtxo(nodeUrl, xOnly, network, needSompi) {
   const address = addressOfXOnly(xOnly, network);
