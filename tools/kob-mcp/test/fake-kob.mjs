@@ -1,4 +1,4 @@
-// A stand-in kob CLI with a small chain in FAKE_KOB_CHAIN (JSON); every call goes to FAKE_KOB_LOG.
+// A stand-in kob CLI with a small chain in FAKE_KOB_CHAIN (JSON). Every call goes to FAKE_KOB_LOG.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -32,12 +32,12 @@ function sign(action, net, plan = {}, ids = [], apply = () => {}, issues = [], t
   c.kasFree += net;
   c.tusdFree += tusdNet;
   apply();
-  // the node took it and the reply was lost (kob-cli flow.rs: the plan with result null, exit 1)
+  // The node took it and the reply was lost (kob-cli flow.rs: the plan with result null, exit 1).
   if (process.env.FAKE_KOB_SUBMIT_LOST) { process.stderr.write('error: submit: socket: timed out\n'); print(doc, 1); }
   print({ ...doc, result: { status: 'submitted', txid: doc.transaction.txid, fee: String(FEE), covenant_ids: ids, file: null, engine_validated: true } });
 }
 
-// FAKE_KOB_FEATURES=claim,delivery: the help of a CLI with bid delivery
+// FAKE_KOB_FEATURES=claim,delivery: the help of a CLI with bid delivery.
 const features = (process.env.FAKE_KOB_FEATURES ?? '').split(',');
 if (args.includes('--help')) {
   if (args[0] === 'claim' && !features.includes('claim')) { process.stderr.write('error: unknown command `claim`\n'); process.exit(2); }
@@ -91,7 +91,8 @@ switch (args[0]) {
     const amount = units(val('--amount'));
     const max = val('--max-price') ? kasOf(val('--max-price')) : null;
     if (max != null && price > max && process.env.FAKE_KOB_TAKE_UNBUILT) {
-      // the CLI's other form: the fill could not be built either, so the refusal is only the stderr text
+      // The CLI's other form: the fill could not be built either, so the refusal is only the stderr
+      // text.
       process.stderr.write('error: this fill pays 0.26 KAS per TUSD (the order\'s price 0.26 KAS per TUSD at the lock time (DAA 5), less its tip 0 KAS per TUSD that you keep), above your --max-price 0.2 KAS per TUSD: nothing signed\n');
       process.exit(1);
     }

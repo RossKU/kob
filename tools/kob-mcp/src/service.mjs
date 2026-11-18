@@ -24,7 +24,9 @@ function need(re, v, what) {
   return v;
 }
 
-/** A free-text value for the CLI: one line, never starting with "-" (it would read as an option). */
+/**
+ * A free-text value for the CLI: one line, never starting with "-" (it would read as an option).
+ */
 function text(v, what, max = 1024) {
   if (typeof v !== 'string' || !v.length || v.length > max || /^-/.test(v) || /[\r\n\0]/.test(v)) {
     throw new Refusal(`BAD_ARGUMENT: ${what} must be one line of 1..${max} characters, not starting with "-"`);
@@ -40,7 +42,10 @@ const hashArgs = (tool, args) => {
   return createHash('sha256').update(`${tool}\n${sorted}`).digest('hex');
 };
 
-/** The KAS a planned or sent transaction takes out of the wallet: max(fee, -net KAS); a merge's chain: its fee. */
+/**
+ * The KAS a planned or sent transaction takes out of the wallet: max(fee, -net KAS).
+ * For a merge's chain it is the fee.
+ */
 export function spendOf(doc) {
   if (doc?.links) return { spend: big(doc.fee), fee: big(doc.fee), net: -big(doc.fee) };
   const fee = big(doc?.transaction?.fee);
@@ -63,7 +68,10 @@ export class KobService {
     this.features = { claim: false, delivery: false };
   }
 
-  /** What this CLI build offers, read once from its help: `kob claim` and `--delivery` (bid delivery). */
+  /**
+   * What this CLI build offers, read once from its help: `kob claim` and `--delivery` (bid
+   * delivery).
+   */
   async detectFeatures() {
     const claim = await this.kob.exec(['claim', '--help'], { bare: true });
     const place = await this.kob.exec(['place', '--help'], { bare: true });
@@ -215,7 +223,8 @@ export class KobService {
         if ((a.max_price == null) === (a.min_price == null)) {
           throw new Refusal('PRICE_BOUND_REQUIRED: give exactly one of max_price (you buy from a sell order) or min_price (you sell into a buy order)');
         }
-        // the token is pinned: the CLI refuses an order whose node-verified state trades another token
+        // The token is pinned: the CLI refuses an order whose node-verified state trades another
+        // token.
         const tok = need(RE.id, a.token, 'token (the covenant id of the token the order trades)').toLowerCase();
         const argv = ['take', need(RE.id, a.id, 'id').toLowerCase(), '--token', tok, '--amount', amt(a.amount, 'amount')];
         if (a.max_price) argv.push('--max-price', px(a.max_price, 'max_price'));
@@ -262,8 +271,10 @@ export class KobService {
     if (a.image) argv.push('--image', text(a.image, 'image', 256));
     const carrier = a.carrier ? toSompi(px(a.carrier, 'carrier')) : 1_000_000_000n;
     argv.push('--carrier', String(carrier));
-    // After creation: keep everything (default), or sell on a curve created in the genesis (its own UTXO, its custody, a kept share).
-    // lock_until locks the kept share on chain (the curve's kept part, else keep_percent of the supply, default all of it).
+    // After creation: keep everything (default), or sell on a curve created in the genesis (its own
+    // UTXO, its custody, a kept share).
+    // lock_until locks the kept share on chain (the curve's kept part, else keep_percent of the
+    // supply, default all of it).
     const lock = a.lock_until === undefined ? null
       : need(/^(\+\d{1,5}[dhm]|\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?Z)?|\d{13,16})$/, a.lock_until, 'lock_until (+90d, a date YYYY-MM-DD or unix ms)');
     if (lock) argv.push('--lock-until', lock);
@@ -293,7 +304,10 @@ export class KobService {
     return { argv, create: { carrier, locked: carrier * outputs } };
   }
 
-  /** The funding UTXO of a creation: given, or the smallest that covers the carriers and 1 KAS of fees. */
+  /**
+   * The funding UTXO of a creation: given, or the smallest that covers the carriers and 1 KAS of
+   * fees.
+   */
   async fundingFor(a, carrier) {
     const maker = await this.makerKey();
     if (a.fund_utxo) {
@@ -309,7 +323,10 @@ export class KobService {
     return { ...u, maker };
   }
 
-  /** Runs `kob token create` (dry or --yes) into `dir`; returns { code, stderr, doc } with doc built from the files. */
+  /**
+   * Runs `kob token create` (dry or --yes) into `dir`; returns { code, stderr, doc } with doc built
+   * from the files.
+   */
   async runCreate(argv, fund, dir, yes) {
     const full = [...argv, '--fund-utxo', `${fund.txid}:${fund.index}:${fund.amount}:${fund.maker}`, '--out-dir', dir, yes ? '--yes' : '--dry-run'];
     const r = await this.kob.exec(full, { json: false, indexer: false });
@@ -352,7 +369,8 @@ export class KobService {
     const r = await this.kob.exec([...built.argv, ...extra, '--dry-run']);
     const errs = (r.json?.issues ?? []).filter((i) => i.severity === 'error');
     if (r.code !== 0 || errs.length || !r.json) {
-      // A take's bound refusal is an issue in the JSON, or only the stderr text when the fill could not be built either.
+      // A take's bound refusal is an issue in the JSON, or only the stderr text when the fill could
+      // not be built either.
       const bound = errs.length ? '' : takeRefusalCode(r.stderr);
       return { ok: false, doc: r.json, error: `CLI_REFUSED (exit ${r.code}): ${errs.map((i) => `${i.code} ${i.message}`).join('; ') || `${bound}${r.stderr || 'no output'}`}` };
     }
@@ -378,8 +396,9 @@ export class KobService {
   }
 
   /**
-   * A write tool: plan (dry run) and check; without `confirm` in confirm mode, return the plan and its id; with the
-   * matching `confirm` (or in auto mode), plan again, check again and send. `estimate` stops after the checks.
+   * A write tool: plan (dry run) and check.
+   * Without `confirm` in confirm mode, it returns the plan and its id. With the matching `confirm`
+   * (or in auto mode), it plans again, checks again and sends. `estimate` stops after the checks.
    */
   write(tool, args, { estimate = false } = {}) {
     return this.serial(() => this.writeNow(tool, args, estimate));
@@ -463,8 +482,8 @@ export class KobService {
       const extra = this.cfg.cli.priorityFee ? ['--priority-fee'] : [];
       const r = await this.kob.exec([...built.argv, ...extra, '--yes']);
       doc = r.json;
-      // Only a refusal the CLI states came before the submit (or the node's rejection) releases the spend; a lost reply,
-      // a crash or an unreadable result counts until the UTC day rolls.
+      // Only a refusal the CLI states came before the submit (or the node's rejection) releases the
+      // spend. A lost reply, a crash or an unreadable result counts until the UTC day rolls.
       if (r.timedOut) { failure = 'the CLI timed out: the outcome is unknown, check kob_orders / kob_balances'; ambiguous = true; } else if (r.code !== 0) {
         failure = `exit ${r.code}: ${r.stderr || 'no output'}`;
         ambiguous = Boolean(doc?.links?.some((l) => l.status === 'submitted')) || !sentNothing(r.stderr);
@@ -474,7 +493,7 @@ export class KobService {
     if (failure) {
       const counted = ambiguous || txids.length > 0;
       if (counted) {
-        // the planned transaction's id, to look up by hand
+        // The planned transaction's id, to look up by hand.
         const known = txids.length ? txids : [doc?.transaction?.txid].filter(Boolean);
         this.ledger.settle(planId, d.spend, known, 'unknown');
       } else this.ledger.release(planId, failure);
@@ -498,13 +517,19 @@ export class KobService {
     };
   }
 
-  /** The wallet's free holding of a token as confirmed on the node (kob balances), base units; null when not confirmed. */
+  /**
+   * The wallet's free holding of a token as confirmed on the node (kob balances), base units; null
+   * when not confirmed.
+   */
   async freeHolding(cov) {
     const row = ((await this.balances().catch(() => null))?.tokens ?? []).find((t) => String(t.token).toLowerCase() === cov);
     return row?.free_verified === true ? big(row.free) : null;
   }
 
-  /** The price band of a limit price or take bound, with the token's decimals for books whose scale is capped at 10^9. */
+  /**
+   * The price band of a limit price or take bound, with the token's decimals for books whose scale
+   * is capped at 10^9.
+   */
   async band({ side, price, token }) {
     const book = await this.bookFor(token);
     let decimals = null;
@@ -531,8 +556,9 @@ export class KobService {
 }
 
 /**
- * The CLI's last error line says nothing was sent: a refusal before signing or submitting, a failed engine validation, or
- * the node's explicit rejection. Anything else after `--yes` started (a lost reply, a socket error) may have been sent.
+ * True when the CLI's last error line says nothing was sent: a refusal before signing or
+ * submitting, a failed engine validation, or the node's explicit rejection. Anything else after
+ * `--yes` started (a lost reply, a socket error) may have been sent.
  */
 export function sentNothing(stderr) {
   const lines = String(stderr ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);

@@ -1,5 +1,6 @@
-// The kob CLI as a child process, as tools/mm-bot/src/kob.mjs drives it: --json, --dry-run before --yes, exit code
-// first, the key only as --key-file or KOB_KEY. No shell: every argument is its own argv entry.
+// The kob CLI as a child process, driven as tools/mm-bot/src/kob.mjs drives it: --json, --dry-run
+// before --yes, exit code first, the key only as --key-file or KOB_KEY.
+// No shell: every argument is its own argv entry.
 
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -29,7 +30,7 @@ export function parseJsonStream(text) {
   return docs;
 }
 
-// stderr lines that are progress notes, not errors
+// Stderr lines that are progress notes, not errors.
 const NOISE = /blocks are contended|^dry run: nothing signed/;
 
 export class Kob {

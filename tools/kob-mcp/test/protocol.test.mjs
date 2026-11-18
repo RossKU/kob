@@ -1,4 +1,5 @@
-// The server over stdio, as Claude Desktop or Claude Code runs it: list the tools, call reads and a confirmed write.
+// Tests the server over stdio, as Claude Desktop or Claude Code runs it.
+// It lists the tools, calls reads and calls a confirmed write.
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
