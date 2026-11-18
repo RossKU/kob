@@ -1,13 +1,14 @@
-// Toast queue (pure: no DOM, no timers). The `<ToastHost>` component subscribes and owns the expiry timers.
+// Toast queue (pure: no DOM, no timers). The `<ToastHost>` component subscribes and owns the expiry
+// timers.
 export type ToastTone = 'info' | 'ok' | 'warn' | 'error';
 
 export interface ToastItem {
   id: number;
   tone: ToastTone;
   message: string;
-  /** 0 = stays until dismissed */
+  /** 0 means the toast stays until dismissed. */
   timeoutMs: number;
-  /** identical messages are merged; the host restarts the timer when this changes */
+  /** Identical messages are merged. The host restarts the timer when this changes. */
   count: number;
 }
 
@@ -24,14 +25,16 @@ export class ToastStore {
   private items: ToastItem[] = [];
   private nextId = 1;
   private readonly listeners = new Set<() => void>();
-  /** how many flow cards are on screen (`hold`) */
+  /** How many flow cards are on screen (`hold`). */
   private holds = 0;
   private readonly heldErrors = new Set<(message: string) => void>();
 
   /**
-   * A flow's card is on screen (founder 2026-11-14): until the returned release is called, a new toast that is not an error is not shown (a
-   * notification is in the bell already; nothing is replayed once the card goes). An error is shown all the same (founder 2026-11-17: a
-   * failure is always seen at the top right, never only in the bell) and goes to the bell's listeners too (`onHeldError`), which colour it.
+   * A flow's card is on screen. Until the returned release is called, a new toast that is not an
+   * error is not shown. A notification is in the bell already, and nothing is replayed once the
+   * card goes. An error is shown all the same, because a failure is always seen at the top right
+   * and never only in the bell. It also goes to the bell's listeners (`onHeldError`), which
+   * colour it.
    */
   hold(): () => void {
     this.holds++;
@@ -48,7 +51,10 @@ export class ToastStore {
     return this.holds > 0;
   }
 
-  /** Called with the text of every error toast raised while a flow's card is on screen (the bell lists it too). */
+  /**
+   * Called with the text of every error toast raised while a flow's card is on screen. The bell
+   * lists it too.
+   */
   onHeldError(fn: (message: string) => void): () => void {
     this.heldErrors.add(fn);
     return () => this.heldErrors.delete(fn);
@@ -68,8 +74,9 @@ export class ToastStore {
   }
 
   /**
-   * Adds a toast (or bumps the counter of an identical one). Errors stay until dismissed. Returns the toast id, or 0 when a flow's card holds
-   * the toasts back (`hold`; never an error).
+   * Adds a toast, or bumps the counter of an identical one. Errors stay until dismissed. Returns
+   * the toast id, or 0 when a flow's card holds the toasts back (`hold`), which never holds an
+   * error.
    */
   push(input: ToastInput): number {
     const tone = input.tone ?? 'info';
@@ -84,7 +91,7 @@ export class ToastStore {
       return same.id;
     }
     const item: ToastItem = { id: this.nextId++, tone, message: input.message, timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT[tone], count: 1 };
-    // the oldest non-error toast makes room first; only if all are errors the oldest error goes
+    // The oldest non-error toast makes room first. Only if all are errors does the oldest error go.
     let next = [...this.items, item];
     while (next.length > MAX_TOASTS) {
       const victim = next.findIndex((t) => t.tone !== 'error' && t.id !== item.id);
@@ -109,7 +116,10 @@ export class ToastStore {
   }
 }
 
-/** What the host shows (kit/Toast.tsx): the toasts on screen, how many wait behind them (a phone's "+N" chip) and whether an error is among those. */
+/**
+ * What the host shows (kit/Toast.tsx): the toasts on screen, how many wait behind them (a phone's
+ * "+N" chip) and whether an error is among those.
+ */
 export interface HostView {
   shown: readonly ToastItem[];
   waiting: number;
@@ -117,9 +127,12 @@ export interface HostView {
 }
 
 /**
- * A desktop or a tablet: every toast, stacked under the cards (`cards`: a send's or a flow's card other components put in the host). A phone: one
- * notification at a time: a card first (the toasts wait behind it), else the newest error, else the newest toast; the rest (and the cards beyond
- * the first) wait behind the chip, which is red while an error is among them.
+ * What the host shows as a list.
+ * - A desktop or a tablet shows every toast, stacked under the cards (`cards`: a send's or a
+ *   flow's card other components put in the host).
+ * - A phone shows one notification at a time: a card first, with the toasts waiting behind it,
+ *   else the newest error, else the newest toast. The rest, and the cards beyond the first, wait
+ *   behind the chip, which is red while an error is among them.
  */
 export function hostView(list: readonly ToastItem[], cards: number, phone: boolean): HostView {
   if (!phone) return { shown: list, waiting: 0, waitingError: false };

@@ -10,9 +10,9 @@ export interface BannerProps {
   tone?: BannerTone;
   title?: ComponentChildren;
   children?: ComponentChildren;
-  /** right-hand actions (e.g. a Retry button) */
+  /** Right-hand actions, for example a Retry button. */
   actions?: ComponentChildren;
-  /** shows a dismiss button */
+  /** Shows a dismiss button. */
   onDismiss?: () => void;
   'data-testid'?: string;
   class?: string;
@@ -41,7 +41,10 @@ export function Banner(props: BannerProps) {
   );
 }
 
-/** Error banner with a Retry button: the standard failure state of an async view. A plain sentence says what failed; the raw message sits behind "Details". */
+/**
+ * Error banner with a Retry button: the standard failure state of an async view. A plain sentence
+ * says what failed, and the raw message sits behind "Details".
+ */
 export function ErrorBanner(props: { error: Error | string | null | undefined; title?: string; onRetry?: () => void; 'data-testid'?: string }) {
   if (!props.error) return null;
   const message = typeof props.error === 'string' ? props.error : props.error.message;

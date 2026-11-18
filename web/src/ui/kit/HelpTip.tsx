@@ -1,17 +1,26 @@
-// A small "?" next to a label or a heading with its explanation behind it: the same panel as the warn badges' TipBadge (market/TipBadge.tsx), with
-// any content. Click, tap, Enter or Space opens and closes it; Escape closes it (and only it: a dialog around it stays open) and puts the focus back
-// on the button, as do a press elsewhere. Nothing is hover-only. The panel is fixed to the viewport (a card that cuts what overflows it does not cut
-// it), kept 16 px inside the window's sides, under the button, or above it when there is no room below, and it follows the button on a scroll.
+// A small "?" next to a label or a heading with its explanation behind it. It is the same panel as
+// the warn badges' TipBadge (market/TipBadge.tsx), with any content.
+// - Click, tap, Enter or Space opens and closes it.
+// - Escape closes it, and only it, so a dialog around it stays open. A press elsewhere does too.
+//   The focus goes back to the button.
+// - Nothing is hover-only.
+//
+// The panel is fixed to the viewport, because a card that cuts what overflows it does not cut it.
+// It is kept 16 px inside the window's sides, under the button, or above it when there is no room
+// below, and it follows the button on a scroll.
 import type { ComponentChildren } from 'preact';
 import { useId, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 
 export interface HelpTipProps {
-  /** what the help is about (a field's label, a heading): the button is named "More about {label}", the panel {label} */
+  /**
+   * What the help is about (a field's label, a heading). The button is named "More about {label}"
+   * and the panel {label}.
+   */
   label: string;
-  /** the explanation: plain text or paragraphs */
+  /** The explanation: plain text or paragraphs. */
   children: ComponentChildren;
-  /** the button's test id; the panel's is `<id>-panel` */
+  /** The button's test id. The panel's is `<id>-panel`. */
   'data-testid'?: string;
   class?: string;
 }
@@ -26,7 +35,8 @@ export function HelpTip(props: HelpTipProps) {
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
 
-  // a layout effect: placed and listening in the frame the panel appears (an Escape or a tap right after the click is not lost)
+  // A layout effect, so it is placed and listening in the frame the panel appears. An Escape or a
+  // tap right after the click is not lost.
   useLayoutEffect(() => {
     if (!open) {
       setPos(null);
@@ -48,7 +58,7 @@ export function HelpTip(props: HelpTipProps) {
       setOpen(false);
       if (focus) button.current?.focus();
     };
-    // capture: before a dialog's own Escape, which would close the dialog
+    // Capture, so it runs before a dialog's own Escape, which would close the dialog.
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.stopPropagation();

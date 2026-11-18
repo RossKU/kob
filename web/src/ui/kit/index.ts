@@ -1,33 +1,57 @@
-// UI KIT: the small, dependency-free component set every view uses (Preact 10, styles in src/styles.css). Import from here:
+// UI KIT: the small, dependency-free component set every view uses (Preact 10, styles in
+// src/styles.css). Import from here:
 //   import { Button, Field, Banner, Modal, Amount, ... } from '../kit';
 //
-// Components (all forward `data-testid`; text comes from the caller, translated with `t()` from src/i18n):
-//   Button        { variant: 'primary'|'secondary'|'danger'|'ghost', loading, small, block, disabled, ...button attributes }
-//   Field         label + input/textarea/select + hint + error.  { label, hint, error, as: 'input'|'textarea'|'select', options, value, onValue(string),
-//                 onInput(event), type, inputMode, placeholder, disabled, readOnly, suffix, 'data-testid' (on the CONTROL) }
-//   Select        Field as="select" with { options: SelectOption[] }
-//   Dropdown      the drop-down behind Select, for a control with its own label: { value, options (options and { group, options }), onChange, labelledBy or label }
-//   Checkbox      { checked, onChange(boolean), label, hint }
-//   FieldShell    render-prop wrapper for custom controls: children({ id, labelId, describedBy, invalid })
-//   Segmented     radio-group toggle { options: [{ value, label, tone: 'buy'|'sell', 'data-testid' }], value, onChange, 'aria-label' }
-//   Table         scrollable <table> wrapper { caption, dense, children }; TableMessage { colSpan } for empty / loading rows
-//   Badge         { tone: 'ok'|'warn'|'bad'|'info'|'neutral', title }
-//   Banner        { tone: 'info'|'ok'|'warn'|'error', title, actions, onDismiss };  ErrorBanner { error, onRetry }
-//   Modal/Dialog  { title, onClose, footer, large, dismissable, hideClose } (render conditionally: mounted = open)
-//   Spinner       { large };  Loading { text }
-//   CurveGraph    a stepped sell curve: price against the share sold { steps (kob/curve.ts curveSteps), label, axis }
-//   Stepper       the signing steps of a chained flow { steps: StepperItem[] (label, state done|current|waiting|failed, note, busy), label, layout }
-//   Amount        { kind: 'kas'|'token'|'price', value: bigint|null, decimals, scale, maxFraction, unit, group, signed }
-//   CopyText      { value, short, head, tail } shortened id/address with a copy button;  copyToClipboard(text)
-//   ToastHost     mount once (App does); show messages with showToast(message, tone, timeoutMs?)
-//   Section       titled card { title, actions, collapsible, defaultOpen }
-//   KeyValueList  <dl> { items: [{ label, value, 'data-testid', show }], compact }
-//   Tabs          tab strip { tabs, active, onChange, 'aria-label' }
-//   EmptyState    the one empty / disconnected state { icon, children (one sentence), action, compact }
-//   HelpTip       a "?" beside a label or heading that opens its explanation (click / tap / keyboard, Escape closes) { label (the topic), children }
+// Every component forwards `data-testid`. Text comes from the caller, translated with `t()` from
+// src/i18n.
 //
-// Helpers: download.ts (downloadText, readFileText, exportFileName, jsonText), format.ts (shortId, shortAddress, kasText, tokenText, pricePerTokenText, amountText, formatRowTime, displayPriceDp, columnPriceDp), hooks.ts (useAsync, useInterval, useNow),
-// toast-store.ts (showToast, ToastStore).
+// Components, with their main props:
+// - `Button`: `variant` ('primary' | 'secondary' | 'danger' | 'ghost'), `loading`, `small`,
+//   `block`, `disabled` and the button attributes.
+// - `Field`: label, input / textarea / select, hint and error. Props are `label`, `hint`, `error`,
+// `as` ('input' | 'textarea' | 'select'), `options`, `value`, `onValue(string)`, `onInput(event)`,
+//   `type`, `inputMode`, `placeholder`, `disabled`, `readOnly`, `suffix` and `data-testid`, which
+//   goes on the CONTROL.
+// - `Select`: `Field` as="select" with `options: SelectOption[]`.
+// - `Dropdown`: the drop-down behind `Select`, for a control with its own label. Props are
+//   `value`, `options` (options and `{ group, options }`), `onChange`, and `labelledBy` or `label`.
+// - `Checkbox`: `checked`, `onChange(boolean)`, `label`, `hint`.
+// - `FieldShell`: a render-prop wrapper for custom controls, `children({ id, labelId,
+//   describedBy, invalid })`.
+// - `Segmented`: a radio-group toggle with `options` (`value`, `label`, `tone`, `data-testid`),
+//   `value`, `onChange` and `aria-label`.
+// - `Table`: a scrollable `<table>` wrapper with `caption`, `dense` and `children`. `TableMessage`
+//   with `colSpan` is for empty and loading rows.
+// - `Badge`: `tone` ('ok' | 'warn' | 'bad' | 'info' | 'neutral') and `title`.
+// - `Banner`: `tone` ('info' | 'ok' | 'warn' | 'error'), `title`, `actions` and `onDismiss`.
+//   `ErrorBanner` takes `error` and `onRetry`.
+// - `Modal` and `Dialog`: `title`, `onClose`, `footer`, `large`, `dismissable` and `hideClose`.
+//   Render them conditionally, as mounted means open.
+// - `Spinner` with `large`, and `Loading` with `text`.
+// - `CurveGraph`: a stepped sell curve, price against the share sold. Props are `steps`
+//   (kob/curve.ts `curveSteps`), `label` and `axis`.
+// - `Stepper`: the signing steps of a chained flow. Props are `steps` (`StepperItem[]` with
+//   `label`, `state` done | current | waiting | failed, `note` and `busy`), `label` and `layout`.
+// - `Amount`: `kind` ('kas' | 'token' | 'price'), `value` (bigint or null), `decimals`, `scale`,
+//   `maxFraction`, `unit`, `group` and `signed`.
+// - `CopyText`: `value`, `short`, `head` and `tail`. It is a shortened id or address with a copy
+//   button. `copyToClipboard(text)` is exported too.
+// - `ToastHost`: mount it once (App does). Show messages with `showToast(message, tone,
+//   timeoutMs?)`.
+// - `Section`: a titled card with `title`, `actions`, `collapsible` and `defaultOpen`.
+// - `KeyValueList`: a `<dl>` with `items` (`label`, `value`, `data-testid`, `show`) and `compact`.
+// - `Tabs`: a tab strip with `tabs`, `active`, `onChange` and `aria-label`.
+// - `EmptyState`: the one empty / disconnected state, with `icon`, `children` (one sentence),
+//   `action` and `compact`.
+// - `HelpTip`: a "?" beside a label or heading that opens its explanation by click, tap or
+//   keyboard, and Escape closes it. Props are `label` (the topic) and `children`.
+//
+// Helpers:
+// - download.ts: `downloadText`, `readFileText`, `exportFileName`, `jsonText`.
+// - format.ts: `shortId`, `shortAddress`, `kasText`, `tokenText`, `pricePerTokenText`,
+//   `amountText`, `formatRowTime`, `displayPriceDp`, `columnPriceDp`.
+// - hooks.ts: `useAsync`, `useInterval`, `useNow`.
+// - toast-store.ts: `showToast`, `ToastStore`.
 export * from './download';
 export * from './format';
 export * from './hooks';
