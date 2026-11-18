@@ -1,8 +1,9 @@
-//! `KobCurveAsk` in the indexer (`docs/design/curve-ask-spec.md`): placed and listed, shown as its remaining levels
-//! (one order, its amount counted once), filled across levels (the event at the mean level price, the view at the
-//! current level), amended, cancelled, reverted by a reorg and replayed from the record log; created unbound in its
-//! token's genesis (the KOB1 payload's GENESIS record, the custody's token, one custody candidate, no KCC-23 listing
-//! of the curve), bound by its first fill or by an amend that names its token.
+//! `KobCurveAsk` in the indexer (`docs/design/curve-ask-spec.md`): placed and listed, shown as its
+//! remaining levels (one order, its amount counted once), filled across levels (the event at the
+//! mean level price, the view at the current level), amended, cancelled, reverted by a reorg and
+//! replayed from the record log; created unbound in its token's genesis (the KOB1 payload's GENESIS
+//! record, the custody's token, one custody candidate, no KCC-23 listing of the curve), bound by
+//! its first fill or by an amend that names its token.
 
 mod common;
 
@@ -455,8 +456,8 @@ async fn the_curve_view_serialises_its_levels() {
     assert_eq!(b["asks"][2]["covenant_id"], cov.to_hex());
 }
 
-/// Security review 2026-11-17 M4: a book of depth k holds at most k levels of a curve, and its top k (per order and
-/// aggregated) are exact; an order view lists at most 50 remaining levels.
+/// A book of depth k holds at most k levels of a curve, and its top k (per order and aggregated)
+/// are exact; an order view lists at most 50 remaining levels.
 #[tokio::test]
 async fn a_shallow_book_and_a_view_take_only_the_best_levels_of_a_long_curve() {
     let c = Ctx::new();

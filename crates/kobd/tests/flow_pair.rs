@@ -1,10 +1,12 @@
-//! Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`; one template each for both sides and both token families) end to
-//! end through the indexer: created with the `kob-protocol` builders, indexed (placement record, exact custodies of either
-//! token, lineage, strays of both tokens), shown in the pair book, filled with `build_batch` legs (every transaction
-//! validated in the rusty-kaspa engine) through the KAS books (route), against opposite pair orders (netting) or from the
-//! filler's inventory, and followed through partial fills, IOC returns, closes, refunds, cancels, if-done exits, repeat merges
-//! and arms in both evidence modes. The founder price rule: a pair fill records volume (`pair_fills`, its event without a
-//! price) and never a KAS trade, candle or last price; its KAS-book counterparties record their own trades.
+//! Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`; one template each for both sides and both
+//! token families) end to end through the indexer: created with the `kob-protocol` builders,
+//! indexed (placement record, exact custodies of either token, lineage, strays of both tokens),
+//! shown in the pair book, filled with `build_batch` legs (every transaction validated in the
+//! rusty-kaspa engine) through the KAS books (route), against opposite pair orders (netting) or
+//! from the filler's inventory, and followed through partial fills, IOC returns, closes, refunds,
+//! cancels, if-done exits, repeat merges and arms in both evidence modes. The price rule: a pair
+//! fill records volume (`pair_fills`, its event without a price) and never a KAS trade, candle or
+//! last price; its KAS-book counterparties record their own trades.
 
 mod common;
 
@@ -893,10 +895,12 @@ async fn a_waiting_buy_first_entry_without_escrow_gets_a_new_b_custody_from_its_
     assert_eq!(c.hs.event_detail(&exit, "fill")["merged_into"], cov.to_hex());
 }
 
-/// The soak's crossed pair book (2026-10-11, up to 6 %): takers in flight and TWAP orders between slices were levels. A market
-/// sell of A (IOC) under the resting bid of A made a route ask below the route bid; a TWAP ask of B between its slices made a
-/// route bid above the route ask; an IOC pair bid sat above both. A level is resting liquidity a matcher can fill now: the pair
-/// book leaves the IOC / FOK orders (KAS and pair) out, and shows a TWAP order once its slice is due, for one slice.
+/// The pair book shows resting liquidity only: takers in flight and TWAP orders between slices are
+/// not levels. A market sell of A (IOC) under the resting bid of A would make a route ask below the
+/// route bid; a TWAP ask of B between its slices would make a route bid above the route ask; an IOC
+/// pair bid would sit above both. A level is resting liquidity a matcher can fill now: the pair
+/// book leaves the IOC / FOK orders (KAS and pair) out, and shows a TWAP order once its slice is
+/// due, for one slice.
 #[tokio::test]
 async fn the_pair_book_shows_resting_liquidity_only_and_is_not_crossed_by_takers_or_twap_slices_not_due() {
     let p = AB;
@@ -993,7 +997,7 @@ async fn a_pair_order_records_an_unknown_commitment_as_none_and_the_migration_fi
     let ask = resting_for(&c, Family::Kron, SIDE_ASK, P200).await;
     let zero = Some([0u8; 32].to_vec());
     assert_eq!(ext_of_token(TOKEN_COV_KRON), vec![None, zero.clone()]);
-    // an earlier build: the pair's row was zero, so the ask's identity looked seen and was not recorded
+    // the pair's row is zero, so the ask's identity looks seen and is not recorded
     {
         let g = c.hs.ingest.lock().unwrap();
         g.conn()

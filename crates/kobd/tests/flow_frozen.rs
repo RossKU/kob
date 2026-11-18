@@ -1,5 +1,6 @@
-//! "Possibly frozen": an order flagged by the matcher's engine pre-simulation is left out of the books, the API says so, and the
-//! flag lapses when the order moves or a later pre-simulation passes. (The matcher side is in `matcher_frozen.rs`.)
+//! "Possibly frozen": an order flagged by the matcher's engine pre-simulation is left out of the
+//! books, the API says so, and the flag lapses when the order moves or a later pre-simulation
+//! passes. (The matcher side is in `matcher_frozen.rs`.)
 
 mod common;
 
@@ -207,9 +208,9 @@ async fn the_open_token_list_lists_a_token_known_only_from_an_unlisted_order() {
     assert_eq!((rows.len(), rows[0].extension_commitment.as_deref()), (1, None));
 }
 
-/// The all-zero extension commitment (the standard fixed-supply KCC-20 class: TUSD, every `kob token create`) is a commitment:
-/// the open token list reports it (it reported none, and the CLI refused every such token: TN10 2026-10-14 B-4), and the
-/// migration of earlier pair rows leaves a real zero commitment alone.
+/// The all-zero extension commitment (the standard fixed-supply KCC-20 class: TUSD, every `kob
+/// token create`) is a commitment: the open token list reports it, and the migration of earlier
+/// pair rows leaves a real zero commitment alone.
 #[tokio::test]
 async fn the_open_token_list_reports_the_zero_extension_commitment() {
     use kob_protocol::artifacts::{token_template, TemplateId};
@@ -237,9 +238,10 @@ async fn the_open_token_list_reports_the_zero_extension_commitment() {
     assert_eq!(list()[0].extension_commitment.as_deref(), Some(Hash32([0; 32]).to_hex().as_str()));
 }
 
-/// The market scale of a token without decimals is sticky (TN10 2026-10-15 O-3): `/v1/tokens` reports the scale of the token's
-/// earliest listed order after every order of it has ended, and a later order of another scale does not move it. A client prices
-/// the next "first order" at it instead of asking for decimals again (another value would put two scales on one market).
+/// The market scale of a token without decimals is sticky: `/v1/tokens` reports the scale of the
+/// token's earliest listed order after every order of it has ended, and a later order of another
+/// scale does not move it. A client prices the next "first order" at it instead of asking for
+/// decimals again (another value would put two scales on one market).
 #[tokio::test]
 async fn the_open_token_list_reports_the_scale_of_the_earliest_order_after_it_ended() {
     use kob_protocol::artifacts::{token_template, TemplateId};

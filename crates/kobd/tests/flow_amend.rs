@@ -1,10 +1,12 @@
-//! In-place amend (AMEND record): the maker's cancel of a plain ask continues the order's covenant id with new terms and
-//! the custody, owned by that id, never moves. The indexer proves the continuation against the revealed previous state
-//! (`payload::verify_amend`) and takes the new terms into the order (price, tip, expiry, listing decision); a reorg
-//! restores the old terms exactly. A continuation of a cancel that is not a verified amend (forged record, no record, a
-//! second output carrying the id) stays unproven and is listed nowhere: neither in the matcher's book nor in the public
-//! book, depth or counts. A plain bid is amended the same way (it owns no custody: its quantity is its escrow), and its
-//! budget rate (and so the amount its escrow funds) follows the new terms.
+//! In-place amend (AMEND record): the maker's cancel of a plain ask continues the order's covenant
+//! id with new terms and the custody, owned by that id, never moves. The indexer proves the
+//! continuation against the revealed previous state (`payload::verify_amend`) and takes the new
+//! terms into the order (price, tip, expiry, listing decision); a reorg restores the old terms
+//! exactly. A continuation of a cancel that is not a verified amend (forged record, no record, a
+//! second output carrying the id) stays unproven and is listed nowhere: neither in the matcher's
+//! book nor in the public book, depth or counts. A plain bid is amended the same way (it owns no
+//! custody: its quantity is its escrow), and its budget rate (and so the amount its escrow funds)
+//! follows the new terms.
 
 mod common;
 
@@ -341,10 +343,12 @@ async fn a_bid_amend_that_changes_the_scale_is_listed_nowhere() {
     assert!(c.hs.query::<String>("SELECT reason FROM rejects", []).starts_with("amend:"));
 }
 
-/// The price rule of the trades (the resting side, the older one, sets the price) reads the age of an order from its CURRENT terms: an
-/// in-place amend replaces them and restarts the age. A bid placed first and a later ask, the ask amended before the bid: the ask has
-/// rested at its terms longer, the bid is the aggressor, and the trade (and its candle) is at the ask's price. By the placement time
-/// alone the bid would count as older and the chart would show the bid's price, which no maker received (the TN10 soak, 2026-11-05).
+/// The price rule of the trades (the resting side, the older one, sets the price) reads the age of
+/// an order from its CURRENT terms: an in-place amend replaces them and restarts the age. A bid
+/// placed first and a later ask, the ask amended before the bid: the ask has rested at its terms
+/// longer, the bid is the aggressor, and the trade (and its candle) is at the ask's price. By the
+/// placement time alone the bid would count as older and the chart would show the bid's price,
+/// which no maker received.
 #[tokio::test]
 async fn an_amend_restarts_the_age_that_decides_which_side_sets_the_trade_price() {
     let c = Ctx::new();

@@ -1,9 +1,9 @@
-//! The KRON family through the indexer: every order kind created, filled, merged, cancelled and refunded
-//! with the `kob-protocol` builders (protocol v3 transactions with the 46-byte KRON tokens, validated by the script
-//! engine) and followed end to end: placement records with the 2-byte custody part, exact custody
-//! (`id_type` 2), strays, booked exits and repeat merges, stops armed and triggered by a resting fill of the same
-//! transaction, reorgs and the record log.
-//! The KCC-20 twins of these flows are `flow_kinds`, `flow_ifd`, `flow_strays` and `flow_cond`.
+//! The KRON family through the indexer: every order kind created, filled, merged, cancelled and
+//! refunded with the `kob-protocol` builders (protocol v3 transactions with the 46-byte KRON
+//! tokens, validated by the script engine) and followed end to end: placement records with the
+//! 2-byte custody part, exact custody (`id_type` 2), strays, booked exits and repeat merges, stops
+//! armed and triggered by a resting fill of the same transaction, reorgs and the record log. The
+//! KCC-20 twins of these flows are `flow_kinds`, `flow_ifd`, `flow_strays` and `flow_cond`.
 
 mod common;
 

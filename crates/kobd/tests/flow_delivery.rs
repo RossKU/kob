@@ -1,7 +1,8 @@
-//! Bid delivery modes followed by the indexer (`docs/design/bid-delivery-spec.md`): a mode-1 bid's bought-custody is the order's
-//! (never a stray), its fills, claim, refund and ending fill hand the tokens to the maker, a mode-2 top-up is the fill's delivery,
-//! and a delivery's KAS is not taken for a carrier the escrow released. The transactions are the builders' mode-0 ones patched to
-//! the delivery shapes (`common/delivery.rs`).
+//! Bid delivery modes followed by the indexer (`docs/design/bid-delivery-spec.md`): a mode-1 bid's
+//! bought-custody is the order's (never a stray), its fills, claim, refund and ending fill hand the
+//! tokens to the maker, a mode-2 top-up is the fill's delivery, and a delivery's KAS is not taken
+//! for a carrier the escrow released. The transactions are the builders' mode-0 ones patched to the
+//! delivery shapes (`common/delivery.rs`).
 
 mod common;
 #[path = "common/delivery.rs"]
@@ -356,9 +357,10 @@ async fn a_mode_0_bid_reads_wallet_and_holds_no_bought_custody() {
     assert!(json.get("delivery").is_none() && json.get("bought_custody").is_none(), "absent, not null");
 }
 
-/// L2: a fill that names an exact look-alike of the bought-custody (a stray sent to the order: the contract takes either) in place
-/// of the live one leaves that one unspent. The fill's new custody is the order's, the old one a stray: the order stays listed with
-/// its bought-custody, a reorg gives the roles back, and the maker's cancel sweeps the stray with the custody.
+/// A fill that names an exact look-alike of the bought-custody (a stray sent to the order: the
+/// contract takes either) in place of the live one leaves that one unspent. The fill's new custody
+/// is the order's, the old one a stray: the order stays listed with its bought-custody, a reorg
+/// gives the roles back, and the maker's cancel sweeps the stray with the custody.
 #[tokio::test]
 async fn a_fill_naming_a_look_alike_of_the_bought_custody_keeps_the_order_and_strays_the_old_one() {
     let c = Ctx::new();

@@ -1,9 +1,10 @@
-//! If-done exits served to clients: every exit kind (buy-first `KobIfdBid` -> `KobCondAsk`, sell-first `KobIfdAsk` ->
-//! `KobCondBid`, plain and repeating, KCC-20 and KRON) carries in its `GET /v1/orders/{id}` view what a client needs to spend it
-//! without any other lookup: its entry's extension commitment and the proven token state of its custody and strays. A cancel is
-//! built from the view alone and validated by the script engine; the matcher's listed order of an exit carries the same custody
-//! state (a keeper refund of it validates). A database written before the fix (exits stored without a commitment) is repaired on
-//! open to exactly the rows a fresh build gives.
+//! If-done exits served to clients: every exit kind (buy-first `KobIfdBid` -> `KobCondAsk`,
+//! sell-first `KobIfdAsk` -> `KobCondBid`, plain and repeating, KCC-20 and KRON) carries in its
+//! `GET /v1/orders/{id}` view what a client needs to spend it without any other lookup: its entry's
+//! extension commitment and the proven token state of its custody and strays. A cancel is built
+//! from the view alone and validated by the script engine; the matcher's listed order of an exit
+//! carries the same custody state (a keeper refund of it validates). A database with exits stored
+//! without a commitment is repaired on open to exactly the rows a fresh build gives.
 
 mod common;
 

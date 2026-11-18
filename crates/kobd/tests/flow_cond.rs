@@ -1,6 +1,7 @@
-//! Conditional orders (stop, trailing, take-profit, OCO) and stop entries with trigger evidence: a stop
-//! arms, ratchets or fills at its trigger only in a transaction that fills a plain resting order qualifying as its
-//! evidence, and the indexer records which one; all with real builders validated by the script engine.
+//! Conditional orders (stop, trailing, take-profit, OCO) and stop entries with trigger evidence: a
+//! stop arms, ratchets or fills at its trigger only in a transaction that fills a plain resting
+//! order qualifying as its evidence, and the indexer records which one; all with real builders
+//! validated by the script engine.
 
 mod common;
 
@@ -296,9 +297,10 @@ async fn buy_side_conditional_take_profit_and_stop_entries() {
     assert_eq!(c.hs.tip_state(&exit), Some(AnyState::KobCondAsk(ibs.exit_for(4 * WHOLE, None).unwrap())));
 }
 
-/// A conditional order without a take-profit leg (`tpPrice` 0: a stop-market, stop-limit or trailing stop) is measured at its
-/// stop for the operator's minimum order value. Measured at the absent take-profit it was worth 0, so every such stop was
-/// unlisted (`order_value_below_minimum`): never armed, never triggered, never refunded by a keeper (TN10 soak, 2026-10-06).
+/// A conditional order without a take-profit leg (`tpPrice` 0: a stop-market, stop-limit or
+/// trailing stop) is measured at its stop for the operator's minimum order value. Measured at the
+/// absent take-profit it would be worth 0, so every such stop would be unlisted
+/// (`order_value_below_minimum`): never armed, never triggered, never refunded by a keeper.
 #[tokio::test]
 async fn a_stop_without_a_take_profit_is_listed_at_its_stop_value() {
     let rules =
