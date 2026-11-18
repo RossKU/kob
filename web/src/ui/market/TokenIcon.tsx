@@ -1,24 +1,34 @@
-// A token's round icon: its picture, else a letter on a colour taken from its covenant id. Where the picture comes from is decided in use-token-logo.ts
-// (kascov.io's checked copy; else, if the viewer allows creator sites, the creator's own address: compared with the `image_hash` of the creation record when it
-// has one, else labelled unchecked; the letter and a note when the picture at that address is not the committed file; nothing for a token whose logo a report
-// hid). It is fetched only while the row is on screen and only when the viewer allows icons (Settings). A checked or IPFS picture is shown from a blob: URL;
-// the creator's own https image is a plain <img> (CSP img-src https:), no referrer, lazy, in the icon's fixed box.
+// A token's round icon: its picture, else a letter on a colour taken from its covenant id. Where
+// the picture comes from is decided in use-token-logo.ts. The sources are:
+// - kascov.io's checked copy.
+// - If the viewer allows creator sites, the creator's own address. It is compared with the
+//   `image_hash` of the creation record when it has one, else labelled unchecked. The letter and
+//   a note show when the picture at that address is not the committed file.
+// - Nothing for a token whose logo a report hid.
+// The picture is fetched only while the row is on screen and only when the viewer allows icons
+// (Settings). A checked or IPFS picture is shown from a blob: URL. The creator's own https image
+// is a plain <img> (CSP img-src https:), with no referrer, lazy, in the icon's fixed box.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { logoGate } from '../../data/logo-gate';
 import { t } from '../../i18n';
 import type { TokenRow } from './token-model';
 import { useTokenLogo } from './use-token-logo';
 
-/** The letter of a letter avatar: the first letter or digit of the ticker, else of the covenant id. */
+/**
+ * The letter of a letter avatar: the first letter or digit of the ticker, else of the covenant id.
+ */
 export function avatarLetter(ticker: string, covenantId: string): string {
   for (const c of ticker) if (/[\p{L}\p{N}]/u.test(c)) return c.toUpperCase();
   return covenantId.slice(0, 1).toUpperCase() || '?';
 }
 
-/** A hue 0..359 from the first bytes of the covenant id: a token keeps its colour. */
+/** A hue from 0 to 359 from the first bytes of the covenant id, so a token keeps its colour. */
 export const avatarHue = (covenantId: string): number => (parseInt(covenantId.slice(0, 4), 16) || 0) % 360;
 
-/** `size` (px) is the diameter when the icon is not sized by its container (`.idb`, `.ml-name`); the default is 24 px; the letter follows it. */
+/**
+ * The icon of a token. `size` (px) is the diameter when the icon is not sized by its container
+ * (`.idb`, `.ml-name`). The default is 24 px, and the letter follows it.
+ */
 export function TokenIcon(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'>; size?: number; /** a repeated icon (the rows of a list) carries no test id of its own */ anonymous?: boolean; /** a view of the wallet's own tokens: a creator-hosted picture waits for the user's "Show logo" unless the token was acquired (data/logo-gate.ts) */ scope?: 'wallet' }) {
   const root = useRef<HTMLSpanElement>(null);
   const [seen, setSeen] = useState(() => typeof IntersectionObserver === 'undefined');
@@ -43,7 +53,7 @@ export function TokenIcon(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' |
 
   const src = logo.state === 'checked' || logo.state === 'ipfs' || logo.state === 'verified' || logo.state === 'creator' ? logo.src : null;
   const px = size ?? 24;
-  // the click shows this token's logo and remembers it; the row under the icon does not see it
+  // The click shows this token's logo and remembers it. The row under the icon does not see it.
   const show = (e: Event) => {
     e.preventDefault();
     e.stopPropagation();
