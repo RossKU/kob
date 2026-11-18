@@ -1,9 +1,13 @@
-// One notification poll of a wallet, and one of its watched invoices (no timers, no DOM: the provider schedules them).
+// One notification poll of a wallet, and one of its watched invoices. There are no timers and no
+// DOM, because the provider schedules them.
 //
-// Orders: the indexer's live orders of the maker (every page of `status=active`) plus the newest page of the maker's unfiltered history, so an order
-// that just left the active list (filled, killed, refunded) is still seen with its final status. They become snapshots, are diffed against the stored
-// ones and stored again. Any source that fails leaves the stored state untouched (a down indexer never reads as "everything vanished").
-// Payments: P2PK KAS UTXOs from the node (`utxos.fundingFor`) and `owned` token UTXOs from the indexer; see `diffPayments` for the change heuristic.
+// Orders: the indexer's live orders of the maker (every page of `status=active`) plus the newest
+// page of the maker's unfiltered history. An order that just left the active list, by a fill, a
+// kill or a refund, is then still seen with its final status. The orders become snapshots, are
+// diffed against the stored ones and stored again. Any source that fails leaves the stored state
+// untouched, so a down indexer never reads as "everything vanished".
+// Payments: P2PK KAS UTXOs from the node (`utxos.fundingFor`) and `owned` token UTXOs from the
+// indexer. See `diffPayments` for the change heuristic.
 import { readClock } from '../../app/env';
 import type { Services } from '../../app/services';
 import type { OrderView } from '../../data/indexer-types';
@@ -14,11 +18,20 @@ import { sanitizeUntrusted } from '../../kob/registry';
 
 export const ORDERS_POLL_MS = 15_000;
 export const INVOICE_POLL_MS = 30_000;
-/** The newest history page looked at next to the live orders (new fills of recently placed orders). */
+/**
+ * The newest history page looked at next to the live orders. It shows new fills of recently placed
+ * orders.
+ */
 const RECENT_LIMIT = 100;
-/** kinds that mean "an own order settled": the proceeds / refund that arrive in the same poll are not an outside payment */
+/**
+ * Kinds that mean an own order settled. Proceeds or a refund that arrive in the same poll are then
+ * not an outside payment.
+ */
 const SETTLES: ReadonlySet<string> = new Set(['fill', 'partial', 'triggered', 'expired', 'refunded', 'killed', 'cancelled', 'reorg']);
-/** At most this many live orders that fell out of the lists are asked for by id in one poll (a re-org rarely takes more). */
+/**
+ * At most this many live orders that fell out of the lists are asked for by id in one poll. A
+ * re-org rarely takes more.
+ */
 const MAX_LOOKUPS = 20;
 
 async function pollOrders(s: Services, store: NotificationStore, pubkey: Hex, nowMs: number, signal: AbortSignal | undefined): Promise<NotificationEvent[]> {
@@ -33,8 +46,9 @@ async function pollOrders(s: Services, store: NotificationStore, pubkey: Hex, no
   for (const v of recent) byId.set(v.covenant_id, v);
   for (const v of active) byId.set(v.covenant_id, v);
   const prev = store.snapshots();
-  // A live order that is in neither list is either paged out of the recent window or gone from the chain (a re-org took its placement): ask the
-  // indexer for it by id. Only a definite "not found" counts as gone; an error leaves the stored snapshot alone.
+  // A live order that is in neither list is either paged out of the recent window or gone from the
+  // chain, because a re-org took its placement. Ask the indexer for it by id. Only a definite
+  // "not found" counts as gone. An error leaves the stored snapshot alone.
   const gone: NotificationEvent[] = [];
   const dropped = new Set<Hex>();
   if (prev) {
@@ -49,14 +63,15 @@ async function pollOrders(s: Services, store: NotificationStore, pubkey: Hex, no
             dropped.add(id);
           }
         } catch {
-          /* unreachable: try again next poll */
+          /* Unreachable. Try again next poll. */
         }
       }),
     );
   }
   const next = snapshotMap([...byId.values()], clock);
   const events = [...diffOrders(prev, next, nowMs), ...gone];
-  // keep what the answer did not cover (an older order paged out of the recent window) so it is not mistaken for new if it reappears
+  // Keep what the answer did not cover, such as an older order paged out of the recent window, so
+  // it is not mistaken for new if it reappears.
   if (prev) for (const [id, snap] of prev) if (!next.has(id) && !dropped.has(id)) next.set(id, snap);
   store.setSnapshots(next);
   return events;
@@ -75,8 +90,9 @@ async function pollPayments(s: Services, store: NotificationStore, pubkey: Hex, 
 }
 
 /**
- * Polls the orders and the incoming payments of one wallet; returns every event found (not yet stored: the caller `ingest`s them). The two sources fail
- * independently: `errors` counts the failed ones.
+ * Polls the orders and the incoming payments of one wallet and returns every event found. The
+ * events are not stored yet, so the caller `ingest`s them. The two sources fail independently,
+ * and `errors` counts the failed ones.
  */
 export async function pollWallet(s: Services, store: NotificationStore, pubkey: Hex, nowMs: number, signal?: AbortSignal): Promise<{ events: NotificationEvent[]; errors: number }> {
   let errors = 0;
@@ -88,7 +104,10 @@ export async function pollWallet(s: Services, store: NotificationStore, pubkey: 
 
 export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
 
-/** Reads `<url>/status` of every watched invoice that is not terminal (plain GET, nothing of the wallet in it); stores the new statuses and returns the events. */
+/**
+ * Reads `<url>/status` of every watched invoice that is not terminal. It is a plain GET with
+ * nothing of the wallet in it. It stores the new statuses and returns the events.
+ */
 export async function pollInvoices(store: NotificationStore, nowMs: number, fetchFn: FetchFn = (u, i) => fetch(u, i)): Promise<NotificationEvent[]> {
   const out: NotificationEvent[] = [];
   for (const w of store.invoices()) {
@@ -98,13 +117,14 @@ export async function pollInvoices(store: NotificationStore, nowMs: number, fetc
       if (!res.ok) continue;
       const j = (await res.json()) as { status?: unknown; reference?: unknown } | null;
       if (!j || typeof j.status !== 'string' || j.status.length > 20) continue;
-      // text from the invoice server: control and bidirectional characters replaced, at most 80 characters
+      // Text from the invoice server. Control and bidirectional characters are replaced, and it is
+      // cut at 80 characters.
       const reference = typeof j.reference === 'string' ? sanitizeUntrusted(j.reference, 80) : null;
       const ev = diffInvoice(w, j.status, reference, nowMs);
       if (ev) out.push(ev);
       store.updateInvoice(w.id, { status: j.status, ...(reference !== null ? { reference } : {}) });
     } catch {
-      /* unreachable / not JSON: try again next round */
+      /* Unreachable or not JSON. Try again next round. */
     }
   }
   return out;

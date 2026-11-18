@@ -1,13 +1,20 @@
-// Notification provider: owns the settings (opt-in, `kob.notify.settings`), the per-wallet store, and the polling that feeds it. Nothing runs while the
-// notifications are off (the default) or no wallet is connected: no request, no feed subscription. When on, the wallet's orders and incoming payments are
-// polled every 15 s and on every live `fills` notice of the indexer feed, watched x402 invoices every 30 s (see poll.ts).
+// Notification provider. It owns the settings (opt-in, `kob.notify.settings`), the per-wallet store
+// and the polling that feeds it.
+// Nothing runs while the notifications are off, which is the default, or no wallet is connected.
+// That means no request and no feed subscription. When on, the wallet's orders and incoming
+// payments are polled every 15 s and on every live `fills` notice of the indexer feed. Watched
+// x402 invoices are polled every 30 s (see poll.ts).
 //
-// Delivery of a new event: always an in-app toast (a burst of more than 3 collapses into one summary toast); additionally a browser notification when
-// `settings.browser` is on, the permission was granted (it is requested only from a click in Settings) and the page is HIDDEN: a visible page already
-// shows the toast, so the OS notification is for the background tab. The notification `tag` is the event id (the browser merges repeats).
+// A new event always gives an in-app toast, and a burst of more than 3 collapses into one summary
+// toast. It also gives a browser notification when all of these hold:
+// - `settings.browser` is on,
+// - the permission was granted, and it is requested only from a click in Settings,
+// - the page is hidden.
+// A visible page already shows the toast, so the OS notification is for the background tab. The
+// notification `tag` is the event id, so the browser merges repeats.
 //
-// System notifications (system-notices.ts: the market switched to the node, and back) need no wallet and no opt-in: they are in the bell's list and count,
-// for this session.
+// System notifications (system-notices.ts) are the market switching to the node and back. They
+// need no wallet and no opt-in. They are in the bell's list and count for this session.
 import { createContext, type ComponentChildren } from 'preact';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
@@ -29,14 +36,14 @@ export type BrowserPermission = 'granted' | 'denied' | 'default' | 'unsupported'
 
 export interface NotifyApi {
   settings: NotifySettings;
-  /** merges a patch (kinds merged key by key) and persists */
+  /** Merges a patch, with kinds merged key by key, and persists it. */
   update(patch: { enabled?: boolean; browser?: boolean; kinds?: Partial<Record<NotifyKind, boolean>> }): void;
   items: readonly NotificationEvent[];
-  /** the app's own notifications (no wallet needed), newest first */
+  /** The app's own notifications, which need no wallet, newest first. */
   system: readonly SystemNotice[];
-  /** unread notifications of the wallet and of the app */
+  /** Unread notifications of the wallet and of the app. */
   unread: number;
-  /** a wallet is connected (notifications are per wallet) */
+  /** A wallet is connected. Notifications are per wallet. */
   connected: boolean;
   markRead(id: string): void;
   markAllRead(): void;
@@ -44,7 +51,7 @@ export interface NotifyApi {
   invoices: ReturnType<NotificationStore['invoices']>;
   addInvoice(input: string): 'ok' | 'invalid' | 'duplicate';
   removeInvoice(id: string): void;
-  /** current browser permission; `requestBrowser` must be called from a click */
+  /** Current browser permission. `requestBrowser` must be called from a click. */
   permission(): BrowserPermission;
   requestBrowser(): Promise<BrowserPermission>;
 }
@@ -59,7 +66,10 @@ const STUB: NotifyApi = {
 export const NotifyContext = createContext<NotifyApi>(STUB);
 export const useNotify = (): NotifyApi => useContext(NotifyContext);
 
-/** How long a toast waits for the declaration of a token it names (data/token-declarations.ts); then it shows what is known. */
+/**
+ * How long a toast waits for the declaration of a token it names (data/token-declarations.ts).
+ * After that it shows what is known.
+ */
 const DECLARATION_WAIT_MS = 2500;
 
 const TONE: Partial<Record<NotifyKind, ToastTone>> = { fill: 'ok', payment: 'ok', expirySoon: 'warn', expired: 'warn', killed: 'warn' };
@@ -77,7 +87,7 @@ function deliver(fresh: readonly NotificationEvent[], s: NotifySettings, registr
     try {
       new Notification(d.title, { body: d.body, tag: e.id });
     } catch {
-      /* some mobile browsers only allow notifications through a service worker */
+      /* Some mobile browsers only allow notifications through a service worker. */
     }
   }
 }
@@ -90,7 +100,8 @@ export function NotifyProvider(props: { children: ComponentChildren }) {
   const [settings, setSettings] = useState<NotifySettings>(() => loadNotifySettings());
   const [, setTick] = useState(0);
   const [system, setSystem] = useState<SystemNotice[]>([]);
-  // one notification per switch of the market to the node and back (the state the page opened with is not a switch)
+  // One notification per switch of the market to the node and back. The state the page opened with
+  // is not a switch.
   useEffect(() => {
     const c = services.standalone;
     if (!c) return undefined;
@@ -101,7 +112,8 @@ export function NotifyProvider(props: { children: ComponentChildren }) {
       if (n) setSystem((l) => addNotice(l, n));
     });
   }, [services.standalone]);
-  // an error toast raised while a flow's card is on screen is in the bell too (the toast shows all the same: kit/toast-store.ts `hold`)
+  // An error toast raised while a flow's card is on screen is in the bell too. The toast shows all
+  // the same (kit/toast-store.ts `hold`).
   useEffect(() => toasts.onHeldError((text) => setSystem((l) => addNotice(l, noticeOfHeldError(text, Date.now())))), []);
 
   const store = useMemo(() => (pubkey ? new NotificationStore(safeStorage(), network, pubkey) : null), [pubkey, network]);
@@ -120,7 +132,8 @@ export function NotifyProvider(props: { children: ComponentChildren }) {
       if (!fresh.length) return;
       const network = services.config.network;
       const show = () => deliver(fresh, s, services.registry, currentFiat(network === 'testnet-10'), network);
-      // a token the page has not met yet has no name or decimals: its declaration is asked for first (a moment at most), so the toast reads "26.6325 TUSD", not raw units
+      // A token the page has not met yet has no name or decimals. Its declaration is asked for
+      // first, for a moment at most, so the toast reads "26.6325 TUSD" and not raw units.
       const unknown = [...new Set(fresh.filter((e) => e.kind === 'payment' && e.token && !services.registry.byCovenantId.has(e.token) && declaredToken(network, e.token) === undefined).map((e) => e.token!))];
       if (!unknown.length) return show();
       restoreDeclarations(services.kob);
@@ -144,7 +157,8 @@ export function NotifyProvider(props: { children: ComponentChildren }) {
   useEffect(() => {
     if (active) void poll();
   }, [active, poll]);
-  // notifications are for the moments the page is not looked at: these polls keep running in a background tab
+  // Notifications are for the moments the page is not looked at, so these polls keep running in a
+  // background tab.
   useInterval(() => void poll(), ORDERS_POLL_MS, active, { background: true });
   useLiveRefresh(services, active ? ['fills'] : [], () => active, () => void poll(), 60_000, { background: true });
 
