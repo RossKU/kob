@@ -149,7 +149,12 @@ mod tests {
 
     #[test]
     fn emoji_sequences_survive() {
-        for s in ["\u{1F469}\u{200D}\u{1F4BB}", "\u{1F469}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F468}", "\u{2764}\u{FE0F}", "\u{1F3F4}\u{E0067}\u{E0062}\u{E007F}"] {
+        for s in [
+            "\u{1F469}\u{200D}\u{1F4BB}",
+            "\u{1F469}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F468}",
+            "\u{2764}\u{FE0F}",
+            "\u{1F3F4}\u{E0067}\u{E0062}\u{E007F}",
+        ] {
             assert!(!has_bad_char(s), "{s:?}");
             assert_eq!(strip_bad(s), s);
         }
