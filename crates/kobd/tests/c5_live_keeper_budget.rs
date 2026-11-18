@@ -1,16 +1,19 @@
-//! C5 liveness audit, keepers: a build that always fails is retried every tick and eats the attempt budget.
+//! A build that always fails is retried every tick and must not eat the keepers' attempt budget.
 //!
-//! `keepers::tick` sorts the due orders by (kind, refund time, id), builds at most `max_attempts` (128) jobs per tick and
-//! STOPS the loop at the budget (`keepers/mod.rs`: `if attempts >= cfg.max_attempts { ...; break; }`). A job that fails to
-//! build (`Err(e) => report.skipped.push(..)`) is counted as an attempt but, unlike an unprofitable one
-//! (`known_unprofitable`), is never remembered, and the matcher's `frozen_until` set is not in the keepers' `excluded`
-//! either. An order whose refund can never be built therefore costs one attempt EVERY tick, and 128 of them in front of the
-//! queue (earliest refund time first, kills before refunds) starve every later refund and kill of the operator.
+//! `keepers::tick` sorts the due orders by (kind, refund time, id), builds at most `max_attempts`
+//! (128) jobs per tick and STOPS the loop at the budget (`keepers/mod.rs`: `if attempts >=
+//! cfg.max_attempts { ...; break; }`). A job that fails to build (`Err(e) =>
+//! report.skipped.push(..)`) is counted as an attempt but, unlike an unprofitable one
+//! (`known_unprofitable`), is never remembered, and the matcher's `frozen_until` set is not in the
+//! keepers' `excluded` either. An order whose refund can never be built therefore costs one attempt
+//! EVERY tick, and 128 of them in front of the queue (earliest refund time first, kills before
+//! refunds) starve every later refund and kill of the operator.
 //!
-//! The cheapest such order: a `refundTip` larger than the order's own value. The numeric gate allows a tip up to 2^60
-//! (`sanity.rs`, `c.range("refundTip", .., 0, MONEY_MAX)`), the listing rules do not look at it, the fee-floor pre-check only
-//! looks at `tip - floor >= minProfit` (a huge tip passes), and `build_refund_order` then fails with
-//! `refund payout would be negative`. A frozen custody (the engine rejects the refund) has the same effect.
+//! The cheapest such order: a `refundTip` larger than the order's own value. The numeric gate
+//! allows a tip up to 2^60 (`sanity.rs`, `c.range("refundTip", .., 0, MONEY_MAX)`), the listing
+//! rules do not look at it, the fee-floor pre-check only looks at `tip - floor >= minProfit` (a
+//! huge tip passes), and `build_refund_order` then fails with `refund payout would be negative`. A
+//! frozen custody (the engine rejects the refund) has the same effect.
 
 #[path = "matcher_common/mod.rs"]
 mod common;
@@ -61,8 +64,9 @@ fn one_unbuildable_order_does_not_stop_the_honest_kill() {
 
 #[test]
 fn a_crowd_of_unbuildable_refunds_cannot_starve_the_keeper() {
-    // C5: expected to fail until failed builds are remembered per (order, outpoint) like `known_unprofitable` (or the attempt
-    // budget is spent fairly, e.g. a rotating start), and possibly-frozen orders get the matcher's `frozen_until` backoff.
+    // Failed builds are remembered per (order, outpoint) like `known_unprofitable` (or the attempt
+    // budget is spent fairly, e.g. a rotating start), and possibly-frozen orders get the matcher's
+    // `frozen_until` backoff.
     let cfg = KeeperConfig::default();
     assert_eq!(cfg.max_attempts, 128);
     let mut orders: Vec<ListedOrder> = (1..=cfg.max_attempts as u32 + 2).map(|n| hostile_kill(n, 1_000)).collect();

@@ -1,11 +1,13 @@
-//! C5 liveness audit: behaviour the audit found CORRECT, pinned so a later change cannot break it.
+//! Indexer views and keeper plans whose behaviour is correct, pinned so a later change keeps it.
 //!
-//! 1. A sell-first repeating `KobIfdAsk` with `amountLeft = 0` (no custody): the view serves its decoded state, the entry's
-//!    extension commitment, `custody { ok, utxo: null }` and `refund_due_daa`; the matcher's listed order has no custody and
-//!    the keeper plans a `close` at exactly that DAA (not one DAA earlier).
-//! 2. An order of a token that is NOT on the allowlist is unlisted (never offered to the matcher / keepers) but still
-//!    indexed: its view carries the proven custody state and the maker's cancel built from the view alone validates in the
-//!    script engine (docs/ops/executor.md: "Unlisted orders are still indexed and queryable by covenant id").
+//! 1. A sell-first repeating `KobIfdAsk` with `amountLeft = 0` (no custody): the view serves its
+//!    decoded state, the entry's extension commitment, `custody { ok, utxo: null }` and
+//!    `refund_due_daa`; the matcher's listed order has no custody and the keeper plans a `close` at
+//!    exactly that DAA (not one DAA earlier).
+//! 2. An order of a token that is NOT on the allowlist is unlisted (never offered to the matcher /
+//!    keepers) but still indexed: its view carries the proven custody state and the maker's cancel
+//!    built from the view alone validates in the script engine (docs/ops/executor.md: "Unlisted
+//!    orders are still indexed and queryable by covenant id").
 
 mod common;
 

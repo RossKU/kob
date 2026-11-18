@@ -1,6 +1,7 @@
-//! The listing gate (`sanity::check`) for states no order should be listed with: a stop entry whose trigger is beyond its
-//! limit (armable, never fillable: C6-6), and a state built in memory with a number the 8-byte state pushes cannot carry
-//! (`i64::MIN` in a field its mode does not read: every builder would fail to encode it, C6-3).
+//! The listing gate (`sanity::check`) for states no order should be listed with: a stop entry whose
+//! trigger is beyond its limit (armable, never fillable), and a state built in memory with a number
+//! the 8-byte state pushes cannot carry (`i64::MIN` in a field its mode does not read: every
+//! builder would fail to encode it).
 
 use kob_protocol::state::*;
 use kobd::sanity::check;
@@ -27,15 +28,17 @@ fn an_unencodable_state_is_not_listed() {
     assert_eq!(check(&AnyState::KobAsk(s)).unwrap_err(), "bad_state:encoding:unencodable");
 }
 
-/// Live TN10 shapes (2026-10-06, protocol v3, prices per whole token): market orders of TETH and TBTC are IOC auctions over
-/// 300 DAA from the touch (rise for a buy, decay for a sell; a pair market order decays in B per whole A). Their slopes (1e9 to
-/// 3e10 per DAA) passed the protocol's builder gate but the listing gate bounded `slope x (2^34 / decayStep)` by 2^60, as if
-/// the path were evaluated for 545 years, and left every one unlisted (`bad_state:slope:overflow`): never matched, never
-/// killed, the escrow locked until the maker cancelled. The matcher evaluates a path only before the order's refund time
-/// (`t < refund_due <= expiryDaa`, from `origin >= activeFrom`), so the gate bounds the product over that window. The pair
-/// order carries today's `sExt` (the commitment of its custody; zero, as its `tExt`), the ask today's
-/// `extensionCommitment` (zero).
-/// The token template fields name the current `KCC20Ref_8x8` (the shapes were recorded under the program built from the
+/// Live TN10 shapes (protocol v3, prices per whole token): market orders of TETH and TBTC are IOC
+/// auctions over 300 DAA from the touch (rise for a buy, decay for a sell; a pair market order
+/// decays in B per whole A). Their slopes (1e9 to 3e10 per DAA) pass the protocol's builder gate,
+/// so the listing gate must list them: it bounds `slope x (window / decayStep)` by 2^60 over the
+/// window in which the matcher evaluates a path, not over `2^34 / decayStep` (545 years), which
+/// would leave every one unlisted (`bad_state:slope:overflow`): never matched, never killed, the
+/// escrow locked until the maker cancelled. The matcher evaluates a path only before the order's
+/// refund time (`t < refund_due <= expiryDaa`, from `origin >= activeFrom`), so the gate bounds the
+/// product over that window. The pair order carries today's `sExt` (the commitment of its custody;
+/// zero, as its `tExt`), the ask today's `extensionCommitment` (zero). The token template fields
+/// name the current `KCC20Ref_8x8` (the shapes were recorded under the program built from the
 /// unmerged reference; only the template hash and suffix length differ).
 const LIVE_TETH_RISE_BID: &str = r#"{"kind":"KobBid","state":{"activeFrom":"589237500","decayStep":"1","deliveryCarrier":"1000000000","expiryDaa":"589237800","extensionCommitment":"0000000000000000000000000000000000000000000000000000000000000000","interval":"0","maker":"19d7e0528509a5b9b523b8fefb1617833e09f82b32af4d31ca67a3f65ffe22e8","maxFill":"0","minFill":"1","price":"6323507075544","priceEnd":"6513212287810","refundTip":"5000000","reserve":"0","scale":"100000000","slope":"948526062","tif":"1","tip":"0","tokenCovId":"827f13e92508094b97d367b4dd9ff95377255c4b163e39a3feebc431baea0926","tokenTplHash":"666da060d02663939efdc534ea10cce219e5564af86f4cc8eeea2ca129f7c032","tplPrefixLen":"1","tplSuffixLen":"6237"}}"#;
 const LIVE_TBTC_DECAY_ASK: &str = r#"{"kind":"KobAsk","state":{"activeFrom":"589237229","amountLeft":"844","decayStep":"1","expiryDaa":"589237529","extensionCommitment":"0000000000000000000000000000000000000000000000000000000000000000","interval":"0","maker":"3d457cd98b931431d5998084909cd17d616a2a4e1d87545f45d97fed08b925a3","maxFill":"0","minFill":"1","price":"200132824074995","priceEnd":"194128839352746","refundTip":"5000000","scale":"100000000","slope":"30019923612","tif":"1","tip":"0","tokenCovId":"7832859429d5a9ef5778a31af8371daaa94fd6f49069d90d1c85a8e8fc257754","tokenTplHash":"666da060d02663939efdc534ea10cce219e5564af86f4cc8eeea2ca129f7c032","tplPrefixLen":"1","tplSuffixLen":"6237"}}"#;
@@ -76,9 +79,11 @@ fn a_decay_path_is_still_bounded_over_a_long_window() {
     assert_eq!(check(&AnyState::KobPair(p_gtc)).unwrap_err(), "bad_state:slope:overflow");
 }
 
-/// Audit 2026-10-29 F1: the `interval` of an order is the DAA its slice opens after its UTXO's, and a trigger reads it out of the evidence
-/// order's own state. A negative one (a raw-built order: nothing in the covenant validates a creation) would count as rested at once, so no
-/// order carrying one is listed, planned or offered to a matcher as evidence (`bad_state:interval`); the library builders refuse it too.
+/// The `interval` of an order is the DAA its slice opens after its UTXO's, and a trigger reads it
+/// out of the evidence order's own state. A negative one (a raw-built order: nothing in the
+/// covenant validates a creation) would count as rested at once, so no order carrying one is
+/// listed, planned or offered to a matcher as evidence (`bad_state:interval`); the library builders
+/// refuse it too.
 #[test]
 fn an_order_with_a_negative_interval_is_not_listed_and_so_is_never_evidence() {
     for iv in [-1, -1_000_000_000_000] {
