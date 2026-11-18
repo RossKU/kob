@@ -8,7 +8,7 @@ import type { OrderStatus } from '../../data/indexer-types';
 import type { AnyState, OrderState } from '../../kob/types';
 import { loadKobNode } from '../../kob/wasm.node';
 import { MAKER, orderViewOf, placeGolden } from '../../testing/chain-fixtures';
-import { buildEntries, countByStatus, describeEntry, entryState, recordsToResolve, type OrderTypeKey } from './orders-model';
+import { buildEntries, isOwnFill, ownOrderIds, countByStatus, describeEntry, entryState, recordsToResolve, type OrderTypeKey } from './orders-model';
 import { buildListItems, filterItems, tabCounts } from './list-model';
 
 const kob = loadKobNode();
@@ -431,5 +431,17 @@ describe('a Collected bid holding what it bought (bid-delivery-spec §10)', () =
     const { row } = rowOf('create.ask');
     expect(row.delivery).toBeNull();
     expect(row.bought).toBeNull();
+  });
+});
+
+describe('own fill notices (Portfolio reload)', () => {
+  const own = ownOrderIds([{ id: 'AB' as never }], [{ covenantId: 'cd' as never }]);
+  it('matches the wallet orders, either case', () => {
+    expect(isOwnFill(own, { order: 'ab' })).toBe(true);
+    expect(isOwnFill(own, { order: 'CD' })).toBe(true);
+  });
+  it('ignores the fills of other orders and notices without an order', () => {
+    expect(isOwnFill(own, { order: 'ef' })).toBe(false);
+    expect(isOwnFill(own, {})).toBe(false);
   });
 });

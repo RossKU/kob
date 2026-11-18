@@ -60,7 +60,7 @@ import {
   abandoningOrders, abandonsStrays, describeActionError, liveExitsOfRepeatEntry, markCancelling, mergeFlow, rawActionError, planCancelFor, planCancelMany, planMergeFor,
   planRefundFor, planSweepFor, planSweepMany, warnEntryOnly,
 } from './actions';
-import { amendKind, describeEntries, entryState, countByStatus, type OrderRowModel } from './orders-model';
+import { amendKind, describeEntries, entryState, countByStatus, isOwnFill, ownOrderIds, type OrderRowModel } from './orders-model';
 import { buildListItems, cancellableIds, filterItems, itemMemberIds, tabCounts } from './list-model';
 import { ORDER_SORT_KEYS, orderColumns, orderSortValue, orderEnded, orderTotalKas, type OrderSortKey } from './orders-sort';
 import { loadOrderEvents, loadOrders, type OrdersData } from './orders-data';
@@ -142,7 +142,9 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     },
     [pubkey, wallet.records, services],
   );
-  useLiveRefresh(services, ['fills'], () => true, data.refresh, REFRESH_MS);
+  // a fill reloads the list only when it names one of the wallet's own orders (an entry or a placement record), not every fill of the market
+  const ownIds = useRef<ReadonlySet<string>>(new Set());
+  useLiveRefresh(services, ['fills'], (e) => isOwnFill(ownIds.current, e), data.refresh, REFRESH_MS);
 
   const tab: PortfolioTab = embed ? embedTab : (props.tab ?? 'balances');
   const setTab = (next: PortfolioTab) => (embed ? setEmbedTab(next) : navigate({ name: 'portfolio', tab: next }));
@@ -208,6 +210,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const [sweepFollowUp, setSweepFollowUp] = useState<{ pending: boolean; retry: () => void } | null>(null);
 
   const d = late && late.base === data.data ? late.next : (data.data ?? null);
+  ownIds.current = ownOrderIds(d?.entries ?? [], d?.records ?? []);
   // the wallet's balances, read once for the page: the summary strip over the tabs and the Balances tab show the same figures
   const balances = useWalletBalances(d, pubkey, data.data ?? null);
   // the USD display (Settings): the summary's KAS values in dollars; null = KAS

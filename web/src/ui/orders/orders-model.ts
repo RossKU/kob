@@ -38,6 +38,14 @@ export interface OrderEntry {
   resolved: ResolvedRecord | null;
 }
 
+/** The covenant ids (lower case) of the wallet's orders: the list's entries and its placement records. */
+export function ownOrderIds(entries: readonly Pick<OrderEntry, 'id'>[], records: readonly Pick<PlacementRecord, 'covenantId'>[]): Set<string> {
+  return new Set([...entries.map((e) => e.id), ...records.map((r) => r.covenantId)].map((id) => id.toLowerCase()));
+}
+
+/** A fill notice that concerns the wallet: it names one of its orders. */
+export const isOwnFill = (own: ReadonlySet<string>, e: { order?: string }): boolean => !!e.order && own.has(e.order.toLowerCase());
+
 const bi = (v: string | number | bigint | null | undefined): bigint | null => (v === null || v === undefined ? null : BigInt(v));
 const big0 = (v: string | number | bigint | null | undefined): bigint => bi(v) ?? 0n;
 
