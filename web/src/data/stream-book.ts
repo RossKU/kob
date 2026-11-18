@@ -1,16 +1,28 @@
-// The order book of standalone mode (data/standalone.ts): the resting orders the indexer gave before the mode (asked on the node at once), the orders
-// the browser saw placed (or followed) in the node's new blocks since the stream started, and the wallet's own orders resolved from its receipts; a
-// placement is CONFIRMED on the node before it is listed. Pure: no timers, no node.
+// The order book of standalone mode (data/standalone.ts). It is pure, with no timers and no node.
 //
-// What is listed, per token (the indexer's `/v1/books` rules as far as the browser can apply them, crates/kobd/src/indexer/reads.rs and
-// tokens.rs `ListingRules`): a plain ask or bid (kob/stream-orders.ts `STREAM_KINDS`) that the node confirmed, good till cancelled (no IOC / FOK: they
-// do not rest), without an auction (its price is its limit), active and not expired at the newest block's DAA score, before its day-order deadline,
-// worth at least MIN_ORDER_VALUE_SOMPI (the executor's default `min_order_value_sompi`; an order the indexer listed before the mode keeps the verdict of
-// the executor it reads), an ask with its custody; an order of a registry token only
-// with the registry's program, extension commitment and scale. Everything else stays out: a smaller book is the safe side.
+// It holds three kinds of entries:
+// - the resting orders the indexer gave before the mode, asked on the node at once,
+// - the orders the browser saw placed or followed in the node's new blocks since the stream
+//   started,
+// - the wallet's own orders, resolved from its receipts.
+// A placement is confirmed on the node before it is listed.
 //
-// The views have the indexer's response shapes (`BookView`, `OrderView`, `IndexerTokenView`), so the market page, the order ticket and the book check
-// (app/book-verify.ts: the node is asked again before an order is taken) read them unchanged.
+// Per token it lists what the indexer's `/v1/books` rules would, as far as the browser can apply
+// them (crates/kobd/src/indexer/reads.rs and tokens.rs `ListingRules`). An order is listed only
+// when it is:
+// - a plain ask or bid (kob/stream-orders.ts `STREAM_KINDS`) that the node confirmed,
+// - good till cancelled, because IOC and FOK orders do not rest, or a curve sell order,
+// - without an auction, so its price is its limit,
+// - active and not expired at the newest block's DAA score, and before its day-order deadline,
+// - worth at least MIN_ORDER_VALUE_SOMPI, the executor's default `min_order_value_sompi`. An
+//   order the indexer listed before the mode keeps the verdict of the executor it reads.
+// - for an ask, held with its custody,
+// - for a registry token, under the registry's program, extension commitment and scale.
+// Everything else stays out, because a smaller book is the safe side.
+//
+// The views have the indexer's response shapes (`BookView`, `OrderView`, `IndexerTokenView`). So
+// the market page, the order ticket and the book check read them unchanged. The book check
+// (app/book-verify.ts) asks the node again before an order is taken.
 import type { BookOrderView, BookView, IndexerTokenView, LevelView, OrderView, TokenUtxoView } from './indexer-types';
 import type { OrderSnapshot } from '../kob/cancel';
 import { describeOrder, extensionOf } from '../kob/order-facts';
@@ -21,37 +33,54 @@ import { quoteOf } from '../kob/units';
 import { curveLevelsLeft } from '../kob/curve';
 import type { KobWasm } from '../kob/wasm';
 
-/** The least an order is worth (its amount at its price; a bid: its escrow) to be listed, sompi: the executor's default (1 KAS). */
+/**
+ * The least an order is worth to be listed, in sompi: the executor's default of 1 KAS. An ask is
+ * worth its amount at its price, a bid its escrow.
+ */
 export const MIN_ORDER_VALUE_SOMPI = 100_000_000n;
-/** Most orders a streamed book holds; past it the oldest unconfirmed, then the oldest confirmed ones are forgotten. */
+/**
+ * The most orders a streamed book holds. Past it the oldest unconfirmed entries are forgotten
+ * first, then the oldest confirmed ones, and the wallet's own orders last.
+ */
 export const MAX_STREAM_ORDERS = 2_000;
 
-/** `stream`: seen placed (or followed) in a block; `receipt`: the wallet's own order, resolved on the node from its receipt; `indexer`: a resting order the indexer gave before the mode (data/stream-carry.ts), asked on the node at once. */
+/**
+ * Where an entry came from.
+ * - `stream`: seen placed or followed in a block.
+ * - `receipt`: the wallet's own order, resolved on the node from its receipt.
+ * - `indexer`: a resting order the indexer gave before the mode (data/stream-carry.ts), asked on
+ *   the node at once.
+ */
 export type StreamOrigin = 'stream' | 'receipt' | 'indexer';
 
+/** One order of the streamed book. */
 export interface StreamEntry {
   snap: OrderSnapshot;
-  /** the node confirmed `snap` (the order UTXO, and an ask's custody, exist unspent at the scripts its state derives) */
+  /**
+   * Whether the node confirmed `snap`, meaning the order UTXO, and an ask's custody, exist unspent
+   * at the scripts its state derives.
+   */
   confirmed: boolean;
   origin: StreamOrigin;
-  /** where the order was placed (null: unknown, a receipt without it) */
+  /** Where the order was placed. Null parts are unknown, as for a receipt without them. */
   genesis: { txid: Hex | null; out: number | null; daa: bigint };
-  /** amountLeft when first seen (the filled amount shown is measured from there) */
+  /** amountLeft when first seen. The filled amount shown is measured from there. */
   firstAmount: bigint | null;
-  /** when it was first seen, ms */
+  /** When it was first seen, in ms. */
   seenMs: number;
-  /** node checks that did not confirm it, in a row (an unconfirmed entry is dropped after a few) */
+  /** Node checks in a row that did not confirm it. An unconfirmed entry is dropped after a few. */
   misses: number;
 }
 
-/** The registry's facts of a token (an order of a registry token is listed only with them). */
+/** The registry's facts of a token. An order of a registry token is listed only with them. */
 export interface RegistryFacts { templateHash: Hex; extensionCommitment: Hex | null; scale: bigint | null }
 
+/** What a listing decision needs besides the entry. */
 export interface ListingContext {
   kob: KobWasm;
-  /** the newest block's DAA score */
+  /** The newest block's DAA score. */
   daa: bigint;
-  /** wall clock, unix seconds (day-order deadlines) */
+  /** The wall clock in unix seconds, for day-order deadlines. */
   nowUnix: bigint;
   registry?: (token: Hex) => RegistryFacts | null;
 }
@@ -59,7 +88,10 @@ export interface ListingContext {
 const ZERO32 = '0'.repeat(64);
 const s64 = (v: bigint | null | undefined): number | null => (v === null || v === undefined ? null : Number(v));
 
-/** One listable order: its side, price and amount (an ask: its custody; a bid: what its escrow buys, an estimate). */
+/**
+ * One listable order with its side, price and amount. An ask's amount is its custody. A bid's is
+ * what its escrow buys, an estimate.
+ */
 export interface Listing {
   entry: StreamEntry;
   token: Hex;
@@ -68,11 +100,11 @@ export interface Listing {
   scale: bigint;
   amount: bigint;
   estimated: boolean;
-  /** a curve sell order: its remaining levels (each a row of its own), the current first */
+  /** The remaining levels of a curve sell order, each a row of its own, the current first. */
   levels?: { level: number; price: bigint; amount: bigint }[];
 }
 
-/** Whether a confirmed entry is part of the book now, and as what (pure). */
+/** Whether a confirmed entry is part of the book now, and as what. It is pure. */
 export function listingOf(e: StreamEntry, ctx: ListingContext): Listing | null {
   if (!e.confirmed) return null;
   const st = e.snap.order.state;
@@ -82,7 +114,7 @@ export function listingOf(e: StreamEntry, ctx: ListingContext): Listing | null {
   } catch {
     return null;
   }
-  // a curve has no time in force (it rests until sold out or cancelled)
+  // A curve has no time in force. It rests until sold out or cancelled.
   if (d.pair || d.trigger || d.entry || (d.tif !== 'gtc' && !d.curve) || d.auction) return null;
   if (d.activeFrom > ctx.daa || (d.expiryDaa > 0n && ctx.daa >= d.expiryDaa)) return null;
   if (e.snap.deadline !== null && e.snap.deadline <= ctx.nowUnix) return null;
@@ -96,13 +128,14 @@ export function listingOf(e: StreamEntry, ctx: ListingContext): Listing | null {
     if (reg.scale !== null && reg.scale !== d.scale) return null;
   }
   const value = BigInt(e.snap.order.amount);
-  // an order the indexer listed (kept from before the mode) passed the listing rule of the executor it reads: its own minimum, not the default one
+  // An order the indexer listed, kept from before the mode, passed the listing rule of the executor
+  // it reads. That rule has its own minimum, not the default one.
   const min = e.origin === 'indexer' ? 1n : MIN_ORDER_VALUE_SOMPI;
   if (d.side === 'sell') {
     if (!e.snap.custody) return null;
     const amount = BigInt(e.snap.custody.state.amount);
     if (amount <= 0n || quoteOf(amount, d.price, d.scale, 'down') < min) return null;
-    // an unbound curve (made in its token's genesis) names no token: its custody's is it
+    // An unbound curve, made in its token's genesis, names no token. Its custody's token is it.
     const c = d.curve;
     const token = c?.unbound ? (e.snap.custody.covenantId ?? d.tokenCovId) : d.tokenCovId;
     return { entry: e, token, side: 'sell', price: d.price, scale: d.scale, amount, estimated: false, ...(c ? { levels: curveLevelsLeft(c.levelSize, c.table, c.total, amount) } : {}) };
@@ -118,14 +151,14 @@ export function listingOf(e: StreamEntry, ctx: ListingContext): Listing | null {
   return { entry: e, token: d.tokenCovId, side: 'buy', price: d.price, scale: d.scale, amount, estimated: true };
 }
 
-/** Price per base unit, compared exactly: `a.price / a.scale` against `b.price / b.scale`. */
+/** Compares the price per base unit exactly, `a.price / a.scale` against `b.price / b.scale`. */
 const cmpPrice = (a: Listing, b: Listing): number => {
   const l = a.price * b.scale;
   const r = b.price * a.scale;
   return l < r ? -1 : l > r ? 1 : 0;
 };
 
-/** Asks ascending, bids descending; within a price the order seen first, then the covenant id. */
+/** Asks ascending, bids descending. Within a price, the order seen first, then the covenant id. */
 function sorted(rows: Listing[], side: 'sell' | 'buy'): Listing[] {
   return rows.sort((a, b) => {
     const p = cmpPrice(a, b);
@@ -148,7 +181,7 @@ function rowOf(l: Listing, ctx: ListingContext): BookOrderView {
   };
 }
 
-/** Rows of one price and scale as one level (the indexer's `aggregate=true`). */
+/** Rows of one price and scale as one level, as the indexer's `aggregate=true` gives them. */
 function levelsOf(rows: BookOrderView[]): LevelView[] {
   const out: LevelView[] = [];
   for (const r of rows) {
@@ -162,7 +195,10 @@ function levelsOf(rows: BookOrderView[]): LevelView[] {
   return out;
 }
 
-/** The streamed book of `token` (`/v1/books/{token}`: one row per order, or levels with `aggregate`), at most `depth` rows or levels per side. */
+/**
+ * The streamed book of `token` as `/v1/books/{token}` gives it, one row per order or levels with
+ * `aggregate`. It has at most `depth` rows or levels per side.
+ */
 export function bookViewOf(entries: Iterable<StreamEntry>, token: Hex, ctx: ListingContext, q: { depth?: number; aggregate?: boolean } = {}): BookView {
   const t = token.toLowerCase();
   const asks: Listing[] = [];
@@ -170,7 +206,7 @@ export function bookViewOf(entries: Iterable<StreamEntry>, token: Hex, ctx: List
   for (const e of entries) {
     const l = listingOf(e, ctx);
     if (!l || l.token.toLowerCase() !== t) continue;
-    // a curve: one listing per remaining level, each at its price with its size
+    // A curve gives one listing per remaining level, each at its price with its size.
     const ls = l.levels ? l.levels.map((lv) => ({ ...l, price: lv.price, amount: lv.amount, levels: [lv] })) : [l];
     (l.side === 'sell' ? asks : bids).push(...ls);
   }
@@ -190,7 +226,10 @@ function tokenUtxoView(u: NonNullable<OrderSnapshot['custody']>, owner: Hex, rol
   };
 }
 
-/** The `/v1/orders/{id}` view of an entry (its current state proven by the node): what the book check and the ticket read. */
+/**
+ * The `/v1/orders/{id}` view of an entry, whose current state the node proved. The book check and
+ * the ticket read it.
+ */
 export function orderViewOf(e: StreamEntry, ctx: Pick<ListingContext, 'kob'>): OrderView {
   const snap = e.snap;
   const st = snap.order.state;
@@ -223,8 +262,10 @@ export function orderViewOf(e: StreamEntry, ctx: Pick<ListingContext, 'kob'>): O
 }
 
 /**
- * The tokens with listed orders (`/v1/tokens`): no ticker, no decimals and no scale of their own (a registry entry or a verified declaration names
- * them); a token whose orders pin different programs or extension commitments is listed without one (`program_ambiguous`).
+ * The tokens with listed orders, as `/v1/tokens` gives them. They have no ticker, no decimals and
+ * no scale of their own, because a registry entry or a verified declaration names those. A token
+ * whose orders pin different programs or extension commitments is listed without one. Different
+ * programs also set `program_ambiguous`.
  */
 export function tokensViewOf(entries: Iterable<StreamEntry>, ctx: ListingContext): IndexerTokenView[] {
   const by = new Map<Hex, { tpls: Set<Hex>; exts: Set<Hex>; asks: number; bids: number; family: 'kcc20' | 'kron' }>();
@@ -253,8 +294,11 @@ export function tokensViewOf(entries: Iterable<StreamEntry>, ctx: ListingContext
 }
 
 /**
- * The book's entries and an index of the outpoints they hold (pure). `put` adds or replaces an entry (a replacement waits for the node again unless it
- * is confirmed), `confirm` / `miss` record the node's answer, `touched` names the entries a transaction's inputs spend.
+ * The book's entries and an index of the outpoints they hold. It is pure.
+ * - `put` adds or replaces an entry. A replacement waits for the node again unless it is
+ *   confirmed.
+ * - `confirm` and `miss` record the node's answer.
+ * - `touched` names the entries a transaction's inputs spend.
  */
 export class StreamBook {
   private readonly items = new Map<Hex, StreamEntry>();
@@ -278,7 +322,10 @@ export class StreamBook {
     for (const k of outpointsOf(e.snap)) this.byOutpoint.set(k, e.snap.covenantId);
   }
 
-  /** Adds or replaces the entry of `snap.covenantId` (a new state: unconfirmed until the node answers, the first sighting kept). */
+  /**
+   * Adds or replaces the entry of `snap.covenantId`. A new state is unconfirmed until the node
+   * answers, and the first sighting is kept.
+   */
   put(snap: OrderSnapshot, o: { origin: StreamOrigin; genesis?: StreamEntry['genesis']; nowMs: number; confirmed?: boolean }): StreamEntry {
     const id = snap.covenantId.toLowerCase() as Hex;
     const old = this.items.get(id);
@@ -287,7 +334,7 @@ export class StreamBook {
     const e: StreamEntry = {
       snap: { ...snap, covenantId: id },
       confirmed: o.confirmed ?? false,
-      // an own order learned from its receipt stays one when the stream follows it
+      // An own order learned from its receipt stays one when the stream follows it.
       origin: old?.origin === 'receipt' ? 'receipt' : o.origin,
       genesis: old?.genesis ?? o.genesis ?? { txid: null, out: null, daa: BigInt(snap.order.blockDaaScore ?? 0) },
       firstAmount: old ? old.firstAmount : left,
@@ -300,7 +347,10 @@ export class StreamBook {
     return e;
   }
 
-  /** The node confirmed the entry's snapshot (`snap` as confirmed: its amounts are the node's). False when the entry changed meanwhile. */
+  /**
+   * Records that the node confirmed the entry's snapshot. `snap` is as confirmed, so its amounts
+   * are the node's. False when the entry changed meanwhile.
+   */
   confirm(covenantId: Hex, snap: OrderSnapshot): boolean {
     const e = this.items.get(covenantId.toLowerCase());
     if (!e || e.snap.order.transactionId !== snap.order.transactionId || e.snap.order.index !== snap.order.index) return false;
@@ -312,7 +362,10 @@ export class StreamBook {
     return true;
   }
 
-  /** The node did not confirm the entry: counted; it is removed after `limit` misses in a row (true when removed). */
+  /**
+   * Records that the node did not confirm the entry. It is removed after `limit` misses in a row,
+   * and then this returns true.
+   */
   miss(covenantId: Hex, limit: number): boolean {
     const e = this.items.get(covenantId.toLowerCase());
     if (!e) return false;
@@ -331,7 +384,7 @@ export class StreamBook {
     this.items.delete(id);
   }
 
-  /** The entry whose ORDER UTXO is `outpoint` (`txid:index`). */
+  /** The entry whose order UTXO is `outpoint` (`txid:index`). */
   orderAt(outpoint: string): StreamEntry | undefined {
     const id = this.byOutpoint.get(outpoint);
     const e = id ? this.items.get(id) : undefined;

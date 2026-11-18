@@ -1,34 +1,47 @@
-// What the page already read from the indexer in this session, kept for standalone mode (data/standalone.ts). When the page goes standalone (the
-// switch in Settings, or the automatic fallback when the indexer cannot be used) it does not drop that: the candles, trades and 24 h figures of a
-// market already loaded, the token facts of the list (an open-list token's decimals come from the indexer's market scale) and the activity rows
-// stay, and what the node shows afterwards is merged into them. Nothing is asked of the indexer here: this only remembers answers it already gave
-// (`modeIndexer` records them while the indexer is in use), so the trust is the one those answers had before the switch.
+// What the page already read from the indexer in this session, kept for standalone mode
+// (data/standalone.ts).
 //
-// The resting orders of a market are kept too (its `/v1/orders?token=&status=active` answer, read beside its book, and every `/v1/orders/{id}` answer):
-// standalone mode starts its book from them instead of from nothing. That is never trust in the indexer's word: the mode lists such an order only while
-// the node holds it (each one is checked on the node at once and again with every recheck, a spend in a block takes it out), and an order is taken only
-// after the book check confirms it on the node again (app/book-verify.ts). The indexer's data wins again once it is back (the node's collected data is
-// dropped, the carry goes on recording what the indexer says).
+// When the page goes standalone, by the switch in Settings or by the automatic fallback when the
+// indexer cannot be used, it does not drop that. What stays:
+// - the candles, trades and 24 h figures of a market already loaded,
+// - the token facts of the list, since an open-list token's decimals come from the indexer's
+//   market scale,
+// - the activity rows.
+// What the node shows afterwards is merged into them. Nothing is asked of the indexer here. This
+// only remembers answers it already gave, which `modeIndexer` records while the indexer is in use.
+// So the trust is the one those answers had before the switch.
+//
+// The resting orders of a market are kept too. They come from its
+// `/v1/orders?token=&status=active` answer, read beside its book, and from every
+// `/v1/orders/{id}` answer. Standalone mode starts its book from them instead of from nothing.
+// That is never trust in the indexer's word. The mode lists such an order only while the node
+// holds it. Each one is checked on the node at once and again with every recheck, and a spend in a
+// block takes it out. An order is taken only after the book check confirms it on the node again
+// (app/book-verify.ts). The indexer's data wins again once it is back. The node's collected data
+// is then dropped, and the carry goes on recording what the indexer says.
 import type { CandleInterval, CandleView, CandlesView, IndexerTokenView, OrderView, StatsView, TradeView, TradesView } from './indexer-types';
 import type { Hex } from '../kob/types';
 import type { RegistryFacts } from './stream-book';
 
-/** Most bars kept per token and interval (the chart's own limit). */
+/** Most bars kept per token and interval, the chart's own limit. */
 const MAX_BARS = 1500;
-/** Most markets whose figures are kept (the least recently read go first). */
+/** Most markets whose figures are kept. The least recently read go first. */
 const MAX_MARKETS = 200;
 /** Most resting orders kept per market. */
 const MAX_ORDERS = 500;
-/** The resting orders of a market are read again at most this often (a read of its book asks for them). */
+/**
+ * The resting orders of a market are read again at most this often. A read of its book asks for
+ * them.
+ */
 export const ORDERS_READ_MS = 60_000;
 /** Most parked stores of the activity log. */
 const MAX_PARKED = 24;
 const DAY_MS = 86_400_000;
 
 interface MarketCarry {
-  /** sompi per this many base units (every carried figure of the market is priced on it) */
+  /** The price basis, sompi per this many base units. Every carried figure of the market has it. */
   basis: bigint;
-  /** when the last of these answers was read, ms */
+  /** When the last of these answers was read, in ms. */
   at: number;
   trades: { at: number; items: TradeView[] } | null;
   candles: Map<CandleInterval, Map<number, CandleView>>;
@@ -38,13 +51,14 @@ interface MarketCarry {
 const hasCustody = (v: OrderView): boolean => !!v.custody?.utxo;
 const sameOutpoint = (a: OrderView, b: OrderView): boolean => !!a.current && !!b.current && a.current.txid === b.current.txid && a.current.index === b.current.index;
 
-/** An order of `token`'s KAS book that rests (open or partly filled, listed). */
+/** Whether `v` rests in `token`'s KAS book, meaning open or partly filled, and listed. */
 const isResting = (v: OrderView, token: Hex): boolean =>
   typeof v.covenant_id === 'string' && typeof v.token === 'string' && v.token.toLowerCase() === token && (v.status === 'open' || v.status === 'partial') && v.listed !== false && v.in_book !== false && !v.expired;
 
 const posBig = (s: string): bigint | null => (/^[1-9]\d*$/.test(s) ? BigInt(s) : null);
 const isPow10 = (n: number): boolean => Number.isInteger(n) && n >= 1 && n <= 1_000_000_000 && /^10*$/.test(String(n));
 
+/** The indexer answers kept for standalone mode. */
 export class IndexerCarry {
   private tokenRows = new Map<Hex, IndexerTokenView>();
   private tokensRead: number | null = null;
@@ -55,9 +69,9 @@ export class IndexerCarry {
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  // ------------------------------------------------------------------------------------------ recording (the indexer in use)
+  // --- Recording, while the indexer is in use ---
 
-  /** The token list the indexer gave (all of it: a later read replaces it). */
+  /** Records the token list the indexer gave. It is all of it, so a later read replaces it. */
   recordTokens(rows: readonly IndexerTokenView[]): void {
     this.tokenRows = new Map(rows.map((r) => [r.covenant_id.toLowerCase(), r]));
     this.tokensRead = this.now();
@@ -68,7 +82,8 @@ export class IndexerCarry {
     if (b === null) return null;
     const id = token.toLowerCase();
     let m = this.markets.get(id);
-    // another price basis: the carried figures are priced differently, so none of them mixes with the new ones
+    // Another price basis prices the carried figures differently, so none of them mixes with the
+    // new ones.
     if (m && m.basis !== b) m = undefined;
     if (!m) {
       m = { basis: b, at: 0, trades: null, candles: new Map(), stats: null };
@@ -80,14 +95,17 @@ export class IndexerCarry {
     return m;
   }
 
-  /** The newest page of trades (a page read further back is not kept). */
+  /** Records the newest page of trades. A page read further back is not kept. */
   recordTrades(token: Hex, q: { before?: unknown } | undefined, v: TradesView | null): void {
     if (!v || (q && q.before !== undefined && q.before !== null)) return;
     const m = this.market(token, v.price_basis);
     if (m) m.trades = { at: m.at, items: v.items };
   }
 
-  /** Bars: a full load replaces the series, a load from a bucket replaces the bars from there on (the chart's own incremental rule). */
+  /**
+   * Records bars. A full load replaces the series. A load from a bucket replaces the bars from
+   * there on, which is the chart's own incremental rule.
+   */
   recordCandles(token: Hex, q: { interval: CandleInterval; from?: number } | undefined, v: CandlesView | null): void {
     if (!v) return;
     const m = this.market(token, v.price_basis);
@@ -109,8 +127,10 @@ export class IndexerCarry {
   }
 
   /**
-   * The resting orders of a market the indexer gave (`/v1/orders?token=&status=active`): they replace what was kept of it. The list does not carry an
-   * ask's custody (only `/v1/orders/{id}` does): a kept view of the same order at the same outpoint that has it stays (`needsCustody` names the others).
+   * Records the resting orders of a market the indexer gave (`/v1/orders?token=&status=active`).
+   * They replace what was kept of it. The list does not carry an ask's custody, which only
+   * `/v1/orders/{id}` does. So a kept view of the same order at the same outpoint that has it
+   * stays, and `needsCustody` names the others.
    */
   recordOrders(token: Hex, views: readonly OrderView[]): void {
     const id = token.toLowerCase() as Hex;
@@ -127,7 +147,10 @@ export class IndexerCarry {
     while (this.orderViews.size > MAX_MARKETS) this.orderViews.delete(this.orderViews.keys().next().value!);
   }
 
-  /** One order the indexer gave (`/v1/orders/{id}`): its newest view is kept while it rests, an order that no longer rests is forgotten. */
+  /**
+   * Records one order the indexer gave (`/v1/orders/{id}`). Its newest view is kept while it rests,
+   * and an order that no longer rests is forgotten.
+   */
   recordOrder(v: OrderView | null): void {
     if (!v || typeof v.token !== 'string') return;
     const token = v.token.toLowerCase() as Hex;
@@ -139,7 +162,10 @@ export class IndexerCarry {
     } else this.orderViews.set(token, { at: this.now(), views: new Map([[id, v]]) });
   }
 
-  /** The best (lowest priced) kept asks of `token` without their custody, at most `n`: their full views are read one by one. */
+  /**
+   * The best, lowest priced kept asks of `token` without their custody, at most `n`. Their full
+   * views are read one by one.
+   */
   needsCustody(token: Hex, n: number): Hex[] {
     const m = this.orderViews.get(token.toLowerCase() as Hex);
     if (!m) return [];
@@ -151,7 +177,10 @@ export class IndexerCarry {
       .map((v) => v.covenant_id);
   }
 
-  /** Whether the resting orders of `token` are to be read now (none were for ORDERS_READ_MS); true marks them asked. */
+  /**
+   * Whether the resting orders of `token` are to be read now, because none were for
+   * ORDERS_READ_MS. True marks them asked.
+   */
   ordersDue(token: Hex): boolean {
     const id = token.toLowerCase() as Hex;
     const at = this.ordersAsked.get(id);
@@ -160,31 +189,34 @@ export class IndexerCarry {
     if (this.ordersAsked.size > MAX_MARKETS) this.ordersAsked.delete(this.ordersAsked.keys().next().value!);
     return true;
   }
-  /** The read of `ordersDue` failed: it may be made again at the next read of the book. */
+  /** Records that the read of `ordersDue` failed. It may be made again at the next book read. */
   ordersFailed(token: Hex): void {
     this.ordersAsked.delete(token.toLowerCase() as Hex);
   }
 
-  // ------------------------------------------------------------------------------------------ reading (standalone mode)
+  // --- Reading, in standalone mode ---
 
-  /** The resting orders kept, of every market (the indexer's views, as it gave them). */
+  /** The resting orders kept, of every market, as the indexer gave its views. */
   orders(): OrderView[] {
     return [...this.orderViews.values()].flatMap((m) => [...m.views.values()]);
   }
-  /** When the resting orders of `id` were read from the indexer, ms; null: none were. */
+  /** When the resting orders of `id` were read from the indexer, in ms. Null when none were. */
   ordersAt(id: Hex): number | null {
     return this.orderViews.get(id.toLowerCase() as Hex)?.at ?? null;
   }
 
-  /** The tokens the indexer listed (as it gave them). */
+  /** The tokens the indexer listed, as it gave them. */
   tokens(): IndexerTokenView[] {
     return [...this.tokenRows.values()];
   }
-  /** The indexer's row of a token, or null: it was never listed this session. */
+  /** The indexer's row of a token, or null when it was never listed this session. */
   token(id: Hex): IndexerTokenView | null {
     return this.tokenRows.get(id.toLowerCase()) ?? null;
   }
-  /** When the token list was read (ms), if it names `id` (else null): the facts of that token are as old as that. */
+  /**
+   * When the token list was read, in ms, if it names `id`, else null. The facts of that token are
+   * as old as that.
+   */
   tokenAt(id: Hex): number | null {
     return this.tokenRows.has(id.toLowerCase()) ? this.tokensRead : null;
   }
@@ -193,13 +225,19 @@ export class IndexerCarry {
     return this.tokensRead;
   }
 
-  /** When market figures of `id` (trades, candles, 24 h figures) were last read from the indexer, ms; null: none were. */
+  /**
+   * When market figures of `id` (trades, candles, 24 h figures) were last read from the indexer,
+   * in ms. Null when none were.
+   */
   marketAt(id: Hex): number | null {
     const m = this.markets.get(id.toLowerCase());
     return m && (m.trades || m.stats || m.candles.size) ? m.at : null;
   }
 
-  /** The price basis the indexer gave this token's figures on (they are merged on it), else its market scale or standard scale. */
+  /**
+   * The price basis the indexer gave this token's figures on, which they are merged on. Else it is
+   * its standard scale or its market scale.
+   */
   basisOf(id: Hex): bigint | null {
     const m = this.markets.get(id.toLowerCase());
     if (m) return m.basis;
@@ -208,7 +246,10 @@ export class IndexerCarry {
     return typeof s === 'number' && isPow10(s) ? BigInt(s) : null;
   }
 
-  /** The scale the indexer's row gives the market (the standard scale, else the market scale): the one the token was traded on before the mode. */
+  /**
+   * The scale the indexer's row gives the market, the standard scale else the market scale. It is
+   * the one the token was traded on before the mode.
+   */
   scaleOf(id: Hex): number | null {
     const v = this.tokenRows.get(id.toLowerCase());
     const s = v ? v.scale ?? v.market_scale : null;
@@ -216,8 +257,10 @@ export class IndexerCarry {
   }
 
   /**
-   * The facts the indexer's row of a token gives a streamed order to be listed against: its program, extension commitment and scale (the same facts
-   * the registry gives a registry token). Null without a listed program or when the row names more than one (an ambiguous token is not listed).
+   * The facts the indexer's row of a token gives a streamed order to be listed against. They are
+   * its program, extension commitment and scale, the same facts the registry gives a registry
+   * token. Null without a listed program, or when the row names more than one, because an
+   * ambiguous token is not listed.
    */
   factsOf(id: Hex): RegistryFacts | null {
     const v = this.tokenRows.get(id.toLowerCase());
@@ -237,9 +280,12 @@ export class IndexerCarry {
     return this.markets.get(id.toLowerCase())?.stats ?? null;
   }
 
-  // ------------------------------------------------------------------------------------------ parked views (the activity log)
+  // --- Parked views of the activity log ---
 
-  /** Keeps a view's store under a key (the newest `MAX_PARKED` are kept): standalone mode seeds its own from it. */
+  /**
+   * Keeps a view's store under a key, the newest `MAX_PARKED` of them. Standalone mode seeds its
+   * own from it.
+   */
   park(key: string, store: unknown): void {
     this.parkedStores.delete(key);
     this.parkedStores.set(key, store);
@@ -250,7 +296,7 @@ export class IndexerCarry {
   }
 }
 
-// ------------------------------------------------------------------------------------------ merging with what the node saw (pure)
+// --- Merging with what the node saw (pure) ---
 
 const big = (s: string | null | undefined): bigint | null => (s !== null && s !== undefined && /^\d+$/.test(s) ? BigInt(s) : null);
 const maxOf = (a: string | null, b: string | null): string | null => (a === null ? b : b === null ? a : (big(a) ?? 0n) >= (big(b) ?? 0n) ? a : b);
@@ -258,9 +304,12 @@ const minOf = (a: string | null, b: string | null): string | null => (a === null
 const sum = (a: string | null, b: string | null): string => ((big(a) ?? 0n) + (big(b) ?? 0n)).toString();
 
 /**
- * The carried bars and the bars the node's fills made (`seen`, ascending): a bucket in both opens where the carried one did, closes where the node's did
- * and adds the volumes (the node saw only fills after the carried read). The window rules of `/v1/candles`: `from` / `to` bound the bucket start, the
- * first `limit` bars from `from`, else the newest `limit`.
+ * Merges the carried bars with the bars the node's fills made (`seen`, ascending).
+ *
+ * A bucket in both opens where the carried one did, closes where the node's did, and adds the
+ * volumes, because the node saw only fills after the carried read. The window follows the rules
+ * of `/v1/candles`. `from` and `to` bound the bucket start. The result is the first `limit` bars
+ * from `from`, else the newest `limit`.
  */
 export function mergeCandles(carried: readonly CandleView[], seen: CandlesView, q: { from?: number; to?: number; limit?: number }): CandlesView {
   const limit = Math.max(1, Math.min(q.limit ?? 500, 1500));
@@ -273,7 +322,10 @@ export function mergeCandles(carried: readonly CandleView[], seen: CandlesView, 
   return { ...seen, items: q.from !== undefined ? all.slice(0, limit) : all.slice(-limit) };
 }
 
-/** Trades, newest first: what the node saw, then the carried ones (a transaction in both is the node's). `before` pages only the node's own rows. */
+/**
+ * Trades, newest first: what the node saw, then the carried ones. A transaction in both is the
+ * node's. `before` pages only the node's own rows.
+ */
 export function mergeTrades(carried: readonly TradeView[], seen: TradesView, limit: number): TradesView {
   const have = new Set(seen.items.map((t) => t.txid));
   const older = carried.filter((t) => !have.has(t.txid));
@@ -282,10 +334,14 @@ export function mergeTrades(carried: readonly TradeView[], seen: TradesView, lim
 }
 
 /**
- * The 24 h figures: the carried ones (as the indexer gave them, `ts`) with what the node saw added (`seen`: the node's own figures; its book part is
- * the partial book). The last price is the node's newest fill, else the carried one; the window is the carried window plus what the node saw since,
- * so it is at most 24 h old at the carried read and grows by what has passed since: that is what "indexer data until HH:MM" says. Past 24 h from the
- * carried read none of its window figures is kept (only the last price).
+ * The 24 h figures: the carried ones, as the indexer gave them at `ts`, with what the node saw
+ * added.
+ *
+ * `seen` holds the node's own figures, and its book part is the partial book. The last price is
+ * the node's newest fill, else the carried one. The window is the carried window plus what the
+ * node saw since. So it is at most 24 h old at the carried read and grows by what has passed
+ * since, which is what "indexer data until HH:MM" says. Past 24 h from the carried read, none of
+ * its window figures is kept, only the last price.
  */
 export function mergeStats(carried: StatsView, seen: StatsView, nowMs: number): StatsView {
   const live = nowMs - carried.ts < DAY_MS;
@@ -310,9 +366,11 @@ export function mergeStats(carried: StatsView, seen: StatsView, nowMs: number): 
 }
 
 /**
- * The token list: the node's rows (tokens with orders it saw) and the carried ones. A carried row keeps the indexer's facts (ticker, decimals, scales,
- * powers, warnings, declaration); the order counts are the node's partial book's (0 for a token it saw no order of), a fact the node proved is added to
- * a carried row that lacked it.
+ * The token list: the node's rows, for tokens with orders it saw, and the carried ones.
+ * - A carried row keeps the indexer's facts: ticker, decimals, scales, powers, warnings and
+ *   declaration.
+ * - The order counts are the node's partial book's, 0 for a token it saw no order of.
+ * - A program or extension commitment the node proved is added to a carried row that lacked it.
  */
 export function mergeTokens(carried: readonly IndexerTokenView[], seen: readonly IndexerTokenView[]): IndexerTokenView[] {
   const by = new Map<Hex, IndexerTokenView>();

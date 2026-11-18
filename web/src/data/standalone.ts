@@ -1,35 +1,53 @@
-// Standalone mode: the market from the node alone. The browser follows the node's new blocks (`NodeApi.subscribeBlocks`), reads the KOB1 placement
-// records of every transaction with kob-wasm (kob/stream-orders.ts: the decoder the indexer uses, record by record) and the spends of KOB orders
-// (fills, cancels, amends), follows the orders it saw to their continuations, and confirms every one on the node before it is listed
-// (kob/node-verify.ts `confirmSnapshotsOnNode`: the order UTXO, and an ask's custody, unspent at the scripts its state derives under the templates
-// this build pins; the same check the book gets before an order is taken, app/book-verify.ts). The wallet's own orders are added from its receipts
-// once the node resolved them (`adopt`). Trades, candles, the 24 h figures and the depth are built from what was seen (data/stream-market.ts); a fill
-// counts once the node shows an output of its transaction.
+// Standalone mode: the market from the node alone.
 //
-// The book does not start empty: the resting orders the page last read from the indexer (data/stream-carry.ts) are its first entries, each one asked on
-// the node at once and again with every recheck; one the node no longer holds, or that a block shows spent, leaves the book. An order placed while
-// the indexer could not be read and before the mode followed the blocks is not seen (no server and no other party is asked; covenant-id lookups on
-// the node do not exist yet). Nothing is taken on this book's word: the book check asks the node again before an order is planned (app/book-verify.ts).
+// The browser follows the node's new blocks (`NodeApi.subscribeBlocks`). It reads the KOB1
+// placement records of every transaction with kob-wasm (kob/stream-orders.ts), the decoder the
+// indexer uses, record by record. It also reads the spends of KOB orders, meaning fills, cancels
+// and amends, and follows the orders it saw to their continuations. Every order is confirmed on
+// the node before it is listed (kob/node-verify.ts `confirmSnapshotsOnNode`). The check is that
+// the order UTXO, and an ask's custody, are unspent at the scripts its state derives under the
+// templates this build pins. It is the same check the book gets before an order is taken
+// (app/book-verify.ts). The wallet's own orders are added from its receipts once the node
+// resolved them (`adopt`). Trades, candles, the 24 h figures and the depth are built from what was
+// seen (data/stream-market.ts). A fill counts once the node shows an output of its transaction.
 //
-// When (the user's three settings, `StandalonePrefs`):
-//   * `manual`: on from the start, whatever the indexer does; the app then sends the indexer no market request and does not poll its health;
-//   * `auto` (default on): the health of the indexer in use (`report`, from the status poll, ui/shell/status.ts) that is `bad` (down, stale, on another
-//     network, without its node), or the FIRST market read that finds it down (`readFailed`), is asked once more after ENTER_CHECK_MS; still bad,
-//     standalone mode starts, and the read that failed is answered from it. With failover (data/indexer-failover.ts) the report is about the active
-//     indexer and the failover gets its time first (`fastFallback` off): a usable backup keeps the app on the indexers;
-//     An indexer that answers but is BEHIND the chain by more than LAG_SWITCH_SECONDS (its health's `lag_seconds`, else `lag_daa` / 10) counts the same
-//     way (`behind`: the mode says so in its texts; the same second look, the same kept data);
-//   * `autoReturn` (default on): a report that the indexer is caught up (`ok` and within LAG_RETURN_SECONDS of the chain) is checked once more after
-//     RETURN_CHECK_MS (the mode asks the indexer's health itself every few seconds); still caught up, an automatic mode ends and the indexer's book is
-//     read again (its book wins). Between the two bounds the mode stays (no flapping). Off: the mode stays and `indexerBack` says it may end (`returnToIndexer`, the button of the bell's entry).
+// The book does not start empty. Its first entries are the resting orders the page last read
+// from the indexer (data/stream-carry.ts). Each one is asked on the node at once and again with
+// every recheck. One the node no longer holds, or that a block shows spent, leaves the book. An
+// order placed while the indexer could not be read and before the mode followed the blocks is not
+// seen. No server and no other party is asked, and the node has no covenant-id lookup. Nothing is
+// taken on this book's word, because the book check asks the node again before an order is
+// planned (app/book-verify.ts).
 //
-// What the page already read from the indexer in this session is KEPT, not dropped (data/stream-carry.ts: the candles, trades and 24 h figures of the
-// markets it loaded, the token list with the facts of open-list tokens, the activity rows, the resting orders): the views merge what the node shows
-// afterwards into it.
+// The user's three settings (`StandalonePrefs`) decide when the mode runs.
+// - `manual` turns it on from the start, whatever the indexer does. The app then sends the indexer
+//   no market request and does not poll its health.
+// - `auto` (default on) starts it when the indexer in use stays bad. A bad health report (`report`,
+//   from the status poll in ui/shell/status.ts) means down, stale, on another network or without
+//   its node. That report, or the first market read that finds the indexer down (`readFailed`),
+//   is checked once more after ENTER_CHECK_MS. If it is still bad, the mode starts and the failed
+//   read is answered from it. With failover (data/indexer-failover.ts) the report is about the
+//   active indexer, and the failover gets its time first (`fastFallback` off). A usable backup
+//   keeps the app on the indexers. An indexer that answers but is behind the chain by more than
+//   LAG_SWITCH_SECONDS counts the same way, with the same second look and the same kept data. The
+//   lag is its health's `lag_seconds`, else `lag_daa` / 10. The mode then sets `behind` and says so
+//   in its texts.
+// - `autoReturn` (default on) ends an automatic mode when the indexer is caught up, meaning `ok`
+//   and within LAG_RETURN_SECONDS of the chain. Such a report is checked once more after
+//   RETURN_CHECK_MS, and the mode asks the indexer's health itself every few seconds. If it is
+//   still caught up, the mode ends and the indexer's book is read again, and its book wins.
+//   Between the two bounds the mode stays, so it does not flap. With `autoReturn` off the mode
+//   stays, and `indexerBack` says it may end (`returnToIndexer`, the button of the bell's entry).
 //
-// While active, the app's indexer (`modeIndexer`) answers the book, the orders of the book, the token list and the market data from here; what
-// needs the indexer's records (pair books, holders and token UTXOs, the order lists of My orders and the notifications) fails as it does with the
-// indexer down.
+// What the page already read from the indexer in this session is kept (data/stream-carry.ts). That
+// covers the candles, trades and 24 h figures of the markets it loaded, the token list with the
+// facts of open-list tokens, the activity rows and the resting orders. The views merge what the
+// node shows afterwards into it.
+//
+// While active, the app's indexer (`modeIndexer`) answers the book, the orders of the book, the
+// token list and the market data from here. What needs the indexer's records fails as it does
+// with the indexer down. That covers pair books, holders and token UTXOs, the order lists of My
+// orders, and the notifications.
 import type { IndexerApi } from './indexer';
 import { IndexerError } from './indexer';
 import type { BookView, CandleInterval, CandlesView, EventView, HealthView, IndexerTokenView, OrderView, StatsView, TradesView } from './indexer-types';
@@ -46,7 +64,12 @@ import type { Hex, TxJson } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 import { assessIndexerHealth, type HealthAssessment } from '../ui/shell/health';
 
-/** The user's choices (Settings): standalone always on; fall back to it when the indexer is down; return to the indexer when it is back. */
+/**
+ * The user's choices in Settings.
+ * - `manual`: standalone mode always on.
+ * - `auto`: fall back to it when the indexer is down.
+ * - `autoReturn`: return to the indexer when it is back.
+ */
 export interface StandalonePrefs {
   manual: boolean;
   auto: boolean;
@@ -54,81 +77,129 @@ export interface StandalonePrefs {
 }
 export const DEFAULT_STANDALONE: Readonly<StandalonePrefs> = Object.freeze({ manual: false, auto: true, autoReturn: true });
 
-/** A bad report (or a failed read) is checked once more after this long before the mode starts (a blip does not start it). */
+/**
+ * A bad report or a failed read is checked once more after this long before the mode starts, so
+ * a blip does not start it.
+ */
 export const ENTER_CHECK_MS = 1_000;
-/** A usable report is checked once more after this long before an automatic mode ends (an indexer that flickers does not end it). */
+/**
+ * A usable report is checked once more after this long before an automatic mode ends, so an
+ * indexer that flickers does not end it.
+ */
 export const RETURN_CHECK_MS = 5_000;
-/** An indexer that answers but is more than this many seconds behind the chain is not used: an automatic mode starts (like an indexer that is down). */
+/**
+ * An indexer that answers but is more than this many seconds behind the chain is not used. An
+ * automatic mode starts, as for an indexer that is down.
+ */
 export const LAG_SWITCH_SECONDS = 120;
-/** An automatic mode ends only once the indexer is within this many seconds of the chain (well under LAG_SWITCH_SECONDS, so the two do not flap). */
+/**
+ * An automatic mode ends only once the indexer is within this many seconds of the chain. It is
+ * well under LAG_SWITCH_SECONDS, so the two do not flap.
+ */
 export const LAG_RETURN_SECONDS = 20;
-/** With further indexers the failover gets this long to find a usable one first (its re-checks and one round of probes take about 12 s). */
+/**
+ * With further indexers the failover gets this long to find a usable one first. Its re-checks and
+ * one round of probes take about 12 s.
+ */
 export const ENTER_CHECK_FAILOVER_MS = 20_000;
 /** That check of the indexer is cut off after this long. */
 export const PROBE_TIMEOUT_MS = 6_000;
-/** New or changed orders (and fills) are confirmed on the node this long after the block that showed them (more of them in one read). */
+/**
+ * New or changed orders and fills are confirmed on the node this long after the block that showed
+ * them, so that one read covers more of them.
+ */
 export const VERIFY_DELAY_MS = 1_500;
-/** An unconfirmed order or fill is asked again after these delays (a block's transactions reach the node's UTXO set once it is merged), then dropped. */
+/**
+ * An unconfirmed order or fill is asked again after these delays, then dropped. A block's
+ * transactions reach the node's UTXO set only once the block is merged.
+ */
 export const VERIFY_RETRY_MS: readonly number[] = [2_000, 4_000, 8_000, 16_000];
-/** Confirmed orders are confirmed again this often (a spend in a block the stream missed), at most RECHECK_BATCH per round. */
+/**
+ * Confirmed orders are confirmed again this often, at most RECHECK_BATCH per round. This catches a
+ * spend in a block the stream missed.
+ */
 export const RECHECK_MS = 30_000;
 export const RECHECK_BATCH = 100;
-/** No block for this long while following: the subscription is made again and every order confirmed again. */
+/**
+ * After this long without a block while following, the subscription is made again and every order
+ * is confirmed again.
+ */
 export const STALL_MS = 30_000;
 /** A failed subscription is tried again after this long, doubled up to SUBSCRIBE_RETRY_MAX_MS. */
 export const SUBSCRIBE_RETRY_MS = 5_000;
 export const SUBSCRIBE_RETRY_MAX_MS = 60_000;
-/** The housekeeping tick (stall watch, rechecks), ms. */
+/** The housekeeping tick of the stall watch and the rechecks, in ms. */
 const TICK_MS = 5_000;
 /** Most orders or fills confirmed in one node read. */
 const VERIFY_CHUNK = 100;
-/** Transactions remembered as read (a transaction is in several parallel blocks). */
+/** Transactions remembered as read, because a transaction is in several parallel blocks. */
 const SEEN_TXS = 20_000;
-/** Blocks waiting to be read; past it the oldest are dropped and every order is confirmed again. */
+/** Blocks waiting to be read. Past it the oldest are dropped and every order is confirmed again. */
 const MAX_QUEUE = 500;
-/** Fills waiting for the node; past it the oldest are dropped. */
+/** Fills waiting for the node. Past it the oldest are dropped. */
 const MAX_PENDING_FILLS = 2_000;
 
+/** Whether standalone mode is off, subscribing to the node's blocks, or following them. */
 export type StandalonePhase = 'off' | 'connecting' | 'live';
 
+/** What the views read of standalone mode. */
 export interface StandaloneState {
   active: boolean;
-  /** `manual`: the setting; `auto`: the indexer could not be used */
+  /** `manual` when the setting turned it on, `auto` when the indexer could not be used. */
   reason: 'manual' | 'auto' | null;
-  /** `connecting`: subscribing to the node's blocks (again); `live`: following them */
+  /** `connecting` while subscribing to the node's blocks (again), `live` while following them. */
   phase: StandalonePhase;
-  /** when the mode started (ms since the epoch): what happened before is not shown */
+  /** When the mode started, in ms since the epoch. What happened before is not shown. */
   sinceMs: number | null;
-  /** counts every change of the book or the market data (a view reads it again) */
+  /** Counts every change of the book or the market data, so a view reads it again. */
   version: number;
-  /** orders listed now */
+  /** Orders listed now. */
   orders: number;
-  /** an automatic mode with `autoReturn` off: the indexer answers again (`returnToIndexer` ends the mode) */
+  /**
+   * Set in an automatic mode with `autoReturn` off when the indexer answers again.
+   * `returnToIndexer` ends the mode.
+   */
   indexerBack: boolean;
-  /** an automatic mode: it started because the indexer is behind the chain (not because it cannot be reached) */
+  /**
+   * Set in an automatic mode that started because the indexer is behind the chain, not because it
+   * cannot be reached.
+   */
   behind: boolean;
 }
 
+/** What `StandaloneController` needs. */
 export interface StandaloneDeps {
   kob: KobWasm;
   node: Pick<NodeApi, 'getUtxosByAddresses' | 'subscribeBlocks'>;
-  /** script public key -> address of the app's network (the node is asked by address) */
+  /** Script public key to address on the app's network, because the node is asked by address. */
   toAddress: (spk: string) => string;
   network: string;
-  /** the indexer the app reads otherwise: asked once more before an automatic mode starts */
+  /** The indexer the app reads otherwise. It is asked once more before an automatic mode starts. */
   indexer: Pick<IndexerApi, 'health'>;
-  /** what the indexer in use answered before (`modeIndexer` records it); a controller made without one starts with nothing kept */
+  /**
+   * What the indexer in use answered before, as `modeIndexer` records it. A controller made
+   * without one starts with nothing kept.
+   */
   carry?: IndexerCarry;
   prefs?: Partial<StandalonePrefs>;
-  /** how long a bad report is waited on before the indexer is asked again (default ENTER_CHECK_MS; longer with failover, which switches first) */
+  /**
+   * How long a bad report is waited on before the indexer is asked again. The default is
+   * ENTER_CHECK_MS. It is longer with failover, which switches first.
+   */
   enterCheckMs?: number;
-  /** seconds behind the chain from which an answering indexer is left (default LAG_SWITCH_SECONDS) */
+  /** Seconds behind the chain from which an answering indexer is left (LAG_SWITCH_SECONDS). */
   lagSwitchSeconds?: number;
-  /** seconds behind the chain up to which an automatic mode may end (default LAG_RETURN_SECONDS) */
+  /** Seconds behind the chain up to which an automatic mode may end. Default LAG_RETURN_SECONDS. */
   lagReturnSeconds?: number;
-  /** a market read that finds the indexer down starts the check at once and waits for it (default on; off with failover, which switches first) */
+  /**
+   * Whether a market read that finds the indexer down starts the check at once and waits for it.
+   * It is on by default and off with failover, which switches first.
+   */
   fastFallback?: boolean;
-  /** the registry's facts of a token: its orders are listed only with them, and its scale is the price basis */
+  /**
+   * The registry's facts of a token. Its orders are listed only with them, and its scale is the
+   * price basis.
+   */
   registry?: (token: Hex) => RegistryFacts | null;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
@@ -136,7 +207,10 @@ export interface StandaloneDeps {
 }
 
 
-/** An indexer read that failed because the indexer is down (no answer, a timeout, a server error), not a refusal, a cancel or a missing route. */
+/**
+ * Tells whether an indexer read failed because the indexer is down. That means no answer, a
+ * timeout or a server error, not a refusal, a cancel or a missing route.
+ */
 export function isIndexerDown(e: unknown): boolean {
   if (!(e instanceof IndexerError) || e.code === 'standalone_mode' || e.kind === 'aborted') return false;
   return e.kind === 'network' || e.kind === 'timeout' || (e.kind === 'http' && e.status >= 500);
@@ -147,12 +221,19 @@ export function standaloneUnavailable(what = 'this'): IndexerError {
   return new IndexerError('http', 503, 'standalone_mode', `Standalone mode: ${what} needs the indexer.`);
 }
 
-/** A fill waiting for the node to show its transaction (one of its outputs). */
+/** A fill waiting for the node to show one of its transaction's outputs. */
 interface PendingFill { fill: StreamFill; ts: number; daa: bigint; probe: OutpointRef; due: number; misses: number }
 
+/**
+ * Runs standalone mode. It decides when the mode is on and builds the book and the market data
+ * from the node's blocks.
+ */
 export class StandaloneController {
   readonly indexer: IndexerApi;
-  /** what the page read from the indexer before the mode (kept across it; the mode's own collection is dropped when it ends) */
+  /**
+   * What the page read from the indexer before the mode. It is kept across the mode, while the
+   * mode's own collection is dropped when it ends.
+   */
   readonly carry: IndexerCarry;
   private readonly kob: KobWasm;
   private readonly node: StandaloneDeps['node'];
@@ -177,27 +258,30 @@ export class StandaloneController {
   private subscribeFails = 0;
   private lastBlockMs = 0;
   private enterTimer: unknown = null;
-  /** the second look before an automatic mode starts is under way */
+  /** The second look before an automatic mode starts is under way. */
   private entering = false;
-  /** reads waiting for that look (`readFailed`) */
+  /** Reads waiting for that look (`readFailed`). */
   private waiters: (() => void)[] = [];
   private returnTimer: unknown = null;
-  /** counts the return checks: a bad report in between makes a pending one void */
+  /** Counts the return checks. A bad report in between makes a pending one void. */
   private returnSeq = 0;
-  /** the mode's own look at the indexer's health is under way */
+  /** The mode's own look at the indexer's health is under way. */
   private watching = false;
-  /** entries started from the kept resting orders, not asked on the node yet */
+  /** Entries started from the kept resting orders, not asked on the node yet. */
   private readonly carried = new Set<Hex>();
   private verifyTimer: unknown = null;
   private tickTimer: unknown = null;
   private retryTimer: unknown = null;
   private lastRecheckMs = 0;
-  /** next node check of each unconfirmed entry, ms */
+  /** Next node check of each unconfirmed entry, in ms. */
   private readonly due = new Map<Hex, number>();
   private pendingFills: PendingFill[] = [];
   private readonly fills = new Map<Hex, SeenFill[]>();
   private fillSeq = 0;
-  /** the scale of the first order seen of each token (its price basis when the registry has no decimals) */
+  /**
+   * The scale of the first order seen of each token. It is the price basis when the registry has
+   * no decimals.
+   */
   private readonly firstScale = new Map<Hex, bigint>();
   private seen = new Set<Hex>();
   private seenOld = new Set<Hex>();
@@ -232,7 +316,10 @@ export class StandaloneController {
   get prefs(): StandalonePrefs {
     return this.prefsNow;
   }
-  /** the mode was switched on in Settings: the indexer is not asked for anything of the market, not even its health */
+  /**
+   * Whether the mode was switched on in Settings. The indexer is then not asked for anything of
+   * the market, not even its health.
+   */
   get manual(): boolean {
     return this.snap.reason === 'manual';
   }
@@ -242,7 +329,10 @@ export class StandaloneController {
     return () => this.listeners.delete(cb);
   }
 
-  /** New settings, applied at once: `manual` on starts the mode, off ends a manual one (the indexer is used again; a down one may start it again). */
+  /**
+   * Applies new settings at once. `manual` on starts the mode, and off ends a manual one. The
+   * indexer is then used again, and a down one may start the mode again.
+   */
   setPrefs(p: Partial<StandalonePrefs>): void {
     if (this.disposed) return;
     this.prefsNow = { ...this.prefsNow, ...p };
@@ -255,22 +345,31 @@ export class StandaloneController {
     else if (this.snap.indexerBack && this.prefsNow.autoReturn) this.exit();
   }
 
-  /** The indexer answers but is further behind the chain than the switch bound (a lag it does not report is not held against it). */
+  /**
+   * The indexer answers but is further behind the chain than the switch bound. A lag it does not
+   * report is not held against it.
+   */
   private isBehind(a: HealthAssessment): boolean {
     return (a.level === 'ok' || a.level === 'warn') && typeof a.lagEstimate === 'number' && a.lagEstimate > this.lagSwitch;
   }
 
-  /** The indexer is fit to be left for: it is down or behind the chain. */
+  /** The indexer is to be left, because it is down or behind the chain. */
   private isUnfit(a: HealthAssessment): boolean {
     return a.level === 'bad' || this.isBehind(a);
   }
 
-  /** The indexer is caught up: healthy and within the return bound (a lag it does not report counts as caught up). */
+  /**
+   * The indexer is caught up, meaning healthy and within the return bound. A lag it does not report
+   * counts as caught up.
+   */
   private isCaughtUp(a: HealthAssessment): boolean {
     return a.level === 'ok' && (typeof a.lagEstimate !== 'number' || a.lagEstimate <= this.lagReturn);
   }
 
-  /** The health of the indexer in use (the status poll): starts an automatic mode when it stays bad, ends it (or offers to) when it stays usable. */
+  /**
+   * Takes the health of the indexer in use from the status poll. It starts an automatic mode when
+   * the health stays bad, and ends it, or offers to, when it stays usable.
+   */
   report(a: HealthAssessment): void {
     if (this.disposed || this.manual) return;
     if (this.isUnfit(a)) {
@@ -286,7 +385,7 @@ export class StandaloneController {
     }
     if (!this.snap.active) return;
     if (!this.isCaughtUp(a)) {
-      // answering, but not yet within the return bound: the two looks start over
+      // Answering, but not yet within the return bound. The two looks start over.
       this.disarmReturn();
       if (this.snap.indexerBack) this.set({ indexerBack: false });
       return;
@@ -296,8 +395,9 @@ export class StandaloneController {
   }
 
   /**
-   * A market read of the indexer failed (`modeIndexer`): when the indexer is down, the second look starts now instead of after the next status poll.
-   * Resolves once it is decided: true when the mode is on (the read is answered from it), false when it is not.
+   * Takes a failed market read of the indexer (`modeIndexer`). When the indexer is down, the
+   * second look starts now instead of after the next status poll. It resolves once that is
+   * decided, to true when the mode is on and answers the read, else to false.
    */
   readFailed(e: unknown): Promise<boolean> {
     if (this.snap.active) return Promise.resolve(true);
@@ -306,7 +406,7 @@ export class StandaloneController {
     return new Promise((resolve) => this.waiters.push(() => resolve(this.snap.active)));
   }
 
-  /** The second look at a bad indexer: still bad after ENTER_CHECK_MS, an automatic mode starts. */
+  /** The second look at a bad indexer. Still bad after ENTER_CHECK_MS, an automatic mode starts. */
   private armEnter(): void {
     if (this.snap.active || !this.prefsNow.auto || this.enterTimer !== null || this.entering) return;
     const gen = this.gen;
@@ -321,14 +421,17 @@ export class StandaloneController {
     }, this.enterCheckMs);
   }
 
-  /** The reads waiting for the second look are answered (the mode is on, or it is not). */
+  /** Answers the reads waiting for the second look, whether the mode is on or not. */
   private release(): void {
     const w = this.waiters;
     this.waiters = [];
     for (const f of w) f();
   }
 
-  /** The second look at an indexer that is usable again: still usable after RETURN_CHECK_MS, an automatic mode ends (or offers to). */
+  /**
+   * The second look at an indexer that is usable again. Still usable after RETURN_CHECK_MS, an
+   * automatic mode ends, or offers to.
+   */
   private armReturn(): void {
     if (this.returnTimer !== null) return;
     const seq = ++this.returnSeq;
@@ -349,12 +452,15 @@ export class StandaloneController {
     this.cancel('returnTimer');
   }
 
-  /** Ends an automatic mode (the user switches back once the indexer answers again). */
+  /** Ends an automatic mode, when the user switches back once the indexer answers again. */
   returnToIndexer(): void {
     if (this.snap.reason === 'auto') this.exit();
   }
 
-  /** The wallet's own orders, resolved on the node from its receipts (`resolveRecord`): listed at once (the resolution was the node check). */
+  /**
+   * Lists the wallet's own orders, resolved on the node from its receipts (`resolveRecord`). They
+   * are listed at once, because the resolution was the node check.
+   */
   adopt(snaps: readonly OrderSnapshot[], daa?: bigint): void {
     if (!this.snap.active) return;
     if (daa !== undefined && daa > this.daa) this.daa = daa;
@@ -371,7 +477,10 @@ export class StandaloneController {
     if (changed) this.publish(true);
   }
 
-  /** The orders of `maker` the book lists (optionally of one token), as indexer views: the ticket's own-order check reads them. */
+  /**
+   * The orders of `maker` the book lists, optionally of one token, as indexer views. The ticket's
+   * own-order check reads them.
+   */
   ownOrders(maker: Hex, token?: Hex): OrderView[] {
     const ctx = this.ctx();
     const out: OrderView[] = [];
@@ -392,10 +501,11 @@ export class StandaloneController {
     this.listeners.clear();
   }
 
-  // ------------------------------------------------------------------------------------------ views (the standalone indexer)
+  // --- Views of the standalone indexer ---
 
   ctx(): ListingContext {
-    // a token the registry does not name is listed against the facts the indexer gave for it before the mode (its program, commitment and scale)
+    // A token the registry does not name is listed against the facts the indexer gave for it
+    // before the mode, meaning its program, commitment and scale.
     return { kob: this.kob, daa: this.daa, nowUnix: BigInt(Math.floor(this.now() / 1000)), registry: (t) => this.registry?.(t) ?? this.carry.factsOf(t) };
   }
   bookView(token: Hex, q: { depth?: number; aggregate?: boolean } = {}): BookView {
@@ -405,11 +515,18 @@ export class StandaloneController {
     const e = this.book.get(id);
     return e && e.confirmed ? orderViewOf(e, this.ctx()) : null;
   }
-  /** The tokens with orders the node showed, and the tokens the indexer listed before (with the facts it gave). */
+  /**
+   * The tokens with orders the node showed, and the tokens the indexer listed before with the facts
+   * it gave.
+   */
   tokensView(): IndexerTokenView[] {
     return mergeTokens(this.carry.tokens(), tokensViewOf(this.book.entries(), this.ctx()));
   }
-  /** Sompi per this many base units: what the carried figures are priced on, else the registry's scale, else the scale of the first order seen of the token, else 1. */
+  /**
+   * The price basis of `token`, the base units a sompi price is per. It is what the carried
+   * figures are priced on, else the registry's scale, else the scale of the first order seen of
+   * the token, else 1.
+   */
   basisOf(token: Hex): bigint {
     const t = token.toLowerCase();
     return this.carry.basisOf(t) ?? this.registry?.(t)?.scale ?? this.firstScale.get(t) ?? 1n;
@@ -418,9 +535,12 @@ export class StandaloneController {
     return this.fills.get(token.toLowerCase()) ?? [];
   }
   /**
-   * What the activity log can show in this mode (ui/activity): the fills the node confirmed (every token, as `/v1/fills` events, newest first) and the
-   * placements this page saw in the node's blocks (as order views, with their placement transaction). Only what happened since the mode started; no
-   * cancels, refunds or pair orders (phase 1 of the log, and pair orders are not followed here).
+   * What the activity log (ui/activity) can show in this mode.
+   * - The fills the node confirmed, of every token, as `/v1/fills` events, newest first.
+   * - The placements this page saw in the node's blocks, as order views with their placement
+   *   transaction.
+   * It covers only what happened since the mode started. It has no cancels or refunds, and no pair
+   * orders, which are not followed here.
    */
   seenActivity(): { fills: EventView[]; orders: OrderView[] } {
     const fills: EventView[] = [];
@@ -441,14 +561,15 @@ export class StandaloneController {
       try {
         orders.push(orderViewOf(e, ctx));
       } catch {
-        /* an order this build cannot describe is not listed */
+        /* An order this build cannot describe is not listed. */
       }
     }
     return { fills, orders };
   }
   tradesView(token: Hex, q: { limit?: number; before?: number | string } = {}) {
     const seen = tradesView(token.toLowerCase(), this.fillsOf(token), this.basisOf(token), q);
-    // the carried trades are the newest page's: a page read further back (`before`) is the node's own rows only
+    // The carried trades are the newest page's. A page read further back (`before`) is the node's
+    // own rows only.
     return q.before === undefined ? mergeTrades(this.carry.trades(token), seen, Math.max(1, Math.min(q.limit ?? 50, 500))) : seen;
   }
   candlesView(token: Hex, q: { interval: CandleInterval; from?: number; to?: number; limit?: number }) {
@@ -456,7 +577,7 @@ export class StandaloneController {
     const basis = this.basisOf(t);
     const carried = this.carry.candles(t, q.interval);
     if (!carried.length) return candlesView(t, this.fillsOf(t), basis, q);
-    // the node's bars over the same window, merged with the carried ones
+    // The node's bars over the same window, merged with the carried ones.
     const { from, to } = q;
     return mergeCandles(carried, candlesView(t, this.fillsOf(t), basis, { interval: q.interval, ...(from !== undefined ? { from } : {}), ...(to !== undefined ? { to } : {}), limit: 1500 }), q);
   }
@@ -470,7 +591,7 @@ export class StandaloneController {
     return depthView(token.toLowerCase(), this.bookView(token, { depth: 500, aggregate: true }), this.basisOf(token), this.now(), this.daa, levels ?? 50);
   }
 
-  // ------------------------------------------------------------------------------------------ mode
+  // --- Mode ---
 
   private async probe(): Promise<HealthAssessment> {
     let health: HealthView | null = null;
@@ -515,9 +636,10 @@ export class StandaloneController {
   }
 
   /**
-   * The book starts from the resting orders the page last read from the indexer: listed as they were a moment ago and asked on the node at once (one it
-   * no longer holds leaves the book; a block that spends one moves it as it moves any order). The book check asks the node again before an order is
-   * planned, so an entry that is gone by then is never taken.
+   * Starts the book from the resting orders the page last read from the indexer. They are listed as
+   * they were a moment ago and asked on the node at once. One the node no longer holds leaves the
+   * book, and a block that spends one moves it as it moves any order. The book check asks the node
+   * again before an order is planned, so an entry that is gone by then is never taken.
    */
   private seed(): void {
     const now = this.now();
@@ -565,7 +687,7 @@ export class StandaloneController {
       try {
         cb(this.snap);
       } catch {
-        /* a subscriber's bug must not stop the mode */
+        /* A subscriber's bug must not stop the mode. */
       }
     }
   }
@@ -575,7 +697,10 @@ export class StandaloneController {
     this.emit();
   }
 
-  /** A new state for the views; `changed`: the book or the market data changed (the version moves). */
+  /**
+   * Publishes a new state for the views. `changed` says the book or the market data changed, which
+   * moves the version.
+   */
   private publish(changed: boolean, phase: StandalonePhase = this.snap.phase): void {
     if (!this.snap.active) return;
     const ctx = this.ctx();
@@ -608,7 +733,10 @@ export class StandaloneController {
     }
   }
 
-  /** Blocks may have been missed: every confirmed order is asked again (a spend the stream did not see takes it out). */
+  /**
+   * Blocks may have been missed, so every confirmed order is asked again. A spend the stream did
+   * not see takes it out.
+   */
   private onGap(): void {
     this.lastRecheckMs = 0;
     this.scheduleVerify(0);
@@ -622,7 +750,8 @@ export class StandaloneController {
       if (gen !== this.gen) return;
       const now = this.now();
       if (this.snap.phase === 'live' && now - this.lastBlockMs > STALL_MS) {
-        // a subscription that went quiet (a node that stopped notifying, a link the SDK did not report): subscribe again
+        // A subscription went quiet, from a node that stopped notifying or a link the SDK did not
+        // report. Subscribe again.
         const sub = this.sub;
         this.sub = null;
         void sub?.close().catch(() => undefined);
@@ -631,7 +760,8 @@ export class StandaloneController {
         this.onGap();
       }
       if (now - this.lastRecheckMs >= RECHECK_MS) this.scheduleVerify(0);
-      // an automatic mode looks at the indexer itself (the status poll is slower): usable again, the mode ends after one more look (`armReturn`)
+      // An automatic mode looks at the indexer itself, because the status poll is slower. Usable
+      // again, the mode ends after one more look (`armReturn`).
       if (this.snap.reason === 'auto' && !this.watching && this.returnTimer === null) {
         this.watching = true;
         void this.probe().then((a) => {
@@ -639,13 +769,13 @@ export class StandaloneController {
           if (gen === this.gen) this.report(a);
         });
       }
-      // an order that expired or reached its deadline leaves the book on the clock alone
+      // An order that expired or reached its deadline leaves the book on the clock alone.
       this.publish(false);
       this.scheduleTick();
     }, TICK_MS);
   }
 
-  // ------------------------------------------------------------------------------------------ blocks
+  // --- Blocks ---
 
   private onBlock(b: StreamBlock): void {
     this.lastBlockMs = this.now();
@@ -695,13 +825,14 @@ export class StandaloneController {
       const t = d.tokenCovId.toLowerCase();
       if (!this.firstScale.has(t) && d.scale > 0n) this.firstScale.set(t, d.scale);
     } catch {
-      /* not a readable order: no scale */
+      /* Not a readable order, so no scale. */
     }
   }
 
   /**
-   * One transaction: its placements join the book (to be confirmed), every input that spends a KOB order moves that order to its continuation
-   * (or out of the book) and records its fill. True when anything changed.
+   * Reads one transaction. Its placements join the book, to be confirmed. Every input that spends a
+   * KOB order moves that order to its continuation, or out of the book, and records its fill.
+   * Returns true when anything changed.
    */
   private async readTx(tx: TxJson, b: StreamBlock, gen: number): Promise<boolean> {
     const daa = b.daaScore;
@@ -724,7 +855,8 @@ export class StandaloneController {
       const known = this.book.orderAt(key);
       const spend = revealSpend(this.kob, tx, i);
       if (!spend) {
-        // the input spends a followed order but does not read as one: it is not believed to be the same order any more
+        // The input spends a followed order but does not read as one. It is not believed to be the
+        // same order any more.
         if (known) {
           this.book.remove(known.snap.covenantId);
           this.due.delete(known.snap.covenantId);
@@ -739,13 +871,15 @@ export class StandaloneController {
         this.due.delete(known.snap.covenantId);
         changed = true;
       } else if (next) {
-        // an order placed before the mode started is learned from the transaction that continues it
+        // An order placed before the mode started is learned from the transaction that continues
+        // it.
         put(next, known?.origin ?? 'stream', known ? undefined : { txid: null, out: null, daa });
       }
       const fill = fillOf(this.kob, spend, tx.id, next?.covenantId ?? known?.snap.covenantId ?? null);
       if (fill) this.addPendingFill(fill, tx, b);
     }
-    // a custody spent by a transaction that does not spend its order: the order is asked again before it is listed again
+    // A custody was spent by a transaction that does not spend its order. The order is asked again
+    // before it is listed again.
     for (const e of this.book.touched(tx.inputs.map((x) => outpointKey(x.transactionId, x.index)))) {
       if (!e.confirmed || e.snap.order.transactionId === tx.id) continue;
       this.book.miss(e.snap.covenantId, VERIFY_RETRY_MS.length + 1);
@@ -756,7 +890,8 @@ export class StandaloneController {
   }
 
   private addPendingFill(fill: StreamFill, tx: TxJson, b: StreamBlock): void {
-    // the transaction counts once the node shows one of its outputs: the continuation of the filled order, else any covenant output, else the first
+    // The transaction counts once the node shows one of its outputs. That is the continuation of
+    // the filled order, else any covenant output, else the first.
     const cont = fill.covenantId ? tx.outputs.findIndex((o) => o.covenant?.covenantId === fill.covenantId) : -1;
     const any = tx.outputs.findIndex((o) => !!o.covenant);
     const index = cont >= 0 ? cont : any >= 0 ? any : 0;
@@ -766,7 +901,7 @@ export class StandaloneController {
     this.pendingFills.push({ fill, ts: b.timestampMs || this.now(), daa: b.daaScore, probe: { transactionId: tx.id, index, scriptPublicKey: out.scriptPublicKey }, due: this.now() + VERIFY_DELAY_MS, misses: 0 });
   }
 
-  // ------------------------------------------------------------------------------------------ node checks
+  // --- Node checks ---
 
   private scheduleVerify(ms: number): void {
     if (this.verifyTimer !== null) return;
@@ -777,7 +912,10 @@ export class StandaloneController {
     }, ms);
   }
 
-  /** Confirms the unconfirmed entries and fills that are due and, every RECHECK_MS, a batch of the confirmed entries. */
+  /**
+   * Confirms the unconfirmed entries and fills that are due and, every RECHECK_MS, a batch of the
+   * confirmed entries.
+   */
   private async verify(gen: number): Promise<void> {
     if (this.verifying) return void this.scheduleVerify(VERIFY_DELAY_MS);
     this.verifying = true;
@@ -786,7 +924,7 @@ export class StandaloneController {
       const now = this.now();
       const pending = [...this.book.entries()].filter((e) => !e.confirmed && (this.due.get(e.snap.covenantId) ?? 0) <= now);
       const rechecking = now - this.lastRecheckMs >= RECHECK_MS;
-      // the entries started from the kept orders are asked at once, all of them
+      // The entries started from the kept orders are asked at once, all of them.
       const carried = [...this.carried].flatMap((id) => {
         const e = this.book.get(id);
         return e && e.confirmed ? [e] : [];
@@ -801,7 +939,8 @@ export class StandaloneController {
         try {
           res = await confirmSnapshotsOnNode(this.kob, this.node, part.map((e) => e.snap), this.toAddress);
         } catch {
-          // the node could not be asked: nothing is counted against the orders, the pending (and the kept) ones are asked again
+          // The node could not be asked. Nothing is counted against the orders, and the pending and
+          // the kept ones are asked again.
           for (const e of part) {
             if (!e.confirmed) this.due.set(e.snap.covenantId, this.now() + VERIFY_RETRY_MS[0]!);
             else if (carried.includes(e)) this.carried.add(e.snap.covenantId);
@@ -819,7 +958,8 @@ export class StandaloneController {
             this.due.delete(id);
             return;
           }
-          // an unconfirmed one is asked a few more times (its block may not be merged yet); a confirmed one the node no longer holds is out at once
+          // An unconfirmed one is asked a few more times, because its block may not be merged yet.
+          // A confirmed one the node no longer holds is out at once.
           const removed = this.book.miss(id, e.confirmed ? 1 : VERIFY_RETRY_MS.length + 1);
           if (removed) this.due.delete(id);
           else this.due.set(id, this.now() + VERIFY_RETRY_MS[Math.min(e.misses - 1, VERIFY_RETRY_MS.length - 1)]!);
@@ -836,7 +976,10 @@ export class StandaloneController {
     if (next.length) this.scheduleVerify(Math.max(200, Math.min(...next) - this.now()));
   }
 
-  /** Counts the fills whose transaction the node shows (one of its outputs is in the UTXO set); the others are asked a few more times. */
+  /**
+   * Counts the fills whose transaction the node shows, meaning one of its outputs is in the UTXO
+   * set. The others are asked a few more times.
+   */
   private async verifyFills(gen: number): Promise<boolean> {
     const now = this.now();
     const due = this.pendingFills.filter((f) => f.due <= now);
@@ -871,7 +1014,10 @@ export class StandaloneController {
   }
 }
 
-/** The `IndexerApi` of standalone mode: the book, its orders, the token list and the market data from what was seen; everything else is unavailable. */
+/**
+ * The `IndexerApi` of standalone mode. It answers the book, its orders, the token list and the
+ * market data from what was seen. Everything else is unavailable.
+ */
 function standaloneIndexer(c: StandaloneController): IndexerApi {
   const no = (what: string) => async (): Promise<never> => {
     throw standaloneUnavailable(what);
@@ -883,7 +1029,8 @@ function standaloneIndexer(c: StandaloneController): IndexerApi {
     book: async (token, q) => c.bookView(token, q ?? {}),
     order: async (id) => {
       const v = c.orderView(id);
-      // an order the book does not hold is not known to be gone: an error, never "not found"
+      // An order the book does not hold is not known to be gone, so this is an error and never
+      // "not found".
       if (!v) throw standaloneUnavailable('this order');
       return v;
     },
@@ -897,7 +1044,7 @@ function standaloneIndexer(c: StandaloneController): IndexerApi {
     trades: async (token, q) => c.tradesView(token, q ?? {}),
     candles: async (token, q) => c.candlesView(token, q),
     stats: async (token) => c.statsView(token),
-    // no history of its own: the Activity summary is not shown in standalone mode
+    // There is no history of its own, so the Activity summary is not shown in standalone mode.
     activity: async () => null,
     depth: async (token, q) => c.depthView(token, q?.levels),
     pairBook: no('the pair book'),
@@ -907,16 +1054,23 @@ function standaloneIndexer(c: StandaloneController): IndexerApi {
   };
 }
 
-/** The best asks of a market whose full view (with the custody) is read beside its resting orders. */
+/** How many of a market's best asks get their full view, with the custody, beside its orders. */
 const CUSTODY_READS = 20;
 
-/** The reads standalone mode answers itself: one of them that finds the indexer down is answered from the mode once it is on. */
+/**
+ * The reads standalone mode answers itself. One of them that finds the indexer down is answered
+ * from the mode once it is on.
+ */
 const SERVED: ReadonlySet<string | symbol> = new Set(['tokens', 'book', 'order', 'trades', 'candles', 'stats', 'depth']);
 
 /**
- * The app's indexer with standalone mode: the indexer (`real`, the failover proxy or the single indexer) while it is in use, the standalone views
- * while the mode is active. `health` goes to the indexer unless the mode is on by the setting (the status poll must see it come back). A read that
- * finds the indexer down starts the check of an automatic mode at once (`readFailed`); a read the mode serves is then answered from it.
+ * The app's indexer with standalone mode.
+ *
+ * It is the indexer (`real`, the failover proxy or the single indexer) while that is in use, and
+ * the standalone views while the mode is active. `health` goes to the indexer unless the setting
+ * turned the mode on, because the status poll must see the indexer come back. A read that finds
+ * the indexer down starts the check of an automatic mode at once (`readFailed`). A read the mode
+ * serves is then answered from it.
  */
 export function modeIndexer(
   real: IndexerApi,
@@ -930,7 +1084,8 @@ export function modeIndexer(
       if (typeof v !== 'function') return v;
       const call = (v as (...x: unknown[]) => unknown).bind(target);
       if (!useReal) return call;
-      // what the indexer in use answers is remembered, to be kept when standalone mode starts (data/stream-carry.ts)
+      // What the indexer in use answers is remembered, to be kept when standalone mode starts
+      // (data/stream-carry.ts).
       const rec = c.carry ? recording(c.carry, prop, call, real) : call;
       const readFailed = c.readFailed;
       if (prop === 'health' || !readFailed) return rec;
@@ -950,14 +1105,17 @@ export function modeIndexer(
   });
 }
 
-/** `call` of the indexer, its answers to the market reads remembered in `carry` (the others pass through); a read of a book has the market's resting orders read. */
+/**
+ * Wraps `call` of the indexer so that its answers to the market reads are remembered in `carry`.
+ * The other reads pass through. A read of a book also has the market's resting orders read.
+ */
 function recording(carry: IndexerCarry, prop: string | symbol, call: (...x: unknown[]) => unknown, real?: IndexerApi): (...x: unknown[]) => unknown {
   const noted = (read: (r: never) => void) => async (...a: unknown[]) => {
     const r = await call(...a);
     try {
       read(r as never);
     } catch {
-      /* remembering must never fail a read */
+      /* Remembering must never fail a read. */
     }
     return r;
   };
@@ -982,13 +1140,15 @@ function recording(carry: IndexerCarry, prop: string | symbol, call: (...x: unkn
     case 'book':
       return (...a) =>
         noted(() => {
-          // the resting orders of the market, with their states, read beside its book (at most once per ORDERS_READ_MS): standalone mode starts its book from them
+          // The resting orders of the market are read with their states beside its book, at most
+          // once per ORDERS_READ_MS. Standalone mode starts its book from them.
           const token = a[0] as Hex;
           if (!real || !carry.ordersDue(token)) return;
           void real.allOrders({ token, status: 'active', limit: 200 }, { maxPages: 3, priority: 'low' }).then(
             async (r) => {
               carry.recordOrders(token, r);
-              // the list has no custody of an ask: the best asks are read one by one (only new or moved ones: a kept view at the same outpoint stays)
+              // The list has no custody of an ask, so the best asks are read one by one. Only new
+              // or moved ones are read, and a kept view at the same outpoint stays.
               const ids = carry.needsCustody(token, CUSTODY_READS);
               for (let i = 0; i < ids.length; i += 4) {
                 const got = await Promise.all(ids.slice(i, i + 4).map((id) => real.order(id, { priority: 'low' }).catch(() => null)));
