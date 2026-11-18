@@ -1,9 +1,13 @@
-// Loads "My orders": the indexer's orders + strays for the wallet, the wallet's placement records, and the node's verdict on every record the
-// indexer does not know (`resolveRecord`). A fresh placement or an indexer outage therefore still shows the order. Each source fails on its own.
+// Loads "My orders". It reads the indexer's orders and strays for the wallet and the wallet's
+// placement records. It also gets the node's verdict on every record the indexer does not know
+// (`resolveRecord`). A fresh placement or an indexer outage therefore still shows the order. Each
+// source fails on its own.
 //
-// The node never holds the list back: `loadOrders` answers once the indexer and the record store have (the node's clock only if it came within
-// CLOCK_WAIT_MS), with the record verdicts this session already has; the others are looked up after it (each bounded by RESOLVE_TIMEOUT_MS) and
-// the list is handed over again with them (`onUpdate`). A verdict that the order is gone is kept for the session; a live one for LIVE_CACHE_MS.
+// The node never holds the list back. `loadOrders` answers once the indexer and the record store
+// have. It uses the node's clock only if that came within CLOCK_WAIT_MS, and the record verdicts
+// this session already has. The other records are looked up after it, each bounded by
+// RESOLVE_TIMEOUT_MS, and the list is handed over again with them (`onUpdate`). A verdict that the
+// order is gone is kept for the session. A live one is kept for LIVE_CACHE_MS.
 import { readClock } from '../../app/env';
 import type { Services } from '../../app/services';
 import type { IndexerApi } from '../../data/indexer';
@@ -20,25 +24,28 @@ import { buildEntries, recordsToResolve, type OrderEntry } from './orders-model'
 
 export interface OrdersData {
   entries: OrderEntry[];
-  /** the indexer's orders of the wallet (all statuses) */
+  /** The indexer's orders of the wallet, with all statuses. */
   views: OrderView[];
-  /** entries/exits grouped for display (indexer views only) */
+  /** Entries and exits grouped for display, from indexer views only. */
   positions: Position[];
   strays: StrayView[];
-  /** the maker-wide stray list could not be read (a cancel from the record path then says strays are unknown instead of losing them silently) */
+  /**
+   * The maker-wide stray list could not be read. A cancel from the record path then says strays are
+   * unknown instead of losing them silently.
+   */
   straysError: Error | null;
   clock: Clock | null;
-  /** error of the indexer queries (null: fine or not configured) */
+  /** Error of the indexer queries. Null means fine or not configured. */
   indexerError: Error | null;
   nodeError: Error | null;
   records: PlacementRecord[];
-  /** live orders known only from records resolved on the node */
+  /** Live orders known only from records resolved on the node. */
   snapshots: OrderSnapshot[];
-  /** records whose node lookup failed (their status is unknown) */
+  /** Records whose node lookup failed, so their status is unknown. */
   resolveFailures: number;
 }
 
-/** Runs `fn` over `items` with at most `n` in flight; results keep their order. */
+/** Runs `fn` over `items` with at most `n` in flight. Results keep their order. */
 export async function pool<T, R>(items: readonly T[], n: number, fn: (x: T) => Promise<R>): Promise<R[]> {
   const out = new Array<R>(items.length);
   let next = 0;
@@ -54,11 +61,20 @@ export async function pool<T, R>(items: readonly T[], n: number, fn: (x: T) => P
 
 export const spkToAddressFor = (s: Pick<Services, 'sdk' | 'config'>) => (spk: string): string => spkStringToAddress(s.sdk, spk, s.config.network);
 
-/** How long one record's node lookup may take before it counts as failed (a slow node only delays the background merge). */
+/**
+ * How long one record's node lookup may take before it counts as failed. A slow node only delays
+ * the background merge.
+ */
 export const RESOLVE_TIMEOUT_MS = 5_000;
-/** How long the list waits for the node's clock before it shows without it (it follows with the record verdicts). */
+/**
+ * How long the list waits for the node's clock before it shows without it. The clock follows with
+ * the record verdicts.
+ */
 export const CLOCK_WAIT_MS = 800;
-/** How long a verdict that a record's order is live is reused (a gone order's verdict is kept for the session). */
+/**
+ * How long a verdict that a record's order is live is reused. A gone order's verdict is kept for
+ * the session.
+ */
 export const LIVE_CACHE_MS = 15_000;
 
 const within = <T>(p: Promise<T>, ms: number): Promise<T | null> =>
@@ -70,7 +86,10 @@ const within = <T>(p: Promise<T>, ms: number): Promise<T | null> =>
     );
   });
 
-/** Resolves records on the node (4 at a time, each within RESOLVE_TIMEOUT_MS). A failed or timed-out lookup yields `null` for that record. */
+/**
+ * Resolves records on the node, 4 at a time and each within RESOLVE_TIMEOUT_MS. A failed or
+ * timed-out lookup yields `null` for that record.
+ */
 export async function resolveRecords(s: Pick<Services, 'kob' | 'node' | 'sdk' | 'config'>, records: readonly PlacementRecord[], spkToAddress?: (spk: string) => string): Promise<Map<Hex, ResolvedRecord | null>> {
   const spk = spkToAddress ?? spkToAddressFor(s);
   const results = await pool(records, 4, (r) => within(resolveRecord(s.kob, s.node, r, spk), RESOLVE_TIMEOUT_MS));
@@ -78,8 +97,9 @@ export async function resolveRecords(s: Pick<Services, 'kob' | 'node' | 'sdk' | 
 }
 
 /**
- * The verdicts of this session for one node, by covenant id and the record's state (a record that learns a new state is looked up again): a
- * gone order's for the session, a live one's for LIVE_CACHE_MS; a failed lookup is not kept.
+ * The verdicts of this session for one node, by covenant id and the record's state. A record that
+ * learns a new state is looked up again. A gone order's verdict is kept for the session and a live
+ * one's for LIVE_CACHE_MS. A failed lookup is not kept.
  */
 type Verdicts = Map<string, { res: ResolvedRecord; at: number }>;
 const sessions = new WeakMap<object, Verdicts>();
@@ -99,22 +119,32 @@ const cachedVerdict = (verdicts: Verdicts, r: PlacementRecord, now: number): Res
 export interface LoadOrdersOptions {
   signal?: AbortSignal;
   /**
-   * the list again once the record verdicts the first answer did not have came from the node (and its clock, if it was late); not called when
-   * there was nothing to add. Without it `loadOrders` waits for them (tests, callers that need the node's view).
+   * Called with the list again once the record verdicts the first answer did not have came from the
+   * node, and its clock if it was late. It is not called when there was nothing to add. Without it
+   * `loadOrders` waits for them, as tests and callers that need the node's view do.
    */
   onUpdate?(data: OrdersData): void;
-  /** script public key -> address (tests); default: the SDK's, for the configured network */
+  /**
+   * Script public key to address, for tests. The default is the SDK's, for the configured network.
+   */
   spkToAddress?: (spk: string) => string;
 }
 
-/** Pages of the unfiltered (newest first) order history loaded next to every live order: enough for "done" rows, bounded. */
+/**
+ * Pages of the unfiltered order history, newest first, loaded next to every live order. It is
+ * enough for "done" rows and bounded.
+ */
 export const HISTORY_PAGES = 5;
-/** A cancel whose order is still seen at the outpoint it spent this long after submission did not happen (rejected, reorged). */
+/**
+ * A cancel whose order is still seen at the outpoint it spent this long after submission did not
+ * happen, because it was rejected or reorged.
+ */
 export const CANCEL_PENDING_SECONDS = 3600n;
 
 /**
- * Every live order of the maker (`status=active`, every page: the indexer pages newest first, and the oldest live order of a busy repeat, its
- * ENTRY, must never fall off the list) plus a bounded window of recent history, merged (the active answer wins).
+ * Every live order of the maker (`status=active`, every page) plus a bounded window of recent
+ * history, merged with the active answer winning. The indexer pages newest first, and the oldest
+ * live order of a busy repeat, its entry, must never fall off the list.
  */
 export async function loadMakerOrders(indexer: Pick<IndexerApi, 'allOrders'>, maker: Hex, sig: { signal?: AbortSignal }): Promise<OrderView[]> {
   const [active, recent] = await Promise.all([
@@ -131,10 +161,12 @@ const TERMINAL_VIEW = new Set(['filled', 'cancelled', 'refunded', 'killed', 'clo
 const isLiveView = (v: OrderView): boolean => v.status === 'open' || v.status === 'partial';
 
 /**
- * Keeps the record store current (C5-03 / C5-06): every own live order the indexer proves gets a record (if-done exits have none: they are
- * created by their entry's fill), every record learns the last proven state, and a record marked `cancelling` is dropped once that is final
- * (the order is terminal / spent) or un-marked when the order lives on at another outpoint (a fill won the race) or the cancel never landed.
- * Returns the records as they are now. Store failures are ignored: the store is a convenience.
+ * Keeps the record store current. Every own live order the indexer proves gets a record. If-done
+ * exits have none, because their entry's fill creates them. Every record learns the last proven
+ * state. A record marked `cancelling` is dropped once that is final, meaning the order is terminal
+ * or spent. It is un-marked when the order lives on at another outpoint, because a fill won the
+ * race, or when the cancel never landed. Returns the records as they are now. Store failures are
+ * ignored, because the store is a convenience.
  */
 export async function syncRecords(
   s: Pick<Services, 'kob' | 'config'>,
@@ -152,7 +184,7 @@ export async function syncRecords(
     try {
       await store.put(r);
     } catch {
-      /* memory copy only */
+      /* Memory copy only. */
     }
   };
   const drop = async (id: Hex) => {
@@ -160,7 +192,7 @@ export async function syncRecords(
     try {
       await store.remove(id);
     } catch {
-      /* ignore */
+      /* Ignore. */
     }
   };
   for (const v of views) {
@@ -181,7 +213,8 @@ export async function syncRecords(
         await drop(rec.covenantId);
         continue;
       }
-      // the order lives on: a fill won the race (another outpoint), or the cancel never got in (still at the outpoint it spent, long after)
+      // The order lives on. Either a fill won the race, leaving another outpoint, or the cancel
+      // never got in and the order is still at the outpoint it spent, long after.
       if ((where !== null && where !== c.spends) || (stale && where === c.spends)) next = { ...next, cancelling: null };
     }
     if (v && isLiveView(v)) next = refreshFromView(s.kob, next, v);
@@ -207,10 +240,11 @@ export async function loadOrders(s: Services, pubkey: Hex, store: RecordStore, o
     : Promise.resolve([]);
   const recordsP = store.list();
   const background = !!o.onUpdate;
-  // the node's clock is not waited for long when the list may follow later
+  // The node's clock is not waited for long when the list may follow later.
   const [clock0, views, strays, stored] = await Promise.all([background ? within(clockP, CLOCK_WAIT_MS) : clockP, viewsP, straysP, recordsP]);
 
-  // records the indexer does not list (or lists live without a proven state): ask the node what became of them (fresh placements, indexer down)
+  // Records the indexer does not list, or lists live without a proven state. Ask the node what
+  // became of them, as for fresh placements and an indexer that is down.
   const unknown = recordsToResolve(views, stored);
   const at = Date.now();
   const verdicts = verdictsOf(s.node);
@@ -231,7 +265,7 @@ export async function loadOrders(s: Services, pubkey: Hex, store: RecordStore, o
       try {
         snapshots.push(snapshotFromRecord(r));
       } catch {
-        /* not spendable after all */
+        /* Not spendable after all. */
       }
     }
     return {
@@ -259,7 +293,8 @@ export async function loadOrders(s: Services, pubkey: Hex, store: RecordStore, o
     const { resolved, failures } = await lookUp();
     return assemble(resolved, failures, clock0, stored);
   }
-  // the list now, from the indexer, the records and the verdicts on hand; the node's answers follow
+  // The list now, from the indexer, the records and the verdicts on hand. The node's answers
+  // follow.
   const first = await assemble(known, 0, clock0, stored);
   if (pending.length || !clock0) {
     void (async () => {
@@ -272,7 +307,10 @@ export async function loadOrders(s: Services, pubkey: Hex, store: RecordStore, o
   return first;
 }
 
-/** Every event of one order (`/v1/orders/{id}/events`, following the cursor; at most 10 pages of 100). An unknown order has none. */
+/**
+ * Every event of one order (`/v1/orders/{id}/events`), following the cursor for at most 10 pages of
+ * 100. An unknown order has none.
+ */
 export async function loadOrderEvents(indexer: Pick<IndexerApi, 'orderEvents'>, id: Hex, signal?: AbortSignal): Promise<EventView[]> {
   const out: EventView[] = [];
   let after: string | undefined;
