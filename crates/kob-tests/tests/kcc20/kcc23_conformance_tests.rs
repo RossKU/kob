@@ -1,5 +1,6 @@
-//! KCC-23 conformance: kaspanet/kccs `main` 1516a6c (#26, KCC-23 status Draft) `kcc-0023/vectors/conformance.json` (vendored
-//! unmodified in `crates/kob-tests/vectors/kcc23/`, see PROVENANCE.md there) executed against KOB's implementation:
+//! Runs the KCC-23 conformance vectors (kaspanet/kccs `main` 1516a6c (#26, KCC-23 status Draft),
+//! `kcc-0023/vectors/conformance.json`, vendored unmodified in `crates/kob-tests/vectors/kcc23/`,
+//! see PROVENANCE.md there) against KOB's implementation:
 //!
 //! | Vector section | KOB code under test |
 //! |---|---|
@@ -7,7 +8,8 @@
 //! | binding_mutations | `kcc23::verify_binding` refuses each (changed metadata: the recomputed preparation id differs; version 0) |
 //! | declarations | `kcc23::decode` / `kcc23::encode` and `kcc23::TokenDeclaration::from_payload` |
 //!
-//! Plus KOB's own writer: `kcc23::TokenMetadata` of the vector's example token serialises to the vector's `metadata_text`.
+//! Plus KOB's own writer: `kcc23::TokenMetadata` of the vector's example token serialises to the
+//! vector's `metadata_text`.
 //!
 //! Run: cargo test -p kob-tests --test kcc23_conformance_tests
 

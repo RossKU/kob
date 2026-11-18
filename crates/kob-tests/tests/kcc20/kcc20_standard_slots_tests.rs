@@ -1,16 +1,19 @@
-//! KOB's standard token program, the reference KCC-20 in its default configuration (`KCC20Ref`, 3 token inputs / 3 token
-//! outputs per transaction), against the order templates' stray scan, whose bound `MAX_TOK_IN = 8` was sized for the 8 / 8
-//! prototype. The bound stays: it is an upper bound on the token inputs a settle may carry, and every transaction of a
-//! 3 / 3 token carries at most three (the token program's leader takes at most two delegates; after a verified genesis
-//! every input of the token's covenant id is a holder of that program, so the leader is one). The scan therefore reads
-//! every token input such a transaction can have, and the order templates do not change.
+//! Tests KOB's standard token program, the reference KCC-20 in its default configuration
+//! (`KCC20Ref`, 3 token inputs / 3 token outputs per transaction), against the order templates'
+//! stray scan, whose bound `MAX_TOK_IN = 8` is sized for the 8 / 8 prototype and stays: it is an
+//! upper bound on the token inputs a settle may carry, and every transaction of a 3 / 3 token
+//! carries at most three (the token program's leader takes at most two delegates; after a verified
+//! genesis every input of the token's covenant id is a holder of that program, so the leader is
+//! one). The scan therefore reads every token input such a transaction can have, and the order
+//! templates do not change.
 //!
 //! Executed in rusty-kaspa v2.1.0's TxScriptEngine (pinned templates):
 //!   - three custodies of three orders share one transfer; a fourth is beyond the builder's slots;
-//!   - a stray owned by the settling ask at token-input slot 1 or 2 (all slots a 3 / 3 transaction has beside the custody)
-//!     is refused by the ask's scan;
-//!   - four token inputs (the custody and three key-held fillers, no stray): the 3 / 3 program's leader refuses them, so
-//!     no transaction reaches the scan with more than three, while the 8 / 8 prototype takes the same four.
+//!   - a stray owned by the settling ask at token-input slot 1 or 2 (all slots a 3 / 3 transaction
+//!     has beside the custody) is refused by the ask's scan;
+//!   - four token inputs (the custody and three key-held fillers, no stray): the 3 / 3 program's
+//!     leader refuses them, so no transaction reaches the scan with more than three, while the 8 /
+//!     8 prototype takes the same four.
 //!
 //! Run: cargo test --release -p kob-tests --test kcc20_standard_slots_tests -- --nocapture
 

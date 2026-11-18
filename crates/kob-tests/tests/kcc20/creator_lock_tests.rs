@@ -1,4 +1,4 @@
-//! Creator lock (`kob_protocol::creator_lock`) executed in the rusty-kaspa v2.1.0 script engine.
+//! Tests the creator lock (`kob_protocol::creator_lock`) in the rusty-kaspa v2.1.0 script engine.
 //!
 //! A genesis locks a share of the supply under an owner of scheme 0x03 whose P2SH redeem script is
 //! `<until> OP_CHECKLOCKTIMEVERIFY <key> OP_CHECKSIG`. The unlock spends the locked token UTXO and
@@ -6,7 +6,7 @@
 //! sequence on the coin. These tests show that only that transaction moves the tokens: an earlier
 //! lock time, a final sequence, another key, a missing or fake authority input, and every merge or
 //! transfer shape that takes the locked UTXO as a delegate or on the borrow path are refused by the
-//! token program or the lock script themselves. No contract or template was changed for it.
+//! token program or the lock script themselves.
 
 use std::collections::BTreeMap;
 

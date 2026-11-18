@@ -1,7 +1,7 @@
-//! Fixed-supply KCC-20 issuance (`kob token create` / `kob_protocol::issue`) against rusty-kaspa
-//! v2.1.0's script engine: the genesis transaction, then first transfers of the issued token UTXOs
-//! (owner scheme 0x04 custody; the standard program KOB issues takes up to 3 token inputs and 3 token
-//! outputs, the 8 / 8 prototype up to 8 / 8) and the limits.
+//! Tests fixed-supply KCC-20 issuance (`kob token create` / `kob_protocol::issue`) against
+//! rusty-kaspa v2.1.0's script engine: the genesis transaction, then first transfers of the issued
+//! token UTXOs (owner scheme 0x04 custody; the standard program KOB issues takes up to 3 token
+//! inputs and 3 token outputs, the 8 / 8 prototype up to 8 / 8) and the limits.
 //!
 //! Run: cargo test --release -p kob-tests --test kcc20_issue_tests -- --nocapture --test-threads=1
 

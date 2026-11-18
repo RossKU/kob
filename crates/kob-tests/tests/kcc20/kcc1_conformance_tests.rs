@@ -1,5 +1,6 @@
-//! KCC-1 conformance: kaspanet/kccs `main` 411b41b `kcc-0001/vectors/conformance.json` (vendored unmodified in
-//! `crates/kob-tests/vectors/kcc1/`, see PROVENANCE.md there) executed against KOB's implementation:
+//! Runs the KCC-1 conformance vectors (kaspanet/kccs `main` 411b41b,
+//! `kcc-0001/vectors/conformance.json`, vendored unmodified in `crates/kob-tests/vectors/kcc1/`,
+//! see PROVENANCE.md there) against KOB's implementation:
 //!
 //! | Vector section | KOB code under test |
 //! |---|---|
@@ -14,8 +15,9 @@
 //! | rejection_vectors | `kcc1::{decode_arguments, decode_state, validate_argument_type, check_entrypoints}`, the encoders, the compiler |
 //! | hash_committed_virtual_element | `silverscript_abi::encode_struct_payload` (Packed) and `kcc1::hash` |
 //!
-//! Plus a sweep over every committed KOB program artifact (orders, router): every dispatch tag recomputed from
-//! its ABI types under KCC-1 section 3.5.1, every type a KCC-1 type, every template hash recomputed under section 3.7.3.
+//! Plus a sweep over every committed KOB program artifact (orders, router): every dispatch tag
+//! recomputed from its ABI types under KCC-1 section 3.5.1, every type a KCC-1 type, every template
+//! hash recomputed under section 3.7.3.
 //!
 //! Run: cargo test -p kob-tests --test kcc1_conformance_tests -- --nocapture
 

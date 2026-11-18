@@ -1,31 +1,38 @@
-//! KOB orders on tokens of the published build of the KCC-20 reference: the `KCC20` actor of upstream's `KCC20PublicMint`
-//! app (argent-lang/kcc20-reference `c8a0871`, `fixtures/public-mint/sil/KCC20.sil`, vendored in
-//! `contracts/third-party/kcc20-reference`), embedded as `TemplateId::Kcc20PublicMint`, KaspaRocket's build of the same
-//! actor at 10 / 10 token slots (`contracts/third-party/kasparocket`, `TemplateId::KaspaRocketToken11458`, handle `3d689d62...`,
-//! suffix 11,312 B) and KForge's at 6 / 6 (`contracts/third-party/kforge-kcc20`, `TemplateId::KForgeToken7214`, handle
-//! `da96d352...`, suffix 7,068 B). Every test below runs on every build (`BUILDS`).
+//! Tests KOB orders on tokens of the published build of the KCC-20 reference: the `KCC20` actor of
+//! upstream's `KCC20PublicMint` app (argent-lang/kcc20-reference `c8a0871`,
+//! `fixtures/public-mint/sil/KCC20.sil`, vendored in `contracts/third-party/kcc20-reference`),
+//! embedded as `TemplateId::Kcc20PublicMint`, KaspaRocket's build of the same actor at 10 / 10
+//! token slots (`contracts/third-party/kasparocket`, `TemplateId::KaspaRocketToken11458`, handle
+//! `3d689d62...`, suffix 11,312 B) and KForge's at 6 / 6 (`contracts/third-party/kforge-kcc20`,
+//! `TemplateId::KForgeToken7214`, handle `da96d352...`, suffix 7,068 B). Every test below runs on
+//! every build (`BUILDS`).
 //!
-//! Its state is `0x20 ‖ gen__kcc20_template` (the compiler-owned context: the program's own Sil template hash, the same in
-//! every UTXO) followed by the standard 112-byte `KCC20State`. KOB pins the program as its KCC-1 actor-type handle, the
-//! view upstream's own artifact exports for `actor_type<KCC20State>`: prefix = the 1-byte Sil prefix plus the context push
-//! (34 B), the open state = the 112 bytes every KOB order reads at fixed offsets, suffix = the Sil suffix (3,885 B),
-//! template hash = the handle's `734850b0...`. The order contracts are unchanged: they take (tokenTplHash, tplPrefixLen,
-//! tplSuffixLen) per order and authenticate a holder as `blake3(len ‖ prefix ‖ len ‖ suffix)` of its redeem script.
+//! Its state is `0x20 ‖ gen__kcc20_template` (the compiler-owned context: the program's own Sil
+//! template hash, the same in every UTXO) followed by the standard 112-byte `KCC20State`. KOB pins
+//! the program as its KCC-1 actor-type handle, the view upstream's own artifact exports for
+//! `actor_type<KCC20State>`: prefix = the 1-byte Sil prefix plus the context push (34 B), the open
+//! state = the 112 bytes every KOB order reads at fixed offsets, suffix = the Sil suffix (3,885 B),
+//! template hash = the handle's `734850b0...`. The order contracts are unchanged: they take
+//! (tokenTplHash, tplPrefixLen, tplSuffixLen) per order and authenticate a holder as `blake3(len ‖
+//! prefix ‖ len ‖ suffix)` of its redeem script.
 //!
 //! Executed in rusty-kaspa v2.1.0's TxScriptEngine (pinned templates, `pair_harness::Ed`):
-//!   - the byte layout: the handle cut equals upstream's artifact, the 112 bytes after the context are the standalone
-//!     build's state byte for byte, and every offset the orders read is the same;
-//!   - every KAS-book scenario, branch shape and pair scenario on the published build (fills, refunds, IOC / FOK ends,
-//!     updates, repeat merges, cancels; KobAsk / KobBid, conditional, if-done, pair kinds) passes on every input,
-//!     including the token program's own leader / delegator template checks when several holders (custodies of
-//!     different orders) are spent in one transaction (up to the program's 3 token inputs, a fourth refused; on the
-//!     6 / 6 build six custodies and a seventh refused; on the 10 / 10 build eight custodies, the most a KOB order
-//!     transaction carries, and a ninth refused);
-//!   - negatives: the same transactions with the custody / delivery tokens' context field replaced (a consistent holder of
-//!     another `gen__kcc20_template` value under the same covenant id), or with the tokens moved to the standalone build
-//!     (and the standalone scenarios moved to the published build; the published builds swapped), are refused by every
-//!     order that settles against them;
-//!     an order that pins the Sil cut (`9703112e...`, prefix 1) refuses the custody, and the builders refuse such terms.
+//!   - the byte layout: the handle cut equals upstream's artifact, the 112 bytes after the context
+//!     are the standalone build's state byte for byte, and every offset the orders read is the
+//!     same;
+//!   - every KAS-book scenario, branch shape and pair scenario on the published build (fills,
+//!     refunds, IOC / FOK ends, updates, repeat merges, cancels; KobAsk / KobBid, conditional,
+//!     if-done, pair kinds) passes on every input, including the token program's own leader /
+//!     delegator template checks when several holders (custodies of different orders) are spent in
+//!     one transaction (up to the program's 3 token inputs, a fourth refused; on the 6 / 6 build
+//!     six custodies and a seventh refused; on the 10 / 10 build eight custodies, the most a KOB
+//!     order transaction carries, and a ninth refused);
+//!   - negatives: the same transactions with the custody / delivery tokens' context field replaced
+//!     (a consistent holder of another `gen__kcc20_template` value under the same covenant id), or
+//!     with the tokens moved to the standalone build (and the standalone scenarios moved to the
+//!     published build; the published builds swapped), are refused by every order that settles
+//!     against them; an order that pins the Sil cut (`9703112e...`, prefix 1) refuses the custody,
+//!     and the builders refuse such terms.
 //!
 //! Run: cargo test --release -p kob-tests --test kcc20_public_mint_tests -- --nocapture
 
