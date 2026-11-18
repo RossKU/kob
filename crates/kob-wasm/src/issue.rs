@@ -119,6 +119,33 @@ struct IssueRequest {
     /// 0x04, owner zero) is its custody; the maker is the owner of `funding[0]`.
     #[serde(default)]
     curve: Option<CurveJson>,
+    /// A creator lock (`kob_protocol::creator_lock`): holder `holder` becomes the lock's (owner
+    /// scheme 0x03, its P2SH hash, borrow disabled), opening at `until` (unix ms) to the owner of
+    /// `funding[0]`; the declaration carries it as `lock`.
+    #[serde(default)]
+    lock: Option<LockJson>,
+}
+
+/// The creator lock of an `IssueRequest`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LockJson {
+    holder: usize,
+    #[serde(with = "json::field")]
+    until: u64,
+}
+
+/// The creator lock a creation declares, and the holder it owns.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LockOut {
+    #[serde(flatten)]
+    info: kob_protocol::creator_lock::CreatorLock,
+    #[serde(with = "json::field")]
+    script: Vec<u8>,
+    #[serde(with = "json::field")]
+    authority: [u8; 32],
+    holder: u32,
 }
 
 /// The curve of an `IssueRequest`: its table and terms. Token fields, `total` and `amountLeft` come from the genesis.
@@ -229,6 +256,8 @@ struct IssueResult {
     docs: Docs,
     #[serde(skip_serializing_if = "Option::is_none")]
     curve: Option<CurveOut>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lock: Option<LockOut>,
     warnings: Vec<String>,
 }
 
@@ -362,6 +391,23 @@ fn to_spec(r: &IssueRequest, fee_rate: u64) -> R<IssueSpec> {
             table: c.table.clone(),
         };
         spec.curve = Some(GenesisCurve { state, custody: c.custody, carrier: c.carrier.unwrap_or(spec.carrier) });
+    }
+    if let Some(l) = &r.lock {
+        let key = spec.funding.first().ok_or("invalid parameter: no funding")?.owner_pubkey;
+        let lock = kob_protocol::creator_lock::CreatorLock::new(l.until, key).map_err(|e| format!("invalid parameter: {e}"))?;
+        if r.curve.as_ref().is_some_and(|c| c.custody == l.holder) {
+            return Err("invalid parameter: the creator lock and the curve name the same holder".into());
+        }
+        let h =
+            spec.holders.get_mut(l.holder).ok_or_else(|| format!("invalid parameter: lock holder {} is not a holder", l.holder))?;
+        if h.owner_scheme != issue::SCHEME_P2PK_SCHNORR || h.owner != key {
+            return Err("invalid parameter: the creator lock takes a holder of the funding key (owner scheme 0)".into());
+        }
+        h.owner = lock.authority();
+        h.owner_scheme = issue::SCHEME_P2SH;
+        h.borrow_scheme = 0;
+        h.borrow_guard = [0; 32];
+        spec.lock = Some(lock);
     }
     Ok(spec)
 }
@@ -499,7 +545,13 @@ pub fn issue(spec_json: &str) -> R<String> {
         carrier: g.tx.outputs[c.output].value,
         state: AnyState::KobCurveAsk(c.state.clone()),
     });
-    let result = IssueResult { prep, built, declaration, token, docs, curve, warnings: plan.warnings().to_vec() };
+    let lock = spec.lock.map(|l| LockOut {
+        info: l,
+        script: l.script(),
+        authority: l.authority(),
+        holder: req.lock.as_ref().map(|x| x.holder as u32).unwrap_or(0),
+    });
+    let result = IssueResult { prep, built, declaration, token, docs, curve, lock, warnings: plan.warnings().to_vec() };
     serde_json::to_string(&result).map_err(|e| e.to_string())
 }
 

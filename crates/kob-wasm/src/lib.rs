@@ -1156,6 +1156,65 @@ pub mod api {
     pub fn issue_limits() -> R<String> {
         crate::issue::issue_limits()
     }
+    /// A creator lock (`kob_protocol::creator_lock`) from `{until, key}` or `{script}` (hex; refused
+    /// unless it is exactly the template): `{until, key, script, authority, scriptPublicKey}`.
+    pub fn creator_lock(request: &str) -> R<String> {
+        use kob_protocol::creator_lock::CreatorLock;
+        let v: serde_json::Value = parse("request", request)?;
+        let lock = match v.get("script").and_then(|s| s.as_str()) {
+            Some(s) => CreatorLock::parse_hex(s).ok_or("not a creator lock script")?,
+            None => {
+                let l: CreatorLock = parse("request", request)?;
+                CreatorLock::new(l.until, l.key).map_err(|e| e.to_string())?
+            }
+        };
+        out(&serde_json::json!({
+            "until": lock.until.to_string(),
+            "key": to_hex(&lock.key),
+            "script": lock.script_hex(),
+            "authority": to_hex(&lock.authority()),
+            "scriptPublicKey": tx::spk_to_string(&lock.spk()),
+        }))
+    }
+    /// The KAS output that authorises a creator lock's unlock (`kob_protocol::creator_lock::LockCoin`).
+    /// With `ownKeys`, the change key must be one of them.
+    pub fn build_lock_coin(request: &str) -> R<String> {
+        let (r, own): (kob_protocol::creator_lock::LockCoin, _) = with_own_keys(request)?;
+        if let Some(own) = &own {
+            for k in [r.change, r.funding.first().map(|f| f.pubkey)].into_iter().flatten() {
+                if !own.contains(&k) {
+                    return Err(format!("change key {} is not one of the wallet keys", to_hex(&k)));
+                }
+            }
+        }
+        out(&kob_protocol::creator_lock::build_lock_coin(&r, &budget::lookup).map_err(|e| e.to_string())?)
+    }
+    /// A creator lock's unlock (`kob_protocol::creator_lock::UnlockCreatorLock`). With `ownKeys`, the
+    /// lock's key, the recipient and the change key must be among them.
+    pub fn build_unlock(request: &str) -> R<String> {
+        let (r, own): (kob_protocol::creator_lock::UnlockCreatorLock, _) = with_own_keys(request)?;
+        if let Some(own) = &own {
+            for (what, k) in [("lock key", Some(r.lock.key)), ("recipient", r.to), ("change key", r.change)] {
+                if let Some(k) = k {
+                    if !own.contains(&k) {
+                        return Err(format!("{what} {} is not one of the wallet keys", to_hex(&k)));
+                    }
+                }
+            }
+        }
+        out(&kob_protocol::creator_lock::build_unlock(&r, &budget::lookup).map_err(|e| e.to_string())?)
+    }
+    fn with_own_keys<T: serde::de::DeserializeOwned>(request: &str) -> R<(T, Option<Vec<[u8; 32]>>)> {
+        let mut v: serde_json::Value = parse("request", request)?;
+        let own: Option<Vec<[u8; 32]>> = match v.as_object_mut().and_then(|o| o.remove("ownKeys")) {
+            None | Some(serde_json::Value::Null) => None,
+            Some(k) => {
+                let list: Vec<String> = serde_json::from_value(k).map_err(|e| format!("ownKeys: {e}"))?;
+                Some(list.iter().map(|s| kob_protocol::json::hex32(s).map_err(|e| format!("ownKeys: {e}"))).collect::<R<_>>()?)
+            }
+        };
+        Ok((serde_json::from_value(v).map_err(|e| format!("request: {e}"))?, own))
+    }
 }
 
 fn js<T>(r: Result<T, String>) -> Result<T, JsError> {
@@ -1424,6 +1483,24 @@ pub fn issue(spec: &str) -> Result<String, JsError> {
 /// The proof is `kob-kcc23-proof/1` JSON from an indexer or any other source. The result is
 /// `{covenantId, preparationTxid, genesisTxid, json, token}`. It throws when the proof binds
 /// nothing.
+/// A creator lock: `{until, key}` or `{script}` -> `{until, key, script, authority, scriptPublicKey}`.
+#[wasm_bindgen(js_name = creatorLock)]
+pub fn creator_lock(request: &str) -> Result<String, JsError> {
+    js(api::creator_lock(request))
+}
+
+/// The KAS output that authorises a creator lock's unlock: a `BuiltTx`.
+#[wasm_bindgen(js_name = buildLockCoin)]
+pub fn build_lock_coin(request: &str) -> Result<String, JsError> {
+    js(api::build_lock_coin(request))
+}
+
+/// A creator lock's unlock: a `BuiltTx` (lock time = the lock's time).
+#[wasm_bindgen(js_name = buildUnlock)]
+pub fn build_unlock(request: &str) -> Result<String, JsError> {
+    js(api::build_unlock(request))
+}
+
 #[wasm_bindgen(js_name = kcc23Verify)]
 pub fn kcc23_verify(proof: &str) -> Result<String, JsError> {
     js(api::kcc23_verify(proof))
