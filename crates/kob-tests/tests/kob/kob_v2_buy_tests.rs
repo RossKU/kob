@@ -3775,6 +3775,32 @@ fn v2_buy_repeat_ifd_attacks() {
     let (ei, _) = add_ev(&f, &mut s, &Ev::bid(285_000_000));
     set_arg(&mut s, 0, 0, iv(ei));
     run_bad(n, &with_name(s, "NRPB33 exit armed by update beside a merge of 3 qty (an update is not its settle)"), 2);
+    // ... or refunded with a sigscript that starts with 0x08 || m, as its settle of m would (H1, the twin of the sell side's
+    // NRP23 / V3IB06): the entry reads a booked exit that settled m and passes; the exit's own refund refuses (due: lock time
+    // at its expiry). With bought == 0 it allows no token input, and refund() takes no argument (the 8-byte push is an extra
+    // item), so a refund never sits beside a merge
+    let refund8 = |x: &CondBP, x_value: i64| {
+        let mut inp = refund_push_ev(&condb(n, x), 3 * WHOLE, x_value, cov(RPTA_EXIT), 2_000);
+        if let Role::RawSs { name, .. } = &mut inp.role {
+            *name = "condb.refund8";
+        }
+        let mut s = rpta_merge(&f, &MergeBKnobs::new(&f, 6, 4, 3));
+        s.inputs[0] = inp;
+        s.outputs[0] = out(x_value - REFUND_TIP, p2pk_spk(&m), None);
+        s.outputs[1] = out(0, p2pk_spk(&m), None);
+        s.inputs.push(p2pk_in(&f.taker, 1000 * KAS));
+        s.lock_time = EXPIRY as u64;
+        let last = s.outputs.len() - 1;
+        balance(&mut s, last);
+        s
+    };
+    let x_value = rpta_merge(&f, &MergeBKnobs::new(&f, 6, 4, 3)).inputs[0].entry.amount as i64;
+    let s = refund8(&xp, x_value);
+    run_bad(n, &with_name(s, "NRPB37 exit refunded with its sigscript pushed as 0x08 || m beside a merge of 3 qty (H1)"), 0);
+    // the same with a hand-made exit holding bought units (mode 1, bought 1 whole): the refund that reads its custody input
+    // still takes no argument and allows that one token input only (the entry also refuses its delivery block)
+    let s = refund8(&CondBP { mode: 1, bought: WHOLE, ..xp.clone() }, x_value);
+    run_bad(n, &with_name(s, "NRPB37b exit of mode 1 holding 1 whole refunded with 0x08 || m beside a merge of 3 qty (H1)"), 0);
     // The other direction: a re-arming take-profit names, as its merge, its sell-stop entry's arming update next to an
     // ask fill: the exit's whole budgets would leak to the filler. (The merge is laid out for an empty entry; the entry that
     // is armed instead still holds qty, since update arms only an entry with qty to fill.)
@@ -6825,6 +6851,41 @@ fn dm_ordering_rules() {
     s.outputs.swap(0, 1);
     rebalance(&mut s, &ix);
     run_bad(n, &with_name(s, "DM5-04 top-up successor not at the order's own index"), 0);
+    // DLV-07 with one order (KobBid's PO08 / NO08): the order at input 1 tops up the receive UTXO (input 2), its delivery D
+    // at output 1. With `fake`, the receive UTXO's real successor (the leader's first output, grown by DM_THR + 1 that the
+    // seller pays) is output 0 and D a copy of the receive state grown by n: OpAuthOutputIdx(tokIn, 0) is 0, not the order
+    let one = |fake: bool, name: &str| {
+        let t = &f.net.t;
+        let (mut s, ix) = dm_fill(&f, &DmK { form: 2, ..DmK::new(dm_cp(mb, 2, 0), 4) });
+        s.inputs.insert(0, p2pk_in(&f.taker, KAS));
+        for o in s.outputs.iter_mut() {
+            if let Some(b) = o.covenant.as_mut() {
+                b.authorizing_input += 1;
+            }
+        }
+        set_arg(&mut s, 1, 1, iv(2));
+        if fake {
+            let recv = TSt::recv(DM_RECV_HAVE, &mb, DM_THR);
+            let succ = recv.with(|r| r.amount += DM_THR + 1);
+            s.outputs.insert(0, t_out(t, DM_RECV_KAS, &succ, 2));
+            if let Role::TokLeader { next, .. } = &mut s.inputs[2].role {
+                next.insert(0, succ.val());
+            }
+            let sold = TSt::plain(4 * WHOLE + DM_RECV_HAVE + DM_THR + 1, &pk(&f.taker));
+            s.inputs[3] = t_in(t, CARRIER, &sold, None, Wit::P2pk(f.taker), 1_000);
+        } else {
+            s.outputs.insert(0, out(KAS, p2pk_spk(&pk(&f.taker)), None));
+        }
+        balance(&mut s, ix.change + 1);
+        with_name(s, name)
+    };
+    run_ok(n, &one(false, "DM5-05+ one order at input 1 tops up the receive UTXO (output 0 a KAS output)"));
+    let s = one(true, "DM5-05 one order: the receive UTXO's successor at output 0, the order's output 1 a copy of its state");
+    run_bad(n, &s, 1);
+    // only the order refuses it: the token accepts the successor at output 0 and the copy at output 1
+    let (tx, entries) = build(n, &s, &[]);
+    let res = execute(&tx, &entries).expect("DM5-05 executes");
+    assert!(res.iter().enumerate().all(|(i, r)| i == 1 || r.is_ok()), "DM5-05: only the order (input 1) refuses");
     // a terminal top-up with a refund: the refund at M - 1 - i, the successor at i
     let ending = dm_shapes(&dm_cp(mb, 2, 0), 2);
     run_ok(n, &with_name(dm_fill(&f, &ending[1]).0, "DM5 terminal top-up with its refund last"));
