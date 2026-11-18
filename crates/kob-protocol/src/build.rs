@@ -1467,10 +1467,7 @@ pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
                 return invalid("the amend of an unbound curve needs its custody (it binds the curve to that token)");
             };
             let cov = order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
-            if c.utxo.transaction_id != order.utxo.transaction_id
-                || c.state.owner() != cov
-                || c.state.amount() != prev.amount_left
-            {
+            if c.utxo.transaction_id != order.utxo.transaction_id || c.state.owner() != cov || c.state.amount() != prev.amount_left {
                 return invalid("the custody of an unbound curve is the output of its genesis it owns, of exactly amountLeft");
             }
             if c.utxo.covenant_id != Some(next.token_cov_id) {

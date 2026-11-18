@@ -624,7 +624,7 @@ mod tests {
             let mut b = t.contract().compiled.bytecode[1..1 + t.state_len].to_vec();
             let Some(xid) = exit_template(id) else { return AnyState::decode(id, &b).expect("compiled state") };
             let n = b.len();
-            let ints_only = |t: &[u8]| t.len() % 9 == 0 && t.chunks(9).all(|c| c[0] == 0x08);
+            let ints_only = |t: &[u8]| t.len().is_multiple_of(9) && t.chunks(9).all(|c| c[0] == 0x08);
             let (j, end) = (0..n.saturating_sub(3))
                 .filter(|&j| b[j] == 0x4d)
                 .map(|j| (j, j + 3 + u16::from_le_bytes([b[j + 1], b[j + 2]]) as usize))

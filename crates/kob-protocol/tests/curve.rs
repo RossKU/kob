@@ -100,7 +100,7 @@ fn curve_record_round_trips() {
             }
             let st = AnyState::KobCurveAsk(s.clone());
             let r = Record::order(0, &st, Some(Custody { token_output: 1, extension_commitment: EXT }), None);
-            let bytes = payload::encode(&[r.clone()]).unwrap();
+            let bytes = payload::encode(std::slice::from_ref(&r)).unwrap();
             let back = payload::decode(&bytes).unwrap().unwrap();
             assert_eq!(back.records, vec![r]);
             println!(
@@ -112,7 +112,7 @@ fn curve_record_round_trips() {
             // AMEND of the curve, and an amend that would leave it unbound is refused
             let a =
                 Record::amend(0, 0, &AnyState::KobCurveAsk(CurveAskState { tip: TIP, token_cov_id: TOKEN_COV, ..s.clone() }), None);
-            let ab = payload::encode(&[a.clone()]).unwrap();
+            let ab = payload::encode(std::slice::from_ref(&a)).unwrap();
             assert_eq!(payload::decode(&ab).unwrap().unwrap().records, vec![a]);
             let prev = AnyState::KobCurveAsk(s.clone());
             assert!(payload::check_amend_terms(&prev, &AnyState::KobCurveAsk(CurveAskState { token_cov_id: [0; 32], ..s.clone() }))

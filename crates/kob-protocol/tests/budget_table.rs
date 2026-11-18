@@ -198,12 +198,17 @@ fn pair_shapes_padded(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
     out
 }
 
+/// Role -> (budget, the shape needing the most units, those units).
+type Measured = BTreeMap<String, (u16, String, u64)>;
+/// A group of named shapes, built when it is measured.
+type ShapeGroup = Box<dyn Fn() -> Vec<(String, Action)>>;
+
 /// Role -> (budget, the shape needing the most units, those units), measured one group of shapes at a time (each program,
 /// the grid, each program pair), and the worst shape of each role: the whole shape set does not fit in memory.
-fn measure_streamed() -> (BTreeMap<String, (u16, String, u64)>, BTreeMap<String, Action>) {
-    let mut measured: BTreeMap<String, (u16, String, u64)> = BTreeMap::new();
+fn measure_streamed() -> (Measured, BTreeMap<String, Action>) {
+    let mut measured: Measured = BTreeMap::new();
     let mut keep: BTreeMap<String, Action> = BTreeMap::new();
-    let mut groups: Vec<Box<dyn Fn() -> Vec<(String, Action)>>> = vec![];
+    let mut groups: Vec<ShapeGroup> = vec![];
     for p in common::PROGRAMS {
         groups.push(Box::new(move || program_shapes(p)));
     }
