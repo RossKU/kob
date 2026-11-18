@@ -1,12 +1,18 @@
-// The signing pipeline every transaction of the app goes through:
+// The signing pipeline every transaction of the app goes through. Its stages are:
 //
-//   built (kob.build) -> signing (wallet signs each digest) -> finalizing (kob.finalize VERIFIES each signature against the digest and
-//   assembles the scripts) -> validating (kob.validate: the script engine runs the covenants; nothing invalid is ever broadcast)
-//   -> submitting (node RPC) -> submitted { txid }
+// - built: `kob.build` made the transaction.
+// - signing: the wallet signs each digest.
+// - finalizing: `kob.finalize` verifies each signature against its digest and assembles the
+//   scripts.
+// - validating: `kob.validate` runs the covenants in the script engine, so nothing invalid is ever
+//   broadcast.
+// - submitting: the node RPC takes it.
+// - submitted: the node returned `{ txid }`.
 //
-// The wallet only ever sees the unsigned transaction the user confirmed. What it returns is reduced to signatures, which must verify
-// against digests kob-wasm computed from OUR transaction: a wallet that altered the transaction, signed the wrong key or a different
-// sighash type is caught at `finalizing`, before anything is broadcast.
+// The wallet only ever sees the unsigned transaction the user confirmed. What it returns is reduced
+// to signatures, which must verify against digests kob-wasm computed from our own transaction. So
+// a wallet that altered the transaction, signed with the wrong key or used a different sighash
+// type is caught at `finalizing`, before anything is broadcast.
 import type { BuiltTx, SignedTx, TxJson } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 import type { NodeApi, NodeUtxo } from '../data/node';
@@ -18,13 +24,19 @@ import type { LockHint, SignerNote } from '../signer/protocol';
 import { WalletError, type WalletAdapter, type LiveSigning } from './types';
 import { awaitVisible, freshInputs, needsVisibility, noteSent } from './visibility';
 
+/** A stage of the signing pipeline, as `onStage` reports it. */
 export type SignStage = 'signing' | 'finalizing' | 'validating' | 'submitting' | 'submitted';
+/** A stage the pipeline can fail at. */
 export type FailedStage = Exclude<SignStage, 'submitted'>;
 
+/** A failure of the signing pipeline, with the stage it failed at and a code for the UI. */
 export class SignFlowError extends Error {
   readonly stage: FailedStage;
   readonly cause: unknown;
-  /** `WalletError.code` / `NodeError.code` of the cause, or `signature` (finalize refused) / `validation` (script engine refused) / `other` */
+  /**
+   * The cause's `WalletError.code` or `NodeError.code`. Otherwise it is `signature` when finalize
+   * refused, `validation` when the script engine refused, or `other`.
+   */
   readonly code: string;
   constructor(stage: FailedStage, cause: unknown, message: string, code: string) {
     super(message);
@@ -33,7 +45,10 @@ export class SignFlowError extends Error {
     this.cause = cause;
     this.code = code;
   }
-  /** the user declined in the wallet (`rejected-fresh`: perhaps because the wallet refused): not an error to show as one */
+  /**
+   * Tells whether the user declined in the wallet, which is not an error to show as one.
+   * `rejected-fresh` counts too, although the wallet may have refused on its own.
+   */
   get rejectedByUser(): boolean {
     return this.stage === 'signing' && (this.code === 'rejected' || this.code === 'rejected-fresh');
   }
@@ -48,84 +63,122 @@ export class SignFlowError extends Error {
 export const REJECTED_FRESH =
   'Your wallet did not sign this step, so nothing was sent for it. If your wallet said an input "is not an unspent output on this network" (KasWare then offers only Reject), its node had not caught up with your previous transaction yet: wait a few seconds and try again.';
 
-/** Whether a wallet's refusal of `tx` is to be reported as `rejected-fresh`. */
+/** Tells whether a wallet's refusal of `tx` is to be reported as `rejected-fresh`. */
 export const isDeclinedFresh = (e: unknown, adapter: WalletAdapter, tx: Pick<TxJson, 'inputs'>, alsoFresh?: ReadonlyMap<string, number>): boolean =>
   e instanceof WalletError && e.code === 'rejected' && needsVisibility(adapter) && freshInputs(tx, alsoFresh ? { alsoFresh } : {}).length > 0;
 
+/** The inputs of `signAndSubmit`. */
 export interface SignAndSubmitArgs {
   kob: KobWasm;
   node: NodeApi;
   adapter: WalletAdapter;
   built: BuiltTx;
-  /** network name (`mainnet` / `testnet-10`); wallets that need it (Kastle) get it */
+  /** The network name, `mainnet` or `testnet-10`. Wallets that need it, such as Kastle, get it. */
   network: string;
-  /** run the in-wasm script engine before broadcasting (default true; only tests turn it off) */
+  /**
+   * Runs the in-wasm script engine before broadcasting. The default is true, and only tests turn it
+   * off.
+   */
   validate?: boolean;
-  /** shrink the compute budgets to what the scripts use, lowering the fee (default true) */
+  /**
+   * Shrinks the compute budgets to what the scripts use, which lowers the fee. The default is true.
+   */
   tighten?: boolean;
   onStage?: (stage: SignStage, info?: { txid?: string }) => void;
-  /** wallet popup timeout, ms (default: `SIGN_TIMEOUT_MS`) */
+  /** The wallet popup timeout in ms. The default is `SIGN_TIMEOUT_MS`. */
   timeoutMs?: number;
   /**
-   * re-read the wallet (silently) right before asking it to sign and refuse when its account or network is no longer the one the plan was
-   * built for (default true when the adapter can `refresh`)
+   * Re-reads the wallet silently right before asking it to sign. It refuses when the wallet's
+   * account or network is no longer the one the plan was built for. The default is true when the
+   * adapter can `refresh`.
    */
   checkWallet?: boolean;
   /**
-   * script public key -> address of the configured network. When given, every input of the transaction is re-read from the NODE right before
-   * the wallet is asked to sign, and any input whose amount, script or covenant id the node does not confirm aborts the flow (the KAS of unsigned
-   * covenant inputs is committed by no signature, so the fee shown must be over chain values). The order send (ui/confirm/send.ts) omits it: its
-   * own pre-sign check has just read every input on the node and the decoder stops any it does not confirm. Tests with synthetic chains omit it.
+   * Maps a script public key to an address of the configured network.
+   *
+   * When given, every input of the transaction is re-read from the node right before the wallet is
+   * asked to sign. Any input whose amount, script or covenant id the node does not confirm aborts
+   * the flow. The KAS of unsigned covenant inputs is committed by no signature, so the fee shown
+   * must be over chain values.
+   *
+   * The order send (ui/confirm/send.ts) omits it. Its own pre-sign check has just read every input
+   * on the node, and the decoder stops any it does not confirm. Tests with synthetic chains omit it
+   * too.
    */
   inputAddress?: (spk: string) => string;
   /**
-   * the last DAA score at which this transaction may still be sent (an auction that starts at the clock it was planned with: `auctionSubmitBy`).
-   * The node clock is read once the wallet has signed; a clock past it aborts the flow before anything is broadcast (`clock-moved`): the price
-   * of the auction has moved on while the wallet was waiting for approval, so the caller plans it again with the current clock.
+   * The last DAA score at which this transaction may still be sent. It is set for an auction that
+   * starts at the clock it was planned with (`auctionSubmitBy`).
+   *
+   * The node clock is read once the wallet has signed. A clock past it aborts the flow before
+   * anything is broadcast (`clock-moved`). The price of the auction has then moved on while the
+   * wallet waited for approval, so the caller plans it again with the current clock.
    */
   submitByDaa?: bigint;
-  /** the transaction re-times the one the wallet signed last (`SignOptions.retime`) */
+  /** Set when the transaction re-times the one the wallet signed last (`SignOptions.retime`). */
   retime?: boolean;
-  /** the node's DAA score now, for the times the private-key signer says (`SignOptions.clockDaa`) */
+  /**
+   * The node's DAA score now, for the times the private-key signer says (`SignOptions.clockDaa`).
+   */
   clockDaa?: bigint;
-  /** the app's hints for the private-key signer's confirmation (`SignOptions.signerNotes`) */
+  /** The app's hints for the private-key signer's confirmation (`SignOptions.signerNotes`). */
   signerNotes?: SignerNote[];
-  /** a step of the wallet's one-approval session (`SignOptions.session`): every check here still runs */
+  /**
+   * A step of the wallet's one-approval session (`SignOptions.session`). Every check here still
+   * runs.
+   */
   session?: string;
-  /** the wallet's creator locks a lock coin of this transaction pays to (`SignOptions.locks`) */
+  /**
+   * The wallet's creator locks that a lock coin of this transaction pays to (`SignOptions.locks`).
+   */
   locks?: LockHint[];
   /**
-   * the transaction may be replaced while the user reads it (`SignOptions.live`): `submitByOf` gives the `submitByDaa` of a replacement the
-   * wallet signed, which is then the one finalized, checked and sent
+   * Set when the transaction may be replaced while the user reads it (`SignOptions.live`).
+   * `submitByOf` gives the `submitByDaa` of a replacement the wallet signed, which is then the one
+   * finalized, checked and sent.
    */
   live?: { signing: LiveSigning; submitByOf(built: BuiltTx): bigint | undefined };
   /**
-   * script public key -> address of the app's network, for the visibility gate (visibility.ts): an input that spends an output of a transaction
-   * this page sent moments ago (a ladder, an order right after another) must be visible to an extension wallet's own node before the wallet is
-   * asked. Without it (and without `inputAddress`) such a transaction is not signed (`inputs-pending`).
+   * Maps a script public key to an address of the app's network, for the visibility gate
+   * (visibility.ts).
+   *
+   * An input that spends an output of a transaction this page sent moments ago must be visible to
+   * an extension wallet's own node before the wallet is asked. That happens with a ladder, or with
+   * an order right after another. Without this and without `inputAddress`, such a transaction is
+   * not signed (`inputs-pending`).
    */
   addressOf?: (spk: string) => string;
-  /** the visibility gate waits (true) / stops waiting (false) */
+  /** Called with true when the visibility gate starts waiting, and with false when it stops. */
   onWait?: (waiting: boolean) => void;
-  /** the gate's limits (tests shorten them) */
+  /** The gate's limits. Tests shorten them. */
   visibility?: { timeoutMs?: number; pollMs?: number; settleMs?: number; sleep?: (ms: number) => Promise<void> };
 }
 
 /**
- * How far (DAA, 2 s at 10 per second) past its start an auction planned at the click may still be sent. An auction of a market or marketable
- * order starts `MARKET_ACTIVATION_DAA` after the clock it was planned with and moves its price from that start on: a wallet that keeps the
- * request open longer than that lead plus this margin returns a signature for an auction already this far down its price path.
+ * How far past its start an auction planned at the click may still be sent, in DAA. It is 2 s at
+ * 10 per second.
+ *
+ * An auction of a market or marketable order starts `MARKET_ACTIVATION_DAA` after the clock it was
+ * planned with, and moves its price from that start on. A wallet that keeps the request open
+ * longer than that lead plus this margin returns a signature for an auction already this far down
+ * its price path.
  */
 export const AUCTION_START_MARGIN_DAA = 20n;
 
-/** A wallet that answers "I cannot see an input" (`inputs-unknown`) is asked again this often, this far apart (chain.ts does the same). */
+/**
+ * How often, and how far apart, a wallet that answers "I cannot see an input" (`inputs-unknown`)
+ * is asked. chain.ts does the same.
+ */
 const UNKNOWN_ATTEMPTS = 3;
 const UNKNOWN_RETRY_MS = 2000;
 
 /**
- * The `submitByDaa` of a transaction that creates `states` (the planner's `{ kind, state }` order states): the earliest start (plus
- * `AUCTION_START_MARGIN_DAA`) of an auction among them that starts at or after `plannedAtDaa`, the clock it was planned with (an amended order
- * that keeps an older start is not one). Null: no such auction.
+ * The `submitByDaa` of a transaction that creates `states`, the planner's `{ kind, state }` order
+ * states.
+ *
+ * It is the earliest start, plus `AUCTION_START_MARGIN_DAA`, of an auction among them that starts
+ * at or after `plannedAtDaa`, the clock it was planned with. An amended order that keeps an older
+ * start does not count. It returns null when there is no such auction.
  */
 export function auctionSubmitBy(states: readonly { state: unknown }[], plannedAtDaa: bigint): bigint | null {
   let by: bigint | null = null;
@@ -147,7 +200,10 @@ export function auctionSubmitBy(states: readonly { state: unknown }[], plannedAt
   return by;
 }
 
-/** The node clock must still be at or before `by` (`SignAndSubmitArgs.submitByDaa`); a clock that cannot be read counts as moved. */
+/**
+ * Checks that the node clock is still at or before `by` (`SignAndSubmitArgs.submitByDaa`). A clock
+ * that cannot be read counts as moved.
+ */
 async function assertClockBefore(node: NodeApi, by: bigint): Promise<void> {
   let daa: bigint;
   try {
@@ -159,22 +215,25 @@ async function assertClockBefore(node: NodeApi, by: bigint): Promise<void> {
   if (daa > by) throw new SignFlowError('validating', null, `The auction would already be ${daa - by + AUCTION_START_MARGIN_DAA} DAA past its start (node clock ${daa}). Nothing was sent.`, 'clock-moved');
 }
 
+/** What `signAndSubmit` sent. */
 export interface SignAndSubmitResult {
-  /** id returned by the node */
+  /** The id returned by the node. */
   txid: string;
-  /** the transaction sent: `built`, or the replacement of it the wallet signed (`live`) */
+  /** The transaction sent, `built` or the replacement of it the wallet signed (`live`). */
   built: BuiltTx;
   signed: SignedTx;
-  /** network fee, sompi */
+  /** The network fee in sompi. */
   fee: bigint;
 }
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /**
- * The plan was built for one account on one network. A wallet that switched since (an event the UI may not have handled yet, or a
- * confirmation screen left open) must not be asked to sign it: the popup would show another account, or the signature would be for a key
- * the plan does not spend.
+ * Checks that the wallet is still on the account and network the plan was built for.
+ *
+ * A wallet that switched since must not be asked to sign it. The switch may be an event the UI has
+ * not handled yet, or a confirmation screen left open. The popup would show another account, or
+ * the signature would be for a key the plan does not spend.
  */
 export async function assertWalletMatches(adapter: WalletAdapter, built: BuiltTx, network: string): Promise<void> {
   let now;
@@ -204,8 +263,9 @@ async function assertInputsOnNode(node: NodeApi, built: BuiltTx, toAddress: (spk
 }
 
 /**
- * The visibility gate of one transaction (visibility.ts): an extension wallet is asked only once every input that spends an output of a
- * transaction this page sent recently is visible to its own node. A no-op for the private-key signer and for inputs older than that.
+ * The visibility gate of one transaction (visibility.ts). An extension wallet is asked only once
+ * every input that spends an output of a transaction this page sent recently is visible to its own
+ * node. It does nothing for the private-key signer and for inputs older than that.
  */
 async function assertVisibleToWallet(a: SignAndSubmitArgs, built: BuiltTx): Promise<void> {
   if (!needsVisibility(a.adapter) || freshInputs(built.tx).length === 0) return;
@@ -225,6 +285,10 @@ async function assertVisibleToWallet(a: SignAndSubmitArgs, built: BuiltTx): Prom
   }
 }
 
+/**
+ * Runs the signing pipeline for one transaction, from the wallet's signature to the node's txid.
+ * Each failure throws a `SignFlowError` that names its stage.
+ */
 export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmitResult> {
   const { kob, node, adapter, network } = a;
   let built = a.built;
@@ -248,7 +312,8 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
       sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}), ...(a.clockDaa !== undefined ? { clockDaa: a.clockDaa } : {}), ...(a.signerNotes?.length ? { signerNotes: a.signerNotes } : {}), ...(a.locks?.length ? { locks: a.locks } : {}), ...(a.live ? { live: a.live.signing } : {}), ...(a.session ? { session: a.session } : {}) });
       break;
     } catch (e) {
-      // the wallet's own node has not seen a coin of it yet after all (a slow relay): asked again a moment later, at most UNKNOWN_ATTEMPTS times
+      // The wallet's own node has not seen a coin of it yet after all, through a slow relay. It is
+      // asked again a moment later, at most UNKNOWN_ATTEMPTS times in all.
       if (e instanceof WalletError && e.code === 'inputs-unknown' && n < UNKNOWN_ATTEMPTS) {
         await sleep(UNKNOWN_RETRY_MS);
         continue;
@@ -258,7 +323,8 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
       throw new SignFlowError('signing', e, msg(e), code);
     }
   }
-  // the wallet signed a replacement it was given while the user read: that one is finalized, checked and sent
+  // When the wallet signed a replacement it was given while the user read, that one is finalized,
+  // checked and sent.
   const replaced = a.live?.signing.signed;
   if (a.live && replaced && replaced !== built) {
     built = replaced;
@@ -292,49 +358,57 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
     const err = e instanceof NodeError ? e : describeNodeError(e);
     throw new SignFlowError('submitting', err, err.message, err.code);
   }
-  // the node's answer is not trusted as "the" txid: it must be the id of the very transaction that was signed and validated
+  // The node's answer is not trusted as the txid. It must be the id of the very transaction that
+  // was signed and validated.
   if (txid !== signed.tx.id) {
     throw new SignFlowError('submitting', null, `The node answered with transaction id ${String(txid).slice(0, 16)}... but the signed transaction is ${signed.tx.id.slice(0, 16)}...: its answer cannot be trusted. Check the explorer before retrying.`, 'txid-mismatch');
   }
-  // what this transaction changes is read past the indexer's cache from now on (data/fresh.ts)
+  // What this transaction changes is read past the indexer's cache from now on (data/fresh.ts).
   markOwnAction();
-  // its outputs are fresh: the next transaction spending one waits until the wallet's node sees it (handed to that node where the wallet can)
+  // Its outputs are fresh. The next transaction spending one waits until the wallet's node sees
+  // it. Where the wallet can, the transaction is handed to that node.
   void noteSent(adapter, signed.tx);
   stage('submitted', { txid });
   return { txid, built, signed, fee: BigInt(signed.fee.fee) };
 }
 
-// ------------------------------------------------------------------------------------------------ acceptance
+// --- Acceptance ---
 
+/** An output to wait for in the node's UTXO set. */
 export interface ExpectedOutput {
-  /** address the output pays to (the node indexes UTXOs by address) */
+  /** The address the output pays to. The node indexes UTXOs by address. */
   address: string;
   transactionId: string;
   index: number;
 }
 
+/** The polling limits of `waitForAcceptance`. */
 export interface AcceptanceOptions {
   timeoutMs?: number;
   pollMs?: number;
-  /** injectable for deterministic tests */
+  /** Injectable, for deterministic tests. */
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   signal?: AbortSignal;
 }
 
+/** The outcome of `waitForAcceptance`. */
 export interface AcceptanceResult {
-  /** every expected output was seen in the node's UTXO set */
+  /** Every expected output was seen in the node's UTXO set. */
   accepted: boolean;
   elapsedMs: number;
   found: NodeUtxo[];
   missing: ExpectedOutput[];
-  /** last node error seen while polling (polling continues through transient errors) */
+  /** The last node error seen while polling. Polling continues through transient errors. */
   lastError?: string;
 }
 
 /**
- * Polls the node until ALL `expected` outputs appear in its UTXO set (= the transaction was accepted into the DAG), or the timeout hits.
- * The caller says what to look for (`expectedOutputs()` derives it from a transaction). Never throws for node hiccups.
+ * Polls the node until all `expected` outputs appear in its UTXO set, or the timeout hits. Their
+ * appearance means the transaction was accepted into the DAG.
+ *
+ * The caller says what to look for, and `expectedOutputs()` derives it from a transaction. It
+ * never throws for node hiccups.
  */
 export async function waitForAcceptance(node: NodeApi, expected: ExpectedOutput | ExpectedOutput[], o: AcceptanceOptions = {}): Promise<AcceptanceResult> {
   const want = Array.isArray(expected) ? expected : [expected];
@@ -363,7 +437,10 @@ export async function waitForAcceptance(node: NodeApi, expected: ExpectedOutput 
   }
 }
 
-/** The outputs of `tx` to wait for (`indices`: all when omitted), with their addresses derived through the SDK. */
+/**
+ * The outputs of `tx` to wait for, with their addresses derived through the SDK. `indices` picks
+ * them, and all are taken when it is omitted.
+ */
 export function expectedOutputs(sdk: KaspaSdk, network: string, tx: TxJson, indices?: number[]): ExpectedOutput[] {
   const pick = indices ?? tx.outputs.map((_, i) => i);
   return pick.map((index) => {

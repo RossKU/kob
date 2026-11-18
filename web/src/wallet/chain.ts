@@ -1,14 +1,21 @@
-// The signing pipeline of a CHAIN: transactions where step k+1 spends an output of step k (a token creation: the KCC-23 preparation, then the
-// genesis). Each step goes through what every transaction of the app goes through (sign.ts): the wallet signs -> kob.finalize verifies every
-// signature and assembles the scripts -> kob.validate runs the script engine -> the node. Two strategies:
+// The signing pipeline of a chain, a list of transactions where step k+1 spends an output of step
+// k. A token creation is one, with the KCC-23 preparation and then the genesis.
 //
-//   * atomic (the adapter has `signChain`: the private-key signer): ONE approval for every step, all signed, finalized and validated before
-//     anything is sent, then sent in order.
-//   * sequential (every extension wallet): step k is signed, finalized, validated, recorded (`onSigned`) and SENT before the wallet is asked
-//     for step k+1, and step k+1 is asked for only once the output it spends is visible to the wallet's own node (visibility.ts). An extension
-//     wallet looks every input up on its own node (KasWare 0.11.5): an output of a transaction nobody broadcast is never there.
+// Each step goes through what every transaction of the app goes through (sign.ts). The wallet
+// signs, `kob.finalize` verifies every signature and assembles the scripts, `kob.validate` runs the
+// script engine, and then the node takes it. There are two strategies:
 //
-// Nothing is sent that was not finalized and validated. A failure says how many steps the node took (`ChainError.sent`): those are out, for good.
+// - Atomic, when the adapter has `signChain` and the chain has two steps. That adapter is the
+//   private-key signer. One approval covers every step. All are signed, finalized and validated
+//   before anything is sent, then sent in order.
+// - Sequential, for every extension wallet. Step k is signed, finalized, validated, recorded
+//   (`onSigned`) and sent before the wallet is asked for step k+1. Step k+1 is asked for only once
+//   the output it spends is visible to the wallet's own node (visibility.ts). An extension wallet
+//   looks every input up on its own node (KasWare 0.11.5), and an output of a transaction nobody
+//   broadcast is never there.
+//
+// Nothing is sent that was not finalized and validated. A failure says how many steps the node took
+// (`ChainError.sent`). Those are out for good.
 import type { NodeApi } from '../data/node';
 import { NodeError, describeNodeError } from '../data/node-error';
 import type { BuiltTx, InputSignature, SignedTx, TxJson } from '../kob/types';
@@ -17,10 +24,11 @@ import { REJECTED_FRESH, SignFlowError, assertWalletMatches, isDeclinedFresh, ty
 import { WalletError, type SignOptions, type WalletAdapter } from './types';
 import { awaitVisible, needsVisibility, noteSent } from './visibility';
 
+/** A failure of a chain, with the step that failed and how many steps were sent. */
 export class ChainError extends SignFlowError {
-  /** the step that failed (0-based) */
+  /** The step that failed, 0-based. */
   readonly step: number;
-  /** how many steps the node took before the failure (steps `0..sent-1` are out) */
+  /** How many steps the node took before the failure. Steps `0..sent-1` are out. */
   readonly sent: number;
   constructor(stage: FailedStage, cause: unknown, message: string, code: string, step: number, sent: number) {
     super(stage, cause, message, code);
@@ -30,49 +38,67 @@ export class ChainError extends SignFlowError {
   }
 }
 
+/** What a chain stage reports beyond its stage. */
 export interface ChainStageInfo {
   step: number;
   txid?: string;
-  /** the gate is waiting until the wallet's node sees the output this step spends (the wallet is not asked yet) */
+  /**
+   * The gate is waiting until the wallet's node sees the output this step spends. The wallet is
+   * not asked yet.
+   */
   waiting?: boolean;
 }
 
+/** The inputs of `runSignChain`. */
 export interface ChainArgs {
   kob: KobWasm;
   node: NodeApi;
   adapter: WalletAdapter;
   network: string;
-  /** the steps, in order; step k+1 must spend an output of step k */
+  /** The steps, in order. Step k+1 must spend an output of step k. */
   steps: BuiltTx[];
-  /** script public key -> address of the app's network (the visibility gate asks KOB's node by address) */
+  /**
+   * Maps a script public key to an address of the app's network. The visibility gate asks KOB's
+   * node by address.
+   */
   addressOf: (spk: string) => string;
-  /** parents of the first step sent by an earlier page (txid -> when): its inputs are fresh too (visibility.ts `freshInputs`) */
+  /**
+   * The parents of the first step that an earlier page sent, mapped from txid to when. Their
+   * outputs count as fresh too (visibility.ts `freshInputs`).
+   */
   alsoFresh?: ReadonlyMap<string, number>;
-  /** passed to `signChain` (the private-key signer checks the genesis against it) */
+  /** Passed to `signChain`. The private-key signer checks the genesis against it. */
   signChainOptions?: Pick<SignOptions, 'genesisClaim'>;
   timeoutMs?: number;
-  /** default true when the adapter can `refresh` */
+  /** The default is true when the adapter can `refresh`. */
   checkWallet?: boolean;
-  /** default true; only tests turn it off */
+  /** The default is true, and only tests turn it off. */
   validate?: boolean;
   tighten?: boolean;
   /**
-   * every step signed so far, finalized and validated, BEFORE the newest is sent (atomic: once, with every step): the caller records what it
-   * needs to finish the chain if the page dies. A throw stops the chain before anything more is sent.
+   * Receives every step signed so far, finalized and validated, before the newest is sent. In the
+   * atomic strategy it is called once, with every step. The caller records what it needs to finish
+   * the chain if the page dies. A throw stops the chain before anything more is sent.
    */
   onSigned?: (signed: SignedTx[]) => void;
-  /** the node took step k */
+  /** Called when the node took step k. */
   onSent?: (step: number, signed: SignedTx) => void;
   onStage?: (stage: SignStage, info: ChainStageInfo) => void;
-  /** whether an `orphan` answer to step k is offered again (the node has not seen its parent yet); default: every step after the first */
+  /**
+   * Tells whether an `orphan` answer to step k is offered again, because the node has not seen its
+   * parent yet. The default is every step after the first.
+   */
   orphanRetry?: (step: number) => boolean;
-  /** orphan retries (default 5 x 1500 ms) */
+  /** The orphan retries. The default is 5 tries, 1500 ms apart. */
   sendAttempts?: number;
   sendRetryMs?: number;
-  /** a wallet that answers "I cannot see an input" (`inputs-unknown`) is asked again this often, this far apart (default 3 x 2000 ms) */
+  /**
+   * How often, and how far apart, a wallet that answers "I cannot see an input"
+   * (`inputs-unknown`) is asked. The default is 3 times, 2000 ms apart.
+   */
   unknownAttempts?: number;
   unknownRetryMs?: number;
-  /** the visibility gate's limits (visibility.ts) */
+  /** The visibility gate's limits (visibility.ts). */
   visibleTimeoutMs?: number;
   visiblePollMs?: number;
   settleMs?: number;
@@ -80,18 +106,22 @@ export interface ChainArgs {
   now?: () => number;
 }
 
+/** What a chain sent. */
 export interface ChainResult {
   signed: SignedTx[];
-  /** every fee, sompi */
+  /** All fees together, in sompi. */
   fee: bigint;
 }
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/** Whether `next` spends an output of `prev`. */
+/** Tells whether `next` spends an output of `prev`. */
 export const spendsOutputOf = (prev: Pick<BuiltTx, 'tx'>, next: Pick<BuiltTx, 'tx'>): boolean => next.tx.inputs.some((i) => i.transactionId === prev.tx.id);
 
-/** Sends `tx`; a node that already has it counts as sent. Throws a NodeError, or a SignFlowError (`txid-mismatch`). */
+/**
+ * Sends `tx`. A node that already has it counts as sent. It throws a NodeError, or a SignFlowError
+ * `txid-mismatch`.
+ */
 export async function sendTx(node: NodeApi, tx: TxJson): Promise<void> {
   try {
     const id = await node.submitTransaction(tx);
@@ -103,7 +133,10 @@ export async function sendTx(node: NodeApi, tx: TxJson): Promise<void> {
   }
 }
 
-/** `sendTx`, again while the node answers `orphan` (it has not seen the parent yet): `attempts` tries `retryMs` apart. */
+/**
+ * Runs `sendTx` again while the node answers `orphan`, which means it has not seen the parent yet.
+ * It makes `attempts` tries, `retryMs` apart.
+ */
 export async function sendTxRetrying(node: NodeApi, tx: TxJson, attempts: number, retryMs: number, sleep: (ms: number) => Promise<void>): Promise<void> {
   for (let n = 1; ; n++) {
     try {
@@ -116,6 +149,7 @@ export async function sendTxRetrying(node: NodeApi, tx: TxJson, attempts: number
   }
 }
 
+/** Signs and sends a chain, atomically or step by step as the wallet allows. */
 export async function runSignChain(a: ChainArgs): Promise<ChainResult> {
   const { kob, node, adapter, network, steps } = a;
   const sleep = a.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -145,7 +179,8 @@ export async function runSignChain(a: ChainArgs): Promise<ChainResult> {
     } catch (e) {
       throw fail('finalizing', e, `The wallet's signature does not match this transaction${sent ? '' : ', nothing was sent'}. (${msg(e)})`, 'signature', k);
     }
-    // the id the wallet signed for: the next step spends it (a version 1 id does not depend on signature scripts or budgets)
+    // The id the wallet signed for must stay, because the next step spends it. A version 1 id does
+    // not depend on signature scripts or budgets.
     if (signed.tx.id !== built.tx.id) throw fail('finalizing', null, 'The signed transaction is not the one planned (its id changed): the chain would break. Nothing more was sent.', 'signature', k);
     return signed;
   };
@@ -183,7 +218,7 @@ export async function runSignChain(a: ChainArgs): Promise<ChainResult> {
     }
   };
 
-  // ---- atomic: one approval for every step (the private-key signer)
+  // Atomic: one approval for every step, from the private-key signer.
   if (adapter.signChain && steps.length === 2) {
     stage('signing', { step: 0 });
     if (check) for (const b of steps) await assertWalletMatches(adapter, b, network);
@@ -203,12 +238,13 @@ export async function runSignChain(a: ChainArgs): Promise<ChainResult> {
     return { signed, fee: signed.reduce((s, x) => s + BigInt(x.fee.fee), 0n) };
   }
 
-  // ---- sequential: sign, check, record, send; the next step only once its input is visible to the wallet's node
+  // Sequential: sign, check, record and send. The next step comes only once its input is visible
+  // to the wallet's node.
   const signed: SignedTx[] = [];
   for (let k = 0; k < steps.length; k++) {
     const built = steps[k]!;
     stage('signing', { step: k });
-    // the account and the network may have changed while the previous step went out
+    // The account and the network may have changed while the previous step went out.
     if (check) {
       try {
         await assertWalletMatches(adapter, built, network);
@@ -237,12 +273,14 @@ export async function runSignChain(a: ChainArgs): Promise<ChainResult> {
       try {
         sigs = await adapter.signTx(built, opts);
       } catch (e) {
-        // the wallet's node has not seen the input after all (a slow relay): a moment later it has
+        // The wallet's node has not seen the input after all, through a slow relay. A moment later
+        // it has.
         if (e instanceof WalletError && e.code === 'inputs-unknown' && n < attempts) {
           await sleep(a.unknownRetryMs ?? 2000);
           continue;
         }
-        // declined, perhaps because the wallet's node could not find the step's input yet: nothing was sent for this step
+        // Declined, perhaps because the wallet's node could not find the step's input yet. Nothing
+        // was sent for this step.
         if (isDeclinedFresh(e, adapter, built.tx, a.alsoFresh)) throw fail('signing', e, REJECTED_FRESH, 'rejected-fresh', k);
         throw fail('signing', e, msg(e), e instanceof WalletError ? e.code : 'other', k);
       }

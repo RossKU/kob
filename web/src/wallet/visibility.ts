@@ -1,41 +1,59 @@
-// The visibility gate. An extension wallet looks every input it is asked to sign up on its OWN node and refuses one it does not find there
-// unspent (KasWare 0.11.5 off mainnet; KOB assumes every extension wallet does, on every network). KOB's node and the wallet's node are not the
-// same node: an output of a transaction KOB's node accepted a moment ago may not have reached the wallet's node yet. So:
+// The visibility gate.
 //
-//   * Before an extension wallet is asked to sign, every input it signs that spends an output of a transaction this page sent recently must be
-//     visible to the wallet's node: `awaitVisible`. (Older inputs are on chain for both nodes.)
-//   * After KOB's node accepted a transaction, `noteSent` remembers it and, where the adapter can (`announce`: KasWare `pushTx`), hands it to the
-//     wallet's node at once. That keeps the transaction in the wallet node's mempool while it waits for its block. KOB's node is the
-//     broadcast that counts.
-//   * Every fresh input waits until KOB's node lists it in its UTXO set (the transaction is in a
-//     block), then `SETTLE_MS` more, announced or not.
+// An extension wallet looks every input it is asked to sign up on its own node, and refuses one it
+// does not find there unspent. KasWare 0.11.5 does so off mainnet, and KOB assumes every extension
+// wallet does on every network. KOB's node and the wallet's node are not the same node. An output
+// of a transaction KOB's node accepted a moment ago may not have reached the wallet's node yet.
+// So:
+//
+// - Before an extension wallet is asked to sign, every input it signs that spends an output of a
+//   transaction this page sent recently must be visible to the wallet's node (`awaitVisible`).
+//   Older inputs are on chain for both nodes.
+// - After KOB's node accepted a transaction, `noteSent` remembers it. Where the adapter can
+//   (`announce`, KasWare `pushTx`), it hands the transaction to the wallet's node at once. That
+//   keeps the transaction in the wallet node's mempool while it waits for its block. KOB's node is
+//   the broadcast that counts.
+// - Every fresh input waits until KOB's node lists it in its UTXO set, which means the transaction
+//   is in a block. Then it waits `SETTLE_MS` more, announced or not.
 //
 // This is probabilistic, not a proof. The wallet finds an output in its node's mempool or in its
-// UTXO index, and a transaction moving from one to the other can for a moment be in neither: on
-// TN10 KasWare once refused a genesis input whose transaction had been announced, about 1 s after
-// it was sent, which is when such a move happens. An accepted announce therefore does not count on
-// its own. Once KOB's node lists the output, the margin leaves the wallet's node time to take the
-// same block into its index, which makes a refusal rare. A refusal is safe: nothing is sent for
-// that step, and asking again a few seconds later succeeds (wallet/sign.ts `rejected-fresh`).
+// UTXO index. A transaction moving from one to the other can for a moment be in neither, about 1 s
+// after it was sent. So an accepted announce does not count on its own. Once KOB's node lists the
+// output, the margin leaves the wallet's node time to take the same block into its index, which
+// makes a refusal rare. A refusal is safe. Nothing is sent for that step, and asking again a few
+// seconds later succeeds (wallet/sign.ts `rejected-fresh`).
 //
 // The private-key signer (`inputPolicy: 'offline'`) signs what it is shown and skips all of this.
 import type { NodeApi } from '../data/node';
 import type { Hex, TxInputJson, TxJson } from '../kob/types';
 import type { WalletAdapter } from './types';
 
-/** How long `announce` may take (KasWare `pushTx` has no popup: it answers at once or not at all). */
+/**
+ * How long `announce` may take. KasWare `pushTx` has no popup, so it answers at once or not at
+ * all.
+ */
 export const ANNOUNCE_TIMEOUT_MS = 3000;
-/** How long the gate waits for an input to become visible before it gives up (the wallet is then not asked). */
+/**
+ * How long the gate waits for an input to become visible before it gives up. The wallet is then
+ * not asked.
+ */
 export const VISIBLE_TIMEOUT_MS = 60_000;
+/** How often the gate asks KOB's node, in ms. */
 export const VISIBLE_POLL_MS = 500;
 /**
- * The margin for the wallet's node after KOB's node lists the output: it takes the same block into
- * its UTXO index a moment later.
+ * The margin for the wallet's node after KOB's node lists the output. The wallet's node takes the
+ * same block into its UTXO index a moment later.
  */
 export const SETTLE_MS = 2000;
-/** How long a transaction this page sent counts as fresh (its outputs may not be visible to the wallet's node yet). */
+/**
+ * How long a transaction this page sent counts as fresh. Its outputs may not be visible to the
+ * wallet's node yet.
+ */
 export const FRESH_MS = 3 * 60_000;
-/** An output older than this when KOB's node lists it needs no margin: the wallet's node has long seen its block. */
+/**
+ * An output older than this when KOB's node lists it needs no margin, because the wallet's node
+ * has long seen its block.
+ */
 const SETTLED_AFTER_MS = 30_000;
 
 interface Sent {
@@ -46,7 +64,7 @@ const sent = new Map<Hex, Sent>();
 
 const now0 = () => Date.now();
 
-/** Whether `adapter` needs its inputs visible to its own node before it is asked to sign. */
+/** Tells whether `adapter` needs its inputs visible to its own node before it is asked to sign. */
 export const needsVisibility = (adapter: Pick<WalletAdapter, 'inputPolicy'>): boolean => (adapter.inputPolicy ?? 'node-visible') === 'node-visible';
 
 function prune(now: number): void {
@@ -54,8 +72,11 @@ function prune(now: number): void {
 }
 
 /**
- * KOB's node accepted `tx`, which this page sent: remembered as fresh, and handed to the wallet's own node when the adapter can (`announce`).
- * Resolves whether the wallet's node has it; never rejects. Call it only with a transaction that was finalized, validated and accepted.
+ * Notes that KOB's node accepted `tx`, which this page sent. It is remembered as fresh, and handed
+ * to the wallet's own node when the adapter can (`announce`).
+ *
+ * It resolves with whether the wallet's node has it, and never rejects. Call it only with a
+ * transaction that was finalized, validated and accepted.
  */
 export function noteSent(adapter: WalletAdapter | null, tx: TxJson, o: { now?: () => number; timeoutMs?: number } = {}): Promise<boolean> {
   const now = (o.now ?? now0)();
@@ -72,7 +93,10 @@ export function noteSent(adapter: WalletAdapter | null, tx: TxJson, o: { now?: (
   }
 }
 
-/** When this page sent `txid` (ms since the epoch), or null: not sent here, or longer ago than `FRESH_MS`. */
+/**
+ * When this page sent `txid`, in ms since the epoch. It is null when it was not sent here, or was
+ * sent longer ago than `FRESH_MS`.
+ */
 export function sentAt(txid: string, now: number = now0()): number | null {
   const s = sent.get(txid.toLowerCase());
   return s && now - s.at <= FRESH_MS ? s.at : null;
@@ -88,20 +112,22 @@ export function freshTxids(now: number = now0()): Set<string> {
   return new Set([...sent.keys()].filter((id) => sentAt(id, now) !== null));
 }
 
-/** Tests only: forgets every transaction noted. */
+/** Forgets every transaction noted. For tests only. */
 export function resetVisibility(): void {
   sent.clear();
 }
 
+/** An input that spends an output of a fresh transaction. */
 export interface FreshInput {
   input: TxInputJson;
-  /** when its parent was sent */
+  /** When its parent was sent. */
   at: number;
 }
 
 /**
- * The inputs of `tx` that spend an output of a transaction this page sent less than `FRESH_MS` ago, plus those of `alsoFresh` (txid -> when it
- * was sent: a creation resumed after a reload, whose first step an earlier page sent).
+ * The inputs of `tx` that spend an output of a transaction this page sent less than `FRESH_MS` ago.
+ * It adds those of `alsoFresh`, which maps a txid to when it was sent. That serves a creation
+ * resumed after a reload, whose first step an earlier page sent.
  */
 export function freshInputs(tx: Pick<TxJson, 'inputs'>, o: { alsoFresh?: ReadonlyMap<string, number>; now?: number } = {}): FreshInput[] {
   const now = o.now ?? now0();
@@ -115,15 +141,21 @@ export function freshInputs(tx: Pick<TxJson, 'inputs'>, o: { alsoFresh?: Readonl
   return out;
 }
 
+/** The inputs of `awaitVisible`. */
 export interface VisibleArgs {
   adapter: WalletAdapter;
   node: NodeApi;
-  /** the transaction the wallet is about to be asked to sign */
+  /** The transaction the wallet is about to be asked to sign. */
   tx: Pick<TxJson, 'inputs'>;
-  /** script public key -> address of the app's network (KOB's node is asked by address) */
+  /**
+   * Maps a script public key to an address of the app's network. KOB's node is asked by address.
+   */
   addressOf: (spk: string) => string;
   alsoFresh?: ReadonlyMap<string, number>;
-  /** the gate starts waiting (true) and stops (false): the UI says why the wallet is not asked yet */
+  /**
+   * Called with true when the gate starts waiting and with false when it stops, so the UI can say
+   * why the wallet is not asked yet.
+   */
   onWait?: (waiting: boolean) => void;
   timeoutMs?: number;
   pollMs?: number;
@@ -133,17 +165,18 @@ export interface VisibleArgs {
   signal?: AbortSignal;
 }
 
+/** The outcome of `awaitVisible`. */
 export type VisibleResult =
   | { ok: true; waitedMs: number }
-  /** not visible in time: the wallet must not be asked now */
+  /** Not visible in time. The wallet must not be asked now. */
   | { ok: false; waitedMs: number; missing: { transactionId: Hex; index: number }[]; lastError?: string };
 
 const outKey = (txid: string, index: number) => `${txid.toLowerCase()}:${index}`;
 
 /**
  * Resolves once every input of `tx` that spends a fresh output (`freshInputs`) is listed by KOB's
- * node and the margin for the wallet's node passed. A no-op for an offline signer and for a
- * transaction with no fresh input. Never throws for node hiccups.
+ * node and the margin for the wallet's node passed. It does nothing for an offline signer and for a
+ * transaction with no fresh input. It never throws for node hiccups.
  */
 export async function awaitVisible(a: VisibleArgs): Promise<VisibleResult> {
   const now = a.now ?? now0;
