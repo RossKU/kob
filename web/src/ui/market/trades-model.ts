@@ -1,8 +1,9 @@
 // View models of the recent-trades list. Pure.
 //
-// A `fill` event names the order that was filled: `side` 1 = an ASK (sell order) was filled, i.e. the TAKER bought; 2 = a bid was filled,
-// the taker sold. Prices are the orders' state prices (sompi per whole token of `scale` base units, see book-model.ts), amounts base units.
-// `ts` is the block timestamp in ms (0 = unknown).
+// A `fill` event names the order that was filled. `side` 1 means an ASK, a sell order, was filled,
+// so the taker bought. `side` 2 means a bid was filled, so the taker sold. Prices are the orders'
+// state prices, in sompi per whole token of `scale` base units (see book-model.ts), and amounts
+// are in base units. `ts` is the block timestamp in ms, where 0 means unknown.
 import type { EventView } from '../../data/indexer-types';
 import { quoteOf } from '../../kob/units';
 
@@ -10,15 +11,15 @@ export interface TradeRow {
   id: number;
   txid: string;
   covenantId: string;
-  /** what the taker did: `buy` when an ask was filled */
+  /** What the taker did: `buy` when an ask was filled. */
   takerSide: 'buy' | 'sell' | null;
-  /** sompi per whole token (`scale` base units) */
+  /** Sompi per whole token (`scale` base units). */
   price: bigint | null;
-  /** base units filled */
+  /** Base units filled. */
   amount: bigint | null;
-  /** the fill's KAS value, `amount x price / scale` rounded down, sompi */
+  /** The fill's KAS value, `amount x price / scale` rounded down, in sompi. */
   value: bigint | null;
-  /** block time, ms since epoch; null when the indexer does not know it */
+  /** Block time in ms since epoch. Null when the indexer does not know it. */
   timeMs: number | null;
   daa: number;
   settled: boolean;
@@ -27,7 +28,10 @@ export interface TradeRow {
 
 const big = (v: unknown): bigint | null => (typeof v === 'string' && /^\d+$/.test(v) ? BigInt(v) : typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? BigInt(v) : null);
 
-/** Fill events -> trade rows, newest first. `scale` is the market's scale (base units per whole token: the prices' denominator). */
+/**
+ * Turns fill events into trade rows, newest first. `scale` is the market's scale, the base units
+ * per whole token and the prices' denominator.
+ */
 export function tradeRows(items: readonly EventView[], scale: bigint, limit = 30): TradeRow[] {
   const sc = scale > 0n ? scale : 1n;
   return items
@@ -54,8 +58,8 @@ export function tradeRows(items: readonly EventView[], scale: bigint, limit = 30
 }
 
 /**
- * Amount-weighted average price of the rows that have a price and an amount (sompi per whole token of `scale` base units, rounded down); null
- * when there is nothing to weigh.
+ * Amount-weighted average price of the rows that have a price and an amount, in sompi per whole
+ * token of `scale` base units, rounded down. It is null when there is nothing to weigh.
  */
 export function vwap(rows: readonly TradeRow[]): bigint | null {
   let weighted = 0n;
