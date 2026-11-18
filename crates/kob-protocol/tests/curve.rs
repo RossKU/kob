@@ -460,9 +460,9 @@ fn chromatic_tables_climb_one_semitone_per_level() {
         assert_eq!(*t.table.last().unwrap(), t.table[0] << octaves);
         assert!(t.table.windows(2).all(|w| w[0] < w[1]));
         // a semitone up, within the integer rounding of the start
-        for k in 1..12 {
-            let want = (t.table[0] as u128 * SEMITONES[k]) >> 40;
-            assert!((t.table[k] as i128 - want as i128).abs() <= (SEMITONES[k] >> 40) as i128 + 1, "level {k}");
+        for (k, s) in SEMITONES.iter().enumerate().skip(1) {
+            let want = (t.table[0] as u128 * s) >> 40;
+            assert!((t.table[k] as i128 - want as i128).abs() <= (s >> 40) as i128 + 1, "level {k}");
         }
         assert!(t.realised <= spec.total && t.realised > spec.total - spec.total / 1000, "{} of {}", t.realised, spec.total);
     }
