@@ -104,18 +104,25 @@ export interface IssueSpec {
   /** The token's Telegram: a handle or its address. Declared as `https://t.me/<handle>`. */
   telegram?: string;
   network?: string;
-  /** Share of each per-transaction mass limit the two transactions may fill, in percent (default 90). */
+  /**
+   * The share of each per-transaction mass limit the two transactions may fill, in percent.
+   * Defaults to 90.
+   */
   massMarginPercent?: number;
   /**
    * `public-mint` (default, `KCC20PublicMint`, the published build of the reference) or `3x3`
    * (`KCC20Ref`, the standalone 3 / 3).
    */
   program?: '3x3' | 'public-mint';
-  /** A `KobCurveAsk` created in this genesis, unbound: holder `custody` (owner zero, scheme 0x04) is its custody. */
+  /**
+   * An unbound `KobCurveAsk` created in this genesis. Holder `custody` (owner zero, scheme 0x04) is
+   * its custody.
+   */
   curve?: IssueCurveSpec;
   /**
-   * A creator lock (kob/creator-lock.ts): holder `holder` (the funding key's, scheme 0) becomes the lock's (owner scheme 0x03, its P2SH
-   * hash), opening at `until` (unix ms) to the funding key; the declaration carries it as `lock`.
+   * A creator lock (kob/creator-lock.ts). Holder `holder`, the funding key's (scheme 0), becomes
+   * the lock's (owner scheme 0x03, its P2SH hash) and opens at `until` (unix ms) to the funding
+   * key. The declaration carries it as `lock`.
    */
   lock?: { holder: number; until: U64 };
 }
@@ -128,7 +135,7 @@ export interface IssueCurveSpec {
   minFill: U64;
   tip?: U64;
   activeFrom?: U64;
-  /** KAS on the curve's UTXO (default: the token carrier) */
+  /** KAS on the curve's UTXO, by default the token carrier. */
   carrier?: U64;
 }
 
@@ -136,10 +143,10 @@ export interface IssueCurveSpec {
 export interface IssueCurve {
   covenantId: Hex;
   output: number;
-  /** the token output that is its custody */
+  /** The token output that is its custody. */
   custody: number;
   carrier: U64;
-  /** `KobCurveAsk`, unbound */
+  /** The unbound `KobCurveAsk`. */
   state: Extract<AnyState, { kind: 'KobCurveAsk' }>;
 }
 
@@ -227,7 +234,7 @@ export interface IssueDeclaration {
 
 /** The creator lock a creation declares (kob-wasm `issue` `lock`), and the holder it owns. */
 export interface IssueLock {
-  /** unix ms */
+  /** Unix ms. */
   until: U64;
   key: Hex;
   script: Hex;
@@ -244,9 +251,9 @@ export interface IssueResult {
   declaration: IssueDeclaration;
   token: IssueToken;
   docs: IssueDocs;
-  /** the curve this genesis places ("Sell on a curve") */
+  /** The curve this genesis places ("Sell on a curve"). */
   curve?: IssueCurve;
-  /** the creator lock this creation declares ("Lock my share until") */
+  /** The creator lock this creation declares ("Lock my share until"). */
   lock?: IssueLock;
   warnings: string[];
 }
@@ -391,13 +398,15 @@ export interface IssueForm {
   /** Permit a non-zero borrow scheme on non-covenant holders (never set by the default form). */
   allowBorrow?: boolean;
   /**
-   * "After creation": keep all, sell at one price (a KobAsk placed once the token exists) or sell on a curve (a KobCurveAsk in the genesis).
-   * The sale takes the wallet's share; what is kept is a separate output of the wallet.
+   * "After creation" offers keep all, sell at one price (a KobAsk placed once the token exists) or
+   * sell on a curve (a KobCurveAsk in the genesis). The sale takes the wallet's share, and what is
+   * kept is a separate output of the wallet.
    */
   sale?: SaleForm;
   /**
-   * "Lock my share until": a unix time in milliseconds (decimal text), empty or absent for none. It locks what the wallet keeps (with a sale:
-   * the kept share; without: the wallet's share) on chain until then (kob/creator-lock.ts).
+   * "Lock my share until", a unix time in milliseconds as decimal text, empty or absent for none.
+   * It locks what the wallet keeps on chain until then (kob/creator-lock.ts). With a sale that is
+   * the kept share, and without one it is the wallet's share.
    */
   lockUntil?: string;
 }
@@ -613,7 +622,8 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
     }
   }
 
-  // "Lock my share until": a unix-ms time in the future (the consensus reads a lock time below 5 x 10^11 as a DAA score)
+  // "Lock my share until" takes a unix-ms time in the future. The consensus reads a lock time below
+  // 5 x 10^11 as a DAA score.
   const lockUntil = (form.lockUntil ?? '').trim();
   if (lockUntil !== '') {
     if (!/^\d{1,16}$/.test(lockUntil) || BigInt(lockUntil) < LOCK_TIME_THRESHOLD || BigInt(lockUntil) > MAX_UNTIL) err('lock.invalid', 'Choose the date your share opens.', 'lock');
@@ -637,7 +647,10 @@ export function metadataBytes(form: Pick<IssueForm, 'name' | 'ticker' | 'decimal
   return 1 + new TextEncoder().encode(json).length;
 }
 
-/** A creator lock's script in the declaration: 88 hex characters, whatever its terms (only its length is measured). */
+/**
+ * A creator lock's script in the declaration. It is 88 hex characters whatever its terms, and only
+ * its length is measured.
+ */
 const LOCK_SCRIPT_PLACEHOLDER = '0'.repeat(88);
 
 /** Token inputs / outputs per transfer of the program the form issues. */
@@ -698,21 +711,24 @@ export interface IssuePlan extends IssueResult {
   spec: IssueSpec;
   /** Network fee in sompi: the preparation's and the genesis's together. */
   fee: bigint;
-  /** the sale chosen under "After creation" */
+  /** The sale chosen under "After creation". */
   sale?: PlannedSale;
 }
 
-/** A sale of the creation: base units for sale and kept, and the genesis output that holds the part for sale. */
+/**
+ * A sale of the creation, with the base units for sale and kept, and the genesis output that holds
+ * the part for sale.
+ */
 export interface PlannedSale {
   mode: 'ask' | 'curve';
   sell: bigint;
   keep: bigint;
-  /** a curve: its custody; one price: the wallet output the ask spends */
+  /** For a curve, its custody. For one price, the wallet output the ask spends. */
   output: number;
-  /** sompi if sold out */
+  /** Sompi if sold out. */
   total: bigint;
   curve?: { table: CurveTable; minFill: bigint; numbers: CurveNumbers };
-  /** one price: sompi per whole token */
+  /** For one price, sompi per whole token. */
   price?: bigint;
 }
 
@@ -763,7 +779,8 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
           ...(h.borrowScheme !== 0 ? { borrowScheme: h.borrowScheme, borrowGuard: h.borrowGuard } : {}),
         }))
       : [{ owner: maker, ownerScheme: 0, amount: parsed.supply.toString() }];
-  // "After creation": the sale takes the wallet's share; the kept part is a separate output of the wallet
+  // For "After creation", the sale takes the wallet's share, and the kept part is a separate output
+  // of the wallet.
   let curve: IssueCurveSpec | undefined;
   let sale: PlannedSale | undefined;
   if (form.sale && form.sale.mode !== 'keep') {
@@ -791,7 +808,8 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
       sale = { mode: 'ask', sell: p.sell, keep: p.keep, output: at, total: p.total, price: p.price };
     }
   }
-  // "Lock my share until": the share the wallet keeps (a sale's kept part, inserted right after the part for sale; else the wallet's share)
+  // "Lock my share until" locks the share the wallet keeps. With a sale that is the kept part,
+  // inserted right after the part for sale. Otherwise it is the wallet's share.
   let lock: IssueSpec['lock'];
   const lockUntil = (form.lockUntil ?? '').trim();
   if (lockUntil !== '') {
@@ -805,7 +823,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
     }
     lock = { holder, until: lockUntil };
   }
-  // a curve's own UTXO carries KAS too (the token carrier)
+  // A curve's own UTXO carries KAS too, the token carrier.
   const outputs = BigInt(holders.length + (curve ? 1 : 0));
 
   // Only plain P2PK UTXOs of the maker can fund the genesis, because the wallet signs every input

@@ -31,7 +31,7 @@ export type PairKind = 'KobPair' | 'KobCondPair' | 'KobIfdPair';
 /** The KAS-quoted order kinds (a token against KAS), family-neutral. */
 export type KasKind = 'KobAsk' | 'KobBid' | 'KobCondAsk' | 'KobCondBid' | 'KobIfdBid' | 'KobIfdAsk';
 /** The order kinds, family-neutral (what the UI and the planners reason about). */
-/** The stepped sell curve (`KobCurveAsk`): KCC-20 only, sell side only. */
+/** The stepped sell curve (`KobCurveAsk`), KCC-20 only and sell side only. */
 export type CurveKind = 'KobCurveAsk';
 export type BaseKind = KasKind | PairKind | CurveKind;
 /**
@@ -55,31 +55,40 @@ import type { Kcc20Program, KronProgram, TokenProgram } from './programs.generat
 export type { Kcc20Program, KronProgram, TokenProgram };
 
 /**
- * Delivery mode of a buy-side order (docs/design/bid-delivery-spec.md §1), as a decimal string:
- * `'0'` a new token UTXO per fill, `'1'` accumulate in the order's bought-custody (one UTXO to the
- * maker when the order ends or is claimed), `'2'` top-up of the maker's receive UTXO.
+ * Delivery mode of a buy-side order (docs/design/bid-delivery-spec.md §1), as a decimal string.
+ * - `'0'` delivers a new token UTXO per fill.
+ * - `'1'` accumulates in the order's bought-custody, which goes to the maker as one UTXO when the
+ *   order ends or is claimed.
+ * - `'2'` tops up the maker's receive UTXO.
  */
 export type DeliveryMode = '0' | '1' | '2';
 /**
- * The delivery block appended to a delivering order's state (bid-delivery-spec §2): `KobBid`,
- * `KobCondBid`, `KobPair`, `KobCondPair`. kob-wasm always returns the fields; on input an absent
- * field is 0. A state of the legacy layout (an order placed before the block, a retired template)
- * decodes with every field '0', i.e. mode 0. The KRON twins have no block: always mode 0.
+ * The delivery block appended to a delivering order's state (bid-delivery-spec §2), for `KobBid`,
+ * `KobCondBid`, `KobPair` and `KobCondPair`. kob-wasm always returns the fields, and on input an
+ * absent field is 0. A state of the legacy layout, an order placed without the block or under a
+ * retired template, decodes with every field '0', which is mode 0. The KRON twins have no block
+ * and are always mode 0.
  */
 export interface DeliveryFields {
   /** 0 new, 1 accumulate, 2 top-up ({@link DeliveryMode}). Set at placement, never amended. */
   mode?: I64;
-  /** Mode 2: the least threshold of the maker's receive UTXO (`borrow_guard`); else '0'. */
+  /** In mode 2, the least threshold of the maker's receive UTXO (`borrow_guard`), else '0'. */
   recvThreshold?: I64;
-  /** Mode 2: the KAS a top-up fill keeps in place of `deliveryCarrier` (0..deliveryCarrier); else '0'. */
+  /**
+   * In mode 2, the KAS a top-up fill keeps in place of `deliveryCarrier` (0..deliveryCarrier), else
+   * '0'.
+   */
   topupTip?: I64;
-  /** Mutable, mode 1: base units in the bought-custody (exactly); '0' in modes 0 and 2 and at placement. */
+  /**
+   * Mutable in mode 1, where it is exactly the base units in the bought-custody. It is '0' in modes
+   * 0 and 2 and at placement.
+   */
   bought?: I64;
 }
 /**
- * The delivery block an if-done entry writes into each exit, which starts with `bought = 0`:
- * `KobIfdAsk` (its `KobCondBid` exits) and `KobIfdPair` (its `KobCondPair` exits). Absent = 0; a
- * repeating entry's exits are mode 0.
+ * The delivery block an if-done entry writes into each exit, which starts with `bought = 0`. The
+ * entries are `KobIfdAsk` (its `KobCondBid` exits) and `KobIfdPair` (its `KobCondPair` exits). An
+ * absent field is 0, and a repeating entry's exits are mode 0.
  */
 export interface ExitDeliveryFields {
   exitMode?: I64;
@@ -88,17 +97,20 @@ export interface ExitDeliveryFields {
 }
 /** The two state layouts of a delivering kind (bid-delivery-spec §2). */
 export type StateLayout = 'legacy' | 'delivery';
-/** kob-wasm `stateLayouts`: the layouts of a template and where its delivery block sits. */
+/** The layouts of a template and where its delivery block sits (kob-wasm `stateLayouts`). */
 export interface StateLayoutsInfo {
   /** The layout of the template this build pins. */
   pinned: StateLayout;
   legacyLen: number;
-  /** null for a kind without a delivery block (asks, `KobIfdBid`, every KRON twin). */
+  /** Null for a kind without a delivery block (asks, `KobIfdBid`, every KRON twin). */
   deliveryLen: number | null;
-  /** The block's fields: state offset of the push and the redeem-script window of the 8 bytes. */
+  /**
+   * The block's fields, each with the state offset of its push and the redeem-script window of its
+   * 8 bytes.
+   */
   fields: { name: string; stateOffset: number; window: [number, number] }[];
 }
-/** kob-wasm `decodeStateLayout`: a decoded state and the layout its length selected. */
+/** A decoded state and the layout its length selected (kob-wasm `decodeStateLayout`). */
 export interface DecodedStateLayout { layout: StateLayout; order: AnyState }
 
 /** State of a plain ask (`KobAsk`): an amount of a token offered for KAS. */
@@ -123,8 +135,9 @@ export interface AskState {
   extensionCommitment: Hex;
 }
 /**
- * State of a stepped sell curve (`KobCurveAsk`, docs/design/curve-ask-spec.md): one custody sold level by level along `table`.
- * Level j sells the units [j·levelSize, (j + 1)·levelSize) of `total` at `table[j]`; the current level is (total − amountLeft) / levelSize.
+ * State of a stepped sell curve (`KobCurveAsk`, docs/design/curve-ask-spec.md), one custody sold
+ * level by level along `table`. Level j sells the units [j·levelSize, (j + 1)·levelSize) of
+ * `total` at `table[j]`. The current level is (total − amountLeft) / levelSize.
  */
 export interface CurveAskState {
   maker: Hex;
@@ -568,7 +581,7 @@ export interface AmendOrderRequest {
   records?: PayloadRecord[];
   fee?: FeeOptions;
   ownKeys?: Hex[];
-  /** an unbound curve: its custody (the amend names its token; the builder checks it) */
+  /** The custody of an unbound curve. The amend names its token, and the builder checks it. */
   custody?: TokenUtxo | null;
 }
 
@@ -626,8 +639,9 @@ export interface TxJson {
 /** One argument of a covenant entry call: an int, bytes or a signature. */
 export type SigArg = { kind: 'int' | 'bytes'; value: string } | { kind: 'sig'; value: Hex };
 /**
- * The owner witness of a token input: a covenant id, a P2PK key, or (`p2sh`, owner scheme 0x03) the index of the input whose script public
- * key is the P2SH of the owner (a creator lock's coin, kob/creator-lock.ts). A `p2sh` token input carries no signature of its own.
+ * The owner witness of a token input. It is a covenant id, a P2PK key, or, for `p2sh` (owner scheme
+ * 0x03), the index of the input whose script public key is the P2SH of the owner. That input is a
+ * creator lock's coin (kob/creator-lock.ts). A `p2sh` token input carries no signature of its own.
  */
 export type SigWitness = { kind: 'covenantId' } | { kind: 'p2pk'; value: Hex } | { kind: 'p2sh'; value: number };
 /** How one input is signed. */
@@ -647,8 +661,8 @@ export type SigPlan =
    */
   | { kind: 'retiredCancel'; template: TemplateName; retired: Hex; state: Hex; maker: Hex }
   /**
-   * The KAS coin of a creator lock (kob/creator-lock.ts): `push(sig65) push(script)`, a SIGHASH_ALL signature of `key`; the
-   * transaction's lock time is at least `until` (unix ms).
+   * The KAS coin of a creator lock (kob/creator-lock.ts), spent with `push(sig65) push(script)` and
+   * a SIGHASH_ALL signature of `key`. The transaction's lock time is at least `until` (unix ms).
    */
   | { kind: 'creatorLock'; until: U64; key: Hex };
 

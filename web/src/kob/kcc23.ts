@@ -29,11 +29,14 @@ export interface TokenDeclaration {
   website: string | null;
   x: string | null;
   telegram: string | null;
-  /** The name or symbol has a character drawn like a Latin letter (a warning, never a refusal; display.ts). */
+  /**
+   * The name or symbol has a character drawn like a Latin letter (display.ts). It is a warning,
+   * never a refusal.
+   */
   lookalike?: boolean;
   /**
-   * `lock`: a creator lock's redeem script (88 lowercase hex), taken only when it is exactly the template (kob/creator-lock.ts). What it holds
-   * is `VerifiedDeclaration.lock`.
+   * `lock` is a creator lock's redeem script (88 lowercase hex), taken only when it is exactly the
+   * template (kob/creator-lock.ts). What it holds is `VerifiedDeclaration.lock`.
    */
   lock: Hex | null;
   /** Fields present but not taken, for example "decimals: not an integer from 0 to 18". */
@@ -49,8 +52,8 @@ export interface VerifiedDeclaration {
   json: string;
   token: TokenDeclaration;
   /**
-   * The declared creator lock verified against the genesis: what it holds and until when. Null without a `lock`, or when it holds nothing
-   * there (named in `token.issues`).
+   * The declared creator lock verified against the genesis, with what it holds and until when. It
+   * is null without a `lock`, or when it holds nothing there (named in `token.issues`).
    */
   lock: VerifiedLock | null;
 }

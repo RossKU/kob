@@ -246,8 +246,9 @@ export interface KobWasm {
    */
   checkNumbers(state: AnyState): void;
   /**
-   * The delivery rules of an order state (bid-delivery-spec §2: mode, recvThreshold, topupTip, bought; the exit block of an
-   * if-done entry); `placement` for a new order (bought = 0). Throws with the reason.
+   * Checks the delivery rules of an order state (bid-delivery-spec §2). They cover mode,
+   * recvThreshold, topupTip and bought, and the exit block of an if-done entry. `placement` is set
+   * for a new order, with bought = 0. Throws with the reason.
    */
   checkDelivery(state: AnyState, placement: boolean): void;
   /** `0 < n <= left` and `n >= minFill` unless n takes everything left. */

@@ -241,16 +241,16 @@ export interface PlanEnv {
   carrier?: bigint;
   /**
    * The node-confirmed UTXOs of the book's orders (app/book-verify.ts), by covenant id in lower
-   * case. A crossing order takes them directly (kob/take.ts). Absent: nothing can be taken.
+   * case. A crossing order takes them directly (kob/take.ts). When absent, nothing can be taken.
    */
   bookOrders?: ReadonlyMap<string, BookOrderUtxo>;
 }
 
-/** A resting order of the book as the node confirmed it: what a take spends. */
+/** A resting order of the book as the node confirmed it, which is what a take spends. */
 export interface BookOrderUtxo {
   covenantId: Hex;
   order: OrderUtxo<OrderState>;
-  /** an ask's custody; null for a bid */
+  /** An ask's custody, null for a bid. */
   custody: TokenUtxo | null;
 }
 
@@ -371,32 +371,41 @@ export interface OrderPlan {
    * fills against the visible book, also on a failed build.
    */
   fills?: PlanFills;
-  /** A buy's delivery (mode 0 / 1 / 2, a top-up's tip and threshold): orders/delivery.ts `withDelivery`. */
+  /**
+   * A buy's delivery, from orders/delivery.ts `withDelivery`. It holds the mode (0, 1 or 2) and a
+   * top-up's tip and threshold.
+   */
   delivery?: PlanDelivery;
   /**
    * Set when the transaction takes resting orders directly from the wallet (a crossing limit with
-   * the `take` policy, kob/take.ts). `states` is then empty: the tx creates no order.
+   * the `take` policy, kob/take.ts). `states` is then empty, because the tx creates no order.
    */
   take?: TakeFacts;
 }
 
-/** The claims of a mode-1 order's bought-custody (bid-delivery-spec §7, CL1 to CL3); `decodeSigning` names them the same. */
+/**
+ * The claims of a mode-1 order's bought-custody (bid-delivery-spec §7, CL1 to CL3).
+ * `decodeSigning` names them the same.
+ */
 export type ClaimKind = 'claim' | 'claim-merge' | 'claim-place';
 
-/** What a claim moves, for its confirmation. Token amounts in base units of the bought token, KAS in sompi. */
+/**
+ * What a claim moves, for its confirmation. Token amounts are in base units of the bought token,
+ * and KAS in sompi.
+ */
 export interface ClaimDisclosure {
   kind: ClaimKind;
-  /** the order claimed from; it continues with `bought` 0 unless `ends` */
+  /** The order claimed from. It continues with `bought` 0 unless `ends`. */
   covenantId: Hex;
   bought: bigint;
-  /** the wallet's plain UTXOs merged into the claim (CL2, CL3) */
+  /** The wallet's plain UTXOs merged into the claim (CL2, CL3). */
   merged: bigint;
-  /** to the maker's one plain UTXO, and into the placed order's custody */
+  /** To the maker's one plain UTXO, and into the placed order's custody. */
   toYou: bigint;
   toOrder: bigint;
-  /** KAS added to the continuation: the carrier of its next custody */
+  /** KAS added to the continuation, the carrier of its next custody. */
   carrierAdded: bigint;
-  /** a claim and place that ends the order */
+  /** A claim and place that ends the order. */
   ends: boolean;
   fee: bigint | null;
 }
@@ -404,48 +413,60 @@ export interface ClaimDisclosure {
 /** One resting order a take fills, at its own price. */
 export interface TakeFill {
   covenantId: Hex;
-  /** the resting order's side: an ask is bought from, a bid is sold into */
+  /** The resting order's side. An ask is bought from, and a bid is sold into. */
   side: 'ask' | 'bid';
   maker: Hex;
-  /** its state price and tip, sompi per whole token */
+  /** Its state price and tip, in sompi per whole token. */
   price: bigint;
   tip: bigint;
-  /** base units taken */
+  /** Base units taken. */
   amount: bigint;
-  /** KAS the taker pays the maker (ask: kob-wasm `askProceeds`) or gets (bid: `bidSpend`), sompi */
+  /**
+   * KAS in sompi that the taker pays the maker (kob-wasm `askProceeds` for an ask) or gets
+   * (`bidSpend` for a bid).
+   */
   kas: bigint;
 }
 
-/** One take transaction: the orders it fills. */
+/** One take transaction and the orders it fills. */
 export interface TakeStep { fills: TakeFill[]; amount: bigint; kas: bigint }
 
 /** What a take does and what is left of the order. */
 export interface TakeFacts {
-  /** the user's side */
+  /** The user's side. */
   side: 'sell' | 'buy';
-  /** the token's covenant id */
+  /** The token's covenant id. */
   token: Hex;
-  /** what happens to the rest: it rests as a limit (GTC, GTD, day), or it is not placed (IOC, FOK, market) */
+  /**
+   * What happens to the rest. It rests as a limit (GTC, GTD, day), or it is not placed (IOC, FOK,
+   * market).
+   */
   restKind: 'limit' | 'none';
-  /** the user's limit (a market order: its worst price), sompi per whole token */
+  /** The user's limit in sompi per whole token, the worst price for a market order. */
   limit: bigint;
   scale: bigint;
-  /** the transactions the visible book needs, best price first; the first is the one built */
+  /** The transactions the visible book needs, best price first. The first is the one built. */
   steps: TakeStep[];
-  /** base units and KAS of this transaction (steps[0]) */
+  /** Base units and KAS of this transaction (steps[0]). */
   amount: bigint;
   kas: bigint;
-  /** network fee of this transaction */
+  /** The network fee of this transaction. */
   fee: bigint;
-  /** the most KAS a buy pays (ceil at the limit), the least a sell gets (floor at the limit), for `amount` */
+  /**
+   * The most KAS a buy pays (ceil at the limit), or the least a sell gets (floor at the limit), for
+   * `amount`.
+   */
   bound: bigint;
-  /** all steps together */
+  /** All steps together. */
   total: { amount: bigint; kas: bigint };
-  /** base units left after every step: they rest at the limit */
+  /** Base units left after every step. They rest at the limit. */
   rest: bigint;
-  /** the plan of that rest against the book without the taken orders (its carriers and fee), or null */
+  /**
+   * The plan of that rest against the book without the taken orders (its carriers and fee), or
+   * null.
+   */
   restPlan: OrderPlan | null;
-  /** KAS on the taker's token output (kept by the wallet) */
+  /** KAS on the taker's token output, kept by the wallet. */
   tokenCarrier: bigint;
 }
 

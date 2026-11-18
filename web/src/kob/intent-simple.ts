@@ -25,9 +25,9 @@ export type Activation = { unixSeconds: bigint } | { daa: bigint };
 /** What to do with a limit that already crosses the book at placement (matcher.md 10.5). */
 export type CrossingPolicy =
   /**
-   * Fill now from the book: the wallet takes the crossing orders at their own prices (kob/take.ts),
-   * no executor, then the rest rests at the limit. The ticket's default on a KAS market. A pair
-   * order plans it as `auction`.
+   * Fill now from the book. The wallet takes the crossing orders at their own prices (kob/take.ts)
+   * without an executor, and the rest rests at the limit. This is the ticket's default on a KAS
+   * market. A pair order plans it as `auction`.
    */
   | 'take'
   /**
@@ -72,22 +72,26 @@ export interface LimitIntent extends SimpleBase {
   activeFrom?: Activation;
   crossing?: CrossingPolicy;
   /**
-   * For a buy only, the number of fills the escrow budgets a delivery carrier for. Defaults to 3. A Collected buy is funded with
-   * one carrier whatever this says.
+   * For a buy only, the number of fills the escrow budgets a delivery carrier for. Defaults to 3.
+   * A Collected buy is funded with one carrier whatever this says.
    */
   maxFills?: bigint;
-  /** For a buy only: where the bought tokens go (orders/delivery.ts). Default: the wallet default, else Collected. */
+  /**
+   * For a buy only, where the bought tokens go (orders/delivery.ts). It defaults to the wallet's
+   * default, else Collected.
+   */
   delivery?: DeliveryRequest;
 }
 
 /**
- * A stepped sell curve (`KobCurveAsk`, docs/design/curve-ask-spec.md): one order, one custody, sold level by level along `table` (the
- * ticket's sell ladder placed as one order). KCC-20 only. No expiry: it rests until sold out or cancelled.
+ * A stepped sell curve (`KobCurveAsk`, docs/design/curve-ask-spec.md). It is one order with one
+ * custody, sold level by level along `table`, and places the ticket's sell ladder as one order. It
+ * is KCC-20 only and has no expiry, so it rests until sold out or cancelled.
  */
 export interface CurveIntent extends SimpleBase {
   type: 'curve';
   side: 'sell';
-  /** Base units per level; `amount` is the whole curve. */
+  /** Base units per level. `amount` is the whole curve. */
   levelSize: bigint;
   /** Sompi per whole token of each level, non-decreasing. */
   table: bigint[];
@@ -99,9 +103,9 @@ export interface CurveIntent extends SimpleBase {
  */
 export interface IocIntent extends SimpleBase {
   /**
-   * Fill now from the book: the wallet takes the crossing orders at their own prices (kob/take.ts)
-   * and places nothing for the rest. A FOK takes all in one transaction or nothing. Off by default
-   * here (the covenant order); the ticket turns it on.
+   * Fill now from the book. The wallet takes the crossing orders at their own prices (kob/take.ts)
+   * and places nothing for the rest. A FOK takes all in one transaction or nothing. It is off by
+   * default here, for the covenant order, and the ticket turns it on.
    */
   take?: boolean;
   type: 'ioc';
@@ -117,9 +121,9 @@ export interface IocIntent extends SimpleBase {
  */
 export interface FokIntent extends SimpleBase {
   /**
-   * Fill now from the book: the wallet takes the crossing orders at their own prices (kob/take.ts)
-   * and places nothing for the rest. A FOK takes all in one transaction or nothing. Off by default
-   * here (the covenant order); the ticket turns it on.
+   * Fill now from the book. The wallet takes the crossing orders at their own prices (kob/take.ts)
+   * and places nothing for the rest. A FOK takes all in one transaction or nothing. It is off by
+   * default here, for the covenant order, and the ticket turns it on.
    */
   take?: boolean;
   type: 'fok';
@@ -154,9 +158,10 @@ interface AuctionOptions {
  */
 export interface MarketIntent extends SimpleBase, AuctionOptions {
   /**
-   * Fill now from the book: the wallet takes the crossing orders at their own prices, within the slippage bound (kob/take.ts)
-   * and places nothing for the rest. With `allOrNothing` it takes all in one transaction or nothing. Off by default
-   * here (the covenant order); the ticket turns it on.
+   * Fill now from the book. The wallet takes the crossing orders at their own prices, within the
+   * slippage bound (kob/take.ts), and places nothing for the rest. With `allOrNothing` it takes all
+   * in one transaction or nothing. It is off by default here, for the covenant order, and the
+   * ticket turns it on.
    */
   take?: boolean;
   type: 'market';
@@ -221,7 +226,10 @@ export interface DcaIntent extends ScheduleBase {
   type: 'dca';
   side?: 'buy';
   maxFills?: bigint;
-  /** Where the bought tokens go (orders/delivery.ts). Default: the wallet default, else Collected. */
+  /**
+   * Where the bought tokens go (orders/delivery.ts). It defaults to the wallet's default, else
+   * Collected.
+   */
   delivery?: DeliveryRequest;
 }
 
@@ -244,7 +252,10 @@ export interface DutchIntent extends SimpleBase {
   /** The start of the auction. Defaults to placement plus 30 DAA. */
   activeFrom?: Activation;
   maxFills?: bigint;
-  /** A rising bid only: where the bought tokens go (orders/delivery.ts). Default: the wallet default, else Collected. */
+  /**
+   * For a rising bid only, where the bought tokens go (orders/delivery.ts). It defaults to the
+   * wallet's default, else Collected.
+   */
   delivery?: DeliveryRequest;
 }
 

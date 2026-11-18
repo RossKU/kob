@@ -18,7 +18,10 @@ import type { Family, Hex, KronState, TokenProgram, TokenState, Kcc20State, U64 
 
 /** KCC-20 `owner_scheme` of a key-held state. */
 export const KCC20_SCHEME_P2PK = 0;
-/** KCC-20 `owner_scheme` of a `p2sh/v1` owner: Blake2b of a redeem script (a creator lock, kob/creator-lock.ts). */
+/**
+ * KCC-20 `owner_scheme` of a `p2sh/v1` owner, the Blake2b of a redeem script. A creator lock is one
+ * (kob/creator-lock.ts).
+ */
 export const KCC20_SCHEME_P2SH = 3;
 /** KCC-20 `owner_scheme` of a state owned by a covenant id. */
 export const KCC20_SCHEME_COVID = 4;
@@ -70,22 +73,25 @@ export const isKronUnspendable = (s: TokenState, program?: TokenProgram | null):
 /** True for a KCC-20 state without borrowing or a KRON state without the minter flag. */
 export const isPlainState = (s: TokenState): boolean => (isKronState(s) ? s.is_minter === 0 : s.borrow_scheme === 0);
 /**
- * True for a state the builders spend from a wallet: plain, or a key-owned KCC-20 holding with a
- * borrow setting (option A: the owner path checks the owner only, whatever the borrow scheme).
- * Its change keeps the setting; custodies, deliveries and recipients stay plain.
+ * True for a state the builders spend from a wallet. That is a plain one, or a key-owned KCC-20
+ * holding with a borrow setting, because the owner path checks the owner only, whatever the borrow
+ * scheme. Its change keeps the setting. Custodies, deliveries and recipients stay plain.
  */
 export const isSpendableHolding = (s: TokenState, program?: TokenProgram | null): boolean =>
   isKeyOwned(s, program) && (isPlainState(s) || isKcc20State(s));
-/** The borrow setting of a state as one key, `scheme:guard`. Every plain state has {@link PLAIN_BORROW}. */
+/**
+ * The borrow setting of a state as one key, `scheme:guard`. Every plain state has
+ * {@link PLAIN_BORROW}.
+ */
 export const borrowKeyOf = (s: TokenState): string => (isKronState(s) || s.borrow_scheme === 0 ? PLAIN_BORROW : `${s.borrow_scheme}:${s.borrow_guard.toLowerCase()}`);
 /** The borrow key of a plain state. */
 export const PLAIN_BORROW = `0:${ZERO32}`;
-/** The same state with the borrow setting of `from` (KCC-20; a KRON state is returned as is). */
+/** The same state with the borrow setting of `from`, for KCC-20. A KRON state is returned as is. */
 export const withBorrowOf = <S extends TokenState>(s: S, from: TokenState): S =>
   isKronState(s) || isKronState(from) ? s : ({ ...s, borrow_scheme: from.borrow_scheme, borrow_guard: from.borrow_guard } as S);
 /**
- * Groups `utxos` by borrow setting: the plain group first, then by total, largest first, then by
- * key. Inputs of different settings never share a transaction.
+ * Groups `utxos` by borrow setting. The plain group comes first, then the others by total, largest
+ * first, then by key. Inputs of different settings never share a transaction.
  */
 export function groupByBorrow<U extends { state: TokenState }>(utxos: readonly U[]): U[][] {
   const groups = new Map<string, U[]>();

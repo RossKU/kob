@@ -70,8 +70,9 @@ export interface CondCommon {
    */
   maxFills?: bigint;
   /**
-   * Where the bought tokens go (orders/delivery.ts): a buy-side conditional, and the buy-back exits of a sell-first IFD / IFO.
-   * Default: the wallet default, else Collected. The exits of a repeating entry always deliver at each fill.
+   * Where the bought tokens go (orders/delivery.ts), for a buy-side conditional and for the
+   * buy-back exits of a sell-first IFD or IFO. It defaults to the wallet's default, else Collected.
+   * The exits of a repeating entry always deliver at each fill.
    */
   delivery?: DeliveryRequest;
 }

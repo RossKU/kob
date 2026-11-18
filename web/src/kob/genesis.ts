@@ -58,9 +58,10 @@ export interface GenesisVerified {
   seedOutputs: number[];
   /**
    * Genesis outputs that are companions the program's profile pins by template hash, with their
-   * role. `bridge-minter` is a federated bridge's minter (kUSDT's BridgeMint) and `zk-bridge-minter`
-   * a ZK bridge's (Kozmic's BridgeMint). Both mint against deposits on another chain and are also
-   * among `minterOutputs`; `bridge` is what such a minter names in its state, which KOB does not check.
+   * role. `bridge-minter` is a federated bridge's minter (kUSDT's BridgeMint), and
+   * `zk-bridge-minter` is a ZK bridge's (Kozmic's BridgeMint). Both mint against deposits on
+   * another chain and are also among `minterOutputs`. `bridge` is what such a minter names in its
+   * state, which KOB does not check.
    */
   companionOutputs: GenesisCompanion[];
   /** The build of the public-mint app whose actors the genesis holds. */
@@ -86,13 +87,16 @@ export interface GenesisUnavailable {
   code: 'unrevealed' | 'unsupported_program' | 'malformed';
   message: string;
 }
-/** What a bridge's minter names in its state (lowercase hex), unchecked: anyone can deploy the same minter with values of their own. */
+/**
+ * What a bridge's minter names in its state, in lowercase hex. It is unchecked, because anyone can
+ * deploy the same minter with values of their own.
+ */
 export interface BridgeFacts {
-  /** the bridge covenant whose input every mint needs (`zk-bridge-minter`) */
+  /** The bridge covenant whose input every mint needs (`zk-bridge-minter`). */
   bridgeCovenantId?: string;
-  /** the hash of the signer keys (`bridge-minter`) */
+  /** The hash of the signer keys (`bridge-minter`). */
   signerSet?: string;
-  /** the guardian's key (`bridge-minter`) */
+  /** The guardian's key (`bridge-minter`). */
   guardian?: string;
 }
 /** A companion output of a genesis group. */
