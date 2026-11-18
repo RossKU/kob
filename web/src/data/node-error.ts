@@ -1,7 +1,10 @@
-// Errors of node access, shared by the wRPC node and the HTTP mock node. The SDK rejects with a bare Error / string whose text looks like
+// Errors of node access, shared by the wRPC node and the HTTP mock node. The SDK rejects with a
+// bare Error or string whose text looks like this:
 //   RPC Server (remote error) -> code:0  message:`Rejected transaction <id>: <reason>` data:None
-// which is unreadable in a toast: `describeNodeError` maps the known consensus / mempool rejections to a stable code plus a short message.
+// That is unreadable in a toast. `describeNodeError` maps the known consensus and mempool
+// rejections to a stable code and a short message.
 
+/** The kind of a node failure. */
 export type NodeErrorCode =
   | 'unavailable'      // no connection / socket dropped / timeout
   | 'network-mismatch' // node is on another network than the app is configured for
@@ -14,9 +17,10 @@ export type NodeErrorCode =
   | 'bad-response'     // the server answered something we do not understand
   | 'other';
 
+/** Every failure of node access, with a stable code and the raw text. */
 export class NodeError extends Error {
   readonly code: NodeErrorCode;
-  /** raw text as received (for logs / a "details" disclosure) */
+  /** The raw text as received, for logs and a "details" disclosure. */
   readonly raw: string;
   constructor(code: NodeErrorCode, message: string, raw = message) {
     super(message);
@@ -26,7 +30,7 @@ export class NodeError extends Error {
   }
 }
 
-/** Text of whatever the SDK / fetch threw. */
+/** The text of whatever the SDK or fetch threw. */
 export function rawErrorText(e: unknown): string {
   if (typeof e === 'string') return e;
   if (e instanceof Error) return e.message;
@@ -36,7 +40,7 @@ export function rawErrorText(e: unknown): string {
     try {
       return JSON.stringify(e);
     } catch {
-      /* fall through */
+      /* Fall through. */
     }
   }
   return String(e);
@@ -44,7 +48,10 @@ export function rawErrorText(e: unknown): string {
 
 const CONNECTION = /websocket|not connected|disconnect|connection (?:closed|refused|reset|lost)|refused|timed? ?out|network error|failed to fetch|econn|enotfound|socket|unreachable/i;
 
-/** True for errors that mean "the link is down" (worth waiting for a reconnect and retrying an idempotent read). */
+/**
+ * True for errors that mean "the link is down". They are worth waiting for a reconnect and
+ * retrying an idempotent read.
+ */
 export const isConnectionError = (e: unknown): boolean => e instanceof NodeError ? e.code === 'unavailable' : CONNECTION.test(rawErrorText(e));
 
 /** Extracts the node's own reason from the SDK wrapper text. */
@@ -53,14 +60,16 @@ export function nodeReason(raw: string): string {
   const m = /message:`([\s\S]*?)`\s*data:/.exec(s);
   if (m) s = m[1] ?? s;
   s = s.replace(/^RPC Server \(remote error\) ->\s*/, '');
-  // "Rejected transaction <id>: <reason>" -> "<reason>"; the id is not useful to a user
+  // "Rejected transaction <id>: <reason>" becomes "<reason>", because the id is not useful to a
+  // user.
   s = s.replace(/^Rejected transaction [0-9a-f]+:\s*/i, '').replace(/transaction [0-9a-f]{64}\s+/gi, 'transaction ');
   return s.trim();
 }
 
 /**
- * Maps a raw failure to a `NodeError`. Idempotent for NodeError inputs. `context` 'read' (UTXO / info queries) skips the
- * transaction-rejection classes, which would read wrongly for a failed query.
+ * Maps a raw failure to a `NodeError`. It is idempotent for NodeError inputs. `context` 'read',
+ * for UTXO and info queries, skips the transaction-rejection classes, which would read wrongly for
+ * a failed query.
  */
 export function describeNodeError(e: unknown, context: 'submit' | 'read' = 'submit'): NodeError {
   if (e instanceof NodeError) return e;

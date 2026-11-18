@@ -1,12 +1,16 @@
-// Loader and typed subset of the OFFICIAL kaspa-wasm v2.1.0 SDK (vendored in web/vendor/kaspa-web, ESM, browser), plus the
-// small address helpers the app needs. The rest of the code depends on the `KaspaSdk` INTERFACE, never on the concrete module, so
-// node tests (vendor/kaspa-node via kaspa-sdk.node.ts), the browser and in-memory fakes are interchangeable.
+// Loader and typed subset of the official kaspa-wasm v2.1.0 SDK, plus the small address helpers
+// the app needs. The SDK is vendored in web/vendor/kaspa-web as a browser ESM build. The rest of
+// the code depends on the `KaspaSdk` interface, never on the concrete module. So node tests
+// (vendor/kaspa-node via kaspa-sdk.node.ts), the browser and in-memory fakes are interchangeable.
 //
-// The SDK is used for exactly three things: wRPC (node access), addresses, and (tests / mock wallets only) sighash signing.
+// The SDK is used for exactly three things:
+// - wRPC, for node access,
+// - addresses,
+// - sighash signing, in tests and mock wallets only.
 // Transaction layout, sighash and fees come from kob-wasm, never from here.
 import type { Hex } from '../kob/types';
 
-// ------------------------------------------------------------------------------------------------ typed subset
+// --- Typed subset ---
 
 /** `ScriptPublicKey` of the SDK: `script` is hex. */
 export interface SdkScriptPublicKey {
@@ -14,28 +18,32 @@ export interface SdkScriptPublicKey {
   readonly script: string;
 }
 
+/** `Address` of the SDK. */
 export interface SdkAddress {
   readonly prefix: string;
   readonly payload: string;
-  /** 'PubKey' | 'PubKeyECDSA' | 'ScriptHash' */
+  /** 'PubKey', 'PubKeyECDSA' or 'ScriptHash'. */
   readonly version: string;
   toString(): string;
 }
 
+/** `PrivateKey` of the SDK, for tests and mock wallets. */
 export interface SdkPrivateKey {
   toString(): string;
 }
 
+/** An input of an SDK `Transaction`. */
 export interface SdkTransactionInput {
   signatureScript: string;
 }
 
-/** wasm `Transaction`. Only what the tests and the mock wallets touch. */
+/** wasm `Transaction`, with only what the tests and the mock wallets touch. */
 export interface SdkTransaction {
   readonly inputs: SdkTransactionInput[];
   serializeToSafeJSON(): string;
 }
 
+/** `UtxoEntryReference` of the SDK, as `getUtxosByAddresses` returns it. */
 export interface SdkUtxoEntryReference {
   readonly address?: SdkAddress;
   readonly outpoint: { readonly transactionId: string; readonly index: number };
@@ -43,11 +51,15 @@ export interface SdkUtxoEntryReference {
   readonly scriptPublicKey: SdkScriptPublicKey;
   readonly blockDaaScore: bigint;
   readonly isCoinbase: boolean;
-  /** the inner `UtxoEntry`, which is where 2.1.0 exposes the covenant id (a `Hash`, `undefined` for plain UTXOs) */
+  /**
+   * The inner `UtxoEntry`, which is where 2.1.0 exposes the covenant id. It is a `Hash`, and
+   * `undefined` for plain UTXOs.
+   */
   readonly entry?: { readonly covenantId?: { toString(): string } | string | null };
   readonly covenantId?: { toString(): string } | string | null;
 }
 
+/** The config of an SDK `RpcClient`. */
 export interface SdkRpcConfig {
   url?: string;
   resolver?: unknown;
@@ -55,6 +67,7 @@ export interface SdkRpcConfig {
   networkId?: string;
 }
 
+/** Options of `RpcClient.connect`. */
 export interface SdkConnectOptions {
   blockAsyncConnect?: boolean;
   timeoutDuration?: number;
@@ -63,37 +76,51 @@ export interface SdkConnectOptions {
   url?: string;
 }
 
+/** What `getBlockDagInfo` gives. */
 export interface SdkBlockDagInfo {
   network: string;
   virtualDaaScore: bigint;
-  /** the past median time (unix ms) the node checks a lock time against */
+  /** The past median time (unix ms) the node checks a lock time against. */
   pastMedianTime?: bigint;
-  /** the selected tip (2.1.0: `sink`) and the pruning point, hex block hashes: the ends of the node's long DAA-rate window */
+  /**
+   * The selected tip (`sink` in 2.1.0) and the pruning point, as hex block hashes. They are the
+   * ends of the node's long DAA-rate window.
+   */
   sink?: string;
   pruningPointHash?: string;
 }
 
-/** `getBlock({ hash, includeTransactions: false })`: the header fields the DAA rate needs (timestamp in ms). */
+/**
+ * `getBlock({ hash, includeTransactions: false })`: the header fields the DAA rate needs, with the
+ * timestamp in ms.
+ */
 export interface SdkBlockHeaderInfo {
   block?: { header?: { timestamp?: bigint | number; daaScore?: bigint | number } };
 }
 
+/** The `RpcClient` calls the app makes. */
 export interface SdkRpcClient {
   readonly isConnected: boolean;
   connect(options?: SdkConnectOptions): Promise<void>;
   disconnect(): Promise<void>;
   addEventListener(event: 'connect' | 'disconnect' | 'block-added', callback: (event?: unknown) => void): void;
   removeEventListener?(event: 'connect' | 'disconnect' | 'block-added', callback?: (event?: unknown) => void): void;
-  /** `block-added` notifications (standalone mode, data/block-stream.ts); absent on test fakes */
+  /** `block-added` notifications for standalone mode (data/block-stream.ts). Test fakes lack it. */
   subscribeBlockAdded?(): Promise<void>;
   unsubscribeBlockAdded?(): Promise<void>;
   getBlockDagInfo(): Promise<SdkBlockDagInfo>;
-  /** a block by hash (headers only with `includeTransactions: false`); used for the long-window DAA rate. Absent on test fakes. */
+  /**
+   * A block by hash, headers only with `includeTransactions: false`. It is used for the
+   * long-window DAA rate. Test fakes lack it.
+   */
   getBlock?(request: { hash: string; includeTransactions: boolean }): Promise<SdkBlockHeaderInfo>;
   getServerInfo(): Promise<{ serverVersion: string; networkId?: string; isSynced?: boolean }>;
   getUtxosByAddresses(request: { addresses: string[] }): Promise<{ entries: SdkUtxoEntryReference[] }>;
   submitTransaction(request: { transaction: SdkTransaction; allowOrphan?: boolean }): Promise<{ transactionId: string }>;
-  /** `getFeeEstimate({})`: `{ estimate: { priorityBucket, normalBuckets, lowBuckets } }` (feerates in sompi per gram); parsed by kob/fee-policy.ts. Absent on older SDKs. */
+  /**
+   * `getFeeEstimate({})`: `{ estimate: { priorityBucket, normalBuckets, lowBuckets } }`, with
+   * feerates in sompi per gram, parsed by kob/fee-policy.ts. Older SDKs lack it.
+   */
   getFeeEstimate?(request?: Record<string, never>): Promise<unknown>;
 }
 
@@ -108,23 +135,28 @@ export interface KaspaSdk {
   payToAddressScript(address: SdkAddress | string): SdkScriptPublicKey;
   Transaction: { deserializeFromSafeJSON(json: string): SdkTransaction };
   PrivateKey: new (hex: string) => SdkPrivateKey;
-  /** hex of `push(sig65)` (0x41 || sig64 || sighashByte) */
+  /** The hex of `push(sig65)`, which is 0x41 || sig64 || sighashByte. */
   createInputSignature(tx: SdkTransaction, inputIndex: number, key: SdkPrivateKey, sighash?: number): string;
-  /** NOTE: the SDK's own enum (All = 0), not the wallet-facing SIGHASH_ALL = 1 of `SignRequest.sighashType` */
+  /**
+   * The SDK's own enum, with All = 0. It is not the wallet-facing SIGHASH_ALL = 1 of
+   * `SignRequest.sighashType`.
+   */
   SighashType: { All: number };
   Encoding: { Borsh: number; SerdeJson: number };
   Resolver: new () => unknown;
   RpcClient: new (config: SdkRpcConfig) => SdkRpcClient;
 }
 
-// ------------------------------------------------------------------------------------------------ networks
+// --- Networks ---
 
 export const MAINNET = 'mainnet';
 export const TESTNET_10 = 'testnet-10';
 
 /**
- * Canonical network name. Wallets and nodes disagree on spelling: KasWare reports `kaspa_testnet_10`, nodes report `kaspa-mainnet` /
- * `testnet-10`, the SDK takes `mainnet` / `testnet-10`. Unknown names come back lower-cased and unchanged (callers compare).
+ * The canonical network name. Wallets and nodes disagree on spelling. KasWare reports
+ * `kaspa_testnet_10`, nodes report `kaspa-mainnet` or `testnet-10`, and the SDK takes `mainnet`
+ * or `testnet-10`. Unknown names come back lower-cased and otherwise unchanged, for callers to
+ * compare.
  */
 export function normalizeNetwork(raw: unknown): string {
   if (typeof raw !== 'string') return '';
@@ -138,7 +170,7 @@ export function normalizeNetwork(raw: unknown): string {
   return s;
 }
 
-/** Address prefix of a canonical network name. */
+/** The address prefix of a network name. */
 export function addressPrefix(network: string): string {
   switch (normalizeNetwork(network)) {
     case MAINNET: return 'kaspa';
@@ -148,11 +180,14 @@ export function addressPrefix(network: string): string {
   }
 }
 
-// ------------------------------------------------------------------------------------------------ address helpers (pure given an sdk)
+// --- Address helpers, pure given an SDK ---
 
 const isHex = (s: string, len?: number) => /^[0-9a-f]*$/i.test(s) && s.length % 2 === 0 && (len === undefined || s.length === len);
 
-/** P2PK (Schnorr, x-only key) address of a 32-byte public key: script `OP_DATA32 <pk> OP_CHECKSIG`. */
+/**
+ * The P2PK (Schnorr, x-only key) address of a 32-byte public key, with the script
+ * `OP_DATA32 <pk> OP_CHECKSIG`.
+ */
 export function pubkeyToAddress(sdk: KaspaSdk, pubkeyHex: Hex, network: string): string {
   if (!isHex(pubkeyHex, 64)) throw new Error(`pubkeyToAddress: expected a 32-byte x-only key (64 hex chars), got ${pubkeyHex.length} chars`);
   const spk = new sdk.ScriptPublicKey(0, '20' + pubkeyHex.toLowerCase() + 'ac');
@@ -161,7 +196,10 @@ export function pubkeyToAddress(sdk: KaspaSdk, pubkeyHex: Hex, network: string):
   return addr.toString();
 }
 
-/** Address of a kaspa-string-form script public key (`version u16 BE hex` + `script hex`, as kob-wasm returns it). */
+/**
+ * The address of a script public key in kaspa string form, `version u16 BE hex` + `script hex`,
+ * as kob-wasm returns it.
+ */
 export function spkStringToAddress(sdk: KaspaSdk, spk: string, network: string): string {
   const { version, script } = splitSpkString(spk);
   const addr = sdk.addressFromScriptPublicKey(new sdk.ScriptPublicKey(version, script), normalizeNetwork(network));
@@ -169,31 +207,41 @@ export function spkStringToAddress(sdk: KaspaSdk, spk: string, network: string):
   return addr.toString();
 }
 
-/** Inverse of `spkStringToAddress`: the script public key string (`version + script`) that pays to `address`. */
+/**
+ * The inverse of `spkStringToAddress`: the script public key string (`version + script`) that
+ * pays to `address`.
+ */
 export function addressToSpkString(sdk: KaspaSdk, address: string): string {
   const s = sdk.payToAddressScript(address);
   return s.version.toString(16).padStart(4, '0') + s.script;
 }
 
+/** Splits a script public key string into its version and script hex. */
 export function splitSpkString(spk: string): { version: number; script: string } {
   if (spk.length < 4 || !isHex(spk)) throw new Error(`invalid script public key string: ${spk.slice(0, 24)}`);
   return { version: parseInt(spk.slice(0, 4), 16), script: spk.slice(4).toLowerCase() };
 }
 
+/** Joins a version and script hex into a script public key string. */
 export const joinSpkString = (version: number, script: string): string => version.toString(16).padStart(4, '0') + script;
 
-// ------------------------------------------------------------------------------------------------ browser loader
+// --- Browser loader ---
 
 let cached: Promise<KaspaSdk> | null = null;
 
+/** Options of `loadKaspaSdk`. */
 export interface LoadKaspaSdkOptions {
-  /** tests only (`features.test`): publish the namespace as `window.__kobKaspa` so the mock wallets can sign with the official SDK */
+  /**
+   * For tests only (`features.test`). It publishes the namespace as `window.__kobKaspa`, so the
+   * mock wallets can sign with the official SDK.
+   */
   exposeForTests?: boolean;
 }
 
 /**
- * Lazily imports the vendored ESM SDK (a ~10 MB wasm: only when a node/address feature is first needed), initialises it once and
- * returns the namespace. The wasm binary is emitted as an asset by Vite (`?url`).
+ * Imports the vendored ESM SDK lazily, initialises it once and returns the namespace. It is a
+ * ~10 MB wasm, so it loads only when a node or address feature is first needed. Vite emits the
+ * wasm binary as an asset (`?url`).
  */
 export function loadKaspaSdk(opts: LoadKaspaSdkOptions = {}): Promise<KaspaSdk> {
   cached ??= (async () => {

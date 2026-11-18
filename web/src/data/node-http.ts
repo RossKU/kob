@@ -1,12 +1,17 @@
-// `NodeApi` over HTTP against the offline mock server (web/mock/server.mjs), selected when the node URL is http(s).
-// Contract (the server side is written by the mock-server work item):
+// `NodeApi` over HTTP against the offline mock server (web/mock/server.mjs), selected when the
+// node URL is http(s). The contract:
 //   GET  {base}/node/info    -> { network, virtualDaaScore, serverVersion, daaRateMilli }
 //   POST {base}/node/utxos   body { addresses }     -> { entries: NodeUtxo[] }
 //   POST {base}/node/submit  body { transaction }   -> { transactionId }   or HTTP 400 { error }
-//   GET  {base}/node/fee-estimate                    -> the node's `getFeeEstimate` answer ({ estimate: { priorityBucket, normalBuckets, lowBuckets } }); optional: any failure = no estimate
-//   GET  {base}/node/blocks?after=<seq>              -> { tip, blocks: [{ seq, header, transactions }] }: the blocks after `seq` (none without `after`: the tip
-//                                                      only), in the wRPC `block-added` layout (data/block-stream.ts); polled while blocks are followed
-// Never used against a real node: submission there must go through wRPC (see node-rpc.ts).
+//   GET  {base}/node/fee-estimate
+//        -> the node's `getFeeEstimate` answer,
+//           { estimate: { priorityBucket, normalBuckets, lowBuckets } }
+//   GET  {base}/node/blocks?after=<seq>
+//        -> { tip, blocks: [{ seq, header, transactions }] }
+// The fee estimate is optional, and any failure means no estimate. `/node/blocks` gives the
+// blocks after `seq`, or only the tip without `after`, in the wRPC `block-added` layout
+// (data/block-stream.ts). It is polled while blocks are followed. This is never used against a
+// real node, because submission there must go through wRPC (see node-rpc.ts).
 import { parseFeeEstimate, type FeeEstimate } from '../kob/fee-policy';
 import type { TxJson } from '../kob/types';
 import type { BlockSubscription, NodeApi, NodeInfo, NodeUtxo } from './node';
@@ -14,20 +19,22 @@ import { streamBlockOf, type StreamBlock } from './block-stream';
 import { normalizeNetwork } from './kaspa-sdk';
 import { NodeError, describeNodeError, rawErrorText } from './node-error';
 
+/** Options of `HttpMockNode`. */
 export interface HttpMockNodeOptions {
-  /** base URL, e.g. `http://127.0.0.1:8899` */
+  /** The base URL, such as `http://127.0.0.1:8899`. */
   baseUrl: string;
-  /** network the app is configured for; `connect` fails on a mismatch */
+  /** The network the app is configured for. `connect` fails on a mismatch. */
   network: string;
   fetch?: typeof fetch;
   now?: () => number;
   timeoutMs?: number;
-  /** how often `subscribeBlocks` asks for new blocks, ms (default 1000) */
+  /** How often `subscribeBlocks` asks for new blocks, in ms (default 1000). */
   blockPollMs?: number;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 
+/** The node client over HTTP against the offline mock server. */
 export class HttpMockNode implements NodeApi {
   readonly kind = 'http-mock' as const;
   private readonly base: string;
@@ -75,7 +82,8 @@ export class HttpMockNode implements NodeApi {
   private failure(status: number, json: unknown): NodeError {
     const err = isRecord(json) ? json.error : undefined;
     const text = typeof err === 'string' ? err : isRecord(err) && typeof err.message === 'string' ? err.message : `HTTP ${status}`;
-    // the server may forward the node's own rejection text: reuse the same classification as the wRPC node
+    // The server may forward the node's own rejection text, so reuse the same classification as
+    // the wRPC node.
     return status === 400 || status === 422 ? describeNodeError(text) : new NodeError('other', text, text);
   }
 
@@ -106,7 +114,7 @@ export class HttpMockNode implements NodeApi {
   }
 
   async disconnect(): Promise<void> {
-    /* stateless */
+    /* Stateless. */
   }
 
   async getClock(): Promise<{ daa: bigint; unixSeconds: bigint; rateMilli: number | null }> {
@@ -125,7 +133,7 @@ export class HttpMockNode implements NodeApi {
     return (json.entries as NodeUtxo[]).map((e) => ({ ...e, covenantId: e.covenantId ?? null }));
   }
 
-  /** GET /node/fee-estimate; a mock without the route (or any failure) is "no estimate" */
+  /** GET /node/fee-estimate. A mock without the route, or any failure, gives "no estimate". */
   async getFeeEstimate(): Promise<FeeEstimate | null> {
     try {
       const { status, json } = await this.request('GET', '/node/fee-estimate');
@@ -135,7 +143,7 @@ export class HttpMockNode implements NodeApi {
     }
   }
 
-  /** One read of `/node/blocks`: the tip and the blocks after `after` (null: the tip only). */
+  /** One read of `/node/blocks`: the tip and the blocks after `after`, or the tip only for null. */
   private async blocksAfter(after: number | null): Promise<{ tip: number; blocks: StreamBlock[] }> {
     const { status, json } = await this.request('GET', after === null ? '/node/blocks' : `/node/blocks?after=${after}`);
     if (status !== 200) throw this.failure(status, json);
@@ -149,8 +157,9 @@ export class HttpMockNode implements NodeApi {
   }
 
   /**
-   * Follows the mock node's blocks by polling `/node/blocks` every `blockPollMs`: the blocks after the tip at subscription time, in order. A failed
-   * poll is retried; the first answer after one or more failures reports a gap (`onGap`), as a dropped wRPC link does.
+   * Follows the mock node's blocks by polling `/node/blocks` every `blockPollMs`. It hands over the
+   * blocks after the tip at subscription time, in order. A failed poll is retried. The first
+   * answer after one or more failures reports a gap (`onGap`), as a dropped wRPC link does.
    */
   async subscribeBlocks(onBlock: (b: StreamBlock) => void, onGap?: () => void): Promise<BlockSubscription> {
     let cursor = (await this.blocksAfter(null)).tip;
@@ -171,7 +180,7 @@ export class HttpMockNode implements NodeApi {
           try {
             onBlock(b);
           } catch {
-            /* a subscriber's bug must not stop the poll */
+            /* A subscriber's bug must not stop the poll. */
           }
         }
         cursor = r.tip;
