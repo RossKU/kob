@@ -1,10 +1,14 @@
-// The Rust side the SDK needs. Everything that must equal the Rust verifier byte for byte (transaction building,
-// signing, authorization digests, token output scripts, preflight) runs in `kob-wasm`; the SDK only orchestrates.
-// `wasm-node.ts` implements this interface over the wasm-bindgen bindings; tests inject a stub.
+// The Rust side the SDK needs. Everything that must equal the Rust verifier byte for byte runs in
+// `kob-wasm`, and the SDK only orchestrates. That covers transaction building, signing,
+// authorization digests, token output scripts and the preflight. `wasm-node.ts` implements this
+// interface over the wasm-bindgen bindings, and tests inject a stub.
 //
-// Conventions: JSON-shaped values in and out (64-bit integers as decimal strings, bytes as lowercase hex, spks as
-// `version u16 BE hex || script hex`). Every function is synchronous and pure: the wasm reads no clock and does no
-// I/O, so `nowMs` and the chain snapshot are arguments.
+// Conventions:
+// - Values are JSON-shaped in and out.
+// - 64-bit integers are decimal strings and bytes are lowercase hex.
+// - An spk is `version u16 BE hex || script hex`.
+// - Every function is synchronous and pure. The wasm reads no clock and does no I/O, so `nowMs`
+//   and the chain snapshot are arguments.
 
 import type {
   Custody,
@@ -20,17 +24,20 @@ import type {
 import { KobX402Error } from './errors.ts';
 
 /**
- * A token UTXO as the kob-protocol JSON carries it: `{ transactionId, index, amount, blockDaaScore, covenantId, state }`, the
- * state being a KCC-20 state `{ amount, owner, owner_scheme, borrow_scheme, borrow_guard, extension_commitment }` or a KRON
- * state `{ owner, id_type, amount, is_minter }` (a KRON token is held by address presence, `id_type` 3: the payer also
- * supplies a KAS UTXO of the owner, which authorises the token input).
+ * A token UTXO as the kob-protocol JSON carries it. Its fields are `{ transactionId, index,
+ * amount, blockDaaScore, covenantId, state }`. The state is either a KCC-20 state `{ amount,
+ * owner, owner_scheme, borrow_scheme, borrow_guard, extension_commitment }` or a KRON state
+ * `{ owner, id_type, amount, is_minter }`. A KRON token is held by address presence with
+ * `id_type` 3, so the payer also supplies a KAS UTXO of the owner, which authorises the token
+ * input.
  */
 export type TokenUtxoJson = Record<string, unknown>;
 
 /**
- * A swap-and-pay quote in kob-x402 `Quote` JSON: `{ lockTime, orders: [OrderRef] }` where an `OrderRef` is
- * `{ leg: { kind: "bid", order, amount } | { kind: "ask", order, custody, amount } }` (amount in token base units). Produced by the order source
- * (indexer); the lock time is a recent virtual DAA score.
+ * A swap-and-pay quote in kob-x402 `Quote` JSON, `{ lockTime, orders: [OrderRef] }`. An
+ * `OrderRef` is `{ leg: { kind: "bid", order, amount } | { kind: "ask", order, custody, amount } }`
+ * with the amount in token base units. The order source (indexer) produces it, and the lock time
+ * is a recent virtual DAA score.
  */
 export interface SwapQuote {
   lockTime: string;
@@ -38,8 +45,9 @@ export interface SwapQuote {
 }
 
 /**
- * A token as the payer / merchant configures it; hashes default to the embedded registry entry of the covenant id. Either
- * family: the family is the pinned program's (a KRON token has no `extensionCommitment`; omit it).
+ * A token as the payer or merchant configures it. The hashes default to the embedded registry
+ * entry of the covenant id. The family is the pinned program's, so a KRON token has no
+ * `extensionCommitment` and it is omitted.
  */
 export interface TokenSpec {
   covenantId: string;
@@ -79,13 +87,22 @@ export interface PayRequest {
   payerPublicKey?: string;
   /** Payer P2PK KAS UTXOs (funding, fee, change; the whole payment for a native offer). */
   utxos: PayerUtxo[];
-  /** UTXOs of the payer's tokens (kcc20, and the pay asset of a swap-and-pay: KCC-20 or KRON). Sourced from an indexer. */
+  /**
+   * UTXOs of the payer's tokens: kcc20, and the pay asset of a swap-and-pay (KCC-20 or KRON). From
+   * an indexer.
+   */
   tokenUtxos?: TokenUtxoJson[];
   /** Swap-and-pay: the orders to fill. */
   quote?: SwapQuote;
-  /** Swap-and-pay: covenant id of the token the payer pays with (informational; the quote decides). */
+  /**
+   * Swap-and-pay: covenant id of the token the payer pays with. Informational, since the quote
+   * decides.
+   */
   payAsset?: string;
-  /** Swap-and-pay: the most the payer will spend of `payAsset`, in that asset's units (decimal string); a route that pays with another asset is refused. */
+  /**
+   * Swap-and-pay: the most the payer will spend of `payAsset`, in that asset's units (decimal
+   * string). A route that pays with another asset is refused.
+   */
   maxPayAmount?: string;
   /** Payer-pinned token allowlist (default: the tokens the offer names). */
   tokens?: TokenSpec[];
@@ -97,21 +114,27 @@ export interface PayRequest {
   resource?: Resource;
   nowMs: number;
   /**
-   * Native KAS: the most sompi the payer pays for the offer (decimal string). Required by `payNative`: an offer above it is
-   * refused, and there is no default (never the offer's own amount).
+   * Native KAS: the most sompi the payer pays for the offer (decimal string). `payNative` requires
+   * it. An offer above it is refused, and there is no default, never the offer's own amount.
    */
   maxAmountSompi?: string;
-  /** Highest acceptable fee in sompi (decimal string); the builder fails above it. */
+  /** Highest acceptable fee in sompi (decimal string). The builder fails above it. */
   maxFeeSompi?: string;
   /**
-   * Fee rate of the payment transaction in sompi per gram (every profile; default: the relay floor, 100). Pass the node's
-   * estimate for the urgency of the payment (`feeRateFromEstimate`: a merchant's HTTP request waits, so the priority bucket),
+   * Fee rate of the payment transaction in sompi per gram, for every profile. The default is the
+   * relay floor, 100. Pass the node's estimate for the urgency of the payment with
+   * `feeRateFromEstimate`. A merchant's HTTP request waits, so use the priority bucket. This is
    * the same dynamic policy as the executor's (`crates/kobd/src/fee.rs`).
    */
   feeRate?: number;
-  /** Authorization lifetime in seconds (native and kcc20; default: the offer's `maxTimeoutSeconds`). The client passes a short one. */
+  /**
+   * Authorization lifetime in seconds (native and kcc20). Default: the offer's `maxTimeoutSeconds`.
+   */
   ttlSeconds?: number;
-  /** Most KAS (sompi) the payer funds into a merchant token output / its own token change (kcc20, swap; default 2 KAS). */
+  /**
+   * Most KAS (sompi) the payer funds into a merchant token output or its own token change. Default
+   * 2 KAS.
+   */
   maxCarrierSompi?: string;
 }
 
@@ -124,14 +147,23 @@ export interface PayResult {
   feeSompi: string;
   /** Authorization expiry (unix ms). */
   expiresAtMs: number;
-  /** Swap-and-pay: units of the pay asset the payer gives up (sompi incl. fee when paying KAS). */
+  /**
+   * Swap-and-pay: units of the pay asset the payer gives up, in sompi including the fee when paying
+   * KAS.
+   */
   payerSpent?: string;
-  /** Swap-and-pay: sompi the payment takes from the payer's KAS coins (fee, carriers, and the cost when paying KAS). */
+  /**
+   * Swap-and-pay: sompi the payment takes from the payer's KAS coins (fee, carriers, and the cost
+   * when paying KAS).
+   */
   kasSpent?: string;
   warnings?: string[];
 }
 
-/** Step 1 of the wallet flow (kcc20): the unsigned payment; opaque `built` and `template` go back to `finishKcc20`. */
+/**
+ * Step 1 of the wallet flow (kcc20): the unsigned payment. The opaque `built` and `template` go
+ * back to `finishKcc20`.
+ */
 export interface UnsignedKcc20 {
   built: { sign: SignRequest[]; [key: string]: unknown };
   template: unknown;
@@ -156,7 +188,10 @@ export interface PreflightRequest {
   allowIssuerControlled?: boolean;
   /** Swap-and-pay: the payer's bound on what the payment costs, counted in `maxPayAsset`. */
   maxPay?: string;
-  /** The asset `maxPay` counts: `KAS` (the default) or a token covenant id; a payment in another asset is refused. */
+  /**
+   * The asset `maxPay` counts, `KAS` (the default) or a token covenant id. A payment in another
+   * asset is refused.
+   */
   maxPayAsset?: string;
   /** The payer's ceiling on the merchant carrier (default 2 KAS). */
   maxCarrierSompi?: string;
@@ -199,7 +234,10 @@ export interface PreparedRevoke {
 }
 
 export interface RevokeResult {
-  /** Signed self-spend as `kaspa-sdk-safe-json-v2.0.0` text (loads with `Transaction.deserializeFromSafeJSON`). */
+  /**
+   * Signed self-spend as `kaspa-sdk-safe-json-v2.0.0` text (loads with
+   * `Transaction.deserializeFromSafeJSON`).
+   */
   transaction: string;
   transactionId: string;
   /** The payment input the self-spend consumes. */
@@ -229,9 +267,10 @@ export interface IntentOptions {
   /** KasToToken (pay asset KAS): most sompi the asks may demand at their quotes. Required. */
   maxPay?: string;
   /**
-   * KasToToken: most sompi for the merchant's carrier, fillers and the network fee. A single cap: whoever executes the intent may keep
-   * up to `maxExtra` of the payer's KAS, so set it tight. Default: what the actor's shape needs at 5 times `feeRate` plus 0.02 KAS
-   * (about the carrier + 0.14 KAS for the default one-ask shape on an 8/8 token).
+   * KasToToken: most sompi for the merchant's carrier, fillers and the network fee. It is a single
+   * cap. Whoever executes the intent may keep up to `maxExtra` of the payer's KAS, so set it
+   * tight. The default is what the actor's shape needs at 5 times `feeRate` plus 0.02 KAS. For the
+   * default one-ask shape on an 8/8 token that is about the carrier plus 0.14 KAS.
    */
   maxExtra?: string;
   /** TokenToKas / TokenSwap (pay asset a token): most units sold. Required. */
@@ -241,9 +280,14 @@ export interface IntentOptions {
   /** KAS of a token intent's UTXO the keeper may spend on fillers and the fee (default 1 KAS). */
   keeperValue?: string;
   lockCarrier?: string;
-  /** How long the facilitator may execute (default 5 min; at most the offer's `maxTimeoutSeconds`). */
+  /**
+   * How long the facilitator may execute (default 5 min; at most the offer's `maxTimeoutSeconds`).
+   */
   expiresInMs?: number;
-  /** Fee rate of the creation, sompi per gram (default the relay floor 100); see `PayRequest.feeRate`. */
+  /**
+   * Fee rate of the creation, sompi per gram (default the relay floor 100); see
+   * `PayRequest.feeRate`.
+   */
   feeRate?: number;
 }
 
@@ -263,8 +307,9 @@ export interface IntentPayRequest {
   tokens?: TokenSpec[];
   allowIssuerControlled?: boolean;
   /**
-   * The rate a creation that cannot be built at `options.feeRate` (its fee above a bound, funds short of the dearer fee) is
-   * retried at, once (default the relay floor 100): an estimate never makes a payable intent impossible.
+   * The rate a creation is retried at, once, when it cannot be built at `options.feeRate`. That
+   * happens when its fee is above a bound or the funds fall short of the dearer fee. The default
+   * is the relay floor, 100. So an estimate never makes a payable intent impossible.
    */
   feeRateFloor?: number;
 }
@@ -279,10 +324,11 @@ export interface IntentHandle {
 
 export interface IntentPayResult extends PayResult {
   /**
-   * The payer's worst case in units of the pay asset (token units sold at most, or the intent's KAS and the creation fee):
-   * the intent program lets the executor keep what the orders release beyond the merchant's amount, so show this as the cost.
-   * `kasSpent` is the most KAS the creation takes from the payer's coins (the intent's KAS, the creation fee and a token
-   * intent's lock carrier); the unused part comes back at execution, cancel or expiry.
+   * The payer's worst case in units of the pay asset. It is the token units sold at most, or the
+   * intent's KAS and the creation fee. The intent program lets the executor keep what the orders
+   * release beyond the merchant's amount, so show this as the cost. `kasSpent` is the most KAS the
+   * creation takes from the payer's coins. That is the intent's KAS, the creation fee and the lock
+   * carrier of a token intent. The unused part comes back at execution, cancel or expiry.
    */
   payerSpent: string;
   intent: IntentHandle;
@@ -317,25 +363,45 @@ export interface SignedTransaction {
 
 export interface KobWasm {
   version(): string;
-  /** Serialized spk of an address (`version u16 BE hex || script hex`), the value of `extra.payToScriptPublicKey`. */
+  /**
+   * Serialized spk of an address (`version u16 BE hex || script hex`), the value of
+   * `extra.payToScriptPublicKey`.
+   */
   addressToScriptPublicKey(address: string): string;
-  /** Pinned program hash and extension commitment of a registry token (used for `route.payAssets` entries the configuration leaves out). */
+  /**
+   * Pinned program hash and extension commitment of a registry token, used where `route.payAssets`
+   * leaves them out.
+   */
   resolveToken(network: NetworkId, asset: string): { templateHash: string; extensionCommitment: string; family?: TokenFamily };
-  /** `extra.token` of a `kcc20` offer, including the merchant token output's spk computed from the pinned program. */
+  /**
+   * `extra.token` of a `kcc20` offer, including the merchant token output's spk computed from the
+   * pinned program.
+   */
   tokenOffer(req: TokenOfferRequest): TokenExtra;
-  /** Local-key builders. A native payment signs the request authorization digest with the funding key, so it needs a local key. */
+  /**
+   * Local-key builders. A native payment signs the request authorization digest with the funding
+   * key, so it needs a local key.
+   */
   payNative(req: PayRequest): PayResult;
   payKcc20(req: PayRequest): PayResult;
   paySwap(req: PayRequest): PayResult;
-  /** Wallet flow: build unsigned, let a wallet sign `built.sign`, finish with the signatures only. */
+  /**
+   * Wallet flow: build unsigned, let a wallet sign `built.sign`, finish with the signatures only.
+   */
   buildKcc20Unsigned(req: PayRequest): UnsignedKcc20;
   finishKcc20(unsigned: UnsignedKcc20, signatures: InputSignature[]): PayResult;
   prepareSwap(req: PayRequest): PreparedSwap;
   finishSwap(prepared: PreparedSwap, signatures: InputSignature[]): PayResult;
-  /** Payer-side verification of a built payment against a snapshot (the same verifier logic the facilitator runs). */
+  /**
+   * Payer-side verification of a built payment against a snapshot (the same verifier logic the
+   * facilitator runs).
+   */
   preflight(req: PreflightRequest): PreflightResult;
   revoke(req: RevokeRequest): RevokeResult;
-  /** Wallet revoke, step 1 (kcc20 and swap-and-pay payments; a native payment's revoke needs the local key). */
+  /**
+   * Wallet revoke, step 1 (kcc20 and swap-and-pay payments). The revoke of a native payment needs
+   * the local key.
+   */
   prepareRevoke?(req: PrepareRevokeRequest): PreparedRevoke;
   /** Wallet revoke, step 2: the signed self-spend. */
   finishRevoke?(prepared: PreparedRevoke, signatures: InputSignature[]): RevokeResult;
@@ -347,23 +413,28 @@ export interface KobWasm {
   cancelIntent?(req: CancelIntentRequest): SignedTransaction | { built: { sign: SignRequest[]; [key: string]: unknown } };
   finishCancel?(built: { built: unknown }, signatures: InputSignature[]): SignedTransaction;
   /**
-   * The expiry of an intent, built by anyone from its deadline on (no signature): its KAS and locked tokens back to the payer.
-   * A node accepts it once its past median time reached the deadline (`lockTime`, unix ms).
+   * The expiry of an intent, built by anyone from its deadline on without a signature. It returns
+   * its KAS and locked tokens to the payer. A node accepts it once its past median time has
+   * reached the deadline (`lockTime`, unix ms).
    */
   expireIntent?(req: ExpireIntentRequest): SignedTransaction & { lockTime: string };
   /** Invoice id (Rust): SHA-256 of the canonical JSON. */
   invoiceId?(invoice: unknown): string;
   /** Checks a fetched invoice against its id and its structure at `nowMs`. */
   checkInvoice?(invoice: unknown, id: string, nowMs: number): { id: string; expiresAtMs: number; kaspaUri: string | null };
-  /** The Rust retry table (`kob_x402::client::retry`): the step after a failed paid request; the SDK's `retry.ts` mirrors it. */
+  /**
+   * The Rust retry table (`kob_x402::client::retry`), the step after a failed paid request.
+   * `retry.ts` mirrors it.
+   */
   retryDecision?(req: { status?: number; diagnostic?: string; retryable?: boolean }): 'resend' | 'rebuild' | 'stop';
   /** Every diagnostic spelling of the Rust verifier and facilitator. */
   diagnostics?(): string[];
 }
 
 /**
- * Loads the node build of `kob-wasm` (`scripts/build-wasm.sh`) as a `KobWasm`. Kept dynamic so this module (and
- * everything that only takes a `KobWasm` by injection) does not depend on the generated bindings being present.
+ * Loads the node build of `kob-wasm` (`scripts/build-wasm.sh`) as a `KobWasm`. The load is
+ * dynamic, so this module and everything that only takes a `KobWasm` by injection do not depend
+ * on the generated bindings being present.
  */
 export async function loadKobWasm(options: { pkgDir?: string } = {}): Promise<KobWasm> {
   const spec = './wasm-node.ts';

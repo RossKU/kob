@@ -1,28 +1,37 @@
 // Resource-server paywall for the Kaspa x402 `exact` binding.
 //
-//   unpaid request        -> 402 + PAYMENT-REQUIRED (offers built from configuration through KobWasm)
-//   PAYMENT-SIGNATURE     -> decode; `accepted` must equal one of OUR offers (canonical JSON equality);
-//                            `payment-identifier` id required; the transaction must declare its id (safe JSON `id`);
-//                            requestHash recomputed independently from the
-//                            request we actually received and compared with the payload's; POST /settle to the
-//                            facilitator with that requestHash; on success serve the resource with PAYMENT-RESPONSE
-//                            (only after the settlement shows OUR offer's amount and network); on failure return a
-//                            corrective 402 carrying the diagnostic in `extensions.kaspa`.
+// An unpaid request gets a 402 with PAYMENT-REQUIRED. Its offers are built from configuration
+// through `KobWasm`.
 //
-// Idempotency: a payment id is remembered together with the transaction it was settled with. A request repeating
-// that id is answered from memory only when it carries the same transaction; any other transaction under a
-// remembered id is refused (`kaspa_payment_identifier_conflict`) and never reaches the facilitator. A settlement
-// is served only when its transaction id is the one the request's transaction declares.
+// A request with PAYMENT-SIGNATURE goes through these steps:
+// - Decode it. `accepted` must equal one of our offers, by canonical JSON equality.
+// - Require the `payment-identifier` id.
+// - Require the transaction to declare its id (safe JSON `id`).
+// - Recompute `requestHash` independently from the request we actually received, and compare it
+//   with the payload's.
+// - POST /settle to the facilitator with that `requestHash`.
+// - On success, serve the resource with PAYMENT-RESPONSE, but only after the settlement shows our
+//   offer's amount and network.
+// - On failure, return a corrective 402 that carries the diagnostic in `extensions.kaspa`.
 //
-// One settled payment is served to the request that carries its payment id, never to another id: a broadcast
-// transaction is public, its payment id is not. The same transaction under another id is refused
-// (`kaspa_payment_identifier_conflict`), by this paywall while it remembers the transaction and by the KOB facilitator
-// (which binds the transaction to its id in its durable ledger) after a restart. The payer's own retry (same id, same
-// transaction) is served again with `replayed: true`: from memory, or from the facilitator's `extensions.kob.replayed`
-// mark, which it records durably, so a restarted paywall never hands the handler the same payment as a new one.
+// Idempotency. A payment id is remembered together with the transaction it was settled with. A
+// request that repeats the id is answered from memory only when it carries the same transaction.
+// Any other transaction under a remembered id is refused (`kaspa_payment_identifier_conflict`) and
+// never reaches the facilitator. A settlement is served only when its transaction id is the one
+// that the transaction of the request declares.
 //
-// Framework-agnostic core: `paywall.handle(request: Request): Promise<Response>`; `toNodeListener` adapts it to
-// node:http. The merchant's own resource is a `handler(request, paid)` that only runs after settlement.
+// One settled payment is served to the request that carries its payment id, never to another id.
+// A broadcast transaction is public, and its payment id is not. The same transaction under another
+// id is refused (`kaspa_payment_identifier_conflict`). This paywall refuses it while it remembers
+// the transaction. The KOB facilitator refuses it after a restart, because it binds the
+// transaction to its id in its durable ledger. The payer's own retry, with the same id and the
+// same transaction, is served again with `replayed: true`. That comes from memory, or from the
+// facilitator's `extensions.kob.replayed` mark, which it records durably. So a restarted paywall
+// never hands the handler the same payment as a new one.
+//
+// The core is framework-agnostic, `paywall.handle(request: Request): Promise<Response>`.
+// `toNodeListener` adapts it to node:http. The merchant's own resource is a
+// `handler(request, paid)` that only runs after settlement.
 
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -71,8 +80,9 @@ export interface PaidContext {
   paymentId: string;
   requestHash: string;
   /**
-   * Recomputed transaction id from the facilitator's settlement: the transaction that paid the merchant (for an intent
-   * payment the execution, not the creation the request carried).
+   * Recomputed transaction id from the facilitator's settlement. It is the transaction that paid
+   * the merchant, which for an intent payment is the execution, not the creation the request
+   * carried.
    */
   transactionId: string;
   amount: string;
@@ -86,9 +96,10 @@ export interface PaidContext {
   /** The request body bytes (the `Request` passed to the handler has its body consumed). */
   body: Uint8Array;
   /**
-   * True when this payment was already answered (the payer's retry of the same payment id and transaction, from this
-   * paywall's memory or from the facilitator's durable `extensions.kob.replayed` mark): the handler runs again,
-   * nothing is charged, and the handler must not count it as a new payment.
+   * True when this payment was already answered. That is the payer's retry of the same payment id
+   * and transaction, answered from this paywall's memory or from the facilitator's durable
+   * `extensions.kob.replayed` mark. The handler runs again and nothing is charged, and the handler
+   * must not count it as a new payment.
    */
   replayed: boolean;
 }
@@ -105,21 +116,29 @@ export interface PaywallConfig {
   /** The protected resource; runs only after a verified settlement. */
   handler: PaywallHandler;
   resource?: { description?: string; mimeType?: string };
-  /** Public base URL (behind a proxy): the origin the payer requested. Default: the request's own URL. */
+  /**
+   * Public base URL, for use behind a proxy: the origin the payer requested. Default: the request's
+   * own URL.
+   */
   publicUrl?: string;
   maxTimeoutSeconds?: number;
   /**
-   * The finality the offers ask for and a settlement must show (`extensions.kaspa.finality`) before the resource is served. Default
-   * `confirmed`: the transaction is in the virtual chain and `confirmationsDaa` deeper (the facilitator's setting, about 10 s at its
-   * default 100). `accepted` serves at depth 0, a few seconds sooner, while a payer can still race a conflicting spend through
-   * another node; choose it only for resources whose loss that risk covers.
+   * The finality the offers ask for and a settlement must show (`extensions.kaspa.finality`)
+   * before the resource is served. The default is `confirmed`. The transaction is then in the
+   * virtual chain and `confirmationsDaa` deeper, which is about 10 s at the facilitator's default
+   * of 100. `accepted` serves at depth 0, a few seconds sooner, while a payer can still race a
+   * conflicting spend through another node. Choose it only for resources whose loss that risk
+   * covers.
    */
   finality?: Finality;
   maxBodyBytes?: number;
   now?: () => number;
   /** Max remembered settled payment ids (oldest evicted). Only settled payments enter it. */
   maxLedgerEntries?: number;
-  /** Max payments being settled at once (default 1000); a request beyond it is answered 503 (retryable) and not remembered. */
+  /**
+   * Max payments being settled at once (default 1000). A request beyond it gets 503 (retryable) and
+   * is not remembered.
+   */
   maxSettling?: number;
 }
 
@@ -140,7 +159,7 @@ interface Local {
 interface LedgerEntry {
   requestHash: string;
   requirementsHash: string;
-  /** The transaction id the payment declares (and the facilitator settled). */
+  /** The transaction id the payment declares, which the facilitator settled. */
   transactionId: string;
   /** SHA-256 of the transaction text of the request this id was first seen with. */
   transactionDigest: string;
@@ -165,11 +184,17 @@ export function createPaywall(config: PaywallConfig): Paywall {
   const maxBody = config.maxBodyBytes ?? 1024 * 1024;
   const maxLedger = config.maxLedgerEntries ?? 10_000;
   const maxSettling = config.maxSettling ?? 1_000;
-  /** Payment ids being settled now (removed when the settlement ends): kept apart from the ledger of settled payments. */
+  /**
+   * Payment ids being settled now, removed when the settlement ends. Kept apart from the ledger of
+   * settled payments.
+   */
   const settling = new Map<string, LedgerEntry>();
   const now = config.now ?? Date.now;
   const ledger = new Map<string, LedgerEntry>();
-  /** Settled transaction id -> the payment id it was settled under (the transaction is public, the id is not). */
+  /**
+   * Settled transaction id to the payment id it was settled under. The transaction is public, the
+   * id is not.
+   */
   const served = new Map<string, string>();
   let staticOffers: PaymentRequirements[] | undefined;
 
@@ -190,7 +215,8 @@ export function createPaywall(config: PaywallConfig): Paywall {
 
   const resourceUrl = (request: Request): string => {
     const u = new URL(request.url);
-    // origin + path: a request path starting with `//` must not be read as a protocol-relative reference
+    // Origin plus path. A request path starting with `//` must not be read as a protocol-relative
+    // reference.
     return config.publicUrl ? normalizeUrl(new URL(new URL(config.publicUrl).origin + u.pathname + u.search)) : normalizeUrl(u);
   };
 
@@ -234,7 +260,8 @@ export function createPaywall(config: PaywallConfig): Paywall {
     try {
       res = await config.handler(request, paid);
     } catch {
-      // Paid but the resource failed: the settlement stays recorded, a retry with the same id re-runs the handler.
+      // Paid but the resource failed. The settlement stays recorded, and a retry with the same id
+      // re-runs the handler.
       res = json(500, { error: 'resource_failed', paymentId: paid.paymentId });
     }
     const headers = new Headers(res.headers);
@@ -295,7 +322,8 @@ export function createPaywall(config: PaywallConfig): Paywall {
       return challenge(url, accepts, { reason: 'invalid_payload', diagnostic: 'invalid_kaspa_payment_identifier', message: 'payment-identifier id must match ^[A-Za-z0-9_-]{16,128}$' });
     }
 
-    // ---- the transaction the request carries: its declared id and its exact bytes identify the payment
+    // ---- the transaction the request carries: its declared id and its exact bytes identify the
+    // payment
     const declaredId = declaredTransactionId(payload.payload.transaction);
     if (declaredId === undefined) {
       return challenge(url, accepts, {
@@ -317,7 +345,8 @@ export function createPaywall(config: PaywallConfig): Paywall {
       });
     }
 
-    // ---- idempotency: same id + same fingerprint + same offer + same transaction -> cached outcome; anything else conflicts
+    // ---- idempotency: same id, same fingerprint, same offer and same transaction give the cached
+    // outcome; anything else conflicts
     const prior = ledger.get(id) ?? settling.get(id);
     if (prior) {
       if (prior.requestHash !== requestHash || prior.requirementsHash !== reqsHash) {
@@ -329,9 +358,10 @@ export function createPaywall(config: PaywallConfig): Paywall {
       if (prior.state === 'settling') {
         return json(409, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'settlement_pending', retryable: true, message: 'this payment id is being settled' } } });
       }
-      // A repeat is served only inside the retry window of the payment (the offer's maxTimeoutSeconds after it settled): a lost answer is
-      // resent within it, but a settled payment is not a standing licence for free repeats of a metered call; later the caller is asked to pay
-      // again (audit 2026-10-30 X2)
+      // A repeat is served only inside the retry window of the payment, which is the offer's
+      // `maxTimeoutSeconds` after it settled. A lost answer is re-sent within it. A settled payment
+      // is not a standing licence for free repeats of a metered call, so later the caller is asked
+      // to pay again.
       if (now() > prior.at + offer.maxTimeoutSeconds * 1000) {
         return challenge(url, accepts, {
           reason: 'invalid_payload',
@@ -342,11 +372,12 @@ export function createPaywall(config: PaywallConfig): Paywall {
       const settlement = prior.settlement as SettlementResponse;
       return serve(request, paidContext(id, requestHash, settlement, offer, url, method, body, true));
     }
-    // a transaction settled under another payment id is that payment, not this request's
+    // A transaction settled under another payment id is that payment, not this request's.
     const owner = served.get(declaredId);
     if (owner !== undefined && owner !== id) return otherIdConflict();
-    // requests being settled are held apart from settled payments, in a bounded set: any number of well-formed requests that never
-    // settle cannot push a settled payment out of the ledger (a full set answers 503, nothing is remembered)
+    // Requests being settled are held apart from settled payments, in a bounded set. So any number
+    // of well-formed requests that never settle cannot push a settled payment out of the ledger. A
+    // full set answers 503 and nothing is remembered.
     if (settling.size >= maxSettling) {
       return json(503, { error: 'unexpected_settle_error', extensions: { kaspa: { diagnostic: 'rate_limited', retryable: true, message: 'too many payments are being settled; retry' } } }, { 'retry-after': '1' });
     }
@@ -388,37 +419,44 @@ export function createPaywall(config: PaywallConfig): Paywall {
       settling.delete(id);
       return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settlement does not match the offer' } } });
     }
-    // ... and on a `kcc20` one that does not carry the offer's custody class (x402-kcc20-profile.md 4.3: required, equal)
+    // ... and on a `kcc20` one that does not carry the offer's custody class (x402-kcc20-profile.md
+    // 4.3, required and equal).
     const custody = kcc20Custody(offer);
     if (custody !== null && !(isRecord(settlement.extensions?.kaspa) && (settlement.extensions?.kaspa as Record<string, unknown>).custody === custody)) {
       settling.delete(id);
       return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settlement does not carry the custody class of the offer' } } });
     }
-    // ... and on one that stands on less than the finality the offer asked for (`extensions.kaspa.finality`)
+    // ... and on one that stands on less than the finality the offer asked for
+    // (`extensions.kaspa.finality`)
     if (finalityRank(settledFinality(settlement)) < finalityRank(offerFinality(offer))) {
       settling.delete(id);
       return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settlement is weaker than the finality of the offer' } } });
     }
-    // The transaction the payer sent declares its id (safe JSON `id`, which the facilitator checks against the recomputed id); a
-    // facilitator answer for another transaction than the one in this request does not settle this payment. An intent payment
-    // sends the intent's creation and is settled by the facilitator's execution: the settlement names the execution in
-    // `transaction` and the creation in `extensions.kob.intent.creation`, which is what the request's transaction must be.
+    // The transaction the payer sent declares its id (safe JSON `id`), which the facilitator checks
+    // against the recomputed id. A facilitator answer for another transaction than the one in this
+    // request does not settle this payment. An intent payment sends the creation of the intent and
+    // is settled by the facilitator's execution. The settlement names the execution in
+    // `transaction` and the creation in `extensions.kob.intent.creation`, and the creation is what
+    // the transaction of the request must be.
     const txid = settledRequestTransaction(settlement, isIntentOffer(offer));
     if (declaredId !== txid) {
       settling.delete(id);
       return json(502, { error: 'invalid_transaction_state', extensions: { kaspa: { diagnostic: 'internal', retryable: false, message: 'the facilitator settled another transaction than the one in this request' } } });
     }
-    // settled meanwhile under another id (two requests racing with one transaction): served to that id only
+    // Settled meanwhile under another id (two requests racing with one transaction). It is served
+    // to that id only.
     const owner2 = served.get(txid);
     if (owner2 !== undefined && owner2 !== id) {
       settling.delete(id);
       return otherIdConflict();
     }
-    // the facilitator answered this payment before (to this paywall before a restart, or to a retry it forgot)
+    // The facilitator answered this payment before, to this paywall before a restart or to a retry
+    // it forgot.
     const kobExt = isRecord(settlement.extensions?.kob) ? (settlement.extensions?.kob as { replayed?: unknown; answeredAgoMs?: unknown }) : {};
     const replayed = kobExt.replayed === true;
-    // ... and a repeat the facilitator answered longer ago than the retry window is not served (this paywall may have forgotten the
-    // payment: a restart, an eviction, a second instance; audit 2026-10-30 X10)
+    // ... and a repeat the facilitator answered longer ago than the retry window is not served.
+    // This paywall may have forgotten the payment after a restart, an eviction or with a second
+    // instance.
     const ago = typeof kobExt.answeredAgoMs === 'string' && /^[0-9]{1,15}$/.test(kobExt.answeredAgoMs) ? Number(kobExt.answeredAgoMs) : 0;
     if (replayed && ago > offer.maxTimeoutSeconds * 1000) {
       settling.delete(id);
@@ -474,7 +512,10 @@ function paidContext(
   return c;
 }
 
-/** `mempool` < `accepted` < `confirmed`; anything else (missing) ranks lowest. */
+/**
+ * Ranks finality as `mempool` < `accepted` < `confirmed`. Anything else, including a missing value,
+ * ranks lowest.
+ */
 function finalityRank(f: unknown): number {
   return f === 'confirmed' ? 3 : f === 'accepted' ? 2 : f === 'mempool' ? 1 : 0;
 }
@@ -486,7 +527,10 @@ function transactionDigest(transaction: string): string {
   return createHash('sha256').update(transaction, 'utf8').digest('hex');
 }
 
-/** The `id` a safe-JSON transaction declares (lower-case 64 hex), or undefined when it declares none / is not JSON. */
+/**
+ * The `id` a safe-JSON transaction declares (lower-case 64 hex), or undefined when it declares none
+ * or is not JSON.
+ */
 export function declaredTransactionId(transaction: string): string | undefined {
   try {
     const id = (JSON.parse(transaction) as { id?: unknown } | null)?.id;
@@ -511,15 +555,21 @@ function json(status: number, body: unknown, headers: Record<string, string> = {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers } });
 }
 
-// ------------------------------------------------------------------------------------------------- node:http
+// node:http
 
 export interface NodeAdapterOptions {
   maxBodyBytes?: number;
-  /** Take the origin from `X-Forwarded-Proto` / `X-Forwarded-Host` (only behind a trusted proxy). Prefer `publicUrl`. */
+  /**
+   * Take the origin from `X-Forwarded-Proto` and `X-Forwarded-Host`, only behind a trusted proxy.
+   * Prefer `publicUrl`.
+   */
   trustProxy?: boolean;
 }
 
-/** Adapts a `Request -> Response` handler to node:http (`http.createServer(toNodeListener(paywall.handle))`). */
+/**
+ * Adapts a `Request -> Response` handler to node:http
+ * (`http.createServer(toNodeListener(paywall.handle))`).
+ */
 export function toNodeListener(
   handle: (request: Request) => Promise<Response>,
   options: NodeAdapterOptions = {},
@@ -564,8 +614,9 @@ export function toNodeListener(
 }
 
 /**
- * A node:http server around a paywall. `PAYMENT-SIGNATURE` carries a whole signed transaction (a KCC-20 spend with
- * its unlocking scripts is tens of KB of base64), far above node's 16 KB default header limit, so the limit is raised.
+ * A node:http server around a paywall. `PAYMENT-SIGNATURE` carries a whole signed transaction. A
+ * KCC-20 spend with its unlocking scripts is tens of KB of base64, far above node's 16 KB default
+ * header limit, so the limit is raised.
  */
 export function createNodeServer(paywall: Paywall, options: NodeAdapterOptions & { maxHeaderSize?: number } = {}): Server {
   return createServer({ maxHeaderSize: options.maxHeaderSize ?? 256 * 1024 }, paywall.nodeListener(options));

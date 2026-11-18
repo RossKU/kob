@@ -1,8 +1,9 @@
-// `KobWasm` over the node build of kob-wasm (`scripts/build-wasm.sh`, output crates/kob-wasm/pkg-node).
+// `KobWasm` over the node build of kob-wasm (`scripts/build-wasm.sh`, output
+// crates/kob-wasm/pkg-node).
 //
-// The bindings speak JSON strings. A failure of an x402 binding is an exception whose message is a JSON object
-// `{ reason, diagnostic, message, retryable, details? }` (the `extensions.kaspa` shape); it is re-thrown as a
-// `KobX402Error` carrying those fields.
+// The bindings speak JSON strings. A failure of an x402 binding is an exception whose message is
+// a JSON object, `{ reason, diagnostic, message, retryable, details? }`, which is the
+// `extensions.kaspa` shape. It is re-thrown as a `KobX402Error` carrying those fields.
 
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -125,7 +126,8 @@ export function createKobWasm(opts: { pkgDir?: string } = {}): KobWasmNode {
     o.paymentId = req.paymentId;
     if (req.ttlSeconds !== undefined) o.ttlSeconds = req.ttlSeconds;
     if (req.maxCarrierSompi) o.maxCarrierSompi = req.maxCarrierSompi;
-    // the payer's own policy runs BEFORE anything is built or signed: pinned tokens, custody opt-in
+    // The payer's own policy runs before anything is built or signed: pinned tokens and the custody
+    // opt-in.
     if (req.tokens) b.tokens = req.tokens;
     if (req.allowIssuerControlled) b.allowIssuerControlled = true;
     return b;
@@ -256,7 +258,10 @@ export function createKobWasm(opts: { pkgDir?: string } = {}): KobWasmNode {
   return api;
 }
 
-/** Builds an offer entry through the Rust requirement builders (used to cross-check the TS builders). */
+/**
+ * Builds an offer entry through the Rust requirement builders. It is used to cross-check the TS
+ * builders.
+ */
 export function rustOffer(kob: KobBindings, kind: 'native' | 'kcc20' | 'swap' | 'intent', request: Record<string, unknown>): PaymentRequirements {
   const f =
     kind === 'native'

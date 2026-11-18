@@ -1,29 +1,46 @@
-// Wire types of the Kaspa x402 `exact` binding (elldeeone/kaspa-x402 v1.0.1, `kaspa-exact-v2`) plus the two
-// KOB contributions: the `kcc20` profile (`extra.token`), swap-and-pay (`extra.route`, binding `kob-swap-v1`), its intent
-// mode (binding `kob-intent-v1`) and invoices (`kob-invoice-v1`).
-// Mirrors `crates/kob-x402/src/wire.rs` field for field. Amounts are canonical decimal uint64 strings, hashes are
-// lowercase hex, addresses are bech32 strings.
+// Wire types of the Kaspa x402 `exact` binding (elldeeone/kaspa-x402 v1.0.1, `kaspa-exact-v2`),
+// plus the KOB contributions:
+// - The `kcc20` profile (`extra.token`).
+// - Swap-and-pay (`extra.route`, binding `kob-swap-v1`) and its intent mode (binding
+//   `kob-intent-v1`).
+// - Invoices (`kob-invoice-v1`).
+//
+// This mirrors `crates/kob-x402/src/wire.rs` field for field. Amounts are canonical decimal uint64
+// strings, hashes are lowercase hex and addresses are bech32 strings.
 
 export const X402_VERSION = 2;
 export const SCHEME_EXACT = 'exact';
 export const BINDING_EXACT = 'kaspa-exact-v2';
 export const BINDING_SWAP = 'kob-swap-v1';
-/** Intent-based swap-and-pay: the payer signs a KOB router intent once, the facilitator executes it. */
+/**
+ * Intent-based swap-and-pay. The payer signs a KOB router intent once and the facilitator executes
+ * it.
+ */
 export const BINDING_INTENT = 'kob-intent-v1';
-/** The KOB router artifact the intent offers name (`extra.route.router`): `kob_protocol::router::ROUTER_ARTIFACT_ID`. */
+/**
+ * The KOB router artifact the intent offers name (`extra.route.router`):
+ * `kob_protocol::router::ROUTER_ARTIFACT_ID`.
+ */
 export const ROUTER_ARTIFACT_ID = '0a950380894b31a8ef14d5de12689b969a3d3c836bc6ff3efa0678196c20786c';
 /** `invoiceVersion` of an invoice. */
 export const INVOICE_VERSION = 'kob-invoice-v1';
 export const TX_ENCODING = 'kaspa-sdk-safe-json-v2.0.0';
 export const ASSET_KAS = 'KAS';
 export const PAYLOAD_EXACT_TX = 'exact-transaction';
-/** Authorization: Schnorr signature over the request digest by a P2PK input (the binding). v2 binds the payment identifier. */
+/**
+ * Authorization by a Schnorr signature over the request digest by a P2PK input (the binding). v2
+ * binds the payment identifier.
+ */
 export const AUTH_VERSION_SIGNED = 'kaspa-x402-exact-request-authorization-v2';
-/** Authorization: the digest is committed in the transaction payload (token profile, swap-and-pay). v2 binds the payment identifier. */
+/**
+ * Authorization by the digest committed in the transaction payload (token profile, swap-and-pay).
+ * v2 binds the payment identifier.
+ */
 export const AUTH_VERSION_PAYLOAD = 'kob-x402-payload-commitment-v2';
 /**
- * `extra.paymentFlow` of every exact offer (required by the binding; an omitted flow is invalid): the payment settles before the
- * resource is served. KOB's own profiles (kcc20, swap-and-pay, intents) carry it too.
+ * `extra.paymentFlow` of every exact offer. The binding requires it, and an omitted flow is
+ * invalid. The payment settles before the resource is served. The KOB profiles (kcc20,
+ * swap-and-pay, intents) carry it too.
  */
 export const PAYMENT_FLOW_UPFRONT = 'upfront';
 export const PAYMENT_IDENTIFIER_KEY = 'payment-identifier';
@@ -40,8 +57,9 @@ export type Profile = 'standard-native' | 'kcc20' | 'additive';
 export type Finality = 'accepted' | 'confirmed';
 export type Custody = 'unconditional' | 'issuer-controlled';
 /**
- * Token family: the program lineage of a token. A merchant asset (`kcc20` profile, `extra.token.family`) is always
- * `kcc20`; a swap-and-pay pay asset may also be a `kron` token (46-byte state, no extension commitment).
+ * Token family, the program lineage of a token. A merchant asset (`kcc20` profile,
+ * `extra.token.family`) is always `kcc20`. A swap-and-pay pay asset may also be a `kron` token,
+ * which has a 46-byte state and no extension commitment.
  */
 export type TokenFamily = 'kcc20' | 'kron';
 
@@ -56,7 +74,7 @@ export interface Resource {
   [key: string]: unknown;
 }
 
-/** `extra.token` of a `kcc20` offer (custody is explicit: the founder's point on kas-smiths.org topic 15 #20). */
+/** `extra.token` of a `kcc20` offer. Custody is explicit (kas-smiths.org topic 15 #20). */
 export interface TokenExtra {
   family: 'kcc20';
   templateHash: string;
@@ -72,11 +90,14 @@ export interface TokenExtra {
 }
 
 export interface RoutePayAsset {
-  /** A token covenant id (KCC-20 program of any pinned template, KaspaCom's included, or a KRON token), or `KAS` (only when the merchant receives a token). */
+  /**
+   * A token covenant id, or `KAS` when the merchant receives a token. A covenant id is a KCC-20
+   * program of any pinned template, KaspaCom's included, or a KRON token.
+   */
   asset: string;
-  /** Absent for `KAS`. The pinned program; its family is the program's. */
+  /** Absent for `KAS`. The pinned program, whose family is the program's. */
   templateHash?: string;
-  /** Absent for `KAS`; all zero for a KRON token (it has none). */
+  /** Absent for `KAS`. All zero for a KRON token, which has none. */
   extensionCommitment?: string;
   [key: string]: unknown;
 }
@@ -105,7 +126,10 @@ export interface ExactExtra {
   [key: string]: unknown;
 }
 
-/** One offer of `accepts`. Unknown fields are kept: the requirements hash covers the complete object. */
+/**
+ * One offer of `accepts`. Unknown fields are kept, because the requirements hash covers the
+ * complete object.
+ */
 export interface PaymentRequirements {
   scheme: string;
   network: string;
@@ -139,7 +163,9 @@ export type PublicReason =
   | 'unsupported_scheme'
   | 'unexpected_settle_error';
 
-/** Local diagnostics (`extensions.kaspa.diagnostic`); the wire reason stays one of `PublicReason`. */
+/**
+ * Local diagnostics (`extensions.kaspa.diagnostic`). The wire reason stays one of `PublicReason`.
+ */
 export const DIAGNOSTICS = [
   'invalid_kaspa_x402_amount',
   'invalid_kaspa_x402_binding',
@@ -239,14 +265,20 @@ export interface RoutePayload {
   intent?: IntentTerms;
 }
 
-/** `payload.route.intent` (intent mode): what the facilitator needs, besides the offer, to recompute the intent. */
+/**
+ * `payload.route.intent` (intent mode): what the facilitator needs, besides the offer, to recompute
+ * the intent.
+ */
 export interface IntentTerms {
-  /** Router actor (`KasToToken_buy`, `TokenToKas_sell2`, ...): the fill shape the keeper uses. */
+  /** Router actor (`KasToToken_buy`, `TokenToKas_sell2`, ...), the fill shape the keeper uses. */
   actor: string;
   /** The payer's x-only key (64 hex). */
   payer: string;
   maxPay?: string;
-  /** KasToToken: one cap for the merchant's carrier, the fillers and the fee; whoever executes the intent may keep up to it. */
+  /**
+   * KasToToken: one cap for the merchant's carrier, the fillers and the fee. Whoever executes the
+   * intent may keep up to it.
+   */
   maxExtra?: string;
   maxSell?: string;
   lockOutputIndex?: number;
@@ -276,7 +308,10 @@ export interface PaymentPayload {
   extensions?: { 'payment-identifier'?: PaymentIdentifierExtension; [key: string]: unknown };
 }
 
-/** Body of `POST /verify` and `POST /settle`. `requestHash` is mandatory and never inferred from the payload. */
+/**
+ * Body of `POST /verify` and `POST /settle`. `requestHash` is mandatory and never inferred from the
+ * payload.
+ */
 export interface FacilitatorRequest {
   x402Version: number;
   paymentPayload: PaymentPayload;
@@ -317,12 +352,15 @@ export interface SupportedResponse {
   signers?: Record<string, string[]>;
 }
 
-// ------------------------------------------------------------------------------------------- offer configuration
+// Offer configuration.
 
 /** A token accepted as payment or paid to the merchant (metadata beyond the covenant id). */
 export interface TokenOfferSpec {
   custody: Custody;
-  /** KAS value of the merchant token output in sompi (decimal string). Default: the wasm's policy minimum. */
+  /**
+   * KAS value of the merchant token output in sompi (decimal string). Default: the wasm's policy
+   * minimum.
+   */
   carrier?: string;
   /** Pinned program hash; the wasm resolves it from its registry when absent. */
   templateHash?: string;
@@ -331,7 +369,10 @@ export interface TokenOfferSpec {
   decimals?: number;
 }
 
-/** What the merchant sells, in server configuration terms. Built into `accepts` entries through `KobWasm`. */
+/**
+ * What the merchant sells, in server configuration terms. Built into `accepts` entries through
+ * `KobWasm`.
+ */
 export type OfferSpec =
   | { kind: 'native'; amount: string; finality?: Finality }
   | { kind: 'kcc20'; asset: string; amount: string; token: TokenOfferSpec; finality?: Finality }
@@ -345,20 +386,26 @@ export type OfferSpec =
       asset?: string;
       token?: TokenOfferSpec;
       /**
-       * Tokens the payer may pay with, of either family. `family: 'kron'` with a `templateHash` needs no extension
-       * commitment (a KRON token has none: all zero on the wire).
+       * Tokens the payer may pay with, of either family. `family: 'kron'` with a `templateHash`
+       * needs no extension commitment, because a KRON token has none and it is all zero on the
+       * wire.
        */
       payAssets: { asset: string; templateHash?: string; extensionCommitment?: string; family?: TokenFamily }[];
       finality?: Finality;
       /**
-       * `signed` (default): the payer signs a route over named orders (`kob-swap-v1`). `intent`: the payer signs a KOB router
-       * intent once and the facilitator executes it (`kob-intent-v1`; pay tokens on a KCC-20 program of the 112-byte state or a
-       * KRON program, the merchant token on a KCC-20 one; KaspaCom's program, pending review, only through `signed`).
+       * `signed` is the default, and the payer signs a route over named orders (`kob-swap-v1`).
+       * `intent` has the payer sign a KOB router intent once, and the facilitator executes it
+       * (`kob-intent-v1`). In that mode the pay tokens are on a KCC-20 program of the 112-byte
+       * state or a KRON program, and the merchant token is on a KCC-20 one. KaspaCom's program is
+       * pending review and only goes through `signed`.
        */
       mode?: 'signed' | 'intent';
     };
 
-/** `swap`: payer-signed swap-and-pay (`kob-swap-v1`); `intent`: its intent mode (`kob-intent-v1`, the payer signs a router intent). */
+/**
+ * `swap` is payer-signed swap-and-pay (`kob-swap-v1`). `intent` is its intent mode
+ * (`kob-intent-v1`).
+ */
 export type OfferKind = 'native' | 'kcc20' | 'swap' | 'intent';
 
 /** A transaction outpoint. */
@@ -382,11 +429,12 @@ export interface PayerUtxo {
   address?: string;
 }
 
-// ------------------------------------------------------------------------------------------------ invoices
+// Invoices.
 
 /**
- * An invoice (`kob-invoice-v1`): the x402 requirements of one sale, the merchant's reference and an expiry. Its id is the
- * SHA-256 of its canonical JSON; the facilitator serves it at `GET /invoices/<id>` (the URL a QR code carries).
+ * An invoice (`kob-invoice-v1`): the x402 requirements of one sale, the merchant's reference and
+ * an expiry. Its id is the SHA-256 of its canonical JSON. The facilitator serves it at
+ * `GET /invoices/<id>`, the URL a QR code carries.
  */
 export interface Invoice {
   x402Version: number;
@@ -405,7 +453,7 @@ export interface Invoice {
 export type InvoiceState = 'unpaid' | 'pending' | 'paid' | 'expired' | 'failed';
 
 export interface InvoicePayment {
-  /** The transaction that pays the merchant (an intent: its execution). */
+  /** The transaction that pays the merchant. For an intent it is the execution. */
   transaction: string;
   acceptedDaaScore?: string;
   payer?: string;
@@ -420,7 +468,10 @@ export interface InvoiceAttempt {
   reason?: string;
 }
 
-/** A refused duplicate / late payment the facilitator keeps watching (a refund candidate once `observed` is `accepted`). */
+/**
+ * A refused duplicate or late payment the facilitator keeps watching. It is a refund candidate once
+ * `observed` is `accepted`.
+ */
 export interface ExtraPayment {
   kind: 'duplicate' | 'late';
   transaction: string;
