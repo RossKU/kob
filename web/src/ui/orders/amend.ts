@@ -1,16 +1,23 @@
-// Amend = cancel + a new order in ONE atomic transaction (`planCancelReplace`). This module derives the ReplacementSpec from the CURRENT
-// order state: it edits only the fields the user may change (price, amount, tip; a conditional order's take-profit and stop) and leaves every
-// other term as it is. It never decides validity: kob-wasm's builder (run by planCancelReplace) is the reference and its refusals come back as issues.
+// Amend is a cancel plus a new order in one atomic transaction (`planCancelReplace`). This module
+// derives the ReplacementSpec from the current order state. It edits only the fields the user may
+// change, which are price, amount, tip and a conditional order's take-profit and stop. It leaves
+// every other term as it is. It never decides validity. The builder of kob-wasm, run by
+// planCancelReplace, is the reference, and its refusals come back as issues.
 //
-// Amounts are token base units, prices / tips the state's (sompi per whole token of the order's `scale` base units). Pair orders (KobPair,
-// KobCondPair, KobIfdPair) have no in-place amend in the protocol: they are replaced from the full ticket form (cancel-replace). KAS on the new
-// order UTXO:
-//   * asks: unchanged (the order UTXO is a carrier; custody and top-up tokens are handled by planCancelReplace);
-//   * plain bids: the KAS budget stays unless the user tops it up (`addKas`, taken from the wallet's free KAS by planCancelReplace); the amount
-//     follows from the new price and the budget. A partly filled bid whose escrow no longer funds ONE minimum fill can only be replaced with a
-//     top-up (the builder refuses a replacement below `bidEscrow(minFill, 1)`, kob-protocol `min_order_value`);
-//   * conditional bids: the escrow follows the new worst price and tip: `value' = value + escrow'(amount') - escrow(amount)` where escrow is the
-//     spend of the whole amount at the worst leg (kob-wasm `condBidEscrow`; the delivery carriers and the keeper reserve stay as they are).
+// Amounts are token base units. Prices and tips are the state's, in sompi per whole token of the
+// order's `scale` base units. Pair orders (KobPair, KobCondPair, KobIfdPair) have no in-place amend
+// in the protocol. They are replaced from the full ticket form as a cancel-replace. The KAS on the
+// new order UTXO is:
+// - Asks: unchanged. The order UTXO is a carrier, and custody and top-up tokens are handled by
+//   planCancelReplace.
+// - Plain bids: the KAS budget stays unless the user tops it up with `addKas`, taken from the
+//   wallet's free KAS by planCancelReplace. The amount follows from the new price and the budget. A
+//   partly filled bid whose escrow no longer funds one minimum fill can only be replaced with a
+//   top-up. The builder refuses a replacement below `bidEscrow(minFill, 1)`, kob-protocol
+//   `min_order_value`.
+// - Conditional bids: the escrow follows the new worst price and tip. It is `value' = value +
+//   escrow'(amount') - escrow(amount)`, where escrow is the spend of the whole amount at the worst
+//   leg (kob-wasm `condBidEscrow`). The delivery carriers and the keeper reserve stay as they are.
 import { bidWorst, slipForLimit, stopWorstPrice, type Legs } from '../../kob/orders/cond-legs';
 import { baseKind } from '../../kob/order-facts';
 import type { PlanIssue } from '../../kob/plan-types';
@@ -21,41 +28,61 @@ import type { CondAskState, CondBidState, AskState, BidState, CurveAskState, Ord
 import { amendCurveTable, currentLevel } from '../../kob/curve';
 import type { KobWasm } from '../../kob/wasm';
 
-/** limit: plain ask / bid (in place where possible); cond: stop / take-profit / OCO legs. */
+/** limit: plain ask or bid, in place where possible. cond: stop, take-profit and OCO legs. */
 export type AmendKind = 'limit' | 'cond' | 'curve';
 
-/** New values as typed by the user (state prices: sompi per whole token; amounts: base units); a missing field keeps the current value. */
+/**
+ * New values as typed by the user. State prices are in sompi per whole token and amounts in base
+ * units. A missing field keeps the current value.
+ */
 export interface AmendInput {
-  /** limit price (limit orders) or take-profit price (conditional orders with a take-profit leg) */
+  /**
+   * Limit price for limit orders, or take-profit price for conditional orders with a take-profit
+   * leg.
+   */
   price?: bigint;
-  /** trigger price of a conditional order's stop leg */
+  /** Trigger price of a conditional order's stop leg. */
   stop?: bigint;
   /**
-   * the stop leg's worst price (stop-limit: the limit). Without it a moved stop keeps its band in PERCENT, so its worst price moves with it
-   * (the preview shows the new worst price); with it the band is re-derived so the worst price stays at this limit (matcher.md 10.6).
+   * The stop leg's worst price, which is the limit of a stop-limit. Without it a moved stop keeps
+   * its band in percent, so its worst price moves with it and the preview shows the new worst
+   * price. With it the band is re-derived so the worst price stays at this limit (matcher.md 10.6).
    */
   stopLimit?: bigint;
-  /** base units to keep resting (asks and conditional orders; a plain bid keeps its KAS budget) */
+  /**
+   * Base units to keep resting, for asks and conditional orders. A plain bid keeps its KAS budget.
+   */
   amount?: bigint;
-  /** priority tip, sompi per whole token */
+  /** Priority tip, in sompi per whole token. */
   tip?: bigint;
-  /** plain bids only: additional KAS (sompi) for the new order's escrow, on top of what the old order still holds */
+  /**
+   * Plain bids only: additional KAS in sompi for the new order's escrow, on top of what the old
+   * order still holds.
+   */
   addKas?: bigint;
   /**
-   * GTC renewal: the new order gets a fresh on-chain expiry (now + 90 days). A GTC ends 90 days after PLACEMENT whatever its fills
-   * (refund due at min(expiryDaa, utxoDaa + 90 days), expiryDaa = placement + 90 days), so renewing is a replacement with a new expiryDaa.
+   * GTC renewal. The new order gets a fresh on-chain expiry of now + 90 days. A GTC ends 90 days
+   * after placement whatever its fills, because the refund is due at min(expiryDaa, utxoDaa + 90
+   * days) and expiryDaa is placement + 90 days. Renewing is therefore a replacement with a new
+   * expiryDaa.
    */
   renew?: boolean;
-  /** a curve: its price now and its last level's (sompi per whole token), its level size and minimum fill (base units) */
+  /**
+   * A curve: its price now and its last level's in sompi per whole token, and its level size and
+   * minimum fill in base units.
+   */
   curve?: { now?: bigint; last?: bigint; levelSize?: bigint; minFill?: bigint };
 }
 
 export interface AmendOptions {
-  /** the token's tick (sompi per whole token): prices must be multiples of it */
+  /** The token's tick in sompi per whole token. Prices must be multiples of it. */
   tick?: bigint;
-  /** current DAA score: needed to renew (the new expiry is nowDaa + 90 days) */
+  /** Current DAA score. It is needed to renew, because the new expiry is nowDaa + 90 days. */
   nowDaa?: bigint;
-  /** kob-wasm: the escrows and the buying power come from its exact helpers (the covenant's arithmetic); without it the same quote rule in bigint */
+  /**
+   * kob-wasm. The escrows and the buying power come from its exact helpers, which are the
+   * covenant's arithmetic. Without it the same quote rule runs in bigint.
+   */
   kob?: KobWasm;
 }
 
@@ -74,12 +101,17 @@ export interface AmendResult {
   ok: boolean;
   issues: PlanIssue[];
   spec: ReplacementSpec | null;
-  /** the values the new order will have (state prices, base units), for the preview line */
+  /** The values the new order will have, as state prices and base units, for the preview line. */
   next: {
     price: bigint | null; stop: bigint | null; amount: bigint | null; tip: bigint;
-    /** plain bids: the escrow of the new order (sompi) and the most base units it can fund (its buying power) */
+    /**
+     * Plain bids: the escrow of the new order in sompi and the most base units it can fund, which
+     * is its buying power.
+     */
     value?: bigint; maxAmount?: bigint;
-    /** conditional orders with a stop: the worst price after the trigger (the band's end) */
+    /**
+     * Conditional orders with a stop: the worst price after the trigger, which is the band's end.
+     */
     stopWorst?: bigint;
   } | null;
 }
@@ -147,7 +179,7 @@ function limitReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOption
   if (sell && add !== 0n) issues.push(issue('add-kas-bid-only', 'error', 'only a buy order takes additional KAS', 'addKas'));
   if (issues.some((i) => i.severity === 'error') || price === null) return fail(issues);
 
-  // an ask's minimum fill never exceeds what is left (a smaller amount keeps a valid minimum)
+  // An ask's minimum fill never exceeds what is left, so a smaller amount keeps a valid minimum.
   const minFill = big(s.minFill);
   const fit = sell && amount !== null && minFill > amount ? { minFill: str(amount) } : {};
   const next = { ...s, price: str(price), tip: str(tip), ...(sell ? { amountLeft: str(amount!) } : {}), ...fit, ...renewed };
@@ -156,7 +188,8 @@ function limitReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOption
   let bidNext: { value: bigint; maxAmount: bigint } | undefined;
   if (!sell) {
     value += add;
-    // the builder refuses a replacement that cannot fund one minimum fill (kob-protocol min_order_value = bidEscrow(minFill, 1))
+    // The builder refuses a replacement that cannot fund one minimum fill (kob-protocol
+    // `min_order_value` = `bidEscrow(minFill, 1)`).
     const minValue = bidEscrowOf(o, order, minFill, 1n);
     if (minValue === null || value < minValue) {
       const need = minValue ?? 0n;
@@ -204,7 +237,7 @@ function condReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOptions
   const renewed = renewedExpiry(input, o, issues);
   let slip = big(s.slipBps);
   if (hasStop && stop !== null && input.stopLimit !== undefined) {
-    // stop-limit: the band ends at the user's limit or inside it
+    // Stop-limit: the band ends at the user's limit or inside it.
     const lim = input.stopLimit;
     if (lim <= 0n) issues.push(issue('price-not-positive', 'error', 'the price must be greater than zero', 'stopLimit'));
     else if (sell ? lim > stopWant : lim < stopWant) {
@@ -221,8 +254,9 @@ function condReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOptions
   const order = { kind: st.kind, state: next } as OrderState;
   let value = big(snap.order.amount);
   if (!sell) {
-    // the escrow follows the worst price the buy can now pay and the new tip: the spend of the whole amount at the worst leg (rounded down per
-    // fill, so it funds any split), the delivery carriers and the keeper reserve staying as they are
+    // The escrow follows the worst price the buy can now pay and the new tip. It is the spend of
+    // the whole amount at the worst leg, rounded down per fill so it funds any split. The delivery
+    // carriers and the keeper reserve stay as they are.
     const legsOf = (tpS: bigint, stopS: bigint, slipS: bigint): Legs => ({ tpPrice: tpS, stopPrice: stopS, stopWorst: stopS > 0n ? stopWorstPrice(side, stopS, slipS) : 0n }) as Legs;
     const spend = (state: CondBidState, legs: Legs): bigint | null => {
       const worst = bidWorst(legs);
@@ -247,8 +281,9 @@ function condReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOptions
 }
 
 /**
- * Builds the in-place amend of a curve (KobCurveAsk, spec §5): the price now and the last level's re-spread the levels left, the level size,
- * tip and minimum fill may change; the amount left and the total stay. An unbound curve (made in its token genesis) is bound by its amend.
+ * Builds the in-place amend of a curve (KobCurveAsk, spec §5). The price now and the last level's
+ * re-spread the levels left. The level size, tip and minimum fill may change. The amount left and
+ * the total stay. An unbound curve, made in its token genesis, is bound by its amend.
  */
 function curveReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOptions): AmendResult {
   const st = snap.order.state;
@@ -274,9 +309,10 @@ function curveReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOption
   if (issues.some((i) => i.severity === 'error')) return fail(issues);
   const t = amendCurveTable({ total: big(s.total), amountLeft: big(s.amountLeft), levelSize, now, last });
   if (!t) return fail([...issues, issue('curve-too-many-levels', 'error', 'this level size gives more than 1,000 levels', 'levelSize')]);
-  // an unbound curve names its token on its amend: the custody's
+  // An unbound curve names its token on its amend, which is the custody's.
   const unbound = /^0{64}$/.test(s.tokenCovId);
-  // the genesis custody sits in the curve's own transaction (the covenant checks it): a stray of another token named as the custody does not bind it
+  // The genesis custody sits in the curve's own transaction, and the covenant checks it. A stray of
+  // another token named as the custody does not bind it.
   const bind = unbound && snap.custody?.transactionId.toLowerCase() === snap.order.transactionId.toLowerCase() ? snap.custody.covenantId ?? null : null;
   if (unbound && !bind) return fail([...issues, issue('curve-custody-unknown', 'error', 'the curve\'s tokens are not found yet: refresh and try again')]);
   const next: CurveAskState = {
@@ -286,7 +322,10 @@ function curveReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOption
   return { ok: true, issues, spec: { order, value: big(snap.order.amount), ...(snap.deadline !== null ? { deadline: snap.deadline } : {}) }, next: { price: now, stop: null, amount: big(s.amountLeft), tip } };
 }
 
-/** The replacement spec for an amendment, or the reasons it cannot be built. `kind` comes from `amendKind` (orders-model.ts). */
+/**
+ * The replacement spec for an amendment, or the reasons it cannot be built. `kind` comes from
+ * `amendKind` (orders-model.ts).
+ */
 export function buildReplacement(snap: OrderSnapshot, kind: AmendKind, input: AmendInput, o: AmendOptions = {}): AmendResult {
   return kind === 'limit' ? limitReplacement(snap, input, o) : kind === 'curve' ? curveReplacement(snap, input, o) : condReplacement(snap, input, o);
 }
