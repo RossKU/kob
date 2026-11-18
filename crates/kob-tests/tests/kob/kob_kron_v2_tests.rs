@@ -294,6 +294,8 @@ enum EvMode {
     ZeroFill,
     /// a look-alike: a P2SH script carrying a real order's state under another template
     Forged,
+    /// H1: a KobBidKron refund whose sigscript starts with 0x08 || n (`refund()` takes no argument: an extra push)
+    RefundPush,
     /// the real redeem script pushed by an input whose script public key is not its P2SH
     NotP2sh,
 }
@@ -1425,6 +1427,15 @@ fn push_tok(
     }
 }
 
+/// H1: a KobBidKron refund whose sigscript starts with 0x08 || n, as a fill's would. Its `refund()` takes no argument,
+/// so the 8-byte push is an extra item the entry must refuse.
+fn refund_push_ev(art: &SilAbiArtifact, n: i64, value: i64, c: Hash, daa: u64) -> Inp {
+    let mut ss = vec![0x08];
+    ss.extend(n.to_le_bytes());
+    ss.extend(encode_entry_sig_script(art, "refund", &[]).expect("encode refund"));
+    ss.extend(push(&bytecode(art)));
+    Inp { entry: utxo(value, spk_of(art), c, daa), role: Role::Raw { ss, name: "ev.bid.refund8" }, seq: 0 }
+}
 /// A look-alike evidence order: a P2SH script of the real redeem script's length whose state span holds the
 /// real order's state (the push header of its data overwrites the first two state bytes, which no touch check
 /// reads) under another template ("PUSHDATA2 data, drop, drop, true"). Its sigscript starts with 0x08 || n.
@@ -1507,7 +1518,7 @@ fn add_ev(f: &Fx, s: &mut Scn, e: &Ev) -> (i64, i64) {
     let decay = e.slope != 0;
     let origin = if e.interval > 0 { e.active_from.max(e.daa as i64 + e.interval) } else { e.active_from };
     let t_arg = if decay { origin } else { 0 };
-    let expiry = if matches!(e.mode, EvMode::Refund | EvMode::ZeroFill) { NOW as i64 } else { EXPIRY };
+    let expiry = if matches!(e.mode, EvMode::Refund | EvMode::RefundPush | EvMode::ZeroFill) { NOW as i64 } else { EXPIRY };
     let look = matches!(e.mode, EvMode::Forged | EvMode::NotP2sh);
     let owner = if e.mode == EvMode::Cancel { mc } else { matcher };
     if e.ask {
@@ -1527,7 +1538,7 @@ fn add_ev(f: &Fx, s: &mut Scn, e: &Ev) -> (i64, i64) {
         let tk = ei as i64 + 1;
         let mut inp = match e.mode {
             EvMode::Fill => call(&art, "settle", vec![nb(claim), iv(tk), iv(0), iv(t_arg)], "ev.ask.settle", CARRIER, e.cov, e.daa),
-            EvMode::Refund | EvMode::ZeroFill => {
+            EvMode::Refund | EvMode::RefundPush | EvMode::ZeroFill => {
                 call(&art, "settle", vec![nb(0), iv(tk), iv(0), iv(0)], "ev.ask.refund", CARRIER, e.cov, e.daa)
             }
             EvMode::Cancel => call(&art, "cancel", vec![Arg::SigPos(f.maker_c, 0x01)], "ev.ask.cancel", CARRIER, e.cov, e.daa),
@@ -1536,7 +1547,7 @@ fn add_ev(f: &Fx, s: &mut Scn, e: &Ev) -> (i64, i64) {
         };
         inp.seq = e.interval as u64;
         s.inputs.push(inp);
-        if matches!(e.mode, EvMode::Refund | EvMode::ZeroFill) {
+        if matches!(e.mode, EvMode::Refund | EvMode::RefundPush | EvMode::ZeroFill) {
             // the unsold tokens go back to maker C at the ask's own index
             let st = vec![tok_state(n, &mc, SCHEME_P2PK)];
             let l = push_tok(f, s, CARRIER, n, &e.cov.as_bytes(), SCHEME_COVID, e.token, Wit::CovId, e.tok_daa, st);
@@ -1566,6 +1577,7 @@ fn add_ev(f: &Fx, s: &mut Scn, e: &Ev) -> (i64, i64) {
         let mut inp = match e.mode {
             EvMode::Fill => call(&art, "fill", vec![nb(n), iv(ei as i64 + 1), iv(t_arg)], "ev.bid.fill", v, e.cov, e.daa),
             EvMode::Refund => call(&art, "refund", vec![], "ev.bid.refund", v, e.cov, e.daa),
+            EvMode::RefundPush => refund_push_ev(&art, n, v, e.cov, e.daa),
             EvMode::Cancel => call(&art, "cancel", vec![Arg::SigPos(f.maker_c, 0x01)], "ev.bid.cancel", v, e.cov, e.daa),
             EvMode::ZeroFill => call(&art, "fill", vec![nb(0), iv(ei as i64 + 1), iv(t_arg)], "ev.bid.fill0", v, e.cov, e.daa),
             EvMode::Forged => forged_ev(&bytecode(&art), n, v, e.cov, e.daa),
@@ -3193,6 +3205,10 @@ fn touch_battery(f: &Fx, kind: Kind) {
     bad(&good.with(|e| e.mode = EvMode::Refund), 0, "11", "refunded, not filled (ask settle n = 0 / bid refund; minTouch 0)");
     if !good.ask {
         bad(&good.with(|e| e.mode = EvMode::ZeroFill), 0, "11b", "a bid fill with n = 0 (the bid refuses it too; minTouch 0)");
+        // H1: a due refund of a bid whose sigscript reads as a fill of n (refused by the bid itself, refund() has no argument)
+        let s = trig(f, kind, &good.with(|e| e.mode = EvMode::RefundPush), 1);
+        let at = ev_args(&s, kind).0 as usize;
+        bad_s(s, "11c", "a bid refund whose sigscript starts with 0x08 || n (H1)", at);
     }
     // wrong indices
     let base = trig(f, kind, &good, 1);
