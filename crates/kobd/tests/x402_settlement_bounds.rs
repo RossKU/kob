@@ -1,5 +1,6 @@
-//! Bounds of x402 settlement and of the HTTP transports, each on the real code path: ledger replay and the facilitator's
-//! reconcile, the x402 HTTP router, the production `ProtocolVerifier`, the read API's `WsRegistry` and `api::conn::serve`.
+//! Bounds of x402 settlement and of the HTTP transports, each on the real code path: ledger replay
+//! and the facilitator's reconcile, the x402 HTTP router, the production `ProtocolVerifier`, the
+//! read API's `WsRegistry` and `api::conn::serve`.
 //!
 //! Run: KOB_SKIP_NETWORK_TESTS=1 cargo test -p kobd --test x402_settlement_bounds -- --nocapture --test-threads=8
 

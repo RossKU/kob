@@ -1,11 +1,17 @@
-//! Regression: the x402 facilitator behind a local reverse proxy.
+//! The x402 facilitator behind a local reverse proxy attributes each request to the forwarded
+//! client.
 //!
-//! Every request used to come from 127.0.0.1: `/metrics` ("admin key or loopback peer") was readable by anybody who could reach the
-//! proxy, and the per-IP limiter was one shared bucket that anonymous junk (counted before authentication) exhausted, so every
-//! merchant got `429`. Now: `trustedProxies` + `clientIpHeader` attribute requests to the forwarded client; `/metrics` never
-//! trusts the loopback peer when proxies are configured or when the request carries a forwarding header; a request with a valid
-//! merchant key is limited by the merchant's bucket, not the shared per-IP one; settle and verify have concurrency caps
-//! (per merchant and global).
+//! Without that, every request would come from 127.0.0.1: `/metrics` ("admin key or loopback peer")
+//! would be readable by anybody who could reach the proxy, and the per-IP limiter would be one
+//! shared bucket that anonymous junk (counted before authentication) exhausts, so every merchant
+//! would get `429`. So:
+//!
+//! * `trustedProxies` + `clientIpHeader` attribute requests to the forwarded client;
+//! * `/metrics` never trusts the loopback peer when proxies are configured or when the request
+//!   carries a forwarding header;
+//! * a request with a valid merchant key is limited by the merchant's bucket, not the shared per-IP
+//!   one;
+//! * settle and verify have concurrency caps (per merchant and global).
 
 use std::net::SocketAddr;
 use std::sync::Arc;

@@ -1,6 +1,6 @@
-//! Live testnet-10 end-to-end test of x402: KAS exact, KCC-20 exact and
-//! swap-and-pay settled through the real facilitator (HTTP in-process, `NodeChain` over wRPC) against
-//! a TN10 node of your own, with fresh random keys funded by the self-mining tool.
+//! Live testnet-10 end-to-end test of x402: KAS exact, KCC-20 exact and swap-and-pay settled
+//! through the real facilitator (HTTP in-process, `NodeChain` over wRPC) against a TN10 node of
+//! your own, with fresh random keys funded by the self-mining tool.
 //!
 //! ONE sequential test, step by step:
 //!
@@ -16,9 +16,15 @@
 //!   (`POST /invoices/{id}/pay`); the facilitator broadcasts the creation and executes the intent against a live bid
 //!   of the indexer's book; the invoice status is `paid` with the execution; a second payment is a refused duplicate.
 //!
-//! Skipped when `KOB_SKIP_NETWORK_TESTS=1`. Env: `KOB_TN10_MINER` (REQUIRED: the path of the built `tn10-miner` binary, see
-//! `tools/wallet-gate/miner/README.md`), `KOB_TN10_WRPC` (the testnet-10 node, default `ws://127.0.0.1:18210`; `KOB_TN10_NODE` is still read as an alias). Writes `x402-tn10-report.json`
-//! into the cargo target directory. The whole test has a 25 minute budget.
+//! Skipped when `KOB_SKIP_NETWORK_TESTS=1`.
+//!
+//! * `KOB_TN10_MINER` (REQUIRED): the path of the built `tn10-miner` binary, see
+//!   `tools/wallet-gate/miner/README.md`.
+//! * `KOB_TN10_WRPC`: the testnet-10 node, default `ws://127.0.0.1:18210`; `KOB_TN10_NODE` is also
+//!   read as an alias.
+//!
+//! Writes `x402-tn10-report.json` into the cargo target directory. The whole test has a 25 minute
+//! budget.
 #![allow(clippy::too_many_arguments)]
 
 use std::collections::{BTreeMap, BTreeSet};

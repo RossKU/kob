@@ -57,10 +57,12 @@ async fn settlement_finality_and_reorgs_come_from_the_indexers_acceptance_tracki
     assert_eq!(view.tracked(&txid), Tracked::NotAccepted, "tracked from before the broadcast");
 
     // the node accepts it and the merchant spends the output at once: the UTXO observation alone
-    // never sees the settlement as accepted. The settle thread polls the chain every few milliseconds, and the facilitator reads an
-    // accepted transaction from any of its outputs in the UTXO set: the node is unreachable for it while the test mines the block and
-    // spends every output, so that no poll can see the transaction accepted before the indexer's follower does (the test was racy: a
-    // poll between `mine` and the spends, or in the milliseconds before the follower's block, settled it at the node's score)
+    // never sees the settlement as accepted. The settle thread polls the chain every few
+    // milliseconds, and the facilitator reads an accepted transaction from any of its outputs in
+    // the UTXO set: the node is unreachable for it while the test mines the block and spends every
+    // output, so that no poll can see the transaction accepted before the indexer's follower does.
+    // A poll between `mine` and the spends, or just before the follower's block, would settle it at
+    // the node's score.
     chain.set_unavailable(true);
     chain.mine(1);
     for i in 0..tx.outputs.len() {
@@ -221,9 +223,9 @@ fn swap_quotes_come_from_the_book_best_price_first() {
     assert_eq!(prices, vec![P260, P250, P255]);
 }
 
-/// The follower reports which input of the spending transaction spent a watched outpoint, that input's signature script, and
-/// every output in order, so that the facilitator can read the entry an intent ran and the output the router pins for its
-/// merchant (review p6, F1).
+/// The follower reports which input of the spending transaction spent a watched outpoint, that
+/// input's signature script, and every output in order, so that the facilitator can read the entry
+/// an intent ran and the output the router pins for its merchant.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_follower_reports_the_spending_input_and_every_output_in_order() {
     use kob_x402::chain::SpentBy;

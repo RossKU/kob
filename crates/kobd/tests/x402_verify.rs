@@ -1,6 +1,7 @@
-//! Regression: `/verify` does not call a payment valid that the node cannot accept.
+//! `/verify` does not call a payment valid that the node cannot accept.
 //!
-//! A payer input that is a coinbase output younger than the maturity is refused by consensus; `/verify` used to say valid.
+//! A payer input that is a coinbase output younger than the maturity is refused by consensus, so
+//! `/verify` must refuse it too.
 
 use std::sync::Arc;
 use std::time::Duration;

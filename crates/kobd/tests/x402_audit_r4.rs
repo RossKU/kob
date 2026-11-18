@@ -1,9 +1,11 @@
-//! Audit 2026-10-30 round 4 regressions of the x402 merchant path (offline, in-memory chain whose submit runs the real script
-//! engine, the real verifier and the real facilitator):
+//! Regression tests of the x402 merchant path (offline, in-memory chain whose submit runs the real
+//! script engine, the real verifier and the real facilitator):
 //!
-//! * X8: a token merchant is NOT paid by the payer's own cancel carrying a plain (covenant-less) copy of the merchant's token
-//!   script; an execution by another keeper (a real token output) still settles.
-//! * X9: the spend of the intent output is followed from the claim on; a full watch table refuses the payment before any broadcast.
+//! * X8: a token merchant is NOT paid by the payer's own cancel carrying a plain (covenant-less)
+//!   copy of the merchant's token script; an execution by another keeper (a real token output)
+//!   still settles.
+//! * X9: the spend of the intent output is followed from the claim on; a full watch table refuses
+//!   the payment before any broadcast.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 #[path = "../../kob-protocol/tests/common/mod.rs"]

@@ -1,7 +1,9 @@
-//! Audit 2026-10-30 regressions of the x402 merchant path (offline, in-memory chain, real verifier):
+//! Regression tests of the x402 merchant path (offline, in-memory chain, real verifier):
 //!
-//! * X1: a `/settle` of a payment `/verify` saw must name the payment identifier `/verify` saw, not one of the settler's own.
-//! * X3: an intent executed by another keeper pays the merchant: the payer's `/settle` succeeds with that transaction.
+//! * X1: a `/settle` of a payment `/verify` saw must name the payment identifier `/verify` saw, not
+//!   one of the settler's own.
+//! * X3: an intent executed by another keeper pays the merchant: the payer's `/settle` succeeds
+//!   with that transaction.
 #![allow(clippy::too_many_arguments)]
 
 #[path = "../../kob-protocol/tests/common/mod.rs"]

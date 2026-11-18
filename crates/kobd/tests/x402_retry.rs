@@ -1,7 +1,8 @@
-//! The payer's retry (`kob_x402::client::retry::pay_with_retry`) against the real facilitator core over the deterministic mock
-//! chain, with injected failures (no network): a lost order race, an unreachable facilitator, a node rejection, an answer lost
-//! after the payment went through, every attempt failing, a worse re-quote above the payer's limit, and two retries of one
-//! payment racing. In every case the merchant is paid at most once.
+//! The payer's retry (`kob_x402::client::retry::pay_with_retry`) against the real facilitator core
+//! over the deterministic mock chain, with injected failures (no network): a lost order race, an
+//! unreachable facilitator, a node rejection, an answer lost after the payment went through, every
+//! attempt failing, a worse re-quote above the payer's limit, and two retries of one payment
+//! racing. In every case the merchant is paid at most once.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
