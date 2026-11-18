@@ -1,5 +1,6 @@
-// What choosing a pair in the title bar does: open the token's KAS market (remembering the orientation that was chosen) or the token pair. The URL changes,
-// so the browser's back button returns to the previous pair.
+// What choosing a pair in the title bar does. It opens the token's KAS market, remembering the
+// orientation that was chosen, or the token pair. The URL changes, so the browser's back button
+// returns to the previous pair.
 import { navigate } from '../../app/router';
 import { marketFor, type DisplayedPair } from './market-select';
 import { marketKey, writeInverted } from './orientation';

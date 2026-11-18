@@ -1,5 +1,7 @@
-// The viewer's favourite tokens and pairs: a convenience of this browser, one record per network (covenant ids differ by network). Covenant ids only: a ticker is a
-// label, never the identity. Nothing here reaches an order, a signature or a server. Pure, but for `useFavorites`.
+// The viewer's favourite tokens and pairs. It is a convenience of this browser, with one record
+// per network, because covenant ids differ by network. It holds covenant ids only. A ticker is a
+// label and never the identity. Nothing here reaches an order, a signature or a server. It is
+// pure, but for `useFavorites`.
 import { useState } from 'preact/hooks';
 
 export const FAVORITES_KEY_PREFIX = 'kob.favorites.v1:';
@@ -18,7 +20,10 @@ const browserStore = (): Store | null => {
 
 const idOf = (v: unknown): string | null => (typeof v === 'string' && /^[0-9a-f]{64}$/i.test(v) ? v.toLowerCase() : null);
 
-/** Validates a stored record: anything that is not a covenant id or a pair of two different ones is dropped, and so is a repeat (either way round). */
+/**
+ * Validates a stored record. Anything that is not a covenant id or a pair of two different ones is
+ * dropped, and so is a repeat, either way round.
+ */
 export function parseFavorites(v: unknown): Favorites {
   const o = (v && typeof v === 'object' ? v : {}) as { tokens?: unknown; pairs?: unknown };
   const tokens = new Set<string>();
@@ -35,7 +40,10 @@ export function parseFavorites(v: unknown): Favorites {
   return { tokens: [...tokens], pairs };
 }
 
-/** The favourites of `network` (none without storage or with a damaged record). Never throws. */
+/**
+ * The favourites of `network`. There are none without storage or with a damaged record. It never
+ * throws.
+ */
 export function readFavorites(network: string, store: Store | null = browserStore()): Favorites {
   try {
     const raw = store?.getItem(FAVORITES_KEY_PREFIX + network);
@@ -45,7 +53,10 @@ export function readFavorites(network: string, store: Store | null = browserStor
   }
 }
 
-/** Stores the favourites of `network`. False when the browser keeps nothing. Never throws. */
+/**
+ * Stores the favourites of `network`. It returns false when the browser keeps nothing. It never
+ * throws.
+ */
 export function writeFavorites(network: string, f: Favorites, store: Store | null = browserStore()): boolean {
   try {
     if (!store) return false;
@@ -58,7 +69,10 @@ export function writeFavorites(network: string, f: Favorites, store: Store | nul
 
 export const isFavoriteToken = (f: Favorites, id: string): boolean => f.tokens.includes(id.toLowerCase());
 
-/** A pair is one favourite whichever way round it is shown: the flip of a pair page keeps its star. */
+/**
+ * A pair is one favourite whichever way round it is shown, so the flip of a pair page keeps its
+ * star.
+ */
 export function isFavoritePair(f: Favorites, base: string, quote: string): boolean {
   const [a, b] = [base.toLowerCase(), quote.toLowerCase()];
   return f.pairs.some((p) => (p.base === a && p.quote === b) || (p.base === b && p.quote === a));
@@ -75,10 +89,13 @@ export function togglePair(f: Favorites, base: string, quote: string): Favorites
   return { ...f, pairs: f.pairs.filter((p) => !((p.base === a && p.quote === b) || (p.base === b && p.quote === a))) };
 }
 
-/** What a blocked storage could not keep: the favourites last the visit. */
+/** What a blocked storage could not keep. The favourites last the visit. */
 const visit = new Map<string, Favorites>();
 
-/** The favourites of `network` as component state. A change starts from what is stored, so another tab's change is not lost. */
+/**
+ * The favourites of `network` as component state. A change starts from what is stored, so another
+ * tab's change is not lost.
+ */
 export function useFavorites(network: string): { favorites: Favorites; change: (fn: (f: Favorites) => Favorites) => void } {
   const [favorites, setFavorites] = useState<Favorites>(() => visit.get(network) ?? readFavorites(network));
   const change = (fn: (f: Favorites) => Favorites) => {

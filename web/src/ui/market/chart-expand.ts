@@ -1,6 +1,9 @@
-// The "Expand chart" choice of the market pages (token and pair), kept in this browser. One flag for every market: the price chart's button flips it, the page's grid
-// (MarketShell, market.css .mkt-chart-big) lays out accordingly. Three columns: the chart takes the book's and the depth chart's place; two columns and a phone: a taller
-// chart box. A store of its own so the button (inside the chart) and the grid (around it) agree without one passing props through the other.
+// The "Expand chart" choice of the market pages, token and pair, kept in this browser. It is one
+// flag for every market. The price chart's button flips it, and the page's grid (MarketShell,
+// market.css `.mkt-chart-big`) lays out accordingly. With three columns the chart takes the book's
+// and the depth chart's place. With two columns and on a phone the chart box is taller. It is a
+// store of its own, so the button inside the chart and the grid around it agree without one
+// passing props through the other.
 import { useEffect, useState } from 'preact/hooks';
 
 const KEY = 'kob.chart.expand';
@@ -16,7 +19,10 @@ function read(): boolean {
 let current = read();
 const listeners = new Set<(on: boolean) => void>();
 
-/** Expand or restore the chart; the choice is remembered (not when there is no storage: then it lasts until the page is left). */
+/**
+ * Expands or restores the chart. The choice is remembered, but not when there is no storage, and
+ * then it lasts until the page is left.
+ */
 export function setChartExpanded(on: boolean): void {
   if (on === current) return;
   current = on;
@@ -24,12 +30,12 @@ export function setChartExpanded(on: boolean): void {
     if (on) localStorage.setItem(KEY, '1');
     else localStorage.removeItem(KEY);
   } catch {
-    /* not kept */
+    /* Not kept. */
   }
   listeners.forEach((l) => l(on));
 }
 
-/** Whether the chart is expanded now; follows a change made anywhere on the page. */
+/** Whether the chart is expanded now. It follows a change made anywhere on the page. */
 export function useChartExpanded(): boolean {
   const [on, setOn] = useState(current);
   useEffect(() => {
