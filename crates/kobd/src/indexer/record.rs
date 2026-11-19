@@ -18,7 +18,8 @@
 //! What is kept is decided against the database at extraction time. A transaction is kept when:
 //!
 //! - its payload is a KOB1 placement record, or claims to be one and does not decode (kept as a
-//!   reject),
+//!   reject; at most [`MAX_UNDECODABLE_IN_WINDOW`] a reorg window when nothing else makes it
+//!   relevant),
 //! - an input spends a tracked order or token UTXO,
 //! - a token output is owned (scheme `0x04`) by a tracked or freshly created order id: custody
 //!   after a fill, a delivery to an if-done exit, or a stray (`docs/spec/matcher.md` §1.2). The
@@ -195,6 +196,41 @@ pub struct TxRecord {
 /// It is `KOB1` and a version byte no reader supports. The record keeps the fact of the reject,
 /// not the junk. The processor reports it as `payload:undecodable`.
 pub const UNDECODABLE_PAYLOAD: &[u8] = b"KOB1\xff";
+
+/// Most transactions recorded per reorg window (the chain blocks the store holds) only for a KOB1
+/// payload that does not decode (`payload:undecodable`). A KOB placement of this build always
+/// decodes, so these are junk or a broken client, and the first ones show it.
+pub const MAX_UNDECODABLE_IN_WINDOW: i64 = 256;
+
+/// Whether the rejects of the stored chain blocks hold fewer than [`MAX_UNDECODABLE_IN_WINDOW`]
+/// `payload:undecodable`. One bounded read of the partial index `rejects_undecodable`.
+fn undecodable_room(conn: &Connection) -> DbResult<bool> {
+    let n: i64 = conn
+        .prepare_cached(
+            "SELECT COUNT(*) FROM (SELECT 1 FROM rejects WHERE reason = 'payload:undecodable' \
+             AND block_seq >= (SELECT COALESCE(MIN(seq), 0) FROM blocks) LIMIT ?1)",
+        )?
+        .query_row([MAX_UNDECODABLE_IN_WINDOW], |r| r.get(0))?;
+    Ok(n < MAX_UNDECODABLE_IN_WINDOW)
+}
+
+/// Counts a transaction that [`MAX_UNDECODABLE_IN_WINDOW`] left out of the record log, and logs
+/// the count at most once a minute.
+fn note_unrecorded(txid: &Hash32) {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    static UNRECORDED: AtomicU64 = AtomicU64::new(0);
+    static LOGGED_AT: AtomicU64 = AtomicU64::new(0);
+    UNRECORDED.fetch_add(1, Relaxed);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let last = LOGGED_AT.load(Relaxed);
+    if now >= last.saturating_add(60) && LOGGED_AT.compare_exchange(last, now, Relaxed, Relaxed).is_ok() {
+        tracing::info!(
+            unrecorded = UNRECORDED.swap(0, Relaxed),
+            last = %txid,
+            "KOB1 payloads that do not decode: {MAX_UNDECODABLE_IN_WINDOW} per reorg window are recorded as rejects, these were not"
+        );
+    }
+}
 
 /// Set in the encoded `pos` when the record has a `holds` section.
 const HOLDS_FLAG: u64 = 1 << 31;
@@ -1001,11 +1037,9 @@ impl Extractor<'_> {
                     }
                 }
                 Ok(None) => {}
-                // A KOB1 payload that does not decode is recorded as a reject.
-                Err(_) => {
-                    relevant = true;
-                    undecodable = true;
-                }
+                // A KOB1 payload that does not decode is recorded as a reject, within a bound when
+                // that is all the transaction is (below).
+                Err(_) => undecodable = true,
             }
         }
 
@@ -1120,6 +1154,17 @@ impl Extractor<'_> {
                     relevant = true;
                     break 'found;
                 }
+            }
+        }
+        // A transaction whose only relevance is a KOB1 payload that does not decode costs its fee and
+        // would be a record of the permanent log for good. So only [`MAX_UNDECODABLE_IN_WINDOW`] of
+        // them are recorded per reorg window, and the others are counted in a log line (security
+        // review 2026-11-19 K-L6). One relevant for another reason is recorded, and rejected, as before.
+        if undecodable && !relevant {
+            if undecodable_room(self.conn)? {
+                relevant = true;
+            } else {
+                note_unrecorded(&txid);
             }
         }
         if !relevant {
