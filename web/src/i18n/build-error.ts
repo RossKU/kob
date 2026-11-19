@@ -27,6 +27,14 @@ const RULES: Rule[] = [
   { re: /expir|lock ?time|deadline/i, code: 'timing' },
 ];
 
+/**
+ * A refusal the app wrote itself, already in the user's words (`t(...)`): shown as it is. The rules above are for raw builder and node
+ * texts; an app sentence that names "lock time" or "expiry" must not turn into the generic `build.timing`.
+ */
+export class PlainError extends Error {
+  override name = 'PlainError';
+}
+
 export interface BuildErrorClass {
   code: string;
   params: Params;

@@ -10,6 +10,7 @@ import type { Services } from '../../app/services';
 import { readFees } from '../../app/env';
 import { pendingSpends } from '../../app/pending-spends';
 import { t } from '../../i18n';
+import { PlainError } from '../../i18n/build-error';
 import type { CancelPlan } from '../../kob/cancel';
 import { LOCK_COIN, buildLockCoin, buildUnlock, creatorLock, type CreatorLockInfo } from '../../kob/creator-lock';
 import { pickFor } from '../../kob/fee-policy';
@@ -76,12 +77,12 @@ async function coinsAt(s: Services, lock: CreatorLockInfo): Promise<Utxo[]> {
  */
 export async function planUnlock(s: Services, pubkey: Hex, h: LockedHolding, ticker: string): Promise<UnlockFlow> {
   const me = pubkey.toLowerCase();
-  if (h.key !== me) throw new Error(t('orders.unlock.notYours'));
+  if (h.key !== me) throw new PlainError(t('orders.unlock.notYours'));
   const lock = creatorLock(s.kob, { until: h.until, key: h.key });
   // The node's clock, which the lock time is checked against. A node that does not say leaves it to
   // the node's answer.
   const median = s.node.getPastMedianTime ? await s.node.getPastMedianTime().catch(() => null) : null;
-  if (median !== null && median <= h.until) throw new Error(t('orders.unlock.notOpen', { minutes: String(minutesBefore(h.until, median)) }));
+  if (median !== null && median <= h.until) throw new PlainError(t('orders.unlock.notOpen', { minutes: String(minutesBefore(h.until, median)) }));
   const terms = { until: h.until.toString(), key: h.key };
   const locks = [terms];
   const fee = { feeRate: pickFor(await readFees(s), 'normal').rate.toString() };
@@ -105,17 +106,17 @@ export async function planUnlock(s: Services, pubkey: Hex, h: LockedHolding, tic
       if (!(e instanceof KobError) || !/insufficient/i.test(e.message) || n === funding.length) throw e;
     }
   }
-  if (!coinTx) throw new Error(t('orders.unlock.noKas'));
+  if (!coinTx) throw new PlainError(t('orders.unlock.noKas'));
   const amount = coinTx.tx.outputs[0]?.value ?? LOCK_COIN.toString();
   const coinStep: FlowStep = { title: t('orders.unlock.coinStep'), plan: planOf(coinTx), spends: [], locks, silent: true };
   return {
     steps: [coinStep, unlockStep({ transactionId: coinTx.tx.id, index: 0, amount })],
     next: async (k, txids) => {
-      if (k !== 1 || !txids[0]) throw new Error(t('orders.unlock.notAccepted'));
+      if (k !== 1 || !txids[0]) throw new PlainError(t('orders.unlock.notAccepted'));
       const address = spkToAddressFor(s)(lock.scriptPublicKey);
       const res = await waitForAcceptance(s.node, { address, transactionId: txids[0], index: 0 }, { timeoutMs: LOCK_COIN_TIMEOUT_MS });
       const got = res.accepted ? res.found.find((f) => f.transactionId === txids[0] && f.index === 0) : undefined;
-      if (!got) throw new Error(t('orders.unlock.notAccepted'));
+      if (!got) throw new PlainError(t('orders.unlock.notAccepted'));
       return unlockStep({ transactionId: got.transactionId, index: got.index, amount: got.amount, blockDaaScore: got.blockDaaScore });
     },
   };

@@ -16,7 +16,7 @@ import { isLiveStatus, type Position } from '../../kob/positions';
 import { custodyState, extensionOfState } from '../../kob/token-state';
 import type { BuiltTx, Family, Hex, TokenUtxo } from '../../kob/types';
 import { t, tIssue } from '../../i18n';
-import { buildErrorText } from '../../i18n/build-error';
+import { PlainError, buildErrorText } from '../../i18n/build-error';
 import { buildMergeLink, mergeCarry, mergeLeaves, planMerge, type MergeLink, type MergeOptions, type MergePlan, type MergeToken } from '../../kob/merge';
 import type { TokenInfo } from '../../kob/registry';
 import { waitForAcceptance } from '../../wallet/sign';
@@ -358,7 +358,7 @@ export async function dropRecords(store: RecordStore, ids: readonly Hex[]): Prom
  * the user confirms the plan.
  */
 export async function planMergeFor(s: Services, pubkey: Hex, token: MergeToken | null, reserved: ReadonlySet<string>, o: MergeOptions = {}): Promise<MergePlan> {
-  if (!token) throw new Error(t('orders.merge.unsupported'));
+  if (!token) throw new PlainError(t('orders.merge.unsupported'));
   const env = await buildCancelEnv(s, { pubkey }, token);
   return planMerge(env, token, env.tokenUtxos ?? [], reserved, o);
 }
@@ -393,9 +393,9 @@ export async function nextMergeLink(
   s: Services, pubkey: Hex, token: MergeToken, plan: MergePlan, k: number, sent: readonly MergeLink[], txids: readonly string[], timeoutMs = MERGE_PARENT_TIMEOUT_MS,
 ): Promise<MergeLink> {
   const planned = plan.links[k];
-  if (!planned) throw new Error(t('orders.merge.unsupported'));
+  if (!planned) throw new PlainError(t('orders.merge.unsupported'));
   const found = planned.parents.length ? await sentOutputs(s, planned.parents, sent, txids, timeoutMs) : [];
-  if (!found) throw new Error(t('orders.merge.notAccepted'));
+  if (!found) throw new PlainError(t('orders.merge.notAccepted'));
   const carried = planned.parents.map((p, i) => mergeCarry(sent[p]!, txids[p]!, token, found[i]));
   const env = await buildCancelEnv(s, { pubkey });
   const link = buildMergeLink(env, token, [...carried, ...planned.fresh], planned.fresh, new Set(), planned);
@@ -452,6 +452,7 @@ export async function awaitMergeOutputs(s: Services, sent: readonly MergeLink[],
  */
 export function describeActionError(e: unknown): string {
   if (e instanceof SnapshotError) return t(`orders.error.snapshot.${e.code}`);
+  if (e instanceof PlainError) return e.message;
   return buildErrorText(e instanceof Error ? e.message : String(e));
 }
 
@@ -460,6 +461,6 @@ export function describeActionError(e: unknown): string {
  * sentence says it all.
  */
 export function rawActionError(e: unknown): string | null {
-  if (e instanceof SnapshotError) return null;
+  if (e instanceof SnapshotError || e instanceof PlainError) return null;
   return e instanceof Error ? e.message : String(e);
 }
