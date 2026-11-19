@@ -1,6 +1,6 @@
 //! Archive pruning for stores that keep their history.
 //!
-//! A store with `lean = false` and `archive_pruning` on (the default) deletes the rows that no API
+//! A store with `lean = false` and `archive_pruning` on (an opt-in; the default keeps every row) deletes the rows that no API
 //! read and no later write needs. [`prune`] does it in small periodic batches. The follower runs it
 //! between its steps, like the lean pruning, and only while the store follows the node. Everything
 //! the API answers stays the same, bar the one retention noted below.

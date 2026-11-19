@@ -6,9 +6,10 @@
 //! of both answers the same JSON on its main endpoints after every few rounds of orders (placed,
 //! filled, partly filled, amended, cancelled), after a reorg inside the window that undoes a
 //! closing, and after a fill of an order that stayed live through all of it; a rebuild of the
-//! pruning store from its record log (`kobd db replay` prunes at its end) holds the same rows; and
-//! with a short retention the spent holdings past it go while the token keeps its program (the
-//! token list) and a live order keeps its spent custody.
+//! pruning store from its record log (`kobd db replay` with the pruning on prunes at its end) holds
+//! the same rows; a replay at the defaults (no pruning) keeps every row; and with a short retention
+//! the spent holdings past it go while the token keeps its program (the token list) and a live order
+//! keeps its spent custody.
 
 mod common;
 
@@ -481,6 +482,82 @@ async fn spent_holdings_past_the_retention_go_and_the_token_keeps_its_program_an
     };
     assert_eq!(programs(&full), programs(&arch));
     assert!(!programs(&arch).is_empty());
+}
+
+/// The default keeps every row, and `kobd db replay` and the store it rebuilt follow the configured setting: at the defaults nothing is
+/// pruned, with `archive_pruning = true` the final dead rows go.
+#[tokio::test]
+async fn the_default_keeps_every_row_and_a_replay_follows_the_setting() {
+    assert!(!kobd::config::IndexerConfig::default().archive_pruning, "the default keeps the whole history");
+    let dir = tempfile::tempdir().unwrap();
+    let node = MockNode::new("testnet-10");
+    let mut w = World::new();
+    w.validate = false;
+    let pf = dir.path().join("full.sqlite3");
+    let log_dir = dir.path().join("records");
+    let (log, _) = RecordLog::open(&log_dir, 1 << 20, 0).unwrap();
+    let full = harness(&node, &pf, None, Some(log));
+    traffic(&w, &node, &[&full], 12, 0).await;
+    node.push_empty(2 * WINDOW as usize);
+    full.sync().await;
+    let tables = ["order_utxos", "token_utxos", "order_amends", "token_holdings", "orders", "order_events"];
+    let kept = tables.iter().map(|t| count(&full, t)).collect::<Vec<_>>();
+    drop(full);
+    let tokens = dir.path().join("tokens.json");
+    std::fs::write(&tokens, format!(r#"[{{"ticker":"TST","covenantId":"{}"}}]"#, Hash32(TOKEN_COV))).unwrap();
+    // `kobd db replay` into a data directory of its own, from a copy of the log, then the indexer on it follows the node and prunes
+    // what is final
+    let mut stores = vec![];
+    for (name, pruning) in [("default", None), ("pruned", Some(true))] {
+        let mut cfg = kobd::config::IndexerConfig {
+            network: "testnet-10".into(),
+            data_dir: dir.path().join(name),
+            tokens_path: Some(tokens.clone()),
+            start: kobd::config::StartMode::Hash(node.anchor()),
+            // a window and a retention of nothing: every spent row is final at once
+            reorg_window_hours: 0,
+            spent_holdings_retention_days: 0,
+            ..Default::default()
+        };
+        if let Some(p) = pruning {
+            cfg.archive_pruning = p;
+        }
+        cfg.rules.min_order_value_sompi = 1;
+        cfg.rules.max_expiry_span_daa = 1 << 40;
+        cfg.api.enabled = false;
+        let copy = dir.path().join(format!("{name}-records"));
+        std::fs::create_dir_all(&copy).unwrap();
+        for p in kobd::indexer::recordlog::segment_paths(&log_dir).unwrap() {
+            std::fs::copy(&p, copy.join(p.file_name().unwrap())).unwrap();
+        }
+        cfg.records.dir = Some(copy);
+        kobd::indexer::replay_from_log(&cfg).unwrap();
+        let replayed = tables.iter().map(|t| db_count(&cfg.db_path(), t)).collect::<Vec<_>>();
+        assert_eq!(replayed, kept, "{name}: the replay itself");
+        // the chain goes on: a rebuild ends with none of its blocks in the window, so nothing is final until the follower applies one
+        node.push_empty(2);
+        let idx = kobd::indexer::Indexer::open(cfg.clone()).unwrap();
+        let f = idx.follower(node.clone());
+        for _ in 0..200 {
+            if matches!(f.step().await, kobd::indexer::follower::StepOutcome::Idle) {
+                break;
+            }
+        }
+        let prunes = idx.ingest.lock().unwrap().prunes();
+        idx.ingest.lock().unwrap().archive_prune_all().unwrap();
+        drop(f);
+        drop(idx);
+        stores.push((prunes, tables.iter().map(|t| db_count(&cfg.db_path(), t)).collect::<Vec<_>>()));
+    }
+    assert_eq!(stores[0], (false, kept.clone()), "the defaults prune nothing");
+    let (prunes, pruned) = &stores[1];
+    assert!(*prunes);
+    assert!(pruned[0] < kept[0] && pruned[1] < kept[1], "the opt-in prunes: {pruned:?} of {kept:?}");
+    assert_eq!(pruned[4..], kept[4..], "orders and events are never pruned");
+}
+
+fn db_count(path: &Path, table: &str) -> i64 {
+    rusqlite::Connection::open(path).unwrap().query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap()
 }
 
 /// Measurement on a copy of a real store (`KOB_ARCHIVE_DB=<a copy of an index.sqlite3 of schema 9 or later, never a live store>`,

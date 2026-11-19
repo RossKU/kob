@@ -234,8 +234,8 @@ pub enum DbSub {
     },
     /// Give the free pages of the store back to the file system (offline; stop the executor first):
     /// a copy without them is checked and takes the place of the store, whose file is deleted. Once
-    /// after the first pruning of a store that kept its whole history (the archive pruning frees
-    /// most of it; docs/ops/executor.md 7.6b). Needs free disk for the copy (the pages in use).
+    /// after the first pruning of a store that kept its whole history (the opt-in archive pruning
+    /// frees most of it; docs/ops/executor.md 7.6b). Needs free disk for the copy (the pages in use).
     Vacuum,
     /// Print a maker order export (JSON) from the database.
     ExportOrders {

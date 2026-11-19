@@ -505,7 +505,8 @@ pub struct IndexerConfig {
     /// - The in-place amends.
     /// - The spent token holdings older than `spent_holdings_retention_days`.
     ///
-    /// Every other answer of the API stays the same. Default `true`.
+    /// Every other answer of the API stays the same. Default `false`: the store keeps every row.
+    /// Pruning is an opt-in for an operator who wants a smaller store.
     pub archive_pruning: bool,
     /// Archive pruning: days a spent token holding stays (`GET /v1/token-utxos?spent=true`) after
     /// it was created (at least the reorg window; a live order's custody stays whatever its age).
@@ -624,7 +625,7 @@ impl Default for IndexerConfig {
             lean: false,
             lean_retention_days: 30,
             lean_max_db_mb: 500,
-            archive_pruning: true,
+            archive_pruning: false,
             spent_holdings_retention_days: 30,
             poll_interval_ms: 500,
             backoff_ms: 1_000,

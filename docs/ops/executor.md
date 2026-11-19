@@ -836,10 +836,12 @@ maintenance jobs and the live book of the read API read, the reorg window, and `
 (`lean_max_db_mb`, 500) deletes the oldest closed orders first, but only while the store is larger. The record log is off.
 The history is an archive indexer's job (`lean = false`).
 
-**Archive pruning** (`archive_pruning = true`, the default, on a store with `lean = false`; schema 12, `indexer::archive`): an indexer that
-keeps the history still deletes the rows that no read of the API and no later write needs, once they are final (spent in a chain block out
-of the reorg window, `MIN(blocks.seq)`, the same rule as the lean pruning), in the same small batches in the follower's loop (one write
-transaction of steps, 12 ms of work, at most every 30 s while idle and only while the store follows the node):
+**Archive pruning** (an opt-in: `archive_pruning = true` on a store with `lean = false`; schema 12, `indexer::archive`). The default is
+`archive_pruning = false`: an indexer keeps every row of its history for ever, and its store gets smaller only by lossless means (the
+record log's sealed segments are compressed, 7.6). An operator who turns the pruning on has an indexer that keeps the history but deletes
+the rows that no read of the API and no later write needs, once they are final (spent in a chain block out of the reorg window,
+`MIN(blocks.seq)`, the same rule as the lean pruning), in the same small batches in the follower's loop (one write transaction of steps,
+12 ms of work, at most every 30 s while idle and only while the store follows the node):
 
 * the **spent order UTXOs and spent token UTXOs of orders that are no longer live** (`order_utxos`, `token_utxos`): every read and every
   write reads an order's UTXOs only while they are unspent (its tip, its custody, the outpoints a block spends). An order's rows go when the
@@ -852,11 +854,12 @@ transaction of steps, 12 ms of work, at most every 30 s while idle and only whil
 
 Orders, events, fills, candles, pair fills and the activity totals are never touched: every other answer of the API is the same as a store
 that keeps everything (`tests/archive_prune.rs` compares the main endpoints of a pruning store and a full one after every few rounds of
-traffic, after a reorg inside the window and after a rebuild from the log). `kobd db replay` prunes the same way once its frames are in. The
-file does not shrink by itself: SQLite uses the freed pages again for new rows, so it stops growing for a while; give them back once with
+traffic, after a reorg inside the window and after a rebuild from the log). `kobd db replay` follows the same setting: with the pruning
+on it prunes the same way once its frames are in, and by default it prunes nothing. The file does not shrink by itself: SQLite uses the
+freed pages again for new rows, so it stops growing for a while; give them back once with
 `kobd db vacuum` (7.6b) after the first pruning of a big store. Measured on a copy of the soak's archive indexer (index-a, 2026-11-12): the
 spent order UTXOs of closed orders 829 MB, the spent token UTXOs 279 MB, the amends 52 MB, and the spent holdings past 30 days the most of
-the rest (`token_holdings` of the custody of closed orders and of key owners). `archive_pruning = false` keeps every row, as before schema 12.
+the rest (`token_holdings` of the custody of closed orders and of key owners). `archive_pruning = false` (the default) keeps every row.
 
 The database is a *derived view* of the record log: `kobd db replay` rebuilds it from the
 records and the follower re-syncs the tail from the node (section 7.6). Measured numbers are in
@@ -1410,8 +1413,8 @@ fast_start = false               # `kobd --executor`, empty data dir: trade at o
 lean = false                     # keep the live book and lean_retention_days of closed orders, no record log, a shrinking file; A.1.2
 lean_retention_days = 30         # lean: days a closed order (and its fills and events) stays readable
 lean_max_db_mb = 500             # lean: above this size the oldest closed orders go first (0: no cap)
-archive_pruning = true           # lean = false: delete the final spent UTXO rows of closed orders, final amends, old spent holdings; Storage policy
-spent_holdings_retention_days = 30 # archive pruning: days a spent token holding stays (GET /v1/token-utxos?spent=true)
+archive_pruning = false          # default: keep every row. true (opt-in, lean = false): delete the final spent UTXO rows of closed orders, final amends, old spent holdings; Storage policy
+spent_holdings_retention_days = 30 # archive_pruning = true only: days a spent token holding stays (GET /v1/token-utxos?spent=true)
 poll_interval_ms = 500
 rpc_timeout_secs = 180
 fetch_parallel = 4               # VSPC windows fetched at once while far behind (1: one at a time); section 3, *Parallel fetch*
@@ -2436,9 +2439,9 @@ archive) deletes the holdings that proved it (before, a lean store could lose it
 then changed). A store of schema 11 takes the short way: `VACUUM INTO`, its triggers dropped and created anew, the new column added and
 filled from the genesis UTXO rows (one pass over the orders), every table keeping its rows. Seconds for an executor's lean store; for an
 archive indexer the copy and one pass (a 2.3 GB copy of index-a, schema 10 to 12: 40 s in all, the copy 22 s, the check 8 s). **Operator step:** `kobd db migrate` on every store
-(offline; the cut-over below for a public indexer). The first start of the new build then prunes an archive store in the background (the
-first pass over index-a's history: minutes of batches while it follows the node); run `kobd db vacuum` (7.6b) once afterwards to give the
-space back. A build of schema 11 refuses the store.
+(offline; the cut-over below for a public indexer). With `archive_pruning = true` (an opt-in since 2026-11-19; the default keeps every
+row) the first start of the new build then prunes an archive store in the background (the first pass over index-a's history: minutes of
+batches while it follows the node); run `kobd db vacuum` (7.6b) once afterwards to give the space back. A build of schema 11 refuses the store.
 
 **Schema 12 to 13 (network fees of the history, own trades).** Schema 13 adds `recorded_outputs` (the plain outputs of the recorded transactions,
 `indexer::outputs`, above): the input values a record written before 2026-11-12 lacks are resolved from it, so the network fee of such a
@@ -2492,7 +2495,7 @@ systemctl start kob-index
 ```
 
 The pruning (lean or archive) frees pages that SQLite uses again for new rows but never gives back to the file system: a lean store gives
-them back as it goes (incremental vacuum), an archive store does not (it was not created for it). After the first archive pruning of a store
+them back as it goes (incremental vacuum), an archive store does not (it was not created for it). After the first archive pruning (opt-in) of a store
 that kept everything (minutes of background batches once schema 12 runs: at `RUST_LOG=kobd=debug` the lines `storage:
 pruned` stop saying `more=true`; `PRAGMA freelist_count` of a read-only `sqlite3` shell shows the free pages), most of its file is free pages: `kobd db vacuum` writes a copy of the pages in use
 (`VACUUM INTO index.sqlite3.vacuuming`), checks that it opens as a store of this build and passes `PRAGMA quick_check`, and puts it in the

@@ -741,10 +741,11 @@ At least one of `owner` and `token` is required: `400` ("owner or token is requi
 whatever its kind, so filter on `owner_kind` when spending. Items come **oldest first** (created block, txid, index).
 
 **Retention of spent holdings.** The live holdings are always all there. With `spent=true` an indexer that keeps the history (`lean =
-false`) lists the spent holdings **created in the last 30 days** (`spent_holdings_retention_days`, default 30; never less than the 12 h
-reorg window): an older spent holding is deleted once its spend is final (out of the reorg window), unless it is the custody of an order
-that is still live (open or partly filled). An executor's lean store keeps `lean_retention_days` (30 by default) of them the same way,
-and under its size cap less. An indexer configured with `archive_pruning = false` keeps every spent holding.
+false`) lists **every** spent holding: it keeps them all by default (`archive_pruning = false`). An indexer whose operator turned on
+`archive_pruning = true` lists the spent holdings **created in the last `spent_holdings_retention_days`** (30 by default; never less
+than the 12 h reorg window): an older spent holding is deleted once its spend is final (out of the reorg window), unless it is the custody
+of an order that is still live (open or partly filled). An executor's lean store keeps `lean_retention_days` (30 by default) of them the
+same way, and under its size cap less.
 ([ops/executor.md](ops/executor.md), *Storage policy*: on such an indexer every other answer of the API is the whole history.)
 
 ```
