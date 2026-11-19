@@ -34,8 +34,10 @@
 //!
 //! - A lane other than the native and coinbase lanes that the batch does not show at all. Its
 //!   proof is asked for only when the batch has a transaction in it.
-//! - The spent outputs attached to inputs. No hash the indexer can check covers them. Tracked
-//!   outputs are the store's own.
+//! - The spent outputs attached to inputs. No hash the indexer can check covers them. A spend
+//!   of a tracked output is read from the store's own output, looked up by outpoint
+//!   (`indexer::record::tracked_in`); the node's entry is used for untracked trigger evidence
+//!   only.
 //! - On testnet-10 the proof of work is cheap. A single GPU mines a block there in seconds.
 //!
 //! # Cost

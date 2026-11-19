@@ -3096,7 +3096,9 @@ work itself is cheap. Cost: one kHeavyHash per chain block, one lane proof call 
 out together, 8 at a time over as many connections, and a window from another node is compared with the primary
 meanwhile, so a batch waits a few round trips to the primary, not one per merged block (one by one, about 0.3 s each to a
 remote node, they held the follower to 1-1.5x chain speed on the TN10 soak). Left to the node: a lane other than the
-native one that a batch hides entirely (until it next shows up), and the spent outputs attached to inputs.
+native one that a batch hides entirely (until it next shows up), and the spent outputs attached to inputs, which are
+read for untracked trigger evidence only: a spend of a tracked output is read from the store's own output, looked up by
+outpoint.
 
 Run a rusty-kaspa v2.1.0 node with `--utxoindex` (funding lookup), `--retention-period-days=7`,
 `--disable-upnp`, RPC on loopback only, never `--unsaferpc` (the recommended setup), or use public nodes (*Public nodes*

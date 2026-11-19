@@ -530,35 +530,49 @@ impl TxRecord {
 
 // ----------------------------------------------------------------------------------------- lookups
 
-/// DAA score of the chain block that created a tracked, unspent order UTXO.
-///
-/// It is what `OpTxInputDaaScore` reads: the accepting block's DAA score. The node does not report
-/// it per input (`blockDaaScore` is `null` in VSPC v2 at every verbosity), so the indexer keeps it
-/// from the block that created the UTXO.
-pub fn order_utxo_daa(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<Option<i64>> {
-    Ok(conn
-        .prepare_cached("SELECT created_daa FROM order_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
-        .query_row(params![&txid.0[..], idx], |r| r.get(0))
-        .optional()?)
+/// A tracked, unspent output that an input spends, as the store has it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrackedIn {
+    /// An order UTXO: its covenant id, script public key and the DAA score of the chain block that
+    /// created it. That DAA is what `OpTxInputDaaScore` reads. The node reports `null` for it in
+    /// VSPC v2, so the indexer keeps it.
+    Order { cov: Hash32, spk: Vec<u8>, daa: i64 },
+    /// A token UTXO of an order, or a proven token holding: the token's covenant id.
+    Token { cov: Hash32 },
 }
 
-/// Whether `txid:idx` is a tracked, unspent token UTXO of an order.
-pub fn token_utxo_tracked(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<bool> {
-    Ok(conn
-        .prepare_cached("SELECT 1 FROM token_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
-        .exists(params![&txid.0[..], idx])?)
+/// What the store tracks at `txid:idx`, unspent: up to three primary-key lookups.
+///
+/// A spend is read from this and never from the spent-output entry a node attaches to the input,
+/// which no hash covers.
+pub fn tracked_in(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<Option<TrackedIn>> {
+    // About 1 us per probe on a miss, the common case. One compound SELECT over the three
+    // tables took about 50 us.
+    let key = params![&txid.0[..], idx];
+    let order: Option<(Vec<u8>, Vec<u8>, i64)> = conn
+        .prepare_cached(
+            "SELECT (SELECT covenant_id FROM orders WHERE id = u.order_id), u.spk, u.created_daa FROM order_utxos u WHERE u.txid = ?1 AND u.idx = ?2 AND u.spent_block IS NULL",
+        )?
+        .query_row(key, |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .optional()?;
+    if let Some((cov, spk, daa)) = order {
+        return Ok(Hash32::from_slice(&cov).map(|cov| TrackedIn::Order { cov, spk, daa }));
+    }
+    for sql in [
+        "SELECT (SELECT h FROM ids WHERE id = t.token_id) FROM token_utxos t WHERE t.txid = ?1 AND t.idx = ?2 AND t.spent_block IS NULL",
+        "SELECT (SELECT h FROM ids WHERE id = t.token_id) FROM token_holdings t WHERE t.txid = ?1 AND t.idx = ?2 AND t.spent_block IS NULL",
+    ] {
+        let cov: Option<Vec<u8>> = conn.prepare_cached(sql)?.query_row(key, |r| r.get(0)).optional()?;
+        if let Some(cov) = cov {
+            return Ok(Hash32::from_slice(&cov).map(|cov| TrackedIn::Token { cov }));
+        }
+    }
+    Ok(None)
 }
 
 /// Whether an order with covenant id `cov` is in the database.
 pub fn order_known(conn: &Connection, cov: &Hash32) -> DbResult<bool> {
     Ok(conn.prepare_cached("SELECT 1 FROM orders WHERE covenant_id = ?1")?.exists([&cov.0[..]])?)
-}
-
-/// Whether `txid:idx` is a tracked, unspent token holding.
-pub fn holding_tracked(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<bool> {
-    Ok(conn
-        .prepare_cached("SELECT 1 FROM token_holdings WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
-        .exists(params![&txid.0[..], idx])?)
 }
 
 /// Whether some order trades the token, as the token of an order or as token B of a pair order.
@@ -930,7 +944,14 @@ impl Extractor<'_> {
         // KCC-23: a candidate preparation or a verified genesis, whatever else the transaction is.
         let kcc23 = super::kcc23::extract(self.conn, tx)?;
         let txid = tx.verbose_data.transaction_id;
-        if !has_kob1 && !any_cov_in && !any_cov_out {
+        // Every input is looked up by its outpoint, whatever the node's spent entry says: a node
+        // that drops or alters the entry of a tracked output must not hide its spend.
+        let tracked: Vec<Option<TrackedIn>> = tx
+            .inputs
+            .iter()
+            .map(|i| tracked_in(self.conn, &i.previous_outpoint.transaction_id, i.previous_outpoint.index))
+            .collect::<DbResult<_>>()?;
+        if !has_kob1 && !any_cov_in && !any_cov_out && tracked.iter().all(Option::is_none) {
             return Ok(kcc23.map(|d| TxRecord::declaration_only(txid, pos, d)));
         }
 
@@ -988,24 +1009,27 @@ impl Extractor<'_> {
         // Untracked covenant inputs: possible trigger evidence, read only if the transaction turns
         // out relevant.
         let mut untracked = Vec::new();
-        for (i, inp) in tx.inputs.iter().enumerate() {
+        for (i, (inp, tracked)) in tx.inputs.iter().zip(tracked).enumerate() {
             let prev = &inp.previous_outpoint;
             let spent = spent_of(inp);
             let cov = spent.and_then(|u| u.covenant_id);
             let mut rec = RecIn { txid: prev.transaction_id, index: prev.index, cov, daa: 0, reveal: None };
-            if cov.is_some() {
-                let spk = spent.map(|u| u.script_public_key.0.as_slice()).unwrap_or(&[]);
-                if let Some(daa) = order_utxo_daa(self.conn, &prev.transaction_id, prev.index)? {
+            match tracked {
+                // The store's script and covenant id, not the node's entry.
+                Some(TrackedIn::Order { cov, spk, daa }) => {
                     relevant = true;
+                    rec.cov = Some(cov);
                     rec.daa = u64::try_from(daa).unwrap_or(0);
-                    rec.reveal = reveal_of(i, inp, spk);
-                } else if token_utxo_tracked(self.conn, &prev.transaction_id, prev.index)?
-                    || holding_tracked(self.conn, &prev.transaction_id, prev.index)?
-                {
-                    relevant = true;
-                } else {
-                    untracked.push(i);
+                    let same = spent.is_some_and(|u| u.covenant_id.is_some() && u.script_public_key.0 == spk);
+                    // A precomputed reveal was parsed against the node's script.
+                    rec.reveal = if same { reveal_of(i, inp, &spk) } else { parse_reveal(&inp.signature_script.0, &spk) };
                 }
+                Some(TrackedIn::Token { cov }) => {
+                    relevant = true;
+                    rec.cov = Some(cov);
+                }
+                None if cov.is_some() => untracked.push(i),
+                None => {}
             }
             inputs.push(rec);
         }
