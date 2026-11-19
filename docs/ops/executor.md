@@ -3088,7 +3088,9 @@ target of its `bits` (kHeavyHash, rusty-kaspa's `kaspa-pow`) and not claim a tar
 mainnet, 1e4 on testnet-10); every transaction must hash to its id; every lane the batch touches (the native lane always,
 coinbase aside) must fold into the tip a KIP-21 lane proof (`getSeqCommitLaneProof`) shows against the last chain block's
 `accepted_id_merkle_root`, so no native transaction can be hidden or added; and the signature scripts of every
-transaction that can matter to KOB must match its merged block, whose transactions must match its `hash_merkle_root`.
+transaction that can matter to KOB must match its merged block, whose transactions must match its `hash_merkle_root`
+and which must be in the merge set of the chain block that accepted the transaction (a direct parent, or found below one
+of its other parents through headers that hash to the parents named, at most 128).
 A batch that fails is refused, logged, not applied, and its node is given up (a public node) or alarmed (a named one). The
 difficulty floor is a heuristic against trivial `bits`, not the node's difficulty adjustment; on testnet-10 the proof of
 work itself is cheap. Cost: one kHeavyHash per chain block, one lane proof call per lane per batch, `Full` verbosity

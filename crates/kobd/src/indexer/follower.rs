@@ -319,6 +319,10 @@ const LEAN_MAX_LAG_DAA: u64 = 600;
 /// (`rpc::WrpcConfig::small_connections`), since a connection carries one request at a time.
 pub const PROOF_FETCHES: usize = 8;
 
+/// A merged block of a batch: its hash, the chain blocks that accepted its transactions that can
+/// matter to KOB, those transactions, and the block.
+type MergedBlock<'a> = (Hash32, Vec<usize>, Vec<&'a crate::rpc::types::Tx>, kaspa_consensus_core::block::Block);
+
 /// `ask` of each of `items`, at most `limit` in flight, the answers in the order of `items`.
 ///
 /// Nothing is asked before the stream is polled. Dropping it cancels what is in flight, so a
@@ -1180,25 +1184,28 @@ impl<S: ChainSource> Follower<S> {
     ) -> Result<(), ProofError> {
         let (lanes, fetched) = tokio::join!(lanes, self.merged_blocks(raw));
         lanes?;
-        for (m, txs, block) in fetched? {
+        for (m, chain_blocks, txs, block) in fetched? {
             proof.lock().unwrap_or_else(|e| e.into_inner()).check_merged_block(m, &block, &txs)?;
+            // In the merge set of the chain block that accepted it (K-H2).
+            for b in chain_blocks {
+                let chain = crate::rpc::proof::consensus_header(&raw.chain_block_accepted_transactions[b].chain_block_header)
+                    .ok_or_else(|| ProofError::Refused(format!("the header of chain block #{b} is incomplete")))?;
+                crate::rpc::proof::check_merged_into(&chain, &block.header, &*self.source).await?;
+            }
         }
         Ok(())
     }
 
     /// The merged blocks of the batch's transactions that can matter to KOB, with those
     /// transactions, in the order of their hashes. It stops at the first failure.
-    async fn merged_blocks<'a>(
-        &self,
-        raw: &'a RawVspcResponse,
-    ) -> Result<Vec<(Hash32, Vec<&'a crate::rpc::types::Tx>, kaspa_consensus_core::block::Block)>, ProofError> {
+    async fn merged_blocks<'a>(&self, raw: &'a RawVspcResponse) -> Result<Vec<MergedBlock<'a>>, ProofError> {
         let keys = super::trust::WindowKeys::of(&raw.chain_block_accepted_transactions);
         let ctx = self
             .blocking(move |i| super::trust::TrustContext::load(i.conn(), i.processor().tokens.clone(), &keys))
             .await
             .map_err(|e| ProofError::Unavailable(format!("database: {e}")))?;
         let blocks = &raw.chain_block_accepted_transactions;
-        let mut by_block: std::collections::BTreeMap<Hash32, Vec<&crate::rpc::types::Tx>> = Default::default();
+        let mut by_block: std::collections::BTreeMap<Hash32, (Vec<usize>, Vec<&crate::rpc::types::Tx>)> = Default::default();
         for (b, txs) in ctx.matters(blocks).into_iter().enumerate() {
             for k in txs {
                 let t = &blocks[b].accepted_transactions[k];
@@ -1208,20 +1215,24 @@ impl<S: ChainSource> Follower<S> {
                         t.verbose_data.transaction_id
                     )));
                 };
-                by_block.entry(m).or_default().push(t);
+                let e = by_block.entry(m).or_default();
+                if !e.0.contains(&b) {
+                    e.0.push(b);
+                }
+                e.1.push(t);
             }
         }
         let hashes: Vec<Hash32> = by_block.keys().copied().collect();
         let mut asked = std::pin::pin!(asked_in_order(hashes, PROOF_FETCHES, |m| self.source.block(m, true)));
         let mut out = Vec::with_capacity(by_block.len());
-        for (m, txs) in by_block {
+        for (m, (chain_blocks, txs)) in by_block {
             let block = asked
                 .next()
                 .await
                 .expect("one answer per merged block")
                 .map_err(|e| ProofError::Unavailable(format!("merged block {m}: {e}")))?
                 .ok_or_else(|| ProofError::Refused(format!("the node does not know {m}, the merged block of its own transaction")))?;
-            out.push((m, txs, block));
+            out.push((m, chain_blocks, txs, block));
         }
         Ok(out)
     }

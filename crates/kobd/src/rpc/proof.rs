@@ -28,7 +28,10 @@
 //! - **Signature scripts.** No id covers them. For every transaction that can matter to KOB
 //!   (`indexer::trust`), the merged block that holds it is fetched once: its header is checked as
 //!   above, its transactions must match its `hash_merkle_root`, and the signature scripts must be
-//!   the same ([`check_merged_block`]).
+//!   the same ([`check_merged_block`]). The merged block must be in the merge set of the chain
+//!   block that accepted the transaction ([`check_merged_into`]): a direct parent, or below a
+//!   parent other than the selected one, through headers that hash to the parents named. A block
+//!   the node made up, even one mined at the floor, is in no proven chain block's past.
 //!
 //! # Left to the node
 //!
@@ -63,7 +66,7 @@ use kaspa_seq_commit::hashing::{
 };
 use kaspa_seq_commit::types::{LaneTipInput, MergesetContext, SeqCommitInput, SeqState, SmtLeafInput};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 /// The `[chain_proof]` table.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -610,6 +613,75 @@ impl ChainProof {
     }
 }
 
+/// Serves block headers ([`check_merged_into`]).
+pub trait HeaderSource: Sync {
+    /// The header of `hash`. `None`: the node does not know it.
+    fn header(&self, hash: Hash32) -> impl std::future::Future<Output = Result<Option<Header>, crate::rpc::RpcError>> + Send;
+}
+
+impl<S: crate::rpc::ChainSource> HeaderSource for S {
+    async fn header(&self, hash: Hash32) -> Result<Option<Header>, crate::rpc::RpcError> {
+        Ok(self.block(hash, false).await?.map(|b| (*b.header).clone()))
+    }
+}
+
+/// Headers fetched at most to find a merged block below its chain block ([`check_merged_into`]).
+/// A merged block is nearly always a direct parent, which needs none.
+pub const MERGESET_WALK_MAX: usize = 128;
+
+/// Proves that the merged block `merged` (its header checked against its hash) is in the merge set
+/// of the chain block `chain` that accepted its transactions.
+///
+/// It is a direct parent of `chain`, or an ancestor of a direct parent other than the selected
+/// one. `fetch` serves the headers on the way, each checked against the hash its child names.
+/// Blue work grows along every parent edge, so a header of no more blue work than `merged` is not
+/// followed. `chain` is proven (its hash, the lane proofs, the pair), so only real blocks are in
+/// its past. Returns the headers fetched.
+pub async fn check_merged_into<H: HeaderSource>(chain: &Header, merged: &Header, src: &H) -> Result<usize, ProofError> {
+    let target = merged.hash;
+    let parents = chain.direct_parents();
+    if parents.contains(&target) {
+        return Ok(0);
+    }
+    let mut seen: HashSet<Hash> = parents.iter().copied().collect();
+    let mut level: Vec<Hash> = parents.iter().skip(1).copied().collect();
+    let mut fetched = 0;
+    while !level.is_empty() && fetched + level.len() <= MERGESET_WALK_MAX {
+        fetched += level.len();
+        // Collected first: a lazy map over borrowed hashes makes the future not `Send` for every lifetime.
+        let asks: Vec<_> = level.iter().map(|h| src.header(Hash32(h.as_bytes()))).collect();
+        let headers = futures_util::future::join_all(asks).await;
+        let mut next = vec![];
+        for (h, r) in level.iter().zip(headers) {
+            let x = match r {
+                Ok(Some(x)) => x,
+                // A dead end: an honest node knows every recent ancestor.
+                Ok(None) => continue,
+                Err(e) => return Err(ProofError::Unavailable(format!("the header of {h}, below chain block {}: {e}", chain.hash))),
+            };
+            if x.hash != *h || kaspa_consensus_core::hashing::header::hash(&x) != x.hash {
+                return refuse(format!("the header asked for as {h} is that of {}, or does not hash to it", x.hash));
+            }
+            if x.blue_work <= merged.blue_work {
+                continue;
+            }
+            for p in x.direct_parents() {
+                if *p == target {
+                    return Ok(fetched);
+                }
+                if seen.insert(*p) {
+                    next.push(*p);
+                }
+            }
+        }
+        level = next;
+    }
+    refuse(format!(
+        "merged block {target} is not in the merge set of chain block {} (no parent path within {MERGESET_WALK_MAX} headers)",
+        chain.hash
+    ))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     //! Real headers, bodies and lane proofs recorded from public TN10 and mainnet nodes
@@ -954,5 +1026,99 @@ pub(crate) mod tests {
             refused(fx.checker().check_merged_block(m, &block, &fx.merged_txs(&raw)), "Merkle root");
             fx.checker().skipping(skip::MERKLE).check_merged_block(m, &block, &fx.merged_txs(&raw)).unwrap();
         }
+    }
+
+    /// A node that knows only these headers.
+    struct Known(HashMap<Hash, Header>);
+
+    impl HeaderSource for Known {
+        async fn header(&self, h: Hash32) -> Result<Option<Header>, crate::rpc::RpcError> {
+            Ok(self.0.get(&Hash::from_bytes(h.0)).map(|x| x.clone()))
+        }
+    }
+
+    /// K-H2: the node rewrites a signature script in the batch and serves a block of its own that
+    /// holds the rewritten transaction, with a correct Merkle root and hash. Mined at the floor
+    /// (on TN10 for real; on mainnet with the proof of work left out), it passes every check of
+    /// the block itself. It is in no merge set of a proven chain block, so it is refused. The real
+    /// merged block is a direct parent of its chain block and needs no header fetched.
+    #[tokio::test]
+    async fn a_merged_block_made_up_by_the_node_is_refused() {
+        for fx in both() {
+            let m = Hash32(fx.merged.header.hash.as_bytes());
+            let raw = fx.raw();
+            let b = raw
+                .chain_block_accepted_transactions
+                .iter()
+                .position(|b| b.accepted_transactions.iter().any(|t| t.verbose_data.block_hash == Some(m)))
+                .unwrap();
+            let chain = consensus_header(&raw.chain_block_accepted_transactions[b].chain_block_header).unwrap();
+            let none = Known(HashMap::new());
+            assert_eq!(check_merged_into(&chain, &fx.merged.header, &none).await.unwrap(), 0, "a direct parent");
+
+            let mut raw = fx.raw();
+            let t = raw
+                .chain_block_accepted_transactions
+                .iter_mut()
+                .flat_map(|b| &mut b.accepted_transactions)
+                .find(|t| t.verbose_data.block_hash == Some(m) && !t.inputs.is_empty())
+                .unwrap();
+            t.inputs[0].signature_script.0.push(0x51);
+            let (script, id) = (t.inputs[0].signature_script.0.clone(), t.verbose_data.transaction_id);
+            let mut txs = (*fx.merged.transactions).clone();
+            let k = txs.iter().position(|x| x.id().as_bytes() == id.0).unwrap();
+            txs[k].inputs[0].signature_script = script;
+            let mut header = fx.merged.header.as_ref().clone();
+            header.hash_merkle_root = kaspa_consensus_core::merkle::calc_hash_merkle_root(txs.iter());
+            let tn10 = fx.network == "testnet-10";
+            let mut cp = if tn10 { fx.checker() } else { fx.checker().skipping(skip::POW | skip::FLOOR) };
+            // As easy as the floor allows right after a start.
+            header.bits = (cp.static_max / 2u64).compact_target_bits();
+            header.finalize();
+            while tn10 && !pow_ok(&header) {
+                header.nonce += 1;
+                header.finalize();
+            }
+            let forged = Block::new(header, txs);
+            let fm = Hash32(forged.header.hash.as_bytes());
+            for t in raw.chain_block_accepted_transactions.iter_mut().flat_map(|b| &mut b.accepted_transactions) {
+                if t.verbose_data.block_hash == Some(m) {
+                    t.verbose_data.block_hash = Some(fm);
+                }
+            }
+            let txs_f: Vec<&Tx> = raw
+                .chain_block_accepted_transactions
+                .iter()
+                .flat_map(|b| &b.accepted_transactions)
+                .filter(|t| t.verbose_data.block_hash == Some(fm))
+                .collect();
+            cp.check_merged_block(fm, &forged, &txs_f).expect("the forged block passes the checks of the block itself");
+            refused(check_merged_into(&chain, &forged.header, &none).await.map(|_| ()), "not in the merge set");
+        }
+    }
+
+    /// The walk below a chain block's other parents: a merged block two levels down is found, one
+    /// that no parent path reaches is refused, and a header that does not hash to its name is.
+    #[tokio::test]
+    async fn the_merge_set_walk_follows_the_parents() {
+        use kaspa_consensus_core::header::CompressedParents;
+        let mk = |parents: Vec<Hash>, work: u64, nonce: u64| {
+            let p = CompressedParents::try_from(vec![parents]).unwrap();
+            let z = Hash::default();
+            Header::new_finalized(1, p, z, z, z, 0, 0x207fffff, nonce, 0, work.into(), 0, z)
+        };
+        let g = mk(vec![], 1, 0);
+        let sp = mk(vec![g.hash], 2, 0);
+        let m = mk(vec![g.hash], 2, 1);
+        let x = mk(vec![m.hash], 3, 0);
+        let chain = mk(vec![sp.hash, x.hash], 4, 0);
+        let lost = mk(vec![g.hash], 2, 2);
+        let known = Known([&g, &sp, &m, &x].into_iter().map(|h| (h.hash, h.clone())).collect());
+        assert_eq!(check_merged_into(&chain, &m, &known).await.unwrap(), 1, "one header fetched");
+        assert_eq!(check_merged_into(&chain, &sp, &known).await.unwrap(), 0, "the selected parent");
+        refused(check_merged_into(&chain, &lost, &known).await.map(|_| ()), "not in the merge set");
+        let mut lying = Known(known.0.clone());
+        lying.0.insert(x.hash, mk(vec![m.hash], 3, 9));
+        refused(check_merged_into(&chain, &m, &lying).await.map(|_| ()), "does not hash");
     }
 }
