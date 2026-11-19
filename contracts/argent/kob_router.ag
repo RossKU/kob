@@ -310,18 +310,18 @@ fn bid_fits(byte[32] b_token, byte[32] token, int n) {
     require(n > 0);
 }
 
-// BID DELIVERY. A KCC-20 KobBid carries a delivery mode (0 new, 1
-// accumulate, 2 top-up) and `bought`, what its bought-custody holds, in its
-// state (docs/design/bid-delivery-spec.md, sections 4 and 8). The router pins
+// BID DELIVERY. A KCC-20 KobBid carries in its state a delivery mode, 0 new,
+// 1 accumulate or 2 top-up, and `bought`, what its bought-custody holds.
+// See docs/design/bid-delivery-spec.md, sections 4 and 8. The router pins
 // each bid leg's delivery as the bid's mode requires it.
-//   A resting bid of mode 1 delivers into its bought-custody: bought + n,
-//   owned by the bid's covenant id (owner scheme 0x04, borrow disabled, zero
-//   guard, the bid's commitment).
-//   An ending bid of mode 1 releases its custody: one plain UTXO of
+//   A resting bid of mode 1 delivers bought + n into its bought-custody. That
+//   UTXO is owned by the bid's covenant id with owner scheme 0x04, borrowing
+//   disabled, a zero guard and the bid's commitment.
+//   An ending bid of mode 1 releases its custody as one plain UTXO of
 //   bought + n to the maker's key.
-//   Modes 0 and 2 deliver one plain UTXO of n to the maker's key (mode 2
-//   form 0). The keeper fills a mode-2 bid with form 0; the bid requires
-//   bought == 0 in both modes.
+//   Modes 0 and 2 deliver one plain UTXO of n to the maker's key. The keeper
+//   fills a mode-2 bid with form 0. The bid requires bought == 0 in both
+//   modes.
 // A bid with bought > 0 runs its fill only with its custody as a token
 // input. Every observed group has an exact shape, so such a bid is filled
 // only by an entry with a custody leg for it (BID CUSTODY). The other entries
@@ -3560,7 +3560,8 @@ actor TokenSwap_swap2_out owns TokenSwapState {
 
 actor TokenSwap_swap_c owns TokenSwapState {
     // One bid and one ask. The bid rests, and the ask rests.
-    // Bid 1 holds a bought-custody, a token A input after the lock (BID CUSTODY).
+    // Bid 1 holds a bought-custody, a token A input after the lock
+    // (BID CUSTODY).
     entry swap_c(cov_id bid1_covid, cov_id ask1_covid, int n_a1)
     observes bids1 by bid1_covid {
         inputs {
@@ -3729,7 +3730,8 @@ actor TokenSwap_swap_c owns TokenSwapState {
 
 actor TokenSwap_swap_bid_out_c owns TokenSwapState {
     // One bid and one ask. The bid ends, and the ask rests.
-    // Bid 1 holds a bought-custody, a token A input after the lock (BID CUSTODY).
+    // Bid 1 holds a bought-custody, a token A input after the lock
+    // (BID CUSTODY).
     entry swap_bid_out_c(cov_id bid1_covid, cov_id ask1_covid, int n_a1)
     observes bids1 by bid1_covid {
         inputs {
@@ -3896,7 +3898,8 @@ actor TokenSwap_swap_bid_out_c owns TokenSwapState {
 
 actor TokenSwap_swap_ask_out_c owns TokenSwapState {
     // One bid and one ask. The bid rests, and the ask is sold out.
-    // Bid 1 holds a bought-custody, a token A input after the lock (BID CUSTODY).
+    // Bid 1 holds a bought-custody, a token A input after the lock
+    // (BID CUSTODY).
     entry swap_ask_out_c(cov_id bid1_covid, cov_id ask1_covid, int n_a1)
     observes bids1 by bid1_covid {
         inputs {
@@ -4053,7 +4056,8 @@ actor TokenSwap_swap_ask_out_c owns TokenSwapState {
 
 actor TokenSwap_swap_out_c owns TokenSwapState {
     // One bid and one ask. The bid ends, and the ask is sold out.
-    // Bid 1 holds a bought-custody, a token A input after the lock (BID CUSTODY).
+    // Bid 1 holds a bought-custody, a token A input after the lock
+    // (BID CUSTODY).
     entry swap_out_c(cov_id bid1_covid, cov_id ask1_covid, int n_a1)
     observes bids1 by bid1_covid {
         inputs {
@@ -4209,7 +4213,8 @@ actor TokenSwap_swap_out_c owns TokenSwapState {
 actor TokenSwap_swap2_c owns TokenSwapState {
     // 2 bids and 2 asks. Every bid but the last ends, and every ask but
     // the last is sold out. The last bid rests, and the last ask rests.
-    // Bid 1 holds a bought-custody, a token A input after the lock (BID CUSTODY).
+    // Bid 1 holds a bought-custody, a token A input after the lock
+    // (BID CUSTODY).
     entry swap2_c(cov_id bid1_covid, cov_id bid2_covid, cov_id ask1_covid, cov_id ask2_covid, int n_a1, int n_a2)
     observes bids1 by bid1_covid {
         inputs {
@@ -4415,7 +4420,8 @@ actor TokenSwap_swap2_c owns TokenSwapState {
 actor TokenSwap_swap2_out_c owns TokenSwapState {
     // 2 bids and 2 asks. Every bid but the last ends, and every ask but
     // the last is sold out. The last bid ends, and the last ask is sold out.
-    // Bid 1 holds a bought-custody, a token A input after the lock (BID CUSTODY).
+    // Bid 1 holds a bought-custody, a token A input after the lock
+    // (BID CUSTODY).
     entry swap2_out_c(cov_id bid1_covid, cov_id bid2_covid, cov_id ask1_covid, cov_id ask2_covid, int n_a1, int n_a2)
     observes bids1 by bid1_covid {
         inputs {
