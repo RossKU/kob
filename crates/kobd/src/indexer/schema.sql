@@ -542,6 +542,16 @@ END;
 CREATE TRIGGER IF NOT EXISTS counters_rejects_delete AFTER DELETE ON rejects BEGIN
     UPDATE counters SET n = n - 1 WHERE name = 'rejects';
 END;
+-- `kcc23_candidate_bytes`: the bytes the KCC-23 candidates hold, `length(tx)` plus 64 for the row and its keys
+-- (`kcc23::CANDIDATE_ROW_BYTES`), which `kcc23::prune` holds to `kcc23::MAX_CANDIDATE_STORE_BYTES`. Counted once for a
+-- store without it (`db::backfill_candidate_bytes`).
+CREATE TRIGGER IF NOT EXISTS counters_kcc23_candidates_insert AFTER INSERT ON kcc23_candidates BEGIN
+    INSERT INTO counters (name, n) VALUES ('kcc23_candidate_bytes', length(NEW.tx) + 64)
+        ON CONFLICT (name) DO UPDATE SET n = n + excluded.n;
+END;
+CREATE TRIGGER IF NOT EXISTS counters_kcc23_candidates_delete AFTER DELETE ON kcc23_candidates BEGIN
+    UPDATE counters SET n = n - (length(OLD.tx) + 64) WHERE name = 'kcc23_candidate_bytes';
+END;
 CREATE TRIGGER IF NOT EXISTS counters_fills_insert AFTER INSERT ON order_events WHEN NEW.kind = 'fill' BEGIN
     INSERT INTO counters (name, n) VALUES ('fills', 1) ON CONFLICT (name) DO UPDATE SET n = n + 1;
 END;

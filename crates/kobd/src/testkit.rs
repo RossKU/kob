@@ -1466,8 +1466,9 @@ pub fn snapshot(conn: &Connection) -> String {
         &[4],
     );
     // A status whose last order changed status keeps a zero row (incremental), which a rebuild
-    // never writes.
-    dump("SELECT name, n FROM counters WHERE n != 0 ORDER BY name", 2, &mut out, "counter", &[]);
+    // never writes. The bytes of the KCC-23 candidates follow the candidate rows above, which are
+    // in the database only (a rebuild from the record log lacks the unbound ones).
+    dump("SELECT name, n FROM counters WHERE n != 0 AND name != 'kcc23_candidate_bytes' ORDER BY name", 2, &mut out, "counter", &[]);
     dump(&format!("SELECT {ACTIVITY_COLS} FROM activity ORDER BY iv, t"), 13, &mut out, "activity", &[]);
     dump(
         "SELECT block_seq, daa, ts, txid, income, miner_fee, own_trade FROM executor_txs ORDER BY daa, txid",

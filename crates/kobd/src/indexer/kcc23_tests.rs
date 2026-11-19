@@ -454,20 +454,70 @@ async fn a_junk_declaration_payload_stays_out_of_the_record_log() {
 
 #[path = "kcc23_bounds_tests.rs"]
 mod bounds;
-/// Beyond MAX_CANDIDATES the oldest unnamed candidates go, inside the window too.
-/// Security review 2026-11-17 L5: beyond MAX_CANDIDATES the oldest unnamed candidates go, inside the window too.
-#[test]
-fn the_candidates_are_capped_oldest_first() {
-    let conn = open_memory("testnet-10").unwrap();
+/// `n` candidates of `bytes` bytes each, at DAA `daa0 + 1` on, ids `<tag><i>`.
+fn fill_candidates(conn: &Connection, tag: &str, n: i64, bytes: i64, daa0: i64) {
     conn.execute(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
-         INSERT INTO kcc23_candidates (txid, tx, created_block, daa) SELECT CAST(printf('%032d', i) AS BLOB), x'00', 1, 1000 + i FROM n",
-        [MAX_CANDIDATES + 5],
+         INSERT INTO kcc23_candidates (txid, tx, created_block, daa) \
+         SELECT CAST(printf('%s%031d', ?2, i) AS BLOB), zeroblob(?3), 1, ?4 + i FROM n",
+        params![n, tag, bytes, daa0],
     )
     .unwrap();
-    assert_eq!(prune(&conn, 0).unwrap(), 5);
-    let (n, oldest): (i64, i64) =
-        conn.query_row("SELECT COUNT(*), MIN(daa) FROM kcc23_candidates", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
-    assert_eq!((n, oldest), (MAX_CANDIDATES, 1006));
-    assert_eq!(prune(&conn, 0).unwrap(), 0);
+}
+
+fn candidate_sum(conn: &Connection) -> i64 {
+    conn.query_row("SELECT COALESCE(SUM(length(tx) + 64), 0) FROM kcc23_candidates", [], |r| r.get(0)).unwrap()
+}
+
+/// Security review 2026-11-19 K-M4: thousands of cheap preparations accepted between an honest
+/// creator's preparation and its genesis do not push the preparation out. The bound is on bytes
+/// (each one paid for as block space), not on rows.
+#[test]
+fn a_flood_of_small_preparations_keeps_an_honest_one() {
+    let conn = open_memory("testnet-10").unwrap();
+    fill_candidates(&conn, "h", 1, 400, 999); // the honest preparation, the oldest
+    fill_candidates(&conn, "j", 20_000, 120, 1_000); // then 20,000 small ones
+    assert_eq!(prune(&conn, 0).unwrap(), 0, "20,000 small candidates are far below the byte bound");
+    let honest: i64 = conn.query_row("SELECT COUNT(*) FROM kcc23_candidates WHERE daa = 1000", [], |r| r.get(0)).unwrap();
+    assert_eq!(honest, 1, "the honest preparation is still there for its genesis");
+    assert_eq!(candidate_bytes(&conn).unwrap(), candidate_sum(&conn));
+}
+
+/// Beyond the byte bound the oldest unnamed candidates go, inside the window too, until the rest
+/// fits; a candidate a stored declaration names stays (security review 2026-11-17 L5).
+#[test]
+fn the_candidates_are_held_to_a_byte_bound_oldest_first() {
+    let conn = open_memory("testnet-10").unwrap();
+    fill_candidates(&conn, "a", 10, 1_000 - 64, 1_000); // 1,000 bytes each, DAA 1001..=1010
+    assert_eq!(candidate_bytes(&conn).unwrap(), 10_000);
+    // the oldest is named by a declaration of a stored block
+    conn.execute("INSERT INTO blocks (seq, hash, daa) VALUES (7, x'07', 1)", []).unwrap();
+    let named: Vec<u8> = conn.query_row("SELECT txid FROM kcc23_candidates WHERE daa = 1001", [], |r| r.get(0)).unwrap();
+    conn.execute(
+        "INSERT INTO kcc23_declarations (covenant_id, proof, preparation_txid, genesis_txid, genesis_block, genesis_daa) \
+         VALUES (x'01', '', ?1, x'02', 7, 1)",
+        [&named],
+    )
+    .unwrap();
+    // 7,500 bytes: the three oldest unnamed go (DAA 1002..=1004)
+    assert_eq!(prune_to(&conn, 0, 7_500).unwrap(), 3);
+    let left: Vec<i64> = conn
+        .prepare("SELECT daa FROM kcc23_candidates ORDER BY daa")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(left, [1001, 1005, 1006, 1007, 1008, 1009, 1010]);
+    assert_eq!(candidate_bytes(&conn).unwrap(), 7_000);
+    assert_eq!(prune_to(&conn, 0, 7_500).unwrap(), 0);
+    // the byte counter follows deletes and inserts
+    conn.execute("DELETE FROM kcc23_candidates WHERE daa = 1010", []).unwrap();
+    fill_candidates(&conn, "b", 3, 10, 2_000);
+    assert_eq!(candidate_bytes(&conn).unwrap(), candidate_sum(&conn));
+    // a store whose counters an earlier build counted gets the bytes counted once
+    conn.execute("DELETE FROM counters WHERE name = 'kcc23_candidate_bytes'", []).unwrap();
+    assert!(crate::indexer::db::backfill_candidate_bytes(&conn).unwrap());
+    assert!(!crate::indexer::db::backfill_candidate_bytes(&conn).unwrap());
+    assert_eq!(candidate_bytes(&conn).unwrap(), candidate_sum(&conn));
 }
