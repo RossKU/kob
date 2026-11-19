@@ -1,4 +1,5 @@
-// Type declarations of e2e-real/common.mjs (plain node ESM). Playwright types are left loose on purpose.
+// Type declarations of e2e-real/common.mjs (plain node ESM). Playwright types are left loose on
+// purpose.
 export const chromium: any;
 export const E2E_REAL_DIR: string;
 export const WEB_ROOT: string;

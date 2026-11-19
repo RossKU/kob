@@ -1,19 +1,25 @@
-// `--mock` mode of the real-wallet run: the SAME scenarios, selectors and checks, but against the offline mock stack of web/e2e (mock/server.mjs:
-// mock indexer + mock node that runs every submitted transaction through kob-wasm) with the in-page mock wallets of src/testing/mock-wallets.ts
-// instead of the released extensions and a TN10 node. It proves that every step of the TN10 run still matches the UI and the protocol; it
-// cannot prove anything about the real extensions, their popups or the real node (README "What the mock mode does not prove").
+// `--mock` mode of the real-wallet run: the SAME scenarios, selectors and checks, but against the
+// offline mock stack of web/e2e (mock/server.mjs: mock indexer + mock node that runs every
+// submitted transaction through kob-wasm) with the in-page mock wallets of
+// src/testing/mock-wallets.ts instead of the released extensions and a TN10 node. It proves that
+// every step of the TN10 run still matches the UI and the protocol; it cannot prove anything about
+// the real extensions, their popups or the real node (README "What the mock mode does not prove").
 // Nothing runs on import.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { WEB_ROOT, sleep } from './common.mjs';
 
-/** Deterministic test keys of the mock (mock/keys.mjs): one per wallet, `maker` is the counterparty of the market scenario (the DEV key on TN10). */
+/**
+ * Deterministic test keys of the mock (mock/keys.mjs): one per wallet, `maker` is the counterparty
+ * of the market scenario (the DEV key on TN10).
+ */
 export const MOCK_KEY_OF = { kasware: 'alice', kaspire: 'bob', kastle: 'carol', dev: 'maker' };
 
 let walletModule = null;
 /**
- * src/testing/mock-wallets.ts as a module (it has no imports): transpiled with vite's oxc transform, so this works on any Node 22 without
- * TypeScript support. `mockWalletInitScript(config)` is the page script the Playwright fixtures inject (e2e/wallet.ts).
+ * src/testing/mock-wallets.ts as a module (it has no imports): transpiled with vite's oxc
+ * transform, so this works on any Node 22 without TypeScript support.
+ * `mockWalletInitScript(config)` is the page script the Playwright fixtures inject (e2e/wallet.ts).
  */
 export async function mockWallets() {
   if (walletModule) return walletModule;
@@ -24,7 +30,10 @@ export async function mockWallets() {
   return walletModule;
 }
 
-/** The page config of a mock wallet for `secretKey` (e2e/wallet.ts `buildWalletConfig`, without the TypeScript imports). */
+/**
+ * The page config of a mock wallet for `secretKey` (e2e/wallet.ts `buildWalletConfig`, without the
+ * TypeScript imports).
+ */
 export async function mockWalletConfig(wallet, secretKey) {
   const { DEFAULT_WALLET_CONFIG, WALLET_DEFAULTS } = await mockWallets();
   const { pubkeyOfSecret } = await import('../mock/keys.mjs');
@@ -41,7 +50,10 @@ export async function mockWalletConfig(wallet, secretKey) {
   };
 }
 
-/** Injects the mock wallet into every page of `ctx` (before any page script), `overrides` on top of its config. Returns the wallet config (address, pubkey). */
+/**
+ * Injects the mock wallet into every page of `ctx` (before any page script), `overrides` on top of
+ * its config. Returns the wallet config (address, pubkey).
+ */
 export async function installMockWallet(ctx, wallet, secretKey, overrides = {}) {
   const config = { ...(await mockWalletConfig(wallet, secretKey)), ...overrides };
   const { mockWalletInitScript } = await mockWallets();
@@ -49,7 +61,10 @@ export async function installMockWallet(ctx, wallet, secretKey, overrides = {}) 
   return config;
 }
 
-/** Starts the mock stack in this process on a free port with an EMPTY chain (no seeded token, book or funds). */
+/**
+ * Starts the mock stack in this process on a free port with an EMPTY chain (no seeded token, book
+ * or funds).
+ */
 export async function startMock() {
   const { startMockServer } = await import('../mock/server.mjs');
   const { TEST_SECRETS, TEST_PUBKEYS } = await import('../mock/keys.mjs');
@@ -68,15 +83,19 @@ export async function startMock() {
     post: (p, b = {}) => call('POST', p, b),
     /** gives `key` (test key name or x-only pubkey) `kas` KAS in `count` UTXOs */
     giveKas: (key, kas, count = 4) => call('POST', '/mock/utxo', { key, kas: String(BigInt(Math.round(kas * 1e8))), count }),
-    /** registers an issued token with the mock indexer (the real indexer learns it from its registry): books, token-utxos and orders of it */
+    /**
+     * registers an issued token with the mock indexer (the real indexer learns it from its
+     * registry): books, token-utxos and orders of it
+     */
     registerToken: (t) => call('POST', '/mock/seed', { tokens: [t] }),
     close: () => srv.close(),
   };
 }
 
 /**
- * The independent node checker of the mock: the same interface as driver.mjs `NodeChecker` (TN10, official SDK), read from the mock node's
- * UTXO set over HTTP (`POST /node/utxos`). Addresses are derived with mock/address.mjs.
+ * The independent node checker of the mock: the same interface as driver.mjs `NodeChecker` (TN10,
+ * official SDK), read from the mock node's UTXO set over HTTP (`POST /node/utxos`). Addresses are
+ * derived with mock/address.mjs.
  */
 export class MockNodeChecker {
   constructor(mockUrl) {

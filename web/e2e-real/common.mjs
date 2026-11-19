@@ -1,12 +1,16 @@
-// Shared helpers for the REAL-wallet TN10 runs (web/e2e-real): unpack / cache the released wallet extensions, launch Chromium with an
-// unpacked extension in a persistent profile, onboard the wallets through their UIs with a throw-away mnemonic, and find / approve
-// their popups. Ported from tools/wallet-gate/test/wallets/{common,kasware,kaspire,kastle}.mjs, which proved every step on TN10.
+// Shared helpers for the REAL-wallet TN10 runs (web/e2e-real): unpack / cache the released wallet
+// extensions, launch Chromium with an unpacked extension in a persistent profile, onboard the
+// wallets through their UIs with a throw-away mnemonic, and find / approve their popups. Ported
+// from tools/wallet-gate/test/wallets/{common,kasware,kaspire,kastle}.mjs, which proved every step
+// on TN10.
 //
-// NOTHING RUNS ON IMPORT: no directories are created, no browser is started, no network is touched. The scenario itself (a run script
-// that drives the built app against a TN10 node) is written later on top of these functions.
+// NOTHING RUNS ON IMPORT: no directories are created, no browser is started, no network is touched.
+// The scenarios themselves (run scripts that drive the built app against a TN10 node) sit on top of
+// these functions.
 //
-// Test money only: mnemonics are generated into the gitignored `e2e-real/.env` and never printed; profiles live in the gitignored
-// `e2e-real/.browser-profiles/`; unpacked extensions in `e2e-real/.ext/` (add `e2e-real/.ext/` to web/.gitignore).
+// Test money only: mnemonics are generated into the gitignored `e2e-real/.env` and never printed;
+// profiles live in the gitignored `e2e-real/.browser-profiles/`; unpacked extensions in
+// `e2e-real/.ext/` (add `e2e-real/.ext/` to web/.gitignore).
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve, sep } from 'node:path';
@@ -17,7 +21,8 @@ import { EXTENSIONS, checkPinnedPackage, crxToZip, packageVersion, sha256Hex } f
 
 export { chromium };
 
-// ------------------------------------------------------------------------------------------------ paths
+// ------------------------------------------------------------------------------------------------
+// paths
 
 export const E2E_REAL_DIR = dirname(fileURLToPath(import.meta.url));
 export const WEB_ROOT = resolve(E2E_REAL_DIR, '..');
@@ -28,7 +33,10 @@ export const PROFILE_ROOT = join(E2E_REAL_DIR, '.browser-profiles');
 export const OUT_DIR = join(E2E_REAL_DIR, 'out');
 export const ENV_PATH = join(E2E_REAL_DIR, '.env');
 
-/** Read-only caches of the wallet-gate kit (extensions already downloaded there); searched in this order. */
+/**
+ * Read-only caches of the wallet-gate kit (extensions already downloaded there); searched in this
+ * order.
+ */
 export const WALLET_GATE_VENDOR_CANDIDATES = [
   process.env.KOB_WALLET_GATE_VENDOR,
   join(REPO_ROOT, 'tools', 'wallet-gate', 'vendor'),
@@ -38,14 +46,19 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const collapse = (s) => String(s).replace(/\s+/g, ' ').trim();
 export const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
-// ------------------------------------------------------------------------------------------------ extension sources
+// ------------------------------------------------------------------------------------------------
+// extension sources
 
-// The pins (versions, sha256, URLs) live in tools/wallet-gate/lib/extension-pins.mjs, shared with the wallet-gate drivers: an
-// unpacked copy (e2e-real/.ext, the wallet-gate cache) is used only when its manifest version equals the pin, and a download whose
-// sha256 differs from the pin is refused before anything is unpacked.
+// The pins (versions, sha256, URLs) live in tools/wallet-gate/lib/extension-pins.mjs, shared with
+// the wallet-gate drivers: an unpacked copy (e2e-real/.ext, the wallet-gate cache) is used only
+// when its manifest version equals the pin, and a download whose sha256 differs from the pin is
+// refused before anything is unpacked.
 export { EXTENSIONS, crxToZip };
 
-/** Unpacks a zip into `dir` (refusing entries that would escape it). Returns the list of written files. */
+/**
+ * Unpacks a zip into `dir` (refusing entries that would escape it). Returns the list of written
+ * files.
+ */
 export function unpackZip(buf, dir) {
   const root = resolve(dir);
   const written = [];
@@ -71,11 +84,12 @@ async function download(url) {
 }
 
 /**
- * Makes `web/e2e-real/.ext/<wallet>/` contain the unpacked extension: reuses it, else copies the wallet-gate cache (read-only source),
- * else downloads it (KasWare / Kastle: CRX from the Chrome Web Store endpoint; Kaspire: the release zip). Only the pinned version is
- * used: an unpacked copy with another manifest version is passed over, and a download whose sha256 or manifest version differs from
- * the pin is refused (nothing is unpacked).
- * @returns {Promise<{dir: string, version: string, source: 'cache' | 'vendor' | 'download', sha256?: string}>}
+ * Makes `web/e2e-real/.ext/<wallet>/` contain the unpacked extension: reuses it, else copies the
+ * wallet-gate cache (read-only source), else downloads it (KasWare / Kastle: CRX from the Chrome
+ * Web Store endpoint; Kaspire: the release zip). Only the pinned version is used: an unpacked copy
+ * with another manifest version is passed over, and a download whose sha256 or manifest version
+ * differs from the pin is refused (nothing is unpacked). @returns {Promise<{dir: string, version:
+ * string, source: 'cache' | 'vendor' | 'download', sha256?: string}>}
  */
 export async function ensureExtension(wallet, { download: allowDownload = true, force = false, extRoot = EXT_ROOT, vendors = WALLET_GATE_VENDOR_CANDIDATES } = {}) {
   const spec = EXTENSIONS[wallet];
@@ -105,10 +119,12 @@ export async function ensureExtension(wallet, { download: allowDownload = true, 
 }
 
 /**
- * `--ext latest`: the newest release of a wallet, downloaded WITHOUT a pin into `.ext/latest/<wallet>/` (never the pinned cache `.ext/<wallet>/`,
- * and always fresh). KasWare / Kastle: the CRX the Chrome Web Store endpoint serves; Kaspire: the newest GitHub release that carries an
- * extension zip. The version and sha256 are returned so the run report records exactly which build ran; `pinnedVersion` says what the pins hold.
- * @returns {Promise<{dir: string, version: string, source: 'latest', sha256: string, pinnedVersion: string}>}
+ * `--ext latest`: the newest release of a wallet, downloaded WITHOUT a pin into
+ * `.ext/latest/<wallet>/` (never the pinned cache `.ext/<wallet>/`, and always fresh). KasWare /
+ * Kastle: the CRX the Chrome Web Store endpoint serves; Kaspire: the newest GitHub release that
+ * carries an extension zip. The version and sha256 are returned so the run report records exactly
+ * which build ran; `pinnedVersion` says what the pins hold. @returns {Promise<{dir: string,
+ * version: string, source: 'latest', sha256: string, pinnedVersion: string}>}
  */
 export async function ensureLatestExtension(wallet, { extRoot = EXT_ROOT } = {}) {
   const spec = EXTENSIONS[wallet];
@@ -138,7 +154,8 @@ export async function ensureLatestExtension(wallet, { extRoot = EXT_ROOT } = {})
   return { dir, version, source: 'latest', sha256: sha256Hex(pkg), pinnedVersion: spec.version };
 }
 
-// ------------------------------------------------------------------------------------------------ .env (secrets, gitignored)
+// ------------------------------------------------------------------------------------------------
+// .env (secrets, gitignored)
 
 export function parseEnv(text) {
   const out = {};
@@ -164,7 +181,8 @@ export function upsertEnv(pairs, path = ENV_PATH) {
   writeFileSync(path, text);
 }
 
-// ------------------------------------------------------------------------------------------------ throw-away keys
+// ------------------------------------------------------------------------------------------------
+// throw-away keys
 
 let sdkCache = null;
 /** The official kaspa SDK for node (vendored in web/vendor/kaspa-node). */
@@ -182,18 +200,23 @@ export function ensureMnemonic(key, path = ENV_PATH) {
   return phrase;
 }
 
-/** KasWare's default keyring path (m/44'/111111'/0'/0/0, Schnorr P2PK): the address it shows after importing `phrase`. */
+/**
+ * KasWare's default keyring path (m/44'/111111'/0'/0/0, Schnorr P2PK): the address it shows after
+ * importing `phrase`.
+ */
 export function kaswareAddress(phrase, network = 'testnet-10') {
   const k = kaspaNode();
   const xprv = new k.XPrv(new k.Mnemonic(phrase).toSeed());
   return xprv.derivePath("m/44'/111111'/0'/0/0").toXPub().toPublicKey().toAddress(network).toString();
 }
 
-// ------------------------------------------------------------------------------------------------ browser
+// ------------------------------------------------------------------------------------------------
+// browser
 
 /**
- * Launches Chromium with an unpacked extension in a persistent profile. Extensions need a headed or new-headless browser; branded
- * Chrome >= 137 ignores --load-extension, so this uses Playwright's Chromium (set KOB_CHROME_PATH for a specific chrome.exe).
+ * Launches Chromium with an unpacked extension in a persistent profile. Extensions need a headed or
+ * new-headless browser; branded Chrome >= 137 ignores --load-extension, so this uses Playwright's
+ * Chromium (set KOB_CHROME_PATH for a specific chrome.exe).
  */
 export async function launchWalletBrowser({ extensionDir, profileName, headless = false, extraArgs = [], viewport = { width: 1280, height: 900 }, fresh = false }) {
   const userDataDir = join(PROFILE_ROOT, profileName);
@@ -229,7 +252,8 @@ export function saveResults(name, obj) {
   return file;
 }
 
-// ------------------------------------------------------------------------------------------------ popups
+// ------------------------------------------------------------------------------------------------
+// popups
 
 /** How each wallet's approval window is recognised by URL. */
 export const POPUP_MATCHERS = {
@@ -252,8 +276,9 @@ export async function findPopup(ctx, wallet, { handled = new WeakSet(), timeoutM
 }
 
 /**
- * Watches for approval windows of `wallet` and calls `handler(page, {wallet, index})` for each new one (approve, reject, inspect ...).
- * Returns a controller: `stop()` ends the watch and resolves to `[{index, url, result?, error?}]`.
+ * Watches for approval windows of `wallet` and calls `handler(page, {wallet, index})` for each new
+ * one (approve, reject, inspect ...). Returns a controller: `stop()` ends the watch and resolves to
+ * `[{index, url, result?, error?}]`.
  *
  *   const watch = approvePopups(ctx, kaswareApprover(), { wallet: 'kasware' });
  *   await page.click('[data-testid="order-place"]'); // the app asks the wallet to sign
@@ -272,8 +297,9 @@ export function approvePopups(ctx, handler, { wallet, pollMs = 250 } = {}) {
         continue;
       }
       handled.add(p);
-      // `seenAt` / `doneAt` (epoch ms): the gap between one popup's `doneAt` and the next one's `seenAt` is how long the app waited before
-      // asking again (a two-step creation: the visibility gate between the preparation and the genesis)
+      // `seenAt` / `doneAt` (epoch ms): the gap between one popup's `doneAt` and the next one's
+      // `seenAt` is how long the app waited before asking again (a two-step creation: the
+      // visibility gate between the preparation and the genesis)
       const entry = { index: seen.length, url: p.url().replace(/(payload=)[^&#]*/, '$1<omitted>'), seenAt: Date.now() };
       seen.push(entry);
       try {
@@ -294,13 +320,17 @@ export function approvePopups(ctx, handler, { wallet, pollMs = 250 } = {}) {
   };
 }
 
-/** Runs `start()` (returns a promise) while approving that wallet's popups; resolves with `{result, popups}`. */
+/**
+ * Runs `start()` (returns a promise) while approving that wallet's popups; resolves with `{result,
+ * popups}`.
+ */
 export async function withPopupApproval(ctx, wallet, start, handler, opts = {}) {
   const watch = approvePopups(ctx, handler, { wallet, ...opts });
   try {
     return { result: await start(), popups: watch.seen };
   } catch (e) {
-    // the windows seen so far go with the error: what the wallet said is the evidence of a refused step
+    // the windows seen so far go with the error: what the wallet said is the evidence of a refused
+    // step
     if (e && typeof e === 'object') e.popups = watch.seen;
     throw e;
   } finally {
@@ -310,22 +340,28 @@ export async function withPopupApproval(ctx, wallet, start, handler, opts = {}) 
 
 const KASWARE_APPROVE = ['Sign', 'Sign & Submit', 'Approve', 'Confirm', 'Connect', 'Submit', 'Allow', 'Sign Transaction'];
 
-/** KasWare: reads the popup text, clicks the first known approve label (or the reject label when `approve` is false). */
+/**
+ * KasWare: reads the popup text, clicks the first known approve label (or the reject label when
+ * `approve` is false).
+ */
 export const kaswareApprover =
   ({ approve = true, screenshotDir = 'kasware' } = {}) =>
   async (pop) => {
     await pop.waitForLoadState('domcontentloaded').catch(() => {});
     let text = '';
-    // rendered once its decline button is there: "Cancel" on the connect window, "Reject" on KasWare 0.10's Sign Transaction window (waiting
-    // for "Cancel" alone ran the whole 16 s on every signature, longer than an auction's lead: every market order stopped with clock-moved)
+    // rendered once its decline button is there: "Cancel" on the connect window, "Reject" on
+    // KasWare 0.10's Sign Transaction window (waiting for "Cancel" alone ran the whole 16 s on
+    // every signature, longer than an auction's lead: every market order stopped with clock-moved)
     for (let i = 0; i < 40; i++) {
       await sleep(400);
       text = await pop.innerText('body').catch(() => '');
       if (/\b(Cancel|Reject)\b/.test(text) && text.length > 30 && i > 1) break;
     }
-    // 0.11.5 checks every input against its own node while the Sign window is open (`verifyPsktInputs`) and shows Sign only when they all pass;
-    // an input it cannot find leaves a "Critical Signing Warning" and Reject alone. Wait for one of the two before reading the window.
-    // (a line of its own: "Sign Transaction" is also the window's title, so it does not count)
+    // 0.11.5 checks every input against its own node while the Sign window is open
+    // (`verifyPsktInputs`) and shows Sign only when they all pass; an input it cannot find leaves a
+    // "Critical Signing Warning" and Reject alone. Wait for one of the two before reading the
+    // window. (a line of its own: "Sign Transaction" is also the window's title, so it does not
+    // count)
     const hasApprove = (s) => KASWARE_APPROVE.filter((t) => t !== 'Sign Transaction').some((t) => new RegExp(`(^|\\n)\\s*${t.replace(/[&]/g, '\\$&')}\\s*($|\\n)`).test(s));
     for (let i = 0; approve && i < 20 && /Sign Transaction/.test(text) && !hasApprove(text) && !/Critical Signing Warning/.test(text); i++) {
       await sleep(400);
@@ -334,7 +370,8 @@ export const kaswareApprover =
     const info = { text, summary: collapse(text).slice(0, 600), screenshot: await shot(pop, screenshotDir, 'popup'), clicked: null };
     const warning = /Critical Signing Warning\s*([^\n]*\n?[^\n]*)/.exec(text);
     if (warning) info.warning = collapse(warning[0]).slice(0, 400);
-    // the wallet withheld Sign: rejected at once, so the app hears the refusal now (not after its signing timeout) and the run says why
+    // the wallet withheld Sign: rejected at once, so the app hears the refusal now (not after its
+    // signing timeout) and the run says why
     const labels = approve && !(warning && !hasApprove(text)) ? KASWARE_APPROVE : ['Cancel', 'Reject'];
     for (const t of labels) {
       const loc = pop.getByText(t, { exact: true });
@@ -413,11 +450,15 @@ export const kastleApprover =
     return info;
   };
 
-// ------------------------------------------------------------------------------------------------ onboarding (throw-away wallets)
+// ------------------------------------------------------------------------------------------------
+// onboarding (throw-away wallets)
 
 const clickText = (page, text, { exact = true, timeout = 15_000 } = {}) => page.getByText(text, { exact }).first().click({ timeout });
 
-/** KasWare: imports `words` (array of 12) with a throw-away password through the onboarding tab; resolves with the wallet page. */
+/**
+ * KasWare: imports `words` (array of 12) with a throw-away password through the onboarding tab;
+ * resolves with the wallet page.
+ */
 export async function onboardKasware(ctx, words, { password = 'Kob-Test-12345' } = {}) {
   if (!Array.isArray(words) || words.length !== 12) throw new Error('onboardKasware: words must be an array of 12 words');
   let [sw] = ctx.serviceWorkers();
@@ -453,9 +494,10 @@ export async function onboardKasware(ctx, words, { password = 'Kob-Test-12345' }
 }
 
 /**
- * KasWare: Settings -> network -> Testnet 10. Resolves with the text of the wallet screen and of Settings afterwards: 0.10 showed the
- * kaspatest: address on the wallet screen; 0.11 shows only "Account 1" there (the address is behind Receive), but names the network in
- * Settings ("KASPA Network Testnet 10") and badges the wallet screen "TN10".
+ * KasWare: Settings -> network -> Testnet 10. Resolves with the text of the wallet screen and of
+ * Settings afterwards: 0.10 showed the kaspatest: address on the wallet screen; 0.11 shows only
+ * "Account 1" there (the address is behind Receive), but names the network in Settings ("KASPA
+ * Network Testnet 10") and badges the wallet screen "TN10".
  */
 export async function switchKaswareToTn10(page) {
   await clickText(page, 'Settings');
@@ -475,10 +517,16 @@ export async function switchKaswareToTn10(page) {
   return `${wallet} | ${settings}`;
 }
 
-/** Did `switchKaswareToTn10` land on Testnet 10? (0.10: a kaspatest: address; 0.11: the network row of Settings) */
+/**
+ * Did `switchKaswareToTn10` land on Testnet 10? (0.10: a kaspatest: address; 0.11: the network row
+ * of Settings)
+ */
 export const kaswareOnTn10 = (text) => /kaspatest:/.test(text) || /Network Testnet 10(?!\d)/.test(text);
 
-/** Kaspire: imports the mnemonic on wallet.html and selects testnet-10. Resolves with a screenshot path. */
+/**
+ * Kaspire: imports the mnemonic on wallet.html and selects testnet-10. Resolves with a screenshot
+ * path.
+ */
 export async function onboardKaspire(ctx, extId, mnemonic, { password }) {
   if (!password) throw new Error('onboardKaspire: a vault password is required');
   const words = mnemonic.trim().split(/\s+/);
@@ -511,12 +559,16 @@ export async function onboardKaspire(ctx, extId, mnemonic, { password }) {
   return file;
 }
 
-/** Kastle: imports the mnemonic through the onboarding tab when the profile has no wallet yet. Resolves true when it onboarded. */
+/**
+ * Kastle: imports the mnemonic through the onboarding tab when the profile has no wallet yet.
+ * Resolves true when it onboarded.
+ */
 export async function onboardKastle(ctx, extId, { mnemonic, password }) {
   if (!password) throw new Error('onboardKastle: a wallet password is required');
   const words = mnemonic.trim().split(/\s+/);
   if (words.length !== 12) throw new Error('onboardKastle: the mnemonic is not 12 words');
-  // opening popup.html on a profile without a wallet makes the background worker open an /onboarding tab a few seconds later
+  // opening popup.html on a profile without a wallet makes the background worker open an
+  // /onboarding tab a few seconds later
   const probe = await ctx.newPage();
   await probe.goto(`chrome-extension://${extId}/popup.html`);
   const onboarding = () => ctx.pages().filter((x) => x.url().includes('#/onboarding'));

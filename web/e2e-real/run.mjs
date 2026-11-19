@@ -1,18 +1,27 @@
-// REAL-wallet run on Kaspa testnet-10: drives the built KOB web app with the released KasWare / Kaspire / Kastle extensions against a TN10 node and
-// proves, per wallet: issue a 3 / 3 token, then place and cancel the main order types (limit GTC sell + buy, amend, IOC, stop, OCO, IFD, pair limit
-// sell + buy, market against a counterparty when an indexer is configured), merge the token's UTXOs and check My orders / Balances, and the Create
-// token features (creator lock and Unlock, Linear and Chromatic curve sales, the Claim of a Collected buy: create.mjs); every accepted
+// REAL-wallet run on Kaspa testnet-10: drives the built KOB web app with the released KasWare /
+// Kaspire / Kastle extensions against a TN10 node and proves, per wallet: issue a 3 / 3 token, then
+// place and cancel the main order types (limit GTC sell + buy, amend, IOC, stop, OCO, IFD, pair
+// limit sell + buy, market against a counterparty when an indexer is configured), merge the token's
+// UTXOs and check My orders / Balances, and the Create token features (creator lock and Unlock,
+// Linear and Chromatic curve sales, the Claim of a Collected buy: create.mjs); every accepted
 // transaction is verified on the node independently of the app.
 //
-//   node e2e-real/run.mjs [--wallet kasware,kaspire,kastle|all] [--only limit,amend,...] [--indexer [url]] [--headless] [--keep-open]
-//                         [--skip-issue] [--rebuild] [--port N] [--ext pinned|latest] [--fund-below KAS] [--fund KAS]
-//   --fund-below / --fund   top a wallet up with --fund KAS from the DEV key when it holds less than --fund-below KAS (defaults 120 / 100); lower
-//                  them when the DEV key runs short and the scenarios need less (one issuance and limit / amend / cells / merge need about 15 KAS)
-//   --ext latest   run the NEWEST released extension (downloaded without a pin into .ext/latest/, version and sha256 in the report) instead of the pinned build
-//   node e2e-real/run.mjs --mock [--indexer] ...      the same scenarios against the offline mock stack (web/e2e) with in-page mock wallets
+//   node e2e-real/run.mjs [--wallet kasware,kaspire,kastle|all] [--only limit,amend,...] [--indexer
+//   [url]] [--headless] [--keep-open]
+//                         [--skip-issue] [--rebuild] [--port N] [--ext pinned|latest] [--fund-below
+//                         KAS] [--fund KAS]
+//   --fund-below / --fund   top a wallet up with --fund KAS from the DEV key when it holds less
+//                           than --fund-below KAS (defaults 120 / 100); lower
+//                  them when the DEV key runs short and the scenarios need less (one issuance and
+//                  limit / amend / cells / merge need about 15 KAS)
+//   --ext latest   run the NEWEST released extension (downloaded without a pin into .ext/latest/,
+//                  version and sha256 in the report) instead of the pinned build
+//   node e2e-real/run.mjs --mock [--indexer] ...      the same scenarios against the offline mock
+//                                                     stack (web/e2e) with in-page mock wallets
 //
-// Exit codes: 0 every selected scenario passed (or was skipped with a reason), 1 a scenario failed, 77 skipped (no .env / extension cache / node
-// unreachable / no build). On demand only: never part of CI. Prerequisites and results: e2e-real/README.md. Secrets (mnemonics, keys) live in the
+// Exit codes: 0 every selected scenario passed (or was skipped with a reason), 1 a scenario failed,
+// 77 skipped (no .env / extension cache / node unreachable / no build). On demand only: never part
+// of CI. Prerequisites and results: e2e-real/README.md. Secrets (mnemonics, keys) live in the
 // gitignored e2e-real/.env and are never printed.
 import { existsSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -25,7 +34,8 @@ import { MOCK_KEY_OF, MockNodeChecker, startMock } from './mock.mjs';
 import { SCENARIOS as ORDER_SCENARIOS, buildTestRegistry, issueTokens, snapshotTracker, sweepOpenOrders } from './scenarios.mjs';
 import { claimResult, runChromatic, runCurve, runLock, runUnlock } from './create.mjs';
 
-// the order scenarios, with the Create token ones around them: the lock first (its time runs while the rest runs), its unlock last
+// the order scenarios, with the Create token ones around them: the lock first (its time runs while
+// the rest runs), its unlock last
 const SCENARIOS = [['lock', runLock], ...ORDER_SCENARIOS.filter(([id]) => !['cells', 'merge', 'balances'].includes(id)), ['curve', runCurve], ['claim', claimResult], ['chromatic', runChromatic], ...ORDER_SCENARIOS.filter(([id]) => ['cells', 'merge', 'balances'].includes(id)), ['unlock', runUnlock]];
 
 export const SKIP = 77;
@@ -59,7 +69,10 @@ const skip = (why) => {
   process.exit(SKIP);
 };
 
-/** The indexer the run uses: `--indexer <url>`, INDEXER_URL of .env, or none (node-only mode, as the TN10 runs so far). `--mock --indexer`: the mock's. */
+/**
+ * The indexer the run uses: `--indexer <url>`, INDEXER_URL of .env, or none (node-only mode, the
+ * TN10 default). `--mock --indexer`: the mock's.
+ */
 function indexerOf(env, mock) {
   if (!flag('indexer') && !env.INDEXER_URL) return '';
   if (mock) return mock.url;
@@ -75,7 +88,8 @@ async function preflight(env) {
   if (!existsSync(ENV_PATH)) skip('web/e2e-real/.env is missing (DEV key, node URL and wallet mnemonics live there, gitignored)');
   for (const k of ['DEV_PRIVATE_KEY', 'DEV_ADDRESS']) if (!env[k]) skip(`${k} is not set in web/e2e-real/.env`);
   for (const w of WALLETS) {
-    // a throw-away mnemonic is generated into .env on first use (never printed); the run funds the wallet from the DEV key
+    // a throw-away mnemonic is generated into .env on first use (never printed); the run funds the
+    // wallet from the DEV key
     const key = `WALLET_MNEMONIC_${w.toUpperCase()}`;
     if (!env[key]) env[key] = ensureMnemonic(key);
     if (LATEST) continue; // downloaded when the wallet's browser starts
@@ -102,9 +116,13 @@ function ensureBuild() {
   if (r.status !== 0 || !existsSync(idx)) skip(`the app build failed: ${(r.stdout + r.stderr).slice(-400)}`);
 }
 
-// ------------------------------------------------------------------------------------------------ browsers
+// ------------------------------------------------------------------------------------------------
+// browsers
 
-/** The browser context of one wallet: the extension in a fresh persistent profile (TN10), or a plain context with the mock wallet. */
+/**
+ * The browser context of one wallet: the extension in a fresh persistent profile (TN10), or a plain
+ * context with the mock wallet.
+ */
 async function walletContext(name, drv, mockBrowser) {
   if (MOCK) {
     const ctx = await mockBrowser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -120,8 +138,9 @@ async function walletContext(name, drv, mockBrowser) {
 }
 
 /**
- * The counterparty of the market scenario: the DEV key (TN10) or the mock `maker` key, driven through the same app in its OWN browser with an
- * in-page signer (src/testing/mock-wallets.ts, enabled by `features.test`, which only an injected config can switch on). Test money only.
+ * The counterparty of the market scenario: the DEV key (TN10) or the mock `maker` key, driven
+ * through the same app in its OWN browser with an in-page signer (src/testing/mock-wallets.ts,
+ * enabled by `features.test`, which only an injected config can switch on). Test money only.
  */
 function counterpartyFactory({ env, mock, server, appConfig, mockBrowser }) {
   const secret = MOCK ? mock.secrets[MOCK_KEY_OF.dev] : env.DEV_PRIVATE_KEY;
@@ -129,7 +148,8 @@ function counterpartyFactory({ env, mock, server, appConfig, mockBrowser }) {
   return async () => {
     const browser = mockBrowser ?? (await chromium.launch({ headless: true, executablePath: process.env.KOB_CHROME_PATH || undefined }));
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    // on TN10 the in-page signer has no node of its own to look inputs up on (its KasWare 0.11.5 input check asks the mock's HTTP node)
+    // on TN10 the in-page signer has no node of its own to look inputs up on (its KasWare 0.11.5
+    // input check asks the mock's HTTP node)
     const drv = walletDriver('kasware', env, { mock: { secretKey: secret.toLowerCase(), config: MOCK ? {} : { checkInputs: false } } });
     drv.label = 'counterparty (DEV key, in-page signer)';
     await drv.setup(ctx);
@@ -146,7 +166,8 @@ function counterpartyFactory({ env, mock, server, appConfig, mockBrowser }) {
   };
 }
 
-// ------------------------------------------------------------------------------------------------ one wallet
+// ------------------------------------------------------------------------------------------------
+// one wallet
 
 async function runWallet(name, env, node, server, { mock, mockBrowser, indexerUrl }) {
   const drv = MOCK ? walletDriver(name, env, { mock: { secretKey: mock.secrets[MOCK_KEY_OF[name]] } }) : walletDriver(name, env);
@@ -160,7 +181,8 @@ async function runWallet(name, env, node, server, { mock, mockBrowser, indexerUr
     indexerUrl,
     nodeUrl: MOCK ? mock.url : env.NODE_WS || TN10_NODE,
     registryUrl: REGISTRY_PATH,
-    // kastle is optional in the app; `test` exposes the SDK to the in-page mock wallets (only in --mock)
+    // kastle is optional in the app; `test` exposes the SDK to the in-page mock wallets (only in
+    // --mock)
     features: { kastle: true, test: MOCK },
   };
   let rc = null;
@@ -198,8 +220,9 @@ async function runWallet(name, env, node, server, { mock, mockBrowser, indexerUr
       server.setRegistry(reg);
       writeJson(`registry-tn10.test.${name}.json`, reg);
       if (MOCK) {
-        // the mock (indexer and node in one process) books orders only for tokens it knows: it learns the issued tokens as the real indexer
-        // learns them from its registry. A real node needs nothing of the kind.
+        // the mock (indexer and node in one process) books orders only for tokens it knows: it
+        // learns the issued tokens as the real indexer learns them from its registry. A real node
+        // needs nothing of the kind.
         for (const t of [rc.token, rc.tokenB, ...rc.extraTokens].filter(Boolean)) {
           const e = t.registryEntry;
           await mock.registerToken({ ticker: e.ticker, covenant_id: e.covenant_id, program: e.template_id === 'kcc20-ref-3x3' ? 'KCC20Ref' : 'KCC20PublicMint', extension_commitment: e.extension_commitment, decimals: e.decimals, template_id: e.template_id, standing: 'official' });
@@ -219,7 +242,8 @@ async function runWallet(name, env, node, server, { mock, mockBrowser, indexerUr
       rc.token = saved.token;
       rc.tokenB = saved.tokenB ?? null;
       if (withPair && !rc.tokenB) throw new Error('--skip-issue: the saved run has no token B for the pair scenario (run once without --skip-issue)');
-      // the fresh browser profile has no tracker: restore the token UTXOs / records the previous run knew (the app re-verifies every one on the node)
+      // the fresh browser profile has no tracker: restore the token UTXOs / records the previous
+      // run knew (the app re-verifies every one on the node)
       await h.page.evaluate((ls) => { for (const [k, v] of Object.entries(ls ?? {})) localStorage.setItem(k, v); }, saved.trackerLS);
       await setRegistry();
     } else {
@@ -265,7 +289,8 @@ async function runWallet(name, env, node, server, { mock, mockBrowser, indexerUr
   return result;
 }
 
-// ------------------------------------------------------------------------------------------------ main
+// ------------------------------------------------------------------------------------------------
+// main
 
 function summarize(results) {
   const rows = [];

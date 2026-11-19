@@ -1,5 +1,6 @@
-// Static server of the REAL-wallet run: serves the built app (dist-real/) on http://localhost:<port> (a secure context, so wallet extensions inject
-// their providers) plus a mutable in-memory TN10 test registry at /registry-tn10.test.json. Nothing runs on import.
+// Static server of the REAL-wallet run: serves the built app (dist-real/) on
+// http://localhost:<port> (a secure context, so wallet extensions inject their providers) plus a
+// mutable in-memory TN10 test registry at /registry-tn10.test.json. Nothing runs on import.
 import http from 'node:http';
 import { once } from 'node:events';
 import { createReadStream, statSync } from 'node:fs';
@@ -21,7 +22,10 @@ const TYPES = {
   '.map': 'application/json',
 };
 
-/** Serves `root` on 127.0.0.1 (localhost); `registry` is the JSON object served at REGISTRY_PATH, replaceable through `setRegistry`. */
+/**
+ * Serves `root` on 127.0.0.1 (localhost); `registry` is the JSON object served at REGISTRY_PATH,
+ * replaceable through `setRegistry`.
+ */
 export async function startAppServer({ root = DIST_REAL, port = 0, registry = { schema_version: 1, network: 'testnet-10', templates: [], tokens: [] } } = {}) {
   let registryJson = registry;
   const base = resolve(root);

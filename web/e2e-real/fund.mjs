@@ -1,5 +1,6 @@
-// Funds TN10 addresses from the DEV key (a plain P2PK tx v1 with computeBudget, signed with the official SDK). Used by the real-wallet run;
-// the DEV key comes from web/e2e-real/.env (gitignored: DEV_PRIVATE_KEY, NODE_WS) or the environment, never from the repo.
+// Funds TN10 addresses from the DEV key (a plain P2PK tx v1 with computeBudget, signed with the
+// official SDK). Used by the real-wallet run; the DEV key comes from web/e2e-real/.env (gitignored:
+// DEV_PRIVATE_KEY, NODE_WS) or the environment, never from the repo.
 //   node e2e-real/fund.mjs <address> <kas> [<address> <kas> ...]
 import { createRequire } from 'node:module';
 import { existsSync, readFileSync } from 'node:fs';
@@ -30,7 +31,10 @@ export function loadSdk() {
   return require(join(HERE, '..', 'vendor', 'kaspa-node', 'kaspa.js'));
 }
 
-/** Sends `outputs` ([{address, kas}]) from the dev key in one transaction; resolves with the txid once the first output is visible. */
+/**
+ * Sends `outputs` ([{address, kas}]) from the dev key in one transaction; resolves with the txid
+ * once the first output is visible.
+ */
 export async function fund(outputs, { env = loadRealEnv(), log = console.log } = {}) {
   const k = loadSdk();
   if (!env.DEV_PRIVATE_KEY) throw new Error('DEV_PRIVATE_KEY missing (web/e2e-real/.env)');
