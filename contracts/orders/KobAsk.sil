@@ -4,8 +4,10 @@ pragma silverscript ^0.1.0;
 //
 // This is the base order of the family. The other orders refer to it for the
 // stray guard, the positional rule, IOC/FOK, the price formulas and rounding.
-// The KRON version is kron/KobAskKron.sil. The specification, with the
-// rounding proof, is docs/spec/order-types.md.
+// The KRON version is kron/KobAskKron.sil. The specification is
+// docs/spec/order-types.md. Its section "Amounts, prices and rounding" has
+// the rounding proof, and "Common semantics" the custody and positional
+// rules.
 //
 // Entries:
 //   settle(nb, tokenIn, tokOut, t), with n = int(nb)

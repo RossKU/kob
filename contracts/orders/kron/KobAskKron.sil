@@ -4,7 +4,8 @@ pragma silverscript ^0.1.0;
 //
 // This is the KRON version of contracts/orders/KobAsk.sil, with the same
 // entries and the same rules. This header lists the differences.
-// contracts/orders/kron/README.md describes the family.
+// contracts/orders/kron/README.md describes the family, and the
+// specification is docs/spec/order-types.md.
 //
 // Token codec. The KRON state is 46 B at template offset 0, with
 // owner[1..33), id_type[34], amount[36..44) and is_minter[45]. It replaces
