@@ -3,10 +3,12 @@
 //
 // The SDK asks them one after another, and a resolver that does not answer holds it for about
 // 20 s. So the Portfolio's balances could wait 20-40 s for the node. Here a few are asked at once,
-// and one more every STAGGER_MS. The first that names a wss:// node wins, and the others are
-// aborted. The node it names is no more trusted than the SDK's pick, because the resolvers are the
-// same. The pick is kept for the browser session (PICK_TTL_MS), so a reload connects at once. A
-// node that fails is forgotten.
+// and one more every STAGGER_MS. Once one names a wss:// node, the others already asked get
+// COLLECT_MS to answer too, and the rest are aborted. A node named by two or more resolvers is
+// taken, otherwise one of the nodes named, at random. So the fastest resolver does not decide
+// alone: a hostile one that answers at once wins no more often than the SDK's own pick. The pick
+// is kept for the browser session (PICK_TTL_MS), so a reload connects at once. A node that fails
+// is forgotten.
 //
 // A failed node is also remembered for FAILED_TTL_MS, because the resolvers often name the same
 // dead node again. A resolver that names one is passed over and the others are asked. The node is
@@ -25,6 +27,8 @@ export const PUBLIC_RESOLVERS: readonly string[] = [
 export const START_AT_ONCE = 4;
 /** Then one more every this long while none has answered. */
 export const STAGGER_MS = 300;
+/** After the first node named, how long the other resolvers asked may still answer. */
+export const COLLECT_MS = 300;
 /** One resolver's answer is given up after this long. */
 export const RESOLVER_TIMEOUT_MS = 4_000;
 /** How long a picked node is reused within this browser session. */
@@ -60,6 +64,7 @@ export interface PickerOptions {
   random?: () => number;
   startAtOnce?: number;
   staggerMs?: number;
+  collectMs?: number;
   timeoutMs?: number;
 }
 
@@ -92,6 +97,7 @@ export function createPublicNodePicker(o: PickerOptions = {}): PublicNodePicker 
   const random = o.random ?? Math.random;
   const atOnce = o.startAtOnce ?? START_AT_ONCE;
   const stagger = o.staggerMs ?? STAGGER_MS;
+  const collect = o.collectMs ?? COLLECT_MS;
   const timeout = o.timeoutMs ?? RESOLVER_TIMEOUT_MS;
   let memory: { network: string; url: string; at: number } | null = null;
   // failed node -> when it may be picked again
@@ -143,15 +149,25 @@ export function createPublicNodePicker(o: PickerOptions = {}): PublicNodePicker 
       // a node that failed lately: used only if no resolver names another
       let fallback: string | null = null;
       let timer: ReturnType<typeof setInterval> | null = null;
+      // the nodes named so far, with how many resolvers named each, in the order first named
+      const named = new Map<string, number>();
+      let collecting: ReturnType<typeof setTimeout> | null = null;
       const finish = (url: string | null) => {
         if (done) return;
         done = true;
         if (timer) clearInterval(timer);
+        if (collecting) clearTimeout(collecting);
         for (const c of ctls) c.abort();
         resolve(url);
       };
+      // a node two resolvers agree on, otherwise one of those named, at random
+      const decide = () => {
+        const most = Math.max(...named.values());
+        const pool = [...named].filter(([, n]) => n === most).map(([u]) => u);
+        finish(pool[Math.min(pool.length - 1, Math.floor(random() * pool.length))]!);
+      };
       const launch = () => {
-        if (done || next >= order.length) return;
+        if (done || collecting || next >= order.length) return;
         const base = order[next++]!.replace(/\/+$/, '');
         const ctl = new AbortController();
         ctls.push(ctl);
@@ -164,9 +180,18 @@ export function createPublicNodePicker(o: PickerOptions = {}): PublicNodePicker 
           .then((url) => {
             clearTimeout(t);
             open--;
-            if (url && !isFailed(url)) return finish(url);
-            if (url) fallback ??= url;
-            if (open === 0 && next >= order.length) finish(fallback);
+            if (done) return;
+            if (url && !isFailed(url)) {
+              named.set(url, (named.get(url) ?? 0) + 1);
+              // the first node named: no more resolvers are started, those asked get COLLECT_MS
+              if (!collecting) {
+                if (timer) clearInterval(timer);
+                collecting = setTimeout(decide, collect);
+              }
+            } else if (url) fallback ??= url;
+            if (collecting) {
+              if (open === 0) decide();
+            } else if (open === 0 && next >= order.length) finish(fallback);
             else launch(); // a failed resolver, or one naming a failed node, hands its turn on at once
           });
       };

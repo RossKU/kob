@@ -59,6 +59,40 @@ describe('public node picker', () => {
     expect(f.aborted).toEqual(expect.arrayContaining(['a.example', 'b.example']));
   });
 
+  it('the fastest resolver does not decide alone: a node two resolvers name wins over one named first', async () => {
+    const EVIL = 'wss://evil.example/kaspa/testnet-10/wrpc/borsh';
+    const delays: Record<string, number> = { 'a.example': 1, 'b.example': 40, 'c.example': 60 };
+    const replies: Record<string, Reply> = { 'a.example': { url: EVIL }, 'b.example': { url: NODE }, 'c.example': { url: NODE }, 'd.example': 'hang' };
+    const f = fakeFetch(replies);
+    const slow = (url: string, init: { signal: AbortSignal }) => new Promise<{ ok: boolean; json(): Promise<unknown> }>((resolve, reject) => {
+      const host = new URL(url).host;
+      setTimeout(() => f.fetch(url, init).then(resolve, reject), delays[host] ?? 0);
+    });
+    const p = createPublicNodePicker({ fetch: slow, resolvers: R, storage: null, random: () => 0.5, startAtOnce: 4, staggerMs: 1_000, collectMs: 200 });
+    await expect(p.pick('testnet-10')).resolves.toBe(NODE);
+    // no resolver is started after the first answer
+    expect(f.asked).toHaveLength(4);
+    expect(f.aborted).toContain('d.example');
+  });
+
+  it('with no agreement, the node is one of those named within the window, at random, not always the first', async () => {
+    const OTHER = 'wss://node-2.example/kaspa/testnet-10/wrpc/borsh';
+    const picks = new Set<string | null>();
+    for (const r of [0, 0.99]) {
+      // two draws order the two resolvers, the third picks the node
+      let draws = 0;
+      const random = () => (draws++ < 2 ? 0.5 : r);
+      const f = fakeFetch({ 'a.example': { url: NODE }, 'b.example': { url: OTHER } });
+      const timed = (url: string, init: { signal: AbortSignal }) => {
+        const later = new URL(url).host === 'b.example';
+        return new Promise<{ ok: boolean; json(): Promise<unknown> }>((resolve, reject) => setTimeout(() => f.fetch(url, init).then(resolve, reject), later ? 30 : 0));
+      };
+      const p = createPublicNodePicker({ fetch: timed, resolvers: R.slice(0, 2), storage: null, random, startAtOnce: 2, collectMs: 200 });
+      picks.add(await p.pick('testnet-10'));
+    }
+    expect(picks).toEqual(new Set([NODE, OTHER]));
+  });
+
   it('asks the next resolver when one fails, and gives null when none names a node', async () => {
     const f = fakeFetch({ 'a.example': 'error', 'b.example': 'bad' });
     const p = createPublicNodePicker({ fetch: f.fetch, resolvers: R, storage: null, startAtOnce: 1, staggerMs: 10_000 });
