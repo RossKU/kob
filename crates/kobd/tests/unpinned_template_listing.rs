@@ -96,16 +96,29 @@ async fn a_resting_ask_of_an_unpinned_template_leaves_every_book_list_and_count(
     assert_eq!(seen(&c, &cov), (false, false, false, false, false, 0), "another template: listed nowhere, not found by id");
 }
 
-/// The database of an older build: the order recorded under `tpl` (a template hash of the same layout).
-fn record_under(c: &Ctx, cov: &Hash32, tpl: [u8; 32]) {
+/// The database of an older build: the order (state `s`) created under the retired template `r`.
+///
+/// Both what an older build stored change: the template the order is recorded under, and the
+/// script of its UTXO, which that template's script hashed to. The indexer reads a spend of a
+/// tracked output against the stored script (K-H1), so a retired cancel only matches it.
+fn record_under(c: &Ctx, cov: &Hash32, r: &kob_protocol::retired::RetiredTemplate, s: &AnyState) {
+    let spk = kobd::script::p2sh_spk(&r.redeem(&r.encode_state(s).unwrap()).unwrap());
     let g = c.hs.ingest.lock().unwrap();
-    kobd::indexer::ids::intern(g.conn(), &tpl).unwrap();
+    kobd::indexer::ids::intern(g.conn(), &r.hash).unwrap();
     g.conn()
         .execute(
             "UPDATE orders SET template_id = (SELECT id FROM ids WHERE h = ?1) WHERE covenant_id = ?2",
-            rusqlite::params![&tpl[..], &cov.0[..]],
+            rusqlite::params![&r.hash[..], &cov.0[..]],
         )
         .unwrap();
+    let n = g
+        .conn()
+        .execute(
+            "UPDATE order_utxos SET spk = ?1 WHERE spent_block IS NULL AND order_id = (SELECT id FROM orders WHERE covenant_id = ?2)",
+            rusqlite::params![&spk, &cov.0[..]],
+        )
+        .unwrap();
+    assert_eq!(n, 1, "the order's one unspent UTXO");
 }
 
 /// An order under a RETIRED template of the cancel-only table (`kob_protocol::retired`, the bid re-version's `KobBid` b995661f):
@@ -116,12 +129,12 @@ async fn an_order_of_a_retired_template_is_served_by_id_only_and_marked_cancel_o
     let c = Ctx::new();
     let b = bid(MAKER_A, 245_000_000);
     let value = b.escrow(10 * WHOLE, 3).unwrap() as u64;
-    let create = c.w.create_tx(AnyState::KobBid(b), value, MAKER_A, 0);
+    let create = c.w.create_tx(AnyState::KobBid(b.clone()), value, MAKER_A, 0);
     c.push(&[&create]).await;
     let cov = c.w.cov(&create, 0);
     assert!(reads::order(c.hs.ingest.lock().unwrap().conn(), &read_ctx(&c), &cov).unwrap().unwrap().cancel_only.is_none());
     let retired = kob_protocol::retired::retired().iter().find(|r| r.label() == "KobBid b995661f").unwrap();
-    record_under(&c, &cov, retired.hash);
+    record_under(&c, &cov, retired, &AnyState::KobBid(b));
     let offered = |c: &Ctx| {
         let g = c.hs.ingest.lock().unwrap();
         let ids = |v: Vec<kobd::matcher::book::ListedOrder>| v.iter().any(|o| o.id() == cov.0);
@@ -158,7 +171,7 @@ async fn the_makers_cancel_of_a_retired_template_order_reads_cancelled() {
         let create = c.w.create_tx(s.clone(), value, MAKER_A, 0);
         c.push(&[&create]).await;
         let cov = c.w.cov(&create, 0);
-        record_under(&c, &cov, r.hash);
+        record_under(&c, &cov, r, &s);
         let cancel = c.w.sign(&Action::CancelOrder(CancelOrder {
             retired: Some(r.hash),
             prefund: None,
