@@ -4,7 +4,8 @@
 //
 // Every check of the pre-sign decoder runs silently before the user is asked:
 // - the wallet's account and network;
-// - every input re-read on the node;
+// - every input re-read on the node, except the wallet's own plain KAS coins, whose signature
+//   commits their values (kob/node-verify.ts `ownPlainInputs`);
 // - the decoder's reading of the built transaction compared with what the planner claims
 //   (`expected`), so a planner, builder or wasm bug can never pass;
 // - the identity of an open-list token;
@@ -20,7 +21,7 @@ import { spkStringToAddress } from '../../data/kaspa-sdk';
 import { t } from '../../i18n';
 import { issueText } from '../../i18n/issue-text';
 import { decodeSigning, type ExpectedSigning, type SigningSummary } from '../../kob/decode';
-import { confirmInputsOnNode, outpointKey } from '../../kob/node-verify';
+import { confirmInputsOnNode, outpointKey, ownPlainInputs } from '../../kob/node-verify';
 import type { Clock } from '../../kob/plan-types';
 import type { PlacementRecord } from '../../kob/records';
 import { withExtraToken, type TokenInfo, type TokenRegistry } from '../../kob/registry';
@@ -161,7 +162,8 @@ function pendingSpent(built: BuiltTx): Blocked | null {
 /**
  * The checks of a transaction before the wallet is asked to sign it. It returns the job to sign
  * (the caller's gate may have replaced its plan), or the first finding that stops it. It never
- * throws for a finding, and a failing node read is a finding (`inputs-unavailable`).
+ * throws for a finding, and a failing node read is a finding (`inputs-unavailable`). A transaction
+ * that spends only the wallet's own plain KAS coins does not ask the node.
  */
 export async function checkBeforeSigning(services: Services, wallet: WalletFacts, job: SendJob): Promise<{ blocked: Blocked } | { job: SendJob; decoded: SigningSummary }> {
   const early = walletBlock(services, wallet, job.built) ?? pendingSpent(job.built);
@@ -169,7 +171,7 @@ export async function checkBeforeSigning(services: Services, wallet: WalletFacts
   // The change of a transaction this page submitted is not on the node's list until a block holds
   // it. The page knows its facts, because it built it.
   const nodeFacts = (b: BuiltTx) =>
-    confirmInputsOnNode(services.node, b.tx.inputs, inputAddressOf(services)).then((r) => {
+    confirmInputsOnNode(services.node, b.tx.inputs, inputAddressOf(services), ownPlainInputs(b)).then((r) => {
       for (const i of b.tx.inputs) {
         const k = outpointKey(i.transactionId, i.index);
         const own = r.facts.has(k) ? null : pendingSpends.factOf(i.transactionId, i.index);
@@ -178,8 +180,8 @@ export async function checkBeforeSigning(services: Services, wallet: WalletFacts
       return r.facts;
     }, () => null);
 
-  // The KAS value of every input re-read from the node (the decoder flags any input the node does
-  // not confirm), with the caller's gate alongside.
+  // The KAS value of every covenant or token input re-read from the node (the decoder flags any
+  // the node does not confirm), with the caller's gate alongside.
   const [facts0, gate] = await Promise.all([nodeFacts(job.built), job.gate ?? Promise.resolve(null)]);
   if (gate && 'stop' in gate) return { blocked: gate.stop };
   let final: SendJob = job;

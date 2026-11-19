@@ -11,7 +11,7 @@ import { MockNode } from '../testing/mock-node';
 import { loadKaspaSdkNode } from '../data/kaspa-sdk.node';
 import { spkStringToAddress } from '../data/kaspa-sdk';
 import { MAKER_PK, MAKER_SK, OTHER_SK } from '../testing/token-fixtures';
-import { buildCancel, buildSend, kob } from '../testing/wallet-fixtures';
+import { buildBid, buildCancel, buildSend, kob } from '../testing/wallet-fixtures';
 import type { WalletAdapter } from './types';
 import type { BuiltTx } from '../kob/types';
 import type { NodeUtxo } from '../data/node';
@@ -265,6 +265,38 @@ describe('signAndSubmit: what the node says is checked', () => {
     const down = seeded(built).setUnavailable(true);
     const lost = await signAndSubmit({ kob, node: down, adapter: kasware(), built, network: NET, inputAddress: toAddress }).catch((e) => e);
     expect(lost).toMatchObject({ stage: 'signing', code: 'inputs-unconfirmed' });
+  });
+
+  it("the wallet's own plain KAS coins are not read: a node that cannot be asked, or lists none of them, does not stop the signing", async () => {
+    // a buy order's creation spends only plain P2PK coins of the maker, whose signature commits their values
+    const built = buildBid();
+    for (const read of [() => Promise.reject(new Error('node down')), () => Promise.resolve([])]) {
+      const n = seeded(built);
+      n.getUtxosByAddresses = read;
+      const res = await signAndSubmit({ kob, node: n, adapter: kasware(), built, network: NET, inputAddress: toAddress });
+      expect(res.txid).toBe(built.tx.id);
+    }
+    const n = seeded(built);
+    await signAndSubmit({ kob, node: n, adapter: kasware(), built, network: NET, inputAddress: toAddress });
+    expect(n.utxoQueries).toHaveLength(0);
+  });
+
+  it('in a mixed transaction only the covenant inputs are read: a missing own coin passes, a missing token input stops it', async () => {
+    const built = buildSend();
+    const funding = built.tx.inputs.findIndex((i) => !i.utxo.covenantId);
+    const fundingAddress = toAddress(built.tx.inputs[funding]!.utxo.scriptPublicKey);
+    const without = (pred: (k: number) => boolean) => {
+      const n = seeded(built);
+      const read = n.getUtxosByAddresses.bind(n);
+      n.getUtxosByAddresses = async (a: string[]) => (await read(a)).filter((u) => !built.tx.inputs.some((i, k) => pred(k) && i.transactionId === u.transactionId && i.index === u.index));
+      return n;
+    };
+    const ok = without((k) => k === funding);
+    const res = await signAndSubmit({ kob, node: ok, adapter: kasware(), built, network: NET, inputAddress: toAddress });
+    expect(res.txid).toBe(built.tx.id);
+    expect(ok.utxoQueries.flat()).not.toContain(fundingAddress);
+    const bad = await signAndSubmit({ kob, node: without((k) => k !== funding), adapter: kasware(), built, network: NET, inputAddress: toAddress }).catch((e) => e);
+    expect(bad).toMatchObject({ stage: 'signing', code: 'inputs-changed' });
   });
 });
 

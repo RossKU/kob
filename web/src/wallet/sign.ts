@@ -18,7 +18,7 @@ import type { KobWasm } from '../kob/wasm';
 import type { NodeApi, NodeUtxo } from '../data/node';
 import { NodeError, describeNodeError } from '../data/node-error';
 import { markOwnAction } from '../data/fresh';
-import { confirmInputsOnNode } from '../kob/node-verify';
+import { confirmInputsOnNode, ownPlainInputs } from '../kob/node-verify';
 import { normalizeNetwork, spkStringToAddress, type KaspaSdk } from '../data/kaspa-sdk';
 import type { LockHint, SignerNote } from '../signer/protocol';
 import { WalletError, type WalletAdapter, type LiveSigning } from './types';
@@ -96,13 +96,14 @@ export interface SignAndSubmitArgs {
   /**
    * Maps a script public key to an address of the configured network.
    *
-   * When given, every input of the transaction is re-read from the node right before the wallet is
-   * asked to sign. Any input whose amount, script or covenant id the node does not confirm aborts
-   * the flow. The KAS of unsigned covenant inputs is committed by no signature, so the fee shown
-   * must be over chain values.
+   * When given, every covenant or token input of the transaction is re-read from the node right
+   * before the wallet is asked to sign. Any whose amount, script or covenant id the node does not
+   * confirm aborts the flow. The KAS of unsigned covenant inputs is committed by no signature, so
+   * the fee shown must be over chain values. The wallet's own plain KAS coins are not read: the
+   * signature commits their values (kob/node-verify.ts `ownPlainInputs`).
    *
-   * The order send (ui/confirm/send.ts) omits it. Its own pre-sign check has just read every input
-   * on the node, and the decoder stops any it does not confirm. Tests with synthetic chains omit it
+   * The order send (ui/confirm/send.ts) omits it. Its own pre-sign check has just read the same
+   * inputs on the node, and the decoder stops any it does not confirm. Tests with synthetic chains omit it
    * too.
    */
   inputAddress?: (spk: string) => string;
@@ -249,9 +250,11 @@ export async function assertWalletMatches(adapter: WalletAdapter, built: BuiltTx
 }
 
 async function assertInputsOnNode(node: NodeApi, built: BuiltTx, toAddress: (spk: string) => string): Promise<void> {
+  const skip = ownPlainInputs(built);
+  if (skip.size === built.tx.inputs.length) return;
   let res;
   try {
-    res = await confirmInputsOnNode(node, built.tx.inputs, toAddress);
+    res = await confirmInputsOnNode(node, built.tx.inputs, toAddress, skip);
   } catch (e) {
     const err = e instanceof NodeError ? e : describeNodeError(e);
     throw new SignFlowError('signing', err, `The node could not confirm the inputs of this transaction (${err.message}). Nothing was sent.`, 'inputs-unconfirmed');
@@ -265,7 +268,8 @@ async function assertInputsOnNode(node: NodeApi, built: BuiltTx, toAddress: (spk
 /**
  * The visibility gate of one transaction (visibility.ts). An extension wallet is asked only once
  * every input that spends an output of a transaction this page sent recently is visible to its own
- * node. It does nothing for the private-key signer and for inputs older than that.
+ * node. It does nothing for the private-key signer and for inputs older than that. It is a wallet
+ * need, not a safety check: KasWare refuses an input its node does not list.
  */
 async function assertVisibleToWallet(a: SignAndSubmitArgs, built: BuiltTx): Promise<void> {
   if (!needsVisibility(a.adapter) || freshInputs(built.tx).length === 0) return;

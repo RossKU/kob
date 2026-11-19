@@ -8,6 +8,9 @@ import { parseRegistry } from './registry';
 import type { ActionRequest, BuiltTx, Hex, Kcc20State, TokenUtxo } from './types';
 import { planMerge, type MergeToken } from './merge';
 import { loadKobNode } from './wasm.node';
+import type { NodeInputFact } from './node-verify';
+import { MAKER_PK } from '../testing/token-fixtures';
+import { buildBid, buildSend } from '../testing/wallet-fixtures';
 import { MAKER, OTHER, TOKEN, goldenRequest, keyUtxo, nodeFactsOf, placeGolden, tokenUtxo, tradableRegistryJson } from '../testing/chain-fixtures';
 
 const kob = loadKobNode();
@@ -61,6 +64,39 @@ describe('decodeSigning flags every input the node does not confirm', () => {
   it('without node facts the decode still works but says the amounts were not checked', () => {
     const s = decodeSigning({ kob, built: honest.built!, maker: MAKER.pk, registry, expected: honest.expected });
     expect(s.warnings.map((w) => w.code)).toContain('inputs-unverified');
+  });
+
+  it("does not compare the wallet's own plain KAS coins, whose signature commits their values; the token inputs still are", () => {
+    // a token send: two token inputs and the wallet's P2PK funding coin
+    const built = buildSend();
+    const own = built.tx.inputs.findIndex((i, k) => built.plans[k]!.kind === 'p2pk' && !i.utxo.covenantId);
+    expect(own).toBeGreaterThanOrEqual(0);
+    const keyOf = (k: number) => `${built.tx.inputs[k]!.transactionId}:${built.tx.inputs[k]!.index}`;
+    const decode = (facts: Map<string, NodeInputFact>) => decodeSigning({ kob, built, maker: MAKER_PK, registry, nodeInputs: facts }).blocking.filter((b) => b.code === 'input-unconfirmed');
+    const facts = new Map(nodeFactsOf(built));
+    expect(decode(facts)).toEqual([]);
+    // the node lists no own coin, or holds another amount on it: not compared
+    const noOwn = new Map(facts);
+    noOwn.delete(keyOf(own));
+    expect(decode(noOwn)).toEqual([]);
+    const otherAmount = new Map(facts);
+    otherAmount.set(keyOf(own), { ...facts.get(keyOf(own))!, amount: 1n });
+    expect(decode(otherAmount)).toEqual([]);
+    // a token input the node does not list, or holds with another amount, still blocks
+    const tok = built.tx.inputs.findIndex((i) => i.utxo.covenantId);
+    const noTok = new Map(noOwn);
+    noTok.delete(keyOf(tok));
+    expect(decode(noTok).map((b) => b.input)).toEqual([tok]);
+    const lowTok = new Map(noOwn);
+    lowTok.set(keyOf(tok), { ...facts.get(keyOf(tok))!, amount: facts.get(keyOf(tok))!.amount - 1n });
+    expect(decode(lowTok).map((b) => b.input)).toEqual([tok]);
+  });
+
+  it('a transaction of only own plain KAS coins needs no node facts and says nothing about them', () => {
+    const built = buildBid();
+    const s = decodeSigning({ kob, built, maker: MAKER_PK, registry, nodeInputs: new Map() });
+    expect(s.blocking.map((b) => b.code)).not.toContain('input-unconfirmed');
+    expect(decodeSigning({ kob, built, maker: MAKER_PK, registry }).warnings.map((w) => w.code)).not.toContain('inputs-unverified');
   });
 });
 

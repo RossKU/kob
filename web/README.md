@@ -65,7 +65,7 @@ order ticket and balances (3 columns from 1200 px, 2 on tablets, stacked on phon
 * **Order button.** The ticket holds only the inputs (the amount box shows the balance it spends, "Available 988.41 KAS", a tap is Max; on
   the KAS/TOKEN view one line converts the KAS) and one button ("Buy Limit", "Sell Market order" ...). The button plans the order again from
   the state at the click with the node clock (read every 2 s in the background, projected to the click) and runs the pre-sign checks silently
-  (`src/ui/confirm/send.ts`: wallet account and network, every input re-read on the node, the built transaction decoded and compared with the
+  (`src/ui/confirm/send.ts`: wallet account and network, every covenant and token input re-read on the node, the built transaction decoded and compared with the
   plan, the re-check against the state at the click: a moved book is the order to sign as long as it keeps the terms shown); only a check that
   makes the order wrong or impossible stops it, with one line. Then the final confirmation, the one place with the order's details: the
   private-key signer's table, decoded from the transaction (`src/signer/summary.ts`: the net effect on the wallet, what is locked in
@@ -229,8 +229,10 @@ After connect the adapters listen for account and network changes (`WalletAdapte
 * **Node over indexer.** The KAS value of a covenant / token input (custody UTXO, strays) is committed by no signature, so it is never taken from the
   indexer: cancel / amend / cancel-all re-read the order, custody and strays from the NODE (`src/kob/node-verify.ts`, used by `snapshotFor`); an
   indexer answer the node does not confirm falls back to the node-resolved placement record, else nothing is built. The pre-sign checks re-read
-  every input of the transaction from the node too and `decodeSigning` blocks any input whose amount / script / covenant id differs
+  every covenant and token input of the transaction from the node too and `decodeSigning` blocks any whose amount / script / covenant id differs
   (`input-unconfirmed`); `signAndSubmit` repeats that check right before the wallet popup and compares the txid the node returns with the signed one.
+  The wallet's own plain KAS coins are not read there (`ownPlainInputs`): the signature commits their amount and script, so a wrong value only
+  makes the node refuse the transaction, and a node that cannot be reached does not stop a spend of them.
 * **No curation of tokens.** Token issuance is permissionless, so the UI shows no verified / official / pending-review labels, no "genesis verified" badge and
   no registry notes about who listed what. What it does show is technical: the token program family, the freeze / seize warnings (template
   `capabilities` from the registry, plus the indexer's `powers`, which can only add), the full covenant id with a copy button, and an `untradable` reason.

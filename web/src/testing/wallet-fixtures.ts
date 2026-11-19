@@ -9,6 +9,9 @@ export const kob = loadKobNode();
 /** KCC-20 send: inputs 0 (token leader) and 1 (delegator) are covenant inputs with the maker's owner witness, input 2 is P2PK funding. */
 export const buildSend = (): BuiltTx => kob.build(sendTokensRequest());
 
+/** A buy order's creation: every input is a plain P2PK coin of the maker. */
+export const buildBid = (): BuiltTx => kob.build(goldenRequest('create.bid', MAKER_PK));
+
 /** Cancel of a sell order: input 0 is the KobAsk covenant input (`cancel(sig)`), input 1 the custody token (covenant-id witness, unsigned). */
 export const buildCancel = (): BuiltTx => kob.build(goldenRequest('cancel.ask', MAKER_PK));
 

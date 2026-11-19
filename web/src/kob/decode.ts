@@ -62,7 +62,7 @@ import type {
   TokenProgram, TokenState, TxInputJson, TxOutputJson, U64,
 } from './types';
 import type { NodeInputFacts } from './node-verify';
-import { outpointKey } from './node-verify';
+import { outpointKey, ownPlainInputs } from './node-verify';
 import { CODEC_OF_PROGRAM, isTokenProgram } from './programs.generated';
 import { KCC20_SCHEME_COVID, KCC20_SCHEME_P2SH, PLAIN_BORROW, borrowKeyOf, extensionOfState, isCovenantOwned, isKcc20State, isKeyOwned, ownerTypeOf, programOfHash } from './token-state';
 import { recoverSweeps, type RecoveredSweep } from './sweep';
@@ -554,8 +554,9 @@ export interface DecodeInput {
    * What the NODE says about the outpoints this tx spends (`confirmInputsOnNode`, keyed
    * `txid:index`). Every input's amount, script and covenant id must equal it: the wallet's
    * signature commits only to the inputs it signs, so an indexer-fed amount on a covenant / token
-   * input would otherwise make the fee shown here fiction. Without it (`undefined`) the tx is
-   * decoded but flagged `inputs-unverified`.
+   * input would otherwise make the fee shown here fiction. The wallet's own plain KAS coins
+   * (`ownPlainInputs`) are not compared: their signature commits their values. Without it
+   * (`undefined`) the tx is decoded but flagged `inputs-unverified` when it has another input.
    */
   nodeInputs?: NodeInputFacts | null;
   /**
@@ -930,15 +931,18 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     ...inputs.filter((d) => d.token?.escrowOf && takenCovs.has(d.token.escrowOf)).map((d) => d.index),
   ]);
 
-  // every input's KAS value, script and covenant id must be what the node holds for that outpoint
+  // every input's KAS value, script and covenant id must be what the node holds for that outpoint,
+  // except the wallet's own plain KAS coins, whose signature commits their values
+  const ownPlain = ownPlainInputs(built);
   if (input.nodeInputs) {
     tx.inputs.forEach((inp, i) => {
+      if (ownPlain.has(i)) return;
       const f = input.nodeInputs!.get(outpointKey(inp.transactionId, inp.index));
       if (!f) return add('input-unconfirmed', `input ${i}: the node does not confirm this UTXO (${shortId(inp.transactionId)}:${inp.index}); its amount cannot be trusted`, { input: i });
       if (f.amount !== big(inp.utxo.amount)) add('input-unconfirmed', `input ${i}: the transaction claims ${formatKas(big(inp.utxo.amount))} KAS but the node holds ${formatKas(f.amount)} KAS on that UTXO`, { input: i, params: { claimed: big(inp.utxo.amount), node: f.amount } });
       else if (f.scriptPublicKey !== inp.utxo.scriptPublicKey || (f.covenantId ?? null) !== (inp.utxo.covenantId ?? null)) add('input-unconfirmed', `input ${i}: the script or covenant id of the spent UTXO differs from what the node holds`, { input: i });
     });
-  } else {
+  } else if (ownPlain.size < tx.inputs.length) {
     add('inputs-unverified', 'the KAS values of the inputs were not checked against the node: the fee shown may be wrong');
   }
 

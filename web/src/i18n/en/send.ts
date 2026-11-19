@@ -20,7 +20,8 @@ export default {
   'send.accountChanged': 'The wallet account changed (planned for {planned}, now {now}). Nothing was sent; try again.',
   'send.networkMismatch': 'Wallet on {wallet}, app on {app}: switch the wallet network and try again.',
   'send.alreadySpending': 'Your last transaction already spends a coin of this one (it is on its way to a block). Nothing was sent; wait a few seconds and try again.',
-  'send.inputsUnavailable': 'The node could not confirm your coins. Nothing was sent; try again.',
+  // Only order and token coins are read on the node; the wallet's own KAS coins are not.
+  'send.inputsUnavailable': 'The node could not confirm the order or token coins this spends. Nothing was sent; try again.',
   'send.decodeFailed': 'The transaction could not be read back. Nothing was sent.',
   'send.checkFailed': 'The order could not be checked. Nothing was sent; try again.',
   // The heading of the red toast of a click that ended without its order (notify/failure-toast.ts),

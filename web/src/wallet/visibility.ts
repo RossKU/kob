@@ -24,6 +24,9 @@
 // seconds later succeeds (wallet/sign.ts `rejected-fresh`).
 //
 // The private-key signer (`inputPolicy: 'offline'`) signs what it is shown and skips all of this.
+//
+// This gate is a wallet need, not a safety check. The signature commits the values of the wallet's
+// own coins, so it is kept only because the wallet refuses an input its node does not list.
 import type { NodeApi } from '../data/node';
 import type { Hex, TxInputJson, TxJson } from '../kob/types';
 import type { WalletAdapter } from './types';

@@ -7,11 +7,16 @@
 // built, is re-read from the node by address and outpoint. The app takes amount, script and
 // covenant id from there. A UTXO the node does not know, or knows with another script or covenant
 // id, blocks the action.
+//
+// The wallet's own plain KAS coins are the exception (`ownPlainInputs`). The wallet's signature
+// commits each of their amounts and scripts, so a wrong value only makes the node refuse the
+// transaction. They are not read before signing, so a node that cannot be reached never stops a
+// spend of them.
 import type { NodeApi } from '../data/node';
 import type { OrderSnapshot } from './cancel';
 import { SnapshotError, ownTokenFacts, unboundCustodyToken } from './cancel';
 import { curveFactsOf, custodiesOf } from './order-facts';
-import type { Hex, TokenProgram, TokenState, TokenUtxo, TxInputJson } from './types';
+import type { BuiltTx, Hex, TokenProgram, TokenState, TokenUtxo, TxInputJson } from './types';
 import type { KobWasm } from './wasm';
 
 /** What the node holds on one outpoint. */
@@ -25,6 +30,26 @@ export type NodeInputFacts = ReadonlyMap<string, NodeInputFact>;
 
 /** Returns the `txid:index` key of an outpoint. */
 export const outpointKey = (txid: string, index: number): string => `${txid}:${index}`;
+
+const P2PK_RE = /^0000 ?20([0-9a-f]{64})ac$/;
+
+/**
+ * The inputs of `built` that are the wallet's own plain KAS coins: no covenant id, a P2PK plan, the
+ * P2PK script of that key, and a SIGHASH_ALL signature of that key asked for on it. The signature
+ * commits the coin's amount and script, so these need no node read before signing. Every other
+ * input does.
+ */
+export function ownPlainInputs(built: Pick<BuiltTx, 'tx' | 'plans' | 'sign'>): Set<number> {
+  const out = new Set<number>();
+  built.tx.inputs.forEach((inp, i) => {
+    const plan = built.plans[i];
+    if (plan?.kind !== 'p2pk' || inp.utxo.covenantId) return;
+    if (P2PK_RE.exec(inp.utxo.scriptPublicKey)?.[1] !== plan.pubkey) return;
+    const req = built.sign.find((r) => r.inputIndex === i);
+    if (req && req.pubkey === plan.pubkey && req.sighashType === 1 && !req.redeemScript) out.add(i);
+  });
+  return out;
+}
 
 /** An outpoint together with the script it should hold, enough to find it on the node. */
 export interface OutpointRef {
@@ -63,11 +88,12 @@ export interface InputMismatch {
 
 /**
  * Compares the inputs of a transaction with node facts. Each must match in amount, script and
- * covenant id.
+ * covenant id. The inputs in `skip` are not compared.
  */
-export function inputMismatches(inputs: readonly TxInputJson[], facts: NodeInputFacts): InputMismatch[] {
+export function inputMismatches(inputs: readonly TxInputJson[], facts: NodeInputFacts, skip: ReadonlySet<number> = new Set()): InputMismatch[] {
   const out: InputMismatch[] = [];
   inputs.forEach((inp, index) => {
+    if (skip.has(index)) return;
     const f = facts.get(outpointKey(inp.transactionId, inp.index));
     if (!f) return void out.push({ index, reason: 'missing', detail: 'the node does not know this UTXO (spent, unconfirmed or invented)' });
     if (f.amount !== BigInt(inp.utxo.amount)) return void out.push({ index, reason: 'amount', detail: `claimed ${inp.utxo.amount} sompi, the node holds ${f.amount}` });
@@ -78,16 +104,19 @@ export function inputMismatches(inputs: readonly TxInputJson[], facts: NodeInput
 }
 
 /**
- * Fetches the facts of every input of a transaction and returns them with the mismatches. It throws
- * only when the node cannot be asked.
+ * Fetches the facts of the inputs of a transaction and returns them with the mismatches. The inputs
+ * in `skip` (`ownPlainInputs`) are neither read nor compared, and when every input is skipped the
+ * node is not asked. It throws only when the node cannot be asked.
  */
 export async function confirmInputsOnNode(
   node: Pick<NodeApi, 'getUtxosByAddresses'>,
   inputs: readonly TxInputJson[],
   spkToAddress: (spk: string) => string,
+  skip: ReadonlySet<number> = new Set(),
 ): Promise<{ facts: Map<string, NodeInputFact>; mismatches: InputMismatch[] }> {
-  const facts = await fetchNodeInputFacts(node, inputs.map((i) => ({ transactionId: i.transactionId, index: i.index, scriptPublicKey: i.utxo.scriptPublicKey })), spkToAddress);
-  return { facts, mismatches: inputMismatches(inputs, facts) };
+  const refs = inputs.flatMap((i, k) => (skip.has(k) ? [] : [{ transactionId: i.transactionId, index: i.index, scriptPublicKey: i.utxo.scriptPublicKey }]));
+  const facts = await fetchNodeInputFacts(node, refs, spkToAddress);
+  return { facts, mismatches: inputMismatches(inputs, facts, skip) };
 }
 
 // --- Snapshots ---

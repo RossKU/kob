@@ -352,9 +352,9 @@ export function useSend(): Sender {
         return ms;
       };
       try {
-        // There is no `inputAddress`. `checkBeforeSigning` has just re-read every input on the node
-        // (the decoder stops any it does not confirm), and a second read would only add a round
-        // trip before the wallet's popup.
+        // There is no `inputAddress`. `checkBeforeSigning` has just re-read every covenant or token
+        // input on the node (the decoder stops any it does not confirm), and a second read would
+        // only add a round trip before the wallet's popup.
         // `addressOf` is for an input spending the change of a transaction this page sent moments
         // ago (a ladder's next level, an order right after another). It waits until the wallet's
         // own node sees it (wallet/visibility.ts).

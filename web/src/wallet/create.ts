@@ -360,7 +360,8 @@ export async function finishCreation(a: FinishArgs): Promise<string> {
   const listed = async (): Promise<boolean> =>
     (await node.getUtxosByAddresses([address])).some((u) => u.transactionId === rec.prepTxid && u.index === 0 && BigInt(u.amount) === BigInt(out0.value));
 
-  // The preparation's output 0 must be on the node before the wallet is asked.
+  // The preparation's output 0 must be on the node before the wallet is asked. This wait is a
+  // wallet need, not a safety check: KasWare refuses a child of a parent its node never saw.
   let sentAt = rec.prepSentAt ?? rec.createdAt;
   if (!(await listed().catch(() => false))) {
     try {

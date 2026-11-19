@@ -82,7 +82,7 @@ describe('checkBeforeSigning', () => {
     expect(blockedBy(await checkBeforeSigning(servicesFor(built), wallet(), { ...job, gate: Promise.resolve(null) }))).toBeNull();
     const down = { getUtxosByAddresses: () => Promise.reject(new Error('node down')) };
     expect(blockedBy(await checkBeforeSigning(servicesFor(built, down), wallet(), job))?.code).toBe('inputs-unavailable');
-    // a node that does not hold the inputs: the decoder flags them (the KAS of covenant inputs is committed by no signature)
+    // a node that does not hold the token inputs: the decoder flags them (the KAS of covenant inputs is committed by no signature)
     expect(blockedBy(await checkBeforeSigning(servicesFor(null), wallet(), job))?.code).toBe('input-unconfirmed');
   });
 
@@ -104,18 +104,45 @@ describe('checkBeforeSigning', () => {
     expect(blockedBy(bad)?.code).toBe('expected-kas-locked');
   });
 
-  it('lets the next order spend the change of a transaction this page submitted, which the node lists only once a block holds it', async () => {
+  it("does not ask the node for the wallet's own plain KAS coins: a buy that spends only them passes with a node that is down or lists nothing", async () => {
     const plan = planOrder(ticketEnv(), buildIntent(form('limit', 'buy', { amount: '2', price: '2.3' }), CTX).intent!);
     const built = plan.built!;
+    expect(built.tx.inputs.every((i) => !i.utxo.covenantId)).toBe(true);
     const job = { built, expected: expectedFromPlan(plan) };
-    // the node does not list the coins yet
+    const asked: string[][] = [];
+    const down = { getUtxosByAddresses: (a: string[]) => (asked.push(a), Promise.reject(new Error('node down'))) };
+    expect(blockedBy(await checkBeforeSigning(servicesFor(null, down), wallet(), job))).toBeNull();
+    expect(asked).toEqual([]);
+    expect(blockedBy(await checkBeforeSigning(servicesFor(null), wallet(), job))).toBeNull();
+  });
+
+  it("still reads a sell's token inputs on the node: own KAS coins missing there pass, token inputs missing stop it", async () => {
+    const plan = planned();
+    const built = plan.built!;
+    const job = { built, expected: expectedFromPlan(plan) };
+    const tokenInputs = built.tx.inputs.filter((i) => i.utxo.covenantId);
+    expect(tokenInputs.length).toBeGreaterThan(0);
+    const node = new MockNode({ network: NET, addressOf: (spk) => spkStringToAddress(sdk, spk, NET) });
+    node.seedFromInputs({ ...built.tx, inputs: tokenInputs });
+    expect(blockedBy(await checkBeforeSigning(servicesFor(null, node), wallet(), job))).toBeNull();
+    // the node lists only the KAS coins: the token inputs are not confirmed
+    const kasOnly = new MockNode({ network: NET, addressOf: (spk) => spkStringToAddress(sdk, spk, NET) });
+    kasOnly.seedFromInputs({ ...built.tx, inputs: built.tx.inputs.filter((i) => !i.utxo.covenantId) });
+    expect(blockedBy(await checkBeforeSigning(servicesFor(null, kasOnly), wallet(), job))?.code).toBe('input-unconfirmed');
+  });
+
+  it('lets the next sell spend the token change of a transaction this page submitted, which the node lists only once a block holds it', async () => {
+    const plan = planned();
+    const built = plan.built!;
+    const job = { built, expected: expectedFromPlan(plan) };
+    // the node does not list the token coins yet
     expect(blockedBy(await checkBeforeSigning(servicesFor(null), wallet(), job))?.code).toBe('input-unconfirmed');
     // they are the change of transactions this page submitted: their facts are the ones it built
-    for (const i of built.tx.inputs) {
-      const outputs = Array.from({ length: i.index + 1 }, () => ({ value: '0', scriptPublicKey: '00', covenant: null }));
-      outputs[i.index] = { value: i.utxo.amount, scriptPublicKey: i.utxo.scriptPublicKey, covenant: null };
-      pendingSpends.addChange({ outputs }, i.transactionId, MAKER_PK);
-    }
+    const tokens = built.tx.inputs.filter((i) => i.utxo.covenantId).map((i) => ({
+      utxo: { transactionId: i.transactionId, index: i.index, amount: i.utxo.amount, covenantId: i.utxo.covenantId!, state: {} as never },
+      scriptPublicKey: i.utxo.scriptPublicKey,
+    }));
+    pendingSpends.addTokens(tokens, MAKER_PK);
     expect(blockedBy(await checkBeforeSigning(servicesFor(null), wallet(), job))).toBeNull();
   });
 

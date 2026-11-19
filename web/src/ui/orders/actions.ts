@@ -385,7 +385,7 @@ async function sentOutputs(s: Services, ids: readonly number[], sent: readonly M
  * Link `k` of a running merge, built again at its turn. `sent` holds the links sent so far and
  * `txids` their transaction ids. Its parents' outputs are read from the node, once the node lists
  * them. KOB's node lists an output once its transaction is in a block, and the send re-reads every
- * input there before the wallet is asked. The KAS UTXOs are read afresh, without the ones the run
+ * token input there before the wallet is asked. The KAS UTXOs are read afresh, without the ones the run
  * has spent. A link of level 1 waits for nothing. The wallet's own node is the send's visibility
  * gate (wallet/visibility.ts).
  */
