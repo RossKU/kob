@@ -1587,7 +1587,7 @@ impl<N: ChainSource> MultiNode<N> {
 
     /// Notes for `/v1/health` whether the last answer applied was cross-checked.
     fn set_cross(&self, checked: bool, why: &str) {
-        let v = CrossCheck { checked, reason: (!checked).then(|| why.to_string()) };
+        let v = CrossCheck { checked, reason: (!checked).then(|| why.to_string()), alone: false };
         *self.cross.lock().unwrap_or_else(|e| e.into_inner()) = v;
     }
 
@@ -1703,6 +1703,7 @@ impl<N: ChainSource> MultiNode<N> {
             tracing::warn!(reason = %why, "single node: the indexer is not cross-checked until a cross-checking node answers again");
         }
         self.set_cross(false, &why);
+        self.cross.lock().unwrap_or_else(|e| e.into_inner()).alone = true;
         Ok(raw)
     }
 
@@ -3306,6 +3307,7 @@ mod tests {
         assert_eq!(super::super::resolver::current("resolver:2"), Some(b.clone()), "not rotated yet");
         let c = m.cross_check();
         assert!(!c.checked && c.reason.as_deref().unwrap().contains(WAITING_FOR_CROSS_CHECK), "{c:?}");
+        assert!(!c.alone, "waiting is not running alone");
         // 20 s on: the resolver is asked for another node.
         tokio::time::advance(Duration::from_secs(21)).await;
         assert!(m.vspc_v2(req()).await.unwrap_err().to_string().contains(WAITING_FOR_CROSS_CHECK));
@@ -3320,12 +3322,13 @@ mod tests {
         assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 2);
         let c = m.cross_check();
         assert!(!c.checked && c.reason.as_deref().unwrap().contains("goes on alone"), "{c:?}");
+        assert!(c.alone, "running alone is visible (K-M3)");
         // At most `ROTATIONS_MAX` in a row; the client resolves the entry again on its next use.
         super::super::resolver::endpoint("resolver:2").unwrap();
         // The node answers again: cross-checked.
         second.answer(Ok(&[1, 2]));
         assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 2);
-        assert_eq!(m.cross_check(), CrossCheck { checked: true, reason: None });
+        assert_eq!(m.cross_check(), CrossCheck { checked: true, reason: None, alone: false });
         // A single node has nothing to wait for.
         let spec =
             NodeSpec { url: "ws://own:1".into(), fetch: true, submit: true, connections: 1, cross_check: false, may_lead: true };
@@ -3333,6 +3336,7 @@ mod tests {
         let one = MultiNode::new(vec![(spec, own.clone())], own);
         assert_eq!(one.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 1);
         assert!(one.cross_check().reason.unwrap().contains("no cross-checking node"));
+        assert!(!one.cross_check().alone, "a single node by configuration");
     }
 
     /// B: a contradiction deep below the tip asks a third node (the referee here).

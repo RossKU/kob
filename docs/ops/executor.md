@@ -3094,7 +3094,8 @@ of its other parents through headers that hash to the parents named, at most 128
 A batch that fails is refused, logged, not applied, and the node at fault is given up (a public node) or alarmed (a
 named one): the node that served a proof, header or block that fails on its own, else the node that served the batch. The
 difficulty floor is a heuristic against trivial `bits`, not the node's difficulty adjustment; on testnet-10 the proof of
-work itself is cheap. Cost: one kHeavyHash per chain block, one lane proof call per lane per batch, `Full` verbosity
+work itself is cheap. Its targets are stored once a minute (`meta` key `chain_proof_floor`) and read back at the start
+when within 36,000 DAA of the cursor, so a restart keeps the floor (`chain_proof.floor_headers` in `/v1/health`). Cost: one kHeavyHash per chain block, one lane proof call per lane per batch, `Full` verbosity
 (about 1-4 % more bytes than `High`), one `getBlock` per merged block holding a KOB transaction. The calls of a batch go
 out together, 8 at a time over as many connections, and a window from another node is compared with the primary
 meanwhile, so a batch waits a few round trips to the primary, not one per merged block (one by one, about 0.3 s each to a
@@ -3151,7 +3152,8 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   after `[cross_check] rotate_after_secs` (default 20) its entry gives its node up for another public node, at most three
   times in a row; after `single_node_after_secs` (default 120) without any answer the authority goes on alone with the
   chain proofs only (below), and `/v1/health` shows `cross_checked: false` with `cross_check_reason` (the status line
-  says `NOT cross-checked`). The first answer of a cross-checking node ends it. With no node left (a network blip of a home link, a
+  says `NOT cross-checked`), `cross_check_alone: true`, a `cross-check:` entry in `node_alarms` and
+  `kob_indexer_cross_check_alone` 1. The first answer of a cross-checking node ends it. With no node left (a network blip of a home link, a
   phone switching networks, a laptop waking up), both are resolved again with a backoff (2 s doubling to 60 s), never held back
   by the rate limit below: the pair is back within about a minute of the link. Every change is logged with the host names, and the status line
   shows both hosts, their state and how often each entry was replaced.

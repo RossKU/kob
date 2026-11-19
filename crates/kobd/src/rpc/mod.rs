@@ -416,11 +416,14 @@ pub struct CrossCheck {
     pub checked: bool,
     /// Why not, when it was not.
     pub reason: Option<String>,
+    /// A cross-checking node is configured, but none answered in time and the chain authority
+    /// goes on alone (`rpc::multi::CrossCheckPolicy::single_after`).
+    pub alone: bool,
 }
 
 impl CrossCheck {
     pub fn single(why: &str) -> CrossCheck {
-        CrossCheck { checked: false, reason: Some(why.to_string()) }
+        CrossCheck { checked: false, reason: Some(why.to_string()), alone: false }
     }
 }
 

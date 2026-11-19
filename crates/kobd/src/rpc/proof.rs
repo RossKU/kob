@@ -14,7 +14,8 @@
 //!   times the median target of the last [`ChainProofConfig::floor_window`] headers accepted, and
 //!   never easier than a fixed floor per network ([`ChainProofConfig::min_difficulty`]). This is a
 //!   heuristic against a forged chain with trivial `bits`, not the node's full difficulty
-//!   adjustment.
+//!   adjustment. The targets are kept in the store ([`ChainProof::floor_due`]) and read back at
+//!   the start ([`ChainProof::seed_floor`]), so a restart does not fall back to the fixed floor.
 //! - **Transactions.** Every accepted transaction hashes to its id.
 //! - **Acceptance.** The accepted transactions of every chain block are those its
 //!   `accepted_id_merkle_root` commits to. Since KIP-21 that root is the sequencing commitment: a
@@ -279,6 +280,8 @@ pub struct ChainProofStatus {
     pub last_refusal: Option<String>,
     /// CPU time of the local checks per chain block, in microseconds (mean since the start).
     pub cpu_us_per_block: f64,
+    /// Headers the floor's median is taken over now. 0 means the fixed network minimum only.
+    pub floor_headers: usize,
     #[serde(skip)]
     cpu_ns_total: u128,
 }
@@ -293,6 +296,10 @@ pub struct ChainProof {
     /// Lane tips at the anchor, `None` for a lane known to be inactive there.
     lanes: HashMap<Hash, Option<LaneTip>>,
     targets: VecDeque<Uint256>,
+    /// The DAA score of the newest header of `targets`.
+    targets_daa: u64,
+    /// When the targets were last handed out to be stored.
+    saved_at: Option<std::time::Instant>,
     status: ChainProofStatus,
     /// Checks left out, for the ablation tests only ([`skip`]).
     skip: u8,
@@ -308,6 +315,16 @@ pub(crate) mod skip {
     pub const MERKLE: u8 = 32;
     pub const SCRIPTS: u8 = 64;
 }
+
+/// How often the floor's targets are handed to the store ([`ChainProof::floor_due`]).
+pub const FLOOR_SAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Stored targets further than this from the cursor (in DAA, about an hour at 10 BPS) are not
+/// used at the start: the difficulty may have moved since.
+pub const FLOOR_SEED_MAX_DAA: u64 = 36_000;
+
+/// The `meta` key the floor's targets are stored under.
+pub const FLOOR_META_KEY: &str = "chain_proof_floor";
 
 /// Lanes remembered at most. A lane beyond this is proven again at the anchor when it shows up.
 const MAX_LANES: usize = 64;
@@ -328,7 +345,60 @@ impl ChainProof {
         let finality_depth = if network == "mainnet" { MAINNET_PARAMS.finality_depth() } else { TESTNET_PARAMS.finality_depth() };
         let static_max = MAX_DIFFICULTY_TARGET / cfg.min_difficulty_for(network);
         let status = ChainProofStatus { enabled: cfg.enabled, ..Default::default() };
-        ChainProof { cfg, finality_depth, static_max, anchor: None, lanes: HashMap::new(), targets: VecDeque::new(), status, skip: 0 }
+        ChainProof {
+            cfg,
+            finality_depth,
+            static_max,
+            anchor: None,
+            lanes: HashMap::new(),
+            targets: VecDeque::new(),
+            targets_daa: 0,
+            saved_at: None,
+            status,
+            skip: 0,
+        }
+    }
+
+    /// The floor's targets as stored: `v1 <DAA of the newest> <compact bits, 8 hex digits each>`.
+    pub fn floor_state(&self) -> Option<String> {
+        if self.targets.is_empty() {
+            return None;
+        }
+        let bits: String = self.targets.iter().map(|t| format!("{:08x}", t.compact_target_bits())).collect();
+        Some(format!("v1 {} {bits}", self.targets_daa))
+    }
+
+    /// [`ChainProof::floor_state`] at most once per [`FLOOR_SAVE_EVERY`], for the store.
+    pub fn floor_due(&mut self) -> Option<String> {
+        if self.saved_at.is_some_and(|t| t.elapsed() < FLOOR_SAVE_EVERY) {
+            return None;
+        }
+        let s = self.floor_state()?;
+        self.saved_at = Some(std::time::Instant::now());
+        Some(s)
+    }
+
+    /// Takes the floor's targets from the store (`s`, [`ChainProof::floor_state`]) at the start,
+    /// when they were kept within [`FLOOR_SEED_MAX_DAA`] of the cursor's DAA score. Returns the
+    /// headers taken.
+    pub fn seed_floor(&mut self, s: &str, cursor_daa: u64) -> usize {
+        let mut parts = s.split(' ');
+        let (Some("v1"), Some(daa), Some(bits), None) = (parts.next(), parts.next(), parts.next(), parts.next()) else { return 0 };
+        let Ok(daa) = daa.parse::<u64>() else { return 0 };
+        if daa.abs_diff(cursor_daa) > FLOOR_SEED_MAX_DAA || bits.len() % 8 != 0 || !bits.is_ascii() {
+            return 0;
+        }
+        let Some(targets) = (0..bits.len() / 8)
+            .map(|i| u32::from_str_radix(&bits[i * 8..i * 8 + 8], 16).ok().map(Uint256::from_compact_target_bits))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return 0;
+        };
+        let window = self.cfg.floor_window.max(1);
+        self.targets = targets.into_iter().rev().take(window).rev().collect();
+        self.targets_daa = daa;
+        self.status.floor_headers = self.targets.len();
+        self.targets.len()
     }
 
     /// Leaves the checks `s` out (`skip`). For the ablation tests.
@@ -602,6 +672,10 @@ impl ChainProof {
         while self.targets.len() > window {
             self.targets.pop_front();
         }
+        if let Some(b) = plan.blocks.last() {
+            self.targets_daa = b.daa_score;
+        }
+        self.status.floor_headers = self.targets.len();
         self.anchor = plan.last;
         Ok(())
     }
@@ -1067,6 +1141,7 @@ pub(crate) mod tests {
         }
     }
 
+    /// Headers served from a map, as a node that knows only these blocks.
     /// A node that knows only these headers.
     struct Known(HashMap<Hash, Header>);
 
@@ -1204,6 +1279,37 @@ pub(crate) mod tests {
                 Err(ProofError::BadProof(o, _)) => assert_eq!(o, other),
                 r => panic!("{r:?}"),
             }
+        }
+    }
+
+    /// K-M3: the floor's targets survive a restart. Stored after a batch and read back, they hold
+    /// a header at the floor of the run before, where a fresh checker takes the fixed minimum.
+    /// Stored targets far from the cursor, or garbled, are not used.
+    #[test]
+    fn the_floor_survives_a_restart() {
+        for fx in both() {
+            let raw = fx.raw();
+            let mut cp = fx.checker();
+            fx.run(&mut cp, &raw).unwrap();
+            let saved = cp.floor_due().expect("targets to store");
+            assert!(cp.floor_due().is_none(), "at most once a minute");
+            let n = raw.added_chain_block_hashes.len();
+            let daa = raw.chain_block_accepted_transactions.last().unwrap().chain_block_header.daa_score;
+            // A header 100x easier than the batch's, as a forger would send it right after a start.
+            let mut easy = fx.start_header.clone();
+            easy.bits = Uint256::from_compact_target_bits(easy.bits).overflowing_mul_u64(100).0.compact_target_bits();
+            easy.finalize();
+            let fresh = fx.checker().skipping(skip::POW);
+            fresh.check_work(&easy, fresh.max_target(median(fresh.targets.iter().copied()))).unwrap();
+            let mut seeded = fx.checker().skipping(skip::POW);
+            assert_eq!(seeded.seed_floor(&saved, daa + 10), n);
+            assert_eq!(seeded.status().floor_headers, n);
+            let r = seeded.check_work(&easy, seeded.max_target(median(seeded.targets.iter().copied())));
+            assert!(matches!(&r, Err(ProofError::Refused(w)) if w.contains("easier than the floor")), "{r:?}");
+            assert_eq!(seeded.floor_state().unwrap(), saved, "the same targets");
+            assert_eq!(fx.checker().seed_floor(&saved, daa + FLOOR_SEED_MAX_DAA + 1), 0, "too far from the cursor");
+            assert_eq!(fx.checker().seed_floor("v1 12 0x", daa), 0);
+            assert_eq!(fx.checker().seed_floor("v2", daa), 0);
         }
     }
 }

@@ -384,6 +384,14 @@ impl<S: ChainSource> Follower<S> {
         let lean = ingest.lock().unwrap_or_else(|e| e.into_inner()).prunes();
         let proof =
             cfg.chain_proof.clone().filter(|_| source.proves_chain()).map(|p| Arc::new(Mutex::new(ChainProof::new(p, &cfg.network))));
+        if let Some(p) = &proof {
+            // The floor's targets of the last run (K-M3), not the fixed minimum.
+            let g = ingest.lock().unwrap_or_else(|e| e.into_inner());
+            if let (Ok(Some(s)), Ok(Some(c))) = (super::db::meta_get(g.conn(), crate::rpc::proof::FLOOR_META_KEY), g.cursor()) {
+                let n = p.lock().unwrap_or_else(|e| e.into_inner()).seed_floor(&s, c.daa);
+                tracing::info!(headers = n, "chain proofs: the difficulty floor starts from the stored targets");
+            }
+        }
         Follower {
             source,
             ingest,
@@ -764,11 +772,15 @@ impl<S: ChainSource> Follower<S> {
         let nodes = self.source.node_stats();
         let source = self.source.source_status();
         // The alarms of named nodes (`rpc::judge`), process-wide.
-        let alarms = crate::rpc::judge::alarms();
+        let mut alarms = crate::rpc::judge::alarms();
         let cross = self.source.cross_check();
+        if cross.alone {
+            alarms.push(format!("cross-check: {}", cross.reason.as_deref().unwrap_or("none answers: the chain authority runs alone")));
+        }
         let proof = self.proof.as_ref().map(|p| p.lock().unwrap_or_else(|e| e.into_inner()).status());
         self.health.update(|h| {
             h.cross_checked = cross.checked;
+            h.cross_check_alone = cross.alone;
             h.cross_check_reason = cross.reason;
             h.chain_proof = proof;
             if !nodes.is_empty() || source.is_some() {
@@ -1138,6 +1150,15 @@ impl<S: ChainSource> Follower<S> {
         Err(StepOutcome::Retry(msg))
     }
 
+    /// Stores the floor's targets of the chain proofs, at most once a minute (K-M3).
+    async fn save_floor(&self) {
+        let Some(s) = self.proof.as_ref().and_then(|p| p.lock().unwrap_or_else(|e| e.into_inner()).floor_due()) else { return };
+        let r = self.blocking(move |i| super::db::meta_set(i.conn(), crate::rpc::proof::FLOOR_META_KEY, &s)).await;
+        if let Err(e) = r {
+            tracing::warn!(error = %e, "chain proofs: the difficulty floor could not be stored");
+        }
+    }
+
     /// A step that gave up on a batch after tip reorgs ([`TIP_REORG`]). The node answered, so the
     /// state is not `node_unavailable`. `following` and `catching_up` stay.
     ///
@@ -1488,6 +1509,7 @@ impl<S: ChainSource> Follower<S> {
                 });
                 self.note_catch_up();
                 self.chain_answered();
+                self.save_floor().await;
                 if !a.event.is_empty() {
                     let _ = self.events.send(Arc::new(a.event));
                 }
