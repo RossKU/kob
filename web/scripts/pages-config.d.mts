@@ -1,11 +1,17 @@
 export const NETWORKS: string[];
 export const MAX_EXTRA_INDEXERS: number;
 export interface PagesConfig { network: string; indexerUrl?: string; extraIndexerUrls?: string[]; nodeUrl?: string; explorerUrl?: string; tokenNamesUrl?: string; /** pinned to its network: the header offers no network switch (unless KOB_PAGES_NETWORK_SWITCH) */ lockNetwork?: boolean }
-/** True for a host name that is not reachable from the public internet (loopback, private, link-local, unspecified). */
+/**
+ * True for a host name that is not reachable from the public internet (loopback, private,
+ * link-local, unspecified).
+ */
 export function isPrivateHost(hostname: string): boolean;
 /** A public URL of one of `schemes`, trailing slashes removed; or an error message. */
 export function publicUrl(name: string, value: unknown, schemes: string[]): { url?: string; error?: string };
-/** The deployment's config.json from the KOB_PAGES_* variables; `config` is null when anything is wrong. */
+/**
+ * The deployment's config.json from the KOB_PAGES_* variables; `config` is null when anything is
+ * wrong.
+ */
 export function pagesConfig(env: Record<string, string | undefined>): { config: PagesConfig | null; errors: string[]; notes: string[] };
 /** The shipped registry's programs for `network`, with no token entries. */
 export function programRegistry(registryText: string, network: string): string;

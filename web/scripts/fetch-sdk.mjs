@@ -9,12 +9,15 @@ import { unzipSync } from 'fflate';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const URL_ = 'https://github.com/kaspanet/rusty-kaspa/releases/download/v2.1.0/kaspa-wasm32-sdk-v2.1.0.zip';
 const VENDOR = join(ROOT, 'vendor');
-// Supply-chain pin: the sha256 of the official v2.1.0 release zip. A download that does not hash to this value is REFUSED (nothing is
-// unpacked). Updating the SDK means updating this constant in a reviewed commit, never accepting whatever the network returned.
+// Supply-chain pin: the sha256 of the official v2.1.0 release zip. A download that does not hash to
+// this value is REFUSED (nothing is unpacked). Updating the SDK means updating this constant in a
+// reviewed commit, never accepting whatever the network returned.
 export const EXPECTED_SHA256 = 'ba674e109ff5dd8bedc4dc2ee8a5ecdf4b600b1178a541d77888ec58310b6124';
-// The tree the pinned zip unpacks to: sha256 over the lines "<sha256 of the file>  <path>\n" of every file under kaspa-node/ and
-// kaspa-web/, sorted by path. An already extracted vendor/ is used only when it still hashes to this (a file changed, added or
-// removed there is refused, not bundled).
+// The tree the pinned zip unpacks to: sha256 over the lines "<sha256 of the file>  <path>\n" of
+//                                                                                  every file under
+//                                                                                  kaspa-node/ and
+// kaspa-web/, sorted by path. An already extracted vendor/ is used only when it still hashes to
+// this (a file changed, added or removed there is refused, not bundled).
 export const EXPECTED_TREE_SHA256 = '81d931353ae0bd090e338be36bcd9d95800d336851532c4bbdba29a08c6ca603';
 
 function treeSha256() {
@@ -37,7 +40,8 @@ if (recorded && recorded !== EXPECTED_SHA256 && !process.argv.includes('--force'
   throw new Error(`vendor/SDK_SHA256.txt (${recorded}) is not the pinned hash (${EXPECTED_SHA256}): rerun with --force to refetch and verify`);
 }
 if (existsSync(join(VENDOR, 'kaspa-node', 'kaspa.js')) && existsSync(join(VENDOR, 'kaspa-web', 'kaspa.js')) && !process.argv.includes('--force')) {
-  // the files actually present are re-hashed: a vendor/ edited after extraction is never taken for the pinned SDK
+  // the files actually present are re-hashed: a vendor/ edited after extraction is never taken for
+  // the pinned SDK
   const tree = treeSha256();
   if (tree !== EXPECTED_TREE_SHA256) {
     throw new Error(`vendor/ does not match the pinned SDK (tree sha256 ${tree}, pinned ${EXPECTED_TREE_SHA256}): rerun with --force to refetch and verify`);
@@ -46,7 +50,8 @@ if (existsSync(join(VENDOR, 'kaspa-node', 'kaspa.js')) && existsSync(join(VENDOR
   process.exit(0);
 }
 console.log('downloading', URL_);
-// GitHub's release downloads answer 502 / 503 / 504 now and then: a few tries, a little apart (the bytes are held to the pin below either way)
+// GitHub's release downloads answer 502 / 503 / 504 now and then: a few tries, a little apart (the
+// bytes are held to the pin below either way)
 let buf = null;
 for (let attempt = 1; ; attempt++) {
   try {

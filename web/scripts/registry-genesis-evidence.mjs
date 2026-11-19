@@ -1,23 +1,35 @@
-// Collects the chain evidence behind the registry's per-token genesis check (C1) and live-minter check (C2), READ-ONLY.
+// Collects the chain evidence behind the registry's per-token genesis check and live-minter
+// check, READ-ONLY.
 //
-//   node web/scripts/registry-genesis-evidence.mjs [--registry registry/tokens.json] [--out registry/evidence/mainnet-genesis.json]
-//        [--node wss://...] [--api https://api.kaspa.org] [--hints https://api.kron.technology/api/registry/tokens]
-//        [--genesis <covenant id>=<genesis txid> ...]   (overrides / replaces the hint for a covenant id)
-//   cargo run -p kob-cli -- registry verify-genesis --network mainnet --evidence registry/evidence/mainnet-genesis.json
+//   node web/scripts/registry-genesis-evidence.mjs [--registry registry/tokens.json] [--out
+//   registry/evidence/mainnet-genesis.json]
+//        [--node wss://...] [--api https://api.kaspa.org] [--hints
+//        https://api.kron.technology/api/registry/tokens]
+//        [--genesis <covenant id>=<genesis txid> ...]   (overrides / replaces the hint for a
+//                                                       covenant id)
+//   cargo run -p kob-cli -- registry verify-genesis --network mainnet --evidence
+//   registry/evidence/mainnet-genesis.json
 //
-// Nothing here is trusted by the verifier: every byte this script records is re-checked by `kob registry verify-genesis`
-// against a hash (the genesis txid is recomputed from the recorded fields, the covenant id from the authorising outpoint and
-// the group's outputs, each redeem script against its P2SH script public key). The sources:
+// Nothing here is trusted by the verifier: every byte this script records is re-checked by `kob
+// registry verify-genesis` against a hash (the genesis txid is recomputed from the recorded fields,
+// the covenant id from the authorising outpoint and the group's outputs, each redeem script against
+// its P2SH script public key). The sources:
 //
-// * Kaspa MAINNET node over wRPC (official kaspa-wasm v2.1.0 SDK, the public `Resolver` unless --node is given): server info,
-//   the virtual DAA score, and `getUtxosByAddresses` (which genesis outputs are still unspent, and the live cells of a token's
-//   minter lineage). Read-only calls only; this script never builds, signs or submits a transaction.
-// * A block explorer (api.kaspa.org, the kaspa-rest-server over the public kaspa-db-filler database) for the genesis
-//   transaction and the transactions that revealed the genesis redeem scripts: public nodes prune block bodies after about
-//   30 hours, and every KRON genesis is weeks old. The explorer drops `sequence`, `lockTime` and `gas`; they are recorded as
-//   0 (the values KRON's builder uses), which the txid recomputation in the verifier confirms or refutes.
-// * The KRON API (api.kron.technology) only as a HINT for the genesis txid of a covenant id; the verifier recomputes the
-//   covenant id from the genesis transaction, so a wrong hint fails, it cannot pass a wrong genesis.
+// * Kaspa MAINNET node over wRPC (official kaspa-wasm v2.1.0 SDK, the public `Resolver` unless
+// --node is given): server info,
+//   the virtual DAA score, and `getUtxosByAddresses` (which genesis outputs are still unspent, and
+//   the live cells of a token's minter lineage). Read-only calls only; this script never builds,
+//   signs or submits a transaction.
+// * A block explorer (api.kaspa.org, the kaspa-rest-server over the public kaspa-db-filler
+// database) for the genesis
+//   transaction and the transactions that revealed the genesis redeem scripts: public nodes prune
+//   block bodies after about 30 hours, and every KRON genesis is weeks old. The explorer drops
+//   `sequence`, `lockTime` and `gas`; they are recorded as 0 (the values KRON's builder uses),
+//   which the txid recomputation in the verifier confirms or refutes.
+// * The KRON API (api.kron.technology) only as a HINT for the genesis txid of a covenant id; the
+// verifier recomputes the
+//   covenant id from the genesis transaction, so a wrong hint fails, it cannot pass a wrong
+//   genesis.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
@@ -81,7 +93,8 @@ function txFields(t) {
   };
 }
 
-// the last data push of a signature script (a P2SH spend reveals its redeem script there); the verifier re-checks the hash
+// the last data push of a signature script (a P2SH spend reveals its redeem script there); the
+// verifier re-checks the hash
 function lastPush(hex) {
   const b = Buffer.from(hex, 'hex');
   let i = 0;
@@ -103,7 +116,8 @@ function lastPush(hex) {
   return last;
 }
 
-// the transaction that spent `txid:index` (an output at `address`), from the explorer's history of that address
+// the transaction that spent `txid:index` (an output at `address`), from the explorer's history of
+// that address
 async function spender(address, txid, index) {
   for (let offset = 0; offset < 2000; offset += 50) {
     const page = await get(`${API}/addresses/${address}/full-transactions?limit=50&offset=${offset}&resolve_previous_outpoints=no`);
@@ -155,7 +169,8 @@ const hints = await get(HINTS).catch((e) => {
 const hintTok = (cov) => hints.tokens.find((t) => t.cp?.tokenCovid === cov) ?? null;
 const hintOf = (cov) => GENESIS.get(cov) ?? hintTok(cov)?.cp?.genesisTxid ?? null;
 
-// KRON state span: 0x20 owner | 0x01 id_type | 0x08 amount (LE i64) | 0x01 is_minter (46 bytes, offset 0)
+// KRON state span: 0x20 owner | 0x01 id_type | 0x08 amount (LE i64) | 0x01 is_minter (46 bytes,
+// offset 0)
 function kronState(owner, idType, amount, minter) {
   const amt = Buffer.alloc(8);
   amt.writeBigInt64LE(BigInt(amount));
@@ -163,14 +178,16 @@ function kronState(owner, idType, amount, minter) {
 }
 const p2sh = (redeem) => String(sdk.payToScriptHashScript(redeem).script);
 
-// An output that was never spent has not revealed its redeem script. For a KRON launch the unspent genesis output is the
-// creator's (or the vesting covenant's) allocation: try the states the KRON API record describes over the program suffix of a
-// revealed sibling; the P2SH hash decides, and the verifier re-checks it.
+// An output that was never spent has not revealed its redeem script. For a KRON launch the unspent
+// genesis output is the creator's (or the vesting covenant's) allocation: try the states the KRON
+// API record describes over the program suffix of a revealed sibling; the P2SH hash decides, and
+// the verifier re-checks it.
 function reconstruct(cov, spk, suffix) {
   const h = hintTok(cov);
   if (!h || !suffix) return null;
-  // every 32-byte key / covenant id and every positive integer of the hint record (creator key, vesting covenant, devAmount,
-  // vesting total, ...): a few hundred candidates, and only the one that hashes to the output counts
+  // every 32-byte key / covenant id and every positive integer of the hint record (creator key,
+  // vesting covenant, devAmount, vesting total, ...): a few hundred candidates, and only the one
+  // that hashes to the output counts
   const owners = new Set();
   const amounts = new Set();
   (function walk(v) {
@@ -249,11 +266,12 @@ for (const tok of reg.tokens) {
   evidence.tokens.push(rec);
 }
 
-// C2 (no live minter) is decided by the verifier from the genesis states: the KRON program lets a transaction create an
-// is_minter output only when it spends a minter (every non-minter token input refuses minter outputs), and a covenant id's
-// only other source of outputs is its genesis, so a genesis without a minter output proves the token can never have one. A
-// genesis WITH a minter output needs its lineage followed to the live cells; this script does not do that, and the verifier
-// then reports C2 as undetermined.
+// The no-live-minter check is decided by the verifier from the genesis states: the KRON program
+// lets a transaction create an is_minter output only when it spends a minter (every non-minter
+// token input refuses minter outputs), and a covenant id's only other source of outputs is its
+// genesis, so a genesis without a minter output proves the token can never have one. A genesis WITH
+// a minter output needs its lineage followed to the live cells; this script does not do that, and
+// the verifier then reports that check as undetermined.
 await rpc.disconnect();
 mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, JSON.stringify(evidence, bigintJson, 2) + '\n');

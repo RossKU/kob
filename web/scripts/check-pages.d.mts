@@ -2,10 +2,16 @@
 export function distFiles(dir: string): string[];
 /** The sha256 of every file of a `sha256sum` list of `dist/` files, by URL path. */
 export function parseHashes(text: string): Map<string, string>;
-/** The post-deploy checks of a hosted web app (headers of `/`, the signer page and `/assets/`; with `dist`, every built file's bytes). */
+/**
+ * The post-deploy checks of a hosted web app (headers of `/`, the signer page and `/assets/`; with
+ * `dist`, every built file's bytes).
+ */
 export function checkPages(
   base: string,
   o?: { dist?: string; hashes?: Map<string, string>; fetchFn?: typeof fetch; attempts?: number; delayMs?: number },
 ): Promise<{ ok: boolean; lines: string[] }>;
-/** The internal app's preview must send an unauthenticated visitor to Cloudflare Access (or refuse it, 401 / 403): never serve the app. */
+/**
+ * The internal app's preview must send an unauthenticated visitor to Cloudflare Access (or refuse
+ * it, 401 / 403): never serve the app.
+ */
 export function checkProtected(urls: string[], o?: { fetchFn?: typeof fetch; attempts?: number; delayMs?: number }): Promise<{ ok: boolean; lines: string[] }>;
