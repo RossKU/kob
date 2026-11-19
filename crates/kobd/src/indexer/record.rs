@@ -560,7 +560,12 @@ pub fn tracked_in(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<Option
     }
     for sql in [
         "SELECT (SELECT h FROM ids WHERE id = t.token_id) FROM token_utxos t WHERE t.txid = ?1 AND t.idx = ?2 AND t.spent_block IS NULL",
-        "SELECT (SELECT h FROM ids WHERE id = t.token_id) FROM token_holdings t WHERE t.txid = ?1 AND t.idx = ?2 AND t.spent_block IS NULL",
+        // (Schema 14) The holdings name their transaction by `txs.id`: one seek of `txs_h` more.
+        concat!(
+            "SELECT (SELECT h FROM ids WHERE id = t.token_id) FROM token_holdings t WHERE t.tx_id = ",
+            super::ids::tx_of!("?1"),
+            " AND t.idx = ?2 AND t.spent_block IS NULL"
+        ),
     ] {
         let cov: Option<Vec<u8>> = conn.prepare_cached(sql)?.query_row(key, |r| r.get(0)).optional()?;
         if let Some(cov) = cov {
