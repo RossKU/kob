@@ -25,9 +25,10 @@
 //! - A record-log write that failed, for example on a full disk or an I/O error. The append is
 //!   rolled back. The state is `stopped`, and nothing more is appended until the operator
 //!   restarts.
-//! - A chain authority that lacks a call the follower needs (`getVirtualChainFromBlockV2`, or
-//!   `getSeqCommitLaneProof` with chain proofs on): state `stopped` with the reason, checked once
-//!   per authority before its first step ([`ChainSource::check_capabilities`]).
+//! - A chain authority that says it lacks a call the follower needs (`getVirtualChainFromBlockV2`,
+//!   or `getSeqCommitLaneProof` with chain proofs on): state `stopped` with the reason, checked
+//!   once per authority before its first step ([`ChainSource::check_capabilities`]). One that only
+//!   closes the connection on it is warned about and checked again, never stopped on.
 //! - A lane proof the synced node can no longer serve, because the cursor is before its pruning
 //!   point (`BlockTooDeep`): state `gap`. No batch from there can be proven, and none is
 //!   applied unproven. A recovering follower does not move the store past it.
@@ -756,9 +757,10 @@ impl<S: ChainSource> Follower<S> {
         outcome
     }
 
-    /// Checks a chain authority not checked yet. One that lacks a call stops the follower
-    /// (`stopped`), instead of retrying in `node_unavailable` for ever. One the check could not
-    /// tell about is checked again at the next step.
+    /// Checks a chain authority not checked yet. One that says it lacks a call stops the follower
+    /// (`stopped`), instead of retrying in `node_unavailable` for ever. One that only closes the
+    /// connection on it (maybe a flaky link) is warned about and, like one the check could not
+    /// tell about, checked again at the next step.
     async fn check_authority(&self) -> Option<StepOutcome> {
         let key = self.source.authority_key();
         if self.checked_authority.lock().unwrap_or_else(|e| e.into_inner()).as_ref() == Some(&key) {
@@ -771,6 +773,10 @@ impl<S: ChainSource> Follower<S> {
             }
             crate::rpc::Capable::Unknown(why) => {
                 tracing::debug!(reason = %why, "the chain authority's calls could not be checked yet");
+                None
+            }
+            crate::rpc::Capable::Closed(why) => {
+                tracing::warn!(reason = %why, "the chain authority may lack a call the indexer needs (an older node?); not stopping on it, checked again");
                 None
             }
             crate::rpc::Capable::No(why) => {

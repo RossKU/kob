@@ -2394,9 +2394,10 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     /// The calls of the authority and of every other node that may serve windows, cross-check or
     /// lead ([`super::probe_calls`]), checked at once, each within [`CAPABILITY_TIMEOUT`].
     ///
-    /// Another node that lacks one is demoted (`NodeBoard::lacks`), and so is a public authority,
-    /// whose entry resolves another node (`Unknown`, so the follower checks again). A named
-    /// authority that lacks one is `No`.
+    /// Another node that lacks one or closes the connection on it is demoted (`NodeBoard::lacks`).
+    /// A public authority that says it lacks one is given up for another (`Unknown`, so the
+    /// follower checks again). A named authority that says so is `No`. The authority's
+    /// `Closed` goes to the follower as it is, which only checks again.
     async fn check_capabilities(&self, lane_proofs: bool) -> super::Capable {
         use super::Capable;
         let a = self.board.authority();
@@ -2420,6 +2421,8 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
                         verdict = Capable::Unknown(format!("the public node {shown} was given up: {why}"));
                     }
                 }
+                Capable::Closed(why) if k == a => verdict = Capable::Closed(format!("the chain authority {shown}: {why}")),
+                Capable::Closed(why) => self.board.lacks(k, &why),
                 c if k == a => verdict = c,
                 _ => {}
             }
@@ -2964,7 +2967,7 @@ mod tests {
     }
 
     /// A node other than the authority that lacks a call is dropped from the chain roles with an
-    /// alarm, and the source goes on. A named authority that lacks one is the follower's `No`.
+    /// alarm, and the source goes on. A named authority is `No` only when it says so.
     #[tokio::test]
     async fn a_node_lacking_a_call_is_demoted_and_an_authority_lacking_one_is_reported() {
         use crate::rpc::Capable;
@@ -2976,15 +2979,20 @@ mod tests {
         let m = MultiNode::new(vec![(spec(ua), a.clone()), (spec(ub), b.clone())], a.clone());
         let key = m.authority_key();
         b.set_no_vspc_v2(true);
-        assert_eq!(m.check_capabilities(false).await, Capable::Yes);
+        assert_eq!(m.check_capabilities(false).await, Capable::Yes, "a secondary that closes the connection");
         let s = m.node_stats();
         assert_eq!((s[0].state.as_str(), s[1].state.as_str()), ("ok", "dropped"), "{s:?}");
         assert!(s[1].dropped_reason.as_deref().is_some_and(|r| r.contains("getVirtualChainFromBlockV2")), "{s:?}");
         assert!(super::super::judge::alarms().iter().any(|x| x.starts_with(ub) && x.contains("getVirtualChainFromBlockV2")));
         assert_eq!(m.authority_key(), key, "the same nodes");
+        // the authority that closes the connection: only checked again
         a.set_no_vspc_v2(true);
-        let Capable::No(why) = m.check_capabilities(false).await else { panic!() };
+        let Capable::Closed(why) = m.check_capabilities(false).await else { panic!() };
         assert!(why.contains(ua) && why.contains("getVirtualChainFromBlockV2"), "{why}");
+        a.set_no_vspc_v2(false);
+        a.set_vspc_v2_not_found(true);
+        let Capable::No(why) = m.check_capabilities(false).await else { panic!() };
+        assert!(why.contains(ua) && why.contains("method not found"), "{why}");
         assert_eq!(m.node_stats()[0].state, "ok", "the authority is never dropped");
     }
 

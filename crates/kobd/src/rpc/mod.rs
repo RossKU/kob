@@ -153,8 +153,11 @@ pub fn classify_node_message(m: &str) -> NodeErrorKind {
 pub enum Capable {
     /// It serves every call checked.
     Yes,
-    /// It lacks one, as the text says.
+    /// It lacks one: it said so ("method not found" and the like).
     No(String),
+    /// It closed the connection on a call twice while it answered `getServerInfo`: an older node,
+    /// or a flaky link. Enough to demote another node, never to stop on the authority.
+    Closed(String),
     /// The check could not tell (no answer, IBD). It is made again later.
     Unknown(String),
 }
@@ -172,8 +175,8 @@ pub fn lacks_call(e: &RpcError) -> bool {
 /// at the sink, where the answer is empty.
 ///
 /// Any answer of the call, an error such as "too deep" too, means the node has it. A node that
-/// does not know a call closes the connection on it (`workflow-rpc`). That counts only when it
-/// happens twice while the node answers `getServerInfo` each time.
+/// does not know a call closes the connection on it (`workflow-rpc`). That is [`Capable::Closed`]
+/// when it happens twice while the node answers `getServerInfo` each time.
 pub async fn probe_calls<S: ChainSource + ?Sized>(src: &S, lane_proofs: bool) -> Capable {
     let sink = match src.dag_info().await {
         Ok(d) => d.sink,
@@ -210,7 +213,7 @@ where
             Err(_) => return Capable::Yes,
         }
     }
-    Capable::No(format!("it does not serve {method}: it closes the connection on it ({closed}) while it answers getServerInfo"))
+    Capable::Closed(format!("it closes the connection on {method} ({closed}) while it answers getServerInfo"))
 }
 
 /// What the source made of a chain authority's answer that contradicts the store
@@ -1194,9 +1197,9 @@ mod tests {
         (format!("ws://{addr}"), server)
     }
 
-    /// The check of a node's calls: a "too deep" answer is the call's own; "method not found" and
-    /// a connection closed twice on the call while the node answers `getServerInfo` are a lack; a
-    /// node that does not answer tells nothing.
+    /// The check of a node's calls: a "too deep" answer is the call's own; "method not found" is a
+    /// lack; a connection closed twice on the call while the node answers `getServerInfo` is
+    /// `Closed`; a node that does not answer tells nothing.
     #[tokio::test]
     async fn a_node_lacking_a_call_is_told_apart_from_one_that_does_not_answer() {
         use super::{lacks_call, probe_calls, Capable, NodeErrorKind};
@@ -1214,7 +1217,7 @@ mod tests {
 
         let (url, server) = calls_node(false, Lanes::TooDeep).await;
         let c = WrpcClient::new(WrpcConfig::new(url.clone()));
-        let Capable::No(why) = probe_calls(&c, true).await else { panic!() };
+        let Capable::Closed(why) = probe_calls(&c, true).await else { panic!() };
         assert!(why.contains("getVirtualChainFromBlockV2") && why.contains("closes the connection"), "{why}");
         server.abort();
         let _ = server.await;

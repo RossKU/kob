@@ -802,6 +802,8 @@ struct MockState {
     contradict: bool,
     /// An older node without `getVirtualChainFromBlockV2`: it closes the connection on it.
     no_vspc_v2: bool,
+    /// `getVirtualChainFromBlockV2` answers "RPC method not found".
+    vspc_v2_not_found: bool,
 }
 
 /// An in-memory node that answers the `ChainSource` calls from a scripted chain.
@@ -851,6 +853,7 @@ impl MockNode {
                 ids_calls: 0,
                 contradict: false,
                 no_vspc_v2: false,
+                vspc_v2_not_found: false,
             }),
         })
     }
@@ -959,6 +962,12 @@ impl MockNode {
     /// the connection. Its calls are then checked (`ChainSource::check_capabilities`).
     pub fn set_no_vspc_v2(&self, on: bool) {
         self.with(|s| s.no_vspc_v2 = on)
+    }
+
+    /// While on, the node answers `getVirtualChainFromBlockV2` with "RPC method not found". Its
+    /// calls are then checked.
+    pub fn set_vspc_v2_not_found(&self, on: bool) {
+        self.with(|s| s.vspc_v2_not_found = on)
     }
 
     /// While on, VSPC answers first remove a block the store never had, which contradicts it.
@@ -1233,6 +1242,9 @@ impl ChainSource for MockNode {
         if self.with(|s| s.no_vspc_v2) {
             return Err(RpcError::Transport("connection closed".into()));
         }
+        if self.with(|s| s.vspc_v2_not_found) {
+            return Err(RpcError::Node("RPC method not found".into()));
+        }
         let r = self.vspc_raw(req.start_hash, req.min_confirmation_count, req.timeout_scale, full);
         let txs = r
             .as_ref()
@@ -1254,7 +1266,7 @@ impl ChainSource for MockNode {
 
     /// Checked only for a node set to lack a call, so that the check takes no scripted answer.
     async fn check_capabilities(&self, lane_proofs: bool) -> crate::rpc::Capable {
-        if !self.with(|s| s.no_vspc_v2) {
+        if !self.with(|s| s.no_vspc_v2 || s.vspc_v2_not_found) {
             return crate::rpc::Capable::Yes;
         }
         crate::rpc::probe_calls(self, lane_proofs).await

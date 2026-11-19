@@ -1356,13 +1356,27 @@ async fn a_contradiction_the_synced_node_repeats_halts() {
     assert!(matches!(&out, StepOutcome::Gap(m) if m.contains("contradicts")), "{out:?}");
 }
 
-/// A node without `getVirtualChainFromBlockV2` stops the follower at its first step (`stopped`, with the reason), instead
-/// of retrying in `node_unavailable` for ever. Nothing is asked of it after that.
+/// A node that says it has no `getVirtualChainFromBlockV2` stops the follower at its first step (`stopped`, with the
+/// reason), instead of retrying in `node_unavailable` for ever. One that only closes the connection on it (an older node,
+/// or a flaky link) never stops it: it is checked again, and followed once it answers.
 #[tokio::test]
 async fn a_node_lacking_vspc_v2_stops_the_follower_at_once() {
+    let e = Ctx::new();
+    e.hs.node.push_empty(3);
+    e.hs.node.set_no_vspc_v2(true);
+    for _ in 0..3 {
+        let out = e.hs.follower.step().await;
+        assert!(matches!(&out, StepOutcome::Retry(_)), "{out:?}");
+    }
+    let h = e.hs.health.snapshot();
+    assert!(h.state != FollowerState::Stopped && h.halt_reason.is_none(), "{h:?}");
+    e.hs.node.set_no_vspc_v2(false);
+    let out = e.hs.sync().await;
+    assert!(matches!(out.last(), Some(StepOutcome::Idle)), "{out:?}");
+
     let c = Ctx::new();
     c.hs.node.push_empty(3);
-    c.hs.node.set_no_vspc_v2(true);
+    c.hs.node.set_vspc_v2_not_found(true);
     let out = c.hs.follower.step().await;
     let StepOutcome::Halted(why) = &out else { panic!("{out:?}") };
     assert!(why.starts_with(LACKS_CALL) && why.contains("getVirtualChainFromBlockV2") && why.contains("v2.1.0"), "{why}");
