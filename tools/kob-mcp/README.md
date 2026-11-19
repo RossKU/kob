@@ -43,6 +43,9 @@ A write first returns its dry-run plan and a `planId`; it is sent only when the 
   units, else 25 % per transaction and 50 % per day of the holding confirmed on the node (`limits.tokenDefault`).
 - At most 3 token creations a day (`launchesPerDay`).
 - A price more than 25 % worse than the last fill is refused.
+- `kob_replace` reads the order's side and token from the CLI's dry run (the order as checked on the node). A sell
+  priced down counts its whole custody under the token caps, as a new sell would. A sell priced down or a buy priced
+  up with no reference to check it against (no last fill, no two-sided book) is refused: cancel and place instead.
 - `kob_send` pays only your own addresses (`withdrawTo`).
 - A `STOP` file in the data folder blocks every write.
 - Every call is logged in `audit.jsonl`.

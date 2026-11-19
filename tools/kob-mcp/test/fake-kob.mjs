@@ -75,7 +75,12 @@ switch (args[0]) {
   case 'replace': {
     const o = c.orders[args[1]];
     if (!o) { process.stderr.write('error: unknown order\n'); process.exit(1); }
-    sign(`amend in place ${args[1]}`, -FEE, { order: args[1], inPlace: true }, [], () => { o.price = kasOf(val('--price')); });
+    // The plan names the order as read on the node (current) and its replacement, as kob-cli does.
+    const kind = o.side === 'sell' ? 'KobAsk' : 'KobBid';
+    const price = val('--price') ? kasOf(val('--price')) : o.price;
+    const st = (p) => ({ kind, state: { tokenCovId: TUSD, scale: '100000000', price: String(p), amountLeft: String(base(String(o.amount))) } });
+    const plan = { order: args[1], inPlace: true, ...(process.env.FAKE_KOB_NO_CURRENT ? {} : { current: st(o.price) }), replacement: st(price) };
+    sign(`amend in place ${args[1]}`, -FEE, plan, [], () => { o.price = price; });
     break;
   }
   case 'cancel': {

@@ -364,7 +364,7 @@ One JSON document on stdout once a transaction has been built: the plan, with th
 | Command | `plan` keys |
 |---|---|
 | `place` | `states` (the order's state and, for a multi-leg kind, its further states), `request` (the web planner's `createOrder` request, or `null`) |
-| `replace` | `order` (covenant id), `inPlace` (boolean), `replacement` (the new state), `value` (string, sompi on the replacement); a re-planned cancel-replace (trailing stop, if-done entry, pair order) adds `states` |
+| `replace` | `order` (covenant id), `inPlace` (boolean), `current` (the order's state as checked on the node, before the change), `replacement` (the new state), `value` (string, sompi on the replacement); a re-planned cancel-replace (trailing stop, if-done entry, pair order) adds `states` |
 | `cancel` | `action` (`"cancel"`), `covenant_id`, `kind` (template name), `returned` (array of `{"token", "units", "utxos", "kas"}`: the strays it takes back; `utxos` is a number) |
 | `refund` | `order`, `due` (number, DAA), `earned` (string, sompi, negative when the refund costs KAS) |
 | `take` | `order`, `amount` (string, base units), `lockTime` (number), `price` (string: the order's state price at `lockTime`), `tip` (string, state units), `kas` (string, sompi the fill pays the maker of a sell order or receives from a buy order, or `null` where it does not compute), `bound` (`null`, or `{"kind": "max" | "min", "per_token": string}`: `--max-price` / `--min-price` in sompi per whole token) |

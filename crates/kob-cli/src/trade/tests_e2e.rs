@@ -434,6 +434,12 @@ fn replace_amends_in_place_or_cancel_replaces() {
     assert_eq!(run(replace, w.args(0x11, &format!("{} --price 3.1KAS --yes", to_hex(&cov)))), 0);
     let s = w.signed(".replace.json");
     assert_eq!(s.tx.outputs[0].covenant.as_ref().map(|c| c.covenant_id), Some(cov));
+    // The plan names the order as checked on the node and its replacement (the MCP's band and caps
+    // read both).
+    let doc: Value = serde_json::from_str(&std::fs::read_to_string(w.fresh(".replace.json")).unwrap()).unwrap();
+    let plan = &doc["info"]["plan"];
+    assert_eq!((plan["current"]["kind"].as_str(), plan["current"]["state"]["price"].as_str()), (Some("KobAsk"), Some("300000000")));
+    assert_eq!(plan["replacement"]["state"]["price"].as_str(), Some("310000000"));
     let p = decode(&s.tx.payload).unwrap().unwrap();
     assert!(p.records.iter().any(|r| matches!(r, Record::Amend { .. })), "{:?}", p.records);
     // A larger amount is a cancel-replace with a top-up from the free tokens of the maker. The new
