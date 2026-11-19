@@ -4,7 +4,7 @@
 import { mkdirSync } from 'node:fs';
 import { expect, test, type MockClient } from '../fixtures';
 import { TOKEN, fund, openMarket } from '../helpers/env';
-import { clickPlace, clickPlaceOnly, confirmUntil, fillFields, pickType, placedBy, readReceipt, cancelReceipt, settlePlan, waitReviewable, waitSubmitted } from '../helpers/ticket';
+import { clickPlace, clickPlaceOnly, confirmReceipt, confirmUntil, fillFields, pickType, placedBy, readReceipt, cancelReceipt, settlePlan, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -227,6 +227,48 @@ test.describe('direct fill by time in force', () => {
     await waitSubmitted(page);
     expect(await tokensOf(mock)).toBe(before + 5n * TOKEN);
     expect(await activeOf(mock)).toEqual([]);
+  });
+
+  test('market buy filled now: a later take stops at the worst price shown, however the book moved', async ({ appPage: page, mock, wallet }) => {
+    await fund(mock);
+    // bob's ask at ten times the best price, beyond the worst price the market order allows
+    await mock.post('/mock/place', { key: 'bob', side: 'ask', price: '25100000', amount: (5n * TOKEN).toString() });
+    await openMarket(page, mock);
+    const before = await tokensOf(mock);
+    await pickType(page, 'market', 'buy');
+    // more than the asks within the worst price: more than one transaction of takes, and a rest
+    await fillFields(page, { amount: '70', direct: 'take' });
+    await expectTake(page, /^Fills now: 62 EXKCC at 0\.025\d+ avg/, /^Rest: not placed$/);
+    await waitReviewable(page);
+    // Once the first take is in, someone takes the maker's asks that are left: bob's ask is the touch.
+    const sent0 = (await mock.submitted(false)).length;
+    let swept = false;
+    await page.route('**/v1/books/**', async (route) => {
+      if (!swept && (await mock.submitted(false)).length > sent0) {
+        swept = true;
+        for (const a of (await mock.ordersOf('maker')).filter((o) => [1, 'ask', 'sell'].includes(o.side))) {
+          await mock.post('/mock/take', { covenant_id: a.covenant_id, amount: a.amount_left });
+        }
+      }
+      await route.continue();
+    });
+    await page.getByTestId('order-place').click();
+    await readReceipt(page);
+    await confirmReceipt(page);
+    await expect(page.getByTestId('order-take-step-1')).toHaveAttribute('data-state', 'done', { timeout: 30_000 });
+    // The next take would pay bob's price: the run stops and says how much was filled.
+    const popup = page.getByTestId('confirm-order');
+    const toast = page.getByTestId('toast-error');
+    await popup.or(toast).first().waitFor({ state: 'visible', timeout: 30_000 });
+    if (process.env.KOB_WM1_SHOT) await page.screenshot({ path: process.env.KOB_WM1_SHOT });
+    expect(swept).toBe(true);
+    await expect(popup).toHaveCount(0);
+    await expect(toast).toContainText(/^Fill from the book stopped: Filled \d+ EXKCC\. The next fill would pass the worst price shown \(0\.0258\d*\), so the rest is not placed\./);
+    const filled = BigInt(/Filled (\d+) EXKCC/.exec((await toast.textContent()) ?? '')![1]!);
+    await expect(page.getByTestId('order-take-step-2')).toHaveAttribute('data-state', 'failed');
+    expect(await wallet!.calls()).toHaveLength(1);
+    await expect.poll(() => tokensNow(mock)).toBe(before + filled * TOKEN);
+    expect((await mock.ordersOf('bob')).filter((o) => o.status === 'open')).toHaveLength(1);
   });
 
   test('market sell filled now: takes the bids within its worst price', async ({ appPage: page, mock }) => {

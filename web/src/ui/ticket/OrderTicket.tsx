@@ -35,7 +35,7 @@ import { Banner, Button, Dropdown, Loading, RawDetails, Segmented, Stepper, kasA
 import type { CurveIntent } from '../../kob/intent-simple';
 import { curveOfLadder, ladderStepItems } from './ladder-curve';
 import { executorTip } from '../../kob/fill-tip';
-import { MAX_TAKE_STEPS } from '../../kob/take';
+import { runTakes } from './take-run';
 import { bookFromIndexer, readClock } from '../../app/env';
 import { readPairReferences, readReferences, type References } from '../../data/indexer-crosscheck';
 import type { PlanEnv } from '../../kob/plan-types';
@@ -61,7 +61,7 @@ import { maxBuyAmount } from './max-amount';
 import { MERGE_ANSWERS, useMergeBeforeSale } from './merge-before-sale';
 import { orderLabel } from './order-label';
 import { usePairTicketEnv, useTicketEnv, useTicketPlan, type EnvWait } from './use-ticket';
-import { CLOCK_TICK_MS, CLOCK_WAIT_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, liveClockAt, reviewClock, sameTransaction, slippageWithin, withinTerms } from './review-check';
+import { CLOCK_TICK_MS, CLOCK_WAIT_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, keepTermsPlan, liveClockAt, reviewClock, sameTransaction } from './review-check';
 import { rememberPairForm, takePairFlip } from './pair-flip';
 import './ticket.css';
 
@@ -92,9 +92,6 @@ export interface OrderTicketProps {
    */
   facts?: ComponentChildren;
 }
-
-/** Answers of the node or the checks that mean the order a take spends is gone to someone else. */
-const LOST_RACE = new Set(['orphan', 'double-spend', 'inputs-changed', 'inputs-unconfirmed', 'input-unconfirmed', 'input-pending-spent']);
 
 /**
  * A level that could not be planned at the click. It holds the sentence, the raw builder text
@@ -709,20 +706,8 @@ export function OrderTicket(props: OrderTicketProps) {
    * slippage narrowed to end there. A touch already beyond it, or another order kind past its
    * shown total, stops the order.
    */
-  const keepTerms = (p: OrderPlan, intent: Intent, plan: (i: Intent) => OrderPlan, shown: OrderPlan | null): { p: OrderPlan; intent: Intent } | PlanStop => {
-    if (!shown || withinTerms(shown, p)) return { p, intent };
-    const d = p.disclosure;
-    const worst = shown.disclosure?.worstPrice ?? null;
-    if ((intent.type === 'market' || intent.type === 'close') && d?.expectedPrice != null && worst !== null) {
-      const bps = slippageWithin(d.side, d.expectedPrice, worst);
-      if (bps !== null) {
-        const narrowed = { ...intent, slippageBps: bps } as Intent;
-        const q = plan(narrowed);
-        if (q.ok && q.built && errors(q).length === 0 && withinTerms(shown, q)) return { p: q, intent: narrowed };
-      }
-    }
-    return { text: t('ticket.beyondTerms'), code: 'terms' };
-  };
+  const keepTerms = (p: OrderPlan, intent: Intent, plan: (i: Intent) => OrderPlan, shown: OrderPlan | null): { p: OrderPlan; intent: Intent } | PlanStop =>
+    keepTermsPlan(p, intent, plan, shown) ?? { text: t('ticket.beyondTerms'), code: 'terms' };
 
   /**
    * Plans one order of the click at once. `index` is its place among `levels`, since a ladder
@@ -919,90 +904,24 @@ export function OrderTicket(props: OrderTicketProps) {
   }, [sellAfterMerge, sellReady]);
 
   /**
-   * A crossing order filled from the book (kob/take.ts). Each take is its own transaction, planned
-   * at its turn on the book read again right before, signed and sent before the next. Then the
-   * rest rests at the limit (GTC, GTD or day) or is not placed (IOC, FOK, market). A take whose
-   * order is gone (a lost race) is planned again on a fresh book once. A second loss places the
-   * order on the book instead: a limit as its auction, an immediate order as its covenant order.
-   * The stepper says where it is.
+   * A crossing order filled from the book (kob/take.ts): its takes, each its own transaction, and
+   * then the rest (take-run.ts `runTakes`). The stepper says where it is.
    */
-  const placeTake = async (intent0: Intent, shown: OrderPlan) => {
-    const tk0 = shown.take!;
-    const restsLimit = tk0.restKind === 'limit';
-    const takeWord = (k: number, n: number) => (n === 1 ? t('ticket.take.stepOne') : t('ticket.take.step', { n: k + 1, of: n }));
-    let items: StepperItem[] = tk0.steps.map((_, k) => ({ label: takeWord(k, tk0.steps.length), state: 'waiting', testid: `order-take-step-${k + 1}` }));
-    if (restsLimit && tk0.rest > 0n) items.push({ label: t('ticket.take.stepRest'), state: 'waiting', testid: 'order-take-step-rest' });
-    const show = () => setTakeRun([...items]);
-    const setItem = (k: number, x: Partial<StepperItem>) => {
-      while (items.length <= k) items.push({ label: takeWord(items.length, items.length + 1), state: 'waiting', testid: `order-take-step-${items.length + 1}` });
-      items[k] = { ...items[k]!, ...x };
-      show();
-    };
-    show();
-    let left = (intent0 as { amount: bigint }).amount;
-    let races = 0;
-    let fallback = false;
-    let at = 0;
-    let txs = 0;
-    for (let guard = 0; left > 0n && guard < MAX_TAKE_STEPS + 3; guard++) {
-      const now = (fallback
-        ? { ...intent0, amount: left, ...(intent0.type === 'limit' ? { crossing: 'auction' } : { take: false }) }
-        : { ...intent0, amount: left }) as Intent;
-      setItem(at, { state: 'current', busy: true });
-      let job = await prepareLevel(now, txs, 2, txs === 0 ? shown : null, { fresh: true });
-      if ('built' in job && !job.plan?.take && !fallback) {
-        // Nothing more to take now. The rest rests as a plain limit, or (IOC, FOK, market) it is
-        // not placed.
-        if (!restsLimit) {
-          items = items.slice(0, at);
-          show();
-          // Nothing at all was filled (the book moved since the plan). That is said, not a silent
-          // end of the click.
-          if (txs === 0) sender.stop(t('ticket.take.nothingNow'), undefined, 'take-empty');
-          break;
-        }
-        job = await prepareLevel({ ...intent0, amount: left, crossing: 'limit' } as Intent, txs + 1, 2, null);
-      }
-      if (!('built' in job)) {
-        setItem(at, { state: 'failed', busy: false });
-        sender.stop(job.text, job.raw, job.code);
-        break;
-      }
-      const isTake = !!job.plan?.take;
-      if (!isTake) setItem(at, { label: t('ticket.take.stepRest'), testid: 'order-take-step-rest' });
-      setItem(at, { state: 'current', busy: false });
-      const out = await sender.send(job);
-      if (out.status === 'submitted') {
-        txs++;
-        setItem(at, { state: 'done', busy: false, note: undefined });
-        at++;
-        if (isTake) {
-          left -= job.plan!.take!.amount;
-          // An estimate of fewer takes than happen: one more step.
-          if (left > 0n && at >= items.length && !restsLimit) items.push({ label: takeWord(at, at + 1), state: 'waiting', testid: `order-take-step-${at + 1}` });
-          if (left > 0n && restsLimit && !items.some((x, k) => k >= at)) items.push({ label: t('ticket.take.stepRest'), state: 'waiting', testid: 'order-take-step-rest' });
-          continue;
-        }
-        left = 0n;
-        break;
-      }
-      const code = out.send.code ?? '';
-      if (isTake && LOST_RACE.has(code) && races < 2) {
-        races++;
-        // The order was gone. The book is read again and taken again. A second loss places the
-        // order on the book.
-        setItem(at, { state: 'current', note: t('ticket.take.retry') });
-        if (races > 1) fallback = true;
-        continue;
-      }
-      setItem(at, { state: 'failed', busy: false });
-      break;
-    }
-    // Steps estimated that never came (the book filled it sooner).
-    items = items.filter((x, k) => k < at || x.state !== 'waiting');
-    show();
-    return { done: left === 0n || (!restsLimit && txs > 0) };
-  };
+  const placeTake = (intent0: Intent, shown: OrderPlan) =>
+    runTakes(intent0, shown, {
+      prepare: (intent, index, terms, fresh) => prepareLevel(intent, index, 2, terms, fresh ? { fresh: true } : {}),
+      send: (job) => sender.send(job),
+      stop: (s) => sender.stop(s.text, s.raw, s.code),
+      show: (items) => setTakeRun(items),
+      words: {
+        step: (k, n) => (n === 1 ? t('ticket.take.stepOne') : t('ticket.take.step', { n: k + 1, of: n })),
+        rest: t('ticket.take.stepRest'),
+        retry: t('ticket.take.retry'),
+        nothingNow: t('ticket.take.nothingNow'),
+        stopTerms: (filled) => t('ticket.take.stopTerms', { amount: formatUnits(filled, token.decimals, { group: ',' }), ticker, price: formatKas(shown.take!.limit, { group: ',' }) }),
+        stopGone: (filled) => t('ticket.take.stopGone', { amount: formatUnits(filled, token.decimals, { group: ',' }), ticker }),
+      },
+    });
 
   /**
    * The order button: every level of the order in turn, each planned at its turn, checked and

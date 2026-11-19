@@ -36,7 +36,8 @@
 //    (kob/node-verify.ts) and stop the order unless each one is confirmed unspent with the amount
 //    and script the transaction commits to. The node, not the indexer, is the authority for the
 //    coins.
-import type { Clock, OrderPlan } from '../../kob/plan-types';
+import type { Intent } from '../../kob/plan';
+import { errors, type Clock, type OrderPlan } from '../../kob/plan-types';
 import type { BuiltTx } from '../../kob/types';
 
 /**
@@ -168,4 +169,26 @@ export function slippageWithin(side: 'buy' | 'sell', touch: bigint, worst: bigin
   const room = side === 'buy' ? worst - touch : touch - worst;
   const bps = room > 0n ? (room * 10_000n) / touch : 0n;
   return bps >= 1n ? bps : null;
+}
+
+/**
+ * The plan made at the click (`p`, of `intent`) within the terms the ticket showed (`shown`,
+ * `withinTerms`). It is the order to sign, whatever its start price, coins or fee. A market or
+ * close order whose auction or take would end beyond the worst price shown is planned again
+ * (`plan`) with the slippage narrowed to end there. Null when it cannot keep them: a touch already
+ * beyond the worst price, or another order kind past its shown total.
+ */
+export function keepTermsPlan(p: OrderPlan, intent: Intent, plan: (i: Intent) => OrderPlan, shown: OrderPlan | null): { p: OrderPlan; intent: Intent } | null {
+  if (!shown || withinTerms(shown, p)) return { p, intent };
+  const d = p.disclosure;
+  const worst = shown.disclosure?.worstPrice ?? null;
+  if ((intent.type === 'market' || intent.type === 'close') && d?.expectedPrice != null && worst !== null) {
+    const bps = slippageWithin(d.side, d.expectedPrice, worst);
+    if (bps !== null) {
+      const narrowed = { ...intent, slippageBps: bps } as Intent;
+      const q = plan(narrowed);
+      if (q.ok && q.built && errors(q).length === 0 && withinTerms(shown, q)) return { p: q, intent: narrowed };
+    }
+  }
+  return null;
 }
