@@ -60,6 +60,37 @@ describe('graph', () => {
     expect(g.area).toBe('M30 25 H60 L60 12.5 H90 L90 0 H100 V50 H30 Z');
   });
 
+  it('merges levels narrower than one unit of the graph, keeping its shape, scale and sold boundary', () => {
+    const amount = 1_000_000n * WHOLE;
+    const t = curveTable(kob, { amount, levels: 1000, total: 10_000n * KAS, multipleMilli: 5000n, scale: SCALE });
+    expect(t.table).toHaveLength(1000);
+    const left = amount - 333n * t.levelSize - t.levelSize / 2n; // mid level 333
+    const all = curveSteps(t.levelSize, t.table, amount, left, 1e9);
+    const merged = curveSteps(t.levelSize, t.table, amount, left);
+    expect(all).toHaveLength(1000);
+    expect(merged.length).toBeLessThanOrEqual(2 * 320 + 4);
+    expect(merged.length).toBeLessThan(400);
+    // contiguous from 0 to 1; each merged step keeps its first level's price
+    expect(merged[0]!.from).toBe(0);
+    expect(merged[merged.length - 1]!.to).toBe(1);
+    merged.forEach((s, i) => {
+      if (i > 0) expect(s.from).toBe(merged[i - 1]!.to);
+      expect(s.price).toBe(t.table[s.level]);
+    });
+    const [ga, gm] = [stepGeometry(all, 320, 96), stepGeometry(merged, 320, 96)];
+    expect(gm.maxPrice).toBe(ga.maxPrice);
+    expect(gm.soldX).toBe(ga.soldX);
+    expect(merged.find((s) => s.price === t.table[0])).toBeTruthy();
+    // at the graph's own size the line moves by less than one unit anywhere
+    const yAt = (st: typeof all, x: number) => {
+      const s = st.find((v) => v.from <= x && x < v.to) ?? st[st.length - 1]!;
+      return (Number(s.price) / Number(ga.maxPrice)) * 96 * 0.9;
+    };
+    for (let i = 0; i < 3200; i++) expect(Math.abs(yAt(merged, i / 3200) - yAt(all, i / 3200))).toBeLessThan(1);
+    // a curve of wide levels is drawn one step per level
+    expect(curveSteps(30n, [10n, 20n, 30n, 40n], 100n, 45n)).toHaveLength(4);
+  });
+
   it('has no sold part on a fresh curve', () => {
     const g = stepGeometry(curveSteps(50n, [1n, 2n], 100n), 10, 10);
     expect(g.soldPath).toBe('');

@@ -313,20 +313,37 @@ export interface CurveStep {
   sold: boolean;
 }
 
+/** Drawn steps per graph width: one per unit of the 320-wide graph box. */
+export const CURVE_GRAPH_STEPS = 320;
+
 /**
- * The steps of a table over `total` base units, one per level. A level whose whole size is sold,
- * given `amountLeft`, is marked as sold.
+ * The steps of a table over `total` base units. A level whose whole size is sold, given
+ * `amountLeft`, is marked as sold. For display only, levels are merged into steps of at most
+ * 1/`maxSteps` of the width, each keeping its first level's price, so a 1,000-level curve stays a
+ * light SVG. The sold boundary and the lowest and highest price always start their own step, so
+ * the scale and the "now" line do not move.
  */
-export function curveSteps(levelSize: bigint, table: readonly bigint[], total: bigint, amountLeft: bigint = total): CurveStep[] {
+export function curveSteps(levelSize: bigint, table: readonly bigint[], total: bigint, amountLeft: bigint = total, maxSteps = CURVE_GRAPH_STEPS): CurveStep[] {
   const sizes = levelSizes(levelSize, table.length, total);
   const soldUnits = total - amountLeft;
   const out: CurveStep[] = [];
-  let acc = 0n;
   const share = (u: bigint) => (total > 0n ? Number((u * 1_000_000n) / total) / 1_000_000 : 0);
+  const lo = table.reduce((m, p) => (p < m ? p : m), table[0] ?? 0n);
+  const hi = table.reduce((m, p) => (p > m ? p : m), table[0] ?? 0n);
+  const cells = BigInt(Math.max(1, Math.floor(maxSteps)));
+  let acc = 0n;
+  let start = 0n;
   table.forEach((price, level) => {
     const from = acc;
     acc += sizes[level]!;
-    out.push({ level, from: share(from), to: share(acc), price, sold: acc <= soldUnits });
+    const sold = acc <= soldUnits;
+    const last = out[out.length - 1];
+    if (last && last.sold === sold && (acc - start) * cells <= total && (price === last.price || (price !== lo && price !== hi))) {
+      last.to = share(acc);
+      return;
+    }
+    start = from;
+    out.push({ level, from: share(from), to: share(acc), price, sold });
   });
   return out;
 }
