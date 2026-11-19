@@ -563,7 +563,7 @@ fn run_with(blocks: u64, per_commit: u64, mix: Mix, seed: u64, cfg: IngestConfig
         "SELECT hex(o.covenant_id), e.kind, e.amount, e.price, e.payout, e.closes, kob_dtext(e.detail) FROM order_events e JOIN orders o ON o.id = e.order_id ORDER BY e.id",
         "SELECT hex(o.covenant_id), s.status, s.filled_amount, s.remaining_amount, s.state_known FROM order_state s JOIN orders o ON o.id = s.order_id ORDER BY o.covenant_id",
         "SELECT hex(u.txid), u.idx, hex(o.covenant_id), u.amount, u.role, u.spent_block FROM token_utxos u JOIN orders o ON o.id = u.order_id ORDER BY u.txid, u.idx",
-        "SELECT hex(h.txid), h.idx, hex(w.h), h.amount, h.role, hex(h.state), h.spent_block FROM token_holdings h JOIN ids w ON w.id = h.owner_id ORDER BY h.txid, h.idx",
+        "SELECT hex(h.txid), h.idx, hex(w.h), h.amount, h.role, hex(h.state), h.spent_block FROM token_holdings_named h JOIN ids w ON w.id = h.owner_id ORDER BY h.txid, h.idx",
         "SELECT block_seq, hex(txid), reason FROM rejects ORDER BY id",
     ] {
         let mut st = ing.conn().prepare(sql).unwrap();

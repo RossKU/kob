@@ -24,6 +24,7 @@
 //! [`crate::executor::IndexerSource`].
 
 use super::db::DbResult;
+use super::ids::{program_name, tx_of};
 use super::packed::{sql_order_ids_more, GENESIS_O, ORDER_IDS_O};
 use super::reads::tip_state;
 use crate::hex::Hash32;
@@ -99,11 +100,13 @@ pub fn snapshot(conn: &Connection, _operator: Option<[u8; 32]>) -> DbResult<Memo
 /// that a transaction leaves the operator, such as a route of an older planner or a taker's own
 /// inventory, land here. The maintenance jobs (`crate::maintenance`) merge or sell them.
 pub fn operator_tokens(conn: &Connection, operator: &[u8; 32]) -> DbResult<Vec<crate::maintenance::OwnToken>> {
-    let mut st = conn.prepare_cached(
-        "SELECT x.txid, x.idx, tk.h, x.program, x.value, kob_hstate(x.state, x.family, ow.h, x.owner_kind, x.amount), x.created_daa FROM token_holdings x \
-         JOIN ids tk ON tk.id = x.token_id JOIN ids ow ON ow.id = x.owner_id \
-         WHERE x.owner_id = (SELECT id FROM ids WHERE h = ?1) AND x.spent_block IS NULL ORDER BY x.created_block, x.txid, x.idx",
-    )?;
+    let mut st = conn.prepare_cached(concat!(
+        "SELECT xt.h, x.idx, tk.h, ",
+        program_name!("x.program_id"),
+        ", x.value, kob_hstate(x.state, x.family, ow.h, x.owner_kind, x.amount), x.created_daa FROM token_holdings x \
+             CROSS JOIN txs xt ON xt.id = x.tx_id JOIN ids tk ON tk.id = x.token_id JOIN ids ow ON ow.id = x.owner_id \
+             WHERE x.owner_id = (SELECT id FROM ids WHERE h = ?1) AND x.spent_block IS NULL ORDER BY x.created_block, xt.h, x.idx"
+    ))?;
     let rows = st.query_map([&operator[..]], |r| {
         Ok((
             r.get::<_, Vec<u8>>(0)?,
@@ -156,13 +159,16 @@ struct OwnedToken {
 }
 
 fn owned_tokens(conn: &Connection) -> DbResult<HashMap<[u8; 32], Vec<OwnedToken>>> {
-    let mut st = conn.prepare_cached(
-        "SELECT fo.covenant_id, t.txid, t.idx, t.amount, t.value, t.role, t.created_daa, tk.h, h.program, \
-                kob_hstate(h.state, h.family, hw.h, h.owner_kind, h.amount) \
-         FROM token_utxos t JOIN orders fo ON fo.id = t.order_id JOIN ids tk ON tk.id = t.token_id \
-         LEFT JOIN token_holdings h ON h.txid = t.txid AND h.idx = t.idx LEFT JOIN ids hw ON hw.id = h.owner_id \
-         WHERE t.spent_block IS NULL ORDER BY t.created_block, t.txid, t.idx",
-    )?;
+    let mut st = conn.prepare_cached(concat!(
+        "SELECT fo.covenant_id, t.txid, t.idx, t.amount, t.value, t.role, t.created_daa, tk.h, ",
+        program_name!("h.program_id"),
+        ", kob_hstate(h.state, h.family, hw.h, h.owner_kind, h.amount) \
+             FROM token_utxos t JOIN orders fo ON fo.id = t.order_id JOIN ids tk ON tk.id = t.token_id \
+             LEFT JOIN token_holdings h ON h.tx_id = ",
+        tx_of!("t.txid"),
+        " AND h.idx = t.idx LEFT JOIN ids hw ON hw.id = h.owner_id \
+             WHERE t.spent_block IS NULL ORDER BY t.created_block, t.txid, t.idx"
+    ))?;
     let rows = st.query_map([], |r| {
         Ok((
             (
@@ -437,10 +443,14 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
 /// The live, proven token UTXOs of `token` that key `owner` holds, oldest first.
 fn key_tokens(conn: &Connection, owner: &[u8; 32], token: &[u8; 32]) -> DbResult<Vec<TokenUtxo>> {
     let mut st = conn.prepare_cached(
-        "SELECT x.txid, x.idx, x.program, x.value, kob_hstate(x.state, x.family, ow.h, x.owner_kind, x.amount), x.created_daa FROM token_holdings x \
-         JOIN ids ow ON ow.id = x.owner_id \
-         WHERE x.owner_id = (SELECT id FROM ids WHERE h = ?1) AND x.token_id = (SELECT id FROM ids WHERE h = ?2) AND x.spent_block IS NULL \
-         ORDER BY x.created_block, x.txid, x.idx",
+        concat!(
+            "SELECT xt.h, x.idx, ",
+            program_name!("x.program_id"),
+            ", x.value, kob_hstate(x.state, x.family, ow.h, x.owner_kind, x.amount), x.created_daa FROM token_holdings x \
+             CROSS JOIN txs xt ON xt.id = x.tx_id JOIN ids ow ON ow.id = x.owner_id \
+             WHERE x.owner_id = (SELECT id FROM ids WHERE h = ?1) AND x.token_id = (SELECT id FROM ids WHERE h = ?2) AND x.spent_block IS NULL \
+             ORDER BY x.created_block, xt.h, x.idx"
+        ),
     )?;
     let rows = st.query_map([&owner[..], &token[..]], |r| {
         Ok((

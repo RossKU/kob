@@ -67,6 +67,7 @@
 //! `price_source: "none"`).
 
 use super::db::DbResult;
+use super::ids::id_of;
 use super::market::{self, Candle};
 use super::packed::{GENESIS_O, ORDER_IDS_O};
 use super::reads::{fillable_now, pinned_template, reduce, tip_state, ReadCtx, CUSTODY_OK, NOT_FROZEN, RESTING_TIF};
@@ -694,8 +695,13 @@ fn pair_volume(
 ) -> DbResult<BTreeMap<i64, (i128, i128, u64)>> {
     let rows = pair_fill_rows(
         conn,
-        "SELECT txid, ts, side, amount_a, amount_b FROM pair_fills WHERE base_cov_id = ?1 AND quote_cov_id = ?2 AND ts >= ?3 \
-         AND ts < ?4 ORDER BY ts LIMIT 200000",
+        concat!(
+            "SELECT txid, ts, side, amount_a, amount_b FROM pair_fills WHERE base_id = ",
+            id_of!("?1"),
+            " AND quote_id = ",
+            id_of!("?2"),
+            " AND ts >= ?3 AND ts < ?4 ORDER BY ts LIMIT 200000"
+        ),
         params![a.0.to_vec(), b.0.to_vec(), start, end],
     )?;
     let mut m: BTreeMap<i64, (i128, i128, u64)> = BTreeMap::new();
@@ -888,8 +894,14 @@ pub fn pair_fills(
     limit: usize,
 ) -> DbResult<PairFillsView> {
     let mut st = conn.prepare_cached(
-        "SELECT id, txid, ts, daa, covenant_id, contract, side, amount_a, amount_b, price, a_scale, tip_kas, counterparty, price_source \
-         FROM pair_fills WHERE base_cov_id = ?1 AND quote_cov_id = ?2 AND id < ?3 ORDER BY id DESC LIMIT ?4",
+        concat!(
+            "SELECT p.id, p.txid, p.ts, p.daa, o.covenant_id, p.contract, p.side, p.amount_a, p.amount_b, p.price, p.a_scale, p.tip_kas, p.counterparty, \
+             p.price_source FROM pair_fills p CROSS JOIN orders o ON o.id = p.order_id WHERE p.base_id = ",
+            id_of!("?1"),
+            " AND p.quote_id = ",
+            id_of!("?2"),
+            " AND p.id < ?3 ORDER BY p.id DESC LIMIT ?4"
+        ),
     )?;
     let rows = st.query_map(params![base.0.to_vec(), quote.0.to_vec(), before.unwrap_or(i64::MAX), limit as i64 + 1], |r| {
         let price: Option<i64> = r.get(9)?;
@@ -927,8 +939,13 @@ pub fn pair_fills(
     // the transaction at the cut, which may be partial.
     let mut rows = pair_fill_rows(
         conn,
-        "SELECT txid, ts, side, amount_a, amount_b FROM pair_fills WHERE base_cov_id = ?1 AND quote_cov_id = ?2 AND ts >= ?3 \
-         ORDER BY ts DESC, id DESC LIMIT ?4",
+        concat!(
+            "SELECT txid, ts, side, amount_a, amount_b FROM pair_fills WHERE base_id = ",
+            id_of!("?1"),
+            " AND quote_id = ",
+            id_of!("?2"),
+            " AND ts >= ?3 ORDER BY ts DESC, id DESC LIMIT ?4"
+        ),
         params![base.0.to_vec(), quote.0.to_vec(), since, market::MAX_FILL_ROWS as i64 + 1],
     )?;
     let window_truncated = rows.len() > market::MAX_FILL_ROWS;
@@ -964,9 +981,15 @@ mod tests {
         let fill = |n: usize, ts: i64, per_tx: usize| {
             conn.execute(
                 "WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?1) \
-                 INSERT INTO pair_fills (block_seq, daa, ts, txid, tx_pos, covenant_id, contract, base_cov_id, quote_cov_id, side, amount_a, amount_b, a_scale, counterparty) \
-                 SELECT 1, 1, ?2 + i, CAST(printf('%032d', ?2 + i / ?5) AS BLOB), 0, x'01', 'KobPair', ?3, ?4, 1, 1, 1, 1, 'inventory' FROM k",
-                params![n as i64, ts, a.0.to_vec(), b.0.to_vec(), per_tx as i64],
+                 INSERT INTO pair_fills (block_seq, daa, ts, txid, tx_pos, order_id, contract, base_id, quote_id, side, amount_a, amount_b, a_scale, counterparty) \
+                 SELECT 1, 1, ?2 + i, CAST(printf('%032d', ?2 + i / ?5) AS BLOB), 0, 1, 'KobPair', ?3, ?4, 1, 1, 1, 1, 'inventory' FROM k",
+                params![
+                    n as i64,
+                    ts,
+                    crate::indexer::ids::intern(&conn, &a.0).unwrap(),
+                    crate::indexer::ids::intern(&conn, &b.0).unwrap(),
+                    per_tx as i64
+                ],
             )
             .unwrap();
         };

@@ -245,31 +245,79 @@ CREATE INDEX IF NOT EXISTS rejects_block ON rejects (block_seq);
 -- indexer could PROVE: the creating transaction's transfer leader (KCC-20 `next_states`, KRON columns) reveals the state of
 -- every output it authorises, and the state is kept only when the P2SH it produces equals the output's script public key.
 -- Genesis outputs of an issuance are never listed (no transaction reveals their state until they are spent).
--- role: owned = any holder that is not a known order, custody / stray = owned by a KOB order id (see `token_utxos`).
+--
+-- (Schema 14) The table holds no 32-byte transaction id and no repeated name, so a row is half of what it was and its key a
+-- third (`indexer::ids`):
+-- * `tx_id` and `spent_tx_id` are rows of `txs`: the outpoint is `(tx_id, idx)`. A statement resolves a transaction id
+--   with `tx_of!("?1")` and returns one with `tx_hash!("x.tx_id")`;
+-- * `program_id` is a row of `programs` (`ids::intern_program`, `program_name!`);
+-- * `role_code` is 0 owned (any holder that is not a known order), 1 custody, 2 stray (owned by a KOB order id, see
+--   `token_utxos`), 3 bought (a mode-1 order's bought-custody, `delivery::ROLE_BOUGHT`); `role_name!` reads it back.
 CREATE TABLE IF NOT EXISTS token_holdings (
-    txid          BLOB NOT NULL,
+    tx_id         INTEGER NOT NULL,       -- txs.id of the creating transaction
     idx           INTEGER NOT NULL,
     token_id      INTEGER NOT NULL,       -- ids.id of the token covenant id
-    program       TEXT NOT NULL,          -- token program template (KCC20Ref_8x8, KronToken2433, ...)
+    program_id    INTEGER NOT NULL,       -- programs.id of the token program template (KCC20Ref_8x8, KronToken2433, ...)
     family        INTEGER NOT NULL,       -- 1 kcc20, 2 kron (KOB1 family byte)
     owner_id      INTEGER NOT NULL,       -- ids.id of the state's 32-byte owner (x-only key, script hash or covenant id)
     owner_kind    INTEGER NOT NULL,       -- kcc20 owner_scheme, kron id_type
     amount        INTEGER NOT NULL,       -- token base units
     value         INTEGER NOT NULL,       -- KAS carrier
     state         BLOB NOT NULL,          -- state span (112 bytes kcc20, 46 bytes kron)
-    role          TEXT NOT NULL,          -- owned | custody | stray
+    role_code     INTEGER NOT NULL,       -- 0 owned | 1 custody | 2 stray | 3 bought
     created_block INTEGER NOT NULL,
     created_daa   INTEGER NOT NULL,
     spent_block   INTEGER,
-    spent_txid    BLOB,
-    PRIMARY KEY (txid, idx)
+    spent_tx_id   INTEGER,                -- txs.id of the spending transaction
+    PRIMARY KEY (tx_id, idx)
 );
+
+-- (Schema 14) The transaction ids the holdings name, once each. A row is added when a holding first names the id
+-- (`ids::intern_tx`) and goes with the last holding that names it: `n` counts the holdings whose `tx_id` or `spent_tx_id`
+-- it is, kept by the triggers below in the transaction of every insert, update and delete of a holding (a batch, a revert,
+-- a replay, the lean and the archive pruning), so a pruned store does not keep the ids of the rows it dropped.
+--
+-- The lookup by the 32 bytes reads `txs_h`, an index of their first 8 (`tx_of!`): a third of a full index over the 32,
+-- and the row it finds is compared whole. Two ids that share their first 8 bytes are two entries of the index, and the
+-- lookup still returns the one that equals. There is no unique constraint: `ids::intern_tx` is the one writer, and the
+-- migration loads each id once.
+CREATE TABLE IF NOT EXISTS txs (
+    id INTEGER PRIMARY KEY,
+    h  BLOB NOT NULL,
+    n  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS txs_h ON txs (substr(h, 1, 8));
+CREATE TRIGGER IF NOT EXISTS txs_holding_insert AFTER INSERT ON token_holdings BEGIN
+    UPDATE txs SET n = n + 1 WHERE id = NEW.tx_id;
+    UPDATE txs SET n = n + 1 WHERE id = NEW.spent_tx_id;
+END;
+CREATE TRIGGER IF NOT EXISTS txs_holding_delete AFTER DELETE ON token_holdings BEGIN
+    UPDATE txs SET n = n - 1 WHERE id = OLD.tx_id;
+    UPDATE txs SET n = n - 1 WHERE id = OLD.spent_tx_id;
+    DELETE FROM txs WHERE id IN (OLD.tx_id, OLD.spent_tx_id) AND n <= 0;
+END;
+CREATE TRIGGER IF NOT EXISTS txs_holding_update AFTER UPDATE OF tx_id, spent_tx_id ON token_holdings
+    WHEN OLD.tx_id IS NOT NEW.tx_id OR OLD.spent_tx_id IS NOT NEW.spent_tx_id BEGIN
+    UPDATE txs SET n = n + 1 WHERE id = NEW.tx_id;
+    UPDATE txs SET n = n + 1 WHERE id = NEW.spent_tx_id;
+    UPDATE txs SET n = n - 1 WHERE id = OLD.tx_id;
+    UPDATE txs SET n = n - 1 WHERE id = OLD.spent_tx_id;
+    DELETE FROM txs WHERE id IN (OLD.tx_id, OLD.spent_tx_id) AND n <= 0;
+END;
+
+-- (Schema 14) The token program names the holdings name, once each; never deleted (a handful of rows).
+CREATE TABLE IF NOT EXISTS programs (
+    id   INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
 -- The programs of one token's holdings, read by a skip-scan (MIN(program), then the next above it) for every evaluated order and every
 -- open-list token (`reads::proven_programs`: 0.1 ms; the DISTINCT it replaced read all of a token's holdings, 18 s on the soak), and
 -- asked once per inserted holding (`processor::insert_holding`: has the token a holding under this program yet). `holding_programs` is that
 -- set with a count, kept by the triggers below in the transaction of every insert and delete of a holding (a batch, a revert, a replay;
 -- not the pruning, schema 12): a few rows per token instead of the 190 MB `(token_cov_id, program)` index over every holding that served the same
--- two reads. `kobd db migrate` counts it once (`db::backfill_holding_programs`) for a store that did not have it.
+-- two reads. `kobd db migrate` counts it once (`db::backfill_holding_programs`) for a store that did not have it. The program is its
+-- name here (schema 14 as before), so the skip-scan reads the names in order.
 CREATE TABLE IF NOT EXISTS holding_programs (
     token_id     INTEGER NOT NULL,        -- ids.id of the token covenant id
     program      TEXT NOT NULL,
@@ -277,7 +325,7 @@ CREATE TABLE IF NOT EXISTS holding_programs (
     PRIMARY KEY (token_id, program)
 ) WITHOUT ROWID;
 CREATE TRIGGER IF NOT EXISTS holding_programs_insert AFTER INSERT ON token_holdings BEGIN
-    INSERT INTO holding_programs (token_id, program, n) VALUES (NEW.token_id, NEW.program, 1)
+    INSERT INTO holding_programs (token_id, program, n) VALUES (NEW.token_id, (SELECT name FROM programs WHERE id = NEW.program_id), 1)
         ON CONFLICT (token_id, program) DO UPDATE SET n = n + 1;
 END;
 -- (Schema 12) A delete under the `meta` key `pruning` (the lean and the archive pruning, which delete final spent holdings) takes nothing
@@ -286,14 +334,14 @@ END;
 -- read asks only whether the row exists.
 CREATE TRIGGER IF NOT EXISTS holding_programs_delete AFTER DELETE ON token_holdings
     WHEN NOT EXISTS (SELECT 1 FROM meta WHERE k = 'pruning') BEGIN
-    UPDATE holding_programs SET n = n - 1 WHERE token_id = OLD.token_id AND program = OLD.program;
-    DELETE FROM holding_programs WHERE token_id = OLD.token_id AND program = OLD.program AND n <= 0;
+    UPDATE holding_programs SET n = n - 1 WHERE token_id = OLD.token_id AND program = (SELECT name FROM programs WHERE id = OLD.program_id);
+    DELETE FROM holding_programs WHERE token_id = OLD.token_id AND program = (SELECT name FROM programs WHERE id = OLD.program_id) AND n <= 0;
 END;
-CREATE TRIGGER IF NOT EXISTS holding_programs_update AFTER UPDATE OF token_id, program ON token_holdings
-    WHEN OLD.token_id IS NOT NEW.token_id OR OLD.program IS NOT NEW.program BEGIN
-    UPDATE holding_programs SET n = n - 1 WHERE token_id = OLD.token_id AND program = OLD.program;
-    DELETE FROM holding_programs WHERE token_id = OLD.token_id AND program = OLD.program AND n <= 0;
-    INSERT INTO holding_programs (token_id, program, n) VALUES (NEW.token_id, NEW.program, 1)
+CREATE TRIGGER IF NOT EXISTS holding_programs_update AFTER UPDATE OF token_id, program_id ON token_holdings
+    WHEN OLD.token_id IS NOT NEW.token_id OR OLD.program_id IS NOT NEW.program_id BEGIN
+    UPDATE holding_programs SET n = n - 1 WHERE token_id = OLD.token_id AND program = (SELECT name FROM programs WHERE id = OLD.program_id);
+    DELETE FROM holding_programs WHERE token_id = OLD.token_id AND program = (SELECT name FROM programs WHERE id = OLD.program_id) AND n <= 0;
+    INSERT INTO holding_programs (token_id, program, n) VALUES (NEW.token_id, (SELECT name FROM programs WHERE id = NEW.program_id), 1)
         ON CONFLICT (token_id, program) DO UPDATE SET n = n + 1;
 END;
 -- The holdings of a token or of an owner in page order, spent ones included (`GET /v1/token-utxos?spent=true`): no sort of the lot.
@@ -302,11 +350,21 @@ END;
 CREATE INDEX IF NOT EXISTS token_holdings_token_page ON token_holdings (token_id, created_block);
 CREATE INDEX IF NOT EXISTS token_holdings_owner_page ON token_holdings (owner_id, created_block);
 CREATE INDEX IF NOT EXISTS token_holdings_created ON token_holdings (created_block);
-CREATE INDEX IF NOT EXISTS token_holdings_spent ON token_holdings (spent_block);
+-- The spent rows by their spending block (a revert un-spends them). (Schema 14) The unspent rows are not in it: every read of it names
+-- a block, and they were a third of its entries.
+CREATE INDEX IF NOT EXISTS token_holdings_spent ON token_holdings (spent_block) WHERE spent_block IS NOT NULL;
 -- The unspent holdings of an owner or of a token, oldest first (`GET /v1/token-utxos`, the operator's own tokens): the live
 -- rows only, in the order a page is read, however many spent rows the owner or the token has.
 CREATE INDEX IF NOT EXISTS token_holdings_live_owner ON token_holdings (owner_id, created_block) WHERE spent_block IS NULL;
 CREATE INDEX IF NOT EXISTS token_holdings_live_token ON token_holdings (token_id, created_block) WHERE spent_block IS NULL;
+-- (Schema 14) The holdings with their transaction ids, program and role written out, in the columns of schema 13, for the sqlite3
+-- shell and the tests. No read of the indexer uses it: a filter or a sort on its `txid` reads every holding (`tx_of!` is the lookup).
+CREATE VIEW IF NOT EXISTS token_holdings_named AS
+    SELECT h.rowid AS hid, t.h AS txid, h.idx, h.token_id, (SELECT p.name FROM programs p WHERE p.id = h.program_id) AS program, h.family,
+           h.owner_id, h.owner_kind, h.amount, h.value, h.state,
+           CASE h.role_code WHEN 0 THEN 'owned' WHEN 1 THEN 'custody' WHEN 2 THEN 'stray' WHEN 3 THEN 'bought' END AS role,
+           h.created_block, h.created_daa, h.spent_block, (SELECT s.h FROM txs s WHERE s.id = h.spent_tx_id) AS spent_txid
+    FROM token_holdings h JOIN txs t ON t.id = h.tx_id;
 
 -- Maintained candle aggregates (`indexer::candles`): one row per bucket of the four intervals the API serves, written with the fills it
 -- holds. Values are decimal text (i128). A token's rows are complete once it has a `candle_meta` row (the price basis they were built
@@ -377,6 +435,7 @@ CREATE INDEX IF NOT EXISTS orders_listed_tokens ON orders (token_id, token_tpl_i
 -- NULL, the pair fields in `detail`) and this row. `counterparty`: route (the transaction also fills KAS-book orders of A or
 -- B, which record their own trades), netting (an opposite pair order of the same pair filled in it, no KAS-book fill of A or
 -- B), inventory (neither: the filler's own tokens). `price_source` is always `none`. Stamped with the block (reverted with it).
+-- (Schema 14) The order and the two tokens are named by integer, as in `order_events` (`indexer::ids`).
 CREATE TABLE IF NOT EXISTS pair_fills (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     block_seq    INTEGER NOT NULL,
@@ -384,10 +443,10 @@ CREATE TABLE IF NOT EXISTS pair_fills (
     ts           INTEGER NOT NULL,
     txid         BLOB NOT NULL,
     tx_pos       INTEGER NOT NULL,
-    covenant_id  BLOB NOT NULL,           -- the filled pair order
+    order_id     INTEGER NOT NULL,        -- orders.id of the filled pair order
     contract     TEXT NOT NULL,
-    base_cov_id  BLOB NOT NULL,           -- token A
-    quote_cov_id BLOB NOT NULL,           -- token B
+    base_id      INTEGER NOT NULL,        -- ids.id of token A
+    quote_id     INTEGER NOT NULL,        -- ids.id of token B
     side         INTEGER NOT NULL,        -- 1 the order sold A (ASK), 2 it bought A (BID)
     amount_a     INTEGER NOT NULL,        -- base units of A filled
     amount_b     INTEGER,                 -- base units of B the maker received (ASK) or paid (BID)
@@ -397,8 +456,8 @@ CREATE TABLE IF NOT EXISTS pair_fills (
     counterparty TEXT NOT NULL,           -- route | netting | inventory
     price_source TEXT NOT NULL DEFAULT 'none'
 );
-CREATE INDEX IF NOT EXISTS pair_fills_pair ON pair_fills (base_cov_id, quote_cov_id, id);
-CREATE INDEX IF NOT EXISTS pair_fills_pair_ts ON pair_fills (base_cov_id, quote_cov_id, ts);
+CREATE INDEX IF NOT EXISTS pair_fills_pair ON pair_fills (base_id, quote_id, id);
+CREATE INDEX IF NOT EXISTS pair_fills_pair_ts ON pair_fills (base_id, quote_id, ts);
 CREATE INDEX IF NOT EXISTS pair_fills_block ON pair_fills (block_seq);
 
 -- KCC-23 declarations (`kcc23.rs`). A candidate preparation: an accepted version 1 transaction whose payload is a declaration

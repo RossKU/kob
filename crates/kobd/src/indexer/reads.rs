@@ -16,7 +16,7 @@
 
 use crate::hex::{self, Hash32};
 use crate::indexer::db::{DbError, DbResult};
-use crate::indexer::ids::{id_of, order_of};
+use crate::indexer::ids::{id_of, order_of, program_name, role_name, tx_hash, tx_of};
 use crate::indexer::packed::{sql_genesis, sql_order_ids, sql_order_ids_more, sql_ustate, GENESIS_O, ORDER_IDS_O};
 use crate::tokens::TokenAllowlist;
 use kob_protocol::artifacts::TemplateId;
@@ -1989,15 +1989,22 @@ pub struct TokenUtxoView {
 /// The columns [`token_utxo_from_row`] reads.
 ///
 /// `t` is `token_utxos` and `h` is the proven `token_holdings` row of the output.
-const TOKEN_UTXO_COLUMNS: &str =
-    "t.txid, t.idx, tk.h, fo.covenant_id, t.amount, t.value, t.role, t.created_daa, t.spent_block, t.spent_txid, h.program, kob_hstate(h.state, h.family, hw.h, h.owner_kind, h.amount), \
-     (fo.token_id IS NOT NULL AND t.token_id != fo.token_id AND (fo.quote_id IS NULL OR t.token_id != fo.quote_id))";
+const TOKEN_UTXO_COLUMNS: &str = concat!(
+    "t.txid, t.idx, tk.h, fo.covenant_id, t.amount, t.value, t.role, t.created_daa, t.spent_block, t.spent_txid, ",
+    program_name!("h.program_id"),
+    ", kob_hstate(h.state, h.family, hw.h, h.owner_kind, h.amount), \
+     (fo.token_id IS NOT NULL AND t.token_id != fo.token_id AND (fo.quote_id IS NULL OR t.token_id != fo.quote_id))"
+);
 /// The FROM of the token UTXO columns.
 ///
 /// `fo` is the owning order, which always exists because the UTXO was stored under its row. `tk`
 /// is the token.
-const TOKEN_UTXO_FROM: &str = "FROM token_utxos t JOIN ids tk ON tk.id = t.token_id JOIN orders fo ON fo.id = t.order_id \
-     LEFT JOIN token_holdings h ON h.txid = t.txid AND h.idx = t.idx LEFT JOIN ids hw ON hw.id = h.owner_id";
+const TOKEN_UTXO_FROM: &str = concat!(
+    "FROM token_utxos t JOIN ids tk ON tk.id = t.token_id JOIN orders fo ON fo.id = t.order_id \
+     LEFT JOIN token_holdings h ON h.tx_id = ",
+    tx_of!("t.txid"),
+    " AND h.idx = t.idx LEFT JOIN ids hw ON hw.id = h.owner_id"
+);
 
 /// A proven token state span as JSON, decoded with the program the indexer proved it for.
 fn proven_state_json(program: Option<String>, state: Option<Vec<u8>>) -> Option<Value> {
@@ -2736,13 +2743,21 @@ pub fn holdings(
         let nt = args.len();
         args.push(SqlValue::Integer(i));
         let ni = args.len();
-        conds.push(format!("(x.created_block, x.txid, x.idx) > (?{nb}, ?{nt}, ?{ni})"));
+        // The first term keeps the range on the page index: the row value names a joined column.
+        conds.push(format!("x.created_block >= ?{nb} AND (x.created_block, xt.h, x.idx) > (?{nb}, ?{nt}, ?{ni})"));
     }
     args.push(SqlValue::Integer(limit as i64 + 1));
     let sql = format!(
-        "SELECT x.txid, x.idx, tk.h, x.program, x.family, ow.h, x.owner_kind, x.amount, x.value, \
-         kob_hstate(x.state, x.family, ow.h, x.owner_kind, x.amount), x.role, x.created_block, x.created_daa, x.spent_block, x.spent_txid \
-         FROM token_holdings x CROSS JOIN ids tk ON tk.id = x.token_id CROSS JOIN ids ow ON ow.id = x.owner_id {} ORDER BY x.created_block, x.txid, x.idx LIMIT ?{}",
+        concat!(
+            "SELECT xt.h, x.idx, tk.h, ",
+            program_name!("x.program_id"),
+            ", x.family, ow.h, x.owner_kind, x.amount, x.value, kob_hstate(x.state, x.family, ow.h, x.owner_kind, x.amount), ",
+            role_name!("x.role_code"),
+            ", x.created_block, x.created_daa, x.spent_block, ",
+            tx_hash!("x.spent_tx_id"),
+            " FROM token_holdings x CROSS JOIN txs xt ON xt.id = x.tx_id CROSS JOIN ids tk ON tk.id = x.token_id CROSS JOIN ids ow ON ow.id = x.owner_id {} \
+             ORDER BY x.created_block, xt.h, x.idx LIMIT ?{}"
+        ),
         if conds.is_empty() { String::new() } else { format!("WHERE {}", conds.join(" AND ")) },
         args.len()
     );

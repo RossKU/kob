@@ -1013,7 +1013,7 @@ async fn a_recovered_mode_1_bid_has_its_bought_custody_and_a_refund_or_cancel_re
     assert!(bc.ok && bc.utxo.as_ref().is_some_and(|u| u.role == "bought" && u.amount == "4000"), "{bc:?}");
     assert_eq!(v.custody.as_ref().map(|c| c.ok), Some(true));
     let role: String = c2.hs.query(
-        "SELECT role FROM token_holdings WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL",
+        "SELECT role FROM token_holdings_named WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL",
         rusqlite::params![&h.fill.tx.id[..], h.ca as i64],
     );
     assert_eq!(role, "bought", "with its proven holding");

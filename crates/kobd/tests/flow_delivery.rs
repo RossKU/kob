@@ -49,7 +49,7 @@ fn holding(c: &Ctx, t: &SignedTx, j: usize, k: u8) -> (i64, String, i64) {
         let g = c.hs.ingest.lock().unwrap();
         g.conn()
             .query_row(
-                "SELECT h.amount, h.role, w.h, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount) FROM token_holdings h \
+                "SELECT h.amount, h.role, w.h, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount) FROM token_holdings_named h \
                  JOIN ids w ON w.id = h.owner_id WHERE h.txid = ?1 AND h.idx = ?2 AND h.spent_block IS NULL",
                 rusqlite::params![&t.tx.id[..], j as i64],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),

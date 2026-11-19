@@ -102,7 +102,7 @@ impl Ctx {
         }
         let holder = |txid: &[u8], idx: u32| -> Option<Vec<u8>> {
             conn.query_row(
-                "SELECT i.h FROM token_holdings h JOIN ids i ON i.id = h.owner_id WHERE h.txid = ?1 AND h.idx = ?2",
+                "SELECT i.h FROM token_holdings_named h JOIN ids i ON i.id = h.owner_id WHERE h.txid = ?1 AND h.idx = ?2",
                 rusqlite::params![txid, idx],
                 |r| r.get(0),
             )
@@ -309,4 +309,69 @@ pub fn rested(c: &Ctx, r: &Resting, min_rest: i64) -> u64 {
 /// takes the order's `keeperTip`).
 pub fn update(order: OrderUtxo<AnyState>, evidence: usize) -> BatchUpdate {
     BatchUpdate { order, evidence, evidence_b: None, take: None }
+}
+
+/// The layout of schema 13 (`kobd::indexer::storage` keeps it to bring older stores to it on the way to schema 14).
+pub const SCHEMA13: &str = include_str!("../../src/indexer/schema13.sql");
+
+/// Writes `dest` as the store a schema 13 build would have left of the store file `src` of this build: the holdings with their
+/// transaction ids, program and role written out (`token_holdings_named`, each holding at its rowid), the pair fills with their order
+/// and tokens as 32 bytes, no `txs` or `programs`, the triggers of schema 13. Every other table, the counters and totals the triggers
+/// kept, and the sequences are copied as they are.
+pub fn store13(src: &std::path::Path, dest: &std::path::Path) {
+    for s in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{s}", dest.display()));
+    }
+    let w = rusqlite::Connection::open(dest).unwrap();
+    w.execute_batch(SCHEMA13).unwrap();
+    w.execute_batch(kobd::logo_reports::SCHEMA).unwrap();
+    let triggers: Vec<String> = {
+        let mut st = w.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").unwrap();
+        let v = st.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+        v
+    };
+    for t in triggers {
+        w.execute_batch(&format!("DROP TRIGGER \"{t}\"")).unwrap();
+    }
+    w.execute("ATTACH DATABASE ?1 AS cur", [src.to_string_lossy().as_ref()]).unwrap();
+    let tables: Vec<(String, bool)> = {
+        let mut st = w
+            .prepare("SELECT name, sql LIKE '%WITHOUT ROWID%' FROM main.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+            .unwrap();
+        let v = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(|r| r.unwrap()).collect();
+        v
+    };
+    for (t, without_rowid) in tables {
+        let sql = match t.as_str() {
+            "token_holdings" => "INSERT INTO token_holdings (rowid, txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, \
+                                 role, created_block, created_daa, spent_block, spent_txid) \
+                                 SELECT hid, txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, \
+                                 created_daa, spent_block, spent_txid FROM cur.token_holdings_named ORDER BY hid"
+                .to_string(),
+            "pair_fills" => "INSERT INTO pair_fills (id, block_seq, daa, ts, txid, tx_pos, covenant_id, contract, base_cov_id, quote_cov_id, side, \
+                             amount_a, amount_b, price, a_scale, tip_kas, counterparty, price_source) \
+                             SELECT p.id, p.block_seq, p.daa, p.ts, p.txid, p.tx_pos, o.covenant_id, p.contract, b.h, q.h, p.side, p.amount_a, \
+                             p.amount_b, p.price, p.a_scale, p.tip_kas, p.counterparty, p.price_source \
+                             FROM cur.pair_fills p JOIN cur.orders o ON o.id = p.order_id JOIN cur.ids b ON b.id = p.base_id \
+                             JOIN cur.ids q ON q.id = p.quote_id ORDER BY p.id"
+                .to_string(),
+            _ => {
+                let cols: Vec<String> = {
+                    let mut st = w.prepare("SELECT name FROM pragma_table_info(?1, 'main') ORDER BY cid").unwrap();
+                    let v = st.query_map([&t], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+                    v
+                };
+                let cols = cols.join(", ");
+                format!("INSERT INTO {t} ({cols}) SELECT {cols} FROM cur.{t}{}", if without_rowid { "" } else { " ORDER BY rowid" })
+            }
+        };
+        w.execute(&sql, []).unwrap_or_else(|e| panic!("{t}: {e}"));
+    }
+    w.execute_batch(
+        "DELETE FROM main.sqlite_sequence; INSERT INTO main.sqlite_sequence (name, seq) SELECT name, seq FROM cur.sqlite_sequence; \
+         UPDATE meta SET v = '13' WHERE k = 'schema_version'; DETACH DATABASE cur;",
+    )
+    .unwrap();
+    // The triggers of schema 13, over the rows as they are.
+    w.execute_batch(SCHEMA13).unwrap();
 }

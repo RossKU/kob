@@ -99,6 +99,10 @@ fn columns_with(conn: &Connection, table: &str) -> String {
                 "kob_gstate(genesis_state, maker, token_cov_id, token_tpl_hash, quote_cov_id)".to_string()
             }
             ("order_events", "detail") if has_fn(conn, "kob_dtext") => "kob_dtext(detail)".to_string(),
+            // schema 14 names a pair fill's order and tokens by integer: joined back to their 32 bytes
+            ("pair_fills", "order_id") => "(SELECT covenant_id FROM orders WHERE id = order_id)".to_string(),
+            ("pair_fills", "base_id") => "(SELECT h FROM ids WHERE id = base_id)".to_string(),
+            ("pair_fills", "quote_id") => "(SELECT h FROM ids WHERE id = quote_id)".to_string(),
             _ => n.clone(),
         })
         .collect::<Vec<_>>()
@@ -177,7 +181,11 @@ fn main() {
         }
         let pair_rows: Vec<(Vec<u8>, Vec<u8>)> = {
             let mut st = conn
-                .prepare("SELECT base_cov_id, quote_cov_id FROM pair_fills GROUP BY 1, 2 ORDER BY COUNT(*) DESC, 1, 2 LIMIT 4")
+                .prepare(if has_col(&conn, "pair_fills", "base_id") {
+                    "SELECT b.h, q.h FROM pair_fills p JOIN ids b ON b.id = p.base_id JOIN ids q ON q.id = p.quote_id GROUP BY 1, 2 ORDER BY COUNT(*) DESC, 1, 2 LIMIT 4"
+                } else {
+                    "SELECT base_cov_id, quote_cov_id FROM pair_fills GROUP BY 1, 2 ORDER BY COUNT(*) DESC, 1, 2 LIMIT 4"
+                })
                 .expect("pairs");
             st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).expect("p").map(|r| r.expect("r")).collect()
         };
@@ -355,7 +363,7 @@ fn main() {
             table_digest(
                 &conn,
                 "token_holdings",
-                "SELECT h.txid, h.idx, t.h, h.program, h.family, w.h, h.owner_kind, h.amount, h.value, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount), h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid FROM token_holdings h JOIN ids t ON t.id = h.token_id JOIN ids w ON w.id = h.owner_id ORDER BY h.rowid",
+                "SELECT h.txid, h.idx, t.h, h.program, h.family, w.h, h.owner_kind, h.amount, h.value, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount), h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid FROM token_holdings_named h JOIN ids t ON t.id = h.token_id JOIN ids w ON w.id = h.owner_id ORDER BY h.hid",
             );
             table_digest(
                 &conn,

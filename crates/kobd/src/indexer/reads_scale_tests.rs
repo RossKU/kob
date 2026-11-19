@@ -88,13 +88,20 @@ fn load(path: &std::path::Path, n: usize) {
         rusqlite::params![n as i64, owner_base],
     )
     .unwrap();
+    // Their transaction ids are rows of `txs` (schema 14): ids `tx_base + i`.
+    let tx_base: i64 = tx.query_row("SELECT COALESCE(MAX(id), 0) FROM txs", [], |r| r.get(0)).unwrap();
+    tx.execute(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) INSERT INTO txs (id, h, n) SELECT ?2 + i, randomblob(32), 0 FROM n",
+        rusqlite::params![n as i64, tx_base],
+    )
+    .unwrap();
     tx.execute(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
-         INSERT INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, \
-                                     created_block, created_daa, spent_block, spent_txid) \
-         SELECT randomblob(32), 0, ?2, ?3, 1, CASE WHEN i % 10 = 0 THEN ?4 ELSE ?5 + i END, 0, 5, 100000000, x'08' || randomblob(111), \
-                'owned', i / 100 + 1, i, CASE WHEN i % 20 = 0 THEN NULL ELSE i / 100 + 2 END, NULL FROM n",
-        rusqlite::params![n as i64, t0_id, P8.name(), aa_id, owner_base],
+         INSERT INTO token_holdings (tx_id, idx, token_id, program_id, family, owner_id, owner_kind, amount, value, state, role_code, \
+                                     created_block, created_daa, spent_block, spent_tx_id) \
+         SELECT ?6 + i, 0, ?2, ?3, 1, CASE WHEN i % 10 = 0 THEN ?4 ELSE ?5 + i END, 0, 5, 100000000, x'08' || randomblob(111), \
+                0, i / 100 + 1, i, CASE WHEN i % 20 = 0 THEN NULL ELSE i / 100 + 2 END, NULL FROM n",
+        rusqlite::params![n as i64, t0_id, crate::indexer::ids::intern_program(&tx, P8.name()).unwrap(), aa_id, owner_base, tx_base],
     )
     .unwrap();
     // Orders: the big token has n / 3 filled ones with nothing resting, the bid-only token has

@@ -2324,17 +2324,18 @@ change funds its next transaction, so most of its transactions resolve, live and
 stays unknown (`GET /v1/stats` counts it in `miner_fee_unknown_txs`). Where the record has the node's values the node's are used (a disagreement
 is logged). An older build skips every format-5 frame likewise.
 
-**Schema.** The database is schema 13 (schema 5: quantities in base units, prices per whole token; schema 6: packed state spans; schema 7:
+**Schema.** The database is schema 14 (schema 5: quantities in base units, prices per whole token; schema 6: packed state spans; schema 7:
 dictionary-packed genesis states and event details; schema 8: integer ids in the child tables; schema 9: integer ids in the orders too and shorter
 page indexes; schema 10: a fill event's fee and executor, `order_events.fee` and `executor_id` (`scripts`), and the activity totals the
 triggers keep, `activity` and `actors`; schema 11: the executors' transactions with their income and network fee, `executor_txs`, and
 totals the lean pruning does not take back; schema 12: the KAS of an order's genesis output, `orders.genesis_value`, and a pruning that keeps
 the proof of a token's program; schema 13: the plain outputs of the recorded transactions, `recorded_outputs`, from which the network fee of
-a record without input values is resolved, 7.6a). Two partial indexes came later within schema 13, `order_utxos_live` (the unspent order UTXOs)
+a record without input values is resolved, 7.6a; schema 14: the transaction ids, programs and roles of the token holdings and the order and
+tokens of a pair fill stored by integer, `txs` and `programs`, below). Two partial indexes came later within schema 13, `order_utxos_live` (the unspent order UTXOs)
 and `order_events_closes` (the closing events), which keep a fill's refresh one seek each however many fills its order had: the first start
 of a build that has them builds them (`CREATE INDEX IF NOT EXISTS`), with no migration and no version change. The table `book_quotes` (the top-of-book history, api-reference 3.23) came the same way (`CREATE TABLE IF NOT EXISTS`). A database written before schema 5 (its `orders` table has the old `lot_units` column) is refused untouched by every
-writer and reader: move it aside and replay (above). **A database of schema 5 to 12 is refused untouched as well** (`database ... is of schema N: this build reads
-schema 13 only`): its tables have other columns, so no start-up repair can bring it forward. `kobd db migrate` (7.6a) brings it to schema 13 in one offline run, and
+writer and reader: move it aside and replay (above). **A database of schema 5 to 13 is refused untouched as well** (`database ... is of schema N: this build reads
+schema 14 only`): its tables have other columns, so no start-up repair can bring it forward. `kobd db migrate` (7.6a) brings it to schema 14 in one offline run, and
 **from then on a build of an older schema refuses the store** (a newer schema is refused by every build), so the way back to the older build is the
 `index.sqlite3.before-migrate` file `kobd db migrate` keeps (or a backup taken before). An old configuration's `[receipts]` table is ignored. Roll indexers out before
 wallets whenever the KOB1 payload version changes: an indexer refuses a payload version it does not know, so it would list
@@ -2454,6 +2455,19 @@ triggers created anew, the table added empty; a store of schema 11 also gets the
 transactions indexed from then on; the fees of the past need the history replayed: on a full indexer with its record log, `kobd db replay`
 (7.6, and the *Operator step* of *Schema 10 to 11*) instead of `kobd db migrate`. A lean store needs only `kobd db migrate` (it follows the
 node, whose input values every new record has). A build of schema 12 refuses the store.
+
+**Schema 13 to 14 (compaction).** The token holdings were half the store: each row repeated two 32-byte transaction ids (its own and
+the one that spent it), its program and role as text, and its key `(txid, idx)` was a second copy of the 32 bytes in an index. Schema 14
+stores each transaction id a holding names once, in `txs` (`id`, `h`, `n`: the holdings that name it, kept by triggers, so the row goes
+with its last holding and a pruned store keeps none it dropped), and each program name once, in `programs`; a holding names them by
+integer (`tx_id`, `spent_tx_id`, `program_id`) and its role by a code (`role_code`: 0 owned, 1 custody, 2 stray, 3 bought). The lookup by
+the 32 bytes reads `txs_h`, an index of their first 8 bytes (a third of a full index), and compares the row whole: an outpoint is two
+seeks, as before. A pair fill names its order and tokens by integer (`order_id`, `base_id`, `quote_id`). Nothing else changes, and every
+read answers the same. The view `token_holdings_named` gives the holdings in the columns of schema 13, for the `sqlite3` shell. On the
+TN10 soak index (15 days, 3.2 GB) the migration takes 163 s and leaves 2.81 GB (13 % less); the holdings with their indexes go from
+1.44 GB to 1.08 GB, the pair fills from 119 MB to 50 MB. `kobd db migrate` builds the new store beside the old one, copies every other
+table as it is and reads every table back before the swap (an older store is first brought to the layout of schema 13 in
+`index.sqlite3.migrating13`, which is then deleted). A build of schema 13 refuses the store.
 
 **Cut-over of a public indexer.** The migration of a copy takes about a minute and a half for a 4 GB store, so the read API stays up while it
 runs and is down only for the swap:

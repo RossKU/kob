@@ -673,7 +673,11 @@ pub fn creator_locks(conn: &Connection, key: &[u8; 32], limit: usize) -> DbResul
 /// Whether a verified creator lock still holds tokens: one of its genesis outputs is an unspent holding.
 fn lock_holds(conn: &Connection, v: &kcc23::VerifiedDeclaration) -> DbResult<bool> {
     let Some(l) = &v.lock else { return Ok(false) };
-    let mut st = conn.prepare_cached("SELECT 1 FROM token_holdings WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?;
+    let mut st = conn.prepare_cached(concat!(
+        "SELECT 1 FROM token_holdings WHERE tx_id = ",
+        super::ids::tx_of!("?1"),
+        " AND idx = ?2 AND spent_block IS NULL"
+    ))?;
     for o in &l.outputs {
         if st.exists(params![&v.genesis_txid[..], o.index as i64])? {
             return Ok(true);

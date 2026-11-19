@@ -855,8 +855,9 @@ fn seed_holding(c: &Connection, n: u8, token: u8, owner: &[u8], family: i64, amo
     let kind = if family == 2 { 3 } else { 0 };
     intern(c, &cid(token)).unwrap();
     intern(c, owner).unwrap();
+    crate::testkit::named_holdings_writable(c);
     c.execute(
-        "INSERT INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa, spent_block, spent_txid) \
+        "INSERT INTO token_holdings_named (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa, spent_block, spent_txid) \
          VALUES (?1, ?2, (SELECT id FROM ids WHERE h = ?3), ?4, ?5, (SELECT id FROM ids WHERE h = ?6), ?7, ?8, 1000000000, ?9, 'owned', ?10, ?11, ?12, ?13)",
         params![
             cid(n),
@@ -1811,8 +1812,9 @@ fn seed_kas_fill(c: &Connection, cov: u8, token: u8, tx: u8, ts: i64, side: i64,
 #[allow(clippy::too_many_arguments)]
 fn seed_pair_fill(c: &Connection, cov: u8, tx: u8, ts: i64, side: i64, amount_a: i64, amount_b: i64, price: i64, counterparty: &str) {
     c.execute(
-        "INSERT INTO pair_fills (block_seq, daa, ts, txid, tx_pos, covenant_id, contract, base_cov_id, quote_cov_id, side, amount_a, \
-         amount_b, price, a_scale, tip_kas, counterparty) VALUES (9, 990, ?1, ?2, 0, ?3, 'KobPair', ?4, ?5, ?6, ?7, ?8, ?9, 1000, 0, ?10)",
+        "INSERT INTO pair_fills (block_seq, daa, ts, txid, tx_pos, order_id, contract, base_id, quote_id, side, amount_a, \
+         amount_b, price, a_scale, tip_kas, counterparty) VALUES (9, 990, ?1, ?2, 0, (SELECT id FROM orders WHERE covenant_id = ?3), 'KobPair', \
+         (SELECT id FROM ids WHERE h = ?4), (SELECT id FROM ids WHERE h = ?5), ?6, ?7, ?8, ?9, 1000, 0, ?10)",
         params![ts, cid(tx), cid(cov), cid(BASE), cid(QUOTE), side, amount_a, amount_b, price, counterparty],
     )
     .unwrap();
@@ -2569,8 +2571,9 @@ async fn creator_locks_are_listed_by_key() {
     let holding = |txid: [u8; 32], idx: i64, spent: bool| {
         intern(&e.w, &covs[0].0).unwrap();
         intern(&e.w, &[0x99; 32]).unwrap();
+        crate::testkit::named_holdings_writable(&e.w);
         e.w.execute(
-            "INSERT OR REPLACE INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, \
+            "INSERT OR REPLACE INTO token_holdings_named (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, \
              created_block, created_daa, spent_block, spent_txid) VALUES (?1, ?2, (SELECT id FROM ids WHERE h = ?3), 'KCC20PublicMint', 1, \
              (SELECT id FROM ids WHERE h = ?4), 3, 200, 100000000, x'00', 'owned', 9, 990, ?5, ?6)",
             rusqlite::params![&txid[..], idx, &covs[0].0[..], &[0x99u8; 32][..], spent.then_some(10i64), spent.then_some(vec![0x98u8; 32])],

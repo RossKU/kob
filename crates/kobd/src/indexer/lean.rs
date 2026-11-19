@@ -72,7 +72,7 @@ macro_rules! live_order_holding {
         concat!(
             "(",
             $h,
-            ".role IN ('custody','bought','stray') AND EXISTS (SELECT 1 FROM ids li JOIN orders lo ON lo.covenant_id = li.h \
+            ".role_code IN (1, 2, 3) AND EXISTS (SELECT 1 FROM ids li JOIN orders lo ON lo.covenant_id = li.h \
              JOIN order_state ls ON ls.order_id = lo.id WHERE li.id = ",
             $h,
             ".owner_id AND ls.status IN ('open','partial')))"
@@ -196,7 +196,7 @@ pub fn ensure_indexes(conn: &Connection) -> DbResult<()> {
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS order_state_closed_daa ON order_state (last_daa) WHERE status NOT IN ('open','partial'); \
          CREATE INDEX IF NOT EXISTS order_amends_order ON order_amends (order_id); \
-         CREATE INDEX IF NOT EXISTS pair_fills_order ON pair_fills (covenant_id); \
+         CREATE INDEX IF NOT EXISTS pair_fills_order ON pair_fills (order_id); \
          CREATE INDEX IF NOT EXISTS pair_fills_daa ON pair_fills (daa); \
          CREATE INDEX IF NOT EXISTS order_utxos_spent_daa ON order_utxos (created_daa) WHERE spent_block IS NOT NULL; \
          CREATE INDEX IF NOT EXISTS token_utxos_spent_daa ON token_utxos (created_daa) WHERE spent_block IS NOT NULL; \
@@ -290,9 +290,9 @@ pub fn prune(
                 for sql in [
                     "DELETE FROM order_events WHERE order_id IN (SELECT id FROM lean_batch)",
                     "DELETE FROM order_amends WHERE order_id IN (SELECT id FROM lean_batch)",
-                    "DELETE FROM pair_fills WHERE covenant_id IN (SELECT cov FROM lean_batch)",
+                    "DELETE FROM pair_fills WHERE order_id IN (SELECT id FROM lean_batch)",
                     "DELETE FROM order_utxos WHERE order_id IN (SELECT id FROM lean_batch)",
-                    "DELETE FROM token_holdings WHERE owner_id IN (SELECT i.id FROM lean_batch b JOIN ids i ON i.h = b.cov) AND role IN ('custody','bought','stray')",
+                    "DELETE FROM token_holdings WHERE owner_id IN (SELECT i.id FROM lean_batch b JOIN ids i ON i.h = b.cov) AND role_code IN (1, 2, 3)",
                     "DELETE FROM token_utxos WHERE order_id IN (SELECT id FROM lean_batch)",
                     "DELETE FROM order_flags WHERE covenant_id IN (SELECT cov FROM lean_batch)",
                     "DELETE FROM order_state WHERE order_id IN (SELECT id FROM lean_batch)",

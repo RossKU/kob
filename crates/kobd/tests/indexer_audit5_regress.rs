@@ -67,7 +67,7 @@ mod v4 {
     }
 
     pub fn programs(c: &Ctx) -> Vec<String> {
-        c.hs.query::<String>("SELECT COALESCE(group_concat(DISTINCT program), '') FROM token_holdings WHERE token_id = (SELECT id FROM ids WHERE h = x'7171717171717171717171717171717171717171717171717171717171717171')", [])
+        c.hs.query::<String>("SELECT COALESCE(group_concat(DISTINCT program), '') FROM token_holdings_named WHERE token_id = (SELECT id FROM ids WHERE h = x'7171717171717171717171717171717171717171717171717171717171717171')", [])
             .split(',')
             .map(|s| s.to_string())
             .collect()
@@ -261,8 +261,9 @@ fn i17_a_token_with_a_holding_is_not_evicted_by_junk_tokens() {
     kobd::indexer::ids::intern(&conn, &real).unwrap();
     kobd::indexer::ids::intern(&conn, &owner).unwrap();
     insert_order(&conn, &[0xee; 32], &real, &tpl, 1000, 1);
+    kobd::testkit::named_holdings_writable(&conn);
     conn.execute(
-        "INSERT INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa) \
+        "INSERT INTO token_holdings_named (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa) \
          VALUES (randomblob(32), 0, (SELECT id FROM ids WHERE h = ?1), ?2, 1, (SELECT id FROM ids WHERE h = ?3), 0, 5, 100000000, randomblob(112), 'owned', 1, 1)",
         params![real, program.name(), owner],
     )

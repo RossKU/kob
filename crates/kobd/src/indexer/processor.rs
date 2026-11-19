@@ -45,7 +45,7 @@
 
 use super::db::{DbError, DbResult};
 use super::delivery::{self, ROLE_BOUGHT};
-use super::ids::{id_of, intern, order_of};
+use super::ids::{id_of, intern, intern_program, intern_tx, lookup_tx, order_of, program_name, role_code, tx_of};
 use super::packed::{sql_genesis, sql_order_ids, sql_order_ids_more, sql_ustate};
 use super::record::{Extractor, Reveal, TxRecord};
 use super::recordlog::LogOp;
@@ -200,6 +200,31 @@ fn load_order_utxo(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<Optio
         .optional()?)
 }
 
+/// Marks the holding `txid:idx` spent by transaction `by` in block `seq`, if it is a live one.
+///
+/// The spending transaction's id is interned only when a holding is spent by it, so `txs` holds no
+/// id that no holding names (`ids::intern_tx`).
+fn spend_holding(conn: &Connection, seq: i64, by: &Hash32, txid: &Hash32, idx: u32) -> DbResult<()> {
+    let Some(tx) = lookup_tx(conn, &txid.0)? else { return Ok(()) };
+    let live = conn
+        .prepare_cached("SELECT 1 FROM token_holdings WHERE tx_id = ?1 AND idx = ?2 AND spent_block IS NULL")?
+        .exists(params![tx, idx])?;
+    if live {
+        conn.prepare_cached(
+            "UPDATE token_holdings SET spent_block = ?1, spent_tx_id = ?2 WHERE tx_id = ?3 AND idx = ?4 AND spent_block IS NULL",
+        )?
+        .execute(params![seq, intern_tx(conn, &by.0)?, tx, idx])?;
+    }
+    Ok(())
+}
+
+/// Deletes the holding row of `txid:idx`, if there is one.
+fn delete_holding(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<()> {
+    conn.prepare_cached(concat!("DELETE FROM token_holdings WHERE tx_id = ", tx_of!("?1"), " AND idx = ?2"))?
+        .execute(params![&txid.0[..], idx])?;
+    Ok(())
+}
+
 /// Whether the order with covenant id `cov` is stored.
 pub fn order_exists(conn: &Connection, cov: &Hash32) -> DbResult<bool> {
     super::record::order_known(conn, cov)
@@ -326,16 +351,16 @@ fn has_live_custody_of(conn: &Connection, cov: &Hash32, token: &Hash32) -> DbRes
 ///   the entry token of an exit.
 fn pair_custody_exts(conn: &Connection, cov: &Hash32, token: &Hash32, state: &AnyState) -> DbResult<Vec<[u8; 32]>> {
     let mut v = vec![];
-    let mut st = conn.prepare_cached(
-        concat!(
-            "SELECT h.program, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount) FROM token_holdings h JOIN ids w ON w.id = h.owner_id \
+    let mut st = conn.prepare_cached(concat!(
+        "SELECT ",
+        program_name!("h.program_id"),
+        ", kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount) FROM token_holdings h JOIN ids w ON w.id = h.owner_id \
              WHERE h.owner_id = ",
-            id_of!("?1"),
-            " AND h.token_id = ",
-            id_of!("?2"),
-            " AND h.role = 'custody' ORDER BY h.created_block DESC, h.idx DESC LIMIT 4"
-        ),
-    )?;
+        id_of!("?1"),
+        " AND h.token_id = ",
+        id_of!("?2"),
+        " AND h.role_code = 1 ORDER BY h.created_block DESC, h.idx DESC LIMIT 4"
+    ))?;
     let rows = st.query_map(params![&cov.0[..], &token.0[..]], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
     for r in rows {
         let (program, bytes) = r?;
@@ -773,10 +798,7 @@ impl Processor {
                     "UPDATE token_utxos SET spent_block = ?1, spent_txid = ?2 WHERE txid = ?3 AND idx = ?4 AND spent_block IS NULL",
                 )?
                 .execute(params![seq, &txid.0[..], &inp.txid.0[..], inp.index])?;
-                conn.prepare_cached(
-                    "UPDATE token_holdings SET spent_block = ?1, spent_txid = ?2 WHERE txid = ?3 AND idx = ?4 AND spent_block IS NULL",
-                )?
-                .execute(params![seq, &txid.0[..], &inp.txid.0[..], inp.index])?;
+                spend_holding(conn, seq, &txid, &inp.txid, inp.index)?;
             }
         }
         super::outputs::record(conn, rec, seq, daa)?;
@@ -1038,7 +1060,7 @@ impl Processor {
             _ => return Ok(()),
         };
         let ts = kob_protocol::state::TokenState::custody(tt.family, c.amount, cov.0, ext);
-        conn.prepare_cached("DELETE FROM token_holdings WHERE txid = ?1 AND idx = ?2")?.execute(params![&c.txid.0[..], c.index])?;
+        delete_holding(conn, &c.txid, c.index)?;
         self.insert_holding(conn, &c.txid, c.index, &token, tt.id, &ts, c.value, "custody", seq, daa)
     }
 
@@ -1068,21 +1090,21 @@ impl Processor {
             .prepare_cached("SELECT 1 FROM holding_programs WHERE token_id = ?1 AND program = ?2")?
             .exists(params![token_id, program.name()])?;
         conn.prepare_cached(
-            "INSERT OR IGNORE INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa) \
+            "INSERT OR IGNORE INTO token_holdings (tx_id, idx, token_id, program_id, family, owner_id, owner_kind, amount, value, state, role_code, created_block, created_daa) \
              VALUES (?1,?2,?3,?4,?5,?14,?7,?8,?9,kob_hpack(?10,?5,?6,?7,?8),?11,?12,?13)",
         )?
         .execute(params![
-            &txid.0[..],
+            intern_tx(conn, &txid.0)?,
             idx,
             token_id,
-            program.name(),
+            intern_program(conn, program.name())?,
             state.family().code(),
             &state.owner()[..],
             kind,
             state.amount(),
             value as i64,
             state.encode(),
-            role,
+            role_code(role),
             seq,
             sql_int(daa),
             intern(conn, &state.owner()[..])?
@@ -2359,7 +2381,7 @@ impl Processor {
         let mut found: Option<(i64, i64)> = None;
         for sql in [
             "SELECT value, amount FROM token_utxos WHERE txid = ?1 AND idx = ?2",
-            "SELECT value, amount FROM token_holdings WHERE txid = ?1 AND idx = ?2",
+            concat!("SELECT value, amount FROM token_holdings WHERE tx_id = ", tx_of!("?1"), " AND idx = ?2"),
         ] {
             found =
                 conn.prepare_cached(sql)?.query_row(params![&inp.txid.0[..], inp.index], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
@@ -3058,7 +3080,7 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
     changed += conn.execute("DELETE FROM token_utxos WHERE created_block = ?1", [seq])?;
     changed += conn.execute("UPDATE token_utxos SET spent_block = NULL, spent_txid = NULL WHERE spent_block = ?1", [seq])?;
     changed += conn.execute("DELETE FROM token_holdings WHERE created_block = ?1", [seq])?;
-    changed += conn.execute("UPDATE token_holdings SET spent_block = NULL, spent_txid = NULL WHERE spent_block = ?1", [seq])?;
+    changed += conn.execute("UPDATE token_holdings SET spent_block = NULL, spent_tx_id = NULL WHERE spent_block = ?1", [seq])?;
     changed += conn.execute("DELETE FROM token_events WHERE block_seq = ?1", [seq])?;
     changed += restore_demoted(conn, seq)?;
     changed += conn.execute("DELETE FROM rejects WHERE block_seq = ?1", [seq])?;
@@ -3202,7 +3224,7 @@ impl Processor {
                     conn.prepare_cached(concat!(
                         "UPDATE token_holdings SET spent_block = 0 WHERE owner_id = ",
                         id_of!("?1"),
-                        " AND role IN ('custody','bought','stray') AND spent_block IS NULL"
+                        " AND role_code IN (1, 2, 3) AND spent_block IS NULL"
                     ))?
                     .execute([&covenant_id.0[..]])?;
                     self.gap_event(conn, covenant_id, txid, cursor_daa, "unknown", true, json!({"reason": "gap_close"}))?;
@@ -3249,9 +3271,11 @@ impl Processor {
                             "UPDATE token_utxos SET spent_block = 0 WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL",
                         )?
                         .execute(params![&t.0[..], i])?;
-                        conn.prepare_cached(
-                            "UPDATE token_holdings SET spent_block = 0 WHERE txid = ?1 AND idx = ?2 AND role IN ('custody','bought','stray') AND spent_block IS NULL",
-                        )?
+                        conn.prepare_cached(concat!(
+                            "UPDATE token_holdings SET spent_block = 0 WHERE tx_id = ",
+                            tx_of!("?1"),
+                            " AND idx = ?2 AND role_code IN (1, 2, 3) AND spent_block IS NULL"
+                        ))?
                         .execute(params![&t.0[..], i])?;
                     }
                     // The DAA of the output itself, which the refund and kill times count from. An
@@ -3332,7 +3356,7 @@ impl Processor {
         if n == 0 {
             return Ok(());
         }
-        conn.prepare_cached("DELETE FROM token_holdings WHERE txid = ?1 AND idx = ?2")?.execute(params![&c.txid.0[..], c.index])?;
+        delete_holding(conn, &c.txid, c.index)?;
         self.insert_holding(conn, &c.txid, c.index, &token, tt.id, &held.state, c.value, ROLE_BOUGHT, 0, daa)?;
         delta.tokens.insert(token);
         delta.orders.insert(*cov);
@@ -3646,11 +3670,13 @@ impl PairFillRow {
         cov: &Hash32,
         template: TemplateId,
     ) -> DbResult<()> {
-        conn.prepare_cached(
-            "INSERT INTO pair_fills (block_seq, daa, ts, txid, tx_pos, covenant_id, contract, base_cov_id, quote_cov_id, side, \
+        conn.prepare_cached(concat!(
+            "INSERT INTO pair_fills (block_seq, daa, ts, txid, tx_pos, order_id, contract, base_id, quote_id, side, \
              amount_a, amount_b, price, a_scale, tip_kas, counterparty, price_source) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,'none')",
-        )?
+             VALUES (?1,?2,?3,?4,?5,",
+            order_of!("?6"),
+            ",?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,'none')"
+        ))?
         .execute(params![
             seq,
             daa,
@@ -3659,8 +3685,8 @@ impl PairFillRow {
             tx_pos,
             &cov.0[..],
             template.name(),
-            &self.a[..],
-            &self.b[..],
+            intern(conn, &self.a[..])?,
+            intern(conn, &self.b[..])?,
             self.side as i64,
             self.amount_a,
             self.amount_b,

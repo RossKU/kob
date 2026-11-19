@@ -114,8 +114,9 @@ fn store() -> Connection {
         (55, id(1), "custody", 10, Some(20)),     // a closed order's spent custody: goes
         (56, key, "owned", 10, Some(105)),        // spent in the window: stays
     ] {
+        crate::testkit::named_holdings_writable(&c);
         c.execute(
-            "INSERT INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, \
+            "INSERT INTO token_holdings_named (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, \
              created_daa, spent_block) VALUES (?1, 0, ?2, ?7, 1, ?3, 0, 5, 1, x'08', ?4, 1, ?5, ?6)",
             rusqlite::params![h(tx), tok, owner, role, daa, spent, program(0)],
         )
@@ -166,7 +167,7 @@ fn the_archive_pruning_deletes_exactly_the_final_dead_rows() {
     );
     assert_eq!(keys(&c, "SELECT txid FROM token_utxos ORDER BY txid"), vec![32, 35, 42]);
     assert_eq!(c.query_row("SELECT group_concat(block_seq) FROM order_amends", [], |r| r.get::<_, String>(0)).unwrap(), "105");
-    assert_eq!(keys(&c, "SELECT txid FROM token_holdings ORDER BY txid"), vec![52, 53, 54, 56]);
+    assert_eq!(keys(&c, "SELECT txid FROM token_holdings_named ORDER BY txid"), vec![52, 53, 54, 56]);
     // 3 order UTXOs, 1 token UTXO, 1 amend and 2 holdings.
     assert_eq!(rows, 7);
     // The proof of the token's program stays, and its count is not taken back.
@@ -196,8 +197,11 @@ fn the_archive_pruning_deletes_exactly_the_final_dead_rows() {
     assert_eq!(keys(&c, "SELECT txid FROM order_utxos ORDER BY txid"), vec![13, 15]);
     assert_eq!(keys(&c, "SELECT txid FROM token_utxos ORDER BY txid"), vec![35]);
     // Its spent custody holding is no longer a live order's.
-    assert_eq!(keys(&c, "SELECT txid FROM token_holdings ORDER BY txid"), vec![52, 53]);
+    assert_eq!(keys(&c, "SELECT txid FROM token_holdings_named ORDER BY txid"), vec![52, 53]);
     assert_eq!(programs(&c), before);
+    // The transaction ids of the pruned holdings went with them (schema 14).
+    crate::testkit::assert_txs_counted(&c);
+    assert_eq!(keys(&c, "SELECT h FROM txs ORDER BY h"), vec![52, 53]);
 }
 
 #[test]
@@ -208,7 +212,7 @@ fn a_retention_that_keeps_everything_deletes_no_holding_and_a_batch_is_bounded()
     let r = prune(&mut c, &cfg, 1010, None, 10).unwrap();
     assert!(r.more && r.rows >= 1, "{r:?}");
     prune_all(&mut c, &cfg);
-    assert_eq!(keys(&c, "SELECT txid FROM token_holdings ORDER BY txid"), vec![51, 52, 53, 54, 55, 56]);
+    assert_eq!(keys(&c, "SELECT txid FROM token_holdings_named ORDER BY txid"), vec![51, 52, 53, 54, 55, 56]);
     assert_eq!(keys(&c, "SELECT txid FROM order_utxos ORDER BY txid"), vec![12, 13, 14, 15, 22, 24]);
 }
 
@@ -227,7 +231,7 @@ fn the_lean_pruning_keeps_a_live_orders_custody_and_no_pruning_takes_a_program_b
             break;
         }
     }
-    let held = keys(&c, "SELECT txid FROM token_holdings ORDER BY txid");
+    let held = keys(&c, "SELECT txid FROM token_holdings_named ORDER BY txid");
     assert!(held.contains(&54), "the live order's spent custody stays: {held:?}");
     assert!(!held.contains(&51) && !held.contains(&55), "{held:?}");
     assert_eq!(programs(&c), before);
@@ -238,15 +242,20 @@ fn the_lean_pruning_keeps_a_live_orders_custody_and_no_pruning_takes_a_program_b
     .unwrap();
     assert_eq!(programs(&c), before);
     assert_eq!(crate::indexer::reads::proven_programs(&c, &h(0xaa)).unwrap().len(), 1);
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM txs", [], |r| r.get::<_, i64>(0)).unwrap(),
+        0,
+        "no transaction id outlives its holdings"
+    );
     // A delete that is not the pruning, such as a revert, takes back what its insert counted.
     c.execute(
-        "INSERT INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa) \
+        "INSERT INTO token_holdings_named (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa) \
          VALUES (?1, 0, (SELECT id FROM ids WHERE h = ?2), ?3, 2, 1, 0, 5, 1, x'08', 'owned', 1, 1)",
         rusqlite::params![h(60), h(0xaa), program(1)],
     )
     .unwrap();
     assert_eq!(programs(&c).len(), 2);
-    c.execute("DELETE FROM token_holdings WHERE txid = ?1", [h(60)]).unwrap();
+    c.execute("DELETE FROM token_holdings WHERE tx_id = (SELECT id FROM txs WHERE h = ?1)", [h(60)]).unwrap();
     assert_eq!(programs(&c), before);
 }
 

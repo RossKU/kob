@@ -71,10 +71,14 @@ impl TrustContext {
     /// every order of the store for each window from another node.)
     pub fn load(conn: &Connection, allowlist: Arc<TokenAllowlist>, keys: &WindowKeys) -> DbResult<TrustContext> {
         let mut outpoints = HashSet::new();
-        let mut tracked: Vec<_> = ["order_utxos", "token_utxos", "token_holdings"]
-            .iter()
-            .map(|t| conn.prepare_cached(&format!("SELECT 1 FROM {t} WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")))
-            .collect::<rusqlite::Result<_>>()?;
+        let mut tracked: Vec<_> = [
+            "SELECT 1 FROM order_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL",
+            "SELECT 1 FROM token_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL",
+            concat!("SELECT 1 FROM token_holdings WHERE tx_id = ", super::ids::tx_of!("?1"), " AND idx = ?2 AND spent_block IS NULL"),
+        ]
+        .iter()
+        .map(|sql| conn.prepare_cached(sql))
+        .collect::<rusqlite::Result<_>>()?;
         for (txid, idx) in &keys.outpoints {
             for st in tracked.iter_mut() {
                 if st.exists(rusqlite::params![&txid.0[..], idx])? {

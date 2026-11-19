@@ -45,7 +45,7 @@ pub const RETENTION_DAA: u64 = 7 * 86_400 * 10;
 pub fn input_value(conn: &Connection, txid: &Hash32, idx: u32, daa: u64) -> DbResult<Option<i64>> {
     for sql in [
         "SELECT value FROM token_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL",
-        "SELECT value FROM token_holdings WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL",
+        concat!("SELECT value FROM token_holdings WHERE tx_id = ", super::ids::tx_of!("?1"), " AND idx = ?2 AND spent_block IS NULL"),
     ] {
         if let Some(v) = conn.prepare_cached(sql)?.query_row(params![&txid.0[..], idx], |r| r.get(0)).optional()? {
             return Ok(Some(v));

@@ -408,6 +408,84 @@ async fn a_pruned_archive_answers_the_api_as_a_store_that_keeps_everything_and_a
     compare((&full, &pf), (&replayed, &pr), &node, true, "the replayed store", true).await;
 }
 
+/// `kobd db migrate` from schema 13 (the holdings' transaction ids interned, schema 14): a store that a schema 13 build indexed, migrated,
+/// holds the rows and answers the API as a store this build rebuilt from the same frames (`kobd db replay`) and as the store itself, a
+/// reorg and more traffic after the migration change nothing of that, and the archive pruning of the migrated store keeps `txs` counted.
+#[tokio::test]
+async fn a_store_migrated_to_schema_14_answers_as_a_replay_of_its_frames() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = MockNode::new("testnet-10");
+    let mut w = World::new();
+    w.validate = false;
+    let (pa, log_dir) = (dir.path().join("a.sqlite3"), dir.path().join("records"));
+    let (log, _) = RecordLog::open(&log_dir, 1 << 20, 0).unwrap();
+    let a = harness(&node, &pa, Some(u64::MAX / 8), Some(log));
+    let mut live = traffic(&w, &node, &[&a], 16, 0).await;
+    // a reorg inside the window undoes a cancel
+    let oldest = live.remove(0);
+    w.include(&node, &[&cancel(&w, &oldest)]);
+    node.push_empty(2);
+    a.sync().await;
+    node.reorg(3, vec![vec![], vec![], vec![], vec![]]);
+    a.sync().await;
+
+    // the store as a schema 13 build left it, migrated offline in a data directory of its own
+    let mdir = dir.path().join("migrated");
+    std::fs::create_dir_all(&mdir).unwrap();
+    let pm = mdir.join("index.sqlite3");
+    {
+        let p14 = dir.path().join("a14.sqlite3");
+        a.ingest.lock().unwrap().conn().execute("VACUUM INTO ?1", [p14.to_string_lossy().as_ref()]).unwrap();
+        store13(&p14, &pm);
+        std::fs::remove_file(&p14).unwrap();
+    }
+    let mut icfg = kobd::config::IndexerConfig { data_dir: mdir.clone(), network: "testnet-10".into(), ..Default::default() };
+    icfg.records.enabled = false;
+    let rep = kobd::indexer::storage::migrate(&icfg, kobd::indexer::storage::Options::default(), |_| {}).unwrap();
+    assert_eq!(rep.from_schema, 13);
+    assert!(rep.rows("txs") > 0 && rep.rows("token_holdings") > rep.rows("txs") / 2, "{rep:?}");
+    let migrated = harness(&node, &pm, Some(u64::MAX / 8), None);
+
+    // the same frames replayed into a store of this build
+    let pr = dir.path().join("replay.sqlite3");
+    {
+        let log = kobd::indexer::recordlog::read_all(&log_dir).unwrap();
+        let conn = open_writer_with(&pr, "testnet-10", false).unwrap();
+        let mut ing = Ingest::new(conn, processor(), None).with_config(ingest_cfg(Some(u64::MAX / 8)));
+        ing.init_cursor(&kobd::indexer::ingest::Cursor { hash: log.records[0].1.start, daa: 0 }).unwrap();
+        ing.replay(log.records).unwrap();
+        ing.archive_prune_all().unwrap();
+    }
+    let replayed = harness(&node, &pr, Some(u64::MAX / 8), None);
+    node.push_empty(2);
+    for h in [&a, &migrated, &replayed] {
+        h.sync().await;
+    }
+    compare((&a, &pa), (&migrated, &pm), &node, true, "the migrated store", false).await;
+    compare((&replayed, &pr), (&migrated, &pm), &node, true, "the migrated store against the replay", true).await;
+    assert_eq!(migrated.snapshot(), a.snapshot(), "the migrated store holds the rows of the store it came from");
+    assert_eq!(unnumbered(&replayed.snapshot()), unnumbered(&migrated.snapshot()), "and the rows of the replay");
+
+    // the migrated store goes on: more traffic, a reorg, its pruning
+    live.extend(traffic(&w, &node, &[&a, &migrated, &replayed], 8, 1_000).await);
+    let l = live.remove(0);
+    w.include(&node, &[&cancel(&w, &l)]);
+    node.push_empty(1);
+    for h in [&a, &migrated, &replayed] {
+        h.sync().await;
+    }
+    node.reorg(2, vec![vec![], vec![], vec![]]);
+    node.push_empty(WINDOW as usize + 5);
+    for h in [&a, &migrated, &replayed] {
+        h.sync().await;
+    }
+    compare((&a, &pa), (&migrated, &pm), &node, true, "the migrated store after more traffic", false).await;
+    compare((&replayed, &pr), (&migrated, &pm), &node, true, "the migrated store against the replay after more traffic", true).await;
+    for h in [&a, &migrated, &replayed] {
+        assert_txs_counted(h.ingest.lock().unwrap().conn());
+    }
+}
+
 /// A snapshot with the numbers of the chain blocks out of the window taken out (`MISSING-BLOCK-<seq>`: the numbering is the store's own).
 fn unnumbered(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -446,7 +524,7 @@ async fn spent_holdings_past_the_retention_go_and_the_token_keeps_its_program_an
         let mut st = g
             .conn()
             .prepare(
-                "SELECT x.txid, x.created_daa, x.spent_block, x.role, w.h FROM token_holdings x JOIN ids w ON w.id = x.owner_id \
+                "SELECT x.txid, x.created_daa, x.spent_block, x.role, w.h FROM token_holdings_named x JOIN ids w ON w.id = x.owner_id \
                  WHERE x.spent_block IS NOT NULL ORDER BY x.txid, x.idx",
             )
             .unwrap();
@@ -640,6 +718,7 @@ async fn a_batch_on_a_big_store_takes_a_bounded_time() {
     let final_seq: i64 = h.query("SELECT MIN(seq) FROM blocks", []);
     assert!(final_seq > 50, "{final_seq}");
     let n = 30_000i64;
+    kobd::testkit::named_holdings_writable(h.ingest.lock().unwrap().conn());
     h.ingest
         .lock()
         .unwrap()
@@ -656,7 +735,7 @@ async fn a_batch_on_a_big_store_takes_a_bounded_time() {
                  SELECT CAST(printf('u%031d', id) AS BLOB), k, id, 7, zeroblob(4), 1, 0, 1 + id % ({final_seq} - 1) FROM orders, (SELECT 0 AS k UNION SELECT 1); \
              INSERT INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa, spent_block) \
                  SELECT CAST(printf('u%031d', id) AS BLOB), 2, 1, id, 5, 3, 'custody', 1, 0, 1 + id % ({final_seq} - 1) FROM orders; \
-             INSERT INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa, spent_block) \
+             INSERT INTO token_holdings_named (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa, spent_block) \
                  SELECT CAST(printf('u%031d', o.id) AS BLOB), 2 + k, 1, 'p', 1, i.id, 4, 5, 1, x'08', 'custody', 1, 0, 1 + o.id % ({final_seq} - 1) \
                  FROM orders o JOIN ids i ON i.h = o.covenant_id, (SELECT 0 AS k UNION SELECT 1); \
              DELETE FROM meta WHERE k = 'archive_seq';"

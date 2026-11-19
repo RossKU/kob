@@ -111,10 +111,11 @@ async fn ask_and_bid_on_a_kasparocket_token_are_indexed_listed_matched_and_fille
         [&cov.0[..]],
     );
     assert_eq!(live, 1);
-    let program: String =
-        c.hs.query("SELECT program FROM token_holdings WHERE txid = ?1 AND idx = ?2", rusqlite::params![&fill.tx.id[..], ci as i64]);
+    let program: String = c
+        .hs
+        .query("SELECT program FROM token_holdings_named WHERE txid = ?1 AND idx = ?2", rusqlite::params![&fill.tx.id[..], ci as i64]);
     assert_eq!(program, "KaspaRocketToken11458", "the rest custody is proven under the program");
-    let rows: i64 = c.hs.query("SELECT COUNT(*) FROM token_holdings WHERE program = ?1", ["KaspaRocketToken11458"]);
+    let rows: i64 = c.hs.query("SELECT COUNT(*) FROM token_holdings_named WHERE program = ?1", ["KaspaRocketToken11458"]);
     assert!(rows >= 2, "the rest custody and the taker's delivery ({rows})");
 }
 

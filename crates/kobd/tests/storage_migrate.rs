@@ -130,7 +130,7 @@ fn table_digests(conn: &Connection) -> Vec<(String, u64, String)> {
         ),
         (
             "token_holdings",
-            "SELECT h.txid, h.idx, t.h, h.program, h.family, w.h, h.owner_kind, h.amount, h.value, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount), h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid FROM token_holdings h JOIN ids t ON t.id = h.token_id JOIN ids w ON w.id = h.owner_id ORDER BY h.txid, h.idx".to_string(),
+            "SELECT h.txid, h.idx, t.h, h.program, h.family, w.h, h.owner_kind, h.amount, h.value, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount), h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid FROM token_holdings_named h JOIN ids t ON t.id = h.token_id JOIN ids w ON w.id = h.owner_id ORDER BY h.txid, h.idx".to_string(),
         ),
         ("counters", "SELECT name, n FROM counters WHERE n != 0 ORDER BY name".to_string()),
         (
@@ -202,7 +202,9 @@ fn reads_json(conn: &Connection) -> Vec<String> {
     }
     // the holdings of an owner: the owner of one holding of the store
     let owner: Option<Vec<u8>> = conn
-        .query_row("SELECT w.h FROM token_holdings h JOIN ids w ON w.id = h.owner_id ORDER BY h.txid, h.idx LIMIT 1", [], |r| r.get(0))
+        .query_row("SELECT w.h FROM token_holdings_named h JOIN ids w ON w.id = h.owner_id ORDER BY h.txid, h.idx LIMIT 1", [], |r| {
+            r.get(0)
+        })
         .ok();
     if let Some(o) = owner {
         let f = HoldingFilter { owner: Some(o), token: None, include_spent: true };
@@ -418,12 +420,20 @@ fn snapshot_file(c: &Ctx, path: &Path) {
     g.conn().execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()]).unwrap();
 }
 
+/// [`snapshot_file`] as the store a schema 13 build left (`common::store13`): the layout the earlier ones below are made from.
+fn snapshot13(c: &Ctx, path: &Path) {
+    let tmp = path.with_extension("current14");
+    snapshot_file(c, &tmp);
+    store13(&tmp, path);
+    std::fs::remove_file(&tmp).unwrap();
+}
+
 #[tokio::test]
 async fn migrate_rebuilds_a_schema_5_store_as_the_current_schema_and_no_read_changes() {
     let c = flows().await;
     let dir = tempfile::tempdir().unwrap();
     let cur = dir.path().join("current.sqlite3");
-    snapshot_file(&c, &cur);
+    snapshot13(&c, &cur);
     let path = dir.path().join("index.sqlite3");
     legacy_store(&cur, &path, Legacy::V5);
     std::fs::remove_file(&cur).unwrap();
@@ -511,7 +521,7 @@ async fn a_schema_8_store_is_migrated_in_the_middle_of_a_chain_and_the_indexer_g
     scenario(&mut c, move |c| {
         let node = c.hs.node.clone();
         let cur = d.join("current.sqlite3");
-        snapshot_file(c, &cur);
+        snapshot13(c, &cur);
         // the indexer lets go of the file (a placeholder store in its place), the file becomes the store of schema 7 and is migrated
         c.hs = Harness::new(db::open_memory("testnet-10").unwrap(), None);
         legacy_store(&cur, &p, Legacy::V8);
@@ -561,7 +571,7 @@ async fn an_old_layout_store_is_refused_untouched_and_a_row_the_integers_cannot_
     let c = flows().await;
     let dir = tempfile::tempdir().unwrap();
     let cur = dir.path().join("current.sqlite3");
-    snapshot_file(&c, &cur);
+    snapshot13(&c, &cur);
     let path = dir.path().join("index.sqlite3");
     legacy_store(&cur, &path, Legacy::V7);
     std::fs::remove_file(&cur).unwrap();
@@ -638,7 +648,7 @@ async fn an_unknown_table_stops_the_migration_and_a_lean_store_stays_lean() {
     let c = flows().await;
     let dir = tempfile::tempdir().unwrap();
     let cur = dir.path().join("current.sqlite3");
-    snapshot_file(&c, &cur);
+    snapshot13(&c, &cur);
     let path = dir.path().join("index.sqlite3");
     legacy_store(&cur, &path, Legacy::V7);
     std::fs::remove_file(&cur).unwrap();
@@ -766,7 +776,7 @@ async fn a_schema_9_store_gets_the_fees_and_totals_of_a_fresh_store_and_no_execu
     // the indexer lets go of the file, the file becomes the store of schema 9 and is migrated
     let node = c.hs.node.clone();
     let cur = dir.path().join("current.sqlite3");
-    snapshot_file(&c, &cur);
+    snapshot13(&c, &cur);
     c.hs = Harness::new(db::open_memory("testnet-10").unwrap(), None);
     legacy_store(&cur, &path, Legacy::V9);
     std::fs::remove_file(&cur).unwrap();
@@ -821,7 +831,7 @@ async fn a_lean_schema_9_store_stays_lean() {
     let c = flows().await;
     let dir = tempfile::tempdir().unwrap();
     let cur = dir.path().join("current.sqlite3");
-    snapshot_file(&c, &cur);
+    snapshot13(&c, &cur);
     let path = dir.path().join("index.sqlite3");
     legacy_store(&cur, &path, Legacy::V9);
     std::fs::remove_file(&cur).unwrap();
@@ -861,7 +871,7 @@ async fn a_schema_10_store_counts_its_executors_transactions_as_unknown() {
     assert!(executors_txs > 0, "the flows have executors' transactions");
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("index.sqlite3");
-    snapshot_file(&c, &path);
+    snapshot13(&c, &path);
     {
         // the store a schema 10 build left: no executors' transactions, the narrower totals, the version
         let w = Connection::open(&path).unwrap();
@@ -923,7 +933,7 @@ async fn a_schema_11_store_gets_the_genesis_values_and_the_trigger_that_keeps_a_
     assert!(values.len() >= 3 && values.iter().all(|v| v.1.is_some_and(|x| x > 0)), "{values:?}");
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("index.sqlite3");
-    snapshot_file(&c, &path);
+    snapshot13(&c, &path);
     {
         // the store a schema 11 build left
         let w = Connection::open(&path).unwrap();
@@ -1064,7 +1074,7 @@ async fn a_store_with_bids_placed_before_the_delivery_modes_and_a_bought_custody
 
     let dir = tempfile::tempdir().unwrap();
     let cur = dir.path().join("current.sqlite3");
-    snapshot_file(&c, &cur);
+    snapshot13(&c, &cur);
     let path = dir.path().join("index.sqlite3");
     legacy_store(&cur, &path, Legacy::V9);
     std::fs::remove_file(&cur).unwrap();
@@ -1086,4 +1096,128 @@ async fn a_store_with_bids_placed_before_the_delivery_modes_and_a_bought_custody
         let needle = format!("\"covenant_id\":\"{}\"", id.to_hex());
         assert_eq!(at(&after_reads, &needle), at(&before_reads, &needle), "{needle}");
     }
+}
+
+/// Schema 13 to 14 (the holdings name their transaction ids by `txs.id`, their program by `programs.id` and their role by a code; a pair
+/// fill names its order and tokens by integer): a store that a schema 13 build left is compacted, every table reads back as it was,
+/// every read answers the same JSON, the transaction ids are stored once each and counted, a row the integer
+/// layout cannot hold stops the migration with the old store untouched, and a second run finds nothing to do.
+#[tokio::test]
+async fn a_schema_13_store_is_compacted_to_schema_14_and_no_read_changes() {
+    let c = flows().await;
+    // a pair fill, as the processor records one, of a stored order and two stored tokens
+    let pair = {
+        let g = c.hs.ingest.lock().unwrap();
+        let conn = g.conn();
+        let quote = [0x72u8; 32];
+        kobd::indexer::ids::intern(conn, &quote).unwrap();
+        let order: Vec<u8> = conn.query_row("SELECT covenant_id FROM orders ORDER BY id LIMIT 1", [], |r| r.get(0)).unwrap();
+        conn.execute(
+            "INSERT INTO pair_fills (block_seq, daa, ts, txid, tx_pos, order_id, contract, base_id, quote_id, side, amount_a, amount_b, price, \
+             a_scale, tip_kas, counterparty) VALUES (1, 990, 1700000000000, ?1, 0, (SELECT id FROM orders WHERE covenant_id = ?2), 'KobPair', \
+             (SELECT id FROM ids WHERE h = ?3), (SELECT id FROM ids WHERE h = ?4), 1, 5, 7, 1400, 1000, 0, 'inventory')",
+            rusqlite::params![&[0x5au8; 32][..], &order, &TOKEN_COV[..], &quote[..]],
+        )
+        .unwrap();
+        (Hash32(TOKEN_COV), Hash32(quote))
+    };
+    let ctx = reads::ReadCtx { node_daa: Some(1_000_000), settle_depth_daa: 100, now_unix: None };
+    let pair_json = |conn: &Connection| {
+        serde_json::to_string(&kobd::indexer::pairs::pair_fills(conn, &ctx, &pair.0, &pair.1, None, 10).unwrap()).unwrap()
+    };
+    // (the snapshot adds the logo rows no chain gives back to the store it is taken of)
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite3");
+    snapshot13(&c, &path);
+    let (digests_before, reads_before, pairs_before) = {
+        let g = c.hs.ingest.lock().unwrap();
+        assert_txs_counted(g.conn());
+        (table_digests(g.conn()), reads_json(g.conn()), pair_json(g.conn()))
+    };
+    assert!(pairs_before.contains("inventory"), "{pairs_before}");
+    assert!(matches!(db::open_writer(&path, "testnet-10"), Err(db::DbError::OldLayout(_, 13))), "refused until migrated");
+
+    // a holding of a role this build does not know: the integer layout cannot hold it, so nothing is migrated and nothing is changed
+    let bad = dir.path().join("bad");
+    std::fs::create_dir_all(&bad).unwrap();
+    std::fs::copy(&path, bad.join("index.sqlite3")).unwrap();
+    Connection::open(bad.join("index.sqlite3"))
+        .unwrap()
+        .execute("UPDATE token_holdings SET role = 'borrowed' WHERE rowid = (SELECT MIN(rowid) FROM token_holdings)", [])
+        .unwrap();
+    let before = std::fs::read(bad.join("index.sqlite3")).unwrap();
+    let err = storage::migrate(&config(&bad), storage::Options::default(), |_| {}).unwrap_err().to_string();
+    assert!(err.contains("token_holdings") && err.contains("untouched"), "{err}");
+    assert!(!bad.join("index.sqlite3.migrating").exists());
+    assert_eq!(std::fs::read(bad.join("index.sqlite3")).unwrap(), before, "the old store is byte for byte what it was");
+
+    let holdings13: i64 = open_ro(&path).query_row("SELECT COUNT(*) FROM token_holdings", [], |r| r.get(0)).unwrap();
+    let mut lines = vec![];
+    let rep = storage::migrate(&config(dir.path()), storage::Options::default(), |l| lines.push(l.to_string())).unwrap();
+    assert_eq!(rep.from_schema, 13, "{lines:?}");
+    assert_eq!(rep.rows("token_holdings"), holdings13 as u64);
+    assert!(rep.rows("txs") > 0 && rep.rows("pair_fills") == 1, "{rep:?}");
+    assert!(!dir.path().join("index.sqlite3.migrating").exists());
+    let after = open_ro(&path);
+    assert_eq!(db::meta_get(&after, "schema_version").unwrap().as_deref(), Some(db::SCHEMA_VERSION.to_string().as_str()));
+    assert_eq!(after.query_row::<String, _, _>("PRAGMA integrity_check", [], |r| r.get(0)).unwrap(), "ok");
+    assert_eq!(table_digests(&after), digests_before);
+    assert_eq!(reads_json(&after), reads_before);
+    assert_eq!(pair_json(&after), pairs_before);
+    assert_txs_counted(&after);
+    // no 32-byte transaction id, program name or role name is left in a holding row
+    let cols: Vec<String> = {
+        let mut st = after.prepare("SELECT name FROM pragma_table_info('token_holdings')").unwrap();
+        let v = st.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+        v
+    };
+    for gone in ["txid", "spent_txid", "program", "role"] {
+        assert!(!cols.iter().any(|c| c == gone), "{gone}: {cols:?}");
+    }
+    // the lookup of an outpoint reads the prefix index of `txs`, then the holding's key
+    let plan: Vec<String> = {
+        let mut st = after
+            .prepare(
+                "EXPLAIN QUERY PLAN SELECT value FROM token_holdings WHERE tx_id = (SELECT tq.id FROM txs tq WHERE substr(tq.h, 1, 8) = substr(?1, 1, 8) \
+                 AND tq.h = ?1) AND idx = ?2",
+            )
+            .unwrap();
+        let v = st.query_map(rusqlite::params![vec![0u8; 32], 0], |r| r.get::<_, String>(3)).unwrap().map(|r| r.unwrap()).collect();
+        v
+    };
+    assert!(
+        plan.iter().any(|p| p.contains("txs_h")) && plan.iter().any(|p| p.contains("sqlite_autoindex_token_holdings_1")),
+        "{plan:?}"
+    );
+    drop(after);
+    // the indexer goes on from it
+    {
+        let w = db::open_writer(&path, "testnet-10").unwrap();
+        assert_txs_counted(&w);
+    }
+    std::fs::remove_file(rep.kept_old.unwrap()).unwrap();
+    let again = storage::migrate(&config(dir.path()), storage::Options::default(), |_| {}).unwrap();
+    assert_eq!(again.from_schema, db::SCHEMA_VERSION);
+    assert!(again.kept_old.is_none());
+}
+
+/// Measurement on a copy of a real store (`KOB_MIGRATE_DB=<a copy of an index.sqlite3, never a live store>`, `-- --ignored
+/// --nocapture`): `kobd db migrate`, each step with its time, and the sizes. The old file is kept beside it.
+#[test]
+#[ignore]
+fn measure_the_migration_on_a_copy() {
+    let Some(path) = std::env::var_os("KOB_MIGRATE_DB") else { return };
+    let path = std::path::PathBuf::from(path);
+    let cfg = config(path.parent().unwrap());
+    assert_eq!(cfg.db_path(), path, "the copy is named index.sqlite3");
+    let t = std::time::Instant::now();
+    let rep = storage::migrate(&cfg, storage::Options { compress_log: false }, |l| println!("migrate: {l}")).unwrap();
+    println!(
+        "schema {} -> {}: {} -> {} bytes in {:.1} s",
+        rep.from_schema,
+        db::SCHEMA_VERSION,
+        rep.db_bytes_before,
+        rep.db_bytes_after,
+        t.elapsed().as_secs_f64()
+    );
 }

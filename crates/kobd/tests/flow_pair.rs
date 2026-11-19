@@ -71,7 +71,7 @@ fn pair_fill_rows(c: &Ctx, cov: &Hash32) -> Vec<(String, String, i64, Option<i64
     let g = c.hs.ingest.lock().unwrap();
     let mut st = g
         .conn()
-        .prepare("SELECT counterparty, price_source, amount_a, amount_b FROM pair_fills WHERE covenant_id = ?1 ORDER BY id")
+        .prepare("SELECT counterparty, price_source, amount_a, amount_b FROM pair_fills WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) ORDER BY id")
         .unwrap();
     st.query_map([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(|r| r.unwrap()).collect()
 }

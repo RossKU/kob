@@ -31,6 +31,7 @@
 
 use crate::hex::{Hash32, HexBytes};
 use crate::indexer::db::DbResult;
+use crate::indexer::ids::{program_name, tx_of};
 use crate::indexer::ingest::{Cursor, Ingest, IngestError};
 use crate::indexer::packed::{sql_genesis, sql_order_ids, sql_order_ids_more, GENESIS_O, ORDER_IDS_O};
 use crate::indexer::processor::OpReport;
@@ -178,9 +179,13 @@ fn prefund_ext(conn: &Connection, o: &ExportedOrder) -> DbResult<Option<Hash32>>
     let Some((token, _)) = state.custodies().get(1).copied() else { return Ok(None) };
     let row: Option<(String, Vec<u8>)> = conn
         .query_row(
-            "SELECT x.program, kob_hstate(x.state, x.family, ow.h, x.owner_kind, x.amount) FROM token_holdings x JOIN ids ow ON ow.id = x.owner_id \
-             WHERE x.owner_id = (SELECT id FROM ids WHERE h = ?1) AND x.token_id = (SELECT id FROM ids WHERE h = ?2) AND x.role = 'custody' \
-             ORDER BY x.created_block DESC, x.idx DESC LIMIT 1",
+            concat!(
+                "SELECT ",
+                program_name!("x.program_id"),
+                ", kob_hstate(x.state, x.family, ow.h, x.owner_kind, x.amount) FROM token_holdings x JOIN ids ow ON ow.id = x.owner_id \
+                 WHERE x.owner_id = (SELECT id FROM ids WHERE h = ?1) AND x.token_id = (SELECT id FROM ids WHERE h = ?2) AND x.role_code = 1 \
+                 ORDER BY x.created_block DESC, x.idx DESC LIMIT 1"
+            ),
             rusqlite::params![&cov.0[..], &token[..]],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -379,13 +384,16 @@ struct OwnedToken {
 fn owned_token_scripts(conn: &Connection, covs: &[Hash32]) -> Result<Vec<OwnedToken>, RecoverError> {
     use kob_protocol::artifacts::{token_template, TemplateId};
     let mut out = Vec::new();
-    let mut st = conn.prepare(
-        "SELECT t.txid, t.idx, t.role, t.amount, h.program, kob_hstate(h.state, h.family, hw.h, h.owner_kind, h.amount), oe.h, \
-         ot.h, o.family \
-         FROM token_utxos t LEFT JOIN token_holdings h ON h.txid = t.txid AND h.idx = t.idx LEFT JOIN ids hw ON hw.id = h.owner_id \
+    let mut st = conn.prepare(concat!(
+        "SELECT t.txid, t.idx, t.role, t.amount, ",
+        program_name!("h.program_id"),
+        ", kob_hstate(h.state, h.family, hw.h, h.owner_kind, h.amount), oe.h, ot.h, o.family \
+         FROM token_utxos t LEFT JOIN token_holdings h ON h.tx_id = ",
+        tx_of!("t.txid"),
+        " AND h.idx = t.idx LEFT JOIN ids hw ON hw.id = h.owner_id \
          LEFT JOIN orders o ON o.id = t.order_id LEFT JOIN ids oe ON oe.id = o.ext_id LEFT JOIN ids ot ON ot.id = o.token_tpl_id \
-         WHERE t.order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND t.spent_block IS NULL",
-    )?;
+         WHERE t.order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND t.spent_block IS NULL"
+    ))?;
     for cov in covs {
         type Row = (Vec<u8>, u32, String, i64, Option<String>, Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
         let rows: Vec<Row> = st

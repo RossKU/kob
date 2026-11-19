@@ -1435,7 +1435,7 @@ pub fn snapshot(conn: &Connection) -> String {
         &[7, 9],
     );
     dump(
-        "SELECT h.txid, h.idx, t.h, h.program, h.family, w.h, h.owner_kind, h.amount, h.value, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount), h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid FROM token_holdings h JOIN ids t ON t.id = h.token_id JOIN ids w ON w.id = h.owner_id ORDER BY h.txid, h.idx",
+        "SELECT h.txid, h.idx, t.h, h.program, h.family, w.h, h.owner_kind, h.amount, h.value, kob_hstate(h.state, h.family, w.h, h.owner_kind, h.amount), h.role, h.created_block, h.created_daa, h.spent_block, h.spent_txid FROM token_holdings_named h JOIN ids t ON t.id = h.token_id JOIN ids w ON w.id = h.owner_id ORDER BY h.txid, h.idx",
         15,
         &mut out,
         "holding",
@@ -1501,6 +1501,7 @@ pub fn assert_read_invariants(conn: &Connection) {
         .query_row("SELECT COUNT(*) FROM order_state WHERE (cur_txid IS NOT NULL) != (status IN ('open','partial'))", [], |r| r.get(0))
         .unwrap();
     assert_eq!(off, 0, "an order's current UTXO and its live status disagree");
+    assert_txs_counted(conn);
     // The activity totals the triggers keep (`GET /v1/stats`) are the ones the events and orders
     // give.
     let rows = |sql: &str| -> Vec<Vec<rusqlite::types::Value>> {
@@ -1525,6 +1526,52 @@ pub fn assert_read_invariants(conn: &Connection) {
         ),
         "the kept makers and executors differ from the counted ones"
     );
+}
+
+/// The transaction ids of the holdings (`txs`, schema 14) are each stored once, every holding's
+/// resolves, and each row counts exactly the holdings that name it: none is left that names
+/// nothing, whatever reverts and prunings the store went through.
+pub fn assert_txs_counted(conn: &Connection) {
+    let q = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert_eq!(q("SELECT COUNT(*) FROM (SELECT h FROM txs GROUP BY h HAVING COUNT(*) > 1)"), 0, "a transaction id is stored twice");
+    assert_eq!(
+        q("SELECT COUNT(*) FROM token_holdings h WHERE NOT EXISTS (SELECT 1 FROM txs t WHERE t.id = h.tx_id) \
+           OR (h.spent_tx_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM txs t WHERE t.id = h.spent_tx_id))"),
+        0,
+        "a holding names a transaction id that is not stored"
+    );
+    assert_eq!(
+        q("SELECT COUNT(*) FROM txs x LEFT JOIN (SELECT id, COUNT(*) AS c FROM (SELECT tx_id AS id FROM token_holdings \
+           UNION ALL SELECT spent_tx_id FROM token_holdings WHERE spent_tx_id IS NOT NULL) GROUP BY id) r ON r.id = x.id \
+           WHERE r.c IS NOT x.n"),
+        0,
+        "a transaction id's count is not the holdings that name it"
+    );
+}
+
+/// Makes `token_holdings_named` (schema 14: the holdings in the columns of schema 13) writable on
+/// `conn`, for tests that store holdings directly: an insert into it interns the transaction ids
+/// and the program, and inserts the holding, with the conflict rule of the insert (`OR IGNORE`,
+/// `OR REPLACE`).
+pub fn named_holdings_writable(conn: &Connection) {
+    conn.execute_batch(
+        "CREATE TEMP TRIGGER IF NOT EXISTS token_holdings_named_insert INSTEAD OF INSERT ON main.token_holdings_named BEGIN
+             INSERT INTO main.txs (h, n) SELECT NEW.txid, 0
+                 WHERE NOT EXISTS (SELECT 1 FROM main.txs WHERE substr(h, 1, 8) = substr(NEW.txid, 1, 8) AND h = NEW.txid);
+             INSERT INTO main.txs (h, n) SELECT NEW.spent_txid, 0
+                 WHERE NEW.spent_txid IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM main.txs WHERE substr(h, 1, 8) = substr(NEW.spent_txid, 1, 8) AND h = NEW.spent_txid);
+             INSERT INTO main.programs (name) SELECT NEW.program WHERE NOT EXISTS (SELECT 1 FROM main.programs WHERE name = NEW.program);
+             INSERT INTO main.token_holdings (tx_id, idx, token_id, program_id, family, owner_id, owner_kind, amount, value, state, role_code,
+                                              created_block, created_daa, spent_block, spent_tx_id)
+                 VALUES ((SELECT id FROM main.txs WHERE substr(h, 1, 8) = substr(NEW.txid, 1, 8) AND h = NEW.txid), NEW.idx, NEW.token_id,
+                         (SELECT id FROM main.programs WHERE name = NEW.program), NEW.family, NEW.owner_id, NEW.owner_kind, NEW.amount,
+                         NEW.value, NEW.state, CASE NEW.role WHEN 'owned' THEN 0 WHEN 'custody' THEN 1 WHEN 'stray' THEN 2 WHEN 'bought' THEN 3 END,
+                         NEW.created_block, NEW.created_daa, NEW.spent_block,
+                         (SELECT id FROM main.txs WHERE substr(h, 1, 8) = substr(NEW.spent_txid, 1, 8) AND h = NEW.spent_txid));
+         END;",
+    )
+    .unwrap();
 }
 
 /// The activity buckets the events and the executors' transactions give.

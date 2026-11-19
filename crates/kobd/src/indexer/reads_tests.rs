@@ -170,8 +170,9 @@ fn store(seed: u64, n: usize) -> Connection {
         let spent_block = if r.below(3) == 0 { None } else { Some(4i64) };
         intern(&conn, &token).unwrap();
         intern(&conn, &owner).unwrap();
+        crate::testkit::named_holdings_writable(&conn);
         conn.execute(
-            "INSERT INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, \
+            "INSERT INTO token_holdings_named (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, \
              created_block, created_daa, spent_block) VALUES (?1,?2,(SELECT id FROM ids WHERE h = ?3),'KCC20Ref_8x8',1,\
              (SELECT id FROM ids WHERE h = ?4),0,5,1,x'08','owned',?5,1,?6)",
             params![txid, idx, token, owner, created_block, spent_block],
@@ -494,7 +495,7 @@ fn the_holdings_pages_are_the_same_through_the_live_indexes() {
                         }
                     }
                     // The oracle: every matching row, oldest first.
-                    let mut sql = "SELECT txid, idx FROM token_holdings WHERE 1".to_string();
+                    let mut sql = "SELECT txid, idx FROM token_holdings_named WHERE 1".to_string();
                     let mut args = vec![];
                     if let Some(o) = &owner {
                         args.push(SqlValue::Blob(o.clone()));

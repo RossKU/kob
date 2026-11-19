@@ -92,9 +92,10 @@ async fn ask_and_bid_on_a_published_build_token_are_indexed_listed_matched_and_f
         [&cov.0[..]],
     );
     assert_eq!(live, 1);
-    let program: String =
-        c.hs.query("SELECT program FROM token_holdings WHERE txid = ?1 AND idx = ?2", rusqlite::params![&fill.tx.id[..], ci as i64]);
+    let program: String = c
+        .hs
+        .query("SELECT program FROM token_holdings_named WHERE txid = ?1 AND idx = ?2", rusqlite::params![&fill.tx.id[..], ci as i64]);
     assert_eq!(program, "KCC20PublicMint", "the rest custody is proven under the published build");
-    let pm_rows: i64 = c.hs.query("SELECT COUNT(*) FROM token_holdings WHERE program = ?1", ["KCC20PublicMint"]);
+    let pm_rows: i64 = c.hs.query("SELECT COUNT(*) FROM token_holdings_named WHERE program = ?1", ["KCC20PublicMint"]);
     assert!(pm_rows >= 2, "the rest custody and the taker's delivery ({pm_rows})");
 }

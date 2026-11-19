@@ -156,7 +156,7 @@ async fn tokens_sent_to_an_unknown_covenant_id_are_ignored() {
     );
     assert_eq!(
         c.hs.query::<i64>(
-            "SELECT COUNT(*) FROM token_holdings WHERE role = 'owned' AND owner_id = (SELECT id FROM ids WHERE h = ?1)",
+            "SELECT COUNT(*) FROM token_holdings_named WHERE role = 'owned' AND owner_id = (SELECT id FROM ids WHERE h = ?1)",
             [&[0x99u8; 32][..]]
         ),
         1

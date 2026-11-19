@@ -225,7 +225,7 @@ async fn lean_pruning_keeps_what_the_matcher_reads_and_the_file_bounded() {
     for t in ["order_events", "order_utxos", "token_utxos", "token_holdings"] {
         // the unspent holdings of key owners are live data (the operator's own are read by the maintenance jobs); every spent row
         // and every row of a closed order goes
-        let spent = if t == "token_holdings" { " WHERE spent_block IS NOT NULL OR role IN ('custody','stray')" } else { "" };
+        let spent = if t == "token_holdings" { " WHERE spent_block IS NOT NULL OR role_code IN (1, 2)" } else { "" };
         let (a, b): (i64, i64) =
             (full.query(&format!("SELECT COUNT(*) FROM {t}{spent}"), []), lean.query(&format!("SELECT COUNT(*) FROM {t}{spent}"), []));
         assert!(b * 2 < a, "{t}: {b} rows kept of {a}");

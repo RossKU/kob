@@ -1,7 +1,7 @@
 //! Offline store migration for `kobd db migrate`, and the offline vacuum of `kobd db vacuum`.
 //!
-//! `kobd db migrate` brings a data directory written by an earlier build (schema 5 to 12) to the
-//! layout of schema 13 in one offline run, and gives the space back. `kobd db vacuum` ([`vacuum`])
+//! `kobd db migrate` brings a data directory written by an earlier build (schema 5 to 13) to the
+//! layout of schema 14 in one offline run, and gives the space back. `kobd db vacuum` ([`vacuum`])
 //! gives the free pages of a store of this build back.
 //!
 //! The store is not altered in place. A new file is built beside it and replaces it only when it
@@ -51,8 +51,20 @@
 //! before the swap.
 //!
 //! A store of schema 9 to 12 takes the short way ([`upgrade_in_place`]). It is copied as it is and
-//! given the new columns, tables and triggers. A store that is of schema 13 already is left as it
-//! is, and the record log step still runs.
+//! given the new columns, tables and triggers.
+//!
+//! # Schema 14
+//!
+//! The steps above build the layout of schema 13 (`schema13.sql`), in `index.sqlite3.migrating13`.
+//! [`compact`] then builds the store of schema 14 from it, and the file of schema 13 is deleted. A
+//! store of schema 13 is compacted directly, with no file between. Schema 14 stores the 32-byte
+//! transaction ids of the token holdings once each (`txs`), their program names once each
+//! (`programs`) and their roles as codes, and names a pair fill's order and tokens by integer: the
+//! holdings with their indexes take a quarter less, the pair fills less than half. Every other table is copied
+//! as it is, and every table is read back and compared with the old store (step 3) before the swap.
+//! The free disk needed is the new store, plus the file of schema 13 for an older store.
+//!
+//! A store that is of schema 14 already is left as it is, and the record log step still runs.
 //!
 //! The executors' transactions that the store already holds are counted as of unknown income and
 //! network fee (`db::backfill_executor_txs`), because the store keeps no record of who owns their
@@ -71,6 +83,14 @@ use std::time::{Duration, Instant};
 pub const BEFORE_MIGRATE: &str = "before-migrate";
 /// The suffix of the file that the new store is built in.
 const MIGRATING: &str = "migrating";
+/// The suffix of the file that a store older than schema 13 is brought to the layout of schema 13 in,
+/// before [`compact`] builds the new store from it.
+const MIGRATING13: &str = "migrating13";
+/// The layout of schema 13, which the steps from an older store build ([`build`], [`upgrade_in_place`])
+/// before schema 14 compacts it ([`compact`]).
+const SCHEMA13: &str = include_str!("schema13.sql");
+/// The schema version of [`SCHEMA13`].
+const SCHEMA13_VERSION: i64 = 13;
 
 /// Options of [`migrate`].
 #[derive(Debug, Clone, Copy)]
@@ -853,7 +873,7 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, from_schema: i64, rep: &mu
 
     // The tables come from the schema, without the indexes and triggers. They are built over the
     // loaded rows.
-    conn.execute_batch(include_str!("schema.sql"))?;
+    conn.execute_batch(SCHEMA13)?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
     let drops: Vec<String> = {
         let mut st = conn.prepare(
@@ -894,11 +914,11 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, from_schema: i64, rep: &mu
     rep.steps.push(("copy", t.elapsed()));
 
     let t = Instant::now();
-    conn.execute_batch(include_str!("schema.sql"))?;
+    conn.execute_batch(SCHEMA13)?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
     // The counts the triggers keep, counted once, as a store without them gets them at start-up.
     db::backfill_counters(&conn)?;
-    db::backfill_holding_programs(&conn)?;
+    count_programs13(&conn)?;
     db::backfill_activity(&conn)?;
     db::backfill_executor_txs(&conn)?;
     db::backfill_all_time(&conn)?;
@@ -913,7 +933,7 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, from_schema: i64, rep: &mu
             "  counters: counted afresh (the old store's differ: its triggers had drifted, or it predates them)"
         });
     }
-    conn.execute("INSERT OR REPLACE INTO main.meta (k, v) VALUES ('schema_version', ?1)", [db::SCHEMA_VERSION.to_string()])?;
+    conn.execute("INSERT OR REPLACE INTO main.meta (k, v) VALUES ('schema_version', ?1)", [SCHEMA13_VERSION.to_string()])?;
     rep.steps.push(("indexes", t.elapsed()));
     say(&format!("indexes: built ({:.1} s)", t.elapsed().as_secs_f64()));
 
@@ -923,7 +943,7 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, from_schema: i64, rep: &mu
     rep.steps.push(("verify", t.elapsed()));
     conn.execute_batch("DETACH DATABASE old")?;
     drop(conn);
-    opens_and_checks(cfg, new, say)
+    quick_checked(new, say)
 }
 
 /// Checks that the file opens as a store of this build and passes `PRAGMA quick_check`.
@@ -942,6 +962,310 @@ fn opens_and_checks(cfg: &IndexerConfig, new: &Path, say: &mut impl FnMut(&str))
         let _ = std::fs::remove_file(format!("{}{suffix}", new.display()));
     }
     say(&format!("check: the new store opens and passes quick_check ({:.1} s)", t.elapsed().as_secs_f64()));
+    Ok(())
+}
+
+/// Checks that a store of the layout of schema 13, built on the way to schema 14, passes
+/// `PRAGMA quick_check`. It is not a store of this build, so it is not opened as one: [`compact`]
+/// checks the store it builds from it.
+fn quick_checked(path: &Path, say: &mut impl FnMut(&str)) -> DbResult<()> {
+    let t = Instant::now();
+    let c = Connection::open(path)?;
+    let ok: String = c.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
+    if ok != "ok" {
+        return Err(bad(format!(
+            "the store of schema {SCHEMA13_VERSION} built on the way fails its check ({ok}); the store was not replaced"
+        )));
+    }
+    drop(c);
+    say(&format!("check: the store of schema {SCHEMA13_VERSION} passes quick_check ({:.1} s)", t.elapsed().as_secs_f64()));
+    Ok(())
+}
+
+/// Counts the programs of the holdings (`holding_programs`) of a store of the layout of schema 13,
+/// as `db::backfill_holding_programs` does for this build's.
+fn count_programs13(conn: &Connection) -> DbResult<()> {
+    if db::meta_get(conn, "holding_programs")?.is_some() {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "DELETE FROM holding_programs; \
+         INSERT INTO holding_programs (token_id, program, n) SELECT token_id, program, COUNT(*) FROM token_holdings GROUP BY token_id, program;",
+    )?;
+    db::meta_set(conn, "holding_programs", "1")?;
+    Ok(())
+}
+
+// --------------------------------------------------------------------------------------- schema 14
+
+/// The tables whose layout schema 14 changed. [`compact`] rebuilds them and copies every other
+/// table as it is.
+const COMPACTED: [&str; 2] = ["token_holdings", "pair_fills"];
+
+/// The columns of the two tables in the layout of schema 13, which [`compact`] reads.
+const HOLDINGS13: &str = "txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa, spent_block, spent_txid";
+const PAIR_FILLS13: &str =
+    "id, block_seq, daa, ts, txid, tx_pos, covenant_id, contract, base_cov_id, quote_cov_id, side, amount_a, amount_b, price, \
+                            a_scale, tip_kas, counterparty, price_source";
+
+/// Steps 1 to 3 from a store of the layout of schema 13: builds the store of schema 14 in `new`.
+///
+/// Schema 14 changes two tables and adds two (`schema.sql`):
+///
+/// - `token_holdings` names its transaction ids by `txs.id` and its program by `programs.id`, and
+///   its role by a code. `txs` holds each transaction id that a holding names once, with the
+///   holdings that name it counted (`n`). The ids are given in the order of the holdings, and each
+///   holding keeps its rowid.
+/// - `pair_fills` names its order by `orders.id` and its tokens by `ids.id`.
+///
+/// Every other table is copied as it is, its rows and their ids, and the sequences of the
+/// autoincrement tables. The indexes and triggers are built over the loaded rows. The counters and
+/// totals the triggers keep are copied, not counted again: a store that pruned keeps the totals of
+/// what it deleted. Then every table is read back (the two changed ones joined back to the
+/// columns of schema 13) and compared with the old store, row by row. A holding or pair fill that
+/// names a value the integer layout cannot hold (an unknown role, an order or token not stored), a
+/// row that does not read back identical, or a `txs` count that is not the holdings that name it
+/// aborts the migration, with the old store untouched.
+fn compact(cfg: &IndexerConfig, old: &Path, new: &Path, rep: &mut Report, say: &mut impl FnMut(&str)) -> DbResult<()> {
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", new.display()));
+    }
+    let conn = Connection::open(new)?;
+    // A crash leaves a file nobody reads, so there is no journal and no sync.
+    conn.pragma_update(None, "journal_mode", "OFF")?;
+    conn.pragma_update(None, "synchronous", "OFF")?;
+    conn.pragma_update(None, "cache_size", -262_144)?;
+    conn.pragma_update(None, "temp_store", "FILE")?;
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    conn.pragma_update(None, "recursive_triggers", "OFF")?;
+    super::packed::register(&conn)?;
+    super::activity::register(&conn)?;
+    conn.execute("ATTACH DATABASE ?1 AS old", [uri_of(old)])?;
+    let page_size: i64 = conn.query_row("PRAGMA old.page_size", [], |r| r.get(0))?;
+    conn.pragma_update(None, "page_size", page_size)?;
+    if cfg.lean {
+        conn.pragma_update(None, "auto_vacuum", 2)?;
+    }
+    conn.execute_batch(include_str!("schema.sql"))?;
+    conn.execute_batch(crate::logo_reports::SCHEMA)?;
+    let drops: Vec<String> = {
+        let mut st = conn.prepare(
+            "SELECT 'DROP ' || type || ' ' || name FROM main.sqlite_master WHERE (type = 'trigger') OR (type = 'index' AND sql IS NOT NULL)",
+        )?;
+        let v = st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        v
+    };
+    for d in drops {
+        conn.execute_batch(&d)?;
+    }
+    let tables: Vec<String> = {
+        let mut st =
+            conn.prepare("SELECT name FROM old.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")?;
+        let v = st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        v
+    };
+    for table in &tables {
+        if !table_exists(&conn, "main", table)? {
+            return Err(bad(format!(
+                "the old store has a table this build does not know ({table}): nothing was migrated (the old store is untouched)"
+            )));
+        }
+    }
+    for (table, cols) in [("token_holdings", HOLDINGS13), ("pair_fills", PAIR_FILLS13)] {
+        if table_exists(&conn, "old", table)? && columns(&conn, "old", table)?.join(", ") != cols {
+            return Err(bad(format!("{table}: the old store's columns are not those of schema {SCHEMA13_VERSION}: nothing was migrated (the old store is untouched)")));
+        }
+    }
+
+    let t = Instant::now();
+    say("copy:");
+    rep.tables.clear();
+    conn.execute_batch("BEGIN")?;
+    for table in tables.iter().filter(|t| !COMPACTED.contains(&t.as_str())) {
+        let t = Instant::now();
+        let n = copy_plain(&conn, table)?;
+        say(&format!("  {table}: {n} rows ({:.1} s)", t.elapsed().as_secs_f64()));
+        rep.tables.push(TableReport { table: table.clone(), rows: n });
+    }
+
+    if table_exists(&conn, "old", "token_holdings")? {
+        let t = Instant::now();
+        let unknown: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM old.token_holdings WHERE role NOT IN ('owned', 'custody', 'stray', 'bought')",
+            [],
+            |r| r.get(0),
+        )?;
+        if unknown > 0 {
+            return Err(bad(format!(
+                "token_holdings: {unknown} rows of the old store have a role this build does not know: nothing was migrated (the old store is untouched)"
+            )));
+        }
+        // The common programs first: their ids take no byte.
+        conn.execute_batch(
+            "INSERT INTO main.programs (name) SELECT program FROM old.token_holdings GROUP BY program ORDER BY COUNT(*) DESC, program; \
+             CREATE TEMP TABLE tx_first (h BLOB PRIMARY KEY, r INTEGER NOT NULL, n INTEGER NOT NULL) WITHOUT ROWID; \
+             INSERT INTO temp.tx_first (h, r, n) SELECT h, MIN(r), COUNT(*) FROM ( \
+               SELECT txid AS h, rowid AS r FROM old.token_holdings \
+               UNION ALL SELECT spent_txid, rowid FROM old.token_holdings WHERE spent_txid IS NOT NULL) GROUP BY h; \
+             INSERT INTO main.txs (h, n) SELECT h, n FROM temp.tx_first ORDER BY r, h; \
+             DROP TABLE temp.tx_first; \
+             CREATE INDEX main.txs_h ON txs (substr(h, 1, 8));",
+        )?;
+        let n = conn.execute(
+            concat!(
+                "INSERT INTO main.token_holdings (rowid, tx_id, idx, token_id, program_id, family, owner_id, owner_kind, amount, value, state, role_code, \
+                 created_block, created_daa, spent_block, spent_tx_id) \
+                 SELECT x.rowid, ",
+                super::ids::tx_of!("x.txid"),
+                ", x.idx, x.token_id, (SELECT p.id FROM main.programs p WHERE p.name = x.program), x.family, x.owner_id, x.owner_kind, x.amount, \
+                 x.value, x.state, CASE x.role WHEN 'owned' THEN 0 WHEN 'custody' THEN 1 WHEN 'stray' THEN 2 WHEN 'bought' THEN 3 END, \
+                 x.created_block, x.created_daa, x.spent_block, ",
+                super::ids::tx_of!("x.spent_txid"),
+                " FROM old.token_holdings x ORDER BY x.rowid"
+            ),
+            [],
+        )? as u64;
+        let txs = count(&conn, "main", "txs")?;
+        say(&format!("  token_holdings: {n} rows, {txs} transaction ids ({:.1} s)", t.elapsed().as_secs_f64()));
+        rep.tables.push(TableReport { table: "token_holdings".into(), rows: n });
+        rep.tables.push(TableReport { table: "txs".into(), rows: txs });
+    }
+    if table_exists(&conn, "old", "pair_fills")? {
+        let t = Instant::now();
+        let n = conn.execute(
+            "INSERT INTO main.pair_fills (id, block_seq, daa, ts, txid, tx_pos, order_id, contract, base_id, quote_id, side, amount_a, amount_b, \
+             price, a_scale, tip_kas, counterparty, price_source) \
+             SELECT p.id, p.block_seq, p.daa, p.ts, p.txid, p.tx_pos, o.id, p.contract, b.id, q.id, p.side, p.amount_a, p.amount_b, p.price, \
+             p.a_scale, p.tip_kas, p.counterparty, p.price_source \
+             FROM old.pair_fills p JOIN main.orders o ON o.covenant_id = p.covenant_id JOIN main.ids b ON b.h = p.base_cov_id \
+             JOIN main.ids q ON q.h = p.quote_cov_id ORDER BY p.id",
+            [],
+        )? as u64;
+        let raw = count(&conn, "old", "pair_fills")?;
+        if n != raw {
+            return Err(bad(format!(
+                "pair_fills: {} of {raw} rows of the old store name an order or token that is not there; the integer layout cannot hold them. Nothing was migrated (the old store is untouched)",
+                raw - n
+            )));
+        }
+        say(&format!("  pair_fills: {n} rows ({:.1} s)", t.elapsed().as_secs_f64()));
+        rep.tables.push(TableReport { table: "pair_fills".into(), rows: n });
+    }
+    conn.execute_batch("COMMIT")?;
+    rep.ids = rep.rows("ids");
+    rep.steps.push(("copy", t.elapsed()));
+
+    let t = Instant::now();
+    conn.execute_batch(include_str!("schema.sql"))?;
+    conn.execute_batch(crate::logo_reports::SCHEMA)?;
+    // The index only the archive pruning reads, when the old store had it (it is built at the first
+    // pruning otherwise). A lean store's are built when it opens.
+    let spent_daa: bool =
+        conn.prepare("SELECT 1 FROM old.sqlite_master WHERE type = 'index' AND name = 'token_holdings_spent_daa'")?.exists([])?;
+    if spent_daa {
+        super::archive::ensure_indexes(&conn)?;
+    }
+    conn.execute("INSERT OR REPLACE INTO main.meta (k, v) VALUES ('schema_version', ?1)", [db::SCHEMA_VERSION.to_string()])?;
+    // The sequences, as the old store had them, once every row is in: an id of an autoincrement table
+    // is never reused.
+    conn.execute_batch(
+        "DELETE FROM main.sqlite_sequence; INSERT INTO main.sqlite_sequence (name, seq) SELECT name, seq FROM old.sqlite_sequence;",
+    )?;
+    rep.steps.push(("indexes", t.elapsed()));
+    say(&format!("indexes: built ({:.1} s)", t.elapsed().as_secs_f64()));
+
+    let t = Instant::now();
+    say("verify:");
+    verify_compact(&conn, &tables, say)?;
+    rep.steps.push(("verify", t.elapsed()));
+    conn.execute_batch("DETACH DATABASE old")?;
+    drop(conn);
+    opens_and_checks(cfg, new, say)
+}
+
+/// Step 3 of [`compact`]: every table of the old store reads back from the new one.
+fn verify_compact(conn: &Connection, tables: &[String], say: &mut impl FnMut(&str)) -> DbResult<()> {
+    let same = |table: &str, old_sql: &str, new_sql: &str, say: &mut dyn FnMut(&str)| -> DbResult<()> {
+        let t = Instant::now();
+        let (a, na) = digest(conn, old_sql)?;
+        let (b, nb) = digest(conn, new_sql)?;
+        if na != nb || a != b {
+            return Err(bad(format!(
+                "{table}: the new store does not read back as the old one ({nb} rows against {na}). Nothing was migrated (the old store is untouched)"
+            )));
+        }
+        say(&format!("  {table}: {na} rows identical ({:.1} s)", t.elapsed().as_secs_f64()));
+        Ok(())
+    };
+    for table in tables {
+        let table = table.as_str();
+        match table {
+            "token_holdings" => same(
+                table,
+                &format!("SELECT rowid, {HOLDINGS13} FROM old.token_holdings ORDER BY rowid"),
+                &format!("SELECT hid, {HOLDINGS13} FROM main.token_holdings_named ORDER BY hid"),
+                say,
+            )?,
+            "pair_fills" => same(
+                table,
+                &format!("SELECT {PAIR_FILLS13} FROM old.pair_fills ORDER BY id"),
+                "SELECT p.id, p.block_seq, p.daa, p.ts, p.txid, p.tx_pos, o.covenant_id, p.contract, b.h, q.h, p.side, p.amount_a, p.amount_b, \
+                 p.price, p.a_scale, p.tip_kas, p.counterparty, p.price_source FROM main.pair_fills p LEFT JOIN main.orders o ON o.id = p.order_id \
+                 LEFT JOIN main.ids b ON b.id = p.base_id LEFT JOIN main.ids q ON q.id = p.quote_id ORDER BY p.id",
+                say,
+            )?,
+            // The version is the one row that changes.
+            "meta" => same(
+                table,
+                "SELECT k, v FROM old.meta WHERE k != 'schema_version' ORDER BY k",
+                "SELECT k, v FROM main.meta WHERE k != 'schema_version' ORDER BY k",
+                say,
+            )?,
+            _ => {
+                let cols = columns(conn, "old", table)?.join(", ");
+                let without_rowid: bool = conn.query_row(
+                    "SELECT sql LIKE '%WITHOUT ROWID%' FROM main.sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |r| r.get(0),
+                )?;
+                let order = if without_rowid {
+                    let mut st = conn.prepare("SELECT name FROM pragma_table_info(?1, 'main') WHERE pk > 0 ORDER BY pk")?;
+                    let keys = st.query_map([table], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                    keys.join(", ")
+                } else {
+                    "rowid".to_string()
+                };
+                // The rows in the order they were loaded in. A rowid that is not a column of its
+                // own is renumbered, as a vacuum does.
+                same(
+                    table,
+                    &format!("SELECT {cols} FROM old.{table} ORDER BY {order}"),
+                    &format!("SELECT {cols} FROM main.{table} ORDER BY {order}"),
+                    say,
+                )?
+            }
+        }
+    }
+    same(
+        "sqlite_sequence",
+        "SELECT name, seq FROM old.sqlite_sequence ORDER BY name",
+        "SELECT name, seq FROM main.sqlite_sequence ORDER BY name",
+        say,
+    )?;
+    // Each transaction id once, and counted by the holdings that name it.
+    let t = Instant::now();
+    let q = |sql: &str| -> DbResult<i64> { Ok(conn.query_row(sql, [], |r| r.get(0))?) };
+    let twice = q("SELECT COUNT(*) FROM (SELECT h FROM main.txs GROUP BY h HAVING COUNT(*) > 1)")?;
+    let miscounted = q(
+        "SELECT COUNT(*) FROM main.txs x LEFT JOIN (SELECT id, COUNT(*) AS c FROM (SELECT tx_id AS id FROM main.token_holdings \
+         UNION ALL SELECT spent_tx_id FROM main.token_holdings WHERE spent_tx_id IS NOT NULL) GROUP BY id) r ON r.id = x.id WHERE r.c IS NOT x.n",
+    )?;
+    if twice > 0 || miscounted > 0 {
+        return Err(bad(format!(
+            "txs: {twice} transaction ids stored twice, {miscounted} counted wrong. Nothing was migrated (the old store is untouched)"
+        )));
+    }
+    say(&format!("  txs: each transaction id once, counted by its holdings ({:.1} s)", t.elapsed().as_secs_f64()));
     Ok(())
 }
 
@@ -975,14 +1299,7 @@ fn opens_and_checks(cfg: &IndexerConfig, new: &Path, say: &mut impl FnMut(&str))
 /// transactions without a fill, so they are checked against the rows instead. No row is rewritten
 /// but the fills (from 9), the orders' new column and the incomes of the executors' transactions
 /// (reset to unknown). Nothing of the old store is touched.
-fn upgrade_in_place(
-    cfg: &IndexerConfig,
-    from: i64,
-    old: &Path,
-    new: &Path,
-    rep: &mut Report,
-    say: &mut impl FnMut(&str),
-) -> DbResult<()> {
+fn upgrade_in_place(from: i64, old: &Path, new: &Path, rep: &mut Report, say: &mut impl FnMut(&str)) -> DbResult<()> {
     for suffix in ["", "-wal", "-shm", "-journal"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", new.display()));
     }
@@ -1069,7 +1386,7 @@ fn upgrade_in_place(
     }
 
     let t = Instant::now();
-    conn.execute_batch(include_str!("schema.sql"))?;
+    conn.execute_batch(SCHEMA13)?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
     if from == 9 {
         db::backfill_activity(&conn)?;
@@ -1079,7 +1396,7 @@ fn upgrade_in_place(
     let genesis_values = db::backfill_genesis_values(&conn)?;
     say(&format!("  orders: the KAS of {genesis_values} genesis outputs kept on the order (schema 12)"));
     check_activity(&conn)?;
-    conn.execute("INSERT OR REPLACE INTO main.meta (k, v) VALUES ('schema_version', ?1)", [db::SCHEMA_VERSION.to_string()])?;
+    conn.execute("INSERT OR REPLACE INTO main.meta (k, v) VALUES ('schema_version', ?1)", [SCHEMA13_VERSION.to_string()])?;
     note(
         &mut rep.steps,
         say,
@@ -1126,7 +1443,7 @@ fn upgrade_in_place(
     note(&mut rep.steps, say, "verify", t, "every table holds the rows of the old store".to_string());
     conn.execute_batch("DETACH DATABASE old")?;
     drop(conn);
-    opens_and_checks(cfg, new, say)
+    quick_checked(new, say)
 }
 
 /// Step 4: `new` takes the place of `path`, and the old file is kept beside it.
@@ -1210,10 +1527,22 @@ pub fn migrate(cfg: &IndexerConfig, opts: Options, mut say: impl FnMut(&str)) ->
         say(&format!("schema {} -> {}: building the new store beside the old one", rep.from_schema, db::SCHEMA_VERSION));
         let new = suffixed(&path, MIGRATING);
         let t = Instant::now();
-        let built = if rep.from_schema >= 9 {
-            upgrade_in_place(cfg, rep.from_schema, &path, &new, &mut rep, &mut say)
+        let built = if rep.from_schema == SCHEMA13_VERSION {
+            compact(cfg, &path, &new, &mut rep, &mut say)
         } else {
-            build(cfg, &path, &new, rep.from_schema, &mut rep, &mut say)
+            // An older store is brought to the layout of schema 13 in a file of its own first, which
+            // is compacted in turn and then deleted.
+            let mid = suffixed(&path, MIGRATING13);
+            let r = if rep.from_schema >= 9 {
+                upgrade_in_place(rep.from_schema, &path, &mid, &mut rep, &mut say)
+            } else {
+                build(cfg, &path, &mid, rep.from_schema, &mut rep, &mut say)
+            }
+            .and_then(|()| compact(cfg, &mid, &new, &mut rep, &mut say));
+            for suffix in ["", "-wal", "-shm", "-journal"] {
+                let _ = std::fs::remove_file(format!("{}{suffix}", mid.display()));
+            }
+            r
         };
         if let Err(e) = built {
             // Nothing of the half-built file is worth keeping. The old store was not touched.

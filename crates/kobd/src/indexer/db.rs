@@ -21,7 +21,7 @@ use tokio::sync::Semaphore;
 /// (schema 4 or older) cannot be migrated ([`refuse_pre_v3`]), and `kobd db replay` rebuilds it
 /// from the record log. What each version changed is in the "Schema" paragraph of
 /// docs/ops/executor.md.
-pub const SCHEMA_VERSION: i64 = 13;
+pub const SCHEMA_VERSION: i64 = 14;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 /// Errors of the indexer's database layer.
@@ -405,7 +405,8 @@ pub fn backfill_holding_programs(conn: &Connection) -> DbResult<(usize, usize)> 
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch("DELETE FROM holding_programs;")?;
     let programs = tx.execute(
-        "INSERT INTO holding_programs (token_id, program, n) SELECT token_id, program, COUNT(*) FROM token_holdings GROUP BY token_id, program",
+        "INSERT INTO holding_programs (token_id, program, n) SELECT h.token_id, p.name, COUNT(*) FROM token_holdings h JOIN programs p ON p.id = h.program_id \
+         GROUP BY h.token_id, p.name",
         [],
     )?;
     let holdings: i64 = tx.query_row("SELECT COALESCE(SUM(n), 0) FROM holding_programs", [], |r| r.get(0))?;
@@ -836,9 +837,12 @@ mod tests {
     fn holding(c: &Connection, txid: u8, token: u8, program: &str) {
         super::super::ids::intern(c, &[token; 32]).unwrap();
         super::super::ids::intern(c, &[9u8; 32]).unwrap();
+        let tx = super::super::ids::intern_tx(c, &[txid; 32]).unwrap();
+        let program = super::super::ids::intern_program(c, program).unwrap();
         c.execute(
-            "INSERT OR IGNORE INTO token_holdings (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, created_block, created_daa)              VALUES (?1, 0, (SELECT id FROM ids WHERE h = ?2), ?3, 1, (SELECT id FROM ids WHERE h = ?4), 0, 5, 1, x'08', 'owned', 1, 1)",
-            rusqlite::params![vec![txid; 32], vec![token; 32], program, vec![9u8; 32]],
+            "INSERT OR IGNORE INTO token_holdings (tx_id, idx, token_id, program_id, family, owner_id, owner_kind, amount, value, state, role_code, created_block, created_daa) \
+             VALUES (?1, 0, (SELECT id FROM ids WHERE h = ?2), ?3, 1, (SELECT id FROM ids WHERE h = ?4), 0, 5, 1, x'08', 0, 1, 1)",
+            rusqlite::params![tx, vec![token; 32], program, vec![9u8; 32]],
         )
         .unwrap();
     }
@@ -856,16 +860,17 @@ mod tests {
         holding(&c, 3, 1, "KronToken2433");
         holding(&c, 4, 2, "KCC20Ref_8x8");
         assert_eq!(programs(&c), [(1, "KCC20Ref_8x8".into(), 2), (1, "KronToken2433".into(), 1), (2, "KCC20Ref_8x8".into(), 1)]);
-        c.execute("DELETE FROM token_holdings WHERE txid = ?1", [vec![3u8; 32]]).unwrap();
-        c.execute("UPDATE token_holdings SET spent_block = 2 WHERE txid = ?1", [vec![1u8; 32]]).unwrap();
+        let tx = |t: u8| super::super::ids::lookup_tx(&c, &[t; 32]).unwrap().unwrap();
+        c.execute("DELETE FROM token_holdings WHERE tx_id = ?1", [tx(3)]).unwrap();
+        c.execute("UPDATE token_holdings SET spent_block = 2 WHERE tx_id = ?1", [tx(1)]).unwrap();
         assert_eq!(
             programs(&c),
             [(1, "KCC20Ref_8x8".into(), 2), (2, "KCC20Ref_8x8".into(), 1)],
             "a spend changes nothing, the last of a program takes its row"
         );
         c.execute(
-            "UPDATE token_holdings SET token_id = (SELECT id FROM ids WHERE h = ?1) WHERE txid = ?2",
-            rusqlite::params![vec![2u8; 32], vec![1u8; 32]],
+            "UPDATE token_holdings SET token_id = (SELECT id FROM ids WHERE h = ?1) WHERE tx_id = ?2",
+            rusqlite::params![vec![2u8; 32], tx(1)],
         )
         .unwrap();
         assert_eq!(programs(&c), [(1, "KCC20Ref_8x8".into(), 1), (2, "KCC20Ref_8x8".into(), 2)]);
