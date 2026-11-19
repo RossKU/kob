@@ -384,7 +384,7 @@ swap_entry() { # $1 = name, $2 = kb (bids), $3 = bid last rest|out, $4 = ka (ask
     echo "    // $kb bids and $ka asks. Every bid but the last ends, and every ask but"
     echo "    // the last is sold out. The last bid $bv, and the last ask $av."
   fi
-  [ "$c" -gt 0 ] && echo "    // Bid 1 holds a bought-custody, a token A input after the lock (BID CUSTODY)."
+  [ "$c" -gt 0 ] && { echo "    // Bid 1 holds a bought-custody, a token A input after the lock"; echo "    // (BID CUSTODY)."; }
   echo "    entry $name($(join , "${args[@]}" | sed 's/,/, /g'))"
   for m in $(seq 1 "$kb"); do
     if [ "$m" = "$kb" ]; then bid_obs "bids$m" "bid${m}_covid" "$bl" "$fam"; else bid_obs "bids$m" "bid${m}_covid" out "$fam"; fi
