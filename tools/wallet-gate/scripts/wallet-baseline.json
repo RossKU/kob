@@ -1,7 +1,7 @@
 {
  "kasware": {
-  "version": "0.11.5",
-  "sha256": "0235123ff6a1ce781c7538bd0a0039df5fceb2fc16536dffe2d9fb4e5d59b46b",
+  "version": "0.11.6",
+  "sha256": "6b3ca0411d4311c227fb3aefec9ea35c700ee436f327644c12dc1e1f184ca01a",
   "methods": [
    "_attachTonConnect",
    "_dispose",
@@ -155,6 +155,7 @@
    "approvalId is required: refusing to answer whichever approval happens to be pending",
    "approvalId is required: refusing to derive whichever approval happens to be pending",
    "borrow_scheme disabled/v1 rejects borrowing",
+   "borrow_scheme is disabled/v1: borrowing is rejected",
    "convertRadix2: invalid data word=# from=#",
    "convertRadix: invalid from=#, base cannot be less than 2",
    "convertRadix: invalid to=#, base cannot be less than 2",
@@ -209,8 +210,8 @@
   ]
  },
  "kaspire": {
-  "version": "0.5.31",
-  "sha256": "cb4c1ea8cd4a21cc650b2d07906f4ec9847c5c51bba5bd1f7b022cb20f52dedd",
+  "version": "0.5.32",
+  "sha256": "bc3e187b33d2a5fef507bfaa5af38eee6e3469fcbd02460743958c23415e3426",
   "methods": [
    "actCovenantWyrm",
    "connect",
@@ -247,6 +248,7 @@
    "Covenant Wyrm action rejected.",
    "Covenant Wyrm mint rejected.",
    "Covenant Wyrm transition rejected. The self-output remains ordinary spendable KAS.",
+   "Full token balance change unavailable: some token states could not be verified. Unknown does not mean zero.",
    "Generated output has an invalid covenant binding.",
    "Invalid Covenant Wyrm action request.",
    "Invalid Covenant Wyrm cell descriptor.",
