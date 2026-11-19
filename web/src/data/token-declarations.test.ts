@@ -2,7 +2,7 @@
 // prefers it to the registry's snapshot and flags any disagreement; an open-list token takes its scale from it.
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  MAX_PARALLEL_READS, adoptDeclaration, declarationConflicts, declaredToken, loadDeclaration, resetDeclarationsForTests, restoreDeclarations, subscribeDeclarations,
+  MAX_PARALLEL_READS, adoptDeclaration, declarationConflicts, declaredToken, listedTickerOf, loadDeclaration, noteListedTickers, resetDeclarationsForTests, restoreDeclarations, subscribeDeclarations,
 } from './token-declarations';
 import { decimalsNote, decimalsOrigin, displayToken } from '../app/token-display';
 import { buildTokenRows, unknownRow } from '../ui/market/token-model';
@@ -84,6 +84,21 @@ describe('declarations: verified before use', () => {
     expect(a).toEqual(b);
     expect(a?.decimals).toBe(2);
     expect(await loadDeclaration(kob, null, NET, 'aa'.repeat(32), null)).toBeNull(); // no source
+  });
+});
+
+describe('listed tickers', () => {
+  it('a listener that throws does not stop the others or reach the caller', () => {
+    let calls = 0;
+    const offBad = subscribeDeclarations(() => {
+      throw new Error('boom');
+    });
+    const offGood = subscribeDeclarations(() => calls++);
+    expect(() => noteListedTickers(NET, [{ covenant_id: 'ab'.repeat(32), ticker: 'LST' }])).not.toThrow();
+    expect(calls).toBe(1);
+    expect(listedTickerOf(NET, 'ab'.repeat(32))).toBe('LST');
+    offBad();
+    offGood();
   });
 });
 

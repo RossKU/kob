@@ -290,7 +290,7 @@ const listedTickers = new Map<string, string>();
 /** Remembers the listed tickers and tells the views. `rows` are as `GET /v1/tokens` gives them. */
 export function noteListedTickers(network: string, rows: readonly { covenant_id: Hex; ticker?: string | null }[]): void {
   for (const r of rows) if (r.ticker) listedTickers.set(k(network, r.covenant_id), r.ticker);
-  for (const f of listeners) f();
+  notify();
 }
 
 /** The listed ticker of a token, else null. */
