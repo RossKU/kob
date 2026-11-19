@@ -11,9 +11,9 @@
 //    and shown from a `blob:` URL. They are checked against the CID where that is possible
 //    without a library (`verifyIpfsBytes`). That is a CIDv1 raw leaf, or a one-block CIDv0 or
 //    dag-pb file with no path, so an image of at most 256 KiB. A larger file, or one inside a
-//    directory, is a many-block DAG whose check needs the whole DAG. There the gateway's content
-//    addressing is accepted. The gateway can then serve other bytes of a valid picture type, but it
-//    cannot make the creator's address point elsewhere.
+//    directory, is a many-block DAG this check cannot cover. It is shown only when the
+//    declaration's `image_hash` matches the bytes; otherwise the next source is tried, because a
+//    gateway could serve another picture there.
 // 3. `https://`, from the declaration, or kascov's claimed image when it has no saved copy. It is
 //    a plain lazy <img src> with no referrer, in a fixed box, labelled "Image from the creator's
 //    site, not checked". The `fetch` sends no credentials, but the <img> sends the host's own
@@ -32,9 +32,8 @@
 // 4. The letter avatar.
 //
 // SVG, AVIF, HEIC, JPEG XL, BMP, ICO and TIFF pictures are shown only from bytes the page read
-// itself, drawn to a WEBP first (data/svg-logo.ts). Those bytes are checked against the original
-// file's hash, except for a many-block IPFS file, where the gateway's content addressing stands
-// in. For every source the app refuses a `data:` URL and a host that is an IP literal,
+// itself and checked, drawn to a WEBP first (data/svg-logo.ts). The hash is that of the original
+// file. For every source the app refuses a `data:` URL and a host that is an IP literal,
 // `localhost` or a name without a dot, which is an address inside the viewer's network.
 import { readCapped, sha256Hex, type ImageMime } from './kascov';
 import { refusedHost, type LogoRef } from './logo-url';
@@ -155,9 +154,9 @@ const fromHex = (h: string): Uint8Array => new Uint8Array((h.match(/../g) ?? [])
 
 /**
  * Whether `bytes` are what `cid` names. `true` means they hash to it and `false` that they do not.
- * `null` means this cannot be checked without the whole DAG, and the caller then relies on the
- * gateway. That is a path inside a directory, a file of more than one block, or a codec or hash
- * this check does not know.
+ * `null` means this cannot be checked without the whole DAG: a path inside a directory, a file of
+ * more than one block, or a codec or hash this check does not know. The bytes are then shown only
+ * when the creator's `image_hash` matches them.
  */
 export async function verifyIpfsBytes(cid: string, path: string, bytes: Uint8Array, sha256: (b: Uint8Array) => Promise<string | null> = sha256Hex): Promise<boolean | null> {
   if (path !== '') return null;
@@ -224,8 +223,8 @@ export function ipfsGatewayUrl(gateway: string, ref: Extract<LogoRef, { kind: 'i
  *
  * Redirects are followed, because dweb.link answers with its per-CID subdomain. It is null when
  * the gateway does not answer or the file is too large. It is also null when the file is not a
- * picture the page can show (data/svg-logo.ts), or its bytes are not what the CID names where
- * that can be checked (`verifyIpfsBytes`).
+ * picture the page can show (data/svg-logo.ts), when its bytes are not what the CID names, or when
+ * neither the CID (`verifyIpfsBytes`) nor `imageHash` could check them.
  * - `checked`: the bytes were compared with the CID.
  * - `hashChecked`: they were compared with the creator's `image_hash`. A different file is not
  *   returned, and `onMismatch` is called.
@@ -233,6 +232,8 @@ export function ipfsGatewayUrl(gateway: string, ref: Extract<LogoRef, { kind: 'i
 export async function fetchIpfsImage(gateway: string, ref: Extract<LogoRef, { kind: 'ipfs' }>, o: IpfsFetchOptions = {}): Promise<IpfsImage | null> {
   const url = ipfsGatewayUrl(gateway, ref);
   if (!url || o.signal?.aborted) return null;
+  // nothing could check the bytes: not asked for at all
+  if (!o.imageHash && (ref.path !== '' || !parseCid(ref.cid))) return null;
   const fetchFn = o.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), o.timeoutMs ?? 10_000);
@@ -246,6 +247,8 @@ export async function fetchIpfsImage(gateway: string, ref: Extract<LogoRef, { ki
     if (!isPicture(bytes)) return null;
     const ok = await verifyIpfsBytes(ref.cid, ref.path, bytes, o.sha256);
     if (ok === false) return null;
+    // shown only when the CID or the creator's hash checked the bytes
+    if (ok === null && !o.imageHash) return null;
     if (o.imageHash) {
       const got = await (o.sha256 ?? sha256Hex)(bytes);
       if (got === null) return null;

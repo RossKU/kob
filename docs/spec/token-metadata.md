@@ -65,8 +65,8 @@ the optional ones that are not set (the order is `name`, `symbol`, `decimals`, `
   an `ipfs://` address the hash is still of the file's bytes (a dag-pb CID is not the file's SHA-256). The Create page computes it in the browser from a file the creator picks
   (nothing is uploaded; SVG is refused), and `kob token create --image-file <path>` does the same (`--image-hash <hex>` gives it directly).
 * **The logo is an address, not a picture.** KOB stores and serves no image. Each viewer's browser loads the `image` address of a declaration (when kascov.io has no
-  checked copy and the viewer allows it): `ipfs://` through a public gateway as bytes (shown from a `blob:` URL; the bytes are compared with the CID where that is
-  possible, and with `image_hash` when the declaration has one), `https://` as a plain image labelled "Image from the creator's site, not checked" (the creator's host
+  checked copy and the viewer allows it): `ipfs://` through a public gateway as bytes (shown from a `blob:` URL; shown only when the bytes match the CID, which is
+  possible for a one-block file with no path, or the declaration's `image_hash`), `https://` as a plain image labelled "Image from the creator's site, not checked" (the creator's host
   sees the viewer's IP address and may change the picture later). With an `image_hash` the browser first tries to read an `https://` picture in CORS mode (no
   credentials, no referrer): if it can and the bytes hash to `image_hash`, the picture is shown from a `blob:` URL as checked; if they do not, the letter is shown with
   the note "The picture at this address does not match the hash in the token's creation record"; if the host sends no CORS header (the usual case) nothing can be

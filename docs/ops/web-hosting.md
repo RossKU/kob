@@ -183,7 +183,7 @@ page fills it from a file the creator picks, `docs/spec/token-metadata.md` 2). S
 * **Order.** 1. kascov's saved copy, when its bytes hash to the creator's committed hash (above). 2. `ipfs://<cid>[/path]`: the bytes are fetched from a public
   gateway (`ipfsGatewayUrl`, default `https://dweb.link/ipfs`; `https://` only; empty turns `ipfs://` logos off) and shown from a `blob:` URL. Where it can be
   done without a library the bytes are compared with the CID (a CIDv1 raw leaf, or a one-block file of at most 256 KiB); a larger file or one inside a
-  directory cannot be checked without the whole DAG, and there the gateway's content addressing is accepted; with an `image_hash` the bytes are compared with it too (a
+  directory cannot be checked without the whole DAG, and is shown only when its bytes match the declaration's `image_hash` (else the next source); with an `image_hash` the bytes are compared with it too (a
   different file: the letter and the note "The picture at this address does not match the hash in the token's creation record"). 3. `https://`: with an `image_hash`, the page
   first tries `fetch(url, {mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer'})` (this is `connect-src`, which already allows `https:`; a host that sends
   no CORS header makes it fail silently): readable bytes that hash to `image_hash` are shown from a `blob:` URL as checked, readable bytes that do not give the letter and

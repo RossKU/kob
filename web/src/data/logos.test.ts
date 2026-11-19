@@ -107,7 +107,7 @@ describe('the CID against the bytes', () => {
     expect(await verifyIpfsBytes(`b${base32(new Uint8Array([0x01, 0x70, 0x12, 0x20, ...base58Decode(HELLO_CID_V0).slice(2)]))}`, '', HELLO, sha)).toBe(true);
   });
 
-  it('cannot be checked (null, the gateway is relied on) for a path, a many-block size, an unknown codec or hash, or no SHA-256', async () => {
+  it('cannot be checked (null) for a path, a many-block size, an unknown codec or hash, or no SHA-256', async () => {
     expect(await verifyIpfsBytes(HELLO_CID_V0, '/logo.png', HELLO, sha)).toBeNull();
     expect(await verifyIpfsBytes(HELLO_CID_V0, '', new Uint8Array(262_145), sha)).toBeNull();
     expect(await verifyIpfsBytes('b' + base32(new Uint8Array([0x01, 0x71, 0x12, 0x20, ...digest(PNG)])), '', PNG, sha)).toBeNull(); // dag-cbor
@@ -156,9 +156,32 @@ describe('fetchIpfsImage', () => {
     expect(await fetchIpfsImage('https://dweb.link/ipfs', rawRef, { fetch: ok(new Uint8Array()) as unknown as typeof fetch, sha256: sha })).toBeNull();
   });
 
-  it('a file that cannot be checked (a path) is accepted from the gateway as a raster image, marked unchecked', async () => {
-    const img = await fetchIpfsImage('https://dweb.link/ipfs', { ...rawRef, path: '/logo.png' }, { fetch: ok(PNG) as unknown as typeof fetch, sha256: sha });
-    expect(img).toMatchObject({ mime: 'image/png', checked: false });
+  it('a file the CID cannot check (a path, an unknown codec, many blocks) is not shown without an image_hash; a path is not even fetched', async () => {
+    const f = ok(PNG);
+    expect(await fetchIpfsImage('https://dweb.link/ipfs', { ...rawRef, path: '/logo.png' }, { fetch: f as unknown as typeof fetch, sha256: sha })).toBeNull();
+    const cbor = 'b' + base32(new Uint8Array([0x01, 0x71, 0x12, 0x20, ...digest(PNG)]));
+    expect(await fetchIpfsImage('https://dweb.link/ipfs', { ...rawRef, cid: cbor }, { fetch: f as unknown as typeof fetch, sha256: sha })).toBeNull();
+    expect(f).not.toHaveBeenCalled();
+    // a dag-pb file over one block: fetched, the size known only then, and refused
+    const big = new Uint8Array(262_145);
+    big.set(PNG);
+    expect(await fetchIpfsImage('https://dweb.link/ipfs', { ...rawRef, cid: HELLO_CID_V0 }, { fetch: ok(big) as unknown as typeof fetch, sha256: sha })).toBeNull();
+    // no SHA-256 at hand: nothing checked, nothing shown
+    expect(await fetchIpfsImage('https://dweb.link/ipfs', rawRef, { fetch: ok(PNG) as unknown as typeof fetch, sha256: () => Promise.resolve(null) })).toBeNull();
+  });
+
+  it('a file the CID cannot check is shown when its bytes match the image_hash (an SVG as the picture drawn from it)', async () => {
+    const hash = createHash('sha256').update(PNG).digest('hex');
+    const img = await fetchIpfsImage('https://dweb.link/ipfs', { ...rawRef, path: '/logo.png' }, { fetch: ok(PNG) as unknown as typeof fetch, sha256: sha, imageHash: hash });
+    expect(img).toMatchObject({ mime: 'image/png', checked: false, hashChecked: true });
+    const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>');
+    const webp = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]);
+    const rasterize = vi.fn(async () => ({ bytes: webp, mime: 'image/webp' as const }));
+    const svgRef = { kind: 'ipfs' as const, cid: HELLO_CID_V0, path: '/logo.svg', svg: true as const };
+    expect(await fetchIpfsImage('https://dweb.link/ipfs', svgRef, { fetch: ok(svg) as unknown as typeof fetch, sha256: sha, rasterize })).toBeNull();
+    expect(rasterize).not.toHaveBeenCalled();
+    const svgHash = createHash('sha256').update(svg).digest('hex');
+    expect(await fetchIpfsImage('https://dweb.link/ipfs', svgRef, { fetch: ok(svg) as unknown as typeof fetch, sha256: sha, rasterize, imageHash: svgHash })).toEqual({ bytes: webp, mime: 'image/webp', checked: false, hashChecked: true });
   });
 
   it('no gateway, a network error and a body over the cap give null', async () => {

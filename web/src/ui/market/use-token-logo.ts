@@ -6,8 +6,9 @@
 //    KCC-23 declaration (`image`, or `logo`), then the one kascov.io lists for it. When the
 //    declaration carries an `image_hash`, the SHA-256 of the file, the bytes are compared with it
 //    first.
-//    - `ipfs://` is fetched as bytes through the gateway. Equal gives 'verified', a different file
-//      gives 'mismatch', and no hash gives 'ipfs'.
+//    - `ipfs://` is fetched as bytes through the gateway. Equal gives 'verified' and a different
+//      file gives 'mismatch'. With no hash it gives 'ipfs' only when the bytes match the CID;
+//      otherwise the next address is tried, since unchecked bytes are not shown.
 //    - `https://` is read in CORS mode. Equal gives 'verified' (a blob) and different gives
 //      'mismatch'. Not readable, which is the usual case with no CORS header, or no hash gives a
 //      plain <img> the page cannot read or check ('creator').
@@ -34,7 +35,7 @@ export type TokenLogo =
   | { state: 'withheld'; host: string }
   /**
    * `checked` is bytes that hash to the creator's committed hash (kascov.io's copy). `ipfs` is
-   * bytes from the gateway, compared with the CID where that is possible.
+   * bytes from the gateway that match the CID.
    */
   | { state: 'checked' | 'ipfs'; src: string }
   /**
