@@ -59,6 +59,11 @@ const TAPE_LIMIT = 50;
  * (ui/activity) runs full width, with the token facts below. Live, the WebSocket feed (`book:` and
  * `fills:`) triggers a debounced refetch. Without it the page polls every 5 s.
  */
+/** The note above a ticket that a link filled in, per preset. */
+export function linkFilledKey(ticket: TicketPreset | undefined): 'market.ticket.linkFilled' | 'market.ticket.linkFilledMarket' | 'market.ticket.linkFilledClose' {
+  return ticket === 'close' ? 'market.ticket.linkFilledClose' : ticket === 'sell' || ticket === 'cover' ? 'market.ticket.linkFilledMarket' : 'market.ticket.linkFilled';
+}
+
 export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; amount?: string; price?: string }) {
   const services = useServices();
   const wallet = useWallet();
@@ -84,9 +89,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
             { side: 'sell', ...(props.amount ? { amount: BigInt(props.amount) } : {}), ...(props.price ? { price: BigInt(props.price) } : {}) }
           : undefined,
   );
-  // A limit sell that the link filled in (side, amount, price). It is said above the ticket until
-  // the book or the form replaces it, because a link can name any price.
-  const linkFilled = useRef(props.ticket === 'ask' ? prefill : undefined);
+  // An order that a link filled in: a limit sell (side, amount, price), or a market sell, buy or
+  // close (side, type, amount). It is said above the ticket until the book or the form replaces it,
+  // because a link can name any price or amount.
+  const linkFilled = useRef(prefill);
   const [liveKey, setLiveKey] = useState(0);
   // Bumps on a reorg or resync, when history may have changed and not only grown. The chart then
   // reloads in full instead of fetching only its newest bars.
@@ -487,7 +493,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
                   <Button small variant="ghost" onClick={() => setEntered(null)} data-testid="first-order-change">{t('market.first.change')}</Button>
                 </Banner>
               ) : null}
-              {linkFilled.current && prefill === linkFilled.current ? <Banner tone="warn" data-testid="ticket-link-filled">{t('market.ticket.linkFilled')}</Banner> : null}
+              {linkFilled.current && prefill === linkFilled.current ? <Banner tone="warn" data-testid="ticket-link-filled">{t(linkFilledKey(props.ticket))}</Banner> : null}
               {wallet.networkMismatch ? <Banner tone="error" data-testid="ticket-network-blocked">{t('market.ticket.networkBlocked')}</Banner> : null}
               <OrderTicket token={ticketInfo ?? info} prefill={prefill} inverted={inverted} facts={<TokenFacts rows={[checkedRow ?? row]} compact data-testid="ticket-token-facts" />} />
             </div>
