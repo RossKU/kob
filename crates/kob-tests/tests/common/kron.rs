@@ -2,11 +2,12 @@
 //! real token programs, and the token sigscript (KRON SDK `transferSigScript` layout).
 //!
 //! The KRON token program has ONE entry and no leader/delegator split: every token input of a
-//! transaction carries the same `owners | types | amounts | isMinters` columns (the next states of the
-//! whole covenant group), a shared signature column (only id_type 0 uses it) and a witness column with
-//! one byte per token input (in input order) that points at the input which authorises that token
-//! input: for id_type 2 (covenant id) an input whose covenant id equals the owner, for id_type 3
-//! (address presence) an input whose script public key is P2PK(owner), for id_type 1 a P2SH input.
+//! transaction carries the same `owners | types | amounts | isMinters` columns (the next states of
+//! the whole covenant group), a shared signature column (only id_type 0 uses it) and a witness
+//! column with one byte per token input (in input order) that points at the input which authorises
+//! that token input: for id_type 2 (covenant id) an input whose covenant id equals the owner, for
+//! id_type 3 (address presence) an input whose script public key is P2PK(owner), for id_type 1 a
+//! P2SH input.
 #![allow(dead_code)]
 
 use kaspa_consensus_core::tx::ScriptPublicKey;

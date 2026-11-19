@@ -1,13 +1,17 @@
 //! Runs the KCC-2 conformance vectors (kaspanet/kccs `main` 411b41b,
 //! `kcc-0002/vectors/authority-schemes.json`, vendored unmodified in
 //! `crates/kob-tests/vectors/kcc2/`, see PROVENANCE.md there) executed against KOB's off-chain
-//! implementation:
+//! implementation.
 //!
-//! | Vector section | KOB code under test |
-//! |---|---|
-//! | constructions | `kob_protocol::kcc2` (scheme bytes and names, `p2pkh_authority` = unkeyed `Hash(pubkey)`, `p2sh_authority`, `p2sh_envelope`), `kob_protocol::script::p2sh_spk`, the KCC-1 push forms, and the KCC-20 state encoder (`Kcc20State::encode`: `owner` and `owner_scheme` bytes) |
-//! | approval_checks | `kcc2::{signature_approval, p2sh_approval, covenant_approval}` |
-//! | registry_checks | `kcc2::classify`, the issuance owner-scheme set (the x402 owner-proof parser: `crates/kob-x402/tests/sighash.rs`) |
+//! Each vector section and the KOB code under test:
+//!
+//! - constructions: `kob_protocol::kcc2` (scheme bytes and names, `p2pkh_authority` = unkeyed
+//!   `Hash(pubkey)`, `p2sh_authority`, `p2sh_envelope`), `kob_protocol::script::p2sh_spk`, the
+//!   KCC-1 push forms, and the KCC-20 state encoder (`Kcc20State::encode`: `owner` and
+//!   `owner_scheme` bytes)
+//! - approval_checks: `kcc2::{signature_approval, p2sh_approval, covenant_approval}`
+//! - registry_checks: `kcc2::classify`, the issuance owner-scheme set (the x402 owner-proof parser:
+//!   `crates/kob-x402/tests/sighash.rs`)
 //!
 //! The same cases are executed in KOB's KCC-20 programs by
 //! `kcc20_conformance_tests::kcc2_authority_vectors_in_kcc20_programs`.

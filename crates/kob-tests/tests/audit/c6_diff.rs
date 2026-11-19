@@ -2,19 +2,25 @@
 //! the builders mirror, random inputs (boundaries and near-overflow included) are built by the
 //! production builders and the boundary the Rust code computes is probed in the rusty-kaspa v2.1.0
 //! engine: the covenant must accept exactly the Rust boundary value and refuse one unit worse (for
-//! the maker). Every probe moves one number of the builder's own transaction:
+//! the maker). Every probe moves one number of the builder's own transaction. The rules and
+//! their probes:
 //!
-//! | rule | probe |
-//! |---|---|
-//! | ask proceeds ceil(n * (p(t) - tip) / scale) (decay, TWAP slice origin, tip, IOC / sold-out carriers) | the maker's KAS output |
-//! | bid spend floor(n * (p(t) + tip) / scale) and budget ceil(n * (pMax + tip) / scale) (rising, reserve, delivery carrier, continuation) | the delivery's KAS; the continuation (exact) |
-//! | stop band / take-profit leg at t (conditional sell / buy) | the maker's output; the conditional bid's continuation |
-//! | trailing ratchet steps (sell and buy side) | the continuation's stop (k, k + 1, k - 1) |
-//! | keeper tips (arm, trail) | the continuation's value |
-//! | refund tips and refund times (every kind; expiry, 90-day idle, IOC/FOK kill) | the maker's output; the lock time |
-//! | if-done amounts (buy-first spend, sell-first proceeds and prefund) | the entry's continuation; the delivery carrier; the exit |
-//! | pair order quote at t: ask B delivery ceil(n * p(t) / scale(A)), bid release floor(n * p(t) / scale(A)), KAS tip | the maker's B delivery (exact, minus one); the builder's release |
-//! | activation, trigger rest time (minRestDaa), TWAP interval (CSV) | the lock time; the input sequence |
+//! - ask proceeds ceil(n * (p(t) - tip) / scale) (decay, TWAP slice origin, tip, IOC / sold-out
+//!   carriers). Probe: the maker's KAS output
+//! - bid spend floor(n * (p(t) + tip) / scale) and budget ceil(n * (pMax + tip) / scale) (rising,
+//!   reserve, delivery carrier, continuation). Probe: the delivery's KAS; the continuation (exact)
+//! - stop band / take-profit leg at t (conditional sell / buy). Probe: the maker's output; the
+//!   conditional bid's continuation
+//! - trailing ratchet steps (sell and buy side). Probe: the continuation's stop (k, k + 1, k - 1)
+//! - keeper tips (arm, trail). Probe: the continuation's value
+//! - refund tips and refund times (every kind; expiry, 90-day idle, IOC/FOK kill). Probe: the
+//!   maker's output; the lock time
+//! - if-done amounts (buy-first spend, sell-first proceeds and prefund). Probe: the entry's
+//!   continuation; the delivery carrier; the exit
+//! - pair order quote at t: ask B delivery ceil(n * p(t) / scale(A)), bid release floor(n * p(t) /
+//!   scale(A)), KAS tip. Probe: the maker's B delivery (exact, minus one); the builder's release
+//! - activation, trigger rest time (minRestDaa), TWAP interval (CSV). Probe: the lock time; the
+//!   input sequence
 //!
 //! Amounts are base units at random scales (powers of ten); every rule mirrors the covenants'
 //! `quoteOf` exactly (split multiplication, ceil for what a maker receives, floor for what it pays:
