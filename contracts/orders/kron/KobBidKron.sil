@@ -2,9 +2,15 @@ pragma silverscript ^0.1.0;
 
 // KobBidKron: a limit order that buys a KRON token with KAS.
 //
-// This is the KRON version of contracts/orders/KobBid.sil, with the same
-// entries and the same rules. This header lists the differences.
-// contracts/orders/kron/README.md describes the family.
+// This is the KRON version of contracts/orders/KobBid.sil, with the rules of
+// its delivery mode 0. This header lists the differences.
+// contracts/orders/kron/README.md describes the family, and the
+// specification is docs/spec/order-types.md.
+//
+// Entries. fill(nb, tokenTplIn, t), cancel(sig) and refund(), as in KobBid.
+// Every fill delivers a new token UTXO to the maker, so fill has no form
+// argument, and the state has no mode, recvThreshold, topupTip or bought.
+// The refund carries no token input at all.
 //
 // Token codec. The KRON state is 46 B, with owner[1..33), id_type[34],
 // amount[36..44) and is_minter[45]. It replaces the 112 B KCC-20 state. The
@@ -12,9 +18,9 @@ pragma silverscript ^0.1.0;
 // presence, TYPE_DELIVERY), amount: n, is_minter: 0 }.
 //
 // No extensionCommitment. KRON has none, so this order has neither the
-// constructor argument nor the state field. The state is 252 B instead of
-// 285 B, and every later field sits 33 B earlier. The pair conditionals call
-// this length BID_STATE_LEN_KRON.
+// constructor argument nor the state field. Its state is 252 B, and every
+// field after tplSuffixLen sits 33 B earlier than in KobBid. The pair
+// conditionals call this length BID_STATE_LEN_KRON.
 //
 // Stray guard. MAX_TOK_IN is 4, the KRON limit, where KobBid has 8. So
 // noStrays unrolls 4 slots, and it reads the owner at
@@ -227,13 +233,12 @@ contract KobBidKron(
         require(OpOutputCovenantId(self) == tokenCovId);
 
         // Minimum fill. A fill takes at least minFill unless it takes all the
-        // buying power left: after it, spare funds less than one base unit at
-        // the budget rate, spare < ceil((pMax + tip) / scale). The exemption
-        // is not "the bid ends" (less than one minimum fill left after the
-        // fill), or a tiny fill could end any bid funded for under two
-        // minimum fills. Every fill moves deliveryCarrier of the escrow onto
-        // its delivery, so the minimum bounds the deliveries and carriers a
-        // filler can force on the maker.
+        // buying power left. Then spare funds less than one base unit at the
+        // budget rate, spare < ceil((pMax + tip) / scale). Leaving less than
+        // one minimum fill is not enough, or a tiny fill could end any bid
+        // funded for under two minimum fills. Every fill moves deliveryCarrier
+        // of the escrow onto its delivery, so the minimum bounds the
+        // deliveries and carriers a filler can force on the maker.
         require(minFill > 0);
         int spare = left - deliveryCarrier - reserve;
         bool canContinue = spare >= quoteOf(minFill, rate, scale - 1);
