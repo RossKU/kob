@@ -1,7 +1,8 @@
-// Market-data views of the mock indexer: trades, candles, 24 h stats and depth, all derived from the fill events and the listed
-// book of the MockChain. Contract: the indexer market-data API (trades = all fill events of ONE transaction on ONE token; every price is
-// sompi per `price_basis` token base units = the token's standard scale, i.e. sompi per whole token; every view also carries `decimals`;
-// bigint arithmetic, floor division, as crates/kobd/src/indexer/market.rs).
+// Market-data views of the mock indexer: trades, candles, 24 h stats and depth, all derived from
+// the fill events and the listed book of the MockChain. Contract: the indexer market-data API
+// (trades = all fill events of ONE transaction on ONE token; every price is sompi per `price_basis`
+// token base units = the token's standard scale, i.e. sompi per whole token; every view also
+// carries `decimals`; bigint arithmetic, floor division, as crates/kobd/src/indexer/market.rs).
 import { termsOf } from './model.mjs';
 import { badRequest, notFound } from './util.mjs';
 import { MAX_PAGE_SIZE, bookView, ctxOf, intParam, limitParam, parseHash, tokensView } from './views.mjs';
@@ -19,7 +20,10 @@ const str = (v) => (v === null || v === undefined ? null : String(v));
 const minB = (a, b) => (a < b ? a : b);
 const maxB = (a, b) => (a > b ? a : b);
 
-/** The allowlisted token behind a `{token}` path segment: 400 for malformed hex, 404 for a token the indexer does not know. */
+/**
+ * The allowlisted token behind a `{token}` path segment: 400 for malformed hex, 404 for a token the
+ * indexer does not know.
+ */
 function tokenOf(chain, id) {
   const token = parseHash('token', id);
   const tok = chain.tokens.get(token);
@@ -34,8 +38,9 @@ function listedLevels(chain, token) {
 }
 
 /**
- * `price_basis` (bigint or null): the token's standard scale (`10^decimals`, at most 10^9: sompi per whole token) when its decimals are known,
- * else the scale of its first order (market.rs `price_basis`), else 1.
+ * `price_basis` (bigint or null): the token's standard scale (`10^decimals`, at most 10^9: sompi
+ * per whole token) when its decimals are known, else the scale of its first order (market.rs
+ * `price_basis`), else 1.
  */
 export function basisOf(chain, tok) {
   if (tok.scale !== null && tok.scale !== undefined) return BigInt(tok.scale);
@@ -48,10 +53,11 @@ export function basisOf(chain, tok) {
 const perBasis = (price, scale, basis) => (price * basis) / (scale > 0n ? scale : 1n);
 
 /**
- * All trades of a token in chain order (ascending id), prices per `basis` (market.rs `trade_of`). A trade groups the fill events of one
- * txid; amount / quote are the ask side's (the bid side's when no ask filled; the quote of a fill is `floor(n * price / scale)`); the price is
- * the amount-weighted per-basis price of the RESTING side (the side whose orders are older: smaller min (genesis daa, genesis block seq); on a
- * tie the asks rest); `side` is the aggressor's.
+ * All trades of a token in chain order (ascending id), prices per `basis` (market.rs `trade_of`). A
+ * trade groups the fill events of one txid; amount / quote are the ask side's (the bid side's when
+ * no ask filled; the quote of a fill is `floor(n * price / scale)`); the price is the
+ * amount-weighted per-basis price of the RESTING side (the side whose orders are older: smaller min
+ * (genesis daa, genesis block seq); on a tie the asks rest); `side` is the aggressor's.
  */
 export function tradesOf(chain, tok, basis) {
   if (basis === null) return [];
@@ -136,8 +142,9 @@ export function tradesPage(chain, tokenId, q) {
 }
 
 /**
- * `GET /v1/candles/{token}?interval=&from=&to=&limit=`: OHLCV per bucket, ascending, empty buckets omitted. `from` / `to` bound the bucket
- * START `t` (inclusive / exclusive). With `from` the FIRST `limit` buckets at or after it are returned, otherwise the LAST `limit`.
+ * `GET /v1/candles/{token}?interval=&from=&to=&limit=`: OHLCV per bucket, ascending, empty buckets
+ * omitted. `from` / `to` bound the bucket START `t` (inclusive / exclusive). With `from` the FIRST
+ * `limit` buckets at or after it are returned, otherwise the LAST `limit`.
  */
 export function candlesView(chain, tokenId, q) {
   const tok = tokenOf(chain, tokenId);
@@ -169,8 +176,9 @@ export function candlesView(chain, tokenId, q) {
 }
 
 /**
- * `GET /v1/quotes/{token}?interval=&from=&to=&limit=`: `[t, bid, ask]` per bucket. The mock keeps no book history: a bucket with trades reads its low
- * and high as the touch, and the bucket of the chain time the current touch (null for an empty side).
+ * `GET /v1/quotes/{token}?interval=&from=&to=&limit=`: `[t, bid, ask]` per bucket. The mock keeps
+ * no book history: a bucket with trades reads its low and high as the touch, and the bucket of the
+ * chain time the current touch (null for an empty side).
  */
 export function quotesView(chain, tokenId, q) {
   const c = candlesView(chain, tokenId, q);
@@ -184,8 +192,9 @@ export function quotesView(chain, tokenId, q) {
 }
 
 /**
- * The KAS candle buckets of a token (prices per its `price_basis`, from its KAS-book trades only), keyed by bucket start (unix ms), optionally
- * limited to `[from, to)`. Shared by the token candles and the pair candles derived from two KAS series (pairs.mjs).
+ * The KAS candle buckets of a token (prices per its `price_basis`, from its KAS-book trades only),
+ * keyed by bucket start (unix ms), optionally limited to `[from, to)`. Shared by the token candles
+ * and the pair candles derived from two KAS series (pairs.mjs).
  */
 export function kasCandleBuckets(chain, tok, ms, from = null, to = null) {
   const basis = basisOf(chain, tok);
@@ -227,10 +236,12 @@ function mergedSide(levels, basis, side) {
 }
 
 /**
- * `GET /v1/stats/{token}`: rolling 24 h window ending at the newest chain time (`chain.nowMs()`, trades with `ts >= now - 24h`) plus the
- * book top. `open_24h` is the price 24 h ago: the last trade at or before `now - 24h`, the window's first trade only when there is no earlier one
- * (market.rs `stats`); `change_24h_bps` = (last - open_24h) * 10000 / open_24h, integer division truncated toward zero. Counts / volumes of an
- * empty window are 0 / "0"; prices of an empty window or empty side are null.
+ * `GET /v1/stats/{token}`: rolling 24 h window ending at the newest chain time (`chain.nowMs()`,
+ * trades with `ts >= now - 24h`) plus the book top. `open_24h` is the price 24 h ago: the last
+ * trade at or before `now - 24h`, the window's first trade only when there is no earlier one
+ * (market.rs `stats`); `change_24h_bps` = (last - open_24h) * 10000 / open_24h, integer division
+ * truncated toward zero. Counts / volumes of an empty window are 0 / "0"; prices of an empty window
+ * or empty side are null.
  */
 export function statsView(chain, tokenId) {
   const tok = tokenOf(chain, tokenId);
@@ -258,9 +269,11 @@ export function statsView(chain, tokenId) {
   const mid = bestAsk !== null && bestBid !== null ? (bestAsk + bestBid) / 2n : null;
   const spread = mid !== null && mid > 0n ? Number(((bestAsk - bestBid) * 10_000n) / mid) : null;
   const counts = tokensView(chain).tokens.find((t) => t.covenant_id === tok.covenant_id);
-  // sompi the asks up to +2 % and the bids down to -2 % of the mid (with one side only: around its best price) are worth (the executor's `depth_2pct_quote`)
+  // sompi the asks up to +2 % and the bids down to -2 % of the mid (with one side only: around its
+  // best price) are worth (the executor's `depth_2pct_quote`)
   const ref = mid ?? bestAsk ?? bestBid;
-  // its two parts (`depth_2pct_bid_sompi` / `depth_2pct_ask_sompi`): "0" for a missing side or an empty book
+  // its two parts (`depth_2pct_bid_sompi` / `depth_2pct_ask_sompi`): "0" for a missing side or an
+  // empty book
   let depth = null;
   let depthBid = 0n;
   let depthAsk = 0n;
@@ -297,7 +310,10 @@ export function statsView(chain, tokenId) {
   };
 }
 
-/** `GET /v1/depth/{token}?levels=`: the listed book merged by per-basis price, best first, with cumulative amount / quote. */
+/**
+ * `GET /v1/depth/{token}?levels=`: the listed book merged by per-basis price, best first, with
+ * cumulative amount / quote.
+ */
 export function depthView(chain, tokenId, q) {
   const tok = tokenOf(chain, tokenId);
   const n = limitParam(q, 'levels', 50);
@@ -320,14 +336,18 @@ export function depthView(chain, tokenId, q) {
 }
 
 /**
- * `GET /v1/stats?since=`: the store's activity totals over the range from `since` (unix ms, rounded down to the minute; all time without it):
- * orders placed (create events), their distinct makers, what the fills released to their fillers (amount x tip / scale per fill, the order's tip)
- * and the KAS in the live order UTXOs now. `executors` is null: the mock chain records no fill's funder (an indexer of schema 10 counts them).
+ * `GET /v1/stats?since=`: the store's activity totals over the range from `since` (unix ms, rounded
+ * down to the minute; all time without it): orders placed (create events), their distinct makers,
+ * what the fills released to their fillers (amount x tip / scale per fill, the order's tip) and the
+ * KAS in the live order UTXOs now. `executors` is null: the mock chain records no fill's funder (an
+ * indexer of schema 10 counts them).
  *
- * The executors' side, per fill transaction (a synthetic but deterministic rule): income = the tips of its fills + ACTIVITY_SPREAD_SOMPI, miner fee =
- * ACTIVITY_MINER_FEE_SOMPI, net = income - fee (all of them known, the unknown counts 0). `knobs` (`POST /mock/activity-stats`): `legacy` serves an older indexer
- * (none of the new fields, only `fees_paid`), `incomeUnknownTxs` / `minerFeeUnknownTxs` are the unknown counts, `negativeIncome` negates the income (and the net follows).
- * `fees_paid` stays the tip sum (deprecated), `tips_paid` is the same value.
+ * The executors' side, per fill transaction (a synthetic but deterministic rule): income = the tips
+ * of its fills + ACTIVITY_SPREAD_SOMPI, miner fee = ACTIVITY_MINER_FEE_SOMPI, net = income - fee
+ * (all of them known, the unknown counts 0). `knobs` (`POST /mock/activity-stats`): `legacy` serves
+ * an older indexer (none of the new fields, only `fees_paid`), `incomeUnknownTxs` /
+ * `minerFeeUnknownTxs` are the unknown counts, `negativeIncome` negates the income (and the net
+ * follows). `fees_paid` stays the tip sum (deprecated), `tips_paid` is the same value.
  */
 export const ACTIVITY_SPREAD_SOMPI = 3_000_000n;
 export const ACTIVITY_MINER_FEE_SOMPI = 2_000_000n;

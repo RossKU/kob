@@ -1,4 +1,5 @@
-// Deterministic TEST keys shared by the mock server (market maker / dev funding) and the e2e fixtures. Never use on a real network.
+// Deterministic TEST keys shared by the mock server (market maker / dev funding) and the e2e
+// fixtures. Never use on a real network.
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { sha256hex, toHex } from './util.mjs';
 
@@ -11,7 +12,10 @@ export const TEST_SECRETS = {
   carol: secret('carol'),
   /** the fictional market maker that owns the seeded book */
   maker: secret('maker'),
-  /** the mock's filler (matcher / inventory taker): signs the batches of simulated pair fills and arms (its tokens and KAS are minted on demand) */
+  /**
+   * the mock's filler (matcher / inventory taker): signs the batches of simulated pair fills and
+   * arms (its tokens and KAS are minted on demand)
+   */
   filler: secret('filler'),
 };
 

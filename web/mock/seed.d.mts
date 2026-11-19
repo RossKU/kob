@@ -12,7 +12,10 @@ export function seedOpenListToken(chain: MockChain, over?: Record<string, unknow
 export function defaultTokenSpec(): { ticker: string; name: string; covenant_id: string; program: string; extension_commitment: string | null; decimals: number; tick: number };
 /** Sompi per whole token the default book is centred on. */
 export const DEFAULT_MID: number;
-/** The scale seeded orders of a token quote at (its standard scale, else its `order_scale`, else 1000). */
+/**
+ * The scale seeded orders of a token quote at (its standard scale, else its `order_scale`, else
+ * 1000).
+ */
 export function scaleOf(tok: { scale?: number | null; order_scale?: number | null }): bigint;
 
 export interface HistorySpec {

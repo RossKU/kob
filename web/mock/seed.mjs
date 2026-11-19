@@ -1,12 +1,15 @@
-// Declarative seeding of the mock chain (`POST /mock/seed`) and the default seed (fictional TN10 token from registry/tokens.example.json,
-// a 10-level book per side, recent fills). Seeded orders are REAL: correct P2SH scripts and custody UTXOs, cancellable by the
-// maker key with the kob-wasm builders.
+// Declarative seeding of the mock chain (`POST /mock/seed`) and the default seed (fictional TN10
+// token from registry/tokens.example.json, a 10-level book per side, recent fills). Seeded orders
+// are REAL: correct P2SH scripts and custody UTXOs, cancellable by the maker key with the kob-wasm
+// builders.
 //
-// Units of every seed spec (protocol v3): `amount` = token BASE UNITS (number, decimal string or bigint); `price`, `tip`, `tick`,
-// `mid`, `price_end`, `slope` = SOMPI PER WHOLE TOKEN, i.e. per `scale` base units (the token's standard scale 10^min(decimals, 9), or its
-// `order_scale` for a token without decimals; a spec may override `scale`); `min_fill` = base units (default 1). Examples: an EXKCC
-// (8 decimals) ask of 3 tokens at 0.0251 KAS each is `{side: 'ask', amount: 300000000, price: 2510000}`; a history fill
-// `{amount: 200000000, price: 2500000}`; a mock fill `POST /mock/fill {covenant_id, amount: 100000000}`.
+// Units of every seed spec (protocol v3): `amount` = token BASE UNITS (number, decimal string or
+// bigint); `price`, `tip`, `tick`, `mid`, `price_end`, `slope` = SOMPI PER WHOLE TOKEN, i.e. per
+// `scale` base units (the token's standard scale 10^min(decimals, 9), or its `order_scale` for a
+// token without decimals; a spec may override `scale`); `min_fill` = base units (default 1).
+// Examples: an EXKCC (8 decimals) ask of 3 tokens at 0.0251 KAS each is `{side: 'ask', amount:
+// 300000000, price: 2510000}`; a history fill `{amount: 200000000, price: 2500000}`; a mock fill
+// `POST /mock/fill {covenant_id, amount: 100000000}`.
 import { readFileSync } from 'node:fs';
 import { DEFAULT_CARRIER } from './chain.mjs';
 import { TEST_PUBKEYS } from './keys.mjs';
@@ -16,7 +19,10 @@ import { HEX64, badRequest, syntheticId } from './util.mjs';
 const PROGRAM_OF_TEMPLATE = { 'kcc20-ref-3x3': 'KCC20Ref', 'kcc20-ref-8x8': 'KCC20Ref_8x8', 'kcc20-kaspacom-0-2-5': 'KCC20KaspaCom_0_2_5', 'kcc20-ref-public-mint': 'KCC20PublicMint' };
 const registryPath = new URL('../../registry/tokens.example.json', import.meta.url);
 
-/** The default token: the first KCC-20 entry of the example registry (ticker EXKCC, 8 decimals: scale 10^8 base units per whole token). */
+/**
+ * The default token: the first KCC-20 entry of the example registry (ticker EXKCC, 8 decimals:
+ * scale 10^8 base units per whole token).
+ */
 export function defaultTokenSpec() {
   const reg = JSON.parse(readFileSync(registryPath, 'utf8'));
   const t = reg.tokens.find((x) => x.family === 'kcc20');
@@ -36,9 +42,9 @@ export function defaultTokenSpec() {
 export const DEFAULT_MID = 2_500_000;
 
 /**
- * An OPEN-LIST token as the executor serves it: a program on the strict template list, no registry entry (empty ticker, no decimals, so no
- * standard scale), `template_id` = the program name. Its seeded orders quote at `order_scale` (1000 base units) and are
- * the only source of its scale.
+ * An OPEN-LIST token as the executor serves it: a program on the strict template list, no registry
+ * entry (empty ticker, no decimals, so no standard scale), `template_id` = the program name. Its
+ * seeded orders quote at `order_scale` (1000 base units) and are the only source of its scale.
  */
 export function openListTokenSpec(over = {}) {
   return {
@@ -54,7 +60,10 @@ export function openListTokenSpec(over = {}) {
   };
 }
 
-/** Registers the open-list token with a small book (asks above `mid`, bids below; sompi per 1000 base units; 4000 base units per order). */
+/**
+ * Registers the open-list token with a small book (asks above `mid`, bids below; sompi per 1000
+ * base units; 4000 base units per order).
+ */
 export function seedOpenListToken(chain, over = {}, { mid = 50_000, levels = 3, maker = 'maker' } = {}) {
   const tok = chain.addToken(openListTokenSpec(over));
   for (let i = 1; i <= levels; i++) {
@@ -80,10 +89,16 @@ const big = (v, what) => {
   }
 };
 
-/** The scale seeded orders of `tok` quote at: its standard scale, else its `order_scale` (a token without decimals), else 1000. */
+/**
+ * The scale seeded orders of `tok` quote at: its standard scale, else its `order_scale` (a token
+ * without decimals), else 1000.
+ */
 export const scaleOf = (tok) => BigInt(tok.scale ?? tok.order_scale ?? 1000);
 
-/** Builds an `AnyState` for a KobAsk / KobBid from a compact spec (other kinds must pass a complete `state`). */
+/**
+ * Builds an `AnyState` for a KobAsk / KobBid from a compact spec (other kinds must pass a complete
+ * `state`).
+ */
 export function buildOrderState(chain, spec) {
   const tok = chain.tokenRef(spec.token ?? [...chain.tokens.keys()][0]);
   const kron = tok.family === 'kron';
@@ -125,8 +140,9 @@ export function buildOrderState(chain, spec) {
 }
 
 /**
- * A `KobCurveAsk` from a compact spec: `amount` base units, `levels` (default 100), `total` sompi if sold out (default 10,000 KAS), `multiple`
- * last / first (default 5), `min_fill` (default 1). The table is kob-wasm's default (`curveTable`).
+ * A `KobCurveAsk` from a compact spec: `amount` base units, `levels` (default 100), `total` sompi
+ * if sold out (default 10,000 KAS), `multiple` last / first (default 5), `min_fill` (default 1).
+ * The table is kob-wasm's default (`curveTable`).
  */
 function curveState(chain, tok, spec) {
   if (tok.family === 'kron') throw badRequest('a curve is KCC-20 only');
@@ -166,7 +182,8 @@ export function seedOneOrder(chain, spec) {
     return chain.seedHistory(any, { status: spec.history, fills: spec.history === 'filled' ? fills : [], agoDaa: spec.ago_daa ?? 1000 });
   }
   let value = spec.value;
-  // a bid's quantity is its escrow: what buys `amount` base units in one fill (kob-wasm `bidEscrow`: budget, delivery carrier, reserve)
+  // a bid's quantity is its escrow: what buys `amount` base units in one fill (kob-wasm
+  // `bidEscrow`: budget, delivery carrier, reserve)
   if (value === undefined) value = any.kind.startsWith('KobBid') ? bidEscrow(chain.kob, any, amount, 1) : DEFAULT_CARRIER;
   const o = chain.seedOrder(any, { value: BigInt(value), covenantId: spec.covenant_id, deadline: spec.deadline ?? null });
   if (spec.possibly_frozen) chain.setPossiblyFrozen(o.covenantId, true);
@@ -174,8 +191,9 @@ export function seedOneOrder(chain, spec) {
 }
 
 /**
- * A book of `levels` price levels per side around `mid` (sompi per whole token), `tick` apart; the best levels hold two orders. `amounts`
- * (optional, base units per level) overrides the default sizes (3..11 whole tokens, bids one whole token more, the second best order one more).
+ * A book of `levels` price levels per side around `mid` (sompi per whole token), `tick` apart; the
+ * best levels hold two orders. `amounts` (optional, base units per level) overrides the default
+ * sizes (3..11 whole tokens, bids one whole token more, the second best order one more).
  */
 export function seedBook(chain, { token, mid, levels = 10, tick, maker = 'maker', amounts }) {
   const tok = chain.tokenRef(token ?? [...chain.tokens.keys()][0]);
@@ -194,7 +212,10 @@ export function seedBook(chain, { token, mid, levels = 10, tick, maker = 'maker'
   return created;
 }
 
-/** The default seed: one fictional token, a plausible book, recent fills. Nothing is funded (use `utxos`). */
+/**
+ * The default seed: one fictional token, a plausible book, recent fills. Nothing is funded (use
+ * `utxos`).
+ */
 export function applyDefaultSeed(chain) {
   const spec = defaultTokenSpec();
   const tok = chain.addToken(spec);
@@ -232,7 +253,8 @@ export function applySeed(chain, spec = {}) {
   return history ? { ...summary(chain), history } : summary(chain);
 }
 
-// ------------------------------------------------------------------------------------------------ market history (trades at explicit times)
+// ------------------------------------------------------------------------------------------------
+// market history (trades at explicit times)
 
 /** mulberry32: a tiny deterministic PRNG in [0, 1). */
 export function mulberry32(seed) {
@@ -246,8 +268,9 @@ export function mulberry32(seed) {
 }
 
 /**
- * Re-establishes chain order after events were seeded in the past: events sorted by DAA (stable) and their ids renumbered, so trade ids
- * (= smallest fill event id) are monotonic in time like the indexer's. Block sequence numbers of orders are left alone.
+ * Re-establishes chain order after events were seeded in the past: events sorted by DAA (stable)
+ * and their ids renumbered, so trade ids (= smallest fill event id) are monotonic in time like the
+ * indexer's. Block sequence numbers of orders are left alone.
  */
 export function sortEventsByDaa(chain) {
   const ev = chain.events;
@@ -260,10 +283,12 @@ export function sortEventsByDaa(chain) {
 }
 
 /**
- * ONE trade at an explicit time: every leg is a finished order filled in the same transaction (`txid`). Legs: `{side: 'ask'|'bid', price,
- * amount, maker?, scale?, age_daa?}` (price sompi per whole token, amount base units) where `age_daa` is how long before the trade the order was placed (default 100; the older
- * side is the resting one). The time is `ts` (unix ms) or `ago_ms` before now (default now); the DAA follows at 10 DAA per second.
- * Call `sortEventsByDaa` after seeding trades in the past (applySeed / seedHistory do).
+ * ONE trade at an explicit time: every leg is a finished order filled in the same transaction
+ * (`txid`). Legs: `{side: 'ask'|'bid', price, amount, maker?, scale?, age_daa?}` (price sompi per
+ * whole token, amount base units) where `age_daa` is how long before the trade the order was placed
+ * (default 100; the older side is the resting one). The time is `ts` (unix ms) or `ago_ms` before
+ * now (default now); the DAA follows at 10 DAA per second. Call `sortEventsByDaa` after seeding
+ * trades in the past (applySeed / seedHistory do).
  */
 export function seedTrade(chain, spec) {
   const tok = chain.tokenRef(spec.token ?? [...chain.tokens.keys()][0]);
@@ -289,10 +314,12 @@ export function seedTrade(chain, spec) {
 }
 
 /**
- * A deterministic market history of `trades` trades over the last `hours` (seeded PRNG): a log-price random walk with trend regimes,
- * volatility / activity clustering and mean reversion, pinned (Brownian bridge) to end at `mid` (sompi per whole token, like the default seed) so it
- * joins the seeded book; prices on the token's `tick`. Both aggressor sides, 1..20 whole tokens with occasional blocks, ~30% of the trades are
- * two-sided (an older resting order and the aggressor filled in one transaction). Returns `{token, trades, fills, from_ts, to_ts}`.
+ * A deterministic market history of `trades` trades over the last `hours` (seeded PRNG): a
+ * log-price random walk with trend regimes, volatility / activity clustering and mean reversion,
+ * pinned (Brownian bridge) to end at `mid` (sompi per whole token, like the default seed) so it
+ * joins the seeded book; prices on the token's `tick`. Both aggressor sides, 1..20 whole tokens
+ * with occasional blocks, ~30% of the trades are two-sided (an older resting order and the
+ * aggressor filled in one transaction). Returns `{token, trades, fills, from_ts, to_ts}`.
  */
 export function seedHistory(chain, { token, hours = 48, trades = 600, seed = 1, mid, tick } = {}) {
   if (chain.tokens.size === 0) throw badRequest('history needs a token (seed one first)');
@@ -374,7 +401,11 @@ export function seedHistory(chain, { token, hours = 48, trades = 600, seed = 1, 
   return { token: tok.covenant_id, trades: n, fills, from_ts: tsOf(times[0]), to_ts: tsOf(times[n - 1]) };
 }
 
-/** `{pubkey|key, kas?, count?, tokens?: [{token, amount, count?, carrier?, borrow_scheme?, borrow_guard?}]}` (a borrow setting without a guard gets a realistic one: chain.mjs `borrowGuardOf`) */
+/**
+ * `{pubkey|key, kas?, count?, tokens?: [{token, amount, count?, carrier?, borrow_scheme?,
+ * borrow_guard?}]}` (a borrow setting without a guard gets a realistic one: chain.mjs
+ * `borrowGuardOf`)
+ */
 export function giveSpec(chain, u) {
   const pk = resolveKey(u.pubkey ?? u.key);
   const made = { kas: [], tokens: [] };

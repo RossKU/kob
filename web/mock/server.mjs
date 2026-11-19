@@ -1,6 +1,8 @@
-// Mock KOB indexer read API + mock Kaspa node in ONE process, with deterministic control endpoints for tests.
+// Mock KOB indexer read API + mock Kaspa node in ONE process, with deterministic control endpoints
+// for tests.
 //   node mock/server.mjs [--port 8790] [--host 127.0.0.1] [--fund] [--no-seed] [--history] [--pair]
-// Importable: `startMockServer({port}) -> {url, close, chain, ...}`. See e2e/README.md for the endpoint list.
+// Importable: `startMockServer({port}) -> {url, close, chain, ...}`. See e2e/README.md for the
+// endpoint list.
 import http from 'node:http';
 import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
@@ -26,7 +28,8 @@ const registryPath = new URL('../../registry/tokens.example.json', import.meta.u
 const MAX_WS_MESSAGE = 4096;
 const MAX_WS_SUBSCRIPTIONS = 64;
 
-// ------------------------------------------------------------------------------------------------ WebSocket protocol (api/ws.rs)
+// ------------------------------------------------------------------------------------------------
+// WebSocket protocol (api/ws.rs)
 
 /** Canonical channel name, or throws with the indexer's error text. */
 export function parseChannel(s) {
@@ -107,7 +110,8 @@ export function framesFor(ev, subs) {
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ server
+// ------------------------------------------------------------------------------------------------
+// server
 
 async function readJson(req) {
   const chunks = [];
@@ -120,44 +124,61 @@ async function readJson(req) {
   }
 }
 
-/** The KAS/USD price the mock indexer serves (`GET /v1/price/kas-usd`, an opt-in route of kobd) until `POST /mock/kas-price` changes it. */
+/**
+ * The KAS/USD price the mock indexer serves (`GET /v1/price/kas-usd`, an opt-in route of kobd)
+ * until `POST /mock/kas-price` changes it.
+ */
 export const DEFAULT_KAS_PRICE = Object.freeze({ usd: 0.03, source: 'coingecko' });
 
-/** The node's fee estimate the mock answers by default: a quiet network, every bucket at the relay floor (100 sompi per gram: fees stay the minimum). */
+/**
+ * The node's fee estimate the mock answers by default: a quiet network, every bucket at the relay
+ * floor (100 sompi per gram: fees stay the minimum).
+ */
 export const DEFAULT_FEE_ESTIMATE = Object.freeze({ priority: 100, normal: 100, low: 100 });
 
 /**
- * @param {{port?: number, host?: string, seed?: boolean, fund?: boolean, history?: boolean | object, settleDepthDaa?: number, daaPerSecond?: number,
- *          startDaa?: number, network?: string, healthEveryMs?: number, log?: (line: string) => void,
- *          feeEstimate?: {priority: number, normal: number, low: number} | null}} [opts]
+ * @param {{port?: number, host?: string, seed?: boolean, fund?: boolean, history?: boolean |
+ * object, settleDepthDaa?: number, daaPerSecond?: number,
+ *          startDaa?: number, network?: string, healthEveryMs?: number, log?: (line: string) =>
+ *          void, feeEstimate?: {priority: number, normal: number, low: number} | null}} [opts]
  */
 export async function startMockServer(opts = {}) {
   const { port = 8790, host = '127.0.0.1', seed = true, fund = false, history = false, pair = false, healthEveryMs = 15_000, log = () => {} } = opts;
   const kob = loadKobMock();
   const chain = new MockChain(kob, { network: opts.network, settleDepthDaa: opts.settleDepthDaa, daaPerSecond: opts.daaPerSecond, startDaa: opts.startDaa });
-  // artificial latency of every API answer (`/mock/*` never waits): `latencyMs` plus a uniform `jitterMs`, on every route or only the indexer's (`/v1/*`)
-  // `indexerDown`: every indexer route (`/v1/*`, the WebSocket included) answers 503 while the node stays up (standalone mode)
-  // mempoolMs: the node lists an output of a submitted transaction only this long after it took it (a real node lists it once a block holds it)
+  // artificial latency of every API answer (`/mock/*` never waits): `latencyMs` plus a uniform
+  // `jitterMs`, on every route or only the indexer's (`/v1/*`) `indexerDown`: every indexer route
+  // (`/v1/*`, the WebSocket included) answers 503 while the node stays up (standalone mode)
+  // mempoolMs: the node lists an output of a submitted transaction only this long after it took it
+  // (a real node lists it once a block holds it)
   const ctl = { latencyMs: 0, jitterMs: 0, scope: 'all', indexerDown: false, mempoolMs: 0, pastMedianMs: null };
-  /** transactions pushed to the mock wallets' own node (`/mock/wallet-node/push`): seen there at once, whatever `lag_ms` */
+  /**
+   * transactions pushed to the mock wallets' own node (`/mock/wallet-node/push`): seen there at
+   * once, whatever `lag_ms`
+   */
   const walletPushed = new Set();
   // the node's blocks: one per accepted transaction (mock/blocks.mjs)
   const blockLog = new BlockLog();
   chain.txListeners.add((tx, daa, ts) => blockLog.record(tx, daa, ts));
-  // `GET /node/fee-estimate` answers this (null: the route is missing, 404, as on a node without getFeeEstimate)
+  // `GET /node/fee-estimate` answers this (null: the route is missing, 404, as on a node without
+  // getFeeEstimate)
   let feeEstimate = opts.feeEstimate === undefined ? { ...DEFAULT_FEE_ESTIMATE } : opts.feeEstimate;
   const sessions = new Set();
-  // the KAS/USD price: `mode` ok | off (404, an indexer without `usd_price`) | down (503, no price yet); `ageS`: how old its `at` is (0 = taken now); `reads` counts the reads
+  // the KAS/USD price: `mode` ok | off (404, an indexer without `usd_price`) | down (503, no price
+  // yet); `ageS`: how old its `at` is (0 = taken now); `reads` counts the reads
   let kasPrice = { ...DEFAULT_KAS_PRICE, mode: 'ok', ageS: 0, reads: 0 };
-  // what `GET /v1/stats` serves of the executors' side (`POST /mock/activity-stats`; `/mock/reset` restores the default)
+  // what `GET /v1/stats` serves of the executors' side (`POST /mock/activity-stats`; `/mock/reset`
+  // restores the default)
   let activityKnobs = { ...M.DEFAULT_ACTIVITY_KNOBS };
 
   const seedAll = (withSeed, withFund, withHistory = false, withPair = false) => {
     if (withSeed) applyDefaultSeed(chain);
-    // opt-in token/token pair (EXKCC/EXUSD with resting pair orders of every kind and a KAS book for EXUSD); never part of the default seed
+    // opt-in token/token pair (EXKCC/EXUSD with resting pair orders of every kind and a KAS book
+    // for EXUSD); never part of the default seed
     if (withPair && chain.tokens.size) P.seedPair(chain, withPair === true ? {} : withPair);
     if (withFund) fundDevKeys(chain);
-    // opt-in market history (48 h of seeded trades) for charts in dev mode; never part of the default seed the e2e specs count on
+    // opt-in market history (48 h of seeded trades) for charts in dev mode; never part of the
+    // default seed the e2e specs count on
     if (withHistory) seedHistory(chain, withHistory === true ? {} : withHistory);
   };
   seedAll(seed, fund, history, pair);
@@ -203,7 +224,8 @@ export async function startMockServer(opts = {}) {
     const path = url.pathname.replace(/\/+$/, '') || '/';
     const isNode = path.startsWith('/node/');
     try {
-      // `all`: every answer; `indexer`: the indexer's only; `node`: the node's only (a node behind a slow tunnel)
+      // `all`: every answer; `indexer`: the indexer's only; `node`: the node's only (a node behind
+      // a slow tunnel)
       const delayed = !path.startsWith('/mock/') && (ctl.scope === 'all' || (ctl.scope === 'indexer' && path.startsWith('/v1/')) || (ctl.scope === 'node' && isNode));
       if (delayed && ctl.latencyMs + ctl.jitterMs > 0) await sleep(ctl.latencyMs + Math.floor(Math.random() * ctl.jitterMs));
       const out = await route(req.method ?? 'GET', path, url.searchParams, req);
@@ -237,9 +259,11 @@ export async function startMockServer(opts = {}) {
     if (get && path === '/v1/health') return ok(V.healthView(chain));
     if (get && path === '/v1/health/ready') return V.readyView(chain);
     if (get && path === '/v1/tokens') return ok(V.tokensView(chain));
-    // the token-logo blocklist of an executor with [logo_reports] enabled (docs/api.md 3.20): nothing is hidden
+    // the token-logo blocklist of an executor with [logo_reports] enabled (docs/api.md 3.20):
+    // nothing is hidden
     if (get && path === '/v1/logo-blocklist') return ok({ hidden: [], updated_ms: 0 });
-    // creator locks (docs/api-reference.md 3.24): a hint only, the web verifies each declaration itself
+    // creator locks (docs/api-reference.md 3.24): a hint only, the web verifies each declaration
+    // itself
     if (get && path === '/v1/creator-locks') {
       const items = [];
       for (const [id, proof] of chain.declarations) if (JSON.stringify(proof).includes('"lock"')) items.push({ covenant_id: id });
@@ -268,7 +292,8 @@ export async function startMockServer(opts = {}) {
     if (get && path === '/v1/strays') return ok(V.straysView(chain, q));
     if (get && path === '/v1/token-events') return ok(V.tokenEventsView(chain, q));
     if (get && path === '/v1/token-utxos') return ok(V.tokenUtxosPage(chain, q));
-    // the KAS price in USD (docs/api-reference.md): kobd serves it with `[api] usd_price`; without it the route is 404, before its first price 503
+    // the KAS price in USD (docs/api-reference.md): kobd serves it with `[api] usd_price`; without
+    // it the route is 404, before its first price 503
     if (get && path === '/v1/price/kas-usd') {
       kasPrice.reads += 1;
       if (kasPrice.mode === 'off') throw notFound('no such route');
@@ -282,7 +307,8 @@ export async function startMockServer(opts = {}) {
     if (get && path === '/v1/stats') return ok(M.activityView(chain, q, activityKnobs));
     if (get && (m = /^\/v1\/stats\/([^/]+)$/.exec(path))) return ok(M.statsView(chain, m[1]));
     if (get && (m = /^\/v1\/depth\/([^/]+)$/.exec(path))) return ok(M.depthView(chain, m[1], q));
-    // ---- token/token pairs (pair orders): the pair book, the pair list, candles derived from the two KAS series, pair fills (pairs.mjs)
+    // ---- token/token pairs (pair orders): the pair book, the pair list, candles derived from the
+    // two KAS series, pair fills (pairs.mjs)
     if (get && (m = /^\/v1\/pairs\/([^/]+)\/([^/]+)\/book$/.exec(path))) return ok(P.pairBookView(chain, m[1], m[2], q));
     if (get && (m = /^\/v1\/pairs\/([^/]+)\/([^/]+)\/candles$/.exec(path))) return ok(P.pairCandlesView(chain, m[1], m[2], q));
     if (get && (m = /^\/v1\/pairs\/([^/]+)\/([^/]+)\/fills$/.exec(path))) return ok(P.pairFillsView(chain, m[1], m[2], q));
@@ -296,8 +322,10 @@ export async function startMockServer(opts = {}) {
       if (chain.health.state === 'node_unavailable') throw new ApiError(503, 'node_unavailable', 'mock: node unavailable');
       return ok({ ...chain.nodeInfo(), ...(ctl.pastMedianMs !== null ? { pastMedianTime: String(ctl.pastMedianMs) } : {}) });
     }
-    // the node's getFeeEstimate (the wallet's fee policy reads it): DEFAULT_FEE_ESTIMATE until `POST /mock/fee-estimate` { priority, normal, low } sets it;
-    // { off: true } removes the route (a node without the method: the wallet pays the floor and says so); `/mock/reset` restores the default
+    // the node's getFeeEstimate (the wallet's fee policy reads it): DEFAULT_FEE_ESTIMATE until
+    // `POST /mock/fee-estimate` { priority, normal, low } sets it; { off: true } removes the route
+    // (a node without the method: the wallet pays the floor and says so); `/mock/reset` restores
+    // the default
     if (get && path === '/node/fee-estimate') {
       if (!feeEstimate) throw notFound('no such route');
       return ok({ estimate: { priorityBucket: { feerate: feeEstimate.priority, estimatedSeconds: 1 }, normalBuckets: [{ feerate: feeEstimate.normal, estimatedSeconds: 30 }], lowBuckets: [{ feerate: feeEstimate.low, estimatedSeconds: 1800 }] } });
@@ -346,9 +374,10 @@ export async function startMockServer(opts = {}) {
       seedAll(body.seed !== false, body.fund === true, body.history ?? false, body.pair ?? false);
       return ok(summary(chain));
     }
-    // the executor's minimum order value (sompi, 0 = off): orders registered from now on that are worth less are indexed with
-    // `listed: false, unlisted_reason: "order_value_below_minimum"`, as the real executor does with its `min_order_value_sompi` (default 1 KAS);
-    // `/mock/reset` turns it off again
+    // the executor's minimum order value (sompi, 0 = off): orders registered from now on that are
+    // worth less are indexed with `listed: false, unlisted_reason: "order_value_below_minimum"`, as
+    // the real executor does with its `min_order_value_sompi` (default 1 KAS); `/mock/reset` turns
+    // it off again
     if (post && path === '/mock/min-order-value') {
       let n;
       try {
@@ -369,14 +398,16 @@ export async function startMockServer(opts = {}) {
       }
       return ok({ down: ctl.indexerDown });
     }
-    // an order placed with a real transaction (a block the node announces): { key, side: 'ask' | 'bid', price, amount, token? }
+    // an order placed with a real transaction (a block the node announces): { key, side: 'ask' |
+    // 'bid', price, amount, token? }
     if (post && path === '/mock/place') return ok(placeReal(chain, body));
     // a plain ask or bid filled by a real batch of the mock's filler: { covenant_id, amount? }
     if (post && path === '/mock/take') {
       if (!HEX64.test(body.covenant_id ?? '')) throw badRequest('covenant_id must be 64 hex characters');
       return ok(takeReal(chain, body.covenant_id, body.amount));
     }
-    // the KAS price the indexer serves: `{ usd?, source?, ageS?, mode?: 'ok' | 'off' | 'down' }` (a field left out is kept); GET reads it with the number of reads so far
+    // the KAS price the indexer serves: `{ usd?, source?, ageS?, mode?: 'ok' | 'off' | 'down' }` (a
+    // field left out is kept); GET reads it with the number of reads so far
     if (get && path === '/mock/kas-price') return ok(kasPrice);
     if (post && path === '/mock/kas-price') {
       if (body.usd !== undefined) {
@@ -391,8 +422,10 @@ export async function startMockServer(opts = {}) {
       }
       return ok(kasPrice);
     }
-    // the executors' side of `GET /v1/stats`: `{ legacy?, incomeUnknownTxs?, minerFeeUnknownTxs?, negativeIncome? }` (a field left out is kept): `legacy` serves an older
-    // indexer without the new fields, the unknown counts are the transactions it could not price, `negativeIncome` negates the income
+    // the executors' side of `GET /v1/stats`: `{ legacy?, incomeUnknownTxs?, minerFeeUnknownTxs?,
+    // negativeIncome? }` (a field left out is kept): `legacy` serves an older indexer without the
+    // new fields, the unknown counts are the transactions it could not price, `negativeIncome`
+    // negates the income
     if (post && path === '/mock/activity-stats') {
       for (const k of ['incomeUnknownTxs', 'minerFeeUnknownTxs']) {
         if (body[k] === undefined) continue;
@@ -411,8 +444,8 @@ export async function startMockServer(opts = {}) {
       return ok(body.pair ? { ...out, pair: P.seedPair(chain, body.pair === true ? {} : body.pair) } : out);
     }
     if (post && path === '/mock/retired-order') {
-      // a plain bid of the first token placed by an older build under a retired template (`label`, e.g. "KobBid b995661f"): only its maker's
-      // cancel can spend it
+      // a plain bid of the first token placed by an older build under a retired template (`label`,
+      // e.g. "KobBid b995661f"): only its maker's cancel can spend it
       const r = chain.kob.retiredTemplates().find((x) => x.label === (body.label ?? 'KobBid b995661f'));
       if (!r) throw badRequest(`no retired template ${body.label}`);
       const any = buildOrderState(chain, { side: 'bid', maker: body.maker ?? 'alice', price: body.price, amount: body.amount });
@@ -425,15 +458,18 @@ export async function startMockServer(opts = {}) {
     }
     if (post && path === '/mock/fill') {
       if (!HEX64.test(body.covenant_id ?? '')) throw badRequest('covenant_id must be 64 hex characters');
-      // `amount`: base units (default: one whole token or the minimum fill if larger, at most everything left); `price`: sompi per whole token.
-      // A pair order is filled by a real batch: `via` inventory | netting | route, `against` (netting), `leg` (a conditional), `mode` (evidence 0 | 1)
+      // `amount`: base units (default: one whole token or the minimum fill if larger, at most
+      // everything left); `price`: sompi per whole token. A pair order is filled by a real batch:
+      // `via` inventory | netting | route, `against` (netting), `leg` (a conditional), `mode`
+      // (evidence 0 | 1)
       return ok(chain.simulateFill(body.covenant_id, {
         amount: body.amount, price: body.price, taker: body.taker ? key(body.taker) : undefined, via: body.via, against: body.against, leg: body.leg, mode: body.mode, merge: body.merge,
       }));
     }
     if (post && path === '/mock/stray') {
       if (!HEX64.test(body.covenant_id ?? '')) throw badRequest('covenant_id must be 64 hex characters');
-      // `token` (optional): a FOREIGN stray of another token: a known ticker / covenant id, or a new covenant id (registered unlisted, `program`, `ticker`)
+      // `token` (optional): a FOREIGN stray of another token: a known ticker / covenant id, or a
+      // new covenant id (registered unlisted, `program`, `ticker`)
       let token = body.token ?? null;
       if (typeof token === 'string' && HEX64.test(token) && !chain.tokens.has(token)) token = { covenant_id: token, program: body.program, ticker: body.ticker, decimals: body.decimals };
       if (token && typeof token === 'object' && !HEX64.test(token.covenant_id ?? '')) throw badRequest('token.covenant_id must be 64 hex characters');
@@ -441,7 +477,8 @@ export async function startMockServer(opts = {}) {
     }
     if (post && path === '/mock/arm') {
       if (!HEX64.test(body.covenant_id ?? '')) throw badRequest('covenant_id must be 64 hex characters');
-      // a pair stop: `mode` 0 (two KAS-book fills) or 1 (a resting pair order, default) of evidence, in a real update batch
+      // a pair stop: `mode` 0 (two KAS-book fills) or 1 (a resting pair order, default) of
+      // evidence, in a real update batch
       return ok(chain.armOrder(body.covenant_id, { mode: body.mode }));
     }
     if (post && path === '/mock/trail') {
@@ -453,8 +490,9 @@ export async function startMockServer(opts = {}) {
       if (!HEX64.test(body.covenant_id ?? '')) throw badRequest('covenant_id must be 64 hex characters');
       return ok(chain.setPossiblyFrozen(body.covenant_id, body.frozen !== false));
     }
-    // `{ hold_ms }`: the node's UTXO lists leave out an output of a submitted transaction for its first `hold_ms` (still in the mempool); the node
-    // still takes a transaction that spends it, as a real node does
+    // `{ hold_ms }`: the node's UTXO lists leave out an output of a submitted transaction for its
+    // first `hold_ms` (still in the mempool); the node still takes a transaction that spends it, as
+    // a real node does
     if (post && path === '/mock/node-mempool') {
       ctl.mempoolMs = Math.max(0, Number(body.hold_ms ?? 0) || 0);
       return ok({ hold_ms: ctl.mempoolMs });
@@ -463,23 +501,27 @@ export async function startMockServer(opts = {}) {
       const n = body.daa !== undefined ? Number(body.daa) : body.seconds !== undefined ? Number(body.seconds) * 10 : NaN;
       return ok({ daa: chain.advanceDaa(n) });
     }
-    // the mock wallets' OWN node (src/testing/mock-wallets.ts): what a wallet that looks its inputs up before signing (KasWare 0.11.5) sees.
-    // `{ outpoints: [{ transactionId, index }], lag_ms }` -> `{ entries: [{ transactionId, index, state }] }`, state `unspent` | `spent` | `unknown` |
-    // `unseen` (an output of a submitted transaction younger than `lag_ms`: not relayed to the wallet's node yet, unless its transaction was pushed to it)
+    // the mock wallets' OWN node (src/testing/mock-wallets.ts): what a wallet that looks its inputs
+    // up before signing (KasWare 0.11.5) sees. `{ outpoints: [{ transactionId, index }], lag_ms }`
+    // -> `{ entries: [{ transactionId, index, state }] }`, state `unspent` | `spent` | `unknown` |
+    // `unseen` (an output of a submitted transaction younger than `lag_ms`: not relayed to the
+    // wallet's node yet, unless its transaction was pushed to it)
     if (post && path === '/mock/wallet-node/outpoints') {
       const lag = Math.max(0, Number(body.lag_ms ?? 0) || 0);
       const list = Array.isArray(body.outpoints) ? body.outpoints : [];
       const entries = list.map((o) => {
         const u = chain.utxos.get(`${o?.transactionId}:${o?.index}`);
-        // the lag is a relay delay: it applies to outputs of transactions submitted to the node, not to seeded coins (older than any lag)
+        // the lag is a relay delay: it applies to outputs of transactions submitted to the node,
+        // not to seeded coins (older than any lag)
         const relayed = chain.txs.has(u?.txid);
         const state = !u ? 'unknown' : u.spentBy ? 'spent' : lag > 0 && relayed && !walletPushed.has(u.txid) && Date.now() - (u.createdMs ?? 0) < lag ? 'unseen' : 'unspent';
         return { transactionId: o?.transactionId, index: o?.index, state };
       });
       return ok({ entries });
     }
-    // KasWare `pushTx`: the wallet's node takes a signed transaction (`{ transaction }`); one the node does not have yet is submitted (a refusal is
-    // the node's 400), one it has is only marked as seen by the wallet's node
+    // KasWare `pushTx`: the wallet's node takes a signed transaction (`{ transaction }`); one the
+    // node does not have yet is submitted (a refusal is the node's 400), one it has is only marked
+    // as seen by the wallet's node
     if (post && path === '/mock/wallet-node/push') {
       const tx = body.transaction;
       if (!tx || typeof tx !== 'object' || !HEX64.test(tx.id ?? '')) throw badRequest('transaction must be a transaction object with an id');
@@ -487,7 +529,8 @@ export async function startMockServer(opts = {}) {
       walletPushed.add(tx.id);
       return ok({ transactionId: tx.id });
     }
-    // the node's past median time (unix ms) in /node/info, which a creator lock's unlock is checked against: { ms } sets it, { ms: null } removes it
+    // the node's past median time (unix ms) in /node/info, which a creator lock's unlock is checked
+    // against: { ms } sets it, { ms: null } removes it
     if (post && path === '/mock/median') {
       ctl.pastMedianMs = body.ms === null || body.ms === undefined ? null : Number(body.ms);
       return ok({ ms: ctl.pastMedianMs });
@@ -506,7 +549,8 @@ export async function startMockServer(opts = {}) {
       chain.health = {
         state: String(body.state ?? 'following'),
         lagDaa: Number(body.lag_daa ?? 0),
-        // optional: a store that began late (book_complete false, history_from_daa) and a build with another payload version
+        // optional: a store that began late (book_complete false, history_from_daa) and a build
+        // with another payload version
         ...(body.book_complete === undefined ? {} : { bookComplete: !!body.book_complete }),
         ...(body.history_from_daa === undefined ? {} : { historyFromDaa: Number(body.history_from_daa) }),
         ...(body.payload_version === undefined ? {} : { payloadVersion: Number(body.payload_version) }),
@@ -577,7 +621,10 @@ export async function startMockServer(opts = {}) {
   };
 }
 
-/** Dev convenience (`--fund`): alice and bob get 1000 KAS and 100 whole tokens of the first token each (two UTXOs of 50). */
+/**
+ * Dev convenience (`--fund`): alice and bob get 1000 KAS and 100 whole tokens of the first token
+ * each (two UTXOs of 50).
+ */
 export function fundDevKeys(chain) {
   const first = [...chain.tokens.keys()][0];
   for (const name of ['alice', 'bob']) {
@@ -586,7 +633,8 @@ export function fundDevKeys(chain) {
   }
 }
 
-// ------------------------------------------------------------------------------------------------ CLI
+// ------------------------------------------------------------------------------------------------
+// CLI
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);

@@ -1,6 +1,7 @@
-// Minimal Kaspa cashaddr (bech32-like) codec so the mock node can index UTXOs by script public key and still accept addresses.
-// Format: `<prefix>:<base32 of (version byte || payload)><40-bit checksum>`; Schnorr P2PK = version 0 (32 B key),
-// ECDSA P2PK = version 1 (33 B), P2SH = version 8 (32 B hash). Verified against the official SDK in test/mock-server.test.ts.
+// Minimal Kaspa cashaddr (bech32-like) codec so the mock node can index UTXOs by script public key
+// and still accept addresses. Format: `<prefix>:<base32 of (version byte || payload)><40-bit
+// checksum>`; Schnorr P2PK = version 0 (32 B key), ECDSA P2PK = version 1 (33 B), P2SH = version 8
+// (32 B hash). Verified against the official SDK in test/mock-server.test.ts.
 import { fromHex, toHex } from './util.mjs';
 
 const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
@@ -63,7 +64,8 @@ export function decodeAddress(address) {
   return { prefix, version: bytes[0], payload: Buffer.from(bytes.slice(1)) };
 }
 
-// Script public keys use the kaspa string form of the SDK / kob-wasm: version (u16 BE hex) + script hex.
+// Script public keys use the kaspa string form of the SDK / kob-wasm: version (u16 BE hex) + script
+// hex.
 export const p2pkSpk = (pubkeyHex) => `000020${pubkeyHex}ac`;
 export const p2shSpk = (hashHex) => `0000aa20${hashHex}87`;
 

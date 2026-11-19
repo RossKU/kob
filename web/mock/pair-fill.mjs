@@ -1,16 +1,22 @@
-// Simulated fills, arms and trails of PAIR orders (KobPair, KobCondPair, KobIfdPair) for the mock's control API, as REAL transactions: a batch
-// built by kob-wasm (`build` action `batch`, the matcher's own builder), signed by the mock's filler key, finalized and accepted through
-// `MockChain.submit`, so the script engine runs every covenant (the pair order's guarantees, the stray guards, its exits and custodies).
+// Simulated fills, arms and trails of PAIR orders (KobPair, KobCondPair, KobIfdPair) for the mock's
+// control API, as REAL transactions: a batch built by kob-wasm (`build` action `batch`, the
+// matcher's own builder), signed by the mock's filler key, finalized and accepted through
+// `MockChain.submit`, so the script engine runs every covenant (the pair order's guarantees, the
+// stray guards, its exits and custodies).
 //
-//   counterparty (`via`): `inventory` (the filler's own tokens: minted on demand), `netting` (an opposite pair order of the same pair: an existing
-//   one given as `against`, or one seeded for the occasion) or `route` (KAS-book orders of A and of B, seeded for the occasion and filled in the
-//   same transaction: they record their own KAS trades);
-//   trigger evidence (`mode`): 0, two resting KAS-book orders (one of A, one of B) filled together at quotes that imply the rate; 1, a resting KobPair
-//   of the same pair. Evidence orders are seeded by another key ("carol"), backdated so they have rested minRestDaa, and filled in the batch.
+//   counterparty (`via`): `inventory` (the filler's own tokens: minted on demand), `netting` (an
+//   opposite pair order of the same pair: an existing one given as `against`, or one seeded for the
+//   occasion) or `route` (KAS-book orders of A and of B, seeded for the occasion and filled in the
+//   same transaction: they record their own KAS trades); trigger evidence (`mode`): 0, two resting
+//   KAS-book orders (one of A, one of B) filled together at quotes that imply the rate; 1, a
+//   resting KobPair of the same pair. Evidence orders are seeded by another key ("carol"),
+//   backdated so they have rested minRestDaa, and filled in the batch.
 //
-// What a batch does to the orders it spends (their continuation states, the exit an if-done entry's fill creates) is derived here: each candidate
-// state's script is computed by kob-wasm and matched against the batch's outputs (the real indexer splices the mutable windows instead). The chain
-// then applies the batch with those states (`MockChain.applyKnownSpend`): fill events with the pair fields and NO price, `pair_fills` rows.
+// What a batch does to the orders it spends (their continuation states, the exit an if-done entry's
+// fill creates) is derived here: each candidate state's script is computed by kob-wasm and matched
+// against the batch's outputs (the real indexer splices the mutable windows instead). The chain
+// then applies the batch with those states (`MockChain.applyKnownSpend`): fill events with the pair
+// fields and NO price, `pair_fills` rows.
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { TEST_PUBKEYS, TEST_SECRETS } from './keys.mjs';
 import { MAX_IDLE, baseKind, bidEscrow, isPairKind, pairTokensOf } from './model.mjs';
@@ -26,7 +32,8 @@ const KAS = 100_000_000n;
 const ZERO32 = '00'.repeat(32);
 const hexBytes = (h) => Uint8Array.from(Buffer.from(h, 'hex'));
 
-// ------------------------------------------------------------------------------------------------ utxos of the request
+// ------------------------------------------------------------------------------------------------
+// utxos of the request
 
 function orderUtxo(chain, o, tagged = false) {
   const u = chain.utxos.get(`${o.current.txid}:${o.current.index}`);
@@ -50,7 +57,10 @@ function mintKas(chain, sompi) {
   return { transactionId: g.transactionId, index: 0, amount: g.amount, blockDaaScore: String(u.daa), covenantId: null, pubkey: FILLER };
 }
 
-/** The batch leg of order `o` filling `n` base units (`extra`: a conditional's leg, evidence leg indices, a merge). */
+/**
+ * The batch leg of order `o` filling `n` base units (`extra`: a conditional's leg, evidence leg
+ * indices, a merge).
+ */
 function legOf(chain, o, n, extra = {}) {
   const order = orderUtxo(chain, o);
   const pt = pairTokensOf(o.state);
@@ -71,12 +81,16 @@ function legOf(chain, o, n, extra = {}) {
   }
 }
 
-// ------------------------------------------------------------------------------------------------ quotes and amounts (kob-wasm)
+// ------------------------------------------------------------------------------------------------
+// quotes and amounts (kob-wasm)
 
 const raw = (chain) => chain.kob.raw;
 const opt = (v) => (v === null || v === undefined ? null : BigInt(v));
 
-/** The quote of a pair order at DAA `t` (B per whole A): a KobPair's price (decay / rise), a conditional's leg price, an entry's price. */
+/**
+ * The quote of a pair order at DAA `t` (B per whole A): a KobPair's price (decay / rise), a
+ * conditional's leg price, an entry's price.
+ */
 function quoteAt(chain, o, t, { leg = 0, trigger = false } = {}) {
   const any = J(o.state);
   const u = String(o.currentDaa);
@@ -86,7 +100,10 @@ function quoteAt(chain, o, t, { leg = 0, trigger = false } = {}) {
   return null;
 }
 
-/** What the order's counterparty must supply for a fill of `n` at `p`: {token, amount} of what the pair order receives (T). */
+/**
+ * What the order's counterparty must supply for a fill of `n` at `p`: {token, amount} of what the
+ * pair order receives (T).
+ */
 function supplyOf(chain, o, n, p) {
   const pt = pairTokensOf(o.state);
   if (pt.side === 2) return { token: pt.a.covId, amount: n };
@@ -98,11 +115,13 @@ function supplyOf(chain, o, n, p) {
   return { token: pt.b.covId, amount: b(raw(chain).pairTOutMin(any, String(n), String(p))) };
 }
 
-// ------------------------------------------------------------------------------------------------ evidence
+// ------------------------------------------------------------------------------------------------
+// evidence
 
 /**
- * Seeds the trigger evidence of pair stop `o` in `mode` (0 KAS books, 1 a resting pair order) for `effect` (`arm` or `trail`), backdated so it has
- * rested, and returns its legs and what the filler must supply for them. Quotes follow the order's rule (kob-wasm `pairTriggerRule`), checked with
+ * Seeds the trigger evidence of pair stop `o` in `mode` (0 KAS books, 1 a resting pair order) for
+ * `effect` (`arm` or `trail`), backdated so it has rested, and returns its legs and what the filler
+ * must supply for them. Quotes follow the order's rule (kob-wasm `pairTriggerRule`), checked with
  * kob-wasm `pairArms` / `condPairTrailK` before anything is built.
  */
 function seedEvidence(chain, o, mode, effect) {
@@ -129,7 +148,8 @@ function seedEvidence(chain, o, mode, effect) {
     const ev = seedPairOrder(chain, { kind: 'KobPair', side: sides.pair, base: pt.a.covId, quote: pt.b.covId, amount: minTouch, minFill: minTouch, price: target, maker: 'carol', daa: back });
     return { orders: [ev], amounts: [minTouch], supply: [supplyOf(chain, ev, minTouch, target)] };
   }
-  // mode 0: B quoted at 1 KAS per whole B; A at the quote that implies the target rate (r = a x scale(B) / b)
+  // mode 0: B quoted at 1 KAS per whole B; A at the quote that implies the target rate (r = a x
+  // scale(B) / b)
   const bq = KAS;
   const aq = sides.kasBooks.a === 'ask' ? (target * bq) / pt.b.scale : (target * bq + pt.b.scale - 1n) / pt.b.scale;
   check({ mode: 'kasBooks', a: aq.toString(), b: bq.toString() });
@@ -147,16 +167,21 @@ function seedEvidence(chain, o, mode, effect) {
   return { orders: [evA, evB], amounts: [nA, nB], supply };
 }
 
-// ------------------------------------------------------------------------------------------------ build, sign, derive, submit
+// ------------------------------------------------------------------------------------------------
+// build, sign, derive, submit
 
-/** Builds the batch, signs the filler's inputs, finalizes it, derives what it does to the orders and submits it to the mock chain. */
+/**
+ * Builds the batch, signs the filler's inputs, finalizes it, derives what it does to the orders and
+ * submits it to the mock chain.
+ */
 function run(chain, request) {
   let built;
   try {
     built = JSON.parse(raw(chain).build(J(request)));
   } catch (e) {
     const msg = String(e?.message ?? e);
-    // kob-protocol's budget table has no role for some pair updates (e.g. a buy stop's arm on mode 1 evidence): arm it in its own fill instead
+    // kob-protocol's budget table has no role for some pair updates (e.g. a buy stop's arm on mode
+    // 1 evidence): arm it in its own fill instead
     const hint = /no compute budget for input role `Kob(Cond|Ifd)Pair\.update/.test(msg) ? ' (no keeper update for this case: arm it in its fill, POST /mock/fill with leg 1 and mode)' : '';
     throw badRequest(`kob-wasm refused the batch: ${msg}${hint}`);
   }
@@ -194,7 +219,10 @@ function fillArg(a) {
 }
 const intArg = (args, k) => (args[k] && args[k].kind === 'int' ? BigInt(args[k].value) : null);
 
-/** Token output states of a built tx by output index (the leader plan of each token lists them in output order). */
+/**
+ * Token output states of a built tx by output index (the leader plan of each token lists them in
+ * output order).
+ */
 function tokenOutputs(built) {
   const out = new Map();
   const seen = new Set();
@@ -210,7 +238,10 @@ function tokenOutputs(built) {
   return out;
 }
 
-/** The pair counterparty of the pair order at input `self` (processor.rs `pair_counterparty`): route, netting or inventory. */
+/**
+ * The pair counterparty of the pair order at input `self` (processor.rs `pair_counterparty`):
+ * route, netting or inventory.
+ */
 function counterpartyOf(chain, built, self, pt) {
   let netting = false;
   for (const [i, p] of built.plans.entries()) {
@@ -231,7 +262,10 @@ function counterpartyOf(chain, built, self, pt) {
   return netting ? 'netting' : 'inventory';
 }
 
-/** `detail.evidence` of a pair spend that used trigger evidence (processor.rs `pair_evidence_detail`). */
+/**
+ * `detail.evidence` of a pair spend that used trigger evidence (processor.rs
+ * `pair_evidence_detail`).
+ */
 function evidenceOf(chain, built, args, idx) {
   const [ia, ib, im] = idx;
   const mode = intArg(args, im);
@@ -249,8 +283,9 @@ function evidenceOf(chain, built, args, idx) {
 }
 
 /**
- * What the batch does to every tracked order it spends: the continuation state (the candidate whose script is the output bound to the order's
- * covenant id), the fill size, the pair fields of a pair fill, the evidence of an arm or trail; and the exits an if-done pair entry's fill creates.
+ * What the batch does to every tracked order it spends: the continuation state (the candidate whose
+ * script is the output bound to the order's covenant id), the fill size, the pair fields of a pair
+ * fill, the evidence of an arm or trail; and the exits an if-done pair entry's fill creates.
  */
 function derive(chain, built, tx, lock) {
   const orders = new Map();
@@ -382,7 +417,8 @@ function derive(chain, built, tx, lock) {
   return { orders, exits };
 }
 
-// ------------------------------------------------------------------------------------------------ control API
+// ------------------------------------------------------------------------------------------------
+// control API
 
 /** The order behind `cov`, live, with its current UTXO. */
 function live(chain, cov) {
@@ -424,10 +460,12 @@ function result(chain, cov, r) {
 }
 
 /**
- * Fills a pair order by a real batch. Options: `amount` (base units of A; default one whole A or the minimum fill, at most all left), `via`
- * (`inventory` default, `netting`, `route`), `against` (netting: the covenant id of an opposite pair order of the same pair; default a seeded one),
- * `leg` (a conditional's leg: 0 take-profit / limit, 1 stop; default the take-profit when it has one), `mode` (evidence mode 0 / 1 when the fill arms
- * an unarmed stop leg or stop entry; default 1). A booked exit's take-profit fill merges its entry when the entry is live (a repeat re-arm).
+ * Fills a pair order by a real batch. Options: `amount` (base units of A; default one whole A or
+ * the minimum fill, at most all left), `via` (`inventory` default, `netting`, `route`), `against`
+ * (netting: the covenant id of an opposite pair order of the same pair; default a seeded one),
+ * `leg` (a conditional's leg: 0 take-profit / limit, 1 stop; default the take-profit when it has
+ * one), `mode` (evidence mode 0 / 1 when the fill arms an unarmed stop leg or stop entry; default
+ * 1). A booked exit's take-profit fill merges its entry when the entry is live (a repeat re-arm).
  */
 export function simulatePairFill(chain, cov, opts = {}) {
   const o = live(chain, cov);
@@ -442,7 +480,8 @@ export function simulatePairFill(chain, cov, opts = {}) {
   if (o.kind === 'KobCondPair') {
     extra.leg = opts.leg !== undefined ? Number(opts.leg) : b(s.tpPrice) > 0n ? 0 : 1;
     trigger = extra.leg === 1 && b(s.armed) === 0n;
-    // a booked exit's take-profit re-arms its entry in the same transaction (merge), when the entry is live
+    // a booked exit's take-profit re-arms its entry in the same transaction (merge), when the entry
+    // is live
     const parent = s.parent && s.parent !== ZERO32 ? chain.orders.get(s.parent) : null;
     if (extra.leg === 0 && parent && (parent.status === 'open' || parent.status === 'partial') && parent.current && opts.merge !== false) {
       const ppt = pairTokensOf(parent.state);
@@ -472,7 +511,8 @@ export function simulatePairFill(chain, cov, opts = {}) {
     // the bid pays the floor, the ask receives the ceil: one base unit of B covers the rounding
     supply.push({ token: pt.b.covId, amount: 1n });
   } else if (via === 'route') {
-    // through the KAS books: a sell of A meets a KAS bid of A and buys B from a KAS ask of B (a buy of A: the reverse); the filler's KAS bridges
+    // through the KAS books: a sell of A meets a KAS bid of A and buys B from a KAS ask of B (a buy
+    // of A: the reverse); the filler's KAS bridges
     const need = supplyOf(chain, o, n, p);
     const kas = (token, side, amount, scale) => {
       const any = buildOrderState(chain, { token, side, price: String(KAS), amount, min_fill: 1, maker: 'carol', scale: scale.toString() });
@@ -491,8 +531,9 @@ export function simulatePairFill(chain, cov, opts = {}) {
 }
 
 /**
- * Arms (`trail: false`) or trails (`trail: true`) a pair stop without a fill: an update next to its trigger evidence (`mode` 0 two KAS-book fills,
- * 1 a resting pair order; default 1), seeded and filled in the same batch.
+ * Arms (`trail: false`) or trails (`trail: true`) a pair stop without a fill: an update next to its
+ * trigger evidence (`mode` 0 two KAS-book fills, 1 a resting pair order; default 1), seeded and
+ * filled in the same batch.
  */
 export function simulatePairArm(chain, cov, opts = {}) {
   const o = live(chain, cov);
@@ -504,7 +545,8 @@ export function simulatePairArm(chain, cov, opts = {}) {
   const mode = opts.mode !== undefined ? Number(opts.mode) : 1;
   const ev = seedEvidence(chain, o, mode, effect);
   const legs = ev.orders.map((x, k) => legOf(chain, x, ev.amounts[k]));
-  // the evidence legs need a counterparty too: the filler's inventory (a resting KAS ask is bought with the filler's KAS)
+  // the evidence legs need a counterparty too: the filler's inventory (a resting KAS ask is bought
+  // with the filler's KAS)
   const supply = [...ev.supply];
   const update = { order: orderUtxo(chain, o, true), evidence: 0, ...(mode === 0 ? { evidenceB: 1 } : {}), take: null };
   const r = run(chain, batchRequest(chain, legs, supply, [update]));

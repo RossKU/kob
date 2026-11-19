@@ -1,9 +1,12 @@
-// The in-memory "chain + indexer" behind the mock server: a fake Kaspa node (UTXO set, DAA clock, submit with FULL script validation through
-// kob-wasm) and the indexer state derived from what gets submitted (orders recovered from KOB1 placement records, custody / stray token
-// UTXOs, lifecycle events). Simulated fills / arming (control API) perform REAL UTXO transitions with correct redeem scripts, so an order
-// that was partially filled can still be cancelled by the app and validates in the script engine. Pair orders (KobPair, KobCondPair,
-// KobIfdPair) are filled, armed and trailed by REAL transactions: a batch built by kob-wasm (inventory, netting or a route through the KAS books;
-// trigger evidence in either mode), signed by the mock's filler key and accepted through `submit` like any other transaction (pair-fill.mjs).
+// The in-memory "chain + indexer" behind the mock server: a fake Kaspa node (UTXO set, DAA clock,
+// submit with FULL script validation through kob-wasm) and the indexer state derived from what gets
+// submitted (orders recovered from KOB1 placement records, custody / stray token UTXOs, lifecycle
+// events). Simulated fills / arming (control API) perform REAL UTXO transitions with correct redeem
+// scripts, so an order that was partially filled can still be cancelled by the app and validates in
+// the script engine. Pair orders (KobPair, KobCondPair, KobIfdPair) are filled, armed and trailed
+// by REAL transactions: a batch built by kob-wasm (inventory, netting or a route through the KAS
+// books; trigger evidence in either mode), signed by the mock's filler key and accepted through
+// `submit` like any other transaction (pair-fill.mjs).
 import { addressOfSpk, addressPrefix, p2pkSpk, spkOfAddress } from './address.mjs';
 import { KINDS, auctionOf, baseKind, bidBuyingPower, custodiesOf, custodyAmount, isPairKind, pairTokensOf, quoteOf, sideOf, termsOf } from './model.mjs';
 import { simulatePairArm, simulatePairFill } from './pair-fill.mjs';
@@ -12,8 +15,9 @@ import { TEST_PUBKEYS } from './keys.mjs';
 import { ApiError, HEX64, Rejection, badRequest, notFound, sha256hex, syntheticId } from './util.mjs';
 
 /**
- * A realistic KCC-20 borrow guard for `scheme` (as a TN10 holding carries one): 1 an amount threshold (8 bytes LE, here half the
- * holding), 2 somebody else's guard key (carol's), 3 a hash-chain head. Never all zeros, so a change that drops or alters it shows.
+ * A realistic KCC-20 borrow guard for `scheme` (as a TN10 holding carries one): 1 an amount
+ * threshold (8 bytes LE, here half the holding), 2 somebody else's guard key (carol's), 3 a
+ * hash-chain head. Never all zeros, so a change that drops or alters it shows.
  */
 export function borrowGuardOf(scheme, amount, seq = 0) {
   if (scheme === 1) {
@@ -30,9 +34,15 @@ const ZERO_FEE = { fee: '0', minFee: '0', feeRate: '0', mass: { size: 0, compute
 const KOB1 = '4b4f4231';
 export const DEFAULT_CARRIER = 1_000_000_000n; // 10 KAS per covenant UTXO
 const outKey = (txid, index) => `${txid}:${index}`;
-/** Tokens whose book an order touches: its own, and a pair order's quote token B (`book:<A>` and `book:<B>` fire). */
+/**
+ * Tokens whose book an order touches: its own, and a pair order's quote token B (`book:<A>` and
+ * `book:<B>` fire).
+ */
 const bookTokens = (o) => [o.token, o.quote ?? null].filter(Boolean);
-/** The order's state as base units / sompi (bigint) of a numeric spec value (number, decimal string or bigint). */
+/**
+ * The order's state as base units / sompi (bigint) of a numeric spec value (number, decimal string
+ * or bigint).
+ */
 const big = (v, what) => {
   try {
     return BigInt(v);
@@ -41,14 +51,15 @@ const big = (v, what) => {
   }
 };
 
-// The exit order an if-done entry commits to is stored as a prefix (kind code, first N state bytes); the covenant appends the repeat
-// fields. Zero tails of the plain (unbooked) exit: `0x20 parent(32) 0x08 rptPrice(8) [0x08 rptPre(8)] 0x08 rptUntil(8)`.
+// The exit order an if-done entry commits to is stored as a prefix (kind code, first N state
+// bytes); the covenant appends the repeat fields. Zero tails of the plain (unbooked) exit: `0x20
+// parent(32) 0x08 rptPrice(8) [0x08 rptPre(8)] 0x08 rptUntil(8)`.
 const EXIT_TAIL = { KobCondAsk: '20' + '00'.repeat(32) + '08' + '00'.repeat(8) + '08' + '00'.repeat(8), KobCondBid: '20' + '00'.repeat(32) + '08' + '00'.repeat(8) + '08' + '00'.repeat(8) + '08' + '00'.repeat(8) };
 
 export class MockChain {
   /**
-   * @param {import('../src/kob/wasm').KobWasm} kob
-   * @param {{network?: string, settleDepthDaa?: number, daaPerSecond?: number, startDaa?: number}} [opts]
+   * @param {import('../src/kob/wasm').KobWasm} kob @param {{network?: string, settleDepthDaa?:
+   * number, daaPerSecond?: number, startDaa?: number}} [opts]
    */
   constructor(kob, opts = {}) {
     this.kob = kob;
@@ -62,7 +73,10 @@ export class MockChain {
     this.transferTag = this.templates.get('KCC20Ref').entries.transfer;
     /** @type {Set<(ev: object) => void>} */
     this.listeners = new Set();
-    /** every accepted transaction, as it was submitted (the mock node's blocks, mock/blocks.mjs) @type {Set<(tx: object, daa: number, tsMs: number) => void>} */
+    /**
+     * every accepted transaction, as it was submitted (the mock node's blocks, mock/blocks.mjs)
+     * @type {Set<(tx: object, daa: number, tsMs: number) => void>}
+     */
     this.txListeners = new Set();
     this.reset();
   }
@@ -89,27 +103,35 @@ export class MockChain {
     this.txs = new Set();
     this.submissions = [];
     this.failNext = { remaining: 0, message: 'mock: injected submit failure' };
-    // the executor's `min_order_value_sompi` (crates/kobd/src/tokens.rs ListingRules; the real default is 1 KAS = 100000000). OFF (0) by default so the
-    // seeded books and the specs' small orders stay listed; `POST /mock/min-order-value` turns the rule on
+    // the executor's `min_order_value_sompi` (crates/kobd/src/tokens.rs ListingRules; the real
+    // default is 1 KAS = 100000000). OFF (0) by default so the seeded books and the specs' small
+    // orders stay listed; `POST /mock/min-order-value` turns the rule on
     this.minOrderValue = 0n;
-    // KCC-23 (the executor's indexer::kcc23): candidate preparations by txid (their id-relevant fields), and the verified launch proof of every
-    // covenant id whose genesis spent one
+    // KCC-23 (the executor's indexer::kcc23): candidate preparations by txid (their id-relevant
+    // fields), and the verified launch proof of every covenant id whose genesis spent one
     this.kcc23Candidates = new Map();
     this.declarations = new Map();
     this.health = { state: 'following', lagDaa: 0 };
     /** pair fills (`pair_fills` rows: volume only, never a price) */
     this.pairFills = [];
     this.pairFillSeq = 0;
-    /** txid -> what a batch the mock built itself does to the orders it spends (pair-fill.mjs): the states the indexer would splice */
+    /**
+     * txid -> what a batch the mock built itself does to the orders it spends (pair-fill.mjs): the
+     * states the indexer would splice
+     */
     this.pending = new Map();
   }
 
-  // ------------------------------------------------------------------------------------------------ clock
+  // -----------------------------------------------------------------------------------------------
+  // clock
 
   daa() {
     return this.startDaa + this.daaOffset + Math.floor(((Date.now() - this.t0) * this.daaPerSecond) / 1000);
   }
-  /** Wall clock in ms; advancing the DAA by `n` moves it by `n / 10` seconds so day orders stay consistent with the DAA. */
+  /**
+   * Wall clock in ms; advancing the DAA by `n` moves it by `n / 10` seconds so day orders stay
+   * consistent with the DAA.
+   */
   nowMs() {
     return Date.now() + Math.floor(this.daaOffset * 100);
   }
@@ -123,7 +145,8 @@ export class MockChain {
     return this.daa();
   }
 
-  // ------------------------------------------------------------------------------------------------ listeners / events
+  // -----------------------------------------------------------------------------------------------
+  // listeners / events
 
   /** Emits one "committed batch" (drives the WebSocket frames). */
   emit(ev) {
@@ -154,10 +177,12 @@ export class MockChain {
     return ev;
   }
 
-  // ------------------------------------------------------------------------------------------------ UTXO primitives
+  // -----------------------------------------------------------------------------------------------
+  // UTXO primitives
 
   addUtxo({ txid, index, amount, spk, covenantId = null, daa, kind = 'other' }) {
-    // createdMs: wall time the node learned the output (the mock wallets' own node sees it `lag_ms` later: server.mjs /mock/wallet-node)
+    // createdMs: wall time the node learned the output (the mock wallets' own node sees it `lag_ms`
+    // later: server.mjs /mock/wallet-node)
     const u = { txid, index, amount: BigInt(amount), spk, covenantId, daa, kind, spentBy: null, orderCov: null, tokenRec: null, createdMs: Date.now() };
     const key = outKey(txid, index);
     this.utxos.set(key, u);
@@ -192,18 +217,21 @@ export class MockChain {
       template_hash: t.template_hash ?? tpl.hash,
       extension_commitment: t.extension_commitment ?? null,
       decimals: t.decimals ?? null,
-      // the token's standard scale (`10^decimals`, at most 10^9): an order is listed only at this scale (`/v1/tokens` `scale`); a token without
-      // decimals (open list, no registry entry) has none and its orders are listed whatever their scale
+      // the token's standard scale (`10^decimals`, at most 10^9): an order is listed only at this
+      // scale (`/v1/tokens` `scale`); a token without decimals (open list, no registry entry) has
+      // none and its orders are listed whatever their scale
       scale: t.decimals == null ? null : 10 ** Math.min(Number(t.decimals), 9),
       // the scale seeded orders of a token WITHOUT decimals use (mock seeding only, not served)
       order_scale: t.order_scale ?? null,
       // price step of the seeded books, sompi per whole token (mock seeding only)
       tick: t.tick ?? null,
       program,
-      // `GET /v1/tokens`: powers of the program template; the strict-list template id; the ticker is '' for tokens outside the registry (the executor
-      // serves no per-token standing: KOB makes no listing judgement)
+      // `GET /v1/tokens`: powers of the program template; the strict-list template id; the ticker
+      // is '' for tokens outside the registry (the executor serves no per-token standing: KOB makes
+      // no listing judgement)
       powers: t.powers ?? [],
-      // like the executor: the id of the strict-list template of the program (null only when a test says so: a program off the list)
+      // like the executor: the id of the strict-list template of the program (null only when a test
+      // says so: a program off the list)
       template_id: 'template_id' in t ? (t.template_id ?? null) : (TEMPLATE_ID_OF_PROGRAM[program] ?? null),
       family: t.family ?? 'kcc20',
       // a token the indexer tracks only as foreign strays: not listed by `/v1/tokens`
@@ -258,7 +286,8 @@ export class MockChain {
   }
 
   tokenState(tok, owner, scheme, amount) {
-    // KRON (46-byte state): id_type 2 = covenant id (custody), 3 = address presence (a key's holdings)
+    // KRON (46-byte state): id_type 2 = covenant id (custody), 3 = address presence (a key's
+    // holdings)
     if (tok.family === 'kron') return { amount: String(amount), owner, id_type: scheme === 4 ? 2 : 3, is_minter: 0 };
     return {
       amount: String(amount),
@@ -274,7 +303,8 @@ export class MockChain {
     return this.tokenUtxos.filter((t) => t.owner === owner && t.role === role && !t.spent);
   }
 
-  // ------------------------------------------------------------------------------------------------ control: fund keys
+  // -----------------------------------------------------------------------------------------------
+  // control: fund keys
 
   /** Gives a key KAS (one P2PK UTXO of `sompi`). */
   giveKas(pubkey, sompi) {
@@ -294,9 +324,11 @@ export class MockChain {
   }
 
   /**
-   * A token UTXO sent to an order's covenant id from outside the protocol (owner scheme 4 without a custody role): inert, never liquidity. `token`
-   * (optional): another token than the order's own, a FOREIGN stray (matcher.md 1.2): a known token (ticker or covenant id), or a new covenant id
-   * that is registered as an unlisted token (kept out of `/v1/tokens`) with `program` (default KCC20Ref_8x8) and `ticker`.
+   * A token UTXO sent to an order's covenant id from outside the protocol (owner scheme 4 without a
+   * custody role): inert, never liquidity. `token` (optional): another token than the order's own,
+   * a FOREIGN stray (matcher.md 1.2): a known token (ticker or covenant id), or a new covenant id
+   * that is registered as an unlisted token (kept out of `/v1/tokens`) with `program` (default
+   * KCC20Ref_8x8) and `ticker`.
    */
   seedStray(cov, amount, carrier = DEFAULT_CARRIER, token = null) {
     const o = this.orders.get(cov);
@@ -327,7 +359,8 @@ export class MockChain {
     return this.tokenUtxos.filter((t) => t.token === tok.covenant_id && t.owner === pubkey && t.role === 'owned' && !t.spent).reduce((a, t) => a + t.amount, 0n);
   }
 
-  // ------------------------------------------------------------------------------------------------ node API
+  // -----------------------------------------------------------------------------------------------
+  // node API
 
   nodeInfo() {
     return {
@@ -358,11 +391,13 @@ export class MockChain {
     return out;
   }
 
-  // ------------------------------------------------------------------------------------------------ KCC-23 declarations
+  // -----------------------------------------------------------------------------------------------
+  // KCC-23 declarations
 
   /**
-   * What the executor's indexer does (indexer::kcc23): a transaction whose payload is a KCC-23 declaration is a candidate preparation; a covenant
-   * output whose authorising input spends a candidate gets a launch proof, kept only when kob-wasm verifies it for that covenant id.
+   * What the executor's indexer does (indexer::kcc23): a transaction whose payload is a KCC-23
+   * declaration is a candidate preparation; a covenant output whose authorising input spends a
+   * candidate gets a launch proof, kept only when kob-wasm verifies it for that covenant id.
    */
   captureDeclarations(tx) {
     const proofTx = (t) => ({
@@ -404,12 +439,14 @@ export class MockChain {
     }
   }
 
-  // ------------------------------------------------------------------------------------------------ submit
+  // -----------------------------------------------------------------------------------------------
+  // submit
 
   /**
-   * Consensus-style acceptance of a fully signed tx (kaspa safe JSON): every input known, unspent and matching its embedded entry, then
-   * the whole tx through the script engine (`kob.validate`: scripts with enforced budgets, storage mass, fee floor, block limits).
-   * On success spends / creates UTXOs and updates the indexer view. Throws `Rejection` with the reason otherwise.
+   * Consensus-style acceptance of a fully signed tx (kaspa safe JSON): every input known, unspent
+   * and matching its embedded entry, then the whole tx through the script engine (`kob.validate`:
+   * scripts with enforced budgets, storage mass, fee floor, block limits). On success spends /
+   * creates UTXOs and updates the indexer view. Throws `Rejection` with the reason otherwise.
    */
   submit(tx) {
     const fail = (m) => {
@@ -476,13 +513,16 @@ export class MockChain {
     // 2. outputs
     const outs = tx.outputs.map((o, j) => this.addUtxo({ txid, index: j, amount: BigInt(o.value), spk: o.scriptPublicKey, covenantId: o.covenant?.covenantId ?? null, daa, kind: o.covenant ? 'covenant' : 'p2pk' }));
 
-    // 3. token outputs: states come from the leader input's signature script (this is how the real indexer learns them)
+    // 3. token outputs: states come from the leader input's signature script (this is how the real
+    //    indexer learns them)
     const tokenMatches = new Map(); // output index -> Kcc20State
     const leaders = new Map();
     const used = new Set();
-    // A token genesis has no leader: it names the states of its outputs in its payload (`KOBG`), believed only where their P2SH is the output's
-    // script (the indexer does the same: record.rs `genesis_leaders`), and the token is tracked from then on, listed or not.
-    // a genesis that places a sell curve carries them in its KOB1 payload, as the optional GENESIS record (0x85, the same KOBG bytes)
+    // A token genesis has no leader: it names the states of its outputs in its payload (`KOBG`),
+    // believed only where their P2SH is the output's script (the indexer does the same: record.rs
+    // `genesis_leaders`), and the token is tracked from then on, listed or not. a genesis that
+    // places a sell curve carries them in its KOB1 payload, as the optional GENESIS record (0x85,
+    // the same KOBG bytes)
     const genesis = genesisStates(tx.payload) ?? genesisStates(this.genesisRecord(tx.payload));
     tx.outputs.forEach((o, j) => {
       if (!o.covenant) return;
@@ -505,7 +545,8 @@ export class MockChain {
           if (spk === o.scriptPublicKey) {
             used.add(`${auth}:${k}`);
             tokenMatches.set(j, st);
-            // a token only its holdings show: tracked, not listed (`/v1/tokens` names the tokens an order placement named)
+            // a token only its holdings show: tracked, not listed (`/v1/tokens` names the tokens an
+            // order placement named)
             tok ??= this.addToken({ covenant_id: o.covenant.covenantId, ticker: '', program: p, extension_commitment: st.extension_commitment, hidden: true });
             break;
           }
@@ -539,7 +580,8 @@ export class MockChain {
       }
     }
 
-    // 4b. the exits a known batch creates (an if-done pair entry's fill): fresh covenants without a placement record
+    // 4b. the exits a known batch creates (an if-done pair entry's fill): fresh covenants without a
+    // placement record
     const pend = this.pending.get(txid) ?? null;
     for (const x of pend?.exits ?? []) {
       const u = outs[x.output];
@@ -573,8 +615,9 @@ export class MockChain {
     const closed = [];
     const touched = new Set(created);
     const fills = [];
-    // in-place amends (AMEND records, plain asks and bids): the maker's cancel continues the order's covenant id with the recorded state, verified by
-    // kob-wasm against the state the input reveals (as the real indexer does); anything else continuing a cancel stays unproven
+    // in-place amends (AMEND records, plain asks and bids): the maker's cancel continues the
+    // order's covenant id with the recorded state, verified by kob-wasm against the state the input
+    // reveals (as the real indexer does); anything else continuing a cancel stays unproven
     let amends = [];
     if (typeof tx.payload === 'string' && tx.payload.startsWith(KOB1)) {
       try {
@@ -583,7 +626,8 @@ export class MockChain {
         this.rejects.push({ txid, reason: `amend:${String(e?.message ?? e)}` });
       }
     }
-    // sweeps in place (SWEEP records, payload.rs `verify_sweep`): the maker's cancel continues the order under the SAME script; only strays move
+    // sweeps in place (SWEEP records, payload.rs `verify_sweep`): the maker's cancel continues the
+    // order under the SAME script; only strays move
     const sweepRecords = this.decodeRecords(tx.payload).filter((r) => r.type === 'sweep');
     for (const so of spentOrders) {
       const o = so.order;
@@ -602,7 +646,8 @@ export class MockChain {
         continue;
       }
       if (entry === 'cancel' && cont && sweepRecords.length) this.rejects.push({ txid, reason: 'sweep:record does not continue the same script' });
-      // a spend of a batch the mock built itself: the new state (and the fill, arm or trail) is known, as the real indexer splices it
+      // a spend of a batch the mock built itself: the new state (and the fill, arm or trail) is
+      // known, as the real indexer splices it
       const known = pend?.orders.get(so.cov);
       if (known) {
         this.applyKnownSpend(o, so, known, { txid, daa, seq, cont, closed, fills });
@@ -645,7 +690,8 @@ export class MockChain {
         touched.add(so.cov);
         continue;
       }
-      // a fill the mock did not build (a wallet's direct take): the new state proven against the continuation's script (processor.rs `derive_after`)
+      // a fill the mock did not build (a wallet's direct take): the new state proven against the
+      // continuation's script (processor.rs `derive_after`)
       const derived = (entry === 'fill' || entry === 'settle') && cont ? this.deriveFill(o, so, cont) : null;
       if (derived) {
         const { next, n } = derived;
@@ -673,7 +719,8 @@ export class MockChain {
       const ioc = o.tif === 1n || o.tif === 2n;
       let kind = entry ?? 'unknown';
       let status;
-      // `settle(0)` is the refund of a token-holding order (docs/spec/order-types.md): its first argument, the fill amount `n`, is an 8-byte little-endian zero (build.rs `nb(0)`)
+      // `settle(0)` is the refund of a token-holding order (docs/spec/order-types.md): its first
+      // argument, the fill amount `n`, is an 8-byte little-endian zero (build.rs `nb(0)`)
       const refundsAsSettle = entry === 'settle' && so.reveal.pushes.length >= 3 && so.reveal.pushes[0].length === 8 && so.reveal.pushes[0].every((b) => b === 0);
       if (entry === 'cancel') status = 'cancelled';
       else if (entry === 'refund' || refundsAsSettle) {
@@ -725,7 +772,10 @@ export class MockChain {
     return { transactionId: txid };
   }
 
-  /** The value (hex) of a KOB1 payload's GENESIS record (0x85): the token states of a genesis that places a curve; null when there is none. */
+  /**
+   * The value (hex) of a KOB1 payload's GENESIS record (0x85): the token states of a genesis that
+   * places a curve; null when there is none.
+   */
   genesisRecord(payload) {
     if (typeof payload !== 'string' || !payload.startsWith(KOB1)) return null;
     const r = this.decodeRecords(payload).find((x) => x.type === 'unknown' && x.recordType === 0x85);
@@ -742,9 +792,11 @@ export class MockChain {
   }
 
   /**
-   * The SWEEP record continuing order input `so` at `cont`, verified as the real indexer does (payload.rs `verify_sweep`): the record names this
-   * output and input, the output carries the SAME script as the spent order UTXO, it is bound to the order's covenant id from that input, and no
-   * other input or output carries the id. Null when there is none or it does not verify (the continuation then stays unproven).
+   * The SWEEP record continuing order input `so` at `cont`, verified as the real indexer does
+   * (payload.rs `verify_sweep`): the record names this output and input, the output carries the
+   * SAME script as the spent order UTXO, it is bound to the order's covenant id from that input,
+   * and no other input or output carries the id. Null when there is none or it does not verify (the
+   * continuation then stays unproven).
    */
   verifySweep(tx, records, so, cont) {
     const rec = records.find((r) => r.output === cont.index && r.input === so.input);
@@ -758,8 +810,9 @@ export class MockChain {
   }
 
   /**
-   * The state a fill of `n` (the reveal's first argument, 8 bytes sign-magnitude LE) leaves at `cont`, or null: the unchanged state, `amountLeft - n`
-   * (a curve bound to its order's token) or a Collected bid's `bought + n`, whichever script is the continuation's.
+   * The state a fill of `n` (the reveal's first argument, 8 bytes sign-magnitude LE) leaves at
+   * `cont`, or null: the unchanged state, `amountLeft - n` (a curve bound to its order's token) or
+   * a Collected bid's `bought + n`, whichever script is the continuation's.
    */
   deriveFill(o, so, cont) {
     const p = so.reveal?.pushes?.[0];
@@ -790,8 +843,9 @@ export class MockChain {
   }
 
   /**
-   * A spend of a batch the mock built itself (pair-fill.mjs): the order's new state is known (as the real indexer splices it from the reveal), so
-   * the order row, its event (`fill` with the pair fields and NO price for a pair order; `arm` / `trail` with the evidence; `rearm` on a merged
+   * A spend of a batch the mock built itself (pair-fill.mjs): the order's new state is known (as
+   * the real indexer splices it from the reveal), so the order row, its event (`fill` with the pair
+   * fields and NO price for a pair order; `arm` / `trail` with the evidence; `rearm` on a merged
    * entry) and the `pair_fills` row follow from it.
    */
   applyKnownSpend(o, so, k, { txid, daa, seq, cont, closed, fills }) {
@@ -825,7 +879,8 @@ export class MockChain {
       o.filledAmount += k.n;
       if (cont) o.status = 'partial';
       const detail = { input: so.input, entry: k.entry, simulated: true, ...(k.pair ? { pair: k.pair } : {}), ...(k.evidence ? { evidence: k.evidence } : {}), ...(k.exit ? { exit: k.exit } : {}) };
-      // a pair fill is never a price (founder rule): its event carries `price` null and `detail.pair` (volume, counterparty, price_source none)
+      // a pair fill is never a price: its event carries `price` null and
+      // `detail.pair` (volume, counterparty, price_source none)
       const ev = this.pushEvent({ cov, kind: 'fill', seq, daa, txid, token: o.token, side: o.side, amount: k.n, price: pair ? null : (k.price === null ? null : k.price.toString()), closes: !cont, detail });
       fills.push(this.fillNotice(o, ev, txid, k.n, null));
       if (pair && k.pair) {
@@ -840,23 +895,29 @@ export class MockChain {
     }
   }
 
-  /** The WebSocket `fill` notice (`FillNotice` of the indexer): integers are JSON numbers there (`amount` base units, `price`, `payout`). */
+  /**
+   * The WebSocket `fill` notice (`FillNotice` of the indexer): integers are JSON numbers there
+   * (`amount` base units, `price`, `payout`).
+   */
   fillNotice(o, ev, txid, amount, payout) {
     const num = (v) => (v === null || v === undefined ? null : Number(v));
     return { order: o.covenantId, token: o.token, side: o.side, price: num(ev.price), amount: Number(amount || ev.amount || 0), payout: num(payout), txid, block: syntheticId('block', this.blockSeq), daa: ev.daa };
   }
 
-  // ------------------------------------------------------------------------------------------------ orders
+  // -----------------------------------------------------------------------------------------------
+  // orders
 
   /**
-   * Registers an order the way the indexer does after recovering a placement record: the order row, its `create` event and the
-   * token registry sighting. The order UTXO / custody UTXO themselves are created by the caller.
+   * Registers an order the way the indexer does after recovering a placement record: the order row,
+   * its `create` event and the token registry sighting. The order UTXO / custody UTXO themselves
+   * are created by the caller.
    */
   registerOrder({ covenantId, any, txid, out, value, daa, seq, custodyState, deadline = null, origin = 'chain', parent = null, custodyToken = null }) {
     const info = KINDS[any.kind];
     const s = any.state;
     const t = termsOf(any);
-    // a pair order: its token is A, its quote B (both must pass the listing rules; B's refusal is `quote_<reason>`)
+    // a pair order: its token is A, its quote B (both must pass the listing rules; B's refusal is
+    // `quote_<reason>`)
     const pt = pairTokensOf(any);
     // an unbound curve (made in its token's genesis) names no token: it is its custody's
     const tokenId = pt ? pt.a.covId : any.kind === 'KobCurveAsk' && /^0{64}$/.test(s.tokenCovId) && custodyToken ? custodyToken : s.tokenCovId;
@@ -866,15 +927,17 @@ export class MockChain {
       !tk ? 'token_not_allowlisted'
         : tk.template_hash && hash && tk.template_hash !== hash ? 'template_mismatch'
           : scale <= 0n ? 'bad_state:scale:not positive'
-            // every listed order of a token quotes the same whole token (kobd tokens.rs ListingRules)
+            // every listed order of a token quotes the same whole token (kobd tokens.rs
+            // ListingRules)
             : tk.scale != null && scale !== BigInt(tk.scale) ? 'non_standard_scale' : null;
     let reason = listing(tok, tplHash, t.scale);
     if (!reason && pt) {
       const q = listing(this.tokens.get(pt.b.covId) ?? null, pt.b.tplHash, pt.b.scale);
       if (q) reason = `quote_${q}`;
     }
-    // the order's value (ListingRules::evaluate): a plain ask / bid's amount at its quote rounded down, a bid's escrow (the KAS of its output); the
-    // other kinds (conditional, if-done, pair) are not measured here
+    // the order's value (ListingRules::evaluate): a plain ask / bid's amount at its quote rounded
+    // down, a bid's escrow (the KAS of its output); the other kinds (conditional, if-done, pair)
+    // are not measured here
     if (!reason && this.minOrderValue > 0n && !pt) {
       const base = baseKind(any.kind);
       const val = base === 'KobAsk' ? quoteOf(t.amountLeft, t.price, t.scale, 'down') : base === 'KobBid' ? BigInt(value) : null;
@@ -895,7 +958,8 @@ export class MockChain {
       tif: t.tif,
       genesis: { txid, out, seq, daa },
       status: 'open',
-      // base units (bigint): filled so far, left (`amountLeft`; a bid's buying power, an upper bound), at creation (null for a bid)
+      // base units (bigint): filled so far, left (`amountLeft`; a bid's buying power, an upper
+      // bound), at creation (null for a bid)
       filledAmount: 0n,
       amountLeft: t.amountLeft,
       amountExact: t.amountLeft !== null,
@@ -907,7 +971,8 @@ export class MockChain {
       lastDaa: daa,
       listed,
       unlistedReason: reason,
-      // the executor's pre-simulation of the next fill failed (a frozen / blacklisted token state): omitted from the book, flagged on the order
+      // the executor's pre-simulation of the next fill failed (a frozen / blacklisted token state):
+      // omitted from the book, flagged on the order
       possiblyFrozen: false,
       origin,
       parent,
@@ -937,8 +1002,9 @@ export class MockChain {
   }
 
   /**
-   * Seeds a complete, real order: order UTXO with the correct P2SH script for its state, plus the custody token UTXO of ask kinds.
-   * `any` is a full `AnyState`; the maker can cancel it with the matching secret key.
+   * Seeds a complete, real order: order UTXO with the correct P2SH script for its state, plus the
+   * custody token UTXO of ask kinds. `any` is a full `AnyState`; the maker can cancel it with the
+   * matching secret key.
    */
   seedOrder(any, { value, custodyCarrier = DEFAULT_CARRIER, covenantId, deadline = null, parent = null, daa: at } = {}) {
     const info = KINDS[any.kind];
@@ -952,7 +1018,8 @@ export class MockChain {
     const val = BigInt(value ?? DEFAULT_CARRIER);
     const u = this.addUtxo({ txid, index: 0, amount: val, spk: this.kob.scriptPublicKey(any), covenantId: cov, daa, kind: 'order' });
     u.orderCov = cov;
-    // the custodies: an ask's token; a pair order's custodies of A and / or B (kob-wasm `custodies`, record order)
+    // the custodies: an ask's token; a pair order's custodies of A and / or B (kob-wasm
+    // `custodies`, record order)
     const parts = [];
     if (isPairKind(any.kind)) {
       const pt = pairTokensOf(any);
@@ -975,10 +1042,12 @@ export class MockChain {
   }
 
   /**
-   * An order placed by an older build under a RETIRED template of the cancel-only table (`retired`: its hash, kob-wasm `retiredTemplates`): its
-   * UTXO at that template's script with its covenant id, and the placement record the wallet of that build kept. The indexer here does not know
-   * it (like an indexer that never recorded it: `/v1/orders/{id}` answers 404), so the wallet resolves it from that record; its maker's cancel
-   * spends it like any covenant UTXO (validated in the engine).
+   * An order placed by an older build under a RETIRED template of the cancel-only table (`retired`:
+   * its hash, kob-wasm `retiredTemplates`): its UTXO at that template's script with its covenant
+   * id, and the placement record the wallet of that build kept. The indexer here does not know it
+   * (like an indexer that never recorded it: `/v1/orders/{id}` answers 404), so the wallet resolves
+   * it from that record; its maker's cancel spends it like any covenant UTXO (validated in the
+   * engine).
    */
   seedRetiredOrder(any, retired, { value } = {}) {
     if (!this.kob.retiredTemplates().some((r) => r.hash === retired && r.kind === any.kind)) throw badRequest(`${retired} is not a retired ${any.kind} template`);
@@ -996,8 +1065,9 @@ export class MockChain {
   }
 
   /**
-   * A finished order (filled or cancelled) with its events: history for the trades list. No UTXOs. `genesisDaa` / `genesisTs` and a
-   * fill's `daa` / `ts` / `txid` override the defaults (market history: explicit times, two orders filled in one transaction).
+   * A finished order (filled or cancelled) with its events: history for the trades list. No UTXOs.
+   * `genesisDaa` / `genesisTs` and a fill's `daa` / `ts` / `txid` override the defaults (market
+   * history: explicit times, two orders filled in one transaction).
    */
   seedHistory(any, { status = 'filled', fills = [], agoDaa = 1000, genesisDaa, genesisTs } = {}) {
     const n = ++this.synth;
@@ -1035,7 +1105,8 @@ export class MockChain {
     return o;
   }
 
-  // ------------------------------------------------------------------------------------------------ control: simulate fills / arming
+  // -----------------------------------------------------------------------------------------------
+  // control: simulate fills / arming
 
   /** Splits a stored order into what a fill needs (current UTXO, custody). */
   fillContext(cov) {
@@ -1048,13 +1119,16 @@ export class MockChain {
   }
 
   /**
-   * Simulates a fill of `amount` base units (default: one whole token or the minimum fill if larger, at most everything left) at `price` (sompi per whole
-   * token; default: the current quote): performs the real transition (order UTXO -> continuation with the new state and script, custody
-   * replaced, maker payout / delivery outputs), records the event and emits the WebSocket frames. IFD entries also create their exit order as
-   * a child. Nothing is signed: the transition is synthetic, but the amounts follow the covenants' quote rule (an ask's maker is paid
-   * `ceil(n * (price - tip) / scale)`, a bid pays `floor(n * (price + tip) / scale)` and a continuing plain bid consumes
-   * `ceil(n * (pMax + tip) / scale)` of its escrow; the fill must satisfy the order's minimum fill, kob-wasm `fillOk`). A PAIR order is filled by
-   * a real batch instead (pair-fill.mjs `simulatePairFill`: `via` inventory / netting / route, `leg`, evidence `mode`).
+   * Simulates a fill of `amount` base units (default: one whole token or the minimum fill if
+   * larger, at most everything left) at `price` (sompi per whole token; default: the current
+   * quote): performs the real transition (order UTXO -> continuation with the new state and script,
+   * custody replaced, maker payout / delivery outputs), records the event and emits the WebSocket
+   * frames. IFD entries also create their exit order as a child. Nothing is signed: the transition
+   * is synthetic, but the amounts follow the covenants' quote rule (an ask's maker is paid `ceil(n
+   * * (price - tip) / scale)`, a bid pays `floor(n * (price + tip) / scale)` and a continuing plain
+   * bid consumes `ceil(n * (pMax + tip) / scale)` of its escrow; the fill must satisfy the order's
+   * minimum fill, kob-wasm `fillOk`). A PAIR order is filled by a real batch instead (pair-fill.mjs
+   * `simulatePairFill`: `via` inventory / netting / route, `leg`, evidence `mode`).
    */
   simulateFill(cov, opts = {}) {
     const { amount, price, taker } = opts;
@@ -1066,7 +1140,8 @@ export class MockChain {
     const t = termsOf(any);
     const kind = baseKind(any.kind);
     const left = t.amountLeft ?? o.amountLeft ?? 0n;
-    // default: one whole token (`scale` base units), at least the minimum fill, at most everything left
+    // default: one whole token (`scale` base units), at least the minimum fill, at most everything
+    // left
     const one = t.scale > t.minFill ? t.scale : t.minFill;
     const n = amount === undefined || amount === null ? (one < left ? one : left) : big(amount, 'amount');
     if (n <= 0n) throw badRequest('amount must be positive');
@@ -1074,7 +1149,8 @@ export class MockChain {
     if (!this.kob.raw.fillOk(JSON.stringify(any), String(n), String(cur.amount))) throw badRequest(`a fill of ${n} base units breaks the order's minimum fill (${t.minFill})`);
     const daa = this.daa();
     const nowQuote = auctionOf(any, o.currentDaa, daa)?.current_price;
-    // a curve is paid level by level (kob-wasm `curveProceeds`, at most 8 levels); its fill price is the mean level price
+    // a curve is paid level by level (kob-wasm `curveProceeds`, at most 8 levels); its fill price
+    // is the mean level price
     const curvePaid = any.kind === 'KobCurveAsk' ? this.kob.raw.curveProceeds(JSON.stringify(any), String(n)) : null;
     if (any.kind === 'KobCurveAsk' && curvePaid == null) throw badRequest('a curve fill touches at most 8 levels');
     const p = price !== undefined ? big(price, 'price') : curvePaid != null ? (BigInt(curvePaid) * t.scale) / n + t.tip : BigInt(nowQuote ?? t.price);
@@ -1123,12 +1199,14 @@ export class MockChain {
       const delivery = BigInt(s.deliveryCarrier);
       const exitCarrier = kind === 'KobIfdBid' ? BigInt(s.exitCarrier) : 0n;
       let deliveryValue = delivery;
-      // a Collected (mode 1) KCC-20 bid keeps what it bought in its bought-custody (bid-delivery-spec §1, §4): the first fill funds its carrier
+      // a Collected (mode 1) KCC-20 bid keeps what it bought in its bought-custody
+      // (bid-delivery-spec §1, §4): the first fill funds its carrier
       const collects = any.kind === 'KobBid' && String(s.mode ?? '0') === '1';
       const priorBought = collects ? BigInt(s.bought ?? 0) : 0n;
       const priorCustody = collects && priorBought > 0n ? this.liveTokenUtxos(cov, 'bought')[0] ?? null : null;
       if (kind === 'KobBid') {
-        // a plain bid consumes its budget ceil(n * (pMax + tip) / scale); the difference to what it paid rides on the delivery
+        // a plain bid consumes its budget ceil(n * (pMax + tip) / scale); the difference to what it
+        // paid rides on the delivery
         const used = BigInt(this.kob.raw.bidUsed(JSON.stringify(any), String(n)));
         const rest = cur.amount - used;
         const cont = BigInt(s.tif) === 0n && this.kob.raw.bidCanContinue(JSON.stringify(any), String(rest));
@@ -1185,12 +1263,16 @@ export class MockChain {
     return { transactionId: txid, covenant_id: cov, status: o.status, filled_amount: o.filledAmount.toString(), amount_left: o.amountLeft === null ? null : o.amountLeft.toString(), children, event_id: ev.id };
   }
 
-  /** Creates the exit order an if-done entry spawns on a fill (a real child with its UTXO and, for sells, custody tokens). */
+  /**
+   * Creates the exit order an if-done entry spawns on a fill (a real child with its UTXO and, for
+   * sells, custody tokens).
+   */
   spawnExit(entry, n, value, txid, index, daa, seq, delivery) {
     const es = entry.state.state;
     const exitBase = baseKind(entry.kind) === 'KobIfdBid' ? 'KobCondAsk' : 'KobCondBid';
     const exitKind = entry.kind.endsWith('Kron') ? exitBase + 'Kron' : exitBase;
-    // a KCC-20 buy-first entry writes its own extensionCommitment behind the repeat fields of its KobCondAsk exit
+    // a KCC-20 buy-first entry writes its own extensionCommitment behind the repeat fields of its
+    // KobCondAsk exit
     const extTail = exitKind === 'KobCondAsk' ? '20' + es.extensionCommitment : '';
     const exit = this.kob.decodeState(exitKind, es.exitState + EXIT_TAIL[exitBase] + extTail);
     exit.state.amountLeft = String(n);
@@ -1208,8 +1290,14 @@ export class MockChain {
     return cov;
   }
 
-  /** Arms a stop / stop-entry: performs the `armed` transition of the state (new UTXO, new script), emits an `arm` event. */
-  /** Marks / unmarks an order as possibly frozen (the executor's pre-simulation of its next fill failed). */
+  /**
+   * Arms a stop / stop-entry: performs the `armed` transition of the state (new UTXO, new script),
+   * emits an `arm` event.
+   */
+  /**
+   * Marks / unmarks an order as possibly frozen (the executor's pre-simulation of its next fill
+   * failed).
+   */
   setPossiblyFrozen(cov, frozen) {
     const o = this.orders.get(cov);
     if (!o) throw badRequest(`unknown order ${cov}`);
@@ -1250,9 +1338,11 @@ export class MockChain {
   }
 
   /**
-   * A re-org that takes the LAST simulated fill of an order back out (the indexer's view of the order: its fill event, amounts, status and state; the
-   * mock's UTXOs are not rolled back, so the order should not be traded or cancelled afterwards). Only a partial fill of a plain order can be undone
-   * (a fill that closed the order or spawned an exit cannot). Emits the order notice and a `reorg` frame of `blocks` blocks.
+   * A re-org that takes the LAST simulated fill of an order back out (the indexer's view of the
+   * order: its fill event, amounts, status and state; the mock's UTXOs are not rolled back, so the
+   * order should not be traded or cancelled afterwards). Only a partial fill of a plain order can
+   * be undone (a fill that closed the order or spawned an exit cannot). Emits the order notice and
+   * a `reorg` frame of `blocks` blocks.
    */
   revertLastFill(cov, blocks = 1) {
     const o = this.orders.get(cov);

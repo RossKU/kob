@@ -1,12 +1,14 @@
-// REST views of the mock indexer: the exact JSON shapes of crates/kobd/src/indexer/reads.rs (snake_case, string sompi and base units,
-// numeric DAA / counts / scales, `confirmations` + `settled` on every chain-derived view) built from the MockChain state.
+// REST views of the mock indexer: the exact JSON shapes of crates/kobd/src/indexer/reads.rs
+// (snake_case, string sompi and base units, numeric DAA / counts / scales, `confirmations` +
+// `settled` on every chain-derived view) built from the MockChain state.
 import { KINDS, curveOf, auctionOf, baseKind, bidBudgetRate, custodiesOf, custodyAmount, ifdBudgetRate, isPairKind, pairTokensOf, refundDue, repeatOf, termsOf } from './model.mjs';
 import { HEX64, badRequest } from './util.mjs';
 
 export const MAX_PAGE_SIZE = 200;
 export const ORDER_STATUSES = ['open', 'partial', 'filled', 'cancelled', 'refunded', 'closed', 'active'];
 
-// ------------------------------------------------------------------------------------------------ query parsing (api/rest.rs)
+// ------------------------------------------------------------------------------------------------
+// query parsing (api/rest.rs)
 
 export function limitParam(q, key, dflt, max = MAX_PAGE_SIZE) {
   const raw = q.get(key);
@@ -45,7 +47,8 @@ export const hexParam = (q, key) => {
   return v.toLowerCase();
 };
 
-// ------------------------------------------------------------------------------------------------ context
+// ------------------------------------------------------------------------------------------------
+// context
 
 export function ctxOf(chain) {
   return {
@@ -62,7 +65,8 @@ const settled = (ctx, daa) => {
 const active = (o) => o.status === 'open' || o.status === 'partial';
 const str = (v) => (v === null || v === undefined ? null : String(v));
 
-// ------------------------------------------------------------------------------------------------ health / tokens
+// ------------------------------------------------------------------------------------------------
+// health / tokens
 
 export function counters(chain) {
   const byStatus = {};
@@ -99,7 +103,8 @@ export function healthView(chain) {
     alarms: [],
     settle_depth_daa: chain.settleDepthDaa,
     counters: counters(chain),
-    // the build and the history flags of docs/api.md section 3.1 (a store that began late: book_complete false + history_from_daa)
+    // the build and the history flags of docs/api.md section 3.1 (a store that began late:
+    // book_complete false + history_from_daa)
     version: '0.1.0',
     commit: null,
     payload_version: chain.health.payloadVersion ?? 4,
@@ -115,8 +120,9 @@ export function readyView(chain) {
 }
 
 /**
- * A token without decimals: the scale of its earliest order, open or ended, listed orders first (kobd reads.rs `market_scale`): the scale
- * its first order set, which stays the market's. Null with decimals and before any order.
+ * A token without decimals: the scale of its earliest order, open or ended, listed orders first
+ * (kobd reads.rs `market_scale`): the scale its first order set, which stays the market's. Null
+ * with decimals and before any order.
  */
 function marketScale(chain, t) {
   if (t.decimals != null) return null;
@@ -148,14 +154,19 @@ export function tokensView(chain) {
   };
 }
 
-// ------------------------------------------------------------------------------------------------ token UTXOs
+// ------------------------------------------------------------------------------------------------
+// token UTXOs
 
-/** The tokens an order's own transfers move: its token and a pair order's quote token B (a stray of any other token is foreign). */
+/**
+ * The tokens an order's own transfers move: its token and a pair order's quote token B (a stray of
+ * any other token is foreign).
+ */
 const orderTokens = (o) => [o.token, o.quote ?? null].filter(Boolean);
 
 export function tokenUtxoView(rec, ctx, extra = {}, chain = null) {
   const tok = chain?.tokens.get(rec.token) ?? null;
-  // a stray of a token other than its order's own: FOREIGN (reads.rs TokenUtxoView `foreign`); `program` = the program its state was proven under
+  // a stray of a token other than its order's own: FOREIGN (reads.rs TokenUtxoView `foreign`);
+  // `program` = the program its state was proven under
   const owner = rec.role === 'stray' ? chain?.orders.get(rec.owner) : null;
   const foreign = !!owner && !orderTokens(owner).includes(rec.token);
   return {
@@ -179,7 +190,10 @@ export function tokenUtxoView(rec, ctx, extra = {}, chain = null) {
   };
 }
 
-/** `/v1/token-utxos?owner=&token=&spent=&limit=&cursor=` (api/rest.rs): at least one of owner / token, `spent=false` by default, keyset paged oldest first. */
+/**
+ * `/v1/token-utxos?owner=&token=&spent=&limit=&cursor=` (api/rest.rs): at least one of owner /
+ * token, `spent=false` by default, keyset paged oldest first.
+ */
 export function tokenUtxosPage(chain, q) {
   const ctx = ctxOf(chain);
   const owner = hashParam(q, 'owner');
@@ -216,7 +230,8 @@ export function tokenEventsView(chain, q) {
   return { items: chain.tokenEvents.filter((e) => token === null || e.token === token).slice(0, limit) };
 }
 
-// ------------------------------------------------------------------------------------------------ orders
+// ------------------------------------------------------------------------------------------------
+// orders
 
 function custodyView(chain, o, ctx) {
   if (isPairKind(o.kind)) {
@@ -238,7 +253,10 @@ const frac = (num, den) => {
   return { num: (num / g).toString(), den: (den / g).toString() };
 };
 
-/** The custodies of a pair order's current state in record order (`utxo` / `ok` with `withUtxos`); empty once closed. */
+/**
+ * The custodies of a pair order's current state in record order (`utxo` / `ok` with `withUtxos`);
+ * empty once closed.
+ */
 function pairCustodyParts(chain, o, ctx, withUtxos) {
   if (!o.current || !o.stateKnown) return [];
   const pt = pairTokensOf(o.state);
@@ -254,8 +272,9 @@ function pairCustodyParts(chain, o, ctx, withUtxos) {
 }
 
 /**
- * The `pair` object of a pair order's `OrderView` (docs/ops/executor.md 5.4, reads.rs `PairView`): both tokens, the side, the price in B base units
- * per whole A (a KobPair's price, a KobIfdPair's limit, a KobCondPair's take-profit / limit leg or null), its stop, the quote now, the custodies.
+ * The `pair` object of a pair order's `OrderView` (docs/ops/executor.md 5.4, reads.rs `PairView`):
+ * both tokens, the side, the price in B base units per whole A (a KobPair's price, a KobIfdPair's
+ * limit, a KobCondPair's take-profit / limit leg or null), its stop, the quote now, the custodies.
  */
 function pairView(chain, o, ctx, auction, withUtxos) {
   const any = o.state;
@@ -319,7 +338,8 @@ export function orderView(chain, o, ctx, detailed = false) {
     expiry_daa: expiry,
     active_from: Number(t.activeFrom),
     in_book: inBook,
-    // the rate a fill consumes the escrow at, sompi per whole token: a bid's pMax + tip, a buy-first entry's price + tip
+    // the rate a fill consumes the escrow at, sompi per whole token: a bid's pMax + tip, a
+    // buy-first entry's price + tip
     budget_rate: kind === 'KobBid' ? bidBudgetRate(any).toString() : kind === 'KobIfdBid' ? ifdBudgetRate(any).toString() : null,
     reserve: kind === 'KobBid' ? String(s.reserve) : null,
     initial_amount: o.initialAmount === null ? null : o.initialAmount.toString(),
@@ -335,7 +355,8 @@ export function orderView(chain, o, ctx, detailed = false) {
     current: o.current ? { txid: o.current.txid, index: o.current.index, value: o.current.value.toString() } : null,
     state_known: o.stateKnown,
     state: stateKnown ? any : null,
-    // the indexer's placement state of an order without a current one (the mock keeps the last state: same terms)
+    // the indexer's placement state of an order without a current one (the mock keeps the last
+    // state: same terms)
     placed_state: stateKnown ? undefined : any,
     current_daa: o.current ? o.currentDaa : null,
     deadline: o.deadline,
@@ -352,7 +373,8 @@ export function orderView(chain, o, ctx, detailed = false) {
     expired: expiry !== null && active(o) && ctx.nodeDaa !== null && ctx.nodeDaa >= expiry,
     possibly_frozen: !!o.possiblyFrozen,
   };
-  // a curve: its levels from the current state (kobd reads.rs `CurveView`); `price` / `quote` are the current level's
+  // a curve: its levels from the current state (kobd reads.rs `CurveView`); `price` / `quote` are
+  // the current level's
   if (curve) {
     const c = curveOf(stateKnown ? any : { ...any, state: { ...s, amountLeft: '0' } });
     view.curve = {
@@ -361,7 +383,8 @@ export function orderView(chain, o, ctx, detailed = false) {
     };
     view.price = view.quote = view.curve.price_now;
   }
-  // a delivering order's mode and, in mode 1, what its bought-custody holds (kobd reads.rs; a non-pair bid's custody is that view too)
+  // a delivering order's mode and, in mode 1, what its bought-custody holds (kobd reads.rs; a
+  // non-pair bid's custody is that view too)
   if (s.mode !== undefined) {
     const mode = Number(s.mode);
     view.delivery = mode === 1 ? 'order' : mode === 2 ? 'topup' : 'wallet';
@@ -380,7 +403,8 @@ export function orderView(chain, o, ctx, detailed = false) {
       if (!pair && o.side === 2 && want > 0n) view.custody = cv;
     }
   }
-  // a pair order: its pair, prices in B per whole A and custodies (utxo / ok on single lookups and a maker's list)
+  // a pair order: its pair, prices in B per whole A and custodies (utxo / ok on single lookups and
+  // a maker's list)
   if (pair) view.pair = pairView(chain, o, ctx, stateKnown ? auction : null, detailed || ctx.makerList === true);
   if (detailed) {
     view.children = [...o.children];
@@ -419,9 +443,13 @@ export function ordersPage(chain, q) {
   return { items: page.map((o) => orderView(chain, o, active(o) ? listCtx : ctx)), next_cursor: rows.length > limit && last ? `${last.genesis.seq}:${last.covenantId}` : null };
 }
 
-// ------------------------------------------------------------------------------------------------ book
+// ------------------------------------------------------------------------------------------------
+// book
 
-/** Ask-side liquidity needs exactly one live custody UTXO holding `amountLeft` base units (matcher.md 1.2); bids hold KAS. */
+/**
+ * Ask-side liquidity needs exactly one live custody UTXO holding `amountLeft` base units
+ * (matcher.md 1.2); bids hold KAS.
+ */
 function custodyOk(chain, o) {
   if (o.side === 2) return true;
   const live = chain.liveTokenUtxos(o.covenantId, 'custody');
@@ -447,7 +475,10 @@ function bookOrders(chain, token, side) {
     });
 }
 
-/** The book rows of a side: one per order, one per remaining level of a curve (`level`), by price per base unit, then age, then level. */
+/**
+ * The book rows of a side: one per order, one per remaining level of a curve (`level`), by price
+ * per base unit, then age, then level.
+ */
 function bookRows(chain, token, side) {
   const rows = bookOrders(chain, token, side).flatMap((o) => {
     const c = curveOf(o.state);
@@ -501,8 +532,8 @@ export function bookView(chain, tokenId, q) {
     }
     const levels = new Map();
     for (const { o, price, amount } of orders) {
-      // levels group by (price, scale): orders of another scale quote another whole token (kobd reads.rs `book_side_levels`); a curve adds each
-      // remaining level at its own price
+      // levels group by (price, scale): orders of another scale quote another whole token (kobd
+      // reads.rs `book_side_levels`); a curve adds each remaining level at its own price
       const t = { ...termsOf(o.state), price };
       const scale = t.scale > 0n ? t.scale : 1n;
       const key = `${t.price}:${scale}`;
@@ -512,7 +543,8 @@ export function bookView(chain, tokenId, q) {
       lv.amount_estimated = lv.amount_estimated || !o.amountExact || o.amountLeft === null;
       levels.set(key, lv);
     }
-    // ordered exactly by the price per base unit (asks ascending, bids descending), then by price, then by scale (same direction)
+    // ordered exactly by the price per base unit (asks ascending, bids descending), then by price,
+    // then by scale (same direction)
     const dir = n === 1 ? 1 : -1;
     const cmp = (a, b) => cmpPerBaseUnit(a.price, a.scale, b.price, b.scale) || (a.price < b.price ? -1 : a.price > b.price ? 1 : 0) || (a.scale < b.scale ? -1 : a.scale > b.scale ? 1 : 0);
     return [...levels.values()]
@@ -523,7 +555,8 @@ export function bookView(chain, tokenId, q) {
   return { token, aggregated: aggregate, node_daa: ctx.nodeDaa, asks: side(1), bids: side(2) };
 }
 
-// ------------------------------------------------------------------------------------------------ events / fills
+// ------------------------------------------------------------------------------------------------
+// events / fills
 
 const eventView = (e, ctx) => ({ ...e, confirmations: conf(ctx, e.daa), settled: settled(ctx, e.daa) });
 
