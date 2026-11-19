@@ -1,5 +1,8 @@
-// `soak.mjs balances`: KAS and token balances of every soak key (one JSON object on stdout; no secrets): the node's KAS total, the spendable
-// KAS the bots' wallets would spend, and per soak token the holdings the token tracker proves on the node (count, amount, KAS locked in the carriers).
+// `soak.mjs balances`: KAS and token balances of every soak key (one JSON object on stdout, no
+// secrets).
+// It reports the node's KAS total and the spendable KAS the bots' wallets would spend.
+// Per soak token it reports the holdings the token tracker proves on the node (count, amount, KAS
+// locked in the carriers).
 import type { Env } from '../env';
 import { Stats } from '../log';
 import { markets, tokenRef } from '../market';

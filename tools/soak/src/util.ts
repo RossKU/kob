@@ -23,7 +23,10 @@ export const onTick = (v: bigint, tick: bigint): bigint => {
 };
 export const bps = (v: bigint, b: number): bigint => (v * BigInt(Math.round(b * 100))) / 1_000_000n;
 
-/** whole-token decimal text ("0.0005") -> base units (exact; more fraction digits than `decimals` is an error) */
+/**
+ * Whole-token decimal text ("0.0005") to base units. It is exact, and more fraction digits than
+ * `decimals` is an error.
+ */
 export function unitsOf(text: string, decimals: number): bigint {
   const m = /^(\d+)(?:\.(\d+))?$/.exec(text.trim());
   if (!m) throw new Error(`not a decimal amount: ${text}`);
@@ -32,7 +35,10 @@ export function unitsOf(text: string, decimals: number): bigint {
   return BigInt(m[1]) * 10n ** BigInt(decimals) + BigInt(frac.padEnd(decimals, '0') || '0');
 }
 
-/** the base units of `usd` dollars of a token worth `tokenUsd` per whole token (rounded down, at least 1) */
+/**
+ * The base units of `usd` dollars of a token worth `tokenUsd` per whole token (rounded down, at
+ * least 1).
+ */
 export function usdToUnits(usd: number, tokenUsd: number, decimals: number): bigint {
   if (!(usd > 0) || !(tokenUsd > 0)) throw new Error('usdToUnits: positive amounts only');
   // 12 significant digits of the whole-token amount, then exact scaling (no float above 2^53)
@@ -45,7 +51,10 @@ export function usdToUnits(usd: number, tokenUsd: number, decimals: number): big
   return v < 1n ? 1n : v;
 }
 
-/** a uniformly random amount of base units in [lo, hi] (any amount: protocol v3 orders are not rounded to a step) */
+/**
+ * A uniformly random amount of base units in [lo, hi]. Any amount is allowed, because protocol v3
+ * orders are not rounded to a step.
+ */
 export function randUnits(lo: bigint, hi: bigint): bigint {
   if (hi <= lo) return lo;
   const span = hi - lo + 1n;

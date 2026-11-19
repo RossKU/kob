@@ -1,9 +1,12 @@
-// Samples the pair page's spread line (data-testid="pair-spread") of the soak's UI every N seconds with Playwright's Chromium from
-// web/node_modules, one JSON line per sample: the text and its class (crossed = a negative spread, spread = a
-// positive or zero one). Read-only.
+// Samples the pair page's spread line (data-testid="pair-spread") of the soak's UI every N seconds.
+// It uses Playwright's Chromium from web/node_modules and writes one JSON line per sample.
+// A sample holds the text and its class (crossed = a negative spread, spread = a positive or zero
+// one).
+// Read-only.
 //
-//   node scripts/pair-note-sample.mjs --out <file.jsonl> [--every 20] [--minutes 50] [--url http://127.0.0.1:8490] [--asset token2|token3]
-//   node scripts/pair-note-sample.mjs --summary <file.jsonl>      # crossed share, runs, longest runs
+//   node scripts/pair-note-sample.mjs --out <file.jsonl> [--every 20] [--minutes 50] \
+//        [--url http://127.0.0.1:8490] [--asset token2|token3]
+//   node scripts/pair-note-sample.mjs --summary <file.jsonl>   # crossed share, runs, longest runs
 import { createRequire } from 'node:module';
 import { appendFileSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

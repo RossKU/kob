@@ -1,4 +1,5 @@
-// A trader limit that is marketable when planned is a taker (IOC at its own price); a passive limit rests (src/bots/taker.ts).
+// A trader limit that is marketable when planned is a taker (IOC at its own price). A passive limit
+// rests (src/bots/taker.ts).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { crossesBest, takerIntent } from '../src/bots/taker.ts';

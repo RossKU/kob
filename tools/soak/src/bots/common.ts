@@ -1,4 +1,5 @@
-// Shared bot actions over the web app's planners: place any intent, cancel, amend (cancel-replace), cancel-all.
+// Shared bot actions over the web app's planners: place any intent, cancel, amend (cancel-replace),
+// cancel-all.
 import { planOrder, type Intent } from '@/kob/plan';
 import type { PairOrderPlan, TokenMarket } from '@/kob/plan-types';
 import { errors, type BookView } from '@/kob/plan-types';
@@ -25,13 +26,19 @@ export interface PlaceResult extends SubmitOutcome {
   /** covenant ids of the orders the transaction creates */
   created?: string[];
   planIssue?: string;
-  /** the parameters of that refusal (SELF_TRADE: `ownCovenantId`, the own resting order the plan would trade against) */
+  /**
+   * The parameters of that refusal (SELF_TRADE: `ownCovenantId`, the own resting order the plan
+   * would trade against).
+   */
   planParams?: Record<string, unknown>;
   /** a SELF_TRADE refusal: every own resting order the plan would trade against */
   selfTrade?: string[];
 }
 
-/** the result of a refused plan (counted per code; a SELF_TRADE names every own order it would trade against) */
+/**
+ * The result of a refused plan (counted per code). A SELF_TRADE names every own order it would
+ * trade against.
+ */
 function refusal(w: BotWallet, plan: Parameters<typeof errors>[0], tag: string, what: string): PlaceResult {
   const errs = errors(plan);
   const code = errs[0]?.code ?? 'unknown';
@@ -42,8 +49,11 @@ function refusal(w: BotWallet, plan: Parameters<typeof errors>[0], tag: string, 
 }
 
 /**
- * Plans `intent` against the live book / wallet and submits it; plan refusals are counted per code (never thrown). `o.taker`: a limit that is
- * marketable against the planner's own book is placed as an IOC at the same price instead of a resting / auctioning limit (taker.ts).
+ * Plans `intent` against the live book / wallet and submits it. Plan refusals are counted per code
+ * and never thrown.
+ * With `o.taker`, a limit that is marketable against the planner's own book is placed as an IOC at
+ * the same price
+ * instead of a resting / auctioning limit (taker.ts).
  */
 export function place(env: Env, w: BotWallet, intent: Intent, tag: string, o: { book?: BookView; mine?: OrderView[]; taker?: boolean } = {}, which?: Which): Promise<PlaceResult> {
   return w.exclusive(async (): Promise<PlaceResult> => {
@@ -76,8 +86,10 @@ export function marketOfView(env: Env, view: OrderView) {
 }
 
 /**
- * Plans a PAIR order through the web planner (`planOrder` with a PairPlanEnv: every order type of the KAS ticket on the pair `base`/`quote`,
- * prices B base units per whole A) and submits it. Refusals are counted like `place`.
+ * Plans a PAIR order through the web planner and submits it.
+ * `planOrder` takes a PairPlanEnv: every order type of the KAS ticket on the pair `base`/`quote`,
+ * with prices in B base units per whole A.
+ * Refusals are counted like `place`.
  */
 export function placePair(env: Env, w: BotWallet, intent: Intent, tag: string, base: TokenMarket, quote: TokenMarket, o: { taker?: boolean } = {}): Promise<PlaceResult & { pair?: PairOrderPlan['pair'] }> {
   return w.exclusive(async (): Promise<PlaceResult & { pair?: PairOrderPlan['pair'] }> => {
@@ -113,8 +125,10 @@ export function snapshot(view: OrderView): OrderSnapshot | null {
 }
 
 /**
- * The list endpoint (`/v1/orders`) has no custody / strays: spend an order only from its full, fresh view (`/v1/orders/{id}`). An order whose
- * listed UTXO this key's own pending transaction already spends (a cancel or amend the indexer has not caught up with) is gone for it.
+ * The list endpoint (`/v1/orders`) has no custody / strays, so spend an order only from its full,
+ * fresh view (`/v1/orders/{id}`).
+ * An order whose listed UTXO this key's own pending transaction already spends (a cancel or amend
+ * the indexer has not caught up with) is gone for it.
  */
 async function fresh(env: Env, w: BotWallet, view: OrderView): Promise<OrderView | null> {
   try {
@@ -140,7 +154,10 @@ export function cancel(env: Env, w: BotWallet, listed: OrderView, tag = 'cancel'
   });
 }
 
-/** amend a plain limit order to `price` (sompi per whole token; cancel + replacement in one transaction), optionally to `amount` base units */
+/**
+ * Amend a plain limit order to `price` (sompi per whole token; cancel + replacement in one
+ * transaction), optionally to `amount` base units.
+ */
 export function amend(env: Env, w: BotWallet, listed: OrderView, price: bigint, amount?: bigint): Promise<SubmitOutcome> {
   return w.exclusive(() => amendNow(env, w, listed, price, amount));
 }
@@ -195,15 +212,18 @@ async function cancelAllNow(env: Env, w: BotWallet, listed: OrderView[], tag: st
 }
 
 /**
- * The price of an order view in sompi per whole token: its current quote (an auction's price now) or its limit. The state price is per `scale`
- * base units; the soak's orders all have the token's standard scale 10^decimals (the indexer lists no other), so it is per whole token.
+ * The price of an order view in sompi per whole token: its current quote (an auction's price now)
+ * or its limit.
+ * The state price is per `scale` base units.
+ * The soak's orders all have the token's standard scale 10^decimals (the indexer lists no other),
+ * so it is per whole token.
  */
 export function priceOf(view: OrderView): bigint | null {
   const p = view.quote ?? view.price;
   return p == null ? null : BigInt(p);
 }
 
-// ------------------------------------------------------------------------------------------------ scenario actions (gap review 2026-10-13)
+// ------------------------------------------------------------------------ scenario actions
 
 /** "txid:index" of an order view's current UTXO ('' when it has none) */
 export const spendsOf = (v: OrderView): string => (v.current ? `${v.current.txid}:${v.current.index}` : '');
@@ -211,13 +231,19 @@ export const spendsOf = (v: OrderView): string => (v.current ? `${v.current.txid
 /** a proven order state as flat decimal strings (the checker's scenario records compare these) */
 export const flatState = (state: unknown): Record<string, string> => Object.fromEntries(Object.entries((state ?? {}) as Record<string, unknown>).map(([k, v]) => [k, String(v)]));
 
-/** what a cancel-all submitted: the orders of its successful transactions (with the outpoint each spent) and those transactions */
+/**
+ * What a cancel-all submitted: the orders of its successful transactions (with the outpoint each
+ * spent) and those transactions.
+ */
 export interface CancelAllOutcome {
   orders: { id: string; spends: string }[];
   txids: string[];
 }
 
-/** cancel every given order like `cancelAll`, and say which orders the submitted transactions cancel (scenario records) */
+/**
+ * Cancel every given order like `cancelAll`, and say which orders the submitted transactions cancel
+ * (scenario records).
+ */
 export function cancelAllDetailed(env: Env, w: BotWallet, listed: OrderView[], tag: string): Promise<CancelAllOutcome> {
   return w.exclusive(async () => {
     const views = (await Promise.all(listed.map((v) => fresh(env, w, v)))).filter((v): v is OrderView => !!v);
@@ -249,7 +275,10 @@ export function cancelAllDetailed(env: Env, w: BotWallet, listed: OrderView[], t
   });
 }
 
-/** what a replacement (renewal, pair amend) submitted: the replaced order, the replacement's id and terms */
+/**
+ * What a replacement (renewal, pair amend) submitted: the replaced order, the replacement's id and
+ * terms.
+ */
 export interface ReplaceOutcome extends SubmitOutcome {
   old?: { id: string; spends: string; expiryDaa: string; state: Record<string, string> };
   id?: string;
@@ -257,7 +286,10 @@ export interface ReplaceOutcome extends SubmitOutcome {
   expect?: Record<string, string>;
 }
 
-/** submits a planned cancel-replace and describes it (the replacement's id: the old one when amended in place, else the created covenant) */
+/**
+ * Submits a planned cancel-replace and describes it.
+ * The replacement's id is the old one when amended in place, else the created covenant.
+ */
 async function submitReplace(w: BotWallet, view: OrderView, snap: OrderSnapshot, plan: ReturnType<typeof planCancelReplace>, spec: ReplacementSpec, tag: string): Promise<ReplaceOutcome> {
   if (!plan.ok || !plan.built) {
     w.stats.inc(`plan_refused:${tag}:${errors(plan)[0]?.code ?? 'unknown'}`);
@@ -272,9 +304,11 @@ async function submitReplace(w: BotWallet, view: OrderView, snap: OrderSnapshot,
 }
 
 /**
- * GTC renewal through the web's renew path (My orders "Renew", `planAmendFor` with `renew`): the replacement spec from the CURRENT state with a
- * fresh 90-day expiry (amend.ts `buildReplacement`, kind `limit` for a plain ask / bid, `cond` for a stop / take-profit / OCO), then ONE atomic
- * cancel-replace (`planCancelReplace`, in place where the protocol allows).
+ * GTC renewal through the web's renew path (My orders "Renew", `planAmendFor` with `renew`).
+ * The replacement spec comes from the CURRENT state with a fresh 90-day expiry
+ * (amend.ts `buildReplacement`: kind `limit` for a plain ask / bid, `cond` for a stop / take-profit
+ * / OCO).
+ * Then ONE atomic cancel-replace follows (`planCancelReplace`, in place where the protocol allows).
  */
 export function renew(env: Env, w: BotWallet, listed: OrderView, kind: 'limit' | 'cond', tag = 'renew'): Promise<ReplaceOutcome> {
   return w.exclusive(async (): Promise<ReplaceOutcome> => {
@@ -294,9 +328,13 @@ export function renew(env: Env, w: BotWallet, listed: OrderView, kind: 'limit' |
 }
 
 /**
- * Pair amend through the pair ticket's replace path (My orders "Replace" of a resting pair limit, ReplaceDialog): the order back to its ticket
- * intent (`intentFromOrder`), the new price, re-planned against the pair environment with the order's own custody counted (`replaceEnv`), and the
- * planned order as the replacement of ONE atomic cancel-replace (`planCancelReplace` with the maker's B UTXOs beside A's, as `planReplaceFor`).
+ * Pair amend through the pair ticket's replace path (My orders "Replace" of a resting pair limit,
+ * ReplaceDialog).
+ * - The order goes back to its ticket intent (`intentFromOrder`) with the new price.
+ * - It is re-planned against the pair environment with the order's own custody counted
+ *   (`replaceEnv`).
+ * - The planned order becomes the replacement of ONE atomic cancel-replace
+ *  (`planCancelReplace` with the maker's B UTXOs beside A's, as `planReplaceFor`).
  */
 export function pairAmend(env: Env, w: BotWallet, listed: OrderView, base: TokenMarket, quote: TokenMarket, newPrice: (side: 'buy' | 'sell', price: bigint) => bigint, tag: string): Promise<ReplaceOutcome> {
   return w.exclusive(async (): Promise<ReplaceOutcome> => {
@@ -337,7 +375,10 @@ export function pairAmend(env: Env, w: BotWallet, listed: OrderView, base: Token
   });
 }
 
-/** what a token merge did: the inputs it merged, the links submitted and the output it ended with (null when nothing was submitted) */
+/**
+ * What a token merge did: the inputs it merged, the links submitted and the output it ended with
+ * (null when nothing was submitted).
+ */
 export interface MergeOutcome {
   inputs: TokenUtxo[];
   links: string[];
@@ -347,9 +388,12 @@ export interface MergeOutcome {
 }
 
 /**
- * "Merge tokens" through the web's merge planner (kob/merge.ts, My orders' merge flow): `planMerge` over the wallet's plain UTXOs of `m` (smallest
- * first; KOB's standard program: 3 -> 1, then 1 + 2 -> 1, ... up to 10 links), link 0 submitted as planned, every next link rebuilt once the previous
- * one's output is accepted (read from the NODE, as the app's chained Merge did before it became one transaction per click), with fresh KAS UTXOs. Only one link holds the wallet lock at a time.
+ * "Merge tokens" through the web's merge planner (kob/merge.ts, My orders' merge flow).
+ * `planMerge` runs over the wallet's plain UTXOs of `m`, smallest first.
+ * KOB's standard program merges 3 -> 1, then 1 + 2 -> 1, ... up to 10 links.
+ * Link 0 is submitted as planned, with fresh KAS UTXOs.
+ * Every next link is rebuilt once the previous one's output is accepted, read from the NODE.
+ * Only one link holds the wallet lock at a time.
  */
 export async function mergeTokens(env: Env, w: BotWallet, m: TokenMarket, tag = 'mergeTokens'): Promise<MergeOutcome> {
   const token: MergeToken = { covenantId: m.covenantId, program: m.program, templateHash: m.templateHash, extensionCommitment: m.family === 'kron' ? null : m.extensionCommitment, slots: { inputs: m.slots.inputs } };

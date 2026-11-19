@@ -1,5 +1,7 @@
-// serve-ui --public: the /indexer relay is read-only (GET/HEAD) except for exactly `POST /v1/logo-reports`, whose body is capped. The relay runs as a
-// real child process against a fake indexer, so what is checked is what the public site does.
+// serve-ui --public: the /indexer relay is read-only (GET/HEAD) except for exactly `POST
+// /v1/logo-reports`, whose body is capped.
+// The relay runs as a real child process against a fake indexer, so what is checked is what the
+// public site does.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -120,7 +122,8 @@ test('a body over the cap is refused with 413 and never reaches the indexer (dec
       res.resume();
       resolve(res.statusCode ?? 0);
     });
-    // the relay may close the connection while the body is still being sent: the status line is what counts
+    // The relay may close the connection while the body is still being sent: the status line is
+    // what counts.
     req.on('error', () => resolve(413));
     req.write(Buffer.alloc(1500, 0x61));
     req.end(Buffer.alloc(1500, 0x61));

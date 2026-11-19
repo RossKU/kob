@@ -1,8 +1,11 @@
-// Pure logic of the bots' token-UTXO consolidation (no I/O, so it is unit-tested): which UTXOs to merge, and how often.
+// Pure logic of the bots' token-UTXO consolidation (no I/O, so it is unit-tested): which UTXOs to
+// merge, and how often.
 //
-// Every fill, refund and fan-out leaves a new token UTXO that carries ~10 KAS; left alone a market maker holds hundreds (687 TUSD and 491
-// TETH after 1.5 h in the 2026-10-01 soak, ~15,000 KAS of carriers). The fan-out (`fanout.ts`) deliberately keeps `keep` UTXOs per token
-// (one token input per sell-side placement), so consolidation merges only the EXCESS, smallest first, and never below `keep`.
+// Every fill, refund and fan-out leaves a new token UTXO that carries ~10 KAS.
+// Left alone, a market maker holds hundreds of them.
+// The fan-out (`fanout.ts`) deliberately keeps `keep` UTXOs per token (one token input per
+// sell-side placement).
+// So consolidation merges only the EXCESS, smallest first, and never below `keep`.
 
 /** what the selection needs of a token UTXO (the web `TokenUtxo` satisfies it) */
 export interface MergeCandidate {
@@ -14,29 +17,43 @@ export interface MergeCandidate {
 export interface ConsolidateConfig {
   /** switch the whole step off */
   enabled: boolean;
-  /** merge only when a key holds MORE than `keep + slack` plain UTXOs of one token (keep = the token's fan-out target) */
+  /**
+   * Merge only when a key holds MORE than `keep + slack` plain UTXOs of one token (keep = the
+   * token's fan-out target).
+   */
   slack: number;
   /** at most this many merge transactions per `intervalSec`, per key and token */
   maxTxPerInterval: number;
   intervalSec: number;
   /** the traders (and the x402 payer's tokens, if ever wired) run the step too */
   traders: boolean;
-  /** plain KAS coins: a key holding more than this merges its smallest ones (`kasMergeSelection`; 0 = never) */
+  /**
+   * Plain KAS coins: a key holding more than this merges its smallest ones (`kasMergeSelection`, 0
+   * = never).
+   */
   kasAbove: number;
-  /** plain KAS coins per merge (the SDK generator splits a set above the mass limit into several transactions) */
+  /**
+   * Plain KAS coins per merge (the SDK generator splits a set above the mass limit into several
+   * transactions).
+   */
   kasInputs: number;
   /**
-   * The market maker keeps FEW LARGE token UTXOs (one ask level spends one UTXO and returns change; a sell whose inputs exceed the program's 3
-   * is refused as TOKEN_UTXOS_FRAGMENTED): it merges down to the fan-out target + `mmSlack` UTXOs (the 10-minute fan-out then never has pieces to re-split), with its own, higher rate cap.
+   * The market maker keeps FEW LARGE token UTXOs.
+   * One ask level spends one UTXO and returns change, and a sell whose inputs exceed the program's
+   * 3 is refused as TOKEN_UTXOS_FRAGMENTED.
+   * So it merges down to the fan-out target + `mmSlack` UTXOs, and the 10-minute fan-out never has
+   * pieces to re-split.
+   * It has its own, higher rate cap.
    */
   mmSlack: number;
   mmMaxTxPerInterval: number;
 }
 
 /**
- * Defaults. KOB's standard KCC-20 program takes 3 token inputs per transaction, so a merge takes 2 UTXOs off the count (8 with the 8 / 8
- * prototype the soak ran before): 8 merge transactions per minute per key and token keep a market maker's fragmentation (about 8 new token
- * UTXOs a minute at the 2026-10-01 rates) in check.
+ * Defaults. KOB's standard KCC-20 program takes 3 token inputs per transaction, so a merge takes 2
+ * UTXOs off the count.
+ * 8 merge transactions per minute per key and token keep a market maker's fragmentation (about 8
+ * new token UTXOs a minute) in check.
  */
 export const DEFAULT_CONSOLIDATE: ConsolidateConfig = { enabled: true, slack: 8, maxTxPerInterval: 8, intervalSec: 60, traders: true, kasAbove: 100, kasInputs: 80, mmSlack: 4, mmMaxTxPerInterval: 24 };
 
@@ -54,14 +71,19 @@ export function consolidateConfig(raw?: Partial<ConsolidateConfig>): Consolidate
   };
 }
 
-/** The market maker's view of the config: few large UTXOs (the fan-out target + `mmSlack`) and its own rate cap. */
+/**
+ * The market maker's view of the config: few large UTXOs (the fan-out target + `mmSlack`) and its
+ * own rate cap.
+ */
 export function mmConsolidateConfig(c: ConsolidateConfig): ConsolidateConfig {
   return { ...c, slack: c.mmSlack, maxTxPerInterval: c.mmMaxTxPerInterval };
 }
 
 /**
- * True when the `maxInputs` largest UTXOs together hold less than `need` base units although the key holds more in total: a sell of `need`
- * would be refused (TOKEN_UTXOS_FRAGMENTED) until the dust is merged. False when the key simply lacks the tokens (merging cannot help).
+ * True when the `maxInputs` largest UTXOs together hold less than `need` base units although the
+ * key holds more in total.
+ * A sell of `need` would be refused (TOKEN_UTXOS_FRAGMENTED) until the dust is merged.
+ * False when the key simply lacks the tokens (merging cannot help).
  */
 export function isFragmented(amounts: readonly (bigint | string)[], need: bigint, maxInputs: number): boolean {
   const xs = amounts.map((a) => BigInt(a)).sort((a, b) => (a > b ? -1 : a < b ? 1 : 0));
@@ -72,9 +94,11 @@ export function isFragmented(amounts: readonly (bigint | string)[], need: bigint
 }
 
 /**
- * KAS the merged output carries: the largest input carrier, at most `ceiling` (the order planner's default carrier), at least `floor` (the
- * program's minimum token output). The old fixed 10 KAS never fit: UTXOs the soak creates carry 2 KAS, so three of them (6 KAS) never covered
- * the output plus the fee and every merge was skipped.
+ * KAS the merged output carries: the largest input carrier, at most `ceiling` (the order planner's
+ * default carrier),
+ * at least `floor` (the program's minimum token output).
+ * A fixed 10 KAS would not fit: the UTXOs the soak creates carry 2 KAS, so three of them (6 KAS)
+ * never cover the output plus the fee.
  */
 export function mergedCarrier(inputs: readonly { amount: bigint | string }[], floor: bigint, ceiling: bigint): bigint {
   const largest = inputs.reduce((m, u) => (BigInt(u.amount) > m ? BigInt(u.amount) : m), 0n);
@@ -83,7 +107,10 @@ export function mergedCarrier(inputs: readonly { amount: bigint | string }[], fl
 }
 
 export interface SelectOptions {
-  /** the UTXO count to keep (the fan-out target): the visible count never drops below it, even before a merge output is indexed */
+  /**
+   * The UTXO count to keep (the fan-out target). The visible count never drops below it, even
+   * before a merge output is indexed.
+   */
   keep: number;
   /** a merge is planned only when the eligible count exceeds `keep + slack` */
   slack: number;
@@ -91,18 +118,26 @@ export interface SelectOptions {
   maxInputs: number;
   /** most batches (merge transactions) to plan */
   maxBatches: number;
-  /** outpoints (`txid:index`) in use by the bot (reserved by an unaccepted transaction): never selected */
+  /**
+   * Outpoints (`txid:index`) in use by the bot (reserved by an unaccepted transaction): never
+   * selected.
+   */
   reserved?: ReadonlySet<string>;
 }
 
 export const outpointKey = (u: { transactionId: string; index: number }): string => `${u.transactionId}:${u.index}`;
 
 /**
- * Batches of UTXOs to merge, one transaction each (one output per batch, so the program's output limit is never the constraint).
- * Rule: the eligible UTXOs (positive amount, not reserved) are sorted smallest first (ties by outpoint, so the plan is deterministic).
- * When their count n is at most `keep + slack` nothing is planned. Otherwise the smallest ones are taken in batches of up to `maxInputs`
- * while the inputs of all batches together stay within n - keep: the count after the merges (outputs included) is then at least `keep`,
- * and even while the merge outputs are not yet visible to the indexer it never drops below `keep`. Batches are disjoint.
+ * Batches of UTXOs to merge, one transaction each (one output per batch, so the program's output
+ * limit is never the constraint).
+ * Rule: the eligible UTXOs (positive amount, not reserved) are sorted smallest first (ties by
+ * outpoint, so the plan is deterministic).
+ * When their count n is at most `keep + slack`, nothing is planned.
+ * Otherwise the smallest ones are taken in batches of up to `maxInputs`, while the inputs of all
+ * batches together stay within n - keep.
+ * The count after the merges (outputs included) is then at least `keep`.
+ * Even while the merge outputs are not yet visible to the indexer, it never drops below `keep`.
+ * Batches are disjoint.
  */
 export function selectMerges<T extends MergeCandidate>(utxos: readonly T[], o: SelectOptions): T[][] {
   const plan = planOf(utxos, o);
@@ -122,12 +157,17 @@ export function selectMerges<T extends MergeCandidate>(utxos: readonly T[], o: S
 }
 
 /**
- * The merges of one pass as a CHAIN of transactions: the first merges up to `maxInputs` of the smallest eligible UTXOs into one output, and
- * every next one spends that (still unaccepted) output together with up to `maxInputs - 1` more, so a pass ends with ONE merged UTXO even on
- * a 3-input program (KOB's standard KCC-20 program: 3 -> 1, then 1 + 2 -> 1, ...). Each link is a transfer of at most `maxInputs` token inputs
- * into one output, valid on its own. Returns the FRESH UTXOs of each link (from the second link on the caller adds the previous link's
- * output). The rule of `selectMerges` holds: the threshold, smallest first, and the fresh inputs of all links within n - keep, so the
- * visible count never drops below `keep` (the chain's one output only adds to it).
+ * The merges of one pass as a CHAIN of transactions.
+ * The first merges up to `maxInputs` of the smallest eligible UTXOs into one output.
+ * Every next one spends that (still unaccepted) output together with up to `maxInputs - 1` more.
+ * So a pass ends with ONE merged UTXO even on a 3-input program (KOB's standard KCC-20 program: 3
+ * -> 1, then 1 + 2 -> 1, ...).
+ * Each link is a transfer of at most `maxInputs` token inputs into one output, valid on its own.
+ * Returns the FRESH UTXOs of each link. From the second link on, the caller adds the previous
+ * link's output.
+ * The rule of `selectMerges` holds: the threshold, smallest first, and the fresh inputs of all
+ * links within n - keep.
+ * So the visible count never drops below `keep` (the chain's one output only adds to it).
  */
 export function selectMergeChain<T extends MergeCandidate>(utxos: readonly T[], o: SelectOptions): T[][] {
   const plan = planOf(utxos, o);
@@ -147,7 +187,10 @@ export function selectMergeChain<T extends MergeCandidate>(utxos: readonly T[], 
   return links;
 }
 
-/** The eligible UTXOs (positive amount, not reserved) sorted smallest first, ties by outpoint; null when nothing is to be merged. */
+/**
+ * The eligible UTXOs (positive amount, not reserved) sorted smallest first, ties by outpoint. null
+ * when nothing is to be merged.
+ */
 function planOf<T extends MergeCandidate>(utxos: readonly T[], o: SelectOptions): { sorted: T[]; n: number; keep: number; maxIn: number } | null {
   const reserved = o.reserved;
   const eligible = utxos.filter((u) => BigInt(u.state.amount) > 0n && !(reserved?.has(outpointKey(u)) ?? false));
@@ -194,11 +237,14 @@ export class RateLimiter {
 }
 
 /**
- * The fan-out (`fanout.ts`) as a CHAIN of transfers within the program's token outputs: each transaction splits the UTXO it spends into
- * up to `maxOutputs - 1` pieces of `each` base units plus the token change, and the next one spends that change (not yet accepted).
- * Returns the pieces per transaction: together at most `need` (the UTXOs the key lacks) and what `amount` covers, in at most `maxTx`
- * transactions. Pieces that take the whole remainder (no change) end the chain. With KOB's standard program (3 token outputs) that is 2
- * pieces per transaction; the 8 / 8 prototype took 7 in one.
+ * The fan-out (`fanout.ts`) as a CHAIN of transfers within the program's token outputs.
+ * Each transaction splits the UTXO it spends into up to `maxOutputs - 1` pieces of `each` base
+ * units plus the token change.
+ * The next one spends that change (not yet accepted).
+ * Returns the pieces per transaction: together at most `need` (the UTXOs the key lacks) and what
+ * `amount` covers, in at most `maxTx` transactions.
+ * Pieces that take the whole remainder (no change) end the chain.
+ * With KOB's standard program (3 token outputs) that is 2 pieces per transaction.
  */
 export function fanoutPlan(o: { amount: bigint; each: bigint; need: number; maxOutputs: number; maxTx: number }): number[] {
   const out: number[] = [];
@@ -217,10 +263,13 @@ export function fanoutPlan(o: { amount: bigint; each: bigint; need: number; maxO
 }
 
 /**
- * The plain KAS coins of a bot key to merge into one: none while it holds at most `above`; else its `maxInputs` SMALLEST unreserved coins
- * (the payouts of fills, refunds and cancels, a few KAS each: the 10-11 soak had 1,227 on the market maker and 8,771 on one trader). Left
- * unmerged, a bid's funding needs more than the 50 inputs a plan may take (FUNDING_FRAGMENTED: the market maker's top 50 coins held 865 of
- * its 2,476 KAS) while the balance stays above the bank's top-up threshold, and every plan reads thousands of UTXOs.
+ * The plain KAS coins of a bot key to merge into one: none while it holds at most `above`, else its
+ * `maxInputs` SMALLEST unreserved coins.
+ * These coins are the payouts of fills, refunds and cancels, a few KAS each.
+ * Left unmerged, a bid's funding needs more than the 50 inputs a plan may take
+ * (FUNDING_FRAGMENTED),
+ * while the balance stays above the bank's top-up threshold, and every plan reads thousands of
+ * UTXOs.
  */
 export function kasMergeSelection<T extends { transactionId: string; index: number; amount: bigint | string }>(
   coins: readonly T[],

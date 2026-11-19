@@ -1,4 +1,5 @@
-// Restart causes of the supervisor's children (scripts/restarts.mjs): requested / held, start failures of a deploy step, crashes.
+// Restart causes of the supervisor's children (scripts/restarts.mjs): requested / held, start
+// failures of a deploy step, crashes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyExits } from '../scripts/restarts.mjs';
@@ -10,7 +11,7 @@ test('only the latest supervisor run counts; an exit right after a restart reque
     L('10:00:00.000', 'supervisor up'),
     L('10:01:00.000', 'exited', { name: 'bots', upSec: 60 }),
     L('11:00:00.000', 'supervisor up'),
-    // the 10-10 redeploy: bundle renamed, then the child crash-looped at once
+    // A redeploy: bundle renamed, then the child crash-looped at once.
     L('13:37:08.803', 'restart requested', { name: 'bots' }),
     L('13:37:08.959', 'exited', { name: 'bots', upSec: 311 }),
     L('13:37:23.055', 'exited', { name: 'bots', upSec: 0 }),

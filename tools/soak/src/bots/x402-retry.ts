@@ -1,19 +1,30 @@
-// The x402 payer's turns and the merchant's injected faults that drive the SDK's retry paths (docs/spec/x402-retry.md). Pure (no `@/` imports):
-// unit-tested with plain `node --test`.
+// The x402 payer's turns and the merchant's injected faults that drive the SDK's retry paths
+// (docs/spec/x402-retry.md).
+// Pure (no `@/` imports): unit-tested with plain `node --test`.
 //
-//   /retry/drop      0.5 KAS (native): the merchant DROPS the first paid request of each payment before the paywall sees it (the connection is
-//                    closed): the payer has no answer, RE-SENDS the same signed artifact, and the paywall settles it then
-//   /retry/lost      0.25 TUSD (KCC-20 exact): the paywall settles the first paid request, then the merchant LOSES the answer (500): the payer
-//                    RE-SENDS the same artifact and the paywall answers it from memory (`replayed`), the payment is not settled twice
-//   /retry/conflict  0.5 KAS paid with TUSD (swap): right after the payer's swap quote names a market-maker bid, the market maker amends that bid
-//                    (cancel-replace in place, the web's amend): the facilitator's broadcast meets the conflict (`order_conflict`), the payer
-//                    REBUILDS with a fresh quote under a new payment id, spending the first attempt's anchor, so at most one attempt is accepted
+//   /retry/drop      0.5 KAS (native): the merchant DROPS the first paid request of each payment
+//                    before the paywall sees it (connection closed). The payer has no answer,
+//                    RE-SENDS the same signed artifact, and the paywall settles it then.
+//   /retry/lost      0.25 TUSD (KCC-20 exact): the paywall settles the first paid request, then the
+//                    merchant LOSES the answer (500). The payer RE-SENDS the same artifact and the
+//                    paywall answers it from memory (`replayed`). The payment is not settled twice.
+//   /retry/conflict  0.5 KAS paid with TUSD (swap): right after the payer's swap quote names a
+//                    market-maker bid, the market maker amends that bid (cancel-replace in place,
+//                    the web's amend). The facilitator's broadcast meets the conflict
+//                    (`order_conflict`). The payer REBUILDS with a fresh quote under a new payment
+//                    id, spending the first attempt's anchor, so at most one attempt is accepted.
 
-/** The payer's turn kinds: the three paid resources, the invoice paid by an intent, and the three retry scenarios. */
+/**
+ * The payer's turn kinds: the three paid resources, the invoice paid by an intent, and the three
+ * retry scenarios.
+ */
 export const X402_KINDS = ['/native', '/token', '/swap', 'invoice', '/retry/drop', '/retry/lost', '/retry/conflict'] as const;
 export type X402Kind = (typeof X402_KINDS)[number];
 
-/** Default weights of the payer's turns: the plain payments as before (in turn: equal weights), a retry scenario every ~5 turns. */
+/**
+ * Default weights of the payer's turns: the plain payments have equal weights, and a retry scenario
+ * comes every ~5 turns.
+ */
 export const DEFAULT_X402_WEIGHTS: Readonly<Record<X402Kind, number>> = {
   '/native': 3,
   '/token': 3,
@@ -24,7 +35,10 @@ export const DEFAULT_X402_WEIGHTS: Readonly<Record<X402Kind, number>> = {
   '/retry/conflict': 1,
 };
 
-/** The weights of the payer's turns (config `x402.weights` over the defaults); `invoice` only when invoice intents are enabled. Unknown kinds are dropped. */
+/**
+ * The weights of the payer's turns (config `x402.weights` over the defaults). `invoice` is used
+ * only when invoice intents are enabled. Unknown kinds are dropped.
+ */
 export function x402Weights(o: { weights?: Record<string, number>; invoices: boolean }): Record<string, number> {
   const out: Record<string, number> = {};
   for (const k of X402_KINDS) {
@@ -42,7 +56,10 @@ export const RETRY_BASE: Readonly<Record<string, '/native' | '/token' | '/swap'>
   '/retry/conflict': '/swap',
 };
 
-/** The fault the merchant injects on a path: `drop` before the paywall, `lose` the answer after it settled. */
+/**
+ * The fault the merchant injects on a path: `drop` before the paywall, `lose` the answer after it
+ * settled.
+ */
 export const RETRY_FAULT: Readonly<Record<string, 'drop' | 'lose'>> = {
   '/retry/drop': 'drop',
   '/retry/lost': 'lose',
@@ -51,9 +68,12 @@ export const RETRY_FAULT: Readonly<Record<string, 'drop' | 'lose'>> = {
 export type Fault = 'none' | 'drop' | 'lose';
 
 /**
- * Decides the merchant's fault per paid request: the FIRST time a payment signature (the `PAYMENT-SIGNATURE` header: one signed artifact) is seen
- * on a fault path, its fault; every later send of the same artifact goes through. Unpaid requests (no header) and other paths: none. Remembers
- * at most `max` signatures (oldest forgotten first).
+ * Decides the merchant's fault per paid request.
+ * The FIRST time a payment signature (the `PAYMENT-SIGNATURE` header: one signed artifact) is seen
+ * on a fault path, it gets that path's fault.
+ * Every later send of the same artifact goes through.
+ * Unpaid requests (no header) and other paths get none.
+ * It remembers at most `max` signatures (oldest forgotten first).
  */
 export class FaultInjector {
   private readonly seen = new Set<string>();
@@ -75,8 +95,10 @@ export class FaultInjector {
 }
 
 /**
- * The race of `/retry/conflict`: armed before the payment, consumed by the FIRST swap quote (which names the bid to amend away); the outpoints
- * it raced are left out of every later quote (the rebuild must not quote the bid it lost).
+ * The race of `/retry/conflict`: armed before the payment, consumed by the FIRST swap quote (which
+ * names the bid to amend away).
+ * The outpoints it raced are left out of every later quote, so the rebuild does not quote the bid
+ * it lost.
  */
 export class ConflictRace {
   private armed = false;

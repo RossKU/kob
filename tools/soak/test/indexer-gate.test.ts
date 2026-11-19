@@ -1,12 +1,14 @@
-// The indexer gate: the pure decision (health -> open / closed, transitions) and the gate object with an injected clock and health
-// function. The submit choke point itself (BotWallet.submit) only calls `gateRefusal`, which is tested here with a fake gate.
+// The indexer gate: the pure decision (health -> open / closed, transitions) and the gate object
+// with an injected clock and health function.
+// The submit choke point itself (BotWallet.submit) only calls `gateRefusal`, which is tested here
+// with a fake gate.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { advance, gateHealth, gateRefusal, healthFromMetrics, IndexerGate, judgeHealth, type GateState, type HealthLike } from '../src/indexer-gate.ts';
 
 const following: HealthLike = { state: 'following', caught_up: true, lag_daa: 3, last_error: null };
 
-// ------------------------------------------------------------------------------------------------ pure decision
+// ---------------------------------------- pure decision
 
 test('open only when caught_up is true', () => {
   assert.equal(judgeHealth(following).open, true);
@@ -101,7 +103,7 @@ test('starting while the indexer lags is a pause right away', () => {
   assert.deepEqual(r.next, { open: false, since: 7 });
 });
 
-// ------------------------------------------------------------------------------------------------ the gate object
+// ---------------------------------------- the gate object
 
 interface Rig {
   gate: IndexerGate;
@@ -232,7 +234,7 @@ test('waitOpen sleeps and re-checks until the indexer follows, and gives up when
   assert.equal(done, false);
 });
 
-// ------------------------------------------------------------------------------------------------ the metrics source
+// ---------------------------------------- the metrics source
 
 const prom = (caught: number, within: number, lag = 7) =>
   [

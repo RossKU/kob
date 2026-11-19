@@ -1,6 +1,7 @@
-// Keeps a bot's tokens spread over several UTXOs (one token input per placement; a single UTXO would serialise every sell-side
-// placement behind the acceptance of the previous one). The transfer also moves genesis outputs, which the indexer never lists, into
-// indexed holdings.
+// Keeps a bot's tokens spread over several UTXOs.
+// A token input is needed per placement, so a single UTXO would serialise every sell-side placement
+// behind the acceptance of the previous one.
+// The transfer also moves genesis outputs, which the indexer never lists, into indexed holdings.
 import { slotOfToken, type Env } from '../env';
 import { errText } from '../log';
 import type { TokenMarket } from '@/kob/plan-types';
@@ -16,7 +17,10 @@ const CARRIER = 10n * KAS;
 /** the fan-out of an asset token without a `fanout` config: outputs and whole tokens per output */
 export const DEFAULT_ASSET_FANOUT: { mm: [number, string]; traders: [number, string] } = { mm: [8, '0.3'], traders: [4, '0.06'] };
 
-/** the fan-out target (token UTXOs kept per holder) of a role on a market: what token consolidation must never merge below */
+/**
+ * The fan-out target (token UTXOs kept per holder) of a role on a market: what token consolidation
+ * must never merge below.
+ */
 export function fanoutTarget(env: Env, role: 'mm' | 'trader', m: TokenMarket): number {
   const slot = slotOfToken(env.state, m.covenantId);
   if (!slot || slot === 'token') return role === 'mm' ? 8 : 4;
@@ -25,12 +29,15 @@ export function fanoutTarget(env: Env, role: 'mm' | 'trader', m: TokenMarket): n
 }
 
 /**
- * Splits the largest token UTXO of `w` into outputs of `each` base units until it holds `want` token UTXOs: a chain of transfers within
- * the program's token outputs (`fanoutPlan`; 2 pieces + the token change per transaction with KOB's standard 3 / 3 program), each next
- * transfer spending the previous one's token change.
+ * Splits the largest token UTXO of `w` into outputs of `each` base units until it holds `want`
+ * token UTXOs.
+ * It is a chain of transfers within the program's token outputs (`fanoutPlan`).
+ * Each transaction makes 2 pieces + the token change with KOB's standard 3 / 3 program.
+ * Each next transfer spends the previous one's token change.
  */
 export function fanOut(env: Env, w: BotWallet, want: number, each: bigint, which?: Which): Promise<boolean> {
-  // one plan-and-submit section of the key at a time: the chain of transfers runs alone over the key's coins
+  // One plan-and-submit section of the key at a time: the chain of transfers runs alone over the
+  // key's coins.
   return w.exclusive(() => fanOutNow(env, w, want, each, which));
 }
 

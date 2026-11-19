@@ -1,5 +1,6 @@
-// The payer's spend authorisation covers every resource of the soak's paywall (the x402 SDK refuses an offer whose merchant asset has
-// no `maxAmount` ceiling: `spend_not_authorized`, seen on the 2026-10-01 redeploy).
+// The payer's spend authorisation covers every resource of the soak's paywall.
+// The x402 SDK refuses an offer whose merchant asset has no `maxAmount` ceiling
+// (`spend_not_authorized`).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { payerMaxAmount, payerMaxPayAmount, soakPrices, TOKEN_CARRIER_SOMPI } from '../src/bots/x402-caps.ts';
@@ -20,8 +21,9 @@ test('a swap may sell at least one whole token', () => {
   assert.ok(BigInt(payerMaxPayAmount(m)) >= 100_000_000n);
 });
 
-// The SDK holds a payment's whole KAS cost to the KAS ceiling (8e927d4): a token payment's carrier and fee, a native payment's price
-// and fee. Under the former 1 KAS ceiling every /token payment (1 KAS carrier + fee) was refused after the 2026-10-08 redeploy.
+// The SDK holds a payment's whole KAS cost to the KAS ceiling: a token payment's carrier and fee, a
+// native payment's price and fee.
+// A 1 KAS ceiling would refuse every /token payment (1 KAS carrier + fee).
 test('the KAS ceiling covers a token payment carrier and a native price, each with a fee at the cap', () => {
   for (const fee of [20_000_000n, 100_000_000n]) {
     const kas = BigInt(payerMaxAmount(m, fee).KAS);

@@ -1,5 +1,8 @@
-// The soak's x402 price list and the payer's spend authorisation, kept together (pure, unit-tested): the SDK pays an offer only when
-// the payer's capabilities carry an explicit ceiling (`maxAmount`) for the offer's merchant asset (and a `maxPay` bound, by pay asset, for a swap).
+// The soak's x402 price list and the payer's spend authorisation, kept together (pure,
+// unit-tested).
+// The SDK pays an offer only when the payer's capabilities carry an explicit ceiling (`maxAmount`)
+// for the offer's merchant asset.
+// A swap also needs a `maxPay` bound, by pay asset.
 const KAS = 100_000_000n;
 
 export interface SoakTokenFacts {
@@ -10,7 +13,10 @@ export interface SoakTokenFacts {
 /** base units of one whole token */
 const whole = (m: SoakTokenFacts): bigint => 10n ** BigInt(m.decimals);
 
-/** merchant asset and amount of each paid resource (`KAS` in sompi, the token in base units: a quarter of a whole token) */
+/**
+ * Merchant asset and amount of each paid resource (`KAS` in sompi, the token in base units: a
+ * quarter of a whole token).
+ */
 export function soakPrices(m: SoakTokenFacts): Record<'/native' | '/token' | '/swap', { kind: 'native' | 'kcc20' | 'swap'; asset: string; amount: bigint }> {
   return {
     '/native': { kind: 'native', asset: 'KAS', amount: KAS / 2n },
@@ -19,14 +25,19 @@ export function soakPrices(m: SoakTokenFacts): Record<'/native' | '/token' | '/s
   };
 }
 
-/** the KAS carrier a token payment delivers with the tokens (the paywall's default for a kcc20 offer) */
+/**
+ * The KAS carrier a token payment delivers with the tokens (the paywall's default for a kcc20
+ * offer).
+ */
 export const TOKEN_CARRIER_SOMPI = KAS;
 
 /**
- * per merchant asset spend ceilings of the payer: 1 whole token (four times the token price), and a KAS ceiling that covers the
- * dearest KAS cost of one payment. The SDK holds everything a payment takes in KAS to the KAS ceiling: the price of a native
- * payment, and the carrier plus the network fee of a token payment (a token payment with a 1 KAS carrier is refused under a
- * 1 KAS ceiling: `spend_not_authorized`, seen on the 2026-10-08 redeploy). `maxFeeSompi` is the payer's fee cap.
+ * Per merchant asset spend ceilings of the payer: 1 whole token (four times the token price), and a
+ * KAS ceiling that covers the dearest KAS cost of one payment.
+ * The SDK holds everything a payment takes in KAS to the KAS ceiling.
+ * That is the price of a native payment, and the carrier plus the network fee of a token payment.
+ * A token payment with a 1 KAS carrier is refused under a 1 KAS ceiling (`spend_not_authorized`).
+ * `maxFeeSompi` is the payer's fee cap.
  */
 export function payerMaxAmount(m: SoakTokenFacts, maxFeeSompi: bigint): Record<string, string> {
   const native = soakPrices(m)['/native'].amount + maxFeeSompi;
@@ -35,7 +46,10 @@ export function payerMaxAmount(m: SoakTokenFacts, maxFeeSompi: bigint): Record<s
   return { KAS: kas.toString(), [m.covenantId]: whole(m).toString() };
 }
 
-/** the swap's pay-side ceiling (token base units the payer may sell into bids for one payment): 5 whole tokens */
+/**
+ * The swap's pay-side ceiling (token base units the payer may sell into bids for one payment): 5
+ * whole tokens.
+ */
 export function payerMaxPayAmount(m: SoakTokenFacts): string {
   return (whole(m) * 5n).toString();
 }

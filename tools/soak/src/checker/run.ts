@@ -1,33 +1,63 @@
-// The soak checker: every `checker.intervalSec` it reads the indexer (exec-a, the bots' indexer), the second indexer (exec-b), the node
-// and the files the bots / executors write, checks the protocol invariants incrementally (cursors in run/state/checker.json) and appends
-// each violation ONCE to run/incidents.jsonl (logged at `error`). The pure rules are in rules.ts (formulas documented there).
+// The soak checker.
+// Every `checker.intervalSec` it reads the indexer (exec-a, the bots' indexer), the second indexer
+// (exec-b), the node and the files the bots and executors write.
+// It checks the protocol invariants incrementally (cursors in run/state/checker.json) and appends
+// each violation ONCE to run/incidents.jsonl (logged at `error`).
+// The pure rules are in rules.ts, where the formulas are documented.
 //
-//  1 custody     (also the amount accounting: filled + left == initial, base units) every live order's current outpoint is in the NODE's UTXO set at P2SH(its proven state) with its covenant id; every
-//                live ask-side order with an amount left has exactly one live custody token UTXO of amountLeft base units (indexer), which is in
-//                the node's UTXO set at the token program's P2SH of its state. Orders touched in the last 300 DAA are skipped; a problem
-//                must persist over two rounds (>= 45 s) with the same outpoints (indexer / node timing is never reported).
-//  2 stray       a stray that disappears from /v1/strays must have been spent by a `cancel` event of its order.
-//  3 all-in      every fill (paged from /v1/fills): quote within the order's worst bound, maker payout >= the all-in minimum
-//                (asks), sell-first entry exits funded with the proceeds.
-//  4 ioc-fok     no IOC / FOK live 1200 DAA past its kill time (by the indexer's own cursor); FOK never partial.
-//  5 trigger     every arm / trail event backed by a fill (n > 0) in the SAME transaction of a plain resting KobAsk / KobBid of the same
-//                token and scale (touch trigger): right side and price vs the stop / trail step, amount (base units) >= minTouch,
-//                slope 0, exposed >= minRestDaa DAA before the tx (warn when the exposure cannot be read), tx DAA >= activeFrom.
-//  6 repeat      entry amount + booked exit amounts <= N (base units); every rearm pairs with a merged take-profit fill of its exit; cycle profit.
-//  7 x402        payer's 200s vs the facilitator ledger (settled once, no double settlement).
-//  8 fee         txs.jsonl: fee == feeRate x max(compute, transientNormalized) in relay mode, the recorded feeRate within [100, config fees.maxRate].
-//  9 agree       exec-a and exec-b list the same orders and fills up to min(cursors) - 200 DAA, and agree on sampled orders.
-// 10 health      follower state / lag / progress of both indexers; node sync, book staleness, step age of both executors.
-// 11 pair        every pair order fill (KobPair, KobCondPair, KobIfdPair) carries NO price (founder rule: pair fills are volume only) and
-//                honours the order's guarantee at its quote: an ask receives >= ceil(n x q / scale(A)) of B, a bid pays <= floor(...);
-//                every pair arm / trail names evidence of one of the two modes (two KAS-book fills, or a resting KobPair filled).
-// 12 supply      per soak token: live token UTXOs (indexer B while it follows, else A, + holdings it never saw, on the node) add up to the supply.
-// 13 scenarios   the bots' scenario records (run/state/scenarios.jsonl, scenario-rules.ts): a limit ladder's rungs are independent orders of
-//                one size (`ladder`), cancelling one rung touches no other; a GTC renewal keeps its terms with a later expiry and a pair
-//                amend keeps pair, side and size (`replace`); a cancel-all ends every order (`cancel-all`); a token merge ends in one
-//                output of the inputs' total (`merge`); x402 retries: at most one accepted attempt per payment, a lost answer replayed (`x402`).
-// Every soak token is checked (TUSD and the asset tokens); fills are read across tokens, so a transaction filling several books and
-// pair orders is counted once with every book it touched.
+// Invariants:
+// - 1 custody (also the amount accounting: filled + left == initial, base units). Every live
+//   order's current outpoint is in the NODE's UTXO set at P2SH(its proven state) with its covenant
+//   id.
+//   Every live ask-side order with an amount left has exactly one live custody token UTXO of
+//   amountLeft base units (indexer), which is in the node's UTXO set at the token program's P2SH of
+//   its state.
+//   Orders touched in the last 300 DAA are skipped. A problem must persist over two rounds (>= 45
+//   s) with the same outpoints, so indexer / node timing is never reported.
+// - 2 stray. A stray that disappears from /v1/strays must have been spent by a `cancel` event of
+//   its order.
+// - 3 all-in. Every fill (paged from /v1/fills) has its quote within the order's worst bound and,
+//   for asks, a maker payout >= the all-in minimum. Sell-first entry exits are funded with the
+//   proceeds.
+// - 4 ioc-fok. No IOC / FOK is live 1200 DAA past its kill time (by the indexer's own cursor). A
+//   FOK is never partial.
+// - 5 trigger. Every arm / trail event is backed by a fill (n > 0) in the SAME transaction of a
+//   plain resting KobAsk / KobBid of the same token and scale (touch trigger).
+//   The evidence has the right side and price against the stop / trail step, an amount (base units)
+//   >= minTouch and slope 0.
+//   It was exposed >= minRestDaa DAA before the tx (warn when the exposure cannot be read), and the
+//   tx DAA is >= activeFrom.
+// - 6 repeat. Entry amount + booked exit amounts <= N (base units). Every rearm pairs with a merged
+//   take-profit fill of its exit. The cycle profit is checked.
+// - 7 x402. The payer's 200s match the facilitator ledger (settled once, no double settlement).
+// - 8 fee. In txs.jsonl, fee == feeRate x max(compute, transientNormalized) in relay mode, and the
+//   recorded feeRate is within [100, config fees.maxRate].
+// - 9 agree. exec-a and exec-b list the same orders and fills up to min(cursors) - 200 DAA, and
+//   agree on sampled orders.
+// - 10 health. Follower state, lag and progress of both indexers, node sync, book staleness and
+//   step age of both executors.
+// - 11 pair. Every pair order fill (KobPair, KobCondPair, KobIfdPair) carries NO price, because
+//   pair fills are volume only.
+//   It honours the order's guarantee at its quote: an ask receives >= ceil(n x q / scale(A)) of B
+//   and a bid pays <= floor(...).
+//   Every pair arm / trail names evidence of one of the two modes (two KAS-book fills, or a resting
+//   KobPair filled).
+// - 12 supply. Per soak token, the live token UTXOs add up to the supply. They are the indexer's (B
+//   while it follows, else A), plus the holdings it never saw, read on the node.
+// - 13 scenarios. The bots' scenario records (run/state/scenarios.jsonl, scenario-rules.ts) are
+//   checked:
+//   - A limit ladder's rungs are independent orders of one size, and cancelling one rung touches no
+//   other (`ladder`).
+//   - A GTC renewal keeps its terms with a later expiry, and a pair amend keeps pair, side and size
+//   (`replace`).
+//   - A cancel-all ends every order (`cancel-all`).
+//   - A token merge ends in one output of the inputs' total (`merge`).
+//   - x402 retries: at most one accepted attempt per payment, and a lost answer is replayed
+//   (`x402`).
+//
+// Every soak token is checked (TUSD and the asset tokens).
+// Fills are read across tokens, so a transaction filling several books and pair orders is counted
+// once with every book it touched.
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { HttpIndexer } from '@/data/indexer';
@@ -92,7 +122,9 @@ import { INV, type EventLike, type HealthLike, type OrderLike, type Violation } 
 
 const log = logger('checker');
 
-/** orders touched this recently (DAA, by the indexer's cursor) are not checked against the node yet */
+/**
+ * Orders touched this recently (DAA, by the indexer's cursor) are not checked against the node yet.
+ */
 const TOUCH_GRACE_DAA = 300;
 const KILL_GRACE_DAA = 1200n;
 const REPORT_EVERY_MS = 5 * 60_000;
@@ -113,8 +145,10 @@ interface Ctx {
   /** custody lookups by order id, valid while the order's last_daa is unchanged */
   custodyCache: Map<string, { lastDaa: number; items: TokenUtxo[] }>;
   /**
-   * indexer A's cursor DAA since which executor A's keepers could act without a break (null while they cannot: see `keepersCanAct`):
-   * the IOC / FOK deadline starts no earlier. Sampled every round and every `GATE_MS` between rounds (a minute sample missed lag episodes)
+   * Indexer A's cursor DAA since which executor A's keepers could act without a break.
+   * It is null while they cannot (see `keepersCanAct`). The IOC / FOK deadline starts no earlier.
+   * It is sampled every round and every `GATE_MS` between rounds, so lag episodes within a round
+   * are seen.
    */
   followingSince: bigint | null;
   /** the fast sweep's own state (see `sweepTerms`) */
@@ -122,11 +156,15 @@ interface Ctx {
   /** indexer A's cursor DAA at the last round (0 before the first) */
   cursor: number;
   /**
-   * memos of ended orders whose memo was pruned, read again by `memoFor` this round: kept out of `st.orders` (the order is counted in
-   * `st.prunedOrders` already), dropped at the start of the next round
+   * Memos of ended orders whose memo was pruned, read again by `memoFor` this round.
+   * They are kept out of `st.orders`, because the order is counted in `st.prunedOrders` already,
+   * and dropped at the start of the next round.
    */
   lookups: Map<string, OrderMemo>;
-  /** exits of a repeat entry read as ended and pruned (`repeatStep`): not read again; bounded, cleared when full */
+  /**
+   * Exits of a repeat entry that read as ended and were pruned (`repeatStep`). They are not read
+   * again. The set is bounded and cleared when full.
+   */
   endedExits: Set<string>;
 }
 
@@ -135,7 +173,10 @@ interface SweepState {
   busy: boolean;
   /** per token: the ids the previous sweep listed (where this one may stop) */
   listed: Map<string, Set<string>>;
-  /** per token: live orders the previous sweep listed without their proven state (read again while they are among the newest) */
+  /**
+   * Per token: live orders the previous sweep listed without their proven state. They are read
+   * again while they are among the newest.
+   */
   unresolved: Map<string, Set<string>>;
 }
 
@@ -152,7 +193,10 @@ interface TokenUtxo {
 
 const like = (v: OrderView): OrderLike => v as unknown as OrderLike;
 const evLike = (e: EventView): EventLike => e as unknown as EventLike;
-/** an order's terms of the moment: its proven state, else (closed: no state) the view's current terms, which follow in-place amends */
+/**
+ * An order's terms of the moment: its proven state, else (closed, so no state) the view's current
+ * terms, which follow in-place amends.
+ */
 function currentTerms(v: OrderView | null): Record<string, string> | null {
   if (!v) return null;
   if (v.state?.state) return v.state.state as unknown as Record<string, string>;
@@ -185,7 +229,9 @@ export async function runChecker(env: Env): Promise<void> {
   const cfg = env.cfg;
   const token = env.state.token?.covenantId;
   if (!token) throw new Error('the soak token is not issued yet (run `soak setup`)');
-  // every issued soak token: TUSD, then the asset tokens (TETH, TBTC), then the external tokens the traders trade (a KRON token: no supply check)
+  // Every issued soak token: TUSD, then the asset tokens (TETH, TBTC), then the external tokens the
+  // traders trade.
+  // A KRON token has no supply check.
   const tokens = [
     token,
     ...ASSET_SLOTS.flatMap((s) => (env.state[s] ? [env.state[s]!.covenantId] : [])),
@@ -193,7 +239,8 @@ export async function runChecker(env: Env): Promise<void> {
   ];
   const statePath = join(cfg.runPath, 'state', 'checker.json');
   const st = loadState(statePath);
-  // run/recheck-triggers (touch it, restart the checker): re-check every arm / trail / triggered fill of the conditional orders memoized
+  // run/recheck-triggers (touch it, restart the checker) re-checks every arm / trail / triggered
+  // fill of the memoized conditional orders.
   const recheck = join(cfg.runPath, 'recheck-triggers');
   if (existsSync(recheck)) {
     for (const [id, m] of Object.entries(st.orders)) {
@@ -227,8 +274,9 @@ export async function runChecker(env: Env): Promise<void> {
     endedExits: new Set(),
   };
   log.info('checker starting', { tokens, indexer: cfg.indexerUrl, indexerB: cfg.indexerUrlB, rounds: st.rounds, orders: Object.keys(st.orders).length });
-  // the fast sweep runs between rounds (the round's scan then finds the terms in st.early); one at a time: a tick while the previous sweep
-  // still waits for the indexer is skipped
+  // The fast sweep runs between rounds, so the round's scan then finds the terms in st.early.
+  // Only one runs at a time. A tick while the previous sweep still waits for the indexer is
+  // skipped.
   setInterval(() => {
     if (x.sweep.busy) return;
     x.sweep.busy = true;
@@ -236,9 +284,11 @@ export async function runChecker(env: Env): Promise<void> {
       .catch((e) => log.debug('sweep failed', { error: errText(e) }))
       .finally(() => (x.sweep.busy = false));
   }, SWEEP_MS);
-  // the keepers' gate between rounds: a book that lags the node for a minute between two round samples restarts the kill deadline. Sampled
-  // from GET /v1/metrics (the follower's own numbers, no database work; /v1/health counts the whole store on every request), /v1/health
-  // when the metrics cannot be read
+  // The keepers' gate between rounds.
+  // A book that lags the node for a minute between two round samples restarts the kill deadline.
+  // It is sampled from GET /v1/metrics (the follower's own numbers, no database work, while
+  // /v1/health counts the whole store on every request).
+  // /v1/health is used when the metrics cannot be read.
   let gateBusy = false;
   setInterval(() => {
     if (gateBusy) return;
@@ -276,8 +326,10 @@ export async function runChecker(env: Env): Promise<void> {
 }
 
 /**
- * The keepers act only on a book that follows the node: the kill deadline runs from the moment they can (see checkKill). Their gate is
- * indexer A's lag tolerance (/v1/health) and executor A's matcher metrics (book stale against the live node, waiting for the indexer, paused).
+ * The keepers act only on a book that follows the node. The kill deadline runs from the moment they
+ * can (see checkKill).
+ * Their gate is indexer A's lag tolerance (/v1/health) and executor A's matcher metrics (book stale
+ * against the live node, waiting for the indexer, paused).
  */
 function trackKeepers(x: Ctx, hA: HealthLike | null): void {
   // an unanswered health request (a busy API) says nothing about the gate: the sample is skipped
@@ -288,7 +340,11 @@ function trackKeepers(x: Ctx, hA: HealthLike | null): void {
 
 const GATE_MS = 5_000;
 
-/** indexer A's lag tolerance and cursor for the keepers' gate: from its metrics, else from its health (null: no answer, the sample is skipped) */
+/**
+ * Indexer A's lag tolerance and cursor for the keepers' gate, from its metrics, else from its
+ * health.
+ * Null means no answer, and the sample is skipped.
+ */
 async function gateSample(x: Ctx): Promise<(HealthLike & { within_lag_tolerance?: boolean }) | null> {
   const m = await metricsHealth(x.env.cfg.indexerUrl, 10_000).catch(() => null);
   if (!m) return health(x.A);
@@ -328,15 +384,17 @@ async function round(x: Ctx): Promise<void> {
   await step('strays', () => straysStep(x, now));
   await step('x402', async () => x402Step(x, now));
   await step('fees', async () => feesStep(x));
-  // the supply listing (every live token UTXO of every soak token, ~10 pages a round) reads indexer B while it follows (the bots and the web
-  // app read A), A while B does not; the two list the same holdings (invariant 9 compares their orders and fills)
+  // The supply listing (every live token UTXO of every soak token, about 10 pages a round) reads
+  // indexer B while it follows, and A while B does not.
+  // The bots and the web app read A. The two list the same holdings, and invariant 9 compares their
+  // orders and fills.
   const bOk = !!x.B && !!hB && hB.state === 'following' && (hB.lag_daa ?? 0) <= 100;
   if (bOk || aOk) await step('supply', () => supplyStep(x, now, bOk ? { url: x.env.cfg.indexerUrlB!, name: x.nameB } : { url: x.env.cfg.indexerUrl, name: x.nameA }));
   await step('scenarios', () => scenariosStep(x, now));
   if (x.B && hB) await step('agree', () => agreeStep(x, hA, hB, scan, now));
 }
 
-// ------------------------------------------------------------------------------------------------ 10. health
+// ------------------------------------------------------------ 10. health
 
 function readMetrics(x: Ctx, name: string): Record<string, number> | null {
   const p = join(x.env.cfg.runPath, name, 'metrics.prom');
@@ -369,7 +427,7 @@ function checkHealth(x: Ctx, hA: HealthLike | null, hB: HealthLike | null, now: 
   }
 }
 
-// ------------------------------------------------------------------------------------------------ order scan
+// ------------------------------------------------------------ order scan
 
 interface Scan {
   views: Map<string, OrderView>;
@@ -417,7 +475,11 @@ function memoize(x: Ctx, v: OrderView): OrderMemo {
 
 const fullTerms = (t: Record<string, string> | null | undefined): Record<string, string> | null => (t && t._partial !== '1' ? t : null);
 
-/** an order's token(s) (its token; a pair order also its token B) as indexes into `st.tokenIds`, which grows by the tokens not in it yet */
+/**
+ * An order's token(s) (its token, and for a pair order also its token B) as indexes into
+ * `st.tokenIds`.
+ * `st.tokenIds` grows by the tokens not in it yet.
+ */
 function tokenIxs(st: CheckerState, v: OrderView): number[] {
   const ids = (st.tokenIds ??= []);
   const out: number[] = [];
@@ -431,15 +493,21 @@ function tokenIxs(st: CheckerState, v: OrderView): number[] {
   return out;
 }
 
-/** the fast sweep's page size (a few orders per token are placed between two sweeps) and how deep it reads at most (the newest orders) */
+/**
+ * The fast sweep's page size (a few orders per token are placed between two sweeps) and how deep it
+ * reads at most (the newest orders).
+ */
 const SWEEP_PAGE = 25;
 const SWEEP_DEPTH = 200;
 
 /**
- * The fast sweep: the full terms of the newest orders of each token, kept until a round memoizes the order (see `CheckerState.early`).
- * Incremental: the listing is newest first (the indexer's block sequence), so the orders below the newest one the previous sweep listed were
- * all looked at before; it reads small pages down to that order, and on (to SWEEP_DEPTH) only while a live order listed without its proven
- * state is still to be read again. Every order is looked at as it was when one 200-order page per token was read every SWEEP_MS.
+ * The fast sweep: the full terms of the newest orders of each token, kept until a round memoizes
+ * the order (see `CheckerState.early`).
+ * It is incremental. The listing is newest first (the indexer's block sequence), so the orders
+ * below the newest one the previous sweep listed were all looked at before.
+ * It reads small pages down to that order. It reads on (to SWEEP_DEPTH) only while a live order
+ * listed without its proven state is still to be read again.
+ * So every order is looked at as it was when one 200-order page per token was read every SWEEP_MS.
  */
 async function sweepTerms(x: Ctx): Promise<void> {
   const early = (x.st.early ??= {});
@@ -474,8 +542,10 @@ async function memoFor(x: Ctx, id: string): Promise<OrderMemo | null> {
   }
   const v = await x.A.order(id);
   if (!v) return m ?? null;
-  // an order that ended before the memo window and has no memo was pruned: it is counted in `prunedOrders` already, so its memo is not stored
-  // again (it would be counted a second time when it is pruned again); the checks get the same memo a tombstone gave (no event keys, partial terms)
+  // An order that ended before the memo window and has no memo was pruned and is counted in
+  // `prunedOrders` already.
+  // So its memo is not stored again, which would count it a second time when it is pruned again.
+  // The checks get the same memo a tombstone gives (no event keys, partial terms).
   if (!m && x.cursor > 0 && !isActive(v.status) && x.cursor - v.last_daa > ORDER_MEMO_WINDOW_DAA) {
     const l = buildMemo(x, v);
     x.lookups.set(id, l);
@@ -506,8 +576,9 @@ async function scanOrders(x: Ctx, hA: HealthLike): Promise<Scan> {
     const active = await A.allOrders({ token, status: 'active', limit: 200 }, { maxPages: 100 });
     for (const v of active) views.set(v.covenant_id, v);
   }
-  // orders created since the last scan (full history on the first round): catches orders created and terminated between rounds; a
-  // token added later (the second soak token) starts from its own full history
+  // Orders created since the last scan (the full history on the first round).
+  // This catches orders created and terminated between rounds.
+  // A token added later starts from its own full history.
   for (const token of x.tokens) {
     const floor = st.scanDaaByToken?.[token] === undefined && token !== x.token ? 0 : st.scanDaa;
     for (const v of await pageOrders(A, token, floor)) if (!views.has(v.covenant_id) && v.genesis.daa >= floor - 1000) views.set(v.covenant_id, v);
@@ -534,7 +605,8 @@ async function scanOrders(x: Ctx, hA: HealthLike): Promise<Scan> {
   st.scanDaa = Math.max(0, hA.cursor_daa - 600);
   st.scanDaaByToken = Object.fromEntries(x.tokens.map((t) => [t, st.scanDaa]));
   for (const [id, e] of Object.entries(st.early ?? {})) if (hA.cursor_daa - e.daa > ORDER_MEMO_WINDOW_DAA) delete st.early![id];
-  // forget the memos of orders terminated more than ~2 h ago (not those checked this round: they go the next); the report keeps their counts
+  // Forget the memos of orders terminated more than about 2 h ago. Those checked this round go the
+  // next round. The report keeps their counts.
   const pruned = pruneOrders(st, hA.cursor_daa, { has: (id) => views.has(id) || refetch.has(id) });
   if (pruned) {
     stat(x, 'ordersPruned', pruned);
@@ -556,7 +628,7 @@ async function allEvents(ix: HttpIndexer, id: string): Promise<EventView[]> {
   return out.sort((a, b) => a.id - b.id);
 }
 
-// ------------------------------------------------------------------------------------------------ 4 (FOK), 5, 6 (rearm): events
+// ------------------------------------------------------------ 4 (FOK), 5, 6 (rearm): events
 
 async function eventsStep(x: Ctx, scan: Scan): Promise<void> {
   const now = Date.now();
@@ -597,15 +669,18 @@ async function processEvents(x: Ctx, v: OrderView, now: number): Promise<boolean
     }
     const triggeredFill = e.kind === 'fill' && detailOf(e).evidence != null;
     if (e.kind === 'arm' || e.kind === 'trail' || triggeredFill) {
-      // the stop's terms: its proven current state, else (it filled or closed before this round) the full state memoized while it was
-      // live; the stop price of a trailing stop may since have moved, so only the latest trail of a live order checks the new stop
+      // The stop's terms: its proven current state, else (it filled or closed before this round)
+      // the full state memoized while it was live.
+      // The stop price of a trailing stop may have moved since, so only the latest trail of a live
+      // order checks the new stop.
       const cur = v.state?.state as unknown as Record<string, string> | undefined;
       const s = cur ?? (m.terms && m.terms._partial !== '1' ? m.terms : undefined);
       if (!s) {
         stat(x, 'triggersUnverifiable');
       } else {
         if (isPairContract(v.contract)) {
-          // a pair stop: the evidence the indexer recorded is one of the two modes (the evidence orders' contracts when known)
+          // A pair stop: the evidence the indexer recorded is one of the two modes (the evidence
+          // orders' contracts when known).
           const ids = (detailOf(e).evidence as { orders?: (string | null)[] } | undefined)?.orders ?? [];
           const kinds = await Promise.all(ids.map(async (o) => (o ? ((await memoFor(x, o))?.c ?? null) : null)));
           const viol = checkPairEvidence({ covenant_id: id, contract: v.contract }, evLike(e), kinds);
@@ -618,8 +693,10 @@ async function processEvents(x: Ctx, v: OrderView, now: number): Promise<boolean
         }
         const facts = await evidenceIn(x, e);
         stat(x, 'triggers');
-        // a trailing stop's stop price read after a later trail (or from a memo) is not the one this event saw
-        // (an arm reads the stop as much as a triggered fill does: a memo older than a trail before the arm holds the stop before it)
+        // A trailing stop's stop price read after a later trail (or from a memo) is not the one
+        // this event saw.
+        // An arm reads the stop as much as a triggered fill does: a memo older than a trail before
+        // the arm holds the stop before it.
         const stopUnknown = (triggeredFill || e.kind === 'arm') && stopMayHaveMoved(s, !!cur, i, lastTrail);
         const r = checkTrigger(like(v), s, evLike(e), facts, { latestStopChange: !!cur && i === lastTrail, stopUnknown });
         if (r.ok) stat(x, 'triggersOk');
@@ -645,10 +722,14 @@ async function processEvents(x: Ctx, v: OrderView, now: number): Promise<boolean
 }
 
 /**
- * The fills of the OTHER orders in the transaction of an `arm` / `trail` event (`/v1/fills` has no txid filter: page the token's fills
- * backwards from just above the event's id, event ids of one transaction are adjacent), as evidence candidates with their exposure:
- * `max(UTXO DAA of the order spent by the fill + interval, custody UTXO DAA (asks), activeFrom)`. The DAA of the spent UTXO is that of
- * the order's previous event (or its genesis); when a piece cannot be read, `exposedSince` / `slope` stay null (the rule warns).
+ * The fills of the OTHER orders in the transaction of an `arm` / `trail` event, as evidence
+ * candidates with their exposure.
+ * `/v1/fills` has no txid filter, so the token's fills are paged backwards from just above the
+ * event's id. Event ids of one transaction are adjacent.
+ * The exposure is `max(UTXO DAA of the order spent by the fill + interval, custody UTXO DAA (asks),
+ * activeFrom)`.
+ * The DAA of the spent UTXO is that of the order's previous event (or its genesis).
+ * When a piece cannot be read, `exposedSince` / `slope` stay null and the rule warns.
  */
 const EVIDENCE_ID_WINDOW = 500;
 const SWEEP_MS = 5_000;
@@ -673,10 +754,12 @@ async function evidenceIn(x: Ctx, e: EventView): Promise<EvidenceFact[]> {
     const partial = t._partial === '1';
     let exposedSince: number | null = null;
     let exposedFloor: number | null = null;
-    // a terminated order's partial terms lack its TWAP `interval`: the start computed without it is only a floor
+    // A terminated order's partial terms lack its TWAP `interval`, so the start computed without it
+    // is only a floor.
     if (isPlainKind(memo.c)) {
       const evs = await allEvents(x.A, f.covenant_id);
-      // a plain ask or bid amended in place (KOB1 v3) quoted its terms of the moment: the evidence price is the amended one
+      // A plain ask or bid amended in place (KOB1 v3) quotes its terms of the moment, so the
+      // evidence price is the amended one.
       if (evs.some((k) => k.kind === 'amend')) {
         t = termsAtFill(t, currentTerms(await x.A.order(f.covenant_id)), evs.map(evLike), f.id);
       }
@@ -722,7 +805,7 @@ const b0s = (v: string | undefined): bigint => {
 };
 const isPlainKind = (c: string): boolean => baseKind(c) === 'KobAsk' || baseKind(c) === 'KobBid';
 
-// ------------------------------------------------------------------------------------------------ 6. repeat positions
+// ------------------------------------------------------------ 6. repeat positions
 
 async function repeatStep(x: Ctx, views: Map<string, OrderView>, now: number): Promise<void> {
   for (const v of views.values()) {
@@ -736,7 +819,8 @@ async function repeatStep(x: Ctx, views: Map<string, OrderView>, now: number): P
     for (const c of entry.children ?? []) {
       const memo = x.st.orders[c];
       if (memo && !memo.active) continue;
-      // no memo: a child pruned after it ended (an ended exit counts for nothing in `checkRepeatAmount`; it is read once)
+      // No memo: a child pruned after it ended. An ended exit counts for nothing in
+      // `checkRepeatAmount`, so it is read once.
       if (!memo && x.endedExits.has(c)) continue;
       const cv = await x.A.order(c);
       if (!cv) continue;
@@ -756,7 +840,7 @@ async function repeatStep(x: Ctx, views: Map<string, OrderView>, now: number): P
   }
 }
 
-// ------------------------------------------------------------------------------------------------ 3. fills
+// ------------------------------------------------------------ 3. fills
 
 async function fillsStep(x: Ctx): Promise<void> {
   const { A, st } = x;
@@ -764,7 +848,8 @@ async function fillsStep(x: Ctx): Promise<void> {
   migrateFills(x);
   const fresh: EventView[] = [];
   let before: number | undefined;
-  // every soak token at once (no token filter): the fills one transaction makes in several books are read together
+  // Every soak token at once (no token filter), so the fills one transaction makes in several books
+  // are read together.
   for (let i = 0; i < 1000; i++) {
     const p = await A.fills({ limit: 200, before });
     fresh.push(...p.items.filter((e) => !e.token || x.tokens.includes(e.token)));
@@ -774,8 +859,9 @@ async function fillsStep(x: Ctx): Promise<void> {
     before = oldest.id;
   }
   fresh.sort((a, b) => a.id - b.id);
-  // event ids only grow (a reorg re-applies a transaction under new ids, which `seen` dedupes): anything at or below the cursor was
-  // counted already, even when its `seen` entry has been pruned (counting those again inflated the totals on every round)
+  // Event ids only grow. A reorg re-applies a transaction under new ids, which `seen` dedupes.
+  // Anything at or below the cursor was counted already, even when its `seen` entry has been
+  // pruned.
   const prevMax = f.maxId;
   const multi = (f.multi ??= { txMultiBook: 0, txPair: 0, pairFills: 0, txMultiPair: 0 });
   multi.txPair ??= 0;
@@ -791,7 +877,8 @@ async function fillsStep(x: Ctx): Promise<void> {
     else if (memo?.terms) {
       let r = checkFill({ covenant_id: e.covenant_id, contract: memo.c }, memo.terms, evLike(e));
       if (r.violations.length && /^Kob(Ask|Bid)/.test(memo.c)) {
-        // a plain ask or bid amended in place (KOB1 v3) keeps its id with new terms: check the fill against the terms it was filled under
+        // A plain ask or bid amended in place (KOB1 v3) keeps its id with new terms, so the fill is
+        // checked against the terms it was filled under.
         const evs = (await A.orderEvents(e.covenant_id, { limit: 200 }))?.items ?? [];
         if (evs.some((v) => v.kind === 'amend')) {
           r = checkFill({ covenant_id: e.covenant_id, contract: memo.c }, termsAtFill(memo.terms, currentTerms(await A.order(e.covenant_id)), evs.map(evLike), e.id), evLike(e));
@@ -828,8 +915,10 @@ async function fillsStep(x: Ctx): Promise<void> {
       f.buy++;
       bt.buy++;
     }
-    // per transaction and token: a trade's tokens / KAS are the larger of its ask-side and bid-side sums (a swap-and-pay sells into bids
-    // without an ask; a pair order's fill moves base units of its token A and no KAS)
+    // Per transaction and token, a trade's tokens / KAS are the larger of its ask-side and bid-side
+    // sums.
+    // A swap-and-pay sells into bids without an ask. A pair order's fill moves base units of its
+    // token A and no KAS.
     let t = normTx(f.tx[e.txid], x.token);
     if (!t) {
       t = { d: e.daa, k: {} };
@@ -851,8 +940,9 @@ async function fillsStep(x: Ctx): Promise<void> {
     const mx = (a: string, b: string) => (BigInt(a) > BigInt(b) ? BigInt(a) : BigInt(b));
     const [t0, k0] = [mx(s.s, s.b), mx(s.ks, s.kb)];
     if (memo?.terms && e.amount != null) {
-      // base units, and the KAS they are worth at the fill's quote, rounded down as the indexer's trades are; a pair order trades a token
-      // for another token (no KAS price): no KAS leg
+      // Base units, and the KAS they are worth at the fill's quote, rounded down as the indexer's
+      // trades are.
+      // A pair order trades a token for another token (no KAS price), so it has no KAS leg.
       const tok = BigInt(e.amount);
       const q = e.price ?? memo.terms.price;
       const kas = q && !pair ? (quoteOf(tok, BigInt(q), BigInt(memo.terms.scale ?? '0'), 'down') ?? 0n) : 0n;
@@ -882,21 +972,30 @@ async function fillsStep(x: Ctx): Promise<void> {
   for (const [k, t] of Object.entries(f.tx)) if ((typeof t === 'object' ? t.d : Number(t)) < floor) delete f.tx[k];
 }
 
-/** fill counters of a state written before the second token: the per-token map starts with the primary token's totals */
+/**
+ * Fill counters of a state written without per-token maps: the per-token map starts with the
+ * primary token's totals.
+ */
 function migrateFills(x: Ctx): void {
   const f = x.st.fills;
   if (f.byToken) return;
   f.byToken = { [x.token]: { count: f.count, sell: f.sell, buy: f.buy, trades: f.trades, volumeTokens: f.volumeTokens, volumeKas: f.volumeKas } };
 }
 
-/** a recent fill transaction in the per-token shape (a legacy entry `{d, s, b, ks, kb}` was the primary token's) */
+/**
+ * A recent fill transaction in the per-token shape. A legacy entry `{d, s, b, ks, kb}` is the
+ * primary token's.
+ */
 function normTx(t: TxSums | LegacyTxSums | number | undefined, primary: string): TxSums | null {
   if (!t || typeof t !== 'object') return null;
   if ('k' in t) return t;
   return { d: t.d, k: { [primary]: { s: t.s, b: t.b, ks: t.ks, kb: t.kb } } };
 }
 
-/** Invariant 11 for one pair fill: no price, and the order's guarantee in B at its quote (the indexer's `detail.pair`). */
+/**
+ * Invariant 11 for one pair fill: no price, and the order's guarantee in B at its quote (the
+ * indexer's `detail.pair`).
+ */
 function pairFill(x: Ctx, e: EventView, memo: OrderMemo): void {
   const r = checkPairFill({ covenant_id: e.covenant_id, contract: memo.c }, evLike(e));
   stat(x, 'pairFills');
@@ -907,7 +1006,7 @@ function pairFill(x: Ctx, e: EventView, memo: OrderMemo): void {
   for (const v of r.violations) report(x, v);
 }
 
-// ------------------------------------------------------------------------------------------------ 1. custody and node UTXOs
+// ------------------------------------------------------------ 1. custody and node UTXOs
 
 /** The order's script: a cancel-only order (retired template) keeps its own, not today's kind's. */
 function orderSpk(kob: Env['kob'], v: OrderView): string {
@@ -944,7 +1043,8 @@ async function custodyStep(x: Ctx, views: Map<string, OrderView>, cursor: number
     } catch (e) {
       probs.push(`order script not derivable: ${errText(e)}`);
     }
-    // ask-side kinds hold exactly one custody of their token; a pair order every custody of its state (A and / or B: the view's `pair`)
+    // Ask-side kinds hold exactly one custody of their token. A pair order holds every custody of
+    // its state (A and / or B: the view's `pair`).
     const parts = custodyParts(v, x.token);
     if (!parts) continue;
     for (const { token, expected } of parts) {
@@ -1009,7 +1109,7 @@ async function custodyStep(x: Ctx, views: Map<string, OrderView>, cursor: number
       });
     }
   }
-  // forget custody trackers of orders no longer live
+  // Forget custody trackers of orders that are not live.
   x.persist.retain((k) => !k.startsWith('custody:') || views.has(k.slice(8)));
   for (const k of x.custodyCache.keys()) {
     const id = k.split(':')[0]!;
@@ -1018,8 +1118,11 @@ async function custodyStep(x: Ctx, views: Map<string, OrderView>, cursor: number
 }
 
 /**
- * The custodies an order view must hold, per token: an ask-side KAS order its `amountLeft` of its token; a pair order each custody of its current
- * state (the view's `pair.custodies`, record order: a sell-first entry's A and its B prefund); null for kinds without custody.
+ * The custodies an order view must hold, per token.
+ * An ask-side KAS order holds its `amountLeft` of its token.
+ * A pair order holds each custody of its current state (the view's `pair.custodies`, record order:
+ * a sell-first entry's A and its B prefund).
+ * It is null for kinds without custody.
  */
 function custodyParts(v: OrderView, primary: string): { token: string; expected: bigint }[] | null {
   const pair = (v as unknown as { pair?: { custodies?: { token: string; expected_amount: string }[] } }).pair;
@@ -1029,7 +1132,10 @@ function custodyParts(v: OrderView, primary: string): { token: string; expected:
   return [{ token: (v.token ?? primary).toLowerCase(), expected: BigInt(s.amountLeft ?? '0') }];
 }
 
-/** amount accounting (base units) of the live plain asks and KobPair orders: filled + left == initial, over two rounds with the same position */
+/**
+ * Amount accounting (base units) of the live plain asks and KobPair orders: filled + left ==
+ * initial, over two rounds with the same position.
+ */
 function balanceStep(x: Ctx, views: Map<string, OrderView>, now: number): void {
   for (const v of views.values()) {
     const key = `balance:${v.covenant_id}`;
@@ -1042,7 +1148,7 @@ function balanceStep(x: Ctx, views: Map<string, OrderView>, now: number): void {
   x.persist.retain((k) => !k.startsWith('balance:') || views.has(k.slice(8)));
 }
 
-// ------------------------------------------------------------------------------------------------ 2. strays
+// ------------------------------------------------------------ 2. strays
 
 async function straysStep(x: Ctx, now: number): Promise<void> {
   const { A, st } = x;
@@ -1081,7 +1187,7 @@ async function straysStep(x: Ctx, now: number): Promise<void> {
   }
 }
 
-// ------------------------------------------------------------------------------------------------ 7. x402
+// ------------------------------------------------------------ 7. x402
 
 function readLines<T>(path: string): T[] {
   if (!existsSync(path)) return [];
@@ -1120,7 +1226,8 @@ function x402Step(x: Ctx, now: number): void {
   const ledger = existsSync(lp) ? readFileSync(lp, 'utf8') : '';
   const r = checkX402(payments, ledger, now);
   for (const v of r.violations) report(x, v);
-  // the retry scenarios (`/retry/*`): at most one accepted attempt per payment, a resent lost answer served from the merchant's memory
+  // The retry scenarios (`/retry/*`): at most one accepted attempt per payment, and a resent lost
+  // answer is served from the merchant's memory.
   const rr = checkX402Retries(payments, ledger);
   for (const v of rr.violations) report(x, v);
   x.st.stats.x402RetryPayments = rr.stats.retryPayments;
@@ -1132,7 +1239,7 @@ function x402Step(x: Ctx, now: number): void {
   x.st.stats.x402Settled = r.stats.settled;
 }
 
-// ------------------------------------------------------------------------------------------------ 8. fees
+// ------------------------------------------------------------ 8. fees
 
 function feesStep(x: Ctx): void {
   const p = join(x.env.cfg.runPath, 'state', 'txs.jsonl');
@@ -1151,7 +1258,8 @@ function feesStep(x: Ctx): void {
   }
   const end = text.lastIndexOf('\n');
   if (end < 0) return;
-  // the rates a fee may use: the relay floor up to the configured maximum rate of the dynamic fee policy (config fees.maxRate)
+  // The rates a fee may use: the relay floor up to the configured maximum rate of the dynamic fee
+  // policy (config fees.maxRate).
   const bounds: FeeBounds = { floor: DEFAULT_FEE_BOUNDS.floor, maxRate: BigInt(x.env.cfg.feeSettings.maxRate) };
   for (const l of text.slice(0, end).split('\n')) {
     if (!l.trim()) continue;
@@ -1163,12 +1271,14 @@ function feesStep(x: Ctx): void {
     }
     const r = checkFeeLine(line, bounds);
     stat(x, 'feeLines');
-    // transactions paid above the relay floor by the dynamic fee policy: counted (the checker accepts any rate within the bounds)
+    // Transactions paid above the relay floor by the dynamic fee policy are counted. The checker
+    // accepts any rate within the bounds.
     if (/^[0-9]+$/.test(String(line.feeRate)) && BigInt(line.feeRate) > bounds.floor) stat(x, 'feeAboveFloor');
     if (r === 'unchecked') stat(x, 'feeUnchecked');
     else if (r === null) continue;
     else if ('kind' in r) {
-      // the builder folded a change too small to keep (storage mass) into the fee: visible as an info line and a counter, never an incident
+      // The builder folds a change too small to keep (storage mass) into the fee. That is an info
+      // line and a counter, never an incident.
       stat(x, 'feeFoldedDust');
       log.info('fee above its rate: change folded by the builder', { txid: r.txid, bot: r.bot, what: r.what, fee: r.fee, expected: r.expected, excess: r.excess, maxFold: r.maxFold });
     } else report(x, r);
@@ -1176,7 +1286,7 @@ function feesStep(x: Ctx): void {
   x.st.txsOffset += Buffer.byteLength(text.slice(0, end + 1), 'utf8');
 }
 
-// ------------------------------------------------------------------------------------------------ 13. scenarios
+// ------------------------------------------------------------ 13. scenarios
 
 /** records checked per round (the rest wait for the next round) and the most kept waiting */
 const SCEN_PER_ROUND = 40;
@@ -1214,7 +1324,10 @@ function newScenarioRecords(x: Ctx): ScenarioRecord[] {
   return out;
 }
 
-/** the merged output of a merge as the indexer lists it: the owner's live token UTXOs first, its spent ones too once the output may be spent */
+/**
+ * The merged output of a merge as the indexer lists it: the owner's live token UTXOs first, and its
+ * spent ones too once the output may be spent.
+ */
 async function mergedOutput(x: Ctx, r: MergeRecord, ageMs: number): Promise<{ amount: string; owner: string } | null> {
   const find = (items: { txid: string; index: number; amount: string; owner: string }[] | null) => items?.find((u) => u.txid === r.final.txid && u.index === r.final.index) ?? null;
   const live = find(await x.A.tokenUtxos({ owner: r.maker, token: r.token, spent: false, limit: 200, maxPages: 5 }));
@@ -1236,7 +1349,8 @@ async function scenarioVerdict(x: Ctx, r: ScenarioRecord, ageMs: number): Promis
     }
     case 'ladder': {
       const vs = await Promise.all(r.rungs.map((g) => view(g.id)));
-      // a rung off its planned price may have been amended since (a trader's Amend of that order, in place): only those rungs' events are read
+      // A rung off its planned price may have been amended in place by a trader's Amend of that
+      // order, so only those rungs' events are read.
       const amended = new Set<string>();
       for (const id of repricedRungs(r, vs)) {
         const evs = await events(id);
@@ -1263,9 +1377,14 @@ async function scenarioVerdict(x: Ctx, r: ScenarioRecord, ageMs: number): Promis
 }
 
 /**
- * Scenario records of the bots (src/scenarios.ts, rules in scenario-rules.ts): the plan-side promises are checked as soon as a record is read (a
- * renewal keeps its terms and extends the expiry, a pair amend keeps the pair, side and size, a merge's total is its inputs' sum); the chain-side ones
- * once the indexer shows the transactions (up to SCENARIO_GRACE_MS). Counters `scen:<kind>`, `scen:<kind>:ok`, `scen:<kind>:<note>`.
+ * Scenario records of the bots (src/scenarios.ts, rules in scenario-rules.ts).
+ * The plan-side promises are checked as soon as a record is read:
+ * - a renewal keeps its terms and extends the expiry,
+ * - a pair amend keeps the pair, side and size,
+ * - a merge's total is its inputs' sum.
+ * The chain-side ones are checked once the indexer shows the transactions (up to
+ * SCENARIO_GRACE_MS).
+ * Counters are `scen:<kind>`, `scen:<kind>:ok` and `scen:<kind>:<note>`.
  */
 async function scenariosStep(x: Ctx, now: number): Promise<void> {
   const queue = (x.st.scen ??= []);
@@ -1279,7 +1398,8 @@ async function scenariosStep(x: Ctx, now: number): Promise<void> {
     stat(x, 'scen:dropped', queue.length - SCEN_QUEUE_MAX);
     queue.splice(0, queue.length - SCEN_QUEUE_MAX);
   }
-  // at most SCEN_PER_ROUND records a round; one still pending goes to the back, so the queue rotates and none starves the others
+  // At most SCEN_PER_ROUND records are checked a round. One still pending goes to the back, so the
+  // queue rotates and none starves the others.
   const unseen: ScenarioRecord[] = [];
   const waiting: ScenarioRecord[] = [];
   let n = 0;
@@ -1302,7 +1422,7 @@ async function scenariosStep(x: Ctx, now: number): Promise<void> {
   x.st.scen = [...unseen, ...waiting];
 }
 
-// ------------------------------------------------------------------------------------------------ 12. supply conservation
+// ------------------------------------------------------------ 12. supply conservation
 
 interface RawTokenUtxo {
   txid: string;
@@ -1310,7 +1430,10 @@ interface RawTokenUtxo {
   amount: string;
 }
 
-/** every live token UTXO of `token` the indexer at `indexerUrl` knows (`/v1/token-utxos?token=`, all owners); null when it cannot be listed */
+/**
+ * Every live token UTXO of `token` that the indexer at `indexerUrl` knows
+ * (`/v1/token-utxos?token=`, all owners). Null when it cannot be listed.
+ */
 async function liveTokenUtxos(indexerUrl: string, token: string): Promise<RawTokenUtxo[] | null> {
   const out: RawTokenUtxo[] = [];
   let cursor: string | null = null;
@@ -1336,7 +1459,10 @@ interface Holding {
   state: Record<string, unknown>;
 }
 
-/** holdings the bots' trackers know (run/state/tracker-*.json) and the genesis outputs of the soak tokens, for `token` */
+/**
+ * Holdings the bots' trackers know (run/state/tracker-*.json) and the genesis outputs of the soak
+ * tokens, for `token`.
+ */
 function knownHoldings(x: Ctx, token: string): Holding[] {
   const out: Holding[] = [];
   const dir = join(x.env.cfg.runPath, 'state');
@@ -1373,7 +1499,8 @@ function knownHoldings(x: Ctx, token: string): Holding[] {
 function supplyOf(x: Ctx, token: string): { ticker: string; supply: bigint; exact: boolean } | null {
   const st = x.env.state;
   if (token === st.token?.covenantId) {
-    // TUSD was issued before these indexers started: holdings no tracker knows (executor keys of the earlier run) form a constant offset
+    // TUSD was issued before these indexers started. Holdings no tracker knows (executor keys of an
+    // earlier run) form a constant offset.
     return { ticker: st.token.ticker, supply: BigInt(x.env.cfg.token.supply) * 10n ** BigInt(st.token.decimals), exact: false };
   }
   // an asset token (TETH, TBTC) was issued by this run: its supply is exact
@@ -1428,7 +1555,8 @@ async function supplyStep(x: Ctx, now: number, ix: { url: string; name: string }
     const delta = live - sup.supply;
     const rec = (book[token] ??= { baseline: sup.exact ? '0' : null, last: delta.toString(), live: live.toString(), untracked: untracked.toString(), ts: now });
     stat(x, 'supplyChecks');
-    // a token issued before the indexers: the first offset that holds for 3 rounds (>= 2 min) becomes the accepted baseline
+    // For a token issued before the indexers, the first offset that holds for 3 rounds (>= 2 min)
+    // becomes the accepted baseline.
     if (rec.baseline === null) {
       const p = x.persist.observe(`supply-baseline:${token}`, true, now, 3, 120_000, delta.toString());
       if (p.fire) {
@@ -1445,12 +1573,14 @@ async function supplyStep(x: Ctx, now: number, ix: { url: string; name: string }
   }
 }
 
-// ------------------------------------------------------------------------------------------------ 9. the two indexers agree
+// ------------------------------------------------------------ 9. the two indexers agree
 
 /**
- * The fills of (fromDaa, toDaa] on one indexer. Fill ids follow insertion order, not chain order: imported fill events (record-log
- * import, older DAA) sit among newer fills at ids of their own on each indexer, so one row below the window says nothing about the rows
- * after it. Paging stops only after two whole pages below the window.
+ * The fills of (fromDaa, toDaa] on one indexer.
+ * Fill ids follow insertion order, not chain order. Imported fill events (record-log import, older
+ * DAA) sit among newer fills at ids of their own on each indexer.
+ * So one row below the window says nothing about the rows after it. Paging stops only after two
+ * whole pages below the window.
  */
 async function fillKeys(ix: HttpIndexer, fromDaa: number, toDaa: number): Promise<string[]> {
   const out: string[] = [];

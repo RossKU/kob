@@ -1,13 +1,21 @@
-// File-backed StorageLike for the bots' token tracker (run/state/tracker-<name>.json: genesis outputs and pre-run holdings the indexer
-// never lists live only there). Kept free of `@/` imports so `node --test` can load it.
+// File-backed StorageLike for the bots' token tracker (run/state/tracker-<name>.json).
+// Genesis outputs and pre-run holdings the indexer never lists live only there.
+// It is kept free of `@/` imports so `node --test` can load it.
 //
-// The file is shared with other processes: `scripts/holdings.cjs --seed`, the balances / cancel CLIs and setup all read or write the
-// same files while the bots run. So the in-memory copy is only a cache of the file:
-//   - every read first checks the file (mtime, size, inode) and reloads it when it changed;
-//   - every write re-reads the file first and replaces only the key being set (atomic: temp file + rename), so a key written by
-//     someone else is carried over instead of being reverted by the next bot write.
-// Two writers can still interleave between the read and the rename (no cross-process lock); the window is a few milliseconds and the
-// loser's key is the same one the winner just wrote, never an unrelated one.
+// The file is shared with other processes.
+// `scripts/holdings.cjs --seed`, the balances / cancel CLIs and setup all read or write the same
+// files while the bots run.
+// So the in-memory copy is only a cache of the file:
+// - Every read first checks the file (mtime, size, inode) and reloads it when it changed.
+// - Every write re-reads the file first and replaces only the key being set (atomic: temp file +
+//   rename).
+//   So a key written by someone else is carried over instead of being reverted by the next bot
+//   write.
+//
+// Two writers can still interleave between the read and the rename, because there is no
+// cross-process lock.
+// The window is a few milliseconds, and the loser's key is the same one the winner just wrote,
+// never an unrelated one.
 import { copyFileSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { logger } from './log.ts';
 
@@ -22,7 +30,10 @@ export class FileStorage {
   private m: Record<string, string> = {};
   /** signature of the file state `m` reflects (null: not read yet) */
   private sig: string | null = null;
-  /** the file on disk could not be parsed at the last look: `m` is the memory copy, and the file is saved aside before it is replaced */
+  /**
+   * The file on disk could not be parsed at the last look. `m` is the memory copy, and the file is
+   * saved aside before it is replaced.
+   */
   private unreadable = false;
   private warnedSig: string | null = null;
   private readonly warn: (msg: string, fields?: Record<string, unknown>) => void;
@@ -62,7 +73,8 @@ export class FileStorage {
       this.sig = sig;
       this.unreadable = false;
     } catch (e) {
-      // torn or hand-edited file: keep serving the memory copy and look again on the next call (it may be a write in progress)
+      // Torn or hand-edited file: keep serving the memory copy and look again on the next call (it
+      // may be a write in progress).
       this.unreadable = true;
       if (this.warnedSig !== sig) {
         this.warnedSig = sig;
@@ -96,8 +108,10 @@ export class FileStorage {
 
   setItem(k: string, v: string): void {
     this.refresh();
-    // a tracker store that loses more than half of its candidates at once is logged with the caller (pre-run holdings the indexer
-    // never lists live only here: losing them hides the key's tokens from the bots)
+    // A tracker store that loses more than half of its candidates at once is logged with the
+    // caller.
+    // Pre-run holdings the indexer never lists live only here, and losing them hides the key's
+    // tokens from the bots.
     try {
       const before = this.m[k] ? (JSON.parse(this.m[k]) as { items?: unknown[] }).items?.length ?? 0 : 0;
       const after = (JSON.parse(v) as { items?: unknown[] }).items?.length ?? 0;

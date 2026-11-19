@@ -1,4 +1,5 @@
-// Pure part of the soak summary report: aggregation of the collected inputs and the compact text form (no I/O, no `@/` imports).
+// Pure part of the soak summary report: aggregation of the collected inputs and the compact text
+// form (no I/O, no `@/` imports).
 import type { Incident } from './incidents.ts';
 
 export interface OrderRow {
@@ -20,11 +21,16 @@ export interface MemoLike {
 }
 
 /**
- * The orders of the soak tokens from the checker's memo (every order its scans saw: the active set and every order created since the last
- * scan, terminated ones with their final status), instead of paging the indexer's whole order history on every report. `tokenIds` is the
- * index the memos' `tk` point into; `soak` the soak token ids. A memo without `tk` (written before the field) counts when the checker
- * scans only soak tokens (`legacyIsSoak`: no external token is traded); otherwise it is left out and the list is incomplete.
- * `pruned` holds the counts of the ended orders whose memo was dropped (store.ts `prunedOrders`, key `contract|tif|status|side|tk indexes`): one row each with `n`.
+ * The orders of the soak tokens from the checker's memo, instead of paging the indexer's whole
+ * order history on every report.
+ * The memo holds every order its scans saw: the active set and every order created since the last
+ * scan, terminated ones with their final status.
+ * `tokenIds` is the index the memos' `tk` point into, and `soak` the soak token ids.
+ * A memo without `tk` counts when the checker scans only soak tokens (`legacyIsSoak`: no external
+ * token is traded).
+ * Otherwise it is left out and the list is incomplete.
+ * `pruned` holds the counts of the ended orders whose memo was dropped (store.ts `prunedOrders`,
+ * key `contract|tif|status|side|tk indexes`), one row each with `n`.
  */
 export function memoOrderRows(orders: Record<string, MemoLike>, tokenIds: readonly string[], soak: readonly string[], legacyIsSoak: boolean, pruned: Record<string, number> = {}): { rows: OrderRow[]; complete: boolean } {
   const want = new Set(soak.map((t) => t.toLowerCase()));
@@ -118,7 +124,7 @@ export interface ReportData {
   supervisor: { name: string; running: boolean; restarts: number }[];
 }
 
-// ------------------------------------------------------------------------------------------------ formatting helpers
+// ---- formatting helpers ----
 
 export const fmtKas = (sompi: bigint | string | number | null | undefined, dp = 4): string => {
   if (sompi === null || sompi === undefined) return '?';
@@ -149,9 +155,12 @@ export const fmtDur = (ms: number): string => {
 const pad = (s: string | number, n: number) => String(s).padEnd(n);
 const top = (m: Record<string, number>, n: number): [string, number][] => Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, n);
 
-// ------------------------------------------------------------------------------------------------ aggregation
+// ---- aggregation ----
 
-/** bot counters (`try:<a>`, `placed:<a>`, `plan_refused:<a>:<code>`, `tx_ok:<a>`, `tx_conflict:<a>`, `tx_failed:<a>`, `plan_throw:<a>`, `act_error:<a>`) per action */
+/**
+ * Bot counters per action: `try:<a>`, `placed:<a>`, `plan_refused:<a>:<code>`, `tx_ok:<a>`,
+ * `tx_conflict:<a>`, `tx_failed:<a>`, `plan_throw:<a>`, `act_error:<a>`.
+ */
 export function botActions(counters: Record<string, number>): ActionRow[] {
   const rows = new Map<string, ActionRow>();
   const row = (a: string) => {
@@ -219,7 +228,10 @@ export function ordersSummary(rows: OrderRow[]): { total: number; active: number
   return { total, active, byContract };
 }
 
-/** peak working set per process (and of the total) over the samples at or after `sinceMs` (resources.jsonl text) */
+/**
+ * Peak working set per process (and of the total) over the samples at or after `sinceMs`
+ * (resources.jsonl text).
+ */
 export function resourcePeaks(jsonl: string, sinceMs: number): { peak: Record<string, number>; peakTotal: number } {
   const peak: Record<string, number> = {};
   let peakTotal = 0;
@@ -252,7 +264,10 @@ export function incidentSummary(incs: Incident[]): { total: number; errors: numb
 }
 
 const TIF_NAME: Record<string, string> = { '0': 'gtc', '1': 'ioc', '2': 'fok', '-': '' };
-/** the scenario checks of the checker (`scen:<kind>` done, `scen:<kind>:ok`) and the x402 retry payments, one text line */
+/**
+ * The scenario checks of the checker (`scen:<kind>` done, `scen:<kind>:ok`) and the x402 retry
+ * payments, one text line.
+ */
 export function scenarioLine(k: Record<string, number>): string {
   const kinds = ['ladder', 'ladderCancel', 'renew', 'pairAmend', 'cancelAll', 'merge'];
   const part = (kind: string) => `${kind} ${k[`scen:${kind}:ok`] ?? 0}/${k[`scen:${kind}`] ?? 0}${k[`scen:${kind}:recorded`] ? ` (${k[`scen:${kind}:recorded`]} rec)` : ''}`;
@@ -261,7 +276,7 @@ export function scenarioLine(k: Record<string, number>): string {
 
 const INVARIANTS = ['custody', 'stray', 'all-in', 'ioc-fok', 'trigger', 'repeat', 'x402', 'fee', 'indexers-agree', 'health', 'pair', 'supply', 'replace', 'ladder', 'cancel-all', 'merge'];
 
-// ------------------------------------------------------------------------------------------------ JSON + text
+// ---- JSON + text ----
 
 export function buildReport(d: ReportData): { json: Record<string, unknown>; text: string } {
   const orders = ordersSummary(d.orders);

@@ -1,5 +1,7 @@
-// The traders' action weights (config `traders[].weights` and `token2.pairWeights` / `token3.pairWeights` override them per key; 0 switches an
-// action off). Pure (no `@/` imports): read by bots/traders.ts and the unit tests.
+// The traders' action weights.
+// Config `traders[].weights` and `token2.pairWeights` / `token3.pairWeights` override them per key,
+// and 0 switches an action off.
+// Pure (no `@/` imports): read by bots/traders.ts and the unit tests.
 
 export const DEFAULT_WEIGHTS: Record<string, number> = {
   market: 16,
@@ -28,7 +30,7 @@ export const DEFAULT_WEIGHTS: Record<string, number> = {
   cancel: 7,
   amend: 5,
   cancelAll: 1,
-  // scenarios of the 2026-10-13 gap review
+  // Scenario actions: limit ladders, the cancel of one rung, GTC renewal, token merge.
   ladder: 3,
   ladderCancel: 2,
   renew: 2,
@@ -36,10 +38,13 @@ export const DEFAULT_WEIGHTS: Record<string, number> = {
 };
 
 /**
- * The pair actions (an asset token A against TUSD B): every family of pair kinds. `limitSell` / `limitBuy` rest near the reference (and cross
- * each other: netting), `ioc` / `market` take (the route through the two KAS books, or resting pair orders), `stop` / `trailing` / `oco` are
- * KobCondPair orders the matcher arms from pair evidence (two KAS-book fills, or a resting pair order filled), `ifdBuy` / `ifdSell` / `repeatIfd`
- * KobIfdPair entries (buy-first and sell-first) whose fills create exits.
+ * The pair actions (an asset token A against TUSD B): every family of pair kinds.
+ * - `limitSell` / `limitBuy` rest near the reference (and cross each other: netting).
+ * - `ioc` / `market` take (the route through the two KAS books, or resting pair orders).
+ * - `stop` / `trailing` / `oco` are KobCondPair orders the matcher arms from pair evidence (two
+ *   KAS-book fills, or a resting pair order filled).
+ * - `ifdBuy` / `ifdSell` / `repeatIfd` are KobIfdPair entries (buy-first and sell-first) whose
+ *   fills create exits.
  */
 export const DEFAULT_PAIR_WEIGHTS: Record<string, number> = {
   limitSell: 6,
@@ -64,7 +69,7 @@ export const DEFAULT_PAIR_WEIGHTS: Record<string, number> = {
   ifoStopEntry: 1,
   repeatIfo: 1,
   cancel: 3,
-  // scenarios of the 2026-10-13 gap review: dated pair limits, the pair amend (replace), the pair cancel-all
+  // Scenario actions: dated pair limits, the pair amend (replace), the pair cancel-all.
   gtd: 2,
   day: 1,
   timed: 2,

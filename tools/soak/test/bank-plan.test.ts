@@ -1,5 +1,6 @@
-// The bank's payout planning: the pure retry ladder, and the real SDK generator's storage-mass dead band (the `Mass calculation error`
-// root cause, see src/bank-plan.ts). The SDK part runs when web/vendor/kaspa-node is present.
+// The bank's payout planning: the pure retry ladder, and the real SDK generator's storage-mass dead
+// band (the `Mass calculation error` root cause, see src/bank-plan.ts).
+// The SDK part runs when web/vendor/kaspa-node is present.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -94,7 +95,8 @@ test('real SDK generator: a change in the storage-mass dead band is refused, and
     isCoinbase: false,
   }));
   const create = (outputs: PayoutOutput[]) => sdk.createTransactions({ entries, outputs: outputs.map((o) => ({ address: o.address, amount: o.amount })), changeAddress: address, priorityFee: 0n, networkId: network });
-  // 33 coins minus 0.05 KAS: the leftover after the fee is a change output whose storage mass is over the 100,000 limit (live bank, 10-02)
+  // 33 coins minus 0.05 KAS: the leftover after the fee is a change output whose storage mass is
+  // over the 100,000 limit.
   const dead: PayoutOutput = { address, amount: 33n * COIN - 5_000_000n };
   await assert.rejects(create([dead]), (e: unknown) => typeof e === "string" && isMassError(e) && /Mass calculation error/.test(e));
   const ok = createWithMassRetry(create, [dead]);
@@ -163,7 +165,10 @@ test('createWithMassRetry: the coin variants come right after the plan, before t
   assert.deepEqual(r.outputs.map((o) => o.amount), [100n * KAS], 'the plan was paid unchanged');
 });
 
-/** the TN10 bank of 10-03 10:28 (live listing, below the merged coin): 46 coinbase coins of 3.0851 KAS, then the smaller ones */
+/**
+ * A live TN10 bank listing, below the merged coin: 46 coinbase coins of 3.0851 KAS, then the
+ * smaller ones.
+ */
 const LIVE_SMALL = [...Array.from({ length: 46 }, () => 3.0851), 2.9826, 2.8813, 2.5279, 1.9941, 1.4913, 1.3834, 1.2986, 1.2039, 1.1914, 1.1512, 1.1033, 0.9899, 0.9868, ...Array.from({ length: 20 }, () => 0.9096)];
 const LIVE_GIANT = 461_621.5306;
 
@@ -194,11 +199,13 @@ test('real SDK generator: the 10-03 live bank (one 461,621 KAS coin + 79 small o
   const { address, entries, gen } = sdkBank([LIVE_GIANT, ...LIVE_SMALL]);
   assert.equal(entries.length, 80);
   const plan = consolidationOutputs(address, sum(entries));
-  // the plan as the bank sent it (largest first, output = total - 1 KAS): refused every tick, 56 times
+  // The plan as the bank sent it (largest first, output = total - 1 KAS). It was refused on every
+  // tick.
   await assert.rejects(gen(plan), (e: unknown) => typeof e === 'string' && isMassError(e));
   // the old ladder (the output only raised) finds nothing either
   await assert.rejects(createWithMassRetry((o) => gen(o), plan), (e: unknown) => typeof e === 'string' && isMassError(e));
-  // with the margin coins: planned as asked, one transaction that spends all 80 coins, change of ~0.4 KAS
+  // With the margin coins: planned as asked, one transaction that spends all 80 coins, change of
+  // ~0.4 KAS.
   const set = marginCoins(entries, plan[0].amount, marginFor(100n))!;
   const r = await createWithMassRetry((o, coins?: typeof set) => gen(o, coins), plan, [set]);
   assert.equal(r.retries, 1);

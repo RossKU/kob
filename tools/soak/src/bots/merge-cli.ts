@@ -1,8 +1,13 @@
-// `soak.mjs consolidate [<key>...]`: the redeploy helper that merges every soak key's plain token UTXOs into ONE per token (the bots'
-// own consolidation keeps the fan-out target; this one does not). Each round sends `sendTokens` transactions of up to the program's token
-// inputs (smallest first) into one output of the same key, the fee and the change from the freed carriers (no KAS funding), then waits until
-// the key's view (indexer + tracker) shows the merges before the next round. The merged output carries 10 KAS when the inputs' carriers
-// allow it, else 1 KAS (x402 payments leave 1 KAS carriers). Run it with the bots stopped: it reserves nothing across processes.
+// `soak.mjs consolidate [<key>...]`: the redeploy helper that merges every soak key's plain token
+// UTXOs into ONE per token.
+// The bots' own consolidation keeps the fan-out target. This one does not.
+// Each round sends `sendTokens` transactions of up to the program's token inputs (smallest first)
+// into one output of the same key.
+// The fee and the change come from the freed carriers (no KAS funding).
+// Then it waits until the key's view (indexer + tracker) shows the merges before the next round.
+// The merged output carries 10 KAS when the inputs' carriers allow it, else 1 KAS (x402 payments
+// leave 1 KAS carriers).
+// Run it with the bots stopped: it reserves nothing across processes.
 import type { Env } from '../env';
 import { logger, Stats } from '../log';
 import { buildAtUrgency } from '../fees';
@@ -65,7 +70,8 @@ export async function mergeAll(env: Env, names: string[]): Promise<Record<string
           sent.push(r.txid!);
         }
         if (!sent.length) break;
-        // the next round starts once the view lists every merged output (the inputs are reserved by the wallet meanwhile), at most 3 minutes
+        // The next round starts once the view lists every merged output (the inputs are reserved by
+        // the wallet meanwhile), at most 3 minutes.
         for (let i = 0; i < 36; i++) {
           await sleep(5000);
           const seen = new Set((await w.tokenUtxos(ref)).map((u) => u.transactionId));

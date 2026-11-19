@@ -1,4 +1,5 @@
-// Unit tests of the checker's pure rules: `npm test` (node --test, Node >= 22.18 strips the TypeScript types natively).
+// Unit tests of the checker's pure rules: `npm test` (node --test, Node >= 22.18 strips the
+// TypeScript types natively).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -39,7 +40,8 @@ import type { EventLike, OrderLike } from '../src/checker/types.ts';
 
 const ID = 'aa'.repeat(32);
 const TOKEN = 'bb'.repeat(32);
-// protocol v3: base units and sompi per whole token. Scale 10^8 (8 decimals): 2 whole tokens are 200,000,000 base units, 20 KAS each.
+// Protocol v3: base units and sompi per whole token. Scale 10^8 (8 decimals): 2 whole tokens are
+// 200,000,000 base units, 20 KAS each.
 const U = 100_000_000;
 const ask = { scale: String(U), minFill: '1', price: '2000000000', tip: '0', slope: '0', priceEnd: '0', amountLeft: String(4 * U), tif: '0' };
 const fill = (o: Partial<EventLike> = {}): EventLike => ({
@@ -57,7 +59,7 @@ const fill = (o: Partial<EventLike> = {}): EventLike => ({
   ...o,
 });
 
-// ------------------------------------------------------------------------------------------------ all-in
+// ---------------------------------------- all-in
 
 test('worst bounds per contract', () => {
   assert.equal(worstBound('KobAsk', ask).bound, 2_000_000_000n);
@@ -102,7 +104,8 @@ test('an ask amended in place is checked against the terms it filled under (TN10
   const f2 = fill({ id: 5, price: '2429590000', payout: String(2n * 2_429_590_000n) });
   // with the placement terms both fills look like sells below the limit
   assert.equal(checkFill({ covenant_id: ID, contract: 'KobAsk' }, placed, f2).violations.length, 1);
-  // the first fill happened between the two amends (terms = previous of amend 4), the second after the last one (current terms)
+  // The first fill happened between the two amends (terms = previous of amend 4). The second came
+  // after the last one (current terms).
   assert.equal(termsAtFill(placed, current, evs, 3).price, '2443640000');
   assert.deepEqual(checkFill({ covenant_id: ID, contract: 'KobAsk' }, termsAtFill(placed, current, evs, 3), f1).violations, []);
   assert.deepEqual(checkFill({ covenant_id: ID, contract: 'KobAsk' }, termsAtFill(placed, current, evs, 5), f2).violations, []);
@@ -160,7 +163,7 @@ test('terms of a terminated order: the bid cap from budget_rate, asks keep only 
   assert.equal(partialTerms({ price: '2000000000', tip: '1000', scale: U, budget_rate: '2100001000' })!.priceEnd, '2100000000');
 });
 
-// ------------------------------------------------------------------------------------------------ IOC / FOK
+// ---------------------------------------- IOC / FOK
 
 const ioc = (o: Partial<OrderLike> = {}): OrderLike => ({ covenant_id: ID, contract: 'KobAsk', side: 1, status: 'open', tif: 1, last_daa: 10_000, current_daa: 10_000, active_from: 0, expiry_daa: 99_999_999, kill_daa: null, ...o });
 
@@ -180,7 +183,7 @@ test('an IOC alive past kill + grace is reported, within grace it is not', () =>
 });
 
 test('IOC kill deadline runs on the indexer cursor and only while the indexer follows (a lagging indexer is not blamed)', () => {
-  // kill 10,600; the cursor is 1,231 past it (as in the 07:17 incident) but the indexer only started following at 11,800
+  // Kill 10,600. The cursor is 1,231 past it, but the indexer only started following at 11,800.
   assert.equal(checkKill(ioc(), 11_831n, 1200n, null).length, 0, 'lagging: nothing is overdue');
   assert.equal(checkKill(ioc(), 11_831n, 1200n, 11_800n).length, 0, 'grace runs from followingSince, not from the kill time');
   assert.equal(checkKill(ioc(), 13_000n, 1200n, 11_800n).length, 0);
@@ -196,7 +199,8 @@ test('IOC kill deadline runs on the indexer cursor and only while the indexer fo
 });
 
 test('an IOC / FOK created after its own expiry is overdue only from its creation', () => {
-  // expiry 10,100, created (accepted) at 12,000: kill time 10,100 passed before the order existed (a creation that sat in the mempool)
+  // Expiry 10,100, created (accepted) at 12,000: kill time 10,100 passed before the order existed
+  // (a creation that sat in the mempool).
   const late = ioc({ last_daa: 12_000, current_daa: 12_000, expiry_daa: 10_100 });
   assert.equal(killDaa(late), 10_100n);
   assert.equal(checkKill(late, 13_200n).length, 0);
@@ -212,7 +216,8 @@ test('keeper gate: a book stale against the live node closes it although /v1/hea
   const m = (o: Record<string, number> = {}) => ({ kob_matcher_last_step_seconds: now - 2, kob_matcher_book_stale: 0, kob_matcher_waiting_for_indexer: 0, kob_matcher_paused: 0, ...o });
   assert.equal(keepersCanAct(h, m(), now), true);
   assert.equal(keepersCanAct(h, null, now), true, 'no metrics file: the health verdict alone');
-  // 2026-10-09 14:03:34-14:04:41: "the book lags the node; planning nothing" (book 592206751, node 592207955), health within tolerance
+  // A book that lags the node ("the book lags the node; planning nothing", book 592206751, node
+  // 592207955) with health within tolerance.
   assert.equal(keepersCanAct(h, m({ kob_matcher_book_stale: 1 }), now), false);
   assert.equal(keepersCanAct(h, m({ kob_matcher_waiting_for_indexer: 1 }), now), false);
   assert.equal(keepersCanAct(h, m({ kob_matcher_paused: 1 }), now), false);
@@ -221,8 +226,11 @@ test('keeper gate: a book stale against the live node closes it although /v1/hea
   assert.equal(keepersCanAct({ state: 'following', lag_daa: 50 }, m(), now), true, 'an older executor: following within 100 DAA');
   assert.equal(keepersCanAct({ state: 'following', lag_daa: 150 }, m(), now), false);
   assert.equal(keepersCanAct(null, m(), now), false);
-  // the deadline: kill 592207282; the gate sampled closed during the episode and open again at cursor 592208400 -> the kill accepted at
-  // 592208670 is inside the grace (it was reported 1201 DAA overdue with the stale followingSince 592206280 of the minute sample)
+  // The deadline: kill 592207282. The gate sampled closed during the episode and open again at
+  // cursor 592208400.
+  // So the kill accepted at 592208670 is inside the grace.
+  // It must not be reported 1201 DAA overdue from the stale followingSince 592206280 of the minute
+  // sample.
   let fs: bigint | null = 592_206_280n;
   fs = nextFollowingSince(fs, keepersCanAct(h, m({ kob_matcher_book_stale: 1 }), now), 592_207_100n);
   assert.equal(fs, null);
@@ -242,7 +250,7 @@ test('FOK events: a non-closing fill or a remainder kill in the fill transaction
   assert.equal(checkFokEvents({ ...o, tif: 1 }, [fill({ closes: false })]).length, 0);
 });
 
-// ------------------------------------------------------------------------------------------------ triggers (touch)
+// ---------------------------------------- triggers (touch)
 
 const condAsk = { tokenCovId: TOKEN, scale: String(U), stopPrice: '1800000000', tpPrice: '0', trailStep: '0', trailGap: '0', minTouch: '1000', minRestDaa: '600', activeFrom: '0' };
 /** a resting ask filled in the trigger transaction (100,000 base units, resting since DAA 1000) */
@@ -348,7 +356,8 @@ test('buy stop trails down on a resting ask fill', () => {
 });
 
 test('an arm of a trailing stop read from a memo older than its trail is a warning, not an error (TN10 KobCondBid ba1e1310)', () => {
-  // the stop of the memo (before the trail at 591217066 on an ask at 6390843734549); the arm's bid 6417709759338 is below it
+  // The stop of the memo (before the trail at 591217066 on an ask at 6390843734549). The arm's bid
+  // 6417709759338 is below it.
   const memo = { tokenCovId: TOKEN, scale: String(U), stopPrice: '6428402249437', tpPrice: '0', trailStep: '1000000000', trailGap: '20000000000', minTouch: '1', minRestDaa: '50', activeFrom: '0' };
   const CB = { covenant_id: ID, contract: 'KobCondBid' };
   const armAt = fill({ kind: 'arm', daa: 591217250, amount: null, price: null, payout: null });
@@ -360,7 +369,8 @@ test('an arm of a trailing stop read from a memo older than its trail is a warni
   assert.equal(r.violations.length, 1);
   assert.equal(r.violations[0].severity, 'warn');
   assert.match(r.reasons.join(';'), /may have trailed/);
-  // the stop it is read with is certain: a live state (no later trail) or a stop that does not trail -> still an error
+  // The stop it is read with is certain: a live state (no later trail) or a stop that does not
+  // trail. This is still an error.
   assert.equal(stopMayHaveMoved(memo, true, 2, 1), false);
   assert.equal(stopMayHaveMoved({ ...memo, trailStep: '0' }, false, 2, 1), false);
   assert.equal(checkTrigger(CB, memo, armAt, [bid], { stopUnknown: stopMayHaveMoved(memo, true, 2, 1) }).violations[0].severity, 'error');
@@ -370,9 +380,10 @@ test('an arm of a trailing stop read from a memo older than its trail is a warni
   assert.equal(checkTrigger(CB, memo, armAt, [evd({ price: '6417709759338' })], { stopUnknown: true }).violations[0].severity, 'error');
 });
 
-// ------------------------------------------------------------------------------------------------ repeat
+// ---------------------------------------- repeat
 
-// amounts in base units (a multiple of U = one whole token of scale 10^8 unless the test is about the last base unit)
+// Amounts in base units (a multiple of U = one whole token of scale 10^8, unless the test is about
+// the last base unit).
 const entry = (amount: string): OrderLike => ({ covenant_id: ID, contract: 'KobIfdBid', side: 2, status: 'open', last_daa: 1, state: { kind: 'KobIfdBid', state: { amountLeft: amount, scale: String(U), price: '2000000000', tip: '0', rptAmount: String(7 * U) } } });
 const exitOf = (amount: string, status = 'open', parent = ID): OrderLike => ({ covenant_id: 'e' + amount + status, contract: 'KobCondAsk', side: 1, status, last_daa: 1, state: { kind: 'KobCondAsk', state: { amountLeft: amount, parent, scale: String(U), tpPrice: '2100000000', tip: '0', rptPrice: '2000000000' } } });
 
@@ -408,7 +419,7 @@ test('repeat cycle: rptPrice is the entry budget rate and the maker keeps the sp
   assert.ok(checkRepeatCycle(entry('0'), wrongBudget, ok).some((v) => v.subject.endsWith(':rptPrice')));
 });
 
-// ------------------------------------------------------------------------------------------------ fees
+// ---------------------------------------- fees
 
 test('fee == 100 x max(compute, transientNormalized) exactly in relay mode', () => {
   const l = { txid: 't1', fee: '2500000', minFee: '2500000', feeRate: '100', feeMode: 'relay', compute: 20000, transientNormalized: 25000, storage: 90000 };
@@ -419,7 +430,7 @@ test('fee == 100 x max(compute, transientNormalized) exactly in relay mode', () 
   assert.equal(checkFeeLine({ ...l, feeMode: 'priority' }), 'unchecked');
 });
 
-// ------------------------------------------------------------------------------------------------ x402
+// ---------------------------------------- x402
 
 const led = (e: Record<string, unknown>) => JSON.stringify({ entry: e });
 
@@ -463,7 +474,7 @@ test('x402: one outpoint consumed by two accepted settlements, one txid bound to
   assert.deepEqual(subjects, ['c:requests', 'u:1:double']);
 });
 
-// ------------------------------------------------------------------------------------------------ agreement, health, persistence
+// ---------------------------------------- agreement, health, persistence
 
 test('indexer agreement diffs', () => {
   const a = { covenant_id: ID, contract: 'KobAsk', side: 1, status: 'open', filled_amount: '0', amount_left: '300000000', last_daa: 5, current: { txid: 't', index: 0, value: '1' }, state_known: true } as OrderLike;
@@ -499,7 +510,8 @@ test('persistence: fires once after N rounds of the same condition; a changed si
 test('a buy costs at most its all-in limit (escrow drawn less the delivery output, rising-bid surplus included)', () => {
   const bid = { ...ask, tip: '1000', deliveryCarrier: '1000000000' };
   const allIn = 2n * (2_000_000_000n + 1000n);
-  // a rising bid consumes used(n) = ceil(n * (pMax + tip) / scale) at the budget rate and returns the surplus on the delivery output
+  // A rising bid consumes used(n) = ceil(n * (pMax + tip) / scale) at the budget rate and returns
+  // the surplus on the delivery output.
   const surplus = 2n * 4_000_000n;
   const ev = (cost: bigint, soldOut = false) =>
     fill({
@@ -526,12 +538,16 @@ test('a buy costs at most its all-in limit (escrow drawn less the delivery outpu
   assert.equal(checkFill({ covenant_id: ID, contract: 'KobBid' }, bid, fill({ side: 2, payout: null, detail: { verified: true, t: 995, escrow_before: '1' } })).payoutChecked, false);
 });
 
-// fee rule with a folded change: kob-protocol tx.rs Draft::seal keeps a change only if the transaction with it stays within the block limits;
-// a change alone below ~C/500001 = 1_999_996 sompi (storage mass C/c) is folded into the fee (the fee is the floor + the change + the change output's fee)
+// Fee rule with a folded change: kob-protocol tx.rs Draft::seal keeps a change only if the
+// transaction with it stays within the block limits.
+// A change alone below ~C/500001 = 1_999_996 sompi (storage mass C/c) is folded into the fee.
+// The fee is then the floor + the change + the change output's fee.
 const feeBase = { txid: 'aa', feeRate: '100', feeMode: 'relay' } as const;
-// compute-bound amend (the mm bot's): floor 471900; the change output adds 412 compute = 41200 sompi, so the largest fold is 1_999_996 + 41_200
+// Compute-bound amend (the mm bot's): floor 471900. The change output adds 412 compute = 41200
+// sompi, so the largest fold is 1_999_996 + 41_200.
 const mmLine = { ...feeBase, minFee: '471900', compute: 4719, transientNormalized: 4698, storage: 0, changeOutput: null };
-// transient-bound amend (t1/t4/mm): floor 1929800; the change output adds 104 normalized transient = 10400 sompi
+// Transient-bound amend (t1/t4/mm): floor 1929800. The change output adds 104 normalized transient
+// = 10400 sompi.
 const trLine = { ...feeBase, minFee: '1929800', compute: 12789, transientNormalized: 19298, storage: 0, changeOutput: null };
 
 test('fee: exactly the floor is fine', () => {
@@ -543,20 +559,23 @@ test('fee: exactly the floor is fine', () => {
 test('fee: the fold bound is floor(C / 500001) + the change output fee, derived from the builder rule', () => {
   assert.equal(maxFoldedExcess(mmLine), 1_999_996n + 41_200n);
   assert.equal(maxFoldedExcess(trLine), 1_999_996n + 10_400n);
-  // a transaction that already carries storage mass leaves less room for the change: c <= C / (500001 - storage)
+  // A transaction that already carries storage mass leaves less room for the change: c <= C /
+  // (500001 - storage).
   assert.equal(maxFoldedExcess({ ...trLine, storage: 400_000 }), 1_000_000_000_000n / 100_001n + 10_400n);
   // the no-change transaction itself over the storage limit: no bound
   assert.equal(maxFoldedExcess({ ...trLine, storage: 500_001 }), null);
 });
 
 test('fee: a folded excess up to the bound is accepted (info-level result), one above it is an error', () => {
-  // the live incidents: mm amend fee 2508700 vs 471900 (excess 2036800), t2 amend 2756500 vs 1929800 (excess 826700)
+  // Excess fees seen on TN10: mm amend fee 2508700 vs 471900 (excess 2036800), t2 amend 2756500 vs
+  // 1929800 (excess 826700).
   const live = checkFeeLine({ ...mmLine, fee: '2508700' });
   assert.ok(live && typeof live === 'object' && 'kind' in live);
   assert.deepEqual(live, { kind: 'folded', txid: 'aa', bot: undefined, what: undefined, fee: '2508700', expected: '471900', excess: '2036800', maxFold: '2041196' });
   const t2 = checkFeeLine({ ...trLine, fee: '2756500' });
   assert.ok(t2 && typeof t2 === 'object' && 'kind' in t2 && t2.excess === '826700');
-  // the smallest excess (1 sompi: a change too small to even pay for its own output), and exactly the bound
+  // The smallest excess (1 sompi: a change too small to even pay for its own output), and exactly
+  // the bound.
   assert.ok(checkFeeLine({ ...mmLine, fee: String(471900n + 1n) }) && 'kind' in (checkFeeLine({ ...mmLine, fee: String(471900n + 1n) }) as object));
   const edge = checkFeeLine({ ...mmLine, fee: String(471900n + 2_041_196n) });
   assert.ok(edge && typeof edge === 'object' && 'kind' in edge);
@@ -630,7 +649,8 @@ test('evidence of a terminated order: partial terms carry the token and activati
   const bidStop = { ...condAsk, stopPrice: '2310090000', minRestDaa: '50', minTouch: '1' };
   const bid = (o: Partial<EvidenceFact> = {}) => evd({ contract: 'KobBid', side: 2, price: '2314350000', amount: '1', tokenCovId: t.tokenCovId, slope: null, exposedSince: null, ...o });
   const armAt = fill({ kind: 'arm', daa: 584755879, amount: null, price: null, payout: null });
-  // the 2026-10-01 case: an IOC bid resting 69 DAA, filled next to the arm, seen by the checker only after it closed -> unverifiable, a warning
+  // An IOC bid resting 69 DAA, filled next to the arm, seen by the checker only after it closed. It
+  // is unverifiable, so the result is a warning.
   const r = checkTrigger({ covenant_id: ID, contract: 'KobCondBid' }, bidStop, armAt, [evd({ price: '2312040000', exposedSince: '584755325' }), bid({ exposedFloor: 584755810 })]);
   assert.equal(r.violations[0].severity, 'warn');
   // rested less than minRestDaa even from the earliest possible start: an error
@@ -648,7 +668,8 @@ test('a stop filled at its trigger is checked like an arm: evidence side and pri
   assert.equal(checkTrigger(CA, condAsk, trig, []).violations[0].severity, 'error');
 });
 
-// ------------------------------------------------------------------------------------------------ fees: the dynamic fee policy (fee == recorded rate x mass, rate within [floor, maxRate])
+// ---------------------------------------- fees: the dynamic fee policy
+// (fee == recorded rate x mass, rate within [floor, maxRate])
 
 const dyn = (rate: number, over: Record<string, unknown> = {}) => ({
   txid: 'd1', feeRate: String(rate), feeMode: 'relay', compute: 20000, transientNormalized: 25000, storage: 90000,
@@ -717,7 +738,7 @@ test('fee: the change fold bound scales with the recorded rate', () => {
   assert.ok(out && typeof out === 'object' && 'invariant' in out);
 });
 
-// ------------------------------------------------------------------------------------------------ amounts, prices and rounding (protocol v3)
+// ---------------------------------------- amounts, prices and rounding (protocol v3)
 
 test('quoteOf rounds as the covenants do: down for what a maker pays, up for what a maker must receive', () => {
   assert.equal(quoteOf(3n, 2500n, 1000n, 'down'), 7n);
@@ -734,7 +755,8 @@ test('quoteOf rounds as the covenants do: down for what a maker pays, up for wha
 });
 
 test('a seller must receive the rounded-UP value of the filled amount: one sompi below is a violation', () => {
-  // scale 1000, price 2500 per whole token, tip 100: 3 base units are worth 3 * 2400 / 1000 = 7.2 -> 8 sompi
+  // Scale 1000, price 2500 per whole token, tip 100: 3 base units are worth 3 * 2400 / 1000 = 7.2,
+  // rounded up to 8 sompi.
   const s = { scale: '1000', minFill: '1', price: '2500', tip: '100', slope: '0', priceEnd: '0', amountLeft: '10', tif: '0' };
   const ev = (payout: string) => fill({ amount: '3', price: '2500', payout, detail: { verified: true, t: 1 } });
   assert.deepEqual(checkFill({ covenant_id: ID, contract: 'KobAsk' }, s, ev('8')).violations, []);
@@ -758,8 +780,10 @@ test('a buyer pays at most the rounded-DOWN value: one sompi above is a violatio
 });
 
 test('a terminal bid fill: the plain refund output (detail.refund_value) is not part of the buy cost', () => {
-  // scale 1000, price 2500, tip 100: 3 base units cost at most 7 sompi. The bid sold out (no escrow_after) with 5 KAS above the delivery
-  // carrier: that spare KAS leaves the escrow as a refund output, so counting only the delivery would read it as a 5 KAS overspend.
+  // Scale 1000, price 2500, tip 100: 3 base units cost at most 7 sompi.
+  // The bid sold out (no escrow_after) with 5 KAS above the delivery carrier.
+  // That spare KAS leaves the escrow as a refund output, so counting only the delivery would read
+  // it as a 5 KAS overspend.
   const bid = { scale: '1000', minFill: '1', price: '2500', tip: '100', slope: '0', priceEnd: '0', tif: '0' };
   const KAS = 100_000_000n;
   const refund_ = (r: bigint | null) => r ?? 0n;
@@ -785,7 +809,8 @@ test('a terminal bid fill: the plain refund output (detail.refund_value) is not 
 });
 
 test('a merged take-profit pays the maker the rounded-up proceeds minus the rounded-up merge return', () => {
-  // scale 1000, 3 base units: proceeds ceil(3 * 2100 / 1000) = 7, merge return ceil(3 * 2000 / 1000) = 6: the maker keeps at least 1
+  // Scale 1000, 3 base units: proceeds ceil(3 * 2100 / 1000) = 7, merge return ceil(3 * 2000 /
+  // 1000) = 6. The maker keeps at least 1.
   const exit = { scale: '1000', minFill: '1', tip: '0', tpPrice: '2100', stopPrice: '0', slipBps: '0', trailStep: '0', rptPrice: '2000', amountLeft: '3', tif: '0' };
   const ev = (payout: string) => fill({ amount: '3', price: '2100', payout, detail: { verified: true, t: 1, merged_into: 'dd'.repeat(32) } });
   assert.equal(checkFill({ covenant_id: ID, contract: 'KobCondAsk' }, exit, ev('1')).violations.length, 0);

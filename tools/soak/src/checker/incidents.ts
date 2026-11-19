@@ -1,5 +1,8 @@
-// Incident log run/incidents.jsonl: one JSON line `{ts, invariant, severity, subject, detail}` per violation, appended ONCE per
-// (invariant, subject) for the life of the soak (the existing file is read back at start). No `@/` imports (unit-tested).
+// Incident log run/incidents.jsonl: one JSON line `{ts, invariant, severity, subject, detail}` per
+// violation.
+// A line is appended ONCE per (invariant, subject) for the life of the soak (the existing file is
+// read back at start).
+// No `@/` imports (unit-tested).
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Violation } from './types.ts';
@@ -43,7 +46,10 @@ export class IncidentLog {
     return this.seen.has(`${invariant}|${subject}`);
   }
 
-  /** appends the violation unless its (invariant, subject) was reported before; true when it is new */
+  /**
+   * Appends the violation unless its (invariant, subject) was reported before. Returns true when it
+   * is new.
+   */
   report(v: Violation, now = new Date()): boolean {
     const k = `${v.invariant}|${v.subject}`;
     if (this.seen.has(k)) return false;

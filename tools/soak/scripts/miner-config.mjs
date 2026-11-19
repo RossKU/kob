@@ -1,6 +1,9 @@
-// The supervisor's miner child: run/config.json `miner` -> the tn10-miner settings file (run/miner.json, passed as MINER_CONFIG).
-// The supervisor rewrites the file on every start of the miner; the miner re-reads it whenever it changes, so an edit of run/miner.json
-// moves the watermarks / duty cycle of the running miner at once (until the next supervisor start rewrites it from config.json).
+// The supervisor's miner child: run/config.json `miner` -> the tn10-miner settings file
+// (run/miner.json, passed as MINER_CONFIG).
+// The supervisor rewrites the file on every start of the miner.
+// The miner re-reads it whenever it changes.
+// So an edit of run/miner.json moves the watermarks and duty cycle of the running miner at once,
+// until the next supervisor start rewrites it from config.json.
 // See README "Miner".
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -11,7 +14,10 @@ const GPU_KEYS = ['device', 'global', 'local', 'dispatchMs'];
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const posInt = (v) => Number.isInteger(v) && v > 0;
 
-/** The validated tn10-miner settings (its settings-file shape) of a soak config; throws on a bad `miner` block. */
+/**
+ * The validated tn10-miner settings (its settings-file shape) of a soak config. Throws on a bad
+ * `miner` block.
+ */
 export function minerSettings(cfg) {
   const m = cfg.miner ?? {};
   if (!isObj(m)) throw new Error('config.miner must be an object');
@@ -21,7 +27,8 @@ export function minerSettings(cfg) {
     if (!['cpu', 'gpu', 'auto'].includes(m.backend)) throw new Error('config.miner.backend must be "cpu", "gpu" or "auto"');
     out.backend = m.backend;
   }
-  // `minerThreads` (top level) is the older spelling; the CPU backend's threads (unused by the GPU backend)
+  // `minerThreads` (top level) is an alias. It sets the CPU backend's threads, which the GPU
+  // backend does not use.
   const threads = m.threads ?? cfg.minerThreads ?? 6;
   if (!posInt(threads)) throw new Error('config.miner.threads must be a positive integer');
   out.threads = threads;
@@ -70,8 +77,9 @@ export function minerSettings(cfg) {
 }
 
 /**
- * The supervisor's spec of the miner child. Writes `<run>/miner.json` unless `write` is false. Pays the bank key; the watermarks apply
- * to the bank's spendable (coinbase-matured) balance unless `balanceAddress` says otherwise.
+ * The supervisor's spec of the miner child. Writes `<run>/miner.json` unless `write` is false.
+ * Pays the bank key. The watermarks apply to the bank's spendable (coinbase-matured) balance unless
+ * `balanceAddress` says otherwise.
  */
 export function minerSpec(cfg, { run, minerBin, bankAddress, write = true }) {
   const settings = minerSettings(cfg);

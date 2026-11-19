@@ -1,5 +1,7 @@
-// The soak registry's token programs (src/registry-templates.ts): the same pins as the shipped registry, and external tokens
-// (a Kasseal launchpad token, program KCC20PublicMint) listed on the reference's published public-mint build.
+// The soak registry's token programs (src/registry-templates.ts): the same pins as the shipped
+// registry.
+// Also external tokens (a Kasseal launchpad token, program KCC20PublicMint) listed on the
+// reference's published public-mint build.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -43,7 +45,8 @@ test('the launchpad test programs pin what the embedded profiles say, and are ad
       name,
     );
     assert.ok(p.networks?.includes('testnet-10'), name); // KaspaRocket's program is on mainnet too since the 2026-10-27 review
-    // the custody owner the order templates pin; a KRON program's holder type is the build of the order kinds (0: *KronD0)
+    // The custody owner the order templates pin. A KRON program's holder type is the build of the
+    // order kinds (0: *KronD0).
     if (t.family === 'kron') assert.deepEqual(t.escrow, { id_type: p.owners.custody, is_minter: 0, delivery_id_type: p.owners.holder });
     else assert.deepEqual(t.escrow, { owner_scheme: p.owners.custody, borrow_scheme: 0 });
     // the shipped (mainnet) registry does not carry them

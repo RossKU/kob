@@ -1,5 +1,7 @@
-// Read-only: compares the bots' transaction log (run/state/txs.jsonl) between two windows: fees per hour, transactions per hour, and
-// size / fee / payload per action, so a redeploy's cost change can be read off.
+// Read-only: compares the bots' transaction log (run/state/txs.jsonl) between two windows.
+// It shows fees per hour, transactions per hour, and size / fee / payload per action,
+// so the cost change of a redeploy can be read off.
+//
 //   node scripts/fee-compare.mjs --before <ISO> <ISO> --after <ISO> [<ISO>] [--run run]
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,7 +24,8 @@ const f = (x, d = 2) => x.toFixed(d);
 console.log(`before ${new Date(b0).toISOString()} .. ${new Date(b1).toISOString()} (${f(B.hours)} h): ${B.txs} txs, ${f(B.feeKas, 3)} KAS, ${f(B.feeKas / B.hours, 3)} KAS/h, ${f(B.txs / B.hours, 1)} tx/h, ${f(B.feeKas / B.txs, 5)} KAS/tx, ${Math.round(B.bytes / B.txs)} B/tx`);
 console.log(`after  ${new Date(a0).toISOString()} .. ${new Date(a1).toISOString()} (${f(A.hours)} h): ${A.txs} txs, ${f(A.feeKas, 3)} KAS, ${f(A.feeKas / A.hours, 3)} KAS/h, ${f(A.txs / A.hours, 1)} tx/h, ${f(A.feeKas / A.txs, 5)} KAS/tx, ${Math.round(A.bytes / A.txs)} B/tx`);
 console.log(`fee per tx ${f((A.feeKas / A.txs / (B.feeKas / B.txs) - 1) * 100, 1)} %, bytes per tx ${f((A.bytes / A.txs / (B.bytes / B.txs) - 1) * 100, 1)} %, fee per hour ${f((A.feeKas / A.hours / (B.feeKas / B.hours) - 1) * 100, 1)} %`);
-// the after-window's action mix priced at the before-window's per-action fee: the cost change with the activity held constant
+// The after-window's action mix priced at the before-window's per-action fee: the cost change with
+// the activity held constant.
 let mixB = 0, mixA = 0;
 for (const [k, e] of Object.entries(A.by)) { const b = B.by[k]; if (!b) continue; mixB += e.n * (b.fee / b.n); mixA += e.fee; }
 console.log(`same action mix (after's counts at before's per-action fee): ${f((mixA / mixB - 1) * 100, 1)} %`);

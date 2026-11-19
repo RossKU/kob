@@ -1,5 +1,6 @@
-// The soak's fee policy glue: config.fees, the bank's feeRate plan (fake generator and the real SDK generator),
-// and the unplanned builders (token consolidation, fan-out). The policy itself is tested in web/src/kob/fee-policy.test.ts.
+// The soak's fee policy glue: config.fees, the bank's feeRate plan (fake generator and the real SDK
+// generator), and the unplanned builders (token consolidation, fan-out).
+// The policy itself is tested in web/src/kob/fee-policy.test.ts.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -10,7 +11,7 @@ import { planWithFeePolicy, type PayoutOutput, KAS } from '../src/bank-plan.ts';
 import { buildAtUrgency } from '../src/fees.ts';
 import { feeChoiceOf, normalizePolicy, createFeeService, type FeeEstimate } from '../../../web/src/kob/fee-policy.ts';
 
-// ------------------------------------------------------------------------------------------------ config
+// ---------------------------------------- config
 
 test('config.fees: an absent key is the defaults with dynamic ON; keys are independent', () => {
   assert.deepEqual(feeSettingsOf(undefined), { dynamic: true, maxRate: 1000, maxFeeKas: 1 });
@@ -28,11 +29,13 @@ test('config.fees: an invalid value throws (a typo must not silently change what
   assert.throws(() => feeSettingsOf('on' as never), /object/);
 });
 
-// ------------------------------------------------------------------------------------------------ x402 payer
-// The payer's rate is the x402 SDK's `feeRate` / `feeRateFloor` (packages/kob-x402/test/fee.test.ts covers the pass-through to every
-// builder and the one retry at the floor); the soak only sets the HIGH-bucket rate before each payment (bots/x402.ts).
+// ---------------------------------------- x402 payer
+// The payer's rate is the x402 SDK's `feeRate` / `feeRateFloor`.
+// packages/kob-x402/test/fee.test.ts covers the pass-through to every builder and the one retry at
+// the floor.
+// The soak only sets the HIGH-bucket rate before each payment (bots/x402.ts).
 
-// ------------------------------------------------------------------------------------------------ bank
+// ---------------------------------------- bank
 
 const addr = 'kaspatest:qz';
 const outs: PayoutOutput[] = [{ address: addr, amount: 100n * KAS }];
@@ -70,7 +73,8 @@ test('bank: a plan that fails at the picked rate is generated again at the floor
 
 test('bank: the total cap regenerates ONCE at floor_div(rate x cap, fee) when one transaction pays more', async () => {
   const log: bigint[] = [];
-  // mass 4,000,000 x 400 = 1.6e9 sompi per transaction against the 1 KAS cap -> 400 x 1e8 / 1.6e9 = 25 -> the floor 100
+  // Mass 4,000,000 x 400 = 1.6e9 sompi per transaction against the 1 KAS cap, so 400 x 1e8 / 1.6e9
+  // = 25, which is raised to the floor 100.
   const r = await planWithFeePolicy(fakeCreate(4_000_000n, log), outs, normalizePolicy(), 400n);
   assert.deepEqual(log, [400n, 100n]);
   assert.equal(r.rate, 100n);
@@ -115,7 +119,7 @@ test('bank: the real SDK generator pays feeRate x mass (feeRate is a number of s
   assert.equal(capped.cappedFrom, 900n);
 });
 
-// ------------------------------------------------------------------------------------------------ unplanned builders (consolidate, fan-out)
+// ---------------------------------------- unplanned builders (consolidate, fan-out)
 
 const estimate: FeeEstimate = { priority: 300, normal: 150, low: 120 };
 const envOf = (est: FeeEstimate | null, settings = { dynamic: true, maxRate: 1000, maxFeeKas: 1 }) =>

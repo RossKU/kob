@@ -1,4 +1,5 @@
-// Process-wide services: kob-wasm, the official kaspa SDK, one node connection, the indexer client, keys and the soak state file.
+// Process-wide services: kob-wasm, the official kaspa SDK, one node connection, the indexer client,
+// keys and the soak state file.
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -72,16 +73,23 @@ export interface Env {
   node: KaspaRpcNode;
   indexer: HttpIndexer;
   /**
-   * further indexers a market / close order's start is checked against (the web app's `extraIndexerUrls`): the soak's second executor
-   * (`indexerUrlB`); without one every market order worth 100 KAS or more is refused as MARKET_START_UNVERIFIED
+   * Further indexers a market / close order's start is checked against (the web app's
+   * `extraIndexerUrls`).
+   * It is the soak's second executor (`indexerUrlB`). Without one, every market order worth 100 KAS
+   * or more is refused as MARKET_START_UNVERIFIED.
    */
   verifiers: { label: string; api: HttpIndexer }[];
   keys: Record<string, KeyEntry>;
   state: SoakState;
-  /** the dynamic fee policy (config `fees`) and the oracle over the node's getFeeEstimate (fees.ts) */
+  /**
+   * The dynamic fee policy (config `fees`) and the oracle over the node's getFeeEstimate (fees.ts).
+   */
   fees: FeeService;
   saveState(): void;
-  /** set by the bots process only: while the indexer is not following, BotWallet.submit refuses and the bot loops wait (indexer-gate.ts) */
+  /**
+   * Set by the bots process only. While the indexer is not following, BotWallet.submit refuses and
+   * the bot loops wait (indexer-gate.ts).
+   */
   gate?: IndexerGate;
 }
 

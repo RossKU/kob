@@ -1,19 +1,33 @@
-// Tracking error of the soak's USD prices against the real markets the bots follow (Binance USD-M KASUSDT / ETHUSDT / BTCUSDT).
+// Tracking error of the soak's USD prices against the real markets the bots follow (Binance USD-M
+// KASUSDT / ETHUSDT / BTCUSDT).
 //
-//   node scripts/tracking.mjs [--config run/config.json] [--minutes 60 | --from <ISO> [--to <ISO>]] [--indexer http://127.0.0.1:8091] [--json]
+//   node scripts/tracking.mjs [--config run/config.json] \
+//        [--minutes 60 | --from <ISO> [--to <ISO>]] [--indexer http://127.0.0.1:8091] [--json]
 //
-// Soak side, from the indexer's trades and 1m candles (block time), converted the way the web app does (web/src/ui/market/usd-model.ts):
-//   KAS/USD = 1 / (KAS per TUSD)          ETH/USD = KAS per TETH / KAS per TUSD          BTC/USD = KAS per TBTC / KAS per TUSD
-// Reference side: every good Binance poll of the bots (run/state/ref-prices.jsonl, price.ts RefRecorder; exchange time, ~3 s apart).
+// Soak side, from the indexer's trades and 1m candles (block time), converted the way the web app
+// does (web/src/ui/market/usd-model.ts):
+//
+//   KAS/USD = 1 / (KAS per TUSD)
+//   ETH/USD = KAS per TETH / KAS per TUSD
+//   BTC/USD = KAS per TBTC / KAS per TUSD
+//
+// Reference side: every good Binance poll of the bots (run/state/ref-prices.jsonl, price.ts
+// RefRecorder; exchange time, ~3 s apart).
 //
 // Two views per market:
-//   trades   every trade of the market's own book in the window (TUSD trades for KAS/USD, TETH / TBTC trades for ETH / BTC): its price,
-//            divided by the newest TUSD trade at or before it (the time-aligned USD rate; skipped when that is older than 10 min),
-//            against the newest Binance price at or before (trade time - lag).
-//   candles  the app's chart: 1m buckets, each leg's close (carried across buckets without trades), the ratio of the closes, against the
-//            last Binance price of the same bucket; buckets where no leg traded are left out.
-// Deviation = soak / Binance - 1 in basis points. Lag: the shift (0 to 600 s, step 5 s) of the reference that minimises the median |deviation|
-// of the trades view (a positive lag: the soak follows Binance that much later).
+//
+//   trades   every trade of the market's own book in the window (TUSD trades for KAS/USD,
+//            TETH / TBTC trades for ETH / BTC). Its price is divided by the newest TUSD trade at
+//            or before it (the time-aligned USD rate, skipped when that is older than 10 min).
+//            It is compared with the newest Binance price at or before (trade time - lag).
+//   candles  the app's chart: 1m buckets, each leg's close (carried across buckets without
+//            trades), the ratio of the closes. It is compared with the last Binance price of the
+//            same bucket. Buckets where no leg traded are left out.
+//
+// Deviation = soak / Binance - 1 in basis points.
+// Lag is the shift (0 to 600 s, step 5 s) of the reference that minimises the median |deviation| of
+// the trades view.
+// A positive lag means the soak follows Binance that much later.
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,7 +61,7 @@ const markets = [
     .map((s) => ({ name: `${st[s].ticker.replace(/^T/, '')}/USD`, symbol: symOf(cfg[s].priceUrl), base: st[s] })),
 ];
 
-// ------------------------------------------------------------------------------------------------ reference record
+// ------------------------------------------------------------------------ reference record
 
 const ref = new Map(); // symbol -> { t: number[], p: number[] }
 {
@@ -86,7 +100,7 @@ const refAt = (symbol, t, maxAge = 30_000) => {
   return i >= 0 && t - a.t[i] <= maxAge ? a.p[i] : null;
 };
 
-// ------------------------------------------------------------------------------------------------ indexer
+// ------------------------------------------------------------------------ indexer
 
 async function get(path) {
   const r = await fetch(API + path, { signal: AbortSignal.timeout(20_000) });
@@ -95,8 +109,10 @@ async function get(path) {
 }
 
 /**
- * trades of a token in [from - 10 min, to], ascending: { t, kas } with kas = KAS per WHOLE token. Protocol v3: `price_basis` is the token's
- * standard scale (10^decimals, sompi per whole token) and the response carries `decimals`; the formula below holds for any basis.
+ * Trades of a token in [from - 10 min, to], ascending: { t, kas } with kas = KAS per WHOLE token.
+ * `price_basis` is the token's standard scale (10^decimals, sompi per whole token) and the response
+ * carries `decimals`.
+ * The formula below holds for any basis.
  */
 async function trades(tok) {
   const out = [];
@@ -115,7 +131,10 @@ async function trades(tok) {
   return out.filter((x) => x.t >= from - MAX_RATE_AGE).sort((a, b) => a.t - b.t);
 }
 
-/** 1m candles of a token in the window: Map bucket -> { c (KAS per whole token), traded } (carried across empty buckets) */
+/**
+ * 1m candles of a token in the window: Map bucket -> { c (KAS per whole token), traded } (carried
+ * across empty buckets).
+ */
 async function candles(tok) {
   const v = await get(`/v1/candles/${tok.covenantId}?interval=1m&from=${from - MAX_RATE_AGE}&to=${to}&limit=2000`);
   const basis = Number(v.price_basis);
@@ -129,7 +148,7 @@ async function candles(tok) {
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ statistics
+// ------------------------------------------------------------------------ statistics
 
 const q = (sorted, p) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))] : null);
 function summary(devs) {

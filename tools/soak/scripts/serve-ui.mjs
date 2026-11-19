@@ -1,14 +1,23 @@
-// Serves the web app (a `vite build` of web/ copied to run/web-dist, built against the TN10 kob-wasm) with a config pointing at the soak's
-// indexer (exec-a, CORS enabled) and its TN10 node, plus the soak registry. Read-only market pages need no wallet.
+// Serves the web app with a config pointing at the soak's indexer (exec-a, CORS enabled), its TN10
+// node and the soak registry.
+// The app is a `vite build` of web/ copied to run/web-dist, built against the TN10 kob-wasm.
+// Read-only market pages need no wallet.
 //
-//   node scripts/serve-ui.mjs [--config run/config.json] [--public]   -> http://<ui.listen>/#/market/<token>
+//   node scripts/serve-ui.mjs [--config run/config.json] [--public]
+//   -> http://<ui.listen>/#/market/<token>
 //
-// --public (or `ui.public: true`): everything goes through this one origin, so the page can be put behind a tunnel or proxy
-// (https): the app is configured with `<origin>/indexer` (read-only GET/HEAD relay to the indexer) and `wss://<host>/node`
-// (WebSocket relay to the TN10 node). Nothing else of the soak is reachable through it. The /indexer relay is GET/HEAD only, with one
-// exception: `POST /v1/logo-reports` (the app's "Report logo" button posts it next to the blocklist), with a small body cap.
+// `--public` (or `ui.public: true`) sends everything through this one origin, so the page can be
+// put behind a tunnel or proxy (https).
+// The app is configured with `<origin>/indexer` (read-only GET/HEAD relay to the indexer) and
+// `wss://<host>/node`
+// (WebSocket relay to the TN10 node).
+// Nothing else of the soak is reachable through it.
+// The /indexer relay is GET/HEAD only, with one exception.
+// `POST /v1/logo-reports` (the app's "Report logo" button posts it next to the blocklist) passes,
+// with a small body cap.
 //
-// The app is configured with `quoteTokens` (TUSD = USD): it shows KAS/USD, ETH/USD (TETH) and BTC/USD (TBTC) charts through the TUSD book.
+// The app is configured with `quoteTokens` (TUSD = USD).
+// It shows KAS/USD, ETH/USD (TETH) and BTC/USD (TBTC) charts through the TUSD book.
 import { createServer, request as httpRequest } from 'node:http';
 import { connect, isIP } from 'node:net';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -47,7 +56,8 @@ const origin = (req) => {
   return { proto, host: req.headers.host ?? `${host}:${port}` };
 };
 
-// the USD quote token of the soak (TUSD tracks 1 USD worth of KAS): the app shows KAS/USD and every other token in USD through it
+// The USD quote token of the soak (TUSD tracks 1 USD worth of KAS).
+// The app shows KAS/USD and every other token in USD through it.
 const quoteTokens = () => {
   try {
     const st = JSON.parse(readFileSync(join(RUN, 'state.json'), 'utf8'));
@@ -72,12 +82,15 @@ const appConfig = (req) => {
   };
 };
 
-// the one write the /indexer relay passes: a logo report (docs/api-reference.md 3.19). The indexer reads at most 1024 bytes of it, so twice that is a cap with room
+// The one write the /indexer relay passes: a logo report (docs/api-reference.md 3.19).
+// The indexer reads at most 1024 bytes of it, so twice that is a cap with room.
 const LOGO_REPORTS = '/v1/logo-reports';
 const LOGO_REPORT_MAX_BODY = 2048;
 
-// POST /v1/logo-reports: the body (capped) goes to the indexer as it is, as JSON; the client address the tunnel saw goes along as the header the indexer's
-// `api.client_ip_header` reads (cf-connecting-ip, x-forwarded-for), so its per-client report limit is the visitor's and not the relay's
+// POST /v1/logo-reports: the body (capped) goes to the indexer as it is, as JSON.
+// The client address the tunnel saw goes along as the header that the indexer's
+// `api.client_ip_header` reads (cf-connecting-ip, x-forwarded-for).
+// So its per-client report limit is the visitor's and not the relay's.
 function relayLogoReport(req, res) {
   const tooLarge = () => {
     res.writeHead(413, { connection: 'close' });
@@ -175,12 +188,15 @@ const server = createServer((req, res) => {
   let file = normalize(join(DIST, path === '/' ? 'index.html' : path === '/signer' ? 'signer.html' : path));
   if (!file.startsWith(DIST)) return void res.writeHead(403).end();
   if (!existsSync(file) || statSync(file).isDirectory()) file = join(DIST, 'index.html');
-  // index.html and every file without a content hash are revalidated on each load (a browser must never keep an old bundle's entry);
-  // the hashed build output under /assets/ never changes under its name
+  // index.html and every file without a content hash are revalidated on each load, so a browser
+  // never keeps an old bundle's entry.
+  // The hashed build output under /assets/ never changes under its name.
   const hashed = file.startsWith(join(DIST, 'assets') + sep);
-  // what web/public/_headers asks of a host for the private-key signer (`vite preview` serves the same, web/vite.config.ts): the signer
-  // page's header policy (sandbox, frame-ancestors 'self'), and CORS on /assets/*: the signer runs in an opaque origin, so its scripts,
-  // stylesheet and wasm are cross-origin requests to this host
+  // What web/public/_headers asks of a host for the private-key signer (`vite preview` serves the
+  // same, web/vite.config.ts):
+  // - The signer page's header policy (sandbox, frame-ancestors 'self').
+  // - CORS on /assets/*. The signer runs in an opaque origin, so its scripts, stylesheet and wasm
+  //   are cross-origin requests to this host.
   const signerPage = file === join(DIST, 'signer.html');
   res.writeHead(200, {
     'content-type': TYPES[extname(file)] ?? 'application/octet-stream',

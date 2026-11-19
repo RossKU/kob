@@ -1,24 +1,36 @@
 // Market history across a re-issue (no `@/` imports: unit-tested with plain `node --test`).
 //
-// A token issued again (the switch of the soak tokens to KOB's standard 3 / 3 program, 2026-10-10) gets a new covenant id, and the
-// indexer keys every market read by covenant id: the trades, candles, 24 h stats and last price of `/v1/trades|candles|stats/{token}`
-// come from the `fill` rows of `order_events` (`token_id`, an `ids.id`), the pair pages from `pair_fills` (`base_cov_id`,
-// `quote_cov_id`) and the KAS candles of the two legs. `carryHistory` moves those rows of the old id to the new id of the same
-// TICKER, so the market page of the new token shows one continuous chart. Nothing else is touched: the old orders keep their own
-// `token_id` (their token template is not the new one, and `/v1/tokens` lists tokens from the orders), the old token's UTXO
-// tables stay as they are.
+// A token issued again gets a new covenant id, and the indexer keys every market read by covenant
+// id.
+// That covers the trades, candles, 24 h stats and last price of `/v1/trades|candles|stats/{token}`.
+// They come from the `fill` rows of `order_events` (`token_id`, an `ids.id`), the pair pages from
+// `pair_fills` (`base_cov_id`, `quote_cov_id`) and the KAS candles of the two legs.
+// `carryHistory` moves those rows of the old id to the new id of the same TICKER, so the market
+// page of the new token shows one continuous chart.
+// Nothing else is touched.
+// The old orders keep their own `token_id`, because their token template is not the new one and
+// `/v1/tokens` lists tokens from the orders.
+// The old token's UTXO tables stay as they are.
 //
-// Layouts: the destination of every write here is a schema-9 store (what this build writes: 32-byte ids interned as integers, an
-// order is `orders.id`; a token, a maker, a template and an extension commitment are `ids.id`; see
-// crates/kobd/src/indexer/schema.sql). A database that is only READ (the chart check, the source of an import) may be of
-// any layout: schema 9; schema 8 (the child tables hold integers, but `orders` still holds the blobs `template_hash`, `maker`,
-// `token_cov_id`, `token_tpl_hash`, `ext_commit`, `quote_cov_id`); or an older store (schema 5 to 7: blobs everywhere, `covenant_id` /
-// `token_cov_id` in `order_events` and `order_state`). `storeSchema` tells them apart: `orders.maker_id` is schema 9, `orders.id`
-// without it schema 8, neither schema 7 (standing for 5 to 7).
+// Layouts: the destination of every write here is a schema-9 store.
+// In schema 9, ids are 32-byte values interned as integers, an order is `orders.id`, and a token, a
+// maker, a template and an extension commitment are `ids.id` (see
+// crates/kobd/src/indexer/schema.sql).
+// A database that is only READ (the chart check, the source of an import) may be of any layout:
+// - schema 9;
+// - schema 8: the child tables hold integers, but `orders` still holds the blobs `template_hash`,
+//   `maker`, `token_cov_id`, `token_tpl_hash`, `ext_commit`, `quote_cov_id`;
+// - an older store (schema 5 to 7): blobs everywhere, `covenant_id` / `token_cov_id` in
+//   `order_events` and `order_state`.
+// `storeSchema` tells them apart. `orders.maker_id` is schema 9, `orders.id` without it is schema
+// 8, and neither is schema 7 (standing for 5 to 7).
 //
-// The executor must be stopped (the database is its derived view; the lock is not checked here). `kobd db replay` rebuilds
-// the tables from the record log and undoes the carry: run it again after a replay (it is idempotent). Each carried id is recorded in
-// `meta` (`carried_history:<old id>`), so a second run reports `already` and an attempt to carry the same id elsewhere is refused.
+// The executor must be stopped (the database is its derived view, and the lock is not checked
+// here).
+// `kobd db replay` rebuilds the tables from the record log and undoes the carry, so run it again
+// after a replay (it is idempotent).
+// Each carried id is recorded in `meta` (`carried_history:<old id>`), so a second run reports
+// `already` and an attempt to carry the same id elsewhere is refused.
 
 export interface RegistryLike {
   tokens: Array<{ ticker: string; covenant_id: string }>;
@@ -41,18 +53,27 @@ export interface SqlDb {
 }
 
 export interface CarryResult extends CarryPair {
-  /** `fill` events moved to the new id (KAS-book trades and the fill events of pair orders whose token A it was) */
+  /**
+   * `fill` events moved to the new id (KAS-book trades and the fill events of pair orders whose
+   * token A it was).
+   */
   fills: number;
   /** pair fills whose base token A / quote token B it was */
   pairBase: number;
   pairQuote: number;
-  /** the meta record was already there (a re-run: nothing of the old id was left, or only rows added after the first run) */
+  /**
+   * The meta record was already there (a re-run: nothing of the old id was left, or only rows added
+   * after the first run).
+   */
   already: boolean;
 }
 
 const HEX32 = /^[0-9a-f]{64}$/;
 
-/** The re-issued tickers between two registries: every ticker of `before` whose covenant id changed in `after`. */
+/**
+ * The re-issued tickers between two registries: every ticker of `before` whose covenant id changed
+ * in `after`.
+ */
 export function carryPairs(before: RegistryLike, after: RegistryLike): CarryPair[] {
   const index = (r: RegistryLike, what: string): Map<string, string> => {
     const m = new Map<string, string>();
@@ -72,7 +93,8 @@ export function carryPairs(before: RegistryLike, after: RegistryLike): CarryPair
     const to = b.get(ticker);
     if (!to) throw new Error(`ticker ${ticker} of the old registry is not in the new one: its history would have no market to go to`);
     if (to === from) continue;
-    // ids only move to fresh ones: a new id that is another ticker's old id would merge two histories
+    // Ids only move to fresh ones. A new id that is another ticker's old id would merge two
+    // histories.
     if (oldIds.has(to)) throw new Error(`the new id of ${ticker} (${to}) is an old id of another token`);
     out.push({ ticker, from, to });
   }
@@ -86,8 +108,11 @@ type Probe = { prepare(sql: string): { get(...params: unknown[]): unknown } };
 const ordersHas = (db: Probe, col: string): boolean => !!db.prepare("SELECT 1 AS x FROM pragma_table_info('orders') WHERE name = ?").get(col);
 
 /**
- * The layout of a store: 9 (`orders.maker_id`: the blob columns of `orders` are interned too), 8 (`orders.id` only: the child tables
- * hold integer order and token ids, `orders` keeps its blobs), 7 for every older blob-keyed layout (schemas 5 to 7).
+ * The layout of a store.
+ * - 9: `orders.maker_id` exists, so the blob columns of `orders` are interned too.
+ * - 8: `orders.id` only. The child tables hold integer order and token ids, and `orders` keeps its
+ *   blobs.
+ * - 7: every older blob-keyed layout (schemas 5 to 7).
  */
 export function storeSchema(db: Probe): 7 | 8 | 9 {
   if (ordersHas(db, 'maker_id')) return 9;
@@ -98,9 +123,12 @@ export function storeSchema(db: Probe): 7 | 8 | 9 {
 export const isSchema9 = (db: Probe): boolean => storeSchema(db) === 9;
 
 /**
- * Moves the market history of every pair (old id -> new id) in ONE transaction. Refuses (and changes nothing) when an order of an old id
- * is still open or partial (its later fills would stay under the old id: end every order first), when an old id was carried to another
- * id before, or when the database lacks the indexer tables.
+ * Moves the market history of every pair (old id -> new id) in ONE transaction.
+ * It refuses, and changes nothing, in these cases:
+ * - An order of an old id is still open or partial (its later fills would stay under the old id, so
+ *   end every order first).
+ * - An old id was carried to another id before.
+ * - The database lacks the indexer tables.
  */
 export function carryHistory(db: SqlDb, pairs: CarryPair[], opts: { allowLive?: boolean; now?: () => number } = {}): CarryResult[] {
   for (const t of ['order_events', 'pair_fills', 'orders', 'order_state', 'meta']) {
@@ -128,7 +156,8 @@ export function carryHistory(db: SqlDb, pairs: CarryPair[], opts: { allowLive?: 
         const was = JSON.parse(prev.v) as { to?: string };
         if (was.to !== p.to) throw new Error(`${p.ticker}: ${p.from} was carried to ${was.to} before, not to ${p.to}`);
       }
-      // the target is interned (a token id is a row of `ids`, never deleted); an old id with no `ids` row has no fills: the update matches nothing
+      // The target is interned (a token id is a row of `ids`, never deleted). An old id with no
+      // `ids` row has no fills, so the update matches nothing.
       db.prepare('INSERT OR IGNORE INTO ids (h) VALUES (?)').run(hex(p.to));
       const fills = num(
         db
@@ -149,15 +178,18 @@ export function carryHistory(db: SqlDb, pairs: CarryPair[], opts: { allowLive?: 
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ chart check
+// ------------------------------------------------------------ chart check
 //
-// What every chart must show, checked after a redeploy (`scripts/chart-history.mjs`; the database may be of any layout): the first candle of each interval is the
-// bucket of the token's first KAS trade in the database, and no fill is left under an id carried to it (a replay of the record
-// log undid the carry). A chart that starts later than the database lost history in the read path, not in the data: the
-// 2026-10-14 case (the indexer read only the newest 20 000 fills of a window, so the TUSD chart began on 10-11 although its
-// fills went back to 10-06).
+// What every chart must show, checked after a redeploy (`scripts/chart-history.mjs`; the database
+// may be of any layout).
+// The first candle of each interval is the bucket of the token's first KAS trade in the database.
+// No fill is left under an id carried to it (a replay of the record log undoes the carry).
+// A chart that starts later than the database lost history in the read path, not in the data.
 
-/** The candle intervals of the API (`/v1/candles`, `/v1/pairs/{a}/{b}/candles`) and their length in ms. */
+/**
+ * The candle intervals of the API (`/v1/candles`, `/v1/pairs/{a}/{b}/candles`) and their length in
+ * ms.
+ */
 export const CHART_INTERVALS: ReadonlyArray<readonly [string, number]> = [
   ['1d', 86_400_000],
   ['1h', 3_600_000],
@@ -168,13 +200,22 @@ export const CHART_INTERVALS: ReadonlyArray<readonly [string, number]> = [
 export interface HistoryFloor {
   ticker: string;
   id: string;
-  /** ms of the first KAS-book fill under the current id (what `/v1/candles` reads), null without one */
+  /**
+   * Ms of the first KAS-book fill under the current id (what `/v1/candles` reads), null without
+   * one.
+   */
   firstTrade: number | null;
-  /** fills still under an old id carried to this one (`carried_history:<old id>` in `meta`): non-zero after a replay */
+  /**
+   * Fills still under an old id carried to this one (`carried_history:<old id>` in `meta`).
+   * Non-zero after a replay.
+   */
   leftover: number;
 }
 
-/** Per token of the registry: its first KAS trade and the fills left under its carried ids (read-only; the executor may run). */
+/**
+ * Per token of the registry: its first KAS trade and the fills left under its carried ids
+ * (read-only, the executor may run).
+ */
 export function historyFloors(db: SqlDb, reg: RegistryLike): HistoryFloor[] {
   const v8 = storeSchema(db) >= 8; // integer order and token ids in the child tables (schemas 8 and 9)
   const keys = (db.prepare("SELECT group_concat(k, ',') AS ks FROM meta WHERE k LIKE 'carried_history:%'").get() as { ks: string | null }).ks;
@@ -186,7 +227,8 @@ export function historyFloors(db: SqlDb, reg: RegistryLike): HistoryFloor[] {
   }
   return (reg.tokens ?? []).map((t) => {
     const id = String(t.covenant_id).toLowerCase();
-    // the same rows as the indexer's FILL_SELECT (market.rs): a priced KAS-book fill of a known order
+    // The same rows as the indexer's FILL_SELECT (market.rs): a priced KAS-book fill of a known
+    // order.
     const first = db
       .prepare(
         v8
@@ -223,8 +265,11 @@ export function pairMarkets(db: SqlDb, reg: RegistryLike): Array<[string, string
 }
 
 /**
- * The problems of one market's charts: for each interval, its first candle (from the API, null for none) against the bucket of
- * `firstTrade` (a pair: the later of its two tokens' first trades, the first bucket in which both have a price).
+ * The problems of one market's charts.
+ * For each interval, its first candle (from the API, null for none) is compared against the bucket
+ * of `firstTrade`.
+ * For a pair, `firstTrade` is the later of its two tokens' first trades, the first bucket in which
+ * both have a price.
  */
 export function chartProblems(market: string, firstTrade: number | null, firstCandle: Record<string, number | null | undefined>): string[] {
   const out: string[] = [];
@@ -238,40 +283,60 @@ export function chartProblems(market: string, firstTrade: number | null, firstCa
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ import from older runs
+// ------------------------------------------------------------ import from older runs
 //
-// Each soak run started its indexers on a fresh database, so the trades of the earlier runs (on the same chain, often of the same
-// tokens) live only in those runs' databases. `importHistory` copies the KAS-book fills of one older database into the current
-// one, by ticker onto the current covenant ids (as `carryHistory` does), so the charts reach back to the very first run:
+// Each soak run starts its indexers on a fresh database, so the trades of earlier runs (on the same
+// chain, often of the same tokens) live only in those runs' databases.
+// `importHistory` copies the KAS-book fills of one older database into the current one, by ticker
+// onto the current covenant ids (as `carryHistory` does).
+// So the charts reach back to the very first run. It copies:
+// - The fills (`order_events` kind `fill` with a price) whose token maps to a current ticker,
+//   before `until`.
+//   `until` is the start of the next run: where two runs overlap, the one live at the time wins.
+//   Each fill is copied once (an event of the same order and transaction is never copied twice),
+//   with `block_seq` 0 (no chain block of this database, so a reorg never reverts it).
+// - The orders those fills belong to that the database does not hold (the market reads take the
+//   scale and the genesis DAA from them).
+//   They get `genesis_block` 0, `maker_id` NULL (they never show in a maker's orders), `listed` 0
+//   with `unlisted_reason` `history_import:<label>`, their token id unchanged, and a final
+//   `order_state`.
+//   An order still open in the old run is `closed`, because it is no longer anyone's.
+// - The pair fills of the mapped tokens (a database of protocol v3 or later).
 //
-// * the fills (`order_events` kind `fill` with a price) whose token maps to a current ticker, before `until` (the start of the
-//   next run: where two runs overlap, the one live at the time wins), each once (an event of the same order and transaction is
-//   never copied twice), with `block_seq` 0 (no chain block of this database: a reorg never reverts it);
-// * the orders those fills belong to that the database does not hold (the market reads take the scale and the genesis DAA from
-//   them): `genesis_block` 0, `maker_id` NULL (they never show in a maker's orders), `listed` 0 with `unlisted_reason`
-//   `history_import:<label>`, their token id unchanged, and a final `order_state` (an order still open in the old run is
-//   `closed`: it is no longer anyone's);
-// * the pair fills of the mapped tokens (a database of protocol v3 or later).
+// The target is a schema-9 store.
+// An imported order gets a fresh `orders.id`, and its fills and state point at it.
+// Its template, token, token program, extension commitment and quote token are interned in `ids`
+// and written as `template_id`, `token_id`, `token_tpl_id`, `ext_id` and `quote_id`. `maker_id` is
+// NULL.
+// The source may be of any layout: schema 9 (the same columns, read back through `ids`), schema 8
+// (integer children, blob columns in `orders`) or schema 5 to 7 (blob-keyed `order_events` /
+// `order_state`).
+// `genesis_state` and `detail` are copied as they are.
+// They are packed in schema 7 and later, so rows from a schema 5 / 6 source are not read by the SQL
+// decoders of this build (docs/ops/executor.md 7.6a).
+// A database of the lot layouts (protocol v2, schema 4 or older: `orders.lot_units`) is converted
+// exactly.
+// A fill's amount is `lots * lot_units * unit` base units, and its price stays sompi per `unit`
+// base units, which is the imported order's `scale`.
 //
-// The target is a schema-9 store (an imported order gets a fresh `orders.id`, its fills and state point at it, and its template, token,
-// token program, extension commitment and quote token are interned in `ids` and written as `template_id`, `token_id`, `token_tpl_id`,
-// `ext_id`, `quote_id`; `maker_id` is NULL). The source may be of any layout: schema 9 (the same columns, read back through `ids`),
-// schema 8 (integer children, blob columns in `orders`) or schema 5 to 7 (blob-keyed `order_events` / `order_state`).
-// `genesis_state` and `detail` are copied as they are (packed in schema 7 and later, so rows from a schema 5 / 6 source are not read by
-// the SQL decoders of this build: docs/ops/executor.md 7.6a).
-// A database of the lot layouts (protocol v2, schema 4 or older: `orders.lot_units`) is converted exactly: a fill's amount is
-// `lots * lot_units * unit` base units and its price stays sompi per `unit` base units, which is the imported order's `scale`.
-// One transaction; the import is recorded in `meta` (`history_import:<label>`), so a re-run is a no-op. The executor must be
-// stopped. `kobd db replay` rebuilds the tables from the record log and drops the import: import again after a replay.
-// Undo: delete the `order_events` / `order_state` rows (by `order_id`) and the `orders` rows of the orders whose `unlisted_reason` is
-// the label's, and the meta row (the interned `ids` rows may stay).
+// The import runs in one transaction and is recorded in `meta` (`history_import:<label>`), so a
+// re-run is a no-op.
+// The executor must be stopped.
+// `kobd db replay` rebuilds the tables from the record log and drops the import, so import again
+// after a replay.
+// Undo: delete the `order_events` / `order_state` rows (by `order_id`) and the `orders` rows of the
+// orders whose `unlisted_reason` is the label's, and the meta row.
+// The interned `ids` rows may stay.
 
 /** The read side of node:sqlite's `DatabaseSync` an import reads a source with. */
 export interface SqlSrc {
   prepare(sql: string): {
     all(...params: unknown[]): unknown[];
     get(...params: unknown[]): unknown;
-    /** node:sqlite: read integers as bigint (a stored value may exceed 2^53, e.g. a 2^62 "never" expiry) */
+    /**
+     * node:sqlite: read integers as bigint (a stored value may exceed 2^53, e.g. a 2^62 "never"
+     * expiry).
+     */
     setReadBigInts?(on: boolean): void;
   };
 }
@@ -302,13 +367,19 @@ const hasColumn = (db: SqlSrc, table: string, col: string): boolean =>
 
 const hexOf = (b: unknown): string => Buffer.from(b as Uint8Array).toString('hex');
 
-/** The first fill of a database (ms, ignoring a zero time), any token: the start of that run's trading. */
+/**
+ * The first fill of a database (ms, ignoring a zero time), any token: the start of that run's
+ * trading.
+ */
 export function firstFillTs(db: SqlSrc): number | null {
   const r = db.prepare("SELECT MIN(ts) AS t FROM order_events WHERE kind = 'fill' AND ts > 0").get() as { t: number | bigint | null };
   return r.t == null ? null : num(r.t);
 }
 
-/** Every token of a source database with KAS-book fills that maps by ticker to a current id (`old`: old id -> ticker). */
+/**
+ * Every token of a source database with KAS-book fills that maps by ticker to a current id (`old`:
+ * old id -> ticker).
+ */
 export function importPairs(src: SqlSrc, old: Map<string, string>, current: RegistryLike): CarryPair[] {
   const now = new Map((current.tokens ?? []).map((t) => [t.ticker, String(t.covenant_id).toLowerCase()]));
   const ids = src
@@ -343,7 +414,8 @@ export function importHistory(
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(opts.label)) throw new Error(`bad label ${opts.label}`);
   const key = `history_import:${opts.label}`;
   if (dst.prepare('SELECT v FROM meta WHERE k = ?').get(key)) return { already: true, results: [] };
-  // the source layout: 9 (orders interned too), 8 (children integer, orders blobs) or 7 (blob-keyed); a lot layout is always a 7
+  // The source layout: 9 (orders interned too), 8 (children integer, orders blobs) or 7
+  // (blob-keyed). A lot layout is always a 7.
   const srcSchema = storeSchema(src);
   const srcV8 = srcSchema >= 8;
   const lots = hasColumn(src, 'orders', 'lot_units');
@@ -355,7 +427,8 @@ export function importHistory(
     : `SELECT e.covenant_id AS cov, e.daa, e.ts, e.txid, e.tx_pos, e.side, ${amount} AS amount, e.price, e.payout, e.closes, e.detail
        FROM order_events e JOIN orders o ON o.covenant_id = e.covenant_id
        WHERE e.kind = 'fill' AND e.token_cov_id = ? AND e.price IS NOT NULL AND ${amount} > 0 AND e.side IN (1, 2) ORDER BY e.ts, e.id`;
-  // the 32-byte values of the order row, named as the blob layouts name them: a schema-9 source joins `ids` (NULL stays NULL)
+  // The 32-byte values of the order row, named as the blob layouts name them. A schema-9 source
+  // joins `ids` (NULL stays NULL).
   const idH = (col: string): string => `(SELECT h FROM ids WHERE id = o.${col})`;
   const v = (blob: string, interned: string): string => (srcSchema === 9 ? `${idH(interned)} AS ${blob}` : `o.${blob}`);
   const quote = srcSchema === 9 ? idH('quote_id') : hasColumn(src, 'orders', 'quote_cov_id') ? 'o.quote_cov_id' : 'NULL';
@@ -372,13 +445,15 @@ export function importHistory(
        FROM orders o LEFT JOIN order_state s ON s.${srcV8 ? 'order_id = o.id' : 'covenant_id = o.covenant_id'} WHERE o.covenant_id = ?`;
   const orderOf = bigStatement(src, orderSql);
   const haveOrder = dst.prepare('SELECT 1 AS x FROM orders WHERE covenant_id = ?');
-  // `+e.kind`: by the order's events (order_events_cov), not by every fill of the database (the planner's pick for `kind = ?`)
+  // `+e.kind`: by the order's events (order_events_cov), not by every fill of the database (the
+  // planner's pick for `kind = ?`).
   const haveFill = dst.prepare(
     "SELECT 1 AS x FROM orders o JOIN order_events e ON e.order_id = o.id WHERE o.covenant_id = ? AND e.txid = ? AND +e.kind = 'fill'",
   );
   const internToken = dst.prepare('INSERT OR IGNORE INTO ids (h) VALUES (?)');
   const tokenIdOf = dst.prepare('SELECT id FROM ids WHERE h = ?');
-  // the six 32-byte values of an order are `ids` rows (interned before the insert, bound as `(SELECT id FROM ids WHERE h = ?)`: NULL stays NULL)
+  // The six 32-byte values of an order are `ids` rows. They are interned before the insert and
+  // bound as `(SELECT id FROM ids WHERE h = ?)`. NULL stays NULL.
   const putOrder = dst.prepare(
     `INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, ext_id, scale, min_fill, price, tip, tif,
        expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, genesis_state, genesis_txid, genesis_out, genesis_block, genesis_daa,
@@ -387,7 +462,8 @@ export function importHistory(
        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, ?, 'chain', (SELECT id FROM ids WHERE h = ?))`,
   );
   const putState = dst.prepare(
-    // the orders row is inserted first: a NULL `order_id` (its INTEGER PRIMARY KEY) would silently take a fresh rowid
+    // The orders row is inserted first, because a NULL `order_id` (its INTEGER PRIMARY KEY) would
+    // silently take a fresh rowid.
     `INSERT INTO order_state (order_id, status, filled_amount, remaining_amount, amount_exact, state_known, last_block, last_daa)
      VALUES ((SELECT id FROM orders WHERE covenant_id = ?), ?, ?, NULL, 0, 0, 0, ?)`,
   );
@@ -437,7 +513,8 @@ export function importHistory(
       }
       results.push(r);
     }
-    // pair fills (protocol v3 and later): both tokens mapped, before `until`, each (order, transaction) once
+    // Pair fills (protocol v3 and later): both tokens mapped, before `until`, each (order,
+    // transaction) once.
     if (hasColumn(src, 'pair_fills', 'base_cov_id')) {
       const to = new Map(pairs.map((p) => [p.from, p.to]));
       const havePair = dst.prepare('SELECT 1 AS x FROM pair_fills WHERE base_cov_id = ? AND quote_cov_id = ? AND ts = ? AND covenant_id = ? AND txid = ?');

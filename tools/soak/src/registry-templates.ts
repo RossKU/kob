@@ -1,6 +1,7 @@
-// Token-program entries of the soak registry (run/registry/tokens.json): KOB's standard program for the soak's own tokens and, for the
-// tokens it lists without issuing them (`externalTokens`: Kasseal launchpad tokens, a KRON token), the reference's published public-mint build
-// and KRON's two programs.
+// Token-program entries of the soak registry (run/registry/tokens.json).
+// They are KOB's standard program for the soak's own tokens.
+// For the tokens it lists without issuing them (`externalTokens`: Kasseal launchpad tokens, a KRON
+// token), they are the reference's published public-mint build and KRON's two programs.
 import type { ExternalTokenConfig } from './config';
 
 export const TEMPLATE_STANDARD = {
@@ -13,7 +14,7 @@ export const TEMPLATE_STANDARD = {
   max_token_inputs: 3,
   max_token_outputs: 3,
   escrow: { owner_scheme: 4, borrow_scheme: 0 },
-  // reviewed in the shipped registry too since 2026-10-12 (internal review only)
+  // Reviewed in the shipped registry too (internal review only).
   review_status: 'reviewed',
   source: {
     path: 'contracts/artifacts/KCC20Ref.json',
@@ -21,7 +22,10 @@ export const TEMPLATE_STANDARD = {
   },
 };
 
-/** The reference's published public-mint build (KOB's handle of its `KCC20` actor), the program of external tokens such as Kasseal's. */
+/**
+ * The reference's published public-mint build (KOB's handle of its `KCC20` actor), the program of
+ * external tokens such as Kasseal's.
+ */
 export const TEMPLATE_PUBLIC_MINT = {
   id: 'kcc20-ref-public-mint',
   family: 'kcc20',
@@ -32,7 +36,7 @@ export const TEMPLATE_PUBLIC_MINT = {
   max_token_inputs: 3,
   max_token_outputs: 3,
   escrow: { owner_scheme: 4, borrow_scheme: 0 },
-  // reviewed in the shipped registry too since 2026-10-13 (internal review only)
+  // Reviewed in the shipped registry too (internal review only).
   review_status: 'reviewed',
   capabilities: ['public-mint'],
   source: {
@@ -41,7 +45,10 @@ export const TEMPLATE_PUBLIC_MINT = {
   },
 };
 
-/** KRON's two token programs (46-byte state, 4 / 5 slots), reviewed in the shipped registry (internal review B2, 2026-09-30): an external KRON token. */
+/**
+ * KRON's two token programs (46-byte state, 4 / 5 slots), reviewed in the shipped registry
+ * (internal review only). They serve an external KRON token.
+ */
 const kronTemplate = (id: 'kron-2433' | 'kron-2732', hash: string, suffix: number) => ({
   id,
   family: 'kron',
@@ -63,11 +70,15 @@ export const TEMPLATE_KRON_2433 = kronTemplate('kron-2433', '2ed46a7edf5b168e67d
 export const TEMPLATE_KRON_2732 = kronTemplate('kron-2732', '8097c96fe586a785b3ffb62ddd2a9b3012593421d605d136d26153806e28053e', 2686);
 
 /**
- * Two third-party launchpad programs KOB embeds as `pending-review`, testnet-10 only (`crates/kob-protocol/data/programs.json`):
- * KForge's (KRON 46-byte state behind a 1-byte prefix, holders id_type 0, 1 / 3 slots: KOB serves it with the `*KronD0` order builds)
- * and KaspaRocket's (the public-mint KCC20 actor at 10 / 10 slots). The soak registry marks them `reviewed` so that the TN10 executors
- * list KOB orders of their tokens (config `testPrograms`): a TN10 test of the programs, not a review; the shipped registry does not
- * carry them.
+ * Two third-party launchpad programs KOB embeds as `pending-review`, testnet-10 only
+ * (`crates/kob-protocol/data/programs.json`).
+ * - KForge's: KRON 46-byte state behind a 1-byte prefix, holders id_type 0, 1 / 3 slots. KOB serves
+ *   it with the `*KronD0` order builds.
+ * - KaspaRocket's: the public-mint KCC20 actor at 10 / 10 slots.
+ *
+ * The soak registry marks them `reviewed` so that the TN10 executors list KOB orders of their
+ * tokens (config `testPrograms`).
+ * That is a TN10 test of the programs, not a review. The shipped registry does not carry them.
  */
 export const TEMPLATE_KFORGE_1785 = {
   id: 'kforge-token-1785',
@@ -103,9 +114,12 @@ export const TEMPLATE_KASPAROCKET_11458 = {
   },
 };
 /**
- * KForge's current token program (`KForgeToken7214`: the KCC-20 reference actor at 6 / 6 slots, mainnet and testnet-10), reviewed in the
- * shipped registry since 2026-11-05 (internal review only; contracts/third-party/kforge-kcc20/UPSTREAM.md): listed by config
- * `testPrograms` so that the TN10 executors list KOB orders of KForge tokens launched on testnet-10.
+ * KForge's current token program (`KForgeToken7214`: the KCC-20 reference actor at 6 / 6 slots,
+ * mainnet and testnet-10).
+ * It is reviewed in the shipped registry (internal review only;
+ * contracts/third-party/kforge-kcc20/UPSTREAM.md).
+ * Config `testPrograms` lists it so that the TN10 executors list KOB orders of KForge tokens
+ * launched on testnet-10.
  */
 export const TEMPLATE_KFORGE_7214 = {
   id: 'kforge-token-7214',
@@ -165,7 +179,8 @@ export function externalRegistryToken(t: ExternalTokenConfig): Record<string, un
     family: tpl.family,
     covenant_id: t.covenantId,
     template_id: tpl.id,
-    // KRON: no extension commitment, class `none` (registry rules); KCC-20: the token's commitment (all zero by default)
+    // KRON: no extension commitment, class `none` (registry rules). KCC-20: the token's commitment
+    // (all zero by default).
     extension_commitment: kron ? null : (t.extensionCommitment ?? ZERO32),
     extension_class: kron ? 'none' : 'fixed-supply-standard',
     decimals: t.decimals,
@@ -177,8 +192,9 @@ export function externalRegistryToken(t: ExternalTokenConfig): Record<string, un
 }
 
 /**
- * The registry's templates: the standard program, plus the public-mint build, the KRON programs and the launchpad test programs the
- * external tokens use or `testPrograms` names (in that order).
+ * The registry's templates: the standard program, plus the public-mint build, the KRON programs and
+ * the launchpad test programs.
+ * The external tokens use these, or `testPrograms` names them, in that order.
  */
 export function soakTemplates(external: readonly ExternalTokenConfig[], testPrograms: readonly string[] = []): unknown[] {
   for (const p of testPrograms) if (!(p in TEST_PROGRAM_TEMPLATES)) throw new Error(`testPrograms: unknown program ${p}`);

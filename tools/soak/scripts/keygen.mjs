@@ -1,5 +1,8 @@
-// Generates the soak's keys (bank, market maker, traders, x402 payer and merchant, two executor hot keys) into run/keys.json
-// (gitignored), the executors' 64-hex key files run/exec-{a,b}/operator.key and the x402 merchant API key. Idempotent.
+// Generates the soak's keys into run/keys.json (gitignored).
+// The keys are the bank, market maker, traders, x402 payer and merchant, and two executor hot keys.
+// It also writes the executors' 64-hex key files run/exec-{a,b}/operator.key and the x402 merchant
+// API key.
+// It is idempotent.
 import { createHash, randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';

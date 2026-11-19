@@ -1,5 +1,6 @@
-// The bank: mined coinbase lands on the bank key; the bank consolidates the coinbase dust and tops up every wallet (bots, executors)
-// in chunks, using the official SDK's transaction generator (plain P2PK KAS transfers).
+// The bank: mined coinbase lands on the bank key.
+// The bank consolidates the coinbase dust and tops up every wallet (bots, executors) in chunks,
+// using the official SDK's transaction generator (plain P2PK KAS transfers).
 import type { Env } from './env';
 import { key } from './env';
 import { errText, type Logger, type Stats } from './log';
@@ -67,7 +68,8 @@ export class Bank {
       (e: any) => !(e.isCoinbase && daa - BigInt(e.blockDaaScore) < MATURITY) && !e.entry?.covenantId && !this.recent.isSpent(RecentSpends.key(e.outpoint.transactionId, e.outpoint.index), now),
     );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    // the generator refuses huge input sets (mass): the largest 80 coins per tick, the rest next tick
+    // The generator refuses huge input sets (mass): the largest 80 coins per tick, the rest next
+    // tick.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mature.sort((a: any, b: any) => (BigInt(b.amount) > BigInt(a.amount) ? 1 : -1));
     mature.splice(80);
@@ -93,13 +95,17 @@ export class Bank {
       if (need > 0n) this.stats.inc('bank_short');
     }
     if (outputs.length === 0 && mature.length <= cfg.consolidateAbove) return;
-    // nothing to pay out: merge the coins into one (the generator would otherwise spend a single input back to the bank each tick)
+    // Nothing to pay out: merge the coins into one. The generator would otherwise spend a single
+    // input back to the bank each tick.
     const consolidating = outputs.length === 0;
     if (consolidating) outputs.push(...consolidationOutputs(bank.address, total));
     const privateKey = new this.sdk.PrivateKey(bank.secretKey);
-    // payouts and consolidations are housekeeping: the LOW bucket of the node's fee estimate (fee policy). The SDK generator takes the rate as
-    // `feeRate` (sompi per gram; absent = the 100 relay floor) and `priorityFee` stays 0n. A plan whose change lands in the generator's
-    // storage-mass dead band is refused with `Mass calculation error`: see bank-plan.ts
+    // Payouts and consolidations are housekeeping: the LOW bucket of the node's fee estimate (fee
+    // policy).
+    // The SDK generator takes the rate as `feeRate` (sompi per gram, absent = the 100 relay floor)
+    // and `priorityFee` stays 0n.
+    // A plan whose change lands in the generator's storage-mass dead band is refused with `Mass
+    // calculation error`. See bank-plan.ts.
     const ctx = await feeContext(this.env);
     const pick = pickFor(ctx, 'low');
     const planned = await planWithFeePolicy<{ transactions: any[]; summary?: any }, any[]>(
@@ -116,7 +122,8 @@ export class Bank {
       ctx.policy,
       pick.rate,
       undefined,
-      // the coin set that cannot stop in the storage-mass dead band (bank-plan.ts), tried after the plan itself is refused
+      // The coin set that cannot stop in the storage-mass dead band (bank-plan.ts), tried after the
+      // plan itself is refused.
       (outs, rate) => {
         const set = marginCoins(mature, outs.reduce((s2, o) => s2 + o.amount, 0n), marginFor(rate));
         return set ? [set] : [];
