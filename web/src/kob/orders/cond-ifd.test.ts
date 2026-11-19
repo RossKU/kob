@@ -1,5 +1,6 @@
-// IFD, IFO / bracket (stop entries included) and repeat IFD / IFO, both sides. Every plan is consensus-checked (cond-testkit.planOk).
-// Amounts are base units of the 3-decimal test token (TOK = 1000 base units = one token = the scale), prices sompi per whole token.
+// IFD, IFO / bracket (stop entries included) and repeat IFD / IFO, both sides. Every plan is
+// consensus-checked (cond-testkit.planOk). Amounts are base units of the 3-decimal test token (TOK
+// = 1000 base units = one token = the scale), prices sompi per whole token.
 import { describe, expect, it } from 'vitest';
 import type { CondIntent, ExitSpec } from '../intent-cond';
 import { CLOCK, KAS, TOK, makeEnv } from '../../testing/fixtures';
@@ -33,10 +34,12 @@ describe('IFD buy-first (KobIfdBid -> KobCondAsk exit)', () => {
       deliveryCarrier: C.toString(), exitCarrier: C.toString(), minFill: '2500', entryStop: '0', bandDaa: '0', keeperTip: '0', armed: '0', rptAmount: '0',
       minTouch: '0', extensionCommitment: env.token.extensionCommitment,
     });
-    // minFill default ceil(10000 / 4) = 2500 -> at most 4 fills, each needs a delivery and an exit carrier: exactly kob-wasm ifdBidEscrow
+    // minFill default ceil(10000 / 4) = 2500 -> at most 4 fills, each needs a delivery and an exit
+    // carrier: exactly kob-wasm ifdBidEscrow
     expect(recovered[0]!.value).toBe((10n * 240_000_000n + 4n * 2n * C).toString());
     expect(env.kob.ifdBidEscrow(plan.states[0]!)).toBe(10n * 240_000_000n + 4n * 2n * C);
-    // the committed exit round-trips through kob-wasm (IfdBidState::exit()) and is the last listed state
+    // the committed exit round-trips through kob-wasm (IfdBidState::exit()) and is the last listed
+    // state
     expect(plan.states).toHaveLength(2);
     expect(committedExit(env, plan.states[0]!)).toEqual(plan.states[1]);
     const x = askState(plan.states[1]!);
@@ -44,7 +47,8 @@ describe('IFD buy-first (KobIfdBid -> KobCondAsk exit)', () => {
       amountLeft: '10000', tpPrice: '300000000', stopPrice: '0', tip: '0', expiryDaa: GTC_EXIT.toString(), refundTip: RT, keeperTip: '0',
       slipBps: '0', bandDaa: '0', armed: '0', parent: ZERO, rptPrice: '0', rptUntil: '0', maker: env.maker, scale: '1000',
     });
-    // the exit's minimum fill: the amount worth 10 KAS at its leg (3334 at 3 KAS), at most the entry's minimum fill (one exit per entry fill)
+    // the exit's minimum fill: the amount worth 10 KAS at its leg (3334 at 3 KAS), at most the
+    // entry's minimum fill (one exit per entry fill)
     expect(x.minFill).toBe('2500');
     const d = plan.disclosure!;
     expect(d).toMatchObject({
@@ -75,9 +79,10 @@ describe('IFD buy-first (KobIfdBid -> KobCondAsk exit)', () => {
 
   it('the exit minimum fill and trigger threshold: defaults and explicit values', () => {
     const env = makeEnv();
-    // a large order: the 10-KAS amount at the 2 KAS stop (5 tokens) is below the entry minimum fill (25 tokens); the
-    // exit's trigger threshold is a quarter of the entry's amount (25 tokens), not its own minimum fill: one print of 5
-    // tokens does not arm the stop-loss of a 100-token position
+    // a large order: the 10-KAS amount at the 2 KAS stop (5 tokens) is below the entry minimum fill
+    // (25 tokens); the exit's trigger threshold is a quarter of the entry's amount (25 tokens), not
+    // its own minimum fill: one print of 5 tokens does not arm the stop-loss of a 100-token
+    // position
     const big = planOk(env, buyFirst({ amount: 100n * TOK, exit: { stop: 200_000_000n } }));
     expect(askState(big.plan.states[1]!)).toMatchObject({ minFill: '5000', minTouch: '25000' });
     expect(BigInt(askState(big.plan.states[1]!).minTouch)).toBe(env.kob.defaultMinTouch(5_000n, 100n * TOK));
@@ -140,13 +145,15 @@ describe('IFD buy-first (KobIfdBid -> KobCondAsk exit)', () => {
   it('an amount that is not a multiple of the scale: the escrow and the totals follow the quote rule', () => {
     const env = makeEnv();
     const bf = planOk(env, { type: 'ifo', side: 'buy', amount: 4_321n, tip: 7n, entry: { price: 240_000_000n }, exit: { takeProfit: 300_000_000n, stop: 200_000_000n } });
-    // spend of the whole amount at the limit (rounded down) + ceil(4321 / 1081) = 4 x (delivery + exit) carriers
+    // spend of the whole amount at the limit (rounded down) + ceil(4321 / 1081) = 4 x (delivery +
+    // exit) carriers
     expect(BigInt(bf.recovered[0]!.value)).toBe((4_321n * 240_000_007n) / SCALE + 4n * 2n * C);
     expect(BigInt(bf.recovered[0]!.value)).toBe(env.kob.ifdBidEscrow(bf.plan.states[0]!));
     expect(bf.plan.disclosure!.allInTotal).toBe((4_321n * 240_000_007n) / SCALE);
     const sf = planOk(env, { type: 'ifo', side: 'sell', amount: 4_321n, tip: 7n, entry: { price: 260_000_000n }, exit: { takeProfit: 240_000_000n, stop: 280_000_000n } });
     expect(sf.recovered[0]!.custody!.state.amount).toBe('4321');
-    // prefund rate: the stop ceiling 288.4 KAS less the proceeds 260 KAS - 7 sompi; ceil(4321 x 28_400_007 / 1000) + 3 sompi of rounding (4 fills)
+    // prefund rate: the stop ceiling 288.4 KAS less the proceeds 260 KAS - 7 sompi; ceil(4321 x
+    // 28_400_007 / 1000) + 3 sompi of rounding (4 fills)
     expect(ifdAsk(sf.plan.states[0]!).prefund).toBe('28400007');
     expect(BigInt(sf.recovered[0]!.value)).toBe(C + ceilDiv(4_321n * 28_400_007n, SCALE) + 3n + 4n * C);
     expect(BigInt(sf.recovered[0]!.value)).toBe(env.kob.ifdAskEscrow(sf.plan.states[0]!, C));
@@ -201,7 +208,8 @@ describe('IFD sell-first (KobIfdAsk -> KobCondBid exit)', () => {
       amountLeft: '10000', price: '260000000', tip: '0', prefund: '0', exitCarrier: C.toString(), minFill: '2500', entryStop: '0', bandDaa: '0',
       keeperTip: '0', armed: '0', rptAmount: '0', refundTip: RT,
     });
-    // custody holds exactly the 10 tokens; the order UTXO carries the entry carrier + 4 exit carriers + 3 sompi of prefund rounding (kob-wasm ifdAskEscrow)
+    // custody holds exactly the 10 tokens; the order UTXO carries the entry carrier + 4 exit
+    // carriers + 3 sompi of prefund rounding (kob-wasm ifdAskEscrow)
     expect(recovered[0]!.custody!.state).toMatchObject({ amount: '10000', owner: recovered[0]!.covenantId, owner_scheme: 4 });
     expect(recovered[0]!.value).toBe((C + 4n * C + 3n).toString());
     expect(env.kob.ifdAskEscrow(plan.states[0]!, C)).toBe(C + 4n * C + 3n);
@@ -226,10 +234,12 @@ describe('IFD sell-first (KobIfdAsk -> KobCondBid exit)', () => {
   it("prefund: the default is the smallest rate covering the exit stop leg's worst buy-back", () => {
     const env = makeEnv();
     const { plan, recovered } = planOk(env, { type: 'ifo', side: 'sell', amount: 10n * TOK, entry: { price: 260_000_000n }, exit: { takeProfit: 240_000_000n, stop: 280_000_000n } });
-    // the stop ceiling is 280 KAS + 28 000 * 300 = 288.4 KAS; the entry brings 260 KAS per token: 28.4 KAS per token must be pre-funded
+    // the stop ceiling is 280 KAS + 28 000 * 300 = 288.4 KAS; the entry brings 260 KAS per token:
+    // 28.4 KAS per token must be pre-funded
     const prefund = 288_400_000n - 260_000_000n;
     expect(ifdAsk(plan.states[0]!).prefund).toBe(prefund.toString());
-    // ceil(10000 x 28.4 KAS / 1000) + 3 sompi of rounding (each of the 4 fills rounds its prefund up)
+    // ceil(10000 x 28.4 KAS / 1000) + 3 sompi of rounding (each of the 4 fills rounds its prefund
+    // up)
     expect(BigInt(recovered[0]!.value)).toBe(C + 10n * prefund + 3n + 4n * C);
     expect(plan.disclosure!.carriers).toContainEqual({ kind: 'prefund', amount: 10n * prefund + 3n, count: 1 });
     expect(plan.cond!.exit).toMatchObject({ prefund, side: 'buy', stopWorstAllIn: 288_400_000n });
@@ -367,7 +377,8 @@ describe('IFD validation', () => {
     expect(errorCodes(bad(buyFirst({ expiry: { kind: 'gtdDaa', daa: CLOCK.daa + 77_760_001n } })))).toEqual(['EXPIRY_TOO_FAR']);
     const entry = { price: 240_000_000n, stop: 244_000_000n };
     const exit = { takeProfit: 200_000_000n };
-    // sell-first: the arming tip is paid from the carrier; 3 KAS does not fit half of a 5 KAS carrier, 2 KAS does
+    // sell-first: the arming tip is paid from the carrier; 3 KAS does not fit half of a 5 KAS
+    // carrier, 2 KAS does
     expect(errorCodes(bad(sellFirst({ entry: { ...entry, keeperTip: 3n * KAS }, exit, carrier: 5n * KAS })))).toEqual(['COND_KEEPER_FUNDING_TOO_LARGE']);
     expect(planCond(env, sellFirst({ entry: { ...entry, keeperTip: 2n * KAS }, exit, carrier: 5n * KAS })).ok).toBe(true);
   });
@@ -380,7 +391,8 @@ describe('repeat IFD / IFO', () => {
   const repSell = (over: Record<string, unknown> = {}): CondIntent => ({
     type: 'repeatIfd', side: 'sell', amount: 10n * TOK, entry: { price: 260_000_000n }, exit: { takeProfit: 240_000_000n }, repeat: { count: 2n }, ...over,
   } as CondIntent);
-  // the merge costs as tip rates over the smallest take-profit fill: the exit minimum fill 2500 (= the entry's)
+  // the merge costs as tip rates over the smallest take-profit fill: the exit minimum fill 2500 (=
+  // the entry's)
   const MT_BUY = ceilDiv(MERGE_COST_BUY_FIRST * SCALE, 2_500n); // 400_000 sompi per token
   const MT_SELL = ceilDiv(MERGE_COST_SELL_FIRST * SCALE, 2_500n); // 600_000 sompi per token
 
@@ -404,7 +416,8 @@ describe('repeat IFD / IFO', () => {
     const x = askState(plan.states[1]!);
     expect(x).toMatchObject({ tip: MT_BUY.toString(), parent: ZERO, rptPrice: '0', rptUntil: '0', amountLeft: '10000' });
     expect(committedExit(env, plan.states[0]!)).toEqual(plan.states[1]);
-    // budget + ceil(10000 / 2500) x (delivery + exit) + one more exit carrier: kob-wasm ifdBidEscrow
+    // budget + ceil(10000 / 2500) x (delivery + exit) + one more exit carrier: kob-wasm
+    // ifdBidEscrow
     expect(recovered[0]!.value).toBe((10n * 240_000_000n + 4n * 2n * C + C).toString());
     expect(BigInt(recovered[0]!.value)).toBe(env.kob.ifdBidEscrow(plan.states[0]!));
     expect(plan.disclosure!.carriers).toEqual([
@@ -425,7 +438,8 @@ describe('repeat IFD / IFO', () => {
     expect(ifdAsk(plan.states[0]!).rptAmount).toBe('20001');
     expect(bidState(plan.states[1]!).tip).toBe(MT_SELL.toString());
     expect(committedExit(env, plan.states[0]!)).toEqual(plan.states[1]);
-    // entry carrier (which the repeating entry keeps when it sells out) + 4 exit carriers; prefund 0 here (3 sompi of rounding)
+    // entry carrier (which the repeating entry keeps when it sells out) + 4 exit carriers; prefund
+    // 0 here (3 sompi of rounding)
     expect(recovered[0]!.value).toBe((C + 4n * C + 3n).toString());
     expect(recovered[0]!.custody!.state.amount).toBe('10000');
     expect(plan.cond!.repeat).toMatchObject({ rptAmount: 20_001n, mergeTip: MT_SELL, profitPerToken: 260_000_000n - (240_000_000n + MT_SELL) });
@@ -474,7 +488,8 @@ describe('repeat IFD / IFO', () => {
       type: 'repeatIfo', side: 'buy', amount: 5n * TOK, entry: { price: 240_000_000n }, exit: { takeProfit: 300_000_000n, stop: 200_000_000n }, repeat: { count: 3n },
     });
     expect(ifdBid(bf.plan.states[0]!).rptAmount).toBe('15001');
-    // entry minimum fill ceil(5000 / 4) = 1250 is also the exit's: merge tip ceil(0.01 KAS x 1000 / 1250)
+    // entry minimum fill ceil(5000 / 4) = 1250 is also the exit's: merge tip ceil(0.01 KAS x 1000 /
+    // 1250)
     const mt = ceilDiv(MERGE_COST_BUY_FIRST * SCALE, 1_250n);
     expect(askState(bf.plan.states[1]!)).toMatchObject({ tpPrice: '300000000', stopPrice: '200000000', tip: mt.toString(), minFill: '1250' });
     expect(committedExit(env, bf.plan.states[0]!)).toEqual(bf.plan.states[1]);
@@ -538,13 +553,15 @@ describe('repeat IFD / IFO', () => {
       const bf = planOk(env, {
         type: repeat ? 'repeatIfd' : 'ifd', side: 'buy', amount, minFill, entry: { price }, exit: { takeProfit: 400_000_000n }, ...(repeat ? { repeat: { count: k } } : {}),
       } as CondIntent);
-      // floor(amount x price / scale) + a delivery and an exit carrier per possible fill (+ the repeating entry's own exit carrier)
+      // floor(amount x price / scale) + a delivery and an exit carrier per possible fill (+ the
+      // repeating entry's own exit carrier)
       expect(BigInt(bf.recovered[0]!.value), `buy amount=${amount} minFill=${minFill} repeat=${repeat}`).toBe((amount * price) / SCALE + fills * 2n * C + (repeat ? C : 0n));
       if (repeat) expect(ifdBid(bf.plan.states[0]!).rptAmount).toBe((1n + k * amount).toString());
       const sf = planOk(env, {
         type: repeat ? 'repeatIfd' : 'ifd', side: 'sell', amount, minFill, entry: { price: 500_000_000n + price }, exit: { takeProfit: 240_000_000n }, ...(repeat ? { repeat: { count: k } } : {}),
       } as CondIntent);
-      // the carrier, a sompi of prefund rounding per extra fill (prefund 0 here), an exit carrier per possible fill
+      // the carrier, a sompi of prefund rounding per extra fill (prefund 0 here), an exit carrier
+      // per possible fill
       expect(BigInt(sf.recovered[0]!.value), `sell amount=${amount} minFill=${minFill}`).toBe(C + (fills - 1n) + fills * C);
       expect(sf.recovered[0]!.custody!.state.amount).toBe(amount.toString());
     }

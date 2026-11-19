@@ -1,4 +1,5 @@
-// The trigger of the dead-node note (NodeDownNote.tsx): only a node that is known to be unreachable counts; a read that has not answered yet does not.
+// The trigger of the dead-node note (NodeDownNote.tsx): only a node that is known to be unreachable
+// counts. A read that has not answered yet does not.
 import { describe, expect, it } from 'vitest';
 import { has } from '../../i18n';
 import { nodeIsDown } from './status';

@@ -1,6 +1,7 @@
-// Delivery of buy orders (bid-delivery-spec §10): the default per order class and token family, the top-up tip formula, the receive
-// threshold, and the plans the simple planner builds with them (signed and validated by the script engine like every other plan).
-// Each rule has a negative case that fails when the rule is removed.
+// Delivery of buy orders (bid-delivery-spec §10): the default per order class and token family, the
+// top-up tip formula, the receive threshold, and the plans the simple planner builds with them
+// (signed and validated by the script engine like every other plan). Each rule has a negative case
+// that fails when the rule is removed.
 import { describe, expect, it } from 'vitest';
 import type { BidState } from '../types';
 import type { OrderPlan } from '../plan-types';
@@ -23,7 +24,10 @@ const order = (o: Partial<DeliveryOrder> = {}): DeliveryOrder => ({ codec: 'kcc2
 const codes = (xs: readonly PlanIssue[]): string[] => xs.map((i) => i.code);
 const bidOf = (p: OrderPlan): BidState => p.states[0]!.state as BidState;
 
-/** Plans, asserts success, validates the built transaction in the script engine and recovers the placement record. */
+/**
+ * Plans, asserts success, validates the built transaction in the script engine and recovers the
+ * placement record.
+ */
 function planValid(intent: SimpleIntent, env = makeEnv()): OrderPlan {
   const p = planSimple(env, intent);
   expect(errors(p), JSON.stringify(errors(p))).toEqual([]);
@@ -90,7 +94,8 @@ describe('the top-up tip (bid-delivery-spec §10)', () => {
     expect(run(-1n).codes).toEqual(['TOPUP_TIP_INVALID']);
     expect(run(744_249n).codes).toEqual(['TOPUP_TIP_LOW']);
     expect(run(744_250n)).toMatchObject({ codes: [], r: { fields: { topupTip: '744250' } } });
-    // S4: below COVENANT_OUTPUT_MIN (0.08 KAS) even with a 1 KAS carrier, as kob-protocol's check_delivery
+    // Below COVENANT_OUTPUT_MIN (0.08 KAS) even with a 1 KAS carrier, as kob-protocol's
+    // check_delivery.
     expect(TOPUP_TIP_MAX).toBe(COVENANT_OUTPUT_MIN - 1n);
     expect(DC > TOPUP_TIP_MAX).toBe(true);
     expect(run(TOPUP_TIP_MAX)).toMatchObject({ codes: [], r: { fields: { topupTip: TOPUP_TIP_MAX.toString() } } });
@@ -126,7 +131,8 @@ describe('the receive threshold (bid-delivery-spec §10)', () => {
     expect(topupOffer(order({ minFill: 1_500n }))).toMatchObject({ ok: true, threshold: 2_000n, recvThreshold: 1_499n, defaultTip: 744_250n });
     expect(topupOffer(order({ minFill: 1n }))).toEqual({ ok: false, reason: 'minFill' });
     expect(topupOffer(order({ price: null }))).toEqual({ ok: false, reason: 'price' });
-    // a program row without an extra (only KRON rows; deliveryFixed catches KRON first, so a KCC-20 codec on it reaches the program rule)
+    // a program row without an extra (only KRON rows; deliveryFixed catches KRON first, so a KCC-20
+    // codec on it reaches the program rule)
     expect(topupOffer(order({ program: 'KronToken2433' }))).toEqual({ ok: false, reason: 'program' });
     expect(topupOffer(order({ program: 'KCC20Ref_8x8' }))).toMatchObject({ ok: true, defaultTip: defaultTopupTip(DC, 1_282_400n) });
     expect(topupOffer(order({ cls: 'immediate' }))).toEqual({ ok: false, reason: 'fixed' });
@@ -165,7 +171,8 @@ describe('plans with a delivery (signed and validated by the script engine)', ()
     expect(planDelivery(p)).toMatchObject({ delivery: { choice: 'collected' }, fills: 1n });
     const more = planValid(limitBuy({ maxFills: 5n, ...col }));
     expect(more.request!.value).toBe(p.request!.value);
-    // the default: each fill funds one carrier per fill (4 fills of 2.5 tokens, at most the default 3)
+    // the default: each fill funds one carrier per fill (4 fills of 2.5 tokens, at most the default
+    // 3)
     const each = planValid(limitBuy());
     expect(bidOf(each).mode).toBe('0');
     expect(planDelivery(each)).toMatchObject({ delivery: { choice: 'each' } });
@@ -179,7 +186,7 @@ describe('plans with a delivery (signed and validated by the script engine)', ()
     expect(BigInt(p.request!.value)).toBe(K.bidEscrow(p.states[0]!, 10n * TOK, 3n));
     expect(p.disclosure!.notes).toContain('deliveryTopup');
     expect(planDelivery(p)).toMatchObject({ delivery: { choice: 'topup', threshold: 2_000n }, fills: 3n });
-    // a stored threshold and a tip raised to the cap (S4: below 0.08 KAS)
+    // a stored threshold and a tip raised to the cap (below 0.08 KAS)
     const q = planValid(limitBuy({ delivery: { choice: 'topup', threshold: 1_000n, topupTip: TOPUP_TIP_MAX } }));
     expect(bidOf(q)).toMatchObject({ recvThreshold: '1000', topupTip: TOPUP_TIP_MAX.toString() });
     // the threshold is capped at minFill - 1

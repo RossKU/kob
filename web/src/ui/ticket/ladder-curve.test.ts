@@ -1,5 +1,5 @@
-// A sell ladder as one curve order: the ladder's prices become the table (percent and even spacing), a buy or a falling ladder is not a curve;
-// the stepper of separate orders.
+// A sell ladder as one curve order: the ladder's prices become the table (percent and even
+// spacing), a buy or a falling ladder is not a curve. The stepper of separate orders.
 import { describe, expect, it } from 'vitest';
 import type { LimitIntent } from '../../kob/intent-simple';
 import { expandLimitLadder } from './ladder';

@@ -126,7 +126,8 @@ describe('chart drawings storage', () => {
     // a colour is a swatch's name: a CSS colour, markup or a number is not taken
     const odd = ['#ff0000', 'red', 'url(javascript:1)', '<b>', 7, null, {}, ['buy']].map((color, i) => ({ id: `o${i}`, kind: 'hline', price: 1, color }));
     expect(parseDrawings(JSON.stringify({ v: 1, items: odd })).map((d) => d.color)).toEqual(odd.map(() => DEFAULT_COLOR));
-    // a recolour survives the round trip, and an old drawing keeps its place in the list while it is recoloured
+    // A recolour survives the round trip, and an old drawing keeps its place in the list while it
+    // is recoloured.
     saveDrawings('mainnet', TOKEN, [{ ...T, color: 'warn' }]);
     expect(loadDrawings('mainnet', TOKEN)[0]!.color).toBe('warn');
   });
@@ -276,7 +277,10 @@ describe('the box', () => {
 });
 
 describe('logicalX (the library answers x = 0 for a fractional index)', () => {
-  /** The library's mapping: bar i at 10 + 7 * i, and 0 for anything that is not a whole number (timeScale.indexToCoordinate). */
+  /**
+   * The library's mapping: bar i at 10 + 7 * i, and 0 for anything that is not a whole number
+   * (timeScale.indexToCoordinate).
+   */
   const lib = (i: number): number => (Number.isInteger(i) ? 10 + 7 * i : 0);
 
   it('places a whole index as the library does', () => {

@@ -1,7 +1,9 @@
-// Pre-sign decoding of pair orders (KobPair, KobCondPair, KobIfdPair; token A for token B, either family each): placements (custodies of A and
-// of B, a sell-first entry's B prefund, escrows per role against the plan), cancels / refunds / sweeps / position cancels (what returns of A, of B
-// and of KAS), the registry pins of both tokens, and the trigger evidence of pair stops in both modes (two KAS-book fills, or a resting pair
-// order). Every transaction is real: the golden pair requests re-keyed to the test maker, built, signed and run through the script engine.
+// Pre-sign decoding of pair orders (KobPair, KobCondPair, KobIfdPair; token A for token B, either
+// family each): placements (custodies of A and of B, a sell-first entry's B prefund, escrows per
+// role against the plan), cancels / refunds / sweeps / position cancels (what returns of A, of B
+// and of KAS), the registry pins of both tokens, and the trigger evidence of pair stops in both
+// modes (two KAS-book fills, or a resting pair order). Every transaction is real: the golden pair
+// requests re-keyed to the test maker, built, signed and run through the script engine.
 import { describe, expect, it } from 'vitest';
 import { decodeSigning, fillArg, type SigningSummary } from './decode';
 import { planCancel, planCancelAll, planRefund, planSweep, type CancelEnv, type OrderSnapshot } from './cancel';
@@ -23,7 +25,10 @@ const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 const decode = (built: BuiltTx, extra: Partial<Parameters<typeof decodeSigning>[0]> = {}): SigningSummary =>
   decodeSigning({ kob, built, maker: MAKER.pk, registry: null, nodeInputs: nodeFactsOf(built), ...extra });
 
-/** A registry listing the golden KCC-20 pair tokens A (70..) and B (71..) on the reference program; `bExt` overrides B's extension commitment. */
+/**
+ * A registry listing the golden KCC-20 pair tokens A (70..) and B (71..) on the reference program;
+ * `bExt` overrides B's extension commitment.
+ */
 function registry(bExt?: string): TokenRegistry {
   const doc = tradableRegistryJson();
   const t = doc.tokens[0];
@@ -56,10 +61,12 @@ describe('pair placements of every kind and family mix', () => {
         const o = s.orders[0]!;
         expect(o.verified).toBe(true);
         expect(o.description).toMatchObject({ kind, side, tokenCovId: A, pair: { kind, side, base: { covId: A }, quote: { covId: B } } });
-        // every custody of the record, of its own token, with the amount kob-wasm says the state holds
+        // every custody of the record, of its own token, with the amount kob-wasm says the state
+        // holds
         expect(o.custodies.map((c) => [c.ref.covenantId, c.amount, c.role])).toEqual(cs.filter((c) => c.amount > 0n).map((c) => [c.token, c.amount, c.role]));
         if (suffix === 'create.ifdAsk') expect(o.custodies.map((c) => c.role)).toEqual(['base', 'quote']);
-        // per token: what leaves the wallet goes into the custodies (a pair order holds no KAS escrow: its KAS is carriers and tip)
+        // per token: what leaves the wallet goes into the custodies (a pair order holds no KAS
+        // escrow: its KAS is carriers and tip)
         for (const c of o.custodies) expect(s.net.tokens.find((t) => t.ref.covenantId === c.ref.covenantId)!.escrowed).toBe(c.amount);
         expect(o.locked.escrow).toBe(0n);
         expect(o.locked.total).toBe(o.value);
@@ -284,7 +291,8 @@ describe('trigger evidence of pair stops (both modes)', () => {
   });
 
   it('a resting pair order on the wrong side does not arm a pair stop (side rule)', () => {
-    // the buy stop's evidence is a pair BID; naming the ASK leg of the same transaction instead breaks the side rule
+    // the buy stop's evidence is a pair BID; naming the ASK leg of the same transaction instead
+    // breaks the side rule
     const b = builtOf('pair.cond.bid.stop.ev1');
     const i = orderInput(b);
     const s0 = dec(b);

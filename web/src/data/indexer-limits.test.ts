@@ -1,5 +1,5 @@
-// The indexer client reads at most `maxBodyBytes` of a response, and the indexer's error text reaches the UI without control, bidi or zero-width
-// characters.
+// The indexer client reads at most `maxBodyBytes` of a response, and the indexer's error text
+// reaches the UI without control, bidi or zero-width characters.
 import { describe, expect, it } from 'vitest';
 import { HttpIndexer, IndexerError } from './indexer';
 import { hasBadChar, plainUntrusted } from '../kob/registry';

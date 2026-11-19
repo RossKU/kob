@@ -1,4 +1,5 @@
-// Web layer: every destination key of a build request must be the wallet key (or the user's explicit change address).
+// Web layer: every destination key of a build request must be the wallet key (or the user's
+// explicit change address).
 import { describe, expect, it } from 'vitest';
 import { guardRequest, requestKeyProblem } from './request-guard';
 import { KobError } from './wasm';

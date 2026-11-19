@@ -1,4 +1,5 @@
-// The link-preview head of index.html: the static tags, and the build-time additions of head-meta.mjs (testnet title prefix, absolute og:url / og:image).
+// The link-preview head of index.html: the static tags, and the build-time additions of
+// head-meta.mjs (testnet title prefix, absolute og:url / og:image).
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -70,7 +71,8 @@ describe('the frame logo (header and footer of every page)', () => {
 });
 
 describe('the tab title follows the network in force at runtime (app/page-title.tsx)', () => {
-  // no DOM in this environment: a stand-in that holds the title and the two meta tags of an index.html text
+  // no DOM in this environment: a stand-in that holds the title and the two meta tags of an
+  // index.html text
   const fake = (src: string) => {
     const metas = new Map<string, { v: string; getAttribute: (n: string) => string; setAttribute: (n: string, v: string) => void }>();
     const meta = (sel: string, key: RegExp) => {

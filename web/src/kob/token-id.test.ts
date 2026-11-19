@@ -1,5 +1,5 @@
-// A token outside the registry is identified by its covenant id alone: it is shown with 8 + 8 hex (64 bits). Tokens that share a ticker are told apart
-// by covenant id (`sharedTickerIds`).
+// A token outside the registry is identified by its covenant id alone: it is shown with 8 + 8 hex
+// (64 bits). Tokens that share a ticker are told apart by covenant id (`sharedTickerIds`).
 import { describe, expect, it } from 'vitest';
 import { displayName, longId, parseRegistry, shortId } from './registry';
 import { tradableRegistryJson } from '../testing/chain-fixtures';

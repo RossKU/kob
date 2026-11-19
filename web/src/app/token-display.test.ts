@@ -1,5 +1,8 @@
-// How a token is shown: the registry's decimals and ticker, else those of this browser's issuance of it (unverified), else the assumed 8 decimals
-// and its covenant id as its name (founder 2026-10-17: never "base units" in front of a user).
+// Tests how a token is shown.
+//
+// The registry's decimals and ticker come first. Otherwise those of this browser's issuance of the
+// token are used (unverified). Otherwise the assumed 8 decimals and the covenant id as its name
+// are used. "Base units" never appear in front of a user.
 import { describe, expect, it } from 'vitest';
 import type { TokenInfo } from '../kob/registry';
 import { rememberIssuedToken } from '../data/issued-decimals';
@@ -58,7 +61,8 @@ describe('displayToken: the price scale of its order or its market, the order of
     const tk = displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, mem(), 1_000_000n)!;
     expect(tk).toMatchObject({ decimals: 6, decimalsSource: 'scale' });
     expect(decimalsNote(tk)).toMatchObject({ text: '6 decimals, from its market' });
-    // the market's scale decides over this browser's issuance record, as on the ticket; the record keeps its name; a scale of 1 (unknown) or not a power of ten says nothing
+    // The market's scale decides over this browser's issuance record, as on the ticket. The record
+    // keeps its name. A scale of 1 (unknown) or not a power of ten says nothing.
     const s = mem();
     rememberIssuedToken('testnet-10', ID, { decimals: 2, ticker: 'XYZ' }, s);
     expect(displayToken({ byCovenantId: new Map() }, 'testnet-10', ID, s, 1_000_000n)).toMatchObject({ decimals: 6, ticker: 'XYZ', decimalsSource: 'scale' });
@@ -87,7 +91,8 @@ describe('displayToken: a program with default decimals (KaspaRocket convention)
     expect(decimalsNote(tk)).toMatchObject({ text: 'KaspaRocket convention' });
     expect(decimalsNote(tk)!.title).toContain('3 decimals, the KaspaRocket convention');
     expect(decimalsOrigin(tk)).toBe('program');
-    // the program the token was seen under (the indexer's list, the wallet's verified holdings) when the caller does not name it
+    // The program the token was seen under (the indexer's list, the wallet's verified holdings)
+    // when the caller does not name it.
     expect(displayToken({ byCovenantId: new Map() }, 'mainnet', ID, mem())!.decimalsSource).toBe('assumed');
     noteTokenProgram('mainnet', ID, 'KaspaRocketToken11458');
     expect(displayToken({ byCovenantId: new Map() }, 'mainnet', ID, mem())).toMatchObject({ decimals: 3, decimalsSource: 'program' });

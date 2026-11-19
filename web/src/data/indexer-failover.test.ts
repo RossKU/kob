@@ -1,4 +1,5 @@
-// Indexer failover: which indexer may serve (judge / selectMember: pure) and the controller that switches between them (fake timers, scripted indexers).
+// Indexer failover: which indexer may serve (judge / selectMember: pure) and the controller that
+// switches between them (fake timers, scripted indexers).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
@@ -87,7 +88,7 @@ describe('selectMember', () => {
   });
 });
 
-// ------------------------------------------------------------------------------------------------ the controller
+// ---------------------------------------------------------------------------------- the controller
 
 /** A scripted indexer: `answer` is what `/v1/health` gives now (a Probe: health or an error). */
 class Fake {
@@ -207,7 +208,8 @@ describe('IndexerFailover', () => {
     await settle(0);
     const reads = () => fakes[1]!.reads;
     expect(reads()).toBe(1);
-    // the status poll keeps reporting every 15 s: that does not make more probes than the backoff allows
+    // The status poll keeps reporting every 15 s: that does not make more probes than the backoff
+    // allows.
     for (let t = 0; t < 600; t += 15) {
       await settle(15_000);
       report(fo, down);

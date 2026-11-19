@@ -1,6 +1,8 @@
-// The signer frame on claims (bid-delivery-spec §7) and on delivery terms: it decodes a claim itself, names it like a merge (title and
-// lines: what is claimed, where it goes, the carrier added, the fee), refuses a tampered one, signs a valid one only on Approve, and binds the
-// delivery terms of an order (a re-time or an update that changes a tip or threshold is shown again).
+// The signer frame on claims (bid-delivery-spec §7) and on delivery terms: it decodes a claim
+// itself, names it like a merge (title and lines: what is claimed, where it goes, the carrier
+// added, the fee), refuses a tampered one, signs a valid one only on Approve, and binds the
+// delivery terms of an order (a re-time or an update that changes a tip or threshold is shown
+// again).
 import { describe, expect, it } from 'vitest';
 import { createSignerCore } from './core';
 import { SIGNER_PROTOCOL, parseAppMessage, type SignerToApp } from './protocol';
@@ -18,7 +20,10 @@ const HINTS = [{ covenantId: TOKEN.covenantId, ticker: 'TST', decimals: 3 }];
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 const line = (s: ReturnType<typeof summarize>, label: RegExp) => s.lines.find((l) => label.test(l.label))?.value;
 
-/** The claim's continuation re-derived from a changed price: the order would continue with other terms. */
+/**
+ * The claim's continuation re-derived from a changed price: the order would continue with other
+ * terms.
+ */
 function tampered(built: BuiltTx, os: OrderState): BuiltTx {
   const b = clone(built);
   const next = clone(os);

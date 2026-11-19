@@ -1,5 +1,6 @@
-// The cost preview under the amount box: a limit order is amount x price; a market order walks the book from the best level and shows the bound it allows
-// beside (a buy's max plus the fee, a sell's min less it) only when they differ; a book too thin for the amount says what it covers.
+// The cost preview under the amount box: a limit order is amount x price. A market order walks the
+// book from the best level and shows the bound it allows beside (a buy's max plus the fee, a sell's
+// min less it) only when they differ. A book too thin for the amount says what it covers.
 import { describe, expect, it } from 'vitest';
 import type { Intent } from '../../kob/plan';
 import type { BookView } from '../../kob/plan-types';

@@ -17,7 +17,8 @@ const tplJson = (review: 'reviewed' | 'pending-review', hash = tpl.hash) => ({
 });
 const tokJson = (ticker: string, id: string, verified = true) => ({
   ticker, name: `${ticker} coin`, family: 'kcc20', covenant_id: id, template_id: 'kcc20-ref-8x8', extension_commitment: 'ee'.repeat(32), extension_class: 'fixed-supply-standard',
-  // lot_size / tick: legacy protocol v2 fields the registry reads and ignores; v3 orders never read them
+  // lot_size / tick: legacy protocol v2 fields the registry reads and ignores. v3 orders never read
+  // them.
   decimals: 8, lot_size: 100_000_000, tick: 100_000, verified,
 });
 const ID = (c: string) => c.repeat(64);
@@ -26,7 +27,10 @@ function registry(review: 'reviewed' | 'pending-review', tokens: Record<string, 
   return parseRegistry({ schema_version: 1, network: 'testnet-10', templates: [tplJson(review, hash)], tokens }, { kob, network: 'testnet-10' });
 }
 
-/** What an OLDER executor still sends: a per-token `standing` (official / unverified / delisted), a judgement KOB no longer makes and the app ignores. */
+/**
+ * What an OLDER executor still sends: a per-token `standing` (official / unverified / delisted).
+ * KOB makes no such judgement and the app ignores it.
+ */
 const legacyStanding = (standing: string) => ({ standing }) as unknown as Partial<IndexerTokenView>;
 
 const view = (ticker: string, id: string, asks = 0, bids = 0, over: Partial<IndexerTokenView> = {}): IndexerTokenView => ({
@@ -143,7 +147,8 @@ describe('filterTokens / parseCovenantId', () => {
     const kr = TOKEN_PROGRAMS.find((p) => p.name === 'KaspaRocketToken11458')!;
     const r = unknownRow(reg, view('', ID('8'), 0, 0, { decimals: null, scale: null, template_hash: kr.templateHash }));
     expect([r.decimals, r.scale]).toEqual([3, 1000n]);
-    // the indexer's decimals (its operator's registry entry) come first; another program has no default
+    // The indexer's decimals (its operator's registry entry) come first. Another program has no
+    // default.
     expect(unknownRow(reg, view('', ID('8'), 0, 0, { decimals: 6, scale: null, template_hash: kr.templateHash })).decimals).toBe(6);
     expect(unknownRow(reg, view('', ID('8'), 0, 0, { decimals: null, scale: null })).decimals).toBeNull();
   });
@@ -379,9 +384,10 @@ describe('the genesis line of a row: kascov\'s remark and KOB\'s own check', () 
     expect(applyGenesisCheck(row(['genesis_kascov', 'blacklist']), verified()).facts).toEqual(['genesis_verified', 'blacklist']);
     const mint = applyGenesisCheck(row(['genesis_unverified', 'public-mint']), verified({ mintAllowance: 500n, mintersUnspent: true }));
     expect(mint.facts).toEqual(['genesis_verified', 'public-mint', 'mint_allowance']);
-    // a program that is not reviewed (a prototype, one pending review) passes the check too, but the line says so (audit 2026-10-29 F6)
+    // A program that is not reviewed (a prototype, one pending review) passes the check too, but
+    // the line says so.
     expect(applyGenesisCheck(row(['genesis_unverified']), verified({ program: 'KCC20Ref_8x8' })).facts).toEqual(['genesis_verified_unreviewed']);
-    // a KRON minter mints without bound: the fact is there, with no allowance (F7)
+    // A KRON minter mints without bound: the fact is there, with no allowance.
     expect(applyGenesisCheck(row(['genesis_unverified', 'mint-authority']), verified({ program: 'KronToken2433', mintUnbounded: true })).facts).toEqual(['genesis_verified', 'mint-authority', 'mint_allowance']);
     expect(mint.genesis).toMatchObject({ status: 'verified', mintAllowance: 500n });
   });

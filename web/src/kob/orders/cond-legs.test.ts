@@ -17,20 +17,23 @@ describe('slipForLimit (matcher.md 10.6: largest slipBps not beyond the limit)',
   });
 
   it('caps at 10 000 bps', () => {
-    // a sell band reaches zero only at 10 000 bps: the largest slip keeping the worst price above the limit is 9 999
+    // a sell band reaches zero only at 10 000 bps: the largest slip keeping the worst price above
+    // the limit is 9 999
     expect(slipForLimit('sell', 230_000_000n, 1n)).toBe(9_999n);
     expect(slipForLimit('buy', 230_000_000n, 900_000_000n)).toBe(10_000n);
   });
 
   it('multiplies first like the covenants: low stops keep a band and never pass the limit', () => {
-    // stop 5 000 sompi per token: the band is stop*bps/10^4 (5 per 10 bps). Divide-first gave floor(5000/10^4)=0, i.e. no band at all.
+    // stop 5 000 sompi per token: the band is stop*bps/10^4 (5 per 10 bps). Divide-first gave
+    // floor(5000/10^4)=0, i.e. no band at all.
     expect(stopWorstPrice('sell', 5_000n, 300n)).toBe(4_850n);
     expect(stopWorstPrice('buy', 5_000n, 300n)).toBe(5_150n);
     expect(stopWorstPrice('sell', 9_999n, 300n)).toBe(9_999n - 299n);
     expect(stopWorstPrice('sell', 1n, 9_999n)).toBe(1n);
     expect(stopWorstPrice('sell', 1n, 10_000n)).toBe(0n);
     expect(stopWorstPrice('buy', 1n, 10_000n)).toBe(2n);
-    // a stop-limit at a low price: the limit 4 900 of a 5 000 stop allows 201 bps (worst price 4 900), not the 10 000 the old code returned
+    // a stop-limit at a low price: the limit 4 900 of a 5 000 stop allows 201 bps (worst price 4
+    // 900), not 10 000
     expect(slipForLimit('sell', 5_000n, 4_900n)).toBe(201n);
     expect(slipForLimit('sell', 5_000n, 4_899n)).toBe(203n);
     expect(stopWorstPrice('sell', 5_000n, slipForLimit('sell', 5_000n, 4_899n))).toBeGreaterThanOrEqual(4_899n);

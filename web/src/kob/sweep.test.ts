@@ -1,7 +1,9 @@
-// The maker's SWEEP of an order's strays IN PLACE (kob-protocol `SweepOrder`, SWEEP record 0x83): planned by `planSweep`, built by kob-wasm,
-// signed locally and validated in the script engine for every order kind of both families, then decoded; and the
-// hostile variants the decoder must block (another script on the continuation, a record that does not verify, a token output to another key,
-// the custody swept along, a plan that claims another sweep). Foreign strays (other tokens owned by the order id) ride on sweeps and cancels.
+// The maker's SWEEP of an order's strays IN PLACE (kob-protocol `SweepOrder`, SWEEP record 0x83):
+// planned by `planSweep`, built by kob-wasm, signed locally and validated in the script engine for
+// every order kind of both families, then decoded; and the hostile variants the decoder must block
+// (another script on the continuation, a record that does not verify, a token output to another
+// key, the custody swept along, a plan that claims another sweep). Foreign strays (other tokens
+// owned by the order id) ride on sweeps and cancels.
 import { describe, expect, it } from 'vitest';
 import { planCancel, planSweep, snapshotFromOrderView, type CancelEnv, type CancelPlan, type OrderSnapshot } from './cancel';
 import { decodeSigning, type ExpectedSigning, type SigningSummary } from './decode';
@@ -28,7 +30,10 @@ const env = (over: Partial<CancelEnv> = {}): CancelEnv => ({ kob, maker: MAKER.p
 const snapOf = (name: string): OrderSnapshot => placeGolden(kob, name).snapshots[0]!;
 const txid = (n: number): Hex => n.toString(16).padStart(2, '0').repeat(32);
 
-/** A stray of the order's own token (its family; the custody's extension commitment, else the golden token's). */
+/**
+ * A stray of the order's own token (its family; the custody's extension commitment, else the golden
+ * token's).
+ */
 function ownStray(snap: OrderSnapshot, amount: bigint, n: number): TokenUtxo {
   const family = familyOfKind(snap.order.state.kind);
   const ext = (snap.custody ? extensionOfState(snap.custody.state) : null) ?? TOKEN.ext;
@@ -78,7 +83,8 @@ describe('planSweep: the order continues under the same script, its strays retur
     // a plain ask's carrier pays; every other kind is funded by one wallet coin
     const ask = /create\.ask$/.test(name);
     expect(plan.fundingUsed.length, name).toBe(ask ? 0 : 1);
-    // the continuation: output 0, the SAME script as the order input, bound to the same covenant id from input 0
+    // the continuation: output 0, the SAME script as the order input, bound to the same covenant id
+    // from input 0
     const tx = plan.built!.tx;
     expect(tx.outputs[0]!.scriptPublicKey).toBe(tx.inputs[0]!.utxo.scriptPublicKey);
     expect(tx.outputs[0]!.covenant).toEqual({ authorizingInput: 0, covenantId: snap.covenantId });
@@ -110,7 +116,8 @@ describe('planSweep: the order continues under the same script, its strays retur
     const sp = s.spends[0]!;
     const own = s.net.tokens.find((n) => n.ref.covenantId === sp.description!.tokenCovId)!.ref;
     const tr = (k: string, p?: Record<string, string | number | bigint>) => t(k, p);
-    // the order is the same one (same title), the strays of its own token are told in whole units, the foreign one by its id alone
+    // the order is the same one (same title), the strays of its own token are told in whole units,
+    // the foreign one by its id alone
     expect(orderTitle(sp.description!, null, { tr, ref: own, clock: null, time: () => '', registry })).toBe('Sell limit order');
     expect(tokenAmountText(own, sp.strays)).toBe('0.012 TST');
     expect(sp.otherStrays).toHaveLength(1);
@@ -198,7 +205,8 @@ describe('the pre-sign decoder blocks a sweep that is not one', () => {
   it('the custody swept along, and a plan that claims another sweep or a cancel', () => {
     const snap = withStrays(snapOf('create.ask'));
     const ok = planSweep(env(), snap);
-    // the builder accepts the custody as one more stray of the order's token: the plan's `untouched` outpoint catches it
+    // the builder accepts the custody as one more stray of the order's token: the plan's
+    // `untouched` outpoint catches it
     const req = { ...(ok.request as SweepOrderRequest), strays: [snap.custody!, ...(ok.request as SweepOrderRequest).strays!] };
     const greedy = kob.build({ ...req, ownKeys: [MAKER.pk] });
     expect(codes(decode(greedy, ok.expected).blocking)).toContain('sweep-custody-spent');

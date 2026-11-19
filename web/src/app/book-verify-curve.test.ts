@@ -1,5 +1,6 @@
-// A curve sell order against the node (app/book-verify.ts): its rows (one per remaining level, one covenant id) are checked once; the levels its
-// confirmed state has stay, each at its own price, in price order among the other asks; a level at another price or bigger than its state is not.
+// A curve sell order against the node (app/book-verify.ts): its rows (one per remaining level, one
+// covenant id) are checked once. The levels its confirmed state has stay, each at its own price, in
+// price order among the other asks. A level at another price or bigger than its state is not.
 import { describe, expect, it } from 'vitest';
 import type { BookOrderView, BookView, LevelView, OrderView } from '../data/indexer-types';
 import type { OrderSnapshot } from '../kob/cancel';
@@ -83,7 +84,8 @@ describe('verifyBook: an unbound curve (made in its token genesis, its custody g
     const own = await run(viewWith({ ...curve.custody!, covenantId: token }));
     expect(own.dropped).toEqual([]);
     expect(own.view.asks).toHaveLength(2);
-    // a look-alike at the custody's script in another transaction, of the market's token as the indexer claims
+    // A look-alike at the custody's script in another transaction, of the market's token as the
+    // indexer claims.
     const out0 = g.built.tx.outputs[0]!;
     chain.add({ transactionId: 'ab'.repeat(32), index: 0, amount: out0.value, scriptPublicKey: out0.scriptPublicKey, covenantId: token });
     const other = await run(viewWith({ ...curve.custody!, transactionId: 'ab'.repeat(32), index: 0, covenantId: token }));

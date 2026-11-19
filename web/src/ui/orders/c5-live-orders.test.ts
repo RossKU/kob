@@ -1,5 +1,6 @@
-// C5 liveness ("every state can be exited"): My-orders states the wallet must show and act on. Uncompiled when written (2026-10-02);
-// tests marked `C5: expected to fail` pin the fixed behaviour of a finding in research/2026-09-29/planning/core/c5_liveness.md.
+// Tests that My orders shows and can act on every order state, so that no state is a dead end.
+//
+// Each group below pins one liveness rule of the orders list and the cancel path.
 import { describe, expect, it, vi } from 'vitest';
 import type { Services } from '../../app/services';
 import type { IndexerApi } from '../../data/indexer';
@@ -42,10 +43,10 @@ const place = (name: string) => {
 };
 
 describe('C5-L1: a killed IOC / FOK / market order is a terminal status, not "unknown"', () => {
-  // The indexer closes an IOC whose unfilled rest is returned (and every IOC / FOK kill) with status `killed`
-  // (crates/kobd/src/indexer/processor.rs: `(None, Some("kill")) => "killed"`); the web knows only
-  // open / partial / filled / cancelled / refunded / closed, so every partly filled market order reads "unknown".
-  // C5: expected to fail until orders-model.ts ORDER_STATUSES / statusOf and positions.ts TERMINAL learn `killed`.
+  // The indexer closes an IOC whose unfilled rest is returned, and every IOC or FOK kill, with
+  // status `killed` (crates/kobd/src/indexer/processor.rs). A partly filled market order must
+  // therefore read as done, not "unknown". ORDER_STATUSES, statusOf and the positions TERMINAL set
+  // all know `killed`.
   it('describeEntry maps killed to a done status and counts it as done', () => {
     const { snap } = place('create.ask.market');
     const view = orderViewOf(kob, snap, { status: 'killed', filled_amount: '3', amount_left: '0' } as Partial<OrderView>);
@@ -66,16 +67,19 @@ describe('C5-L1: a killed IOC / FOK / market order is a terminal status, not "un
 });
 
 describe('C5-L2: a live order older than the newest 20 pages of history is still listed', () => {
-  // loadOrders asks `allOrders({ maker, limit: 200 })` without a status filter; the indexer pages newest first and allOrders stops after
-  // 20 pages (4,000 orders). A repeat IFD books one exit per entry fill, so an active trap repeat reaches that in weeks, and its ENTRY,
-  // the oldest order of the position (and the one the booked exits need for every take-profit), is the first to fall off the list:
-  // no row, no cancel, position cancel misses it. The indexer already serves `status=active`.
-  // C5: expected to fail until loadOrders also loads `allOrders({ maker, status: 'active' })` (all pages) and merges.
+  // loadOrders asks `allOrders({ maker, limit: 200 })` without a status filter. The indexer pages
+  // newest first and allOrders stops after 20 pages (4,000 orders). A repeat IFD books one exit
+  // per entry fill, so an active trap repeat can pass that. Its ENTRY is the oldest order of the
+  // position and the one the booked exits need for every take-profit, so it falls off the list
+  // first. Without it there is no row, no cancel, and a position cancel misses it. The indexer
+  // serves `status=active`, so loadOrders also loads `allOrders({ maker, status: 'active' })`
+  // (all pages) and merges.
   it('the old live order appears even when the unfiltered history is truncated', async () => {
     const old = place('create.ifdBid.repeat');
     const live = orderViewOf(kob, old.snap);
     const recent = place('create.ask');
-    // 4,000 newer, closed orders: what the unfiltered, truncated listing returns (same view object reused, ids differ)
+    // 4,000 newer, closed orders: what the truncated, unfiltered listing returns.
+    // The same view object is reused with different ids.
     const history: OrderView[] = Array.from({ length: 4000 }, (_, i) => ({
       ...orderViewOf(kob, recent.snap, { status: 'filled' } as Partial<OrderView>),
       covenant_id: (i + 1).toString(16).padStart(64, '0'),
@@ -91,12 +95,14 @@ describe('C5-L2: a live order older than the newest 20 pages of history is still
 });
 
 describe('C5-L3: dust strays must not make an order uncancellable from the UI', () => {
-  // Anyone can send token UTXOs of the order's token to its covenant id. With more strays than the token program's input room
-  // (3/3 program: custody + 2), planCancel refuses (`cancel.strays-exceed-slots`) unless `allowAbandonStrays`, and NO UI caller passes it
-  // (ui/orders/actions.ts planCancelFor / planCancelMany): the maker can no longer cancel the order (nor its position) at all; only a fill
-  // or the expiry refund ends it (90 days for a GTC, never for a stop-loss exit the user wants to pull). A griefer pays 3 dust strays.
-  // C5: expected to fail until the actions fall back to abandoning the smallest strays (a warning the confirm screen shows) or sweep
-  // them in a separate step first.
+  // Anyone can send token UTXOs of the order's token to its covenant id. With more strays than
+  // the token program's input room (3/3 program: custody + 2), planCancel refuses
+  // (`cancel.strays-exceed-slots`) unless `allowAbandonStrays` is set. If the UI never set it,
+  // the maker could not cancel the order or its position at all. Only a fill or the expiry
+  // refund would end it: 90 days for a GTC, never for a stop-loss exit the user wants to pull.
+  // A griefer pays 3 dust strays for that. So planCancelFor / planCancelMany (ui/orders/actions.ts)
+  // abandon the smallest strays and the confirm screen shows a warning, or the strays are swept
+  // in a separate step first.
   const withStrays = (c: FakeChain, strays: TokenUtxo[]): FakeChain => {
     for (const x of strays) {
       c.add({ transactionId: x.transactionId, index: x.index, amount: x.amount, scriptPublicKey: kob.tokenScriptPublicKey('KCC20Ref', x.state as Kcc20State), covenantId: x.covenantId });
@@ -133,11 +139,13 @@ describe('C5-L3: dust strays must not make an order uncancellable from the UI', 
 });
 
 describe('C5-L4: if-done exits survive an indexer outage (the wallet keeps a record of them)', () => {
-  // An exit is created by its entry's fill: it has no placement record. The wallet's records (localStorage, backup files) therefore hold
-  // only the ENTRY; when the indexer is down or gone, `loadOrders` lists only records, so every exit (which holds the bought tokens of a
-  // buy-first IFD / repeat, or the proceeds + prefund of a sell-first one) disappears from My orders and cannot be cancelled. The indexer
-  // serves everything a record needs (state, extension commitment); the wallet just never stores it.
-  // C5: expected to fail until loadOrders (or the position view) upserts a record for every own live order the indexer shows without one.
+  // An exit is created by its entry's fill, so it has no placement record. The wallet's records
+  // (localStorage, backup files) hold only the ENTRY. When the indexer is down or gone,
+  // `loadOrders` lists only records. Every exit would then disappear from My orders and could not
+  // be cancelled. An exit holds the bought tokens of a buy-first IFD / repeat, or the proceeds and
+  // prefund of a sell-first one. The indexer serves everything a record needs (state, extension
+  // commitment), so loadOrders (or the position view) upserts a record for every own live order
+  // the indexer shows without one.
   it('loadOrders stores a record for an exit the indexer shows', async () => {
     const { goldenRequest } = await import('../../testing/chain-fixtures');
     const { snapshotFromItem } = await import('../../kob/cancel');

@@ -40,9 +40,10 @@ const place = (name: string, label?: string) => {
 };
 
 /**
- * A golden placement with a smaller amount left: the node alone proves a record spent only when its search over the continuation amounts is
- * exhaustive (every base unit up to the candidate budget, records.ts); the 10 TST golden ask (10,000 base units) is beyond it and resolves
- * 'unknown' without the indexer.
+ * A golden placement with a smaller amount left: the node alone proves a record spent only when its
+ * search over the continuation amounts is exhaustive (every base unit up to the candidate budget,
+ * records.ts). The 10 TST golden ask (10,000 base units) is beyond it and resolves 'unknown'
+ * without the indexer.
  */
 const placeSmall = (name: string, amountLeft: string) => {
   const request = goldenRequest<ActionRequest>(name, MAKER.pk);
@@ -104,7 +105,8 @@ describe('loadOrders: the node never holds the list back', () => {
     expect(updates).toHaveLength(1);
     expect(updates[0]!.clock).not.toBeNull();
     expect(describeEntry(updates[0]!.entries[0]!, { kob, clock: updates[0]!.clock }).source).toBe('node');
-    // the verdict is kept for the session: a reload within LIVE_CACHE_MS has it at once, nothing to follow
+    // The verdict is kept for the session: a reload within LIVE_CACHE_MS has it at once, nothing to
+    // follow.
     const again: unknown[] = [];
     const second = await loadOrders(s, MAKER.pk, store, { spkToAddress: testAddress, onUpdate: (d) => again.push(d) });
     expect(describeEntry(second.entries[0]!, { kob, clock: second.clock }).source).toBe('node');
@@ -157,7 +159,8 @@ describe('loadOrders', () => {
     await store.put(a.rec);
     const gone = await loadOrders(services({ chain: new FakeChain() }), MAKER.pk, store, { spkToAddress: testAddress });
     expect(describeEntry(gone.entries[0], { kob, clock: gone.clock }).status).toBe('closed');
-    // the 10,000-unit golden ask cannot be searched exhaustively on the node: gone stays unknown (the indexer proves it at once)
+    // The 10,000-unit golden ask cannot be searched exhaustively on the node: gone stays unknown
+    // (the indexer proves it at once).
     const bigStore = new MemoryRecordStore();
     await bigStore.put(place('create.ask').rec);
     const big = await loadOrders(services({ chain: new FakeChain() }), MAKER.pk, bigStore, { spkToAddress: testAddress });
@@ -264,7 +267,8 @@ describe('a record whose cancel was sent, before the node answers', () => {
     const first = await loadOrders(services({ chain: chainWith(a) }), MAKER.pk, store, { spkToAddress: testAddress, onUpdate: (d) => updates.push(d) });
     expect(first.entries).toEqual([]);
     await vi.waitFor(() => expect(updates).toHaveLength(1));
-    // the node still has it at the outpoint the cancel spends: shown again, live, until the cancel is in
+    // The node still has it at the outpoint the cancel spends: shown again, live, until the cancel
+    // is in.
     expect(updates[0]!.entries.map((e) => e.id)).toEqual([a.rec.covenantId]);
     expect(describeEntry(updates[0]!.entries[0]!, { kob, clock: CLOCK }).status).toBe('open');
   });

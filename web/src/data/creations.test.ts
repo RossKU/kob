@@ -42,7 +42,8 @@ describe('creation records (a creation whose genesis may not have gone out)', ()
     removeCreation('testnet-10', 'c1'.repeat(32), s);
     expect(listCreations('testnet-10', 'aa'.repeat(32), s)).toEqual([]);
     expect(listCreations('mainnet', 'aa'.repeat(32), s)).toHaveLength(1);
-    // only the v2 key is written: a page of an older build (v1 only) never sees a record without a signed genesis
+    // Only the v2 key is written: a page of an older build (v1 only) never sees a record without a
+    // signed genesis.
     expect(s.data.has('kob.creations.v1')).toBe(false);
     expect(s.data.has('kob.creations.v2')).toBe(true);
   });

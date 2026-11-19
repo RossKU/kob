@@ -1,8 +1,10 @@
-// Audit 2026-10-30 round 4 regressions for the signer frame under a hostile parent (G5, G6, G7, W4):
-//   G5  an approved flat order (slope 0) is not re-timed into a steep decay without a prompt
-//   G6  the flipped view says a sell that decays to 0 KAS
-//   G7  the token hints' decimals are labelled as the app's word, and an order whose scale does not fit them blocks Approve
-//   W4  forgetting the key (or importing another) takes the approval with it
+// Regressions for the signer frame under a hostile parent.
+//
+// - An approved flat order (slope 0) is not re-timed into a steep decay without a prompt.
+// - The flipped view says a sell that decays to 0 KAS.
+// - The token hints' decimals are labelled as the app's word, and an order whose scale does not fit
+//   them blocks Approve.
+// - Forgetting the key, or importing another, takes the approval with it.
 import { describe, expect, it } from 'vitest';
 import { createSignerCore } from '../signer/core';
 import { RETIME_MAX_DELAY_DAA, sameOrBetter } from '../signer/retime';
@@ -70,7 +72,8 @@ describe('G5: a flat approval is not re-timed into a steep decay', () => {
     const dutch = planCase('dutch sell');
     const a = decode(dutch.built!);
     expect(sameOrBetter(a, a)).toBe(true);
-    // a decay step of 0 on a decaying order is not valid on chain, and counts as 1 (never as an infinite slowness)
+    // a decay step of 0 on a decaying order is not valid on chain, and counts as 1 (never as an
+    // infinite slowness)
     const slow = decode(mutate(dutch, { slope: '1', decayStep: '1000' }));
     expect(sameOrBetter(slow, decode(mutate(dutch, { slope: '1', decayStep: '1000' })))).toBe(true);
     expect(sameOrBetter(slow, decode(mutate(dutch, { slope: '1', decayStep: '1' })))).toBe(false);
@@ -89,7 +92,8 @@ describe('G6: the flipped view says a sell that decays to zero', () => {
     expect(plain.join(' ; ')).toMatch(/0 KAS per GOLD/);
     const receive = flipped.find((r) => r.startsWith('You receive='))!;
     expect(receive, flipped.join(' ; ')).toMatch(/at least 0 KAS/);
-    // and it says the price is a decay (an expected and a worst row), as it does for any other decaying order
+    // and it says the price is a decay (an expected and a worst row), as it does for any other
+    // decaying order
     expect(flipped.some((r) => /^Worst price/.test(r) || /worst/i.test(r.split('=')[0]!)), flipped.join(' ; ')).toBe(true);
   });
 });
@@ -116,8 +120,9 @@ describe('G7: the decimals the app gives are labelled, and an order that does no
     }
   });
 
-  // G7 (b): through the frame the hint is not the app's word. With the table the bundle pins the frame reads the token from the table; without it
-  // the token is shown on the assumed 8 decimals. Either way a lying decimals hint does not reach the screen.
+  // Through the frame the hint is not the app's word. With the table the bundle pins, the frame
+  // reads the token from the table. Without it the token is shown on the assumed 8 decimals.
+  // Either way a lying decimals hint does not reach the screen.
   it('through the frame a lying decimals hint is replaced by the pinned table\'s entry, or by the scale the order itself names', () => {
     const b = limitSell();
     const cov = tokenOf(b);
@@ -139,7 +144,8 @@ describe('G7: the decimals the app gives are labelled, and an order that does no
     const bad = mutate(p, { scale: '1000000000' });
     const cov = tokenOf(bad);
     const s = summarize(kob, bad, MAKER_PK, [{ covenantId: cov, ticker: 'GOLD', decimals: 9 }]);
-    // consistent with itself, so it is not refused by the check; the frame says whose word the 9 decimals are
+    // consistent with itself, so it is not refused by the check; the frame says whose word the 9
+    // decimals are
     expect(s.orders[0]!.token).toContain('9 decimals as the app lists them');
     expect(s.orders[0]!.rows.find((r) => /^Amount/.test(r.label))!.value).toBe('0.5 GOLD');
   });

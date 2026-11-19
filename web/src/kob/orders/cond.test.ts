@@ -1,5 +1,6 @@
-// Conditional orders without an entry: stop-market, stop-limit, trailing stop, take-profit, OCO, on both sides. Every plan is run through
-// the oracle chain of cond-testkit (sign locally, finalize with tightened budgets, script-engine validate, recover the placement record).
+// Conditional orders without an entry: stop-market, stop-limit, trailing stop, take-profit, OCO, on
+// both sides. Every plan is run through the oracle chain of cond-testkit (sign locally, finalize
+// with tightened budgets, script-engine validate, recover the placement record).
 import { describe, expect, it } from 'vitest';
 import type { CondIntent } from '../intent-cond';
 import { CLOCK, KAS, MAKER_PK, OTHER_PK, TOK, makeEnv, market8x8, marketKron, tokenUtxo } from '../../testing/fixtures';
@@ -10,9 +11,14 @@ import { askState, bidState, codes, errorCodes, planOk } from './cond-testkit';
 const CARRIER = 1_000_000_000n;
 const GTC = CLOCK.daa + 77_760_000n;
 const SCALE = 1_000n;
-/** Each fill (mode 0): the per-fill carrier tests below (Each fill is the default; the Collected tests select it). */
+/**
+ * Each fill (mode 0): the per-fill carrier tests below (Each fill is the default; the Collected
+ * tests select it).
+ */
 const EACH = { choice: 'each' } as const;
-/** the wallet default minimum fill: the amount worth 10 KAS at the leg price, clamped to 1..amount */
+/**
+ * the wallet default minimum fill: the amount worth 10 KAS at the leg price, clamped to 1..amount
+ */
 const defMin = (amount: bigint, price: bigint): bigint => {
   const want = ceilDiv(10n * KAS * SCALE, price);
   return want > amount ? amount : want;
@@ -29,7 +35,8 @@ describe('stop-market', () => {
       slipBps: '300', bandDaa: '300', keeperTip: '2200000', minRestDaa: '50', armed: '0',
       trailStep: '0', trailGap: '0', trailWait: '0', parent: '0'.repeat(64), rptPrice: '0', rptUntil: '0',
     });
-    // the minimum fill is worth 10 KAS at the stop (ceil(10 / 2.3 tokens) = 4348 base units); the trigger threshold defaults to it
+    // the minimum fill is worth 10 KAS at the stop (ceil(10 / 2.3 tokens) = 4348 base units); the
+    // trigger threshold defaults to it
     expect(s.minFill).toBe('4348');
     expect(BigInt(s.minFill)).toBe(env.kob.defaultMinFill(10n * TOK, 230_000_000n, SCALE));
     expect(s.minTouch).toBe('4348');
@@ -41,7 +48,8 @@ describe('stop-market', () => {
     const d = plan.disclosure!;
     expect(d).toMatchObject({
       side: 'sell', tokenAmount: 10_000n, scale: 1_000n, minFill: 4_348n, minTouch: 4_348n, tokensEscrowed: 10_000n, tip: 0n, refundTip: 3_600_000n, keeperTip: 2_200_000n,
-      // 230 KAS - 23 000 sompi per bps * 300 = 223.1 KAS: the worst the sell can get; it starts at the stop
+      // 230 KAS - 23 000 sompi per bps * 300 = 223.1 KAS: the worst the sell can get; it starts at
+      // the stop
       limitPrice: 223_100_000n, worstPrice: 223_100_000n, expectedPrice: 230_000_000n, allInPrice: 223_100_000n, allInTotal: 2_231_000_000n,
       kasLocked: 2n * CARRIER,
     });
@@ -80,10 +88,12 @@ describe('stop-market', () => {
       extensionCommitment: env.token.extensionCommitment, tpPrice: '0', stopPrice: '260000000', slipBps: '300', bandDaa: '300', keeperTip: '2200000',
       minTouch: '3847', minFill: '3847', armed: '0', amountLeft: '10000', deliveryCarrier: CARRIER.toString(), tip: '0',
     });
-    // 10 tokens at the worst price 260 KAS + 26 000 * 300 = 267.8 KAS; three fills funded (ceil(10000 / 3847) = 3); the keeper's arm on top
+    // 10 tokens at the worst price 260 KAS + 26 000 * 300 = 267.8 KAS; three fills funded
+    // (ceil(10000 / 3847) = 3); the keeper's arm on top
     const ceiling = 260_000_000n + 26_000n * 300n;
     expect(BigInt(recovered[0]!.value)).toBe(10n * ceiling + 3n * CARRIER + 2_200_000n);
-    // the escrow part is exactly kob-wasm condBidEscrow (the spend of the whole amount at the worst leg, rounded down, plus the carriers)
+    // the escrow part is exactly kob-wasm condBidEscrow (the spend of the whole amount at the worst
+    // leg, rounded down, plus the carriers)
     expect(env.kob.condBidEscrow(plan.states[0]!, 3n)).toBe(10n * ceiling + 3n * CARRIER);
     expect(recovered[0]!.custody).toBeNull();
     const d = plan.disclosure!;
@@ -116,7 +126,8 @@ describe('stop-market', () => {
     const exp = planOk(env, { type: 'stopMarket', side: 'sell', amount: 10n * TOK, stop: 230_000_000n, minFill: 500n, minTouch: 2_500n });
     expect(askState(exp.plan.states[0]!)).toMatchObject({ minFill: '500', minTouch: '2500' });
     expect(exp.plan.disclosure).toMatchObject({ minFill: 500n, minTouch: 2_500n });
-    // when it is not given the threshold is the larger of the minimum fill and a quarter of the amount
+    // when it is not given the threshold is the larger of the minimum fill and a quarter of the
+    // amount
     expect(askState(planOk(env, { type: 'stopMarket', side: 'sell', amount: 10n * TOK, stop: 230_000_000n, minFill: 700n }).plan.states[0]!).minTouch).toBe('2500');
     expect(askState(planOk(env, { type: 'stopMarket', side: 'sell', amount: 10n * TOK, stop: 230_000_000n, minFill: 3_000n }).plan.states[0]!).minTouch).toBe('3000');
     // 100% of the amount (the strongest protection against stop hunting)
@@ -126,7 +137,8 @@ describe('stop-market', () => {
     expect(errorCodes(planCond(env, { type: 'stopMarket', side: 'sell', amount: 10n * TOK, stop: 230_000_000n, minTouch: 0n }))).toEqual(['COND_MIN_TOUCH_INVALID']);
     // a take-profit has no trigger: the disclosure shows none
     expect(planOk(env, { type: 'takeProfit', side: 'sell', amount: TOK, price: 300_000_000n }).plan.disclosure!.minTouch).toBeNull();
-    // OCO: the default minimum fill is worth 10 KAS at the LOWER leg of a sell, the HIGHER leg of a buy
+    // OCO: the default minimum fill is worth 10 KAS at the LOWER leg of a sell, the HIGHER leg of a
+    // buy
     const ocoSell = planOk(env, { type: 'oco', side: 'sell', amount: 10n * TOK, takeProfit: 300_000_000n, stop: 230_000_000n });
     expect(BigInt(askState(ocoSell.plan.states[0]!).minFill)).toBe(defMin(10n * TOK, 230_000_000n));
     const ocoBuy = planOk(env, { type: 'oco', side: 'buy', amount: 10n * TOK, takeProfit: 200_000_000n, stop: 260_000_000n });
@@ -140,7 +152,8 @@ describe('stop-market', () => {
     // a seller receives at least ceil(4321 x (300 KAS - 7 sompi) / 1000)
     expect(sell.plan.disclosure!.allInTotal).toBe(ceilDiv(4_321n * (300_000_000n - 7n), SCALE));
     const buy = planOk(env, { type: 'takeProfit', side: 'buy', amount: 4_321n, price: 200_000_000n, tip: 7n });
-    // a buyer pays at most floor(4321 x (200 KAS + 7 sompi) / 1000); the escrow is the same floor plus one carrier (one fill)
+    // a buyer pays at most floor(4321 x (200 KAS + 7 sompi) / 1000); the escrow is the same floor
+    // plus one carrier (one fill)
     expect(buy.plan.disclosure!.allInTotal).toBe((4_321n * 200_000_007n) / SCALE);
     expect(BigInt(buy.recovered[0]!.value)).toBe((4_321n * 200_000_007n) / SCALE + CARRIER);
   });
@@ -192,7 +205,8 @@ describe('trailing stop', () => {
     const { plan } = planOk(makeEnv(), { type: 'trailingStop', side: 'sell', amount: 10n * TOK, stop: 230_000_000n, trail });
     expect(askState(plan.states[0]!)).toMatchObject({ trailStep: '1000000', trailGap: '5000000', trailWait: '6000', stopPrice: '230000000', tpPrice: '0', armed: '0' });
     expect(plan.cond!.trail).toEqual({ step: 1_000_000n, gap: 5_000_000n, waitDaa: 6_000n, waitSeconds: 600n, maxUpdatesPerDay: 144n, expectedUpdates: 20 });
-    // 20 trail updates plus the arm: 21 x 0.021 KAS, inside the 10 KAS carrier (nothing extra is locked)
+    // 20 trail updates plus the arm: 21 x 0.021 KAS, inside the 10 KAS carrier (nothing extra is
+    // locked)
     expect(plan.cond!.keeper).toEqual({ tip: 2_200_000n, expectedUpdates: 21, reserve: 46_200_000n, fundedFrom: 'carrier' });
     expect(plan.disclosure!.kasLocked).toBe(2n * CARRIER);
     expect(plan.disclosure!.notes).toEqual(expect.arrayContaining(['trailing', 'keeperReserve']));
@@ -372,7 +386,8 @@ describe('guards and funding', () => {
   });
 
   it('the token input\'s own KAS is recycled: order + custody + change carriers (30 KAS) need only 20 KAS of funding', () => {
-    // the 100-token UTXO carries 10 KAS; selling 10 tokens leaves change, so three 10 KAS carriers are created
+    // the 100-token UTXO carries 10 KAS; selling 10 tokens leaves change, so three 10 KAS carriers
+    // are created
     const short = planCond(makeEnv({ funding: [15n * KAS] }), sellStop);
     expect(short.issues[0]).toMatchObject({ code: 'INSUFFICIENT_KAS', params: { needed: 20n * KAS, have: 15n * KAS } });
     const ok = planOk(makeEnv({ funding: [21n * KAS] }), sellStop);

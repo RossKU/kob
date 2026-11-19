@@ -28,7 +28,8 @@ describe('combineBalances', () => {
     expect(c.tokens[0]).toMatchObject({ token: TOKEN.covenantId, free: 300n, escrowed: custody, strays: 0n, orderCount: 1 });
     expect(c.tokens[0].kasLocked).toBeGreaterThan(0n);
     expect(c.kas.free).toBe(5_000_000_000n);
-    // the free token UTXO's 10 KAS carrier is the wallet's, spendable once it moves (Merge, a sale): counted apart and in the total
+    // The free token UTXO's 10 KAS carrier is the wallet's, spendable once it moves (Merge, a
+    // sale): counted apart and in the total.
     expect(c.kas.onTokens).toBe(1_000_000_000n);
     expect(c.kas.total).toBe(5_000_000_000n + c.tokens[0].kasLocked + 1_000_000_000n);
     // another key's token UTXO is not the wallet's KAS

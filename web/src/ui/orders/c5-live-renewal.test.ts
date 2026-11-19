@@ -1,13 +1,16 @@
-// C5 liveness (GTC): the on-chain refund of any KobAsk / KobBid / Cond* / Ifd* / Cross is due at min(expiryDaa, UTXO DAA + 90 days)
-// (kob-protocol state.rs `refund_due`, KobAsk.sil line 193-202), and the wallet writes a GTC's `expiryDaa` as PLACEMENT DAA + 90 days
-// (kob/daa.ts `expiryFor('gtc')`). Fills do not move `expiryDaa`, so a partly filled GTC still ends 90 days after PLACEMENT, not after its last fill.
-// orders-model.ts computes the "renew before day 85" reminder from the LAST FILL (`lastDaa`) instead of from the expiry, so for any GTC that
-// had a fill the reminder comes up to 85 days too late: the order is refunded / ignored by matchers (matcher.md 2.3: `t >= expiryDaa`)
-// before the user is ever told to renew. (The existing orders-model.test.ts 'GTC renewal is day 85 counted from the last activity' pins the
-// wrong semantics; ticket.help.lifetime says "90 days without activity" too.) Amend (`limitReplacement`: `{...s, price, ...}`) keeps the old
-// `expiryDaa` as well, so even a "renewal" by Amend does not extend the life: see the report.
-// Uncompiled when written (2026-10-02).
-// C5: expected to fail until the reminder is derived from `renewalUnixForExpiry(clock, expiryDaa)` (daa.ts, already exists and is unused).
+// Tests the GTC renewal reminder of My orders against the real refund deadline.
+//
+// The on-chain refund of any KobAsk / KobBid / Cond* / Ifd* / Cross is due at
+// min(expiryDaa, UTXO DAA + 90 days) (kob-protocol state.rs `refund_due`, KobAsk.sil). The wallet
+// writes a GTC's `expiryDaa` as PLACEMENT DAA + 90 days (kob/daa.ts `expiryFor('gtc')`). Fills do
+// not move `expiryDaa`, so a partly filled GTC still ends 90 days after PLACEMENT, not after its
+// last fill.
+//
+// The "renew before day 85" reminder of orders-model.ts is therefore derived from
+// `renewalUnixForExpiry(clock, expiryDaa)` (daa.ts), not from the LAST FILL (`lastDaa`). A
+// reminder counted from the last fill would come up to 85 days too late, after the order is
+// refunded or ignored by matchers (matcher.md 2.3: `t >= expiryDaa`). Amend (`limitReplacement`:
+// `{...s, price, ...}`) keeps the old `expiryDaa`, so an Amend does not extend the life either.
 import { describe, expect, it } from 'vitest';
 import type { OrderSnapshot } from '../../kob/cancel';
 import { MAX_IDLE_DAA, renewalUnixForExpiry } from '../../kob/daa';

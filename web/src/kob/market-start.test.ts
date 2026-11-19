@@ -1,5 +1,6 @@
-// The start of a market / close auction is the best price of the indexer book; planning compares it with the best price of every further indexer
-// (an independent reference) and refuses a start far on the costly side of one. The last fill comes from the same indexer as the book: it is no
+// The start of a market / close auction is the best price of the indexer book; planning compares it
+// with the best price of every further indexer (an independent reference) and refuses a start far
+// on the costly side of one. The last fill comes from the same indexer as the book: it is no
 // reference, and without a further indexer the start is accepted without a word.
 import { describe, expect, it } from 'vitest';
 import { MARKET_START_TOLERANCE_BPS, planOrder } from './plan';

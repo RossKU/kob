@@ -1,4 +1,5 @@
-// The flip of a pair page carries the order across: A/B Buy N A at p is B/A Sell N x p B at 1/p (pair-flip.ts).
+// The flip of a pair page carries the order across: A/B Buy N A at p is B/A Sell N x p B at 1/p
+// (pair-flip.ts).
 import { describe, expect, it } from 'vitest';
 import { buildIntent, initialForm } from './form-state';
 import { flipPairForm, rememberPairForm, requestPairFlip, takePairFlip } from './pair-flip';

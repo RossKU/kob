@@ -1,5 +1,6 @@
-// The visibility gate: an extension wallet is asked to sign an input spending a fresh output only once KOB's node lists that output and a
-// margin for the wallet's node passed, announced or not; the private-key signer and old inputs pass at once.
+// The visibility gate: an extension wallet is asked to sign an input spending a fresh output only
+// once KOB's node lists that output and a margin for the wallet's node passed, announced or not;
+// the private-key signer and old inputs pass at once.
 import { beforeEach, describe, expect, it } from 'vitest';
 import { MockNode } from '../testing/mock-node';
 import type { TxJson } from '../kob/types';

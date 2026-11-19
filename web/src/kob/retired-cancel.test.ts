@@ -1,7 +1,8 @@
-// Orders under a RETIRED template of the cancel-only table (kob-wasm `retiredTemplates`, docs/spec/template-retirement.md): the wallet's record
-// of such an order is resolved on the node under the retired template's own script, its maker's cancel is built (alone or in a cancel-all),
-// validated in the script engine and decoded as "Cancel an order under an older contract version (cancel only)"; every other planner refuses it
-// and the decoder refuses any other spend of it.
+// Orders under a RETIRED template of the cancel-only table (kob-wasm `retiredTemplates`,
+// docs/spec/template-retirement.md): the wallet's record of such an order is resolved on the node
+// under the retired template's own script, its maker's cancel is built (alone or in a cancel-all),
+// validated in the script engine and decoded as "Cancel an order under an older contract version
+// (cancel only)"; every other planner refuses it and the decoder refuses any other spend of it.
 import { describe, expect, it } from 'vitest';
 import { planCancel, planCancelAll, planCancelReplace, planRefund, planSweep, snapshotFromRecord, type CancelEnv, type OrderSnapshot } from './cancel';
 import { decodeSigning } from './decode';
@@ -24,8 +25,9 @@ const BID = 'KobBid b995661f';
 const COND_ASK_F1 = 'KobCondAsk 02a34664';
 
 /**
- * A placed golden order as the wallet recorded it under the retired template `label` (same kind and state layout), its order UTXO on the fake
- * node at the retired template's script (outpoint `n`), its custody (if any) where the placement put it.
+ * A placed golden order as the wallet recorded it under the retired template `label` (same kind and
+ * state layout), its order UTXO on the fake node at the retired template's script (outpoint `n`),
+ * its custody (if any) where the placement put it.
  */
 function retiredOrder(golden: string, label: string, n = 0x5e) {
   const p = placeGolden(kob, golden);
@@ -153,7 +155,8 @@ describe('the maker\'s cancel of an order under a retired template', () => {
     const asFill: BuiltTx = { ...built, roles: built.roles.map((r, i) => (i === 0 ? r.replace('.cancel', '.fill') : r)) };
     const s = decodeSigning({ kob, built: asFill, maker: MAKER.pk, registry: null, nodeInputs: nodeFactsOf(asFill) });
     expect(s.blocking.map((b) => b.code)).toContain('retired-not-cancel');
-    // another retired template of the same kind (none here) or of another kind: its script derives nothing that matches
+    // another retired template of the same kind (none here) or of another kind: its script derives
+    // nothing that matches
     const p0 = built.plans[0]!;
     if (p0.kind !== 'retiredCancel') throw new Error('not a retired cancel');
     const other: BuiltTx = { ...built, plans: [{ ...p0, retired: retiredHash(COND_ASK_F1) }, ...built.plans.slice(1)] };

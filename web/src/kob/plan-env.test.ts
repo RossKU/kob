@@ -1,6 +1,7 @@
 // Regressions on what a malicious / failing indexer can steer in the planners:
-//   the market reference price is cross-checked with the last fill and its source is shown
-//   a guard that could not run (indexer failure, hostile omission) is REPORTED and blocks until acknowledged
+//   the market reference price is cross-checked with the last fill and its source is shown a guard
+//   that could not run (indexer failure, hostile omission) is REPORTED and blocks until
+//   acknowledged
 import { describe, expect, it } from 'vitest';
 import { buildPlanEnv } from '../app/env';
 import type { Services } from '../app/services';
@@ -23,8 +24,9 @@ describe('the reference price of market orders', () => {
   it('a book 10x above the last fill (an independent data path) raises MARKET_REFERENCE_DIVERGES', () => {
     const env: PlanEnv = { ...makeEnv({ book: lyingBook, funding: [100_000n * KAS] }), lastFillPrice: 248_000_000n };
     const p = planOrder(env, buy);
-    // the last fill comes from the same indexer as the book: no independent reference, the start is not refused (market-start.test.ts); the
-    // divergence is a warning of the plan (not shown in the ticket)
+    // the last fill comes from the same indexer as the book: no independent reference, the start is
+    // not refused (market-start.test.ts); the divergence is a warning of the plan (not shown in the
+    // ticket)
     expect(p.ok).toBe(true);
     expect(codes(p)).toContain('MARKET_REFERENCE_DIVERGES');
     const d = p.issues.find((i) => i.code === 'MARKET_REFERENCE_DIVERGES')!;
@@ -100,7 +102,8 @@ describe('guards that could not run are reported, not silently off', () => {
 describe('buildPlanEnv leaves the wallet\'s pair orders out of the KAS book guards', () => {
   const info = registry.tokens[0]!;
   const scale = 10 ** info.decimals;
-  // a pair order is listed under both its tokens; it has no KAS price (price / quote null): as a KAS-book order it would be a sell at 0
+  // a pair order is listed under both its tokens; it has no KAS price (price / quote null): as a
+  // KAS-book order it would be a sell at 0
   const pairAsk = {
     covenant_id: 'c1'.repeat(32), contract: 'KobPair', side: 1, token: info.covenantId, status: 'open', price: null, quote: null, tip: '0',
     scale, min_fill: '1', amount_left: String(2 * scale), initial_amount: String(2 * scale), expired: false,

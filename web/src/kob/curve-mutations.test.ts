@@ -1,5 +1,6 @@
-// A curve whose terms the wallet refuses, built for real (the protocol accepts each of them): the pre-sign decoder blocks a new curve order, the
-// creation's confirmation and the signer frame refuse a genesis curve; the confirmation shows a curve as a curve, not as a limit.
+// A curve whose terms the wallet refuses, built for real (the protocol accepts each of them): the
+// pre-sign decoder blocks a new curve order, the creation's confirmation and the signer frame
+// refuse a genesis curve; the confirmation shows a curve as a curve, not as a limit.
 import { describe, expect, it } from 'vitest';
 import { CLOCK, MAKER_PK, kob as kobOf, makeEnv, market3x3 } from '../testing/fixtures';
 import { nodeFactsOf } from '../testing/chain-fixtures';

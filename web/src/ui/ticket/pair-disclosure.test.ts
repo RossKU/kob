@@ -1,6 +1,11 @@
-// The pair ticket's disclosure from REAL pair plans (kob/orders/pair-*.ts against a PairPlanEnv): every pair order type renders its notes without
-// a hole, the pair rows carry the planner's exact amounts (escrows of A and B, the guaranteed B, the KAS tip, what each exit holds) and a pair stop
-// discloses the founder's trigger rule (two KAS books or a resting pair order). Issue sentences of the pair planner format their prices in B.
+// Tests the pair ticket's disclosure from REAL pair plans.
+//
+// The plans come from kob/orders/pair-*.ts against a PairPlanEnv.
+//
+// Every pair order type renders its notes without a hole. The pair rows carry the planner's exact
+// amounts (escrows of A and B, the guaranteed B, the KAS tip, what each exit holds). A pair stop
+// discloses its trigger rule (two KAS books or a resting pair order). Issue sentences of the pair
+// planner format their prices in B.
 import { describe, expect, it } from 'vitest';
 import { rawEntry, t } from '../../i18n';
 import { issueText } from '../../i18n/issue-text';
@@ -53,7 +58,8 @@ describe('pair ticket disclosure (real pair plans)', () => {
       const m = buildDisclosureModel(p, CTX)!;
       expect(m.pair, name).not.toBeNull();
       const tags = m.notes.map((n) => n.tag);
-      // the pair planner's own sentences: prices only from the KAS books, the KAS tip, route / netting / inventory
+      // The pair planner's own sentences: prices only from the KAS books, the KAS tip, route /
+      // netting / inventory.
       for (const tag of ['pairPricesFromKasBooks', 'pairTipKas', 'pairRoute', 'pairNetting', 'pairInventory']) expect(tags, `${name}: ${tag}`).toContain(tag);
       for (const n of m.notes) {
         const text = t(n.key, n.params);

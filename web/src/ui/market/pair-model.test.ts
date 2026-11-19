@@ -8,7 +8,8 @@ import { bridgeQuoteFlip, buildPairBook, mergeOrientations, mergePairSummaries, 
 import type { TokenRow } from './token-model';
 import type { MarketToken } from './use-market-token';
 
-// BASE: 8 decimals, scale 1e8; QUOTE: 6 decimals, scale 1e6. price_num / price_den = QUOTE base units per BASE base unit.
+// BASE: 8 decimals, scale 1e8; QUOTE: 6 decimals, scale 1e6. price_num / price_den = QUOTE base
+// units per BASE base unit.
 const BASE: PairToken = { covenantId: 'aa'.repeat(32), ticker: 'BTC', decimals: 8, scale: 100_000_000n };
 const QUOTE: PairToken = { covenantId: 'bb'.repeat(32), ticker: 'USDT', decimals: 6, scale: 1_000_000n };
 const lv = (source: 'direct' | 'entry' | 'route', num: string, den: string, amount: string, orders = 1): PairLevelView => ({ source, price_num: num, price_den: den, amount, orders });
@@ -16,7 +17,8 @@ const view = (asks: PairLevelView[], bids: PairLevelView[]): PairBookView => ({ 
 
 describe('pair book model', () => {
   it('prices are exact rationals shown per WHOLE base token in quote units (decimals honoured), asks rounded up, bids down', () => {
-    // 52_000 USDT units per 1e8 BTC units = 0.052 USDT per BTC; 1/3 of a unit ratio shows the rounding
+    // 52_000 USDT units per 1e8 BTC units = 0.052 USDT per BTC; 1/3 of a unit ratio shows the
+    // rounding.
     const m = buildPairBook(view([lv('direct', '52000', '100000000', '300000000', 2), lv('route', '1', '1875', '100000000')], [lv('route', '48000', '100000000', '500000000')]), BASE, QUOTE)!;
     expect(m.asks.map((r) => [r.source, r.priceText, r.amountText, r.orders])).toEqual([
       ['direct', '0.052000', '3', 2], // fixed decimals: every row of a column has the same number (trailing zeros kept)
@@ -134,7 +136,8 @@ describe('one token of a pair page', () => {
     expect(side({ row: row(), loading: true })).toEqual({ state: 'loading' });
     // the render between a row and the first read of its orders
     expect(side({ row: row() })).toEqual({ state: 'loading' });
-    // a listed row whose program is unclear waits for what the node confirms, a row only kascov.io names too
+    // A listed row whose program is unclear waits for what the node confirms, a row only kascov.io
+    // names too.
     expect(side({ row: row(), reason: 'program-ambiguous', resolving: true })).toEqual({ state: 'loading' });
     expect(side({ row: row({ source: 'kascov' }), reason: 'no-extension', resolving: true })).toEqual({ state: 'loading' });
   });
@@ -177,7 +180,8 @@ describe('one book for the two orientations of a pair', () => {
 
   it('a B/A ask is an A/B bid and a B/A bid an A/B ask, price inverted exactly, amount in A; the B/A route is left out', () => {
     const ab = { base: A, quote: B, daa_score: 1, asks: [lv('direct', 3, 1, 10)], bids: [lv('route', 1, 1, 50)] };
-    // a B/A ask: 20 B at 1/4 A per B (= 4 B per A: an A/B bid of 5 A at 4); a B/A bid: 9 B at 1/2 A per B (= an A/B ask of 4 A at 2)
+    // A B/A ask: 20 B at 1/4 A per B (= 4 B per A: an A/B bid of 5 A at 4). A B/A bid: 9 B at 1/2 A
+    // per B (= an A/B ask of 4 A at 2).
     const ba = { base: B, quote: A, daa_score: 1, asks: [lv('direct', 1, 4, 20)], bids: [lv('entry', 1, 2, 9, 2), lv('route', 1, 3, 99)] };
     const m = mergeOrientations(ab, ba);
     expect(m.asks).toEqual([{ ...lv('entry', 2, 1, 4, 2), reversed: true }, lv('direct', 3, 1, 10)]);

@@ -1,7 +1,9 @@
-// Finding AUD-EXT, off-chain mitigation in the wallet: the stop-trigger evidence of the conditional / if-done covenants does not compare the
-// KCC-20 extension commitment, so trades under a second commitment of the same covenant id (a look-alike only a genesis can mint) can arm or trail
-// a stop. A token whose genesis the registry verified (`genesis_verified: true`) has one commitment; every other KCC-20 token (all open-list
-// tokens) gets STOP_EVIDENCE_GENESIS_UNVERIFIED on any plan with a stop leg, trailing stop or stop entry (also in a committed exit).
+// Finding AUD-EXT, off-chain mitigation in the wallet: the stop-trigger evidence of the conditional
+// / if-done covenants does not compare the KCC-20 extension commitment, so trades under a second
+// commitment of the same covenant id (a look-alike only a genesis can mint) can arm or trail a
+// stop. A token whose genesis the registry verified (`genesis_verified: true`) has one commitment;
+// every other KCC-20 token (all open-list tokens) gets STOP_EVIDENCE_GENESIS_UNVERIFIED on any plan
+// with a stop leg, trailing stop or stop entry (also in a committed exit).
 import { describe, expect, it } from 'vitest';
 import { planOrder, stopEvidenceIssues } from './plan';
 import type { Intent } from './plan';

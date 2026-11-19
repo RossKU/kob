@@ -1,5 +1,6 @@
-// Audit 2026-10-29 S2: a finding the decoder blocks signing on is never signed by the frame, whatever the page asks, and the frame names the finding.
-// A hostile parent could otherwise send a transaction the app's own confirmation screen refuses (here a 5 KAS fee) and have it approved.
+// A finding the decoder blocks signing on is never signed by the frame, whatever the page asks, and
+// the frame names the finding. A hostile parent could otherwise send a transaction the app's own
+// confirmation screen refuses (here a 5 KAS fee) and have it approved.
 import { describe, expect, it } from 'vitest';
 import { createSignerCore, type SignerCore } from './core';
 import { SIGNER_PROTOCOL, parseAppMessage, type SignerToApp } from './protocol';

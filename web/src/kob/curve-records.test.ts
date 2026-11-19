@@ -1,5 +1,6 @@
-// A curve created in its token's genesis gets a placement record from the genesis alone (kob-wasm `recoverOrders` over the KOB1 payload): the
-// order unbound (tokenCovId zero), its custody the genesis token output it owns. The curve's facts and the orders list read it.
+// A curve created in its token's genesis gets a placement record from the genesis alone (kob-wasm
+// `recoverOrders` over the KOB1 payload): the order unbound (tokenCovId zero), its custody the
+// genesis token output it owns. The curve's facts and the orders list read it.
 import { describe, expect, it } from 'vitest';
 import { loadKobNode } from './wasm.node';
 import { pubkeyOf } from '../testing/local-signer';
@@ -42,7 +43,8 @@ describe('a curve in its token genesis', () => {
     expect(r.amount).toBe((900n * SCALE).toString());
     expect(r.custody?.output).toBe(0);
     expect(r.custody?.tokenState?.owner).toBe(r.covenantId);
-    // its token, from the custody output's covenant in the genesis: the orders list names it before the indexer does
+    // its token, from the custody output's covenant in the genesis: the orders list names it before
+    // the indexer does
     expect(r.token).toBe(plan.token.covenantId);
     expect(isPlacementRecord(r)).toBe(true);
     expect(isPlacementRecord({ ...r, token: 'zz' })).toBe(false);
@@ -73,7 +75,8 @@ describe('a fresh unbound curve in the orders list (from the record, before the 
       custody: { transactionId: plan.built.tx.id, index: 0, amount: '1000', covenantId: plan.token.covenantId, state: order.custody!.state },
     }]]);
     expect(row(old, resolved as never).token).toBe(plan.token.covenantId);
-    // live on the node, and a curve has no expiry (0): not "expired, refund pending" once the clock is known
+    // live on the node, and a curve has no expiry (0): not "expired, refund pending" once the clock
+    // is known
     const live = describeEntry(buildEntries([], [rec], resolved as never)[0]!, { kob, clock: { daa: 80_000_000n, unixSeconds: 1_790_000_000n, rateMilli: 10_000 } });
     expect(live.live).toBe(true);
     expect(live.expiry.kind).toBe('none');
@@ -140,7 +143,8 @@ describe('cancel of an unbound curve (made in its token genesis)', () => {
     expect(s.blocking).toEqual([]);
     expect(c.tokensReturned).toBe(sell);
 
-    // a stray of its own token (sent to the curve's id before its first fill) is swept by the same cancel, never left behind
+    // a stray of its own token (sent to the curve's id before its first fill) is swept by the same
+    // cancel, never left behind
     const { strayFor } = await import('../testing/chain-fixtures');
     const { splitStrayViews } = await import('./cancel');
     const stray = { ...strayFor(snap, 5n * SCALE), covenantId: plan.token.covenantId };
@@ -217,7 +221,8 @@ describe('amend of a curve', () => {
 });
 
 describe('an unbound curve on the node (its custody the genesis output of its token)', () => {
-  // the genesis on a fake node, and the indexer's view of its curve: the custody under the token's covenant id
+  // the genesis on a fake node, and the indexer's view of its curve: the custody under the token's
+  // covenant id
   async function world() {
     const { FakeChain, orderViewOf, snapshotOfRecovered, tokenUtxoView } = await import('../testing/chain-fixtures');
     const g = genesisWithCurve();

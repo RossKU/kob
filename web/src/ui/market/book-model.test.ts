@@ -193,7 +193,8 @@ describe('price aggregation (tick grouping)', () => {
     const m = buildBookModel(view, { group: 10n });
     expect(m.asks.map((r) => [r.price, r.amount, r.cumAmount])).toEqual([[110n, 5n, 5n], [120n, 4n, 9n]]);
     expect(m.bids.map((r) => [r.price, r.amount, r.cumAmount])).toEqual([[90n, 3n, 3n], [80n, 5n, 8n]]);
-    // grouping rounds asks up and bids down: the grouped rows are 110 / 90, the book's touch is still 101 / 99
+    // Grouping rounds asks up and bids down: the grouped rows are 110 / 90, the book's touch is
+    // still 101 / 99.
     expect(m.bestAsk).toBe(101n);
     expect(m.bestBid).toBe(99n);
     expect(m.spread).toBe(2n);
@@ -202,7 +203,8 @@ describe('price aggregation (tick grouping)', () => {
     expect(m.spread).toBe(flat.spread);
     expect(m.mid).toBe(flat.mid);
     expect(m.asks.at(-1)!.depthPct).toBe(100);
-    // the cumulative value is what the orders are worth at their own prices (2 x 101 + 3 x 105 = 517), not the amount at the group's rounded price (5 x 110 = 550)
+    // The cumulative value is what the orders are worth at their own prices (2 x 101 + 3 x 105 =
+    // 517), not the amount at the group's rounded price (5 x 110 = 550).
     expect(m.asks.map((r) => r.cumValue)).toEqual([517n, 965n]);
     expect(m.bids.map((r) => r.cumValue)).toEqual([99n + 190n, 99n + 190n + 440n]);
     expect(flat.asks.map((r) => r.cumValue)).toEqual([202n, 517n, 965n]);
@@ -236,7 +238,8 @@ describe('grouping steps on the display rule', () => {
     expect(displayGroupSizes(300n, 6, 8, 100_000_000n)).toEqual([300n, 3_000n, 30_000n, 300_000n]);
   });
   it('follow the order scale: a price is per scale base units, the step per whole token', () => {
-    // 6 decimals, scale 1e6: 1 whole token = 1e6 base units; 0.001 KAS per token = 100,000 sompi per whole token
+    // 6 decimals, scale 1e6: 1 whole token = 1e6 base units; 0.001 KAS per token = 100,000 sompi
+    // per whole token.
     expect(displayGroupSizes(1n, 3, 6, 1_000_000n)[0]).toBe(100_000n);
     // a scale of 10x the token's units: the same step per whole token is 10x the state price
     expect(displayGroupSizes(1n, 3, 6, 10_000_000n)[0]).toBe(1_000_000n);

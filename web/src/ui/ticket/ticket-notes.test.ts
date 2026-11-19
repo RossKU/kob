@@ -28,10 +28,13 @@ describe('ticket notes', () => {
   });
 });
 
-// ------------------------------------------------------------------------------------------------ minimum order value
+// ----------------------------------------------------------------------------- minimum order value
 
 const KAS = 100_000_000n;
-/** The states are hand-made: only the fields the listing rule reads (amountLeft, price, scale) matter, so this needs no wasm. */
+/**
+ * The states are hand-made: only the fields the listing rule reads (amountLeft, price, scale)
+ * matter, so this needs no wasm.
+ */
 const ask = (amountLeft: string, price: string, scale: string, kind = 'KobAsk'): OrderState => ({ kind, state: { amountLeft, price, scale } }) as unknown as OrderState;
 const bid = (price: string, scale: string, kind = 'KobBid'): OrderState => ({ kind, state: { price, scale } }) as unknown as OrderState;
 const plan = (state: OrderState, value: string | bigint = '1000000000') => ({ states: [state], request: { action: 'createOrder', order: state, value: String(value), funding: [] } }) as never;

@@ -1,6 +1,9 @@
-// A pair order of tokens without a registry entry (the golden pair vectors, decoded from the built transaction): it is decoded against the registry plus
-// BOTH open-list tokens, so each pin is compared and each token's identity is checked (audit A1-2), and the confirmation table names a quote that has no
-// ticker by its covenant id, on the decimals of the scale its order names.
+// Tests a pair order of tokens without a registry entry (the golden pair vectors, decoded from the
+// built transaction).
+//
+// It is decoded against the registry plus BOTH open-list tokens, so each pin is compared and each
+// token's identity is checked. The confirmation table names a quote that has no ticker by its
+// covenant id, on the decimals of the scale its order names.
 import { describe, expect, it } from 'vitest';
 import type { Services } from '../../app/services';
 import type { WalletSession } from '../../app/context';
@@ -30,7 +33,10 @@ const decode = (registry: TokenRegistry) => decodeSigning({ kob, built, maker: M
 const pair = decode(empty).orders[0]!.description.pair!;
 const [A, B] = [pair.base.covId, pair.quote.covId] as [Hex, Hex];
 
-/** The TokenInfo `synthesizeOpenToken` makes of one token of the pair: its pins as the order names them, its commitment picked by the indexer. */
+/**
+ * The TokenInfo `synthesizeOpenToken` makes of one token of the pair: its pins as the order names
+ * them, its commitment picked by the indexer.
+ */
 function open(t: typeof pair.base, references: ExtensionReference[] = [], ext: Hex = t.ext!): TokenInfo {
   const tpl = kob.templates().find((x) => x.hash === t.tplHash)!;
   return {

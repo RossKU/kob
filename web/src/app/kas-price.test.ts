@@ -179,7 +179,8 @@ describe('the KAS price feed', () => {
     };
     await vi.advanceTimersByTimeAsync(0);
     expect(t.calls()).toBe(1);
-    // read 1 failed: 2, then 4, 8, then the cap of 10 (twice), the 7th read fails too, the 8th is ok
+    // Read 1 failed: 2, then 4, 8, then the cap of 10 (twice), the 7th read fails too, the 8th is
+    // ok.
     expect([await waitOf(), await waitOf(), await waitOf(), await waitOf(), await waitOf(), await waitOf(), await waitOf()]).toEqual([2, 4, 8, 10, 10, 10, 10]);
     expect(t.calls()).toBe(8);
     expect(t.store.snapshot.status).toBe('ok');

@@ -374,7 +374,8 @@ describe('fetchVerifiedImage', () => {
 
   it('bytes that hash right but cannot be drawn (an SVG the browser cannot draw) are refused; one it draws is shown as that picture', async () => {
     expect(await fetchVerifiedImage([U1], sha(SVG), { fetch: (async () => bytesResponse(SVG)) as unknown as typeof globalThis.fetch, rasterize: async () => null })).toBeNull();
-    // the SVG above carries a script: refused even where the browser could draw it; a plain one is shown as the picture drawn from it
+    // The SVG above carries a script: refused even where the browser could draw it. A plain one is
+    // shown as the picture drawn from it.
     expect(await fetchVerifiedImage([U1], sha(SVG), { fetch: (async () => bytesResponse(SVG)) as unknown as typeof globalThis.fetch, rasterize: async () => ({ bytes: PNG, mime: 'image/png' }) })).toBeNull();
     const plain = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>');
     const png = await fetchVerifiedImage([U1], sha(plain), { fetch: (async () => bytesResponse(plain)) as unknown as typeof globalThis.fetch, rasterize: async () => ({ bytes: PNG, mime: 'image/png' }) });
@@ -404,7 +405,7 @@ describe('fetchVerifiedImage', () => {
 describe('iconSources', () => {
   it('kascov\'s saved copy first, then the creator\'s own URL; nothing without a committed hash', () => {
     const t = { covenantId: ID('a'), imageHash: sha(PNG), imageUrl: 'https://storage.googleapis.com/bucket/a.png' };
-    // the creator's own host is never a source (F10): the viewer's IP goes to kascov.io only
+    // The creator's own host is never a source. The viewer's IP goes to kascov.io only.
     expect(iconSources('mainnet', t)).toEqual([`https://kascov.io/img/mainnet/${ID('a')}`]);
     expect(iconSources('mainnet', { ...t, imageUrl: null })).toEqual([`https://kascov.io/img/mainnet/${ID('a')}`]);
     expect(iconSources('mainnet', { ...t, imageHash: null })).toEqual([]);
@@ -435,7 +436,8 @@ describe('createIconLoader', () => {
     expect(await l.load('testnet-10', t('a'))).toBeNull();
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(await l.load('testnet-10', t('b'))).toBe('blob:ok');
-    // bytes that hashed right for one token are the image of that hash for every token that commits to it
+    // Bytes that hashed right for one token are the image of that hash for every token that commits
+    // to it.
     expect(await l.load('testnet-10', t('a'))).toBe('blob:ok');
     t0 = 2_000;
     expect(await l.load('testnet-10', t('a'))).toBe('blob:ok');
@@ -474,7 +476,8 @@ describe('createIconLoader', () => {
     };
     const l = createIconLoader({ fetch: fetch as unknown as typeof globalThis.fetch, makeUrl: () => 'blob:ok', limit: 2 });
     const hashes = Array.from({ length: 6 }, (_, i) => String(i).padStart(64, '0'));
-    // every request answers the same PNG, so only hash(PNG) verifies: the others fail after their (limited) fetch
+    // Every request answers the same PNG, so only hash(PNG) verifies: the others fail after their
+    // (limited) fetch.
     await Promise.all(hashes.map((h, i) => l.load('testnet-10', t(String(i + 1), h))));
     expect(peak).toBeLessThanOrEqual(2);
     expect(peak).toBeGreaterThan(0);

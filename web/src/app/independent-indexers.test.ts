@@ -1,5 +1,6 @@
-// The further indexers that cross-check prices and the market start are compared with the primary one by a normalised form: the same
-// indexer spelled differently (upper case, its default port, a trailing slash) is not an independent verifier.
+// The further indexers that cross-check prices and the market start are compared with the primary
+// one by a normalised form: the same indexer spelled differently (upper case, its default port, a
+// trailing slash) is not an independent verifier.
 import { describe, expect, it, vi } from 'vitest';
 import { createServices, independentIndexers } from './services';
 import { DEFAULT_CONFIG, indexerKey, resolveConfig, type AppConfig } from '../config';
@@ -45,7 +46,8 @@ describe('createServices: failover between the configured indexers', () => {
       return new Response(JSON.stringify(url.includes('/v1/health') ? healthy : { tokens: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
     });
     try {
-      // the primary is down: the first backup becomes the indexer, the feed follows it, the verifiers are the others
+      // The primary is down: the first backup becomes the indexer, the feed follows it, the
+      // verifiers are the others.
       s.failover!.report(0, { health: null, error: new Error('down') });
       await vi.waitFor(() => expect(s.failover!.state.active).toBe(1));
       expect(retarget).toHaveBeenLastCalledWith('https://b1.example');

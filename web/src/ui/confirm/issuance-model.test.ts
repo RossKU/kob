@@ -109,7 +109,8 @@ describe('issuance confirmation model', () => {
   it('blocks a token output whose script is not the claimed token state (tokens redirected)', () => {
     const p = plan();
     const built = clone(p.built);
-    // the claim says the tokens are owned by the maker; the transaction pays them to another key's token script
+    // The claim says the tokens are owned by the maker. The transaction pays them to another key's
+    // token script.
     const swapped = plan({ holders: [{ owner: other, ownerScheme: 0, amount: '1000' }] });
     built.tx.outputs[swapped.token.outputs[0]!.index]!.scriptPublicKey = swapped.built.tx.outputs[swapped.token.outputs[0]!.index]!.scriptPublicKey;
     const codes = model(p, built).blocking.map((b) => b.code);
@@ -165,7 +166,8 @@ describe('issuance confirmation model', () => {
     const dearPrep = clone(p.prep);
     dearPrep.fee.feeRate = '1500';
     expect(m(p, pol(), p.built, dearPrep).blocking.map((b) => b.code)).toContain('feeRate');
-    // 1.5 KAS of fees: above the fixed 1 KAS ceiling, allowed by a dynamic 2 KAS cap, not by a cap of 1 KAS or by a policy that is off
+    // 1.5 KAS of fees: above the fixed 1 KAS ceiling, allowed by a dynamic 2 KAS cap, not by a cap
+    // of 1 KAS or by a policy that is off.
     const burnt = clone(p.prep);
     const change = burnt.fee.changeOutput!;
     const take = 150_000_000n - BigInt(burnt.fee.fee) - BigInt(p.built.fee.fee);
@@ -214,7 +216,8 @@ describe('issuance confirmation model', () => {
     expect(r('locked').help!.some((h) => h.startsWith('KAS on the curve order: '))).toBe(true);
     // the unaudited program stays a warning (the screen's one risk line)
     expect(m.warnings.map((w) => w.code)).toEqual(['unaudited']);
-    // one price: placed after creation, shown in the summary; tokens to another key are a row of their own
+    // One price: placed after creation, shown in the summary. Tokens to another key are a row of
+    // their own.
     const q = plan({ supply: '1000', holders: [{ owner: maker, ownerScheme: 0, amount: '600' }, { owner: other, ownerScheme: 0, amount: '400' }] });
     const ask = buildIssuanceModel({ kob, built: q.built, prep: q.prep, token: q.token, askSale: { sell: 50_000_000_000n, price: 2n * KAS }, maker, tr: (k, x) => t(k, x) }).brief!;
     expect(ask.find((x) => x.id === 'sale')!.detail).toBe('at 2 KAS each, as a sell order you place after creation');

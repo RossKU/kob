@@ -1,10 +1,13 @@
-// C5 liveness (error messages): the orders UI renders planner findings with `tIssue('orders.issue', issue)` (i18n/index.ts), which passes ONLY
-// `issue.params` to the sentence. `cancel.build-failed` (cancel.ts `issue('cancel.build-failed', 'error', msg)`) carries the builder's refusal in
-// `message` and has NO params, so the sentence 'The transaction could not be built: {message}' is shown with the literal "{message}":
-// every kob-wasm rejection of a cancel / refund / amend (custody mismatch, unknown token program, storage mass, ...) reaches the user as an
-// unexplained dead end. (issue-text.ts `issueText` fills `message`, but the orders flow does not use it.)
-// Uncompiled when written (2026-10-02).
-// C5: expected to fail until the orders flow formats findings with issueText() / tIssue fills {message} from issue.message when no params are given.
+// Tests that a planner finding without params still renders its message in the orders UI.
+//
+// The orders UI renders findings with `tIssue('orders.issue', issue)` (i18n/index.ts), which
+// passes ONLY `issue.params` to the sentence. `cancel.build-failed` (cancel.ts
+// `issue('cancel.build-failed', 'error', msg)`) carries the builder's refusal in `message` and
+// has NO params. The sentence 'The transaction could not be built: {message}' must not show the
+// literal "{message}". Every kob-wasm rejection of a cancel, refund or amend (custody mismatch,
+// unknown token program, storage mass, ...) would otherwise reach the user as an unexplained dead
+// end. So the orders flow formats findings with issueText() (issue-text.ts), or tIssue fills
+// {message} from issue.message when no params are given.
 import { describe, expect, it } from 'vitest';
 import { tIssue } from './index';
 

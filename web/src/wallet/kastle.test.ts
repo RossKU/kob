@@ -60,7 +60,8 @@ describe('Kastle adapter: signTx', () => {
   it('a P2PK-only transaction is signed by a plain call (no scripts)', async () => {
     const { adapter, provider } = mk();
     const built = buildSend();
-    // keep only the funding input's request: the covenant inputs are not this wallet's business here
+    // keep only the funding input's request: the covenant inputs are not this wallet's business
+    // here
     const p2pkOnly = { ...built, sign: built.sign.filter((s) => s.redeemScript === null) };
     await adapter.signTx(p2pkOnly, { network: 'testnet-10' });
     expect(provider.lastScripts()).toBeUndefined();

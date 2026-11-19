@@ -1,5 +1,6 @@
-// My orders rows of orders under an older contract version: a retired template of the cancel-only table is shown with its decoded terms, the
-// "older contract version — cancel only" badge and a working Cancel (counted by Cancel all); a template outside the table has no Cancel.
+// My orders rows of orders under an older contract version: a retired template of the cancel-only
+// table is shown with its decoded terms, the "older contract version — cancel only" badge and a
+// working Cancel (counted by Cancel all). A template outside the table has no Cancel.
 import { describe, expect, it } from 'vitest';
 import type { Clock } from '../../kob/plan-types';
 import { recordsFromBuilt, type PlacementRecord, type ResolvedRecord } from '../../kob/records';

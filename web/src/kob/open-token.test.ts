@@ -125,8 +125,9 @@ describe('the first order of an open-list token: decimals entered by the user, n
     expect(synthesizeOpenToken(kob, view(), scales).ok).toBe(true);
   });
 
-  // TN10 2026-10-15 O-3: every earlier order of the token had ended, the book was empty, and the page offered a "first order" with entered
-  // decimals again; other decimals would have put orders of two price scales on one market
+  // Every earlier order of the token has ended and the book is empty. The page must not offer a
+  // "first order" with entered decimals again, because other decimals would put orders of two price
+  // scales on one market.
   it('the market keeps the scale its first order set after every order of it has ended (`market_scale`)', () => {
     const ended = view({ open_asks: 0, market_scale: 1_000_000 });
     const r = synthesizeOpenToken(kob, ended, []);
@@ -134,9 +135,11 @@ describe('the first order of an open-list token: decimals entered by the user, n
     expect(r.ok && toTokenMarket(kob, r.info.json).scale).toBe(1_000_000n);
     expect(synthesizeOpenToken(kob, ended, [], null, null, [], { decimals: 2 })).toEqual({ ok: false, reason: 'scale-conflict' });
     expect(synthesizeOpenToken(kob, ended, [], null, null, [], { decimals: 6 }).ok).toBe(true);
-    // it wins over the open orders' scale (orders of another scale placed before the market's scale was kept)
+    // it wins over the open orders' scale (orders of another scale placed before the market's scale
+    // was kept)
     expect(synthesizeOpenToken(kob, view({ market_scale: 100 }), scales)).toMatchObject({ ok: true, info: { decimals: 2 } });
-    // no order ever (null), or an older indexer (absent): the open orders, else the entered decimals
+    // no order ever (null), or an indexer that does not report it (absent): the open orders, else
+    // the entered decimals
     for (const v of [view({ market_scale: null }), view()]) {
       expect(synthesizeOpenToken(kob, v, scales)).toMatchObject({ ok: true, info: { decimals: 3 } });
       expect(synthesizeOpenToken(kob, v, [], null, null, [], { decimals: 2 })).toMatchObject({ ok: true, info: { decimals: 2, openScale: 'entered' } });
@@ -161,7 +164,8 @@ describe('program review: prototypes are not traded on mainnet without a registr
     expect(programAllowed('KCC20Ref_8x8', 'mainnet')).toBe(false);
     expect(programAllowed('KCC20Ref_8x8', 'testnet-10')).toBe(true);
     expect(programAllowed('NoSuchProgram', 'testnet-10')).toBe(false);
-    // a program whose profile lists its networks is allowed on those only (KaspaRocket and KForge's KCC-20 build: mainnet and testnet-10; KForge's legacy KRON-layout program: testnet-10)
+    // a program whose profile lists its networks is allowed on those only (KaspaRocket and KForge's
+    // KCC-20 build: mainnet and testnet-10; KForge's legacy KRON-layout program: testnet-10)
     expect(programAllowed('KaspaRocketToken11458', 'testnet-10')).toBe(true);
     expect(programAllowed('KaspaRocketToken11458', 'mainnet')).toBe(true);
     expect(programAllowed('KForgeToken1785', 'testnet-10')).toBe(true);
@@ -293,7 +297,8 @@ describe('findPublicToken: a covenant id no list names, from token outputs the i
     const r = await findPublicToken(src({ utxos: [out('KCC20Ref'), out('KCC20Ref')] }), kob, ID.toUpperCase(), 'mainnet');
     expect(r).toMatchObject({ ok: true, view: { covenant_id: ID, extension_commitment: EXT, family: 'kcc20', template_id: 'kcc20-ref-3x3', open_asks: 0, open_bids: 0 } });
     if (!r.ok) return;
-    // the extension commitment's source is the chain (the node-confirmed outputs); without decimals it still needs the first order's
+    // the extension commitment's source is the chain (the node-confirmed outputs); without decimals
+    // it still needs the first order's
     expect(synthesizeOpenToken(kob, r.view, [], null, null, [], { network: 'mainnet', fromChain: true })).toEqual({ ok: false, reason: 'no-scale' });
     const s = synthesizeOpenToken(kob, r.view, [], null, null, [], { network: 'mainnet', fromChain: true, decimals: 8 });
     expect(s.ok && s.info).toMatchObject({ program: 'KCC20Ref', decimals: 8, openScale: 'entered', extension: { commitment: EXT, source: 'chain', mismatch: [] } });

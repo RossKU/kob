@@ -189,7 +189,8 @@ describe('buildCreate / verifyBuilt', () => {
     expect(tokenCarrierFloor(env.kob, kaspacom.hash)).toBe(50_000_000n);
     expect(orderCarrierFloor(env.kob, kaspacom.hash)).toBe(50_000_000n);
     expect(COVENANT_OUTPUT_MIN).toBe(4n * DUST_OUTPUT_MIN);
-    // a plain token output (a transfer, a merge) keeps the dust bound; a new order's carrier the covenant output bound
+    // a plain token output (a transfer, a merge) keeps the dust bound; a new order's carrier the
+    // covenant output bound
     expect(tokenCarrierFloor(env.kob, env.token.templateHash)).toBe(DUST_OUTPUT_MIN);
     expect(orderCarrierFloor(env.kob, env.token.templateHash)).toBe(COVENANT_OUTPUT_MIN);
     // 0.02 KAS (the plain-output bound) and anything below 0.08 KAS is refused on a covenant output
@@ -213,7 +214,8 @@ describe('buildCreate / verifyBuilt', () => {
   });
 
   it('a token change is recycled into the wallet: only order + custody carriers are needed from the funding UTXO', () => {
-    // the wallet has 100 tokens in one UTXO worth 10 KAS; selling 4 needs 10 (order) + 10 (custody) + 10 (change) - 10 (input) = 20 KAS + fee
+    // the wallet has 100 tokens in one UTXO worth 10 KAS; selling 4 needs 10 (order) + 10 (custody)
+    // + 10 (change) - 10 (input) = 20 KAS + fee
     const { env, spec } = askSpec(makeEnv({ funding: [20n * KAS + 2_000_000n] }));
     expect(buildCreate(env, spec).built).not.toBeNull();
     const { env: env2, spec: spec2 } = askSpec(makeEnv({ funding: [20n * KAS - 1n] }));
@@ -230,7 +232,8 @@ describe('plan assembly and disclosure', () => {
     const order = makeAsk(env, { amount: 1_234n, minFill: 1n, price: P, tip: 7n, expiryDaa: env.clock.daa + 5_000n });
     const res = buildCreate(env, { order, value: DEFAULT_CARRIER, tokenAmount: 1_234n });
     const disclosure = makeDisclosure(env, res, { order, amount: 1_234n, limitPrice: P, expectedPrice: null, worstPrice: null, expiryKind: 'gtc' });
-    // the all-in total of an ask is what it receives at least: ceil(1234 x (P - 7) / 1000) (kob-wasm askProceedsAt)
+    // the all-in total of an ask is what it receives at least: ceil(1234 x (P - 7) / 1000)
+    // (kob-wasm askProceedsAt)
     expect(disclosure).toMatchObject({ tokenAmount: 1_234n, scale: 1_000n, minFill: 1n, minTouch: null, allInPrice: P - 7n, tip: 7n });
     expect(disclosure.allInTotal).toBe(ceilDiv(1_234n * (P - 7n), 1_000n));
     expect(finishPlan([warn], [order], res, disclosure).ok).toBe(true);

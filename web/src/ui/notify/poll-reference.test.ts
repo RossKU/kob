@@ -1,5 +1,5 @@
-// The reference of a watched invoice comes from the invoice server: it is stored and shown with control and bidirectional characters
-// replaced and at most 80 characters.
+// The reference of a watched invoice comes from the invoice server: it is stored and shown with
+// control and bidirectional characters replaced and at most 80 characters.
 import { describe, expect, it } from 'vitest';
 import { NotificationStore } from '../../kob/notifications';
 import { pollInvoices } from './poll';

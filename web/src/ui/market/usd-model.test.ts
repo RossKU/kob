@@ -8,9 +8,11 @@ const MIN = 60_000;
 const c = (t: number, o: bigint, h: bigint, l: bigint, cl: bigint, volume = 1n, quote?: bigint): Candle => ({
   t, o, h, l, c: cl, volume, quote: quote ?? cl * volume, trades: 1, filled: false,
 });
-// TUSD: 8 decimals, price basis 1e8 (one whole TUSD); a price of 25 KAS per TUSD = 2.5e9 sompi per basis -> 0.04 USD per KAS
+// TUSD: 8 decimals, price basis 1e8 (one whole TUSD). A price of 25 KAS per TUSD = 2.5e9 sompi per
+// basis -> 0.04 USD per KAS.
 const TUSD = (candles: Candle[]): TokenLeg => ({ candles, decimals: 8, basis: 100_000_000n });
-// TBTC: 8 decimals, price basis 200 base units (0.000002 TBTC); 4 KAS per basis = 4e8 sompi -> 2,000,000 KAS per TBTC
+// TBTC: 8 decimals, price basis 200 base units (0.000002 TBTC); 4 KAS per basis = 4e8 sompi ->
+// 2,000,000 KAS per TBTC.
 const TBTC = (candles: Candle[]): TokenLeg => ({ candles, decimals: 8, basis: 200n });
 
 describe('usd-model', () => {
@@ -26,7 +28,8 @@ describe('usd-model', () => {
     expect(rs.map((r) => r.t)).toEqual([0, MIN, 2 * MIN]);
     // 2,000,000 KAS per TBTC / 25 KAS per TUSD = 80,000 USD
     expect(ratToNumber(rs[0]!.c)).toBe(80_000);
-    // minute 1: TBTC 2,200,000 KAS, TUSD carried at 25 -> 88,000 (time-aligned: the carried close of the same bucket)
+    // Minute 1: TBTC 2,200,000 KAS, TUSD carried at 25 -> 88,000 (time-aligned: the carried close
+    // of the same bucket).
     expect(ratToNumber(rs[1]!.c)).toBe(88_000);
     expect(rs[1]!.filled).toBe(false);
     // minute 2: TBTC carried at 2,200,000, TUSD 20 -> 110,000

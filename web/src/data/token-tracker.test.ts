@@ -33,7 +33,10 @@ function world(extra: Partial<ConstructorParameters<typeof TokenTracker>[0]> = {
   return { node, storage, now, tracker };
 }
 
-/** builds + signs + finalizes a sendTokens (default: 12000 tokens in, 9000 to OTHER, 3000 change to MAKER) */
+/**
+ * Builds, signs and finalizes a sendTokens.
+ * By default 12000 tokens go in, 9000 to OTHER and 3000 return as change to MAKER.
+ */
 function makeSend(opts: Parameters<typeof sendTokensRequest>[0] = {}): { built: BuiltTx; signed: SignedTx } {
   const built = kob.build(sendTokensRequest(opts));
   const signed = kob.finalize(built, signBuilt(built, [MAKER_SK]), { tightenBudgets: true });
@@ -128,7 +131,8 @@ describe('TokenTracker.tokenUtxosFor (local candidates verified on the node)', (
     w.tracker.trackFromBuilt(kob, built, MAKER_PK);
     await w.node.submitTransaction(signed.tx);
     expect(await w.tracker.tokenUtxosFor(MAKER_PK, TOKEN)).toHaveLength(1);
-    // a second, live candidate keeps the node's answer non-empty (an empty answer is never evidence)
+    // A second, live candidate keeps the node's answer non-empty.
+    // An empty answer is never evidence.
     const other = tokenUtxo(0x0f, 77n);
     const spk = kob.tokenScriptPublicKey(TOKEN_PROGRAM, other.state);
     w.node.addUtxo({ address: spkStringToAddress(sdk, spk, NET), transactionId: other.transactionId, index: other.index, amount: CARRIER, scriptPublicKey: spk, covenantId: TOKEN_COV_ID });
@@ -262,7 +266,8 @@ describe('TokenTracker with the indexer as first source', () => {
     expect((await w.tracker.tokenUtxosFor(MAKER_PK, TOKEN)).map((x) => x.state.amount)).toEqual(['60', '40']);
     bag.down = true;
     expect((await w.tracker.tokenUtxosFor(MAKER_PK, TOKEN)).map((x) => x.state.amount)).toEqual(['60', '40']);
-    // spent on chain while the indexer is away: the node no longer lists it, so it is not offered (and not asked again)
+    // Spent on chain while the indexer is away. The node does not list it, so it is not offered
+    // and not asked again.
     w.node.removeUtxo(b.transactionId, b.index);
     expect((await w.tracker.tokenUtxosFor(MAKER_PK, TOKEN)).map((x) => x.state.amount)).toEqual(['40']);
     w.node.addUtxo({ address: spkStringToAddress(sdk, kob.tokenScriptPublicKey(TOKEN_PROGRAM, b.state), NET), transactionId: b.transactionId, index: b.index, amount: CARRIER, scriptPublicKey: kob.tokenScriptPublicKey(TOKEN_PROGRAM, b.state), covenantId: TOKEN_COV_ID });
@@ -277,7 +282,8 @@ describe('TokenTracker with the indexer as first source', () => {
     const t = new TokenTracker({ kob, node: w.node, sdk, network: NET, storage: w.storage, indexer: { tokenUtxos: async () => [view(o, true)] } });
     t.add(MAKER_PK, { transactionId: o.transactionId, index: o.index, tokenCovId: TOKEN_COV_ID, program: TOKEN_PROGRAM, state: o.state, carrier: CARRIER });
     expect(await t.tokenUtxosFor(MAKER_PK, TOKEN)).toHaveLength(1);
-    // the local copy stays: after an indexer reset (fresh database) it is the only record of the holding
+    // The local copy stays. After an indexer reset (fresh database) it is the only record of the
+    // holding.
     expect(t.list(MAKER_PK)).toHaveLength(1);
   });
 
@@ -347,7 +353,8 @@ describe('TokenTracker.heldTokens (balances: every token the key holds)', () => 
     const k3 = { amount: '40', owner: MAKER_PK, id_type: 3, is_minter: 0 };
     put(w, 'KronToken2433', KRON_COV, k0, '92'.repeat(32));
     put(w, 'KronToken2433', KRON_COV, k3, '93'.repeat(32));
-    // a look-alike claim: the indexer names the reference program, the output's script is another program's: it never verifies
+    // A look-alike claim. The indexer names the reference program, but the output's script is
+    // another program's, so it never verifies.
     const fake = tokenState(900n);
     put(w, 'KCC20Ref_8x8', OTHER_COV, fake, '94'.repeat(32));
     bag.views = [
@@ -363,7 +370,8 @@ describe('TokenTracker.heldTokens (balances: every token the key holds)', () => 
     const got = await w.tracker.heldTokens(MAKER_PK);
     expect(calls[0]).toEqual({ owner: MAKER_PK, spent: false });
     expect(rows(got)).toEqual([[OTHER_COV, 'KCC20Ref_8x8', '500'], [KRON_COV, 'KronToken2433', '70'], [KRON_COV, 'KronToken2433', '40']]);
-    // `skip`: the key-owned UTXOs of a token the caller reads itself are left out; the KRON one KOB cannot spend stays (only a balance shows it)
+    // `skip` leaves out the key-owned UTXOs of a token the caller reads itself. The KRON one that
+    // KOB cannot spend stays, because only a balance shows it.
     expect(rows(await w.tracker.heldTokens(MAKER_PK, { skip: new Set([KRON_COV]) }))).toEqual([[OTHER_COV, 'KCC20Ref_8x8', '500'], [KRON_COV, 'KronToken2433', '70']]);
     // read-only: nothing is stored
     expect(w.tracker.list(MAKER_PK)).toEqual([]);
@@ -388,7 +396,10 @@ describe('TokenTracker fails safe: holdings are never dropped on weak evidence',
   let w: World;
   beforeEach(() => { w = world({ pendingGraceMs: GRACE }); });
 
-  /** a token UTXO on the node (optional) and in the local list, added long enough ago to be past the pending grace */
+  /**
+   * A token UTXO on the node (optional) and in the local list.
+   * The local one is old enough to be past the pending grace.
+   */
   const holding = (n: number, amount: bigint, o: { onNode?: boolean; ageMs?: number } = {}) => {
     const u = tokenUtxo(n, amount);
     const spk = kob.tokenScriptPublicKey(TOKEN_PROGRAM, u.state);
@@ -448,7 +459,8 @@ describe('TokenTracker fails safe: holdings are never dropped on weak evidence',
     holding(0x96, 10n);
     const gone = holding(0x97, 20n);
     w.node.removeUtxo(gone.transactionId, gone.index);
-    // a burst of checks within the spacing is ONE miss; many checks inside the grace period are not enough either
+    // A burst of checks within the spacing is ONE miss. Many checks inside the grace period are
+    // not enough either.
     for (let i = 0; i < 20; i++) await check();
     expect(w.tracker.list(MAKER_PK).find((t) => t.transactionId === gone.transactionId)!.missCount).toBe(1);
     for (let i = 0; i < 8; i++) {
@@ -496,7 +508,8 @@ describe('TokenTracker fails safe: holdings are never dropped on weak evidence',
     // the indexer database is reset (it lists nothing): the holding is still found and spendable
     bag.views = [];
     expect((await t.tokenUtxosFor(MAKER_PK, TOKEN)).map((x) => x.state.amount)).toEqual(['30']);
-    // spent on the node: pruned by the confirmed-miss rule like any other candidate (another live one keeps the answer non-empty)
+    // Spent on the node: pruned by the confirmed-miss rule like any other candidate. Another live
+    // one keeps the answer non-empty.
     holding(0x9d, 5n);
     w.node.removeUtxo(u.transactionId, u.index);
     for (let i = 0; i < 14; i++) {
@@ -508,7 +521,8 @@ describe('TokenTracker fails safe: holdings are never dropped on weak evidence',
 
   it('an add() that lands while a node check is in flight is not reverted by that check', async () => {
     holding(0xa1, 10n);
-    // a contradicted candidate makes this check write the store (a stale snapshot written back would lose the add below)
+    // A contradicted candidate makes this check write the store. A stale snapshot written back
+    // would lose the add below.
     const bad = holding(0xa3, 5n, { onNode: false });
     const badSpk = kob.tokenScriptPublicKey(TOKEN_PROGRAM, bad.state);
     w.node.addUtxo({ address: spkStringToAddress(sdk, badSpk, NET), transactionId: bad.transactionId, index: bad.index, amount: CARRIER, scriptPublicKey: badSpk, covenantId: '99'.repeat(32) });

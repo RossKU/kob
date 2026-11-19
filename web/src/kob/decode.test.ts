@@ -77,7 +77,8 @@ describe('create transactions: what the wallet will sign, derived from the built
     expect(o.custody).toBeNull();
     const value = BigInt(goldenRequest<{ value: string }>('create.bid').value);
     expect(o.value).toBe(value);
-    // the delivery carrier (10 KAS) is the reserve line; the escrow is what is left after the refund tip
+    // the delivery carrier (10 KAS) is the reserve line; the escrow is what is left after the
+    // refund tip
     expect(o.locked).toMatchObject({ total: value, escrow: value - REFUND - 10n * KAS, refundTips: REFUND, reserves: 10n * KAS, carriers: 0n });
     expect(s.net.tokens).toEqual([]);
     expect(s.signatures).toBe(1);
@@ -241,7 +242,8 @@ describe('expected: the planner\'s claims are compared with the derived facts', 
       expected: { orders: [orderStateOf('create.ask')], kasLocked: 20n * KAS, tokensEscrowed: 10_000n, maxFee: 20_000_000n },
     });
     expect(s.blocking).toEqual([]);
-    // kasLocked may also be stated as the net wallet outflow or including the token-change carrier (planner disclosure vocabulary)
+    // kasLocked may also be stated as the net wallet outflow or including the token-change carrier
+    // (planner disclosure vocabulary)
     expect(decode(built, { expected: { kasLocked: 30n * KAS } }).blocking).toEqual([]);
   });
 
@@ -340,7 +342,8 @@ describe('tamper tests: every way of making the wallet sign something else is a 
 
   it('a state field changed in the payload (output script kept) fails the placement record check', () => {
     const b = tampered('create.ask', (x) => {
-      // price 250_000_000: LEB128 80 e5 9a 77 inside the compact state of the (version 3) placement record
+      // price 250_000_000: LEB128 80 e5 9a 77 inside the compact state of the (version 3) placement
+      // record
       const price = '80e59a77';
       expect(x.tx.payload).toContain(price);
       x.tx.payload = x.tx.payload.replace(price, '81e59a77');
@@ -460,7 +463,8 @@ describe('tamper tests: every way of making the wallet sign something else is a 
 
 describe('the token an order pins must be the registered token', () => {
   it('a token pin that differs from the registry (template, extension commitment) is blocking; tokens this build cannot trade (unknown, or a program it does not support for trading) warn', () => {
-    // golden 8x8 order trades the 7070.. covenant as a KCC20Ref_8x8 token, but the registry lists 7070.. as the 3x3 reference program
+    // golden 8x8 order trades the 7070.. covenant as a KCC20Ref_8x8 token, but the registry lists
+    // 7070.. as the 3x3 reference program
     const wrongProgram = decode(buildGolden('create.ask.8x8.x402'));
     expect(blockingCodes(wrongProgram)).toContain('order-token-mismatch');
     const reg = (mutate: (d: any) => void) => {
@@ -471,12 +475,14 @@ describe('the token an order pins must be the registered token', () => {
     const otherExt = reg((d) => { d.tokens[0].extension_commitment = 'dd'.repeat(32); });
     expect(blockingCodes(decode(buildGolden('create.ask'), { registry: otherExt }))).toEqual(['order-token-mismatch']);
     expect(blockingCodes(decode(buildGolden('create.bid'), { registry: otherExt }))).toEqual(['order-token-mismatch']);
-    // an unverified entry on a reviewed template is tradable (open token list): no unlisted warning, no more strict than an open-list token
+    // an unverified entry on a reviewed template is tradable (open token list): no unlisted
+    // warning, no more strict than an open-list token
     const pending = reg((d) => { d.tokens[0].verified = false; });
     const bid = decode(buildGolden('create.bid'), { registry: pending });
     expect(bid.blocking).toEqual([]);
     expect(bid.warnings.map((w) => w.code)).toEqual([]);
-    // only the program decides: a program this build does not support for trading (pending review) is not tradable here
+    // only the program decides: a program this build does not support for trading (pending review)
+    // is not tradable here
     const unsupported = reg((d) => { d.templates.find((t: { id: string }) => t.id === 'kcc20-ref-3x3').review_status = 'pending-review'; });
     expect(decode(buildGolden('create.bid'), { registry: unsupported }).warnings.map((w) => w.code)).toEqual(['token-unlisted']); // even though no token moves in a bid
     const unknown = decode(buildGolden('create.ask'), { registry: reg((d) => { d.tokens = [d.tokens[1]]; }) });

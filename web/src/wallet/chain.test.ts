@@ -1,5 +1,6 @@
-// The chain runner (a step spends an output of the step before): one approval for the private-key signer; for an extension wallet each step
-// signed, checked, recorded and sent before the next is asked for, and the next asked for only once the wallet's own node sees its input.
+// The chain runner (a step spends an output of the step before): one approval for the private-key
+// signer; for an extension wallet each step signed, checked, recorded and sent before the next is
+// asked for, and the next asked for only once the wallet's own node sees its input.
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ChainError, runSignChain, spendsOutputOf } from './chain';
 import { createKaswareAdapter } from './kasware';
@@ -101,7 +102,8 @@ describe('runSignChain', () => {
     const s2 = setup();
     const q = fakeKasware({ sdk, sk: MAKER_SK });
     const second = (await runSignChain({ ...base(s2, createKaswareAdapter({ getProvider: () => q })), onSent: () => void (q.behavior.rejectSign = true) }).catch((x) => x)) as ChainError;
-    // the second step spends what the first sent a moment ago: declined, perhaps by a wallet that could not find it yet
+    // the second step spends what the first sent a moment ago: declined, perhaps by a wallet that
+    // could not find it yet
     expect([second.code, second.step, second.sent, second.rejectedByUser]).toEqual(['rejected-fresh', 1, 1, true]);
     expect(second.message).toMatch(/nothing was sent for it.*wait a few seconds and try again/);
     expect(s2.node.submissions.map((t) => t.id)).toEqual([s2.steps[0]!.tx.id]);

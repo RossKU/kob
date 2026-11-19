@@ -1,5 +1,9 @@
-// The rows of a pair placement (the golden pair vectors, decoded from the built transaction only): they name the pair, what the order holds of A
-// and B, what the whole amount guarantees in B, the KAS tip, and the founder's trigger rule of a pair stop; no raw key or hole is shown.
+// Tests the rows of a pair placement.
+//
+// The golden pair vectors are decoded from the built transaction only.
+//
+// They name the pair, what the order holds of A and B, what the whole amount guarantees in B, the
+// KAS tip and the trigger rule of a pair stop. No raw key or hole is shown.
 import { describe, expect, it } from 'vitest';
 import { decodeSigning, type DecodedOrder, type TokenRef } from '../../kob/decode';
 import { parseRegistry, type TokenRegistry } from '../../kob/registry';
@@ -41,7 +45,8 @@ describe('rows of a pair placement', () => {
         if (side === 'sell') expect(ids(rows)).toContain('pairEscrowA');
         if (side === 'buy' || kind === 'KobIfdPair') expect(ids(rows)).toContain('pairEscrowB');
         if (kind === 'KobPair') expect(ids(rows)).toContain('pairTotal');
-        // KAS exposure rows of the KAS kinds never appear on a pair order: its trigger is the pair rule
+        // KAS exposure rows of the KAS kinds never appear on a pair order: its trigger is the pair
+        // rule.
         expect(ids(rows)).not.toContain('exposure');
         for (const s of [title, ...rows.flatMap((r) => [r.label, r.value, r.detail ?? ''])]) {
           expect(s, s).not.toMatch(/\{\w+\}/);

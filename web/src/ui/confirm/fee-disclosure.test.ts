@@ -180,7 +180,8 @@ describe('the decoder\'s fee sanity bounds follow the policy cap', () => {
     const fee = BigInt(built.fee.fee);
     const base = decodeSigning({ kob, built, maker: makeEnv().maker, registry, nodeInputs: nodeFactsOf(built) });
     const allowed = decodeSigning({ kob, built, maker: makeEnv().maker, registry, nodeInputs: nodeFactsOf(built), feePolicy: policy() });
-    // the placement is light: both decode without a fee finding; the bounds are exercised directly below
+    // The placement is light: both decode without a fee finding. The bounds are exercised directly
+    // below.
     expect(fee).toBeLessThan(50_000_000n);
     expect(base.blocking.filter((b) => b.code === 'fee-excessive')).toEqual([]);
     expect(allowed.blocking.filter((b) => b.code === 'fee-excessive')).toEqual([]);
@@ -222,7 +223,10 @@ describe('the decoder\'s fee sanity bounds follow the policy cap', () => {
     expect(codes(decodeWith(atRate(1001n)))).toEqual([]);
   });
 
-  /** the same transaction with its change output reduced by `extra` (declared fee updated: a builder that burns KAS consistently) */
+  /**
+   * The same transaction with its change output reduced by `extra` (declared fee updated: a builder
+   * that burns KAS consistently).
+   */
   const burn = (built: ReturnType<typeof atRate>, extra: bigint) => {
     const b = JSON.parse(JSON.stringify(built)) as typeof built;
     const ci = b.fee.changeOutput!;
@@ -244,7 +248,8 @@ describe('the decoder\'s fee sanity bounds follow the policy cap', () => {
   });
 
   it('the 1% floor rises only to what the transaction costs at its own rate (not to the cap)', () => {
-    // a heavy transaction at a high rate may cost more than 0.1 KAS and more than 1% of what it moves: its own-rate allowance covers that
+    // A heavy transaction at a high rate may cost more than 0.1 KAS and more than 1% of what it
+    // moves: its own-rate allowance covers that.
     const built = atRate(3000n);
     expect(BigInt(built.fee.fee)).toBeGreaterThan(10_000_000n); // above the fixed 0.1 KAS bound
     expect(codes(decodeWith(built))).toContain('fee-excessive'); // the fixed bounds alone block it

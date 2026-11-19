@@ -1,6 +1,9 @@
-// The pair book against the node (app/pair-book.ts, audit 2026-10-29 round 2, R1). A pair market / close order starts at the touch of the pair book; the
-// indexer's pair levels have no order behind them, so the planners get a book built from the orders the node confirms and the route of the two KAS
-// books. A phantom pair ask used to set the start of a pair market buy (3x the real price) with no node read at all.
+// Tests the pair book against the node (app/pair-book.ts).
+//
+// A pair market or close order starts at the touch of the pair book. The indexer's pair levels
+// have no order behind them. So the planners get a book built from the orders the node confirms
+// and the route of the two KAS books. A phantom pair ask must not set the start of a pair market
+// buy (3x the real price) without a node read.
 import { describe, expect, it } from 'vitest';
 import type { OrderView } from '../data/indexer-types';
 import { joinSpkString } from '../data/kaspa-sdk';
@@ -20,7 +23,7 @@ import type { Services } from './services';
 const kob = loadKobNode();
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
-/** A pair order's indexer view (open, state proven, custody listed), listed as the executor lists it under token A. */
+/** A pair order's indexer view, listed as the executor lists it under token A. */
 function viewOf(snap: OrderSnapshot, over: Partial<OrderView> = {}): OrderView {
   const st = snap.order.state;
   const pf = pairFactsOf(st)!;
@@ -105,7 +108,8 @@ describe('verifyPairBook: the orders of the pair book must exist on the node as 
     expect(out.dropped.map((d) => d.reason)).toEqual(['other-market']);
     expect(out.book.asks).toEqual([]);
     const ext = await verifyPairBook(w.deps({ base: { ...tokenOf(w.pf.a), extensionCommitment: 'cd'.repeat(32) } }), [w.askView]);
-    // an order whose state names no extension for the sold token is bound by the tokens' ids and templates; one that names it must match
+    // An order whose state names no extension for the sold token is bound by the tokens' ids and
+    // templates. One that names it must match.
     expect(ext.dropped.length === 0 || ext.dropped[0]!.reason === 'other-market').toBe(true);
   });
 
@@ -157,9 +161,12 @@ describe('routeLevels: the route of the pair is derived from the two node-confir
   const kasA: BookView = { asks: [{ price: 3_000_000_000n, amount: 400_000n, orders: 1 }], bids: [{ price: 2_900_000_000n, amount: 100_000n, orders: 1 }] };
   const kasB: BookView = { asks: [{ price: 210_000_000n, amount: 9_000_000_000n, orders: 1 }], bids: [{ price: 200_000_000n, amount: 50_000_000_000n, orders: 1 }] };
   it('an ask buys A at the asks of A with the KAS of B sold into the bids of B; a bid sells A into its bids and buys B at its asks', () => {
-    // scale A = 1000 (3 decimals), scale B = 10^8: B per whole A = ceil(3e9 x 1e8 / 2e8) = 1.5e9 for the ask, floor(2.9e9 x 1e8 / 2.1e8) for the bid
+    // Scale A = 1000 (3 decimals), scale B = 10^8.
+    // B per whole A is ceil(3e9 x 1e8 / 2e8) = 1.5e9 for the ask and floor(2.9e9 x 1e8 / 2.1e8)
+    // for the bid.
     const r = routeLevels(kasA, kasB, 1000n, 100_000_000n);
-    // the bids of B hold 1000 KAS of B: 33,333 base units of A at 3 KAS a whole A, less than the 400,000 the asks of A offer
+    // The bids of B hold 1000 KAS of B. That is 33,333 base units of A at 3 KAS a whole A, less
+    // than the 400,000 the asks of A offer.
     expect(r.asks).toEqual([{ price: 1_500_000_000n, amount: 33_333n, orders: 2, routeOrders: 2, routeRows: 1 }]);
     expect(r.bids[0]!.price).toBe((2_900_000_000n * 100_000_000n) / 210_000_000n);
   });

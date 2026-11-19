@@ -260,7 +260,8 @@ describe('status, refund and renewal', () => {
     expect(rowOf('create.ask', { expired: true }).row.expired).toBe(true);
   });
 
-  // C5 W-15: between its deadline (00:00 UTC) and its on-chain expiry a day order is ended (matchers stop at the deadline), not live
+  // Between its deadline (00:00 UTC) and its on-chain expiry a day order is ended, not live,
+  // because matchers stop at the deadline.
   it('a day order past its deadline reads ended (refund pending), from the indexer flag or the clock', () => {
     expect(rowOf('create.ask.day', { deadline_passed: true }).row.expired).toBe(true);
     expect(rowOf('create.ask.day', { deadline: Number(CLOCK.unixSeconds) - 1, deadline_passed: false }).row.expired).toBe(true);
@@ -274,8 +275,9 @@ describe('status, refund and renewal', () => {
     expect(rowOf('create.ask', { current: null }).row.canCancel).toBe(false);
   });
 
-  // C5 W-3: the reminder comes from the on-chain expiry (a GTC's expiryDaa = placement + 90 days; fills do not extend it). This test pinned
-  // "counted from the last activity", which is the wrong rule (min(expiryDaa, utxoDaa + 90 days)); with no fill both give the same date.
+  // The reminder comes from the on-chain expiry. A GTC's expiryDaa is placement + 90 days and
+  // fills do not extend it, so the rule is min(expiryDaa, utxoDaa + 90 days), not the last
+  // activity. With no fill both give the same date.
   it('GTC renewal is day 85 of the on-chain expiry (placement + 90 days), and turns due when the time comes', () => {
     const p = placeGolden(kob, 'create.ask');
     const st = p.snapshots[0].order.state as Extract<OrderState, { kind: 'KobAsk' | 'KobAskKron' }>;
@@ -285,7 +287,8 @@ describe('status, refund and renewal', () => {
     const early = describeEntry(buildEntries([view], [])[0], ctx);
     expect(early.renewalUnix).toBe(gtcRenewalUnix(daaToUnix(CLOCK, BigInt(genesis))));
     expect(early.renewalDue).toBe(false);
-    // the chain advances 85 days (10 DAA per second): the reminder is due exactly then, not a second before
+    // The chain advances 85 days (10 DAA per second): the reminder is due exactly then, not a
+    // second before.
     const at = (secs: bigint): Clock => ({ daa: 1000n + secs * 10n, unixSeconds: CLOCK.unixSeconds + secs, rateMilli: 10_000 });
     const later = describeEntry(buildEntries([view], [])[0], { kob, clock: at(85n * 86_400n) });
     const justBefore = describeEntry(buildEntries([view], [])[0], { kob, clock: at(85n * 86_400n - 1n) });
@@ -295,7 +298,8 @@ describe('status, refund and renewal', () => {
 });
 
 describe('GTC of every kind (expiry = placement + 90 days)', () => {
-  // order-types.md Defaults: GTC = 90 days idle, renew before day 85 (matcher.md §10.10) - for a stop, OCO or if-done entry as for a limit
+  // order-types.md Defaults: GTC = 90 days idle, renew before day 85 (matcher.md §10.10) - for a
+  // stop, OCO or if-done entry as for a limit.
   const withExpiry = (name: string, f: (genesis: bigint) => bigint) => {
     const p = placeGolden(kob, name);
     const snap = p.snapshots[0];
@@ -332,7 +336,8 @@ describe('merging with placement records', () => {
   });
 
   it('an ended order the indexer lists without a current state is not looked up on the node (its placement state describes it)', () => {
-    // TN10 2026-10-17: every filled order of the browser's records was resolved on the node before the list showed (~30 s over a tunnel)
+    // Resolving every filled order of the browser's records on the node before the list shows is
+    // slow (about 30 s over a tunnel), so ended orders are not looked up.
     for (const status of ['filled', 'cancelled', 'refunded', 'killed', 'closed'] as const) {
       const ended = { ...view, status, state_known: false, state: null };
       expect(recordsToResolve([ended], [rec]), status).toEqual([]);

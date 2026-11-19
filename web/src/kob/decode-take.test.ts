@@ -1,5 +1,6 @@
-// The pre-sign decoder on take transactions (kob/decode.ts): a crossing order filled from the wallet. The wallet receives exactly the tokens
-// bought, pays at most its limit, and nothing goes to a third party beyond the resting makers' payouts.
+// The pre-sign decoder on take transactions (kob/decode.ts): a crossing order filled from the
+// wallet. The wallet receives exactly the tokens bought, pays at most its limit, and nothing goes
+// to a third party beyond the resting makers' payouts.
 import { describe, expect, it } from 'vitest';
 import type { BookOrderUtxo, BookView, OrderPlan, PlanEnv } from './plan-types';
 import { errors } from './plan-types';
@@ -128,7 +129,7 @@ describe('the take checks', () => {
     built.tx.outputs[j]!.scriptPublicKey = `000020${THIRD}ac`;
     const s = decode(p, expectedFromPlan(p), built);
     expect(codes(s)).toContain('payment-out');
-    // in the signer frame too: the payout is no longer a fill's
+    // in the signer frame too: the payout is not a fill's
     expect(decode(p, undefined, built).outputs[j]!.kind).toBe('payment-out');
   });
 

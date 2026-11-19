@@ -1,6 +1,8 @@
-// Every finding code a user can see must have an English sentence under `issues.<code>` with the same placeholders as the catalogue message.
-// Catalogues that are exported as lists are imported; the ones that live inside function bodies (cancel.ts, issue.ts, decode.ts, the wallet and node
-// error types, the registry verification helpers) are read from the SOURCE files, so a code added there without a sentence fails this test.
+// Every finding code a user can see must have an English sentence under `issues.<code>` with the
+// same placeholders as the catalogue message. Catalogues that are exported as lists are imported.
+// The ones that live inside function bodies (cancel.ts, issue.ts, decode.ts, the wallet and node
+// error types, the registry verification helpers) are read from the SOURCE files, so a code added
+// there without a sentence fails this test.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -16,7 +18,7 @@ const unique = (xs: Iterable<string>): string[] => [...new Set(xs)].sort();
 const matches = (text: string, re: RegExp, group = 1): string[] => [...text.matchAll(re)].map((m) => m[group]);
 const placeholderNames = (s: string): string[] => unique(matches(s, /\{(\w+)(?::\w+)?\}/g));
 
-// ------------------------------------------------------------------------------------------------ code enumeration
+// -------------------------------------------------------------------------------- code enumeration
 
 const plannerCodes = Object.keys(ISSUE_CATALOG);
 const condCodes = Object.keys(COND_ISSUE_CATALOG);
@@ -29,7 +31,10 @@ const snapshotCodes = unique([
   ...matches(/readonly code: ([^;]+);\n\s*constructor\(code: SnapshotError/.exec(cancelSrc)?.[1] ?? '', /'([\w-]+)'/g),
 ]).map((c) => `snapshot.${c}`);
 
-/** Form codes of issue.ts: every dotted code literal, plus the `${field}.invalid` family of the display-text check. */
+/**
+ * Form codes of issue.ts: every dotted code literal, plus the `${field}.invalid` family of the
+ * display-text check.
+ */
 function issueFormCodes(): string[] {
   const src = source('../kob/issue.ts');
   const literal = matches(src, /'([a-z]+(?:\.[a-z_]+)+)'/g);

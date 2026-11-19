@@ -1,6 +1,7 @@
-// Audit 2026-10-29 F3 on the web side: the scale and the program of an open-list token. The executor now lists only orders at the scale the token's
-// decimals fix (a declaration, a program convention), serves no `market_scale` beside resolved decimals and names no program when placements claim
-// several; the web keeps its own refusals for an older or hostile executor.
+// The scale and the program of an open-list token, on the web side. The executor lists only orders
+// at the scale the token's decimals fix (a declaration, a program convention), serves no
+// `market_scale` beside resolved decimals and names no program when placements claim several. The
+// web keeps its own refusals for an executor that does otherwise or is hostile.
 import { describe, expect, it } from 'vitest';
 import type { IndexerTokenView } from '../data/indexer-types';
 import { synthesizeOpenToken } from './open-token';

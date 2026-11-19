@@ -27,7 +27,8 @@ describe('PendingSpends', () => {
     const p = new PendingSpends(() => now);
     const pk = 'ab'.repeat(32);
     const key = (transactionId: string, index: number, amount: string) => ({ transactionId, index, amount, covenantId: null, pubkey: pk });
-    // the wallet holds 126.5 KAS: one coin of 120 and one of 6.5; an order spends the 120 and returns 113 as change (7 KAS locked and fee)
+    // The wallet holds 126.5 KAS: one coin of 120 and one of 6.5. An order spends the 120 and
+    // returns 113 as change (7 KAS locked and fee).
     const listed = [key('c1', 0, '12000000000'), key('c2', 0, '650000000')];
     const tx = {
       outputs: [
@@ -39,11 +40,13 @@ describe('PendingSpends', () => {
     p.add([{ transactionId: 'c1', index: 0 }]);
     p.addChange(tx, 'TX1', pk);
     const total = (us: { amount: string }[]) => us.reduce((a, u) => a + BigInt(u.amount), 0n);
-    // a read made before the transaction reached a block still lists the spent coin and not the change: 6.5 + 113 = 119.5 KAS
+    // A read made before the transaction reached a block still lists the spent coin and not the
+    // change: 6.5 + 113 = 119.5 KAS.
     const f = p.funding(listed, pk);
     expect(total(f)).toBe(11950000000n);
     expect(f[0]).toMatchObject({ transactionId: 'tx1', index: 1, amount: '11300000000', covenantId: null, pubkey: pk });
-    // only this key's plain outputs: not the order output, not a payment to another key, not for another key
+    // Only this key's plain outputs: not the order output, not a payment to another key, not for
+    // another key.
     expect(p.funding([], 'cd'.repeat(32))).toEqual([]);
     // the next order may spend it: its node facts are the ones the page built
     expect(p.factOf('tx1', 1)).toEqual({ amount: 11300000000n, scriptPublicKey: p2pkScriptPublicKey(pk), covenantId: null });
@@ -80,10 +83,12 @@ describe('PendingSpends', () => {
     const tok = 'ee'.repeat(32);
     const tu = (transactionId: string, index: number, amount: string, covenantId = tok, owner = pk) =>
       ({ transactionId, index, amount: '100000000', covenantId, state: { owner, amount, extension_commitment: 'cc'.repeat(32) } }) as unknown as TokenUtxo;
-    // level 1 spent the wallet's one token UTXO (100) and returned 99 as change; level 2 spends that change and returns 98
+    // Level 1 spent the wallet's one token UTXO (100) and returned 99 as change. Level 2 spends
+    // that change and returns 98.
     p.add([{ transactionId: 'a0', index: 0 }]);
     p.addTokens([{ utxo: tu('L1', 2, '99'), scriptPublicKey: '0000aa' }], pk);
-    // the reader lists only what the node verifies: neither the spent UTXO (still listed by an old read) nor the change counts wrong
+    // The reader lists only what the node verifies: neither the spent UTXO (still listed by an old
+    // read) nor the change counts wrong.
     expect(p.tokens([tu('a0', 0, '100')], pk, tok).map((u) => [u.transactionId, u.state.amount])).toEqual([['l1', '99']]);
     expect(p.factOf('L1', 2)).toEqual({ amount: 100000000n, scriptPublicKey: '0000aa', covenantId: tok });
     p.add([{ transactionId: 'l1', index: 2 }]);

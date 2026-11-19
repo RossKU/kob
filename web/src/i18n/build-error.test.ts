@@ -1,4 +1,6 @@
-// C5 R-3: builder / node refusals reach the user as plain sentences; the raw developer text only behind "Details".
+// Tests that builder and node refusals reach the user as plain sentences.
+//
+// The raw developer text is only behind "Details".
 import { describe, expect, it } from 'vitest';
 import { PlainError, buildErrorText, classifyBuildError, withoutRaw } from './build-error';
 
@@ -38,7 +40,8 @@ describe('classifyBuildError', () => {
   });
 
   it('an app sentence (PlainError) is not raw text: the rules are not for it', () => {
-    // classifyBuildError still maps a raw text naming the lock time; the app keeps its own sentence by throwing a PlainError (ui/orders/actions.ts)
+    // classifyBuildError still maps a raw text naming the lock time. The app keeps its own sentence
+    // by throwing a PlainError (ui/orders/actions.ts).
     const e = new PlainError('Not open yet on the network: the node clock is 2 min before the lock time. Try again then.');
     expect(classifyBuildError(e.message).code).toBe('timing');
     expect(e).toBeInstanceOf(Error);

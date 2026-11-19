@@ -1,11 +1,15 @@
-// C5 liveness (cancel-all): planCancelAll returns one plan per transaction and TxFlow / OrdersView promise "they spend disjoint UTXOs, so a
-// partial sequence leaves everything consistent" (TxFlow.tsx header). That is false for the maker FUNDING UTXO: every plan calls
-// buildWithFunding(env, ...) from the same `env.funding` pool, which always picks the same UTXO (smallest single one covering the deficit).
-// When two or more transactions of one cancel-all need funding (tiny bids; two tokens; more orders than `maxOrdersPerTx`), the first one
-// spends the UTXO and every later plan is now invalid ("input already spent"): the flow stops at step 2 with "remaining N", and the user has
-// to press "cancel all" again (a re-plan). With only one funding UTXO the later orders cannot be cancelled in the same run at all.
-// Uncompiled when written (2026-10-02); fixtures as in cancel.test.ts.
-// C5: expected to fail until planCancelAll removes the funding UTXOs used by an earlier plan from the pool of the later ones.
+// Cancel-all liveness: planCancelAll returns one plan per transaction, and TxFlow / OrdersView rely
+// on the plans spending disjoint UTXOs, so that a partial sequence leaves everything consistent
+// (TxFlow.tsx header).
+//
+// The maker funding UTXO is the shared resource. Every plan calls buildWithFunding(env, ...) on the
+// same `env.funding` pool, which always picks the same UTXO (the smallest single one covering the
+// deficit). When two or more transactions of one cancel-all need funding (tiny bids, two tokens,
+// more orders than `maxOrdersPerTx`), planCancelAll must remove the funding UTXOs used by an
+// earlier plan from the pool of the later ones. Otherwise the later plans spend an input that is
+// already spent and the flow stops after the first step.
+//
+// Fixtures are the ones of cancel.test.ts.
 import { describe, expect, it } from 'vitest';
 import { planCancelAll, type CancelEnv, type OrderSnapshot } from './cancel';
 import { loadKobNode } from './wasm.node';
@@ -17,7 +21,10 @@ const env = (over: Partial<CancelEnv> = {}): CancelEnv => ({
   kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 100n * KAS, 201), keyUtxo(MAKER.pk, 3n * KAS, 202)], tokenUtxos: [], clock: { daa: 78_000_000n }, ...over,
 });
 
-/** The golden bid with its escrow shrunk to dust (a bid that bought almost everything): its cancel cannot pay its own fee. */
+/**
+ * The golden bid with its escrow shrunk to dust (a bid that bought almost everything): its cancel
+ * cannot pay its own fee.
+ */
 const bid = placeGolden(kob, 'create.bid').snapshots[0];
 const dust = (n: number): OrderSnapshot => {
   const id = n.toString(16).padStart(2, '0').repeat(32);

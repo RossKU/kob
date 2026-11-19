@@ -1,4 +1,5 @@
-// The Unlock press before the node's clock reaches the lock time: refused with its own sentence, not the generic "time terms" one.
+// The Unlock press before the node's clock reaches the lock time: refused with its own sentence,
+// not the generic "time terms" one.
 import { describe, expect, it } from 'vitest';
 import type { Services } from '../../app/services';
 import { loadKobNode } from '../../kob/wasm.node';

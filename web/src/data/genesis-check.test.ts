@@ -1,7 +1,12 @@
-// KOB's own genesis check (data/genesis-check.ts) over RECORDED chain data: the genesis groups of real mainnet and testnet-10 tokens as kascov.io and the Kaspa
-// REST explorers served them on 2026-10-28 (src/testing/genesis-chain.json; the same groups with their verdicts are the Rust vectors, crates/kob-protocol/
-// vectors/genesis-open.json). Nothing here reaches the network: every fetch is answered from the recording, anything else throws. The verification runs in the
-// real kob-wasm (`verifyGenesis`), so a pass is a pass of the Rust rules.
+// Tests KOB's own genesis check (data/genesis-check.ts) over RECORDED chain data.
+//
+// The recording holds the genesis groups of real mainnet and testnet-10 tokens as kascov.io and
+// the Kaspa REST explorers served them (src/testing/genesis-chain.json). The same groups with
+// their verdicts are the Rust vectors (crates/kob-protocol/vectors/genesis-open.json).
+//
+// Nothing here reaches the network. Every fetch is answered from the recording and anything else
+// throws. The verification runs in the real kob-wasm (`verifyGenesis`), so a pass is a pass of
+// the Rust rules.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createGenesisChecker, EXPLORER_BASE, lastPush, parseExplorerGenesis, parseKascovGenesis, revealFromSpend, type GenesisCheck, type GenesisChecker } from './genesis-check';
@@ -35,7 +40,10 @@ interface Net {
   fetch: typeof fetch;
 }
 
-/** A fetch that answers from the recording of one case (`kascov`, `explorerTx`, `spends`, `addressPages`) and throws on anything else. */
+/**
+ * A fetch that answers from the recording of one case (`kascov`, `explorerTx`, `spends`,
+ * `addressPages`) and throws on anything else.
+ */
 function recorded(c: Case, o: { kascov?: unknown; explorerTx?: unknown; kascovStatus?: number; explorerStatus?: number; spends?: Record<string, unknown>; addressPages?: Record<string, unknown[]>; offline?: boolean } = {}): Net {
   const urls: string[] = [];
   const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });
@@ -105,9 +113,11 @@ describe('verifying recorded tokens', () => {
   it('a public minter\'s allowance is reported: the most that could still be minted, and whether the genesis minter has been used', async () => {
     const c = caseOf('kqa-publicmint-seed');
     const r = await run(checkerFor(recorded(c)), c);
-    // its genesis minter was spent since: some of the 100000 may be minted already, KOB does not say how much is left
+    // Its genesis minter was spent since: some of the 100000 may be minted already, KOB does not
+    // say how much is left.
     expect(r).toMatchObject({ status: 'verified', mintAllowance: 100_000n, mintersUnspent: false });
-    // the same group with the minter unspent (as kascov would then say): the whole allowance is there
+    // The same group with the minter unspent (as kascov would then say): the whole allowance is
+    // there.
     const doc = clone(c.kascov);
     for (const u of doc.utxos) {
       if (u.revealed_hex) {
@@ -162,10 +172,12 @@ describe.each([
   it('verifies from the chain bytes, says the issuance is a bridge and counts no public mint for it', async () => {
     const n = net();
     const r = await checkerFor(n).check('testnet-10', k.covenantId, { kascovBase: BASE });
-    // the TokenSeed nobody revealed is rebuilt from the creator's key, which only the explorer's transaction names
+    // The TokenSeed nobody revealed is rebuilt from the creator's key, which only the explorer's
+    // transaction names.
     expect(r).toMatchObject({ status: 'verified', source: 'explorer', program: 'KCC20PublicMint', supply: 0n, bridge: true, mintAllowance: null, mintersUnspent: null });
     expect(n.urls).toHaveLength(2);
-    // a federated bridge; what its minter names, unchecked: the hash of the signer keys and the guardian key
+    // A federated bridge. What its minter names, unchecked: the hash of the signer keys and the
+    // guardian key.
     expect(r).toMatchObject({
       bridgeMinter: {
         kind: 'federated',
@@ -179,7 +191,8 @@ describe.each([
     await checkerFor(net(), { verify: (r) => (sent.push(r), verifyGenesis(kob, r)) }).check('testnet-10', k.covenantId, { kascovBase: BASE });
     const v = verifyGenesis(kob, sent.at(-1)!);
     expect(v).toMatchObject({ status: 'verified', minterOutputs: [0], seedOutputs: [1], companionOutputs: [{ index: 0, role: 'bridge-minter' }], mintAllowance: 0n });
-    // a public mint beside it (as a verdict could say) is still counted as one; a token without the companion is no bridge
+    // A public mint beside it (as a verdict could say) is still counted as one. A token without the
+    // companion is no bridge.
     const both = (r: GenesisRequest) => ({ ...verifyGenesis(kob, r), minterOutputs: [0, 1], mintAllowance: 5n }) as ReturnType<typeof verifyGenesis>;
     expect(await checkerFor(net(), { verify: both }).check('testnet-10', k.covenantId, { kascovBase: BASE })).toMatchObject({ bridge: true, mintAllowance: 5n });
     expect(await run(checkerFor(recorded(caseOf('kqa-publicmint-seed'))), caseOf('kqa-publicmint-seed'))).not.toHaveProperty('bridge');
@@ -202,7 +215,8 @@ describe('failing and unavailable', () => {
     const c = caseOf('dawdaw-unspent-curve');
     const net = recorded(c);
     expect(await run(checkerFor(net), c)).toEqual({ status: 'unavailable', reason: 'history' });
-    // the explorer was asked for the genesis transaction (its keys are owner candidates for a seed) and for nothing it could not use
+    // The explorer was asked for the genesis transaction (its keys are owner candidates for a seed)
+    // and for nothing it could not use.
     expect(net.urls.some((u) => u.includes(`/transactions/${c.kascov.genesis_txid}`))).toBe(true);
   });
 
@@ -212,14 +226,16 @@ describe('failing and unavailable', () => {
     lie.utxos[0]!.value += 1;
     // explorer honest: the check recovers from the explorer's own bytes and verifies
     expect(await run(checkerFor(recorded(c, { kascov: lie })), c)).toMatchObject({ status: 'verified', source: 'explorer' });
-    // explorer down: a mismatch only kascov's file shows is a supplier's word, not a verdict (a stale or hostile file must not brand a clean token for the
-    // session, audit 2026-10-29 F8): unavailable, asked again later
+    // Explorer down. A mismatch only kascov's file shows is a supplier's word, not a verdict. A
+    // stale or hostile file must not brand a clean token for the session. The result is
+    // unavailable, and the check asks again later.
     expect(await run(checkerFor(recorded(c, { kascov: lie, explorerStatus: 503 })), c)).toMatchObject({ status: 'unavailable', reason: 'unreachable' });
     // both lie
     const tx = clone(c.explorerTx) as { outputs: { amount: number; covenant_id: string | null }[] };
     tx.outputs.find((o) => o.covenant_id)!.amount += 1;
     expect(await run(checkerFor(recorded(c, { kascov: lie, explorerTx: tx })), c)).toMatchObject({ status: 'failed', code: 'mismatch' });
-    // a script byte flipped in kascov's file: it no longer hashes to its output (explorer down: unavailable, as above)
+    // A script byte flipped in kascov's file does not hash to its output. With the explorer down
+    // the result is unavailable, as above.
     const flip = clone(c.kascov);
     const s = flip.utxos[0]!.revealed_hex!;
     flip.utxos[0]!.revealed_hex = `${s.slice(0, 500)}${s.slice(500, 502) === '00' ? '01' : '00'}${s.slice(502)}`;
@@ -424,7 +440,8 @@ describe.each([
     const doc = clone(k.kascov) as { utxos: { revealed_hex?: string }[] };
     const r = doc.utxos[0]!.revealed_hex!;
     doc.utxos[0]!.revealed_hex = r.slice(0, 1000) + (r.slice(1000, 1002) === '00' ? '01' : '00') + r.slice(1002);
-    // kascov's file alone never fails a token; without the explorer the check is unavailable, never verified
+    // kascov's file alone never fails a token. Without the explorer the check is unavailable, never
+    // verified.
     const n = net(doc);
     const out = await checkerFor(n).check('mainnet', k.covenantId, { kascovBase: BASE });
     expect(out.status).not.toBe('verified');

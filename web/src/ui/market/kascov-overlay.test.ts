@@ -32,7 +32,8 @@ describe('units: exactly as KOB prices its own candles (KAS per whole token with
     expect(pts.map((x) => x.t)).toEqual([2, 3]);
     same(pts[0]!.price, R(1n, 2n));
     same(pts[1]!.price, R(1n, 1n));
-    // different decimals: BASE 0.2 KAS per token (2 decimals); QUOTE 4 KAS per token (0 decimals: 4e8 sompi per unit)
+    // Different decimals: BASE 0.2 KAS per token (2 decimals); QUOTE 4 KAS per token (0 decimals:
+    // 4e8 sompi per unit).
     same(pairPoints({ candles: [c(1, 200_000_000n, 1000n)], decimals: 2 }, { candles: [c(1, 400_000_000n, 1n)], decimals: 0 })[0]!.price, R(1n, 20n));
     // the market list's spots give the same exact figures
     same(spotPairPrice({ num: 13n, den: 800n }, 8, { num: 50n, den: 1n }, 6), R(13n, 400n));
@@ -45,7 +46,8 @@ describe('the line on the KOB bars', () => {
   const whole = (r: Rational | null) => (r ? Number(r.num / r.den) : null);
 
   it('is, per bar, the latest point that starts before the bar end; none before the first point; carried after the last', () => {
-    // 5 minute bars (open times in seconds): the bar at 600 s ends at 900 s, before the first 15 minute point
+    // 5 minute bars (open times in seconds): the bar at 600 s ends at 900 s, before the first 15
+    // minute point.
     expect(laidOnBars(pts, [600, 900, 1200, 1500, 1800, 2100, 9000], 300_000).map(whole)).toEqual([null, 1, 1, 1, 2, 2, 2]);
   });
 

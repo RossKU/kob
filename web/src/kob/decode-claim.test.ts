@@ -1,6 +1,10 @@
-// Claims of a mode-1 order's bought-custody (bid-delivery-spec §7: CL1 claim, CL2 claim and merge, CL3 claim and place, continuing or
-// ending) built by kob-wasm `claimOrder`, run in the script engine and decoded; then one mutant per rule, each refused with its own
-// finding. A mutant re-derives the scripts it touches and carries its own node facts, so only the claim rule can catch it.
+// Claims of a mode-1 order's bought-custody (bid-delivery-spec §7), built by kob-wasm `claimOrder`,
+// run in the script engine and decoded.
+//
+// The claim forms are CL1 (claim), CL2 (claim and merge) and CL3 (claim and place, continuing or
+// ending). Then one mutant per rule is built, each refused with its own finding. A mutant
+// re-derives the scripts it touches and carries its own node facts, so only the claim rule can
+// catch it.
 import { describe, expect, it } from 'vitest';
 import { boughtOf, decodeSigning, deliveryOf, type ExpectedSigning, type SigningSummary } from './decode';
 import { parseRegistry } from './registry';
@@ -66,7 +70,8 @@ describe('claims decode: the continuation keeps every field but bought, the toke
   });
 });
 
-// ------------------------------------------------------------------------------------------------ mutants
+// ------------------------------------------------------------------------------------------------
+// mutants
 
 /** Re-derives a token output's script from its (edited) next state in the leader plan. */
 function setTokenOutput(b: BuiltTx, j: number, edit: (st: Kcc20State) => void) {
@@ -201,7 +206,8 @@ describe('claim mutants: each is refused by the claim rule', () => {
     const [rec] = kob.recoverOrders(b.tx);
     const bid = clone(placeGolden(kob, 'create.bid').recovered[0]!.order as OrderState);
     b.tx.outputs[rec!.output]!.scriptPublicKey = kob.scriptPublicKey(bid);
-    // a builder that wrote a bid's record: the record names the bid, its output carries the bid's script
+    // a builder that wrote a bid's record: the record names the bid, its output carries the bid's
+    // script
     const lying = { ...kob, recoverOrders: () => [{ ...rec!, order: bid, custody: null }] };
     const s = decodeSigning({ kob: lying, built: b, maker: MAKER.pk, registry, nodeInputs: nodeFactsOf(b) });
     refusedBy(s, 'claim-invalid', /does not hold only the claimed token/);
@@ -218,7 +224,8 @@ describe('claim mutants: each is refused by the claim rule', () => {
     const { snap, custody } = holding('create.bid.acc');
     const mode0 = clone(snap.order);
     Object.assign(mode0.state.state, { mode: '0', bought: '0' });
-    // a sweep of the same order in mode 0 with a stray that is exactly the custody, then the order read as mode 1 (input and output)
+    // a sweep of the same order in mode 0 with a stray that is exactly the custody, then the order
+    // read as mode 1 (input and output)
     const built = kob.build({ action: 'sweepOrder', order: mode0, strays: [custody], funding: [keyUtxo(MAKER.pk, 50n * KAS, 201)] });
     expect(decode(built).blocking).toEqual([]);
     const b = clone(built);
@@ -238,7 +245,8 @@ describe('claim mutants: each is refused by the claim rule', () => {
     Object.assign(st.state, { mode: '1' });
     p.state = kob.encodeState(st);
     b.tx.inputs[0]!.utxo.scriptPublicKey = kob.scriptPublicKey(st);
-    // kob-wasm's amend recovery refuses it; the decoder's own rule refuses it without that recovery check too
+    // kob-wasm's amend recovery refuses it; the decoder's own rule refuses it without that recovery
+    // check too
     expect(codes(decode(b).blocking)).toContain('recover-failed');
     const amends = kob.recoverAmends(built.tx, built.plans);
     const lax = { ...kob, recoverAmends: () => amends };

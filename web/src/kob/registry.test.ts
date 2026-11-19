@@ -29,9 +29,11 @@ describe('shipped registries', () => {
     const r = parse(shippedRegistryJson(), 'mainnet');
     expect(r.network).toBe('mainnet');
     expect(r.tokens.length).toBe(8);
-    // the genesis facts (registry/evidence/mainnet-genesis.json, `kob registry verify-genesis`): genesis verified (C1), no live minter (C2)
+    // the genesis facts (registry/evidence/mainnet-genesis.json, `kob registry verify-genesis`):
+    // genesis verified, no live minter
     expect(r.tokens.every((t) => t.family === 'kron' && t.json.verified && t.json.genesis_verified === true)).toBe(true);
-    // founder 2026-10-19: KOB makes no per-token judgement: no entry carries a listing status, an official flag or a maintainer warning
+    // KOB makes no per-token judgement: no entry carries a listing status, an official flag or a
+    // maintainer warning
     const rawTokens = JSON.parse(shippedRegistryJson()).tokens as Record<string, unknown>[];
     for (const k of ['status', 'official', 'warning']) expect(rawTokens.filter((t) => k in t).map((t) => t.ticker), k).toEqual([]);
     expect(rawTokens.some((t) => /\b(listed|official)\b/i.test(JSON.stringify(t.display ?? {})))).toBe(false);
@@ -39,7 +41,8 @@ describe('shipped registries', () => {
     expect(displayName(pepe)).toBe('PEPE (a73c…47cd)');
     const raw = JSON.parse(shippedRegistryJson());
     expect(raw.tokens.every((t: { genesis?: { live_minters?: string[]; minter_outputs: number[] } }) => t.genesis?.live_minters?.length === 0 && t.genesis.minter_outputs.length === 0)).toBe(true);
-    // the KRON programs are reviewed with conditions (internal review, `crates/kob-tests/tests/audit/review_b2_kron.rs`)
+    // the KRON programs are reviewed with conditions
+    // (`crates/kob-tests/tests/audit/review_b2_kron.rs`)
     expect(r.tokens.every((t) => t.tradable && t.untradableReason === null && t.templateMatchesPinned)).toBe(true);
     const review = Object.fromEntries(r.templates.map((t) => [t.id, t.review_status]));
     expect(review).toMatchObject({ 'kcc20-ref-3x3': 'reviewed', 'kcc20-ref-8x8': 'pending-review', 'kron-2433': 'reviewed', 'kron-2732': 'reviewed', 'kcc20-kaspacom-0-2-5': 'pending-review', 'kcc20-ref-public-mint': 'reviewed' });
@@ -47,7 +50,8 @@ describe('shipped registries', () => {
       expect(r.templates.find((t) => t.id === id)!.risks!.some((x) => x.startsWith('Reviewed with conditions') && x.includes('live is_minter'))).toBe(true);
     }
     expect(r.templates.map((t) => t.id).slice(0, 4)).toEqual(['kcc20-ref-3x3', 'kcc20-ref-8x8', 'kron-2433', 'kron-2732']);
-    // a third-party program lists what its authorities can do: it reaches the token info (no freeze / seize here)
+    // a third-party program lists what its authorities can do: it reaches the token info (no freeze
+    // / seize here)
     const kc = r.templates.find((t) => t.id.startsWith('kcc20-kaspacom'));
     if (kc) expect(kc.capabilities).toEqual(['mint-authority', 'public-mint', 'burn']);
     const byId = Object.fromEntries(r.templateChecks.map((c) => [c.id, c]));
@@ -55,7 +59,8 @@ describe('shipped registries', () => {
     expect(byId['kcc20-ref-8x8']).toMatchObject({ program: 'KCC20Ref_8x8', matchesPinned: true });
     expect(byId['kron-2433']).toMatchObject({ program: 'KronToken2433', matchesPinned: true, problems: [] });
     expect(byId['kron-2732']).toMatchObject({ program: 'KronToken2732', matchesPinned: true, problems: [] });
-    // the published public-mint build of the reference: pinned as its actor-type handle (the context push in a 34-byte prefix)
+    // the published public-mint build of the reference: pinned as its actor-type handle (the
+    // context push in a 34-byte prefix)
     expect(byId['kcc20-ref-public-mint']).toMatchObject({ program: 'KCC20PublicMint', matchesPinned: true, problems: [] });
     const pm = r.templates.find((t) => t.id === 'kcc20-ref-public-mint')!;
     expect([pm.prefix_len, pm.state_len, pm.suffix_len, pm.max_token_inputs, pm.review_status]).toEqual([34, 112, 3885, 3, 'reviewed']);
@@ -106,8 +111,9 @@ describe('tradability (the program allowlist, verified against the pinned templa
     expect(r.tokens.map((t) => t.untradableReason)).toEqual([null, null]);
     expect(r.tokens.map((t) => t.tradable)).toEqual([true, true]);
     expect(tokenById(r, TOKEN.covenantId)).toMatchObject({ program: 'KCC20Ref', tick: null });
-    // the per-token judgements KOB no longer makes, in a registry of the older shape: read and ignored, never honoured (any value, any type):
-    // a `delisted`, official or warned token is tradable exactly as without them, and nothing of them reaches the token info
+    // Per-token judgements are not part of the registry shape: they are read and ignored, never
+    // honoured (any value, any type). A `delisted`, official or warned token is tradable exactly as
+    // without them, and nothing of them reaches the token info.
     const plain = parse(tradableRegistryJson());
     const legacy = (over: Record<string, unknown>) => {
       const old = tradableRegistryJson();
@@ -126,8 +132,9 @@ describe('tradability (the program allowlist, verified against the pinned templa
     doc3.tokens[0].verified = false;
     doc3.templates[0].template_hash = 'ab'.repeat(32);
     expect(tokenById(parse(doc3), TOKEN.covenantId)).toMatchObject({ tradable: false, untradableReason: 'template-mismatch' });
-    // protocol v3 has no lots and no price tick: an entry without the registry's legacy lot size or tick is tradable (the scale comes from its
-    // decimals); a legacy value is read and ignored (registry.rs), never validated
+    // protocol v3 has no lots and no price tick: an entry without the registry's lot size or tick
+    // is tradable (the scale comes from its decimals), and a lot size or tick that is present is
+    // read and ignored (registry.rs), never validated
     const doc4 = tradableRegistryJson();
     doc4.tokens[0].lot_size = null;
     doc4.tokens[0].tick = null;
@@ -407,7 +414,8 @@ describe('on-chain verification', () => {
     const codes2 = verifyTokenUtxo(kob, tst, other).problems.map((p) => p.code);
     expect(codes2).toContain('extension-mismatch');
     expect(codes2).toContain('script-mismatch');
-    // the state amount is part of the script: a UTXO whose script does not match its claimed state is not this token
+    // the state amount is part of the script: a UTXO whose script does not match its claimed state
+    // is not this token
     const forged = { ...good, state: { ...good.state, amount: '999999' } };
     expect(verifyTokenUtxo(kob, tst, forged).problems.map((p) => p.code)).toEqual(['script-mismatch']);
     // a script of the OTHER program with the same state
@@ -429,7 +437,8 @@ describe('on-chain verification', () => {
       ticker: 'TST', covenant_id: TOKEN.covenantId, template_hash: TOKEN.templateHash, extension_commitment: TOKEN.ext, scale: 1000, decimals: 3, open_asks: 0, open_bids: 0,
     };
     expect(verifyIndexerToken(tst, view)).toEqual({ ok: true, problems: [], missing: [] });
-    // the indexer's standard scale must be 10^decimals of the registry token (another scale quotes another whole token)
+    // the indexer's standard scale must be 10^decimals of the registry token (another scale quotes
+    // another whole token)
     expect(verifyIndexerToken(tst, { ...view, scale: 100 }).problems.map((p) => p.code)).toEqual(['scale-mismatch']);
     expect(verifyIndexerToken(tst, { ...view, scale: null }).ok).toBe(true);
     expect(verifyIndexerToken(tst, { ...view, template_hash: 'ab'.repeat(32) }).problems.map((p) => p.code)).toEqual(['template-hash-mismatch']);
@@ -453,9 +462,11 @@ describe('registry genesis record (C1 / C2)', () => {
     expect(codes(doc({}))).toEqual([]);
     expect(codes(doc({ genesis_verified: undefined, genesis: undefined }))).toEqual([]);
     expect(codes(doc({ genesis: { ...GENESIS, live_minters: undefined } }))).toEqual([]);
-    // a live minter is a fact the API reports as the warning `live_mint_authority` (derived, never maintainer text)
+    // a live minter is a fact the API reports as the warning `live_mint_authority` (derived, never
+    // maintainer text)
     expect(codes(doc({ genesis: { ...GENESIS, live_minters: ['cd'.repeat(32) + ':3'] } }))).toEqual([]);
-    // the pinned upstream builds of the public-mint app a genesis may name (their issuers differ only by rebalance_value)
+    // the pinned upstream builds of the public-mint app a genesis may name (their issuers differ
+    // only by rebalance_value)
     for (const issuer of ['kcc20-reference@c8a0871', 'kcc20-reference@27f8403']) expect(codes(doc({ genesis: { ...GENESIS, issuer } }))).toEqual([]);
   });
   it('checks the record shape', () => {

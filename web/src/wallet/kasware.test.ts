@@ -77,7 +77,8 @@ describe('KasWare adapter: signTx', () => {
     expect(req.options.signInputs).toEqual(built.sign.map((s) => ({ index: s.inputIndex, sighashType: 1 })));
     expect(sigs.map((s) => s.inputIndex)).toEqual(built.sign.map((s) => s.inputIndex));
     for (const s of sigs) expect(s.signature).toMatch(/^[0-9a-f]{128}01$/); // 65 bytes, SIGHASH_ALL
-    // covenant inputs 0 and 1 and P2PK input 2: finalize verifies each signature, the script engine runs the covenants
+    // covenant inputs 0 and 1 and P2PK input 2: finalize verifies each signature, the script engine
+    // runs the covenants
     expect(() => assertConsensusValid(built, sigs)).not.toThrow();
   });
 

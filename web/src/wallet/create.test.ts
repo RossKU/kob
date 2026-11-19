@@ -1,10 +1,14 @@
-// The token creation flow (KCC-23: preparation, then the genesis spending it) against the mock node and the fake wallets.
+// The token creation flow (KCC-23: preparation, then the genesis spending it) against the mock node
+// and the fake wallets.
 //
-//   * one approval (the private-key signer, `signChain`): both signed before anything is sent, the preparation first;
-//   * an extension wallet that looks every input up on its own node (KasWare 0.11.5, the fakes' `walletNode`): the preparation is signed and
-//     SENT, handed to the wallet's node, and only then is the wallet asked for the genesis;
-//   * the creation record kept exactly while the genesis may still be missing (a declined second approval, a reload, a refused genesis), and
-//     finished later: with no signature when the genesis was signed, with one when it was not; a v1 record still resumes.
+//   * one approval (the private-key signer, `signChain`): both signed before anything is sent, the
+//     preparation first;
+//   * an extension wallet that looks every input up on its own node (KasWare 0.11.5, the fakes'
+//     `walletNode`): the preparation is signed and SENT, handed to the wallet's node, and only then
+//     is the wallet asked for the genesis;
+//   * the creation record kept exactly while the genesis may still be missing (a declined second
+//     approval, a reload, a refused genesis), and finished later: with no signature when the
+//     genesis was signed, with one when it was not; a v1 record still resumes.
 import { beforeEach, describe, expect, it } from 'vitest';
 import { finishCreation, resumeCreation, signAndSubmitCreation, CREATION_INVALID, CREATION_SPENT } from './create';
 import { SignFlowError, type SignStage } from './sign';
@@ -46,7 +50,10 @@ function setup(o: { applyOnSubmit?: boolean } = {}) {
   return { plan, node, storage };
 }
 
-/** The fake KasWare 0.11.5 with its own node (`walletNode`, default: a lagging view of the test's node that `pushTx` feeds). */
+/**
+ * The fake KasWare 0.11.5 with its own node (`walletNode`, default: a lagging view of the test's
+ * node that `pushTx` feeds).
+ */
 const kasware = (s: ReturnType<typeof setup>, behavior = {}, walletNode: FakeWalletNode = laggingWalletNode(s.node)) => {
   const p = fakeKasware({ sdk, sk: MAKER_SK, behavior, walletNode });
   return {
@@ -57,7 +64,10 @@ const kasware = (s: ReturnType<typeof setup>, behavior = {}, walletNode: FakeWal
   };
 };
 
-/** A wallet with one approval for both (as the private-key signer): signs locally, counts its approvals. */
+/**
+ * A wallet with one approval for both (as the private-key signer): signs locally, counts its
+ * approvals.
+ */
 function oneApproval(): { adapter: WalletAdapter; approvals: () => number } {
   let n = 0;
   const sign = (b: BuiltTx): InputSignature[] => signBuilt(b, [MAKER_SK]);
@@ -215,14 +225,16 @@ describe('signAndSubmitCreation: an extension wallet that checks its inputs on i
 
   it('an accepted pushTx is not enough: the genesis waits for the node and the margin; a refusal is asked again and passes', async () => {
     const s = setup();
-    // pushTx is accepted, yet the wallet's lookup does not find the preparation until it moved into its node's UTXO index (seen on TN10)
+    // pushTx is accepted, yet the wallet's lookup does not find the preparation until it moved into
+    // its node's UTXO index
     const view = laggingWalletNode(s.node, { pushLost: true });
     const w = kasware(s, {}, view);
     const slept: number[] = [];
     let refused = 0;
     const sign = w.provider.signPskt.bind(w.provider);
     w.provider.signPskt = async (req) => sign(req).catch((e: Error) => Promise.reject((refused++, e)));
-    // the wallet's node takes the block only after the margin: the first ask is refused, the one 2 s later passes
+    // the wallet's node takes the block only after the margin: the first ask is refused, the one 2
+    // s later passes
     const sleep = async (ms: number) => void (slept.push(ms), ms === 2000 && slept.filter((x) => x === 2000).length === 2 && view.reveal());
     const res = await signAndSubmitCreation({ ...args(s, w.adapter), sleep });
     expect(res.txid).toBe(s.plan.built.tx.id);
@@ -298,7 +310,8 @@ describe('signAndSubmitCreation: an extension wallet that checks its inputs on i
     expect(e.rejectedByUser).toBe(false);
     expect(e.message).toMatch(/second approval was declined, so nothing more was sent/);
     expect(e.message).toMatch(/is not an unspent output on this network/);
-    // KasWare's Reject in its warning window answers like any rejection: the step spent a fresh output, so both are said
+    // KasWare's Reject in its warning window answers like any rejection: the step spent a fresh
+    // output, so both are said
     expect((e.cause as SignFlowError).code).toBe('rejected-fresh');
     expect(s.node.submissions.map((t) => t.id)).toEqual([s.plan.prep.tx.id]);
     expect(s.node.hasUtxo(s.plan.prep.tx.id, 0)).toBe(true);
@@ -307,7 +320,7 @@ describe('signAndSubmitCreation: an extension wallet that checks its inputs on i
     expect(rec.genesis).toBeUndefined();
     expect(rec.genesisBuilt!.tx.id).toBe(s.plan.built.tx.id);
     expect(typeof rec.prepSentAt).toBe('number');
-    // a v1 reader would have dropped this record: it is in v2 only
+    // a v1 reader would drop this record, so it is stored in v2 only
     expect(s.storage.data.has('kob.creations.v1')).toBe(false);
 
     // "Finish the creation": one approval, the genesis sent, the record gone

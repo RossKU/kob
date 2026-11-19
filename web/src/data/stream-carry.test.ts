@@ -1,4 +1,5 @@
-// What the page read from the indexer, kept for standalone mode (data/stream-carry.ts): the recording and the merging with what the node saw.
+// What the page read from the indexer, kept for standalone mode (data/stream-carry.ts): the
+// recording and the merging with what the node saw.
 import { describe, expect, it } from 'vitest';
 import type { CandleView, CandlesView, IndexerTokenView, OrderView, StatsView, TradeView, TradesView } from './indexer-types';
 import { IndexerCarry, ORDERS_READ_MS, mergeCandles, mergeStats, mergeTokens, mergeTrades } from './stream-carry';
@@ -142,7 +143,7 @@ describe('the resting orders of a market', () => {
     c.recordOrders(TOKEN, [order('aa'.repeat(32)), order('ab'.repeat(32), { status: 'partial' }), order('ac'.repeat(32), { status: 'filled' }), order('ad'.repeat(32), { listed: false }), order('ae'.repeat(32), { token: OTHER })]);
     expect(c.orders().map((o) => o.covenant_id)).toEqual(['aa'.repeat(32), 'ab'.repeat(32)]);
     expect(c.ordersAt(TOKEN)).toBe(NOW);
-    // a single read: a new state is kept, one that no longer rests is forgotten
+    // A single read: a new state is kept, one that does not rest is forgotten.
     c.recordOrder(order('ab'.repeat(32), { status: 'cancelled' }));
     c.recordOrder(order('af'.repeat(32)));
     expect(c.orders().map((o) => o.covenant_id)).toEqual(['aa'.repeat(32), 'af'.repeat(32)]);

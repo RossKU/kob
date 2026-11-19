@@ -8,7 +8,10 @@ import {
 
 const o = (value: string, label = value, disabled = false): DropdownOption => ({ value, label, ...(disabled ? { disabled } : {}) });
 
-/** Rows 0 Limit, 1 Market, 2 Stop (off), 3 Stop-limit, 4 Take-profit, 5 TWAP, 6 Trailing (off): disabled rows in the middle and at the end. */
+/**
+ * Rows 0 Limit, 1 Market, 2 Stop (off), 3 Stop-limit, 4 Take-profit, 5 TWAP, 6 Trailing (off):
+ * disabled rows in the middle and at the end.
+ */
 const ENTRIES: DropdownEntry[] = [
   { group: 'Basic', options: [o('limit', 'Limit'), o('market', 'Market')] },
   { group: 'Trigger', options: [o('stop', 'Stop', true), o('stopLimit', 'Stop-limit'), o('takeProfit', 'Take-profit')] },

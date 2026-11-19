@@ -16,7 +16,8 @@ import { CTX, TOKEN, form, ticketEnv } from '../ui/ticket/ticket-fixtures';
 
 const sdk = loadKaspaSdkNode();
 const P = SIGNER_PROTOCOL;
-// the registry table the bundle pins (table.ts) and the app sends: the listed token of these requests
+// the registry table the bundle pins (table.ts) and the app sends: the listed token of these
+// requests
 const TABLE: RegistryRow[] = [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 8 }];
 const PINNED = tableHash(TABLE);
 
@@ -103,7 +104,8 @@ describe('signer core: signing', () => {
     expect(b.send(signReq(buildSend(), 'b'))).toBeNull();
     expect(b.sent.at(-1)).toEqual({ p: P, type: 'rejected', id: 'b', reason: 'busy' });
 
-    // the app claims another digest than the transaction has: the signature over the real one does not verify against it, nothing is returned
+    // the app claims another digest than the transaction has: the signature over the real one does
+    // not verify against it, nothing is returned
     const c = setup();
     c.core.importKey(MAKER_SK);
     const forged = buildSend();
@@ -241,7 +243,8 @@ describe('signer core: a silent re-time is bounded (audit 2026-10-29 S3)', () =>
 });
 
 describe('signer core: the request on screen follows the market and the clock (updates of the app)', () => {
-  // a market buy planned at the click, again 15 s later (only its times move), and on a dearer book (a worse start and worst price)
+  // a market buy planned at the click, again 15 s later (only its times move), and on a dearer book
+  // (a worse start and worst price)
   const at = (daa: bigint, o: Parameters<typeof ticketEnv>[0] = {}) => {
     const env = ticketEnv(o);
     return { ...env, clock: { ...env.clock, daa: env.clock.daa + daa, unixSeconds: env.clock.unixSeconds + daa / 10n } };

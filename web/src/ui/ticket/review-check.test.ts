@@ -92,7 +92,8 @@ describe('sameTransaction', () => {
 });
 
 describe('the clock of a click (an auction starts from it)', () => {
-  // TN10 2026-10-17: a market order planned at Review and signed 17 s later started its auction 175 DAA in the past and filled near its worst price
+  // A market order planned at Review and signed some seconds later must not start its auction in
+  // the past, or it fills near its worst price.
   const market = { type: 'market', side: 'buy', amount: 5n * TOK } as never;
   const startOf = (p: OrderPlan): bigint => BigInt((p.states[0]!.state as { activeFrom: string }).activeFrom);
 
@@ -104,7 +105,8 @@ describe('the clock of a click (an auction starts from it)', () => {
     expect(plan.ok).toBe(true);
     expect(startOf(plan)).toBe(node.daa + MARKET_ACTIVATION_DAA);
     expect(auctionSubmitBy(plan.states, read.clock.daa)).toBe(node.daa + MARKET_ACTIVATION_DAA + AUCTION_START_MARGIN_DAA);
-    // a node too slow to answer: the clock on hand projected to the click, never the clock on hand itself
+    // A node too slow to answer: the clock on hand projected to the click, never the clock on hand
+    // itself.
     const slow = await reviewClock(() => new Promise<Clock>(() => undefined), stale, 0, { waitMs: 10, now: () => 17_500 });
     expect(startOf(planOrder(makeEnv({ clock: slow.clock }), market))).toBe(stale.daa + 170n + MARKET_ACTIVATION_DAA);
   });

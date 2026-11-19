@@ -1,4 +1,5 @@
-// The token-logo blocklist (data/logo-blocklist.ts): reading the list, failing open, the cache, a viewer's own report.
+// The token-logo blocklist (data/logo-blocklist.ts): reading the list, failing open, the cache, a
+// viewer's own report.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createLogoBlocklist, githubReportUrl, logoBlocklistUrlOf, logoReportsUrlOf, LOGO_BLOCKLIST_KEY, parseBlocklist, reportLogo } from './logo-blocklist';
 

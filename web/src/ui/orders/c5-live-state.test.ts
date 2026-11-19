@@ -1,15 +1,21 @@
-// C5 liveness (row states of My orders). Findings pinned here (the sibling c5-live-orders.test.ts covers `killed`, list truncation, stray slots):
-//   C5-S1  a SOLD-OUT buy-first REPEAT entry that waits for its exits has `amount_left: '0'` (indexer: a repeating entry that sold out stays
-//          `partial` with nothing left, executor.md). orders-model `unfundable: live && side === 'buy' && amount_left === 0` flagged it as
-//          "cannot buy a minimum fill ... Refund the KAS", and OrderRow's banner button runs a plain CANCEL of the entry alone:
-//          booked exits then cannot take profit until their rptUntil (matcher.md 6.1 / 10.13). A healthy position is shown as a broken order.
-//   C5-S2  `canCancel` is `v.state_known && v.current !== null` for any order the indexer lists, and `recordsToResolve` only resolves records the
-//          indexer does NOT list. When the indexer lists an order whose current state it has not proven (`state_known: false`, e.g. a continuation
-//          it could not splice, processor.rs derive_after -> None) the wallet's own record is never asked: Cancel stays disabled although
-//          snapshotFor (actions.ts) WOULD fall back to the record + node and could cancel it.
-// Uncompiled when written (2026-10-02).
-// C5: expected to fail until (S1) unfundable excludes repeat entries (`repeat?.role === 'entry'`), (S2) recordsToResolve includes records of views
-// with state_known === false and buildEntries attaches the resolution so canCancel can use it.
+// Tests the row states of My orders, so that a healthy position is never shown as a broken order.
+//
+// The sibling c5-live-orders.test.ts covers `killed`, list truncation and stray slots.
+//
+// Two rules are pinned here.
+// - S1. A SOLD-OUT buy-first REPEAT entry that waits for its exits has `amount_left: '0'`. The
+//   indexer keeps a repeating entry that sold out as `partial` with nothing left (executor.md).
+//   `unfundable` must exclude repeat entries (`repeat?.role === 'entry'`). Otherwise the row says
+//   "cannot buy a minimum fill ... Refund the KAS", and the banner button of OrderRow runs a plain
+//   CANCEL of the entry alone. Booked exits then cannot take profit until their rptUntil
+//   (matcher.md 6.1 / 10.13).
+// - S2. `canCancel` is `v.state_known && v.current !== null` for any order the indexer lists, and
+//   `recordsToResolve` only resolves records the indexer does NOT list. When the indexer lists an
+//   order whose current state it has not proven (`state_known: false`, for example a continuation
+//   it could not splice, processor.rs derive_after -> None), the wallet's own record must still
+//   be asked. So `recordsToResolve` includes records of views with state_known === false, and
+//   buildEntries attaches the resolution so canCancel can use it. snapshotFor (actions.ts) falls
+//   back to the record and the node and can cancel such an order.
 import { describe, expect, it } from 'vitest';
 import type { Clock } from '../../kob/plan-types';
 import { recordsFromBuilt, type ResolvedRecord } from '../../kob/records';

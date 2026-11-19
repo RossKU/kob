@@ -1,5 +1,6 @@
-// The take planner (kob/take.ts): a crossing limit filled directly from the wallet. Every take transaction is signed with the taker's key
-// only, finalized with tightened budgets and validated by the script engine; the resting orders are real placements of another key.
+// The take planner (kob/take.ts): a crossing limit filled directly from the wallet. Every take
+// transaction is signed with the taker's key only, finalized with tightened budgets and validated
+// by the script engine; the resting orders are real placements of another key.
 import { describe, expect, it } from 'vitest';
 import type { BookOrderUtxo, BookView, OrderPlan, PlanEnv } from './plan-types';
 import { errors } from './plan-types';
@@ -154,7 +155,8 @@ describe('limit protection', () => {
 
 describe('dust', () => {
   it('a partial fill whose rest would be dust (KIP-9) is not taken; the whole order is', () => {
-    // 8 decimals, a bid of 4 tokens at 0.0249 KAS: 1 token left would be 0.0249 KAS on a covenant output, below its 0.08 KAS floor
+    // 8 decimals, a bid of 4 tokens at 0.0249 KAS: 1 token left would be 0.0249 KAS on a covenant
+    // output, below its 0.08 KAS floor
     const m = market8x8({ decimals: 8 } as never);
     // its escrow budgets one delivery (as the mock's seeded bids)
     const b = resting('buy', 2_490_000n, 4n * m.scale, { minFill: 1n, market: m, maxFills: 1n });

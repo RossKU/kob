@@ -1,6 +1,8 @@
-// Creator lock in the web app: the template parser against kob-wasm, a creation with a lock planned and verified (its launch proof binds the
-// lock with its amount, outputs and supply), the confirmations of that creation (app and signer frame: "locked for you", never "another key"),
-// and the pre-sign decoder on an unlock and a lock coin: ok for the wallet's own lock, blocking for another key's or a wrong one.
+// Creator lock in the web app: the template parser against kob-wasm, a creation with a lock planned
+// and verified (its launch proof binds the lock with its amount, outputs and supply), the
+// confirmations of that creation (app and signer frame: "locked for you", never "another key"), and
+// the pre-sign decoder on an unlock and a lock coin: ok for the wallet's own lock, blocking for
+// another key's or a wrong one.
 import { describe, expect, it } from 'vitest';
 import { loadKobNode } from './wasm.node';
 import { pubkeyOf, signBuilt } from '../testing/local-signer';

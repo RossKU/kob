@@ -14,7 +14,8 @@ import { buildIntent, layoutOf, FIELDS, setSide, type TicketForm } from '../tick
 import { CASES, CTX, form, json } from '../ticket/ticket-fixtures';
 import { sideOfField } from '../ticket/TicketFields';
 
-// 8 decimals, scale 1e8 (one whole token): a book price of 2_500_000 sompi per token is 0.025 KAS per token = 40 tokens per KAS
+// 8 decimals, scale 1e8 (one whole token): a book price of 2_500_000 sompi per token is 0.025 KAS
+// per token = 40 tokens per KAS.
 const S = 100_000_000n;
 const lv = (price: string, tokens: number, orders = 1): LevelView => ({ price, amount: String(BigInt(tokens) * S), orders, amount_estimated: false, scale: Number(S) });
 const CTX_BOOK = { name: 'EXKCC', decimals: 8, scale: S, tick: 100_000n, dp: 2, labels: { price: 'p', size: 's', total: 't' } };
@@ -52,7 +53,8 @@ describe('conventions', () => {
     } finally {
       g.localStorage = before;
     }
-    // storage that throws (blocked cookies / private mode): reads give "no choice", writes are ignored
+    // Storage that throws (blocked cookies / private mode): reads give "no choice", writes are
+    // ignored.
     g.localStorage = { getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('denied'); } };
     try {
       expect(readInverted('token:aa')).toBeNull();
@@ -66,9 +68,11 @@ describe('conventions', () => {
 describe('prices', () => {
   it('tokens per KAS is the exact inverse of KAS per token', () => {
     expect(ratToNumber(tokensPerKas(2_500_000n, 8, 100_000_000n)!)).toBe(40);
-    // a price per 0.5 token (scale 5e7): 1_000_000 sompi per half token = 0.02 KAS per token = 50 tokens per KAS
+    // A price per 0.5 token (scale 5e7): 1_000_000 sompi per half token = 0.02 KAS per token = 50
+    // tokens per KAS.
     expect(ratToNumber(tokensPerKas(1_000_000n, 8, 50_000_000n)!)).toBe(50);
-    // 12 decimals, scale 1e9 (a thousandth of a token): 2_500 sompi per 1e9 base units = 0.025 KAS per token
+    // 12 decimals, scale 1e9 (a thousandth of a token): 2_500 sompi per 1e9 base units = 0.025 KAS
+    // per token.
     expect(ratToNumber(tokensPerKas(2_500n, 12, 1_000_000_000n)!)).toBe(40);
     expect(tokensPerKas(0n, 8, 100_000_000n)).toBeNull();
     expect(flippedPriceText(2_500_000n, 8, 100_000_000n, 2)).toBe('40.00');
@@ -80,10 +84,12 @@ describe('prices', () => {
     expect(invertedToNativePriceText('40', 'up')).toBe('0.025');
     expect(invertedToNativePriceText('0.4', 'down')).toBe('2.5');
     expect(invertedToNativePriceText('400000', 'up')).toBe('0.0000025');
-    // 1/3 has no finite expansion: a sell (round up) is never below the true price, a buy (down) never above
+    // 1/3 has no finite expansion: a sell (round up) is never below the true price, a buy (down)
+    // never above.
     expect(invertedToNativePriceText('3', 'up')).toBe('0.33333334');
     expect(invertedToNativePriceText('3', 'down')).toBe('0.33333333');
-    // text that is not a positive decimal goes through for the form to report; zero stays zero (the form says "positive")
+    // Text that is not a positive decimal goes through for the form to report. Zero stays zero (the
+    // form says "positive").
     expect(invertedToNativePriceText('abc', 'up')).toBe('abc');
     expect(invertedToNativePriceText('', 'up')).toBe('');
     expect(invertedToNativePriceText('0', 'up')).toBe('0');
@@ -112,7 +118,8 @@ describe('order book', () => {
     expect(flipped.asks.map((r) => r.priceText)).toEqual(['100.00', '50.00']);
     // the book is not crossed: best bid below best ask
     expect(Number(flipped.bids[0]!.priceValue)).toBeLessThan(Number(flipped.asks.at(-1)!.priceValue));
-    // size is KAS (amount x price / scale): 7 tokens at 0.025 KAS = 0.175 KAS; total is the cumulative tokens
+    // Size is KAS (amount x price / scale): 7 tokens at 0.025 KAS = 0.175 KAS. Total is the
+    // cumulative tokens.
     expect(flipped.bids[0]).toMatchObject({ sizeText: '0.175', totalText: '7', amount: 700_000_000n });
     expect(flipped.bids[1]).toMatchObject({ sizeText: '0.150', totalText: '10' });
     // mid and spread of the inverted touch: bid 40, ask 50
@@ -123,7 +130,8 @@ describe('order book', () => {
   it('the same level is the same click in either orientation: the ticket prefill is native', () => {
     const key = (v: typeof native) => [...v.asks, ...v.bids].map((r) => `${r.pick}@${r.nativePrice}`).sort();
     expect(key(flipped)).toEqual(key(native));
-    // an ask level (a seller of the token) is bought, a bid level sold, whichever side of the screen it is drawn on
+    // An ask level (a seller of the token) is bought, a bid level sold, whichever side of the
+    // screen it is drawn on.
     expect(native.asks.every((r) => r.pick === 'buy') && native.bids.every((r) => r.pick === 'sell')).toBe(true);
     expect(flipped.bids.every((r) => r.pick === 'buy') && flipped.asks.every((r) => r.pick === 'sell')).toBe(true);
   });
@@ -185,7 +193,8 @@ describe('candles', () => {
   const candle = (t: number, o: bigint, h: bigint, l: bigint, c: bigint, volume: bigint, quote: bigint, filled = false): Candle => ({ t, o, h, l, c, volume, quote, trades: 1, filled });
 
   it('open and close invert, high and low swap, the volume is the KAS turnover, a rising price is a falling inverse', () => {
-    // 0.02 -> 0.025 KAS per token (up): open 2_000_000, close 2_500_000, range 1_000_000..5_000_000 sompi per token
+    // 0.02 -> 0.025 KAS per token (up): open 2_000_000, close 2_500_000, range 1_000_000..5_000_000
+    // sompi per token.
     const s = flippedChartSeries([candle(60_000, 2_000_000n, 5_000_000n, 1_000_000n, 2_500_000n, 300_000_000n, 900_000_000n)], 8, 100_000_000n, 2);
     expect(s.bars[0]).toMatchObject({ time: 60, open: 50, high: 100, low: 20, close: 40, filled: false });
     expect(s.bars[0]!.high).toBeGreaterThanOrEqual(Math.max(s.bars[0]!.open, s.bars[0]!.close));
@@ -240,12 +249,15 @@ describe('depth', () => {
 });
 
 describe('the ticket: the order is the same whichever way it is displayed', () => {
-  // the form is NATIVE (KAS per token, token amounts); an inverted display only converts what is typed and swaps the side labels
+  // The form is NATIVE (KAS per token, token amounts). An inverted display only converts what is
+  // typed and swaps the side labels.
   const priceFieldIds = (f: TicketForm): string[] => {
     const l = layoutOf(f);
     return [...l.main, ...l.advanced].filter((id) => FIELDS[id]?.kind === 'price');
   };
-  /** the form after the user typed, in an inverted ticket, the inverse of every native price of `f` */
+  /**
+   * The form after the user typed, in an inverted ticket, the inverse of every native price of `f`.
+   */
   const viaInvertedInput = (f: TicketForm): TicketForm => {
     const values = { ...f.values };
     for (const id of priceFieldIds(f)) {
@@ -255,7 +267,8 @@ describe('the ticket: the order is the same whichever way it is displayed', () =
     }
     return { ...f, values };
   };
-  // prices whose inverse is a finite decimal: what a user types in an inverted box is then exactly the inverse, so the order is bit-identical
+  // Prices whose inverse is a finite decimal: what a user types in an inverted box is then exactly
+  // the inverse, so the order is bit-identical.
   const NICE = ['2.5', '4', '2', '5', '1.25', '8', '0.5'];
   const nice = (f: TicketForm): TicketForm => {
     const values = { ...f.values };
@@ -303,7 +316,8 @@ describe('the ticket: the order is the same whichever way it is displayed', () =
 });
 
 describe('grouping of the inverted book', () => {
-  // 8 decimals, scale 1e8: 2_510_000 sompi per token = 0.0251 KAS per token = 39.8406 tokens per KAS
+  // 8 decimals, scale 1e8: 2_510_000 sompi per token = 0.0251 KAS per token = 39.8406 tokens per
+  // KAS.
   const c = { decimals: 8, scale: S, dp: 3 };
   const lvl = (price: bigint, tokens = 1n) => ({ price, amount: tokens * S, orders: 1, estimated: false });
 
@@ -319,7 +333,8 @@ describe('grouping of the inverted book', () => {
     const b398 = out.find((l) => l.amount === 5n * S)!;
     expect(ratToNumber(b398.inv!)).toBeCloseTo(39.8, 10);
     expect(b398.orders).toBe(2);
-    // the buy a click prefills must be at or above the highest native price of the bucket (2_512_000) and still be at 39.8 tokens per KAS or better
+    // The buy a click prefills must be at or above the highest native price of the bucket
+    // (2_512_000) and still be at 39.8 tokens per KAS or better.
     expect(b398.price).toBeGreaterThanOrEqual(2_512_000n);
     expect(ratToNumber(tokensPerKas(b398.price, 8, 100_000_000n)!)).toBeLessThanOrEqual(39.8 + 1e-9);
     const b397 = out.find((l) => l.amount === S)!;
@@ -328,12 +343,14 @@ describe('grouping of the inverted book', () => {
 
   it('displayed asks (native bids) round UP; the native price of the bucket is at or below its lowest native bid', () => {
     const regroup = invertedRegrouper({ ...c, mult: 100n })!;
-    // 40.0 (2_500_000) and 39.8406 (2_510_000) as native BIDS: inverted 40.0 -> bucket 40.0, 39.8406 -> bucket 39.9
+    // 40.0 (2_500_000) and 39.8406 (2_510_000) as native BIDS: inverted 40.0 -> bucket 40.0,
+    // 39.8406 -> bucket 39.9.
     const out = regroup([lvl(2_500_000n), lvl(2_510_000n)], 'bid');
     expect(out).toHaveLength(2);
     const up = out.find((l) => ratToNumber(l.inv!) < 39.95)!;
     expect(ratToNumber(up.inv!)).toBeCloseTo(39.9, 10);
-    // a sell at the bucket's native price reaches this bid: its native price is not above the bid's (2_510_000)
+    // A sell at the bucket's native price reaches this bid: its native price is not above the bid's
+    // (2_510_000).
     expect(up.price).toBeLessThanOrEqual(2_510_000n);
   });
 
@@ -345,7 +362,8 @@ describe('grouping of the inverted book', () => {
     expect(sum(v.bids)).toBe(10n * S); // the native asks: 7 + 3 tokens
     expect(sum(v.asks)).toBe(10n * S);
     for (const r of [...v.bids, ...v.asks]) expect(r.nativePrice > 0n).toBe(true);
-    // the best displayed bid is the displayed bucket of the best native ask and its text is the bucket's exact inverted price
+    // The best displayed bid is the displayed bucket of the best native ask and its text is the
+    // bucket's exact inverted price.
     expect(v.bids[0]!.priceText).toBe('40.000');
   });
 

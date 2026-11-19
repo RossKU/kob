@@ -1,7 +1,9 @@
-// "Merge all" and the sell ticket's merge: the candidates (only the wallet's own UTXOs of the token, one tree per borrow setting, never an order's custody / stray or a
-// reserved outpoint), the tree's shape on the standard 3 / 3 program (level 1 groups the originals in threes, later levels merge the outputs)
-// and on the 8 / 8 prototype, the target mode (just enough for one placement), the KRON output cap, and every link built by kob-wasm, signed
-// locally, run through the script engine and decoded on the confirmation model (a send to the wallet itself, nothing blocking).
+// "Merge all" and the sell ticket's merge: the candidates (only the wallet's own UTXOs of the
+// token, one tree per borrow setting, never an order's custody / stray or a reserved outpoint), the
+// tree's shape on the standard 3 / 3 program (level 1 groups the originals in threes, later levels
+// merge the outputs) and on the 8 / 8 prototype, the target mode (just enough for one placement),
+// the KRON output cap, and every link built by kob-wasm, signed locally, run through the script
+// engine and decoded on the confirmation model (a send to the wallet itself, nothing blocking).
 import { describe, expect, it } from 'vitest';
 import { decodeSigning } from './decode';
 import {
@@ -34,7 +36,9 @@ const kronUtxos = (amounts: bigint[]): TokenUtxo[] =>
   }));
 const sum = (xs: TokenUtxo[]) => xs.reduce((s, u) => s + BigInt(u.state.amount), 0n);
 const ids = (n: number) => Array.from({ length: n }, (_, i) => i);
-/** The UTXOs a tree leaves: the originals it does not spend plus the outputs no later node spends. */
+/**
+ * The UTXOs a tree leaves: the originals it does not spend plus the outputs no later node spends.
+ */
 const left = (n: number, nodes: MergeNode<number>[]) => n - nodes.reduce((s, x) => s + x.fresh.length, 0) + mergeLeaves(nodes).length;
 const levels = (nodes: MergeNode<unknown>[]) => nodes.reduce<Record<number, number>>((m, x) => ({ ...m, [x.level]: (m[x.level] ?? 0) + 1 }), {});
 
@@ -50,7 +54,7 @@ describe('merge candidates', () => {
     const reserved = tokenUtxo(7n, MAKER.pk, 0x5a);
     const all = [...mine, other, custody, otherExt, otherToken, empty, borrowed, reserved];
     const got = mergeCandidates(all, STD, MAKER.pk, new Set([`${reserved.transactionId}:${reserved.index}`]));
-    // a borrow setting is no longer refused (option A): it merges in its own tree
+    // a borrow setting does not refuse the merge: it merges in its own tree
     expect(got.map((u) => u.state.amount)).toEqual(['5', '10', '20', '30']);
     expect(got[0]).toBe(borrowed);
   });
@@ -160,7 +164,8 @@ describe('target mode (just enough for one placement)', () => {
     const code = (s: ReturnType<typeof planMergeShape>) => (s.ok ? 'ok' : s.issue.code);
     expect(code(planMergeShape(STD, utxos(5), MAKER.pk, new Set(), { target: 120n }))).toBe('merge.not-needed');
     expect(code(planMergeShape(STD, utxos(5), MAKER.pk, new Set(), { target: 151n }))).toBe('merge.short');
-    // the KRON program takes 4 token inputs: 1.5 G needs all six of 300 M, one 3 -> 1 output of 900 M within the cap
+    // the KRON program takes 4 token inputs: 1.5 G needs all six of 300 M, one 3 -> 1 output of 900
+    // M within the cap
     expect(KRON.slots.inputs).toBe(4);
     const kron = kronUtxos(Array.from({ length: 6 }, () => 300_000_000n));
     expect(code(planMergeShape(KRON, kron, MAKER.pk, new Set(), { target: 1_500_000_000n }))).toBe('ok');
@@ -174,7 +179,8 @@ describe('target mode (just enough for one placement)', () => {
     const plan = planMergeShape(STD, set, MAKER.pk);
     expect(plan.ok && plan.nodes).toHaveLength(15);
     if (!plan.ok) return;
-    // four level-1 transactions went through, the fifth was rejected: 18 originals and 4 merged outputs remain
+    // four level-1 transactions went through, the fifth was rejected: 18 originals and 4 merged
+    // outputs remain
     const sent = plan.nodes.slice(0, 4);
     const spent = new Set(sent.flatMap((x) => x.fresh));
     const outputs = sent.map((x, k) => tokenUtxo(sum(x.fresh), MAKER.pk, 0xc0 + k, KAS));
@@ -211,7 +217,8 @@ describe('planMerge on the standard program (real kob-wasm builds)', () => {
     expect(BigInt(top.output.state.amount)).toBe(sum(set));
     for (const l of plan.links) {
       checkLink(l);
-      // the freed carriers pay the fee: no wallet KAS input, the merged output keeps one carrier at the 1 KAS default
+      // the freed carriers pay the fee: no wallet KAS input, the merged output keeps one carrier at
+      // the 1 KAS default
       expect(l.fundingUsed).toEqual([]);
       expect(l.output.carrier).toBe(KAS);
     }
@@ -223,7 +230,8 @@ describe('planMerge on the standard program (real kob-wasm builds)', () => {
     expect(plan.links).toHaveLength(15);
     expect([plan.before, plan.after, plan.levels]).toEqual([30, 1, 4]);
     for (const l of plan.links) checkLink(l);
-    // 30 carriers of 2 KAS in, the final UTXO keeps 1 KAS: 59 KAS less the fees come back as KAS change
+    // 30 carriers of 2 KAS in, the final UTXO keeps 1 KAS: 59 KAS less the fees come back as KAS
+    // change
     expect(plan.freed).toBe(59n * KAS - plan.fee);
     const change = plan.links.reduce((s, l) => s + l.built.tx.outputs.filter((o) => !o.covenant).reduce((t, o) => t + BigInt(o.value), 0n), 0n);
     expect(change).toBe(plan.freed);
@@ -355,7 +363,8 @@ describe('borrow settings (option A): one tree per setting, each output keeps it
   });
 
   it('target mode merges in the one setting that holds the amount', () => {
-    // plain holds 60 in 3, scheme 2 holds 26 in 4: 25 needs no merge (plain covers it); 70 fits no setting
+    // plain holds 60 in 3, scheme 2 holds 26 in 4: 25 needs no merge (plain covers it); 70 fits no
+    // setting
     const set = [...plain(3), ...scheme2([5n, 6n, 7n, 8n])];
     const notNeeded = planMergeShape(STD, set, MAKER.pk, new Set(), { target: 25n });
     expect(notNeeded.ok ? null : notNeeded.issue.code).toBe('merge.not-needed');

@@ -120,7 +120,8 @@ describe('pair 24 h figures: prices from the KAS series, volumes from pair fills
 
 describe('pair depth within 2 % of the mid (the market list)', () => {
   it('sums amount x price (QUOTE base units) of the asks up to +2 % and the bids down to -2 % of the mid, every source, both ends inclusive', () => {
-    // best ask 51 000, best bid 50 000 (QUOTE base units per 1e8 BASE base units): mid 50 500, band 49 490 .. 51 510
+    // Best ask 51 000, best bid 50 000 (QUOTE base units per 1e8 BASE base units): mid 50 500, band
+    // 49 490 .. 51 510.
     const b = book(
       [lv('direct', '51000', '100000000', '300000000'), lv('route', '51510', '100000000', '100000000'), lv('direct', '51511', '100000000', '100000000')],
       [lv('entry', '50000', '100000000', '100000000'), lv('direct', '49490', '100000000', '200000000'), lv('direct', '49489', '100000000', '900000000')],
@@ -142,7 +143,8 @@ describe('pair depth within 2 % of the mid (the market list)', () => {
   it('is a lower bound when a side came back full and still inside the band', () => {
     const b = book([lv('direct', '51000', '100000000', '100000000')], [lv('direct', '50000', '100000000', '100000000'), lv('direct', '49900', '100000000', '100000000')]);
     expect(pairDepthOf(b, BASE, QUOTE, 2)).toEqual({ quote: 51_000n + 50_000n + 49_900n, atLeast: true });
-    // the bids side is full but the last level it returned is outside the band: nothing beyond it can count
+    // The bids side is full but the last level it returned is outside the band: nothing beyond it
+    // can count.
     const c = book([lv('direct', '51000', '100000000', '100000000')], [lv('direct', '50000', '100000000', '100000000'), lv('direct', '40000', '100000000', '100000000')]);
     expect(pairDepthOf(c, BASE, QUOTE, 2)).toEqual({ quote: 101_000n, atLeast: false });
   });

@@ -1,4 +1,5 @@
-// The claim dialog's planning (claim.ts): which wallet UTXOs a merge may take, the ask a claim and sell places, and the self-trade guard.
+// The claim dialog's planning (claim.ts): which wallet UTXOs a merge may take, the ask a claim and
+// sell places, and the self-trade guard.
 import { describe, expect, it } from 'vitest';
 import type { CancelEnv, OrderSnapshot } from '../../kob/cancel';
 import { parseRegistry } from '../../kob/registry';

@@ -1,6 +1,7 @@
-// An order is only recovered (kob-wasm `recoverOrders`, which the pre-sign decoder, the
-// placement check and the backup import all go through) when its genesis group is the order output alone. A sibling bound
-// to the order's covenant id would carry that id forever and could unlock the order's custody outside the order's rules.
+// An order is only recovered (kob-wasm `recoverOrders`, which the pre-sign decoder, the placement
+// check and the backup import all go through) when its genesis group is the order output alone. A
+// sibling bound to the order's covenant id would carry that id forever and could unlock the order's
+// custody outside the order's rules.
 import { blake2b } from '@noble/hashes/blake2.js';
 import { describe, expect, it } from 'vitest';
 import { decodeSigning } from './decode';
@@ -15,7 +16,10 @@ const hexBytes = (h: string): Uint8Array => Uint8Array.from(h.match(/../g) ?? []
 const toHex = (b: Uint8Array): Hex => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 const le = (v: bigint, n: number): number[] => Array.from({ length: n }, (_, i) => Number((v >> BigInt(8 * i)) & 0xffn));
 
-/** Consensus genesis covenant id (rusty-kaspa `covenant_id`): keyed blake2b-256 over the authorising outpoint and the group. */
+/**
+ * Consensus genesis covenant id (rusty-kaspa `covenant_id`): keyed blake2b-256 over the authorising
+ * outpoint and the group.
+ */
 function genesisId(tx: TxJson, auth: number, outputs: number[]): Hex {
   const inp = tx.inputs[auth];
   const bytes: number[] = [...hexBytes(inp.transactionId), ...le(BigInt(inp.index), 4), ...le(BigInt(outputs.length), 8)];
@@ -29,7 +33,10 @@ function genesisId(tx: TxJson, auth: number, outputs: number[]): Hex {
   return toHex(blake2b(Uint8Array.from(bytes), { dkLen: 32, key: new TextEncoder().encode('CovenantID') }));
 }
 
-/** The golden placement with a sibling in the order's genesis group: ids re-derived, order, sibling and custody rebound. */
+/**
+ * The golden placement with a sibling in the order's genesis group: ids re-derived, order, sibling
+ * and custody rebound.
+ */
 function withSibling(name: string): { built: BuiltTx; honestId: Hex } {
   const built = clone(goldenTx(name).built);
   const [rec] = kob.recoverOrders(built.tx);
@@ -45,7 +52,8 @@ function withSibling(name: string): { built: BuiltTx; honestId: Hex } {
   for (const k of group) tx.outputs[k].covenant = { authorizingInput: binding.authorizingInput, covenantId: id };
   if (rec.custody) {
     const c = rec.custody;
-    // the custody's token program: the one whose P2SH of the recovered state is the honest custody output
+    // the custody's token program: the one whose P2SH of the recovered state is the honest custody
+    // output
     const programs = Object.keys(kob.keeperTips()) as TokenProgram[];
     const spkOf = (p: TokenProgram): string | null => {
       try {

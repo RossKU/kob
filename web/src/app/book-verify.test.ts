@@ -1,4 +1,5 @@
-// The order book against the node (app/book-verify.ts): a phantom ask, a spent order, a changed amount or price, all present, the node down.
+// The order book against the node (app/book-verify.ts): a phantom ask, a spent order, a changed
+// amount or price, all present, the node down.
 import { describe, expect, it } from 'vitest';
 import type { BookOrderView, BookView, LevelView, OrderView } from '../data/indexer-types';
 import { joinSpkString } from '../data/kaspa-sdk';
@@ -17,7 +18,10 @@ import type { Services } from './services';
 const kob = loadKobNode();
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
-/** a snapshot of the golden ask with another covenant id, outpoint and (optionally) price: an order only an indexer could invent */
+/**
+ * A snapshot of the golden ask with another covenant id, outpoint and (optionally) price: an order
+ * only an indexer could invent.
+ */
 function forge(base: OrderSnapshot, n: number, price: bigint): OrderSnapshot {
   const txid = n.toString(16).padStart(2, '0').repeat(32);
   const st = clone(base.order.state) as OrderState & { state: Record<string, string> };
@@ -85,7 +89,7 @@ describe('verifyBook: the orders of the book must exist on the node as the index
 
   it('a spent order (its UTXO gone from the node) is left out', async () => {
     const w = world();
-    // somebody spent it: the node no longer lists the order UTXO nor its custody
+    // Somebody spent it. The node does not list the order UTXO or its custody.
     const spend = { id: 'ee'.repeat(32), inputs: [{ transactionId: w.real.order.transactionId, index: w.real.order.index }, { transactionId: w.real.custody!.transactionId, index: w.real.custody!.index }], outputs: [] } as unknown as TxJson;
     w.chain.applyTx(spend);
     const out = await verifyBook(w.deps, book([rowOf(w.real)]));

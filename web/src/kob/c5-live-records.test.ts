@@ -1,14 +1,20 @@
-// C5 liveness: the placement record is the wallet's ONLY way to find (and cancel) an order without the indexer (records.ts header,
-// RecoverPanel "the fallback that keeps cancel working when the indexer disappears"). resolveRecord enumerates continuations of the
-// ORIGINAL state over amountLeft / armed ∈ {recorded, 0, 1} / rptAmount (2,000 candidates). States a live order reaches routinely were
-// outside that set, so the record path answered `unknown` and the order could not be cancelled:
-//   * an armed stop (bandDaa > 0) that fills partly: the covenant writes the arming UTXO's DAA into `armed`
-//     (KobCondAsk.sil `newArmed = OpTxInputDaaScore(self)`, same in KobCondBid / KobIfdAsk);
-//   * a repeat entry with "unlimited" repeats (rptAmount = 1 + 10^7·N) after ONE partial fill (amountLeft and rptAmount both move);
-//   * a trailing stop after a trail (stopPrice is not enumerated, documented).
-// Fixed (C5): records keep the LAST proven state (refreshed from indexer views / node resolutions, original kept for identity) and the
-// enumeration walks amountLeft / rptAmount jointly (rpt = rptOrig - filled, amount = amountOrig - filled + merged), in steps of the minimum
-// fill once the amount exceeds the candidate budget (a fill of the minimum fill is the case tested here).
+// Liveness of the record path: the placement record is the wallet's only way to find and cancel an
+// order without the indexer (records.ts header, RecoverPanel "the fallback that keeps cancel
+// working when the indexer disappears").
+//
+// resolveRecord enumerates continuations of the original state over amountLeft, armed and
+// rptAmount. The states a live order routinely reaches must be inside that set:
+// - An armed stop (bandDaa > 0) that fills partly. The covenant writes the arming UTXO's DAA into
+//   `armed` (KobCondAsk.sil `newArmed = OpTxInputDaaScore(self)`, the same in KobCondBid and
+//   KobIfdAsk).
+// - A repeat entry with "unlimited" repeats (rptAmount = 1 + 10^7 * N) after one partial fill,
+//   where amountLeft and rptAmount both move.
+// - A trailing stop after a trail. Its stopPrice is not enumerated.
+//
+// Records keep the last proven state, refreshed from indexer views and node resolutions, and keep
+// the original for identity. The enumeration walks amountLeft and rptAmount jointly
+// (rpt = rptOrig - filled, amount = amountOrig - filled + merged). Once the amount exceeds the
+// candidate budget it steps by the minimum fill, which is the case tested here.
 import { describe, expect, it } from 'vitest';
 import { loadKobNode } from './wasm.node';
 import { recordsFromBuilt, refreshFromResolved, resolveRecord } from './records';
@@ -25,10 +31,10 @@ const st = (kind: OrderState['kind'], hex: string) => kob.decodeState(kind, hex)
 const edit = (o: OrderState, fields: Record<string, string>): OrderState => ({ ...o, state: { ...(o.state as unknown as Record<string, string>), ...fields } } as unknown as OrderState);
 
 describe('C5-R1: the record path finds the states a live order routinely reaches', () => {
-  // The arming UTXO's DAA cannot be enumerated (any DAA): the wallet can only know it by having SEEN that UTXO. Realistic case (and the one
-  // the record keeps for): the wallet resolved the order while it rested at DAA 1234567 (refreshFromResolved stores that UTXO's DAA), then a
-  // band stop was armed inside a fill spending that UTXO (armed = 1234567) and filled partly (one minimum fill, new UTXO at 1234600).
-  // (As first written the record had never seen any UTXO of the order, so armed = 1234567 was unknowable without a by-covenant-id lookup.)
+  // The arming UTXO's DAA cannot be enumerated (any DAA), so the wallet can only know it by having
+  // seen that UTXO. The case covered: the wallet resolved the order while it rested at DAA 1234567
+  // (refreshFromResolved stores that UTXO's DAA), then a band stop was armed inside a fill spending
+  // that UTXO (armed = 1234567) and filled partly (one minimum fill, new UTXO at 1234600).
   it('an armed stop-loss that filled partly (armed = the arming UTXO DAA) resolves live', async () => {
     const { p, rec: placed } = recordOf('create.condAsk');
     const before = new FakeChain();
@@ -54,7 +60,8 @@ describe('C5-R1: the record path finds the states a live order routinely reaches
     const s = base.state as unknown as Record<string, string>;
     const n = BigInt(s.amountLeft);
     const f = BigInt(s.minFill);
-    // the wallet's "unlimited" repeat: rptAmount = 1 + 10,000,000 · N (cond-common.ts UNLIMITED_REPEAT_COUNT)
+    // the wallet's "unlimited" repeat: rptAmount = 1 + 10,000,000 · N (cond-common.ts
+    // UNLIMITED_REPEAT_COUNT)
     const unlimited = edit(base, { rptAmount: (1n + 10_000_000n * n).toString() });
     const rec2 = { ...rec, state: kob.encodeState(unlimited) };
     // one fill of the minimum fill: both move by it

@@ -1,5 +1,5 @@
-// The colour of a token's letter icon comes from its covenant id, never from its ticker or name: two tokens with one ticker look different, and a token
-// keeps its colour.
+// The colour of a token's letter icon comes from its covenant id, never from its ticker or name:
+// two tokens with one ticker look different, and a token keeps its colour.
 import { describe, expect, it } from 'vitest';
 import { avatarHue, avatarLetter } from './TokenIcon';
 

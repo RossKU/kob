@@ -7,7 +7,7 @@ import {
 } from './daa';
 
 const kob = loadKobNode();
-// 15:00:00 UTC; golden day-order vector: deadline 1_790_726_400, expiry D0 + 324_000 + 3_240
+// 15:00:00 UTC. Golden day-order vector: deadline 1_790_726_400, expiry D0 + 324_000 + 3_240.
 const clock: Clock = { daa: 1_000_000n, unixSeconds: 1_790_694_000n, rateMilli: 10_000 };
 
 describe('rate and conversions', () => {

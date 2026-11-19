@@ -106,12 +106,14 @@ describe('state price (per scale base units) <-> per whole token', () => {
   });
 
   it('converts a foreign scale and rounds in the requested direction', () => {
-    // a 12-decimal token quotes per 10^9 base units (the scale cap): 3 sompi per whole token is 0.003 sompi per 10^9 base units
+    // a 12-decimal token quotes per 10^9 base units (the scale cap): 3 sompi per whole token is
+    // 0.003 sompi per 10^9 base units
     expect(tokenPriceToStatePrice(3_000n, 12, 1_000_000_000n, 'down')).toBe(3n);
     expect(tokenPriceToStatePrice(3_001n, 12, 1_000_000_000n, 'down')).toBe(3n);
     expect(tokenPriceToStatePrice(3_001n, 12, 1_000_000_000n, 'up')).toBe(4n);
     expect(statePriceToTokenPrice(3n, 12, 1_000_000_000n)).toBe(3_000n);
-    // a scale of 500 base units on a 3-decimal token (not a power of ten: only to exercise the rounding)
+    // a scale of 500 base units on a 3-decimal token (not a power of ten: only to exercise the
+    // rounding)
     expect(tokenPriceToStatePrice(3n, 3, 500n, 'nearest')).toBe(2n);
     expect(statePriceToTokenPrice(1n, 3, 500n, 'up')).toBe(2n);
   });
@@ -121,7 +123,8 @@ describe('state price (per scale base units) <-> per whole token', () => {
     expect(formatPricePerToken(250_000_000n, 3, 1000n)).toBe('2.5');
     expect(parsePricePerToken('2.5', 3, 1000n, 'up')).toBe(250_000_000n);
     expect(parsePricePerToken('0.00000001', 3, 1000n, 'down')).toBe(1n);
-    // a 12-decimal token quoted per 10^9 base units: 1 sompi per 10^9 base units is 1000 sompi per token
+    // a 12-decimal token quoted per 10^9 base units: 1 sompi per 10^9 base units is 1000 sompi per
+    // token
     expect(formatPricePerToken(1n, 12, 1_000_000_000n, { maxFraction: 8 })).toBe('0.00001');
     expect(formatPricePerToken(1n, 3, 3n, { maxFraction: 8 })).toBe('0.00000333');
   });

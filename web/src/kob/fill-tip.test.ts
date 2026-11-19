@@ -1,4 +1,5 @@
-// The executor tip of the ticket's "Tip executors" option (kob/fill-tip.ts): the measured match fee x 1.25, per token over the minimum fill.
+// The executor tip of the ticket's "Tip executors" option (kob/fill-tip.ts): the measured match fee
+// x 1.25, per token over the minimum fill.
 import { describe, expect, it } from 'vitest';
 import { errors } from './plan-types';
 import { planOrder } from './plan';
@@ -32,7 +33,8 @@ describe('the measured match fee', () => {
       expect(fee!).toBeLessThan(KAS / 10n);
       const t = executorTip(env, p)!;
       expect(t.fee).toBe(fee);
-      // over the whole 20 tokens, not the 4-token minimum fill: the tip in all is about one match fee x 1.25
+      // over the whole 20 tokens, not the 4-token minimum fill: the tip in all is about one match
+      // fee x 1.25
       expect(t.tip).toBe(tipForFee(fee!, 20n * TOK, TOK));
       expect(t.total).toBe((20n * TOK * t.tip + TOK - 1n) / TOK);
       expect(t.total).toBeGreaterThanOrEqual((fee! * TIP_FEE_MARGIN_PCT) / 100n);
@@ -56,7 +58,7 @@ describe('the measured match fee', () => {
 
 describe('the founder case (2026-11-17)', () => {
   it('a 306 KAS buy of about 8.3 tokens: the tip in all is about 1.25 x one fill, not 1.25 x per minimum fill', () => {
-    // a 0.0172 KAS match; 8.3 tokens; the old rule (per 0.27-token minimum fill) asked about 30 x as much
+    // a 0.0172 KAS match; 8.3 tokens; a tip per 0.27-token minimum fill would be about 30 x as much
     const fee = 1_720_000n;
     const amount = 8_300n;
     const tip = tipForFee(fee, amount, TOK);

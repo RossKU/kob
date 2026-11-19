@@ -1,5 +1,6 @@
-// The kascov.io facts of the icon loader and the explorer link that came with the token page of a token only kascov.io names:
-// a saved copy kascov.io has none of is not asked for again for a day (a 404 is a console line each time), and the link to the explorer.
+// The kascov.io facts of the icon loader and the explorer link that came with the token page of a
+// token only kascov.io names: a saved copy kascov.io has none of is not asked for again for a day
+// (a 404 is a console line each time), and the link to the explorer.
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { createIconLoader, createMissingCopies, fetchVerifiedImage, kascovTokenUrl, MISSING_COPY_KEY, MISSING_COPY_TTL_MS } from './kascov';
@@ -61,10 +62,12 @@ describe('a saved copy kascov.io has none of is asked for once a day, not on eve
     // a new page load (a new loader, the same storage): no request at all for it
     expect(await mk().load('testnet-10', tok('a'))).toBeNull();
     expect(fetch).toHaveBeenCalledTimes(1);
-    // with the creator's own URL the copy is skipped and the creator's host is NOT tried (audit F10: the viewer's IP stays with kascov.io)
+    // With the creator's own URL the copy is skipped and the creator's host is NOT tried. The
+    // viewer's IP stays with kascov.io.
     expect(await mk().load('testnet-10', tok('a', 'https://img.example/a.png'))).toBeNull();
     expect(fetch.mock.calls.map((c) => String((c as unknown as unknown[])[0]))).toEqual([copyOf('a')]);
-    // another token is not affected; a day later the copy is asked for again (kascov.io may have saved it by then)
+    // Another token is not affected. A day later the copy is asked for again (kascov.io may have
+    // saved it by then).
     expect(await mk().load('testnet-10', tok('b'))).toBeNull();
     expect(fetch).toHaveBeenCalledTimes(2);
     clock += MISSING_COPY_TTL_MS + 1;

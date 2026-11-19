@@ -1,6 +1,8 @@
-// My orders for pair orders (KobPair, KobCondPair, KobIfdPair) from REAL planned states: the row's type is the KAS kind the order mirrors, its prices
-// are B per whole A (no KAS all-in price: the tip is KAS), it shows what it holds of each token and the trigger rule of a pair stop, and its only
-// amend is the full pair ticket (cancel-replace: the protocol has no in-place pair amend). The replace form re-plans the very same order.
+// My orders for pair orders (KobPair, KobCondPair, KobIfdPair) from REAL planned states: the row's
+// type is the KAS kind the order mirrors, its prices are B per whole A (no KAS all-in price: the
+// tip is KAS), it shows what it holds of each token and the trigger rule of a pair stop, and its
+// only amend is the full pair ticket (cancel-replace: the protocol has no in-place pair amend). The
+// replace form re-plans the very same order.
 import { describe, expect, it } from 'vitest';
 import type { OrderView } from '../../data/indexer-types';
 import { planOrder, type Intent } from '../../kob/plan';

@@ -1,4 +1,5 @@
-// The amount slider: percent of Max <-> amount (base units, any decimals), the minimum fill, and a buy's Max found by the planner search.
+// The amount slider: percent of Max <-> amount (base units, any decimals), the minimum fill, and a
+// buy's Max found by the planner search.
 import { describe, expect, it } from 'vitest';
 import { planOrder, type Intent } from '../../kob/plan';
 import { errors, type PlanEnv } from '../../kob/plan-types';
@@ -110,7 +111,8 @@ describe('the thumb keeps its position through ticks (founder, 2026-10-30: it ju
   it('Max moving, going unknown while the book reloads and coming back does not move it', () => {
     let mem = settle(1_000_000_000n); // 3.958 of 10 -> 40 %
     expect(mem).toEqual({ amount: AMOUNT, pct: 40, settled: true });
-    // ticks: Max a little different each time, a transient empty book (no Max), Max wildly different for a moment, then back
+    // ticks: Max a little different each time, a transient empty book (no Max), Max wildly
+    // different for a moment, then back.
     for (const max of [1_000_000_000n, 980_000_000n, null, 0n, null, 8_000_000n, 1200_000_000n, null, 1_000_000_000n, 970_000_000n]) {
       mem = trackPercent(mem, AMOUNT, max);
       expect(mem.pct, `Max ${max}`).toBe(40);

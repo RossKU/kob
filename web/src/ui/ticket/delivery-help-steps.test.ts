@@ -1,4 +1,5 @@
-// The step machine of the Delivery help's animation: play, pause, the loop with its hold on the last step, steps by hand, reduced motion.
+// The step machine of the Delivery help's animation: play, pause, the loop with its hold on the
+// last step, steps by hand, reduced motion.
 import { describe, expect, it } from 'vitest';
 import { has } from '../../i18n';
 import { END_HOLD_MS, LAST_STEP, STEP_MS, boughtAt, captionOf, delayOf, initialSteps, stepBy, tick, toggle } from './delivery-help-steps';
@@ -45,7 +46,8 @@ describe('the Delivery help steps', () => {
   it('every sentence of the help exists', () => {
     for (const m of ['each', 'collected', 'topup']) {
       for (const k of ['result', 'cost', 'aria', 'wait', 'for', 'tradeoff']) expect(has(`ticket.dhelp.${k}.${m}`), `${k}.${m}`).toBe(true);
-      // the long form of the select and Settings, the short one of the help and the order details, and the hint under the select
+      // The long form of the select and Settings, the short one of the help and the order details,
+      // and the hint under the select.
       for (const k of ['opt', 'short']) expect(has(`ticket.${k}.delivery.${m}`), `${k}.${m}`).toBe(true);
       expect(has(`ticket.delivery.hint.${m}`), `hint.${m}`).toBe(true);
     }

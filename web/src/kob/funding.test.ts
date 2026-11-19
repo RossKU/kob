@@ -140,7 +140,8 @@ describe('selectTokens: the covering set, then the spare slots take the smallest
     const change = t(10n);
     const fresh = new Set([change.transactionId.toLowerCase()]);
     const u = [change, t(12n), t(1n)];
-    // the smallest covering one would be the fresh 10; the settled 12 covers 8, and the spare slot takes the settled 1, never the change
+    // the smallest covering one would be the fresh 10; the settled 12 covers 8, and the spare slot
+    // takes the settled 1, never the change
     expect(units(selectTokens(u, 8n * m.scale, 3, null, { fresh }))).toEqual([12n, 1n]);
     // 15 needs the change: covered largest first with it, the settled 1 rides along
     expect(units(selectTokens(u, 15n * m.scale, 3, null, { fresh }))).toEqual([12n, 10n, 1n]);

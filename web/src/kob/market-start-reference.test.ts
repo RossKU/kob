@@ -1,6 +1,7 @@
-// The start of a market / close order is the best price of the indexer book. The last fill comes from the same indexer, so only a further
-// indexer is an independent reference: a pair market without one is accepted, one that answers checks it; a configured indexer that does not
-// answer is reported, never dropped silently.
+// The start of a market / close order is the best price of the indexer book. The last fill comes
+// from the same indexer, so only a further indexer is an independent reference: a pair market
+// without one is accepted, one that answers checks it; a configured indexer that does not answer is
+// reported, never dropped silently.
 import { describe, expect, it } from 'vitest';
 import { planOrder } from './plan';
 import { makePairEnv } from './orders/pair-fixtures';
@@ -42,7 +43,8 @@ describe('references from further indexers', () => {
       { covenantId: 'a' as never, toBook: (v) => v as unknown as ReturnType<typeof book> },
       { covenantId: 'b' as never, toBook: (v) => v as unknown as ReturnType<typeof book>, scale: 100n },
     );
-    // buying A with B: A's ask over B's bid; selling A for B: A's bid over B's ask (B base units per whole A)
+    // buying A with B: A's ask over B's bid; selling A for B: A's bid over B's ask (B base units
+    // per whole A)
     expect(r.touches).toEqual([{ label: 'x', bestAsk: 3_000n, bestBid: 1_000n }]);
     expect(r.unavailable).toEqual(['half']);
   });
