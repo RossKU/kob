@@ -3,20 +3,28 @@
 //! receive UTXOs (form 1), refunds that release a bought-custody, claims (CL1 to CL3), pair
 //! delivery fills and refunds, and the router's bought-custody legs.
 //!
-//! | Id | Attack |
-//! |---|---|
-//! | DLV-01 | custody stand-in: another order's custody, the attacker's own UTXO, a wrong amount, borrowing on, another extension |
-//! | DLV-02 | look-alike receive state: the attacker's, a lower threshold, a non-canonical guard, another borrow scheme or extension |
-//! | DLV-03 | cross-mode delivery: a delivery shaped for another mode or form, the order's mode or `form` argument changed |
-//! | DLV-04 | tip over-take: one more sompi (or a carrier) out of the escrow, the delivery's KAS below its due |
-//! | DLV-05 | claim by a non-maker: the attacker signs the claim, or a keeper refunds before it is due |
-//! | DLV-06 | `bought` inflated or deflated in the continuation (custody unchanged, or both by one unit) |
-//! | DLV-07 | a second top-up of the same receive UTXO by a second mode-2 order in one transaction |
-//! | DLV-08 | the receive UTXO's successor moved off the delivery slot |
-//! | DLV-09 | stray-guard bypass with a fake custody (an exact look-alike owned by the order, named or swept) |
-//! | DLV-10 | a fill or claim that keeps `bought` while the custody leaves, or releases it while continuing |
-//! | DLV-11 | a refund that drops the custody, sends it elsewhere, cuts its KAS or moves its slot |
-//! | DLV-12 | an ending fill that leaves the custody behind |
+//! The attacks, by id:
+//!
+//! - DLV-01 custody stand-in: another order's custody, the attacker's own UTXO, a wrong amount,
+//!   borrowing on, another extension
+//! - DLV-02 look-alike receive state: the attacker's, a lower threshold, a non-canonical guard,
+//!   another borrow scheme or extension
+//! - DLV-03 cross-mode delivery: a delivery shaped for another mode or form, the order's mode or
+//!   `form` argument changed
+//! - DLV-04 tip over-take: one more sompi (or a carrier) out of the escrow, the delivery's KAS
+//!   below its due
+//! - DLV-05 claim by a non-maker: the attacker signs the claim, or a keeper refunds before it is
+//!   due
+//! - DLV-06 `bought` inflated or deflated in the continuation (custody unchanged, or both by one
+//!   unit)
+//! - DLV-07 a second top-up of the same receive UTXO by a second mode-2 order in one transaction
+//! - DLV-08 the receive UTXO's successor moved off the delivery slot
+//! - DLV-09 stray-guard bypass with a fake custody (an exact look-alike owned by the order, named
+//!   or swept)
+//! - DLV-10 a fill or claim that keeps `bought` while the custody leaves, or releases it while
+//!   continuing
+//! - DLV-11 a refund that drops the custody, sends it elsewhere, cuts its KAS or moves its slot
+//! - DLV-12 an ending fill that leaves the custody behind
 //!
 //! Each attempt must be refused, or is a designed note by an explicit rule (`rt::classify`,
 //! `rt::ALLOW`). Maker-signed claims attacked from the maker's own seat (DLV-10) are notes: the
@@ -25,7 +33,13 @@
 //! The existing tests per attack id (hand-built scenarios, ablation, pre-sign) are mapped in
 //! docs/security/redteam-coverage.md.
 //!
-//! Run: cargo test -p kob-tests --test redteam_delivery_tests -- --nocapture --test-threads=2 (the pair tests: add --ignored)
+//! Run:
+//!
+//! ```text
+//! cargo test -p kob-tests --test redteam_delivery_tests -- --nocapture --test-threads=2
+//! ```
+//!
+//! The pair tests are ignored by default. Run them with `--ignored`.
 
 #[path = "../../../kob-protocol/tests/common/mod.rs"]
 mod fx;

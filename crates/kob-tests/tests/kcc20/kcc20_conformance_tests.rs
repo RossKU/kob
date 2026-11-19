@@ -30,7 +30,11 @@
 //! reference. For the 8/8 variant it is ADAPTED: 4 inputs are accepted and 9 inputs are rejected
 //! (counted as `adapted` in the summary).
 //!
-//! Run: cargo test --release -p kob-tests --test kcc20_conformance_tests -- --nocapture --test-threads=1
+//! Run:
+//!
+//! ```text
+//! cargo test --release -p kob-tests --test kcc20_conformance_tests -- --nocapture --test-threads=1
+//! ```
 
 #![allow(clippy::too_many_arguments)]
 

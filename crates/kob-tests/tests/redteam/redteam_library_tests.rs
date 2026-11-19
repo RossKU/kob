@@ -13,7 +13,13 @@
 //! The existing tests per attack id (hand-built scenarios, ablation, pre-sign) are mapped in
 //! docs/security/redteam-coverage.md.
 //!
-//! Run: cargo test -p kob-tests --test redteam_library_tests -- --nocapture --test-threads=2 (the pair tests: add --ignored)
+//! Run:
+//!
+//! ```text
+//! cargo test -p kob-tests --test redteam_library_tests -- --nocapture --test-threads=2
+//! ```
+//!
+//! The pair tests are ignored by default. Run them with `--ignored`.
 
 #[path = "../../../kob-protocol/tests/common/mod.rs"]
 mod fx;

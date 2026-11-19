@@ -1,12 +1,14 @@
 //! Runs the KCC-23 conformance vectors (kaspanet/kccs `main` 1516a6c (#26, KCC-23 status Draft),
 //! `kcc-0023/vectors/conformance.json`, vendored unmodified in `crates/kob-tests/vectors/kcc23/`,
-//! see PROVENANCE.md there) against KOB's implementation:
+//! see PROVENANCE.md there) against KOB's implementation.
 //!
-//! | Vector section | KOB code under test |
-//! |---|---|
-//! | binding (payload digest, rest preimage and digest, preparation id, covenant id) | rusty-kaspa v2.1.0 hashing KOB builds with, and `kob_protocol::kcc23::verify_binding` |
-//! | binding_mutations | `kcc23::verify_binding` refuses each (changed metadata: the recomputed preparation id differs; version 0) |
-//! | declarations | `kcc23::decode` / `kcc23::encode` and `kcc23::TokenDeclaration::from_payload` |
+//! Each vector section and the KOB code under test:
+//!
+//! - binding (payload digest, rest preimage and digest, preparation id, covenant id): rusty-kaspa
+//!   v2.1.0 hashing KOB builds with, and `kob_protocol::kcc23::verify_binding`
+//! - binding_mutations: `kcc23::verify_binding` refuses each (changed metadata: the recomputed
+//!   preparation id differs; version 0)
+//! - declarations: `kcc23::decode` / `kcc23::encode` and `kcc23::TokenDeclaration::from_payload`
 //!
 //! Plus KOB's own writer: `kcc23::TokenMetadata` of the vector's example token serialises to the
 //! vector's `metadata_text`.

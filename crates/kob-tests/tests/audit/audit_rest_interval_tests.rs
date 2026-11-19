@@ -16,7 +16,12 @@
 //! The honest controls (evidence one DAA old with `interval` 0) are refused by the rest time, and
 //! the honest update (the evidence rested) is accepted.
 //!
-//! Run: cargo test --release -p kob-tests --test audit_rest_interval_tests -- --nocapture --test-threads=1
+//! Run:
+//!
+//! ```text
+//! cargo test --release -p kob-tests --test audit_rest_interval_tests -- \
+//!     --nocapture --test-threads=1
+//! ```
 
 #[path = "../common/mod.rs"]
 mod common;

@@ -1,19 +1,30 @@
 //! Runs the KCC-1 conformance vectors (kaspanet/kccs `main` 411b41b,
 //! `kcc-0001/vectors/conformance.json`, vendored unmodified in `crates/kob-tests/vectors/kcc1/`,
-//! see PROVENANCE.md there) against KOB's implementation:
+//! see PROVENANCE.md there) against KOB's implementation.
 //!
-//! | Vector section | KOB code under test |
-//! |---|---|
-//! | hash_function | `kob_protocol::kcc1::{hash, hash_keyed}` and the script engine's `OP_BLAKE3` / `OP_BLAKE3_WITH_KEY` (what the programs run) |
-//! | canonical_type_names | `kcc1::{type_name, parse_type_name}` |
-//! | data_pushes | `kob_protocol::script::push_data` (KOB's argument/redeem push), `kcc1::{push_minimal, push_explicit}`, and the `silverscript-abi` argument and state encoders KOB encodes every program with |
-//! | scalar_encodings, composite_encodings | the `silverscript-abi` encoders (argument and state), `kcc1::decode_arguments` / `kcc1::decode_state` round trips |
-//! | dispatch_and_arguments, zero_argument_dispatch, record_dispatch | `kcc1::function_signature` / `dispatch_tag`, AND the SilverScript compiler KOB builds its programs with (each vector compiled as a real entrypoint) |
-//! | p2sh_envelope, continuation_program | `kob_protocol::script::p2sh_spk`, `kcc1::split_invocation`, `kcc2::p2sh_authority` |
-//! | state_encoding, template_views | `silverscript-abi` state encoder, `kcc1::decode_state`, `silverscript_abi::template_hash` |
-//! | template_hashes | `silverscript_abi::template_hash` (the hash KOB pins) and an independent recomputation with `kcc1::hash` |
-//! | rejection_vectors | `kcc1::{decode_arguments, decode_state, validate_argument_type, check_entrypoints}`, the encoders, the compiler |
-//! | hash_committed_virtual_element | `silverscript_abi::encode_struct_payload` (Packed) and `kcc1::hash` |
+//! Each vector section and the KOB code under test:
+//!
+//! - hash_function: `kob_protocol::kcc1::{hash, hash_keyed}` and the script engine's `OP_BLAKE3` /
+//!   `OP_BLAKE3_WITH_KEY` (what the programs run)
+//! - canonical_type_names: `kcc1::{type_name, parse_type_name}`
+//! - data_pushes: `kob_protocol::script::push_data` (KOB's argument/redeem push),
+//!   `kcc1::{push_minimal, push_explicit}`, and the `silverscript-abi` argument and state encoders
+//!   KOB encodes every program with
+//! - scalar_encodings, composite_encodings: the `silverscript-abi` encoders (argument and state),
+//!   `kcc1::decode_arguments` / `kcc1::decode_state` round trips
+//! - dispatch_and_arguments, zero_argument_dispatch, record_dispatch: `kcc1::function_signature` /
+//!   `dispatch_tag`, AND the SilverScript compiler KOB builds its programs with (each vector
+//!   compiled as a real entrypoint)
+//! - p2sh_envelope, continuation_program: `kob_protocol::script::p2sh_spk`,
+//!   `kcc1::split_invocation`, `kcc2::p2sh_authority`
+//! - state_encoding, template_views: `silverscript-abi` state encoder, `kcc1::decode_state`,
+//!   `silverscript_abi::template_hash`
+//! - template_hashes: `silverscript_abi::template_hash` (the hash KOB pins) and an independent
+//!   recomputation with `kcc1::hash`
+//! - rejection_vectors: `kcc1::{decode_arguments, decode_state, validate_argument_type,
+//!   check_entrypoints}`, the encoders, the compiler
+//! - hash_committed_virtual_element: `silverscript_abi::encode_struct_payload` (Packed) and
+//!   `kcc1::hash`
 //!
 //! Plus a sweep over every committed KOB program artifact (orders, router): every dispatch tag
 //! recomputed from its ABI types under KCC-1 section 3.5.1, every type a KCC-1 type, every template

@@ -7,14 +7,31 @@
 //!
 //! Program as reconstructed in the review (both templates, one entry, every covenant token input
 //! runs all of it):
-//!   n_out = len(owners)/32 in 1..=5; n_in = OpCovInputCount(own cov) in 1..=4; OpCovOutputCount == n_out
-//!   for i < n_in: state_i = last 2433/2732 bytes of the sigscript of covenant input i; auth by state_i.type:
-//!       0 checkSig(sigs[65i..], owner)  1 inSpk(wits[i]) == P2SH(owner)  2 inCovId(wits[i]) == owner
-//!       3 inSpk(wits[i]) == P2PK(owner)  else fail;  amount_i >= 0;  sum_in += amount_i
-//!   for j < n_out: (amount_j >= 1 || (minter_j && amount_j == 0)); amount_j <= 1e9;
-//!       outSpk(covOutIdx(j)) == P2SH(state_j || own suffix)
-//!   if !self.is_minter: sum_in == sum_out and no output minter flag (a minter input skips both checks)
-//!   2732 only: witness index in [0, nIns), type-2 owner != 0^32, input amount <= 1e9, output type in 0..=3.
+//!
+//! ```text
+//! n_out = len(owners)/32 in 1..=5
+//! n_in = OpCovInputCount(own cov) in 1..=4
+//! OpCovOutputCount == n_out
+//! for i < n_in:
+//!     state_i = last 2433/2732 bytes of the sigscript of covenant input i
+//!     auth by state_i.type:
+//!         0 checkSig(sigs[65i..], owner)
+//!         1 inSpk(wits[i]) == P2SH(owner)
+//!         2 inCovId(wits[i]) == owner
+//!         3 inSpk(wits[i]) == P2PK(owner)
+//!         else fail
+//!     amount_i >= 0
+//!     sum_in += amount_i
+//! for j < n_out:
+//!     amount_j >= 1 || (minter_j && amount_j == 0)
+//!     amount_j <= 1e9
+//!     outSpk(covOutIdx(j)) == P2SH(state_j || own suffix)
+//! if !self.is_minter:
+//!     sum_in == sum_out and no output minter flag (a minter input skips both checks)
+//! 2732 only:
+//!     witness index in [0, nIns), type-2 owner != 0^32, input amount <= 1e9,
+//!     output type in 0..=3
+//! ```
 //!
 //! Notes on the transactions: token outputs are bound to a TOKEN input (a binding to a non-covenant
 //! input is a genesis and fails the covenant context), and SINGLE|ANYONECANPAY is 0x84 (0x83 is not
