@@ -101,6 +101,8 @@ A token argument is a ticker or a covenant id. Sources, in order:
 - **Decimals of a token without a registry entry.** They come from the scale its orders use. A token without orders and
   without a KCC-23 declaration has none anywhere, so its first order names them: `--decimals N` (0..=9, the scale is 10^N).
   Once the token had an order, that scale decides; a `--decimals` that disagrees is refused.
+  `kob place` checks decimals that only the indexer names against the orders the node confirms. When no order of the
+  token is confirmed on the node, nothing else confirms them, so `kob place` needs `--decimals N` with the same value.
 - **Declared tokens (KCC-23).** The on-chain declaration comes first (`docs/spec/token-metadata.md` section 4). The CLI asks
   the indexer for the launch proof (`GET /v1/tokens/{id}/declaration`), verifies it against the covenant id (a proof that does
   not verify or names another id is refused), and takes the declared decimals (scale `10^min(decimals, 9)`) and symbol. A

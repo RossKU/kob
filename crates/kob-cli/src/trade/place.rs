@@ -80,7 +80,9 @@ AMOUNTS (always with a unit; never rounded)
   --decimals N   the first order of a token without a registry entry and without orders: its decimals (0..=9; the scale
                  is 10^N). The chain records no decimals: give the ones the issuer chose. Once the token had an order,
                  the scale its first order set decides, also after every order of it ended (a --decimals that disagrees
-                 is refused). This machine keeps them for the next command until the indexer lists the order
+                 is refused). This machine keeps them for the next command until the indexer lists the order.
+                 Also needed, with the same value, when only the indexer names the decimals and no order of the token
+                 is confirmed on the node
   WHEN           2026-10-20T00:00Z (UTC) or daa:N;   DURATION 30s, 5m or 300daa;   BPS 3% or 300bps
 
 SAFETY
@@ -657,6 +659,19 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<Pl
     let depth = p.get("--amount").and_then(|v| parse_token_amount(v, &a.unit(), "--amount").ok()).unwrap_or(0);
     let needs = Needs { a: side == Side::Sell, b: b.is_some() && (side == Side::Buy || if_done) };
     let (mut env, mut notes) = env_sized(c, &a, b.as_ref(), needs, maker, depth)?;
+    // Decimals that only the indexer names, with no order on the node to confirm them, read every
+    // amount and price of the order: wrong ones price it 10^k off. `--decimals N`, which
+    // `resolve_with` has checked against them, confirms them; without it nothing is signed.
+    if entered.is_none() && notes.iter().any(|i| i.code == "TOKEN_DECIMALS_UNCHECKED") {
+        return Err(format!(
+            "{}: its decimals ({}) come from the indexer alone (no registry entry, no KCC-23 declaration, no order of it \
+             confirmed on the node), and every amount and price reads with them: check them, then give `--decimals {}` \
+             to confirm them; nothing signed",
+            a.name(),
+            a.decimals,
+            a.decimals
+        ));
+    }
     notes.extend(found);
     env.carrier = carrier;
     env.guards_acknowledged = p.has("--ack-no-guards");
@@ -802,6 +817,9 @@ pub fn env_sized(
                 }
                 None => {
                     guards.push("book".to_string());
+                    if probe {
+                        notes.push(decimals_unchecked(a));
+                    }
                     Default::default()
                 }
             };
@@ -857,6 +875,21 @@ pub fn env_sized(
     Ok((env, notes))
 }
 
+/// The finding for decimals of an unlisted token that only the indexer names and no order on the
+/// node confirms. `kob place` refuses it unless `--decimals` names the same ([`env_for`]).
+fn decimals_unchecked(a: &TokenMarket) -> Issue {
+    Issue {
+        code: "TOKEN_DECIMALS_UNCHECKED",
+        severity: Severity::Warning,
+        message: format!(
+            "{}: its decimals ({}) come from the indexer, and no order on the node confirms them (no registry entry, no \
+             KCC-23 declaration): every amount and price reads with them",
+            a.name(),
+            a.decimals
+        ),
+    }
+}
+
 /// The decimals of an unlisted token that come from the indexer, against the scales of the orders
 /// the node confirms (`book_check`). The indexer reading every amount and price with decimals the
 /// orders on the node do not use is refused.
@@ -874,16 +907,7 @@ fn decimals_check(a: &TokenMarket, v: &super::book_check::VerifiedBook) -> Resul
         ));
     }
     Ok(Some(if v.confirmed == 0 {
-        Issue {
-            code: "TOKEN_DECIMALS_UNCHECKED",
-            severity: Severity::Warning,
-            message: format!(
-                "{}: its decimals ({}) come from the indexer, and no order on the node confirms them (no registry entry, no \
-                 KCC-23 declaration): check them yourself, every amount and price reads with them",
-                a.name(),
-                a.decimals
-            ),
-        }
+        decimals_unchecked(a)
     } else {
         Issue {
             code: "TOKEN_DECIMALS_CHECKED",

@@ -305,10 +305,10 @@ fn run(f: fn(&[String]) -> i32, args: Vec<String>) -> i32 {
 fn place_signs_only_with_yes_and_matches_the_planner() {
     let w = world("place", &[]);
     let place = crate::trade::place::run;
-    let base = "limit --token TST --side sell --amount 10TST --price 3KAS";
+    let base = "limit --token TST --decimals 3 --side sell --amount 10TST --price 3KAS";
     // A bare number has no unit, a key on the command line is refused, and without --yes and
     // without a terminal nothing is signed.
-    assert_eq!(run(place, w.args(0x11, "limit --token TST --side sell --amount 10 --price 3KAS --yes")), 2);
+    assert_eq!(run(place, w.args(0x11, "limit --token TST --decimals 3 --side sell --amount 10 --price 3KAS --yes")), 2);
     let mut leak = w.args(0x11, &format!("{base} --yes"));
     leak.extend(["--key".into(), "11".repeat(32)]);
     assert_eq!(run(place, leak), 2);
@@ -333,19 +333,19 @@ fn place_signs_only_with_yes_and_matches_the_planner() {
     assert_eq!(rec[0].custody.as_ref().unwrap().state.amount(), 10 * SCALE);
     // A buy, a stop-market sell, an IFD buy-first, and a market order against an empty book, which
     // is refused for lack of liquidity.
-    assert_eq!(run(place, w.args(0x11, "limit --token TST --side buy --amount 5TST --price 2KAS --tip 0.001KAS --yes")), 0);
+    assert_eq!(run(place, w.args(0x11, "limit --token TST --decimals 3 --side buy --amount 5TST --price 2KAS --tip 0.001KAS --yes")), 0);
     let s = w.signed(".place.json");
     let AnyState::KobBid(b) = &recover_orders(&s.tx).unwrap()[0].order else { panic!() };
     assert_eq!((b.price, b.tip, b.delivery_carrier, b.min_fill), (200_000_000, 100_000, KAS as i64, 5000));
-    assert_eq!(run(place, w.args(0x11, "stop-market --token TST --side sell --amount 4TST --stop 2.5KAS --yes")), 0);
+    assert_eq!(run(place, w.args(0x11, "stop-market --token TST --decimals 3 --side sell --amount 4TST --stop 2.5KAS --yes")), 0);
     let s = w.signed(".place.json");
     assert!(
         matches!(recover_orders(&s.tx).unwrap()[0].order, AnyState::KobCondAsk(ref c) if c.stop_price == 250_000_000 && c.slip_bps == 300)
     );
-    assert_eq!(run(place, w.args(0x11, "ifd --token TST --side buy --amount 8TST --price 2KAS --take-profit 2.5KAS --yes")), 0);
+    assert_eq!(run(place, w.args(0x11, "ifd --token TST --decimals 3 --side buy --amount 8TST --price 2KAS --take-profit 2.5KAS --yes")), 0);
     let s = w.signed(".place.json");
     assert!(matches!(recover_orders(&s.tx).unwrap()[0].order, AnyState::KobIfdBid(_)));
-    assert_eq!(run(place, w.args(0x11, "market --token TST --side buy --amount 1TST --yes")), 1);
+    assert_eq!(run(place, w.args(0x11, "market --token TST --decimals 3 --side buy --amount 1TST --yes")), 1);
     // A carrier below the covenant minimum, and an option of another kind.
     assert_eq!(run(place, w.args(0x11, &format!("{base} --carrier 0.05KAS --yes"))), 1);
     assert_eq!(run(place, w.args(0x11, &format!("{base} --stop 1KAS --yes"))), 2);
@@ -359,22 +359,22 @@ fn place_every_new_kind() {
     let order = |suffix: &str| recover_orders(&w.signed(suffix).tx).unwrap()[0].order.clone();
     // TWAP, which implies a sell, and DCA, which implies a buy: the interval and the slice are in
     // the state.
-    assert_eq!(run(place, w.args(0x11, "twap --token TST --amount 10TST --slice 2TST --interval 60s --price 3KAS --yes")), 0);
+    assert_eq!(run(place, w.args(0x11, "twap --token TST --decimals 3 --amount 10TST --slice 2TST --interval 60s --price 3KAS --yes")), 0);
     let AnyState::KobAsk(a) = order(".place.json") else { panic!() };
     assert_eq!((a.interval, a.max_fill, a.amount_left), (600, 2 * SCALE, 10 * SCALE));
-    assert_eq!(run(place, w.args(0x11, "dca --token TST --amount 4TST --slice 1TST --interval 600daa --price 2KAS --yes")), 0);
+    assert_eq!(run(place, w.args(0x11, "dca --token TST --decimals 3 --amount 4TST --slice 1TST --interval 600daa --price 2KAS --yes")), 0);
     let AnyState::KobBid(b) = order(".place.json") else { panic!() };
     assert_eq!((b.interval, b.max_fill), (600, SCALE));
     // A Dutch decay, a streaming buy from the displayed price, a trailing stop, and a repeat IFD
     // with a stop entry.
     assert_eq!(
-        run(place, w.args(0x11, "dutch --token TST --side sell --amount 2TST --price 3KAS --price-end 2KAS --duration 10m --yes")),
+        run(place, w.args(0x11, "dutch --token TST --decimals 3 --side sell --amount 2TST --price 3KAS --price-end 2KAS --duration 10m --yes")),
         0
     );
     let AnyState::KobAsk(a) = order(".place.json") else { panic!() };
     assert_eq!((a.price, a.price_end, a.active_from), (300_000_000, 200_000_000, 1_000_030));
     assert_eq!(
-        run(place, w.args(0x11, "streaming --token TST --side buy --amount 1TST --displayed-price 2.5KAS --tolerance 1% --yes")),
+        run(place, w.args(0x11, "streaming --token TST --decimals 3 --side buy --amount 1TST --displayed-price 2.5KAS --tolerance 1% --yes")),
         0
     );
     let AnyState::KobBid(b) = order(".place.json") else { panic!() };
@@ -384,7 +384,7 @@ fn place_every_new_kind() {
             place,
             w.args(
                 0x11,
-                "trailing-stop --token TST --side sell --amount 3TST --stop 2KAS --trail-step 0.01KAS --trail-gap 0.05KAS --yes"
+                "trailing-stop --token TST --decimals 3 --side sell --amount 3TST --stop 2KAS --trail-step 0.01KAS --trail-gap 0.05KAS --yes"
             )
         ),
         0
@@ -394,7 +394,7 @@ fn place_every_new_kind() {
     assert_eq!(
         run(
             place,
-            w.args(0x11, "repeat-ifd --token TST --side buy --amount 4TST --price 2KAS --entry-stop 1.9KAS --take-profit 2.5KAS --repeat-count 3 --yes")
+            w.args(0x11, "repeat-ifd --token TST --decimals 3 --side buy --amount 4TST --price 2KAS --entry-stop 1.9KAS --take-profit 2.5KAS --repeat-count 3 --yes")
         ),
         0
     );
@@ -404,22 +404,22 @@ fn place_every_new_kind() {
     // Refused before anything is read: a side against the kind, a half trailing stop, and an
     // option of another kind.
     assert_eq!(
-        run(place, w.args(0x11, "twap --token TST --side buy --amount 1TST --slice 1TST --interval 60s --price 3KAS --yes")),
+        run(place, w.args(0x11, "twap --token TST --decimals 3 --side buy --amount 1TST --slice 1TST --interval 60s --price 3KAS --yes")),
         2
     );
     assert_eq!(
-        run(place, w.args(0x11, "trailing-stop --token TST --side sell --amount 1TST --stop 2KAS --trail-step 0.01KAS --yes")),
+        run(place, w.args(0x11, "trailing-stop --token TST --decimals 3 --side sell --amount 1TST --stop 2KAS --trail-step 0.01KAS --yes")),
         2
     );
     assert_eq!(
         run(
             place,
-            w.args(0x11, "dutch --token TST --side sell --amount 1TST --price 3KAS --price-end 2KAS --duration 1m --slice 1TST --yes")
+            w.args(0x11, "dutch --token TST --decimals 3 --side sell --amount 1TST --price 3KAS --price-end 2KAS --duration 1m --slice 1TST --yes")
         ),
         2
     );
     // Close against an empty book has no bids to sell into.
-    assert_eq!(run(place, w.args(0x11, "close --token TST --yes")), 1);
+    assert_eq!(run(place, w.args(0x11, "close --token TST --decimals 3 --yes")), 1);
     assert_eq!(w.submitted(), 6);
 }
 
@@ -753,7 +753,7 @@ fn an_unlisted_token_commitment_must_match_the_wallets_holdings() {
     };
     set_ext([0xdd; 32]);
     let place = crate::trade::place::run;
-    let buy = "limit --token TST --side buy --amount 5TST --price 2KAS --yes";
+    let buy = "limit --token TST --decimals 3 --side buy --amount 5TST --price 2KAS --yes";
     assert_eq!(run(place, w.args(0x11, buy)), 1);
     assert_eq!(w.submitted(), 0);
     set_ext(EXT);
@@ -881,6 +881,21 @@ fn indexer_decimals_that_the_orders_on_the_node_contradict_are_refused() {
     w.indexer_state.lock().unwrap().routes.get_mut("/v1/tokens").unwrap()["tokens"][0]["decimals"] = json!(3);
     assert_eq!(run(place, w.args(0x11, sell)), 0);
     assert!(w.issue_codes(".place.json").iter().any(|c| c == "TOKEN_DECIMALS_CHECKED"));
+}
+
+/// Decimals of an unlisted token that only the indexer names, with no order on the node to
+/// confirm them, need `--decimals` with the same value: otherwise a limit price reads 10^k off.
+#[test]
+fn indexer_decimals_that_nothing_confirms_need_decimals() {
+    let w = world("decimals-none", &[]);
+    let place = crate::trade::place::run;
+    let buy = "limit --token TST --side buy --amount 1TST --price 2KAS --yes";
+    assert_eq!(run(place, w.args(0x11, buy)), 1);
+    assert_eq!(run(place, w.args(0x11, &format!("{buy} --decimals 4"))), 1, "another scale than the indexer's");
+    assert_eq!(w.submitted(), 0);
+    assert_eq!(run(place, w.args(0x11, &format!("{buy} --decimals 3"))), 0);
+    assert!(w.issue_codes(".place.json").iter().any(|c| c == "TOKEN_DECIMALS_UNCHECKED"));
+    assert_eq!(w.submitted(), 1);
 }
 
 const TOKEN_B: [u8; 32] = [0x71; 32];
@@ -1252,7 +1267,7 @@ fn a_second_sell_within_the_indexer_lag_spends_the_first_ones_token_change() {
     use kob_protocol::tx::spk_from_string;
     let w = world("backtoback", &[]);
     let place = crate::trade::place::run;
-    let sell = |p: &str| format!("limit --token TST --side sell --amount 30TST --price {p} --yes");
+    let sell = |p: &str| format!("limit --token TST --decimals 3 --side sell --amount 30TST --price {p} --yes");
     assert_eq!(run(place, w.args(0x11, &sell("3KAS"))), 0);
     let s = w.signed(".place.json");
     // The node confirms the transaction, which the indexer has not seen. Its inputs are spent and
@@ -1332,11 +1347,12 @@ fn the_first_order_scale_of_an_unlisted_token_sticks() {
     // machine, so the scale of the market decides.
     std::fs::remove_file(crate::recent::decimals_path().unwrap()).unwrap();
     set("market_scale", json!(SCALE));
-    assert_eq!(run(place, w.args(0x11, &buy(""))), 0);
-    assert_eq!((w.submitted(), scale_of(&w)), (3, SCALE));
+    // No order on the node confirms the indexer's scale any more (they all ended): `--decimals`
+    // with the same value must.
+    assert_eq!(run(place, w.args(0x11, &buy(""))), 1);
     assert_eq!(run(place, w.args(0x11, &buy(" --decimals 2"))), 1, "a second scale on the market");
     assert_eq!(run(place, w.args(0x11, &buy(" --decimals 3"))), 0);
-    assert_eq!(w.submitted(), 4);
+    assert_eq!((w.submitted(), scale_of(&w)), (3, SCALE));
     // The book reads at the scale of the market.
     w.indexer_state.lock().unwrap().routes.insert(
         format!("/v1/books/{}?depth=20", to_hex(&TOKEN)),
@@ -1540,7 +1556,7 @@ fn every_trading_command_refuses_a_fee_above_the_ceiling_unless_allowed() {
     let to = address_of(&p2pk_spk(&taker), NET).unwrap();
     type Case<'a> = (&'a str, fn(&[String]) -> i32, u8, String, &'a str);
     let cases: Vec<Case> = vec![
-        ("place", crate::trade::place::run, 0x11, "limit --token TST --side sell --amount 10TST --price 3KAS".into(), ".place.json"),
+        ("place", crate::trade::place::run, 0x11, "limit --token TST --decimals 3 --side sell --amount 10TST --price 3KAS".into(), ".place.json"),
         ("replace", crate::trade::actions::run_replace, 0x11, format!("{} --price 3.1KAS", to_hex(&a)), ".replace.json"),
         (
             "take",
