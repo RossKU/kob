@@ -75,3 +75,32 @@ fn a_merge_of_full_carriers_keeps_the_configured_carrier() {
     let j = &r.jobs[0];
     assert!(j.released > 0 && j.released < 2 * KAS as i64, "merged onto what the carriers pay: released {}", j.released);
 }
+
+/// Security review 2026-11-19 E-M1: a sale's rest never gets a carrier out of the operator's funding. A junk KRON token
+/// sent to the operator on a small carrier, a small bid for part of it and an ask to pass the price floor: the rest's
+/// carrier is what the sold carrier and the proceeds pay after the fee, and the funding (the presence) comes back whole.
+#[test]
+fn a_kron_sale_leaves_its_rest_on_what_the_sale_pays() {
+    let cfg = MaintenanceConfig { merge: false, ..Default::default() };
+    // 2 whole junk tokens on a 0.5 KAS carrier; a bid for 1 whole at 2.60 (pays about 2.6 KAS), an ask at 2.70
+    let bid = l_bid_a(100, K3, 2, P260, WHOLE);
+    let ask = l_ask_a(300, K3, 9, 270_000_000, 10 * WHOLE);
+    let mut inp = input(vec![own(K3, 2 * WHOLE, KAS / 2)], vec![funding(50 * KAS)]);
+    inp.orders = vec![bid, ask];
+    let r = tick(&inp, &cfg, &signer());
+    assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
+    let j = &r.jobs[0];
+    assert_eq!(j.kind, MaintKind::Sell);
+    assert!(j.validation.is_some());
+    assert!(change(j) >= 50 * KAS, "change {} below the 50 KAS of funding", change(j));
+    // the rest's carrier is below the configured 10 KAS: at most the 0.5 KAS carrier and the proceeds
+    let rest = KAS as i64 / 2 - j.released;
+    assert!(rest > 0 && (rest as u64) < 4 * KAS, "the rest's carrier: {rest}");
+    // a rest the sale cannot carry at all: no sale
+    let dust = COVENANT_OUTPUT_MIN / 4;
+    let tiny = l_bid_a(101, K3, 2, 1, WHOLE); // pays almost nothing
+    let mut inp = input(vec![own(K3, 2 * WHOLE, dust)], vec![funding(50 * KAS)]);
+    inp.orders = vec![tiny, l_ask_a(301, K3, 9, 1, 10 * WHOLE)];
+    let r = tick(&inp, &cfg, &signer());
+    assert!(r.jobs.iter().all(|j| change(j) >= 50 * KAS), "{:?}", r.skipped);
+}

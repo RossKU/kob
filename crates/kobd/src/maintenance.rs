@@ -18,7 +18,9 @@
 //!   `sell_floor_bps` (90 % by default) of what the book's resting asks charge for the same
 //!   amount. With no such asks there is no sale, unless the floor is 0. Selling into the bid must
 //!   also pay more than the fee. The token UTXOs (as many as the program takes) are sold into the
-//!   best such bid as a taker. The rest comes back as one token UTXO.
+//!   best such bid as a taker. The rest comes back as one token UTXO. Its carrier comes out of
+//!   the sold UTXOs' carriers and the proceeds alone, lowered to what they pay after the fee (or
+//!   no sale), never out of the operator's funding, as a merge's does.
 //! - **Merge** runs otherwise, when the operator holds at least `min_utxos` token UTXOs of one
 //!   token. As many as the program takes become one. A listed inventory token's merge goes on
 //!   `keep_carrier`. The other carriers return to the funding pool. The merged carrier comes out of
@@ -346,7 +348,8 @@ fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i
 
 /// The sale of `tokens` (one group) into `bid` for `amount` base units, the operator as taker.
 ///
-/// The bid pays the operator's change. The unsold rest comes back as one token UTXO.
+/// The bid pays the operator's change. The unsold rest comes back as one token UTXO on `carrier`.
+#[allow(clippy::too_many_arguments)]
 fn sell_action(
     bid: &ListedOrder,
     amount: i64,
@@ -354,6 +357,7 @@ fn sell_action(
     funding: &[KeyUtxo],
     operator: [u8; 32],
     lock: u64,
+    carrier: u64,
     cfg: &MaintenanceConfig,
 ) -> Result<Action, String> {
     let base = bid.order.state.clone().into_family(kob_protocol::family::Family::Kcc20);
@@ -370,7 +374,7 @@ fn sell_action(
         updates: vec![],
         taker_tokens: tokens.to_vec(),
         taker: Some(operator),
-        taker_token_carrier: cfg.token_carrier,
+        taker_token_carrier: carrier,
         keep_surplus: vec![],
         keep_carrier: None,
         receivers: vec![],
@@ -524,12 +528,36 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
                 },
                 None => None,
             };
-            if let Some((bid, amount, _)) = best {
+            if let Some((bid, amount, pays)) = best {
                 let rest = held > 0 && held - amount > 0;
-                let carrier_out = if rest { cfg.token_carrier } else { 0 };
-                match sell_action(&bid, amount, &utxos, &funding, operator, t, cfg).and_then(|a| {
-                    let a = priced(a, cfg, |b| Some(operator_kas(b, &funding, &utxos, carrier_out)));
+                let sale = |carrier: u64| {
+                    sell_action(&bid, amount, &utxos, &funding, operator, t, carrier, cfg)
+                        .map(|a| priced(a, cfg, |b| Some(operator_kas(b, &funding, &utxos, if rest { carrier } else { 0 }))))
+                };
+                // The rest's carrier comes out of the sold inputs' carriers and the proceeds, after
+                // the fee, as a merge's does (`merge_carrier`): never out of the operator's funding.
+                let carrier = if rest {
+                    merge_carrier(cfg.token_carrier, carriers_in.saturating_add(pays), |c| {
+                        build_with(&sale(c)?, &budgets).map(|b| b.fee.fee).map_err(|e| e.to_string())
+                    })
+                    .map_err(|why| format!("the rest's carrier: {why}"))
+                } else {
+                    Ok(cfg.token_carrier)
+                };
+                let carrier_out = match &carrier {
+                    Ok(c) if rest => *c,
+                    _ => 0,
+                };
+                match carrier.and_then(|c| {
+                    let a = sale(c)?;
                     let (built, signed, v) = build_sign(&a, signer, cfg.validate)?;
+                    // The operator's free KAS (its funding) comes back whole: the change pays it
+                    // back, whatever the bid paid.
+                    let change = built.fee.change_output.map(|i| built.tx.outputs[i as usize].value).unwrap_or(0);
+                    let fin: u64 = funding.iter().map(|k| k.utxo.amount).sum();
+                    if rest && change < fin {
+                        return Err(format!("the rest's carrier would take {} sompi of the operator's funding", fin - change));
+                    }
                     Ok((a, built, signed, v))
                 }) {
                     Ok((action, built, signed, validation)) => {
