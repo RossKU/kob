@@ -2,8 +2,8 @@
 //
 // A token issued again (the switch of the soak tokens to KOB's standard 3 / 3 program, 2026-10-10) gets a new covenant id, and the
 // indexer keys every market read by covenant id: the trades, candles, 24 h stats and last price of `/v1/trades|candles|stats/{token}`
-// come from the `fill` rows of `order_events` (`token_id`, an `ids.id`), the pair pages from `pair_fills` (`base_cov_id`,
-// `quote_cov_id`) and the KAS candles of the two legs. `carryHistory` moves those rows of the old id to the new id of the same
+// come from the `fill` rows of `order_events` (`token_id`, an `ids.id`), the pair pages from `pair_fills` (`base_id`, `quote_id`,
+// `ids.id`s since schema 14; `base_cov_id`, `quote_cov_id` blobs before) and the KAS candles of the two legs. `carryHistory` moves those rows of the old id to the new id of the same
 // TICKER, so the market page of the new token shows one continuous chart. Nothing else is touched: the old orders keep their own
 // `token_id` (their token template is not the new one, and `/v1/tokens` lists tokens from the orders), the old token's UTXO
 // tables stay as they are.
@@ -19,6 +19,10 @@
 // The executor must be stopped (the database is its derived view; the lock is not checked here). `kobd db replay` rebuilds
 // the tables from the record log and undoes the carry: run it again after a replay (it is idempotent). Each carried id is recorded in
 // `meta` (`carried_history:<old id>`), so a second run reports `already` and an attempt to carry the same id elsewhere is refused.
+//
+// `pair_fills` has two layouts, told apart by `pairFillsInterned`: schema 14 names the filled order and the two tokens by integer
+// (`order_id` an `orders.id`, `base_id` / `quote_id` `ids.id`s) and needs the order in `orders`; schema 13 and older hold the blobs
+// `covenant_id`, `base_cov_id`, `quote_cov_id`. Every function here reads and writes either.
 
 export interface RegistryLike {
   tokens: Array<{ ticker: string; covenant_id: string }>;
@@ -97,6 +101,14 @@ export function storeSchema(db: Probe): 7 | 8 | 9 {
 /** True for a schema-9 store (what this build writes). */
 export const isSchema9 = (db: Probe): boolean => storeSchema(db) === 9;
 
+/** True when `pair_fills` names its order and tokens by integer (`order_id`, `base_id`, `quote_id`: schema 14 and later). */
+export const pairFillsInterned = (db: Probe): boolean =>
+  !!db.prepare("SELECT 1 AS x FROM pragma_table_info('pair_fills') WHERE name = 'base_id'").get();
+
+/** SQL: the 32-byte token id of a `pair_fills` row (alias p) in either layout (`base` or `quote`). */
+const pairToken = (interned: boolean, side: 'base' | 'quote'): string =>
+  interned ? `(SELECT h FROM ids WHERE id = p.${side}_id)` : `p.${side}_cov_id`;
+
 /**
  * Moves the market history of every pair (old id -> new id) in ONE transaction. Refuses (and changes nothing) when an order of an old id
  * is still open or partial (its later fills would stay under the old id: end every order first), when an old id was carried to another
@@ -107,6 +119,7 @@ export function carryHistory(db: SqlDb, pairs: CarryPair[], opts: { allowLive?: 
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t)) throw new Error(`not a KOB indexer database: no table ${t}`);
   }
   if (!isSchema9(db)) throw new Error('the database is of an older layout (no orders.maker_id: not schema 9): open it with this build first');
+  const interned = pairFillsInterned(db);
   const out: CarryResult[] = [];
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -135,8 +148,18 @@ export function carryHistory(db: SqlDb, pairs: CarryPair[], opts: { allowLive?: 
           .prepare("UPDATE order_events SET token_id = (SELECT id FROM ids WHERE h = ?2) WHERE kind = 'fill' AND token_id = (SELECT id FROM ids WHERE h = ?1)")
           .run(hex(p.from), hex(p.to)).changes,
       );
-      const pairBase = num(db.prepare('UPDATE pair_fills SET base_cov_id = ?2 WHERE base_cov_id = ?1').run(hex(p.from), hex(p.to)).changes);
-      const pairQuote = num(db.prepare('UPDATE pair_fills SET quote_cov_id = ?2 WHERE quote_cov_id = ?1').run(hex(p.from), hex(p.to)).changes);
+      // schema 14: by `ids.id` (the target is interned above; an old id without an `ids` row matches nothing)
+      const [pairBase, pairQuote] = (['base', 'quote'] as const).map((c) =>
+        num(
+          db
+            .prepare(
+              interned
+                ? `UPDATE pair_fills SET ${c}_id = (SELECT id FROM ids WHERE h = ?2) WHERE ${c}_id = (SELECT id FROM ids WHERE h = ?1)`
+                : `UPDATE pair_fills SET ${c}_cov_id = ?2 WHERE ${c}_cov_id = ?1`,
+            )
+            .run(hex(p.from), hex(p.to)).changes,
+        ),
+      ) as [number, number];
       const rec = prev ? { ...JSON.parse(prev.v), rerun: (opts.now ?? Date.now)() } : { ticker: p.ticker, to: p.to, at: (opts.now ?? Date.now)(), fills, pairBase, pairQuote };
       db.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').run(key, JSON.stringify(rec));
       out.push({ ...p, fills, pairBase, pairQuote, already: !!prev });
@@ -177,6 +200,9 @@ export interface HistoryFloor {
 /** Per token of the registry: its first KAS trade and the fills left under its carried ids (read-only; the executor may run). */
 export function historyFloors(db: SqlDb, reg: RegistryLike): HistoryFloor[] {
   const v8 = storeSchema(db) >= 8; // integer order and token ids in the child tables (schemas 8 and 9)
+  const leftPairs = pairFillsInterned(db)
+    ? 'SELECT COUNT(*) AS n FROM pair_fills WHERE base_id = (SELECT id FROM ids WHERE h = ?1) OR quote_id = (SELECT id FROM ids WHERE h = ?1)'
+    : 'SELECT COUNT(*) AS n FROM pair_fills WHERE base_cov_id = ?1 OR quote_cov_id = ?1';
   const keys = (db.prepare("SELECT group_concat(k, ',') AS ks FROM meta WHERE k LIKE 'carried_history:%'").get() as { ks: string | null }).ks;
   const carriedTo = new Map<string, string[]>();
   for (const k of keys ? keys.split(',') : []) {
@@ -204,7 +230,7 @@ export function historyFloors(db: SqlDb, reg: RegistryLike): HistoryFloor[] {
           : "SELECT COUNT(*) AS n FROM order_events WHERE kind = 'fill' AND token_cov_id = ?",
       );
       leftover += num((left.get(hex(from)) as { n: number | bigint }).n);
-      leftover += num((db.prepare('SELECT COUNT(*) AS n FROM pair_fills WHERE base_cov_id = ?1 OR quote_cov_id = ?1').get(hex(from)) as { n: number | bigint }).n);
+      leftover += num((db.prepare(leftPairs).get(hex(from)) as { n: number | bigint }).n);
     }
     return { ticker: t.ticker, id, firstTrade: first.t == null ? null : num(first.t), leftover };
   });
@@ -213,8 +239,12 @@ export function historyFloors(db: SqlDb, reg: RegistryLike): HistoryFloor[] {
 /** The pair markets (base id, quote id) with pair fills between two tokens of the registry. */
 export function pairMarkets(db: SqlDb, reg: RegistryLike): Array<[string, string]> {
   const ids = new Set((reg.tokens ?? []).map((t) => String(t.covenant_id).toLowerCase()));
+  const interned = pairFillsInterned(db);
   const r = db
-    .prepare("SELECT group_concat(p, ',') AS ps FROM (SELECT DISTINCT lower(hex(base_cov_id)) || ':' || lower(hex(quote_cov_id)) AS p FROM pair_fills)")
+    .prepare(
+      `SELECT group_concat(m, ',') AS ps FROM (SELECT DISTINCT lower(hex(${pairToken(interned, 'base')})) || ':' || lower(hex(${pairToken(interned, 'quote')})) AS m
+       FROM pair_fills p)`,
+    )
     .get() as { ps: string | null };
   return (r.ps ? r.ps.split(',') : [])
     .map((p) => p.split(':') as [string, string])
@@ -251,7 +281,8 @@ export function chartProblems(market: string, firstTrade: number | null, firstCa
 //   them): `genesis_block` 0, `maker_id` NULL (they never show in a maker's orders), `listed` 0 with `unlisted_reason`
 //   `history_import:<label>`, their token id unchanged, and a final `order_state` (an order still open in the old run is
 //   `closed`: it is no longer anyone's);
-// * the pair fills of the mapped tokens (a database of protocol v3 or later).
+// * the pair fills of the mapped tokens (a database of protocol v3 or later), and their pair orders as above when the database does
+//   not hold them (schema 14 names a pair fill's order by `orders.id`, and the pair reads join it).
 //
 // The target is a schema-9 store (an imported order gets a fresh `orders.id`, its fills and state point at it, and its template, token,
 // token program, extension commitment and quote token are interned in `ids` and written as `template_id`, `token_id`, `token_tpl_id`,
@@ -395,6 +426,21 @@ export function importHistory(
     `INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, payout, closes, detail)
      VALUES ((SELECT id FROM orders WHERE covenant_id = ?), 0, ?, ?, ?, ?, 'fill', ?, ?, ?, ?, ?, ?, ?)`,
   );
+  /** Copies the order `cov` of the source (with a final state) unless the target holds it; false when neither holds it. */
+  const ensureOrder = (cov: unknown): boolean => {
+    if (haveOrder.get(cov)) return true;
+    const o = orderOf.get(cov) as Record<string, unknown> | undefined;
+    if (!o) return false;
+    for (const h of [o.template_hash, o.token_cov_id, o.token_tpl_hash, o.ext_commit, o.quote_cov_id]) if (h != null) internToken.run(h);
+    putOrder.run(
+      o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.token_cov_id, o.token_tpl_hash, o.ext_commit, o.scale, o.min_fill, o.price,
+      o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, o.reserve, o.initial_amount, o.deadline, o.genesis_state,
+      o.genesis_txid, o.genesis_out, o.genesis_daa, o.parent, key, o.quote_cov_id,
+    );
+    const status = o.status == null || o.status === 'open' || o.status === 'partial' ? 'closed' : String(o.status);
+    putState.run(o.covenant_id, status, o.filled_amount ?? 0, o.last_daa ?? o.genesis_daa);
+    return true;
+  };
   const results: ImportResult[] = [];
   dst.exec('BEGIN IMMEDIATE');
   try {
@@ -414,17 +460,7 @@ export function importHistory(
           continue;
         }
         const cov = hexOf(f.cov);
-        if (!copied.has(cov) && !haveOrder.get(f.cov)) {
-          const o = orderOf.get(f.cov) as Record<string, unknown>;
-          for (const h of [o.template_hash, o.token_cov_id, o.token_tpl_hash, o.ext_commit, o.quote_cov_id]) if (h != null) internToken.run(h);
-          putOrder.run(
-            o.covenant_id, o.contract, o.template_hash, o.family, o.side, o.token_cov_id, o.token_tpl_hash, o.ext_commit, o.scale, o.min_fill, o.price,
-            o.tip, o.tif, o.expiry_daa, o.active_from, o.in_book, o.budget_rate, o.reserve, o.initial_amount, o.deadline, o.genesis_state,
-            o.genesis_txid, o.genesis_out, o.genesis_daa, o.parent, key, o.quote_cov_id,
-          );
-          const status = o.status == null || o.status === 'open' || o.status === 'partial' ? 'closed' : String(o.status);
-          putState.run(o.covenant_id, status, o.filled_amount ?? 0, o.last_daa ?? o.genesis_daa);
-        }
+        if (!copied.has(cov)) ensureOrder(f.cov);
         copied.add(cov);
         if (tokenId == null) {
           internToken.run(hex(p.to));
@@ -437,18 +473,42 @@ export function importHistory(
       }
       results.push(r);
     }
-    // pair fills (protocol v3 and later): both tokens mapped, before `until`, each (order, transaction) once
-    if (hasColumn(src, 'pair_fills', 'base_cov_id')) {
+    // pair fills (protocol v3 and later): both tokens mapped, before `until`, each (order, transaction) once, in the layout of each
+    // side (`pairFillsInterned`)
+    const srcPairs = hasColumn(src, 'pair_fills', 'base_id') ? 14 : hasColumn(src, 'pair_fills', 'base_cov_id') ? 13 : 0;
+    if (srcPairs) {
       const to = new Map(pairs.map((p) => [p.from, p.to]));
-      const havePair = dst.prepare('SELECT 1 AS x FROM pair_fills WHERE base_cov_id = ? AND quote_cov_id = ? AND ts = ? AND covenant_id = ? AND txid = ?');
-      const putPair = dst.prepare(
-        `INSERT INTO pair_fills (block_seq, daa, ts, txid, tx_pos, covenant_id, contract, base_cov_id, quote_cov_id, side, amount_a, amount_b, price, a_scale,
-           tip_kas, counterparty, price_source) VALUES (0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      const dstInterned = pairFillsInterned(dst);
+      // bound as blobs: the order's covenant id and the two token ids (interned before the insert)
+      const order = '(SELECT id FROM orders WHERE covenant_id = ?)';
+      const token = '(SELECT id FROM ids WHERE h = ?)';
+      const havePair = dst.prepare(
+        dstInterned
+          ? `SELECT 1 AS x FROM pair_fills WHERE base_id = ${token} AND quote_id = ${token} AND ts = ? AND order_id = ${order} AND txid = ?`
+          : 'SELECT 1 AS x FROM pair_fills WHERE base_cov_id = ? AND quote_cov_id = ? AND ts = ? AND covenant_id = ? AND txid = ?',
       );
-      for (const f of bigStatement(src, 'SELECT * FROM pair_fills WHERE ts < ? ORDER BY ts, id').all(opts.until) as Array<Record<string, unknown>>) {
+      const putPair = dst.prepare(
+        dstInterned
+          ? `INSERT INTO pair_fills (block_seq, daa, ts, txid, tx_pos, order_id, contract, base_id, quote_id, side, amount_a, amount_b, price, a_scale,
+               tip_kas, counterparty, price_source) VALUES (0, ?, ?, ?, ?, ${order}, ?, ${token}, ${token}, ?, ?, ?, ?, ?, ?, ?, ?)`
+          : `INSERT INTO pair_fills (block_seq, daa, ts, txid, tx_pos, covenant_id, contract, base_cov_id, quote_cov_id, side, amount_a, amount_b, price, a_scale,
+               tip_kas, counterparty, price_source) VALUES (0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      const read =
+        srcPairs === 14
+          ? `SELECT p.daa, p.ts, p.txid, p.tx_pos, (SELECT covenant_id FROM orders WHERE id = p.order_id) AS covenant_id, p.contract,
+               ${pairToken(true, 'base')} AS base_cov_id, ${pairToken(true, 'quote')} AS quote_cov_id, p.side, p.amount_a, p.amount_b, p.price,
+               p.a_scale, p.tip_kas, p.counterparty, p.price_source FROM pair_fills p WHERE p.ts < ? ORDER BY p.ts, p.id`
+          : 'SELECT * FROM pair_fills WHERE ts < ? ORDER BY ts, id';
+      for (const f of bigStatement(src, read).all(opts.until) as Array<Record<string, unknown>>) {
         const a = to.get(hexOf(f.base_cov_id));
         const b = to.get(hexOf(f.quote_cov_id));
         if (!a || !b || havePair.get(hex(a), hex(b), f.ts, f.covenant_id, f.txid)) continue;
+        // the pair order, so that the row names one (schema 14) and a later `kobd db migrate` keeps it (schema 13); a fill of an order
+        // the source does not hold either (imported there without it) cannot be named by integer
+        if (!ensureOrder(f.covenant_id) && dstInterned) continue;
+        internToken.run(hex(a));
+        internToken.run(hex(b));
         putPair.run(
           f.daa, f.ts, f.txid, f.tx_pos, f.covenant_id, f.contract, hex(a), hex(b), f.side, f.amount_a, f.amount_b, f.price, f.a_scale, f.tip_kas,
           f.counterparty, f.price_source ?? 'none',
