@@ -1,33 +1,38 @@
 pragma silverscript ^0.1.0;
 
-// KobCurveAsk: one sell order (one custody UTXO) whose price steps up level by
-// level along a price table, like a Hyperliquid HIP-2 ask. Spec:
-// docs/design/curve-ask-spec.md.
+// KobCurveAsk: a sell order whose price steps up along a price table.
 //
-// Level j sells the units [j * levelSize, (j + 1) * levelSize) of `total` at
-// table[j], sompi per whole token (`scale` base units), all-in (KobAsk's price
-// convention: the maker gets price - tip). The last level may be partial. The
-// level is derived: (total - amountLeft) / levelSize. amountLeft is the only
-// mutable field and the custody's exact amount pins it.
-//
-// Custody, the stray guard, the positional payout and the cancel are KobAsk's
-// (KobAsk.sil), without IOC/FOK, TWAP, decay and the refund: a curve rests
-// until it sells out or the maker cancels it (an expiry would cost every fill
-// its refund code; the placement record's deadline is the free, soft one).
-//
-// Unbound: tokenCovId = 0 lets the curve sit in its token's genesis
-// transaction (the two covenant ids would otherwise commit to each other).
-// Its first spend takes the token of a custody input created in the same
-// transaction as the order UTXO, which only the maker can have built, and a
-// partial fill writes that id into the continuation.
+// One custody UTXO is sold level by level. Level j sells the units
+// [j * levelSize, (j + 1) * levelSize) of `total` at table[j], in sompi per
+// whole token (`scale` base units). The price is all-in, as in KobAsk, so the
+// maker gets price - tip. The last level may be partial. The specification
+// is docs/design/curve-ask-spec.md.
 //
 // Entries:
-//   settle(nb, tokenIn, tokOut, rsLen), n = int(nb), rsLen = this script's length
-//     Buy n > 0 base units at the curve. Anyone, once tx.daa >= activeFrom.
-//   cancel(sig)  Maker only, SIGHASH_ALL (also the amend).
+//   settle(nb, tokenIn, tokOut, rsLen), with n = int(nb)
+//     Buy n > 0 base units along the curve. Anyone, once
+//     tx.daa >= activeFrom. rsLen is the length of this redeem script.
+//   cancel(sig)
+//     Maker only, signed with SIGHASH_ALL. It is also the amend.
+//
+// State. amountLeft is the only mutable field, and the custody's exact
+// amount pins it. The current level is (total - amountLeft) / levelSize.
+// table is the last field, because its length varies.
+//
+// Custody, the stray guard, the positional payout and cancel are KobAsk's.
+// There is no IOC/FOK, TWAP, decay or refund. A curve rests until it sells
+// out or the maker cancels it. An expiry would cost every fill the refund
+// code, so the placement record's deadline is the only, soft, end date.
+//
+// Unbound. With tokenCovId = 0 the curve can sit in its token's genesis
+// transaction, where the two covenant ids would otherwise commit to each
+// other. Its first spend takes the token of a custody input created in the
+// same transaction as the order UTXO, which only the maker can have built.
+// A partial fill writes that id into the continuation.
 //
 // A fill crosses at most MAX_CROSS levels, counting the one it starts in.
-// Each level is rounded up on its own (quoteOf, ceil is superadditive).
+// Each level is rounded up on its own with quoteOf. Ceil is superadditive,
+// so the maker gets at least the exact value of the whole fill.
 contract KobCurveAsk(
     pubkey init_maker,
     byte[32] init_tokenCovId,
@@ -115,7 +120,8 @@ contract KobCurveAsk(
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
 
-        // Unbound: the token of a custody from the order UTXO's own transaction.
+        // Unbound. The token is that of a custody created in the order
+        // UTXO's own transaction.
         byte[32] cid = tokenCovId;
         byte[] z = byte[](0 as byte[8]) + byte[](0 as byte[8]);
         z = z + z;
