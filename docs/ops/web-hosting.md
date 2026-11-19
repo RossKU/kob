@@ -306,7 +306,7 @@ Pages deploy skipped" and what is missing into the run's summary, and job `deplo
 On a push to `master` that changes `web/` or an input of the app (kob-wasm, kob-protocol, contracts, registry, the toolchain), and
 on *Actions* > *deploy-pages* > *Run workflow*:
 
-1. builds and tests the app as the `web` job of `ci.yml` does (kob-wasm slim bindings, the pinned kaspa-wasm SDK,
+1. builds and tests the app as the `web` job of `ci.yml` does, from source with no build cache restored (kob-wasm slim bindings, the pinned kaspa-wasm SDK,
    typecheck, unit tests, then `npm run build:release` and `scripts/release-hashes.sh`, so the upload is the release bundle), and uploads nothing
    until the `ci.yml` run of the same commit has passed: that run carries the mock e2e suite (sharded), which the deploy does not run again;
 2. writes `web/dist/config.json` from the variables; on `testnet-10` also `web/dist/registry/tokens.json` as the supported
@@ -318,7 +318,7 @@ on *Actions* > *deploy-pages* > *Run workflow*:
 3. uploads `web/dist` with Cloudflare's wrangler action (pinned by commit, wrangler version pinned) to the production branch;
 4. writes the deployment URL, `config.json`, the sha256 of every deployed file and the output of `scripts/release-hashes.sh`
    into the run's summary;
-5. checks the live deployment (`web/scripts/check-pages.mjs`): `/` sends the app's Content-Security-Policy (with
+5. checks the live deployment in a job of its own, `verify`, which holds no secret and reads the hashes the deploy job uploaded as an artifact before its first step with the Cloudflare token (`web/scripts/check-pages.mjs`, from a fresh checkout): `/` sends the app's Content-Security-Policy (with
    `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`;
    `/signer.html` and `/signer` send the signer's own policy and `X-Frame-Options: SAMEORIGIN`, never the app's; `/assets/*`
    sends `Access-Control-Allow-Origin: *`; every built file is served byte for byte. Any failure fails the run.
