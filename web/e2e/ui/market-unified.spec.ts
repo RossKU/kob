@@ -1,5 +1,6 @@
-// One market page: the title bar shows `BASE / QUOTE` with a drop-down on each side (KAS and the tokens); choosing the other asset changes the market in
-// place (same layout, URL follows, back works). And the flip is complete: everything on the page follows the displayed orientation.
+// One market page: the title bar shows `BASE / QUOTE` with a drop-down on each side (KAS and the
+// tokens). Choosing the other asset changes the market in place (same layout, URL follows, back
+// works). And the flip is complete: everything on the page follows the displayed orientation.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
@@ -12,7 +13,10 @@ test.use({ autoOpen: false });
 
 const QUOTE = 'e7'.repeat(32);
 
-/** The example registry with EXKCC listed and EXUSD (6 decimals) as a second listed token, matching the mock pair seed. */
+/**
+ * The example registry with EXKCC listed and EXUSD (6 decimals) as a second listed token, matching
+ * the mock pair seed.
+ */
 async function listBoth(page: Page): Promise<void> {
   const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
   for (const t of reg.templates) t.review_status = 'reviewed';
@@ -44,7 +48,7 @@ test.describe('one market page, a pair selector', () => {
     expect(values[0]).toBe('kas');
     expect(values).toContain(QUOTE);
     expect(values).not.toContain(base);
-    // the base side lists the tokens (never the quote)
+    // The base side lists the tokens (never the quote).
     const baseValues = await pickerValues(page, 'market-base-select');
     expect(baseValues).toContain(base);
     expect(baseValues).toContain(QUOTE);
@@ -69,12 +73,12 @@ test.describe('one market page, a pair selector', () => {
     await expect(page).toHaveURL(new RegExp(`#/market/${base}/${QUOTE}$`));
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
     await expect(page.getByTestId('pair-book')).toBeVisible();
-    // the same unified order ticket, now with EXUSD as its quote
+    // The same unified order ticket, now with EXUSD as its quote.
     await expect(page.getByTestId('order-ticket')).toBeVisible();
     await expect(page.getByTestId('order-available')).toContainText('EXKCC'); // the default Sell spends the base token
     await page.getByTestId('order-side-buy').click();
     await expect(page.getByTestId('order-available')).toContainText('EXUSD'); // a buy spends the pair's quote
-    // same places: the title, the book left, the chart in the middle, the ticket right
+    // Same places: the title, the book left, the chart in the middle, the ticket right.
     const chart1 = await box(page, 'chart-section');
     const book1 = await box(page, 'pair-book-section');
     const ticket1 = await box(page, 'order-ticket');
@@ -87,15 +91,17 @@ test.describe('one market page, a pair selector', () => {
     expect(Math.abs(book1.width - book0.width)).toBeLessThan(2);
     expect(Math.abs(ticket1.x - ticket0.x)).toBeLessThan(2);
     expect(Math.abs(ticket1.width - ticket0.width)).toBeLessThan(2);
-    // the same market bar (one row of the pictures, the pair, the figures: e2e/ui/market-bar.spec.ts, pair-header.spec.ts), so the pair selector stays at the same height
+    // The same market bar (one row of the pictures, the pair, the figures:
+    // e2e/ui/market-bar.spec.ts, pair-header.spec.ts), so the pair selector stays at the same
+    // height.
     expect(Math.abs(title1.y - title0.y)).toBeLessThan(3);
     await expect(page.getByText('Trade against')).toHaveCount(0);
 
-    // the flip control next to the pair swaps base and quote
+    // The flip control next to the pair swaps base and quote.
     await page.getByTestId('market-flip').click();
     await expect(page).toHaveURL(new RegExp(`#/market/${QUOTE}/${base}$`));
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'EXUSD/EXKCC');
-    // back / forward
+    // Back / forward.
     await page.goBack();
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
     await page.goBack();
@@ -105,7 +111,7 @@ test.describe('one market page, a pair selector', () => {
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
 
 
-    // picking KAS on the quote side goes back to the token's KAS market, in the same place
+    // Picking KAS on the quote side goes back to the token's KAS market, in the same place.
     await pickAsset(page, 'market-quote-select', 'kas');
     await expect(page).toHaveURL(new RegExp(`#/market/${base}$`));
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'EXKCC/KAS');
@@ -123,16 +129,16 @@ test.describe('one market page, a pair selector', () => {
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'KAS/EXKCC');
     await expect(page.getByTestId('market-base-select')).toHaveAttribute('data-value', 'kas');
     await expect(page.getByTestId('market-quote-select')).toHaveAttribute('data-value', base);
-    // the other token on the quote side: KAS/EXUSD = the EXUSD market, inverted
+    // The other token on the quote side: KAS/EXUSD = the EXUSD market, inverted.
     await pickAsset(page, 'market-quote-select', QUOTE);
     await expect(page).toHaveURL(new RegExp(`#/market/${QUOTE}$`));
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'KAS/EXUSD');
     await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-inverted', '1');
-    // a token on the left with the other token on the right: the pair
+    // A token on the left with the other token on the right: the pair.
     await pickAsset(page, 'market-base-select', base);
     await expect(page).toHaveURL(new RegExp(`#/market/${base}/${QUOTE}$`));
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
-    // KAS on the quote side: the native KAS market of the base token
+    // KAS on the quote side: the native KAS market of the base token.
     await pickAsset(page, 'market-quote-select', 'kas');
     await expect(page).toHaveURL(new RegExp(`#/market/${base}$`));
     await expect(pairOf(page)).toHaveAttribute('data-pair', 'EXKCC/KAS');
@@ -161,7 +167,7 @@ test.describe('the flip is complete: everything follows the displayed orientatio
       expect(await rows('bids').count()).toBeLessThan(10);
       expect(await amounts('asks')).toBe(askAmount);
       expect(await amounts('bids')).toBe(bidAmount);
-      // the option labels are steps of the shown price unit
+      // The option labels are steps of the shown price unit.
       const labels = await optionLabels(group);
       expect(labels).toHaveLength(4);
       if (flipped) expect(Number(labels[3]!.replace(/,/g, ''))).toBeGreaterThanOrEqual(0.1);
@@ -178,14 +184,17 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     await page.getByTestId('market-flip').click();
     await chooseOption(page.getByTestId('book-group'), { index: 3 });
     const bid = page.getByTestId(TESTID.bookBids).getByTestId('book-bid-row').first();
-    // displayed bids are the native asks (0.0251 ..): the grouped level's native price is at or above its highest ask
+    // Displayed bids are the native asks (0.0251 ..): the grouped level's native price is at or
+    // above its highest ask.
     const nativePrice = Number(await bid.getAttribute('data-native-price'));
-    // the ticket's side is the user's: shown Sell (native buy) chosen first, and the click keeps it
+    // The ticket's side is the user's: shown Sell (native buy) chosen first, and the click keeps
+    // it.
     await page.getByTestId('order-side-sell').click();
     await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-side', 'buy');
     await bid.click();
     await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-side', 'buy');
-    // the best displayed bid bucket is 39 tokens per KAS (native asks 0.0251 .. 0.0256 = 39.84 .. 39.06 fall into it): the buy it prefills must reach the highest of them
+    // The best displayed bid bucket is 39 tokens per KAS (native asks 0.0251 .. 0.0256 = 39.84 ..
+    // 39.06 fall into it): the buy it prefills must reach the highest of them.
     await expect(bid).toHaveAttribute('data-price', '39.000');
     const nativeText = await page.getByTestId('order-price-native').innerText();
     expect(num(nativeText.match(/([0-9.]+) KAS per/)![1])).toBeGreaterThanOrEqual(0.0256 - 1e-9);
@@ -197,7 +206,7 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     const base = (await mock.token()).covenant_id;
     await page.goto(`/#/market/${base}`);
     const foot = page.locator('.ob-foot');
-    // one short line; the whole sentences are its title
+    // One short line. The whole sentences are its title.
     await expect(foot).toHaveAttribute('title', /the ticket keeps its buy or sell side/);
     await page.getByTestId('market-flip').click();
     await expect(foot).toHaveAttribute('title', /the ticket keeps its buy or sell side/);
@@ -213,7 +222,7 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     const ticket = page.getByTestId('order-ticket');
     const help = page.getByTestId('order-type-help');
 
-    // native: the wording of a token market
+    // Native: the wording of a token market.
     await expect(page.locator('.field', { has: page.getByTestId('order-tip') }).locator('.tk-unit')).toContainText('KAS per EXKCC');
     await chooseOption(page.getByTestId('order-type'), 'close');
     await expect(help).toContainText('Sells your tokens at market');
@@ -221,22 +230,23 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     await expect.poll(() => optionLabel(page.getByTestId('order-type'), 'twap')).toBe('TWAP (sell in slices)');
     await chooseOption(page.getByTestId('order-type'), 'limit');
 
-    // inverted
+    // Inverted.
     await page.getByTestId('market-flip').click();
     await expect(ticket).toHaveAttribute('data-inverted', '1');
-    // the amount counts the shown base, KAS; the line below it says the token amount the order is built with
+    // The amount counts the shown base, KAS. The line below it says the token amount the order is
+    // built with.
     await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderAmount) }).locator('.tk-unit')).toHaveText('KAS');
     await page.getByTestId(TESTID.orderAmount).fill('0.12');
     await page.getByTestId(TESTID.orderPrice).fill('25'); // 25 EXKCC per KAS = 0.04 KAS per EXKCC
-    // 0.12 KAS at 0.04 KAS per EXKCC = 3 EXKCC
+    // 0.12 KAS at 0.04 KAS per EXKCC = 3 EXKCC.
     await expect(page.getByTestId('order-amount-tokens')).toHaveText('= 3 EXKCC at your price');
-    // the tip is an amount of KAS per token traded; its share of the KAS traded is shown
+    // The tip is an amount of KAS per token traded. Its share of the KAS traded is shown.
     await expect(page.locator('.field', { has: page.getByTestId('order-tip') }).locator('.tk-unit')).toContainText('KAS per EXKCC traded');
     await expect(page.locator('.field', { has: page.getByTestId('order-tip') }).locator('.tk-unit')).not.toHaveText('KAS per EXKCC');
     await fillFields(page, { tip: '0.001' }); // the tip sits in Advanced options
     await expect(page.getByTestId('order-tip-share')).toContainText('2.5%');
     await expect(page.getByTestId('order-available')).toBeVisible();
-    // the helps
+    // The helps.
     await chooseOption(page.getByTestId('order-type'), 'close');
     await expect(help).toContainText('Buys KAS with all your EXKCC');
     await expect(help).not.toContainText('Sells your tokens');

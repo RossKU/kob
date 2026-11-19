@@ -1,5 +1,7 @@
-// The rows of the Portfolio's table open to their details (a chevron: a button with aria-expanded, keyboard operable) and stay as the viewer left them across refreshes: an
-// opened row is not closed by a refresh, and nothing shifts. On the Portfolio page and in a market page's panel; Open orders, Order history and Trade history. Mock stack.
+// The rows of the Portfolio's table open to their details (a chevron: a button with aria-expanded,
+// keyboard operable) and stay as the viewer left them across refreshes: an opened row is not closed
+// by a refresh, and nothing shifts. On the Portfolio page and in a market page's panel. Open
+// orders, Order history and Trade history. Mock stack.
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { listExkcc, connectWallet } from '../helpers/env';
@@ -29,14 +31,14 @@ for (const width of [390, 1280]) {
       const toggle = page.getByTestId(`order-toggle-${ids.open}`);
       const details = page.getByTestId(`order-details-${ids.open}`);
       await expect(toggle).toBeVisible();
-      // collapsed by default
+      // Collapsed by default.
       await expect(toggle).toHaveAttribute('aria-expanded', 'false');
       await expect(details).toBeHidden();
-      // by a click
+      // By a click.
       await toggle.click();
       await expect(toggle).toHaveAttribute('aria-expanded', 'true');
       await expect(details).toBeVisible();
-      // by the keyboard: Enter closes it, Space opens it again
+      // By the keyboard: Enter closes it, Space opens it again.
       await toggle.focus();
       await page.keyboard.press('Enter');
       await expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -44,7 +46,7 @@ for (const width of [390, 1280]) {
       await page.keyboard.press('Space');
       await expect(toggle).toHaveAttribute('aria-expanded', 'true');
       await expect(details).toBeVisible();
-      // a refresh keeps it open and moves nothing
+      // A refresh keeps it open and moves nothing.
       await page.waitForTimeout(800);
       await page.evaluate(RECORD);
       await page.getByTestId('orders-refresh').click();
@@ -52,12 +54,12 @@ for (const width of [390, 1280]) {
       await expect(toggle).toHaveAttribute('aria-expanded', 'true');
       await expect(details).toBeVisible();
       expect(await cls(page), 'layout shift across a refresh').toBeLessThan(0.02);
-      // another tab and back: still open
+      // Another tab and back: still open.
       await page.getByTestId('orders-tab-history').click();
       await page.getByTestId('orders-tab-active').click();
       await expect(page.getByTestId(`order-toggle-${ids.open}`)).toHaveAttribute('aria-expanded', 'true');
 
-      // the trade history: the same
+      // The trade history: the same.
       await page.getByTestId('orders-tab-fills').click();
       const fillToggle = page.getByTestId('wallet-fill-toggle').first();
       await expect(fillToggle).toBeVisible();

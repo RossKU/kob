@@ -1,6 +1,10 @@
-// The gate on the contrast of the controls that change colour with their state: in both themes, every segmented control and every white pill, in each state it can be
-// in, shows its text at 4.5:1 or more. The colours are the browser's own, read after the cascade: a hover rule that outranks the checked background (the `Rows` control:
-// the text of a segment the pointer had just pressed took the colour of what it stood on) can only be seen this way. The maths: src/ui/kit/contrast.ts.
+// The gate on the contrast of the controls that change colour with their state.
+// In both themes, every segmented control and every white pill, in each state it can be in, shows
+// its text at 4.5:1 or more.
+// The colours are the browser's own, read after the cascade.
+// A hover rule that outranks the checked background (as on the `Rows` control) can only be seen
+// this way: the text of a segment under the pointer takes the colour of what it stands on.
+// The maths: src/ui/kit/contrast.ts.
 import type { Locator, Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { connectWallet, listExkcc } from '../helpers/env';
@@ -11,7 +15,10 @@ test.use({ autoOpen: false });
 const THEMES = ['dark', 'light'] as const;
 type Theme = (typeof THEMES)[number];
 
-/** The segments of every kind: the kit's radio segments, and the Activity log's own (pressed instead of checked). */
+/**
+ * The segments of every kind: the kit's radio segments, and the Activity log's own (pressed instead
+ * of checked).
+ */
 const SEGMENTS = '.segmented button:not(:disabled), .act-seg button';
 const CHECKED = "[aria-checked='true'], [aria-pressed='true']";
 
@@ -25,8 +32,11 @@ async function open(page: Page, theme: Theme, route: string): Promise<void> {
   await still(page);
 }
 
-/** What the text of `el` stands on: its colour and the background colours from `el` up to the first opaque one. The selected segment is transparent: its pill is the sliding mark
- *  (`.slide-ind`, a sibling), which stands under it, so that mark's colour is what the text is on. */
+/**
+ * What the text of `el` stands on: its colour and the background colours from `el` up to the first
+ * opaque one. The selected segment is transparent: its pill is the sliding mark.
+ * (`.slide-ind`, a sibling), which stands under it, so that mark's colour is what the text is on.
+ */
 const colours = (el: Locator) =>
   el.evaluate((node) => {
     const backgrounds: string[] = [];
@@ -72,7 +82,10 @@ async function checkStates(page: Page, c: ReturnType<typeof checker>, el: Locato
   await rest(page);
 }
 
-/** Every state of every segment on the page: pressed, a segment keeps the pointer, so checked and hover are read together as well as apart. */
+/**
+ * Every state of every segment on the page: pressed, a segment keeps the pointer, so checked and
+ * hover are read together as well as apart.
+ */
 async function checkSegments(page: Page, c: ReturnType<typeof checker>, where: string, expected: number): Promise<void> {
   const segments = page.locator(SEGMENTS);
   await expect.poll(() => segments.count(), { message: `the segments of ${where}` }).toBeGreaterThanOrEqual(expected);
@@ -157,7 +170,7 @@ for (const theme of THEMES) {
       await page.getByTestId('order-type-option-market').hover();
       await c.check(label('market'), 'row', 'hover');
       await c.check(label('limit'), 'row', 'chosen');
-      // no list of the app has a disabled row yet: the state is the attribute's
+      // No list of the app has a disabled row yet: the state is the attribute's.
       await page.getByTestId('order-type-option-ioc').evaluate((e) => e.setAttribute('aria-disabled', 'true'));
       await c.check(label('ioc'), 'row', 'disabled');
       await page.keyboard.press('Escape');

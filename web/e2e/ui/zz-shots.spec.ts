@@ -1,5 +1,6 @@
-// Screenshots only (not a test of anything): every tab of the Portfolio and a market page's panel (its three order tabs) at 390, 600, 720, 1024, 1280 and 1440 px in the theme KOB_THEME, to KOB_SHOTS
-// with the prefix KOB_SHOT_TAG. Skipped without KOB_SHOTS.
+// Screenshots only (not a test of anything): every tab of the Portfolio and a market page's panel
+// (its three order tabs) at 390, 600, 720, 1024, 1280 and 1440 px in the theme KOB_THEME, to
+// KOB_SHOTS with the prefix KOB_SHOT_TAG. Skipped without KOB_SHOTS.
 import { test } from '../fixtures';
 import { listExkcc, connectWallet } from '../helpers/env';
 import { lateTimeZone, seedLongValues } from '../helpers/portfolio-long';

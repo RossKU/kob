@@ -1,6 +1,7 @@
-// Wallet changes AFTER connect (account switch, network switch, lock) while a ready ticket is on screen, for all three wallets.
-// The plan of the ticket was built for one key on one network: it must never be signed for another. The ticket refuses (button disabled, a need line)
-// while the wallet is wrong, and nothing may reach the wallet or the node.
+// Wallet changes AFTER connect (account switch, network switch, lock) while a ready ticket is on
+// screen, for all three wallets. The plan of the ticket was built for one key on one network: it
+// must never be signed for another. The ticket refuses (button disabled, a need line) while the
+// wallet is wrong, and nothing may reach the wallet or the node.
 import { test, expect, TEST_KEYS, closeBell, statusEntry } from '../fixtures';
 import { clickConnectOption, disconnectWallet, fund, openMarket, type WalletName } from '../helpers/env';
 import { clickPlace, expectWalletSigned, fillFields, pickType, placedBy, waitReviewable, waitSubmitted } from '../helpers/ticket';
@@ -101,9 +102,10 @@ test.describe('listeners follow the session', () => {
   test('connect registers the listeners once, disconnect and reconnect never stack them', async ({ appPage: page, mock, wallet }) => {
     await fund(mock, 'alice');
     await openMarket(page, mock);
-    // The listeners are registered and removed by the session's effect, which the UI runs after it has painted the change: the address chip
-    // can already show the new state while the provider still holds the old listeners. So each count is polled (bounded by the expect
-    // timeout) until it reaches the state the page shows, never read once right after the DOM changed.
+    // The listeners are registered and removed by the session's effect, which the UI runs after it
+    // has painted the change: the address chip can already show the new state while the provider
+    // still holds the old listeners. So each count is polled (bounded by the expect timeout) until
+    // it reaches the state the page shows, never read once right after the DOM changed.
     await expect.poll(() => wallet!.listenerCount()).toBeGreaterThan(0);
     const connected = await wallet!.listenerCount();
     await disconnectWallet(page);

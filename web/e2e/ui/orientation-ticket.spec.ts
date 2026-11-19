@@ -1,7 +1,10 @@
-// The ticket follows the pair AS SHOWN, BASE/QUOTE: the left asset is the base, Amount counts it, the price is QUOTE per BASE and Buy / Sell
-// are the base's. A token's KAS book is TOKEN/KAS on chain, so its inverted view KAS/TOKEN counts KAS and builds the native order of the same
-// economic meaning (buying KAS = selling the token); a pair page flips by opening B/A and carries the order across with the side turned over.
-// Every check clicks the real controls and reads what the screen shows and what the accepted transaction commits to.
+// The ticket follows the pair AS SHOWN, BASE/QUOTE: the left asset is the base, Amount counts it,
+// the price is QUOTE per BASE and Buy / Sell are the base's. A token's KAS book is TOKEN/KAS on
+// chain, so its inverted view KAS/TOKEN counts KAS and builds the native order of the same economic
+// meaning (buying KAS = selling the token). A pair page flips by opening B/A and carries the order
+// across with the side turned over.
+// Every check clicks the real controls and reads what the screen shows and what the accepted
+// transaction commits to.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
@@ -20,7 +23,7 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     await openMarket(page, mock);
     const ticket = page.getByTestId('order-ticket');
 
-    // native EXKCC/KAS: Buy 10 EXKCC at 0.024 KAS per EXKCC (below the book: it rests)
+    // Native EXKCC/KAS: Buy 10 EXKCC at 0.024 KAS per EXKCC (below the book: it rests).
     await page.getByTestId(TESTID.orderSideBuy).click();
     await page.getByTestId(TESTID.orderAmount).fill('10');
     await page.getByTestId(TESTID.orderPrice).fill('0.024');
@@ -28,11 +31,12 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     const native = await placeOrderAndRead(page, mock);
     expect(native.receipt.orders.map((o) => o.title)).toEqual(['Buy limit order']);
     expect(native.receipt.orders[0]!.rows).toMatchObject({ 'Limit price': '0.024 KAS per EXKCC', 'You pay at most per token (all-in)': '0.024 KAS per EXKCC' });
-    // the sent order clears the amount: the same native form again
+    // The sent order clears the amount: the same native form again.
     await page.getByTestId(TESTID.orderAmount).fill('10');
     await page.getByTestId(TESTID.orderPrice).fill('0.024');
 
-    // flip: KAS/EXKCC. Buying EXKCC is selling KAS: the Sell button is on, the amount is the 0.24 KAS it costs, the price 41.67 EXKCC per KAS
+    // Flip: KAS/EXKCC. Buying EXKCC is selling KAS: the Sell button is on, the amount is the 0.24
+    // KAS it costs, the price 41.67 EXKCC per KAS.
     await page.getByTestId('market-flip').click();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXKCC');
     await expect(ticket).toHaveAttribute('data-shown-side', 'sell');
@@ -45,7 +49,7 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderPrice) }).locator('.tk-unit')).toHaveText('EXKCC per KAS');
     await expect(page.getByTestId(TESTID.orderPlace)).toContainText('Sell');
 
-    // flip back: the very same native form
+    // Flip back: the very same native form.
     await page.getByTestId('market-flip').click();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXKCC/KAS');
     await expect(page.getByTestId(TESTID.orderSideBuy)).toHaveAttribute('aria-checked', 'true');
@@ -53,13 +57,15 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     await expect(amountUnit(page)).toHaveText('EXKCC');
     await expect(page.getByTestId(TESTID.orderPrice)).toHaveValue('0.024');
 
-    // sent from the flipped form, the order is the native Buy (a bid of 10 EXKCC at 0.024 KAS), identical to the one sent natively
+    // Sent from the flipped form, the order is the native Buy (a bid of 10 EXKCC at 0.024 KAS),
+    // identical to the one sent natively.
     await page.getByTestId('market-flip').click();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXKCC');
     const flipped = await placeOrderAndRead(page, mock);
     await expectWalletSigned(wallet!, flipped, { requests: 2, call: 1 });
-    // the confirmation of the flipped form speaks the flipped view (a sale of KAS), above the native order's chain-side terms: the same net
-    // effect and the same chain rows as the native table (only the DAA times differ), its prices said in EXKCC per KAS instead
+    // The confirmation of the flipped form speaks the flipped view (a sale of KAS), above the
+    // native order's chain-side terms: the same net effect and the same chain rows as the native
+    // table (only the DAA times differ), its prices said in EXKCC per KAS instead.
     expect(flipped.receipt.orders.map((o) => o.title)).toEqual(['Sell KAS · limit']);
     expect(flipped.receipt.orders[0]!.rows).toMatchObject({ 'You sell': 'up to 0.24 KAS', 'You receive': '10 EXKCC', Price: '41.6666 EXKCC per KAS' });
     expect(flipped.receipt.lines).toEqual(native.receipt.lines);
@@ -83,12 +89,14 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     await expect(page.getByTestId('order-amount-tokens')).toHaveText('= 400 EXKCC at your price');
     await expect(page.getByTestId('order-price-native')).toContainText('0.025 KAS per EXKCC');
     const placed = await placeOrderAndRead(page, mock);
-    // the confirmation says it as typed (a purchase of 10 KAS for 400 EXKCC at 40 EXKCC per KAS), the native sell of 400 EXKCC below
+    // The confirmation says it as typed (a purchase of 10 KAS for 400 EXKCC at 40 EXKCC per KAS),
+    // the native sell of 400 EXKCC below.
     expect(placed.receipt.orders.map((o) => o.title)).toEqual(['Buy KAS · limit']);
     expect(placed.receipt.orders[0]!.token).toMatch(/· on chain: Sell limit order$/);
     expect(placed.receipt.orders[0]!.rows).toMatchObject({ 'You pay': '400 EXKCC', 'You receive': 'at least 10.00 KAS', Price: '40 EXKCC per KAS', Amount: '400 EXKCC' });
     expect(placed.views).toHaveLength(1);
-    // the signed order is a sell of 400 EXKCC = 40,000,000,000 base units, at 2,500,000 sompi per whole EXKCC
+    // The signed order is a sell of 400 EXKCC = 40,000,000,000 base units, at 2,500,000 sompi per
+    // whole EXKCC.
     expect(placed.views[0].contract).toBe('KobAsk');
     expect(placed.views[0].state.state).toMatchObject({ amountLeft: '40000000000', price: '2500000' });
     expect(placed.submission.token_outputs.filter((o) => o.role === 'custody').map((o) => o.amount)).toEqual(['40000000000']);
@@ -99,14 +107,16 @@ test.describe('a KAS book: EXKCC/KAS and KAS/EXKCC', () => {
     await openMarket(page, mock);
     await page.getByTestId('market-flip').click();
     await chooseOption(page.getByTestId('order-type'), 'market');
-    // shown Sell KAS = native buy of EXKCC: sized at the best ask (0.0251 KAS per EXKCC) moved by the 3 % slippage, 0.025853: the most its
-    // auction can pay (TN10 2026-10-17: sized at the ask, 20 KAS typed became 20.60 KAS at the worst price)
+    // Shown Sell KAS = native buy of EXKCC: sized at the best ask (0.0251 KAS per EXKCC) moved by
+    // the 3 % slippage, 0.025853, the most its auction can pay.
+    // It is never sized at the plain ask: 20 KAS typed must not become 20.60 KAS at the worst
+    // price.
     await page.getByTestId(TESTID.orderSideSell).click();
     await page.getByTestId(TESTID.orderAmount).fill('0.251');
     await expect(page.getByTestId('order-amount-tokens')).toHaveText('≈ 9.70874 EXKCC (spends at most 0.26 KAS)');
-    // the exact amount behind the rounded hint: 0.25099999 KAS at 0.025853 KAS per EXKCC
+    // The exact amount behind the rounded hint: 0.25099999 KAS at 0.025853 KAS per EXKCC.
     await expect(page.getByTestId('order-amount-tokens')).toHaveAttribute('data-base', '970873786');
-    // and the shown Buy KAS = native sell: what it receives, at the best bid (approximate)
+    // And the shown Buy KAS = native sell: what it receives, at the best bid (approximate).
     await page.getByTestId(TESTID.orderSideBuy).click();
     await page.getByTestId(TESTID.orderAmount).fill('0.245');
     await expect(page.getByTestId('order-amount-tokens')).toContainText('(receives about');
@@ -117,7 +127,10 @@ test.describe('a token pair: EXKCC/EXUSD and EXUSD/EXKCC', () => {
   const QUOTE = 'e7'.repeat(32);
   test.use({ appConfig: { quoteTokens: { [QUOTE]: 'USD' } } });
 
-  /** the example registry with EXKCC listed and EXUSD (6 decimals) as a second listed token, matching the mock pair seed */
+  /**
+   * The example registry with EXKCC listed and EXUSD (6 decimals) as a second listed token,
+   * matching the mock pair seed.
+   */
   async function listBoth(page: Page): Promise<void> {
     const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
     for (const t of reg.templates) t.review_status = 'reviewed';
@@ -138,18 +151,18 @@ test.describe('a token pair: EXKCC/EXUSD and EXUSD/EXKCC', () => {
     const ticket = page.getByTestId('order-ticket');
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXUSD/KAS');
     await expect(ticket).toHaveAttribute('data-inverted', '0');
-    // Buy 3 EXUSD at 0.3 KAS per EXUSD
+    // Buy 3 EXUSD at 0.3 KAS per EXUSD.
     await page.getByTestId(TESTID.orderSideBuy).click();
     await page.getByTestId(TESTID.orderAmount).fill('3');
     await page.getByTestId(TESTID.orderPrice).fill('0.3');
     await expect(amountUnit(page)).toHaveText('EXUSD');
     const native = await placeOrderAndRead(page, mock);
     expect(native.receipt.orders.map((o) => o.title)).toEqual(['Buy limit order']);
-    // the sent order clears the amount: the same native form again
+    // The sent order clears the amount: the same native form again.
     await page.getByTestId(TESTID.orderAmount).fill('3');
     await page.getByTestId(TESTID.orderPrice).fill('0.3');
 
-    // flip: KAS/EXUSD. Buying EXUSD is selling KAS: 0.9 KAS at 3.333333 EXUSD per KAS
+    // Flip: KAS/EXUSD. Buying EXUSD is selling KAS: 0.9 KAS at 3.333333 EXUSD per KAS.
     await page.getByTestId('market-flip').click();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXUSD');
     await expect(ticket).toHaveAttribute('data-shown-side', 'sell');
@@ -159,7 +172,7 @@ test.describe('a token pair: EXKCC/EXUSD and EXUSD/EXKCC', () => {
     await expect(page.getByTestId('order-amount-tokens')).toHaveText('= 3 EXUSD at your price');
     const flipped = await placeOrder(page, mock);
     await expectWalletSigned(wallet!, flipped, { requests: 2, call: 1 });
-    // the signed order is the native Buy of 3 EXUSD at 0.3 KAS, identical to the one sent natively
+    // The signed order is the native Buy of 3 EXUSD at 0.3 KAS, identical to the one sent natively.
     expect(native.views[0].contract).toBe('KobBid');
     expect(native.views[0].state.state).toMatchObject({ price: '30000000' });
     expect(onChainTerms(flipped)).toEqual(onChainTerms(native));
@@ -181,13 +194,14 @@ test.describe('a token pair: EXKCC/EXUSD and EXUSD/EXKCC', () => {
     await connectWallet(page);
     const ticket = page.getByTestId('order-ticket');
 
-    // EXKCC/EXUSD: Buy 2 EXKCC at 0.0515 EXUSD per EXKCC
+    // EXKCC/EXUSD: Buy 2 EXKCC at 0.0515 EXUSD per EXKCC.
     await page.getByTestId(TESTID.orderSideBuy).click();
     await page.getByTestId(TESTID.orderAmount).fill('2');
     await page.getByTestId(TESTID.orderPrice).fill('0.0515');
     await expect(amountUnit(page)).toHaveText('EXKCC');
 
-    // flip: EXUSD/EXKCC. Buying EXKCC with EXUSD is selling EXUSD for EXKCC: 0.103 EXUSD at 19.417476 EXKCC per EXUSD
+    // Flip: EXUSD/EXKCC. Buying EXKCC with EXUSD is selling EXUSD for EXKCC: 0.103 EXUSD at
+    // 19.417476 EXKCC per EXUSD.
     await page.getByTestId('market-flip').click();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXUSD/EXKCC');
     await expect(ticket).toHaveAttribute('data-side', 'sell');
@@ -198,7 +212,8 @@ test.describe('a token pair: EXKCC/EXUSD and EXUSD/EXKCC', () => {
     await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderPrice) }).locator('.tk-unit')).toHaveText('EXKCC per EXUSD');
     await expect(page.getByTestId('ticket-pair-carried')).toHaveCount(0);
 
-    // and back: Buy 2 EXKCC (0.103 EXUSD at 19.417476 = 2.0000000 EXKCC, rounded down to EXKCC's 8 decimals)
+    // And back: Buy 2 EXKCC (0.103 EXUSD at 19.417476 = 2.0000000 EXKCC, rounded down to EXKCC's 8
+    // decimals).
     await page.getByTestId('market-flip').click();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
     await expect(page.getByTestId(TESTID.orderSideBuy)).toHaveAttribute('aria-checked', 'true');

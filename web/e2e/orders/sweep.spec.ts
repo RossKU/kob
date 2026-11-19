@@ -1,7 +1,9 @@
-// The maker's SWEEP of an order's stray tokens IN PLACE (KOB1 SWEEP record, matcher.md 1.2) through the UI and the mock stack: an ask with two
-// strays of its own token and one FOREIGN stray (another token, outside the registry), a bid (its sweep is paid by a wallet coin), and the C5-01
-// case where a cancel would abandon strays: "Sweep first", then the cancel. The mock node runs every transaction through the script engine and
-// registers a verified sweep as a continuation (the order stays live at the new outpoint, its strays are spent, the tokens go to the maker).
+// The maker's SWEEP of an order's stray tokens IN PLACE (KOB1 SWEEP record, matcher.md 1.2) through
+// the UI and the mock stack: an ask with two strays of its own token and one FOREIGN stray (another
+// token, outside the registry), a bid (its sweep is paid by a wallet coin), and the case
+// where a cancel would abandon strays: "Sweep first", then the cancel. The mock node runs every
+// transaction through the script engine and registers a verified sweep as a continuation (the order
+// stays live at the new outpoint, its strays are spent, the tokens go to the maker).
 import { test, expect, type MockClient } from '../fixtures';
 import { KAS, TOKEN } from '../helpers/env';
 import { openOrders, runFlow, seedOrders, openOrderRow } from '../helpers/orders';
@@ -35,7 +37,8 @@ test.describe('sweep strays in place', () => {
     await openOrderRow(page, id);
     await page.getByTestId(`order-sweep-${id}`).click();
     const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
-    // the transaction: the 3 strays are spent, the order continues (nothing closed or created), and what the strays held goes to the maker only
+    // the transaction: the 3 strays are spent, the order continues (nothing closed or created), and
+    // what the strays held goes to the maker only
     const alice = (await mock.balance('alice')).pubkey;
     expect(placed!.submission.records.map((r) => r.type)).toContain('sweep');
     expect(placed!.submission.closed).toEqual([]);
@@ -43,7 +46,8 @@ test.describe('sweep strays in place', () => {
     const own = placed!.submission.token_outputs.filter((o) => o.role === 'owned');
     expect(own.every((o) => o.owner === alice), 'nothing goes to other keys').toBe(true);
 
-    // the mock node: a continuation of the same order (same state, custody untouched), the strays spent, the tokens at the maker
+    // the mock node: a continuation of the same order (same state, custody untouched), the strays
+    // spent, the tokens at the maker
     const after = await mock.order(id!);
     expect(after.status).toBe('open');
     expect(after.amount_left).toBe(String(3n * TOKEN));
@@ -60,8 +64,8 @@ test.describe('sweep strays in place', () => {
     await expect(row).toHaveAttribute('data-status', 'open');
     await expect(row.getByTestId('order-amount')).toContainText('3 / 3');
     await expect(page.getByTestId(`order-sweep-${id}`)).toHaveCount(0);
-    // and it is still the maker's to cancel (from its new outpoint); the sweep's result is still on screen until the cancel's flow replaces it:
-    // its wallet request says it has
+    // and it is still the maker's to cancel (from its new outpoint); the sweep's result is still on
+    // screen until the cancel's flow replaces it: its wallet request says it has
     const asked = (await wallet!.calls()).length;
     await page.getByTestId(`order-cancel-${id}`).click();
     await confirmAfterClick(page, 'flow-status'); // the cancel's final confirmation, then its wallet request

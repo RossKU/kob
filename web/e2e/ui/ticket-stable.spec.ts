@@ -1,7 +1,11 @@
-// The order ticket never changes size and never moves anything (founder, 2026-11-10; the usual exchange layout): the panel has the height of its row (beside the book
-// and the chart) or a fixed height (a phone), its form scrolls inside it and the Buy / Sell button is pinned to its bottom. Switching Limit / Market / Stop, the
-// Ladder, the expiry fields and the Advanced box, typing an amount and an error in the reason slot change nothing outside the form: the button, the book, the
-// charts and the activity log keep their boxes (+-1 px), and nothing on the page scrolls sideways. Mock stack.
+// The order ticket never changes size and never moves anything.
+// The panel has the height of its row (beside the book and the chart) or a fixed height (a phone),
+// its form scrolls inside it and the Buy / Sell button is pinned to its bottom.
+// Switching Limit / Market / Stop, the Ladder, the expiry fields and the Advanced box, typing an
+// amount and an error in the reason slot change nothing outside the form.
+// The button, the book, the charts and the activity log keep their boxes (+-1 px), and nothing on
+// the page scrolls sideways.
+// Mock stack.
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
@@ -10,7 +14,10 @@ import { horizontalOverflow } from '../helpers/i18n';
 
 test.use({ autoOpen: false });
 
-/** What must not move: the ticket panel, its button and scroll area's footer, the book's panel (the depth chart is its Depth view), the chart and the activity log under them. */
+/**
+ * What must not move: the ticket panel, its button and scroll area's footer, the book's panel (the
+ * depth chart is its Depth view), the chart and the activity log under them.
+ */
 const watched = (_page: Page): string[] => ['ticket-container', 'order-ticket', 'order-place', 'order-book', 'book-section', 'chart-section', 'activity-list'];
 type Box = { x: number; y: number; width: number; height: number };
 
@@ -27,7 +34,10 @@ const boxes = (page: Page): Promise<Record<string, Box>> =>
     return out;
   }, watched(page));
 
-/** Three columns (from 1200 px): the book, the chart and the ticket are one row and end on one line, where the ticket's button is pinned. */
+/**
+ * Three columns (from 1200 px): the book, the chart and the ticket are one row and end on one line,
+ * where the ticket's button is pinned.
+ */
 async function expectOneBottomLine(page: Page): Promise<void> {
   const bottom = (id: string) => page.getByTestId(id).evaluate((el) => el.getBoundingClientRect().bottom + scrollY);
   const chart = await bottom('chart-section');
@@ -41,7 +51,8 @@ async function run(page: Page, mock: import('../fixtures').MockClient): Promise<
   await openMarket(page, mock);
   await pickType(page, 'limit', 'buy');
   await settlePlan(page);
-  // what loads under the grid (the activity log's rows, the wallet's panel) changes the page by itself: the boxes are taken once it is in
+  // What loads under the grid (the activity log's rows, the wallet's panel) changes the page by
+  // itself: the boxes are taken once it is in.
   await page.getByTestId('activity-list').scrollIntoViewIfNeeded(); // it reads its rows once it is on screen
   await expect(page.getByTestId('activity-list').getByTestId('activity-row').first()).toBeVisible();
   await expect(page.getByTestId('market-orders').getByTestId('orders-section')).toBeVisible();
@@ -59,14 +70,15 @@ async function run(page: Page, mock: import('../fixtures').MockClient): Promise<
       }
     }
     expect(await horizontalOverflow(page), `${step}: nothing scrolls sideways`).toBe(0);
-    // the form's own scroll area never makes the page's scroll area wider either
+    // The form's own scroll area never makes the page's scroll area wider either.
     expect(await page.getByTestId('order-scroll').evaluate((el) => el.scrollWidth - el.clientWidth), `${step}: the form does not scroll sideways`).toBeLessThanOrEqual(0);
   };
 
   await check('limit');
   await pickType(page, 'market', 'buy');
   await check('market');
-  // a market order keeps its price row, disabled and reading "Market price" (Limit's price row is where it stands), so the rows and the button do not move
+  // A market order keeps its price row, disabled and reading "Market price" (Limit's price row is
+  // where it stands), so the rows and the button do not move.
   await expect(page.getByTestId('order-price-market')).toBeDisabled();
   await expect(page.getByTestId('order-price-market')).toHaveValue('Market price');
   await pickType(page, 'stopLimit', 'buy');
@@ -86,7 +98,7 @@ async function run(page: Page, mock: import('../fixtures').MockClient): Promise<
   await check('expiry fields');
   await pickType(page, 'ifo', 'buy');
   await check('a long form (if-done with a bracket)');
-  // the button stays where it is while the form scrolls inside the panel
+  // The button stays where it is while the form scrolls inside the panel.
   await page.getByTestId('order-scroll').evaluate((el) => { el.scrollTop = el.scrollHeight; });
   await check('the form scrolled to its end');
   await expect(page.getByTestId('order-place')).toBeVisible();

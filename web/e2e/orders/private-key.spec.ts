@@ -1,6 +1,8 @@
-// The "Private key" wallet: the key is typed into signer.html, framed `sandbox="allow-scripts"` (opaque origin). The app never sees it: it sends
-// the unsigned transaction, the frame shows its own decoding (the final confirmation: a title and a table of the order's terms, the fee and the
-// token; the app shows no popup of its own for this wallet) and signs only after a click on its own Confirm button.
+// The "Private key" wallet: the key is typed into signer.html, framed `sandbox="allow-scripts"`
+// (opaque origin). The app never sees it: it sends the unsigned transaction, the frame shows its
+// own decoding (the final confirmation: a title and a table of the order's terms, the fee and the
+// token; the app shows no popup of its own for this wallet) and signs only after a click on its own
+// Confirm button.
 import type { Frame, Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
 import { KAS, disconnectWallet, fund, mockClock, openConnect, openMarket, gotoOrders } from '../helpers/env';
@@ -8,7 +10,10 @@ import { chooseOption } from '../helpers/dropdown';
 import { runFlow } from '../helpers/orders';
 import { clickPlace, confirmReceipt, expectStopped, fillFields, pickType, placedBy, readReceipt, readSignerFrame, waitReviewable, waitSubmitted, type ReceiptRead } from '../helpers/ticket';
 import { formatKas } from '../../src/kob/units';
-/** the header chip shows the address with its network prefix and the start of its body, then an ellipsis (WalletButton.tsx chipAddress) */
+/**
+ * the header chip shows the address with its network prefix and the start of its body, then an
+ * ellipsis (WalletButton.tsx chipAddress)
+ */
 const chipAddress = (a: string): string => {
   const body = a.slice(a.indexOf(':') + 1);
   return `${a.slice(0, a.indexOf(':') + 1)}${body.slice(0, 12)}…`;
@@ -33,7 +38,8 @@ async function connectKey(page: Page, key = SECRET): Promise<void> {
   await expect(f.getByTestId('signer-key')).toHaveAttribute('type', 'password');
   await expect(f.getByTestId('signer-key')).toHaveAttribute('autocomplete', 'off');
   await expect(f.getByTestId('signer-key')).toHaveAttribute('spellcheck', 'false');
-  // before anything is pasted: what the key is, and the one line of caution (in memory of this tab only; testnet, small amounts)
+  // before anything is pasted: what the key is, and the one line of caution (in memory of this tab
+  // only; testnet, small amounts)
   await expect(f.getByTestId('signer-guide')).toContainText('64 hexadecimal characters');
   await expect(f.getByTestId('signer-guide')).toContainText('seed phrase');
   await expect(f.getByTestId('signer-guide')).toContainText('stays in this tab');
@@ -48,13 +54,16 @@ async function sellTicket(page: Page): Promise<void> {
   await waitReviewable(page);
 }
 
-/** the fee the frame shows is the exact fee of the transaction the node accepted (full precision) */
+/**
+ * the fee the frame shows is the exact fee of the transaction the node accepted (full precision)
+ */
 const feeText = (sompi: string): string => `${formatKas(BigInt(sompi))} KAS`;
 
 /**
- * Waits for the signer frame of the request the app just made (the click on the order button or on a My orders action; the app shows no popup for
- * this wallet), checks its title, summary lines and order tables, approves in the frame (Approve signs), and returns what the frame showed.
- * `lines` are exact summary lines by label, `orderTitles` the titles of the orders it lists.
+ * Waits for the signer frame of the request the app just made (the click on the order button or on
+ * a My orders action; the app shows no popup for this wallet), checks its title, summary lines and
+ * order tables, approves in the frame (Approve signs), and returns what the frame showed. `lines`
+ * are exact summary lines by label, `orderTitles` the titles of the orders it lists.
  */
 async function approveInFrame(page: Page, want: { title: string; lines?: Record<string, string>; orderTitles?: string[] }): Promise<ReceiptRead> {
   const f = signer(page);
@@ -71,7 +80,10 @@ async function approveInFrame(page: Page, want: { title: string; lines?: Record<
   return receipt;
 }
 
-/** Everything of the app page a script there could read: storage, cookies, the URL, the page's own markup and IndexedDB names. */
+/**
+ * Everything of the app page a script there could read: storage, cookies, the URL, the page's own
+ * markup and IndexedDB names.
+ */
 async function pageReadable(page: Page): Promise<string> {
   return page.evaluate(async () => {
     const dump = (s: Storage) => Array.from({ length: s.length }, (_, i) => `${s.key(i)}=${s.getItem(s.key(i)!)}`).join('\n');
@@ -87,13 +99,15 @@ test('connect with a private key in the signer frame, place and cancel an order 
   await openMarket(page, mock, { connect: false });
   await connectKey(page);
   await expect(page.getByTestId('wallet-address')).toContainText(chipAddress(TEST_KEYS.alice.testnetAddress));
-  // the address is the chip's text; how it is connected is the wallet icon's tooltip, never a label next to the address
+  // the address is the chip's text; how it is connected is the wallet icon's tooltip, never a label
+  // next to the address
   await expect(page.getByTestId('wallet-address')).toHaveText(new RegExp(`^${chipAddress(TEST_KEYS.alice.testnetAddress)}`));
   await expect(page.getByTestId('wallet-connected')).not.toContainText('Private key');
   await expect(page.getByTestId('wallet-kind')).toHaveAttribute('title', 'Connected with: private key (this browser)');
   await expect(page.getByTestId('signer-overlay')).toBeHidden();
 
-  // place: the frame's table says the order (2 tokens at 0.027 KAS each), what it locks and the fee; no popup of the app
+  // place: the frame's table says the order (2 tokens at 0.027 KAS each), what it locks and the
+  // fee; no popup of the app
   await sellTicket(page);
   await clickPlace(page);
   const shown = await approveInFrame(page, {
@@ -101,8 +115,9 @@ test('connect with a private key in the signer frame, place and cancel an order 
     lines: { 'Locked in orders': '2 KAS' },
     orderTitles: ['Sell limit order'],
   });
-  // the mock registry is not the table this bundle pins (registry/tokens.json, signer/table.ts): the frame does not take its ticker or
-  // decimals from the app: it names the token by its covenant id and reads it on the scale the order itself names
+  // the mock registry is not the table this bundle pins (registry/tokens.json, signer/table.ts):
+  // the frame does not take its ticker or decimals from the app: it names the token by its covenant
+  // id and reads it on the scale the order itself names
   expect(shown.orders[0]!.rows).toMatchObject({ Amount: expect.stringMatching(/^2 [0-9a-f]{8}…[0-9a-f]{8}$/), 'Limit price': expect.stringMatching(/^0.027 KAS per [0-9a-f]{8}…[0-9a-f]{8}$/) });
   expect(shown.orders[0]!.token).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} [(]8 decimals, from its price scale[)]$/);
   const placed = await placedBy(mock, await waitSubmitted(page));
@@ -136,7 +151,8 @@ test('the frame is an opaque origin: the app cannot read it, cannot sign through
   await connectKey(page);
   await expect(page.getByTestId('wallet-address')).toBeVisible();
 
-  // the frame's side: opaque origin, no storage of the app's origin, no access to the app's document
+  // the frame's side: opaque origin, no storage of the app's origin, no access to the app's
+  // document
   const inside = await signerFrame(page).evaluate(() => {
     const r: Record<string, string> = { origin: String(self.origin) };
     try {
@@ -157,7 +173,8 @@ test('the frame is an opaque origin: the app cannot read it, cannot sign through
   await clickPlace(page);
   await expect(signer(page).getByTestId('signer-approve')).toBeVisible();
 
-  // the app's side: a script of the page tries to read the frame, click its button, and fake approvals
+  // the app's side: a script of the page tries to read the frame, click its button, and fake
+  // approvals
   const outside = await page.evaluate(() => {
     const f = document.querySelector<HTMLIFrameElement>('[data-testid="signer-frame"]')!;
     const r: Record<string, string> = { sandbox: f.getAttribute('sandbox') ?? '', contentDocument: String(f.contentDocument) };
@@ -250,7 +267,8 @@ test('a page that clips the frame down to its buttons gets no approval; shown wh
   await connectKey(page);
   await expect(page.getByTestId('wallet-address')).toBeVisible();
   await sellTicket(page);
-  // before the request appears, a script of the page clips the frame so that only its buttons show (its own summary could sit above them)
+  // before the request appears, a script of the page clips the frame so that only its buttons show
+  // (its own summary could sit above them)
   await page.evaluate(() => {
     const box = document.querySelector<HTMLElement>('.signer-box')!;
     const frame = document.querySelector<HTMLIFrameElement>('[data-testid="signer-frame"]')!;
@@ -290,7 +308,8 @@ test('a browser without IntersectionObserver v2 (no isVisible on the entry) is n
   await expect(button).toBeVisible();
   await expect(button).toHaveAttribute('data-state', 'unavailable');
   await expect(button).toHaveAttribute('title', 'Not available in this browser. Use a browser extension wallet.');
-  // nothing about it stays in the bar; pressing the button says why, as text in a dialog (a tooltip does not exist on a touch screen)
+  // nothing about it stays in the bar; pressing the button says why, as text in a dialog (a tooltip
+  // does not exist on a touch screen)
   await expect(page.getByTestId('wallet-key-unsupported')).toHaveCount(0);
   await button.click();
   const why = page.getByTestId('wallet-key-unsupported');
@@ -307,7 +326,8 @@ test.describe('an iPhone (no IntersectionObserver v2, no extension wallets)', ()
       delete (IntersectionObserverEntry.prototype as { isVisible?: boolean }).isVisible;
     });
     await openMarket(page, mock, { connect: false });
-    // the bar is one "Connect" button and nothing else; with no extension it goes to the private key, which this browser cannot run: the reason, as text
+    // the bar is one "Connect" button and nothing else; with no extension it goes to the private
+    // key, which this browser cannot run: the reason, as text
     await expect(page.getByTestId('wallet-key-unsupported')).toHaveCount(0);
     await expect(page.getByTestId('wallet-install-hint')).toHaveCount(0);
     await expect(page.getByTestId('wallet-connect-list').getByRole('button')).toHaveText(['Connect']);
@@ -339,7 +359,8 @@ test('signer.html framed by a same-origin script without the sandbox attribute i
 test('a late Approve (9 s in the frame) on a market order: the frame is not shown again, one transaction, and its clock is the one at Approve', async ({ appPage: page, mock }) => {
   test.setTimeout(120_000);
   await fund(mock);
-  // counts how often the signer overlay becomes visible (every prompt of the frame shows it): sampled every animation frame
+  // counts how often the signer overlay becomes visible (every prompt of the frame shows it):
+  // sampled every animation frame
   await page.addInitScript(() => {
     const w = window as unknown as { __overlayShown: number };
     w.__overlayShown = 0;
@@ -367,7 +388,8 @@ test('a late Approve (9 s in the frame) on a market order: the frame is not show
   await page.getByTestId('order-place').click();
   const f = signer(page);
   await expect(f.getByTestId('signer-title')).toBeVisible({ timeout: 30_000 });
-  // the clock reaches the frame before the request: the first view already says every time as "in 20 s | DAA ...", never a bare "DAA score ..."
+  // the clock reaches the frame before the request: the first view already says every time as "in
+  // 20 s | DAA ...", never a bare "DAA score ..."
   const timeCells = await f.getByTestId('signer-order-0').locator('dd[data-daa]').allTextContents();
   expect(timeCells.length).toBeGreaterThan(0);
   for (const text of timeCells) expect(text).toMatch(/^(now|in \d+ \w+)DAA \d+$/);
@@ -383,14 +405,17 @@ test('a late Approve (9 s in the frame) on a market order: the frame is not show
     .toMatchObject({ frame: expect.any(Number) });
   const size = await f.locator('body').evaluate(() => ({ content: Math.ceil(document.getElementById('signer')!.getBoundingClientRect().height), frame: window.innerHeight }));
   test.info().annotations.push({ type: 'signer-table', description: `content ${size.content}px in a frame of ${size.frame}px (viewport ${JSON.stringify(page.viewportSize())})` });
-  // as tall as its content, or (a table taller than the viewport leaves: other fonts, a phone) as tall as the viewport leaves, then it scrolls
+  // as tall as its content, or (a table taller than the viewport leaves: other fonts, a phone) as
+  // tall as the viewport leaves, then it scrolls
   const room = await page.getByTestId('signer-frame').evaluate((el) => window.innerHeight - Math.ceil(el.getBoundingClientRect().top) - 14);
   expect(Math.abs(size.frame - Math.min(size.content, room)), 'the frame fits its content, up to the viewport').toBeLessThanOrEqual(2);
-  // the table follows the market and the clock while it is open: its start is said from the clock and moves on
+  // the table follows the market and the clock while it is open: its start is said from the clock
+  // and moves on
   const start = f.getByTestId('signer-order-0').locator('dd[data-daa]').first();
   await expect(start).toContainText(/^(now|in \d+ s)DAA \d+$/, { timeout: 5_000 });
   const daa0 = Number(await start.getAttribute('data-daa'));
-  // the user reads for 9 s (the mock chain advances 10 DAA a second): the auction in the table began on the clock of the click
+  // the user reads for 9 s (the mock chain advances 10 DAA a second): the auction in the table
+  // began on the clock of the click
   await readSignerFrame(page);
   await page.waitForTimeout(Math.max(0, 9_000 - (Date.now() - t0)));
   await expect(f.getByTestId('signer-approve')).toBeEnabled();
@@ -403,16 +428,19 @@ test('a late Approve (9 s in the frame) on a market order: the frame is not show
   const txid = await waitSubmitted(page);
   const placed = await placedBy(mock, txid);
 
-  // one prompt only: the frame was shown once; the re-timed request after the late Approve was signed without showing it again
+  // one prompt only: the frame was shown once; the re-timed request after the late Approve was
+  // signed without showing it again
   const shown = await page.evaluate(() => (window as unknown as { __overlayShown: number }).__overlayShown);
   expect(shown - shownAfterConnect, 'the frame was shown once for this order').toBe(1);
   await expect(page.getByTestId('signer-overlay')).toBeHidden();
   expect(await mock.submitted(false), 'one transaction').toHaveLength(1);
-  // the stale clock of the table did not end up in the order: the auction starts at or after the node clock at Approve
+  // the stale clock of the table did not end up in the order: the auction starts at or after the
+  // node clock at Approve
   const state = placed.views[0].state.state;
   expect(placed.views[0].contract).toBe('KobBid');
   expect(Number(state.activeFrom), 'activeFrom >= the DAA at Approve').toBeGreaterThanOrEqual(approvedAt.daa);
-  // what was signed is what the table showed at Approve (re-timed after it only if the clock passed its start meanwhile)
+  // what was signed is what the table showed at Approve (re-timed after it only if the clock passed
+  // its start meanwhile)
   expect(Number(state.activeFrom)).toBeGreaterThanOrEqual(shownStart);
   expect(Number(state.activeFrom) - shownStart).toBeLessThanOrEqual(40);
   expect(Number(state.expiryDaa)).toBeGreaterThan(Number(state.activeFrom));
@@ -440,7 +468,8 @@ test.describe('the app\'s hints in the signer frame (a phone, 390 px)', () => {
     await expect(f.getByTestId('signer-app-hints')).toHaveCount(0);
     await confirmReceipt(page);
     await waitSubmitted(page);
-    // 38 x 0.026 = 0.988 KAS: below 1 KAS. The sentence is the frame's own, the signer's rows are all still there, Approve is not held by it
+    // 38 x 0.026 = 0.988 KAS: below 1 KAS. The sentence is the frame's own, the signer's rows are
+    // all still there, Approve is not held by it
     await fillFields(page, { amount: '38', price: '0.026' });
     await waitReviewable(page);
     await page.getByTestId('order-place').click();

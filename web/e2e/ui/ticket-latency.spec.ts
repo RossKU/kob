@@ -1,11 +1,20 @@
-// The order ticket with a slow indexer (every answer 2-6 s, the node fast): typing never waits for the network. Right after the page opens the
-// ticket says what it is still reading; once its environment is in, the order button is enabled within 1 s of the last keystroke even while
-// background reads are in flight. A click then opens the final confirmation only after the re-check against the state at the click
-// (ui/ticket/review-check.ts), which reads again the parts that are older than the click, were read before the feed went live, or may have been
-// changed by a notice or by a submission of this page: with this indexer that is a few answers of 2-6 s; Continue in the popup asks the wallet at once.
-// With a ready ticket and a quick indexer the confirmation is there within 1 s of the click, also for an order right after the first one. A later order never picks the coins an earlier one has just spent
-// (app/pending-spends.ts), and it spends the wallet's settled coins rather than the change of the order before: an extension wallet is asked for a
-// coin that change made only once its own node sees it (wallet/visibility.ts), so an order that can only spend that change waits for it, and says so.
+// The order ticket with a slow indexer (every answer 2-6 s, the node fast). Typing never waits for
+// the network.
+//
+// - Right after the page opens, the ticket says what it is still reading.
+// - Once its environment is in, the order button is enabled within 1 s of the last keystroke, even
+//   while background reads are in flight.
+// - A click then opens the final confirmation only after the re-check against the state at the
+//   click (ui/ticket/review-check.ts). The re-check reads again the parts that are older than the
+//   click, were read before the feed went live, or may have been changed by a notice or by a
+//   submission of this page. With this indexer that is a few answers of 2-6 s. Continue in the
+//   popup asks the wallet at once.
+// - With a ready ticket and a quick indexer, the confirmation is there within 1 s of the click,
+//   also for an order right after the first one.
+// - A later order never picks the coins an earlier one has just spent (app/pending-spends.ts). It
+//   spends the wallet's settled coins rather than the change of the order before.
+// - An extension wallet is asked for a coin that change made only once its own node sees it
+//   (wallet/visibility.ts). So an order that can only spend that change waits for it, and says so.
 import type { Page } from '@playwright/test';
 import { expect, test, type MockWalletHandle } from '../fixtures';
 import { connectWallet, fund, listExkcc } from '../helpers/env';
@@ -14,7 +23,10 @@ import { waitSubmitted } from '../helpers/ticket';
 /** The transactions the wallet's sign request `n` (0-based) spends from. */
 const spentTxids = async (wallet: MockWalletHandle, n: number): Promise<string[]> => (await wallet.calls())[n]!.tx.inputs.map((i: { transactionId: string }) => i.transactionId);
 
-/** milliseconds from a click to the final confirmation popup, and then from Continue to the wallet's sign request */
+/**
+ * Milliseconds from a click to the final confirmation popup, and then from Continue to the wallet's
+ * sign request.
+ */
 interface ClickTimes {
   toPopup: number;
   toWallet: number;
@@ -24,16 +36,26 @@ test.use({ autoOpen: false });
 
 const BUDGET_MS = 1_000;
 /**
- * a click on a ticket whose parts were read before the feed went live, or before a notice / a submission of this page, waits for the re-check reads of the slow indexer (2-6 s each, a few in a row).
- * The market page also reads the connected wallet's orders, strays and token coins (the Portfolio panel on the page) and the book's per-order lookups through the same few
- * connections to that origin, so the re-check's reads queue behind them: 60 s, not 30 s (measured 10-30 s on a quick machine, more on a CI runner).
+ * A click on a ticket whose parts were read before the feed went live, or before a notice / a
+ * submission of this page, waits for the re-check reads of the slow indexer (2-6 s each, a few in a
+ * row).
+ * The market page also reads the connected wallet's orders, strays and token coins (the Portfolio
+ * panel on the page) and the book's per-order lookups through the same few connections to that
+ * origin, so the re-check's reads queue behind them: 60 s, not 30 s (measured 10-30 s on a quick
+ * machine, more on a CI runner).
  */
 const RECHECK_BUDGET_MS = 60_000;
 
-/** The visibility gate's margin after KOB's node lists a fresh output (wallet/visibility.ts `SETTLE_MS`). */
+/**
+ * The visibility gate's margin after KOB's node lists a fresh output (wallet/visibility.ts
+ * `SETTLE_MS`).
+ */
 const SETTLE_MS = 2_000;
 
-/** The node on an origin of its own, as in production (wRPC): its calls never queue behind the slow indexer's in the browser's connection pool. */
+/**
+ * The node on an origin of its own, as in production (wRPC): its calls never queue behind the slow
+ * indexer's in the browser's connection pool.
+ */
 async function nodeOnItsOwnOrigin(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const c = (window as unknown as { __KOB_CONFIG__: { nodeUrl: string } }).__KOB_CONFIG__;
@@ -41,14 +63,17 @@ async function nodeOnItsOwnOrigin(page: Page): Promise<void> {
   });
 }
 
-/** Types amount and price; returns the time of the last keystroke. */
+/** Types amount and price. Returns the time of the last keystroke. */
 async function typeOrder(page: Page, amount: string, price: string): Promise<number> {
   await page.getByTestId('order-amount').fill(amount);
   await page.getByTestId('order-price').fill(price);
   return Date.now();
 }
 
-/** The order button enabled for THIS order (the amount box holds it and its plan is not pending; background reads may still be in flight), polled; returns when. */
+/**
+ * The order button enabled for THIS order (the amount box holds it and its plan is not pending;
+ * background reads may still be in flight), polled. Returns when.
+ */
 async function placeableFor(page: Page, amount: string): Promise<number> {
   await expect
     .poll(
@@ -63,8 +88,9 @@ async function placeableFor(page: Page, amount: string): Promise<number> {
 }
 
 /**
- * Clicks the order button; returns the milliseconds until the final confirmation popup is there, and from its Continue until the wallet received its
- * sign request (approved at once by the mock wallet). The wallet is not asked before Continue.
+ * Clicks the order button. Returns the milliseconds until the final confirmation popup is there,
+ * and from its Continue until the wallet received its sign request (approved at once by the mock
+ * wallet). The wallet is not asked before Continue.
  */
 async function clickToWallet(page: Page, wallet: MockWalletHandle, request: number): Promise<ClickTimes> {
   const t0 = Date.now();
@@ -90,21 +116,24 @@ test.describe('order ticket with a slow indexer (2-6 s an answer)', () => {
       await connectWallet(page);
       await page.getByTestId('order-side-buy').click();
 
-      // typed at once, before any indexer answer: within 1 s the ticket either enables the order button or names what it is still reading (never a silent, disabled button)
+      // Typed at once, before any indexer answer: within 1 s the ticket either enables the order
+      // button or names what it is still reading (never a silent, disabled button).
       let typed = await typeOrder(page, '3', '0.0201');
       await expect(page.locator('[data-testid="order-need-loading"], [data-testid="order-place"]:enabled').first()).toBeVisible({ timeout: BUDGET_MS });
       expect(Date.now() - typed).toBeLessThan(BUDGET_MS);
       await expect(page.getByTestId('order-need-loading')).toHaveCount(0, { timeout: 30_000 });
       await placeableFor(page, '3');
 
-      // the parts were read before the feed went live: the re-check reads them again from the slow indexer before the wallet is asked
+      // The parts were read before the feed went live: the re-check reads them again from the slow
+      // indexer before the wallet is asked.
       const clickToWallet1 = await clickToWallet(page, wallet!, 1);
       expect(clickToWallet1.toPopup).toBeLessThan(RECHECK_BUDGET_MS);
       expect(clickToWallet1.toWallet).toBeLessThan(BUDGET_MS);
       const txid = await waitSubmitted(page);
 
-      // a live notice sets background reads going (2-6 s each): typing re-plans against what is on hand, at once; the click reaches the wallet
-      // after the re-check reads of the slow indexer (the wallet is not asked before them)
+      // A live notice sets background reads going (2-6 s each): typing re-plans against what is on
+      // hand, at once. The click reaches the wallet after the re-check reads of the slow indexer
+      // (the wallet is not asked before them).
       const ask = (await mock.ordersOf('maker', 'active')).find((o: { side: number }) => o.side === 1);
       await mock.fill(ask!.covenant_id, 1000n);
       await page.waitForTimeout(1_200); // past the feed's debounce: the reads are in flight now
@@ -113,13 +142,15 @@ test.describe('order ticket with a slow indexer (2-6 s an answer)', () => {
       expect(keyToPlace).toBeLessThan(BUDGET_MS);
       const clickToWallet2 = await clickToWallet(page, wallet!, 2);
       expect(clickToWallet2.toPopup).toBeLessThan(RECHECK_BUDGET_MS);
-      // the wallet has settled coins: the second order spends one of them, not the first one's change, and the wallet is asked at once
+      // The wallet has settled coins: the second order spends one of them, not the first one's
+      // change, and the wallet is asked at once.
       expect(clickToWallet2.toWallet).toBeLessThan(BUDGET_MS);
       expect(await spentTxids(wallet!, 1)).not.toContain(txid);
       const txid2 = await waitSubmitted(page);
       expect(txid2).not.toBe(txid);
 
-      // a third order right after: planned from the environment on hand, which still lists the coins the second one spent; they are left out
+      // A third order right after: planned from the environment on hand, which still lists the
+      // coins the second one spent. They are left out.
       typed = await typeOrder(page, '5', '0.0203');
       const keyToPlace2 = (await placeableFor(page, '5')) - typed;
       expect(keyToPlace2).toBeLessThan(BUDGET_MS);
@@ -153,13 +184,15 @@ test.describe('order ticket with a slow indexer (2-6 s an answer)', () => {
       await expect(page.getByTestId('order-need-loading')).toHaveCount(0, { timeout: 30_000 });
       await placeableFor(page, '3');
 
-      // checks, planning and the node clock are quick: the confirmation is there within 1 s of the click, the wallet is asked within 1 s of Continue
+      // Checks, planning and the node clock are quick: the confirmation is there within 1 s of the
+      // click, the wallet is asked within 1 s of Continue.
       const first = await clickToWallet(page, wallet!, 1);
       expect(first.toPopup).toBeLessThan(BUDGET_MS);
       expect(first.toWallet).toBeLessThan(BUDGET_MS);
       const txid = await waitSubmitted(page);
 
-      // an order right after: the first one's coins are left out, the re-check reads what the submission may have changed, still within 1 s
+      // An order right after: the first one's coins are left out, the re-check reads what the
+      // submission may have changed, still within 1 s.
       await typeOrder(page, '4', '0.0202');
       await placeableFor(page, '4');
       const second = await clickToWallet(page, wallet!, 2);
@@ -175,7 +208,7 @@ test.describe('order ticket with a slow indexer (2-6 s an answer)', () => {
 
   test('an order right after the first that can only spend its change: the ticket says it waits for the wallet, which is asked once the node lists the change and the margin passed', async ({ appPage: page, mock, wallet }) => {
     test.setTimeout(120_000);
-    // ONE coin: the second order has nothing but the first one's change to spend
+    // ONE coin: the second order has nothing but the first one's change to spend.
     await fund(mock, 'alice', { utxos: 1 });
     await nodeOnItsOwnOrigin(page);
     await listExkcc(page);
@@ -201,11 +234,12 @@ test.describe('order ticket with a slow indexer (2-6 s an answer)', () => {
       expect(toPopup).toBeLessThan(BUDGET_MS);
       await page.getByTestId('confirm-order-ok').click();
       const t1 = Date.now();
-      // the gate's wait is shown on the order button while the wallet's node catches up
+      // The gate's wait is shown on the order button while the wallet's node catches up.
       await expect(page.getByTestId('order-place')).toContainText('sees your last transaction', { timeout: 5_000 });
       await wallet!.waitForCalls(2, 30_000);
       const toWallet = Date.now() - t1;
-      // the mock node lists the change at once: the wallet is asked after the margin, and not much later
+      // The mock node lists the change at once: the wallet is asked after the margin, and not much
+      // later.
       expect(toWallet).toBeGreaterThanOrEqual(SETTLE_MS - 200);
       expect(toWallet).toBeLessThan(SETTLE_MS + BUDGET_MS);
       expect(await spentTxids(wallet!, 1)).toContain(txid);

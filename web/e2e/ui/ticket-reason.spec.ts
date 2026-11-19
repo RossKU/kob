@@ -1,7 +1,12 @@
-// The ticket says why the order button is off, always (founder, 2026-11-02): for every order type and side, a disabled button says why. A REAL blocking error
-// (a value that does not parse, too little balance ...) is red text in the one fixed-height slot directly above it (`order-issues`); a required field that is
-// simply EMPTY (untouched, or reset after an order) is no error: the slot stays empty and the disabled button itself says what to enter ("Enter an amount"). The unit of every input row sits in one fixed-width column at
-// the right end of the row, and the cost line under the amount is never an empty gap.
+// The ticket says why the order button is off, always: for every order type and side, a disabled
+// button says why.
+//
+// - A real blocking error (a value that does not parse, too little balance ...) is red text in the
+//   one fixed-height slot directly above the button (`order-issues`).
+// - A required field that is simply empty (untouched, or reset after an order) is no error. The
+//   slot stays empty and the disabled button itself says what to enter ("Enter an amount").
+// - The unit of every input row sits in one fixed-width column at the right end of the row.
+// - The cost line under the amount is never an empty gap.
 import { expect, test } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
 import { optionValues } from '../helpers/dropdown';
@@ -27,25 +32,28 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
         const sideBtn = page.getByTestId(`order-side-${side}`);
         if (await sideBtn.isDisabled()) continue;
         await sideBtn.click();
-        // (the amount and the price are carried from one type to the next: start from an empty form)
+        // The amount and the price are carried from one type to the next: start from an empty form.
         await fillFields(page, { amount: '' });
         if (await page.getByTestId('order-price').count()) await fillFields(page, { price: '' });
         await settlePlan(page);
-        // an empty form: the button is off and says what to enter; the slot has no red text (an empty field is not an error)
-        // (a close order has no amount to give: it sells everything, and its slot is empty)
+        // An empty form: the button is off and says what to enter. The slot has no red text (an
+        // empty field is not an error).
+        // A close order has no amount to give: it sells everything, and its slot is empty.
         if (await button.isDisabled()) {
           await expect(button, `${type} ${side}: the button of an empty form`).toHaveText(/^Enter /);
           await expect(slot, `${type} ${side}: no error text for an empty form`).not.toContainText(/\S/);
           seenDisabled++;
         } else await expect(slot, `${type} ${side}: nothing to say`).not.toContainText(/\S/);
-        // only an amount: the first missing field is named by the button, or a real reason is in the slot
+        // Only an amount: the first missing field is named by the button, or a real reason is in
+        // the slot.
         await fillFields(page, { amount: '1' });
         await settlePlan(page);
         if (await button.isDisabled()) {
           if (/^Enter /.test((await button.textContent()) ?? '')) await expect(slot, `${type} ${side}: amount only, an empty field`).not.toContainText(/\S/);
           else await expect(slot, `${type} ${side}: amount only`).toContainText(/\S/);
         } else await expect(slot.locator('li:not(.tk-reason-warn)')).toHaveCount(0); // (a warning, e.g. an order below the minimum value, is no reason)
-        // the slot, and the button under it, are where they were for every type that has the same fields above (the slot's own box never changes)
+        // The slot, and the button under it, are where they were for every type that has the same
+        // fields above (the slot's own box never changes).
         const box = (await page.getByTestId('order-place').boundingBox())!;
         slotBox ??= { x: box.x, y: 0, width: box.width, height: box.height };
         expect([box.x, box.width, box.height], `${type} ${side}: button box`).toEqual([slotBox.x, slotBox.width, slotBox.height]);
@@ -65,24 +73,25 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
     await fillFields(page, { amount: '', price: '' });
     await settlePlan(page);
     const box0 = (await page.getByTestId('order-place').boundingBox())!;
-    // the untouched form: "Enter an amount" on the disabled button, nothing in the slot, no red
+    // The untouched form: "Enter an amount" on the disabled button, nothing in the slot, no red.
     await expect(button).toBeDisabled();
     await expect(button).toHaveText('Enter an amount');
     await expect(slot).not.toContainText(/\S/);
     await expect(slot.locator('[data-severity="error"], .tk-reason-field')).toHaveCount(0);
-    // the first missing field, in order: the price next
+    // The first missing field, in order: the price next.
     await fillFields(page, { amount: '2' });
     await settlePlan(page);
     await fillFields(page, { price: '' });
     await settlePlan(page);
     await expect(button).toHaveText('Enter a price');
     await expect(slot).not.toContainText(/\S/);
-    // a stop order names its stop price
+    // A stop order names its stop price.
     await pickType(page, 'stopLimit', 'sell');
     await fillFields(page, { amount: '2' });
     await settlePlan(page);
     await expect(button).toHaveText(/^Enter a (stop )?price$|^Enter stop/i);
-    // a real error is red text in the slot (the value does not parse), and the button keeps its normal label
+    // A real error is red text in the slot (the value does not parse), and the button keeps its
+    // normal label.
     await pickType(page, 'limit', 'sell');
     await fillFields(page, { amount: 'abc', price: '0.027' });
     await settlePlan(page);
@@ -90,7 +99,7 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
     await expect(slot).toContainText(/\S/);
     await expect(slot.locator('.tk-reason-field')).toHaveCount(1);
     await expect(button).not.toHaveText(/^Enter /);
-    // a placed order resets the amount: calm, not an error right after a success
+    // A placed order resets the amount: calm, not an error right after a success.
     await fillFields(page, { amount: '2', price: '0.027' });
     await waitReviewable(page);
     await placeOrder(page, mock);
@@ -99,7 +108,7 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
     await expect(button).toHaveText('Enter an amount');
     await expect(slot).not.toContainText(/\S/);
     await expect(slot.locator('[data-severity="error"], .tk-reason-field')).toHaveCount(0);
-    // the slot kept its size through all of it
+    // The slot kept its size through all of it.
     const box1 = (await page.getByTestId('order-place').boundingBox())!;
     expect([box1.x, box1.width, box1.height]).toEqual([box0.x, box0.width, box0.height]);
   });
@@ -111,7 +120,8 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
     for (const type of ['limit', 'stopLimit', 'market', 'ifd']) {
       await pickType(page, type, 'buy');
       await page.getByTestId('order-advanced').locator('summary').click();
-      // the rows of the form and the rows inside the Advanced box (which has its own padding) each keep one column
+      // The rows of the form and the rows inside the Advanced box (which has its own padding) each
+      // keep one column.
       for (const area of ['.tk-form > .field .tk-suffix, .tk-form > .tk-touch .tk-suffix', '.tk-advanced-body .tk-suffix']) {
         const units = page.locator(`[data-testid="order-ticket"] ${area}`);
         expect(await units.count(), `${type}: input rows with a unit in ${area}`).toBeGreaterThan(0);
@@ -131,7 +141,8 @@ for (const [name, width] of [['desktop', 1280], ['phone', 390]] as const) {
     const cost = page.getByTestId('order-cost-preview');
     await expect(cost).toHaveText('—');
     expect((await cost.boundingBox())!.height).toBeLessThan(24);
-    // the Available line under the amount ends at the right edge of the amount's unit column; the total over the button ends at the right edge of the footer
+    // The Available line under the amount ends at the right edge of the amount's unit column. The
+    // total over the button ends at the right edge of the footer.
     await pickType(page, 'market', 'buy');
     await page.getByTestId('order-amount').fill('1');
     await expect(page.getByTestId('order-cost-preview').locator('.tk-line-unit')).toHaveText('KAS');

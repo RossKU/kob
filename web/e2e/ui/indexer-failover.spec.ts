@@ -1,6 +1,8 @@
-// Indexer failover (data/indexer-failover.ts): when the primary indexer is down or not ready, the book, charts and orders are read from a healthy further
-// indexer of the host's list ("Using backup indexer <host>"), the page goes back to the primary once it has recovered, and the remaining indexers keep
-// cross-checking. The backups here are further mock servers (the same mock as the primary, started in-process on their own ports).
+// Indexer failover (data/indexer-failover.ts): when the primary indexer is down or not ready, the
+// book, charts and orders are read from a healthy further indexer of the host's list ("Using backup
+// indexer <host>"), the page goes back to the primary once it has recovered, and the remaining
+// indexers keep cross-checking. The backups here are further mock servers (the same mock as the
+// primary, started in-process on their own ports).
 import type { Page, Request } from '@playwright/test';
 import { startMockServer } from '../../mock/server.mjs';
 import { closeBell, expect, MockClient, openBell, statusEntry, test } from '../fixtures';
@@ -14,7 +16,10 @@ test.afterEach(async () => {
   for (const s of servers.splice(0)) await s.close();
 });
 
-/** Another mock indexer (default seed); its book is moved by lifting its best ask level so that it differs from the primary's. */
+/**
+ * Another mock indexer (default seed). Its book is moved by lifting its best ask level so that it
+ * differs from the primary's.
+ */
 async function backup(opts: { liftBestAsks?: boolean | number; network?: string } = {}): Promise<{ client: MockClient; host: string; url: string }> {
   const srv = await startMockServer({ port: 0, ...(opts.network ? { network: opts.network } : {}) });
   servers.push(srv);
@@ -23,14 +28,17 @@ async function backup(opts: { liftBestAsks?: boolean | number; network?: string 
   if (opts.liftBestAsks) {
     const tok = await client.token();
     const book = await client.book(tok.covenant_id, false, 20);
-    // `true`: the best ask level only; a number: that many of the best price levels
+    // `true`: the best ask level only. A number: that many of the best price levels.
     const levels = [...new Set<string>(book.asks.map((a: { price: string }) => a.price))].slice(0, opts.liftBestAsks === true ? 1 : opts.liftBestAsks);
     for (const o of book.asks.filter((a: { price: string }) => levels.includes(a.price))) await client.fill(o.covenant_id, o.amount_left, { taker: 'bob' });
   }
   return { client, host: new URL(srv.url).host, url: srv.url };
 }
 
-/** The app is told about further indexers after the default config is injected (their ports are only known once the servers run). */
+/**
+ * The app is told about further indexers after the default config is injected (their ports are only
+ * known once the servers run).
+ */
 async function withExtras(page: Page, urls: string[]): Promise<void> {
   await page.addInitScript((u) => {
     (window as any).__KOB_CONFIG__.extraIndexerUrls = u;
@@ -60,22 +68,24 @@ test.describe('indexer failover', () => {
     const banner = await statusEntry(page, 'banner-backup-indexer');
     await expect(banner).toHaveCount(0);
 
-    // the primary loses its node: not ready. The page fails over by itself, and the open dialog follows
+    // The primary loses its node: not ready. The page fails over by itself, and the open dialog
+    // follows.
     await mock.setHealth('node_unavailable');
     await expect(banner).toBeVisible({ timeout: 60_000 });
     await expect(banner).toContainText(`Using backup indexer ${b.host}`);
     await expect(banner).not.toContainText('History may be incomplete');
     await closeBell(page);
-    // the book on screen is the backup's (its best ask level was lifted): same token, other prices
+    // The book on screen is the backup's (its best ask level was lifted): same token, other prices.
     await expect.poll(() => midOf(page), { timeout: 30_000 }).not.toBe(primaryMid);
     reads.clear();
     await page.getByTestId('book-refresh').click();
     await expect.poll(() => reads.origins().length).toBeGreaterThan(0);
     expect(new Set(reads.origins())).toEqual(new Set([b.host]));
-    // the status bar and the live indicator speak for the indexer in use: no "indexer cannot be reached" entry
+    // The status bar and the live indicator speak for the indexer in use: no "indexer cannot be
+    // reached" entry.
     await expect(await statusEntry(page, 'banner-indexer')).toHaveCount(0);
 
-    // the primary recovers: back to it, the entry leaves by itself
+    // The primary recovers: back to it, the entry leaves by itself.
     await mock.setHealth('following');
     await expect(banner).toHaveCount(0, { timeout: 90_000 });
     await closeBell(page);
@@ -83,7 +93,7 @@ test.describe('indexer failover', () => {
     reads.clear();
     await page.getByTestId('book-refresh').click();
     await expect.poll(() => reads.origins().length).toBeGreaterThan(0);
-    // the primary is the indexer again (the backup only cross-checks)
+    // The primary is the indexer again (the backup only cross-checks).
     expect(reads.origins()).toContain(primaryHost);
   });
 
@@ -109,7 +119,7 @@ test.describe('indexer failover', () => {
     await withExtras(page, [wrongNet.url, wrongPayload.url]);
     await mock.setHealth('node_unavailable');
     await page.goto('/#/market');
-    // no usable backup: the page switches to the node (one calm entry), no backup entry appears
+    // No usable backup: the page switches to the node (one calm entry), no backup entry appears.
     await openBell(page);
     await expect(page.getByTestId('notify-status').getByTestId(/^banner-(switching|standalone)$/)).toBeVisible({ timeout: 60_000 });
     await page.waitForTimeout(8_000);
@@ -130,14 +140,15 @@ test.describe('indexer failover', () => {
     const finding = page.getByTestId('indexer-disagreement');
     await expect(finding).toBeVisible({ timeout: 30_000 });
     await expect(finding).toContainText(b2.host);
-    // the primary is not a reference while it is not ready: it is not reported as unreachable either
+    // The primary is not a reference while it is not ready: it is not reported as unreachable
+    // either.
     await expect(finding).not.toContainText(new URL(mock.url).host);
   });
 
   test('the entry fits a 375 px phone, a long host included', async ({ appPage: page, mock }) => {
     test.setTimeout(90_000);
     const b = await backup();
-    // the backup behind a long host name (the mock itself, reached through this address)
+    // The backup behind a long host name (the mock itself, reached through this address).
     const longHost = 'a-very-long-backup-indexer-host-name-for-the-phone-layout.testnet.example.invalid';
     await page.route(`http://${longHost}/**`, async (route) => {
       const res = await route.fetch({ url: route.request().url().replace(`http://${longHost}`, b.url) });

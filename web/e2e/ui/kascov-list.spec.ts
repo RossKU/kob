@@ -1,8 +1,11 @@
-// The market list completed from kascov.io (src/data/kascov.ts), against the mock stack with a MOCKED kascov (e2e/helpers/kascov.ts: the real service is
-// never reached): tokens of a program this build trades, named by their creators' claims and sorted after the KOB rows as "no orders"; icons only for
-// bytes that hash to the committed hash; the notes where kascov disagrees with KOB; the Settings toggle; kascov down, slow-shaped or turned off by the
-// deployment. Desktop and a 375 px phone (no horizontal overflow). The app under test is the built one, so its Content-Security-Policy is in force:
-// the pictures are shown from blob: URLs, never from a third-party URL.
+// The market list completed from kascov.io (src/data/kascov.ts), against the mock stack with a
+// MOCKED kascov (e2e/helpers/kascov.ts: the real service is never reached): tokens of a program
+// this build trades, named by their creators' claims and sorted after the KOB rows as "no orders".
+// Icons only for bytes that hash to the committed hash. The notes where kascov disagrees with KOB.
+// The Settings toggle. Kascov down, slow-shaped or turned off by the deployment. Desktop and a 375
+// px phone (no horizontal overflow). The app under test is the built one, so its
+// Content-Security-Policy is in force: the pictures are shown from blob: URLs, never from a
+// third-party URL.
 import { createHash } from 'node:crypto';
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
@@ -20,7 +23,7 @@ const UNPINNED = ID(0xa5); // a program this build does not pin
 const PUBLIC_MINT = ID(0xa6); // KCC20PublicMint
 const INVALID = ID(0xa7); // kascov calls it invalid: its status never decides the listing (only a `verified` one shows the chip)
 const MAINNET_ONLY = ID(0xa8); // pinned but not enabled on... (KForge: testnet-10 only, so this one IS listed on testnet-10)
-/** the second token the mock stack lists (its registry), with KOB's own ticker */
+/** The second token the mock stack lists (its registry), with KOB's own ticker. */
 const KOB_OTHER = ID(0xe6);
 const CREATOR_URL = 'https://storage.googleapis.com/kaspa-rocket-prod-uploads/no-cors.png';
 
@@ -36,7 +39,7 @@ const tokens = (exkcc: string): MockKascovToken[] => [
   { covenant_id: PUBLIC_MINT, claimed_ticker: 'MINTY', claimed_name: 'Public Mint Token', program: MINT },
   { covenant_id: INVALID, claimed_ticker: 'BAD', claimed_name: 'Called Invalid', status: 'invalid', program: MINT },
   { covenant_id: MAINNET_ONLY, claimed_ticker: 'FORGE', claimed_name: 'Testnet Only Program', program: programHash('KForgeToken1785') },
-  // a token KOB knows: KOB's ticker and decimals stand, the disagreement is a note
+  // A token KOB knows: KOB's ticker and decimals stand, the disagreement is a note.
   { covenant_id: exkcc, claimed_ticker: 'FAKE', claimed_name: 'Not The Name', claimed_decimals: 2 },
 ];
 
@@ -53,32 +56,36 @@ test.describe('with kascov.io', () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto('/#/market');
 
-    // a token of a pinned program that no KOB source names: a "no orders" row named by its creator's claim, with the source said
+    // A token of a pinned program that no KOB source names: a "no orders" row named by its
+    // creator's claim, with the source said.
     const row = page.getByTestId(`token-row-${SAVED}`);
     await expect(row).toHaveAttribute('data-source', 'kascov');
     await expect(page.getByTestId(`token-link-${SAVED}`)).toHaveText('SAVED');
     await expect(page.getByTestId(`token-hash-${SAVED}`)).toHaveText('a1a1a1a1a1a1…a1a1a1a1a1a1');
     await expect(page.getByTestId(`token-name-${SAVED}`)).toContainText('Saved Icon Token');
-    // the source is a small marker; the sentence is its tooltip and the legend above the list says it once
+    // The source is a small marker. The sentence is its tooltip and the legend above the list says
+    // it once.
     await expect(page.getByTestId(`kascov-source-${SAVED}`)).toHaveText('via kascov');
     await expect(page.getByTestId(`kascov-source-${SAVED}`)).toHaveAttribute('title', 'name and ticker from kascov.io (declared by their creator)');
     await page.getByTestId('legend-toggle').click();
     await expect(page.getByTestId('legend-source')).toContainText('name and ticker from kascov.io (declared by their creator)');
     await expect(page.getByTestId('token-table')).not.toContainText('declared by their creator');
     await expect(page.getByTestId(`token-depth-${SAVED}`)).toHaveText('no orders');
-    // nothing of its figures is invented
+    // Nothing of its figures is invented.
     for (const f of ['last', 'change', 'volume', 'mcap', 'spread']) await expect(page.getByTestId(`token-${f}-${SAVED}`)).toHaveText('—');
 
-    // the program decides: a pinned program on this network is listed (kascov's status does not decide it), an unpinned one is not
+    // The program decides: a pinned program on this network is listed (kascov's status does not
+    // decide it), an unpinned one is not.
     for (const id of [SAVED, MISMATCH, NO_CORS, NO_IMAGE, PUBLIC_MINT, INVALID, MAINNET_ONLY]) await expect(page.getByTestId(`token-row-${id}`)).toHaveCount(1);
     await expect(page.getByTestId(`token-row-${UNPINNED}`)).toHaveCount(0);
 
-    // KOB's rows come first and keep their ticker; the disagreement is a note, never a replacement
+    // KOB's rows come first and keep their ticker. The disagreement is a note, never a replacement.
     const ids = await shownIds(page);
     expect(ids[0]).toBe(exkcc);
     expect(new Set(ids)).toEqual(new Set([exkcc, KOB_OTHER, SAVED, MISMATCH, NO_CORS, NO_IMAGE, PUBLIC_MINT, INVALID, MAINNET_ONLY]));
     await expect(page.getByTestId(`token-link-${exkcc}`)).toContainText('EXKCC');
-    // a short badge each; the full sentence with both values is the tooltip, and a tap or the keyboard opens it as a panel (a title does not exist on a touch screen)
+    // A short badge each. The full sentence with both values is the tooltip, and a tap or the
+    // keyboard opens it as a panel (a title does not exist on a touch screen).
     const tickerBadge = page.getByTestId(`kascov-ticker-differs-${exkcc}`);
     const decimalsBadge = page.getByTestId(`kascov-decimals-differ-${exkcc}`);
     await expect(tickerBadge).toHaveText(/ticker differs$/);
@@ -98,7 +105,8 @@ test.describe('with kascov.io', () => {
     await page.keyboard.press('Escape');
     await expect(page.getByTestId(`kascov-source-${exkcc}`)).toHaveCount(0);
 
-    // icons: the saved copy hashes to the committed hash and is shown from a blob: URL it decodes from; every other case is a letter
+    // Icons: the saved copy hashes to the committed hash and is shown from a blob: URL it decodes
+    // from. Every other case is a letter.
     const icon = page.getByTestId(`token-icon-${SAVED}`);
     await icon.scrollIntoViewIfNeeded();
     await expect(icon).toHaveAttribute('data-icon', 'image');
@@ -112,7 +120,8 @@ test.describe('with kascov.io', () => {
       await expect(letter.locator('img')).toHaveCount(0);
     }
     await expect(page.getByTestId(`token-icon-${MISMATCH}`)).toHaveText('M');
-    // kascov holds no copy for NO_CORS: its creator's own address is shown as a plain <img>, labelled unchecked (the page cannot read its bytes: no CORS)
+    // Kascov holds no copy for NO_CORS: its creator's own address is shown as a plain <img>,
+    // labelled unchecked (the page cannot read its bytes: no CORS).
     const creator = page.getByTestId(`token-icon-${NO_CORS}`);
     await creator.scrollIntoViewIfNeeded();
     await expect(creator).toHaveAttribute('data-icon', 'creator-image');
@@ -122,21 +131,24 @@ test.describe('with kascov.io', () => {
     expect(await creatorImg.getAttribute('referrerpolicy')).toBe('no-referrer');
     expect(await creatorImg.getAttribute('crossorigin')).toBeNull();
     await expect.poll(() => creatorImg.evaluate((e: HTMLImageElement) => e.naturalWidth)).toBe(1);
-    // the mismatching copy was fetched and refused (a letter); the checked path never asks the creator's host: it is asked only after kascov had no copy
+    // The mismatching copy was fetched and refused (a letter). The checked path never asks the
+    // creator's host: it is asked only after kascov had no copy.
     await expect.poll(() => log.requests.includes(`https://kascov.io/img/testnet-10/${MISMATCH}`)).toBe(true);
     await expect.poll(() => log.requests.includes(`https://kascov.io/img/testnet-10/${NO_CORS}`)).toBe(true);
     await expect.poll(() => log.requests.includes(CREATOR_URL)).toBe(true);
-    // the only <img> that points at a third-party URL is that creator image, and the policy was never violated
+    // The only <img> that points at a third-party URL is that creator image, and the policy was
+    // never violated.
     expect(await page.locator('img[src^="http"]').evaluateAll((els) => els.map((e) => e.getAttribute('src')))).toEqual([CREATOR_URL]);
     expect(pageErrors.filter((e) => /Content.Security.Policy/i.test(e))).toEqual([]);
     expect(await overflow(page)).toBe(0);
 
-    // the default sort is by 24 h volume: the rows with no orders stay after the KOB row in both directions of another figure column too
+    // The default sort is by 24 h volume: the rows with no orders stay after the KOB row in both
+    // directions of another figure column too.
     await page.getByTestId('sort-depth').first().click();
     expect((await shownIds(page))[0]).toBe(exkcc);
     await page.getByTestId('sort-depth').first().click();
     expect((await shownIds(page))[0]).toBe(exkcc);
-    // search reaches the kascov names
+    // Search reaches the kascov names.
     await page.getByTestId('token-search').fill('public mint');
     await expect(page.getByTestId(`token-row-${PUBLIC_MINT}`)).toHaveCount(1);
     await expect(page.getByTestId(`token-row-${SAVED}`)).toHaveCount(0);
@@ -154,10 +166,10 @@ test.describe('with kascov.io', () => {
     await expect(page.getByTestId(`token-depth-${SAVED}`)).toBeHidden();
     await expect(page.getByTestId(`kascov-source-${SAVED}`)).toBeVisible();
     expect(await overflow(page)).toBe(0);
-    // the narrowest rows too: the note of a disagreement does not widen the page
+    // The narrowest rows too: the note of a disagreement does not widen the page.
     await expect(page.getByTestId(`kascov-ticker-differs-${exkcc}`)).toBeVisible();
     expect(await overflow(page)).toBe(0);
-    // a tap on the badge opens the full sentence inside the screen
+    // A tap on the badge opens the full sentence inside the screen.
     await page.getByTestId(`kascov-ticker-differs-${exkcc}`).click();
     const panel = page.getByTestId(`kascov-ticker-differs-detail-${exkcc}`);
     await expect(panel).toContainText('kascov.io says the ticker is FAKE; KOB shows EXKCC');
@@ -173,7 +185,7 @@ test.describe('with kascov.io', () => {
     const exkcc = (await mock.token()).covenant_id;
     await mockKascov(page, opts(exkcc));
     await page.goto(`/#/market/${exkcc}`);
-    // EXKCC has its own ticker: kascov's FAKE is a note on the header, never the title
+    // EXKCC has its own ticker: kascov's FAKE is a note on the header, never the title.
     await expect(page.getByTestId('token-title')).toContainText('EXKCC');
     await expect(page.getByTestId(`kascov-ticker-differs-${exkcc}`)).toBeVisible();
     await expect(page.getByTestId(`token-icon-${exkcc}`)).toHaveAttribute('data-icon', 'letter');
@@ -184,7 +196,8 @@ test.describe('with kascov.io', () => {
     const stats = await mock.get(`/v1/stats/${exkcc}`);
     const dec = Number(stats.decimals);
     const own = Number(stats.last) / Number(stats.price_basis); // KOB's last price, KAS per whole token
-    // kascov's price: 0.0125 KAS per whole token (quote_sompi over base_amount of one whole token), an older close of 0.02 before it
+    // kascov's price: 0.0125 KAS per whole token (quote_sompi over base_amount of one whole token),
+    // an older close of 0.02 before it.
     const base = 10 ** dec;
     const candles = { [exkcc]: [{ t: 1_000, base, quote: 2_000_000 }, { t: 2_000, base, quote: 1_250_000 }] };
     const priced = (market: MockKascovToken['market']) => tokens(exkcc).map((k) => (k.covenant_id === exkcc ? { ...k, ...(market ? { market } : {}) } : k));
@@ -192,7 +205,8 @@ test.describe('with kascov.io', () => {
     const legend = page.getByTestId('chart-kascov');
     const chart = page.getByTestId('price-chart');
 
-    // kascov does not price the token: the toggle is there but faded and disabled (aria-disabled, so its tooltip shows), a click asks for nothing, no line in the tooltip
+    // Kascov does not price the token: the toggle is there but faded and disabled (aria-disabled,
+    // so its tooltip shows), a click asks for nothing, no line in the tooltip.
     let log = await mockKascov(page, { tokens: priced({ unpriced_reason: "no single covenant holds this token's inventory" }), candles });
     await page.goto('/#/market');
     await expect(page.getByTestId(`token-last-${exkcc}`)).not.toHaveAttribute('title', /kascov/);
@@ -207,7 +221,8 @@ test.describe('with kascov.io', () => {
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
     await expect(chart).toHaveAttribute('data-kascov', '0');
     expect(log.candleRequests).toEqual([]);
-    // a remembered ON (a choice made on a priced market) shows off here, asks for nothing and is not erased
+    // A remembered ON (a choice made on a priced market) shows off here, asks for nothing and is
+    // not erased.
     await page.evaluate(() => localStorage.setItem('kob.chart.kascov', '1'));
     await page.reload();
     await expect(chart).toHaveAttribute('data-state', 'ready');
@@ -218,7 +233,8 @@ test.describe('with kascov.io', () => {
     expect(await page.evaluate(() => localStorage.getItem('kob.chart.kascov'))).toBe('1');
     await page.evaluate(() => localStorage.removeItem('kob.chart.kascov'));
 
-    // priced: the list's price cell keeps its text and tooltip and gains one line (the percent is against KOB's own price)
+    // Priced: the list's price cell keeps its text and tooltip and gains one line (the percent is
+    // against KOB's own price).
     log = await mockKascov(page, { tokens: priced({ spot_num_sompi: 1_250_000, spot_den: base }), candles });
     await page.reload(); // the app keeps the list for a while: a new page reads the new one
     await page.goto('/#/market');
@@ -228,13 +244,14 @@ test.describe('with kascov.io', () => {
     expect(Math.abs(pct - Math.round(((0.0125 - own) / own) * 100))).toBeLessThanOrEqual(1);
     expect(log.candleRequests).toEqual([]);
 
-    // the market page: a toggle, off, and nothing asked of kascov's candles yet
+    // The market page: a toggle, off, and nothing asked of kascov's candles yet.
     await page.goto(`/#/market/${exkcc}`);
     await expect(chart).toHaveAttribute('data-state', 'ready');
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
     await expect(toggle).not.toHaveAttribute('aria-disabled');
     await expect(toggle).toHaveAttribute('title', 'kascov price (third-party)');
-    // the logo is a static file of this app (never kascov.io's host: the CSP and the mock-only network would show it), decorative, and it loaded
+    // The logo is a static file of this app (never kascov.io's host: the CSP and the mock-only
+    // network would show it), decorative, and it loaded.
     const logo = toggle.locator('img.chart-kascov-logo');
     await expect(logo).toHaveAttribute('alt', '');
     await expect(logo).toHaveAttribute('src', /^(\.\/|\/)kascov-logo\.svg$/);
@@ -243,7 +260,8 @@ test.describe('with kascov.io', () => {
     await expect(legend).toHaveCount(0);
     expect(log.candleRequests).toEqual([]);
 
-    // on: the legend says the price and what it is, and the 5 minute chart asked for the 15 minute candles of this token, once
+    // On: the legend says the price and what it is, and the 5 minute chart asked for the 15 minute
+    // candles of this token, once.
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-pressed', 'true');
     await expect(chart).toHaveAttribute('data-kascov', '1');
@@ -251,7 +269,7 @@ test.describe('with kascov.io', () => {
     await expect(legend).toHaveAttribute('title', "Third-party reference from kascov.io: a marginal pool price on other venues, before fees. KOB does not use it; KOB's prices come from its own book.");
     expect(log.candleRequests).toEqual([`https://kascov.io/data/testnet-10/token/${exkcc}/candles?bucket=15m&phase=all`]);
 
-    // another interval asks for its own bucket; off stops the line and every request
+    // Another interval asks for its own bucket. Off stops the line and every request.
     await page.getByTestId('chart-interval-1h').click();
     await expect.poll(() => log.candleRequests.length).toBe(2);
     expect(log.candleRequests[1]).toContain('bucket=1h&phase=all');
@@ -264,7 +282,7 @@ test.describe('with kascov.io', () => {
     await expect(chart).toHaveAttribute('data-state', 'ready');
     expect(log.candleRequests.length).toBe(2);
 
-    // kascov answers with an error: the legend says so, nothing else breaks
+    // Kascov answers with an error: the legend says so, nothing else breaks.
     log = await mockKascov(page, { tokens: priced({ spot_num_sompi: 1_250_000, spot_den: base }), candles, candlesMode: 'http' });
     await page.reload();
     await expect(chart).toHaveAttribute('data-state', 'ready');
@@ -290,24 +308,24 @@ test.describe('refresh policy', () => {
     expect(log.tokenRequests).toBe(1);
     await page.clock.fastForward(30_000);
     await expect.poll(() => log.tokenRequests).toBe(2);
-    // the same file again (generated_at_ms unchanged): the row is still there, nothing was lost
+    // The same file again (generated_at_ms unchanged): the row is still there, nothing was lost.
     await expect(page.getByTestId(`token-row-${SAVED}`)).toBeVisible();
 
-    // the tab goes to the background: no timer fires a request
+    // The tab goes to the background: no timer fires a request.
     await page.evaluate(() => {
       (window as unknown as { __hidden: boolean }).__hidden = true;
       document.dispatchEvent(new Event('visibilitychange'));
     });
     await page.clock.fastForward(600_000);
     expect(log.tokenRequests).toBe(2);
-    // back in the foreground with a stale list: fetched at once
+    // Back in the foreground with a stale list: fetched at once.
     await page.evaluate(() => {
       (window as unknown as { __hidden: boolean }).__hidden = false;
       document.dispatchEvent(new Event('visibilitychange'));
     });
     await expect.poll(() => log.tokenRequests).toBe(3);
 
-    // another page does not poll
+    // Another page does not poll.
     await page.goto('/#/settings');
     await expect(page.getByTestId('settings-icons')).toBeVisible();
     await page.clock.fastForward(600_000);
@@ -330,7 +348,7 @@ test.describe('the Settings toggle "Load token icons"', () => {
     await expect(page.getByTestId(`token-row-${SAVED}`)).toBeVisible();
     await expect(page.getByTestId(`token-name-${SAVED}`)).toContainText('Saved Icon Token');
     await expect(page.getByTestId(`token-icon-${SAVED}`)).toHaveAttribute('data-icon', 'letter');
-    // give a (wrongly) started fetch time to show itself
+    // Give a (wrongly) started fetch time to show itself.
     await page.waitForTimeout(700);
     expect(log.requests.filter((u) => !u.endsWith('/tokens.json'))).toEqual([]);
 
@@ -338,7 +356,7 @@ test.describe('the Settings toggle "Load token icons"', () => {
     await page.goto('/#/settings');
     await expect(page.getByTestId('settings-icons-toggle')).not.toBeChecked();
 
-    // on again: the picture comes
+    // On again: the picture comes.
     await page.getByTestId('settings-icons-toggle').check();
     expect(await page.evaluate(() => localStorage.getItem('kob.icons'))).toBeNull();
     await page.goto('/#/market');
@@ -356,7 +374,7 @@ for (const mode of ['down', 'shape', 'http'] as const) {
       await page.goto('/#/market');
       await expect(page.getByTestId(`token-row-${exkcc}`)).toHaveAttribute('data-state', 'ready');
       await expect(page.getByTestId('kascov-unavailable')).toHaveText(/unavailable/);
-      // the label beside the legend control says it too, where it is seen
+      // The label beside the legend control says it too, where it is seen.
       await expect(page.getByTestId('legend-attribution')).toHaveAttribute('data-names', 'unavailable');
       await expect(page.getByTestId('legend-attribution')).toHaveText('names via kascov unavailable: trying again');
       expect(new Set(await shownIds(page))).toEqual(new Set([exkcc, KOB_OTHER]));
@@ -379,7 +397,8 @@ test.describe('the deployment turns the token names off (tokenNamesUrl: "")', ()
     await expect(page.getByTestId('kascov-unavailable')).toHaveCount(0);
     await page.goto('/#/settings');
     await expect(page.getByTestId('settings-icons-off')).toBeVisible();
-    // logos from the address a creator gave (a KCC-23 declaration) need no token list: the switches stay
+    // Logos from the address a creator gave (a KCC-23 declaration) need no token list: the switches
+    // stay.
     await expect(page.getByTestId('settings-icons-toggle')).toBeEnabled();
     expect(log.requests).toEqual([]);
   });
@@ -417,7 +436,7 @@ test.describe('token logos from the creator\'s address: the Settings switch, the
     await page.goto('/#/market');
     await page.getByTestId(`token-icon-${NO_CORS}`).scrollIntoViewIfNeeded();
     await expect(page.getByTestId(`token-icon-${NO_CORS}`)).toHaveAttribute('data-icon', 'letter');
-    // the checked copies still show: only the creators' addresses are off
+    // The checked copies still show: only the creators' addresses are off.
     await page.getByTestId(`token-icon-${SAVED}`).scrollIntoViewIfNeeded();
     await expect(page.getByTestId(`token-icon-${SAVED}`)).toHaveAttribute('data-icon', 'image');
     await page.waitForTimeout(500);
@@ -446,11 +465,12 @@ test.describe('token logos from the creator\'s address: the Settings switch, the
     await page.waitForTimeout(500);
     expect(log.requests.includes(CREATOR_URL)).toBe(false);
     expect(log.requests.includes(`https://kascov.io/img/testnet-10/${SAVED}`)).toBe(false);
-    // the token page says so
+    // The token page says so.
     await page.goto(`/#/market/${NO_CORS}`);
     await expect(page.getByTestId('token-logo-note')).toContainText('Logo hidden after a report');
     await expect(page.getByTestId('logo-report-open')).toHaveCount(0);
-    // the cache of the last list serves the next visit at once, even when the indexer is unreachable (it fails open only for tokens not on the list)
+    // The cache of the last list serves the next visit at once, even when the indexer is
+    // unreachable (it fails open only for tokens not on the list).
     expect(await page.evaluate(() => localStorage.getItem('kob.logo-blocklist.v1'))).toContain(NO_CORS);
   });
 
@@ -481,7 +501,8 @@ test.describe('token logos from the creator\'s address: the Settings switch, the
     await expect(page.getByTestId('logo-report-github')).toHaveAttribute('href', new RegExp(`^https://github.com/RossKU/kob/issues/new\\?template=logo-report.yml&covenant_id=${NO_CORS}$`));
     const reason = page.getByTestId('logo-report-reason');
     expect(await optionLabels(reason)).toEqual(['Illegal content', 'Impersonates another project or person', 'Something else']);
-    // the list is in the dialog and above it; Escape and a press on the backdrop close the list, not the dialog
+    // The list is in the dialog and above it. Escape and a press on the backdrop close the list,
+    // not the dialog.
     await reason.click();
     await expect(dialog.getByTestId('logo-report-reason-panel')).toBeVisible();
     await page.keyboard.press('Escape');
@@ -496,7 +517,7 @@ test.describe('token logos from the creator\'s address: the Settings switch, the
     await page.getByTestId('logo-report-send').click();
     await expect(page.getByTestId('logo-report-result')).toContainText('now hidden for everyone');
     expect(posted).toEqual([{ covenant_id: NO_CORS, reason: 'illegal' }]);
-    // the logo is a letter at once, and the details say why
+    // The logo is a letter at once, and the details say why.
     await page.keyboard.press('Escape');
     await expect(page.getByTestId(`token-icon-${NO_CORS}`).first()).toHaveAttribute('data-icon', 'letter');
     await expect(page.getByTestId('token-logo-note')).toContainText('Logo hidden after a report');
@@ -514,13 +535,16 @@ test.describe('token logos from the creator\'s address: the Settings switch, the
     await page.getByTestId('logo-report-send').click();
     await expect(page.getByTestId('logo-report-result')).toContainText('Try again in 120 s');
     await expect(page.getByTestId('logo-report-github')).toBeVisible();
-    // not hidden by a failed report
+    // Not hidden by a failed report.
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('token-logo-note')).toContainText("not checked");
   });
 });
 
-/** The CIDv1 (raw leaf, SHA-256) of some bytes: what `ipfs add --cid-version 1 --raw-leaves` prints for a file of one block. */
+/**
+ * The CIDv1 (raw leaf, SHA-256) of some bytes: what `ipfs add --cid-version 1 --raw-leaves` prints
+ * for a file of one block.
+ */
 function rawCid(bytes: Buffer): string {
   const A = 'abcdefghijklmnopqrstuvwxyz234567';
   const input = Buffer.concat([Buffer.from([0x01, 0x55, 0x12, 0x20]), createHash('sha256').update(bytes).digest()]);
@@ -552,7 +576,7 @@ test.describe('an ipfs:// logo', () => {
       tokens: [
         ...tokens(exkcc),
         { covenant_id: IPFS_OK, claimed_ticker: 'IPFSOK', claimed_image: `ipfs://${okCid}`, program: MINT },
-        // the gateway answers this address with a PNG that is not the one the CID names
+        // The gateway answers this address with a PNG that is not the one the CID names.
         { covenant_id: IPFS_FORGED, claimed_ticker: 'IPFSBAD', claimed_image: `ipfs://${forgedCid}`, program: MINT },
       ],
     });
@@ -571,7 +595,7 @@ test.describe('an ipfs:// logo', () => {
     await expect.poll(() => asked.includes(`https://dweb.link/ipfs/${forgedCid}`)).toBe(true);
     await expect(bad).toHaveAttribute('data-icon', 'letter');
     expect(asked).toContain(`https://dweb.link/ipfs/${okCid}`);
-    // the gateway is the only host asked for these: not kascov's creator route
+    // The gateway is the only host asked for these: not kascov's creator route.
     expect(log.requests.some((u) => u.includes('dweb.link'))).toBe(false);
   });
 });

@@ -1,5 +1,6 @@
-// The sell ladder placed as one curve order (KobCurveAsk: the ladder's prices are its table), or as separate orders with the stepper; and the
-// amend of a curve from its details. Mock KasWare, default mock seed. Screenshots of the ticket option: `KOB_CURVE_SHOTS`.
+// The sell ladder placed as one curve order (KobCurveAsk: the ladder's prices are its table), or as
+// separate orders with the stepper. And the amend of a curve from its details. Mock KasWare,
+// default mock seed. Screenshots of the ticket option: `KOB_CURVE_SHOTS`.
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from '@playwright/test';
@@ -35,7 +36,8 @@ for (const v of VARIANTS) {
     await sellLadder(page, '3');
     await expect(page.getByTestId('order-ladder-as-curve')).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByTestId('order-ladder-how')).toContainText('One order and one UTXO');
-    // a curve has no expiry: no "Lasts"; the footer says what placing it costs (its carriers and the fee)
+    // A curve has no expiry: no "Lasts". The footer says what placing it costs (its carriers and
+    // the fee).
     await expect(page.getByTestId('field-lifetime')).toHaveCount(0);
     await expect(page.getByTestId('order-total')).toContainText('To place');
     await expect(page.getByTestId('order-cost-preview')).toContainText(/^\s*2\.0\d+ KAS\s*$/);
@@ -48,7 +50,7 @@ for (const v of VARIANTS) {
     await shot(page, `ticket-curve-${v.name}`);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(v.width);
     if (v.name !== 'light') return;
-    // one transaction: one KobCurveAsk of 6 EXKCC, 2 per level, the ladder's prices as its table
+    // One transaction: one KobCurveAsk of 6 EXKCC, 2 per level, the ladder's prices as its table.
     const placed = await placeOrder(page, mock);
     expect(await wallet!.calls()).toHaveLength(1);
     const o = placed.views[0];
@@ -69,7 +71,7 @@ test('two levels default to separate orders; separate orders show the stepper', 
   const steps = page.getByTestId('order-ladder-stepper');
   await expect(steps.getByTestId('order-ladder-step-1')).toHaveAttribute('data-state', 'done');
   await expect(steps.getByTestId('order-ladder-step-2')).toHaveAttribute('data-state', 'done');
-  // a buy ladder offers no curve
+  // A buy ladder offers no curve.
   await pickType(page, 'limit', 'buy');
   await fillFields(page, { amount: '1', price: '0.0245', 'ladder.on': true, 'ladder.levels': '3', 'ladder.pct': '2' });
   await waitReviewable(page);

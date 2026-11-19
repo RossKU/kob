@@ -1,6 +1,8 @@
-// Market orientation: every token book opens as TOKEN/KAS (BTC/KAS), a USD reference token (config `quoteTokens`) too (TUSD/KAS; tickers are never renamed), and every market has a control that
-// inverts the pair. The flip is a pure display transform: price, chart, book, trades, stats and the ticket follow it, the choice is remembered per market,
-// and the order the user signs is identical whichever way it is displayed.
+// Market orientation: every token book opens as TOKEN/KAS (BTC/KAS), a USD reference token (config
+// `quoteTokens`) too (TUSD/KAS; tickers are never renamed), and every market has a control that
+// inverts the pair. The flip is a pure display transform: price, chart, book, trades, stats and the
+// ticket follow it, the choice is remembered per market, and the order the user signs is identical
+// whichever way it is displayed.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
@@ -24,7 +26,7 @@ async function bookRows(page: Page, side: 'asks' | 'bids'): Promise<{ price: str
   );
 }
 
-/** the figure of a stats tile (its value text, without the unit) */
+/** The figure of a stats tile (its value text, without the unit). */
 async function stat(page: Page, id: string): Promise<number> {
   const text = await page.getByTestId(id).locator('.mkt-stat-value').first().evaluate((el) => el.childNodes[0]?.textContent ?? '');
   return num(text);
@@ -56,7 +58,7 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     await expect(flip).toHaveText('');
     await expect(flip).toHaveAttribute('data-flip-to', 'KAS/EXKCC');
     await expect(flip).toHaveAttribute('aria-pressed', 'false');
-    // icon only, and just right of the pair title on the same row
+    // Icon only, and just right of the pair title on the same row.
     await expect(flip).toHaveAttribute('title', 'Flip pair');
     const fb = (await flip.boundingBox())!;
     const pb = (await page.getByTestId('market-pair').boundingBox())!;
@@ -64,7 +66,7 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     expect(fb.x - (pb.x + pb.width)).toBeLessThan(24);
     expect(Math.abs(fb.y + fb.height / 2 - (pb.y + pb.height / 2))).toBeLessThan(24);
 
-    // native figures
+    // Native figures.
     const chart = page.getByTestId('price-chart');
     await expect(chart).toHaveAttribute('data-state', 'ready');
     await expect(chart).toHaveAttribute('data-inverted', '0');
@@ -82,7 +84,7 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     expect(nativeSides.length).toBeGreaterThan(5);
     await expect(page.getByTestId('order-book')).toContainText('Price (KAS per EXKCC)');
 
-    // ---- flip
+    // ---- flip.
     await flip.click();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXKCC');
     await expect(flip).toHaveAttribute('data-flip-to', 'EXKCC/KAS');
@@ -94,7 +96,7 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     await expect(page.getByTestId('order-book')).toContainText('Size (KAS)');
     await expect(page.getByTestId('order-book')).toContainText('Total (EXKCC)');
 
-    // candles: open / close invert, high and low swap
+    // Candles: open / close invert, high and low swap.
     const inv = await legend(page);
     expect(close(inv.o, 1 / nativeLegend.o)).toBe(true);
     expect(close(inv.c, 1 / nativeLegend.c)).toBe(true);
@@ -103,12 +105,13 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     expect(inv.h).toBeGreaterThanOrEqual(Math.max(inv.o, inv.c));
     expect(inv.l).toBeLessThanOrEqual(Math.min(inv.o, inv.c));
 
-    // book: native asks are the bids (best bid = 1 / best ask), native bids the asks; the same levels, the same prefill
+    // Book: native asks are the bids (best bid = 1 / best ask), native bids the asks. The same
+    // levels, the same prefill.
     const asks = await bookRows(page, 'asks');
     const bids = await bookRows(page, 'bids');
     expect(bids).toHaveLength(nativeAsks.length);
     expect(asks).toHaveLength(nativeBids.length);
-    // displayed bids best first = native asks best (lowest) first
+    // Displayed bids best first = native asks best (lowest) first.
     expect(bids.map((r) => r.nativePrice)).toEqual([...nativeAsks].reverse().map((r) => r.nativePrice));
     expect(asks.map((r) => r.nativePrice)).toEqual([...nativeBids].reverse().map((r) => r.nativePrice));
     for (const r of bids) expect(close(num(r.price), 1e8 / Number(r.nativePrice), 0.001)).toBe(true);
@@ -120,35 +123,35 @@ test.describe('token market: TOKEN/KAS, flipped to KAS/TOKEN', () => {
     expect(bidPrices[0]!).toBeLessThan(askPrices.at(-1)!);
     const mid = Number(await page.getByTestId('book-mid').getAttribute('data-value'));
     expect(close(mid, (bidPrices[0]! + askPrices.at(-1)!) / 2, 0.001)).toBe(true);
-    // the depth chart (the Depth view of the book's panel) follows too
+    // The depth chart (the Depth view of the book's panel) follows too.
     await page.getByTestId('book-view-depth').click();
     await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
     await page.getByTestId('book-view-book').click();
 
-    // the activity log is the same in both orientations (it is the log of every view of the market: amounts in the token, prices in KAS, the
-    // colour the taker's side on the token)
+    // The activity log is the same in both orientations (it is the log of every view of the market:
+    // amounts in the token, prices in KAS, the colour the taker's side on the token).
     expect(nativeSides.length).toBeGreaterThan(0);
     expect(await sides(page)).toEqual(nativeSides);
 
-    // stats
+    // Stats.
     const last = await stat(page, 'stat-last');
     expect(close(last, 1 / nativeLast, 0.02)).toBe(true);
     expect(close(await stat(page, 'stat-high'), 1 / nativeLow, 0.02)).toBe(true);
     expect(close(await stat(page, 'stat-low'), 1 / nativeHigh, 0.02)).toBe(true);
-    // up 25 % one way is down 20 % the other: the signs oppose
+    // Up 25 % one way is down 20 % the other: the signs oppose.
     const change = await stat(page, 'stat-change');
     if (nativeChange !== 0) expect(Math.sign(change)).toBe(-Math.sign(nativeChange));
     await expect(page.getByTestId('stat-volume')).toContainText('24h volume (KAS)');
     await expect(page.getByTestId('stat-quote-volume')).toContainText('24h volume (EXKCC)');
 
-    // remembered per market: a reload keeps it, another market is not affected
+    // Remembered per market: a reload keeps it, another market is not affected.
     await expect.poll(() => page.evaluate((k) => localStorage.getItem(k), `kob.flip.v2:token:${id}`)).toBe('1');
     await page.reload();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXKCC');
     await page.goto(`/#/market/${id}`);
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXKCC');
 
-    // ---- flip back: the native figures return
+    // ---- flip back: the native figures return.
     await page.goto(`/#/market/${id}`);
     await page.getByTestId('market-flip').click();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXKCC/KAS');
@@ -179,47 +182,48 @@ test.describe('the ticket in an inverted market', () => {
     await fund(mock, 'alice');
     await openMarket(page, mock);
 
-    // ---- native: sell 1 EXKCC at 0.04 KAS per EXKCC (far above the book: it rests)
+    // ---- native: sell 1 EXKCC at 0.04 KAS per EXKCC (far above the book: it rests).
     await page.getByTestId(TESTID.orderSideSell).click();
     await page.getByTestId(TESTID.orderAmount).fill('1');
     await page.getByTestId(TESTID.orderPrice).fill('0.04');
     const native = await placeOrder(page, mock);
-    // the sent order clears the amount: the same native form again
+    // The sent order clears the amount: the same native form again.
     await page.getByTestId(TESTID.orderAmount).fill('1');
     await page.getByTestId(TESTID.orderPrice).fill('0.04');
 
-    // ---- flip: the form keeps its order; it is now worded in KAS/EXKCC, whose base is KAS
+    // ---- flip: the form keeps its order and is worded in KAS/EXKCC, whose base is KAS.
     await page.getByTestId('market-flip').click();
     const ticket = page.getByTestId('order-ticket');
     await expect(ticket).toHaveAttribute('data-inverted', '1');
-    // no orientation explainer at the ticket top: it looks the same in both orientations
+    // No orientation explainer at the ticket top: it looks the same in both orientations.
     await expect(page.getByTestId('ticket-flip-note')).toHaveCount(0);
-    // the native Sell is the shown Buy (buying KAS with EXKCC), at 25 EXKCC per KAS
+    // The native Sell is the shown Buy (buying KAS with EXKCC), at 25 EXKCC per KAS.
     await expect(ticket).toHaveAttribute('data-side', 'sell');
     await expect(ticket).toHaveAttribute('data-shown-side', 'buy');
     await expect(page.getByTestId(TESTID.orderSideBuy)).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByTestId(TESTID.orderPrice)).toHaveValue('25');
     await expect(page.getByTestId('order-price-native')).toContainText('0.04 KAS per EXKCC');
     await expect(page.getByTestId(TESTID.orderPlace)).toContainText('Buy');
-    // the amount is KAS: 1 EXKCC at 0.04 = 0.04 KAS, the exact token amount below it
+    // The amount is KAS: 1 EXKCC at 0.04 = 0.04 KAS, the exact token amount below it.
     await expect(page.getByTestId(TESTID.orderAmount)).toHaveValue('0.04');
     await expect(page.locator('.field', { has: page.getByTestId(TESTID.orderAmount) }).locator('.tk-unit')).toHaveText('KAS');
     await expect(page.getByTestId('order-amount-tokens')).toHaveText('= 1 EXKCC at your price');
 
-    // the same order typed in the shown units: 25 EXKCC per KAS
+    // The same order typed in the shown units: 25 EXKCC per KAS.
     await page.getByTestId(TESTID.orderPrice).fill('');
     await page.getByTestId(TESTID.orderPrice).fill('25');
     await expect(page.getByTestId('order-price-native')).toContainText('0.04 KAS per EXKCC');
     const flipped = await placeOrderAndRead(page, mock);
     await expectWalletSigned(wallet!, flipped, { requests: 2, call: 1 });
-    // its confirmation speaks the flipped view (a purchase of KAS for 1 EXKCC at 25 EXKCC per KAS), its chain-side terms below (a sell of
-    // 1 EXKCC at 0.04 KAS)
+    // Its confirmation speaks the flipped view (a purchase of KAS for 1 EXKCC at 25 EXKCC per KAS),
+    // its chain-side terms below (a sell of 1 EXKCC at 0.04 KAS).
     expect(flipped.receipt.orders.map((o) => o.title)).toEqual(['Buy KAS · limit']);
     expect(flipped.receipt.orders[0]!.token).toMatch(/· on chain: Sell limit order$/);
     expect(flipped.receipt.orders[0]!.rows).toMatchObject({ 'You pay': '1 EXKCC', 'You receive': 'at least 0.04 KAS', Price: '25 EXKCC per KAS', Amount: '1 EXKCC' });
     expect(flipped.receipt.lines['Locked in orders']).toBe('2 KAS');
-    // the order that was signed is the native one: same contract, same price (a sell of 1 EXKCC at 0.04 KAS per token = 4_000_000 sompi per whole
-    // token, exactly), same amount, same funds locked
+    // The order that was signed is the native one: same contract, same price (a sell of 1 EXKCC at
+    // 0.04 KAS per token = 4_000_000 sompi per whole token, exactly), same amount, same funds
+    // locked.
     expect(flipped.views).toHaveLength(1);
     expect(native.views).toHaveLength(1);
     expect(native.views[0].contract).toBe('KobAsk');
@@ -232,7 +236,8 @@ test.describe('the ticket in an inverted market', () => {
     await openMarket(page, mock);
     await page.getByTestId('market-flip').click();
     const ticket = page.getByTestId('order-ticket');
-    // the best displayed bid is the native best ask (0.0251 KAS per EXKCC): hitting it sells KAS, i.e. buys EXKCC at exactly 0.0251
+    // The best displayed bid is the native best ask (0.0251 KAS per EXKCC): hitting it sells KAS,
+    // i.e. buys EXKCC at exactly 0.0251.
     const bids = page.getByTestId(TESTID.bookBids).getByTestId('book-bid-row');
     await expect(bids.first()).toHaveAttribute('data-native-price', '2510000');
     await page.getByTestId(TESTID.orderSideSell).click();
@@ -243,7 +248,8 @@ test.describe('the ticket in an inverted market', () => {
     await expect(page.getByTestId('order-price-native')).toContainText('0.0251 KAS per EXKCC');
     const shown = num(await page.getByTestId(TESTID.orderPrice).inputValue());
     expect(close(shown, 1 / 0.0251, 1e-6)).toBe(true);
-    // an ask level (native bid 0.0249) fills its price; the side stays the one chosen (shown Buy = native sell)
+    // An ask level (native bid 0.0249) fills its price. The side stays the one chosen (shown Buy =
+    // native sell).
     const asks = page.getByTestId(TESTID.bookAsks).getByTestId('book-ask-row');
     await page.getByTestId(TESTID.orderSideBuy).click();
     await expect(ticket).toHaveAttribute('data-side', 'sell');
@@ -258,22 +264,24 @@ test.describe('the ticket in an inverted market', () => {
     await openMarket(page, mock);
     await page.getByTestId('market-flip').click();
     const ticket = page.getByTestId('order-ticket');
-    // shown Sell (native buy: the price rounds down) at 39.84 EXKCC per KAS: 1/39.84 = 0.025100401..., the buy limit never above it: 0.0251004
-    // (protocol v3 has no price tick: the step is one sompi per whole token)
+    // Shown Sell (native buy: the price rounds down) at 39.84 EXKCC per KAS: 1/39.84 =
+    // 0.025100401..., the buy limit never above it: 0.0251004.
+    // Protocol v3 has no price tick: the step is one sompi per whole token.
     await page.getByTestId(TESTID.orderSideSell).click();
     await expect(ticket).toHaveAttribute('data-side', 'buy');
     await page.getByTestId(TESTID.orderPrice).fill('39.84');
     await expect(page.getByTestId('order-price-native')).toContainText('0.0251004 KAS per EXKCC');
-    // shown Buy (native sell: rounds up) at 39.84: 0.025100401... -> the sell limit never below it: 0.02510041 (the next sompi)
+    // Shown Buy (native sell: rounds up) at 39.84: 0.025100401... -> the sell limit never below it:
+    // 0.02510041 (the next sompi).
     await page.getByTestId(TESTID.orderSideBuy).click();
     await expect(ticket).toHaveAttribute('data-side', 'sell');
     await page.getByTestId(TESTID.orderPrice).fill('');
     await page.getByTestId(TESTID.orderPrice).fill('39.84');
     await expect(page.getByTestId('order-price-native')).toContainText('0.02510041 KAS per EXKCC');
-    // the conversion itself is the rounding (to the next sompi in the maker's favour): the native line says what is placed; without a price tick
-    // there is no second, tick rounding to flag
+    // The conversion itself is the rounding (to the next sompi in the maker's favour): the native
+    // line says what is placed. Without a price tick there is no second, tick rounding to flag.
     await settlePlan(page);
-    // a malformed price still reports the form's own error
+    // A malformed price still reports the form's own error.
     await page.getByTestId(TESTID.orderPrice).fill('abc');
     await expect(page.getByTestId(TESTID.orderPrice)).toHaveAttribute('aria-invalid', 'true');
   });
@@ -281,10 +289,13 @@ test.describe('the ticket in an inverted market', () => {
 
 test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker> flipped', () => {
   const QUOTE = 'e7'.repeat(32);
-  // home: auto, an operator's explicit landing screen (the default empty hash is the landing page)
+  // Home: auto, an operator's explicit landing screen (the default empty hash is the landing page).
   test.use({ appConfig: { quoteTokens: { [QUOTE]: 'USD' }, home: 'auto' } });
 
-  /** the example registry with EXKCC listed and EXUSD (6 decimals) as a second listed token, matching the mock pair seed */
+  /**
+   * The example registry with EXKCC listed and EXUSD (6 decimals) as a second listed token,
+   * matching the mock pair seed.
+   */
   async function listBoth(page: Page): Promise<void> {
     const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
     for (const t of reg.templates) t.review_status = 'reviewed';
@@ -301,7 +312,8 @@ test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker
     await listBoth(page);
     const exkcc = await seeded(mock);
 
-    // landing: the USD token's own book, EXUSD/KAS (the token on the left, the ticker never renamed): a full market with its book and ticket
+    // Landing: the USD token's own book, EXUSD/KAS (the token on the left, the ticker never
+    // renamed): a full market with its book and ticket.
     await page.goto('/');
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXUSD/KAS');
     await expect(page.getByTestId('token-title')).toContainText('EXUSD');
@@ -313,7 +325,7 @@ test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker
     await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-inverted', '0');
     await expect(page.getByTestId('token-usd-chart')).toHaveCount(0);
 
-    // a flip: KAS/EXUSD, remembered
+    // A flip: KAS/EXUSD, remembered.
     await page.getByTestId('market-flip').click();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KAS/EXUSD');
     await expect(page.getByTestId('chart-unit')).toHaveText('EXUSD per KAS');
@@ -323,14 +335,14 @@ test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker
     await page.getByTestId('market-flip').click();
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXUSD/KAS');
 
-    // the list: both tokens, no market / pair column, no derived USD table
+    // The list: both tokens, no market / pair column, no derived USD table.
     await page.goto('/#/market');
     await expect(page.getByTestId(`token-row-${exkcc}`)).toBeVisible();
     await expect(page.getByTestId(`token-row-${QUOTE}`)).toBeVisible();
     await expect(page.getByTestId('token-list')).toBeVisible();
     await expect(page.getByTestId('usd-prices')).toHaveCount(0);
 
-    // a plain token page has no USD link either
+    // A plain token page has no USD link either.
     await page.goto(`/#/market/${exkcc}`);
     await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXKCC/KAS');
     await expect(page.getByTestId('token-usd-chart')).toHaveCount(0);
@@ -353,7 +365,7 @@ test.describe('USD reference token: <its ticker>/KAS by default, KAS/<its ticker
   });
 });
 
-// an operator's explicit config home (the default empty hash is the landing page: landing.spec.ts)
+// An operator's explicit config home (the default empty hash is the landing page: landing.spec.ts).
 test.describe('home: auto', () => {
   test.use({ appConfig: { home: 'auto' } });
   test('the empty hash is a chart, the market list is at #/market', async ({ appPage: page, mock }) => {

@@ -1,10 +1,14 @@
-// The order-type matrix (mock KasWare wallet, default mock seed, EXKCC listed as tradable): every order type of docs/spec/order-types.md, on
-// each side where it exists, is placed end to end through the UI:
-//   ticket fields -> ONE click on the order button -> the final confirmation (the signer's table: summary, fee and the order's terms, read before it is confirmed) -> its
-//   Confirm -> the wallet signs exactly the inputs of the transaction -> mock node accepts (the covenants run) -> the indexer holds the right contract with the right state fields
-//   (and kob-wasm `recoverOrders` on the accepted tx agrees) -> My orders shows it with the right label and status.
-// The expectations live in cases.ts; this file is the generic driver plus the timing rules (GTC 90 days, GTD date, day order until 00:00 UTC
-// against `kob.dayOrder`, timed activation, IOC / auction lifetimes).
+// The order-type matrix (mock KasWare wallet, default mock seed, EXKCC listed as tradable): every
+// order type of docs/spec/order-types.md, on each side where it exists, is placed end to end
+// through the UI:
+//   ticket fields -> ONE click on the order button -> the final confirmation (the signer's table:
+//   summary, fee and the order's terms, read before it is confirmed) -> its Confirm -> the wallet
+//   signs exactly the inputs of the transaction -> mock node accepts (the covenants run) -> the
+//   indexer holds the right contract with the right state fields (and kob-wasm `recoverOrders` on
+//   the accepted tx agrees) -> My orders shows it with the right label and status.
+// The expectations live in cases.ts; this file is the generic driver plus the timing rules (GTC 90
+// days, GTD date, day order until 00:00 UTC against `kob.dayOrder`, timed activation, IOC / auction
+// lifetimes).
 import { test, expect } from '../fixtures';
 import { p2pkSpk } from '../../mock/address.mjs';
 import { loadKobNode } from '../../src/kob/wasm.node';
@@ -28,7 +32,10 @@ interface Placement {
   unix: number;
 }
 
-/** The timing rules: what the planner computed for the on-chain expiry / activation against the node clock and the wallet defaults. */
+/**
+ * The timing rules: what the planner computed for the on-chain expiry / activation against the node
+ * clock and the wallet defaults.
+ */
 async function checkTiming(t: Timing, p: Placement, ctx: Ctx): Promise<void> {
   const expiry = Number(p.state.expiryDaa);
   const activeFrom = Number(p.state.activeFrom);
@@ -49,11 +56,13 @@ async function checkTiming(t: Timing, p: Placement, ctx: Ctx): Promise<void> {
       break;
     }
     case 'day': {
-      // the placement record carries the wall-clock deadline: the next 00:00 UTC after the placement (either side of a midnight that passed while the test ran)
+      // the placement record carries the wall-clock deadline: the next 00:00 UTC after the
+      // placement (either side of a midnight that passed while the test ran)
       const day = (u: number) => (Math.floor(u / 86_400) + 1) * 86_400;
       expect([day(p.unix - 5), day(p.unix + 5)]).toContain(p.view.deadline);
       const kob = await loadKobNode();
-      // the wallet measures the DAA rate; dayOrder clamps it to 9.5 .. 10.5 DAA/s and adds a 1% margin
+      // the wallet measures the DAA rate; dayOrder clamps it to 9.5 .. 10.5 DAA/s and adds a 1%
+      // margin
       const lo = Number(kob.dayOrder(BigInt(p.daa), BigInt(p.unix), 9_500n).expiryDaa);
       const hi = Number(kob.dayOrder(BigInt(p.daa), BigInt(p.unix), 10_500n).expiryDaa);
       expect(kob.dayOrder(BigInt(p.daa), BigInt(p.unix), 10_000n).deadline.toString()).toBe(String(p.view.deadline));
@@ -92,13 +101,15 @@ for (const c of CASES) {
     await waitReviewable(page);
     if (!('tip' in fields)) await expect(page.getByTestId('order-tip')).toHaveValue(''); // the default tip is 0: an empty box
 
-    // ---- one click: the final confirmation, read before it is confirmed; then the wallet is asked once and signs exactly the inputs of the transaction
+    // ---- one click: the final confirmation, read before it is confirmed; then the wallet is asked
+    // once and signs exactly the inputs of the transaction
     const receipt = await clickPlaceAndRead(page);
     expect(receipt.from).toBe('app');
     expect(receipt.title).toBe('Place order');
     expect(receipt.updated).toBe(false);
     expect(receipt.problems).toBe(false);
-    // the one order the transaction creates, with the terms of the case (and the exit an if-done entry commits to)
+    // the one order the transaction creates, with the terms of the case (and the exit an if-done
+    // entry commits to)
     expect(receipt.orders, 'one order in the table').toHaveLength(1);
     const order = receipt.orders[0]!;
     expect(order.title).toBe(c.receipt.orderTitle);
@@ -108,7 +119,8 @@ for (const c of CASES) {
       expect(order.exit?.title).toBe(c.receipt.exitTitle);
       expect(order.exit?.rows).toMatchObject(c.receipt.exitCard);
     } else expect(order.exit).toBeNull();
-    // the summary: the token lines of the case, what is locked in orders (the value the accepted transaction locks), and the net KAS = locked + fee
+    // the summary: the token lines of the case, what is locked in orders (the value the accepted
+    // transaction locks), and the net KAS = locked + fee
     for (const [label, value] of Object.entries(c.receipt.lines ?? {})) expect(receipt.lines[label], `summary line ${label}`).toBe(value);
     expect(receipt.lines['Locked in orders'], 'locked in orders').toBe(c.locked);
     const kasAmount = (text: string | undefined): bigint => {
@@ -126,14 +138,16 @@ for (const c of CASES) {
     if (Number(stateOf.activeFrom) > 0 && 'Starts at' in order.rows) expect(order.rows['Starts at'], 'start').toBe(`DAA score ${stateOf.activeFrom}`);
     await expectWalletSigned(wallet!, placed, { inputs: Array.from({ length: placed.submission.inputs }, (_, i) => i) });
 
-    // ---- the transaction itself: one order created, the value it locks, nothing paid to another key
+    // ---- the transaction itself: one order created, the value it locks, nothing paid to another
+    // key
     expect(placed.submission.created).toHaveLength(1);
     const tx = placed.submission.tx;
     const alice = (await mock.balance('alice')).pubkey;
     const lockedOutputs = new Set([...placed.submission.created.map((o) => o.output), ...placed.submission.token_outputs.filter((o) => o.role === 'custody').map((o) => o.output)]);
     const locked = [...lockedOutputs].reduce((sum, i) => sum + BigInt(tx.outputs[i].value), 0n);
     expect(locked, 'KAS locked in contracts').toBe(BigInt(Math.round(Number(c.locked.replace(' KAS', '')) * 1e8)));
-    // everything else goes back to the wallet key: its KAS change, or the token change carrier it owns
+    // everything else goes back to the wallet key: its KAS change, or the token change carrier it
+    // owns
     const ownCarriers = new Set(placed.submission.token_outputs.filter((o) => o.role === 'owned' && o.owner === alice).map((o) => o.output));
     tx.outputs.forEach((o: any, i: number) => {
       if (!lockedOutputs.has(i) && !ownCarriers.has(i)) expect(o.scriptPublicKey, `output ${i} is change to the wallet key`).toBe(p2pkSpk(alice));
@@ -154,8 +168,9 @@ for (const c of CASES) {
       expect(view.custody.utxo.state.owner).toBe(view.covenant_id);
     }
     if (c.exit) {
-      // the exit an if-done entry commits to sits inside the entry state as a template (the fields only known at the fill are left out):
-      // it must belong to the maker, name the token, and carry every price of the exit as an 8-byte push
+      // the exit an if-done entry commits to sits inside the entry state as a template (the fields
+      // only known at the fill are left out): it must belong to the maker, name the token, and
+      // carry every price of the exit as an 8-byte push
       const tpl = state.exitState!;
       expect(tpl.startsWith('20' + view.maker), 'exit template owner').toBe(true);
       expect(tpl).toContain(view.state.state.tokenCovId);
@@ -183,7 +198,8 @@ for (const c of CASES) {
     await expect(row.getByTestId('order-status')).toHaveText(/^open$/i);
     await openOrderRow(page, view.covenant_id);
     await expect(row.getByTestId(`order-tx-${view.covenant_id}`)).toBeVisible();
-    // the placement note the app stored with the record, in the ticket's words ("Sell · Limit"), never the form's ids
+    // the placement note the app stored with the record, in the ticket's words ("Sell · Limit"),
+    // never the form's ids
     const typeName = (ticketText as Record<string, string>)[`ticket.type.${c.type}.name`]!.replace('{name}', 'EXKCC');
     await expect(row).toContainText(`${c.side === 'buy' ? 'Buy' : 'Sell'} · ${typeName}`);
   });

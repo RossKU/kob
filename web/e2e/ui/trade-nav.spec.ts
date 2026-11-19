@@ -1,7 +1,9 @@
-// The header's "Trade" tab (Market | Trade | Portfolio | Activity | ...): Market is the list; Trade leads back to the market opened last (a token's KAS market or a
-// token/token pair, the exact route), per network in localStorage. It is ALWAYS there (the tab bar never shifts between pages): with nothing stored it leads to
-// the first market the registry lists. A stored value that is no market route, or a market that does not resolve, is dropped. Trade is the active tab on a
-// market page, Market only on the list. The phone menu has it too. 360 px fit.
+// The header's "Trade" tab (Market | Trade | Portfolio | Activity | ...): Market is the list. Trade
+// leads back to the market opened last (a token's KAS market or a token/token pair, the exact
+// route), per network in localStorage. It is ALWAYS there (the tab bar never shifts between pages):
+// with nothing stored it leads to the first market the registry lists. A stored value that is no
+// market route, or a market that does not resolve, is dropped. Trade is the active tab on a market
+// page, Market only on the list. The phone menu has it too. 360 px fit.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
@@ -30,11 +32,12 @@ test('a first visit has the Trade tab too: it leads to the first listed market, 
   await expect(page.getByTestId('nav-trade')).toBeVisible();
   await expect(page.getByTestId('nav-trade')).not.toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('nav-market')).toHaveAttribute('aria-current', 'page');
-  // the registry's first tradable token (the mock's EXKCC), else the list: a real market route either way
+  // The registry's first tradable token (the mock's EXKCC), else the list: a real market route
+  // either way.
   const token = (await mock.token()).covenant_id;
   await expect(page.getByTestId('nav-trade')).toHaveAttribute('href', new RegExp('^#/market(/' + token + ')?$'));
   expect(await stored(page)).toBeNull();
-  // the tab does not move between the list and another page
+  // The tab does not move between the list and another page.
   const x = (await page.getByTestId('nav-trade').boundingBox())!.x;
   await page.getByTestId('nav-activity').click();
   expect((await page.getByTestId('nav-trade').boundingBox())!.x).toBeCloseTo(x, 0);
@@ -49,11 +52,11 @@ test('opening a market adds Trade (next to Market); Market then leads to the lis
   await expect(tab).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('nav-market')).not.toHaveAttribute('aria-current', 'page');
   expect(await stored(page)).toBe(`#/market/${token}`);
-  // Market | Trade | Activity: in this order
+  // Market | Trade | Activity: in this order.
   const xs = await Promise.all(['nav-market', 'nav-trade', 'nav-activity'].map(async (id) => (await page.getByTestId(id).boundingBox())!.x));
   expect(xs[0]).toBeLessThan(xs[1]!);
   expect(xs[1]).toBeLessThan(xs[2]!);
-  // the market page has no "All markets" line: the Market tab is one click
+  // The market page has no "All markets" line: the Market tab is one click.
   await expect(page.getByTestId('market-all')).toHaveCount(0);
 
   await page.getByTestId('nav-market').click();
@@ -67,11 +70,11 @@ test('opening a market adds Trade (next to Market); Market then leads to the lis
   await expect(page.getByTestId('order-ticket')).toBeVisible();
   await expect(page.getByTestId('nav-trade')).toHaveAttribute('aria-current', 'page');
 
-  // the Market tab goes to the list again, and Trade is still there
+  // The Market tab goes to the list again, and Trade is still there.
   await page.getByTestId('nav-market').click();
   await expect(page.getByTestId('token-list-view')).toBeVisible();
   await expect(page.getByTestId('nav-trade')).toBeVisible();
-  // other pages keep neither tab current
+  // Other pages keep neither tab current.
   await page.getByTestId('nav-activity').click();
   await expect(page.getByTestId('nav-trade')).not.toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('nav-market')).not.toHaveAttribute('aria-current', 'page');
@@ -100,7 +103,7 @@ test('a pair is remembered as a pair', async ({ appPage: page, mock }) => {
   await expect(page.getByTestId('nav-trade')).toHaveAttribute('href', `#/market/${base}/${QUOTE}`);
   await page.getByTestId('nav-trade').click();
   await expect(page.getByTestId('pair-header')).toBeVisible();
-  // the token's own market is the other tab's target afterwards
+  // The token's own market is the other tab's target afterwards.
   await page.goto(`/#/market/${base}`);
   await expect(page.getByTestId('token-header')).toBeVisible();
   expect(await stored(page)).toBe(`#/market/${base}`);
@@ -123,7 +126,7 @@ test('a market that no longer resolves is forgotten and Trade falls back to the 
   await expect(page.getByTestId('token-not-found')).toBeVisible();
   await expect(page.getByTestId('nav-trade')).not.toHaveAttribute('href', `#/market/${gone}`);
   expect(await stored(page)).toBeNull();
-  // the list is a click away, and the tab is still there
+  // The list is a click away, and the tab is still there.
   await page.getByTestId('nav-market').click();
   await expect(page.getByTestId('token-list-view')).toBeVisible();
   await expect(page.getByTestId('nav-trade')).toBeVisible();
@@ -151,12 +154,13 @@ for (const width of [360, 390]) {
     await expect(tab).toHaveAttribute('aria-current', 'page');
     const box = (await tab.boundingBox())!;
     expect(box.x + box.width).toBeLessThanOrEqual(width);
-    // the header never overflows; the page below it is checked on the normal fonts only (a market title on the wide ones is its own matter, pair-header.spec.ts)
+    // The header never overflows. The page below it is checked on the normal fonts only (a market
+    // title on the wide ones is its own matter, pair-header.spec.ts).
     expect(await page.locator('header.header').evaluate((h) => h.scrollWidth <= window.innerWidth)).toBe(true);
     if (process.env.KOB_WIDE_FONTS !== '1') expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     const header = (await page.locator('header.header').boundingBox())!;
     expect(header.height).toBeLessThan(64);
-    // from the list, the menu's Trade leads back
+    // From the list, the menu's Trade leads back.
     await page.getByTestId('menu-panel').getByTestId('nav-market').click();
     await expect(page.getByTestId('token-list-view')).toBeVisible();
     await page.getByTestId('menu-button').click();
@@ -165,7 +169,8 @@ for (const width of [360, 390]) {
   });
 }
 
-// the extra tab must not break the one-row header at the widths where the tabs are shown (wide fonts: KOB_WIDE_FONTS=1 makes the row take the phone layout first)
+// The extra tab must not break the one-row header at the widths where the tabs are shown (wide
+// fonts: KOB_WIDE_FONTS=1 makes the row take the phone layout first).
 for (const width of [1280, 1024, 900, 880]) {
   test(`${width} px: the header with the Trade tab is one row and does not scroll sideways`, async ({ appPage: page, mock }) => {
     await page.setViewportSize({ width, height: 800 });

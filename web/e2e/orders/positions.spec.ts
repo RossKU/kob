@@ -1,5 +1,6 @@
-// Position cards in My orders (mock indexer available): an IFD / repeat entry with its exits is ONE card with the phase chip, the price path,
-// amount entered / exited / open, the repeat state, and realised fills on demand. Mock KasWare wallet, default mock seed.
+// Position cards in My orders (mock indexer available): an IFD / repeat entry with its exits is ONE
+// card with the phase chip, the price path, amount entered / exited / open, the repeat state, and
+// realised fills on demand. Mock KasWare wallet, default mock seed.
 import { test, expect, type MockClient } from '../fixtures';
 import { fund, openMarket, gotoOrders } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
@@ -91,7 +92,8 @@ test.describe('position cards', () => {
     await expect(page.getByTestId(`position-${entryId}`)).toHaveAttribute('data-phase', 'cancelled');
   });
 
-  // B1 / C5 R-9: close of a SELL-first position: cancel its orders (their KAS comes back), then buy back the amount it sold at market
+  // Close of a SELL-first position: cancel its orders (their KAS comes back), then buy
+  // back the amount it sold at market
   test('close a sell-first position: its orders are cancelled, then the ticket opens on a market buy of the amount sold', async ({ appPage: page, mock, wallet }) => {
     await fund(mock);
     await openMarket(page, mock);
@@ -117,7 +119,8 @@ test.describe('position cards', () => {
     await expect(page.getByTestId('order-amount')).toHaveValue('1');
   });
 
-  // close of a partly filled BUY-first position: the ticket sells what the entry bought (1 of 2), not the wallet's whole free balance
+  // close of a partly filled BUY-first position: the ticket sells what the entry bought (1 of 2),
+  // not the wallet's whole free balance
   test('close a partly filled buy-first position: the ticket opens on a market sell of the amount bought', async ({ appPage: page, mock, wallet }) => {
     const entryId = await placeAndFill(page, mock, 'ifd', { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' }, 1);
     await gotoOrders(page);

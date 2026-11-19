@@ -1,5 +1,8 @@
-// Screenshots of Create token and its confirmation screen (desktop light and dark, phone) for review. Not a test of anything: skipped without
-// KOB_CREATE_SHOTS=<dir>. `KOB_CREATE_PHASE=before` names the files for the page as it was before its help moved behind "?" (and opens no help).
+// Screenshots of Create token and its confirmation screen (desktop light and dark, phone) for
+// review.
+// Not a test of anything. Skipped without KOB_CREATE_SHOTS=<dir>.
+// `KOB_CREATE_PHASE=before` tags the files "before" and opens no help. The default tags them
+// "after".
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from '@playwright/test';
@@ -19,7 +22,10 @@ const VARIANTS = [
   { name: 'phone', theme: 'light', width: 390, height: 844 },
 ] as const;
 
-/** The whole confirmation screen: the window is made as tall as the dialog (it scrolls inside a fixed backdrop, so a full-page shot would cut it). */
+/**
+ * The whole confirmation screen: the window is made as tall as the dialog (it scrolls inside a
+ * fixed backdrop, so a full-page shot would cut it).
+ */
 async function shotDialog(page: Page, name: string, width: number, height: number): Promise<void> {
   const h = await page.getByTestId('confirm-screen').evaluate((el) => Math.ceil(el.getBoundingClientRect().height));
   await page.setViewportSize({ width, height: Math.max(height, h + 80) });
@@ -41,12 +47,13 @@ for (const v of VARIANTS) {
     await page.getByTestId('sale-keep').fill('10');
     await expect(page.getByTestId('sale-graph')).toBeVisible();
     await expect(page.getByTestId('issue-summary')).toBeVisible();
-    // the top of the page, nothing focused (a full-page shot of a scrolled page draws the sticky header in the middle)
+    // The top of the page, nothing focused (a full-page shot of a scrolled page draws the sticky
+    // header in the middle).
     await page.evaluate(() => { (document.activeElement as HTMLElement | null)?.blur(); window.scrollTo(0, 0); });
     await page.screenshot({ path: join(SHOTS!, `page-${PHASE}-${v.name}.png`), fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(v.width);
     if (PHASE === 'after') {
-      // one field's help open
+      // One field's help open.
       await page.getByTestId('issue-ticker-help').click();
       await expect(page.getByTestId('issue-ticker-help-panel')).toBeVisible();
       await page.screenshot({ path: join(SHOTS!, `page-help-${v.name}.png`) });

@@ -1,5 +1,8 @@
-// Field help of the ticket: off at first on every width (UI review H-03: the form is its labels and boxes, the long text of a field is its tooltip), shown by the title row's "?";
-// shown, it wraps (a phone has no hover tooltip) instead of ending in an ellipsis. Mock stack.
+// Field help of the ticket is off at first on every width: the form is its labels and boxes, and
+// the long text of a field is its tooltip.
+// It is shown by the title row's "?".
+// Shown, it wraps (a phone has no hover tooltip) instead of ending in an ellipsis.
+// Mock stack.
 import { expect, test } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
 import { pickType } from '../helpers/ticket';
@@ -14,13 +17,14 @@ test.describe('desktop, 1280 px wide', () => {
     await openMarket(page, mock);
     await expect(page.getByTestId('order-help-toggle')).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByTestId('order-type-help')).toBeHidden();
-    // no hint box that holds only the help is left in the layout (an empty box would still take the field's gap)
+    // No hint box that holds only the help is left in the layout (an empty box would still take the
+    // field's gap).
     const boxes = await page.getByTestId('order-ticket').evaluate((root) => [...root.querySelectorAll<HTMLElement>('.field-hint')].filter((e) => e.offsetHeight > 0 && e.querySelector(':scope > .tk-help') && !e.querySelector(':scope > :not(.tk-help)')).length);
     expect(boxes).toBe(0);
-    // the tooltip of the order type and of the price box is their long help
+    // The tooltip of the order type and of the price box is their long help.
     await expect(page.getByTestId('order-type').locator('xpath=ancestor::div[@title][1]')).toHaveAttribute('title', /Rests at your price/);
     await expect(page.getByTestId('order-price').locator('xpath=ancestor::div[@title][1]')).toHaveAttribute('title', /rounded to the price step/);
-    // turned on, the help stands under the fields and stays on the next visit
+    // Turned on, the help stands under the fields and stays on the next visit.
     await page.getByTestId('order-help-toggle').click();
     await expect(page.getByTestId('order-type-help')).toBeVisible();
     await page.reload();
@@ -36,7 +40,8 @@ test.describe('phone, 390 px wide', () => {
     await fund(mock);
     await openMarket(page, mock);
     await pickType(page, 'stopMarket', 'sell'); // the longest help texts
-    // a phone hides the field help at first (the form fits the panel); the title row's "?" shows it
+    // A phone hides the field help at first (the form fits the panel). The title row's "?" shows
+    // it.
     await expect(page.getByTestId('order-type-help')).toBeHidden();
     await page.getByTestId('order-help-toggle').click();
     await expect(page.getByTestId('order-help-toggle')).toHaveAttribute('aria-pressed', 'true');

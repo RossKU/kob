@@ -1,6 +1,8 @@
-// The tables of the Portfolio never paint a cell over its neighbour: at every width from 760 to 1600 px (steps of 40), with long values seeded (a date like
-// "11/10/26, 10:38 PM", a Filled cell of "1,960.83737795 / 1,960.83737795 <hex name> 100%", a hex-named token, "expired (IOC/FOK)"), no two cells of a row of
-// Open orders, Order history or Fills have overlapping contents, and each cell holds its own content. Also the panel on a market page. Mock stack.
+// The tables of the Portfolio never paint a cell over its neighbour: at every width from 760 to
+// 1600 px (steps of 40), with long values seeded (a date like "11/10/26, 10:38 PM", a Filled cell
+// of "1,960.83737795 / 1,960.83737795 <hex name> 100%", a hex-named token, "expired (IOC/FOK)"), no
+// two cells of a row of Open orders, Order history or Fills have overlapping contents, and each
+// cell holds its own content. Also the panel on a market page. Mock stack.
 // KOB_SHOTS=<dir> saves screenshots at KOB_SHOT_WIDTHS (KOB_SHOT_TAG prefixes the names).
 import type { Locator, Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
@@ -13,7 +15,10 @@ test.use({ autoOpen: false, timezoneId: lateTimeZone() });
 const WIDTHS = [...Array.from({ length: 22 }, (_, i) => 760 + 40 * i), 1024].sort((a, b) => a - b); // 760 ... 1600, and a tablet's 1024
 const SHOT_WIDTHS = new Set((process.env.KOB_SHOT_WIDTHS ?? '').split(',').filter(Boolean).map(Number));
 
-/** Rows (`.or-line`, or a table row of the fills) whose cells overlap, or whose cells hold more than their box, as sentences. */
+/**
+ * Rows (`.or-line`, or a table row of the fills) whose cells overlap, or whose cells hold more than
+ * their box, as sentences.
+ */
 async function overlaps(root: Locator, where: string): Promise<string[]> {
   return root.evaluate((el, w) => {
     const bad: string[] = [];
@@ -26,7 +31,9 @@ async function overlaps(root: Locator, where: string): Promise<string[]> {
         const range = document.createRange();
         range.selectNodeContents(c);
         let rects = [...range.getClientRects()].filter((r) => r.width > 0.5 && r.height > 0.5);
-        // a whole transaction id ends with an ellipsis where its cell has no room: the text is clipped by its box, so the box (the id up to its ellipsis, and the Copy button) is what is painted
+        // A whole transaction id ends with an ellipsis where its cell has no room: the text is
+        // clipped by its box, so the box (the id up to its ellipsis, and the Copy button) is what
+        // is painted.
         const whole = c.querySelector('.copy-ellipsis');
         if (whole) rects = [...whole.querySelectorAll('a, code, button')].filter((e) => !(e.tagName === 'CODE' && e.parentElement?.tagName === 'A')).map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0.5 && r.height > 0.5);
         return { c, rects };
@@ -80,12 +87,13 @@ for (const width of WIDTHS) {
       found.push(...(await overlaps(root, `page ${id}`)));
       if (shots) await shot(page, `${width}-page-${id}`);
     }
-    // the same on a market page's panel (its width is the page's less the columns beside it)
+    // The same on a market page's panel (its width is the page's less the columns beside it).
     const token = await mock.token();
     await page.goto(`/#/market/${token.covenant_id}`);
     const mine = page.getByTestId('market-orders');
     await expect(mine).toBeVisible();
-    // the panel shows this market only by default: the hex-named token's orders are on another market's page
+    // The panel shows this market only by default: the hex-named token's orders are on another
+    // market's page.
     await mine.getByTestId('market-orders-scope-all').click();
     for (const [id, panel] of [['active', 'open'], ['history', 'history'], ['fills', 'fills']] as const) {
       await mine.getByTestId(`orders-tab-${id}`).click();

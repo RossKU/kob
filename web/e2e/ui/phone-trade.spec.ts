@@ -1,5 +1,10 @@
-// The Buy | Sell bar of the market page (review H-11, founder 2026-11-11): phone only, a bar at the bottom edge instead of a floating "Trade" button; each button takes the ticket's side, scrolls to the
-// ticket and focuses its amount box; it is gone while the ticket is on screen; the page keeps room under its end so the bar covers no content. Mock stack.
+// The Buy | Sell bar of the market page: phone only, a bar at the bottom edge instead of a floating
+// "Trade" button.
+// - Each button takes the ticket's side, scrolls to the ticket and focuses its amount box.
+// - The bar is gone while the ticket is on screen.
+// - The page keeps room under its end, so the bar covers no content.
+//
+// Mock stack.
 import { expect, test } from '../fixtures';
 import { TESTID } from '../testids';
 import { fund, openMarket } from '../helpers/env';
@@ -20,7 +25,7 @@ test.describe('phone, 390 px wide', () => {
     await expect(bar).toBeVisible();
     await expect(page.getByTestId('market-trade-buy')).toHaveText('Buy');
     await expect(page.getByTestId('market-trade-sell')).toHaveText('Sell');
-    // a bar at the bottom edge, the full width, not a button over the plot
+    // A bar at the bottom edge, the full width, not a button over the plot.
     const box = (await bar.boundingBox())!;
     expect(box.x).toBe(0);
     expect(box.width).toBe(390);
@@ -31,7 +36,7 @@ test.describe('phone, 390 px wide', () => {
     await expect(page.getByTestId(TESTID.orderAmount)).toBeInViewport();
     await expect(ticket).toHaveAttribute('data-side', 'buy');
     await expect(bar).toBeHidden(); // the ticket is on screen: no bar
-    // back up: the bar returns, and Sell takes the other side
+    // Back up: the bar returns, and Sell takes the other side.
     await page.evaluate(() => window.scrollTo(0, 0));
     await expect(bar).toBeVisible();
     await page.getByTestId('market-trade-sell').click();
@@ -47,7 +52,8 @@ test.describe('phone, 390 px wide', () => {
     const side = page.getByTestId('order-side-buy');
     const place = page.getByTestId('order-place');
     await expect(place).toBeAttached();
-    // the switch scrolled past (under the sticky header), the ticket's order button still on screen
+    // The switch scrolled past (under the sticky header), the ticket's order button still on
+    // screen.
     await side.evaluate((el) => {
       const r = el.parentElement!.getBoundingClientRect();
       const head = document.querySelector<HTMLElement>('.app-header, header')!.offsetHeight;
@@ -55,7 +61,7 @@ test.describe('phone, 390 px wide', () => {
     });
     await expect(place).toBeInViewport();
     await expect(bar).toBeVisible();
-    // the switch on screen: no bar
+    // The switch on screen: no bar.
     await side.evaluate((el) => el.scrollIntoView({ block: 'center' }));
     await expect(bar).toBeHidden();
   });
@@ -64,7 +70,8 @@ test.describe('phone, 390 px wide', () => {
     await fund(mock);
     await openMarket(page, mock);
     await expect(page.getByTestId('market-trade-bar')).toBeVisible();
-    // the end of the page: what loads under the grid (the activity log, the wallet's panel) makes it longer while it is scrolled, so scroll again until it does not grow
+    // The end of the page: what loads under the grid (the activity log, the wallet's panel) makes
+    // it longer while it is scrolled, so scroll again until it does not grow.
     let height = 0;
     for (let i = 0; i < 12; i++) {
       await page.evaluate(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' }));
@@ -73,7 +80,7 @@ test.describe('phone, 390 px wide', () => {
       if (now === height && (await page.evaluate(() => Math.round(scrollY + innerHeight) >= document.documentElement.scrollHeight - 1))) break;
       height = now;
     }
-    // the last element of the page (the footer's last line) ends above the bar
+    // The last element of the page (the footer's last line) ends above the bar.
     const barTop = (await page.getByTestId('market-trade-bar').boundingBox())!.y;
     const end = await page.evaluate(() => {
       const last = [...document.querySelectorAll('footer *')].filter((e) => e.getBoundingClientRect().height > 0).pop() ?? document.body;

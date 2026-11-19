@@ -1,9 +1,17 @@
-// The optional USD display (Settings, "Display currency"): KAS stays the default; with USD every READ-ONLY KAS value is shown as approximate dollars (the market list, a market's
-// header strip and its Activity panel, the Activity page's summary, volume chart and feed, the Portfolio's summary and balances), with the KAS figure in the tooltip and a one-line
-// note that says what the dollars are. The order book, the ticket's inputs, the price chart and everything signed stay in KAS, and no price the user types is converted.
-// The price is the indexer's (`GET /v1/price/kas-usd`: the mock serves $0.03 taken now unless a test steers it); a missing, unavailable or too old (over 10 minutes) price
-// falls back to KAS with a notice. While KAS is the display currency the app asks for it only on the market views, for the thin-book marker of the 24 h change (its
-// threshold is in dollars; founder 2026-11-12), and never shows a dollar there.
+// The optional USD display (Settings, "Display currency"): KAS stays the default.
+//
+// - With USD, every read-only KAS value is shown as approximate dollars: the market list, a
+//   market's header strip and its Activity panel, the Activity page's summary, volume chart and
+//   feed, the Portfolio's summary and balances.
+// - The KAS figure is in the tooltip, and a one-line note says what the dollars are.
+// - The order book, the ticket's inputs, the price chart and everything signed stay in KAS. No
+//   price the user types is converted.
+// - The price is the indexer's (`GET /v1/price/kas-usd`: the mock serves $0.03 unless a test steers
+//   it).
+// - A missing, unavailable or too old (over 10 minutes) price falls back to KAS with a notice.
+// - While KAS is the display currency the app asks for the price only on the market views, for the
+//   thin-book marker of the 24 h change (its threshold is in dollars), and never shows a dollar
+//   there.
 import { expect, test, type MockClient } from '../fixtures';
 import { connectWallet, fund, gotoNav, listExkcc, openMarket, showActivity } from '../helpers/env';
 import { seedOrders } from '../helpers/orders';
@@ -30,7 +38,7 @@ async function openList(page: import('@playwright/test').Page, mock: MockClient)
 }
 
 test('KAS is the default: nothing is dollars, no note, and the price is asked only on the market views (the thin-book marker)', async ({ appPage: page, mock }) => {
-  // a page without a market view never asks
+  // A page without a market view never asks.
   await page.goto('/#/settings');
   await expect(page.getByTestId('settings-currency')).toBeVisible();
   await page.waitForTimeout(1_500);
@@ -41,7 +49,7 @@ test('KAS is the default: nothing is dollars, no note, and the price is asked on
   await expect(page.getByTestId('sort-last')).toContainText('Price (KAS)');
   await expect(page.getByTestId('fiat-note')).toHaveCount(0);
   await expect(page.getByTestId('fiat-notice')).toHaveCount(0);
-  // the market list reads it for the marker, and still shows no dollar
+  // The market list reads it for the marker, and still shows no dollar.
   await expect.poll(() => mock.kasPriceReads()).toBeGreaterThan(0);
   await expect(page.getByTestId(`token-last-${id}`)).not.toContainText('$');
 });
@@ -59,7 +67,7 @@ test('Settings: the choice applies at once, is kept in this browser (kob.currenc
   await expect(usd).toHaveAttribute('aria-checked', 'true');
   expect(await page.evaluate(() => localStorage.getItem('kob.currency'))).toBe('usd');
   await expect.poll(() => mock.kasPriceReads()).toBeGreaterThanOrEqual(1);
-  // the note says what the dollars are, on any page, once the price is in
+  // The note says what the dollars are, on any page, once the price is in.
   await expect(page.getByTestId('settings-currency-choice')).toBeVisible();
 
   await page.reload();
@@ -71,7 +79,7 @@ test('Settings: the choice applies at once, is kept in this browser (kob.currenc
   const reads = await mock.kasPriceReads();
   await page.waitForTimeout(1_000);
   expect(await mock.kasPriceReads()).toBe(reads);
-  // clearing the app's data lists the choice with the settings
+  // Clearing the app's data lists the choice with the settings.
   await expect(page.getByTestId('settings-local')).toBeVisible();
 });
 
@@ -83,7 +91,7 @@ test('the market list shows the price, 24 h volume, market cap and depth in doll
   const last = row.getByTestId(`token-last-${id}`);
   await expect(last).toHaveText(/^\$0\.\d+$/);
   expect(numberOf(await last.textContent())).toBeCloseTo((Number(stats.last) / 1e8) * PRICE, 5);
-  // the KAS price is in the tooltip with the rate used
+  // The KAS price is in the tooltip with the rate used.
   await expect(last).toHaveAttribute('title', /KAS per EXKCC\) · USD estimate at \$0\.03 per KAS$/);
   const volume = row.getByTestId(`token-volume-${id}`);
   await expect(volume).toHaveText(/^\$[\d,]+\.?\d*$/);
@@ -92,19 +100,20 @@ test('the market list shows the price, 24 h volume, market cap and depth in doll
   const depth = row.getByTestId(`token-depth-${id}`);
   await expect(depth).toHaveText(/^\$[\d,]+\.\d+$/);
   expect(numberOf(await depth.textContent())).toBeCloseTo((Number(stats.depth_2pct_quote) / 1e8) * PRICE, 3);
-  // a ratio is not a value: the change is still a percentage
+  // A ratio is not a value: the change is still a percentage.
   await expect(row.getByTestId(`token-change-${id}`)).toHaveText(/^[+-]?\d+\.\d\d%$/);
   await expect(page.getByTestId('sort-last')).toContainText('Price (USD)');
   await expect(page.getByTestId('sort-volume')).toContainText('24h volume (USD)');
   await expect(page.getByTestId('sort-depth')).toContainText('Depth ±2% (USD)');
-  // what the dollars are is said in Settings, not on the page (founder 2026-11-11): the source, the age, an estimate and, on testnet, that its KAS has no value
+  // What the dollars are is said in Settings, not on the page: the source, the age, an estimate
+  // and, on testnet, that its KAS has no value.
   await expect(page.getByTestId('fiat-note')).toHaveCount(0);
   const back = page.url();
   await page.goto('/#/settings');
   const note = page.getByTestId('settings-currency').getByTestId('fiat-note');
   await expect(note).toHaveText(/^USD at the KAS price from CoinGecko, (under a minute|\d+ min) ago\. An estimate, not a quote\. Testnet KAS has no value: priced as mainnet KAS, for display only\.$/);
   await page.goto(back);
-  // one line of text in a table cell: nothing wraps or overlaps
+  // One line of text in a table cell: nothing wraps or overlaps.
   for (const cell of [last, volume, depth]) {
     const box = await cell.locator('span').first().boundingBox();
     expect(box!.height).toBeLessThan(30);
@@ -134,15 +143,15 @@ test('a market page shows its last price and 24 h statistics in dollars; the ord
   await expect(page.getByTestId('stat-low')).toContainText('$');
   await expect(page.getByTestId('stat-quote-volume')).toContainText('$');
   await expect(page.getByTestId('stat-quote-volume')).toContainText('24h volume (USD)');
-  // the volume in the token and the change are not KAS values
+  // The volume in the token and the change are not KAS values.
   await expect(page.getByTestId('stat-volume')).not.toContainText('$');
   await expect(page.getByTestId('stat-change')).toContainText('%');
-  // the tooltip keeps the KAS figure
+  // The tooltip keeps the KAS figure.
   await expect(last.locator('.mkt-stat-value')).toHaveAttribute('title', /KAS per EXKCC · USD estimate at \$0\.03 per KAS$/);
-  // no note on the market page (founder 2026-11-11: Settings explains the dollars; the tooltip names the price)
+  // No note on the market page: Settings explains the dollars, and the tooltip names the price.
   await expect(page.getByTestId('fiat-note')).toHaveCount(0);
 
-  // the order book and the ticket: KAS, never dollars; the price field takes what the user types
+  // The order book and the ticket: KAS, never dollars. The price field takes what the user types.
   await expect(page.getByTestId('book-section')).toBeVisible();
   await expect(page.getByTestId('book-section')).not.toContainText('$');
   const ticket = page.getByTestId('order-ticket');
@@ -153,7 +162,7 @@ test('a market page shows its last price and 24 h statistics in dollars; the ord
     await expect(price).toHaveValue('0.0251');
     await expect(ticket).not.toContainText('$');
   }
-  // the market's Activity panel is dollars too (the Activity page has its own test)
+  // The market's Activity panel is dollars too (the Activity page has its own test).
   await expect(page.getByTestId('activity-list')).toBeVisible();
 });
 
@@ -167,7 +176,7 @@ test('the Portfolio summary and the Balances value column are dollars with the K
   expect(kasFree).toBeGreaterThan(0);
   const kasTotal = numberOf(await page.getByTestId('portfolio-total').textContent());
 
-  // Settings, then back: the choice applies at once, the wallet stays connected
+  // Settings, then back: the choice applies at once, the wallet stays connected.
   await gotoNav(page, 'nav-settings');
   await page.getByTestId('settings-currency-usd').click();
   await expect.poll(() => mock.kasPriceReads()).toBeGreaterThanOrEqual(1);
@@ -181,32 +190,32 @@ test('the Portfolio summary and the Balances value column are dollars with the K
   await expect(page.getByTestId('portfolio-total')).toHaveText(/^\$[\d,]+\.\d\d$/);
   expect(numberOf(await page.getByTestId('portfolio-total').textContent())).toBeCloseTo(kasTotal * PRICE, 1);
   await expect(page.getByTestId('portfolio-in-orders')).toHaveText(/^\$[\d,]+\.\d\d$/);
-  // the Estimate tag of the total says it is dollars, not KAS
+  // The Estimate tag of the total says it is dollars, not KAS.
   await page.getByTestId('portfolio-estimate').click();
   await expect(page.getByTestId('portfolio-estimate-detail')).toContainText('An estimate in US dollars');
   await page.keyboard.press('Escape');
-  // an open-orders count is a count
+  // An open-orders count is a count.
   await expect(page.getByTestId('portfolio-open-count')).not.toContainText('$');
   await expect(page.getByTestId('fiat-note')).toHaveCount(0); // said in Settings
 
-  // the balances: the Value column is dollars, the held amounts are KAS and tokens
+  // The balances: the Value column is dollars, the held amounts are KAS and tokens.
   await expect(page.getByTestId('balances-panel')).toBeVisible();
   await expect(page.getByTestId('kas-total')).toHaveText(/^\$[\d,]+\.\d\d$/);
-  // every read-only KAS amount of the balances is dollars (the amounts of a token stay in tokens)
+  // Every read-only KAS amount of the balances is dollars (the amounts of a token stay in tokens).
   await expect(page.getByTestId('kas-free')).toContainText('$');
   await expect(page.getByTestId('kas-free')).not.toContainText('KAS');
   await expect(page.getByTestId('kas-locked')).toContainText('$');
   await expect(page.getByTestId('kas-locked')).not.toContainText('KAS');
   await expect(page.getByTestId('token-balances-table')).toContainText('Locked in orders (USD)');
   await expect(page.getByTestId('token-balances-table')).toContainText('Value (USD)');
-  // a token with a last price has a value in dollars; its held amount stays in tokens
+  // A token with a last price has a value in dollars. Its held amount stays in tokens.
   const tokenValue = page.locator('[data-testid="balance-value"]').first();
   if ((await tokenValue.count()) > 0 && !(await tokenValue.innerText()).includes('—')) {
     await expect(tokenValue).toContainText('$');
     await expect(page.locator('[data-testid^="balance-row-"] [data-testid="balance-escrowed"]').first()).not.toContainText('$');
   }
 
-  // back to KAS
+  // Back to KAS.
   await gotoNav(page, 'nav-settings');
   await page.getByTestId('settings-currency-kas').click();
   await gotoNav(page, 'nav-portfolio');
@@ -230,12 +239,12 @@ test('a price older than 10 minutes is not used: KAS with a one-line notice; 9 m
   const notice = page.getByTestId('fiat-notice');
   await expect(notice).toHaveAttribute('data-reason', 'stale');
   await expect(notice).toHaveText('The KAS price is 11 min old, too old to show: showing KAS.');
-  // KAS, never the stale dollars
+  // KAS, never the stale dollars.
   await expect(page.getByTestId(`token-last-${id}`)).not.toContainText('$');
   await expect(page.getByTestId(`token-volume-${id}`)).not.toContainText('$');
   await expect(page.getByTestId('sort-last')).toContainText('Price (KAS)');
   await expect(page.getByTestId('fiat-note')).toHaveCount(0);
-  // the notice is one muted line
+  // The notice is one muted line.
   const box = await notice.boundingBox();
   expect(box!.height).toBeLessThan(28);
 });
@@ -258,7 +267,7 @@ test('an indexer without the route (404) or without a price yet (503) shows KAS 
   await expect(page.getByTestId(`token-last-${id}`)).not.toContainText('$');
   await expect(page.getByTestId('token-list-error')).toHaveCount(0);
 
-  // the price comes back: dollars, without a reload of the choice
+  // The price comes back: dollars, without a reload of the choice.
   await mock.kasPrice({ mode: 'ok' });
   await page.reload();
   await expect(page.getByTestId(`token-last-${id}`)).toHaveText(/^\$/);
@@ -275,12 +284,13 @@ test('the price is read once at the start and again every minute while the page 
   expect(await mock.kasPriceReads()).toBe(1);
   await page.clock.fastForward(11_000);
   await expect.poll(() => mock.kasPriceReads()).toBe(2);
-  // the new price is in force
+  // The new price is in force.
   const stats = await mock.get(`/v1/stats/${id}`);
   await expect(page.getByTestId(`token-last-${id}`)).toHaveAttribute('title', /USD estimate at \$0\.06 per KAS$/);
   expect(numberOf(await page.getByTestId(`token-last-${id}`).textContent())).toBeCloseTo((Number(stats.last) / 1e8) * 0.06, 5);
 
-  // the indexer has no price (503): the last price is kept, and the next read is two minutes away, not one
+  // The indexer has no price (503): the last price is kept, and the next read is two minutes away,
+  // not one.
   await mock.kasPrice({ mode: 'down' });
   await page.clock.fastForward(61_000);
   await expect.poll(() => mock.kasPriceReads()).toBe(3);
@@ -289,7 +299,8 @@ test('the price is read once at the start and again every minute while the page 
   await page.clock.fastForward(61_000);
   await expect.poll(() => mock.kasPriceReads()).toBe(4);
   await expect(page.getByTestId(`token-last-${id}`)).toHaveText(/^\$/);
-  // a second failure in a row: four minutes. The price comes back meanwhile, and the pace of a minute with the first success
+  // A second failure in a row: four minutes. The price comes back meanwhile, and the pace of a
+  // minute with the first success.
   await mock.kasPrice({ mode: 'ok', usd: 0.04 });
   await page.clock.fastForward(121_000);
   expect(await mock.kasPriceReads()).toBe(4);
@@ -320,7 +331,8 @@ async function textWithout(page: import('@playwright/test').Page, skip: string[]
     const root = (document.querySelector('main') ?? document.body).cloneNode(true) as HTMLElement;
     for (const id of ids) root.querySelectorAll(`[data-testid="${id}"]`).forEach((e) => e.remove());
     root.querySelectorAll('[aria-hidden="true"], script, style').forEach((e) => e.remove());
-    // one line per text node: the end of a figure and the words of the next element are not one text
+    // One line per text node: the end of a figure and the words of the next element are not one
+    // text.
     const lines: string[] = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node: Node | null;
@@ -342,7 +354,7 @@ test('the Activity page: the summary (all time, windows, the volume chart and it
   await page.goto('/#/activity');
   const sum = page.getByTestId('activity-summary');
   await expect(sum).toBeVisible();
-  // KAS first: the units are KAS
+  // KAS first: the units are KAS.
   await expect(page.getByTestId('summary-all-volume')).toContainText('KAS');
   await expect(page.getByTestId('activity-sort-price')).toContainText('Price (KAS)');
 
@@ -358,21 +370,21 @@ test('the Activity page: the summary (all time, windows, the volume chart and it
   await expect(sum).toContainText('Volume, KAS markets (USD)');
   await expect(page.getByTestId('summary-readout')).toContainText('$');
   await expect(page.getByTestId('summary-readout')).not.toContainText('KAS');
-  // the volume chart's axis
+  // The volume chart's axis.
   const axis = sum.locator('.sum-y span').first();
   await expect(axis).toHaveText(/^\$/);
-  // paid to executors and locked in orders
+  // Paid to executors and locked in orders.
   await expect(page.getByTestId('summary-all-paid')).not.toContainText('KAS');
   await expect(page.getByTestId('summary-window-paid')).not.toContainText('KAS');
   await expect(page.getByTestId('summary-now-locked')).toContainText('$');
   await expect(page.getByTestId('summary-now-locked')).not.toContainText('KAS');
-  // every window
+  // Every window.
   for (const w of ['7D', '1M', '1Y', '1D']) {
     await page.getByTestId(`summary-window-${w}`).click();
     await expect(page.getByTestId('summary-window-volume')).not.toContainText('KAS');
   }
 
-  // the feed: a row's KAS value line and its price are dollars, the header says USD
+  // The feed: a row's KAS value line and its price are dollars, the header says USD.
   await expect(page.getByTestId('activity-sort-price')).toContainText('Price (USD)');
   const row = page.getByTestId('activity-row').first();
   await expect(row).toBeVisible();
@@ -380,14 +392,15 @@ test('the Activity page: the summary (all time, windows, the volume chart and it
   await expect(row.locator('.act-sub')).toHaveAttribute('title', /KAS · USD estimate at \$0\.03 per KAS$/);
   await expect(row.locator('.act-c-px')).toHaveText(/^\$/);
   await expect(row.locator('.act-c-px')).toHaveAttribute('title', /KAS · USD estimate at \$0\.03 per KAS$/);
-  // the token amount of the row stays in tokens
+  // The token amount of the row stays in tokens.
   await expect(row.locator('.act-c-amt b')).not.toContainText('$');
 
-  // sorting by the price column still orders by the number
+  // Sorting by the price column still orders by the number.
   await page.getByTestId('activity-sort-price').click();
   await expect(page.getByTestId('activity-sort-price').locator('xpath=ancestor::*[@role="columnheader"][1]')).toHaveAttribute('aria-sort', /ascending|descending/);
 
-  // nothing on the page is still a number in KAS (the explanatory note and the markets' names are not figures)
+  // Nothing on the page is still a number in KAS (the explanatory note and the markets' names are
+  // not figures).
   expect(kasAmounts(await textWithout(page, []))).toEqual([]);
 });
 
@@ -420,7 +433,10 @@ test('the market list and the Portfolio balances: no figure left is a number in 
   expect(kasAmounts(await textWithout(page, []))).toEqual([]);
 });
 
-/** Where the ticket's cost line stands against its amount box, with an amount typed and with none: the layout a viewer sees (the figures change, the places must not). */
+/**
+ * Where the ticket's cost line stands against its amount box, with an amount typed and with none:
+ * the layout a viewer sees (the figures change, the places must not).
+ */
 async function costGeometry(page: import('@playwright/test').Page): Promise<number[]> {
   const out: number[] = [];
   for (const amount of ['100', '250', '']) {
@@ -438,7 +454,7 @@ test('the ticket shows a muted read-only dollar estimate beside the order total,
   await openMarket(page, mock);
   await expect(page.getByTestId('order-ticket')).toBeVisible();
   await page.getByTestId('order-price').fill('0.0251');
-  // KAS first: the layout of the cost line with an amount typed and without
+  // KAS first: the layout of the cost line with an amount typed and without.
   await expect(page.getByTestId('order-cost-usd')).toHaveCount(0);
   const inKas = await costGeometry(page);
 
@@ -452,15 +468,16 @@ test('the ticket shows a muted read-only dollar estimate beside the order total,
   const usd = page.getByTestId('order-cost-usd');
   await expect(usd).toHaveText(/^≈ \$[\d,]+\.\d+$/);
   await expect(usd).toHaveAttribute('title', /KAS · USD estimate at \$0\.03 per KAS$/);
-  // 100 tokens at about 0.0251 KAS is about 2.5 KAS (the ticket's own estimate, with the order's tip and fee) = about $0.075 at the mock's $0.03
+  // 100 tokens at about 0.0251 KAS is about 2.5 KAS (the ticket's own estimate, with the order's
+  // tip and fee) = about $0.075 at the mock's $0.03.
   expect(numberOf(await usd.textContent())).toBeCloseTo(2.5 * PRICE, 2);
-  // the ticket's own cost figure and unit are KAS
+  // The ticket's own cost figure and unit are KAS.
   await expect(cost).toContainText('KAS');
-  // the same places as in KAS, whatever is typed
+  // The same places as in KAS, whatever is typed.
   const inUsd = await costGeometry(page);
   expect(inUsd).toEqual(inKas);
   await expect(usd).toHaveText('');
-  // it is a muted figure, not an input: nothing to type in or tab to
+  // It is a muted figure, not an input: nothing to type in or tab to.
   expect(await usd.evaluate((e) => e.tagName)).toBe('SPAN');
 });
 
@@ -477,7 +494,7 @@ test('the four Portfolio tabs with a fill: the orders, the trade history and the
   expect(kasAmounts(await textWithout(page, []))).toEqual([]);
   await expect(page.getByTestId(`order-line-${open}`).locator('.or-price .dt-val')).toHaveText(/^\$[\d,.]+$/);
   await expect(page.getByTestId(`order-line-${open}`).locator('.or-value .dt-val')).toHaveText(/^\$[\d,.]+$/);
-  // the amount of tokens is not converted
+  // The amount of tokens is not converted.
   await expect(page.getByTestId(`order-line-${open}`).locator('.or-amount')).toContainText('EXKCC');
 
   await page.getByTestId('orders-tab-history').click();
@@ -492,7 +509,7 @@ test('the four Portfolio tabs with a fill: the orders, the trade history and the
   expect(kasAmounts(await textWithout(page, []))).toEqual([]);
   const price = page.getByTestId('wallet-fill-row').first().locator('.dt-c-price .dt-val');
   await expect(price).toHaveText(/^\$[\d,.]+$/);
-  // sorted by the price: numeric (the dollar texts are read as numbers)
+  // Sorted by the price: numeric (the dollar texts are read as numbers).
   await page.getByTestId('wallet-fills-sort-price').click();
   const prices = (await page.locator('[data-testid="wallet-fill-row"] .dt-c-price .dt-val').allTextContents()).map(numberOf);
   expect(prices).toEqual([...prices].sort((a, b) => b - a));
@@ -507,7 +524,7 @@ test('a flipped market (KAS/TOKEN): the 24 h KAS volume tile is dollars with the
   const id = await openMarket(page, mock);
   await page.getByTestId('market-flip').click();
   await expect(page.getByTestId('market-stats')).toHaveAttribute('data-state', 'ready');
-  // KAS first: the volume tile is in KAS
+  // KAS first: the volume tile is in KAS.
   const volume = page.getByTestId('stat-volume');
   await expect(volume).toContainText('24h volume (KAS)');
   await expect(volume).not.toContainText('$');
@@ -523,7 +540,7 @@ test('a flipped market (KAS/TOKEN): the 24 h KAS volume tile is dollars with the
   await expect(volume).not.toContainText('KAS');
   expect(numberOf(await volume.locator('.mkt-stat-value').textContent())).toBeCloseTo(kasVolume * PRICE, 1);
   await expect(volume.locator('.mkt-stat-value')).toHaveAttribute('title', /KAS · USD estimate at \$0\.03 per KAS$/);
-  // the prices are tokens per KAS and the token volume is tokens: not dollars
+  // The prices are tokens per KAS and the token volume is tokens: not dollars.
   for (const tile of ['stat-last', 'stat-high', 'stat-low', 'stat-quote-volume']) await expect(page.getByTestId(tile)).not.toContainText('$');
   await expect(page.getByTestId('stat-quote-volume')).toContainText('24h volume (EXKCC)');
   await expect(page.getByTestId('stat-last')).toContainText('per KAS');

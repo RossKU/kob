@@ -1,7 +1,10 @@
-// Facts about a token (matcher.md 1.2a: "Wallets MUST show the warnings wherever the token is shown"). A normal token shows NO status: "Genesis not verified" (the
-// check could not run) is no chip, its sentence is in the token's details. What lets someone create more of the token or freeze / seize balances (a live mint
-// authority, a mint authority, freeze, seize, a failed genesis check) is ONE "High risk" chip with its reason opened on a tap (a touch screen has no tooltip);
-// the other facts (public mint, blacklist) stay neutral chips with their sentence as the tooltip. Facts, not a rating.
+// Facts about a token (matcher.md 1.2a: "Wallets MUST show the warnings wherever the token is
+// shown"). A normal token shows NO status: "Genesis not verified" (the check could not run) is no
+// chip, its sentence is in the token's details. What lets someone create more of the token or
+// freeze / seize balances (a live mint authority, a mint authority, freeze, seize, a failed genesis
+// check) is ONE "High risk" chip with its reason opened on a tap (a touch screen has no tooltip).
+// The other facts (public mint, blacklist) stay neutral chips with their sentence as the tooltip.
+// Facts, not a rating.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
@@ -10,7 +13,10 @@ import { toggleListFilter } from '../helpers/list-filter';
 
 const GENESIS = { txid: 'ab'.repeat(32), daa_score: 10, outputs: [1, 2], supply: 1000, minter_outputs: [], live_minters: [], checked_at_daa: 20, source: 'test' };
 
-/** The example registry with EXKCC listed; `verifiedGenesis`: its genesis record says clean (the check `kob registry verify-genesis` makes). */
+/**
+ * The example registry with EXKCC listed. `verifiedGenesis`: its genesis record says clean (the
+ * check `kob registry verify-genesis` makes).
+ */
 async function listWith(page: Page, verifiedGenesis: boolean): Promise<void> {
   const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
   for (const t of reg.templates) t.review_status = 'reviewed';
@@ -24,7 +30,10 @@ async function listWith(page: Page, verifiedGenesis: boolean): Promise<void> {
   );
 }
 
-/** The indexer says what the executor says of a token whose registry entry has a live mint authority and whose program can mint and blacklist. */
+/**
+ * The indexer says what the executor says of a token whose registry entry has a live mint authority
+ * and whose program can mint and blacklist.
+ */
 async function indexerFacts(page: Page): Promise<void> {
   await page.route(/\/v1\/tokens(\?.*)?$/, async (route) => {
     const res = await route.fetch();
@@ -48,9 +57,9 @@ test.describe('token facts', () => {
     await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveCount(0);
     await expect(header.getByTestId('badge-high-risk')).toHaveCount(0);
     await expect(header).not.toContainText('Genesis not verified');
-    // the ticket's facts panel has nothing to say either
+    // The ticket's facts panel has nothing to say either.
     await expect(page.getByTestId('ticket-token-facts')).toHaveCount(0);
-    // the sentence is reachable: the token's details open on a tap
+    // The sentence is reachable: the token's details open on a tap.
     const details = page.getByTestId('token-status-details');
     await details.getByRole('button').first().click();
     await expect(details.getByTestId('status-fact-genesis_unverified')).toContainText(/Genesis not verified.*not checked against its token program/);
@@ -63,7 +72,8 @@ test.describe('token facts', () => {
     const id = (await mock.token()).covenant_id;
     await page.goto(`/#/market/${id}`);
     const header = page.getByTestId('token-header');
-    // by default nothing but the High risk chip: no fact chip at all ("Genesis not verified", public mint, blacklist are statuses)
+    // By default nothing but the High risk chip: no fact chip at all ("Genesis not verified",
+    // public mint, blacklist are statuses).
     await expect(header.locator('[data-testid^="token-fact-"]')).toHaveCount(0);
     await expect(header.getByTestId('badge-high-risk')).toHaveAttribute('data-reasons', 'live_mint_authority');
     await expect(header.getByTestId('high-risk-toggle')).toHaveClass(/badge-warn/);
@@ -72,35 +82,37 @@ test.describe('token facts', () => {
     await expect(page.getByTestId('high-risk-reasons')).toContainText('whoever holds it can create more of this token');
     await header.getByTestId('high-risk-toggle').click();
     await expect(page.getByTestId('high-risk-reasons')).toHaveCount(0);
-    // the other sentences are in the details, behind one tap
+    // The other sentences are in the details, behind one tap.
     const details = page.getByTestId('token-status-details');
     await details.getByRole('button').first().click();
     await expect(details.getByTestId('status-fact-public-mint')).toContainText(/anyone create more/);
     await expect(details.getByTestId('status-fact-blacklist')).toContainText(/block addresses/);
-    // the High risk reason is stated once: not again as a fact line
+    // The High risk reason is stated once: not again as a fact line.
     await expect(details.getByTestId('status-risk-live_mint_authority')).toContainText(/whoever holds it can create more of this token/);
     await expect(details.getByTestId('status-fact-live_mint_authority')).toHaveCount(0);
-    // the market list: the High risk chip on the row, small and on one line with the covenant id; every fact sentence is in the legend above the list, behind one tap
+    // The market list: the High risk chip on the row, small and on one line with the covenant id.
+    // Every fact sentence is in the legend above the list, behind one tap.
     await page.goto('/#/market');
     const row = page.getByTestId(`token-row-${id}`);
     await expect(row.getByTestId('badge-high-risk')).toBeVisible();
     await expect(row.getByTestId('token-fact-live_mint_authority')).toHaveCount(0);
     await expect(row.locator('[data-testid^="token-fact-"]')).toHaveCount(0);
-    // a tap on the chip opens the reason (not cut by the row), a second tap closes it
+    // A tap on the chip opens the reason (not cut by the row), a second tap closes it.
     await row.getByTestId('high-risk-toggle').click();
     await expect(page.getByTestId('high-risk-reasons')).toBeVisible();
     await expect(page.getByTestId('high-risk-reasons')).toContainText('whoever holds it can create more of this token');
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('high-risk-reasons')).toHaveCount(0);
     await expect(row.locator('summary, [data-testid^="token-fact-text-"]')).toHaveCount(0);
-    // the legend is collapsed behind one info control; the attribution stays as a short label
+    // The legend is collapsed behind one info control. The attribution stays as a short label.
     await expect(page.getByTestId('legend-attribution')).toHaveText('names via kascov');
     await expect(page.getByTestId('legend-body')).toHaveCount(0);
     await page.getByTestId('legend-toggle').click();
     await expect(page.getByTestId('legend-fact-public-mint')).toBeHidden();
     await page.getByTestId('legend-badges').locator('summary').click();
     await expect(page.getByTestId('legend-fact-public-mint')).toContainText('anyone create more');
-    // the id is the second line of the row's text and the badges the third, on their own line (never wrapped)
+    // The id is the second line of the row's text and the badges the third, on their own line
+    // (never wrapped).
     await expect(row.locator('.ml-line2').filter({ has: page.getByTestId(`token-hash-${id}`) })).toHaveCount(1);
     await expect(row.locator('.ml-line3').filter({ has: page.getByTestId('badge-high-risk') })).toHaveCount(1);
   });
@@ -112,7 +124,8 @@ test.describe('token facts', () => {
     await page.goto('/#/market');
     const row = page.getByTestId(`token-row-${id}`);
     await expect(row.getByTestId('badge-high-risk')).toBeVisible();
-    // preact runs passive effects after the next frame (requestAnimationFrame, or a 35 ms timer): hold both back for 3 s, so a listener registered in a passive effect would not exist yet
+    // Preact runs passive effects after the next frame (requestAnimationFrame, or a 35 ms timer):
+    // hold both back for 3 s, so a listener registered in a passive effect would not exist yet.
     await page.evaluate(() => {
       window.requestAnimationFrame = () => 0;
       const timer = window.setTimeout.bind(window);
@@ -187,7 +200,8 @@ test.describe('token facts', () => {
     const panel = (await page.getByTestId('high-risk-reasons').boundingBox())!;
     expect(panel.x).toBeGreaterThanOrEqual(0);
     expect(panel.x + panel.width).toBeLessThanOrEqual(375);
-    // a live mint authority (confirmed) together with the program's mint authority power is ONE reason
+    // A live mint authority (confirmed) together with the program's mint authority power is ONE
+    // reason.
     await expect(page.getByTestId('high-risk-reasons').locator('li')).toHaveCount(1);
     await expect(page.getByTestId('high-risk-reasons')).toContainText('A mint authority still exists: whoever holds it can create more of this token.');
     await page.keyboard.press('Escape');
@@ -197,14 +211,15 @@ test.describe('token facts', () => {
     }));
     expect(overflow.page).toBeLessThanOrEqual(0);
     expect(overflow.tables).toBeLessThanOrEqual(0);
-    // the token's details say it once too, and list only the facts High risk does not already state
+    // The token's details say it once too, and list only the facts High risk does not already
+    // state.
     await page.goto(`/#/market/${(await mock.token()).covenant_id}`);
     const details = page.getByTestId('token-status-details');
     await details.getByRole('button').first().click();
     await expect(details.getByTestId('status-risk-live_mint_authority')).toContainText('A mint authority still exists');
     await expect(details.locator('[data-testid^="status-risk-"]')).toHaveCount(1);
     await expect(details.getByTestId('status-fact-live_mint_authority')).toHaveCount(0);
-    // the program's power is said neutrally, pointing at the confirmed one
+    // The program's power is said neutrally, pointing at the confirmed one.
     await expect(details.getByTestId('status-fact-mint-authority')).toContainText('one is still live (see High risk)');
     await expect(details.getByTestId('status-fact-public-mint')).toBeVisible();
   });

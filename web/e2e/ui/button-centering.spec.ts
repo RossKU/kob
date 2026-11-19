@@ -1,9 +1,14 @@
-// The label of a button, a pill or a chip sits on the vertical centre of its box. A font whose ascent is much larger than its descent (Segoe UI and Yu Gothic UI,
-// the system UI fonts of Windows) puts the cap height below the centre of a line box that flexbox centres; `text-box: trim-both cap alphabetic` (styles.css,
-// landing.css) centres the cap height instead. The check: the box of the capital letters (from the baseline to the cap height) of the label's text node,
-// against the centre of the control, within 1 px; an icon or the spinner of a busy button against the centre too; and the control's height as written.
-// Chromium 133+ only (the property); a browser without it is skipped. KOB_BTN_SHOTS=<dir> also saves a zoomed screenshot of every control (device scale 3)
-// and a JSONL of the measurements, named by KOB_BTN_TAG (before / after); KOB_WIDE_FONTS=1 runs the whole page in a wide font (the CI runner's).
+// The label of a button, a pill or a chip sits on the vertical centre of its box. A font whose
+// ascent is much larger than its descent (Segoe UI and Yu Gothic UI, the system UI fonts of
+// Windows) puts the cap height below the centre of a line box that flexbox centres.
+// `text-box: trim-both cap alphabetic` (styles.css, landing.css) centres the cap height instead.
+// The check: the box of the capital letters (from the baseline to the cap height) of the label's
+// text node, against the centre of the control, within 1 px. An icon or the spinner of a busy
+// button against the centre too. And the control's height as written.
+// Chromium 133+ only (the property). A browser without it is skipped. KOB_BTN_SHOTS=<dir> also
+// saves a zoomed screenshot of every control (device scale 3) and a JSONL of the measurements,
+// named by KOB_BTN_TAG (before / after). KOB_WIDE_FONTS=1 runs the whole page in a wide font (the
+// CI runner's).
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Locator, Page } from '@playwright/test';
@@ -17,7 +22,10 @@ const tokens: MockKascovToken[] = Array.from({ length: 60 }, (_, i) => ({ covena
 const shots = process.env.KOB_BTN_SHOTS;
 const tag = process.env.KOB_BTN_TAG ?? 'run';
 const wide = process.env.KOB_WIDE_FONTS === '1';
-/** KOB_BTN_FONT="Segoe UI": every element in that family (the system UI font of most Windows machines; the machine's own `system-ui` may be another). */
+/**
+ * KOB_BTN_FONT="Segoe UI": every element in that family (the system UI font of most Windows
+ * machines; the machine's own `system-ui` may be another).
+ */
 const forceFont = async (page: Page): Promise<void> => {
   const family = process.env.KOB_BTN_FONT;
   if (!family) return;
@@ -37,17 +45,23 @@ const record = (name: string, m: Measure) => {
 };
 
 interface Measure {
-  /** the first non-blank text node's cap box centre minus the control's centre, px (null: no text) */
+  /**
+   * The first non-blank text node's cap box centre minus the control's centre, px (null: no text).
+   */
   cap: number | null;
-  /** the same for the ink of the whole string (descenders and all) */
+  /** The same for the ink of the whole string (descenders and all). */
   ink: number | null;
-  /** an svg / spinner inside: its centre minus the control's centre */
+  /** An svg / spinner inside: its centre minus the control's centre. */
   icon: number | null;
   height: number;
   font: string;
 }
 
-/** The vertical centre of the ink of the control's face, minus the control's centre (CSS px), with its background, border and colours forced to black on white, an icon hidden; `text`: the label's text node is set to it meanwhile. */
+/**
+ * The vertical centre of the ink of the control's face, minus the control's centre (CSS px), with
+ * its background, border and colours forced to black on white, an icon hidden. `text`: the label's
+ * text node is set to it meanwhile.
+ */
 async function inkRows(page: Page, el: Locator, text: string | null): Promise<number | null> {
   const prepared = await el.evaluate((node, t) => {
     const w = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.nodeValue && n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT) });
@@ -70,7 +84,8 @@ async function inkRows(page: Page, el: Locator, text: string | null): Promise<nu
     return true;
   }, text);
   if (!prepared) return null;
-  // a whole-pixel window around the control (its own box sits at a fraction of a pixel on the page), scanned inside the control's box only
+  // A whole-pixel window around the control (its own box sits at a fraction of a pixel on the
+  // page), scanned inside the control's box only.
   const box = await el.evaluate((node) => {
     const r = node.getBoundingClientRect();
     return { x: r.left, y: r.top, w: r.width, h: r.height };
@@ -107,7 +122,7 @@ async function inkRows(page: Page, el: Locator, text: string | null): Promise<nu
           }
         }
       }
-      // the ink's centre minus the box's centre, CSS px
+      // The ink's centre minus the box's centre, CSS px.
       return top < 0 ? null : (top + bottom + 1) / 2 / k - (box.y - clip.y + box.h / 2);
     },
     { b64: png.toString('base64'), box, clip },
@@ -115,8 +130,10 @@ async function inkRows(page: Page, el: Locator, text: string | null): Promise<nu
 }
 
 /**
- * The vertical offsets of a control's label (and icon), in CSS px, centre of the label minus centre of the control. `cap`: the capitals of the label, as pixels
- * (the label's text set to "HHH" meanwhile: the box from the cap height to the baseline); `ink`: the real text's ink, descenders and all; `icon`: an svg or spinner.
+ * The vertical offsets of a control's label (and icon), in CSS px, centre of the label minus centre
+ * of the control. `cap`: the capitals of the label, as pixels.
+ * (the label's text set to "HHH" meanwhile: the box from the cap height to the baseline). `ink`:
+ * the real text's ink, descenders and all. `icon`: an svg or spinner.
  */
 async function measure(page: Page, el: Locator, label = true): Promise<Measure> {
   const dom = await el.evaluate((node) => {
@@ -171,7 +188,8 @@ test('the app: Connect, a small button, the status chip, a badge, the Rows contr
   await expect(page.getByTestId('activity-actor')).toBeVisible();
   for (const a of ['all', 'orders', 'executions']) await check(page, `activity-actor-${a}`, page.getByTestId(`activity-actor-${a}`));
 
-  // a busy button: the spinner takes the label's place, the box keeps its size; and a plain, a primary and a small `.btn` with the label as a span (Button.tsx)
+  // A busy button: the spinner takes the label's place, the box keeps its size. And a plain, a
+  // primary and a small `.btn` with the label as a span (Button.tsx).
   const busy = await page.evaluate(() => {
     const host = document.createElement('div');
     host.setAttribute('data-testid', 'btn-probe');
@@ -222,7 +240,7 @@ test('the landing page: the two calls to action, the chip, the header pill', asy
   await check(page, 'landing-header-open-app', page.getByTestId('landing-open-app'));
   await check(page, 'landing-cta-solid', page.getByTestId('landing-cta'));
   await check(page, 'landing-cta-line', page.locator('.lp-pill-line').first());
-  // the chip sits in the header's row on a wide screen and in the hero on a very small phone
+  // The chip sits in the header's row on a wide screen and in the hero on a very small phone.
   if (await page.getByTestId('landing-chip').isVisible()) await check(page, 'landing-chip', page.getByTestId('landing-chip'));
   await check(page, 'landing-header-chip', page.getByTestId('network-chip'));
 });

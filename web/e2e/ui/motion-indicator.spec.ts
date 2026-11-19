@@ -1,6 +1,10 @@
-// The app's motion (founder, 2026-11-11: subtle, fast, restrained): the sliding mark of a segmented control (the selected pill) and of a tab strip (the underline)
-// sits under the selected option on the first paint, after a click and after a resize, and takes no room (the control's box never changes); with reduced motion
-// the transitions are gone. The mark is a transform + width on an absolutely positioned element (kit/slide-indicator.ts). Mock stack.
+// The app's motion is subtle, fast and restrained.
+// The sliding mark of a segmented control (the selected pill) and of a tab strip (the underline)
+// sits under the selected option on the first paint, after a click and after a resize, and takes no
+// room (the control's box never changes).
+// With reduced motion the transitions are gone.
+// The mark is a transform + width on an absolutely positioned element (kit/slide-indicator.ts).
+// Mock stack.
 import type { Locator, Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { connectWallet, listExkcc, openMarket } from '../helpers/env';
@@ -15,7 +19,10 @@ const box = async (el: Locator): Promise<Box> => {
   return b;
 };
 
-/** The mark of `group` against the option: the pill covers it, the underline lies on its bottom edge (no transition under way: the box is the place it was sent to). */
+/**
+ * The mark of `group` against the option: the pill covers it, the underline lies on its bottom edge
+ * (no transition under way: the box is the place it was sent to).
+ */
 async function expectMarkUnder(group: Locator, option: Locator, kind: 'pill' | 'underline'): Promise<void> {
   const mark = group.locator(':scope > .slide-ind');
   await expect
@@ -40,7 +47,8 @@ test.describe('segmented control: the selected pill', () => {
     const side = page.getByTestId('order-side-buy').locator('xpath=..');
     const [a, b] = [page.getByTestId('order-side-buy'), page.getByTestId('order-side-sell')];
     await expect(a).toBeVisible();
-    // whichever side the ticket opens on: the first paint has the mark under it already (no waiting: it has not slid in from anywhere)
+    // Whichever side the ticket opens on: the first paint has the mark under it already (no
+    // waiting: it has not slid in from anywhere).
     const startsOnBuy = (await a.getAttribute('aria-checked')) === 'true';
     const [first, second] = startsOnBuy ? [a, b] : [b, a];
     const m0 = await box(side.locator(':scope > .slide-ind'));
@@ -53,21 +61,22 @@ test.describe('segmented control: the selected pill', () => {
     await expect(second).toHaveAttribute('aria-checked', 'true');
     await expectMarkUnder(side, second, 'pill');
     const colour = await side.locator(':scope > .slide-ind').evaluate((e) => getComputedStyle(e).backgroundColor);
-    // the sell side is the red pill, the buy side the green one: the mark's colour follows the selection
+    // The sell side is the red pill, the buy side the green one: the mark's colour follows the
+    // selection.
     await expect(side).toHaveAttribute('data-tone', second === b ? 'sell' : 'buy');
     await first.click();
     await expectMarkUnder(side, first, 'pill');
     await expect(side).toHaveAttribute('data-tone', first === b ? 'sell' : 'buy');
     await expect.poll(() => side.locator(':scope > .slide-ind').evaluate((e) => getComputedStyle(e).backgroundColor)).not.toBe(colour);
 
-    // a resize: the pill follows its segment at once
+    // A resize: the pill follows its segment at once.
     await second.click();
     for (const width of [900, 600, 390, 1280]) {
       await page.setViewportSize({ width, height: 900 });
       await expect(second).toHaveAttribute('aria-checked', 'true');
       await expectMarkUnder(side, second, 'pill');
     }
-    // the mark takes no room: the group's box is what it was
+    // The mark takes no room: the group's box is what it was.
     const after = await box(side);
     expect(Math.abs(after.height - before.height)).toBeLessThanOrEqual(0.5);
   });
@@ -98,7 +107,7 @@ test.describe('tab strip: the active underline', () => {
     }
     await page.setViewportSize({ width: 1280, height: 720 });
     await expect(strip).toBeVisible();
-    // the mark takes no room: the strip is as high as before (its width is the page's)
+    // The mark takes no room: the strip is as high as before (its width is the page's).
     await expect.poll(async () => Math.abs((await box(strip)).height - before.height)).toBeLessThanOrEqual(0.5);
   });
 });
@@ -110,10 +119,11 @@ test.describe('motion is subtle, and reduced motion turns it off', () => {
     const side = page.getByTestId('order-side-buy').locator('xpath=..');
     await expect(side).toBeVisible();
     expect(await everyTransitionOff(page, '[data-testid="order-side-buy"]')).toBe(false);
-    // a slide (a click on the other side) has the stylesheet's transition on; the first paint and a resize have it off
+    // A slide (a click on the other side) has the stylesheet's transition on. The first paint and a
+    // resize have it off.
     await page.getByTestId('order-side-sell').click();
     await page.getByTestId('order-side-buy').click();
-    // the durations are the quick ones (100-200 ms)
+    // The durations are the quick ones (100-200 ms).
     const ms = await side.locator(':scope > .slide-ind').evaluate((e) => Math.max(...getComputedStyle(e).transitionDuration.split(',').map((d) => parseFloat(d) * 1000)));
     expect(ms).toBeGreaterThanOrEqual(100);
     expect(ms).toBeLessThanOrEqual(200);
@@ -123,7 +133,7 @@ test.describe('motion is subtle, and reduced motion turns it off', () => {
       if ((await page.locator(selector.trim()).count()) === 0) continue;
       expect(await everyTransitionOff(page, selector.trim()), selector).toBe(true);
     }
-    // and a pressed button does not shrink
+    // And a pressed button does not shrink.
     const btn = page.locator('.btn:not(:disabled)').first();
     await btn.hover();
     await page.mouse.down();

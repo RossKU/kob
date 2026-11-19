@@ -1,5 +1,7 @@
-// The open review notice (the specification is not final, no review shows the code is free of bugs): a header badge and the footer's disclaimer on every page, and an entry of the bell's current status
-// whose dismissal survives a reload. Info: it colours nothing. Nothing blocks trading.
+// The open review notice (the specification is not final, no review shows the code is free of
+// bugs): a header badge and the footer's disclaimer on every page, and an entry of the bell's
+// current status whose dismissal survives a reload. Info: it colours nothing. Nothing blocks
+// trading.
 import { closeBell, expect, statusEntry, test } from '../fixtures';
 
 test.describe('open review notice', () => {
@@ -18,8 +20,9 @@ test.describe('open review notice', () => {
   });
 
   test('footer line, header badge and the entry of the bell; the dismissal is remembered across a reload', async ({ appPage: page }) => {
-    // an app page has ONE compact footer line (review L-04): the open review lead, the Disclaimer and the security policy; the long wording is on the
-    // Disclaimer page (above) and the landing page, one link away
+    // An app page has ONE compact footer line: the open review lead, the Disclaimer and the
+    // security policy.
+    // The long wording is on the Disclaimer page (above) and the landing page, one link away.
     const footer = page.getByTestId('footer');
     await expect(page.getByTestId('footer-preaudit')).toHaveText('Open review.');
     await expect(footer.getByTestId('footer-disclaimer')).toHaveAttribute('href', '#/disclaimer');
@@ -40,7 +43,7 @@ test.describe('open review notice', () => {
     await expect(page.getByTestId('main')).toBeVisible();
     await expect(await statusEntry(page, 'banner-preaudit')).toHaveCount(0);
     await closeBell(page);
-    // the permanent parts stay
+    // The permanent parts stay.
     await expect(page.getByTestId('footer-preaudit')).toBeVisible();
     await expect(page.getByTestId('preaudit-badge')).toBeVisible();
   });

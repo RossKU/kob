@@ -1,7 +1,10 @@
-// The header is ONE row, on a desktop (900 px and wider) and on a phone alike. Desktop: the logo, the tabs, the chip "● testnet-10 · open review" (the dot is the
-// node and indexer status, the chip opens its lines), "Connect" (or the address chip with its menu), the theme toggle and the bell. Phone: the logo, a menu button
-// (the tabs, the theme toggle, the network and status explanation), the shortened chip, one "Connect" button and the bell. A problem also colours the bell and is
-// listed in its panel, never only the dot.
+// The header is ONE row, on a desktop (900 px and wider) and on a phone alike. Desktop: the logo,
+// the tabs, the chip "● testnet-10 · open review" (the dot is the node and indexer status, the chip
+// opens its lines), "Connect" (or the address chip with its menu), the theme toggle and the bell.
+// Phone: the logo, a menu button.
+// (the tabs, the theme toggle, the network and status explanation), the shortened chip, one
+// "Connect" button and the bell. A problem also colours the bell and is listed in its panel, never
+// only the dot.
 import type { Page } from '@playwright/test';
 import { test, expect, closeBell, statusEntry } from '../fixtures';
 import { connectWallet } from '../helpers/env';
@@ -15,8 +18,12 @@ const rowOf = async (page: Page, ids: string[]): Promise<{ ys: number[]; right: 
 };
 const noScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
-// 900 px and wider is the desktop row; on a font so wide that the row does not fit (the CI runner's fonts at 900 px) the header takes the phone layout, still ONE row
-/** A wide font like the CI runner's (DejaVu Sans, close to Verdana): the header must fit, or take the phone layout, on it too. */
+// 900 px and wider is the desktop row. On a font so wide that the row does not fit (the CI runner's
+// fonts at 900 px) the header takes the phone layout, still ONE row.
+/**
+ * A wide font like the CI runner's (DejaVu Sans, close to Verdana): the header must fit, or take
+ * the phone layout, on it too.
+ */
 const wideFonts = (page: Page) =>
   page.addInitScript(() => {
     document.addEventListener('DOMContentLoaded', () => {
@@ -35,7 +42,7 @@ for (const width of [1280, 1024, 900, 880]) {
     await expect(page.getByTestId('network-badge')).toHaveText(/^(testnet-10|tn10)$/);
     await expect(page.getByTestId('preaudit-badge')).toHaveText('open review');
     await expect(page.getByTestId('status-bar')).toHaveCount(0);
-    // the layout settles after the first measurement
+    // The layout settles after the first measurement.
     await expect.poll(async () => (await page.getByTestId('nav-market').count()) + (await page.getByTestId('menu-button').count())).toBe(1);
     const wide = (await page.getByTestId('nav-market').count()) === 1;
     if (width >= 880) expect(wide, `the desktop row fits ${width} px on a wide font`).toBe(true);
@@ -50,7 +57,8 @@ for (const width of [1280, 1024, 900, 880]) {
   });
 }
 
-// the row's room stops growing at 1240 px (--frame-max), so 1280 px is any wider window too; narrower on so wide a font the row folds into the narrow layout
+// The row's room stops growing at 1240 px (--frame-max), so 1280 px is any wider window too.
+// Narrower on so wide a font the row folds into the narrow layout.
 for (const [width, spare] of [[1280, 20]] as const) {
   test(`${width} px with a connected wallet on a wide font: the tabs stand 12 px apart and the wide row fits with ${spare} px to spare`, async ({ appPage: page }) => {
     await wideFonts(page);
@@ -59,10 +67,10 @@ for (const [width, spare] of [[1280, 20]] as const) {
     await connectWallet(page);
     await expect(page.getByTestId('nav-market')).toBeVisible();
     await expect(page.getByTestId('menu-button')).toHaveCount(0);
-    // the tab after Market is Trade (always there)
+    // The tab after Market is Trade (always there).
     const [market, next] = await Promise.all(['nav-market', 'nav-trade'].map((id) => page.getByTestId(id).boundingBox()));
     expect(next!.x - market!.x - market!.width).toBeCloseTo(12, 0);
-    // what `wideWidth` (narrow.ts) sums, against what `roomOf` gives it
+    // What `wideWidth` (narrow.ts) sums, against what `roomOf` gives it.
     const left = await page.evaluate(() => {
       const px = (v: string) => Number.parseFloat(v) || 0;
       const row = document.querySelector<HTMLElement>('.header-inner')!;
@@ -89,7 +97,7 @@ test('desktop: a row that does not fit (wide fonts, a long translation) becomes 
   expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
   expect(right).toBeLessThanOrEqual(1280);
   expect(await noScroll(page)).toBe(true);
-  // a much wider window fits the row again
+  // A much wider window fits the row again.
   await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip, .header .brand span { letter-spacing: 0 !important; }' });
   await page.setViewportSize({ width: 1500, height: 800 });
   await expect(page.getByTestId('nav-market')).toBeVisible();
@@ -111,7 +119,7 @@ test('a header that started narrow comes back to the full row when the window is
     expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
     expect(right).toBeLessThanOrEqual(width);
   }
-  // and narrow again
+  // And narrow again.
   await page.setViewportSize({ width: 500, height: 800 });
   await expect(page.getByTestId('menu-button')).toBeVisible();
 });
@@ -123,7 +131,8 @@ test('a row squeezed by wide texts comes back when the room is there: tabs again
   await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip { letter-spacing: 12px; }' });
   await expect(page.getByTestId('menu-button')).toBeVisible();
   await page.addStyleTag({ content: '.header .nav a, .header .btn, .header .net-chip { letter-spacing: 0 !important; }' });
-  // the same width: the texts are normal again and the row fits, so it is shown again without any resize
+  // The same width: the texts are normal again and the row fits, so it is shown again without any
+  // resize.
   await page.setViewportSize({ width: 1020, height: 800 });
   await expect(page.getByTestId('nav-market')).toBeVisible();
 });
@@ -131,7 +140,7 @@ test('a row squeezed by wide texts comes back when the room is there: tabs again
 test('desktop: the status dot sits inside the network chip; the chip opens the status lines, by keyboard too, and closes on Escape and outside', async ({ appPage: page }) => {
   await page.goto('/#/market');
   const chip = page.getByTestId('network-switch');
-  // no orphan dot: the dot is a part of the chip's own button
+  // No orphan dot: the dot is a part of the chip's own button.
   await expect(chip.getByTestId('status-dot')).toBeVisible();
   const [dotBox, chipBox] = await Promise.all([page.getByTestId('status-dot').boundingBox(), chip.boundingBox()]);
   expect(dotBox!.x).toBeGreaterThanOrEqual(chipBox!.x);
@@ -159,7 +168,8 @@ test('desktop: Connect offers the one extension and the private key side by side
   await page.goto('/#/market');
   await page.getByTestId('wallet-connect').click();
   await expect(page.getByTestId('wallet-choose').getByRole('button')).toHaveText(['Connect KasWare', 'Private key']);
-  // rows with each wallet's mark; the extension this browser has not got is an Install link, and the private key entry carries the one line that recommends an extension
+  // Rows with each wallet's mark. The extension this browser has not got is an Install link, and
+  // the private key entry carries the one line that recommends an extension.
   await expect(page.getByTestId('wallet-connect-kasware').locator('.wallet-mark')).toBeVisible();
   await expect(page.getByTestId('wallet-connect-local-key').locator('.wallet-mark')).toBeVisible();
   await expect(page.getByTestId('wallet-recommend')).toHaveText('A browser extension wallet is recommended.');
@@ -177,7 +187,7 @@ test('desktop: the connected address is ONE chip that opens a menu (copy, explor
   await page.goto('/#/market');
   await connectWallet(page);
   const chip = page.getByTestId('wallet-menu');
-  // closed: the chip holds the address and nothing else to press
+  // Closed: the chip holds the address and nothing else to press.
   await expect(page.getByTestId('wallet-connected').getByRole('button')).toHaveCount(1);
   await expect(page.getByTestId('wallet-disconnect')).toHaveCount(0);
   await expect(chip).toHaveAttribute('aria-expanded', 'false');
@@ -190,7 +200,7 @@ test('desktop: the connected address is ONE chip that opens a menu (copy, explor
   await expect(page.getByTestId('wallet-disconnect')).toHaveText('Disconnect');
   await page.getByTestId('wallet-copy').click();
   await expect(page.getByTestId('wallet-copy')).toHaveText('Copied');
-  // Escape closes it and the focus returns to the chip; a press outside closes it too
+  // Escape closes it and the focus returns to the chip. A press outside closes it too.
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('wallet-menu-panel')).toHaveCount(0);
   await expect(chip).toBeFocused();
@@ -198,7 +208,7 @@ test('desktop: the connected address is ONE chip that opens a menu (copy, explor
   await expect(page.getByTestId('wallet-menu-panel')).toBeVisible();
   await page.mouse.click(5, 500);
   await expect(page.getByTestId('wallet-menu-panel')).toHaveCount(0);
-  // Disconnect ends the session
+  // Disconnect ends the session.
   await chip.click();
   await page.getByTestId('wallet-disconnect').click();
   await expect(page.getByTestId('wallet-connected')).toHaveCount(0);
@@ -214,12 +224,12 @@ test.describe('phone', () => {
       const { ys, right } = await rowOf(page, ['brand', 'network-chip', 'wallet-connect', 'notify-bell', 'menu-button']);
       expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
       expect(right).toBeLessThanOrEqual(width);
-      // the order of the row: the logo, the chip, Connect, the bell and, last, the menu
+      // The order of the row: the logo, the chip, Connect, the bell and, last, the menu.
       const xs = (await Promise.all(['brand', 'network-chip', 'wallet-connect', 'notify-bell', 'menu-button'].map((id) => page.getByTestId(id).boundingBox()))).map((b) => b!.x);
       expect([...xs].sort((a, b) => a - b)).toEqual(xs);
       expect((await page.locator('header.header').boundingBox())!.height).toBeLessThan(56);
       await expect(page.getByTestId('network-badge')).toHaveText('tn10');
-      // the status is the dot inside the chip, on a phone too
+      // The status is the dot inside the chip, on a phone too.
       await expect(page.getByTestId('network-switch').getByTestId('status-dot')).toBeVisible();
       await expect(page.getByTestId('wallet-connect')).toHaveText('Connect');
       for (const gone of ['nav-market', 'theme-toggle', 'wallet-connect-local-key', 'wallet-install-hint']) await expect(page.getByTestId(gone)).toHaveCount(0);
@@ -239,22 +249,22 @@ test.describe('phone', () => {
     await expect(page.getByTestId('menu-network')).toContainText('no review can show the code is free of bugs');
     await expect(page.getByTestId('status-node')).toContainText('Node: reachable');
     await expect(page.getByTestId('status-indexer')).toContainText('following');
-    // the panel is as wide as the screen and does not scroll the page sideways
+    // The panel is as wide as the screen and does not scroll the page sideways.
     const panel = (await page.getByTestId('menu-panel').boundingBox())!;
     expect(panel.x).toBeGreaterThanOrEqual(0);
     expect(panel.x + panel.width).toBeLessThanOrEqual(375);
     expect(await noScroll(page)).toBe(true);
-    // a tab opens its page and closes the menu
+    // A tab opens its page and closes the menu.
     await page.getByTestId('nav-settings').click();
     await expect(page.getByTestId('menu-panel')).toHaveCount(0);
     await expect(page).toHaveURL(/#\/settings/);
-    // Escape closes it and the focus returns to the button
+    // Escape closes it and the focus returns to the button.
     await button.click();
     await expect(page.getByTestId('menu-panel')).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('menu-panel')).toHaveCount(0);
     await expect(button).toBeFocused();
-    // the theme toggle in the menu works
+    // The theme toggle in the menu works.
     await button.click();
     const before = await page.getByTestId('theme-toggle').getAttribute('data-theme');
     await page.getByTestId('theme-toggle').click();
@@ -265,27 +275,27 @@ test.describe('phone', () => {
     await page.setViewportSize({ width: 390, height: 800 });
     await page.goto('/#/market');
     const button = page.getByTestId('menu-button');
-    // the tab of the page already open: no navigation, the menu still closes
+    // The tab of the page already open: no navigation, the menu still closes.
     await button.click();
     await expect(page.getByTestId('menu-panel')).toBeVisible();
     await page.getByTestId('nav-market').click();
     await expect(page.getByTestId('menu-panel')).toHaveCount(0);
     await expect(page).toHaveURL(/#\/market$/);
-    // a tap outside the menu
+    // A tap outside the menu.
     await button.click();
     await expect(page.getByTestId('menu-panel')).toBeVisible();
     await page.mouse.click(20, 780);
     await expect(page.getByTestId('menu-panel')).toHaveCount(0);
-    // another tab: navigation and closing
+    // Another tab: navigation and closing.
     await button.click();
     await page.getByTestId('nav-portfolio').click();
     await expect(page.getByTestId('menu-panel')).toHaveCount(0);
     await expect(page).toHaveURL(/#\/portfolio/);
-    // Escape
+    // Escape.
     await button.click();
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('menu-panel')).toHaveCount(0);
-    // the theme toggle changes the page in place: the menu stays open so the change is seen
+    // The theme toggle changes the page in place: the menu stays open so the change is seen.
     await button.click();
     await page.getByTestId('theme-toggle').click();
     await expect(page.getByTestId('menu-panel')).toBeVisible();
@@ -301,17 +311,19 @@ test.describe('phone', () => {
     await page.getByTestId('wallet-connect-kasware').click();
     await expect(page.getByTestId('wallet-address')).toContainText(/^q\w{7}…$/);
     await expect(page.getByTestId('wallet-sheet')).toHaveCount(0);
-    // the runner's fonts are wider still than Verdana: a little more letter spacing stands for them
+    // The runner's fonts are wider still than Verdana: a little more letter spacing stands for
+    // them.
     await page.addStyleTag({ content: '.header * { letter-spacing: 0.5px; }' });
     const { ys, right } = await rowOf(page, ['menu-button', 'brand', 'network-chip', 'wallet-connected', 'notify-bell']);
     expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(6);
     expect(right).toBeLessThanOrEqual(375);
     expect(await noScroll(page)).toBe(true);
-    // nothing sits on top of anything: each item of the row ends before the next begins
+    // Nothing sits on top of anything: each item of the row ends before the next begins.
     const order = ['brand', 'network-chip', 'wallet-connected', 'notify-bell', 'menu-button'];
     const boxes = await Promise.all(order.map((id) => page.getByTestId(id).boundingBox()));
     for (let i = 0; i + 1 < order.length; i++) expect(boxes[i]!.x + boxes[i]!.width, `${order[i]} ends before ${order[i + 1]}`).toBeLessThanOrEqual(boxes[i + 1]!.x + 0.5);
-    // the connected chip opens its menu, under the header and inside the window, and its Disconnect can be pressed
+    // The connected chip opens its menu, under the header and inside the window, and its Disconnect
+    // can be pressed.
     await page.getByTestId('wallet-menu').click();
     const menu = (await page.getByTestId('wallet-menu-panel').boundingBox())!;
     expect(menu.x).toBeGreaterThanOrEqual(0);
@@ -332,8 +344,9 @@ test.describe('phone', () => {
   });
 });
 
-// 1024 px, not 900: the Trade tab is always there now (review L-09), and on the CI runner's wide fonts the 900 px row (still the wide layout) has no room left for the
-// name beside the logo; it comes back from about 960 px, which is what this checks
+// 1024 px, not 900: the Trade tab is always there, and on the CI runner's wide fonts the 900 px row
+// (still the wide layout) has no room left for the name beside the logo.
+// The name comes back from about 960 px, which is what this checks.
 test('desktop 1024 px: the brand shows its name beside the logo when the row has room for it (no wallet connected)', async ({ appPage: page }) => {
   await wideFonts(page);
   await page.setViewportSize({ width: 1024, height: 800 });
@@ -349,7 +362,8 @@ test('desktop 1440 px: the tabs sit in the true centre of the row where it has r
   await page.goto('/#/market');
   const header = page.locator('header.header');
   await expect(page.getByTestId('nav-market')).toBeVisible();
-  // the tabs: in the true centre when the row has room for that (a desktop's fonts), else (a wider font, the CI runner's) between the brand and the tools
+  // The tabs: in the true centre when the row has room for that (a desktop's fonts), else (a wider
+  // font, the CI runner's) between the brand and the tools.
   const placement = async () => {
     await page.waitForTimeout(300);
     const [brand, tools, nav] = await Promise.all([page.getByTestId('brand').boundingBox(), page.locator('.header .header-tools').boundingBox(), page.locator('.header .nav').boundingBox()]);
@@ -366,7 +380,7 @@ test('desktop 1440 px: the tabs sit in the true centre of the row where it has r
   await expect(connect).toHaveClass(/btn-pill/);
   const s = await connect.evaluate((e) => { const c = getComputedStyle(e); return { r: parseFloat(c.borderTopLeftRadius), h: e.getBoundingClientRect().height }; });
   expect(s.r).toBeGreaterThanOrEqual(s.h / 2 - 0.5);
-  // connected: the wider wallet chip, still one row
+  // Connected: the wider wallet chip, still one row.
   await connect.click();
   await page.getByTestId('wallet-connect-kasware').click();
   await expect(page.getByTestId('wallet-connected')).toBeVisible();
@@ -402,7 +416,7 @@ test.describe('a touch screen (pointer: coarse)', () => {
     const host = page.getByTestId('toast-host');
     await expect(host).toHaveAttribute('data-phone', 'true');
     const header = (await page.locator('header.header').boundingBox())!;
-    // the header's height is read by an effect after the first paint
+    // The header's height is read by an effect after the first paint.
     await expect.poll(() => host.evaluate((e) => parseFloat(getComputedStyle(e).top))).toBeGreaterThanOrEqual(header.y + header.height);
     const css = await host.evaluate((e) => { const c = getComputedStyle(e); return { top: parseFloat(c.top), left: parseFloat(c.left), right: parseFloat(c.right) }; });
     expect(css.left).toBe(12);
@@ -410,14 +424,15 @@ test.describe('a touch screen (pointer: coarse)', () => {
     expect(css.top, 'just under the header').toBeLessThanOrEqual(header.y + header.height + 12);
   });
 
-  // founder 2026-11-14: top right just under the header (near the bell), so a toast never covers the order ticket's button (was bottom right, review L-02)
+  // Top right just under the header (near the bell), so a toast never covers the order ticket's
+  // button.
   test('a desktop: the toasts sit at the top right, just under the header', async ({ appPage: page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto('/#/settings');
     const host = page.getByTestId('toast-host');
     await expect(host).not.toHaveAttribute('data-phone', 'true');
     const header = (await page.locator('header.header').boundingBox())!;
-    // the header's height is read by an effect after the first paint
+    // The header's height is read by an effect after the first paint.
     await expect.poll(() => host.evaluate((e) => parseFloat(getComputedStyle(e).top))).toBeGreaterThanOrEqual(header.y + header.height);
     const css = await host.evaluate((e) => { const c = getComputedStyle(e); return { top: parseFloat(c.top), right: parseFloat(c.right), width: parseFloat(c.width) }; });
     expect(css.right).toBe(16);

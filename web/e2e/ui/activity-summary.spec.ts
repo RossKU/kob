@@ -1,5 +1,7 @@
-// The summary above the Activity page's log (ui/activity/ActivitySummary.tsx), against the mock indexer: all time, the time window (1D / 7D / 1M / 1Y)
-// with its volume chart, the books now; "—" for what the indexer does not report yet; no horizontal scroll on a phone. Only on the Activity page.
+// The summary above the Activity page's log (ui/activity/ActivitySummary.tsx), against the mock
+// indexer: all time, the time window (1D / 7D / 1M / 1Y) with its volume chart, the books now. "—"
+// for what the indexer does not report yet. No horizontal scroll on a phone. Only on the Activity
+// page.
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
 import { listExkcc } from '../helpers/env';
@@ -11,16 +13,22 @@ async function seed(page: Page, mock: MockClient): Promise<void> {
   await listExkcc(page);
 }
 
-/** `GET /v1/stats` of the mock indexer (the activity totals), not `/v1/stats/{token}` */
+/** `GET /v1/stats` of the mock indexer (the activity totals), not `/v1/stats/{token}`. */
 const STATS_URL = /\/v1\/stats(\?|$)/;
 
 const num = (s: string | null) => Number((s ?? '').replace(/[^0-9.]/g, ''));
 
-/** the tooltips of the executors' tiles (the help text is the label's title and follows the exact figure in the figure's) */
+/**
+ * The tooltips of the executors' tiles (the help text is the label's title and follows the exact
+ * figure in the figure's).
+ */
 const INCOME_HELP = 'What KOB transactions left to the executors that sent them: the spread between crossing orders, auction margins and keeper tips, before network fees. Transactions in which an executor trades for itself are not counted.';
 const MINERS_HELP = 'Network fees of the KOB transactions the executors sent.';
 
-/** sompi (a decimal string, maybe negative) as the tiles' tooltip words it: whole KAS, grouped by thousands, trailing zeros trimmed */
+/**
+ * Sompi (a decimal string, maybe negative) as the tiles' tooltip words it: whole KAS, grouped by
+ * thousands, trailing zeros trimmed.
+ */
 function exactKas(sompi: string): string {
   const v = BigInt(sompi);
   const a = v < 0n ? -v : v;
@@ -38,15 +46,18 @@ test.describe('activity summary', () => {
     const sum = page.getByTestId('activity-summary');
     await expect(sum).toBeVisible();
     await expect(sum).not.toHaveAttribute('aria-busy', 'true', { timeout: 20_000 });
-    // all time: the KAS markets' volume and trades, and the first day
+    // All time: the KAS markets' volume and trades, and the first day.
     await expect(page.getByTestId('summary-all-volume')).toContainText('KAS');
     expect(num(await page.getByTestId('summary-all-trades').locator('.sum-v').textContent())).toBeGreaterThan(0);
     await expect(page.getByTestId('activity-summary-since')).toContainText('since the first trade');
-    // the indexer's totals (GET /v1/stats): orders placed, traders, what the executors earned and paid the miners, the KAS locked in live orders; executors are recorded by no indexer ("—")
+    // The indexer's totals (GET /v1/stats): orders placed, traders, what the executors earned and
+    // paid the miners, the KAS locked in live orders. Executors are recorded by no indexer ("—").
     expect(num(await page.getByTestId('summary-all-orders').locator('.sum-v').textContent())).toBeGreaterThan(0);
     expect(num(await page.getByTestId('summary-all-traders').locator('.sum-v').textContent())).toBeGreaterThan(0);
     await expect(page.getByTestId('summary-all-paid').locator('.sum-v')).toContainText('KAS');
-    // what the executors earned and paid the miners, from the indexer's own fields (never the tip sum): the mock's fill transactions leave 0.03 KAS plus their tips each and cost 0.02 KAS each
+    // What the executors earned and paid the miners, from the indexer's own fields (never the tip
+    // sum): the mock's fill transactions leave 0.03 KAS plus their tips each and cost 0.02 KAS
+    // each.
     const totals = await mock.get<{ executor_income: string; miner_fees: string; executor_income_txs: number }>('/v1/stats');
     expect(totals.executor_income_txs).toBeGreaterThan(0);
     for (const [id, help, sompi] of [['paid', INCOME_HELP, totals.executor_income], ['miners', MINERS_HELP, totals.miner_fees]] as const) {
@@ -64,28 +75,28 @@ test.describe('activity summary', () => {
       await expect(page.getByTestId(id).locator('.sum-v')).toHaveText('—');
       await expect(page.getByTestId(id).locator('.sum-v')).toHaveAttribute('title', 'Not reported by this indexer yet');
     }
-    // the window's own totals (the last 24 hours): the history seeded two hours back, 30 trades
+    // The window's own totals (the last 24 hours): the history seeded two hours back, 30 trades.
     await expect(page.getByTestId('summary-window-orders').locator('.sum-v')).not.toHaveText('—');
     expect(num(await page.getByTestId('summary-window-orders').locator('.sum-v').textContent())).toBeGreaterThan(0);
     expect(num(await page.getByTestId('summary-window-traders').locator('.sum-v').textContent())).toBeGreaterThan(0);
-    // the window: 24 hourly bars, the trades of the last two hours in it
+    // The window: 24 hourly bars, the trades of the last two hours in it.
     await expect(page.getByTestId('summary-bars').locator('button')).toHaveCount(24);
     expect(num(await page.getByTestId('summary-window-trades').locator('.sum-v').textContent())).toBeGreaterThan(0);
     await expect(page.getByTestId('summary-window-active').locator('.sum-v')).toHaveText('1');
-    // the readout follows the bar under the pointer (the last one by default)
+    // The readout follows the bar under the pointer (the last one by default).
     await expect(page.getByTestId('summary-readout')).toContainText('trades');
     await page.getByTestId('summary-bars').locator('button').first().hover();
     await expect(page.getByTestId('summary-bars').locator('button').first()).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('summary-readout')).toContainText('0 trades');
-    // 7D: 28 bars of six hours; 1M: 30 days; 1Y: 52 weeks
+    // 7D: 28 bars of six hours. 1M: 30 days. 1Y: 52 weeks.
     for (const [w, n] of [['7D', 28], ['1M', 30], ['1Y', 52]] as const) {
       await page.getByTestId(`summary-window-${w}`).click();
       await expect(page.getByTestId('summary-bars').locator('button')).toHaveCount(n);
     }
-    // the books now: open orders split into bids, asks and pair orders
+    // The books now: open orders split into bids, asks and pair orders.
     await expect(page.getByTestId('summary-now-orders')).toContainText('bids');
     expect(num(await page.getByTestId('summary-now-orders').locator('.sum-v').textContent())).toBeGreaterThan(0);
-    // the log stays below it
+    // The log stays below it.
     await expect(page.getByTestId('activity-list').first()).toBeVisible();
     const sumBox = (await sum.boundingBox())!;
     const logBox = (await page.getByTestId('activity').first().boundingBox())!;
@@ -104,7 +115,7 @@ test.describe('activity summary', () => {
       await expect(page.getByTestId(`summary-${scope}-miners`).locator('.sum-k')).toHaveAttribute('title', `${MINERS_HELP} 1 transaction not counted.`);
       await expect(page.getByTestId(`summary-${scope}-miners`).locator('.sum-v')).toHaveText(/^[\d,.]+KAS$/);
     }
-    // none left out: no suffix (the default of the mock, checked by the test above)
+    // None left out: no suffix (the default of the mock, checked by the test above).
     await mock.activityStats({ incomeUnknownTxs: 0, minerFeeUnknownTxs: 0, negativeIncome: false });
     await page.reload();
     await expect(page.getByTestId('activity-summary')).not.toHaveAttribute('aria-busy', 'true', { timeout: 20_000 });
@@ -124,7 +135,7 @@ test.describe('activity summary', () => {
       await expect(page.getByTestId(id).locator('.sum-v')).toHaveText('—');
       await expect(page.getByTestId(id).locator('.sum-v')).toHaveAttribute('title', 'Not reported by this indexer yet');
     }
-    // the rest of the totals are still there
+    // The rest of the totals are still there.
     expect(num(await page.getByTestId('summary-all-orders').locator('.sum-v').textContent())).toBeGreaterThan(0);
   });
 
@@ -182,8 +193,9 @@ test.describe('activity summary on a phone', () => {
 });
 
 test.describe('activity summary while it loads', () => {
-  // the lines that come with the figures (since the first trade, the trades' change, the markets' split) keep their places while they load: the summary
-  // does not grow, and the log below it does not jump, when they arrive
+  // The lines that come with the figures (since the first trade, the trades' change, the markets'
+  // split) keep their places while they load: the summary does not grow, and the log below it does
+  // not jump, when they arrive.
   for (const width of [1440, 390]) {
     test(`keeps its height when the figures arrive (${width} px)`, async ({ appPage: page, mock }) => {
       await page.setViewportSize({ width, height: 1000 });

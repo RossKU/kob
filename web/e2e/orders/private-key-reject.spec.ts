@@ -1,5 +1,8 @@
-// Backing out of the private-key signer's confirmation (Reject in the frame): the signer closes, nothing is sent, the ticket is usable again. Checked on a
-// desktop and on a phone (390 px; the browser may drop the very first click into the freshly shown frame, a second one a moment later is taken: cancelReceipt taps again), for a listed order and for one below the minimum value (its confirmation carries the app's note, so it is taller).
+// Backing out of the private-key signer's confirmation (Reject in the frame): the signer closes,
+// nothing is sent, the ticket is usable again. Checked on a desktop and on a phone (390 px; the
+// browser may drop the very first click into the freshly shown frame, a second one a moment later
+// is taken: cancelReceipt taps again), for a listed order and for one below the minimum value (its
+// confirmation carries the app's note, so it is taller).
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
 import { KAS, fund, openConnect, openMarket } from '../helpers/env';

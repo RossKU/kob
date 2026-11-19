@@ -1,5 +1,6 @@
-// Smoke specs of "My orders": an order seeded for the wallet key shows up with its balances, cancel and amend start their flow at once (the wallet's own
-// approval is the only confirmation), recovery export / import round trip.
+// Smoke specs of "My orders": an order seeded for the wallet key shows up with its balances, cancel
+// and amend start their flow at once (the wallet's own approval is the only confirmation), recovery
+// export / import round trip.
 import { readFileSync } from 'node:fs';
 import { expect, test, TEST_KEYS, type MockClient } from '../fixtures';
 import { TESTID, orderCancel, orderReplace, orderRow } from '../testids';
@@ -7,7 +8,10 @@ import { loadKobNode } from '../../src/kob/wasm.node';
 import { clickConnectOption, listExkcc, openConnect, openOrdersSettings } from '../helpers/env';
 import { runFlow, openOrderRow } from '../helpers/orders';
 
-/** an ask of `tokens` whole EXKCC at `price` sompi per whole token (2_505_000 = 0.02505 EXKCC per KAS) */
+/**
+ * An ask of `tokens` whole EXKCC at `price` sompi per whole token (2_505_000 = 0.02505 EXKCC per
+ * KAS).
+ */
 async function seedAsk(mock: MockClient, price = 2_505_000, tokens = 3) {
   const tok = await mock.token();
   await mock.seed({ orders: [{ token: tok.covenant_id, side: 'ask', maker: 'alice', price, amount: (BigInt(tokens) * 100_000_000n).toString() }] });
@@ -33,11 +37,11 @@ test.describe('my orders', () => {
     await expect(row.getByTestId('order-allin')).toHaveCount(0); // no tip: the all-in price would repeat the price
     await expect(row.getByTestId('order-amount')).toContainText('3 / 3');
     await expect(appPage.getByTestId(TESTID.ordersList)).toBeVisible();
-    // tokens inside the sell order are shown (wallets do not show them), in the Balances tab
+    // Tokens inside the sell order are shown (wallets do not show them), in the Balances tab.
     await appPage.getByTestId('orders-tab-balances').click();
     const bal = appPage.getByTestId(TESTID.balancesPanel).getByTestId(`balance-row-${tok.covenant_id}`);
     await expect(bal.getByTestId('balance-escrowed')).toHaveText(/^3/);
-    // the token's name opens its market (the way to a first sell of a token received elsewhere)
+    // The token's name opens its market (the way to a first sell of a token received elsewhere).
     await expect(bal.getByTestId('balance-market')).toHaveAttribute('href', new RegExp(tok.covenant_id.toLowerCase()));
     await expect(appPage.getByTestId('orders-tab-active')).toContainText('(1)');
     await appPage.getByTestId('orders-tab-history').click();
@@ -45,9 +49,10 @@ test.describe('my orders', () => {
   });
 
   test('the same token reads the same on the market list, the token page and My orders, with no verification wording (registry says verified, the mock indexer says unverified)', async ({ appPage, mock }) => {
-    // EXKCC `verified` in a registry served by the spec; the mock executor serves no verification state at all. Token issuance is permissionless and
-    // KOB makes no per-token judgement: the label is `TICKER (abcd…1234)` whatever either side says (the list row leads with the ticker and prints the
-    // id under it, with its fingerprint beside it)
+    // EXKCC `verified` in a registry served by the spec. The mock executor serves no verification
+    // state at all. Token issuance is permissionless and KOB makes no per-token judgement: the
+    // label is `TICKER (abcd…1234)` whatever either side says (the list row leads with the ticker
+    // and prints the id under it, with its fingerprint beside it).
     await listExkcc(appPage);
     const { tok, order } = await seedAsk(mock);
     const short = `${tok.covenant_id.slice(0, 4)}…${tok.covenant_id.slice(-4)}`;
@@ -72,13 +77,13 @@ test.describe('my orders', () => {
     await expect(appPage.getByTestId('tx-flow')).toBeVisible();
     await expect(appPage.getByTestId('flow-plan-errors')).toHaveCount(0);
     await expect(appPage.getByTestId('orders-action-error')).toHaveCount(0);
-    // no confirmation screen: the first wallet request is made by the click itself
+    // No confirmation screen: the first wallet request is made by the click itself.
     const [placed] = await runFlow(appPage, mock, wallet!, { steps: 1 });
     expect(placed!.submission.closed).toEqual([expect.objectContaining({ covenantId: order.covenant_id, status: 'cancelled' })]);
     expect(await wallet!.calls()).toHaveLength(1);
     const done = await mock.order(order.covenant_id);
     expect(done.status).toBe('cancelled');
-    // the order moves from Active to History
+    // The order moves from Active to History.
     await expect(appPage.getByTestId(orderRow(order.covenant_id))).toHaveCount(0, { timeout: 15_000 });
     await appPage.getByTestId('orders-tab-history').click();
     await expect(appPage.getByTestId(orderRow(order.covenant_id))).toHaveAttribute('data-status', 'cancelled');
@@ -128,7 +133,8 @@ test.describe('my orders', () => {
     await appPage.getByTestId('amend-price').fill('0.0251');
     await appPage.getByTestId('amend-review').click();
     await runFlow(appPage, mock, wallet!, { steps: 1 });
-    // an ask keeping its amount is amended IN PLACE (AMEND record): the same order id continues with the new price, its custody never moved
+    // An ask keeping its amount is amended IN PLACE (AMEND record): the same order id continues
+    // with the new price, its custody never moved.
     const active = await mock.until(() => mock.ordersOf('alice'), (o) => o.length === 1 && o[0].price === '2510000');
     expect(active[0].covenant_id).toBe(order.covenant_id); // 0.0251 KAS per token = 2_510_000 sompi per whole token
   });
@@ -163,7 +169,7 @@ test.describe('recover', () => {
     const view = await mock.order(order.covenant_id);
     const kob = await loadKobNode();
     const key = TEST_KEYS.alice;
-    // the record the app would have stored when the order was placed
+    // The record the app would have stored when the order was placed.
     const record = {
       version: 1, network: 'testnet-10', maker: key.pubkey, txid: null, output: null, covenantId: order.covenant_id, kind: 'KobAsk', templateHash: view.template_hash,
       state: kob.encodeState(view.state), amount: '300000000', custody: null, value: '0', placedAtUnix: '1790000000', placedAtDaa: '1000', label: 'e2e',
@@ -185,8 +191,9 @@ test.describe('recover', () => {
     expect(backup.records).toHaveLength(1);
     expect(backup.records[0].covenantId).toBe(order.covenant_id);
 
-    // wipe the records, then import the backup. The indexer goes away first: while it answers, My orders writes a record for every own live
-    // order it proves (C5-03), which would restore the wiped record by itself; a backup is what brings the record back when nothing else knows it
+    // Wipe the records, then import the backup. The indexer goes away first: while it answers, My
+    // orders writes a record for every own live order it proves (C5-03), which would restore the
+    // wiped record by itself. A backup is what brings the record back when nothing else knows it.
     await appPage.route('**/v1/**', (r) => r.abort());
     await appPage.reload(); // no page that still reads the indexer is left to write the record back
     await appPage.evaluate((k) => localStorage.removeItem(k), storeKey);
@@ -200,7 +207,7 @@ test.describe('recover', () => {
     await expect(appPage.getByTestId('recover-message')).toContainText('Imported 1');
     await expect(appPage.getByTestId('recover-count')).toContainText('1 placement');
 
-    // a file that is not a backup is refused with a reason
+    // A file that is not a backup is refused with a reason.
     await appPage.getByTestId(TESTID.ordersImport).setInputFiles({ name: 'x.json', mimeType: 'application/json', buffer: Buffer.from('{"hello":1}') });
     await expect(appPage.getByTestId('recover-message')).toContainText('not a KOB backup');
   });

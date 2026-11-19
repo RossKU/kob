@@ -1,7 +1,14 @@
-// The market bar (review H-02 / H-10, founder 2026-11-11): ONE row of 56 to 64 px instead of a title block and a stats card: [picture + fingerprint] TICKER / QUOTE ▾ (flip) (star) | last price (change) | 24h high |
-// 24h low | 24h volume | 24h volume KAS | trades | [Live]. The figures scroll sideways inside the bar where they do not fit (the page never does); a phone's first row is the pair, the star and Live,
-// the figures a scrollable row under it. The covenant id with its copy button, the name and the program chip are in the token's details card, once; no "All markets" line; the tab title has no covenant id.
-// The ticket's place button is on the first screen at 1280x800 and 1920x1080 (H-01). Mock stack: the token page of EXKCC, and the pair page.
+// The market bar is ONE row of 56 to 64 px instead of a title block and a stats card.
+// The row is: [picture + fingerprint] TICKER / QUOTE ▾ (flip) (star) | last price (change) | 24h
+// high | 24h low | 24h volume | 24h volume KAS | trades | [Live].
+// The figures scroll sideways inside the bar where they do not fit (the page never does).
+// A phone's first row is the pair, the star and Live, with the figures in a scrollable row under
+// it.
+// The covenant id with its copy button, the name and the program chip are in the token's details
+// card, once.
+// There is no "All markets" line, and the tab title has no covenant id.
+// The ticket's place button is on the first screen at 1280x800 and 1920x1080.
+// Mock stack: the token page of EXKCC, and the pair page.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
@@ -35,7 +42,8 @@ for (const [width, height] of [[1280, 800], [1920, 1080]] as const) {
     const bar = await rect(page, 'market-bar');
     expect(bar.height, 'the bar is one row').toBeGreaterThanOrEqual(56);
     expect(bar.height).toBeLessThanOrEqual(64);
-    // left to right: the picture and the fingerprint, the pair, the flip, the star, the figures, Live
+    // Left to right: the picture and the fingerprint, the pair, the flip, the star, the figures,
+    // Live.
     const order = ['token-icon-' + id, 'fingerprint-' + id, 'market-pair', 'market-flip', 'token-page-favorite', 'stat-last', 'stat-change', 'stat-high', 'stat-low', 'stat-volume', 'stat-quote-volume', 'stat-trades'];
     let right = -1;
     for (const t of order) {
@@ -45,17 +53,19 @@ for (const [width, height] of [[1280, 800], [1920, 1080]] as const) {
       expect(r.y + r.height / 2).toBeLessThan(bar.bottom);
       right = r.right;
     }
-    // Live is at the bar's right end, after the figures' box (the figures scroll inside it where a wide font leaves them no room)
+    // Live is at the bar's right end, after the figures' box (the figures scroll inside it where a
+    // wide font leaves them no room).
     const figures = await page.locator('.mkt-bar-stats').evaluate((el) => { const r = el.getBoundingClientRect(); return { right: r.right }; });
     const live = await rect(page, 'live-indicator');
     expect(live.x, 'Live is right of the figures').toBeGreaterThanOrEqual(figures.right - 1);
     expect(live.right).toBeLessThanOrEqual(bar.right);
-    // the last price carries its unit; the old breadcrumb and the title block are gone; the page does not scroll sideways
+    // The last price carries its unit. The old breadcrumb and the title block are gone. The page
+    // does not scroll sideways.
     await expect(page.getByTestId('stat-last')).toContainText('KAS per EXKCC');
     await expect(page.getByTestId('market-all')).toHaveCount(0);
     await expect(page.getByTestId('token-short-id')).toHaveCount(0);
     expect(await sideScroll(page)).toBe(0);
-    // H-01: the place button is on the first screen on load
+    // H-01: the place button is on the first screen on load.
     const place = await rect(page, 'order-place');
     expect(place.bottom, `order-place is inside the ${height} px window`).toBeLessThanOrEqual(height);
     expect(place.y).toBeGreaterThanOrEqual(0);
@@ -76,7 +86,7 @@ test('the tab title has no covenant id; the details card has the name, the whole
   await expect(details.getByTestId('token-covenant-id')).toHaveCount(1);
   await expect(details.getByTestId('badge-family')).toHaveCount(1);
   await expect(page.getByTestId('token-program')).toHaveCount(1);
-  // and not in the bar
+  // And not in the bar.
   await expect(page.getByTestId('market-bar').getByTestId('token-name')).toHaveCount(0);
   await expect(page.getByTestId('market-bar').getByTestId('badge-family')).toHaveCount(0);
   await expect(page.getByTestId('market-bar')).not.toContainText(id.slice(0, 12));
@@ -94,7 +104,7 @@ test('the figures scroll inside the bar on a narrow window: no scrollbar, the pa
   expect(await scroller.evaluate((el) => getComputedStyle(el).overflowX)).toBe('auto');
   expect(await scroller.evaluate((el) => (el as HTMLElement).offsetHeight - el.clientHeight), 'no scrollbar is drawn').toBe(0);
   expect(await sideScroll(page)).toBe(0);
-  // the last cell can be scrolled to
+  // The last cell can be scrolled to.
   await scroller.evaluate((el) => (el.scrollLeft = el.scrollWidth));
   await expect(page.getByTestId('stat-trades')).toBeInViewport();
 });
@@ -148,12 +158,12 @@ test('1280 px: the pair page has the token page\'s bar, the pictures of both tok
   }
   await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
   await expect(page).toHaveTitle('Testnet · EXKCC/EXUSD · KOB');
-  // the pair's book: no "via KAS" chip on a row, the sources said once under the book
+  // The pair's book: no "via KAS" chip on a row, the sources said once under the book.
   await expect(page.getByTestId('pair-via-kas')).toHaveCount(0);
   await expect(page.getByTestId('pair-legend')).toBeVisible();
   await expect(page.locator('[data-testid="pair-level"][data-source="route"]').first()).toBeVisible();
   await expect(page.getByTestId('pair-last')).toBeVisible();
-  // each token's name, id and program are in its details card
+  // Each token's name, id and program are in its details card.
   await expect(page.getByTestId('pair-token-details')).toHaveCount(2);
   for (const d of await page.getByTestId('pair-token-details').all()) {
     await expect(d.getByTestId('token-name')).toHaveCount(1);

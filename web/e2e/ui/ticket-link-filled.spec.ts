@@ -1,4 +1,5 @@
-// A link that fills the order ticket (`?ticket=ask&amount=..&price=..`) says so above the ticket; the note goes once the book or the form takes over (web review L1). Mock stack.
+// A link that fills the order ticket (`?ticket=ask&amount=..&price=..`) says so above the ticket.
+// The note goes once the book or the form takes over. Mock stack.
 import { mkdirSync } from 'node:fs';
 import { expect, test } from '../fixtures';
 import { openMarket } from '../helpers/env';

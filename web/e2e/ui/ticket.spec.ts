@@ -1,8 +1,12 @@
-// Smoke tests of the order ticket and its one-button send flow (checks, the final confirmation popup, the wallet's own approval, send) against the mock stack (mock indexer + node + KasWare-style mock wallet).
-// The per-order-type matrix is the next phase's job: here every type is reachable, and the limit-sell flow runs end to end.
+// Smoke tests of the order ticket and its one-button send flow (checks, the final confirmation
+// popup, the wallet's own approval, send).
+// They run against the mock stack (mock indexer + node + KasWare-style mock wallet).
+// Every order type is reachable here, and the limit-sell flow runs end to end.
 //
-// The example registry of the mock lists EXKCC as pending-review (tradable; the UI no longer shows any verification state). Every test serves a copy in which
-// the token is listed and verified, exactly what a fully reviewed registry entry looks like.
+// The example registry of the mock lists EXKCC as pending-review (tradable; the UI shows no
+// verification state).
+// Every test serves a copy in which the token is listed and verified, exactly what a fully reviewed
+// registry entry looks like.
 import { readFileSync } from 'node:fs';
 import { test, expect } from '../fixtures';
 import type { Page } from '@playwright/test';
@@ -58,12 +62,14 @@ test.describe('order ticket', () => {
     await page.getByTestId('order-price').fill('2.6');
     await fillFields(page, { tip: '0.01' }); // the tip sits in Advanced options
     await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
-    // the ticket itself lists no cost and terms: those are in the final confirmation only
+    // The ticket itself lists no cost and terms: those are in the final confirmation only.
     await expect(page.getByTestId('order-disclosure')).toHaveCount(0);
 
-    // one click: the final confirmation (what the order costs and does), Continue, then the wallet is asked once and signs exactly the transaction the node accepts
+    // One click: the final confirmation (what the order costs and does), Continue, then the wallet
+    // is asked once and signs exactly the transaction the node accepts.
     await expect(page.getByTestId('order-place')).toBeEnabled();
-    // timers on a clock the test can move on (the line of the accepted order goes after a minute: below)
+    // Timers on a clock the test can move on (the line of the accepted order goes after a minute:
+    // below).
     await page.clock.install();
     const placed = await placeOrderAndRead(page, mock);
     const shown = placed.receipt;
@@ -73,35 +79,37 @@ test.describe('order ticket', () => {
     expect(shown.fee).toBe(`${formatKas(BigInt(placed.submission.fee))} KAS`);
     expect(shown.orders).toHaveLength(1);
     expect(shown.orders[0]!.title).toBe('Sell limit order');
-    // 3 EXKCC at 2.6 KAS with a 0.01 KAS tip: the all-in price is 2.59
+    // 3 EXKCC at 2.6 KAS with a 0.01 KAS tip: the all-in price is 2.59.
     expect(shown.orders[0]!.rows).toMatchObject({ Amount: '3 EXKCC', 'Limit price': '2.6 KAS per EXKCC', 'You receive at least per token (all-in)': '2.59 KAS per EXKCC', 'KAS on the order output': '1 KAS' });
     expect(shown.orders[0]!.rows.Expires, 'the expiry is shown').toMatch(/^DAA score [0-9]+$/);
     await expectWalletSigned(wallet!, placed);
     expect(placed.submission.created).toHaveLength(1);
     expect(placed.submission.created[0]!.kind).toBe('KobAsk');
-    // the order as the node holds it
+    // The order as the node holds it.
     const view = placed.views[0];
     expect(view.side).toBe(1); // a sell
     expect(view.state.state).toMatchObject({ amountLeft: '300000000', price: '260000000', tip: '1000000', refundTip: '5000000' }); // 3 EXKCC at 2.6 KAS, tip 0.01 KAS
-    // the form starts the next order empty
+    // The form starts the next order empty.
     await expect(page.getByTestId('order-amount')).toHaveValue('');
 
-    // the line of an accepted order goes about a minute after the network took it into a block (an error would stay)
+    // The line of an accepted order goes about a minute after the network took it into a block (an
+    // error would stay).
     await expect(page.getByTestId('order-status')).toHaveAttribute('data-confirmed', 'confirmed', { timeout: 30_000 });
     await page.clock.fastForward(59_000);
     await expect(page.getByTestId('order-status')).toBeVisible();
     await page.clock.fastForward(2_000);
     await expect(page.getByTestId('order-status')).toHaveCount(0);
 
-    // the order is on the book, with its tokens in escrow
+    // The order is on the book, with its tokens in escrow.
     const mine = await mock.ordersOf('alice');
     expect(mine).toHaveLength(1);
     const bal = await mock.balance('alice');
     expect(BigInt(bal.tokens.EXKCC ?? '0')).toBe(97n * TOKEN);
   });
 
-  // founder 2026-11-14: the notifications sit at the top right under the header, so a submitted order's card covers at most the market bar's right
-  // end, never the ticket (its button above all); the ticket's own footer shows no line once the order is submitted
+  // The notifications sit at the top right under the header, so a submitted order's card covers at
+  // most the market bar's right end, never the ticket (its button above all).
+  // The ticket's own footer shows no line once the order is submitted.
   test('a submitted order: its notification at the top right over the market bar, clear of the ticket; nothing left in the ticket footer', async ({ appPage: page, mock }) => {
     await fundAlice(mock);
     await openTicket(page, mock);
@@ -126,7 +134,8 @@ test.describe('order ticket', () => {
     await page.getByTestId('order-amount').fill('2');
     await page.getByTestId('order-price').fill('2.7');
 
-    // the click opens the popup: its title and the order's terms; the status line says it is waiting for the user, the wallet has not been asked
+    // The click opens the popup: its title and the order's terms. The status line says it is
+    // waiting for the user, the wallet has not been asked.
     await clickPlaceOnly(page);
     const shown = await readReceipt(page);
     expect(shown.from).toBe('app');
@@ -138,7 +147,7 @@ test.describe('order ticket', () => {
     await expect(page.getByTestId('order-status')).toHaveAttribute('data-phase', 'confirming');
     expect(await wallet!.calls(), 'no wallet request before Continue').toHaveLength(0);
 
-    // Cancel: the neutral outcome, nothing was sent, no wallet request
+    // Cancel: the neutral outcome, nothing was sent, no wallet request.
     await page.getByTestId('confirm-order-cancel').click();
     await expect(page.getByTestId('confirm-order')).toHaveCount(0);
     const stopped = await expectStopped(page, 'rejected', { code: 'cancelled' });
@@ -146,7 +155,8 @@ test.describe('order ticket', () => {
     expect(await wallet!.calls()).toHaveLength(0);
     expect(await mock.submitted(false)).toHaveLength(0);
 
-    // the same button opens it again; Continue asks the wallet exactly once and the order goes through
+    // The same button opens it again. Continue asks the wallet exactly once and the order goes
+    // through.
     await clickPlaceOnly(page);
     await readReceipt(page);
     await page.getByTestId('confirm-order-ok').click();
@@ -168,11 +178,12 @@ test.describe('order ticket', () => {
     expect(first.title).toBe('Place order');
     expect(first.orders.map((o) => o.title)).toEqual(['Buy market order (auction)']);
     expect(first.updated).toBe(false);
-    // the popup follows the market and the clock while it is open: its start moves on with the node clock, said as a time from now
+    // The popup follows the market and the clock while it is open: its start moves on with the node
+    // clock, said as a time from now.
     const start = page.getByTestId('confirm-order-order-0').locator('dd[data-daa]').first();
     const daa0 = Number(await start.getAttribute('data-daa'));
     await expect(start).toContainText(/^(now|in \d+ s)DAA \d+$/, { timeout: 5_000 });
-    // the user reads for ~4 s (the mock chain advances 10 DAA a second)
+    // The user reads for ~4 s (the mock chain advances 10 DAA a second).
     await page.waitForTimeout(4_000);
     expect(await wallet!.calls()).toHaveLength(0);
     const daa1 = Number(await start.getAttribute('data-daa'));
@@ -180,7 +191,7 @@ test.describe('order ticket', () => {
     const confirmedAt = await mockClock(mock);
     const shownStart = Number(await start.getAttribute('data-daa'));
     await page.getByTestId('confirm-order-ok').click();
-    // nothing got worse: no second popup, the wallet is asked directly (once)
+    // Nothing got worse: no second popup, the wallet is asked directly (once).
     const txid = await waitSubmitted(page);
     await expect(page.getByTestId('confirm-order')).toHaveCount(0);
     await expect(page.getByTestId('confirm-order-updated')).toHaveCount(0);
@@ -188,11 +199,13 @@ test.describe('order ticket', () => {
     const placed = await placedBy(mock, txid);
     await expectWalletSigned(wallet!, placed);
     expect(await mock.submitted(false)).toHaveLength(1);
-    // the stale clock of the popup did not end up in the order: its auction starts at or after the node clock when Confirm was clicked
+    // The stale clock of the popup did not end up in the order: its auction starts at or after the
+    // node clock when Confirm was clicked.
     const state = placed.views[0].state.state;
     expect(placed.views[0].contract).toBe('KobBid');
     expect(Number(state.activeFrom), 'activeFrom (the auction start) >= the DAA at Confirm').toBeGreaterThanOrEqual(confirmedAt.daa);
-    // what was sent is what the popup showed at Continue (a later plan only if the popup's last one was more than two rounds old)
+    // What was sent is what the popup showed at Continue (a later plan only if the popup's last one
+    // was more than two rounds old).
     expect(Number(state.activeFrom) - shownStart, 'the start sent is the one shown, or a moment later').toBeLessThanOrEqual(40);
     expect(Number(state.activeFrom)).toBeGreaterThanOrEqual(shownStart);
     expect(Number(state.expiryDaa)).toBeGreaterThan(Number(state.activeFrom));
@@ -210,7 +223,8 @@ test.describe('order ticket', () => {
     expect(await wallet!.calls()).toHaveLength(1);
     expect(await mock.submitted()).toHaveLength(0);
 
-    // approve now: the same button opens the confirmation again, then asks the wallet, signs and submits
+    // Approve now: the same button opens the confirmation again, then asks the wallet, signs and
+    // submits.
     await wallet!.configure({ approve: true });
     await clickPlace(page);
     await waitSubmitted(page);
@@ -243,7 +257,7 @@ test.describe('order ticket', () => {
     const stopped = await expectStopped(page, 'failed');
     expect(stopped.text).toContain('injected submit failure');
     expect(await mock.submitted()).toHaveLength(0);
-    // the ticket stays as it was: the same button tries again and the node accepts
+    // The ticket stays as it was: the same button tries again and the node accepts.
     await expect(page.getByTestId('order-place')).toBeEnabled();
     await clickPlace(page);
     await waitSubmitted(page);
@@ -261,7 +275,7 @@ test.describe('order ticket', () => {
     await expect(issue).toBeVisible();
     await expect(issue).toContainText('3 EXKCC'); // short by 3 of the 8 EXKCC
     await expect(page.getByTestId('order-place')).toBeDisabled();
-    // "max" fills what the balance allows and clears the error
+    // "max" fills what the balance allows and clears the error.
     await page.getByTestId('order-available').click();
     await expect(page.getByTestId('order-amount')).toHaveValue('5');
     await expect(page.getByTestId('order-issue-INSUFFICIENT_TOKENS')).toHaveCount(0);
@@ -317,12 +331,13 @@ test.describe('order ticket', () => {
       await expect(page.getByTestId('order-amount')).toBeVisible();
       await expect(page.getByTestId('order-type-help')).not.toBeEmpty();
       for (const id of expectField[type] ?? []) {
-        // the priority tip sits in Advanced options for every type (closed by default); the other fields are on the ticket itself
+        // The priority tip sits in Advanced options for every type (closed by default). The other
+        // fields are on the ticket itself.
         if (id === 'order-tip') await expect(page.getByTestId('order-advanced').getByTestId(id), `${type}: ${id}`).toHaveCount(1);
         else await expect(page.getByTestId(id), `${type}: ${id}`).toBeVisible();
       }
     }
-    // the side follows the type: TWAP only sells, DCA only buys
+    // The side follows the type: TWAP only sells, DCA only buys.
     await chooseOption(page.getByTestId('order-type'), 'twap');
     await expect(page.getByTestId('order-side-buy')).toBeDisabled();
     await chooseOption(page.getByTestId('order-type'), 'dca');
@@ -351,7 +366,7 @@ test.describe('order ticket', () => {
     await waitReviewable(page);
     await expect(page.getByTestId('order-place')).toHaveText('Sell Stop (market)');
     await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
-    // the trigger rules are in the final confirmation (read and cancelled: nothing is sent)
+    // The trigger rules are in the final confirmation (read and cancelled: nothing is sent).
     const shown = await peekReceipt(page);
     expect(shown.orders.map((o) => o.title)).toEqual(['Sell stop order']);
     const rows = shown.orders[0]!.rows;
@@ -380,19 +395,19 @@ test.describe('order ticket', () => {
     const top = BigInt(asks[0]!.price);
     await page.getByTestId('order-side-buy').click();
     await chooseOption(page.getByTestId('order-type'), 'streaming');
-    // a buy meets the best ask
+    // A buy meets the best ask.
     await expect(seen).toHaveValue(priceText(top));
-    // a sell meets the best bid
+    // A sell meets the best bid.
     await page.getByTestId('order-side-sell').click();
     await expect(seen).toHaveValue(priceText(BigInt((await mock.book(token, false)).bids[0].price)));
     await page.getByTestId('order-side-buy').click();
     await expect(seen).toHaveValue(priceText(top));
-    // the best asks are taken: the box follows the new quote
+    // The best asks are taken: the box follows the new quote.
     for (const o of asks.filter((a) => BigInt(a.price) === top)) await mock.fill(o.covenant_id, o.amount_left);
     const next = BigInt((await best())[0]!.price);
     expect(next).toBeGreaterThan(top);
     await expect(seen).toHaveValue(priceText(next));
-    // a price of the user's own stays
+    // A price of the user's own stays.
     await seen.fill('0.03');
     const asks2 = await best();
     for (const o of asks2.filter((a) => BigInt(a.price) === next)) await mock.fill(o.covenant_id, o.amount_left);
@@ -409,7 +424,7 @@ test.describe('order ticket', () => {
     const slider = page.getByTestId('order-amount-slider');
     const range = page.getByTestId('order-amount-range');
     const base = async () => BigInt(Math.round(Number(await amount.inputValue()) * 1e8));
-    // a sell: Max is the free balance (100 EXKCC)
+    // A sell: Max is the free balance (100 EXKCC).
     await page.getByTestId('order-side-sell').click();
     await page.getByTestId('order-price').fill('0.03');
     await expect(range).toBeEnabled();
@@ -418,16 +433,16 @@ test.describe('order ticket', () => {
     await expect(slider).toHaveAttribute('data-pct', '50');
     await page.getByTestId('order-amount-pct-100').click();
     await expect(amount).toHaveValue('100');
-    // keyboard: one step is 1 %
+    // Keyboard: one step is 1 %.
     await range.focus();
     await page.keyboard.press('ArrowLeft');
     await expect(amount).toHaveValue('99');
     await expect(range).toHaveAttribute('aria-valuetext', '99% · 99 EXKCC');
-    // typing moves the slider
+    // Typing moves the slider.
     await amount.fill('25');
     await expect(slider).toHaveAttribute('data-pct', '25');
     await expect(page.getByTestId('order-amount-pct-25')).toHaveAttribute('aria-pressed', 'true');
-    // a minimum fill of 30 tokens: the 25 % point is off, 0 % empties the box
+    // A minimum fill of 30 tokens: the 25 % point is off, 0 % empties the box.
     await page.getByTestId('order-advanced').locator('summary').click();
     await page.getByTestId('field-minFill').fill('30');
     await expect(page.getByTestId('order-amount-pct-25')).toBeDisabled();
@@ -435,10 +450,10 @@ test.describe('order ticket', () => {
     await expect(amount).toHaveValue('');
     await page.getByTestId('field-minFill').fill('');
 
-    // a buy: 50 % is half of what Max gives (the planner's search)
+    // A buy: 50 % is half of what Max gives (the planner's search).
     await page.getByTestId('order-side-buy').click();
     await page.getByTestId('order-price').fill('0.0245');
-    // the slider waits for the buy's Max (a planner search) before it takes a pick
+    // The slider waits for the buy's Max (a planner search) before it takes a pick.
     await expect(range).toBeEnabled();
     await page.getByTestId('order-available').click();
     await expect(amount).not.toHaveValue('');
@@ -449,7 +464,7 @@ test.describe('order ticket', () => {
     await expect.poll(base).toBe(max / 2n);
     await expect(slider).toHaveAttribute('data-pct', '50');
     await expect(page.getByTestId('order-place')).toBeEnabled();
-    // a phone: the slider is one row inside the ticket, nothing scrolls sideways
+    // A phone: the slider is one row inside the ticket, nothing scrolls sideways.
     await page.setViewportSize({ width: 375, height: 800 });
     const box = (await slider.boundingBox())!;
     const pt = (await page.getByTestId('order-amount-pct-100').boundingBox())!;

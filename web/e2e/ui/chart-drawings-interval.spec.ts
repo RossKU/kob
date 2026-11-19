@@ -1,7 +1,11 @@
-// Drawings are anchored to a price and a unix time, so they keep their place when the chart's interval changes (1m / 5m / 1H / 1D) and after a reload. The chart draws into a canvas, so the
-// panel exposes what its last paint placed: `data-drawn` (the drawings that have a position on the chart now) and `data-drawn-visible` (of those, the ones touching the plot); the stored
-// entry in localStorage is checked beside it. A drawing is never lost by an interval switch: it is placed on every interval (a trend line whose two times fall into one daily bar is
-// very short, not gone; times before the first loaded bar or after the newest one are placed on the bar grid), and what the user drew stays in storage untouched.
+// Drawings are anchored to a price and a unix time, so they keep their place when the chart's
+// interval changes (1m / 5m / 1H / 1D) and after a reload. The chart draws into a canvas, so the
+// panel exposes what its last paint placed: `data-drawn` (the drawings that have a position on the
+// chart now) and `data-drawn-visible` (of those, the ones touching the plot). The stored entry in
+// localStorage is checked beside it. A drawing is never lost by an interval switch: it is placed on
+// every interval (a trend line whose two times fall into one daily bar is very short, not gone;
+// times before the first loaded bar or after the newest one are placed on the bar grid), and what
+// the user drew stays in storage untouched.
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
@@ -62,7 +66,10 @@ async function toInterval(page: Page, iv: string): Promise<void> {
 interface Stored { kind: string; a?: { time: number }; b?: { time: number } }
 const stored = (page: Page, key: string) => page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? '{"items":[]}').items as Stored[], key);
 
-/** What the last paint placed: per drawing, the x of its two points (a horizontal line has none), and the pane's width. */
+/**
+ * What the last paint placed: per drawing, the x of its two points (a horizontal line has none),
+ * and the pane's width.
+ */
 async function placed(page: Page): Promise<{ kind: string; x1?: number; x2?: number }[]> {
   const at = (await chartOf(page).getAttribute('data-drawn-at')) ?? '';
   return at.split('|').filter(Boolean).map((e) => {
@@ -73,8 +80,9 @@ async function placed(page: Page): Promise<{ kind: string; x1?: number; x2?: num
 }
 
 /**
- * The x of every point follows its time: one straight line x = x0 + k * time through all the points of the two-point drawings (the bars are evenly spaced), within 2 px of rounding,
- * and a later time is further right.
+ * The x of every point follows its time: one straight line x = x0 + k * time through all the points
+ * of the two-point drawings (the bars are evenly spaced), within 2 px of rounding, and a later time
+ * is further right.
  */
 async function expectOnTimeLine(page: Page, key: string, why: string): Promise<void> {
   const items = await stored(page, key);
@@ -94,7 +102,10 @@ async function expectOnTimeLine(page: Page, key: string, why: string): Promise<v
   for (const p of pts) expect(Math.abs(lo.x + k * (p.t - lo.t) - p.x), `${why}: x of t=${p.t} on the time line (not squeezed to the edge)`).toBeLessThanOrEqual(2);
 }
 
-/** Every drawing is placed (and the stored ones are all still there) on the interval that is on screen. */
+/**
+ * Every drawing is placed (and the stored ones are all still there) on the interval that is on
+ * screen.
+ */
 async function expectKept(page: Page, key: string, n: number, why: string): Promise<void> {
   await expect(chartOf(page), `${why}: placed`).toHaveAttribute('data-drawn', String(n));
   await expect(chartOf(page), `${why}: data-drawings`).toHaveAttribute('data-drawings', String(n));
@@ -124,11 +135,11 @@ for (const [name, size, touch] of [['desktop 1280', { width: 1280, height: 900 }
         await toInterval(page, iv);
         await expectKept(page, key, 4, `on ${iv}`);
         if (iv === '5m') await expect(chartOf(page), 'back on 5m: all four on the plot again').toHaveAttribute('data-drawn-visible', '4');
-        // a second look a moment later: nothing drops off after the first paint
+        // A second look a moment later: nothing drops off after the first paint.
         await page.waitForTimeout(300);
         await expectKept(page, key, 4, `on ${iv} (later)`);
       }
-      // every interval after another, in a row (quick switches that overlap the loads)
+      // Every interval after another, in a row (quick switches that overlap the loads).
       for (const iv of [...INTERVALS, '1h', '1m', '1d', '5m'] as const) {
         await page.getByTestId(`chart-interval-${iv}`).click();
       }
@@ -136,7 +147,7 @@ for (const [name, size, touch] of [['desktop 1280', { width: 1280, height: 900 }
       await expect(chartOf(page)).toHaveAttribute('data-state', 'ready');
       await expectKept(page, key, 4, 'after quick switches');
 
-      // a reload on each interval
+      // A reload on each interval.
       for (const iv of ['1m', '1h', '1d'] as const) {
         await toInterval(page, iv);
         await page.reload();
@@ -148,7 +159,10 @@ for (const [name, size, touch] of [['desktop 1280', { width: 1280, height: 900 }
   });
 }
 
-/** Seeds the market's store with drawings placed by hand (times in unix seconds), then opens the chart on `iv`. */
+/**
+ * Seeds the market's store with drawings placed by hand (times in unix seconds), then opens the
+ * chart on `iv`.
+ */
 async function openWith(page: Page, token: string, items: unknown[], iv: string): Promise<void> {
   await page.evaluate(([k, list, i]) => { localStorage.setItem(k as string, JSON.stringify({ v: 1, items: list })); localStorage.setItem('kob.chart.interval', i as string); }, [STORE(token), items, iv]);
   await page.reload();
@@ -175,7 +189,8 @@ test.describe('desktop 1280, drawings at odd times', () => {
       await expect(chartOf(page), `on ${iv}`).toHaveAttribute('data-drawn', '3');
       const [short, past, future] = await placed(page);
       const width = (await page.locator('.chart-canvas').boundingBox())!.width;
-      // before the first loaded bar: left of the plot; after the newest: right of it; in between: a real place (not the left edge), the two ends apart or at least not collapsed to 0
+      // Before the first loaded bar: left of the plot. After the newest: right of it. In between: a
+      // real place (not the left edge), the two ends apart or at least not collapsed to 0.
       expect(past!.x1, `${iv}: past start`).toBeLessThan(0);
       expect(past!.x2, `${iv}: past end`).toBeLessThan(0);
       expect(past!.x1!, `${iv}: past in order`).toBeLessThan(past!.x2!);
@@ -185,7 +200,7 @@ test.describe('desktop 1280, drawings at odd times', () => {
       expect(short!.x1, `${iv}: the short line is not squeezed to the left edge`).not.toBe(0);
       expect(short!.x1!, `${iv}: the short line is in order`).toBeLessThanOrEqual(short!.x2!);
       if (iv === '1d') {
-        // both times in one daily bar: a few pixels apart, inside the plot
+        // Both times in one daily bar: a few pixels apart, inside the plot.
         expect(short!.x1, '1d: inside the plot').toBeGreaterThan(0);
         expect(short!.x2, '1d: inside the plot').toBeLessThan(width);
         expect(short!.x2! - short!.x1!, '1d: very short, not gone').toBeLessThan(20);

@@ -1,9 +1,20 @@
-// KOB's own genesis check and kascov's remark (founder decision 2026-10-28). The market list shows a token that kascov.io marks verified with the chip
-// "Verified by kascov" (third party, labelled; the list asks for nothing more). A token page checks the genesis itself, once, from the creation bytes of
-// REAL tokens recorded on 2026-10-28 (src/testing/genesis-chain.json: kascov.io's per-token file and the Kaspa REST explorer, both MOCKED here) with the real
-// kob-wasm rules: "Genesis verified" (KOB's own fact, replacing the chip), "Genesis check failed" (a warning, even though kascov says verified) or
-// no status chip at all, whatever the result (a pass, kascov's remark, a check that could not run: a normal token shows none; all of it, with the reason, is in the
-// "Status and checks" section of the token's details), and the one "High risk" chip with its reason when the check FOUND a problem. Desktop and a 375 px phone.
+// KOB's own genesis check and kascov's remark.
+//
+// The market list shows a token that kascov.io marks verified with the chip "Verified by kascov"
+// (third party, labelled; the list asks for nothing more).
+//
+// A token page checks the genesis itself, once, with the real kob-wasm rules.
+// The input is the creation bytes of real tokens (src/testing/genesis-chain.json: kascov.io's
+// per-token file and the Kaspa REST explorer, both mocked here).
+// The result is one of:
+// - "Genesis verified" (KOB's own fact, replacing the chip).
+// - "Genesis check failed" (a warning, even though kascov says verified).
+// - No status chip at all, whatever the result (a pass, kascov's remark, a check that could not
+//   run). A normal token shows none. All of it, with the reason, is in the "Status and checks"
+//   section of the token's details.
+//
+// The one "High risk" chip with its reason shows when the check found a problem.
+// Desktop and a 375 px phone.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
@@ -65,13 +76,13 @@ for (const vp of VIEWPORTS) {
         await expect(row.locator('[data-testid^="token-fact-"]')).toHaveCount(0);
         await expect(row).not.toContainText(/Genesis not verified|Verified by kascov/);
       }
-      // the legend explains both
+      // The legend explains both.
       await page.getByTestId('legend-toggle').click();
       await page.getByTestId('legend-badges').locator('summary').click();
       await expect(page.getByTestId('legend-fact-genesis_kascov')).toContainText('Verified by kascov');
       await expect(page.getByTestId('legend-fact-genesis_verified')).toContainText('KOB checked this token');
       await expect(page.getByTestId('legend-fact-genesis_failed')).toContainText('failed');
-      // the list makes no request for a token's file and none to an explorer
+      // The list makes no request for a token's file and none to an explorer.
       expect(kascov.fileRequests).toEqual([]);
       expect(explorer.requests).toEqual([]);
       expect(await horizontalOverflow(page)).toBe(0);
@@ -80,7 +91,7 @@ for (const vp of VIEWPORTS) {
     test('the page checks the genesis itself, once: "Genesis verified" (KOB\'s own fact) replaces the chip, and says what it means', async ({ appPage: page }) => {
       const { kascov, explorer } = await open(page, `/market/${BRW.covenantId}`, { tokens: [listed(BRW)], files: files(BRW) });
       const header = page.getByTestId('token-header');
-      // no chip in the header, whatever the result; the pass and what it means are in the details
+      // No chip in the header, whatever the result. The pass and what it means are in the details.
       await expect(header.locator('[data-testid^="token-fact-"]')).toHaveCount(0);
       await expect(header.getByTestId('genesis-failed-warning')).toHaveCount(0);
       const line = await status(page, 'genesis_verified');
@@ -88,7 +99,7 @@ for (const vp of VIEWPORTS) {
       await expect(line).toContainText(/KOB checked this token's creation itself/);
       await expect(page.getByTestId('status-fact-genesis_kascov')).toHaveCount(0);
       await expect(page.getByTestId('status-fact-genesis_unverified')).toHaveCount(0);
-      // one token file, no explorer (kascov's file carried everything the check needs)
+      // One token file, no explorer (kascov's file carried everything the check needs).
       expect(kascov.fileRequests).toEqual([BRW.covenantId]);
       expect(explorer.requests).toEqual([]);
       expect(await horizontalOverflow(page)).toBe(0);
@@ -99,7 +110,8 @@ for (const vp of VIEWPORTS) {
       const header = page.getByTestId('token-header');
       await expect(header.locator('[data-testid^="token-fact-"]')).toHaveCount(0);
       await expect(await status(page, 'genesis_verified')).toContainText('Genesis verified');
-      // its genesis minter has been spent since: some of the allowance may be minted, so it is "up to"
+      // Its genesis minter has been spent since: some of the allowance may be minted, so it is "up
+      // to".
       const allowance = page.getByTestId('status-fact-mint_allowance');
       await expect(allowance).toContainText('Mint left: up to');
       await expect(allowance).toContainText(/does not mean a fixed supply/);
@@ -112,8 +124,10 @@ for (const vp of VIEWPORTS) {
       tampered.utxos[0]!.value += 1;
       await open(page, `/market/${BRW.covenantId}`, { tokens: [listed(BRW, 'verified')], files: { [BRW.covenantId]: tampered } });
       const header = page.getByTestId('token-header');
-      // a supplier's file that does not hash to the covenant id, with no explorer to confirm it, is not a verdict: the token is not branded failed
-      // for the session, kascov's own chip stays and the check is asked again later (audit 2026-10-29 F8)
+      // A supplier's file that does not hash to the covenant id, with no explorer to confirm it, is
+      // not a verdict.
+      // The token is not branded failed for the session, kascov's own chip stays and the check is
+      // asked again later.
       await expect(header.getByTestId('token-fact-genesis_failed')).toHaveCount(0);
       await expect(header.getByTestId('genesis-failed-warning')).toHaveCount(0);
       await expect(header.getByTestId('badge-high-risk')).toHaveCount(0);
@@ -125,7 +139,7 @@ for (const vp of VIEWPORTS) {
     test('a genesis with an output that is not the token\'s program fails as contaminated, whatever kascov says', async ({ appPage: page }) => {
       await open(page, `/market/${KUSDT.covenantId}`, { tokens: [listed(KUSDT, 'verified')], files: files(KUSDT) });
       const header = page.getByTestId('token-header');
-      // the one High risk chip (the failed check is its reason, opened on a tap); the banner stays
+      // The one High risk chip (the failed check is its reason, opened on a tap). The banner stays.
       await expect(header.getByTestId('badge-high-risk')).toHaveAttribute('data-reasons', 'genesis_failed');
       await expect(header.getByTestId('token-fact-genesis_failed')).toHaveCount(0);
       await header.getByTestId('high-risk-toggle').click();
@@ -141,11 +155,12 @@ for (const vp of VIEWPORTS) {
       const header = page.getByTestId('token-header');
       await expect(await status(page, 'genesis_verified')).toContainText('Genesis verified');
       await expect(page.getByTestId('token-program')).toContainText('checked from its genesis');
-      // the issuance, from the genesis check (the pinned BridgeMint), with where its description comes from
+      // The issuance, from the genesis check (the pinned BridgeMint), with where its description
+      // comes from.
       const issuance = page.getByTestId('token-issuance');
       await expect(issuance).toContainText('Federated bridge (BridgeMint)');
       await expect(page.getByTestId('token-issuance-source')).toHaveText('per issuer docs; signers not verified by KOB');
-      // the custody note: folded until tapped
+      // The custody note: folded until tapped.
       const note = page.getByTestId('token-bridge-note');
       await expect(note).toBeVisible();
       await expect(note.getByTestId('token-bridge-note-text')).toBeHidden();
@@ -153,11 +168,11 @@ for (const vp of VIEWPORTS) {
       await expect(note.getByTestId('token-bridge-note-text')).toContainText("held by the bridge's signers");
       await expect(note.getByTestId('token-bridge-note-text')).toContainText('can be lost');
       await expect(note.getByTestId('token-bridge-note-text')).toContainText('does not verify its signer set');
-      // what the minter's state names, unchecked, for a holder to compare with the issuer's values
+      // What the minter's state names, unchecked, for a holder to compare with the issuer's values.
       await expect(note.getByTestId('token-bridge-signer-set')).toHaveAttribute('data-value', 'b563c26ffc9f94f977e9d580f02a0b8501c023a8455f2f35b74e79f8df3c0301');
       await expect(note.getByTestId('token-bridge-guardian')).toHaveAttribute('data-value', '3c4c0ef3d985fb93ebdb30c5dd8ff8d6ffffa1e411565a21cc33aa2365a89566');
       await expect(note.getByTestId('token-bridge-covenant')).toHaveCount(0);
-      // a bridge's minter is no public mint: no allowance line, no High risk
+      // A bridge's minter is no public mint: no allowance line, no High risk.
       await expect(page.getByTestId('status-fact-mint_allowance')).toHaveCount(0);
       await expect(header.getByTestId('badge-high-risk')).toHaveCount(0);
       expect(await horizontalOverflow(page)).toBe(0);
@@ -191,14 +206,14 @@ for (const vp of VIEWPORTS) {
     });
 
     test('the history is not available: the token stays "Genesis not verified" with the reason (kascov\'s chip stays as it was, with the reason in its tooltip)', async ({ appPage: page }) => {
-      // kascov does not say verified: no chip in the header ...
+      // Kascov does not say verified: no chip in the header ...
       await open(page, `/market/${BRW.covenantId}`, { tokens: [listed(BRW, 'unvalidated')], files: {} });
       const header = page.getByTestId('token-header');
       await expect(page.getByTestId('token-page')).toBeVisible();
       await expect(header.getByTestId('token-fact-genesis_unverified')).toHaveCount(0);
       await expect(header).not.toContainText('Genesis not verified');
       await expect(header.getByTestId('badge-high-risk')).toHaveCount(0);
-      // ... and its explanation, with the reason, one tap away in the token's details
+      // ... and its explanation, with the reason, one tap away in the token's details.
       await page.getByTestId('token-status-details').getByRole('button').first().click();
       const status = page.getByTestId('status-fact-genesis_unverified');
       await expect(status).toContainText('Genesis not verified: history not available');

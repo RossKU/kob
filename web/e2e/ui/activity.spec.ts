@@ -1,7 +1,9 @@
-// The activity log (ui/activity): the Activity page (#/activity, every market) and the same log on the token and pair pages,
-// against the mock indexer: one row per transaction, newest first, each row a link to the transaction on tn10.kaspa.stream (new tab, noopener);
-// fills and placements (phase 1), the Columns filters and their persistence, live rows, pause and the "+N new" hold,
-// a phone layout without horizontal scroll. `KOB_ACTIVITY_SHOTS=<dir>` also saves screenshots (1440 and 390 px, dark and light).
+// The activity log (ui/activity): the Activity page (#/activity, every market) and the same log on
+// the token and pair pages, against the mock indexer: one row per transaction, newest first, each
+// row a link to the transaction on tn10.kaspa.stream (new tab, noopener). Fills and placements
+// (phase 1), the Columns filters and their persistence, live rows, pause and the "+N new" hold, a
+// phone layout without horizontal scroll. `KOB_ACTIVITY_SHOTS=<dir>` also saves screenshots (1440
+// and 390 px, dark and light).
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from '@playwright/test';
@@ -14,7 +16,10 @@ const SHOTS = process.env.KOB_ACTIVITY_SHOTS ?? '';
 const QUOTE = 'e7'.repeat(32);
 const TX_URL = /^https:\/\/tn10\.kaspa\.stream\/transactions\/[0-9a-f]{64}$/;
 
-/** The example registry with EXKCC and a second listed KCC-20, EXUSD (6 decimals), matching the mock pair seed. */
+/**
+ * The example registry with EXKCC and a second listed KCC-20, EXUSD (6 decimals), matching the mock
+ * pair seed.
+ */
 async function listPair(page: Page): Promise<void> {
   const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
   for (const t of reg.templates) t.review_status = 'reviewed';
@@ -26,14 +31,17 @@ async function listPair(page: Page): Promise<void> {
   );
 }
 
-/** The default book with a little history (fills) of EXKCC; returns its covenant id. */
+/** The default book with a little history (fills) of EXKCC. Returns its covenant id. */
 async function seedToken(page: Page, mock: MockClient): Promise<string> {
   await mock.seedHistory({ hours: 2, trades: 30, seed: 3 });
   await listExkcc(page);
   return (await mock.token()).covenant_id as string;
 }
 
-/** The pair seed with one fill of a resting pair ask and one of a resting pair bid; returns the EXKCC covenant id. */
+/**
+ * The pair seed with one fill of a resting pair ask and one of a resting pair bid. Returns the
+ * EXKCC covenant id.
+ */
 async function seedPair(page: Page, mock: MockClient): Promise<string> {
   await mock.seed({ pair: true });
   await mock.seedHistory({ hours: 2, trades: 20, seed: 4 });
@@ -53,7 +61,7 @@ const attrs = (page: Page, name: string) => rows(page).evaluateAll((els, n) => e
 async function shot(page: Page, name: string, theme: 'dark' | 'light', fullPage = true): Promise<void> {
   if (!SHOTS) return;
   await page.evaluate((th) => document.documentElement.setAttribute('data-theme', th), theme);
-  // a phone: the screen with the log at its top
+  // A phone: the screen with the log at its top.
   if (!fullPage) await page.getByTestId('activity').first().evaluate((e) => { e.scrollIntoView({ block: 'start' }); window.scrollBy(0, -72); });
   await page.mouse.move(0, 0);
   await page.waitForTimeout(400);
@@ -72,10 +80,10 @@ test.describe('activity page', () => {
     const kinds = await attrs(page, 'data-kind');
     expect(kinds).toContain('fill');
     expect(kinds).toContain('placed');
-    // one row per transaction
+    // One row per transaction.
     const txids = await attrs(page, 'data-txid');
     expect(new Set(txids).size).toBe(txids.length);
-    // every row is a real link: keyboard and middle click work, a new tab without the opener
+    // Every row is a real link: keyboard and middle click work, a new tab without the opener.
     const first = rows(page).first();
     expect(await first.evaluate((e) => e.tagName)).toBe('A');
     await expect(first).toHaveAttribute('href', TX_URL);
@@ -83,27 +91,31 @@ test.describe('activity page', () => {
     await expect(first).toHaveAttribute('rel', 'noopener noreferrer');
     expect(await first.getAttribute('href')).toContain(txids[0]!);
     await expect(first).toHaveAttribute('aria-label', /opens tn10\.kaspa\.stream in a new tab/);
-    // the columns: market icons, short tx, wallet, amount (+ KAS value), price, confirmations, time
+    // The columns: market icons, short tx, wallet, amount (+ KAS value), price, confirmations,
+    // time.
     const fill = rows(page).and(page.locator('[data-kind="fill"]')).first();
-    // the whole id, never shortened in the middle (founder 2026-11-12): the cell ends it with an ellipsis where it has no room; whole in its title too
+    // The whole id is never shortened in the middle.
+    // The cell ends it with an ellipsis where it has no room, and the whole id is in its title too.
     await expect(fill.locator('.act-c-tx')).toHaveText(/^[0-9a-f]{64}$/);
     await expect(fill.locator('.act-c-tx')).toHaveAttribute('title', /^[0-9a-f]{64}$/);
     await expect(fill.locator('.act-c-amt')).toContainText('EXKCC');
     await expect(fill.locator('.act-c-amt')).toContainText('KAS');
     await expect(fill.locator('.act-c-px')).toHaveText(/^0\.0\d+$/);
-    // one 24-hour time (today HH:MM:SS, else YYYY-MM-DD HH:MM), the full timestamp with the zone in the title; no subscript-zero figure in the cells
+    // One 24-hour time (today HH:MM:SS, else YYYY-MM-DD HH:MM), the full timestamp with the zone in
+    // the title. No subscript-zero figure in the cells.
     await expect(fill.locator('.act-c-time')).toHaveText(/^(\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2} \d{2}:\d{2})$/);
     await expect(fill.locator('.act-c-time')).toHaveAttribute('title', /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
     expect((await fill.locator('.act-c-amt, .act-c-px').allInnerTexts()).join(' ')).not.toMatch(/[₀-₉]/);
-    // the owners of the filled orders are looked up: the address without its network prefix, never shortened in the middle (the full one in the title)
+    // The owners of the filled orders are looked up: the address without its network prefix, never
+    // shortened in the middle (the full one in the title).
     await expect(fill.getByTestId('activity-wallet')).toHaveText(/^q[0-9a-z]{20,}/, { timeout: 15_000 });
     expect(await fill.getByTestId('activity-wallet').innerText()).not.toContain('…');
     await expect(fill.getByTestId('activity-wallet')).toHaveAttribute('title', /kaspatest:/);
-    // the legend under the table: phase 1 kinds and the confirmation marks
+    // The legend under the table: phase 1 kinds and the confirmation marks.
     await expect(page.getByTestId('activity-legend')).toContainText('fill, taker bought');
     await expect(page.getByTestId('activity-legend')).toContainText('placed (order owner)');
     await expect(page.getByTestId('activity-legend')).toContainText('settled');
-    // the page's own log has no "All activity" link
+    // The page's own log has no "All activity" link.
     await expect(page.getByTestId('activity-all-link')).toHaveCount(0);
     await shot(page, 'activity-1440', 'dark');
     await shot(page, 'activity-1440', 'light');
@@ -113,13 +125,14 @@ test.describe('activity page', () => {
     await seedToken(page, mock);
     await page.goto('/#/activity');
     await expect(rows(page).first()).toBeVisible();
-    // Orders = signed by the order owner (placements); Executions = fills
+    // Orders = signed by the order owner (placements). Executions = fills.
     await page.getByTestId('activity-actor-orders').click();
     await expect.poll(async () => [...new Set(await attrs(page, 'data-kind'))]).toEqual(['placed']);
     await page.getByTestId('activity-actor-executions').click();
     await expect.poll(async () => [...new Set(await attrs(page, 'data-kind'))]).toEqual(['fill']);
     await page.getByTestId('activity-actor-all').click();
-    // the Columns panel offers only what the current API lists, and says what comes with the indexer update
+    // The Columns panel offers only what the current API lists, and says what comes with the
+    // indexer update.
     await expect(page.getByTestId('activity-vis')).toHaveText('Columns ▾');
     await page.getByTestId('activity-vis').click();
     const panel = page.getByTestId('activity-vis-panel');
@@ -130,14 +143,15 @@ test.describe('activity page', () => {
     await page.getByTestId('activity-vis-fill').uncheck();
     await expect.poll(async () => [...new Set(await attrs(page, 'data-kind'))]).toEqual(['placed']);
     await expect(page.getByTestId('activity-kind-fill')).toHaveAttribute('aria-pressed', 'false');
-    // remembered: after a reload the fills stay hidden
+    // Remembered: after a reload the fills stay hidden.
     await page.reload();
     await expect(rows(page).first()).toBeVisible();
     expect([...new Set(await attrs(page, 'data-kind'))]).toEqual(['placed']);
     expect(JSON.parse((await page.evaluate(() => localStorage.getItem('kob.activity.v1')))!).page.kinds.fill).toBe(false);
     await page.getByTestId('activity-kind-fill').click();
     await expect.poll(async () => (await attrs(page, 'data-kind')).includes('fill')).toBe(true);
-    // mine only: the connected wallet's orders (alice has none in the seed: the list empties); disabled without a wallet
+    // Mine only: the connected wallet's orders (alice has none in the seed: the list empties).
+    // Disabled without a wallet.
     await expect(page.getByTestId('activity-mine')).toBeDisabled();
     await connectWallet(page, 'kasware');
     await expect(page.getByTestId('activity-mine')).toBeEnabled();
@@ -152,7 +166,7 @@ test.describe('activity page', () => {
     await page.goto('/#/activity');
     await expect(rows(page).first()).toBeVisible();
     await expect(page.getByTestId('activity-market')).toHaveCount(0);
-    // every market: the pair's fills and EXKCC's KAS book
+    // Every market: the pair's fills and EXKCC's KAS book.
     await expect.poll(async () => new Set(await attrs(page, 'data-market')).has(`${base}/${QUOTE}`)).toBe(true);
     await expect.poll(async () => new Set(await attrs(page, 'data-market')).has(base)).toBe(true);
     await page.goto(`/#/activity?market=${base}`);
@@ -190,13 +204,13 @@ test.describe('activity page', () => {
     await expect(page.getByTestId('activity-live')).toHaveAttribute('data-mode', 'live');
     await expect(rows(page).first()).toBeVisible();
     const asks = (await mock.ordersOf('maker', 'active')).filter((o: { side: number; token: string }) => o.side === 1 && o.token === token);
-    // live
+    // Live.
     const before = (await attrs(page, 'data-txid'))[0];
     await mock.fill(asks[0]!.covenant_id);
     await expect.poll(async () => (await attrs(page, 'data-txid'))[0], { timeout: 15_000 }).not.toBe(before);
     await expect(rows(page).first()).toHaveAttribute('data-kind', 'fill');
     await expect(rows(page).first()).toHaveAttribute('data-side', 'buy');
-    // paused: the new row waits, counted
+    // Paused: the new row waits, counted.
     await page.getByTestId('activity-pause').click();
     await expect(page.getByTestId('activity-live')).toHaveAttribute('data-mode', 'held');
     const top = (await attrs(page, 'data-txid'))[0];
@@ -208,7 +222,7 @@ test.describe('activity page', () => {
     await expect(page.getByTestId('activity-new')).toHaveCount(0);
     await expect.poll(async () => (await attrs(page, 'data-txid'))[0]).not.toBe(top);
     await expect(page.getByTestId('activity-pause')).toHaveAttribute('aria-pressed', 'false');
-    // pointed at: held while the pointer is over the list, released when it leaves
+    // Pointed at: held while the pointer is over the list, released when it leaves.
     const top2 = (await attrs(page, 'data-txid'))[0];
     await rows(page).nth(2).hover();
     await mock.fill(asks[2]!.covenant_id);
@@ -227,13 +241,13 @@ test.describe('the log on the token and pair pages', () => {
     const base = await seedPair(page, mock);
     await page.goto(`/#/market/${base}`);
     const log = page.getByTestId('token-page').getByTestId('activity');
-    // under the token page the log reads nothing until it is on screen
+    // Under the token page the log reads nothing until it is on screen.
     await showActivity(page);
     await expect(log.getByTestId('activity-row').first()).toBeVisible();
     await expect(log.getByTestId('activity-market')).toHaveCount(0);
     await expect.poll(async () => [...new Set(await attrs(page, 'data-market'))]).toEqual([base]);
     await expect(log.getByTestId('activity-all-link')).toHaveAttribute('href', '#/activity');
-    // layout: under the book, the chart and the ticket, above the facts; as wide as the grid
+    // Layout: under the book, the chart and the ticket, above the facts. As wide as the grid.
     const box = async (id: string) => (await page.getByTestId(id).first().boundingBox())!;
     const [grid, act, chart, details] = [(await page.locator('.mkt-grid').boundingBox())!, await box('activity'), await box('chart-section'), (await page.locator('.mkt-area-details').boundingBox())!];
     expect(act.y).toBeGreaterThan(chart.y + chart.height - 1);
@@ -241,7 +255,7 @@ test.describe('the log on the token and pair pages', () => {
     expect(Math.abs(act.width - grid.width)).toBeLessThan(2);
     await shot(page, 'token-1440', 'dark');
     await shot(page, 'token-1440', 'light');
-    // the link opens the Activity page
+    // The link opens the Activity page.
     await log.getByTestId('activity-all-link').click();
     await expect(page).toHaveURL(/#\/activity$/);
     await expect(page.getByTestId('activity-page')).toBeVisible();
@@ -263,7 +277,7 @@ test.describe('the log on the token and pair pages', () => {
       await expect(r.locator('.act-c-amt b')).toContainText('EXKCC');
       await expect(r.locator('.act-sub')).toContainText('EXUSD');
       await expect(r).toHaveAttribute('href', TX_URL);
-      // two token icons: A / B
+      // Two token icons: A / B.
       await expect(r.locator('.act-c-mk .tk-icon')).toHaveCount(2);
     }
     await expect(log.locator('[data-testid="activity-row"][data-kind="placed"]').first()).toBeVisible();
@@ -306,7 +320,8 @@ test.describe('activity on a phone', () => {
   });
 });
 
-// the table fits its card at every width: narrower cards drop the pie, then the Wallet column, then take two lines per row; never a sideways scroll
+// The table fits its card at every width: narrower cards drop the pie, then the Wallet column, then
+// take two lines per row. Never a sideways scroll.
 const WIDTHS = [390, 760, 887, 1000, 1100, 1280, 1440, 1774];
 test('the log fits its card at every width, on the Activity page and under a token page (no element past the card, no page scroll sideways)', async ({ appPage: page, mock }) => {
   test.setTimeout(120_000);
@@ -318,7 +333,8 @@ test('the log fits its card at every width, on the Activity page and under a tok
       for (const e of document.querySelectorAll('[data-testid="activity"] *')) {
         const r = e.getBoundingClientRect();
         if (r.width === 0 || (e as HTMLElement).closest('.hp-panel')) continue;
-        // a phone's tools are one row that scrolls sideways inside itself (founder 2026-11-11): what is scrolled out of it is clipped by the row, not past the card
+        // A phone's tools are one row that scrolls sideways inside itself.
+        // What is scrolled out of it is clipped by the row, not drawn past the card.
         if ((e as HTMLElement).parentElement?.closest('.act-tools')) continue;
         if (r.right > card.right + 1 || r.left < card.left - 1) bad.push(`${e.tagName}.${String((e as HTMLElement).className).slice(0, 30)} ${Math.round(r.left)}-${Math.round(r.right)} card ${Math.round(card.left)}-${Math.round(card.right)}`);
       }
@@ -335,7 +351,10 @@ test('the log fits its card at every width, on the Activity page and under a tok
   }
 });
 
-// founder 2026-11-12: Tx and Wallet get the width first; with room (a token page on a wide window) the whole transaction id and the whole wallet are shown, the figure columns stay at their figures' width
+// Tx and Wallet get the width first.
+// With room (a token page on a wide window) the whole transaction id and the whole wallet are
+// shown.
+// The figure columns stay at their figures' width.
 test('a wide log shows the whole transaction id and wallet; Tx and Wallet are wider than the figure columns', async ({ appPage: page, mock }) => {
   const token = await seedPair(page, mock);
   const read = () =>
@@ -353,7 +372,8 @@ test('a wide log shows the whole transaction id and wallet; Tx and Wallet are wi
     await expect(rows(page).first()).toBeVisible();
     await expect(page.getByTestId('activity-wallet').first()).toHaveText(/^q[0-9a-z]{20,}/, { timeout: 15_000 });
     const c = await read();
-    // Amount stops at its figures' width until Tx and Wallet are whole (the slack after that is spread between the columns)
+    // Amount stops at its figures' width until Tx and Wallet are whole (the slack after that is
+    // spread between the columns).
     expect(c.tx, `tx at ${width}`).toBeGreaterThan(c.px * 2.5);
     expect(c.who, `wallet at ${width}`).toBeGreaterThan(c.px * 2.5);
     expect(c.px).toBeLessThanOrEqual(100);
@@ -361,12 +381,14 @@ test('a wide log shows the whole transaction id and wallet; Tx and Wallet are wi
       expect(c.tx).toBeGreaterThan(c.amt * 1.5);
       expect(c.amt).toBeLessThanOrEqual(150);
     }
-    // CI's Linux fonts are wider than Windows': the whole text at 1920 is asserted only where the mono font is the narrow one
+    // CI's Linux fonts are wider than Windows': the whole text at 1920 is asserted only where the
+    // mono font is the narrow one.
     if (width === 1920 && process.env.KOB_WIDE_FONTS !== '1') expect({ txCut: c.txCut, whoCut: c.whoCut }).toEqual({ txCut: false, whoCut: false });
   }
 });
 
-// live updates move nothing on the page: rows sit at fixed heights and slide by a transform, a row is never re-created, the tools keep their place
+// Live updates move nothing on the page: rows sit at fixed heights and slide by a transform, a row
+// is never re-created, the tools keep their place.
 test('20 live updates: no layout shift (CLS 0), rows kept (not re-created), the tools still', async ({ appPage: page, mock }) => {
   test.setTimeout(120_000);
   const token = await seedToken(page, mock);
@@ -376,7 +398,8 @@ test('20 live updates: no layout shift (CLS 0), rows kept (not re-created), the 
   await expect(rows(page)).toHaveCount(20);
   await page.mouse.move(2, 2);
   await page.waitForTimeout(1500);
-  // the tools within the log's card (the book above changes height as its orders fill: the whole card may move, its contents must not)
+  // The tools within the log's card (the book above changes height as its orders fill: the whole
+  // card may move, its contents must not).
   const tools = async () => { const [t, c] = [(await page.locator('.act-tools').boundingBox())!, (await page.getByTestId('activity').boundingBox())!]; return { x: t.x - c.x, y: t.y - c.y }; };
   const toolsBefore = await tools();
   await page.evaluate(() => {
@@ -394,7 +417,7 @@ test('20 live updates: no layout shift (CLS 0), rows kept (not re-created), the 
         }
       }
     }).observe({ type: 'layout-shift', buffered: false });
-    // every row now on screen is marked: a re-created row would lose the mark
+    // Every row now on screen is marked: a re-created row would lose the mark.
     for (const r of document.querySelectorAll('[data-testid="activity-row"]')) (r as unknown as { __kept: boolean }).__kept = true;
   });
   const marked = await attrs(page, 'data-txid');
@@ -405,15 +428,16 @@ test('20 live updates: no layout shift (CLS 0), rows kept (not re-created), the 
     await mock.fill(o.covenant_id);
     await page.waitForTimeout(250);
   }
-  // the newest rows came in above it (it moved down, or off the 20 rows shown)
+  // The newest rows came in above it (it moved down, or off the 20 rows shown).
   await expect.poll(async () => { const i = (await attrs(page, 'data-txid')).indexOf(first!); return i === -1 || i >= 10; }, { timeout: 30_000 }).toBe(true);
   await page.waitForTimeout(1500);
   const cls = await page.evaluate(() => (window as unknown as { __cls: { value: number; log: number; sources: string[] } }).__cls);
   console.log(`CLS over 20 updates: page ${cls.value.toFixed(4)}, from the activity log ${cls.log.toFixed(4)} (shifted: ${[...new Set(cls.sources)].join(', ') || 'none'})`);
-  // nothing in the log shifts; the page's total stays far under the "good" threshold (0.1) though the order book above changes as its orders fill
+  // Nothing in the log shifts. The page's total stays far under the "good" threshold (0.1) though
+  // the order book above changes as its orders fill.
   expect(cls.log).toBe(0);
   expect(cls.value).toBeLessThan(0.05);
-  // rows still on screen are the same nodes
+  // Rows still on screen are the same nodes.
   const kept = await page.evaluate((ids) => ids.filter((id) => { const r = document.querySelector(`[data-testid="activity-row"][data-txid="${id}"]`); return r && !(r as unknown as { __kept?: boolean }).__kept; }), marked);
   expect(kept, 're-created rows').toEqual([]);
   const toolsAfter = await tools();

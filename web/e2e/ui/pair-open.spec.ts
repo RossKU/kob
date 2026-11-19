@@ -1,7 +1,11 @@
-// A token/token pair needs no registry entry: only the token program is reviewed. The pair seed's EXKCC / EXUSD served as an executor serves tokens outside the
-// registry (no ticker, no decimals: the scale of their orders tells them), with an empty registry (the page of a host that ships none) or EXKCC alone listed.
-// The page resolves each token as its own page does, an order of them is decoded against the registry plus BOTH tokens, the final confirmation shows the identity of
-// each, a commitment known without the indexer that differs stops it, and My orders cancels it. A token the page cannot trade yet says why.
+// A token/token pair needs no registry entry: only the token program is reviewed. The pair seed's
+// EXKCC / EXUSD served as an executor serves tokens outside the registry (no ticker, no decimals:
+// the scale of their orders tells them), with an empty registry (the page of a host that ships
+// none) or EXKCC alone listed.
+// The page resolves each token as its own page does, an order of them is decoded against the
+// registry plus BOTH tokens, the final confirmation shows the identity of each, a commitment known
+// without the indexer that differs stops it, and My orders cancels it. A token the page cannot
+// trade yet says why.
 import type { Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { closeBell, test, expect, statusEntry, TEST_KEYS, type MockClient } from '../fixtures';
@@ -14,11 +18,13 @@ test.use({ autoOpen: false });
 
 const QUOTE = 'e7'.repeat(32);
 const NO_ORDER = 'c1'.repeat(32);
-/** EXUSD has 6 decimals: base units per whole EXUSD */
+/** EXUSD has 6 decimals: base units per whole EXUSD. */
 const USD = 1_000_000n;
 const long = (id: string): string => `${id.slice(0, 8)}…${id.slice(-8)}`;
 
-/** The example registry's templates, reviewed, and no token: what a host without a token list ships. */
+/**
+ * The example registry's templates, reviewed, and no token: what a host without a token list ships.
+ */
 async function emptyRegistry(page: Page): Promise<void> {
   const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
   for (const t of reg.templates) t.review_status = 'reviewed';
@@ -28,7 +34,10 @@ async function emptyRegistry(page: Page): Promise<void> {
   );
 }
 
-/** `/v1/tokens` as the executor serves tokens outside the registry; `over` per covenant id (null drops the token from the list); `delayMs` holds the answer back. */
+/**
+ * `/v1/tokens` as the executor serves tokens outside the registry. `over` per covenant id (null
+ * drops the token from the list). `delayMs` holds the answer back.
+ */
 async function openListed(page: Page, ids: readonly string[], over: Record<string, Record<string, unknown> | null> = {}, delayMs = 0): Promise<void> {
   await page.route(/\/v1\/tokens(\?.*)?$/, async (route) => {
     const res = await route.fetch();
@@ -84,14 +93,14 @@ test('both tokens unregistered, no token in the registry: the pair opens, an ord
   await openListed(page, [base, QUOTE], {}, 400);
   await watchNotFound(page);
   await page.goto(`/#/market/${base}/${QUOTE}`);
-  // the token list is on its way: the page waits, it never says the pair does not exist
+  // The token list is on its way: the page waits, it never says the pair does not exist.
   await expect(page.getByTestId('pair-loading')).toBeVisible();
   await expect(page.getByTestId('pair-page')).toBeVisible();
   expect(await sawNotFound(page)).toBe(false);
   await connectWallet(page);
   await expect(page.getByTestId('pair-book')).toBeVisible();
   await expect(page.getByTestId('pair-book').locator('[data-testid="pair-level"][data-source="direct"][data-side="ask"]').last()).toHaveAttribute('data-price', '0.0505');
-  // named by their covenant ids; the ids of both stay on the page
+  // Named by their covenant ids. The ids of both stay on the page.
   await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', `${long(base)}/${long(QUOTE)}`);
   await expect(page.getByTestId('pair-token-details')).toHaveCount(2);
 
@@ -103,7 +112,8 @@ test('both tokens unregistered, no token in the registry: the pair opens, an ord
   expect(Object.keys(rows).sort()).toEqual([`ext-${base}`, `ext-${QUOTE}`].sort());
   expect(rows[`ext-${QUOTE}`]!.text).toContain(long(QUOTE));
   const receipt = await readReceipt(page);
-  // the amounts read as the ticket read them: 8 and 6 decimals, the scales of the two markets; a token without a ticker is named by its id, also as the quote
+  // The amounts read as the ticket read them: 8 and 6 decimals, the scales of the two markets. A
+  // token without a ticker is named by its id, also as the quote.
   expect(receipt.orders[0]!.rows).toMatchObject({
     Pair: `sells ${long(base)} for ${long(QUOTE)} (prices in ${long(QUOTE)} per ${long(base)})`,
     'Base tokens locked in the order': `2 ${long(base)}`,
@@ -123,19 +133,19 @@ test('both tokens unregistered, no token in the registry: the pair opens, an ord
   await expect(row.getByTestId('order-pair')).toContainText(long(QUOTE));
   await page.getByTestId('orders-tab-balances').click();
   await expect(page.getByTestId('balances-panel')).toBeVisible();
-  // a token without a registry entry offers no merge (as in its KAS market)
+  // A token without a registry entry offers no merge (as in its KAS market).
   await expect(page.getByTestId(`balance-row-${base}`)).toBeVisible();
   await expect(page.getByTestId(`orders-merge-token-${base}`)).toHaveCount(0);
   await page.getByTestId('orders-tab-active').click();
 
-  // the amend needs both registry entries: refused in a sentence
+  // The amend needs both registry entries: refused in a sentence.
   await openOrderRow(page, id);
   await page.getByTestId(`order-replace-${id}`).click();
   await expect(page.getByTestId('replace-no-token')).toContainText('cancel the order and place a new one');
   await page.getByTestId('replace-no-token').getByRole('button').first().click();
   await expect(page.getByTestId('replace-no-token')).toHaveCount(0);
 
-  // a stray of the order is swept in place, the order lives on
+  // A stray of the order is swept in place, the order lives on.
   await mock.stray(id, TOKEN);
   await page.getByTestId('orders-refresh').click();
   await expect(page.getByTestId('orders-strays').getByTestId('stray-row')).toHaveCount(1);
@@ -183,7 +193,8 @@ test('only the quote unregistered: a buy escrows it, its identity alone is shown
 test('a quote whose extension commitment differs from the node-verified holdings stops the order before the wallet is asked', async ({ appPage: page, mock, wallet }) => {
   const base = await seedPair(mock, { usd: 10n });
   await listExkcc(page);
-  // the indexer names a look-alike's commitment; the wallet's EXUSD, confirmed on the node, carries the real one
+  // The indexer names a look-alike's commitment. The wallet's EXUSD, confirmed on the node, carries
+  // the real one.
   await openListed(page, [QUOTE], { [QUOTE]: { extension_commitment: 'ab'.repeat(32) } });
   await openPage(page, base);
   await pickType(page, 'limit', 'sell');
@@ -221,11 +232,11 @@ test('a token program this build cannot trade, or one the orders disagree on: th
   await expect(page.getByTestId('not-tradable-page')).toContainText(`${QUOTE.slice(0, 4)}…${QUOTE.slice(-4)}`);
 
   await page.unroute(/\/v1\/tokens(\?.*)?$/);
-  // orders claim several programs: a token output the node confirms decides it
+  // Orders claim several programs: a token output the node confirms decides it.
   await openListed(page, [QUOTE], { [QUOTE]: { template_hash: null, template_id: undefined, program_ambiguous: true } });
   await page.reload();
   await expect(page.getByTestId('pair-page')).toBeVisible();
-  // and with none the page says so, after waiting for that answer
+  // And with none the page says so, after waiting for that answer.
   await page.route(/\/v1\/token-utxos(\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"items":[],"next_cursor":null}' }));
   await page.reload();
   await expect(page.getByTestId('not-tradable-page')).toContainText('more than one token program');
@@ -276,7 +287,8 @@ test('the selectors: an unregistered token is offered next to a token, and a pai
   await expect(page).toHaveURL(new RegExp(`#/market/${base}/${QUOTE}$`));
   await expect(page.getByTestId('pair-page')).toBeVisible();
 
-  // no token list names it: the node confirms the outputs of it the indexer names, and the page keeps it selected
+  // No token list names it: the node confirms the outputs of it the indexer names, and the page
+  // keeps it selected.
   await page.unroute(/\/v1\/tokens(\?.*)?$/);
   await openListed(page, [QUOTE], { [QUOTE]: null });
   await page.reload();

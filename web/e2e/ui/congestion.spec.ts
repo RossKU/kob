@@ -1,7 +1,9 @@
-// The congestion note of the final confirmation: when the node's fee estimate shows contended blocks (the first normal bucket at least 10 percent above the
-// relay floor of 100 sompi per gram) the order's confirmation says KOB transactions are ranked by their storage mass, which the normal fee does not cover, and
-// where the one control is (Settings: "Pay the priority fee"). The ticket itself shows nothing. Nothing when the toggle is already on, when the network is
-// quiet, or when the node has no estimate.
+// The congestion note of the final confirmation: when the node's fee estimate shows contended
+// blocks (the first normal bucket at least 10 percent above the relay floor of 100 sompi per gram)
+// the order's confirmation says KOB transactions are ranked by their storage mass, which the normal
+// fee does not cover, and where the one control is (Settings: "Pay the priority fee"). The ticket
+// itself shows nothing. Nothing when the toggle is already on, when the network is quiet, or when
+// the node has no estimate.
 import type { Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';

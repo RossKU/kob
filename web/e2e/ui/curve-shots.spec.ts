@@ -1,5 +1,7 @@
-// Screenshots only: the book and Open orders with a curve sell order of the wallet (KOB_CURVE=1; without it, the same page before curves), desktop
-// light, desktop dark and a phone, to KOB_SHOTS with the prefix KOB_SHOT_TAG. Skipped without KOB_SHOTS.
+// Screenshots only: the book and Open orders with a curve sell order of the wallet, desktop light,
+// desktop dark and a phone.
+// KOB_CURVE=1 adds the curve order.
+// The files go to KOB_SHOTS with the prefix KOB_SHOT_TAG. Skipped without KOB_SHOTS.
 import { test } from '../fixtures';
 import { listExkcc, connectWallet } from '../helpers/env';
 import { seedPortfolio } from '../helpers/portfolio-seed';
@@ -22,7 +24,8 @@ for (const v of VIEWS) {
     const tok = await mock.token();
     let curveId: string | null = null;
     if (process.env.KOB_CURVE === '1') {
-      // a 20-level curve of 100 EXKCC (2.55 KAS if sold out, last level 1.04x the first: its levels among the plain asks), 3 levels sold
+      // A 20-level curve of 100 EXKCC (2.55 KAS if sold out, last level 1.04x the first: its levels
+      // among the plain asks), 3 levels sold.
       await mock.seed({ orders: [{ token: tok.covenant_id, kind: 'KobCurveAsk', maker: 'alice', amount: '10000000000', levels: 20, total: '255000000', multiple: '1.04' }] });
       const curve = (await mock.ordersOf('alice')).find((o: { contract: string }) => o.contract === 'KobCurveAsk')!.covenant_id as string;
       await mock.fill(curve, 1_500_000_000n);
@@ -41,7 +44,7 @@ for (const v of VIEWS) {
     await page.waitForTimeout(1500);
     await page.screenshot({ path: name('orders'), fullPage: true });
     if (curveId) {
-      // the curve's details: the levels left as a step line
+      // The curve's details: the levels left as a step line.
       await page.getByTestId(`order-toggle-${curveId}`).click();
       const details = page.getByTestId(`order-details-${curveId}`);
       await details.waitFor();

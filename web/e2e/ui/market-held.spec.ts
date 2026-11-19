@@ -1,9 +1,12 @@
-// The connected wallet's own tokens in the market list. The indexer lists only registry tokens and
-// tokens that have had an order placed, so a token just created, or one in a wallet with no order
-// ever placed, had no row there and its holder could not find its market. Each such token now has a
-// row in that wallet's own list, marked "Held", named by its verified KCC-23 declaration, with "—"
-// for its figures; its market takes the first order. Nobody else's list changes. The list's filters
-// are one menu, on a desktop and on a 390 px phone. Against the mock stack.
+// The connected wallet's own tokens in the market list.
+// The indexer lists only registry tokens and tokens that have had an order placed.
+// A token just created, or one in a wallet with no order ever placed, has no indexer row, so its
+// holder could not find its market.
+// Each such token has a row in that wallet's own list, marked "Held", named by its verified KCC-23
+// declaration, with "—" for its figures.
+// Its market takes the first order. Nobody else's list changes.
+// The list's filters are one menu, on a desktop and on a 390 px phone.
+// Against the mock stack.
 import { join } from 'node:path';
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
@@ -44,7 +47,7 @@ async function seedHoldings(mock: MockClient): Promise<string> {
 
 /**
  * Creates a token in the app (KCC-23: a declaration, then the genesis) as alice, who holds all of
- * it; returns its covenant id.
+ * it. Returns its covenant id.
  */
 async function createToken(page: Page, mock: MockClient): Promise<string> {
   await mock.giveKas('alice', 500n * KAS);
@@ -68,7 +71,7 @@ async function createToken(page: Page, mock: MockClient): Promise<string> {
 test('a token just created is in its holder\'s list, marked Held and named by its declaration; its market takes the first order', async ({ appPage: page, mock }) => {
   await listExkcc(page);
   const id = await createToken(page, mock);
-  // the indexer lists no order of it, so its token list does not name it
+  // The indexer lists no order of it, so its token list does not name it.
   expect((await mock.tokens()).map((t) => t.covenant_id)).not.toContain(id);
 
   await page.goto('/#/market');
@@ -77,22 +80,22 @@ test('a token just created is in its holder\'s list, marked Held and named by it
   await expect(row).toHaveAttribute('data-source', 'held');
   await expect(row).toHaveAttribute('data-held', '1');
   await expect(page.getByTestId(`token-held-${id}`)).toHaveText('Held');
-  // named by its verified declaration, as its page names it
+  // Named by its verified declaration, as its page names it.
   await expect(page.getByTestId(`token-link-${id}`)).toHaveText('HELDX');
   await expect(page.getByTestId(`token-name-${id}`)).toContainText('Held Example Coin');
-  // no order is known: every figure reads "—"
+  // No order is known: every figure reads "—".
   for (const f of ['last', 'change', 'volume', 'mcap', 'spread', 'depth']) await expect(page.getByTestId(`token-${f}-${id}`)).toHaveText('—');
   await shot(page, 'list-held-row-1280');
 
-  // the Held filter keeps the wallet's tokens only
+  // The Held filter keeps the wallet's tokens only.
   await toggleListFilter(page, 'token-list-held');
   await expect(page.getByTestId('token-list-filter-count')).toHaveText('1');
   expect(await rowIds(page)).toEqual([id]);
   await toggleListFilter(page, 'token-list-held');
   await expect(page.getByTestId('token-list-filter-count')).toHaveCount(0);
 
-  // its market opens from the row, and its ticket takes the first order: a sell of what the wallet
-  // holds
+  // Its market opens from the row, and its ticket takes the first order: a sell of what the wallet
+  // holds.
   await page.getByTestId(`token-link-${id}`).click();
   await expect(page.getByTestId('token-page')).toBeVisible();
   await expect(page.getByTestId('token-not-found')).toHaveCount(0);
@@ -112,8 +115,8 @@ test('the rows are only in the holder\'s own view; a token without a declaration
   await page.goto('/#/market');
   await expect(page.getByTestId(`token-row-${exkcc}`)).toBeVisible();
 
-  // without a wallet: no Held filter, no mark, and the token no list names is found by nothing, a
-  // search by its id included
+  // Without a wallet: no Held filter, no mark, and the token no list names is found by nothing, a
+  // search by its id included.
   await expect((await openListFilter(page)).getByTestId('token-list-held')).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(page.getByTestId(`token-held-${exkcc}`)).toHaveCount(0);
@@ -121,8 +124,8 @@ test('the rows are only in the holder\'s own view; a token without a declaration
   await expect(page.getByTestId('token-list-empty')).toBeVisible();
   await page.getByTestId('token-search').fill('');
 
-  // alice connects: the listed token she holds is marked; hers without a name waits for "show
-  // nameless"; bob's is never there
+  // Alice connects: the listed token she holds is marked. Hers without a name waits for "show
+  // nameless". Bob's is never there.
   await connectWallet(page);
   await expect(page.getByTestId(`token-held-${exkcc}`)).toHaveText('Held', { timeout: 20_000 });
   await expect(page.getByTestId(`token-row-${MINE}`)).toHaveCount(0);
@@ -134,16 +137,16 @@ test('the rows are only in the holder\'s own view; a token without a declaration
   await expect(page.getByTestId(`token-held-${MINE}`)).toHaveText('Held');
   await expect(page.getByTestId(`token-row-${BOBS}`)).toHaveCount(0);
 
-  // Held and "show nameless" together: the wallet's two tokens
+  // Held and "show nameless" together: the wallet's two tokens.
   await toggleListFilter(page, 'token-list-held');
   await expect(page.getByTestId('token-list-filter-count')).toHaveText('2');
   expect((await rowIds(page)).sort()).toEqual([exkcc, MINE].sort());
-  // without "show nameless" the Held view keeps the named one
+  // Without "show nameless" the Held view keeps the named one.
   await toggleListFilter(page, 'token-list-nameless');
   expect(await rowIds(page)).toEqual([exkcc]);
   await toggleListFilter(page, 'token-list-nameless');
 
-  // the wallet leaves: its rows, its marks and its filter go with it
+  // The wallet leaves: its rows, its marks and its filter go with it.
   await disconnectWallet(page);
   await expect(page.getByTestId(`token-row-${MINE}`)).toHaveCount(0);
   await expect(page.getByTestId(`token-held-${exkcc}`)).toHaveCount(0);
@@ -175,21 +178,21 @@ for (const vp of [
       const items = panel.getByRole('menuitemcheckbox');
       await expect(items).toHaveText(['Favorites', 'Held', 'Show tokens without a name (1)']);
       await expect(items.first()).toBeFocused();
-      // the panel stands in the window, and the page does not scroll sideways
+      // The panel stands in the window, and the page does not scroll sideways.
       const box = (await panel.boundingBox())!;
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(vp.width);
       expect(await horizontalOverflow(page)).toBe(0);
       await shot(page, `filter-menu-${vp.tag}`);
 
-      // the keys: the arrows move, Escape closes and gives the focus back
+      // The keys: the arrows move, Escape closes and gives the focus back.
       await page.keyboard.press('ArrowDown');
       await expect(panel.getByTestId('token-list-held')).toBeFocused();
       await page.keyboard.press('Escape');
       await expect(panel).toHaveCount(0);
       await expect(face).toBeFocused();
 
-      // two filters on: the button says so, the entries are checked, Clear switches them off
+      // Two filters on: the button says so, the entries are checked, Clear switches them off.
       await toggleListFilter(page, 'token-list-held');
       await toggleListFilter(page, 'token-list-favorites');
       await expect(page.getByTestId('token-list-filter-count')).toHaveText('2');

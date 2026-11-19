@@ -1,5 +1,7 @@
-// The app's drop-down (ui/kit/Dropdown.tsx) in a page: what a screen reader is told, the keys, and that the list is whole and on screen, on a phone and at the bottom of the
-// window too. What each key does in every state is unit tested (src/ui/kit/dropdown-model.test.ts); here the focus, the portal and the layout, which need a browser.
+// The app's drop-down (ui/kit/Dropdown.tsx) in a page: what a screen reader is told, the keys, and
+// that the list is whole and on screen, on a phone and at the bottom of the window too. What each
+// key does in every state is unit tested (src/ui/kit/dropdown-model.test.ts). Here the focus, the
+// portal and the layout, which need a browser.
 import type { Locator, Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { chooseOption, optionValues, readOptions } from '../helpers/dropdown';
@@ -8,14 +10,20 @@ import { horizontalOverflow } from '../helpers/i18n';
 
 const activeValue = (page: Page) => page.locator('.picker-option.is-active').getAttribute('data-value');
 
-/** Scrolls the page until the button stands at the bottom of the window (a padding on top gives a button high on the page the room). */
+/**
+ * Scrolls the page until the button stands at the bottom of the window (a padding on top gives a
+ * button high on the page the room).
+ */
 const toBottom = (face: Locator) =>
   face.evaluate((el) => {
     document.body.style.paddingTop = `${window.innerHeight}px`;
     window.scrollBy(0, el.getBoundingClientRect().bottom - window.innerHeight + 16);
   });
 
-/** The panel is inside the window and the last row, scrolled to, is the element a press there reaches: nothing cuts it or stands over it. */
+/**
+ * The panel is inside the window and the last row, scrolled to, is the element a press there
+ * reaches: nothing cuts it or stands over it.
+ */
 async function expectWhole(page: Page, panel: Locator): Promise<void> {
   const size = page.viewportSize()!;
   const box = (await panel.boundingBox())!;

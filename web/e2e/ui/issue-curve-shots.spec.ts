@@ -1,5 +1,6 @@
-// Screenshots of Create token with its "After creation" choice (desktop light and dark, phone). `KOB_CURVE_SHOTS`: the folder;
-// `KOB_CURVE_PHASE=before` takes the page as it was before the choice existed (nothing is selected).
+// Screenshots of Create token with its "After creation" choice (desktop light and dark, phone).
+// `KOB_CURVE_SHOTS` is the folder.
+// `KOB_CURVE_PHASE=before` tags the files "before" and selects nothing.
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from '@playwright/test';

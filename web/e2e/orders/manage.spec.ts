@@ -1,6 +1,7 @@
-// Managing placed orders through the UI (mock KasWare wallet, default mock seed): cancel (single, partly filled), cancel-replace, cancel-all of a
-// position / a token / everything, refund of an expired own order, stray sweep, the escrowed-balances panel, and the recovery paths (export, clear
-// local data, import; My orders with the indexer down from placement records + the node).
+// Managing placed orders through the UI (mock KasWare wallet, default mock seed): cancel (single,
+// partly filled), cancel-replace, cancel-all of a position / a token / everything, refund of an
+// expired own order, stray sweep, the escrowed-balances panel, and the recovery paths (export,
+// clear local data, import; My orders with the indexer down from placement records + the node).
 import { readFileSync } from 'node:fs';
 import { test, expect, type MockClient } from '../fixtures';
 import { KAS, TOKEN, connectWallet, fund, openMarket, gotoNav, gotoOrders, openOrdersSettings } from '../helpers/env';
@@ -10,7 +11,10 @@ import { fillFields, pickType, placeOrder, type Placed } from '../helpers/ticket
 test.use({ autoOpen: false });
 
 const tokens = async (mock: MockClient) => BigInt((await mock.balance('alice')).tokens.EXKCC ?? '0');
-/** Token amount a transaction pays out to `owner` (wallet-owned outputs only, never covenant custody). */
+/**
+ * Token amount a transaction pays out to `owner` (wallet-owned outputs only, never covenant
+ * custody).
+ */
 const tokensTo = (placed: Placed, owner: string): bigint => placed.submission.token_outputs.filter((o) => o.role === 'owned' && o.owner === owner).reduce((a, o) => a + BigInt(o.amount), 0n);
 
 test.describe('cancel', () => {
@@ -32,8 +36,8 @@ test.describe('cancel', () => {
 
     expect((await mock.order(id)).status).toBe('cancelled');
     expect(await tokens(mock)).toBe(3n * TOKEN);
-    // its card sits top right just under the header, clear of the header and its wallet chip (founder 2026-11-14; review L-02); while it is on
-    // screen no toast shows (the card says it is done)
+    // its card sits top right just under the header, clear of the header and its wallet chip
+    // while it is on screen no toast shows (the card says it is done)
     const toast = page.getByTestId('tx-flow');
     await expect(toast).toBeVisible();
     await expect(page.locator('[data-testid="toast-host"] > .toast:not(.send-toast)')).toHaveCount(0);
@@ -73,11 +77,13 @@ test.describe('cancel', () => {
     await expect(page.getByTestId('amend-preview')).toContainText('0.0272');
     await page.getByTestId('amend-review').click();
     const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
-    // in place (AMEND record): nothing is closed or created, the same covenant id continues with the new price
+    // in place (AMEND record): nothing is closed or created, the same covenant id continues with
+    // the new price
     expect(placed!.submission.records.map((r) => r.type)).toContain('amend');
     expect(placed!.submission.closed).toEqual([]);
     expect(placed!.submission.created).toEqual([]);
-    // the amended order keeps the old order's scale (1e8 base units, one whole token): 0.0272 KAS per token = 2_720_000 sompi
+    // the amended order keeps the old order's scale (1e8 base units, one whole token): 0.0272 KAS
+    // per token = 2_720_000 sompi
     const now = await mock.until(() => mock.order(id), (o) => o.state?.state?.price === '2720000');
     expect(now.state.state).toMatchObject({ price: '2720000', scale: '100000000', amountLeft: String(3n * TOKEN) });
     expect(now.status).toBe('open');
@@ -87,7 +93,8 @@ test.describe('cancel', () => {
     await expect(page.getByTestId(`order-row-${id}`).getByTestId('order-price')).toContainText('0.0272');
   });
 
-  // B1: a plain bid is amended in place too (it owns no custody: its quantity is its escrow, which pays the fee)
+  // A plain bid is amended in place too (it owns no custody: its quantity is its escrow, which
+  // pays the fee)
   test('amend the price of a bid: amended IN PLACE, the order keeps its id, the escrow pays the fee', async ({ appPage: page, mock, wallet }) => {
     const [id] = await seedOrders(mock, [{ side: 'bid', price: 2_400_000, tokens: 2 }]);
     await openOrders(page, mock);
@@ -128,7 +135,8 @@ test.describe('cancel', () => {
     await expect(dialog.getByTestId('replace-review')).toBeEnabled({ timeout: 30_000 });
     await dialog.getByTestId('replace-review').click();
     const [amended] = await runFlow(page, mock, wallet, { steps: 1 });
-    // amended in place: the same covenant id continues as a TWAP with the same slice and interval, at the new price
+    // amended in place: the same covenant id continues as a TWAP with the same slice and interval,
+    // at the new price
     expect(amended!.submission.records.map((r) => r.type)).toContain('amend');
     expect(amended!.submission.closed).toEqual([]);
     const after = (await mock.until(() => mock.order(id), (o) => o.state?.state?.price === '2720000')).state.state;
@@ -170,7 +178,8 @@ test.describe('cancel', () => {
     await fillFields(page, { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026' });
     const entry = await placeOrder(page, mock);
     const entryId = entry.views[0].covenant_id;
-    // a fill of the entry books its exit order (one whole token: the position now has an entry with 1 EXKCC left and an exit for 1 EXKCC)
+    // a fill of the entry books its exit order (one whole token: the position now has an entry with
+    // 1 EXKCC left and an exit for 1 EXKCC)
     await mock.fill(entryId);
     const kids = await mock.until(async () => (await mock.order(entryId)).children as string[], (c) => c.length === 1);
     const exitId = kids[0]!;
@@ -191,7 +200,8 @@ test.describe('cancel', () => {
     const st = await statusesOf(mock, 'alice');
     expect(st[entryId]).toBe('cancelled');
     expect(st[exitId]).toBe('cancelled');
-    // everything the position held returns to alice (the 1 token the fill bought is back in her wallet)
+    // everything the position held returns to alice (the 1 token the fill bought is back in her
+    // wallet)
     expect(await tokens(mock)).toBe(101n * TOKEN);
   });
 
@@ -337,7 +347,8 @@ test.describe('recovery', () => {
     await page.goto('/#/portfolio');
     await page.reload();
     await connectWallet(page);
-    // the page knows the indexer is gone (the header's dot says it; no warning of its own on the page)
+    // the page knows the indexer is gone (the header's dot says it; no warning of its own on the
+    // page)
     await expect(page.getByTestId('status-dot')).toHaveAttribute('data-indexer-code', 'unreachable', { timeout: 30_000 });
     await expect(page.getByTestId('orders-indexer-down')).toHaveCount(0);
     await openOrdersSettings(page);
@@ -380,7 +391,8 @@ test.describe('recovery', () => {
     await expect(row.getByTestId('order-source')).toBeVisible();
     await expect(row.getByTestId('order-price')).toContainText('0.0245');
 
-    // the stray tokens owned by the order cannot be read without the indexer: the cancel goes ahead on the records and the node alone
+    // the stray tokens owned by the order cannot be read without the indexer: the cancel goes ahead
+    // on the records and the node alone
     await page.getByTestId(`order-cancel-${id}`).click();
     const [cancel] = await runFlow(page, mock, wallet, { steps: 1 });
     expect(cancel!.submission.closed).toEqual([{ covenantId: id, entry: 'cancel', status: 'cancelled' }]);

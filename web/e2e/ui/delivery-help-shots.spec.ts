@@ -1,5 +1,6 @@
-// Screenshots and a video of the Delivery help (DeliveryHelp.tsx) for review: desktop light mid-animation with one loop on video, desktop dark,
-// phone light. Not a test of anything; skipped without KOB_DELIVERY_SHOTS=<dir>.
+// Screenshots and a video of the Delivery help (DeliveryHelp.tsx) for review: desktop light
+// mid-animation with one loop on video, desktop dark, phone light. Not a test of anything. Skipped
+// without KOB_DELIVERY_SHOTS=<dir>.
 import { expect, test } from '../fixtures';
 import { pickType } from '../helpers/ticket';
 import { openStd } from '../helpers/delivery';
@@ -25,7 +26,7 @@ for (const v of [{ theme: 'light', width: 1280, name: 'help-desktop-light' }, { 
     const help = page.getByTestId('delivery-help');
     const caption = help.getByTestId('delivery-help-caption');
     if (v.name === 'help-desktop-light') {
-      // one whole loop on the video, then the shot mid-animation
+      // One whole loop on the video, then the shot mid-animation.
       await expect(caption).toHaveText('Order ends', { timeout: 10_000 });
       await expect(caption).toHaveText('Fill 2 of 3', { timeout: 10_000 });
       await page.waitForTimeout(500);
@@ -34,7 +35,7 @@ for (const v of [{ theme: 'light', width: 1280, name: 'help-desktop-light' }, { 
       await help.getByTestId('delivery-help-play').click();
       await page.waitForTimeout(800);
     }
-    // a phone shows the dialog as it scrolls on screen; a desktop the whole dialog
+    // A phone shows the dialog as it scrolls on screen. A desktop the whole dialog.
     if (v.width < 600) await page.screenshot({ path: `${shots}/delivery-${v.name}.png` });
     else await help.screenshot({ path: `${shots}/delivery-${v.name}.png` });
     const video = page.video();

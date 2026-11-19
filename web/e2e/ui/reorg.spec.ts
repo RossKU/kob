@@ -1,5 +1,7 @@
-// Chain re-organisations: a routine (shallow) one is silent, a deep one shows a subtle header indicator, and one that undoes something of the user's own
-// (a fill they were told about) is a notification that says exactly what changed. There is no global re-org banner.
+// Chain re-organisations: a routine (shallow) one is silent, a deep one shows a subtle header
+// indicator, and one that undoes something of the user's own.
+// (a fill they were told about) is a notification that says exactly what changed. There is no
+// global re-org banner.
 import type { Page } from '@playwright/test';
 import { expect, openBell, statusEntry, test, TEST_KEYS, type MockClient } from '../fixtures';
 import { TESTID, orderRow } from '../testids';
@@ -17,7 +19,10 @@ async function closePanel(page: Page) {
   await expect(page.getByTestId('notify-panel')).toHaveCount(0);
 }
 
-/** Turns the in-app notifications on from the bell and waits for the first poll (the baseline) to be stored. */
+/**
+ * Turns the in-app notifications on from the bell and waits for the first poll (the baseline) to be
+ * stored.
+ */
 async function enableNotifications(page: Page) {
   await page.getByTestId('notify-bell').click();
   await page.getByTestId('notify-enable').click();
@@ -80,7 +85,7 @@ test.describe('chain re-organisations', () => {
     await expect(item).toContainText('was reverted by a chain reorganisation');
     await expect(item).toContainText('The order is open again');
 
-    // the same state on the next polls does not repeat it
+    // The same state on the next polls does not repeat it.
     await closePanel(appPage);
     await mock.reorg(1);
     await appPage.waitForTimeout(1500);

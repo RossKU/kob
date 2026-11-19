@@ -1,46 +1,56 @@
-// Smoke specs of the shell and the market views against the mock stack (seeded book: token EXKCC, 10 levels per side, 8 fills).
-// Per-order-type specs belong to the ticket work; here: the list, the token page, live status, wallet, the shared-ticker note, health entries of the bell.
+// Smoke specs of the shell and the market views against the mock stack (seeded book: token EXKCC,
+// 10 levels per side, 8 fills).
+// Per-order-type specs belong to the ticket work. Here: the list, the token page, live status,
+// wallet, the shared-ticker note, health entries of the bell.
 import { expect, test, TEST_KEYS, closeBell, statusEntry } from '../fixtures';
 import { TESTID } from '../testids';
 import { clickConnectOption, disconnectWallet } from '../helpers/env';
 
-/** The seeded token as the mock indexer reports it (prices: sompi per whole token, i.e. per 1e8 base units). */
+/**
+ * The seeded token as the mock indexer reports it (prices: sompi per whole token, i.e. per 1e8 base
+ * units).
+ */
 async function seeded(mock: import('../fixtures').MockClient) {
   const tok = await mock.token();
   return { id: tok.covenant_id, short: `${tok.covenant_id.slice(0, 4)}…${tok.covenant_id.slice(-4)}` };
 }
 
-// `/` is the landing page (config `home`, default `landing`: landing.spec.ts); the token list lives at `#/market`
+// `/` is the landing page (config `home`, default `landing`: landing.spec.ts). The token list lives
+// at `#/market`.
 test.describe('shell and token list', () => {
   test.use({ appPath: '/#/market' });
 
   test('lists the registry token as its ticker over its shortened covenant id (copyable) with no verification wording', async ({ appPage, mock }) => {
-    // a row rises in: its parts are measured at rest
+    // A row rises in: its parts are measured at rest.
     await appPage.emulateMedia({ reducedMotion: 'reduce' });
     const { id } = await seeded(mock);
     await expect(appPage.getByTestId(TESTID.navMarket)).toHaveAttribute('aria-current', 'page');
     const row = appPage.getByTestId(`token-row-${id}`);
     await expect(row).toBeVisible();
     await expect(row.getByTestId(`token-link-${id}`)).toHaveText('EXKCC');
-    // the identity block: the icon and the fingerprint of the covenant id (its three words are the tooltip and the accessible name)
+    // The identity block: the icon and the fingerprint of the covenant id (its three words are the
+    // tooltip and the accessible name).
     await expect(row.getByTestId(`identity-${id}`)).toBeVisible();
     {
-      // the fingerprint is 60 % of the icon and centred on it
+      // The fingerprint is 60 % of the icon and centred on it.
       const [icon, fp] = await Promise.all([`token-icon-${id}`, `fingerprint-${id}`].map((t) => row.getByTestId(t).boundingBox()));
       expect(Math.abs(fp!.height / icon!.height - 0.6)).toBeLessThan(0.03);
       expect(Math.abs(fp!.y + fp!.height / 2 - (icon!.y + icon!.height / 2))).toBeLessThan(1.5);
     }
     await expect(row.getByTestId(`fingerprint-${id}`)).toHaveAttribute('aria-label', /^Covenant id fingerprint: [a-z]+ [a-z]+ [a-z]+$/);
-    // token issuance is permissionless and KOB makes no per-token judgement: the row never says verified / official / pending review (a token whose genesis check could not run shows no status at all)
+    // Token issuance is permissionless and KOB makes no per-token judgement: the row never says
+    // verified / official / pending review (a token whose genesis check could not run shows no
+    // status at all).
     await expect(row).not.toContainText(/unverified|(?<!Genesis not )verified|official|pending review|registry/i);
     await expect(row.getByTestId('badge-family')).toBeVisible();
     for (const badge of ['verified', 'unverified', 'official', 'pending-review', 'custom-registry', 'not-in-registry']) await expect(row.getByTestId(`badge-${badge}`)).toHaveCount(0);
     await expect(row.locator('[data-testid^="shared-ticker-"]')).toHaveCount(0); // a unique ticker has no note
     await expect(row).toHaveAttribute('data-tradable', '1');
-    // the indexer's open order counts are merged in (the split is in the depth cell's tooltip)
+    // The indexer's open order counts are merged in (the split is in the depth cell's tooltip).
     await expect(row.getByTestId(`token-depth-${id}`)).toHaveAttribute('title', /KAS · 11 asks · 11 bids$/);
-    // the covenant id is shortened (8 + 8 hex), monospace, with the whole id in its tooltip and behind the copy button; there is no id column, no
-    // market / pair column and no size-convention column; the figure headers sort (the list opens by 24 h volume) and the badges sit by the id
+    // The covenant id is shortened (8 + 8 hex), monospace, with the whole id in its tooltip and
+    // behind the copy button. There is no id column, no market / pair column and no size-convention
+    // column. The figure headers sort (the list opens by 24 h volume) and the badges sit by the id.
     const hash = row.getByTestId(`token-hash-${id}`);
     await expect(hash).toHaveText(`${id.slice(0, 12)}…${id.slice(-12)}`);
     await expect(hash).toHaveAttribute('title', id);
@@ -50,11 +60,12 @@ test.describe('shell and token list', () => {
     await expect(appPage.locator('[data-testid="token-table"] thead th')).toHaveText([/^Token/, /^Price \(KAS\)/, /^24h/, /^24h volume \(KAS\)/, /^Market cap \(KAS\)/, /^Spread/, /^Depth ±2% \(KAS\)/]);
     await expect(row.locator('[data-testid^="token-pair-"]')).toHaveCount(0);
     await expect(appPage.getByTestId('network-badge')).toHaveText('testnet-10');
-    // an app page has ONE compact footer line (the paragraph and the non-custodial statement are on the Disclaimer page and the landing page)
+    // An app page has ONE compact footer line (the paragraph and the non-custodial statement are on
+    // the Disclaimer page and the landing page).
     await expect(appPage.getByTestId('footer-statement')).toHaveCount(0);
     await expect(appPage.getByTestId('footer-disclaimer')).toBeVisible();
     expect((await appPage.getByTestId('footer').boundingBox())!.height).toBeLessThan(80);
-    // the app's version; the engine of an unreleased build (0.0.0) is not shown as a version
+    // The app's version. The engine of an unreleased build (0.0.0) is not shown as a version.
     await expect(appPage.getByTestId('footer-versions')).toContainText(/^App \d+\.\d+\.\d+/);
     await expect(appPage.getByTestId('footer-versions')).not.toContainText('0.0.0');
   });
@@ -109,7 +120,7 @@ test.describe('shell and token list', () => {
       const withNote = await measure(size);
       const tag = appPage.getByTestId('market-bar').getByTestId('token-shared-ticker');
       await expect(tag).toBeVisible();
-      // one line, inside the bar
+      // One line, inside the bar.
       const [tb, bb] = await Promise.all([tag.boundingBox(), appPage.getByTestId('market-bar').boundingBox()]);
       expect(tb!.height).toBeLessThan(16);
       expect(tb!.y).toBeGreaterThanOrEqual(bb!.y);
@@ -122,7 +133,8 @@ test.describe('shell and token list', () => {
     const { id } = await seeded(mock);
     const twin = 'bb'.repeat(32);
     const solo = 'dd'.repeat(32);
-    // the twin is found through the indexer only (no registry entry) and reads EXKCC in a different case; SOLO is unique
+    // The twin is found through the indexer only (no registry entry) and reads EXKCC in a different
+    // case. SOLO is unique.
     await mock.seed({ tokens: [
       { ticker: 'exkcc', covenant_id: twin, extension_commitment: 'cc'.repeat(32), decimals: 8 },
       { ticker: 'SOLO', covenant_id: solo, extension_commitment: 'cc'.repeat(32), decimals: 8 },
@@ -134,7 +146,8 @@ test.describe('shell and token list', () => {
     const soloRow = appPage.getByTestId(`token-row-${solo}`);
     await expect(twinRow).toBeVisible();
     await expect(twinRow).toHaveAttribute('data-source', 'indexer');
-    // a list row carries no ticker warning: the fingerprints beside the two tickers differ, and the short covenant id is under each
+    // A list row carries no ticker warning: the fingerprints beside the two tickers differ, and the
+    // short covenant id is under each.
     for (const r of [regRow, twinRow]) {
       await expect(r.locator('[data-testid^="shared-ticker-"]')).toHaveCount(0);
       await expect(r).not.toContainText('Another token');
@@ -142,16 +155,17 @@ test.describe('shell and token list', () => {
     expect(await regRow.getByTestId(`fingerprint-${id}`).getAttribute('data-words')).not.toBe(await twinRow.getByTestId(`fingerprint-${twin}`).getAttribute('data-words'));
     await expect(soloRow).toBeVisible();
     await expect(soloRow.locator('[data-testid^="shared-ticker-"]')).toHaveCount(0);
-    // no row says whether a token is verified or official
+    // No row says whether a token is verified or official.
     for (const r of [regRow, twinRow, soloRow]) await expect(r).not.toContainText(/unverified|(?<!Genesis not )verified|official|pending review|NOT that token/i);
-    // the token page header of the registry token repeats the note; the ticket under it stays free of it
+    // The token page header of the registry token repeats the note. The ticket under it stays free
+    // of it.
     await regRow.getByTestId(`token-link-${id}`).click();
     const tag = appPage.getByTestId('market-bar').getByTestId('token-shared-ticker');
     await expect(tag).toHaveText(/Shared ticker: check the covenant id/);
     await expect(tag).toHaveAttribute('title', note);
     await expect(appPage.getByTestId('ticket-container')).toBeVisible();
     await expect(appPage.getByTestId('ticket-container')).not.toContainText(note);
-    // the unique ticker's page has none
+    // The unique ticker's page has none.
     await appPage.goto(`/#/market/${solo}`);
     await expect(appPage.getByTestId('token-header')).toBeVisible();
     await expect(appPage.getByTestId('token-shared-ticker')).toHaveCount(0);
@@ -161,7 +175,7 @@ test.describe('shell and token list', () => {
     const other = 'dd'.repeat(32);
     await mock.seed({ tokens: [{ ticker: 'NEWT', covenant_id: other, extension_commitment: 'cc'.repeat(32), decimals: 8 }] });
     await appPage.reload();
-    // it is already listed by the indexer; paste an id the indexer does not know first
+    // It is already listed by the indexer. Paste an id the indexer does not know first.
     await appPage.getByTestId('add-token').getByRole('button').first().click();
     await appPage.getByTestId('token-add-input').fill('ee'.repeat(32));
     await appPage.getByTestId('token-add-button').click();
@@ -188,17 +202,19 @@ test.describe('token page', () => {
     const bids = appPage.getByTestId(TESTID.bookBids).getByTestId('book-bid-row');
     await expect(asks).toHaveCount(10);
     await expect(bids).toHaveCount(10);
-    // asks are displayed with the highest price at the top, the best ask right above the spread; bids best first
+    // Asks are displayed with the highest price at the top, the best ask right above the spread.
+    // Bids best first.
     const askPrices = (await asks.evaluateAll((els) => els.map((e) => BigInt((e as HTMLElement).dataset.price!)))) as bigint[];
     const bidPrices = (await bids.evaluateAll((els) => els.map((e) => BigInt((e as HTMLElement).dataset.price!)))) as bigint[];
     expect([...askPrices].sort((a, b) => (a > b ? -1 : 1))).toEqual(askPrices);
     expect([...bidPrices].sort((a, b) => (a > b ? -1 : 1))).toEqual(bidPrices);
-    // 2_510_000 sompi per whole token at the touch (0.0251 KAS); bids 2_490_000
+    // 2_510_000 sompi per whole token at the touch (0.0251 KAS). Bids 2_490_000.
     expect(askPrices.at(-1)).toBe(2_510_000n);
     expect(bidPrices[0]).toBe(2_490_000n);
     await expect(appPage.getByTestId('book-mid')).toHaveAttribute('data-value', '2500000');
     await expect(appPage.getByTestId('book-spread')).toContainText('0.0002');
-    // fixed decimals per column: every price, size and total of the book has the same number of decimals, right-aligned
+    // Fixed decimals per column: every price, size and total of the book has the same number of
+    // decimals, right-aligned.
     for (const col of [1, 2, 3]) {
       const texts = await appPage.locator('[data-testid="book-asks"] .book-row:not(.book-blank), [data-testid="book-bids"] .book-row:not(.book-blank)').evaluateAll((els, n) => els.map((e) => (e.children[n] as HTMLElement).textContent ?? ''), col);
       const dec = new Set(texts.map((x) => (x.replace(/^~/, '').includes('.') ? x.replace(/^~/, '').split('.')[1]!.length : 0)));
@@ -206,19 +222,20 @@ test.describe('token page', () => {
       expect(dec.size, `column ${col}: ${texts.join(' | ')}`).toBe(1);
     }
     expect(await asks.last().locator('.book-price').evaluate((e) => getComputedStyle(e).textAlign)).toBe('right');
-    // the touch level holds two orders (7 EXKCC at 0.0251)
+    // The touch level holds two orders (7 EXKCC at 0.0251).
     await expect(asks.last()).toHaveAttribute('data-amount', '700000000');
     await expect(asks.last()).toContainText('2');
-    // the bar of the deepest cumulative level is full width
+    // The bar of the deepest cumulative level is full width.
     await expect(bids.last().locator('.book-bar, i')).toHaveAttribute('style', /width:\s*(100|9\d(\.\d+)?)%/);
     await appPage.getByTestId('book-view-depth').click();
     await expect(appPage.getByTestId('depth-chart').locator('svg')).toBeVisible();
     await appPage.getByTestId('book-view-book').click();
 
-    // the activity log under the grid: the 8 seeded fills (Executions: the fills alone)
+    // The activity log under the grid: the 8 seeded fills (Executions: the fills alone).
     await appPage.getByTestId('activity-actor-executions').click();
     await expect(appPage.getByTestId(TESTID.activityList).locator('[data-testid=activity-row][data-kind=fill]')).toHaveCount(8);
-    // clicking a level prefills the ticket (a stub until the ticket lands): it must not break the page
+    // Clicking a level prefills the ticket (a stub until the ticket lands): it must not break the
+    // page.
     await asks.last().click();
     await expect(appPage.getByTestId('token-page')).toBeVisible();
   });
@@ -229,7 +246,7 @@ test.describe('token page', () => {
     await expect(appPage.getByTestId('token-page')).toBeVisible();
     await expect(appPage.getByTestId('token-back')).toHaveCount(0);
     await expect(appPage.getByTestId('token-page').getByText('All tokens')).toHaveCount(0);
-    // the first thing in the page is the title bar
+    // The first thing in the page is the title bar.
     const page = (await appPage.getByTestId('token-page').boundingBox())!;
     const title = (await appPage.getByTestId('market-pair').boundingBox())!;
     expect(title.y - page.y).toBeLessThan(40);
@@ -245,8 +262,9 @@ test.describe('token page', () => {
     await expect(appPage.getByTestId('token-header')).not.toContainText(/unverified|(?<!Genesis not )verified|official|pending review/i);
     await expect(appPage.getByTestId('ticket-unavailable')).toHaveCount(0);
     await expect(appPage.getByTestId('ticket-container')).toBeVisible();
-    // an unknown tick is no row (not "Tick: -"); the Program row is one plain line (what it runs, how that was established), and the template checks are
-    // folded in "Status and checks" (one line while folded, never a panel as tall as the facts beside it), the verdict inside
+    // An unknown tick is no row (not "Tick: -"). The Program row is one plain line (what it runs,
+    // how that was established), and the template checks are folded in "Status and checks" (one
+    // line while folded, never a panel as tall as the facts beside it), the verdict inside.
     await expect(appPage.getByTestId('token-tick')).toHaveCount(0);
     await expect(appPage.getByTestId('token-details')).not.toContainText('Tick');
     await expect(appPage.getByTestId('token-program')).toHaveText('KCC-20 (KOB reference, 8x8) · template matched');
@@ -281,7 +299,8 @@ test.describe('token page', () => {
     await expect(appPage.getByTestId('live-indicator')).toContainText('5 s', { timeout: 15_000 });
   });
 
-  // TN10 2026-10-15 O-3: every earlier order of the token had ended at scale 10^6 and the page offered a "first order" with entered decimals again
+  // A token whose every order has ended at scale 10^6 keeps that scale: the page must not offer a
+  // "first order" with entered decimals again.
   test('an open-list token whose every order has ended keeps the scale its first order set: the ticket, no first-order decimals', async ({ appPage, mock }) => {
     const id = 'e1'.repeat(32);
     await mock.seed({
@@ -316,14 +335,14 @@ test.describe('wallet', () => {
     const addr = appPage.getByTestId(TESTID.walletAddress);
     await expect(addr).toBeVisible();
     await expect(addr).toHaveAttribute('data-value', TEST_KEYS.alice.testnetAddress);
-    // the chip's text is the address with its network prefix and the start of its body, then an ellipsis (never cut in the middle); the full
-    // address is its value
+    // The chip's text is the address with its network prefix and the start of its body, then an
+    // ellipsis (never cut in the middle). The full address is its value.
     await expect(addr).toContainText(/^kaspatest:q\w{11}…$/);
     await expect(addr).not.toHaveText(TEST_KEYS.alice.testnetAddress); // shortened
-    // the wallet's name is no label of the address: it is the wallet icon's tooltip
+    // The wallet's name is no label of the address: it is the wallet icon's tooltip.
     await expect(appPage.getByTestId('wallet-connected')).not.toContainText('KasWare');
     await expect(appPage.getByTestId('wallet-kind')).toHaveAttribute('title', 'Connected with: KasWare');
-    // the wallet's network is shown only when it differs from the app's
+    // The wallet's network is shown only when it differs from the app's.
     await expect(appPage.getByTestId('wallet-network')).toHaveCount(0);
     await expect(appPage.getByTestId('wallet-connected')).toHaveAttribute('data-network', 'testnet-10');
     await expect(appPage.getByTestId('banner-network-mismatch')).toHaveCount(0);
@@ -332,7 +351,8 @@ test.describe('wallet', () => {
   });
 
   test.describe('wallet on the wrong network', () => {
-    // the wallet refuses to switch (KasWare cannot always be switched by a page): the app must block trading and say how to fix it
+    // The wallet refuses to switch (KasWare cannot always be switched by a page): the app must
+    // block trading and say how to fix it.
     test.use({ walletOptions: { network: 'mainnet', allowNetworkSwitch: false } });
     test('blocks trading and explains how to fix it', async ({ appPage }) => {
       await clickConnectOption(appPage, TESTID.walletConnectKasware);
@@ -355,7 +375,7 @@ test.describe('wallet', () => {
       await bar.getByRole('button').click();
       await expect(appPage.getByTestId('signer-overlay')).toBeVisible();
       await expect(appPage.getByTestId('wallet-dialog')).toHaveCount(0);
-      // the one line of caution is in the entry form
+      // The one line of caution is in the entry form.
       await expect(appPage.frameLocator('[data-testid="signer-frame"]').getByTestId('signer-guide')).toContainText('Testnet and small amounts only');
     });
 
@@ -375,7 +395,8 @@ test.describe('wallet', () => {
 });
 
 test.describe('health status', () => {
-  // the indexer's own entries and marks: the automatic standalone fallback (e2e/ui/standalone.spec.ts) would replace them once a bad state persists
+  // The indexer's own entries and marks: the automatic standalone fallback
+  // (e2e/ui/standalone.spec.ts) would replace them once a bad state persists.
   test.use({ autoOpen: false, appConfig: { standalone: { auto: false } } });
 
   test('a lagging or stale indexer is one entry of the bell and the dot (red: no fallback to the node here); the book carries no mark of its own', async ({ appPage, mock }) => {
@@ -415,7 +436,7 @@ test.describe('health status', () => {
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-node-level', 'bad');
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-level', 'bad');
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('title', /Node: unreachable/);
-    // a node URL is set (the mock): the entry names it and sends the user to Settings
+    // A node URL is set (the mock): the entry names it and sends the user to Settings.
     const banner = await statusEntry(appPage, 'banner-node');
     await expect(banner).toContainText('cannot be reached');
     await expect(banner).toContainText('Check the node URL in Settings');

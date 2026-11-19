@@ -1,5 +1,7 @@
-// The header and the footer run the full width of the window (the brand at the left edge, the tools at the right edge, one gutter of clamp(16px, 2.5vw, 32px));
-// the page's content keeps its column (--frame-max, 1240 px). The app shell and the landing page share the frame. No sideways scroll at any width.
+// The header and the footer run the full width of the window (the brand at the left edge, the tools
+// at the right edge, one gutter of clamp(16px, 2.5vw, 32px)). The page's content keeps its column
+// (--frame-max, 1240 px). The app shell and the landing page share the frame. No sideways scroll at
+// any width.
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 

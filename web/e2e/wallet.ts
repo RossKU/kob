@@ -1,6 +1,7 @@
-// Playwright helper: injects a mock wallet (src/testing/mock-wallets.ts) into a page BEFORE any page script runs.
-// Call `installMockWallet(page, {...})` before `page.goto`. The wallet signs in the page with `window.__kobKaspa` (the app exposes the
-// official SDK there when its injected config has `features.test`), exactly like the real extension signs with its own wasm.
+// Playwright helper: injects a mock wallet (src/testing/mock-wallets.ts) into a page BEFORE any
+// page script runs. Call `installMockWallet(page, {...})` before `page.goto`. The wallet signs in
+// the page with `window.__kobKaspa` (the app exposes the official SDK there when its injected
+// config has `features.test`), exactly like the real extension signs with its own wasm.
 import type { Page } from '@playwright/test';
 import { DEFAULT_WALLET_CONFIG, WALLET_DEFAULTS, mockWalletInitScript, type MockWalletCall, type MockWalletConfig, type MockWalletId } from '../src/testing/mock-wallets';
 import { pubkeyOf } from '../src/testing/local-signer';
@@ -14,7 +15,10 @@ export interface InstallMockWalletOptions extends Partial<Omit<MockWalletConfig,
   secretKey: string;
 }
 
-/** Full page-side config: public key and per-network addresses are derived from the secret key here (node side). */
+/**
+ * Full page-side config: public key and per-network addresses are derived from the secret key here
+ * (node side).
+ */
 export function buildWalletConfig(o: InstallMockWalletOptions): MockWalletConfig {
   const { wallet, secretKey, ...rest } = o;
   const pubkey = pubkeyOf(secretKey);
@@ -38,11 +42,17 @@ export interface MockWalletHandle {
   /** every sign request the wallet received (deep copies, safe to assert on) */
   calls(): Promise<MockWalletCall[]>;
   lastCall(): Promise<MockWalletCall | null>;
-  /** the KasWare `pushTx` requests the page made (a transaction handed to the wallet's own node), oldest first */
+  /**
+   * the KasWare `pushTx` requests the page made (a transaction handed to the wallet's own node),
+   * oldest first
+   */
   pushes(): Promise<{ at: number; txid: string; ok: boolean; error: string | null }[]>;
   /** resolves once the wallet has received at least `n` sign requests (returns them) */
   waitForCalls(n?: number, timeoutMs?: number): Promise<MockWalletCall[]>;
-  /** changes behaviour of the LIVE page (approve / reject / delay / wrongSignature / ...). A reload restores the installed options. */
+  /**
+   * changes behaviour of the LIVE page (approve / reject / delay / wrongSignature / ...). A reload
+   * restores the installed options.
+   */
   configure(patch: Partial<MockWalletConfig>): Promise<void>;
   clearCalls(): Promise<void>;
   /** fires a wallet event on the live page (`accountsChanged`, `networkChanged`) */
@@ -51,7 +61,10 @@ export interface MockWalletHandle {
   setNetwork(network: 'testnet-10' | 'mainnet'): Promise<void>;
   /** the user picks another account in the wallet (another key) and `accountsChanged` fires */
   setAccount(secretKey: string): Promise<void>;
-  /** the wallet locks / the site loses its connection: no account is exposed, `accountsChanged([])` fires */
+  /**
+   * the wallet locks / the site loses its connection: no account is exposed, `accountsChanged([])`
+   * fires
+   */
   lose(): Promise<void>;
   /** provider listeners the page has registered (leak checks) */
   listenerCount(): Promise<number>;

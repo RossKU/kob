@@ -1,5 +1,7 @@
-// The current status of the bell: what holds now, listed above the notifications, colouring the bell without opening it. Live state, not history: an entry
-// comes and goes with its condition, is not stored and Clear does not touch it. It does not depend on the notifications being on or a wallet being connected.
+// The current status of the bell: what holds now, listed above the notifications, colouring the
+// bell without opening it. Live state, not history: an entry comes and goes with its condition, is
+// not stored and Clear does not touch it. It does not depend on the notifications being on or a
+// wallet being connected.
 // The one exception stays on the page: a wallet on another network.
 import type { Page } from '@playwright/test';
 import { closeBell, expect, openBell, statusEntry, test, TEST_KEYS } from '../fixtures';
@@ -7,7 +9,8 @@ import { connectWallet } from '../helpers/env';
 
 const bell = (page: Page) => page.getByTestId('notify-bell');
 const shot = (name: string) => (process.env.KOB_SHOT_DIR ? `${process.env.KOB_SHOT_DIR}/${name}.png` : undefined);
-// (the mock stack needs `features.test`: test mode is a warning of its own, so without a problem the bell here is amber with the open review notice beside it)
+// The mock stack needs `features.test`: test mode is a warning of its own, so without a problem the
+// bell here is amber with the open review notice beside it.
 const cssColor = (page: Page, variable: string) =>
   page.evaluate((v) => {
     const probe = document.createElement('i');
@@ -36,14 +39,14 @@ test.describe('without a wallet, notifications off (the defaults)', () => {
     await page.mouse.move(1, 1);
     await expect.poll(() => bell(page).evaluate((b) => getComputedStyle(b).color)).toBe(await cssColor(page, '--bad'));
     await page.screenshot({ path: shot('bell-red-closed') });
-    // nothing of it on the page
+    // Nothing of it on the page.
     await expect(page.getByTestId('banner-node')).toHaveCount(0);
 
     const entry = await statusEntry(page, 'banner-node');
     await expect(entry).toContainText('No connection to a Kaspa node');
     await expect(entry).toContainText('cannot be reached');
     await page.screenshot({ path: shot('bell-red-open') });
-    // the worst first, and all of it above the notifications
+    // The worst first, and all of it above the notifications.
     await expect(page.getByTestId('notify-status').locator('.banner').first()).toHaveAttribute('data-testid', 'banner-node');
     const status = (await page.getByTestId('notify-status').boundingBox())!;
     const history = (await page.getByTestId('notify-connect').boundingBox())!;
@@ -73,12 +76,14 @@ test.describe('without a wallet, notifications off (the defaults)', () => {
     await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('[data-testid="notify-panel"]'))).toBe(true);
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('notify-panel')).toHaveCount(0);
-    // the tones without an alarm (the mock stack always has the test-mode warning): the bell keeps its plain colour
+    // The tones without an alarm (the mock stack always has the test-mode warning): the bell keeps
+    // its plain colour.
     await page.mouse.move(1, 1);
     for (const tone of ['info', 'none']) {
       const color = await bell(page).evaluate((b, v) => {
         b.setAttribute('data-status-tone', v);
-        // the colour eases between the tones (the app's motion): read it when the transition is over, not part-way from the old tone
+        // The colour eases between the tones (the app's motion): read it when the transition is
+        // over, not part-way from the old tone.
         return Promise.all(b.getAnimations().map((x) => x.finished)).then(() => getComputedStyle(b).color);
       }, tone);
       expect(color).not.toBe(await cssColor(page, '--bad'));
@@ -118,7 +123,8 @@ test.describe('in test mode, with what is saved in this browser', () => {
       expect(inner.x + inner.width).toBeLessThanOrEqual(box.x + box.width);
     }
     await expect(dialog.getByTestId('banner-preaudit')).toBeVisible();
-    // taller than the room under the header: the panel hangs under it, ends inside the window and scrolls inside, so its last line is reached by scrolling it
+    // Taller than the room under the header: the panel hangs under it, ends inside the window and
+    // scrolls inside, so its last line is reached by scrolling it.
     expect(box.y + box.height).toBeLessThanOrEqual(500);
     expect(await dialog.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
     const link = page.getByTestId('notify-settings-link');
@@ -148,7 +154,7 @@ test.describe('with a wallet', () => {
     await expect(page.getByTestId('notify-empty')).toBeVisible();
     await expect(page.getByTestId('banner-test-mode')).toBeVisible();
     await expect(bell(page)).toHaveAttribute('data-status-count', count!);
-    // nothing of the status was written to the stored notifications
+    // Nothing of the status was written to the stored notifications.
     const stored = await page.evaluate((k) => localStorage.getItem(k), key);
     expect(stored).not.toContain('banner');
     expect(JSON.parse(stored!).items).toEqual([]);
@@ -169,7 +175,7 @@ test.describe('with a wallet', () => {
         expect(line.height, 'one line').toBeLessThan(36);
         expect(await noPageScroll(page)).toBeLessThanOrEqual(0);
         await page.screenshot({ path: shot(`mismatch-${width}`) });
-        // the whole text, one press away
+        // The whole text, one press away.
         await banner.locator('summary').click();
         await expect(banner.getByText('Switch the network in your wallet settings')).toBeVisible();
         expect((await banner.boundingBox())!.height).toBeGreaterThan(line.height);

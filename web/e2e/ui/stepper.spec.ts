@@ -1,6 +1,8 @@
-// The signing stepper (src/ui/kit/Stepper.tsx) mid-flow, in both themes and on a phone: Create token (Prepare, then Create token) on its
-// confirmation screen, and Merge all (Merge 1 of 3 ...) in its flow card. The wallet holds the second request open, so the screen is caught
-// with one step done and the next one current. An ordered list with aria-current on the current step; nothing runs past the window's width.
+// The signing stepper (src/ui/kit/Stepper.tsx) mid-flow, in both themes and on a phone: Create
+// token (Prepare, then Create token) on its confirmation screen, and Merge all (Merge 1 of 3 ...)
+// in its flow card. The wallet holds the second request open, so the screen is caught with one step
+// done and the next one current. An ordered list with aria-current on the current step. Nothing
+// runs past the window's width.
 // Screenshots go to `KOB_STEPPER_SHOTS`, else the test's output folder.
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -59,7 +61,7 @@ for (const v of VARIANTS) {
       await page.getByTestId('issue-review').click();
       await page.getByTestId('confirm-ack').check();
       await page.getByTestId('confirm-sign').click();
-      // the first approval answers at once; the second one is held open
+      // The first approval answers at once. The second one is held open.
       await wallet!.waitForCalls(1, 20_000);
       await wallet!.configure({ delayMs: 120_000 });
       const stepper = page.getByTestId('create-stepper');

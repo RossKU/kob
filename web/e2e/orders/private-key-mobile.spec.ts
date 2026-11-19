@@ -1,9 +1,13 @@
-// The private-key signer on Android-like phones. Regression guard for a bug the headless emulator never showed: on a real Android Chrome (fractional
-// device pixel ratio) the frame's IntersectionObserver v2 check reported 3 of 5 summary rows as covered, because the boxes of adjacent `.line` rows
-// touch and a fractional ratio made them overlap by a device pixel, so Approve never enabled. The signer observes each line's dt / dd (inside the
-// row's padding) instead of the row. Two mechanical guards, per profile (several ratios, widths and both color schemes):
-//   1. the whole flow works: place + Approve and cancel + Approve, Approve enabled within seconds, the transaction submitted;
-//   2. geometry: inside the frame, no two observed parts' boxes touch or overlap (the actual failure mode, independent of the emulator's occlusion).
+// The private-key signer on Android-like phones. Regression guard for a bug the headless emulator
+// never showed: on a real Android Chrome (fractional device pixel ratio) the frame's
+// IntersectionObserver v2 check reported 3 of 5 summary rows as covered, because the boxes of
+// adjacent `.line` rows touch and a fractional ratio made them overlap by a device pixel, so
+// Approve never enabled. The signer observes each line's dt / dd (inside the row's padding) instead
+// of the row. Two mechanical guards, per profile (several ratios, widths and both color schemes):
+//   1. the whole flow works: place + Approve and cancel + Approve, Approve enabled within seconds,
+//      the transaction submitted;
+//   2. geometry: inside the frame, no two observed parts' boxes touch or overlap (the actual
+//      failure mode, independent of the emulator's occlusion).
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
@@ -36,11 +40,15 @@ async function connectKey(page: Page): Promise<void> {
   await expect(page.getByTestId('wallet-address')).toBeVisible();
 }
 
-/** The geometry of the summary: the boxes of every observed part (title, each line's label and value, each order's title and token). */
+/**
+ * The geometry of the summary: the boxes of every observed part (title, each line's label and
+ * value, each order's title and token).
+ */
 async function observedPartsGap(page: Page): Promise<{ count: number; rows: number; minGap: number; closest: string; lineParts: number }> {
   return page.frameLocator('[data-testid="signer-frame"]').locator('body').evaluate(() => {
     const root = document.getElementById('signer')!;
-    // the same set of parts as signer/main.ts: the title, the label and value of every line, each order's title and token
+    // the same set of parts as signer/main.ts: the title, the label and value of every line, each
+    // order's title and token
     const parts = [...root.querySelectorAll('h1, h2, p.token, .line > dt, .line > dd')].filter((e) => {
       const r = e.getBoundingClientRect();
       return r.width > 0 && r.height > 0;
@@ -52,7 +60,8 @@ async function observedPartsGap(page: Page): Promise<{ count: number; rows: numb
       for (let j = i + 1; j < boxes.length; j++) {
         const a = boxes[i]!.r;
         const b = boxes[j]!.r;
-        // the distance between two boxes: the larger of the horizontal and vertical gaps (negative = they overlap on both axes)
+        // the distance between two boxes: the larger of the horizontal and vertical gaps (negative
+        // = they overlap on both axes)
         const gap = Math.max(a.left - b.right, b.left - a.right, a.top - b.bottom, b.top - a.bottom);
         if (gap < minGap) {
           minGap = gap;
@@ -64,7 +73,10 @@ async function observedPartsGap(page: Page): Promise<{ count: number; rows: numb
   });
 }
 
-/** Reads the frame, checks the geometry, scrolls through the table, and approves: Approve must enable within seconds. */
+/**
+ * Reads the frame, checks the geometry, scrolls through the table, and approves: Approve must
+ * enable within seconds.
+ */
 async function approveAndroid(page: Page, label: string): Promise<void> {
   const receipt = await readReceipt(page);
   expect(receipt.from).toBe('signer');
@@ -72,7 +84,8 @@ async function approveAndroid(page: Page, label: string): Promise<void> {
   expect(g.lineParts, `${label}: no observed part is a .line row`).toBe(0);
   expect(g.rows, `${label}: the table has summary rows`).toBeGreaterThanOrEqual(3);
   expect(g.count, `${label}: parts observed (a label and a value per row at least)`).toBeGreaterThanOrEqual(g.rows * 2);
-  // different parts (other rows, title, order head) are at least 2 CSS px apart: with a fractional device pixel ratio a smaller gap becomes an overlap
+  // different parts (other rows, title, order head) are at least 2 CSS px apart: with a fractional
+  // device pixel ratio a smaller gap becomes an overlap
   expect(g.minGap, `${label}: observed parts must not touch or overlap; closest ${g.closest}`).toBeGreaterThanOrEqual(2);
   const approve = signer(page).getByTestId('signer-approve');
   await readSignerFrame(page);

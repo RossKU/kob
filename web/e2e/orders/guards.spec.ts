@@ -1,5 +1,6 @@
-// Wallet-side guards and input validation of the ticket: everything that must stop or explain an order BEFORE the order button works
-// (docs/spec/matcher.md section 10): self-trade prevention, the FOK pre-check against the visible book, tick rounding, amount and time-range errors.
+// Wallet-side guards and input validation of the ticket: everything that must stop or explain an
+// order BEFORE the order button works (docs/spec/matcher.md section 10): self-trade prevention, the
+// FOK pre-check against the visible book, tick rounding, amount and time-range errors.
 import { test, expect } from '../fixtures';
 import { browserTzOffset, fund, localDateTimeText, mockClock, openMarket } from '../helpers/env';
 import { seedOrders } from '../helpers/orders';
@@ -70,7 +71,8 @@ test.describe('fill-or-kill pre-check', () => {
 
   test('FOK that would need more counterparties than one transaction can carry is refused', async ({ appPage: page, mock }) => {
     await fund(mock, 'alice', { tokens: 100n });
-    // twelve one-token bids at the best price: 21 crossing tokens, but a fill of 17 needs at least 10 orders (the token allows 8)
+    // twelve one-token bids at the best price: 21 crossing tokens, but a fill of 17 needs at least
+    // 10 orders (the token allows 8)
     await seedOrders(mock, Array.from({ length: 12 }, () => ({ side: 'bid' as const, price: 2_490_000, tokens: 1, maker: 'maker' as const })));
     await openMarket(page, mock);
     await pickType(page, 'fok', 'sell');
@@ -82,7 +84,8 @@ test.describe('fill-or-kill pre-check', () => {
 
   test('FOK whose last counterparty would need a partial fill below its minimum fill is refused with the amounts that fill', async ({ appPage: page, mock }) => {
     await fund(mock, 'alice', { tokens: 100n });
-    // two bids above the book at 0.025: 6 tokens that fill only in full, 5 tokens that fill at least 3
+    // two bids above the book at 0.025: 6 tokens that fill only in full, 5 tokens that fill at
+    // least 3
     const tok = await mock.token();
     const T = 100_000_000n;
     await mock.seed({
@@ -147,7 +150,8 @@ test.describe('input validation', () => {
     await fillFields(page, { amount: '1.5' });
     await expect(amountError).toHaveCount(0);
     await waitReviewable(page);
-    // an empty required field is not an error yet: no error is shown, the order button just stays disabled
+    // an empty required field is not an error yet: no error is shown, the order button just stays
+    // disabled
     await fillFields(page, { amount: '' });
     await expect(amountError).toHaveCount(0);
     await expect(page.getByTestId('order-place')).toBeDisabled();

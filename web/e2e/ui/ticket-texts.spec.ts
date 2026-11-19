@@ -1,5 +1,8 @@
-// Wording of the ticket and the settings that used to mislead: the amount help promised a cost line the ticket does not have, the day-order text named
-// one country's time zone for everybody, a failed read blamed the node whatever failed, and the dynamic-fee hint promised a review screen.
+// Wording of the ticket and the settings.
+// - The amount help does not promise a cost line the ticket does not have.
+// - The day-order text names no one country's time zone for everybody.
+// - A failed read does not blame the node whatever failed.
+// - The dynamic-fee hint does not promise a review screen.
 import { expect, test } from '../fixtures';
 import { TOKEN, connectWallet, fund, listExkcc, openMarket } from '../helpers/env';
 import { fillFields, pickType, placeOrder, waitReviewable } from '../helpers/ticket';
@@ -12,10 +15,12 @@ test('the amount box has no help line to promise a cost line, and the day-order 
   await pickType(page, 'limit', 'buy');
   const form = page.getByTestId('order-ticket');
   await expect(form).not.toContainText('cost is shown below');
-  // (no help line under the amount box at all: the label and the unit say what it is; the lines under it are Available and the cost)
+  // No help line under the amount box at all: the label and the unit say what it is. The lines
+  // under it are Available and the cost.
   await expect(form).not.toContainText('Amount of EXKCC to buy or sell.');
   await expect(form).not.toContainText('JST');
-  // the field help is off at first (its long text is the field's tooltip); the "?" shows it under the fields
+  // The field help is off at first (its long text is the field's tooltip). The "?" shows it under
+  // the fields.
   await page.getByTestId('order-help-toggle').click();
   await expect(form.getByText(/A day order ends by 00:00 UTC \(\d\d:\d\d \S+ for you\)\./)).toBeVisible();
 });
@@ -42,13 +47,15 @@ test('the dynamic fee hint says where the fee is shown and that the rate is not'
 
 test('a key-owned holding with a borrow setting counts in Available and sells on the owner path; its change keeps the setting', async ({ appPage: page, mock }) => {
   await fund(mock, 'alice', { tokens: 5n });
-  // borrow scheme 2 (a guard key), as a TN10 holding had: spendable by its owner like a plain one (option A)
+  // Borrow scheme 2 (a guard key), as a TN10 holding had: spendable by its owner like a plain one
+  // (option A).
   await mock.giveTokens('alice', 7n * TOKEN, { borrow_scheme: 2 });
   const token = await openMarket(page, mock);
   await pickType(page, 'limit', 'sell');
   await expect(page.getByTestId('order-available')).toContainText('12');
   await expect(page.getByTestId('order-unusable')).toHaveCount(0);
-  // 6 is more than the plain 5: the sale takes the borrow-enabled 7 alone, never both kinds in one transaction
+  // 6 is more than the plain 5: the sale takes the borrow-enabled 7 alone, never both kinds in one
+  // transaction.
   await fillFields(page, { amount: '6', price: '0.2' });
   await waitReviewable(page);
   await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
@@ -57,9 +64,9 @@ test('a key-owned holding with a borrow setting counts in Available and sells on
   expect(placed.submission.created).toHaveLength(1);
   const alice = (await mock.balance('alice')).pubkey;
   const owned = ((await mock.get(`/v1/token-utxos?owner=${alice}&token=${token}&spent=false&limit=50`)).items as { amount: string; role: string; state: { borrow_scheme: number } }[]).filter((u) => u.role === 'owned');
-  // the plain 5 untouched; the change of 1 keeps borrow scheme 2
+  // The plain 5 untouched. The change of 1 keeps borrow scheme 2.
   expect(owned.map((u) => [BigInt(u.amount), u.state.borrow_scheme]).sort((a, b) => Number(a[0]) - Number(b[0]))).toEqual([[1n * TOKEN, 2], [5n * TOKEN, 0]]);
-  // the custody of the new ask is plain
+  // The custody of the new ask is plain.
   const custody = ((await mock.get(`/v1/token-utxos?owner=${placed.submission.created[0]!.covenantId}&token=${token}&spent=false`)).items as { role: string; state: { borrow_scheme: number } }[]);
   expect(custody.map((u) => [u.role, u.state.borrow_scheme])).toEqual([['custody', 0]]);
 });
