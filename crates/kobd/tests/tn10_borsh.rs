@@ -4,12 +4,12 @@
 //! fetched over Borsh, and Borsh is the smaller answer.
 //!
 //! Environment:
-//! * `KOB_TN10_WRPC`               the primary (JSON), default `ws://127.0.0.1:18210`
-//!                                 (Borsh at its port `17xxx`)
-//! * `KOB_TN10_WRPC_OTHER`         the other node (JSON), default a public TN10 node
-//!                                 (Borsh at `.../wrpc/borsh`)
-//! * `KOB_SKIP_NETWORK_TESTS=1`    skip (offline runs)
-//! * `KOB_REQUIRE_NETWORK_TESTS=1` fail instead of skip when a node is unreachable
+//! * `KOB_TN10_WRPC`: the primary (JSON), default `ws://127.0.0.1:18210` (Borsh at its port
+//!   `17xxx`)
+//! * `KOB_TN10_WRPC_OTHER`: the other node (JSON), default a public TN10 node (Borsh at
+//!   `.../wrpc/borsh`)
+//! * `KOB_SKIP_NETWORK_TESTS=1`: skip (offline runs)
+//! * `KOB_REQUIRE_NETWORK_TESTS=1`: fail instead of skip when a node is unreachable
 
 use kobd::hex::Hash32;
 use kobd::rpc::borsh::borsh_url_for;
