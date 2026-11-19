@@ -135,7 +135,9 @@ async fn a_mode_1_bid_keeps_what_it_buys_in_its_bought_custody_and_the_claim_and
         [order_id(&cov)],
     );
     let ob = find_cov(&fb, &cov).unwrap();
-    assert_eq!(rem, b7.buying_power(fb.tx.outputs[ob].value as i64 + b7.delivery_carrier), "no carrier reserved for the next fill");
+    // the escrow itself buys: no carrier reserved for the next fill, and none added to it
+    assert_eq!(rem, b7.buying_power(fb.tx.outputs[ob].value as i64), "no carrier reserved for the next fill");
+    assert_eq!(view(&c, &cov).amount_left, Some(rem.to_string()));
 
     // claim (CL1): the maker takes the 7 and the order goes on with bought = 0
     let cb = find_custody(&fb, &cov, 7 * WHOLE).unwrap();

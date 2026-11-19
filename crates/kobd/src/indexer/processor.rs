@@ -2911,13 +2911,10 @@ fn refresh_with(conn: &Connection, cov: &Hash32, how: Filled) -> DbResult<()> {
                 // and the reserve. It is an upper bound, because every further fill moves one more
                 // carrier.
                 //
-                // A mode-1 bid whose bought-custody exists releases no carrier on its next fill:
-                // that delivery rides on the custody's KAS (bid-delivery-spec §4), so the whole
-                // escrow above the reserve buys.
-                (None, Some(AnyState::KobBid(b) | AnyState::KobBidKron(b)), _) => {
-                    let extra = if b.mode == kob_protocol::state::MODE_ACCUMULATE && b.bought > 0 { b.delivery_carrier } else { 0 };
-                    (Some(b.buying_power(value.saturating_add(extra))), false)
-                }
+                // A mode-1 bid whose bought-custody exists keeps no carrier for its next fill
+                // (bid-delivery-spec §4): `buying_power` already leaves it out. Adding the carrier
+                // to the escrow here counted one carrier as buying power the escrow does not have.
+                (None, Some(AnyState::KobBid(b) | AnyState::KobBidKron(b)), _) => (Some(b.buying_power(*value)), false),
                 // An unproven bid state gets the same bound from the order row. No delivery carrier
                 // is known.
                 (None, _, TemplateId::KobBid) => match (order.budget_rate, order.reserve, order.scale) {
