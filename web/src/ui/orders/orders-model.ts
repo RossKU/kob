@@ -78,7 +78,8 @@ export function recordsToResolve(views: readonly OrderView[], records: readonly 
 
 /**
  * Merges by covenant id, newest first. The sort key is the genesis DAA of the view, else the
- * record's placement DAA, and ties go by id.
+ * record's placement DAA, and ties go by id. A record being cancelled shows only while the node
+ * finds it live.
  */
 export function buildEntries(views: readonly OrderView[], records: readonly PlacementRecord[], resolved: ReadonlyMap<Hex, ResolvedRecord> = new Map()): OrderEntry[] {
   const recById = new Map(records.map((r) => [r.covenantId, r]));
@@ -87,7 +88,11 @@ export function buildEntries(views: readonly OrderView[], records: readonly Plac
   for (const r of records) {
     if (seen.has(r.covenantId)) continue;
     seen.add(r.covenantId);
-    out.push({ id: r.covenantId, view: null, record: r, resolved: resolved.get(r.covenantId) ?? null });
+    const res = resolved.get(r.covenantId) ?? null;
+    // a record whose cancel was sent, which neither the indexer lists nor the node has found live: not an order of unknown status with a Cancel
+    // button (the node's verdict follows; a cancel that lost brings it back)
+    if (r.cancelling && res?.status !== 'live') continue;
+    out.push({ id: r.covenantId, view: null, record: r, resolved: res });
   }
   const age = (e: OrderEntry): bigint => (e.view ? BigInt(e.view.genesis.daa) : big0(e.record?.placedAtDaa));
   return out.sort((a, b) => (age(a) === age(b) ? (a.id < b.id ? -1 : 1) : age(a) > age(b) ? -1 : 1));

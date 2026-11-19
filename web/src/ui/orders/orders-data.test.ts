@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Services } from '../../app/services';
 import type { IndexerApi } from '../../data/indexer';
 import type { Page, OrderView, StrayView } from '../../data/indexer-types';
@@ -227,6 +227,45 @@ describe('records follow the order (C5-06: a cancel drops the record only once i
     await mark(store, a.rec, `${a.p.txid}:0`);
     await loadOrders(services({ chain: new FakeChain(), indexer: null }), MAKER.pk, store, { spkToAddress: testAddress });
     expect(await store.get(a.rec.covenantId)).toBeNull();
+  });
+});
+
+describe('a record whose cancel was sent, before the node answers', () => {
+  it('is not listed as an order of unknown status; the node finding it live brings it back', async () => {
+    const a = place('create.ask');
+    const snap = a.p.snapshots[0];
+    const store = new MemoryRecordStore();
+    await store.put({ ...a.rec, cancelling: { txid: 'cc'.repeat(32), spends: `${snap.order.transactionId}:${snap.order.index}`, atUnix: CLOCK.unixSeconds.toString() } });
+    // the indexer does not list it (yet, or any more): the list answers before the node
+    const updates: Awaited<ReturnType<typeof loadOrders>>[] = [];
+    const first = await loadOrders(services({ chain: chainWith(a) }), MAKER.pk, store, { spkToAddress: testAddress, onUpdate: (d) => updates.push(d) });
+    expect(first.entries).toEqual([]);
+    await vi.waitFor(() => expect(updates).toHaveLength(1));
+    // the node still has it at the outpoint the cancel spends: shown again, live, until the cancel is in
+    expect(updates[0]!.entries.map((e) => e.id)).toEqual([a.rec.covenantId]);
+    expect(describeEntry(updates[0]!.entries[0]!, { kob, clock: CLOCK }).status).toBe('open');
+  });
+
+  it('a live verdict from before the cancel was sent is not reused', async () => {
+    const a = place('create.ask');
+    const snap = a.p.snapshots[0];
+    const store = new MemoryRecordStore();
+    await store.put(a.rec);
+    const s = services({ chain: chainWith(a) });
+    // the node said live; then the cancel went out
+    const before = await loadOrders(s, MAKER.pk, store, { spkToAddress: testAddress });
+    expect(before.entries.map((e) => e.resolved?.status)).toEqual(['live']);
+    await store.put({ ...(await store.get(a.rec.covenantId))!, cancelling: { txid: 'cc'.repeat(32), spends: `${snap.order.transactionId}:${snap.order.index}`, atUnix: String(Math.floor(Date.now() / 1000)) } });
+    const first = await loadOrders(s, MAKER.pk, store, { spkToAddress: testAddress, onUpdate: () => undefined });
+    expect(first.entries).toEqual([]);
+  });
+
+  it('a fresh placement without a mark still shows before the node answers', async () => {
+    const a = place('create.ask');
+    const store = new MemoryRecordStore();
+    await store.put(a.rec);
+    const first = await loadOrders(services({ chain: chainWith(a) }), MAKER.pk, store, { spkToAddress: testAddress, onUpdate: () => undefined });
+    expect(first.entries.map((e) => e.id)).toEqual([a.rec.covenantId]);
   });
 });
 

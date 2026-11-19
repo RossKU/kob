@@ -99,7 +99,7 @@ export async function resolveRecords(s: Pick<Services, 'kob' | 'node' | 'sdk' | 
 /**
  * The verdicts of this session for one node, by covenant id and the record's state. A record that
  * learns a new state is looked up again. A gone order's verdict is kept for the session and a live
- * one's for LIVE_CACHE_MS. A failed lookup is not kept.
+ * one's for LIVE_CACHE_MS, but not past a cancel sent since. A failed lookup is not kept.
  */
 type Verdicts = Map<string, { res: ResolvedRecord; at: number }>;
 const sessions = new WeakMap<object, Verdicts>();
@@ -113,6 +113,8 @@ const cachedVerdict = (verdicts: Verdicts, r: PlacementRecord, now: number): Res
   const v = verdicts.get(verdictKey(r));
   if (!v) return null;
   if (v.res.status === 'live' && now - v.at > LIVE_CACHE_MS) return null;
+  // a live verdict from before the record's cancel was sent is out of date (atUnix is whole seconds)
+  if (v.res.status === 'live' && r.cancelling && v.at < (Number(r.cancelling.atUnix) + 1) * 1000) return null;
   return v.res;
 };
 
