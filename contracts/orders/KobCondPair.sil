@@ -28,16 +28,14 @@ pragma silverscript ^0.1.0;
 //     Maker only, signed with SIGHASH_ALL. It is also the claim of the
 //     bought-custody (docs/design/bid-delivery-spec.md, section 7).
 //
-// The T delivery has a mode, the maker's and immutable, as in KobPair: 0 a
-// new plain UTXO per fill, 1 accumulate in the order's bought-custody of
-// exactly `bought`, 2 top-up of the maker's receive UTXO with form (0 new
-// plain, 1 new receive UTXO, 2 top-up) chosen by the filler. Modes 1 and 2
-// are for a KCC-20 T only, and a booked exit (repeat) delivers in mode 0.
+// The delivery modes of T are those of KobPair. Modes 1 and 2 are for a
+// KCC-20 T only, and a booked exit of a repeating entry delivers in mode 0.
 //
 // Only stopPrice, armed, amountLeft, custody and bought are mutable. The
 // repeat fields are zero unless a repeating KobIfdPair entry booked this
-// order as its exit. The evidence templates, KobAsk, KobBid and KobPair of
-// both families, are build constants.
+// order as its exit. The state layout is listed at the top of the contract
+// body. The evidence templates, KobAsk, KobBid and KobPair of both
+// families, are build constants.
 contract KobCondPair(
     byte[32] ASK_TPL,
     int ASK_PRE,
@@ -830,9 +828,10 @@ contract KobCondPair(
                 tr = OpTxInputScriptSigSubstr(tTplIn, tBase, tBase + tSize);
                 require(blake3(byte[](tPre as byte[8]) + tr.slice(0, tPre) + byte[](tSuf as byte[8]) + tr.slice(tPre + tLen, tSize)) == tTplHash);
             }
-            // KCC-20 T state [9..79) of a token owned by the maker's key (dMid)
-            // or by this order's id (cMid): owner, owner scheme, borrowing
-            // disabled and a zero guard. tail is [79..112), the commitment tExt.
+            // KCC-20 T state [9..79) of a token owned by the maker's key
+            // (dMid) or by this order's id (cMid): owner, owner scheme,
+            // borrowing disabled and a zero guard. tail is [79..112), the
+            // commitment tExt.
             byte[] zg = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
             byte[] dMid = byte[](0x20) + byte[](maker) + byte[](0x0100010020) + zg;
             byte[] cMid = byte[](0x20) + byte[](selfId) + byte[](0x0104010020) + zg;
