@@ -1,5 +1,6 @@
-// Drives the app's drop-down (ui/kit/Dropdown.tsx) through the test id of its button: the list exists only while it is open, in a panel `<id>-panel` outside the card the
-// button is in, with the rows `<id>-option-<value>`. The current value is the button's `data-value`.
+// Drives the app's drop-down (ui/kit/Dropdown.tsx) through the test id of its button: the list
+// exists only while it is open, in a panel `<id>-panel` outside the card the button is in, with the
+// rows `<id>-option-<value>`. The current value is the button's `data-value`.
 import type { Locator } from '@playwright/test';
 import { expect } from '../fixtures';
 
@@ -9,7 +10,10 @@ const panelOf = async (control: Locator): Promise<Locator> => {
   return control.page().getByTestId(`${id}-panel`);
 };
 
-/** Opens the list and chooses, as a user does: by value or by label as shown, or by place (`{ index }`, disabled rows counted). The list is closed after. */
+/**
+ * Opens the list and chooses, as a user does: by value or by label as shown, or by place (`{ index
+ * }`, disabled rows counted). The list is closed after.
+ */
 export async function chooseOption(control: Locator, choice: string | { index: number }): Promise<void> {
   const panel = await panelOf(control);
   await control.click();
@@ -28,7 +32,10 @@ export interface ShownOption {
   disabled: boolean;
 }
 
-/** What the list offers, in order; it is left closed. A click sent to the button, not a press: this reads the list, also of a button something stands over. */
+/**
+ * What the list offers, in order; it is left closed. A click sent to the button, not a press: this
+ * reads the list, also of a button something stands over.
+ */
 export async function readOptions(control: Locator): Promise<ShownOption[]> {
   const panel = await panelOf(control);
   await control.dispatchEvent('click');

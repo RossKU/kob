@@ -1,6 +1,7 @@
-// Screen details a user sees and clicks, each a regression of a defect found in a hands-on pass over the app (mock stack): the wallet
-// address after a network switch, copy buttons, the pair ticket's price unit, panels when the
-// indexer is down, the settings that pin servers and their reset, the skip link, a token of 18 decimals, the depth legend, the issue summary.
+// Screen details a user sees and clicks, each a regression of a defect found in a hands-on pass
+// over the app (mock stack): the wallet address after a network switch, copy buttons, the pair
+// ticket's price unit, panels when the indexer is down, the settings that pin servers and their
+// reset, the skip link, a token of 18 decimals, the depth legend, the issue summary.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS, closeBell, statusEntry } from '../fixtures';
@@ -16,7 +17,7 @@ test.describe('KasWare that starts on mainnet and switches', () => {
   test.use({ walletOptions: { network: 'mainnet' } });
   test('the address shown is the testnet one after the switch', async ({ appPage: page, mock }) => {
     await openMarket(page, mock);
-    // the wallet's network is shown only when it differs from the app's
+    // The wallet's network is shown only when it differs from the app's.
     await expect(page.getByTestId('wallet-network')).toHaveCount(0);
     await expect(page.getByTestId('wallet-connected')).toHaveAttribute('data-network', 'testnet-10');
     await expect(page.getByTestId('wallet-address')).toHaveAttribute('data-value', TEST_KEYS.alice.testnetAddress);
@@ -32,12 +33,13 @@ test('copy buttons keep their label on one line (token details)', async ({ appPa
 });
 
 test.describe('market panels when the indexer cannot be reached', () => {
-  // the panels of a page that has no indexer data at all: the automatic standalone fallback (e2e/ui/standalone.spec.ts) is off here
+  // The panels of a page that has no indexer data at all: the automatic standalone fallback
+  // (e2e/ui/standalone.spec.ts) is off here.
   test.use({ appConfig: { standalone: { auto: false } } });
   test('chart and depth show no endless skeleton, the activity log no "No activity yet"', async ({ appPage: page, mock }) => {
     await listExkcc(page);
     const tok = await mock.token();
-    // the app learns the token from the registry; every indexer read fails
+    // The app learns the token from the registry. Every indexer read fails.
     await page.route('**/v1/**', (r) => r.abort());
     await page.goto(`/#/market/${tok.covenant_id}`);
     await expect(page.getByTestId('book-error')).toBeVisible({ timeout: 20_000 });
@@ -49,7 +51,7 @@ test.describe('market panels when the indexer cannot be reached', () => {
     await page.getByTestId('book-view-depth').click();
     await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'empty');
     await expect(page.getByTestId('depth-empty')).toHaveText('The book could not be loaded.');
-    // no book, no grouping to offer (it showed "0.00000001")
+    // No book, no grouping to offer (it showed "0.00000001").
     await expect(page.getByTestId('book-group')).toHaveCount(0);
   });
 });
@@ -70,7 +72,7 @@ test('the depth legend keeps the estimate mark with its amounts', async ({ appPa
   await page.getByTestId('book-view-depth').click(); // the depth chart is the Depth view of the book's panel
   const summary = page.getByTestId('depth-summary');
   await expect(summary).toContainText(/^~ In view: /);
-  // the price labels at the edges stay inside the chart
+  // The price labels at the edges stay inside the chart.
   const out = await page.getByTestId('depth-chart').locator('svg').evaluate((svg) => {
     const box = svg.getBoundingClientRect();
     return [...svg.querySelectorAll('text')].filter((t) => {
@@ -104,7 +106,8 @@ test.describe('the pair ticket', () => {
     await expect(page.getByTestId('order-ticket')).toBeVisible();
     const hint = page.getByTestId('order-price').locator('xpath=ancestor::div[contains(@class,"field")][1]').locator('.field-hint');
     await expect(hint).toContainText('EXUSD per EXKCC');
-    // the sell-first prefund of a pair if-done is in the quote token too (its box says EXKCC / EXUSD)
+    // The sell-first prefund of a pair if-done is in the quote token too (its box says EXKCC /
+    // EXUSD).
     await pickType(page, 'ifd', 'sell');
     await page.getByTestId('order-advanced').locator('summary').click();
     const prefund = page.getByTestId('field-prefund').locator('xpath=ancestor::div[contains(@class,"field")][1]').locator('.field-hint');
@@ -130,7 +133,8 @@ test.describe('settings', () => {
     expect(JSON.parse((await page.evaluate(() => localStorage.getItem('kob.settings')))!)).toEqual({ features: { priorityFee: true } });
     await expect(page.getByTestId('settings-reset-servers')).toHaveCount(0);
 
-    // another indexer (the same mock under another host name), saved: every page says so (the servers are in the folded Advanced section)
+    // Another indexer (the same mock under another host name), saved: every page says so (the
+    // servers are in the folded Advanced section).
     await openSettingsAdvanced(page);
     await page.getByTestId('settings-indexer-url').fill(mock.url.replace('127.0.0.1', 'localhost'));
     await page.getByTestId('settings-servers-ack').check();
@@ -138,7 +142,7 @@ test.describe('settings', () => {
     await page.reload();
     await expect(await statusEntry(page, 'banner-stored-indexer')).toBeVisible();
     await closeBell(page);
-    // the entry says "reset it": Settings has the button
+    // The entry says "reset it": Settings has the button.
     await openSettingsAdvanced(page);
     await page.getByTestId('settings-reset-servers').click();
     await expect(page.getByTestId('settings-saved')).toBeVisible();
@@ -178,18 +182,21 @@ test.describe('a token of 18 decimals', () => {
     await page.goto(`/#/market/${D18}`);
     await connectWallet(page);
     await expect(page.getByTestId('order-ticket')).toBeVisible();
-    // the standard scale is a billionth of a token (10^9 of its 10^18 units), not "one whole token"
+    // The standard scale is a billionth of a token (10^9 of its 10^18 units), not "one whole
+    // token".
     await expect(page.getByTestId('token-scale')).toContainText('per 0.000000001 EIGHTEEN; prices are shown per whole token');
-    // the book quotes 0.025 KAS per 10^9 base units = 25,000,000 KAS per token; a sell far below it crosses the book (the planner's price warning
-    // is not shown on the ticket and never a stop), and the final confirmation names the token's amount and the price per whole token
+    // The book quotes 0.025 KAS per 10^9 base units = 25,000,000 KAS per token. A sell far below it
+    // crosses the book (the planner's price warning is not shown on the ticket and never a stop),
+    // and the final confirmation names the token's amount and the price per whole token.
     await pickType(page, 'limit', 'sell');
-    // its auction (the order on the book): a direct fill would take the bids at their prices
+    // Its auction (the order on the book): a direct fill would take the bids at their prices.
     await fillFields(page, { amount: '1', price: '1', crossing: 'auction' });
     await settlePlan(page);
     await expect(page.getByTestId('order-note-PRICE_AGGRESSIVE_VS_MARKET')).toHaveCount(0);
     await expect(page.getByTestId('order-issue-PRICE_AGGRESSIVE_VS_MARKET')).toHaveCount(0);
     await expect(page.getByTestId('order-place')).toBeEnabled();
-    // the long balance stays whole in the Available line (the market page has no balance card any more)
+    // The long balance stays whole in the Available line (the market page has no balance card any
+    // more).
     await expect(page.getByTestId('order-available')).toHaveText('Available 1.234567890123456789 EIGHTEEN');
     const shown = await peekReceipt(page);
     expect(shown.orders[0]!.token).toMatch(/^EIGHTEEN [(]d1d1d1d1…d1d1d1d1[)]$/);
@@ -222,7 +229,8 @@ test('on a phone the auto-refund checkbox keeps its text beside it', async ({ ap
   await page.setViewportSize({ width: 375, height: 812 });
   await openMarket(page, mock, { route: '/portfolio' });
   await openOrdersSettings(page);
-  // both read in one frame (the list and the balances above it arrive while the page settles and move the line down between two reads)
+  // Both read in one frame (the list and the balances above it arrive while the page settles and
+  // move the line down between two reads).
   const where = () => page.evaluate(() => {
     const b = document.querySelector('[data-testid="orders-auto-refund"]')!.getBoundingClientRect();
     const l = document.querySelector('[data-testid="orders-auto-refund-label"] span')!.getBoundingClientRect();
@@ -240,7 +248,8 @@ test('without the registry the bell\'s entry matches what the page does: indexer
   await expect(banner).not.toContainText('not tradable');
   await closeBell(page);
   await expect(page.getByTestId('order-ticket')).not.toHaveAttribute('data-state', 'untradable');
-  // the decimals of an unlisted token are no box in the page: they are the tooltip of the token-family chip
+  // The decimals of an unlisted token are no box in the page: they are the tooltip of the
+  // token-family chip.
   await expect(page.getByTestId('token-open-caution')).toHaveCount(0);
   await expect(page.getByTestId('badge-family')).toHaveAttribute('title', /whole tokens of 8 decimals/);
 });
@@ -251,7 +260,8 @@ test('a side or type switch keeps the amount and the price; the stop, exit and t
   await pickType(page, 'ifd', 'buy');
   await fillFields(page, { amount: '2', price: '0.0245', 'exit.takeProfit': '0.026', tip: '0.0001', 'entry.stop': '0.024' });
   await waitReviewable(page);
-  // buy -> sell: a buy's entry stop (at or below its price; a sell's is at or above) and tip are not carried to the sell, nothing is left out of sight
+  // Buy -> sell: a buy's entry stop (at or below its price; a sell's is at or above) and tip are
+  // not carried to the sell, nothing is left out of sight.
   await page.getByTestId('order-side-sell').click();
   await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-side', 'sell');
   await expect(page.getByTestId('order-amount')).toHaveValue('2');
@@ -261,7 +271,7 @@ test('a side or type switch keeps the amount and the price; the stop, exit and t
   await expect(page.getByTestId('field-entry.stop')).toHaveValue('');
   await fillFields(page, { 'exit.takeProfit': '0.0235' });
   await waitReviewable(page);
-  // ifd -> stop-limit: the amount stays, the stop and limit are new boxes
+  // Ifd -> stop-limit: the amount stays, the stop and limit are new boxes.
   await fillFields(page, { tip: '0.0002' });
   await pickType(page, 'stopLimit');
   await expect(page.getByTestId('order-amount')).toHaveValue('2');
@@ -272,13 +282,13 @@ test('a side or type switch keeps the amount and the price; the stop, exit and t
 test('the header after connecting: one network badge, a compact wallet chip, short on a phone', async ({ appPage: page, mock }) => {
   await openMarket(page, mock);
   const header = page.locator('header.header');
-  // 1280 px: the app's network once (the wallet's only when it differs), the wallet chip with the address and a wallet icon (its tooltip says
-  // how it is connected)
+  // 1280 px: the app's network once (the wallet's only when it differs), the wallet chip with the
+  // address and a wallet icon (its tooltip says how it is connected).
   await expect(header.getByText('testnet-10', { exact: true })).toHaveCount(1);
   await expect(page.getByTestId('wallet-network')).toHaveCount(0);
   await expect(page.getByTestId('wallet-address')).toContainText(/^kaspatest:q\w{11}…$/);
   await expect(page.getByTestId('wallet-kind')).toHaveAttribute('title', 'Connected with: KasWare');
-  // the chip is one button; Copy, the explorer and Disconnect are in its menu
+  // The chip is one button. Copy, the explorer and Disconnect are in its menu.
   await page.getByTestId('wallet-menu').click();
   await expect(page.getByTestId('wallet-disconnect')).toHaveAccessibleName('Disconnect');
   await expect(page.getByTestId('wallet-copy')).toBeVisible();
@@ -287,7 +297,8 @@ test('the header after connecting: one network badge, a compact wallet chip, sho
   await expect(page.getByTestId('wallet-menu-panel')).toHaveCount(0);
   const wide = await header.boundingBox();
   expect(wide!.height).toBeLessThan(70);
-  // 375 px: still ONE row (the logo, the menu, the shortened network chip, the short address, the bell)
+  // 375 px: still ONE row (the logo, the menu, the shortened network chip, the short address, the
+  // bell).
   await page.setViewportSize({ width: 375, height: 812 });
   await expect(page.getByTestId('wallet-address')).toBeVisible();
   await expect(page.getByTestId('wallet-address')).toContainText(/^q\w{7}…$/);

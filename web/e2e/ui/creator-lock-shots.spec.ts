@@ -1,5 +1,6 @@
-// Screenshots of the creator lock (review only, skipped without KOB_LOCK_SHOTS=<dir>): Create token with "Lock my share until" chosen, the
-// token page's "Creator lock" line, and the Portfolio's "locked until" sub-line, from one creation run through the mock wallet and node.
+// Screenshots of the creator lock (review only, skipped without KOB_LOCK_SHOTS=<dir>): Create token
+// with "Lock my share until" chosen, the token page's "Creator lock" line, and the Portfolio's
+// "locked until" sub-line, from one creation run through the mock wallet and node.
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '../fixtures';
@@ -29,7 +30,8 @@ test('creator lock shots', async ({ appPage: page, mock }) => {
   await page.evaluate(() => { (document.activeElement as HTMLElement | null)?.blur(); window.scrollTo(0, 0); });
   await page.screenshot({ path: join(SHOTS!, 'lock-create.png'), fullPage: true });
 
-  // the creation: the confirmation says locked for you; the mock wallet signs, the mock node takes both steps
+  // The creation: the confirmation says locked for you. The mock wallet signs, the mock node takes
+  // both steps.
   await page.getByTestId('issue-review').click();
   await expect(page.getByTestId('confirm-screen')).toBeVisible();
   await expect(page.getByTestId('confirm-brief-lock')).toContainText('400,000 LOCKD');
@@ -40,14 +42,14 @@ test('creator lock shots', async ({ appPage: page, mock }) => {
   await expect(page.getByTestId('issue-result')).toBeVisible({ timeout: 30_000 });
   const tokenId = (await page.getByTestId('issue-result-tokenId').getAttribute('data-value'))!;
 
-  // the token page: the declared lock in the token's details
+  // The token page: the declared lock in the token's details.
   await page.goto(`/#/market/${tokenId}`);
   const line = page.getByTestId('token-creator-lock');
   await expect(line).toContainText('400,000 LOCKD (40% of supply) until', { timeout: 30_000 });
   await line.scrollIntoViewIfNeeded();
   await page.getByTestId('token-details').screenshot({ path: join(SHOTS!, 'lock-token-page.png') });
 
-  // the Portfolio: the locked share as a sub-line under Available
+  // The Portfolio: the locked share as a sub-line under Available.
   await page.goto('/#/portfolio');
   const row = page.getByTestId(`balance-row-${tokenId}`);
   await expect(row.getByTestId('balance-locked')).toContainText('locked until', { timeout: 30_000 });

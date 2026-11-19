@@ -1,7 +1,9 @@
-// Every column of the Portfolio's lists and of the activity log sorts: Order history, Open orders, Fills, Balances, and the Activity page. A header is a button: first click
-// the column's natural direction (numbers and times largest first, text from A), second the other way, third the list's own order again (newest first); numbers sort
-// as numbers, an empty value ("—") is last in either direction; the sort covers the whole list before it is paged; it is kept in the browser; a card layout (no header)
-// has the same sort as a control. Mock stack.
+// Every column of the Portfolio's lists and of the activity log sorts: Order history, Open orders,
+// Fills, Balances, and the Activity page. A header is a button: first click the column's natural
+// direction (numbers and times largest first, text from A), second the other way, third the list's
+// own order again (newest first). Numbers sort as numbers, an empty value ("—") is last in either
+// direction. The sort covers the whole list before it is paged. It is kept in the browser. A card
+// layout (no header) has the same sort as a control. Mock stack.
 // KOB_SHOTS=<dir> saves screenshots (KOB_SHOT_TAG prefixes the names).
 import type { Locator, Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
@@ -12,7 +14,10 @@ import { seedOrders } from '../helpers/orders';
 
 test.use({ autoOpen: false, timezoneId: lateTimeZone() });
 
-/** The first number in a cell's text (thousands separators dropped); NaN for "—" and for text without one. */
+/**
+ * The first number in a cell's text (thousands separators dropped). NaN for "—" and for text
+ * without one.
+ */
 const num = (s: string | null | undefined): number => {
   const m = (s ?? '').replace(/,/g, '').match(/-?\d+(\.\d+)?/);
   return m ? Number(m[0]) : Number.NaN;
@@ -66,10 +71,12 @@ test.describe('1280 px wide', () => {
     const rows = page.locator('[data-testid^="order-row-"]');
     await expect(rows.first()).toBeVisible();
     await page.waitForTimeout(900);
-    // (a table that cannot hold its content, in a wide font, is cards: no header to press; the control of the cards is tested at 390 px)
+    // A table that cannot hold its content, in a wide font, is cards: no header to press. The
+    // control of the cards is tested at 390 px.
     if (!(await page.getByTestId('orders-head').isVisible())) return;
     page.setDefaultTimeout(15_000);
-    // (a wide font can turn the table into cards while the test runs: the headers go, the cards' own control is tested at 390 px)
+    // A wide font can turn the table into cards while the test runs: the headers go, the cards' own
+    // control is tested at 390 px.
     try {
       const own = await ids(page);
       const total = (await page.getByTestId('orders-tab-history').textContent())!;
@@ -78,22 +85,24 @@ test.describe('1280 px wide', () => {
       const cell = (sel: string) => texts(page.locator(`[data-testid^="order-line-"] ${sel}`));
       const minutes = () => cell('.or-time').then((a) => a.map((x) => Date.parse(x)));
 
-      // the own order: newest first, which the time header says
+      // The own order: newest first, which the time header says.
       await expect(head('time')).toHaveAttribute('aria-sort', 'descending');
       await expect(head('price')).toHaveAttribute('aria-sort', 'none');
 
-      // time: the first click reverses the own order, the second brings it back
+      // Time: the first click reverses the own order, the second brings it back.
       await sortBtn('time').click();
       await expect(head('time')).toHaveAttribute('aria-sort', 'ascending');
       await expect.poll(() => ids(page)).not.toEqual(own);
-      // (orders placed in one minute tie: their own order is kept between them, so the order is checked by the times the lines show)
+      // Orders placed in one minute tie: their own order is kept between them, so the order is
+      // checked by the times the lines show.
       expect([...(await ids(page))].sort()).toEqual([...own].sort());
       expectOrdered(await minutes(), 'asc', 'time');
       await sortBtn('time').click();
       await expect(head('time')).toHaveAttribute('aria-sort', 'descending');
       expect(await ids(page)).toEqual(own);
 
-      // a number column (price): largest first, smallest first, own order; numbers as numbers (0.0238 is smaller than 0.02913 smaller than 34.37)
+      // A number column (price): largest first, smallest first, own order. Numbers as numbers
+      // (0.0238 is smaller than 0.02913 smaller than 34.37).
       await sortBtn('price').click();
       await expect(head('price')).toHaveAttribute('aria-sort', 'descending');
       expectOrdered((await cell('.or-price')).map(num), 'desc', 'price');
@@ -104,7 +113,8 @@ test.describe('1280 px wide', () => {
       await expect(head('price')).toHaveAttribute('aria-sort', 'none');
       expect(await ids(page)).toEqual(own);
 
-      // the filled part (by its percentage) and the value: KAS-budget buys have neither ("—"): last in both directions
+      // The filled part (by its percentage) and the value: KAS-budget buys have neither ("—"): last
+      // in both directions.
       const pct = (x: string) => { const m = /(\d+)%/.exec(x); return m ? Number(m[1]) : Number.NaN; };
       const filledNums = () => cell('.or-filled').then((a) => a.map(pct));
       await sortBtn('filled').click();
@@ -118,7 +128,7 @@ test.describe('1280 px wide', () => {
       expectOrdered((await cell('.or-value')).map(num), 'asc', 'value');
       await sortBtn('total').click();
 
-      // a text column (market): A to Z, then Z to A
+      // A text column (market): A to Z, then Z to A.
       await sortBtn('market').click();
       await expect(head('market')).toHaveAttribute('aria-sort', 'ascending');
       const asc = (await cell('.or-market-name')).map((x) => x.replace(/\s+/g, ''));
@@ -136,7 +146,8 @@ test.describe('1280 px wide', () => {
       }
       expect(await ids(page)).toEqual(own);
 
-      // the sort covers the whole list before it is paged: 10 rows a page, price largest first: page 1 holds the top of all of it; the counts do not change
+      // The sort covers the whole list before it is paged: 10 rows a page, price largest first:
+      // page 1 holds the top of all of it. The counts do not change.
       await page.getByTestId('portfolio-rows-10').click();
       await sortBtn('price').click();
       await expect(page.getByTestId('portfolio-showing')).toHaveText(new RegExp('^1–10 of '));
@@ -145,13 +156,13 @@ test.describe('1280 px wide', () => {
       const page2 = (await cell('.or-price')).map(num);
       expect(Math.min(...page1.filter((v) => !Number.isNaN(v)))).toBeGreaterThanOrEqual(Math.max(...page2.filter((v) => !Number.isNaN(v))));
       await expect(page.getByTestId('orders-tab-history')).toHaveText(total);
-      // another sort starts at the first page
+      // Another sort starts at the first page.
       await sortBtn('market').click();
       await expect(page.getByTestId('portfolio-showing')).toHaveText(new RegExp('^1–10 of '));
       await sortBtn('price').click();
       await shot(page, 'history-1280');
 
-      // kept in the browser: a reload keeps the column and the direction
+      // Kept in the browser: a reload keeps the column and the direction.
       await page.reload();
       await connectWallet(page, 'kasware');
       await expect(head('price')).toHaveAttribute('aria-sort', 'descending');
@@ -166,7 +177,7 @@ test.describe('1280 px wide', () => {
     await setup(page, mock, '/#/portfolio/open');
     await expect(page.locator('[data-testid^="order-row-"]').first()).toBeVisible();
     await page.waitForTimeout(900);
-    // Open orders: the price sort here does not touch Order history's
+    // Open orders: the price sort here does not touch Order history's.
     await page.getByTestId('orders-sort-price').click();
     expectOrdered((await texts(page.locator('[data-testid^="order-line-"] .or-price'))).map(num), 'desc', 'open price');
     await page.getByTestId('orders-tab-history').click();
@@ -174,11 +185,13 @@ test.describe('1280 px wide', () => {
     await page.getByTestId('orders-tab-active').click();
     await expect(page.getByTestId('orders-sort-price').locator('xpath=ancestor::*[@role="columnheader"]')).toHaveAttribute('aria-sort', 'descending');
 
-    // Fills: amounts across tokens of other decimals as numbers (1 EXKCC, 2 EXKCC, 1,000 of the hex-named token, 1,960.83737795 ...)
+    // Fills: amounts across tokens of other decimals as numbers (1 EXKCC, 2 EXKCC, 1,000 of the
+    // hex-named token, 1,960.83737795 ...).
     await page.getByTestId('orders-tab-fills').click();
     await page.getByTestId('portfolio-rows-50').click();
     await expect(page.getByTestId('wallet-fill-row').first()).toBeVisible();
-    // (where the table does not fit its room, in a wide font, the fills are cards: the control is tested at 390 px)
+    // Where the table does not fit its room, in a wide font, the fills are cards: the control is
+    // tested at 390 px.
     if (!(await page.getByTestId('wallet-fills-sortctl').isVisible())) {
     const fillHead = (k: string) => page.getByTestId(`wallet-fills-sort-${k}`).locator('xpath=ancestor::*[@role="columnheader"]');
     await expect(fillHead('time')).toHaveAttribute('aria-sort', 'descending');
@@ -205,7 +218,7 @@ test.describe('1280 px wide', () => {
     }
     await shot(page, 'fills-1280');
 
-    // Balances: the tokens by what is free, by what is in orders; KAS stays the first row
+    // Balances: the tokens by what is free, by what is in orders. KAS stays the first row.
     await page.getByTestId('orders-tab-balances').click();
     await expect(page.getByTestId('kas-balance')).toBeVisible();
     if (!(await page.getByTestId('balances-sortctl').isVisible())) {
@@ -281,14 +294,16 @@ test.describe('1280 px wide', () => {
     }
     await page.getByTestId('activity-sort-time').click();
     await expect(head('time')).toHaveAttribute('aria-sort', 'ascending');
-    // (the sort covers the rows within reach, up to 100: oldest first shows the oldest of them, not the same fifty rows turned round)
+    // The sort covers the rows within reach, up to 100: oldest first shows the oldest of them, not
+    // the same fifty rows turned round.
     const seconds = (x: string) => { const m = /(\d+):(\d+):(\d+)\s*(AM|PM)?/i.exec(x); return m ? ((Number(m[1]) % 12) + (/pm/i.test(m[4] ?? '') ? 12 : 0)) * 3600 + Number(m[2]) * 60 + Number(m[3]) : Number.NaN; };
     const rowTimes = () => page.locator('[data-testid="activity-row"] .act-c-time').evaluateAll((els) => els.map((e) => e.getAttribute('title') ?? ''));
     expectOrdered((await rowTimes()).map(seconds), 'asc', 'activity time');
     await page.getByTestId('activity-sort-time').click();
     await expect.poll(() => page.locator('[data-testid="activity-row"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-txid')!))).toEqual(own);
 
-    // a new row with a sort on: it takes its place in the order (a big one is first by amount, descending); nothing above the log moves
+    // A new row with a sort on: it takes its place in the order (a big one is first by amount,
+    // descending). Nothing above the log moves.
     await page.getByTestId('activity-sort-amount').click();
     const [big] = await seedOrders(mock, [{ side: 'ask', price: 2_950_000, tokens: 500 }]);
     await page.evaluate(() => {
@@ -341,7 +356,7 @@ test.describe('390 px wide: the cards have no sort control (founder 2026-11-11)'
     await shot(page, 'balances-390');
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth), 'the page does not scroll sideways').toBeLessThanOrEqual(0);
 
-    // widened to a desktop, the table has its headers and they sort (no card is left)
+    // Widened to a desktop, the table has its headers and they sort (no card is left).
     await page.setViewportSize({ width: 1280, height: 1000 });
     await page.waitForTimeout(500);
     if (await page.getByTestId('balances-head').isVisible()) {

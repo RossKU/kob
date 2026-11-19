@@ -1,5 +1,7 @@
-// Transaction links to the block explorer (kaspa.stream; the base follows the network, TN10 in this stack): an activity-log row of the token page, an order's placement
-// transaction and its fill rows in My orders open the transaction in a NEW tab. The explorer itself is stubbed (no network access in the mock stack).
+// Transaction links to the block explorer (kaspa.stream; the base follows the network, TN10 in this
+// stack): an activity-log row of the token page, an order's placement transaction and its fill rows
+// in My orders open the transaction in a NEW tab. The explorer itself is stubbed (no network access
+// in the mock stack).
 import type { BrowserContext, Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
 import { fund, listExkcc, openMarket, gotoOrders, showActivity } from '../helpers/env';
@@ -30,7 +32,7 @@ test('activity log: a row is a link to its transaction on the TN10 explorer, ope
   const [popup] = await Promise.all([page.context().waitForEvent('page'), row.click()]);
   await expect(popup).toHaveURL(`https://tn10.kaspa.stream/transactions/${txid}`);
   await popup.close();
-  // the app page stays where it was
+  // The app page stays where it was.
   await expect(page).toHaveURL(new RegExp(`#/market/${tok.covenant_id}$`));
 });
 
@@ -38,7 +40,8 @@ async function placeAndPartlyFill(page: Page, mock: MockClient): Promise<string>
   await fund(mock);
   await openMarket(page, mock);
   await pickType(page, 'limit', 'buy');
-  // a 1 EXKCC minimum fill lets the order fill in part (the default minimum of a small order is its whole amount)
+  // A 1 EXKCC minimum fill lets the order fill in part (the default minimum of a small order is its
+  // whole amount).
   await fillFields(page, { amount: '2', minFill: '1', price: '0.0245' });
   const placed = await placeOrder(page, mock);
   const id = placed.views[0].covenant_id as string;
@@ -58,7 +61,7 @@ test('My orders: the placement transaction and every fill row link to the explor
   await openOrderRow(page, id);
   const txid = (await card.getByTestId(`order-tx-${id}`).getAttribute('data-value'))!;
   await expect(card.getByTestId(`order-explorer-${id}`)).toHaveAttribute('href', `https://tn10.kaspa.stream/transactions/${txid}`);
-  // fills: the row (anywhere) and the id open the fill's transaction
+  // Fills: the row (anywhere) and the id open the fill's transaction.
   await card.getByTestId(`order-fills-toggle-${id}`).click();
   const fill = card.getByTestId('order-fill-row').first();
   await expect(fill).toBeVisible();

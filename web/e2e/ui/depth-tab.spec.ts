@@ -1,6 +1,10 @@
-// The depth chart has no panel of its own at any width (founder, 2026-11-11): it is the "Depth" view of the ORDER BOOK's panel (an "Order book | Depth" switch in the panel's header, the
-// choice remembered in this browser), on three columns too. The price chart is never hidden, at any width. A click on the depth chart prefills the ticket like a click on a book row (an ask a buy,
-// a bid a sell, at the price under the pointer, on the market's price step). Mock stack.
+// The depth chart has no panel of its own at any width.
+// It is the "Depth" view of the order book's panel (an "Order book | Depth" switch in the panel's
+// header, the choice remembered in this browser), on three columns too.
+// The price chart is never hidden, at any width.
+// A click on the depth chart prefills the ticket like a click on a book row: an ask a buy, a bid a
+// sell, at the price under the pointer, on the market's price step.
+// Mock stack.
 import type { Locator, Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
 import { listExkcc } from '../helpers/env';
@@ -19,7 +23,10 @@ const rect = async (loc: Locator) => (await loc.boundingBox())!;
 /** Document coordinates (the page may scroll between two measurements). */
 const docRect = (loc: Locator) => loc.evaluate((el) => { const r = el.getBoundingClientRect(); return { x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height }; });
 
-/** The price the depth chart's tooltip reads at `fraction` of the way from the mid line to the right (ask) or the left (bid) edge, after moving the pointer there. */
+/**
+ * The price the depth chart's tooltip reads at `fraction` of the way from the mid line to the right
+ * (ask) or the left (bid) edge, after moving the pointer there.
+ */
 async function hoverPrice(page: Page, depth: Locator, side: 'ask' | 'bid', fraction: number): Promise<{ x: number; y: number; price: number }> {
   const svg = depth.locator('svg.depth-svg');
   await svg.scrollIntoViewIfNeeded();
@@ -36,7 +43,10 @@ async function hoverPrice(page: Page, depth: Locator, side: 'ask' | 'bid', fract
   return { x, y, price: Number(/(\d+\.\d+)\s/.exec(text)![1]) };
 }
 
-/** A click on the chart's `side` fills the ticket's price (within a step of the one the tooltip read) and leaves the ticket's side as the user chose it (the opposite one here). */
+/**
+ * A click on the chart's `side` fills the ticket's price (within a step of the one the tooltip
+ * read) and leaves the ticket's side as the user chose it (the opposite one here).
+ */
 async function pickFrom(page: Page, depth: Locator, side: 'ask' | 'bid'): Promise<void> {
   const want = side === 'ask' ? 'sell' : 'buy';
   await page.getByTestId(want === 'buy' ? 'order-side-buy' : 'order-side-sell').click();
@@ -46,11 +56,13 @@ async function pickFrom(page: Page, depth: Locator, side: 'ask' | 'bid'): Promis
   const ticket = page.getByTestId('order-ticket');
   await expect(ticket).toHaveAttribute('data-side', want);
   const price = Number(await page.getByTestId('order-price').inputValue());
-  // the market's step is 0.0001: a buy rounds up to it, a sell down, so the order reaches what the pointer pointed at
+  // The market's step is 0.0001: a buy rounds up to it, a sell down, so the order reaches what the
+  // pointer pointed at.
   expect(Math.abs(price - at.price), `the ticket's ${price} against the ${at.price} under the pointer`).toBeLessThan(0.00015);
   if (side === 'ask') expect(price).toBeGreaterThanOrEqual(at.price - 1e-9);
   else expect(price).toBeLessThanOrEqual(at.price + 1e-9);
-  // what the book itself would have prefilled has the same shape: a level's price, on the same step
+  // What the book itself would have prefilled has the same shape: a level's price, on the same
+  // step.
   expect(Math.round(price * 1e4) / 1e4).toBeCloseTo(price, 9);
 }
 
@@ -61,12 +73,12 @@ for (const width of [390, 850, 1280]) {
     test('the depth chart is a view of the order book panel, the price chart is never hidden, and the choice is remembered', async ({ appPage: page, mock }) => {
       await open(page, mock);
 
-      // the price chart's panel is only the price chart: its title, no switch
+      // The price chart's panel is only the price chart: its title, no switch.
       await expect(page.getByTestId('chart-section').locator('h2')).toHaveText('Price');
       await expect(page.getByTestId('chart-section').getByRole('radiogroup')).toHaveCount(0);
       await expect(page.getByTestId('price-chart')).toBeVisible();
 
-      // the book is the default view
+      // The book is the default view.
       const view = page.getByTestId('book-view');
       await expect(view).toHaveAttribute('role', 'radiogroup');
       await expect(page.getByTestId('book-view-book')).toHaveAttribute('aria-checked', 'true');
@@ -91,12 +103,13 @@ for (const width of [390, 850, 1280]) {
       await expect(depth.locator('svg')).toBeVisible();
       await expect(depth.locator('.bid-area')).toHaveCount(1);
       await expect(depth.locator('.ask-area')).toHaveCount(1);
-      // the price chart is still there, as it was
+      // The price chart is still there.
       await expect(page.getByTestId('price-chart')).toBeVisible();
       await expect(page.locator('[data-testid="price-chart"] canvas').first()).toBeVisible();
       const chartNow = await rect(page.locator('[data-testid="price-chart"] .chart-box'));
       expect(Math.abs(chartNow.height - chartBefore.height) + Math.abs(chartNow.width - chartBefore.width)).toBeLessThanOrEqual(1);
-      // the book is behind the depth chart (hidden, not unmounted); the panel keeps its size; the depth chart fills the panel's body under the header
+      // The book is behind the depth chart (hidden, not unmounted). The panel keeps its size. The
+      // depth chart fills the panel's body under the header.
       await expect(page.getByTestId('order-book')).toBeHidden();
       await expect(page.getByTestId('book-section')).toHaveCount(1);
       const panelNow = await rect(panel);
@@ -108,24 +121,24 @@ for (const width of [390, 850, 1280]) {
       expect(d.height, 'the depth chart is as tall as the body less its legend (a line or three)').toBeGreaterThan(body.height - 110);
       expect(d.y + d.height).toBeLessThanOrEqual(body.y + body.height + 1);
       expect(Math.abs(d.width - body.width)).toBeLessThanOrEqual(1);
-      // the book's own controls keep their place and are not offered meanwhile
+      // The book's own controls keep their place and are not offered meanwhile.
       await expect(group).toBeHidden();
       await expect(page.getByTestId('book-refresh')).toBeHidden();
       const groupNow = await docRect(group);
       expect(Math.abs(groupNow.x - groupBefore.x) + Math.abs(groupNow.y - groupBefore.y)).toBeLessThanOrEqual(1);
       expect(await horizontalOverflow(page), 'nothing scrolls sideways').toBe(0);
 
-      // a click on the ask side buys, on the bid side sells
+      // A click on the ask side buys, on the bid side sells.
       await pickFrom(page, depth, 'ask');
       await pickFrom(page, depth, 'bid');
 
-      // the choice is remembered across a reload
+      // The choice is remembered across a reload.
       await page.reload();
       await expect(page.getByTestId('book-view-depth')).toHaveAttribute('aria-checked', 'true');
       await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');
       await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', 'ready');
 
-      // back to the book: the same book, its controls again
+      // Back to the book: the same book, its controls again.
       await page.getByTestId('book-view-book').click();
       await expect(page.getByTestId('depth-chart')).toHaveCount(0);
       await expect(page.getByTestId('order-book')).toBeVisible();

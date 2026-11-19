@@ -1,7 +1,14 @@
-// An order worth less than the executor's minimum order value (default 1 KAS) is indexed but never listed, so it never fills. The ticket warns before the click, in the
-// slot over the button, in the warn tone (UI review H-08, founder 2026-11-11: a warning, not a block: the button stays enabled and stays where it is); the final confirmation says it
-// again as a warning callout, and My orders says "Not listed by the indexer" with the reason and what to do.
-// The mock indexer applies the rule like the real executor once `mock.minOrderValue(1 KAS)` is set (it is off by default). Desktop and a 375 px phone.
+// An order worth less than the executor's minimum order value (default 1 KAS) is indexed but never
+// listed, so it never fills.
+//
+// - The ticket warns before the click, in the slot over the button, in the warn tone. It is a
+//   warning, not a block: the button stays enabled and stays where it is.
+// - The final confirmation says it again as a warning callout.
+// - My orders says "Not listed by the indexer" with the reason and what to do.
+//
+// The mock indexer applies the rule like the real executor once `mock.minOrderValue(1 KAS)` is set
+// (it is off by default).
+// Desktop and a 375 px phone.
 import { expect, test, TEST_KEYS } from '../fixtures';
 import { KAS, fund, openMarket } from '../helpers/env';
 import { horizontalOverflow } from '../helpers/i18n';
@@ -30,13 +37,14 @@ for (const vp of VIEWPORTS) {
       const warn = page.getByTestId('order-warn-min-value');
       const place = page.getByTestId('order-place');
 
-      // 39 EXKCC at 0.026 KAS = 1.014 KAS: listed, no warning
+      // 39 EXKCC at 0.026 KAS = 1.014 KAS: listed, no warning.
       await fillFields(page, { amount: '39', price: '0.026' });
       await settlePlan(page);
       await expect(place).toBeEnabled();
       await expect(warn).toHaveCount(0);
       const before = (await place.boundingBox())!;
-      // 38 EXKCC at 0.026 KAS = 0.988 KAS: below 1 KAS. The order can still be placed; the slot over the button says it will not fill
+      // 38 EXKCC at 0.026 KAS = 0.988 KAS: below 1 KAS. The order can still be placed. The slot
+      // over the button says it will not fill.
       await fillFields(page, { amount: '38' });
       await settlePlan(page);
       await expect(warn).toHaveText('Below the 1 KAS minimum: it will not fill');
@@ -45,7 +53,8 @@ for (const vp of VIEWPORTS) {
       await expect(place).toBeEnabled();
       expect(await place.boundingBox()).toEqual(before);
       expect(await horizontalOverflow(page), 'ticket').toBe(0);
-      // the price counts too: 40 x 0.025 = 1 KAS is the minimum itself (listed); a hair under is not
+      // The price counts too: 40 x 0.025 = 1 KAS is the minimum itself (listed). A hair under is
+      // not.
       await fillFields(page, { amount: '40', price: '0.025' });
       await settlePlan(page);
       await expect(warn).toHaveCount(0);
@@ -60,7 +69,8 @@ for (const vp of VIEWPORTS) {
       await openMarket(page, mock);
       await pickType(page, 'limit', 'sell');
       const notes = page.getByTestId('confirm-order-notes');
-      // 38 x 0.026 = 0.988 KAS: below 1 KAS. The ticket warned; the confirmation says it once more, as a callout over its figures
+      // 38 x 0.026 = 0.988 KAS: below 1 KAS. The ticket warned. The confirmation says it once more,
+      // as a callout over its figures.
       await fillFields(page, { amount: '38', price: '0.026' });
       await settlePlan(page);
       await clickPlaceOnly(page);
@@ -71,14 +81,15 @@ for (const vp of VIEWPORTS) {
       await expect(notes).toHaveClass(/send-warn/);
       expect(await horizontalOverflow(page), 'confirmation').toBe(0);
       await cancelReceipt(page);
-      // 40 x 0.0255 = 1.02 KAS: listed, no note
+      // 40 x 0.0255 = 1.02 KAS: listed, no note.
       await fillFields(page, { amount: '40', price: '0.0255' });
       await settlePlan(page);
       await clickPlaceOnly(page);
       await readReceipt(page);
       await expect(notes).toHaveCount(0);
       await cancelReceipt(page);
-      // back below: the note is there again, and Continue places the order (a note never blocks it)
+      // Back below: the note is there again, and Continue places the order (a note never blocks
+      // it).
       await fillFields(page, { amount: '38', price: '0.026' });
       await settlePlan(page);
       await clickPlaceOnly(page);
@@ -100,20 +111,20 @@ for (const vp of VIEWPORTS) {
     test('an order placed below the minimum is shown in My orders as not listed, with the reason and the hint; a listed order is not', async ({ appPage: page, mock }) => {
       await openMarket(page, mock);
       await pickType(page, 'limit', 'sell');
-      // below: 38 x 0.026 = 0.988 KAS. The ticket warns and the order goes out anyway.
+      // Below: 38 x 0.026 = 0.988 KAS. The ticket warns and the order goes out anyway.
       await fillFields(page, { amount: '38', price: '0.026' });
       await settlePlan(page);
       await expect(page.getByTestId('order-warn-min-value')).toHaveCount(1);
       const low = await placeOrder(page, mock);
       const lowId = low.submission.created[0]!.covenantId;
-      // above: 40 x 0.0255 = 1.02 KAS
+      // Above: 40 x 0.0255 = 1.02 KAS.
       await fillFields(page, { amount: '40', price: '0.0255' });
       await settlePlan(page);
       await expect(page.getByTestId('order-warn-min-value')).toHaveCount(0);
       const ok = await placeOrder(page, mock);
       const okId = ok.submission.created[0]!.covenantId;
 
-      // the indexer's verdicts
+      // The indexer's verdicts.
       expect(await mock.order(lowId)).toMatchObject({ listed: false, unlisted_reason: 'order_value_below_minimum', status: 'open' });
       expect(await mock.order(okId)).toMatchObject({ listed: true, unlisted_reason: null, status: 'open' });
 
@@ -125,17 +136,17 @@ for (const vp of VIEWPORTS) {
       await expect(banner).toBeVisible();
       await expect(lowRow.getByTestId('order-unlisted-reason')).toHaveText(/^Not listed by the indexer: the order is worth less than the minimum order value/);
       await expect(lowRow.getByTestId('order-unlisted-hint')).toHaveText(/will not fill\. Cancel it, or replace it with a larger order\.$/);
-      // the machine code is only behind "Details"
+      // The machine code is only behind "Details".
       await expect(lowRow.getByTestId('order-unlisted-code')).toContainText('order_value_below_minimum');
       await expect(banner.locator('details[open]')).toHaveCount(0);
       await expect(lowRow.getByTestId('order-unlisted-reason')).not.toContainText('order_value_below_minimum');
-      // it is still cancellable
+      // It is still cancellable.
       await expect(lowRow.getByTestId(orderCancel(lowId))).toBeEnabled();
-      // the listed order has no such line
+      // The listed order has no such line.
       await expect(page.getByTestId(orderRow(okId))).toBeVisible();
       await expect(page.getByTestId(orderRow(okId)).getByTestId('order-unlisted')).toHaveCount(0);
       expect(await horizontalOverflow(page), 'My orders').toBe(0);
-      // and the banner stays inside the card
+      // And the banner stays inside the card.
       const card = (await lowRow.boundingBox())!;
       const inner = (await banner.boundingBox())!;
       expect(inner.x).toBeGreaterThanOrEqual(card.x - 1);

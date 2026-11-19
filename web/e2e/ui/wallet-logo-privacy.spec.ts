@@ -1,5 +1,7 @@
-// Review M5: a creator-hosted logo loads in a wallet view only for a token the user acquired (an order of theirs names it) or chose to show ("Show logo",
-// kept per token in this browser); a token dusted to the address shows its letter and makes no request to the creator's host. Market views load as before.
+// A creator-hosted logo loads in a wallet view only for a token the user acquired (an order of
+// theirs names it) or chose to show ("Show logo", kept per token in this browser).
+// A token dusted to the address shows its letter and makes no request to the creator's host.
+// Market views load logos as usual.
 // Mock stack, kascov mocked (e2e/helpers/kascov.ts).
 import { expect, test } from '../fixtures';
 import { connectWallet, TOKEN } from '../helpers/env';
@@ -37,7 +39,7 @@ test('wallet views: an acquired token loads its creator-hosted logo, a dusted on
   expect(log.requests).toContain(OWN_URL);
   expect(log.requests).not.toContain(DUST_URL);
 
-  // one click shows it and remembers the choice for the token
+  // One click shows it and remembers the choice for the token.
   await dust.click();
   await expect(dust).toHaveAttribute('data-icon', 'creator-image');
   await expect.poll(() => log.requests.includes(DUST_URL)).toBe(true);

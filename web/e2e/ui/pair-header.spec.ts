@@ -1,7 +1,14 @@
-// The two market headers are the same market bar (founder, 2026-11-11; e2e/ui/market-bar.spec.ts has its size and the figures).
-// A token pair: [icon A][fingerprint A] / [icon B][fingerprint B], the tickers ("TETH / TUSD", the pair selector), the swap button, the star and the figures in one row at 1280 and 880 px, one
-// row of the pair, the star and Live with the figures under it on a phone; the name, the id and the program chip of each token are in its details card. A token's KAS market: the identity block, the
-// pair and the swap, the figures, Live. Checked at 1280, 880, 390 and 360 px, also with the wide fonts (KOB_WIDE_FONTS=1: no row breaks the page's width).
+// The two market headers are the same market bar (e2e/ui/market-bar.spec.ts has its size and the
+// figures).
+//
+// - A token pair has [icon A][fingerprint A] / [icon B][fingerprint B], the tickers ("TETH / TUSD",
+//   the pair selector), the swap button, the star and the figures in one row at 1280 and 880 px.
+// - On a phone the pair, the star and Live are one row, with the figures under it.
+// - The name, the id and the program chip of each token are in its details card.
+// - A token's KAS market has the identity block, the pair and the swap, the figures and Live.
+//
+// Checked at 1280, 880, 390 and 360 px, also with the wide fonts (KOB_WIDE_FONTS=1: no row breaks
+// the page's width).
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures';
@@ -39,7 +46,8 @@ for (const width of [1280, 880, 390, 360]) {
       box(header.getByTestId(`token-icon-${base}`)), box(header.getByTestId(`fingerprint-${base}`)), box(header.getByTestId(`token-icon-${QUOTE}`)), box(header.getByTestId(`fingerprint-${QUOTE}`)),
       box(header.getByTestId('market-flip')), box(header.getByTestId('market-pair')), box(header.getByTestId('pair-favorite')), box(header.getByTestId('pair-live')),
     ]);
-    // left to right: icon A, fingerprint A, icon B, fingerprint B, the tickers, the swap button, the star, all on one row
+    // Left to right: icon A, fingerprint A, icon B, fingerprint B, the tickers, the swap button,
+    // the star, all on one row.
     expect(iconA.x).toBeLessThan(fpA.x);
     expect(fpA.x + fpA.width).toBeLessThanOrEqual(iconB.x + 1);
     expect(iconB.x).toBeLessThan(fpB.x);
@@ -49,15 +57,16 @@ for (const width of [1280, 880, 390, 360]) {
     const bar = await box(header.getByTestId('market-bar'));
     expect(flip.x + flip.width).toBeLessThanOrEqual(bar.x + bar.width + 1);
     expect(live.x + live.width).toBeLessThanOrEqual(bar.x + bar.width + 1);
-    // the pictures are 32 px on a desktop and 24 on a phone (two blocks in the first row)
+    // The pictures are 32 px on a desktop and 24 on a phone (two blocks in the first row).
     expect(iconA.height).toBeCloseTo(width >= 760 ? 32 : 24, 0);
-    // the tickers share the row of the pictures
+    // The tickers share the row of the pictures.
     for (const b of [pair, fpA, iconB, fpB, flip, star]) expect(Math.abs(b.y + b.height / 2 - (iconA.y + iconA.height / 2))).toBeLessThan(iconA.height / 2 + 4);
-    // the fingerprint is 60 % of the icon
+    // The fingerprint is 60 % of the icon.
     expect(Math.abs(fpA.height / iconA.height - 0.6)).toBeLessThan(0.03);
     expect(Math.abs(fpB.height / iconB.height - 0.6)).toBeLessThan(0.03);
     await expect(header.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
-    // no line per token in the header any more: the name, the id and the program chip are in each token's details card
+    // No line per token in the header any more: the name, the id and the program chip are in each
+    // token's details card.
     await expect(header.getByTestId('pair-token-meta')).toHaveCount(0);
     await expect(header.getByTestId('token-name')).toHaveCount(0);
     const facts = page.getByTestId('pair-token-details');
@@ -69,7 +78,7 @@ for (const width of [1280, 880, 390, 360]) {
       await expect(d.getByTestId('badge-family')).toHaveCount(1);
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-    // the selector is still there (market-unified.spec.ts drives it)
+    // The selector is still there (market-unified.spec.ts drives it).
     await expect(header.getByTestId('market-base-select')).toBeAttached();
     if (width !== 880) await header.screenshot({ path: test.info().outputPath(`pair-header-${width}.png`) });
   });
@@ -86,7 +95,8 @@ for (const width of [1280, 880, 390, 360]) {
       box(header.getByTestId(`token-icon-${id}`)), box(header.getByTestId(`fingerprint-${id}`)), box(header.getByTestId('market-pair')), box(header.getByTestId('market-flip')),
       box(header.getByTestId('live-indicator')), box(header.getByTestId('market-stats')), box(header.getByTestId('market-bar')),
     ]);
-    // the identity block at the left, then the pair and the swap; Live at the bar's right end; the figures beside them (a phone: under)
+    // The identity block at the left, then the pair and the swap. Live at the bar's right end. The
+    // figures beside them (a phone: under).
     expect(icon.x).toBeLessThan(fp.x);
     expect(fp.x + fp.width).toBeLessThanOrEqual(pair.x + 1);
     expect(pair.x + pair.width).toBeLessThanOrEqual(flip.x + 1);

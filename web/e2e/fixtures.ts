@@ -1,8 +1,11 @@
 // Playwright fixtures of the mock e2e stack:
-//   mock     typed client of the mock server's control API (reset to the default seed before every test)
-//   appPage  a page with `window.__KOB_CONFIG__` pointing at the mock indexer / node / registry and a chosen mock wallet installed
+//   mock     typed client of the mock server's control API (reset to the default seed before every
+//            test)
+//   appPage  a page with `window.__KOB_CONFIG__` pointing at the mock indexer / node / registry and
+//            a chosen mock wallet installed
 //   wallet   the handle of that mock wallet (call log, runtime steering)
-// Options (test.use): walletId, walletKey, walletOptions, appConfig, autoOpen, appPath, failOnPageError, covenantChecked.
+// Options (test.use): walletId, walletKey, walletOptions, appConfig, autoOpen, appPath,
+// failOnPageError, covenantChecked.
 import { test as base, expect, type Page } from '@playwright/test';
 import { startMockServer } from '../mock/server.mjs';
 import { TEST_PUBKEYS, TEST_SECRETS } from '../mock/keys.mjs';
@@ -12,12 +15,16 @@ import { installMockWallet, type InstallMockWalletOptions, type MockWalletHandle
 export { expect };
 export type { MockWalletHandle, MockWalletId };
 
-// ------------------------------------------------------------------------------------------------ deterministic test keys
+// ------------------------------------------------------------------------------------------------
+// deterministic test keys
 
 export type KeyName = keyof typeof TEST_SECRETS;
 export interface TestKey { name: KeyName; secretKey: string; pubkey: string; testnetAddress: string; mainnetAddress: string }
 
-/** alice / bob / carol are the users under test, `maker` owns the seeded book. Test money only: the secrets are public. */
+/**
+ * alice / bob / carol are the users under test, `maker` owns the seeded book. Test money only: the
+ * secrets are public.
+ */
 export const TEST_KEYS: Record<KeyName, TestKey> = Object.fromEntries(
   (Object.keys(TEST_SECRETS) as KeyName[]).map((name) => [
     name,
@@ -31,7 +38,8 @@ export const TEST_KEYS: Record<KeyName, TestKey> = Object.fromEntries(
   ]),
 ) as Record<KeyName, TestKey>;
 
-// ------------------------------------------------------------------------------------------------ control client
+// ------------------------------------------------------------------------------------------------
+// control client
 
 export interface GiveSpec {
   /** KAS (sompi) in `count` UTXOs of this size */
@@ -89,30 +97,41 @@ export class MockClient {
     return this.reset({ seed: true });
   }
   /**
-   * The executor's minimum order value (`min_order_value_sompi`, its default is 1 KAS = 100000000): orders placed from now on that are worth less are
-   * indexed with `listed: false, unlisted_reason: "order_value_below_minimum"`. Off (0) after a reset, so other specs' small orders stay listed.
+   * The executor's minimum order value (`min_order_value_sompi`, its default is 1 KAS = 100000000):
+   * orders placed from now on that are worth less are indexed with `listed: false, unlisted_reason:
+   * "order_value_below_minimum"`. Off (0) after a reset, so other specs' small orders stay listed.
    */
   minOrderValue(sompi: bigint | string | number) {
     return this.post('/mock/min-order-value', { sompi });
   }
-  /** The node's fee estimate (sompi per gram per bucket; the default after a reset: every bucket at the relay floor); `'off'`: the route answers 404. */
+  /**
+   * The node's fee estimate (sompi per gram per bucket; the default after a reset: every bucket at
+   * the relay floor); `'off'`: the route answers 404.
+   */
   feeEstimate(v: { priority?: number; normal?: number; low?: number } | 'off') {
     return this.post('/mock/fee-estimate', v === 'off' ? { off: true } : v);
   }
-  /** The node's past median time (unix ms) in `/node/info`, which an unlock is checked against; null: none (the default after a reset). */
+  /**
+   * The node's past median time (unix ms) in `/node/info`, which an unlock is checked against;
+   * null: none (the default after a reset).
+   */
   median(ms: number | bigint | null) {
     return this.post('/mock/median', { ms: ms === null ? null : Number(ms) });
   }
   /**
-   * The KAS price in USD the mock indexer serves (`GET /v1/price/kas-usd`; the default after a reset: $0.03, CoinGecko, taken now): `{ usd, source, ageS }` (how old its time
-   * is), `mode`: `ok`, `off` (404: an indexer without `usd_price`) or `down` (503: no price yet). Resolves with the state and the number of reads so far.
+   * The KAS price in USD the mock indexer serves (`GET /v1/price/kas-usd`; the default after a
+   * reset: $0.03, CoinGecko, taken now): `{ usd, source, ageS }` (how old its time is), `mode`:
+   * `ok`, `off` (404: an indexer without `usd_price`) or `down` (503: no price yet). Resolves with
+   * the state and the number of reads so far.
    */
   kasPrice(v: { usd?: number; source?: string; ageS?: number; mode?: 'ok' | 'off' | 'down' } = {}) {
     return this.post<{ usd: number; source: string; ageS: number; mode: string; reads: number }>('/mock/kas-price', v);
   }
   /**
-   * The executors' side of the mock indexer's `GET /v1/stats` (a field left out is kept): `legacy` serves an older indexer without the new fields, `incomeUnknownTxs` and
-   * `minerFeeUnknownTxs` are the transactions not counted, `negativeIncome` negates the executors' income. `mock.reset()` restores the default.
+   * The executors' side of the mock indexer's `GET /v1/stats` (a field left out is kept): `legacy`
+   * serves an older indexer without the new fields, `incomeUnknownTxs` and `minerFeeUnknownTxs` are
+   * the transactions not counted, `negativeIncome` negates the executors' income. `mock.reset()`
+   * restores the default.
    */
   activityStats(v: { legacy?: boolean; incomeUnknownTxs?: number; minerFeeUnknownTxs?: number; negativeIncome?: boolean } = {}) {
     return this.post<{ legacy: boolean; incomeUnknownTxs: number; minerFeeUnknownTxs: number; negativeIncome: boolean }>('/mock/activity-stats', v);
@@ -125,7 +144,10 @@ export class MockClient {
   seed(spec: Record<string, unknown>) {
     return this.post('/mock/seed', spec);
   }
-  /** Additive seeded market history (deterministic per `seed`): `{token?, hours = 48, trades = 600, seed = 1, mid?, tick?}`. */
+  /**
+   * Additive seeded market history (deterministic per `seed`): `{token?, hours = 48, trades = 600,
+   * seed = 1, mid?, tick?}`.
+   */
   seedHistory(spec: { token?: string; hours?: number; trades?: number; seed?: number; mid?: number; tick?: number } = {}) {
     return this.post('/mock/seed', { history: spec });
   }
@@ -143,8 +165,8 @@ export class MockClient {
     return (await this.get(`/mock/submitted${withTx ? '' : '?full=0'}`)).items;
   }
   /**
-   * Simulates a fill of `amount` base units (default: one whole token, at least the order's minimum fill, at most what is left; price: the
-   * current quote); IFD entries also book their exit order.
+   * Simulates a fill of `amount` base units (default: one whole token, at least the order's minimum
+   * fill, at most what is left; price: the current quote); IFD entries also book their exit order.
    */
   fill(covenantId: string, amount?: bigint | string | number, opts: { price?: bigint | string | number; taker?: KeyName | string } = {}) {
     return this.post('/mock/fill', { covenant_id: covenantId, ...(amount === undefined ? {} : { amount }), ...opts });
@@ -153,8 +175,9 @@ export class MockClient {
     return this.post('/mock/arm', { covenant_id: covenantId });
   }
   /**
-   * A token UTXO sent to an order's covenant id from outside the protocol. `token`: a FOREIGN stray of another token (a known ticker / covenant id,
-   * or a new covenant id registered as an unlisted token with `program` (default KCC20Ref_8x8) and `ticker`).
+   * A token UTXO sent to an order's covenant id from outside the protocol. `token`: a FOREIGN stray
+   * of another token (a known ticker / covenant id, or a new covenant id registered as an unlisted
+   * token with `program` (default KCC20Ref_8x8) and `ticker`).
    */
   stray(covenantId: string, amount: bigint | string | number, opts: { token?: string; program?: string; ticker?: string; decimals?: number } = {}) {
     return this.post('/mock/stray', { covenant_id: covenantId, amount, ...opts });
@@ -169,26 +192,39 @@ export class MockClient {
   failNextSubmit(message = 'mock: injected submit failure', count = 1) {
     return this.post('/mock/fail-next-submit', { message, count });
   }
-  /** Every API answer waits `ms` (+ up to `jitterMs` more, uniform); `scope: 'indexer'` delays only the indexer (`/v1/*`), not the node. */
+  /**
+   * Every API answer waits `ms` (+ up to `jitterMs` more, uniform); `scope: 'indexer'` delays only
+   * the indexer (`/v1/*`), not the node.
+   */
   latency(ms: number, o: { jitterMs?: number; scope?: 'all' | 'indexer' | 'node' } = {}) {
     return this.post('/mock/latency', { ms, jitter_ms: o.jitterMs ?? 0, scope: o.scope ?? 'all' });
   }
   /**
-   * `following` | `catching_up` | `node_unavailable` | `gap` ...; `extra`: `book_complete` / `history_from_daa` (a store that began late) and
-   * `payload_version` (a build of another KOB1 payload version) as `/v1/health` reports them
+   * `following` | `catching_up` | `node_unavailable` | `gap` ...; `extra`: `book_complete` /
+   * `history_from_daa` (a store that began late) and `payload_version` (a build of another KOB1
+   * payload version) as `/v1/health` reports them
    */
   setHealth(state: string, lagDaa = 0, extra: { book_complete?: boolean; history_from_daa?: number; payload_version?: number } = {}) {
     return this.post('/mock/health', { state, lag_daa: lagDaa, ...extra });
   }
-  /** The node lists an output of a submitted transaction only `holdMs` after it took it, as a real node once a block holds it (0: at once). */
+  /**
+   * The node lists an output of a submitted transaction only `holdMs` after it took it, as a real
+   * node once a block holds it (0: at once).
+   */
   nodeMempool(holdMs: number) {
     return this.post('/mock/node-mempool', { hold_ms: holdMs });
   }
-  /** A chain re-org of `blocks` blocks (1 = routine; more than 30 is "deep"); changes nothing in the order data. */
+  /**
+   * A chain re-org of `blocks` blocks (1 = routine; more than 30 is "deep"); changes nothing in the
+   * order data.
+   */
   reorg(blocks = 1) {
     return this.post('/mock/reorg', { blocks });
   }
-  /** A re-org that takes the last (partial) simulated fill of an order back out of the indexer's view (see MockChain.revertLastFill). */
+  /**
+   * A re-org that takes the last (partial) simulated fill of an order back out of the indexer's
+   * view (see MockChain.revertLastFill).
+   */
   revertFill(covenantId: string, blocks = 1) {
     return this.post('/mock/revert-fill', { covenant_id: covenantId, blocks });
   }
@@ -240,9 +276,13 @@ export class MockClient {
   }
 }
 
-// ------------------------------------------------------------------------------------------------ the bell's current status
+// ------------------------------------------------------------------------------------------------
+// the bell's current status
 
-/** Opens the bell's dialog (it may be open already). The conditions that hold now (`banner-*`) are listed in it, live; a gone one has left it. */
+/**
+ * Opens the bell's dialog (it may be open already). The conditions that hold now (`banner-*`) are
+ * listed in it, live; a gone one has left it.
+ */
 export async function openBell(page: Page): Promise<void> {
   const panel = page.getByTestId('notify-panel');
   if (!(await panel.isVisible())) await page.getByTestId('notify-bell').click();
@@ -255,13 +295,17 @@ export async function closeBell(page: Page): Promise<void> {
   await expect(page.getByTestId('notify-panel')).toHaveCount(0);
 }
 
-/** An entry of the current status, with the dialog open: so `toHaveCount(0)` on it says the condition is gone, not that the dialog is closed. */
+/**
+ * An entry of the current status, with the dialog open: so `toHaveCount(0)` on it says the
+ * condition is gone, not that the dialog is closed.
+ */
 export async function statusEntry(page: Page, testid: string) {
   await openBell(page);
   return page.getByTestId('notify-status').getByTestId(testid);
 }
 
-// ------------------------------------------------------------------------------------------------ app configuration
+// ------------------------------------------------------------------------------------------------
+// app configuration
 
 /** The `window.__KOB_CONFIG__` the app boots with in e2e runs. */
 export function appConfigFor(mockUrl: string, extra: Record<string, unknown> = {}) {
@@ -281,7 +325,9 @@ export interface AppOptions {
   walletId: MockWalletId | null;
   walletKey: KeyName;
   walletOptions: Partial<Omit<InstallMockWalletOptions, 'wallet' | 'secretKey'>>;
-  /** merged over the default injected config (network, indexerUrl, nodeUrl, registryUrl, features) */
+  /**
+   * merged over the default injected config (network, indexerUrl, nodeUrl, registryUrl, features)
+   */
   appConfig: Record<string, unknown>;
   /** navigate to `appPath` before the test body runs */
   autoOpen: boolean;
@@ -289,8 +335,9 @@ export interface AppOptions {
   /** fail the test on an uncaught page error */
   failOnPageError: boolean;
   /**
-   * the one-time covenant-signing check (C5-10, wallet/covenant-probe.ts) of a wallet not declared capable (Kastle) has already passed for every
-   * test key (default true: the wallet specs count sign requests); false: the ticket asks for the test signature first
+   * the one-time covenant-signing check (wallet/covenant-probe.ts) of a wallet not declared
+   * capable (Kastle) has already passed for every test key (default true: the wallet specs count
+   * sign requests); false: the ticket asks for the test signature first
    */
   covenantChecked: boolean;
 }
@@ -318,7 +365,8 @@ export const test = base.extend<AppOptions & TestFixtures, WorkerFixtures>({
   failOnPageError: [true, { option: true }],
   covenantChecked: [true, { option: true }],
 
-  // One shared server (started by playwright.config.ts) unless KOB_MOCK_PER_WORKER=1: then every worker owns an in-process server.
+  // One shared server (started by playwright.config.ts) unless KOB_MOCK_PER_WORKER=1: then every
+  // worker owns an in-process server.
   mockBase: [
     async ({}, use) => {
       const shared = process.env.KOB_MOCK_URL;
@@ -348,16 +396,19 @@ export const test = base.extend<AppOptions & TestFixtures, WorkerFixtures>({
     page.on('console', (m) => {
       if (m.type() === 'error') pageErrors.push(`console.error: ${m.text()}`);
     });
-    // the real kascov.io is never reached from a test: the market list asks it for names and icons (data/kascov.ts), and every spec gets an empty answer
-    // unless it installs its own route (e2e/helpers/kascov.ts; a later route wins). Nor are the Kaspa REST explorers KOB's own genesis check falls back to
-    // (data/genesis-check.ts) ever reached: 404 unless a spec installs its own route
+    // the real kascov.io is never reached from a test: the market list asks it for names and icons
+    // (data/kascov.ts), and every spec gets an empty answer unless it installs its own route
+    // (e2e/helpers/kascov.ts; a later route wins). Nor are the Kaspa REST explorers KOB's own
+    // genesis check falls back to (data/genesis-check.ts) ever reached: 404 unless a spec installs
+    // its own route
     await page.route(/^https:\/\/api(-tn10)?\.kaspa\.org\//, (route) =>
       route.fulfill({ status: 404, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '{}' }),
     );
     await page.route(/^https:\/\/kascov\.io\//, (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ network: 'testnet-10', generated_at_ms: 1, tokens: [] }) }),
     );
-    // KOB_WIDE_FONTS=1: every page in a font as wide as the CI runner's (DejaVu Sans; Verdana is close), to reproduce its layouts on a desktop
+    // KOB_WIDE_FONTS=1: every page in a font as wide as the CI runner's (DejaVu Sans; Verdana is
+    // close), to reproduce its layouts on a desktop
     if (process.env.KOB_WIDE_FONTS === '1') {
       await page.addInitScript(() => {
         document.addEventListener('DOMContentLoaded', () => {

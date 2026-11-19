@@ -1,6 +1,8 @@
-// The signing paths of every wallet the app supports (KasWare is the default of the other specs), and every way signing can end without an
-// accepted order: a wallet that declines, a wallet that signs the wrong thing, a network mismatch, a node that refuses the transaction.
-// Wallet popups are blind to token semantics, so the failure modes are what protects the user: none of them may broadcast anything.
+// The signing paths of every wallet the app supports (KasWare is the default of the other specs),
+// and every way signing can end without an accepted order: a wallet that declines, a wallet that
+// signs the wrong thing, a network mismatch, a node that refuses the transaction. Wallet popups are
+// blind to token semantics, so the failure modes are what protects the user: none of them may
+// broadcast anything.
 import { test, expect } from '../fixtures';
 import { disconnectWallet, fund, openMarket, gotoOrders } from '../helpers/env';
 import { runFlow, seedOrders } from '../helpers/orders';
@@ -25,7 +27,8 @@ test.describe('Kaspire', () => {
     const placed = await placeOrder(page, mock);
     await expectWalletSigned(wallet!, placed);
     const [call] = await wallet!.calls();
-    // the token input is a covenant (P2SH) input: Kaspire needs its redeem script and how to assemble the signature script
+    // the token input is a covenant (P2SH) input: Kaspire needs its redeem script and how to
+    // assemble the signature script
     expect(call!.scripts, 'per-input scripts').not.toBeNull();
     expect(call!.scripts!.length).toBeGreaterThan(0);
     for (const s of call!.scripts!) {
@@ -36,7 +39,8 @@ test.describe('Kaspire', () => {
     const id = placed.views[0].covenant_id;
     expect(placed.views[0].contract).toBe('KobAsk');
 
-    // cancel it: the only argument of `cancel` is the signature, so Kaspire can assemble the whole script (ordered-args)
+    // cancel it: the only argument of `cancel` is the signature, so Kaspire can assemble the whole
+    // script (ordered-args)
     await gotoOrders(page);
     await page.getByTestId(`order-cancel-${id}`).click();
     const [step] = await runFlow(page, mock, wallet, { steps: 1 });
@@ -59,7 +63,8 @@ test.describe('Kaspire', () => {
     await wallet!.configure({ dropScripts: true });
     const placed = await placeOrder(page, mock);
     await expectWalletSigned(wallet!, placed);
-    // the wallet was asked with scripts but answered without assembling them: only its signatures were used
+    // the wallet was asked with scripts but answered without assembling them: only its signatures
+    // were used
     const [call] = await wallet!.calls();
     expect(call!.scripts).not.toBeNull();
   });

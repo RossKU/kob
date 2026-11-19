@@ -1,16 +1,20 @@
-// The order-type matrix: one entry per order type and side of docs/spec/order-types.md, with what the final confirmation popup, the accepted transaction
-// (indexer state fields, locked value) and My orders must show. Every expected figure follows from the typed inputs and
-// the protocol rules (prices in KAS per EXKCC; amounts in EXKCC, 1 EXKCC = 1e8 base units = the order scale; the default seed rests around 0.025 KAS
-// with bids <= 0.0249 and asks >= 0.0251;
-// e.g. a 3% market bound is 0.0249 x 0.97 = 0.024153, a sell-first IFO prefund is stop-worst 0.02781 - entry 0.026 = 0.00181): a wrong number in
-// the UI fails the test.
+// The order-type matrix: one entry per order type and side of docs/spec/order-types.md, with what
+// the final confirmation popup, the accepted transaction (indexer state fields, locked value) and
+// My orders must show. Every expected figure follows from the typed inputs and the protocol rules
+// (prices in KAS per EXKCC; amounts in EXKCC, 1 EXKCC = 1e8 base units = the order scale; the
+// default seed rests around 0.025 KAS with bids <= 0.0249 and asks >= 0.0251; e.g. a 3% market
+// bound is 0.0249 x 0.97 = 0.024153, a sell-first IFO prefund is stop-worst 0.02781 - entry 0.026 =
+// 0.00181): a wrong number in the UI fails the test.
 //
-// Price fields of the on-chain state are sompi per whole token (per `scale` = 1e8 base units): 0.027 EXKCC per KAS = 2_700_000; amounts are base
-// units. All wallet defaults come from docs/spec/order-types.md and kob-wasm `defaultConstants` (tip 0, carrier 1 KAS per covenant UTXO, market 3%
-// over 20 s, stop 3% band over 30 s, rest time R 5 s, trigger threshold = the minimum fill, keeper tip 0.022 KAS on the 8/8 program, refund tip
-// 0.05 KAS). Minimum fill defaults (matcher.md 10): a resting order the amount worth 10 KAS (a notional, not a carrier) at its price, capped at the whole
-// amount (so every 2-token order here is filled whole: ONE delivery carrier of a bid); IOC / FOK / market 1 base unit; an IFD entry a quarter of
-// the amount (four fills: four delivery carriers and four prefunded exit carriers).
+// Price fields of the on-chain state are sompi per whole token (per `scale` = 1e8 base units):
+// 0.027 EXKCC per KAS = 2_700_000; amounts are base units. All wallet defaults come from
+// docs/spec/order-types.md and kob-wasm `defaultConstants` (tip 0, carrier 1 KAS per covenant UTXO,
+// market 3% over 20 s, stop 3% band over 30 s, rest time R 5 s, trigger threshold = the minimum
+// fill, keeper tip 0.022 KAS on the 8/8 program, refund tip 0.05 KAS). Minimum fill defaults
+// (matcher.md 10): a resting order the amount worth 10 KAS (a notional, not a carrier) at its
+// price, capped at the whole amount (so every 2-token order here is filled whole: ONE delivery
+// carrier of a bid); IOC / FOK / market 1 base unit; an IFD entry a quarter of the amount (four
+// fills: four delivery carriers and four prefunded exit carriers).
 import type { FieldValues, Side } from '../helpers/ticket';
 
 /** What a case may need from the browser / mock clock to type dates. */
@@ -46,28 +50,40 @@ export interface OrderCase {
   listType: string;
   listLabel: string;
   /**
-   * The final confirmation (the signer's table), read before it is confirmed: `orderTitle` = the title of the one order it lists; `lines` = the token
-   * lines of its summary (the net KAS and "Locked in orders" are checked against the accepted transaction); `card` = the rows of that order's table
-   * (every row except the DAA times, which are compared with the on-chain state); `exitTitle` / `exitCard` = the exit an if-done entry commits to.
+   * The final confirmation (the signer's table), read before it is confirmed: `orderTitle` = the
+   * title of the one order it lists; `lines` = the token lines of its summary (the net KAS and
+   * "Locked in orders" are checked against the accepted transaction); `card` = the rows of that
+   * order's table (every row except the DAA times, which are compared with the on-chain state);
+   * `exitTitle` / `exitCard` = the exit an if-done entry commits to.
    */
   receipt: { orderTitle: string; lines?: Record<string, string>; card: Record<string, string>; exitTitle?: string; exitCard?: Record<string, string> };
-  /** the KAS the accepted transaction locks in contracts (order output + custody carriers), summed from its outputs */
+  /**
+   * the KAS the accepted transaction locks in contracts (order output + custody carriers), summed
+   * from its outputs
+   */
   locked: string;
   escrowed: string | null;
   /** the exit an if-done entry commits to */
   exit?: ExitExpect;
-  /** exact fields of the state the indexer holds after acceptance (the on-chain facts: price, tif, tip, refund tip, carriers, slippage) */
+  /**
+   * exact fields of the state the indexer holds after acceptance (the on-chain facts: price, tif,
+   * tip, refund tip, carriers, slippage)
+   */
   state: Record<string, string>;
   timing: Timing;
 }
 
-// ------------------------------------------------------------------------------------------------ limit family
+// ------------------------------------------------------------------------------------------------
+// limit family
 const limit = (side: Side): Pick<OrderCase, 'type' | 'side' | 'kind' | 'listType' | 'listLabel'> => ({
   type: 'limit', side, kind: side === 'sell' ? 'KobAsk' : 'KobBid', listType: 'limit', listLabel: 'Limit (GTC)',
 });
 
 const SELL = { locked: '2 KAS', escrowed: '2 EXKCC' } as const;
-/** a 2-token resting buy at price p (KAS per token): escrow 2p, one delivery carrier (the default minimum fill is the whole amount) */
+/**
+ * a 2-token resting buy at price p (KAS per token): escrow 2p, one delivery carrier (the default
+ * minimum fill is the whole amount)
+ */
 const buyLimit = (escrowKas: string) => ({ locked: `${(1 + Number(escrowKas)).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} KAS`, escrowed: null });
 
 export const CASES: OrderCase[] = [
@@ -525,10 +541,11 @@ export const CASES: OrderCase[] = [
     state: { price: '2250000', entryStop: '2300000', bandDaa: '300', keeperTip: '2200000', armed: '0', amountLeft: '200000000' },
     timing: { kind: 'gtc' },
   },
-  // ---- repeat IFD / IFO (default unlimited within 90 days; explicit count). The merge tip is charged per exit minimum fill (cond-common.ts
-  // mergeTipRate): with the IFD default minimum fill (a quarter of the amount, 0.5 EXKCC) it would double per token and turn these spreads into a
-  // loss, so the cases set a 1 EXKCC minimum fill (merge tip 0.01 KAS per token buy-first, 0.015 sell-first; a 0.0155 KAS spread is the smallest
-  // profitable one here).
+  // ---- repeat IFD / IFO (default unlimited within 90 days; explicit count). The merge tip is
+  // charged per exit minimum fill (cond-common.ts mergeTipRate): with the IFD default minimum fill
+  // (a quarter of the amount, 0.5 EXKCC) it would double per token and turn these spreads into a
+  // loss, so the cases set a 1 EXKCC minimum fill (merge tip 0.01 KAS per token buy-first, 0.015
+  // sell-first; a 0.0155 KAS spread is the smallest profitable one here).
   {
     name: 'repeat IFD buy-first, default unlimited (within 90 days)', type: 'repeatIfd', side: 'buy', kind: 'KobIfdBid', listType: 'repeat', listLabel: 'Repeat IFD', locked: '5.049 KAS', escrowed: null,
     fields: () => ({ amount: '2', minFill: '1', price: '0.0245', 'exit.takeProfit': '0.04' }),
@@ -593,7 +610,10 @@ export const CASES: OrderCase[] = [
   },
 ];
 
-/** `datetime-local` text of `c.unix + seconds` in the browser's wall clock (truncated to the minute, like the input itself). */
+/**
+ * `datetime-local` text of `c.unix + seconds` in the browser's wall clock (truncated to the minute,
+ * like the input itself).
+ */
 function localAfter(c: Ctx, seconds: number): string {
   const d = new Date((c.unix + seconds - c.tz * 60) * 1000);
   const p = (n: number) => String(n).padStart(2, '0');

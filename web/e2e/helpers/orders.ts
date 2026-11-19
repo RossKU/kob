@@ -1,5 +1,6 @@
-// Helpers of the "My orders" flows: seeding orders for the wallet key, opening the orders page, and waiting for a (possibly multi-step) transaction flow
-// that starts at once: each step shows the final confirmation popup (confirmed here) and then asks the wallet.
+// Helpers of the "My orders" flows: seeding orders for the wallet key, opening the orders page, and
+// waiting for a (possibly multi-step) transaction flow that starts at once: each step shows the
+// final confirmation popup (confirmed here) and then asks the wallet.
 import type { Page } from '@playwright/test';
 import { expect, type MockClient, type KeyName, type MockWalletHandle } from '../fixtures';
 import { openMarket, type WalletName } from './env';
@@ -14,7 +15,10 @@ export interface SeedAsk {
   maker?: KeyName;
 }
 
-/** Seeds real (cancellable) orders of `maker` (default alice) for the default token; returns their covenant ids in order. */
+/**
+ * Seeds real (cancellable) orders of `maker` (default alice) for the default token; returns their
+ * covenant ids in order.
+ */
 export async function seedOrders(mock: MockClient, specs: SeedAsk[]): Promise<string[]> {
   const tok = await mock.token();
   const before = new Set((await mock.ordersOf('alice')).map((o) => o.covenant_id));
@@ -23,31 +27,39 @@ export async function seedOrders(mock: MockClient, specs: SeedAsk[]): Promise<st
   return after.filter((o) => !before.has(o.covenant_id)).map((o) => o.covenant_id);
 }
 
-/** Opens the details under an order's line (its actions other than Cancel, its facts, its fills) unless they are open already. */
+/**
+ * Opens the details under an order's line (its actions other than Cancel, its facts, its fills)
+ * unless they are open already.
+ */
 export async function openOrderRow(page: Page, id: string): Promise<void> {
   const toggle = page.getByTestId(`order-toggle-${id}`);
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
   await expect(page.getByTestId(`order-details-${id}`)).toBeVisible();
 }
 
-/** Opens the Portfolio page's Open orders tab with the mock wallet connected and waits for the list. */
+/**
+ * Opens the Portfolio page's Open orders tab with the mock wallet connected and waits for the list.
+ */
 export async function openOrders(page: Page, mock: MockClient, wallet: WalletName = 'kasware'): Promise<void> {
   await openMarket(page, mock, { route: '/portfolio/open', wallet });
   await expect(page.getByTestId('orders-list')).toBeVisible();
 }
 
 /**
- * Waits for the end of a transaction flow of My orders (`flow-done`, or `flow-stopped` with `stopped: true`): the action's click starts the first
- * step, and each step shows its final confirmation popup before its wallet request (confirmed here; `confirm: false` leaves the popups to the spec; the
- * private-key signer's frame is approved by the spec itself and shows no app popup). Returns the transactions the flow submitted, in order (decoded by the mock
- * node), and checks that the wallet signed exactly those and nothing else.
+ * Waits for the end of a transaction flow of My orders (`flow-done`, or `flow-stopped` with
+ * `stopped: true`): the action's click starts the first step, and each step shows its final
+ * confirmation popup before its wallet request (confirmed here; `confirm: false` leaves the popups
+ * to the spec; the private-key signer's frame is approved by the spec itself and shows no app
+ * popup). Returns the transactions the flow submitted, in order (decoded by the mock node), and
+ * checks that the wallet signed exactly those and nothing else.
  */
 export async function runFlow(page: Page, mock: MockClient, wallet: MockWalletHandle | null, opts: { steps?: number; stopped?: boolean; confirm?: boolean } = {}): Promise<Placed[]> {
   const end = page.getByTestId(opts.stopped ? 'flow-stopped' : 'flow-done');
   if (opts.confirm !== false) await confirmUntil(page, end);
   await expect(end).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
-  // the transactions: a multi-step flow lists the first 10 characters of each submitted step, the status line shows the last one in full
+  // the transactions: a multi-step flow lists the first 10 characters of each submitted step, the
+  // status line shows the last one in full
   const prefixes = (await page.locator('[data-testid^="flow-step-"] code').allTextContents()).map((c) => c.trim().replace('…', ''));
   const status = page.getByTestId('flow-status');
   await expect(status).toHaveAttribute('data-phase', /^(submitted|blocked|rejected|failed)$/);

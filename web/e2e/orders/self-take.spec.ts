@@ -1,6 +1,8 @@
-// A crossing order fills directly from the wallet (kob/take.ts): the user is the taker of the resting orders, at their prices, with no executor,
-// and pays only the network fee. The default book (mock/seed.mjs) is the market maker's: asks of 3 and 4 EXKCC at 0.0251, then 10 at 0.0252;
-// bids of 4 and 5 at 0.0249. Every take is a real transaction the mock node validates in the script engine.
+// A crossing order fills directly from the wallet (kob/take.ts): the user is the taker of the
+// resting orders, at their prices, with no executor, and pays only the network fee. The default
+// book (mock/seed.mjs) is the market maker's: asks of 3 and 4 EXKCC at 0.0251, then 10 at 0.0252;
+// bids of 4 and 5 at 0.0249. Every take is a real transaction the mock node validates in the script
+// engine.
 import { mkdirSync } from 'node:fs';
 import { expect, test, type MockClient } from '../fixtures';
 import { TOKEN, fund, openMarket } from '../helpers/env';
@@ -10,7 +12,10 @@ test.use({ autoOpen: false });
 
 const SHOTS = process.env.KOB_TAKE_SHOTS ?? '';
 
-/** alice's funded balance of the default token, base units (the funding first: it may land a moment after `fund`) */
+/**
+ * alice's funded balance of the default token, base units (the funding first: it may land a moment
+ * after `fund`)
+ */
 async function tokensOf(mock: MockClient): Promise<bigint> {
   await expect.poll(() => tokensNow(mock)).toBeGreaterThan(0n);
   return tokensNow(mock);
@@ -33,8 +38,8 @@ async function expectTake(page: import('@playwright/test').Page, fills: RegExp, 
 }
 
 /**
- * What the user sees of the block, whatever the font: each line one row (a narrow ticket cuts its end, the fee first), its whole text in its tooltip,
- * and no sideways scroll of the page.
+ * What the user sees of the block, whatever the font: each line one row (a narrow ticket cuts its
+ * end, the fee first), its whole text in its tooltip, and no sideways scroll of the page.
  */
 async function expectOneRow(page: import('@playwright/test').Page): Promise<void> {
   for (const id of ['order-take-fills', 'order-take-rest']) {
@@ -139,7 +144,7 @@ test.describe('direct fill from the book', () => {
     const book = page.getByTestId('order-book');
     await expect(book.locator(`[data-testid=book-ask-row][data-amount="${7n * TOKEN}"]`, { hasText: /^0\.0252/ })).toHaveCount(1, { timeout: 15_000 });
     await expect(book.locator('[data-testid=book-ask-row]', { hasText: /^0\.0251/ })).toHaveCount(0);
-    // the amount resets: what the click filled is no longer offered as "Fills now"; the steps stay
+    // the amount resets: what the click filled is not offered as "Fills now"; the steps stay
     await expect(page.getByTestId('order-amount')).toHaveValue('');
     await expect(page.getByTestId('order-take-fills')).toHaveCount(0);
     await expect(stepper).toBeVisible();
@@ -177,7 +182,7 @@ test.describe('direct fill from the book', () => {
     await clickPlace(page);
     await waitSubmitted(page);
     expect(await tokensOf(mock)).toBe(before - 4n * TOKEN);
-    // 4 x 0.0249 KAS less the fee (and the KAS the token change no longer carries)
+    // 4 x 0.0249 KAS less the fee (and the KAS the token change does not carry)
     const kas1 = BigInt((await mock.balance('alice')).kas);
     expect(kas1 - kas0).toBeGreaterThan(9_000_000n);
     expect(await activeOf(mock)).toEqual([]);
@@ -240,7 +245,8 @@ test.describe('direct fill by time in force', () => {
     await fillFields(page, { amount: '70', direct: 'take' });
     await expectTake(page, /^Fills now: 62 EXKCC at 0\.025\d+ avg/, /^Rest: not placed$/);
     await waitReviewable(page);
-    // Once the first take is in, someone takes the maker's asks that are left: bob's ask is the touch.
+    // Once the first take is in, someone takes the maker's asks that are left: bob's ask is the
+    // touch.
     const sent0 = (await mock.submitted(false)).length;
     let swept = false;
     await page.route('**/v1/books/**', async (route) => {

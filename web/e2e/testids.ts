@@ -1,5 +1,6 @@
-// The UI test-id contract: the UI hard-codes these `data-testid` values (it imports NOTHING from e2e/), the e2e specs use the constants.
-// Keep this list authoritative and short. Dynamic ids and intent-form fields go through the helpers at the bottom.
+// The UI test-id contract: the UI hard-codes these `data-testid` values (it imports NOTHING from
+// e2e/), the e2e specs use the constants. Keep this list authoritative and short. Dynamic ids and
+// intent-form fields go through the helpers at the bottom.
 export const TESTID = {
   // navigation
   navMarket: 'nav-market',
@@ -28,12 +29,22 @@ export const TESTID = {
   orderAmount: 'order-amount',
   orderPrice: 'order-price',
   orderTip: 'order-tip',
-  /** the amount label's button: the balance of the asset the order spends ("Available 988.41 KAS"); clicking it is Max */
+  /**
+   * the amount label's button: the balance of the asset the order spends ("Available 988.41 KAS");
+   * clicking it is Max
+   */
   orderAvailable: 'order-available',
-  /** the ONE button of the ticket: checks, the final confirmation (popup / signer frame), the wallet's own approval, send */
+  /**
+   * the ONE button of the ticket: checks, the final confirmation (popup / signer frame), the
+   * wallet's own approval, send
+   */
   orderPlace: 'order-place',
   orderIssues: 'order-issues',
-  /** the app's final confirmation of an external wallet (`confirm-order-title`, `-summary`, `-fee`, `-order-<i>` (+ `-exit`), `-problems`, `-updated`), its buttons and the private-key signer's frame table */
+  /**
+   * the app's final confirmation of an external wallet (`confirm-order-title`, `-summary`, `-fee`,
+   * `-order-<i>` (+ `-exit`), `-problems`, `-updated`), its buttons and the private-key signer's
+   * frame table
+   */
   confirmOrder: 'confirm-order',
   confirmOrderOk: 'confirm-order-ok',
   confirmOrderCancel: 'confirm-order-cancel',
@@ -42,9 +53,15 @@ export const TESTID = {
   signerFee: 'signer-fee',
   signerApprove: 'signer-approve',
   signerReject: 'signer-reject',
-  /** the inline status line under the button (`data-phase`: checking | confirming | signing | sending | submitted | blocked | rejected | failed; `rejected` + code `cancelled` after Cancel) */
+  /**
+   * the inline status line under the button (`data-phase`: checking | confirming | signing |
+   * sending | submitted | blocked | rejected | failed; `rejected` + code `cancelled` after Cancel)
+   */
   orderStatus: 'order-status',
-  /** inside a status line: the submitted transaction (`data-status`, `data-value` = full txid) or one error (`data-code`) */
+  /**
+   * inside a status line: the submitted transaction (`data-status`, `data-value` = full txid) or
+   * one error (`data-code`)
+   */
   txStatus: 'tx-status',
   txId: 'tx-id',
   sendError: 'send-error',
@@ -53,7 +70,8 @@ export const TESTID = {
   flowStatus: 'flow-status',
   flowDone: 'flow-done',
   flowStopped: 'flow-stopped',
-  // issuance only: the token issue page still has its confirmation screen (orders have the final confirmation above)
+  // issuance only: the token issue page still has its confirmation screen (orders have the final
+  // confirmation above)
   confirmScreen: 'confirm-screen',
   confirmSign: 'confirm-sign',
   confirmClose: 'confirm-close',
@@ -79,5 +97,8 @@ export const orderRow = (covenantId: string) => `order-row-${covenantId}`;
 export const orderCancel = (covenantId: string) => `order-cancel-${covenantId}`;
 export const orderReplace = (covenantId: string) => `order-replace-${covenantId}`;
 
-/** Every intent form input has `data-testid="field-<intentFieldName>"` (the field names of src/kob/intent-*.ts). */
+/**
+ * Every intent form input has `data-testid="field-<intentFieldName>"` (the field names of
+ * src/kob/intent-*.ts).
+ */
 export const field = (intentFieldName: string) => `field-${intentFieldName}`;

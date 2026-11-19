@@ -1,10 +1,14 @@
-// Order lifetime and ladder features of the ticket (mock KasWare wallet, default mock seed, EXKCC listed as tradable), each through the real UI to
-// the mock node:
-//   * exit lifetime of IFD / IFO exits (good till cancelled or until a date): the exit template the entry commits to and the exit order a fill creates;
-//   * timed activation (`activeFrom`) of conditional orders and if-done entries: the on-chain state;
-//   * the repeat ladder: several repeat IFD levels from one ticket, one click, each level its own popup, wallet request and transaction.
-// (The ticket no longer lists an order's terms: lifetimes and starts are asserted on what the accepted transaction commits to.)
-// Prices are KAS per EXKCC, amounts EXKCC (1e8 base units); state prices are sompi per whole token (0.026 KAS = 2_600_000).
+// Order lifetime and ladder features of the ticket (mock KasWare wallet, default mock seed, EXKCC
+// listed as tradable), each through the real UI to the mock node:
+//   * exit lifetime of IFD / IFO exits (good till cancelled or until a date): the exit template the
+//     entry commits to and the exit order a fill creates;
+//   * timed activation (`activeFrom`) of conditional orders and if-done entries: the on-chain
+//     state;
+//   * the repeat ladder: several repeat IFD levels from one ticket, one click, each level its own
+//     popup, wallet request and transaction. (The ticket does not list an order's terms:
+//     lifetimes and starts are asserted on what the accepted transaction commits to.) Prices are
+//     KAS per EXKCC, amounts EXKCC (1e8 base units); state prices are sompi per whole token (0.026
+//     KAS = 2_600_000).
 import { test, expect } from '../fixtures';
 import { browserTzOffset, fund, mockClock, openMarket } from '../helpers/env';
 import { expectWalletSigned, fillFields, pickType, placeLadder, placeOrder, waitReviewable, type FieldValues } from '../helpers/ticket';
@@ -13,17 +17,26 @@ test.use({ autoOpen: false });
 
 /** 90 days at 10 DAA/s */
 const GTC_DAA = 77_760_000;
-/** the "never" a good-till-cancelled exit commits to in its template (cond-common.ts GTC_EXIT_EXPIRY_DAA): its 90 days start when a fill creates it */
+/**
+ * the "never" a good-till-cancelled exit commits to in its template (cond-common.ts
+ * GTC_EXIT_EXPIRY_DAA): its 90 days start when a fill creates it
+ */
 const GTC_EXIT_EXPIRY_DAA = 1n << 62n;
 /** the 8-byte little-endian integer push of the state codec: 08 <u64 le> */
 const pushInt = (v: bigint): string => '08' + Array.from({ length: 8 }, (_, i) => Number((v >> BigInt(8 * i)) & 0xffn).toString(16).padStart(2, '0')).join('');
 const two = (n: number) => String(n).padStart(2, '0');
-/** `datetime-local` text of a unix time in the browser's wall clock (minute precision, like the input) */
+/**
+ * `datetime-local` text of a unix time in the browser's wall clock (minute precision, like the
+ * input)
+ */
 const localText = (unix: number, tz: number): string => {
   const d = new Date((unix - tz * 60) * 1000);
   return `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.getUTCDate())}T${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`;
 };
-/** the planner converts a wall-clock moment to DAA with the measured rate: 1% of the distance plus the planning lag */
+/**
+ * the planner converts a wall-clock moment to DAA with the measured rate: 1% of the distance plus
+ * the planning lag
+ */
 const slack = (secs: number) => Math.round(secs * 10 * 0.01) + 600;
 const daaAt = (placed: { daa: number; unix: number }, target: number) => placed.daa + (target - placed.unix) * 10;
 
@@ -53,12 +66,14 @@ test.describe('exit lifetime (R-10)', () => {
       const placed = await placeOrder(page, mock);
       const at = { daa: placed.submission.daa, unix: Math.floor(Date.parse(placed.submission.at) / 1000) };
       const entry = placed.views[0];
-      // the entry itself stays good till cancelled (90 days from placement); only its exits end on the date
+      // the entry itself stays good till cancelled (90 days from placement); only its exits end on
+      // the date
       expect(Math.abs(Number(entry.state.state.expiryDaa) - at.daa - GTC_DAA)).toBeLessThan(5_000);
       const tpl: string = entry.state.state.exitState;
       expect(tpl, 'the exit template no longer carries the GTC "never"').not.toContain(pushInt(GTC_EXIT_EXPIRY_DAA));
 
-      // a fill of the entry creates the exit: it ends on the chosen date (the DAA the planner converted it to), not 90 days after its creation
+      // a fill of the entry creates the exit: it ends on the chosen date (the DAA the planner
+      // converted it to), not 90 days after its creation
       await mock.fill(entry.covenant_id);
       const children = await mock.until(async () => (await mock.order(entry.covenant_id)).children as string[], (x) => x.length >= 1);
       const exit = await mock.order(children[0]!);
@@ -109,7 +124,8 @@ test.describe('timed start (R-11)', () => {
       const activeFrom = Number(state.activeFrom);
       expect(Math.abs(activeFrom - daaAt(at, target)), 'activeFrom = the chosen start').toBeLessThan(slack(2 * 3600));
       expect(activeFrom).toBeGreaterThan(at.daa);
-      // good till cancelled: 90 days from the placement, not from the start (the start does not extend the order)
+      // good till cancelled: 90 days from the placement, not from the start (the start does not
+      // extend the order)
       expect(Math.abs(Number(state.expiryDaa) - at.daa - GTC_DAA)).toBeLessThan(5_000);
       expect(Number(state.expiryDaa)).toBeGreaterThan(activeFrom);
     });
@@ -133,7 +149,8 @@ test.describe('repeat ladder (R-14)', () => {
     await fund(mock);
     await openMarket(page, mock);
     await pickType(page, 'repeatIfd', 'buy');
-    // a minimum fill of the whole amount keeps the merge tip of the repeats at 0.01 KAS per token (cases.ts, repeat section)
+    // a minimum fill of the whole amount keeps the merge tip of the repeats at 0.01 KAS per token
+    // (cases.ts, repeat section)
     await fillFields(page, { amount: '1', minFill: '1', price: '0.0245', 'exit.takeProfit': '0.04' });
     await waitReviewable(page);
     // one level by default: no ladder, no step field
@@ -145,7 +162,8 @@ test.describe('repeat ladder (R-14)', () => {
     await waitReviewable(page);
     const ladder = page.getByTestId('order-ladder');
     await expect(ladder).toContainText('Ladder: 3 levels');
-    // buy-first levels wait one step lower each; the exit moves with its entry (same profit per token)
+    // buy-first levels wait one step lower each; the exit moves with its entry (same profit per
+    // token)
     await expect(page.getByTestId('order-ladder-level-1')).toHaveText(/Level 1: entry 0\.0245\b.*KAS, take-profit 0\.04\b.*KAS/);
     await expect(page.getByTestId('order-ladder-level-2')).toHaveText(/Level 2: entry 0\.0235\b.*KAS, take-profit 0\.039\b.*KAS/);
     await expect(page.getByTestId('order-ladder-level-3')).toHaveText(/Level 3: entry 0\.0225\b.*KAS, take-profit 0\.038\b.*KAS/);
@@ -154,7 +172,8 @@ test.describe('repeat ladder (R-14)', () => {
 
     // one click: each level is its own transaction, the wallet is asked once per level
     const placed = await placeLadder(page, mock, 3);
-    // the node got exactly three transactions (placeLadder), one repeat entry each, at the stepped prices
+    // the node got exactly three transactions (placeLadder), one repeat entry each, at the stepped
+    // prices
     const entries = [];
     for (const p of placed) {
       expect(p.submission.created).toHaveLength(1);

@@ -1,7 +1,9 @@
-// The GitHub Pages mirror build (KOB_MIRROR=github-pages, src/app/mirror.ts) served under the sub-path /kob/ with no response headers, as
-// https://rossku.github.io/kob/ is: playwright.ghpages.config.ts. Checks: it loads from the sub-path (no request leaves /kob/), the market works
-// with the mock stack, the CSP is in a <meta> (the policy of public/_headers minus what a meta cannot carry), a framed page shows only the frame
-// notice, and the private-key option is absent everywhere (Connect, Settings, the signer page).
+// The GitHub Pages mirror build (KOB_MIRROR=github-pages, src/app/mirror.ts) served under the
+// sub-path /kob/ with no response headers, as https://rossku.github.io/kob/ is:
+// playwright.ghpages.config.ts. Checks: it loads from the sub-path (no request leaves /kob/), the
+// market works with the mock stack, the CSP is in a <meta> (the policy of public/_headers minus
+// what a meta cannot carry), a framed page shows only the frame notice, and the private-key option
+// is absent everywhere (Connect, Settings, the signer page).
 import type { Page } from '@playwright/test';
 import { devices } from '@playwright/test';
 import { CSP_HEADER, CSP_META, SIGNER_CSP_META } from '../../csp.mjs';
@@ -11,7 +13,10 @@ const BASE = '/kob/';
 
 test.use({ walletId: null, appPath: `${BASE}#/market` });
 
-/** The CSP violations the page reported (an init script listens before any of the page's own scripts run). */
+/**
+ * The CSP violations the page reported (an init script listens before any of the page's own scripts
+ * run).
+ */
 const violations = (page: Page) => page.evaluate(() => (window as unknown as { __cspViolations?: string[] }).__cspViolations ?? []);
 
 test.beforeEach(async ({ page }) => {
@@ -22,7 +27,10 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-/** Every request to the mirror's host stays under /kob/, and none of them fails (but config.json: the deploy writes it, the mock run injects its config). */
+/**
+ * Every request to the mirror's host stays under /kob/, and none of them fails (but config.json:
+ * the deploy writes it, the mock run injects its config).
+ */
 function watchRequests(page: Page, origin: string) {
   const outside: string[] = [];
   const failed: string[] = [];

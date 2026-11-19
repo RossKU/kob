@@ -1,6 +1,10 @@
-// Screenshots of the fixes from the TN10 wallet run of 2026-11-19 (review only, skipped without KOB_FIX_SHOTS=<dir>; KOB_FIX_SHOTS_TAG names
-// them, e.g. before / after): Unlock against the node's past median time and its refusal text, a token held only in a creator lock, a fresh
-// curve in Open orders before the indexer has it, and a record being cancelled while the node has not answered.
+// Screenshots of four wallet-run fixes (review only, skipped without KOB_FIX_SHOTS=<dir>).
+// KOB_FIX_SHOTS_TAG names the files, e.g. before / after.
+//
+// - Unlock against the node's past median time and its refusal text.
+// - A token held only in a creator lock.
+// - A fresh curve in Open orders before the indexer has it.
+// - A record being cancelled while the node has not answered.
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from '@playwright/test';
@@ -34,7 +38,8 @@ test('creator lock: Unlock by the node clock, its refusal, the program mark', as
   await page.getByTestId('issue-name').fill('Locked Coin');
   await page.getByTestId('issue-ticker').fill('LOCKD');
   await page.getByTestId('issue-supply').fill('1000000');
-  // keep everything, all locked until tomorrow 00:00 (the viewer's zone): the wallet holds the token only in its lock
+  // Keep everything, all locked until tomorrow 00:00 (the viewer's zone): the wallet holds the
+  // token only in its lock.
   const { date, until } = await page.evaluate(() => {
     const d = new Date();
     const t = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
@@ -53,7 +58,8 @@ test('creator lock: Unlock by the node clock, its refusal, the program mark', as
   await expect(page.getByTestId('issue-result')).toBeVisible({ timeout: 30_000 });
   const tokenId = (await page.getByTestId('issue-result-tokenId').getAttribute('data-value'))!;
 
-  // 128 s after the lock time by the wall clock; the node's clock (TN10: 127-130 s behind) is 2 s before it
+  // 128 s after the lock time by the wall clock. The node's clock (TN10: 127-130 s behind) is 2 s
+  // before it.
   await mock.median(until - 2_000);
   await page.clock.setSystemTime(until + 128_000);
   await page.goto('/#/portfolio');
@@ -63,8 +69,8 @@ test('creator lock: Unlock by the node clock, its refusal, the program mark', as
   await settle(page);
   await page.getByTestId('balances-panel').screenshot({ path: shot('unlock-early') });
 
-  // the press while the node clock is before the lock time (a build that shows the button then; else the node's clock passed and went back,
-  // as when the app switched nodes)
+  // The press while the node clock is before the lock time (a build that shows the button then;
+  // else the node's clock passed and went back, as when the app switched nodes).
   const unlock = row.getByTestId(`balance-unlock-${tokenId}`);
   if (!(await unlock.isVisible())) {
     await mock.median(until + 5_000);
@@ -98,7 +104,7 @@ test('a fresh curve in Open orders before the indexer has it', async ({ appPage:
   await expect(page.getByTestId('tx-status')).toBeVisible({ timeout: 30_000 });
   await page.getByTestId('confirm-close').click();
   await expect(page.getByTestId('issue-result-curve')).toBeVisible({ timeout: 30_000 });
-  // the indexer does not have it yet: the list reads the wallet's records and the node
+  // The indexer does not have it yet: the list reads the wallet's records and the node.
   await page.route('**/v1/**', (r) => r.abort());
   await gotoOrders(page);
   const row = page.locator('[data-testid^="order-row-"]').first();
@@ -114,7 +120,8 @@ test('a sell just cancelled, before the node answers', async ({ appPage: page, m
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.addInitScript(() => localStorage.setItem('kob.theme', 'light'));
   const [id] = await seedOrders(mock, [{ side: 'ask', price: 2_700_000, tokens: 3 }]);
-  // the indexer's live order gets a record; then the indexer is gone and the record is the list's source
+  // The indexer's live order gets a record. Then the indexer is gone and the record is the list's
+  // source.
   await openOrders(page, mock);
   await expect(page.getByTestId(`order-row-${id}`)).toHaveAttribute('data-status', 'open');
   await page.route('**/v1/**', (r) => r.abort());
@@ -124,7 +131,8 @@ test('a sell just cancelled, before the node answers', async ({ appPage: page, m
   await expect(page.getByTestId(`order-row-${id}`)).toHaveAttribute('data-status', 'open', { timeout: 30_000 });
   await page.getByTestId(`order-cancel-${id}`).click();
   await runFlow(page, mock, wallet, { steps: 1 });
-  // a new page with a slow node: the list shows from the records before the node's verdict on the cancelled order
+  // A new page with a slow node: the list shows from the records before the node's verdict on the
+  // cancelled order.
   await page.route('**/node/utxos', async (r) => {
     await new Promise((res) => setTimeout(res, 6_000));
     await r.continue();

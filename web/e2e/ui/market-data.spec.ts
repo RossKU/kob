@@ -1,6 +1,8 @@
-// Market data of the token page against the mock indexer's market endpoints (`/v1/trades|candles|quotes|stats|depth`): the 24 h stats strip, the
-// candlestick chart with its interval switch, the depth chart, the activity log, price grouping of the book, the theme toggle, and a phone
-// layout without horizontal scroll. The mock seeds a deterministic 48 h price history (`mock.seedHistory`) on top of the default book.
+// Market data of the token page against the mock indexer's market endpoints
+// (`/v1/trades|candles|quotes|stats|depth`): the 24 h stats strip, the candlestick chart with its
+// interval switch, the depth chart, the activity log, price grouping of the book, the theme toggle,
+// and a phone layout without horizontal scroll. The mock seeds a deterministic 48 h price history
+// (`mock.seedHistory`) on top of the default book.
 // `KOB_SHOTS=1` also saves full-page screenshots (dark / light / phone) to test-results/shots/.
 import { expect, test } from '../fixtures';
 import { TESTID } from '../testids';
@@ -20,7 +22,7 @@ async function openWithHistory(page: import('@playwright/test').Page, mock: impo
 test.describe('market data', () => {
   test('stats, candles, depth and the activity log render from the market-data endpoints', async ({ appPage: page, mock }) => {
     await openWithHistory(page, mock);
-    // 24 h stats
+    // 24 h stats.
     const stats = page.getByTestId('market-stats');
     await expect(stats).toHaveAttribute('data-state', 'ready');
     await expect(page.getByTestId('stat-last')).toContainText(/0\.02\d{4}/);
@@ -30,16 +32,16 @@ test.describe('market data', () => {
     await expect(page.getByTestId('stat-volume')).not.toContainText('—');
     await expect(page.getByTestId('stat-quote-volume')).not.toContainText('—');
 
-    // candles: the library draws into canvases; the gap-filled series has bars
+    // Candles: the library draws into canvases. The gap-filled series has bars.
     const chart = page.getByTestId('price-chart');
     await expect(chart).toHaveAttribute('data-state', 'ready');
     await expect(chart.locator('canvas').first()).toBeVisible();
     expect(Number(await chart.getAttribute('data-bars'))).toBeGreaterThan(50);
     await expect(page.getByTestId('chart-legend')).toContainText(/0\.02/);
-    // the book's mid line (/v1/quotes) and its read-out in the legend
+    // The book's mid line (/v1/quotes) and its read-out in the legend.
     await expect(chart).toHaveAttribute('data-mid', '1');
     await expect(page.getByTestId('chart-mid')).toContainText(/Mid\s*\d+\.\d+/);
-    // the mid line can be hidden and shown again (remembered in this browser)
+    // The mid line can be hidden and shown again (remembered in this browser).
     if (SHOTS) await page.getByTestId('price-chart').screenshot({ path: test.info().outputPath('chart-mid-on.png') });
     await page.getByTestId('chart-mid-toggle').click();
     await expect(page.getByTestId('chart-mid-toggle')).toHaveAttribute('aria-pressed', 'false');
@@ -47,11 +49,11 @@ test.describe('market data', () => {
     if (SHOTS) await page.getByTestId('price-chart').screenshot({ path: test.info().outputPath('chart-mid-off.png') });
     await page.getByTestId('chart-mid-toggle').click();
     await expect(page.getByTestId('chart-mid')).toContainText(/Mid\s*\d+\.\d+/);
-    // the TradingView attribution stays on the chart and in the footer
+    // The TradingView attribution stays on the chart and in the footer.
     await expect(chart.locator('a[href*="tradingview.com"]')).toHaveCount(1);
     await expect(page.getByTestId('footer-chart-notice')).toContainText('TradingView');
 
-    // interval switch (remembered)
+    // Interval switch (remembered).
     await page.getByTestId('chart-interval-1h').click();
     await expect(chart).toHaveAttribute('data-interval', '1h');
     await expect(chart).toHaveAttribute('data-state', 'ready');
@@ -64,7 +66,7 @@ test.describe('market data', () => {
     await expect(page.getByTestId('price-chart')).toHaveAttribute('data-interval', '1d');
     await page.getByTestId('chart-interval-5m').click();
 
-    // depth from /v1/depth (the Depth view of the book's panel)
+    // Depth from /v1/depth (the Depth view of the book's panel).
     await page.getByTestId('book-view-depth').click();
     const depth = page.getByTestId('depth-chart');
     await expect(depth).toHaveAttribute('data-source', 'depth');
@@ -73,7 +75,8 @@ test.describe('market data', () => {
     await expect(depth.locator('path.ask-area')).toHaveCount(1);
     await page.getByTestId('book-view-book').click();
 
-    // the activity log (the fills of /v1/fills): newest first, both taker sides coloured, the time of each
+    // The activity log (the fills of /v1/fills): newest first, both taker sides coloured, the time
+    // of each.
     const log = page.getByTestId(TESTID.activityList);
     await page.getByTestId('activity-actor-executions').click();
     const fills = log.locator('[data-testid="activity-row"][data-kind="fill"]');
@@ -102,8 +105,9 @@ test.describe('market data', () => {
     const bids = page.getByTestId(TESTID.bookBids).getByTestId('book-bid-row');
     const askAmount = await amounts(asks);
     const bidAmount = await amounts(bids);
-    // protocol v3 has no registry tick: the step is the one the visible prices sit on (their gcd, 10,000 sompi per whole token in the mock book), and
-    // 10 x it = 0.001 KAS per token: asks 0.0251 .. 0.026 round UP into one 0.026 row, bids 0.0249 .. 0.024 DOWN into 0.024
+    // Protocol v3 has no registry tick: the step is the one the visible prices sit on (their gcd,
+    // 10,000 sompi per whole token in the mock book), and 10 x it = 0.001 KAS per token: asks
+    // 0.0251 .. 0.026 round UP into one 0.026 row, bids 0.0249 .. 0.024 DOWN into 0.024.
     const select = page.getByTestId('book-group');
     await chooseOption(select, { index: 1 });
     await expect(asks).toHaveCount(1);
@@ -157,7 +161,8 @@ test.describe('market data on a phone', () => {
   test('stacks the panels without horizontal scroll', async ({ appPage: page, mock }) => {
     await openWithHistory(page, mock);
     await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', 'ready');
-    // below 1200 px the depth chart is the Depth view of the book's panel, not a panel of its own (depth-tab.spec.ts)
+    // Below 1200 px the depth chart is the Depth view of the book's panel, not a panel of its own
+    // (depth-tab.spec.ts).
     await expect(page.getByTestId('depth-section')).toHaveCount(0);
     await page.getByTestId('book-view-depth').click();
     await expect(page.getByTestId('depth-chart')).toHaveAttribute('data-state', 'ready');

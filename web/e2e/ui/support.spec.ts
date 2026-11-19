@@ -1,5 +1,7 @@
-// The Support page (#/support). The donation address is a mainnet one, so on this testnet-10 build too the page shows it and reads the mainnet explorer; that explorer is
-// mocked here, the real one is never reached. An empty address, injected with `__KOB_TEST_SUPPORT_ADDRESS__` (read with `features.test` on), hides the page.
+// The Support page (#/support). The donation address is a mainnet one, so on this testnet-10 build
+// too the page shows it and reads the mainnet explorer. That explorer is mocked here, the real one
+// is never reached. An empty address, injected with `__KOB_TEST_SUPPORT_ADDRESS__` (read with
+// `features.test` on), hides the page.
 import type { Page } from '@playwright/test';
 import { expect, test, TEST_KEYS } from '../fixtures';
 
@@ -55,7 +57,7 @@ test.describe('the page', () => {
     await expect(page.getByTestId('support-address')).toHaveAttribute('data-value', SUPPORT_ADDRESS);
     await expect(page.getByTestId('support-network')).toContainText('real KAS on Kaspa mainnet');
     await expect(page.getByTestId('support-terms')).toContainText('voluntary gift');
-    // the QR code keeps its white ground on a dark page
+    // The QR code keeps its white ground on a dark page.
     await expect(page.getByTestId('support-qr').locator('rect')).toHaveAttribute('fill', '#fff');
     await expect(page.getByTestId('support-qr').locator('path')).toHaveAttribute('fill', '#000');
 
@@ -65,7 +67,8 @@ test.describe('the page', () => {
     await expect(rows.nth(0).locator('td').last()).toHaveText('7');
     await expect(rows.nth(1)).toContainText('Guardian');
     await expect(rows.nth(1).locator('td').last()).toHaveText('4');
-    // the title badge: a decorative emoji, then the name; the address whole (the end is cut by CSS only where it cannot fit, never the middle)
+    // The title badge: a decorative emoji, then the name. The address whole (the end is cut by CSS
+    // only where it cannot fit, never the middle).
     await expect(rows.nth(0).locator('.support-badge [aria-hidden="true"]')).toHaveText('👑');
     await expect(rows.nth(0).locator('code')).toHaveText(TEST_KEYS.carol.mainnetAddress);
     await expect(rows.nth(0).locator('code')).toHaveAttribute('title', TEST_KEYS.carol.mainnetAddress);

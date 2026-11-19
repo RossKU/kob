@@ -1,5 +1,7 @@
-// Load, then show: a page's frame (cards, headings, column titles) is there at once, its contents come together once they settle, at most LIST_HOLD_MS (1.5 s) after the page
-// opened; what a trader acts on waits for none of it. The market list has its own spec (market-list-rows.spec.ts). Slow answers come from `mock.latency` and `page.route`.
+// Load, then show: a page's frame (cards, headings, column titles) is there at once, its contents
+// come together once they settle, at most LIST_HOLD_MS (1.5 s) after the page opened. What a trader
+// acts on waits for none of it. The market list has its own spec (market-list-rows.spec.ts). Slow
+// answers come from `mock.latency` and `page.route`.
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
 import { connectWallet, listExkcc, showActivity } from '../helpers/env';
@@ -7,7 +9,10 @@ import { seedOrders } from '../helpers/orders';
 
 test.use({ autoOpen: false, viewport: { width: 1440, height: 1000 } });
 
-/** Every number of `selector` matches the page has shown, from its first paint on (read in the page: a spec's polls would miss a row that comes alone). */
+/**
+ * Every number of `selector` matches the page has shown, from its first paint on (read in the page:
+ * a spec's polls would miss a row that comes alone).
+ */
 const watchCount = (page: Page, selector: string) =>
   page.addInitScript((sel) => {
     const seen = new Set<number>();
@@ -37,11 +42,12 @@ test('the Activity page: its heading and column titles at once, its rows all tog
   const rows = await log.getByTestId('activity-row').count();
   expect(await log.getByTestId('activity-row').first().evaluate((e) => getComputedStyle(e).animationName)).toBe('ml-rise');
   expect(await counts(page), 'nothing, then every row of the page').toEqual([0, rows]);
-  // the rows stood where they belong all along: the rise is `translate`, their places a `transform`
+  // The rows stood where they belong all along: the rise is `translate`, their places a
+  // `transform`.
   const second = log.getByTestId('activity-row').nth(1);
   await expect.poll(() => second.evaluate((e) => getComputedStyle(e).translate)).toBe('none');
   expect((await second.boundingBox())!.y).toBeGreaterThan((await log.getByTestId('activity-row').first().boundingBox())!.y);
-  // the rise is over: a row that comes now is live
+  // The rise is over: a row that comes now is live.
   await expect.poll(() => log.getByTestId('activity-row').first().evaluate((e) => e.classList.contains('ml-in'))).toBe(false);
 });
 
@@ -67,13 +73,13 @@ test('a token page: the ticket works at once while the book waits for the stats;
     await route.continue();
   });
   await page.goto(`/#/market/${token}`);
-  // the frame of the book: the column titles over the rows' places
+  // The frame of the book: the column titles over the rows' places.
   const frame = page.getByTestId('book-loading');
   await expect(frame).toBeVisible();
   await expect(frame.locator('.ob-head')).toContainText('Price');
   await expect(page.getByTestId('book-asks')).toHaveCount(0);
   await expect(page.getByTestId('market-stats')).toHaveAttribute('data-state', 'loading');
-  // the ticket does not wait
+  // The ticket does not wait.
   await expect(page.getByTestId('order-ticket')).toBeVisible();
   await page.getByTestId('order-amount').fill('1');
   await expect(page.getByTestId('order-amount')).toHaveValue('1');

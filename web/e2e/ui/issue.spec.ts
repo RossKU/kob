@@ -1,6 +1,7 @@
-// Smoke tests of the token creation view (#/create) against the mock stack: a full creation (KCC-23: the
-// preparation declaring the token details, then the genesis spending it) with the mock KasWare wallet and with the private key (one approval in
-// the signer frame), and the blocking cases.
+// Smoke tests of the token creation view (#/create) against the mock stack: a full creation
+// (KCC-23: the preparation declaring the token details, then the genesis spending it) with the mock
+// KasWare wallet and with the private key (one approval in the signer frame), and the blocking
+// cases.
 import { test, expect, TEST_KEYS } from '../fixtures';
 import { clickConnectOption, openSettingsAdvanced } from '../helpers/env';
 import { readReceipt, confirmReceipt, fillFields, pickType, placeOrder, waitReviewable } from '../helpers/ticket';
@@ -18,7 +19,8 @@ test.describe('token issuance', () => {
 
     await expect(page.getByTestId('issue-form')).toBeVisible();
     await expect(page.getByTestId('issue-review')).toBeDisabled();
-    // the page is "Create a token": one line under the title, the basics in view, the rest folded under Advanced; the explanations are behind "?"
+    // The page is "Create a token": one line under the title, the basics in view, the rest folded
+    // under Advanced. The explanations are behind "?".
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Create a token');
     await expect(page.getByTestId('nav-create')).toHaveText('Create token');
     await expect(page.getByTestId('issue-intro')).toHaveText('Create a fixed-supply token. The whole supply goes to your wallet.');
@@ -33,7 +35,8 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('issue-holder-add')).toBeHidden();
     await expect(page.getByTestId('issue-carrier')).toBeHidden();
     await page.getByTestId('issue-advanced').getByRole('button').first().click();
-    // the program: the published public-mint build (KCC20PublicMint, no minter) by default, the standalone 3 / 3 as the one alternative
+    // The program: the published public-mint build (KCC20PublicMint, no minter) by default, the
+    // standalone 3 / 3 as the one alternative.
     await expect(page.getByTestId('issue-program-public-mint')).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByTestId('issue-program').getByRole('radio')).toHaveCount(2);
     await page.getByTestId('issue-program-help').click();
@@ -42,21 +45,23 @@ test.describe('token issuance', () => {
     await page.getByTestId('issue-program-help').click();
     await expect(page.getByTestId('issue-program-help-panel')).toHaveCount(0);
     await page.getByTestId('issue-name').fill('New Example Coin');
-    // the ticker is uppercased as typed
+    // The ticker is uppercased as typed.
     await page.getByTestId('issue-ticker').fill('newkcc');
     await expect(page.getByTestId('issue-ticker')).toHaveValue('NEWKCC');
     await page.getByTestId('issue-decimals').fill('2');
     await page.getByTestId('issue-supply').fill('1000000');
-    // the token's accounts: a handle each, kept as the account's address in the proposed registry entry
+    // The token's accounts: a handle each, kept as the account's address in the proposed registry
+    // entry.
     await page.getByTestId('issue-x').fill('@newkcc');
     await page.getByTestId('issue-telegram').fill('@newkcc_chat');
 
-    // default holder: the whole supply to the connected wallet, shown explicitly
+    // Default holder: the whole supply to the connected wallet, shown explicitly.
     await expect(page.getByTestId('issue-holder-0-amount')).toHaveValue('1000000');
     await expect(page.getByTestId('issue-summary')).toBeVisible();
     await expect(page.getByTestId('issue-summary-supply')).toContainText('1,000,000');
     await expect(page.getByTestId('issue-summary')).toContainText('KCC20PublicMint');
-    // choosing the standalone 3 / 3 plans that program and says it is not recognised by other indexers; back to the default for the issuance below
+    // Choosing the standalone 3 / 3 plans that program and says it is not recognised by other
+    // indexers. Back to the default for the issuance below.
     await page.getByTestId('issue-program-3x3').click();
     await expect(page.getByTestId('issue-program-3x3')).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByTestId('issue-summary')).toContainText('KCC20Ref');
@@ -69,7 +74,8 @@ test.describe('token issuance', () => {
 
     await page.getByTestId('issue-review').click();
     await expect(page.getByTestId('confirm-screen')).toBeVisible();
-    // the short summary first; the risk and the wallet notes one line each, their full text behind "?"
+    // The short summary first. The risk and the wallet notes one line each, their full text behind
+    // "?".
     await expect(page.getByTestId('confirm-brief-create')).toContainText('1,000,000 NEWKCC');
     await expect(page.getByTestId('confirm-brief-keep')).toContainText('1,000,000 NEWKCC');
     await expect(page.getByTestId('confirm-brief-fee')).toContainText('for 2 transactions');
@@ -78,7 +84,7 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('confirm-risk')).toContainText('Unaudited token program');
     await expect(page.getByTestId('confirm-wallet-line')).toHaveText(/Your wallet asks twice and shows only KAS/);
     await expect(page.getByTestId('confirm-wallet-line')).toHaveAttribute('data-codes', /walletTwice/);
-    // the full sections are under "All details": what is recorded on chain with the token (KCC-23)
+    // The full sections are under "All details": what is recorded on chain with the token (KCC-23).
     const declare = page.getByTestId('confirm-section-declare');
     await expect(declare).toBeHidden();
     await page.getByTestId('confirm-details').locator(':scope > summary').click();
@@ -93,16 +99,18 @@ test.describe('token issuance', () => {
     await page.getByTestId('confirm-ack').check();
     await page.getByTestId('confirm-sign').click();
 
-    // the pre-sign screen reports the accepted transaction; closing it hands the result to the issuance view
+    // The pre-sign screen reports the accepted transaction. Closing it hands the result to the
+    // issuance view.
     await expect(page.getByTestId('tx-status')).toBeVisible({ timeout: 30_000 });
     await page.getByTestId('confirm-close').click();
 
-    // result panel
+    // Result panel.
     await expect(page.getByTestId('issue-result')).toBeVisible({ timeout: 30_000 });
     const tokenId = await page.getByTestId('issue-result-tokenId').getAttribute('data-value');
     expect(tokenId).toMatch(/^[0-9a-f]{64}$/);
 
-    // the mock node accepted the preparation, then the genesis spending its output 0; the covenant is the one shown
+    // The mock node accepted the preparation, then the genesis spending its output 0. The covenant
+    // is the one shown.
     const submitted = await mock.submitted();
     expect(submitted.length).toBeGreaterThan(1);
     const genesis = submitted[submitted.length - 1];
@@ -110,27 +118,31 @@ test.describe('token issuance', () => {
     expect(genesis.txid).toBe(await page.getByTestId('issue-result-txid').getAttribute('data-value'));
     expect(prep.txid).toBe(await page.getByTestId('issue-result-prepTxid').getAttribute('data-value'));
     expect(genesis.tx.inputs.map((i: any) => [i.transactionId, i.index])).toEqual([[prep.txid, 0]]);
-    // the genesis names the states of its token outputs (KOBG | version 1 | count | length-prefixed 112-byte state spans): how an indexer, the
-    // issuing key in another browser and the CLI find the issued output, which has no transfer leader to reveal it
+    // The genesis names the states of its token outputs (KOBG | version 1 | count | length-prefixed
+    // 112-byte state spans): how an indexer, the issuing key in another browser and the CLI find
+    // the issued output, which has no transfer leader to reveal it.
     expect(genesis.tx.payload).toMatch(/^4b4f4247010170[0-9a-f]{224}$/);
     const declared = '{"name":"New Example Coin","symbol":"NEWKCC","decimals":2,"x":"https://x.com/newkcc","telegram":"https://t.me/newkcc_chat"}';
     expect(prep.tx.payload).toBe(`00${Buffer.from(declared, 'utf8').toString('hex')}`);
     const covenantIds = (genesis.tx?.outputs ?? []).map((o: any) => o?.covenant?.covenantId ?? o?.covenant?.covenant_id).filter(Boolean);
     expect(covenantIds).toEqual([tokenId]);
-    // the indexer captured the declaration (as the executor does) and serves it as a launch proof; the result offers the same proof
+    // The indexer captured the declaration (as the executor does) and serves it as a launch proof.
+    // The result offers the same proof.
     const proof = await mock.get(`/v1/tokens/${tokenId}/declaration`);
     expect(proof).toMatchObject({ format: 'kob-kcc23-proof/1', covenantId: tokenId, preparation: { payload: prep.tx.payload } });
     await expect(page.getByTestId('issue-proof-download')).toBeVisible();
-    // nothing is left to resume
+    // Nothing is left to resume.
     expect(await page.evaluate(() => [localStorage.getItem('kob.creations.v1'), localStorage.getItem('kob.creations.v2')])).toEqual([null, null]);
 
-    // the wallet's token output is remembered by the token tracker (test hook window.__kob, present with features.test)
+    // The wallet's token output is remembered by the token tracker (test hook window.__kob, present
+    // with features.test).
     const tracked = await page.evaluate((pk) => (window as any).__kob.services.tracker.list(pk), TEST_KEYS.alice.pubkey);
     expect(tracked).toHaveLength(1);
     expect(tracked[0]).toMatchObject({ transactionId: genesis.txid, index: 0, tokenCovId: tokenId, program: 'KCC20PublicMint' });
     expect(tracked[0].state.amount).toBe('100000000');
 
-    // the token's facts in the registry format (for tools and community lists: no listing request; the page itself shows no verification state)
+    // The token's facts in the registry format (for tools and community lists: no listing request;
+    // the page itself shows no verification state).
     const entry = JSON.parse((await page.getByTestId('issue-registry-entry').textContent()) ?? '');
     expect(entry).toMatchObject({ ticker: 'NEWKCC', name: 'New Example Coin', decimals: 2, covenant_id: tokenId, template_id: 'kcc20-ref-public-mint', max_token_inputs: 3, verified: false });
     expect(entry).not.toHaveProperty('status');
@@ -140,23 +152,25 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('issue-result-listing-note')).toContainText('KOB keeps no list of approved tokens');
     await expect(page.getByTestId('issue-result-listing-note')).not.toContainText(/pull request|official/i);
 
-    // download of the entry
+    // Download of the entry.
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('issue-registry-download').click()]);
     expect(download.suggestedFilename()).toBe('NEWKCC.registry-entry.json');
 
-    // reset for another issuance
+    // Reset for another issuance.
     await page.getByTestId('issue-another').click();
     await expect(page.getByTestId('issue-form')).toBeVisible();
     await expect(page.getByTestId('issue-name')).toHaveValue('');
 
-    // its market (no order yet: known from the wallet's holdings) names it by its declaration: the declared name and ticker, marked as declared
-    // on chain like the wallet views, and the banner says the decimals are the declared ones (not a price scale, not "the chain carries none")
+    // Its market (no order yet: known from the wallet's holdings) names it by its declaration: the
+    // declared name and ticker, marked as declared on chain like the wallet views, and the banner
+    // says the decimals are the declared ones (not a price scale, not "the chain carries none").
     await page.goto(`/#/market/${tokenId}`);
     const header = page.getByTestId('token-header');
-    // the name is in the details card (the market bar holds the pair, the figures and Live)
+    // The name is in the details card (the market bar holds the pair, the figures and Live).
     await expect(page.getByTestId('token-details').getByTestId('token-name')).toHaveText('New Example Coin');
     await expect(header.getByTestId('token-title')).toContainText('NEWKCC');
-    // a token on its declaration is a normal token: no marker next to the name; where its facts come from is in the token's details
+    // A token on its declaration is a normal token: no marker next to the name. Where its facts
+    // come from is in the token's details.
     await expect(page.getByTestId('token-details').getByTestId('token-decimals-note')).toHaveCount(0);
     await expect(header).not.toContainText('declared, bound by ancestry');
     await page.getByTestId('token-status-details').getByRole('button').first().click();
@@ -183,16 +197,18 @@ test.describe('token issuance', () => {
     const tokenId = (await page.getByTestId('issue-result-tokenId').getAttribute('data-value'))!;
     const genesisTxid = (await page.getByTestId('issue-result-txid').getAttribute('data-value'))!;
 
-    // the issuing browser tracks the output; the INDEXER lists it too, to the owner, before any transfer or order (the genesis named it)
+    // The issuing browser tracks the output. The INDEXER lists it too, to the owner, before any
+    // transfer or order (the genesis named it).
     const alice = TEST_KEYS.alice.pubkey;
     expect(await page.evaluate((pk) => (window as any).__kob.services.tracker.list(pk).length, alice)).toBe(1);
     const held = await mock.get(`/v1/token-utxos?owner=${alice}&token=${tokenId}`);
     expect(held.items).toHaveLength(1);
     expect(held.items[0]).toMatchObject({ txid: genesisTxid, index: 0, token: tokenId, owner: alice, amount: '100000000000', role: 'owned', program: 'KCC20PublicMint', spent: false });
-    // a key that did not receive it is listed nothing
+    // A key that did not receive it is listed nothing.
     expect((await mock.get(`/v1/token-utxos?owner=${TEST_KEYS.bob.pubkey}&token=${tokenId}`)).items).toEqual([]);
 
-    // a fresh profile: this browser forgets everything it knew (the tracker, the creation records, the settings)
+    // A fresh profile: this browser forgets everything it knew (the tracker, the creation records,
+    // the settings).
     await page.goto('about:blank');
     await page.evaluate(() => undefined);
     await page.goto('/#/create');
@@ -206,7 +222,8 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('wallet-address')).toBeVisible();
     expect(await page.evaluate((pk) => (window as any).__kob.services.tracker.list(pk).length, alice)).toBe(0);
 
-    // the wallet holds the tokens (found through the indexer and confirmed on the node) and can list them for sale
+    // The wallet holds the tokens (found through the indexer and confirmed on the node) and can
+    // list them for sale.
     await expect(page.getByTestId('order-ticket')).toBeVisible({ timeout: 30_000 });
     await pickType(page, 'limit', 'sell');
     await fillFields(page, { amount: '100', price: '0.05' });
@@ -216,13 +233,14 @@ test.describe('token issuance', () => {
     const asks = await mock.ordersOf('alice');
     expect(asks).toHaveLength(1);
     expect(asks[0]).toMatchObject({ token: tokenId, side: 1, status: 'open' }); // side 1: an ask (a sell)
-    // and the order took the very output the genesis made
+    // And the order took the very output the genesis made.
     expect(placed.submission.spent?.map((s) => s.outpoint)).toContain(`${genesisTxid}:0`);
   });
 
   test('Settings: "Find a token you created earlier" recovers an issuance output of an older creation this browser never saw', async ({ appPage: page, mock }) => {
-    // a token created before genesis payloads named their states: its output is held by the key, the app knows nothing of it (no tracker entry,
-    // no declaration, decimals unknown). The issuer says what the creation gave the key; the node confirms the output.
+    // A token created before genesis payloads named their states: its output is held by the key,
+    // the app knows nothing of it (no tracker entry, no declaration, decimals unknown). The issuer
+    // says what the creation gave the key. The node confirms the output.
     const id = '9c'.repeat(32);
     await mock.seed({ tokens: [{ ticker: '', covenant_id: id, program: 'KCC20Ref', extension_commitment: null, decimals: null, hidden: true }] });
     await mock.giveTokens('alice', 500_000n, { token: id });
@@ -231,7 +249,7 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('wallet-address')).toBeVisible();
     await openSettingsAdvanced(page);
     await expect(page.getByTestId('tracker-empty')).toBeVisible();
-    // the backup is named where it is made
+    // The backup is named where it is made.
     await expect(page.getByTestId('settings-tracker')).toContainText('Keep this list');
 
     await page.getByTestId('recover-id').fill('not an id');
@@ -240,15 +258,15 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('recover-message')).toContainText('64-character covenant id');
     await page.getByTestId('recover-id').fill(id);
     await page.getByTestId('recover-find').click();
-    // the token declares no decimals on chain: they are asked for
+    // The token declares no decimals on chain: they are asked for.
     await expect(page.getByTestId('recover-message')).toContainText('declares no decimals');
     await page.getByTestId('recover-decimals').fill('2');
-    // an amount the creation did not give the key finds nothing, and nothing is stored
+    // An amount the creation did not give the key finds nothing, and nothing is stored.
     await page.getByTestId('recover-amount').fill('4999');
     await page.getByTestId('recover-find').click();
     await expect(page.getByTestId('recover-message')).toContainText('holds no output of this token for your key with that amount');
     await expect(page.getByTestId('tracker-empty')).toBeVisible();
-    // the exact amount: found, confirmed on the node, remembered
+    // The exact amount: found, confirmed on the node, remembered.
     await page.getByTestId('recover-amount').fill('5000');
     await page.getByTestId('recover-find').click();
     await expect(page.getByTestId('recover-message')).toContainText('Found 1 output of this token for your key.');
@@ -272,7 +290,7 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('issue-ticker')).not.toHaveAttribute('aria-invalid', 'true');
     await expect(page.getByTestId('issue-review')).toBeEnabled();
 
-    // a look-alike ticker warns the same way; a different one has no warning
+    // A look-alike ticker warns the same way. A different one has no warning.
     await page.getByTestId('issue-ticker').fill('EXKR0N'); // EXKRON with a zero
     await expect(page.getByTestId('issue-issue-ticker.lookalike')).toBeVisible();
     await expect(page.getByTestId('issue-review')).toBeEnabled();
@@ -292,7 +310,7 @@ test.describe('token issuance', () => {
     await page.getByTestId('issue-ticker').fill('SPLIT');
     await page.getByTestId('issue-decimals').fill('0');
     await page.getByTestId('issue-supply').fill('100');
-    // the holders are under Advanced
+    // The holders are under Advanced.
     await page.getByTestId('issue-advanced').getByRole('button').first().click();
     await page.getByTestId('issue-holder-add').click();
     await page.getByTestId('issue-holder-1-owner').fill('ab'.repeat(32));
@@ -317,7 +335,7 @@ test.describe('token issuance', () => {
       await page.goto('/#/create');
       await clickConnectOption(page, 'wallet-connect-kasware');
       await expect(page.getByTestId('wallet-address')).toBeVisible();
-      // the field hints are not on the page: each is behind its label's "?"
+      // The field hints are not on the page: each is behind its label's "?".
       const ticker = page.getByTestId('issue-ticker-help');
       await expect(ticker).toHaveAttribute('aria-label', 'More about Ticker');
       await expect(ticker).toHaveAttribute('aria-expanded', 'false');
@@ -327,12 +345,12 @@ test.describe('token issuance', () => {
       const panel = page.getByTestId('issue-ticker-help-panel');
       await expect(panel).toContainText('capital letters A-Z or digits 0-9');
       await expect(ticker).toHaveAttribute('aria-controls', (await panel.getAttribute('id'))!);
-      // inside the window, 16 px from its sides, nothing scrolls sideways
+      // Inside the window, 16 px from its sides, nothing scrolls sideways.
       const box = (await panel.boundingBox())!;
       expect(box.x).toBeGreaterThanOrEqual(16);
       expect(box.x + box.width).toBeLessThanOrEqual(width - 16);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-      // a tap elsewhere closes it; so does Escape, which puts the focus back on its button
+      // A tap elsewhere closes it. So does Escape, which puts the focus back on its button.
       await page.getByRole('heading', { level: 1 }).click();
       await expect(panel).toHaveCount(0);
       await ticker.focus();
@@ -345,7 +363,7 @@ test.describe('token issuance', () => {
       await expect(panel).toBeVisible();
       await page.keyboard.press('Escape');
       for (const id of ['issue-name-help', 'issue-supply-help', 'issue-decimals-help', 'issue-icon-help', 'issue-image-file-help', 'issue-intro-help']) await expect(page.getByTestId(id), id).toHaveAttribute('aria-label', /^More about /);
-      // validation errors stay at their field
+      // Validation errors stay at their field.
       await page.getByTestId('issue-ticker').fill('A');
       await page.getByTestId('issue-ticker').blur();
       await expect(page.getByTestId('issue-ticker').locator('xpath=ancestor::div[contains(@class,"field")][1]').locator('.field-error')).toBeVisible();
@@ -355,7 +373,8 @@ test.describe('token issuance', () => {
       await page.getByTestId('issue-supply').fill('1000');
       await page.getByTestId('issue-review').click();
       await expect(page.getByTestId('confirm-screen')).toBeVisible();
-      // the "not audited" disclosure: a short line in view before signing, its full text one tap away
+      // The "not audited" disclosure: a short line in view before signing, its full text one tap
+      // away.
       const risk = page.getByTestId('confirm-risk');
       await expect(risk).toBeVisible();
       await expect(risk).toHaveAttribute('data-codes', 'unaudited');
@@ -369,14 +388,14 @@ test.describe('token issuance', () => {
       await expect(page.getByTestId('confirm-risk-help-panel')).toHaveCount(0);
       await expect(page.getByTestId('confirm-screen')).toBeVisible();
       await expect(page.getByTestId('confirm-risk-help')).toBeFocused();
-      // the locked KAS and the fees explain themselves behind their "?"
+      // The locked KAS and the fees explain themselves behind their "?".
       await page.getByTestId('confirm-brief-locked-help').click();
       await expect(page.getByTestId('confirm-brief-locked-help-panel')).toContainText('Every token output carries KAS.');
       await page.getByTestId('confirm-brief-fee-help').click();
       await expect(page.getByTestId('confirm-brief-locked-help-panel')).toHaveCount(0);
       await expect(page.getByTestId('confirm-brief-fee-help-panel')).toContainText('Paid to the network, not returned');
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-      // a second Escape closes the dialog as before
+      // A second Escape closes the dialog.
       await page.keyboard.press('Escape');
       await page.keyboard.press('Escape');
       await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
@@ -392,7 +411,7 @@ test.describe('token issuance', () => {
     await page.getByTestId('issue-name').fill('Poor Coin');
     await page.getByTestId('issue-ticker').fill('POOR');
     await page.getByTestId('issue-supply').fill('1000');
-    // 10 KAS carrier default, 4 KAS in the wallet: 6 KAS short
+    // 10 KAS carrier default, 4 KAS in the wallet: 6 KAS short.
     const shortfall = page.getByTestId('issue-issue-funds.insufficient');
     await expect(shortfall).toBeVisible();
     await expect(shortfall).toContainText('6');
@@ -408,7 +427,8 @@ test.describe('token issuance', () => {
     await page.getByTestId('issue-ticker').fill('RESUME');
     await page.getByTestId('issue-supply').fill('100');
     await expect(page.getByTestId('issue-summary')).toBeVisible();
-    // the node takes the preparation and refuses the genesis: the app's fetch of the second submission fails
+    // The node takes the preparation and refuses the genesis: the app's fetch of the second
+    // submission fails.
     let submits = 0;
     await page.route('**/*', async (route) => {
       const r = route.request();
@@ -420,18 +440,20 @@ test.describe('token issuance', () => {
     await page.getByTestId('issue-review').click();
     await page.getByTestId('confirm-ack').check();
     await page.getByTestId('confirm-sign').click();
-    // the preparation is on chain, the genesis is not: the confirmation closes, the page offers the creation (never signed again on that screen)
+    // The preparation is on chain, the genesis is not: the confirmation closes, the page offers the
+    // creation (never signed again on that screen).
     await expect(page.getByTestId('confirm-screen')).toHaveCount(0, { timeout: 30_000 });
     await expect(page.getByTestId('issue-notice')).toContainText('the token itself was not created yet');
     await expect(page.getByTestId('issue-notice-finish')).toHaveText('Send the creation');
     await page.unroute('**/*');
-    // only the preparation went out; the creation is offered again
+    // Only the preparation went out. The creation is offered again.
     const before = await mock.submitted();
     expect(Buffer.from(before[before.length - 1]!.tx.payload.slice(2), 'hex').toString()).toContain('"symbol":"RESUME"');
     const pending = page.getByTestId('issue-pending');
     await expect(pending).toBeVisible();
     await expect(pending).toContainText('RESUME');
-    // the genesis was signed before it was refused: it is sent again as it is, with no new signature
+    // The genesis was signed before it was refused: it is sent again as it is, with no new
+    // signature.
     const asked = (await wallet!.calls()).length;
     await expect(page.getByTestId('issue-pending-send')).toHaveText('Send the creation');
     const steps = page.getByTestId('issue-pending-stepper');
@@ -454,7 +476,7 @@ test.describe('token issuance', () => {
     await expect(button).toHaveCount(2); // the extension and the private key
     await expect(page.getByTestId('issue-connect-kasware')).toBeVisible();
     await expect(page.getByTestId('issue-connect-kasware')).toHaveText(/Connect KasWare/);
-    // the private key beside the extension, as in the header's pick
+    // The private key beside the extension, as in the header's pick.
     await expect(page.getByTestId('issue-connect-local-key')).toHaveText('Private key');
     await page.getByTestId('issue-connect-kasware').click();
     await expect(page.getByTestId('wallet-address')).toBeVisible();
@@ -488,8 +510,9 @@ test.describe('token issuance', () => {
 test.describe('token creation with the private key', () => {
   test.use({ walletId: null });
 
-  // the gate's one Connect (the header's action: no extension, so the private key entry): a phone (390 px) has no other way to start, and a desktop with no
-  // extension gets the same button instead of an "install" dead end
+  // The gate's one Connect (the header's action: no extension, so the private key entry): a phone
+  // (390 px) has no other way to start, and a desktop with no extension gets the same button
+  // instead of an "install" dead end.
   for (const [name, width, height] of [['phone 390 px', 390, 844], ['desktop 1280 px', 1280, 800]] as const) {
     test(`${name}: the Create token gate has one Connect that opens the private key entry, and a token is created end to end`, async ({ appPage: page, mock }) => {
       await page.setViewportSize({ width, height });
@@ -548,7 +571,8 @@ test.describe('token creation with the private key', () => {
     await expect(page.getByTestId('confirm-info').locator('[data-code="walletTwice"]')).toHaveCount(0);
     await page.getByTestId('confirm-ack').check();
     await page.getByTestId('confirm-sign').click();
-    // the frame: ONE request for the creation, its declared facts and the genesis checked against the claimed states
+    // The frame: ONE request for the creation, its declared facts and the genesis checked against
+    // the claimed states.
     const receipt = await readReceipt(page);
     expect(receipt.title).toBe('Create token');
     expect(receipt.lines['Name (recorded on chain)']).toBe('Key Coin');
@@ -556,12 +580,12 @@ test.describe('token creation with the private key', () => {
     expect(receipt.lines['Decimals (recorded on chain)']).toBe('4');
     expect(receipt.lines['Total supply']).toBe('250 KEYC');
     await expect(f.getByTestId('signer-problems')).toHaveCount(0);
-    // one approval signs both: the stepper says so at its first step
+    // One approval signs both: the stepper says so at its first step.
     await expect(page.getByTestId('create-step-prep')).toHaveAttribute('aria-current', 'step');
     await expect(page.getByTestId('create-step-prep')).toContainText('Sign both in your wallet');
     await confirmReceipt(page);
     await expect(page.getByTestId('tx-status')).toBeVisible({ timeout: 30_000 });
-    // no second request: both went out
+    // No second request: both went out.
     await expect(page.getByTestId('signer-overlay')).toBeHidden();
     const submitted = await mock.submitted();
     const genesis = submitted[submitted.length - 1]!;

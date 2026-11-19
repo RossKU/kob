@@ -1,5 +1,9 @@
-// On a touch screen (`pointer: coarse`, review H-11) the chart's drawing tools and colours sit behind ONE "Draw" button that opens a small sheet; the intervals and Expand stay in the row; a pick of a tool
-// closes the sheet and turns the tool on, a colour keeps it open; the legend is one line and its volume has a unit. A mouse keeps the tools' row (chart-drawings.spec.ts). Mock stack, a touch context.
+// On a touch screen (`pointer: coarse`) the chart's drawing tools and colours sit behind one "Draw"
+// button that opens a small sheet.
+// The intervals and Expand stay in the row.
+// Picking a tool closes the sheet and turns the tool on. Picking a colour keeps it open.
+// The legend is one line and its volume has a unit.
+// A mouse keeps the tools' row (chart-drawings.spec.ts). Mock stack, a touch context.
 import { expect, test } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
 
@@ -11,7 +15,7 @@ test('the tools are behind a Draw button; a tool picked in the sheet closes it a
   await openMarket(page, mock);
   const chart = page.getByTestId('price-chart');
   await expect(chart).toHaveAttribute('data-state', 'ready');
-  // the row: intervals, Draw, Expand, all inside the card; no tools row
+  // The row: intervals, Draw, Expand, all inside the card. No tools row.
   const draw = page.getByTestId('chart-draw-sheet');
   await expect(draw).toBeVisible();
   await expect(draw).toContainText('Draw');
@@ -25,18 +29,19 @@ test('the tools are behind a Draw button; a tool picked in the sheet closes it a
     expect(b.x + b.width, id).toBeLessThanOrEqual(card.x + card.width);
   }
   expect(await draw.evaluate((el) => el.getBoundingClientRect().height), 'a touch target').toBeGreaterThanOrEqual(34);
-  // the sheet: the six tools and the clear button, the six colours
+  // The sheet: the six tools and the clear button, the six colours.
   await draw.tap();
   const sheet = page.getByTestId('chart-draw-panel');
   await expect(sheet).toBeVisible();
   for (const k of ['hline', 'trend', 'xline', 'box', 'paint', 'erase']) await expect(sheet.getByTestId(`draw-${k}`)).toBeVisible();
   await expect(sheet.getByTestId('draw-clear')).toBeVisible();
   for (const c of ['muted', 'buy', 'sell', 'info', 'warn', 'accent']) await expect(sheet.getByTestId(`draw-color-${c}`)).toBeVisible();
-  // a colour keeps the sheet open
+  // A colour keeps the sheet open.
   await sheet.getByTestId('draw-color-sell').tap();
   await expect(sheet).toBeVisible();
   await expect(sheet.getByTestId('draw-color-sell')).toHaveAttribute('aria-pressed', 'true');
-  // a tool closes it and is on (a layer over the plot takes the taps; the Draw button says a tool is on)
+  // A tool closes it and is on (a layer over the plot takes the taps; the Draw button says a tool
+  // is on).
   await sheet.getByTestId('draw-hline').tap();
   await expect(sheet).toHaveCount(0);
   await expect(page.getByTestId('chart-draw-layer')).toHaveAttribute('data-tool', 'hline');
@@ -58,11 +63,12 @@ test('the legend is one line and the volume has its unit', async ({ appPage: pag
   await expect(legend).toContainText('EXKCC');
   const lines = await legend.evaluate((el) => Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight)));
   expect(lines, 'one line').toBe(1);
-  // the read-out is cut, never wrapped: it fits or ends in an ellipsis inside the legend
+  // The read-out is cut, never wrapped: it fits or ends in an ellipsis inside the legend.
   expect(await page.locator('.chart-ohlc').evaluate((el) => el.getBoundingClientRect().right <= el.parentElement!.getBoundingClientRect().right + 1)).toBe(true);
 });
 
-// A narrow chart panel with a MOUSE (a narrow desktop window) has the Draw button too: the full row of tools needs about 465 px beside the intervals, and the three never overlap.
+// A narrow chart panel with a MOUSE (a narrow desktop window) has the Draw button too: the full row
+// of tools needs about 465 px beside the intervals, and the three never overlap.
 for (const width of [360, 390, 500]) {
   test.describe(`a mouse at ${width} px`, () => {
     test.use({ hasTouch: false, isMobile: false, viewport: { width, height: 900 } });

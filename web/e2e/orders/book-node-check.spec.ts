@@ -1,6 +1,8 @@
-// The book against the node (app/book-verify.ts): a market order is an auction that starts at the best price of the indexer's book, so before it is
-// signed the orders at that touch must exist unspent on the NODE at the script their state derives. An indexer that lists a cheap ask nobody holds
-// (a phantom) cannot make a buyer's auction start from it: the ticket plans from the real ask and shows nothing about it (the console has it), as with an honest book.
+// The book against the node (app/book-verify.ts): a market order is an auction that starts at the
+// best price of the indexer's book, so before it is signed the orders at that touch must exist
+// unspent on the NODE at the script their state derives. An indexer that lists a cheap ask nobody
+// holds (a phantom) cannot make a buyer's auction start from it: the ticket plans from the real ask
+// and shows nothing about it (the console has it), as with an honest book.
 import type { Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
@@ -12,8 +14,9 @@ const PHANTOM = 'f0'.repeat(32);
 const PHANTOM_TXID = 'f1'.repeat(32);
 
 /**
- * The indexer lists, besides the real book, an ask at half the best ask that exists nowhere: its book row, and its order view (the real best ask's
- * state with that price, at an outpoint no node holds). Returns the price the phantom is listed at and the real best ask's.
+ * The indexer lists, besides the real book, an ask at half the best ask that exists nowhere: its
+ * book row, and its order view (the real best ask's state with that price, at an outpoint no node
+ * holds). Returns the price the phantom is listed at and the real best ask's.
  */
 async function listPhantomAsk(page: Page, mock: MockClient): Promise<{ real: bigint; phantom: bigint }> {
   const tok = await mock.token();
@@ -59,7 +62,8 @@ test.describe('market orders start from a price the node confirms', () => {
     await fillFields(page, { amount: '2' });
     await settlePlan(page);
     await waitReviewable(page);
-    // nothing is shown for the orders left out (a note on every refresh was noise; the console has it): the order button stays a single click
+    // nothing is shown for the orders left out (a note on every refresh was noise; the console has
+    // it): the order button stays a single click
     await expect(page.getByText(/not on the node/i)).toHaveCount(0);
     // the auction starts at the real best ask, not at the phantom
     const placed = await placeOrder(page, mock);

@@ -1,6 +1,9 @@
-// The landing page: what the empty hash shows by default (config `home` = `landing`), a full page in place of the app's tabs and banners, in the same
-// frame as the app (one header row and one footer, Frame.tsx). "Open the app" goes to the market list (#/market); the app's logo comes back to it. Phone (390 px) and desktop (1440 px).
-// KOB_LP_SHOTS=<dir> also saves full-page screenshots (reduced motion: every block in its final place) to compare with the approved prototype.
+// The landing page: what the empty hash shows by default (config `home` = `landing`), a full page
+// in place of the app's tabs and banners, in the same frame as the app (one header row and one
+// footer, Frame.tsx). "Open the app" goes to the market list (#/market). The app's logo comes back
+// to it. Phone (390 px) and desktop (1440 px).
+// KOB_LP_SHOTS=<dir> also saves full-page screenshots (reduced motion: every block in its final
+// place) to compare with the approved prototype.
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 
@@ -19,10 +22,11 @@ for (const [width, height] of [
     const landing = page.getByTestId('landing');
     await expect(landing).toBeVisible();
     await expect(landing).toHaveAttribute('data-network', 'testnet-10');
-    // the h1's real text for screen readers (its three visual lines are hidden from them)
+    // The h1's real text for screen readers (its three visual lines are hidden from them).
     await expect(page.getByRole('heading', { level: 1, name: 'Decentralized order book on Kaspa.' })).toBeVisible();
     await expect(page.getByTestId('landing-chip')).toHaveText('testnet-10 · open review');
-    // no app shell: no app header (tabs, wallet, bell) or app links; the shared frame instead: one header, one footer
+    // No app shell: no app header (tabs, wallet, bell) or app links. The shared frame instead: one
+    // header, one footer.
     await expect(page.getByTestId('brand')).toHaveCount(0);
     await expect(page.getByTestId('nav-market')).toHaveCount(0);
     await expect(page.getByTestId('wallet-connect-list')).toHaveCount(0);
@@ -36,7 +40,8 @@ for (const [width, height] of [
     await expect(page.getByTestId('network-chip')).toHaveText(width < 1200 ? 'tn10 · open review' : 'testnet-10 · open review');
     await expect(page.getByTestId('theme-toggle')).toHaveCount(1);
     await expect(page.getByTestId('theme-toggle')).toBeVisible();
-    // the header has the app's height; see-through at the top (the page's background runs under it), a blurred bar once the page is scrolled
+    // The header has the app's height. See-through at the top (the page's background runs under
+    // it), a blurred bar once the page is scrolled.
     const nav = (await page.getByTestId('landing-nav').boundingBox())!;
     expect(nav.y).toBe(0);
     expect(nav.height).toBe(width < 720 ? 52 : 56);
@@ -49,7 +54,8 @@ for (const [width, height] of [
     await expect(page).toHaveTitle(/^Testnet · KOB/);
     expect(await noScroll(page), 'no horizontal scroll at the top').toBe(true);
 
-    // the hero rises in, the bars grow in when scrolled to, the footer carries the network's disclaimer and the configured indexer's API
+    // The hero rises in, the bars grow in when scrolled to, the footer carries the network's
+    // disclaimer and the configured indexer's API.
     await expect(page.getByTestId('landing-hero')).toHaveClass(/lp-go/);
     await page.getByTestId('landing-bigbook').scrollIntoViewIfNeeded();
     await expect(page.getByTestId('landing-bigbook')).toHaveClass(/lp-seen/);
@@ -58,13 +64,14 @@ for (const [width, height] of [
     await expect(page.getByTestId('landing-disclaimer')).toContainText('Open review.');
     await expect(page.getByTestId('landing-disclaimer')).toContainText('never holds funds or orders, does not trade and does not operate executors');
     await expect(page.getByTestId('landing-disclaimer').getByRole('link', { name: 'Security policy' })).toHaveAttribute('href', /SECURITY.md$/);
-    // no charts on this page: no chart attribution, no app-only links
+    // No charts on this page: no chart attribution, no app-only links.
     await expect(page.getByTestId('footer-chart-notice')).toHaveCount(0);
     await expect(page.getByTestId('footer').getByRole('link', { name: 'Recover orders' })).toHaveCount(0);
     await expect(page.getByTestId('landing-api')).toHaveAttribute('href', `${mock.url}/v1/health`);
     expect(await noScroll(page), 'no horizontal scroll at the bottom').toBe(true);
 
-    // every link and button can be reached with the keyboard: the nav's CTA is a link to the market list
+    // Every link and button can be reached with the keyboard: the nav's CTA is a link to the market
+    // list.
     const cta = page.getByTestId('landing-open-app');
     await expect(cta).toHaveAttribute('href', '#/market');
     await expect(page.getByTestId('landing-cta').first()).toHaveAttribute('href', '#/market');
@@ -77,7 +84,7 @@ for (const [width, height] of [
     await expect(page.getByTestId('landing')).toHaveCount(0);
     expect(await page.evaluate(() => window.scrollY), 'the app page opens at its top').toBe(0);
 
-    // the app's logo leads back to the landing page
+    // The app's logo leads back to the landing page.
     await expect(page.getByTestId('brand')).toHaveAttribute('href', '#/');
     await page.getByTestId('brand').click();
     await expect(page.getByTestId('landing')).toBeVisible();
@@ -129,7 +136,7 @@ test.describe('the trust us row', () => {
     await expect(page.getByTestId('landing-audit')).toContainText('Verify it yourself');
     await expect(page.getByTestId('landing-audit')).toContainText('no review can show the code is free of bugs');
     await expect(page.getByTestId('landing-audit')).toContainText('Red-team work and private reports are welcome.');
-    // one text on every network: the testnet build does not mention test tokens here either
+    // One text on every network: the testnet build does not mention test tokens here either.
     await expect(page.getByTestId('landing-audit')).not.toContainText(/testnet|test tokens/i);
     await expect(page.getByTestId('landing-audit-note')).toHaveText('Please test only with your own funds and orders. There is no bug bounty.');
     for (const id of ['landing-feedback-security', 'landing-feedback-issue', 'landing-feedback-message']) await expect(row.getByTestId(id)).toBeVisible();
@@ -153,7 +160,7 @@ test.describe('mainnet build', () => {
     await expect(page.getByTestId('landing')).not.toContainText(/testnet|test tokens/i);
     await expect(page.getByTestId('landing-nav')).not.toContainText(/testnet|tn10/i);
     await expect(page.getByTestId('footer')).not.toContainText(/testnet|test tokens/i);
-    // the app's footer says the same
+    // The app's footer says the same.
     await page.goto('/#/settings');
     await expect(page.getByTestId('footer-preaudit')).toContainText('Open review.');
     await expect(page.getByTestId('footer')).not.toContainText(/testnet|test tokens/i);
@@ -203,7 +210,8 @@ test('1440 px: one frame on both pages, the logo does not move when "Open the ap
   const lpLogo = await box('landing-brand');
   const lpHeader = (await page.locator('header').boundingBox())!;
   const kicker = (await page.locator('.lp-kicker').boundingBox())!;
-  // the header and the footer run the full width (the logo at the window's gutter); the content keeps the frame's 1240 px column
+  // The header and the footer run the full width (the logo at the window's gutter). The content
+  // keeps the frame's 1240 px column.
   expect(lpLogo.x, 'the logo sits at the window gutter').toBeCloseTo(32, 0);
   expect(kicker.x, 'the hero text starts in the content column').toBeCloseTo((1440 - 1240) / 2 + 24, 0);
   await page.getByTestId('footer').scrollIntoViewIfNeeded();
@@ -218,7 +226,7 @@ test('1440 px: one frame on both pages, the logo does not move when "Open the ap
   expect(appLogo.width).toBeCloseTo(lpLogo.width, 1);
   expect(appHeader.height).toBe(lpHeader.height);
   expect(appHeader.height).toBe(56);
-  // the app's content is in the same column as the landing page's
+  // The app's content is in the same column as the landing page's.
   const mainLeft = await page.getByTestId('main').evaluate((e) => e.getBoundingClientRect().left + parseFloat(getComputedStyle(e).paddingLeft));
   expect(mainLeft).toBeCloseTo(kicker.x, 1);
   await page.getByTestId('footer').scrollIntoViewIfNeeded();
@@ -232,7 +240,7 @@ test('1440x900: the hero buttons stand clearly inside the first screen (at least
   await expect(page.getByTestId('landing-hero')).toHaveClass(/lp-go/);
   const cta = page.getByTestId('landing-cta').first();
   await expect.poll(async () => 900 - (await cta.boundingBox())!.y - (await cta.boundingBox())!.height, { message: 'the buttons stand above the fold' }).toBeGreaterThanOrEqual(100);
-  // a phone keeps its own, compact hero: no extra room under the buttons
+  // A phone keeps its own, compact hero: no extra room under the buttons.
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator('.lp-hero h1')).toBeVisible();
   expect(await page.locator('.lp-hero').evaluate((e) => parseFloat(getComputedStyle(e).paddingBottom))).toBeLessThanOrEqual(40);
@@ -282,7 +290,8 @@ test('390 px: the bots section (command line, read API) fits the screen: no text
   for (const r of rights) expect(r).toBeLessThanOrEqual(390);
 });
 
-// the CI runner's fonts (DejaVu Sans) are wider than a desktop's: the phone row keeps room to spare on a font as wide (Verdana), and nothing scrolls sideways
+// The CI runner's fonts (DejaVu Sans) are wider than a desktop's: the phone row keeps room to spare
+// on a font as wide (Verdana), and nothing scrolls sideways.
 for (const width of [360, 390]) {
   test(`${width} px on a wide font: the header row has room to spare and the page does not scroll sideways`, async ({ appPage: page }) => {
     await page.addInitScript(() => {
@@ -297,7 +306,8 @@ for (const width of [360, 390]) {
     await expect(page.getByTestId('landing-hero')).toHaveClass(/lp-go/);
     const box = async (id: string) => (await page.getByTestId(id).boundingBox())!;
     const [brand, chip, toggle] = [await box('landing-brand'), await box('network-chip'), await box('theme-toggle')];
-    // the row's own width (the brand, a gap, the tools) at most 330 px at 360: about 30 px to spare for a still wider font
+    // The row's own width (the brand, a gap, the tools) at most 330 px at 360: about 30 px to spare
+    // for a still wider font.
     const natural = brand.x + brand.width + 6 + (toggle.x + toggle.width - chip.x);
     expect(natural).toBeLessThanOrEqual(width - 30);
     expect(toggle.x + toggle.width).toBeLessThanOrEqual(width - 15);
@@ -308,7 +318,9 @@ for (const width of [360, 390]) {
 }
 
 test.describe('the closing heading', () => {
-  // the page brings no font of its own: a system without Inter Display falls back to a wider one, which used to break "The book" and "is open." in two
+  // The page brings no font of its own.
+  // A system without Inter Display falls back to a wider one, which would break "The book" and "is
+  // open." in two.
   test('keeps its two lines beside the mark, in any font and at any width', async ({ appPage: page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto('/');
@@ -322,7 +334,7 @@ test.describe('the closing heading', () => {
         return lines.length === 2 && lines.every((s) => s.offsetHeight < fs * 1.2 && s.scrollWidth <= h2.clientWidth + 1);
       });
     expect(await oneLineEach()).toBe(true);
-    // a much wider font than Inter Display
+    // A much wider font than Inter Display.
     await page.addStyleTag({ content: ".lp-final h2 { font-family: 'Courier New', monospace !important; letter-spacing: 0 !important; }" });
     for (const width of [1100, 1440, 1920, 900]) {
       await page.setViewportSize({ width, height: 900 });

@@ -1,10 +1,11 @@
-// A wallet with something on every tab of the Portfolio page: long KAS figures, an unregistered token named by its hex id, a part-filled sell, a KAS-budget buy,
-// finished orders and a dozen fills. Shared by the Portfolio layout specs. Mock stack.
+// A wallet with something on every tab of the Portfolio page: long KAS figures, an unregistered
+// token named by its hex id, a part-filled sell, a KAS-budget buy, finished orders and a dozen
+// fills. Shared by the Portfolio layout specs. Mock stack.
 import type { MockClient } from '../fixtures';
 import { KAS, TOKEN } from './env';
 import { seedOrders } from './orders';
 
-/** the founder's unregistered token: no ticker, named by 8 + 8 hex of its covenant id */
+/** An unregistered token: no ticker, named by 8 + 8 hex of its covenant id */
 export const PF_ID = '83478d88' + '11'.repeat(24) + '6daacd64';
 
 export async function seedPortfolio(mock: MockClient): Promise<{ filled: string; budget: string; open: string; unreg: string; done: string[] }> {
@@ -33,7 +34,10 @@ export async function seedPortfolio(mock: MockClient): Promise<{ filled: string;
   return { filled: filled!, budget: budget!, open: open!, unreg, done };
 }
 
-/** `n` more finished sell orders of the wallet (one token each, filled whole at their own prices): history rows and fills for paging. Returns their ids. */
+/**
+ * `n` more finished sell orders of the wallet (one token each, filled whole at their own prices):
+ * history rows and fills for paging. Returns their ids.
+ */
 export async function seedManyDone(mock: MockClient, n: number): Promise<string[]> {
   const tok = await mock.token();
   const before = new Set((await mock.ordersOf('alice')).map((o: { covenant_id: string }) => o.covenant_id));

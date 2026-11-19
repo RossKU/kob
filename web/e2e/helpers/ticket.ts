@@ -1,21 +1,33 @@
-// Drives the order ticket (one button -> the final confirmation popup -> the wallet's own approval -> sent, with the progress inline) through its test ids;
-// reads the confirmation popup and the status line into plain objects so specs assert on values, never on layout. The private-key signer shows the same
-// confirmation in its own frame instead of an app popup. Everything waits on UI state (visible / enabled / call log), never on fixed sleeps.
+// Drives the order ticket (one button -> the final confirmation popup -> the wallet's own approval
+// -> sent, with the progress inline) through its test ids; reads the confirmation popup and the
+// status line into plain objects so specs assert on values, never on layout. The private-key signer
+// shows the same confirmation in its own frame instead of an app popup. Everything waits on UI
+// state (visible / enabled / call log), never on fixed sleeps.
 import type { Locator, Page } from '@playwright/test';
 import { expect, type MockClient, type MockWalletHandle, type SubmissionSummary } from '../fixtures';
 import { chooseOption } from './dropdown';
 
 export type Side = 'buy' | 'sell';
 export type FieldValue = string | boolean;
-/** Field ids are the intent paths of the form (`price`, `stop`, `exit.takeProfit`, `repeat.count`, `lifetime` ...). */
+/**
+ * Field ids are the intent paths of the form (`price`, `stop`, `exit.takeProfit`, `repeat.count`,
+ * `lifetime` ...).
+ */
 export type FieldValues = Record<string, FieldValue>;
 
-/** The `data-testid` of a ticket field (form-state.ts `FIELDS`): amount / price / tip have the short order-* ids. */
+/**
+ * The `data-testid` of a ticket field (form-state.ts `FIELDS`): amount / price / tip have the short
+ * order-* ids.
+ */
 export const fieldTestId = (id: string): string => (id === 'amount' ? 'order-amount' : id === 'price' ? 'order-price' : id === 'tip' ? 'order-tip' : `field-${id}`);
 
-// ------------------------------------------------------------------------------------------------ ticket
+// ------------------------------------------------------------------------------------------------
+// ticket
 
-/** Chooses side and order type (the side follows the type: TWAP only sells, DCA only buys, close only sells). */
+/**
+ * Chooses side and order type (the side follows the type: TWAP only sells, DCA only buys, close
+ * only sells).
+ */
 export async function pickType(page: Page, type: string, side?: Side): Promise<void> {
   await chooseOption(page.getByTestId('order-type'), type);
   await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-type', type);
@@ -30,7 +42,10 @@ async function openAdvanced(page: Page): Promise<void> {
   if ((await box.getAttribute('open')) === null) await box.locator('summary').click();
 }
 
-/** Fills the fields in order (later fields may only appear after an earlier switch, e.g. `lifetime` = gtd shows `lifetimeAt`). Advanced fields open the disclosure box. */
+/**
+ * Fills the fields in order (later fields may only appear after an earlier switch, e.g. `lifetime`
+ * = gtd shows `lifetimeAt`). Advanced fields open the disclosure box.
+ */
 export async function fillFields(page: Page, values: FieldValues): Promise<void> {
   for (const [id, value] of Object.entries(values)) {
     const loc = page.getByTestId(fieldTestId(id));
@@ -45,22 +60,32 @@ export async function fillFields(page: Page, values: FieldValues): Promise<void>
   }
 }
 
-/** Waits until the planner settled on the typed form: not pending, and either the order button is enabled or an error issue is shown. */
+/**
+ * Waits until the planner settled on the typed form: not pending, and either the order button is
+ * enabled or an error issue is shown.
+ */
 export async function settlePlan(page: Page): Promise<void> {
   await expect(page.getByTestId('order-ticket')).toHaveAttribute('aria-busy', 'false');
   await expect(page.getByTestId('order-pending')).toHaveCount(0);
 }
 
-/** Waits for a plan without errors: the order button is enabled (the order's details are shown only in the final confirmation). */
+/**
+ * Waits for a plan without errors: the order button is enabled (the order's details are shown only
+ * in the final confirmation).
+ */
 export async function waitReviewable(page: Page): Promise<void> {
   await settlePlan(page);
   await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
   await expect(page.getByTestId('order-place')).toBeEnabled();
 }
 
-// ------------------------------------------------------------------------------------------------ the final confirmation
+// ------------------------------------------------------------------------------------------------
+// the final confirmation
 
-/** One order the transaction creates or amends, as the table shows it (an if-done entry's committed exit nested as `exit`). */
+/**
+ * One order the transaction creates or amends, as the table shows it (an if-done entry's committed
+ * exit nested as `exit`).
+ */
 export interface ReceiptOrder {
   /** "Sell limit order", "Buy market order (auction)" ... */
   title: string;
@@ -71,26 +96,41 @@ export interface ReceiptOrder {
   exit: ReceiptOrder | null;
 }
 
-/** The final confirmation: the private-key signer's table (title, the net effect, the fee, every order's terms). */
+/**
+ * The final confirmation: the private-key signer's table (title, the net effect, the fee, every
+ * order's terms).
+ */
 export interface ReceiptRead {
   /** "Place order", "Cancel order", "Send" ... */
   title: string;
-  /** the summary lines before the fee: label -> value ("KAS in your wallet" -> "-4.014866 KAS", "Locked in orders" -> "2 KAS", a token's net ...) */
+  /**
+   * the summary lines before the fee: label -> value ("KAS in your wallet" -> "-4.014866 KAS",
+   * "Locked in orders" -> "2 KAS", a token's net ...)
+   */
   lines: Record<string, string>;
   /** the labels of the summary lines in order (the first is the net KAS) */
   labels: string[];
-  /** the network fee, full precision ("0.014866 KAS"): what `formatKas(fee)` of the accepted transaction gives */
+  /**
+   * the network fee, full precision ("0.014866 KAS"): what `formatKas(fee)` of the accepted
+   * transaction gives
+   */
   fee: string;
   orders: ReceiptOrder[];
   /** the "updated" notice of a re-timed order (the app popup only) */
   updated: boolean;
   /** a problems note is shown */
   problems: boolean;
-  /** `app` = the popup of the app (external wallets), `signer` = the private-key signer's frame (the same table, the only prompt of that wallet) */
+  /**
+   * `app` = the popup of the app (external wallets), `signer` = the private-key signer's frame (the
+   * same table, the only prompt of that wallet)
+   */
   from: 'app' | 'signer';
 }
 
-/** True when the connected wallet is the private-key signer (its frame shows the confirmation; the app shows no popup of its own). */
+/**
+ * True when the connected wallet is the private-key signer (its frame shows the confirmation; the
+ * app shows no popup of its own).
+ */
 export async function isPrivateKey(page: Page): Promise<boolean> {
   const chip = page.getByTestId('wallet-connected');
   return (await chip.count()) > 0 && (await chip.getAttribute('data-wallet')) === 'local-key';
@@ -112,7 +152,10 @@ interface TableIds {
 const APP_IDS: TableIds = { title: 'confirm-order-title', summary: 'confirm-order-summary', fee: 'confirm-order-fee', order: 'confirm-order-order-', line: '.send-line', feeLine: 'send-fee', head: 'h3', token: 'p.send-token', problems: 'confirm-order-problems' };
 const SIGNER_IDS: TableIds = { title: 'signer-title', summary: 'signer-summary', fee: 'signer-fee', order: 'signer-order-', line: '.line', feeLine: 'fee', head: 'h2', token: 'p.token', problems: 'signer-problems' };
 
-/** Reads the table inside the page (the same structure in the popup and in the frame; only the ids and classes differ). */
+/**
+ * Reads the table inside the page (the same structure in the popup and in the frame; only the ids
+ * and classes differ).
+ */
 const readTable = (root: Element, ids: TableIds) => {
   const text = (e: Element | null | undefined) => (e?.textContent ?? '').replace(/\s+/g, ' ').trim();
   const byId = (id: string) => root.querySelector(`[data-testid="${id}"]`);
@@ -120,7 +163,8 @@ const readTable = (root: Element, ids: TableIds) => {
   for (const el of byId(ids.summary)?.querySelectorAll(ids.line) ?? []) if (!el.classList.contains(ids.feeLine)) lines.push({ label: text(el.querySelector('dt')), value: text(el.querySelector('dd')) });
   const order = (el: Element): { title: string; token: string; rows: Record<string, string>; exit: unknown } => {
     const rows: Record<string, string> = {};
-    // a start or an expiry is said from the clock ("in 28 s" over its DAA score): read as the DAA score it carries, as the row says it without a clock
+    // a start or an expiry is said from the clock ("in 28 s" over its DAA score): read as the DAA
+    // score it carries, as the row says it without a clock
     const value = (dd: Element | null) => (dd?.getAttribute('data-daa') ? 'DAA score ' + dd.getAttribute('data-daa') : text(dd));
     for (const l of el.querySelectorAll(':scope > dl > ' + ids.line)) rows[text(l.querySelector('dt'))] = value(l.querySelector('dd'));
     const exit = el.querySelector(':scope > section');
@@ -139,7 +183,10 @@ function toReceipt(t: Table, from: 'app' | 'signer', updated: boolean): ReceiptR
   };
 }
 
-/** Reads the open final confirmation: the popup of the app, or (private-key signer) the signer frame. Waits until it is shown; confirms nothing. */
+/**
+ * Reads the open final confirmation: the popup of the app, or (private-key signer) the signer
+ * frame. Waits until it is shown; confirms nothing.
+ */
 export async function readReceipt(page: Page): Promise<ReceiptRead> {
   if (await isPrivateKey(page)) {
     const f = signerFrameOf(page);
@@ -154,9 +201,11 @@ export async function readReceipt(page: Page): Promise<ReceiptRead> {
 }
 
 /**
- * Reads the private-key signer's table the way a person does when it is taller than the frame: by scrolling it with the mouse wheel (a table that
- * fits, as at the default 1280x720 viewport, needs nothing). Every part of the table must have been fully on screen for about 0.4 s (signer/seen.ts)
- * before Approve is enabled. A script's `scrollTo` inside the cross-origin frame is not applied reliably; a real wheel is.
+ * Reads the private-key signer's table the way a person does when it is taller than the frame: by
+ * scrolling it with the mouse wheel (a table that fits, as at the default 1280x720 viewport, needs
+ * nothing). Every part of the table must have been fully on screen for about 0.4 s (signer/seen.ts)
+ * before Approve is enabled. A script's `scrollTo` inside the cross-origin frame is not applied
+ * reliably; a real wheel is.
  */
 export async function readSignerFrame(page: Page): Promise<void> {
   const body = signerFrameOf(page).locator('body');
@@ -164,7 +213,8 @@ export async function readSignerFrame(page: Page): Promise<void> {
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   const { total, view } = await body.evaluate(() => ({ total: document.documentElement.scrollHeight, view: window.innerHeight }));
   if (total <= view) return; // the whole table fits the frame: nothing to scroll
-  // a part counts as read after SEEN_MIN_MS (0.4 s) fully on screen and unmoved, which the observer reports with a delay: each stop lasts longer
+  // a part counts as read after SEEN_MIN_MS (0.4 s) fully on screen and unmoved, which the observer
+  // reports with a delay: each stop lasts longer
   const STOP_MS = 900;
   for (let last = -1; ; ) {
     await page.waitForTimeout(STOP_MS);
@@ -175,22 +225,27 @@ export async function readSignerFrame(page: Page): Promise<void> {
   }
 }
 
-/** Confirms the open final confirmation: the popup's Continue in wallet, or Approve in the signer frame (which then signs). */
+/**
+ * Confirms the open final confirmation: the popup's Continue in wallet, or Approve in the signer
+ * frame (which then signs).
+ */
 export async function confirmReceipt(page: Page): Promise<void> {
   if (await isPrivateKey(page)) {
     await readSignerFrame(page);
     const approve = signerFrameOf(page).getByTestId('signer-approve');
     await expect(approve).toBeEnabled();
     await approve.click();
-    // a click into the cross-origin frame can be lost (the browser's input protection for a frame that was just redrawn or scrolled; CI run
-    // 43829265470: Approve stayed enabled for 30 s after one click), as `cancelReceipt` notes: a person taps again. A click that was taken
-    // removes Approve at once (main.ts shows the idle view), so it is never clicked twice for one request
+    // A click into the cross-origin frame can be lost (the browser's input protection for a frame
+    // that was just redrawn or scrolled), as `cancelReceipt` notes. A person taps again, so the
+    // helper does. A click that was taken removes Approve at once (main.ts shows the idle view), so
+    // it is never clicked twice for one request.
     await expect(async () => {
       if ((await approve.count()) === 0 || (await page.getByTestId('signer-overlay').isHidden())) return;
       await approve.click({ timeout: 2_000 });
       await expect(approve).toHaveCount(0, { timeout: 1_500 });
     }).toPass({ timeout: 20_000 });
-    // the frame signs and the page checks the clock before it closes: on a busy runner that passes 10 s
+    // the frame signs and the page checks the clock before it closes: on a busy runner that passes
+    // 10 s
     await expect(page.getByTestId('signer-overlay')).toBeHidden({ timeout: 30_000 });
   } else {
     await page.getByTestId('confirm-order-ok').click();
@@ -198,11 +253,16 @@ export async function confirmReceipt(page: Page): Promise<void> {
   }
 }
 
-/** Cancels the open final confirmation: the app popup's Cancel, or Cancel in the signer frame. Nothing is sent. */
+/**
+ * Cancels the open final confirmation: the app popup's Cancel, or Cancel in the signer frame.
+ * Nothing is sent.
+ */
 export async function cancelReceipt(page: Page): Promise<void> {
   if (await isPrivateKey(page)) {
-    // a click in the signer's cross-origin frame right after it was shown or redrawn can be dropped by the browser (its input protection for a frame whose
-    // visibility is tracked, about the first second): a person taps again, so the helper does (measured at 390 and 1280 px: the first click at once is lost, one 0.8 s later works)
+    // a click in the signer's cross-origin frame right after it was shown or redrawn can be dropped
+    // by the browser (its input protection for a frame whose visibility is tracked, about the first
+    // second): a person taps again, so the helper does (measured at 390 and 1280 px: the first
+    // click at once is lost, one 0.8 s later works)
     await expect(async () => {
       await signerFrameOf(page).getByTestId('signer-reject').click({ timeout: 2_000 });
       await expect(page.getByTestId('signer-overlay')).toBeHidden({ timeout: 1_500 });
@@ -214,8 +274,9 @@ export async function cancelReceipt(page: Page): Promise<void> {
 }
 
 /**
- * The app popup, or a status that stopped the click before it, after a click on an order button / a My orders action. The ticket's stopped line is
- * hidden (its red toast says why): it is waited for in the document, not on screen.
+ * The app popup, or a status that stopped the click before it, after a click on an order button / a
+ * My orders action. The ticket's stopped line is hidden (its red toast says why): it is waited for
+ * in the document, not on screen.
  */
 function popupOrStop(page: Page, testid: string): Locator {
   const stopped = ['blocked', 'rejected', 'failed'].map((p) => `[data-testid="${testid}"][data-phase="${p}"]`).join(', ');
@@ -223,8 +284,10 @@ function popupOrStop(page: Page, testid: string): Locator {
 }
 
 /**
- * The step after the click: an external wallet's final confirmation popup is confirmed (the wallet is asked only after that); a click that stops
- * before it (blocked / failed) shows no popup and returns; the private-key signer shows no app popup (its frame is the confirmation: see `readReceipt`).
+ * The step after the click: an external wallet's final confirmation popup is confirmed (the wallet
+ * is asked only after that); a click that stops before it (blocked / failed) shows no popup and
+ * returns; the private-key signer shows no app popup (its frame is the confirmation: see
+ * `readReceipt`).
  */
 export async function confirmAfterClick(page: Page, testid: StatusId = 'order-status'): Promise<void> {
   if (await isPrivateKey(page)) return;
@@ -233,8 +296,9 @@ export async function confirmAfterClick(page: Page, testid: StatusId = 'order-st
 }
 
 /**
- * Confirms every app popup that shows up (a ladder: one per level; a multi-step My orders flow: one per step; the updated popup of a re-timed
- * order) until `done` is visible. The private-key signer shows none, so there this only waits.
+ * Confirms every app popup that shows up (a ladder: one per level; a multi-step My orders flow: one
+ * per step; the updated popup of a re-timed order) until `done` is visible. The private-key signer
+ * shows none, so there this only waits.
  */
 export async function confirmUntil(page: Page, done: Locator, opts: { timeout?: number } = {}): Promise<void> {
   const deadline = Date.now() + (opts.timeout ?? 60_000);
@@ -247,7 +311,8 @@ export async function confirmUntil(page: Page, done: Locator, opts: { timeout?: 
   }
 }
 
-// ------------------------------------------------------------------------------------------------ placing (one button, the wallet's own approval)
+// ------------------------------------------------------------------------------------------------
+// placing (one button, the wallet's own approval)
 
 export interface Placed {
   txid: string;
@@ -256,7 +321,10 @@ export interface Placed {
   views: any[];
 }
 
-/** After a send: the mock node's decoded submission of that tx and the indexer views of what it created. */
+/**
+ * After a send: the mock node's decoded submission of that tx and the indexer views of what it
+ * created.
+ */
 export async function placedBy(mock: MockClient, txid: string): Promise<Placed> {
   const sub = (await mock.submitted()).find((s) => s.txid === txid);
   expect(sub, `the mock node accepted ${txid}`).toBeTruthy();
@@ -269,7 +337,9 @@ export type StatusId = 'order-status' | 'flow-status';
 
 export interface SendRead {
   phase: SendPhase;
-  /** blocked / rejected / failed: the finding / failure code of `send-error` and its one sentence */
+  /**
+   * blocked / rejected / failed: the finding / failure code of `send-error` and its one sentence
+   */
   code: string | null;
   text: string | null;
   /** submitted: the full txid and the `tx-status` (submitted | confirmed | unconfirmed) */
@@ -277,7 +347,10 @@ export interface SendRead {
   status: string | null;
 }
 
-/** Reads the status line (`order-status` of the ticket: hidden once the click stopped, its red toast says why; `flow-status` of My orders). */
+/**
+ * Reads the status line (`order-status` of the ticket: hidden once the click stopped, its red toast
+ * says why; `flow-status` of My orders).
+ */
 export async function readSendStatus(page: Page, testid: StatusId = 'order-status'): Promise<SendRead> {
   const root = page.getByTestId(testid);
   await expect(root).toBeAttached();
@@ -296,21 +369,28 @@ export async function readSendStatus(page: Page, testid: StatusId = 'order-statu
 }
 
 /**
- * Waits until the ticket is ready, then clicks the order button ONCE and confirms the final confirmation popup of an external wallet (the wallet is
- * asked only after that). With the private-key signer there is no app popup: its frame is the confirmation (approve there).
+ * Waits until the ticket is ready, then clicks the order button ONCE and confirms the final
+ * confirmation popup of an external wallet (the wallet is asked only after that). With the
+ * private-key signer there is no app popup: its frame is the confirmation (approve there).
  */
 export async function clickPlace(page: Page): Promise<void> {
   await clickPlaceOnly(page);
   await confirmAfterClick(page);
 }
 
-/** Waits until the ticket is ready and clicks the order button ONCE, leaving the final confirmation open (an external wallet's popup, or the signer frame). */
+/**
+ * Waits until the ticket is ready and clicks the order button ONCE, leaving the final confirmation
+ * open (an external wallet's popup, or the signer frame).
+ */
 export async function clickPlaceOnly(page: Page): Promise<void> {
   await waitReviewable(page);
   await page.getByTestId('order-place').click();
 }
 
-/** Clicks the order button, reads the final confirmation and cancels it: what the order would do, nothing sent. */
+/**
+ * Clicks the order button, reads the final confirmation and cancels it: what the order would do,
+ * nothing sent.
+ */
 export async function peekReceipt(page: Page): Promise<ReceiptRead> {
   await clickPlaceOnly(page);
   const receipt = await readReceipt(page);
@@ -318,7 +398,10 @@ export async function peekReceipt(page: Page): Promise<ReceiptRead> {
   return receipt;
 }
 
-/** Clicks the order button, reads the final confirmation BEFORE confirming it, confirms it, and returns what it showed. */
+/**
+ * Clicks the order button, reads the final confirmation BEFORE confirming it, confirms it, and
+ * returns what it showed.
+ */
 export async function clickPlaceAndRead(page: Page): Promise<ReceiptRead> {
   await clickPlaceOnly(page);
   const receipt = await readReceipt(page);
@@ -327,15 +410,17 @@ export async function clickPlaceAndRead(page: Page): Promise<ReceiptRead> {
 }
 
 /**
- * Waits for the status line to stop at `phase` (blocked | rejected | failed): ONE error line with the finding / failure code, nothing submitted,
- * no issuance confirmation screen. Returns what it shows. Pair it with `wallet.calls()` where the wallet must not have been asked at all.
+ * Waits for the status line to stop at `phase` (blocked | rejected | failed): ONE error line with
+ * the finding / failure code, nothing submitted, no issuance confirmation screen. Returns what it
+ * shows. Pair it with `wallet.calls()` where the wallet must not have been asked at all.
  */
 export async function expectStopped(page: Page, phase: 'blocked' | 'rejected' | 'failed', opts: { code?: string | RegExp; testid?: StatusId } = {}): Promise<SendRead> {
   const testid = opts.testid ?? 'order-status';
   await expect(page.getByTestId(testid)).toHaveAttribute('data-phase', phase, { timeout: 30_000 });
   await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
   const read = await readSendStatus(page, testid);
-  // the ticket says why only in a red toast at the top right (the app's own Cancel is the user's choice: none); a flow's card says it itself
+  // the ticket says why only in a red toast at the top right (the app's own Cancel is the user's
+  // choice: none); a flow's card says it itself
   if (testid === 'order-status') {
     await expect(page.getByTestId(testid), 'no failure box in the ticket').toBeHidden();
     // (a phone shows a flow's card first: the toast waits behind it, the "+N" chip red)
@@ -347,7 +432,10 @@ export async function expectStopped(page: Page, phase: 'blocked' | 'rejected' | 
   return read;
 }
 
-/** Waits until the status line shows the submitted transaction confirmed in a block; returns its tx id. */
+/**
+ * Waits until the status line shows the submitted transaction confirmed in a block; returns its tx
+ * id.
+ */
 export async function waitSubmitted(page: Page, testid: StatusId = 'order-status'): Promise<string> {
   const root = page.getByTestId(testid);
   await expect(root.getByTestId('tx-id')).toBeVisible({ timeout: 30_000 });
@@ -357,7 +445,11 @@ export async function waitSubmitted(page: Page, testid: StatusId = 'order-status
   return txid!;
 }
 
-/** The flow for one order: ready ticket -> ONE click -> the final confirmation popup -> the wallet's approval -> sent -> confirmed. Returns the accepted transaction; the issuance confirmation screen must never appear. */
+/**
+ * The flow for one order: ready ticket -> ONE click -> the final confirmation popup -> the wallet's
+ * approval -> sent -> confirmed. Returns the accepted transaction; the issuance confirmation screen
+ * must never appear.
+ */
 export async function placeOrder(page: Page, mock: MockClient): Promise<Placed> {
   await clickPlace(page);
   const txid = await waitSubmitted(page);
@@ -365,7 +457,10 @@ export async function placeOrder(page: Page, mock: MockClient): Promise<Placed> 
   return placedBy(mock, txid);
 }
 
-/** A ladder: one click, one transaction per level (each its own popup and wallet request); waits for "All N levels placed" and returns the accepted transactions in order. */
+/**
+ * A ladder: one click, one transaction per level (each its own popup and wallet request); waits for
+ * "All N levels placed" and returns the accepted transactions in order.
+ */
 export async function placeLadder(page: Page, mock: MockClient, levels: number): Promise<Placed[]> {
   const before = (await mock.submitted(false)).length;
   await clickPlaceOnly(page);
@@ -377,12 +472,15 @@ export async function placeLadder(page: Page, mock: MockClient, levels: number):
   return Promise.all(mine.map((s) => placedBy(mock, s.txid)));
 }
 
-// ------------------------------------------------------------------------------------------------ wallet call log
+// ------------------------------------------------------------------------------------------------
+// wallet call log
 
 /**
- * The wallet was asked to sign exactly what the app built: ONE request for the accepted transaction, over exactly the inputs the app said it signs
- * (`sign[]`, i.e. every input the wallet key controls: P2PK funds and the maker-signed covenant entries), all of them signed, none left unsigned,
- * and the transaction the wallet saw is the one the node accepted (same outputs and payload; only the signature scripts were added).
+ * The wallet was asked to sign exactly what the app built: ONE request for the accepted
+ * transaction, over exactly the inputs the app said it signs (`sign[]`, i.e. every input the wallet
+ * key controls: P2PK funds and the maker-signed covenant entries), all of them signed, none left
+ * unsigned, and the transaction the wallet saw is the one the node accepted (same outputs and
+ * payload; only the signature scripts were added).
  */
 export async function expectWalletSigned(wallet: MockWalletHandle, placed: Placed, opts: { requests?: number; inputs?: number[]; call?: number } = {}): Promise<void> {
   const calls = await wallet.calls();
@@ -404,8 +502,9 @@ export async function expectWalletSigned(wallet: MockWalletHandle, placed: Place
 }
 
 /**
- * What an accepted transaction commits to for each order it created, without the clock-dependent expiry: the contract, its decoded state, the KAS the
- * order output locks and the token custodies. Two placements of the same economic order (typed in either orientation) must have equal terms.
+ * What an accepted transaction commits to for each order it created, without the clock-dependent
+ * expiry: the contract, its decoded state, the KAS the order output locks and the token custodies.
+ * Two placements of the same economic order (typed in either orientation) must have equal terms.
  */
 export function onChainTerms(placed: Placed): { contract: string; state: Record<string, string>; locked: string; custody: string[] }[] {
   return placed.views.map((view, i) => {
@@ -419,7 +518,10 @@ export function onChainTerms(placed: Placed): { contract: string; state: Record<
   });
 }
 
-/** `placeOrder` that also returns the final confirmation as it was shown BEFORE it was confirmed (an external wallet's popup, or the signer frame). */
+/**
+ * `placeOrder` that also returns the final confirmation as it was shown BEFORE it was confirmed (an
+ * external wallet's popup, or the signer frame).
+ */
 export async function placeOrderAndRead(page: Page, mock: MockClient): Promise<Placed & { receipt: ReceiptRead }> {
   const receipt = await clickPlaceAndRead(page);
   const txid = await waitSubmitted(page);

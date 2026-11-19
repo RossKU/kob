@@ -1,20 +1,25 @@
-// The market list (`#/market`) against the mock stack: the 24 h figures of each token's KAS market (`/v1/stats`: last price, change, KAS volume,
-// spread, depth within 2 % of the mid, market cap), a favourite pair (price implied through the two KAS markets, 24 h pair volume, `/v1/pairs` for its order counts), sorting by
-// every column (24 h volume first; mouse and keyboard), search over tokens and pairs, a row whose figures the indexer cannot give, and the phone layout.
+// The market list (`#/market`) against the mock stack: the 24 h figures of each token's KAS market
+// (`/v1/stats`: last price, change, KAS volume, spread, depth within 2 % of the mid, market cap), a
+// favourite pair (price implied through the two KAS markets, 24 h pair volume, `/v1/pairs` for its
+// order counts), sorting by every column (24 h volume first; mouse and keyboard), search over
+// tokens and pairs, a row whose figures the indexer cannot give, and the phone layout.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
 import { seedFavorites } from '../helpers/env';
 import { toggleListFilter } from '../helpers/list-filter';
 
-// every test opens the list itself (after its registry / route stubs are in place)
+// Every test opens the list itself (after its registry / route stubs are in place).
 test.use({ autoOpen: false });
 
 const QUOTE = 'e7'.repeat(32);
-/** the default seed's token (EXKCC of the example registry) */
+/** The default seed's token (EXKCC of the example registry). */
 const EXKCC = 'e5'.repeat(32);
 
-/** The example registry with EXKCC listed and a second listed KCC-20, EXUSD (6 decimals), matching the mock pair seed. */
+/**
+ * The example registry with EXKCC listed and a second listed KCC-20, EXUSD (6 decimals), matching
+ * the mock pair seed.
+ */
 async function listBoth(page: Page): Promise<void> {
   const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
   for (const t of reg.templates) t.review_status = 'reviewed';
@@ -26,7 +31,10 @@ async function listBoth(page: Page): Promise<void> {
   );
 }
 
-/** Both tokens listed, the pair seed (EXUSD's KAS book, live EXKCC/EXUSD pair orders) and two EXUSD trades worth 75 KAS: EXUSD out-trades EXKCC. */
+/**
+ * Both tokens listed, the pair seed (EXUSD's KAS book, live EXKCC/EXUSD pair orders) and two EXUSD
+ * trades worth 75 KAS: EXUSD out-trades EXKCC.
+ */
 async function twoMarkets(page: Page, mock: MockClient): Promise<string> {
   await seedFavorites(page, { pairs: [{ base: EXKCC, quote: QUOTE }] });
   await mock.seed({ pair: true });
@@ -44,7 +52,10 @@ async function twoMarkets(page: Page, mock: MockClient): Promise<string> {
   return exkcc;
 }
 
-/** The covenant ids of the token rows in their shown order: EXKCC and EXUSD only (the example registry lists tokens the mock does not trade). */
+/**
+ * The covenant ids of the token rows in their shown order: EXKCC and EXUSD only (the example
+ * registry lists tokens the mock does not trade).
+ */
 const rowIds = async (page: Page) =>
   (await page.locator('[data-testid="token-table"] tbody tr').evaluateAll((trs) => trs.map((tr) => (tr.getAttribute('data-testid') ?? '').replace('token-row-', ''))))
     .filter((id) => id === QUOTE || id === EXKCC);
@@ -55,12 +66,14 @@ test('a token row shows its last price in KAS, the 24 h change, KAS volume, spre
   const row = page.getByTestId(`token-row-${id}`);
   await expect(row).toHaveAttribute('data-state', 'ready');
   const stats = await mock.get(`/v1/stats/${id}`);
-  // the seeded fills of the last minutes: last 0.025 KAS per EXKCC at the decimals of the registry tick; the exact price and the unit in the tooltip
+  // The seeded fills of the last minutes: last 0.025 KAS per EXKCC at the decimals of the registry
+  // tick. The exact price and the unit in the tooltip.
   const last = String(Number(stats.last) / 1e8);
   await expect(row.getByTestId(`token-last-${id}`)).toHaveText(new RegExp(`^${last.replace('.', '\\.')}0*$`));
   await expect(row.getByTestId(`token-last-${id}`)).toHaveAttribute('title', `${last} (KAS per EXKCC)`);
   await expect(row.getByTestId(`token-change-${id}`)).toHaveText(/^[+-]?\d+\.\d\d%$/);
-  // a change over fewer than 3 trades in the window is muted with its count in the tooltip; over more it is as before
+  // A change over fewer than 3 trades in the window is muted with its count in the tooltip. Over
+  // more trades it shows normally.
   const thin = Number(stats.trades_24h) < 3;
   const changeFigure = row.getByTestId(`token-change-${id}`).locator('span');
   if (thin) {
@@ -73,19 +86,22 @@ test('a token row shows its last price in KAS, the 24 h change, KAS volume, spre
   await expect(row.getByTestId(`token-volume-${id}`)).toHaveAttribute('title', new RegExp(`KAS · ${stats.trades_24h} trades in 24 h$`));
   await expect(row.getByTestId(`token-spread-${id}`)).toHaveText(/^\d+\.\d\d%$/);
   await expect(row.getByTestId(`token-spread-${id}`)).toHaveAttribute('title', /^Best bid 0\.0\d+ · best ask 0\.0\d+ \(KAS per EXKCC\)$/);
-  // the executor's `depth_2pct_quote` (sompi): the KAS the book offers within 2 % of its mid
+  // The executor's `depth_2pct_quote` (sompi): the KAS the book offers within 2 % of its mid.
   expect(stats.depth_2pct_quote).toMatch(/^\d+$/);
   await expect(row.getByTestId(`token-depth-${id}`)).toHaveText((Number(stats.depth_2pct_quote) / 1e8).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
   await expect(row.getByTestId(`token-depth-${id}`)).toHaveAttribute('title', new RegExp(`KAS · ${stats.open_asks} asks · ${stats.open_bids} bids$`));
-  // a token with no supply KOB can vouch for has no market cap
+  // A token with no supply KOB can vouch for has no market cap.
   await expect(row.getByTestId(`token-mcap-${id}`)).toHaveText('—');
-  // the list opens by 24 h volume, most traded first
+  // The list opens by 24 h volume, most traded first.
   await expect(page.getByTestId('sort-volume').locator('xpath=..')).toHaveAttribute('aria-sort', 'descending');
-  // pairs are reached by the picker and the favourites: no table of them
+  // Pairs are reached by the picker and the favourites: no table of them.
   await expect(page.getByTestId('pair-table')).toHaveCount(0);
 });
 
-/** The example registry with EXKCC listed and carrying a verified fixed-supply genesis record of 1,000,000 tokens (8 decimals): the app knows its fully diluted value. */
+/**
+ * The example registry with EXKCC listed and carrying a verified fixed-supply genesis record of
+ * 1,000,000 tokens (8 decimals): the app knows its fully diluted value.
+ */
 async function listWithSupply(page: Page): Promise<void> {
   const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
   for (const t of reg.templates) t.review_status = 'reviewed';
@@ -101,13 +117,14 @@ async function listWithSupply(page: Page): Promise<void> {
 test('a thin book (the smaller side within 2 % worth less than 0.1 % of the token\'s value, $100 to $10,000) mutes the 24 h change with its rule in the tooltip, in the list and on the token page', async ({ appPage: page, mock }) => {
   const id = (await mock.token()).covenant_id;
   await listWithSupply(page);
-  // KAS at $0.001: 1,000,000 tokens at about 0.025 KAS are worth about $25, the threshold is the $100 floor, and no mock book is that deep
+  // KAS at $0.001: 1,000,000 tokens at about 0.025 KAS are worth about $25, the threshold is the
+  // $100 floor, and no mock book is that deep.
   await mock.kasPrice({ usd: 0.001 });
   await page.goto('/#/market');
   const row = page.getByTestId(`token-row-${id}`);
   await expect(row).toHaveAttribute('data-state', 'ready');
   const stats = await mock.get(`/v1/stats/${id}`);
-  // the executor's two sides of the 2 % band (sompi strings), together `depth_2pct_quote`
+  // The executor's two sides of the 2 % band (sompi strings), together `depth_2pct_quote`.
   expect(stats.depth_2pct_bid_sompi).toMatch(/^\d+$/);
   expect(stats.depth_2pct_ask_sompi).toMatch(/^\d+$/);
   expect(BigInt(stats.depth_2pct_bid_sompi) + BigInt(stats.depth_2pct_ask_sompi)).toBe(BigInt(stats.depth_2pct_quote));
@@ -116,12 +133,13 @@ test('a thin book (the smaller side within 2 % worth less than 0.1 % of the toke
   await expect(cell.locator('span')).toHaveAttribute('data-thin-book', 'true');
   await expect(cell.locator('span')).toHaveClass(/tone-flat/);
   await expect(cell).toHaveAttribute('title', new RegExp(String.raw`(^|\n)Thin book: under \$100 within 2% of the price\n${rule}`));
-  // the same figure on the token page's market bar
+  // The same figure on the token page's market bar.
   await page.goto(`/#/market/${id}`);
   const change = page.getByTestId('stat-change').locator('.mkt-stat-value');
   await expect(change).toHaveAttribute('data-thin-book', 'true');
   await expect(change).toHaveAttribute('title', new RegExp(String.raw`(^|\n)Thin book: under \$100 within 2% of the price\n${rule}`));
-  // a dear KAS makes the token worth more, so the threshold is the $10,000 cap and rises with the price: the marker follows the numbers
+  // A dear KAS makes the token worth more, so the threshold is the $10,000 cap and rises with the
+  // price: the marker follows the numbers.
   await mock.kasPrice({ usd: 900 });
   await page.goto('/#/market');
   await page.reload();
@@ -143,14 +161,15 @@ test('sorting: 24 h volume first, every header sorts (click and keyboard), searc
   expect(await rowIds(page)).toEqual([QUOTE, exkcc]);
   await expect(page.getByTestId(`token-volume-${QUOTE}`)).toHaveText('75.10');
 
-  // a click on the name sorts A-Z, a second click Z-A
+  // A click on the name sorts A-Z, a second click Z-A.
   await page.getByTestId('sort-market').first().click();
   await expect(page.getByTestId('sort-market').first().locator('xpath=..')).toHaveAttribute('aria-sort', 'ascending');
   expect(await rowIds(page)).toEqual([exkcc, QUOTE]);
   await page.getByTestId('sort-market').first().click();
   expect(await rowIds(page)).toEqual([QUOTE, exkcc]);
 
-  // keyboard: Tab to a header button and Enter / Space; the price (EXUSD 0.502 KAS > EXKCC 0.0251 KAS), descending first, then ascending
+  // Keyboard: Tab to a header button and Enter / Space. The price (EXUSD 0.502 KAS > EXKCC 0.0251
+  // KAS), descending first, then ascending.
   await page.getByTestId('sort-last').first().focus();
   await page.keyboard.press('Enter');
   await expect(page.getByTestId('sort-last').first().locator('xpath=..')).toHaveAttribute('aria-sort', 'descending');
@@ -159,7 +178,9 @@ test('sorting: 24 h volume first, every header sorts (click and keyboard), searc
   expect(await rowIds(page)).toEqual([exkcc, QUOTE]);
   await expect(page.getByTestId('sort-volume').first().locator('xpath=..')).toHaveAttribute('aria-sort', 'none');
 
-  // the favourite pair EXKCC/EXUSD: its price implied through both KAS markets (EXKCC's ~0.025 EXUSD per KAS's 0.502 KAS), the depth near its mid (live pair orders in the tooltip), no spread
+  // The favourite pair EXKCC/EXUSD: its price implied through both KAS markets (EXKCC's ~0.025
+  // EXUSD per KAS's 0.502 KAS), the depth near its mid (live pair orders in the tooltip), no
+  // spread.
   await toggleListFilter(page, 'token-list-favorites');
   const pairId = `${exkcc}-${QUOTE}`;
   const pair = page.getByTestId(`pair-row-${pairId}`);
@@ -169,15 +190,15 @@ test('sorting: 24 h volume first, every header sorts (click and keyboard), searc
   await expect(pair.getByTestId(`pair-last-${pairId}`)).toHaveAttribute('title', /^0\.0\d+ \(EXUSD per EXKCC\)$/);
   await expect(pair.getByTestId(`pair-depth-${pairId}`)).toHaveText(/^≥?[\d,.]+[KMBT]?$/);
   await expect(pair.getByTestId(`pair-depth-${pairId}`)).toHaveAttribute('title', /EXUSD · 3 asks · 2 bids · 1 conditional/);
-  // a pair has no supply: no market cap column
+  // A pair has no supply: no market cap column.
   await expect(page.getByTestId('pair-table').getByTestId('sort-mcap')).toHaveCount(0);
   await expect(pair.getByTestId(`pair-spread-${pairId}`)).toHaveText('—');
   await expect(pair.getByTestId(`pair-volume-${pairId}`)).toHaveText('0.00');
   await expect(pair.getByTestId(`pair-volume-${pairId}`)).toHaveAttribute('title', /EXUSD · 0 pair fills in 24 h$/);
-  // the pair table's headers carry the same sort state
+  // The pair table's headers carry the same sort state.
   await expect(page.getByTestId('pair-table').getByTestId('sort-last').locator('xpath=..')).toHaveAttribute('aria-sort', 'ascending');
 
-  // search: a token matches its pairs; BASE/QUOTE matches the pair; nothing else
+  // Search: a token matches its pairs. BASE/QUOTE matches the pair. Nothing else.
   await page.getByTestId('token-search').fill('exusd');
   await expect(pair).toBeVisible();
   await page.getByTestId('token-search').fill('exkcc/exusd');
@@ -188,7 +209,7 @@ test('sorting: 24 h volume first, every header sorts (click and keyboard), searc
   await page.getByTestId('token-search').fill('');
   await expect(pair).toBeVisible();
 
-  // a pair link opens the pair page
+  // A pair link opens the pair page.
   await page.getByTestId(`pair-link-${pairId}`).click();
   await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
 });
@@ -208,10 +229,10 @@ test('a token whose 24 h figures the indexer cannot give shows — without break
   }
   await expect(page.getByTestId(`token-row-${exkcc}`)).toHaveAttribute('data-state', 'ready');
   await expect(page.getByTestId(`token-last-${exkcc}`)).toHaveText(/^0\.0\d+$/);
-  // a row without figures sorts last whatever the direction
+  // A row without figures sorts last whatever the direction.
   await page.getByTestId('sort-volume').first().click();
   expect(await rowIds(page)).toEqual([exkcc, QUOTE]);
-  // the pair needs both legs for its price: — there too
+  // The pair needs both legs for its price: — there too.
   await toggleListFilter(page, 'token-list-favorites');
   await expect(page.getByTestId(`pair-last-${exkcc}-${QUOTE}`)).toHaveText('—');
 });
@@ -235,7 +256,7 @@ test('while the figures load, each row shows placeholders and the names are alre
 });
 
 test('a token icon has a thin ring from the theme token (light: black 12 %, dark: white 22 %) that does not change its size', async ({ appPage: page, mock }) => {
-  // a row rises in: its size is measured at rest
+  // A row rises in: its size is measured at rest.
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const id = (await mock.token()).covenant_id;
   await page.goto('/#/market');
@@ -261,7 +282,7 @@ test.describe('phone', () => {
   test('375 px: name, price and change only, no sideways scrolling (an open-list token named by 8 + 8 hex too)', async ({ appPage: page, mock }) => {
     await mock.seed({ open_token: true });
     const exkcc = await twoMarkets(page, mock);
-    // a token without metadata (no ticker, no decimals) is out of the default list until asked for
+    // A token without metadata (no ticker, no decimals) is out of the default list until asked for.
     await expect(page.getByTestId(`token-link-${'0f'.repeat(32)}`)).toHaveCount(0);
     await toggleListFilter(page, 'token-list-nameless');
     await expect(page.getByTestId(`token-link-${'0f'.repeat(32)}`)).toHaveText('Unnamed token');
@@ -271,7 +292,7 @@ test.describe('phone', () => {
     await expect(row.getByTestId(`token-last-${exkcc}`)).toBeVisible();
     await expect(row.getByTestId(`token-change-${exkcc}`)).toBeVisible();
     for (const k of ['volume', 'mcap', 'spread', 'depth']) await expect(row.getByTestId(`token-${k}-${exkcc}`)).toBeHidden();
-    // the identity block stays on the left, the shortened id under the name
+    // The identity block stays on the left, the shortened id under the name.
     await expect(row.getByTestId(`identity-${exkcc}`)).toBeVisible();
     await expect(row.getByTestId(`token-hash-${exkcc}`)).toBeVisible();
     await expect(page.getByTestId('sort-volume').first()).toBeHidden();
@@ -281,10 +302,10 @@ test.describe('phone', () => {
     });
     expect(overflow.page).toBeLessThanOrEqual(0);
     expect(overflow.tables).toBeLessThanOrEqual(0);
-    // sorting still works from the visible headers
+    // Sorting still works from the visible headers.
     await page.getByTestId('sort-change').first().click();
     await expect(page.getByTestId('sort-change').first().locator('xpath=..')).toHaveAttribute('aria-sort', 'descending');
-    // the favourite pair's table keeps its headers
+    // The favourite pair's table keeps its headers.
     await toggleListFilter(page, 'token-list-favorites');
     await expect(page.getByTestId('pair-table').getByTestId('sort-last')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);

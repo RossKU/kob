@@ -1,8 +1,11 @@
-// Drawing tools on the market page's price chart (a horizontal line, a trend line, an extended line, a box, recolour, delete, clear all, and a palette of six colour swatches
-// behind one colour button for the next drawing): placed with clicks, kept in this browser per market and network (localStorage) with their colours, restored after a reload, each market
-// with its own, and usable on a phone by tapping. Lightweight Charts draws into
-// canvases, so a drawing is read back through the chart's `data-drawings` count and the screen-reader list of the drawings (`chart-draw-list`).
-// Mock stack: the token page of EXKCC with a seeded history, and the EXKCC/EXUSD pair page for a second market.
+// Drawing tools on the market page's price chart (a horizontal line, a trend line, an extended
+// line, a box, recolour, delete, clear all, and a palette of six colour swatches behind one colour
+// button for the next drawing): placed with clicks, kept in this browser per market and network
+// (localStorage) with their colours, restored after a reload, each market with its own, and usable
+// on a phone by tapping. Lightweight Charts draws into canvases, so a drawing is read back through
+// the chart's `data-drawings` count and the screen-reader list of the drawings (`chart-draw-list`).
+// Mock stack: the token page of EXKCC with a seeded history, and the EXKCC/EXUSD pair page for a
+// second market.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
@@ -17,7 +20,10 @@ const listOf = (page: Page) => page.getByTestId('chart-draw-list').locator('li')
 const layerOf = (page: Page) => page.getByTestId('chart-draw-layer');
 const STORE = (token: string) => `kob.chart.drawings.${'testnet-10'}.${token}`;
 
-/** The example registry with EXKCC and a second listed KCC-20, EXUSD (6 decimals), matching the mock pair seed. */
+/**
+ * The example registry with EXKCC and a second listed KCC-20, EXUSD (6 decimals), matching the mock
+ * pair seed.
+ */
 async function listPair(page: Page): Promise<void> {
   const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
   for (const t of reg.templates) t.review_status = 'reviewed';
@@ -29,7 +35,10 @@ async function listPair(page: Page): Promise<void> {
   );
 }
 
-/** The pair seed and the history of both KAS markets, the registry with both tokens, then the token page of EXKCC. Returns EXKCC's covenant id. */
+/**
+ * The pair seed and the history of both KAS markets, the registry with both tokens, then the token
+ * page of EXKCC. Returns EXKCC's covenant id.
+ */
 async function openWithPair(page: Page, mock: MockClient): Promise<string> {
   await mock.seed({ pair: true });
   await mock.seedHistory({});
@@ -42,7 +51,10 @@ async function openWithPair(page: Page, mock: MockClient): Promise<string> {
   return base;
 }
 
-/** A point of the drawing layer (the plot area), as fractions of its width and height, in page coordinates. */
+/**
+ * A point of the drawing layer (the plot area), as fractions of its width and height, in page
+ * coordinates.
+ */
 async function at(page: Page, fx: number, fy: number): Promise<{ x: number; y: number }> {
   const b = (await layerOf(page).boundingBox())!;
   return { x: b.x + b.width * fx, y: b.y + b.height * fy };
@@ -55,7 +67,10 @@ async function drawHline(page: Page, fy: number): Promise<void> {
   await expect(layerOf(page)).toHaveCount(0); // a placed drawing ends its tool
 }
 
-/** A two-click drawing (trend line, extended line, box) from one point of the plot to another, as fractions of the layer. */
+/**
+ * A two-click drawing (trend line, extended line, box) from one point of the plot to another, as
+ * fractions of the layer.
+ */
 async function drawTwo(page: Page, tool: 'trend' | 'xline' | 'box', from: [number, number], to: [number, number]): Promise<void> {
   await page.getByTestId(`draw-${tool}`).click();
   const a = await at(page, ...from);
@@ -68,7 +83,10 @@ async function drawTwo(page: Page, tool: 'trend' | 'xline' | 'box', from: [numbe
 }
 
 const drawTrend = (page: Page, from: [number, number], to: [number, number]) => drawTwo(page, 'trend', from, to);
-/** Open the colour button's palette and pick a swatch by its colour key (the palette closes on a pick). */
+/**
+ * Open the colour button's palette and pick a swatch by its colour key (the palette closes on a
+ * pick).
+ */
 async function pickColor(page: Page, c: string, tap = false): Promise<void> {
   const btn = page.getByTestId('chart-color');
   const sw = page.getByTestId(`draw-color-${c}`);
@@ -95,16 +113,18 @@ test.describe('desktop', () => {
     await expect(chart).toHaveAttribute('data-state', 'ready');
     await expect(chart).toHaveAttribute('data-drawings', '0');
     await expect(page.getByTestId('draw-clear')).toBeDisabled();
-    // no tool on: no layer over the chart, the chart takes the pointer (pan and zoom)
+    // No tool on: no layer over the chart, the chart takes the pointer (pan and zoom).
     await expect(layerOf(page)).toHaveCount(0);
     for (const id of ['draw-hline', 'draw-trend', 'draw-xline', 'draw-box', 'draw-paint', 'draw-erase']) await expect(page.getByTestId(id)).toHaveAttribute('aria-pressed', 'false');
-    // the toolbar is not over the plot or its price axis, and says that drawings stay in this browser
+    // The toolbar is not over the plot or its price axis, and says that drawings stay in this
+    // browser.
     const tools = (await page.getByTestId('chart-tools').boundingBox())!;
     const box = (await page.locator('.chart-box').boundingBox())!;
     expect(tools.y + tools.height, 'toolbar above the plot').toBeLessThanOrEqual(box.y + 1);
     await expect(page.getByTestId('draw-hline')).toHaveAttribute('title', /stay in this browser/);
 
-    // horizontal line: one click sets the level; the layer leaves the price axis and the time axis free
+    // Horizontal line: one click sets the level. The layer leaves the price axis and the time axis
+    // free.
     await page.getByTestId('draw-hline').click();
     await expect(page.getByTestId('draw-hline')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('chart-draw-hint')).toContainText('price level');
@@ -121,7 +141,7 @@ test.describe('desktop', () => {
     expect(level, 'a price near the mock book (0.025 KAS)').toBeGreaterThan(0.015);
     expect(level).toBeLessThan(0.04);
 
-    // trend line: two clicks, Esc steps back from the first point and then leaves the tool
+    // Trend line: two clicks, Esc steps back from the first point and then leaves the tool.
     await page.getByTestId('draw-trend').click();
     const a = await at(page, 0.25, 0.7);
     await page.mouse.click(a.x, a.y);
@@ -138,7 +158,7 @@ test.describe('desktop', () => {
     await expect(listOf(page)).toHaveCount(2);
     await expect(listOf(page).nth(1)).toContainText('Trend line from');
 
-    // kept in this browser, per network and market: back after a reload
+    // Kept in this browser, per network and market: back after a reload.
     const stored = await page.evaluate((k) => localStorage.getItem(k), STORE(token));
     expect(JSON.parse(stored!).items.map((d: { kind: string }) => d.kind)).toEqual(['hline', 'trend']);
     await page.reload();
@@ -147,7 +167,7 @@ test.describe('desktop', () => {
     await expect(listOf(page)).toHaveCount(2);
     await expect(listOf(page).first()).toContainText(`Horizontal line at ${level}`);
 
-    // delete: the delete tool removes the drawing under the click; the other one stays
+    // Delete: the delete tool removes the drawing under the click. The other one stays.
     await page.getByTestId('draw-erase').click();
     await expect(page.getByTestId('chart-draw-hint')).toContainText('delete');
     const onLine = await at(page, 0.9, 0.4); // the horizontal line spans the plot
@@ -162,7 +182,7 @@ test.describe('desktop', () => {
     await page.reload();
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '1');
 
-    // clear all
+    // Clear all.
     await page.getByTestId('draw-clear').click();
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '0');
     await expect(page.getByTestId('draw-clear')).toBeDisabled();
@@ -186,7 +206,7 @@ test.describe('desktop', () => {
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '2');
     await page.getByTestId('theme-toggle').click();
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '2');
-    // with no tool on the wheel reaches the chart: zoom keeps working
+    // With no tool on the wheel reaches the chart: zoom keeps working.
     const b = (await page.locator('.chart-canvas').boundingBox())!;
     await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
     await page.mouse.wheel(0, -300);
@@ -209,7 +229,8 @@ test.describe('desktop', () => {
     await expect(page.getByTestId('draw-box')).toHaveAccessibleName('Box');
     await expect(page.getByTestId('draw-paint')).toHaveAccessibleName('Recolour a drawing');
     await expect(page.getByTestId('draw-erase')).toHaveAccessibleName('Delete a drawing');
-    // one colour button (a menu button) names the current colour and opens a palette: a labelled group of toggle buttons, one pressed
+    // One colour button (a menu button) names the current colour and opens a palette: a labelled
+    // group of toggle buttons, one pressed.
     const colorBtn = page.getByTestId('chart-color');
     await expect(colorBtn).toHaveAccessibleName('Drawing colour: Grey');
     await expect(colorBtn).toHaveAttribute('aria-haspopup', 'true');
@@ -223,16 +244,16 @@ test.describe('desktop', () => {
     await expect(page.getByTestId('draw-color-accent')).toHaveAccessibleName('Violet');
     await expect(page.getByTestId('chart-swatches').locator('[aria-pressed="true"]')).toHaveCount(1);
     await expect(page.getByTestId('draw-color-muted')).toHaveAttribute('aria-pressed', 'true');
-    // Esc closes it and the focus is back on the button
+    // Esc closes it and the focus is back on the button.
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('chart-swatches')).toHaveCount(0);
     await expect(colorBtn).toBeFocused();
-    // so does a press outside it
+    // So does a press outside it.
     await colorBtn.click();
     await expect(page.getByTestId('chart-swatches')).toBeVisible();
     await page.mouse.click(5, 300);
     await expect(page.getByTestId('chart-swatches')).toHaveCount(0);
-    // a swatch from the keyboard: the palette closes, the button shows the new colour
+    // A swatch from the keyboard: the palette closes, the button shows the new colour.
     await colorBtn.click();
     await page.getByTestId('draw-color-buy').focus();
     await page.keyboard.press('Enter');
@@ -243,7 +264,7 @@ test.describe('desktop', () => {
     await expect(page.getByTestId('draw-color-buy')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('draw-color-muted')).toHaveAttribute('aria-pressed', 'false');
     await page.keyboard.press('Escape');
-    // clear all is an icon button with a name and a tooltip
+    // Clear all is an icon button with a name and a tooltip.
     await expect(page.getByTestId('draw-clear')).toHaveAccessibleName('Clear all drawings');
     await expect(page.getByTestId('draw-clear')).toHaveAttribute('title', /Clear all drawings/);
     await page.getByTestId('draw-trend').focus();
@@ -253,7 +274,7 @@ test.describe('desktop', () => {
     await expect(page.getByTestId('draw-trend')).toHaveAttribute('aria-pressed', 'false');
     await page.keyboard.press('Space');
     await expect(page.getByTestId('draw-trend')).toHaveAttribute('aria-pressed', 'true');
-    // a second tool replaces the first
+    // A second tool replaces the first.
     await page.getByTestId('draw-erase').click();
     await expect(page.getByTestId('draw-trend')).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByTestId('draw-erase')).toHaveAttribute('aria-pressed', 'true');
@@ -265,7 +286,8 @@ test.describe('desktop', () => {
     const token = await openMarket(page, mock);
     const chart = chartOf(page);
     await expect(chart).toHaveAttribute('data-state', 'ready');
-    // the colour button sits above the plot, on the same row as the tools; its palette has six swatches
+    // The colour button sits above the plot, on the same row as the tools. Its palette has six
+    // swatches.
     const sw = (await page.getByTestId('chart-color').boundingBox())!;
     const tl = (await page.getByTestId('chart-tools').boundingBox())!;
     const box = (await page.locator('.chart-box').boundingBox())!;
@@ -275,7 +297,7 @@ test.describe('desktop', () => {
     await expect(page.getByTestId('chart-swatches').getByRole('button')).toHaveCount(6);
     await page.keyboard.press('Escape');
 
-    // the swatch sets the colour of the NEXT drawing
+    // The swatch sets the colour of the NEXT drawing.
     await pickColor(page, 'info');
     await expect(page.getByTestId('chart-color')).toHaveAccessibleName('Drawing colour: Blue');
     await drawTwo(page, 'xline', [0.4, 0.8], [0.5, 0.7]);
@@ -287,7 +309,7 @@ test.describe('desktop', () => {
     await expect(listOf(page).nth(0)).toContainText('Extended line from');
     await expect(listOf(page).nth(1)).toContainText('Box from');
 
-    // Esc steps a two-point drawing back, as for the trend line
+    // Esc steps a two-point drawing back, as for the trend line.
     await page.getByTestId('draw-box').click();
     const c1 = await at(page, 0.8, 0.8);
     await page.mouse.click(c1.x, c1.y);
@@ -298,7 +320,7 @@ test.describe('desktop', () => {
     await expect(layerOf(page)).toHaveCount(0);
     await expect(chart).toHaveAttribute('data-drawings', '2');
 
-    // recolour: pick a swatch, then click the box's outline (the extended line stays as it is)
+    // Recolour: pick a swatch, then click the box's outline (the extended line stays as it is).
     await pickColor(page, 'sell');
     await page.getByTestId('draw-paint').click();
     await expect(page.getByTestId('draw-paint')).toHaveAttribute('aria-pressed', 'true');
@@ -309,7 +331,7 @@ test.describe('desktop', () => {
     await page.keyboard.press('Escape');
     await expect(layerOf(page)).toHaveCount(0);
 
-    // kept with their colours; the next-drawing swatch is remembered too
+    // Kept with their colours. The next-drawing swatch is remembered too.
     const stored = JSON.parse((await page.evaluate((k) => localStorage.getItem(k), STORE(token)))!);
     expect(stored.items.map((d: { kind: string; color: string }) => [d.kind, d.color])).toEqual([['xline', 'info'], ['box', 'sell']]);
     await page.reload();
@@ -318,11 +340,12 @@ test.describe('desktop', () => {
     expect(await colorsOf(page)).toEqual(['info', 'sell']);
     expect(await kindsOf(page)).toEqual(['xline', 'box']);
     await expect(page.getByTestId('chart-color')).toHaveAccessibleName('Drawing colour: Red');
-    // a theme change repaints with the same drawings and colours
+    // A theme change repaints with the same drawings and colours.
     await page.getByTestId('theme-toggle').click();
     expect(await colorsOf(page)).toEqual(['info', 'sell']);
 
-    // delete: the extended line is hit far past its second point, along the whole visible line; the box inside its area
+    // Delete: the extended line is hit far past its second point, along the whole visible line. The
+    // box inside its area.
     await page.getByTestId('draw-erase').click();
     const lb = (await layerOf(page).boundingBox())!;
     const p1 = { x: lb.x + lb.width * 0.4, y: lb.y + lb.height * 0.8 };
@@ -362,7 +385,7 @@ test.describe('desktop', () => {
     await drawTrend(page, [0.3, 0.7], [0.6, 0.3]);
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '2');
 
-    // the pair page: no drawings of its own yet; one horizontal line there
+    // The pair page: no drawings of its own yet. One horizontal line there.
     await page.goto(`/#/market/${base}/${QUOTE}`);
     await expect(page.getByTestId('pair-page')).toHaveAttribute('data-base', base);
     await expect(chartOf(page)).toHaveAttribute('data-state', 'ready');
@@ -374,7 +397,8 @@ test.describe('desktop', () => {
     const keys = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('kob.chart.drawings.')).sort());
     expect(keys).toEqual([STORE(base), STORE(`${base}/${QUOTE}`)].sort());
 
-    // back on the token market: its two, not the pair's; and the pair's still there after a reload of the pair
+    // Back on the token market: its two, not the pair's. And the pair's still there after a reload
+    // of the pair.
     await page.goto(`/#/market/${base}`);
     await expect(chartOf(page)).toHaveAttribute('data-state', 'ready');
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '2');
@@ -420,7 +444,10 @@ test.describe('desktop', () => {
 test.describe('phone, 390 px wide, touch', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
-  /** On a touch screen the tools and the colours are behind the Draw button (chart-draw-sheet.spec.ts): open its sheet unless it is open. */
+  /**
+   * On a touch screen the tools and the colours are behind the Draw button
+   * (chart-draw-sheet.spec.ts): open its sheet unless it is open.
+   */
   async function sheet(page: Page) {
     if ((await page.getByTestId('chart-draw-panel').count()) === 0) await page.getByTestId('chart-draw-sheet').tap();
     await expect(page.getByTestId('chart-draw-panel')).toBeVisible();
@@ -434,10 +461,11 @@ test.describe('phone, 390 px wide, touch', () => {
     await fund(mock);
     const token = await openMarket(page, mock);
     await expect(chartOf(page)).toHaveAttribute('data-state', 'ready');
-    // the whole plot on screen (taps outside the viewport go nowhere), clear of the Buy | Sell bar
+    // The whole plot on screen (taps outside the viewport go nowhere), clear of the Buy | Sell bar.
     await page.locator('.chart-box').evaluate((el) => el.scrollIntoView({ block: 'center' }));
     const box = (await page.locator('.chart-box').boundingBox())!;
-    // the header is one row: the intervals, the Draw button and Expand, all inside the screen and above the plot, the button finger-sized
+    // The header is one row: the intervals, the Draw button and Expand, all inside the screen and
+    // above the plot, the button finger-sized.
     const draw = (await page.getByTestId('chart-draw-sheet').boundingBox())!;
     expect(draw.x + draw.width).toBeLessThanOrEqual(390);
     expect(draw.y + draw.height, 'Draw above the plot').toBeLessThanOrEqual(box.y + 1);
@@ -447,7 +475,7 @@ test.describe('phone, 390 px wide, touch', () => {
     const acts = (await page.locator('.chart-actions').boundingBox())!;
     expect(acts.x).toBeGreaterThanOrEqual(0);
     expect(acts.x + acts.width).toBeLessThanOrEqual(390);
-    // the sheet: inside the screen, the swatches finger-sized
+    // The sheet: inside the screen, the swatches finger-sized.
     await sheet(page);
     const sw = (await page.getByTestId('chart-swatches').boundingBox())!;
     expect(sw.x).toBeGreaterThanOrEqual(0);
@@ -473,7 +501,7 @@ test.describe('phone, 390 px wide, touch', () => {
     await expect(chartOf(page)).toHaveAttribute('data-drawings', '2');
     expect(await horizontalOverflow(page), 'market page').toBe(0);
 
-    // a box by two taps, in a colour picked with a tap, and recoloured with a tap
+    // A box by two taps, in a colour picked with a tap, and recoloured with a tap.
     await colour(page, 'info');
     await tool(page, 'box');
     const c1 = await at(page, 0.15, 0.85);
@@ -490,7 +518,7 @@ test.describe('phone, 390 px wide, touch', () => {
     expect(await colorsOf(page)).toEqual(['sell', 'sell', 'buy']);
     expect(await horizontalOverflow(page), 'market page').toBe(0);
 
-    // a finger deletes a drawing with some margin around its line
+    // A finger deletes a drawing with some margin around its line.
     await tool(page, 'erase');
     const near = await at(page, 0.9, 0.45);
     await page.touchscreen.tap(near.x, near.y + 9);

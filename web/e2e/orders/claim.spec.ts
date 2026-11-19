@@ -1,6 +1,8 @@
-// Claim of what a Collected buy order bought (bid-delivery-spec §7, §10) through the UI and the mock stack: the order row and the balances show
-// the bought tokens as the wallet's, Claim shows its fee, one approval sends them to the wallet and the order stays open with nothing bought.
-// With KOB_W2_SHOTS=<dir> the same run saves the review shots (Portfolio desktop and phone, the order row, the claim dialog).
+// Claim of what a Collected buy order bought (bid-delivery-spec §7, §10) through the UI and the
+// mock stack: the order row and the balances show the bought tokens as the wallet's, Claim shows
+// its fee, one approval sends them to the wallet and the order stays open with nothing bought. With
+// KOB_W2_SHOTS=<dir> the same run saves screenshots (Portfolio desktop and phone, the order
+// row, the claim dialog).
 import { test, expect, type MockClient } from '../fixtures';
 import { KAS, TOKEN } from '../helpers/env';
 import { openOrders, runFlow, openOrderRow } from '../helpers/orders';
@@ -10,7 +12,10 @@ test.use({ autoOpen: false });
 const shots = process.env.KOB_W2_SHOTS;
 const balanceOf = async (mock: MockClient, ticker: string) => BigInt((await mock.balance('alice')).tokens[ticker] ?? '0');
 
-/** A Collected limit buy of 3 tokens of alice's, filled twice by one token: 2 tokens held by the order. */
+/**
+ * A Collected limit buy of 3 tokens of alice's, filled twice by one token: 2 tokens held by the
+ * order.
+ */
 async function collectedBid(mock: MockClient): Promise<string> {
   await mock.giveKas('alice', 500n * KAS, 2);
   await mock.giveTokens('alice', 5n * TOKEN);
@@ -72,7 +77,8 @@ test('a Collected buy order: bought tokens shown as yours, Claim with its fee, o
   await dialog.getByTestId('claim-confirm').click();
   const [tx] = await runFlow(page, mock, wallet, { steps: 1 });
 
-  // one transaction: the order continues (nothing closed), its bought-custody is spent, the tokens go to alice as one UTXO
+  // one transaction: the order continues (nothing closed), its bought-custody is spent, the tokens
+  // go to alice as one UTXO
   expect(tx!.submission.closed).toEqual([]);
   expect(tx!.submission.spent?.some((s) => s.covenantId === tok.covenant_id && s.outpoint === `${view.bought_custody.utxo.txid}:${view.bought_custody.utxo.index}`)).toBe(true);
   const after = await mock.order(id);

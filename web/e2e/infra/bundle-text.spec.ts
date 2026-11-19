@@ -1,5 +1,6 @@
-// The built bundle (what the browser runs: the app, the planners' and the decoder's messages, the SDKs) never says "base units" to a user
-// (founder decision 2026-10-17); a token's amounts are whole tokens. Runs on dist/, which the e2e web server builds first.
+// The built bundle (what the browser runs: the app, the planners' and the decoder's messages, the
+// SDKs) never says "base units" to a user. A token's amounts are
+// whole tokens. Runs on dist/, which the e2e web server builds first.
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '@playwright/test';

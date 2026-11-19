@@ -1,4 +1,6 @@
-// My orders > balances on a phone: one compact card per token (line 1 the name with its full name as the tooltip and its value at the right, line 2 the figures with their words, the buttons under them); a table on a desktop. Same test ids. Mock stack.
+// My orders > balances on a phone: one compact card per token (line 1 the name with its full name
+// as the tooltip and its value at the right, line 2 the figures with their words, the buttons under
+// them). A table on a desktop. Same test ids. Mock stack.
 import { expect, test, type MockClient } from '../fixtures';
 import { TESTID } from '../testids';
 import { fund, openMarket } from '../helpers/env';
@@ -27,11 +29,13 @@ test.describe('phone, 390 px wide', () => {
     const label = (await name.textContent())!;
     await expect(name).toHaveAttribute('title', label); // the full name
     expect(await name.evaluate((el) => el.getBoundingClientRect().height < 2.2 * parseFloat(getComputedStyle(el).lineHeight))).toBe(true); // one line
-    // Free tokens / In your orders on the second line, the value at the right of the first; the strays and the KAS locked in orders are not on the card unless there are strays (here none)
+    // Free tokens / In your orders on the second line, the value at the right of the first. The
+    // strays and the KAS locked in orders are not on the card unless there are strays (here none).
     const shown = await row.locator('.dt-c[data-label]').evaluateAll((cells) => cells.filter((c) => getComputedStyle(c).display !== 'none').map((c) => getComputedStyle(c, '::before').content));
     expect(shown).toEqual(['"Free tokens"', '"In your orders"', '"Value (KAS): "']);
     const tops = await row.locator('.dt-c-available > span, .dt-c-inOrders').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
-    // one line: their tops agree within 2 px (a figure and a number with its unit round to neighbouring pixels on some fonts)
+    // One line: their tops agree within 2 px (a figure and a number with its unit round to
+    // neighbouring pixels on some fonts).
     expect(Math.max(...tops) - Math.min(...tops), `the two figures stand on one line: ${tops}`).toBeLessThanOrEqual(2);
     expect((await row.boundingBox())!.height, 'a compact card').toBeLessThan(120);
     await expect(row.getByTestId('balance-escrowed')).toHaveText(/^3/); // test ids and text unchanged
@@ -39,7 +43,7 @@ test.describe('phone, 390 px wide', () => {
     expect(rb.x).toBeGreaterThanOrEqual(0);
     expect(rb.x + rb.width).toBeLessThanOrEqual(390 + 1);
     expect(await horizontalOverflow(page), 'My orders').toBe(0);
-    // the cancel button sits under the figures, inside the card
+    // The cancel button sits under the figures, inside the card.
     const cancel = row.getByTestId(`orders-cancel-token-${tok.covenant_id}`);
     await expect(cancel).toBeVisible();
     const cb = (await cancel.boundingBox())!;

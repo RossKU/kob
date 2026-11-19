@@ -1,7 +1,16 @@
-// The market page fits its window with no empty room (founder, 2026-11-11): on three columns, ONE row (book | chart | ticket; the depth chart is a view of the book's panel), the chart takes the
-// whole row: its box is what the ticket's row leaves over (the row is as tall as the ticket's whole Limit form, never taller), so the ticket has no empty band between its "Advanced options" box and
-// its pinned button, on a short, a full-HD and a tall window alike, and its place button is on the first screen at 1280x800 and 1920x1080 (review H-01); the order book lists as
-// many levels per side as its card holds (8 to 40; a phone keeps 12); the 1D chart's time axis reads dates, an intraday one 24-hour times. Mock stack: the token page of EXKCC, and the pair page.
+// The market page fits its window with no empty room.
+//
+// - On three columns there is ONE row (book | chart | ticket). The depth chart is a view of the
+//   book's panel.
+// - The chart takes the whole row: its box is what the ticket's row leaves over. The row is as tall
+//   as the ticket's whole Limit form, never taller.
+// - So the ticket has no empty band between its "Advanced options" box and its pinned button, on a
+//   short, a full-HD and a tall window alike.
+// - The ticket's place button is on the first screen at 1280x800 and 1920x1080.
+// - The order book lists as many levels per side as its card holds (8 to 40; a phone keeps 12).
+// - The 1D chart's time axis reads dates, an intraday one 24-hour times.
+//
+// Mock stack: the token page of EXKCC, and the pair page.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
@@ -14,9 +23,13 @@ const bottom = (page: Page, sel: string) => page.locator(sel).first().evaluate((
 const top = (page: Page, sel: string) => page.locator(sel).first().evaluate((el) => el.getBoundingClientRect().top + scrollY);
 const heightOf = (page: Page, sel: string) => page.locator(sel).first().evaluate((el) => el.getBoundingClientRect().height);
 
-/** The ticket's form has no empty band: from the bottom of the Advanced options box to the top of the footer (the pinned button) at most 24 px (the form's own gap and padding). */
+/**
+ * The ticket's form has no empty band: from the bottom of the Advanced options box to the top of
+ * the footer (the pinned button) at most 24 px (the form's own gap and padding).
+ */
 async function expectNoEmptyBand(page: Page): Promise<void> {
-  // the form's natural height is measured once the fonts and the data are in (OrderTicket.tsx --tk-fit)
+  // The form's natural height is measured once the fonts and the data are in (OrderTicket.tsx
+  // --tk-fit).
   await expect.poll(() => page.locator('.mkt-grid').evaluate((el) => (el as HTMLElement).style.getPropertyValue('--tk-fit')), { message: 'the ticket measured its form' }).toMatch(/px$/);
   await page.waitForTimeout(400);
   const band = (await top(page, '.tk-foot')) - (await bottom(page, '[data-testid="order-advanced"]'));
@@ -39,18 +52,20 @@ for (const [width, height] of SIZES) {
       expect(Math.abs((await bottom(page, '[data-testid="book-section"]')) - chart), 'the book ends at the chart').toBeLessThanOrEqual(1);
       expect(await top(page, '[data-testid="book-section"]'), 'one row: the three start together').toBeCloseTo(await top(page, '[data-testid="chart-section"]'), 0);
       expect(await top(page, '[data-testid="order-ticket"]')).toBeCloseTo(await top(page, '[data-testid="chart-section"]'), 0);
-      // the chart's box is the rest of the ticket's row (floor 240 px), and the page height is the same on every window height (the row follows the form, not the window)
+      // The chart's box is the rest of the ticket's row (floor 240 px), and the page height is the
+      // same on every window height (the row follows the form, not the window).
       expect(await heightOf(page, '.chart-box')).toBeGreaterThanOrEqual(240);
     } else {
       expect(await heightOf(page, '.chart-box'), 'two columns: a fixed chart box').toBeCloseTo(420, 0);
     }
-    // no loop: the boxes are the same a moment later (the ticket's measure never feeds on the row)
+    // No loop: the boxes are the same a moment later (the ticket's measure never feeds on the row).
     const boxes = () => page.evaluate(() => ['chart-section', 'order-ticket', 'book-section'].map((id) => document.querySelector(`[data-testid="${id}"]`)!.getBoundingClientRect().height));
     const a = await boxes();
     await page.waitForTimeout(700);
     expect(await boxes()).toEqual(a);
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
-    // H-01: on the two usual desktop windows the ticket's place button is on the first screen, on load, without scrolling
+    // H-01: on the two usual desktop windows the ticket's place button is on the first screen, on
+    // load, without scrolling.
     if (width >= 1280 && height <= 1080) {
       const place = (await page.getByTestId('order-place').boundingBox())!;
       expect(place.y, 'the place button is below the top edge').toBeGreaterThanOrEqual(0);
@@ -63,7 +78,7 @@ for (const [width, height] of SIZES) {
 test('1920x1080: the order book lists as many levels as its card holds, 8 at least, 40 at most; a tall row (a long form) gives at least 14 per side', async ({ appPage: page, mock }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await fund(mock);
-  // 25 levels a side: the seed's 10 and 15 more
+  // 25 levels a side: the seed's 10 and 15 more.
   await seedOrders(mock, [
     ...Array.from({ length: 15 }, (_, i) => ({ side: 'ask' as const, price: 2_610_000 + i * 10_000, tokens: 1 })),
     ...Array.from({ length: 15 }, (_, i) => ({ side: 'bid' as const, price: 2_390_000 - i * 10_000, tokens: 1 })),
@@ -73,7 +88,8 @@ test('1920x1080: the order book lists as many levels as its card holds, 8 at lea
   const bids = page.locator('[data-testid="book-bids"] .book-row:not(.book-blank)');
   const slotsOf = async () => page.locator('[data-testid="book-asks"] .book-row').count();
   const check = async (label: string) => {
-    // the card is full: the side holds exactly the slots that fit its height (less than one row left over), each filled while the data has levels
+    // The card is full: the side holds exactly the slots that fit its height (less than one row
+    // left over), each filled while the data has levels.
     const side = await heightOf(page, '[data-testid="book-asks"]');
     const slots = await slotsOf();
     expect(side - slots * 21, `${label}: less than one row left over`).toBeLessThan(21);
@@ -90,8 +106,8 @@ test('1920x1080: the order book lists as many levels as its card holds, 8 at lea
   await expect.poll(() => slotsOf(), { message: 'the book drew its slots' }).toBeGreaterThanOrEqual(8);
   await page.waitForTimeout(500);
   const natural = await check('the ticket row');
-  // the card is as tall as the ticket's row, which is as tall as the form: a taller form (here the 840 px the form measured before its field help was folded away by default)
-  // gives the book more levels, at least 14 a side
+  // The card is as tall as the ticket's row, which is as tall as the form.
+  // A taller form (here 840 px) gives the book more levels, at least 14 a side.
   await page.locator('.mkt-grid').evaluate((el) => (el as HTMLElement).style.setProperty('--tk-fit', '840px'));
   await expect.poll(() => slotsOf(), { message: 'the book follows the taller row' }).toBeGreaterThanOrEqual(14);
   await page.waitForTimeout(300);
@@ -104,7 +120,7 @@ test('1920x1080: fewer levels than slots keeps the asks on the spread, the blank
   await openMarket(page, mock); // the seed has 10 levels a side
   const asks = page.locator('[data-testid="book-asks"] .book-row');
   await expect(asks.first()).toBeVisible();
-  // a row tall enough for more than 10 levels a side (a long form)
+  // A row tall enough for more than 10 levels a side (a long form).
   await page.locator('.mkt-grid').evaluate((el) => (el as HTMLElement).style.setProperty('--tk-fit', '840px'));
   await expect.poll(() => asks.count()).toBeGreaterThan(10);
   await page.waitForTimeout(300);
@@ -184,11 +200,12 @@ test.describe('the pair page fits its window too', () => {
       await openPair(page, mock);
       await expectNoEmptyBand(page);
       const chart = await bottom(page, '[data-testid="chart-section"]');
-      // the ticket's column (the pair's has the link to the wallet's orders under the form)
+      // The ticket's column (the pair's has the link to the wallet's orders under the form).
       expect(Math.abs((await bottom(page, '.mkt-area-ticket')) - chart)).toBeLessThanOrEqual(1);
       expect(Math.abs((await bottom(page, '[data-testid="pair-book-section"]')) - chart)).toBeLessThanOrEqual(1);
       expect(await heightOf(page, '.chart-box')).toBeGreaterThanOrEqual(240);
-      // the side of the pair book is as tall as the card gave it: the 8 slots it has at least, no level cut off (every level drawn fits the side)
+      // The side of the pair book is as tall as the card gave it: the 8 slots it has at least, no
+      // level cut off (every level drawn fits the side).
       expect(await heightOf(page, '[data-testid="pair-book-asks"]')).toBeGreaterThanOrEqual(8 * 21);
       expect(await page.locator('[data-testid="pair-book-asks"]').evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
     });

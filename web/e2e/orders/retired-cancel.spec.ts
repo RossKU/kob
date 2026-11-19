@@ -1,7 +1,10 @@
-// An order under a RETIRED template of the cancel-only table (an older contract version, docs/spec/template-retirement.md): the wallet's record of
-// a bid placed by an older build under `KobBid` b995661f. My orders resolves it on the node under that template's own script and shows its terms
-// with the "older contract version — cancel only" badge; Cancel all counts it; Cancel builds its retired cancel, which the private-key signer
-// decodes as "Cancel an order under an older contract version (cancel only)" with what returns to the wallet; the node accepts it (engine-validated).
+// An order under a RETIRED template of the cancel-only table (an older contract version,
+// docs/spec/template-retirement.md): the wallet's record of a bid placed by an older build under
+// `KobBid` b995661f. My orders resolves it on the node under that template's own script and shows
+// its terms with the "older contract version — cancel only" badge; Cancel all counts it; Cancel
+// builds its retired cancel, which the private-key signer decodes as "Cancel an order under an
+// older contract version (cancel only)" with what returns to the wallet; the node accepts it
+// (engine-validated).
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
 import { fund, gotoOrders, openMarket } from '../helpers/env';
@@ -39,7 +42,8 @@ test('an order under an older contract version: shown cancel-only, counted by Ca
   await expect(row).toBeVisible({ timeout: 30_000 });
   await expect(row.getByTestId('order-cancel-only')).toHaveText('older contract version — cancel only');
   await expect(row.getByTestId('order-old-template')).toHaveCount(0);
-  // its terms decode from the retired template's state (today's layout): a buy limit, live on the node
+  // its terms decode from the retired template's state (today's layout): a buy limit, live on the
+  // node
   await expect(row).toHaveAttribute('data-live', '1', { timeout: 30_000 });
   await expect(row).toHaveAttribute('data-side', 'buy');
   await expect(row.getByTestId(`order-type-${id}`)).not.toHaveText(/unknown/i);
@@ -59,7 +63,8 @@ test('an order under an older contract version: shown cancel-only, counted by Ca
   expect(shown.problems).toBe(false);
   await confirmReceipt(page);
 
-  // the node accepted it (the mock validates every submission in the engine): it spends the retired order's UTXO, back to alice
+  // the node accepted it (the mock validates every submission in the engine): it spends the retired
+  // order's UTXO, back to alice
   await expect.poll(async () => (await mock.submitted()).some((s) => (s.spent ?? []).some((x) => x.outpoint === `${seeded.txid}:0`)), { timeout: 30_000 }).toBe(true);
   const sub = (await mock.submitted()).find((s) => (s.spent ?? []).some((x) => x.outpoint === `${seeded.txid}:0`))!;
   expect(sub.created).toEqual([]);

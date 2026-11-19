@@ -1,5 +1,6 @@
-// Screenshots of the chromatic curve shape (review only, skipped without KOB_CHROMATIC_SHOTS=<dir>): Create token with "Sell on a curve"
-// and the Chromatic shape chosen, the "After creation" section with its graph and the whole page.
+// Screenshots of the chromatic curve shape (review only, skipped without
+// KOB_CHROMATIC_SHOTS=<dir>): Create token with "Sell on a curve" and the Chromatic shape chosen,
+// the "After creation" section with its graph and the whole page.
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '../fixtures';
@@ -23,7 +24,7 @@ test('chromatic curve shots', async ({ appPage: page, mock }) => {
   await page.getByTestId('issue-after-curve').click();
   await page.getByTestId('sale-keep').fill('10');
   await page.getByTestId('sale-shape-chromatic').click();
-  // the Octaves field takes the Levels slot, the Multiple slot shows the levels and the top
+  // The Octaves field takes the Levels slot, the Multiple slot shows the levels and the top.
   await expect(page.getByTestId('sale-levels')).toHaveCount(0);
   await expect(page.getByTestId('sale-multiple')).toHaveCount(0);
   await expect(page.getByTestId('sale-octaves-range')).toContainText('25, top 4× first');

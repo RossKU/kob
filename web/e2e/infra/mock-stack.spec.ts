@@ -1,6 +1,7 @@
-// Infrastructure test: the mock server, the injected app config, the mock wallets (all three), kob-wasm and the official SDK working
-// together in a real browser, driven through the placeholder page (e2e/fixtures-site). The per-order-type specs replace the placeholder
-// with the real UI later; this spec proves the fixtures they rely on.
+// Infrastructure test: the mock server, the injected app config, the mock wallets (all three),
+// kob-wasm and the official SDK working together in a real browser, driven through the placeholder
+// page (e2e/fixtures-site). The per-order-type specs replace the placeholder with the real UI
+// later; this spec proves the fixtures they rely on.
 import { expect, test, TEST_KEYS, type KeyName, type MockClient } from '../fixtures';
 import { TESTID } from '../testids';
 import type { ActionRequest, KeyUtxo, TokenUtxo } from '../../src/kob/types';
@@ -10,9 +11,10 @@ const TEN_KAS_X5 = 5n * 10n ** 10n;
 const TOKENS_10 = 10n * 10n ** 8n; // 10 whole tokens of the seeded token (scale 1e8 base units)
 
 /**
- * A createOrder request for an ask of `wholeTokens` whole tokens by `key` at `price` sompi per whole token, assembled from the mock indexer + node like
- * the app does. The order state is modelled on a seeded book order (same token identity, scale and minimum fill) with the maker, price and amount
- * replaced.
+ * A createOrder request for an ask of `wholeTokens` whole tokens by `key` at `price` sompi per
+ * whole token, assembled from the mock indexer + node like the app does. The order state is
+ * modelled on a seeded book order (same token identity, scale and minimum fill) with the maker,
+ * price and amount replaced.
  */
 async function askRequest(mock: MockClient, key: KeyName, wholeTokens: number, price: number): Promise<ActionRequest> {
   const tok = await mock.token();
@@ -150,7 +152,8 @@ test.describe('failure injection', () => {
     await mock.failNextSubmit('mempool is full');
     expect(await signAndSubmitError(appPage, request)).toBe('mempool is full');
     await expect(appPage.getByTestId(TESTID.txStatus)).toHaveText('rejected: mempool is full');
-    // the wallet returns a signature over the wrong digest: kob-wasm's finalize refuses it before anything is submitted
+    // the wallet returns a signature over the wrong digest: kob-wasm's finalize refuses it before
+    // anything is submitted
     await wallet!.configure({ wrongSignature: true });
     expect(await signAndSubmitError(appPage, request)).toMatch(/signature/i);
     expect(await mock.submitted(false)).toEqual([]);

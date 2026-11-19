@@ -3,12 +3,20 @@ import type { Page } from '@playwright/test';
 import { expect } from '../fixtures';
 import { readOptions } from './dropdown';
 
-/** The shape of a translation key that was rendered instead of its text: `ticket.type.limit.name`. */
+/**
+ * The shape of a translation key that was rendered instead of its text: `ticket.type.limit.name`.
+ */
 export const KEY_SHAPE = /^[a-z]+\.[a-zA-Z.]+$/;
-/** Every namespace of the app's dictionaries; a hyphenated key (`orders.type.limit-gtd`) is caught by this one. */
+/**
+ * Every namespace of the app's dictionaries; a hyphenated key (`orders.type.limit-gtd`) is caught
+ * by this one.
+ */
 export const KEY_NAMESPACED = /^(common|shell|market|ticket|confirm|orders|settings|issue|issues|amend)\.[\w.-]+$/;
 
-/** Texts (text nodes and the placeholder / title / aria-label / alt attributes) currently on the page that look like an untranslated key. */
+/**
+ * Texts (text nodes and the placeholder / title / aria-label / alt attributes) currently on the
+ * page that look like an untranslated key.
+ */
 export async function leakedKeys(page: Page): Promise<string[]> {
   const found = await page.evaluate(
     ([shape, ns]) => {
@@ -28,7 +36,8 @@ export async function leakedKeys(page: Page): Promise<string[]> {
       for (const el of document.body.querySelectorAll('[placeholder],[title],[aria-label],[alt]')) {
         for (const attr of ['placeholder', 'title', 'aria-label', 'alt']) check(el.getAttribute(attr));
       }
-      // hidden <details> content is part of the text nodes above; the rows of a drop-down are not, they exist while it is open (below)
+      // hidden <details> content is part of the text nodes above; the rows of a drop-down are not,
+      // they exist while it is open (below)
       return [...found];
     },
     [KEY_SHAPE.source, KEY_NAMESPACED.source],

@@ -1,6 +1,9 @@
-// The Create page's logo file and the declaration's `image` + `image_hash` (docs/spec/token-metadata.md 2), against the mock stack: the browser hashes
-// the picked file (one with code in it refused), the preparation declares `image` then `image_hash`, and the token's icon is shown as checked only while the picture at the
-// address still hashes to it (a different picture: the letter and a note; a host that sends no CORS header: the unchecked image, as before).
+// The Create page's logo file and the declaration's `image` + `image_hash`
+// (docs/spec/token-metadata.md 2), against the mock stack: the browser hashes the picked file (one
+// with code in it refused), the preparation declares `image` then `image_hash`, and the token's
+// icon is shown as checked only while the picture at the address still hashes to it (a different
+// picture: the letter and a note; a host that sends no CORS header: the unchecked image, as
+// before).
 import { createHash } from 'node:crypto';
 import { test, expect } from '../fixtures';
 import { OTHER_PNG, PNG } from '../helpers/kascov';
@@ -22,7 +25,8 @@ test('a logo file is hashed in the browser, declared as image + image_hash, and 
   await page.getByTestId('issue-supply').fill('1000');
   await page.getByTestId('issue-icon').fill(URL_);
 
-  // an SVG with a script is refused with a reason and sets no hash; a PNG fills the hash (64 lowercase hex), shown in the advanced field too
+  // An SVG with a script is refused with a reason and sets no hash. A PNG fills the hash (64
+  // lowercase hex), shown in the advanced field too.
   await page.getByTestId('issue-image-file').setInputFiles({ name: 'logo.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>') });
   await expect(page.getByTestId('issue-form')).toContainText('That picture carries code');
   await expect(page.getByTestId('issue-image-hash-note')).toHaveCount(0);
@@ -35,7 +39,7 @@ test('a logo file is hashed in the browser, declared as image + image_hash, and 
   await page.getByTestId('issue-image-file-help').click();
   await expect(page.getByTestId('issue-image-file-help-panel')).toContainText('cannot be changed later');
   await page.keyboard.press('Escape');
-  // a hash typed by hand must be 64 hex
+  // A hash typed by hand must be 64 hex.
   await page.getByTestId('issue-image-hash').fill('abc');
   await expect(page.getByTestId('issue-form')).toContainText('64 hexadecimal characters');
   await expect(page.getByTestId('issue-review')).toBeDisabled();
@@ -52,13 +56,13 @@ test('a logo file is hashed in the browser, declared as image + image_hash, and 
   await expect(page.getByTestId('issue-result')).toBeVisible({ timeout: 30_000 });
   const tokenId = (await page.getByTestId('issue-result-tokenId').getAttribute('data-value'))!;
 
-  // the preparation's payload: `image`, then `image_hash` (lowercase), compact, in KOB's order
+  // The preparation's payload: `image`, then `image_hash` (lowercase), compact, in KOB's order.
   const submitted = await mock.submitted();
   const prep = submitted[submitted.length - 2];
   const declared = `{"name":"Hashed Logo Coin","symbol":"HLC","decimals":8,"image":"${URL_}","image_hash":"${want}"}`;
   expect(prep.tx.payload).toBe(`00${Buffer.from(declared, 'utf8').toString('hex')}`);
 
-  // the host allows reading: the same bytes -> a checked picture from a blob: URL
+  // The host allows reading: the same bytes -> a checked picture from a blob: URL.
   const serve = (body: Buffer, headers: Record<string, string>) =>
     page.route(URL_, (route) => route.fulfill({ status: 200, contentType: 'image/png', headers, body }));
   await serve(PNG, CORS);
@@ -68,7 +72,7 @@ test('a logo file is hashed in the browser, declared as image + image_hash, and 
   await expect(icon).toHaveAttribute('data-icon', 'image');
   expect(await icon.locator('img').getAttribute('src')).toMatch(/^blob:/);
 
-  // the host serves another picture: the letter and the note, never the other picture
+  // The host serves another picture: the letter and the note, never the other picture.
   await page.unroute(URL_);
   await serve(OTHER_PNG, CORS);
   await page.reload();
@@ -76,8 +80,10 @@ test('a logo file is hashed in the browser, declared as image + image_hash, and 
   await expect(page.getByTestId(`token-icon-${tokenId}`).first()).toHaveAttribute('data-icon', 'letter');
   await expect(page.getByTestId(`token-icon-${tokenId}`).first().locator('img')).toHaveCount(0);
 
-  // the host sends no CORS header (Playwright adds one to a fulfilled response, so the blocked read is simulated by failing the page's fetch only): nothing can
-  // be read, so the unchecked image is shown as before
+  // The host sends no CORS header.
+  // Playwright adds one to a fulfilled response, so the blocked read is simulated by failing the
+  // page's fetch only.
+  // Nothing can be read, so the unchecked image is shown.
   await page.unroute(URL_);
   await page.route(URL_, (route) =>
     route.request().resourceType() === 'fetch' ? route.abort('failed') : route.fulfill({ status: 200, contentType: 'image/png', body: PNG }),

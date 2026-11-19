@@ -1,5 +1,6 @@
-// How the market list arrives: placeholders until the first figures are in, then the rows in their sorted places, one page at a time (the viewer picks how many);
-// a figure that arrives moves no row. Mock stack with a mocked kascov (many tokens that only it names).
+// How the market list arrives: placeholders until the first figures are in, then the rows in their
+// sorted places, one page at a time (the viewer picks how many). A figure that arrives moves no
+// row. Mock stack with a mocked kascov (many tokens that only it names).
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { mockKascov, programHash, type MockKascovToken } from '../helpers/kascov';
@@ -43,7 +44,7 @@ test('figures that come late move no row', async ({ appPage: page, mock }) => {
   });
   await mock.seedHistory({ hours: 2, trades: 30, seed: 3 });
   await page.goto('/#/market');
-  // the hold ends before the figures: the rows show, with their skeletons
+  // The hold ends before the figures: the rows show, with their skeletons.
   await expect(rows(page).first()).toBeVisible({ timeout: 2_400 });
   const before = await rows(page).evaluateAll((trs) => trs.map((tr) => tr.getAttribute('data-testid')));
   await page.waitForTimeout(300);

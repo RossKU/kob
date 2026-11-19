@@ -1,6 +1,10 @@
-// How the Portfolio's tables (and the market page's panel: the same components) change their structure as the room shrinks: a table, then the table folded, then cards, decided by FIT in
-// one fixed order, so the same width always gives the same structure (the founder's tablet showed cards and, a minute later at the same width, a table). A phone (below 640 px) is cards
-// with no sort control. The Connect button of a page is the header's. KOB_WIDE_FONTS=1 runs the page in the CI runner's wide font. Mock stack.
+// How the Portfolio's tables (and the market page's panel: the same components) change their
+// structure as the room shrinks.
+// The order is a table, then the table folded, then cards, decided by FIT in one fixed order, so
+// the same width always gives the same structure.
+// A phone (below 640 px) is cards with no sort control.
+// The Connect button of a page is the header's.
+// KOB_WIDE_FONTS=1 runs the page in the CI runner's wide font. Mock stack.
 import type { Locator, Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { listExkcc, connectWallet } from '../helpers/env';
@@ -10,7 +14,10 @@ test.use({ autoOpen: false });
 
 const fold = (table: Locator) => table.getAttribute('data-fold');
 
-/** The embedded panel of a market page, on `tab` (a tab id of the orders view), with the wallet connected. */
+/**
+ * The embedded panel of a market page, on `tab` (a tab id of the orders view), with the wallet
+ * connected.
+ */
 async function openPanel(page: Page, mock: import('../fixtures').MockClient, tab: string): Promise<Locator> {
   await page.addInitScript(() => localStorage.setItem('kob.theme', 'dark'));
   await seedPortfolio(mock);
@@ -37,7 +44,8 @@ test.describe('a tablet: the structure follows the room, not the history', () =>
       const first = await fold(table);
       expect(['0', '1', '2'], `fold at 1000 px (${tab})`).toContain(first);
       if (tab === 'fills') {
-        // the transaction id is whole (an ellipsis ends it where the column has no room), never shortened in the middle; the title has it whole too
+        // The transaction id is whole (an ellipsis ends it where the column has no room), never
+        // shortened in the middle. The title has it whole too.
         const tx = table.getByTestId('wallet-fill-tx').first();
         await expect(tx).toHaveText(/^[0-9a-f]{64}$/);
         await expect(tx).toHaveAttribute('title', /^[0-9a-f]{64}$/);
@@ -45,14 +53,15 @@ test.describe('a tablet: the structure follows the room, not the history', () =>
       }
       await expect(table.locator('.dt-head')).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth), 'no sideways scroll').toBeLessThanOrEqual(0);
-      // narrowed to a phone and widened back, widened and narrowed back: the same structure at 1000 px each time
+      // Narrowed to a phone and widened back, widened and narrowed back: the same structure at 1000
+      // px each time.
       for (const w of [390, 1000, 1400, 1000, 700, 1000]) {
         await page.setViewportSize({ width: w, height: 600 });
         await page.waitForTimeout(250);
         if (w === 390) expect(await fold(table), 'a phone is cards').toBe('cards');
         if (w === 1000) expect(await fold(table), 'back at 1000 px').toBe(first);
       }
-      // the data arriving again changes nothing either (a refresh of the page)
+      // The data arriving again changes nothing either (a refresh of the page).
       await page.reload();
       await connectWallet(page, 'kasware');
       const panel = page.getByTestId('market-orders');

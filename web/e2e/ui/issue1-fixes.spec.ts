@@ -1,6 +1,13 @@
-// GitHub issue 1 and the founder's follow-ups (2026-11-03): the KAS-on-token-coins explanation, the image note of the token creation form, an order
-// ticket that grows alone (its own column, Advanced options never pushes the panels below or leaves a gap), the folded template verification, and
-// Settings with its operator part under "Advanced / self-hosting". (The final confirmation's notes are in min-order-value.spec.ts and order-flow.spec.ts.)
+// GitHub issue 1 and its follow-ups.
+//
+// - The KAS-on-token-coins explanation.
+// - The image note of the token creation form.
+// - An order ticket that grows alone (its own column). Advanced options never pushes the panels
+//   below or leaves a gap.
+// - The folded template verification.
+// - Settings with its operator part under "Advanced / self-hosting".
+//
+// The final confirmation's notes are in min-order-value.spec.ts and order-flow.spec.ts.
 import { readFileSync } from 'node:fs';
 import { expect, test } from '../fixtures';
 import { KAS, TOKEN, connectWallet, fund, openMarket } from '../helpers/env';
@@ -27,7 +34,7 @@ test('My orders: the KAS on token coins has a one-line muted explanation', async
   const note = page.getByTestId('kas-on-tokens-note');
   await expect(note).toHaveText('KAS held by your token coins; it comes back when they move.');
   await expect(note).toHaveClass(/muted/);
-  // one line at a desktop width, right under the figures
+  // One line at a desktop width, right under the figures.
   const box = (await note.boundingBox())!;
   expect(box.height).toBeLessThan(28);
   expect(box.y).toBeGreaterThan((await page.getByTestId('kas-on-tokens').boundingBox())!.y);
@@ -36,7 +43,7 @@ test('My orders: the KAS on token coins has a one-line muted explanation', async
 test('token creation: the image address says each viewer loads the logo from it, and that ipfs:// is tamper-proof', async ({ appPage: page }) => {
   await page.goto('/#/create');
   await expect(page.getByTestId('issue-form')).toBeVisible();
-  // behind the Logo label's "?"
+  // Behind the Logo label's "?".
   await page.getByTestId('issue-icon-help').click();
   const help = page.getByTestId('issue-icon-help-panel');
   await expect(help).toContainText('loads the logo from this address');
@@ -51,16 +58,17 @@ for (const width of [1280, 880, 390]) {
     await openMarket(page, mock);
     await pickType(page, 'limit', 'buy');
     await settlePlan(page);
-    // what loads under the grid (the activity log's rows, the wallet's panel) changes the page's height by itself: measured once it is in
+    // What loads under the grid (the activity log's rows, the wallet's panel) changes the page's
+    // height by itself: measured once it is in.
     await page.getByTestId('activity-list').scrollIntoViewIfNeeded();
     await expect(page.getByTestId('activity-list').getByTestId('activity-row').first()).toBeVisible();
     await expect(page.getByTestId('market-orders').getByTestId('orders-section')).toBeVisible();
     await page.waitForTimeout(500);
     await page.evaluate(() => scrollTo(0, 0));
     const adv = page.getByTestId('order-advanced');
-    // document coordinates (the click on the summary may scroll the page)
+    // Document coordinates (the click on the summary may scroll the page).
     const box = (id: string) => page.getByTestId(id).evaluate((el) => { const r = el.getBoundingClientRect(); return { x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height }; });
-    // the book's panel (with its Depth view) stays put at every width
+    // The book's panel (with its Depth view) stays put at every width.
     const ids = ['book-section', 'chart-section', 'token-details', 'ticket-container', 'order-place'];
     const closed: Record<string, { x: number; y: number; width: number; height: number }> = {};
     for (const id of ids) closed[id] = await box(id);
@@ -71,7 +79,7 @@ for (const width of [1280, 880, 390]) {
       const now = await box(id);
       for (const k of ['x', 'y', 'width', 'height'] as const) expect(Math.abs(now[k] - closed[id]![k]), id + '.' + k).toBeLessThanOrEqual(1);
     }
-    // the form is what grew: it scrolls inside the panel
+    // The form is what grew: it scrolls inside the panel.
     expect(await page.getByTestId('order-scroll').evaluate((el) => el.scrollHeight > el.clientHeight), 'the form scrolls inside the panel').toBe(true);
     expect(await horizontalOverflow(page), 'page').toBe(0);
   });
@@ -87,7 +95,7 @@ test('the template checks sit in "Status and checks": one line while folded, bes
   expect(folded.height).toBeLessThan(70);
   expect((await facts.boundingBox())!.height).toBeGreaterThan(folded.height);
   await expect(page.getByTestId('template-verification')).toBeHidden();
-  // a phone too: still one line
+  // A phone too: still one line.
   await page.setViewportSize({ width: 390, height: 900 });
   await verification.scrollIntoViewIfNeeded();
   expect((await verification.boundingBox())!.height).toBeLessThan(70);
@@ -102,17 +110,17 @@ test('Settings: network, wallet and fee options in view; the servers folded in t
   const adv = page.getByTestId('settings-advanced');
   await expect(adv).toBeVisible();
   await expect(adv).toContainText('Advanced / self-hosting');
-  // folded: the operator part is in the page but not shown
+  // Folded: the operator part is in the page but not shown.
   const servers = ['settings-indexer-url', 'settings-node-url', 'settings-registry-url', 'settings-server-warning'];
   const operator = ['settings-registry', 'settings-tracker', 'settings-trust'];
   for (const id of [...servers, ...operator]) await expect(page.getByTestId(id), `${id} folded`).toBeHidden();
-  // the servers are settings of the Save card: their fold is inside it, with the Save button below
+  // The servers are settings of the Save card: their fold is inside it, with the Save button below.
   const fold = page.getByTestId('settings-connection').getByTestId('settings-servers-fold');
   await fold.getByRole('button').first().click();
   for (const id of servers) await expect(page.getByTestId(id), `${id} open`).toBeVisible();
   await adv.getByRole('button').first().click();
   for (const id of operator) await expect(page.getByTestId(id), `${id} open`).toBeVisible();
-  // nothing was changed by looking: Save stays off
+  // Nothing was changed by looking: Save stays off.
   await expect(page.getByTestId('settings-save')).toBeDisabled();
   expect(await horizontalOverflow(page), 'settings').toBe(0);
 });

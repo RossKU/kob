@@ -1,5 +1,6 @@
-// Create token, "After creation": a sell curve created in the token's own genesis (KobCurveAsk, unbound), with a share kept in the wallet; and
-// "Sell at one price", which hands the first sale to the order ticket. Mock KasWare (two approvals) and the private key (one approval).
+// Create token, "After creation": a sell curve created in the token's own genesis (KobCurveAsk,
+// unbound), with a share kept in the wallet. And "Sell at one price", which hands the first sale to
+// the order ticket. Mock KasWare (two approvals) and the private key (one approval).
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
 import { clickConnectOption, gotoOrders } from '../helpers/env';
@@ -22,7 +23,7 @@ test.describe('Create token: after creation', () => {
     await page.goto('/#/create');
     await clickConnectOption(page, 'wallet-connect-kasware');
     await fillToken(page);
-    // the default keeps everything; the curve's defaults are all filled in
+    // The default keeps everything. The curve's defaults are all filled in.
     await expect(page.getByTestId('issue-after-keep').locator('input')).toBeChecked();
     await page.getByTestId('issue-after-curve').click();
     await expect(page.getByTestId('sale-keep')).toHaveValue('0');
@@ -32,20 +33,20 @@ test.describe('Create token: after creation', () => {
     await expect(page.getByTestId('sale-multiple')).toHaveValue('5');
     await expect(page.getByTestId('sale-split')).toHaveText('All 1,000,000 CURV go on sale.');
     await expect(page.getByTestId('sale-graph')).toHaveAttribute('data-steps', '100');
-    // keep % and the amount for sale stay linked both ways
+    // Keep % and the amount for sale stay linked both ways.
     await page.getByTestId('sale-keep').fill('10');
     await expect(page.getByTestId('sale-amount')).toHaveValue('900000');
     await expect(page.getByTestId('sale-split')).toHaveText('You keep 100,000 CURV; 900,000 CURV go on sale.');
     await page.getByTestId('sale-amount').fill('750000');
     await expect(page.getByTestId('sale-keep')).toHaveValue('25');
     await page.getByTestId('sale-keep').fill('10');
-    // the numbers follow the amount: about 10,000 KAS if sold out, the last level 5x the first
+    // The numbers follow the amount: about 10,000 KAS if sold out, the last level 5x the first.
     await expect(page.getByTestId('sale-realised')).toContainText(/^9,?99\d(\.\d+)? KAS$/);
     const first = Number((await page.getByTestId('sale-first').textContent())!.replace(/[^0-9.]/g, ''));
     const last = Number((await page.getByTestId('sale-last').textContent())!.replace(/[^0-9.]/g, ''));
     expect(last / first).toBeGreaterThan(4.9);
     expect(last / first).toBeLessThan(5.1);
-    // a bad number blocks the review with its reason at the field
+    // A bad number blocks the review with its reason at the field.
     await page.getByTestId('sale-levels').fill('0');
     await expect(page.getByTestId('issue-review')).toBeDisabled();
     await page.getByTestId('sale-levels').fill('100');
@@ -53,7 +54,7 @@ test.describe('Create token: after creation', () => {
     await expect(page.getByTestId('issue-summary-sale')).toContainText('Sell 900,000 CURV on a curve: 100 levels');
     await page.getByTestId('issue-review').click();
     await expect(page.getByTestId('confirm-screen')).toBeVisible();
-    // the summary says what goes on sale; the curve's full terms are under "All details"
+    // The summary says what goes on sale. The curve's full terms are under "All details".
     await expect(page.getByTestId('confirm-brief-sale')).toContainText('900,000 CURV');
     await expect(page.getByTestId('confirm-brief-sale')).toContainText('on a curve: 100 levels');
     await expect(page.getByTestId('confirm-brief-keep')).toContainText('100,000 CURV');
@@ -66,7 +67,8 @@ test.describe('Create token: after creation', () => {
     await page.getByTestId('confirm-close').click();
     await expect(page.getByTestId('issue-result-curve')).toContainText('Your curve order is on the book: 900,000 CURV');
 
-    // the genesis: the custody (owned by the curve), the kept share, the curve; two covenant groups
+    // The genesis: the custody (owned by the curve), the kept share, the curve. Two covenant
+    // groups.
     const submitted = await mock.submitted();
     const genesis = submitted[submitted.length - 1]!;
     const prep = submitted[submitted.length - 2]!;
@@ -77,23 +79,24 @@ test.describe('Create token: after creation', () => {
     expect(ids.slice(0, 2)).toEqual([tokenId, tokenId]);
     expect(ids[2]).toMatch(/^[0-9a-f]{64}$/);
     expect(ids[2]).not.toBe(tokenId);
-    // a KOB1 payload: the curve's ORDER record with the token states
+    // A KOB1 payload: the curve's ORDER record with the token states.
     expect(genesis.tx.payload).toMatch(/^4b4f4231/);
-    // the kept share is the wallet's (tracked), the custody is not
+    // The kept share is the wallet's (tracked), the custody is not.
     const tracked = await page.evaluate((pk) => (window as any).__kob.services.tracker.list(pk), TEST_KEYS.alice.pubkey);
     expect(tracked.map((x: any) => [x.index, x.state.amount])).toEqual([[1, (100_000n * 100_000_000n).toString()]]);
-    // the indexer lists the curve at once: unbound, level 0 of 100, the custody's token
+    // The indexer lists the curve at once: unbound, level 0 of 100, the custody's token.
     const listed = (await mock.ordersOf('alice')) as any;
     const curve = (listed.orders ?? listed).find((o: any) => o.covenant_id === ids[2]);
     expect(curve).toMatchObject({ contract: 'KobCurveAsk', token: tokenId, curve: { level: 0, levels: 100, unbound: true } });
-    // Portfolio balances: the curve's custody under its token, in whole tokens; no row of the zero id the unbound state names
+    // Portfolio balances: the curve's custody under its token, in whole tokens. No row of the zero
+    // id the unbound state names.
     await gotoOrders(page, 'balances');
     const bal = page.getByTestId(`balance-row-${tokenId}`);
     await expect(bal.getByTestId('balance-escrowed')).toContainText('900,000', { timeout: 15_000 });
     await expect(bal).not.toContainText('raw amount');
     await expect(page.getByTestId(`balance-row-${'0'.repeat(64)}`)).toHaveCount(0);
-    // its cancel from Open orders: an unbound curve's token is its custody's (genesis output 0), which the node confirms under that token;
-    // the 900,000 CURV come back to alice
+    // Its cancel from Open orders: an unbound curve's token is its custody's (genesis output 0),
+    // which the node confirms under that token. The 900,000 CURV come back to alice.
     await gotoOrders(page, 'open');
     await page.getByTestId(`order-cancel-${ids[2]}`).click();
     const [cancelled] = await runFlow(page, mock, null, { steps: 1 });
@@ -111,7 +114,7 @@ test.describe('Create token: after creation', () => {
     await fillToken(page);
     await page.getByTestId('issue-after-ask').click();
     await page.getByTestId('sale-keep').fill('25');
-    // the price field shows the default (10,000 KAS over the amount); it can be typed
+    // The price field shows the default (10,000 KAS over the amount). It can be typed.
     await expect(page.getByTestId('sale-price')).toHaveAttribute('placeholder', /0\.01333333/);
     await page.getByTestId('sale-price').fill('0.02');
     await expect(page.getByTestId('sale-total-ask')).toContainText('15000 KAS');
@@ -136,7 +139,7 @@ test.describe('Create token: after creation', () => {
     await fillToken(page);
     await page.getByTestId('issue-after-curve').click();
     await expect(page.getByTestId('issue-summary-sale')).toBeVisible();
-    // the node takes the preparation and refuses the genesis (a KOB1 payload with the curve) once
+    // The node takes the preparation and refuses the genesis (a KOB1 payload with the curve) once.
     let submits = 0;
     await page.route('**/*', async (route) => {
       const r = route.request();
@@ -152,7 +155,7 @@ test.describe('Create token: after creation', () => {
     await page.unroute('**/*');
     await page.getByTestId('issue-pending-send').click();
     await expect(page.getByTestId('issue-result-curve')).toContainText('Your curve order is on the book: 1,000,000 CURV');
-    // the placement record of the curve (Open orders and its cancel read it)
+    // The placement record of the curve (Open orders and its cancel read it).
     const genesis = (await mock.submitted()).at(-1)!;
     const curveId = genesis.tx.outputs[1].covenant.covenantId;
     const records = () =>

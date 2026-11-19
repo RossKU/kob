@@ -1,10 +1,20 @@
-// Every failure is seen at the top right (founder 2026-11-17: "When something fails, the red toast doesn't appear at the top right"). A send of the
-// order ticket that stops (the wallet declines, the node refuses: fee, mass, a missing input; the pre-sign check refuses; the node cannot be reached;
-// a direct fill from the book that loses its race every time; a chained step the wallet cannot see) raises ONE red toast with the reason, also on a
-// phone, and also while another flow's card is on screen (an error is never held back for the bell alone). A My orders flow (a cancel, a merge)
-// shows its failure on its own card, in red. A lost race that the retry wins shows no error at all. The toast is the only place a send-time failure
-// is said (2026-11-18): the ticket shows no red box, keeps its height, its total and its button where they were, and a reason the button is off for
-// moves neither. KOB_TOAST_SHOTS=<dir> saves screenshots.
+// Every failure is seen at the top right.
+// A send of the order ticket that stops raises one red toast with the reason, also on a phone, and
+// also while another flow's card is on screen (an error is never held back for the bell alone).
+// The failures are:
+// - The wallet declines.
+// - The node refuses (fee, mass, a missing input).
+// - The pre-sign check refuses.
+// - The node cannot be reached.
+// - A direct fill from the book loses its race every time.
+// - A chained step the wallet cannot see.
+//
+// A My orders flow (a cancel, a merge) shows its failure on its own card, in red.
+// A lost race that the retry wins shows no error at all.
+// The toast is the only place a send-time failure is said.
+// The ticket shows no red box and keeps its height, its total and its button where they were.
+// A reason the button is off for moves neither.
+// KOB_TOAST_SHOTS=<dir> saves screenshots.
 import { mkdirSync, readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
@@ -25,14 +35,17 @@ async function shot(page: Page, name: string, view: View): Promise<void> {
   await page.screenshot({ path: `${SHOTS}/${name}-${view}.png` });
 }
 
-/** The one red toast at the top right (a phone: across the top), just under the header, with `text` in it. */
+/**
+ * The one red toast at the top right (a phone: across the top), just under the header, with `text`
+ * in it.
+ */
 async function expectRedToast(page: Page, view: View, text: RegExp): Promise<void> {
   const toast = page.getByTestId('toast-error');
   await expect(toast).toHaveCount(1, { timeout: 30_000 });
   await expect(toast).toBeVisible();
   await expect(toast).toContainText(text);
   await expect(toast).toHaveAttribute('role', 'alert');
-  // red: the error tone's colour on its edge
+  // Red: the error tone's colour on its edge.
   const edge = await toast.evaluate((e) => getComputedStyle(e).borderLeftColor);
   const bad = await page.evaluate(() => {
     const p = document.createElement('div');
@@ -51,7 +64,10 @@ async function expectRedToast(page: Page, view: View, text: RegExp): Promise<voi
   if (view === 'desktop') expect(box.x, 'the right part of the screen').toBeGreaterThan(vw / 2);
 }
 
-/** Where the ticket, its footer, its total and its button are in the document (px, rounded): what a failure must not change. */
+/**
+ * Where the ticket, its footer, its total and its button are in the document (px, rounded): what a
+ * failure must not change.
+ */
 async function ticketBoxes(page: Page): Promise<Record<'ticket' | 'foot' | 'total' | 'button', { top: number; height: number }>> {
   return page.evaluate(() => {
     const box = (sel: string) => {
@@ -81,12 +97,12 @@ for (const [view, viewport] of VIEWPORTS) {
       await expectStopped(page, 'rejected');
       await expectRedToast(page, view, /^Order not sent: You declined the request in your wallet/);
       await shot(page, 'wallet-declined', view);
-      // the same failure again: still one toast, counted
+      // The same failure again: still one toast, counted.
       await clickPlace(page);
       await expectStopped(page, 'rejected');
       await expect(page.getByTestId('toast-error')).toHaveCount(1);
       await expect(page.getByTestId('toast-error')).toContainText('×2');
-      // a later order that goes through takes the stale error away
+      // A later order that goes through takes the stale error away.
       await wallet!.configure({ approve: true });
       await clickPlace(page);
       await waitSubmitted(page);
@@ -126,7 +142,8 @@ for (const [view, viewport] of VIEWPORTS) {
       await fund(mock);
       await openMarket(page, mock);
       await sellTicket(page);
-      // from the click on, the node reports one more sompi in every coin: the decoder does not sign what it cannot confirm
+      // From the click on, the node reports one more sompi in every coin: the decoder does not sign
+      // what it cannot confirm.
       await page.route('**/node/utxos', async (route) => {
         const res = await route.fetch();
         const body = await res.json();
@@ -151,12 +168,14 @@ for (const [view, viewport] of VIEWPORTS) {
       await confirmUntil(page, page.getByTestId('order-take-step-1').and(page.locator('[data-state="done"]')));
       await waitSubmitted(page);
       await expect(page.getByTestId('toast-error')).toHaveCount(0);
-      // the take, its retry and the placement of the order instead all lose: one toast for the whole click
+      // The take, its retry and the placement of the order instead all lose: one toast for the
+      // whole click.
       await fillFields(page, { amount: '2', price: '0.0252' });
       await expect(page.getByTestId('order-take')).toBeVisible({ timeout: 15_000 });
       await mock.failNextSubmit('transaction has an orphan input: already spent by another transaction', 3);
       await clickPlaceOnly(page);
-      // (the status line says "failed" for a moment at each lost race too: the end is the step the stepper marks failed)
+      // The status line says "failed" for a moment at each lost race too: the end is the step the
+      // stepper marks failed.
       await confirmUntil(page, page.locator('[data-testid^="order-take-step-"][data-state="failed"]'));
       await expectStopped(page, 'failed');
       await expectRedToast(page, view, /^Fill from the book stopped: /);
@@ -170,7 +189,7 @@ for (const [view, viewport] of VIEWPORTS) {
       await fillFields(page, { amount: '2', price: '0.0251', direct: 'take' });
       await expect(page.getByTestId('order-take')).toBeVisible({ timeout: 15_000 });
       await waitReviewable(page);
-      // someone else takes both asks at 0.0251 just as the click reads the book again
+      // Someone else takes both asks at 0.0251 just as the click reads the book again.
       const asks = (await mock.ordersOf('maker')).filter((o) => [1, 'ask', 'sell'].includes(o.side) && String(o.price) === '2510000');
       expect(asks.length).toBeGreaterThan(0);
       let taken = false;
@@ -241,12 +260,13 @@ for (const [view, viewport] of VIEWPORTS) {
       await expectStopped(page, 'failed');
       await expect(page.locator('.tk-status')).toBeHidden();
       expect(await ticketBoxes(page), 'the same ticket after the failure').toEqual(before);
-      // the wallet declines too: still nothing in the ticket
+      // The wallet declines too: still nothing in the ticket.
       await wallet!.configure({ approve: false });
       await clickPlace(page);
       await expectStopped(page, 'rejected');
       expect(await ticketBoxes(page), 'the same ticket after a decline').toEqual(before);
-      // a reason the button is off for (more tokens than the wallet holds): in its slot above the total, the ticket and the button stay put
+      // A reason the button is off for (more tokens than the wallet holds): in its slot above the
+      // total, the ticket and the button stay put.
       await fillFields(page, { amount: '100000' });
       await expect(page.getByTestId('order-issue-INSUFFICIENT_TOKENS')).toBeVisible({ timeout: 15_000 });
       await expect(page.getByTestId('order-place')).toBeDisabled();
@@ -317,16 +337,17 @@ for (const [view, viewport] of VIEWPORTS) {
       await fund(mock);
       const [id] = await seedOrders(mock, [{ side: 'ask', price: 2_700_000, tokens: 3 }]);
       await openMarket(page, mock);
-      // the order first (the card at the top right would sit over the ticket's first rows)
+      // The order first (the card at the top right would sit over the ticket's first rows).
       await sellTicket(page);
-      // the market page's own orders panel: a cancel the wallet declines leaves its stopped card on screen
+      // The market page's own orders panel: a cancel the wallet declines leaves its stopped card on
+      // screen.
       await wallet!.configure({ approve: false });
       const cancel = page.getByTestId(`order-cancel-${id}`);
       await cancel.scrollIntoViewIfNeeded();
       await cancel.click();
       await confirmUntil(page, page.getByTestId('flow-stopped'));
       await expect(page.getByTestId('tx-flow')).toHaveClass(/toast-error/);
-      // now the ticket's order fails too
+      // Now the ticket's order fails too.
       await page.getByTestId('order-place').scrollIntoViewIfNeeded();
       await clickPlace(page);
       await expectStopped(page, 'rejected');
@@ -334,7 +355,8 @@ for (const [view, viewport] of VIEWPORTS) {
         await expectRedToast(page, view, /^Order not sent: You declined/);
         await shot(page, 'failure-under-flow-card', view);
       } else {
-        // a phone shows one notification at a time: the card, and a red "+1" for the error waiting behind it
+        // A phone shows one notification at a time: the card, and a red "+1" for the error waiting
+        // behind it.
         const chip = page.getByTestId('toast-more');
         await expect(chip).toBeVisible();
         await expect(chip).toHaveAttribute('data-tone', 'error');
@@ -347,7 +369,7 @@ for (const [view, viewport] of VIEWPORTS) {
   });
 }
 
-// ---- the merge set-up of e2e/orders/merge.spec.ts: EXSTD, a token of the standard 3 / 3 program
+// ---- the merge set-up of e2e/orders/merge.spec.ts: EXSTD, a token of the standard 3 / 3 program.
 const STD = '5a'.repeat(32);
 const EXT = 'ee'.repeat(32);
 async function registryWithStd(page: Page): Promise<void> {
@@ -366,7 +388,7 @@ async function openBalances(page: Page, count: number): Promise<void> {
   await page.goto('/#/portfolio');
   await connectWallet(page, 'kasware');
   await expect(page.getByTestId('balances-panel')).toBeVisible();
-  // the button says only "Merge all"; the count is its tooltip
+  // The button says only "Merge all". The count is its tooltip.
   await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveAttribute('title', new RegExp(`^Merge your ${count} UTXOs `), { timeout: 15_000 });
 }
 

@@ -1,5 +1,7 @@
-// The header's network chip is a control: it opens a small panel with the two networks (the current one marked), and choosing the other one saves the network
-// (like Settings) and reloads. The deployment's servers are for its own network, so the other network starts without them; a deployment can pin its network
+// The header's network chip is a control: it opens a small panel with the two networks (the current
+// one marked), and choosing the other one saves the network.
+// (like Settings) and reloads. The deployment's servers are for its own network, so the other
+// network starts without them. A deployment can pin its network.
 // (`lockNetwork`: no switch) and a browser with saved servers is told why it cannot switch.
 import type { Page } from '@playwright/test';
 import { test, expect } from '../fixtures';
@@ -24,7 +26,7 @@ test('the chip is a button with a name; it opens the panel with both networks, t
   await expect(button).toHaveAttribute('aria-haspopup', 'true');
   await expect(button).toHaveAttribute('aria-expanded', 'false');
   await expect(page.getByRole('button', { name: 'Network: testnet-10. Change network' })).toBeVisible();
-  // the chip's own words are still in it
+  // The chip's own words are still in it.
   await expect(badge(page)).toHaveAttribute('data-network', 'testnet-10');
   await expect(page.getByTestId('preaudit-badge')).toHaveText('open review');
   await expect(page.getByTestId('network-switch-panel')).toHaveCount(0);
@@ -38,15 +40,16 @@ test('the chip is a button with a name; it opens the panel with both networks, t
   await expect(page.getByTestId('network-option-mainnet')).not.toHaveAttribute('aria-current', 'true');
   await expect(page.getByTestId('network-option-mainnet')).toBeEnabled();
   await expect(page.getByTestId('network-switch-note')).toContainText('Open review');
-  // the status lines are in the same panel, above the networks (the chip's dot is their summary)
+  // The status lines are in the same panel, above the networks (the chip's dot is their summary).
   await expect(page.getByTestId('status-popover')).toBeVisible();
   await expect(page.getByTestId('status-node')).toContainText('Node: reachable');
   await expect(page.getByTestId('network-switch-reload')).toContainText('reloads the page');
   await expect(page.getByTestId('network-switch-reload')).toContainText('real funds');
-  // the deployment has an indexer, which is for testnet-10: the other network starts without it, and the panel says so
+  // The deployment has an indexer, which is for testnet-10: the other network starts without it,
+  // and the panel says so.
   await expect(page.getByTestId('network-switch-servers')).toContainText('no indexer');
 
-  // the current network again: nothing is saved
+  // The current network again: nothing is saved.
   await page.getByTestId('network-option-testnet-10').click();
   expect(await stored(page)).toBeNull();
   await expect(panel).toBeVisible();
@@ -71,7 +74,7 @@ test('keyboard: Enter opens the panel, Tab reaches the options, Enter on the oth
 test('switching to mainnet and back: the setting is saved, the page reloads into the network, and the testnet servers are not used on mainnet', async ({ appPage: page, mock }) => {
   await page.goto('/#/market');
   await expect(badge(page)).toHaveAttribute('data-network', 'testnet-10');
-  // the tab title names the network in force (at runtime: one bundle serves both)
+  // The tab title names the network in force (at runtime: one bundle serves both).
   await expect(page).toHaveTitle(/^Testnet · Market · KOB/);
 
   await choose(page, 'mainnet');
@@ -79,19 +82,22 @@ test('switching to mainnet and back: the setting is saved, the page reloads into
   await expect(badge(page)).toHaveAttribute('data-network', 'mainnet');
   await expect(page).toHaveTitle(/^Market · KOB/);
   await expect(page.getByTestId('network-switch')).toHaveAccessibleName('Network: mainnet. Change network');
-  // none of the deployment's servers is in force: Settings (advanced) shows them empty, the network is mainnet
+  // None of the deployment's servers is in force: Settings (advanced) shows them empty, the network
+  // is mainnet.
   await page.goto('/#/settings');
   await page.getByTestId('settings-servers-fold').getByRole('button').first().click();
   await expect(page.getByTestId('settings-indexer-url')).toHaveValue('');
   await expect(page.getByTestId('settings-node-url')).toHaveValue('');
   await expect(page.getByTestId('settings-registry-url')).toHaveValue('./registry/tokens.json');
   await expect(page.getByTestId('settings-network')).toContainText('mainnet');
-  // the panel on mainnet: the current one is mainnet, and no note about losing servers (there are none to lose)
+  // The panel on mainnet: the current one is mainnet, and no note about losing servers (there are
+  // none to lose).
   await page.getByTestId('network-switch').click();
   await expect(page.getByTestId('network-option-mainnet')).toHaveAttribute('aria-current', 'true');
   await expect(page.getByTestId('network-switch-servers')).toHaveCount(0);
 
-  // and back to the deployment's own network (the host's default): the stored choice is cleared, and the deployment's own servers apply again
+  // And back to the deployment's own network (the host's default): the stored choice is cleared,
+  // and the deployment's own servers apply again.
   await Promise.all([page.waitForEvent('load'), page.getByTestId('network-option-testnet-10').click()]);
   expect((await stored(page))?.network).toBeUndefined();
   await expect(badge(page)).toHaveAttribute('data-network', 'testnet-10');
@@ -121,7 +127,7 @@ test('servers saved in this browser: the switch says why it is off and points to
     try {
       if (!localStorage.getItem('kob.settings')) localStorage.setItem('kob.settings', JSON.stringify({ indexerUrl: url }));
     } catch {
-      /* no storage */
+      /* No storage. */
     }
   }, mock.url);
   await page.goto('/#/market');
@@ -144,7 +150,7 @@ test('a phone: the chip (the short form with its status dot) opens the panel und
   await page.getByTestId('network-switch').click();
   const panel = page.getByTestId('network-switch-panel');
   await expect(panel).toBeVisible();
-  // the panel rises in over ~160 ms (the app's motion): measured when it has arrived
+  // The panel rises in over ~160 ms (the app's motion): measured when it has arrived.
   await panel.evaluate((el) => Promise.all(el.getAnimations().map((x) => x.finished)));
   const box = (await panel.boundingBox())!;
   expect(box.x).toBeGreaterThanOrEqual(0);
@@ -152,7 +158,7 @@ test('a phone: the chip (the short form with its status dot) opens the panel und
   const header = (await page.locator('header.header').boundingBox())!;
   expect(box.y).toBeGreaterThanOrEqual(header.y + header.height - 2);
   expect(await noScroll(page)).toBe(true);
-  // the menu and the chip's panel never stay open together
+  // The menu and the chip's panel never stay open together.
   await page.getByTestId('menu-button').click();
   await expect(page.getByTestId('menu-panel')).toBeVisible();
   await expect(panel).toHaveCount(0);

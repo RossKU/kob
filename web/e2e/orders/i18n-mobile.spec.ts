@@ -1,5 +1,6 @@
-// Dictionary leaks and layout: the whole ticket + inline status + My orders flow with no untranslated dictionary key anywhere (and the trading terms in
-// English), and the same flow on a 390 px phone (no horizontal scroll, the key controls reachable, the status lines fit the screen).
+// Dictionary leaks and layout: the whole ticket + inline status + My orders flow with no
+// untranslated dictionary key anywhere (and the trading terms in English), and the same flow on a
+// 390 px phone (no horizontal scroll, the key controls reachable, the status lines fit the screen).
 import { test, expect } from '../fixtures';
 import { fund, openMarket, gotoOrders } from '../helpers/env';
 import { optionLabels, optionValues } from '../helpers/dropdown';
@@ -48,7 +49,8 @@ test.describe('English text', () => {
     await expectNoLeakedKeys(page, 'the market-order ticket');
     await expect(page.getByTestId('order-place')).toHaveText('Buy Market');
 
-    // a limit order, placed with one click and the final confirmation (its popup is free of leaked keys too)
+    // a limit order, placed with one click and the final confirmation (its popup is free of leaked
+    // keys too)
     await pickType(page, 'limit', 'sell');
     await fillFields(page, { amount: '2', price: '0.027' });
     await waitReviewable(page);
@@ -156,7 +158,8 @@ test.describe('phone, 390 px wide', () => {
     await page.goto(`/#/market/${tokenId}`);
     await expect(page.getByTestId('order-ticket')).toBeVisible();
     await pickType(page, 'repeatIfo', 'buy');
-    // a 1 EXKCC minimum fill keeps the repeat merge tip at 0.01 KAS per token (see cases.ts, repeat section)
+    // a 1 EXKCC minimum fill keeps the repeat merge tip at 0.01 KAS per token (see cases.ts, repeat
+    // section)
     await fillFields(page, { amount: '2', minFill: '1', price: '0.0245', 'exit.takeProfit': '0.04', 'exit.stop': '0.023' });
     await waitReviewable(page);
     expect(await horizontalOverflow(page), 'repeat IFO ticket').toBe(0);

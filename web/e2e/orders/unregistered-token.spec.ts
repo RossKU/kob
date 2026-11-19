@@ -1,6 +1,6 @@
-// A token the registry does not list (TN10 2026-10-17: the founder's own token read "13,500,000,000,000 base units" and "10 KAS per 100000000
-// base units", taken for a wrong supply). Its amounts read in whole tokens: its decimals come from its declaration, its program's default, the scale of its
-// order or market, else the issuing browser's issuance record (its ticker too, marked unverified), with a small marker by its name.
+// A token the registry does not list. Its amounts read in whole tokens: its decimals come from its
+// declaration, its program's default, the scale of its order or market, else the issuing browser's
+// issuance record (its ticker too, marked unverified), with a small marker by its name.
 import { test, expect } from '../fixtures';
 import { connectWallet, fund, gotoOrders } from '../helpers/env';
 import { openOrders } from '../helpers/orders';
@@ -8,13 +8,14 @@ import { cancelReceipt, clickPlaceOnly, fillFields, pickType, readReceipt, waitR
 
 const ID = '83'.repeat(32);
 const SHORT = '83838383…83838383';
-// the amount's unit slot shows the short form of an unnamed token (review M-03), the full id in its tooltip
+// the amount's unit slot shows the short form of an unnamed token, the full id in its
+// tooltip
 const UNIT = '8383…8383';
 
 async function seedToken(mock: Parameters<typeof openOrders>[1]): Promise<string> {
   await mock.seed({
     tokens: [{ ticker: '', covenant_id: ID, program: 'KCC20Ref', template_id: 'KCC20Ref', extension_commitment: 'ee'.repeat(32), powers: [], decimals: null, order_scale: 100_000_000 }],
-    // the founder's sell order: 45,000 tokens (8 decimals) at 10 KAS each
+    // A sell order: 45,000 tokens (8 decimals) at 10 KAS each
     orders: [{ token: ID, side: 'ask', maker: 'alice', amount: '4500000000000', price: 1_000_000_000 }],
   });
   const mine = await mock.ordersOf('alice');
@@ -31,7 +32,8 @@ test('no record: the amounts read in whole tokens on the scale of its order, the
   await expect(row.getByTestId('order-amount')).toContainText(`45,000 / 45,000 ${UNIT}`);
   await expect(row.getByTestId('order-price')).toContainText(new RegExp(`^10(\\.0+)?\\s*KAS per (${SHORT}|${UNIT})`));
   await expect(page.getByTestId('orders-view')).not.toContainText(/base units/);
-  // the balances row: the covenant id and the fingerprint name the token, the source of its decimals is the name's tooltip, not text beside it
+  // the balances row: the covenant id and the fingerprint name the token, the source of its
+  // decimals is the name's tooltip, not text beside it
   await gotoOrders(page, 'balances');
   const bal = page.getByTestId(`balance-row-${ID}`);
   await expect(bal.getByTestId('balance-market')).toHaveText(SHORT);

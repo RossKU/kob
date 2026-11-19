@@ -1,6 +1,8 @@
-// Placeholder page for the e2e infrastructure tests. It plays the role of the app: reads window.__KOB_CONFIG__, publishes the official
-// SDK as window.__kobKaspa when features.test is set (same rule as the real app), connects a wallet, and runs the signing split
-// build (kob-wasm) -> wallet signs -> finalize (kob-wasm) -> submit to the node. The wallet handling mirrors tools/wallet-gate/web/wallets.mjs.
+// Placeholder page for the e2e infrastructure tests. It plays the role of the app: reads
+// window.__KOB_CONFIG__, publishes the official SDK as window.__kobKaspa when features.test is set
+// (same rule as the real app), connects a wallet, and runs the signing split build (kob-wasm) ->
+// wallet signs -> finalize (kob-wasm) -> submit to the node. The wallet handling mirrors
+// tools/wallet-gate/web/wallets.mjs.
 const cfg = window.__KOB_CONFIG__ ?? {};
 const $ = (id) => document.querySelector(`[data-testid="${id}"]`);
 const setStatus = (s) => ($('tx-status').textContent = s);

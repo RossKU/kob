@@ -1,8 +1,10 @@
-// "Merge all" and "Merge, then sell" with the private-key signer: ONE approval in the signer frame covers the whole planned merge (its own
-// screen: the token, the UTXOs, at most N transactions, the most network fee, how long it lasts), then the frame signs each step without
-// showing itself, as long as its own decoding finds the step to be exactly the next link of the plan it was shown (src/signer/session.ts).
-// A step off the plan (here: a fee above the session's per-transaction cap after the fee estimate jumps mid-run) is shown for confirmation
-// as usual and ends the session. A sale after the merges always gets its own confirmation. Extension wallets keep one approval per
+// "Merge all" and "Merge, then sell" with the private-key signer: ONE approval in the signer frame
+// covers the whole planned merge (its own screen: the token, the UTXOs, at most N transactions, the
+// most network fee, how long it lasts), then the frame signs each step without showing itself, as
+// long as its own decoding finds the step to be exactly the next link of the plan it was shown
+// (src/signer/session.ts). A step off the plan (here: a fee above the session's per-transaction cap
+// after the fee estimate jumps mid-run) is shown for confirmation as usual and ends the session. A
+// sale after the merges always gets its own confirmation. Extension wallets keep one approval per
 // transaction (merge.spec.ts, unchanged).
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
@@ -72,7 +74,8 @@ async function allowSession(page: Page, txs: number, screenshot?: string): Promi
   await expect(page.getByTestId('signer-overlay')).toBeVisible({ timeout: 30_000 });
   const read = await readReceipt(page);
   expect(read.from).toBe('signer');
-  // the mock registry is not the table the bundle pins: the frame names the token by its covenant id, not by the app's ticker
+  // the mock registry is not the table the bundle pins: the frame names the token by its covenant
+  // id, not by the app's ticker
   expect(read.title).toBe('Merge token UTXOs without asking each time');
   expect(read.lines['Transactions']).toBe(`at most ${txs}`);
   expect(read.lines['What']).toMatch(/^\d+ of your UTXOs into \d+, to yourself\. .+ in total, unchanged\.$/);
@@ -143,8 +146,9 @@ test('a step off the allowed plan (a fee above its cap after the estimate jumps)
   await openBalances(page, 30);
   await page.getByTestId(`orders-merge-token-${STD}`).click();
   await expect(page.getByTestId('merge-all-dialog')).toBeVisible({ timeout: 30_000 });
-  // the node's fee rate jumps tenfold after the plan was made (the app reads the estimate again after its refresh time): the first step is the
-  // planned one, the next is rebuilt at the new rate, above the per-transaction cap the frame set from the plan
+  // the node's fee rate jumps tenfold after the plan was made (the app reads the estimate again
+  // after its refresh time): the first step is the planned one, the next is rebuilt at the new
+  // rate, above the per-transaction cap the frame set from the plan
   await mock.feeEstimate({ priority: 1000, normal: 1000, low: 1000 });
   await page.waitForTimeout(11_000);
   await page.getByTestId('merge-all-confirm').click();

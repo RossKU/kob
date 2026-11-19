@@ -1,9 +1,16 @@
-// A token only kascov.io names (a "no orders" row of the market list) and the pages around it (the live check of 2026-10-28: such a row led to "Token not found:
-// the wallet must hold it"). The page opens from what KOB can verify: the token program from the template hash this build pins, the extension commitment from
-// token outputs the indexer names and the node confirms (whoever holds them), the decimals by the rules of the app (declaration, the program's default such as
-// KaspaRocket's 3, else the first order names them); the creator's name and ticker are labels, never authority. Also: the tab titles, the full covenant id
-// wrapping on a phone, and the saved copy kascov.io has none of being asked for once, not on every visit. Desktop and a 375 px phone, against the mock stack
-// with a MOCKED kascov.io (e2e/helpers/kascov.ts).
+// A token only kascov.io names (a "no orders" row of the market list) and the pages around it.
+// The page opens from what KOB can verify:
+// - The token program, from the template hash this build pins.
+// - The extension commitment, from token outputs the indexer names and the node confirms (whoever
+//   holds them).
+// - The decimals, by the rules of the app: the declaration, the program's default such as
+//   KaspaRocket's 3, else the first order names them.
+//
+// The creator's name and ticker are labels, never authority.
+// Also covered: the tab titles, the full covenant id wrapping on a phone, and the saved copy
+// kascov.io has none of being asked for once, not on every visit.
+// Desktop and a 375 px phone, against the mock stack with a mocked kascov.io
+// (e2e/helpers/kascov.ts).
 import type { Page } from '@playwright/test';
 import { expect, test, TEST_KEYS } from '../fixtures';
 import { connectWallet, fund, listExkcc } from '../helpers/env';
@@ -65,33 +72,37 @@ for (const vp of VIEWPORTS) {
       await expect(page.getByTestId(`token-depth-${REF_ID}`)).toHaveText('no orders');
       await link.click();
 
-      // never the dead end
+      // Never the dead end.
       await expect(page.getByTestId('token-page')).toBeVisible();
       await expect(page.getByTestId('token-not-found')).toHaveCount(0);
 
-      // the header: the creator's name and ticker, labelled; KOB's own program and its review; the decimals rule; the explorer link
+      // The header: the creator's name and ticker, labelled. KOB's own program and its review. The
+      // decimals rule. The explorer link.
       await expect(page.getByTestId('token-title')).toHaveText(`KASC (${SHORT(REF_ID)})`);
       await expect(page.getByTestId('token-name')).toHaveText('Kasc Token');
       await expect(page.getByTestId(`kascov-source-${REF_ID}`)).toHaveText('name and ticker from kascov.io (declared by their creator)');
-      // (no family chip yet: the token has no entry; the first order opens it)
+      // No family chip yet: the token has no entry. The first order opens it.
       await expect(page.getByTestId('badge-family')).toHaveCount(0);
       await expect(page.getByTestId('kascov-link')).toHaveAttribute('href', `https://kascov.io/#/testnet-10/token/${REF_ID}`);
       await expect(page.getByTestId('kascov-link')).toHaveAttribute('rel', 'noopener noreferrer');
-      // an unverified genesis is no status chip (a normal token), never a refusal (non-blocking); its sentence is in the token's details
+      // An unverified genesis is no status chip (a normal token), never a refusal (non-blocking).
+      // Its sentence is in the token's details.
       await expect(page.getByTestId('token-fact-genesis_unverified')).toHaveCount(0);
       await expect(page.getByTestId('token-status-details')).toBeVisible();
-      // the Program row says which program it runs and how that was established, for a token with no registry entry too
+      // The Program row says which program it runs and how that was established, for a token with
+      // no registry entry too.
       await expect(page.getByTestId('token-program')).toContainText(/^KCC-20 (.+) · (checked from its genesis|template matched)/);
 
-      // the units and the tab use the creator's ticker where KOB has no name of its own
+      // The units and the tab use the creator's ticker where KOB has no name of its own.
       await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'KASC/KAS');
       await expect(page.getByTestId('chart-unit')).toHaveText('KAS per KASC');
       expect(await page.title()).toBe('Testnet · KASC/KAS · KOB');
 
-      // an empty book
+      // An empty book.
       await expect(page.getByTestId('book-empty')).toHaveText('No orders yet');
 
-      // the token declares no decimals and has no program default: the first order names them (kascov.io's claim is shown as a claim, never prefilled)
+      // The token declares no decimals and has no program default: the first order names them
+      // (kascov.io's claim is shown as a claim, never prefilled).
       await expect(page.getByTestId('first-order-claim')).toContainText('kascov.io shows 2 decimals');
       await expect(page.getByTestId('first-order-decimals')).toHaveValue('');
       await page.getByTestId('first-order-decimals').fill('2');
@@ -100,7 +111,7 @@ for (const vp of VIEWPORTS) {
       await expect(page.getByTestId('badge-family')).toHaveAttribute('title', /2 decimals you entered/);
       expect(await horizontalOverflow(page)).toBe(0);
 
-      // a buy: no wallet holding of the token is needed (the wallet holds none)
+      // A buy: no wallet holding of the token is needed (the wallet holds none).
       await connectWallet(page);
       await pickType(page, 'limit', 'buy');
       await fillFields(page, { amount: '10', price: '0.5' });
@@ -117,7 +128,7 @@ for (const vp of VIEWPORTS) {
       await page.getByTestId(`token-link-${ROCKET_ID}`).click();
       await expect(page.getByTestId('token-title')).toHaveText(`ROCK (${SHORT(ROCKET_ID)})`);
       await expect(page.getByTestId('badge-family')).toHaveAttribute('title', /Token program: KaspaRocketToken11458 \(reviewed\), as pinned in this build\./);
-      // no decimals asked for: the program's convention
+      // No decimals asked for: the program's convention.
       await expect(page.getByTestId('first-order')).toHaveCount(0);
       await expect(page.getByTestId('badge-family')).toHaveAttribute('title', /3 decimals, the KaspaRocket convention/);
       await expect(page.getByTestId('book-empty')).toHaveText('No orders yet');
@@ -125,7 +136,7 @@ for (const vp of VIEWPORTS) {
 
       await connectWallet(page);
       await expect(page.getByTestId('order-ticket')).toBeVisible();
-      // alice holds 5000 ROCK (5,000,000 base units at 3 decimals): a sell
+      // Alice holds 5000 ROCK (5,000,000 base units at 3 decimals): a sell.
       await pickType(page, 'limit', 'sell');
       await fillFields(page, { amount: '100', price: '0.02' });
       await waitReviewable(page);
@@ -141,7 +152,7 @@ for (const vp of VIEWPORTS) {
       await expect(page.getByTestId('token-page')).toBeVisible();
       await expect(page.getByTestId('token-not-found')).toHaveCount(0);
       await expect(page.getByTestId('token-title')).toHaveText(`GHST (${SHORT(GHOST_ID)})`);
-      // the one fact it lacks, exactly
+      // The one fact it lacks, exactly.
       const why = page.getByTestId('ticket-untradable');
       await expect(why).toContainText('extension commitment');
       await expect(why).toContainText('the indexer knows no token output of it for the node to confirm');
@@ -161,7 +172,7 @@ for (const vp of VIEWPORTS) {
       await expect(page.getByTestId('token-public-reason')).toContainText('cannot be verified');
       expect(await page.title()).toBe('Testnet · Token not found · KOB');
       expect(await horizontalOverflow(page)).toBe(0);
-      // the same for every page that prints a full id or a long typed one
+      // The same for every page that prints a full id or a long typed one.
       for (const route of [`/market/${'f'.repeat(300)}`, `/market/${NOBODY_ID}/${GHOST_ID}`, `/market/${NOBODY_ID}/kas`, '/portfolio', '/create', '/settings']) {
         await page.goto(`/#${route}`);
         await page.waitForTimeout(300);
@@ -197,7 +208,7 @@ test('a saved copy kascov.io has none of is asked for once; the next visit does 
   await page.getByTestId(`token-icon-${REF_ID}`).scrollIntoViewIfNeeded();
   await expect.poll(asked).toBe(1);
   await expect(page.getByTestId(`token-icon-${REF_ID}`)).toHaveAttribute('data-icon', 'letter');
-  // a new page load of the same browser: the 404 is remembered, no request goes out
+  // A new page load of the same browser: the 404 is remembered, no request goes out.
   await page.reload();
   await expect(page.getByTestId(`token-row-${REF_ID}`)).toHaveAttribute('data-source', 'kascov');
   await page.getByTestId(`token-icon-${REF_ID}`).scrollIntoViewIfNeeded();

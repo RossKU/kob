@@ -1,10 +1,14 @@
-// EXSTD, a listed token of the standard 3 / 3 program (KCC20Ref, the program with a top-up extra), for the delivery specs.
+// EXSTD, a listed token of the standard 3 / 3 program (KCC20Ref, the program with a top-up extra),
+// for the delivery specs.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect } from '../fixtures';
 import { connectWallet, fund } from './env';
 
-/** EXSTD: a listed token of the standard 3 / 3 program (KCC20Ref, the program with a top-up extra), as in market-fills.spec.ts */
+/**
+ * EXSTD: a listed token of the standard 3 / 3 program (KCC20Ref, the program with a top-up extra),
+ * as in market-fills.spec.ts
+ */
 export const STD = '5a'.repeat(32);
 const EXT = 'ee'.repeat(32);
 

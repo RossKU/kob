@@ -1,9 +1,13 @@
-// The order flow of the ticket: ONE button, the final confirmation (an app popup for external wallets), the wallet's own approval, the result inline.
-// There is no issuance-style confirmation screen for orders: a click plans again, runs the silent checks, opens the final confirmation, asks the wallet
-// once and sends. An auction (market order) is planned with the node clock at the click; a signature that comes back more than 20 DAA (2 s) after the
-// auction start is never sent (wallet/sign.ts `auctionSubmitBy`): the send re-times the same order with a later start (the lead grows with each
-// attempt and leaves at least the signing time the late attempt took) and asks the wallet again, up to three times, and stops with `clock-moved`
-// when every attempt was too late. A wallet's signing time is remembered: its next auction starts late enough for it (ui/confirm/signing-time.ts).
+// The order flow of the ticket: ONE button, the final confirmation (an app popup for external
+// wallets), the wallet's own approval, the result inline.
+// There is no issuance-style confirmation screen for orders: a click plans again, runs the silent
+// checks, opens the final confirmation, asks the wallet once and sends. An auction (market order)
+// is planned with the node clock at the click. A signature that comes back more than 20 DAA (2 s)
+// after the auction start is never sent (wallet/sign.ts `auctionSubmitBy`): the send re-times the
+// same order with a later start (the lead grows with each attempt and leaves at least the signing
+// time the late attempt took) and asks the wallet again, up to three times, and stops with
+// `clock-moved` when every attempt was too late. A wallet's signing time is remembered: its next
+// auction starts late enough for it (ui/confirm/signing-time.ts).
 import type { Page } from '@playwright/test';
 import { expect, test, type MockWalletHandle } from '../fixtures';
 import { fund, mockClock, openMarket } from '../helpers/env';
@@ -11,19 +15,32 @@ import { clickPlace, clickPlaceOnly, confirmReceipt, expectStopped, expectWallet
 
 test.use({ autoOpen: false });
 
-/** The mock DAA advances 10 per second; the ticket allows 20 DAA between the auction start it planned and the signature. */
+/**
+ * The mock DAA advances 10 per second. The ticket allows 20 DAA between the auction start it
+ * planned and the signature.
+ */
 const SLOW_WALLET_MS = 6_000;
 /**
- * A wallet that keeps getting slower: a re-timed attempt leaves the last signing time plus 3 s (RETIME_LEAD_DAA) on top of the 5 s window
- * (ui/confirm/signing-time.ts `retimeLead`), so a request 12 s slower than the one before is signed too late again.
+ * A wallet that keeps getting slower: a re-timed attempt leaves the last signing time plus 3 s
+ * (RETIME_LEAD_DAA) on top of the 5 s window.
+ * (ui/confirm/signing-time.ts `retimeLead`), so a request 12 s slower than the one before is signed
+ * too late again.
  */
 const EVER_SLOWER_MS = [10_000, 22_000, 34_000, 46_000];
-/** a wallet that always takes 15 s: longer than the 5 s window of a first attempt, shorter than what a re-timing then leaves */
+/**
+ * A wallet that always takes 15 s: longer than the 5 s window of a first attempt, shorter than what
+ * a re-timing then leaves.
+ */
 const STEADY_SLOW_MS = 15_000;
-/** a start planned at the click is a 30 DAA lead ahead of the node clock (MARKET_ACTIVATION_DAA) */
+/**
+ * A start planned at the click is a 30 DAA lead ahead of the node clock (MARKET_ACTIVATION_DAA).
+ */
 const REPLAN_GAP_DAA = 60;
 
-/** Waits until the wallet has answered its `n`-th request (a slow wallet outlasts the 30 s waits of the ticket helpers). */
+/**
+ * Waits until the wallet has answered its `n`-th request (a slow wallet outlasts the 30 s waits of
+ * the ticket helpers).
+ */
 async function walletAnswered(wallet: MockWalletHandle, n: number, timeoutMs = 90_000): Promise<void> {
   const t0 = Date.now();
   for (;;) {
@@ -34,7 +51,9 @@ async function walletAnswered(wallet: MockWalletHandle, n: number, timeoutMs = 9
   }
 }
 
-/** Remembers whether a confirmation screen was ever in the page (it must never open for an order). */
+/**
+ * Remembers whether a confirmation screen was ever in the page (it must never open for an order).
+ */
 async function watchConfirmScreen(page: Page): Promise<() => Promise<boolean>> {
   await page.evaluate(() => {
     const w = window as unknown as { __sawConfirm: boolean };
@@ -64,7 +83,7 @@ test.describe('order flow: one button, the wallet approves', () => {
     expect(status.txid).toBe(txid);
     await expect(page.getByTestId('tx-id')).toHaveText(/\w/); // the id links to the explorer
 
-    // exactly one request, for exactly the transaction the node accepted
+    // Exactly one request, for exactly the transaction the node accepted.
     const placed = await placedBy(mock, txid);
     await expectWalletSigned(wallet!, placed, { requests: 1 });
     expect(placed.submission.created).toHaveLength(1);
@@ -99,7 +118,8 @@ test.describe('order flow: one button, the wallet approves', () => {
       const submitted = (await mock.submitted(false)).slice(before);
       expect(submitted.map((s) => s.txid), 'exactly one transaction reached the node').toEqual([txid]);
 
-      // the accepted order starts from the clock of the second plan, not from the stale clock of the first
+      // The accepted order starts from the clock of the second plan, not from the stale clock of
+      // the first.
       const placed = await placedBy(mock, txid);
       await expectWalletSigned(wallet!, placed, { requests: 2 });
       const activeFrom = Number(placed.views[0].state.state.activeFrom);
@@ -120,7 +140,8 @@ test.describe('order flow: one button, the wallet approves', () => {
       const first = await waitSubmitted(page);
       expect(await wallet!.calls(), 'the first request was too late for the 5 s window, the re-timed one was not').toHaveLength(2);
 
-      // the wallet's signing time is remembered: the next auction is planned with a start that leaves it, and the wallet is asked once
+      // The wallet's signing time is remembered: the next auction is planned with a start that
+      // leaves it, and the wallet is asked once.
       await typeMarketBuy(page);
       await clickPlace(page);
       await walletAnswered(wallet!, 3);
@@ -139,7 +160,8 @@ test.describe('order flow: one button, the wallet approves', () => {
       const before = (await mock.submitted(false)).length;
 
       await clickPlace(page);
-      // the wallet reads its delay when a request arrives: each next request is made slower than what the re-timing before it left
+      // The wallet reads its delay when a request arrives: each next request is made slower than
+      // what the re-timing before it left.
       for (let n = 1; n < EVER_SLOWER_MS.length; n++) {
         await wallet!.waitForCalls(n, 90_000);
         await wallet!.configure({ delayMs: EVER_SLOWER_MS[n]! });
@@ -153,7 +175,7 @@ test.describe('order flow: one button, the wallet approves', () => {
 
       expect(await wallet!.calls(), 'three re-timings, then it stops').toHaveLength(4);
       expect((await mock.submitted(false)).length, 'nothing reached the node').toBe(before);
-      // the ticket is usable again
+      // The ticket is usable again.
       await expect(page.getByTestId('order-place')).toBeEnabled();
     });
   });
@@ -173,7 +195,8 @@ test.describe('no acknowledgement boxes: what the ticket cannot check stops the 
   });
 
   test.describe('a further indexer whose book is far from ours', () => {
-    // the further indexer is the mock itself behind another origin, its asks at half the price: a market buy starts 100 % above it
+    // The further indexer is the mock itself behind another origin, its asks at half the price: a
+    // market buy starts 100 % above it.
     test.use({ appConfig: { extraIndexerUrls: ['http://idx2.invalid'] } });
 
     test('a market buy is a hard error (button disabled, one red line), nothing reaches the wallet', async ({ appPage: page, mock, wallet }) => {
@@ -201,7 +224,7 @@ test.describe('no acknowledgement boxes: what the ticket cannot check stops the 
   test('guard data that cannot be read is a hard error that clears by itself once the data is read again', async ({ appPage: page, mock }) => {
     test.setTimeout(90_000);
     await fund(mock);
-    // the wallet's own orders (self-trade prevention) cannot be listed
+    // The wallet's own orders (self-trade prevention) cannot be listed.
     const ownOrders = (u: URL) => u.pathname.endsWith('/v1/orders') && u.searchParams.has('maker');
     await page.route(ownOrders, (route) => route.fulfill({ status: 503, json: { error: { code: 'unavailable', message: 'down' } } }));
     await openMarket(page, mock);
@@ -212,7 +235,7 @@ test.describe('no acknowledgement boxes: what the ticket cannot check stops the 
     await expect(issue).toHaveText(/Could not read the token's guard data; try again in a moment\./);
     await expect(page.getByTestId('order-place')).toBeDisabled();
     await expect(page.getByTestId('order-ticket').locator('input[type="checkbox"][data-testid$="-ack"]')).toHaveCount(0);
-    // the indexer answers again: the ticket's background refresh reads it and the error goes
+    // The indexer answers again: the ticket's background refresh reads it and the error goes.
     await page.unroute(ownOrders);
     await expect(issue).toHaveCount(0, { timeout: 45_000 });
     await expect(page.getByTestId('order-place')).toBeEnabled();
@@ -220,7 +243,10 @@ test.describe('no acknowledgement boxes: what the ticket cannot check stops the 
 });
 
 test.describe('the book moves between the ticket and the click', () => {
-  /** Takes the whole best ask level out of the book (every order at the best price filled by another key); returns the old and the new best. */
+  /**
+   * Takes the whole best ask level out of the book (every order at the best price filled by another
+   * key). Returns the old and the new best.
+   */
   async function liftBestAsks(mock: import('../fixtures').MockClient): Promise<{ before: bigint; after: bigint }> {
     const tok = await mock.token();
     const book = await mock.book(tok.covenant_id, false, 20);
@@ -230,7 +256,10 @@ test.describe('the book moves between the ticket and the click', () => {
     return { before: best, after: BigInt(next.asks[0].price) };
   }
 
-  /** The ticket keeps its book while the move is read again: its book reads answer late, so the click plans from the parts on hand */
+  /**
+   * The ticket keeps its book while the move is read again: its book reads answer late, so the
+   * click plans from the parts on hand.
+   */
   async function slowBooks(page: Page): Promise<void> {
     await page.route('**/v1/books/**', async (route) => {
       await new Promise((r) => setTimeout(r, 1_500));
@@ -252,7 +281,8 @@ test.describe('the book moves between the ticket and the click', () => {
     const txid = await waitSubmitted(page);
     expect(await wallet!.calls()).toHaveLength(1);
     const placed = await placedBy(mock, txid);
-    // the auction starts at the moved best ask, and ends no higher than the worst price the ticket showed (3 % above the old best ask)
+    // The auction starts at the moved best ask, and ends no higher than the worst price the ticket
+    // showed (3 % above the old best ask).
     const st = placed.views[0].state.state as { price: string; priceEnd: string };
     expect(BigInt(st.price)).toBe(after);
     expect(BigInt(st.priceEnd)).toBeLessThanOrEqual(before + (before * 300n) / 10_000n);
@@ -283,7 +313,7 @@ test.describe('the planner\'s warnings are not on the ticket (founder, 2026-11-0
     await fillFields(page, { amount: '1', price: '0.0245', crossing: 'auction' }); // an order on the book (a direct fill would take the asks at their price)
     await settlePlan(page);
     const before = (await page.getByTestId('order-place').boundingBox())!;
-    // twice the market (0.025): a typing error, but the user's order
+    // Twice the market (0.025): a typing error, but the user's order.
     await fillFields(page, { price: '0.05' });
     await settlePlan(page);
     await expect(page.getByTestId('order-note-PRICE_AGGRESSIVE_VS_MARKET')).toHaveCount(0);
@@ -291,7 +321,7 @@ test.describe('the planner\'s warnings are not on the ticket (founder, 2026-11-0
     await expect(page.getByTestId('order-issue-PRICE_AGGRESSIVE_VS_MARKET')).toHaveCount(0);
     await expect(page.getByTestId('order-place')).toBeEnabled();
     expect(await page.getByTestId('order-place').boundingBox()).toEqual(before);
-    // the final confirmation says it, once, under its summary: a note, never a stop
+    // The final confirmation says it, once, under its summary: a note, never a stop.
     await clickPlaceOnly(page);
     await expect(page.getByTestId('confirm-order-note')).toHaveCount(1);
     await expect(page.getByTestId('confirm-order-notes')).toContainText('through the market');
@@ -307,7 +337,7 @@ test.describe('the planner\'s warnings are not on the ticket (founder, 2026-11-0
     await fund(mock);
     await openMarket(page, mock);
     await pickType(page, 'stopMarket', 'sell');
-    // a sell stop above the market (0.025): it arms at the next qualifying trade
+    // A sell stop above the market (0.025): it arms at the next qualifying trade.
     await fillFields(page, { amount: '2', stop: '0.03' });
     await settlePlan(page);
     await expect(page.getByTestId('order-note-COND_STOP_ALREADY_REACHED')).toHaveCount(0);

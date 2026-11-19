@@ -1,10 +1,14 @@
-// Delivery of buy orders (bid-delivery-spec §10, mock stack): the ticket's Advanced options gain a Delivery row (Each fill by default, Collected,
-// Top-up with its tip per fill), the main form is unchanged, and Settings holds the wallet-wide default and, read-only, the Top-up threshold per
-// token. The placed orders carry the delivery block the planner chose (decoded by the mock indexer from the real transaction).
+// Delivery of buy orders (bid-delivery-spec §10, mock stack): the ticket's Advanced options gain a
+// Delivery row (Each fill by default, Collected, Top-up with its tip per fill), the main form is
+// unchanged, and Settings holds the wallet-wide default and, read-only, the Top-up threshold per
+// token. The placed orders carry the delivery block the planner chose (decoded by the mock indexer
+// from the real transaction).
 //
-// With KOB_DELIVERY_SHOTS=<dir> the spec also saves the three screenshots of the change (Advanced default, Advanced with Top-up, Settings).
+// With KOB_DELIVERY_SHOTS=<dir> the spec also saves the three screenshots of the change (Advanced
+// default, Advanced with Top-up, Settings).
 //
-// Not covered here (the fill builders of the delivery modes are later work packages): a fill of a Collected or a Top-up order.
+// Not covered here (the fill builders of the delivery modes are later work packages): a fill of a
+// Collected or a Top-up order.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { STD, openStd } from '../helpers/delivery';
@@ -29,7 +33,7 @@ test('a limit buy is Each fill by default: Delivery under Advanced, the Fills bo
   await pickType(page, 'limit', 'buy');
   await fillFields(page, { price: '0.025', amount: '40', minFill: '10' });
   await openAdvanced(page);
-  // the main form is the one of before (amount, price, ladder, lifetime): Delivery is an Advanced row only
+  // The main form has amount, price, ladder and lifetime. Delivery is an Advanced row only.
   const main = await page.getByTestId('order-ticket').locator('[data-testid^="field-"], [data-testid="order-amount"], [data-testid="order-price"]').evaluateAll((els) =>
     els.filter((e) => !e.closest('.tk-advanced') && (e as HTMLElement).offsetParent !== null).map((e) => e.getAttribute('data-testid')),
   );
@@ -39,7 +43,7 @@ test('a limit buy is Each fill by default: Delivery under Advanced, the Fills bo
   await expect(page.getByTestId('order-delivery-note')).toHaveText('Every fill arrives in your wallet as its own UTXO.');
   await expect(page.getByTestId('field-maxFills')).toBeVisible();
   await expect(page.getByTestId('field-topupTip')).toHaveCount(0);
-  // the row right after the priority tip
+  // The row right after the priority tip.
   const ids = await page.getByTestId('order-advanced').locator('[data-testid^="field-"], [data-testid="order-tip"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')));
   expect(ids.slice(0, 2)).toEqual(['order-tip', 'field-delivery']);
   await waitReviewable(page);
@@ -74,7 +78,7 @@ test('Top-up: the tip per fill (default from the program), the tip total and Fil
   await expect(page.getByTestId('field-delivery')).toContainText('Added to one UTXO');
   await expect(page.getByTestId('order-delivery-note')).toHaveText('Every fill is added to one UTXO in your wallet, for a small tip per fill.');
   await expect(page.locator('label', { hasText: /^Tip per added fill$/ })).toBeVisible();
-  // ceil(1.25 x 595 400 sompi), the reference top-up extra of KCC20Ref
+  // ceil(1.25 x 595 400 sompi), the reference top-up extra of KCC20Ref.
   await expect(page.getByTestId('field-topupTip')).toHaveAttribute('placeholder', '0.0074425');
   await expect(page.getByTestId('field-maxFills')).toBeVisible();
   await settlePlan(page);
@@ -88,7 +92,8 @@ test('Top-up: the tip per fill (default from the program), the tip total and Fil
     await page.getByTestId('order-ticket').screenshot({ path: `${shots}/delivery-advanced-topup.png` });
   }
   const placed = await placeOrder(page, mock);
-  // the wallet's T = ceil(5 KAS x 10^8 / 0.025 KAS) = 200 EXSTD; the order's recvThreshold is min(T, minFill - 1) = 10 EXSTD less one base unit
+  // The wallet's T = ceil(5 KAS x 10^8 / 0.025 KAS) = 200 EXSTD. The order's recvThreshold is
+  // min(T, minFill - 1) = 10 EXSTD less one base unit.
   expect(stateOf(placed)).toMatchObject({ mode: '2', recvThreshold: '999999999', topupTip: '900000', bought: '0' });
 
   await page.goto('/#/settings');
@@ -128,7 +133,7 @@ test('Settings: the wallet default applies to the ticket at once; IOC, sells and
   await expect(page.getByTestId('field-delivery')).toHaveCount(0);
   await pickType(page, 'limit', 'sell');
   await expect(page.getByTestId('field-delivery')).toHaveCount(0);
-  // a KRON token delivers at each fill: no choice
+  // A KRON token delivers at each fill: no choice.
   await listExkcc(page);
   const kron = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8')).tokens.find((t: { ticker: string }) => t.ticker === 'EXKRON');
   await page.goto(`/#/market/${kron.covenant_id}`);
@@ -145,20 +150,20 @@ test("What's this?: the step-by-step help opens from the Delivery label, plays, 
   await pickType(page, 'limit', 'buy');
   await openAdvanced(page);
   const link = page.getByTestId('order-delivery-help');
-  // on the label row of Delivery, at its right end
+  // On the label row of Delivery, at its right end.
   const [lb, label] = await Promise.all([link.boundingBox(), page.locator('label', { hasText: /^Bought tokens$/ }).boundingBox()]);
   expect(Math.abs(lb!.y + lb!.height - (label!.y + label!.height))).toBeLessThan(6);
   expect(lb!.x).toBeGreaterThan(label!.x + label!.width);
   await link.click();
   const help = page.getByTestId('delivery-help');
   await expect(help).toBeVisible();
-  // the choice in force (Each fill, the default) is highlighted and carries the default pill
+  // The choice in force (Each fill, the default) is highlighted and carries the default pill.
   await expect(help.getByTestId('delivery-help-lane-each')).toHaveAttribute('data-on', 'true');
   await expect(help.getByTestId('delivery-help-lane-collected')).toHaveAttribute('data-on', 'false');
   await expect(help.getByTestId('delivery-help-lane-each').locator('.dh-pill').first()).toHaveText('default');
   const caption = help.getByTestId('delivery-help-caption');
   const play = help.getByTestId('delivery-help-play');
-  // it plays: the caption moves on by itself
+  // It plays: the caption moves on by itself.
   await expect(play).toHaveAttribute('aria-label', 'Pause');
   await expect(caption).toHaveText('Fill 2 of 3', { timeout: 5_000 });
   await play.click();
@@ -166,19 +171,18 @@ test("What's this?: the step-by-step help opens from the Delivery label, plays, 
   const held = await caption.textContent();
   await page.waitForTimeout(1_600);
   await expect(caption).toHaveText(held!);
-  // steps by hand
-  // steps by hand, to the end (the forward button stops there)
+  // Steps by hand steps by hand, to the end (the forward button stops there).
   const forward = help.getByTestId('delivery-help-forward');
   while (await forward.isEnabled()) await forward.click();
   await expect(caption).toHaveText('Order ends');
   await expect(help.getByTestId('delivery-help-result-collected')).toHaveText('1 UTXO · when the order ends');
   await help.getByTestId('delivery-help-back').click();
   await expect(caption).toHaveText('Fill 3 of 3');
-  // Escape closes; focus is back on the link
+  // Escape closes. Focus is back on the link.
   await page.keyboard.press('Escape');
   await expect(help).toHaveCount(0);
   await expect(link).toBeFocused();
-  // the close button too
+  // The close button too.
   await link.click();
   await help.getByRole('button', { name: 'Close' }).click();
   await expect(help).toHaveCount(0);

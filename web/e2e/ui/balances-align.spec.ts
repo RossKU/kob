@@ -1,5 +1,7 @@
-// Portfolio > Balances: the header and every row share one set of column tracks, whatever buttons a row has (none, Merge all, Cancel all, both, Convert to plain),
-// so each figure column and its header label end on one right edge (within 1 px), no header cut, at 1280, 1152 and 1024 px; a phone keeps its cards. Screenshots go to the test's output. Mock stack.
+// Portfolio > Balances: the header and every row share one set of column tracks, whatever buttons a
+// row has (none, Merge all, Cancel all, both, Convert to plain), so each figure column and its
+// header label end on one right edge (within 1 px), no header cut, at 1280, 1152 and 1024 px. A
+// phone keeps its cards. Screenshots go to the test's output. Mock stack.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
@@ -43,11 +45,14 @@ async function open(page: Page, mock: MockClient): Promise<void> {
   await expect(page.getByTestId(`orders-merge-token-${MERGE}`)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId(`orders-convert-token-${CONVERT}`)).toBeVisible();
   await expect(page.locator('[data-testid^="orders-cancel-token-"]').first()).toBeVisible();
-  // the fonts in, the rows risen in (.ml-in)
+  // The fonts in, the rows risen in (.ml-in).
   await page.evaluate(async () => { await document.fonts.ready; await Promise.all(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished)); });
 }
 
-/** Per figure column: the right edges of the header cell and of every row's cell, and of the header's label and every row's figure (first lines), in px. */
+/**
+ * Per figure column: the right edges of the header cell and of every row's cell, and of the
+ * header's label and every row's figure (first lines), in px.
+ */
 const edges = (page: Page) =>
   page.getByTestId('token-balances-table').evaluate((table, cols) => {
     const firstLineRight = (cell: Element): number => {
@@ -75,20 +80,21 @@ for (const width of [1280, 1152, 1024]) {
     await open(page, mock);
     const table = page.getByTestId('token-balances-table');
     await shot(page, `balances-${width}`);
-    // a font as wide as the CI runner's (DejaVu Sans) needs more than 1024 px for the KAS figure: there the table is cards, as it was before
+    // A font as wide as the CI runner's (DejaVu Sans) needs more than 1024 px for the KAS figure.
+    // There the table is cards.
     if (width < 1100 && (await table.getAttribute('data-fold')) === 'cards') test.skip(true, 'cards at this width with this font');
     await expect(table).not.toHaveAttribute('data-fold', 'cards');
-    // one grid for all: the same tracks on the header and on each row
+    // One grid for all: the same tracks on the header and on each row.
     const tracks = await table.locator('.dt-head, .dt-body .dt-row').evaluateAll((els) => els.map((e) => getComputedStyle(e).gridTemplateColumns));
     expect(new Set(tracks).size, tracks.join('\n')).toBe(1);
-    // no header is cut (a long one wraps)
+    // No header is cut (a long one wraps).
     const cut = await table.locator('.dt-head .sortbtn > span:first-child').evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
     expect(cut, 'headers cut off').toEqual([]);
     for (const [k, e] of Object.entries(await edges(page))) {
       expect(spread(e.cells), `${k}: cell right edges ${e.cells}`).toBeLessThanOrEqual(1);
       expect(spread(e.figures), `${k}: header label and figure right edges ${e.figures}`).toBeLessThanOrEqual(1);
     }
-    // the buttons stay inside their cell
+    // The buttons stay inside their cell.
     for (const act of await table.locator('.dt-c-act').all()) {
       const cell = (await act.boundingBox())!;
       for (const b of await act.locator('.btn').all()) {

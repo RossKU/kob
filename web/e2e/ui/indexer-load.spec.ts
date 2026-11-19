@@ -1,6 +1,8 @@
-// Indexer load of one open market page: a live fill refreshes every resource coalesced and the chart reads only its newest bars (`from=`), a
-// hidden tab neither refetches nor polls and catches up once shown, and a click on the order button reuses an environment read a moment ago
-// instead of reading everything again (one that may be stale is re-checked before the final confirmation opens; ticket-latency.spec.ts times it).
+// Indexer load of one open market page: a live fill refreshes every resource coalesced and the
+// chart reads only its newest bars (`from=`), a hidden tab neither refetches nor polls and catches
+// up once shown, and a click on the order button reuses an environment read a moment ago instead of
+// reading everything again (one that may be stale is re-checked before the final confirmation
+// opens; ticket-latency.spec.ts times it).
 import type { Page, Request } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { fund, listExkcc, openMarket } from '../helpers/env';
@@ -19,7 +21,10 @@ function record(page: Page, re: RegExp): Request[] {
   return seen;
 }
 
-/** Makes the page hidden / shown as a background tab is (document.visibilityState + the visibilitychange event). */
+/**
+ * Makes the page hidden / shown as a background tab is (document.visibilityState + the
+ * visibilitychange event).
+ */
 async function setHidden(page: Page, hidden: boolean): Promise<void> {
   await page.evaluate((h) => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (h ? 'hidden' : 'visible') });
@@ -48,9 +53,9 @@ test.describe('indexer load per viewer', () => {
     await expect(page.getByTestId('stat-trades')).not.toHaveText(trades);
     await expect.poll(() => candles.length).toBeGreaterThan(0);
     for (const r of candles) expect(new URL(r.url()).searchParams.get('from'), r.url()).not.toBeNull();
-    // the chart still draws the full series
+    // The chart still draws the full series.
     expect(Number(await page.getByTestId('price-chart').getAttribute('data-bars'))).toBeGreaterThan(50);
-    // a resync (events may have been missed) reads the full series once
+    // A resync (events may have been missed) reads the full series once.
     candles.length = 0;
     await mock.resync();
     await expect.poll(() => candles.some((r) => new URL(r.url()).searchParams.get('from') === null)).toBe(true);
@@ -63,7 +68,7 @@ test.describe('indexer load per viewer', () => {
     const reads = record(page, MARKET_READS);
     const ask = (await mock.ordersOf('maker', 'active')).find((o: { side: number }) => o.side === 1);
     await mock.fill(ask!.covenant_id);
-    // the notice arrives within the debounce (1 s): give it well over that, nothing may be read
+    // The notice arrives within the debounce (1 s): give it well over that, nothing may be read.
     await page.waitForTimeout(3_000);
     expect(reads.map((r) => r.url())).toEqual([]);
     await expect(page.getByTestId('stat-trades')).toHaveText(trades);
@@ -78,10 +83,12 @@ test.describe('indexer load per viewer', () => {
     await page.getByTestId('order-side-sell').click();
     await fillFields(page, { amount: '3', price: '0.03' });
     await waitReviewable(page);
-    // the wallet holds each request for a moment: what the app read is judged when the request arrives, before the placement's own refresh
+    // The wallet holds each request for a moment: what the app read is judged when the request
+    // arrives, before the placement's own refresh.
     await wallet!.configure({ delayMs: 1_500 });
 
-    // the ticket's own book read (per order, depth 100) marks an environment build (the market's book reads per order too, at its own depth)
+    // The ticket's own book read (per order, depth 100) marks an environment build (the market's
+    // book reads per order too, at its own depth).
     const envReads = record(page, /\/v1\/books\/[0-9a-f]+\?(?=.*aggregate=false)(?=.*depth=100\b)/);
     await mock.resync(); // the feed says "reload": the environment is read again
     await expect.poll(() => envReads.length).toBeGreaterThan(0);
@@ -96,10 +103,11 @@ test.describe('indexer load per viewer', () => {
     expect(envReads, 'the click must not read the environment again').toHaveLength(0);
     await waitSubmitted(page);
 
-    // a slow indexer and node (400 ms a request), an environment older than the reuse window
+    // A slow indexer and node (400 ms a request), an environment older than the reuse window.
     await mock.latency(400);
     try {
-      // the feed was live all along and sent no notice since: it still is the state at the click, nothing is read again
+      // The feed was live all along and sent no notice since: it still is the state at the click,
+      // nothing is read again.
       await fillFields(page, { amount: '3' });
       await waitReviewable(page);
       await page.waitForTimeout(3_500);
@@ -110,8 +118,9 @@ test.describe('indexer load per viewer', () => {
       expect(envReads).toHaveLength(0);
       await waitSubmitted(page);
 
-      // the book moved since (a notice, its read still on its way: an indexer at 3 s an answer): the check starts at once and the wallet is not asked
-      // before the re-check has read the state at the click
+      // The book moved since (a notice, its read still on its way: an indexer at 3 s an answer):
+      // the check starts at once and the wallet is not asked before the re-check has read the state
+      // at the click.
       const ask = (await mock.ordersOf('maker', 'active')).find((o: { side: number }) => o.side === 1);
       await fillFields(page, { amount: '3' });
       await waitReviewable(page);
