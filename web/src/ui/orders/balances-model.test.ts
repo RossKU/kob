@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { StrayView } from '../../data/indexer-types';
 import { loadKobNode } from '../../kob/wasm.node';
 import { MAKER, OTHER, TOKEN, orderViewOf, placeGolden, strayFor, tokenUtxo, tokenUtxoView } from '../../testing/chain-fixtures';
-import { balanceColumnFractions, combineBalances, orderTokenPrograms, strayTotals, unreviewedProgram } from './balances-model';
+import { balanceColumnFractions, balanceProgram, combineBalances, orderTokenPrograms, strayTotals, unreviewedProgram } from './balances-model';
 import { unitsFraction } from '../kit';
 
 const kob = loadKobNode();
@@ -70,6 +70,25 @@ describe('unreviewedProgram', () => {
     expect(unreviewedProgram('KCC20P2')).toBe(true);
     expect(unreviewedProgram('KCC20KaspaCom_0_2_5')).toBe(true);
     expect(unreviewedProgram(null)).toBe(true);
+  });
+});
+
+describe('balanceProgram', () => {
+  const tok = '88'.repeat(32);
+  const none = new Map();
+  it('a token held only in the creator lock of the wallet takes the program of its lock, so it is not marked unsupported', () => {
+    const locked = [{ token: tok, program: 'KCC20PublicMint' as const }];
+    expect(balanceProgram(tok, { free: none, orders: none })).toBeNull();
+    expect(unreviewedProgram(balanceProgram(tok, { free: none, orders: none }))).toBe(true);
+    expect(balanceProgram(tok, { free: none, locked, orders: none })).toBe('KCC20PublicMint');
+    expect(unreviewedProgram(balanceProgram(tok, { free: none, locked, orders: none }))).toBe(false);
+    // the lock of another token says nothing of this one; an unreviewed program stays marked
+    expect(balanceProgram('99'.repeat(32), { free: none, locked, orders: none })).toBeNull();
+    expect(unreviewedProgram(balanceProgram(tok, { free: none, locked: [{ token: tok, program: 'KCC20P2' }], orders: none }))).toBe(true);
+  });
+  it('the registry first, then the free UTXOs', () => {
+    expect(balanceProgram(tok, { listed: 'KCC20Ref', free: new Map([[tok, 'KCC20PublicMint']]), orders: none })).toBe('KCC20Ref');
+    expect(balanceProgram(tok, { free: new Map([[tok, 'KCC20PublicMint']]), locked: [{ token: tok, program: 'KCC20Ref' }], orders: none })).toBe('KCC20PublicMint');
   });
 });
 

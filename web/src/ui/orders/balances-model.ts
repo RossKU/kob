@@ -39,6 +39,18 @@ export function unreviewedProgram(program: TokenProgram | null | undefined): boo
 }
 
 /**
+ * The program a balance row's token is under: the registry's, else the one the node verified its
+ * free UTXOs, its creator lock's UTXOs or its orders under. A token held only in the wallet's
+ * creator lock has no free UTXO and no order, so its lock names it.
+ */
+export function balanceProgram(
+  token: Hex,
+  o: { listed?: TokenProgram | null; free: ReadonlyMap<Hex, TokenProgram>; locked?: readonly { token: Hex; program: TokenProgram }[]; orders: ReadonlyMap<Hex, TokenProgram> },
+): TokenProgram | null {
+  return o.listed ?? o.free.get(token) ?? o.locked?.find((l) => l.token === token)?.program ?? o.orders.get(token) ?? null;
+}
+
+/**
  * The token program each live order names (`token_template_hash`, a pinned program's), by token. It
  * covers the program of a token held only in orders, which neither the registry nor a free UTXO
  * names. A whole new supply put on sale at its creation would otherwise read "unsupported program".

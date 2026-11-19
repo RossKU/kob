@@ -23,7 +23,7 @@ import type { KascovMeta } from '../market/token-model';
 import type { WalletBalances } from './use-balances';
 import { AMOUNT_FRACTION_MAX, amountCell } from './cells';
 import { countText, tCount } from './plural';
-import { balanceColumnFractions, orderTokenPrograms, unreviewedProgram } from './balances-model';
+import { balanceColumnFractions, balanceProgram, orderTokenPrograms, unreviewedProgram } from './balances-model';
 import { convertibleCounts, mergeAllFrees, mergeTokenFor, mergeableCounts } from './merge-model';
 import type { OrdersData } from './orders-data';
 import { formatRowDate, rowTimeTitle } from '../kit/format';
@@ -289,7 +289,7 @@ export function BalancesPanel(props: {
                 // "Convert to plain" is in the Merge all dialog where that button shows. Only a
                 // token with nothing to merge has it here, and the cell keeps its width.
                 const showConvert = !!props.onConvertToken && convertible.has(b.token) && !showMerge;
-                const program = info?.program ?? free.data!.programs.get(b.token) ?? orderPrograms.get(b.token) ?? null;
+                const program = balanceProgram(b.token, { listed: info?.program, free: free.data!.programs, locked: free.data!.locked, orders: orderPrograms });
                 // The wallet's creator lock of the token is a sub-line under Available. Once it is
                 // open, Unlock, or the CLI's command, is in the action cell.
                 const locked = b.locked && b.locked.amount > 0n ? b.locked : null;
