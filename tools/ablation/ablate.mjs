@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 // Contract ablation (mutation) runner for the four v2 harness suites. See README.md.
 //
-//   node tools/ablation/ablate.mjs [--suite kcc20-sell|kcc20-buy|kron-sell|kron-buy|kcc20-cross|kron-cross|all] [--only ID,suite:ID]
-//        [--jobs N] [--exe-dir DIR] [--out DIR] [--dry-run] [--baseline] [--no-baseline] [--list] [--keep]
-//        [--release] [--timeout SEC]
+//   node tools/ablation/ablate.mjs
+//        [--suite kcc20-sell|kcc20-buy|kron-sell|kron-buy|kcc20-cross|kron-cross|all]
+//        [--only ID,suite:ID] [--jobs N] [--exe-dir DIR] [--out DIR] [--dry-run]
+//        [--baseline] [--no-baseline] [--list] [--keep] [--release] [--timeout SEC]
 //
-// For every mutation: copy the committed contracts of the suite into a scratch directory, apply the edits (each must match
-// exactly once and change the text), run the named test function of the prebuilt test executable with KOB_ABLATION=1 and
-// KOB_ABLATION_SRC=<scratch>, and check that the named attack scenarios flipped from rejected to accepted.
+// For every mutation the runner copies the committed contracts of the suite into a scratch
+// directory and applies the edits. Each edit must match exactly once and change the text. It then
+// runs the named test function of the prebuilt test executable with KOB_ABLATION=1 and
+// KOB_ABLATION_SRC=<scratch>. The named attack scenarios must flip from rejected to accepted.
 import fs from 'node:fs';
 import path from 'node:path';
 import cp from 'node:child_process';
@@ -92,7 +94,8 @@ function prepareMutation(suite, mut, outDir) {
   return { dir };
 }
 
-// A test reference is `<fn>` (a test fn of the suite's binary) or `<bin>::<fn>` (a test fn of another kob-tests binary).
+// A test reference is `<fn>` (a test fn of the suite's binary) or `<bin>::<fn>`.
+// `<bin>::<fn>` names a test fn of another kob-tests binary.
 const binOf = (suite, ref) => (ref.includes('::') ? ref.split('::')[0] : suite.testBin);
 const fnOf = ref => (ref.includes('::') ? ref.split('::').slice(1).join('::') : ref);
 const fileOf = ref => ref.replace(/::/g, '__');
@@ -301,7 +304,8 @@ for (const r of results) {
   r.mutations.sort((a, b) => catalogOrder.indexOf(a.id) - catalogOrder.indexOf(b.id));
   r.templates.sort();
 }
-// the KCC-20 program of the KAS-kind suites' 3 / 3 runs (crates/kob-tests `KOB_KCC20_PROGRAM`; audit AUD-PM)
+// The KCC-20 program of the 3 / 3 runs of the KAS-kind suites (`KOB_KCC20_PROGRAM` in
+// crates/kob-tests).
 const meta = { date: new Date().toISOString().slice(0, 10), secs: secs(T0), jobs: opt.jobs, kcc20Program: process.env.KOB_KCC20_PROGRAM || 'KCC20Ref' };
 const t = writeReport(OUT, meta, results);
 for (const s of suites) {

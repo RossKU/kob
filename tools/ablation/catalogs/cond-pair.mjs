@@ -1,32 +1,55 @@
-// KobCondPair (contracts/orders/KobCondPair.sil): the pair conditional (stop / stop-limit / trailing / TP leg / OCO, and the
-// exit of KobIfdPair). This catalog owns EVERY check of KobCondPair EXCEPT the repeat-IFD merge / re-arm checks, which
-// the cond-pair-rpt catalog owns (the TP fill with / without the entry, rptUntil, the budget / prefund / proceeds of a
-// re-arm, the sell-out, and the update / stop-leg "never next to the entry" rules: `OpCovInputCount(parent) == 0`,
-// `require(present == 0)`, `tx.daa >= rptUntil`, the merge argument, `n < MERGE_K`, `dOut > 0`, the re-arming sell-out).
+// KobCondPair (contracts/orders/KobCondPair.sil): the pair conditional.
 //
-// Test binary: crates/kob-tests/tests/kob/kob_cond_pair_tests.rs (ids NC..; a / b = the ASK / BID side, sk / sr / tk = the
-// custody S / the bought token T is KCC-20 / KRON). Attacks run on the two mixed program pairs (KCC20Ref_8x8 +
-// KronToken2433, KronToken2433 + KCC20Ref_8x8), NC59 on KCC-20 / KCC-20 (see cond_pair_evidence_tk). Scenarios that edit
-// the evidence order's own state also fail that order's input: `inputOnly` (the proof is the conditional's own input).
+// The conditional is a stop, stop-limit, trailing, TP leg or OCO, and the exit of KobIfdPair. This
+// catalog owns every check of KobCondPair except the repeat-IFD merge / re-arm checks, which the
+// cond-pair-rpt catalog owns:
+// - the TP fill with and without the entry, rptUntil;
+// - the budget, prefund and proceeds of a re-arm, and the sell-out;
+// - the update / stop-leg "never next to the entry" rules: `OpCovInputCount(parent) == 0`,
+//   `require(present == 0)`, `tx.daa >= rptUntil`, the merge argument, `n < MERGE_K`, `dOut > 0`
+//   and the re-arming sell-out.
 //
-// Every `require` of KobCondPair.sil is an entry below (expect or hold), an entry of cond-pair-rpt, or one of the checks
-// listed here. The unrolled noStrays scan (one function for S and T, fill / refund / update): its eight slot lines
-// (GS0..GS7) are witnessed by a T stray at each slot (NC18t<k>, on the side whose T is the KCC-20 token), its bound (GB)
-// by a 9th input. The repeat-IFD requires left to cond-pair-rpt (kob_ifd_pair_tests): update `OpCovInputCount(parent)
-// == 0`, `tx.daa >= rptUntil`, a stop fill's `present == 0`, `n < MERGE_K`, the entry's 0x08 first push and its merge
-// argument `-(i * 2^53 + n)`, `dOut > 0`, and the re-arming sell-out's `outAmount == 0` and delivery carrier.
+// The test binary is crates/kob-tests/tests/kob/kob_cond_pair_tests.rs. Scenario ids are NC..
+// - The suffix a / b is the ASK / BID side.
+// - The suffix sk / sr / tk is the custody S, or the bought token T, being KCC-20 / KRON.
+//
+// Attacks run on the two mixed program pairs (KCC20Ref_8x8 + KronToken2433, KronToken2433 +
+// KCC20Ref_8x8). NC59 runs on KCC-20 / KCC-20 (see cond_pair_evidence_tk). Scenarios that edit the
+// evidence order's own state also fail that order's input: `inputOnly`. The proof is the
+// conditional's own input.
+//
+// Every `require` of KobCondPair.sil is an entry below (expect or hold), an entry of
+// cond-pair-rpt, or one of the checks listed here.
+//
+// The unrolled noStrays scan is one function for S and T, for fill, refund and update. Its eight
+// slot lines (GS0..GS7) are witnessed by a T stray at each slot (NC18t<k>, on the side whose T is
+// the KCC-20 token). Its bound (GB) is witnessed by a 9th input.
+//
+// The repeat-IFD requires are left to cond-pair-rpt (kob_ifd_pair_tests):
+// - update `OpCovInputCount(parent) == 0`;
+// - `tx.daa >= rptUntil`;
+// - a stop fill's `present == 0`;
+// - `n < MERGE_K`;
+// - the entry's 0x08 first push and its merge argument `-(i * 2^53 + n)`;
+// - `dOut > 0`;
+// - the re-arming sell-out's `outAmount == 0` and delivery carrier.
 //
 // Checks without a witness attack (not in the catalog):
-//  - the fixed push bytes of a custody state: every genuine token UTXO has them.
-//  - cancel `require(sb.length == 65)`: `sb[64]` of a shorter signature fails by itself; a longer one is no signature.
-//  - refund `require(refundTip >= 0)`: its only use is `outputs[self].value + refundTip >= carriers`; a negative value
-//    only raises what the maker must receive (the keeper's take is bounded above by refundTip), never lowers it.
-//  - the side rule of the evidence (the order's own counterparties as evidence, NC26 / NC35): held by the template
-//    authentication and the identity check (EVHASH, EVP2SH, EVTPL hold; EVID flips NC35).
-//  - fill `require(tScale > 0)` (AUD-NP, both scales positive as in KobPair): for an ASK tScale is the scale of B, which a
-//    fill does not read (B's scale enters only the evidence, and every evidence order, KobPair included, refuses a
-//    non-positive scale, so the comparison with it fails anyway); for a BID it is the scale of A, the BID twin of NC114
-//    (a hostile field of the maker's own order; no scenario of its own).
+// - The fixed push bytes of a custody state. Every genuine token UTXO has them.
+// - Cancel `require(sb.length == 65)`. `sb[64]` of a shorter signature fails by itself, and a
+//   longer one is no signature.
+// - Refund `require(refundTip >= 0)`. Its only use is
+//   `outputs[self].value + refundTip >= carriers`. A negative value only raises what the maker
+//   must receive, because the keeper's take is bounded above by refundTip. It never lowers it.
+// - The side rule of the evidence (the order's own counterparties as evidence, NC26 / NC35). The
+//   template authentication and the identity check hold it (EVHASH, EVP2SH, EVTPL hold; EVID
+//   flips NC35).
+// - Fill `require(tScale > 0)`. Both scales are positive, as in KobPair.
+//   - For an ASK, tScale is the scale of B, which a fill does not read. B's scale enters only the
+//     evidence, and every evidence order, KobPair included, refuses a non-positive scale, so the
+//     comparison with it fails anyway.
+//   - For a BID, it is the scale of A, the BID twin of NC114. It is a hostile field of the maker's
+//     own order and has no scenario of its own.
 import { del, rep, rx } from '../lib/edits.mjs';
 
 export const suite = {
@@ -52,17 +75,18 @@ const FIL = 'cond_pair_fills';
 const CAR = 'cond_pair_carriers';
 const MISC = 'cond_pair_evidence_misc';
 const DM = 'cond_pair_delivery_modes';
-// AUD-EXT: the evidence of another extension commitment (another kob-tests binary)
+// The evidence of another extension commitment (another kob-tests binary).
 const AUDC = 'audit_pair_sec_tests::aud_ext_cond_pair_refuses_evidence_of_another_extension_commitment';
 
 const both = id => [`${id}a`, `${id}b`];
 
-// anchors for function-scoped rx edits
+// Anchors for function-scoped rx edits.
 const A_EVLEG = '    function evLeg(int ev, bool ask, byte[32] tok, int fam, int sc, byte[32] ext, int tk, byte[32] tokTpl, int tokPre, int tokSuf,';
 const A_RD = '    function rd(int ev, bool ask, bool pair, byte[32] tok, int fam, int sc, byte[32] ext, byte[32] kTpl, int kPre, int kSuf,';
 
-// the custody tk of the ask / pair evidence: a holder UTXO of the token's program. tplState without the template-hash
-// check (P2SH kept) / without the P2SH check (template hash kept), called for tk only (lib/touch.mjs NO_HASH / NO_P2SH)
+// The custody tk of the ask / pair evidence is a holder UTXO of the token's program. These are
+// tplState without the template-hash check (P2SH kept) and without the P2SH check (template hash
+// kept), called for tk only (lib/touch.mjs NO_HASH / NO_P2SH).
 const TPL_END = '        return rs.slice(pre, pre + stLen);\n    }\n';
 const NO_HASH = `
     function tplStateNoHash(int idx, int pre, int stLen, int suf) : byte[] {
@@ -84,7 +108,7 @@ const NO_P2SH = `
 `;
 const tkNoHash = a => [rep(TPL_END, TPL_END + NO_HASH), rx(a, /tplState\(tk, ([^,]+), ([^,]+), ([^,]+), [^)]+\)/, m => `tplStateNoHash(tk, ${m[1]}, ${m[2]}, ${m[3]})`)];
 const tkNoP2sh = a => [rep(TPL_END, TPL_END + NO_P2SH), rx(a, /tplState\(tk, /, 'tplStateNoP2sh(tk, ')];
-// the owner / covenant-marker comparison of the custody state read
+// The owner / covenant-marker comparison of the custody state read.
 const OWNER = /require\(cs\.slice\(ow, ow \+ 32 \+ mark\.length\) == byte\[\]\(OpInputCovenantId\(ev\)\) \+ mark\);/;
 
 const A_TRAIL = '            bool cap = true;\n            if (trail) {';
@@ -99,8 +123,9 @@ export const mutations = [
   { id: 'G1', file: F, run: { [SET]: ['NC06a', 'NC06b', 'NC08a', 'NC08b'], [UP]: ['NC76'] }, note: 'no S input owned by this id but the custody (fill, refund; the update spends none)', edits: [del('        noStrays(sCovId, selfId, cust, sOff);\n')] },
   { id: 'G2', file: F, run: { [SET]: ['NC07a', 'NC07b', 'NC09a', 'NC09b'], [UP]: ['NC77'] }, note: 'no T input owned by this id', edits: [del('        noStrays(tCovId, selfId, tc, tOff);\n')] },
   { id: 'G3', file: F, test: UP, expect: ['NC76'], note: 'an update spends no S input of the order (cust = -1 so the custody is not exempted)', edits: [rep('        if (update) { cust = 0 - 1; }', '        if (update) { cust = custIn; }')] },
-  // the unrolled scan slot by slot (one shared function: the T scan of a TP fill witnesses each line), and its bound (a 9th
-  // input of a KCC-20 token is beyond the scan; the token program refuses it on its own input, so only the order flips)
+  // The unrolled scan slot by slot, and its bound. One shared function serves both, so the T scan
+  // of a TP fill witnesses each line. A 9th input of a KCC-20 token is beyond the scan. The token
+  // program refuses it on its own input, so only the order flips.
   ...[0, 1, 2, 3, 4, 5, 6, 7].map(k => ({ id: `GS${k}`, file: F, test: SET, expect: [`NC18t${k}`], note: `noStrays scan slot ${k}: a stray of the order at the input of slot ${k} of its token`, edits: [rep(`require(byte[32](OpTxInputScriptSigSubstr(x${k}, e${k}, e${k} + 32)) != me);`, 'require(true);')] })),
   { id: 'GB', file: F, test: SET, expect: ['NC19t'], inputOnly: ['NC19t'], note: 'noStrays bound: at most MAX_TOK_IN = 8 inputs of the token (a 9th is not scanned; the KCC-20 program refuses it on its own input)', edits: [del('        require(cnt <= MAX_TOK_IN);\n')] },
   // ---- settlement (leg fill)
@@ -115,9 +140,10 @@ export const mutations = [
   { id: 'O3', file: F, test: SET, expect: both('NC13'), note: "the maker's token output at i is pinned (delivery / profit; the pin is now split: this is the T pin, the BID exit's S profit pin under dS is a separate check)", edits: [del('                require(tx.outputs[dIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(\n                    tr.slice(0, tPre) + dSt + tr.slice(tPre + tLen, tr.length)\n                )));\n')] },
   { id: 'O4', file: F, test: SET, expect: both('NC14'), note: "the maker's token output carries its token covenant (split like O3: this is the T delivery's)", edits: [del('                require(OpOutputCovenantId(dIdx) == tCovId);\n')] },
   { id: 'K1', file: F, test: SET, expect: both('NC10'), note: 'one continuation on a partial fill', edits: [rx('        if (cont) {', /require\(OpCovOutputCount\(selfId\) == 1\);/, 'require(true);')] },
-  // ---- evidence. rd reads the A leg (mode 0) and the pair order (mode 1); evLeg reads the B leg (mode 0); tplState
-  // authenticates both. Scenarios that doctor the evidence order's own state also fail that order's input (inputOnly):
-  // the proof is the conditional's own input.
+  // ---- evidence
+  // rd reads the A leg (mode 0) and the pair order (mode 1). evLeg reads the B leg (mode 0).
+  // tplState authenticates both. Scenarios that doctor the evidence order's own state also fail
+  // that order's input (inputOnly), because the proof is the conditional's own input.
   // rd (A leg / pair order)
   { id: 'EVPUSH', file: F, run: { [EV0]: both('NC2C'), [EV1]: both('NC3C') }, note: 'rd: the evidence sigscript starts with the 8-byte fill push (a cancel ground to read as a fill)', edits: [rx(A_RD, /require\(OpTxInputScriptSigSubstr\(ev, 0, 1\) == byte\[\]\(0x08\)\);/, 'require(true);')] },
   { id: 'EVN', file: F, run: { [EV0]: both('NC20'), [EV1]: both('NC30') }, inputOnly: [...both('NC20'), ...both('NC30')], note: 'rd: the evidence is filled (n > 0)', edits: [rx(A_RD, /require\(n > 0\);/, 'require(true);')] },
@@ -130,15 +156,18 @@ export const mutations = [
   { id: 'EVTKDAA', file: F, test: EXP, expect: ['NC51a'], note: "rd: the ask evidence's custody DAA exposure term", edits: [rx(A_RD, /int td = OpTxInputDaaScore\(tk\);/, 'int td = 0;')] },
   { id: 'EVTK', file: F, test: 'cond_pair_evidence_tk', expect: ['NC59a'], note: "rd: the ask evidence's custody is a token input of its token", edits: [rx(A_RD, /require\(OpInputCovenantId\(tk\) == cTok\);/, 'require(true);')] },
   { id: 'EVTKOWN', file: F, test: EXP, expect: ['NC57a'], note: "rd: the ask evidence's custody is owned by the evidence ask (covenant marker)", edits: [rx(A_RD, OWNER, 'require(true);')] },
-  // the custody is a holder UTXO of the token's program: the real custody fresh, tk named at an OLD stand-in carrying the
-  // token's covenant id that reads the evidence as owner (NC5H / NC3H a look-alike holder of another program, NC5S / NC3S
-  // the genuine holder redeem on a non-P2SH input; mode 0 the A ask, mode 1 the pair order's custody). The evidence
-  // order's own stray guard and the token program refuse the stand-in at their inputs: inputOnly.
+  // The custody is a holder UTXO of the token's program. The attacks name tk at an OLD stand-in
+  // that carries the token's covenant id and reads the evidence as owner.
+  // - NC5H / NC3H: a look-alike holder of another program.
+  // - NC5S / NC3S: the genuine holder redeem on a non-P2SH input.
+  // Mode 0 is the A ask, mode 1 the pair order's custody. The real custody is used fresh. The
+  // evidence order's own stray guard and the token program refuse the stand-in at their inputs:
+  // inputOnly.
   { id: 'EVTKTPL', file: F, test: EXP, expect: ['NC5Ha', 'NC3Ha', 'NC3Hb'], inputOnly: ['NC5Ha', 'NC3Ha', 'NC3Hb'], note: "rd: the ask / pair evidence's custody is a holder of the token's program (template hash; P2SH kept): an old look-alike holder of another program refused", edits: tkNoHash(A_RD) },
   { id: 'EVTKP2SH', file: F, test: EXP, expect: ['NC5Sa', 'NC3Sa', 'NC3Sb'], inputOnly: ['NC5Sa', 'NC3Sa', 'NC3Sb'], note: "rd: the ask / pair evidence's custody is the P2SH of the holder redeem it shows (template hash kept): an old non-P2SH input with the genuine redeem refused", edits: tkNoP2sh(A_RD) },
-  // AUD-EXT (closed by the template version after the audit): the evidence trades the order's commitments. The attacks
-  // (audit_pair_sec_tests, NAUD-EXT-C<mode><side>[B]) move every unit of A (or of B) to another commitment next to an
-  // arm update: without the check every input accepts them.
+  // The evidence trades the order's commitments. The attacks (audit_pair_sec_tests,
+  // NAUD-EXT-C<mode><side>[B]) move every unit of A (or of B) to another commitment next to an arm
+  // update. Without the check every input accepts them.
   { id: 'EVEXT', file: F, test: AUDC, expect: ['NAUD-EXT-C0b'], note: "rd: a KCC-20 KAS-book bid of A names A's commitment (its extensionCommitment, read with its scale)", edits: [rx(A_RD, /byte\[\] got = o\.slice\(34, 66\) \+ o\.slice\(118, 126 \+ d\);/, 'byte[] got = o.slice(34, 66) + o.slice(118, 126 + d);\n        if (!ask && fam != FAM_KRON) { got = o.slice(34, 66) + byte[](ext) + o.slice(150, 159); }')] },
   { id: 'EVCEXT', file: F, test: AUDC, expect: ['NAUD-EXT-C0a', 'NAUD-EXT-C1a', 'NAUD-EXT-C1bB'], note: "rd: a KCC-20 custody of the ask / pair evidence is of its token's commitment (mode 0 the A ask; mode 1 the pair order's S)", edits: [rx(A_RD, /if \(cFam != FAM_KRON\) \{ require\(byte\[32\]\(cs\.slice\(80, 112\)\) == cExt\); \}/, '')] },
   { id: 'EVTEXT', file: F, test: AUDC, expect: ['NAUD-EXT-C1aB', 'NAUD-EXT-C1b'], note: "rd: the pair evidence's tExt is the commitment of its T (B of a pair ASK, A of a pair BID)", edits: [rx(A_RD, /\+ byte\[\]\(tI\) \+ byte\[\]\(tE\)\n\s*\+ byte\[\]\(0x08\)/, '+ byte[](tI) + byte[](0x08)'), rx(A_RD, /o\.slice\(238, 279\)/, 'o.slice(270, 279)')] },
@@ -162,11 +191,12 @@ export const mutations = [
   // tplState (both readers)
   { id: 'EVHASH', file: F, run: { [EXP]: ['NC58'] }, hold: { [EV0]: both('NC26'), [EXP]: ['NC54', 'NC55', 'NC56'] }, note: 'the evidence template hash (a look-alike P2SH redeem; the wrong side and a wrong input are also refused by the P2SH check or the fill push)', edits: [rx('    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {', /require\(blake3\([\s\S]*?\) == tpl\);/, 'require(true);')] },
   { id: 'EVP2SH', file: F, run: { [EXP]: ['NC5P'] }, hold: { [EV0]: both('NC26'), [EXP]: ['NC54', 'NC55', 'NC56'] }, note: 'the evidence is a P2SH spend of the redeem it shows (a planted UTXO with genuine redeem bytes)', edits: [rx('    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {', /require\(tx\.inputs\[idx\]\.scriptPubKey == byte\[\]\(new ScriptPubKeyP2SHFromRedeemScript\(rs\)\)\);/, 'require(true);')] },
-  // the implied-rate comparison (arm and trailing validity)
+  // The implied-rate comparison (arm and trailing validity).
   { id: 'EVARM', file: F, run: { [EV1]: both('NC36'), [TR]: both('NC60') }, inputOnly: both('NC36'), note: 'the implied rate reaches the stop / the trail is valid (a >= q hi, a <= q lo)', edits: [rx('            int q = quoteOf(x, b, sB, c);', /if \(hi\) \{\n\s*require\(a >= q\);\n\s*\} else \{\n\s*require\(a <= q\);\n\s*\}/, 'require(true);')] },
   // ---- trailing
   { id: 'TRMAX', file: F, test: TR, expect: both('NC61'), note: 'the trail is maximal (a < q2 hi, a > q2 lo)', edits: [rx('            if (!cap) {', /if \(hi\) \{\n\s*require\(a < q2\);\n\s*\} else \{\n\s*require\(a > q2\);\n\s*\}/, 'require(true);')] },
-  // the same comparisons one branch at a time: hi (the A leg is a bid: arm a buy stop, trail a sell stop) and lo
+  // The same comparisons one branch at a time. The branches are hi and lo. In hi the A leg is a
+  // bid: arm a buy stop, trail a sell stop.
   { id: 'EVARMH', file: F, run: { [EV1]: ['NC36b'], [TR]: ['NC60a'] }, inputOnly: ['NC36b'], note: 'hi branch: a buy stop arms only at a rate >= its stop; a sell stop trails only to a valid stop', edits: [rep('require(a >= q);', 'require(true);')] },
   { id: 'EVARML', file: F, run: { [EV1]: ['NC36a'], [TR]: ['NC60b'] }, inputOnly: ['NC36a'], note: 'lo branch: a sell stop arms only at a rate <= its stop; a buy stop trails only to a valid stop', edits: [rep('require(a <= q);', 'require(true);')] },
   { id: 'TRMAXH', file: F, test: TR, expect: ['NC61a'], note: 'hi branch: a sell stop trails maximally', edits: [rep('require(a < q2);', 'require(true);')] },
@@ -238,7 +268,7 @@ export const mutations = [
   { id: 'K7', file: F, test: CAR, expect: ['NC136b'], note: 'done with a return: the maker gets the order value but the tip (now one `>= keep` check after the outAmount branch, shared with K8; removed here only for outAmount > 0)', edits: [rep('                        require(tx.outputs[self].value >= keep);\n', '                        if (outAmount == 0) { require(tx.outputs[self].value >= keep); }\n')] },
   { id: 'K8', file: F, test: CAR, expect: both('NC137'), note: 'sold out: every carrier back to the maker but the tip (now one `>= keep` check after the outAmount branch, shared with K7; removed here only for outAmount == 0)', edits: [rep('                        require(tx.outputs[self].value >= keep);\n', '                        if (outAmount > 0) { require(tx.outputs[self].value >= keep); }\n')] },
   { id: 'Q7', file: F, test: CAR, expect: ['NC138'], note: 'a rest keeps something in the custody (no continuation with an empty escrow)', edits: [del('                    require(outAmount > 0);\n')] },
-  // ---- evidence mode argument, the B quote, trailing gap / step
+  // ---- evidence mode argument, the B quote, trailing gap and step
   { id: 'EVMODE', file: F, test: MISC, expect: ['NC140'], note: 'evMode is 0 or 1', edits: [del('            require(evMode == 1);\n')] },
   { id: 'EVB0', file: F, test: MISC, expect: ['NC141'], inputOnly: ['NC141'], note: 'the B quote is positive (a buy stop would arm on any B ask at 0)', edits: [del('        require(b > 0);\n')] },
   { id: 'TRGAP', file: F, test: MISC, expect: ['NC143'], note: 'trailGap >= 0 (hostile field: a sell stop would trail above the rate)', edits: [rx(A_TRAIL, /require\(trailGap >= 0\);/, 'require(true);')] },
@@ -246,12 +276,13 @@ export const mutations = [
   { id: 'TRX', file: F, hold: { [MISC]: ['NC145'] }, note: "a buy stop's s' - gap >= 0: defence in depth (a negative x makes the validity a <= floor(x * b / sB) fail)", edits: [rx(A_TRAIL, /require\(x >= 0\);/, 'require(true);')] },
 ];
 mutations.push(
-  // both template checks of the evidence removed: the order's own counterparties (wrong side) and the order / a token
-  // input / a P2PK input named as evidence
+  // Both template checks of the evidence removed. The evidence is the order's own counterparties
+  // (wrong side), the order, a token input or a P2PK input.
   { id: 'EVTPL', file: F, hold: { [EV0]: both('NC26'), [EXP]: ['NC54', 'NC55', 'NC56'] }, note: 'evidence template hash and P2SH both removed: the wrong side (the order own counterparties) and the order / a token / a P2PK input are still refused (state read at the other template offsets fails the token / scale identity; the fill push refuses token / P2PK inputs)', edits: [rx('    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {', /require\(tx\.inputs\[idx\]\.scriptPubKey == byte\[\]\(new ScriptPubKeyP2SHFromRedeemScript\(rs\)\)\);\n\s*require\(blake3\([\s\S]*?\) == tpl\);/, 'require(true);')] },
 );
 
-// delivery modes (docs/design/bid-delivery-spec.md; WP-C3): a booked exit re-arming fill delivers in mode 0
+// Delivery modes (docs/design/bid-delivery-spec.md). A booked exit's re-arming fill delivers in
+// mode 0.
 mutations.push(
   { id: "DM-CP1", file: F, test: DM, expect: ["yNM82"], inputOnly: ["yNM82"], note: "a re-arming fill (the entry present) is mode 0", edits: [rep("                        rearm = true;\n                        require(mode == 0);\n", "                        rearm = true;\n")] },
   { id: "DM-CP2", file: F, test: "cond_pair_second_topup", expect: ["aNM20","bNM20"], note: "mode 2 top-up: output i is the receive UTXO's successor (DLV-07: a second order claims the receive UTXO another order tops up)", edits: [del("                            require(OpAuthOutputIdx(tTplIn, 0) == self);\n")] },

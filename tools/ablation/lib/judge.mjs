@@ -4,7 +4,10 @@ import { idState, idOf, programsOf } from './parse.mjs';
 const short = n => (n === '' ? '' : n.replace(/^kron_token_/, '').replace(/\.bin$/, ''));
 const at = s => (s.name === '' ? '' : `@${short(s.name)}`);
 
-/** Common sanity of a run: the right number of template sections, the test really ran, no panic. Returns problem strings. */
+/**
+ * Checks the sanity of a run. The template sections must be the right number, the test must have
+ * run and there must be no panic. Returns problem strings.
+ */
 function runProblems(suite, run) {
   const p = run.parsed;
   const out = [];
@@ -18,9 +21,11 @@ function runProblems(suite, run) {
 }
 
 /**
+ * Judges the runs of one mutation and returns its verdict.
+ *
  * @param suite  suite config
  * @param mut    normalized mutation
- * @param runs   [{ testFn, expect, parsed, code, signal, timedOut }] one per test function of the mutation
+ * @param runs   [{ testFn, expect, parsed, code, signal, timedOut }], one per test function
  */
 export function judgeMutation(suite, mut, runs) {
   const why = [];
@@ -28,7 +33,8 @@ export function judgeMutation(suite, mut, runs) {
   const posFails = new Set();
   const collateral = new Set();
   const notes = [];
-  // the token programs the verdict was seen on: the names of the flipped expected scenarios and of the held ones
+  // The token programs the verdict was seen on. These are the names of the flipped expected
+  // scenarios and of the held ones.
   const programs = new Set();
   for (const run of runs) {
     const expect = new Set([...run.expect, ...run.hold]);
@@ -53,7 +59,8 @@ export function judgeMutation(suite, mut, runs) {
         if (st !== 'rejected') why.push(`${id}${at(s)}: ${st === 'absent' ? 'not reached' : 'flipped (' + st + ')'}, expected to stay rejected`);
       }
     }
-    // Problems (panic, missing section) only matter when they explain a missing verdict or when they hide a scenario.
+    // Problems (panic, missing section) only matter when they explain a missing verdict or when
+    // they hide a scenario.
     const missing = why.length > 0 || run.parsed.sections.length !== suite.expectedTemplates;
     if (problems.length) (missing ? why : notes).push(`${run.testFn}: ${problems.join('; ')}`);
   }
@@ -63,7 +70,10 @@ export function judgeMutation(suite, mut, runs) {
   return { status, why, notes, flipped, collateral: [...collateral], posFails: [...posFails], programs: [...programs].sort() };
 }
 
-/** Baseline (no mutation): zero ABLATION-PASS / ABLATION-POS-FAIL, clean exit, every expected attack reached and rejected. */
+/**
+ * Judges a baseline run (no mutation). The baseline is clean when there is no ABLATION-PASS or
+ * ABLATION-POS-FAIL, the exit is clean, and every expected attack was reached and rejected.
+ */
 export function judgeBaseline(suite, run, expectIds) {
   const why = [];
   const p = run.parsed;

@@ -1,24 +1,34 @@
 #!/usr/bin/env node
-// Catalog coverage: which `require` lines of the mutated templates no catalog mutation deletes or changes.
+// Catalog coverage. Lists the `require` lines of the mutated templates that no catalog mutation
+// deletes or changes.
 //
-//   node tools/ablation/coverage.mjs [--suite a,b|all] [--file REGEX] [--summary] [--root REPO] [--results FILE,FILE [--program NAME]]
+//   node tools/ablation/coverage.mjs [--suite a,b|all] [--file REGEX] [--summary] [--root REPO]
+//        [--results FILE,FILE [--program NAME]]
 //
-// A require line (the line of a statement's `require(`) counts as covered when at least one mutation of any selected
-// catalog (its `edits` on `file`, or an `also` part on that contract) deletes or changes that very line. Changed lines
-// are found with an exact LCS line diff of the committed source (line endings normalised to LF) against the mutated
-// text, so a line between two edits of a multi-edit mutation is covered only when it is itself changed. A covered line is
-// not necessarily confirmed: run the mutation (ablate.mjs) for that. Templates are grouped by contract name; a contract
-// mutated by several suites (KobAsk in kcc20-sell, its evidence role in other suites) collects the mutations of all of
-// them. Commented-out lines are ignored.
+// A require line is the line of a statement's `require(`. It counts as covered when at least one
+// mutation of any selected catalog deletes or changes that very line. The mutation is either an
+// `edits` entry on `file` or an `also` part on that contract.
 //
-// --results: only the mutations that some of these ablate.mjs `results.json` files report as CONFIRMED or HELD count, so
-// a covered line is a confirmed one on the runs those files record (e.g. the runs on the public-mint program, audit
-// AUD-PM: the uncovered lines must then be exactly the documented ones of the static check). With --program, a mutation
-// counts only when its verdict was seen on that token program (`programs` of the result: the program names printed with
-// its flipped, or for a hold its rejected, scenarios), e.g. `--program KCC20PublicMint`.
+// Changed lines come from an exact LCS line diff of the committed source against the mutated text.
+// Line endings are normalised to LF. A line between two edits of a multi-edit mutation is covered
+// only when it is itself changed. A covered line is not necessarily confirmed. Run the mutation
+// (ablate.mjs) for that.
 //
-// Output: per template the number of require lines and the uncovered ones (line number and text); --summary prints the
-// counts only. Exit code 0 (the list is informational: the catalogs document the unwitnessable checks in their header).
+// Templates are grouped by contract name. A contract mutated by several suites collects the
+// mutations of all of them. KobAsk in kcc20-sell and its evidence role in other suites are an
+// example. Commented-out lines are ignored.
+//
+// --results: only mutations that one of these ablate.mjs `results.json` files reports as CONFIRMED
+// or HELD count. A covered line is then a confirmed one on the runs those files record. On the
+// public-mint program the uncovered lines must be exactly the documented ones of the static check.
+//
+// --program: a mutation counts only when its verdict was seen on that token program, for example
+// `--program KCC20PublicMint`. The `programs` field of the result holds the program names printed
+// with the flipped scenarios, or with the rejected scenarios for a hold.
+//
+// Output: per template, the number of require lines and the uncovered ones (line number and text).
+// --summary prints the counts only. The exit code is 0 because the list is informational. The
+// catalogs document the unwitnessable checks in their header.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,7 +49,8 @@ const fileRe = opt('--file') ? new RegExp(opt('--file')) : null;
 const summary = argv.includes('--summary');
 const program = opt('--program') ?? null;
 if (program && !opt('--results')) throw new Error('--program needs --results');
-// suite:id of every mutation the given results files confirm (CONFIRMED) or hold (HELD); null = every mutation counts
+// The suite:id of every mutation that the given results files confirm (CONFIRMED) or hold (HELD).
+// null means every mutation counts.
 let witnessed = null;
 if (opt('--results')) {
   witnessed = new Set();

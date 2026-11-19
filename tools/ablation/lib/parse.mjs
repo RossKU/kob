@@ -1,14 +1,21 @@
 // Parser for the output of one ablation-mode test run (`--nocapture`, KOB_ABLATION=1).
 //
-// Lines of interest (printed by the harness in crates/kob-tests/tests):
-//   === KRON template <file>                                  section marker (KRON suites loop over both pinned templates)
-//   ABLATION-PASS <scenario name> all_inputs_ok=<bool>         an attack scenario was ACCEPTED (run_bad in ablation mode)
-//   ABLATION-POS-FAIL <scenario name> (...)                    a positive scenario was rejected (every suite)
-//   NEGATIVE <scenario name>  [REJECTED ...]                   an attack scenario was rejected (normal outcome)
-// A scenario id is the first whitespace-delimited token of the scenario name. The rest of a verdict line names the token
-// program(s) the scenario ran on: the pair tag `<A>+<B>` of the pair suites, `@<program>` of the KCC-20 KAS-kind suites.
+// Lines of interest, printed by the harness in crates/kob-tests/tests:
+//
+//   === KRON template <file>
+//       Section marker. The KRON suites loop over both pinned templates.
+//   ABLATION-PASS <scenario name> all_inputs_ok=<bool>
+//       An attack scenario was ACCEPTED (run_bad in ablation mode).
+//   ABLATION-POS-FAIL <scenario name> (...)
+//       A positive scenario was rejected (every suite).
+//   NEGATIVE <scenario name>  [REJECTED ...]
+//       An attack scenario was rejected (the normal outcome).
+//
+// A scenario id is the first whitespace-delimited token of the scenario name. The rest of a verdict
+// line names the token program or programs the scenario ran on. The pair suites print the pair tag
+// `<A>+<B>`. The KCC-20 KAS-kind suites print `@<program>`.
 
-/** Token program names in a scenario line (KCC-20 programs, the launchpad programs, KRON token programs). */
+/** Token program names in a scenario line (KCC-20, launchpad and KRON token programs). */
 export const programsOf = name => [...name.matchAll(/\b(KCC20\w*|KaspaRocketToken\d+|KForgeToken\d+|KronToken\d+)\b/g)].map(m => m[1]);
 
 export const idOf = name => name.trim().split(/\s+/)[0];
@@ -16,9 +23,12 @@ export const idOf = name => name.trim().split(/\s+/)[0];
 export const shortTemplate = name => name.replace(/^kron_token_/, '').replace(/\.bin$/, '');
 
 /**
+ * Parses the output of one test run into template sections.
+ *
  * @param {string} stdout   test stdout
  * @param {string} stderr   test stderr (panic messages, compiler errors)
- * @param {RegExp|null} marker  suite.templateMarker (capture group 1 = section name) or null for single-section suites
+ * @param {RegExp|null} marker  suite.templateMarker (group 1 = section name), or null when the
+ *   suite has a single section
  */
 export function parseOutput(stdout, stderr, marker) {
   const sections = [];
@@ -29,7 +39,7 @@ export function parseOutput(stdout, stderr, marker) {
   };
   let cur = marker ? null : newSection('');
   for (const raw of stdout.split('\n')) {
-    // --nocapture leaves libtest's "test <name> ... " in front of the first line the test prints
+    // --nocapture leaves libtest's "test <name> ... " in front of the first line the test prints.
     const line = raw.replace(/\r$/, '').replace(/^test \S+ \.\.\. /, '');
     if (marker) {
       const t = marker.exec(line);

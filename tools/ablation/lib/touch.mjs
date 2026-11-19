@@ -1,28 +1,42 @@
-// Touch-trigger (v2.6) mutations shared by the four order catalogs. Every conditional order / stop entry
-// reads its trigger evidence in one of three functions: touchAsk(ev, tk), touchBid(ev) or touch(ev, tk)
-// (KobCondAsk / KobCondBid update, either side). The same checks appear in each (the KRON twins differ only
-// in byte offsets and the custody owner encoding), so one generator emits one mutation per check, scoped to
-// the function by its header (rx: from the header to the next entry / function declaration).
+// Touch-trigger mutations shared by the four order catalogs.
+//
+// Every conditional order and stop entry reads its trigger evidence in one of three functions:
+// touchAsk(ev, tk), touchBid(ev) or touch(ev, tk). They are the update paths of KobCondAsk and
+// KobCondBid, on either side. The same checks appear in each. The KRON twins differ only in byte
+// offsets and in the custody owner encoding. One generator therefore emits one mutation per check,
+// scoped to the function by its header (rx: from the header to the next entry / function
+// declaration).
 //
 //   touchMutations({ prefix, file, fn, runs, notes })
 //     prefix  id prefix, e.g. 'TA' -> TA-push08, TA-npos, ...
 //     file    contract (.sil name)
 //     fn      the function header line, e.g. 'function touchAsk(int ev, int tk) : int {'
-//     runs    { check: { testFn: [scenario ids] } }; only the checks listed are emitted. A value may also be
-//             { run: {...}, hold: {...}, inputOnly: [...] } for defence-in-depth entries.
+//     runs    { check: { testFn: [scenario ids] } }; only the checks listed are emitted. A value
+//             may also be { run: {...}, hold: {...}, inputOnly: [...] } for defence-in-depth
+//             entries.
 //
-// Checks: push08 (the fill argument is a fixed 8-byte push), npos (n > 0), tpl (template hash of the evidence),
-// p2sh (the evidence UTXO is the P2SH of that redeem script), token, scale (the evidence quotes per the same scale),
-// mintouch (n >= minTouch base units),
-// slope (== 0), cltv (tx.daa >= exposed + minRestDaa), interval / active / tokdaa (the three exposure terms),
-// tkcov (the custody carries the token's covenant id), owner (the custody is owned by the evidence ask, scheme
-// covenant id), tktpl / tkp2sh (the custody is a holder UTXO of the token's program: template hash, P2SH; the other kept),
-// ext (the custody is of the order's extension commitment), bidext (an evidence bid names the order's extension commitment).
+// Checks:
+// - push08: the fill argument is a fixed 8-byte push.
+// - npos: n > 0.
+// - tpl: the template hash of the evidence.
+// - p2sh: the evidence UTXO is the P2SH of that redeem script.
+// - token: the evidence token.
+// - scale: the evidence quotes per the same scale.
+// - mintouch: n >= minTouch base units.
+// - slope: slope == 0.
+// - cltv: tx.daa >= exposed + minRestDaa.
+// - interval, active, tokdaa: the three exposure terms.
+// - tkcov: the custody carries the token's covenant id.
+// - owner: the custody is owned by the evidence ask, scheme covenant id.
+// - tktpl, tkp2sh: the custody is a holder UTXO of the token's program, by template hash or by
+//   P2SH. The other check is kept.
+// - ext: the custody is of the order's extension commitment.
+// - bidext: an evidence bid names the order's extension commitment.
 import { rep, rx, rxDel } from './edits.mjs';
 
 const TPL_END = '        return rs.slice(pre, pre + stLen);\n    }\n';
 
-// tplState without the template-hash check (P2SH only) and without the P2SH check (template only)
+// tplState without the template-hash check (P2SH only) and without the P2SH check (template only).
 const NO_HASH = `
     function tplStateNoHash(int idx, int pre, int stLen, int suf) : byte[] {
         int size = pre + stLen + suf;

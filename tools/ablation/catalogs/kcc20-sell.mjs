@@ -1,44 +1,66 @@
-// KCC-20 sell-first suite (protocol v3: amounts in base units, prices per whole token): contracts/orders.
-// Ported from ablate.sh; scenario ids follow the current test names (NRP* / NRPB*, formerly NR* / NRB*).
-// Touch trigger: the T*-* entries (lib/touch.mjs generates one per evidence check; see README).
-// Protocol v3 checks (minFill, quoteOf rounding, price >= tip, the repeat merge pushes): the V-* entries, flipped
-// by the V3* scenarios of the v3_* test fns.
+// KCC-20 sell-first suite (amounts in base units, prices per whole token): contracts/orders.
 //
-// Audit completion (2026-10-13): every `require` of KobAsk, KobBid, KobCondAsk and KobIfdBid is an entry below (expect or
-// hold; the AU-* entries and the scenarios NAU-* of the v3_audit_* test fns fill what the earlier entries left open) or one of
-// the checks listed here. The unrolled stray scans have one entry per slot line (AU-A-S<k>, AU-B-S<k>, AU-IB-S<k>: a stray
-// of the order at token slot k on the 8/8 token; AU-CA-S<k> likewise), the scan bounds an
-// input-only entry each (a 9th token input: the KCC-20 program refuses it on its own input, so only the order flips).
-// Planted inputs (NAU-A03 / A04, CA03 / CA04, B13, IB13: a UTXO carrying the token covenant id that no token program
-// created) follow the pair suite's NP25 / NP26: consensus cannot produce them, the orders refuse them anyway.
-// Defence in depth (hold + combined): fill n > 0 and the minFill rule (AU-A-13 / 13x, AU-CA-15 / 15x); the IFD exit
-// script equality and its genesis id, the covenant id being derived from the script (AU-IB-20 / 20x); the exit template
-// hash holds NI4 (also refused by the script equality) and flips NAU-IB34, a look-alike exit template.
+// Scenario ids follow the test names (NRP* / NRPB*).
+//
+// Touch trigger: the T*-* entries. lib/touch.mjs generates one per evidence check (see README).
+//
+// Base-unit checks (minFill, quoteOf rounding, price >= tip, the repeat merge pushes): the V-*
+// entries, flipped by the V3* scenarios of the v3_* test fns.
+//
+// Every `require` of KobAsk, KobBid, KobCondAsk and KobIfdBid is an entry below (expect or hold) or
+// one of the checks listed here. The AU-* entries and the scenarios NAU-* of the v3_audit_* test
+// fns cover what the other entries leave open.
+//
+// The unrolled stray scans have one entry per slot line (AU-A-S<k>, AU-B-S<k>, AU-IB-S<k>, and
+// AU-CA-S<k> likewise). Each is a stray of the order at token slot k on the 8/8 token. The scan
+// bounds have one input-only entry each: a 9th token input. The KCC-20 program refuses it on its
+// own input, so only the order flips.
+//
+// Planted inputs (NAU-A03 / A04, CA03 / CA04, B13, IB13) are UTXOs that carry the token covenant id
+// and that no token program created. They follow the pair suite's NP25 / NP26. Consensus cannot
+// produce them and the orders refuse them anyway.
+//
+// Defence in depth (hold + combined):
+// - fill n > 0 and the minFill rule (AU-A-13 / 13x, AU-CA-15 / 15x);
+// - the IFD exit script equality and its genesis id, the covenant id being derived from the script
+//   (AU-IB-20 / 20x);
+// - the exit template hash. It holds NI4 (also refused by the script equality) and flips NAU-IB34,
+//   a look-alike exit template.
 //
 // Checks without a witness attack (not in the catalog):
-//  - cancel `require(sb.length == 65)` (KobAsk, KobBid, KobCondAsk, KobIfdBid): `sb[64]` of a shorter signature fails on its
-//    own, a longer one is no Schnorr signature for checkSig.
-//  - refund `require(refundTip >= 0)` (KobAsk, KobBid, KobCondAsk, KobIfdBid): its only use is
-//    `tx.outputs[self].value + refundTip >= <carriers / escrow>`, so a negative refundTip only raises what the maker must
-//    receive; no transaction becomes acceptable when the check is removed.
-//  - KobCondAsk update `require(side == SIDE_BID)`: touch() returns SIDE_ASK or SIDE_BID only (SIDE_BID unless tk >= 0), so
-//    the else branch of `side == SIDE_ASK` always has side == SIDE_BID.
-//  - KobBid delivery modes (DM-* entries; docs/design/bid-delivery-spec.md). Without an attack of their own:
-//    `require(topupTip >= 0)` (a negative tip only makes the filler add KAS to the escrow); `require(have >= 0)` (a negative
-//    amount would only shrink the maker's receive UTXO before the gain; the token program keeps amounts non-negative);
-//    isCustody's P2SH line (a planted non-P2SH look-alike custody, which consensus cannot produce, could only add tokens to
-//    the order: the real custody is then a stray and every other UTXO of the id is refused); `require(rem + onDelivery >=
-//    0)` (given reserve >= 0, rem >= -released, and with onDelivery 0 the token program keeps the continued UTXO's KAS;
-//    with a negative reserve it is the second check of AU-B-7 / AU-B-7x); in the top-up
-//    branch `total = have + n`, `haveKas = ...`, `onDelivery = 0` and `mid = rst.slice(42, 79)` (the token program's borrow
-//    path pins the successor's state, gain and KAS; removing them only makes honest top-ups fail); `onDelivery = 0` of the
-//    custody branch and the noStrays exclusion `x_k != custody` (removing them only refuses honest fills); BOUGHT_AT (a
-//    wrong window breaks every honest continuation; the window is asserted by modes_budgets_and_layout).
-//  - KobBid refundTo aliasing guard (the BR-B-* entries below flip its `require(ci == tokenCovId || ci == ZERO32)` as a
-//    whole, scenarios BR37 / BR38). Its two halves and the `if (r < tx.inputs.length)` condition have no attack of their
-//    own: dropping either half of the disjunction (or reading OpInputCovenantId(r) at r >= N, where the script fails) only
-//    makes honest fills fail, which the positive controls BR11+ (slot at a token input), BR12+ (plain funding input) and
-//    BR13+ (the ask's custody token input) pin; no transaction becomes acceptable.
+// - Cancel `require(sb.length == 65)` (KobAsk, KobBid, KobCondAsk, KobIfdBid). `sb[64]` of a
+//   shorter signature fails on its own, and a longer one is no Schnorr signature for checkSig.
+// - Refund `require(refundTip >= 0)` (KobAsk, KobBid, KobCondAsk, KobIfdBid). Its only use is
+//   `tx.outputs[self].value + refundTip >= <carriers / escrow>`. A negative refundTip only raises
+//   what the maker must receive, so no transaction becomes acceptable when the check is removed.
+// - KobCondAsk update `require(side == SIDE_BID)`. touch() returns SIDE_ASK or SIDE_BID only
+//   (SIDE_BID unless tk >= 0), so the else branch of `side == SIDE_ASK` always has
+//   side == SIDE_BID.
+// - KobBid delivery modes (DM-* entries; docs/design/bid-delivery-spec.md). These have no attack of
+//   their own:
+//   - `require(topupTip >= 0)`. A negative tip only makes the filler add KAS to the escrow.
+//   - `require(have >= 0)`. A negative amount would only shrink the maker's receive UTXO before
+//     the gain. The token program keeps amounts non-negative.
+//   - isCustody's P2SH line. A planted non-P2SH look-alike custody, which consensus cannot
+//     produce, could only add tokens to the order. The real custody is then a stray and every
+//     other UTXO of the id is refused.
+//   - `require(rem + onDelivery >= 0)`. Given reserve >= 0, rem >= -released, and with onDelivery
+//     0 the token program keeps the continued UTXO's KAS. With a negative reserve it is the second
+//     check of AU-B-7 / AU-B-7x.
+//   - In the top-up branch, `total = have + n`, `haveKas = ...`, `onDelivery = 0` and
+//     `mid = rst.slice(42, 79)`. The token program's borrow path pins the successor's state, gain
+//     and KAS. Removing them only makes honest top-ups fail.
+//   - `onDelivery = 0` of the custody branch and the noStrays exclusion `x_k != custody`.
+//     Removing them only refuses honest fills.
+//   - BOUGHT_AT. A wrong window breaks every honest continuation. The window is asserted by
+//     modes_budgets_and_layout.
+// - The KobBid refundTo aliasing guard. The BR-B-* entries below flip its
+//   `require(ci == tokenCovId || ci == ZERO32)` as a whole (scenarios BR37 / BR38). Its two halves
+//   and the `if (r < tx.inputs.length)` condition have no attack of their own. Dropping either
+//   half of the disjunction, or reading OpInputCovenantId(r) at r >= N where the script fails,
+//   only makes honest fills fail. The positive controls pin that: BR11+ (slot at a token input),
+//   BR12+ (plain funding input) and BR13+ (the ask's custody token input). No transaction becomes
+//   acceptable.
 import { del, rep, rx, rxDel } from '../lib/edits.mjs';
 import { touchMutations } from '../lib/touch.mjs';
 import { withPublicMint } from '../lib/pm.mjs';
@@ -53,18 +75,19 @@ export const suite = {
 };
 
 const T_RPT = 'v2_repeat_ifd_attacks';
-// AUD-EXT (closed by the template version after the audit): the evidence of another extension commitment, in the
-// audit_pair_sec_tests binary (the KAS-quoted stops on the 8/8, 3/3 and public-mint programs)
+// The evidence of another extension commitment, in the audit_pair_sec_tests binary (the KAS-quoted
+// stops on the 8/8, 3/3 and public-mint programs).
 const T_AUD = 'audit_pair_sec_tests::aud_ext_kas_stops_refuse_evidence_of_another_extension_commitment';
-// touch trigger batteries, one test fn per trigger kind
+// Touch trigger batteries, one test fn per trigger kind.
 const T_SET = 'v2_touch_cond_settle';
 const T_ARM = 'v2_touch_cond_arm';
 const T_TRL = 'v2_touch_cond_trail';
 const T_IF = 'v2_touch_ifd_fill';
 const T_IA = 'v2_touch_ifd_arm';
-// Every touch battery runs on the 8/8 program (the test fns above) and on the reference 3/3 program (the same fn
-// with _3x3). on3x3 adds the 3/3 twin of every battery run of a touchMutations spec, without the scenarios whose
-// shape the 3/3 program refuses (SKIPPED in its output: NTA16 needs 3 token inputs and 4 token outputs).
+// Every touch battery runs on the 8/8 program (the test fns above) and on the reference 3/3
+// program (the same fn with _3x3). on3x3 adds the 3/3 twin of every battery run of a
+// touchMutations spec. It leaves out the scenarios whose shape the 3/3 program refuses (SKIPPED in
+// its output: NTA16 needs 3 token inputs and 4 token outputs).
 const BATTERIES = new Set([T_SET, T_ARM, T_TRL, T_IF, T_IA]);
 const NOT_ON_3x3 = new Set(['NTA16']);
 function with3x3(run) {
@@ -87,13 +110,13 @@ const T_TM = 'v2_negative_trigger_manipulation';
 const T_LC = 'v2_lifecycle_stop_auction_keeper_trailing';
 const T_STRAY = 'v2_lifecycle_stray_custody';
 const T_IFD = 'v2_lifecycle_ifd_stop_entry';
-// protocol v3
+// Test fns for the base-unit checks.
 const T_MIN = 'v3_min_fill';
 const T_RND = 'v3_rounding';
 const T_TIP = 'v3_tip';
 const T_FOK = 'v3_fok';
 const T_MRG = 'v3_merge_push';
-// audit completion (2026-10-13): every require of the four templates
+// Test fns for every require of the four templates.
 const T_AK = 'v2_lifecycle_auctions_and_kill';
 const T_TCE = 'v2_negative_tif_cancel_expiry';
 const T_LIM = 'v2_negative_limits_and_tips';
@@ -104,10 +127,10 @@ const T_AU_CA = 'v3_audit_cond_ask';
 const T_AU_CAS = 'v3_audit_cond_ask_strays';
 const T_AU_IB = 'v3_audit_ifd_bid';
 const T_OI = 'v2_negative_oco_and_ifd';
-// bid refund re-version: a terminal fill returns the KAS beyond deliveryCarrier to the maker (BR scenarios)
+// A terminal fill of the bid returns the KAS beyond deliveryCarrier to the maker (BR scenarios).
 const T_BR = 'v3_bid_refund';
-// KobBid delivery modes (docs/design/bid-delivery-spec.md): the kob_bid_modes_tests binary (DM-* entries, and the KobBid
-// entries above whose check also guards a mode-1 / mode-2 shape)
+// KobBid delivery modes (docs/design/bid-delivery-spec.md): the kob_bid_modes_tests binary (DM-*
+// entries, and the KobBid entries above whose check also guards a mode-1 / mode-2 shape).
 const M_NEG = 'kob_bid_modes_tests::modes_fill_negatives';
 const M_STRAY = 'kob_bid_modes_tests::modes_stray_guard';
 const M_SLOTS = 'kob_bid_modes_tests::modes_stray_guard_slots_8x8';
@@ -282,7 +305,7 @@ export const mutations = withPublicMint([
       rep('            if (newLeft > 0 || rptAmount > 0) {', '            if (newLeft > 0) {'),
     ],
   },
-  // ---- mutation controls (from mutate.sh, KCC-20 auction / keeperTip checks; the harness patching it needed is now KOB_ABLATION mode)
+  // ---- mutation controls (from mutate.sh, KCC-20 auction / keeperTip checks)
   {
     id: 'M2',
     file: 'KobCondAsk',
@@ -299,7 +322,6 @@ export const mutations = withPublicMint([
     note: 'control: keeperTip >= 0 on update',
     edits: [del('require(keeperTip >= 0);')],
   },
-  // ---- fix pass (2026-09-30)
   {
     id: 'FXE1',
     file: 'KobAsk',
@@ -332,7 +354,8 @@ export const mutations = withPublicMint([
     note: "merge: the committed exit (exitState, compared with the exit's state) quotes at the entry's scale (else the exit returns budget(m) at its scale and the entry re-arms m at its own)",
     edits: [del('            require(int(byte[8](st.slice(118, 126))) == scale);\n')],
   },
-  // ---- touch trigger: KobCondAsk touchAsk (stop leg armed inside its fill), touch (update: arm / trail)
+  // ---- touch trigger: KobCondAsk touchAsk (stop leg armed inside its fill) and touch
+  // (update: arm / trail)
   ...touchMutations({
     prefix: 'TA',
     file: 'KobCondAsk',
@@ -353,10 +376,12 @@ export const mutations = withPublicMint([
       tokdaa: { [T_SET]: ['NTA02'] },
       tkcov: { [T_SET]: ['NTA02b'] },
       owner: { [T_SET]: ['NTA15', 'NTA16'] },
-      // the look-alike holder / non-P2SH input is also refused by the evidence ask's stray guard and the token program
+      // The evidence ask's stray guard and the token program also refuse the look-alike holder /
+      // non-P2SH input.
       tktpl: { run: { [T_SET]: ['NTA02c'] }, inputOnly: ['NTA02c'] },
       tkp2sh: { run: { [T_SET]: ['NTA02d'] }, inputOnly: ['NTA02d'] },
-      // AUD-EXT: only the evidence ask and its custody trade the other commitment (the token program refuses the mix)
+      // Only the evidence ask and its custody trade the other commitment (the token program
+      // refuses the mix).
       ext: { run: { [T_AUD]: ['NAUD-EXT-CA3'] }, inputOnly: ['NAUD-EXT-CA3'] },
     }),
   }),
@@ -389,7 +414,8 @@ export const mutations = withPublicMint([
       owner: { [T_ARM]: ['NTU15', 'NTU16'] },
       tktpl: { run: { [T_ARM]: ['NTU02c'] }, inputOnly: ['NTU02c'] },
       tkp2sh: { run: { [T_ARM]: ['NTU02d'] }, inputOnly: ['NTU02d'] },
-      // AUD-EXT: an update next to fills of units of another commitment (every input accepts it without the check)
+      // An update next to fills of units of another commitment. Every input accepts it without
+      // the check.
       ext: { [T_AUD]: ['NAUD-EXT-CA1'] },
       bidext: { [T_AUD]: ['NAUD-EXT-CA2'] },
     }),
@@ -465,7 +491,7 @@ export const mutations = withPublicMint([
       cltv: { [T_IF]: ['NTI01', 'NTI03', 'NTI04'], [T_IA]: ['NTJ01', 'NTJ03', 'NTJ04'] },
       interval: { [T_IF]: ['NTI04'], [T_IA]: ['NTJ04'] },
       active: { [T_IF]: ['NTI03'], [T_IA]: ['NTJ03'] },
-      // AUD-EXT: in the entry's fill only the evidence bid moves (the token program refuses the mix)
+      // In the entry's fill only the evidence bid moves (the token program refuses the mix).
       bidext: { run: { [T_AUD]: ['NAUD-EXT-IB1', 'NAUD-EXT-IB2'] }, inputOnly: ['NAUD-EXT-IB2'] },
     }),
   }),
@@ -506,7 +532,8 @@ export const mutations = withPublicMint([
     note: 'update spends no token input owned by the entry (bounded scan; the evidence fill brings foreign token inputs)',
     edits: [rxDel('    entry update(int ev) {', /^\s*noStrays\(selfId\);$/m)],
   },
-  // ---- update arms only an entry with an amount to buy and its stop on the limit's side; a merge keeps an armed entry's band origin
+  // ---- update arms only an entry with an amount to buy and its stop on the limit's side
+  // A merge keeps an armed entry's band origin.
   {
     id: 'TJ-amount',
     file: 'KobIfdBid',
@@ -532,7 +559,7 @@ export const mutations = withPublicMint([
     edits: [rep('if (armed == 1 && bandDaa > 0) {', 'if (armed == 1 && bandDaa < 0) {')],
   },
 
-  // ================================================================ protocol v3 checks
+  // ============================= base units, rounding, minFill, tip, merge
   // ---- KobAsk
   {
     id: 'V-A-minfill',
@@ -733,8 +760,8 @@ export const mutations = withPublicMint([
     edits: [del('            require(OpTxInputScriptSigSubstr(k, 0, 1) == byte[](0x08));\n')],
   },
 
-  // ================================================================ audit completion (2026-10-13)
-  // ---- KobAsk / KobBid (every require; unwitnessable ones in the header)
+  // ============================= every require of the four templates
+  // ---- KobAsk / KobBid (the unwitnessable ones are in the header)
   { id: "AU-A-1", file: "KobAsk", run: { [T_AU_A]: ["NAU-A03"] }, note: "tplRs: the custody input is the P2SH of the holder script it pushes (a planted UTXO of the token covenant id)", edits: [del("        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));\n")] },
   { id: "AU-A-2", file: "KobAsk", run: { [T_AU_A]: ["NAU-A04"] }, note: "tplRs: the custody's template is the token's (a planted P2SH of a look-alike template)", edits: [del("        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, size)) == tpl);\n")] },
   { id: "AU-A-3", file: "KobAsk", run: { [T_AU_A]: ["NAU-A22"] }, inputOnly: ["NAU-A22"], note: "noStrays bound: at most MAX_TOK_IN = 8 token inputs (a 9th is not scanned; the KCC-20 program refuses a 9th input on its own, so only the ask flips)", edits: [del("        require(cnt <= MAX_TOK_IN);\n")] },
@@ -925,7 +952,9 @@ export const mutations = withPublicMint([
   { id: "AU-IB-45", file: "KobIfdBid", run: { [T_AU_IB]: ["NAU-IB27"] }, note: "refund: no output bound to the entry's id", edits: [rep("        require(OpCovInputCount(tokenCovId) == 0);\n        require(OpCovOutputCount(selfId) == 0);\n", "        require(OpCovInputCount(tokenCovId) == 0);\n")] },
   { id: "AU-IB-46", file: "KobIfdBid", run: { [T_AU_IB]: ["NAU-IB28"] }, note: "refund: output i pays P2PK(maker)", edits: [del("        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));\n")] },
   { id: "AU-IB-47", file: "KobIfdBid", run: { [T_AU_IB]: ["NAU-IB29"] }, note: "refund: the maker gets the escrow minus at most refundTip", edits: [del("        require(tx.outputs[self].value + refundTip >= tx.inputs[self].value);\n")] },
-  // ---- KobBid terminal fill: the maker's refund output (refundTo and the REFUND_MIN branch; the BR* scenarios of v3_bid_refund)
+  // ---- KobBid terminal fill: the maker's refund output
+  // The checks are refundTo and the REFUND_MIN branch. The scenarios are the BR* ones of
+  // v3_bid_refund.
   { id: "BR-B-spk", file: "KobBid", run: { [T_BR]: ["BR21","BR22","BR23","BR25","BR27","BR29","BR32"] }, note: "refundTo: the slot pays P2PK(maker), the destination of refund() (a redirected, P2SH or omitted refund; there the slot holds the taker's change)", edits: [del("        require(tx.outputs[r].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));\n")] },
   { id: "BR-B-value", file: "KobBid", run: { [T_BR]: ["BR24","BR33","BR34"], [T_AK]: ["NM4"], [T_RND]: ["V3B03b"] }, note: "refundTo: the slot holds at least the remainder (one sompi short, an empty or smaller refund at the slot; the market bid charged its bound, spend one sompi above the floor)", edits: [del("        require(tx.outputs[r].value >= rem);\n")] },
   { id: "BR-B-alias", file: "KobBid", run: { [T_BR]: ["BR37","BR38"] }, note: "refundTo aliasing guard: the slot is not the positional output of another order / router input (an ask of the same maker paying its proceeds there, any other covenant input)", edits: [del("            require(ci == tokenCovId || ci == ZERO32);\n")] },
@@ -934,7 +963,8 @@ export const mutations = withPublicMint([
   { id: "BR-B-branch", file: "KobBid", run: { [T_BR]: ["BR25","BR27","BR28"] }, note: "the branch condition flipped (rem < REFUND_MIN): a remainder of REFUND_MIN or more rides on the delivery again, one below it needs the refund layout", edits: [rep("if (rem >= REFUND_MIN) {", "if (rem < REFUND_MIN) {")] },
   { id: "BR-B-above", file: "KobBid", run: { [T_BR]: ["BR27"] }, note: "the boundary moved up (rem > REFUND_MIN): a remainder of exactly REFUND_MIN rides on the delivery", edits: [rep("if (rem >= REFUND_MIN) {", "if (rem > REFUND_MIN) {")] },
   { id: "BR-B-below", file: "KobBid", run: { [T_BR]: ["BR28"] }, note: "the boundary moved down (rem >= REFUND_MIN - 1): a remainder of REFUND_MIN - 1 sompi is split off to the maker and the delivery keeps only the carrier", edits: [rep("if (rem >= REFUND_MIN) {", "if (rem >= REFUND_MIN - 1) {")] },
-  // ---- KobBid delivery modes (docs/design/bid-delivery-spec.md sections 4, 5; scenarios of kob_bid_modes_tests)
+  // ---- KobBid delivery modes (docs/design/bid-delivery-spec.md sections 4, 5)
+  // The scenarios are in kob_bid_modes_tests.
   { id: "DM-1", file: "KobBid", run: { [M_NEG]: ["NS05"] }, note: "fill: bought >= 0 (hostile field: a mode-1 order with bought -5 delivers a custody of n - 5, the seller keeps 5)", edits: [del("        require(bought >= 0);\n")] },
   { id: "DM-2", file: "KobBid", run: { [M_STRAY]: ["NG02","NG03","NG04","NG05"] }, note: "stray guard: only a mode-1 order holding a custody (bought > 0) excludes tokIn from the scan; otherwise a stray of the id named as tokIn rides to the seller", edits: [rep("        if (bought > 0) { cust = tokIn; }\n", "        cust = tokIn;\n")] },
   { id: "DM-3", file: "KobBid", run: { [M_NEG]: ["NS02"] }, note: "mode >= 0 (hostile field: mode -1 would fill as mode 0)", edits: [del("        require(mode >= 0);\n")] },

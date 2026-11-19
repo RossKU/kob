@@ -1,7 +1,13 @@
-// KobCondPair repeat / merge checks (contracts/orders/KobCondPair.sil), the ones a KobIfdPair re-arm (merge) exercises on the
-// EXIT input. Test binary: kob_ifd_pair_tests (the re-arm scenarios). The other KobCondPair checks (plain stop / limit /
-// trailing fills, the evidence battery, strays, custody, non-repeat continuation) are the `cond-pair` catalog of the other
-// suite agent. Scenario ids NCR.. (and the NIX.. merge scenarios of ifd_merge_rules); each runs on both mixed pairs.
+// KobCondPair repeat / merge checks (contracts/orders/KobCondPair.sil).
+//
+// These are the checks that a KobIfdPair re-arm (merge) exercises on the EXIT input. The test
+// binary is kob_ifd_pair_tests (the re-arm scenarios).
+//
+// The other KobCondPair checks are in the `cond-pair` catalog. They are the plain stop / limit /
+// trailing fills, the evidence battery, strays, custody and the non-repeat continuation.
+//
+// Scenario ids are NCR.. and the NIX.. merge scenarios of ifd_merge_rules. Each runs on both mixed
+// pairs.
 import { del, rep, rx } from '../lib/edits.mjs';
 
 export const suite = {
@@ -17,15 +23,16 @@ const F = 'KobCondPair';
 const T = 'cond_rpt_profit';
 const TR = 'cond_rpt_rules';
 const A_UPDATE = '        if (update) {\n            // UPDATE: never next to the repeat entry';
-// the exit's check of the entry's merge push
+// The exit's check of the entry's merge push.
 const PUSH_X = '                    require(int(byte[8](OpTxInputScriptSigSubstr(pin, 1, 9))) == 0 - (self * MERGE_K + n));\n';
-// the S output pin (refund, rest or return)
+// The S output pin (refund, rest or return).
 const S_PIN = `                require(tx.outputs[outIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
                     trs.slice(0, sPre) + tokenState(sFamily, outAmount, outOwner, rest, gx) + trs.slice(sPre + sLen, trs.length)
                 )));
 `;
 
-// the maker's T output pin (an ASK exit's profit is in T; the BID exit's S profit under dS is a separate pin)
+// The maker's T output pin. An ASK exit's profit is in T. The BID exit's S profit under dS is a
+// separate pin.
 const MAKER_DELIVERY = `                require(tx.outputs[dIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
                     tr.slice(0, tPre) + dSt + tr.slice(tPre + tLen, tr.length)
                 )));
@@ -36,7 +43,7 @@ export const mutations = [
   { id: 'CR1', file: F, test: T, expect: ['NCR1'], note: 'a re-arming take-profit pays the maker exactly its profit dOut at output i (ASK exit: tOut - budget). Removing the maker-delivery pin lets the re-arm skim the profit.', edits: [del(MAKER_DELIVERY)] },
   // ---- a booked exit takes profit without its entry only from rptUntil
   { id: 'CR2', file: F, test: 'cond_rpt_until', expect: ['NCRU'], note: 'a booked exit (parent set) takes profit on leg 0 without its entry present only once tx.daa >= rptUntil; before that it must run together with its entry merge', edits: [del('                        require(tx.daa >= rptUntil);\n')] },
-  // ---- completion (p2t_ifd2): the repeat rules of the exit (test fns cond_rpt_rules, ifd_merge_rules)
+  // ---- the repeat rules of the exit (test fns cond_rpt_rules, ifd_merge_rules)
   { id: 'CR3', file: F, test: TR, expect: ['NCR4'], note: 'update: a booked exit is never armed next to its repeat entry (here: next to a fill of the entry)', edits: [rx(A_UPDATE, /require\(OpCovInputCount\(parent\) == 0\);/, '')] },
   { id: 'CR4', file: F, test: TR, expect: ['NCR5'], note: "the stop leg never re-arms: a booked exit's stop fill is refused next to its entry (here its merge: the matcher would fund a re-arm after a stop-loss)", edits: [del('                    require(present == 0);\n')] },
   { id: 'CR6', file: F, test: TR, expect: ['NCR9'], inputOnly: ['NCR9'], note: "the entry's sigscript starts with an 8-byte push (a 9-byte push carrying the merge argument refused; the entry's own byte[8] argument refuses it too)", edits: [del('                    require(OpTxInputScriptSigSubstr(pin, 0, 1) == byte[](0x08));\n')] },
@@ -46,19 +53,30 @@ export const mutations = [
   { id: 'CR9c', file: F, test: TR, expect: ['NCR7'], note: 'outAmount == 0 AND the S-output pins (script, covenant) removed: a look-alike exit holding one A more than its amountLeft sells out and the extra A goes to the matcher', edits: [del('                        require(outAmount == 0);\n'), del(S_PIN), del('                require(OpOutputCovenantId(outIdx) == sCovId);\n')] },
   { id: 'CR10', file: F, test: TR, expect: ['NCR8'], note: "a sold-out re-arm: the maker's profit output carries deliveryCarrier (the rest of the exit's KAS is the entry's)", edits: [rep('                        require(outAmount == 0);\n                        require(tx.outputs[self].value >= deliveryCarrier);\n', '                        require(outAmount == 0);\n')] },
   { id: 'CR11', file: F, test: 'ifd_merge_rules', expect: ['NIX9'], note: "the exit's S stray guard keeps the entry's xc honest: xc named at a genuine A UTXO owned by the exit (with one sompi of KAS) passes the entry's heldGx, only the exit refuses it as a stray (duplicate of cond-pair G1, witnessed by a merge)", edits: [del('        noStrays(sCovId, selfId, cust, sOff);\n')] },
-  // ---- the re-arm's bound n < 2^53: a look-alike exit of 2^53 + m right before the booked exit aliases its merge argument
+  // ---- the re-arm's bound n < 2^53
+  // A look-alike exit of 2^53 + m right before the booked exit aliases its merge argument.
   { id: 'CR12', file: F, test: 'cond_rpt_merge_k', expect: ['NCR10'], note: "re-arm: n < MERGE_K. A look-alike exit (parent = the entry, attacker-funded, KCC-20 A) trading n1 = 2^53 + m at input i reads the entry's merge of the booked exit at i + 1 for m, -((i + 1) * 2^53 + m), as its own -(i * 2^53 + n1) and re-arms without the entry crediting it", edits: [del('                    require(n < MERGE_K);\n')] },
 ];
 
 
-// Coverage of the repeat / merge requires of KobCondPair.settle (the other KobCondPair checks: cond-pair.mjs):
-//  update `OpCovInputCount(parent) == 0` CR3; leg 0 without the entry `tx.daa >= rptUntil` CR2; a stop fill's
-//  `present == 0` CR4; the entry's first push 0x08 CR6; the entry's merge argument CR7 (hold) + ifd-pair IF110c
-//  (combined); `dOut > 0` CR8; the re-arming sell-out's `outAmount == 0` CR9 (hold) + CR9c (combined) and its profit
-//  output's deliveryCarrier CR10; the maker's profit pin CR1. CR11 re-witnesses the exit's S stray guard (cond-pair G1)
-//  through a merge's xc. The re-arm's `n < MERGE_K` CR12: not reachable by a genuine booked exit (KobIfdPair books only
-//  n < 2^53, ifd-pair IF115, and a booked exit's amountLeft only shrinks), witnessed by an attacker-funded look-alike exit
-//  of a KCC-20 A (NCR10, cond_rpt_merge_k, KCC/KRON only: KRON amounts are capped at 10^9) trading 2^53 + m right
-//  before the genuine booked exit trading m, whose merge argument it aliases.
+// Coverage of the repeat / merge requires of KobCondPair.settle. The other KobCondPair checks are
+// in cond-pair.mjs.
+//
+// - update `OpCovInputCount(parent) == 0`: CR3.
+// - leg 0 without the entry `tx.daa >= rptUntil`: CR2.
+// - a stop fill's `present == 0`: CR4.
+// - the entry's first push 0x08: CR6.
+// - the entry's merge argument: CR7 (hold) and ifd-pair IF110c (combined).
+// - `dOut > 0`: CR8.
+// - the re-arming sell-out's `outAmount == 0`: CR9 (hold) and CR9c (combined).
+// - the profit output's deliveryCarrier: CR10.
+// - the maker's profit pin: CR1.
+// - the exit's S stray guard (cond-pair G1), re-witnessed through a merge's xc: CR11.
+//
+// The re-arm's `n < MERGE_K` (CR12) is not reachable by a genuine booked exit. KobIfdPair books
+// only n < 2^53 (ifd-pair IF115) and the amountLeft of a booked exit only shrinks. CR12 is
+// witnessed by an attacker-funded look-alike exit of a KCC-20 A (NCR10, cond_rpt_merge_k). It
+// trades 2^53 + m right before the genuine booked exit trading m, whose merge argument it aliases.
+// The scenario runs on KCC-20 and KRON only, because KRON amounts are capped at 10^9.
 //
 // Not in the catalog: none of the repeat / merge requires.
