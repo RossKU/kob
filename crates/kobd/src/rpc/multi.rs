@@ -1866,6 +1866,15 @@ impl<N: ChainSource> MultiNode<N> {
         (0..self.nodes.len()).find(|&i| i != a && self.specs[i].cross_check)
     }
 
+    /// The origin of an answer of node `k`: the authority's own, or another node's.
+    fn served_by(&self, k: usize) -> Origin {
+        if k == self.board.authority() {
+            Origin { node: k, ..Origin::PRIMARY }
+        } else {
+            Origin { node: k, trusted: false, tier: 0 }
+        }
+    }
+
     /// The nodes other than the authority that are not dropped, in the order of the list.
     fn others(&self) -> Vec<usize> {
         let a = self.board.authority();
@@ -2326,29 +2335,33 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
         self.nodes[0].proves_chain()
     }
     /// From the authority, else from another node: a proof checks itself (`rpc::proof`).
-    async fn lane_proof(&self, block: Hash32, lane: Hash32) -> Result<kaspa_rpc_core::GetSeqCommitLaneProofResponse, RpcError> {
+    async fn lane_proof(
+        &self,
+        block: Hash32,
+        lane: Hash32,
+    ) -> Result<(kaspa_rpc_core::GetSeqCommitLaneProofResponse, Origin), RpcError> {
         let e = match self.primary().lane_proof(block, lane).await {
-            Ok(p) => return Ok(p),
+            Ok((p, _)) => return Ok((p, self.served_by(self.board.authority()))),
             // The block left the authority's chain: the follower fetches the batch again.
             Err(e) if e.left_selected_chain() => return Err(e),
             Err(e) => e,
         };
         for k in self.others() {
-            if let Ok(Ok(p)) = tokio::time::timeout(FALLBACK_ASK_TIMEOUT, self.nodes[k].lane_proof(block, lane)).await {
-                return Ok(p);
+            if let Ok(Ok((p, _))) = tokio::time::timeout(FALLBACK_ASK_TIMEOUT, self.nodes[k].lane_proof(block, lane)).await {
+                return Ok((p, self.served_by(k)));
             }
         }
         Err(e)
     }
     /// From the authority, else from another node: a block checks itself against its hash.
-    async fn block(&self, hash: Hash32, txs: bool) -> Result<Option<kaspa_consensus_core::block::Block>, RpcError> {
+    async fn block(&self, hash: Hash32, txs: bool) -> Result<Option<(kaspa_consensus_core::block::Block, Origin)>, RpcError> {
         let e = match self.primary().block(hash, txs).await {
-            Ok(Some(b)) => return Ok(Some(b)),
+            Ok(Some((b, _))) => return Ok(Some((b, self.served_by(self.board.authority())))),
             r => r,
         };
         for k in self.others() {
-            if let Ok(Ok(Some(b))) = tokio::time::timeout(FALLBACK_ASK_TIMEOUT, self.nodes[k].block(hash, txs)).await {
-                return Ok(Some(b));
+            if let Ok(Ok(Some((b, _)))) = tokio::time::timeout(FALLBACK_ASK_TIMEOUT, self.nodes[k].block(hash, txs)).await {
+                return Ok(Some((b, self.served_by(k))));
             }
         }
         e

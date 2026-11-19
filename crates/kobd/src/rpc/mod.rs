@@ -307,23 +307,25 @@ pub trait ChainSource: Send + Sync + 'static {
             Verbosity::High
         }
     }
-    /// A KIP-21 lane proof of `lane` at the chain block `block` (`getSeqCommitLaneProof`).
+    /// A KIP-21 lane proof of `lane` at the chain block `block` (`getSeqCommitLaneProof`), with
+    /// the node that served it: a proof that fails blames that node.
     fn lane_proof(
         &self,
         block: Hash32,
         lane: Hash32,
-    ) -> impl Future<Output = Result<kaspa_rpc_core::GetSeqCommitLaneProofResponse, RpcError>> + Send {
+    ) -> impl Future<Output = Result<(kaspa_rpc_core::GetSeqCommitLaneProofResponse, Origin), RpcError>> + Send {
         async move {
             let _ = (block, lane);
             Err(RpcError::Node("getSeqCommitLaneProof is not supported by this source".into()))
         }
     }
-    /// A block (`getBlock`), with its transactions when `txs`. `None`: the node does not know it.
+    /// A block (`getBlock`), with its transactions when `txs`, and the node that served it.
+    /// `None`: the node does not know it.
     fn block(
         &self,
         hash: Hash32,
         txs: bool,
-    ) -> impl Future<Output = Result<Option<kaspa_consensus_core::block::Block>, RpcError>> + Send {
+    ) -> impl Future<Output = Result<Option<(kaspa_consensus_core::block::Block, Origin)>, RpcError>> + Send {
         async move {
             let _ = (hash, txs);
             Err(RpcError::Node("getBlock is not supported by this source".into()))
@@ -1062,16 +1064,21 @@ impl ChainSource for WrpcClient {
         probe_calls(self, lane_proofs).await
     }
 
-    async fn lane_proof(&self, block: Hash32, lane: Hash32) -> Result<kaspa_rpc_core::GetSeqCommitLaneProofResponse, RpcError> {
-        self.call("getSeqCommitLaneProof", serde_json::json!({ "blockHash": block.to_hex(), "laneKey": lane.to_hex() })).await
+    async fn lane_proof(
+        &self,
+        block: Hash32,
+        lane: Hash32,
+    ) -> Result<(kaspa_rpc_core::GetSeqCommitLaneProofResponse, Origin), RpcError> {
+        let params = serde_json::json!({ "blockHash": block.to_hex(), "laneKey": lane.to_hex() });
+        self.call("getSeqCommitLaneProof", params).await.map(|p| (p, Origin::PRIMARY))
     }
 
-    async fn block(&self, hash: Hash32, txs: bool) -> Result<Option<kaspa_consensus_core::block::Block>, RpcError> {
+    async fn block(&self, hash: Hash32, txs: bool) -> Result<Option<(kaspa_consensus_core::block::Block, Origin)>, RpcError> {
         let params = serde_json::json!({ "hash": hash.to_hex(), "includeTransactions": txs });
         match self.call::<kaspa_rpc_core::GetBlockResponse>("getBlock", params).await {
-            Ok(r) => {
-                kaspa_consensus_core::block::Block::try_from(r.block).map(Some).map_err(|e| RpcError::Decode(format!("getBlock: {e}")))
-            }
+            Ok(r) => kaspa_consensus_core::block::Block::try_from(r.block)
+                .map(|b| Some((b, Origin::PRIMARY)))
+                .map_err(|e| RpcError::Decode(format!("getBlock: {e}"))),
             // Only "unknown" means it does not know the block. Another node error proves nothing.
             Err(e) if e.is_unknown_block() => Ok(None),
             Err(e) => Err(e),

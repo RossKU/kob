@@ -340,7 +340,7 @@ pub const PROOF_FETCHES: usize = 8;
 
 /// A merged block of a batch: its hash, the chain blocks that accepted its transactions that can
 /// matter to KOB, those transactions, and the block.
-type MergedBlock<'a> = (Hash32, Vec<usize>, Vec<&'a crate::rpc::types::Tx>, kaspa_consensus_core::block::Block);
+type MergedBlock<'a> = (Hash32, Vec<usize>, Vec<&'a crate::rpc::types::Tx>, (kaspa_consensus_core::block::Block, Origin));
 
 /// `ask` of each of `items`, at most `limit` in flight, the answers in the order of `items`.
 ///
@@ -1122,15 +1122,20 @@ impl<S: ChainSource> Follower<S> {
                 });
                 Err(StepOutcome::Gap(msg))
             }
-            Err(ProofError::Refused(why)) => {
-                proof.lock().unwrap_or_else(|e| e.into_inner()).refused(&why);
-                tracing::error!(node = origin.node, reason = %why, "a batch failed its chain proof: refused, nothing applied, the node is backed off from");
-                self.source.chain_refused(origin, &why);
-                let msg = format!("chain proof refused: {why}");
-                self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
-                Err(StepOutcome::Retry(msg))
-            }
+            // The batch's fault, or that of the node that served a proof for it (K-M2).
+            Err(ProofError::Refused(why)) => self.refuse_batch(proof, origin, why),
+            Err(ProofError::BadProof(from, why)) => self.refuse_batch(proof, from, why),
         }
+    }
+
+    /// A batch refused for `why`: the node behind `blamed` is reported.
+    fn refuse_batch(&self, proof: &Mutex<ChainProof>, blamed: Origin, why: String) -> Result<(), StepOutcome> {
+        proof.lock().unwrap_or_else(|e| e.into_inner()).refused(&why);
+        tracing::error!(node = blamed.node, reason = %why, "a batch failed its chain proof: refused, nothing applied, the node is backed off from");
+        self.source.chain_refused(blamed, &why);
+        let msg = format!("chain proof refused: {why}");
+        self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
+        Err(StepOutcome::Retry(msg))
     }
 
     /// A step that gave up on a batch after tip reorgs ([`TIP_REORG`]). The node answered, so the
@@ -1190,15 +1195,13 @@ impl<S: ChainSource> Follower<S> {
             }
         };
         if lock().needs_anchor(&plan) {
-            let block = self
+            let (block, from) = self
                 .source
                 .block(plan.parent, false)
                 .await
                 .map_err(|e| unavailable("the header of the batch's parent", e))?
-                .ok_or_else(|| {
-                ProofError::Refused(format!("the node does not know {}, the parent of its own batch", plan.parent))
-            })?;
-            lock().set_anchor(&plan, &block.header)?;
+                .ok_or_else(|| ProofError::Refused(format!("the node does not know {}, the parent of its own batch", plan.parent)))?;
+            lock().set_anchor(&plan, &block.header, from)?;
         }
         let anchor = lock().anchor().map(|a| a.hash).unwrap_or(plan.parent);
         let unknown = lock().unknown_lanes(&plan);
@@ -1206,8 +1209,9 @@ impl<S: ChainSource> Follower<S> {
             self.source.lane_proof(anchor, Hash32(lane.as_bytes()))
         }));
         for lane in unknown.iter().copied() {
-            let p = asked.next().await.expect("one answer per lane").map_err(|e| unavailable("a lane proof at the cursor", e))?;
-            lock().learn_lane(lane, &p)?;
+            let (p, from) =
+                asked.next().await.expect("one answer per lane").map_err(|e| unavailable("a lane proof at the cursor", e))?;
+            lock().learn_lane(lane, &p, from)?;
         }
         let expected = lock().expected(&plan)?;
         let asks = expected.iter().map(|(lane, _)| self.source.lane_proof(plan.end, Hash32(lane.as_bytes())));
@@ -1236,8 +1240,8 @@ impl<S: ChainSource> Follower<S> {
     ) -> Result<(), ProofError> {
         let (lanes, fetched) = tokio::join!(lanes, self.merged_blocks(raw));
         lanes?;
-        for (m, chain_blocks, txs, block) in fetched? {
-            proof.lock().unwrap_or_else(|e| e.into_inner()).check_merged_block(m, &block, &txs)?;
+        for (m, chain_blocks, txs, (block, from)) in fetched? {
+            proof.lock().unwrap_or_else(|e| e.into_inner()).check_merged_block(m, &block, &txs, from)?;
             // In the merge set of the chain block that accepted it (K-H2).
             for b in chain_blocks {
                 let chain = crate::rpc::proof::consensus_header(&raw.chain_block_accepted_transactions[b].chain_block_header)
@@ -1901,6 +1905,11 @@ mod tests {
             unsynced: std::sync::atomic::AtomicBool,
             /// What the follower told the source of a failing authority.
             failing: Mutex<Vec<String>>,
+            /// Who serves the proofs and blocks, and who was blamed for a refused batch.
+            proof_origin: Mutex<Origin>,
+            blamed: Mutex<Vec<Origin>>,
+            /// Lane proofs that do not give the header's commitment.
+            bad_proofs: std::sync::atomic::AtomicBool,
         }
 
         impl Recorded {
@@ -1978,34 +1987,42 @@ mod tests {
                 &self,
                 block: Hash32,
                 lane: Hash32,
-            ) -> Result<kaspa_rpc_core::GetSeqCommitLaneProofResponse, RpcError> {
+            ) -> Result<(kaspa_rpc_core::GetSeqCommitLaneProofResponse, Origin), RpcError> {
                 self.round_trip().await;
+                let from = *self.proof_origin.lock().unwrap();
                 let p = self
                     .fx
                     .proofs
                     .get(&kaspa_hashes::Hash::from_bytes(lane.0))
                     .ok_or_else(|| RpcError::Node("no such lane".into()))?;
+                let mut p = p.clone();
+                if self.bad_proofs.load(SeqCst) {
+                    p.1.payload_and_ctx_digest = kaspa_hashes::Hash::from_bytes([7; 32]);
+                }
                 match block {
                     b if b == self.fx.start && self.too_deep.load(SeqCst) => {
                         Err(RpcError::Node(format!("block {b} is too deep (before the current pruning point)")))
                     }
-                    b if b == self.fx.start => Ok(p.0.clone()),
+                    b if b == self.fx.start => Ok((p.0, from)),
                     b if b == self.last().0 && self.reorgs.fetch_update(SeqCst, SeqCst, |n| n.checked_sub(1)).is_ok() => {
                         Err(RpcError::Node(format!("block {b} is not in the selected parent chain")))
                     }
-                    b if b == self.last().0 => Ok(p.1.clone()),
+                    b if b == self.last().0 => Ok((p.1, from)),
                     _ => Err(RpcError::Node("not recorded".into())),
                 }
             }
-            async fn block(&self, hash: Hash32, _txs: bool) -> Result<Option<kaspa_consensus_core::block::Block>, RpcError> {
+            async fn block(&self, hash: Hash32, _txs: bool) -> Result<Option<(kaspa_consensus_core::block::Block, Origin)>, RpcError> {
                 self.round_trip().await;
                 if hash.0 == self.fx.merged.header.hash.as_bytes() {
-                    return Ok(Some(self.fx.merged.clone()));
+                    return Ok(Some((self.fx.merged.clone(), *self.proof_origin.lock().unwrap())));
                 }
-                Ok((hash == self.fx.start).then(|| kaspa_consensus_core::block::Block::new(self.fx.start_header.clone(), vec![])))
+                Ok((hash == self.fx.start).then(|| {
+                    (kaspa_consensus_core::block::Block::new(self.fx.start_header.clone(), vec![]), *self.proof_origin.lock().unwrap())
+                }))
             }
-            fn chain_refused(&self, _origin: Origin, why: &str) {
+            fn chain_refused(&self, origin: Origin, why: &str) {
                 self.refused.lock().unwrap().push(why.to_string());
+                self.blamed.lock().unwrap().push(origin);
             }
             async fn authority_failing(&self, _at: Hash32, why: &str) -> bool {
                 self.failing.lock().unwrap().push(why.to_string());
@@ -2040,6 +2057,9 @@ mod tests {
                 too_deep: Default::default(),
                 unsynced: Default::default(),
                 failing: Mutex::new(vec![]),
+                proof_origin: Mutex::new(Origin::PRIMARY),
+                blamed: Mutex::new(vec![]),
+                bad_proofs: Default::default(),
             });
             let conn = crate::indexer::db::open_memory(&network).unwrap();
             let ingest =
@@ -2193,6 +2213,28 @@ mod tests {
             let o = f.step().await;
             assert!(matches!(o, StepOutcome::Applied { .. }), "{o:?}");
             assert_eq!(cursor(&ingest), src.last().0);
+        }
+
+        /// K-M2: a lane proof that fails on its own blames the node that served it, not the node
+        /// that served the batch.
+        #[tokio::test]
+        async fn a_bad_proof_blames_the_node_that_served_it() {
+            let other = Origin { node: 1, trusted: false, tier: 0 };
+            let (f, src, ingest, _health) = follower(TN10, |_| {});
+            *src.proof_origin.lock().unwrap() = other;
+            src.bad_proofs.store(true, SeqCst);
+            let o = f.step().await;
+            assert!(matches!(&o, StepOutcome::Retry(m) if m.contains("chain proof refused")), "{o:?}");
+            assert_eq!(cursor(&ingest), src.fx.start, "nothing applied");
+            assert_eq!(*src.blamed.lock().unwrap(), vec![other], "the proof's server, not the batch's");
+            // A batch that its valid proofs contradict blames the batch's node.
+            let (f, src, _ingest, _health) = follower(TN10, |r| {
+                let b = r.chain_block_accepted_transactions.iter_mut().find(|b| b.accepted_transactions.len() > 1).unwrap();
+                b.accepted_transactions.pop();
+            });
+            *src.proof_origin.lock().unwrap() = other;
+            let _ = f.step().await;
+            assert_eq!(*src.blamed.lock().unwrap(), vec![Origin::PRIMARY]);
         }
 
         /// K-M1: a node that answers every lane proof "not in the selected parent chain" no longer

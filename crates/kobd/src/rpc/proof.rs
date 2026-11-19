@@ -54,6 +54,7 @@
 
 use crate::hex::Hash32;
 use crate::rpc::types::{ChainBlockHeader, RawVspcResponse, Tx};
+use crate::rpc::Origin;
 use kaspa_consensus_core::block::Block;
 use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::subnets::{SUBNETWORK_ID_COINBASE, SUBNETWORK_ID_NATIVE};
@@ -114,6 +115,9 @@ pub enum ProofError {
     /// The block to prove at is before the node's pruning point (`BlockTooDeep`), so the node
     /// can no longer prove it. Asking again does not help.
     TooDeep(String),
+    /// A proof, block or header served for the batch fails on its own. The node behind the origin
+    /// served it and is the one blamed, whichever node served the batch (K-M2).
+    BadProof(Origin, String),
 }
 
 impl std::fmt::Display for ProofError {
@@ -123,6 +127,7 @@ impl std::fmt::Display for ProofError {
             ProofError::Unavailable(w) => write!(f, "chain proof unavailable: {w}"),
             ProofError::Reorged(w) => write!(f, "chain proof after a tip reorg: {w}"),
             ProofError::TooDeep(w) => write!(f, "chain proof out of the node's reach: {w}"),
+            ProofError::BadProof(_, w) => write!(f, "chain proof refused: {w}"),
         }
     }
 }
@@ -195,15 +200,30 @@ impl Anchor {
     }
 }
 
-/// Checks a lane proof of `block` (its `accepted_id_merkle_root` is `root`) against what the
-/// checker computed for the lane, `expected` (`None`: no active lane).
-pub fn check_lane_proof(root: Hash, lane: Hash, expected: Option<LaneTip>, p: &GetSeqCommitLaneProofResponse) -> Result<(), String> {
+/// Checks a lane proof of `block` (its `accepted_id_merkle_root` is `root`), served by `from`,
+/// against what the checker computed for the lane, `expected` (`None`: no active lane).
+///
+/// A proof that does not give `root` is the server's fault ([`ProofError::BadProof`]). A valid
+/// proof of another tip says the batch's transactions are wrong ([`ProofError::Refused`]).
+pub fn check_lane_proof(
+    root: Hash,
+    lane: Hash,
+    expected: Option<LaneTip>,
+    p: &GetSeqCommitLaneProofResponse,
+    from: Origin,
+) -> Result<(), ProofError> {
     let claimed = p.lane.as_ref().map(|l| LaneTip { tip: l.tip, blue_score: l.blue_score });
+    lane_proof_gives(root, lane, claimed, p).map_err(|e| ProofError::BadProof(from, e))?;
     if claimed != expected {
-        return Err(format!("lane {lane}: the node proves {claimed:?}, the accepted transactions give {expected:?}"));
+        return refuse(format!("lane {lane}: the node proves {claimed:?}, the accepted transactions give {expected:?}"));
     }
+    Ok(())
+}
+
+/// Whether the lane proof `p` of the tip `claimed` gives the commitment `root`.
+fn lane_proof_gives(root: Hash, lane: Hash, claimed: Option<LaneTip>, p: &GetSeqCommitLaneProofResponse) -> Result<(), String> {
     let proof = kaspa_smt::proof::OwnedSmtProof::from_bytes(&p.smt_proof).map_err(|e| format!("lane {lane}: bad SMT proof: {e}"))?;
-    let leaf = expected.map(|l| smt_leaf_hash(&SmtLeafInput { lane_tip: &l.tip, blue_score: l.blue_score }));
+    let leaf = claimed.map(|l| smt_leaf_hash(&SmtLeafInput { lane_tip: &l.tip, blue_score: l.blue_score }));
     let lanes_root = proof.compute_root::<SeqCommitActiveNode>(&lane, leaf).map_err(|e| format!("lane {lane}: bad SMT proof: {e}"))?;
     let activity_root = activity_root_hash(&p.inactivity_shortcut, &lanes_root);
     let state_root = seq_state_root(&SeqState { activity_root: &activity_root, payload_and_ctx_digest: &p.payload_and_ctx_digest });
@@ -473,13 +493,13 @@ impl ChainProof {
         self.anchor.is_none_or(|a| a.hash != plan.parent)
     }
 
-    /// Sets the anchor from the header of `plan.parent`, fetched from the node.
-    pub fn set_anchor(&mut self, plan: &Plan, header: &Header) -> Result<(), ProofError> {
+    /// Sets the anchor from the header of `plan.parent`, served by `from`.
+    pub fn set_anchor(&mut self, plan: &Plan, header: &Header, from: Origin) -> Result<(), ProofError> {
         if header.hash.as_bytes() != plan.parent.0 {
-            return refuse(format!("the header asked for {} is that of {}", plan.parent, header.hash));
+            return Err(ProofError::BadProof(from, format!("the header asked for {} is that of {}", plan.parent, header.hash)));
         }
         if kaspa_consensus_core::hashing::header::hash(header) != header.hash {
-            return refuse(format!("the header of {} does not hash to it", plan.parent));
+            return Err(ProofError::BadProof(from, format!("the header of {} does not hash to it", plan.parent)));
         }
         self.check_work(header, self.max_target(median(self.targets.iter().copied())))?;
         self.anchor = Some(Anchor::of(header));
@@ -492,12 +512,12 @@ impl ChainProof {
         plan.lanes.iter().copied().filter(|l| !self.lanes.contains_key(l)).collect()
     }
 
-    /// Learns the tip of `lane` at the anchor from its proof there.
-    pub fn learn_lane(&mut self, lane: Hash, p: &GetSeqCommitLaneProofResponse) -> Result<(), ProofError> {
+    /// Learns the tip of `lane` at the anchor from its proof there, served by `from`.
+    pub fn learn_lane(&mut self, lane: Hash, p: &GetSeqCommitLaneProofResponse, from: Origin) -> Result<(), ProofError> {
         let Some(a) = self.anchor else { return refuse("no anchor") };
         let claimed = p.lane.as_ref().map(|l| LaneTip { tip: l.tip, blue_score: l.blue_score });
         if self.on(skip::LANES) {
-            check_lane_proof(a.accepted_id_merkle_root, lane, claimed, p).map_err(ProofError::Refused)?;
+            lane_proof_gives(a.accepted_id_merkle_root, lane, claimed, p).map_err(|e| ProofError::BadProof(from, e))?;
         }
         self.status.lane_proofs_total += 1;
         if self.lanes.len() >= MAX_LANES && !self.lanes.contains_key(&lane) {
@@ -551,19 +571,23 @@ impl ChainProof {
     }
 
     /// Checks the lane proofs at the batch's last chain block against `expected` and accepts the
-    /// batch: the anchor moves to its last chain block.
+    /// batch: the anchor moves to its last chain block. Each proof comes with the node that served
+    /// it.
     pub fn finish(
         &mut self,
         plan: Plan,
         expected: &[(Hash, Option<LaneTip>)],
-        proofs: &[GetSeqCommitLaneProofResponse],
+        proofs: &[(GetSeqCommitLaneProofResponse, Origin)],
     ) -> Result<(), ProofError> {
         if proofs.len() != expected.len() {
             return refuse("a lane proof is missing");
         }
-        for ((lane, want), p) in expected.iter().zip(proofs).filter(|_| self.on(skip::LANES)) {
-            check_lane_proof(plan.end_root, *lane, *want, p)
-                .map_err(|e| ProofError::Refused(format!("chain block {}: {e}", plan.end)))?;
+        for ((lane, want), (p, from)) in expected.iter().zip(proofs).filter(|_| self.on(skip::LANES)) {
+            check_lane_proof(plan.end_root, *lane, *want, p, *from).map_err(|e| match e {
+                ProofError::BadProof(o, w) => ProofError::BadProof(o, format!("chain block {}: {w}", plan.end)),
+                ProofError::Refused(w) => ProofError::Refused(format!("chain block {}: {w}", plan.end)),
+                e => e,
+            })?;
         }
         self.status.lane_proofs_total += proofs.len() as u64;
         self.status.blocks_total += plan.blocks.len() as u64;
@@ -582,19 +606,26 @@ impl ChainProof {
         Ok(())
     }
 
-    /// Checks a merged block fetched for the signature scripts of `txs` (its transactions that can
-    /// matter to KOB, from the batch).
-    pub fn check_merged_block(&mut self, hash: Hash32, block: &Block, txs: &[&Tx]) -> Result<(), ProofError> {
+    /// Checks a merged block, served by `from`, fetched for the signature scripts of `txs` (its
+    /// transactions that can matter to KOB, from the batch).
+    ///
+    /// A block other than the one asked for, or a body that does not match its header, is the
+    /// server's fault. A block of that hash that does not hold the batch's transactions as the
+    /// batch has them is the batch's.
+    pub fn check_merged_block(&mut self, hash: Hash32, block: &Block, txs: &[&Tx], from: Origin) -> Result<(), ProofError> {
         let header = &block.header;
         if header.hash.as_bytes() != hash.0 || kaspa_consensus_core::hashing::header::hash(header) != header.hash {
-            return refuse(format!("the merged block asked for as {hash} has the header of {}", header.hash));
+            return Err(ProofError::BadProof(from, format!("the merged block asked for as {hash} has the header of {}", header.hash)));
         }
         self.check_work(header, self.max_target(median(self.targets.iter().copied())))?;
         let root = kaspa_consensus_core::merkle::calc_hash_merkle_root(block.transactions.iter());
         if self.on(skip::MERKLE) && root != header.hash_merkle_root {
-            return refuse(format!(
-                "the transactions of merged block {hash} give the Merkle root {root}, its header has {}",
-                header.hash_merkle_root
+            return Err(ProofError::BadProof(
+                from,
+                format!(
+                    "the transactions of merged block {hash} give the Merkle root {root}, its header has {}",
+                    header.hash_merkle_root
+                ),
             ));
         }
         for t in txs {
@@ -613,15 +644,16 @@ impl ChainProof {
     }
 }
 
-/// Serves block headers ([`check_merged_into`]).
+/// Serves block headers, with the node that served each ([`check_merged_into`]).
 pub trait HeaderSource: Sync {
     /// The header of `hash`. `None`: the node does not know it.
-    fn header(&self, hash: Hash32) -> impl std::future::Future<Output = Result<Option<Header>, crate::rpc::RpcError>> + Send;
+    fn header(&self, hash: Hash32)
+        -> impl std::future::Future<Output = Result<Option<(Header, Origin)>, crate::rpc::RpcError>> + Send;
 }
 
 impl<S: crate::rpc::ChainSource> HeaderSource for S {
-    async fn header(&self, hash: Hash32) -> Result<Option<Header>, crate::rpc::RpcError> {
-        Ok(self.block(hash, false).await?.map(|b| (*b.header).clone()))
+    async fn header(&self, hash: Hash32) -> Result<Option<(Header, Origin)>, crate::rpc::RpcError> {
+        Ok(self.block(hash, false).await?.map(|(b, from)| ((*b.header).clone(), from)))
     }
 }
 
@@ -653,14 +685,17 @@ pub async fn check_merged_into<H: HeaderSource>(chain: &Header, merged: &Header,
         let headers = futures_util::future::join_all(asks).await;
         let mut next = vec![];
         for (h, r) in level.iter().zip(headers) {
-            let x = match r {
+            let (x, from) = match r {
                 Ok(Some(x)) => x,
                 // A dead end: an honest node knows every recent ancestor.
                 Ok(None) => continue,
                 Err(e) => return Err(ProofError::Unavailable(format!("the header of {h}, below chain block {}: {e}", chain.hash))),
             };
             if x.hash != *h || kaspa_consensus_core::hashing::header::hash(&x) != x.hash {
-                return refuse(format!("the header asked for as {h} is that of {}, or does not hash to it", x.hash));
+                return Err(ProofError::BadProof(
+                    from,
+                    format!("the header asked for as {h} is that of {}, or does not hash to it", x.hash),
+                ));
             }
             if x.blue_work <= merged.blue_work {
                 continue;
@@ -736,18 +771,21 @@ pub(crate) mod tests {
         fn run(&self, cp: &mut ChainProof, raw: &RawVspcResponse) -> Result<(), ProofError> {
             let plan = cp.check_local(self.start, raw)?.expect("chain blocks");
             if cp.needs_anchor(&plan) {
-                cp.set_anchor(&plan, &self.start_header)?;
+                cp.set_anchor(&plan, &self.start_header, Origin::PRIMARY)?;
             }
             for lane in cp.unknown_lanes(&plan) {
                 let (p, _) =
                     self.proofs.get(&lane).ok_or_else(|| ProofError::Unavailable(format!("no recorded proof of lane {lane}")))?;
-                cp.learn_lane(lane, p)?;
+                cp.learn_lane(lane, p, Origin::PRIMARY)?;
             }
             let expected = cp.expected(&plan)?;
             let proofs = expected
                 .iter()
                 .map(|(l, _)| {
-                    self.proofs.get(l).map(|p| p.1.clone()).ok_or_else(|| ProofError::Unavailable(format!("no proof of {l}")))
+                    self.proofs
+                        .get(l)
+                        .map(|p| (p.1.clone(), Origin::PRIMARY))
+                        .ok_or_else(|| ProofError::Unavailable(format!("no proof of {l}")))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             cp.finish(plan, &expected, &proofs)
@@ -769,7 +807,7 @@ pub(crate) mod tests {
 
     fn refused(r: Result<(), ProofError>, what: &str) {
         match r {
-            Err(ProofError::Refused(w)) => assert!(w.contains(what), "refused for another reason: {w}"),
+            Err(ProofError::Refused(w) | ProofError::BadProof(_, w)) => assert!(w.contains(what), "refused for another reason: {w}"),
             other => panic!("not refused ({what}): {other:?}"),
         }
     }
@@ -818,7 +856,7 @@ pub(crate) mod tests {
             let txs_m = fx.merged_txs(&raw);
             assert!(!txs_m.is_empty());
             let m = Hash32(fx.merged.header.hash.as_bytes());
-            cp.check_merged_block(m, &fx.merged, &txs_m).unwrap();
+            cp.check_merged_block(m, &fx.merged, &txs_m, Origin::PRIMARY).unwrap();
             let t1 = std::time::Instant::now();
             for _ in 0..100 {
                 assert!(pow_ok(&fx.start_header));
@@ -979,7 +1017,8 @@ pub(crate) mod tests {
             if let Some(l) = fx.proofs.get_mut(&native).unwrap().1.lane.as_mut() {
                 l.tip = Hash::from_bytes([7; 32]);
             }
-            refused(fx.run(&mut fx.checker(), &fx.raw()), "the node proves");
+            // A proof of another tip does not give the header's commitment.
+            refused(fx.run(&mut fx.checker(), &fx.raw()), "the proof gives the commitment");
             let mut fx = fixture(text);
             fx.proofs.get_mut(&native).unwrap().1.payload_and_ctx_digest = Hash::from_bytes([7; 32]);
             refused(fx.run(&mut fx.checker(), &fx.raw()), "the proof gives the commitment");
@@ -1016,15 +1055,15 @@ pub(crate) mod tests {
                 .unwrap();
             t.inputs[0].signature_script.0.push(0x51);
             let (script, id) = (t.inputs[0].signature_script.0.clone(), t.verbose_data.transaction_id);
-            refused(fx.checker().check_merged_block(m, &fx.merged, &fx.merged_txs(&raw)), "signature scripts");
-            fx.checker().skipping(skip::SCRIPTS).check_merged_block(m, &fx.merged, &fx.merged_txs(&raw)).unwrap();
+            refused(fx.checker().check_merged_block(m, &fx.merged, &fx.merged_txs(&raw), Origin::PRIMARY), "signature scripts");
+            fx.checker().skipping(skip::SCRIPTS).check_merged_block(m, &fx.merged, &fx.merged_txs(&raw), Origin::PRIMARY).unwrap();
             // The forger changes the merged block too.
             let mut txs = (*fx.merged.transactions).clone();
             let k = txs.iter().position(|x| x.id().as_bytes() == id.0).unwrap();
             txs[k].inputs[0].signature_script = script;
             let block = Block::new(fx.merged.header.as_ref().clone(), txs);
-            refused(fx.checker().check_merged_block(m, &block, &fx.merged_txs(&raw)), "Merkle root");
-            fx.checker().skipping(skip::MERKLE).check_merged_block(m, &block, &fx.merged_txs(&raw)).unwrap();
+            refused(fx.checker().check_merged_block(m, &block, &fx.merged_txs(&raw), Origin::PRIMARY), "Merkle root");
+            fx.checker().skipping(skip::MERKLE).check_merged_block(m, &block, &fx.merged_txs(&raw), Origin::PRIMARY).unwrap();
         }
     }
 
@@ -1032,8 +1071,8 @@ pub(crate) mod tests {
     struct Known(HashMap<Hash, Header>);
 
     impl HeaderSource for Known {
-        async fn header(&self, h: Hash32) -> Result<Option<Header>, crate::rpc::RpcError> {
-            Ok(self.0.get(&Hash::from_bytes(h.0)).map(|x| x.clone()))
+        async fn header(&self, h: Hash32) -> Result<Option<(Header, Origin)>, crate::rpc::RpcError> {
+            Ok(self.0.get(&Hash::from_bytes(h.0)).map(|x| (x.clone(), Origin::PRIMARY)))
         }
     }
 
@@ -1092,7 +1131,8 @@ pub(crate) mod tests {
                 .flat_map(|b| &b.accepted_transactions)
                 .filter(|t| t.verbose_data.block_hash == Some(fm))
                 .collect();
-            cp.check_merged_block(fm, &forged, &txs_f).expect("the forged block passes the checks of the block itself");
+            cp.check_merged_block(fm, &forged, &txs_f, Origin::PRIMARY)
+                .expect("the forged block passes the checks of the block itself");
             refused(check_merged_into(&chain, &forged.header, &none).await.map(|_| ()), "not in the merge set");
         }
     }
@@ -1120,5 +1160,50 @@ pub(crate) mod tests {
         let mut lying = Known(known.0.clone());
         lying.0.insert(x.hash, mk(vec![m.hash], 3, 9));
         refused(check_merged_into(&chain, &m, &lying).await.map(|_| ()), "does not hash");
+    }
+
+    /// K-M2: the right node is blamed. A lane proof that does not give the header's commitment is
+    /// its server's fault, whoever served the batch. A valid proof that the batch's transactions
+    /// contradict is the batch's.
+    #[test]
+    fn a_bad_proof_blames_its_server_and_a_bad_batch_its_own() {
+        let other = Origin { node: 3, trusted: false, tier: 0 };
+        for fx in both() {
+            let prove = |raw: &RawVspcResponse, tamper: bool| {
+                let mut cp = fx.checker();
+                let plan = cp.check_local(fx.start, raw).unwrap().unwrap();
+                cp.set_anchor(&plan, &fx.start_header, Origin::PRIMARY).unwrap();
+                for lane in cp.unknown_lanes(&plan) {
+                    cp.learn_lane(lane, &fx.proofs[&lane].0, Origin::PRIMARY).unwrap();
+                }
+                let expected = cp.expected(&plan).unwrap();
+                let mut proofs: Vec<_> = expected.iter().map(|(l, _)| (fx.proofs[l].1.clone(), other)).collect();
+                if tamper {
+                    proofs[0].0.payload_and_ctx_digest = Hash::from_bytes([7; 32]);
+                }
+                cp.finish(plan, &expected, &proofs)
+            };
+            prove(&fx.raw(), false).unwrap();
+            match prove(&fx.raw(), true) {
+                Err(ProofError::BadProof(o, w)) => assert!(o == other && w.contains("the proof gives the commitment"), "{w}"),
+                r => panic!("{r:?}"),
+            }
+            let (b, k) = native_tx(&fx.raw());
+            let mut hidden = fx.raw();
+            hidden.chain_block_accepted_transactions[b].accepted_transactions.remove(k);
+            match prove(&hidden, false) {
+                Err(ProofError::Refused(w)) => assert!(w.contains("the accepted transactions give"), "{w}"),
+                r => panic!("{r:?}"),
+            }
+            // A merged block whose body does not match its header: its server's fault.
+            let m = Hash32(fx.merged.header.hash.as_bytes());
+            let mut txs = (*fx.merged.transactions).clone();
+            txs.pop();
+            let block = Block::new(fx.merged.header.as_ref().clone(), txs);
+            match fx.checker().check_merged_block(m, &block, &[], other) {
+                Err(ProofError::BadProof(o, _)) => assert_eq!(o, other),
+                r => panic!("{r:?}"),
+            }
+        }
     }
 }

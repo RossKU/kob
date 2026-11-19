@@ -3091,7 +3091,8 @@ coinbase aside) must fold into the tip a KIP-21 lane proof (`getSeqCommitLanePro
 transaction that can matter to KOB must match its merged block, whose transactions must match its `hash_merkle_root`
 and which must be in the merge set of the chain block that accepted the transaction (a direct parent, or found below one
 of its other parents through headers that hash to the parents named, at most 128).
-A batch that fails is refused, logged, not applied, and its node is given up (a public node) or alarmed (a named one). The
+A batch that fails is refused, logged, not applied, and the node at fault is given up (a public node) or alarmed (a
+named one): the node that served a proof, header or block that fails on its own, else the node that served the batch. The
 difficulty floor is a heuristic against trivial `bits`, not the node's difficulty adjustment; on testnet-10 the proof of
 work itself is cheap. Cost: one kHeavyHash per chain block, one lane proof call per lane per batch, `Full` verbosity
 (about 1-4 % more bytes than `High`), one `getBlock` per merged block holding a KOB transaction. The calls of a batch go
