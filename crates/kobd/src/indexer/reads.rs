@@ -1122,8 +1122,8 @@ pub(crate) type RawBookLevel = ((i64, i64), (i128, i64, bool));
 /// rests there is read (the book of one token). It counts at its quote now for its resting
 /// amount ([`resting_level`]): no IOC / FOK taker, a TWAP order once its slice is due and for
 /// that slice, an auction at its current price. [`book_side_levels`] renders the first `depth`
-/// levels. The 24 h statistics read the ones near the touch without a string per level. Either
-/// way it is one scan of the live orders of the token.
+/// levels. It is one scan of the live orders of the token. The 24 h statistics walk the same
+/// orders with [`for_each_resting`] and keep only their sums.
 pub(crate) fn book_side_sorted(
     conn: &Connection,
     ctx: &ReadCtx,
@@ -1131,6 +1131,45 @@ pub(crate) fn book_side_sorted(
     side: i64,
     top: Option<usize>,
 ) -> DbResult<Vec<RawBookLevel>> {
+    // Maps (price, scale) to (amount, orders, estimated). A curve adds each remaining level's size
+    // at its price, so its amount is counted once.
+    let mut levels: BTreeMap<(i64, i64), (i128, i64, bool)> = BTreeMap::new();
+    for_each_resting(conn, ctx, token, side, |mut level, scale, exact| {
+        if let Some(d) = top {
+            best_prices(&mut level, side, d);
+        }
+        for (_, price, remaining) in level {
+            let l = levels.entry((price, scale.max(1))).or_insert((0, 0, false));
+            l.0 += remaining.unwrap_or(0).max(0) as i128;
+            l.1 += 1;
+            l.2 |= remaining.is_none() || exact == 0;
+        }
+    })?;
+    let mut out: Vec<_> = levels.into_iter().collect();
+    out.sort_by(|((pa, sa), _), ((pb, sb), _)| {
+        let o = (*pa as i128 * *sb as i128).cmp(&(*pb as i128 * *sa as i128)).then(pa.cmp(pb)).then(sa.cmp(sb));
+        if side == 1 {
+            o
+        } else {
+            o.reverse()
+        }
+    });
+    Ok(out)
+}
+
+/// Calls `f` with the resting levels of each live listed order of one side of the book of a
+/// token, as [`book_side_sorted`] reads them: `(levels, scale, amount_exact)`, the levels as
+/// [`resting_levels`] gives them, in no order.
+///
+/// One order's levels are held at a time, so a reader that keeps what it needs as it goes holds
+/// no more than that, whatever the book holds (security review 2026-11-19 K-L4).
+pub(crate) fn for_each_resting(
+    conn: &Connection,
+    ctx: &ReadCtx,
+    token: &Hash32,
+    side: i64,
+    mut f: impl FnMut(Vec<(Option<usize>, i64, Option<i64>)>, i64, i64),
+) -> DbResult<()> {
     let now = book_daa(conn, ctx)?;
     let live = fillable_now(now, ctx.now_unix);
     let pinned = pinned_template();
@@ -1144,34 +1183,14 @@ pub(crate) fn book_side_sorted(
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(rusqlite::params![token.0.to_vec(), side], |r| {
         let (price, remaining): (i64, Option<i64>) = (r.get(0)?, r.get(2)?);
-        let mut level = resting_levels(&r.get::<_, String>(4)?, r.get(5)?, r.get(6)?, price, remaining, now);
-        if let Some(d) = top {
-            best_prices(&mut level, side, d);
-        }
+        let level = resting_levels(&r.get::<_, String>(4)?, r.get(5)?, r.get(6)?, price, remaining, now);
         Ok((level, r.get::<_, i64>(1)?, r.get::<_, i64>(3)?))
     })?;
-    // Maps (price, scale) to (amount, orders, estimated). A curve adds each remaining level's size
-    // at its price, so its amount is counted once.
-    let mut levels: BTreeMap<(i64, i64), (i128, i64, bool)> = BTreeMap::new();
     for r in rows {
         let (level, scale, exact) = r?;
-        for (_, price, remaining) in level {
-            let l = levels.entry((price, scale.max(1))).or_insert((0, 0, false));
-            l.0 += remaining.unwrap_or(0).max(0) as i128;
-            l.1 += 1;
-            l.2 |= remaining.is_none() || exact == 0;
-        }
+        f(level, scale, exact);
     }
-    let mut out: Vec<_> = levels.into_iter().collect();
-    out.sort_by(|((pa, sa), _), ((pb, sb), _)| {
-        let o = (*pa as i128 * *sb as i128).cmp(&(*pb as i128 * *sa as i128)).then(pa.cmp(pb)).then(sa.cmp(sb));
-        if side == 1 {
-            o
-        } else {
-            o.reverse()
-        }
-    });
-    Ok(out)
+    Ok(())
 }
 
 fn book_side_levels(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64, depth: usize) -> DbResult<Vec<LevelView>> {
