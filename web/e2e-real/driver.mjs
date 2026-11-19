@@ -1,6 +1,7 @@
-// Building blocks of the real-wallet run: the independent node checker, the wallet drivers (KasWare / Kaspire / Kastle, real extensions or the
-// in-page mock wallets of `--mock`) and the app driver (connect, the pre-sign confirmation screen, multi-step flows). Nothing runs on import.
-// Secrets (mnemonics, keys) are never printed.
+// Building blocks of the real-wallet run: the independent node checker, the wallet drivers (KasWare
+// / Kaspire / Kastle, real extensions or the in-page mock wallets of `--mock`) and the app driver
+// (connect, the pre-sign confirmation screen, multi-step flows). Nothing runs on import. Secrets
+// (mnemonics, keys) are never printed.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -31,7 +32,8 @@ export async function retryOnce(label, fn) {
   }
 }
 
-// ------------------------------------------------------------------------------------------------ independent node checker
+// ------------------------------------------------------------------------------------------------
+// independent node checker
 
 /** Reads the TN10 node directly through the official SDK, independently of the app under test. */
 export class NodeChecker {
@@ -110,8 +112,9 @@ export class NodeChecker {
 }
 
 /**
- * Every output of a submitted tx (JSON from the wRPC frame on TN10, from the HTTP submit body in `--mock`) with its address and whether it is a
- * P2SH (covenant) output. `node` is a NodeChecker or a MockNodeChecker (address derivation).
+ * Every output of a submitted tx (JSON from the wRPC frame on TN10, from the HTTP submit body in
+ * `--mock`) with its address and whether it is a P2SH (covenant) output. `node` is a NodeChecker or
+ * a MockNodeChecker (address derivation).
  */
 export function outputsOf(node, tx) {
   return (tx?.outputs ?? []).map((o, i) => {
@@ -133,11 +136,15 @@ export const spentBy = (tx) => (tx?.inputs ?? []).map((inp) => {
   return `${op.transactionId ?? op.transaction_id}:${op.index}`;
 });
 
-// ------------------------------------------------------------------------------------------------ wallet drivers
+// ------------------------------------------------------------------------------------------------
+// wallet drivers
 
 const KASWARE_PASSWORD = 'Kob-Test-12345'; // throwaway UI password of the throwaway KasWare profile (same as common.mjs onboardKasware)
 
-/** KasWare approver that first unlocks the wallet when the approval window opens on its lock screen (a re-opened profile / auto-lock). */
+/**
+ * KasWare approver that first unlocks the wallet when the approval window opens on its lock screen
+ * (a re-opened profile / auto-lock).
+ */
 export const kaswareApproverWithUnlock = (opts = {}) => {
   const inner = kaswareApprover(opts);
   return async (pop, info) => {
@@ -155,9 +162,10 @@ export const kaswareApproverWithUnlock = (opts = {}) => {
 };
 
 /**
- * A wallet under test. `setup(ctx)` prepares it in the browser context (onboarding through the extension UI, or the mock wallet injection);
- * `approve(ctx, start)` runs `start()` (an app action that makes the wallet ask) while approving the wallet's windows, resolving with
- * `{result, popups}`. The mock wallets approve by themselves (no window): `popups` is empty.
+ * A wallet under test. `setup(ctx)` prepares it in the browser context (onboarding through the
+ * extension UI, or the mock wallet injection); `approve(ctx, start)` runs `start()` (an app action
+ * that makes the wallet ask) while approving the wallet's windows, resolving with `{result,
+ * popups}`. The mock wallets approve by themselves (no window): `popups` is empty.
  *
  *   real:  walletDriver('kaspire', env)
  *   mock:  walletDriver('kaspire', env, { mock: { secretKey } })
@@ -217,7 +225,8 @@ export function walletDriver(name, env, { mock = null } = {}) {
       },
     };
   }
-  // kastle: optional in the app (`features.kastle`); the run switches it on. Its network switch to TN10 is a popup of the connect step.
+  // kastle: optional in the app (`features.kastle`); the run switches it on. Its network switch to
+  // TN10 is a popup of the connect step.
   const mnemonic = env.WALLET_MNEMONIC_KASTLE;
   return {
     name,
@@ -233,11 +242,13 @@ export function walletDriver(name, env, { mock = null } = {}) {
   };
 }
 
-// ------------------------------------------------------------------------------------------------ app driver
+// ------------------------------------------------------------------------------------------------
+// app driver
 
 /**
- * Opens the app in a new page of `ctx` with the injected config (`window.__KOB_CONFIG__`); records console errors and every transaction the
- * app submits: wRPC `submitTransaction` frames (TN10) and `POST /node/submit` bodies (the mock node).
+ * Opens the app in a new page of `ctx` with the injected config (`window.__KOB_CONFIG__`); records
+ * console errors and every transaction the app submits: wRPC `submitTransaction` frames (TN10) and
+ * `POST /node/submit` bodies (the mock node).
  */
 export async function openApp(ctx, baseUrl, config) {
   const page = await ctx.newPage();
@@ -245,8 +256,9 @@ export async function openApp(ctx, baseUrl, config) {
   page.on('console', (m) => {
     if (m.type() === 'error') h.consoleErrors.push(m.text().slice(0, 400));
   });
-  // a submit request carries no transaction id: the node's answer does (`transactionId`); it goes to the oldest submit still
-  // without one (the app submits one transaction at a time and waits for the answer)
+  // a submit request carries no transaction id: the node's answer does (`transactionId`); it goes
+  // to the oldest submit still without one (the app submits one transaction at a time and waits for
+  // the answer)
   const answer = (id) => {
     const s = h.submits.find((x) => x.tx && !x.txid);
     if (s && typeof id === 'string') s.txid = id;
@@ -271,8 +283,8 @@ export async function openApp(ctx, baseUrl, config) {
       const p = typeof f.payload === 'string' ? f.payload : '';
       if (!/"transactionId"/.test(p) || /"outputs"/.test(p)) return;
       try {
-        // only a submit's answer: `{transactionId}` (a replacement also names the replaced one); a UTXO list names
-        // transaction ids inside its entries, never at the top of its params
+        // only a submit's answer: `{transactionId}` (a replacement also names the replaced one); a
+        // UTXO list names transaction ids inside its entries, never at the top of its params
         const j = JSON.parse(p);
         const r = j.params ?? j;
         if (r && typeof r.transactionId === 'string' && Object.keys(r).every((k) => k === 'transactionId' || k === 'replacedTransaction')) answer(r.transactionId);
@@ -283,7 +295,8 @@ export async function openApp(ctx, baseUrl, config) {
     ws.on('framesent', (f) => {
       const p = typeof f.payload === 'string' ? f.payload : '';
       if (process.env.KOB_DEBUG_WS) log('ws-sent', typeof f.payload, String(f.payload).length, p.slice(0, 160));
-      // wRPC uses numeric op codes: recognise the submit request by its payload (a transaction with inputs / outputs)
+      // wRPC uses numeric op codes: recognise the submit request by its payload (a transaction with
+      // inputs / outputs)
       if (!/"transaction"/.test(p) || !/"outputs"/.test(p)) return;
       try {
         const j = JSON.parse(p);
@@ -297,19 +310,23 @@ export async function openApp(ctx, baseUrl, config) {
   await page.addInitScript((c) => {
     window.__KOB_CONFIG__ = c;
   }, config);
-  // the market list: the empty hash is the landing page, which has no app header (no wallet buttons)
+  // the market list: the empty hash is the landing page, which has no app header (no wallet
+  // buttons)
   await page.goto(baseUrl + '/#/market');
   await page.getByTestId('main').waitFor({ timeout: 60_000 }).catch(() => {});
-  // again after every reload (the run reloads to switch registries, the resume check to come back to a saved creation)
+  // again after every reload (the run reloads to switch registries, the resume check to come back
+  // to a saved creation)
   page.on('load', () => void watchKaswarePushTx(h));
   await watchKaswarePushTx(h);
   return h;
 }
 
 /**
- * Records every KasWare `pushTx` call of the page (the app's `announce` of a transaction it sent, wallet/visibility.ts) with its outcome and
- * time, so the run shows whether the wallet's node took it at once or the app fell back to waiting for the block. The provider is wrapped,
- * not replaced: the call goes through unchanged. Read with `pushTxLog(h)`. No-op without `window.kasware` or `pushTx` (Kaspire, KasWare 0.10).
+ * Records every KasWare `pushTx` call of the page (the app's `announce` of a transaction it sent,
+ * wallet/visibility.ts) with its outcome and time, so the run shows whether the wallet's node took
+ * it at once or the app fell back to waiting for the block. The provider is wrapped, not replaced:
+ * the call goes through unchanged. Read with `pushTxLog(h)`. No-op without `window.kasware` or
+ * `pushTx` (Kaspire, KasWare 0.10).
  */
 export async function watchKaswarePushTx(h) {
   await h.page.waitForFunction(() => typeof window.kasware?.pushTx === 'function', null, { timeout: 5000 }).catch(() => {});
@@ -357,11 +374,15 @@ export const goto = async (h, hash) => {
 
 const tid = (h, id) => h.page.getByTestId(id);
 
-/** Connects the wallet through the app's header (approves the wallet's connect / network windows) and reads what the header shows. */
+/**
+ * Connects the wallet through the app's header (approves the wallet's connect / network windows)
+ * and reads what the header shows.
+ */
 export async function connectWallet(h, ctx, wallet) {
   const btn = tid(h, `wallet-connect-${wallet.name}`);
-  // the header has one Connect: named for the wallet when it is the only way in (`wallet-connect-<id>`), else `wallet-connect`, which opens
-  // the chooser whose rows carry `wallet-connect-<id>` (an extension plus the private key entry the app offers on testnet-10)
+  // the header has one Connect: named for the wallet when it is the only way in
+  // (`wallet-connect-<id>`), else `wallet-connect`, which opens the chooser whose rows carry
+  // `wallet-connect-<id>` (an extension plus the private key entry the app offers on testnet-10)
   const chooser = tid(h, 'wallet-connect');
   try {
     await btn.or(chooser).first().waitFor({ timeout: 60_000 });
@@ -370,7 +391,8 @@ export async function connectWallet(h, ctx, wallet) {
       await btn.waitFor({ timeout: 15_000 });
     }
   } catch {
-    // say why: what the header shows, whether the page has the wallet's provider at all, and the page's errors (a provider script that threw)
+    // say why: what the header shows, whether the page has the wallet's provider at all, and the
+    // page's errors (a provider script that threw)
     const seen = await h.page.evaluate((n) => ({ provider: typeof window[n], hint: document.querySelector('[data-testid="wallet-install-hint"]')?.textContent ?? null }), wallet.name).catch(() => ({}));
     throw new Error(`the app offers no ${wallet.label} connect button after 60 s: window.${wallet.name} is ${seen.provider}, header "${collapse(seen.hint ?? '')}", page errors ${JSON.stringify(h.pageErrors.slice(0, 3))}`);
   }
@@ -379,7 +401,8 @@ export async function connectWallet(h, ctx, wallet) {
     await tid(h, 'wallet-address').waitFor({ timeout: POPUP_TIMEOUT_MS });
   });
   const address = await tid(h, 'wallet-address').getAttribute('data-value');
-  // the header's wallet chip carries the wallet's network; a network badge (`wallet-network`) appears only when it differs from the app's
+  // the header's wallet chip carries the wallet's network; a network badge (`wallet-network`)
+  // appears only when it differs from the app's
   const network = ((await tid(h, 'wallet-connected').getAttribute('data-network')) ?? '').trim();
   if ((await tid(h, 'wallet-network').count()) > 0) throw new Error(`the header shows a network mismatch (wallet ${network})`);
   return { address, network, popups, shownAddress: (await tid(h, 'wallet-address').innerText()).trim() };
@@ -394,17 +417,19 @@ export async function kasBalance(node, address) {
 const CONFIRM_ERR = ['confirm-error', 'confirm-rejected'];
 
 /**
- * The pre-sign screen of a token issuance -> wallet -> node acceptance round trip (orders have no such screen: `signFromTicket`, `runFlow`).
- * Precondition: `confirm-screen` is (about to be) open.
- * Ticks the "I checked" box, refuses BLOCKING findings, signs, waits for the transaction id and the app's acceptance status, closes the
- * screen. Throws with the app's own error text on any failure. `expectKind`: the decoded kind the screen must show (`issue`).
+ * The pre-sign screen of a token issuance -> wallet -> node acceptance round trip (orders have no
+ * such screen: `signFromTicket`, `runFlow`). Precondition: `confirm-screen` is (about to be) open.
+ * Ticks the "I checked" box, refuses BLOCKING findings, signs, waits for the transaction id and the
+ * app's acceptance status, closes the screen. Throws with the app's own error text on any failure.
+ * `expectKind`: the decoded kind the screen must show (`issue`).
  */
 export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir, { expectKind } = {}) {
   const t0 = Date.now();
   const screen = tid(h, 'confirm-screen');
   await screen.waitFor({ timeout: 90_000 });
-  // since fce3f29ea the screen opens with a short summary (`confirm-brief`); the verified sections (`confirm-summary` ...) are under All
-  // details (`confirm-details`), opened here so the record holds the whole text
+  // since fce3f29ea the screen opens with a short summary (`confirm-brief`); the verified sections
+  // (`confirm-summary` ...) are under All details (`confirm-details`), opened here so the record
+  // holds the whole text
   await tid(h, 'confirm-summary').waitFor({ state: 'attached', timeout: 60_000 });
   const details = h.page.locator('[data-testid="confirm-details"] > summary');
   if ((await details.count()) && (await tid(h, 'confirm-details').getAttribute('open')) === null) await details.first().click().catch(() => {});
@@ -434,8 +459,9 @@ export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir, { expe
   try {
     approval = await watched;
   } catch (e) {
-    // what the wallet windows said (a 0.11.5 "Critical Signing Warning"), what was sent and announced, how long the app waited between the
-    // approvals: the evidence of a failed creation, in the error the run records
+    // what the wallet windows said (a 0.11.5 "Critical Signing Warning"), what was sent and
+    // announced, how long the app waited between the approvals: the evidence of a failed creation,
+    // in the error the run records
     const ws = (e.popups ?? []).map((p) => ({ index: p.index, clicked: p.result?.clicked ?? null, warning: p.result?.warning ?? null, seenAt: p.seenAt, doneAt: p.doneAt, screenshot: p.result?.screenshot ?? null }));
     const pushTx = (await pushTxLog(h)).filter((x) => x.at >= tSign).map((x) => ({ txid: x.txid, ok: x.ok, ms: x.ms, at: x.at, error: x.error }));
     const sent = h.submits.slice(submitsBefore).map((x) => x.txid ?? x.tx?.id ?? null);
@@ -455,8 +481,9 @@ export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir, { expe
   screenshots.push(await shot(h.page, shotDir, `${label}-accepted`));
   const submits = h.submits.slice(submitsBefore);
   const submitted = submits.at(-1)?.tx ?? null;
-  // a creation is two transactions (preparation, genesis) and two approvals: how long the app waited between them, and what announced the
-  // first one to the wallet's node (`pushTx`) or did not
+  // a creation is two transactions (preparation, genesis) and two approvals: how long the app
+  // waited between them, and what announced the first one to the wallet's node (`pushTx`) or did
+  // not
   const pushTx = (await pushTxLog(h)).filter((e) => e.at >= tSign);
   const gapsMs = popups.slice(1).map((p, i) => (p.seenAt && popups[i].doneAt ? p.seenAt - popups[i].doneAt : null));
   const sentTxids = submits.map((x) => x.txid ?? x.tx?.id ?? null);
@@ -466,17 +493,23 @@ export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir, { expe
   return { txid, kind, appStatus: status, summary, shownAs: '', acks: [], confirmText: fullText, popups, gapsMs, sentTxids, pushTx, screenshots, signMs, totalMs: Date.now() - t0, submitted };
 }
 
-/** The phases of an order action's status line (`order-status` / `flow-status`) that end it without a transaction. */
+/**
+ * The phases of an order action's status line (`order-status` / `flow-status`) that end it without
+ * a transaction.
+ */
 const STOPPED = ['blocked', 'rejected', 'failed'];
 
 /**
- * The app's final confirmation of a transaction for an external wallet (`confirm-order`, the order's details from the decoded transaction):
- * read and confirmed when it is open, its title, summary lines and fee returned; null when none is open (the private-key signer confirms in its own frame).
+ * The app's final confirmation of a transaction for an external wallet (`confirm-order`, the
+ * order's details from the decoded transaction): read and confirmed when it is open, its title,
+ * summary lines and fee returned; null when none is open (the private-key signer confirms in its
+ * own frame).
  */
 async function confirmInApp(h, expect = null) {
   const popup = tid(h, 'confirm-order');
   if (!(await popup.count())) return null;
-  // read in one pass (an absent part is '' at once, not a 30 s locator wait); `orders`: each order's title, token and terms
+  // read in one pass (an absent part is '' at once, not a 30 s locator wait); `orders`: each
+  // order's title, token and terms
   const read = await popup.evaluate((el) => {
     const txt = (n) => (n?.textContent ?? '').replace(/\s+/g, ' ').trim();
     const q = (id) => el.querySelector(`[data-testid="${id}"]`);
@@ -486,7 +519,8 @@ async function confirmInApp(h, expect = null) {
     };
   });
   read.text = [read.title, read.rows, ...read.orders].join(' | ');
-  // what the confirmation says is not what the scenario orders: cancelled here, nothing reaches the wallet or the chain
+  // what the confirmation says is not what the scenario orders: cancelled here, nothing reaches the
+  // wallet or the chain
   if (expect && !expect.re.test(read.text)) {
     await tid(h, 'confirm-order-cancel').click().catch(() => {});
     throw new Error(`the confirmation does not say what is ordered (${expect.re}${expect.what ? `: ${expect.what}` : ''}): ${read.text.slice(0, 600)}`);
@@ -495,7 +529,10 @@ async function confirmInApp(h, expect = null) {
   return read;
 }
 
-/** The phase of a status line (`order-status` / `flow-status`) now, null when there is none (no locator wait). */
+/**
+ * The phase of a status line (`order-status` / `flow-status`) now, null when there is none (no
+ * locator wait).
+ */
 const phaseOf = (h, id) => h.page.evaluate((id) => document.querySelector(`[data-testid="${id}"]`)?.getAttribute('data-phase') ?? null, id).catch(() => null);
 
 /** The status line's sentence when it stopped (`send-error`), with its code. */
@@ -507,9 +544,11 @@ async function statusError(h, scope) {
 }
 
 /**
- * An order of the ticket: `click()` presses the order button, which checks the order silently and shows the final confirmation (the app's
- * popup for an external wallet, confirmed here; the private-key signer's frame), then asks the wallet. Approves the wallet's popup(s), waits for the transaction id on the ticket's status line (`order-status`) and the app's acceptance
- * status. Throws with the app's own sentence when it stops (a blocking check, a rejection, a failure).
+ * An order of the ticket: `click()` presses the order button, which checks the order silently and
+ * shows the final confirmation (the app's popup for an external wallet, confirmed here; the
+ * private-key signer's frame), then asks the wallet. Approves the wallet's popup(s), waits for the
+ * transaction id on the ticket's status line (`order-status`) and the app's acceptance status.
+ * Throws with the app's own sentence when it stops (a blocking check, a rejection, a failure).
  */
 export async function signFromTicket(h, ctx, wallet, label, shotDir, click, { expect = null } = {}) {
   const t0 = Date.now();
@@ -521,7 +560,8 @@ export async function signFromTicket(h, ctx, wallet, label, shotDir, click, { ex
     const t1 = Date.now();
     for (;;) {
       const phase = await phaseOf(h, 'order-status');
-      // `expect` is checked on the first confirmation only (a re-timed auction shows the same terms with later times)
+      // `expect` is checked on the first confirmation only (a re-timed auction shows the same terms
+      // with later times)
       if (phase === 'confirming') receipts.push(await confirmInApp(h, receipts.some(Boolean) ? null : expect));
       if (phase === 'submitted') return;
       if (STOPPED.includes(phase)) throw new Error(await statusError(h, 'order-status'));
@@ -545,9 +585,10 @@ export async function signFromTicket(h, ctx, wallet, label, shotDir, click, { ex
 }
 
 /**
- * A ladder of the ticket: one click, one transaction per level, each with its final confirmation (confirmed here) and its wallet popup.
- * Approves them until the ticket says every level was placed (`order-result-ladder`); throws with the app's sentence when a level stops.
- * Returns the submitted transactions in order, the popups, and the time between one popup closing and the next opening.
+ * A ladder of the ticket: one click, one transaction per level, each with its final confirmation
+ * (confirmed here) and its wallet popup. Approves them until the ticket says every level was placed
+ * (`order-result-ladder`); throws with the app's sentence when a level stops. Returns the submitted
+ * transactions in order, the popups, and the time between one popup closing and the next opening.
  */
 export async function signLadderFromTicket(h, ctx, wallet, label, shotDir, click, levels) {
   const t0 = Date.now();
@@ -573,17 +614,20 @@ export async function signLadderFromTicket(h, ctx, wallet, label, shotDir, click
 }
 
 /**
- * Runs a My orders transaction flow (cancel, cancel of a position, merge ...) that the action's button has just started: every step shows its
- * final confirmation (confirmed here) and asks the wallet, the next one after each submission. Approves the popups until the flow shows its result and returns one step
- * per submitted transaction. Throws when the flow stops or ends with an error. Open My orders fresh before the action (scenarios.mjs
- * `openOrders`): an error banner of an earlier flow on the same page would be taken for this one's.
+ * Runs a My orders transaction flow (cancel, cancel of a position, merge ...) that the action's
+ * button has just started: every step shows its final confirmation (confirmed here) and asks the
+ * wallet, the next one after each submission. Approves the popups until the flow shows its result
+ * and returns one step per submitted transaction. Throws when the flow stops or ends with an error.
+ * Open My orders fresh before the action (scenarios.mjs `openOrders`): an error banner of an
+ * earlier flow on the same page would be taken for this one's.
  */
 export async function runFlow(h, ctx, wallet, label, shotDir, { maxSteps = 12 } = {}) {
   const t0 = Date.now();
   const submitsBefore = h.submits.length;
   let shownAs = '';
   let done = '';
-  // what the flow says it does (`flow-shown-as`, shown only while a step runs): read whenever it is there, and always before a step is confirmed
+  // what the flow says it does (`flow-shown-as`, shown only while a step runs): read whenever it is
+  // there, and always before a step is confirmed
   const readShownAs = async () => {
     if (shownAs) return;
     shownAs = await h.page.evaluate(() => (document.querySelector('[data-testid="flow-shown-as"]')?.textContent ?? '').replace(/\s+/g, ' ').trim());

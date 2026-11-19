@@ -1,11 +1,15 @@
-// Scenarios of the Create token features added after the 2026-11-14 run: a creator share lock (KCC20 OWNER_P2SH + CLTV, declared as `lock`
-// in the KCC-23 declaration) and its Unlock once the lock time passed; a sell curve created in the token's genesis (shape Linear and shape
-// Chromatic, unbound), a crossing Collected buy that an executor fills against the curve, the Claim of what the buy collected, and the
-// cancels. Every wallet-signed transaction is checked on the node as in scenarios.mjs. Nothing runs on import.
+// Scenarios of the Create token features: a creator share lock
+// (KCC20 OWNER_P2SH + CLTV, declared as `lock` in the KCC-23 declaration) and its Unlock once the
+// lock time passed; a sell curve created in the token's genesis (shape Linear and shape Chromatic,
+// unbound), a crossing Collected buy that an executor fills against the curve, the Claim of what
+// the buy collected, and the cancels. Every wallet-signed transaction is checked on the node as in
+// scenarios.mjs. Nothing runs on import.
 //
-// The lock UI offers whole days or a date (the start of that day in the viewer's time zone). A lock of a few minutes is a date in a time
-// zone whose next midnight is a few minutes away: the app page's zone is set with the DevTools protocol (Emulation.setTimezoneOverride)
-// while the creation is planned and signed; the lock time itself is absolute (unix ms in the script and the declaration).
+// The lock UI offers whole days or a date (the start of that day in the viewer's time zone). A lock
+// of a few minutes is a date in a time zone whose next midnight is a few minutes away: the app
+// page's zone is set with the DevTools protocol (Emulation.setTimezoneOverride) while the creation
+// is planned and signed; the lock time itself is absolute (unix ms in the script and the
+// declaration).
 import { collapse, log, shot, sleep } from './common.mjs';
 import { connectWallet, goto, openApp, outputsOf, runFlow, signOnConfirmScreen } from './driver.mjs';
 import {
@@ -17,30 +21,42 @@ const tid = (h, id) => h.page.getByTestId(id);
 const short = (s) => (s ? `${s.slice(0, 10)}...` : '-');
 /** The Unlock button shows this long after the lock time (ui/orders/unlock.ts UNLOCK_MARGIN_MS). */
 const UNLOCK_MARGIN_MS = 90_000;
-/** The lock is at least this far from the moment the creation is planned (the two approvals and the review must fit). */
+/**
+ * The lock is at least this far from the moment the creation is planned (the two approvals and the
+ * review must fit).
+ */
 const LOCK_LEAD_MS = 6 * 60_000;
 
-/** `rc` with another token as "token A" (openTicket / place / cancelStep read `rc.token`); everything else, `h` included, from `rc`. */
+/**
+ * `rc` with another token as "token A" (openTicket / place / cancelStep read `rc.token`);
+ * everything else, `h` included, from `rc`.
+ */
 const withToken = (rc, token) => override(rc, { token });
 
-/** An object that reads `rc` but has `props` as its own (defined, never assigned: an inherited setter would write through to `rc`). */
+/**
+ * An object that reads `rc` but has `props` as its own (defined, never assigned: an inherited
+ * setter would write through to `rc`).
+ */
 function override(rc, props) {
   const o = Object.create(rc);
   for (const [k, v] of Object.entries(props)) Object.defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true });
   return o;
 }
 
-// ------------------------------------------------------------------------------------------------ time zone of the lock
+// ------------------------------------------------------------------------------------------------
+// time zone of the lock
 
 /**
- * A time zone whose next local midnight is `leadMs` from now (rounded up to the whole minute): a custom ICU offset zone `GMT+hh:mm`
- * (Chromium takes it in Emulation.setTimezoneOverride), with the date input's value (that day) and the instant (unix ms). The named zones
- * have offsets in 30 / 45 minute steps at best, which leaves up to an hour to wait. The page computes the instant itself
+ * A time zone whose next local midnight is `leadMs` from now (rounded up to the whole minute): a
+ * custom ICU offset zone `GMT+hh:mm` (Chromium takes it in Emulation.setTimezoneOverride), with the
+ * date input's value (that day) and the instant (unix ms). The named zones have offsets in 30 / 45
+ * minute steps at best, which leaves up to an hour to wait. The page computes the instant itself
  * (`new Date(y, m - 1, d)` in the overridden zone); this is the harness's own, compared with it.
  */
 export function pickLockZone(leadMs = LOCK_LEAD_MS, now = Date.now()) {
   const until = Math.ceil((now + leadMs) / 60_000) * 60_000;
-  // local = utc + offset: midnight at `until` needs offset = -(minutes of the UTC day at `until`), taken into [-12:00, +12:00)
+  // local = utc + offset: midnight at `until` needs offset = -(minutes of the UTC day at `until`),
+  // taken into [-12:00, +12:00)
   let off = -Math.round((until % 86_400_000) / 60_000);
   off = ((off % 1440) + 1440) % 1440;
   if (off >= 720) off -= 1440;
@@ -50,7 +66,10 @@ export function pickLockZone(leadMs = LOCK_LEAD_MS, now = Date.now()) {
   return { zone, offsetMinutes: off, date, until, msToMidnight: until - now };
 }
 
-/** The script-number push of `n` as hex (little endian, minimal, a 0x00 when the top bit is set): how a CLTV lock time sits in the script. */
+/**
+ * The script-number push of `n` as hex (little endian, minimal, a 0x00 when the top bit is set):
+ * how a CLTV lock time sits in the script.
+ */
 function scriptNumHex(n) {
   const bytes = [];
   let v = BigInt(n);
@@ -67,21 +86,26 @@ async function setZone(h, zone) {
   await h.cdp.send('Emulation.setTimezoneOverride', { timezoneId: zone ?? '' });
 }
 
-/** Moves the page's `Date.now` by `offsetMs` (the real clock is kept as `__kobRealNow`); 0 puts it back. A reload ends it. */
+/**
+ * Moves the page's `Date.now` by `offsetMs` (the real clock is kept as `__kobRealNow`); 0 puts it
+ * back. A reload ends it.
+ */
 const shiftClock = (page, offsetMs) =>
   page.evaluate((off) => {
     const real = (window.__kobRealNow ??= Date.now.bind(Date));
     Date.now = off ? () => real() + off : real;
   }, offsetMs);
 
-// ------------------------------------------------------------------------------------------------ Create token with a sale / lock
+// ------------------------------------------------------------------------------------------------
+// Create token with a sale / lock
 
 const parseKas = (s) => Number(String(s ?? '').replace(/[^0-9.]/g, ''));
 
 /**
- * One creation on `#/create` with the published public-mint program: `sale` (null = keep all, or { keepPct, shape: 'linear' | 'chromatic',
- * levels, multiple, octaves, totalKas }) and `lock` (null or { zone, date }). Signs on the confirmation screen (two approvals: preparation,
- * genesis), checks both on the node and the result panel, and returns what the later steps need.
+ * One creation on `#/create` with the published public-mint program: `sale` (null = keep all, or {
+ * keepPct, shape: 'linear' | 'chromatic', levels, multiple, octaves, totalKas }) and `lock` (null
+ * or { zone, date }). Signs on the confirmation screen (two approvals: preparation, genesis),
+ * checks both on the node and the result panel, and returns what the later steps need.
  */
 async function createToken(rc, r, label, { sale = null, lock = null, expectConfirm = [] } = {}) {
   const { h } = rc;
@@ -97,7 +121,8 @@ async function createToken(rc, r, label, { sale = null, lock = null, expectConfi
   await tid(h, 'issue-ticker').fill(ticker);
   await tid(h, 'issue-decimals').fill('8');
   await tid(h, 'issue-supply').fill(String(SUPPLY));
-  // 1 KAS per token output (Advanced > Carrier; the TN10 default is 10 KAS, which every token UTXO keeps)
+  // 1 KAS per token output (Advanced > Carrier; the TN10 default is 10 KAS, which every token UTXO
+  // keeps)
   await tid(h, 'issue-carrier').fill('1');
   const form = {};
   if (sale) {
@@ -125,7 +150,8 @@ async function createToken(rc, r, label, { sale = null, lock = null, expectConfi
     if (form.curveError) throw new Error(`the curve form says: ${form.curveError}`);
   }
   if (lock) {
-    // the page's zone: the date chosen starts a few minutes from now there (set until the creation is signed: the plan re-reads the date)
+    // the page's zone: the date chosen starts a few minutes from now there (set until the creation
+    // is signed: the plan re-reads the date)
     await setZone(h, lock.zone);
     await tid(h, 'issue-lock-choice').selectOption('date');
     await tid(h, 'issue-lock-date').fill(lock.date);
@@ -149,8 +175,9 @@ async function createToken(rc, r, label, { sale = null, lock = null, expectConfi
     try {
       s = await signOnConfirmScreen(h, rc.ctx, rc.drv, `${label}-create`, rc.name);
     } catch (e) {
-      // the genesis was not sent (the wallet's node did not list the preparation's output yet: "Nothing was sent; try again"): the page
-      // offers "Finish the creation" (issue-pending-send), which asks for the genesis again (wallet/visibility.ts, README)
+      // the genesis was not sent (the wallet's node did not list the preparation's output yet:
+      // "Nothing was sent; try again"): the page offers "Finish the creation" (issue-pending-send),
+      // which asks for the genesis again (wallet/visibility.ts, README)
       if (!/Nothing was sent|not sent/i.test(String(e?.message))) throw e;
       notSent = { error: String(e.message).slice(0, 800), screenshot: await shot(h.page, rc.name, `${label}-not-sent`) };
       await tid(h, 'confirm-close').click().catch(() => {});
@@ -163,10 +190,12 @@ async function createToken(rc, r, label, { sale = null, lock = null, expectConfi
   const step = { ...stepOf(`create ${label} (${ticker})`, s), form, confirmText: collapse(s.confirmText ?? '').slice(0, 3000), genesisNotSentFirst: notSent ?? undefined };
   step.screenshots.unshift(formShot);
   r.steps.push(step);
-  // (a creation finished later has no confirmation text of its own: its first attempt's screen was the one read)
+  // (a creation finished later has no confirmation text of its own: its first attempt's screen was
+  // the one read)
   if (!notSent) for (const re of expectConfirm) if (!re.test(step.confirmText)) throw new Error(`the confirmation screen does not say ${re}: ${step.confirmText.slice(0, 900)}`);
   if (!s.submitted) throw new Error('the submitted genesis was not captured from the node connection');
-  // the preparation: the first submit of this creation with a KCC-23 payload (0x00 + JSON); the genesis is the last one
+  // the preparation: the first submit of this creation with a KCC-23 payload (0x00 + JSON); the
+  // genesis is the last one
   const prep = h.submits.slice(submitsBefore).find((x) => typeof x.tx?.payload === 'string' && x.tx.payload.startsWith('00'))?.tx ?? null;
   const declared = typeof prep?.payload === 'string' && prep.payload.startsWith('00') ? Buffer.from(prep.payload.slice(2), 'hex').toString('utf8') : null;
   const spent = s.submitted.inputs?.[0]?.transactionId ?? s.submitted.inputs?.[0]?.previousOutpoint?.transactionId;
@@ -192,7 +221,10 @@ async function createToken(rc, r, label, { sale = null, lock = null, expectConfi
   return { token, genesisTxid: s.txid, genesisTx: s.submitted, declaration: declared, records, form, step };
 }
 
-/** "Finish the creation" after a genesis that was not sent: one approval (the preparation is on the node), the result panel. */
+/**
+ * "Finish the creation" after a genesis that was not sent: one approval (the preparation is on the
+ * node), the result panel.
+ */
 async function finishCreation(rc, label) {
   const { h } = rc;
   const t0 = Date.now();
@@ -218,19 +250,25 @@ async function finishCreation(rc, label) {
   return { txid, kind: null, appStatus: null, summary: '', shownAs: 'Finish the creation', acks: [], confirmText: '', popups, screenshots, totalMs: Date.now() - t0, submitted };
 }
 
-/** Lists the new token in the run's test registry (and the mock indexer) and reloads the app, as the issuance of token A does. */
+/**
+ * Lists the new token in the run's test registry (and the mock indexer) and reloads the app, as the
+ * issuance of token A does.
+ */
 async function listToken(rc, token) {
   rc.extraTokens.push(token);
   await rc.setRegistry();
 }
 
-// ------------------------------------------------------------------------------------------------ lock
+// ------------------------------------------------------------------------------------------------
+// lock
 
 /**
- * Create token with "Lock my share until" a date a few minutes ahead (keep all: the wallet's whole share is locked). Checks the declaration's
- * `lock` script carries the lock time, the Portfolio's "locked until" line, that Unlock is not offered before the lock time (plus the
- * margin), and on TN10 that an early unlock is not accepted: the app refuses it on the node's past median time, and, with that check taken
- * out in a second page of the same wallet (features.test, the test hook), the wallet-signed early unlock is refused by the node.
+ * Create token with "Lock my share until" a date a few minutes ahead (keep all: the wallet's whole
+ * share is locked). Checks the declaration's `lock` script carries the lock time, the Portfolio's
+ * "locked until" line, that Unlock is not offered before the lock time (plus the margin), and on
+ * TN10 that an early unlock is not accepted: the app refuses it on the node's past median time,
+ * and, with that check taken out in a second page of the same wallet (features.test, the test
+ * hook), the wallet-signed early unlock is refused by the node.
  */
 export async function runLock(rc) {
   return scenario(rc, 'lock', async (r) => {
@@ -272,8 +310,9 @@ export async function runLock(rc) {
 }
 
 /**
- * Opens Portfolio > Balances and polls `read()` every 2 s until `pred` holds; the tab is opened afresh only every 45 s (each opening
- * reloads the balances, which take several seconds on TN10 with many token UTXOs: opening it every few seconds never let them finish).
+ * Opens Portfolio > Balances and polls `read()` every 2 s until `pred` holds; the tab is opened
+ * afresh only every 45 s (each opening reloads the balances, which take several seconds on TN10
+ * with many token UTXOs: opening it every few seconds never let them finish).
  */
 async function pollBalances(rc, read, pred, timeoutMs) {
   const t0 = Date.now();
@@ -307,10 +346,12 @@ const lockedView = (h, token) =>
   }, token);
 
 /**
- * TN10 only. A second page of the same wallet with the app's test hook (features.test: `window.__kob.services`) and its clock moved past the
- * lock time: (1) Unlock shows, the press asks the node's past median time and refuses ("Not open yet"); nothing is sent. (2) With the
- * services' `getPastMedianTime` taken out (the harness, not the app), the press plans the unlock: the lock coin (1 KAS to the lock's address)
- * is signed and accepted, the unlock (lock time = the lock's time) is signed by the wallet and must be REFUSED by the node.
+ * TN10 only. A second page of the same wallet with the app's test hook (features.test:
+ * `window.__kob.services`) and its clock moved past the lock time: (1) Unlock shows, the press asks
+ * the node's past median time and refuses ("Not open yet"); nothing is sent. (2) With the services'
+ * `getPastMedianTime` taken out (the harness, not the app), the press plans the unlock: the lock
+ * coin (1 KAS to the lock's address) is signed and accepted, the unlock (lock time = the lock's
+ * time) is signed by the wallet and must be REFUSED by the node.
  */
 async function earlyUnlock(rc, r) {
   const L = rc.lockRun;
@@ -334,15 +375,17 @@ async function earlyUnlock(rc, r) {
     let raw = '';
     while (Date.now() - t0 < 30_000 && !refusal) {
       refusal = collapse(await tid(h2, 'orders-action-error').innerText().catch(() => ''));
-      // the raw text sits under "Details" (kit RawDetails): textContent reads it with the details closed
+      // the raw text sits under "Details" (kit RawDetails): textContent reads it with the details
+      // closed
       raw = collapse(await h2.page.locator('[data-testid="orders-action-error"] [data-testid="raw-details"]').textContent({ timeout: 2000 }).catch(() => ''));
       if (!refusal && (await tid(h2, 'flow-status').count())) break;
       await sleep(500);
     }
     const appCheck = { name: 'early unlock: the app asks the node clock', clockAheadMs: offset, refusal, raw, sent: h2.submits.length - sent0, screenshot: await shot(h2.page, rc.name, 'lock-early-app-refusal') };
     r.steps.push(appCheck);
-    // the app's sentence is "Not open yet on the network ..." (orders.unlock.notOpen); the Portfolio's banner shows it through the generic
-    // builder-error mapping (i18n/build-error.ts: /lock ?time/ -> build.timing), its own text under Details
+    // the app's sentence is "Not open yet on the network ..." (orders.unlock.notOpen); the
+    // Portfolio's banner shows it through the generic builder-error mapping (i18n/build-error.ts:
+    // /lock ?time/ -> build.timing), its own text under Details
     if (!/Not open yet/i.test(`${refusal} ${raw}`) || appCheck.sent) throw new Error(`an early unlock was not refused by the app before signing: ${JSON.stringify(appCheck).slice(0, 600)}`);
     log(`[${rc.name}] lock: early Unlock refused by the app: "${refusal.slice(0, 120)}" (details: ${raw.slice(0, 160)})`);
 
@@ -363,15 +406,17 @@ async function earlyUnlock(rc, r) {
     } catch (e) {
       flowError = String(e?.message ?? e).slice(0, 1200);
     }
-    // a flow whose last step the node refused still ends on "Done: n transaction(s) submitted" (`flow-done`, the steps before it), the
-    // refused step marked Failed with the node's sentence: read from the flow card
+    // a flow whose last step the node refused still ends on "Done: n transaction(s) submitted"
+    // (`flow-done`, the steps before it), the refused step marked Failed with the node's sentence:
+    // read from the flow card
     const flowText = collapse(await tid(h2, 'tx-flow').innerText().catch(() => bodyText(h2)));
     const nodeSaid = /The node reported an error: ([^.]*(?:.[^ ]*)?)/i.exec(flowText)?.[1] ?? null;
     if (!flowError && nodeSaid) flowError = `the flow's unlock step failed: The node reported an error: ${nodeSaid}`;
     const subs = h2.submits.slice(sent1).filter((x) => x.tx);
     const node = { name: 'early unlock: wallet-signed, sent to the node', flowError, flowText: flowText.slice(0, 600), flowDone: flow?.done ?? null, submitted: subs.map((x) => ({ txid: x.txid ?? null, lockTime: x.tx.lockTime ?? null, inputs: x.tx.inputs?.length, outputs: x.tx.outputs?.length })), popups: popupView(flow?.steps?.[0]?.popups ?? []), screenshot: await shot(h2.page, rc.name, 'lock-early-node') };
     r.steps.push(node);
-    // the lock coin (first submit, output 0 at the lock's address) is on the node; the locked genesis outputs are still unspent
+    // the lock coin (first submit, output 0 at the lock's address) is on the node; the locked
+    // genesis outputs are still unspent
     const coin = subs.find((x) => String(x.tx.lockTime ?? '0') === '0');
     const unlockTry = subs.find((x) => String(x.tx.lockTime ?? '0') !== '0');
     if (coin?.txid) {
@@ -392,7 +437,10 @@ async function earlyUnlock(rc, r) {
   }
 }
 
-/** After the lock time + margin: Unlock on the Portfolio, one wallet flow, the locked genesis outputs spent, the whole supply back as the wallet's. */
+/**
+ * After the lock time + margin: Unlock on the Portfolio, one wallet flow, the locked genesis
+ * outputs spent, the whole supply back as the wallet's.
+ */
 export async function runUnlock(rc) {
   return scenario(rc, 'unlock', async (r) => {
     const { h } = rc;
@@ -402,7 +450,8 @@ export async function runUnlock(rc) {
     const mock = rc.result.mode === 'mock';
     const openAt = L.until + UNLOCK_MARGIN_MS + 5_000;
     if (mock) {
-      // the mock node has no clock of its own: the page's clock is moved past the lock time instead of waiting
+      // the mock node has no clock of its own: the page's clock is moved past the lock time instead
+      // of waiting
       await shiftClock(h.page, Math.max(0, openAt - Date.now()));
     } else if (Date.now() < openAt) {
       log(`[${rc.name}] unlock: waiting ${Math.round((openAt - Date.now()) / 1000)} s for the lock time + margin`);
@@ -447,7 +496,8 @@ export async function runUnlock(rc) {
   });
 }
 
-// ------------------------------------------------------------------------------------------------ curves
+// ------------------------------------------------------------------------------------------------
+// curves
 
 /** The curve row of Open orders: type, live, its level line. */
 const curveRow = async (h, id) => ({
@@ -456,7 +506,10 @@ const curveRow = async (h, id) => ({
   bought: await h.page.evaluate((id) => (document.querySelector(`[data-testid="order-bought-${id}"]`)?.textContent ?? '').replace(/\s+/g, ' ').trim(), id),
 });
 
-/** Creates a token with a curve in its genesis and checks the curve in Open orders (one row, type curve, level 1 of N, live). */
+/**
+ * Creates a token with a curve in its genesis and checks the curve in Open orders (one row, type
+ * curve, level 1 of N, live).
+ */
 async function createCurve(rc, r, label, sale, levels) {
   const c = await createToken(rc, r, label, { sale, expectConfirm: [new RegExp(`on a curve: ${levels} levels`)] });
   if (!/curve order is on the book/i.test(c.step.result.curve)) throw new Error(`the result panel does not say the curve is on the book: "${c.step.result.curve}"`);
@@ -477,12 +530,15 @@ async function createCurve(rc, r, label, sale, levels) {
 }
 
 /**
- * Linear curve sale in the genesis (10% kept, 10 levels, 40 KAS if sold out, last level 5x the first), checked in Open orders and Balances.
- * The app refuses a buy into the wallet's own curve ("would trade against your own order"), so the buy goes to a curve of the counterparty
- * (the DEV key, in its own browser with the in-page signer, as the market scenario): the counterparty creates the same curve in its genesis,
- * the wallet places a crossing Collected limit buy of two levels at 1.15x the first level's price (below the second level's), an executor on
- * the network fills one level of the curve into it (with --mock the mock fills both). The Claim of what the buy collected is its own result
- * (`claim`); then the wallet cancels the buy and its own curve, the counterparty its curve.
+ * Linear curve sale in the genesis (10% kept, 10 levels, 40 KAS if sold out, last level 5x the
+ * first), checked in Open orders and Balances. The app refuses a buy into the wallet's own curve
+ * ("would trade against your own order"), so the buy goes to a curve of the counterparty (the DEV
+ * key, in its own browser with the in-page signer, as the market scenario): the counterparty
+ * creates the same curve in its genesis, the wallet places a crossing Collected limit buy of two
+ * levels at 1.15x the first level's price (below the second level's), an executor on the network
+ * fills one level of the curve into it (with --mock the mock fills both). The Claim of what the buy
+ * collected is its own result (`claim`); then the wallet cancels the buy and its own curve, the
+ * counterparty its curve.
  */
 export async function runCurve(rc) {
   return scenario(rc, 'curve', async (r) => {
@@ -491,7 +547,8 @@ export async function runCurve(rc) {
     rc.curveRun = { token: own.token, filled: false };
     if (!rc.openCounterparty) throw new Error('no counterparty key (DEV_PRIVATE_KEY) for the curve the wallet buys from');
     const cp = await rc.openCounterparty();
-    // own properties only: `rc.h` is an accessor of the wallet's page, assigning through it would replace the wallet's page
+    // own properties only: `rc.h` is an accessor of the wallet's page, assigning through it would
+    // replace the wallet's page
     const cpRc = override(rc, { ...cp, name: `${rc.name}-counterparty`, address: await cp.h.page.getByTestId('wallet-address').getAttribute('data-value') });
     const cpRefresh = async () => {
       await cp.h.page.reload();
@@ -501,7 +558,8 @@ export async function runCurve(rc) {
     };
     try {
       if (rc.result.mode === 'mock') await rc.mock.giveKas('maker', 100, 4);
-      // the counterparty's curve: the same terms, created in its genesis (listToken reloads the wallet's page; the counterparty's is reloaded here)
+      // the counterparty's curve: the same terms, created in its genesis (listToken reloads the
+      // wallet's page; the counterparty's is reloaded here)
       Object.defineProperty(cpRc, 'setRegistry', { value: async () => { await rc.setRegistry(); await cpRefresh(); } });
       const theirs = await createCurve(cpRc, r, 'cp-curve', sale, 10);
       const tok = theirs.token;
@@ -510,7 +568,8 @@ export async function runCurve(rc) {
       const bidSompi = Math.floor(firstSompi * 1.15);
       const price = (bidSompi / 1e8).toFixed(8).replace(/0+$/, '');
       Object.assign(rc.curveRun, { token: tok, curveId: theirs.curveId, level });
-      // the crossing buy: a plain limit (fills at its limit, so an executor keeps the difference to the curve's level price), Collected delivery
+      // the crossing buy: a plain limit (fills at its limit, so an executor keeps the difference to
+      // the curve's level price), Collected delivery
       const bid = await place(withToken(rc, tok), r, 'curve-buy', { type: 'limit', side: 'buy', fields: { amount: String(2n * level), price, minFill: String(level), delivery: 'collected', crossing: 'limit' }, expectSummary: /Buy limit order/ });
       const bidId = bid.covenantIds[0];
       Object.assign(rc.curveRun, { bidId, bidTxid: bid.txid, bidTx: bid.tx, price });
@@ -545,7 +604,8 @@ export async function runCurve(rc) {
       rc.curveRun.fillViews = views;
       log(`[${rc.name}] curve: ${rc.curveRun.filled ? `filled: curve ${views.curve.level}, buy holds "${views.bid.bought}"` : `no fill after ${Math.round(fill.waitedMs / 1000)} s`}`);
       rc.claimResult = await runClaim(rc);
-      // the buy (its KAS back, and what it holds), the counterparty's curve, the wallet's own curve (its custody back)
+      // the buy (its KAS back, and what it holds), the counterparty's curve, the wallet's own curve
+      // (its custody back)
       const R = rc.curveRun;
       const bidCreatedBy = new Map([[R.bidTxid, R.bidTx], ...(R.claimTxid ? [[R.claimTxid, R.claimTx]] : [])]);
       const cb = await cancelStep(withToken(rc, tok), r, 'curve-buy', { placed: bidCreatedBy, covenantIds: [bidId], looseSpent: !!R.filled && !R.claimTxid });
@@ -561,7 +621,10 @@ export async function runCurve(rc) {
   });
 }
 
-/** The Claim of what the Collected buy of `runCurve` bought: Balances' Claim, its dialog (amount, fee), one approval; the buy stays open. */
+/**
+ * The Claim of what the Collected buy of `runCurve` bought: Balances' Claim, its dialog (amount,
+ * fee), one approval; the buy stays open.
+ */
 async function runClaim(rc) {
   return scenario(rc, 'claim', async (r) => {
     const R = rc.curveRun;
@@ -593,7 +656,8 @@ async function runClaim(rc) {
     const step = { ...stepOf('claim', s), balancesBefore: before, bought, dialog: view, done };
     step.screenshots.unshift(dialogShot);
     r.steps.push(step);
-    // node: the claim's covenant outputs (the buy's continuation, the tokens to the wallet) are unspent
+    // node: the claim's covenant outputs (the buy's continuation, the tokens to the wallet) are
+    // unspent
     step.verify = await verifyCreated(rc, s.submitted, s.txid, 'claim');
     const got = await trackedFrom(h, s.txid, tokenId);
     step.tracked = got.items;
@@ -615,14 +679,19 @@ async function runClaim(rc) {
   });
 }
 
-/** The `claim` result of the run (made inside `curve`); SKIP when the curve scenario did not run. */
+/**
+ * The `claim` result of the run (made inside `curve`); SKIP when the curve scenario did not run.
+ */
 export async function claimResult(rc) {
   if (rc.claimResult) return rc.claimResult;
   const why = rc.curveRun ? 'not reached: the curve scenario stopped before the claim' : 'runs inside the curve scenario (--only curve,claim)';
   return { name: 'claim', ok: !rc.curveRun, skipped: rc.curveRun ? null : why, error: rc.curveRun ? why : null, steps: [] };
 }
 
-/** Chromatic curve sale in the genesis (10% kept, 1 octave = 13 levels, the top 2x the first, 20 KAS if sold out), then its cancel. */
+/**
+ * Chromatic curve sale in the genesis (10% kept, 1 octave = 13 levels, the top 2x the first, 20 KAS
+ * if sold out), then its cancel.
+ */
 export async function runChromatic(rc) {
   return scenario(rc, 'chromatic', async (r) => {
     const sale = { keepPct: 10, shape: 'chromatic', octaves: 1, totalKas: 20 };
