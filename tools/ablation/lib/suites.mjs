@@ -7,7 +7,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 export const SUITE_NAMES = ['kcc20-sell', 'kcc20-buy', 'kron-sell', 'kron-buy', 'pair', 'cond-pair', 'cond-pair-rpt', 'ifd-pair', 'curve-ask'];
 
-// Suites whose catalogs are not run (name -> reason). `--suite all` skips them; naming one fails. None at present.
+// Suites whose catalogs are not run (name -> reason). `--suite all` skips them and naming one
+// fails. There are none at present.
 export const PENDING_SUITES = {};
 
 const normId = s => String(s).trim();
@@ -20,7 +21,7 @@ function normalize(suite, m) {
   if (!m.id || /\s/.test(normId(m.id))) fail('id must be a non-empty token without whitespace');
   if (!m.file) fail('missing file');
   if (!Array.isArray(m.edits) || !m.edits.length) fail('missing edits');
-  // runs: testFn -> { expect: ids that must flip, hold: ids that must stay rejected }
+  // runs: testFn -> { expect: ids that must flip, hold: ids that must stay rejected }.
   const byTest = new Map();
   const slot = t => byTest.get(t) ?? byTest.set(t, { testFn: t, expect: [], hold: [] }).get(t);
   if (m.test) for (const id of m.expect ?? []) slot(m.test).expect.push(normId(id));

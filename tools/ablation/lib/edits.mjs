@@ -1,15 +1,19 @@
-// Edit DSL for contract mutations. Every edit is validated: it must match exactly where it says it matches and it must
-// change the text; otherwise EditError is thrown (an ablation can never silently be a no-op).
+// Edit DSL for contract mutations.
+//
+// Every edit is validated. It must match exactly where it says it matches and it must change the
+// text. Otherwise EditError is thrown, so an ablation is never silently a no-op.
 //
 //   del(str)                    remove `str` (must occur exactly once)
 //   rep(from, to)               replace `from` by `to` (`from` must occur exactly once)
-//   rx(anchor, pattern, to)     find `anchor` (exactly once), then replace the first match of `pattern` that lies at or
-//                               after the anchor and before the next `entry` / `function` declaration (so a pattern
-//                               can not leak into a neighbouring function) by `to` (string, or function(match) -> string)
-//   rxDel(anchor, pattern)      rx with an empty replacement; the newline right after the match is removed too
-//   fn(label, f)                arbitrary callback f(text) -> text (escape hatch, still checked for no-op)
+//   rx(anchor, pattern, to)     find `anchor` (exactly once), then replace the first match of
+//                               `pattern` that lies at or after the anchor and before the next
+//                               `entry` / `function` declaration, so a pattern cannot leak into
+//                               a neighbouring function. `to` is a string or function(match).
+//   rxDel(anchor, pattern)      rx with an empty replacement; the newline after the match goes too
+//   fn(label, f)                arbitrary callback f(text) -> text (escape hatch, still checked
+//                               for no-op)
 //
-// The object forms ({del}, {replace}, {regex}, {fn}) are what the catalogs may also spell out directly.
+// The catalogs may also spell out the object forms ({del}, {replace}, {regex}, {fn}) directly.
 
 export class EditError extends Error {}
 
@@ -42,7 +46,7 @@ function applyRegex(text, { anchor, pattern, to = '' }) {
   const n = countOf(text, anchor);
   if (n !== 1) throw new EditError(`regex: anchor ${preview(anchor)} occurs ${n}x (need exactly 1)`);
   const a = text.indexOf(anchor);
-  // scope: from the anchor to the next entry / function declaration
+  // Scope: from the anchor to the next entry / function declaration.
   const rest = text.slice(a + anchor.length);
   const decl = /\n[ \t]*(?:entry|function)\b/.exec(rest);
   const end = a + anchor.length + (decl ? decl.index : rest.length);

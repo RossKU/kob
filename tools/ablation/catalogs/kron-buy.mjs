@@ -1,31 +1,47 @@
-// KRON buy-side suite: contracts/orders/kron (KobCondBidKron, KobIfdAskKron), protocol v3 (no lots).
-// Ported from the protocol v2 catalog: ids, notes and expectations preserved, every edit retargeted to the v3
-// contract text (amounts in base units, prices sompi per whole token, quoteOf rounding, merge argument -(k * 2^53 + m)).
-// New v3 checks get their own mutations (minFill, the quoteOf floor / ceil choices, price >= tip, the update parent
-// guard; the 0x08 first-byte merge checks are defence in depth and HELD). IA24a / IA24b are defence in depth (two
-// independent binds of the booked exit): removing either alone must NOT flip anything.
-// Audit completion (2026-10-13): every other require of KobCondBidKron / KobIfdAskKron has an AU-KCB-* / AU-KIA-* entry
-// (a confirmed flip, or a held defence-in-depth entry with its combined removal). Cross-contract defence in depth: the
-// exit's n > 0 / the entry's m > 0 (AU-KCB-5, AU-KIA-13, combined AU-KCB-5x) and the entry's merge scale > 0 / the exit's
-// scale > 0 (AU-KIA-12, combined AU-KIA-12x), and the update's scale > 0 / the evidence KobAskKron's scale > 0 (AU-KCB-39,
-// combined AU-KCB-39x; judged at the evidence input, which refuses its own negative scale).
-// Bid refund (2026-11): the terminal non-re-arm fill of KobCondBidKron sends the KAS beyond deliveryCarrier back to the
-// maker once it is REFUND_MIN (1 KAS) or more: BR-1 .. BR-9 (BR-6 is AU-*-25, its rem < REFUND_MIN scenario NBR08 added) (witnesses NBR* of kron_v2_buy_bid_refund, PBR* are its
-// positive controls). The bound rem >= REFUND_MIN has three entries: if (false) (BR-7), > (BR-8: rem = REFUND_MIN may not
-// stay on the delivery), >= REFUND_MIN - 1 (BR-9). Checks without a flip: the bound `if (r < tx.inputs.length)` of
-// refundTo (a slot beyond the input count is legal; without the bound the out-of-range OpInputCovenantId fails the
-// script, so only the positive control PBR08 sees it, as a rejected positive, never as an accepted attack). The re-arm
-// path (rearm) sends the remainder back to the entry, which checks it: no refund there.
-// Not in this catalog: the two `require(iv >= 0)` lines of KobCondBidKron.touchBid / touch (audit 2026-10-29 F1, a negative
-// evidence interval); their reproducers are in audit_rest_interval_tests, which is not an ablation suite.
+// KRON buy-side suite: contracts/orders/kron (KobCondBidKron, KobIfdAskKron), no lots.
+//
+// The edits target the contract text with amounts in base units, prices in sompi per whole token,
+// quoteOf rounding and the merge argument -(k * 2^53 + m).
+//
+// The base-unit checks have their own mutations: minFill, the quoteOf floor / ceil choices,
+// price >= tip and the update parent guard. The 0x08 first-byte merge checks are defence in depth
+// and HELD. IA24a / IA24b are defence in depth too: they are two independent binds of the booked
+// exit, and removing either alone must NOT flip anything.
+//
+// Every other require of KobCondBidKron / KobIfdAskKron has an AU-KCB-* / AU-KIA-* entry. It is a
+// confirmed flip, or a held defence-in-depth entry with its combined removal. The cross-contract
+// defence in depth is:
+// - the exit's n > 0 and the entry's m > 0 (AU-KCB-5, AU-KIA-13, combined AU-KCB-5x);
+// - the entry's merge scale > 0 and the exit's scale > 0 (AU-KIA-12, combined AU-KIA-12x);
+// - the update's scale > 0 and the evidence KobAskKron's scale > 0 (AU-KCB-39, combined
+//   AU-KCB-39x). It is judged at the evidence input, which refuses its own negative scale.
+//
+// Bid refund: the terminal non-re-arm fill of KobCondBidKron sends the KAS beyond deliveryCarrier
+// back to the maker once it is REFUND_MIN (1 KAS) or more. The entries are BR-1 .. BR-9. BR-6 is
+// AU-*-25 with its rem < REFUND_MIN scenario NBR08. The witnesses are NBR* of
+// kron_v2_buy_bid_refund, and PBR* are its positive controls.
+// - The bound rem >= REFUND_MIN has three entries: if (false) (BR-7), > (BR-8: rem = REFUND_MIN
+//   may not stay on the delivery) and >= REFUND_MIN - 1 (BR-9).
+// - The bound `if (r < tx.inputs.length)` of refundTo has no flip. A slot beyond the input count
+//   is legal. Without the bound the out-of-range OpInputCovenantId fails the script, so only the
+//   positive control PBR08 sees it, as a rejected positive and never as an accepted attack.
+// - The re-arm path (rearm) sends the remainder back to the entry, which checks it. There is no
+//   refund there.
+//
+// Not in this catalog: the two `require(iv >= 0)` lines of KobCondBidKron.touchBid / touch (a
+// negative evidence interval). Their reproducers are in audit_rest_interval_tests, which is not an
+// ablation suite.
+//
 // Checks without a witness attack (not in the catalog):
-//  - KobCondBidKron.update `require(side == SIDE_ASK)`: touch() returns SIDE_ASK (tk >= 0) or SIDE_BID (tk < 0) and
-//    nothing else; the branch is entered only with side != SIDE_BID, so the check cannot fail.
-//  - cancel `require(sb.length == 65)` (both contracts): `sb[64]` of a shorter signature fails on its own, a longer one
-//    is no Schnorr signature for checkSig.
-//  - `require(refundTip >= 0)` (KobCondBidKron.refund, KobIfdAskKron refund and close): its only use is
-//    `tx.outputs[self].value + refundTip >= ...`, so a negative refundTip raises what the maker must receive; it only
-//    tightens the keeper's payout, no transaction is accepted when the check is removed.
+// - KobCondBidKron.update `require(side == SIDE_ASK)`. touch() returns SIDE_ASK (tk >= 0) or
+//   SIDE_BID (tk < 0) and nothing else. The branch is entered only with side != SIDE_BID, so the
+//   check cannot fail.
+// - Cancel `require(sb.length == 65)` (both contracts). `sb[64]` of a shorter signature fails on
+//   its own, and a longer one is no Schnorr signature for checkSig.
+// - `require(refundTip >= 0)` (KobCondBidKron.refund, KobIfdAskKron refund and close). Its only
+//   use is `tx.outputs[self].value + refundTip >= ...`. A negative refundTip raises what the maker
+//   must receive. It only tightens the keeper's payout, so no transaction is accepted when the
+//   check is removed.
 import { del, rep, rx, rxDel } from '../lib/edits.mjs';
 import { touchMutations } from '../lib/touch.mjs';
 
@@ -43,20 +59,21 @@ const T_LIFE = 'kron_v2_buy_lifecycle';
 const T_NEG = 'kron_v2_buy_negative';
 const T_RPT = 'kron_v2_buy_repeat_ifd_attacks';
 const T_DUST = 'kron_v2_buy_lifecycle_dust_custody';
-// new v3 check batteries
+// Batteries of the base-unit checks.
 const T_MINFILL = 'kron_v2_buy_v3_min_fill';
 const T_ROUND = 'kron_v2_buy_v3_rounding';
 const T_TIP = 'kron_v2_buy_v3_tip';
 const T_MERGE = 'kron_v2_buy_v3_merge_push';
-// touch trigger batteries, one test fn per trigger kind
+// Touch trigger batteries, one test fn per trigger kind.
 const T_BS = 'kron_v2_buy_touch_cond_settle';
 const T_BA = 'kron_v2_buy_touch_cond_arm';
 const T_BT = 'kron_v2_buy_touch_cond_trail';
 const T_AF = 'kron_v2_buy_touch_ifd_fill';
 const T_AA = 'kron_v2_buy_touch_ifd_arm';
-// audit completion (2026-10-13): witnesses of the checks no scenario reached before
+// Witnesses of the checks no other scenario reaches.
 const T_AU_CB = 'kron_v2_buy_audit_cond_bid';
-// bid refund (2026-11): the terminal non-re-arm fill of KobCondBidKron returns the KAS beyond deliveryCarrier once it is REFUND_MIN or more
+// The terminal non-re-arm fill of KobCondBidKron returns the KAS beyond deliveryCarrier once it is
+// REFUND_MIN or more.
 const T_BR = 'kron_v2_buy_bid_refund';
 const T_AU_IA = 'kron_v2_buy_audit_ifd_ask';
 
@@ -194,7 +211,7 @@ export const mutations = [
     note: 'trail: at most once per trailWait (require(this.ageDaa >= trailWait))',
     edits: [rxDel('entry update(', /^\s*require\(this\.ageDaa >= trailWait\);\s*$/m)],
   },
-  // ---- KobCondBidKron, new v3 checks
+  // ---- KobCondBidKron, base-unit checks
   {
     id: 'CB-minfill',
     file: 'KobCondBidKron',
@@ -471,7 +488,7 @@ export const mutations = [
     note: 'ONLY the exit genesis id removed: double / aliased / attacker-authorised exits are accepted; the script equality still binds the tampered / plain / altered exits',
     edits: [rxDel('entry settle(', /^\s*require\(OpOutputCovenantId\(exitOut\) == blake2bWithKey\([\s\S]*?byte\[\]\("CovenantID"\)\s*\)\);\s*$/m)],
   },
-  // ---- KobIfdAskKron, new v3 checks
+  // ---- KobIfdAskKron, base-unit checks
   {
     id: 'IA-minfill',
     file: 'KobIfdAskKron',
@@ -531,7 +548,7 @@ export const mutations = [
     note: "v3: the merge requires the committed exit to quote at the entry's scale (exitState [118..126); an exit at scale 999 refused: the two would round the merge differently)",
     edits: [del('                require(int(byte[8](st.slice(118, 126))) == scale);\n')],
   },
-  // ---- fix pass
+  // ---- further checks of KobIfdAskKron
   {
     id: 'FXL3c',
     file: 'KobIfdAskKron',
@@ -566,7 +583,8 @@ export const mutations = [
     note: 'a sell-out merge never costs the entry (floor = max(prefund, exit value - proceeds))',
     edits: [rep('if (all > floor) { floor = all; }', 'floor = all;')],
   },
-  // ---- touch trigger: KobCondBidKron touchBid (buy-stop leg armed inside its fill), touch (update: arm / trail)
+  // ---- touch trigger: KobCondBidKron touchBid (buy-stop leg armed inside its fill) and touch
+  // (update: arm / trail)
   ...touchMutations({
     prefix: 'TB',
     file: 'KobCondBidKron',
@@ -705,7 +723,7 @@ export const mutations = [
     note: 'merge into an entry armed by update (armed 1, band): the continuation records the band origin (else the auction restarts)',
     edits: [rep('if (armed == 1 && bandDaa > 0) {', 'if (armed == 1 && bandDaa < 0) {')],
   },
-  // ---- 2026-10-06: the refund of an empty (repeating) entry
+  // ---- the refund of an empty (repeating) entry
   {
     id: 'IA-refund-held',
     file: 'KobIfdAskKron',
@@ -715,7 +733,7 @@ export const mutations = [
     note: 'refund (settle nb = 0) only while tokens are held: an empty repeating entry with a zero-amount custody would pin no output, so close() is its end (inputOnly: whether the KRON program itself takes the zero-amount custody is not what this check decides)',
     edits: [rxDel('    entry settle(byte[8] nb, int tokenIn,', /^\s*require\(amountLeft > 0\);$/m)],
   },
-  // ---- audit completion (2026-10-13): every remaining require of KobCondBidKron / KobIfdAskKron (AU-KCB-*, AU-KIA-*)
+  // ---- every remaining require of KobCondBidKron / KobIfdAskKron (AU-KCB-*, AU-KIA-*)
   { id: "AU-KCB-1", file: "KobCondBidKron", run: { [T_BS]: ["NTB18"], [T_BA]: ["NTV18"], [T_BT]: ["NTW18"] }, note: "tplState: the evidence UTXO is the P2SH of the redeem script it pushes (both evidence readers: touchBid, touch)", edits: [del("        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));\n")] },
   { id: "AU-KCB-2", file: "KobCondBidKron", run: { [T_BS]: ["NTB17"], [T_BA]: ["NTV17"], [T_BT]: ["NTW17"] }, note: "tplState: the evidence's template hash (a real order's state under another template)", edits: [del("        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, size)) == tpl);\n")] },
   { id: "AU-KCB-S0", file: "KobCondBidKron", run: { [T_AU_CB]: ["NAU-KCBS0"] }, note: "noStrays scan slot 0: a stray of the conditional buy at token slot 0 rides to the taker", edits: [rep("require(byte[32](OpTxInputScriptSigSubstr(x0, e0, e0 + 32)) != me);", 'require(true);')] },
@@ -811,7 +829,8 @@ export const mutations = [
   { id: "AU-KIA-43", file: "KobIfdAskKron", run: { [T_NEG]: ["KI-C1"] }, note: "cancel: SIGHASH_ALL only", edits: [del("        require(sb[64] == SIGHASH_ALL);\n")] },
   { id: "AU-KIA-44", file: "KobIfdAskKron", run: { [T_NEG]: ["KI-C2"] }, note: "cancel: the maker's signature", edits: [del("        require(checkSig(s, maker));\n")] },
   { id: "AU-KIA-45", file: "KobIfdAskKron", run: { [T_AU_IA]: ["NAU-KIA35"] }, inputOnly: ["NAU-KIA35"], note: "booking: n < MERGE_K (2^53), so the merge argument -(k * 2^53 + n) does not overflow into k; the KRON program refuses a custody above its amount cap on its own input, so only the entry flips (as V3-C-mergek in kron-sell)", edits: [del("                    require(n < MERGE_K);\n")] },
-  // ---- KobCondBidKron: the refund of a terminal non-re-arm fill (BR-*; witnesses NBR* in kron_v2_buy_bid_refund)
+  // ---- KobCondBidKron: the refund of a terminal non-re-arm fill
+  // The entries are BR-*. The witnesses are NBR* in kron_v2_buy_bid_refund.
   { id: "BR-1", file: "KobCondBidKron", run: { [T_BR]: ["NBR14"] }, note: "refundTo aliasing guard: the input at the refund slot is a token input or a plain key input, not another order (a KobAskKron of the same maker whose payout doubles as the refund)", edits: [rep("            require(ci == tokenCovId || ci == ZERO32);\n", "            require(true);\n")] },
   { id: "BR-2", file: "KobCondBidKron", run: { [T_BR]: ["NBR01", "NBR02", "NBR04", "NBR09", "NBR10", "NBR11", "NBR12"] }, note: "refundTo: the output at M - 1 - self pays P2PK(maker) (another key, a non-P2PK script, no refund output, one output for two orders, swapped refunds, a slot off by one)", edits: [del("        require(tx.outputs[r].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));\n")] },
   { id: "BR-3", file: "KobCondBidKron", run: { [T_BR]: ["NBR03"] }, hold: { [T_BR]: ["NBR13"] }, note: "refundTo: the refund carries at least rem (1 sompi short is refused; a spare output after the refund is also refused by the P2PK check)", edits: [del("        require(tx.outputs[r].value >= rem);\n")] },

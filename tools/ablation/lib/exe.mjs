@@ -16,7 +16,10 @@ export function findInDir(dir, bin) {
   return hits[0].p;
 }
 
-/** `cargo test -p kob-tests --test <bin> --no-run --message-format=json`; returns the executable of the test target. */
+/**
+ * Runs `cargo test -p kob-tests --test <bin> --no-run --message-format=json`.
+ * Returns the executable of the test target.
+ */
 export function findViaCargo(root, bin, { release = false } = {}) {
   const args = ['test', '-p', 'kob-tests', '--test', bin, '--no-run', '--message-format=json'];
   if (release) args.push('--release');

@@ -1,15 +1,20 @@
-// KobCurveAsk (docs/design/curve-ask-spec.md): contracts/orders, test binary kob_curve_ask_tests. One entry per require of
-// the contract, plus the walk's level step, its rounding and the unbound path.
+// KobCurveAsk (docs/design/curve-ask-spec.md): contracts/orders, test binary kob_curve_ask_tests.
+//
+// There is one entry per require of the contract, plus the walk's level step, its rounding and the
+// unbound path.
 //
 // Checks without a witness attack (not in the catalog):
-//  - cancel `require(sb.length == 65)`: as KobAsk (`sb[64]` of a shorter signature fails on its own, a longer one is no
-//    Schnorr signature for checkSig).
-//  - `require(levelSize > 0)`: 0 fails the division, a negative size walks away from `end` and `pos == end` refuses it.
-//  - `require(n <= amountLeft)`: a larger n only pays for units the custody does not hold (the token program keeps the
-//    amounts), and a curve is no trigger evidence.
-//  - `cid = OpInputCovenantId(tokenIn)` (the unbound path): without it `cid` stays zero and every unbound fill fails.
-// Defence in depth: the custody's owner and scheme checks both refuse a key-owned custody (NK6: held by each, flipped by
-// both, K6x).
+// - Cancel `require(sb.length == 65)`. As in KobAsk, `sb[64]` of a shorter signature fails on its
+//   own, and a longer one is no Schnorr signature for checkSig.
+// - `require(levelSize > 0)`. A size of 0 fails the division. A negative size walks away from
+//   `end`, and `pos == end` refuses it.
+// - `require(n <= amountLeft)`. A larger n only pays for units the custody does not hold, because
+//   the token program keeps the amounts. A curve is no trigger evidence.
+// - `cid = OpInputCovenantId(tokenIn)` (the unbound path). Without it `cid` stays zero and every
+//   unbound fill fails.
+//
+// Defence in depth: the custody's owner and scheme checks both refuse a key-owned custody. Each
+// holds it (NK6), both together flip it (K6x).
 import { del, rep } from '../lib/edits.mjs';
 
 export const suite = {

@@ -1,23 +1,31 @@
-// KobPair (contracts/orders/KobPair.sil): the plain pair order, one template for both sides and both token families.
-// Test binary: crates/kob-tests/tests/kob/kob_pair_tests.rs (scenario ids NP.., run on the two mixed program pairs
-// KCC20Ref_8x8 + KronToken2433 and KronToken2433 + KCC20Ref_8x8). Ids with `sk` / `sr` / `tk` / `tr` exist only where the
-// custody S / the bought token T is KCC-20 / KRON. The C1 fake-quote mutations (Q4 / Q5 / Q6) are witnessed by the
-// KobPair fake-quote scenarios directly AND by the same fake quotes read as the trigger evidence of a KobCondPair stop
-// (kob_cond_pair_tests::cond_pair_evidence_fake_quotes, NC40..NC43, fill and arm update): the conditional reads only the
-// pair order's state, so with the KobPair check removed the fake quote fills and arms the stop (every input accepts).
+// KobPair (contracts/orders/KobPair.sil): the plain pair order.
 //
-// Every `require` of KobPair.sil is an entry below (expect or hold) or one of the checks listed here. The unrolled
-// noStrays scan is one function for S and T: its eight slot lines (GS0..GS7) are witnessed by a T stray at each slot
-// (NP34t<k>, on the side whose T is the KCC-20 token: 8 inputs per token), its bound (GB) by a 9th input.
+// One template serves both sides and both token families. The test binary is
+// crates/kob-tests/tests/kob/kob_pair_tests.rs. Scenario ids are NP.., run on the two mixed program
+// pairs KCC20Ref_8x8 + KronToken2433 and KronToken2433 + KCC20Ref_8x8. Ids with `sk` / `sr` / `tk`
+// / `tr` exist only where the custody S, or the bought token T, is KCC-20 / KRON.
+//
+// The C1 fake-quote mutations (Q4 / Q5 / Q6) are witnessed by the KobPair fake-quote scenarios
+// directly. They are also witnessed by the same fake quotes read as the trigger evidence of a
+// KobCondPair stop (kob_cond_pair_tests::cond_pair_evidence_fake_quotes, NC40..NC43, fill and arm
+// update). The conditional reads only the pair order's state, so with the KobPair check removed
+// the fake quote fills and arms the stop (every input accepts).
+//
+// Every `require` of KobPair.sil is an entry below (expect or hold) or one of the checks listed
+// here. The unrolled noStrays scan is one function for S and T. Its eight slot lines (GS0..GS7)
+// are witnessed by a T stray at each slot (NP34t<k>, on the side whose T is the KCC-20 token: 8
+// inputs per token). Its bound (GB) is witnessed by a 9th input.
 //
 // Checks without a witness attack (not in the catalog):
-//  - cancel `require(sb.length == 65)`: `sb[64]` of a shorter signature fails on its own, a longer one is no Schnorr
-//    signature for checkSig.
-//  - the KRON marker byte 0x08 of `tin.slice(33, 36) == 0x010208` and the KCC-20 push bytes of the custody state: every
-//    genuine token UTXO of the program has them (only the id_type / scheme / borrow bytes are attacker-relevant: NP21).
-//  - the refund `require(refundTip >= 0)`: its only use is `tx.outputs[self].value + refundTip >= carriers`, so a
-//    negative refundTip raises the KAS the maker must receive (the keeper may take at most refundTip). A negative value
-//    only tightens the keeper's payout, never loosens it, so no transaction is accepted when the check is removed.
+// - Cancel `require(sb.length == 65)`. `sb[64]` of a shorter signature fails on its own, and a
+//   longer one is no Schnorr signature for checkSig.
+// - The KRON marker byte 0x08 of `tin.slice(33, 36) == 0x010208` and the KCC-20 push bytes of the
+//   custody state. Every genuine token UTXO of the program has them. Only the id_type / scheme /
+//   borrow bytes are attacker-relevant (NP21).
+// - The refund `require(refundTip >= 0)`. Its only use is
+//   `tx.outputs[self].value + refundTip >= carriers`. A negative refundTip raises the KAS the
+//   maker must receive, because the keeper may take at most refundTip. It only tightens the
+//   keeper's payout and never loosens it, so no transaction is accepted when the check is removed.
 import { del, rep, rx } from '../lib/edits.mjs';
 
 export const suite = {
@@ -40,7 +48,8 @@ const LIF = 'pair_lifecycle';
 const OUT = 'pair_outputs';
 const CAR = 'pair_carriers';
 const DM = 'pair_delivery_modes';
-// the KobCondPair stops armed by a fake pair quote (mode-1 evidence; KobCondPair is recompiled against the mutated KobPair)
+// The KobCondPair stops armed by a fake pair quote (mode-1 evidence). KobCondPair is recompiled
+// against the mutated KobPair.
 const CFQ = 'kob_cond_pair_tests::cond_pair_evidence_fake_quotes';
 
 const both = id => [`${id}a`, `${id}b`];
@@ -142,8 +151,10 @@ export const mutations = [
   // ---- cancel
   { id: 'X1', file: F, test: LIF, expect: both('NP79'), note: 'cancel: SIGHASH_ALL only', edits: [del('        require(sb[64] == SIGHASH_ALL);\n')] },
   { id: 'X2', file: F, test: LIF, expect: both('NP80'), note: 'cancel: the maker signs', edits: [rep('        require(checkSig(s, maker));', '        require(sb.length == 65);')] },
-  // ---- delivery modes (docs/design/bid-delivery-spec.md; WP-C3: kob_pair_tests::pair_delivery_modes, ids <side>t<family> +
-  // NM.., the side a / b and the KCC-20 T family k; the KRON-T battery has no attack of its own, mode 0 only)
+  // ---- delivery modes (docs/design/bid-delivery-spec.md)
+  // The scenarios are kob_pair_tests::pair_delivery_modes. Their ids are <side>t<family> + NM..,
+  // where the side is a / b and the KCC-20 T family is k. The KRON-T battery has no attack of its
+  // own, mode 0 only.
   { id: "DM-P1", file: F, test: DM, expect: ["atkNM01","btkNM01","atkNM02","btkNM02","atkNM03","btkNM03","atkNM04","btkNM04","atkNM07","btkNM07","atkNM19","btkNM19","atkNM05","btkNM05","atkNM06","btkNM06"], inputOnly: ["atkNM05","btkNM05","atkNM06","btkNM06"], note: "mode 1 later fill: the bought-custody is known by its exact state (amount bought, plain owner = the order id, zero guard, the commitment)", edits: [del("            require(tr.slice(tPre, tPre + 112) == byte[](0x08) + byte[](bought as byte[8]) + cMid + tail);\n")] },
   { id: "DM-P5", file: F, test: DM, expect: ["atkNM79","btkNM79"], inputOnly: ["atkNM79","btkNM79"], note: "mode 2 top-up: the receive UTXO is the P2SH of the script its state is read from", edits: [rep("                        require(OpAuthOutputIdx(tTplIn, 0) == self);\n                        require(tx.inputs[tTplIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(tr)));\n", "                        require(OpAuthOutputIdx(tTplIn, 0) == self);\n")] },
   { id: "DM-P10", file: F, test: "pair_second_topup", expect: ["aNM20","bNM20"], note: "mode 2 top-up: output i is the receive UTXO's successor (DLV-07: a second order claims the receive UTXO another order tops up)", edits: [del("                        require(OpAuthOutputIdx(tTplIn, 0) == self);\n")] },

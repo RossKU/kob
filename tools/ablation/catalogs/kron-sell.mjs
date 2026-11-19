@@ -1,32 +1,58 @@
-// KRON sell-side suite: contracts/orders/kron (KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron), protocol v3
-// (amounts in base units, minFill, quoteOf rounding in the maker's favour, merge argument -(k * 2^53 + m)).
-// Ported from the ad-hoc ablate_sell.mjs; ids and expectations preserved where the check still exists. Each mutation must
-// flip its scenarios on BOTH pinned KRON templates (the tests loop over both and print "=== KRON template <file>").
-// Touch trigger: the T*-* entries (lib/touch.mjs generates one per evidence check; see README). The V3-* entries mutate
-// the checks protocol v3 added (minFill, rounding direction, tip <= price, the 0x08 merge checks, the update parent guard,
-// n < MERGE_K on booking and on a re-arming take-profit, the merge exit at the entry's scale).
-// Audit completion (2026-10-13): every require of the four templates has an entry (the AU-KA / AU-KB / AU-KCA / AU-KIB
-// blocks at the end; new witnesses in the v3_audit_*_kron test fns, ids NAU-K* / PAU-K*), or is listed here.
-// Bid refund (2026-11): the terminal fill of KobBidKron sends the KAS beyond deliveryCarrier back to the maker once it is
-// REFUND_MIN (1 KAS) or more: BR-1 .. BR-9 (BR-6 is AU-*-25, its rem < REFUND_MIN scenario NBR08 added) (witnesses NBR* of v3_bid_refund_kron, PBR* are its positive controls; the
-// remaining v3_audit_bid_kron / v2_* terminal attacks run on the refund layout). The bound rem >= REFUND_MIN has three
-// entries: if (false) (BR-7), > (BR-8: rem = REFUND_MIN may not stay on the delivery), >= REFUND_MIN - 1 (BR-9).
-// Checks without a flip: the bound `if (r < tx.inputs.length)` of refundTo (a slot beyond the input count is legal; without
-// the bound the out-of-range OpInputCovenantId fails the script, so only the positive control PBR09 sees it, as a rejected
-// positive, never as an accepted attack).
+// KRON sell-side suite: contracts/orders/kron (KobAskKron, KobBidKron, KobCondAskKron,
+// KobIfdBidKron).
+//
+// The edits target the contract text with amounts in base units, minFill, quoteOf rounding in the
+// maker's favour and the merge argument -(k * 2^53 + m). Each mutation must flip its scenarios on
+// BOTH pinned KRON templates. The tests loop over both and print "=== KRON template <file>".
+//
+// Touch trigger: the T*-* entries. lib/touch.mjs generates one per evidence check (see README).
+// The V3-* entries mutate the base-unit checks:
+// - minFill;
+// - the rounding direction;
+// - tip <= price;
+// - the 0x08 merge checks;
+// - the update parent guard;
+// - n < MERGE_K on booking and on a re-arming take-profit;
+// - the merge exit at the entry's scale.
+//
+// Every require of the four templates has an entry (the AU-KA / AU-KB / AU-KCA / AU-KIB blocks at
+// the end, with witnesses in the v3_audit_*_kron test fns, ids NAU-K* / PAU-K*), or is listed
+// here.
+//
+// Bid refund: the terminal fill of KobBidKron sends the KAS beyond deliveryCarrier back to the
+// maker once it is REFUND_MIN (1 KAS) or more. The entries are BR-1 .. BR-9. BR-6 is AU-*-25 with
+// its rem < REFUND_MIN scenario NBR08. The witnesses are NBR* of v3_bid_refund_kron, and PBR* are
+// its positive controls. The remaining v3_audit_bid_kron / v2_* terminal attacks run on the refund
+// layout.
+// - The bound rem >= REFUND_MIN has three entries: if (false) (BR-7), > (BR-8: rem = REFUND_MIN
+//   may not stay on the delivery) and >= REFUND_MIN - 1 (BR-9).
+// - The bound `if (r < tx.inputs.length)` of refundTo has no flip. A slot beyond the input count
+//   is legal. Without the bound the out-of-range OpInputCovenantId fails the script, so only the
+//   positive control PBR09 sees it, as a rejected positive and never as an accepted attack.
+//
 // Checks without a witness attack (not in the catalog):
-//  - cancel `require(sb.length == 65)` (KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron): `sb[64]` of a shorter
-//    signature fails on its own, a longer one is no Schnorr signature for checkSig.
-//  - `require(refundTip >= 0)` (KobAskKron settle n = 0, KobBidKron refund, KobCondAskKron settle n = 0, KobIfdBidKron
-//    refund): its only use is `tx.outputs[self].value + refundTip >= <carriers / escrow>`, so a negative refundTip raises
-//    what the maker must receive. It only tightens the keeper's limit; no transaction becomes acceptable without it.
-//  - KobCondAskKron update `require(side == SIDE_BID)`: touch() returns SIDE_ASK (tk >= 0) or SIDE_BID (tk < 0) and
-//    nothing else, so the else branch of `if (side == SIDE_ASK)` is only entered with side == SIDE_BID.
-// Input-only flips (the token program refuses the same transaction on its own input): the stray-scan bounds (a 5th token
-// input), an id_type 3 custody of the order's id (no input is P2PK of the id), the zero fills (an empty delivery).
-// Defence in depth (hold + combined): fill n > 0 and the minFill rule (AU-KA-13 / 13x, AU-KCA-15 / 15x); the IFD exit
-// script equality and its genesis id, the covenant id being derived from the script (AU-KIB-18 / 18x); the exit template
-// hash holds NI4 (also refused by the script equality) and flips NAU-KIB34, a look-alike exit template.
+// - Cancel `require(sb.length == 65)` (KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron).
+//   `sb[64]` of a shorter signature fails on its own, and a longer one is no Schnorr signature for
+//   checkSig.
+// - `require(refundTip >= 0)` (KobAskKron settle n = 0, KobBidKron refund, KobCondAskKron settle
+//   n = 0, KobIfdBidKron refund). Its only use is `tx.outputs[self].value + refundTip >=
+//   <carriers / escrow>`. A negative refundTip raises what the maker must receive. It only
+//   tightens the keeper's limit, so no transaction becomes acceptable without it.
+// - KobCondAskKron update `require(side == SIDE_BID)`. touch() returns SIDE_ASK (tk >= 0) or
+//   SIDE_BID (tk < 0) and nothing else, so the else branch of `if (side == SIDE_ASK)` is only
+//   entered with side == SIDE_BID.
+//
+// Input-only flips (the token program refuses the same transaction on its own input):
+// - the stray-scan bounds (a 5th token input);
+// - an id_type 3 custody of the order's id (no input is P2PK of the id);
+// - the zero fills (an empty delivery).
+//
+// Defence in depth (hold + combined):
+// - fill n > 0 and the minFill rule (AU-KA-13 / 13x, AU-KCA-15 / 15x);
+// - the IFD exit script equality and its genesis id, the covenant id being derived from the script
+//   (AU-KIB-18 / 18x);
+// - the exit template hash. It holds NI4 (also refused by the script equality) and flips
+//   NAU-KIB34, a look-alike exit template.
 import { del, rep, rx, rxDel } from '../lib/edits.mjs';
 import { touchMutations } from '../lib/touch.mjs';
 
@@ -46,19 +72,19 @@ const T_STRAY = 'v2_lifecycle_stray_custody';
 const T_RPT = 'v2_repeat_ifd_attacks';
 const T_TRIG = 'v2_negative_trigger_manipulation';
 const T_EXTRA = 'v2_kron_v23_extra_attacks';
-// touch trigger batteries, one test fn per trigger kind
+// Touch trigger batteries, one test fn per trigger kind.
 const T_SET = 'v2_touch_cond_settle';
 const T_ARM = 'v2_touch_cond_arm';
 const T_TRL = 'v2_touch_cond_trail';
 const T_IF = 'v2_touch_ifd_fill';
 const T_IA = 'v2_touch_ifd_arm';
-// protocol v3
+// Test fns for the base-unit checks.
 const T_MIN = 'v3_min_fill';
 const T_RND = 'v3_rounding';
 const T_TIP = 'v3_tip';
 const T_PUSH = 'v3_merge_push';
 const T_LIM = 'v3_merge_limits';
-// audit completion (2026-10-13): every require of the four templates
+// Test fns for every require of the four templates.
 const T_TCE = 'v2_negative_tif_cancel_expiry';
 const T_NLT = 'v2_negative_limits_and_tips';
 const T_NTV = 'v2_negative_time_variants';
@@ -70,7 +96,8 @@ const T_AU_KA = 'v3_audit_ask_kron';
 const T_AU_KB = 'v3_audit_bid_kron';
 const T_AU_KCA = 'v3_audit_cond_ask_kron';
 const T_AU_KIB = 'v3_audit_ifd_bid_kron';
-// bid refund (2026-11): the terminal fill of KobBidKron returns the KAS beyond deliveryCarrier once it is REFUND_MIN or more
+// The terminal fill of KobBidKron returns the KAS beyond deliveryCarrier once it is REFUND_MIN or
+// more.
 const T_BR = 'v3_bid_refund_kron';
 
 export const mutations = [
@@ -840,7 +867,6 @@ export const mutations = [
       rep('newRpt = rptAmount - n;', 'newRpt = 0;'),
     ],
   },
-  // ---- fix pass (2026-09-30)
   {
     id: 'FXE1',
     file: 'KobAskKron',
@@ -873,7 +899,8 @@ export const mutations = [
     note: "merge: the committed exit (exitState, compared with the exit's state) quotes at the entry's scale (else the exit returns budget(m) at its scale and the entry re-arms m at its own)",
     edits: [del('            require(int(byte[8](st.slice(118, 126))) == scale);\n')],
   },
-  // ---- touch trigger: KobCondAsk touchAsk (stop leg armed inside its fill), touch (update: arm / trail)
+  // ---- touch trigger: KobCondAsk touchAsk (stop leg armed inside its fill) and touch
+  // (update: arm / trail)
   ...touchMutations({
     prefix: 'TA',
     file: 'KobCondAskKron',
@@ -894,7 +921,8 @@ export const mutations = [
       tokdaa: { [T_SET]: ['NTA02'] },
       tkcov: { [T_SET]: ['NTA02b'] },
       owner: { [T_SET]: ['NTA15', 'NTA16'] },
-      // the look-alike holder / non-P2SH input is also refused by the evidence ask's stray guard and the token program
+      // The evidence ask's stray guard and the token program also refuse the look-alike holder /
+      // non-P2SH input.
       tktpl: { run: { [T_SET]: ['NTA02c'] }, inputOnly: ['NTA02c'] },
       tkp2sh: { run: { [T_SET]: ['NTA02d'] }, inputOnly: ['NTA02d'] },
     },
@@ -1025,8 +1053,8 @@ export const mutations = [
     edits: [rx('    entry update(int ev) {', /require\(touchBid\(ev\) >= entryStop\);/, 'require(touchBid(ev) >= 0);')],
   },
 
-  // ---- update arms only an entry with something to fill and its stop on the limit's side; a merge keeps an armed
-  // entry's band origin
+  // ---- update arms only an entry with something to fill and its stop on the limit's side
+  // A merge keeps an armed entry's band origin.
   {
     id: 'TJ-amount',
     file: 'KobIfdBidKron',
@@ -1052,7 +1080,7 @@ export const mutations = [
     edits: [rep('if (armed == 1 && bandDaa > 0) {', 'if (armed == 1 && bandDaa < 0) {')],
   },
 
-  // ---- protocol v3: KobAskKron
+  // ---- base units: KobAskKron
   {
     id: 'V3-A-minfill',
     file: 'KobAskKron',
@@ -1077,7 +1105,7 @@ export const mutations = [
     note: 'p >= tip (also a decayed price): a negative proceeds rate would pay the maker nothing',
     edits: [del('            require(p >= tip);\n')],
   },
-  // ---- protocol v3: KobBidKron
+  // ---- base units: KobBidKron
   {
     id: 'V3-B-minfill',
     file: 'KobBidKron',
@@ -1134,7 +1162,7 @@ export const mutations = [
     note: 'the escrow is consumed at the ceil budget (used c = scale - 1 -> 0)',
     edits: [rep('int used = quoteOf(n, rate, scale - 1);', 'int used = quoteOf(n, rate, 0);')],
   },
-  // ---- protocol v3: KobCondAskKron
+  // ---- base units: KobCondAskKron
   {
     id: 'V3-C-minfill',
     file: 'KobCondAskKron',
@@ -1194,7 +1222,7 @@ export const mutations = [
     note: "re-arm: the exit sells n < 2^53 (the merge argument -(self * 2^53 + n) names this input and n only then: an exit of 2^53 + m at input i reads the merge of the booked exit at input i + 1 as its own; the KRON token refuses custodies above 10^9, so the exit input alone proves it)",
     edits: [del('                require(n < MERGE_K);\n')],
   },
-  // ---- protocol v3: KobIfdBidKron
+  // ---- base units: KobIfdBidKron
   {
     id: 'V3-I-floor',
     file: 'KobIfdBidKron',
@@ -1230,7 +1258,7 @@ export const mutations = [
     edits: [del('                require(n < MERGE_K);\n')],
   },
 
-  // ================================================================ audit completion (2026-10-13)
+  // ============================= every require of the four templates
   // AB-BEGIN
   { id: "AU-KA-1", file: "KobAskKron", run: { [T_AU_KA]: ["NAU-KA03"] }, note: "tplRs: the custody input is the P2SH of the holder script it pushes (a planted UTXO of the token covenant id)", edits: [del("        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));\n")] },
   { id: "AU-KA-2", file: "KobAskKron", run: { [T_AU_KA]: ["NAU-KA04"] }, note: "tplRs: the custody's template is the token's (a planted P2SH of a look-alike template)", edits: [del("        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, size)) == tpl);\n")] },
@@ -1398,7 +1426,8 @@ export const mutations = [
   { id: "AU-KIB-38", file: "KobIfdBidKron", run: { [T_AU_KIB]: ["NAU-KIB27"] }, note: "refund: no output bound to the entry's id", edits: [rep("        require(OpCovInputCount(tokenCovId) == 0);\n        require(OpCovOutputCount(selfId) == 0);\n", "        require(OpCovInputCount(tokenCovId) == 0);\n")] },
   { id: "AU-KIB-39", file: "KobIfdBidKron", run: { [T_AU_KIB]: ["NAU-KIB28"] }, note: "refund: output i pays P2PK(maker)", edits: [del("        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));\n")] },
   { id: "AU-KIB-40", file: "KobIfdBidKron", run: { [T_AU_KIB]: ["NAU-KIB29"] }, note: "refund: the maker gets the escrow minus at most refundTip", edits: [del("        require(tx.outputs[self].value + refundTip >= tx.inputs[self].value);\n")] },
-  // ---- KobBidKron: the refund of a terminal fill (BR-*; witnesses NBR* in v3_bid_refund_kron)
+  // ---- KobBidKron: the refund of a terminal fill
+  // The entries are BR-*. The witnesses are NBR* in v3_bid_refund_kron.
   { id: "BR-1", file: "KobBidKron", run: { [T_BR]: ["NBR14"] }, note: "refundTo aliasing guard: the input at the refund slot is a token input or a plain key input, not another order (a KobAskKron of the same maker whose payout doubles as the refund)", edits: [rep("            require(ci == tokenCovId || ci == ZERO32);\n", "            require(true);\n")] },
   { id: "BR-2", file: "KobBidKron", run: { [T_BR]: ["NBR01", "NBR02", "NBR04", "NBR09", "NBR10", "NBR11", "NBR12"] }, note: "refundTo: the output at M - 1 - self pays P2PK(maker) (another key, a non-P2PK script, no refund output, one output for two bids, swapped refunds, a slot off by one)", edits: [del("        require(tx.outputs[r].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));\n")] },
   { id: "BR-3", file: "KobBidKron", run: { [T_BR]: ["NBR03"], [T_AUC]: ["NM4"] }, hold: { [T_BR]: ["NBR13"] }, note: "refundTo: the refund carries at least rem (1 sompi short is refused; a spare output after the refund is also refused by the P2PK check)", edits: [del("        require(tx.outputs[r].value >= rem);\n")] },
