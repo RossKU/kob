@@ -1279,7 +1279,8 @@ pub fn build_cancel_order(r: &CancelOrder, budgets: BudgetFn) -> Result<BuiltTx>
 fn cancel_plan(s: &AnyState, retired: Option<[u8; 32]>) -> Result<SigPlan> {
     let id = s.template_id();
     Ok(match retired {
-        None => entry(id, s.encode(), "cancel", vec![Arg::Sig(s.maker())]),
+        // try_encode: a hostile state (a curve with no level) is an error, not a panic
+        None => entry(id, s.try_encode()?, "cancel", vec![Arg::Sig(s.maker())]),
         Some(h) => {
             let r = crate::retired::retired_for(&h, id)?;
             // the span of the retired template's own layout (legacy: no delivery block)

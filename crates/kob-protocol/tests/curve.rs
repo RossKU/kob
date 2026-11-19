@@ -501,3 +501,23 @@ fn chromatic_tables_climb_one_semitone_per_level() {
 
 const VECTOR_REALISED: i64 = 999_999_998_632;
 const VECTOR: [i64; 13] = [27_634, 29_278, 31_018, 32_863, 34_817, 36_888, 39_081, 41_405, 43_867, 46_475, 49_239, 52_167, 55_268];
+
+/// P-L4: a curve state with no level, or more levels than one push holds, is an error wherever it
+/// comes in (an indexer's JSON, a builder request), never a panic of the cancel builder or of the
+/// address computation (a trap in kob-wasm).
+#[test]
+fn sec_an_empty_or_unencodable_curve_table_is_an_error_not_a_panic() {
+    let s = curve(TemplateId::Kcc20Ref, 4);
+    let json = serde_json::to_value(Action::CancelOrder(cancel_curve(&s))).unwrap();
+    assert!(serde_json::from_value::<Action>(json.clone()).is_ok(), "the request as it is reads");
+    for table in [serde_json::json!([]), serde_json::Value::Array(vec![serde_json::json!(P250.to_string()); 65_535 / 8 + 1])] {
+        let mut v = json.clone();
+        v["order"]["state"]["state"]["table"] = table;
+        let e = serde_json::from_value::<Action>(v).expect_err("a table no push holds is refused as it is read");
+        assert!(e.to_string().contains("table"), "{e}");
+    }
+    // a state made in code: its cancel is an error too
+    let empty = CurveAskState { table: vec![], ..s };
+    let e = build(&Action::CancelOrder(cancel_curve(&empty))).expect_err("the cancel of an empty curve is refused");
+    assert!(e.to_string().contains("table"), "{e}");
+}

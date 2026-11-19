@@ -57,8 +57,32 @@ pub struct CurveAskState {
     #[serde(rename = "extensionCommitment", with = "crate::json::field")]
     pub extension_commitment: [u8; 32],
     /// Sompi per whole token of each level.
-    #[serde(rename = "table", with = "crate::json::field_vec")]
+    #[serde(rename = "table", with = "table_field")]
     pub table: Vec<i64>,
+}
+
+/// Most levels a table can hold: one push of at most 65,535 bytes, 8 per level.
+pub const CURVE_TABLE_MAX_ENTRIES: usize = 65_535 / 8;
+
+/// The table's JSON, as `json::field_vec`. A table with no level, or more than one push holds, is
+/// refused as it is read, so every state read encodes ([`CurveAskState::try_encode`]): an indexer
+/// that serves one gets an error, never a panic (a trap in kob-wasm).
+mod table_field {
+    use serde::{de, Deserializer, Serializer};
+
+    use super::CURVE_TABLE_MAX_ENTRIES;
+
+    pub fn serialize<S: Serializer>(v: &[i64], s: S) -> Result<S::Ok, S::Error> {
+        crate::json::field_vec::serialize(v, s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<i64>, D::Error> {
+        let v: Vec<i64> = crate::json::field_vec::deserialize(d)?;
+        if v.is_empty() || v.len() > CURVE_TABLE_MAX_ENTRIES {
+            return Err(de::Error::custom(format!("a curve table has 1 to {CURVE_TABLE_MAX_ENTRIES} levels, got {}", v.len())));
+        }
+        Ok(v)
+    }
 }
 
 fn err(m: impl Into<String>) -> StateError {
