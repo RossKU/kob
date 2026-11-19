@@ -242,7 +242,7 @@ export default {
   'confirm.issue.holderYou': 'your wallet',
   'confirm.issue.holderCurve': 'your curve order (on sale)',
   'confirm.issue.holderLocked': 'locked for you until {date}',
-  'confirm.issue.lockNote': 'Your share is locked on chain until that date: nobody can move it before, not even you. After it, Portfolio offers Unlock.',
+  'confirm.issue.lockNote': 'Your share is locked on chain until that date: nobody can move it before, not even you. After it, Portfolio offers Unlock with a wallet that signs script inputs; otherwise the CLI unlocks it with the private key.',
   'confirm.issue.curveSection': 'Sell on a curve',
   'confirm.issue.curveNote': 'One sell order of yours, created with the token. Its price steps up as it sells; you can cancel it any time.',
   'confirm.issue.curveAmount': 'For sale',

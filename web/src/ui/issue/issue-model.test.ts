@@ -295,3 +295,28 @@ describe('a creation finished later', () => {
     expect(saleOfRecord({})).toBeUndefined();
   });
 });
+
+describe('the creator lock and the wallet that will unlock it', () => {
+  it('warns when the wallet has not shown it signs script inputs (the check Unlock uses), and says so when its test failed', async () => {
+    const { lockSignerNote } = await import('./issue-model');
+    const store = new Map<string, string>();
+    const g = globalThis as { localStorage?: unknown };
+    const before = g.localStorage;
+    g.localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+    try {
+      const kastle = { id: 'kastle' as const, covenantSigning: 'unknown' as const };
+      const kasware = { id: 'kasware' as const, covenantSigning: 'proven' as const };
+      expect(lockSignerNote('180', kasware, wallet)).toBeNull();
+      expect(lockSignerNote('none', kastle, wallet)).toBeNull();
+      expect(lockSignerNote('180', null, wallet)).toBeNull();
+      expect(lockSignerNote('180', kastle, wallet)).toBe('unproven');
+      expect(lockSignerNote('date', kastle, wallet)).toBe('unproven');
+      store.set(`kob.covenantSign.v1:kastle:${wallet}`, 'unsupported');
+      expect(lockSignerNote('180', kastle, wallet)).toBe('unsupported');
+      store.set(`kob.covenantSign.v1:kastle:${wallet}`, 'ok');
+      expect(lockSignerNote('180', kastle, wallet)).toBeNull();
+    } finally {
+      g.localStorage = before;
+    }
+  });
+});

@@ -214,6 +214,8 @@ export default {
   'issue.lock.helpSale': 'Locks the share you keep (not the part for sale) on chain until the date. Nobody can move it before then, not even you. Buyers see the lock on the token page.',
   'issue.lock.helpHow': 'The token declares the lock, and the locked tokens are held by a script that only your key can spend, and only after the date. The token contract is the same.',
   'issue.lock.helpUnlock': 'After the date, Portfolio offers Unlock: one transaction (two if it first sends 1 KAS to the lock, most of which comes back). It needs a wallet that signs script inputs; the CLI can do it too.',
+  'issue.lock.signerUnproven': "This wallet has not shown that it can sign the unlock. If it cannot, unlocking after the date needs the CLI and this wallet's private key.",
+  'issue.lock.signerUnsupported': "This wallet cannot sign the unlock. After the date, unlocking needs the CLI and this wallet's private key. Choose No lock if you cannot export the key.",
   'issue.summary.sale': 'After creation',
   'issue.summary.saleCurve': 'Sell {sell} {ticker} on a curve: {levels} levels, {first} to {last} KAS',
   'issue.summary.saleAsk': 'Sell {sell} {ticker} at {price} KAS each, placed after creation',
