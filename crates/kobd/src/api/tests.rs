@@ -2361,6 +2361,38 @@ async fn the_daily_total_and_the_trusted_proxy_rule_bound_reports() {
     assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
 }
 
+/// Security review 2026-11-19 K-L2: a flood of reports from many addresses, or of GitHub issues (one runner address each),
+/// hides a few logos, never every one. The first report of a token still hides it at once.
+#[tokio::test]
+async fn reports_hide_at_most_max_pending_unreviewed_logos_and_github_shares_one_budget() {
+    let e = logo_env(crate::config::LogoReportsConfig { max_pending: 3, per_client_per_hour: 1, ..enabled() }, |_| {});
+    let app = router(e.state.clone());
+    for n in 1..=3u8 {
+        assert_eq!(post_from(&app, &report_body(n, "other"), &format!("10.2.0.{n}")).await.2["result"], "hidden");
+    }
+    // a fourth logo from a fourth address: refused until the operator reviews
+    let (s, hd, v) = post_from(&app, &report_body(4, "illegal"), "10.2.0.4").await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited")));
+    assert!(hd.get("retry-after").is_some());
+    // a report of a logo already hidden is still taken
+    assert_eq!(post_from(&app, &report_body(2, "illegal"), "10.2.0.5").await.2["result"], "hidden");
+    // the operator restores one: the next report hides at once again
+    crate::logo_reports::restore(&mut e.logo.test_connection(), &Hash32([1; 32]), 1_000_000, false).unwrap();
+    assert_eq!(post_from(&app, &report_body(4, "illegal"), "10.2.0.6").await.2["result"], "hidden");
+    let (_, _, v) = get_from(&app, "/v1/logo-blocklist", "127.0.0.1", &[]).await;
+    assert_eq!(v["hidden"], serde_json::json!([h(2), h(3), h(4)]));
+
+    // GitHub issues reach the indexer from a new runner address each: they share one client budget
+    let e = logo_env(crate::config::LogoReportsConfig { per_client_per_hour: 2, ..enabled() }, |_| {});
+    let app = router(e.state.clone());
+    let gh = |n: u8| format!("{{\"covenant_id\":\"{}\",\"reason\":\"other\",\"source\":\"github\",\"ref\":{n}}}", h(n));
+    for n in 1..=2u8 {
+        assert_eq!(post_from(&app, &gh(n), &format!("10.3.0.{n}")).await.0, StatusCode::OK);
+    }
+    assert_eq!(post_from(&app, &gh(3), "10.3.0.3").await.0, StatusCode::TOO_MANY_REQUESTS, "the GitHub budget is spent");
+    assert_eq!(post_from(&app, &report_body(3, "other"), "10.3.0.3").await.0, StatusCode::OK, "the web app's budget is its own");
+}
+
 #[tokio::test]
 async fn cors_allows_the_post_of_a_report() {
     let e = logo_env(enabled(), |c| c.cors_allow_origin = Some("https://kob.example".into()));
