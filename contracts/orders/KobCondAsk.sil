@@ -5,7 +5,9 @@ pragma silverscript ^0.1.0;
 // One covenant UTXO holds a take-profit leg and a stop leg. Together they
 // make stop, stop-limit, trailing stop, take-profit and OCO orders. KobIfdBid
 // creates one as the exit of each of its fills. The KRON version is
-// kron/KobCondAskKron.sil. The specification is docs/spec/order-types.md.
+// kron/KobCondAskKron.sil. The specification is docs/spec/order-types.md,
+// "Order types", and the trigger rules are in docs/spec/matcher.md,
+// "Triggers".
 //
 // Entries:
 //   settle(nb, tokenIn, tokOut, leg, ev, tk, t), with n = int(nb)
@@ -371,7 +373,6 @@ contract KobCondAsk(
             // the continuation, so partial fills do not restart the auction.
             int newArmed = armed;
             if (armed == 1 && bandDaa > 0) {
-                // record the auction origin (the arming transaction's DAA) for the remainder
                 newArmed = OpTxInputDaaScore(self);
             }
             // The take-profit leg 0 fills at tpPrice at any time.
