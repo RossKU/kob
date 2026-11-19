@@ -93,6 +93,8 @@ test('config: the defaults plus a token pass; bad values are listed together', (
   assert.ok(validate({ ...ok, reference: { ...ok.reference, pairAgreement: 0.006 } }).some((p) => /pairAgreement must be below half/.test(p)));
   assert.ok(validate({ ...ok, reference: { ...ok.reference, pairAgreement: null } }).some((p) => /pairAgreement/.test(p)), 'off only with minVenues 3');
   assert.deepEqual(validate({ ...ok, reference: { ...ok.reference, pairAgreement: null, minVenues: 3 } }), []);
+  // E-L5: one USDT/USD source may sit up to usdtAgreement from 1, so it too stays below half the spread.
+  assert.ok(validate({ ...ok, reference: { ...ok.reference, usdtAgreement: 0.006 } }).some((p) => /usdtAgreement must be below half/.test(p)));
   assert.ok(bad.some((p) => /must not exceed 100/.test(p)));
   const p = join(dir, 'cfg.json');
   writeFileSync(p, JSON.stringify({ network: 'testnet-10', keyFile: 'bot.key', dataDir: 'run', token: { covenantId: TOKEN, decimals: 6 } }));

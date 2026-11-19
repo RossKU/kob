@@ -34,7 +34,7 @@ export const DEFAULTS = {
     maxCandleAgeSec: 120, // a venue whose newest closed candle ended longer ago is stale
     timeoutMs: 10_000,
     usdtUsd: ['kraken', 'coinbase'], // sources of USDT/USD: every one is asked
-    usdtAgreement: 0.002, // two USDT/USD readings further apart give no rate (IDLE for the USDT venues)
+    usdtAgreement: 0.002, // two USDT/USD readings further apart, or a lone one further from 1, give no rate (IDLE for the USDT venues); below half the spread
     usdtBand: 0.01, // a USDT/USD reading further than this from 1 is refused
     stableMaxAgeSec: 300, // a USDT/USD or token USD reading older than this is not used
     crossCheck: { enabled: true, everySec: 300, venues: ['mexc', 'kucoin', 'bybit'], warnDeviation: 0.01 },
@@ -158,6 +158,7 @@ export function validate(cfg) {
   num(q.mergeAboveUtxos, 'quotes.mergeAboveUtxos', { min: 1, max: 3, int: true });
   if (half + ((q.levels - 1) * q.levelStepPct) / 100 >= 1) p.push('quotes: the outermost bid would be at or below zero');
   if (r.pairAgreement == null ? r.minVenues < 3 : r.pairAgreement >= half) p.push('reference.pairAgreement must be below half of quotes.spreadPct (as a fraction), or two venues can move the fair value past the best quote');
+  if (r.usdtAgreement >= half) p.push('reference.usdtAgreement must be below half of quotes.spreadPct (as a fraction), or one USDT/USD source can move the fair value past the best quote');
   if (q.repriceThreshold >= half) p.push('quotes.repriceThreshold must be below half of quotes.spreadPct (as a fraction), or a quote can drift through the fair value');
   if (q.skew?.enabled) {
     num(q.skew.maxShift, 'quotes.skew.maxShift', { min: 0, max: 0.5 });
