@@ -4,7 +4,8 @@ pragma silverscript ^0.1.0;
 //
 // This is the KRON version of contracts/orders/KobIfdAsk.sil, with the same
 // entries and the same rules. This header lists the differences.
-// contracts/orders/kron/README.md describes the family.
+// contracts/orders/kron/README.md describes the family, and the
+// specification is docs/spec/order-types.md.
 //
 // Token codec. The KRON state is 46 B at template offset 0, see KronState.
 // It has no borrow or extension fields. The custody is owned by this
@@ -24,8 +25,10 @@ pragma silverscript ^0.1.0;
 //
 // Stray guard. MAX_TOK_IN is 4, the KRON limit, where KobIfdAsk has 8.
 //
-// exitState is the last field, so the other state fields of the entry and
-// the contSpk windows are those of KobIfdAsk.
+// The exits deliver in KobCondBid's mode 0, so exitState is the last field
+// and the entry has no exitMode, exitRecvThreshold or exitTopupTip. The
+// other state fields of the entry and the contSpk windows are those of
+// KobIfdAsk.
 contract KobIfdAskKron(
     byte[32] COND_BID_TPL,
     int COND_BID_PRE,

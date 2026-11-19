@@ -7,7 +7,8 @@ pragma silverscript ^0.1.0;
 // buys back those n base units on the committed legs. That gives sell-first
 // IFD, IFO and bracket orders, optionally repeating. KobIfdBid has the same
 // shape with the sides swapped. The KRON version is kron/KobIfdAskKron.sil.
-// The specification is docs/spec/order-types.md.
+// The specification is docs/spec/order-types.md, with "Repeat IFD in
+// detail" and "Stop entries (IFD / IFO)".
 //
 // Entries:
 //   settle(nb, tokenIn, tokOut, exitOut, cPre, cSuf, ev, tk, t), n = int(nb)
@@ -473,7 +474,7 @@ contract KobIfdAsk(
                 int xPre = 0;
                 int xUntil = 0;
                 // The exits of a repeating entry merge back into it, so they
-                // deliver nothing themselves and keep no bought-custody: mode 0.
+                // keep no bought-custody and deliver in mode 0.
                 if (rptAmount != 0) {
                     require(exitMode == 0);
                 }
