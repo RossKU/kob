@@ -480,6 +480,17 @@ function budgetOf(e: OrderEntry, state: OrderState | null, desc: OrderDescriptio
   return { placed, left };
 }
 
+/**
+ * The token of an unbound curve (created in its token's genesis: its state names none) before the indexer names it: the custody the node found
+ * in the curve's own transaction, else the one its placement record took from that transaction. Never the zero id.
+ */
+function unboundTokenOf(e: OrderEntry): Hex | null {
+  const c = e.resolved?.custody;
+  const tx = e.resolved?.order?.transactionId;
+  if (c?.covenantId && tx && c.transactionId.toLowerCase() === tx.toLowerCase()) return c.covenantId;
+  return e.record?.token ?? null;
+}
+
 export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowModel {
   const es = entryState(e, ctx.kob);
   const status = statusOf(e);
@@ -570,8 +581,8 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
 
   return {
     // An unbound curve, created in its token's genesis, names no token in its state. The indexer's
-    // `token` is its custody's.
-    id: e.id, entry: e, token: desc && !desc.curve?.unbound ? desc.tokenCovId : (v?.token ?? desc?.tokenCovId ?? null), side, contract: v?.contract ?? kind, typeKey, status, source, live, expired, price, auctionStart, stopPrice, tip, allInPrice,
+    // `token` is its custody's; before the indexer has it, the token comes from the creation record.
+    id: e.id, entry: e, token: desc && !desc.curve?.unbound ? desc.tokenCovId : (v?.token ?? (desc ? unboundTokenOf(e) : null)), side, contract: v?.contract ?? kind, typeKey, status, source, live, expired, price, auctionStart, stopPrice, tip, allInPrice,
     budget: budgetOf(e, es ? es.state : null, desc, status),
     amountTotal, amountLeft, amountEstimated: v ? v.amount_estimated : e.resolved !== null && es?.source === 'node' && baseKind(es.state.kind) === 'KobBid',
     scale, minFill: desc ? desc.minFill : bi(v?.min_fill ?? null),

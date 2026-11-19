@@ -56,7 +56,7 @@
 // finds such an order at once.
 import type { OrderView } from '../data/indexer-types';
 import type { NodeApi, NodeUtxo } from '../data/node';
-import { asOrderState, big, custodiesOf, extensionOf, familyOfKind, familyOfOrder, isIfdKind, isOrderKind, pairExtFor, pairFactsOf, sideOf, tokenTplHashOf } from './order-facts';
+import { asOrderState, big, curveFactsOf, custodiesOf, extensionOf, familyOfKind, familyOfOrder, isIfdKind, isOrderKind, pairExtFor, pairFactsOf, sideOf, tokenTplHashOf } from './order-facts';
 import { custodyState, extensionOfState } from './token-state';
 import { recoverSweeps } from './sweep';
 import type { Hex, OrderKind, OrderState, OrderUtxo, RetiredTemplateInfo, SigPlan, TokenProgram, TokenState, TokenUtxo, TxJson, U64 } from './types';
@@ -112,6 +112,11 @@ export interface PlacementRecord {
    */
   ext?: Hex | null;
   /**
+   * An unbound curve (placed in its token's genesis, its state names no token): its token, the covenant id of its custody output in the
+   * placing tx. For display only; a cancel or an amend takes the token from the custody found on the node.
+   */
+  token?: Hex | null;
+  /**
    * The last proven current state of the order (an indexer view with `state_known`, or a node
    * resolution) and the UTXO it was seen at.
    */
@@ -150,6 +155,7 @@ export function isPlacementRecord(x: unknown): x is PlacementRecord {
     (x.prefund === undefined || x.prefund === null || (isObj(x.prefund) && Number.isInteger(x.prefund.output) && isDec(x.prefund.value))) &&
     (x.deadline === undefined || x.deadline === null || isDec(x.deadline)) &&
     (x.ext === undefined || x.ext === null || isHex(x.ext, 32)) &&
+    (x.token === undefined || x.token === null || isHex(x.token, 32)) &&
     (x.last === undefined || x.last === null || (isObj(x.last) && isHex(x.last.state) && (x.last.state as string).length > 0 && isHex(x.last.txid, 32) && Number.isInteger(x.last.index) && isDec(x.last.daa))) &&
     (x.cancelling === undefined || x.cancelling === null || (isObj(x.cancelling) && isHex(x.cancelling.txid, 32) && typeof x.cancelling.spends === 'string' && isDec(x.cancelling.atUnix))) &&
     (x.origin === undefined || x.origin === 'placed' || x.origin === 'indexer')
@@ -286,6 +292,13 @@ export interface RecordOpts {
   label?: string;
 }
 
+/** An unbound curve's token: the covenant id of its custody output in its own tx (null for any other order). */
+function unboundToken(tx: TxJson, order: OrderState, custodyOutput: number | undefined): Hex | null {
+  if (!curveFactsOf(order)?.unbound || custodyOutput === undefined) return null;
+  const id = tx.outputs[custodyOutput]?.covenant?.covenantId?.toLowerCase() ?? null;
+  return id && isHex(id, 32) ? id : null;
+}
+
 /**
  * Placement records of the orders a create or cancel-replace tx creates. An unsigned tx is fine,
  * because the tx id does not cover signatures.
@@ -296,11 +309,13 @@ export function recordsFromBuilt(kob: KobWasm, built: { tx: TxJson }, opts: Reco
     const order = asOrderState(r.order);
     if (!order) continue;
     if (order.state.maker !== opts.maker) continue;
+    const token = unboundToken(built.tx, order, r.custody?.output);
     out.push({
       version: 1, network: opts.network, maker: opts.maker, txid: r.transactionId, output: r.output, covenantId: r.covenantId, kind: order.kind,
       templateHash: pinnedHash(kob, order.kind), state: kob.encodeState(order), amount: amountOf(order),
       custody: r.custody ? { output: r.custody.output, value: r.custody.value, tokenState: r.custody.state } : null,
       ...(r.prefund ? { prefund: { output: r.prefund.output, value: r.prefund.value, tokenState: r.prefund.state } } : {}),
+      ...(token ? { token } : {}),
       value: r.value, deadline: r.deadline ?? null, placedAtUnix: String(opts.placedAtUnix), placedAtDaa: String(opts.placedAtDaa),
       ...(opts.note !== undefined ? { note: opts.note } : {}), ...(opts.label !== undefined ? { label: opts.label } : {}),
     });

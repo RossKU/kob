@@ -6,7 +6,7 @@ import { pubkeyOf } from '../testing/local-signer';
 import { issueRaw } from './issue';
 import { curveTable } from './curve';
 import { asOrderState, curveFactsOf, describeOrder, holdsTokens, isOrderKind, sideOfKind } from './order-facts';
-import { recordsFromBuilt } from './records';
+import { isPlacementRecord, recordsFromBuilt } from './records';
 
 const kob = loadKobNode();
 const maker = pubkeyOf('33'.repeat(32));
@@ -42,12 +42,37 @@ describe('a curve in its token genesis', () => {
     expect(r.amount).toBe((900n * SCALE).toString());
     expect(r.custody?.output).toBe(0);
     expect(r.custody?.tokenState?.owner).toBe(r.covenantId);
+    // its token, from the custody output's covenant in the genesis: the orders list names it before the indexer does
+    expect(r.token).toBe(plan.token.covenantId);
+    expect(isPlacementRecord(r)).toBe(true);
+    expect(isPlacementRecord({ ...r, token: 'zz' })).toBe(false);
     const st = asOrderState(kob.decodeState('KobCurveAsk', r.state))!;
     const c = curveFactsOf(st)!;
     expect(c).toMatchObject({ level: 0, levels: 10, unbound: true, total: 900n * SCALE });
     expect(c.priceNow).toBe(c.table[0]);
     // the description's price is the current level's
     expect(describeOrder(st).price).toBe(c.table[0]);
+  });
+});
+
+describe('a fresh unbound curve in the orders list (from the record, before the indexer has it)', () => {
+  it('names the token from its record or the custody the node found, never the zero id', async () => {
+    const { buildEntries, describeEntry } = await import('../ui/orders/orders-model');
+    const plan = genesisWithCurve();
+    const rec = recordsFromBuilt(kob, plan.built, { maker, network: 'testnet-10', placedAtUnix: 1, placedAtDaa: 2 })[0]!;
+    const row = (r: typeof rec, resolved = new Map()) => describeEntry(buildEntries([], [r], resolved)[0]!, { kob, clock: null });
+    expect(row(rec).token).toBe(plan.token.covenantId);
+    // an older record without the token: nothing rather than 0000...0000
+    const { token: _t, ...old } = rec;
+    expect(row(old).token).toBeNull();
+    // the node found its custody in the genesis: that custody's token
+    const order = kob.recoverOrders(plan.built.tx)[0]!;
+    const resolved = new Map([[rec.covenantId, {
+      status: 'live', covenantId: rec.covenantId, strays: [], stateChanged: false, checked: 1,
+      order: { transactionId: plan.built.tx.id, index: order.output, amount: order.value, state: asOrderState(order.order)! },
+      custody: { transactionId: plan.built.tx.id, index: 0, amount: '1000', covenantId: plan.token.covenantId, state: order.custody!.state },
+    }]]);
+    expect(row(old, resolved as never).token).toBe(plan.token.covenantId);
   });
 });
 
