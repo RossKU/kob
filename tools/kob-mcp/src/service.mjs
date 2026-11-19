@@ -36,6 +36,24 @@ function text(v, what, max = 1024) {
 
 export class Refusal extends Error {}
 
+/** The farthest a creator lock may open: about 10 years (3,653 days) from now. */
+export const MAX_LOCK_MS = 3_653 * 86_400_000;
+
+/**
+ * `lock_until` as the CLI takes it: +N days, hours or minutes, a date (UTC), or unix milliseconds
+ * (13 digits: seconds and microseconds are refused). It must be at most MAX_LOCK_MS away. The CLI
+ * checks it again, and that it lies in the future.
+ */
+export function lockUntil(v, now = Date.now()) {
+  const s = need(/^(\+\d{1,7}[dhm]|\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?Z)?|\d{13})$/, v, 'lock_until (+90d, a date YYYY-MM-DD or unix milliseconds, 13 digits)');
+  const rel = /^\+(\d+)([dhm])$/.exec(s);
+  const step = { d: 86_400_000, h: 3_600_000, m: 60_000 };
+  const at = rel ? now + Number(rel[1]) * step[rel[2]] : /^\d{13}$/.test(s) ? Number(s) : Date.parse(s.length === 10 ? `${s}T00:00:00Z` : s);
+  if (!Number.isFinite(at)) throw new Refusal(`BAD_ARGUMENT: lock_until ${s} is not a date`);
+  if (at - now > MAX_LOCK_MS) throw new Refusal(`BAD_ARGUMENT: lock_until ${s} is more than 10 years away`);
+  return s;
+}
+
 const hashArgs = (tool, args) => {
   const { confirm, ...rest } = args ?? {};
   const sorted = JSON.stringify(rest, Object.keys(rest).sort());
@@ -275,8 +293,7 @@ export class KobService {
     // UTXO, its custody, a kept share).
     // lock_until locks the kept share on chain (the curve's kept part, else keep_percent of the
     // supply, default all of it).
-    const lock = a.lock_until === undefined ? null
-      : need(/^(\+\d{1,5}[dhm]|\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?Z)?|\d{13,16})$/, a.lock_until, 'lock_until (+90d, a date YYYY-MM-DD or unix ms)');
+    const lock = a.lock_until === undefined ? null : lockUntil(a.lock_until);
     if (lock) argv.push('--lock-until', lock);
     let outputs = 1n;
     if (a.sell === 'curve') {

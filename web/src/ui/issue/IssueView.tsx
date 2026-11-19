@@ -57,6 +57,7 @@ import type { BuiltTx, Hex } from '../../kob/types';
 import type { PlanIssue } from '../../kob/plan-types';
 import type { CurveShape } from '../../kob/curve';
 import { isKeyOwned } from '../../kob/token-state';
+import { MAX_LOCK_SPAN_MS } from '../../kob/creator-lock';
 import type { Services } from '../../app/services';
 import { ConnectBar } from '../shell/WalletButton';
 import { visibilityCheckSupported } from '../../signer/seen';
@@ -939,6 +940,8 @@ export function IssueView() {
     const until = lockUntilOf(l);
     const err = errorOf('lock', l.choice === 'none' ? '' : 'x');
     const today = formatRowDate(Date.now());
+    // The last day a lock may open (kob/issue.ts refuses a later one).
+    const latest = formatRowDate(Date.now() + Number(MAX_LOCK_SPAN_MS) - 86_400_000);
     return (
       <div class="issue-lock" data-testid="issue-lock">
         <div class="issue-lock-row">
@@ -960,6 +963,7 @@ export function IssueView() {
               type="date"
               class="input issue-lock-date"
               min={today}
+              max={latest}
               value={l.date}
               aria-label={t('issue.lock.date')}
               aria-invalid={err ? 'true' : undefined}

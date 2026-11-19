@@ -260,6 +260,7 @@ export default {
   'issues.sale.no_share': 'Your wallet receives no tokens to sell: give it a share of the supply.',
   'issues.lock.invalid': 'Choose the date your share opens.',
   'issues.lock.past': 'The date your share opens must be in the future.',
+  'issues.lock.far': 'The date your share opens must be within 10 years.',
   'issues.lock.no_keep': 'Keep a share in your wallet to lock it: everything goes on sale.',
   'issues.lock.no_share': 'Your wallet receives no tokens to lock: give it a share of the supply.',
   'issues.sale.curve.invalid': 'This curve cannot be built: change the levels, the amount or the total.',

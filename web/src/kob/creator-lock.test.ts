@@ -137,6 +137,12 @@ describe('a creation with a lock', () => {
     expect(() => plan({ lockUntil: '1000' })).toThrow(/date/);
   });
 
+  it('refuses a lock more than 10 years away (a time in microseconds read as milliseconds)', () => {
+    expect(() => plan({ lockUntil: String(Date.now() + 3_650 * DAY) })).not.toThrow();
+    expect(() => plan({ lockUntil: String(Date.now() + 3_660 * DAY) })).toThrow(/within 10 years/);
+    expect(() => plan({ lockUntil: String(BigInt(Date.now() + 90 * DAY) * 1000n) })).toThrow();
+  });
+
   it('the app confirmation says locked for you, never another key, and blocks nothing', () => {
     const p = plan({ sale: { ...defaultSaleForm(), mode: 'ask', keepPct: '40', price: '1' } });
     const m = buildIssuanceModel({ kob, built: p.built, prep: p.prep, oneApproval: true, token: p.token, maker, tr: (k, q) => t(k, q) });

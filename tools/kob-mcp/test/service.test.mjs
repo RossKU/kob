@@ -211,6 +211,22 @@ test('token create: lock_until locks the kept share (a curve\'s kept part, else 
   assert.match((await svc.write('kob_token_create', { ...base, sell: 'curve', lock_until: '+90d' })).reason, /^BAD_ARGUMENT: lock_until locks the kept share/);
 });
 
+test('token create: lock_until is at most 10 years away, and a unix time is milliseconds (13 digits)', async () => {
+  const t = setup();
+  const svc = new KobService(t.cfg);
+  const base = { name: 'Test MCP', ticker: 'TMCN', decimals: 0, supply: '1000', fund_utxo: `${"aa".repeat(32)}:1:5000000000`, keep_percent: 20 };
+  assert.equal((await svc.write('kob_token_create', { ...base, lock_until: '+3650d' })).status, 'plan');
+  assert.equal((await svc.write('kob_token_create', { ...base, ticker: 'TMCO', lock_until: String(Date.now() + 365 * 86_400_000) })).status, 'plan');
+  const year = new Date().getUTCFullYear();
+  for (const far of ['+99999d', '+3700d', '+999999h', `${year + 11}-01-01`, String(Date.now() + 3_700 * 86_400_000)]) {
+    assert.match((await svc.write('kob_token_create', { ...base, lock_until: far })).reason, /^BAD_ARGUMENT: lock_until .*10 years/, far);
+  }
+  // microseconds or seconds, not milliseconds
+  for (const unit of [String(BigInt(Date.now() + 90 * 86_400_000) * 1000n), String(Math.floor(Date.now() / 1000) + 90 * 86_400)]) {
+    assert.match((await svc.write('kob_token_create', { ...base, lock_until: unit })).reason, /^BAD_ARGUMENT: lock_until/, unit);
+  }
+});
+
 test('fee estimate signs nothing and stores no plan', async () => {
   const t = setup();
   const svc = new KobService(t.cfg);

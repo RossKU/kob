@@ -22,7 +22,7 @@ import type { PlanIssue } from './plan-types';
 import { normalizeTicker } from './registry';
 import { hasBadChar } from './display';
 import { curveMinFill, curveNumbers, curveSpecOfSale, curveTable, parseSale, type CurveNumbers, type CurveTable, type SaleForm } from './curve';
-import { LOCK_TIME_THRESHOLD, MAX_UNTIL } from './creator-lock';
+import { LOCK_TIME_THRESHOLD, MAX_LOCK_SPAN_MS, MAX_UNTIL } from './creator-lock';
 import type { AnyState, BuiltTx, Hex, Kcc20State, KeyUtxo, TokenUtxo, U64 } from './types';
 import { KobError, type KobWasm } from './wasm';
 
@@ -622,12 +622,13 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
     }
   }
 
-  // "Lock my share until" takes a unix-ms time in the future. The consensus reads a lock time below
-  // 5 x 10^11 as a DAA score.
+  // "Lock my share until" takes a unix-ms time in the future, at most 10 years away. The consensus
+  // reads a lock time below 5 x 10^11 as a DAA score.
   const lockUntil = (form.lockUntil ?? '').trim();
   if (lockUntil !== '') {
     if (!/^\d{1,16}$/.test(lockUntil) || BigInt(lockUntil) < LOCK_TIME_THRESHOLD || BigInt(lockUntil) > MAX_UNTIL) err('lock.invalid', 'Choose the date your share opens.', 'lock');
     else if (BigInt(lockUntil) <= BigInt(Date.now())) err('lock.past', 'The date your share opens must be in the future.', 'lock');
+    else if (BigInt(lockUntil) > BigInt(Date.now()) + MAX_LOCK_SPAN_MS) err('lock.far', 'The date your share opens must be within 10 years.', 'lock');
   }
 
   return { issues, parsed: ok && supply !== null ? { supply, holders, carrier } : null };

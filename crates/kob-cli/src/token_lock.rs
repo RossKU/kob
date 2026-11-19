@@ -31,6 +31,9 @@ use crate::trade::opts;
 use crate::trade::units::{tokens, TokenUnit};
 
 const DAY_MS: u64 = 86_400_000;
+/// The farthest ahead `--lock-until` may be: about 10 years (3,653 days). A time in microseconds,
+/// or a wrong unit, would lock the share for millennia.
+pub const MAX_LOCK_MS: u64 = 3_653 * DAY_MS;
 /// A token's declaration the indexer does not have yet (a genesis just sent) is asked again this often, this far apart.
 const DECLARATION_ATTEMPTS: u32 = 6;
 const DECLARATION_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
@@ -73,7 +76,8 @@ pub fn utc(ms: u64) -> String {
 }
 
 /// `--lock-until`: `+90d`, `+12h`, `+15m` (from `now`), `YYYY-MM-DD` (00:00 UTC),
-/// `YYYY-MM-DDTHH:MM[:SS]Z` (UTC), or unix milliseconds. It must lie in the future.
+/// `YYYY-MM-DDTHH:MM[:SS]Z` (UTC), or unix milliseconds (13 digits). It must lie in the future,
+/// at most [`MAX_LOCK_MS`] (about 10 years) from `now`.
 pub fn parse_lock_until(v: &str, now: u64) -> Result<u64, String> {
     let bad = || {
         format!(
@@ -91,7 +95,14 @@ pub fn parse_lock_until(v: &str, now: u64) -> Result<u64, String> {
             _ => return Err(bad()),
         };
         now.checked_add(n.checked_mul(step).ok_or_else(bad)?).ok_or_else(bad)?
-    } else if t.len() >= 13 && t.bytes().all(|b| b.is_ascii_digit()) {
+    } else if !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()) {
+        // unix milliseconds now and for centuries have 13 digits: 10 are seconds, 16 microseconds
+        if t.len() != 13 {
+            return Err(format!(
+                "--lock-until {t}: a unix time is in milliseconds (13 digits), this one has {} (seconds have 10, microseconds 16)",
+                t.len()
+            ));
+        }
         t.parse().map_err(|_| bad())?
     } else {
         let (date, time) = t.split_once('T').unwrap_or((t, ""));
@@ -127,6 +138,9 @@ pub fn parse_lock_until(v: &str, now: u64) -> Result<u64, String> {
     }
     if until > kob_protocol::creator_lock::MAX_UNTIL {
         return Err(bad());
+    }
+    if until - now > MAX_LOCK_MS {
+        return Err(format!("--lock-until {} is more than 10 years away: a lock opens within 10 years", utc(until)));
     }
     Ok(until)
 }
@@ -470,9 +484,9 @@ mod tests {
         let now = 1_800_000_000_000;
         assert_eq!(parse_lock_until("+90d", now), Ok(now + 90 * DAY_MS));
         assert_eq!(parse_lock_until("+15m", now), Ok(now + 15 * 60_000));
-        assert_eq!(parse_lock_until("2027-02-16", 0).map(utc), Ok("2027-02-16 00:00 UTC".into()));
-        assert_eq!(parse_lock_until("2027-02-16T13:45Z", 0).map(utc), Ok("2027-02-16 13:45 UTC".into()));
-        assert_eq!(parse_lock_until("2027-02-16T13:45:30Z", 0), Ok(parse_lock_until("2027-02-16T13:45Z", 0).unwrap() + 30_000));
+        assert_eq!(parse_lock_until("2027-02-16", now).map(utc), Ok("2027-02-16 00:00 UTC".into()));
+        assert_eq!(parse_lock_until("2027-02-16T13:45Z", now).map(utc), Ok("2027-02-16 13:45 UTC".into()));
+        assert_eq!(parse_lock_until("2027-02-16T13:45:30Z", now), Ok(parse_lock_until("2027-02-16T13:45Z", now).unwrap() + 30_000));
         assert_eq!(parse_lock_until("1900000000000", now), Ok(1_900_000_000_000));
         for bad in ["90d", "+90y", "2027-02-30", "2027-2-16", "2027-02-16T13:45", "+d", "yesterday", "+0d"] {
             assert!(parse_lock_until(bad, now).is_err(), "{bad}");
@@ -480,5 +494,21 @@ mod tests {
         assert!(parse_lock_until("2020-01-01", now).unwrap_err().contains("not in the future"));
         assert_eq!(civil_from_days(days_from_civil(2028, 2, 29)), (2028, 2, 29));
         assert_eq!(days_from_civil(1970, 1, 1), 0);
+    }
+
+    /// E-L6: a lock more than 10 years away is refused, and so is a unix time that is not in
+    /// milliseconds (seconds, or microseconds that would lock the share until about the year 57,000).
+    #[test]
+    fn lock_until_has_a_ten_year_bound_and_takes_milliseconds_only() {
+        let now = 1_800_000_000_000;
+        assert_eq!(parse_lock_until("+3650d", now), Ok(now + 3_650 * DAY_MS));
+        for far in ["+3700d", "+99999d", "+999999h", "2099-01-01", "2099-01-01T00:00Z", "9999999999999"] {
+            let e = parse_lock_until(far, now).unwrap_err();
+            assert!(e.contains("10 years"), "{far}: {e}");
+        }
+        for unit in ["1900000000", "1900000000000000", "19000000000000"] {
+            let e = parse_lock_until(unit, now).unwrap_err();
+            assert!(e.contains("milliseconds (13 digits)"), "{unit}: {e}");
+        }
     }
 }

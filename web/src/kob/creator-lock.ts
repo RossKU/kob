@@ -25,6 +25,11 @@ import { KobError, type KobWasm } from './wasm';
 export const LOCK_TIME_THRESHOLD = 500_000_000_000n;
 /** The latest `until` taken, 2^53 - 1 ms, which a JavaScript number holds exactly. */
 export const MAX_UNTIL = (1n << 53n) - 1n;
+/**
+ * The farthest ahead a new lock may open: about 10 years (3,653 days). A time in microseconds or a
+ * wrong unit would lock the share for millennia.
+ */
+export const MAX_LOCK_SPAN_MS = 3_653n * 86_400_000n;
 /** The redeem script's length in bytes. */
 export const LOCK_SCRIPT_LEN = 44;
 /**
