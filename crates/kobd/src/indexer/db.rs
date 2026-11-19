@@ -216,6 +216,9 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     if backfill_counters(conn)? {
         tracing::info!("counted the orders, statuses, fills and rejects once for the health counters (kept by triggers from now on)");
     }
+    if backfill_candidate_bytes(conn)? {
+        tracing::info!("counted the bytes of the KCC-23 candidate preparations once (kept by triggers from now on)");
+    }
     let (programs, holdings) = backfill_holding_programs(conn)?;
     if holdings > 0 {
         tracing::info!(programs, holdings, "counted the programs of the token holdings once (kept by triggers from now on)");
@@ -275,11 +278,27 @@ pub fn backfill_counters(conn: &Connection) -> DbResult<bool> {
          INSERT INTO counters (name, n) SELECT 'orders_listed', COUNT(*) FROM orders WHERE listed = 1; \
          INSERT INTO counters (name, n) SELECT 'rejects', COUNT(*) FROM rejects; \
          INSERT INTO counters (name, n) SELECT 'fills', COUNT(*) FROM order_events WHERE kind = 'fill'; \
-         INSERT INTO counters (name, n) SELECT 'status:' || status, COUNT(*) FROM order_state GROUP BY status;",
+         INSERT INTO counters (name, n) SELECT 'status:' || status, COUNT(*) FROM order_state GROUP BY status; \
+         INSERT INTO counters (name, n) SELECT 'kcc23_candidate_bytes', COALESCE(SUM(length(tx) + 64), 0) FROM kcc23_candidates;",
     )?;
     meta_set(&tx, "counters", "1")?;
     tx.commit()?;
     Ok(true)
+}
+
+/// Counts the bytes the KCC-23 candidates hold (`counters.kcc23_candidate_bytes`, schema.sql) once, for
+/// a store whose row counters an earlier build counted.
+///
+/// The triggers keep it from then on, and [`super::kcc23::prune`] reads it. It does nothing (returns
+/// false) when the row is there.
+pub fn backfill_candidate_bytes(conn: &Connection) -> DbResult<bool> {
+    let n = conn.execute(
+        "INSERT INTO counters (name, n) SELECT 'kcc23_candidate_bytes', \
+           (SELECT COALESCE(SUM(length(tx) + 64), 0) FROM kcc23_candidates) \
+         WHERE NOT EXISTS (SELECT 1 FROM counters WHERE name = 'kcc23_candidate_bytes')",
+        [],
+    )?;
+    Ok(n > 0)
 }
 
 /// Counts the activity totals (`activity`, `actors`, schema.sql) once, for a database without them.

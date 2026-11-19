@@ -531,31 +531,73 @@ pub fn revert(conn: &Connection, seq: i64) -> DbResult<usize> {
     Ok(n)
 }
 
-/// Most candidates kept. Beyond it the oldest go first.
+/// Bytes a candidate's row and keys are counted for beside its encoding (`length(tx)`).
 ///
-/// At [`MAX_CANDIDATE_BYTES`] each that is at most 256 MiB. A KOB preparation is a few hundred
-/// bytes.
-pub const MAX_CANDIDATES: i64 = 8_192;
+/// The trigger of `counters.kcc23_candidate_bytes` (schema.sql) adds the same.
+pub const CANDIDATE_ROW_BYTES: i64 = 64;
 
-/// Deletes the candidates accepted before DAA `before` that no stored declaration names, and the
-/// oldest of those beyond [`MAX_CANDIDATES`].
+/// Most bytes the candidates hold: their encodings plus [`CANDIDATE_ROW_BYTES`] each. Beyond it
+/// the oldest go first.
 ///
-/// Only declarations of the stored chain blocks, the reorg window, count.
+/// It is the 8,192 candidates of [`MAX_CANDIDATE_BYTES`] each that an earlier build kept. The bound
+/// is on bytes, not rows, so a flood of small preparations has to fill as many bytes as large
+/// ones do. Each byte of an encoding is a byte of the accepted transaction (signature scripts are
+/// not kept), and each such byte costs at least one gram of mass. To push out an honest
+/// preparation before its genesis, one has to get about 256 MiB of transactions accepted in between:
+/// some 540 full blocks, about 54 seconds of the whole network at 10 blocks per second and 500,000
+/// grams a block. A bound of 8,192 rows took 8,192 small transactions, a few seconds of blocks
+/// (security review 2026-11-19 K-M4).
+pub const MAX_CANDIDATE_STORE_BYTES: i64 = 8_192 * MAX_CANDIDATE_BYTES as i64;
+
+/// Deletes the candidates accepted before DAA `before` that no stored declaration names, and,
+/// while the candidates hold more than [`MAX_CANDIDATE_STORE_BYTES`], the oldest of those.
+///
+/// Only declarations of the stored chain blocks, the reorg window, count. The bytes held are a
+/// counter the triggers keep, so the check is one row, and the oldest are walked only while there
+/// is too much.
 pub fn prune(conn: &Connection, before: u64) -> DbResult<usize> {
+    prune_to(conn, before, MAX_CANDIDATE_STORE_BYTES)
+}
+
+/// [`prune`] with a bound of `budget` bytes.
+pub(crate) fn prune_to(conn: &Connection, before: u64, budget: i64) -> DbResult<usize> {
     const UNNAMED: &str = "NOT EXISTS (SELECT 1 FROM kcc23_declarations d JOIN blocks b ON b.seq = d.genesis_block \
                            WHERE d.preparation_txid = kcc23_candidates.txid)";
     let mut n =
         conn.prepare_cached(&format!("DELETE FROM kcc23_candidates WHERE daa < ?1 AND {UNNAMED}"))?.execute([before as i64])?;
-    let count: i64 = conn.prepare_cached("SELECT COUNT(*) FROM kcc23_candidates")?.query_row([], |r| r.get(0))?;
-    if count > MAX_CANDIDATES {
-        n += conn
-            .prepare_cached(&format!(
-                "DELETE FROM kcc23_candidates WHERE txid IN \
-                 (SELECT txid FROM kcc23_candidates WHERE {UNNAMED} ORDER BY daa, txid LIMIT ?1)"
-            ))?
-            .execute([count - MAX_CANDIDATES])?;
+    let held = candidate_bytes(conn)?;
+    if held <= budget {
+        return Ok(n);
+    }
+    // The oldest unnamed first, until what is left fits. The walk stops there.
+    let mut over = held - budget;
+    let doomed: Vec<Vec<u8>> = {
+        let mut st = conn.prepare_cached(&format!(
+            "SELECT txid, length(tx) + {CANDIDATE_ROW_BYTES} FROM kcc23_candidates WHERE {UNNAMED} ORDER BY daa, txid"
+        ))?;
+        let mut rows = st.query([])?;
+        let mut v = vec![];
+        while over > 0 {
+            let Some(r) = rows.next()? else { break };
+            over -= r.get::<_, i64>(1)?;
+            v.push(r.get(0)?);
+        }
+        v
+    };
+    let mut del = conn.prepare_cached("DELETE FROM kcc23_candidates WHERE txid = ?1")?;
+    for t in doomed {
+        n += del.execute([t])?;
     }
     Ok(n)
+}
+
+/// The bytes the candidates hold (`counters.kcc23_candidate_bytes`).
+pub fn candidate_bytes(conn: &Connection) -> DbResult<i64> {
+    Ok(conn
+        .prepare_cached("SELECT n FROM counters WHERE name = 'kcc23_candidate_bytes'")?
+        .query_row([], |r| r.get(0))
+        .optional()?
+        .unwrap_or(0))
 }
 
 /// The launch proof (JSON, `kob-kcc23-proof/1`) the indexer holds for a covenant id.
