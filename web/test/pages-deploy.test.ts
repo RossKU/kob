@@ -514,6 +514,31 @@ describe('the deploy workflow gate (the signer page it ships takes private keys)
     // no deploy step reads a site's value from a variable directly: the matrix carries it
     expect(job('deploy')).not.toContain('vars.');
   });
+
+  it('builds the deployed bundle from source: no build cache is restored in the deploy job', () => {
+    expect(job('deploy')).not.toMatch(/rust-cache|actions\/cache@/);
+  });
+
+  it('the hashes leave the deploy runner before the first step with the Cloudflare token, and a job with no secret checks the deployment', () => {
+    const deploy = job('deploy');
+    const hashed = deploy.indexOf('xargs sha256sum > "$RUNNER_TEMP/deployed.sha256"');
+    const uploaded = deploy.search(/upload-artifact@[0-9a-f]{40} # v[\d.]+\n\s+with:\n\s+name: deployed-sha256-\$\{\{ matrix\.site \}\}/);
+    const token = deploy.indexOf('secrets.CLOUDFLARE_API_TOKEN');
+    expect(hashed).toBeGreaterThan(0);
+    expect(uploaded).toBeGreaterThan(hashed);
+    expect(token).toBeGreaterThan(uploaded);
+    // the checker does not run beside the token
+    expect(deploy).not.toContain('node scripts/check-pages.mjs');
+    const verify = job('verify');
+    expect(verify).toContain('needs: [config, deploy]');
+    expect(verify).toContain("github.ref == 'refs/heads/master'");
+    expect(verify).toMatch(/\n    permissions:\n      contents: read\n/);
+    expect(verify).not.toMatch(/secrets\.|environment:|GH_TOKEN|github\.token/);
+    expect(verify).toMatch(/download-artifact@[0-9a-f]{40} # v[\d.]+\n\s+with:\n\s+name: deployed-sha256-\$\{\{ matrix\.site \}\}/);
+    expect(verify).toContain('node scripts/check-pages.mjs "$URL" --hashes "$RUNNER_TEMP/handover/deployed.sha256"');
+    expect(verify).toContain('node scripts/check-pages.mjs --protected "${urls[@]}"');
+    expect(verify).toContain('persist-credentials: false');
+  });
 });
 
 describe('there is no landing-only site (docs/ops/web-hosting.md, 4b): one public app, the same build on every host', () => {

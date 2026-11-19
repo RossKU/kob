@@ -4,7 +4,7 @@ name: deploy-pages
 # workflow_dispatch: the web app is built and tested as the web job of ci.yml does (the e2e suite is that run's: the deploy waits for it), config.json is written from the repository
 # variables KOB_PAGES_* (web/scripts/pages-config.mjs; on testnet-10 also the token-program list as registry/tokens.json), web/dist
 # is uploaded to the Pages project KOB_PAGES_PROJECT (a Direct Upload project: the build needs Rust and wasm, so Cloudflare does not
-# build it) and the live deployment is checked: the headers of public/_headers (CSP with frame-ancestors 'none', X-Frame-Options DENY,
+# build it) and the live deployment is checked by the job verify, which holds no secret: the headers of public/_headers (CSP with frame-ancestors 'none', X-Frame-Options DENY,
 # the signer page's own policy) and every file byte for byte (web/scripts/check-pages.mjs); any difference fails the job. The job
 # summary lists the deployment URL and the sha256 of every deployed file.
 #
@@ -232,7 +232,7 @@ jobs:
         with:
           toolchain: "1.94.0"
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # no rust cache here: the deployed bundle (the signer page among it) is built from source, never from a restored target/
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -295,6 +295,15 @@ jobs:
       - name: sha256 of every file deployed (the logic of scripts/release-hashes.sh)
         working-directory: .
         run: find web/dist -type f | LC_ALL=C sort | xargs sha256sum > "$RUNNER_TEMP/deployed.sha256"
+      # the hashes go to the verify job as an artifact uploaded here, before the first step that holds the Cloudflare token: a later step of this
+      # runner cannot replace them (an artifact name is written once per run, and the job cannot delete artifacts)
+      - name: The hashes, for the verify job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deployed-sha256-${{ matrix.site }}
+          path: ${{ runner.temp }}/deployed.sha256
+          if-no-files-found: error
+          retention-days: 7
       # a first run creates the Direct Upload project (docs/ops/web-hosting.md 1); on later runs it exists and this step's failure is ignored
       - name: Create the Pages project if it does not exist yet
         continue-on-error: true
@@ -363,14 +372,68 @@ jobs:
             echo "::error::the upload became a ${PAGES_ENV:-unknown} deployment, not production: set KOB_PAGES_BRANCH to the production branch of the Pages project (docs/ops/web-hosting.md)"
             exit 1
           fi
+      # the URLs wrangler gave, for the verify job (which checks them with the hashes recorded before the upload)
+      - name: The deployment URLs, for the verify job
+        env:
+          URL: ${{ steps.deploy.outputs.deployment-url }}
+          ALIAS: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
+        run: printf '%s\n%s\n' "$URL" "$ALIAS" > "$RUNNER_TEMP/deployment-urls.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deployment-urls-${{ matrix.site }}
+          path: ${{ runner.temp }}/deployment-urls.txt
+          if-no-files-found: error
+          retention-days: 7
+      # the custom domain: the host of the public URL, attached to the project (and its DNS record) when that is not done yet; what the
+      # token cannot do is printed as dashboard steps (docs/ops/web-hosting.md, section 5)
+      - name: Custom domain of the site (the host of the public URL)
+        if: matrix.public != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PROJECT: ${{ matrix.project }}
+          PUBLIC_URL: ${{ matrix.public }}
+        run: node scripts/pages-domain.mjs --project "$PROJECT" --public-url "$PUBLIC_URL" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # The post-deploy checks, on a runner of their own: no secret, no environment, read access to the repository only. The hashes are the
+  # artifact the deploy job uploaded before its first step with the Cloudflare token, and scripts/check-pages.mjs comes from a fresh
+  # checkout of the same commit, so nothing that ran beside the token can rewrite either (the deployment URLs are still wrangler's).
+  verify:
+    needs: [config, deploy]
+    if: needs.config.outputs.ready == 'true' && github.ref == 'refs/heads/master'
+    name: verify (${{ matrix.site }})
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.config.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: deployed-sha256-${{ matrix.site }}
+          path: ${{ runner.temp }}/handover
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: deployment-urls-${{ matrix.site }}
+          path: ${{ runner.temp }}/handover
       # the internal mainnet app: an unauthenticated request must meet Cloudflare Access (the project's access policy for previews), on the deployment URL and on the
       # branch alias, never the app; the job fails (and says to delete the deployment) when it is served openly
       - name: Post-deploy check of the internal app (behind Cloudflare Access, not served openly)
         if: matrix.internal != ''
-        env:
-          URL: ${{ steps.deploy.outputs.deployment-url }}
-          ALIAS: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
         run: |
+          URL=$(sed -n 1p "$RUNNER_TEMP/handover/deployment-urls.txt")
+          ALIAS=$(sed -n 2p "$RUNNER_TEMP/handover/deployment-urls.txt")
           urls=()
           for u in "$URL" "$ALIAS"; do
             case "$u" in https://*) urls+=("$u") ;; esac
@@ -387,24 +450,13 @@ jobs:
           exit "$rc"
       - name: Post-deploy check (headers of public/_headers, every file byte for byte against the hashes recorded before the upload steps)
         if: matrix.internal == ''
-        env:
-          URL: ${{ steps.deploy.outputs.deployment-url }}
         run: |
+          URL=$(sed -n 1p "$RUNNER_TEMP/handover/deployment-urls.txt")
           case "$URL" in https://*) ;; *) echo "::error::no https deployment URL from wrangler: \`$URL\`"; exit 1 ;; esac
           set +e
-          node scripts/check-pages.mjs "$URL" --hashes "$RUNNER_TEMP/deployed.sha256" > "$RUNNER_TEMP/check.txt" 2>&1
+          node scripts/check-pages.mjs "$URL" --hashes "$RUNNER_TEMP/handover/deployed.sha256" > "$RUNNER_TEMP/check.txt" 2>&1
           rc=$?
           set -e
           cat "$RUNNER_TEMP/check.txt"
           { echo; echo "### Post-deploy check"; echo; echo '```'; cat "$RUNNER_TEMP/check.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
-      # the custom domain: the host of the public URL, attached to the project (and its DNS record) when that is not done yet; what the
-      # token cannot do is printed as dashboard steps (docs/ops/web-hosting.md, section 5)
-      - name: Custom domain of the site (the host of the public URL)
-        if: matrix.public != ''
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          PROJECT: ${{ matrix.project }}
-          PUBLIC_URL: ${{ matrix.public }}
-        run: node scripts/pages-domain.mjs --project "$PROJECT" --public-url "$PUBLIC_URL" | tee -a "$GITHUB_STEP_SUMMARY"
