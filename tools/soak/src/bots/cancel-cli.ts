@@ -1,6 +1,8 @@
-// `soak.mjs cancel <covenantId...>`: cancels orders with their makers' keys through exactly the web app's path (the order's full view ->
-// `snapshotFromOrderView` -> `planCancel` -> sign -> validate -> submit). Used to confirm that an order the UI could not cancel before
-// (a booked if-done exit without an extension commitment in its view) is cancellable now.
+// `soak.mjs cancel <covenantId...>`: cancels orders with their makers' keys through exactly the web
+// app's path
+// (the order's full view -> `snapshotFromOrderView` -> `planCancel` -> sign -> validate -> submit).
+// Use it to confirm that an order the UI could not cancel (a booked if-done exit without an
+// extension commitment in its view) is cancellable.
 import type { Env } from '../env';
 import { logger, Stats } from '../log';
 import { walletFor } from '../wallet';

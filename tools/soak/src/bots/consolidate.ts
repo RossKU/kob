@@ -1,9 +1,17 @@
-// Merges a bot's own plain token UTXOs (see consolidate-math.ts for the selection rule). The reverse of fanout.ts: a `sendTokens` of up to
-// `slots.inputs` token inputs into ONE output of the same key; the other carriers are freed (the fee comes out of them, the rest returns
-// to the key's KAS as the change output, like the executor's own maintenance merge). A pass is a CHAIN (`selectMergeChain`): from the second
-// transaction on, the previous merge's output (not yet accepted) is one of the inputs, so with KOB's standard program (3 token inputs) a
-// pass of k transactions merges 2k + 1 UTXOs into one. Only token UTXOs are spent, never KAS funding, so the key's order placements (which
-// fund from KAS UTXOs) are not affected; the inputs are reserved on submit like every other transaction.
+// Merges a bot's own plain token UTXOs (see consolidate-math.ts for the selection rule).
+// It is the reverse of fanout.ts: a `sendTokens` of up to `slots.inputs` token inputs into ONE
+// output of the same key.
+// The other carriers are freed. The fee comes out of them, and the rest returns to the key's KAS as
+// the change output,
+// like the executor's own maintenance merge.
+// A pass is a CHAIN (`selectMergeChain`).
+// From the second transaction on, the previous merge's output (not yet accepted) is one of the
+// inputs.
+// So with KOB's standard program (3 token inputs) a pass of k transactions merges 2k + 1 UTXOs into
+// one.
+// Only token UTXOs are spent, never KAS funding, so the key's order placements (which fund from KAS
+// UTXOs) are not affected.
+// The inputs are reserved on submit like every other transaction.
 import type { TokenMarket } from '@/kob/plan-types';
 import type { Kcc20State, TokenUtxo } from '@/kob/types';
 import type { Env } from '../env';
@@ -15,10 +23,14 @@ import type { BotWallet } from '../wallet';
 import { DEFAULT_CARRIER, tokenCarrierFloor } from '@/kob/orders/common';
 import { mergedCarrier, RateLimiter, selectMergeChain, type ConsolidateConfig } from './consolidate-math';
 
-/** KAS a merge must free (inputs' carriers minus the output's) to pay its fee; below it the batch is skipped */
+/**
+ * KAS a merge must free (inputs' carriers minus the output's) to pay its fee. Below it the batch is
+ * skipped.
+ */
 const MIN_FREED = KAS;
 
-// one limiter per (cap, window): the traders and the market maker (own, higher cap) share the process and must not reset each other's history
+// One limiter per (cap, window): the traders and the market maker (own, higher cap) share the
+// process and must not reset each other's history.
 const limiters = new Map<string, RateLimiter>();
 function limiterFor(cfg: ConsolidateConfig): RateLimiter {
   const k = `${cfg.maxTxPerInterval}/${cfg.intervalSec}`;
@@ -28,12 +40,14 @@ function limiterFor(cfg: ConsolidateConfig): RateLimiter {
 }
 
 /**
- * One consolidation pass for `w` on token market `m`, keeping at least `keep` token UTXOs. Returns the number of merge transactions
- * submitted. Never throws: refusals and failures are counted and logged.
+ * One consolidation pass for `w` on token market `m`, keeping at least `keep` token UTXOs.
+ * Returns the number of merge transactions submitted. Never throws: refusals and failures are
+ * counted and logged.
  */
 export function consolidateTokens(env: Env, w: BotWallet, m: TokenMarket, keep: number, cfg: ConsolidateConfig): Promise<number> {
   if (!cfg.enabled) return Promise.resolve(0);
-  // one plan-and-submit section of the key at a time (the market maker of three books and the fan-out share it)
+  // One plan-and-submit section of the key at a time (the market maker of three books and the
+  // fan-out share it).
   return w.exclusive(() => consolidateNow(env, w, m, keep, cfg));
 }
 
@@ -50,7 +64,8 @@ async function consolidateNow(env: Env, w: BotWallet, m: TokenMarket, keep: numb
     let merged = 0;
     let carry: TokenUtxo | null = null;
     for (const fresh of links) {
-      // the previous link's output (unaccepted) leads the next merge: one UTXO at the end of the pass
+      // The previous link's output (unaccepted) leads the next merge: one UTXO at the end of the
+      // pass.
       const batch: TokenUtxo[] = carry ? [carry, ...fresh] : fresh;
       const carriersIn = batch.reduce((s, u) => s + BigInt(u.amount), 0n);
       const carrier = mergedCarrier(batch, tokenCarrierFloor(env.kob, m.templateHash), DEFAULT_CARRIER);
@@ -60,7 +75,8 @@ async function consolidateNow(env: Env, w: BotWallet, m: TokenMarket, keep: numb
       }
       const total = batch.reduce((s, u) => s + BigInt(u.state.amount), 0n);
       rl.record(key, Date.now());
-      // housekeeping: the LOW bucket of the node's fee estimate (fee policy), never ahead of trading
+      // Housekeeping: the LOW bucket of the node's fee estimate (fee policy), never ahead of
+      // trading.
       const built = await buildAtUrgency(
         env,
         'low',

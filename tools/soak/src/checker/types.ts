@@ -1,5 +1,7 @@
-// Minimal structural views of the indexer read API (docs/ops/executor.md Part B §5, protocol v3: base units, no lots) used by the checker's pure logic. They are subsets of
-// web/src/data/indexer-types.ts, declared here so the pure modules have no `@/` import (unit-testable with plain `node --test`).
+// Minimal structural views of the indexer read API (docs/ops/executor.md Part B §5, protocol v3:
+// base units, no lots) used by the checker's pure logic.
+// They are subsets of web/src/data/indexer-types.ts, declared here so the pure modules have no `@/`
+// import and are unit-testable with plain `node --test`.
 
 export type Hex = string;
 
@@ -100,7 +102,10 @@ export const INV = {
   pair: 'pair',
   supply: 'supply',
   health: 'health',
-  /** scenario checks (scenario-rules.ts): GTC renewals and pair amends, limit ladders, cancel-alls, token merges */
+  /**
+   * Scenario checks (scenario-rules.ts): GTC renewals and pair amends, limit ladders, cancel-alls,
+   * token merges.
+   */
   replace: 'replace',
   ladder: 'ladder',
   cancelAll: 'cancel-all',

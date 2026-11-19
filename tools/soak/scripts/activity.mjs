@@ -1,6 +1,9 @@
-// Read-only: how busy every market page is. Per KAS book (TUSD, TETH, TBTC): fills and trades per minute (`/v1/fills?token=`,
-// `/v1/trades/<token>`, what the market page's recent trades show); per pair (each asset token against TUSD): pair fills per minute
-// (`/v1/pairs/<A>/<TUSD>/fills`) split by counterparty, and the price_source values seen (protocol v3: always `none`).
+// Read-only: how busy every market page is.
+// Per KAS book (TUSD, TETH, TBTC) it counts fills and trades per minute (`/v1/fills?token=`,
+// `/v1/trades/<token>`, which the market page's recent trades show).
+// Per pair (each asset token against TUSD) it counts pair fills per minute
+// (`/v1/pairs/<A>/<TUSD>/fills`),
+// split by counterparty, and lists the price_source values seen (always `none`).
 //
 //   node scripts/activity.mjs [--minutes 10] [--api http://127.0.0.1:8091] [--json]
 import { readFileSync } from 'node:fs';

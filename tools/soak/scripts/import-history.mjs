@@ -1,19 +1,30 @@
-// Imports the chart history of older soak runs into one STOPPED executor's database (src/history-carry.ts `importHistory`): the
-// KAS-book fills (and pair fills) of each source database, by ticker onto the current covenant ids, each source only before the
-// next run started (where runs overlap, the run live at the time wins; the last source ends where this database's own chain
-// events start). Old ids are named by ticker from `--old-registry` files and from this database's `carried_history` records.
-// Idempotent per label. Then `scripts/chart-history.mjs` must report every chart from its first trade.
+// Imports the chart history of older soak runs into one STOPPED executor's database
+// (src/history-carry.ts `importHistory`).
+// It takes the KAS-book fills (and pair fills) of each source database, by ticker onto the current
+// covenant ids.
+// Each source counts only before the next run started.
+// Where runs overlap, the run live at the time wins. The last source ends where this database's own
+// chain events start.
+// Old ids are named by ticker from `--old-registry` files and from this database's
+// `carried_history` records.
+// The import is idempotent per label. Afterwards `scripts/chart-history.mjs` must report every
+// chart from its first trade.
 //
-//   node scripts/import-history.mjs --db run/exec-b/data/index.sqlite3 --source m5=<index.sqlite3> --source m9a=<...> \
-//        [--old-registry <tokens.json> ...] [--registry run/registry/tokens.json] [--floor run/state/chart-floor.json] [--dry-run]
+//   node scripts/import-history.mjs --db run/exec-b/data/index.sqlite3 \
+//        --source m5=<index.sqlite3> --source m9a=<...> [--old-registry <tokens.json> ...] \
+//        [--registry run/registry/tokens.json] [--floor run/state/chart-floor.json] [--dry-run]
 //
-// The first trade per ticker after the import is recorded in the floor file (the earliest one wins): `chart-history.mjs` reports a
-// database whose history no longer reaches it (a replay or a rebuilt database drops the import: run this again). `--record-floor`
-// writes it from the database alone (no source, read-only).
+// The first trade per ticker after the import is recorded in the floor file (the earliest one
+// wins).
+// `chart-history.mjs` reports a database whose history does not reach it.
+// A replay or a rebuilt database drops the import, so run this again.
+// `--record-floor` writes the floor from the database alone (no source, read-only).
 //
-// The destination (--db) must be a schema-9 store (what this build writes); a source may be of any layout (schema 9, 8, or 5 to 7).
+// The destination (--db) must be a schema-9 store. A source may be of any layout (schema 9, 8, or 5
+// to 7).
 //
-// Hold the executor first (scripts/hold-child.ps1 -Name exec-b): the script refuses a database whose writer is alive.
+// Hold the executor first (scripts/hold-child.ps1 -Name exec-b). The script refuses a database
+// whose writer is alive.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';

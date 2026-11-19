@@ -1,5 +1,7 @@
-// The trader scenarios of the 2026-10-13 gap review: the pure action builders (bots/scenario-math.ts), the x402 retry turns and the merchant's
-// faults (bots/x402-retry.ts), the external tokens' registry entries (KRON), and the checker's scenario invariants (checker/scenario-rules.ts).
+// The trader scenarios: the pure action builders (bots/scenario-math.ts), the x402 retry turns and
+// the merchant's faults (bots/x402-retry.ts).
+// Also the external tokens' registry entries (KRON), and the checker's scenario invariants
+// (checker/scenario-rules.ts).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { datedPairLimit, externalReference, fixedKasRef, ladderLevels, ladderSetting, LADDER_MAX_LEVELS, LADDER_MIN_LEVELS, mergeTotal, oldestFirst, pairAmendPrice, rungSize } from '../src/bots/scenario-math.ts';
@@ -19,7 +21,7 @@ const seq = (...xs: number[]) => {
   return () => xs[i++ % xs.length]!;
 };
 
-// ------------------------------------------------------------------------------------------------ action builders
+// ---------------------------------------- action builders
 
 test('ladder levels stay within the ticket bounds (2..20), short ladders most of the time', () => {
   for (let i = 0; i < 2000; i++) {
@@ -94,7 +96,7 @@ test('mergeTotal sums the inputs', () => {
   assert.equal(mergeTotal([{ amount: '1' }, { amount: '20' }, { amount: '300' }]), 321n);
 });
 
-// ------------------------------------------------------------------------------------------------ x402 retry turns and faults
+// ---------------------------------------- x402 retry turns and faults
 
 test('x402 turn weights: defaults, overrides, invoice only when enabled, 0 switches a kind off', () => {
   const w = x402Weights({ invoices: true });
@@ -133,7 +135,7 @@ test('the conflict race is armed for one quote only', () => {
   assert.equal(r.take(), false);
 });
 
-// ------------------------------------------------------------------------------------------------ external tokens (KRON)
+// ---------------------------------------- external tokens (KRON)
 
 test('an external KRON token is listed on its KRON program, without extension commitment', () => {
   const kron = { ticker: 'TKRON', name: 'TN10 KRON test', covenantId: 'ab'.repeat(32), program: 'KronToken2433', decimals: 8, trade: { bookShare: 0.05, refKas: '0.1' } } as const;
@@ -144,7 +146,7 @@ test('an external KRON token is listed on its KRON program, without extension co
   assert.throws(() => externalRegistryToken({ ...kron, extensionCommitment: '11'.repeat(32) }), /no extension commitment/);
 });
 
-// ------------------------------------------------------------------------------------------------ checker: replace (renew, pair amend)
+// ---------------------------------------- checker: replace (renew, pair amend)
 
 const OLD = 'aa'.repeat(32);
 const NEW = 'bb'.repeat(32);
@@ -166,10 +168,12 @@ test('a renewal plan keeps every term and only extends the expiry', () => {
 });
 
 test('a renewal of a partly filled order fits a minimum fill above what is left down to what is left: accepted (TN10 2026-10-16)', () => {
-  // TN10 1dba094b...: a conditional order with minFill 442 and 2 base units left renewed with minFill 2 (the same fills: only the whole rest)
+  // A conditional order with minFill 442 and 2 base units left, renewed with minFill 2 (the same
+  // fills: only the whole rest).
   const left = { ...ask, minFill: '442', amountLeft: '2' };
   assert.equal(checkPlannedReplacement(renewRec({ before: left, expect: { ...left, minFill: '2', expiryDaa: '9000' } })), null);
-  // down to anything but what is left, or a minimum fill at or below what is left that changes, is still a changed term
+  // Down to anything but what is left, or a minimum fill at or below what is left that changes, is
+  // still a changed term.
   for (const [b, e] of [[left, '1'], [left, '3'], [{ ...ask, minFill: '10' }, '9'], [{ ...ask, minFill: '300' }, '299']] as const) {
     const v = checkPlannedReplacement(renewRec({ before: b, expect: { ...b, minFill: e, expiryDaa: '9000' } }));
     assert.deepEqual((v?.detail as { changed: string[] } | undefined)?.changed, ['minFill'], `${b.minFill} -> ${e}`);
@@ -193,7 +197,8 @@ test('a pair amend whose new price crosses the market is planned as a crossing a
   const auction = { ...pair, price: '990', slope: '85571259', priceEnd: '1010', activeFrom: '595000000', expiryDaa: '12' };
   const rec = renewRec({ kind: 'pairAmend', inPlace: false, id: NEW, before: pair, expect: auction });
   assert.equal(checkPlannedReplacement(rec), null);
-  // a slope without an end price is no crossing auction; an order with a schedule must keep it; an auction that changes another kept term is still caught
+  // A slope without an end price is no crossing auction. An order with a schedule must keep it. An
+  // auction that changes another kept term is still caught.
   assert.deepEqual((checkPlannedReplacement({ ...rec, expect: { ...auction, priceEnd: '0' } })?.detail as { changed: string[] }).changed, ['slope']);
   assert.deepEqual((checkPlannedReplacement({ ...rec, expect: { ...auction, interval: '600' } })?.detail as { changed: string[] }).changed, ['interval']);
   assert.deepEqual((checkPlannedReplacement({ ...rec, expect: { ...auction, tip: '4' } })?.detail as { changed: string[] }).changed, ['tip']);
@@ -225,7 +230,7 @@ test('a replacement by a new order is recognised by its genesis transaction', ()
   assert.deepEqual(checkReplacement(rec, v, [], 1000), { done: true, ok: true, violations: [] });
 });
 
-// ------------------------------------------------------------------------------------------------ checker: ladder
+// ---------------------------------------- checker: ladder
 
 const rung = (i: number) => ({ id: String(i).repeat(64).slice(0, 64), price: String(1000 - i * 10), txid: `${String(i).repeat(64).slice(0, 63)}f` });
 const ladderRec = (n: number, side: 'buy' | 'sell' = 'buy'): LadderRecord => ({ kind: 'ladder', ts: 0, bot: 't1', token: 'tok', side, size: '700', levels: n, rungs: Array.from({ length: n }, (_, i) => rung(i + 1)) });
@@ -249,12 +254,14 @@ test('a rung amended after its placement holds the amend\'s price: not a ladder 
   const moved = rec.rungs[2]!;
   assert.deepEqual(repricedRungs(rec, views), [moved.id]);
   assert.deepEqual(repricedRungs(rec, [views[0]!, null, null, null]), []);
-  // the rung's events: its creation in its own transaction, then an in-place amend (the trader's Amend of that order)
+  // The rung's events: its creation in its own transaction, then an in-place amend (the trader's
+  // Amend of that order).
   const created = [ev(1, 'create', moved.txid, moved.id)];
   assert.equal(amendedAfter(created, moved.txid), false);
   assert.equal(amendedAfter([...created, ev(2, 'amend', 'ab'.repeat(32), moved.id)], moved.txid), true);
   assert.deepEqual(checkLadder(rec, views, 1000, new Set([moved.id])), { done: true, ok: true, violations: [], note: 'amended' });
-  // not amended: the price is the ladder's problem; an amended rung is still held to every other term
+  // Not amended: the price is the ladder's problem. An amended rung is still held to every other
+  // term.
   const v = checkLadder(rec, views, 1000);
   assert.deepEqual((v as { violations: { detail: { rungs: { problems: string[] }[] } }[] }).violations[0]!.detail.rungs[0]!.problems, [`price 977 != ${moved.price}`]);
   const parented = checkLadder(rec, rec.rungs.map((r, i) => rungView(r, i === 2 ? { price: '977', parent: 'p' } : {})), 1000, new Set([moved.id]));
@@ -304,7 +311,7 @@ test('a cancel-all ends every order (or loses the race to a fill)', () => {
   assert.ok(v.done && v.violations[0]?.invariant === 'cancel-all' && (v.violations[0].detail.live as string[])[0] === 'o2');
 });
 
-// ------------------------------------------------------------------------------------------------ checker: merge
+// ---------------------------------------- checker: merge
 
 const mergeRec = (over: Partial<MergeRecord> = {}): MergeRecord => ({
   kind: 'merge', ts: 0, bot: 't1', token: 'tok', ticker: 'TUSD', maker: 'MK',
@@ -328,7 +335,7 @@ test('the merged output holds the inputs\' total for the wallet', () => {
   assert.deepEqual(checkMerge(mergeRec(), null, SCENARIO_GRACE_MS + 1), { done: true, ok: false, violations: [], note: 'output not found' });
 });
 
-// ------------------------------------------------------------------------------------------------ checker: x402 retries
+// ---------------------------------------- checker: x402 retries
 
 const ledger = (entries: { txid: string; state: string }[]) => entries.map((e) => JSON.stringify({ entry: e })).join('\n');
 

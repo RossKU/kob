@@ -1,29 +1,44 @@
-// The indexer gate: the bots trade only while the indexer they read (`env.indexer`: GET /v1/metrics, GET /v1/health when the metrics do not
-// say it is caught up or within its tolerance, see `gateHealth`) is following the chain, or is at most `maxLagSecs` (default 30 s, the
-// executor's `max_lag_secs`) behind it.
+// The indexer gate. The bots trade only while the indexer they read (`env.indexer`) is following
+// the chain, or is at most `maxLagSecs` behind it.
+// The default is 30 s, the executor's `max_lag_secs`.
+// The gate reads GET /v1/metrics, and GET /v1/health when the metrics do not say the indexer is
+// caught up or within its tolerance (see `gateHealth`).
 //
-// Why: on 2026-10-01 the TN10 indexers fell 3.4 h behind in a transaction flood and the bots kept placing, amending and cancelling
-// against the frozen book (216 transactions on chain that no indexer saw). A book that lags the chain lists orders that may already
-// be spent and misses the bots' own transactions, so every plan made from it is a guess. The decision logic below is pure (no clock,
-// no I/O) so it can be unit-tested; `IndexerGate` adds the polling, the one-line transition logs and the counters.
+// Why: a book that lags the chain lists orders that may already be spent and misses the bots' own
+// transactions, so every plan made from it is a guess.
+// The decision logic below is pure (no clock, no I/O), so it can be unit-tested.
+// `IndexerGate` adds the polling, the one-line transition logs and the counters.
 //
-// Scope (see `BotWallet.submit`, the single choke point): every transaction that goes through a BotWallet is gated (orders, amends,
-// cancels, cancel-all, fan-out, consolidation, the market maker and the traders). NOT gated:
-//   - `bank.ts` (plain KAS payouts through the SDK's own generator: nothing in them reads the indexer);
-//   - `setup.ts` and the operator CLIs (cancel, balances): they run without a gate (`env.gate` is set only by `runBots`), setup because
-//     the issuance happens before there is anything to follow, the CLIs because an operator cancelling orders during a stall must not
-//     be blocked by the very condition they are repairing.
-//   - the x402 payer submits through the x402 SDK, not a BotWallet; its LOOP waits on the gate instead (`bots/x402.ts`): the facilitator
-//     settles and the checker verifies through the indexers, and swap quotes read the book, so a payment made while the indexer
-//     lags cannot be accounted for.
+// Scope: `BotWallet.submit` is the single choke point, so every transaction that goes through a
+// BotWallet is gated.
+// That covers orders, amends, cancels, cancel-all, fan-out, consolidation, the market maker and the
+// traders.
+// Not gated:
+// - `bank.ts`: plain KAS payouts through the SDK's own generator. Nothing in them reads the
+//   indexer.
+// - `setup.ts` and the operator CLIs (cancel, balances). They run without a gate, because
+//   `env.gate` is set only by `runBots`. Setup issues before there is anything to follow. An
+//   operator cancelling orders during a stall must not be blocked by the condition being repaired.
+// - The x402 payer. It submits through the x402 SDK, not a BotWallet, so its loop waits on the gate
+//   instead (`bots/x402.ts`). The facilitator settles and the checker verifies through the
+//   indexers, and swap quotes read the book. A payment made while the indexer lags cannot be
+//   accounted for.
 import { errText, type Logger, type Stats } from './log.ts';
 
 /**
- * The gate fields of an executor's GET /v1/metrics (Prometheus text): the follower's in-memory numbers, served without database work, where
- * GET /v1/health also counts the orders and fills of the whole store on every request (about a second on the soak's indexers under load).
- * `state` is only what the gauges imply: `following` while caught up, `catching_up` while within the executor's lag tolerance but not caught
- * up (the executor counts only `following` with a known node position as caught up, and only `following` / `catching_up` as within), null
- * otherwise (starting, catching up beyond the tolerance, node unavailable, gap: /v1/health says which).
+ * The gate fields of an executor's GET /v1/metrics (Prometheus text).
+ * They are the follower's in-memory numbers, served without database work.
+ * GET /v1/health also counts the orders and fills of the whole store on every request, which takes
+ * about a second on the soak's indexers under load.
+ *
+ * `state` is only what the gauges imply:
+ * - `following` while caught up.
+ * - `catching_up` while within the executor's lag tolerance but not caught up.
+ * - null otherwise (starting, catching up beyond the tolerance, node unavailable, gap). /v1/health
+ *   says which.
+ *
+ * The executor counts only `following` with a known node position as caught up, and only
+ * `following` / `catching_up` as within tolerance.
  */
 export interface MetricsHealth {
   state: 'following' | 'catching_up' | null;
@@ -33,7 +48,10 @@ export interface MetricsHealth {
   lag_daa: number;
 }
 
-/** the gate fields of a /v1/metrics answer; null when one of the gauges is missing (an executor without them) */
+/**
+ * The gate fields of a /v1/metrics answer. Null when one of the gauges is missing (an executor
+ * without them).
+ */
 export function healthFromMetrics(text: string): MetricsHealth | null {
   const g: Record<string, number> = {};
   for (const line of text.split('\n')) {
@@ -50,7 +68,10 @@ export function healthFromMetrics(text: string): MetricsHealth | null {
   return { state: c ? 'following' : w ? 'catching_up' : null, caught_up: c, within_lag_tolerance: w, cursor_daa: cursor, lag_daa: lag };
 }
 
-/** GET `<baseUrl>/v1/metrics` as gate fields (null: not served, or without the gauges); throws when the request fails */
+/**
+ * GET `<baseUrl>/v1/metrics` as gate fields. Null means not served, or served without the gauges.
+ * Throws when the request fails.
+ */
 export async function metricsHealth(baseUrl: string, timeoutMs = 10_000): Promise<MetricsHealth | null> {
   const r = await fetch(new URL('/v1/metrics', baseUrl), { signal: AbortSignal.timeout(timeoutMs) });
   if (!r.ok) return null;
@@ -58,8 +79,11 @@ export async function metricsHealth(baseUrl: string, timeoutMs = 10_000): Promis
 }
 
 /**
- * The gate's health answer: the indexer's metrics while they say it is caught up or within its lag tolerance (the common case, at no database
- * cost), its full GET /v1/health otherwise (the state, lag and last error a pause is judged and logged with) and when the metrics cannot be read.
+ * The gate's health answer.
+ * It is the indexer's metrics while they say it is caught up or within its lag tolerance (the
+ * common case, at no database cost).
+ * Otherwise, and when the metrics cannot be read, it is the full GET /v1/health.
+ * That answer carries the state, lag and last error that a pause is judged and logged with.
  */
 export async function gateHealth(metrics: () => Promise<MetricsHealth | null>, health: () => Promise<HealthLike>): Promise<HealthLike> {
   const m = await metrics().catch(() => null);
@@ -67,7 +91,10 @@ export async function gateHealth(metrics: () => Promise<MetricsHealth | null>, h
   return health();
 }
 
-/** the fields of the indexer's GET /v1/health the gate reads (the web `HealthView` plus `caught_up`) */
+/**
+ * The fields of the indexer's GET /v1/health the gate reads (the web `HealthView` plus
+ * `caught_up`).
+ */
 export interface HealthLike {
   state?: string;
   caught_up?: boolean;
@@ -91,12 +118,17 @@ export interface GateVerdict {
 }
 
 /**
- * What a health answer (or the failure to get one) means. Trading is allowed when the indexer says `caught_up === true`; an
- * indexer that predates the field is judged by `state === 'following'`. With `maxLagDaa > 0` it is also allowed while the indexer is
- * `following` or `catching_up` and its `lag_daa` is at most `maxLagDaa` (a book that is seconds old only costs the bots a lost race;
- * a batch of a flooded chain takes 10 to 30 s, which flips the indexer to `catching_up` with the book still fresh). An unknown lag, or
- * any other state (starting, node_unavailable, gap, stopped), stays closed. A failed request is "not following": a book that cannot
- * even be asked about its own health is not one to trade against.
+ * What a health answer (or the failure to get one) means.
+ * Trading is allowed when the indexer says `caught_up === true`. An indexer without that field is
+ * judged by `state === 'following'`.
+ * With `maxLagDaa > 0` trading is also allowed while the indexer is `following` or `catching_up`
+ * and its `lag_daa` is at most `maxLagDaa`.
+ * A book that is seconds old only costs the bots a lost race.
+ * A batch of a flooded chain takes 10 to 30 s, which flips the indexer to `catching_up` with the
+ * book still fresh.
+ * An unknown lag, or any other state (starting, node_unavailable, gap, stopped), stays closed.
+ * A failed request is "not following", because a book that cannot even be asked about its own
+ * health is not one to trade against.
  */
 export function judgeHealth(h: HealthLike | null | undefined, error?: unknown, maxLagDaa = 0): GateVerdict {
   if (error !== undefined || !h || typeof h !== 'object') {
@@ -126,9 +158,13 @@ export interface GateState {
 export type GateTransition = { kind: 'paused'; verdict: GateVerdict } | { kind: 'resumed'; pausedMs: number; verdict: GateVerdict };
 
 /**
- * The state machine: one verdict at time `now` -> the next state and the transition it causes, if any. A transition happens only when the
- * open/closed answer CHANGES (a stream of "catching_up" verdicts is one pause), except that a first verdict of "closed" counts as a pause
- * (the bots start while the indexer lags: say so) and a first verdict of "open" is silent.
+ * The state machine. One verdict at time `now` gives the next state and the transition it causes,
+ * if any.
+ * A transition happens only when the open/closed answer changes, so a stream of "catching_up"
+ * verdicts is one pause.
+ * A first verdict of "closed" counts as a pause, because the bots start while the indexer lags and
+ * the log should say so.
+ * A first verdict of "open" is silent.
  */
 export function advance(prev: GateState, v: GateVerdict, now: number): { next: GateState; transition: GateTransition | null } {
   if (prev.open === v.open) return { next: prev, transition: null };
@@ -145,7 +181,10 @@ export interface IndexerGateDeps {
   stats?: Pick<Stats, 'inc' | 'set'>;
   /** how long a verdict is trusted before the next request (default 5 s) */
   pollMs?: number;
-  /** trade while the indexer lags by at most this many DAA (default 0: only while caught up); see `judgeHealth` */
+  /**
+   * Trade while the indexer lags by at most this many DAA (default 0: only while caught up). See
+   * `judgeHealth`.
+   */
   maxLagDaa?: number;
 }
 
@@ -170,8 +209,10 @@ export class IndexerGate {
   }
 
   /**
-   * The current verdict: the cached one while it is younger than `pollMs`, else a fresh health request (concurrent callers share one
-   * request). Callers drive the polling (every submit, every wait loop), so no timer is needed and an idle bot makes no requests.
+   * The current verdict: the cached one while it is younger than `pollMs`, else a fresh health
+   * request (concurrent callers share one request).
+   * Callers drive the polling (every submit, every wait loop), so no timer is needed and an idle
+   * bot makes no requests.
    */
   check(force = false): Promise<GateVerdict> {
     if (!force && this.verdict && this.now() - this.checkedAt < this.pollMs) return Promise.resolve(this.verdict);
@@ -204,7 +245,10 @@ export class IndexerGate {
     return v;
   }
 
-  /** A refusal for `what` (an action name) while the indexer is not following; null when trading is allowed. Counts `gate_blocked:<what>`. */
+  /**
+   * A refusal for `what` (an action name) while the indexer is not following. Null when trading is
+   * allowed. Counts `gate_blocked:<what>`.
+   */
   async refusal(what: string): Promise<GateRefusal | null> {
     const v = await this.check();
     if (v.open) return null;
@@ -214,8 +258,9 @@ export class IndexerGate {
   }
 
   /**
-   * Resolves once the indexer is following (true), or as soon as `stop()` says so (false). Re-checks every `pollMs`: bot loops call this
-   * instead of spinning through plan-and-refuse cycles while paused.
+   * Resolves once the indexer is following (true), or as soon as `stop()` says so (false).
+   * Re-checks every `pollMs`.
+   * Bot loops call this instead of spinning through plan-and-refuse cycles while paused.
    */
   async waitOpen(stop: () => boolean = () => false, sleep: (ms: number) => Promise<void> = defaultSleep): Promise<boolean> {
     for (;;) {

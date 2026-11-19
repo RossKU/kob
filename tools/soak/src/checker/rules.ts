@@ -1,31 +1,48 @@
-// Pure invariant rules of the soak checker (no I/O, no `@/` imports: `node --test test/*.test.ts` runs them directly).
+// Pure invariant rules of the soak checker (no I/O, no `@/` imports: `node --test test/*.test.ts`
+// runs them directly).
 //
-// Protocol v3 has no lots: every quantity (`n`, `amountLeft`, `minFill`, `minTouch`, custody) is token BASE UNITS; every price and tip is
-// sompi per WHOLE token, i.e. per `scale` base units (`scale = 10^decimals`, a state field of the order). The value of n base units at the
-// rate r is `quoteOf(n, r) = n * r / scale`, rounded in the maker's favour (BigInt: exact, no 64-bit limit). The formulas are those of
-// crates/kob-protocol/src/state.rs and contracts/orders/*.sil, docs/spec/matcher.md §2.1 and docs/spec/order-types.md "Amounts, prices and rounding":
+// Protocol v3 has no lots.
+// Every quantity (`n`, `amountLeft`, `minFill`, `minTouch`, custody) is token BASE UNITS.
+// Every price and tip is sompi per WHOLE token, i.e. per `scale` base units (`scale = 10^decimals`,
+// a state field of the order).
+// The value of n base units at the rate r is `quoteOf(n, r) = n * r / scale`, rounded in the
+// maker's favour (BigInt: exact, no 64-bit limit).
+// The formulas are those of crates/kob-protocol/src/state.rs and contracts/orders/*.sil,
+// docs/spec/matcher.md §2.1 and docs/spec/order-types.md "Amounts, prices and rounding":
 //
-//   sell (ask side) receives at least  ceil(n * (q - tip) / scale)      q = the order's quote at the fill's time argument t
+//   sell (ask side) receives at least  ceil(n * (q - tip) / scale)
 //   buy  (bid side) pays at most       floor(n * (q + tip) / scale)
+//   where q = the order's quote at the fill's time argument t
 //
-// and the quote q never lies beyond the order's WORST bound:
+// The quote q never lies beyond the order's WORST bound:
 //
-//   KobAsk      q >= price, or >= priceEnd for a decaying ask (slope > 0: q = max(priceEnd, price - slope*steps))
-//   KobBid      q <= price, or <= priceEnd for a rising bid (slope > 0, priceEnd > price: q = min(priceEnd, price + ...))
-//   KobCondAsk  q >= min(tpPrice [if > 0], stopFloor [if stopPrice > 0]),  stopFloor   = stop - floor(stop / 10^4) * slipBps
-//   KobCondBid  q <= max(tpPrice,          stopCeiling [if stopPrice > 0]), stopCeiling = stop + floor(stop / 10^4) * slipBps
-//               (a stop-limit is a stop whose band ends at the limit; a trailing stop moves its band, so an older fill may lie
-//               beyond the CURRENT band: trailing orders get the payout check only)
+//   KobAsk      q >= price, or >= priceEnd for a decaying ask
+//               (slope > 0: q = max(priceEnd, price - slope*steps))
+//   KobBid      q <= price, or <= priceEnd for a rising bid
+//               (slope > 0, priceEnd > price: q = min(priceEnd, price + ...))
+//   KobCondAsk  q >= min(tpPrice [if > 0], stopFloor [if stopPrice > 0])
+//               stopFloor = stop - floor(stop / 10^4) * slipBps
+//   KobCondBid  q <= max(tpPrice, stopCeiling [if stopPrice > 0])
+//               stopCeiling = stop + floor(stop / 10^4) * slipBps
+//               (a stop-limit is a stop whose band ends at the limit; a trailing stop moves
+//               its band, so an older fill may lie beyond the CURRENT band: trailing orders
+//               get the payout check only)
 //   KobIfdBid   q <= price (a stop entry auctions from entryStop <= price up to price)
 //   KobIfdAsk   q >= price (a stop entry auctions from entryStop >= price down to price)
 //
-// The fill event (`GET /v1/orders/{id}/events`, `GET /v1/fills`) carries `price` = the covenant's quote at the call's `t` (computed from
-// the spent state when `detail.verified`) and, for side-1 fills, `payout` = the value of the output at the order input's index. For
-// `KobAsk` and `KobCondAsk` that output is P2PK(maker) and the covenant requires it to hold at least the all-in proceeds (plus carriers on
-// a sell-out), so `payout >= ceil(n * (q - tip) / scale)`; a booked repeat exit's merged take-profit pays the maker only the profit:
-// `payout >= ceil(n * (q - tip) / scale) - ceil(n * rptPrice / scale)`. A `KobIfdAsk` entry fill pays the proceeds into its new exit instead:
-// `exit value >= ceil(n * (q - tip) / scale)` (+ prefund and carriers). What a BID pays is not exposed by the read API (no payout for
-// side 2, no order values per event): buy fills are checked by the quote bound only.
+// The fill event (`GET /v1/orders/{id}/events`, `GET /v1/fills`) carries `price`, the covenant's
+// quote at the call's `t`.
+// The price is computed from the spent state when `detail.verified`.
+// For side-1 fills it also carries `payout`, the value of the output at the order input's index.
+// For `KobAsk` and `KobCondAsk` that output is P2PK(maker).
+// The covenant requires it to hold at least the all-in proceeds (plus carriers on a sell-out), so
+// `payout >= ceil(n * (q - tip) / scale)`.
+// A booked repeat exit's merged take-profit pays the maker only the profit: `payout >= ceil(n * (q
+// - tip) / scale) - ceil(n * rptPrice / scale)`.
+// A `KobIfdAsk` entry fill pays the proceeds into its new exit instead: `exit value >= ceil(n * (q
+// - tip) / scale)` (+ prefund and carriers).
+// What a BID pays is not exposed by the read API (no payout for side 2, no order values per event),
+// so buy fills are checked by the quote bound only.
 import { INV, type EventLike, type HealthLike, type OrderLike, type Violation } from './types.ts';
 
 export const big = (v: unknown): bigint | null => {
@@ -40,9 +57,13 @@ const b0 = (v: unknown): bigint => big(v) ?? 0n;
 const maxB = (a: bigint, b: bigint) => (a > b ? a : b);
 const minB = (a: bigint, b: bigint) => (a < b ? a : b);
 /**
- * `quoteOf(n, rate, scale)`: the value of n base units at `rate` sompi (or token B base units) per whole token = per `scale` base units,
- * rounded down (`'down'`: what a maker pays) or up (`'up'`: what a maker must receive). Exact in BigInt; the covenants' split
- * multiplication equals it whenever the result fits 63 bits (the builders refuse orders beyond 2^62). null: a negative input or no scale.
+ * `quoteOf(n, rate, scale)`: the value of n base units at `rate` sompi (or token B base units) per
+ * whole token = per `scale` base units.
+ * It is rounded down (`'down'`: what a maker pays) or up (`'up'`: what a maker must receive).
+ * It is exact in BigInt.
+ * The covenants' split multiplication equals it whenever the result fits 63 bits (the builders
+ * refuse orders beyond 2^62).
+ * It is null for a negative input or no scale.
  */
 export function quoteOf(n: bigint, rate: bigint, scale: bigint, round: 'down' | 'up'): bigint | null {
   if (n < 0n || rate < 0n || scale <= 0n) return null;
@@ -56,7 +77,7 @@ export const baseKind = (contract: string): string => contract.replace(/Kron$/, 
 export const isAskSide = (contract: string): boolean => ['KobAsk', 'KobCondAsk', 'KobIfdAsk'].includes(baseKind(contract));
 export const isActive = (status: string): boolean => status === 'open' || status === 'partial';
 
-// ------------------------------------------------------------------------------------------------ 3. all-in limits per fill
+// ---- 3. all-in limits per fill ----
 
 export interface WorstBound {
   /** `min`: the quote must be >= bound (sell); `max`: <= bound (buy) */
@@ -65,8 +86,10 @@ export interface WorstBound {
   skip?: string;
 }
 
-// the covenant's band multiplies first (`stopPrice * slipBps / 10000`, exact to one sompi at any stop price): dividing first lost up to
-// slipBps sompi once v3 prices (per whole token) stopped being multiples of 10000, and flagged fills at the true ceiling (TN10 2026-10-06)
+// The covenant's band multiplies first (`stopPrice * slipBps / 10000`, exact to one sompi at any
+// stop price).
+// Dividing first loses up to slipBps sompi once v3 prices (per whole token) are not multiples of
+// 10000, and flags fills at the true ceiling.
 export function stopFloor(s: Record<string, string>): bigint {
   const stop = b0(s.stopPrice);
   return stop - (stop * b0(s.slipBps)) / 10_000n;
@@ -110,9 +133,12 @@ export function worstBound(contract: string, s: Record<string, string>): WorstBo
 }
 
 /**
- * The terms an order filled under, given its in-place amends (KOB1 `AMEND` record: a plain ask or bid amended in place keeps its covenant id;
- * the indexer records an `amend` event whose `detail.previous` holds the terms BEFORE it: price, tif, expiryDaa, activeFrom, tip).
- * The terms at a fill are the `previous` of the first amend after it (event ids only grow), else the order's current state.
+ * The terms an order filled under, given its in-place amends.
+ * A plain ask or bid amended in place keeps its covenant id (KOB1 `AMEND` record).
+ * The indexer records an `amend` event whose `detail.previous` holds the terms BEFORE it: price,
+ * tif, expiryDaa, activeFrom, tip.
+ * The terms at a fill are the `previous` of the first amend after it (event ids only grow), else
+ * the order's current state.
  */
 export function termsAtFill(memoTerms: Record<string, string>, current: Record<string, string> | null, events: EventLike[], fillId: number): Record<string, string> {
   const amends = events.filter((e) => e.kind === 'amend').sort((a, b) => Number(a.id ?? 0) - Number(b.id ?? 0));
@@ -126,10 +152,13 @@ export function termsAtFill(memoTerms: Record<string, string>, current: Record<s
 }
 
 /**
- * An order copied from an older run's database by `scripts/import-history.mjs` (`unlisted_reason` `history_import:<label>`, maker NULL,
- * block 0): its fills are chart history, not transactions of this run, and its terms are what the import could rebuild (protocol v2
- * lot layouts, without an auction's end price `lot_max`), so the per-fill invariants do not apply (2026-10-14: 4,754 false "fill price beyond
- * the order's worst bound" errors on imported IOC auction bids whose fills rose above the start price toward `lot_max`).
+ * An order copied from another run's database by `scripts/import-history.mjs` (`unlisted_reason`
+ * `history_import:<label>`, maker NULL, block 0).
+ * Its fills are chart history, not transactions of this run.
+ * Its terms are what the import could rebuild (old lot layouts, without an auction's end price
+ * `lot_max`).
+ * So the per-fill invariants do not apply: for example, an imported IOC auction bid has fills above
+ * the start price toward `lot_max`.
  */
 export function isImportedHistory(v: { unlisted_reason?: string | null }): boolean {
   return typeof v.unlisted_reason === 'string' && v.unlisted_reason.startsWith('history_import:');
@@ -142,8 +171,9 @@ export interface FillCheck {
 }
 
 /**
- * Invariant 3 for one fill event of an order (`s` = the order's proven state; the immutable terms are all this rule reads, except the stop
- * of a trailing order, which it skips). `rptPrice` of a booked exit is immutable too.
+ * Invariant 3 for one fill event of an order (`s` = the order's proven state).
+ * The immutable terms are all this rule reads, except the stop of a trailing order, which it skips.
+ * `rptPrice` of a booked exit is immutable too.
  */
 export function checkFill(order: { covenant_id: string; contract: string }, s: Record<string, string>, ev: EventLike): FillCheck {
   const out: FillCheck = { violations: [], boundChecked: false, payoutChecked: false };
@@ -154,10 +184,12 @@ export function checkFill(order: { covenant_id: string; contract: string }, s: R
   const q = big(ev.price);
   const scale = b0(s.scale);
   const tip = b0(s.tip);
-  // value of n base units at a rate (null when the terms carry no scale: a state of an older layout, not checkable)
+  // Value of n base units at a rate (null when the terms carry no scale, so the state is not
+  // checkable).
   const quote = (n0: bigint, r: bigint, round: 'down' | 'up') => quoteOf(n0, r, scale, round);
   const net = (p: bigint) => (p > tip ? p - tip : 0n);
-  // terms rebuilt from a terminated order's view (no proven state left): only a bid's cap is known exactly (from budget_rate)
+  // Terms rebuilt from a terminated order's view (no proven state left): only a bid's cap is known
+  // exactly (from budget_rate).
   const partial = s._partial === '1';
   const wb: WorstBound = partial && baseKind(order.contract) !== 'KobBid' ? { dir: 'min', bound: null, skip: 'terms of a terminated order' } : worstBound(order.contract, s);
   const subject = `${order.covenant_id}:${ev.txid}`;
@@ -210,11 +242,16 @@ export function checkFill(order: { covenant_id: string; contract: string }, s: R
       }
     }
   }
-  // bid side: the indexer reports the escrow before and after the fill (detail.escrow_before / escrow_after, absent when the bid sold
-  // out) and the delivery output at the input's position (delivery_value: the maker's token output, whose KAS is the delivery carrier
-  // plus, for a rising bid, the used(n) - allIn(t) that KobBid consumes at the budget rate but returns on the delivery). A terminal
-  // fill whose spare KAS is at least 1 KAS sends it to the maker as a plain output of its own (detail.refund_value, absent below
-  // 1 KAS and on every other fill: the spare then stays on the delivery). The buy's cost is what left the maker:
+  // Bid side.
+  // The indexer reports the escrow before and after the fill (detail.escrow_before / escrow_after,
+  // absent when the bid sold out).
+  // It also reports the delivery output at the input's position (delivery_value).
+  // That is the maker's token output, whose KAS is the delivery carrier plus, for a rising bid, the
+  // used(n) - allIn(t) that KobBid consumes at the budget rate but returns on the delivery.
+  // A terminal fill whose spare KAS is at least 1 KAS sends it to the maker as a plain output of
+  // its own (detail.refund_value, absent below 1 KAS and on every other fill: the spare then stays
+  // on the delivery).
+  // The buy's cost is what left the maker:
   // escrow_before - escrow_after - delivery_value - refund_value <= floor(n * (q + tip) / scale).
   const eb = big(d.escrow_before);
   const ea = big(d.escrow_after) ?? 0n;
@@ -241,9 +278,13 @@ export function checkFill(order: { covenant_id: string; contract: string }, s: R
 }
 
 /**
- * Terms of an order whose proven state is gone (terminated before the checker saw it live), from the view's top-level fields:
- * `price`, `tip`, `scale`, `min_fill`, `token`, `active_from`; a bid's cap from `budget_rate = priceMax + tip` (a rising bid when priceMax is above
- * `price`). Marked `_partial`: `checkFill` then checks the bound of bids only and the payout against the event's verified quote.
+ * Terms of an order whose proven state is gone (terminated before the checker saw it live), from
+ * the view's top-level fields:
+ * `price`, `tip`, `scale`, `min_fill`, `token`, `active_from`.
+ * A bid's cap comes from `budget_rate = priceMax + tip` (a rising bid when priceMax is above
+ * `price`).
+ * They are marked `_partial`: `checkFill` then checks the bound of bids only and the payout against
+ * the event's verified quote.
  */
 export function partialTerms(v: { price?: string | null; tip?: string | null; scale?: number | null; min_fill?: string | null; budget_rate?: string | null; tif?: number | null; token?: string | null; active_from?: number | null }): Record<string, string> | null {
   if (v.price == null || v.scale == null) return null;
@@ -263,7 +304,11 @@ export function partialTerms(v: { price?: string | null; tip?: string | null; sc
   return t;
 }
 
-/** a `KobIfdAsk` entry fill pays its proceeds into the exit it creates: `exit value >= ceil(n * (q - tip) / scale)` (lower bound; the prefund and carriers come on top) */
+/**
+ * A `KobIfdAsk` entry fill pays its proceeds into the exit it creates: `exit value >= ceil(n * (q -
+ * tip) / scale)`.
+ * This is a lower bound, as the prefund and carriers come on top.
+ */
 export function checkIfdAskExitFunding(entry: { covenant_id: string }, s: Record<string, string>, ev: EventLike, exit: OrderLike | null): Violation | null {
   if (ev.kind !== 'fill' || !exit || !exit.current || exit.current.txid !== ev.txid || exit.current.value == null) return null;
   const n = big(ev.amount);
@@ -282,7 +327,7 @@ export function checkIfdAskExitFunding(entry: { covenant_id: string }, s: Record
   };
 }
 
-// ------------------------------------------------------------------------------------------------ 4. IOC / FOK
+// ---- 4. IOC / FOK ----
 
 export const IOC_LIFE = 600n;
 
@@ -298,15 +343,21 @@ export function killDaa(o: OrderLike): bigint | null {
 }
 
 /**
- * invariant 4 on a live order: an IOC / FOK (tif 1 / 2) still open `grace` DAA after its kill time; a FOK in status `partial`.
+ * Invariant 4 on a live order: an IOC / FOK (tif 1 / 2) still open `grace` DAA after its kill time,
+ * or a FOK in status `partial`.
  *
- * `cursorDaa` is the INDEXER's cursor (the DAA the keepers' book has reached), never the node's: a keeper cannot act on an order
- * its indexer has not seen. `followingSince` is the cursor DAA at which the indexer last started following the tip within the
- * matcher's tolerance (null while it lags or is down: nothing is overdue then, because the matcher and keepers plan nothing
- * while the book lags the node). The deadline is `max(kill, followingSince, born) + grace`, `born` being the DAA of the order's current
- * UTXO: the keepers get the grace from the moment they can act, so an indexer that has just caught up past an order's kill time is not
- * blamed for the lag, and an order whose creation was accepted after its own expiry (a transaction that waited minutes in a full
- * mempool at the relay-floor fee rate, TN10 after a flood) is not overdue before it exists.
+ * `cursorDaa` is the INDEXER's cursor (the DAA the keepers' book has reached), never the node's.
+ * A keeper cannot act on an order its indexer has not seen.
+ * `followingSince` is the cursor DAA at which the indexer last started following the tip within the
+ * matcher's tolerance.
+ * It is null while the indexer lags or is down. Nothing is overdue then, because the matcher and
+ * keepers plan nothing while the book lags the node.
+ * The deadline is `max(kill, followingSince, born) + grace`, `born` being the DAA of the order's
+ * current UTXO.
+ * The keepers get the grace from the moment they can act, so an indexer that has just caught up
+ * past an order's kill time is not blamed for the lag.
+ * An order whose creation was accepted after its own expiry (a transaction that waited minutes in a
+ * full mempool at the relay-floor fee rate) is not overdue before it exists.
  */
 export function checkKill(o: OrderLike, cursorDaa: bigint, grace = 1200n, followingSince: bigint | null = 0n): Violation[] {
   const out: Violation[] = [];
@@ -329,14 +380,19 @@ export function checkKill(o: OrderLike, cursorDaa: bigint, grace = 1200n, follow
 }
 
 /**
- * Whether executor A's keepers can plan a kill right now (the `followingSince` gate of `checkKill`). The executor plans nothing while
- * its indexer is outside the lag tolerance (`within_lag_tolerance` of /v1/health; an older executor: `following` within 100 DAA), nor
- * while its matcher finds the book more than `max_book_lag` behind the node it reads LIVE (`kob_matcher_book_stale`), waits for the
- * indexer (`kob_matcher_waiting_for_indexer`) or is paused (`kob_matcher_paused`), nor when it stopped ticking (`kob_matcher_last_step_seconds`
- * older than `maxStepAgeSec`). /v1/health alone misses the book-lag gate: its `node_daa` is the indexer's polled one, behind the node
- * during slow window fetches. TN10 2026-10-09 14:03:34-14:04:41 exec-a logged "the book lags the node" (book 592206751, node 592207955)
- * while the checker's minute sample read within tolerance; the kill of IOC d5e78d02 went out 2 s after the book caught up and was
- * reported 1201 DAA overdue. A missing metrics file leaves the health verdict alone.
+ * Whether executor A's keepers can plan a kill right now (the `followingSince` gate of
+ * `checkKill`).
+ * The executor plans nothing in these cases:
+ * - Its indexer is outside the lag tolerance (`within_lag_tolerance` of /v1/health, or `following`
+ *   within 100 DAA when that field is absent).
+ * - Its matcher finds the book more than `max_book_lag` behind the node it reads LIVE
+ *   (`kob_matcher_book_stale`).
+ * - Its matcher waits for the indexer (`kob_matcher_waiting_for_indexer`) or is paused
+ *   (`kob_matcher_paused`).
+ * - It stopped ticking (`kob_matcher_last_step_seconds` older than `maxStepAgeSec`).
+ * /v1/health alone misses the book-lag gate, because its `node_daa` is the indexer's polled one,
+ * behind the node during slow window fetches.
+ * A missing metrics file leaves the health verdict alone.
  */
 export function keepersCanAct(
   h: (Pick<HealthLike, 'state' | 'lag_daa'> & { within_lag_tolerance?: boolean }) | null,
@@ -352,10 +408,14 @@ export function keepersCanAct(
 }
 
 /**
- * One token's part of the checker's fast sweep (run.ts `sweepTerms`; the reads are injected): `page(cursor)` lists the token's orders newest
- * first. Reads pages down to one that holds an order the previous sweep listed (`prev`: everything below it was read then), and on, to
- * `depth` orders at most, while an order of `pending` (read again each sweep) is not read yet. Without `prev` (the first sweep) it reads
- * `depth` orders. `visit` sees every order read; returns the ids read (the next sweep's `prev`).
+ * One token's part of the checker's fast sweep (run.ts `sweepTerms`; the reads are injected).
+ * `page(cursor)` lists the token's orders newest first.
+ * It reads pages down to one that holds an order the previous sweep listed (`prev`: everything
+ * below it was read then).
+ * It then goes on, to `depth` orders at most, while an order of `pending` (read again each sweep)
+ * is not read yet.
+ * Without `prev` (the first sweep) it reads `depth` orders.
+ * `visit` sees every order read. It returns the ids read (the next sweep's `prev`).
  */
 export async function sweepPages<V extends { covenant_id: string }>(
   page: (cursor: string | undefined) => Promise<{ items: V[]; next_cursor?: string | null }>,
@@ -381,12 +441,18 @@ export async function sweepPages<V extends { covenant_id: string }>(
   return listed;
 }
 
-/** the indexer cursor DAA since which the keepers have been able to act without a break, after one more sample (null: they cannot) */
+/**
+ * The indexer cursor DAA since which the keepers have been able to act without a break, after one
+ * more sample (null: they cannot).
+ */
 export function nextFollowingSince(prev: bigint | null, canAct: boolean, cursorDaa: bigint): bigint | null {
   return canAct ? (prev ?? cursorDaa) : null;
 }
 
-/** invariant 4 on the events of a FOK: every fill closes the order, and no remainder is returned in a fill's transaction */
+/**
+ * Invariant 4 on the events of a FOK: every fill closes the order, and no remainder is returned in
+ * a fill's transaction.
+ */
 export function checkFokEvents(o: { covenant_id: string; contract: string; tif?: number | null }, events: EventLike[]): Violation[] {
   if (o.tif !== 2) return [];
   const out: Violation[] = [];
@@ -402,13 +468,16 @@ export function checkFokEvents(o: { covenant_id: string; contract: string; tif?:
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ 5. triggers (touch)
+// ---- 5. triggers (touch) ----
 
 /**
- * One fill of the transaction of an `arm` / `trail` event that could be its trigger evidence (the fill of ANOTHER order in the same
- * transaction). `contract` is the filled order's kind: only a plain `KobAsk` / `KobBid` (or Kron) fill is evidence. `exposedSince` is
- * `max(order UTXO DAA + interval, custody UTXO DAA (asks only), activeFrom)` or null when the data to compute it is missing;
- * `slope` null = unknown (the proven state of the order is gone).
+ * One fill of the transaction of an `arm` / `trail` event that could be its trigger evidence (the
+ * fill of ANOTHER order in the same transaction).
+ * `contract` is the filled order's kind: only a plain `KobAsk` / `KobBid` (or Kron) fill is
+ * evidence.
+ * `exposedSince` is `max(order UTXO DAA + interval, custody UTXO DAA (asks only), activeFrom)`, or
+ * null when the data to compute it is missing.
+ * `slope` null means unknown (the proven state of the order is gone).
  */
 export interface EvidenceFact {
   order?: string;
@@ -416,7 +485,10 @@ export interface EvidenceFact {
   /** 1 ask (a resting ask was filled), 2 bid */
   side: number;
   tokenCovId: string;
-  /** base units per whole token of the evidence order (touch evidence compares prices of one scale only) */
+  /**
+   * Base units per whole token of the evidence order (touch evidence compares prices of one scale
+   * only).
+   */
   scale: string | number;
   price: string | number;
   /** base units filled in the transaction */
@@ -424,8 +496,10 @@ export interface EvidenceFact {
   slope: string | number | null;
   exposedSince: string | number | null;
   /**
-   * when `exposedSince` is unknown: a DAA the exposure cannot have started before (the start computed without a term the data lacks,
-   * e.g. a TWAP `interval` of an order whose state is gone). Exposure from the floor already short of `minRestDaa` is a violation.
+   * Used when `exposedSince` is unknown: a DAA the exposure cannot have started before.
+   * It is the start computed without a term the data lacks, e.g. a TWAP `interval` of an order
+   * whose state is gone.
+   * Exposure from the floor already short of `minRestDaa` is a violation.
    */
   exposedFloor?: string | number | null;
 }
@@ -438,30 +512,39 @@ export interface TriggerCheck {
 }
 
 /**
- * Whether the stop price in `s` may not be the one an `arm` or a triggered `fill` (event `index` of the order's events) was checked
- * against on chain: a trailing stop (`trailStep > 0`) whose terms are the memo of an order no longer live (the last state a round read:
- * a trail between that read and the event moved the stop), or whose live state was read after a later trail. TN10 2026-10-08:
- * KobCondBid ba1e1310 / 53e09f86 / d290a9b6 trailed down at DAA 591217066 (evidence ask 6390843734549), were armed at 591217250 by a
- * bid at 6417709759338 and filled at 591217368, all between two rounds: the memo held the stops from before the trail (6428402249437,
- * 6429829142713, 6426067116442) and the consensus-accepted arms were reported as errors. Such a stop is checked as unknown (a warning).
+ * Whether the stop price in `s` may not be the one an `arm` or a triggered `fill` (event `index` of
+ * the order's events) was checked against on chain.
+ * That holds for a trailing stop (`trailStep > 0`) in two cases:
+ * - Its terms are the memo of an order no longer live (the last state a round read), so a trail
+ *   between that read and the event may have moved the stop.
+ * - Its live state was read after a later trail.
+ * Such a stop is checked as unknown (a warning), so a consensus-accepted arm is not reported as an
+ * error.
  */
 export function stopMayHaveMoved(s: Record<string, string>, live: boolean, index: number, lastTrail: number): boolean {
   return b0(s.trailStep) > 0n && (!live || index < lastTrail);
 }
 
 /**
- * Invariant 5 (touch trigger): an `arm` / `trail` event of a conditional order or stop entry must be backed by a fill (n > 0) in
- * the SAME transaction of a plain resting `KobAsk` / `KobBid` (or Kron) of the same token and scale (`evidence`, contracts/orders `touch`):
- *   common      amount (base units) >= minTouch; slope == 0; exposedSince + minRestDaa <= the tx's DAA (the event's `daa` is
- *               never below the lock time, so failing it is certain); the tx's DAA >= activeFrom
- *   arm         KobCondAsk / KobIfdAsk: a resting ASK (side 1) with price <= stop (entryStop);
- *               KobCondBid / KobIfdBid: a resting BID (side 2) with price >= stop (entryStop)
- *   trail       KobCondAsk: a resting BID, k = floor((rp - trailGap - oldStop) / trailStep) >= 1, so the new stop <= rp - trailGap (and,
- *               without a take-profit cap, > rp - trailGap - trailStep); KobCondBid: a resting ASK, mirrored downwards.
- *               The new stop is the current `stopPrice` when this trail is the latest stop change (`latestStopChange`), else only the
- *               side is checked.
- * A candidate that passes everything but whose exposure (or slope) cannot be verified from the indexer data yields a 'warn'
- * ("unverifiable"), not an error; no candidate at all, or none that could pass, is an error.
+ * Invariant 5 (touch trigger): an `arm` / `trail` event of a conditional order or stop entry must
+ * be backed by a fill (n > 0) in the SAME transaction.
+ * The fill is of a plain resting `KobAsk` / `KobBid` (or Kron) of the same token and scale
+ * (`evidence`, contracts/orders `touch`):
+ *
+ *   common   amount (base units) >= minTouch; slope == 0; exposedSince + minRestDaa <= the tx's DAA
+ *            (the event's `daa` is never below the lock time, so failing it is certain);
+ *            the tx's DAA >= activeFrom
+ *   arm      KobCondAsk / KobIfdAsk: a resting ASK (side 1) with price <= stop (entryStop);
+ *            KobCondBid / KobIfdBid: a resting BID (side 2) with price >= stop (entryStop)
+ *   trail    KobCondAsk: a resting BID, k = floor((rp - trailGap - oldStop) / trailStep) >= 1,
+ *            so the new stop <= rp - trailGap (and, without a take-profit cap,
+ *            > rp - trailGap - trailStep); KobCondBid: a resting ASK, mirrored downwards.
+ *            The new stop is the current `stopPrice` when this trail is the latest stop change
+ *            (`latestStopChange`), else only the side is checked.
+ *
+ * A candidate that passes everything but whose exposure (or slope) cannot be verified from the
+ * indexer data yields a 'warn' ("unverifiable"), not an error.
+ * No candidate at all, or none that could pass, is an error.
  */
 export function checkTrigger(
   order: { covenant_id: string; contract: string },
@@ -498,7 +581,8 @@ export function checkTrigger(
     else if (b0(r.exposedSince) + b0(s.minRestDaa) > txDaa) why.push(`exposed since ${r.exposedSince}: ${txDaa - b0(r.exposedSince)} DAA < minRestDaa ${s.minRestDaa} at the tx (DAA ${ev.daa})`);
     if (txDaa < b0(s.activeFrom)) why.push(`tx DAA ${ev.daa} < activeFrom ${s.activeFrom}`);
     if (ev.kind === 'arm' || ev.kind === 'fill') {
-      // an arm, or a fill at the trigger (a triggered stop leg / stop entry, `detail.evidence` on the fill): the same side rule
+      // An arm, or a fill at the trigger (a triggered stop leg / stop entry, `detail.evidence` on
+      // the fill): the same side rule.
       const beyond = (msg: string) => (o.stopUnknown ? unknown.push(`${msg} (the stop may have trailed since the terms were read)`) : why.push(msg));
       if (kind === 'KobCondAsk' || kind === 'KobIfdAsk') {
         if (side !== 1) why.push(`side ${side} (${ev.kind} needs a filled resting ask, side 1)`);
@@ -559,12 +643,15 @@ export function checkTrigger(
   };
 }
 
-// ------------------------------------------------------------------------------------------------ 6. repeat IFD / IFO
+// ---- 6. repeat IFD / IFO ----
 
 /** a booked exit of `entryId` */
 export const isBookedExitOf = (o: OrderLike, entryId: string): boolean => (o.state?.state.parent ?? '').toLowerCase() === entryId.toLowerCase();
 
-/** entry amount left + live booked exit amounts left (base units) never exceed N (the entry's initial amount) */
+/**
+ * Entry amount left + live booked exit amounts left (base units) never exceed N (the entry's
+ * initial amount).
+ */
 export function checkRepeatAmount(entry: OrderLike, n: string | number | bigint | null, exits: OrderLike[]): Violation | null {
   const total = big(n);
   if (total === null || !entry.state) return null;
@@ -585,7 +672,10 @@ export function checkRepeatAmount(entry: OrderLike, n: string | number | bigint 
   };
 }
 
-/** every `rearm` of an entry pairs with a take-profit fill of the named exit in the same transaction, of the same amount, merged into it */
+/**
+ * Every `rearm` of an entry pairs with a take-profit fill of the named exit in the same
+ * transaction, of the same amount, merged into it.
+ */
 export function checkRearm(entryId: string, rearm: EventLike, exitEvents: EventLike[] | null): Violation | null {
   const d = detailOf(rearm);
   const exit = typeof d.exit === 'string' ? d.exit : null;
@@ -602,11 +692,14 @@ export function checkRearm(entryId: string, rearm: EventLike, exitEvents: EventL
 }
 
 /**
- * Repeat economics of one merged take-profit (buy-first: `KobIfdBid` entry, `KobCondAsk` exit): the exit's `rptPrice` is the entry's
- * budget rate `price + tip` (sompi per whole token), the fill is the take-profit leg (`q == tpPrice`), and the maker keeps at least
- * `ceil(m * (tp - tip_exit) / scale) - ceil(m * rptPrice / scale)` (the all-in proceeds minus what the merge returns to the entry): the
- * configured spread. Sell-first (`KobIfdAsk` + `KobCondBid`): `rptPrice == price - tip`, `rptPre == prefund`; the profit is paid by a bid-side
- * fill, which the read API does not value (not checked).
+ * Repeat economics of one merged take-profit (buy-first: `KobIfdBid` entry, `KobCondAsk` exit).
+ * The exit's `rptPrice` is the entry's budget rate `price + tip` (sompi per whole token), and the
+ * fill is the take-profit leg (`q == tpPrice`).
+ * The maker keeps at least `ceil(m * (tp - tip_exit) / scale) - ceil(m * rptPrice / scale)`, the
+ * all-in proceeds minus what the merge returns to the entry.
+ * That is the configured spread.
+ * Sell-first (`KobIfdAsk` + `KobCondBid`): `rptPrice == price - tip` and `rptPre == prefund`.
+ * The profit is paid by a bid-side fill, which the read API does not value (not checked).
  */
 export function checkRepeatCycle(entry: OrderLike, exit: OrderLike, fill: EventLike): Violation[] {
   const out: Violation[] = [];
@@ -643,7 +736,7 @@ export function checkRepeatCycle(entry: OrderLike, exit: OrderLike, fill: EventL
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ 8. fee == recorded rate x mass, rate within [floor, maxRate]
+// ---- 8. fee == recorded rate x mass, rate within [floor, maxRate] ----
 
 export interface TxLine {
   ts?: number;
@@ -657,14 +750,23 @@ export interface TxLine {
   compute: number | string;
   transientNormalized: number | string;
   storage?: number | string;
-  /** index of the change output; null when the builder folded a change too small to carry (its storage mass) into the fee */
+  /**
+   * Index of the change output. It is null when the builder folded a change too small to carry (its
+   * storage mass) into the fee.
+   */
   changeOutput?: number | null;
-  /** the fee policy's view of the transaction (informational: the checker never trusts it for the bounds) */
+  /**
+   * The fee policy's view of the transaction (informational: the checker never trusts it for the
+   * bounds).
+   */
   urgency?: string | null;
   feeSource?: string | null;
 }
 
-/** The rates a fee may legitimately use: the relay floor and the policy's maximum rate (sompi per gram). */
+/**
+ * The rates a fee may legitimately use: the relay floor and the policy's maximum rate (sompi per
+ * gram).
+ */
 export interface FeeBounds {
   floor: bigint;
   maxRate: bigint;
@@ -673,35 +775,52 @@ export interface FeeBounds {
 /** kob_protocol MIN_FEE_RATE and the policy default (fee-policy.ts DEFAULT_FEE_POLICY.maxRate). */
 export const DEFAULT_FEE_BOUNDS: FeeBounds = { floor: 100n, maxRate: 1000n };
 
-/** Block storage-mass limit and mass parameter (kob-protocol `tx.rs:49-51`: `STORAGE_MASS_PARAMETER`, `BLOCK_STORAGE_LIMIT`). */
+/**
+ * Block storage-mass limit and mass parameter (kob-protocol `tx.rs:49-51`:
+ * `STORAGE_MASS_PARAMETER`, `BLOCK_STORAGE_LIMIT`).
+ */
 export const STORAGE_MASS_PARAMETER = 1_000_000_000_000n;
 export const BLOCK_STORAGE_LIMIT = 500_000n;
 /**
- * Mass a P2PK change output (34-byte script, no covenant) adds to a transaction, from rusty-kaspa v2.1.0 `consensus/core/src/mass/mod.rs`:
- * serialized size 8 (value) + 2 (spk version) + 8 (spk length) + 34 = 52 bytes (`transaction_output_estimated_serialized_size`);
- * compute = 52 (per tx byte) + 10 x (2 + 34) (per spk byte) = 412; transient = 4 x size, normalized with the mempool cofactor 1/2 = 2 x size = 104.
+ * Mass a P2PK change output (34-byte script, no covenant) adds to a transaction, from rusty-kaspa
+ * v2.1.0 `consensus/core/src/mass/mod.rs`.
+ * - Serialized size: 8 (value) + 2 (spk version) + 8 (spk length) + 34 = 52 bytes
+ *   (`transaction_output_estimated_serialized_size`).
+ * - Compute: 52 (per tx byte) + 10 x (2 + 34) (per spk byte) = 412.
+ * - Transient: 4 x size, normalized with the mempool cofactor 1/2 = 2 x size = 104.
  * Its storage plurality is 1 (`utxo_plurality`: 63 + 34 <= 100).
  */
 export const CHANGE_OUTPUT_COMPUTE_MASS = 412n;
 export const CHANGE_OUTPUT_TRANSIENT_NORMALIZED = 104n;
 
 /**
- * The exact rule the builder folds a change by (kob-protocol `tx.rs` `Draft::seal`, lines 1229-1266): it solves the change value
- * `c = slack - fee(with change output)` and keeps the change only if the transaction WITH it is `within_block_limits()`
- * (compute <= 500000, storage <= 500000, transient <= 1000000, `tx.rs:541`); otherwise the change is folded into the fee
- * (`change_output = None`, the whole slack is paid). Hence, in relay mode (fee = 100 x max(compute, transientNormalized)):
+ * The exact rule the builder folds a change by (kob-protocol `tx.rs` `Draft::seal`, lines
+ * 1229-1266).
+ * It solves the change value `c = slack - fee(with change output)`.
+ * It keeps the change only if the transaction WITH it is `within_block_limits()` (compute <=
+ * 500000, storage <= 500000, transient <= 1000000, `tx.rs:541`).
+ * Otherwise the change is folded into the fee (`change_output = None`, the whole slack is paid).
+ * Hence, in relay mode (fee = 100 x max(compute, transientNormalized)):
  *
  *   folded  <=>  c <= 0  or  storage(tx with change c) > 500000
- *   excess  =  fee - floor  =  slack - fee_without  =  c + dFee     (dFee = floor(with change output) - floor(without))
+ *   excess  =  fee - floor  =  slack - fee_without  =  c + dFee
+ *            (dFee = floor(with change output) - floor(without))
  *
- * The storage mass with the change is `D + floor(C / c)` (`calc_storage_mass`: harmonic outputs `C p^2 / amount` per output; the change has
- * p = 1), where `D` is the storage mass of the transaction without the change (max(0, others - inputs)), which txs.jsonl records as
- * `storage`. So a change is folded iff `floor(C / c) > 500000 - D`, i.e. `c <= floor(C / (500001 - D))`; when `D` is clamped to 0 the least
- * favourable case is D = 0 (c <= 1_999_996). The largest excess a fold can leave is therefore `floor(C / (500001 - storage)) + dFee`.
- * (Assumption: adding the change does not switch the input side from the harmonic to the arithmetic form of `calc_storage_mass`, which
- * needs more than 2 inputs and one other output; the bots' amends have 1-2 inputs. The compute and transient limits are not reachable
- * by one output on transactions the wallet signs, so they are not part of the bound.)
- * Returns null when the transaction without change already exceeds the storage limit (no bound; such a line is never explained).
+ * The storage mass with the change is `D + floor(C / c)` (`calc_storage_mass`: harmonic outputs `C
+ * p^2 / amount` per output, and the change has p = 1).
+ * `D` is the storage mass of the transaction without the change (max(0, others - inputs)), which
+ * txs.jsonl records as `storage`.
+ * So a change is folded iff `floor(C / c) > 500000 - D`, i.e. `c <= floor(C / (500001 - D))`.
+ * When `D` is clamped to 0 the least favourable case is D = 0 (c <= 1_999_996).
+ * The largest excess a fold can leave is therefore `floor(C / (500001 - storage)) + dFee`.
+ *
+ * This assumes that adding the change does not switch the input side from the harmonic to the
+ * arithmetic form of `calc_storage_mass`.
+ * That switch needs more than 2 inputs and one other output, and the bots' amends have 1-2 inputs.
+ * The compute and transient limits are not reachable by one output on transactions the wallet
+ * signs, so they are not part of the bound.
+ * Returns null when the transaction without change already exceeds the storage limit (no bound;
+ * such a line is never explained).
  */
 export function maxFoldedExcess(l: Pick<TxLine, 'compute' | 'transientNormalized' | 'storage'>, rate = 100n): bigint | null {
   const storage = b0(l.storage ?? 0);
@@ -712,7 +831,10 @@ export function maxFoldedExcess(l: Pick<TxLine, 'compute' | 'transientNormalized
   return STORAGE_MASS_PARAMETER / (BLOCK_STORAGE_LIMIT + 1n - storage) + dFee;
 }
 
-/** A fee above the floor that the builder's change fold explains (logged as an info line, not an incident). */
+/**
+ * A fee above the floor that the builder's change fold explains (logged as an info line, not an
+ * incident).
+ */
 export interface FoldedFee {
   kind: 'folded';
   txid: string;
@@ -727,11 +849,16 @@ export interface FoldedFee {
 }
 
 /**
- * `fee == feeRate * max(compute, transientNormalized)` in relay mode (exact), with the RECORDED feeRate inside `bounds` ([relay floor, the policy's
- * maximum rate]); other modes: 'unchecked'. A dynamic fee (rate above the floor) is therefore not an incident; a rate outside the bounds, a fee that is not
- * its recorded rate times the independently measured mass, or a builder `minFee` that disagrees with it still is.
- * With no change output (`changeOutput === null`) an excess `0 < excess <= maxFoldedExcess` is the builder's fold (returned as a FoldedFee);
- * any other excess, a fee below its rate's cost, or an excess with a change output present (or an old line without the field) is a violation.
+ * `fee == feeRate * max(compute, transientNormalized)` in relay mode (exact), with the RECORDED
+ * feeRate inside `bounds` ([relay floor, the policy's maximum rate]).
+ * Other modes are 'unchecked'.
+ * A dynamic fee (rate above the floor) is therefore not an incident.
+ * A rate outside the bounds is still one, and so is a fee that is not its recorded rate times the
+ * independently measured mass, or a builder `minFee` that disagrees with it.
+ * With no change output (`changeOutput === null`) an excess `0 < excess <= maxFoldedExcess` is the
+ * builder's fold (returned as a FoldedFee).
+ * Any other excess is a violation, as is a fee below its rate's cost, or an excess with a change
+ * output present (or a line without the field).
  */
 export function checkFeeLine(l: TxLine, bounds: FeeBounds = DEFAULT_FEE_BOUNDS): Violation | null | 'unchecked' | FoldedFee {
   if (l.feeMode !== 'relay') return 'unchecked';
@@ -759,7 +886,7 @@ export function checkFeeLine(l: TxLine, bounds: FeeBounds = DEFAULT_FEE_BOUNDS):
   };
 }
 
-// ------------------------------------------------------------------------------------------------ 7. x402 settled exactly once
+// ---- 7. x402 settled exactly once ----
 
 export interface Payment {
   ts: number;
@@ -781,7 +908,10 @@ export interface LedgerEntry {
   reason?: string;
 }
 
-/** replays a facilitator ledger (JSONL `{"entry": {...}}`, the last line of a txid wins); a torn line is skipped */
+/**
+ * Replays a facilitator ledger (JSONL `{"entry": {...}}`, the last line of a txid wins). A torn
+ * line is skipped.
+ */
 export function replayLedger(text: string): { last: Map<string, LedgerEntry>; requestHashes: Map<string, Set<string>>; lines: number; bad: number } {
   const last = new Map<string, LedgerEntry>();
   const requestHashes = new Map<string, Set<string>>();
@@ -816,9 +946,12 @@ export interface X402Result {
 }
 
 /**
- * Invariant 7: every payment the payer got a 200 for is in the facilitator ledger exactly once and `accepted` (grace `graceMs` for
- * pending / broadcast), no payment txid was recorded twice, no ledger txid carries two request hashes, and no outpoint was consumed by
- * two accepted settlements.
+ * Invariant 7. Each of these must hold:
+ * - Every payment the payer got a 200 for is in the facilitator ledger exactly once and `accepted`
+ *   (grace `graceMs` for pending / broadcast).
+ * - No payment txid was recorded twice.
+ * - No ledger txid carries two request hashes.
+ * - No outpoint was consumed by two accepted settlements.
  */
 export function checkX402(payments: Payment[], ledgerText: string, nowMs: number, graceMs = 15 * 60_000): X402Result {
   const { last, requestHashes } = replayLedger(ledgerText);
@@ -869,26 +1002,37 @@ export function checkX402(payments: Payment[], ledgerText: string, nowMs: number
   return { violations: v, stats: { payments: payments.length, settled, pending, ledgerEntries: last.size, ledgerAccepted: acc, ledgerFailed: failed, ledgerAmbiguous: amb, unrecordedAccepted: unrecorded, byKind } };
 }
 
-// ------------------------------------------------------------------------------------------------ 11. pair orders
+// ---- 11. pair orders ----
 
-/** A pair order (protocol v3: KobPair, KobCondPair, KobIfdPair; token A for token B at B base units per whole A). */
+/**
+ * A pair order (protocol v3: KobPair, KobCondPair, KobIfdPair; token A for token B at B base units
+ * per whole A).
+ */
 export const isPairContract = (contract: string): boolean => /^Kob(Pair|CondPair|IfdPair)$/.test(contract);
 
 export interface PairCheck {
   violations: Violation[];
   /** the fill carried the pair fields this rule reads */
   checked: boolean;
-  /** what the maker received above its guarantee (an ask) or paid below it (a bid), base units of B */
+  /**
+   * What the maker received above its guarantee (an ask) or paid below it (a bid), base units of B.
+   */
   surplus: bigint;
 }
 
 /**
- * Invariant 11 (pair orders): the founder price rule and the pair guarantee, for one fill event of a pair order (`GET /v1/fills`):
- *   * a pair fill NEVER sets a price: the event's `price` is null and `detail.pair.price_source` is `none` (its counterparty may be the route
- *     through the KAS books, netting or inventory: the route's KAS-book fills record their own KAS trades);
- *   * at the order's quote q at the fill (`detail.pair.price`, B base units per whole A) an ASK receives at least `ceil(n x q / scale(A))` of B
- *     (`amount_b` = the call's tOut; a sell-first entry: the proceeds put into its exit), a BID pays at most `floor(n x q / scale(A))`
- *     (`amount_b` = its sOut; a buy-first entry: the B it releases). The KAS tip never comes out of B.
+ * Invariant 11 (pair orders): the pair price rule and the pair guarantee, for one fill event of a
+ * pair order (`GET /v1/fills`).
+ * - A pair fill NEVER sets a price. The event's `price` is null and `detail.pair.price_source` is
+ *   `none`.
+ *   Its counterparty may be the route through the KAS books, netting or inventory, and the route's
+ *   KAS-book fills record their own KAS trades.
+ * - At the order's quote q at the fill (`detail.pair.price`, B base units per whole A) an ASK
+ *   receives at least `ceil(n x q / scale(A))` of B.
+ *   Here `amount_b` is the call's tOut (a sell-first entry: the proceeds put into its exit).
+ * - At that quote a BID pays at most `floor(n x q / scale(A))`.
+ *   Here `amount_b` is its sOut (a buy-first entry: the B it releases).
+ * - The KAS tip never comes out of B.
  * A fill without `detail.pair` is a warning (the indexer could not read the call).
  */
 export function checkPairFill(order: { covenant_id: string; contract: string }, ev: EventLike): PairCheck {
@@ -929,13 +1073,18 @@ export function checkPairFill(order: { covenant_id: string; contract: string }, 
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ 12. supply conservation per token
+// ---- 12. supply conservation per token ----
 
 /**
- * Invariant 12: the live token UTXOs of a fixed-supply token always add up to its supply (the KCC-20 program neither mints nor burns; a
- * fill, pair fill, cancel or transfer only moves units). `live` = the indexer's live token UTXOs plus the holdings the indexer never
- * saw (genesis outputs, pre-run holdings the bots' trackers know) that are still in the node's UTXO set. `baseline` is the accepted
- * constant offset (a token issued before the indexers started: holdings no tracker knows); 0 for a token issued under the indexers.
+ * Invariant 12: the live token UTXOs of a fixed-supply token always add up to its supply.
+ * The KCC-20 program neither mints nor burns, so a fill, pair fill, cancel or transfer only moves
+ * units.
+ * `live` is the indexer's live token UTXOs plus the holdings the indexer never saw that are still
+ * in the node's UTXO set.
+ * Those holdings are genesis outputs and pre-run holdings the bots' trackers know.
+ * `baseline` is the accepted constant offset (a token issued before the indexers started: holdings
+ * no tracker knows).
+ * It is 0 for a token issued under the indexers.
  */
 export function checkSupply(token: string, ticker: string, supply: bigint, live: bigint, baseline: bigint, parts: Record<string, unknown> = {}): Violation | null {
   const delta = live - supply;
@@ -948,13 +1097,17 @@ export function checkSupply(token: string, ticker: string, supply: bigint, live:
   };
 }
 
-// ------------------------------------------------------------------------------------------------ 1b. amount accounting
+// ---- 1b. amount accounting ----
 
 /**
- * Amount accounting of a live order, in base units: `filled_amount + amount_left == initial_amount` for the kinds whose `amountLeft` only
- * ever decreases by fills (a plain ask and a KobPair; a repeat entry gets merges back, a bid has no amount). The indexer derives the
- * three numbers from different columns (the creation event, the fill events, the current state), so a missed or doubled fill, or a state
- * of another order, shows here exactly. null when the view does not carry them (a bid, a conditional order, a closed order).
+ * Amount accounting of a live order, in base units: `filled_amount + amount_left ==
+ * initial_amount`.
+ * It holds for the kinds whose `amountLeft` only ever decreases by fills (a plain ask and a
+ * KobPair; a repeat entry gets merges back, a bid has no amount).
+ * The indexer derives the three numbers from different columns (the creation event, the fill
+ * events, the current state).
+ * So a missed or doubled fill, or a state of another order, shows here exactly.
+ * It is null when the view does not carry them (a bid, a conditional order, a closed order).
  */
 export function checkAmountBalance(o: OrderLike): Violation | null {
   const k = baseKind(o.contract);
@@ -972,7 +1125,7 @@ export function checkAmountBalance(o: OrderLike): Violation | null {
   };
 }
 
-// ------------------------------------------------------------------------------------------------ 9. two indexers agree
+// ---- 9. two indexers agree ----
 
 /** fields of one order both indexers must agree on (once both are past its last event) */
 export function diffOrder(a: OrderLike, b: OrderLike | null): string[] {
@@ -996,7 +1149,7 @@ export function diffSets(a: Iterable<string>, b: Iterable<string>): { onlyA: str
   return { onlyA: [...sa].filter((x) => !sb.has(x)), onlyB: [...sb].filter((x) => !sa.has(x)) };
 }
 
-// ------------------------------------------------------------------------------------------------ 10. health
+// ---- 10. health ----
 
 /** problem codes of one indexer's `/v1/health` (null = unreachable) */
 export function healthIssues(h: HealthLike | null, nowMs: number, o: { maxLagDaa?: number; maxProgressAgeMs?: number } = {}): string[] {
@@ -1033,18 +1186,23 @@ export function metricIssues(m: Record<string, number> | null, nowSec: number, o
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ persistence (no benign races)
+// ---- persistence (no benign races) ----
 
 /**
- * Condition tracker: a condition becomes an incident only after it held for `rounds` consecutive observations (and at least `minMs`),
- * then once per episode (the subject carries the episode start, so a later episode is a new incident). Serializable (checker state).
+ * Condition tracker: a condition becomes an incident only after it held for `rounds` consecutive
+ * observations (and at least `minMs`).
+ * It then becomes an incident once per episode (the subject carries the episode start, so a later
+ * episode is a new incident).
+ * It is serializable (checker state).
  */
 export class Persist {
   data: Record<string, { since: number; count: number; fired: boolean; sig?: string }>;
   constructor(data: Record<string, { since: number; count: number; fired: boolean; sig?: string }> = {}) {
     this.data = data;
   }
-  /** `sig`: the condition's identity (e.g. the missing outpoint); a changed sig restarts the count */
+  /**
+   * `sig`: the condition's identity (e.g. the missing outpoint). A changed sig restarts the count.
+   */
   observe(key: string, bad: boolean, now: number, rounds = 2, minMs = 0, sig?: string): { fire: boolean; since: number } {
     if (!bad) {
       delete this.data[key];
@@ -1066,11 +1224,17 @@ export class Persist {
 }
 
 /**
- * Invariant 11 for an `arm` / `trail` event (or a fill that armed in itself) of a pair stop (KobCondPair, a KobIfdPair stop entry): its
- * `detail.evidence` names evidence of one of the two modes the covenant accepts: mode 0, two KAS-book fills (inputs [A, B], their quotes `a` and
- * `b` > 0, both orders plain KAS-book orders: KobAsk / KobBid of either family); mode 1, a resting KobPair of the pair filled in the same
- * transaction (inputs [k], its `price` > 0). `kinds` = the contracts of the evidence orders when the checker could read them (null: not read).
- * The covenant itself checks sides, quotes vs the stop, sizes and rest; this rule checks what the indexer recorded is one of the two modes.
+ * Invariant 11 for an `arm` / `trail` event (or a fill that armed in itself) of a pair stop
+ * (KobCondPair, a KobIfdPair stop entry).
+ * Its `detail.evidence` names evidence of one of the two modes the covenant accepts:
+ * - Mode 0: two KAS-book fills (inputs [A, B], their quotes `a` and `b` > 0, both orders plain
+ *   KAS-book orders: KobAsk / KobBid of either family).
+ * - Mode 1: a resting KobPair of the pair filled in the same transaction (inputs [k], its `price` >
+ *   0).
+ * `kinds` holds the contracts of the evidence orders when the checker could read them (null: not
+ * read).
+ * The covenant itself checks sides, quotes vs the stop, sizes and rest. This rule checks that what
+ * the indexer recorded is one of the two modes.
  */
 export function checkPairEvidence(order: { covenant_id: string; contract: string }, ev: EventLike, kinds: (string | null)[] | null = null): Violation | null {
   if (!isPairContract(order.contract)) return null;

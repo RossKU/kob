@@ -1,4 +1,5 @@
-// The supervisor's miner child: config.miner -> tn10-miner settings file (scripts/miner-config.mjs).
+// The supervisor's miner child: config.miner -> tn10-miner settings file
+// (scripts/miner-config.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';

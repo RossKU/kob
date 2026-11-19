@@ -1,10 +1,20 @@
-// Soak supervisor: starts the miner, the two executors, the bots and the checker; restarts any that exits (exponential backoff);
-// writes every child's output to a size-rotated log; samples memory / CPU of every child once a minute; stops everything when
-// run/STOP appears (scripts/stop.ps1) or on SIGINT / SIGTERM. run/RESTART-<child> (scripts/restart-child.ps1) restarts one child only,
-// with its spec rebuilt from a fresh read of the config (e.g. the miner after a binary swap or a `miner` block edit). run/HOLD-<child>
-// (scripts/hold-child.ps1) stops that child and keeps it down until the file is removed (a deploy step: a database carried, a bundle
-// rebuilt); a child whose binary or bundle is missing is not started (no crash loop) until the file is there. `restarts` counts only the
-// exits nobody asked for; operator restarts and holds are `requested` (scripts/restarts.mjs classifies the log the same way).
+// Soak supervisor: starts the miner, the two executors, the bots and the checker.
+// - It restarts any child that exits (exponential backoff).
+// - It writes every child's output to a size-rotated log and samples memory and CPU of every child
+//   once a minute.
+// - It stops everything when run/STOP appears (scripts/stop.ps1) or on SIGINT / SIGTERM.
+// - run/RESTART-<child> (scripts/restart-child.ps1) restarts one child only, with its spec rebuilt
+//   from a fresh read
+//  of the config (e.g. the miner after a binary swap or a `miner` block edit).
+// - run/HOLD-<child> (scripts/hold-child.ps1) stops that child and keeps it down until the file is
+//   removed
+//  (a deploy step: a database carried, a bundle rebuilt).
+//  A child whose binary or bundle is missing is not started (no crash loop) until the file is
+// there.
+//
+// `restarts` counts only the exits nobody asked for.
+// Operator restarts and holds are `requested` (scripts/restarts.mjs classifies the log the same
+// way).
 //
 //   node scripts/supervisor.mjs [--config run/config.json] [--only miner,exec-a,...]
 import { spawn, execFile } from 'node:child_process';
@@ -31,17 +41,20 @@ const keys = JSON.parse(readFileSync(join(RUN, 'keys.json'), 'utf8'));
 const LOG_MAX = Number(process.env.SOAK_LOG_MAX_BYTES ?? 20 * 1024 * 1024);
 const LOG_KEEP = 5;
 const STOP_FILE = join(RUN, 'STOP');
-// disk guard (free space of the run directory's drive, checked every minute): below DISK_WARN a warning (and stats/disk.json); below
-// DISK_LOW the low-disk mode: every log rotates now, rotated logs are gzipped, and the bots' / checker's info lines are dropped (only
-// warnings and errors are written) until the drive has DISK_LOW + 1 GB free again
+// Disk guard (free space of the run directory's drive, checked every minute).
+// Below DISK_WARN it logs a warning (and writes stats/disk.json).
+// Below DISK_LOW it enters the low-disk mode:
+// every log rotates now, rotated logs are gzipped, and the bots' and checker's info lines are
+// dropped (only warnings and errors are written),
+// until the drive has DISK_LOW + 1 GB free again.
 const GB = 1024 ** 3;
 const DISK_WARN = Number(process.env.SOAK_DISK_WARN_GB ?? 10) * GB;
 const DISK_LOW = Number(process.env.SOAK_DISK_LOW_GB ?? 3) * GB;
 let lowDisk = false;
 rmSync(STOP_FILE, { force: true });
 
-// A write that fails (a full drive: ENOSPC) is dropped, never fatal: the supervisor and its children keep running and the
-// writes resume once the drive has room (TN10 2026-10-19: one unhandled ENOSPC took the whole soak down).
+// A write that fails (a full drive: ENOSPC) is dropped, never fatal.
+// The supervisor and its children keep running, and the writes resume once the drive has room.
 let writeFailedAt = 0;
 const bestEffort = (what, fn) => {
   try {
@@ -85,7 +98,8 @@ class RotatingLog {
     this.size = existsSync(this.path) ? statSync(this.path).size : 0;
     this.stream = createWriteStream(this.path, { flags: 'a' });
     this.broken = false;
-    // an async write error (ENOSPC) breaks this sink only: the child's output is dropped until the sink reopens
+    // An async write error (ENOSPC) breaks this sink only. The child's output is dropped until the
+    // sink reopens.
     this.stream.on('error', (e) => {
       this.broken = true;
       this.brokenAt = Date.now();
@@ -162,7 +176,8 @@ function x402Config(ex) {
     killSwitchFile: join(RUN, ex.name, 'x402.kill'),
   };
   if (cfg.x402.invoiceIntent?.enabled) {
-    // docs/ops/executor.md A.7: the keeper key only receives what token intents leave over (the executor's own hot key)
+    // docs/ops/executor.md A.7: the keeper key only receives what token intents leave over (the
+    // executor's own hot key).
     c.intents = { enabled: true, keeperPubkey: keys[ex.key].publicKey, fillerSompi: 20000000, maxAttempts: 20, maxBuilds: 24, maxCandidates: 8, lockMarginDaa: 10 };
     c.invoices = { enabled: true, store: join(RUN, ex.name, 'x402-invoices.jsonl'), maxLifetimeSeconds: 3600, maxOpenPerMerchant: 1000 };
   }
@@ -173,12 +188,14 @@ function x402Config(ex) {
 function specs() {
   const node = process.execPath;
   const soak = join(SOAK, 'dist', 'soak.mjs');
-  // the miner: settings file run/miner.json from config.miner (miner-config.mjs; the miner re-reads it on change)
+  // The miner: settings file run/miner.json from config.miner (miner-config.mjs). The miner
+  // re-reads it on change.
   const out = [minerSpec(cfg, { run: RUN, minerBin: abs(cfg.minerBin), bankAddress: keys[cfg.bank.key].address })];
   for (const ex of cfg.executors) {
     const dir = join(RUN, ex.name);
     mkdirSync(join(dir, 'data'), { recursive: true });
-    // the roles: the Executor alone on lean storage (`--lean` in its args), else the Executor and the Indexer over a full store
+    // The roles: the Executor alone on lean storage (`--lean` in its args), else the Executor and
+    // the Indexer over a full store.
     const roles = (ex.args ?? []).includes('--lean') ? ['--executor'] : ['--executor', '--indexer'];
     const args = [
       ...roles,
@@ -193,16 +210,21 @@ function specs() {
       '--pause-file', join(dir, 'pause'),
       ...(ex.args ?? []),
     ];
-    // every client of the soak (bots, checker, UI) is 127.0.0.1: lift the per-client rate limit; the UI calls the API cross-origin.
-    // The file is rewritten on every start, so a VSPC request timeout other than the executor's default (180 s) must come from the
-    // config (`rpcTimeoutSecs`, per executor or global): an edit of executor.toml is lost on the next start.
+    // Every client of the soak (bots, checker, UI) is 127.0.0.1, so the per-client rate limit is
+    // lifted. The UI calls the API cross-origin.
+    // The file is rewritten on every start.
+    // So a VSPC request timeout other than the executor's default (180 s) must come from the config
+    // (`rpcTimeoutSecs`, per executor or global), because an edit of executor.toml is lost on the
+    // next start.
     const rpcTimeout = ex.rpcTimeoutSecs ?? cfg.rpcTimeoutSecs;
-    // parallel window fetch while catching up (docs/ops/executor.md, "Parallel fetch"): connections and the memory budget of the windows held ahead
+    // Parallel window fetch while catching up (docs/ops/executor.md, "Parallel fetch"): connections
+    // and the memory budget of the windows held ahead.
     const fetchParallel = ex.fetchParallel ?? cfg.fetchParallel;
     const prefetchMaxMb = ex.prefetchMaxMb ?? cfg.prefetchMaxMb;
     // parallel windows up to this lag (blue score) behind the sink; the executor's default is 1,200
     const prefetchMinLagBlue = ex.prefetchMinLagBlue ?? cfg.prefetchMinLagBlue;
-    // lag tolerance of the executor's planning gates, in seconds (the bots' gate reads the same `maxLagSecs`; 0 = strict)
+    // Lag tolerance of the executor's planning gates, in seconds. The bots' gate reads the same
+    // `maxLagSecs`. 0 = strict.
     const maxLagSecs = ex.maxLagSecs ?? cfg.maxLagSecs;
     writeFileSync(
       join(dir, 'executor.toml'),
@@ -237,7 +259,10 @@ function specs() {
 const children = new Map();
 let stopping = false;
 
-/** run/RESTART-<name>: kill that child; the exit handler starts it again with a spec rebuilt from a fresh read of the config */
+/**
+ * run/RESTART-<name>: kill that child. The exit handler starts it again with a spec rebuilt from a
+ * fresh read of the config.
+ */
 function restartRequests() {
   for (const st of children.values()) {
     const f = join(RUN, `RESTART-${st.spec.name}`);
@@ -258,7 +283,8 @@ function restartRequests() {
     } else start(st.spec);
   }
   for (const st of children.values()) {
-    // run/HOLD-<name>: stop the child and keep it down; once the file is gone (or a missing binary / bundle is there) start it again
+    // run/HOLD-<name>: stop the child and keep it down.
+    // Once the file is gone (or a missing binary or bundle is there), start it again.
     if (st.child && existsSync(holdFile(st.spec.name)) && !st.asked) {
       say('hold', { name: st.spec.name });
       st.asked = true;
@@ -269,7 +295,11 @@ function restartRequests() {
 
 const holdFile = (name) => join(RUN, `HOLD-${name}`);
 
-/** why a child must not start now: held (run/HOLD-<name>), or its executable / script missing (a deploy swapping it); null = start */
+/**
+ * Why a child must not start now: held (run/HOLD-<name>), or its executable or script is missing (a
+ * deploy swapping it).
+ * null = start.
+ */
 function blocker(spec) {
   if (existsSync(holdFile(spec.name))) return { msg: 'held', path: holdFile(spec.name) };
   const files = [...(spec.cmd === process.execPath ? [] : [spec.cmd]), ...spec.args.filter((a) => /\.(mjs|cjs|js)$/i.test(a))];

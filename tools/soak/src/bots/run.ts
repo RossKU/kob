@@ -1,5 +1,6 @@
-// The bots process: price feeds, bank, market maker (one ladder per soak book), traders, x402 merchant + payer. Stats are flushed to
-// run/stats/bots.json.
+// The bots process: price feeds, bank, market maker (one ladder per soak book), traders, x402
+// merchant + payer.
+// Stats are flushed to run/stats/bots.json.
 import { genesisOf, type Env, type GenesisOutputs } from '../env';
 import { symbolOfUrl } from '../config';
 import { logger, Stats } from '../log';
@@ -18,8 +19,10 @@ import { X402Bots } from './x402';
 const log = logger('bots');
 
 /**
- * Re-registers the genesis outputs of a token in the holders' trackers (`setup` adds them, but a bots process running at the same time
- * rewrites the tracker files from its own memory): the tracker verifies every candidate on the node, so a spent one is simply dropped.
+ * Re-registers the genesis outputs of a token in the holders' trackers.
+ * `setup` adds them, but a bots process running at the same time rewrites the tracker files from
+ * its own memory.
+ * The tracker verifies every candidate on the node, so a spent one is simply dropped.
  */
 function seedGenesis(env: Env, stats: Stats, m: TokenMarket, g: GenesisOutputs | undefined): void {
   for (const [name, o] of Object.entries(g ?? {})) {
@@ -39,16 +42,21 @@ function seedGenesis(env: Env, stats: Stats, m: TokenMarket, g: GenesisOutputs |
 
 export async function runBots(env: Env): Promise<void> {
   const stats = new Stats(`${env.cfg.runPath}/stats`, 'bots');
-  // trading (every BotWallet.submit, the bot loops, the x402 payer) pauses while the indexer is not following; the bank's plain KAS payouts do not
-  // (also while it lags by at most `maxLagSecs`, default 30 s: the executors' `max_lag_secs`, written by the supervisor)
+  // Trading pauses while the indexer is not following. That covers every BotWallet.submit, the bot
+  // loops and the x402 payer.
+  // The bank's plain KAS payouts do not pause.
+  // Following includes lagging by at most `maxLagSecs` (default 30 s, the executors'
+  // `max_lag_secs`, written by the supervisor).
   const maxLagDaa = Math.round((env.cfg.maxLagSecs ?? DEFAULT_MAX_LAG_SECS) * DAA_PER_SECOND);
-  // read from the indexer's metrics (no database work) while they say it follows, from its /v1/health otherwise (see gateHealth)
+  // The gate reads the indexer's metrics (no database work) while they say it follows, and its
+  // /v1/health otherwise (see gateHealth).
   const health = () => gateHealth(() => metricsHealth(env.cfg.indexerUrl), () => env.indexer.health());
   env.gate = new IndexerGate({ health, log: log.child('gate'), stats, maxLagDaa });
   stats.set('gate_max_lag_daa', maxLagDaa);
   await env.gate.check(true);
   const m = tokenMarket(env);
-  // every good Binance poll is recorded for the UI server's reference overlay (price.ts RefRecorder)
+  // Every good Binance poll is recorded for the UI server's reference overlay (price.ts
+  // RefRecorder).
   const rec = new RefRecorder(env.cfg.runPath);
   const feed = new PriceFeed(env.cfg, log.child('price'), stats, rec.onPrice);
   await feed.start();
@@ -59,7 +67,8 @@ export async function runBots(env: Env): Promise<void> {
     assets.push({ ...a, feed: new DerivedFeed(feed, usd) });
     seedGenesis(env, stats, a.m, genesisOf(env.state, a.slot));
   }
-  // external tokens the traders trade (a KRON token minted on TN10 by KRON's tooling): a fixed KAS reference, no fan-out, no market maker
+  // External tokens the traders trade (a KRON token minted on TN10 by KRON's tooling): a fixed KAS
+  // reference, no fan-out, no market maker.
   const external: ExternalBook[] = tradedExternalMarkets(env).map((x) => ({ ...x, feed: new FixedKasFeed(feed, unitsOf(x.trade.refKas, 8)) }));
   RefRecorder.writeSymbols(
     env.cfg.runPath,
@@ -88,8 +97,9 @@ export async function runBots(env: Env): Promise<void> {
     external: external.map((x) => ({ ticker: x.m.ticker, covenantId: x.m.covenantId, program: x.m.program, family: x.m.family, bookShare: x.trade.bookShare, refKas: x.trade.refKas })),
   });
 
-  // token fan-out before trading (and every 10 minutes): several token UTXOs per bot and token (TUSD: 300 per market-maker output, 60 per
-  // trader output, 20 per payer output; an asset token: its `fanout` config, whole tokens per output)
+  // Token fan-out before trading and every 10 minutes: several token UTXOs per bot and token.
+  // - TUSD: 300 per market-maker output, 60 per trader output, 20 per payer output.
+  // - An asset token: its `fanout` config, whole tokens per output.
   const tusd = (whole: string) => unitsOf(whole, m.decimals);
   const fan = async () => {
     await fanOut(env, walletFor(env, env.cfg.mm.key, stats, log.child('mm')), fanoutTarget(env, 'mm', m), tusd('300'), m);

@@ -1,7 +1,10 @@
-// One payer turn of the x402 bot, observable from the log alone: a line when it starts (the path the weighted pick chose), a warning
-// every `warnAfterMs` while it is still running (a stalled turn is visible while it stalls, not only once it ends), and a line when it
-// ends, with how long it took and whether it threw. The turn itself is never abandoned: a payment in flight keeps its own retry and
-// deadline (the SDK's), so a second turn never runs beside it.
+// One payer turn of the x402 bot, observable from the log alone.
+// It logs a line when the turn starts (the path the weighted pick chose).
+// It logs a warning every `warnAfterMs` while the turn is still running, so a stalled turn is
+// visible while it stalls and not only once it ends.
+// It logs a line when the turn ends, with how long it took and whether it threw.
+// The turn itself is never abandoned. A payment in flight keeps its own retry and deadline (the
+// SDK's), so a second turn never runs beside it.
 import { errText, type Logger } from '../log.ts';
 
 export interface TurnOptions {

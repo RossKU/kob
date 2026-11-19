@@ -1,5 +1,5 @@
-// The tracker's file-backed storage: a file shared with other processes (holdings --seed, the CLIs, setup) must never be reverted by the
-// bots' own next write.
+// The tracker's file-backed storage. A file shared with other processes (holdings --seed, the CLIs,
+// setup) must never be reverted by the bots' own next write.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
@@ -13,7 +13,10 @@ function tmp(): { dir: string; file: string; done: () => void } {
 }
 const onDisk = (file: string) => JSON.parse(readFileSync(file, 'utf8')) as Record<string, string>;
 const store = (n: number) => JSON.stringify({ v: 1, items: Array.from({ length: n }, (_, i) => ({ i })) });
-/** an external writer (a script): a plain write, not the storage's atomic one; the mtime is moved so the change is visible even on a coarse clock */
+/**
+ * An external writer (a script): a plain write, not the storage's atomic one. The mtime is moved so
+ * the change is visible even on a coarse clock.
+ */
 let bump = 0;
 function external(file: string, content: unknown): void {
   writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content));

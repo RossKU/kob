@@ -21,7 +21,8 @@ const thr = () => 10; // bps
 
 test('ladder: missing levels are placed, a level off by more than its threshold is amended, surplus orders are cancelled', () => {
   const targets = [T(0, 10_000n), T(1, 9_990n), T(2, 9_980n)];
-  // bids best first: 10_000 (on level), 9_900 (off level 1 by ~90 bps) -> amend; level 2 missing -> place
+  // Bids best first: 10_000 (on level), 9_900 (off level 1 by ~90 bps) -> amend. Level 2 is missing
+  // -> place.
   const steps = ladderSteps('buy', targets, [{ price: 9_900n, order: 'o2' }, { price: 10_000n, order: 'o1' }], thr, 10);
   assert.deepEqual(steps, [
     { kind: 'amend', order: 'o2', target: targets[1] },
@@ -36,7 +37,8 @@ test('ladder: a held slot (own pending placement or amend, not listed yet) keeps
   // the indexer lists none of the three placements yet: nothing is placed again
   const held = targets.map((t) => ({ price: t.price, order: null }));
   assert.deepEqual(ladderSteps('buy', targets, held, thr, 10), []);
-  // an amended order still listed at its old price (far off) is not amended again; a held surplus slot is not cancelled
+  // An amended order still listed at its old price (far off) is not amended again. A held surplus
+  // slot is not cancelled.
   assert.deepEqual(ladderSteps('buy', [T(0, 10_000n)], [{ price: 9_000n, order: null }, { price: 8_000n, order: null }], thr, 10), []);
 });
 

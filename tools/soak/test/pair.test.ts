@@ -1,6 +1,10 @@
-// Unit tests of the pair-order logic of the soak (protocol v3 KobPair / KobCondPair / KobIfdPair: token A for token B): invariant 11 (a pair
-// fill never sets a price and honours the order's guarantee in B; pair arms name evidence of one of the two modes), invariant 12 (supply), the
-// pair arithmetic of the pair bots and the multi-market report (`npm test`).
+// Unit tests of the pair-order logic of the soak (protocol v3 KobPair / KobCondPair / KobIfdPair:
+// token A for token B).
+// They cover:
+// - Invariant 11: a pair fill never sets a price and honours the order's guarantee in B. Pair arms
+//   name evidence of one of the two modes.
+// - Invariant 12 (supply).
+// - The pair arithmetic of the pair bots and the multi-market report (`npm test`).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkAmountBalance, checkFill, checkPairEvidence, checkPairFill, checkSupply, isPairContract } from '../src/checker/rules.ts';
@@ -14,7 +18,10 @@ const TETH = 'e7e70000'.padEnd(64, '1');
 const ORDER = { covenant_id: 'cc'.repeat(32), contract: 'KobPair' };
 const U = 100_000_000n; // one whole TETH (A, scale 10^8)
 
-/** A pair fill event as the indexer serves it: `price` null, `detail.pair` (amount_b = tOut of an ask / sOut of a bid). */
+/**
+ * A pair fill event as the indexer serves it: `price` null, `detail.pair` (amount_b = tOut of an
+ * ask / sOut of a bid).
+ */
 const fill = (side: 'ask' | 'bid', n: bigint, amountB: bigint, price: bigint, over: Record<string, unknown> = {}, evPrice: string | null = null): EventLike => ({
   id: 1, covenant_id: ORDER.covenant_id, daa: 100, txid: 'ff'.repeat(32), kind: 'fill', side: side === 'ask' ? 1 : 2, amount: n.toString(), price: evPrice, payout: null, closes: false,
   detail: { input: 0, pair: { side, base: TETH, quote: TUSD, a_scale: Number(U), amount_a: n.toString(), amount_b: amountB.toString(), price: price.toString(), tip_kas: '0', counterparty: 'route', price_source: 'none', ...over } },
@@ -26,7 +33,8 @@ test('pair contracts', () => {
 });
 
 test('pair fill: an ask receives at least ceil(n x q / scale(A)) of B; a bid pays at most floor(...); the surplus is reported', () => {
-  // 2.5 TETH at 268_929 TUSD base units per whole TETH: exactly 672_322.5 -> an ask needs 672_323, a bid pays at most 672_322
+  // 2.5 TETH at 268_929 TUSD base units per whole TETH: exactly 672_322.5, so an ask needs 672_323
+  // and a bid pays at most 672_322.
   const n = 250_000_000n;
   const q = 268_929n;
   assert.deepEqual(checkPairFill(ORDER, fill('ask', n, 672_323n, q)).violations, []);
@@ -88,11 +96,13 @@ test('supply: live == supply + baseline passes; any other offset is minted or bu
 });
 
 test('pair rate: B base units per whole A from the two KAS references; the pair book reference when close to it', () => {
-  // 1 TETH = 61_800 KAS, 1 TUSD = 22.98 KAS: 2689.2950... TUSD = 268_929_503_916 TUSD base units (scale 10^8) per whole TETH
+  // 1 TETH = 61_800 KAS, 1 TUSD = 22.98 KAS: 2689.2950... TUSD = 268_929_503_916 TUSD base units
+  // (scale 10^8) per whole TETH.
   const fair = pairRateOf(6_180_000_000_000n, 2_298_000_000n, U)!;
   assert.equal(fair, (6_180_000_000_000n * U) / 2_298_000_000n);
   assert.equal(pairRateOf(1n, 0n, U), null);
-  // the book's touch per base unit of A: ask 2700 / bid 2680 TUSD per TETH -> midpoint 2690 TUSD per whole TETH (in TUSD base units)
+  // The book's touch per base unit of A: ask 2700 / bid 2680 TUSD per TETH, so the midpoint is 2690
+  // TUSD per whole TETH (in TUSD base units).
   const lvl = (whole: bigint) => ({ price_num: whole.toString(), price_den: U.toString() });
   const view = { asks: [lvl(270_000_000_000n)], bids: [lvl(268_000_000_000n)] };
   assert.equal(pairReference(view, U, fair, 300), 269_000_000_000n);

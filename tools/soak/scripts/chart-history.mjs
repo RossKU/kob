@@ -1,15 +1,23 @@
-// Read-only: do the charts keep their whole history? For every executor of run/config.json, per token of the registry (KAS
-// book) and per pair market with pair fills, the first candle of each interval (1d, 1h, 5m, 1m) from that executor's API must be
-// the bucket of the first trade in its database, and no fill may be left under an old id carried to a current one (a replay
-// of the record log undoes `carry-history`). Exit 1 on any problem. Run it before and after every redeploy (README "Redeploy").
+// Read-only: do the charts keep their whole history?
+// For every executor of run/config.json, per token of the registry (KAS book) and per pair market
+// with pair fills:
+// - The first candle of each interval (1d, 1h, 5m, 1m) from that executor's API must be the bucket
+//   of the first trade in its database.
+// - No fill may be left under an old id carried to a current one (a replay of the record log undoes
+//   `carry-history`).
 //
-//   node scripts/chart-history.mjs [--config run/config.json] [--registry run/registry/tokens.json] [--floor run/state/chart-floor.json]
-//        [--only exec-b] [--json]
+// Exit 1 on any problem. Run it before and after every redeploy (README "Redeploy").
 //
-// Each database may be of any layout (schema 9, 8, or 5 to 7): the first trade is read with the matching columns.
+//   node scripts/chart-history.mjs [--config run/config.json] [--registry run/registry/tokens.json]
+//        [--floor run/state/chart-floor.json] [--only exec-b] [--json]
 //
-// The floor file (written by scripts/import-history.mjs) holds the earliest first trade per ticker any import reached: a database
-// whose first trade is later lost the imported history (a replay or a rebuilt database: import again).
+// Each database may be of any layout (schema 9, 8, or 5 to 7). The first trade is read with the
+// matching columns.
+//
+// The floor file (written by scripts/import-history.mjs) holds the earliest first trade per ticker
+// any import reached.
+// A database whose first trade is later has lost the imported history (a replay or a rebuilt
+// database): import again.
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';

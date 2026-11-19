@@ -1,6 +1,9 @@
-// Scenario records (run/state/scenarios.jsonl): what a bot expects of an action whose result the checker can verify on its own later (the
-// checker's `scenarios` step, rules in checker/scenario-rules.ts). One JSON line per action, appended by the bots, read by the checker from
-// its cursor. No `@/` imports (the checker's pure tests read these types).
+// Scenario records (run/state/scenarios.jsonl).
+// Each record states what a bot expects of an action whose result the checker can verify on its own
+// later.
+// The checker's `scenarios` step applies the rules in checker/scenario-rules.ts.
+// There is one JSON line per action, appended by the bots and read by the checker from its cursor.
+// There are no `@/` imports, because the checker's pure tests read these types.
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -10,7 +13,10 @@ export interface SpentOrder {
   spends: string;
 }
 
-/** A limit ladder: every rung its own order placed by its own transaction, all of the same size and side (ticket feature e3fe485). */
+/**
+ * A limit ladder: every rung is its own order placed by its own transaction, all of the same size
+ * and side.
+ */
 export interface LadderRecord {
   kind: 'ladder';
   ts: number;
@@ -21,7 +27,9 @@ export interface LadderRecord {
   size: string;
   levels: number;
   rungs: { id: string; price: string; txid: string }[];
-  /** the ladder stopped at a rung (a refusal or a failed submit): the rungs placed before it stay */
+  /**
+   * The ladder stopped at a rung (a refusal or a failed submit). The rungs placed before it stay.
+   */
   stoppedAt?: number;
 }
 
@@ -38,8 +46,12 @@ export interface LadderCancelRecord {
 }
 
 /**
- * A replacement whose terms the bot knows: a GTC renewal (`renew`, the web's renew path: same terms, expiry now + 90 days) or a pair amend
- * (`pairAmend`, the pair ticket's replace: same pair, side, amount and lifetime, a new price). `expect` is the replacement's state as built.
+ * A replacement whose terms the bot knows.
+ * - `renew`: a GTC renewal (the web's renew path), with the same terms and expiry now + 90 days.
+ * - `pairAmend`: a pair amend (the pair ticket's replace), with the same pair, side, amount and
+ *   lifetime and a new price.
+ *
+ * `expect` is the replacement's state as built.
  */
 export interface ReplaceRecord {
   kind: 'renew' | 'pairAmend';
@@ -60,7 +72,10 @@ export interface ReplaceRecord {
   expect: Record<string, string>;
 }
 
-/** A cancel-all (`pair`: every live pair order of one pair of the bot): every order must end, by this cancel or by a fill that won the race. */
+/**
+ * A cancel-all (`pair`: every live pair order of one pair of the bot). Every order must end, by
+ * this cancel or by a fill that won the race.
+ */
 export interface CancelAllRecord {
   kind: 'cancelAll';
   ts: number;
@@ -70,7 +85,10 @@ export interface CancelAllRecord {
   txids: string[];
 }
 
-/** A token merge (web "Merge tokens", a chain of transfers 3 -> 1, then 1 + 2 -> 1, ...): one output holding the inputs' total. */
+/**
+ * A token merge (web "Merge tokens", a chain of transfers 3 -> 1, then 1 + 2 -> 1, ...). One output
+ * holds the inputs' total.
+ */
 export interface MergeRecord {
   kind: 'merge';
   ts: number;

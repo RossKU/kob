@@ -1,11 +1,18 @@
-// `soak.mjs order`: the operator places one order by hand through exactly the bots' path (the web app's planner over the live book and the
-// key's wallet -> sign -> validate -> submit), on a soak token or on an external token of the soak registry (`externalTokens`, e.g. a Kasseal
-// launchpad token). Keys beside run/keys.json come from `--keys <file>` (same format). A token UTXO the key received outside KOB (bought on a
-// Kasseal curve) is announced with `--seed <txid>:<index>:<amount>:<carrier sompi>` (a KCC-20 holder owned by the key, owner scheme 0, no
-// borrow, the token's extension commitment); the tracker verifies it on the node before it is spent.
+// `soak.mjs order`: the operator places one order by hand through exactly the bots' path.
+// The path is the web app's planner over the live book and the key's wallet, then sign, validate
+// and submit.
+// The token is a soak token or an external token of the soak registry (`externalTokens`, e.g. a
+// Kasseal launchpad token).
+// Keys beside run/keys.json come from `--keys <file>` (same format).
+// A token UTXO the key received outside KOB (bought on a Kasseal curve) is announced with `--seed
+// <txid>:<index>:<amount>:<carrier sompi>`.
+// It is a KCC-20 holder owned by the key, owner scheme 0, no borrow, with the token's extension
+// commitment.
+// The tracker verifies it on the node before it is spent.
 //
-//   node dist/soak.mjs order --config run/config.json --keys run/kasseal-keys.json --key ksA --token <covenant id> \
-//        [--seed <txid>:<index>:<amount>:<carrier>] --intent '{"type":"limit","side":"sell","amount":"1000n","price":"20000000n"}'
+//   node dist/soak.mjs order --config run/config.json --keys run/kasseal-keys.json --key ksA \
+//        --token <covenant id> [--seed <txid>:<index>:<amount>:<carrier>] \
+//        --intent '{"type":"limit","side":"sell","amount":"1000n","price":"20000000n"}'
 //
 // Intent numbers are strings with an `n` suffix (bigint), e.g. "1000n".
 import { readFileSync } from 'node:fs';
@@ -21,7 +28,10 @@ const log = logger('order');
 export const parseIntent = (json: string): Intent =>
   JSON.parse(json, (_k, v) => (typeof v === 'string' && /^-?\d+n$/.test(v) ? BigInt(v.slice(0, -1)) : v)) as Intent;
 
-/** merges extra keys (a file in the run/keys.json format) into the environment; a name already in run/keys.json is refused */
+/**
+ * Merges extra keys (a file in the run/keys.json format) into the environment. A name already in
+ * run/keys.json is refused.
+ */
 export function addKeys(env: Env, file: string | undefined): void {
   if (!file) return;
   const extra = JSON.parse(readFileSync(file, 'utf8')) as Record<string, KeyEntry>;

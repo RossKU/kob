@@ -1,6 +1,9 @@
-// The soak tokens as markets: registry entries (generated at setup), TokenMarkets, planner environments, the books. The primary token
-// (TUSD, `state.token`) and, when configured, the asset tokens beside it (`state.token2` TETH, `state.token3` TBTC): all KCC-20 on KOB's
-// standard program, the KCC-20 reference with 3 token inputs / 3 token outputs per transaction (`KCC20Ref`, registry `kcc20-ref-3x3`).
+// The soak tokens as markets: registry entries (generated at setup), TokenMarkets, planner
+// environments and the books.
+// The primary token (TUSD, `state.token`) and, when configured, the asset tokens beside it
+// (`state.token2` TETH, `state.token3` TBTC) are all KCC-20 on KOB's standard program.
+// That is the KCC-20 reference with 3 token inputs / 3 token outputs per transaction (`KCC20Ref`,
+// registry `kcc20-ref-3x3`).
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { bookFromIndexer, kasReferenceOf, ownOrderRefs } from '@/app/env';
@@ -18,12 +21,16 @@ import { feeContext } from './fees';
 import type { RefSource } from './price';
 import type { BotWallet } from './wallet';
 
-/** The program every soak token is issued with (kob-wasm `issue`, its default): KOB's standard KCC-20 program. */
+/**
+ * The program every soak token is issued with (kob-wasm `issue`, its default): KOB's standard
+ * KCC-20 program.
+ */
 export const SOAK_PROGRAM = 'KCC20Ref' as const;
 
 /**
- * Refuses a soak state whose tokens were issued under another program (the 8 / 8 program of the soak before 2026-10-10): this build lists,
- * builds and matches only the pinned templates, so such a token is re-issued (remove its entries from run/state.json, then `soak setup`).
+ * Refuses a soak state whose tokens were issued under another program, such as the 8 / 8 program.
+ * This build lists, builds and matches only the pinned templates.
+ * Such a token must be re-issued: remove its entries from run/state.json, then run `soak setup`.
  */
 export function checkSoakProgram(t: IssuedToken): void {
   if (t.templateHash !== TEMPLATE_STANDARD.template_hash) {
@@ -47,8 +54,11 @@ function registryToken(t: IssuedToken, description: string): Record<string, unkn
     extension_commitment: t.extensionCommitment,
     extension_class: 'fixed-supply-standard',
     decimals: t.decimals,
-    // no `lot_size` / `tick`: legacy protocol v2 fields that kob_protocol::registry reads and ignores (protocol v3: any amount of base
-    // units, any whole-sompi price per whole token); the web app then prices on a 1-sompi step
+    // No `lot_size` / `tick`: they are protocol v2 fields that kob_protocol::registry reads and
+    // ignores.
+    // In protocol v3 an order has any amount of base units and any whole-sompi price per whole
+    // token.
+    // The web app then prices on a 1-sompi step.
     max_token_inputs: TEMPLATE_STANDARD.max_token_inputs,
     max_token_outputs: TEMPLATE_STANDARD.max_token_outputs,
     verified: true,
@@ -56,7 +66,10 @@ function registryToken(t: IssuedToken, description: string): Record<string, unkn
   };
 }
 
-/** The registry JSON of the soak (testnet-10, the soak tokens), also the executors' `--tokens` allowlist. */
+/**
+ * The registry JSON of the soak (testnet-10, the soak tokens). It is also the executors' `--tokens`
+ * allowlist.
+ */
 export function soakRegistry(env: Env): unknown {
   const t = env.state.token;
   if (!t) throw new Error('the soak token is not issued yet (run `soak setup`)');
@@ -78,7 +91,10 @@ export function writeRegistry(env: Env): string {
   return p;
 }
 
-/** Which soak market: omitted = the primary token (TUSD); a slot ('token', 'token2', 'token3'); a covenant id; or a TokenMarket. */
+/**
+ * Which soak market: omitted means the primary token (TUSD), else a slot ('token', 'token2',
+ * 'token3'), a covenant id or a TokenMarket.
+ */
 export type Which = TokenMarket | string | undefined;
 
 const cachedMarkets = new Map<string, TokenMarket>();
@@ -119,7 +135,10 @@ export function tokenMarket(env: Env, which?: Which): TokenMarket {
   return m;
 }
 
-/** an external token of the soak registry (`externalTokens`) as a market (the operator's `order` command; the traders trade those with a `trade` block) */
+/**
+ * An external token of the soak registry (`externalTokens`) as a market.
+ * The operator's `order` command uses it, and the traders trade those with a `trade` block.
+ */
 function externalMarket(env: Env, covenantId: string): TokenMarket | undefined {
   if (!(env.cfg.externalTokens ?? []).some((t) => t.covenantId === covenantId)) return undefined;
   let m = cachedMarkets.get(covenantId);
@@ -140,12 +159,18 @@ export interface AssetMarket {
   m: TokenMarket;
 }
 
-/** A soak book beside TUSD as the bots trade it: the asset market and its per-token KAS reference (Binance asset / KASUSDT). */
+/**
+ * A soak book beside TUSD as the bots trade it: the asset market and its per-token KAS reference
+ * (Binance asset / KASUSDT).
+ */
 export interface AssetBook extends AssetMarket {
   feed: RefSource;
 }
 
-/** An external token the traders trade (`externalTokens[]` with a `trade` block, e.g. a KRON token): its market, config and reference. */
+/**
+ * An external token the traders trade (`externalTokens[]` with a `trade` block, e.g. a KRON token):
+ * its market, config and reference.
+ */
 export interface ExternalBook {
   cfg: ExternalTokenConfig;
   trade: ExternalTradeConfig;
@@ -187,7 +212,10 @@ export async function readBook(env: Env, which?: Which): Promise<BookView> {
 /** a pair order (KobPair, KobCondPair, KobIfdPair: token A for token B; no KAS price) */
 export const isPair = (v: { contract: string; pair?: unknown }): boolean => isPairOrderView(v as Parameters<typeof isPairOrderView>[0]);
 
-/** open / partial orders of a maker on a soak token (indexer view; a pair order is listed under both its tokens) */
+/**
+ * Open and partial orders of a maker on a soak token (indexer view). A pair order is listed under
+ * both its tokens.
+ */
 export async function myOrders(env: Env, maker: string, which?: Which): Promise<OrderView[]> {
   const m = tokenMarket(env, which);
   return env.indexer.allOrders({ maker, token: m.covenantId, status: 'active' }, { maxPages: 10 });
@@ -203,17 +231,25 @@ export async function planEnv(env: Env, w: BotWallet, o: { book?: BookView; mine
     o.mine ? Promise.resolve(o.mine) : myOrders(env, w.pk, m).catch(() => [] as OrderView[]),
     feeContext(env),
   ]);
-  // Self-trade guard over the maker's resting orders of THIS book: its KAS-quoted orders (a pair order has no KAS price; its own guard is the
-  // pair planner's, over the pair book: pairPlanEnv), less those its own pending transactions already cancel or amend (the listing lags)
+  // Self-trade guard over the maker's resting orders of this book.
+  // It covers the KAS-quoted orders, less those its own pending transactions already cancel or
+  // amend (the listing lags).
+  // A pair order has no KAS price. Its guard is the pair planner's, over the pair book
+  // (pairPlanEnv).
   const own = w.actionable(mine).filter((v) => !isPair(v));
   return { kob: env.kob, token: m, maker: w.pk, clock, book, ownOrders: ownOrderRefs(m, own), funding, tokenUtxos, fees };
 }
 
 /**
- * The environment of a pair order on `base`/`quote` (A/B, oriented): what the web app's `buildPairPlanEnv` reads, from the soak's own sources
- * (the bot wallet, the bots' indexer): the maker's KAS and UTXOs of BOTH tokens, the pair book (direct / entry / route) as a BookView in B per whole
- * A, the maker's live pair orders of the pair (self-trade prevention), the KAS references of A and B (default minimum fill) and the rate their
- * newest KAS trades imply. A guard whose data could not be read is reported (`guardsUnavailable`) as in the app.
+ * The environment of a pair order on `base`/`quote` (A/B, oriented). It holds what the web app's
+ * `buildPairPlanEnv` reads, from the soak's own sources (the bot wallet, the bots' indexer):
+ * - The maker's KAS and UTXOs of both tokens.
+ * - The pair book (direct / entry / route) as a BookView in B per whole A.
+ * - The maker's live pair orders of the pair (self-trade prevention).
+ * - The KAS references of A and B (default minimum fill) and the rate their newest KAS trades
+ *   imply.
+ *
+ * A guard whose data could not be read is reported (`guardsUnavailable`), as in the app.
  */
 export async function pairPlanEnv(env: Env, w: BotWallet, base: Which, quote: Which): Promise<PairPlanEnv> {
   const a = tokenMarket(env, base);
@@ -242,8 +278,11 @@ export async function pairPlanEnv(env: Env, w: BotWallet, base: Which, quote: Wh
 }
 
 /**
- * A market / close order's planner environment with the start references of the verifier indexers (`env.verifiers`, the app's
- * `extraIndexerUrls`): each one's touch of the KAS book, or for a pair the rate its two KAS books imply. Any other order type: unchanged.
+ * A market / close order's planner environment with the start references of the verifier indexers
+ * (`env.verifiers`, the app's `extraIndexerUrls`).
+ * Each reference is that indexer's touch of the KAS book, or for a pair the rate its two KAS books
+ * imply.
+ * Any other order type is unchanged.
  */
 export async function withStartReferences<E extends PlanEnv>(env: Env, e: E, intentType: string): Promise<E> {
   if ((intentType !== 'market' && intentType !== 'close') || !env.verifiers.length) return e;

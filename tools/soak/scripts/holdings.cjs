@@ -1,7 +1,13 @@
-// Every soak key's live token UTXOs, verified on the node: candidates from the indexer (`/v1/token-utxos?owner=`), the bots' local trackers
-// (run/state/tracker-<key>.json) and, with EXTRA=<file>, a previous output of this script; each kept only if the P2SH of its state holds the
-// outpoint. Writes run/holdings.json (OUT=<name>); `--seed` rewrites every tracker to exactly the verified set (the pre-run holdings a fresh
-// indexer never lists live only there: run it before the bots start, see README "Redeploy on main ae87d77"). Read-only otherwise.
+// Every soak key's live token UTXOs, verified on the node.
+// Candidates come from the indexer (`/v1/token-utxos?owner=`), the bots' local trackers
+// (run/state/tracker-<key>.json)
+// and, with EXTRA=<file>, a previous output of this script.
+// Each is kept only if the P2SH of its state holds the outpoint.
+// It writes run/holdings.json (OUT=<name>). Otherwise it is read-only.
+// `--seed` rewrites every tracker to exactly the verified set.
+// Pre-run holdings that a fresh indexer never lists live only there, so run it before the bots
+// start (see README "Redeploy").
+//
 //   node scripts/holdings.cjs [--seed]   (API=http://127.0.0.1:8091, NODE=ws://..., RUN=<run dir>)
 const fs = require('fs');
 const RUN = process.env.RUN || __dirname + '/../run';

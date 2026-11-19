@@ -1,7 +1,14 @@
-// The soak summary report: run/reports/latest.{json,txt}, plus a timestamped copy per hour (report-YYYYMMDD-HH.{json,txt}). Inputs:
-// both indexers (health, open asks / bids), the executors' metrics files, the bots' counters, the checker's state (fills / volume / check
-// counters, its order memo: the orders by contract, status and tif), the incident log, the supervisor's status and resource samples. The
-// text form is compact (scripts/status.ps1 prints it; it is pasted into status updates).
+// The soak summary report: run/reports/latest.{json,txt}, plus a timestamped copy per hour
+// (report-YYYYMMDD-HH.{json,txt}).
+// The inputs are:
+// - both indexers (health, open asks / bids),
+// - the executors' metrics files,
+// - the bots' counters,
+// - the checker's state (fills / volume / check counters, its order memo: the orders by contract,
+//   status and tif),
+// - the incident log,
+// - the supervisor's status and resource samples.
+// The text form is compact (scripts/status.ps1 prints it, and it is pasted into status updates).
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { HttpIndexer } from '@/data/indexer';
@@ -46,9 +53,10 @@ export async function writeReport(env: Env): Promise<{ text: string }> {
     executors.push({ name: e.name, health, metrics: existsSync(mp) ? parseProm(readFileSync(mp, 'utf8')) : null });
   }
 
-  // orders of every soak token from the checker's memo (one entry per order: a pair order listed under both its tokens counts once). Paging
-  // the indexer's whole order history here cost ~250 requests per token every 5 minutes, growing with the history, and stopped at 50,000
-  // orders per token anyway
+  // Orders of every soak token from the checker's memo (one entry per order: a pair order listed
+  // under both its tokens counts once).
+  // Paging the indexer's whole order history here would cost ~250 requests per token every 5
+  // minutes, grow with the history, and stop at 50,000 orders per token anyway.
   const soakTokens = [t, env.state.token2, env.state.token3].filter((x): x is NonNullable<typeof t> => !!x);
   const chk = readJson<CheckerState>(join(run, 'state', 'checker.json'));
   const legacyIsSoak = !(cfg.externalTokens ?? []).some((x) => x.trade && x.trade.bookShare > 0);

@@ -1,5 +1,7 @@
-// Reference price: Binance USD-M futures KASUSDT (public REST, no key; Binance has no KAS spot market). 1 TUSD = 1 USD worth of KAS,
-// so the reference price of one TUSD in KAS is 1 / KASUSDT. Only the bots read it; nothing on chain depends on it.
+// Reference price: Binance USD-M futures KASUSDT (public REST, no key). Binance has no KAS spot
+// market.
+// 1 TUSD = 1 USD worth of KAS, so the reference price of one TUSD in KAS is 1 / KASUSDT.
+// Only the bots read it. Nothing on chain depends on it.
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LoadedConfig } from './config';
@@ -15,7 +17,10 @@ export interface RefPrice {
   ts: number;
 }
 
-/** Called with every good poll: the Binance symbol, its USD price and the exchange's time (else the local time), unix ms. */
+/**
+ * Called with every good poll: the Binance symbol, its USD price and the exchange's time (else the
+ * local time) in unix ms.
+ */
 export type OnPrice = (symbol: string, usd: number, ts: number) => void;
 
 /** Binance's `time` of a ticker answer when it is a plausible unix ms, else now. */
@@ -74,7 +79,9 @@ export interface RefSource {
   get(): RefPrice | null;
 }
 
-/** USD price of one whole asset token from a Binance ticker (`{price}`), polled like the KAS feed. */
+/**
+ * USD price of one whole asset token from a Binance ticker (`{price}`), polled like the KAS feed.
+ */
 export class UsdFeed {
   private last: { usd: number; ts: number } | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -120,7 +127,8 @@ export class UsdFeed {
 }
 
 /**
- * The KAS reference of one whole USD-priced token: assetUsd / KASUSDT (e.g. 1 TETH at ETHUSDT 2690 and KASUSDT 0.0435 = 61,839 KAS).
+ * The KAS reference of one whole USD-priced token: assetUsd / KASUSDT (e.g. 1 TETH at ETHUSDT 2690
+ * and KASUSDT 0.0435 = 61,839 KAS).
  * Null (bots pause on this book) when either feed is stale.
  */
 export class DerivedFeed implements RefSource {
@@ -138,8 +146,9 @@ export class DerivedFeed implements RefSource {
 }
 
 /**
- * A fixed KAS reference of one whole token (an external token's `trade.refKas`, e.g. a KRON token: no Binance price): its USD value follows
- * KASUSDT; null (the bots pause on this book) while the KAS feed is stale.
+ * A fixed KAS reference of one whole token (an external token's `trade.refKas`, e.g. a KRON token
+ * with no Binance price).
+ * Its USD value follows KASUSDT. Null (the bots pause on this book) while the KAS feed is stale.
  */
 export class FixedKasFeed implements RefSource {
   constructor(
@@ -154,10 +163,17 @@ export class FixedKasFeed implements RefSource {
 }
 
 /**
- * The reference record the soak UI server serves (scripts/serve-ui.mjs `/soak/ref/v1/*`, read-only): every good Binance poll of the bots
- * appends `{"t":<unix ms>,"s":"<symbol>","p":<USD>}` to run/state/ref-prices.jsonl, and run/state/ref-symbols.json says which soak market
- * each symbol is the reference of (KASUSDT: KAS itself, quoted by the USD token TUSD; ETHUSDT: TETH; BTCUSDT: TBTC). The web app overlays
- * these lines on its USD charts (config `referenceFeedUrl`), so how well the soak tracks the real markets is visible.
+ * The reference record the soak UI server serves (scripts/serve-ui.mjs `/soak/ref/v1/*`,
+ * read-only).
+ * Every good Binance poll of the bots appends `{"t":<unix ms>,"s":"<symbol>","p":<USD>}` to
+ * run/state/ref-prices.jsonl.
+ * run/state/ref-symbols.json says which soak market each symbol is the reference of:
+ * - KASUSDT: KAS itself, quoted by the USD token TUSD.
+ * - ETHUSDT: TETH.
+ * - BTCUSDT: TBTC.
+ *
+ * The web app overlays these lines on its USD charts (config `referenceFeedUrl`), so how well the
+ * soak tracks the real markets is visible.
  */
 export class RefRecorder {
   private readonly file: string;

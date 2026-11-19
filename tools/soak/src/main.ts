@@ -1,15 +1,21 @@
 // KOB TN10 soak: `node dist/soak.mjs <command> --config run/config.json`
-//   setup     one-time: TUSD and asset-token (token2, token3) issuance, registry / allowlist (--recover-issue <slot>:<txid> after an interrupted setup)
-//   cancel    cancel orders by covenant id with their makers' keys (the web app's cancel path); --keys <file> adds keys
-//   order     place one order by hand (the bots' path), also on an external token: --key <name> --token <covenant id> --intent <json>
+//   setup     one-time: TUSD and asset-token (token2, token3) issuance, registry / allowlist
+//             (--recover-issue <slot>:<txid> after an interrupted setup)
+//   cancel    cancel orders by covenant id with their makers' keys (the web app's cancel path);
+//             --keys <file> adds keys
+//   order     place one order by hand (the bots' path), also on an external token:
+//             --key <name> --token <covenant id> --intent <json>
 //             [--keys <file>] [--seed <txid>:<index>:<amount>:<carrier>] (src/bots/order-cli.ts)
 //   bots      bank (funding), market maker, traders, x402 merchant + payer (one process)
 //   checker   protocol invariants from indexer + node, incident log, periodic report
 //   balances  KAS / token balances of every soak key (JSON)
-//   consolidate  merge every key's token UTXOs into one per token (redeploy helper; bots stopped), optional key names
+//   consolidate  merge every key's token UTXOs into one per token (redeploy helper; bots stopped),
+//             optional key names
 //   report    print the summary report once
-//   carry-history  move the market history of re-issued tokens to their new covenant ids, by ticker (one indexer database, its
-//             executor stopped): --db <index.sqlite3> --from-registry <old tokens.json> [--to-registry <file>] [--dry-run]
+//   carry-history  move the market history of re-issued tokens to their new covenant ids, by ticker
+//             (one indexer database, its executor stopped):
+//             --db <index.sqlite3> --from-registry <old tokens.json>
+//             [--to-registry <file>] [--dry-run]
 import { loadConfig, type TokenSlot } from './config';
 import { createEnv } from './env';
 import { errText, logger } from './log';
@@ -29,7 +35,8 @@ async function main(): Promise<void> {
     case 'setup': {
       const env = await createEnv(cfg);
       const { runSetup } = await import('./setup');
-      // --recover-issue <token|token2|token3>:<txid>: record an issuance that was broadcast by an interrupted setup
+      // --recover-issue <token|token2|token3>:<txid>: record an issuance that was broadcast by an
+      // interrupted setup.
       const rec = arg('--recover-issue');
       const m = rec ? /^(token|token2|token3):([0-9a-f]{64})$/.exec(rec) : null;
       if (rec && !m) throw new Error('--recover-issue <token|token2|token3>:<txid>');
@@ -50,7 +57,8 @@ async function main(): Promise<void> {
       break;
     }
     case 'cancel': {
-      // operator tool: cancel the given orders with their makers' keys through the web app's cancel path (order view -> snapshot -> planCancel)
+      // Operator tool: cancel the given orders with their makers' keys through the web app's cancel
+      // path (order view -> snapshot -> planCancel).
       const env = await createEnv(cfg);
       const { cancelOrders } = await import('./bots/cancel-cli');
       const { addKeys } = await import('./bots/order-cli');
@@ -80,7 +88,8 @@ async function main(): Promise<void> {
       break;
     }
     case 'consolidate': {
-      // redeploy helper: one token UTXO per key and token (the bots' own consolidation keeps their fan-out); prints the per-key result
+      // Redeploy helper: one token UTXO per key and token (the bots' own consolidation keeps their
+      // fan-out). Prints the per-key result.
       const env = await createEnv(cfg);
       const { mergeAll } = await import('./bots/merge-cli');
       const names = process.argv.slice(3).filter((a, i, all) => !a.startsWith('--') && all[i - 1] !== '--config');
@@ -97,7 +106,8 @@ async function main(): Promise<void> {
       break;
     }
     case 'carry-history': {
-      // redeploy helper (re-issued tokens, src/history-carry.ts): no node, no keys; the new registry defaults to run/registry/tokens.json
+      // Redeploy helper for re-issued tokens (src/history-carry.ts). It needs no node and no keys.
+      // The new registry defaults to run/registry/tokens.json.
       const { readFileSync } = await import('node:fs');
       const { join } = await import('node:path');
       const { carryHistory, carryPairs } = await import('./history-carry');

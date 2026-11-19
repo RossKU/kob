@@ -1,6 +1,7 @@
-// Every payer turn of the x402 bot is visible in the log: its start (the path the pick chose), a warning within a bounded time
-// while it runs long, and its end with its duration, whether it returns or throws (TN10 2026-10-17: after the binding 1.0.0
-// cutover the log could not tell an unpicked path from a turn that never ended).
+// Every payer turn of the x402 bot is visible in the log.
+// The log shows its start (the path the pick chose), a warning within a bounded time while it runs
+// long, and its end with its duration, whether it returns or throws.
+// Without that, the log could not tell an unpicked path from a turn that never ended.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loggedTurn } from '../src/bots/x402-turn.ts';

@@ -1,4 +1,5 @@
-// JSON-lines logging to stdout (the supervisor writes it to a rotated log file) and a tiny counter registry flushed to run/stats/*.json.
+// JSON-lines logging to stdout and a tiny counter registry flushed to run/stats/*.json.
+// The supervisor writes stdout to a rotated log file.
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 

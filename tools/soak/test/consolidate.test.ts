@@ -1,4 +1,5 @@
-// Token-UTXO consolidation: the pure selection (which UTXOs to merge) and the rate limit. No network, no wallet.
+// Token-UTXO consolidation: the pure selection (which UTXOs to merge) and the rate limit. No
+// network, no wallet.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { consolidateConfig, DEFAULT_CONSOLIDATE, fanoutPlan, isFragmented, kasMergeSelection, mergedCarrier, mmConsolidateConfig, outpointKey, RateLimiter, selectMergeChain, selectMerges, type MergeCandidate } from '../src/bots/consolidate-math.ts';
@@ -46,7 +47,8 @@ test('never merges below the fan-out target, even before the outputs are indexed
 test('one pass drains the excess to keep + one merged UTXO per batch; later passes converge on keep', () => {
   const bs = selectMerges(many(100), { ...base, maxBatches: 1000 });
   assert.equal(100 - (total(bs) - bs.length), base.keep + bs.length);
-  // the next pass on the result (merge outputs included) plans fewer batches, until the threshold is no longer exceeded
+  // The next pass on the result (merge outputs included) plans fewer batches, until the threshold
+  // is no longer exceeded.
   let n = 100 - (total(bs) - bs.length);
   for (let i = 0; i < 5 && n > base.keep + base.slack; i++) {
     const b = selectMerges(many(n), { ...base, maxBatches: 1000 });
@@ -98,7 +100,8 @@ test('per-token separation: each token is planned from its own UTXOs only', () =
   const teth = many(10).map((x) => ({ ...x, transactionId: txid(1000 + Number(BigInt('0x' + x.transactionId.slice(0, 4)))) }));
   assert.ok(selectMerges(tusd, base).length > 0);
   assert.deepEqual(selectMerges(teth, base), []);
-  // a mixed list is not separated by the function: callers pass one token's UTXOs (wallet.tokenUtxos(token)); the plan never spans two calls
+  // A mixed list is not separated by the function. Callers pass one token's UTXOs
+  // (wallet.tokenUtxos(token)), and the plan never spans two calls.
   const a = selectMerges(tusd, base).flat().map(outpointKey);
   const b = selectMerges(teth, base).flat().map(outpointKey);
   assert.equal(b.length, 0);
@@ -149,7 +152,7 @@ test('a disabled limit (0 per interval) plans nothing', () => {
   assert.deepEqual(selectMerges(many(50), { ...base, maxBatches: rl.allowance('k', 0) }), []);
 });
 
-// ---------------------------------------------------------------- the chained pass (KOB's standard program: 3 token inputs)
+// ---------------------------------- the chained pass (KOB's standard program: 3 token inputs)
 
 const std = { ...base, maxInputs: 3 };
 
@@ -201,7 +204,8 @@ test('fanoutPlan: 2 pieces + the token change per transfer with the standard 3 /
   assert.deepEqual(fanoutPlan({ amount: 3_000_000n, each: 300n, need: 7, maxOutputs: 3, maxTx: 8 }), [2, 2, 2, 1]);
   // the 8 / 8 prototype did it in one transfer
   assert.deepEqual(fanoutPlan({ amount: 3_000_000n, each: 300n, need: 7, maxOutputs: 8, maxTx: 8 }), [7]);
-  // the amount runs out: 5 pieces of 300 in 1,500, the last transfer leaves no change and ends the chain
+  // The amount runs out: 5 pieces of 300 in 1,500. The last transfer leaves no change and ends the
+  // chain.
   assert.deepEqual(fanoutPlan({ amount: 1500n, each: 300n, need: 7, maxOutputs: 3, maxTx: 8 }), [2, 2, 1]);
   // capped by maxTx, nothing to do, nothing affordable, a program without room for a change output
   assert.deepEqual(fanoutPlan({ amount: 3_000_000n, each: 300n, need: 7, maxOutputs: 3, maxTx: 2 }), [2, 2]);

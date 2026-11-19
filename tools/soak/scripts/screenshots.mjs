@@ -1,22 +1,36 @@
-// Captures the web UI on live TN10 data (the soak's UI server, scripts/serve-ui.mjs) with Playwright's Chromium from web/node_modules.
-// The app has one market page with BASE / QUOTE selectors: a token's KAS book (`#/market/<id>`, TOKEN/KAS by convention, KAS/TUSD for the
-// USD reference token TUSD) or a token/token pair (`#/pair/<base>/<quote>`, settled through the two KAS books). The set:
+// Captures the web UI on live TN10 data (the soak's UI server, scripts/serve-ui.mjs) with
+// Playwright's Chromium from web/node_modules.
+// The app has one market page with BASE / QUOTE selectors.
+// It shows a token's KAS book (`#/market/<id>`, TOKEN/KAS by convention, KAS/TUSD for the USD
+// reference token TUSD)
+// or a token/token pair (`#/pair/<base>/<quote>`, settled through the two KAS books).
+// The set:
 //
-//   list                   the market list (`#/market`)
-//   market-<T>             every soak token's market page, dark, and the same page flipped (the `market-flip` toggle: KAS/TOKEN), the
-//                          first token also light, at 1280 px and on a phone
-//   pair-<B>-<Q>           every pair of a soak token with TUSD (direct cross-limit levels and the route through the two KAS books)
-//   orders                 "My orders" of a soak trader (t1, read through a test wallet that never signs)
-//   confirm                the pre-sign confirmation of a far-from-market limit buy worth about 20 KAS on the second token's market (never signed)
+//   list              the market list (`#/market`)
+//   market-<T>        every soak token's market page, dark, and the same page flipped (the
+//                     `market-flip` toggle: KAS/TOKEN), the first token also light, at 1280 px
+//                     and on a phone
+//   pair-<B>-<Q>      every pair of a soak token with TUSD (direct cross-limit levels and the
+//                     route through the two KAS books)
+//   orders            "My orders" of a soak trader (t1, read through a test wallet that never
+//                     signs)
+//   confirm           the pre-sign confirmation of a far-from-market limit buy worth about 20 KAS
+//                     on the second token's market (never signed)
 //
-// The orders and confirm shots inject the web app's test wallet (web/src/testing/mock-wallets.ts, `features.test` through
-// `window.__KOB_CONFIG__`, both only in this local browser) with the trader's key from run/keys.json. The wallet is configured to REFUSE
-// every signature request (`approve: false`) and the script never presses Sign, so nothing is broadcast. The key never leaves this process
-// and the browser it starts (it is not printed and not written anywhere).
+// The orders and confirm shots inject the web app's test wallet (web/src/testing/mock-wallets.ts,
+// `features.test` through `window.__KOB_CONFIG__`, both only in this local browser) with the
+// trader's key from run/keys.json.
+// The wallet is configured to REFUSE every signature request (`approve: false`) and the script
+// never presses Sign,
+// so nothing is broadcast.
+// The key never leaves this process and the browser it starts. It is not printed and not written
+// anywhere.
 //
-// Every shot prints the page's state (chart state / bars / inversion, book rows, pair levels, order rows).
+// Every shot prints the page's state (chart state / bars / inversion, book rows, pair levels, order
+// rows).
 //
-//   node scripts/screenshots.mjs [--url http://127.0.0.1:8490] [--out screenshots] [--only <name part>] [--tag public] [--no-wallet]
+//   node scripts/screenshots.mjs [--url http://127.0.0.1:8490] [--out screenshots] \
+//        [--only <name part>] [--tag public] [--no-wallet]
 import { createRequire } from 'node:module';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -80,8 +94,9 @@ async function readyChart(page, { book = true } = {}) {
   await page.getByTestId('price-chart').waitFor({ timeout: 30_000 }).catch(() => {});
   await page.waitForFunction(() => document.querySelector('[data-testid="price-chart"]')?.getAttribute('data-state') === 'ready', null, { timeout: 30_000 }).catch(() => {});
   if (!book) return;
-  // near-zero spreads: a trader's order may cross the touch for a few seconds (until a matcher fills it; the spread is then negative): wait for
-  // both sides to be listed
+  // Near-zero spreads: a trader's order may cross the touch for a few seconds, until a matcher
+  // fills it, and the spread is then negative.
+  // Wait for both sides to be listed.
   await page
     .waitForFunction(
       () => document.querySelectorAll('[data-testid="book-bids"] [data-testid^="book-"]').length > 0 && document.querySelectorAll('[data-testid="book-asks"] [data-testid^="book-"]').length > 0,
@@ -180,8 +195,9 @@ async function walletShots() {
     await page.getByTestId('order-type').click();
     await page.getByTestId('order-type-option-limit').click();
     await page.getByTestId('order-side-buy').click();
-    // about 20 KAS worth, 10 % under the best bid (TOKEN/KAS, the convention): rests far from the market, never crosses the trader's own asks
-    // the displayed best bid (KAS per whole token)
+    // About 20 KAS worth, 10 % under the best bid (TOKEN/KAS, the convention).
+    // It rests far from the market and never crosses the trader's own asks.
+    // The displayed best bid is in KAS per whole token.
     const bidText = await page.locator('[data-testid="book-bids"] [data-testid^="book-"]').first().innerText();
     const price = Number(bidText.trim().split(/\s+/)[0].replace(/[,~]/g, '')) * 0.9;
     // the amount in whole tokens (any amount of base units; the soak tokens have 8 decimals)

@@ -1,7 +1,10 @@
-// A bot wallet: a local Schnorr key standing in for a browser wallet. Every transaction goes through the web app's own pipeline
-// (planner -> kob.build -> local signature -> kob.finalize -> kob.validate (script engine) -> node submit), exactly what a user's wallet
-// does, so the soak exercises the production planners. Outpoints spent by our own not-yet-accepted transactions are reserved so the next
-// plan never double-spends them.
+// A bot wallet: a local Schnorr key standing in for a browser wallet.
+// Every transaction goes through the web app's own pipeline, exactly what a user's wallet does, so
+// the soak exercises the production planners.
+// The pipeline is: planner -> kob.build -> local signature -> kob.finalize -> kob.validate (script
+// engine) -> node submit.
+// Outpoints spent by our own not-yet-accepted transactions are reserved, so the next plan never
+// double-spends them.
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { signBuilt } from '@/testing/local-signer';
@@ -34,19 +37,28 @@ export interface SubmitOutcome {
   paused?: boolean;
 }
 
-// Under a TN10 flood a submitted transaction can wait minutes in the mempool while the UTXO index still lists its inputs (10-07: 3 min
-// was too short, the market maker re-spent its own pending inputs).
+// Under a TN10 flood a submitted transaction can wait minutes in the mempool while the UTXO index
+// still lists its inputs.
+// The reservation must outlast that wait, or the market maker re-spends its own pending inputs.
 const RESERVE_MS = 600_000;
-/** inputs of a transaction the mempool refused because another transaction spends one of them: skipped this long (the other spend lands) */
+/**
+ * Inputs of a transaction the mempool refused because another transaction spends one of them. They
+ * are skipped this long (the other spend lands).
+ */
 const CONFLICT_RESERVE_MS = 60_000;
 /** how old the wallet's view of its own mempool transactions may be when it plans */
 const MEMPOOL_TTL_MS = 10_000;
-/** how long one read of the key's token UTXOs of a token serves the next reads (well below the indexer's own lag behind the chain) */
+/**
+ * How long one read of the key's token UTXOs of a token serves the next reads (well below the
+ * indexer's own lag behind the chain).
+ */
 const TOKEN_UTXOS_TTL_MS = 5_000;
 
 /**
- * One SDK client per process for the wallets' mempool reads (the web app's node wrapper has none). Under the 10-11 flood a transaction
- * at the normal rate waited up to an hour in the mempool, far beyond RESERVE_MS: its inputs are skipped as long as the node holds it.
+ * One SDK client per process for the wallets' mempool reads (the web app's node wrapper has none).
+ * Under a flood a transaction at the normal rate can wait up to an hour in the mempool, far beyond
+ * RESERVE_MS.
+ * Its inputs are skipped as long as the node holds it.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let mempoolRpc: Promise<any> | null = null;
@@ -77,12 +89,18 @@ export class BotWallet {
   private readonly reserved = new Map<string, number>();
   private readonly adapter: WalletAdapter;
   private readonly lock = new Mutex();
-  /** outpoints this key's transactions in the node's mempool spend (refreshed at most every MEMPOOL_TTL_MS by funding / tokenUtxos) */
+  /**
+   * Outpoints this key's transactions in the node's mempool spend (refreshed at most every
+   * MEMPOOL_TTL_MS by funding / tokenUtxos).
+   */
   private inMempool = new Set<string>();
   private mempoolAt = 0;
   private mempoolRead: Promise<void> | null = null;
   private lastKasMerge = 0;
-  /** the last read of the key's token UTXOs per token (covenant id), shared for TOKEN_UTXOS_TTL_MS (see `tokenUtxos`) */
+  /**
+   * The last read of the key's token UTXOs per token (covenant id), shared for TOKEN_UTXOS_TTL_MS
+   * (see `tokenUtxos`).
+   */
   private readonly tokenReads = new Map<string, { at: number; p: Promise<TokenUtxo[]> }>();
 
   constructor(
@@ -115,12 +133,16 @@ export class BotWallet {
       detect: () => true,
       connect: async () => ({ id: 'kasware', label: name, address: k.address, pubkey: k.publicKey, network: env.cfg.network, version: 'soak' }),
       signTx: async (built: BuiltTx) => signBuilt(built, [sk]),
-      // a local key that signs what it is given, like the app's private-key signer: no wallet node whose view of fresh inputs must be awaited
+      // A local key that signs what it is given, like the app's private-key signer. There is no
+      // wallet node whose view of fresh inputs must be awaited.
       inputPolicy: 'offline',
     };
   }
 
-  /** reads which outpoints this key's mempool transactions spend; a failed read keeps the previous answer (and the reservations still apply) */
+  /**
+   * Reads which outpoints this key's mempool transactions spend. A failed read keeps the previous
+   * answer, and the reservations still apply.
+   */
   private async refreshMempool(): Promise<void> {
     if (Date.now() - this.mempoolAt < MEMPOOL_TTL_MS) return;
     this.mempoolRead ??= (async () => {
@@ -156,21 +178,29 @@ export class BotWallet {
     this.reserved.set(`${txid}:${index}`, Date.now() + ms);
   }
 
-  /** outpoints ("txid:index") currently reserved by this wallet's own submitted transactions, or spent by its transactions in the mempool */
+  /**
+   * Outpoints ("txid:index") currently reserved by this wallet's own submitted transactions, or
+   * spent by its transactions in the mempool.
+   */
   reservedKeys(): Set<string> {
     const now = Date.now();
     return new Set([...[...this.reserved].filter(([, exp]) => exp >= now).map(([k]) => k), ...this.inMempool]);
   }
 
   /**
-   * Runs one plan-and-submit section of this key at a time (see pending.ts `Mutex`): every bot action that plans over the key's coins
-   * (place, cancel, amend, cancel-all, fan-out, merge) goes through here, so concurrent loops of one key never pick the same input.
+   * Runs one plan-and-submit section of this key at a time (see pending.ts `Mutex`).
+   * Every bot action that plans over the key's coins goes through here (place, cancel, amend,
+   * cancel-all, fan-out, merge).
+   * So concurrent loops of one key never pick the same input.
    */
   exclusive<T>(fn: () => Promise<T>): Promise<T> {
     return this.lock.run(fn);
   }
 
-  /** an order listing split into the orders this key may act on and those its own pending transactions already spend (pending.ts) */
+  /**
+   * An order listing split into the orders this key may act on and those its own pending
+   * transactions already spend (pending.ts).
+   */
   pendingSplit<T extends { current?: { txid: string; index: number } | null }>(views: readonly T[]): { live: T[]; pending: T[] } {
     return splitPending(views, this.reservedKeys());
   }
@@ -181,8 +211,10 @@ export class BotWallet {
   }
 
   /**
-   * Merges this key's smallest plain KAS coins into one (consolidate-math `kasMergeSelection`): a compound transaction of the official SDK's
-   * generator back to the key, at the LOW bucket rate, at most once a minute per key. Returns the transactions submitted; never throws.
+   * Merges this key's smallest plain KAS coins into one (consolidate-math `kasMergeSelection`).
+   * It is a compound transaction of the official SDK's generator back to the key, at the LOW bucket
+   * rate, at most once a minute per key.
+   * Returns the transactions submitted. Never throws.
    */
   mergeKas(o: { above: number; maxInputs: number }): Promise<number> {
     if (o.above <= 0 || Date.now() - this.lastKasMerge < 60_000) return Promise.resolve(0);
@@ -199,8 +231,10 @@ export class BotWallet {
         this.stats.set(`kas_utxos:${this.name}`, coins.length);
         const pick = kasMergeSelection(coins, { ...o, reserved: this.reservedKeys() });
         const total = pick.reduce((t, c) => t + c.amount, 0n);
-        // one output of all but 1 KAS: the generator then spends every picked coin (with no output it spends one); the change (1 KAS less
-        // the fee) stays clear of the storage-mass dead band. A pile worth less than 2 KAS waits.
+        // One output of all but 1 KAS. The generator then spends every picked coin (with no output
+        // it spends one).
+        // The change (1 KAS less the fee) stays clear of the storage-mass dead band. A pile worth
+        // less than 2 KAS waits.
         if (!pick.length || total < 2n * 100_000_000n) return 0;
         const rate = pickFor(await feeContext(this.env), 'low').rate;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -244,9 +278,12 @@ export class BotWallet {
   }
 
   /**
-   * spendable token UTXOs of `token` (verified on the node, not reserved), largest first. One read of the indexer (and the node) serves every
-   * call for TOKEN_UTXOS_TTL_MS: a market-maker tick or a trader action reads them several times (merge check, inventory, each plan). A
-   * reused answer is safe: only this key spends its token UTXOs, and its own spends are filtered as reservations at every call.
+   * Spendable token UTXOs of `token` (verified on the node, not reserved), largest first.
+   * One read of the indexer (and the node) serves every call for TOKEN_UTXOS_TTL_MS.
+   * A market-maker tick or a trader action reads them several times (merge check, inventory, each
+   * plan).
+   * A reused answer is safe: only this key spends its token UTXOs, and its own spends are filtered
+   * as reservations at every call.
    */
   async tokenUtxos(token: TokenRef): Promise<TokenUtxo[]> {
     const k = token.covenantId.toLowerCase();
@@ -269,10 +306,14 @@ export class BotWallet {
   }
 
   /**
-   * Every submitted transaction goes to run/state/txs.jsonl with its fee and an INDEPENDENT mass computation (kob.masses of the signed
-   * transaction): the checker verifies fee == feeRate x max(compute, normalized transient) with the recorded feeRate in [relay floor, maxRate].
-   * `urgency` / `feeSource` / `bucketFeerate` / `cappedFrom` / `overCap` are the fee policy's own account of the rate (null when the transaction was
-   * built without the policy); the checker does not rely on them.
+   * Every submitted transaction goes to run/state/txs.jsonl with its fee and an independent mass
+   * computation (kob.masses of the signed transaction).
+   * The checker verifies fee == feeRate x max(compute, normalized transient), with the recorded
+   * feeRate in [relay floor, maxRate].
+   * `urgency`, `feeSource`, `bucketFeerate`, `cappedFrom` and `overCap` are the fee policy's own
+   * account of the rate.
+   * They are null when the transaction was built without the policy. The checker does not rely on
+   * them.
    */
   private recordTx(what: string, txid: string, signed: { tx: import('@/kob/types').TxJson; fee: { fee: string; minFee: string; feeRate: string; feeMode: string; changeOutput: number | null } }, choice: ReturnType<typeof feeChoiceOf> = null): void {
     try {
@@ -292,9 +333,13 @@ export class BotWallet {
     }
   }
 
-  /** signs, finalizes, validates in the script engine and submits; reserves the inputs on success. Refused (paused: true) while the indexer gate is closed. */
+  /**
+   * Signs, finalizes, validates in the script engine and submits. Reserves the inputs on success.
+   * Refused (paused: true) while the indexer gate is closed.
+   */
   async submit(built: BuiltTx, what: string, fields: Record<string, unknown> = {}): Promise<SubmitOutcome> {
-    // the one choke point of every bot transaction: nothing is placed, amended, cancelled, fanned out or merged while the indexer lags
+    // The one choke point of every bot transaction: nothing is placed, amended, cancelled, fanned
+    // out or merged while the indexer lags.
     const refused = await gateRefusal(this.env.gate, what);
     if (refused) return refused;
     try {
@@ -309,12 +354,15 @@ export class BotWallet {
       return { ok: true, txid: r.txid, fee: r.fee };
     } catch (e) {
       const text = e instanceof SignFlowError ? `${e.stage}: ${e.message}` : errText(e);
-      // "already has this transaction": the same transaction again (a plan from a listing that still shows what it spent): benign like a lost race
+      // "Already has this transaction": the same transaction again (a plan from a listing that
+      // still shows what it spent). It is benign, like a lost race.
       const conflict = /double spend|already spent|orphan|not found in the utxo|missing|RejectDoubleSpend|already in the mempool|is not in the utxo set|already being spent|already has this transaction/i.test(text);
       this.stats.inc(conflict ? 'tx_conflict' : 'tx_failed');
       this.stats.inc(`${conflict ? 'tx_conflict' : 'tx_failed'}:${what}`);
-      // a rejected transaction's inputs may still be ours to use; release nothing. When the mempool already holds a spend of one of them
-      // (ours not yet indexed, or the matcher's fill of an order), the next plans skip them for a minute instead of losing the same race again.
+      // A rejected transaction's inputs may still be ours to use, so release nothing.
+      // When the mempool already holds a spend of one of them (ours not yet indexed, or the
+      // matcher's fill of an order), the next plans skip them for a minute.
+      // That avoids losing the same race again.
       if (/already being spent|double spend|RejectDoubleSpend|already spent by transaction/i.test(text)) {
         for (const i of built.tx.inputs) this.reserve(i.transactionId, i.index, CONFLICT_RESERVE_MS);
       }
@@ -325,8 +373,9 @@ export class BotWallet {
 }
 
 /**
- * One BotWallet per key and process: the input reservations live in the wallet object, so two objects of one key (the market maker of two
- * books, the fan-out) would double-spend each other's coins. Every bot takes its wallet from here.
+ * One BotWallet per key and process. The input reservations live in the wallet object, so two
+ * objects of one key would double-spend each other's coins.
+ * Examples are the market maker of two books and the fan-out. Every bot takes its wallet from here.
  */
 const wallets = new Map<string, BotWallet>();
 export function walletFor(env: Env, name: string, stats: Stats, log?: Logger): BotWallet {

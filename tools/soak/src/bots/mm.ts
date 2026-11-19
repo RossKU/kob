@@ -1,8 +1,14 @@
-// Market maker: a ladder of GTC limit bids and asks around the Binance-derived reference, skewed by the inventory it accumulated since
-// start. Levels drifting more than `requoteBps` from where they belong are amended (cancel-replace, one transaction); surplus orders are
-// cancelled; a large reference move (or every ~30 minutes) cancels the whole ladder at once (cancel-all) and rebuilds it. The indexer lags the
-// chain by minutes under load: an order the maker just placed (not listed yet) or amended (listed with its spent UTXO) holds its level until
-// the listing catches up, so a level is never placed twice and an amended order is never amended again from its stale view.
+// Market maker: a ladder of GTC limit bids and asks around the Binance-derived reference, skewed by
+// the inventory it accumulated since start.
+// Levels drifting more than `requoteBps` from where they belong are amended (cancel-replace, one
+// transaction).
+// Surplus orders are cancelled.
+// A large reference move (or every ~30 minutes) cancels the whole ladder at once (cancel-all) and
+// rebuilds it.
+// The indexer lags the chain by minutes under load.
+// An order the maker just placed (not listed yet) or amended (listed with its spent UTXO) holds its
+// level until the listing catches up.
+// So a level is never placed twice and an amended order is never amended again from its stale view.
 import type { OrderView } from '@/data/indexer-types';
 import type { TokenMarket } from '@/kob/plan-types';
 import type { SoakConfig } from '../config';
@@ -18,7 +24,10 @@ import { consolidateConfig, isFragmented, mmConsolidateConfig } from './consolid
 import { fanoutTarget } from './fanout';
 import { ladderSteps, requoteThreshold, type LadderSlot } from './mm-math';
 
-/** how long an order this maker placed or cancelled is remembered while the indexer does not reflect it (the wallet's reservation time) */
+/**
+ * How long an order this maker placed or cancelled is remembered while the indexer does not reflect
+ * it (the wallet's reservation time).
+ */
 const PENDING_MS = 600_000;
 /** a placement younger than this is not looked up yet (the indexer cannot list it so soon) */
 const LOOKUP_AFTER_MS = 15_000;
@@ -42,9 +51,14 @@ export class MarketMaker {
   /** the reference of the previous tick: which side the ladder moves away from first */
   private prevTickRef: bigint | null = null;
   private stopped = false;
-  /** orders this ladder placed that the indexer does not list yet: covenant id -> side, price, time */
+  /**
+   * Orders this ladder placed that the indexer does not list yet: covenant id -> side, price, time.
+   */
   private readonly placed = new Map<string, { side: 'buy' | 'sell'; price: bigint; at: number }>();
-  /** orders this ladder cancelled (cancel, cancel-all): while their cancel is pending they hold no level */
+  /**
+   * Orders this ladder cancelled (cancel, cancel-all). While their cancel is pending they hold no
+   * level.
+   */
   private readonly dropping = new Map<string, number>();
 
   private readonly c: SoakConfig['mm'];
@@ -71,11 +85,14 @@ export class MarketMaker {
 
   async run(): Promise<void> {
     while (!this.stopped) {
-      // no ladder work against a book that lags the chain: wait here instead of planning and being refused at submit
+      // No ladder work against a book that lags the chain: wait here instead of planning and being
+      // refused at submit.
       if (!(await this.env.gate?.waitOpen(() => this.stopped) ?? true)) break;
       const cc = consolidateConfig(this.env.cfg.consolidate);
-      // BEFORE quoting: the maker's token holdings are kept in a few large UTXOs, so a sell level (smallest sufficient UTXO + change) never
-      // needs more input UTXOs than the program takes (TOKEN_UTXOS_FRAGMENTED); the merge and the placements share the key's exclusive section
+      // BEFORE quoting: the maker's token holdings are kept in a few large UTXOs.
+      // So a sell level (smallest sufficient UTXO + change) never needs more input UTXOs than the
+      // program takes (TOKEN_UTXOS_FRAGMENTED).
+      // The merge and the placements share the key's exclusive section.
       try {
         await this.keepTokensWhole(cc);
       } catch (e) {
@@ -87,16 +104,18 @@ export class MarketMaker {
         this.stats.inc(`mm_errors${this.sfx}`);
         this.log.warn('mm tick failed', { error: errText(e) });
       }
-      // the KAS the fills pay back in small coins: merged, so a bid's funding stays within one plan's inputs
+      // The KAS the fills pay back in small coins is merged, so a bid's funding stays within one
+      // plan's inputs.
       if (cc.enabled) await this.w.mergeKas({ above: cc.kasAbove, maxInputs: cc.kasInputs });
       await sleep(this.c.intervalSec * 1000);
     }
   }
 
   /**
-   * Merges the maker's token dust (chained merges, smallest first, its own rate cap) down to the fan-out target + `mmSlack` UTXOs. Runs every loop;
-   * counts a pass as "fragmented" (stat `mm_fragmented`) when even the whole ask side of the ladder could not be funded by the program's inputs
-   * largest UTXOs.
+   * Merges the maker's token dust (chained merges, smallest first, its own rate cap) down to the
+   * fan-out target + `mmSlack` UTXOs. Runs every loop.
+   * It counts a pass as "fragmented" (stat `mm_fragmented`) when even the whole ask side of the
+   * ladder could not be funded by the program's `inputs` largest UTXOs.
    */
   private async keepTokensWhole(cc: ReturnType<typeof consolidateConfig>): Promise<void> {
     if (!cc.enabled) return;
@@ -120,7 +139,8 @@ export class MarketMaker {
     const c = this.c;
     const tick = this.m.tick;
     const mid = ref + bps(ref, skewBps);
-    // a level's size: any amount of base units between minTokens and maxTokens whole tokens (no step)
+    // A level's size: any amount of base units between minTokens and maxTokens whole tokens (no
+    // step).
     const lo = unitsOf(c.minTokens, this.m.decimals);
     const hi = unitsOf(c.maxTokens, this.m.decimals);
     const out: Level[] = [];
@@ -143,8 +163,9 @@ export class MarketMaker {
     }
     const mine = (await myOrders(this.env, this.w.pk, this.m)).filter((o) => (o.contract === 'KobAsk' || o.contract === 'KobBid') && o.tif === 0 && o.token === this.m.covenantId);
     const inv = await this.inventory(mine);
-    // the listing after this maker's own pending transactions: `live` may be acted on; an amended order (or one a matcher's fill in the
-    // mempool spends) holds its level; a cancelled one is gone
+    // The listing after this maker's own pending transactions.
+    // `live` may be acted on. An amended order (or one a matcher's fill in the mempool spends)
+    // holds its level. A cancelled one is gone.
     const now = Date.now();
     for (const [id, at] of this.dropping) if (now - at > PENDING_MS) this.dropping.delete(id);
     const { live, pending } = this.w.pendingSplit(mine);
@@ -174,8 +195,9 @@ export class MarketMaker {
 
     const want = this.ladder(ref.perToken, skew);
     const book = await readBook(this.env, this.m);
-    // a tight ladder moves the side the reference moves AWAY from first (up: asks first), so a re-quoted level never meets its own stale
-    // opposite quote (a self-trade the planner refuses)
+    // A tight ladder moves the side the reference moves AWAY from first (up: asks first).
+    // So a re-quoted level never meets its own stale opposite quote (a self-trade the planner
+    // refuses).
     const up = this.prevTickRef !== null && ref.perToken > this.prevTickRef;
     this.prevTickRef = ref.perToken;
     for (const side of up ? (['sell', 'buy'] as const) : (['buy', 'sell'] as const)) {
@@ -194,7 +216,8 @@ export class MarketMaker {
         } else if (step.kind === 'amend') {
           const r = await amend(this.env, this.w, step.order, step.target.price);
           this.stats.inc(r.ok ? `mm_amend_ok${x}` : `mm_amend_failed${x}`);
-          // an amended bid keeps its KAS budget: a partly filled bid moved up may no longer fund one minimum fill -> cancel, re-place next tick
+          // An amended bid keeps its KAS budget. A partly filled bid moved up may no longer fund
+          // one minimum fill: cancel, re-place next tick.
           if (!r.ok && !r.conflict && !r.paused && r.error !== 'order is gone') await this.drop(step.order);
         } else {
           // surplus orders beyond the ladder
@@ -212,8 +235,9 @@ export class MarketMaker {
   }
 
   /**
-   * Forgets the placements the indexer reflects: listed as active (then `mine` has them), or known in any other status (filled or killed before
-   * the listing caught up); a placement never seen is dropped after PENDING_MS (its transaction did not make it).
+   * Forgets the placements the indexer reflects: listed as active (then `mine` has them),
+   * or known in any other status (filled or killed before the listing caught up).
+   * A placement never seen is dropped after PENDING_MS (its transaction did not make it).
    */
   private async prunePlaced(mine: OrderView[], now: number): Promise<void> {
     const listed = new Set(mine.map((o) => o.covenant_id));

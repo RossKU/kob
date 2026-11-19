@@ -1,30 +1,48 @@
-// How far from the reference the traders let a taker or an auction go (no `@/` imports: unit-tested with plain `node --test`).
+// How far from the reference the traders let a taker or an auction go.
+// There are no `@/` imports, so it is unit-tested with plain `node --test`.
 //
-// Why (TN10 2026-10-14, 26 h of the three KAS books): 76 % of the trades more than 1 % from the Binance-derived reference (84 % of those more
-// than 2 %) were priced by an AUCTION order at its worst bound: a stop-market, trailing-stop or OCO stop leg (default band 3 %), a market
-// order (default bound 3 %), 60 to 95 % of each kind's trades. The executors follow the chain 1 to 2 minutes late, the auctions run 20 to
-// 30 s, so every one of them is filled at its far end, and the indexer's trade price is the older (auctioning) order's price. The market
-// maker's trades were within 0.3 % of the reference at the 90th percentile. The bounds below keep every auction within a few tens of bps.
+// Why the bands exist: trades far from the Binance-derived reference were mostly priced by an
+// AUCTION order at its worst bound.
+// That covers a stop-market, trailing-stop or OCO stop leg (default band 3 %) and a market order
+// (default bound 3 %).
+// The executors follow the chain 1 to 2 minutes late and the auctions run 20 to 30 s.
+// So every auction is filled at its far end, and the indexer's trade price is the older
+// (auctioning) order's price.
+// The market maker's trades stay within 0.3 % of the reference at the 90th percentile.
+// The bounds below keep every auction within a few tens of bps.
 //
-// All values are basis points of the price, except `depthFraction` (a share of the visible opposite depth).
+// All values are basis points of the price, except `depthFraction` (a share of the visible opposite
+// depth).
 
 export interface Bands {
   /** market / close: slippage bound of the IOC auction (protocol default 300) */
   marketBps: number;
   /** streaming (quote-and-execute): tolerance */
   streamingBps: number;
-  /** stop-market, trailing stop, OCO / bracket stop leg: band of the stop's auction (protocol default 300) */
+  /**
+   * Stop-market, trailing stop, OCO / bracket stop leg: band of the stop's auction (protocol
+   * default 300).
+   */
   stopBps: number;
   /** stop-limit: distance of the limit from the stop */
   stopLimitBps: number;
-  /** a limit placed through the touch (placed as an IOC at that price) and an IOC / FOK: how far past the touch */
+  /**
+   * A limit placed through the touch (placed as an IOC at that price) and an IOC / FOK: how far
+   * past the touch.
+   */
   crossBps: number;
   /** a stop entry's auction: how far its limit lies beyond its stop */
   entryBandBps: number;
-  /** Dutch auction: start distance range (away from the market) and end distance range (through the market) */
+  /**
+   * Dutch auction: start distance range (away from the market) and end distance range (through the
+   * market).
+   */
   dutchStartBps: [number, number];
   dutchEndBps: [number, number];
-  /** a taker takes at most this share of the opposite depth within `depthBandBps` of the touch (KAS books; 0 = no cap) */
+  /**
+   * A taker takes at most this share of the opposite depth within `depthBandBps` of the touch (KAS
+   * books, 0 = no cap).
+   */
   depthFraction: number;
   depthBandBps: number;
 }
@@ -80,9 +98,11 @@ export function depthWithin(levels: readonly DepthLevel[], bandBps: number): big
 }
 
 /**
- * The size a taker may take: `amount`, cut to `fraction` of the opposite depth within `bandBps` of the touch but never below `floor` (the smallest
- * order the trader places) and never above `amount`. An empty opposite side, a zero fraction or a zero depth leave `amount` alone (the planner
- * refuses a taker with nothing to take by itself).
+ * The size a taker may take: `amount`, cut to `fraction` of the opposite depth within `bandBps` of
+ * the touch,
+ * but never below `floor` (the smallest order the trader places) and never above `amount`.
+ * An empty opposite side, a zero fraction or a zero depth leave `amount` alone.
+ * The planner refuses a taker with nothing to take by itself.
  */
 export function capToDepth(amount: bigint, opposite: readonly DepthLevel[], fraction: number, bandBps: number, floor: bigint): bigint {
   if (!(fraction > 0)) return amount;

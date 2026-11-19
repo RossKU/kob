@@ -1,5 +1,6 @@
-// One-time setup (idempotent, state in run/state.json): the TUSD issuance, the asset tokens' issuances (config `token2`, `token3`) and the generated
-// registry / allowlist.
+// One-time setup (idempotent, state in run/state.json).
+// It does the TUSD issuance, the asset tokens' issuances (config `token2`, `token3`) and the
+// generated registry / allowlist.
 import { issueLimits, issueRaw, issuedTokenUtxos, type IssueSpec } from '@/kob/issue';
 import type { BuiltTx, KeyUtxo } from '@/kob/types';
 import { selectFunding } from '@/kob/funding';
@@ -31,7 +32,9 @@ async function waitFunds(w: BotWallet, need: bigint): Promise<KeyUtxo[]> {
   }
 }
 
-/** Submits and waits until the node's UTXO set shows output `index` of the transaction (accepted). */
+/**
+ * Submits and waits until the node's UTXO set shows output `index` of the transaction (accepted).
+ */
 async function submitAndWait(env: Env, w: BotWallet, built: BuiltTx, what: string, index = 0): Promise<string> {
   const r = await w.submit(built, what);
   if (!r.ok || !r.txid) throw new Error(`${what} failed: ${r.error}`);
@@ -46,8 +49,10 @@ async function submitAndWait(env: Env, w: BotWallet, built: BuiltTx, what: strin
 }
 
 /**
- * The checks of a token config that must fail BEFORE its issuance is broadcast: the bots price every soak book in sompi per whole token, the
- * order price unit when `scale` = 10^decimals (kob-wasm `defaultScale` caps the scale at 10^9), and the tick is a positive whole sompi count.
+ * The checks of a token config that must fail before its issuance is broadcast.
+ * The bots price every soak book in sompi per whole token, which is the order price unit when
+ * `scale` = 10^decimals.
+ * kob-wasm `defaultScale` caps the scale at 10^9. The tick is a positive whole sompi count.
  */
 export function checkTokenConfig(t: TokenConfig): void {
   if (!Number.isInteger(t.decimals) || t.decimals < 0 || t.decimals > 9) throw new Error(`${t.ticker}: decimals must be 0..9 (the bots quote per whole token)`);
@@ -55,7 +60,10 @@ export function checkTokenConfig(t: TokenConfig): void {
   unitsOf(t.supply, 0);
 }
 
-/** the issuance holders of a token config: each allocation share of the supply, the rest to the bank */
+/**
+ * The issuance holders of a token config: each allocation share of the supply, the rest to the
+ * bank.
+ */
 function holdersOf(env: Env, t: TokenConfig, bankPk: string): { supply: bigint; holders: IssueSpec['holders'] } {
   const supply = BigInt(t.supply) * 10n ** BigInt(t.decimals);
   const holders: IssueSpec['holders'] = [];
@@ -70,9 +78,10 @@ function holdersOf(env: Env, t: TokenConfig, bankPk: string): { supply: bigint; 
 }
 
 /**
- * `setup --recover-issue <txid>`: rebuilds the state of an issuance that was broadcast but not recorded (a setup interrupted between the
- * broadcast and the state write): every holder's genesis output is looked up on the node at the address of its exact token state (the
- * issuance's fixed-supply extension commitment), which also yields the covenant id.
+ * `setup --recover-issue <txid>`: rebuilds the state of an issuance that was broadcast but not
+ * recorded (a setup interrupted between the broadcast and the state write).
+ * Every holder's genesis output is looked up on the node at the address of its exact token state
+ * (the issuance's fixed-supply extension commitment), which also yields the covenant id.
  */
 export async function recoverIssue(env: Env, stats: Stats, slot: TokenSlot, txid: string): Promise<void> {
   const t: TokenConfig | undefined = env.cfg[slot];
@@ -113,12 +122,18 @@ export async function recoverIssue(env: Env, stats: Stats, slot: TokenSlot, txid
   log.info('issuance recovered', { slot, ticker: t.ticker, covenantId, txid, holders: Object.keys(genesis).length });
 }
 
-/** Issues the soak token of `slot` (config `token` = TUSD, `token2`, `token3`) with KOB's own issuance (kob-wasm `issue`, fixed supply). The soak stays on the standalone 3 / 3 program KCC20Ref (`SOAK_PROGRAM`), asked for by name since the
- * default issuance is the published public-mint build (2026-11-04): every soak check and registry template below is that program's. */
+/**
+ * Issues the soak token of `slot` (config `token` = TUSD, `token2`, `token3`) with KOB's own
+ * issuance (kob-wasm `issue`, fixed supply).
+ * The soak stays on the standalone 3 / 3 program KCC20Ref (`SOAK_PROGRAM`), asked for by name
+ * because the default issuance is the published public-mint build.
+ * Every soak check and registry template below is that program's.
+ */
 export async function issueToken(env: Env, stats: Stats, slot: TokenSlot = 'token'): Promise<void> {
   const have = issuedOf(env.state, slot);
   if (have) {
-    // a token of the soak before the switch to the standard program is not tradable on this build: say so before anything runs
+    // A token of the soak issued under another program is not tradable on this build. Say so before
+    // anything runs.
     checkSoakProgram(have);
     log.info('token already issued', { slot, ticker: have.ticker, covenantId: have.covenantId });
     return;
@@ -127,7 +142,8 @@ export async function issueToken(env: Env, stats: Stats, slot: TokenSlot = 'toke
   if (!t) return;
   const description = t.description ?? 'KOB TN10 soak test token: 1 TUSD tracks 1 USD worth of KAS (Binance KASUSDT reference, off chain). No value.';
   const bank = walletOf(env, env.cfg.bank.key, stats);
-  // everything that can fail on the configuration fails BEFORE the issuance is broadcast (the state is written only after it)
+  // Everything that can fail on the configuration fails before the issuance is broadcast. The state
+  // is written only after it.
   checkTokenConfig(t);
   const { supply, holders } = holdersOf(env, t, bank.pk);
   const need = CARRIER * BigInt(holders.length) + KAS;
@@ -145,14 +161,16 @@ export async function issueToken(env: Env, stats: Stats, slot: TokenSlot = 'toke
     description,
     program: '3x3',
   };
-  // an issuance is a NORMAL-urgency transaction of the fee policy (one-off, so no cap rebuild: its fee is a few hundredths of a KAS)
+  // An issuance is a NORMAL-urgency transaction of the fee policy. It is a one-off, so there is no
+  // cap rebuild. Its fee is a few hundredths of a KAS.
   const fee: FeeEnvFields = withUrgency({ fees: await feeContext(env) } as FeeEnvFields, 'normal');
   if (fee.feeRate !== undefined) spec.feeRate = fee.feeRate.toString();
   let res;
   try {
     res = issueRaw(env.kob, spec);
   } catch (e) {
-    // the coins cannot pay the dearer fee: the relay floor (the estimate must never make the issuance impossible)
+    // The coins cannot pay the dearer fee, so use the relay floor. The estimate must never make the
+    // issuance impossible.
     if (fee.feeRate === undefined || fee.feeRate <= env.fees.policy.floor) throw e;
     spec.feeRate = env.fees.policy.floor.toString();
     res = issueRaw(env.kob, spec);
@@ -161,7 +179,8 @@ export async function issueToken(env: Env, stats: Stats, slot: TokenSlot = 'toke
     recordFee(fee, res.prep, BigInt(res.prep.fee.feeRate));
     recordFee(fee, res.built, BigInt(res.built.fee.feeRate));
   }
-  // a creation is two transactions (KCC-23): the preparation declaring the token, then the genesis spending its output 0 (docs/spec/token-metadata.md)
+  // A creation is two transactions (KCC-23): the preparation declaring the token, then the genesis
+  // spending its output 0 (docs/spec/token-metadata.md).
   await submitAndWait(env, bank, res.prep, `issue-declare:${t.ticker}`);
   const txid = await submitAndWait(env, bank, res.built, `issue:${t.ticker}`);
   const issued = {

@@ -1,13 +1,21 @@
-// Read-only watch statistics of a running soak, from the indexer API and the executor logs (no secrets read).
+// Read-only watch statistics of a running soak, from the indexer API and the executor logs (no
+// secrets read).
 //
-//   node scripts/watch-stats.mjs --since 2026-10-06T10:25:55Z [--api http://127.0.0.1:8091] [--logs run/logs] [--json]
+//   node scripts/watch-stats.mjs --since <ISO time> [--api http://127.0.0.1:8091] \
+//        [--logs run/logs] [--json]
 //
-// * pair fills (KobPair, KobCondPair, KobIfdPair: token A for token B): per pair and contract, how they were filled (`counterparty`: the route
-//   through the two KAS books, netting against opposite pair orders, or the matcher's inventory), the volume in base units of A and B, and that
-//   every one is volume only (`price` null, `price_source` none: a pair fill never sets a price);
-// * pair triggers: the arms and trails of pair stops, per evidence mode (0 two KAS-book fills, 1 a resting pair order);
-// * matcher income per transaction: the `final txid=.. kind=.. profit=..` lines of every executor log since `--since`, joined with the
-//   transactions that hold a pair fill (single = one pair fill, multi = two or more) and the rest (plain batches).
+// - Pair fills (KobPair, KobCondPair, KobIfdPair: token A for token B). Per pair and contract it
+//   shows how they were filled
+//  (`counterparty`: the route through the two KAS books, netting against opposite pair orders, or
+// the matcher's inventory),
+//  the volume in base units of A and B, and that every one is volume only (`price` null,
+// `price_source` none: a pair fill never sets a price).
+// - Pair triggers: the arms and trails of pair stops, per evidence mode (0 two KAS-book fills, 1 a
+//   resting pair order).
+// - Matcher income per transaction: the `final txid=.. kind=.. profit=..` lines of every executor
+//   log since `--since`,
+//  joined with the transactions that hold a pair fill (single = one pair fill, multi = two or more)
+// and the rest (plain batches).
 import fs from 'node:fs';
 import path from 'node:path';
 

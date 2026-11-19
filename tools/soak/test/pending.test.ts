@@ -1,5 +1,6 @@
-// The bots' own-transaction bookkeeping (src/bots/pending.ts): a listing that lags the chain, after the wallet's own pending spends; the
-// SELF_TRADE refusal's own orders; the per-key lock.
+// The bots' own-transaction bookkeeping (src/bots/pending.ts).
+// It covers a listing that lags the chain after the wallet's own pending spends, the SELF_TRADE
+// refusal's own orders and the per-key lock.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Mutex, mempoolSpent, outpointOf, selfTradeIds, splitPending } from '../src/bots/pending.ts';

@@ -1,10 +1,16 @@
-// x402 on the soak market: a merchant paywall (packages/kob-x402 `createPaywall`) with three priced resources, settled through the
-// `kobd --executor --x402-config` facilitator, and a payer that pays them in turn:
+// x402 on the soak market: a merchant paywall (packages/kob-x402 `createPaywall`) with three priced
+// resources.
+// It settles through the `kobd --executor --x402-config` facilitator, and a payer pays the
+// resources in turn:
 //   /native  0.5 KAS                      standard-native KAS payment
 //   /token   0.25 TUSD                    KCC-20 exact payment
-//   /swap    0.5 KAS paid WITH TUSD       swap-and-pay: the payer sells TUSD into resting KOB bids in the payment transaction
-// and the SDK's retry paths (x402-retry.ts): `/retry/drop` (the merchant drops the first paid request: re-send), `/retry/lost` (it loses the
-// answer after settling: re-send, served from memory), `/retry/conflict` (the quoted bid is amended away: order_conflict, rebuild).
+//   /swap    0.5 KAS paid WITH TUSD       swap-and-pay: the payer sells TUSD into resting KOB bids
+//                                         in the payment transaction
+// The SDK's retry paths (x402-retry.ts) are also exercised:
+// - `/retry/drop`: the merchant drops the first paid request, and the payer re-sends.
+// - `/retry/lost`: the merchant loses the answer after settling, and the re-send is served from
+//   memory.
+// - `/retry/conflict`: the quoted bid is amended away (order_conflict), and the payer rebuilds.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -38,10 +44,16 @@ const NETWORK: NetworkId = 'kaspa:testnet-10';
 export class X402Bots {
   private server: Server | null = null;
   private stopped = false;
-  /** the rate the payer's next transaction is built at (the x402 SDK's feeRate source) and the floor a failed build is retried at */
+  /**
+   * The rate the payer's next transaction is built at (the x402 SDK's feeRate source) and the floor
+   * a failed build is retried at.
+   */
   private readonly payFee: { rate: number | undefined; floor: number } = { rate: undefined, floor: 100 };
   readonly payer: BotWallet;
-  /** the merchant's injected faults (`/retry/drop`, `/retry/lost`) and the swap quote's race (`/retry/conflict`) */
+  /**
+   * The merchant's injected faults (`/retry/drop`, `/retry/lost`) and the swap quote's race
+   * (`/retry/conflict`).
+   */
   private readonly faults = new FaultInjector();
   private readonly race = new ConflictRace();
 
@@ -64,7 +76,8 @@ export class X402Bots {
     const m = tokenMarket(this.env);
     const apiKey = readFileSync(join(this.env.cfg.runPath, 'x402-merchant.key'), 'utf8').trim();
     const payTo = key(this.env, cfg.merchantKey).address;
-    // the wasm resolves unknown tokens from its builtin (mainnet) registry: pin the TN10 token's program and extension explicitly
+    // The wasm resolves unknown tokens from its builtin (mainnet) registry, so pin the TN10 token's
+    // program and extension explicitly.
     const token = { custody: 'unconditional' as const, ticker: m.ticker, decimals: m.decimals, templateHash: m.templateHash, extensionCommitment: m.extensionCommitment };
     const price = soakPrices(m);
     const offers: Record<string, OfferSpec[]> = {
@@ -105,9 +118,12 @@ export class X402Bots {
   }
 
   /**
-   * The node listener of one paywall with the merchant's injected fault (x402-retry.ts `FaultInjector`): `drop` closes the connection of the
-   * first paid request of a payment before the paywall sees it; `lose` lets the paywall settle it, then answers 500 instead of the resource
-   * (an unknown outcome to the payer). Every later send of the same signed payment goes through.
+   * The node listener of one paywall with the merchant's injected fault (x402-retry.ts
+   * `FaultInjector`).
+   * `drop` closes the connection of the first paid request of a payment before the paywall sees it.
+   * `lose` lets the paywall settle it, then answers 500 instead of the resource (an unknown outcome
+   * to the payer).
+   * Every later send of the same signed payment goes through.
    */
   private faultyListener(path: string, wall: Paywall): (req: IncomingMessage, res: ServerResponse) => void {
     const lossy = toNodeListener(async (request) => {
@@ -135,8 +151,10 @@ export class X402Bots {
   }
 
   /**
-   * `/retry/conflict`: the market maker amends the bid the swap quote just named (the web's amend: an in-place cancel-replace of a KobBid, one tick
-   * lower), so the payment's broadcast meets a spent order. Awaited: the amend is in the mempool before the payment is sent.
+   * `/retry/conflict`: the market maker amends the bid the swap quote just named (the web's amend:
+   * an in-place cancel-replace of a KobBid, one tick lower).
+   * So the payment's broadcast meets a spent order.
+   * It is awaited, so the amend is in the mempool before the payment is sent.
    */
   private async raceBid(v: OrderView, price: bigint): Promise<void> {
     const m = tokenMarket(this.env);
@@ -147,7 +165,10 @@ export class X402Bots {
     this.log.info('x402 race: quoted bid amended by the market maker', { order: v.covenant_id, ok: r.ok, txid: r.txid, error: r.error });
   }
 
-  /** swap quote from the indexer book: the best plain constant-price bids, enough token base units for `amount` sompi (payer sells TUSD) */
+  /**
+   * Swap quote from the indexer book: the best plain constant-price bids, enough token base units
+   * for `amount` sompi (the payer sells TUSD).
+   */
   private async quote(q: { amount: string }): Promise<SwapQuote> {
     const racing = this.race.take();
     const mmPk = this.env.keys[this.env.cfg.mm.key]?.publicKey;
@@ -163,12 +184,17 @@ export class X402Bots {
       const st = v?.state as { kind: string; state: Record<string, string> } | null | undefined;
       if (!v || !v.current || !st || st.kind !== 'KobBid' || v.current.value == null) continue;
       const s = st.state;
-      // plain GTC bids only: no auction, no activation, no TWAP/DCA rate limit (interval: a relative lock the payment cannot meet)
+      // Plain GTC bids only: no auction, no activation, no TWAP/DCA rate limit (interval: a
+      // relative lock the payment cannot meet).
       if (s.tif !== '0' || s.slope !== '0' || s.interval !== '0' || s.maxFill !== '0' || BigInt(s.activeFrom) > clock.daa || s.maker === this.payer.pk) continue;
-      // a bid this payer raced away earlier (its old outpoint may still be listed): never quoted again
+      // A bid this payer raced away earlier (its old outpoint may still be listed) is never quoted
+      // again.
       if (this.race.raced.has(`${v.current.txid}:${v.current.index}`)) continue;
-      // protocol v3: base units. The bid's buying power is its `amount_left`; `price` is sompi per whole token (per `scale` base units). The base
-      // units that pay `need` are ceil(need x scale / price) (the tip the bid also pays is ignored: conservative), at least the bid's minimum fill
+      // Protocol v3: base units. The bid's buying power is its `amount_left`, and `price` is sompi
+      // per whole token (per `scale` base units).
+      // The base units that pay `need` are ceil(need x scale / price), at least the bid's minimum
+      // fill.
+      // The tip the bid also pays is ignored, which is conservative.
       const price = BigInt(s.price);
       const scale = BigInt(s.scale);
       const avail = BigInt(v.amount_left ?? 0);
@@ -204,7 +230,8 @@ export class X402Bots {
     if (!cfg.enabled) return;
     this.server = this.merchant();
     const wasm = createKobWasm({ pkgDir: this.env.cfg.kobWasmDir });
-    // payments are urgent (a merchant's HTTP request waits): they pay the HIGH bucket of the fee policy
+    // Payments are urgent (a merchant's HTTP request waits), so they pay the HIGH bucket of the fee
+    // policy.
     this.payFee.floor = Number(this.env.fees.policy.floor);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rpc = await connectRpc(this.env.sdk as any, { url: this.env.cfg.nodeUrl, network: NETWORK });
@@ -212,7 +239,8 @@ export class X402Bots {
     const tokens = async (): Promise<TokenUtxoJson[]> => (await this.payer.tokenUtxos(tokenRef(this.env))) as unknown as TokenUtxoJson[];
     const context = rpcContextProvider(rpc, { tokens, quote: (q) => this.quote(q) });
     const pk = key(this.env, cfg.payerKey);
-    // 0.2 KAS at the floor; a dynamic fee at a busy moment is several times that, so the ceiling follows the policy's per-transaction cap
+    // 0.2 KAS at the floor. A dynamic fee at a busy moment is several times that, so the ceiling
+    // follows the policy's per-transaction cap.
     const maxFee = this.env.fees.policy.dynamic && this.env.fees.policy.maxFeeSompi > 20_000_000n ? this.env.fees.policy.maxFeeSompi : 20_000_000n;
     const client = (caps: ConstructorParameters<typeof KobX402Client>[0]['capabilities'], store = new MemoryArtifactStore()) =>
       new KobX402Client({
@@ -228,37 +256,45 @@ export class X402Bots {
         capabilities: caps,
         maxFeeSompi: maxFee.toString(),
         maxPay: { [m.covenantId]: payerMaxPayAmount(m) },
-        // binding 1.0.0: an unattended payer needs a complete funding policy (with the ceilings in `caps.maxAmount`): its local
-        // key, the soak merchant's origin and address, the kinds it pays
+        // Binding 1.0.0: an unattended payer needs a complete funding policy (with the ceilings in
+        // `caps.maxAmount`).
+        // It names its local key, the soak merchant's origin and address, and the kinds it pays.
         policy: {
           fundingSource: 'local-keys',
           allowedOrigins: [`http://${cfg.listen}`],
           allowedPayTo: [key(this.env, cfg.merchantKey).address],
           allowedKinds: ['native', 'kcc20', 'swap'],
         },
-        // every payment at the policy's HIGH rate (pickPayFee sets it before each one); one that cannot be built at it is rebuilt at the floor
+        // Every payment is at the policy's HIGH rate (pickPayFee sets it before each one). One that
+        // cannot be built at it is rebuilt at the floor.
         feeRate: () => this.payFee.rate,
         feeRateFloor: this.payFee.floor,
       });
     const bal = async () => ({ [m.covenantId]: (await this.payer.tokenBalance(tokenRef(this.env))).toString() });
     const base = `http://${cfg.listen}`;
-    // the payer's turns: weighted (config `x402.weights`, x402-retry.ts DEFAULT_X402_WEIGHTS): the paid resources, the invoice, the retry paths
+    // The payer's turns are weighted (config `x402.weights`, x402-retry.ts DEFAULT_X402_WEIGHTS):
+    // the paid resources, the invoice, the retry paths.
     const weights = x402Weights({ weights: cfg.weights, invoices: !!cfg.invoiceIntent?.enabled });
     const merchantKey = readFileSync(join(this.env.cfg.runPath, 'x402-merchant.key'), 'utf8').trim();
     const invoices = new InvoiceClient({ url: cfg.facilitatorUrl, apiKey: merchantKey, allowInsecureHttp: true, payTimeoutMs: 90_000 });
     const paidTurn = this.paidTurnOf(client, bal, base, maxFee, m);
     await sleep(30_000);
     while (!this.stopped) {
-      // the payer submits through the x402 SDK, not a BotWallet, so it waits on the gate itself (see indexer-gate.ts for why even /native waits)
+      // The payer submits through the x402 SDK, not a BotWallet, so it waits on the gate itself
+      // (see indexer-gate.ts for why even /native waits).
       if (!(await this.env.gate?.waitOpen(() => this.stopped) ?? true)) break;
       const path = weighted(weights);
-      // every turn is logged when it starts and ends (and while it runs long), so the log shows each pick and how long it took
+      // Every turn is logged when it starts and ends (and while it runs long), so the log shows
+      // each pick and how long it took.
       await loggedTurn(this.log, path, () => (path === 'invoice' ? this.payInvoice(wasm, rpc, invoices, tokens) : paidTurn(path))).catch(() => undefined);
       await sleep(expDelay(cfg.meanIntervalSec, 20));
     }
   }
 
-  /** The body of the x402 run loop's paid-resource turns, bound by `run` (closures over the client and the chain context). */
+  /**
+   * The body of the x402 run loop's paid-resource turns, bound by `run` (closures over the client
+   * and the chain context).
+   */
   private paidTurnOf(
     client: (caps: ConstructorParameters<typeof KobX402Client>[0]['capabilities'], store?: MemoryArtifactStore) => KobX402Client,
     bal: () => Promise<Record<string, string>>,
@@ -279,7 +315,8 @@ export class X402Bots {
         const body = await response.text();
         if (response.status === 200 && payment) {
           this.stats.inc(`x402_paid:${path}`);
-          // the SDK's own retry (re-send of an unknown outcome, rebuild after an order lost to another taker): counted apart
+          // The SDK's own retry (re-send of an unknown outcome, rebuild after an order lost to
+          // another taker) is counted apart.
           if (payment.attempts > 1 || payment.resends > 0) this.stats.inc(`x402_retried:${path}`);
           if (payment.resends > 0) this.stats.inc(`x402_resent:${path}`);
           if (payment.attempts > 1) this.stats.inc(`x402_rebuilt:${path}`);
@@ -306,9 +343,12 @@ export class X402Bots {
   }
 
   /**
-   * One invoice paid by an intent (docs/ops/executor.md A.7): the merchant registers an invoice of `amountKas` whose only entry is an intent
-   * swap offer paid with TUSD; the payer signs the router intent's creation and posts it to `/invoices/{id}/pay`; the facilitator broadcasts
-   * it and executes the intent against the TUSD bids as a keeper. The intent handle is logged before anything is sent (persist).
+   * One invoice paid by an intent (docs/ops/executor.md A.7).
+   * The merchant registers an invoice of `amountKas` whose only entry is an intent swap offer paid
+   * with TUSD.
+   * The payer signs the router intent's creation and posts it to `/invoices/{id}/pay`.
+   * The facilitator broadcasts it and executes the intent against the TUSD bids as a keeper.
+   * The intent handle is logged before anything is sent (persist).
    */
   private async payInvoice(wasm: ReturnType<typeof createKobWasm>, rpc: Awaited<ReturnType<typeof connectRpc>>, invoices: InvoiceClient, tokens: () => Promise<TokenUtxoJson[]>): Promise<void> {
     const cfg = this.env.cfg.x402;
@@ -340,7 +380,8 @@ export class X402Bots {
         this.stats.inc('x402_paid:invoice-intent');
         const creation = (settlement.extensions as { kob?: { intent?: { creation?: string } } } | undefined)?.kob?.intent?.creation;
         this.log.info('x402 invoice paid by intent', { invoice: reg.id, tx: settlement.transaction, creation, payerSpent: payment.payerSpent, sends, ms: Date.now() - t0 });
-        // the facilitator ledger keys an intent entry by its creation id (docs/ops/executor.md A.7): the checker looks it up by that
+        // The facilitator ledger keys an intent entry by its creation id (docs/ops/executor.md
+        // A.7), and the checker looks it up by that.
         this.recordPayment('invoice-intent', creation ?? settlement.transaction, amount.toString(), 'KAS', pick);
       } else {
         this.stats.inc(`x402_unpaid:invoice-intent:${status}`);
@@ -353,8 +394,14 @@ export class X402Bots {
     }
   }
 
-  /** the checker verifies every recorded payment settled exactly once (run/state/x402-payments.jsonl) */
-  /** the HIGH-bucket rate for the next payer transaction (the node's estimate through the cached oracle; the floor when it has none) */
+  /**
+   * The checker verifies every recorded payment settled exactly once
+   * (run/state/x402-payments.jsonl).
+   */
+  /**
+   * The HIGH-bucket rate for the next payer transaction (the node's estimate through the cached
+   * oracle, the floor when it has none).
+   */
   private async pickPayFee(): Promise<RatePick> {
     const pick = pickFor(await feeContext(this.env), 'high');
     this.payFee.rate = Number(pick.rate);

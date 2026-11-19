@@ -125,7 +125,8 @@ test('orders of the soak tokens from the checker memo: a pair order counts once,
   assert.equal(all.rows.length, 4);
   assert.equal(all.complete, true);
   assert.equal(ordersSummary(all.rows).byContract.KobPair.total, 1);
-  // with an external token traded, a memo without its token cannot be placed: left out, the list says it is incomplete
+  // With an external token traded, a memo without its token cannot be placed. It is left out, and
+  // the list says it is incomplete.
   const ext = memoOrderRows(memo, ids, ['tusd', 'teth'], false);
   assert.equal(ext.rows.length, 3);
   assert.equal(ext.complete, false);

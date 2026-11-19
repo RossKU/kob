@@ -1,4 +1,5 @@
-// Pure pair arithmetic of the pair-order bots (no `@/` imports: unit-tested with plain `node --test`).
+// Pure pair arithmetic of the pair-order bots (no `@/` imports, so plain `node --test` runs the
+// unit tests).
 
 export interface Rat {
   num: bigint;
@@ -18,8 +19,9 @@ export function reduceRat(r: Rat): Rat {
 }
 
 /**
- * The fair pair price, whole QUOTE tokens per whole BASE token, from the KAS references of the two tokens (sompi per whole token each):
- * perTokenBase / perTokenQuote.
+ * The fair pair price, in whole QUOTE tokens per whole BASE token.
+ * It comes from the KAS references of the two tokens (sompi per whole token each): perTokenBase /
+ * perTokenQuote.
  */
 export function fairPairPrice(base: { perToken: bigint }, quote: { perToken: bigint }): Rat {
   return reduceRat({ num: base.perToken, den: quote.perToken });
@@ -28,7 +30,10 @@ export function fairPairPrice(base: { perToken: bigint }, quote: { perToken: big
 /** r x (1 + b / 10^4), exact to 1/100 bps */
 export const withBps = (r: Rat, b: number): Rat => reduceRat({ num: r.num * BigInt(1_000_000 + Math.round(b * 100)), den: r.den * 1_000_000n });
 
-/** a rational as a decimal string with at most `digits` fraction digits, rounded `down` or `up` (trailing zeros trimmed) */
+/**
+ * A rational as a decimal string with at most `digits` fraction digits, rounded `down` or `up`
+ * (trailing zeros trimmed).
+ */
 export function ratText(r: Rat, digits: number, round: 'down' | 'up'): string {
   const s = 10n ** BigInt(digits);
   const scaled = round === 'up' ? (r.num * s + r.den - 1n) / r.den : (r.num * s) / r.den;
@@ -38,8 +43,10 @@ export function ratText(r: Rat, digits: number, round: 'down' | 'up'): string {
 }
 
 /**
- * The rate two KAS references imply, B base units per WHOLE A (a pair order's price unit): `perTokenA x scale(B) / perTokenB` (sompi per whole A
- * over sompi per whole B), rounded down; null without a positive B reference.
+ * The rate two KAS references imply, in B base units per WHOLE A (a pair order's price unit).
+ * It is `perTokenA x scale(B) / perTokenB` (sompi per whole A over sompi per whole B), rounded
+ * down.
+ * It is null without a positive B reference.
  */
 export function pairRateOf(perTokenA: bigint, perTokenB: bigint, scaleB: bigint): bigint | null {
   if (perTokenA <= 0n || perTokenB <= 0n || scaleB <= 0n) return null;
@@ -53,8 +60,10 @@ export interface PairLevelLike {
 }
 
 /**
- * The pair book's reference rate in B base units per whole A: the midpoint of its best ask and best bid (any source: direct, entry, route; one
- * side when only one exists), when it lies within `maxBps` of `fair`; null otherwise (a thin or stale book: the caller uses the fair rate).
+ * The pair book's reference rate in B base units per whole A.
+ * It is the midpoint of its best ask and best bid (any source: direct, entry, route; one side when
+ * only one exists), when it lies within `maxBps` of `fair`.
+ * Otherwise it is null (a thin or stale book), and the caller uses the fair rate.
  */
 export function pairReference(view: { asks: PairLevelLike[]; bids: PairLevelLike[] } | null, scaleA: bigint, fair: bigint, maxBps: number): bigint | null {
   if (!view) return null;
