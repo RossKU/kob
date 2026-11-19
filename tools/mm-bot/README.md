@@ -114,7 +114,7 @@ One JSON file; omitted fields take the default; relative paths are relative to t
 | `reference.maxCandleAgeSec` | `120` | older newest candle: stale |
 | `reference.timeoutMs` | `10000` | per request |
 | `reference.usdtUsd` | kraken, coinbase | USDT/USD sources, all asked |
-| `reference.usdtAgreement`, `usdtBand` | `0.002`, `0.01` | sources further apart, or a reading further from 1: no rate |
+| `reference.usdtAgreement`, `usdtBand` | `0.002`, `0.01` | two sources further apart than `usdtAgreement`, a lone source further than `usdtAgreement` from 1, or any reading further than `usdtBand` from 1: no rate. `usdtAgreement` must stay below half the spread |
 | `reference.stableMaxAgeSec` | `300` | max age of a stablecoin rate |
 | `reference.crossCheck` | on, 300 s | KAS/USDC log-only check |
 | `quotes.levels` | `3` | levels per side |

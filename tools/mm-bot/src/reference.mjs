@@ -84,6 +84,9 @@ export function combine(venues, { minVenues, maxDeviation, pairAgreement = null 
 /**
  * USDT/USD from the sources' fresh readings ({ kraken, coinbase }).
  * A reading outside 1 +- band is refused, and two that differ by more than agreement give no rate.
+ * A reading that stands alone must sit within agreement of 1, the peg standing in for the second
+ * source: one wrong source scales every USDT venue together, and agreement stays below half the
+ * spread (config validate), so it cannot move the fair value past the best quote.
  * The result is { value, source } or { value: null, reason }.
  */
 export function usdtRate(readings, { band, agreement }) {
@@ -95,6 +98,10 @@ export function usdtRate(readings, { band, agreement }) {
     else ok.push([source, v]);
   }
   if (!ok.length) return { value: null, reason: bad.join('; ') || 'no reading' };
+  if (ok.length === 1 && Math.abs(ok[0][1] - 1) > agreement) {
+    const [[source, v]] = ok;
+    return { value: null, reason: `only ${source} ${v.toFixed(5)}, further than ${agreement} from 1 with no second source to agree` };
+  }
   if (ok.length > 1) {
     const vs = ok.map(([, v]) => v);
     const d = Math.max(...vs) / Math.min(...vs) - 1;

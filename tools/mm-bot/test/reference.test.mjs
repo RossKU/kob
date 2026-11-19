@@ -158,3 +158,13 @@ test('USDT/USD: both sources asked; a reading far from 1 or two that disagree gi
   assert.equal(usdtRate({ kraken: 0.999, coinbase: null }, o).value, 0.999);
   assert.equal(usdtRate({}, o).reason, 'no reading');
 });
+
+test('USDT/USD: a lone source is held to the agreement bound, below half the spread (E-L5)', () => {
+  const o = { band: 0.01, agreement: 0.002 };
+  // Inside the 1 % band but 0.7 % off: alone it would move every USDT venue past a 0.5 % best quote.
+  assert.equal(usdtRate({ kraken: 0.993, coinbase: null }, o).value, null);
+  assert.match(usdtRate({ kraken: null, coinbase: 1.007 }, o).reason, /only coinbase 1.00700, further than 0.002 from 1/);
+  assert.equal(usdtRate({ kraken: 1.015, coinbase: 0.993 }, o).value, null, 'the other refused: the one left stands alone');
+  close(usdtRate({ kraken: 0.993, coinbase: 0.9935 }, o).value, 0.99325); // two agreeing sources may carry a real move
+  assert.equal(usdtRate({ kraken: 1.0015, coinbase: null }, o).value, 1.0015);
+});
