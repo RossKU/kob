@@ -70,7 +70,7 @@ import { formatRowDate } from '../kit/format';
 import {
   defaultCarrierText, emptyUiState, filterDecimals, filterOwner, filterTicker, formToIssueForm, groupByField, modelIssues, parseDecimalsText, remainingText,
   humanAmount, linkedSaleFields, saleOfRecord, reviewSummary, salePreview, shortfallOf, supplyPreview, walletRowIncluded, type IssueUiState, type SaleUi,
-  LOCK_DAYS, chooseLock, lockUntilOf, type LockChoice,
+  LOCK_DAYS, chooseLock, lockSignerNote, lockUntilOf, type LockChoice,
 } from './issue-model';
 import { hashImageFile } from './image-file';
 import { ResultPanel } from './ResultPanel';
@@ -942,6 +942,8 @@ export function IssueView() {
     const today = formatRowDate(Date.now());
     // The last day a lock may open (kob/issue.ts refuses a later one).
     const latest = formatRowDate(Date.now() + Number(MAX_LOCK_SPAN_MS) - 86_400_000);
+    // a wallet that may not sign the unlock: the share would then need the CLI and the private key
+    const signerNote = lockSignerNote(l.choice, wallet.adapter, pubkey);
     return (
       <div class="issue-lock" data-testid="issue-lock">
         <div class="issue-lock-row">
@@ -974,6 +976,7 @@ export function IssueView() {
           {l.choice !== 'none' && /^\d+$/.test(until) && until !== '0' ? <span class="small muted" data-testid="issue-lock-until">{t('issue.lock.until', { date: formatRowDate(Number(until)) })}</span> : null}
         </div>
         {err ? <p class="field-error" data-testid="issue-lock-error">{err}</p> : null}
+        {signerNote ? <Banner tone="warn" data-testid="issue-lock-signer">{t(signerNote === 'unsupported' ? 'issue.lock.signerUnsupported' : 'issue.lock.signerUnproven')}</Banner> : null}
       </div>
     );
   }

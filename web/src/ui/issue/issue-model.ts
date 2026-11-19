@@ -14,6 +14,9 @@ import { curveNumbersOfState } from '../../kob/curve';
 import type { CreationRecord } from '../../data/creations';
 import type { IssueLock, PlannedSale } from '../../kob/issue';
 import type { Hex } from '../../kob/types';
+import { storedVerdict } from '../../wallet/covenant-probe';
+import type { WalletAdapter } from '../../wallet/types';
+import { unlockSigner } from '../orders/unlock';
 import { groupDigits, shortId } from '../kit/format';
 
 // ---- UI state
@@ -91,6 +94,18 @@ const DAY_MS = 86_400_000;
 /** The time `days` days from `now`, rounded up to the whole minute (unix ms). */
 export function lockUntilIn(days: number, now: number = Date.now()): string {
   return String(Math.ceil((now + days * DAY_MS) / 60_000) * 60_000);
+}
+
+/**
+ * Whether the connected wallet can sign the unlock of a lock chosen here, by the check Portfolio's
+ * Unlock uses (ui/orders/unlock.ts `unlockSigner`). Null with no lock, no wallet, or a wallet that
+ * signs script inputs. 'unsupported' when its test signature failed, 'unproven' when it was never
+ * checked. Either way the unlock would need the CLI and the wallet's private key.
+ */
+export function lockSignerNote(choice: LockChoice, adapter: Pick<WalletAdapter, 'id' | 'covenantSigning'> | null | undefined, pubkey: Hex | null | undefined): 'unproven' | 'unsupported' | null {
+  if (choice === 'none' || !adapter || !pubkey) return null;
+  if (unlockSigner(adapter, pubkey) === 'wallet') return null;
+  return storedVerdict(adapter.id, pubkey) === 'unsupported' ? 'unsupported' : 'unproven';
 }
 
 /** A choice of the lock as its UI state. */
