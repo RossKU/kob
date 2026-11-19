@@ -27,7 +27,7 @@ import { balanceColumnFractions, orderTokenPrograms, unreviewedProgram } from '.
 import { convertibleCounts, mergeAllFrees, mergeTokenFor, mergeableCounts } from './merge-model';
 import type { OrdersData } from './orders-data';
 import { formatRowDate, rowTimeTitle } from '../kit/format';
-import { unlockOpen } from './unlock';
+import { unlockOpen, useUnlockClock } from './unlock-clock';
 import './balances.css';
 
 const BALANCE_SORT_KEYS = ['asset', 'available', 'inOrders', 'strays', 'kasLocked', 'value'] as const;
@@ -129,6 +129,9 @@ export function BalancesPanel(props: {
   const sortCols = balanceColumns(valueLabel, lockedLabel);
   const { free, combined, valueOf } = props.balances;
   const tokensOnShow = (combined?.tokens ?? []).filter((b) => !props.onlyTokens || props.onlyTokens.has(b.token));
+  // the node's clock for the creator locks shown: Unlock shows once the node would take it
+  const lockUntils = tokensOnShow.flatMap((b) => (b.locked && b.locked.amount > 0n ? [b.locked.until] : []));
+  const nodeMedian = useUnlockClock(services.node, lockUntils);
 
   const shownTokens = sortBy(tokensOnShow, sort, (b, key): SortValue => {
     const decimals = displayToken(registry, services.config.network, b.token)?.decimals ?? 8;
@@ -290,7 +293,7 @@ export function BalancesPanel(props: {
                 // The wallet's creator lock of the token is a sub-line under Available. Once it is
                 // open, Unlock, or the CLI's command, is in the action cell.
                 const locked = b.locked && b.locked.amount > 0n ? b.locked : null;
-                const open = !!locked && unlockOpen(locked.until);
+                const open = !!locked && unlockOpen(locked.until, nodeMedian);
                 const showUnlock = open && !!props.onUnlockToken && props.unlockBy !== 'cli';
                 const showCli = open && props.unlockBy === 'cli';
                 return (

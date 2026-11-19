@@ -24,16 +24,13 @@ import { spkToAddressFor } from './orders-data';
 import type { FlowStep } from './TxFlow';
 
 /**
- * The Unlock button shows this long after the lock's time by the wall clock, which is about the lag
- * of the node's past median time. The press then asks the node for its past median time and goes on
- * only once it is past the lock's time, as `kob token unlock` does. The node decides finally.
+ * Whole minutes from the node's clock to the lock's time, at least 1. The node takes the unlock only
+ * once its clock is past that time.
  */
-export const UNLOCK_MARGIN_MS = 90_000;
+export const minutesBefore = (until: bigint, median: bigint): bigint => (until - median > 0n ? (until - median + 59_999n) / 60_000n : 1n);
+
 /** How long the unlock waits for the node to list the lock coin the run sent. */
 export const LOCK_COIN_TIMEOUT_MS = 60_000;
-
-/** Whether the lock is open by `now` in ms, with the margin. */
-export const unlockOpen = (until: bigint, now: number = Date.now()): boolean => until + BigInt(UNLOCK_MARGIN_MS) <= BigInt(Math.floor(now));
 
 /**
  * Whether the connected wallet can sign the unlock here. Its coin is a script (P2SH) input, which a
@@ -84,7 +81,7 @@ export async function planUnlock(s: Services, pubkey: Hex, h: LockedHolding, tic
   // The node's clock, which the lock time is checked against. A node that does not say leaves it to
   // the node's answer.
   const median = s.node.getPastMedianTime ? await s.node.getPastMedianTime().catch(() => null) : null;
-  if (median !== null && median < h.until) throw new Error(t('orders.unlock.notOpen', { minutes: String((h.until - median + 59_999n) / 60_000n) }));
+  if (median !== null && median <= h.until) throw new Error(t('orders.unlock.notOpen', { minutes: String(minutesBefore(h.until, median)) }));
   const terms = { until: h.until.toString(), key: h.key };
   const locks = [terms];
   const fee = { feeRate: pickFor(await readFees(s), 'normal').rate.toString() };
