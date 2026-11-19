@@ -556,7 +556,7 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
   // on-chain expiry, the refund time, follows a little later. From the deadline on it reads "ended,
   // refund pending" and not live.
   const deadlinePassed = live && (v?.deadline_passed === true || (deadline !== null && ctx.clock !== null && ctx.clock.unixSeconds >= deadline));
-  const expired = live && (deadlinePassed || (v ? v.expired : expDaa !== null && expDaa < NO_DATE_DAA && nowDaa !== null && nowDaa >= expDaa));
+  const expired = live && (deadlinePassed || (v ? v.expired : expDaa !== null && expDaa > 0n && expDaa < NO_DATE_DAA && nowDaa !== null && nowDaa >= expDaa));
 
   const amountTotal = v ? bi(v.initial_amount) : bi(e.record?.amount ?? null);
   const amountLeft = v ? bi(v.amount_left) : desc ? desc.amountLeft : null;

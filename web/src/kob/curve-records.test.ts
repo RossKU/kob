@@ -73,6 +73,11 @@ describe('a fresh unbound curve in the orders list (from the record, before the 
       custody: { transactionId: plan.built.tx.id, index: 0, amount: '1000', covenantId: plan.token.covenantId, state: order.custody!.state },
     }]]);
     expect(row(old, resolved as never).token).toBe(plan.token.covenantId);
+    // live on the node, and a curve has no expiry (0): not "expired, refund pending" once the clock is known
+    const live = describeEntry(buildEntries([], [rec], resolved as never)[0]!, { kob, clock: { daa: 80_000_000n, unixSeconds: 1_790_000_000n, rateMilli: 10_000 } });
+    expect(live.live).toBe(true);
+    expect(live.expiry.kind).toBe('none');
+    expect(live.expired).toBe(false);
   });
 });
 
