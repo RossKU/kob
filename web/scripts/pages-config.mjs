@@ -1,43 +1,65 @@
 #!/usr/bin/env node
-// The runtime configuration of a public web deployment (.github/workflows/deploy-pages.yml, docs/ops/web-hosting.md): writes
-// <dist>/config.json from the KOB_PAGES_* repository variables and, on testnet-10, <dist>/registry/tokens.json as the supported
-// token programs with no token entries (the shipped registry names mainnet tokens; the same file `kobd setup` writes as
+// The runtime configuration of a public web deployment (.github/workflows/deploy-pages.yml,
+// docs/ops/web-hosting.md): writes <dist>/config.json from the KOB_PAGES_* repository variables
+// and, on testnet-10, <dist>/registry/tokens.json as the supported token programs with no token
+// entries (the shipped registry names mainnet tokens; the same file `kobd setup` writes as
 // kob-tokens.json for a testnet-10 build).
 //
 //   node scripts/pages-config.mjs --check          validate the variables only (nothing is written)
-//   node scripts/pages-config.mjs --dist dist      validate, then write the files into the built app (after `npm run build:release`)
+//   node scripts/pages-config.mjs --dist dist      validate, then write the files into the built
+//                                                  app (after `npm run build:release`)
 //
 // Variables (environment):
 //   KOB_PAGES_NETWORK             testnet-10 (default) or mainnet
 //   KOB_PAGES_INDEXER_URL         required: the indexer the app reads (https, a public host)
-//   KOB_PAGES_EXTRA_INDEXER_URLS  optional: further indexers: the app cross-checks the start price of a market / close order against them and reads from one when the primary is down
-//                                 (comma-separated, https, at most 4)
-//   KOB_PAGES_NODE_URL            optional: a wRPC node (wss) WITH its path, e.g. wss://<host>/kaspa/testnet-10/wrpc/json (a bare host answers 404 at the
-//                                 handshake; a note says so); empty = a public node the Kaspa SDK's resolver names (reached over Borsh)
-//   KOB_PAGES_EXPLORER_URL        optional: block explorer base (https); empty = kaspa.stream of the network
-//   KOB_PAGES_TOKEN_NAMES_URL     optional: the base of the token names and icons the market list reads, `<base>/<network>/tokens.json` in the shape of
-//                                 kascov.io's data set (https); empty or unset = https://kascov.io/data (the app's default); `off` = no token names
-//                                 (config.json `tokenNamesUrl: ""`; GitHub cannot tell an empty variable from an unset one, hence the word)
+//   KOB_PAGES_EXTRA_INDEXER_URLS  optional: further indexers: the app cross-checks the start price
+//                                 of a market / close order against them and reads from one when
+//                                 the primary is down (comma-separated, https, at most 4)
+//   KOB_PAGES_NODE_URL            optional: a wRPC node (wss) WITH its path, e.g.
+//                                 wss://<host>/kaspa/testnet-10/wrpc/json (a bare host answers 404
+//                                 at the handshake; a note says so); empty = a public node the
+//                                 Kaspa SDK's resolver names (reached over Borsh)
+//   KOB_PAGES_EXPLORER_URL        optional: block explorer base (https); empty = kaspa.stream of
+//                                 the network
+//   KOB_PAGES_TOKEN_NAMES_URL     optional: the base of the token names and icons the market list
+//                                 reads, `<base>/<network>/tokens.json` in the shape of kascov.io's
+//                                 data set (https); empty or unset = https://kascov.io/data (the
+//                                 app's default); `off` = no token names (config.json
+//                                 `tokenNamesUrl: ""`; GitHub cannot tell an empty variable from an
+//                                 unset one, hence the word)
 //
-//   KOB_PAGES_NETWORKS            optional: the servers of the OTHER network, for one site that serves both (config.json `networks`, web/src/config.ts). JSON, e.g.
-//                                 {"testnet-10": {"indexerUrl": "https://...", "extraIndexerUrls": ["https://..."], "nodeUrl": "wss://...", "explorerUrl": "https://..."}}:
-//                                 the rules of the variables above (indexerUrl required). Only testnet-10 on a mainnet site (a testnet-10 site replaces the shipped
-//                                 mainnet registry); that entry gets its token-program list as registry/testnet-10/tokens.json (its `registryUrl`). Unset = no
+//   KOB_PAGES_NETWORKS            optional: the servers of the OTHER network, for one site that
+//                                 serves both (config.json `networks`, web/src/config.ts). JSON,
+//                                 e.g. {"testnet-10": {"indexerUrl": "https://...",
+//                                 "extraIndexerUrls": ["https://..."], "nodeUrl": "wss://...",
+//                                 "explorerUrl": "https://..."}}: the rules of the variables above
+//                                 (indexerUrl required). Only testnet-10 on a mainnet site (a
+//                                 testnet-10 site replaces the shipped mainnet registry); that
+//                                 entry gets its token-program list as
+//                                 registry/testnet-10/tokens.json (its `registryUrl`). Unset = no
 //                                 `networks`: the other network has no servers of the site.
-//   KOB_PAGES_HOST_NETWORKS       optional: the default network of each host name (config.json `hostNetworks`). JSON, e.g. {"kob.kaspa.ag": "mainnet",
-//                                 "kob-tn10.kaspa.ag": "testnet-10"}: exact host names, no port, path or wildcard. A visitor's stored choice still wins. Unset = the
-//                                 site opens on KOB_PAGES_NETWORK on every host.
+//   KOB_PAGES_HOST_NETWORKS       optional: the default network of each host name (config.json
+//                                 `hostNetworks`). JSON, e.g. {"kob.kaspa.ag": "mainnet",
+//                                 "kob-tn10.kaspa.ag": "testnet-10"}: exact host names, no port,
+//                                 path or wildcard. A visitor's stored choice still wins. Unset =
+//                                 the site opens on KOB_PAGES_NETWORK on every host.
 //
-//   KOB_PAGES_NETWORK_SWITCH      `1` / `true`: the header's network chip offers the switch to the other network (web/src/ui/shell/NetworkSwitch.tsx). Unset: the
-//                                 site is pinned to its network (config.json `lockNetwork: true`, the chip a plain label): a site of one network has no servers of
-//                                 the other, and switching a public site to mainnet is the mainnet launch (founder 2026-11-11: pinned until then).
+//   KOB_PAGES_NETWORK_SWITCH      `1` / `true`: the header's network chip offers the switch to the
+//                                 other network (web/src/ui/shell/NetworkSwitch.tsx). Unset: the
+//                                 site is pinned to its network (config.json `lockNetwork: true`,
+//                                 the chip a plain label): a site of one network has no servers of
+//                                 the other, and switching a public site to mainnet is the mainnet
+//                                 launch.
 //
-//   KOB_PAGES_INTERNAL            `1`: the build is the internal mainnet app (a protected preview deployment, docs/ops/web-hosting.md 4c): `--dist` also writes
-//                                 robots.txt (Disallow: /) and adds `X-Robots-Tag: noindex, nofollow` to the dist's `_headers`, so no search engine keeps it.
+//   KOB_PAGES_INTERNAL            `1`: the build is the internal mainnet app (a protected preview
+//                                 deployment, docs/ops/web-hosting.md 4c): `--dist` also writes
+//                                 robots.txt (Disallow: /) and adds `X-Robots-Tag: noindex,
+//                                 nofollow` to the dist's `_headers`, so no search engine keeps it.
 //
-// A public page is served over https, so every URL must be https / wss (a browser blocks http / ws from it anyway), name a public
-// host (not localhost or a private address) and carry no user name, password, query or fragment (config.json is public: an API key
-// in it would be published). Prints the config written; exits 1 with every problem listed.
+// A public page is served over https, so every URL must be https / wss (a browser blocks http / ws
+// from it anyway), name a public host (not localhost or a private address) and carry no user name,
+// password, query or fragment (config.json is public: an API key in it would be published). Prints
+// the config written; exits 1 with every problem listed.
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -47,7 +69,10 @@ import { DEFAULT_REGISTRY_PATH } from '../registry-pin.mjs';
 export const NETWORKS = ['testnet-10', 'mainnet'];
 export const MAX_EXTRA_INDEXERS = 4;
 
-/** True for a host name that is not reachable from the public internet (loopback, private, link-local, unspecified). */
+/**
+ * True for a host name that is not reachable from the public internet (loopback, private,
+ * link-local, unspecified).
+ */
 export function isPrivateHost(hostname) {
   const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return true;
@@ -84,8 +109,8 @@ const indexerKey = (url) => {
 };
 
 /**
- * The deployment's config.json from the KOB_PAGES_* variables: `{ config, errors, notes }`. `config` is null when anything is wrong.
- * @param {Record<string, string | undefined>} env
+ * The deployment's config.json from the KOB_PAGES_* variables: `{ config, errors, notes }`.
+ * `config` is null when anything is wrong. @param {Record<string, string | undefined>} env
  */
 export function pagesConfig(env) {
   const errors = [];
@@ -126,9 +151,10 @@ export function pagesConfig(env) {
 }
 
 /**
- * One network's servers (indexer, further indexers, node, explorer), validated; `name` gives each value's name in the messages.
- * @param {{ indexer: string, extra: string, node: string, explorer: string }} name
- * @param {{ indexer?: unknown, extras: unknown[], node?: unknown, explorer?: unknown }} v
+ * One network's servers (indexer, further indexers, node, explorer), validated; `name` gives each
+ * value's name in the messages. @param {{ indexer: string, extra: string, node: string, explorer:
+ * string }} name @param {{ indexer?: unknown, extras: unknown[], node?: unknown, explorer?: unknown
+ * }} v
  */
 function siteServers(name, v, network, errors, notes) {
   let indexerUrl = '';
@@ -159,7 +185,8 @@ function siteServers(name, v, network, errors, notes) {
     if (r.error) errors.push(r.error);
     else {
       nodeUrl = r.url;
-      // the public nodes answer 404 at the WebSocket handshake of a bare host: the endpoint includes its wRPC path
+      // the public nodes answer 404 at the WebSocket handshake of a bare host: the endpoint
+      // includes its wRPC path
       if (!new URL(nodeUrl).pathname.includes('/wrpc/')) notes.push(`${name.node}: \`${nodeUrl}\` has no /wrpc/ path; a public node needs the whole endpoint, e.g. wss://<host>/kaspa/${network}/wrpc/json (a bare wss://<host> answers 404 and the page shows "Node: unreachable")`);
     }
   } else notes.push(`no ${name.node}: the app connects to a public Kaspa node the SDK resolver names`);
@@ -175,7 +202,10 @@ function siteServers(name, v, network, errors, notes) {
 
 const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** A JSON object variable: the object, null when unset, or undefined (with an error) when it is not one. */
+/**
+ * A JSON object variable: the object, null when unset, or undefined (with an error) when it is not
+ * one.
+ */
 function jsonObject(name, text, errors) {
   const t = String(text ?? '').trim();
   if (!t) return null;
@@ -195,7 +225,10 @@ export const entryRegistryPath = (network) => `registry/${network}/tokens.json`;
 
 const ENTRY_KEYS = ['indexerUrl', 'extraIndexerUrls', 'nodeUrl', 'explorerUrl'];
 
-/** KOB_PAGES_NETWORKS: config.json `networks` (the servers of the site's other network), or undefined when unset or wrong. */
+/**
+ * KOB_PAGES_NETWORKS: config.json `networks` (the servers of the site's other network), or
+ * undefined when unset or wrong.
+ */
 function otherNetworks(text, network, switchOn, errors, notes) {
   const raw = jsonObject('KOB_PAGES_NETWORKS', text, errors);
   if (!raw) return undefined;
@@ -220,7 +253,10 @@ function otherNetworks(text, network, switchOn, errors, notes) {
 /** A host name of KOB_PAGES_HOST_NETWORKS (web/src/config.ts HOST_RE). */
 const HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
 
-/** KOB_PAGES_HOST_NETWORKS: config.json `hostNetworks`, or undefined when unset or wrong. `served`: the networks the site has servers for. */
+/**
+ * KOB_PAGES_HOST_NETWORKS: config.json `hostNetworks`, or undefined when unset or wrong. `served`:
+ * the networks the site has servers for.
+ */
 function hostNetworkMap(text, served, errors, notes) {
   const raw = jsonObject('KOB_PAGES_HOST_NETWORKS', text, errors);
   if (!raw) return undefined;
@@ -239,8 +275,9 @@ function hostNetworkMap(text, served, errors, notes) {
 }
 
 /**
- * The token-program list of a network without a pinned registry: the shipped registry's programs (templates) with `network` set and
- * no token entries (kobd `setup::program_registry`). The app then lists every token of a supported program and names none.
+ * The token-program list of a network without a pinned registry: the shipped registry's programs
+ * (templates) with `network` set and no token entries (kobd `setup::program_registry`). The app
+ * then lists every token of a supported program and names none.
  */
 export function programRegistry(registryText, network) {
   const doc = JSON.parse(registryText);
@@ -249,7 +286,10 @@ export function programRegistry(registryText, network) {
   return JSON.stringify({ ...rest, network, tokens: [] }, null, 2) + '\n';
 }
 
-/** Writes config.json (and the testnet-10 program list, at registry/testnet-10/tokens.json for a `networks` entry) into `dist`; returns the paths written with their sha256. */
+/**
+ * Writes config.json (and the testnet-10 program list, at registry/testnet-10/tokens.json for a
+ * `networks` entry) into `dist`; returns the paths written with their sha256.
+ */
 export function writeDeployment(dist, config, registryPath = DEFAULT_REGISTRY_PATH) {
   const out = [];
   const put = (rel, text) => {
@@ -259,16 +299,20 @@ export function writeDeployment(dist, config, registryPath = DEFAULT_REGISTRY_PA
     out.push({ path: rel, sha256: createHash('sha256').update(text).digest('hex') });
   };
   put('config.json', JSON.stringify(config, null, 2) + '\n');
-  // mainnet: `npm run build:release` already shipped the pinned registry (scripts/release-hashes.sh checks it)
+  // mainnet: `npm run build:release` already shipped the pinned registry (scripts/release-hashes.sh
+  // checks it)
   if (config.network !== 'mainnet') put('registry/tokens.json', programRegistry(readFileSync(registryPath, 'utf8'), config.network));
-  // the other network of a site for both (KOB_PAGES_NETWORKS: testnet-10 on a mainnet site) reads its own program list
+  // the other network of a site for both (KOB_PAGES_NETWORKS: testnet-10 on a mainnet site) reads
+  // its own program list
   for (const n of Object.keys(config.networks ?? {})) put(entryRegistryPath(n), programRegistry(readFileSync(registryPath, 'utf8'), n));
   return out;
 }
 
 /**
- * Keeps a build out of search engines: robots.txt that disallows everything, and an `X-Robots-Tag: noindex, nofollow` rule appended to the dist's `_headers` (a
- * second `/*` block: Pages applies every block that matches). Used for the internal mainnet app only; returns the files written with their sha256.
+ * Keeps a build out of search engines: robots.txt that disallows everything, and an `X-Robots-Tag:
+ * noindex, nofollow` rule appended to the dist's `_headers` (a second `/*` block: Pages applies
+ * every block that matches). Used for the internal mainnet app only; returns the files written with
+ * their sha256.
  */
 export function noindexDist(dist) {
   const out = [];

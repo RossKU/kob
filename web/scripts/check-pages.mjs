@@ -1,21 +1,33 @@
 #!/usr/bin/env node
-// Post-deploy check of a hosted web app (.github/workflows/deploy-pages.yml, docs/ops/web-hosting.md): the host must send what
-// public/_headers asks for, and serve exactly the built files.
+// Post-deploy check of a hosted web app (.github/workflows/deploy-pages.yml,
+// docs/ops/web-hosting.md): the host must send what public/_headers asks for, and serve exactly the
+// built files.
 //
 //   node scripts/check-pages.mjs <base url> [--dist dist]
-//   node scripts/check-pages.mjs --protected <url> [<url> ...]     (the internal mainnet app: unauthenticated requests must meet Cloudflare Access, never the app)
+//   node scripts/check-pages.mjs --protected <url> [<url> ...]     (the internal mainnet app:
+//                                                                  unauthenticated requests must
+//                                                                  meet Cloudflare Access, never
+//                                                                  the app)
 //
-// * `/`: Content-Security-Policy equal to CSP_HEADER of csp.mjs (with `frame-ancestors 'none'`), X-Frame-Options DENY,
-//   X-Content-Type-Options nosniff, Referrer-Policy no-referrer, Strict-Transport-Security, Cross-Origin-Opener-Policy, Permissions-Policy.
-// * `/signer.html` and `/signer` (Cloudflare Pages serves the page under both): the signer's own policy (SIGNER_CSP_HEADER:
-//   sandbox, `frame-ancestors 'self'`) and X-Frame-Options SAMEORIGIN, never the app's `frame-ancestors 'none'` / DENY (the app
-//   could not frame its signer).
-// * a file under `/assets/`: Access-Control-Allow-Origin `*` (the sandboxed signer loads its bundle cross-origin).
-// * with --dist: every built file (except the host's own `_headers` / `_redirects`) is fetched and its sha256 compared with the
-//   local file, so a host that rewrites pages (an injected analytics script, minification, an old deployment) is caught.
-// * with --hashes <sha256sum list>: the same, against the hashes recorded when the bundle was built (before any third-party step ran), not
+// * `/`: Content-Security-Policy equal to CSP_HEADER of csp.mjs (with `frame-ancestors 'none'`),
+// X-Frame-Options DENY,
+//   X-Content-Type-Options nosniff, Referrer-Policy no-referrer, Strict-Transport-Security,
+//   Cross-Origin-Opener-Policy, Permissions-Policy.
+// * `/signer.html` and `/signer` (Cloudflare Pages serves the page under both): the signer's own
+// policy (SIGNER_CSP_HEADER:
+//   sandbox, `frame-ancestors 'self'`) and X-Frame-Options SAMEORIGIN, never the app's
+//   `frame-ancestors 'none'` / DENY (the app could not frame its signer).
+// * a file under `/assets/`: Access-Control-Allow-Origin `*` (the sandboxed signer loads its bundle
+// cross-origin).
+// * with --dist: every built file (except the host's own `_headers` / `_redirects`) is fetched and
+// its sha256 compared with the
+//   local file, so a host that rewrites pages (an injected analytics script, minification, an old
+//   deployment) is caught.
+// * with --hashes <sha256sum list>: the same, against the hashes recorded when the bundle was built
+// (before any third-party step ran), not
 //   against the directory as it is by then.
-// Redirects are followed (Pages sends `/index.html` to `/`). Prints one line per check; exits 1 when any fails.
+// Redirects are followed (Pages sends `/index.html` to `/`). Prints one line per check; exits 1
+// when any fails.
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
@@ -39,7 +51,10 @@ export function distFiles(dir) {
   return out.sort();
 }
 
-/** The hashes of a `sha256sum` list of the files under a `dist/` directory, as a map of URL paths (`/assets/x.js`) to sha256. */
+/**
+ * The hashes of a `sha256sum` list of the files under a `dist/` directory, as a map of URL paths
+ * (`/assets/x.js`) to sha256.
+ */
 export function parseHashes(text) {
   const out = new Map();
   const re = /^([0-9a-f]{64})\s+\*?(?:.*?\/)?dist(\/.*)$/;
@@ -51,9 +66,10 @@ export function parseHashes(text) {
 }
 
 /**
- * Runs the checks against `base`. `fetchFn` is injectable (tests); `attempts` / `delayMs` cover a deployment that is not reachable yet
- * (only the first request is retried: a wrong header on a reachable deployment is a failure, not a delay).
- * @returns {Promise<{ ok: boolean, lines: string[] }>}
+ * Runs the checks against `base`. `fetchFn` is injectable (tests); `attempts` / `delayMs` cover a
+ * deployment that is not reachable yet (only the first request is retried: a wrong header on a
+ * reachable deployment is a failure, not a delay). @returns {Promise<{ ok: boolean, lines: string[]
+ * }>}
  */
 export async function checkPages(base, { dist, hashes, fetchFn = fetch, attempts = 6, delayMs = 5000 } = {}) {
   const root = new URL(base.endsWith('/') ? base : base + '/');
@@ -145,11 +161,14 @@ async function firstScript(res) {
 }
 
 /**
- * The internal mainnet app is a preview deployment behind the Pages project's access policy (Cloudflare Access, docs/ops/web-hosting.md 4c). An unauthenticated
- * request to each of `urls` must NOT get the app: it must be sent to Cloudflare Access (a redirect to `<team>.cloudflareaccess.com` or a `/cdn-cgi/access/` path)
- * or refused (401 / 403). Anything else (a 2xx above all) means the app is open to the world: the check fails. Redirects are not followed; a network error
- * is retried (`attempts`, a new deployment is not reachable at once) and then fails (an unreachable URL proves nothing).
- * @returns {Promise<{ ok: boolean, lines: string[] }>}
+ * The internal mainnet app is a preview deployment behind the Pages project's access policy
+ * (Cloudflare Access, docs/ops/web-hosting.md 4c). An unauthenticated request to each of `urls`
+ * must NOT get the app: it must be sent to Cloudflare Access (a redirect to
+ * `<team>.cloudflareaccess.com` or a `/cdn-cgi/access/` path) or refused (401 / 403). Anything else
+ * (a 2xx above all) means the app is open to the world: the check fails. Redirects are not
+ * followed; a network error is retried (`attempts`, a new deployment is not reachable at once) and
+ * then fails (an unreachable URL proves nothing). @returns {Promise<{ ok: boolean, lines: string[]
+ * }>}
  */
 export async function checkProtected(urls, { fetchFn = fetch, attempts = 4, delayMs = 5000 } = {}) {
   const lines = [];

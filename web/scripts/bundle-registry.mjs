@@ -1,6 +1,7 @@
-// Release build helper (`npm run build:release`): copies the default registry (../registry/tokens.json) into dist/registry/tokens.json, the app's
-// default `registryUrl`, so the built app is self-contained. A plain `npm run build` leaves the registry to the host (the soak's UI server serves its
-// own TN10 registry there).
+// Release build helper (`npm run build:release`): copies the default registry
+// (../registry/tokens.json) into dist/registry/tokens.json, the app's default `registryUrl`, so the
+// built app is self-contained. A plain `npm run build` leaves the registry to the host (the soak's
+// UI server serves its own TN10 registry there).
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

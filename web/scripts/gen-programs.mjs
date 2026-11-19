@@ -1,24 +1,33 @@
 #!/usr/bin/env node
-// Generates web/src/kob/programs.generated.ts from the token-program profile table of kob-protocol
-// (crates/kob-protocol/data/programs.json): the single declaration of every token program. Adding a program to the JSON and re-running
-// `npm run gen:programs` is all the web app needs. A vitest (programs.generated.test.ts) fails when the committed file is stale.
+// Generates web/src/kob/programs.generated.ts from the token-program profile table of kob-protocol.
+//
+// The table is crates/kob-protocol/data/programs.json, the single declaration of every token
+// program. Adding a program to the JSON and running `npm run gen:programs` is all the web app
+// needs. A vitest (programs.generated.test.ts) fails when the committed file is stale.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const SOURCE_URL = new URL('../../crates/kob-protocol/data/programs.json', import.meta.url);
 export const OUTPUT_URL = new URL('../src/kob/programs.generated.ts', import.meta.url);
 /**
- * The top-up extra per token program (bid-delivery-spec §9): the relay-fee difference at the floor rate between a top-up fill and a
- * new-delivery fill of the same order, sompi. kob-protocol generates it with the final templates (work package B2).
+ * The top-up extra per token program, in sompi (bid-delivery-spec §9).
+ *
+ * It is the relay-fee difference at the floor rate between a top-up fill and a new-delivery fill
+ * of the same order. kob-protocol generates it with the final templates.
  */
 export const TOPUP_EXTRA_URL = new URL('../../crates/kob-protocol/data/topup_extra.json', import.meta.url);
 /**
- * Until topup_extra.json exists: the reference values the spec records from the prototype (bid-delivery-spec §9). A program without a
- * value has no top-up default, and the wallet does not offer top-up for it.
+ * Reference values used while topup_extra.json does not exist (bid-delivery-spec §9).
+ *
+ * A program without a value has no top-up default, and the wallet does not offer top-up for it.
  */
 export const TOPUP_EXTRA_REFERENCE = { KCC20Ref: 595400, KCC20PublicMint: 818600, KForgeToken7214: 1455200, KaspaRocketToken11458: 2304000 };
 
-/** Reads topup_extra.json when it exists (`{ name: sompi }` or `{ programs: { name: sompi } }`); null when it does not. */
+/**
+ * Reads topup_extra.json, as `{ name: sompi }` or `{ programs: { name: sompi } }`.
+ *
+ * Returns null when the file does not exist.
+ */
 export function readTopupExtra() {
   if (!existsSync(TOPUP_EXTRA_URL)) return null;
   const j = JSON.parse(readFileSync(TOPUP_EXTRA_URL, 'utf8'));

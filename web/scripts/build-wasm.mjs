@@ -1,6 +1,7 @@
-// Builds kob-wasm (scripts/build-wasm.sh --web --slim at the repo root; needs the wasm32 target and wasm-bindgen-cli 0.2.100,
-// see that script's header) and copies the bindings to web/wasm/{web,node} (gitignored). The slim variant has no x402
-// payer / merchant exports: the browser bundle carries no entry point that accepts a secret key.
+// Builds kob-wasm (scripts/build-wasm.sh --web --slim at the repo root; needs the wasm32 target and
+// wasm-bindgen-cli 0.2.100, see that script's header) and copies the bindings to
+// web/wasm/{web,node} (gitignored). The slim variant has no x402 payer / merchant exports: the
+// browser bundle carries no entry point that accepts a secret key.
 //   npm run build:wasm            build + copy
 //   npm run build:wasm -- --copy  copy only (bindings already built)
 import { spawnSync } from 'node:child_process';
