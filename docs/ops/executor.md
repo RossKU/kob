@@ -1487,7 +1487,8 @@ older than 10 minutes). Turn it on in `kobd.toml` (`[api]`, `usd_price = true`),
 **Token-logo reports (`[logo_reports]`, `logo-reports`).** KOB shows a token's logo straight from the address its creator gave, in
 the viewer's browser, and keeps no image. With `[logo_reports] enabled = true` this server also takes reports of such logos and
 serves the list of hidden ones (`POST /v1/logo-reports`, `GET /v1/logo-blocklist`; the keys are in docs/api-reference.md, section 6, the routes
-in 3.19 and 3.20). The first report of a token hides its logo at once; you review it:
+in 3.19 and 3.20). The first report of a token hides its logo at once; you review it. At most `max_pending` (default 20) logos stay
+hidden unreviewed: past that, new reports that would hide another are refused until you `restore` or `hide` some, so review them:
 
 ```
 kobd logo-reports --config kobd.toml list              # hidden ones not yet reviewed first (add --json)

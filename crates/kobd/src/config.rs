@@ -289,6 +289,10 @@ pub struct LogoReportsConfig {
     /// Reports that newly hide a logo, from all clients together, per 24 hours (a report of a
     /// token already hidden does not count). Default 200; 0: none.
     pub max_per_day: u32,
+    /// Logos that reports hide and the operator has not reviewed yet (`restore`, `hide`), at most.
+    /// Past it a report that would hide one more is refused (429) until the operator reviews some,
+    /// so a flood of reports from many addresses hides a few logos, never all. Default 20; 0: none.
+    pub max_pending: u32,
     /// Origins whose pages may file a report (the web app's, `https://kob.example`). A browser
     /// request with any other `Origin` is refused, so another site cannot make its visitors'
     /// browsers report. Empty (default): `api.cors_allow_origin` when it names one origin, else no
@@ -298,7 +302,14 @@ pub struct LogoReportsConfig {
 
 impl Default for LogoReportsConfig {
     fn default() -> Self {
-        LogoReportsConfig { enabled: false, cooldown_secs: 21_600, per_client_per_hour: 5, max_per_day: 200, origins: vec![] }
+        LogoReportsConfig {
+            enabled: false,
+            cooldown_secs: 21_600,
+            per_client_per_hour: 5,
+            max_per_day: 200,
+            max_pending: 20,
+            origins: vec![],
+        }
     }
 }
 

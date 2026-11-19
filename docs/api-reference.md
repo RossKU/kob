@@ -918,7 +918,10 @@ Rules, in order:
 
 A token the operator hid for good (`hide`) stays hidden whatever is reported. Reports are limited per client
 (`per_client_per_hour`, default 5; the client address of section 5.4) and by the logos they newly hide (`max_per_day`, default
-200 per 24 hours; a report of a token already hidden does not count); only accepted reports count. The generic rate limit of section 5.2 applies first (cost 1).
+200 per 24 hours; a report of a token already hidden does not count); only accepted reports count. At most `max_pending` (default 20)
+logos are hidden by reports and not yet reviewed: past that, a report that would hide one more is refused with `429` until the operator
+has reviewed some (`restore`, or `hide` for good), so a flood from many addresses hides a few logos, never all of them. Reports with
+`source: "github"` share one client budget of `per_client_per_hour`, because the workflow posts from a new runner address for each issue. The generic rate limit of section 5.2 applies first (cost 1).
 
 | Status | When |
 |---|---|
@@ -1371,6 +1374,7 @@ Top-level table of the same file (section 3.19). Unknown keys are refused.
 | `cooldown_secs` | `21600` | After the operator restored a token, reports for it are only recorded for this long. |
 | `per_client_per_hour` | `5` | Reports one client may file per hour; 0 = none. |
 | `max_per_day` | `200` | Reports that newly hide a logo, from all clients together, per 24 hours; 0 = none. |
+| `max_pending` | `20` | Logos hidden by reports and not yet reviewed (`restore`, `hide`), at most; past it a report that would hide one more is `429`; 0 = none. |
 | `origins` | `[]` | Origins whose pages may report (`["https://kob.example"]`); empty: `cors_allow_origin` if it names one origin, else no browser report. |
 
 The state lives in the indexer's database (`logo_blocklist`, `logo_reports`), is not derived from the chain, and is not rebuilt by

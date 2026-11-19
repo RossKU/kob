@@ -26,6 +26,12 @@
 //! - A report costs the reporting client one of `per_client_per_hour`. A report that newly hides
 //!   a logo costs the server one of `max_per_day`. A flood from many addresses can hide at most
 //!   that many tokens a day, and the operator restores them.
+//! - At most `max_pending` logos (default 20) are hidden by reports and not yet reviewed. Past
+//!   that a report that would hide one more is refused (429) until the operator has reviewed
+//!   some (`restore`, or `hide` for good), so a flood hides a few logos, never all of them. The
+//!   first report of a token still hides it at once below that.
+//! - Reports with `source: "github"` share one client budget. The workflow posts from the
+//!   runner's address, a new one per issue, so per address they would have none.
 //! - Only a token the indexer knows (an order trades it, it has a holding or a KCC-23
 //!   declaration) can be reported, so random ids neither use the quota nor grow the blocklist.
 //! - The body must be `application/json` (a cross-site form or `no-cors` fetch cannot send it),
@@ -466,6 +472,14 @@ struct Limiter {
 const HOUR_MS: i64 = 3_600_000;
 const DAY_MS: i64 = 24 * HOUR_MS;
 
+/// The client key of every report that names `source: "github"` (no client has the address `::`).
+const GITHUB_KEY: IpAddr = IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED);
+
+/// How many logos reports hide that the operator has not reviewed yet (state `hidden`).
+fn pending(conn: &Connection) -> DbResult<i64> {
+    Ok(conn.prepare_cached("SELECT COUNT(*) FROM logo_blocklist WHERE state = 'hidden'")?.query_row([], |r| r.get(0))?)
+}
+
 impl Limiter {
     fn new() -> Self {
         Limiter { clients: HashMap::new(), day: VecDeque::new() }
@@ -556,6 +570,14 @@ impl LogoReports {
             return Err(ReportError::UnknownToken);
         }
         let hides = would_hide(&conn, &r.covenant_id, now, cooldown_ms).map_err(ReportError::Db)?;
+        // At most `max_pending` logos are hidden by reports and not yet reviewed: past it a report
+        // that would hide one more waits for the operator (`list`, `restore`, `hide`).
+        if hides && pending(&conn).map_err(ReportError::Db)? >= i64::from(self.cfg.max_pending) {
+            return Err(ReportError::Limited((HOUR_MS / 1000) as u64));
+        }
+        // The GitHub workflow posts from whatever address the runner has, one per issue, so its
+        // reports share one budget instead of one per address.
+        let key = if r.source == Source::Github { GITHUB_KEY } else { key };
         self.limiter
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -612,7 +634,7 @@ mod tests {
     #[test]
     fn the_configuration_defaults_are_off_6_hours_5_an_hour_200_a_day_and_unknown_keys_are_refused() {
         let c = LogoReportsConfig::default();
-        assert_eq!((c.enabled, c.cooldown_secs, c.per_client_per_hour, c.max_per_day), (false, 21_600, 5, 200));
+        assert_eq!((c.enabled, c.cooldown_secs, c.per_client_per_hour, c.max_per_day, c.max_pending), (false, 21_600, 5, 200, 20));
         let cfg: crate::config::IndexerConfig = toml::from_str(
             "[logo_reports]
 enabled = true
