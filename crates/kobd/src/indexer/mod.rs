@@ -451,6 +451,45 @@ impl Running {
     }
 }
 
+/// What [`compact_log`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactReport {
+    /// Whether no writer ran, so that every sealed segment was compressed. Next to a running writer
+    /// only the gzips of older builds are.
+    pub offline: bool,
+    /// The segments compressed.
+    pub report: recordlog::CompressReport,
+    /// Size of the log before, in bytes.
+    pub bytes_before: u64,
+    /// Size of the log after, in bytes.
+    pub bytes_after: u64,
+}
+
+/// Compresses the sealed record-log segments to zstd (`kobd db compact-log`). Lossless: the frames
+/// and their chain hashes are the same, and every reader reads both forms.
+///
+/// With the writer lock free (no writer runs) it holds the lock and compresses every sealed
+/// segment, plain or gzip ([`recordlog::Compact::All`]). Next to a running writer it recompresses
+/// only the gzips of older builds ([`recordlog::Compact::Gzip`]): the writer compresses its plain
+/// segments itself after each rotation and never changes a compressed one.
+pub fn compact_log(cfg: &IndexerConfig) -> Result<CompactReport, IndexerError> {
+    if !cfg.records.enabled || cfg.lean {
+        return Err(IndexerError::Config("this data directory keeps no record log".into()));
+    }
+    let dir = cfg.records_dir();
+    if !dir.is_dir() {
+        return Err(IndexerError::Config(format!("no record log at {}", dir.display())));
+    }
+    let bytes_before = recordlog::log_bytes(&dir).map_err(recordlog::RecordLogError::from)?;
+    let (offline, report) = match lock::WriterLock::acquire(cfg) {
+        Ok(_writer) => (true, recordlog::compact(&dir, recordlog::Compact::All)?),
+        Err(lock::LockError::Busy { .. }) => (false, recordlog::compact(&dir, recordlog::Compact::Gzip)?),
+        Err(e) => return Err(e.into()),
+    };
+    let bytes_after = recordlog::log_bytes(&dir).map_err(recordlog::RecordLogError::from)?;
+    Ok(CompactReport { offline, report, bytes_before, bytes_after })
+}
+
 /// What [`replay_from_log`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplayReport {

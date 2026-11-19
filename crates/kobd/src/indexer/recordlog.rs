@@ -38,11 +38,13 @@
 //!
 //! # Segments
 //!
-//! A sealed segment (every one but the newest) is kept as `seg-<n>.kobrec.gz`, the gzip of the
+//! A sealed segment (every one but the newest) is kept as `seg-<n>.kobrec.zst`, the zstd of the
 //! segment file. The writer compresses the segment it has just rotated away from
-//! ([`compress_sealed`]), after reading the copy back and comparing it with the segment. `kobd db
-//! migrate` compresses the ones an older run left whole. The frames, their chain hashes and
-//! everything that reads the log are the same. Only the bytes on disk are a third of the size.
+//! ([`compress_sealed`]), after reading the copy back and comparing it with the segment. Builds
+//! before 2026-11-19 kept them as gzip (`.kobrec.gz`), which is still read. `kobd db compact-log`
+//! ([`compact`]) recompresses those (next to a running writer too) and `kobd db migrate` does it
+//! offline. The frames, their chain hashes and everything that reads the log are the same. Only
+//! the bytes on disk are about a quarter of the size (gzip: a third).
 //!
 //! # Integrity and crashes
 //!
@@ -590,60 +592,106 @@ fn segment_name(first_n: u64) -> String {
     format!("seg-{first_n:012}.kobrec")
 }
 
-/// Extension of a sealed segment that is kept gzip-compressed.
+/// The form a segment file is kept in.
 ///
-/// `seg-<n>.kobrec.gz` holds the bytes of `seg-<n>.kobrec`, frame for frame. The chain hashes cover
-/// the frame bodies, so the log reads and verifies the same. Only a sealed segment is ever
-/// compressed, never the newest one, which the writer appends to.
-const GZ: &str = ".gz";
+/// `seg-<n>.kobrec` is the plain segment. `seg-<n>.kobrec.zst` (zstd, written now) and
+/// `seg-<n>.kobrec.gz` (gzip, written by builds before 2026-11-19, still read) hold its bytes,
+/// frame for frame. The chain hashes cover the frame bodies, so the log reads and verifies the
+/// same. Only a sealed segment is ever compressed, never the newest one, which the writer appends
+/// to. The order is the trust order: when a crash left a segment in two forms, the older form (the
+/// one a compression started from) is the one read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Form {
+    Plain,
+    Gz,
+    Zst,
+}
+
+impl Form {
+    const ALL: [Form; 3] = [Form::Plain, Form::Gz, Form::Zst];
+
+    fn suffix(self) -> &'static str {
+        match self {
+            Form::Plain => ".kobrec",
+            Form::Gz => ".kobrec.gz",
+            Form::Zst => ".kobrec.zst",
+        }
+    }
+
+    fn of(p: &Path) -> Form {
+        match p.extension().and_then(|e| e.to_str()) {
+            Some("gz") => Form::Gz,
+            Some("zst") => Form::Zst,
+            _ => Form::Plain,
+        }
+    }
+}
 
 fn is_compressed(p: &Path) -> bool {
-    p.extension().is_some_and(|e| e == "gz")
+    Form::of(p) != Form::Plain
+}
+
+/// The path of the same segment in form `f`.
+fn with_form(p: &Path, f: Form) -> PathBuf {
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let stem = name.strip_suffix(Form::of(p).suffix()).unwrap_or(name);
+    p.with_file_name(format!("{stem}{}", f.suffix()))
 }
 
 fn list_segments(dir: &Path) -> std::io::Result<Vec<(u64, PathBuf)>> {
-    let mut v: Vec<(u64, PathBuf)> = Vec::new();
+    let mut v: Vec<(u64, Form, PathBuf)> = Vec::new();
     if !dir.exists() {
-        return Ok(v);
+        return Ok(vec![]);
     }
     for e in std::fs::read_dir(dir)? {
         let p = e?.path();
         let Some(name) = p.file_name().and_then(|n| n.to_str()) else { continue };
         let Some(rest) = name.strip_prefix("seg-") else { continue };
-        let (digits, gz) = match rest.strip_suffix(&format!(".kobrec{GZ}")) {
-            Some(d) => (d, true),
-            None => match rest.strip_suffix(".kobrec") {
-                Some(d) => (d, false),
-                None => continue,
-            },
-        };
-        if let Ok(n) = digits.parse::<u64>() {
-            // Both forms of one segment exist, because a compression stopped before it removed the
-            // original. The original is the one that is trusted.
-            match v.iter().position(|(m, _)| *m == n) {
-                Some(i) => {
-                    if !gz {
-                        v[i] = (n, p);
-                    }
-                }
-                None => v.push((n, p)),
-            }
+        let Some((digits, form)) = Form::ALL.iter().find_map(|f| rest.strip_suffix(f.suffix()).map(|d| (d, *f))) else { continue };
+        let Ok(n) = digits.parse::<u64>() else { continue };
+        // Two forms of one segment exist when a compression stopped before it removed the one it
+        // started from. That one is trusted.
+        match v.iter().position(|(m, _, _)| *m == n) {
+            Some(i) if form < v[i].1 => v[i] = (n, form, p),
+            Some(_) => {}
+            None => v.push((n, form, p)),
         }
     }
     v.sort();
-    Ok(v)
+    Ok(v.into_iter().map(|(n, _, p)| (n, p)).collect())
 }
 
-fn open_gz(path: &Path) -> std::io::Result<Box<dyn Read>> {
-    Ok(Box::new(flate2::read::GzDecoder::new(BufReader::with_capacity(1 << 20, File::open(path)?))))
+/// One segment file for reading, decompressed on the fly.
+fn open_form(path: &Path) -> std::io::Result<Box<dyn Read>> {
+    open_as(path, Form::of(path))
 }
 
-/// A segment file for reading: plain, or gunzipped on the fly.
+/// A file holding a segment in form `form` (a `.tmp` copy too), for reading.
+fn open_as(path: &Path, form: Form) -> std::io::Result<Box<dyn Read>> {
+    let f = File::open(path)?;
+    Ok(match form {
+        Form::Plain => Box::new(f),
+        Form::Gz => Box::new(flate2::read::GzDecoder::new(BufReader::with_capacity(1 << 20, f))),
+        Form::Zst => Box::new(zstd::stream::read::Decoder::with_buffer(BufReader::with_capacity(1 << 20, f))?),
+    })
+}
+
+/// A segment for reading.
+///
+/// A compaction next to this reader (`kobd db compact-log`) may have replaced the file listed by
+/// another form of the same segment. That one is read instead.
 fn open_segment(path: &Path) -> std::io::Result<Box<dyn Read>> {
-    if is_compressed(path) {
-        open_gz(path)
-    } else {
-        Ok(Box::new(File::open(path)?))
+    match open_form(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            for f in Form::ALL {
+                let other = with_form(path, f);
+                if other != path && other.exists() {
+                    return open_form(&other);
+                }
+            }
+            Err(e)
+        }
+        r => r,
     }
 }
 
@@ -745,7 +793,6 @@ fn scan(
     let mut n = 0u64;
     let mut prev = ZERO;
     for (si, (_, path)) in segs.iter().enumerate() {
-        let file_len = std::fs::metadata(path)?.len();
         // The newest segment is never compressed (the writer appends to it), so the torn-tail
         // checks below see plain bytes.
         let mut rdr = BufReader::with_capacity(1 << 20, open_segment(path)?);
@@ -769,7 +816,7 @@ fn scan(
                 }
                 FrameRead::Frame { body, chain, total } => {
                     if chain_hash(&prev, &body) != chain {
-                        let last = si == segs.len() - 1 && offset + total == file_len;
+                        let last = si == segs.len() - 1 && offset + total == std::fs::metadata(path)?.len();
                         if !last {
                             return Err(RecordLogError::Corrupt { n, reason: "chain hash mismatch".into() });
                         }
@@ -1013,27 +1060,28 @@ fn make_cuttable(p: &Path) -> std::io::Result<PathBuf> {
     if !is_compressed(p) {
         return Ok(p.to_path_buf());
     }
-    let plain = PathBuf::from(p.to_string_lossy().trim_end_matches(GZ).to_string());
-    let mut tmp = plain.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
+    let plain = with_form(p, Form::Plain);
+    let tmp = tmp_path(&plain);
     {
         let mut out = BufWriter::with_capacity(1 << 20, File::create(&tmp)?);
-        std::io::copy(&mut open_gz(p)?, &mut out)?;
+        std::io::copy(&mut open_form(p)?, &mut out)?;
         out.flush()?;
         out.get_ref().sync_all()?;
     }
     std::fs::rename(&tmp, &plain)?;
-    std::fs::remove_file(p)?;
+    sync_dir(&plain)?;
+    remove_other_forms(&plain)?;
     Ok(plain)
 }
 
-/// The gzip level of a sealed segment.
+/// The zstd level of a sealed segment.
 ///
-/// It gives a good ratio at a speed that holds the writer only briefly, once per rotation.
-const GZ_LEVEL: u32 = 6;
+/// Measured on copies of three 256 MiB segments of the TN10 soak log: 4.3x (gzip 6, before: 3.3x,
+/// so a quarter smaller), 55 to 65 MB/s, so a rotation holds the writer about 5 s, as gzip did.
+/// Level 19 gains 5 % more at 2 MB/s, and a long window nothing at this level.
+const ZSTD_LEVEL: i32 = 9;
 
-/// What [`compress_sealed`] did.
+/// What [`compress_sealed`] and [`compact`] did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CompressReport {
     /// Number of segments compressed.
@@ -1056,45 +1104,161 @@ fn digest_of(mut r: impl Read) -> std::io::Result<[u8; 32]> {
     }
 }
 
-/// Compresses one sealed segment and returns the compressed size.
+fn tmp_path(p: &Path) -> PathBuf {
+    let mut t = p.as_os_str().to_owned();
+    t.push(".tmp");
+    PathBuf::from(t)
+}
+
+/// Makes a rename or a removal in the directory of `p` durable (Unix; NTFS journals it).
+fn sync_dir(p: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if let Some(d) = p.parent() {
+        File::open(d)?.sync_all()?;
+    }
+    let _ = p;
+    Ok(())
+}
+
+/// Removes every form of the segment at `keep` but that one.
+fn remove_other_forms(keep: &Path) -> std::io::Result<()> {
+    for f in Form::ALL {
+        let p = with_form(keep, f);
+        if p != keep {
+            match std::fs::remove_file(&p) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+                _ => {}
+            }
+        }
+    }
+    sync_dir(keep)
+}
+
+/// A step of [`compress_one`] after which a test stops, as a crash would.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// Half the compressed copy is written.
+    Writing,
+    /// The copy is written, synced and read back, not yet renamed.
+    Written,
+    /// The copy is renamed into place, and the file it was made from is still there.
+    Renamed,
+}
+
+#[cfg(test)]
+thread_local! {
+    static CRASH_AFTER: std::cell::Cell<Option<Step>> = const { std::cell::Cell::new(None) };
+}
+
+/// Stops [`compress_one`] after step `s` in a test that asks for it.
+#[cfg(test)]
+fn crash_after(s: Step) -> std::io::Result<()> {
+    if CRASH_AFTER.get() == Some(s) {
+        return Err(std::io::Error::other(format!("simulated crash after {s:?}")));
+    }
+    Ok(())
+}
+
+/// Compresses one sealed segment (plain, or a gzip of an older build) to zstd and returns the
+/// compressed size.
 ///
-/// The gzip is written beside the segment, read back and compared with it (blake3 of both). Only
-/// then does it replace the segment: rename, then the segment is removed. So no step loses a
-/// frame, and a crash leaves the segment in one form or both.
-fn compress_one(plain: &Path) -> std::io::Result<u64> {
-    let mut gz = plain.as_os_str().to_owned();
-    gz.push(GZ);
-    let gz = PathBuf::from(gz);
-    let mut tmp = gz.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
+/// The copy is written beside it as `.zst.tmp`, synced, read back and compared with it (blake3 of
+/// the bytes both hold). Only then is it renamed into place, after which the file it was made
+/// from is removed. A crash leaves the segment in one form or two, and two forms read as the one
+/// it started from, so no step loses a frame.
+fn compress_one(src: &Path) -> std::io::Result<u64> {
+    let dst = with_form(src, Form::Zst);
+    let tmp = tmp_path(&dst);
     {
-        let mut enc =
-            flate2::write::GzEncoder::new(BufWriter::with_capacity(1 << 20, File::create(&tmp)?), flate2::Compression::new(GZ_LEVEL));
-        std::io::copy(&mut BufReader::with_capacity(1 << 20, File::open(plain)?), &mut enc)?;
+        let mut enc = zstd::stream::write::Encoder::new(BufWriter::with_capacity(1 << 20, File::create(&tmp)?), ZSTD_LEVEL)?;
+        enc.include_checksum(true)?;
+        #[cfg(test)]
+        if CRASH_AFTER.get() == Some(Step::Writing) {
+            let mut all = Vec::new();
+            open_form(src)?.read_to_end(&mut all)?;
+            enc.write_all(&all[..all.len() / 2])?;
+            enc.flush()?;
+            crash_after(Step::Writing)?;
+        }
+        std::io::copy(&mut open_form(src)?, &mut enc)?;
         let mut out = enc.finish()?;
         out.flush()?;
         out.get_ref().sync_all()?;
     }
-    if digest_of(File::open(plain)?)? != digest_of(open_gz(&tmp)?)? {
+    if digest_of(open_form(src)?)? != digest_of(open_as(&tmp, Form::Zst)?)? {
         let _ = std::fs::remove_file(&tmp);
-        return Err(std::io::Error::other(format!("the compressed copy of {} does not read back the same", plain.display())));
+        return Err(std::io::Error::other(format!("the compressed copy of {} does not read back the same", src.display())));
     }
-    std::fs::rename(&tmp, &gz)?;
-    let size = std::fs::metadata(&gz)?.len();
-    std::fs::remove_file(plain)?;
+    #[cfg(test)]
+    crash_after(Step::Written)?;
+    std::fs::rename(&tmp, &dst)?;
+    sync_dir(&dst)?;
+    #[cfg(test)]
+    crash_after(Step::Renamed)?;
+    let size = std::fs::metadata(&dst)?.len();
+    remove_other_forms(&dst)?;
     Ok(size)
 }
 
-/// Compresses every sealed segment of the log directory that is still whole.
+/// Which sealed segments [`compact`] compresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Compact {
+    /// The plain ones: the writer, after each rotation.
+    Plain,
+    /// The gzips of older builds, recompressed. Safe next to a running writer, which never
+    /// changes a compressed segment.
+    Gzip,
+    /// Both, and the `.tmp` files a crash left behind. Offline only: the caller holds the writer
+    /// lock (`kobd db compact-log`, `kobd db migrate`).
+    All,
+}
+
+/// The lock that keeps two compactions of one log apart.
+const COMPACT_LOCK: &str = "kob-compact.lock";
+
+/// Compresses the sealed segments of a log directory (every one but the newest, which the writer
+/// appends to). Idempotent.
 ///
-/// That is all but the newest, which the writer appends to. It is idempotent. The caller holds the
-/// writer lock (`run`, `kobd db migrate`).
-pub fn compress_sealed(dir: &Path) -> Result<CompressReport, RecordLogError> {
+/// [`Compact::Gzip`] and [`Compact::All`] hold an exclusive lock on `<dir>/kob-compact.lock`, so
+/// two of them never work on one segment: a second one is refused.
+pub fn compact(dir: &Path, which: Compact) -> Result<CompressReport, RecordLogError> {
+    let _lock = match which {
+        Compact::Plain => None,
+        Compact::Gzip | Compact::All => {
+            let path = dir.join(COMPACT_LOCK);
+            let f = OpenOptions::new().create(true).truncate(false).write(true).open(&path)?;
+            match f.try_lock() {
+                Ok(()) => Some(f),
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    return Err(RecordLogError::Io(std::io::Error::other(format!(
+                        "another compaction of {} is running ({} is locked)",
+                        dir.display(),
+                        path.display()
+                    ))))
+                }
+                Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
+            }
+        }
+    };
+    if which == Compact::All {
+        for e in std::fs::read_dir(dir)? {
+            let p = e?.path();
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            if name.starts_with("seg-") && name.ends_with(".tmp") {
+                std::fs::remove_file(&p)?;
+            }
+        }
+    }
     let segs = list_segments(dir)?;
     let mut rep = CompressReport::default();
     for (_, p) in segs.iter().take(segs.len().saturating_sub(1)) {
-        if is_compressed(p) {
+        let todo = match Form::of(p) {
+            Form::Plain => which != Compact::Gzip,
+            Form::Gz => which != Compact::Plain,
+            Form::Zst => false,
+        };
+        if !todo {
             continue;
         }
         let before = std::fs::metadata(p)?.len();
@@ -1104,6 +1268,13 @@ pub fn compress_sealed(dir: &Path) -> Result<CompressReport, RecordLogError> {
         rep.after += after;
     }
     Ok(rep)
+}
+
+/// Compresses every sealed segment of the log directory that is still whole ([`Compact::Plain`]).
+///
+/// The writer runs it after each rotation, holding the writer lock.
+pub fn compress_sealed(dir: &Path) -> Result<CompressReport, RecordLogError> {
+    compact(dir, Compact::Plain)
 }
 
 /// Number of complete frames in a log directory, without decoding them.
@@ -1119,7 +1290,12 @@ pub fn record_count(dir: &Path) -> Result<u64, RecordLogError> {
 pub fn log_bytes(dir: &Path) -> std::io::Result<u64> {
     let mut t = 0;
     for (_, p) in list_segments(dir)? {
-        t += std::fs::metadata(p)?.len();
+        t += match std::fs::metadata(&p) {
+            Ok(m) => m.len(),
+            // compressed meanwhile by a compaction next to this reader
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::metadata(with_form(&p, Form::Zst)).map_or(0, |m| m.len()),
+            Err(e) => return Err(e),
+        };
     }
     Ok(t)
 }
@@ -1681,13 +1857,6 @@ mod tests {
         assert_eq!(log.next_n(), 5);
     }
 
-    fn gunzip_to_plain(gz: &Path) {
-        let plain = PathBuf::from(gz.to_string_lossy().trim_end_matches(".gz").to_string());
-        let mut out = File::create(&plain).unwrap();
-        std::io::copy(&mut open_gz(gz).unwrap(), &mut out).unwrap();
-        std::fs::remove_file(gz).unwrap();
-    }
-
     #[test]
     fn sealed_segments_are_compressed_and_the_log_reads_and_extends_as_before() {
         let d = tempfile::tempdir().unwrap();
@@ -1728,11 +1897,11 @@ mod tests {
         assert!(gz.len() >= 2);
         // An old log: every sealed segment whole.
         for p in &gz {
-            gunzip_to_plain(p);
+            rewrite_as(p, Form::Plain);
         }
         assert_eq!(read_all(d.path()).unwrap().records, want);
-        // A compression that wrote the gzip and stopped before it removed the segment: both files
-        // exist.
+        // A compression of an older build that wrote the gzip and stopped before it removed the
+        // segment: both files exist.
         let plain = segment_paths(d.path()).unwrap()[0].clone();
         let mut both = plain.as_os_str().to_owned();
         both.push(".gz");
@@ -1761,6 +1930,208 @@ mod tests {
         std::fs::write(&gz, bytes).unwrap();
         assert!(read_all(d.path()).is_err());
         assert!(record_count(d.path()).is_err());
+    }
+
+    /// Rewrites the segment at `p` in form `to` (as an older build or a test needs it) and returns its path.
+    fn rewrite_as(p: &Path, to: Form) -> PathBuf {
+        let mut bytes = Vec::new();
+        open_form(p).unwrap().read_to_end(&mut bytes).unwrap();
+        let dst = with_form(p, to);
+        match to {
+            Form::Plain => std::fs::write(&dst, &bytes).unwrap(),
+            Form::Gz => {
+                let mut e = flate2::write::GzEncoder::new(File::create(&dst).unwrap(), flate2::Compression::new(6));
+                e.write_all(&bytes).unwrap();
+                e.finish().unwrap();
+            }
+            Form::Zst => std::fs::write(&dst, zstd::encode_all(&bytes[..], 3).unwrap()).unwrap(),
+        }
+        if dst != p {
+            std::fs::remove_file(p).unwrap();
+        }
+        dst
+    }
+
+    fn forms(dir: &Path) -> Vec<Form> {
+        segment_paths(dir).unwrap().iter().map(|p| Form::of(p)).collect()
+    }
+
+    /// A log of `n` frames in small segments; every sealed one is compressed.
+    fn small_log(n: u8) -> (tempfile::TempDir, Vec<(u64, LogBatch)>) {
+        let d = tempfile::tempdir().unwrap();
+        let (mut log, _) = RecordLog::open(d.path(), 300, 0).unwrap();
+        for i in 0..n {
+            log.append(&batch(i), 0).unwrap();
+        }
+        drop(log);
+        let want = read_all(d.path()).unwrap().records;
+        (d, want)
+    }
+
+    #[test]
+    fn plain_gzip_and_zstd_segments_read_as_one_log_and_compact_to_zstd() {
+        let (d, want) = small_log(30);
+        let segs = segment_paths(d.path()).unwrap();
+        assert!(segs.len() >= 5);
+        let f = forms(d.path());
+        assert!(f[..f.len() - 1].iter().all(|f| *f == Form::Zst), "a rotation writes zstd: {f:?}");
+        assert_eq!(*f.last().unwrap(), Form::Plain);
+        rewrite_as(&segs[0], Form::Gz);
+        rewrite_as(&segs[1], Form::Plain);
+        rewrite_as(&segs[2], Form::Gz);
+        assert_eq!(read_all(d.path()).unwrap().records, want, "a mixed log reads the same");
+        // the gzips only (next to a running writer)
+        let r = compact(d.path(), Compact::Gzip).unwrap();
+        assert_eq!(r.segments, 2);
+        assert_eq!(forms(d.path())[..3], [Form::Zst, Form::Plain, Form::Zst]);
+        assert_eq!(read_all(d.path()).unwrap().records, want);
+        // the plain ones (the writer's pass), then everything is zstd and idempotent
+        assert_eq!(compress_sealed(d.path()).unwrap().segments, 1);
+        let f = forms(d.path());
+        assert!(f[..f.len() - 1].iter().all(|f| *f == Form::Zst));
+        assert_eq!(compact(d.path(), Compact::All).unwrap().segments, 0);
+        assert_eq!(read_all(d.path()).unwrap().records, want);
+        // the round trip is exact: every frame's bytes come back
+        let (plain, _) = small_log(30);
+        for (a, b) in segment_paths(d.path()).unwrap().iter().zip(segment_paths(plain.path()).unwrap()) {
+            let (mut x, mut y) = (Vec::new(), Vec::new());
+            open_form(a).unwrap().read_to_end(&mut x).unwrap();
+            open_form(&b).unwrap().read_to_end(&mut y).unwrap();
+            assert_eq!(x, y);
+        }
+    }
+
+    #[test]
+    fn a_crash_at_each_step_of_a_compression_loses_no_frame() {
+        for step in [Step::Writing, Step::Written, Step::Renamed] {
+            for from in [Form::Plain, Form::Gz] {
+                let (d, want) = small_log(30);
+                let first = rewrite_as(&segment_paths(d.path()).unwrap()[0], from);
+                CRASH_AFTER.set(Some(step));
+                let err = compact(d.path(), Compact::All).expect_err("the simulated crash");
+                CRASH_AFTER.set(None);
+                assert!(err.to_string().contains("simulated crash"), "{err}");
+                // the segment is there in the form it had, the copy beside it or in place too
+                assert!(first.exists(), "{step:?} from {from:?}");
+                assert_eq!(segment_paths(d.path()).unwrap()[0], first, "the form it started from is the one read");
+                let tmp = tmp_path(&with_form(&first, Form::Zst));
+                assert_eq!(tmp.exists(), step != Step::Renamed);
+                assert_eq!(with_form(&first, Form::Zst).exists(), step == Step::Renamed);
+                assert_eq!(read_all(d.path()).unwrap().records, want, "{step:?} from {from:?}");
+                assert_eq!(verify(d.path()).unwrap().frames, 30);
+                // the writer opens it and goes on
+                let (mut log, _) = RecordLog::open(d.path(), 300, 30).unwrap();
+                log.append(&batch(30), 0).unwrap();
+                drop(log);
+                // the next run finishes the job and leaves one form
+                compact(d.path(), Compact::All).unwrap();
+                assert!(!first.exists() && !tmp.exists());
+                let f = forms(d.path());
+                assert!(f[..f.len() - 1].iter().all(|f| *f == Form::Zst), "{f:?}");
+                let r = read_all(d.path()).unwrap().records;
+                assert_eq!(r[..30], want[..]);
+                assert_eq!(r.len(), 31);
+            }
+        }
+    }
+
+    #[test]
+    fn a_tampered_zstd_segment_is_refused() {
+        let (d, want) = small_log(30);
+        let seg = segment_paths(d.path()).unwrap()[1].clone();
+        assert_eq!(Form::of(&seg), Form::Zst);
+        let good = std::fs::read(&seg).unwrap();
+        // a damaged byte: the zstd checksum or the chain refuses it
+        let mut bad = good.clone();
+        let mid = bad.len() / 2;
+        bad[mid] ^= 0xff;
+        std::fs::write(&seg, &bad).unwrap();
+        assert!(read_all(d.path()).is_err());
+        assert!(verify(d.path()).is_err());
+        // a well-formed zstd of edited frames: the chain refuses it
+        let mut frames = Vec::new();
+        zstd::stream::read::Decoder::new(&good[..]).unwrap().read_to_end(&mut frames).unwrap();
+        frames[10] ^= 0x01;
+        std::fs::write(&seg, zstd::encode_all(&frames[..], 3).unwrap()).unwrap();
+        match verify(d.path()) {
+            Err(RecordLogError::Corrupt { reason, .. }) => assert!(reason.contains("chain hash mismatch"), "{reason}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(RecordLog::open(d.path(), 300, 30).is_err(), "the writer refuses it too");
+        // a truncated one
+        std::fs::write(&seg, &good[..good.len() - 8]).unwrap();
+        assert!(read_all(d.path()).is_err());
+        std::fs::write(&seg, &good).unwrap();
+        assert_eq!(read_all(d.path()).unwrap().records, want);
+    }
+
+    #[test]
+    fn a_reader_finds_a_segment_that_a_compaction_replaced_meanwhile() {
+        let (d, want) = small_log(30);
+        rewrite_as(&segment_paths(d.path()).unwrap()[0], Form::Gz);
+        let listed = list_segments(d.path()).unwrap();
+        assert_eq!(Form::of(&listed[0].1), Form::Gz);
+        compact(d.path(), Compact::Gzip).unwrap();
+        assert!(!listed[0].1.exists());
+        // the reader listed the gzip; it reads the zstd that replaced it
+        let mut n = 0;
+        scan(&listed, |_, _| {
+            n += 1;
+            Ok(false)
+        })
+        .unwrap();
+        assert_eq!(n, want.len());
+        assert!(log_bytes(d.path()).unwrap() > 0);
+    }
+
+    #[test]
+    fn two_compactions_of_one_log_never_run_at_once() {
+        let (d, _) = small_log(10);
+        let held = OpenOptions::new().create(true).truncate(false).write(true).open(d.path().join(COMPACT_LOCK)).unwrap();
+        held.try_lock().unwrap();
+        let err = compact(d.path(), Compact::Gzip).expect_err("locked");
+        assert!(err.to_string().contains("another compaction"), "{err}");
+        assert!(compact(d.path(), Compact::All).is_err());
+        drop(held);
+        compact(d.path(), Compact::All).unwrap();
+    }
+
+    /// Measurement on a COPY of real segments (`KOB_RECORDS_COPY=<a directory of copied sealed segments, never a live log>`,
+    /// `cargo test --release -p kobd --lib -- --ignored --nocapture measure_the_compaction`): every one is compressed to zstd (an empty
+    /// newest segment is added, since the newest is never compressed), with the ratio and the speed.
+    #[test]
+    #[ignore]
+    fn measure_the_compaction_on_a_copy() {
+        let Some(dir) = std::env::var_os("KOB_RECORDS_COPY") else { return };
+        let dir = PathBuf::from(dir);
+        let mut plain = 0u64;
+        for (_, p) in list_segments(&dir).unwrap() {
+            plain += plain_len(&p);
+        }
+        File::create(dir.join(segment_name(u64::MAX / 2))).unwrap();
+        let before = log_bytes(&dir).unwrap();
+        let t = std::time::Instant::now();
+        let r = compact(&dir, Compact::All).unwrap();
+        let secs = t.elapsed().as_secs_f64();
+        let after = log_bytes(&dir).unwrap();
+        let t = std::time::Instant::now();
+        for (_, p) in list_segments(&dir).unwrap() {
+            digest_of(open_form(&p).unwrap()).unwrap();
+        }
+        let read = t.elapsed().as_secs_f64();
+        println!(
+            "{} segment(s): plain {plain} bytes, on disk {before} -> {after} bytes; {:.2}x of plain, {:.3} of before; \
+             compaction {secs:.1} s ({:.0} MB/s of plain, read back and verified included), read {:.0} MB/s",
+            r.segments,
+            plain as f64 / after as f64,
+            after as f64 / before as f64,
+            plain as f64 / 1e6 / secs,
+            plain as f64 / 1e6 / read
+        );
+    }
+
+    fn plain_len(p: &Path) -> u64 {
+        std::io::copy(&mut open_form(p).unwrap(), &mut std::io::sink()).unwrap()
     }
 
     // ---- template evolution ----

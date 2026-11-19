@@ -33,9 +33,12 @@ kaspa-smt.workspace = true
 workflow-serializer = "0.18.0"
 borsh = "1"
 blake3.workspace = true
-# sealed record-log segments are kept gzip-compressed (`indexer::recordlog`) and genesis states and event details deflated against frozen
-# dictionaries (`indexer::packed`; a preset dictionary needs this backend): pure Rust, no C build
+# genesis states and event details deflated against frozen dictionaries (`indexer::packed`; a preset dictionary needs this backend) and
+# the gzip record-log segments of older builds read (`indexer::recordlog`): pure Rust, no C build
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+# sealed record-log segments are kept zstd-compressed (`indexer::recordlog`; a quarter smaller than gzip): libzstd, built by cc like
+# the bundled SQLite
+zstd = { version = "0.13", default-features = false }
 faster-hex.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }

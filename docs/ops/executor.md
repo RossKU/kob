@@ -907,7 +907,7 @@ it was the same bytes stored again, and none of it is lost now:
   hashes, and `claimed_programs` reads at most 1,024 programs of a token's orders (both only matter beyond the caps, far above what a store holds).
   **This build refuses a store of schema 8 or older** (`OldLayout`, the file untouched) until `kobd db migrate` (7.6a) has rebuilt it, and an older
   build refuses a schema-9 store.
-* **The sealed segments of the record log are kept gzip-compressed** (7.6a, 9).
+* **The sealed segments of the record log are kept compressed** (gzip then; zstd since 2026-11-19, 7.6c, 9).
 
 Measured on a copy of the TN10 soak executor (8.48 GB, 2.32 million order UTXOs, 3.74 million holdings, 1.14 million orders, 3.53 million events):
 
@@ -2362,8 +2362,9 @@ the loaded rows and the row counters and program counts are counted once (40 s; 
 table the rows of the old store (states decoded, ids as the 32 bytes) and the rows of the new one (joined back) are hashed in the same order and compared with their counts; a
 row that does not come back identical, a row whose order or token does not exist (the integer layout cannot hold it) or a count that differs stops the migration with the old store untouched; the new
 file must also pass `PRAGMA quick_check` and open as a store of this build (75 s); (4) **swap**: the old file becomes `index.sqlite3.before-migrate`, the rollback, and the new file takes
-its place; (5) the sealed record-log segments are gzip-compressed (the newest stays whole; a rotation compresses the segment it just sealed from now on,
-which holds the writer for about 3 seconds per 256 MiB segment). `--no-compress-log` leaves step 5 out. A store that is of schema 13 already is left as it is. In step 1 a fill event also gets its fee
+its place; (5) the sealed record-log segments are compressed (the newest stays whole; a rotation compresses the segment it just sealed from now on,
+which holds the writer for about 3 seconds per 256 MiB segment; zstd since 2026-11-19, and step 5 then also recompresses the gzips of
+an older build, 7.6c). `--no-compress-log` leaves step 5 out. A store that is of schema 13 already is left as it is. In step 1 a fill event also gets its fee
 (schema 10): `floor(amount x tip / scale)` at the tip the order had at the fill, the tip the next in-place amend of the order replaced
 (`detail.previous.tip` of its `amend` event) or else the order's own, which is what the processor writes; its executor stays unknown. Step 2
 also counts the activity totals once and checks that the minute and hour buckets add up to the events.
@@ -2461,6 +2462,7 @@ runs and is down only for the swap:
    '/elsewhere/data/index.sqlite3'"`, or `node:sqlite` with `readOnly: true`): a consistent snapshot, no lock held against the writer.
 2. Run the new build's `kobd db migrate` on the copy (a configuration whose `data_dir` is the copy's directory). The copy's record log is not
    needed: copy none, or start with an empty `records` directory there (the migration only compresses sealed segments).
+   (`kobd db compact-log`, 7.6c, recompresses the live log's gzips next to the running indexer, before or after the cut-over.)
 3. Stop the live indexer (on the soak: create `run/HOLD-index-a`; the wrapper stops its child and keeps it down). Keep a copy of the live
    `records` directory's newest segment (sealed ones never change): the way back (7.) needs the log as it was.
 4. Move the live `index.sqlite3` (with its `-wal` / `-shm`) aside and put the migrated `index.sqlite3` in its place. Its `records_next_n` is
@@ -2505,6 +2507,34 @@ without it), at most the size of the store. A run that fails or is stopped leave
 by the next run. It refuses a store of another schema (`kobd db migrate` rewrites the store without its free pages anyway). Once is enough:
 what the pruning frees afterwards is a trickle that new rows take up.
 
+#### 7.6c Compressing the record log: `kobd db compact-log`
+
+The record log keeps the history for ever, so its store gets smaller only by lossless means. Since 2026-11-19 a sealed segment is kept as
+zstd (`seg-*.kobrec.zst`) instead of gzip (`.kobrec.gz`): about a quarter smaller, and read faster. The frames and their chain hashes are
+the same; `replay`, `info`, the start-up chain check and every other reader read plain, gzip and zstd segments alike. The writer
+compresses each segment it seals as zstd; the gzips an older build left stay until they are converted:
+
+```
+kobd db compact-log --data-dir /var/lib/kob-index          # next to the running indexer: the gzips only
+```
+
+* **Next to a running writer** (its writer lock is held) it recompresses only the `.kobrec.gz` segments: the writer never changes a
+  compressed segment, and it compresses its own plain ones after each rotation. No downtime. A reader that listed a `.gz` that is
+  replaced meanwhile reads the `.zst`.
+* **Offline** (the writer lock is free; it holds it while it works) it also compresses every plain sealed segment and removes the
+  `seg-*.tmp` files a crash left. `kobd db migrate` does the same as its last step.
+* **Crash-safe.** Each segment is written to `seg-<n>.kobrec.zst.tmp`, synced, read back and compared with the segment (blake3 of the
+  bytes both hold), renamed into place, and only then is the old file removed. A stop at any step leaves the segment whole, in one form
+  or two, and two forms read as the old one; the next run finishes it. Two compactions of one log never run at once
+  (`records/kob-compact.lock`).
+* **Cost.** About 5 s of one core per 256 MiB segment at a rotation (55 to 65 MB/s), 8 s for a gzip (its two reads and the check
+  included), and the free disk of one compressed segment. Measured with `measure_the_compaction_on_a_copy` on copies of three sealed
+  segments of the TN10 soak log (index-a, 2026-11-19): gzip 245.3 MB -> zstd 188.1 MB (0.77), 4.28x of the plain 805 MB (gzip 3.3x),
+  24 s for the three; the log reads at 680 MB/s (gzip about 450). So the 1.75 GB log (21 gzips of 1.69 GB and a plain segment) becomes about
+  1.35 GB in about 3 minutes. zstd 19 gains 5 % more at 2 MB/s, and a long window across segments nothing: neither is used.
+* **The way back.** A build before 2026-11-19 does not read `.zst`: before running one, decompress the sealed segments
+  (`zstd -d --rm seg-*.kobrec.zst` gives the `.kobrec` files it reads).
+
 #### 7.7 Wrong network / DB
 
 The database records its network; opening it with another `--network` is refused. A node reporting
@@ -2521,8 +2551,8 @@ instance.
 ### 8. Backups
 
 * Record log: `records/seg-*.kobrec` is append-only; all but the newest segment are immutable (and since schema 6 kept as
-  `seg-*.kobrec.gz`, the same bytes compressed: a rotation replaces the sealed segment by its `.gz`), so
-  incremental off-site sync (rsync, restic) is safe. Encrypt off-site copies. Verify a copy by
+  `seg-*.kobrec.gz`, since 2026-11-19 `seg-*.kobrec.zst`, the same bytes compressed: a rotation replaces the sealed segment by
+  its `.zst`, and `kobd db compact-log` replaces a `.gz` by a `.zst` once), so incremental off-site sync (rsync, restic) is safe. Encrypt off-site copies. Verify a copy by
   running `replay` on a scratch machine and comparing `export-orders` output. **This is the asset
   that cannot be recovered from the node after pruning.**
 * Database: `sqlite3 /var/lib/kob-index/index.sqlite3 "VACUUM INTO '/backup/index-$(date +%F).sqlite3'"`
@@ -2579,10 +2609,11 @@ u32 LE body length | body | 32-byte chain hash = blake3(previous chain hash || b
 ```
 
 The chain detects truncation in the middle and edits; segments rotate at `records.segment_bytes`. A sealed segment is kept as
-`seg-<first frame>.kobrec.gz`: the gzip of the segment file, frame for frame (the chain hashes cover the frame bodies, so a
-compressed log verifies and replays the same). The writer compresses a segment when it rotates to the next one, after it has read
-the compressed copy back and compared it with the segment; the newest segment is never compressed. A `.kobrec` and `.kobrec.gz`
-of one segment together (a stop between the two steps) read as the `.kobrec`.
+`seg-<first frame>.kobrec.zst`: the zstd (level 9, with its checksum) of the segment file, frame for frame (the chain hashes cover
+the frame bodies, so a compressed log verifies and replays the same). Builds before 2026-11-19 wrote `seg-<first frame>.kobrec.gz`
+(gzip), which every reader still reads. The writer compresses a segment when it rotates to the next one, after it has read the
+compressed copy back and compared it with the segment; the newest segment is never compressed. Two forms of one segment together
+(a stop between the rename and the removal) read as the older form: `.kobrec`, then `.kobrec.gz`, then `.kobrec.zst`.
 The body is one committed batch: the wall-clock time, the `start` hash of the request, the removed
 chain hashes (tip-first), the new cursor, the chain blocks that carried relevant transactions (hash,
 DAA score, blue score, timestamp), and the operator operations (`import`, `close_gap`, `adopt`). Each operation is

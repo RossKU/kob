@@ -39,8 +39,8 @@
 //!    count that differs. The new file must also pass `PRAGMA quick_check` and open as a store of
 //!    this build.
 //! 4. **Swap.** The new file replaces `index.sqlite3`.
-//! 5. **Record log.** Every sealed segment is gzip-compressed
-//!    ([`super::recordlog::compress_sealed`]). The newest is left whole.
+//! 5. **Record log.** Every sealed segment is zstd-compressed, the gzips of older builds included
+//!    ([`super::recordlog::compact`]). The newest is left whole.
 //!
 //! # Locking and disk
 //!
@@ -1237,7 +1237,7 @@ pub fn migrate(cfg: &IndexerConfig, opts: Options, mut say: impl FnMut(&str)) ->
 
     if opts.compress_log && cfg.records.enabled {
         let t = Instant::now();
-        let r = recordlog::compress_sealed(&cfg.records_dir())?;
+        let r = recordlog::compact(&cfg.records_dir(), recordlog::Compact::All)?;
         rep.log_segments_compressed = r.segments;
         rep.log_bytes_after = recordlog::log_bytes(&cfg.records_dir()).unwrap_or(0);
         note(&mut rep.steps, &mut say, "record log", t, format!("{} segment(s): {} -> {} bytes", r.segments, r.before, r.after));

@@ -504,7 +504,7 @@ async fn a_backup_saved_between_two_frames_is_brought_forward_from_the_log() {
 }
 
 /// Both replays stream the frames from the log and apply each as it is decoded (memory holds one frame, not the log): on a log of
-/// one frame per segment (every sealed one gzip-compressed), `kobd db replay` builds the live database and `--onto-database`
+/// one frame per segment (every sealed one zstd-compressed), `kobd db replay` builds the live database and `--onto-database`
 /// brings a backup to it, with the position and frame count of the log; a log whose chain breaks in a middle segment is
 /// refused before a database exists.
 #[tokio::test]
@@ -518,7 +518,7 @@ async fn a_multi_segment_log_streams_into_the_same_database_and_a_broken_one_int
     let frames = recordlog::record_count(&log_dir).unwrap();
     let segs = recordlog::segment_paths(&log_dir).unwrap();
     assert!(segs.len() as u64 == frames && frames >= 3, "{} segments, {frames} frames", segs.len());
-    assert!(segs[..segs.len() - 1].iter().all(|p| p.extension().is_some_and(|e| e == "gz")), "{segs:?}");
+    assert!(segs[..segs.len() - 1].iter().all(|p| p.extension().is_some_and(|e| e == "zst")), "{segs:?}");
     // what the in-memory read decodes is what the stream hands over, in order
     let all = recordlog::read_all(&log_dir).unwrap();
     let mut streamed = Vec::new();

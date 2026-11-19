@@ -199,7 +199,7 @@ fn migrate_about() -> &'static str {
         format!(
             "Bring a data directory written by an earlier build (schema {} to {}) to this build's layout (schema {}) in one run: a \
              new store is built beside the old one (integer ids, packed state spans, fills-only indexes), verified row by row \
-             against it and swapped in, and the sealed record-log segments are gzip-compressed. Stop the executor first (it takes \
+             against it and swapped in, and the sealed record-log segments are zstd-compressed. Stop the executor first (it takes \
              the writer lock); this build refuses an older store until this has run. Safe to repeat or to stop (the old store is \
              not touched before the swap); the previous store file is kept beside the new one (`index.sqlite3.before-migrate`) \
              until you delete it. Needs free disk for the new store (about three quarters of the old one) and the temporary files \
@@ -237,6 +237,10 @@ pub enum DbSub {
     /// after the first pruning of a store that kept its whole history (the opt-in archive pruning
     /// frees most of it; docs/ops/executor.md 7.6b). Needs free disk for the copy (the pages in use).
     Vacuum,
+    /// Compress the sealed record-log segments to zstd, losslessly (docs/ops/executor.md 7.6c).
+    /// Next to a running writer it recompresses the gzips of older builds only; offline it
+    /// compresses every sealed segment. Crash-safe at every step.
+    CompactLog,
     /// Print a maker order export (JSON) from the database.
     ExportOrders {
         /// Maker public key (hex); default: all makers.
@@ -710,6 +714,18 @@ pub async fn run_db(a: DbArgs) -> Result<()> {
             println!(
                 "store {} -> {} bytes ({} free pages of {} bytes given back)",
                 r.bytes_before, r.bytes_after, r.free_pages, r.page_size
+            );
+        }
+        DbSub::CompactLog => {
+            let r = indexer::compact_log(&cfg)?;
+            println!(
+                "record log {}: {} segment(s) compressed ({} -> {} bytes); the log {} -> {} bytes",
+                if r.offline { "offline" } else { "next to the running writer (the gzips only)" },
+                r.report.segments,
+                r.report.before,
+                r.report.after,
+                r.bytes_before,
+                r.bytes_after
             );
         }
         DbSub::ExportOrders { maker, live_only } => {
