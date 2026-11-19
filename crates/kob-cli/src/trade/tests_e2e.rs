@@ -793,8 +793,9 @@ fn an_unlisted_token_commitment_must_match_the_wallets_holdings() {
 /// A market sell starts at the best bid the node confirms; a bid that only the indexer lists is
 /// left out of the book.
 ///
-/// A start far below the last fill still needs `--ack-market-start`, or a floor price of the
-/// user. The same holds for `close`.
+/// The node proves the listed bids exist, not that the indexer hides none, so the sell still needs
+/// a floor price of the user's or `--ack-market-start` (E-M2). A start far below the last fill
+/// needs the acknowledgement. The same holds for `close`.
 #[test]
 fn a_market_sell_starts_at_a_node_confirmed_bid() {
     let real = [0xb1; 32];
@@ -807,17 +808,20 @@ fn a_market_sell_starts_at_a_node_confirmed_bid() {
     };
     let row = |cov: [u8; 32], price: &str| json!({"covenant_id": to_hex(&cov), "price": price, "amount_left": "40000", "scale": 1000});
     let place = crate::trade::place::run;
-    let sell = "market --token TST --side sell --amount 1TST --yes";
+    let sell = "market --token TST --side sell --amount 1TST --floor-price 1.9KAS --yes";
     // Only a phantom bid: nothing the node confirms, so there is no start to sell at.
     book(json!([row([0xb2; 32], "250000000")]));
     assert_eq!(run(place, w.args(0x11, sell)), 1);
     assert_eq!(w.submitted(), 0);
-    // The phantom above the real bid is left out; the sell starts at the real 2 KAS.
+    // The phantom above the real bid is left out; the sell starts at the real 2 KAS. With no
+    // bound of the user's, it is refused all the same: a hidden better bid would not show.
     book(json!([row([0xb2; 32], "250000000"), row(real, "200000000")]));
+    assert_eq!(run(place, w.args(0x11, "market --token TST --side sell --amount 1TST --yes")), 1);
+    assert_eq!(w.submitted(), 0);
     assert_eq!(run(place, w.args(0x11, sell)), 0);
     assert_eq!(w.submitted(), 1);
     let codes = w.issue_codes(".place.json");
-    assert!(codes.iter().any(|c| c == "MARKET_START_CONFIRMED") && codes.iter().any(|c| c == "BOOK_ORDERS_DROPPED"), "{codes:?}");
+    assert!(codes.iter().any(|c| c == "MARKET_START_FLOOR") && codes.iter().any(|c| c == "BOOK_ORDERS_DROPPED"), "{codes:?}");
     let AnyState::KobAsk(a) = &recover_orders(&w.signed(".place.json").tx).unwrap()[0].order else { panic!() };
     assert_eq!(a.price, 200_000_000);
     // A last fill at 3 KAS: a start 33 % below it waits for the acknowledgement or a floor.

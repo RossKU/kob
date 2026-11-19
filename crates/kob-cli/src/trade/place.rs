@@ -85,9 +85,9 @@ AMOUNTS (always with a unit; never rounded)
 
 SAFETY
   --ack-no-guards       place even when the indexer could not answer for the self-trade / book checks
-  --ack-market-start    accept a market / close auction start far from the last fill (the KAS book is checked on the
-                        node, so the start is a confirmed order); on a pair book, which the node does not check, every
-                        market / close sell needs it, or --floor-price, and a buy worth 100 KAS or more
+  --ack-market-start    accept a market / close auction start that nothing independent checks: every market / close
+                        sell needs it, or --floor-price, and so do a buy worth 100 KAS or more and a start far from the
+                        last fill (the node confirms the listed orders, not that the indexer hides none)
   --floor-price P       a market / close sell never fills below P (the bound is max(slippage bound, P))
   GTC orders end after 90 days idle (renew with `kob replace <id> --renew`).
 

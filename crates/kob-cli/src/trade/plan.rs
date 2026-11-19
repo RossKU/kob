@@ -3503,13 +3503,14 @@ pub(crate) fn env_issues(env: &Env) -> Vec<Issue> {
 /// The findings about the start of a market or close auction.
 ///
 /// A KAS book checked on the node (`env.book_verified`) starts at a confirmed order's price.
-/// Otherwise (a pair book) the start is the best price of the indexer, and the CLI has no
-/// reference independent of it, because the last fill comes from it too. These wait for
-/// `--ack-market-start`:
-/// - A start far on the costly side of the last fill (also with a checked book).
-/// - With an unchecked book, a sell, whatever its value, because a wrong bid sells at its price.
-///   The user's own `--floor-price` bounds it and removes the wait.
-/// - With an unchecked book, a buy worth 100 KAS or more.
+/// The check proves that the listed orders exist, not that the indexer hides none: one that hides
+/// the real best bids (or cheaper asks) still sets the start. A pair book is not checked at all,
+/// and the CLI has no reference independent of the indexer, because the last fill comes from it
+/// too. So, with either book, these wait for `--ack-market-start`:
+/// - A start far on the costly side of the last fill.
+/// - A sell, whatever its value, because a wrong bid sells at its price. The user's own
+///   `--floor-price` bounds it and removes the wait.
+/// - A buy worth 100 KAS or more.
 pub(crate) fn market_start_issues(env: &Env, plan: &Plan, floor: Option<i64>) -> Vec<Issue> {
     let Some(d) = &plan.disclosure else { return vec![] };
     let Some(start) = d.expected_price.filter(|s| *s > 0) else { return vec![] };
@@ -3540,32 +3541,26 @@ pub(crate) fn market_start_issues(env: &Env, plan: &Plan, floor: Option<i64>) ->
             }
         }
     }
-    if verified {
-        return vec![match floor.filter(|_| !buy) {
-            Some(f) => info(
-                "MARKET_START_FLOOR",
-                format!("the auction start ({start}) is the best bid the node confirms; your floor ({f}) bounds the price the order accepts"),
-            ),
-            None => info(
-                "MARKET_START_CONFIRMED",
-                format!("the auction start ({start}) is the best {} the node confirms", if buy { "ask" } else { "bid" }),
-            ),
-        }];
-    }
+    // What the start is, and what nothing checks about it.
+    let side = if buy { "ask" } else { "bid" };
+    let (best, unchecked) = if verified {
+        (format!("the best {side} the node confirms"), "the node confirms the listed orders, not that none is hidden")
+    } else {
+        (format!("the indexer's best {side}"), "nothing independent of that indexer checks it")
+    };
+    let acknowledged = || {
+        warning("MARKET_START_UNVERIFIED_ACKNOWLEDGED", format!("acknowledged: the auction start ({start}) is {best}; {unchecked}"))
+    };
     if !buy {
         return vec![match (floor, ack) {
-            (Some(f), _) => info(
-                "MARKET_START_FLOOR",
-                format!("the auction start ({start}) is the indexer's best bid; your floor ({f}) bounds the price the order accepts"),
-            ),
-            (None, true) => warning(
-                "MARKET_START_UNVERIFIED_ACKNOWLEDGED",
-                format!("acknowledged: nothing independent of the indexer checks the auction start ({start})"),
-            ),
+            (Some(f), _) => {
+                info("MARKET_START_FLOOR", format!("the auction start ({start}) is {best}; your floor ({f}) bounds the price the order accepts"))
+            }
+            (None, true) => acknowledged(),
             (None, false) => error(
                 "MARKET_START_UNVERIFIED",
                 format!(
-                    "the sell's auction starts at {start} per token, the indexer's best bid, and nothing independent of that indexer checks it; check it, then --ack-market-start, or bound the sell with --floor-price"
+                    "the sell's auction starts at {start} per token, {best}, and {unchecked}; check it, then --ack-market-start, or bound the sell with --floor-price"
                 ),
             ),
         }];
@@ -3579,18 +3574,15 @@ pub(crate) fn market_start_issues(env: &Env, plan: &Plan, floor: Option<i64>) ->
     };
     if value.is_none_or(|v| v >= MARKET_START_UNVERIFIED_MIN_SOMPI) {
         vec![if ack {
-            warning(
-                "MARKET_START_UNVERIFIED_ACKNOWLEDGED",
-                format!("acknowledged: nothing independent of the indexer checks the auction start ({start})"),
-            )
+            acknowledged()
         } else {
             error(
                 "MARKET_START_UNVERIFIED",
-                format!(
-                    "the auction starts at {start} per token, the indexer's best price, and nothing independent of that indexer checks it; check it, then --ack-market-start"
-                ),
+                format!("the auction starts at {start} per token, {best}, and {unchecked}; check it, then --ack-market-start"),
             )
         }]
+    } else if verified {
+        vec![info("MARKET_START_CONFIRMED", format!("the auction start ({start}) is {best}"))]
     } else if env.last_fill.is_some() {
         vec![warning(
             "MARKET_START_NO_INDEPENDENT_REFERENCE",

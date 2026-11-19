@@ -742,6 +742,37 @@ fn a_market_sell_needs_an_acknowledgement_or_a_floor() {
     assert!(p.ok && codes(&p).contains(&"MARKET_START_NO_INDEPENDENT_REFERENCE"), "{:?}", p.issues);
 }
 
+/// E-M2: a book checked on the node proves that the listed orders exist, not that the indexer
+/// hides none. An indexer that hides the real best bids (or cheaper asks) still steers the start,
+/// so a market or close sell keeps needing `--floor-price` or `--ack-market-start`, and a buy
+/// worth 100 KAS or more the acknowledgement, with a checked book too.
+#[test]
+fn a_checked_book_still_needs_a_bound_or_an_acknowledgement() {
+    let m = market(TemplateId::Kcc20Ref);
+    let book =
+        Book { bids: vec![level(250_000_000, 400 * TOK, 2)], asks: vec![level(250_000_000, 400 * TOK, 2)], ..Default::default() };
+    let e = Env { market_start_ack: false, book_verified: true, last_fill: Some(250_000_000), book, ..env(&m) };
+    let mk = |side, amount, floor| {
+        Intent::Market(MarketIntent { side, amount, tip: 0, min_fill: None, slippage_bps: None, all_or_nothing: false, floor })
+    };
+    let p = plan_order(&e, &mk(Side::Sell, TOK, None));
+    assert!(!p.ok && codes(&p).contains(&"MARKET_START_UNVERIFIED"), "{:?}", codes(&p));
+    assert!(p.issues.iter().any(|i| i.message.contains("not that none is hidden")), "{:?}", p.issues);
+    let close = Intent::Close(CloseIntent { amount: Some(TOK), tip: 0, slippage_bps: None, all_or_nothing: false, floor: None });
+    assert!(!plan_order(&e, &close).ok);
+    // A floor of the user's own, or the acknowledgement.
+    let p = plan_order(&e, &mk(Side::Sell, TOK, Some(245_000_000)));
+    assert!(p.ok && codes(&p).contains(&"MARKET_START_FLOOR"), "{:?}", p.issues);
+    let acked = Env { market_start_ack: true, ..e.clone() };
+    assert!(plan_order(&acked, &mk(Side::Sell, TOK, None)).ok);
+    // A buy of 2.5 KAS is a note; one of 250 KAS waits for the acknowledgement.
+    let p = plan_order(&e, &mk(Side::Buy, TOK, None));
+    assert!(p.ok && codes(&p).contains(&"MARKET_START_CONFIRMED"), "{:?}", p.issues);
+    let p = plan_order(&e, &mk(Side::Buy, 100 * TOK, None));
+    assert!(!p.ok && codes(&p).contains(&"MARKET_START_UNVERIFIED"), "{:?}", codes(&p));
+    assert!(plan_order(&acked, &mk(Side::Buy, 100 * TOK, None)).ok);
+}
+
 #[test]
 fn the_priority_fee_is_the_storage_inclusive_fee_and_the_default_is_untouched() {
     use kob_protocol::tx::{min_fee, priority_fee, FeeMode, MIN_FEE_RATE};
