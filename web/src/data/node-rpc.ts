@@ -8,7 +8,7 @@ import type { Hex, TxJson } from '../kob/types';
 import type { BlockSubscription, NodeApi, NodeInfo, NodeUtxo } from './node';
 import { streamBlockOf, type StreamBlock } from './block-stream';
 import type { PublicNodePicker } from './public-node';
-import { joinSpkString, normalizeNetwork, spkStringToAddress, type KaspaSdk, type SdkRpcClient, type SdkUtxoEntryReference } from './kaspa-sdk';
+import { joinSpkString, normalizeNetwork, spkStringToAddress, type KaspaSdk, type SdkRpcClient, type SdkRpcConfig, type SdkUtxoEntryReference } from './kaspa-sdk';
 import { NodeError, describeNodeError, isConnectionError, rawErrorText } from './node-error';
 
 // --- DAA rate ---
@@ -176,6 +176,9 @@ function timed<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 const DISCONNECT_WAIT_MS = 3_000;
 /** The connect timeout of a node the resolvers named. Another one is picked after it. */
 const PICKED_CONNECT_MS = 8_000;
+/** Picked nodes tried in one connect, while at least MIN_RETRY_MS of the connect timeout is left. */
+const MAX_PICKS = 3;
+const MIN_RETRY_MS = 3_000;
 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -274,24 +277,49 @@ export class KaspaRpcNode implements NodeApi {
     const { sdk } = this;
     await this.dispose();
     this.setState('connecting');
-    // A public node named by the resolvers is picked here, with several asked at once, else by the
-    // SDK's Resolver.
-    const picked = !this.url && this.publicNode ? await this.publicNode.pick(this.network).catch(() => null) : null;
-    if (this.state === 'closed') throw new NodeError('unavailable', 'The node connection was closed.');
-    const cfg = this.url
-      ? { url: this.url, networkId: this.network, encoding: sdk.Encoding.SerdeJson }
-      : // the public resolvers (`/v2/kaspa/<network>/any/wrpc/...`) answer 404 for `json` and serve `borsh` only, so a resolver-picked node is reached over Borsh
-        picked
-        ? { url: picked, networkId: this.network, encoding: sdk.Encoding.Borsh }
-        : { resolver: new sdk.Resolver(), networkId: this.network, encoding: sdk.Encoding.Borsh };
-    // A picked node that does not come up is left sooner. The next attempt asks the resolvers
-    // again.
-    const connectMs = picked ? Math.min(this.connectTimeoutMs, PICKED_CONNECT_MS) : this.connectTimeoutMs;
+    try {
+      if (this.url) return await this.attempt({ url: this.url, networkId: this.network, encoding: sdk.Encoding.SerdeJson }, this.connectTimeoutMs);
+      // The public resolvers (`/v2/kaspa/<network>/any/wrpc/...`) answer 404 for `json` and serve
+      // `borsh` only, so a resolver-picked node is reached over Borsh.
+      const viaResolver = () => this.attempt({ resolver: new sdk.Resolver(), networkId: this.network, encoding: sdk.Encoding.Borsh }, this.connectTimeoutMs);
+      if (!this.publicNode) return await viaResolver();
+      // A public node named by the resolvers is picked here, with several asked at once, else by
+      // the SDK's Resolver. A picked node that does not come up is left sooner and forgotten, and
+      // another one is picked while the connect timeout lasts.
+      const closed = () => this.state === 'closed';
+      const tried = new Set<string>();
+      let deadline = 0;
+      let last: unknown = null;
+      for (let n = 0; n < MAX_PICKS; n++) {
+        const picked = await this.publicNode.pick(this.network).catch(() => null);
+        if (closed()) throw new NodeError('unavailable', 'The node connection was closed.');
+        if (last !== null && (!picked || tried.has(picked))) break;
+        if (!picked) return await viaResolver();
+        tried.add(picked);
+        if (n === 0) deadline = this.now() + this.connectTimeoutMs;
+        try {
+          return await this.attempt({ url: picked, networkId: this.network, encoding: sdk.Encoding.Borsh }, Math.min(PICKED_CONNECT_MS, deadline - this.now()));
+        } catch (e) {
+          this.publicNode.forget(picked);
+          last = e;
+          if (closed() || deadline - this.now() < MIN_RETRY_MS) break;
+          this.setState('connecting');
+        }
+      }
+      throw last;
+    } catch (e) {
+      if (this.state !== 'closed') this.setState('idle');
+      throw e;
+    }
+  }
+
+  /** One connect of a new client to `cfg`. On failure the client is disposed and the error thrown. */
+  private async attempt(cfg: SdkRpcConfig, connectMs: number): Promise<NodeInfo> {
+    const { sdk } = this;
     let rpc: SdkRpcClient;
     try {
       rpc = new sdk.RpcClient(cfg);
     } catch (e) {
-      this.setState('idle');
       throw new NodeError('unavailable', `Cannot create the node client: ${rawErrorText(e)}`, rawErrorText(e));
     }
     rpc.addEventListener('connect', () => {
@@ -319,9 +347,7 @@ export class KaspaRpcNode implements NodeApi {
       if (this.blockSubs.size && this.blockRpc !== rpc) void this.resubscribe(rpc);
       return info;
     } catch (e) {
-      if (picked) this.publicNode?.forget(picked);
       await this.dispose();
-      this.setState('idle');
       throw e instanceof NodeError ? e : describeNodeError(e, 'read');
     }
   }

@@ -19,6 +19,8 @@ interface FakeState {
   network: string;
   entries: SdkUtxoEntryReference[];
   failConnect?: string;
+  /** connect fails for these node URLs only */
+  failUrls?: Set<string>;
   utxoCalls: string[][];
   submitted: SdkTransaction[];
   submitError?: unknown;
@@ -43,13 +45,16 @@ function makeFake(state: FakeState): KaspaSdk {
     private listeners = new Map<string, (() => void)[]>();
     disconnected = false;
     reads = 0;
+    private readonly url: string | undefined;
     constructor(cfg: SdkRpcConfig) {
+      this.url = cfg.url;
       state.configs.push(cfg);
       state.clients.push(this);
     }
     async connect(_o?: SdkConnectOptions) {
       if (state.hang?.has('connect')) return new Promise<void>(() => undefined);
       if (state.failConnect) throw new Error(state.failConnect);
+      if (this.url && state.failUrls?.has(this.url)) throw new Error('WebSocket connection timed out');
       this.isConnected = true;
       this.emit('connect');
     }
@@ -269,6 +274,44 @@ describe('KaspaRpcNode', () => {
     const none = newState();
     await mk(none, { url: '', publicNode }).connect();
     expect(none.configs[0]!.resolver).toBeDefined();
+  });
+
+  it('a picked node that fails is forgotten and another is picked in the same connect, while the connect timeout lasts', async () => {
+    const DEAD = 'wss://dead.example/kaspa/testnet-10/wrpc/borsh';
+    const LIVE = 'wss://live.example/kaspa/testnet-10/wrpc/borsh';
+    const forgotten: string[] = [];
+    let picks = [DEAD, LIVE];
+    const publicNode = { pick: async () => picks.shift() ?? null, forget: (u: string) => void forgotten.push(u) };
+    const st = newState({ failUrls: new Set([DEAD]) });
+    const node = mk(st, { url: '', publicNode });
+    const seen: string[] = [];
+    node.onStatus((s) => seen.push(s));
+    await expect(node.connect()).resolves.toMatchObject({ network: 'testnet-10' });
+    expect(st.configs.map((c) => c.url)).toEqual([DEAD, LIVE]);
+    expect(forgotten).toEqual([DEAD]);
+    expect(st.clients[0]!.disconnected).toBe(true);
+    expect(seen).toEqual(['connecting', 'connected']);
+    // the same node again, or none: the failure is reported, the SDK Resolver is not tried
+    picks = [DEAD, DEAD];
+    const again = newState({ failUrls: new Set([DEAD]) });
+    await expect(mk(again, { url: '', publicNode }).connect()).rejects.toMatchObject({ code: 'unavailable' });
+    expect(again.configs.map((c) => c.url)).toEqual([DEAD]);
+    picks = [DEAD];
+    const none = newState({ failUrls: new Set([DEAD]) });
+    await expect(mk(none, { url: '', publicNode }).connect()).rejects.toMatchObject({ code: 'unavailable' });
+    expect(none.configs).toHaveLength(1);
+    // at most three picks; none once less than 3 s of the connect timeout is left
+    const many = ['wss://n1.example/x', 'wss://n2.example/x', 'wss://n3.example/x', 'wss://n4.example/x'];
+    picks = [...many];
+    const all = newState({ failUrls: new Set(many) });
+    await expect(mk(all, { url: '', publicNode }).connect()).rejects.toMatchObject({ code: 'unavailable' });
+    expect(all.configs).toHaveLength(3);
+    let t = 0;
+    picks = [...many];
+    const late = newState({ failUrls: new Set(many) });
+    const slow = { pick: async () => picks.shift() ?? null, forget: () => void (t += 12_500) };
+    await expect(mk(late, { url: '', publicNode: slow, now: () => t, connectTimeoutMs: 15_000 }).connect()).rejects.toMatchObject({ code: 'unavailable' });
+    expect(late.configs).toHaveLength(1);
   });
 
   it('refuses a node on another network (accepting the node spelling of mainnet)', async () => {

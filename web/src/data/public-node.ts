@@ -7,6 +7,10 @@
 // aborted. The node it names is no more trusted than the SDK's pick, because the resolvers are the
 // same. The pick is kept for the browser session (PICK_TTL_MS), so a reload connects at once. A
 // node that fails is forgotten.
+//
+// A failed node is also remembered for FAILED_TTL_MS, because the resolvers often name the same
+// dead node again. A resolver that names one is passed over and the others are asked. The node is
+// used only when none names another.
 import { normalizeNetwork } from './kaspa-sdk';
 
 /** The resolvers of the SDK's built-in list, the default `[[group]]` of kaspa-wasm `Resolver`. */
@@ -25,8 +29,12 @@ export const STAGGER_MS = 300;
 export const RESOLVER_TIMEOUT_MS = 4_000;
 /** How long a picked node is reused within this browser session. */
 export const PICK_TTL_MS = 10 * 60_000;
+/** How long a node that failed is passed over. */
+export const FAILED_TTL_MS = 5 * 60_000;
 
 const STORE_KEY = 'kob.node.picked';
+const FAILED_KEY = 'kob.node.failed';
+const MAX_FAILED = 32;
 
 /** Picks a public node for a network from the resolvers. */
 export interface PublicNodePicker {
@@ -35,7 +43,10 @@ export interface PublicNodePicker {
    * the SDK's Resolver.
    */
   pick(network: string): Promise<string | null>;
-  /** Records that the node failed, so the next pick asks the resolvers again. */
+  /**
+   * Records that the node failed. The next pick asks the resolvers again and passes over this node
+   * for FAILED_TTL_MS.
+   */
   forget(url: string): void;
 }
 
@@ -83,6 +94,23 @@ export function createPublicNodePicker(o: PickerOptions = {}): PublicNodePicker 
   const stagger = o.staggerMs ?? STAGGER_MS;
   const timeout = o.timeoutMs ?? RESOLVER_TIMEOUT_MS;
   let memory: { network: string; url: string; at: number } | null = null;
+  // failed node -> when it may be picked again
+  let failed: Map<string, number> | null = null;
+  const failedNow = (): Map<string, number> => {
+    if (!failed) {
+      failed = new Map();
+      try {
+        const v: unknown = JSON.parse(storage?.getItem(FAILED_KEY) ?? 'null');
+        if (Array.isArray(v)) for (const e of v.slice(-MAX_FAILED)) if (Array.isArray(e) && typeof e[0] === 'string' && typeof e[1] === 'number') failed.set(e[0], e[1]);
+      } catch {
+        /* unreadable: none */
+      }
+    }
+    const t = now();
+    for (const [u, until] of failed) if (until <= t || until - t > FAILED_TTL_MS) failed.delete(u);
+    return failed;
+  };
+  const isFailed = (url: string) => failedNow().has(url);
 
   const kept = (network: string): string | null => {
     let k = memory;
@@ -94,7 +122,7 @@ export function createPublicNodePicker(o: PickerOptions = {}): PublicNodePicker 
         /* Unreadable, so ask. */
       }
     }
-    return k && k.network === network && now() - k.at < PICK_TTL_MS && now() >= k.at ? k.url : null;
+    return k && k.network === network && now() - k.at < PICK_TTL_MS && now() >= k.at && !isFailed(k.url) ? k.url : null;
   };
   const keep = (network: string, url: string) => {
     memory = { network, url, at: now() };
@@ -112,6 +140,8 @@ export function createPublicNodePicker(o: PickerOptions = {}): PublicNodePicker 
       let next = 0;
       let open = 0;
       let done = false;
+      // a node that failed lately: used only if no resolver names another
+      let fallback: string | null = null;
       let timer: ReturnType<typeof setInterval> | null = null;
       const finish = (url: string | null) => {
         if (done) return;
@@ -134,9 +164,10 @@ export function createPublicNodePicker(o: PickerOptions = {}): PublicNodePicker 
           .then((url) => {
             clearTimeout(t);
             open--;
-            if (url) finish(url);
-            else if (open === 0 && next >= order.length) finish(null);
-            else launch(); // a failed resolver hands its turn on at once
+            if (url && !isFailed(url)) return finish(url);
+            if (url) fallback ??= url;
+            if (open === 0 && next >= order.length) finish(fallback);
+            else launch(); // a failed resolver, or one naming a failed node, hands its turn on at once
           });
       };
       for (let i = 0; i < Math.min(atOnce, order.length); i++) launch();
@@ -160,6 +191,14 @@ export function createPublicNodePicker(o: PickerOptions = {}): PublicNodePicker 
       return inflight.p;
     },
     forget(url) {
+      const f = failedNow();
+      f.delete(url);
+      f.set(url, now() + FAILED_TTL_MS);
+      try {
+        storage?.setItem(FAILED_KEY, JSON.stringify([...f].slice(-MAX_FAILED)));
+      } catch {
+        /* memory only */
+      }
       if (memory?.url === url) memory = null;
       try {
         const v = JSON.parse(storage?.getItem(STORE_KEY) ?? 'null') as { url?: string } | null;
