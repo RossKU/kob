@@ -150,7 +150,8 @@ async fn compare(
         list.push(format!("/v1/token-utxos?token={}&spent=true&limit=500", Hash32(TOKEN_COV).to_hex()));
     }
     for u in &list {
-        let (x, y) = (get(&a, u).await, get(&b, u).await);
+        let (x, mut y) = (get(&a, u).await, get(&b, u).await);
+        one_clock(u, &x, &mut y);
         if renumbered {
             assert_eq!(unsequenced(x), unsequenced(y), "{what}: {u}");
         } else {
@@ -158,6 +159,19 @@ async fn compare(
         }
     }
     list.len()
+}
+
+/// The 24 h statistics of a token end at the wall clock (`ts`, in ms: the newer of the newest event and the clock, which is past the mock
+/// chain's times), so two reads a moment apart can fall in two seconds. Both must be the clock of the last minute, the second at or after
+/// the first; the second answer then takes the first one's, and every other field is compared as it is.
+fn one_clock(uri: &str, x: &Value, y: &mut Value) {
+    if !uri.starts_with("/v1/stats/") {
+        return;
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    let (tx, ty) = (x["ts"].as_i64().unwrap(), y["ts"].as_i64().unwrap());
+    assert!(now - 60_000 <= tx && tx <= ty && ty <= now, "{uri}: ts {tx} and {ty} are not the wall clock {now}");
+    y["ts"] = x["ts"].clone();
 }
 
 /// An answer without the store's own numbers of its chain blocks (`block_seq`, `last_block`, `last_block_seq`, and the page cursors that
