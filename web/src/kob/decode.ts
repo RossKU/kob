@@ -48,7 +48,7 @@
 // The Schnorr digests in `built.sign` are produced by kob-wasm. TypeScript cannot recompute them,
 // and `kob.finalize` verifies signatures against them.
 import { curveProblems } from './curve';
-import { creatorLock, type CreatorLockInfo } from './creator-lock';
+import { LOCK_COIN_MAX, creatorLock, type CreatorLockInfo } from './creator-lock';
 import type { WalletId } from '../wallet/types';
 import {
   baseKind, custodiesOf, describeOrder, familyOfKind, formatKas, formatUnits, isOrderKind, isPairKind, kindFor, big, orderKindOfTemplate, pairFactsOf,
@@ -106,7 +106,7 @@ export const SIGNING_ISSUE_CODES = [
   'expected-tokens-escrowed', 'expected-cancel-ids', 'expected-max-fee', 'input-unconfirmed', 'token-state-unplain', 'token-state-mixed', 'pair-token-mismatch', 'pair-family-mismatch',
   'pair-terms-invalid', 'order-terms-invalid', 'expected-quote-escrowed', 'trigger-evidence-invalid', 'trigger-rule-unmet', 'sweep-invalid', 'expected-sweep-ids', 'sweep-custody-spent',
   'retired-not-cancel', 'claim-invalid', 'bought-custody-lost', 'expected-claim-ids', 'expected-delivery', 'curve-terms-invalid',
-  'take-amount', 'take-price', 'take-orders', 'take-token', 'unlock-invalid',
+  'take-amount', 'take-price', 'take-orders', 'take-token', 'unlock-invalid', 'lock-coin-stranded',
   // warnings
   'inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records',
   // info
@@ -1206,8 +1206,25 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     }
   }
 
+  // plain outputs to one of those addresses, judged once every output is read (below)
+  const lockCoinOuts: { output: number; until: bigint }[] = [];
   const orders: DecodedOrder[] = [];
   const outputs: DecodedOutput[] = tx.outputs.map((out, j) => decodeOutput(j, out));
+  // A coin at a lock's address is the wallet's own only in a lock-coin transaction: the wallet's
+  // plain KAS in, one coin of at most LOCK_COIN_MAX out, and the rest its change. The unlock spends
+  // one coin, so any other coin there would be stranded. It counts as KAS going out, and blocks.
+  if (lockCoinOuts.length) {
+    const only = lockCoinOuts.length === 1 && inputs.every((d) => d.type === 'kas' && d.ownedBy === 'maker') && outputs.every((o, j) => j === lockCoinOuts[0]!.output || (o.kind === 'kas-change' && o.token === null));
+    for (const { output: j, until } of lockCoinOuts) {
+      const value = outputs[j]!.value;
+      if (only && value <= LOCK_COIN_MAX) {
+        add('lock-coin', `output ${j}: ${formatKas(value)} KAS go to the address of your creator lock (open since ${isoDate(until)}): the unlock spends them and returns the rest`, { output: j, params: { amount: value, date: isoDate(until) } });
+      } else {
+        outputs[j] = { ...outputs[j]!, kind: 'unknown', flagged: true };
+        add('lock-coin-stranded', `output ${j}: ${formatKas(value)} KAS would go to the address of your creator lock outside a lock coin of at most ${formatKas(LOCK_COIN_MAX)} KAS: the unlock spends only one coin there, so these KAS could be stuck`, { output: j, params: { amount: value } });
+      }
+    }
+  }
 
   function decodeOutput(j: number, out: TxOutputJson): DecodedOutput {
     const value = big(out.value);
@@ -1351,10 +1368,11 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       return { ...blank, kind: 'payment-out', flagged: true, recipient: pk };
     }
     // the coin of the wallet's own open creator lock, KAS that only its key spends now. The unlock
-    // returns it, less its fee, as change.
+    // returns it, less its fee, as change. It stays the wallet's only in a lock-coin transaction
+    // (checked once every output is read).
     const coinOf = !out.covenant ? lockCoinSpks.get(out.scriptPublicKey) : undefined;
     if (coinOf) {
-      add('lock-coin', `output ${j}: ${formatKas(value)} KAS go to the address of your creator lock (open since ${isoDate(coinOf.until)}): the unlock spends them and returns the rest`, { output: j, params: { amount: value, date: isoDate(coinOf.until) } });
+      lockCoinOuts.push({ output: j, until: coinOf.until });
       return { ...blank, kind: 'kas-change' };
     }
     // the continuation of an order this tx fills, bound to its covenant id, which its covenant

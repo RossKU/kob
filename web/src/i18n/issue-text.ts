@@ -143,6 +143,7 @@ declare('kas', {
   'payment-out': ['amount'],
   'take-price': ['kas', 'bound'],
   'lock-coin': ['amount'],
+  'lock-coin-stranded': ['amount'],
   'funds.insufficient': ['need', 'have'],
   'cancel.insufficient-funds': ['shortfall'],
 });

@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadKobNode } from './wasm.node';
 import { pubkeyOf, signBuilt } from '../testing/local-signer';
-import { LOCK_COIN, buildLockCoin, buildUnlock, creatorLock, lockOfScript, lockSharePercent, parseLockScript, verifiedLockOf } from './creator-lock';
+import { LOCK_COIN, LOCK_COIN_MAX, buildLockCoin, buildUnlock, creatorLock, lockOfScript, lockSharePercent, parseLockScript, verifiedLockOf } from './creator-lock';
 import { decodeDeclaration, verifyLaunchProof } from './kcc23';
 import { emptyIssueForm, metadataBytes, IssueFormError, planIssue, type IssueForm, type IssuePlan } from './issue';
 import { defaultSaleForm } from './curve';
@@ -251,6 +251,33 @@ describe('the unlock', () => {
     // the frame's summary with its hint
     expect(summarize(kob, tx, maker, [], [{ until: past, key: maker }]).problems).toBe(0);
     expect(summarize(kob, tx, maker, []).problems).toBeGreaterThan(0);
+  });
+
+  it('a coin the one unlock could not spend is KAS going out, and blocks: too large, or a second coin', () => {
+    const past = String(Date.now() - DAY);
+    const locks = [{ until: past, key: maker }];
+    const big = buildLockCoin(kob, { lock: locks[0]!, funding: [utxo(2, 50n * KAS)], amount: (20n * KAS).toString(), ownKeys: [maker] });
+    const s = decodeSigning({ kob, built: big, maker, nodeInputs: factsOf(big), locks });
+    expect(s.ok).toBe(false);
+    expect(s.blocking.map((b) => b.code)).toContain('lock-coin-stranded');
+    expect(s.info.map((i) => i.code)).not.toContain('lock-coin');
+    expect(s.net.kas.toOthers).toBe(20n * KAS);
+    expect(s.net.kas.walletDelta).toBe(-(20n * KAS) - s.net.kas.fee);
+    expect(s.outputs[0]!.kind).toBe('unknown');
+    expect(summarize(kob, big, maker, [], locks).problems).toBeGreaterThan(0);
+    // up to LOCK_COIN_MAX is a lock coin
+    const edge = buildLockCoin(kob, { lock: locks[0]!, funding: [utxo(2, 50n * KAS)], amount: LOCK_COIN_MAX.toString(), ownKeys: [maker] });
+    expect(decodeSigning({ kob, built: edge, maker, nodeInputs: factsOf(edge), locks }).kind).toBe('lock-coin');
+    const over = buildLockCoin(kob, { lock: locks[0]!, funding: [utxo(2, 50n * KAS)], amount: (LOCK_COIN_MAX + 1n).toString(), ownKeys: [maker] });
+    expect(decodeSigning({ kob, built: over, maker, nodeInputs: factsOf(over), locks }).blocking.map((b) => b.code)).toContain('lock-coin-stranded');
+    // two coins in one transaction: the second is taken from the change, so the fee stays
+    const two = clone(buildLockCoin(kob, { lock: locks[0]!, funding: [utxo(2, 50n * KAS)], ownKeys: [maker] }));
+    const change = two.tx.outputs.findIndex((o, j) => j > 0 && !o.covenant);
+    two.tx.outputs[change]!.value = (BigInt(two.tx.outputs[change]!.value) - LOCK_COIN).toString();
+    two.tx.outputs.push({ ...two.tx.outputs[0]! });
+    const d2 = decodeSigning({ kob, built: two, maker, nodeInputs: factsOf(two), locks });
+    expect(d2.blocking.map((b) => b.code).filter((c) => c === 'lock-coin-stranded')).toHaveLength(2);
+    expect(d2.net.kas.toOthers).toBe(2n * LOCK_COIN);
   });
 });
 
