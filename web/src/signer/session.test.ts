@@ -1,6 +1,8 @@
-// The private-key signer's one-approval merge session (session.ts, core.ts): one Allow covers exactly the plan the frame decoded, each step
-// is signed without a prompt only as the next link of that plan, and anything else ends the session and is shown for confirmation as usual.
-// Every link is built by kob-wasm (kob/merge.ts), signed by the frame with the official SDK and run through the script engine.
+// The private-key signer's one-approval merge session (session.ts, core.ts): one Allow covers
+// exactly the plan the frame decoded, each step is signed without a prompt only as the next link of
+// that plan, and anything else ends the session and is shown for confirmation as usual. Every link
+// is built by kob-wasm (kob/merge.ts), signed by the frame with the official SDK and run through
+// the script engine.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSignerCore } from './core';
 import { SIGNER_PROTOCOL, parseAppMessage, parseSignerMessage, type SignerToApp } from './protocol';
@@ -47,7 +49,10 @@ const termsOf = (p: MergePlan): SessionTerms => {
   if ('refused' in t) throw new Error(t.refused);
   return t;
 };
-/** the merge link `l` built again from `inputs` (as the app does at its turn), with the request edited by `edit` */
+/**
+ * the merge link `l` built again from `inputs` (as the app does at its turn), with the request
+ * edited by `edit`
+ */
 const rebuilt = (l: MergeLink, inputs: TokenUtxo[], edit: (r: MergeLink['request']) => void = () => undefined): BuiltTx => {
   const req = clone({ ...l.request, tokens: inputs });
   edit(req);
@@ -101,7 +106,8 @@ describe('session rules: what a merge link is', () => {
     });
     expect(facts(toOther)).toEqual({ refused: 'blocking' });
     expect(facts(kob.build(goldenRequest('cancel.ask', MAKER.pk)))).toHaveProperty('refused');
-    // KRON: one approval per transaction (its token inputs carry no signature, so their amounts are not committed)
+    // KRON: one approval per transaction (its token inputs carry no signature, so their amounts are
+    // not committed)
     const kronTpl = kob.templates().find((x) => x.name === 'KronToken2433')!;
     const KRON: MergeToken = { covenantId: 'e6'.repeat(32), program: 'KronToken2433', templateHash: kronTpl.hash, extensionCommitment: null, slots: { inputs: kronTpl.tokenSlots![0] } };
     const kron = Array.from({ length: 3 }, (_, i) => ({
@@ -115,7 +121,8 @@ describe('session rules: what a merge link is', () => {
 
   it('refuses a carrier above the merge rule, a payload, a changed token amount and a fee much above the minimum', () => {
     const l = plan7().links[0]!;
-    // the merged UTXO would keep 1.5 KAS of the wallet (the rule: the largest input carrier, at most 1 KAS)
+    // the merged UTXO would keep 1.5 KAS of the wallet (the rule: the largest input carrier, at
+    // most 1 KAS)
     expect(facts(rebuilt(l, l.inputs, (r) => void (r.tokenChangeCarrier = (150_000_000n).toString())))).toEqual({ refused: 'carrier' });
     const withPayload = clone(l.built);
     withPayload.tx.payload = 'aa';
@@ -124,7 +131,8 @@ describe('session rules: what a merge link is', () => {
     const leader = fewer.plans.find((x) => x.kind === 'tokenLeader') as Extract<BuiltTx['plans'][number], { kind: 'tokenLeader' }>;
     leader.nextStates[0] = { ...leader.nextStates[0]!, amount: '1' };
     expect(facts(fewer)).toHaveProperty('refused');
-    // a fee much above the minimum (fee-high), or any other warning but the two a frame without a node or registry always gets
+    // a fee much above the minimum (fee-high), or any other warning but the two a frame without a
+    // node or registry always gets
     const d = summarize(kob, l.built, MAKER.pk, HINTS).decoded;
     expect(d.warnings.map((w) => w.code).sort()).toEqual(['inputs-unverified', 'token-unlisted']);
     expect(mergeFacts(kob, { ...d, warnings: [...d.warnings, { code: 'fee-high', severity: 'warning', message: '' }] }, l.built, MAKER.pk)).toEqual({ refused: 'warning' });
@@ -236,7 +244,8 @@ describe('session rules: each step against the allowed plan', () => {
   });
 });
 
-// ------------------------------------------------------------------------------------------------ the frame's core
+// ------------------------------------------------------------------------------------------------
+// the frame's core
 
 function setup(at = { now: 0 }) {
   const sent: SignerToApp[] = [];
@@ -304,7 +313,8 @@ describe('signer core: one-approval session', () => {
   it('a token no pinned table lists: named by its id with "raw amount", the total in base units said so; a declared ticker is shown as declared', () => {
     const c = setup();
     const p = plan7();
-    // the app's table is not the pinned one: its ticker and decimals are the app's word, which the frame does not take
+    // the app's table is not the pinned one: its ticker and decimals are the app's word, which the
+    // frame does not take
     const req = c.send({ ...open(p), registry: [{ ...TABLE[0]!, ticker: 'FAKE' }] })!;
     expect(req.summary.title).toBe('Merge token UTXOs without asking each time');
     expect(req.summary.lines.find((l) => l.label === 'Token')?.value).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(raw amount: nothing states its decimals\)$/);

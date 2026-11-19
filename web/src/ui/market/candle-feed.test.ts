@@ -7,7 +7,10 @@ const bar = (t: number, c = '100'): CandleView => ({ t, o: c, h: c, l: c, c, vol
 const kas = (items: CandleView[], basis = '1000') => ({ token: 'aa', interval: '1m' as const, price_basis: basis, decimals: 3, items });
 const signal = new AbortController().signal;
 
-/** an indexer whose candles come from `series(token)`, honouring `from` and `limit` like the executor; records every query */
+/**
+ * An indexer whose candles come from `series(token)`, honouring `from` and `limit` like the
+ * executor. Records every query.
+ */
 const fakeIndexer = (series: (token: string) => CandleView[], basis = () => '1000') => {
   const calls: { token: string; q: CandlesQuery }[] = [];
   const api = {
@@ -107,7 +110,8 @@ describe('loadCandles', () => {
     items[1] = pbar(60_000, '6');
     items.push(pbar(120_000, '7'));
     const next = await loadCandles(api, { base: 'a', quote: 'b', pairCandles: true }, '1m', first, signal);
-    // each load reads both orientations of the pair (a pair fill of QUOTE/BASE is volume of this pair too)
+    // Each load reads both orientations of the pair (a pair fill of QUOTE/BASE is volume of this
+    // pair too).
     expect(queries.map((q) => q.from)).toEqual([undefined, undefined, 60_000, 60_000]);
     if (next?.kind !== 'pair') throw new Error('pair');
     expect(next.pc.items.map((x) => [x.t, x.c.value])).toEqual([[0, '5'], [60_000, '6'], [120_000, '7']]);
@@ -127,7 +131,8 @@ describe('pair candles of both orientations', () => {
     const ab = view(A, B, [pc(0, '100', '200', 1), pc(60_000, '0', '0', 0)]);
     const ba = view(B, A, [pc(0, '30', '10', 2), pc(60_000, '7', '5', 1), pc(120_000, '9', '9', 9)]);
     const m = mergePairCandleOrientations(ab, ba);
-    // volume of A = A's own + what the other view calls B; volume of B = B's own + what it calls A; the other view's extra buckets add nothing
+    // Volume of A = A's own + what the other view calls B. Volume of B = B's own + what it calls A.
+    // The other view's extra buckets add nothing.
     expect(m.items.map((c) => [c.t, c.pair_volume_a, c.pair_volume_b, c.pair_fills])).toEqual([[0, '110', '230', 3], [60_000, '5', '7', 1]]);
     expect(m.items[0]!.o).toBe(rate);
   });

@@ -1,5 +1,6 @@
-// Standalone mode end to end below the UI: the mode switch (settings, indexer health), the node's blocks read into a partial book that lists only what
-// the node confirms, fills followed into trades and figures, and the indexer views the rest of the app reads (the book check included).
+// Standalone mode end to end below the UI: the mode switch (settings, indexer health), the node's
+// blocks read into a partial book that lists only what the node confirms, fills followed into
+// trades and figures, and the indexer views the rest of the app reads (the book check included).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadKobNode } from '../kob/wasm.node';
 import { snapshotFromOrderView, type OrderSnapshot } from '../kob/cancel';
@@ -394,7 +395,8 @@ describe('the book starts from the resting orders the indexer gave', () => {
     const first = await p;
     expect(first.asks.map((r) => (r as BookOrderView).covenant_id)).toEqual([askId]);
     expect(first.bids.map((r) => (r as BookOrderView).covenant_id)).toEqual([bidId]);
-    // the node check of the kept orders: the spent bid leaves, the ask stays (as the node holds it: what the book check confirms)
+    // The node check of the kept orders: the spent bid leaves, the ask stays (as the node holds it:
+    // what the book check confirms).
     await vi.advanceTimersByTimeAsync(10);
     expect(h.c.bookView(TOKEN).bids).toEqual([]);
     expect(h.c.bookView(TOKEN).asks).toHaveLength(1);
@@ -484,7 +486,10 @@ describe('what the indexer gave before the mode is kept', () => {
   const TEMPLATE = '173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b';
   const row = (id: string, over: Record<string, unknown> = {}) => ({ ticker: id === TOKEN ? 'TUSD' : '', covenant_id: id, template_hash: TEMPLATE, extension_commitment: null, decimals: null, scale: null, market_scale: 1000, open_asks: 5, open_bids: 2, family: 'kcc20', ...over });
   const OLD_BAR = Date.parse('2026-11-05T11:00:00Z');
-  /** an indexer that has loaded a market: two tokens, one hour bar, trades and 24 h figures priced per 1000 base units */
+  /**
+   * An indexer that has loaded a market: two tokens, one hour bar, trades and 24 h figures priced
+   * per 1000 base units.
+   */
   function loaded(scaleOfToken = 1000) {
     return {
       health: vi.fn(async () => health('following')),
@@ -512,11 +517,13 @@ describe('what the indexer gave before the mode is kept', () => {
     await vi.advanceTimersByTimeAsync(0);
     const calls = (real.stats as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
 
-    // the tokens: both stay with the facts the indexer gave (TUSD, its scale), no orders known on the node
+    // The tokens: both stay with the facts the indexer gave (TUSD, its scale), no orders known on
+    // the node.
     const tokens = await ix.tokens();
     expect(tokens.map((t) => [t.covenant_id, t.ticker, t.market_scale, t.open_asks])).toEqual([[TOKEN, 'TUSD', 1000, 0], [OTHER, '', 1000, 0]]);
     expect(h.c.carry.tokenAt(TOKEN)).not.toBeNull();
-    // the market figures as read, before the node showed anything; the book is the node one (empty), a stale indexer book is not offered
+    // The market figures as read, before the node showed anything. The book is the node one
+    // (empty), a stale indexer book is not offered.
     expect((await ix.candles(TOKEN, { interval: '1h' }))!.items.map((b) => b.t)).toEqual([OLD_BAR]);
     expect(await ix.stats(TOKEN)).toMatchObject({ last: '240000000', volume_24h: '1000', trades_24h: 4, price_basis: '1000' });
     expect((await ix.trades(TOKEN, { limit: 50 }))!.items.map((t) => t.id)).toEqual([777]);
@@ -540,10 +547,12 @@ describe('what the indexer gave before the mode is kept', () => {
     expect((await ix.candles(TOKEN, { interval: '1h', from: bars[1]!.t }))!.items.map((b) => b.t)).toEqual([bars[1]!.t]);
     expect((await ix.trades(TOKEN, { limit: 50 }))!.items.map((t) => t.id === 777 ? 'kept' : t.txid)).toEqual([take.id, 'kept']);
     expect(await ix.stats(TOKEN)).toMatchObject({ last: '250000000', last_side: 'buy', open_24h: '230000000', high_24h: '250000000', low_24h: '220000000', volume_24h: '5000', trades_24h: 5, price_basis: '1000' });
-    // what the node saw is priced on the indexer's basis, and the order listed is of the token as the indexer gave it
+    // What the node saw is priced on the indexer's basis, and the order listed is of the token as
+    // the indexer gave it.
     expect(h.c.bookView(TOKEN).asks).toHaveLength(1);
 
-    // back to the indexer: its data is used again, what the mode collected is dropped, the carry goes on recording
+    // Back to the indexer: its data is used again, what the mode collected is dropped, the carry
+    // goes on recording.
     h.c.setPrefs({ manual: false });
     expect(h.c.state.active).toBe(false);
     expect((await ix.candles(TOKEN, { interval: '1h' }))!.items.map((b) => b.t)).toEqual([OLD_BAR]);

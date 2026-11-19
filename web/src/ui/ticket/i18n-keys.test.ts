@@ -1,5 +1,6 @@
-// Every i18n key the ticket and the confirmation code use exists in the English dictionary: literal keys are scanned out of the sources, keys built
-// from a variable (`ticket.note.${tag}`, `confirm.order.${type}` ...) are enumerated from the vocabularies that produce them.
+// Every i18n key the ticket and the confirmation code use exists in the English dictionary: literal
+// keys are scanned out of the sources, keys built from a variable (`ticket.note.${tag}`,
+// `confirm.order.${type}` ...) are enumerated from the vocabularies that produce them.
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';

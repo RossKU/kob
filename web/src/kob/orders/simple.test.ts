@@ -1,7 +1,9 @@
-// Planner tests for every simple order type, side and tif, on the 3x3 reference program and the 8x8 KOB program.
-// Oracle: each plan is signed locally, finalized with tightened budgets and validated by the script engine (consensus rules), the
-// placement record recovered from the transaction equals the planned state, and the disclosure numbers reconcile with the built tx.
-// Amounts are base units of the 3-decimal test token (TOK = 1000 = one whole token = the scale), prices sompi per whole token.
+// Planner tests for every simple order type, side and tif, on the 3x3 reference program and the 8x8
+// KOB program. Oracle: each plan is signed locally, finalized with tightened budgets and validated
+// by the script engine (consensus rules), the placement record recovered from the transaction
+// equals the planned state, and the disclosure numbers reconcile with the built tx. Amounts are
+// base units of the 3-decimal test token (TOK = 1000 = one whole token = the scale), prices sompi
+// per whole token.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +26,10 @@ const golden = JSON.parse(readFileSync(fileURLToPath(new URL('../../../../crates
 const goldenState = (name: string): Record<string, string> => golden.transactions.find((t: { name: string }) => t.name === name).request.order.state;
 
 const K = kob();
-/** Each fill (mode 0): the delivery the golden vectors and the per-fill carrier tests are written for (a GTC buy defaults to Collected). */
+/**
+ * Each fill (mode 0): the delivery the golden vectors and the per-fill carrier tests are written
+ * for (a GTC buy defaults to Collected).
+ */
 const EACH = { choice: 'each' } as const;
 const P = 250_000_000n; // 2.50 KAS per token: on the tick (100) and inside the default book
 const SCALE = 1_000n;
@@ -40,16 +45,23 @@ const bid = (p: OrderPlan): BidState => {
   return s.state as BidState;
 };
 const sum = (xs: bigint[]): bigint => xs.reduce((a, b) => a + b, 0n);
-/** BidState::escrow by the protocol rule: used(amount) = ceil(amount x rate / scale), one sompi per extra fill, a carrier per fill, the reserve. */
+/**
+ * BidState::escrow by the protocol rule: used(amount) = ceil(amount x rate / scale), one sompi per
+ * extra fill, a carrier per fill, the reserve.
+ */
 const escrow = (amount: bigint, rate: bigint, fills: bigint, dc = DC, reserve = 0n): bigint => ceilDiv(amount * rate, SCALE) + (fills - 1n) + fills * dc + reserve;
-/** The wallet's default minimum fill: the amount worth 10 KAS at `price`, clamped to 1..amount (kob-protocol defaults::default_min_fill). */
+/**
+ * The wallet's default minimum fill: the amount worth 10 KAS at `price`, clamped to 1..amount
+ * (kob-protocol defaults::default_min_fill).
+ */
 const defMin = (amount: bigint, price: bigint): bigint => {
   const want = ceilDiv(10n * KAS * SCALE, price);
   return want < 1n ? 1n : want > amount ? amount : want;
 };
 
 /**
- * Plans, asserts success and runs every oracle: consensus validity, recovered placement record, fee and carrier accounting.
+ * Plans, asserts success and runs every oracle: consensus validity, recovered placement record, fee
+ * and carrier accounting.
  */
 function planValid(env: PlanEnv, intent: SimpleIntent): OrderPlan {
   const p = planSimple(env, intent);
@@ -60,7 +72,8 @@ function planValid(env: PlanEnv, intent: SimpleIntent): OrderPlan {
   expect(p.request!.action).toBe('createOrder');
   consensusCheck(K, built);
 
-  // the placement record recovered from the transaction (trusting nothing) is exactly the planned order
+  // the placement record recovered from the transaction (trusting nothing) is exactly the planned
+  // order
   const rec = K.recoverOrders(built.tx);
   expect(rec).toHaveLength(1);
   expect(K.encodeState(rec[0].order)).toBe(K.encodeState(p.states[0]));
@@ -69,7 +82,8 @@ function planValid(env: PlanEnv, intent: SimpleIntent): OrderPlan {
   // the numeric gate of the protocol holds for every planned order
   K.checkNumbers(p.states[0]);
 
-  // accounting: inputs = outputs + fee; kasLocked = inputs - KAS change - fee - the wallet-owned token-change carrier
+  // accounting: inputs = outputs + fee; kasLocked = inputs - KAS change - fee - the wallet-owned
+  // token-change carrier
   const inSum = sum(built.tx.inputs.map((i) => BigInt(i.utxo.amount)));
   const outSum = sum(built.tx.outputs.map((o) => BigInt(o.value)));
   const fee = BigInt(built.fee.fee);
@@ -93,7 +107,8 @@ function planValid(env: PlanEnv, intent: SimpleIntent): OrderPlan {
     expect(d.tokensEscrowed).toBe(BigInt(rec[0].custody!.state.amount));
     expect(d.tokenAmount).toBe(BigInt(ask(p).amountLeft));
   }
-  // all-in arithmetic derives from the state, not from the form; the total follows the quote rule (a seller receives the ceil, a buyer pays the floor)
+  // all-in arithmetic derives from the state, not from the form; the total follows the quote rule
+  // (a seller receives the ceil, a buyer pays the floor)
   if (d.limitPrice !== null) {
     expect(d.allInPrice).toBe(d.side === 'sell' ? d.limitPrice - d.tip : d.limitPrice + d.tip);
     expect(d.allInTotal).toBe(quoteOf(d.tokenAmount, d.allInPrice!, d.scale, d.side === 'sell' ? 'up' : 'down'));
@@ -132,7 +147,8 @@ describe.each(markets)('limit orders on %s', (_name, market) => {
     expect(d.expiry.approxUnixSeconds).toBe(CLOCK.unixSeconds + 90n * 86_400n);
     expect(d.refundTip).toBe(market.refundTip);
     expect(d.notes).toContain('gtc');
-    // carriers: order 10 KAS + custody 10 KAS locked; the token change carrier (100 tokens held, 10 sold) stays with the wallet
+    // carriers: order 10 KAS + custody 10 KAS locked; the token change carrier (100 tokens held, 10
+    // sold) stays with the wallet
     expect(d.carriers).toEqual([
       { kind: 'orderCarrier', amount: 10n * KAS, count: 1 },
       { kind: 'tokenCarrier', amount: 10n * KAS, count: 1 },
@@ -148,7 +164,8 @@ describe.each(markets)('limit orders on %s', (_name, market) => {
     expect(ask(s).amountLeft).toBe('1234');
     expect(s.disclosure!.allInTotal).toBe(ceilDiv(1_234n * (P - 100n), SCALE));
     expect(s.disclosure!.allInTotal).toBe(K.askProceedsAt(s.states[0], 1_234n, P));
-    // a bid of 1.234 tokens: pays at most floor(1234 x (P + tip) / 1000); its escrow budgets the ceil
+    // a bid of 1.234 tokens: pays at most floor(1234 x (P + tip) / 1000); its escrow budgets the
+    // ceil
     const b = planValid(env(), { type: 'limit', side: 'buy', price: P, amount: 1_234n, tip: 100n });
     expect(b.disclosure!.allInTotal).toBe((1_234n * (P + 100n)) / SCALE);
     expect(b.disclosure!.allInTotal).toBe(K.bidSpendAt(b.states[0], 1_234n, P));
@@ -168,9 +185,11 @@ describe.each(markets)('limit orders on %s', (_name, market) => {
       maker: MAKER_PK, extensionCommitment: market.extensionCommitment, price: '245000000', tip: '100000', tif: '0', activeFrom: '0', scale: '1000',
       expiryDaa: String(CLOCK.daa + MAX_IDLE_DAA), reserve: '0', deliveryCarrier: '1000000000', refundTip: market.refundTip.toString(),
     });
-    // minimum fill: 10 KAS at 2.45 KAS per token = ceil(4081.6) base units; fills = min(ceil(10000 / 4082), 3) = 3
+    // minimum fill: 10 KAS at 2.45 KAS per token = ceil(4081.6) base units; fills = min(ceil(10000
+    // / 4082), 3) = 3
     expect(s.minFill).toBe('4082');
-    // used(10000) + 2 sompi (each of 3 fills rounds its budget up) + 3 delivery carriers: exactly the Rust golden vector
+    // used(10000) + 2 sompi (each of 3 fills rounds its budget up) + 3 delivery carriers: exactly
+    // the Rust golden vector
     expect(BigInt(p.request!.value)).toBe(5_451_000_002n);
     expect(BigInt(p.request!.value)).toBe(K.bidEscrow(p.states[0], 10n * TOK, 3n));
     expect(p.request!.tokens).toBeUndefined();
@@ -273,7 +292,8 @@ describe.each(markets)('limit orders on %s', (_name, market) => {
     expect(bid(b).tip).toBe('1000000');
     expect(b.disclosure!.allInPrice).toBe(P + 1_000_000n);
     expect(b.disclosure!.tip).toBe(1_000_000n);
-    // the bid budget includes the tip; the minimum fill is worth 10 KAS at the LIMIT (4 tokens at 2.5 KAS: the whole order, one fill)
+    // the bid budget includes the tip; the minimum fill is worth 10 KAS at the LIMIT (4 tokens at
+    // 2.5 KAS: the whole order, one fill)
     expect(bid(b).minFill).toBe('4000');
     expect(BigInt(b.request!.value)).toBe(escrow(4n * TOK, P + 1_000_000n, 1n));
   });
@@ -290,7 +310,8 @@ describe.each(markets)('IOC / FOK on %s', (_name, market) => {
       expect(p.disclosure!.expiry).toMatchObject({ kind: 'ioc', daa: CLOCK.daa + 300n });
       expect(p.disclosure!.notes).toContain('iocRemainderReturned');
     }
-    // an IOC bid keeps one delivery carrier (the remainder comes back as a refund output from 1 KAS up, else on the delivery)
+    // an IOC bid keeps one delivery carrier (the remainder comes back as a refund output from 1 KAS
+    // up, else on the delivery)
     expect(BigInt(planValid(env(), { type: 'ioc', side: 'buy', price: P, amount: 4n * TOK }).request!.value)).toBe(escrow(4n * TOK, P, 1n));
   });
 
@@ -504,7 +525,8 @@ describe('marketable limit (matcher.md 10.5)', () => {
     const p = planValid(makeEnv(), { type: 'limit', side: 'buy', price: 252_000_000n, amount: 3n * TOK });
     expect(bid(p)).toMatchObject({ price: '250000000', priceEnd: '252000000', tif: '0' });
     expect(BigInt(bid(p).slope) * 200n).toBeGreaterThanOrEqual(2_000_000n);
-    // the minimum fill (the amount worth 10 KAS at the 2.52 limit, 3969 base units) is clamped to the 3-token order: one fill
+    // the minimum fill (the amount worth 10 KAS at the 2.52 limit, 3969 base units) is clamped to
+    // the 3-token order: one fill
     expect(BigInt(p.request!.value)).toBe(escrow(3n * TOK, 252_000_000n, 1n));
   });
 
@@ -540,7 +562,8 @@ describe('marketable limit (matcher.md 10.5)', () => {
 describe.each(markets)('TWAP / DCA on %s', (_name, market) => {
   it('TWAP sell: interval and maxFill in the state (golden shape), whole size in custody, minimum fill at most the slice', () => {
     const p = planValid(makeEnv({ market }), { type: 'twap', amount: 10n * TOK, sliceAmount: 2n * TOK, interval: { seconds: 60n }, price: P, tip: 100_000n });
-    // the 10-KAS minimum at the limit (4 tokens at 2.5 KAS) is above the 2-token slice: capped at the slice
+    // the 10-KAS minimum at the limit (4 tokens at 2.5 KAS) is above the 2-token slice: capped at
+    // the slice
     expect(ask(p)).toMatchObject({ interval: '600', maxFill: '2000', minFill: '2000', slope: '0', priceEnd: '0', tif: '0', amountLeft: '10000', tip: '100000', price: String(P) });
     expect(p.disclosure!.tokensEscrowed).toBe(10_000n);
     expect(p.disclosure!.notes).toContain('twap');
@@ -590,7 +613,8 @@ describe.each(markets)('Dutch decay / rising bid on %s', (_name, market) => {
     const p = planValid(makeEnv({ market }), { type: 'dutch', side: 'sell', amount: 5n * TOK, price: 300_000_000n, priceEnd: 200_000_000n, duration: { seconds: 600n } });
     const s = ask(p);
     expect(s).toMatchObject({ price: '300000000', priceEnd: '200000000', decayStep: '1', activeFrom: String(CLOCK.daa + 30n), tif: '0' });
-    // the minimum fill is the amount worth 10 KAS at the floor (2 KAS per token): 5 tokens, the whole order
+    // the minimum fill is the amount worth 10 KAS at the floor (2 KAS per token): 5 tokens, the
+    // whole order
     expect(s.minFill).toBe('5000');
     expect(BigInt(s.slope) * 6_000n).toBeGreaterThanOrEqual(100_000_000n);
     expect(BigInt(s.slope) * 5_999n).toBeLessThan(100_000_000n + BigInt(s.slope));
@@ -715,7 +739,8 @@ describe('funding and token selection', () => {
     const p = planValid(env, { type: 'limit', side: 'buy', price: P, amount: 4n * TOK });
     const built = p.built!;
     const funding = built.tx.inputs.filter((i) => !i.utxo.covenantId);
-    // the bid's escrow is about 10 KAS + 3 carriers of 10 KAS: 1 + 3 + 40 covers it, the 1000 KAS UTXO stays
+    // the bid's escrow is about 10 KAS + 3 carriers of 10 KAS: 1 + 3 + 40 covers it, the 1000 KAS
+    // UTXO stays
     expect(funding.map((i) => BigInt(i.utxo.amount))).toEqual([1n * KAS, 3n * KAS, 40n * KAS]);
     const cov = built.covenants.find((c) => c.outputs.includes(0))!;
     expect(cov.authorizingInput).toBe(built.tx.inputs.indexOf(funding[0]!));
@@ -744,7 +769,8 @@ describe('funding and token selection', () => {
   it('several token UTXOs are combined largest-first, the spare slot takes the smallest other one, the change returns to the maker', () => {
     const p = planValid(makeEnv({ market: market3x3(), tokenAmounts: [4n * TOK, 3n * TOK, 2n * TOK, 5n * TOK] }), { type: 'limit', side: 'sell', price: P, amount: 9n * TOK });
     const tokenIns = p.built!.tx.inputs.filter((i) => i.utxo.covenantId);
-    // the cover 5 + 4 = 9 is exact; ONE spare slot left: a single extra would only come back as the same UTXO, so none is added
+    // the cover 5 + 4 = 9 is exact; ONE spare slot left: a single extra would only come back as the
+    // same UTXO, so none is added
     expect(tokenIns).toHaveLength(2);
     const q = planValid(makeEnv({ market: market3x3(), tokenAmounts: [4n * TOK, 3n * TOK, 2n * TOK] }), { type: 'limit', side: 'sell', price: P, amount: 6n * TOK });
     // 4 + 3 = 7 >= 6 covers, the third slot takes the 2: change 3
@@ -765,13 +791,15 @@ describe('funding and token selection', () => {
     expect(tokenOuts).toHaveLength(2);
     const change = env.kob.tokenScriptPublicKey(env.token.program!, keyState(env.token.family, 102n * TOK, env.maker, env.token.extensionCommitment, env.token.program!));
     expect(tokenOuts.filter((o) => o.scriptPublicKey === change)).toHaveLength(1);
-    // KAS: three token inputs of 10 KAS each, two token outputs of the order's carrier: the third carrier comes back as KAS change
+    // KAS: three token inputs of 10 KAS each, two token outputs of the order's carrier: the third
+    // carrier comes back as KAS change
     const fundingIn = sum(built.tx.inputs.filter((i) => !i.utxo.covenantId).map((i) => BigInt(i.utxo.amount)));
     const kasChange = BigInt(built.tx.outputs[built.fee.changeOutput!].value);
     const tokenOutKas = sum(tokenOuts.map((o) => BigInt(o.value)));
     expect(kasChange).toBe(fundingIn + 30n * KAS - BigInt(built.tx.outputs[0].value) - tokenOutKas - BigInt(built.fee.fee));
     expect(p.disclosure!.carriers.find((c) => c.kind === 'tokenChangeCarrier')).toMatchObject({ kept: true });
-    // max(compute, normalized transient, storage) within 90% of the per-transaction limits (500,000 on the compute scale)
+    // max(compute, normalized transient, storage) within 90% of the per-transaction limits (500,000
+    // on the compute scale)
     expect(built.fee.mass.priorityMass).toBeLessThan(450_000);
   });
 
@@ -779,7 +807,8 @@ describe('funding and token selection', () => {
     const env = makeEnv({ market: market8x8(), tokenAmounts: Array.from({ length: 8 }, (_, i) => BigInt(i + 1) * TOK) });
     const p = planValid(env, { type: 'limit', side: 'sell', price: P, amount: 8n * TOK });
     expect(p.built!.tx.inputs.filter((i) => i.utxo.covenantId)).toHaveLength(3);
-    // max(compute, normalized transient, storage) against the 500,000 limit: 8 inputs would weigh 105,546 and pay more fee
+    // max(compute, normalized transient, storage) against the 500,000 limit: 8 inputs would weigh
+    // 105,546 and pay more fee
     expect(p.built!.fee.mass.priorityMass).toBeLessThan(60_000);
   });
 
@@ -795,7 +824,8 @@ describe('funding and token selection', () => {
   });
 
   it('not enough KAS: a clear shortfall (boundary exact); a wallet with only just enough succeeds with a smaller reserve', () => {
-    // sell 10 of 10 tokens: needs order carrier + custody carrier - the token input's own 10 KAS = 10 KAS + fee
+    // sell 10 of 10 tokens: needs order carrier + custody carrier - the token input's own 10 KAS =
+    // 10 KAS + fee
     const tokenAmounts = [10n * TOK];
     const fee = 1_192_300n;
     const enough = planValid(makeEnv({ tokenAmounts, funding: [10n * KAS + 2n * fee] }), { type: 'limit', side: 'sell', price: P, amount: 10n * TOK });
@@ -816,9 +846,11 @@ describe('funding and token selection', () => {
 
   it('funding is smallest-first and can span several UTXOs; a wallet of dust UTXOs is reported as fragmented', () => {
     const p = planValid(makeEnv({ funding: [3n * KAS, 2n * KAS, 90n * KAS, 30n * KAS] }), { type: 'limit', side: 'buy', price: P, amount: 30n * TOK });
-    // needs 30 x 2.5 + 3 x 10 KAS (+ 2 sompi) = 105 KAS: smallest first 2 + 3 + 30 = 35 is short, so all four (largest-first took 90 + 30)
+    // needs 30 x 2.5 + 3 x 10 KAS (+ 2 sompi) = 105 KAS: smallest first 2 + 3 + 30 = 35 is short,
+    // so all four (largest-first took 90 + 30)
     expect(p.built!.tx.inputs.filter((i) => !i.utxo.covenantId).map((i) => BigInt(i.utxo.amount))).toEqual([2n * KAS, 3n * KAS, 30n * KAS, 90n * KAS]);
-    // 100 dust UTXOs of 3 KAS for about 280 KAS: the smallest 50 hold 150, largest first needs 94 inputs, more than one placement carries
+    // 100 dust UTXOs of 3 KAS for about 280 KAS: the smallest 50 hold 150, largest first needs 94
+    // inputs, more than one placement carries
     const dust = planSimple(makeEnv({ funding: Array(100).fill(3n * KAS) }), { type: 'limit', side: 'buy', price: P, amount: 100n * TOK });
     expect(dust.issues.map((i) => i.code)).toEqual(['FUNDING_FRAGMENTED']);
   });
@@ -860,7 +892,8 @@ describe('planOrder dispatcher', () => {
 });
 
 describe('property sweep: every combination validates in the script engine', () => {
-  // deterministic pseudo-random sweep over side, size (any base-unit amount), price, tip and time-in-force on both programs
+  // deterministic pseudo-random sweep over side, size (any base-unit amount), price, tip and
+  // time-in-force on both programs
   let seed = 0x2545f491;
   const rnd = (n: number): number => {
     seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
@@ -894,7 +927,8 @@ describe('property sweep: every combination validates in the script engine', () 
 });
 
 describe('fills against the visible book (market, IOC, crossing buys)', () => {
-  // twelve small asks of 2 tokens, one per 0.001 KAS from 2.50 (per-order entries): 24 tokens within any 3% bound, 3 per transaction
+  // twelve small asks of 2 tokens, one per 0.001 KAS from 2.50 (per-order entries): 24 tokens
+  // within any 3% bound, 3 per transaction
   const asks = Array.from({ length: 12 }, (_, i) => bookOrder(P + BigInt(i) * 100_000n, 2n * TOK));
   const bids = Array.from({ length: 12 }, (_, i) => bookOrder(245_000_000n - BigInt(i) * 100_000n, 2n * TOK));
   const book = { asks: asks.map((o) => level(o.price, o.amount)), bids: bids.map((o) => level(o.price, o.amount)), askOrders: asks, bidOrders: bids };
@@ -921,7 +955,8 @@ describe('fills against the visible book (market, IOC, crossing buys)', () => {
     for (const k of ['price', 'priceEnd', 'slope', 'decayStep', 'activeFrom', 'tip'] as const) expect(s[k], k).toBe(o[k]);
     expect(s.tif).toBe('0');
     expect(BigInt(s.expiryDaa)).toBe(BigInt(s.activeFrom) + 300n);
-    // the wallet default (10 KAS at the bound: 3.884 tokens) is above the smallest ask (2 tokens): 2 tokens
+    // the wallet default (10 KAS at the bound: 3.884 tokens) is above the smallest ask (2 tokens):
+    // 2 tokens
     expect(BigInt(s.minFill)).toBe(2n * TOK);
     expect(BigInt(p.request!.value)).toBe(K.bidEscrow(p.states[0], 20n * TOK, 4n));
     expect(p.disclosure!.carriers.find((c) => c.kind === 'deliveryCarrier')).toMatchObject({ count: 4 });
@@ -947,7 +982,8 @@ describe('fills against the visible book (market, IOC, crossing buys)', () => {
   });
 
   it('a multi-fill market buy can deliver MORE than the typed amount: the carriers of fills that do not happen buy tokens (the escrow is the quantity)', () => {
-    // one counterparty of 0.5 token sets the minimum fill (500); 1.2 tokens in fills of at least 500: 3 fills at most, the 5 typed are cut to 3
+    // one counterparty of 0.5 token sets the minimum fill (500); 1.2 tokens in fills of at least
+    // 500: 3 fills at most, the 5 typed are cut to 3
     const small = [bookOrder(P, 500n), bookOrder(P + 100_000n, 5n * TOK)];
     const e = makeEnv({ book: { asks: small.map((o) => level(o.price, o.amount)), bids: book.bids, askOrders: small, bidOrders: bids } });
     const amount = 1_200n;
@@ -955,8 +991,9 @@ describe('fills against the visible book (market, IOC, crossing buys)', () => {
     const st = bid(p);
     expect(BigInt(st.minFill)).toBe(500n);
     expect(p.fills).toMatchObject({ budgeted: 3n, requested: 5n, minFill: 500n, carrierDeposit: 3n * DC });
-    // the covenant's own rule (KobBid.fill): a fill may consume the escrow down to the carrier of its delivery and the reserve, so the book's
-    // buying power is the amount PLUS what the 2 carriers of fills that need not happen buy at the worst price
+    // the covenant's own rule (KobBid.fill): a fill may consume the escrow down to the carrier of
+    // its delivery and the reserve, so the book's buying power is the amount PLUS what the 2
+    // carriers of fills that need not happen buy at the worst price
     const value = BigInt(p.request!.value);
     const rate = BigInt(st.priceEnd) + BigInt(st.tip);
     const budget = value - DC - BigInt(st.reserve);
@@ -1017,7 +1054,8 @@ describe('fills against the visible book (market, IOC, crossing buys)', () => {
     expect(p.fills).toMatchObject({ budgeted: 4n, needed: 4, scope: 'crossing', fillable: 20n * TOK });
     expect(BigInt(p.request!.value)).toBe(K.bidEscrow(p.states[0], 20n * TOK, 4n));
     expect(codes(p)).not.toContain('FILLS_BUDGET_SHORT');
-    // more than the book holds: the crossing part (12 asks: 4 fills) and one for the rest that rests
+    // more than the book holds: the crossing part (12 asks: 4 fills) and one for the rest that
+    // rests
     expect(planValid(env(), { type: 'limit', side: 'buy', amount: 30n * TOK, price: limit, delivery: EACH }).fills!.budgeted).toBe(5n);
     // the user's own value stands, with the warning
     const mine = planValid(env(), { type: 'limit', side: 'buy', amount: 20n * TOK, price: limit, maxFills: 2n, delivery: EACH });

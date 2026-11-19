@@ -1,7 +1,8 @@
-// The DAA rate behind expiries and timed activations (matcher.md 10.10): measured over an hour or more, never over seconds. Block arrivals
-// at 10 BPS are Poisson: 20 s of them carry a +-7 % (1 sigma) rate error, which a day order or a 90-day GTD date would extrapolate.
-// The wallet's own samples give no rate before they span an hour (the nominal 10 DAA/s is used), and a user's date converts on the side
-// of the user's intent (`unixToDaaBound`).
+// The DAA rate behind expiries and timed activations (matcher.md 10.10): measured over an hour or
+// more, never over seconds. Block arrivals at 10 BPS are Poisson: 20 s of them carry a +-7 % (1
+// sigma) rate error, which a day order or a 90-day GTD date would extrapolate. The wallet's own
+// samples give no rate before they span an hour (the nominal 10 DAA/s is used), and a user's date
+// converts on the side of the user's intent (`unixToDaaBound`).
 import { describe, expect, it } from 'vitest';
 import { DaaRateEstimator } from '../data/node-rpc';
 import { clampRate, expiryFor, unixToDaaBound } from './daa';

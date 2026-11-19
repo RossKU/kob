@@ -1,4 +1,5 @@
-// The fee policy at the app level: config.fees -> policy + oracle (feeServiceFor), and what buildPlanEnv / buildCancelEnv hand to the planners.
+// The fee policy at the app level: config.fees -> policy + oracle (feeServiceFor), and what
+// buildPlanEnv / buildCancelEnv hand to the planners.
 import { describe, expect, it } from 'vitest';
 import { mergeConfig } from '../config';
 import { buildCancelEnv, buildPlanEnv, readFees } from './env';

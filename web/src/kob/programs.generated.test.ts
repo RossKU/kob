@@ -1,4 +1,5 @@
-// The committed programs.generated.ts must be exactly what scripts/gen-programs.mjs renders from the Rust-side profile table.
+// The committed programs.generated.ts must be exactly what scripts/gen-programs.mjs renders from
+// the Rust-side profile table.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { OUTPUT_URL, SOURCE_URL, TOPUP_EXTRA_REFERENCE, readTopupExtra, render } from '../../scripts/gen-programs.mjs';

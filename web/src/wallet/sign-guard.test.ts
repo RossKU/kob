@@ -1,5 +1,6 @@
-// signAndSubmit re-reads the wallet right before asking it to sign: a plan built for one account / network is never put in front of
-// another (the confirmation screen may have been open while the user switched in the wallet).
+// signAndSubmit re-reads the wallet right before asking it to sign: a plan built for one account /
+// network is never put in front of another (the confirmation screen may have been open while the
+// user switched in the wallet).
 import { describe, expect, it } from 'vitest';
 import { SignFlowError, signAndSubmit } from './sign';
 import { createKaswareAdapter } from './kasware';

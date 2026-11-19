@@ -1,5 +1,8 @@
-// Audit 2026-10-30 round 4 regressions for the book against the node (W1, W2, W3): a decaying pair ask does not set the market start by its far end,
-// duplicates and claimed amounts count only as far as the node confirms them, and a kept row's tip and minimum fill are the state's.
+// Tests the book against the node for decaying pair asks, duplicates and kept rows.
+//
+// - A decaying pair ask does not set the market start by its far end.
+// - Duplicates and claimed amounts count only as far as the node confirms them.
+// - A kept row's tip and minimum fill are the state's.
 import { describe, expect, it } from 'vitest';
 import type { OrderView, BookOrderView, BookView } from '../data/indexer-types';
 import { describeOrder, pairFactsOf } from '../kob/order-facts';
@@ -49,7 +52,10 @@ function pairWorld() {
   return { ask, chain, askSnap, askView: reg(viewOf(askSnap)), pf, reg, deps };
 }
 
-/** A real pair ask moved to another covenant id with its state changed (the P2SH commits the state, so the node holds the changed one). */
+/**
+ * A real pair ask moved to another covenant id with its state changed (the P2SH commits the state,
+ * so the node holds the changed one).
+ */
 function variant(w: ReturnType<typeof pairWorld>, id: number, patch: Record<string, string>): OrderView {
   const txid = hex(id);
   const st = clone(w.askSnap.order.state) as OrderState & { state: Record<string, string> };
@@ -101,7 +107,8 @@ describe('W1: a decaying pair ask is ranked by its price now', () => {
     });
     const out = await verifyPairBook(w.deps(), [decaying, w.askView]);
     expect(out.dropped).toEqual([]);
-    // the real ask is the best price; the decaying one is at about 3x now (its far end, 1/100, nobody can reach for millions of DAA)
+    // The real ask is the best price. The decaying one is at about 3x now (its far end, 1/100,
+    // nobody can reach for millions of DAA).
     expect(out.book.asks.map((a) => a.price), f(out.book.asks)).toEqual([real.price, real.price * 3n]);
     const e = makePairEnv({ independentReference: false });
     const plan = planOrder({ ...e, book: out.book } as never, { type: 'market', side: 'buy', amount: 1000n });

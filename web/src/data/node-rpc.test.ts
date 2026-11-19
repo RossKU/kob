@@ -10,7 +10,7 @@ const realSdk = loadKaspaSdkNode();
 const golden = JSON.parse(readFileSync(fileURLToPath(new URL('../../../crates/kob-protocol/vectors/golden.json', import.meta.url)), 'utf8'));
 const signedTx = golden.transactions.find((t: { name: string }) => t.name === 'send.tokens').signed.tx;
 
-// ------------------------------------------------------------------------------------------------ fake wRPC client
+// -------------------------------------------------------------------------------- fake wRPC client
 
 interface FakeState {
   configs: SdkRpcConfig[];
@@ -26,14 +26,22 @@ interface FakeState {
   submitError?: unknown;
   /** errors thrown by the next N getUtxosByAddresses calls */
   utxoErrors: unknown[];
-  /** when set, a fresh client starts disconnected and comes up after this many `isConnected` reads */
+  /**
+   * When set, a fresh client starts disconnected and comes up after this many `isConnected` reads.
+   */
   reconnectAfterReads?: number;
   /** never settle these calls (a socket that died silently) */
   hang?: Set<'connect' | 'utxos' | 'submit'>;
-  /** answer of getFeeEstimate: a value, or an Error to throw; undefined = the SDK has no such method */
+  /**
+   * Answer of getFeeEstimate: a value, or an Error to throw. Undefined = the SDK has no such
+   * method.
+   */
   feeEstimate?: unknown;
   feeCalls?: number;
-  /** headers by hash (timestamp ms, DAA score) and the dag info's sink and pruning point: the node's long DAA-rate window */
+  /**
+   * Headers by hash (timestamp ms, DAA score) and the dag info's sink and pruning point: the node's
+   * long DAA-rate window.
+   */
   headers?: Record<string, { timestamp: bigint; daaScore: bigint }>;
   sink?: string;
   pruningPoint?: string;
@@ -124,7 +132,7 @@ const entry = (over: Partial<SdkUtxoEntryReference> = {}): SdkUtxoEntryReference
   ...over,
 });
 
-// ------------------------------------------------------------------------------------------------ estimator
+// --------------------------------------------------------------------------------------- estimator
 
 describe('DaaRateEstimator', () => {
   it('is null until the history spans an hour (matcher.md 10.10)', () => {
@@ -199,7 +207,7 @@ describe('nodeDaaRate', () => {
   });
 });
 
-// ------------------------------------------------------------------------------------------------ entry mapping
+// ----------------------------------------------------------------------------------- entry mapping
 
 describe('mapUtxoEntry', () => {
   it('maps a P2PK entry: derives the address when the SDK gives none, no covenant', () => {
@@ -226,7 +234,7 @@ describe('mapUtxoEntry', () => {
   });
 });
 
-// ------------------------------------------------------------------------------------------------ the node
+// ---------------------------------------------------------------------------------------- the node
 
 describe('KaspaRpcNode', () => {
   const mk = (state: FakeState, extra: Partial<ConstructorParameters<typeof KaspaRpcNode>[0]> = {}) =>
@@ -364,7 +372,8 @@ describe('KaspaRpcNode', () => {
     const node = mk(st, { now: () => t });
     await node.connect();
     expect((await node.getClock()).rateMilli).toBe(9_995);
-    // a node whose window is shorter than an hour gives no rate: the wallet's own samples (none yet)
+    // A node whose window is shorter than an hour gives no rate: the wallet's own samples (none
+    // yet).
     const short = newState({ sink: 'tip', pruningPoint: 'pp', headers: { pp: { timestamp: 0n, daaScore: 0n }, tip: { timestamp: 600_000n, daaScore: 6_000n } } });
     const n2 = mk(short, { now: () => t });
     await n2.connect();

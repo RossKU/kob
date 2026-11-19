@@ -41,7 +41,7 @@ describe('failure classification', () => {
     expect(classifyFailure(flow('submitting', new NodeError('already-known', 'x'), 'x', 'already-known')).kind).toBe('known');
   });
 
-  // C5 R-3: the raw text of an unknown failure is kept for "Details", the sentence is translated (this test pinned the raw text as the sentence)
+  // The raw text of an unknown failure is kept for "Details". The sentence is translated.
   it('unknown errors become a retryable, translated message with the raw text behind Details', () => {
     const f = classifyFailure(new Error('boom'));
     expect(f).toMatchObject({ kind: 'retry', raw: 'boom' });

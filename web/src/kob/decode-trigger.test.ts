@@ -1,7 +1,9 @@
-// Pre-sign decode of the trigger evidence (touch, protocol v2.6): a conditional order or stop entry armed or trailed by a transaction shows the
-// input its `ev` argument names, that input's side / quote / size / rest, and whether it satisfies the order's rule. The transactions are the
-// golden vectors' own built transactions (crates/kob-protocol/vectors/golden.json, consensus-checked by the Rust suite); the tamper cases edit
-// the entry arguments of the built plans the way a buggy or hostile builder could.
+// Pre-sign decode of the trigger evidence (touch, protocol v2.6): a conditional order or stop entry
+// armed or trailed by a transaction shows the input its `ev` argument names, that input's side /
+// quote / size / rest, and whether it satisfies the order's rule. The transactions are the golden
+// vectors' own built transactions (crates/kob-protocol/vectors/golden.json, consensus-checked by
+// the Rust suite); the tamper cases edit the entry arguments of the built plans the way a buggy or
+// hostile builder could.
 import { describe, expect, it } from 'vitest';
 import { decodeSigning, fillArg, type SigningSummary } from './decode';
 import { loadKobNode } from './wasm.node';
@@ -11,7 +13,10 @@ import { goldenTx, nodeFactsOf } from '../testing/chain-fixtures';
 const kob = loadKobNode();
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 const builtOf = (name: string): BuiltTx => clone(goldenTx(name).built as BuiltTx);
-/** A matcher batch pays other makers, so it is never "ok" for an arbitrary wallet key: these tests look at the trigger findings only. */
+/**
+ * A matcher batch pays other makers, so it is never "ok" for an arbitrary wallet key: these tests
+ * look at the trigger findings only.
+ */
 const decode = (built: BuiltTx): SigningSummary => decodeSigning({ kob, built, maker: built.sign[0]?.pubkey ?? '00'.repeat(32), registry: null, nodeInputs: nodeFactsOf(built) });
 const triggerCodes = (s: SigningSummary): string[] => [...s.blocking, ...s.warnings, ...s.info].map((i) => i.code).filter((c) => c.startsWith('trigger-'));
 const entryPlan = (b: BuiltTx, i: number): Extract<SigPlan, { kind: 'entry' }> => {
@@ -31,11 +36,13 @@ describe('trigger evidence of a fill that arms (settle / fill of an unarmed stop
     const t = s.triggers[0]!;
     expect(t).toMatchObject({ input: 0, kind: 'KobCondAsk', path: 'fill', effect: 'arm', trail: null, ok: true });
     expect(t.rule.sides).toEqual(['ask']);
-    // inputs: the order, the evidence ask, the order's custody (the token leader), the evidence's custody
+    // inputs: the order, the evidence ask, the order's custody (the token leader), the evidence's
+    // custody
     expect(t.evidence).toMatchObject({ input: 1, custodyInput: 3, kind: 'KobAsk', side: 'ask' });
     expect(t.evidence.covenantId).toBe(b.tx.inputs[1]!.utxo.covenantId);
     expect(Object.values(t.checks).every(Boolean)).toBe(true);
-    // the evidence quote is at or below the stop; its size is the fill argument n of the evidence (base units) and reaches minTouch
+    // the evidence quote is at or below the stop; its size is the fill argument n of the evidence
+    // (base units) and reaches minTouch
     expect(t.evidence.price! <= t.rule.stop).toBe(true);
     expect(t.evidence.amount).toBe(fillArg(entryPlan(b, 1).args[0]));
     expect(t.evidence.amount! >= t.rule.minTouch).toBe(true);
@@ -126,7 +133,8 @@ describe('invalid trigger evidence is a blocking finding', () => {
 
   it('an ask evidence with a custody index that is not its custody is blocking', () => {
     const b = builtOf('cond.ask.stop.trigger');
-    // input 2 is the conditional order's OWN custody (owned by the order, not by the evidence ask, whose custody is input 3)
+    // input 2 is the conditional order's OWN custody (owned by the order, not by the evidence ask,
+    // whose custody is input 3)
     setInt(b, 0, 5, 2);
     const s = decode(b);
     const t = s.triggers[0]!;
@@ -136,7 +144,8 @@ describe('invalid trigger evidence is a blocking finding', () => {
 
   it('a wrong-side evidence (a resting bid where the order needs a resting ask) is blocking', () => {
     const b = builtOf('match.batch.3x5.8x8.arm');
-    // the arm reads input 0, a KobBid fill of the batch, as if it were an ask (its tk still names a custody)
+    // the arm reads input 0, a KobBid fill of the batch, as if it were an ask (its tk still names a
+    // custody)
     setInt(b, 13, 0, 0);
     const s = decode(b);
     const t = s.triggers[0]!;
@@ -147,7 +156,8 @@ describe('invalid trigger evidence is a blocking finding', () => {
 
   it('a stop entry fill whose evidence is on the wrong side (a sell-stop entry reading a resting bid) is blocking', () => {
     const b = builtOf('ifd.ask.stopEntry.trigger');
-    // KobIfdAsk.settle(nb, tokenIn, tokOut, exitOut, cPre, cSuf, ev, tk, t): tk < 0 names a bid, which a sell-stop entry never accepts
+    // KobIfdAsk.settle(nb, tokenIn, tokOut, exitOut, cPre, cSuf, ev, tk, t): tk < 0 names a bid,
+    // which a sell-stop entry never accepts
     setInt(b, 0, 7, -1);
     const s = decode(b);
     expect(s.triggers[0]!.checks.side).toBe(false);

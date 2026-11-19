@@ -1,6 +1,8 @@
-// Amend / renew of the scheduled plain kinds (TWAP, DCA, Dutch / rising, timed activation; KAS and pair): the live order is turned back into its
-// ticket intent with its schedule, the ticket form re-plans it to the SAME order (the path the replace dialog takes: intent -> form -> intent),
-// and an edit becomes one atomic cancel + replacement the script engine accepts. A Dutch auction goes on from where its decay is now.
+// Amend / renew of the scheduled plain kinds (TWAP, DCA, Dutch / rising, timed activation; KAS and
+// pair): the live order is turned back into its ticket intent with its schedule, the ticket form
+// re-plans it to the SAME order (the path the replace dialog takes: intent -> form -> intent), and
+// an edit becomes one atomic cancel + replacement the script engine accepts. A Dutch auction goes
+// on from where its decay is now.
 import { describe, expect, it } from 'vitest';
 import { planCancelReplace, type OrderSnapshot } from '../../kob/cancel';
 import { planOrder, type Intent } from '../../kob/plan';
@@ -67,7 +69,8 @@ describe('scheduled plain orders open in the replace form with their schedule an
       expect(amendKind(state, key)).toBe('replace');
       const { form, plan } = replanned(state, snap, key);
       expect(form.type).toBe(key);
-      // the same order again: slice, interval, prices, auction slope, amount, minimum fill (the GTC expiry counts from the same clock here)
+      // The same order again: slice, interval, prices, auction slope, amount, minimum fill (the GTC
+      // expiry counts from the same clock here).
       expect(env.kob.encodeState(plan.states[0]!), `${key} ${JSON.stringify(form.values)}`).toBe(env.kob.encodeState(state));
     }
   });
@@ -120,7 +123,8 @@ describe('scheduled plain orders open in the replace form with their schedule an
     const later = was.activeFrom + 50n;
     const back = intentFromOrder(state, ctxOf('dutch', snap, { nowDaa: later, clock: { ...CLOCK, daa: later } }), env.kob);
     expect(back).toMatchObject({ ok: true, intent: { type: 'dutch', side: 'buy', price: 200_000_000n + 50n * was.auction!.slope, priceEnd: 240_000_000n } });
-    // the buy's amount is what its escrow buys (kob-wasm bidBuyingPower), at least the placed amount
+    // The buy's amount is what its escrow buys (kob-wasm bidBuyingPower), at least the placed
+    // amount.
     expect((back as { intent: { amount: bigint } }).intent.amount).toBeGreaterThanOrEqual(6n * TOK);
   });
 

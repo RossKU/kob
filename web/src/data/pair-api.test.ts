@@ -1,5 +1,6 @@
-// The pair-API adapter (data/pair-api.ts): malformed rows never reach bigint math; the documented shapes pass unchanged; the guessed envelopes
-// (an `items` wrapper of /v1/pairs, missing counts, a missing volume / cursor) read as documented.
+// The pair-API adapter (data/pair-api.ts): malformed rows never reach bigint math. The documented
+// shapes pass unchanged. The guessed envelopes (an `items` wrapper of /v1/pairs, missing counts, a
+// missing volume / cursor) read as documented.
 import { describe, expect, it } from 'vitest';
 import type { PairBookView } from './indexer-types';
 import { adaptPairCandles, adaptPairFills, adaptPairSummaries, evidenceDetailOf, pairDetailOf, sanitizePairBook } from './pair-api';

@@ -1,6 +1,7 @@
-// Delivery of pair BIDs (founder decision 11/16): a resting KobPair / KobCondPair bid of a KCC-20 A is Collected by default and funded with one
-// delivery carrier; its default tip also pays the bought-custody input of every later fill; "Added to one UTXO" is not offered on pairs; a
-// KRON A and an immediate order deliver at each fill. The plans are signed and validated by the script engine (pair-testkit pairValid).
+// Delivery of pair BIDs. A resting KobPair / KobCondPair bid of a KCC-20 A is Collected by default
+// and funded with one delivery carrier. Its default tip also pays the bought-custody input of every
+// later fill. "Added to one UTXO" is not offered on pairs. A KRON A and an immediate order deliver
+// at each fill. The plans are signed and validated by the script engine (pair-testkit pairValid).
 import { describe, expect, it } from 'vitest';
 import { defaultPairTip } from './pair-common';
 import { kronA, kronB, makePairEnv } from './pair-fixtures';
@@ -16,7 +17,8 @@ const buy = { type: 'limit', side: 'buy', amount: 10_000n, price: 1_400n, minFil
 describe('the Collected tip of a pair bid', () => {
   it('adds ceil(ceil(1.25 x extra) x L x scale / amount), L = later fills (at most 63), to the default tip (negative: no margin, no rounding up, no cap)', () => {
     expect(PAIR_COLLECTED_EXTRA_REFERENCE.KCC20Ref_8x8).toBe(1_282_600n);
-    // 10 000 base units, minFill 2 500: 3 later fills of 1.25 x 1 282 600 = 1 603 250 sompi, over 10 whole A
+    // 10 000 base units, minFill 2 500: 3 later fills of 1.25 x 1 282 600 = 1 603 250 sompi, over
+    // 10 whole A
     expect(collectedPairTipExtra(1_282_600n, 1_000n, 10_000n, 2_500n)).toBe(480_975n);
     // a later fill of minFill pays its filler at least 1.25 x the extra less the first fill's share
     expect((480_975n * 2_500n) / 1_000n).toBeGreaterThanOrEqual((1_603_250n * 3n) / 4n);
@@ -45,7 +47,8 @@ describe('pair bids with a delivery (signed and validated by the script engine)'
     expect(p.disclosure!.notes).toContain('deliveryCollected');
     // a tip the user typed stays as typed
     expect(pairState(pairValid(env, { ...buy, ...col, tip: 7n })).tip).toBe('7');
-    // the default: Each fill funds the protocol's deliveries (at least two) with the plain default tip
+    // the default: Each fill funds the protocol's deliveries (at least two) with the plain default
+    // tip
     const each = pairValid(env, buy);
     expect(pairState(each).mode).toBe('0');
     expect(each.pair!.deliveries).toBeGreaterThan(1n);
@@ -93,7 +96,8 @@ describe('pair bids with a delivery (signed and validated by the script engine)'
     expect(pairState(each).mode).toBe('0');
     expect(each.pair!.deliveries).toBe(4n);
     expect(BigInt(pairState(each).tip)).toBe(defaultPairTip(env, 10_000n));
-    // a TWAP sell and a stop sell: Each fill by default, Collected when picked; an IOC sell delivers at each fill
+    // a TWAP sell and a stop sell: Each fill by default, Collected when picked; an IOC sell
+    // delivers at each fill
     const twap = { type: 'twap', amount: 10_000n, sliceAmount: 2_500n, interval: { daa: 600n }, price: 1_500n } as const;
     const stopSell = { type: 'stopMarket', side: 'sell', amount: 8_000n, stop: 1_400n } as const;
     expect(pairState(pairValid(env, twap)).mode).toBe('0');

@@ -1,5 +1,6 @@
-// A pair order's state price is B base units per scale(A) base units of A, scale(A) = 10^min(decimals(A), 9). The pre-sign screen shows it per
-// WHOLE A, like the ticket's disclosure: for every decimals of A (0..18) both show the same "150 BBB per AAA" for the same planned state.
+// A pair order's state price is B base units per scale(A) base units of A, scale(A) =
+// 10^min(decimals(A), 9). The pre-sign screen shows it per WHOLE A, like the ticket's disclosure:
+// for every decimals of A (0..18) both show the same "150 BBB per AAA" for the same planned state.
 import { describe, expect, it } from 'vitest';
 import { makePairEnv, level } from '../../kob/orders/pair-fixtures';
 import { pairValid, K } from '../../kob/orders/pair-testkit';

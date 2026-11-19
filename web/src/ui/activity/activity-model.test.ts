@@ -1,5 +1,6 @@
-// The activity log's view model: records -> one row per transaction (kind, side, market icons, wallets, amounts, the explorer link per network),
-// the filters and their stored form, the hold that keeps rows still under the pointer, and the confirmation clock.
+// The activity log's view model: records -> one row per transaction (kind, side, market icons,
+// wallets, amounts, the explorer link per network), the filters and their stored form, the hold
+// that keeps rows still under the pointer, and the confirmation clock.
 import { describe, expect, it } from 'vitest';
 import type { EventView, OrderView, PairFillView } from '../../data/indexer-types';
 import {
@@ -239,7 +240,8 @@ describe('the hold: rows never move under the pointer', () => {
 
   it('while held, rows that would land among or above the shown ones wait and are counted; older ones (a read further back) are appended', () => {
     const snap = new Set(['b', 'a']);
-    // `d` and `c` are new at the top, `x` lands between the shown ones, `z` is older than all of them
+    // `d` and `c` are new at the top, `x` lands between the shown ones, `z` is older than all of
+    // them.
     const v = heldView([r('d'), r('c'), r('b'), r('x'), r('a'), r('z')], snap);
     expect(v.rows.map((x) => x.key)).toEqual(['b', 'a', 'z']);
     expect(v.held).toBe(3);
@@ -324,7 +326,8 @@ describe('confirmations and time', () => {
   });
 
   it('the wallet column drops the network prefix and keeps the first and last six characters', () => {
-    // whole, the prefix dropped: never a middle ellipsis (founder 2026-11-12); the cell ends it with an ellipsis where it has no room
+    // Whole, the prefix dropped: never a middle ellipsis. The cell ends it with an ellipsis where
+    // it has no room.
     expect(walletBody('kaspatest:qz7vabcdefghk3f2')).toBe('qz7vabcdefghk3f2');
     expect(walletBody('qq9d0hxa')).toBe('qq9d0hxa');
   });

@@ -1,6 +1,10 @@
-// C5 (lifecycle disclosure): the "you receive at least / pay at most per token (all-in)" row of `orderRows` is a GUARANTEE. For an auction
-// (market, marketable limit, Dutch) it must be the auction's END (worst) price, not its start (the touch): the covenant only guarantees
-// `priceEnd` (KobAsk.sil: p = max(priceEnd, price - slope·…)), so confirm-model.ts derives `allIn` from `auction.priceEnd` when the order decays.
+// Tests that the "you receive at least / pay at most per token (all-in)" row of `orderRows` is a
+// GUARANTEE.
+//
+// For an auction (market, marketable limit, Dutch) it must be the auction's END (worst) price, not
+// its start (the touch). The covenant only guarantees `priceEnd` (KobAsk.sil:
+// p = max(priceEnd, price - slope·…)), so confirm-model.ts derives `allIn` from
+// `auction.priceEnd` when the order decays.
 import { describe, expect, it } from 'vitest';
 import { decodeSigning } from '../../kob/decode';
 import { parseRegistry, type TokenRegistry } from '../../kob/registry';

@@ -26,7 +26,10 @@ const ctx = (network: string, over: Record<string, unknown> = {}) => ({ network,
 const view = (id: string, over: Partial<IndexerTokenView> = {}): IndexerTokenView => ({
   ticker: '', covenant_id: id, template_hash: REF_8X8, extension_commitment: 'ee'.repeat(32), decimals: null, open_asks: 2, open_bids: 1, template_id: 'kcc20-ref-8x8', ...over,
 });
-/** a registry token row (the registry itself is empty here: `buildTokenRows` over the example registry is covered elsewhere) */
+/**
+ * A registry token row (the registry itself is empty here: `buildTokenRows` over the example
+ * registry is covered elsewhere).
+ */
 function registryRow(ticker: string, id: string, over: Partial<TokenRow> = {}): TokenRow {
   const base = buildTokenRows(registry, [view(id)])[0]!;
   return { ...base, ticker, name: `${ticker} coin`, source: 'registry', info: { covenantId: id, ticker, templateHash: REF_8X8 } as unknown as TokenInfo, decimals: 8, ...over };
@@ -84,8 +87,8 @@ describe('mergeKascov: tokens kascov adds', () => {
       templateId: 'kasparocket-token-11458',
     });
     expect(r.kascov).toMatchObject({ usedTicker: true, usedName: true, tickerDiffers: false, decimalsDiffers: false, decimals: 3, imageHash: 'ab'.repeat(32), imageUrl: 'https://img.example/a.png' });
-    // its decimals are the program's default (the KaspaRocket convention), which kascov's claim agrees with
-    // the facts a trader needs are the ones of any token KOB has not verified
+    // Its decimals are the program's default (the KaspaRocket convention), which kascov's claim
+    // agrees with the facts a trader needs are the ones of any token KOB has not verified.
     expect(r.facts).toContain('genesis_unverified');
   });
 

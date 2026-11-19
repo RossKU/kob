@@ -1,4 +1,5 @@
-// pollWallet's order half: a live order that fell out of the lists is asked for by id; only a definite "not found" reads as reverted.
+// pollWallet's order half: a live order that fell out of the lists is asked for by id. Only a
+// definite "not found" reads as reverted.
 import { describe, expect, it } from 'vitest';
 import type { Services } from '../../app/services';
 import type { OrderView } from '../../data/indexer-types';

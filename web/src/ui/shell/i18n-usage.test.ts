@@ -1,5 +1,6 @@
-// The dictionary completeness test (i18n.test.ts) checks the dictionary itself; THIS one checks that the UI never asks for a key that does not
-// exist: every static `t('area.key')` in the shell / kit / market / orders / settings sources, and every member of the dynamic key families
+// The dictionary completeness test (i18n.test.ts) checks the dictionary itself; THIS one checks
+// that the UI never asks for a key that does not exist: every static `t('area.key')` in the shell /
+// kit / market / orders / settings sources, and every member of the dynamic key families
 // (`t(`orders.type.${key}`)` and friends).
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

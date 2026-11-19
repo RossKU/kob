@@ -1,4 +1,5 @@
-// The curve model: the default table from kob-wasm, the numbers beside the graph, the step line, the sale split and its validation.
+// The curve model: the default table from kob-wasm, the numbers beside the graph, the step line,
+// the sale split and its validation.
 import { describe, expect, it } from 'vitest';
 import { loadKobNode } from './wasm.node';
 import {

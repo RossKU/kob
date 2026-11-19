@@ -1,5 +1,6 @@
-// Token facts from the chain (KCC-23): a declaration is used only after its launch proof verified against the covenant id asked for; the display
-// prefers it to the registry's snapshot and flags any disagreement; an open-list token takes its scale from it.
+// Token facts from the chain (KCC-23): a declaration is used only after its launch proof verified
+// against the covenant id asked for. The display prefers it to the registry's snapshot and flags
+// any disagreement. An open-list token takes its scale from it.
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   MAX_PARALLEL_READS, adoptDeclaration, declarationConflicts, declaredToken, listedTickerOf, loadDeclaration, noteListedTickers, resetDeclarationsForTests, restoreDeclarations, subscribeDeclarations,
@@ -166,14 +167,16 @@ describe('declarations in the display (facts from the chain first, the registry 
     // the market's orders use the declared scale: fine; another: a conflict, whatever was entered
     expect(synthesizeOpenToken(kob, view(), [{ scale: 10_000 }], null, null, [], { network: NET, declared }).ok).toBe(true);
     expect(synthesizeOpenToken(kob, view({ market_scale: 100 }), [], null, null, [], { network: NET, declared, decimals: 2 })).toEqual({ ok: false, reason: 'scale-conflict' });
-    // orders that agree leave the decimals the declared ones: the market banner says so (`decimalsOrigin`), not "the scale its first order set"
+    // Orders that agree leave the decimals the declared ones: the market banner says so
+    // (`decimalsOrigin`), not "the scale its first order set".
     const agreeing = synthesizeOpenToken(kob, view({ market_scale: 10_000 }), [], null, null, [], { network: NET, declared });
     expect(agreeing.ok && agreeing.info).toMatchObject({ decimals: 4, openScale: 'declared' });
     expect(agreeing.ok && decimalsOrigin(agreeing.info)).toBe('declared');
     // without a declaration: the scale of its orders
     const undeclared = synthesizeOpenToken(kob, view({ market_scale: 10_000 }), [], null, null, [], { network: NET });
     expect(undeclared.ok && decimalsOrigin(undeclared.info)).toBe('scale');
-    // more than 9 decimals: the scale stops at 10^9 (as for a registry token), the decimals stay the declared ones
+    // More than 9 decimals: the scale stops at 10^9 (as for a registry token), the decimals stay
+    // the declared ones.
     const big = synthesizeOpenToken(kob, view(), [], null, null, [], { network: NET, declared: { ...declared, decimals: 12 } });
     expect(big.ok && big.info.decimals).toBe(12);
     expect(synthesizeOpenToken(kob, view({ market_scale: 1_000_000_000 }), [], null, null, [], { network: NET, declared: { ...declared, decimals: 12 } }).ok).toBe(true);

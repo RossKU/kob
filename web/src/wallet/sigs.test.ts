@@ -102,7 +102,8 @@ describe('collectSignatures', () => {
   it('refuses a signature made with another hash type (it would sign different data than was confirmed)', () => {
     const tx = txWith('41' + SIG64 + '02', '', '41' + SIG65);
     expect(() => collectSignatures(built, tx, 'W')).toThrow(/hash type \(02\)/);
-    // a 64-byte signature carries no hash type byte: accepted here, finalize checks it against the digest
+    // a 64-byte signature carries no hash type byte: accepted here, finalize checks it against the
+    // digest
     expect(collectSignatures({ sign: [{ inputIndex: 0 }] } as unknown as BuiltTx, txWith(push(SIG64)), 'W')[0]!.signature).toBe(SIG64);
   });
 });

@@ -68,7 +68,8 @@ describe('combineFreeBalances', () => {
     const c = combineFreeBalances(free, { maker: ME, liveOrders: [], strays: [] });
     const row = c.tokens.find((t) => t.token === KF)!;
     expect([row.free, row.notSpendable]).toEqual([5_000_000n, 0n]);
-    // without the program the same state reads as another key-held type (the KRON default holder is address presence)
+    // Without the program the same state reads as another key-held type (the KRON default holder is
+    // address presence).
     const bare = combineFreeBalances({ ...free, programOf: undefined } as never, { maker: ME, liveOrders: [], strays: [] });
     expect(bare.tokens.find((t) => t.token === KF)!.notSpendable).toBe(5_000_000n);
   });

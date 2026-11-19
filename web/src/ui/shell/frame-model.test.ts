@@ -10,7 +10,8 @@ describe('the shared footer', () => {
   it('the app footer carries the chart library attribution; the landing page (no charts) does not', () => {
     expect(showsChartNotice('app')).toBe(true);
     expect(showsChartNotice('landing')).toBe(false);
-    // the attribution itself: TradingView's NOTICE text and a link to tradingview.com, under its test id
+    // The attribution itself: TradingView's NOTICE text and a link to tradingview.com, under its
+    // test id.
     const frame = src('ui/shell/frame-parts.tsx');
     expect(frame).toContain('data-testid="footer-chart-notice"');
     expect(frame).toContain('href="https://www.tradingview.com/"');

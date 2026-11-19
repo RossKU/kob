@@ -1,6 +1,8 @@
-// The lead an auction gets from a wallet's signing time (signing-time.ts): a re-timing after `clock-moved` leaves at least the measured signing
-// time, a slow wallet's first attempt starts later by its shortfall against the window, a measured lead is capped, a fast wallet (the
-// private-key signer) is unaffected, the memory works without storage, and the later plan keeps every term the user approved.
+// The lead an auction gets from a wallet's signing time (signing-time.ts): a re-timing after
+// `clock-moved` leaves at least the measured signing time, a slow wallet's first attempt starts
+// later by its shortfall against the window, a measured lead is capped, a fast wallet (the
+// private-key signer) is unaffected, the memory works without storage, and the later plan keeps
+// every term the user approved.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { decodeSigning } from '../../kob/decode';
 import { planOrder } from '../../kob/plan';
@@ -157,7 +159,8 @@ describe('a shifted first attempt keeps the approved terms', () => {
       const q = planOrder({ ...env, clock: later }, intent);
       expect(q.ok && q.built).toBeTruthy();
       expect(decode(q).orders[0]!.description.activeFrom).toBe(decode(p).orders[0]!.description.activeFrom + extra);
-      // the wallet now has the window plus the shift: its last signing time and RETIME_LEAD_DAA more
+      // The wallet now has the window plus the shift: its last signing time and RETIME_LEAD_DAA
+      // more.
       const byLater = auctionSubmitBy(q.states, later.daa)!;
       expect(byLater).toBe(by! + extra);
       expect(byLater - env.clock.daa).toBe(daaOfMs(19_000) + RETIME_LEAD_DAA);

@@ -37,7 +37,8 @@ describe('max buy on a KAS market', () => {
       const at = planOrder(env, limit(max));
       expect(errors(at), 'plan at max').toEqual([]);
       expect(spent(at) + MAX_KAS_RESERVE).toBeLessThanOrEqual(balanceOf(env));
-      // the next base unit breaks the budget: either the planner refuses it or the reserve would be eaten
+      // The next base unit breaks the budget: either the planner refuses it or the reserve would be
+      // eaten.
       const over = planOrder(env, limit(max + 1n));
       const eaten = over.built && over.disclosure ? spent(over) + MAX_KAS_RESERVE > balanceOf(env) : fundsShort(over);
       expect(eaten, 'plan at max + 1').toBe(true);
@@ -49,7 +50,8 @@ describe('max buy on a KAS market', () => {
     const max = maxFor(env, PRICE);
     const loose = (40n * KAS * CTX.scale) / PRICE;
     expect(max).toBeLessThan(loose);
-    // the escrow is the amount at the price; the rest is the delivery carriers (10 KAS each in this fixture), the fee and the reserve
+    // The escrow is the amount at the price. The rest is the delivery carriers (10 KAS each in this
+    // fixture), the fee and the reserve.
     expect(40n * KAS - quoteOf(max, PRICE, CTX.scale, 'up')).toBeLessThan(25n * KAS);
   });
 
@@ -68,7 +70,8 @@ describe('max buy on a KAS market', () => {
     expect(cost(max) + MAX_KAS_RESERVE).toBeLessThanOrEqual(balanceOf(env));
     // one order alone could buy about five times as much
     expect(maxFor(env, PRICE)).toBeGreaterThan(max * 4n);
-    // the next base unit of every order exceeds the budget by no more than the rounding of a few sompi
+    // The next base unit of every order exceeds the budget by no more than the rounding of a few
+    // sompi.
     expect(cost(max + 1000n) + MAX_KAS_RESERVE).toBeGreaterThan(balanceOf(env));
   });
 

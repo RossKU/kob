@@ -19,7 +19,8 @@ describe('tradeRows', () => {
     expect(buy.price).toBe(25_000n);
     expect(buy.amount).toBe(200n);
     expect(buy.value).toBe(50_000n);
-    // the value rounds down: 3 base units at 25_000 per 100 units = 750 sompi; 1 unit at 99 per 100 = 0
+    // The value rounds down: 3 base units at 25_000 per 100 units = 750 sompi; 1 unit at 99 per 100
+    // = 0.
     expect(tradeRows([ev({ amount: '3' })], 100n)[0]!.value).toBe(750n);
     expect(tradeRows([ev({ amount: '1', price: '99' })], 100n)[0]!.value).toBe(0n);
   });

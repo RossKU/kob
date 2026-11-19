@@ -130,7 +130,8 @@ describe('signAndSubmit: failures stop at the right stage and nothing is broadca
 
   it('a wallet that signed a different transaction than the one shown is caught the same way', async () => {
     const built = buildSend();
-    // the wallet is handed a tampered copy (an output value changed) and signs THAT: its signatures cannot match the digests of ours
+    // the wallet is handed a tampered copy (an output value changed) and signs THAT: its signatures
+    // cannot match the digests of ours
     const tampered = JSON.parse(JSON.stringify(built)) as BuiltTx;
     tampered.tx.outputs[2]!.value = (BigInt(tampered.tx.outputs[2]!.value) - 1000n).toString();
     const evil: WalletAdapter = { ...kasware(), signTx: (_b, o) => kasware().signTx(tampered, o) };
@@ -202,7 +203,8 @@ describe('signAndSubmit: an auction whose start passed while the wallet waited i
     const st = (activeFrom: bigint, slope: bigint) => ({ kind: 'KobBid', state: { activeFrom: activeFrom.toString(), slope: slope.toString() } });
     expect(auctionSubmitBy([st(at + 30n, 415_963n)], at)).toBe(at + 30n + AUCTION_START_MARGIN_DAA);
     expect(auctionSubmitBy([st(at + 90n, 1n), st(at + 30n, 1n)], at)).toBe(at + 30n + AUCTION_START_MARGIN_DAA);
-    // a plain limit order, an order active at once, a start older than the plan (an amended order keeps it): nothing to guard
+    // a plain limit order, an order active at once, a start older than the plan (an amended order
+    // keeps it): nothing to guard
     expect(auctionSubmitBy([st(0n, 0n), st(at + 30n, 0n), st(0n, 5n), st(at - 1n, 5n)], at)).toBeNull();
     expect(AUCTION_START_MARGIN_DAA).toBe(20n);
   });
@@ -268,7 +270,8 @@ describe('signAndSubmit: what the node says is checked', () => {
   });
 
   it("the wallet's own plain KAS coins are not read: a node that cannot be asked, or lists none of them, does not stop the signing", async () => {
-    // a buy order's creation spends only plain P2PK coins of the maker, whose signature commits their values
+    // a buy order's creation spends only plain P2PK coins of the maker, whose signature commits
+    // their values
     const built = buildBid();
     for (const read of [() => Promise.reject(new Error('node down')), () => Promise.resolve([])]) {
       const n = seeded(built);

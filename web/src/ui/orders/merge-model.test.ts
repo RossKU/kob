@@ -1,5 +1,6 @@
-// The merge action's model: the outpoints held for open orders, the per-token count in the "Merge all" button's tooltip, the KAS it frees, and
-// the flow steps with the summary the run's confirmation states (transactions, approvals, KAS freed).
+// The merge action's model: the outpoints held for open orders, the per-token count in the "Merge
+// all" button's tooltip, the KAS it frees, and the flow steps with the summary the run's
+// confirmation states (transactions, approvals, KAS freed).
 import { describe, expect, it } from 'vitest';
 import type { OrderView, StrayView } from '../../data/indexer-types';
 import type { OrderSnapshot } from '../../kob/cancel';
@@ -54,7 +55,8 @@ describe('a token the registry does not list (open list, foreign KCC-20)', () =>
     expect(mt).toEqual({ covenantId: TOKEN.covenantId, program: TOKEN.program, templateHash: info.templateHash, extensionCommitment: TOKEN.ext, slots: { inputs: info.slots.inputs } });
     expect(mergeableCounts(mine, none, MAKER.pk, new Set(), unlisted)).toEqual(new Map([[TOKEN.covenantId, 3]]));
     expect(mergeAllFrees(mine, none, MAKER.pk, new Set(), unlisted).has(TOKEN.covenantId)).toBe(true);
-    // no node-verified program: nothing to merge with (and without the option the registry-only behaviour stays)
+    // No node-verified program: nothing to merge with (and without the option the registry-only
+    // behaviour stays).
     expect(mergeableCounts(mine, none, MAKER.pk, new Set(), { kob, programs: new Map() }).size).toBe(0);
     expect(mergeableCounts(mine, none, MAKER.pk, new Set()).size).toBe(0);
   });
@@ -90,7 +92,8 @@ describe('Merge all: the confirmation and the flow steps', () => {
     const p = plan(30);
     expect(p.ok).toBe(true);
     expect(p.links).toHaveLength(15);
-    // thirty 2 KAS carriers in, the final UTXO keeps one at the 1 KAS default: 59 KAS less the fees come back
+    // Thirty 2 KAS carriers in, the final UTXO keeps one at the 1 KAS default: 59 KAS less the fees
+    // come back.
     expect(p.freed).toBe(59n * KAS - p.fee);
     const freed = formatKas(p.freed).replace('.', '\\.');
     expect(mergeSummary(p, info.ticker)).toMatch(
@@ -98,7 +101,8 @@ describe('Merge all: the confirmation and the flow steps', () => {
         `^Merge 30 TST UTXOs into 1\\. 15 transactions · 15 approvals · about \\+${freed} KAS after fees\\.$`,
       ),
     );
-    // the button's figure before the click: the carriers less the one the final UTXO keeps, before the fees
+    // The button's figure before the click: the carriers less the one the final UTXO keeps, before
+    // the fees.
     expect(mergeAllFrees(set(30), registry.byCovenantId, MAKER.pk, new Set()).get(TOKEN.covenantId)).toBe(59n * KAS);
     expect(mergeAllFrees(set(1), registry.byCovenantId, MAKER.pk, new Set()).size).toBe(0);
   });

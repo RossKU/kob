@@ -1,6 +1,13 @@
-// Founder decision 2026-10-17: "base units" never appears in front of a user. Every amount of a token is said in whole tokens (app/token-display.ts:
-// a declaration, a program default, the scale of its order or market, this browser's issuance of it); where nothing states them no decimals are invented:
-// the chain's integer amount with the token's id, labelled "raw amount", and elsewhere a raw integer only inside the collapsed technical details.
+// Tests that "base units" never appears in front of a user.
+//
+// Every amount of a token is said in whole tokens (app/token-display.ts). The decimals come from
+// - a declaration,
+// - a program default,
+// - the scale of its order or market,
+// - this browser's issuance of it.
+// Where nothing states them, no decimals are invented. The chain's integer amount is shown with
+// the token's id, labelled "raw amount", and elsewhere a raw integer only inside the collapsed
+// technical details.
 import { describe, expect, it } from 'vitest';
 import { allKeys, t, tokenAmountText } from './index';
 
@@ -32,7 +39,8 @@ describe('no "base units" in any user-facing message of the code', () => {
     walk(root);
     const bad: string[] = [];
     for (const f of files) {
-      // the code without its comments: block comments, then line comments (a "//" inside a string is rare enough in this code base)
+      // The code without its comments: block comments, then line comments (a "//" inside a string
+      // is rare enough in this code base).
       const code = readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
       for (const m of code.matchAll(/base[ -]units?\b/gi)) bad.push(`${f.slice(root.length + 1)}: ${code.slice(Math.max(0, m.index! - 40), m.index! + 20).replace(/\s+/g, ' ')}`);
     }

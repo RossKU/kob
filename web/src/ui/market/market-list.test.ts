@@ -94,7 +94,8 @@ describe('market list cells', () => {
     expect(e.sort.last).toEqual({ num: 2877252083n, den: 100_000_000n });
     // the same figures as a row that knows its 8 decimals
     expect(e.sort.last).toEqual(tokenEntry(row('X', ID('f')), ok(stats(ID('f'), { last: '2877252083', mid: '2877252083' }))).sort.last);
-    // a known count wins over the indexer's 0, and a positive count the indexer reports is used when the row has none
+    // A known count wins over the indexer's 0, and a positive count the indexer reports is used
+    // when the row has none.
     const at = (decimals: number | null, reported: number) => tokenEntry(row('X', ID('d'), { decimals }), ok(stats(ID('d'), { decimals: reported, last: '28772' }))).sort.last;
     expect(at(3, 0)).toEqual(at(null, 3));
     expect(at(3, 0)).not.toEqual(at(null, 0));
@@ -123,7 +124,8 @@ describe('market list cells', () => {
     const meta = (supply: bigint): KascovMeta => ({
       ticker: null, name: null, usedTicker: false, usedName: false, verified: true, tickerDiffers: false, decimalsDiffers: false, decimals: 8, imageHash: null, imageUrl: null, supply,
     });
-    // mid 0.0251 KAS per token at $0.04 per KAS: 100,000,000 tokens are worth $100,400 -> threshold $100.40 = 251,000,000,000 sompi (shown $100); 2,500,000,000 tokens -> $2,510
+    // Mid 0.0251 KAS per token at $0.04 per KAS: 100,000,000 tokens are worth $100,400 -> threshold
+    // $100.40 = 251,000,000,000 sompi (shown $100); 2,500,000,000 tokens -> $2,510.
     const r = row('EXKCC', ID('a'), { info: null, source: 'indexer', kascov: meta(10n ** 16n) });
     const big = row('EXKCC', ID('a'), { info: null, source: 'indexer', kascov: meta(25n * 10n ** 16n) });
     const rate = rateOf(0.04)!;
@@ -172,7 +174,8 @@ describe('market list cells', () => {
     expect(changeCell(-1234)).toEqual({ text: '-12.34%', title: null, tone: 'down' });
     expect(changeCell(0)).toEqual({ text: '0.00%', title: null, tone: 'flat' });
     expect(changeCell(null).text).toBeNull();
-    // fewer than 3 trades in the window: muted, the count in the tooltip; 3 or none reported: as before
+    // Fewer than 3 trades in the window: muted, the count in the tooltip; 3 or none reported: as
+    // before.
     expect(changeCell(90_000, 2)).toEqual({ text: '+900.00%', title: 'Based on 2 trades in 24 h', tone: 'flat', thin: true });
     expect(changeCell(0, 1)).toEqual({ text: '0.00%', title: 'Based on 1 trade in 24 h', tone: 'flat', thin: true });
     expect(changeCell(90_000, 3)).toEqual({ text: '+900.00%', title: null, tone: 'up' });
@@ -202,7 +205,8 @@ describe('market list pairs', () => {
   it('lists the favourite pairs in their order, each as it was favoured, with the order counts of both orientations (the flipped pair turns them round)', () => {
     const got = listedPairs([pair(u, a), pair(a, u)], [a, u], [summary(a.covenantId, u.covenantId)]);
     expect(got.map((p) => p.key)).toEqual([`${u.covenantId}/${a.covenantId}`, `${a.covenantId}/${u.covenantId}`]);
-    // the one listed orientation is counted under either way round: EXKCC/EXUSD has 3 asks and 1 bid, so EXUSD/EXKCC has 1 ask and 3 bids
+    // The one listed orientation is counted under either way round: EXKCC/EXUSD has 3 asks and 1
+    // bid, so EXUSD/EXKCC has 1 ask and 3 bids.
     expect(got.map((p) => p.summary && [p.summary.direct_asks, p.summary.direct_bids])).toEqual([[1, 3], [3, 1]]);
     expect(listedPairs([pair(a, u)], [a, u], [])[0]!.summary).toBeNull();
     expect(pairLabelOf(got[1]!)).toBe('EXKCC (aaaa…aaaa) / EXUSD (eeee…eeee)');
@@ -381,7 +385,8 @@ describe('market cap', () => {
   it('is empty without a last trade, without a supply, and when the supply is not a sound fact', () => {
     const none = { text: null, title: null };
     expect(tokenEntry(kascovRow(), ok(stats(ID('a'), { last: null }))).cells.mcap).toEqual(none);
-    // no supply on the row (a token kascov does not list), kascov does not vouch for the token, or it disagrees about the decimals, or the token can still be issued
+    // No supply on the row (a token kascov does not list), kascov does not vouch for the token, or
+    // it disagrees about the decimals, or the token can still be issued.
     expect(tokenEntry(row('EXKCC', ID('a')), ok(stats(ID('a')))).cells.mcap).toEqual(none);
     expect(tokenEntry(kascovRow({ verified: false }), ok(stats(ID('a')))).cells.mcap).toEqual(none);
     expect(tokenEntry(kascovRow({ decimalsDiffers: true }), ok(stats(ID('a')))).cells.mcap).toEqual(none);
@@ -394,7 +399,8 @@ describe('market cap', () => {
     const info = (g: object, verified = true) => ({ json: { genesis_verified: verified, genesis: g } }) as unknown as TokenInfo;
     const rowOf = (g: object, verified = true) => row('EXKCC', ID('a'), { info: info(g, verified), kascov: meta({ supply: 7n }) });
     expect(supplyOf(rowOf(genesis))).toEqual({ units: 5_000_000_000n, source: 'registry' });
-    // a way to mint more (an allowance, a minter output, a live minter) or an unverified record: not a fixed supply, kascov's figure (if it vouches) is used instead
+    // A way to mint more (an allowance, a minter output, a live minter) or an unverified record:
+    // not a fixed supply, kascov's figure (if it vouches) is used instead.
     expect(supplyOf(rowOf({ ...genesis, mint_allowance: 1 }))).toEqual({ units: 7n, source: 'kascov' });
     expect(supplyOf(rowOf({ ...genesis, minter_outputs: [1] }))).toEqual({ units: 7n, source: 'kascov' });
     expect(supplyOf(rowOf({ ...genesis, live_minters: ['cd'.repeat(32) + ':1'] }))).toEqual({ units: 7n, source: 'kascov' });

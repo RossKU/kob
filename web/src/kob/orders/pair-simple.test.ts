@@ -1,6 +1,8 @@
-// Pair planner tests of the plain kinds (KobPair): every intent type of the KAS ticket on a pair A/B, both sides, every KCC-20 / KRON mix.
-// Oracle (pair-testkit.ts): consensus validity, the recovered placement record, the custodies as outputs of their own tokens, the KAS and token
-// accounting; every disclosed amount is checked against an independent BigInt model of the covenants' rounding (pair-fixtures.ts).
+// Pair planner tests of the plain kinds (KobPair): every intent type of the KAS ticket on a pair
+// A/B, both sides, every KCC-20 / KRON mix. Oracle (pair-testkit.ts): consensus validity, the
+// recovered placement record, the custodies as outputs of their own tokens, the KAS and token
+// accounting; every disclosed amount is checked against an independent BigInt model of the
+// covenants' rounding (pair-fixtures.ts).
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -12,7 +14,10 @@ import { market3x3 } from '../../testing/fixtures';
 import { CLOCK, KAS, MAKER_PK, ceilDivM, ceilQ, floorQ, kronA, kronB, level, makePairEnv, tokenA, tokenB } from './pair-fixtures';
 import { defaultPairTip, lowPairTipFields, pairTipBelowDefault } from './pair-common';
 import { K, codes, errorCodes, pairValid, plan } from './pair-testkit';
-/** Each fill: the pair sells below are written for a delivery per fill (a resting pair order defaults to Collected: pair-delivery.test.ts) */
+/**
+ * Each fill: the pair sells below are written for a delivery per fill (a resting pair order
+ * defaults to Collected: pair-delivery.test.ts)
+ */
 const EACH = { choice: 'each' } as const;
 
 const pairState = (p: { states: { kind: string; state: unknown }[] }): PairState => {
@@ -20,7 +25,10 @@ const pairState = (p: { states: { kind: string; state: unknown }[] }): PairState
   return p.states[0].state as PairState;
 };
 const DC = 10n * KAS;
-/** model of kob-protocol defaults::default_min_fill_pair at the fixtures' KAS reference of A (3 KAS per whole A) */
+/**
+ * model of kob-protocol defaults::default_min_fill_pair at the fixtures' KAS reference of A (3 KAS
+ * per whole A)
+ */
 const defMin = (amount: bigint, scaleA: bigint, kasA: bigint | null = 3n * KAS): bigint => {
   if (kasA === null) return ceilDivM(amount, 4n);
   const want = ceilDivM(10n * KAS * scaleA, kasA);
@@ -133,7 +141,8 @@ describe('KobPair: the crossing policy against the pair book (B prices, the KAS 
     expect(errorCodes(rej)).toEqual(['PAIR_MARKETABLE_REJECTED']);
     const timed = pairValid(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 4_000n, price: 1_400n, activeFrom: { daa: CLOCK.daa + 100n } });
     expect(pairState(timed).slope).toBe('0');
-    // a sell at 1451 with a huge KAS tip: the bid is 1450, nothing crosses (a KAS-quoted ask's tip would)
+    // a sell at 1451 with a huge KAS tip: the bid is 1450, nothing crosses (a KAS-quoted ask's tip
+    // would)
     const tipped = pairValid(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 4_000n, price: 1_451n, tip: 10n * KAS });
     expect(codes(tipped)).not.toContain('PAIR_MARKETABLE_AUCTION');
   });
@@ -264,7 +273,8 @@ describe('KobPair refusals and guards', () => {
   it('KRON caps: the A amount, a B escrow and the B delivery of one minimum fill', () => {
     const kk = { a: kronA(), b: kronB(), aAmounts: [2_000_000_000n], bAmounts: [4_000_000_000n] };
     expect(errorCodes(plan(makePairEnv(kk), { type: 'limit', side: 'sell', delivery: EACH, amount: 1_000_000_001n, price: 1n }))).toEqual(['AMOUNT_TOO_LARGE']);
-    // a bid of 1e6 A (scale 1000: 1e9 base units... here 1_000_000 base units = 1000 KRA) at 2_000_000 KRB per KRA: escrow 2e9 KRB > 1e9
+    // a bid of 1e6 A (scale 1000: 1e9 base units... here 1_000_000 base units = 1000 KRA) at
+    // 2_000_000 KRB per KRA: escrow 2e9 KRB > 1e9
     const esc = plan(makePairEnv(kk), { type: 'limit', side: 'buy', amount: 1_000_000n, price: 2_000_000n });
     expect(errorCodes(esc)).toEqual(['PAIR_KRON_CUSTODY_TOO_LARGE']);
     expect(esc.issues.find((i) => i.code === 'PAIR_KRON_CUSTODY_TOO_LARGE')!.params).toMatchObject({ ticker: 'KRB' });
@@ -312,7 +322,8 @@ describe('KobPair refusals and guards', () => {
     expect(p.pair!.deliveries).toBe(20n);
     expect(p.pair!.orderValue).toBe(20n * DC);
     expect(codes(p)).not.toContain('PAIR_FILLS_LIMITED');
-    // more possible fills than the default bound: the bound, and the note that the rest then fills only in full
+    // more possible fills than the default bound: the bound, and the note that the rest then fills
+    // only in full
     const q = pairValid(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 20_000n, price: 1_550n, minFill: 100n });
     expect(q.pair!.deliveries).toBe(64n);
     expect(q.issues.find((i) => i.code === 'PAIR_FILLS_LIMITED')!.params).toMatchObject({ fills: 64n, partials: 63n });

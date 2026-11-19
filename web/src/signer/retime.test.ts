@@ -1,5 +1,6 @@
-// A transaction re-timed after the user confirmed it is signed without asking again only when the decoding of both shows the same orders with
-// times not earlier and prices not worse for the user, the wallet's KAS and the fee within a tiny tolerance (retime.ts).
+// A transaction re-timed after the user confirmed it is signed without asking again only when the
+// decoding of both shows the same orders with times not earlier and prices not worse for the user,
+// the wallet's KAS and the fee within a tiny tolerance (retime.ts).
 import { describe, expect, it } from 'vitest';
 import { decodeSigning, type SigningSummary } from '../kob/decode';
 import { planOrder } from '../kob/plan';
@@ -49,10 +50,11 @@ describe('sameOrBetter', () => {
     expect(sameOrBetter(later, approved)).toBe(false);
   });
 
-  // the ticket re-times an order with an auction starting now (wallet/sign.ts `auctionSubmitBy`: the only orders re-timed) on the environment it
-  // was planned on (OrderTicket.tsx `retimer`): only the clock moves, by a long read of the confirmation (10 to 60 s) or a slow wallet (its
-  // signing time, capped at 60 s, plus three re-timing steps: ui/confirm/signing-time.ts, up to 70 s) plus the re-timing lead;
-  // whatever the type, the signer then signs it without a second prompt
+  // the ticket re-times an order with an auction starting now (wallet/sign.ts `auctionSubmitBy`:
+  // the only orders re-timed) on the environment it was planned on (OrderTicket.tsx `retimer`):
+  // only the clock moves, by a long read of the confirmation (10 to 60 s) or a slow wallet (its
+  // signing time, capped at 60 s, plus three re-timing steps: ui/confirm/signing-time.ts, up to 70
+  // s) plus the re-timing lead; whatever the type, the signer then signs it without a second prompt
   const KAS_TYPED = { ...form('market', 'buy', { amount: '20' }), kas: true };
   for (const [name, f] of [...CASES.map(([n, type, side, values]) => [n, form(type, side, values)] as const), ['market buy typed in KAS', KAS_TYPED] as const]) {
     for (const seconds of [10n, 60n, 70n]) {

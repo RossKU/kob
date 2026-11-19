@@ -1,6 +1,7 @@
-// Regression: mutation sweep of decodeSigning over EVERY golden transaction (all order kinds, both token families, cancels,
-// refunds, sends). Each operator makes the wallet sign something else than the plan; NO mutant may survive (a mutant is compared with the node
-// facts of the ORIGINAL transaction, as the confirm screen does with what the node holds).
+// Regression: mutation sweep of decodeSigning over EVERY golden transaction (all order kinds, both
+// token families, cancels, refunds, sends). Each operator makes the wallet sign something else than
+// the plan; NO mutant may survive (a mutant is compared with the node facts of the ORIGINAL
+// transaction, as the confirm screen does with what the node holds).
 import { describe, expect, it } from 'vitest';
 import { decodeSigning } from './decode';
 import { parseRegistry } from './registry';
@@ -20,7 +21,10 @@ function buildAll(): { name: string; built: BuiltTx }[] {
     try {
       out.push({ name, built: kob.build(goldenRequest<ActionRequest>(name, MAKER.pk)) });
     } catch {
-      /* some golden requests need a non-maker key (send.tokens as OTHER): skipped, covered by decode.test.ts */
+      /*
+       * some golden requests need a non-maker key (send.tokens as OTHER): skipped, covered by
+       * decode.test.ts
+       */
     }
   }
   return out;

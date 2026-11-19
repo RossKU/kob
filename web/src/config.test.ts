@@ -432,7 +432,8 @@ describe("the deployment's servers belong to the deployment's network", () => {
 
 describe('per-network servers (`networks`) and the default network by host name (`hostNetworks`)', () => {
   const tusd = 'b'.repeat(64);
-  // the launch config: one deployment for both hosts, mainnet servers at the top level, testnet-10's in `networks`
+  // the launch config: one deployment for both hosts, mainnet servers at the top level,
+  // testnet-10's in `networks`
   const launch = {
     network: 'mainnet', indexerUrl: 'https://kob-api.example', extraIndexerUrls: ['https://kob-api2.example'], nodeUrl: 'wss://node.example/kaspa/mainnet/wrpc/json',
     explorerUrl: 'https://explorer.example', home: `market:${'a'.repeat(64)}`,

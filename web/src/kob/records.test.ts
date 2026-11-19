@@ -110,7 +110,7 @@ describe('stores', () => {
     const t = new LocalStorageRecordStore(throwingStorage, 'testnet-10', MAKER.pk);
     await t.put(rec);
     expect(await t.list()).toEqual([rec]);
-    // C5 W-14: the UI is told the records live in memory only (and asks for a backup)
+    // the UI is told the records live in memory only (and asks for a backup)
     expect(t.persistent()).toBe(false);
     expect(new LocalStorageRecordStore(null, 'testnet-10', MAKER.pk).persistent()).toBe(false);
     const ok = new LocalStorageRecordStore(new FakeStorage(), 'testnet-10', MAKER.pk);
@@ -135,7 +135,8 @@ describe('indexer recovery format', () => {
   it('exports and re-imports every order kind', () => {
     const recs = ['create.ask', 'create.bid', 'create.condAsk', 'create.condBid', 'create.ifdBid', 'create.ifdAsk'].map((n) => recordOf(n).rec);
     const file = exportIndexerRecovery(recs, 'testnet-10');
-    // version 2 (docs/ops/executor.md 7.5): an ask carries its custody token's extension commitment, else its custody cannot be rebuilt (C5 W-7)
+    // Version 2 (docs/ops/executor.md 7.5): an ask carries its custody token's extension
+    // commitment, else its custody cannot be rebuilt.
     expect(file.version).toBe(2);
     expect(file.orders[0]).toEqual({ template_hash: recs[0].templateHash, state: recs[0].state, covenant_id: recs[0].covenantId, extension_commitment: TOKEN.ext });
     const back = importIndexerRecovery(JSON.parse(JSON.stringify(file)), kob, { maker: MAKER.pk, network: 'testnet-10' });
@@ -183,7 +184,8 @@ describe('backup', () => {
     const run = (rec: PlacementRecord, t: Record<string, TxJson> = txs) => importBackup({ ...exportBackup([rec], t, 'testnet-10'), records: [rec] }, kob, { network: 'testnet-10' }).rejected.map((r) => r.reason);
     expect(run(a.rec)).toEqual([]);
     expect(run({ ...a.rec, state: other.state })[0]).toMatch(/state does not match/);
-    // a state whose amountLeft differs by one base unit: still canonical, but not what the tx placed
+    // a state whose amountLeft differs by one base unit: still canonical, but not what the tx
+    // placed
     const s = kob.decodeState('KobAsk', a.rec.state) as OrderState;
     const changed = kob.encodeState({ kind: 'KobAsk', state: { ...(s.state as AskState), amountLeft: '9999' } });
     expect(run({ ...a.rec, state: changed })[0]).toMatch(/state does not match/);
@@ -211,7 +213,10 @@ describe('backup', () => {
 
 describe('resolveRecord', () => {
   const addr = testAddress;
-  /** a record of a small ask (minimum fill 1): every amount below it is a candidate the search can try */
+  /**
+   * a record of a small ask (minimum fill 1): every amount below it is a candidate the search can
+   * try
+   */
   const askWithAmount = (base: PlacementRecord, amount: number): PlacementRecord => {
     const s = kob.decodeState('KobAsk', base.state) as OrderState;
     return { ...base, state: kob.encodeState({ kind: 'KobAsk', state: { ...(s.state as AskState), amountLeft: String(amount), minFill: '1' } }), amount: String(amount) };
@@ -243,7 +248,8 @@ describe('resolveRecord', () => {
     expect(plan.request!.action).toBe('amendOrder');
     const signed = signAndValidate(kob, plan.built!);
     chain.applyTx(signed.tx, '2000');
-    // a record that had a later proven state and a submit-time cancel mark: the amend replaces both (C5 merge follow-up)
+    // A record that had a later proven state and a submit-time cancel mark: the amend replaces
+    // both.
     await store.put({ ...rec, last: { state: rec.state, txid: p.txid, index: 0, daa: '1000' }, cancelling: { txid: signed.tx.id, spends: `${p.txid}:0`, atUnix: '1' } });
     const [next] = await amendedRecords(kob, plan.built!, store, MAKER.pk);
     expect(next.last ?? null).toBeNull();
@@ -252,8 +258,8 @@ describe('resolveRecord', () => {
     expect(kob.decodeState('KobAsk', next.state)).toEqual(amended);
     expect(BigInt(next.value)).toBe(BigInt(signed.tx.outputs[0].value));
     expect(isPlacementRecord(next)).toBe(true);
-    // the old record no longer finds the order (its script is gone; a search over every amount of it decides it); the moved one does, with the
-    // custody the order had all along
+    // The old record does not find the order: its script is gone, and a search over every amount of
+    // it decides that. The moved record does, with the custody the order had all along.
     expect((await resolveRecord(kob, chain, rec, addr, { maxCandidates: 10_001 })).status).toBe('spent');
     const r = await resolveRecord(kob, chain, next, addr);
     expect(r.status).toBe('live');
@@ -306,7 +312,8 @@ describe('resolveRecord', () => {
       chain.applyTx(signAndValidate(kob, plan.built!).tx);
       expect((await resolveRecord(kob, chain, rec, addr, { maxCandidates: 10_001 })).status, name).toBe(want);
     }
-    // with the default budget the 10_000 base units are walked in steps of the minimum fill only: not exhaustive, so unknown rather than spent
+    // with the default budget the 10_000 base units are walked in steps of the minimum fill only:
+    // not exhaustive, so unknown rather than spent
     const { p, rec } = recordOf('create.ask');
     const chain = new FakeChain();
     chain.applyTx(p.signed.tx);
@@ -320,7 +327,8 @@ describe('resolveRecord', () => {
     expect(String((kob.decodeState('KobBid', rec.state).state as { mode?: string }).mode)).not.toBe('1');
     const chain = new FakeChain();
     expect((await resolveRecord(kob, chain, rec, addr)).status).toBe('spent');
-    // negative: a Collected bid's bought grows with its fills and is not walked, so a node that finds nothing cannot say spent
+    // negative: a Collected bid's bought grows with its fills and is not walked, so a node that
+    // finds nothing cannot say spent
     const st = kob.decodeState('KobBid', rec.state);
     const collected = { ...rec, state: kob.encodeState({ ...st, state: { ...st.state, mode: '1' } } as never) };
     expect((await resolveRecord(kob, new FakeChain(), collected, addr)).status).toBe('unknown');

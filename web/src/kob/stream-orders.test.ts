@@ -1,5 +1,6 @@
-// What standalone mode reads from a block's transactions, on consensus-valid transactions (the golden vectors, signed and validated by kob-wasm) as a
-// node announces them: without the UTXO entries of their inputs.
+// What standalone mode reads from a block's transactions, on consensus-valid transactions (the
+// golden vectors, signed and validated by kob-wasm) as a node announces them: without the UTXO
+// entries of their inputs.
 import { describe, expect, it } from 'vitest';
 import { loadKobNode } from './wasm.node';
 import { fillOf, followSpend, revealSpend, snapshotOfPlacement, txFacts } from './stream-orders';
@@ -13,7 +14,10 @@ const EMPTY = { address: null, amount: '0', scriptPublicKey: '', blockDaaScore: 
 const asAnnounced = (tx: TxJson): TxJson => ({ ...tx, inputs: tx.inputs.map((i) => ({ ...i, utxo: { ...EMPTY } })) });
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
-/** The resting order a golden batch leg spends, as the book would hold it (its order UTXO and custody). */
+/**
+ * The resting order a golden batch leg spends, as the book would hold it (its order UTXO and
+ * custody).
+ */
 function legSnapshot(name: string): OrderSnapshot {
   const t = goldenTx(name).request as unknown as { legs: { kind: string; order: { transactionId: string; index: number; amount: string; covenantId: string; state: Record<string, string>; blockDaaScore: string }; custody?: TokenUtxo | null }[] };
   const l = t.legs[0]!;
@@ -94,7 +98,8 @@ describe('spends (revealSpend, followSpend, fillOf)', () => {
     expect(kob.scriptPublicKey(next.order.state)).toBe(tx.outputs[1]!.scriptPublicKey);
     expect(next.custody).toMatchObject({ transactionId: tx.id, covenantId: snap.custody!.covenantId });
     expect(next.custody!.state.amount).toBe('6000');
-    // the same continuation without the book's snapshot (an order placed before the mode started, learned from its fill)
+    // the same continuation without the book's snapshot (an order placed before the mode started,
+    // learned from its fill)
     expect((await followSpend(kob, s, tx, 2000n, 'testnet-10', null))!.order).toEqual(next.order);
     expect(fillOf(kob, s, tx.id, next.covenantId)).toEqual({ txid: tx.id, covenantId: snap.covenantId, token: '70'.repeat(32), side: 'sell', amount: 4000n, price: 250000000n, scale: 1000n });
   });

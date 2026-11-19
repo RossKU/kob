@@ -1,5 +1,6 @@
-// Conformance: every vector of the reference's test-vectors.json (Hallmarks v1.0, CC0) must be reproduced exactly (spec section 7), plus the pins of
-// UPSTREAM.md: the vectors file and the wordlist are the bytes the reference release carries.
+// Conformance of the Hallmarks v1.0 (CC0) implementation. Every vector of the reference's
+// test-vectors.json must be reproduced exactly (spec section 7). The pins of UPSTREAM.md also hold:
+// the vectors file and the wordlist are the bytes the reference release carries.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';

@@ -1,5 +1,6 @@
-// Integration: what the order planners claim (`OrderPlan.states`, `disclosure`) must agree with what the pre-sign decoder re-derives from the
-// built tx alone. A disagreement is a bug in the planner or in the decoder, and the user would be blocked from signing.
+// Integration: what the order planners claim (`OrderPlan.states`, `disclosure`) must agree with
+// what the pre-sign decoder re-derives from the built tx alone. A disagreement is a bug in the
+// planner or in the decoder, and the user would be blocked from signing.
 import { describe, expect, it } from 'vitest';
 import { decodeSigning, type ExpectedSigning } from './decode';
 import type { CondIntent } from './intent-cond';

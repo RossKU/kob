@@ -22,7 +22,8 @@ describe('price basis conversion', () => {
     expect(basisToTokenSompi(1_234_500_000n, 8, BASIS)).toBe(1_234_500_000n);
     // basis = 100 base units of a 2-decimal token: 250 sompi per 1.00 token -> 0.0000025 KAS
     expect(basisToNumber(250n, 2, 100n)).toBeCloseTo(0.0000025, 15);
-    // a price per 1e6 base units of an 8-decimal token (0.01 token, an open-list order scale): 25_000 sompi per 0.01 token = 2_500_000 sompi per token
+    // A price per 1e6 base units of an 8-decimal token (0.01 token, an open-list order scale).
+    // 25_000 sompi per 0.01 token is 2_500_000 sompi per token.
     expect(basisToTokenSompi(25_000n, 8, 1_000_000n)).toBe(2_500_000n);
     expect(basisToNumber(25_000n, 8, 1_000_000n)).toBeCloseTo(0.025, 12);
     expect(basisToNumber(5n, 8, 0n)).toBe(0);
@@ -41,7 +42,7 @@ describe('price basis conversion', () => {
     expect(priceText(1_234_560_000n, 8, BASIS, 4)).toBe('12.3456');
     expect(priceText(2_500_000n, 8, BASIS, 6)).toBe('0.025000');
     expect(priceText(123_456_789_000_000n, 8, BASIS, 2)).toBe('1,234,567.89');
-    // the spread of a crossed book is negative (found live on TN10: the market page crashed in roundDiv)
+    // The spread of a crossed book is negative, and roundDiv must not crash on it.
     expect(priceText(-2_500_000n, 8, BASIS, 6)).toBe('-0.025000');
     expect(priceText(-2_500_000n, 8, 0n, 3)).toBe('-0.025');
     expect(priceText(25_000n, 8, 1_000_000n, 6)).toBe('0.025000');
@@ -147,7 +148,9 @@ describe('24h stats', () => {
   it('the thin-book threshold is 0.1 % of the fully diluted value, clamped to $100 .. $10,000', () => {
     const usd = (n: number): Rational => ({ num: BigInt(n), den: 1n });
     expect([THIN_BOOK_FDV_SHARE, THIN_BOOK_MIN_USD, THIN_BOOK_MAX_USD]).toEqual([0.001, 100, 10_000]);
-    // below the floor (FDV $50,000 -> $50): the floor; at the knee ($100,000 -> $100) and in between ($2.5M -> $2,500): the share itself; above the cap: the cap
+    // Below the floor (FDV $50,000 -> $50) the share is the floor.
+    // At the knee ($100,000 -> $100) and in between ($2.5M -> $2,500) it is the share itself.
+    // Above the cap it is the cap.
     expect(thinBookThresholdUsd(usd(50_000))).toEqual(usd(100));
     expect(cmpRational(thinBookThresholdUsd(usd(100_000)), usd(100))).toBe(0);
     expect(cmpRational(thinBookThresholdUsd(usd(2_500_000)), usd(2_500))).toBe(0);
@@ -158,7 +161,8 @@ describe('24h stats', () => {
   });
   it('a thin book (the smaller side within 2 % worth under the threshold of the token\'s size) mutes the change and says so; both marks are lines of their own', () => {
     const rate = rateOf(0.04)!;
-    // mid 12.345 KAS per token: 1,000,000 tokens are worth $493,800 -> threshold $493.8 = 12,345 KAS = 1,234,500,000,000 sompi
+    // Mid 12.345 KAS per token. 1,000,000 tokens are worth $493,800, so the threshold is $493.8
+    // = 12,345 KAS = 1,234,500,000,000 sompi.
     const book = (bid: string, ask: string, over: Partial<StatsView> = {}) => ({ ...stats, change_24h_bps: 500, depth_2pct_bid_sompi: bid, depth_2pct_ask_sompi: ask, ...over });
     const supply = 10n ** 14n;
     const under = (v: StatsView, r: typeof rate | null = rate, s: bigint | null = supply) => thinBookUnder(v, r, s);
@@ -167,12 +171,15 @@ describe('24h stats', () => {
     expect(cmpRational(under(book('9000000000000', '1234499999999'))!, { num: 4938n, den: 10n })).toBe(0);
     // a missing side is 0
     expect(under(book('0', '9000000000000'))).not.toBeNull();
-    // the threshold follows the size: 1,000 tokens (FDV $493.8) -> the $100 floor = 250,000,000,000 sompi; 1,000,000,000 tokens -> the $10,000 cap = 25,000,000,000,000 sompi
+    // The threshold follows the size.
+    // 1,000 tokens (FDV $493.8) give the $100 floor = 250,000,000,000 sompi.
+    // 1,000,000,000 tokens give the $10,000 cap = 25,000,000,000,000 sompi.
     expect(under(book('250000000000', '250000000000'), rate, 10n ** 11n)).toBeNull();
     expect(under(book('249999999999', '250000000000'), rate, 10n ** 11n)).not.toBeNull();
     expect(under(book('25000000000000', '25000000000000'), rate, 10n ** 17n)).toBeNull();
     expect(under(book('24999999999999', '25000000000000'), rate, 10n ** 17n)).not.toBeNull();
-    // the reference price: the mid, else the one side, else the last trade; none of them: no FDV, no marker
+    // The reference price is the mid, else the one side, else the last trade. With none of them
+    // there is no FDV and no marker.
     expect(under(book('0', '0', { mid: null, best_ask: null, best_bid: null }))).not.toBeNull();
     expect(under(book('0', '0', { mid: null, best_ask: null, best_bid: null, last: null }))).toBeNull();
     // no rate, no supply, or an older indexer without the two figures: never a guess

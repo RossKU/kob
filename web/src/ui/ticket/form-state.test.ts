@@ -35,7 +35,8 @@ describe('vocabulary and layout', () => {
           const all = [...l.main, ...l.advanced];
           expect(new Set(all).size, `${type}/${side} repeats a field`).toBe(all.length);
           expect(l.main, `${type} must offer an amount`).toContain('amount');
-          // the minimum fill is an advanced option of every type that can fill partially (close sells everything at market)
+          // The minimum fill is an advanced option of every type that can fill partially (close
+          // sells everything at market).
           if (type !== 'close') expect(l.advanced, `${type} must offer the minimum fill`).toContain('minFill');
           // the priority tip is an advanced option of every type, never in the main fields
           expect(l.advanced, `${type} must offer the tip`).toContain('tip');
@@ -61,7 +62,8 @@ describe('vocabulary and layout', () => {
     expect(layoutOf(form('limit', 'sell', {})).main).not.toContain('lifetimeAt');
     expect(layoutOf(form('limit', 'sell', { lifetime: 'gtd' })).main).toContain('lifetimeAt');
     expect(layoutOf(form('limit', 'sell', {})).advanced).not.toContain('maxFills');
-    // a resting buy chooses its delivery right after the tip; Collected is funded with one carrier, so it has no Fills box; Each fill (the default) has one
+    // A resting buy chooses its delivery right after the tip; Collected is funded with one carrier,
+    // so it has no Fills box; Each fill (the default) has one.
     expect(layoutOf(form('limit', 'buy', {})).advanced.slice(0, 2)).toEqual(['tip', 'delivery']);
     expect(layoutOf(form('limit', 'buy', { delivery: 'collected' })).advanced).not.toContain('maxFills');
     expect(layoutOf(form('limit', 'buy', {})).advanced).toContain('maxFills');
@@ -98,7 +100,7 @@ describe('vocabulary and layout', () => {
     expect(m.life).toBe('30');
     expect(initialForm('stopMarket', 'sell').values.bandDaa).toBe('30');
     expect(initialForm('stopMarket', 'sell').values.minRestDaa).toBe('5');
-    // the trigger threshold: the order's minimum fill (founder 2026-10-03); every trigger kind shows it and R
+    // The trigger threshold is the order's minimum fill. Every trigger kind shows it.
     expect(initialForm('stopMarket', 'sell').values.minTouch).toBe('min');
     for (const type of ['stopMarket', 'stopLimit', 'trailingStop', 'oco'] as const) {
       expect(layoutOf(initialForm(type, 'sell')).advanced).toEqual(expect.arrayContaining(['minTouch', 'minRestDaa']));
@@ -131,8 +133,8 @@ describe('vocabulary and layout', () => {
     expect(t.values.price).toBe('1.5');
   });
 
-  // every field typed with a marker: after a switch only the amount and the price (when the new form has one) may still carry it; every
-  // other value is the new form's default
+  // Every field typed with a marker: after a switch only the amount and the price (when the new
+  // form has one) may still carry it. Every other value is the new form's default.
   const marked = (type: OrderTypeId, side: Side): TicketForm => ({
     type, side, values: { ...Object.fromEntries(Object.keys(FIELDS).map((id) => [id, `typed-${id}`])), 'amount@base': '123' },
   });
@@ -217,10 +219,12 @@ describe('price parsing', () => {
   });
 
   it('a token of more than 9 decimals quotes per 10^9 base units (the scale cap)', () => {
-    // 12 decimals: one token = 10^12 base units, the state price is per 10^9 = a thousandth of a token
+    // 12 decimals: one token = 10^12 base units, the state price is per 10^9 = a thousandth of a
+    // token.
     const p = parsePrice('2', 'sell', WIDE);
     expect(p.ok && p.value).toEqual({ price: 200_000n, rounded: false });
-    // 0.00000003 KAS/token = 3 sompi per token = 0.003 sompi per 10^9 base units: a sell rounds up to 1, a buy down to nothing
+    // 0.00000003 KAS/token = 3 sompi per token = 0.003 sompi per 10^9 base units: a sell rounds up
+    // to 1, a buy down to nothing.
     const s = parsePrice('0.00000003', 'sell', WIDE);
     const b = parsePrice('0.00000003', 'buy', WIDE);
     expect(s.ok && s.value).toEqual({ price: 1n, rounded: true });
@@ -330,7 +334,8 @@ describe('buildIntent', () => {
     expect(r.intent).toEqual({ type: 'limit', side: 'sell', amount: 5n * T, price: 150_000_000n, crossing: 'take' });
     const c = buildIntent(form('stopMarket', 'sell', { amount: '5', stop: '2' }), CTX);
     expect(c.intent).toMatchObject({ type: 'stopMarket', amount: 5n * T, stop: 200_000_000n, slipBps: 300, bandDaa: 300n, minRestDaa: 50n });
-    // the default threshold ("min fill") is left to the planner: kob-wasm defaultMinTouch of the order's minimum fill
+    // The default threshold ("min fill") is left to the planner: kob-wasm defaultMinTouch of the
+    // order's minimum fill.
     expect((c.intent as unknown as Record<string, unknown>).minTouch).toBeUndefined();
     expect((c.intent as unknown as Record<string, unknown>).keeperTip).toBeUndefined();
     expect((c.intent as unknown as Record<string, unknown>).minFill).toBeUndefined();
@@ -451,7 +456,8 @@ describe('every order type: form -> intent -> plan (consensus-valid)', () => {
       expect(errors(plan), json(errors(plan))).toEqual([]);
       expect(plan.ok).toBe(true);
       consensusCheck(K, plan.built!);
-      // the disclosure describes the side and the exact amount the form asked for, and a minimum fill within it
+      // The disclosure describes the side and the exact amount the form asked for, and a minimum
+      // fill within it.
       const d = plan.disclosure!;
       expect(d.side).toBe(type === 'close' ? 'sell' : side);
       const typed = values.amount !== undefined ? parseAmount(values.amount, 8) : null;
@@ -473,7 +479,8 @@ describe('every order type: form -> intent -> plan (consensus-valid)', () => {
     const typed = plan({ amount: '5', price: '2.6', minFill: '0.5' });
     expect(errors(typed)).toEqual([]);
     expect(typed.disclosure!.minFill).toBe(50_000_000n);
-    // default of a resting order: kob-wasm defaultMinFill (about one delivery carrier of value), at most the whole amount
+    // Default of a resting order: kob-wasm defaultMinFill (about one delivery carrier of value), at
+    // most the whole amount.
     const def = plan({ amount: '5', price: '2.6' });
     expect(def.disclosure!.minFill).toBe(K.defaultMinFill(5n * TOKEN, 260_000_000n, TOKEN));
     expect(plan({ amount: '3', price: '2.4' }, 'ioc').disclosure!.minFill).toBe(1n);
@@ -584,7 +591,8 @@ describe('exit lifetime, timed activation, trailing IFD exit', () => {
 });
 
 describe('pair ticket: prices in the quote token B, tips in KAS', () => {
-  // A = the base (3 decimals, scale 1000), B = a quote token of 6 decimals: prices are B base units per whole A
+  // A = the base (3 decimals, scale 1000), B = a quote token of 6 decimals: prices are B base units
+  // per whole A.
   const PAIR: TicketCtx = { decimals: 3, scale: 1000n, tick: 1n, quoteDecimals: 6 };
 
   it('reads a price in B per whole A with the decimals of B and rounds it in the maker favour', () => {
@@ -628,13 +636,15 @@ describe('pair ticket: prices in the quote token B, tips in KAS', () => {
 });
 
 describe('pair sells budget their fills (maxFills)', () => {
-  // the pair fixtures: A 3 decimals (scale 1000), B 2 decimals; prices B base units per whole A (1_550 = 15.50 BBB per A)
+  // The pair fixtures: A 3 decimals (scale 1000), B 2 decimals. Prices B base units per whole A
+  // (1_550 = 15.50 BBB per A).
   const PAIR: TicketCtx = { decimals: 3, scale: 1000n, tick: 1n, quoteDecimals: 2 };
   const env = makePairEnv();
 
   it('a pair sell shows the fills field where a buy does; a KAS sell still does not', () => {
     for (const type of ['limit', 'dutch', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'] as const) {
-      // a resting pair sell is Each fill by default (it receives B): its Fills box shows, and hides with Collected (one carrier)
+      // A resting pair sell is Each fill by default (it receives B): its Fills box shows, and hides
+      // with Collected (one carrier).
       expect(layoutOf(form(type, 'sell', {}), PAIR).advanced, `${type} pair sell`).toContain('maxFills');
       expect(layoutOf(form(type, 'sell', { delivery: 'collected' }), PAIR).advanced, `${type} pair sell, collected`).not.toContain('maxFills');
       // a pair buy is Each fill by default: its Fills box shows, and hides with Collected
@@ -662,7 +672,7 @@ describe('pair sells budget their fills (maxFills)', () => {
       // the same form round-trips (the replace dialog)
       expect(json(buildIntent(formFromIntent(r.intent!, PAIR), PAIR).intent), type).toBe(json(r.intent));
     }
-    // as many fills as the order can have: no longer limited
+    // As many fills as the order can have: not limited.
     const all = buildIntent(form('limit', 'sell', { amount: '10', price: '15.5', minFill: '5', maxFills: '2', delivery: 'each' }), PAIR).intent!;
     expect(planOrder(env, all).issues.map((i) => i.code)).not.toContain('PAIR_FILLS_LIMITED');
     // on a KAS market a sell never sends maxFills (the planner would refuse it)

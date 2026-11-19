@@ -35,9 +35,11 @@ describe('kit format', () => {
   it('formats a state price (sompi per scale base units) as KAS per whole token', () => {
     // 8 decimals, scale 1e8 (one whole token): the state price is sompi per token
     expect(pricePerTokenText(25_100n, 8, 100_000_000n)).toBe('0.000251');
-    // 12 decimals, scale capped at 1e9 (a thousandth of a token): the per-token price is 1000 x the state price
+    // 12 decimals, scale capped at 1e9 (a thousandth of a token): the per-token price is 1000 x the
+    // state price.
     expect(pricePerTokenText(100_000n, 12, 1_000_000_000n)).toBe('1');
-    // a price too small for 8 digits still shows as non-zero (an open-list order scale of 1000 base units of a 0-decimal token)
+    // A price too small for 8 digits still shows as non-zero (an open-list order scale of 1000 base
+    // units of a 0-decimal token).
     expect(pricePerTokenText(1n, 0, 1n)).toBe('0.00000001');
     expect(pricePerTokenText(1n, 0, 1_000n)).not.toBe('0');
     expect(pricePerTokenText(0n, 8, 100_000_000n)).toBe('0');
@@ -155,7 +157,8 @@ describe('amount columns never cut a digit', () => {
     expect(cells[1]!.exact).toBe('0.000000000000000001 EIGHTEEN');
     expect(cells[2]!.exact).toBeNull();
     expect(fits(cells)).toBe(true);
-    // whole digits that fit: the decimals shrink for the whole column, a tiny amount reads "<0.0001", never 0
+    // Whole digits that fit: the decimals shrink for the whole column, a tiny amount reads
+    // "<0.0001", never 0.
     const mid = fitAmountColumn([12_345n * one, 1n, one / 3n], 18);
     expect(texts(mid)).toEqual(['12,345.000', '<0.001', '0.333']);
     // a narrower cell (the trade tape): two decimals

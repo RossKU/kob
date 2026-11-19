@@ -44,7 +44,8 @@ describe('network switch model', () => {
     expect(JSON.parse(st.getItem(SETTINGS_KEY)!)).toEqual({ network: 'mainnet', features: { kastle: true } });
     const next = resolveConfig({ file, settings: JSON.parse(st.getItem(SETTINGS_KEY)!) }).config;
     expect(next).toMatchObject({ network: 'mainnet', indexerUrl: '', nodeUrl: '' });
-    // and back to the deployment's own network (the host's default): the stored network is cleared, the deployment's own servers apply again
+    // And back to the deployment's own network (the host's default): the stored network is cleared,
+    // the deployment's own servers apply again.
     expect(networkSwitchPatch(next, 'testnet-10')).toEqual({ network: null });
     expect(saveSettings(networkSwitchPatch(next, 'testnet-10'), st)).toBe(true);
     expect(JSON.parse(st.getItem(SETTINGS_KEY)!)).toEqual({ features: { kastle: true } });
@@ -63,7 +64,8 @@ describe('network switch model', () => {
     expect(saveSettings(networkSwitchPatch(first, 'mainnet'), st)).toBe(true);
     const switched = load(st);
     expect(switched).toMatchObject({ network: 'mainnet', indexerUrl: 'https://main.example' });
-    // back to the host's network: the stored network is CLEARED, so the browser follows the host again (a later change of `hostNetworks` reaches it)
+    // Back to the host's network: the stored network is CLEARED, so the browser follows the host
+    // again (a later change of `hostNetworks` reaches it).
     expect(switched.hostNetwork).toBe('testnet-10');
     expect(networkSwitchPatch(switched, 'testnet-10')).toEqual({ network: null });
     expect(saveSettings(networkSwitchPatch(switched, 'testnet-10'), st)).toBe(true);

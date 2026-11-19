@@ -1,5 +1,6 @@
-// Audit 2026-10-30 regressions for the signer frame (G1, G2, G3): the keeper tip of an if-done stop entry is a row, the seconds of an auction and
-// the band / touch sizes are in the frame's values, and a silent re-time pins the decay slope and moves an expiry only with the start.
+// Regressions for the signer frame. The keeper tip of an if-done stop entry is a row, the seconds
+// of an auction and the band / touch sizes are in the frame's values, and a silent re-time pins the
+// decay slope and moves an expiry only with the start.
 import { describe, expect, it } from 'vitest';
 import { createSignerCore } from '../signer/core';
 import { RETIME_MAX_DELAY_DAA, sameOrBetter } from '../signer/retime';

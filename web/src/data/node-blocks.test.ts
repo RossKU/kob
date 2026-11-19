@@ -1,5 +1,6 @@
-// `NodeApi.subscribeBlocks` of both node implementations (standalone mode follows the node's new blocks): the wRPC client's `block-added`
-// notifications with a subscription made again after a lost link, and the mock node's `/node/blocks` poll.
+// `NodeApi.subscribeBlocks` of both node implementations (standalone mode follows the node's new
+// blocks): the wRPC client's `block-added` notifications with a subscription made again after a
+// lost link, and the mock node's `/node/blocks` poll.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { StreamBlock } from './block-stream';
 import { HttpMockNode } from './node-http';

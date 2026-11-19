@@ -1,5 +1,6 @@
-// A sell ladder placed as one curve order (`CurveIntent`): one KobCurveAsk with the ladder's prices as its table, validated in the script
-// engine and decoded with nothing blocking; the bad shapes are refused.
+// A sell ladder placed as one curve order (`CurveIntent`): one KobCurveAsk with the ladder's prices
+// as its table, validated in the script engine and decoded with nothing blocking; the bad shapes
+// are refused.
 import { describe, expect, it } from 'vitest';
 import { CLOCK, MAKER_PK, consensusCheck, kob, makeEnv, market3x3 } from '../../testing/fixtures';
 import { planOrder } from '../plan';

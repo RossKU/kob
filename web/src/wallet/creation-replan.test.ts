@@ -1,5 +1,5 @@
-// A saved creation is planned again from its facts before the wallet is asked for its genesis: a valid record reproduces its ids, a tampered one
-// is refused.
+// A saved creation is planned again from its facts before the wallet is asked for its genesis: a
+// valid record reproduces its ids, a tampered one is refused.
 import { describe, expect, it } from 'vitest';
 import { replanCreation } from './creation-replan';
 import { checkSavedCreation, CREATION_INVALID } from './create';
@@ -18,7 +18,9 @@ function plan(form: Partial<IssueForm> = {}, funding = [fund(10, 200n)], feeRate
   });
 }
 
-/** The record signAndSubmitCreation saves (the preparation's signature scripts do not matter here). */
+/**
+ * The record signAndSubmitCreation saves (the preparation's signature scripts do not matter here).
+ */
 const recordOf = (p: IssuePlan): CreationRecord => JSON.parse(JSON.stringify({
   network: NET, maker: MAKER_PK, createdAt: 1, covenantId: p.token.covenantId, prepTxid: p.prep.tx.id, genesisTxid: p.built.tx.id, prep: p.prep.tx,
   genesisBuilt: p.built, token: p.token, declaration: p.declaration, docs: p.docs, prepSent: true,

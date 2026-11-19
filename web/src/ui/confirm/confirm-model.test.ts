@@ -1,5 +1,6 @@
-// The decoded-order vocabulary (confirm-model.ts) on the golden transactions: `orderRows` / `orderTitle` of each decoded order, token labels and
-// amounts, the order type re-derived from the state, and the decoder's own verdicts the silent pre-sign checks rely on.
+// The decoded-order vocabulary (confirm-model.ts) on the golden transactions: `orderRows` /
+// `orderTitle` of each decoded order, token labels and amounts, the order type re-derived from the
+// state, and the decoder's own verdicts the silent pre-sign checks rely on.
 import { describe, expect, it } from 'vitest';
 import { decodeSigning, describeInputsForWallet, type DecodedOrder, type DecodedSpend, type ExpectedSigning, type SigningSummary, type TokenRef } from '../../kob/decode';
 import { parseRegistry, type TokenRegistry } from '../../kob/registry';
@@ -46,7 +47,10 @@ const rowOf = (rows: Row[], id: string): Row => {
 };
 const codes = (xs: { code: string }[]) => xs.map((x) => x.code);
 
-/** Every string orderRows / orderTitle / tokenLabel produce for a decoded summary, for leftover-key and placeholder checks. */
+/**
+ * Every string orderRows / orderTitle / tokenLabel produce for a decoded summary, for leftover-key
+ * and placeholder checks.
+ */
 function strings(summary: SigningSummary, reg: TokenRegistry | null = registry): string[] {
   const out: string[] = [];
   const add = (rows: Row[], title: string) => out.push(title, ...rows.flatMap((r) => [r.label, r.value, r.detail ?? '']));
@@ -77,7 +81,8 @@ describe('decoded order terms', () => {
     expect(order.verified).toBe(true);
     expect(rowOf(rows, 'amount').value).toBe('10 TST');
     expect(rowOf(rows, 'minFill').value).toMatch(/ TST$/);
-    // golden token TST has 3 decimals (scale 1000 base units): 250_000_000 sompi per whole token = 2.5 KAS per token
+    // Golden token TST has 3 decimals (scale 1000 base units): 250_000_000 sompi per whole token =
+    // 2.5 KAS per token.
     expect(rowOf(rows, 'price').value).toBe('2.5 KAS per TST');
     expect(rowOf(rows, 'tip').value).toBe('0.001 KAS per TST');
     expect(rowOf(rows, 'allIn').label).toBe('You receive at least per token (all-in)');
@@ -129,7 +134,8 @@ describe('decoded order terms', () => {
     const { rows, title } = created('create.condAsk');
     expect(title).toMatch(/^Sell (stop order|OCO order|trailing stop|take-profit order|OCO order with trailing stop)/);
     expect(rows.some((r) => r.id === 'stop')).toBe(true);
-    // R-4: the trigger direction (a sell stop arms on resting sells at or below it) and the worst fill price after the trigger
+    // R-4: the trigger direction (a sell stop arms on resting sells at or below it) and the worst
+    // fill price after the trigger.
     expect(rowOf(rows, 'exposure').value).toMatch(/at least [\d.]+ TST of a sell order resting at or below the stop for \d+ s/);
     expect(rowOf(rows, 'stopWorst').detail).toMatch(/between the stop and this price/);
     const buy = created('create.condBid').rows;

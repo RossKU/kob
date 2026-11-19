@@ -1,6 +1,8 @@
-// Pair planner tests of the if-done kinds (KobIfdPair with KobCondPair exits): IFD / IFO / bracket, stop entries, repeat IFD / IFO, buy-first
-// and sell-first, every KCC-20 / KRON mix. Same oracle as pair-simple.test.ts; the committed exit, the B escrow / prefund, the exit carrier and
-// the entry's KAS are checked against an independent BigInt model and against kob-wasm (`ifdPairExit`, `ifdPairExitFor`, `ifdPairAmounts`).
+// Pair planner tests of the if-done kinds (KobIfdPair with KobCondPair exits): IFD / IFO / bracket,
+// stop entries, repeat IFD / IFO, buy-first and sell-first, every KCC-20 / KRON mix. Same oracle as
+// pair-simple.test.ts; the committed exit, the B escrow / prefund, the exit carrier and the entry's
+// KAS are checked against an independent BigInt model and against kob-wasm (`ifdPairExit`,
+// `ifdPairExitFor`, `ifdPairAmounts`).
 import { describe, expect, it } from 'vitest';
 import type { CondPairState, IfdPairState } from '../types';
 import type { TokenMarket } from '../plan-types';
@@ -56,7 +58,8 @@ describe.each(combos)('KobIfdPair on %s', (_name, mkA, mkB) => {
     });
     expect(BigInt(e.custody)).toBe(floorQ(amount, 1_401n, a.scale));
     expect(e.exitState.length).toBe(2 * 432);
-    // the committed exit (kob-wasm ifdPairExit) is a KobCondPair ASK of the same pair with the take-profit
+    // the committed exit (kob-wasm ifdPairExit) is a KobCondPair ASK of the same pair with the
+    // take-profit
     const committed = K.ifdPairExit(p.states[0]).state as CondPairState;
     expect(committed).toMatchObject({ side: '1', sCovId: a.covenantId, tCovId: b.covenantId, tpPrice: '1601', stopPrice: '0', minFill: String(exitMin), amountLeft: '0', custody: '0', tip: '0' });
     expect(e.exitState).toBe(K.ifdPairCommitExit(K.ifdPairExit(p.states[0])));
@@ -89,7 +92,8 @@ describe.each(combos)('KobIfdPair on %s', (_name, mkA, mkB) => {
     expect(BigInt(e.custody)).toBe(K.ifdPairBCustodyNeeded(p.states[0]));
     const committed = K.ifdPairExit(p.states[0]).state as CondPairState;
     expect(committed).toMatchObject({ side: '2', sCovId: b.covenantId, tCovId: a.covenantId, tpPrice: '1399', stopPrice: '1700', slipBps: '300', keeperTip: String(keeperTip) });
-    // the exit's trigger threshold scales with the entry's amount (at most what one exit holds), not its own minimum fill
+    // the exit's trigger threshold scales with the entry's amount (at most what one exit holds),
+    // not its own minimum fill
     expect(BigInt(committed.minTouch)).toBe(K.defaultMinTouch(BigInt(committed.minFill), amount));
     const proceeds = ceilQ(amount, 1_599n, a.scale);
     const pre = ceilQ(amount, prefund, a.scale);
@@ -188,7 +192,8 @@ describe('KobIfdPair economics and refusals', () => {
     expect(errorCodes(short)).toEqual(['PAIR_PREFUND_SHORT']);
     expect(short.issues[0].params).toMatchObject({ needed: 1_600n + band(1_600n) - 1_500n, given: 10n, ticker: 'BBB' });
     expect(errorCodes(plan(makePairEnv(), { type: 'ifd', side: 'sell', amount: 4_000n, prefund: -1n, entry: { price: 1_500n }, exit: { takeProfit: 1_300n } }))).toEqual(['COND_PREFUND_INVALID']);
-    // without a prefund need (a take-profit below the entry) the B custody is only the per-fill slack
+    // without a prefund need (a take-profit below the entry) the B custody is only the per-fill
+    // slack
     const none = pairValid(makePairEnv(), { type: 'ifd', side: 'sell', amount: 4_000n, entry: { price: 1_500n }, exit: { takeProfit: 1_300n } });
     expect(entryOf(none)).toMatchObject({ prefund: '0', custody: '3' });
   });
@@ -245,7 +250,8 @@ describe('pair placement: the spare token slots of each token take its smallest 
     const p = pairValid(env, { type: 'ifo', side: 'sell', amount, entry: { price: 1_599n }, exit: { takeProfit: 1_399n, stop: 1_700n } });
     const built = p.built!;
     const ins = (cov: string) => built.tx.inputs.filter((i) => i.utxo.covenantId === cov);
-    // A: the exact cover (8,003), then the 1 and the 2 (not the 50); B: the big UTXO, then the 1 and the 2 (not the 9)
+    // A: the exact cover (8,003), then the 1 and the 2 (not the 50); B: the big UTXO, then the 1
+    // and the 2 (not the 9)
     expect(ins(a.covenantId)).toHaveLength(3);
     expect(ins(b.covenantId)).toHaveLength(3);
     const outs = (cov: string) => built.tx.outputs.filter((o) => o.covenant?.covenantId === cov);
@@ -254,7 +260,8 @@ describe('pair placement: the spare token slots of each token take its smallest 
     expect(outs(b.covenantId)).toHaveLength(2);
     const aChange = K.tokenScriptPublicKey(a.program!, keyState(a.family, 3n, env.maker, a.extensionCommitment, a.program!));
     expect(outs(a.covenantId).filter((o) => o.scriptPublicKey === aChange)).toHaveLength(1);
-    // max(compute, normalized transient, storage) within 90% of the per-transaction limits (500,000 on the compute scale)
+    // max(compute, normalized transient, storage) within 90% of the per-transaction limits (500,000
+    // on the compute scale)
     expect(built.fee.mass.priorityMass).toBeLessThan(450_000);
   });
 });

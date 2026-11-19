@@ -1,5 +1,7 @@
-// Fixed decimals per column: every row of a numeric column shows the SAME number of decimals (trailing zeros kept), chosen once per market / view, so
-// the decimal points line up (right-aligned, tabular figures). Covers the token order book (native and inverted) and the pair (implied) book with the values of the TBTC/TUSD pair-book screenshot.
+// Fixed decimals per column: every row of a numeric column shows the SAME number of decimals
+// (trailing zeros kept), chosen once per market / view, so the decimal points line up
+// (right-aligned, tabular figures). Covers the token order book (native and inverted) and the pair
+// (implied) book with the values of the TBTC/TUSD pair-book screenshot.
 import { describe, expect, it } from 'vitest';
 import type { PairBookView, PairLevelView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
@@ -12,7 +14,8 @@ import { CELL_CHARS } from '../kit/format';
 const decimalsOf = (text: string): number => (text.includes('.') ? text.split('.')[1]!.length : 0);
 const sameDecimals = (texts: string[]): boolean => new Set(texts.map(decimalsOf)).size === 1;
 
-// ---- token order book: 8 decimals, scale 1e8 (prices per whole token), tick = 100_000 sompi per token = 0.001 KAS per token
+// ---- token order book: 8 decimals, scale 1e8 (prices per whole token), tick = 100_000 sompi per
+// token = 0.001 KAS per token.
 const S = 100_000_000n;
 const CTX = { name: 'TBTC', decimals: 8, scale: S, tick: 100_000n, dp: 3, labels: { price: 'p', size: 's', total: 't' } };
 const lv = (price: string, amount: bigint) => ({ price, amount: amount.toString(), amount_estimated: false, orders: 1, scale: Number(S) });
@@ -74,14 +77,16 @@ describe('token book: fixed decimals per column', () => {
 const TBTC: PairToken = { covenantId: 'aa'.repeat(32), ticker: 'TBTC', decimals: 8, scale: 100_000_000n };
 const TUSD: PairToken = { covenantId: 'bb'.repeat(32), ticker: 'TUSD', decimals: 8, scale: 100_000_000n };
 const pl = (source: 'direct' | 'route', price: string, amount: string): PairLevelView => {
-  // `price` = QUOTE per whole BASE as a decimal with at most 2 fraction digits; both tokens have 8 decimals, so units per unit = the same number
+  // `price` = QUOTE per whole BASE as a decimal with at most 2 fraction digits. Both tokens have 8
+  // decimals, so units per unit = the same number.
   const [i, f = ''] = price.split('.');
   return { source, price_num: `${i}${f.padEnd(2, '0')}`, price_den: '100', amount, orders: 1 };
 };
 const pview = (asks: PairLevelView[], bids: PairLevelView[]): PairBookView => ({ base: TBTC.covenantId, quote: TUSD.covenantId, daa_score: 1, asks, bids });
 
 describe('pair book: fixed decimals per column (the TBTC/TUSD screenshot)', () => {
-  // prices that used to show as 84,392.43 / 80,607.2 / 80,482 and amounts as 0.000006 / 0.0000113 / 0.00002365 / 0.0002124
+  // Prices such as 84,392.43 / 80,607.2 / 80,482 and amounts such as 0.000006 / 0.0000113 /
+  // 0.00002365 / 0.0002124 must each show the same decimals within their column.
   const m = buildPairBook(pview([pl('route', '84392.43', '600'), pl('route', '85000', '1130')], [pl('route', '80607.2', '2365'), pl('direct', '80482', '21240')]), TBTC, TUSD)!;
   const rows = [...m.asks, ...m.bids];
 
@@ -118,7 +123,8 @@ describe('pair book click prefill', () => {
   });
 });
 
-// ---- huge and tiny amounts: a column never needs more characters than a cell shows (no "56,609,95…", no "0.0000000…")
+// ---- huge and tiny amounts: a column never needs more characters than a cell shows (no
+// "56,609,95…", no "0.0000000…").
 describe('book, pair book and tapes with 0 and 18 decimals and huge amounts', () => {
   const fits = (texts: string[]) => texts.every((s) => s.length <= CELL_CHARS && !s.includes('…'));
   const E18 = 10n ** 18n;

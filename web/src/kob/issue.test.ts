@@ -1,5 +1,6 @@
-// Issuance: form validation, planning over kob-wasm, and the strongest oracle available: the planned creation (the KCC-23 preparation and
-// the genesis spending it), each signed locally and finalized with tightened budgets, passes kob-wasm `validate` (the script engine runs the
+// Issuance: form validation, planning over kob-wasm, and the strongest oracle available: the
+// planned creation (the KCC-23 preparation and the genesis spending it), each signed locally and
+// finalized with tightened budgets, passes kob-wasm `validate` (the script engine runs the
 // covenants and checks the storage-mass commitment and fee floor), and its launch proof verifies.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -33,7 +34,10 @@ function opts(over: Partial<PlanIssueOptions> = {}): PlanIssueOptions {
 }
 const codes = (f: IssueForm, tickers?: string[]) => validateIssueForm(f, limits, tickers).map((i) => i.code);
 
-/** plan -> local signatures of both transactions -> finalize(tightenBudgets) -> validate; returns the signed genesis */
+/**
+ * plan -> local signatures of both transactions -> finalize(tightenBudgets) -> validate; returns
+ * the signed genesis
+ */
 function signAndValidate(plan: IssuePlan) {
   const one = (b: IssuePlan['built']) => {
     const signed = kob.finalize(b, signBuilt(b, [SK]), { tightenBudgets: true });
@@ -150,7 +154,8 @@ describe('validateIssueForm', () => {
     expect(codes(form({ holders: [h(maker, 0, '0'), h(maker, 0, '1000')] }))).toEqual(['holder.amount.zero']);
     expect(codes(form({ holders: [h(maker, 0, 'x')] }))).toEqual(['holder.amount.invalid']);
     expect(codes(form({ holders: [h(maker, 0, '1000.000000001')] }))).toEqual(['holder.amount.precision']);
-    // scheme 0 needs a real x-only key (an off-curve value would burn the tokens); hashes and covenant ids are opaque
+    // scheme 0 needs a real x-only key (an off-curve value would burn the tokens); hashes and
+    // covenant ids are opaque
     const offCurve = '00'.repeat(31) + '05';
     expect(codes(form({ holders: [h(offCurve, 0, '1000')] }))).toEqual(['holder.owner.not_a_key']);
     expect(codes(form({ holders: [h(offCurve, 1, '1000')] }))).toEqual([]);
@@ -175,7 +180,8 @@ describe('validateIssueForm', () => {
   it('warns about many holders and refuses more than the genesis maximum', () => {
     const many = (n: number) =>
       form({ supply: String(n), holders: Array.from({ length: n }, (_, i) => ({ owner: (i + 1).toString(16).padStart(2, '0').repeat(32), ownerScheme: 1, amount: '1' })) });
-    // the public-mint build and the standalone 3 / 3 program both move at most 3 token outputs together
+    // the public-mint build and the standalone 3 / 3 program both move at most 3 token outputs
+    // together
     expect(validateIssueForm(many(3), limits)).toEqual([]);
     expect(validateIssueForm({ ...many(3), program: 'public-mint' }, limits)).toEqual([]);
     expect(validateIssueForm({ ...many(3), program: '3x3' }, limits)).toEqual([]);
@@ -238,7 +244,8 @@ describe('planIssue', () => {
     expect(token.carrier).toBe((10n * KAS).toString());
     expect(token.outputs).toHaveLength(1);
     expect(token.outputs[0]).toMatchObject({ index: 0, amount: '100000000000', owner: maker, ownerScheme: 0, borrowScheme: 0 });
-    // the preparation: the funding, output 0 to the maker (the genesis's carrier and fee), change; the payload declares the token
+    // the preparation: the funding, output 0 to the maker (the genesis's carrier and fee), change;
+    // the payload declares the token
     expect(prep.plans).toEqual([{ kind: 'p2pk', pubkey: maker }]);
     expect(prep.tx.inputs[0]!.utxo.blockDaaScore).toBe('5000');
     expect(prep.tx.outputs).toHaveLength(2);
@@ -248,7 +255,8 @@ describe('planIssue', () => {
     expect(prep.tx.payload).toBe(plan.declaration.payload);
     expect(decodeDeclaration(kob, prep.tx.payload).token).toMatchObject({ name: 'Test Token', symbol: 'TEST', decimals: 8, description: 'A test token' });
     expect(metadataBytes(form({ description: 'A test token', website: 'https://example.org' }))).toBe(prep.tx.payload.length / 2);
-    // the genesis: one P2PK plan and one SIGHASH_ALL request for its one input (the preparation's output 0), no change
+    // the genesis: one P2PK plan and one SIGHASH_ALL request for its one input (the preparation's
+    // output 0), no change
     expect(built.plans).toEqual([{ kind: 'p2pk', pubkey: maker }]);
     expect(built.sign).toHaveLength(1);
     expect(built.sign[0]).toMatchObject({ inputIndex: 0, pubkey: maker, sighashType: 1, redeemScript: null });
@@ -286,14 +294,16 @@ describe('planIssue', () => {
       i += len;
     }
     expect(i).toBe(bytes.length);
-    // each span is the encoded state of the output it names, and the output's script is the one that state commits to
+    // each span is the encoded state of the output it names, and the output's script is the one
+    // that state commits to
     const claimed = issuedTokenUtxos(plan);
     expect(spans).toHaveLength(claimed.length);
     claimed.forEach((u, k) => {
       expect(spans[k]!.toString('hex')).toBe(kob.encodeTokenState(u.state));
       expect(kob.tokenScriptPublicKey(plan.token.program, u.state)).toBe(plan.built.tx.outputs[u.index]!.scriptPublicKey);
     });
-    // it is part of what the genesis signs, not of the token's identity: the same states under another declaration name the same payload
+    // it is part of what the genesis signs, not of the token's identity: the same states under
+    // another declaration name the same payload
     const other = planIssue(kob, form({ supply: '1000', description: 'other' }), opts());
     expect(other.built.tx.payload).toBe(plan.built.tx.payload);
     expect(other.token.covenantId).not.toBe(plan.token.covenantId);
@@ -367,7 +377,8 @@ describe('planIssue', () => {
     expect(plan.built.tx.outputs[0].value).toBe((250_000_000n).toString());
     expect(plan.built.fee.feeRate).toBe('200');
     expect(BigInt(plan.built.fee.minFee)).toBe(BigInt(plan.built.fee.mass.feeMass) * 200n);
-    // the change of the funding returns from the preparation; its output 0 stays the maker's (the genesis spends it)
+    // the change of the funding returns from the preparation; its output 0 stays the maker's (the
+    // genesis spends it)
     expect(plan.prep.tx.outputs[1]!.scriptPublicKey).toBe(`0000${'20' + otherKey + 'ac'}`);
     expect(plan.prep.tx.outputs[0]!.scriptPublicKey).toBe(`000020${maker}ac`);
     expect(plan.prep.fee.feeRate).toBe('200');
@@ -494,7 +505,8 @@ describe('registry entry', () => {
     });
     expect(entry).not.toHaveProperty('status');
     expect(entry.display).toMatchObject({ description: 'A test token', website: 'https://example.org', icon: 'ipfs://bafy' });
-    // the declaration as made on chain (KOB's fields; facts the chain states itself, like the supply, are not declared again)
+    // the declaration as made on chain (KOB's fields; facts the chain states itself, like the
+    // supply, are not declared again)
     expect(entry.display!.kcc23).toEqual({ name: 'Test Token', symbol: 'TEST', decimals: 8, description: 'A test token', image: 'ipfs://bafy', website: 'https://example.org' });
     check(entry, schema.$defs.token, 'entry');
     // the template hash is the one the shipped registry pins for kcc20-ref-public-mint
@@ -539,8 +551,8 @@ describe("the token's X and Telegram accounts (declared on chain, and in the reg
     expect(p.docs.metadata).toMatchObject({ x: 'https://x.com/kob', telegram: 'https://t.me/kob_chat' });
     expect(registryEntryFromIssue(p.token, p.docs).display).toMatchObject({ x: 'https://x.com/kob' });
     expect(p.declaration.json.endsWith(',"x":"https://x.com/kob","telegram":"https://t.me/kob_chat"}')).toBe(true);
-    // the genesis payload names the states of its token outputs (KOBG, docs/spec/token-metadata.md 3), not the declaration: that is the preparation's,
-    // and another declaration is another token
+    // the genesis payload names the states of its token outputs (KOBG, docs/spec/token-metadata.md
+    // 3), not the declaration: that is the preparation's, and another declaration is another token
     expect(p.built.tx.payload).toMatch(/^4b4f4247010170[0-9a-f]{224}$/);
     expect(plain.built.tx.payload).toBe(p.built.tx.payload);
     expect(p.prep.tx.id).not.toBe(plain.prep.tx.id);

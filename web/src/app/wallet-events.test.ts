@@ -1,4 +1,5 @@
-// The app's reaction to wallet changes after connect: the pure reducer and the watcher that the WalletProvider runs.
+// The app's reaction to wallet changes after connect: the pure reducer and the watcher that the
+// WalletProvider runs.
 import { describe, expect, it, vi } from 'vitest';
 import { reactToWalletChange, sameWallet, watchWallet, type WalletChange } from './wallet-events';
 import { createKaswareAdapter } from '../wallet/kasware';

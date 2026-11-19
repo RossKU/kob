@@ -1,5 +1,6 @@
-// What a token page says of a token no registry or indexer list names (a "no orders" row of the list, a covenant id typed in): the row kascov.io gives it
-// (`kascovRowOf`), its program and decimals rule (`ProgramNote`), the tab titles, and the facts the node confirmed.
+// What a token page says of a token no registry or indexer list names (a "no orders" row of the
+// list, a covenant id typed in): the row kascov.io gives it (`kascovRowOf`), its program and
+// decimals rule (`ProgramNote`), the tab titles, and the facts the node confirmed.
 import { describe, expect, it } from 'vitest';
 import type { KascovToken } from '../../data/kascov';
 import { pageTitle } from '../../app/page-title';

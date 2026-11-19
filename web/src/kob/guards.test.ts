@@ -41,8 +41,9 @@ describe('crossing', () => {
     expect(firmReferencePrice({ asks: [level(10_000_000n, 1n)], bids: [level(240n, 1n)] })).toBe(240n);
     expect(firmReferencePrice({ asks: [level(10_000_000n, 1n)], bids: [] })).toBeNull();
     expect(firmReferencePrice({ asks: [], bids: [level(240n, 1n)] })).toBe(240n);
-    // with the token's scale the bids must be worth one default minimum fill (10 KAS) together: a 1-base-unit bid at an absurd
-    // price above the book does not set the reference, the depth below it does
+    // with the token's scale the bids must be worth one default minimum fill (10 KAS) together: a
+    // 1-base-unit bid at an absurd price above the book does not set the reference, the depth below
+    // it does
     const S = 100_000_000n;
     const deep: BookView = { asks: [], bids: [level(1_000_000_000_000n, 1n), level(240_000_000n, 10n * S)] };
     expect(firmReferencePrice(deep)).toBe(1_000_000_000_000n);
@@ -78,7 +79,8 @@ describe('self-trade prevention (matcher.md 10.12)', () => {
   });
 
   it('counts tips on both sides all-in', () => {
-    // own buy 250 + tip 5 pays up to 255: a sell at 254 crosses, at 256 does not; the new sell tip lowers its floor
+    // own buy 250 + tip 5 pays up to 255: a sell at 254 crosses, at 256 does not; the new sell tip
+    // lowers its floor
     expect(checkSelfTrade([own('buy', 250n, 5n)], { side: 'sell', price: 255n, tip: 0n })).toHaveLength(1);
     expect(checkSelfTrade([own('buy', 250n, 5n)], { side: 'sell', price: 256n, tip: 0n })).toHaveLength(0);
     expect(checkSelfTrade([own('buy', 250n, 5n)], { side: 'sell', price: 258n, tip: 3n })).toHaveLength(1);
@@ -152,7 +154,8 @@ describe('FOK pre-check (matcher.md 10.4, spec 9.9)', () => {
   });
 
   it('per-order entries make the check exact: the fewest crossing orders that hold the quantity', () => {
-    // aggregated: one level in 6 orders is conservative (6 > 3 slots); exact entries show one big order suffices
+    // aggregated: one level in 6 orders is conservative (6 > 3 slots); exact entries show one big
+    // order suffices
     const aggregated: BookView = { asks: [], bids: [level(245n, 20n, 6)] };
     expect(codes(checkFok({ side: 'sell', amount: 10n, limit: 240n, tip: 0n, slots: m3, book: aggregated }))).toEqual(['FOK_TOO_MANY_COUNTERPARTIES']);
     const exact: BookView = {
@@ -186,24 +189,28 @@ describe('FOK pre-check: the minimum fill of the last counterparty', () => {
   const fok = (amount: bigint, book: BookView, slots = m3) => checkFok({ side: 'sell', amount, limit: 240n, tip: 0n, slots, book });
 
   it('refuses a FOK whose last order would need a partial fill below its minimum fill, with the amounts that do fill', () => {
-    // 6 (fills only in full) + 5 (at least 3): 8 needs 2 of the second order, below its minimum of 3, and no other split exists
+    // 6 (fills only in full) + 5 (at least 3): 8 needs 2 of the second order, below its minimum of
+    // 3, and no other split exists
     const b = bids([6n, 6n], [5n, 3n]);
     const r = fok(8n, b);
     expect(codes(r)).toEqual(['FOK_MIN_FILL_BLOCKS']);
     expect(r[0]!.params).toEqual({ left: 2n, minFill: 3n, below: 6n, above: 9n });
     expect(r[0]!.field).toBe('amount');
     expect(issueText(r[0]!, { tokenDecimals: 0, tokenTicker: 'T' })).toBe("FOK can't complete: the last order it needs fills at least 3 T, only 2 T would be left for it. Use at most 6 T or at least 9 T, or IOC.");
-    // the boundary: the suggested amounts fill (6 in full; 6 + the minimum 3), and so does everything up to both in full
+    // the boundary: the suggested amounts fill (6 in full; 6 + the minimum 3), and so does
+    // everything up to both in full
     for (const ok of [6n, 9n, 10n, 11n]) expect(fok(ok, b), `${ok}`).toEqual([]);
     for (const no of [7n, 8n]) expect(codes(fok(no, b)), `${no}`).toEqual(['FOK_MIN_FILL_BLOCKS']);
-    // an order with less left than its minimum fill gives all it has: 6 + 2 (minimum 3, only 2 left) fills 8 exactly
+    // an order with less left than its minimum fill gives all it has: 6 + 2 (minimum 3, only 2
+    // left) fills 8 exactly
     expect(fok(8n, bids([6n, 6n], [2n, 3n]))).toEqual([]);
   });
 
   it('accepts when another split or another order avoids it', () => {
     // the first order can take less: 5 + 3 = 8 (minimums 1 and 3)
     expect(fok(8n, bids([6n, 1n], [5n, 3n]))).toEqual([]);
-    // the greedy pair (6, 5 at least 3) cannot, but a third order (2, any fill) completes 6 + 2 within the slots
+    // the greedy pair (6, 5 at least 3) cannot, but a third order (2, any fill) completes 6 + 2
+    // within the slots
     expect(fok(8n, bids([6n, 6n], [5n, 3n], [2n, 1n]))).toEqual([]);
     // two output slots are enough for 6 + 2
     expect(fok(8n, bids([6n, 6n], [5n, 3n], [2n, 1n]), { inputs: 3, outputs: 2 })).toEqual([]);
@@ -242,7 +249,8 @@ describe('pair FOK: a route level counts only the traded token KAS orders', () =
       { price: 1450n, amount: 2000n, orders: 3, routeOrders: 2, routeRows: 1 },
       { price: 1440n, amount: 500n, orders: 3, routeOrders: 3, routeRows: 1 },
     ]);
-    // a route level of n KAS orders holds at least one of the other token: n - 1 counterparties of A at most; a direct order counts in full
+    // a route level of n KAS orders holds at least one of the other token: n - 1 counterparties of
+    // A at most; a direct order counts in full
     expect(assessFok({ side: 'sell', amount: 2500n, limit: 1400n, tip: 0n, slots: { inputs: 3, outputs: 3 }, book: v }).counterparties).toBe(1 + 1 + 2);
   });
 
@@ -330,7 +338,7 @@ describe('field checks', () => {
     // the book wins over the last trade (reference 1000): 1500 is 50% away from it
     expect(codes(checkMarketBand(both, 100n, 'sell', 1_500n))).toEqual(['PRICE_FAR_FROM_MARKET']);
     expect(checkMarketBand(both, 100n, 'sell', 1_500n)[0].params).not.toHaveProperty('basis');
-    // one side only: still the book, as before
+    // one side only: still the book
     expect(codes(checkMarketBand({ asks: [level(1_000n, 1n)], bids: [] }, 5n, 'sell', 800n))).toEqual(['PRICE_AGGRESSIVE_VS_MARKET']);
     // empty book: the last trade, same thresholds, the finding says so
     const empty: BookView = { asks: [], bids: [] };
@@ -366,7 +374,8 @@ describe('field checks', () => {
     expect(checkCarrierRatio(two, 1_000_000_000n)).toHaveLength(1);
     expect(checkCarrierRatio(two, 2_000_000_000n)).toEqual([]);
     expect(checkCarrierRatio([{ kind: 'orderCarrier', amount: 1n, count: 1 }], null)).toEqual([]);
-    // a bid's escrow and reserve are its value, not carriers (every bid warned: TN10 2026-10-14); a kept line is the wallet's
+    // a bid's escrow and reserve are its value, not carriers, so they do not warn; a kept line is
+    // the wallet's
     const bid = [
       { kind: 'escrow', amount: 25_000_000_000n, count: 1 },
       { kind: 'deliveryCarrier', amount: 200_000_000n, count: 3 },
@@ -403,7 +412,8 @@ describe('estimateFills: the transactions an order taking liquidity needs from t
   it('a sell takes bids into its token outputs; its own rest is an output too while it is not filled up', () => {
     const bids = Array.from({ length: 7 }, (_, i) => bookOrder(P - BigInt(i) * 1_000n, 2n));
     const b: BookView = { asks: [], bids: bids.map((o) => level(o.price, o.amount)), bidOrders: bids };
-    // 14 of 7 bids: 3 in the transaction that finishes it, 2 in each before (one output keeps the rest): 1 + ceil(4 / 2) = 3
+    // 14 of 7 bids: 3 in the transaction that finishes it, 2 in each before (one output keeps the
+    // rest): 1 + ceil(4 / 2) = 3
     expect(estimateFills({ side: 'sell', amount: 14n, limit: P - 6_000n, tip: 0n, slots, book: b })).toMatchObject({ counterparties: 7, perTx: 3, fills: 3 });
     // 3 bids finish 6 in one transaction
     expect(estimateFills({ side: 'sell', amount: 6n, limit: P - 6_000n, tip: 0n, slots, book: b }).fills).toBe(1);
@@ -416,7 +426,8 @@ describe('estimateFills: the transactions an order taking liquidity needs from t
   it('aggregated levels count their orders (route levels as the FOK pre-check counts them); the 8-input cap', () => {
     const lv: BookView = { asks: [level(P, 9n, 6), level(P + 1n, 9n, 3)], bids: [] };
     const e = estimateFills({ side: 'buy', amount: 12n, limit: P + 1n, tip: 0n, slots, book: lv });
-    // the first level's 6 orders, then a third of the second level's 3 (rounded up): 7 orders, 3 fills
+    // the first level's 6 orders, then a third of the second level's 3 (rounded up): 7 orders, 3
+    // fills
     expect(e).toMatchObject({ exact: false, counterparties: 7, fills: 3, smallest: 1n });
     expect(estimateFills({ side: 'buy', amount: 9n, limit: P, tip: 0n, slots: { inputs: 16, outputs: 16 }, book: lv }).perTx).toBe(8);
   });

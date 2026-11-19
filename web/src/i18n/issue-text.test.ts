@@ -39,7 +39,8 @@ describe('issueText: parameter formatting', () => {
 
   it('prices of a token with more than 9 decimals are per whole token (the state price is per 10^9 base units)', () => {
     const i = issue('PRICE_AGGRESSIVE_VS_MARKET', { percent: '50', reference: 2_500_000n });
-    // 18 decimals: the standard scale is 10^9 base units, a billionth of a token: 0.025 KAS per 10^9 base units = 25,000,000 KAS per token
+    // 18 decimals: the standard scale is 10^9 base units, a billionth of a token: 0.025 KAS per
+    // 10^9 base units = 25,000,000 KAS per token.
     expect(issueText(i, { tokenDecimals: 18, tokenTicker: 'T18' })).toContain('(25000000 KAS)');
     expect(issueText(i, { tokenDecimals: 9 })).toContain('(0.025 KAS)');
     expect(issueText(issue('MARKETABLE_AUCTION', { touch: 2_490_000n }), { tokenDecimals: 12 })).toContain('(24.9 KAS)');
@@ -117,8 +118,8 @@ describe('issueText: context merged into the params', () => {
     expect(at(1_000_100n, 1_000_000n)).toContain('in about less than a minute');
   });
 
-  // C5 R-3: a raw builder text is never shown inline: the sentence carries its plain-words class, the raw text goes behind "Details"
-  // (rawOf). This test pinned the raw English inside the sentence.
+  // A raw builder text is never shown inline. The sentence carries its plain-words class, and the
+  // raw text goes behind "Details" (rawOf).
   it('replaces the raw builder detail of a protocol refusal by a plain sentence', () => {
     expect(issueText(issue('BUILD_REJECTED', { reason: 'amount must be positive' }), {})).toBe('The protocol refused this order: the order terms are not valid (an amount, price or minimum fill is out of range)');
     expect(issueText({ code: 'cancel.build-failed', message: 'token-holding order: custody token UTXO required' }, {})).toContain('token custody of the order was not found');
@@ -143,7 +144,10 @@ describe('issueText: fallbacks', () => {
   });
 });
 
-/** Every English placeholder gets a plausible value: catalogue codes are rendered from the params their planners really pass. */
+/**
+ * Every English placeholder gets a plausible value: catalogue codes are rendered from the params
+ * their planners really pass.
+ */
 function synthParams(message: string): Params {
   const p: Params = {};
   for (const m of message.matchAll(/\{(\w+)(?::\w+)?\}/g)) {
@@ -402,7 +406,8 @@ describe('wallet, sign flow and node errors', () => {
         }
       }
     }
-    // the cancel / refund transactions of the golden vectors reach the generic, per-wallet and no-signature notices
+    // The cancel / refund transactions of the golden vectors reach the generic, per-wallet and
+    // no-signature notices.
     for (const c of ['blind-tokens', 'kasware-spend', 'kaspire-covenant', 'kastle-balance', 'covenant-inputs-unsigned', 'no-signature']) expect(seen.has(c), c).toBe(true);
     expect(walletNoticeText({ code: 'kastle-scripts', message: 'x', params: { inputs: 2 } })).toContain('(2 here)');
   });

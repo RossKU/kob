@@ -1,6 +1,8 @@
-// Every order type of the KAS ticket plans on a token/token pair, on both sides it offers (the soak's pair bots place these shapes): limit, IOC,
-// FOK, market, streaming, close, TWAP, DCA, Dutch / rising, stop-market, stop-limit, trailing stop, take-profit, OCO, IFD, IFO (limit and stop
-// entry), repeat IFD / IFO. Prices B base units per whole A around the pair book's mid (1475), amounts base units of A.
+// Every order type of the KAS ticket plans on a token/token pair, on both sides it offers (the
+// soak's pair bots place these shapes): limit, IOC, FOK, market, streaming, close, TWAP, DCA, Dutch
+// / rising, stop-market, stop-limit, trailing stop, take-profit, OCO, IFD, IFO (limit and stop
+// entry), repeat IFD / IFO. Prices B base units per whole A around the pair book's mid (1475),
+// amounts base units of A.
 import { describe, expect, it } from 'vitest';
 import { CLOCK, makePairEnv } from './pair-fixtures';
 import { errorCodes, plan } from './pair-testkit';

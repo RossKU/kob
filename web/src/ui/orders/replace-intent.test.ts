@@ -1,5 +1,6 @@
-// The replace form (R-5): a live order turned back into its ticket intent re-plans to the SAME order (round trip), and an edited intent becomes the
-// replacement of one atomic cancel + new order transaction that the script engine accepts.
+// The replace form (R-5): a live order turned back into its ticket intent re-plans to the SAME
+// order (round trip), and an edited intent becomes the replacement of one atomic cancel + new order
+// transaction that the script engine accepts.
 import { describe, expect, it } from 'vitest';
 import { planCancelReplace, type OrderSnapshot } from '../../kob/cancel';
 import type { CondIntent } from '../../kob/intent-cond';
@@ -39,7 +40,8 @@ const roundTrip = (intent: CondIntent, typeKey: OrderRowModel['typeKey']) => {
   if (!back.ok) throw new Error('no intent');
   const p = planOrder(replaceEnv(env, rowOf(snap, typeKey), state), back.intent);
   expect(p.issues.filter((i) => i.severity === 'error')).toEqual([]);
-  // the same order again: every term but the GTC expiry (counted from now, the same clock here) is what the order had
+  // The same order again: every term but the GTC expiry (counted from now, the same clock here) is
+  // what the order had.
   expect(env.kob.encodeState(p.states[0]!)).toBe(env.kob.encodeState(state));
   return { state, snap, intent: back.intent, plan: p };
 };

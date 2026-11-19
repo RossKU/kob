@@ -95,7 +95,7 @@ describe('ownOrderRefs', () => {
   });
 });
 
-// ------------------------------------------------------------------------------------------------ buildPairPlanEnv
+// -------------------------------------------------------------------------------- buildPairPlanEnv
 
 const K = kob();
 const registry = parseRegistry(tradableRegistryJson(), { kob: K });
@@ -190,7 +190,8 @@ describe('buildPairPlanEnv', () => {
     // a narrow spread: the midpoint
     const narrow = async () => ({ asks: [lvl('310000000')], bids: [lvl('290000000')] });
     expect(await kasReferenceOf({ book: narrow, trades } as unknown as Parameters<typeof kasReferenceOf>[0], m)).toMatchObject({ book: 300_000_000n });
-    // a bid of one base unit at 3,000 times the book's price (worth 9 KAS) does not set it: the bids worth 10 KAS together do
+    // A bid of one base unit at 3,000 times the book's price (worth 9 KAS) does not set it: the
+    // bids worth 10 KAS together do.
     const tiny = async () => ({ asks: [], bids: [lvl('900000000000', '1'), lvl('290000000')] });
     expect(await kasReferenceOf({ book: tiny, trades } as unknown as Parameters<typeof kasReferenceOf>[0], m)).toMatchObject({ book: 290_000_000n });
   });
@@ -218,7 +219,7 @@ describe('buildPairPlanEnv', () => {
 });
 
 
-// ------------------------------------------------------------------------------------------------ one round of reads
+// ------------------------------------------------------------------------------ one round of reads
 
 describe('environment builds read the coins and the market at the same time', () => {
   const deferred = () => {

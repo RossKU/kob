@@ -1,4 +1,5 @@
-// The inverted-market wording of the ticket: every `.inv` / `...Inv` text exists next to its native one and renders without leftover placeholders.
+// The inverted-market wording of the ticket: every `.inv` / `...Inv` text exists next to its native
+// one and renders without leftover placeholders.
 import { describe, expect, it } from 'vitest';
 import ticket from '../../i18n/en/ticket';
 import market from '../../i18n/en/market';

@@ -1,5 +1,6 @@
-// The wallet's delivery settings in localStorage: the default of buy orders and the Top-up receive threshold per (wallet key, token, extension
-// commitment), stored once and reused until it is reset (bid-delivery-spec §10).
+// The wallet's delivery settings in localStorage: the default of buy orders and the Top-up receive
+// threshold per (wallet key, token, extension commitment), stored once and reused until it is reset
+// (bid-delivery-spec §10).
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   DELIVERY_PREF_KEY, listThresholds, readDeliveryPref, readThreshold, rememberThreshold, resetDeliveryPrefMemory, resetThreshold, thresholdKey, writeDeliveryPref,

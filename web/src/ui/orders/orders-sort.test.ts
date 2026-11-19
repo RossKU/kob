@@ -13,7 +13,10 @@ interface Over {
   pair?: boolean;
   budget?: boolean;
 }
-/** The fields of an order line these helpers read (a cast: the rest of the model is not their business). */
+/**
+ * The fields of an order line these helpers read (a cast: the rest of the model is not their
+ * business).
+ */
 const row = (o: Over = {}): OrderRowModel =>
   ({
     status: o.status ?? 'open',

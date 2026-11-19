@@ -6,7 +6,7 @@ const est = (normal: number, priority = normal + 5, low = 100): FeeEstimate => (
 
 describe('isContended: the executor\'s reading of getFeeEstimate (kob_protocol::fee_estimate::FeeEstimate::contended)', () => {
   it('the first normal bucket, rounded up, at least 10 percent above the relay floor', () => {
-    // the TN10 flood of 2026-10-02: normal buckets 140 to 194, low 115, floor 100
+    // A flood on TN10: normal buckets 140 to 194, low 115, floor 100.
     expect(isContended(est(194))).toBe(true);
     expect(isContended(est(140))).toBe(true);
     expect(isContended(est(110))).toBe(true);

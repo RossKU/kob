@@ -1,6 +1,12 @@
-// The node check of the book binds what it confirms to THE MARKET (app/book-verify.ts, audit 2026-10-29 F2). A malicious indexer with no order of its own
-// on the chain used to steer the start price of a market / close auction with REAL orders only: genuine asks listed dearest first, a real order of ANOTHER
-// token, an expired one, or an inflated `amount_left` at the touch. Each of those is now refused or corrected; the touch is the best node-confirmed price.
+// Tests that the node check of the book binds what it confirms to THE MARKET (app/book-verify.ts).
+//
+// A malicious indexer with no order of its own on the chain could steer the start price of a
+// market or close auction with REAL orders only:
+// - genuine asks listed dearest first,
+// - a real order of ANOTHER token,
+// - an expired order,
+// - an inflated `amount_left` at the touch.
+// Each of those is refused or corrected. The touch is the best node-confirmed price.
 import { describe, expect, it } from 'vitest';
 import type { BookOrderView, BookView, OrderView } from '../data/indexer-types';
 import { joinSpkString } from '../data/kaspa-sdk';
@@ -22,11 +28,14 @@ const priceOf = (s: OrderSnapshot): bigint => describeOrder(s.order.state, kob).
 interface Over {
   price?: bigint;
   tokenCovId?: string;
-  /** more fields of the order state (tokenTplHash, extensionCommitment, expiryDaa, activeFrom ...) */
+  /** More fields of the order state (tokenTplHash, extensionCommitment, expiryDaa ...). */
   state?: Record<string, string>;
 }
 
-/** A REAL order on the chain (its order UTXO and custody exist unspent at the scripts their states derive), with another price / token / state. */
+/**
+ * A REAL order on the chain, with another price, token or state.
+ * Its order UTXO and custody exist unspent at the scripts their states derive.
+ */
 function realOrder(base: OrderSnapshot, n: number, over: Over, chain: FakeChain): OrderSnapshot {
   const txid = n.toString(16).padStart(2, '0').repeat(32);
   const st = clone(base.order.state) as OrderState & { state: Record<string, string> };
@@ -84,7 +93,7 @@ const mfOf = (p: { states: { state: unknown }[] }): string => (p.states[0]!.stat
 const planEnv = (book: unknown) => ({ ...makeEnv({ funding: [1_000_000n * KAS] }), book: book as never, clock: CLOCK });
 
 describe('the unchecked tail of the book sets nothing the order signs (audit 2026-10-29 round 2, R3)', () => {
-  /** three real asks, then `n` phantom rows (on no chain) behind them, each claiming `amount` tokens */
+  /** Three real asks, then `n` phantom rows (on no chain), each claiming `amount` tokens. */
   async function withTail(n: number, amount: string) {
     const w = world();
     const p = priceOf(w.real);
@@ -187,7 +196,8 @@ describe('the node check binds the book to the market (audit 2026-10-29 F2)', ()
   it('B1b: orders at one price keep the indexer order', async () => {
     const w = world();
     const p = priceOf(w.real);
-    // the golden ask stands in for a bid row only by side: use the ask side check of the wrong-side rule, and sort asks with equal prices stably
+    // The golden ask stands in for a bid row only by side. Use the ask side check of the
+    // wrong-side rule, and sort asks with equal prices stably.
     const a = w.reg(realOrder(w.real, 0xa3, { price: p }, w.chain));
     const b = w.reg(realOrder(w.real, 0xa4, { price: p }, w.chain));
     const part = await readMarketPart(w.services([rowOf(b), rowOf(a), rowOf(w.real)]), w.market);
@@ -251,10 +261,12 @@ describe('the node check binds the book to the market (audit 2026-10-29 F2)', ()
     expect(BOOK_CHECK_PER_SIDE).toBeLessThanOrEqual(BOOK_CHECK_MIN_CONFIRMED);
     const listed = [rowOf(w.real), ...rows, rowOf(ghost)];
     const part = await readMarketPart(w.services(listed), w.market);
-    // the first round confirms the best rows; the others (the phantom included) are the indexer's word and stay out of the book the planners get
+    // The first round confirms the best rows. The others (the phantom included) are the indexer's
+    // word and stay out of the book the planners get.
     expect(part.dropped).toEqual([]);
     expect(part.book.askOrders!.map((o) => o.covenantId)).toEqual(listed.slice(0, BOOK_CHECK_MIN_CONFIRMED).map((r) => r.covenant_id));
-    // a plan that needs more than that asks for it: the check goes on until the size is covered, and the phantom does not survive it
+    // A plan that needs more than that asks for it. The check goes on until the size is covered,
+    // and the phantom does not survive it.
     const deep = await readMarketPart(w.services(listed), w.market, { depth: 10n ** 30n });
     expect(deep.dropped.map((d) => d.covenantId)).toEqual([ghost.covenantId]);
     expect(deep.book.askOrders!.length).toBe(many + 1);

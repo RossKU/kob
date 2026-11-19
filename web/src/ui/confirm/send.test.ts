@@ -1,6 +1,7 @@
-// The silent pre-sign checks of an order action (send.ts): no confirmation screen shows the decoded transaction any more, so a transaction that
-// disagrees with what the planner claims, a stale account, a wrong network, a node that cannot confirm the coins or a failed re-check must stop
-// it before the wallet is asked, with one sentence.
+// The silent pre-sign checks of an order action (send.ts): no confirmation screen shows the decoded
+// transaction any more, so a transaction that disagrees with what the planner claims, a stale
+// account, a wrong network, a node that cannot confirm the coins or a failed re-check must stop it
+// before the wallet is asked, with one sentence.
 import { describe, expect, it } from 'vitest';
 import type { Services } from '../../app/services';
 import type { WalletSession } from '../../app/context';
@@ -27,7 +28,10 @@ const sdk = loadKaspaSdkNode();
 
 const planned = (): OrderPlan => planOrder(ticketEnv(), buildIntent(form('limit', 'sell', { amount: '5', price: '2.6' }), CTX).intent!);
 
-/** The services the checks read: the node holds exactly the inputs of `built` unless another node is given. */
+/**
+ * The services the checks read: the node holds exactly the inputs of `built` unless another node is
+ * given.
+ */
 function servicesFor(built: BuiltTx | null, node?: Pick<MockNode, 'getUtxosByAddresses'>): Services {
   const n = node ?? new MockNode({ network: NET, addressOf: (spk) => spkStringToAddress(sdk, spk, NET) });
   if (built && n instanceof MockNode) n.seedFromInputs(built.tx);
@@ -82,13 +86,15 @@ describe('checkBeforeSigning', () => {
     expect(blockedBy(await checkBeforeSigning(servicesFor(built), wallet(), { ...job, gate: Promise.resolve(null) }))).toBeNull();
     const down = { getUtxosByAddresses: () => Promise.reject(new Error('node down')) };
     expect(blockedBy(await checkBeforeSigning(servicesFor(built, down), wallet(), job))?.code).toBe('inputs-unavailable');
-    // a node that does not hold the token inputs: the decoder flags them (the KAS of covenant inputs is committed by no signature)
+    // A node that does not hold the token inputs: the decoder flags them (the KAS of covenant
+    // inputs is committed by no signature).
     expect(blockedBy(await checkBeforeSigning(servicesFor(null), wallet(), job))?.code).toBe('input-unconfirmed');
   });
 
   it("puts the re-check's plan in place and checks it as strictly: its own inputs read on the node, decoded against its own claims", async () => {
     const first = planned();
-    // the state at the click planned the same order into another transaction (here: another price, so another order state and escrow)
+    // The state at the click planned the same order into another transaction (here: another price,
+    // so another order state and escrow).
     const other = planOrder(ticketEnv(), buildIntent(form('limit', 'sell', { amount: '5', price: '2.7' }), CTX).intent!);
     const node = new MockNode({ network: NET, addressOf: (spk) => spkStringToAddress(sdk, spk, NET) });
     node.seedFromInputs(first.built!.tx);
@@ -151,7 +157,8 @@ describe('checkBeforeSigning', () => {
     const built = plan.built!;
     const job = { built, expected: expectedFromPlan(plan) };
     expect(blockedBy(await checkBeforeSigning(servicesFor(built), wallet(), job))).toBeNull();
-    // the first one was accepted: the node still lists its inputs, the wallet's node sees them spent by a pending transaction
+    // The first one was accepted: the node still lists its inputs, the wallet's node sees them
+    // spent by a pending transaction.
     pendingSpends.add([built.tx.inputs[0]!]);
     expect(blockedBy(await checkBeforeSigning(servicesFor(built), wallet(), job))?.code).toBe('input-pending-spent');
   });

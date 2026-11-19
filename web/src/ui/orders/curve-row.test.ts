@@ -1,5 +1,6 @@
-// A curve sell order in the orders list: one row, type "curve", its price the current level's, its facts for the sub-line and the details; an
-// unbound curve is listed under the token the indexer names; what the rest pays if it sells.
+// A curve sell order in the orders list: one row, type "curve", its price the current level's, its
+// facts for the sub-line and the details. An unbound curve is listed under the token the indexer
+// names. What the rest pays if it sells.
 import { describe, expect, it } from 'vitest';
 import { loadKobNode } from '../../kob/wasm.node';
 import { orderViewOf, placeGolden } from '../../testing/chain-fixtures';

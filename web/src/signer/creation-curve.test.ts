@@ -1,5 +1,6 @@
-// The private-key signer's check of a creation whose genesis places a sell curve: the claimed curve is re-derived from its state, and a claim
-// that leaves it out, names another maker or another output is refused.
+// The private-key signer's check of a creation whose genesis places a sell curve: the claimed curve
+// is re-derived from its state, and a claim that leaves it out, names another maker or another
+// output is refused.
 import { describe, expect, it } from 'vitest';
 import { defaultSaleForm } from '../kob/curve';
 import { emptyIssueForm, planIssue } from '../kob/issue';

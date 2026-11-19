@@ -1,7 +1,9 @@
-// The pair kinds (payload kinds 0x08 KobPair, 0x09 KobCondPair, 0x0a KobIfdPair) across the wallet's kob layer: placement records (custodies of
-// A and / or B, a sell-first entry's prefund), backups, node resolution (a live order and both its custodies; a partly filled pair ask found by
-// its continuation), node reconciliation of snapshots, balances per token, positions (an if-done pair entry with its exits) and notifications
-// (a pair fill is volume only: never a price). Transactions are the golden pair vectors re-keyed to the test maker and validated by kob-wasm.
+// The pair kinds (payload kinds 0x08 KobPair, 0x09 KobCondPair, 0x0a KobIfdPair) across the
+// wallet's kob layer: placement records (custodies of A and / or B, a sell-first entry's prefund),
+// backups, node resolution (a live order and both its custodies; a partly filled pair ask found by
+// its continuation), node reconciliation of snapshots, balances per token, positions (an if-done
+// pair entry with its exits) and notifications (a pair fill is volume only: never a price).
+// Transactions are the golden pair vectors re-keyed to the test maker and validated by kob-wasm.
 import { describe, expect, it } from 'vitest';
 import type { OrderView } from '../data/indexer-types';
 import { escrowedBalances, withFreeBalances } from './balances';
@@ -22,7 +24,10 @@ const opts = { maker: MAKER.pk, network: 'testnet-10', placedAtUnix: 1_790_000_0
 const A = '70'.repeat(32);
 const B = '71'.repeat(32);
 
-/** An indexer view of a pair order snapshot, with the `pair` object of docs/ops/executor.md 5.4 (custodies in record order). */
+/**
+ * An indexer view of a pair order snapshot, with the `pair` object of docs/ops/executor.md 5.4
+ * (custodies in record order).
+ */
 function pairView(snap: OrderSnapshot, over: Partial<OrderView> & Record<string, unknown> = {}): OrderView {
   const st = snap.order.state;
   const d = describeOrder(st, kob);

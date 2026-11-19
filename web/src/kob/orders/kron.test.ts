@@ -1,5 +1,6 @@
-// The KRON family end to end through the planners: every order kind on a KRON token (KobAskKron, ..., 46-byte token state with address
-// presence, no extension commitment), consensus-checked (sign locally, finalize with tightened budgets, script-engine validate) like the KCC-20 ones.
+// The KRON family end to end through the planners: every order kind on a KRON token (KobAskKron,
+// ..., 46-byte token state with address presence, no extension commitment), consensus-checked (sign
+// locally, finalize with tightened budgets, script-engine validate) like the KCC-20 ones.
 import { describe, expect, it } from 'vitest';
 import type { CondIntent } from '../intent-cond';
 import type { SimpleIntent } from '../intent-simple';

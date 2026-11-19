@@ -1,4 +1,5 @@
-// The header's wide row: the tabs in the true centre when the row has room for it, else packed after the brand; the brand's name where it still fits.
+// The header's wide row: the tabs in the true centre when the row has room for it, else packed
+// after the brand. The brand's name where it still fits.
 import { describe, expect, it } from 'vitest';
 import { headerLayout, rowWidths } from './narrow';
 

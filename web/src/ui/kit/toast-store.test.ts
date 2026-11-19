@@ -10,7 +10,7 @@ describe('toast store', () => {
     const release = s.hold();
     expect(s.held).toBe(true);
     expect(s.push({ message: 'Payment received', tone: 'ok' })).toBe(0);
-    // founder 2026-11-17: a failure is always seen at the top right, never only in the bell
+    // A failure is always seen at the top right, never only in the bell.
     const err = s.push({ message: 'the node failed', tone: 'error' });
     expect(err).toBeGreaterThan(0);
     expect(s.snapshot().map((t) => t.message)).toEqual(['before', 'the node failed']);

@@ -1,5 +1,6 @@
-// The signer frame's own summary must show what the user agrees to beyond the net effect: two requests that differ only in an order's price (or
-// stop) move the same KAS and tokens, so a summary of the net effect alone shows them identically.
+// The signer frame's own summary must show what the user agrees to beyond the net effect: two
+// requests that differ only in an order's price (or stop) move the same KAS and tokens, so a
+// summary of the net effect alone shows them identically.
 import { describe, expect, it } from 'vitest';
 import { summarize } from './summary';
 import { goldenRequest } from '../testing/golden';
@@ -41,7 +42,8 @@ describe('signer summary: order terms', () => {
   it('a sell order at another price shows another summary (the net effect alone is the same)', () => {
     const fair = summarize(kob, build('create.ask'), MAKER_PK, HINTS);
     const cheap = summarize(kob, build('create.ask', (s) => (s.price = (BigInt(s.price) / 1000n).toString())), MAKER_PK, HINTS);
-    // the same token movement and KAS locked for this key (the KAS line differs only by the fee of a shorter encoding, a few sompi)
+    // the same token movement and KAS locked for this key (the KAS line differs only by the fee of
+    // a shorter encoding, a few sompi)
     const same = (x: typeof fair) => x.lines.filter((l) => l.label !== 'KAS');
     expect(same(cheap)).toEqual(same(fair));
     // but the order's terms differ, and the price is on screen
@@ -127,7 +129,8 @@ describe('signer summary: a token merge', () => {
     const { chainKob, built } = mergeBuilt(2);
     const edited = summarize(chainKob, built, CHAIN_MAKER.pk, hints);
     expect(edited.title).toBe('Merge token UTXOs');
-    // the same request read for ANOTHER key: its token inputs are not that key's, so it is no merge of its own tokens
+    // the same request read for ANOTHER key: its token inputs are not that key's, so it is no merge
+    // of its own tokens
     const other = summarize(chainKob, built, CHAIN_OTHER.pk, hints);
     expect(other.title).not.toBe('Merge token UTXOs');
     expect(other.lines.some((l) => /merged$/.test(l.label))).toBe(false);
@@ -138,7 +141,7 @@ describe('signer summary: timing without a clock', () => {
   it("a plain GTC order's expiry is its DAA score, not an if-done exit's (TN10 2026-10-14 B-6); an exit's sentinel still reads as one", () => {
     const expiry = (name: string, edit: (s: Record<string, string>) => void) =>
       summarize(kob, build(name, edit), MAKER_PK, HINTS).orders[0]!.rows.find((r) => /expir/i.test(r.label))?.value;
-    // a GTC order placed on testnet-10 in October 2026: DAA ~595.8M now, + 90 days
+    // a GTC order placed on testnet-10 (DAA ~595.8M) with a 90 day expiry
     expect(expiry('create.ask', (s) => (s.expiryDaa = '673560000'))).toBe('DAA score 673560000');
     expect(expiry('create.bid', (s) => (s.expiryDaa = '673560000'))).toBe('DAA score 673560000');
     expect(expiry('create.ask', (s) => (s.expiryDaa = (1n << 62n).toString()))).toContain('when the exit is created');
@@ -207,12 +210,14 @@ describe('signer summary: prices that cannot be misread, the flipped view in its
   });
 
   it('a market buy of several fills says plainly that it may deliver MORE than the amount, and that Fills is cut to what the minimum fill allows', () => {
-    // 10 tokens, minimum fill 2.5: 4 fills at most, so the 5 typed are cut to 4; 4 carriers of 10 KAS in the escrow
+    // 10 tokens, minimum fill 2.5: 4 fills at most, so the 5 typed are cut to 4; 4 carriers of 10
+    // KAS in the escrow
     const o = summarize(kob, plan(form('market', 'buy', { amount: '10', maxFills: '5' })), FIXTURE_MAKER, hint(false)).orders[0]!;
     const by = Object.fromEntries(o.rows.map((r) => [r.id, r.value]));
     expect(by.tifFills).toMatch(/^fills in up to 4 transactions/);
     expect(by.fillsLimit).toBe('at most 4 transactions: with a minimum fill of 2.5 TUSD the amount cannot be split into more (a larger Fills value is cut to this)');
-    // the most the escrow lets the fills deliver: 10 tokens plus the 3 carriers (30 KAS) of fills that need not happen, at the worst price 2.575
+    // the most the escrow lets the fills deliver: 10 tokens plus the 3 carriers (30 KAS) of fills
+    // that need not happen, at the worst price 2.575
     expect(by.maxReceive).toMatch(/^2[1-3][.]\d+ TUSD$/);
     expect(Number(by.maxReceive!.split(' ')[0])).toBeCloseTo(10 + 30 / 2.575, 0);
     // a one-transaction market buy can never deliver more than its amount: no such row

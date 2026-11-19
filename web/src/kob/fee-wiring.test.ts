@@ -1,5 +1,6 @@
-// The dynamic fee policy through the real planners (real kob-wasm): which bucket each action pays, the fallback to the floor, the total-fee cap
-// rebuild, the funds fallback and the remembered fee choice. Oracle: the BUILT transaction's own feeRate / fee (kob-wasm), never the planner's claim.
+// The dynamic fee policy through the real planners (real kob-wasm): which bucket each action pays,
+// the fallback to the floor, the total-fee cap rebuild, the funds fallback and the remembered fee
+// choice. Oracle: the BUILT transaction's own feeRate / fee (kob-wasm), never the planner's claim.
 import { describe, expect, it } from 'vitest';
 import { feeChoiceOf, normalizePolicy, type FeeContext, type FeeEstimate, type FeePolicy } from './fee-policy';
 import { planOrder, orderUrgency } from './plan';
@@ -167,7 +168,8 @@ describe('pair orders (planOrder with a PairPlanEnv)', () => {
       expect(feeChoiceOf(p.built!)).toMatchObject({ urgency: 'high' });
     }
     expect(rateOf(planOrder(envP(ctx()), { type: 'market', side: 'buy', amount: 5_000n }))).toBe(301n);
-    // the KAS tip never makes a B price cross: a sell at 1451 over a 1450 bid is resting (NORMAL), at 1450 it crosses (HIGH)
+    // the KAS tip never makes a B price cross: a sell at 1451 over a 1450 bid is resting (NORMAL),
+    // at 1450 it crosses (HIGH)
     expect(orderUrgency(makePairEnv(), { type: 'limit', side: 'sell', amount: 5_000n, price: 1_451n, tip: 100n * KAS })).toBe('normal');
     expect(orderUrgency(makePairEnv(), { type: 'limit', side: 'sell', amount: 5_000n, price: 1_450n })).toBe('high');
   });

@@ -139,7 +139,8 @@ describe('disclosure model', () => {
         expect(NOTE_TAGS as readonly string[], `${name}: unknown note tag ${n.tag}`).toContain(n.tag);
       }
     }
-    // most of the vocabulary is exercised by the cases (the rest is emitted only by variants of them)
+    // Most of the vocabulary is exercised by the cases (the rest is emitted only by variants of
+    // them).
     expect(seen.size).toBeGreaterThan(30);
   });
 });

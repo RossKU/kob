@@ -1,4 +1,5 @@
-// The Create page's picture file: checked like the app checks pictures elsewhere, then hashed (ui/issue/image-file.ts).
+// The Create page's picture file: checked like the app checks pictures elsewhere, then hashed
+// (ui/issue/image-file.ts).
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { hashImageFile } from './image-file';

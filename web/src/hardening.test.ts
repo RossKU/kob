@@ -16,8 +16,9 @@ describe('strict Content-Security-Policy and framing protection', () => {
     expect(META_DIRECTIVES['require-trusted-types-for']).toEqual(["'script'"]);
     expect(META_DIRECTIVES['trusted-types']).toEqual(['default']); // one policy, installed at boot (src/app/trusted-types.ts)
     expect(META_DIRECTIVES['form-action']).toEqual(["'none'"]);
-    // token icons and logos: checked and IPFS pictures are shown from a blob: URL; a creator's own https:// logo is a plain <img> (data/logos.ts), so img-src
-    // allows https: and nothing else: no http:, no wildcard, no host list
+    // token icons and logos: checked and IPFS pictures are shown from a blob: URL; a creator's own
+    // https:// logo is a plain <img> (data/logos.ts), so img-src allows https: and nothing else: no
+    // http:, no wildcard, no host list
     expect(META_DIRECTIVES['img-src']).toEqual(["'self'", 'data:', 'blob:', 'https:']);
     expect(CSP_META).not.toMatch(/img-src[^;]*(http:|\*)/);
     expect(CSP_META).not.toMatch(/frame-ancestors/); // not expressible in a <meta>

@@ -1,5 +1,7 @@
-// The activity log's reads (ActivityStore) against a fake indexer: the sources per market filter, the horizon that keeps the two sources from
-// interleaving with a gap, the reads further back, a gap read after a pause, the pair page's own copy of the pair fills, standalone mode and the owner lookups.
+// The activity log's reads (ActivityStore) against a fake indexer: the sources per market filter,
+// the horizon that keeps the two sources from interleaving with a gap, the reads further back, a
+// gap read after a pause, the pair page's own copy of the pair fills, standalone mode and the owner
+// lookups.
 import { describe, expect, it, vi } from 'vitest';
 import type { IndexerApi } from '../../data/indexer';
 import type { EventView, OrderView, PairFillsView } from '../../data/indexer-types';
@@ -53,7 +55,8 @@ const storeOf = (ix: IndexerApi | null, market: ConstructorParameters<typeof Act
 
 describe('activity store', () => {
   it('the first read takes one page of each source; rows below the horizon of a source with more wait for a read further back', async () => {
-    // fills cover DAA 1000..951 in the first page (60 in all); placements 1000..990 step 1 (but only 50 fit); so the horizon is the higher of the two
+    // Fills cover DAA 1000..951 in the first page (60 in all). Placements 1000..990 step 1 (but
+    // only 50 fit). So the horizon is the higher of the two.
     const fills = Array.from({ length: 60 }, (_, i) => ev(1000 - i, 1000 - i));
     const orders = Array.from({ length: 60 }, (_, i) => ord(i, 1000 - i * 2));
     const { ix } = fakeIndexer(fills, orders);
@@ -155,12 +158,14 @@ describe('activity store', () => {
     await before.readNewest({ fills: true, placed: true });
     expect(carry.parked('all')).toBe(before);
     expect(before.lastReadMs).toBe(0);
-    // standalone mode starts: the store of the mode is seeded from it, the node's fills come with their own keys (ids of this page, not the indexer's)
+    // Standalone mode starts: the store of the mode is seeded from it, the node's fills come with
+    // their own keys (ids of this page, not the indexer's).
     const seen = { fills: [{ ...ev(901, 900), id: 1 }, { ...ev(1, 905), id: 2, txid: hex(77) }], orders: [ord(2, 906)] };
     const s = storeOf(null, { kind: 'all' }, { carry, standalone: { seenActivity: () => seen } });
     expect(s.keptUntilMs).toBe(0);
     await s.readNewest({ fills: true, placed: true });
-    // the indexer's two fills and its placement, the node's new fill and placement; the node's repeat of the first fill (same transaction) is not a second row
+    // The indexer's two fills and its placement, the node's new fill and placement. The node's
+    // repeat of the first fill (same transaction) is not a second row.
     expect(s.rows(KINDS).map((r) => r.kind).sort()).toEqual(['fill', 'fill', 'fill', 'placed', 'placed']);
     expect(s.hasOlder(KINDS)).toBe(false);
     // the indexer's store is untouched

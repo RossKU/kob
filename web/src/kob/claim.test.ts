@@ -1,5 +1,6 @@
-// A Collected (mode-1) bid holding its bought-custody (bid-delivery-spec §5, §7): claim, claim and merge, claim and sell, and the cancel /
-// refund that carry the custody back. Every plan is signed and validated in the script engine. Each rule has a negative case.
+// A Collected (mode-1) bid holding its bought-custody (bid-delivery-spec §5, §7): claim, claim and
+// merge, claim and sell, and the cancel / refund that carry the custody back. Every plan is signed
+// and validated in the script engine. Each rule has a negative case.
 import { describe, expect, it } from 'vitest';
 import { claimMergeRoom, planCancel, planCancelAll, planCancelReplace, planClaim, planRefund, snapshotFromOrderView, type CancelEnv, type OrderSnapshot } from './cancel';
 import { boughtOf } from './bought';
@@ -22,7 +23,10 @@ const env = (over: Partial<CancelEnv> = {}): CancelEnv => ({
   kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 100n * KAS, 201), keyUtxo(MAKER.pk, 3n * KAS, 202)], tokenUtxos: [], clock: { daa: 78_000_000n }, ...over,
 });
 
-/** The golden bid as a Collected order that bought `bought` (its custody owned by the order id, exactly `bought`). */
+/**
+ * The golden bid as a Collected order that bought `bought` (its custody owned by the order id,
+ * exactly `bought`).
+ */
 function collected(bought = BOUGHT): { snap: OrderSnapshot; custody: TokenUtxo } {
   const base = placeGolden(kob, 'create.bid').snapshots[0]!;
   const state = { ...base.order.state, state: { ...base.order.state.state, mode: '1', bought: bought.toString() } } as OrderState;
@@ -30,7 +34,7 @@ function collected(bought = BOUGHT): { snap: OrderSnapshot; custody: TokenUtxo }
   const custody = strayFor(snap0, bought, 91, 10n * KAS);
   return { snap: { ...snap0, boughtCustody: custody }, custody };
 }
-/** The pre-sign decoder (W3) accepts the plan as its own expectations say: nothing blocking. */
+/** The pre-sign decoder accepts the plan as its own expectations say: nothing blocking. */
 function expectSigns(plan: CancelPlan) {
   const s = decodeSigning({ kob, built: plan.built!, maker: MAKER.pk, registry, expected: plan.expected, nodeInputs: nodeFactsOf(plan.built!) });
   expect(s.blocking.map((b) => `${b.code}: ${b.message}`)).toEqual([]);

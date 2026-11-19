@@ -1,5 +1,6 @@
-// Account / network change events after connect, for all three adapters against the fake providers of the real event shapes
-// (KasWare accountsChanged(string[]) / networkChanged(name); Kaspire also disconnect; Kastle also kas:account_changed).
+// Account / network change events after connect, for all three adapters against the fake providers
+// of the real event shapes (KasWare accountsChanged(string[]) / networkChanged(name); Kaspire also
+// disconnect; Kastle also kas:account_changed).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createKaswareAdapter } from './kasware';
 import { createKaspireAdapter } from './kaspire';

@@ -1,4 +1,5 @@
-// When Unlock is offered: by the node's past median time, else by the wall clock with a margin (TN10's node clock ran 127-130 s behind).
+// When Unlock is offered: by the node's past median time, else by the wall clock with a margin
+// (TN10's node clock ran 127-130 s behind).
 import { describe, expect, it } from 'vitest';
 import { MAX_WAIT_MS, MEDIAN_POLL_MS, UNLOCK_MARGIN_MS, nextUnlockCheck, unlockOpen } from './unlock-clock';
 import { minutesBefore } from './unlock';
@@ -8,7 +9,7 @@ const at = (ms: number) => Number(UNTIL) + ms;
 
 describe('unlockOpen', () => {
   it('follows the node clock when it is known, not the wall clock', () => {
-    // the TN10 run: 128 s after the lock time by the wall clock, the node clock still 38 s before it
+    // 128 s after the lock time by the wall clock, the node clock is still 38 s before it.
     expect(unlockOpen(UNTIL, UNTIL - 38_000n, at(128_000))).toBe(false);
     expect(unlockOpen(UNTIL, UNTIL, at(130_000))).toBe(false);
     expect(unlockOpen(UNTIL, UNTIL + 1n, at(131_000))).toBe(true);

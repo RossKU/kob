@@ -22,8 +22,9 @@ const sdk = loadKaspaSdkNode();
 const NET = 'testnet-10';
 
 /**
- * The app's host and the frame's core, wired as postMessage would (structured clone + each side's parser). `user` decides what the person at the
- * frame does with a request: approve, reject, or nothing (the request stays open).
+ * The app's host and the frame's core, wired as postMessage would (structured clone + each side's
+ * parser). `user` decides what the person at the frame does with a request: approve, reject, or
+ * nothing (the request stays open).
  */
 function pair(user: (req: PendingRequest) => 'approve' | 'reject' | 'ignore' = () => 'approve') {
   const log: string[] = [];
@@ -208,7 +209,8 @@ describe('private-key adapter (the app side of the signer frame)', () => {
     await host.sign(built, []);
     expect(prompts).toBe(1);
     expect(log.filter((l) => l === 'request true')).toHaveLength(1);
-    // the same transaction again as the re-timing of the one just signed: signed in the frame at once, the frame never shown, no prompt
+    // the same transaction again as the re-timing of the one just signed: signed in the frame at
+    // once, the frame never shown, no prompt
     expect(await host.sign(built, [], undefined, true)).toHaveLength(built.sign.length);
     expect(prompts).toBe(1);
     expect(log.filter((l) => l === 'request true')).toHaveLength(1);
@@ -242,9 +244,11 @@ describe('private-key adapter: a token creation (KCC-23) on one confirmation', (
     expect(s.title).toBe('Create token');
     const line = (label: RegExp) => s.lines.find((l) => label.test(l.label))?.value;
     expect([line(/^Name/), line(/^Ticker/), line(/^Decimals/)]).toEqual(['Frame Coin', 'FRAME', '3']);
-    // the genesis outputs checked against the claimed states: the supply and what this key receives are named, nothing is unknown
+    // the genesis outputs are checked against the claimed states: the supply and what this key
+    // receives are named, nothing is unknown
     expect([line(/^Total supply/), line(/^To you/)]).toEqual(['5000 FRAME', '+5000 FRAME']);
-    // the program and the extension commitment the outputs were checked against are lines of the frame (audit 2026-10-30 G4)
+    // the program and the extension commitment the outputs were checked against are lines of the
+    // frame
     expect(line(/^Token program/)).toMatch(/^[A-Za-z0-9_]+$/);
     expect(line(/^Extension commitment/)).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8}$/);
     expect(s.problems).toBe(0);
@@ -339,7 +343,8 @@ describe('private-key adapter: a one-approval merge session (signer/session.ts)'
     // the same link again: not the next one of the plan, so the frame ends the session and asks
     await adapter.signTx(plan.links[0]!.built, { session: s!.sid });
     expect(prompts).toBe(2);
-    // the run sees that the session is over (its card says the later steps are confirmed one by one)
+    // the run sees that the session is over (its card says the later steps are confirmed one by
+    // one)
     expect(adapter.sessionEnded!(s!.sid)).toBe(true);
     expect(log.filter((l) => l === 'request true')).toHaveLength(shown + 1);
   });

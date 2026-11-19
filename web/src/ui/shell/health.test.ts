@@ -31,7 +31,8 @@ describe('assessIndexerHealth', () => {
     expect(LAG_WARN_SECONDS).toBe(120);
     expect(assessIndexerHealth({ ...base, health: view({ lag_seconds: 120 }) })).toMatchObject({ level: 'ok', fresh: true });
     expect(assessIndexerHealth({ ...base, health: view({ lag_seconds: 121 }) })).toMatchObject({ level: 'warn', code: 'lagging' });
-    // a follower that says catching_up / starting but is within 2 min is fine (seconds, else the DAA lag at ~10 DAA per second)
+    // A follower that says catching_up / starting but is within 2 min is fine (seconds, else the
+    // DAA lag at ~10 DAA per second).
     expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', lag_seconds: 5, lag_daa: 52 }) })).toMatchObject({ level: 'ok', code: 'ok' });
     expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', lag_seconds: 36 }) }).level).toBe('ok');
     expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', lag_seconds: null, lag_daa: 1199 }) }).level).toBe('ok');

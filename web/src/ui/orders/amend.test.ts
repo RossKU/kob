@@ -1,5 +1,6 @@
-// Every amendment is verified end to end: ReplacementSpec -> planCancelReplace (kob-wasm builder) -> sign locally -> finalize -> consensus validate
-// (the script engine runs the covenants) -> the pre-sign decoder has nothing blocking.
+// Every amendment is verified end to end: ReplacementSpec -> planCancelReplace (kob-wasm builder)
+// -> sign locally -> finalize -> consensus validate (the script engine runs the covenants) -> the
+// pre-sign decoder has nothing blocking.
 import { describe, expect, it } from 'vitest';
 import { planCancelReplace, type CancelEnv, type CancelPlan, type OrderSnapshot } from '../../kob/cancel';
 import { decodeSigning } from '../../kob/decode';
@@ -32,7 +33,8 @@ describe('amend a plain limit sell (KobAsk)', () => {
   const s = snap.order.state.state as AskState;
   const price = BigInt(s.price);
 
-  // C5 W-3: a GTC ends 90 days after placement whatever its fills; renewing gives the new order a fresh on-chain expiry
+  // A GTC ends 90 days after placement whatever its fills. Renewing gives the new order a fresh
+  // on-chain expiry.
   it('a renewal alone sets expiryDaa = now + 90 days, keeps every other term and is consensus valid', () => {
     const r = buildReplacement(snap, 'limit', { renew: true }, { nowDaa: 5000n });
     expect(r.ok).toBe(true);
@@ -85,7 +87,8 @@ describe('amend a plain limit sell (KobAsk)', () => {
     const codes = (i: Parameters<typeof buildReplacement>[2], tick?: bigint) => buildReplacement(snap, 'limit', i, { tick }).issues.map((x) => `${x.field}:${x.code}`);
     expect(codes({ price: 0n })).toEqual(['price:price-not-positive']);
     expect(codes({ price: price + 1n }, 100n)).toEqual(['price:price-off-tick']);
-    // any whole sompi per token is a valid price without a tick (the state price is per whole token)
+    // Any whole sompi per token is a valid price without a tick (the state price is per whole
+    // token).
     expect(codes({ price: price + 1n })).toEqual([]);
     expect(codes({ amount: 0n })).toEqual(['amount:amount-not-positive']);
     expect(codes({ tip: -1n })).toEqual(['tip:tip-negative']);
@@ -153,7 +156,8 @@ describe('amend a partly filled buy (KobBid): add KAS', () => {
       expect(refused.spec).toBeNull();
       expect(refused.issues.map((i) => `${i.field}:${i.code}`)).toEqual(['addKas:bid-below-min-fill']);
     }
-    // the kob-wasm builder refuses the same replacement (kob-protocol `min_order_value`): the check above turns that into an actionable message
+    // The kob-wasm builder refuses the same replacement (kob-protocol `min_order_value`): the check
+    // above turns that into an actionable message.
     const raw = planCancelReplace(env(), low, { order: low.order.state, value: BigInt(low.order.amount) });
     expect(raw.ok).toBe(false);
     // exactly the minimum is accepted
@@ -201,7 +205,8 @@ describe('amend a conditional order (take-profit / stop / OCO)', () => {
     const amount = BigInt(s.amountLeft);
     const up = buildReplacement(snap, 'cond', { stop: stop + 200n });
     expect(up.ok).toBe(true);
-    // the stop leg is the worst price of this buy: raising it raises the escrow by the spend of the amount at the new worst price (band included)
+    // The stop leg is the worst price of this buy: raising it raises the escrow by the spend of the
+    // amount at the new worst price (band included).
     expect(up.spec!.value).toBeGreaterThan(BigInt(snap.order.amount));
     verify(planCancelReplace(env(), snap, up.spec!), 'cond bid stop up');
     // with kob-wasm the escrow comes from condBidEscrow: the same value as the bigint rule
@@ -227,7 +232,8 @@ describe('amend a conditional order (take-profit / stop / OCO)', () => {
     expect(buildReplacement(snapOf('create.ask'), 'cond', {}).issues[0].code).toBe('not-amendable');
   });
 
-  // C5 R-5: moving a stop no longer moves a stop-limit's limit silently: the worst price is shown, and a given limit stays where it is
+  // Moving a stop does not move a stop-limit's limit silently. The worst price is shown, and a
+  // given limit stays where it is.
   it('stop-limit: the worst price is disclosed; with a limit the band is re-derived so the worst price stays at it', () => {
     const snap = snapOf('create.condAsk');
     const s = snap.order.state.state as CondAskState;
@@ -241,7 +247,8 @@ describe('amend a conditional order (take-profit / stop / OCO)', () => {
     const next = kept.spec!.order.state as CondAskState;
     expect(BigInt(next.slipBps)).toBeGreaterThan(BigInt(s.slipBps));
     expect(kept.next!.stopWorst).toBeGreaterThanOrEqual(limit);
-    // never beyond the limit; above it by less than one basis point of the stop (the band is whole basis points)
+    // Never beyond the limit. Above it by less than one basis point of the stop (the band is whole
+    // basis points).
     expect(kept.next!.stopWorst! - limit).toBeLessThan((stop + stop / 100n) / 10_000n + 1n);
     verify(planCancelReplace(env(), snap, kept.spec!), 'stop-limit');
     expect(buildReplacement(snap, 'cond', { stopLimit: stop + 1n }).issues.map((i) => i.code)).toEqual(['stop-limit-beyond-stop']);

@@ -70,7 +70,8 @@ describe('HttpIndexer requests', () => {
       return json({ items: [{ txid: 'a' }] });
     });
     const ix = new HttpIndexer({ baseUrl: 'http://x', fetch: f });
-    // an item whose covenant id is not 32-byte lower-case hex is dropped (it would become a label, route and map key)
+    // An item whose covenant id is not 32-byte lower-case hex is dropped (it would become a label,
+    // route and map key).
     expect(await ix.tokens()).toEqual([{ ticker: 'X', covenant_id: 'ab'.repeat(32) }]);
     expect(await ix.strays()).toEqual([]);
     expect(await ix.tokenEvents()).toEqual([{ txid: 'a' }]);
@@ -361,7 +362,7 @@ describe('feed url and channels', () => {
   });
 });
 
-// ------------------------------------------------------------------------------------------------ feed against a real ws server
+// ------------------------------------------------------------------- feed against a real ws server
 
 interface Session { ws: WebSocket; received: Record<string, unknown>[] }
 

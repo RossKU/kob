@@ -1,4 +1,5 @@
-// The order actions against real kob-wasm plans: every built transaction is signed locally, finalized and validated by the script engine.
+// The order actions against real kob-wasm plans: every built transaction is signed locally,
+// finalized and validated by the script engine.
 import { describe, expect, it } from 'vitest';
 import type { Services } from '../../app/services';
 import type { IndexerApi } from '../../data/indexer';
@@ -17,7 +18,8 @@ const kob = loadKobNode();
 const KAS = 100_000_000n;
 const registry = parseRegistry(tradableRegistryJson(), { kob });
 
-// the actions resolve records through the SDK address helper: swap it for the tests' address stand-in
+// The actions resolve records through the SDK address helper: swap it for the tests' address
+// stand-in.
 import * as data from './orders-data';
 import { vi } from 'vitest';
 vi.spyOn(data, 'spkToAddressFor').mockReturnValue(testAddress);
@@ -46,9 +48,10 @@ const place = (name: string) => {
   return { p, rec, snap: p.snapshots[0] };
 };
 /**
- * A golden placement with a smaller amount left: the node alone proves a record spent only when its search over the continuation amounts is
- * exhaustive (every base unit up to the candidate budget, records.ts); the 10 TST golden ask (10,000 base units) is beyond it and resolves
- * 'unknown' without the indexer.
+ * A golden placement with a smaller amount left: the node alone proves a record spent only when its
+ * search over the continuation amounts is exhaustive (every base unit up to the candidate budget,
+ * records.ts). The 10 TST golden ask (10,000 base units) is beyond it and resolves 'unknown'
+ * without the indexer.
  */
 const placeSmall = (name: string, amountLeft: string) => {
   const request = goldenRequest<ActionRequest>(name, MAKER.pk);
@@ -108,7 +111,8 @@ describe('snapshotFor', () => {
   });
 
   it('refuses an order that is gone or that nothing can locate', async () => {
-    // gone: the node search over every continuation amount finds nothing (an order small enough to search exhaustively)
+    // gone: the node search over every continuation amount finds nothing (an order small enough to
+    // search exhaustively).
     const a = placeSmall('create.ask', '1000');
     await expect(snapshotFor(services({}), entryOf(a, false, true))).rejects.toMatchObject({ code: 'not-live' });
     // a larger order the node cannot search exhaustively: its state is unknown, never claimed gone

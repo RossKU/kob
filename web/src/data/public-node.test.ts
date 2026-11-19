@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { FAILED_TTL_MS, PICK_TTL_MS, PUBLIC_RESOLVERS, createPublicNodePicker, nodeUrlOfAnswer } from './public-node';
 
 type Reply = { url: string } | 'error' | 'hang' | 'bad';
-/** A fetch whose resolvers answer as `replies` says (by host), after `delayMs`; records the URLs asked. */
+/**
+ * A fetch whose resolvers answer as `replies` says (by host), after `delayMs`. Records the URLs
+ * asked.
+ */
 function fakeFetch(replies: Record<string, Reply>, delayMs = 5) {
   const asked: string[] = [];
   const aborted: string[] = [];
@@ -85,7 +88,8 @@ describe('public node picker', () => {
     await p2.pick('mainnet');
     expect(f.asked.at(-1)).toMatch(/\/v2\/kaspa\/mainnet\//);
     p2.forget(NODE);
-    // every resolver names the forgotten node: all are asked, then it is used as nothing else is offered
+    // Every resolver names the forgotten node: all are asked, then it is used as nothing else is
+    // offered.
     await expect(p2.pick('testnet-10')).resolves.toBe(NODE);
     expect(f.asked).toHaveLength(2 + R.length);
     now += PICK_TTL_MS + 1;

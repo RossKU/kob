@@ -1,4 +1,5 @@
-// kascovRowOf (kascov-merge.ts): the row of ONE token only kascov.io names, for its own token page. It is the row the list shows for it.
+// kascovRowOf (kascov-merge.ts): the row of ONE token only kascov.io names, for its own token page.
+// It is the row the list shows for it.
 import { describe, expect, it } from 'vitest';
 import type { KascovToken } from '../../data/kascov';
 import type { TokenRegistry } from '../../kob/registry';

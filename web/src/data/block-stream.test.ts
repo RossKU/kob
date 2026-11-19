@@ -1,6 +1,8 @@
-// Block notifications -> the transactions kob-wasm reads (standalone mode). The wRPC shape below is what a public testnet-10 node (rusty-kaspa 2.1.0,
-// JSON encoding) sent on 2026-11-05: 64-bit values as bigint, script public keys as `version + script` hex, covenant bindings on outputs, the id in
-// `verboseData`.
+// Tests block notifications -> the transactions kob-wasm reads (standalone mode).
+//
+// The wRPC shape below is what a public testnet-10 node (rusty-kaspa 2.1.0, JSON encoding) sends.
+// 64-bit values are bigint, script public keys are `version + script` hex, covenant bindings sit
+// on outputs and the id is in `verboseData`.
 import { describe, expect, it } from 'vitest';
 import { isCoinbaseTx, streamBlockOf, txJsonOfBlockTx } from './block-stream';
 

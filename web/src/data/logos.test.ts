@@ -1,4 +1,6 @@
-// Token logos from the creator's address (data/logos.ts, data/logo-url.ts): which addresses are loaded at all, the IPFS check against the CID, the gateway fetch.
+// Tests token logos from the creator's address (data/logos.ts, data/logo-url.ts).
+//
+// Covers which addresses are loaded at all, the IPFS check against the CID and the gateway fetch.
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { asImageHash, checkHttpsImage, createHttpsChecker, createIpfsLoader, fetchIpfsImage, ipfsGatewayUrl, parseCid, parseLogoRef, refusedHost, safeHttpsLogo, verifyIpfsBytes } from './logos';
@@ -83,7 +85,8 @@ describe('parseLogoRef', () => {
     expect(parseLogoRef(' https://kasperolabs.com/kaspero-logo.jpg ')).toEqual({ kind: 'https', url: 'https://kasperolabs.com/kaspero-logo.jpg' });
     expect(parseLogoRef(`ipfs://${HELLO_CID_V0}`)).toEqual({ kind: 'ipfs', cid: HELLO_CID_V0, path: '' });
     expect(parseLogoRef(`ipfs://${V1}/logo.png`)).toEqual({ kind: 'ipfs', cid: V1, path: '/logo.png' });
-    // an SVG address (also a compressed .svgz) is kept, marked: it is shown only from checked bytes (data/svg-logo.ts)
+    // An SVG address (also a compressed .svgz) is kept and marked. It is shown only from checked
+    // bytes (data/svg-logo.ts).
     expect(parseLogoRef(`ipfs://${V1}/a.svg`)).toEqual({ kind: 'ipfs', cid: V1, path: '/a.svg', svg: true });
     expect(parseLogoRef(`ipfs://${V1}/a.svgz`)).toEqual({ kind: 'ipfs', cid: V1, path: '/a.svgz', svg: true });
     expect(parseLogoRef('https://example.org/logo.SVG')).toEqual({ kind: 'https', url: 'https://example.org/logo.SVG', svg: true });
@@ -103,7 +106,8 @@ describe('the CID against the bytes', () => {
   it('a CIDv1 raw leaf is the file itself; a CIDv1 dag-pb is the wrapped block', async () => {
     expect(await verifyIpfsBytes(cidV1Raw(PNG), '', PNG, sha)).toBe(true);
     expect(await verifyIpfsBytes(cidV1Raw(PNG), '', new Uint8Array([...PNG, 9]), sha)).toBe(false);
-    // the dag-pb block of the same file: built by the same rule the checker uses, so only the codec switch is tested here
+    // The dag-pb block of the same file, built by the rule the checker uses. Only the codec
+    // switch is tested here.
     expect(await verifyIpfsBytes(`b${base32(new Uint8Array([0x01, 0x70, 0x12, 0x20, ...base58Decode(HELLO_CID_V0).slice(2)]))}`, '', HELLO, sha)).toBe(true);
   });
 

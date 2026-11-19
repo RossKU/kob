@@ -1,4 +1,5 @@
-// The pair book / own-order helpers of kob/pair.ts (the exact rational helpers are covered by the UI models that use them).
+// The pair book / own-order helpers of kob/pair.ts (the exact rational helpers are covered by the
+// UI models that use them).
 import { describe, expect, it } from 'vitest';
 import type { OrderView, PairBookView } from '../data/indexer-types';
 import { impliedPairRate, isPairOrderView, ownPairOrderRefs, pairBookToBookView, wholePriceOf } from './pair';

@@ -1,5 +1,6 @@
-// A curve sell order's levels in the book: one row per remaining level (`curve_level`, the same covenant id), summed with the other orders at
-// each price like any order, and marked; grouping keeps the marks.
+// A curve sell order's levels in the book: one row per remaining level (`curve_level`, the same
+// covenant id), summed with the other orders at each price like any order, and marked. Grouping
+// keeps the marks.
 import { describe, expect, it } from 'vitest';
 import type { BookOrderView } from '../../data/indexer-types';
 import { buildBookModel, groupLevels, levelsFromView } from './book-model';

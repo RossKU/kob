@@ -1,5 +1,8 @@
-// The signer frame's token labels name the token of a buy too (TN10 2026-10-14 B-7: a KobBid holds none of its token, so the transaction's
-// token inputs and outputs did not name it and the frame showed "Token 55aac2b5…773e07bf", "Minimum fill ... base units (unknown token)").
+// Tests that the signer frame's token labels name the token of a buy too.
+//
+// A KobBid holds none of its token, so the transaction's token inputs and outputs do not name it.
+// The frame must not show "Token 55aac2b5…773e07bf" or "Minimum fill ... base units (unknown
+// token)".
 import { describe, expect, it } from 'vitest';
 import type { TokenInfo, TokenRegistry } from '../kob/registry';
 import { goldenRequest } from '../testing/golden';
@@ -43,7 +46,8 @@ describe('signerTokenHints: a token the registry does not list (founder 2026-10-
     m.clear();
     const assumed = signerTokenHints(kob, ask, MAKER_PK, empty, 'testnet-10');
     expect(assumed).toEqual([{ covenantId: TOKEN_COV_ID, ticker: '', decimals: 0, source: 'assumed' }]);
-    // the frame names it by its covenant id, and reads its amounts on the scale the order names: the whole token the ticket used
+    // The frame names it by its covenant id, and reads its amounts on the scale the order names:
+    // the whole token the ticket used.
     const a = summarize(kob, ask, MAKER_PK, assumed);
     expect(a.orders[0]!.token).toMatch(/^[0-9a-f]{8}…[0-9a-f]{8} \(3 decimals, from its price scale\)$/);
     expect(a.orders[0]!.rows.map((r) => r.value).join(' ')).not.toMatch(/base units/);

@@ -10,7 +10,8 @@ describe('the time axis labels', () => {
   it('a daily chart reads a date at every tick, whatever the zone and the tick kind (never the 09:00 of Tokyo)', () => {
     const labels = [0, 1, 2, 3].map((i) => tickLabel(D0 + i * DAY, '1d', TICK.day, L, 'Asia/Tokyo'));
     expect(labels).toEqual(['Nov 11', 'Nov 12', 'Nov 13', 'Nov 14']);
-    // a time-kind tick on a daily chart is still a date; the zone does not move a daily bar to the evening before
+    // A time-kind tick on a daily chart is still a date. The zone does not move a daily bar to
+    // the evening before.
     expect(tickLabel(D0, '1d', TICK.time, L, 'Asia/Tokyo')).toBe('Nov 11');
     expect(tickLabel(D0, '1d', TICK.time, L, 'America/New_York')).toBe('Nov 11');
     expect(new Set(labels).size).toBe(labels.length);

@@ -1,4 +1,5 @@
-// The signer's numbers at a reader's precision: exact when short, a few significant digits otherwise, and a bound never rounded the kind way.
+// The signer's numbers at a reader's precision: exact when short, a few significant digits
+// otherwise, and a bound never rounded the kind way.
 import { describe, expect, it } from 'vitest';
 import { decimalText, kasPerTokenWords, kasWords, tokenWords, tokensPerKasWords, untilWords } from './words';
 

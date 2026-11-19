@@ -1,4 +1,5 @@
-// Every key the notification UI builds dynamically exists, and describeEvent renders every kind without leftover placeholders.
+// Every key the notification UI builds dynamically exists, and describeEvent renders every kind
+// without leftover placeholders.
 import { afterEach, describe, expect, it } from 'vitest';
 import { has } from '../../i18n';
 import { NOTIFY_KINDS, type NotificationEvent } from '../../kob/notifications';

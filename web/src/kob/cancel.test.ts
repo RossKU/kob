@@ -1,4 +1,5 @@
-// Every builder result is checked in the script engine: sign locally, finalize with tightened budgets, validate (consensus rules).
+// Every builder result is checked in the script engine: sign locally, finalize with tightened
+// budgets, validate (consensus rules).
 import { describe, expect, it } from 'vitest';
 import {
   SnapshotError, amendsInPlace, planCancel, planCancelAll, planCancelReplace, planRefund, snapshotFromItem, snapshotFromOrderView, snapshotFromRecord, tokenSlotsFor,
@@ -69,7 +70,8 @@ describe('planCancel: one order, custody and strays swept in the same tx', () =>
       expect(s.spends[0], name).toMatchObject({ strays: 12n });
       expect(s.info.map((i) => i.code), name).toContain('strays-swept');
     }
-    // a bid owns no tokens: every token utxo owned by its id is a stray and cancel is the only way out
+    // a bid owns no tokens: every token utxo owned by its id is a stray and cancel is the only way
+    // out
     const bid = snapOf('create.bid');
     const plan = planCancel(env(), { ...bid, strays: [strayFor(bid, 42n, 93)] });
     const s = verify(plan, 'bid');
@@ -163,7 +165,8 @@ describe('planCancelReplace: one atomic tx', () => {
     expect(plan.tokensReturned).toBe(4_000n);
     expect(plan.expected.tokensEscrowed).toBe(6_000n);
     expect(plan.expected.kasLocked).toBe(20n * KAS);
-    // the same replacement re-signed locally is a real, consensus-valid tx and its placement record recovers
+    // the same replacement re-signed locally is a real, consensus-valid tx and its placement record
+    // recovers
     const signed = signAndValidate(kob, plan.built!);
     expect(kob.recoverOrders(signed.tx)).toHaveLength(1);
   });
@@ -173,7 +176,8 @@ describe('planCancelReplace: one atomic tx', () => {
       const snap = snapOf(name);
       const next = same(snap, (st) => { st.price = '260000000'; st.tip = '200000'; });
       const plan = planCancelReplace(env(), snap, { order: next, value: 10n * KAS });
-      // the KRON fixture token shares its covenant id with the registered KCC-20 test token: decode it without the registry
+      // the KRON fixture token shares its covenant id with the registered KCC-20 test token: decode
+      // it without the registry
       const reg = name.startsWith('kron.') ? null : registry;
       const s = verify(plan, name, [MAKER.sk], reg);
       expect(plan.request!.action, name).toBe('amendOrder');
@@ -195,7 +199,8 @@ describe('planCancelReplace: one atomic tx', () => {
       const signed = signAndValidate(kob, plan.built!);
       expect(kob.recoverAmends(signed.tx).map((a) => a.covenantId)).toEqual([snap.covenantId]);
       expect(kob.recoverOrders(signed.tx)).toEqual([]);
-      // the same amendment as a cancel-replace re-escrows the custody (a token transfer) and costs more than twice as much
+      // the same amendment as a cancel-replace re-escrows the custody (a token transfer) and costs
+      // more than twice as much
       const cr = planCancelReplace(env(), snap, { order: next, value: 10n * KAS }, undefined, { noInPlace: true });
       verify(cr, `${name}: cancel-replace`, [MAKER.sk], reg);
       expect(cr.request!.action).toBe('cancelOrder');
@@ -215,11 +220,12 @@ describe('planCancelReplace: one atomic tx', () => {
       verify(plan, 'quantity');
       expect(plan.request!.action).toBe('cancelOrder');
     }
-    // the ask pins its custody's extension commitment and an amend never moves the custody: another commitment is never
-    // amended in place (the amended order could settle no custody)
+    // the ask pins its custody's extension commitment and an amend never moves the custody: another
+    // commitment is never amended in place (the amended order could settle no custody)
     expect(amendsInPlace(snap, same(snap, (st) => { st.extensionCommitment = '55'.repeat(32); }))).toBe(false);
     expect(amendsInPlace(snap, next)).toBe(true);
-    // a plain bid keeping its token and scale is amended IN PLACE (it owns no custody); with strays to sweep it stays a cancel-replace
+    // a plain bid keeping its token and scale is amended IN PLACE (it owns no custody); with strays
+    // to sweep it stays a cancel-replace
     const bid = snapOf('create.bid');
     const b = planCancelReplace(env(), bid, { order: same(bid, (st) => { st.price = '230000000'; }), value: BigInt(bid.order.amount) });
     verify(b, 'bid');
@@ -246,7 +252,8 @@ describe('planCancelReplace: one atomic tx', () => {
   });
 
   it('a tiny change rides on the replacement instead of a dust output (the change rule)', () => {
-    // a bid amended to a lower price keeps its escrow; its released KAS less the fee would come back as a few tenths of a KAS
+    // a bid amended to a lower price keeps its escrow; its released KAS less the fee would come
+    // back as a few tenths of a KAS
     const bid = snapOf('create.bid');
     const lower = same(bid, (st) => { st.price = '230000000'; });
     const value = BigInt(bid.order.amount) - 3n * KAS / 10n;
@@ -353,7 +360,8 @@ describe('planCancelAll: positions and groups', () => {
     const ask = snapOf('create.ask');
     const bid = snapOf('create.bid');
     expect(planCancelAll(env(), [ask, bid])).toHaveLength(1);
-    // a second token (another covenant id): kob-wasm covers one token per cancelPosition, so it is planned separately
+    // a second token (another covenant id): kob-wasm covers one token per cancelPosition, so it is
+    // planned separately
     const bid2: OrderSnapshot = { ...bid, order: { ...bid.order, state: { ...bid.order.state, state: { ...bid.order.state.state, tokenCovId: '80'.repeat(32) } } as OrderState } };
     const split = planCancelAll(env(), [ask, bid2]);
     expect(split).toHaveLength(2);
@@ -396,7 +404,8 @@ describe('planRefund: the maker refunds their own order', () => {
     expect(s.kind).toBe('refund');
     expect(s.net.tokens[0]).toMatchObject({ released: 10_000n, toMaker: 10_000n });
     expect(s.net.kas.toOthers).toBe(0n);
-    // no signature: the refund tip pays the node's relay-floor fee and the rest of the tip returns to the maker as change
+    // no signature: the refund tip pays the node's relay-floor fee and the rest of the tip returns
+    // to the maker as change
     expect(plan.built!.fee.fee).toBe(plan.built!.fee.minFee);
     const tipChange = plan.built!.tx.outputs[plan.built!.fee.changeOutput!];
     expect(BigInt(tipChange.value)).toBe(3_600_000n - BigInt(plan.built!.fee.fee));
@@ -506,15 +515,17 @@ describe('snapshots', () => {
     expect(code((v) => { v.state = undefined; })).toBe('state-unknown');
     expect(code((v) => { v.state = { kind: 'KobUnknown', state: {} } as never; })).toBe('state-unknown');
     expect(code((v) => { v.current = null; })).toBe('no-current-utxo');
-    // without the proven custody state and the view's commitment, the custody is rebuilt from the commitment the ask's state pins
+    // without the proven custody state and the view's commitment, the custody is rebuilt from the
+    // commitment the ask's state pins
     const bare = orderViewOf(kob, snap);
     bare.custody!.utxo = { ...tokenUtxoView(snap.custody!, 'custody'), state: undefined };
     bare.extension_commitment = null;
     expect(snapshotFromOrderView(bare).custody?.state).toEqual(snap.custody!.state);
   });
 
-  // If-done exits (booked by an entry's fill, no placement record): the indexer serves the entry's extension commitment and the proven
-  // token state of the exit's custody and strays (it served neither, so the cancel of a buy-first exit threw `no-extension-commitment`).
+  // If-done exits (booked by an entry's fill, no placement record): the indexer serves the entry's
+  // extension commitment and the proven token state of the exit's custody and strays (it served
+  // neither, so the cancel of a buy-first exit threw `no-extension-commitment`).
   describe.each([
     'cancel.position.repeatBuyFirst', 'cancel.position.repeatSellFirst', 'kron.cancel.position.repeatBuyFirst', 'kron.cancel.position.repeatSellFirst',
   ])('an if-done exit view (%s)', (name) => {
@@ -524,8 +535,8 @@ describe('snapshots', () => {
     const family = familyOfKind(exitItem.order.state.kind);
     const st = exitItem.order.state.state as unknown as Record<string, string>;
     const es = entry.order.state.state as unknown as Record<string, string>;
-    // what the indexer stores for the exit: its entry's commitment (buy-first: the entry state's; sell-first: the exit state's, which
-    // is the entry custody's); KRON has none (zero)
+    // what the indexer stores for the exit: its entry's commitment (buy-first: the entry state's;
+    // sell-first: the exit state's, which is the entry custody's); KRON has none (zero)
     const ext: Hex = family === 'kron' ? ZERO32 : (es.extensionCommitment ?? st.extensionCommitment);
     const stray = { ...strayFor(exitItem, 5n, 94), state: custodyState(family, 5n, exitItem.covenantId, ext) };
     const exit: OrderSnapshot = { ...exitItem, strays: [stray] };
@@ -568,8 +579,8 @@ describe('snapshots', () => {
       old.extension_commitment = null;
       old.custody!.utxo = old.custody!.utxo ? { ...old.custody!.utxo, state: undefined } : null;
       old.strays = [];
-      // a buy-first exit (KobCondAsk) names its custody's commitment (its entry's, written by the entry); KRON has none; a sell-first exit
-      // holds KAS and carries its commitment in its state
+      // a buy-first exit (KobCondAsk) names its custody's commitment (its entry's, written by the
+      // entry); KRON has none; a sell-first exit holds KAS and carries its commitment in its state
       const rebuilt = snapshotFromOrderView(old);
       expect(rebuilt.custody?.state ?? null).toEqual(exit.custody?.state ?? null);
       verify(planCancel(env(), rebuilt), `${name}: old view`);

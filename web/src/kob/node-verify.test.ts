@@ -1,5 +1,5 @@
-// Which inputs are read on the node before signing (node-verify.ts). The wallet's own plain KAS coins
-// are not: their signature commits their values. Every covenant or token input still is.
+// Which inputs are read on the node before signing (node-verify.ts). The wallet's own plain KAS
+// coins are not: their signature commits their values. Every covenant or token input still is.
 import { describe, expect, it } from 'vitest';
 import { buildBid, buildCancel, buildSend } from '../testing/wallet-fixtures';
 import { confirmInputsOnNode, ownPlainInputs } from './node-verify';

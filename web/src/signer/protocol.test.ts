@@ -14,7 +14,8 @@ describe('signer protocol: what the signer accepts from the app', () => {
     expect(parseAppMessage({ p: P, type: 'sign', id: 'r2', built: buildCancel(), tokens: [] })?.type).toBe('sign');
     // the orientation of the token's market is a label too (a boolean or absent)
     expect(parseAppMessage(clone({ p: P, type: 'sign', id: 'r3', built, tokens: [{ covenantId: '70'.repeat(32), ticker: 'EXKCC', decimals: 8, inverted: true }] }))?.type).toBe('sign');
-    // a token shown on its program's default decimals (KaspaRocket convention): no ticker, the convention a short label, with that source only
+    // a token shown on its program's default decimals (KaspaRocket convention): no ticker, the
+    // convention a short label, with that source only
     const prog = (h: Record<string, unknown>) => parseAppMessage(clone({ p: P, type: 'sign', id: 'r4', built, tokens: [{ covenantId: '70'.repeat(32), ticker: '', decimals: 3, ...h }] }));
     expect(prog({ source: 'program', convention: 'KaspaRocket convention' })?.type).toBe('sign');
     expect(prog({ source: 'program' })).toBeNull();
@@ -223,7 +224,8 @@ describe('signer protocol: the one-approval merge session', () => {
     for (const bad of ['AB'.repeat(16), 'ab'.repeat(15), 42]) expect(parseAppMessage(clone({ p: P, type: 'sign', id: 'r1', built, tokens: [], session: bad }))).toBeNull();
     expect(parseAppMessage(clone({ p: P, type: 'session-open', id: 'o1', plan: [], tokens: [] }))).toBeNull();
     expect(parseAppMessage(clone({ p: P, type: 'session-open', id: 'o1', plan: Array.from({ length: 51 }, () => built), tokens: [] }))).toBeNull();
-    // the count, fee budget and expiry are the frame's: an app that sends them is not speaking this protocol
+    // the count, fee budget and expiry are the frame's: an app that sends them is not speaking this
+    // protocol
     expect(parseAppMessage(clone({ p: P, type: 'session-open', id: 'o1', plan: [built], tokens: [], txs: 50 }))).toBeNull();
     expect(parseAppMessage(clone({ p: P, type: 'session-open', id: 'o1', plan: [{ ...built, sign: [] }], tokens: [] }))).toBeNull();
     expect(parseAppMessage({ p: P, type: 'session-close', sid: 'x' })).toBeNull();
