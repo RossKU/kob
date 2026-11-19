@@ -74,6 +74,23 @@ const TIP_REORG_REFETCHES: u32 = 2;
 /// about a second at 10 BPS, below where tip reorgs reach.
 const TIP_REORG_CONFIRMATIONS: u64 = 10;
 
+/// Steps in a row that gave up on tip reorgs ...
+const TIP_REORG_STALL_STEPS: u32 = 5;
+/// ... over at least this long, before it counts as a failure of the chain authority (K-M1): a
+/// node that answers every lane proof "not in the selected parent chain" stalls the cursor.
+const TIP_REORG_STALL: Duration = Duration::from_secs(60);
+
+/// Tip reorgs since the cursor last moved.
+#[derive(Debug, Default)]
+struct TipReorgs {
+    /// Steps in a row that gave up on one.
+    steps: u32,
+    /// Since the first of them.
+    since: Option<std::time::Instant>,
+    /// The bound was crossed: the next hand-over check need not wait for `authority_stall`.
+    stalled: bool,
+}
+
 fn is_tip_reorg(o: &StepOutcome) -> bool {
     matches!(o, StepOutcome::Retry(m) if m.starts_with(TIP_REORG))
 }
@@ -287,6 +304,8 @@ pub struct Follower<S: ChainSource> {
     /// When the cursor last moved, or the authority last answered from it (the local monotonic
     /// clock).
     progress_at: Mutex<std::time::Instant>,
+    /// Tip reorgs since the cursor last moved ([`TIP_REORG_STALL`]).
+    tip_reorgs: Mutex<TipReorgs>,
     /// The chain proofs (`rpc::proof`), when on and the source serves them.
     proof: Option<Arc<Mutex<ChainProof>>>,
     /// A contradiction of the store was put off because the node was not synced.
@@ -381,6 +400,7 @@ impl<S: ChainSource> Follower<S> {
             quotes_minute: Mutex::new(0),
             chain_failures: Mutex::new((0, String::new())),
             progress_at: Mutex::new(std::time::Instant::now()),
+            tip_reorgs: Mutex::new(TipReorgs::default()),
             proof,
             contradiction_unsynced: std::sync::atomic::AtomicBool::new(false),
             checked_authority: Mutex::new(None),
@@ -405,6 +425,7 @@ impl<S: ChainSource> Follower<S> {
     fn chain_answered(&self) {
         self.chain_failures.lock().unwrap_or_else(|e| e.into_inner()).0 = 0;
         *self.progress_at.lock().unwrap_or_else(|e| e.into_inner()) = std::time::Instant::now();
+        *self.tip_reorgs.lock().unwrap_or_else(|e| e.into_inner()) = TipReorgs::default();
     }
 
     /// After a failed step: when the authority's chain requests failed often enough in a row and
@@ -413,7 +434,8 @@ impl<S: ChainSource> Follower<S> {
     async fn hand_over(&self) -> Option<StepOutcome> {
         let (n, last) = self.chain_failures.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let stalled = self.progress_at.lock().unwrap_or_else(|e| e.into_inner()).elapsed();
-        if n < self.cfg.authority_failures.max(1) || stalled < self.cfg.authority_stall {
+        let reorg_stall = std::mem::take(&mut self.tip_reorgs.lock().unwrap_or_else(|e| e.into_inner()).stalled);
+        if n < self.cfg.authority_failures.max(1) || (stalled < self.cfg.authority_stall && !reorg_stall) {
             return None;
         }
         let cursor = self.blocking(|i| i.cursor()).await.ok().flatten()?;
@@ -1113,7 +1135,37 @@ impl<S: ChainSource> Follower<S> {
 
     /// A step that gave up on a batch after tip reorgs ([`TIP_REORG`]). The node answered, so the
     /// state is not `node_unavailable`. `following` and `catching_up` stay.
+    ///
+    /// After [`TIP_REORG_STALL_STEPS`] such steps in a row over [`TIP_REORG_STALL`] it is a failure
+    /// of the chain authority instead: `node_unavailable`, and the source is told
+    /// ([`ChainSource::authority_failing`]: an alarm or another node, a failover).
     fn tip_reorg_wait(&self, msg: String) -> StepOutcome {
+        let stall = {
+            let mut t = self.tip_reorgs.lock().unwrap_or_else(|e| e.into_inner());
+            t.steps += 1;
+            let since = *t.since.get_or_insert_with(std::time::Instant::now);
+            let long = since.elapsed();
+            (t.steps >= TIP_REORG_STALL_STEPS && long >= TIP_REORG_STALL).then(|| {
+                let n = std::mem::take(&mut t.steps);
+                t.since = None;
+                t.stalled = true;
+                (n, long)
+            })
+        };
+        if let Some((n, long)) = stall {
+            let why = format!(
+                "the chain authority claimed a tip reorg in {n} steps in a row over {} s, the cursor does not move ({msg})",
+                long.as_secs()
+            );
+            tracing::warn!(reason = %why, "tip reorgs without end: treated as a failure of the chain authority");
+            {
+                let mut g = self.chain_failures.lock().unwrap_or_else(|e| e.into_inner());
+                g.0 = g.0.max(self.cfg.authority_failures.max(1));
+                g.1 = why.clone();
+            }
+            self.set_state(FollowerState::NodeUnavailable, Some(why.clone()));
+            return StepOutcome::Retry(why);
+        }
         self.health.update(|h| {
             if matches!(h.state, FollowerState::NodeUnavailable | FollowerState::Starting) {
                 h.state = FollowerState::CatchingUp;
@@ -1847,6 +1899,8 @@ mod tests {
             too_deep: std::sync::atomic::AtomicBool,
             /// `getServerInfo` says not synced.
             unsynced: std::sync::atomic::AtomicBool,
+            /// What the follower told the source of a failing authority.
+            failing: Mutex<Vec<String>>,
         }
 
         impl Recorded {
@@ -1953,6 +2007,10 @@ mod tests {
             fn chain_refused(&self, _origin: Origin, why: &str) {
                 self.refused.lock().unwrap().push(why.to_string());
             }
+            async fn authority_failing(&self, _at: Hash32, why: &str) -> bool {
+                self.failing.lock().unwrap().push(why.to_string());
+                false
+            }
         }
 
         fn follower(
@@ -1981,6 +2039,7 @@ mod tests {
                 asked: Mutex::new(vec![]),
                 too_deep: Default::default(),
                 unsynced: Default::default(),
+                failing: Mutex::new(vec![]),
             });
             let conn = crate::indexer::db::open_memory(&network).unwrap();
             let ingest =
@@ -2134,6 +2193,36 @@ mod tests {
             let o = f.step().await;
             assert!(matches!(o, StepOutcome::Applied { .. }), "{o:?}");
             assert_eq!(cursor(&ingest), src.last().0);
+        }
+
+        /// K-M1: a node that answers every lane proof "not in the selected parent chain" no longer
+        /// stalls the follower for ever without blame. After `TIP_REORG_STALL_STEPS` steps over
+        /// `TIP_REORG_STALL` it is a failure of the chain authority: `node_unavailable`, and the
+        /// source is told (an alarm, another node, a failover).
+        #[tokio::test]
+        async fn endless_tip_reorgs_count_as_a_failing_authority() {
+            let (f, src, ingest, health) = follower(TN10, |_| {});
+            src.reorgs.store(usize::MAX, SeqCst);
+            for _ in 1..TIP_REORG_STALL_STEPS {
+                let o = f.step().await;
+                assert!(matches!(&o, StepOutcome::Retry(m) if m.starts_with(TIP_REORG)), "{o:?}");
+            }
+            // Steps alone are not enough: the stall must last.
+            let o = f.step().await;
+            assert!(matches!(&o, StepOutcome::Retry(m) if m.starts_with(TIP_REORG)), "{o:?}");
+            assert!(src.failing.lock().unwrap().is_empty());
+            f.tip_reorgs.lock().unwrap().since = std::time::Instant::now().checked_sub(TIP_REORG_STALL);
+            let o = f.step().await;
+            assert!(matches!(&o, StepOutcome::Retry(m) if m.contains("claimed a tip reorg")), "{o:?}");
+            assert_eq!(health.snapshot().state, FollowerState::NodeUnavailable);
+            let told = src.failing.lock().unwrap().clone();
+            assert_eq!(told.len(), 1, "the source is told once");
+            assert!(told[0].contains("claimed a tip reorg"), "{told:?}");
+            assert_eq!(cursor(&ingest), src.fx.start, "nothing applied");
+            // The cursor moves: the count begins again.
+            src.reorgs.store(0, SeqCst);
+            assert!(matches!(f.step().await, StepOutcome::Applied { .. }));
+            assert_eq!(f.tip_reorgs.lock().unwrap().steps, 0);
         }
     }
 }

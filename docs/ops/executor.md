@@ -3221,7 +3221,9 @@ the node as `benched`. So a slow public node can stay listed without slowing the
 answer its small calls (health, sink) while its chain requests (a VSPC batch, the chain hashes, its copy of a window from
 another node) time out or lose the connection: on 2026-11-13 such a primary held index-a still for over 18 minutes, its
 status `authority, ok`. When **2 chain requests in a row fail on the wire and the cursor has not moved for 3 minutes**
-(the local monotonic clock; `AUTHORITY_FAILURES`, `AUTHORITY_STALL`, not configurable), the authority is handed over:
+(the local monotonic clock; `AUTHORITY_FAILURES`, `AUTHORITY_STALL`, not configurable), or when **5 steps in a row over at least
+a minute gave up on a claimed tip reorg** (a lane proof answered "not in the selected parent chain" every time;
+`TIP_REORG_STALL_STEPS`, `TIP_REORG_STALL`; the state is `node_unavailable`), the authority is handed over:
 
 * **Own node with `[[nodes]]`:** the first other node, in the order of the list, that may lead (`may_lead`, below), is not
   dropped, has no alarm, is not behind, has not contradicted the authority within 10 minutes and shows within 30 s that
