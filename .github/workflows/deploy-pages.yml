@@ -12,7 +12,7 @@ name: deploy-pages
 # https://kob-tn10.kaspa.ag (the host of KOB_PAGES_PUBLIC_URL; kob.kaspa.ag is a second custom domain of the same project and deployment, attached by hand).
 # There is no separate mainnet site and no landing-only page. The mainnet launch is a change of this same site: the variables KOB_PAGES_NETWORK=mainnet,
 # KOB_PAGES_NETWORKS and KOB_PAGES_HOST_NETWORKS (kob.kaspa.ag opens on mainnet, kob-tn10.kaspa.ag on testnet-10) and the header network switch
-# (KOB_PAGES_NETWORK_SWITCH, which this file does not pass yet), docs/ops/web-hosting.md 4b and 4d. An optional second site, the INTERNAL mainnet app
+# (KOB_PAGES_NETWORK_SWITCH=1; unset, the site is pinned), docs/ops/web-hosting.md 4b and 4d. An optional second site, the INTERNAL mainnet app
 # (KOB_PAGES_MAINNET_INTERNAL=1, which also needs KOB_PAGES_MAINNET_PROJECT and KOB_PAGES_MAINNET_INDEXER_URL), is the full mainnet app uploaded to its own
 # Pages project as a preview deployment on the branch `internal`, for the founder's own testing: the variable says the project's previews are behind
 # Cloudflare Access (docs/ops/web-hosting.md, 4c), and the job fails when an unauthenticated request to it is not sent to Access (it also sends X-Robots-Tag:
@@ -111,6 +111,7 @@ jobs:
           HOSTS: ${{ vars.KOB_PAGES_HOST_NETWORKS }}
           MAIN_NETWORKS: ${{ vars.KOB_PAGES_MAINNET_NETWORKS }}
           MAIN_HOSTS: ${{ vars.KOB_PAGES_MAINNET_HOST_NETWORKS }}
+          SWITCH: ${{ vars.KOB_PAGES_NETWORK_SWITCH }}
         run: |
           missing=()
           [ "$HAS_TOKEN" = true ] || missing+=("secret CLOUDFLARE_API_TOKEN")
@@ -138,6 +139,10 @@ jobs:
           BRANCH=${BRANCH:-main}
           if ! [[ "$BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$ ]]; then
             echo "::error::KOB_PAGES_BRANCH \`$BRANCH\` is not a branch name"; exit 1
+          fi
+          # the header network switch of the public site: 1 / true = on; unset or 0 = pinned (config.json lockNetwork). A typo must not pin the site silently
+          if [ -n "$SWITCH" ] && ! [[ "$SWITCH" =~ ^(0|1|[Tt][Rr][Uu][Ee])$ ]]; then
+            echo "::error::KOB_PAGES_NETWORK_SWITCH must be 1, true, 0 or unset, not \`$SWITCH\`"; exit 1
           fi
           # the mainnet project exists only for the internal mainnet app (there is no public mainnet site): an indexer without a project is a mistake, and a project
           # without KOB_PAGES_MAINNET_INTERNAL=1 would build nothing
@@ -171,13 +176,13 @@ jobs:
           fi
           # one matrix entry per site; every value is a repository variable (not a secret). `branch` is the Pages branch the site is uploaded to
           # (production: KOB_PAGES_BRANCH; the internal app: `internal`, a preview) and `internal` marks that preview. `networks` and `hosts` are the JSON
-          # of config.json `networks` / `hostNetworks` (empty = none)
+          # of config.json `networks` / `hostNetworks` (empty = none); `netswitch` is KOB_PAGES_NETWORK_SWITCH (the internal app stays pinned)
           matrix=$(jq -nc \
             --arg p "$PROJECT" --arg n "${NETWORK:-testnet-10}" --arg i "$INDEXER" --arg e "$EXTRA" --arg nd "$NODE" --arg ex "$EXPLORER" --arg nm "$NAMES" --arg u "$PUBLIC" --arg br "$BRANCH" \
             --arg mp "$MAIN_PROJECT" --arg mi "$MAIN_INDEXER" --arg me "$MAIN_EXTRA" --arg mnd "$MAIN_NODE" --arg mex "$MAIN_EXPLORER" --arg mnm "$MAIN_NAMES" --arg mint "$MAIN_INTERNAL" \
-            --arg nw "$NETWORKS" --arg hn "$HOSTS" --arg mnw "$MAIN_NETWORKS" --arg mhn "$MAIN_HOSTS" \
-            '{include: ([{site: "testnet", project: $p, network: $n, branch: $br, internal: "", indexer: $i, extra: $e, networks: $nw, hosts: $hn, node: $nd, explorer: $ex, names: $nm, public: $u}]
-              + (if $mp != "" and $mint == "1" then [{site: "mainnet-internal", project: $mp, network: "mainnet", branch: "internal", internal: "1", indexer: $mi, extra: $me, networks: $mnw, hosts: $mhn, node: $mnd, explorer: $mex, names: $mnm, public: ""}] else [] end))}')
+            --arg nw "$NETWORKS" --arg hn "$HOSTS" --arg mnw "$MAIN_NETWORKS" --arg mhn "$MAIN_HOSTS" --arg sw "$SWITCH" \
+            '{include: ([{site: "testnet", project: $p, network: $n, branch: $br, internal: "", indexer: $i, extra: $e, networks: $nw, hosts: $hn, netswitch: $sw, node: $nd, explorer: $ex, names: $nm, public: $u}]
+              + (if $mp != "" and $mint == "1" then [{site: "mainnet-internal", project: $mp, network: "mainnet", branch: "internal", internal: "1", indexer: $mi, extra: $me, networks: $mnw, hosts: $mhn, netswitch: "", node: $mnd, explorer: $mex, names: $mnm, public: ""}] else [] end))}')
           { echo "ready=true"; echo "branch=$BRANCH"; echo "matrix=$matrix"; } >> "$GITHUB_OUTPUT"
       - if: steps.gate.outputs.ready == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -199,6 +204,7 @@ jobs:
             KOB_PAGES_EXTRA_INDEXER_URLS=$(jq -r .extra <<< "$site") KOB_PAGES_NODE_URL=$(jq -r .node <<< "$site") \
             KOB_PAGES_EXPLORER_URL=$(jq -r .explorer <<< "$site") KOB_PAGES_TOKEN_NAMES_URL=$(jq -r .names <<< "$site") \
             KOB_PAGES_NETWORKS=$(jq -r .networks <<< "$site") KOB_PAGES_HOST_NETWORKS=$(jq -r .hosts <<< "$site") \
+            KOB_PAGES_NETWORK_SWITCH=$(jq -r .netswitch <<< "$site") \
               node web/scripts/pages-config.mjs --check || rc=1
           done < <(jq -c '.include[]' <<< "$MATRIX")
           exit "$rc"
@@ -281,6 +287,8 @@ jobs:
           KOB_PAGES_TOKEN_NAMES_URL: ${{ matrix.names }}
           KOB_PAGES_NETWORKS: ${{ matrix.networks }}
           KOB_PAGES_HOST_NETWORKS: ${{ matrix.hosts }}
+          # 1 / true: the header network switch (no lockNetwork); unset: the site is pinned to its network
+          KOB_PAGES_NETWORK_SWITCH: ${{ matrix.netswitch }}
           # the internal mainnet app also gets robots.txt (Disallow: /) and X-Robots-Tag: noindex in its _headers
           KOB_PAGES_INTERNAL: ${{ matrix.internal }}
         run: node scripts/pages-config.mjs --dist dist | tee "$RUNNER_TEMP/pages-config.txt"

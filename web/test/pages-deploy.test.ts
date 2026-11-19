@@ -210,6 +210,17 @@ describe('pages-config: config.json from the repository variables', () => {
       expect(wf).toContain('KOB_PAGES_NETWORKS: ${{ matrix.networks }}');
       expect(wf).toContain('KOB_PAGES_HOST_NETWORKS: ${{ matrix.hosts }}');
     });
+
+    it('the workflow passes KOB_PAGES_NETWORK_SWITCH to the public site only (the launch turns the header switch on; the internal app stays pinned)', () => {
+      const wf = readFileSync(fileURLToPath(new URL('../../.github/workflows/deploy-pages.yml', import.meta.url)), 'utf8');
+      expect(wf).toContain('SWITCH: ${{ vars.KOB_PAGES_NETWORK_SWITCH }}');
+      expect(wf).toContain('hosts: $hn, netswitch: $sw,');
+      expect(wf).toContain('hosts: $mhn, netswitch: "",');
+      expect(wf).toContain('KOB_PAGES_NETWORK_SWITCH=$(jq -r .netswitch <<< "$site")');
+      expect(wf).toContain('KOB_PAGES_NETWORK_SWITCH: ${{ matrix.netswitch }}');
+      // a value that is not 1 / true / 0 fails the run instead of pinning the site silently
+      expect(wf).toContain('"$SWITCH" =~ ^(0|1|[Tt][Rr][Uu][Ee])$');
+    });
   });
 });
 

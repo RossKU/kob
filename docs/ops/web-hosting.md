@@ -70,6 +70,7 @@ Repository *Settings* > *Secrets and variables* > *Actions*.
 | `KOB_PAGES_TOKEN_NAMES_URL` | no | the source of token names and icons: the base of a kascov.io-shaped data set, `https://...` (default `https://kascov.io/data`); `off` = none (see "Token names and icons" below) |
 | `KOB_PAGES_NETWORKS` | no | the servers of the site's other network, as JSON: `config.json` `networks` (section 4d). Only `testnet-10` on a mainnet site; unset = none |
 | `KOB_PAGES_HOST_NETWORKS` | no | the default network of each host name, as JSON: `config.json` `hostNetworks` (section 4d); unset = the site's network on every host |
+| `KOB_PAGES_NETWORK_SWITCH` | no | `1` / `true` = the header network switch (section 6); unset or `0` = the site is pinned (`"lockNetwork": true`); any other value fails the run. The internal mainnet app is always pinned |
 | `KOB_PAGES_BRANCH` | no | the project's production branch, default `main` |
 | `KOB_PAGES_MAINNET_PROJECT` | no | the Pages project of the **internal mainnet app** only (e.g. `kob-web-mainnet`, section 4c). There is no public mainnet site: set without `KOB_PAGES_MAINNET_INTERNAL=1` it fails the run. Create the project empty first (section 4c, step 1) |
 | `KOB_PAGES_MAINNET_INDEXER_URL` | no | the indexer of the internal mainnet app (section 4c); set without `KOB_PAGES_MAINNET_PROJECT` it fails the run |
@@ -336,7 +337,7 @@ The repository variables behind it: `KOB_PAGES_PROJECT=kob-web`, `KOB_PAGES_PUBL
 
 1. `kob.kaspa.ag` opens on mainnet by default and `kob-tn10.kaspa.ag` stays on testnet-10, through `hostNetworks` of `config.json` (`KOB_PAGES_HOST_NETWORKS`, with `KOB_PAGES_NETWORK=mainnet`, the mainnet indexer in `KOB_PAGES_INDEXER_URL` and the testnet-10 servers in `KOB_PAGES_NETWORKS`);
 2. the header network switch is turned on (`KOB_PAGES_NETWORK_SWITCH=1`): until then every site gets `"lockNetwork": true`;
-3. the launch commit passes `KOB_PAGES_NETWORK_SWITCH` through the workflow (it does not yet), the variables are set after the release gates (`docs/ops/release.md`), and the testnet app stays on `kob.kaspa.ag` behind the switch. No new Pages project and no domain move is needed.
+3. the workflow passes `KOB_PAGES_NETWORK_SWITCH` through; the variables are set after the release gates (`docs/ops/release.md`, runbook `docs/releases/mainnet-launch.md`), and the testnet app stays on `kob.kaspa.ag` behind the switch. No new Pages project and no domain move is needed.
 
 To test the full mainnet app before that, without opening it to anyone, use the protected internal preview (section 4c).
 
@@ -427,11 +428,11 @@ The launch config, for the one public project (`KOB_PAGES_PROJECT`, with `KOB_PA
 `kob.kaspa.ag` then opens on mainnet and `kob-tn10.kaspa.ag` on testnet-10, each with its own indexer; the header switch reaches the other one.
 A visitor's choice is stored per origin, so a choice on one host does not follow them to the other.
 
-Nothing changes until the launch. The launch commit has to:
+Nothing changes until the launch (runbook: `docs/releases/mainnet-launch.md`):
 
-1. turn the header switch on for the site: the workflow does not pass `KOB_PAGES_NETWORK_SWITCH` today, so every site gets `"lockNetwork": true` (pass the variable through the matrix, as `KOB_PAGES_NETWORKS` is);
-2. accept that the shared bundle is built with `KOB_NETWORK=mainnet` (from `KOB_PAGES_NETWORK`): the page title has no "Testnet ·" prefix and `og:url` names
-   `kob.kaspa.ag` (`KOB_PAGES_PUBLIC_URL`) on both hosts.
+1. the header switch is on only with `KOB_PAGES_NETWORK_SWITCH=1`, which the workflow passes to the public site; unset, every site gets `"lockNetwork": true`;
+2. the shared bundle is built with `KOB_NETWORK=mainnet` (from `KOB_PAGES_NETWORK`): the static title has no "Testnet ·" prefix, but the page sets it at runtime
+   from the network in force (`web/src/app/page-title.tsx`), so a testnet-10 page still says so; `og:url` names `kob.kaspa.ag` (`KOB_PAGES_PUBLIC_URL`) on both hosts.
 
 The repository variables (`KOB_PAGES_NETWORK`, `KOB_PAGES_INDEXER_URL`, `KOB_PAGES_NETWORKS`, `KOB_PAGES_HOST_NETWORKS`, `KOB_PAGES_PUBLIC_URL`) are set by hand, not by the
 commit, and no Pages project or domain changes: both hosts stay attached to `kob-web`. The previous deployment stays available for a rollback (section 8). Both indexers must answer CORS for both hosts (`cors_allow_origin = "*"` does, `docs/ops/chart-server.md` section 3).
@@ -504,7 +505,7 @@ page. The top-level servers in `config.json` (`indexerUrl`, `nodeUrl`, `extraInd
 network the file names: on the other network the page uses that network's entry of `networks` (section 4d) and, without one, none of them (no indexer,
 the SDK's public node, the bundled registry) unless the visitor's own Settings name servers, so the book and the charts stay empty there. A browser that saved servers in Settings gets no switch (they would stay in force
 on the other network) and is pointed to Settings. To pin a deployment to its network, add `"lockNetwork": true` to `config.json` (`window.__KOB_CONFIG__`):
-the chip is then a plain label. `scripts/pages-config.mjs` writes it unless `KOB_PAGES_NETWORK_SWITCH=1`, which the workflow does not pass yet.
+the chip is then a plain label. `scripts/pages-config.mjs` writes it unless `KOB_PAGES_NETWORK_SWITCH=1`.
 
 ## 7. Checking a deployment
 
