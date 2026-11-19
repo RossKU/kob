@@ -36,7 +36,8 @@ use kob_x402::policy::{AllowedToken, Custody, Policy};
 use kob_x402::safe_tx::spk_from_hex;
 use kob_x402::testkit::MockChain;
 use kob_x402::wire::{hex, FacilitatorRequest, Finality, Network, PaymentRequirements, SettlementResponse, X402_VERSION};
-use kobd::x402::facilitator::{Facilitator, FacilitatorConfig, IntentRuntime};
+use kob_x402::invoice::{Invoice, InvoiceState};
+use kobd::x402::facilitator::{Facilitator, FacilitatorConfig, IntentRuntime, InvoiceRuntime, InvoiceStore};
 use kobd::x402::ledger::{Ledger, State};
 
 use common::{keys, pk, CARRIER, DC, EXT, KAS, NOW, P245, P250, TOKEN_B, TOKEN_COV, WHOLE};
@@ -148,6 +149,7 @@ struct World {
     funds: PayerFunds,
     fac: Facilitator,
     merchant: Merchant,
+    clock: Arc<FixedClock>,
 }
 
 fn world(merchant: Merchant) -> World {
@@ -178,10 +180,11 @@ fn world(merchant: Merchant) -> World {
     let ledger = Arc::new(Ledger::in_memory());
     let book = Arc::new(Mutex::new(book));
     let b2 = book.clone();
+    let clock = Arc::new(FixedClock::new(NOW_MS));
     let fac = Facilitator::new(
         policy.clone(),
         hook.clone(),
-        Arc::new(FixedClock::new(NOW_MS)),
+        clock.clone(),
         ledger.clone(),
         FacilitatorConfig { settle_wait: Duration::from_secs(3), poll_interval: Duration::from_millis(5), ..Default::default() },
     )
@@ -190,9 +193,16 @@ fn world(merchant: Merchant) -> World {
         keeper: KeeperParams { keeper: pk(KEEPER), ..KeeperParams::default() },
         max_attempts: 10,
         lock_margin_daa: 0,
+    })
+    .with_invoices(InvoiceRuntime {
+        store: Arc::new(InvoiceStore::in_memory()),
+        max_lifetime_ms: 86_400_000,
+        public_url: None,
+        max_open_per_merchant: 100,
+        max_extra_payments: 16,
     });
     let funds = PayerFunds { tokens: vec![tok], funding, change: pk(PAYER_K) };
-    World { chain, hook, ledger, book, policy, funds, fac, merchant }
+    World { chain, hook, ledger, book, policy, funds, fac, merchant, clock }
 }
 
 impl World {
@@ -477,4 +487,73 @@ fn an_execution_whose_merchant_output_is_not_at_the_pinned_position_is_not_credi
     }));
     let r = w.settle(&offer, &p);
     w.assert_intent_spent(&p, &r, "execution at a shifted position");
+}
+
+/// An intent executed after its deadline pays the merchant while its invoice reads expired. A covenant cannot set an upper
+/// time limit, so a rival keeper can still execute it until the facilitator's expiry is mined. The facilitator records that
+/// execution: the expiry ends `executed_late`, the attempt names it, and the invoice lists it as a late payment that is
+/// accepted on chain, to refund or honour.
+#[test]
+fn an_execution_after_the_deadline_is_recorded_as_a_late_payment() {
+    let w = world(Merchant::Kas);
+    let offer = w.offer();
+    let inv = Invoice::new(Network::Testnet10, "order-7", NOW_MS + 120_000, None, vec![offer.clone()]);
+    let id = w.fac.register_invoice("shop", inv, &|_| true).unwrap()["id"].as_str().unwrap().to_string();
+    let opts = IntentOptions { max_sell: Some(3 * WHOLE), expires_in_ms: Some(120_000), ..IntentOptions::default() };
+    let p = pay_intent(&w.policy, &offer, &hex(&TOKEN_COV), &id, &keys(), &w.funds, NOW_MS, &opts).unwrap();
+    // The node refuses every execution of the facilitator (and, later, its expiry) from its first one on.
+    let snapshot = w.book.lock().unwrap().clone();
+    *w.hook.creation.lock().unwrap() = Some(p.txid);
+    let chain = w.chain.clone();
+    *w.hook.hook.lock().unwrap() = Some(Box::new(move || chain.set_submit_failure(Some(SubmitError::Rejected("not now".into())))));
+    w.fac.set_settle_wait(Duration::from_millis(300));
+    let stop = Arc::new(AtomicBool::new(false));
+    let miner = {
+        let (c, s) = (w.chain.clone(), stop.clone());
+        thread::spawn(move || {
+            while !s.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(3));
+                c.mine(0);
+            }
+        })
+    };
+    let r = w.fac.pay_invoice(&id, p.payload.clone());
+    stop.store(true, Ordering::SeqCst);
+    miner.join().unwrap();
+    assert!(!r.success, "{r:?}");
+    // After the deadline the facilitator has given the payment up; its expiry is not mined yet (the node refuses it).
+    w.clock.set(NOW_MS + 121_000);
+    w.fac.reconcile();
+    w.chain.set_submit_failure(None);
+    let e = w.ledger.get(&hex(&p.txid)).expect("the creation was broadcast");
+    assert_eq!(e.state, State::Failed);
+    assert!(e.reason.as_deref().unwrap().starts_with("intent_"), "{:?}", e.reason);
+    assert_eq!(e.intent.as_ref().unwrap().expiry.as_ref().unwrap().outcome, None);
+    assert!(w.chain.utxo(&e.intent.as_ref().unwrap().facts.outpoint()).is_some(), "the intent is still on chain");
+    // A rival keeper executes the intent in that window.
+    let facts = e.intent.unwrap().facts;
+    let mut f = facts.clone();
+    let u = w.chain.utxo(&facts.outpoint()).expect("the intent is still on chain");
+    f.intent.block_daa_score = u.block_daa_score;
+    if let Some(l) = f.lock.as_mut() {
+        l.utxo.block_daa_score = u.block_daa_score;
+    }
+    let kp = KeeperParams { keeper: pk(RIVAL_KEEPER), ..KeeperParams::default() };
+    let ex = build_execution(&f, &snapshot, &BTreeSet::new(), w.chain.daa(), &kp).unwrap().expect("the rival has an execution");
+    w.chain.submit(&ex.tx).expect("the rival's execution");
+    w.chain.mine(1);
+    w.fac.reconcile();
+    let exec = hex(&ex.tx.id().as_bytes());
+    let e = w.ledger.get(&hex(&p.txid)).unwrap();
+    assert_eq!(e.intent.as_ref().unwrap().expiry.as_ref().unwrap().outcome.as_deref(), Some(format!("executed_late: {exec}").as_str()));
+    assert!(e.reason.as_deref().unwrap().starts_with(&format!("intent_executed_late: {exec}")), "{:?}", e.reason);
+    let s = w.fac.invoice_status(&id).unwrap();
+    assert_eq!(s.status, InvoiceState::Expired);
+    let late: Vec<_> = s.extra_payments.iter().filter(|x| x.kind == "late").collect();
+    assert_eq!(late.len(), 1, "{:?}", s.extra_payments);
+    assert_eq!((late[0].transaction.as_str(), late[0].observed.as_str()), (e.txid.as_str(), "accepted"));
+    assert!(late[0].accepted_daa_score.is_some());
+    // Reconciled once: later rounds add nothing.
+    w.fac.reconcile();
+    assert_eq!(w.fac.invoice_status(&id).unwrap().extra_payments.len(), 1);
 }

@@ -682,7 +682,7 @@ impl Facilitator {
     /// reconcile.
     pub fn drive_expiry(&self, txid: &str) -> Result<bool> {
         let rt = self.intents.as_ref().ok_or_else(intent_unsupported)?;
-        let (_, rec) = self.intent_entry(txid)?;
+        let (e, rec) = self.intent_entry(txid)?;
         let Some(x) = rec.expiry.clone() else { return Ok(false) };
         if x.outcome.is_some() {
             return Ok(false);
@@ -692,16 +692,21 @@ impl Facilitator {
             return Ok(true);
         }
         let node = |x: ChainError| unavailable(x.to_string());
+        let facts = &rec.facts;
+        let intent_op = facts.outpoint();
         let settle = |outcome: &str| -> Result<bool> {
             self.edit_intent(txid, |en| {
                 if let Some(r) = en.intent.as_mut().and_then(|r| r.expiry.as_mut()) {
                     r.outcome = Some(outcome.to_string());
                 }
             })?;
+            self.chain.unwatch_spend(&intent_op);
             Ok(false)
         };
-        let facts = &rec.facts;
-        let intent_op = facts.outpoint();
+        // Follow who spends the intent until the expiry ends, so a spend that pays the merchant
+        // after the deadline is told from the payer's cancel (`late_execution`). Again after a
+        // restart, which forgets every watch.
+        self.chain.watch_spend(&intent_op);
         let intent_spk = spk_from_hex(&facts.intent_spk)
             .map_err(|_| X402Error::new(Reason::UnexpectedSettleError, Diag::Internal, "bad intent script"))?;
         let found = self.chain.utxos(&[(intent_op, intent_spk.clone())]).map_err(node)?.into_iter().next().flatten();
@@ -730,7 +735,10 @@ impl Facilitator {
             if rec.seen_daa.is_none() {
                 return if self.clock.now_ms() > x.until_ms { settle("never_created") } else { Ok(true) };
             }
-            return settle("spent");
+            return match self.late_execution(&e, &rec)? {
+                Some(outcome) => settle(&outcome),
+                None => Ok(true),
+            };
         }
         let now = self.clock.now_ms();
         if (now as i128) < facts.state.deadline() as i128 {
@@ -776,10 +784,87 @@ impl Facilitator {
                 self.chain.untrack(&id);
                 Ok(true)
             }
+            // Another transaction is spending the intent. The next round reads who, once the
+            // intent is gone: a late execution is recorded (`late_execution`).
             Err(SubmitError::Conflict(_)) => {
                 self.chain.untrack(&id);
-                settle("spent")
+                Ok(true)
             }
+        }
+    }
+
+    /// How an intent whose expiry is pending was spent, once it is gone and our expiry did not.
+    ///
+    /// A covenant cannot set an upper time limit, so the intent stays executable after its
+    /// deadline until an expiry or the payer's cancel is mined. A rival keeper, the merchant, or an
+    /// execution of ours still in flight can run it then, and that pays the merchant while the
+    /// payment reads expired. Such an execution is recorded: the expiry ends `executed_late:
+    /// <txid>`, the entry's reason names it, and an invoice it was for lists it as a `late` payment
+    /// `accepted` on chain, to refund or honour. Any other spend ends `spent`. `None` while the
+    /// chain follower may still report the spender.
+    fn late_execution(&self, e: &Entry, rec: &IntentRecord) -> Result<Option<String>> {
+        let facts = &rec.facts;
+        let now = self.clock.now_ms();
+        match self.chain.spent_by(&facts.outpoint()) {
+            SpentBy::Spent { txid: spender, block_daa_score, input_index, sig_script, outputs } => {
+                let merchant_spk = spk_from_hex(&facts.merchant_spk)
+                    .map_err(|_| X402Error::new(Reason::UnexpectedSettleError, Diag::Internal, "bad merchant script"))?;
+                let min_carrier = self.policy.limits.min_carrier_sompi;
+                let Some(at) = pinned_merchant_output_in(facts, &merchant_spk, input_index, &sig_script, &outputs, min_carrier) else {
+                    return Ok(Some("spent".into()));
+                };
+                let exec = hex(&spender);
+                warn!(
+                    "x402 intent {}: executed after its deadline by {exec} (merchant output {at}); recorded as a late payment to refund or honour",
+                    e.txid
+                );
+                if let (Some(inv), Some(rt)) = (e.invoice.as_deref(), self.invoices.as_ref()) {
+                    let x = super::invoice::ExtraRecord {
+                        kind: "late".into(),
+                        txid: e.txid.clone(),
+                        payer: e.payer.clone(),
+                        watch_txid: exec.clone(),
+                        watch_index: at as u32,
+                        watch_spk: facts.merchant_spk.clone(),
+                        intent: true,
+                        observed: "accepted".into(),
+                        accepted_daa: Some(block_daa_score),
+                        at_ms: now,
+                        spends: vec![],
+                    };
+                    // A failed write leaves the expiry pending: the next round records it again.
+                    rt.store.update(inv, |r| {
+                        if !r.extra.iter().any(|y| y.txid == x.txid && y.watch_txid == x.watch_txid) {
+                            r.extra.push(x);
+                        }
+                    })?;
+                }
+                let reason = format!(
+                    "intent_executed_late: {exec} executed the intent after its deadline and paid the merchant (output {at}); the \
+                     payment reads expired: refund or honour it"
+                );
+                self.edit_intent(&e.txid, |en| en.reason = Some(reason))?;
+                Ok(Some(format!("executed_late: {exec}")))
+            }
+            // Watched and no spender reported yet: the node's UTXO set can be ahead of the follower.
+            SpentBy::Unspent => {
+                let since = rec.gone_ms.unwrap_or(now);
+                if rec.gone_ms.is_none() {
+                    self.edit_intent(&e.txid, |en| {
+                        if let Some(r) = en.intent.as_mut() {
+                            r.gone_ms = Some(now);
+                        }
+                    })?;
+                }
+                let behind = match (self.chain.follower_daa(), self.chain.virtual_daa_score()) {
+                    (Some(f), Ok(v)) => f.saturating_add(FOLLOWER_LAG_DAA) < v,
+                    _ => false,
+                };
+                let wait = if behind { SPENDER_LAG_WAIT_MS } else { SPENDER_GRACE_MS };
+                Ok((now >= since.saturating_add(wait)).then(|| "spent".into()))
+            }
+            // No tracker, or the spend came while nobody watched (a restart): unknown spender.
+            SpentBy::Untracked => Ok(Some("spent".into())),
         }
     }
 

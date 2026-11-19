@@ -182,7 +182,9 @@ pub struct ExpiryRecord {
     /// How it ended, or `None` while it is pending.
     ///
     /// - `expired`: our expiry was accepted.
-    /// - `spent`: another transaction spent the intent.
+    /// - `spent`: another transaction spent the intent (the payer's cancel, or a spender not known).
+    /// - `executed_late: <txid>`: an execution after the deadline paid the merchant; the entry's reason
+    ///   and the invoice's `late` payment record it, to refund or honour.
     /// - `never_created`: the creation never reached the chain within the window.
     /// - `unbuildable: <why>`: no expiry can be built, and the payer's cancel remains.
     #[serde(default, skip_serializing_if = "Option::is_none")]

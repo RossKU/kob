@@ -77,6 +77,9 @@ pub struct InvoiceCtx {
 pub struct ExtraRecord {
     /// `duplicate`, `late` or `released`.
     ///
+    /// `late` is also an intent of an attempt that was executed after its deadline: `watch_txid` is
+    /// that execution, and it is `accepted` from the start.
+    ///
     /// `released` is an attempt with an unknown outcome that was failed and is still watched.
     pub kind: String,
     /// The payment transaction (an intent: its creation).
