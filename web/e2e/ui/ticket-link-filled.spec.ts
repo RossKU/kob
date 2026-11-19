@@ -21,3 +21,25 @@ test('a limit sell filled in by a link carries a note; a plain token link does n
     await page.screenshot({ path: `${dir}/${process.env.KOB_SHOT_TAG ?? 'shot'}-ticket-link-filled.png` });
   }
 });
+
+test('a market sell, buy or close filled in by a link carries a note too', async ({ appPage: page, mock }) => {
+  const id = await openMarket(page, mock, { route: undefined });
+  const dir = process.env.KOB_SHOTS;
+  if (dir) mkdirSync(dir, { recursive: true });
+  for (const [query, text, tag] of [
+    ['ticket=sell&amount=100000000', 'A link filled in this market order', 'sell'],
+    ['ticket=cover&amount=100000000', 'A link filled in this market order', 'cover'],
+    ['ticket=close', 'A link set this ticket to sell all you hold', 'close'],
+  ] as const) {
+    await page.goto('/#/market');
+    await page.goto(`/#/market/${id}?${query}`);
+    await expect(page.getByTestId('order-ticket')).toBeVisible();
+    if (dir) {
+      await page.waitForTimeout(500);
+      await page.getByTestId('ticket-container').screenshot({ path: `${dir}/${process.env.KOB_SHOT_TAG ?? 'shot'}-ticket-link-${tag}.png` });
+    }
+    const note = page.getByTestId('ticket-link-filled');
+    await expect(note).toBeVisible();
+    await expect(note).toContainText(text);
+  }
+});

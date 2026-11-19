@@ -281,6 +281,8 @@ export default {
   'market.declaration.conflictTitle': 'The registry and the chain disagree about this token',
   'market.declaration.conflict': 'What this token recorded on chain at its creation (KCC-23) differs from its registry entry (or from the price scale of its market) in: {fields}. The on-chain values are shown. When the decimals differ, orders of this token are not planned until the two agree.',
   'market.ticket.linkFilled': 'A link filled in this sell order: check the amount and the price before you place it.',
+  'market.ticket.linkFilledMarket': 'A link filled in this market order: check the side and the amount before you place it.',
+  'market.ticket.linkFilledClose': 'A link set this ticket to sell all you hold: check it before you place it.',
   'market.ticket.networkBlocked': 'Your wallet is on the wrong network: trading is blocked until you switch it.',
   'market.ticket.untradable': 'Not tradable in this build: {reason}. The book and your balances stay visible.',
   'market.ticket.untradableBook': 'Not tradable now: {reason}. The book is not shown; your balances and your own orders (kept in this browser) stay available, and trading returns when the indexer does.',
