@@ -221,6 +221,29 @@ describe('records follow the order (C5-06: a cancel drops the record only once i
     expect(rec!.cancelling ?? null).toBeNull();
   });
 
+  it('an hour-old mark is never dropped on a lookup that only failed or answered unknown: the mark goes and the order shows again', async () => {
+    const a = place('create.ask');
+    const snap = a.p.snapshots[0];
+    const old = CLOCK.unixSeconds - 3_601n;
+    // the indexer lists nothing; the node's search over the 10 TST ask is not exhaustive: 'unknown'
+    const unknown = new MemoryRecordStore();
+    await mark(unknown, a.rec, `${snap.order.transactionId}:${snap.order.index}`, old);
+    await loadOrders(services({ indexer: { allOrders: async () => [] } }), MAKER.pk, unknown, { spkToAddress: testAddress });
+    const kept = await unknown.get(a.rec.covenantId);
+    expect(kept).not.toBeNull();
+    expect(kept!.cancelling ?? null).toBeNull();
+    // the node's UTXO lookup fails (its clock still answers)
+    const failed = new MemoryRecordStore();
+    await mark(failed, a.rec, `${snap.order.transactionId}:${snap.order.index}`, old);
+    const s = services({ indexer: { allOrders: async () => [] } });
+    (s.node as unknown as { getUtxosByAddresses: () => Promise<never> }).getUtxosByAddresses = async () => {
+      throw new Error('lookup failed');
+    };
+    const data = await loadOrders(s, MAKER.pk, failed, { spkToAddress: testAddress });
+    expect(await failed.get(a.rec.covenantId)).not.toBeNull();
+    expect(data.entries.map((e) => e.id)).toEqual([a.rec.covenantId]);
+  });
+
   it('without the indexer: dropped when the node search is exhaustive and finds nothing (spent)', async () => {
     const a = placeSmall('create.ask', '1000');
     const store = new MemoryRecordStore();

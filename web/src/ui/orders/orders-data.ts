@@ -139,7 +139,8 @@ export interface LoadOrdersOptions {
 export const HISTORY_PAGES = 5;
 /**
  * A cancel whose order is still seen at the outpoint it spent this long after submission did not
- * happen, because it was rejected or reorged.
+ * happen, because it was rejected or reorged. A cancel not proven final by then is un-marked, so
+ * its order shows again instead of staying hidden.
  */
 export const CANCEL_PENDING_SECONDS = 3600n;
 
@@ -167,7 +168,7 @@ const isLiveView = (v: OrderView): boolean => v.status === 'open' || v.status ==
  * exits have none, because their entry's fill creates them. Every record learns the last proven
  * state. A record marked `cancelling` is dropped once that is final, meaning the order is terminal
  * or spent. It is un-marked when the order lives on at another outpoint, because a fill won the
- * race, or when the cancel never landed. Returns the records as they are now. Store failures are
+ * race, or when nothing proves the cancel final CANCEL_PENDING_SECONDS after it was sent. Returns the records as they are now. Store failures are
  * ignored, because the store is a convenience.
  */
 export async function syncRecords(
@@ -211,13 +212,16 @@ export async function syncRecords(
       const where = v && v.state_known && v.current ? `${v.current.txid}:${v.current.index}` : res?.status === 'live' && res.order ? `${res.order.transactionId}:${res.order.index}` : null;
       const gone = (!!v && TERMINAL_VIEW.has(v.status)) || (!v && res?.status === 'spent');
       const stale = nowUnix !== null && nowUnix >= BigInt(c.atUnix) + CANCEL_PENDING_SECONDS;
-      if (gone || (stale && where === null && !(v && isLiveView(v)))) {
+      // Only a final answer drops it: a terminal indexer view, or the node's 'spent'. A lookup that
+      // failed or answered 'unknown' proves nothing, however old the mark.
+      if (gone) {
         await drop(rec.covenantId);
         continue;
       }
-      // The order lives on. Either a fill won the race, leaving another outpoint, or the cancel
-      // never got in and the order is still at the outpoint it spent, long after.
-      if ((where !== null && where !== c.spends) || (stale && where === c.spends)) next = { ...next, cancelling: null };
+      // The order lives on, or nothing says it is gone. Either a fill won the race, leaving another
+      // outpoint, or the cancel is still not final long after: the order shows again, with its
+      // status as the sources give it, and its Cancel.
+      if ((where !== null && where !== c.spends) || stale) next = { ...next, cancelling: null };
     }
     if (v && isLiveView(v)) next = refreshFromView(s.kob, next, v);
     if (res && (!v || !v.state_known)) next = refreshFromResolved(s.kob, next, res);
