@@ -1,9 +1,11 @@
-// Type declarations of the mock pair helpers (implementation: pairs.mjs). Only the surface tests use is typed.
+// Type declarations of the mock pair helpers (implementation: pairs.mjs). Only the surface tests
+// use is typed.
 import type { MockChain } from './chain.mjs';
 
 /**
- * A pair order spec (prices B base units per WHOLE A, amounts base units of A, tips KAS sompi per whole A): kind, side ('ask' sells A, 'bid' buys
- * A), base / quote (ticker or covenant id), amount, price (KobPair / KobIfdPair), a conditional's stop / tp, an entry's entryStop / prefund /
+ * A pair order spec (prices B base units per WHOLE A, amounts base units of A, tips KAS sompi per
+ * whole A): kind, side ('ask' sells A, 'bid' buys A), base / quote (ticker or covenant id), amount,
+ * price (KobPair / KobIfdPair), a conditional's stop / tp, an entry's entryStop / prefund /
  * rptAmount / exit, decay terms, minFill, maker, value, daa (backdate).
  */
 export interface PairOrderSpec {

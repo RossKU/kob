@@ -13,7 +13,10 @@ export function syntheticId(label, n) {
   return sha256hex(`kob-mock:${label}:${n}`);
 }
 
-/** `Error` carrying an HTTP status and an API error code (the indexer body is `{error:{code,message}}`). */
+/**
+ * `Error` carrying an HTTP status and an API error code (the indexer body is
+ * `{error:{code,message}}`).
+ */
 export class ApiError extends Error {
   constructor(status, code, message) {
     super(message);
@@ -24,7 +27,10 @@ export class ApiError extends Error {
 export const badRequest = (m) => new ApiError(400, 'bad_request', m);
 export const notFound = (m) => new ApiError(404, 'not_found', m);
 
-/** A submit the mock node refuses: the HTTP body is `{error: message}` (plain string, like a node RPC error text). */
+/**
+ * A submit the mock node refuses: the HTTP body is `{error: message}` (plain string, like a node
+ * RPC error text).
+ */
 export class Rejection extends Error {}
 
 export const big = (v, what = 'value') => {

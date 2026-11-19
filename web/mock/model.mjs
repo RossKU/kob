@@ -1,8 +1,11 @@
-// Order-model helpers of the MOCK indexer: which fields a state exposes and the quote / refund arithmetic behind the read-API views.
-// Protocol v3: every quantity is token base units, every price and tip sompi per whole token (`scale` base units of the
-// order's token); a pair order (KobPair, KobCondPair, KobIfdPair) trades base token A for quote token B at B base units per whole A (its
-// tip stays KAS). Ported (bigint) from crates/kob-protocol/src/state.rs for the READ side only; the amounts the covenants check (a bid's
-// buying power and escrow, a pair order's custodies and auction prices) come from kob-wasm's own helpers. Anything consensus-relevant (state encoding, scripts, transactions) goes through kob-wasm; the mock never re-implements that.
+// Order-model helpers of the MOCK indexer: which fields a state exposes and the quote / refund
+// arithmetic behind the read-API views. Protocol v3: every quantity is token base units, every
+// price and tip sompi per whole token (`scale` base units of the order's token); a pair order
+// (KobPair, KobCondPair, KobIfdPair) trades base token A for quote token B at B base units per
+// whole A (its tip stays KAS). Ported (bigint) from crates/kob-protocol/src/state.rs for the READ
+// side only; the amounts the covenants check (a bid's buying power and escrow, a pair order's
+// custodies and auction prices) come from kob-wasm's own helpers. Anything consensus-relevant
+// (state encoding, scripts, transactions) goes through kob-wasm; the mock never re-implements that.
 
 export const MAX_IDLE = 77_760_000n; // GTC = 90 days idle at 10 DAA/s
 export const IOC_LIFE = 600n;
@@ -14,8 +17,8 @@ const BASE_KINDS = {
   KobCondBid: { side: 2, inBook: false },
   KobIfdBid: { side: 2, inBook: true },
   KobIfdAsk: { side: 1, inBook: true },
-  // pair orders (token A for token B, one template each for both sides and families): their side is in their state; they are never in the
-  // KAS books (pair book: pairs.mjs)
+  // pair orders (token A for token B, one template each for both sides and families): their side is
+  // in their state; they are never in the KAS books (pair book: pairs.mjs)
   KobPair: { side: null, inBook: false },
   KobCondPair: { side: null, inBook: false },
   KobIfdPair: { side: null, inBook: false },
@@ -25,7 +28,10 @@ const BASE_KINDS = {
 export const PAIR_KINDS = ['KobPair', 'KobCondPair', 'KobIfdPair'];
 export const isPairKind = (kind) => PAIR_KINDS.includes(kind);
 
-/** Side / book membership per order kind, both families (`KobAskKron` ...; the pair kinds have no KRON twin). */
+/**
+ * Side / book membership per order kind, both families (`KobAskKron` ...; the pair kinds have no
+ * KRON twin).
+ */
 export const KINDS = Object.fromEntries(
   Object.entries(BASE_KINDS).flatMap(([k, v]) => (isPairKind(k) || k === 'KobCurveAsk' ? [[k, v]] : [[k, v], [`${k}Kron`, v]])),
 );
@@ -39,8 +45,9 @@ const tokenOf = (s, p) => ({
   familyCode: Number(s[`${p}Family`]), scale: BigInt(s[`${p}Scale`]), ext: s[`${p}Ext`] ?? null,
 });
 /**
- * A pair order's tokens oriented A (base) / B (quote) and its side (1 ASK sells A, 2 BID buys A; a buy-first entry is 2), null for every other
- * kind. A KobPair / KobCondPair names S (sold) and T (bought); a KobIfdPair names A and B.
+ * A pair order's tokens oriented A (base) / B (quote) and its side (1 ASK sells A, 2 BID buys A; a
+ * buy-first entry is 2), null for every other kind. A KobPair / KobCondPair names S (sold) and T
+ * (bought); a KobIfdPair names A and B.
  */
 export function pairTokensOf(any) {
   if (!isPairKind(any.kind)) return null;
@@ -55,7 +62,10 @@ export function pairTokensOf(any) {
 /** The side of an order (1 sells its token, 2 buys it). */
 export const sideOf = (any) => (isPairKind(any.kind) ? Number(any.state.side) : BASE_KINDS[baseKind(any.kind)].side);
 
-/** kob-wasm `custodies`: the exact custodies an order holds, in record order, `[{token, amount: bigint}]`. */
+/**
+ * kob-wasm `custodies`: the exact custodies an order holds, in record order, `[{token, amount:
+ * bigint}]`.
+ */
 export function custodiesOf(kob, any) {
   return JSON.parse(rawOf(kob).custodies(JSON.stringify(any))).map((c) => ({ token: c.token, amount: BigInt(c.amount) }));
 }
@@ -65,9 +75,10 @@ const max = (x, y) => (x > y ? x : y);
 const min = (x, y) => (x < y ? x : y);
 
 /**
- * The quote rule of every covenant (`state::quote_of`): `n * rate / scale`, rounded UP (`'up'`, what a maker receives) or DOWN (`'down'`,
- * what a maker pays). The covenant's split multiplication equals the exact rational rounding whenever it does not overflow, so bigint
- * division gives the same value.
+ * The quote rule of every covenant (`state::quote_of`): `n * rate / scale`, rounded UP (`'up'`,
+ * what a maker receives) or DOWN (`'down'`, what a maker pays). The covenant's split multiplication
+ * equals the exact rational rounding whenever it does not overflow, so bigint division gives the
+ * same value.
  */
 export function quoteOf(n, rate, scale, round) {
   const [nn, r, s] = [b(n), b(rate), b(scale)];
@@ -79,8 +90,9 @@ export function quoteOf(n, rate, scale, round) {
 export const NO_EXPIRY = 1n << 60n;
 
 /**
- * A `KobCurveAsk`'s levels from its state (docs/design/curve-ask-spec.md §1): the current level, the price now (null when sold out) and the
- * remaining levels `[{level, price, amount}]` (bigint), the current first.
+ * A `KobCurveAsk`'s levels from its state (docs/design/curve-ask-spec.md §1): the current level,
+ * the price now (null when sold out) and the remaining levels `[{level, price, amount}]` (bigint),
+ * the current first.
  */
 export function curveOf(any) {
   if (any.kind !== 'KobCurveAsk') return null;
@@ -101,7 +113,10 @@ export function curveOf(any) {
   return { level: left > 0n ? level : table.length, levels: table.length, levelSize: size, total, table, priceNow: left > 0n ? table[level] : null, remaining };
 }
 
-/** Normalised numeric terms of an order state (`terms_of` in the indexer). All bigint; `price` is the conditional kinds' tpPrice. */
+/**
+ * Normalised numeric terms of an order state (`terms_of` in the indexer). All bigint; `price` is
+ * the conditional kinds' tpPrice.
+ */
 export function termsOf(any) {
   const s = any.state;
   const k = baseKind(any.kind);
@@ -120,10 +135,16 @@ export function termsOf(any) {
   };
 }
 
-/** Exact custody a side-1 KAS order must hold: `amountLeft` token base units (a pair order: `custodiesOf`). */
+/**
+ * Exact custody a side-1 KAS order must hold: `amountLeft` token base units (a pair order:
+ * `custodiesOf`).
+ */
 export const custodyAmount = (any) => termsOf(any).amountLeft;
 
-/** The rate a bid's fill consumes its escrow at: `pMax + tip` sompi per whole token (a rising bid's cap is priceEnd). */
+/**
+ * The rate a bid's fill consumes its escrow at: `pMax + tip` sompi per whole token (a rising bid's
+ * cap is priceEnd).
+ */
 export function bidBudgetRate(any) {
   const s = any.state;
   const price = b(s.slope) !== 0n && b(s.priceEnd) > b(s.price) ? b(s.priceEnd) : b(s.price);
@@ -133,18 +154,24 @@ export function bidBudgetRate(any) {
 /** A buy-first if-done entry's budget rate: `price + tip`. */
 export const ifdBudgetRate = (any) => b(any.state.price) + b(any.state.tip);
 
-/** kob-wasm's raw bindings (`raw` of either facade: src/kob/wasm.ts or kob.mjs) behind a mock `kob`. */
+/**
+ * kob-wasm's raw bindings (`raw` of either facade: src/kob/wasm.ts or kob.mjs) behind a mock `kob`.
+ */
 const rawOf = (kob) => kob?.raw ?? kob;
 
 /**
- * Base units a bid can still buy (its buying power, `BidState::buying_power` through kob-wasm): the largest n whose budget
- * `ceil(n * (pMax + tip) / scale)` leaves the delivery carrier and the reserve of the escrow `curValue`.
+ * Base units a bid can still buy (its buying power, `BidState::buying_power` through kob-wasm): the
+ * largest n whose budget `ceil(n * (pMax + tip) / scale)` leaves the delivery carrier and the
+ * reserve of the escrow `curValue`.
  */
 export function bidBuyingPower(kob, any, curValue) {
   return BigInt(rawOf(kob).bidBuyingPower(JSON.stringify(any), String(curValue)));
 }
 
-/** KAS a bid escrow needs to buy `amount` base units in at most `fills` fills (`BidState::escrow` through kob-wasm). */
+/**
+ * KAS a bid escrow needs to buy `amount` base units in at most `fills` fills (`BidState::escrow`
+ * through kob-wasm).
+ */
 export function bidEscrow(kob, any, amount, fills = 1) {
   const v = rawOf(kob).bidEscrow(JSON.stringify(any), String(amount), String(fills));
   if (v == null) throw new Error('the bid escrow overflows');
@@ -168,8 +195,9 @@ const bandBps = (slip, band, origin, t) => {
 };
 
 /**
- * The auction path of a tip state (decaying ask, rising bid, armed stop leg, armed stop entry, pair market order) at `nodeDaa`, or null.
- * Shape of `AuctionView` in src/data/indexer-types.ts (bigints as decimal strings).
+ * The auction path of a tip state (decaying ask, rising bid, armed stop leg, armed stop entry, pair
+ * market order) at `nodeDaa`, or null. Shape of `AuctionView` in src/data/indexer-types.ts (bigints
+ * as decimal strings).
  */
 export function auctionOf(any, utxoDaa, nodeDaa, kob = null) {
   if (utxoDaa == null) return null;
@@ -221,7 +249,8 @@ export function auctionOf(any, utxoDaa, nodeDaa, kob = null) {
         return e < b(s.bandDaa) ? entryStop + ((price - entryStop) * e) / b(s.bandDaa) : price;
       });
     }
-    // pair orders: prices in B base units per whole A, from kob-wasm (the covenants' own arithmetic)
+    // pair orders: prices in B base units per whole A, from kob-wasm (the covenants' own
+    // arithmetic)
     case 'KobPair': {
       if (!kob || b(s.slope) <= 0n || b(s.decayStep) <= 0n) return null;
       const o = decayOrigin(b(s.activeFrom), b(s.interval), u);

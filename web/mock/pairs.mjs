@@ -1,13 +1,20 @@
-// Token/token pairs of the MOCK indexer: the pair orders (KobPair, KobCondPair, KobIfdPair; token A for token B at B base units per whole A,
-// one template each for both sides and both token families), their state builder and seed, and the four pair endpoints of
-// docs/ops/executor.md 5.4 (crates/kobd/src/indexer/pairs.rs):
-//   GET /v1/pairs/{base}/{quote}/book?depth=     direct (KobPair), entry (KobIfdPair resting at its limit / armed stop entry) and route levels
-//                                                (implied through the two KAS books); price = price_num / price_den QUOTE base units per
-//                                                BASE base unit (reduced), amount in BASE base units
-//   GET /v1/pairs?token=                         oriented pairs with listed live pair orders and their counts per kind
-//   GET /v1/pairs/{base}/{quote}/candles         pair candles DERIVED from the two KAS series (never from pair fills)
-//   GET /v1/pairs/{base}/{quote}/fills           pair fills (volume, counterparty, price_source none) and the 24 h pair volume
-// Every amount of a pair order is computed by kob-wasm (custodies, escrows, prices at a time); the mock re-implements no covenant rule.
+// Token/token pairs of the MOCK indexer: the pair orders (KobPair, KobCondPair, KobIfdPair; token A
+// for token B at B base units per whole A, one template each for both sides and both token
+// families), their state builder and seed, and the four pair endpoints of docs/ops/executor.md 5.4
+// (crates/kobd/src/indexer/pairs.rs):
+//   GET /v1/pairs/{base}/{quote}/book?depth=     direct (KobPair), entry (KobIfdPair resting at its
+//                                                limit / armed stop entry) and route levels
+//                                                (implied through the two KAS books); price =
+//                                                price_num / price_den QUOTE base units per BASE
+//                                                base unit (reduced), amount in BASE base units
+//   GET /v1/pairs?token=                         oriented pairs with listed live pair orders and
+//                                                their counts per kind
+//   GET /v1/pairs/{base}/{quote}/candles         pair candles DERIVED from the two KAS series
+//                                                (never from pair fills)
+//   GET /v1/pairs/{base}/{quote}/fills           pair fills (volume, counterparty, price_source
+//                                                none) and the 24 h pair volume
+// Every amount of a pair order is computed by kob-wasm (custodies, escrows, prices at a time); the
+// mock re-implements no covenant rule.
 import { DEFAULT_CARRIER } from './chain.mjs';
 import { resolveKey, seedBook } from './seed.mjs';
 import { bookView, limitParam, intParam, parseHash } from './views.mjs';
@@ -36,9 +43,13 @@ const active = (o) => o.status === 'open' || o.status === 'partial';
 const raw = (chain) => chain.kob.raw;
 const J = (v) => JSON.stringify(v);
 
-// ------------------------------------------------------------------------------------------------ state builder
+// ------------------------------------------------------------------------------------------------
+// state builder
 
-/** A token's pin in a pair state: template hash, prefix / suffix, family code, standard scale, the extension of new outputs. */
+/**
+ * A token's pin in a pair state: template hash, prefix / suffix, family code, standard scale, the
+ * extension of new outputs.
+ */
 function pin(chain, ref) {
   const t = chain.tokenRef(ref);
   const tpl = chain.templates.get(t.program);
@@ -51,13 +62,17 @@ function pin(chain, ref) {
 const st = (p, x) => ({ [`${p}CovId`]: x.covId, [`${p}TplHash`]: x.tplHash, [`${p}Pre`]: x.pre, [`${p}Suf`]: x.suf, [`${p}Family`]: x.family });
 
 /**
- * A complete pair order state and the KAS its UTXO needs (kob-wasm `minOrderValue`), validated with kob-wasm `checkNewOrder`. Spec (prices B
- * base units per WHOLE A, amounts base units of A, tips KAS sompi per whole A):
- *   kind 'KobPair' | 'KobCondPair' | 'KobIfdPair'; side 'ask' (sell A; a sell-first entry) | 'bid' (buy A; a buy-first entry); base, quote (ticker or
- *   covenant id); amount; price (KobPair / KobIfdPair; a conditional's take-profit is \`tp\`); tip; tif; minFill; maker; activeFrom; expiryDaa;
- *   KobPair: slope, priceEnd, decayStep, interval, maxFill; a bid's escrow covers \`fills\` fills (default amount / minFill);
- *   KobCondPair: stop, tp, slipBps, trailStep, trailGap, trailWait, minTouch, minRestDaa, bandDaa;
- *   KobIfdPair: entryStop, prefund (sell-first), rptAmount, exit: { tp, stop, slipBps, trailStep, trailGap, ... } (the committed KobCondPair exit).
+ * A complete pair order state and the KAS its UTXO needs (kob-wasm `minOrderValue`), validated with
+ * kob-wasm `checkNewOrder`. Spec (prices B base units per WHOLE A, amounts base units of A, tips
+ * KAS sompi per whole A):
+ *   kind 'KobPair' | 'KobCondPair' | 'KobIfdPair'; side 'ask' (sell A; a sell-first entry) | 'bid'
+ *   (buy A; a buy-first entry); base, quote (ticker or covenant id); amount; price (KobPair /
+ *   KobIfdPair; a conditional's take-profit is \`tp\`); tip; tif; minFill; maker; activeFrom;
+ *   expiryDaa; KobPair: slope, priceEnd, decayStep, interval, maxFill; a bid's escrow covers
+ *   \`fills\` fills (default amount / minFill); KobCondPair: stop, tp, slipBps, trailStep,
+ *   trailGap, trailWait, minTouch, minRestDaa, bandDaa; KobIfdPair: entryStop, prefund
+ *   (sell-first), rptAmount, exit: { tp, stop, slipBps, trailStep, trailGap, ... } (the committed
+ *   KobCondPair exit).
  */
 export function pairOrderState(chain, spec) {
   const kob = chain.kob;
@@ -112,7 +127,8 @@ export function pairOrderState(chain, spec) {
     }
   } else {
     const x = spec.exit ?? {};
-    // the committed exit: the opposite side (a buy-first entry's exit sells A, a sell-first entry's buys it back)
+    // the committed exit: the opposite side (a buy-first entry's exit sells A, a sell-first entry's
+    // buys it back)
     const exitAsk = !ask;
     const XS = exitAsk ? A : B;
     const XT = exitAsk ? B : A;
@@ -147,8 +163,9 @@ export function pairOrderState(chain, spec) {
   } catch (e) {
     throw badRequest(`invalid pair order: ${String(e?.message ?? e)}`);
   }
-  // the order UTXO's KAS: the carriers of every possible fill and the tip of the whole amount (kob-wasm `pairKasValue` over `pairMaxFills`), its
-  // refund and keeper tips, and never below kob-wasm's `minOrderValue`
+  // the order UTXO's KAS: the carriers of every possible fill and the tip of the whole amount
+  // (kob-wasm `pairKasValue` over `pairMaxFills`), its refund and keeper tips, and never below
+  // kob-wasm's `minOrderValue`
   const fills = raw(chain).pairMaxFills(J(any));
   const carriers = BigInt(raw(chain).pairKasValue(J(any), fills) ?? 0);
   const least = BigInt(raw(chain).minOrderValue(J(any)));
@@ -156,13 +173,17 @@ export function pairOrderState(chain, spec) {
   return { any, value: v > least ? v : least };
 }
 
-/** Seeds a complete, real pair order (its UTXO and every custody of A and / or B); \`spec\` as {@link pairOrderState} plus \`value\`, \`daa\` (backdate). */
+/**
+ * Seeds a complete, real pair order (its UTXO and every custody of A and / or B); \`spec\` as
+ * {@link pairOrderState} plus \`value\`, \`daa\` (backdate).
+ */
 export function seedPairOrder(chain, spec) {
   const { any, value } = pairOrderState(chain, spec);
   return chain.seedOrder(any, { value: spec.value !== undefined ? BigInt(spec.value) : value, daa: spec.daa, covenantId: spec.covenant_id });
 }
 
-// ------------------------------------------------------------------------------------------------ live pair orders
+// ------------------------------------------------------------------------------------------------
+// live pair orders
 
 /** Every custody the state holds is exactly one live custody UTXO of that token at that amount. */
 export function pairCustodiesOk(chain, o) {
@@ -172,7 +193,10 @@ export function pairCustodiesOk(chain, o) {
   return cs.every((c) => live.filter((u) => u.token === c.token && u.amount === c.amount).length === 1);
 }
 
-/** Listed live pair orders of the oriented pair (base, quote): open / partial, exact custodies, active, not past a refund time or deadline. */
+/**
+ * Listed live pair orders of the oriented pair (base, quote): open / partial, exact custodies,
+ * active, not past a refund time or deadline.
+ */
 function livePairOrders(chain, base, quote) {
   const daa = BigInt(chain.daa());
   return [...chain.orders.values()].filter((o) => {
@@ -185,7 +209,10 @@ function livePairOrders(chain, base, quote) {
   });
 }
 
-/** The quote of a pair order now (B per whole A): a KobPair's price at DAA (decay / rise), an entry's limit or armed auction price. */
+/**
+ * The quote of a pair order now (B per whole A): a KobPair's price at DAA (decay / rise), an
+ * entry's limit or armed auction price.
+ */
 function quoteNow(chain, o, daa) {
   const s = o.state.state;
   const u = String(o.currentDaa ?? daa);
@@ -219,8 +246,9 @@ function orderLevels(chain, base, quote, side) {
 }
 
 /**
- * The plain KAS orders (KobAsk / KobBid, either family) of a token's listed book at their ALL-IN quote now (`rate`: an ask's quote - tip, a
- * bid's quote + tip, sompi per whole token of `scale` base units) and their `amount` (a bid's: its buying power), best first.
+ * The plain KAS orders (KobAsk / KobBid, either family) of a token's listed book at their ALL-IN
+ * quote now (`rate`: an ask's quote - tip, a bid's quote + tip, sompi per whole token of `scale`
+ * base units) and their `amount` (a bid's: its buying power), best first.
  */
 function kasOrders(chain, token, side) {
   const v = bookView(chain, token, new URLSearchParams({ depth: '200', aggregate: 'false' }));
@@ -245,10 +273,12 @@ function kasOrders(chain, token, side) {
 }
 
 /**
- * Route levels (pairs.rs `route_levels`): buying BASE with QUOTE sells QUOTE into QUOTE's KAS bids and buys BASE from BASE's KAS asks (asks of the
- * pair); selling BASE for QUOTE sells BASE into BASE's KAS bids and buys QUOTE from QUOTE's KAS asks (bids of the pair). Each step pairs the current
- * order of both books and consumes the smaller of their KAS amounts (`floor(amount * rate / scale)`); its price is the ratio of the two all-in
- * prices per base unit, its amount the base units that KAS buys or sells (floored). Consecutive steps at one price merge.
+ * Route levels (pairs.rs `route_levels`): buying BASE with QUOTE sells QUOTE into QUOTE's KAS bids
+ * and buys BASE from BASE's KAS asks (asks of the pair); selling BASE for QUOTE sells BASE into
+ * BASE's KAS bids and buys QUOTE from QUOTE's KAS asks (bids of the pair). Each step pairs the
+ * current order of both books and consumes the smaller of their KAS amounts (`floor(amount * rate /
+ * scale)`); its price is the ratio of the two all-in prices per base unit, its amount the base
+ * units that KAS buys or sells (floored). Consecutive steps at one price merge.
  */
 function routeLevels(chain, base, quote, side) {
   const baseOrders = kasOrders(chain, base, side === 'ask' ? 'ask' : 'bid');
@@ -296,7 +326,10 @@ export function pairBookView(chain, baseId, quoteId, q) {
   return { base, quote, daa_score: chain.daa(), asks: asks.map(levelView), bids: bids.map(levelView) };
 }
 
-/** `GET /v1/pairs?token=`: one entry per oriented pair with listed live pair orders, sorted by (base, quote). */
+/**
+ * `GET /v1/pairs?token=`: one entry per oriented pair with listed live pair orders, sorted by
+ * (base, quote).
+ */
 export function pairsView(chain, q) {
   const token = q.get('token') === null ? null : parseHash('token', q.get('token'));
   const pairs = new Map();
@@ -312,9 +345,13 @@ export function pairsView(chain, q) {
   return [...pairs.values()].sort((x, y) => (x.base < y.base ? -1 : x.base > y.base ? 1 : x.quote < y.quote ? -1 : x.quote > y.quote ? 1 : 0));
 }
 
-// ------------------------------------------------------------------------------------------------ candles (derived from the two KAS series)
+// ------------------------------------------------------------------------------------------------
+// candles (derived from the two KAS series)
 
-/** `pa / pb` as B base units per `basisA` base units of A: `pa x basisB / pb`, exact (reduced) and floored. */
+/**
+ * `pa / pb` as B base units per `basisA` base units of A: `pa x basisB / pb`, exact (reduced) and
+ * floored.
+ */
 function pairRate(pa, pb, basisB) {
   if (pb <= 0n) return null;
   const r = reduce(pa * basisB, pb);
@@ -322,9 +359,11 @@ function pairRate(pa, pb, basisB) {
 }
 
 /**
- * `GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=`: for every bucket in which A or B traded in KAS, o = open(A) / open(B),
- * c = close(A) / close(B), h = high(A) / low(B), l = low(A) / high(B); a side without a KAS trade in the bucket carries its last close forward;
- * buckets before both tokens have a KAS price are omitted. Pair volume per bucket from the pair fills (never a price).
+ * `GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=`: for every bucket in which A or
+ * B traded in KAS, o = open(A) / open(B), c = close(A) / close(B), h = high(A) / low(B), l = low(A)
+ * / high(B); a side without a KAS trade in the bucket carries its last close forward; buckets
+ * before both tokens have a KAS price are omitted. Pair volume per bucket from the pair fills
+ * (never a price).
  */
 export function pairCandlesView(chain, baseId, quoteId, q) {
   const base = parseHash('base', baseId);
@@ -379,9 +418,13 @@ export function pairCandlesView(chain, baseId, quoteId, q) {
   };
 }
 
-// ------------------------------------------------------------------------------------------------ fills (volume only)
+// ------------------------------------------------------------------------------------------------
+// fills (volume only)
 
-/** `GET /v1/pairs/{base}/{quote}/fills?limit=&before=`: pair fills newest first and the 24 h pair volume. */
+/**
+ * `GET /v1/pairs/{base}/{quote}/fills?limit=&before=`: pair fills newest first and the 24 h pair
+ * volume.
+ */
 export function pairFillsView(chain, baseId, quoteId, q) {
   const base = parseHash('base', baseId);
   const quote = parseHash('quote', quoteId);
@@ -420,9 +463,13 @@ export function pairFillsView(chain, baseId, quoteId, q) {
   };
 }
 
-// ------------------------------------------------------------------------------------------------ seed
+// ------------------------------------------------------------------------------------------------
+// seed
 
-/** The quote token of the pair seed: a second fictional KCC-20 (6 decimals: scale 10^6 base units per whole token). */
+/**
+ * The quote token of the pair seed: a second fictional KCC-20 (6 decimals: scale 10^6 base units
+ * per whole token).
+ */
 export function quoteTokenSpec(over = {}) {
   return {
     ticker: 'EXUSD',
@@ -438,9 +485,11 @@ export function quoteTokenSpec(over = {}) {
 }
 
 /**
- * Seeds a pair around EXKCC / EXUSD (base = the first token of the chain, quote = a second KCC-20): a KAS book for the quote token (0.5 KAS per
- * EXUSD; the default EXKCC book rests around 0.025 KAS) so the route shows ~0.05 EXUSD per EXKCC, resting KobPair asks and a bid, a buy-first
- * if-done entry (an entry level) and a sell stop (a conditional). `quoteMid` is sompi per whole EXUSD. Returns {base, quote, orders}.
+ * Seeds a pair around EXKCC / EXUSD (base = the first token of the chain, quote = a second KCC-20):
+ * a KAS book for the quote token (0.5 KAS per EXUSD; the default EXKCC book rests around 0.025 KAS)
+ * so the route shows ~0.05 EXUSD per EXKCC, resting KobPair asks and a bid, a buy-first if-done
+ * entry (an entry level) and a sell stop (a conditional). `quoteMid` is sompi per whole EXUSD.
+ * Returns {base, quote, orders}.
  */
 export function seedPair(chain, { base, quote, maker = 'maker', quoteMid = 50_000_000, levels = 5 } = {}) {
   const baseTok = chain.tokenRef(base ?? [...chain.tokens.keys()][0]);
@@ -452,7 +501,8 @@ export function seedPair(chain, { base, quote, maker = 'maker', quoteMid = 50_00
   const px = (micro) => (micro * sB) / 1_000_000n;
   const pair = { base: baseTok.covenant_id, quote: quoteTok.covenant_id, maker, minFill: sA / 10n };
   const orders = [];
-  // asks: sell EXKCC for EXUSD at 0.0505 (2 orders: 2 and 1 EXKCC) and 0.0512 EXUSD per EXKCC (1 EXKCC)
+  // asks: sell EXKCC for EXUSD at 0.0505 (2 orders: 2 and 1 EXKCC) and 0.0512 EXUSD per EXKCC (1
+  // EXKCC)
   for (const [whole, micro] of [[2n, 50_500n], [1n, 50_500n], [1n, 51_200n]]) orders.push(seedPairOrder(chain, { ...pair, kind: 'KobPair', side: 'ask', amount: whole * sA, price: px(micro) }));
   // a bid: buy 3 EXKCC at 0.0495 EXUSD each (its EXUSD escrow)
   orders.push(seedPairOrder(chain, { ...pair, kind: 'KobPair', side: 'bid', amount: 3n * sA, price: px(49_500n) }));

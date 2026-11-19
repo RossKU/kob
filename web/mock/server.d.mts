@@ -8,9 +8,15 @@ export interface MockServerOptions {
   seed?: boolean;
   /** give the dev keys alice and bob KAS and tokens */
   fund?: boolean;
-  /** opt-in seeded market history (48 h of trades by default, see seedHistory in seed.mjs); default false */
+  /**
+   * opt-in seeded market history (48 h of trades by default, see seedHistory in seed.mjs); default
+   * false
+   */
   history?: boolean | import('./seed.mjs').HistorySpec;
-  /** opt-in token/token pair seed (EXKCC/EXUSD pair orders of every kind + an EXUSD KAS book, see seedPair in pairs.mjs); default false */
+  /**
+   * opt-in token/token pair seed (EXKCC/EXUSD pair orders of every kind + an EXUSD KAS book, see
+   * seedPair in pairs.mjs); default false
+   */
   pair?: boolean | Record<string, unknown>;
   settleDepthDaa?: number;
   /** DAA per wall-clock second (default 10; 0 freezes the clock) */
@@ -19,18 +25,27 @@ export interface MockServerOptions {
   network?: string;
   healthEveryMs?: number;
   log?: (line: string) => void;
-  /** what `GET /node/fee-estimate` answers (sompi per gram per bucket); default DEFAULT_FEE_ESTIMATE, null: the route answers 404 */
+  /**
+   * what `GET /node/fee-estimate` answers (sompi per gram per bucket); default
+   * DEFAULT_FEE_ESTIMATE, null: the route answers 404
+   */
   feeEstimate?: { priority: number; normal: number; low: number } | null;
 }
 
-/** The KAS/USD price the mock indexer serves (`GET /v1/price/kas-usd`) until `POST /mock/kas-price` changes it. */
+/**
+ * The KAS/USD price the mock indexer serves (`GET /v1/price/kas-usd`) until `POST /mock/kas-price`
+ * changes it.
+ */
 export const DEFAULT_KAS_PRICE: Readonly<{ usd: number; source: string }>;
 
 /** The default fee estimate: every bucket at the relay floor (100 sompi per gram). */
 export const DEFAULT_FEE_ESTIMATE: Readonly<{ priority: number; normal: number; low: number }>;
 
 export interface MockServer {
-  /** `http://host:port` (no trailing slash): indexer under `/v1`, node under `/node`, control under `/mock`, WebSocket at `/v1/ws` */
+  /**
+   * `http://host:port` (no trailing slash): indexer under `/v1`, node under `/node`, control under
+   * `/mock`, WebSocket at `/v1/ws`
+   */
   url: string;
   port: number;
   chain: MockChain;

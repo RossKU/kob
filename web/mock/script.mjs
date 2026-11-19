@@ -1,8 +1,12 @@
-// What a chain observer (the real indexer, here the mock) reads out of signature scripts. This is observation of on-chain data, not
-// protocol logic: the indexer does the same in crates/kobd/src/indexer/record.rs (`parse_reveal`, `leader_next_states`).
+// What a chain observer (the real indexer, here the mock) reads out of signature scripts. This is
+// observation of on-chain data, not protocol logic: the indexer does the same in
+// crates/kobd/src/indexer/record.rs (`parse_reveal`, `leader_next_states`).
 import { fromHex } from './util.mjs';
 
-/** Data pushes of a signature script (`script.rs::parse_pushes`), or null when it holds anything but pushes. */
+/**
+ * Data pushes of a signature script (`script.rs::parse_pushes`), or null when it holds anything but
+ * pushes.
+ */
 export function parsePushes(scriptHex) {
   const b = fromHex(scriptHex);
   const out = [];
@@ -50,10 +54,11 @@ export function revealOf(scriptHex) {
 }
 
 /**
- * The output states a KCC-20 `transfer` (leader) call authorises, from its signature script: the `State[]` argument is encoded by
- * field (amounts 8 B LE, owners 32 B, owner schemes 1 B, borrow schemes 1 B, borrow guards 32 B, extension commitments 32 B), then
- * the witness, the dispatch tag and the redeem script. Returns null for any other input.
- * @returns {import('../src/kob/types').Kcc20State[] | null}
+ * The output states a KCC-20 `transfer` (leader) call authorises, from its signature script: the
+ * `State[]` argument is encoded by field (amounts 8 B LE, owners 32 B, owner schemes 1 B, borrow
+ * schemes 1 B, borrow guards 32 B, extension commitments 32 B), then the witness, the dispatch tag
+ * and the redeem script. Returns null for any other input. @returns
+ * {import('../src/kob/types').Kcc20State[] | null}
  */
 export function leaderNextStates(scriptHex, transferTagHex) {
   const p = parsePushes(scriptHex);
@@ -81,10 +86,11 @@ export function leaderNextStates(scriptHex, transferTagHex) {
 export const GENESIS_STATES_TAG = '4b4f4247';
 
 /**
- * The KCC-20 states a token genesis names in its payload (`KOBG` | version 1 | count | count x (length | 112-byte state span)): the way a chain
- * observer learns the issued outputs, which have no transfer leader. Nothing is believed here: the caller keeps a state only where its P2SH is the
- * output's script. Returns null for any other payload (or a malformed one).
- * @returns {import('../src/kob/types').Kcc20State[] | null}
+ * The KCC-20 states a token genesis names in its payload (`KOBG` | version 1 | count | count x
+ * (length | 112-byte state span)): the way a chain observer learns the issued outputs, which have
+ * no transfer leader. Nothing is believed here: the caller keeps a state only where its P2SH is the
+ * output's script. Returns null for any other payload (or a malformed one). @returns
+ * {import('../src/kob/types').Kcc20State[] | null}
  */
 export function genesisStates(payloadHex) {
   if (typeof payloadHex !== 'string' || !payloadHex.startsWith(GENESIS_STATES_TAG)) return null;
@@ -97,7 +103,8 @@ export function genesisStates(payloadHex) {
     if (len !== 112 || i + len > b.length) return null;
     const s = b.subarray(i, i + len);
     i += len;
-    // 0x08 amount | 0x20 owner | 0x01 owner_scheme | 0x01 borrow_scheme | 0x20 borrow_guard | 0x20 extension_commitment
+    // 0x08 amount | 0x20 owner | 0x01 owner_scheme | 0x01 borrow_scheme | 0x20 borrow_guard | 0x20
+    // extension_commitment
     if (s[0] !== 0x08 || s[9] !== 0x20 || s[42] !== 0x01 || s[44] !== 0x01 || s[46] !== 0x20 || s[79] !== 0x20) return null;
     states.push({
       amount: s.readBigInt64LE(1).toString(),

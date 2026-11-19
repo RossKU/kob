@@ -1,10 +1,13 @@
-// The mock node's blocks, for standalone mode (src/data/standalone.ts): every transaction the mock chain accepts (`MockChain.applyTx`: the app's
-// submissions, the real batches of the pair fills, `placeReal` below) becomes one block in the wRPC `block-added` layout (src/data/block-stream.ts),
-// served by `GET /node/blocks?after=<seq>`. The mock's synthetic state changes (seeded orders, `simulateFill`) have no transaction and are no block: an
-// order seeded before is an order standalone mode never saw, as on a real node.
+// The mock node's blocks, for standalone mode (src/data/standalone.ts): every transaction the mock
+// chain accepts (`MockChain.applyTx`: the app's submissions, the real batches of the pair fills,
+// `placeReal` below) becomes one block in the wRPC `block-added` layout (src/data/block-stream.ts),
+// served by `GET /node/blocks?after=<seq>`. The mock's synthetic state changes (seeded orders,
+// `simulateFill`) have no transaction and are no block: an order seeded before is an order
+// standalone mode never saw, as on a real node.
 //
-// `placeReal` places an order with a REAL transaction (kob-wasm builds it, the test key signs it, the script engine validates it), so that standalone
-// mode can see it in a block: POST /mock/place { key, side: 'ask' | 'bid', price, amount, token? }.
+// `placeReal` places an order with a REAL transaction (kob-wasm builds it, the test key signs it,
+// the script engine validates it), so that standalone mode can see it in a block: POST /mock/place
+// { key, side: 'ask' | 'bid', price, amount, token? }.
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { DEFAULT_CARRIER } from './chain.mjs';
 import { TEST_PUBKEYS, TEST_SECRETS } from './keys.mjs';
@@ -20,7 +23,10 @@ const KAS = 100_000_000n;
 const J = JSON.stringify;
 const hexBytes = (h) => Uint8Array.from(Buffer.from(h, 'hex'));
 
-/** A transaction (kaspa-wasm safe JSON, as the mock accepts it) in the layout a node's block notification carries: no input UTXO entries. */
+/**
+ * A transaction (kaspa-wasm safe JSON, as the mock accepts it) in the layout a node's block
+ * notification carries: no input UTXO entries.
+ */
 export function rpcTxOf(tx) {
   return {
     version: tx.version,
@@ -41,7 +47,10 @@ export function rpcTxOf(tx) {
   };
 }
 
-/** The block log of a chain: `record` is called by `MockChain.applyTx` for every accepted transaction. */
+/**
+ * The block log of a chain: `record` is called by `MockChain.applyTx` for every accepted
+ * transaction.
+ */
 export class BlockLog {
   constructor() {
     this.reset();
@@ -64,8 +73,9 @@ export class BlockLog {
 }
 
 /**
- * Places a plain ask or bid of a test key with a real transaction: funds the key (and gives an ask its tokens), builds the placement with kob-wasm,
- * signs it with the key's test secret and submits it to the chain. Returns the transaction id and the order's covenant id.
+ * Places a plain ask or bid of a test key with a real transaction: funds the key (and gives an ask
+ * its tokens), builds the placement with kob-wasm, signs it with the key's test secret and submits
+ * it to the chain. Returns the transaction id and the order's covenant id.
  */
 export function placeReal(chain, spec) {
   const name = spec.key ?? 'maker';
@@ -104,8 +114,10 @@ export function placeReal(chain, spec) {
 }
 
 /**
- * Fills a plain ask or bid with a REAL batch transaction (the mock's filler key takes it: KAS for an ask, minted tokens for a bid), so that standalone
- * mode sees the fill in a block: POST /mock/take { covenant_id, amount? } (base units; default one whole token or the minimum fill, at most all left).
+ * Fills a plain ask or bid with a REAL batch transaction (the mock's filler key takes it: KAS for
+ * an ask, minted tokens for a bid), so that standalone mode sees the fill in a block: POST
+ * /mock/take { covenant_id, amount? } (base units; default one whole token or the minimum fill, at
+ * most all left).
  */
 export function takeReal(chain, cov, amount) {
   const { o, cur } = chain.fillContext(cov);
