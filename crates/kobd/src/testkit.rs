@@ -1459,6 +1459,13 @@ pub fn snapshot(conn: &Connection) -> String {
     dump("SELECT txid, tx, created_block, daa FROM kcc23_candidates ORDER BY txid", 4, &mut out, "kcc23_candidate", &[2]);
     dump("SELECT txid, tx FROM kcc23_txs ORDER BY txid", 2, &mut out, "kcc23_tx", &[]);
     dump(
+        "SELECT lock_key, genesis_block, covenant_id FROM kcc23_locks ORDER BY lock_key, covenant_id",
+        3,
+        &mut out,
+        "kcc23_lock",
+        &[1],
+    );
+    dump(
         "SELECT covenant_id, proof, preparation_txid, genesis_txid, genesis_block, genesis_daa FROM kcc23_declarations ORDER BY covenant_id",
         6,
         &mut out,

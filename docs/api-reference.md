@@ -146,6 +146,7 @@ lists the omitted ones).
 | `/v1/trades/{token}` | newest first | `before=` (a trade id) | id of the last trade |
 | `/v1/pairs/{base}/{quote}/fills` | newest first | `before=` (a fill id) | id of the last fill |
 | `/v1/token-utxos` | oldest first | `cursor=` | `<created block seq>:<txid>:<index>` of the last item |
+| `/v1/creator-locks` | oldest genesis first | `cursor=` | `<genesis block seq>:<covenant id>` of the last declaration read |
 | `/v1/strays`, `/v1/token-events` | newest / oldest first | none: `{"items": [...]}` only | (no cursor; `limit` is the only control) |
 
 `before=` and `after=` parse as 64-bit integers (`400` "before must be an integer").
@@ -1084,13 +1085,13 @@ of the window, at its bucket.
 
 ### 3.24 `GET /v1/creator-locks?key=`
 
-The tokens whose KCC-23 declaration locks a share for `key` (a 64-hex x-only key or a P2PK address; `limit`, default 50), each with its
+The tokens whose KCC-23 declaration locks a share for `key` (a 64-hex x-only key or a P2PK address; `limit`, default 50; `cursor`, section 2.3), each with its
 lock as `LaunchProof::verify` found it against the genesis (`docs/spec/token-metadata.md`, *Creator lock*):
 
 ```json
 {"items": [{"covenant_id": "<64 hex>", "genesis_txid": "<64 hex>", "symbol": "LCK", "until": "1900000000000", "key": "<64 hex>",
   "script": "<88 hex>", "authority": "<64 hex>", "amount": "200", "outputs": [{"index": 1, "amount": "200"}],
-  "program": "KCC20PublicMint", "extensionCommitment": "<64 hex>", "supply": "1000"}]}
+  "program": "KCC20PublicMint", "extensionCommitment": "<64 hex>", "supply": "1000"}], "next_cursor": null}
 ```
 
 Only a lock that still holds tokens is listed: one of its locked genesis outputs (`outputs`) is an unspent holding (3.14). A lock
@@ -1098,7 +1099,9 @@ whose outputs were all spent (unlocked and claimed) is left out, and so is one w
 (a genesis that did not name its outputs' states, 3.14). `outputs` and `amount` are what the genesis locked, not what is left.
 
 A hint: a client verifies the launch proof itself (3.5). The locked UTXOs still unspent are
-`GET /v1/token-utxos?owner=<authority>&token=<covenant_id>` (3.14). One scan of the stored declarations, no index.
+`GET /v1/token-utxos?owner=<authority>&token=<covenant_id>` (3.14). The declarations are read through an index by the lock's key,
+oldest genesis first. A page reads at most `limit` + 64 of them (a declaration whose lock no longer holds tokens is passed over), so a
+page can hold fewer than `limit` items and still have a `next_cursor`.
 
 ## 4. WebSocket
 

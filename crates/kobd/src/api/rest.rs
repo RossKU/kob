@@ -195,7 +195,16 @@ pub async fn creator_locks(State(app): State<Arc<App>>, Query(q): Params) -> Api
         .try_into()
         .map_err(|_| ApiError::bad_request("key must be 32 bytes"))?;
     let n = limit(&q, "limit", 50, app.state.cfg.max_page_size)?;
-    let v = app.state.pool.with(move |c| crate::indexer::kcc23::creator_locks(c, &key, n)).await?;
+    let cursor = match q.get("cursor") {
+        None => None,
+        Some(s) => Some(reads::parse_order_cursor(s).ok_or_else(|| ApiError::bad_request("invalid cursor"))?),
+    };
+    let (v, next) = app
+        .state
+        .pool
+        .with(move |c| crate::indexer::kcc23::creator_locks(c, &key, n, cursor.as_ref().map(|(b, id)| (*b, id.as_slice()))))
+        .await?;
+    let next_cursor = next.map(|(b, id)| format!("{b}:{}", hex::encode(&id)));
     let items: Vec<Value> = v
         .into_iter()
         .filter_map(|d| {
@@ -207,7 +216,7 @@ pub async fn creator_locks(State(app): State<Arc<App>>, Query(q): Params) -> Api
             Some(lock)
         })
         .collect();
-    json_ok(json!({ "items": items }))
+    json_ok(json!({ "items": items, "next_cursor": next_cursor }))
 }
 
 /// `GET /v1/books/{token}?depth=&aggregate=`: the KAS book of a token. Pair orders are not in it.

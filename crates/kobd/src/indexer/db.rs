@@ -244,6 +244,14 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     if compacted > 0 {
         tracing::info!(compacted, "KCC-23 declarations: the proofs are stored once per transaction instead of once per covenant id");
     }
+    if let Some(n) = super::kcc23::backfill_locks(conn)? {
+        if n > 0 {
+            tracing::info!(
+                locks = n,
+                "KCC-23 declarations: indexed the creator locks by key once (kept with each declaration from now on)"
+            );
+        }
+    }
     if backfill_activity(conn)? {
         tracing::info!("counted the activity totals once (kept by triggers from now on)");
     }
