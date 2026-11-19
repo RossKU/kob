@@ -500,6 +500,7 @@ pub fn apply(conn: &Connection, seq: i64, daa: u64, txid: &Hash32, d: &DeclSecti
             let mut put = conn.prepare_cached("INSERT OR IGNORE INTO kcc23_txs (txid, tx) VALUES (?1, ?2)")?;
             put.execute(params![&txid.0[..], encode_tx(&d.tx)])?;
             put.execute(params![&b.preparation_txid[..], encode_tx(&preps[b.prep])])?;
+            put_lock(conn, &preps[b.prep], seq, &b.covenant_id)?;
             declared.push(b.covenant_id);
         }
     }
@@ -679,37 +680,106 @@ pub fn compact_legacy(conn: &Connection, limit: usize) -> DbResult<usize> {
     Ok(done)
 }
 
-/// The declared creator locks of `key` (`kob_protocol::creator_lock`), at most `limit`: each
-/// declaration whose preparation holds the key's lock script tail (`b0 20 <key> ac`, as the hex the
-/// declaration's `lock` carries) is verified again, and kept when its lock, verified against the
-/// genesis, opens to `key`, and still holds tokens: one of its locked genesis outputs is an unspent
-/// holding (`token_holdings`). A lock whose outputs were all spent (unlocked, or a spent row the
-/// pruning removed) is not listed. One scan of the stored preparations, no extra table.
-pub fn creator_locks(conn: &Connection, key: &[u8; 32], limit: usize) -> DbResult<Vec<kcc23::VerifiedDeclaration>> {
-    let tail = format!("b020{}ac\"", kob_protocol::json::to_hex(key));
-    // a row an earlier build wrote holds the whole proof, whose payload is hex of the declaration's text
-    let legacy = kob_protocol::json::to_hex(tail.as_bytes());
-    let ids: Vec<Vec<u8>> = {
-        let mut st = conn.prepare_cached(
-            "SELECT d.covenant_id FROM kcc23_declarations d LEFT JOIN kcc23_txs t ON t.txid = d.preparation_txid \
-             WHERE instr(t.tx, ?1) > 0 OR (d.proof != '' AND instr(d.proof, ?2) > 0) ORDER BY d.genesis_block, d.covenant_id",
-        )?;
-        let v = st.query_map(params![tail.as_bytes(), legacy], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+/// The key of the creator lock a preparation's declaration names, if it names one that parses.
+///
+/// Only the index [`creator_locks`] reads is keyed by it. The read verifies the proof again.
+fn lock_key(prep: &ProofTx) -> Option<[u8; 32]> {
+    let d = kcc23::TokenDeclaration::from_payload(&prep.payload).ok()?;
+    Some(kob_protocol::creator_lock::CreatorLock::parse_hex(d.lock.as_deref()?)?.key)
+}
+
+/// Indexes the creator lock that the declaration of `covenant_id` (genesis block `seq`, bound to
+/// `prep`) names.
+fn put_lock(conn: &Connection, prep: &ProofTx, seq: i64, covenant_id: &Hash32) -> DbResult<()> {
+    if let Some(key) = lock_key(prep) {
+        conn.prepare_cached("INSERT OR IGNORE INTO kcc23_locks (lock_key, genesis_block, covenant_id) VALUES (?1, ?2, ?3)")?
+            .execute(params![&key[..], seq, &covenant_id.0[..]])?;
+    }
+    Ok(())
+}
+
+/// Fills `kcc23_locks` once for a store whose declarations an earlier build wrote (`meta.kcc23_locks`).
+///
+/// Returns the locks indexed, or `None` when it was done before.
+pub fn backfill_locks(conn: &Connection) -> DbResult<Option<usize>> {
+    if super::db::meta_get(conn, "kcc23_locks")?.is_some() {
+        return Ok(None);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let rows: Vec<(Vec<u8>, i64)> = {
+        let mut st = tx.prepare("SELECT covenant_id, genesis_block FROM kcc23_declarations ORDER BY covenant_id")?;
+        let v = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
         v
     };
-    let mut out = vec![];
-    for id in ids {
+    let mut n = 0;
+    for (id, seq) in rows {
         let Ok(id) = <[u8; 32]>::try_from(id.as_slice()) else { continue };
-        let Some(json) = proof_json(conn, &Hash32(id))? else { continue };
+        let Some(json) = proof_json(&tx, &Hash32(id))? else { continue };
+        let Ok(p) = serde_json::from_str::<LaunchProof>(&json) else { continue };
+        if lock_key(&p.preparation).is_some() {
+            put_lock(&tx, &p.preparation, seq, &Hash32(id))?;
+            n += 1;
+        }
+    }
+    super::db::meta_set(&tx, "kcc23_locks", "1")?;
+    tx.commit()?;
+    Ok(Some(n))
+}
+
+/// Most index rows one [`creator_locks`] call reads beyond its `limit`.
+///
+/// A row is passed over when its proof does not verify to the key or its lock holds nothing any
+/// more. Past this many such rows the page ends early, with a cursor.
+pub const CREATOR_LOCKS_SLACK: usize = 64;
+
+/// The declared creator locks of `key` (`kob_protocol::creator_lock`), at most `limit`, after the
+/// position `after` (`(genesis block, covenant id)`, exclusive), and the position to go on from
+/// when there may be more.
+///
+/// The declarations that name a lock for `key` are read from the index `kcc23_locks`, in the
+/// order of their genesis block, then covenant id. Each is verified again, and kept when its lock,
+/// verified against the genesis, opens to `key`, and still holds tokens: one of its locked genesis
+/// outputs is an unspent holding (`token_holdings`). A lock whose outputs were all spent
+/// (unlocked, or a spent row the pruning removed) is not listed. At most `limit` +
+/// [`CREATOR_LOCKS_SLACK`] index rows are read (security review 2026-11-19 K-L5: this was a scan of
+/// every stored declaration).
+#[allow(clippy::type_complexity)]
+pub fn creator_locks(
+    conn: &Connection,
+    key: &[u8; 32],
+    limit: usize,
+    after: Option<(i64, &[u8])>,
+) -> DbResult<(Vec<kcc23::VerifiedDeclaration>, Option<(i64, Vec<u8>)>)> {
+    let (from_block, from_id) = after.unwrap_or((i64::MIN, &[]));
+    let budget = limit.saturating_add(CREATOR_LOCKS_SLACK);
+    let rows: Vec<(i64, Vec<u8>)> = {
+        let mut st = conn.prepare_cached(
+            "SELECT genesis_block, covenant_id FROM kcc23_locks WHERE lock_key = ?1 AND (genesis_block, covenant_id) > (?2, ?3) \
+             ORDER BY genesis_block, covenant_id LIMIT ?4",
+        )?;
+        let v = st
+            .query_map(params![&key[..], from_block, from_id, budget.saturating_add(1) as i64], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        v
+    };
+    if limit == 0 {
+        return Ok((vec![], None));
+    }
+    let mut out = vec![];
+    for (k, (_, id)) in rows.iter().enumerate() {
+        if out.len() >= limit || k >= budget {
+            // More rows follow: go on after the last one read.
+            let (s, i) = rows[k - 1].clone();
+            return Ok((out, Some((s, i))));
+        }
+        let Ok(cov) = <[u8; 32]>::try_from(id.as_slice()) else { continue };
+        let Some(json) = proof_json(conn, &Hash32(cov))? else { continue };
         let Ok(v) = serde_json::from_str::<LaunchProof>(&json).map_err(|e| e.to_string()).and_then(|p| p.verify()) else { continue };
         if v.lock.as_ref().is_some_and(|l| l.key == *key) && lock_holds(conn, &v)? {
             out.push(v);
-            if out.len() >= limit {
-                break;
-            }
         }
     }
-    Ok(out)
+    Ok((out, None))
 }
 
 /// Whether a verified creator lock still holds tokens: one of its genesis outputs is an unspent holding.

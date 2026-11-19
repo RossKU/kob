@@ -495,6 +495,21 @@ CREATE INDEX IF NOT EXISTS kcc23_declarations_block ON kcc23_declarations (genes
 CREATE INDEX IF NOT EXISTS kcc23_declarations_preparation ON kcc23_declarations (preparation_txid);
 CREATE INDEX IF NOT EXISTS kcc23_declarations_genesis ON kcc23_declarations (genesis_txid);
 
+-- The creator lock a declaration names, by the lock's key (`GET /v1/creator-locks`, `kcc23::creator_locks`, paged on
+-- (genesis_block, covenant_id)). Written with the declaration (`kcc23::apply`: the lock its preparation's declaration names;
+-- the read verifies the proof again) and deleted with it by the trigger. A store without it gets it filled once
+-- (`kcc23::backfill_locks`, `meta.kcc23_locks`).
+CREATE TABLE IF NOT EXISTS kcc23_locks (
+    lock_key      BLOB NOT NULL,
+    genesis_block INTEGER NOT NULL,          -- the declaration's
+    covenant_id   BLOB NOT NULL,
+    PRIMARY KEY (lock_key, genesis_block, covenant_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS kcc23_locks_covenant ON kcc23_locks (covenant_id);
+CREATE TRIGGER IF NOT EXISTS kcc23_locks_delete AFTER DELETE ON kcc23_declarations BEGIN
+    DELETE FROM kcc23_locks WHERE covenant_id = OLD.covenant_id;
+END;
+
 -- Row counts `GET /v1/health` reports (`reads::counters`), kept by the triggers below in the transaction of every write
 -- (a batch, a revert, a replay, an operator import), so a health check reads a few rows instead of counting the history.
 -- name: orders | orders_listed | rejects | fills | status:<order_state.status>. A database without them gets them at

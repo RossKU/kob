@@ -2640,4 +2640,62 @@ async fn creator_locks_are_listed_by_key() {
     assert!(v["items"].as_array().unwrap().is_empty());
     let (s, _) = get(&app, "/v1/creator-locks").await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    // Security review 2026-11-19 K-L5: the locks are read through an index by key, a page at a time, not by a scan of every
+    // declaration. A second locked token, in a later block.
+    let plan = launch(3, Some(lock));
+    let (prep, gen) = (&plan.prep.tx, &plan.genesis.tx);
+    apply(&e.w, 11, 1_100, &kcc23_txid(prep), &DeclSection { tx: ptx(prep), preparation: true, binds: vec![], refs: vec![] }).unwrap();
+    let d = apply(
+        &e.w,
+        11,
+        1_100,
+        &kcc23_txid(gen),
+        &DeclSection { tx: ptx(gen), preparation: false, binds: vec![ptx(prep)], refs: vec![] },
+    )
+    .unwrap();
+    intern(&e.w, &d[0].0).unwrap();
+    for idx in 0..4i64 {
+        e.w.execute(
+            "INSERT OR REPLACE INTO token_holdings_named (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, \
+             created_block, created_daa, spent_block, spent_txid) VALUES (?1, ?2, (SELECT id FROM ids WHERE h = ?3), 'KCC20PublicMint', 1, \
+             (SELECT id FROM ids WHERE h = ?4), 3, 200, 100000000, x'00', 'owned', 11, 1100, NULL, NULL)",
+            rusqlite::params![&gen.id().as_bytes()[..], idx, &d[0].0[..], &[0x99u8; 32][..]],
+        )
+        .unwrap();
+    }
+    let index: Vec<(i64, Vec<u8>)> =
+        e.w.prepare("SELECT genesis_block, covenant_id FROM kcc23_locks WHERE lock_key = ?1 ORDER BY genesis_block")
+            .unwrap()
+            .query_map([&key[..]], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+    assert_eq!(index, vec![(9, covs[0].0.to_vec()), (11, d[0].0.to_vec())], "only the declarations that name a lock, by key");
+    let page = |q: &str| {
+        let app = app.clone();
+        let url = format!("/v1/creator-locks?key={}&limit=1{q}", kob_protocol::json::to_hex(&key));
+        async move { get(&app, &url).await.1 }
+    };
+    let first = page("").await;
+    assert_eq!(first["items"].as_array().unwrap().len(), 1, "{first}");
+    assert_eq!(first["items"][0]["covenant_id"], covs[0].to_hex());
+    let next = first["next_cursor"].as_str().expect("a cursor: there is more").to_string();
+    assert_eq!(next, format!("9:{}", covs[0].to_hex()));
+    let second = page(&format!("&cursor={next}")).await;
+    assert_eq!(second["items"][0]["covenant_id"], d[0].to_hex());
+    assert!(second["next_cursor"].is_null(), "{second}");
+    assert_eq!(
+        get(&app, &format!("/v1/creator-locks?key={}&cursor=x", kob_protocol::json::to_hex(&key))).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    // a revert of the genesis block takes its lock out of the index
+    crate::indexer::kcc23::revert(&e.w, 11).unwrap();
+    let n: i64 = e.w.query_row("SELECT COUNT(*) FROM kcc23_locks", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1);
+    // a store whose declarations an earlier build wrote gets the index filled once
+    e.w.execute_batch("DELETE FROM kcc23_locks; DELETE FROM meta WHERE k = 'kcc23_locks';").unwrap();
+    assert_eq!(crate::indexer::kcc23::backfill_locks(&e.w).unwrap(), Some(1));
+    assert_eq!(crate::indexer::kcc23::backfill_locks(&e.w).unwrap(), None);
+    assert_eq!(page("").await["items"][0]["covenant_id"], covs[0].to_hex());
 }
