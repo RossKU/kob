@@ -20,7 +20,8 @@
 //!   only when that node confirms them (`ChainSource::confirm_unknown_cursor`). Otherwise nothing
 //!   is rewound or halted, and the follower retries.
 //! - A `removed` list that contradicts the stored chain: state `gap`. This is a different node or
-//!   a bug, and the follower never guesses.
+//!   a bug, and the follower never guesses. It waits like the rewind above while the node is not
+//!   synced, and once it is, the batch is fetched again: only a contradiction that holds then halts.
 //! - A record-log write that failed, for example on a full disk or an I/O error. The append is
 //!   rolled back. The state is `stopped`, and nothing more is appended until the operator
 //!   restarts.
@@ -75,6 +76,10 @@ pub const NOT_SYNCED: &str = "the node is not synced";
 
 /// The start of a retry reason that says the synced node knows the cursor it disowned before.
 const KNOWN_AGAIN: &str = "the synced node knows the cursor again:";
+
+/// The start of a retry reason that says the node, synced now, is asked again before a halt on a
+/// contradiction it gave while not synced.
+const ASK_AGAIN: &str = "the node is synced now; asking it again before halting:";
 
 /// The text of a gap reason that says the node pruned the history the cursor stood in.
 ///
@@ -271,6 +276,8 @@ pub struct Follower<S: ChainSource> {
     progress_at: Mutex<std::time::Instant>,
     /// The chain proofs (`rpc::proof`), when on and the source serves them.
     proof: Option<Arc<Mutex<ChainProof>>>,
+    /// A contradiction of the store was put off because the node was not synced.
+    contradiction_unsynced: std::sync::atomic::AtomicBool,
 }
 
 /// How often the free space of the data directory and the size of the database are measured.
@@ -356,6 +363,7 @@ impl<S: ChainSource> Follower<S> {
             chain_failures: Mutex::new((0, String::new())),
             progress_at: Mutex::new(std::time::Instant::now()),
             proof,
+            contradiction_unsynced: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1248,6 +1256,7 @@ impl<S: ChainSource> Follower<S> {
         let t_commit = t1.elapsed();
         match applied {
             Ok(a) => {
+                self.contradiction_unsynced.store(false, std::sync::atomic::Ordering::Relaxed);
                 let window = {
                     let mut w = self.win();
                     if c.prefetched {
@@ -1362,6 +1371,19 @@ impl<S: ChainSource> Follower<S> {
                     }
                     crate::rpc::StoreContradiction::Halt(Some(why)) => msg = format!("{msg}; {why}"),
                     crate::rpc::StoreContradiction::Halt(None) => {}
+                }
+                // An unsynced node may answer from a chain it is still building: no halt on it.
+                let put_off = &self.contradiction_unsynced;
+                if let Some(o) = self.wait_unless_synced(&format!("{msg}; nothing is halted until it is synced")).await {
+                    put_off.store(true, std::sync::atomic::Ordering::Relaxed);
+                    return o;
+                }
+                // That answer may predate the sync: the batch is fetched again first.
+                if put_off.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    let msg = format!("{ASK_AGAIN} {msg}");
+                    tracing::info!("{msg}");
+                    self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
+                    return StepOutcome::Retry(msg);
                 }
                 self.health.update(|h| {
                     h.state = FollowerState::Gap;
@@ -1583,7 +1605,7 @@ impl<S: ChainSource> Follower<S> {
                     } else {
                         tracing::warn!(attempt = failures, "{r}");
                     }
-                    if is_tip_reorg(&outcome) || r.starts_with(KNOWN_AGAIN) {
+                    if is_tip_reorg(&outcome) || r.starts_with(KNOWN_AGAIN) || r.starts_with(ASK_AGAIN) {
                         // The node answers: poll again, without a growing backoff.
                         self.cfg.poll_interval
                     } else {

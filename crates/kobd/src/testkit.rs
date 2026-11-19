@@ -798,6 +798,8 @@ struct MockState {
     too_large: usize,
     /// `getVirtualChainFromBlock` with transaction ids.
     ids_calls: usize,
+    /// VSPC answers remove first a block the store never had (a contradiction).
+    contradict: bool,
 }
 
 /// An in-memory node that answers the `ChainSource` calls from a scripted chain.
@@ -845,6 +847,7 @@ impl MockNode {
                 ignore_size_limit: false,
                 too_large: 0,
                 ids_calls: 0,
+                contradict: false,
             }),
         })
     }
@@ -947,6 +950,11 @@ impl MockNode {
     /// Sets what `getServerInfo` reports as `isSynced`.
     pub fn set_synced(&self, on: bool) {
         self.with(|s| s.synced = on)
+    }
+
+    /// While on, VSPC answers first remove a block the store never had, which contradicts it.
+    pub fn set_contradict(&self, on: bool) {
+        self.with(|s| s.contradict = on)
     }
 
     /// Chain blocks with index below `floor` no longer have the retention root on their chain.
@@ -1169,7 +1177,10 @@ impl MockNode {
             if let Some(e) = s.fail.pop_front() {
                 return Err(e);
             }
-            let (removed, added) = Self::answer_blocks(s, start, min_conf)?;
+            let (mut removed, added) = Self::answer_blocks(s, start, min_conf)?;
+            if s.contradict {
+                removed.insert(0, h("contradiction", 0));
+            }
             if let Some(limit) = s.link_txs {
                 let txs: usize = added.iter().map(|b| b.txs.len()).sum();
                 if txs > limit.saturating_mul(timeout_scale.max(1) as usize) {

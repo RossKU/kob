@@ -1299,3 +1299,59 @@ async fn a_cursor_the_node_disowns_once_synced_is_walked_back() {
     c.hs.sync().await;
     assert_eq!(c.hs.health.snapshot().cursor_hash, Some(c.hs.node.tip()));
 }
+
+/// A `removed` list that contradicts the store halts nothing while the node is not synced. Once it is, the batch is
+/// fetched again, and a contradiction gone by then is followed on with no gap.
+#[tokio::test]
+async fn an_unsynced_node_that_contradicts_the_store_halts_nothing() {
+    let c = Ctx::new();
+    c.hs.node.push_empty(3);
+    c.hs.sync().await;
+    let cursor = c.hs.node.tip();
+    c.hs.node.push_empty(2);
+    c.hs.node.set_synced(false);
+    c.hs.node.set_contradict(true);
+    for _ in 0..3 {
+        let out = c.hs.follower.step().await;
+        assert!(matches!(&out, StepOutcome::Retry(m) if m.starts_with(NOT_SYNCED) && m.contains("contradicts")), "{out:?}");
+    }
+    let h = c.hs.health.snapshot();
+    assert_eq!((h.state, h.cursor_hash), (FollowerState::NodeUnavailable, Some(cursor)));
+    assert!(h.gap_reason.is_none(), "{h:?}");
+    // synced now: the answer it gave before is not trusted, it is asked again
+    c.hs.node.set_synced(true);
+    let out = c.hs.follower.step().await;
+    assert!(matches!(&out, StepOutcome::Retry(m) if m.contains("asking it again")), "{out:?}");
+    c.hs.node.set_contradict(false);
+    let out = c.hs.sync().await;
+    assert!(!out.iter().any(|o| matches!(o, StepOutcome::Gap(_))), "{out:?}");
+    let h = c.hs.health.snapshot();
+    assert_eq!((h.state, h.cursor_hash), (FollowerState::Following, Some(c.hs.node.tip())));
+    assert!(h.gap_reason.is_none(), "{h:?}");
+}
+
+/// A contradiction that still holds when the synced node is asked again halts the store (`gap`), as does one a synced
+/// node gives at once.
+#[tokio::test]
+async fn a_contradiction_the_synced_node_repeats_halts() {
+    let c = Ctx::new();
+    c.hs.node.push_empty(3);
+    c.hs.sync().await;
+    c.hs.node.push_empty(1);
+    c.hs.node.set_synced(false);
+    c.hs.node.set_contradict(true);
+    assert!(matches!(c.hs.follower.step().await, StepOutcome::Retry(m) if m.starts_with(NOT_SYNCED)));
+    c.hs.node.set_synced(true);
+    assert!(matches!(c.hs.follower.step().await, StepOutcome::Retry(m) if m.contains("asking it again")));
+    let out = c.hs.follower.step().await;
+    assert!(matches!(&out, StepOutcome::Gap(m) if m.contains("contradicts")), "{out:?}");
+    assert_eq!(c.hs.health.snapshot().state, FollowerState::Gap);
+
+    let d = Ctx::new();
+    d.hs.node.push_empty(3);
+    d.hs.sync().await;
+    d.hs.node.push_empty(1);
+    d.hs.node.set_contradict(true);
+    let out = d.hs.follower.step().await;
+    assert!(matches!(&out, StepOutcome::Gap(m) if m.contains("contradicts")), "{out:?}");
+}
