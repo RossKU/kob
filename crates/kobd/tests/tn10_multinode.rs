@@ -4,11 +4,11 @@
 //! and a tampered copy does not.
 //!
 //! Environment:
-//! * `KOB_TN10_WRPC`               the primary, default `ws://127.0.0.1:18210` (a node of your own)
-//! * `KOB_TN10_WRPC_OTHER`         the other node, default a public TN10 node of the Kaspa resolver
-//!                                 (`wss:`)
-//! * `KOB_SKIP_NETWORK_TESTS=1`    skip (offline runs)
-//! * `KOB_REQUIRE_NETWORK_TESTS=1` fail instead of skip when a node is unreachable
+//! * `KOB_TN10_WRPC`: the primary, default `ws://127.0.0.1:18210` (a node of your own)
+//! * `KOB_TN10_WRPC_OTHER`: the other node, default a public TN10 node of the Kaspa resolver
+//!   (`wss:`)
+//! * `KOB_SKIP_NETWORK_TESTS=1`: skip (offline runs)
+//! * `KOB_REQUIRE_NETWORK_TESTS=1`: fail instead of skip when a node is unreachable
 
 use kobd::hex::Hash32;
 use kobd::rpc::multi::{MultiNode, NodeSpec};
