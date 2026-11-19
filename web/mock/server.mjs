@@ -138,7 +138,7 @@ export async function startMockServer(opts = {}) {
   // artificial latency of every API answer (`/mock/*` never waits): `latencyMs` plus a uniform `jitterMs`, on every route or only the indexer's (`/v1/*`)
   // `indexerDown`: every indexer route (`/v1/*`, the WebSocket included) answers 503 while the node stays up (standalone mode)
   // mempoolMs: the node lists an output of a submitted transaction only this long after it took it (a real node lists it once a block holds it)
-  const ctl = { latencyMs: 0, jitterMs: 0, scope: 'all', indexerDown: false, mempoolMs: 0 };
+  const ctl = { latencyMs: 0, jitterMs: 0, scope: 'all', indexerDown: false, mempoolMs: 0, pastMedianMs: null };
   /** transactions pushed to the mock wallets' own node (`/mock/wallet-node/push`): seen there at once, whatever `lag_ms` */
   const walletPushed = new Set();
   // the node's blocks: one per accepted transaction (mock/blocks.mjs)
@@ -294,7 +294,7 @@ export async function startMockServer(opts = {}) {
     // ---- mock node
     if (get && path === '/node/info') {
       if (chain.health.state === 'node_unavailable') throw new ApiError(503, 'node_unavailable', 'mock: node unavailable');
-      return ok(chain.nodeInfo());
+      return ok({ ...chain.nodeInfo(), ...(ctl.pastMedianMs !== null ? { pastMedianTime: String(ctl.pastMedianMs) } : {}) });
     }
     // the node's getFeeEstimate (the wallet's fee policy reads it): DEFAULT_FEE_ESTIMATE until `POST /mock/fee-estimate` { priority, normal, low } sets it;
     // { off: true } removes the route (a node without the method: the wallet pays the floor and says so); `/mock/reset` restores the default
@@ -337,6 +337,7 @@ export async function startMockServer(opts = {}) {
       ctl.scope = 'all';
       ctl.indexerDown = false;
       ctl.mempoolMs = 0;
+      ctl.pastMedianMs = null;
       walletPushed.clear();
       blockLog.reset();
       feeEstimate = { ...DEFAULT_FEE_ESTIMATE };
@@ -485,6 +486,11 @@ export async function startMockServer(opts = {}) {
       if (!chain.txs.has(tx.id)) chain.submit(tx);
       walletPushed.add(tx.id);
       return ok({ transactionId: tx.id });
+    }
+    // the node's past median time (unix ms) in /node/info, which a creator lock's unlock is checked against: { ms } sets it, { ms: null } removes it
+    if (post && path === '/mock/median') {
+      ctl.pastMedianMs = body.ms === null || body.ms === undefined ? null : Number(body.ms);
+      return ok({ ms: ctl.pastMedianMs });
     }
     if (post && path === '/mock/fail-next-submit') {
       chain.failNext = { remaining: Number(body.count ?? 1), message: String(body.message ?? 'mock: injected submit failure') };

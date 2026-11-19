@@ -81,6 +81,17 @@ describe('HttpMockNode', () => {
     expect((await node.getClock()).rateMilli).toBeNull();
   });
 
+  it('getPastMedianTime: /node/info pastMedianTime (unix ms), null when the mock sets none', async () => {
+    const m = mock();
+    const base = await start(m);
+    const node = new HttpMockNode({ baseUrl: base, network: 'testnet-10' });
+    expect(await node.getPastMedianTime()).toBeNull();
+    m.info = { ...m.info, pastMedianTime: '1800000000000' };
+    expect(await node.getPastMedianTime()).toBe(1_800_000_000_000n);
+    m.info = { ...m.info, pastMedianTime: 'soon' };
+    expect(await node.getPastMedianTime()).toBeNull();
+  });
+
   it('getUtxosByAddresses posts the addresses and normalises covenantId', async () => {
     const m = mock({ utxos: [utxo('kaspatest:qa', 0), utxo('kaspatest:qb', 1, { covenantId: '77'.repeat(32) }), utxo('kaspatest:qc', 2)] });
     const base = await start(m);

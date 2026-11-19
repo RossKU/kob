@@ -1,6 +1,6 @@
 // `NodeApi` over HTTP against the offline mock server (web/mock/server.mjs), selected when the
 // node URL is http(s). The contract:
-//   GET  {base}/node/info    -> { network, virtualDaaScore, serverVersion, daaRateMilli }
+//   GET  {base}/node/info    -> { network, virtualDaaScore, serverVersion, daaRateMilli, pastMedianTime? }
 //   POST {base}/node/utxos   body { addresses }     -> { entries: NodeUtxo[] }
 //   POST {base}/node/submit  body { transaction }   -> { transactionId }   or HTTP 400 { error }
 //   GET  {base}/node/fee-estimate
@@ -122,6 +122,14 @@ export class HttpMockNode implements NodeApi {
     const { info, rate } = await this.info();
     const tMs = (t0 + this.now()) / 2;
     return { daa: BigInt(info.virtualDaaScore), unixSeconds: BigInt(Math.floor(tMs / 1000)), rateMilli: rate };
+  }
+
+  /** `/node/info`'s `pastMedianTime` (unix ms; `POST /mock/median`): null when the mock sets none. */
+  async getPastMedianTime(): Promise<bigint | null> {
+    const { status, json } = await this.request('GET', '/node/info');
+    if (status !== 200 || !isRecord(json)) throw this.failure(status, json);
+    const t = json.pastMedianTime;
+    return typeof t === 'string' && /^\d+$/.test(t) ? BigInt(t) : null;
   }
 
   async getUtxosByAddresses(addresses: string[]): Promise<NodeUtxo[]> {

@@ -44,7 +44,7 @@ worker its own in-process server (and enables parallel runs). Ports: `KOB_MOCK_P
   executor does with `min_order_value_sompi` (default 1 KAS = 100000000).
 * WebSocket `/v1/ws`: `subscribe` / `unsubscribe` / `ping`, channels `health`, `reorg`, `fills[:token]`, `book:<token>`, `order:<id>`, frames
   `{channel,type,data}`, `resync`.
-* Mock node: `GET /node/info`, `GET /node/fee-estimate` (every bucket at the relay floor after a reset; `POST /mock/fee-estimate {priority, normal, low}`
+* Mock node: `GET /node/info` (with `pastMedianTime` once `POST /mock/median {ms}` set it), `GET /node/fee-estimate` (every bucket at the relay floor after a reset; `POST /mock/fee-estimate {priority, normal, low}`
   or `{off: true}` for a 404), `POST /node/utxos {addresses}` (cashaddr decoded by `mock/address.mjs`, UTXOs indexed by script public key),
   `POST /node/submit {transaction}` -> `{transactionId}` or HTTP 400 `{error: "<text>"}`. Submit checks inputs (known, unspent, embedded UTXO entry
   equals the node's), then runs the whole tx through the engine. Accepted txs register orders (KOB1 records via `recoverOrders`), custody /

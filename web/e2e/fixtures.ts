@@ -99,6 +99,10 @@ export class MockClient {
   feeEstimate(v: { priority?: number; normal?: number; low?: number } | 'off') {
     return this.post('/mock/fee-estimate', v === 'off' ? { off: true } : v);
   }
+  /** The node's past median time (unix ms) in `/node/info`, which an unlock is checked against; null: none (the default after a reset). */
+  median(ms: number | bigint | null) {
+    return this.post('/mock/median', { ms: ms === null ? null : Number(ms) });
+  }
   /**
    * The KAS price in USD the mock indexer serves (`GET /v1/price/kas-usd`; the default after a reset: $0.03, CoinGecko, taken now): `{ usd, source, ageS }` (how old its time
    * is), `mode`: `ok`, `off` (404: an indexer without `usd_price`) or `down` (503: no price yet). Resolves with the state and the number of reads so far.
