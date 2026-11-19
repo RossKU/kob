@@ -228,12 +228,9 @@ export class KobService {
         if (a.tip) argv.push('--tip', px(a.tip, 'tip'));
         if (a.renew) argv.push('--renew');
         if (argv.length === 2) throw new Refusal('BAD_ARGUMENT: name what changes: price, amount, tip or renew');
-        let band = null;
-        if (a.price) {
-          const o = await this.indexer.tryGet(`/v1/orders/${a.id.toLowerCase()}`);
-          if (o?.side === 1 || o?.side === 2) band = { side: o.side === 1 ? 'sell' : 'buy', price: toSompi(a.price), token: o.token };
-        }
-        return { argv, band };
+        // A new price is checked after the dry run, against the order as the CLI checked it on
+        // the node (replaceChecks), never against the indexer's view of it.
+        return { argv, reprice: a.price ? { price: toSompi(a.price) } : null };
       }
       case 'kob_cancel':
         return { argv: ['cancel', need(RE.id, a.id, 'id').toLowerCase()] };
@@ -442,7 +439,7 @@ export class KobService {
       if (built.create && this.ledger.launchesOn(today()) >= this.cfg.limits.launchesPerDay) {
         throw new Refusal(`LAUNCH_CAP: ${this.cfg.limits.launchesPerDay} token creations per UTC day, ${this.ledger.launchesOn(today())} today`);
       }
-      const band = built.band ? await this.band(built.band) : null;
+      let band = built.band ? await this.band(built.band) : null;
       if (band && !band.ok) throw new Refusal(band.reason);
       const planId = plan?.id ?? randomBytes(6).toString('hex');
       const planDir = join(this.cfg.dataDir, 'creations', `${planId}-plan-${this.now()}`);
@@ -451,6 +448,11 @@ export class KobService {
       const day = today();
       const spentToday = this.ledger.spentOn(day);
       d.tokens = built.create ? {} : tokenOutflows(d.doc);
+      if (built.reprice) {
+        const r = await this.replaceChecks(built.reprice, d.doc);
+        band = r.band;
+        for (const [cov, n] of Object.entries(r.held)) if (BigInt(n) > big(d.tokens[cov])) d.tokens[cov] = n;
+      }
       const caps = [...capRefusals(d, this.cfg.caps, spentToday),
         ...await tokenCapRefusals(d.tokens, this.cfg.caps.tokens, (c) => this.ledger.tokensOutOn(day, c), (c) => this.freeHolding(c))];
       const limits = { perTxKas: kas(this.cfg.caps.perTx), perDayKas: kas(this.cfg.caps.perDay), spentTodayKas: kas(spentToday), maxFeeKas: kas(this.cfg.caps.maxFee) };
@@ -558,6 +560,46 @@ export class KobService {
       decimals = (list?.tokens ?? []).find((t) => t.covenant_id === book.token)?.decimals ?? null;
     }
     return bandCheck({ side, price, book, decimals, bandPct: this.cfg.limits.priceBandPct });
+  }
+
+  /**
+   * The checks of a new price for a resting order (E-M4). The side and the token come from the
+   * dry run's `current` and `replacement` states, which the CLI read from the order's UTXO on the
+   * node, never from the indexer's view of the order.
+   *
+   * A move against the maker (a sell priced down, a buy priced up; any move when the plan has no
+   * comparable current price) needs a band that was checked, unless the operator turned the band
+   * off. A sell priced down also counts its whole custody as tokens leaving the wallet, under the
+   * token caps: it is a new sell of those tokens. Returns { band, held: { cov: base units } }.
+   */
+  async replaceChecks({ price }, doc) {
+    const rep = doc?.plan?.replacement;
+    const cur = doc?.plan?.current;
+    const kind = String(rep?.kind ?? '');
+    const side = /^Kob(Cond|Ifd)?Ask(Kron)?$/.test(kind) ? 'sell' : /^Kob(Cond|Ifd)?Bid(Kron)?$/.test(kind) ? 'buy' : null;
+    const token = String(rep?.state?.tokenCovId ?? '').toLowerCase();
+    if (!side || !RE.id.test(token) || /^0+$/.test(token)) {
+      throw new Refusal(`PRICE_BAND_UNCHECKED: the plan names ${kind ? `a ${kind}` : 'no replacement order'}, whose new price this server cannot check against a KAS book; cancel it and place a new order`);
+    }
+    const px = (st) => {
+      const v = st?.price ?? st?.tpPrice;
+      return /^\d+$/.test(String(v ?? '')) ? BigInt(v) : null;
+    };
+    const was = cur?.kind === kind ? px(cur.state) : null;
+    const now = px(rep.state);
+    const against = was == null || now == null || (side === 'sell' ? now < was : now > was);
+    const band = await this.band({ side, price, token });
+    if (!band.ok) throw new Refusal(band.reason);
+    if (against && !band.checked && !band.off) {
+      throw new Refusal(`PRICE_BAND_UNCHECKED: ${band.note}; a ${side} priced ${side === 'sell' ? 'down' : 'up'} needs a checked band. Cancel it and place a new order (the caps then apply)`);
+    }
+    const held = {};
+    if (side === 'sell' && against) {
+      const left = rep.state.amountLeft;
+      if (!/^\d+$/.test(String(left ?? ''))) throw new Refusal('PRICE_BAND_UNCHECKED: the plan does not name the sell\'s custody; cancel it and place a new order');
+      held[token] = String(left);
+    }
+    return { band, held };
   }
 
   async bookFor(token) {

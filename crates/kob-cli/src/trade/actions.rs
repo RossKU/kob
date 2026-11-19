@@ -642,7 +642,8 @@ pub fn run_replace(args: &[String]) -> i32 {
                 lines,
                 issues,
                 file: format!("{}.replace.json", to_hex(&cov)),
-                json: json!({"order": to_hex(&cov), "inPlace": in_place, "replacement": rep, "value": value.to_string()}),
+                // `current` is the order as checked on the node, before the change.
+                json: json!({"order": to_hex(&cov), "inPlace": in_place, "current": live.order.state, "replacement": rep, "value": value.to_string()}),
                 built,
             },
             units_of(&ms),
@@ -767,7 +768,7 @@ fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[To
             lines,
             issues,
             file: format!("{}.replace.json", to_hex(&live.cov)),
-            json: json!({"order": to_hex(&live.cov), "inPlace": false, "replacement": rep, "states": states, "value": value.to_string()}),
+            json: json!({"order": to_hex(&live.cov), "inPlace": false, "current": live.order.state, "replacement": rep, "states": states, "value": value.to_string()}),
             built,
         },
         units_of(ms),

@@ -147,6 +147,54 @@ test('a send whose reply is lost counts toward the cap (MCP-1)', async () => {
   }
 });
 
+/** A resting sell of 200 TUSD at 0.25 KAS (20 % of the 1,000 held), placed in auto mode. */
+async function restingSell() {
+  const t = setup({ mode: 'auto' });
+  const svc = new KobService(t.cfg);
+  const s = await svc.write('kob_place_limit', { token: 'TUSD', side: 'sell', amount: '200TUSD', price: '0.25KAS' });
+  assert.equal(s.status, 'submitted');
+  return { t, svc, id: s.newCovenantIds[0] };
+}
+
+test('kob_replace: a sell repriced far below the reference is refused, with no indexer view of the order (E-M4)', async () => {
+  const { t, svc, id } = await restingSell();
+  // The indexer (http://127.0.0.1:9) is down: the side and token come from the node-checked plan.
+  const r = await svc.write('kob_replace', { id, price: '0.01KAS' });
+  assert.equal(r.status, 'refused');
+  assert.match(r.reason, /^PRICE_BAND: a sell at 0\.01 KAS is more than 25% below/);
+  assert.equal(t.yesCalls().length, 1, 'only the placement was signed');
+  const bid = await svc.write('kob_place_limit', place);
+  assert.match((await svc.write('kob_replace', { id: bid.newCovenantIds[0], price: '1KAS' })).reason, /^PRICE_BAND: a buy at 1 KAS/);
+});
+
+test('kob_replace: a sell priced down counts its custody under the token caps; priced up it does not (E-M4)', async () => {
+  const { t, svc, id } = await restingSell();
+  // 200 out at placement + 200 (the repriced custody) is within 50 % of the day's 1,000.
+  const down = await svc.write('kob_replace', { id, price: '0.2KAS' });
+  assert.equal(down.status, 'submitted');
+  assert.deepEqual(t.ledger().at(-2).tokens, { [TUSD]: String(200e8) });
+  const up = await svc.write('kob_replace', { id, price: '0.3KAS' });
+  assert.equal(up.status, 'submitted', 'a sell priced up moves nothing against the maker');
+  // Each cut counts again: the fourth 200 out today is above 50 % of the day's holding.
+  assert.equal((await svc.write('kob_replace', { id, price: '0.21KAS' })).status, 'submitted');
+  const again = await svc.write('kob_replace', { id, price: '0.2KAS' });
+  assert.match(again.reason, /TOKEN_DAILY_CAP/);
+  assert.equal(t.yesCalls().length, 4);
+});
+
+test('kob_replace: with no band reference, or no current state in the plan, only a move for the maker passes (E-M4)', async () => {
+  const { t, svc, id } = await restingSell();
+  const chain = JSON.parse(readFileSync(process.env.FAKE_KOB_CHAIN, 'utf8'));
+  writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify({ ...chain, book: { best_bid: null, best_ask: '25000000', last_fill: null } }));
+  assert.match((await svc.write('kob_replace', { id, price: '0.24KAS' })).reason, /^PRICE_BAND_UNCHECKED: no last fill/);
+  assert.equal((await svc.write('kob_replace', { id, price: '0.3KAS' })).status, 'submitted');
+  writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify({ ...JSON.parse(readFileSync(process.env.FAKE_KOB_CHAIN, 'utf8')), book: chain.book }));
+  // An older CLI's plan has no current state: any new price counts as a move against the maker.
+  svc.kob.env.FAKE_KOB_NO_CURRENT = '1';
+  assert.equal((await svc.write('kob_replace', { id, price: '0.31KAS' })).status, 'submitted');
+  assert.deepEqual(t.ledger().at(-2).tokens, { [TUSD]: String(200e8) });
+});
+
 test('the ledger skips a torn line and the next entry starts a new line (MCP-5)', async () => {
   const t = setup({ mode: 'auto' });
   const svc = new KobService(t.cfg);
