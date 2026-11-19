@@ -2191,6 +2191,12 @@ restart point yourself. Recovery, in order of preference:
    kobd db import-orders orders.json    # recovery hook, see below
    kobd --indexer
    ```
+   With a cross-checking node (`nodes`), the rebase acts only on what both nodes list. When they disagree on a tracked order
+   output (one lists it and the other does not, or only one lists its successor), both are asked again three times, a second
+   apart; if they still disagree, the rebase fails with "still disagree on N tracked order output(s)", closes and adopts
+   nothing and leaves the cursor where it was. Run it again once the nodes agree (the automatic gap recovery retries by
+   itself). Keeping such an order open would leave it open for good, because its spend lies before the new cursor.
+
    Orders that were created *and* still open at the gap, and are not in any export, stay invisible
    to the book until their maker imports them (7.5) or cancels them from the placement records: the
    web wallet's Recover panel, or `kob recover --cancel` from its backup or an export (7.5). The

@@ -220,7 +220,7 @@ async fn with_a_cross_checking_node_the_authority_alone_neither_closes_nor_adopt
     let succ_b = node_utxo(&spk_b, cov_b, Hash32([0x72; 32]), 0, vb);
     c.hs.node.set_utxos(vec![succ_a.clone(), succ_b.clone()]);
     let second = MockNode::new("testnet-10");
-    second.set_utxos(vec![node_utxo(&spk_a, cov_a, Hash32(ta.tx.id), 0, va), succ_b]);
+    second.set_utxos(vec![node_utxo(&spk_a, cov_a, Hash32(ta.tx.id), 0, va), succ_b.clone()]);
     let spec = |url: &str, cross_check: bool| NodeSpec {
         url: url.into(),
         fetch: !cross_check,
@@ -229,13 +229,26 @@ async fn with_a_cross_checking_node_the_authority_alone_neither_closes_nor_adopt
         cross_check,
         may_lead: !cross_check,
     };
-    let pair = MultiNode::new(vec![(spec("primary", false), c.hs.node.clone()), (spec("second", true), second)], c.hs.node.clone());
+    let pair =
+        MultiNode::new(vec![(spec("primary", false), c.hs.node.clone()), (spec("second", true), second.clone())], c.hs.node.clone());
     let cursor = Cursor { hash: c.hs.node.tip(), daa: c.daa() };
-    let rep = reconcile_open_orders(&c.hs.ingest, &pair, "testnet-10", cursor).await.unwrap();
-    assert_eq!((rep.closed, rep.adopted), (0, 1), "{rep:?}");
-    // A: the second node has its output, so it is kept where it was (the authority's successor is not adopted)
-    assert_eq!(c.hs.status(&cov_a), "open");
+    let before = c.hs.ingest.lock().unwrap().cursor().unwrap();
+    // Security review 2026-11-19 K-L1: the nodes disagree on A's output (the second one lags, or lies). Keeping A where it
+    // was would leave a phantom for good (its spend lies before the new cursor), so after the re-checks nothing moves.
+    let err = reconcile_open_orders(&c.hs.ingest, &pair, "testnet-10", cursor).await.unwrap_err();
+    assert!(err.to_string().contains("disagree on 1 tracked order output"), "{err}");
+    assert_eq!(c.hs.ingest.lock().unwrap().cursor().unwrap(), before, "the cursor did not move");
     assert_eq!(view(&c, &cov_a).current.unwrap().txid, Hash32(ta.tx.id).to_hex());
-    // B: both report the successor
+    assert_eq!(view(&c, &cov_b).current.unwrap().txid, Hash32(tb.tx.id).to_hex(), "B is not adopted either");
+    // A successor only one node lists is a disagreement too: the second node has dropped A's output but not yet
+    // learnt of its successor
+    second.set_utxos(vec![succ_b.clone()]);
+    assert!(reconcile_open_orders(&c.hs.ingest, &pair, "testnet-10", cursor).await.is_err());
+    assert_eq!(c.hs.status(&cov_a), "open");
+    // once a fresh check agrees with the authority, the rebase goes through: A and B adopt their successors
+    second.set_utxos(vec![succ_a, succ_b]);
+    let rep = reconcile_open_orders(&c.hs.ingest, &pair, "testnet-10", cursor).await.unwrap();
+    assert_eq!((rep.closed, rep.adopted), (0, 2), "{rep:?}");
+    assert_eq!(view(&c, &cov_a).current.unwrap().txid, Hash32([0x71; 32]).to_hex());
     assert_eq!(view(&c, &cov_b).current.unwrap().txid, Hash32([0x72; 32]).to_hex());
 }

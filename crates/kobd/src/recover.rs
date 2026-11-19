@@ -531,11 +531,48 @@ pub async fn rebase<S: ChainSource>(
     Ok(RebaseReport { cursor, reconciled: Some(rep) })
 }
 
+/// How often [`reconcile_open_orders`] asks both nodes again while they disagree.
+pub const RECONCILE_RECHECKS: u32 = 3;
+/// The wait before each of those re-checks (a lagging node catches up).
+pub const RECONCILE_RECHECK_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The tracked outputs `(txid, index, covenant id, script)` on which the authority's listing
+/// (`auth`) and the cross-checking node's (`cross`) disagree.
+///
+/// They disagree on an output that one lists and the other does not, and on an output both have
+/// lost when its same-script successors (same covenant id, not tracked) are not the same in both.
+fn disagreements(
+    tracked: &[(Hash32, u32, Hash32, &[u8])],
+    auth: &[AddressUtxo],
+    cross: &[AddressUtxo],
+    tracked_outpoints: &HashSet<(Hash32, u32)>,
+) -> Vec<(Hash32, u32)> {
+    let op = |u: &AddressUtxo| (u.outpoint.transaction_id, u.outpoint.index);
+    let (a_has, c_has): (HashSet<_>, HashSet<_>) = (auth.iter().map(op).collect(), cross.iter().map(op).collect());
+    let successors = |v: &[AddressUtxo], cov: Hash32, spk: &[u8]| -> std::collections::BTreeSet<(Hash32, u32)> {
+        v.iter()
+            .filter(|u| u.utxo_entry.covenant_id == Some(cov) && u.utxo_entry.script_public_key.0 == spk)
+            .map(op)
+            .filter(|o| !tracked_outpoints.contains(o))
+            .collect()
+    };
+    tracked
+        .iter()
+        .filter(|(txid, idx, cov, spk)| {
+            let (a, c) = (a_has.contains(&(*txid, *idx)), c_has.contains(&(*txid, *idx)));
+            a != c || (!a && successors(auth, *cov, spk) != successors(cross, *cov, spk))
+        })
+        .map(|(txid, idx, ..)| (*txid, *idx))
+        .collect()
+}
+
 /// Brings the tracked order outputs in line with the node's UTXO set and moves the cursor to
 /// `new_cursor`.
 ///
 /// `kobd db rebase` uses it after a gap. Outputs the node no longer has are closed with reason
-/// `gap`. Outputs that continued under the same script are adopted.
+/// `gap`. Outputs that continued under the same script are adopted. With a cross-checking node it
+/// acts only on what both nodes report: while they disagree on a tracked output after
+/// [`RECONCILE_RECHECKS`] re-checks, it changes nothing and fails.
 pub async fn reconcile_open_orders<S: ChainSource>(
     ingest: &Arc<Mutex<Ingest>>,
     source: &S,
@@ -572,20 +609,54 @@ pub async fn reconcile_open_orders<S: ChainSource>(
         }
     }
     let addrs: Vec<String> = addr_of.values().cloned().collect();
-    let utxos = fetch_utxos(source, &addrs).await?;
-    // With a cross-checking node, an output either node has is kept, and only an output both
-    // report is adopted. The authority alone neither closes nor adopts.
-    let mut cross: Option<HashSet<(Hash32, u32)>> = None;
-    for chunk in addrs.chunks(50) {
-        if let Some(v) = source.cross_check_utxos(chunk).await? {
-            cross.get_or_insert_with(HashSet::new).extend(v.iter().map(|u| (u.outpoint.transaction_id, u.outpoint.index)));
+    let tracked_outpoints: HashSet<(Hash32, u32)> = tracked.iter().map(|t| (t.txid, t.idx)).collect();
+    // With a cross-checking node, the store moves only on what both nodes report. A tracked output
+    // one lists and the other does not, or a successor only one lists, is a disagreement: both are
+    // asked again, and while they still disagree nothing is closed or adopted and the cursor stays.
+    // Keeping such an order would leave it open for good, because its spend lies before the new
+    // cursor (security review 2026-11-19 K-L1).
+    let mut attempt = 0;
+    let (utxos, cross) = loop {
+        let utxos = fetch_utxos(source, &addrs).await?;
+        let mut cross: Option<Vec<AddressUtxo>> = None;
+        for chunk in addrs.chunks(50) {
+            if let Some(v) = source.cross_check_utxos(chunk).await? {
+                cross.get_or_insert_with(Vec::new).extend(v);
+            }
         }
-    }
+        let Some(c) = &cross else { break (utxos, None) };
+        let disputed = disagreements(
+            &tracked.iter().map(|t| (t.txid, t.idx, t.cov, t.spk.as_slice())).collect::<Vec<_>>(),
+            &utxos,
+            c,
+            &tracked_outpoints,
+        );
+        if disputed.is_empty() {
+            let set: HashSet<(Hash32, u32)> = c.iter().map(|u| (u.outpoint.transaction_id, u.outpoint.index)).collect();
+            break (utxos, Some(set));
+        }
+        if attempt >= RECONCILE_RECHECKS {
+            return Err(RecoverError::Invalid(format!(
+                "the chain authority and the cross-checking node still disagree on {} tracked order output(s) after {} re-checks \
+                 (first {}:{}): nothing was closed or adopted and the cursor was not moved; retry once the nodes agree",
+                disputed.len(),
+                RECONCILE_RECHECKS,
+                disputed[0].0,
+                disputed[0].1
+            )));
+        }
+        attempt += 1;
+        tracing::warn!(
+            outputs = disputed.len(),
+            attempt,
+            "rebase: the chain authority and the cross-checking node disagree on tracked order outputs; asking both again"
+        );
+        tokio::time::sleep(RECONCILE_RECHECK_DELAY).await;
+    };
     let mut by_spk: HashMap<&[u8], Vec<&AddressUtxo>> = HashMap::new();
     for u in &utxos {
         by_spk.entry(&u.utxo_entry.script_public_key.0).or_default().push(u);
     }
-    let tracked_outpoints: HashSet<(Hash32, u32)> = tracked.iter().map(|t| (t.txid, t.idx)).collect();
     let mut adoptions = Vec::new();
     let mut ops = Vec::new();
     let mut used: HashSet<(Hash32, u32)> = HashSet::new();
