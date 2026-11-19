@@ -13,6 +13,7 @@ use kob_protocol::tx::SignedTx;
 use kobd::config::{IndexerConfig, StartMode};
 use kobd::hex::{Hash32, HexBytes};
 use kobd::indexer::db::open_reader;
+use kobd::indexer::follower::NOT_SYNCED;
 use kobd::indexer::recovery::MAX_GAP_REBASES;
 use kobd::indexer::status::FollowerState;
 use kobd::indexer::Indexer;
@@ -202,4 +203,48 @@ async fn a_move_the_node_cannot_serve_yet_is_retried_and_stoppable() {
     let h = idx.health.snapshot();
     assert!(h.gaps.is_empty() && h.state == FollowerState::Gap, "{h:?}");
     tokio::time::timeout(Duration::from_secs(5), running.stop()).await.expect("the wait is stoppable");
+}
+
+/// A node that was reset and is syncing again does not know the store's cursor yet. The store is neither moved nor halted: the
+/// state is `node_unavailable`. Once the node is synced and knows the cursor, the store follows on with no gap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_store_whose_node_is_not_synced_is_not_moved_past_a_gap() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = MockNode::new("testnet-10");
+    node.push_empty(5);
+    let cfg = config(dir.path());
+    let cursor = {
+        let idx = Indexer::open(cfg.clone()).unwrap();
+        let running = idx.spawn(node.clone()).unwrap();
+        until("the store is at the tip", 30, || idx.health.snapshot().cursor_hash == Some(node.tip())).await;
+        running.stop().await;
+        idx.flush().await;
+        node.tip()
+    };
+    // the node is re-syncing: not synced, and the cursor is below what it holds so far
+    node.set_synced(false);
+    node.push_empty(10);
+    node.set_retention_floor(node.chain().len() - 2);
+    let idx = Indexer::open(cfg.clone()).unwrap();
+    let running = idx.spawn(node.clone()).unwrap();
+    let waiting = || {
+        let h = idx.health.snapshot();
+        h.state == FollowerState::NodeUnavailable && h.last_error.is_some_and(|e| e.starts_with(NOT_SYNCED))
+    };
+    until("the follower waits for the node", 30, waiting).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let h = idx.health.snapshot();
+    assert!(waiting() && h.gaps.is_empty() && h.gap_reason.is_none(), "{h:?}");
+    assert_eq!(h.cursor_hash, Some(cursor), "not moved");
+
+    node.set_retention_floor(0);
+    node.set_synced(true);
+    until("the store follows on", 30, || {
+        let h = idx.health.snapshot();
+        h.state == FollowerState::Following && h.cursor_hash == Some(node.tip())
+    })
+    .await;
+    let h = idx.health.snapshot();
+    assert!(h.gaps.is_empty() && h.reverted_blocks_total == 0, "{h:?}");
+    running.stop().await;
 }

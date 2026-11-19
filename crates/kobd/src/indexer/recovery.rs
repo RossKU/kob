@@ -7,6 +7,8 @@
 //! docs/ops/executor.md Part B 7.4).
 //!
 //! The recovering follower does what an operator does by hand with `kobd db rebase`:
+//! - It waits until the node is synced and asks it for the cursor again. A cursor the node knows
+//!   again is followed on, with no gap.
 //! - It moves the store to the node's pruning point, or to the sink for a store configured to
 //!   start there.
 //! - It reconciles the tracked orders with the node's UTXO set ([`crate::recover::rebase`]).
@@ -62,11 +64,17 @@ pub(super) async fn follow<S: ChainSource>(p: Parts<S>, mut stop: watch::Receive
             let _ = stop.wait_for(|s| *s).await;
             return;
         }
-        match move_past_gap(&p, &reason, rebases + 1).await {
-            Ok(()) => {
+        let moved = match still_disowned(&p).await {
+            Ok(true) => move_past_gap(&p, &reason, rebases + 1).await.map(|()| true),
+            Ok(false) => Ok(false),
+            Err(e) => Err(e),
+        };
+        match moved {
+            Ok(true) => {
                 rebases += 1;
                 failures = 0;
             }
+            Ok(false) => failures = 0,
             Err(e) => {
                 // The node cannot be asked now: it is not synced, has no UTXO index, or moved
                 // its pruning point again. The next look is later, and a failed move does not
@@ -81,6 +89,33 @@ pub(super) async fn follow<S: ChainSource>(p: Parts<S>, mut stop: watch::Receive
                 }
             }
         }
+    }
+}
+
+/// Whether the synced node still disowns the store's cursor. A node that is not synced may not
+/// know it yet: the store is not moved until it is (an error, tried again later). A cursor the
+/// node knows again is followed on, with no gap.
+async fn still_disowned<S: ChainSource>(p: &Parts<S>) -> Result<bool, crate::recover::RecoverError> {
+    use crate::rpc::NodeErrorKind::{RetentionRootMissing, UnknownHash};
+    let info = p.source.server_info().await?;
+    if !info.is_synced {
+        let why = format!("{}: the store is not moved past the gap until it is", super::follower::NOT_SYNCED);
+        p.health.update(|h| h.state = FollowerState::NodeUnavailable);
+        return Err(crate::recover::RecoverError::Invalid(why));
+    }
+    let Some(c) = p.ingest.lock().unwrap_or_else(|e| e.into_inner()).cursor()? else { return Ok(true) };
+    match p.source.chain_hashes(c.hash).await {
+        Ok(_) => {
+            tracing::info!(cursor = %c.hash, "the synced node knows the cursor again; following on, no gap");
+            p.health.update(|h| {
+                h.state = FollowerState::Starting;
+                h.gap_reason = None;
+                h.last_error = None;
+            });
+            Ok(false)
+        }
+        Err(e) if matches!(e.kind(), UnknownHash | RetentionRootMissing) => Ok(true),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -127,4 +162,39 @@ async fn move_past_gap<S: ChainSource>(p: &Parts<S>, reason: &str, attempt: u32)
         h.cursor_daa = r.cursor.daa;
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::indexer::follower::NOT_SYNCED;
+    use crate::testkit::{Harness, MockNode};
+
+    fn parts(hs: &Harness) -> Parts<MockNode> {
+        let cfg = FollowerConfig::from_indexer(&crate::config::IndexerConfig { network: "testnet-10".into(), ..Default::default() });
+        Parts { source: hs.node.clone(), ingest: hs.ingest.clone(), cfg, health: hs.health.clone(), events: hs.events.clone() }
+    }
+
+    /// The store is moved past a gap only once the node is synced and, asked again, still
+    /// disowns the cursor.
+    #[tokio::test]
+    async fn the_store_is_moved_only_when_the_synced_node_still_disowns_the_cursor() {
+        let hs = Harness::new(crate::indexer::db::open_memory("testnet-10").unwrap(), None);
+        hs.node.push_empty(3);
+        hs.sync().await;
+        let p = parts(&hs);
+        let cursor = hs.node.tip();
+        hs.node.forget(cursor);
+        hs.node.set_synced(false);
+        let e = still_disowned(&p).await.unwrap_err();
+        assert!(e.to_string().contains(NOT_SYNCED), "{e}");
+        assert_eq!(hs.health.snapshot().state, FollowerState::NodeUnavailable);
+        hs.node.set_synced(true);
+        assert!(still_disowned(&p).await.unwrap(), "synced and still unknown: moved");
+        hs.node.remember(cursor);
+        assert!(!still_disowned(&p).await.unwrap(), "known again: not moved");
+        let h = hs.health.snapshot();
+        assert!(h.gaps.is_empty() && h.gap_reason.is_none(), "{h:?}");
+        assert_eq!(h.state, FollowerState::Starting);
+    }
 }

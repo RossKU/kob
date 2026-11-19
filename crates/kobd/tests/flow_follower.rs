@@ -11,7 +11,7 @@ use kob_protocol::state::*;
 use kob_protocol::tx::*;
 use kobd::hex::Hash32;
 use kobd::indexer::db::open_memory;
-use kobd::indexer::follower::StepOutcome;
+use kobd::indexer::follower::{StepOutcome, NOT_SYNCED};
 use kobd::indexer::ingest::{Ingest, IngestConfig, IngestError};
 use kobd::indexer::recordlog::RecordLog;
 use kobd::indexer::status::FollowerState;
@@ -1225,4 +1225,77 @@ async fn archive_pruning_answers_as_a_full_store_under_random_traffic_and_reorgs
         pruned_rows += n(&full) - n(&c.hs);
     }
     assert!(pruned_rows > 0, "the pruning deleted rows");
+}
+
+/// A node that is not synced (reset, re-syncing) may not know the cursor yet. Nothing is rewound or halted on its word: the
+/// state is `node_unavailable`. Once it is synced and knows the cursor, the follower follows on with no rewind and no gap.
+#[tokio::test]
+async fn an_unsynced_node_that_disowns_the_cursor_rewinds_and_halts_nothing() {
+    let c = Ctx::new();
+    let create = small_ask(&c, 0);
+    c.w.include(&c.hs.node, &[&create]);
+    c.hs.node.push_empty(3);
+    c.hs.sync().await;
+    let cursor = c.hs.node.tip();
+    assert_eq!(c.hs.health.snapshot().cursor_hash, Some(cursor));
+    c.hs.node.set_synced(false);
+    c.hs.node.forget(cursor);
+    c.hs.node.push_empty(2);
+    for _ in 0..3 {
+        let out = c.hs.follower.step().await;
+        assert!(matches!(&out, StepOutcome::Retry(m) if m.starts_with(NOT_SYNCED)), "{out:?}");
+    }
+    // below its retention root: no gap either
+    c.hs.node.remember(cursor);
+    c.hs.node.set_retention_floor(c.hs.node.chain().len() - 1);
+    let out = c.hs.follower.step().await;
+    assert!(matches!(&out, StepOutcome::Retry(m) if m.starts_with(NOT_SYNCED)), "{out:?}");
+    let h = c.hs.health.snapshot();
+    assert_eq!(h.state, FollowerState::NodeUnavailable);
+    assert!(h.gap_reason.is_none() && h.last_error.as_deref().is_some_and(|e| e.starts_with(NOT_SYNCED)), "{h:?}");
+    assert_eq!((h.cursor_hash, h.reverted_blocks_total), (Some(cursor), 0));
+
+    c.hs.node.set_retention_floor(0);
+    c.hs.node.set_synced(true);
+    let out = c.hs.sync().await;
+    assert!(!out.iter().any(|o| matches!(o, StepOutcome::Rewound { .. } | StepOutcome::Gap(_))), "{out:?}");
+    let h = c.hs.health.snapshot();
+    assert_eq!((h.state, h.cursor_hash, h.reverted_blocks_total), (FollowerState::Following, Some(c.hs.node.tip()), 0));
+    assert_eq!(c.hs.status(&c.w.cov(&create, 0)), "open");
+}
+
+/// The node said "cannot find header" (while it was not synced, say) and knows the cursor when it is asked again: the
+/// follower follows on, with no rewind and no gap.
+#[tokio::test]
+async fn a_cursor_the_synced_node_knows_again_is_followed_on() {
+    let c = Ctx::new();
+    c.hs.node.push_empty(3);
+    c.hs.sync().await;
+    let cursor = c.hs.node.tip();
+    c.hs.node.push_empty(2);
+    c.hs.node.inject_error(RpcError::Node(format!("cannot find header {cursor}")));
+    let out = c.hs.follower.step().await;
+    assert!(matches!(&out, StepOutcome::Retry(m) if m.contains("knows the cursor again")), "{out:?}");
+    assert_eq!(c.hs.health.snapshot().cursor_hash, Some(cursor));
+    let out = c.hs.sync().await;
+    assert!(!out.iter().any(|o| matches!(o, StepOutcome::Rewound { .. } | StepOutcome::Gap(_))), "{out:?}");
+    let h = c.hs.health.snapshot();
+    assert_eq!((h.state, h.cursor_hash, h.reverted_blocks_total), (FollowerState::Following, Some(c.hs.node.tip()), 0));
+}
+
+/// Synced and still disowning the cursor: the walk back runs as before.
+#[tokio::test]
+async fn a_cursor_the_node_disowns_once_synced_is_walked_back() {
+    let c = Ctx::new();
+    c.hs.node.push_empty(3);
+    c.hs.sync().await;
+    c.hs.node.set_synced(false);
+    c.hs.node.forget(c.hs.node.tip());
+    c.hs.node.push_empty(1);
+    assert!(matches!(c.hs.follower.step().await, StepOutcome::Retry(m) if m.starts_with(NOT_SYNCED)));
+    c.hs.node.set_synced(true);
+    let out = c.hs.follower.step().await;
+    assert!(matches!(out, StepOutcome::Rewound { .. }), "{out:?}");
+    c.hs.sync().await;
+    assert_eq!(c.hs.health.snapshot().cursor_hash, Some(c.hs.node.tip()));
 }

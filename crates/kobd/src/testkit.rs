@@ -937,6 +937,18 @@ impl MockNode {
         })
     }
 
+    /// The node knows the block `hash` again (undoes [`MockNode::forget`]).
+    pub fn remember(&self, hash: Hash32) {
+        self.with(|s| {
+            s.forgotten.remove(&hash);
+        })
+    }
+
+    /// Sets what `getServerInfo` reports as `isSynced`.
+    pub fn set_synced(&self, on: bool) {
+        self.with(|s| s.synced = on)
+    }
+
     /// Chain blocks with index below `floor` no longer have the retention root on their chain.
     pub fn set_retention_floor(&self, floor: usize) {
         self.with(|s| s.retention_floor = floor)

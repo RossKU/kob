@@ -13,6 +13,9 @@
 //!   there. If none is known, or the node says `the queried hash does not have retention root on
 //!   its chain`, the downtime exceeded the retention of the node. The state is `gap`, there is no
 //!   further progress, and the operator bootstraps the store (see the docs).
+//! - The rewind and the gap above wait while the node is not synced (a reset or
+//!   re-syncing node may not know the cursor yet): the state is `node_unavailable` until it is,
+//!   and then the cursor is asked again. A cursor it knows again is followed on with no gap.
 //! - With a cross-checking node (the public pair), `cannot find header` and `retention root` count
 //!   only when that node confirms them (`ChainSource::confirm_unknown_cursor`). Otherwise nothing
 //!   is rewound or halted, and the follower retries.
@@ -66,6 +69,12 @@ const TIP_REORG_CONFIRMATIONS: u64 = 10;
 fn is_tip_reorg(o: &StepOutcome) -> bool {
     matches!(o, StepOutcome::Retry(m) if m.starts_with(TIP_REORG))
 }
+
+/// The start of a retry reason that says the node is not synced, so nothing is rewound or halted.
+pub const NOT_SYNCED: &str = "the node is not synced";
+
+/// The start of a retry reason that says the synced node knows the cursor it disowned before.
+const KNOWN_AGAIN: &str = "the synced node knows the cursor again:";
 
 /// The text of a gap reason that says the node pruned the history the cursor stood in.
 ///
@@ -919,7 +928,7 @@ impl<S: ChainSource> Follower<S> {
                 // The primary's window or its acceptance data for another node's: a secondary that times out is skipped
                 // for the next node (`rpc::multi`).
                 self.count_chain_failure(msg.clone());
-                self.set_state(FollowerState::CatchingUp, Some(msg.clone()));
+                self.set_state(FollowerState::CatchingUp, None);
                 StepOutcome::Retry(msg)
             }
             Head::Discarded(why) => {
@@ -1379,7 +1388,8 @@ impl<S: ChainSource> Follower<S> {
         let mut kind = e.kind();
         if matches!(kind, NodeErrorKind::UnknownHash | NodeErrorKind::RetentionRootMissing) {
             // The store is rewound or halted on this only when the source confirms it.
-            if let Some(cursor) = self.blocking(|i| i.cursor()).await.ok().flatten() {
+            let cursor = self.blocking(|i| i.cursor()).await.ok().flatten();
+            if let Some(cursor) = cursor {
                 match self.source.confirm_unknown_cursor(cursor.hash, &e).await {
                     Ok(k) => kind = k,
                     Err(why) => {
@@ -1391,6 +1401,10 @@ impl<S: ChainSource> Follower<S> {
                         return StepOutcome::Retry(msg);
                     }
                 }
+            }
+            match self.still_disowned_when_synced(cursor.map(|c| c.hash), kind).await {
+                Ok(k) => kind = k,
+                Err(o) => return o,
             }
         }
         match kind {
@@ -1408,6 +1422,45 @@ impl<S: ChainSource> Follower<S> {
                 let msg = e.to_string();
                 self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
                 StepOutcome::Retry(msg)
+            }
+        }
+    }
+
+    /// `None` when the node is synced, else the retry that waits for it. A node that is not
+    /// synced (reset, re-syncing) may not know the cursor yet, so nothing is rewound or halted on
+    /// its word.
+    async fn wait_unless_synced(&self, what: &str) -> Option<StepOutcome> {
+        let why = match self.source.server_info().await {
+            Ok(i) if i.is_synced => return None,
+            Ok(_) => format!("{NOT_SYNCED}: {what}"),
+            Err(e) => format!("{what}, and whether the node is synced is unknown (getServerInfo: {e})"),
+        };
+        self.set_state(FollowerState::NodeUnavailable, Some(why.clone()));
+        Some(StepOutcome::Retry(why))
+    }
+
+    /// The node disowns the cursor `at` (`kind`). It counts only once the node is synced and,
+    /// asked again, still disowns it. A cursor the node knows again is followed on, with no gap.
+    async fn still_disowned_when_synced(&self, at: Option<Hash32>, kind: NodeErrorKind) -> Result<NodeErrorKind, StepOutcome> {
+        let what = "it disowns the cursor; nothing is rewound or halted until it is synced";
+        if let Some(o) = self.wait_unless_synced(what).await {
+            return Err(o);
+        }
+        let Some(at) = at else { return Ok(kind) };
+        match self.source.chain_hashes(at).await {
+            Ok(_) => {
+                let msg = format!("{KNOWN_AGAIN} {at}; following on, no gap");
+                tracing::info!("{msg}");
+                self.set_state(FollowerState::CatchingUp, Some(msg.clone()));
+                Err(StepOutcome::Retry(msg))
+            }
+            Err(e) if matches!(e.kind(), NodeErrorKind::UnknownHash | NodeErrorKind::RetentionRootMissing) => {
+                Ok(if e.kind() == kind { kind } else { NodeErrorKind::UnknownHash })
+            }
+            Err(e) => {
+                let msg = format!("asking the synced node for the cursor {at} again: {e}; nothing is rewound or halted");
+                self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
+                Err(StepOutcome::Retry(msg))
             }
         }
     }
@@ -1530,7 +1583,7 @@ impl<S: ChainSource> Follower<S> {
                     } else {
                         tracing::warn!(attempt = failures, "{r}");
                     }
-                    if is_tip_reorg(&outcome) {
+                    if is_tip_reorg(&outcome) || r.starts_with(KNOWN_AGAIN) {
                         // The node answers: poll again, without a growing backoff.
                         self.cfg.poll_interval
                     } else {
