@@ -31,10 +31,11 @@ pragma silverscript ^0.1.0;
 // Only armed, amountLeft, custody and rptAmount are mutable. custody is the
 // exact B held, the escrow of a BID or the prefund of an ASK. exitState is
 // the KobCondPair state of every exit up to armed. exitMode,
-// exitRecvThreshold and exitTopupTip are the delivery mode of every exit
-// (docs/design/bid-delivery-spec.md), written into it with bought 0; a
-// repeating entry's exits deliver in mode 0. The exit and evidence templates
-// are build constants.
+// exitRecvThreshold and exitTopupTip are the delivery mode of every exit,
+// see docs/design/bid-delivery-spec.md, written into it with bought 0. A
+// repeating entry's exits deliver in mode 0. The state layout is listed at
+// the top of the contract body. The exit and evidence templates are build
+// constants.
 contract KobIfdPair(
     byte[32] COND_TPL,
     int COND_PRE,
