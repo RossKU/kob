@@ -699,6 +699,25 @@ impl NodeBoard {
         self.with(i, |p| p.status.dropped_reason.is_some())
     }
 
+    /// Node `i` lacks a call the indexer needs. A resolver entry gives its node up. A named node
+    /// gets an alarm and is dropped from the chain roles until a restart (it still takes
+    /// submissions), unless it is the authority.
+    fn lacks(&self, i: usize, why: &str) {
+        if let Some(node) = self.node_of(i) {
+            super::judge::lacks(&self.entries[i], &node, why);
+        }
+        if i == self.authority() || super::resolver::is_resolver(&self.entries[i]) {
+            return;
+        }
+        let url = self.url(i);
+        self.with(i, |p| {
+            if p.status.dropped_reason.is_none() {
+                tracing::error!(node = %url, reason = why, "node lacks a call the indexer needs: dropped from the chain roles");
+                p.status.dropped_reason = Some(why.to_string());
+            }
+        })
+    }
+
     /// The status of every node, as `/v1/health` shows it.
     pub fn snapshot(&self) -> Vec<NodeStatus> {
         let now = tokio::time::Instant::now();
@@ -1080,6 +1099,9 @@ pub const STORE_CONTRADICTIONS_MAX: u32 = 3;
 /// It must be on the right network and synced. It must know the cursor, and the cursor must be on
 /// its selected chain.
 pub const PROMOTE_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a node has for the check of its calls (`MultiNode::check_capabilities`).
+pub const CAPABILITY_TIMEOUT: Duration = Duration::from_secs(30);
 /// A cross-checking node that contradicted the authority within this long is not promoted.
 pub const PROMOTE_CLEAN_FOR: Duration = Duration::from_secs(600);
 /// The most chain blocks that an answer of the new authority from the cursor where it took over
@@ -2369,6 +2391,48 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     /// other against the store, so the cause is the store, such as a corrupted cursor or a bug. The
     /// store halts there (`gap`) instead of giving up public node after public node. A node named
     /// in the configuration is not replaced, and the store halts at once.
+    /// The calls of the authority and of every other node that may serve windows, cross-check or
+    /// lead ([`super::probe_calls`]), checked at once, each within [`CAPABILITY_TIMEOUT`].
+    ///
+    /// Another node that lacks one is demoted (`NodeBoard::lacks`), and so is a public authority,
+    /// whose entry resolves another node (`Unknown`, so the follower checks again). A named
+    /// authority that lacks one is `No`.
+    async fn check_capabilities(&self, lane_proofs: bool) -> super::Capable {
+        use super::Capable;
+        let a = self.board.authority();
+        let asked = (0..self.nodes.len()).filter(|&k| {
+            k == a || (!self.board.dropped(k) && (self.specs[k].fetch || self.specs[k].cross_check || self.specs[k].may_lead))
+        });
+        let checks = asked.map(|k| async move {
+            let c = tokio::time::timeout(CAPABILITY_TIMEOUT, self.nodes[k].check_capabilities(lane_proofs)).await;
+            (k, c.unwrap_or_else(|_| Capable::Unknown(format!("no answer within {} s", CAPABILITY_TIMEOUT.as_secs()))))
+        });
+        let mut verdict = Capable::Yes;
+        for (k, c) in futures_util::future::join_all(checks).await {
+            let shown = self.board.shown(k);
+            match c {
+                Capable::No(why) if k == a && !super::resolver::is_resolver(self.board.entry(k)) => {
+                    verdict = Capable::No(format!("the chain authority {shown}: {why}"));
+                }
+                Capable::No(why) => {
+                    self.board.lacks(k, &why);
+                    if k == a {
+                        verdict = Capable::Unknown(format!("the public node {shown} was given up: {why}"));
+                    }
+                }
+                c if k == a => verdict = c,
+                _ => {}
+            }
+        }
+        verdict
+    }
+
+    /// The authority and the node behind every entry: a public node replaced anywhere is checked.
+    fn authority_key(&self) -> String {
+        let nodes: Vec<String> = (0..self.nodes.len()).map(|k| self.board.node_of(k).unwrap_or_default()).collect();
+        format!("{} {}", self.board.authority(), nodes.join(" "))
+    }
+
     fn authority_contradicted(&self, at: Hash32, why: &str) -> super::StoreContradiction {
         let a = self.board.authority();
         let entry = self.board.entry(a).to_string();
@@ -2897,6 +2961,31 @@ mod tests {
 
     fn req() -> VspcRequest {
         VspcRequest::new(Hash32([0; 32]), Verbosity::High, None)
+    }
+
+    /// A node other than the authority that lacks a call is dropped from the chain roles with an
+    /// alarm, and the source goes on. A named authority that lacks one is the follower's `No`.
+    #[tokio::test]
+    async fn a_node_lacking_a_call_is_demoted_and_an_authority_lacking_one_is_reported() {
+        use crate::rpc::Capable;
+        use crate::testkit::MockNode;
+        let spec =
+            |url: &str| NodeSpec { url: url.into(), fetch: true, submit: true, connections: 1, cross_check: false, may_lead: true };
+        let (a, b) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
+        let (ua, ub) = ("ws://127.0.0.1:18301", "ws://127.0.0.1:18302");
+        let m = MultiNode::new(vec![(spec(ua), a.clone()), (spec(ub), b.clone())], a.clone());
+        let key = m.authority_key();
+        b.set_no_vspc_v2(true);
+        assert_eq!(m.check_capabilities(false).await, Capable::Yes);
+        let s = m.node_stats();
+        assert_eq!((s[0].state.as_str(), s[1].state.as_str()), ("ok", "dropped"), "{s:?}");
+        assert!(s[1].dropped_reason.as_deref().is_some_and(|r| r.contains("getVirtualChainFromBlockV2")), "{s:?}");
+        assert!(super::super::judge::alarms().iter().any(|x| x.starts_with(ub) && x.contains("getVirtualChainFromBlockV2")));
+        assert_eq!(m.authority_key(), key, "the same nodes");
+        a.set_no_vspc_v2(true);
+        let Capable::No(why) = m.check_capabilities(false).await else { panic!() };
+        assert!(why.contains(ua) && why.contains("getVirtualChainFromBlockV2"), "{why}");
+        assert_eq!(m.node_stats()[0].state, "ok", "the authority is never dropped");
     }
 
     /// A public chain authority whose answer contradicts the store is given up for another.

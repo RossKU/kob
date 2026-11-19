@@ -12,6 +12,7 @@
 //! - It contradicts the other node.
 //! - It is the chain authority and its chain requests keep failing while the cursor stalls
 //!   ([`chain_failing`]).
+//! - It lacks a call the indexer needs, such as `getSeqCommitLaneProof` ([`lacks`]).
 //!
 //! # Public and named nodes
 //!
@@ -109,6 +110,8 @@ pub enum Kind {
     /// Its chain requests keep failing while the cursor does not move (`rpc::multi`,
     /// `MultiNode::authority_failing`).
     Chain,
+    /// It lacks a call the indexer needs (`MultiNode::check_capabilities`). Until a restart.
+    Capability,
 }
 
 #[derive(Default)]
@@ -345,6 +348,12 @@ pub fn contradicted(url: &str, node: &str, why: &str) {
 /// chain answers ([`chain_ok`]).
 pub fn chain_failing(url: &str, node: &str, why: &str) {
     act(url, node, &[(Kind::Chain, Some(why.to_string()))]);
+}
+
+/// `node` lacks a call the indexer needs, as `why` says. A public node is given up for another;
+/// a named node raises an alarm that lasts until a restart.
+pub fn lacks(url: &str, node: &str, why: &str) {
+    act(url, node, &[(Kind::Capability, Some(why.to_string()))]);
 }
 
 /// `node` answered a chain request. That is a fine answer for a chain alarm ([`chain_failing`]).

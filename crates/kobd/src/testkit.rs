@@ -800,6 +800,8 @@ struct MockState {
     ids_calls: usize,
     /// VSPC answers remove first a block the store never had (a contradiction).
     contradict: bool,
+    /// An older node without `getVirtualChainFromBlockV2`: it closes the connection on it.
+    no_vspc_v2: bool,
 }
 
 /// An in-memory node that answers the `ChainSource` calls from a scripted chain.
@@ -848,6 +850,7 @@ impl MockNode {
                 too_large: 0,
                 ids_calls: 0,
                 contradict: false,
+                no_vspc_v2: false,
             }),
         })
     }
@@ -950,6 +953,12 @@ impl MockNode {
     /// Sets what `getServerInfo` reports as `isSynced`.
     pub fn set_synced(&self, on: bool) {
         self.with(|s| s.synced = on)
+    }
+
+    /// While on, the node answers `getVirtualChainFromBlockV2` as an older node does: it closes
+    /// the connection. Its calls are then checked (`ChainSource::check_capabilities`).
+    pub fn set_no_vspc_v2(&self, on: bool) {
+        self.with(|s| s.no_vspc_v2 = on)
     }
 
     /// While on, VSPC answers first remove a block the store never had, which contradicts it.
@@ -1221,6 +1230,9 @@ impl ChainSource for MockNode {
             }
         }
         let _guard = InFlight(self);
+        if self.with(|s| s.no_vspc_v2) {
+            return Err(RpcError::Transport("connection closed".into()));
+        }
         let r = self.vspc_raw(req.start_hash, req.min_confirmation_count, req.timeout_scale, full);
         let txs = r
             .as_ref()
@@ -1238,6 +1250,14 @@ impl ChainSource for MockNode {
             }
             (r, _) => r,
         }
+    }
+
+    /// Checked only for a node set to lack a call, so that the check takes no scripted answer.
+    async fn check_capabilities(&self, lane_proofs: bool) -> crate::rpc::Capable {
+        if !self.with(|s| s.no_vspc_v2) {
+            return crate::rpc::Capable::Yes;
+        }
+        crate::rpc::probe_calls(self, lane_proofs).await
     }
 
     async fn chain_hashes(&self, start: Hash32) -> Result<ChainHashes, RpcError> {

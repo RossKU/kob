@@ -25,6 +25,12 @@
 //! - A record-log write that failed, for example on a full disk or an I/O error. The append is
 //!   rolled back. The state is `stopped`, and nothing more is appended until the operator
 //!   restarts.
+//! - A chain authority that lacks a call the follower needs (`getVirtualChainFromBlockV2`, or
+//!   `getSeqCommitLaneProof` with chain proofs on): state `stopped` with the reason, checked once
+//!   per authority before its first step ([`ChainSource::check_capabilities`]).
+//! - A lane proof the synced node can no longer serve, because the cursor is before its pruning
+//!   point (`BlockTooDeep`): state `gap`. No batch from there can be proven, and none is
+//!   applied unproven. A recovering follower does not move the store past it.
 //!
 //! # Batch size
 //!
@@ -80,6 +86,12 @@ const KNOWN_AGAIN: &str = "the synced node knows the cursor again:";
 /// The start of a retry reason that says the node, synced now, is asked again before a halt on a
 /// contradiction it gave while not synced.
 const ASK_AGAIN: &str = "the node is synced now; asking it again before halting:";
+
+/// The start of the halt reason of a chain authority that lacks a call the follower needs.
+pub const LACKS_CALL: &str = "the chain authority lacks a call the indexer needs";
+
+/// The start of the gap reason of a lane proof the node can no longer serve.
+pub const PROOF_TOO_DEEP: &str = "the node can no longer prove the chain at the cursor";
 
 /// The text of a gap reason that says the node pruned the history the cursor stood in.
 ///
@@ -278,6 +290,8 @@ pub struct Follower<S: ChainSource> {
     proof: Option<Arc<Mutex<ChainProof>>>,
     /// A contradiction of the store was put off because the node was not synced.
     contradiction_unsynced: std::sync::atomic::AtomicBool,
+    /// The `ChainSource::authority_key` whose calls passed the check.
+    checked_authority: Mutex<Option<String>>,
 }
 
 /// How often the free space of the data directory and the size of the database are measured.
@@ -364,6 +378,7 @@ impl<S: ChainSource> Follower<S> {
             progress_at: Mutex::new(std::time::Instant::now()),
             proof,
             contradiction_unsynced: std::sync::atomic::AtomicBool::new(false),
+            checked_authority: Mutex::new(None),
         }
     }
 
@@ -709,7 +724,11 @@ impl<S: ChainSource> Follower<S> {
     /// With `fetch_parallel` > 1 and the cursor far behind, the batch is the next of the windows
     /// fetched ahead, see [`super::prefetch`].
     pub async fn step(&self) -> StepOutcome {
-        let mut outcome = if self.cfg.fetch_parallel > 1 { self.step_prefetch().await } else { self.step_sequential().await };
+        let mut outcome = match self.check_authority().await {
+            Some(o) => o,
+            None if self.cfg.fetch_parallel > 1 => self.step_prefetch().await,
+            None => self.step_sequential().await,
+        };
         if matches!(outcome, StepOutcome::Retry(_)) {
             if let Some(o) = self.hand_over().await {
                 outcome = o;
@@ -735,6 +754,37 @@ impl<S: ChainSource> Follower<S> {
             h.authority_replaced_total = crate::rpc::resolver::authority_replaced() + crate::rpc::multi::promotions();
         });
         outcome
+    }
+
+    /// Checks a chain authority not checked yet. One that lacks a call stops the follower
+    /// (`stopped`), instead of retrying in `node_unavailable` for ever. One the check could not
+    /// tell about is checked again at the next step.
+    async fn check_authority(&self) -> Option<StepOutcome> {
+        let key = self.source.authority_key();
+        if self.checked_authority.lock().unwrap_or_else(|e| e.into_inner()).as_ref() == Some(&key) {
+            return None;
+        }
+        match self.source.check_capabilities(self.proof.is_some()).await {
+            crate::rpc::Capable::Yes => {
+                *self.checked_authority.lock().unwrap_or_else(|e| e.into_inner()) = Some(key);
+                None
+            }
+            crate::rpc::Capable::Unknown(why) => {
+                tracing::debug!(reason = %why, "the chain authority's calls could not be checked yet");
+                None
+            }
+            crate::rpc::Capable::No(why) => {
+                let fix = if why.contains("getSeqCommitLaneProof") {
+                    "run a node of rusty-kaspa v2.1.0 or later, or set [chain_proof] enabled = false"
+                } else {
+                    "run a node of rusty-kaspa v2.1.0 or later"
+                };
+                let msg = format!("{LACKS_CALL}: {why}; {fix}, then restart");
+                self.set_state(FollowerState::Stopped, Some(msg.clone()));
+                self.health.update(|h| h.halt_reason = Some(msg.clone()));
+                Some(StepOutcome::Halted(msg))
+            }
+        }
     }
 
     /// One window from the cursor, fetched now.
@@ -984,7 +1034,7 @@ impl<S: ChainSource> Follower<S> {
         let plan = match plan {
             Ok(p) => p,
             Err(e) => {
-                let verdict = self.proof_verdict(&proof, origin, Err(e));
+                let verdict = self.proof_verdict(&proof, origin, Err(e)).await;
                 return (raw, verdict, Ok(()));
             }
         };
@@ -1002,13 +1052,13 @@ impl<S: ChainSource> Follower<S> {
             }
         };
         let (proved, confirmed) = tokio::join!(proved, confirmed);
-        let verdict = self.proof_verdict(&proof, origin, proved);
+        let verdict = self.proof_verdict(&proof, origin, proved).await;
         (raw, verdict, confirmed)
     }
 
     /// What a chain proof's result `r` makes of the step: nothing (`Ok`), or a retry after a proof
     /// the node could not serve, or after a refusal that reports the node behind `origin`.
-    fn proof_verdict(&self, proof: &Mutex<ChainProof>, origin: Origin, r: Result<(), ProofError>) -> Result<(), StepOutcome> {
+    async fn proof_verdict(&self, proof: &Mutex<ChainProof>, origin: Origin, r: Result<(), ProofError>) -> Result<(), StepOutcome> {
         match r {
             Ok(()) => Ok(()),
             Err(ProofError::Unavailable(why)) => {
@@ -1020,6 +1070,25 @@ impl<S: ChainSource> Follower<S> {
             Err(ProofError::Reorged(why)) => {
                 tracing::debug!(reason = %why, "a block of the batch left the selected parent chain (a tip reorg): fetched again");
                 Err(StepOutcome::Retry(format!("{TIP_REORG}: {why}")))
+            }
+            Err(ProofError::TooDeep(why)) => {
+                if let Some(o) =
+                    self.wait_unless_synced(&format!("{PROOF_TOO_DEEP} ({why}); nothing is halted until it is synced")).await
+                {
+                    return Err(o);
+                }
+                let msg = format!(
+                    "{PROOF_TOO_DEEP}: {why}. The cursor is before the node's pruning point, and chain proofs apply no batch unproven: \
+                     use a node that still proves it, rebase the store (kobd db rebase), or set [chain_proof] enabled = false to follow on \
+                     the node's word"
+                );
+                tracing::error!("{msg}");
+                self.health.update(|h| {
+                    h.state = FollowerState::Gap;
+                    h.gap_reason = Some(msg.clone());
+                    h.last_error = Some(msg.clone());
+                });
+                Err(StepOutcome::Gap(msg))
             }
             Err(ProofError::Refused(why)) => {
                 proof.lock().unwrap_or_else(|e| e.into_inner()).refused(&why);
@@ -1052,6 +1121,8 @@ impl<S: ChainSource> Follower<S> {
         let unavailable = |what: &str, e: RpcError| {
             if e.left_selected_chain() {
                 ProofError::Reorged(format!("{what}: {e}"))
+            } else if e.kind() == NodeErrorKind::BlockTooDeep {
+                ProofError::TooDeep(format!("{what}: {e}"))
             } else {
                 ProofError::Unavailable(format!("{what}: {e}"))
             }
@@ -1440,7 +1511,7 @@ impl<S: ChainSource> Follower<S> {
                 });
                 StepOutcome::Gap(msg)
             }
-            NodeErrorKind::TransitionalIbd | NodeErrorKind::Other => {
+            NodeErrorKind::TransitionalIbd | NodeErrorKind::BlockTooDeep | NodeErrorKind::Other => {
                 let msg = e.to_string();
                 self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
                 StepOutcome::Retry(msg)
@@ -1755,6 +1826,10 @@ mod tests {
             reorgs: std::sync::atomic::AtomicUsize,
             /// The `minConfirmationCount` of each VSPC request.
             asked: Mutex<Vec<Option<u64>>>,
+            /// Lane proofs at the cursor answer "too deep" (the node pruned past it).
+            too_deep: std::sync::atomic::AtomicBool,
+            /// `getServerInfo` says not synced.
+            unsynced: std::sync::atomic::AtomicBool,
         }
 
         impl Recorded {
@@ -1796,7 +1871,7 @@ mod tests {
                 Ok(ServerInfo {
                     server_version: "2.1.0".into(),
                     network_id: self.fx.network.clone(),
-                    is_synced: true,
+                    is_synced: !self.unsynced.load(SeqCst),
                     has_utxo_index: true,
                     virtual_daa_score: 0,
                 })
@@ -1840,6 +1915,9 @@ mod tests {
                     .get(&kaspa_hashes::Hash::from_bytes(lane.0))
                     .ok_or_else(|| RpcError::Node("no such lane".into()))?;
                 match block {
+                    b if b == self.fx.start && self.too_deep.load(SeqCst) => {
+                        Err(RpcError::Node(format!("block {b} is too deep (before the current pruning point)")))
+                    }
                     b if b == self.fx.start => Ok(p.0.clone()),
                     b if b == self.last().0 && self.reorgs.fetch_update(SeqCst, SeqCst, |n| n.checked_sub(1)).is_ok() => {
                         Err(RpcError::Node(format!("block {b} is not in the selected parent chain")))
@@ -1884,6 +1962,8 @@ mod tests {
                 peak: Default::default(),
                 reorgs: Default::default(),
                 asked: Mutex::new(vec![]),
+                too_deep: Default::default(),
+                unsynced: Default::default(),
             });
             let conn = crate::indexer::db::open_memory(&network).unwrap();
             let ingest =
@@ -1931,6 +2011,28 @@ mod tests {
                 assert_eq!((p.blocks_total, p.refused_total), (0, 1));
                 assert!(health.snapshot().status_line().contains("chain proofs refused 1"));
             }
+        }
+
+        /// A lane proof the node can no longer serve at the cursor (`BlockTooDeep`) is no
+        /// `node_unavailable` for ever: nothing while the node is not synced, then a gap that a
+        /// recovering follower does not move past. Nothing is applied unproven.
+        #[tokio::test]
+        async fn a_lane_proof_too_deep_halts_once_the_node_is_synced() {
+            let (f, src, ingest, health) = follower(TN10, |_| {});
+            ingest.lock().unwrap().init_cursor(&Cursor { hash: src.fx.start, daa: 0 }).unwrap();
+            src.too_deep.store(true, SeqCst);
+            src.unsynced.store(true, SeqCst);
+            let o = f.step().await;
+            assert!(matches!(&o, StepOutcome::Retry(m) if m.starts_with(NOT_SYNCED) && m.contains(PROOF_TOO_DEEP)), "{o:?}");
+            assert_eq!(health.snapshot().state, FollowerState::NodeUnavailable);
+            src.unsynced.store(false, SeqCst);
+            let o = f.step().await;
+            let StepOutcome::Gap(why) = &o else { panic!("{o:?}") };
+            assert!(why.starts_with(PROOF_TOO_DEEP) && why.contains("too deep") && !is_pruned_gap(why), "{why}");
+            let h = health.snapshot();
+            assert_eq!((h.state, h.gap_reason.as_deref()), (FollowerState::Gap, Some(why.as_str())));
+            assert_eq!(cursor(&ingest), src.fx.start, "nothing applied");
+            assert_eq!(h.chain_proof.unwrap().refused_total, 0, "the node is not blamed");
         }
 
         /// The proofs of a batch wait one round trip per kind of request, not one per request: the

@@ -103,6 +103,9 @@ pub enum NodeErrorKind {
     RetentionRootMissing,
     /// `consensus is currently in a transitional ibd state`: retry later, never advance.
     TransitionalIbd,
+    /// `block <hash> is too deep (before the current pruning point)`: the node can no longer
+    /// prove at that block (`getSeqCommitLaneProof`). It stays so on that node.
+    BlockTooDeep,
     Other,
 }
 
@@ -138,9 +141,76 @@ pub fn classify_node_message(m: &str) -> NodeErrorKind {
         NodeErrorKind::RetentionRootMissing
     } else if m.contains("transitional ibd") {
         NodeErrorKind::TransitionalIbd
+    } else if m.contains("is too deep") {
+        NodeErrorKind::BlockTooDeep
     } else {
         NodeErrorKind::Other
     }
+}
+
+/// What a check of a node's calls found ([`ChainSource::check_capabilities`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Capable {
+    /// It serves every call checked.
+    Yes,
+    /// It lacks one, as the text says.
+    No(String),
+    /// The check could not tell (no answer, IBD). It is made again later.
+    Unknown(String),
+}
+
+/// The node's answer that it has no such call. An older node closes the connection instead,
+/// which [`probe_calls`] tells apart.
+pub fn lacks_call(e: &RpcError) -> bool {
+    let RpcError::Node(m) = e else { return false };
+    let m = m.to_ascii_lowercase();
+    ["method not found", "not implemented", "not supported", "unavailable in safe mode"].iter().any(|w| m.contains(w))
+}
+
+/// Whether `src` serves the calls the follower needs of a chain authority:
+/// `getVirtualChainFromBlockV2` and, with `lane_proofs`, `getSeqCommitLaneProof`. Both are asked
+/// at the sink, where the answer is empty.
+///
+/// Any answer of the call, an error such as "too deep" too, means the node has it. A node that
+/// does not know a call closes the connection on it (`workflow-rpc`). That counts only when it
+/// happens twice while the node answers `getServerInfo` each time.
+pub async fn probe_calls<S: ChainSource + ?Sized>(src: &S, lane_proofs: bool) -> Capable {
+    let sink = match src.dag_info().await {
+        Ok(d) => d.sink,
+        Err(e) => return Capable::Unknown(format!("getBlockDagInfo: {e}")),
+    };
+    let vspc = || async move { src.vspc_v2(VspcRequest::new(sink, src.authority_verbosity(), None)).await.map(|_| ()) };
+    let c = probe_call(src, "getVirtualChainFromBlockV2", vspc).await;
+    if c != Capable::Yes || !lane_proofs {
+        return c;
+    }
+    let lane = Hash32(proof::native_lane().as_bytes());
+    probe_call(src, "getSeqCommitLaneProof", || async move { src.lane_proof(sink, lane).await.map(|_| ()) }).await
+}
+
+async fn probe_call<S, F, Fut>(src: &S, method: &str, call: F) -> Capable
+where
+    S: ChainSource + ?Sized,
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<(), RpcError>>,
+{
+    let mut closed = String::new();
+    for _ in 0..2 {
+        match call().await {
+            Ok(()) => return Capable::Yes,
+            Err(e) if lacks_call(&e) => return Capable::No(format!("it does not serve {method} ({e})")),
+            Err(e @ RpcError::Transport(_)) => match src.server_info().await {
+                Ok(_) => closed = e.to_string(),
+                Err(i) => return Capable::Unknown(format!("{method}: {e}; getServerInfo: {i}")),
+            },
+            Err(e) if matches!(e, RpcError::Timeout(_)) || e.kind() == NodeErrorKind::TransitionalIbd => {
+                return Capable::Unknown(format!("{method}: {e}"))
+            }
+            // Any other answer comes from the call itself.
+            Err(_) => return Capable::Yes,
+        }
+    }
+    Capable::No(format!("it does not serve {method}: it closes the connection on it ({closed}) while it answers getServerInfo"))
 }
 
 /// What the source made of a chain authority's answer that contradicts the store
@@ -308,6 +378,20 @@ pub trait ChainSource: Send + Sync + 'static {
             let _ = at;
             Ok(kind)
         }
+    }
+    /// Whether the chain authority serves the calls the follower needs ([`probe_calls`]). The
+    /// follower asks once per authority ([`ChainSource::authority_key`]). A source over several
+    /// nodes demotes another node that lacks one (`multi`). The default, for test sources, is
+    /// [`Capable::Yes`].
+    fn check_capabilities(&self, lane_proofs: bool) -> impl Future<Output = Capable> + Send {
+        async move {
+            let _ = lane_proofs;
+            Capable::Yes
+        }
+    }
+    /// Which nodes serve now. A new value means a new chain authority, checked again.
+    fn authority_key(&self) -> String {
+        String::new()
     }
     /// Per-node counters for `/v1/health` (empty for a single node).
     fn node_stats(&self) -> Vec<multi::NodeStatus> {
@@ -971,6 +1055,10 @@ impl ChainSource for WrpcClient {
         true
     }
 
+    async fn check_capabilities(&self, lane_proofs: bool) -> Capable {
+        probe_calls(self, lane_proofs).await
+    }
+
     async fn lane_proof(&self, block: Hash32, lane: Hash32) -> Result<kaspa_rpc_core::GetSeqCommitLaneProofResponse, RpcError> {
         self.call("getSeqCommitLaneProof", serde_json::json!({ "blockHash": block.to_hex(), "laneKey": lane.to_hex() })).await
     }
@@ -1052,5 +1140,91 @@ mod tests {
         assert!(RpcError::Node("Block 0101 not found".into()).is_unknown_block());
         assert!(!RpcError::Transport("cannot find header x".into()).is_unknown_block());
         server.abort();
+    }
+
+    /// How a node answers `getSeqCommitLaneProof`.
+    #[derive(Clone, Copy)]
+    enum Lanes {
+        /// "too deep" at the sink of the fake: an answer of the call.
+        TooDeep,
+        /// The node's "RPC method not found".
+        NotFound,
+    }
+
+    /// A node for the check of its calls. Without `v2` it closes the connection on
+    /// `getVirtualChainFromBlockV2`, as an older node (`workflow-rpc`) does on a call it does not
+    /// know.
+    async fn calls_node(v2: bool, lanes: Lanes) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((s, _)) = listener.accept().await else { return };
+                tokio::spawn(async move {
+                    let Ok(mut ws) = tokio_tungstenite::accept_async(s).await else { return };
+                    while let Some(Ok(Message::Text(t))) = ws.next().await {
+                        let req: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
+                        let ok = |p: serde_json::Value| serde_json::json!({ "id": req["id"], "params": p });
+                        let err = |m: &str| serde_json::json!({ "id": req["id"], "error": { "message": m } });
+                        let h = "11".repeat(32);
+                        let answer = match req["method"].as_str().unwrap() {
+                            "getBlockDagInfo" => ok(serde_json::json!({
+                                "network": "testnet-10", "sink": h, "pruningPointHash": h, "virtualDaaScore": 1
+                            })),
+                            "getServerInfo" => ok(serde_json::json!({
+                                "serverVersion": "2.1.0", "networkId": "testnet-10", "isSynced": true, "hasUtxoIndex": true, "virtualDaaScore": 1
+                            })),
+                            "getVirtualChainFromBlockV2" if !v2 => return,
+                            "getVirtualChainFromBlockV2" => ok(serde_json::json!({
+                                "removedChainBlockHashes": [], "addedChainBlockHashes": [], "chainBlockAcceptedTransactions": []
+                            })),
+                            "getSeqCommitLaneProof" => match lanes {
+                                Lanes::TooDeep => err(&format!("block {h} is too deep (before the current pruning point)")),
+                                Lanes::NotFound => err("RPC method not found"),
+                            },
+                            _ => return,
+                        };
+                        if ws.send(Message::text(answer.to_string())).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (format!("ws://{addr}"), server)
+    }
+
+    /// The check of a node's calls: a "too deep" answer is the call's own; "method not found" and
+    /// a connection closed twice on the call while the node answers `getServerInfo` are a lack; a
+    /// node that does not answer tells nothing.
+    #[tokio::test]
+    async fn a_node_lacking_a_call_is_told_apart_from_one_that_does_not_answer() {
+        use super::{lacks_call, probe_calls, Capable, NodeErrorKind};
+        let (url, server) = calls_node(true, Lanes::TooDeep).await;
+        let c = WrpcClient::new(WrpcConfig::new(url));
+        assert_eq!(c.check_capabilities(true).await, Capable::Yes);
+        server.abort();
+
+        let (url, server) = calls_node(true, Lanes::NotFound).await;
+        let c = WrpcClient::new(WrpcConfig::new(url));
+        assert_eq!(c.check_capabilities(false).await, Capable::Yes, "no lane proofs asked for");
+        let Capable::No(why) = c.check_capabilities(true).await else { panic!() };
+        assert!(why.contains("getSeqCommitLaneProof") && why.contains("method not found"), "{why}");
+        server.abort();
+
+        let (url, server) = calls_node(false, Lanes::TooDeep).await;
+        let c = WrpcClient::new(WrpcConfig::new(url.clone()));
+        let Capable::No(why) = probe_calls(&c, true).await else { panic!() };
+        assert!(why.contains("getVirtualChainFromBlockV2") && why.contains("closes the connection"), "{why}");
+        server.abort();
+        let _ = server.await;
+        let c = WrpcClient::new(WrpcConfig::new(url));
+        assert!(matches!(probe_calls(&c, true).await, Capable::Unknown(_)), "a node that does not answer");
+
+        let deep = RpcError::Node("block 1111 is too deep (before the current pruning point)".into());
+        assert_eq!(deep.kind(), NodeErrorKind::BlockTooDeep);
+        assert!(!lacks_call(&deep));
+        assert!(lacks_call(&RpcError::Node("Not implemented".into())));
+        assert!(!lacks_call(&RpcError::Transport("method not found".into())));
     }
 }

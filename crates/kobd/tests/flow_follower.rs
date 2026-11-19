@@ -11,7 +11,7 @@ use kob_protocol::state::*;
 use kob_protocol::tx::*;
 use kobd::hex::Hash32;
 use kobd::indexer::db::open_memory;
-use kobd::indexer::follower::{StepOutcome, NOT_SYNCED};
+use kobd::indexer::follower::{StepOutcome, LACKS_CALL, NOT_SYNCED};
 use kobd::indexer::ingest::{Ingest, IngestConfig, IngestError};
 use kobd::indexer::recordlog::RecordLog;
 use kobd::indexer::status::FollowerState;
@@ -1354,4 +1354,25 @@ async fn a_contradiction_the_synced_node_repeats_halts() {
     d.hs.node.set_contradict(true);
     let out = d.hs.follower.step().await;
     assert!(matches!(&out, StepOutcome::Gap(m) if m.contains("contradicts")), "{out:?}");
+}
+
+/// A node without `getVirtualChainFromBlockV2` stops the follower at its first step (`stopped`, with the reason), instead
+/// of retrying in `node_unavailable` for ever. Nothing is asked of it after that.
+#[tokio::test]
+async fn a_node_lacking_vspc_v2_stops_the_follower_at_once() {
+    let c = Ctx::new();
+    c.hs.node.push_empty(3);
+    c.hs.node.set_no_vspc_v2(true);
+    let out = c.hs.follower.step().await;
+    let StepOutcome::Halted(why) = &out else { panic!("{out:?}") };
+    assert!(why.starts_with(LACKS_CALL) && why.contains("getVirtualChainFromBlockV2") && why.contains("v2.1.0"), "{why}");
+    let h = c.hs.health.snapshot();
+    assert_eq!((h.state, h.halt_reason.as_deref()), (FollowerState::Stopped, Some(why.as_str())));
+    assert!(h.halted().is_some(), "an alarm (kob_indexer_halted)");
+
+    // a node that serves it is checked once and followed
+    let d = Ctx::new();
+    d.hs.node.push_empty(3);
+    let out = d.hs.sync().await;
+    assert!(matches!(out.last(), Some(StepOutcome::Idle)), "{out:?}");
 }

@@ -538,6 +538,14 @@ impl<S: ChainSource> ChainSource for Failover<S> {
     fn node_stats(&self) -> Vec<NodeStatus> {
         self.inner.tiers[self.active()].node_stats()
     }
+    /// The active tier's: a switch is a new authority, checked again.
+    async fn check_capabilities(&self, lane_proofs: bool) -> super::Capable {
+        self.inner.tiers[self.active()].check_capabilities(lane_proofs).await
+    }
+    fn authority_key(&self) -> String {
+        let t = self.active();
+        format!("{t} {}", self.inner.tiers[t].authority_key())
+    }
     fn source_status(&self) -> Option<FailoverStatus> {
         Some(self.status())
     }
