@@ -764,7 +764,8 @@ fn depth_reference(bid: Option<i128>, ask: Option<i128>) -> Option<i128> {
 ///
 /// The result is the value of the bids down to [`DEPTH_BAND_PERCENT`] % below the reference and
 /// of the asks up to that much above it, both bounds inclusive, as (bid, ask). It is `None` for a
-/// book with no reference.
+/// book with no reference. [`touch`] sums the same band as it walks the orders.
+#[cfg(test)]
 fn depth_bands(bids: &[(i128, i128)], asks: &[(i128, i128)]) -> Option<(i128, i128)> {
     let r = depth_reference(bids.first().map(|l| l.0), asks.first().map(|l| l.0))?;
     let up = r.saturating_mul(100 + DEPTH_BAND_PERCENT);
@@ -774,21 +775,66 @@ fn depth_bands(bids: &[(i128, i128)], asks: &[(i128, i128)]) -> Option<(i128, i1
     Some((b, a))
 }
 
+/// The touch and the depth band of the book of `token`.
+///
+/// It walks the resting orders twice per side and keeps only sums: first the best price and the
+/// number of levels (a curve counts each of its remaining levels), then the value inside the band
+/// around the reference. So it holds one order's levels at a time, not every level of every curve
+/// of the book (up to 1,000 each), as a sorted list of the whole side did (security review
+/// 2026-11-19 K-L4). A level's value is its amount at its price, rounded down per order.
 fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbResult<Touch> {
-    let asks = reads::book_side_sorted(conn, ctx, token, 1, None)?;
-    let bids = reads::book_side_sorted(conn, ctx, token, 2, None)?;
-    let price = |l: &reads::RawBookLevel| per_basis(l.0 .0, l.0 .1, basis);
-    // Levels are in book order (exact price per base unit, best first), so the first one is the
-    // best and the band is a prefix.
-    let ask = asks.first().map(price);
-    let bid = bids.first().map(price);
-    let value = |l: &reads::RawBookLevel| (price(l), (l.1 .0).saturating_mul(l.0 .0 as i128) / (l.0 .1.max(1) as i128));
-    let (bid_levels, ask_levels): (Vec<_>, Vec<_>) = (bids.iter().map(value).collect(), asks.iter().map(value).collect());
-    let bands = depth_bands(&bid_levels, &ask_levels);
+    // The best (price, scale) of a side by the exact price per base unit, and its levels.
+    let best = |side: i64| -> DbResult<(Option<(i64, i64)>, i64)> {
+        let (mut best, mut n): (Option<(i64, i64)>, i64) = (None, 0);
+        reads::for_each_resting(conn, ctx, token, side, |levels, scale, _| {
+            let s = scale.max(1);
+            for (_, p, _) in levels {
+                n += 1;
+                let better = best.is_none_or(|(bp, bs)| {
+                    let o = (p as i128 * bs as i128).cmp(&(bp as i128 * s as i128));
+                    if side == 1 {
+                        o.is_lt()
+                    } else {
+                        o.is_gt()
+                    }
+                });
+                if better {
+                    best = Some((p, s));
+                }
+            }
+        })?;
+        Ok((best, n))
+    };
+    let (best_ask, ask_orders) = best(1)?;
+    let (best_bid, bid_orders) = best(2)?;
+    let ask = best_ask.map(|(p, s)| per_basis(p, s, basis));
+    let bid = best_bid.map(|(p, s)| per_basis(p, s, basis));
+    // The value of a side's levels inside the band: asks at most `bound` per basis (x 100), bids
+    // at least that.
+    let band = |side: i64, bound: i128| -> DbResult<i128> {
+        let mut sum = 0i128;
+        reads::for_each_resting(conn, ctx, token, side, |levels, scale, _| {
+            let s = scale.max(1);
+            for (_, p, amount) in levels {
+                let at = per_basis(p, s, basis).saturating_mul(100);
+                if (side == 1 && at <= bound) || (side == 2 && at >= bound) {
+                    sum = sum.saturating_add((amount.unwrap_or(0).max(0) as i128).saturating_mul(p as i128) / s as i128);
+                }
+            }
+        })?;
+        Ok(sum)
+    };
+    let bands = match depth_reference(bid, ask) {
+        Some(r) => {
+            let a = if ask.is_some() { band(1, r.saturating_mul(100 + DEPTH_BAND_PERCENT))? } else { 0 };
+            let b = if bid.is_some() { band(2, r.saturating_mul(100 - DEPTH_BAND_PERCENT))? } else { 0 };
+            Some((b, a))
+        }
+        None => None,
+    };
     let (depth_bid, depth_ask) = bands.unwrap_or((0, 0));
     let depth = bands.map(|(b, a)| a.saturating_add(b));
-    let orders = |ls: &[reads::RawBookLevel]| ls.iter().map(|l| l.1 .1).sum::<i64>();
-    Ok(Touch { bid, ask, depth, depth_bid, depth_ask, bid_orders: orders(&bids), ask_orders: orders(&asks) })
+    Ok(Touch { bid, ask, depth, depth_bid, depth_ask, bid_orders, ask_orders })
 }
 
 /// The 24 h statistics and the touch of the book of `token`.
