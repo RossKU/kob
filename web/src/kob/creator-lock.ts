@@ -36,6 +36,11 @@ export const LOCK_SCRIPT_LEN = 44;
  * The default KAS of a lock coin, 1 KAS. The unlock pays its fee from it and returns the rest.
  */
 export const LOCK_COIN = 100_000_000n;
+/**
+ * The most KAS the signer takes as a lock coin: LOCK_COIN and a fee margin of 0.1 KAS. A larger
+ * coin, or a second one, could not all be spent by the one unlock.
+ */
+export const LOCK_COIN_MAX = LOCK_COIN + 10_000_000n;
 
 /** A creator lock as kob-wasm `creatorLock` returns it. */
 export interface CreatorLockInfo {

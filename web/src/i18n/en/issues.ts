@@ -182,6 +182,7 @@ export default {
   'issues.take-fills': 'Fills {orders} resting order(s) from the book.',
   'issues.unlock-invalid': '{where}This is not a valid unlock of your creator lock: the lock is of another key, or its coin, time or witness is wrong. Not signing.',
   'issues.unlock-tokens': '{amount} your creator lock held until {date} become yours, free to move.',
+  'issues.lock-coin-stranded': 'Output {output}: {amount} would go to the address of your creator lock, more than one coin for its unlock (at most 1.1 KAS). The unlock spends only one coin there, so these could be stuck. Not signing.',
   'issues.lock-coin': 'Output {output}: {amount} go to the address of your creator lock; the unlock spends them and returns the rest.',
   'issues.swept-in-place': 'Input {input}: the order continues unchanged at output {output}; only its {utxos} stray token UTXO(s) return to you.',
   'issues.claim-invalid': 'Input {input}: not a valid claim of the order\'s bought tokens ({reason}). Not signing.',
