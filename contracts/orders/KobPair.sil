@@ -20,34 +20,21 @@ pragma silverscript ^0.1.0;
 //     Maker only, signed with SIGHASH_ALL. It is also the claim of the
 //     bought-custody (docs/design/bid-delivery-spec.md, section 7).
 //
-// custIn is the custody input. tTplIn is the T input the delivery is built
-// from: the bought-custody in mode 1 once bought > 0, the maker's receive
-// UTXO for a top-up (mode 2, form 2), otherwise any input of T, the source of
-// its template bytes. sOut is the S a fill releases and tOut the T the maker
-// receives. t is the decay time, proven by CLTV. form is read in mode 2 only.
-// nb is a fixed 8-byte push and the first argument, so pair conditionals can
-// read n at sigscript[1..9).
+// custIn is the custody input, and tTplIn the T input whose template the
+// delivery uses. sOut is the S a fill releases and tOut the T the maker
+// receives. t is the decay time, proven by CLTV. nb is a fixed 8-byte push
+// and the first argument, so pair conditionals can read n at sigscript[1..9).
 //
-// Delivery mode of T, the maker's and immutable (bid-delivery-spec.md):
-//   mode 0  new: every fill delivers a new plain UTXO of tOut to the maker.
-//   mode 1  accumulate: the order keeps the T it buys in its own
-//           bought-custody, owned by its covenant id and holding exactly
-//           `bought`. The maker gets one plain UTXO when the order ends, is
-//           refunded or is claimed through cancel.
-//   mode 2  top-up: the filler picks form 0 (a new plain UTXO), form 1 (a new
-//           receive UTXO with threshold recvThreshold) or form 2 (the maker's
-//           receive UTXO tTplIn grows by tOut, and the order leaves topupTip
-//           of its KAS to the filler instead of a delivery carrier).
+// The delivery modes of T are those of KobBid, set by the maker in `mode`.
 // Modes 1 and 2 are for a KCC-20 T only. A KRON T is delivered in mode 0.
 //
-// Only amountLeft, the base units of A still to trade, custody, the exact
-// amount of S held, and bought, the exact amount of T held, are mutable.
-// sExt is the KCC-20 extension commitment of the custody, zero for KRON.
+// Only amountLeft, custody and bought are mutable. amountLeft is the base
+// units of A still to trade, custody the exact amount of S held, and bought
+// the exact amount of T held. sExt is the KCC-20 extension commitment of the
+// custody, zero for KRON.
 //
-// The order checks only its own terms: what it receives and pays, its
-// custody, the stray guards of both tokens and its own outputs. A matcher may
-// fill it through the KAS books, against opposite pair orders or from its own
-// tokens.
+// The order checks only its own terms. A matcher may fill it through the KAS
+// books, against opposite pair orders or from its own tokens.
 contract KobPair(
     pubkey init_maker,
     int init_side,
@@ -512,7 +499,8 @@ contract KobPair(
                     me.slice(0, STATE_END - 17) + byte[]((amountLeft - n) as byte[8]) + byte[](0x08) + byte[](outAmount as byte[8])
                         + me.slice(STATE_END, BOUGHT_AT) + byte[](nextBought as byte[8]) + me.slice(BOUGHT_AT + 8, this.bytecodeSize)
                 )));
-                // the order funds its own delivery carrier and tip (no filler-funded carrier wall)
+                // The order funds its own delivery carrier and tip, so every
+                // quote it shows is takeable without KAS from the filler.
                 require(tx.inputs[self].value >= released + tipKas);
                 require(tx.outputs[selfOut].value >= tx.inputs[self].value - released - tipKas);
                 require(tx.outputs[custIn].value >= tx.inputs[custIn].value);
