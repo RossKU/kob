@@ -5,38 +5,27 @@ pragma silverscript ^0.1.0;
 // This is the base buy order of the family. It follows KobAsk for the stray
 // guard, the positional rule, IOC/FOK, the price formulas and rounding. The
 // KRON version is kron/KobBidKron.sil. The specification is
-// docs/spec/order-types.md; the delivery modes are
+// docs/spec/order-types.md. The delivery modes are specified in
 // docs/design/bid-delivery-spec.md.
 //
 // Entries:
 //   fill(nb, tokIn, t, form), with n = int(nb)
 //     Buy n base units. Anyone, once tx.daa >= activeFrom.
 //   cancel(sig)
-//     Maker only, signed with SIGHASH_ALL. A claim of the bought tokens
-//     (mode 1) is a cancel whose outputs continue the order with bought = 0.
+//     Maker only, signed with SIGHASH_ALL. A cancel that continues the order
+//     with bought = 0 is the claim of the bought tokens.
 //   refund()
-//     Return the escrow to the maker at output i, and the bought-custody
-//     (mode 1, bought > 0) at its own index. Anyone, once
+//     Return the escrow to the maker at output i, and the bought-custody, if
+//     any, at its own index. Anyone, once
 //     tx.daa >= min(expiryDaa, UTXO DAA + 90 days, IOC/FOK kill).
 //
-// Delivery mode, set by the maker and immutable (state field `mode`):
-//   0 new         every fill delivers a new plain UTXO of n to the maker.
-//   1 accumulate  the order keeps what it buys in its own bought-custody, a
-//                 token UTXO owned by the order's covenant id holding exactly
-//                 `bought` (the one mutable field). The maker gets one plain
-//                 UTXO when the order ends, is refunded or is claimed.
-//   2 top-up      the filler picks the form of each fill:
-//                   form 0  a new plain UTXO of n,
-//                   form 1  a new receive UTXO of n (borrow scheme
-//                           amount-threshold, threshold recvThreshold),
-//                   form 2  the maker's receive UTXO tokIn topped up to
-//                           amount + n; the escrow moves no carrier and leaves
-//                           topupTip (<= deliveryCarrier) to the filler.
-// Modes 0 and 1 ignore `form`.
-//
-// tokIn is the token input the delivery is built from: in mode 1 with
-// bought > 0 the bought-custody, in mode 2 form 2 the receive UTXO, otherwise
-// any input of this token (only its template bytes are read). t is the time
+// Delivery modes, set by the maker in `mode`:
+//   0  Every fill delivers a new plain UTXO of n to the maker.
+//   1  The order keeps what it buys in its bought-custody, which holds
+//      exactly `bought`. The maker gets one plain UTXO when the order ends.
+//   2  The filler picks a form per fill: a new plain UTXO, a new receive
+//      UTXO, or a top-up of the maker's receive UTXO tokIn.
+// tokIn is the token input whose template the delivery uses. t is the time
 // of a rising bid, proven by CLTV.
 //
 // nb is a fixed 8-byte push and the first argument. A conditional order that
@@ -44,9 +33,8 @@ pragma silverscript ^0.1.0;
 // push opcode, see KobCondBid.touchBid.
 //
 // Every per-order value but `bought` is in the state span and never changes.
-// A partial fill continues the script with only `bought` spliced (byte-
-// identical in modes 0 and 2), and the escrowed KAS shrinks. The escrow is
-// the quantity, at the budget rate pMax + tip.
+// A partial fill continues the script with `bought` spliced, and the escrowed
+// KAS shrinks. The escrow is the quantity, at the budget rate pMax + tip.
 //
 // Prices are in sompi per whole token, which is `scale` base units. Every
 // amount is rounded in the maker's favour, see KobAsk.quoteOf.
@@ -289,7 +277,7 @@ contract KobBid(
         // input i go to output i, a KCC-20 UTXO on the template read from
         // tokIn with the commitment extensionCommitment. Its state is the
         // struct's canonical push encoding, 0x08 amount 0x20 owner 0x01
-        // scheme 0x01 borrow 0x20 guard 0x20 ext, written by hand; the zero
+        // scheme 0x01 borrow 0x20 guard 0x20 ext, written by hand. The zero
         // guard is four 8-byte zero conversions, not ZERO32. What the amount,
         // owner, schemes and guard are depends on the mode:
         //   mode 0, mode 2 form 0  plain: n, the maker, 0x00, 0x00, zero
@@ -315,7 +303,7 @@ contract KobBid(
         byte[] mid = byte[](0x0100010020) + zg;
         if (mode == 1) {
             // Accumulate. With bought > 0, tokIn is the bought-custody and its
-            // KAS stays on it; the escrow moves no carrier.
+            // KAS stays on it. The escrow moves no carrier.
             if (bought > 0) {
                 isCustody(tokIn, trs, selfId);
                 haveKas = tx.inputs[tokIn].value;
@@ -334,12 +322,13 @@ contract KobBid(
                 if (form == 1) {
                     mid = byte[](0x0100010120) + byte[](recvThreshold as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
                 } else {
-                    // Top-up: tokIn is the maker's receive UTXO, the P2SH of the
-                    // script its state is read from. Owner the maker's key,
-                    // amount-threshold with a threshold >= recvThreshold and a
-                    // canonical guard, the order's commitment. Output i is its
-                    // successor on the borrow path (the leader's first output),
-                    // so no second order can claim the same receive UTXO.
+                    // Top-up. tokIn is the maker's receive UTXO, the P2SH of
+                    // the script its state is read from. It is owned by the
+                    // maker's key, amount-threshold with a threshold of at
+                    // least recvThreshold and a canonical guard, and carries
+                    // the order's commitment. Output i is its successor on the
+                    // borrow path, the leader's first output, so no second
+                    // order can claim the same receive UTXO.
                     require(form == 2);
                     require(OpAuthOutputIdx(tokIn, 0) == self);
                     require(tx.inputs[tokIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(trs)));
@@ -360,15 +349,14 @@ contract KobBid(
         }
 
         // Minimum fill. A fill takes at least minFill unless it takes all the
-        // buying power left: after it, spare funds less than one base unit at
-        // the budget rate, spare < ceil((pMax + tip) / scale). The exemption
-        // is not "the bid ends" (less than one minimum fill left after the
-        // fill), or a tiny fill could end any bid funded for under two
-        // minimum fills. Every fill that creates a delivery moves
-        // deliveryCarrier of the escrow onto it, so the minimum bounds the
-        // deliveries and carriers a filler can force on the maker. The budget
-        // keeps resv per further fill: one carrier, none once the
-        // bought-custody exists.
+        // buying power left. Then spare funds less than one base unit at the
+        // budget rate, spare < ceil((pMax + tip) / scale). Leaving less than
+        // one minimum fill is not enough, or a tiny fill could end any bid
+        // funded for under two minimum fills. Every fill that creates a
+        // delivery moves deliveryCarrier of the escrow onto it, so the minimum
+        // bounds the deliveries and carriers a filler can force on the maker.
+        // The budget keeps resv for each further fill. That is one carrier,
+        // or none once the bought-custody exists.
         require(minFill > 0);
         int spare = left - resv - reserve;
         bool canContinue = spare >= quoteOf(minFill, rate, scale - 1);
