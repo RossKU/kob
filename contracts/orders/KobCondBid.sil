@@ -7,7 +7,8 @@ pragma silverscript ^0.1.0;
 // buy and an OCO. KobIfdAsk creates this order as the exit of a sell-first
 // entry. It mirrors KobCondAsk, and follows KobBid for the delivery and the
 // refund output. The KRON version is kron/KobCondBidKron.sil. The
-// specification is docs/spec/order-types.md.
+// specification is docs/spec/order-types.md, "Order types", and the trigger
+// rules are in docs/spec/matcher.md, "Triggers".
 //
 // Entries:
 //   settle(nb, tokIn, leg, ev, t, form), with n = int(nb) > 0
@@ -29,17 +30,9 @@ pragma silverscript ^0.1.0;
 // bought, see contSpk. The repeat fields parent, rptPrice, rptPre and
 // rptUntil are zero for an ordinary order.
 //
-// Delivery mode (docs/design/bid-delivery-spec.md), immutable:
-//   mode 0  new: every fill delivers a new plain UTXO of n to the maker;
-//   mode 1  accumulate: the order keeps what it buys in its bought-custody,
-//           a token UTXO owned by its covenant id (scheme 0x04) holding
-//           exactly bought. The fill that ends the order delivers bought + n
-//           to the maker as one plain UTXO;
-//   mode 2  top-up: the filler picks the form. 0 is a new plain UTXO of n,
-//           1 a new receive UTXO of n with threshold recvThreshold, and 2 a
-//           top-up of the maker's receive UTXO tokIn to its amount + n, for
-//           which the escrow leaves topupTip (<= deliveryCarrier) to the
-//           filler and moves no carrier.
+// The delivery modes in `mode` are those of KobBid, see its header and
+// docs/design/bid-delivery-spec.md. In mode 1 the fill that ends the order
+// delivers bought + n to the maker as one plain UTXO.
 //
 // Prices are in sompi per whole token, which is `scale` base units. Every
 // amount is rounded in the maker's favour, see KobAsk.quoteOf.
@@ -562,13 +555,14 @@ contract KobCondBid(
                     if (form == 1) {
                         mid = byte[](0x0100010120) + byte[](recvThreshold as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
                     } else {
-                        // Top-up. tokIn is the maker's receive UTXO, the P2SH of
-                        // the script its state is read from: owner the maker's
-                        // key, amount-threshold with a threshold of at least
-                        // recvThreshold and a canonical guard, the order's
-                        // commitment. Its state bytes [9..112) are kept, and its
-                        // KAS stays on it. Output i is its successor on the borrow
-                        // path, so no second order can claim it.
+                        // Top-up. tokIn is the maker's receive UTXO, the P2SH
+                        // of the script its state is read from. It is owned by
+                        // the maker's key, amount-threshold with a threshold
+                        // of at least recvThreshold and a canonical guard, and
+                        // carries the order's commitment. Its state bytes
+                        // [9..112) are kept, and its KAS stays on it. Output i
+                        // is its successor on the borrow path, so no second
+                        // order can claim it.
                         require(OpAuthOutputIdx(tokIn, 0) == self);
                         require(tx.inputs[tokIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(trs)));
                         byte[] rst = trs.slice(tplPrefixLen, tplPrefixLen + 112);

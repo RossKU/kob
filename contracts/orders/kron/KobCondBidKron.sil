@@ -3,12 +3,17 @@ pragma silverscript ^0.1.0;
 // KobCondBidKron: a conditional order that buys a KRON token with KAS.
 //
 // This is the KRON version of contracts/orders/KobCondBid.sil, with the same
-// legs, entries and rules. This header lists the differences.
-// contracts/orders/kron/README.md describes the family.
+// legs and the rules of its delivery mode 0. This header lists the
+// differences. contracts/orders/kron/README.md describes the family, and the
+// specification is docs/spec/order-types.md.
+//
+// Delivery. Every fill delivers a new token UTXO to the maker, so settle has
+// no form argument, and the state ends with the repeat fields. It has no
+// mode, recvThreshold, topupTip or bought, and no bought-custody exists.
 //
 // No extensionCommitment. KRON has none, so this order has neither the
-// constructor argument nor the state field, and its state is 33 B shorter.
-// The contSpk windows sit 33 B earlier.
+// constructor argument nor the state field. The contSpk windows sit 33 B
+// earlier than in KobCondBid.
 //
 // Token codec. The KRON state is 46 B, see KronState. The delivery is built
 // in that encoding, with owner = maker, id_type 3 (TYPE_DELIVERY), amount n
