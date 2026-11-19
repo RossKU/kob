@@ -110,7 +110,8 @@ pub enum Kind {
     /// Its chain requests keep failing while the cursor does not move (`rpc::multi`,
     /// `MultiNode::authority_failing`).
     Chain,
-    /// It lacks a call the indexer needs (`MultiNode::check_capabilities`). Until a restart.
+    /// It lacks a call the indexer needs (`MultiNode::check_capabilities`). It ends when the
+    /// node serves them again (`multi::recheck_lacking`).
     Capability,
 }
 
@@ -351,9 +352,14 @@ pub fn chain_failing(url: &str, node: &str, why: &str) {
 }
 
 /// `node` lacks a call the indexer needs, as `why` says. A public node is given up for another;
-/// a named node raises an alarm that lasts until a restart.
+/// a named node raises an alarm until it serves them again ([`capable`]).
 pub fn lacks(url: &str, node: &str, why: &str) {
     act(url, node, &[(Kind::Capability, Some(why.to_string()))]);
+}
+
+/// `node` serves the calls again: its [`lacks`] alarm ends.
+pub fn capable(url: &str, node: &str) {
+    act(url, node, &[(Kind::Capability, None)]);
 }
 
 /// `node` answered a chain request. That is a fine answer for a chain alarm ([`chain_failing`]).

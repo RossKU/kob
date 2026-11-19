@@ -346,6 +346,18 @@ struct PeerState {
     returning: bool,
     /// Windows in time in a row.
     clean: u32,
+    /// Dropped for a call it lacks: `(next check, checks failed since, lane proofs asked)`.
+    lacking: Option<(tokio::time::Instant, u32, bool)>,
+}
+
+/// A node dropped for a call it lacks is checked again after this, doubling while it still lacks
+/// it, up to [`LACKING_RECHECK_MAX`].
+pub const LACKING_RECHECK_FIRST: Duration = Duration::from_secs(300);
+/// The longest wait between two checks of a node dropped for a call it lacks.
+pub const LACKING_RECHECK_MAX: Duration = Duration::from_secs(2400);
+
+fn lacking_wait(failed: u32) -> Duration {
+    LACKING_RECHECK_FIRST.saturating_mul(1 << failed.min(4)).min(LACKING_RECHECK_MAX)
 }
 
 /// A node whose rate is below the best rate divided by this gets windows only when no faster node
@@ -700,9 +712,9 @@ impl NodeBoard {
     }
 
     /// Node `i` lacks a call the indexer needs. A resolver entry gives its node up. A named node
-    /// gets an alarm and is dropped from the chain roles until a restart (it still takes
-    /// submissions), unless it is the authority.
-    fn lacks(&self, i: usize, why: &str) {
+    /// gets an alarm and is dropped from the chain roles (it still takes submissions), unless it
+    /// is the authority, until it serves the calls again ([`recheck_lacking`]).
+    fn lacks(&self, i: usize, why: &str, lane_proofs: bool) {
         if let Some(node) = self.node_of(i) {
             super::judge::lacks(&self.entries[i], &node, why);
         }
@@ -714,8 +726,49 @@ impl NodeBoard {
             if p.status.dropped_reason.is_none() {
                 tracing::error!(node = %url, reason = why, "node lacks a call the indexer needs: dropped from the chain roles");
                 p.status.dropped_reason = Some(why.to_string());
+                p.lacking = Some((tokio::time::Instant::now() + lacking_wait(0), 0, lane_proofs));
             }
         })
+    }
+
+    /// The nodes dropped for a call they lack whose next check is due, with whether lane proofs
+    /// are asked.
+    fn lacking_due(&self) -> Vec<(usize, bool)> {
+        let now = tokio::time::Instant::now();
+        (0..self.peers.len())
+            .filter_map(|i| self.with(i, |p| p.lacking.filter(|(at, _, _)| *at <= now).map(|(_, _, lanes)| (i, lanes))))
+            .collect()
+    }
+
+    /// The check of node `i`, dropped for a call it lacked, found `c`. Serving them all restores
+    /// it and ends its alarm. Anything else waits for the next check, longer after each lack.
+    fn rechecked(&self, i: usize, c: &super::Capable) {
+        let url = self.url(i);
+        let restored = self.with(i, |p| {
+            let Some((_, failed, lanes)) = p.lacking else { return false };
+            match c {
+                super::Capable::Yes => {
+                    p.lacking = None;
+                    p.status.dropped_reason = None;
+                    true
+                }
+                super::Capable::Unknown(_) => {
+                    p.lacking = Some((tokio::time::Instant::now() + lacking_wait(failed), failed, lanes));
+                    false
+                }
+                super::Capable::No(why) | super::Capable::Closed(why) => {
+                    p.status.dropped_reason = Some(why.clone());
+                    p.lacking = Some((tokio::time::Instant::now() + lacking_wait(failed + 1), failed + 1, lanes));
+                    false
+                }
+            }
+        });
+        if restored {
+            tracing::info!(node = %url, "node serves the calls the indexer needs again: back in the chain roles");
+            if let Some(node) = self.node_of(i) {
+                super::judge::capable(&self.entries[i], &node);
+            }
+        }
     }
 
     /// The status of every node, as `/v1/health` shows it.
@@ -760,6 +813,18 @@ impl NodeBoard {
                 })
             })
             .collect()
+    }
+}
+
+/// The nodes dropped for a call they lacked whose check is due are checked again, each within
+/// [`CAPABILITY_TIMEOUT`] (`NodeBoard::rechecked`).
+async fn recheck_lacking<N: ChainSource>(nodes: &[Arc<N>], board: &NodeBoard) {
+    let checks = board.lacking_due().into_iter().map(|(i, lanes)| async move {
+        let c = tokio::time::timeout(CAPABILITY_TIMEOUT, nodes[i].check_capabilities(lanes)).await;
+        (i, c.unwrap_or_else(|_| super::Capable::Unknown("no answer in time".into())))
+    });
+    for (i, c) in futures_util::future::join_all(checks).await {
+        board.rechecked(i, &c);
     }
 }
 
@@ -813,6 +878,8 @@ pub struct MultiNode<N: ChainSource> {
     last_start: Mutex<Option<Hash32>>,
     /// Whether a probe of the demoted nodes runs now. Only one runs at a time.
     probing: Arc<AtomicBool>,
+    /// A check of the nodes dropped for a call they lack runs (`recheck_lacking`).
+    rechecking: Arc<AtomicBool>,
     /// The cross-check policy.
     policy: CrossCheckPolicy,
     /// Since when the authority's answers wait for a cross-checking node (`None`: vouched).
@@ -1150,6 +1217,7 @@ impl<N: ChainSource> MultiNode<N> {
             last_step: Mutex::new(None),
             last_start: Mutex::new(None),
             probing: Arc::new(AtomicBool::new(false)),
+            rechecking: Arc::new(AtomicBool::new(false)),
             policy: CrossCheckPolicy::default(),
             unvouched: Mutex::new(None),
             cross: Mutex::new(CrossCheck::single("no answer applied yet")),
@@ -1230,7 +1298,23 @@ impl<N: ChainSource> MultiNode<N> {
                     probing.store(false, Ordering::Release);
                 });
             }
+            if !self.board.lacking_due().is_empty()
+                && self.rechecking.compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed).is_ok()
+            {
+                let (nodes, board, rechecking) = (self.nodes.clone(), self.board.clone(), self.rechecking.clone());
+                rt.spawn(async move {
+                    recheck_lacking(&nodes, &board).await;
+                    rechecking.store(false, Ordering::Release);
+                });
+            }
         }
+    }
+
+    /// Checks the nodes dropped for a call they lack whose check is due, on the caller's task.
+    ///
+    /// This is for tests. The health watch runs it on a task of its own.
+    pub async fn recheck_lacking(&self) {
+        recheck_lacking(&self.nodes, &self.board).await;
     }
 
     /// Runs one health check of every node now, on the caller's task.
@@ -2416,13 +2500,13 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
                     verdict = Capable::No(format!("the chain authority {shown}: {why}"));
                 }
                 Capable::No(why) => {
-                    self.board.lacks(k, &why);
+                    self.board.lacks(k, &why, lane_proofs);
                     if k == a {
                         verdict = Capable::Unknown(format!("the public node {shown} was given up: {why}"));
                     }
                 }
                 Capable::Closed(why) if k == a => verdict = Capable::Closed(format!("the chain authority {shown}: {why}")),
-                Capable::Closed(why) => self.board.lacks(k, &why),
+                Capable::Closed(why) => self.board.lacks(k, &why, lane_proofs),
                 c if k == a => verdict = c,
                 _ => {}
             }
@@ -2994,6 +3078,43 @@ mod tests {
         let Capable::No(why) = m.check_capabilities(false).await else { panic!() };
         assert!(why.contains(ua) && why.contains("method not found"), "{why}");
         assert_eq!(m.node_stats()[0].state, "ok", "the authority is never dropped");
+    }
+
+    /// A node dropped for a call it lacks is checked again after 5 min, then after 10 min while it
+    /// still lacks it, and is back in the chain roles, its alarm ended, once it serves the calls.
+    #[tokio::test(start_paused = true)]
+    async fn a_node_dropped_for_a_call_it_lacks_is_restored_once_it_serves_it() {
+        use crate::testkit::MockNode;
+        let spec =
+            |url: &str| NodeSpec { url: url.into(), fetch: true, submit: true, connections: 1, cross_check: true, may_lead: true };
+        let (a, b) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
+        let ub = "ws://127.0.0.1:18312";
+        let m = MultiNode::new(vec![(spec("ws://127.0.0.1:18311"), a.clone()), (spec(ub), b.clone())], a.clone());
+        let alarm = || super::super::judge::alarms().iter().any(|x| x.starts_with(ub));
+        b.set_no_vspc_v2(true);
+        m.check_capabilities(false).await;
+        assert_eq!(m.node_stats()[1].state, "dropped");
+        assert!(alarm());
+        m.recheck_lacking().await;
+        assert_eq!(m.node_stats()[1].state, "dropped", "not due yet");
+        tokio::time::advance(LACKING_RECHECK_FIRST).await;
+        m.recheck_lacking().await;
+        assert_eq!(m.node_stats()[1].state, "dropped", "still lacking: the next check in 10 min");
+        b.set_no_vspc_v2(false);
+        tokio::time::advance(LACKING_RECHECK_FIRST).await;
+        m.recheck_lacking().await;
+        assert_eq!(m.node_stats()[1].state, "dropped", "backed off");
+        tokio::time::advance(LACKING_RECHECK_FIRST).await;
+        m.recheck_lacking().await;
+        let s = &m.node_stats()[1];
+        assert_eq!((s.state.as_str(), s.dropped_reason.as_deref()), ("ok", None), "{s:?}");
+        assert!(!alarm(), "the alarm ended");
+        // a lie still drops it for good: no check restores that
+        m.board.failed(1, Fault::Lie, "a hash");
+        tokio::time::advance(LACKING_RECHECK_MAX).await;
+        m.recheck_lacking().await;
+        assert_eq!(m.node_stats()[1].state, "dropped");
+        assert_eq!(lacking_wait(9), LACKING_RECHECK_MAX);
     }
 
     /// A public chain authority whose answer contradicts the store is given up for another.
