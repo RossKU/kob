@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { KobService } from '../src/service.mjs';
+import { KobService, sentNothing } from '../src/service.mjs';
 import { PRIMARY, setup } from './helpers.mjs';
 
 const TUSD = '55'.repeat(32);
@@ -156,18 +156,32 @@ test('the ledger skips a torn line and the next entry starts a new line (MCP-5)'
   assert.deepEqual(svc.ledger.entries().map((e) => e.kind), ['reserve', 'settle']);
 });
 
-test('a node rejection releases its reservation', async () => {
+test('a node that rejects the submit keeps the reservation: it may have relayed it (E-L3)', async () => {
   const t = setup({ mode: 'auto' });
   process.env.FAKE_KOB_SUBMIT_FAIL = '1';
   try {
-    const r = await new KobService(t.cfg).write('kob_place_limit', place);
+    const svc = new KobService(t.cfg);
+    const r = await svc.write('kob_place_limit', place);
     assert.equal(r.status, 'failed');
-    assert.equal(r.counted, false);
+    assert.equal(r.counted, true);
+    assert.match(r.note, /outcome is unknown/);
+    const s = await svc.status();
+    assert.equal(s.today.spentKas, '1.5005');
+    assert.equal(s.today.unknownOutcomes.length, 1);
+    assert.equal(s.today.unknownOutcomes[0].txids.length, 1, 'the planned txid, to look up');
   } finally {
     delete process.env.FAKE_KOB_SUBMIT_FAIL;
   }
-  assert.deepEqual(t.ledger().map((e) => e.kind), ['reserve', 'release']);
-  assert.equal(new KobService(t.cfg).ledger.spentOn(t.ledger()[0].day), 0n);
+  assert.deepEqual(t.ledger().map((e) => e.kind), ['reserve', 'settle']);
+  assert.equal(t.ledger()[1].outcome, 'unknown');
+});
+
+test('sentNothing: a submit error never reads as nothing sent; refusals before signing do (E-L3)', () => {
+  assert.equal(sentNothing('error: submit: node rejected the request: orphan'), false);
+  assert.equal(sentNothing('error: submit: socket: timed out'), false);
+  assert.equal(sentNothing('error: node wss://n: node rejected the request: bad address'), true, 'a read before signing');
+  assert.equal(sentNothing('error: engine validation failed (nothing submitted): x'), true);
+  assert.equal(sentNothing('error: the plan has errors: nothing signed'), true);
 });
 
 test('token create: the plan counts the carrier and both fees; the confirm sends the same funding', async () => {

@@ -499,8 +499,9 @@ export class KobService {
       const extra = this.cfg.cli.priorityFee ? ['--priority-fee'] : [];
       const r = await this.kob.exec([...built.argv, ...extra, '--yes']);
       doc = r.json;
-      // Only a refusal the CLI states came before the submit (or the node's rejection) releases the
-      // spend. A lost reply, a crash or an unreadable result counts until the UTC day rolls.
+      // Only a refusal the CLI states came before the submit releases the spend. A lost reply, a
+      // node's rejection of the submit, a crash or an unreadable result counts until the UTC day
+      // rolls.
       if (r.timedOut) { failure = 'the CLI timed out: the outcome is unknown, check kob_orders / kob_balances'; ambiguous = true; } else if (r.code !== 0) {
         failure = `exit ${r.code}: ${r.stderr || 'no output'}`;
         ambiguous = Boolean(doc?.links?.some((l) => l.status === 'submitted')) || !sentNothing(r.stderr);
@@ -574,12 +575,15 @@ export class KobService {
 
 /**
  * True when the CLI's last error line says nothing was sent: a refusal before signing or
- * submitting, a failed engine validation, or the node's explicit rejection. Anything else after
- * `--yes` started (a lost reply, a socket error) may have been sent.
+ * submitting, a failed engine validation, or a node's rejection of a read before signing.
+ * Anything else after `--yes` started (a lost reply, a socket error) may have been sent.
+ * A failed submit (`submit: ...`) may have been sent too, even when the node says it rejected
+ * the transaction: a dishonest node can relay it and answer with an error (E-L3).
  */
 export function sentNothing(stderr) {
   const lines = String(stderr ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const last = [...lines].reverse().find((l) => /^error\b/i.test(l)) ?? lines.at(-1) ?? '';
+  if (/\bsubmit:/i.test(last)) return false;
   return /nothing signed|nothing submitted|nothing sent|not signed: pass --yes|engine validation failed|node rejected the request/i.test(last);
 }
 
