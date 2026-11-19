@@ -114,6 +114,15 @@ impl RpcError {
         }
     }
 
+    /// The node's `getBlock` answer that it does not know the block (`cannot find header`, or a
+    /// `block ... not found`). Any other node error (IBD, a busy node) proves nothing.
+    pub fn is_unknown_block(&self) -> bool {
+        matches!(self, RpcError::Node(m) if classify_node_message(m) == NodeErrorKind::UnknownHash || {
+            let m = m.to_ascii_lowercase();
+            m.contains("block") && m.contains("not found")
+        })
+    }
+
     /// The node's `block <hash> is not in the selected parent chain`: the block was on its chain
     /// a moment ago and a tip reorg took it off. The node is fine.
     pub fn left_selected_chain(&self) -> bool {
@@ -154,8 +163,8 @@ pub trait ChainSource: Send + Sync + 'static {
     fn server_info(&self) -> impl Future<Output = Result<ServerInfo, RpcError>> + Send;
     /// Unspent outputs of the given addresses (needs `--utxoindex` on the node).
     fn utxos_by_addresses(&self, addresses: &[String]) -> impl Future<Output = Result<Vec<AddressUtxo>, RpcError>> + Send;
-    /// Whether the node still knows this block (header present). Transport errors are errors; a
-    /// node "not found" answer is `Ok(false)`.
+    /// Whether the node still knows this block (header present). Only a node "not found" answer
+    /// ([`RpcError::is_unknown_block`]) is `Ok(false)`; any other error is an error.
     fn block_exists(&self, hash: Hash32) -> impl Future<Output = Result<bool, RpcError>> + Send;
     /// Blue score of the node's sink (`getSinkBlueScore`): bounds a VSPC batch (`rpc::window`).
     fn sink_blue_score(&self) -> impl Future<Output = Result<u64, RpcError>> + Send;
@@ -871,7 +880,7 @@ impl ChainSource for WrpcClient {
         }
         match self.call::<Resp>("getBlock", serde_json::json!({ "hash": hash.to_hex(), "includeTransactions": false })).await {
             Ok(r) => Ok(Some(r.block.header.blue_score)),
-            Err(RpcError::Node(_)) => Ok(None),
+            Err(e) if e.is_unknown_block() => Ok(None),
             Err(e) => Err(e),
         }
     }
@@ -892,7 +901,7 @@ impl ChainSource for WrpcClient {
         }
         match self.call::<Resp>("getBlock", serde_json::json!({ "hash": hash.to_hex(), "includeTransactions": false })).await {
             Ok(r) => Ok(Some(r.block.header.daa_score)),
-            Err(RpcError::Node(_)) => Ok(None),
+            Err(e) if e.is_unknown_block() => Ok(None),
             Err(e) => Err(e),
         }
     }
@@ -953,7 +962,7 @@ impl ChainSource for WrpcClient {
     async fn block_exists(&self, hash: Hash32) -> Result<bool, RpcError> {
         match self.call_raw("getBlock", serde_json::json!({ "hash": hash.to_hex(), "includeTransactions": false })).await {
             Ok(_) => Ok(true),
-            Err(RpcError::Node(_)) => Ok(false),
+            Err(e) if e.is_unknown_block() => Ok(false),
             Err(e) => Err(e),
         }
     }
@@ -973,11 +982,7 @@ impl ChainSource for WrpcClient {
                 kaspa_consensus_core::block::Block::try_from(r.block).map(Some).map_err(|e| RpcError::Decode(format!("getBlock: {e}")))
             }
             // Only "unknown" means it does not know the block. Another node error proves nothing.
-            Err(RpcError::Node(m))
-                if m.to_ascii_lowercase().contains("not found") || classify_node_message(&m) == NodeErrorKind::UnknownHash =>
-            {
-                Ok(None)
-            }
+            Err(e) if e.is_unknown_block() => Ok(None),
             Err(e) => Err(e),
         }
     }
@@ -986,4 +991,66 @@ impl ChainSource for WrpcClient {
 /// Convenience for callers that only have a hex string.
 pub fn parse_hash(s: &str) -> Result<Hash32, crate::hex::HexError> {
     Hash32::parse(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ChainSource, Hash32, RpcError, WrpcClient, WrpcConfig};
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    /// A node whose `getBlock` answer depends on the hash's first byte: 1 is known, 2 unknown, 3
+    /// in IBD, 4 an unknown method.
+    async fn fake_node() -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((s, _)) = listener.accept().await else { return };
+                tokio::spawn(async move {
+                    let Ok(mut ws) = tokio_tungstenite::accept_async(s).await else { return };
+                    while let Some(Ok(Message::Text(t))) = ws.next().await {
+                        let req: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
+                        let hash = req["params"]["hash"].as_str().unwrap().to_string();
+                        let err = |m: String| serde_json::json!({ "id": req["id"], "error": { "message": m } });
+                        let answer = match &hash[..2] {
+                            "01" => {
+                                serde_json::json!({ "id": req["id"], "params": { "block": { "header": { "blueScore": 7, "daaScore": 9 } } } })
+                            }
+                            "02" => err(format!("cannot find header {hash}")),
+                            "03" => err("consensus is currently in a transitional ibd state".into()),
+                            _ => err("Method not found".into()),
+                        };
+                        if ws.send(Message::text(answer.to_string())).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (format!("ws://{addr}"), server)
+    }
+
+    /// Only "cannot find header" counts as an unknown block. IBD or any other node error is an
+    /// error, so the walk back of the follower does not take it for "not known" and go too deep.
+    #[tokio::test]
+    async fn only_a_not_found_answer_is_an_unknown_block() {
+        let (url, server) = fake_node().await;
+        let c = WrpcClient::new(WrpcConfig::new(url));
+        let h = |b: u8| Hash32([b; 32]);
+        assert!(c.block_exists(h(1)).await.unwrap());
+        assert!(!c.block_exists(h(2)).await.unwrap());
+        assert_eq!(c.block_blue_score(h(1)).await.unwrap(), Some(7));
+        assert_eq!(c.block_daa_score(h(1)).await.unwrap(), Some(9));
+        assert_eq!(c.block_blue_score(h(2)).await.unwrap(), None);
+        assert_eq!(c.block_daa_score(h(2)).await.unwrap(), None);
+        for b in [3, 4] {
+            assert!(matches!(c.block_exists(h(b)).await, Err(RpcError::Node(_))), "{b}");
+            assert!(c.block_blue_score(h(b)).await.is_err(), "{b}");
+            assert!(c.block_daa_score(h(b)).await.is_err(), "{b}");
+        }
+        assert!(RpcError::Node("Block 0101 not found".into()).is_unknown_block());
+        assert!(!RpcError::Transport("cannot find header x".into()).is_unknown_block());
+        server.abort();
+    }
 }
