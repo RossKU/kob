@@ -119,7 +119,7 @@ const SPENDER_GRACE_MS: u64 = 60_000;
 ///
 /// The spender of an intent the node no longer holds may yet be reported. A restart or a lag
 /// beyond the fixed grace must not fail a payment that a rival keeper executed.
-const FOLLOWER_LAG_DAA: u64 = 100;
+pub(super) const FOLLOWER_LAG_DAA: u64 = 100;
 
 /// The longest the facilitator waits for a lagging follower to report a spender.
 ///

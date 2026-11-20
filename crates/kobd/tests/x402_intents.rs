@@ -28,7 +28,7 @@ use kob_protocol::artifacts::TemplateId;
 use kob_protocol::script::p2pk_spk;
 use kob_protocol::state::{AskState, BidState, OrderState, SCHEME_COVID, SCHEME_P2PK};
 use kob_protocol::tx::{OrderUtxo, TokenUtxo, Utxo};
-use kob_x402::chain::{ChainError, ChainUtxo, ChainView, Clock, FixedClock, Outpoint, OutputStatus, SubmitError, Txid};
+use kob_x402::chain::{ChainError, ChainUtxo, ChainView, Clock, FixedClock, Outpoint, OutputStatus, SpentBy, SubmitError, Txid};
 use kob_x402::client::intent::{intent_requirements, pay_intent, IntentOptions, IntentPayment};
 use kob_x402::client::native::{native_requirements, pay_native, PayOptions};
 use kob_x402::client::retry::{pay_intent_with_retry, Built, GiveUp, ResendTransport, RetryPolicy, Sent};
@@ -78,9 +78,19 @@ struct RivalChain {
     /// `creation`: while set, no transaction shows in the mempool (an execution that left it inside a block not merged yet),
     /// and the first UTXO lookup of an output of `creation` (the intent) mines the mempool first (that block is merged).
     merge_on_intent_lookup: Mutex<Option<Txid>>,
+    /// While set, the spenders the mock chain knows are reported (`spent_by`), as the chain follower of `kobd
+    /// --executor` reports those of the outpoints it watches. Off, the view has no follower.
+    report_spends: AtomicBool,
 }
 
 impl ChainView for RivalChain {
+    fn spent_by(&self, out: &Outpoint) -> SpentBy {
+        if self.report_spends.load(Ordering::SeqCst) {
+            self.inner.spent_by(out)
+        } else {
+            SpentBy::Untracked
+        }
+    }
     fn utxos(&self, wanted: &[(Outpoint, ScriptPublicKey)]) -> Result<Vec<Option<ChainUtxo>>, ChainError> {
         let mut m = self.merge_on_intent_lookup.lock().unwrap();
         if m.is_some_and(|c| wanted.iter().any(|(o, _)| o.txid == c)) {
@@ -229,6 +239,7 @@ fn world() -> World {
         on_rival: Mutex::new(None),
         unknown_exec: Mutex::new(None),
         merge_on_intent_lookup: Mutex::new(None),
+        report_spends: AtomicBool::new(false),
     });
     let clock = Arc::new(FixedClock::new(NOW_MS));
     let ledger = Arc::new(Ledger::in_memory());
@@ -476,9 +487,11 @@ fn a_double_spent_invoice_payment_does_not_block_the_invoice() {
     w.clock.set(NOW_MS + 61_000);
     let second = w.pay_kas(&offer, &id, 1);
     assert_eq!(diag(&w.fac.pay_invoice(&id, second.clone())), "invoice_pending");
-    // the payer spends that input back to itself: the first payment can never settle and no longer blocks
+    // the payer spends that input back to itself (the follower reports it): the first payment can never settle and no
+    // longer blocks
     let f0 = &w.funds.funding[0].utxo;
-    w.chain.spend_externally(&Outpoint::new(f0.transaction_id, f0.index));
+    w.view.report_spends.store(true, Ordering::SeqCst);
+    w.chain.spend_externally_by(&Outpoint::new(f0.transaction_id, f0.index), [0xee; 32]);
     w.fac.set_settle_wait(Duration::from_secs(5));
     let r = with_miner(&w, || w.fac.pay_invoice(&id, second));
     assert!(r.success, "{r:?}");
@@ -488,6 +501,35 @@ fn a_double_spent_invoice_payment_does_not_block_the_invoice() {
     let s = w.status(&id);
     assert_eq!(s.status, InvoiceState::Paid);
     assert!(s.extra_payments.iter().any(|x| x.kind == "released" && x.transaction == e.txid));
+}
+
+/// A payment that was accepted while the facilitator did not see it (after a restart the tracker knows nothing) and whose
+/// outputs were all spent since (the merchant spent its output, the payer its change) has its inputs gone too. That is not a
+/// double spend: it keeps blocking the invoice, so the payer is not charged a second time (E-L1).
+#[test]
+fn an_accepted_payment_whose_outputs_are_spent_is_not_taken_for_a_double_spend() {
+    for follower in [false, true] {
+        let w = world();
+        w.view.report_spends.store(follower, Ordering::SeqCst);
+        let offer = w.kas_offer(KAS, MERCHANT);
+        let id = w.invoice(vec![offer.clone()], 600_000);
+        let first = w.pay_kas(&offer, &id, 0);
+        let first_tx =
+            kob_x402::safe_tx::SafeTx::parse(&first.payload.transaction, 1 << 20).unwrap().to_consensus().unwrap().tx;
+        let txid = first_tx.id().as_bytes();
+        w.fac.set_settle_wait(Duration::from_millis(50));
+        assert_eq!(diag(&w.fac.pay_invoice(&id, first)), "settlement_pending");
+        w.chain.mine(1);
+        assert!(w.chain.is_accepted(&txid));
+        for i in 0..first_tx.outputs.len() {
+            w.chain.spend_externally(&Outpoint::new(txid, i as u32));
+        }
+        w.clock.set(NOW_MS + 61_000);
+        let second = w.pay_kas(&offer, &id, 1);
+        assert_eq!(diag(&w.fac.pay_invoice(&id, second)), "invoice_pending", "follower {follower}");
+        let e = w.ledger.get(&hex(&txid)).unwrap();
+        assert_ne!(e.state, State::Failed, "follower {follower}: {:?}", e.reason);
+    }
 }
 
 #[test]
