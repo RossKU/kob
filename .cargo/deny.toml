@@ -11,6 +11,12 @@ all-features = false
 [advisories]
 yanked = "deny"
 ignore = [
+  # risc0 3.0.4 / risc0-groth16 3.0.4 / risc0-circuit-recursion 4.0.4 were yanked on crates.io on 2026-11-19. rusty-kaspa
+  # v2.1.0 pins them exactly (kaspa-txscript, kaspa-txscript-zk-sdk), so no update is possible; the locked versions still
+  # build and check out by checksum. Removed when rusty-kaspa moves to non-yanked releases.
+  { crate = "risc0-zkvm@3.0.4", reason = "yanked; pinned exactly by rusty-kaspa v2.1.0 (kaspa-txscript)" },
+  { crate = "risc0-groth16@3.0.4", reason = "yanked; pinned exactly by rusty-kaspa v2.1.0 (kaspa-txscript-zk-sdk)" },
+  { crate = "risc0-circuit-recursion@4.0.4", reason = "yanked; pinned exactly by rusty-kaspa v2.1.0 (kaspa-txscript)" },
   # tracing-subscriber 0.2.25 (ANSI escape sequences in logged input). Only via ark-relations 0.5.1 <- ark-snark /
   # ark-crypto-primitives / ark-groth16 0.5 <- risc0-groth16 3.0.4 <- kaspa-txscript-zk-sdk (rusty-kaspa v2.1.0) <-
   # vendor/silverscript. 0.2.25 is the last 0.2 release and ark-relations 0.5 requires 0.2; KOB's own logging uses
