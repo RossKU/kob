@@ -35,7 +35,7 @@ What KCC-23 itself specifies (section 3 of the spec; KOB follows it as written):
 
 The fields below are **KOB's convention**, not part of KCC-23. The first three are the ones the KCC-23 example uses; the rest are
 KOB's choice (kept short: the payload is paid for in mass). KOB writes them in this order, compact (no whitespace), leaving out
-the optional ones that are not set (the order is `name`, `symbol`, `decimals`, `description`, `image`, `image_hash`, `website`, `x`, `telegram`, `lock`):
+the optional ones that are not set (the order is `name`, `symbol`, `decimals`, `description`, `image`, `image_hash`, `website`, `x`, `telegram`, `lock`, `lock_kind`):
 
 | Field | Type | KOB writes | A KOB reader takes |
 |---|---|---|---|
@@ -49,6 +49,7 @@ the optional ones that are not set (the order is `name`, `symbol`, `decimals`, `
 | `x` | string, optional | `https://x.com/<handle>`, handle 1..=15 of `A-Z a-z 0-9 _` (the CLI and the app turn `@handle` into this) | the same rule |
 | `telegram` | string, optional | `https://t.me/<handle>`, handle 5..=32 of `A-Z a-z 0-9 _` | the same rule |
 | `lock` | string, optional | a creator lock's redeem script, 88 lowercase hex characters (*Creator lock* below) | the exact template only, else dropped; what it holds is verified against the genesis |
+| `lock_kind` | string, optional | `"auto"`: the lock opens by itself, `lock` holds its terms (`docs/spec/creator-lock-auto.md`); absent or `"manual"`: the signed lock below | another value drops the lock |
 
 * A reader takes each field on its own: a field of the wrong type or out of range is dropped (and named in the reader's
   `issues`), unknown fields are ignored, and a declaration without a usable `decimals` leaves the token's decimals undeclared.
@@ -210,6 +211,10 @@ Whether the issued tokens can be found again depends on whether the genesis name
      output (a send to oneself will do) makes it known to every indexer, because a transfer names the states it creates.
 
 ### Creator lock
+
+New locks open by themselves (`"lock_kind": "auto"`, `docs/spec/creator-lock-auto.md`): after the time anyone may
+send the release, which pays only the creator. This section is the manual lock (`--lock-manual`, web Settings
+"Manual unlock"), which needs the creator's signature; locks made before keep working that way.
 
 A creation can lock the share its creator keeps until a calendar time (web: *After creation, Lock my share until*; CLI
 `--lock-until`). No contract or template changes: the KCC-20 programs already authorise an owner of scheme `0x03`

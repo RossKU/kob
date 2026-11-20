@@ -271,6 +271,18 @@ pub enum SigPlan {
         #[serde(with = "crate::json::field")]
         key: [u8; 32],
     },
+    /// The coin of an automatic creator lock (`crate::lock_auto`): `release()` and the redeem
+    /// script of the `KobLockAuto` template for (`until`, `key`) and the lengths of `program`, the
+    /// token program of the locked tokens. Nobody signs it; the transaction's lock time is at least
+    /// `until`.
+    #[serde(rename_all = "camelCase")]
+    CreatorLockAuto {
+        #[serde(with = "crate::json::field")]
+        until: u64,
+        #[serde(with = "crate::json::field")]
+        key: [u8; 32],
+        program: TemplateId,
+    },
     /// The maker's `cancel(sig)` of an order under a retired template.
     ///
     /// Retired templates are in the cancel-only table (`crate::retired`). The redeem script is the
@@ -319,6 +331,7 @@ impl SigPlan {
             SigPlan::KronToken { signer, .. } => *signer,
             SigPlan::RetiredCancel { maker, .. } => Some(*maker),
             SigPlan::CreatorLock { key, .. } => Some(*key),
+            SigPlan::CreatorLockAuto { .. } => None,
         }
     }
 
@@ -336,6 +349,7 @@ impl SigPlan {
                 crate::retired::retired_for(retired, *t).ok()?.redeem(state).ok()
             }
             SigPlan::CreatorLock { until, key } => Some(crate::creator_lock::CreatorLock { until: *until, key: *key }.script()),
+            SigPlan::CreatorLockAuto { .. } => self.auto_lock().ok().map(|a| a.script()),
         }
     }
 
@@ -366,6 +380,7 @@ impl SigPlan {
                 crate::retired::retired_for(retired, *t)?.redeem(state).map(|_| ())
             }
             SigPlan::CreatorLock { until, key } => crate::creator_lock::CreatorLock::new(*until, *key).map(|_| ()),
+            SigPlan::CreatorLockAuto { .. } => self.auto_lock().map(|_| ()),
         }
     }
 
@@ -380,10 +395,11 @@ impl SigPlan {
             SigPlan::KronToken { template: t, state, .. } => state.spk_with(token_template(*t)),
             // An unknown actor or a malformed state gives an unspendable empty script, and `check`
             // refuses such a plan.
-            SigPlan::Router { .. } | SigPlan::RetiredCancel { .. } | SigPlan::CreatorLock { .. } => self
-                .redeem()
-                .map(|r| kaspa_txscript::pay_to_script_hash_script(&r))
-                .unwrap_or_else(|| ScriptPublicKey::new(0, Default::default())),
+            SigPlan::Router { .. } | SigPlan::RetiredCancel { .. } | SigPlan::CreatorLock { .. } | SigPlan::CreatorLockAuto { .. } => {
+                self.redeem()
+                    .map(|r| kaspa_txscript::pay_to_script_hash_script(&r))
+                    .unwrap_or_else(|| ScriptPublicKey::new(0, Default::default()))
+            }
         }
     }
 
@@ -452,6 +468,18 @@ impl SigPlan {
             SigPlan::CreatorLock { until, key } => {
                 Ok(crate::creator_lock::CreatorLock { until: *until, key: *key }.sig_script(need("creator lock")?))
             }
+            SigPlan::CreatorLockAuto { .. } => self.auto_lock()?.sig_script(),
+        }
+    }
+
+    /// The lock of a [`SigPlan::CreatorLockAuto`] (an error for any other plan, a time or key
+    /// that is no lock, or a program that is not a KCC-20 token program).
+    pub fn auto_lock(&self) -> Result<crate::lock_auto::AutoLock> {
+        match self {
+            SigPlan::CreatorLockAuto { until, key, program } => {
+                crate::lock_auto::AutoLock::new(crate::creator_lock::CreatorLock { until: *until, key: *key }, *program)
+            }
+            _ => invalid("not an automatic creator lock's coin"),
         }
     }
 }

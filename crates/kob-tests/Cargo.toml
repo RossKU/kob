@@ -224,3 +224,7 @@ path = "tests/redteam/redteam_library_tests.rs"
 [[test]]
 name = "redteam_delivery_tests"
 path = "tests/redteam/redteam_delivery_tests.rs"
+
+[[test]]
+name = "lock_auto_tests"
+path = "tests/kcc20/lock_auto_tests.rs"

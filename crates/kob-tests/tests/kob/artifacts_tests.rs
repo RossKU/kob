@@ -40,8 +40,9 @@ fn committed_artifacts_match_sources() {
     let sources = sources_with_ctor();
     // 25 since the pair phase (KobCross replaced by KobPair, KobCondPair, KobIfdPair: one template each for both sides and
     // both families of a token pair); 26 with the optional batch-leader holder (prototypes/kcc20/p2/KCC20Opt, not issued); 22
-    // without the four v1 orders (AskOrder, BidOrder, AskOrderKron, BidOrderKron, removed); 23 with KobCurveAsk
-    assert_eq!(sources.len(), 23, "expected 23 contract sources, found {sources:?}");
+    // without the four v1 orders (AskOrder, BidOrder, AskOrderKron, BidOrderKron, removed); 23 with KobCurveAsk; 24 with
+    // KobLockAuto (the automatic creator lock)
+    assert_eq!(sources.len(), 24, "expected 24 contract sources, found {sources:?}");
     for src in sources {
         let name = src.file_stem().unwrap().to_string_lossy().to_string();
         let ctor_path = src.with_extension("ctor.json");

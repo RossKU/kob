@@ -16,7 +16,7 @@ use kaspa_consensus_core::Hash;
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::build::TokenRef;
 use kob_protocol::creator_lock::{
-    build_lock_coin, build_unlock, verify_genesis_lock, CreatorLock, LockCoin, UnlockCreatorLock, LOCK_BUDGET, LOCK_COIN,
+    build_lock_coin, build_unlock, verify_genesis_lock, CreatorLock, LockCoin, LockKind, UnlockCreatorLock, LOCK_BUDGET, LOCK_COIN,
 };
 use kob_protocol::issue::{build_creation, CreationPlan, FundingUtxo, Holder, IssueProgram, IssueSpec};
 use kob_protocol::kcc23::TokenDeclaration;
@@ -145,10 +145,10 @@ fn the_genesis_declares_the_lock_and_a_reader_verifies_what_it_holds() {
         // another lock (one millisecond later, or another key) holds nothing in this genesis
         let g = &l.plan.genesis;
         let later = CreatorLock::new(UNTIL + 1, key()).unwrap();
-        assert!(verify_genesis_lock(&g.tx, g.covenant_id, &later).is_err());
+        assert!(verify_genesis_lock(&g.tx, g.covenant_id, &later, LockKind::Manual).is_err());
         let other = CreatorLock::new(UNTIL, pubkey_of(&OTHER).unwrap()).unwrap();
-        assert!(verify_genesis_lock(&g.tx, g.covenant_id, &other).is_err());
-        assert!(verify_genesis_lock(&g.tx, Hash::from_bytes([9; 32]), &l.lock).is_err());
+        assert!(verify_genesis_lock(&g.tx, g.covenant_id, &other, LockKind::Manual).is_err());
+        assert!(verify_genesis_lock(&g.tx, Hash::from_bytes([9; 32]), &l.lock, LockKind::Manual).is_err());
     }
 }
 
@@ -178,14 +178,14 @@ fn an_output_the_token_id_does_not_bind_is_not_counted() {
         let mut more = own.clone();
         more.push(extra.encode());
         tx.payload = kob_protocol::genesis_states::encode(&more).unwrap();
-        assert!(verify_genesis_lock(&tx, g.covenant_id, &l.lock).is_err());
+        assert!(verify_genesis_lock(&tx, g.covenant_id, &l.lock, LockKind::Manual).is_err());
         let v = kob_protocol::kcc23::LaunchProof::of(&l.plan.prep.tx, &tx, g.covenant_id).verify().unwrap();
         assert!(v.lock.is_none() && v.token.issues.iter().any(|i| i.starts_with("lock:")), "{:?}", v.token.issues);
         // in place of the free holder's state: only the bound lock counts, and the supply is unknown
         let mut swapped = own.clone();
         swapped[0] = extra.encode();
         tx.payload = kob_protocol::genesis_states::encode(&swapped).unwrap();
-        let lock = verify_genesis_lock(&tx, g.covenant_id, &l.lock).unwrap();
+        let lock = verify_genesis_lock(&tx, g.covenant_id, &l.lock, LockKind::Manual).unwrap();
         assert_eq!((lock.amount, lock.outputs.iter().map(|o| o.index).collect::<Vec<_>>(), lock.supply), (LOCKED, vec![1], None));
         let v = kob_protocol::kcc23::LaunchProof::of(&l.plan.prep.tx, &tx, g.covenant_id).verify().unwrap();
         assert_eq!(v.lock.map(|x| (x.amount, x.supply)), Some((LOCKED, None)));

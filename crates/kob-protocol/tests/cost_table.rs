@@ -29,6 +29,7 @@ fn input_kind(p: &SigPlan) -> String {
         SigPlan::Router { actor, entry, .. } => format!("router.{actor}.{entry}"),
         SigPlan::RetiredCancel { template, .. } => format!("{}.cancel(retired)", template.name()),
         SigPlan::CreatorLock { .. } => "creator-lock".into(),
+        SigPlan::CreatorLockAuto { .. } => "creator-lock-auto".into(),
     }
 }
 
