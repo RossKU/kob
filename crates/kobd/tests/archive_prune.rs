@@ -82,6 +82,7 @@ fn router(path: &Path, node_daa: u64) -> axum::Router {
         lag_alarm_hours: vec![1],
         min_order_value_sompi: 1,
         logo: None,
+        votes: None,
         price: None,
     })
 }

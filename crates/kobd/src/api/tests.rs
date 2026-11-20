@@ -73,6 +73,7 @@ fn env(tweak: impl FnOnce(&mut ApiConfig)) -> Env {
         lag_alarm_hours: vec![1, 6, 12, 24],
         min_order_value_sompi: 100_000_000,
         logo: None,
+        votes: None,
         price: None,
     };
     Env { _dir: dir, w, state }
@@ -2698,4 +2699,186 @@ async fn creator_locks_are_listed_by_key() {
     assert_eq!(crate::indexer::kcc23::backfill_locks(&e.w).unwrap(), Some(1));
     assert_eq!(crate::indexer::kcc23::backfill_locks(&e.w).unwrap(), None);
     assert_eq!(page("").await["items"][0]["covenant_id"], covs[0].to_hex());
+}
+
+// Logo votes.
+
+/// 2026-11-20 12:00 UTC, the clock of the vote service in these tests.
+const VOTE_NOW: i64 = 1_795_176_000_000;
+const VOTE_DAY: &str = "2026-11-20";
+
+async fn vote_post(app: &Router, body: &str, from: &str, headers: &[(&str, &str)]) -> (StatusCode, HeaderMap, Value) {
+    let mut req = Request::builder().method("POST").uri("/v1/logo-votes").header("content-type", "application/json");
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let mut req = req.body(Body::from(body.to_string())).unwrap();
+    req.extensions_mut().insert(peer(from));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let (parts, body) = resp.into_parts();
+    let bytes = body.collect().await.unwrap().to_bytes();
+    (parts.status, parts.headers, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+fn vote_json(b: &crate::logo_votes::Ballot) -> String {
+    serde_json::json!({
+        "covenant_id": b.covenant_id.to_hex(),
+        "vote": b.vote.as_str(),
+        "address": b.address,
+        "day": b.day,
+        "nonce": b.nonce,
+        "signature": hex::encode(&b.signature),
+    })
+    .to_string()
+}
+
+/// A signed vote of account `n` (logo_votes::testing) on token `[id; 32]`, with 8 bits of work.
+fn signed_vote(n: u8, id: u8, vote: crate::logo_votes::Vote) -> crate::logo_votes::Ballot {
+    crate::logo_votes::testing::ballot(n, Hash32([id; 32]), vote, VOTE_DAY, 8)
+}
+
+fn votes_env(cfg: crate::config::LogoVotesConfig, tweak: impl FnOnce(&mut ApiConfig)) -> (Env, ApiState) {
+    let e = env(tweak);
+    let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
+    // tokens 1..=5 are indexed; accounts 1..=9 have two days of KOB history
+    for n in 1..=5u8 {
+        conn.execute(
+            "INSERT INTO kcc23_declarations (covenant_id, proof, preparation_txid, genesis_txid, genesis_block, genesis_daa) \
+             VALUES (?1, 'x', zeroblob(32), zeroblob(32), 0, 0)",
+            [&[n; 32][..]],
+        )
+        .unwrap();
+    }
+    for n in 1..=9u8 {
+        crate::logo_votes::testing::give_history(&conn, &crate::logo_votes::testing::account(n).1, 0, 2 * 864_000, 0x40 + n);
+    }
+    let votes = Arc::new(crate::logo_votes::LogoVotes::with_connection(conn, "testnet-10", cfg, 10, 64, Box::new(|| VOTE_NOW)));
+    let mut state = e.state.clone();
+    state.votes = Some(votes);
+    (e, state)
+}
+
+fn votes_on() -> crate::config::LogoVotesConfig {
+    crate::config::LogoVotesConfig { enabled: true, pow_bits: 8, ..Default::default() }
+}
+
+#[tokio::test]
+async fn vote_routes_are_absent_while_the_feature_is_off() {
+    let e = env(|_| {});
+    let app = router(e.state.clone());
+    assert_eq!(get(&app, "/v1/logo-votes").await.0, StatusCode::NOT_FOUND);
+    let b = signed_vote(1, 1, crate::logo_votes::Vote::Up);
+    assert_eq!(vote_post(&app, &vote_json(&b), "10.0.0.1", &[]).await.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn votes_are_counted_and_the_totals_name_no_voter() {
+    use crate::logo_votes::Vote::{Down, Up};
+    let (_e, state) = votes_env(votes_on(), |_| {});
+    let app = router(state);
+    let (s, hd, v) = get_from(&app, "/v1/logo-votes", "127.0.0.1", &[]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(hd.get("cache-control").unwrap(), "public, max-age=5");
+    assert_eq!((v["logos"].clone(), v["pow_bits"].as_i64(), v["min_voters"].as_i64()), (serde_json::json!([]), Some(8), Some(3)));
+    let (s, _, v) = vote_post(&app, &vote_json(&signed_vote(1, 2, Down)), "10.0.0.1", &[]).await;
+    assert_eq!((s, v), (StatusCode::OK, serde_json::json!({"result": "counted", "covenant_id": h(2), "up": 0, "down": 1})));
+    vote_post(&app, &vote_json(&signed_vote(2, 2, Down)), "10.0.0.2", &[]).await;
+    let (s, _, v) = vote_post(&app, &vote_json(&signed_vote(3, 2, Up)), "10.0.0.3", &[]).await;
+    assert_eq!((s, v["up"].as_i64(), v["down"].as_i64()), (StatusCode::OK, Some(1), Some(2)));
+    // the same vote again: unchanged
+    let (s, _, v) = vote_post(&app, &vote_json(&signed_vote(3, 2, Up)), "10.0.0.3", &[]).await;
+    assert_eq!((s, v["result"].as_str()), (StatusCode::OK, Some("unchanged")));
+    // the vote dropped the cached totals: three voters, net -1, hidden by default
+    let (_, _, v) = get_from(&app, "/v1/logo-votes", "127.0.0.1", &[]).await;
+    assert_eq!(v["logos"], serde_json::json!([{"covenant_id": h(2), "up": 1, "down": 2}]));
+    assert_eq!(v["hidden"], serde_json::json!([h(2)]));
+    let text = v.to_string();
+    for n in 1..=3 {
+        assert!(!text.contains(&crate::logo_votes::testing::account(n).2), "no voter address in the totals");
+    }
+    // another logo the same day: too soon, with the wait
+    let (s, hd, v) = vote_post(&app, &vote_json(&signed_vote(1, 3, Up)), "10.0.0.1", &[]).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("too_soon")));
+    assert_eq!(hd.get("retry-after").unwrap(), "86400");
+}
+
+#[tokio::test]
+async fn bad_votes_are_refused_with_their_reason() {
+    use crate::logo_votes::Vote::Up;
+    let (_e, state) = votes_env(crate::config::LogoVotesConfig { origins: vec!["https://kob.example".into()], ..votes_on() }, |_| {});
+    let app = router(state);
+    let code = |v: &Value| v["error"]["code"].as_str().unwrap_or("").to_string();
+    let good = signed_vote(1, 1, Up);
+    // a bad signature
+    let mut b = good.clone();
+    b.signature[5] ^= 1;
+    let (s, _, v) = vote_post(&app, &vote_json(&b), "10.0.0.1", &[]).await;
+    assert_eq!((s, code(&v)), (StatusCode::BAD_REQUEST, "bad_signature".into()));
+    // the signature presented for another address
+    let mut b = good.clone();
+    b.address = crate::logo_votes::testing::account(2).2;
+    b.nonce = crate::logo_votes::testing::solve("testnet-10", &b.covenant_id, &b.address, VOTE_DAY, 8);
+    assert_eq!(code(&vote_post(&app, &vote_json(&b), "10.0.0.1", &[]).await.2), "bad_signature");
+    // no work
+    let mut b = good.clone();
+    b.nonce = (0u64..)
+        .map(|n| n.to_string())
+        .find(|n| !crate::logo_votes::pow_ok(&crate::logo_votes::pow_input("testnet-10", &b.covenant_id, &b.address, VOTE_DAY, n), 8))
+        .unwrap();
+    assert_eq!(code(&vote_post(&app, &vote_json(&b), "10.0.0.1", &[]).await.2), "bad_pow");
+    // an address without history
+    let (s, _, v) = vote_post(&app, &vote_json(&signed_vote(30, 1, Up)), "10.0.0.1", &[]).await;
+    assert_eq!((s, code(&v)), (StatusCode::FORBIDDEN, "no_history".into()));
+    // an unknown token
+    assert_eq!(vote_post(&app, &vote_json(&signed_vote(1, 9, Up)), "10.0.0.1", &[]).await.0, StatusCode::NOT_FOUND);
+    // a mainnet address on testnet
+    let mut b = good.clone();
+    b.address = kaspa_addresses::Address::new(
+        kaspa_addresses::Prefix::Mainnet,
+        kaspa_addresses::Version::PubKey,
+        &crate::logo_votes::testing::account(1).1,
+    )
+    .to_string();
+    assert_eq!(code(&vote_post(&app, &vote_json(&b), "10.0.0.1", &[]).await.2), "unsupported_address");
+    // the body's shape, the media type and the origin
+    assert_eq!(vote_post(&app, "{\"covenant_id\":1}", "10.0.0.1", &[]).await.0, StatusCode::BAD_REQUEST);
+    let mut odd = serde_json::from_str::<Value>(&vote_json(&good)).unwrap();
+    odd["extra"] = "x".into();
+    assert_eq!(vote_post(&app, &odd.to_string(), "10.0.0.1", &[]).await.0, StatusCode::BAD_REQUEST);
+    odd = serde_json::from_str::<Value>(&vote_json(&good)).unwrap();
+    odd["nonce"] = "-1".into();
+    assert_eq!(vote_post(&app, &odd.to_string(), "10.0.0.1", &[]).await.0, StatusCode::BAD_REQUEST);
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/v1/logo-votes")
+        .header("content-type", "text/plain")
+        .body(Body::from(vote_json(&good)))
+        .unwrap();
+    req.extensions_mut().insert(peer("10.0.0.1"));
+    assert_eq!(app.clone().oneshot(req).await.unwrap().status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let (s, _, v) = vote_post(&app, &vote_json(&good), "10.0.0.1", &[("origin", "https://evil.example")]).await;
+    assert_eq!((s, code(&v)), (StatusCode::FORBIDDEN, "forbidden_origin".into()));
+    // nothing so far was counted; the good vote from the app's page is
+    let (s, _, v) = vote_post(&app, &vote_json(&good), "10.0.0.1", &[("origin", "https://kob.example")]).await;
+    assert_eq!((s, v["result"].as_str()), (StatusCode::OK, Some("counted")));
+}
+
+#[tokio::test]
+async fn a_vote_costs_the_heavy_route_weight_and_the_client_hour_bounds_votes() {
+    use crate::logo_votes::Vote::Up;
+    let (_e, state) = votes_env(crate::config::LogoVotesConfig { per_client_per_hour: 1, ..votes_on() }, |c| {
+        c.rate_limit.per_ip_burst = 10;
+        c.rate_limit.per_ip_rps = 0.001;
+        c.rate_limit.heavy_route_cost = 5;
+    });
+    let app = router(state);
+    assert_eq!(vote_post(&app, &vote_json(&signed_vote(1, 1, Up)), "10.0.0.7", &[]).await.0, StatusCode::OK);
+    // the second vote of this client in the hour is refused by the vote limit, and it spent the
+    // last 5 tokens of the bucket
+    let (s, _, v) = vote_post(&app, &vote_json(&signed_vote(2, 1, Up)), "10.0.0.7", &[]).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited")));
+    // the bucket is empty: even a light read is refused now
+    assert_eq!(get_from(&app, "/v1/health", "10.0.0.7", &[]).await.0, StatusCode::TOO_MANY_REQUESTS);
+    // another client votes
+    assert_eq!(vote_post(&app, &vote_json(&signed_vote(2, 1, Up)), "10.0.0.8", &[]).await.0, StatusCode::OK);
 }
