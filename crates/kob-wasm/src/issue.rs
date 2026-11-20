@@ -121,7 +121,9 @@ struct IssueRequest {
     curve: Option<CurveJson>,
     /// A creator lock (`kob_protocol::creator_lock`): holder `holder` becomes the lock's (owner
     /// scheme 0x03, its P2SH hash, borrow disabled), opening at `until` (unix ms) to the owner of
-    /// `funding[0]`; the declaration carries it as `lock`.
+    /// `funding[0]`; the declaration carries it as `lock`. `kind` `auto` (`kob_protocol::lock_auto`)
+    /// opens it by itself and adds the lock coin to the genesis; `manual` (the default) needs the
+    /// key's signature.
     #[serde(default)]
     lock: Option<LockJson>,
 }
@@ -133,6 +135,8 @@ struct LockJson {
     holder: usize,
     #[serde(with = "json::field")]
     until: u64,
+    #[serde(default)]
+    kind: kob_protocol::creator_lock::LockKind,
 }
 
 /// The creator lock a creation declares, and the holder it owns.
@@ -146,6 +150,9 @@ struct LockOut {
     #[serde(with = "json::field")]
     authority: [u8; 32],
     holder: u32,
+    kind: kob_protocol::creator_lock::LockKind,
+    /// An automatic lock's coin: the genesis output paying the lock's address.
+    coin_output: Option<u32>,
 }
 
 /// The curve of an `IssueRequest`: its table and terms. Token fields, `total` and `amountLeft` come from the genesis.
@@ -403,11 +410,14 @@ fn to_spec(r: &IssueRequest, fee_rate: u64) -> R<IssueSpec> {
         if h.owner_scheme != issue::SCHEME_P2PK_SCHNORR || h.owner != key {
             return Err("invalid parameter: the creator lock takes a holder of the funding key (owner scheme 0)".into());
         }
-        h.owner = lock.authority();
+        spec.lock = Some(lock);
+        spec.lock_kind = l.kind;
+        let authority = spec.lock_authority().map_err(|e| format!("invalid parameter: {e}"))?.expect("a lock");
+        let h = spec.holders.get_mut(l.holder).expect("checked above");
+        h.owner = authority;
         h.owner_scheme = issue::SCHEME_P2SH;
         h.borrow_scheme = 0;
         h.borrow_guard = [0; 32];
-        spec.lock = Some(lock);
     }
     Ok(spec)
 }
@@ -545,11 +555,20 @@ pub fn issue(spec_json: &str) -> R<String> {
         carrier: g.tx.outputs[c.output].value,
         state: AnyState::KobCurveAsk(c.state.clone()),
     });
-    let lock = spec.lock.map(|l| LockOut {
-        info: l,
-        script: l.script(),
-        authority: l.authority(),
-        holder: req.lock.as_ref().map(|x| x.holder as u32).unwrap_or(0),
+    let auto = spec.lock.and_then(|l| kob_protocol::lock_auto::AutoLock::new(l, spec.program.template_id()).ok());
+    let lock = spec.lock.map(|l| {
+        let auto = auto.filter(|_| spec.lock_kind == kob_protocol::creator_lock::LockKind::Auto);
+        LockOut {
+            info: l,
+            script: auto.map_or_else(|| l.script(), |a| a.script()),
+            authority: auto.map_or_else(|| l.authority(), |a| a.authority()),
+            holder: req.lock.as_ref().map(|x| x.holder as u32).unwrap_or(0),
+            kind: spec.lock_kind,
+            coin_output: auto.and_then(|a| {
+                let spk = a.spk();
+                g.tx.outputs.iter().position(|o| o.covenant.is_none() && o.script_public_key == spk).map(|k| k as u32)
+            }),
+        }
     });
     let result = IssueResult { prep, built, declaration, token, docs, curve, lock, warnings: plan.warnings().to_vec() };
     serde_json::to_string(&result).map_err(|e| e.to_string())

@@ -1157,9 +1157,11 @@ pub mod api {
         crate::issue::issue_limits()
     }
     /// A creator lock (`kob_protocol::creator_lock`) from `{until, key}` or `{script}` (hex; refused
-    /// unless it is exactly the template): `{until, key, script, authority, scriptPublicKey}`.
+    /// unless it is exactly the template): `{until, key, kind, script, authority, scriptPublicKey}`.
+    /// With `kind: "auto"` and `program` (a KCC-20 token program) it is the automatic lock of those
+    /// terms (`kob_protocol::lock_auto`): the `KobLockAuto` script, its owner and its address.
     pub fn creator_lock(request: &str) -> R<String> {
-        use kob_protocol::creator_lock::CreatorLock;
+        use kob_protocol::creator_lock::{CreatorLock, LockKind};
         let v: serde_json::Value = parse("request", request)?;
         let lock = match v.get("script").and_then(|s| s.as_str()) {
             Some(s) => CreatorLock::parse_hex(s).ok_or("not a creator lock script")?,
@@ -1168,13 +1170,40 @@ pub mod api {
                 CreatorLock::new(l.until, l.key).map_err(|e| e.to_string())?
             }
         };
+        let kind: LockKind = match v.get("kind") {
+            None | Some(serde_json::Value::Null) => LockKind::Manual,
+            Some(k) => serde_json::from_value(k.clone()).map_err(|e| format!("kind: {e}"))?,
+        };
+        let (script, authority, spk) = match kind {
+            LockKind::Manual => (lock.script(), lock.authority(), lock.spk()),
+            LockKind::Auto => {
+                let program: kob_protocol::artifacts::TemplateId =
+                    serde_json::from_value(v.get("program").cloned().ok_or("an automatic lock needs its token program")?)
+                        .map_err(|e| format!("program: {e}"))?;
+                let a = kob_protocol::lock_auto::AutoLock::new(lock, program).map_err(|e| e.to_string())?;
+                (a.script(), a.authority(), a.spk())
+            }
+        };
         out(&serde_json::json!({
             "until": lock.until.to_string(),
             "key": to_hex(&lock.key),
-            "script": lock.script_hex(),
-            "authority": to_hex(&lock.authority()),
-            "scriptPublicKey": tx::spk_to_string(&lock.spk()),
+            "kind": kind.name(),
+            "terms": lock.script_hex(),
+            "script": to_hex(&script),
+            "authority": to_hex(&authority),
+            "scriptPublicKey": tx::spk_to_string(&spk),
         }))
+    }
+    /// The release of an automatic creator lock (`kob_protocol::lock_auto::ReleaseAutoLock`): a
+    /// `BuiltTx` nobody signs but a keeper input. With `ownKeys`, the keeper input must be one of them.
+    pub fn build_release(request: &str) -> R<String> {
+        let (r, own): (kob_protocol::lock_auto::ReleaseAutoLock, _) = with_own_keys(request)?;
+        if let (Some(own), Some(k)) = (&own, &r.keeper) {
+            if !own.contains(&k.pubkey) {
+                return Err(format!("keeper input key {} is not one of the wallet keys", to_hex(&k.pubkey)));
+            }
+        }
+        out(&kob_protocol::lock_auto::build_release(&r, &budget::lookup).map_err(|e| e.to_string())?)
     }
     /// The KAS output that authorises a creator lock's unlock (`kob_protocol::creator_lock::LockCoin`).
     /// With `ownKeys`, the change key must be one of them.
@@ -1499,6 +1528,12 @@ pub fn build_lock_coin(request: &str) -> Result<String, JsError> {
 #[wasm_bindgen(js_name = buildUnlock)]
 pub fn build_unlock(request: &str) -> Result<String, JsError> {
     js(api::build_unlock(request))
+}
+
+/// An automatic creator lock's release: a `BuiltTx` (lock time = the lock's time; nobody signs).
+#[wasm_bindgen(js_name = buildRelease)]
+pub fn build_release(request: &str) -> Result<String, JsError> {
+    js(api::build_release(request))
 }
 
 #[wasm_bindgen(js_name = kcc23Verify)]
