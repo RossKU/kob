@@ -100,7 +100,7 @@ export function combineBalances(o: {
    */
   programs?: ReadonlyMap<Hex, TokenProgram>;
   /** What the wallet's creator locks hold, per token. A token held only so still has its row. */
-  locked?: readonly { token: Hex; amount: bigint; until: bigint }[];
+  locked?: readonly { token: Hex; amount: bigint; until: bigint; kind?: 'manual' | 'auto' }[];
 }): CombinedBalances {
   // The separate stray list is authoritative. Snapshots, resolved from a node, never know strays.
   const noStrays = o.liveOrders.map((v) => ('covenant_id' in v ? { ...v, strays: undefined } : { ...v, strays: [] }));
@@ -118,7 +118,7 @@ export function combineBalances(o: {
     const cur = by.get(l.token) ?? { token: l.token, free: 0n, notSpendable: 0n, escrowed: 0n, bought: 0n, boughtOrders: 0, strays: 0n, kasLocked: 0n, kasEscrow: 0n, kasCarriers: 0n, orderCount: 0 };
     // One lock per token, because its declaration names one. The earliest time stands for several.
     const was = cur.locked;
-    by.set(l.token, { ...cur, locked: { amount: (was?.amount ?? 0n) + l.amount, until: was && was.until < l.until ? was.until : l.until } });
+    by.set(l.token, { ...cur, locked: { amount: (was?.amount ?? 0n) + l.amount, until: was && was.until < l.until ? was.until : l.until, kind: was?.kind === 'manual' || l.kind === 'manual' ? 'manual' : (l.kind ?? 'manual') } });
   }
   const tokens = [...by.values()].filter((b) => b.free > 0n || b.notSpendable > 0n || b.escrowed > 0n || b.bought > 0n || b.strays > 0n || b.kasLocked > 0n || b.orderCount > 0 || (b.locked?.amount ?? 0n) > 0n).sort((a, b) => (a.token < b.token ? -1 : a.token > b.token ? 1 : 0));
   const kas = kasBalanceSummary(o.freeKas, tokens);

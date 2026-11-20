@@ -12,7 +12,7 @@ import { pendingSpends } from '../../app/pending-spends';
 import { t } from '../../i18n';
 import { PlainError } from '../../i18n/build-error';
 import type { CancelPlan } from '../../kob/cancel';
-import { LOCK_COIN, buildLockCoin, buildUnlock, creatorLock, type CreatorLockInfo } from '../../kob/creator-lock';
+import { LOCK_COIN, buildLockCoin, buildRelease, buildUnlock, creatorLock, type CreatorLockInfo } from '../../kob/creator-lock';
 import { pickFor } from '../../kob/fee-policy';
 import { KobError } from '../../kob/wasm';
 import { TOKEN_PROGRAMS } from '../../kob/programs.generated';
@@ -120,4 +120,31 @@ export async function planUnlock(s: Services, pubkey: Hex, h: LockedHolding, tic
       return unlockStep({ transactionId: got.transactionId, index: got.index, amount: got.amount, blockDaaScore: got.blockDaaScore });
     },
   };
+}
+
+/**
+ * Plans the release of an automatic creator lock `h` (kob/creator-lock.ts `buildRelease`): one step
+ * that spends the lock's coin and the locked genesis output and pays both to the lock's key. Nobody
+ * signs it, so any connected wallet sends it (the send skips the wallet's approval when nothing is
+ * to be signed, and every node and decoder check still runs). The node takes it once its past median
+ * time is past the lock's time, which is read first, as for Unlock.
+ */
+export async function planRelease(s: Services, _pubkey: Hex, h: LockedHolding, ticker: string): Promise<UnlockFlow> {
+  if (h.kind !== 'auto' || !h.coin) throw new PlainError(t('orders.release.notAuto'));
+  const median = s.node.getPastMedianTime ? await s.node.getPastMedianTime().catch(() => null) : null;
+  if (median !== null && median <= h.until) throw new PlainError(t('orders.unlock.notOpen', { minutes: String(minutesBefore(h.until, median)) }));
+  // the locked genesis output: the coin's transaction (tokens sent to the lock later stay there)
+  const tokens = h.utxos.find((u) => u.transactionId === h.coin!.transactionId);
+  if (!tokens) throw new PlainError(t('orders.release.gone'));
+  const fee = { feeRate: pickFor(await readFees(s), 'normal').rate.toString() };
+  const req = { token: { covenantId: h.token, program: h.program }, lock: { until: h.until.toString(), key: h.key }, tokens, coin: h.coin };
+  let built: BuiltTx;
+  try {
+    built = buildRelease(s.kob, { ...req, fee });
+  } catch (e) {
+    // the coin pays at most MAX_TAKE: a busy network's rate may ask more, so the relay floor is tried
+    if (!(e instanceof KobError)) throw e;
+    built = buildRelease(s.kob, req);
+  }
+  return { steps: [{ title: t('orders.release.step'), plan: planOf(built), spends: [], toast: t('orders.release.submitted', { ticker }) }] };
 }
