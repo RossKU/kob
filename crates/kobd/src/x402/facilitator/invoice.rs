@@ -45,7 +45,7 @@ use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use kob_x402::chain::{ChainError, Outpoint, OutputStatus, SpentBy};
+use kob_x402::chain::{ChainError, Outpoint, OutputStatus, SpentBy, Tracked};
 use kob_x402::common::iso_from_ms;
 use kob_x402::error::{Diag, Reason, Result, X402Error};
 use kob_x402::invoice::{ExtraPayment, Invoice, InvoiceAttempt, InvoicePayment, InvoiceState, InvoiceStatus};
@@ -699,7 +699,28 @@ impl Facilitator {
         // The payer's funding input is one of them: still unspent, it is listed here. An output of
         // the transaction itself (its change) would mean it was accepted.
         let consumed: HashSet<Outpoint> = e.consumed_outpoints().into_iter().collect();
-        Ok(!self.chain.utxos_of(&spk)?.iter().any(|(o, _)| consumed.contains(o) || o.txid == txid))
+        if self.chain.utxos_of(&spk)?.iter().any(|(o, _)| consumed.contains(o) || o.txid == txid) {
+            return Ok(false);
+        }
+        // Its inputs are gone. That alone does not show another transaction spent them: the
+        // payment itself may have been accepted (after a restart the tracker does not know it)
+        // with no change and its merchant output spent since. Releasing it then would let the
+        // payer be charged twice (E-L1). So it is failed only on evidence of another spender.
+        for op in &consumed {
+            match self.chain.spent_by(op) {
+                SpentBy::Spent { txid: by, .. } if by == txid => return Ok(false),
+                SpentBy::Spent { .. } => return Ok(true),
+                SpentBy::Unspent | SpentBy::Untracked => {}
+            }
+        }
+        // Or when the acceptance tracker has followed the transaction since before it could reach
+        // the node (the entry was made in this process, and each submit tracks it first) and the
+        // follower is caught up, yet saw no acceptance.
+        let caught_up = match (self.chain.follower_daa(), self.chain.virtual_daa_score()) {
+            (Some(f), Ok(v)) => f.saturating_add(super::intent::FOLLOWER_LAG_DAA) >= v,
+            _ => false,
+        };
+        Ok(e.created_ms >= self.started_ms && caught_up && matches!(self.chain.tracked(&txid), Tracked::NotAccepted))
     }
 
     /// Fails an `ambiguous` direct payment the node does not know, which releases its outpoints.

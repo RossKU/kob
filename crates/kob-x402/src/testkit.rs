@@ -212,6 +212,15 @@ impl MockChain {
         self.state.lock().unwrap().utxos.remove(op);
     }
 
+    /// Spends `op` outside the mock by the transaction `by`, as [`Self::spend_externally`] does, and reports
+    /// that spender (with no outputs) through [`ChainView::spent_by`], as a chain follower would.
+    pub fn spend_externally_by(&self, op: &Outpoint, by: Txid) {
+        let mut s = self.state.lock().unwrap();
+        s.utxos.remove(op);
+        let daa = s.daa;
+        s.spenders.insert(*op, (by, daa, 0, vec![], vec![]));
+    }
+
     /// Advances the virtual DAA score.
     pub fn advance_daa(&self, n: u64) {
         self.state.lock().unwrap().daa += n;

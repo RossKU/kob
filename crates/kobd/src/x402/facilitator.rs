@@ -493,6 +493,9 @@ pub struct Facilitator {
     /// A payment of a paid, expired or full invoice is verified, for the evidence it leaves, at
     /// most [`REFUSED_VERIFY_BURST`] times per [`REFUSED_VERIFY_WINDOW_MS`] per invoice.
     refused_gate: Mutex<HashMap<String, (u64, u32)>>,
+    /// When this facilitator was made (unix ms). The acceptance tracker follows only what this
+    /// process tracked, so an entry made earlier may have been accepted unseen.
+    started_ms: u64,
 }
 
 fn kind_str(k: PaymentKind) -> &'static str {
@@ -541,6 +544,7 @@ impl Facilitator {
         ledger: Arc<Ledger>,
         config: FacilitatorConfig,
     ) -> Facilitator {
+        let started_ms = clock.now_ms();
         Facilitator {
             policy,
             chain,
@@ -561,6 +565,7 @@ impl Facilitator {
             node_probing: Mutex::new(()),
             verified: Mutex::new(VerifiedMemo::default()),
             refused_gate: Mutex::new(HashMap::new()),
+            started_ms,
         }
     }
 
