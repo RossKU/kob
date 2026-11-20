@@ -94,6 +94,13 @@ pub fn decode(built: &BuiltTx, me: &[u8; 32], units: &Units) -> Decoded {
                 }
                 format!("in  #{i}  creator lock coin of key {} (opens at {until} ms) {}", show_id(key, ""), kas(value))
             }
+            SigPlan::CreatorLockAuto { until, key, .. } => {
+                format!(
+                    "in  #{i}  automatic creator lock coin of key {} (opens at {until} ms, back to the key) {}",
+                    show_id(key, ""),
+                    kas(value)
+                )
+            }
             SigPlan::Entry { template, entry, .. } => format!(
                 "in  #{i}  order {} {} `{entry}` ({} on it)",
                 template.name(),
