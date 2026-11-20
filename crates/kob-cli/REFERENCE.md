@@ -607,7 +607,8 @@ declaration. Both are signed at once; the genesis is sent right after the prepar
 | `--name`, `--ticker`, `--decimals` | required: name (1..=64 chars), ticker (2..=12 of A-Z 0-9), decimals (0..=18) |
 | `--fund-utxo TXID:INDEX:AMOUNT:OWNER` | repeatable, all of one key; AMOUNT in sompi; OWNER a 64-hex x-only key or a P2PK address. Without it the key's plain KAS UTXOs on the node fund it, the fewest that cover it, largest first (a dry run then reads the node) |
 | `--sell price|curve`, `--keep PERCENT` | after creation, as the web app (default: keep everything). The sale takes the funding key's share; `--keep` of it (0 to 100, default 0) stays in the wallet as its own output |
-| `--lock-until WHEN` | lock the kept share until WHEN (`+90d`, `+12h`, `+15m`, `YYYY-MM-DD` 00:00 UTC, `YYYY-MM-DDTHH:MMZ`, unix ms): with `--sell` the `--keep` part, else `--keep` of the share (default all), the rest free. The locked output's owner is the P2SH hash (scheme 0x03) of `<until ms> OP_CHECKLOCKTIMEVERIFY <key> OP_CHECKSIG`, declared as `lock` (`docs/spec/token-metadata.md`, *Creator lock*) |
+| `--lock-until WHEN` | lock the kept share until WHEN (`+90d`, `+12h`, `+15m`, `YYYY-MM-DD` 00:00 UTC, `YYYY-MM-DDTHH:MMZ`, unix ms): with `--sell` the `--keep` part, else `--keep` of the share (default all), the rest free. By default it opens by itself (`docs/spec/creator-lock-auto.md`): the locked output's owner is the P2SH hash (scheme 0x03) of the `KobLockAuto` script of the terms, the genesis pays a 1 KAS lock coin to its address, and the declaration says `"lock_kind": "auto"`; after WHEN anyone may release it to the key |
+| `--lock-manual` | with `--lock-until`: the older lock whose owner is the P2SH hash of `<until ms> OP_CHECKLOCKTIMEVERIFY <key> OP_CHECKSIG` (`docs/spec/token-metadata.md`, *Creator lock*); only the key's signature opens it |
 | `--price P` | `--sell price`: KAS per whole token (default 10,000 KAS over the amount). A limit sell (GTC) sent right after the genesis, spending its output and the preparation's change; saved as `sell_order.json` |
 | `--levels N`, `--total KAS`, `--multiple M` | `--sell curve`: a `KobCurveAsk` in the genesis (unbound, no expiry); defaults 100, 10000KAS, 5 |
 | `--shape chromatic`, `--octaves N` | `--sell curve` (and `kob place curve`): one semitone (2^(1/12)) per level over N octaves (1 to 8, default 2), 12 x N + 1 levels, the top 2^N times the start, `--total` sets the start; instead of `--levels` and `--multiple` (`docs/design/curve-ask-spec.md` 7) |
@@ -649,8 +650,10 @@ declaration. Both are signed at once; the genesis is sent right after the prepar
   otherwise it prints the error on stderr and exits 1.
 - **`kob token unlock <TOKEN_ID | DIR> [--outpoint TXID:INDEX]`** releases a creator lock. The lock is read from the token's
   launch proof (the indexer's `GET /v1/tokens/<id>/declaration`, or `launch_proof.json` of the creation's directory) and
-  verified against the genesis; the signing key must be the lock's. Before the node's past median time passes the lock's
-  time it refuses (exit 1; a dry run shows the plan). The unlock spends the locked output(s) and a KAS coin at the lock's
+  verified against the genesis. Before the node's past median time passes the lock's time it refuses (exit 1; a dry run
+  shows the plan). An automatic lock needs no key: the release spends the locked output and the genesis's lock coin and
+  pays the tokens and the coin (less the fee) to the lock's key; anyone may send it. For a manual lock (`--lock-manual`)
+  the signing key must be the lock's, and the unlock spends the locked output(s) and a KAS coin at the lock's
   address and pays the tokens to the key (lock time = the lock's time). Without a coin there, a first transaction sends
   1 KAS from the key's UTXOs (returned as the unlock's change); both are signed and run in the script engine before the one
   confirmation (`--yes`). The common options (`--node`, `--indexer`, `--key-file`, `--dry-run`, `--out-dir`, ...) apply.

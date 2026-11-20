@@ -78,7 +78,7 @@ only when `[api] metrics = true` (the default), the KAS price route (25) only wh
 | 25 | `GET /v1/price/kas-usd` (only with `[api] usd_price`) | [3.22](#322-get-v1pricekas-usd) | 1 | no (own cache) |
 | 26 | `POST /v1/logo-reports` (only with `[logo_reports] enabled`) | [3.19](#319-post-v1logo-reports) | 1 | no |
 | 27 | `GET /v1/logo-blocklist` (only with `[logo_reports] enabled`) | [3.20](#320-get-v1logo-blocklist) | 1 | no |
-| 28 | `GET /v1/creator-locks?key=` | [3.24](#324-get-v1creator-lockskey) | H | no |
+| 28 | `GET /v1/creator-locks?key=`, `?due=` | [3.24](#324-get-v1creator-lockskey) | H | no |
 | 29 | `POST /v1/logo-votes` (only with `[logo_votes] enabled`) | [3.19b](#319b-post-and-get-v1logo-votes) | H | no |
 | 30 | `GET /v1/logo-votes` (only with `[logo_votes] enabled`) | [3.19b](#319b-post-and-get-v1logo-votes) | 1 | no (own cache) |
 
@@ -1144,9 +1144,18 @@ lock as `LaunchProof::verify` found it against the genesis (`docs/spec/token-met
 
 ```json
 {"items": [{"covenant_id": "<64 hex>", "genesis_txid": "<64 hex>", "symbol": "LCK", "until": "1900000000000", "key": "<64 hex>",
-  "script": "<88 hex>", "authority": "<64 hex>", "amount": "200", "outputs": [{"index": 1, "amount": "200"}],
-  "program": "KCC20PublicMint", "extensionCommitment": "<64 hex>", "supply": "1000"}], "next_cursor": null}
+  "kind": "auto", "script": "<hex>", "authority": "<64 hex>", "amount": "200", "outputs": [{"index": 1, "amount": "200", "value": "1000000000"}],
+  "program": "KCC20PublicMint", "extensionCommitment": "<64 hex>", "supply": "1000",
+  "coin": {"index": 2, "amount": "100000000", "value": "100000000"}}], "next_cursor": null}
 ```
+
+`kind` is `manual` (the creator signs the unlock; `script` is the 44-byte lock script) or `auto` (it opens by itself,
+`docs/spec/creator-lock-auto.md`; `script` is the `KobLockAuto` script and `coin` the genesis's lock coin). `value` is an
+output's KAS.
+
+`?due=<unix ms>` (instead of `key`; `limit`, default 50, at most 200; no cursor) lists the automatic locks whose time is at most
+`due` and whose locked output is still unspent, the earliest first, each verified again: what a keeper releases. A released lock
+leaves the list. `key` and `due` together are a 400.
 
 Only a lock that still holds tokens is listed: one of its locked genesis outputs (`outputs`) is an unspent holding (3.14). A lock
 whose outputs were all spent (unlocked and claimed) is left out, and so is one whose outputs the indexer never recorded as holdings

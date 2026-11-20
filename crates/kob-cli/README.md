@@ -312,7 +312,10 @@ kob token create --name "Test USD" --ticker TUSD --decimals 6 --supply 100000000
   everything.
 - `--lock-until +90d` (or a date `YYYY-MM-DD`, UTC) locks the kept share on chain until then: the
   `--keep` part with `--sell`, else `--keep` percent of the share (default all of it). Nobody, the
-  key included, can move it before; `kob token unlock <TOKEN|DIR>` releases it afterwards.
+  key included, can move it before. It opens by itself: afterwards anyone may release it to the
+  key (executors' keepers do, for a 0.01 KAS tip out of the 1 KAS lock coin; `kob token unlock
+  <TOKEN|DIR>` does too, with no key). `--lock-manual` makes the older lock that only the key's
+  signature opens (`kob token unlock` with the key).
 - Drop `--dry-run` and add `--yes` to submit (the public nodes are used unless `--node` or
   `KOB_NODE_WRPC` names one).
 - `--program public-mint` (default) is what kascov.io lists as KCC-20. `--program 3x3` is cheaper
