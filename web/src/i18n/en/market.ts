@@ -391,7 +391,7 @@ export default {
   'market.trades.fallbackHint': 'This indexer has no trades endpoint: every fill event is listed on its own.',
 
   'market.token.info': 'Token details',
-  'market.sharedTickerShort': 'Shared ticker: check the covenant id',
+  'market.sharedTickerShort': 'Shared ticker: check the id',
   'market.sharedTicker': 'Another token uses this ticker — check the covenant id',
 
   'market.badge.highRisk': 'High risk',

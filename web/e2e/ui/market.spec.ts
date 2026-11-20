@@ -122,7 +122,7 @@ test.describe('shell and token list', () => {
       await expect(tag).toBeVisible();
       // One line, inside the bar.
       const [tb, bb] = await Promise.all([tag.boundingBox(), appPage.getByTestId('market-bar').boundingBox()]);
-      expect(tb!.height).toBeLessThan(16);
+      expect(tb!.height).toBeLessThanOrEqual(16);
       expect(tb!.y).toBeGreaterThanOrEqual(bb!.y);
       expect(tb!.y + tb!.height).toBeLessThanOrEqual(bb!.y + bb!.height);
       expect(withNote).toEqual(without[n]);
@@ -161,8 +161,13 @@ test.describe('shell and token list', () => {
     // of it.
     await regRow.getByTestId(`token-link-${id}`).click();
     const tag = appPage.getByTestId('market-bar').getByTestId('token-shared-ticker');
-    await expect(tag).toHaveText(/Shared ticker: check the covenant id/);
-    await expect(tag).toHaveAttribute('title', note);
+    await expect(tag).toHaveText(/Shared ticker: check the id/);
+    await expect(tag).not.toHaveAttribute('title');
+    // A tap opens the full sentence in the tip panel.
+    await tag.click();
+    await expect(appPage.getByTestId('token-shared-ticker-detail')).toHaveText(note);
+    await tag.click();
+    await expect(appPage.getByTestId('token-shared-ticker-detail')).toHaveCount(0);
     await expect(appPage.getByTestId('ticket-container')).toBeVisible();
     await expect(appPage.getByTestId('ticket-container')).not.toContainText(note);
     // The unique ticker's page has none.

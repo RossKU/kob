@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { t, tokenAmountText } from '../../i18n';
 import { Badge, Banner } from '../kit';
+import { TipBadge } from './TipBadge';
 import { type TokenInfo } from '../../kob/registry';
 import { hasIssuerControl, KNOWN_POWERS, riskFactIds, tokenLabel, tokenRiskCodes, type RiskCode, type TokenBadge, type TokenFactId, type TokenRow } from './token-model';
 
@@ -230,18 +231,15 @@ export function SharedTickerNote(props: { shared: boolean; block?: boolean; 'dat
 }
 
 /**
- * The shared-ticker note inside the market bar (MarketBar `note`). It is one muted line in the
- * bar's top space, with a warning sign and the short text, and the full sentence as its tooltip.
- * It is out of the flow, so the bar has the same height with and without it. It renders nothing
- * for other tokens.
+ * The shared-ticker note inside the market bar (MarketBar note). It is one warning-coloured pill
+ * in the bar's top space, with a warning sign and the short text. A tap, or Enter, opens the full
+ * sentence in the same panel as the other tips, because a title tooltip does not exist on a touch
+ * screen. It is out of the flow, so the bar has the same height with and without it. It renders
+ * nothing for other tokens.
  */
 export function SharedTickerBarNote(props: { shared: boolean }) {
   if (!props.shared) return null;
-  return (
-    <span class="mkt-bar-note" role="note" title={t('market.sharedTicker')} data-testid="token-shared-ticker">
-      <span aria-hidden="true">{'⚠'}</span> {t('market.sharedTickerShort')}
-    </span>
-  );
+  return <TipBadge variant="bar" label={t('market.sharedTickerShort')} detail={t('market.sharedTicker')} data-testid="token-shared-ticker" data-detail-testid="token-shared-ticker-detail" />;
 }
 
 /**

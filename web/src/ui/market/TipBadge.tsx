@@ -9,10 +9,12 @@ import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 /**
  * `variant` 'warn' is the default warning badge. 'tag' is a small muted tag with a (?), such as
  * the summary cards' "Estimate (?)". It has the same panel and behaviour, and no space before it,
- * because the caller places it.
+ * because the caller places it. 'bar' is the market bar's shared-ticker note: a warn-coloured pill that
+ * the bar's CSS places (.mkt-bar-note), with no title tooltip, because the panel is the way to read it.
  */
-export function TipBadge(props: { label: string; detail: string; 'data-testid': string; 'data-detail-testid': string; variant?: 'warn' | 'tag' }) {
+export function TipBadge(props: { label: string; detail: string; 'data-testid': string; 'data-detail-testid': string; variant?: 'warn' | 'tag' | 'bar' }) {
   const tag = props.variant === 'tag';
+  const bar = props.variant === 'bar';
   const [pos, setPos] = useState<{ left: number; top: number; scrollY: number } | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   // A layout effect, because the listeners must exist in the same frame the panel appears. A
@@ -59,13 +61,13 @@ export function TipBadge(props: { label: string; detail: string; 'data-testid': 
   };
   return (
     <>
-      {tag ? null : ' '}
+      {tag || bar ? null : ' '}
       <button
         type="button"
-        class={tag ? 'tip-btn tip-tag' : 'badge badge-warn tip-btn'}
+        class={tag ? 'tip-btn tip-tag' : bar ? 'tip-btn mkt-bar-note' : 'badge badge-warn tip-btn'}
         ref={button}
         onClick={toggle}
-        title={props.detail}
+        title={bar ? undefined : props.detail}
         aria-expanded={pos ? 'true' : 'false'}
         aria-label={`${props.label}: ${props.detail}`}
         data-testid={props['data-testid']}
