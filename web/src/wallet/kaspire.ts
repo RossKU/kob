@@ -12,6 +12,10 @@
 // Either way the app only extracts the signature and assembles the script itself through kob-wasm
 // `finalize`, which verifies it. A wallet that mis-assembles cannot produce a wrong transaction.
 //
+// `signMessage` takes `{ message, address }` (the selected address only, at most 10 000 characters)
+// and resolves with `{ address, publicKey, signature }`, a personal-message signature. A logo vote
+// uses it.
+//
 // The 0.5.31 background script shows that `signPskt` looks no input up on any node, so the app's
 // visibility gate (wallet/visibility.ts) is only a precaution here. Its `pushTx` and
 // `getUtxoEntries` are not used.
@@ -169,6 +173,18 @@ export function createKaspireAdapter(deps: KaspireDeps = {}): WalletAdapter {
         onEvent,
         o.pollMs ?? DEFAULT_POLL_MS,
       );
+    },
+
+    async signMessage(message: string, opts: { timeoutMs?: number } = {}): Promise<unknown> {
+      const p = need();
+      try {
+        const accounts = (await withTimeout(p.request({ method: 'getAccounts' }), REFRESH_TIMEOUT_MS, `${LABEL}.getAccounts`)) as string[] | null;
+        const address = accounts?.[0];
+        if (!address) throw new WalletError('unsupported', 'Kaspire exposes no account.');
+        return await withTimeout(p.request({ method: 'signMessage', params: { message, address } }), opts.timeoutMs ?? SIGN_TIMEOUT_MS, `${LABEL}.signMessage`);
+      } catch (e) {
+        throw toWalletError(e, LABEL);
+      }
     },
 
     async signTx(built: BuiltTx, opts: SignOptions = {}): Promise<InputSignature[]> {

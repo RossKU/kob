@@ -8,6 +8,8 @@
 //   * Kastle   connect / getAccount / request('kas:...') / signTx(network, txJson, scripts?) -> tx OBJECT; the public key has 33 bytes;
 //              WITHOUT `scripts` a P2SH input is silently left unsigned (upstream issue #353); `scriptHex:""` returns just push(sig65),
 //              a redeem script returns `push(sig65) push(redeem)`.
+//   * KasWare `signMessage(text, {type})` and Kaspire `request({method:'signMessage', params:{message, address}})` sign a personal
+//              message with the SDK's `signMessage` (hex; Kaspire returns `{signature, ...}`), for the logo votes.
 //
 // Signing happens IN THE PAGE with the official SDK exposed by the app as `window.__kobKaspa` (features.test): the same
 // `createInputSignature(tx, index, privateKey, SighashType.All)` a real wallet runs. Everything is driven by `mockWalletPageScript`,
@@ -304,6 +306,17 @@ export function mockWalletPageScript(config: MockWalletConfig): void {
     return body.transactionId;
   };
 
+  /** A personal message signed with the SDK (`signMessage`: Schnorr over the keyed BLAKE2b hash), as KasWare and Kaspire do. */
+  const signText = async (text: string) => {
+    const call = newCall('signMessage', JSON.stringify(text), [], null, null, null);
+    call.message = text;
+    return run(call, async () => {
+      needAccount();
+      const k = await kaspa();
+      return String(k.signMessage({ message: text, privateKey: opts.secretKey }));
+    });
+  };
+
   const scriptFor = (scripts: any[] | null, i: number) => (scripts && !opts.dropScripts ? scripts.find((s: any) => Number(s.inputIndex) === i) : undefined);
 
   // ------------------------------------------------------------------ KasWare
@@ -335,6 +348,7 @@ export function mockWalletPageScript(config: MockWalletConfig): void {
       });
     },
     pushTx: async (rawtx: string) => pushTx(rawtx),
+    signMessage: async (text: string) => signText(text),
   };
 
   // ------------------------------------------------------------------ Kaspire
@@ -373,6 +387,11 @@ export function mockWalletPageScript(config: MockWalletConfig): void {
         case 'getPublicKey':
           needAccount();
           return publicKey();
+        case 'signMessage': {
+          if (params.address !== address()) throw new Error('Invalid personal-message request.');
+          const signature = await signText(String(params.message ?? ''));
+          return { address: address(), publicKey: publicKey(), signedMessage: signature, signature };
+        }
         case 'signPskt': {
           const txJson: string = params.psktTransactionJson;
           const sign: any[] = params.signInputs ?? [];

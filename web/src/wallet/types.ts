@@ -138,6 +138,16 @@ export interface WalletAdapter {
    * with `WalletError` otherwise.
    */
   announce?(tx: TxJson, opts?: { timeoutMs?: number }): Promise<void>;
+  /**
+   * Signs a text with the account's key by Kaspa's personal-message standard (BIP340 Schnorr over
+   * the BLAKE2b hash keyed `PersonalMessageSigningHash`), as KasWare's `signMessage` and Kaspire's
+   * `signMessage` do. No transaction, no fee. A logo vote uses it (data/logo-votes.ts).
+   *
+   * It resolves with what the wallet returned, which data/logo-votes.ts `normalizeSignature` reads
+   * (hex or base64), and rejects with `WalletError` on a refusal or a timeout. A wallet without it
+   * cannot vote.
+   */
+  signMessage?(message: string, opts?: { timeoutMs?: number }): Promise<unknown>;
 }
 
 /**

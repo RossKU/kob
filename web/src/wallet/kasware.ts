@@ -18,6 +18,9 @@
 //   two apart. A declined step that spends a fresh output says both (wallet/sign.ts).
 // - In 0.11.5, `getUtxoEntries` answers for the wallet's own account from its UTXO tracker, which
 //   lists a new output only once it is mature, 11 to 15 s on TN10. That is too slow to gate on.
+// - `signMessage(text, { type: 'schnorr' })` signs a personal message (0.11.5: kaspa-wasm
+//   `signMessage`, a 64-byte Schnorr signature as hex). `type` defaults to `auto`, which picks
+//   ECDSA for a Tangem account, so it is named. A logo vote uses it.
 import type { BuiltTx, InputSignature, TxJson } from '../kob/types';
 import { normalizeNetwork } from '../data/kaspa-sdk';
 import { WalletError, type SignOptions, type WalletAdapter, type WalletInfo } from './types';
@@ -39,6 +42,8 @@ export interface KaswareProvider extends EmitterLike {
    * without a popup. It resolves with its id.
    */
   pushTx?(rawtx: string): Promise<unknown>;
+  /** Signs a personal message; 0.11.5 resolves with the signature as hex. */
+  signMessage?(text: string, options?: { type?: 'auto' | 'schnorr' | 'ecdsa'; noAuxRand?: boolean }): Promise<unknown>;
 }
 
 /** What the KasWare adapter takes from its caller. */
@@ -163,6 +168,16 @@ export function createKaswareAdapter(deps: KaswareDeps = {}): WalletAdapter {
         // The wallet's node already holds it, from the network or an earlier push. That is what was
         // wanted.
         if (ALREADY.test(errText(e))) return;
+        throw toWalletError(e, LABEL);
+      }
+    },
+
+    async signMessage(message: string, opts: { timeoutMs?: number } = {}): Promise<unknown> {
+      const p = need();
+      if (typeof p.signMessage !== 'function') throw new WalletError('unsupported', 'This KasWare version cannot sign messages.');
+      try {
+        return await withTimeout(p.signMessage(message, { type: 'schnorr' }), opts.timeoutMs ?? SIGN_TIMEOUT_MS, `${LABEL}.signMessage`);
+      } catch (e) {
         throw toWalletError(e, LABEL);
       }
     },
