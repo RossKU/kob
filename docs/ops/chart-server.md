@@ -236,6 +236,11 @@ enabled = true
 # per_client_per_hour = 5
 # max_per_day = 200            # logos newly hidden per day, all clients
 origins = ["https://kob.example"]   # the web app's origin: other sites' pages cannot report
+
+[logo_votes]                   # wallets vote on logos (a signed message, no fee); the web app hides one voted down
+enabled = true
+# pow_bits = 20                # the proof of work of a vote, a few seconds in a browser
+# origins = []                 # empty: the [logo_reports] origins
 ```
 
 The two routes (`POST /v1/logo-reports`, `GET /v1/logo-blocklist`) then sit behind the same tunnel; the per-client limit uses the

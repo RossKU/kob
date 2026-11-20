@@ -1499,7 +1499,9 @@ kobd logo-reports --config kobd.toml import logo-reports.json           # ... an
 ```
 
 These open the database next to a running executor (a short write, like the API's own; no lock, and there is no administrative route
-on the network). The reports and the list live in the indexer's database but are not derived from the chain: `kobd db replay` builds a
+on the network). With `[logo_votes] enabled = true` wallets can also vote on logos (`POST` and `GET /v1/logo-votes`, api-reference
+3.19b, docs/design/logo-votes.md): a signed message, no fee, one vote per wallet a day; the web app hides a logo by default once 3 or
+more voted it to a net -1. Votes never hide anything in the report list, and the export above carries them. The reports and the list live in the indexer's database but are not derived from the chain: `kobd db replay` builds a
 new database without them. GitHub Issue reports reach the same list when the repository variable `KOB_LOGO_REPORT_URL` is the
 address of `POST /v1/logo-reports` of the public server.
 
