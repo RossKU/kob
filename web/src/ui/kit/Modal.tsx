@@ -5,6 +5,11 @@ import { Button } from './Button';
 
 export interface ModalProps {
   title: ComponentChildren;
+  /**
+   * A "?" right after the title (kit/HelpTip.tsx) with the dialog's explanation behind it. It is
+   * out of the heading, so the dialog's name stays its title.
+   */
+  help?: ComponentChildren;
   onClose: () => void;
   children?: ComponentChildren;
   /** Footer buttons. */
@@ -88,7 +93,14 @@ export function Modal(props: ModalProps) {
     >
       <div ref={box} class={`modal${props.large ? ' modal-lg' : ''}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onKeyDown={onKeyDown} data-testid={props['data-testid']}>
         <div class="modal-head">
-          <h2 id={titleId}>{props.title}</h2>
+          {props.help ? (
+            <div class="help-title">
+              <h2 id={titleId}>{props.title}</h2>
+              {props.help}
+            </div>
+          ) : (
+            <h2 id={titleId}>{props.title}</h2>
+          )}
           {props.hideClose ? null : (
             <Button small variant="ghost" onClick={props.onClose} aria-label={t('common.close')} disabled={!dismissable}>
               {'×'}

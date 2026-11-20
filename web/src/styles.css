@@ -507,6 +507,7 @@ small, .small { font-size: 0.85em; }
 .help-panel h4 { margin: 0 0 4px; font-size: 0.85rem; }
 .checkbox-row { display: flex; gap: 8px; align-items: flex-start; }
 .checkbox-row input { margin-top: 4px; }
+.checkbox-row > .help-tip { margin-top: 2px; }
 
 /* a segmented control is a pill: the group and every segment (the selected one's highlight) are fully rounded; the segments keep their boxes, so the heights and the hit areas stay, and the 1px divider keeps its width, now clear */
 /* the selected segment's colour is a mark of its own (`.slide-ind`, kit/slide-indicator.ts) that slides under the segments: the segments stay transparent and sit above it (z-index), the group's own
