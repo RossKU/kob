@@ -965,7 +965,11 @@ pub fn run_logo_reports(a: LogoReportsArgs) -> Result<()> {
                 Some(v) => crate::logo_votes::import(&mut conn, v).map_err(|e| anyhow!(e))?,
                 None => 0,
             };
-            println!("imported {tokens} listed token(s), {rows} report(s) and {votes} logo vote(s)");
+            if votes == 0 {
+                println!("imported {tokens} listed token(s) and {rows} report(s)");
+            } else {
+                println!("imported {tokens} listed token(s), {rows} report(s) and {votes} logo vote(s)");
+            }
         }
     }
     Ok(())
