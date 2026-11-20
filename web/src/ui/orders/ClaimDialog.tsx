@@ -4,7 +4,7 @@ import { t } from '../../i18n';
 import { boughtOf } from '../../kob/bought';
 import type { CancelPlan } from '../../kob/cancel';
 import { parsePricePerToken } from '../../kob/units';
-import { Banner, Button, Field, IssueLine, Modal, Segmented, kasText, pricePerTokenText, tokenText } from '../kit';
+import { Banner, Button, Field, HelpTip, IssueLine, Modal, Segmented, kasText, pricePerTokenText, tokenText } from '../kit';
 import { HEAVY_CLAIM_FEE, claimAskSpec, planClaimChoice, sellCrossesOwnBid, type ClaimChoice, type ClaimContext } from './claim';
 import type { OrderRowModel } from './orders-model';
 
@@ -83,7 +83,15 @@ export function ClaimDialog(props: ClaimDialogProps) {
         </>
       }
     >
-      <p data-testid="claim-amount">{t('orders.claimDialog.body', { amount, ticker })}</p>
+      <p data-testid="claim-amount">
+        {t('orders.claimDialog.body', { amount, ticker })}
+        {kind === 'claim' ? (
+          <>
+            {' '}
+            <HelpTip label={t('orders.claimDialog.claim')} data-testid="claim-hint-help">{t('orders.claimDialog.claimHint')}</HelpTip>
+          </>
+        ) : null}
+      </p>
       <Segmented<Kind>
         aria-label={t('orders.claimDialog.kind')}
         value={kind}
@@ -97,14 +105,13 @@ export function ClaimDialog(props: ClaimDialogProps) {
         data-testid="claim-kind"
       />
       <div class="stack-sm" style="margin-top:10px">
-        {kind === 'claim' ? <p class="small muted">{t('orders.claimDialog.claimHint')}</p> : null}
         {kind === 'merge' ? (
           <Field
             label={t('orders.claimDialog.mergeCount')}
             value={count}
             onValue={setCount}
             inputMode="numeric"
-            hint={t('orders.claimDialog.mergeHint', { count: n, ticker })}
+            help={<HelpTip label={t('orders.claimDialog.mergeCount')}>{t('orders.claimDialog.mergeHint', { count: n, ticker })}</HelpTip>}
             data-testid="claim-merge-count"
           />
         ) : null}
@@ -115,7 +122,7 @@ export function ClaimDialog(props: ClaimDialogProps) {
               value={priceText}
               onValue={setPriceText}
               inputMode="decimal"
-              hint={t('orders.claimDialog.sellHint')}
+              help={<HelpTip label={t('orders.claimDialog.price')}>{t('orders.claimDialog.sellHint')}</HelpTip>}
               error={crosses ? t('orders.claimDialog.crosses') : null}
               data-testid="claim-sell-price"
             />

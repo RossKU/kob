@@ -22,7 +22,7 @@ import type { Position } from '../../kob/positions';
 import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import {
-  Banner, Button, EmptyState, ErrorBanner, Modal, RawDetails, Section, Segmented, Tabs, columnFraction, formatRowTimeUnix, rowTimeTitleUnix, showToast, sortBy, sortKeyOf, toError, useAsync, useSortState,
+  Banner, Button, EmptyState, ErrorBanner, HelpTip, Modal, RawDetails, Section, Segmented, Tabs, columnFraction, formatRowTimeUnix, rowTimeTitleUnix, showToast, sortBy, sortKeyOf, toError, useAsync, useSortState,
 } from '../kit';
 import { DataTable, KAS_FRACTION_MAX, MoneyCell, type DtColumn } from '../kit/DataTable';
 import { ConnectBar } from '../shell/WalletButton';
@@ -1107,6 +1107,12 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       {confirmAll ? (
         <Modal
           title={confirmAll.token ? t('orders.cancelAll.tokenTitle') : t('orders.cancelAll.title')}
+          help={
+            <HelpTip label={confirmAll.token ? t('orders.cancelAll.tokenTitle') : t('orders.cancelAll.title')} data-testid="cancel-all-help">
+              <p>{t('orders.cancelAll.txNote')}</p>
+              <p>{t('orders.raceNote')}</p>
+            </HelpTip>
+          }
           onClose={() => setConfirmAll(null)}
           data-testid="cancel-all-dialog"
           footer={
@@ -1128,8 +1134,6 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
           }
         >
           <p>{tCount('orders.cancelAll.body', confirmAll.ids.length)}</p>
-          <p class="small muted">{t('orders.cancelAll.txNote')}</p>
-          <p class="small muted">{t('orders.raceNote')}</p>
         </Modal>
       ) : null}
     </div>

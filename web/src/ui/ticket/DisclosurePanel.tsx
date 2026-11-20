@@ -3,6 +3,7 @@
 // The replace dialog of My orders shows it, and the order ticket shows it only in the confirmation.
 import type { ComponentChildren } from 'preact';
 import { t } from '../../i18n';
+import { HelpTip } from '../kit';
 import type { DisclosureModel, DisclosureRow, TimeRow, Txt } from './disclosure-model';
 
 const text = (v: Txt | undefined): string => (v === undefined ? '' : typeof v === 'string' ? v : t(v.key, v.params));
@@ -77,8 +78,10 @@ export function DisclosurePanel(props: { model: DisclosureModel }) {
         ))}
       </dl>
 
-      <h4>{t('ticket.disc.lockedTitle')}</h4>
-      <p class="tk-note">{t('ticket.disc.lockedText')}</p>
+      <div class="help-title">
+        <h4>{t('ticket.disc.lockedTitle')}</h4>
+        <HelpTip label={t('ticket.disc.lockedTitle')} data-testid="disc-locked-help">{t('ticket.disc.lockedText')}</HelpTip>
+      </div>
       <dl class="tk-rows" data-testid="disc-carriers">
         {m.carriers.map((c) => (
           <div class={`tk-row${c.kept ? ' tk-muted' : ''}`} key={c.kind} data-testid={`disc-carrier-${c.kind}`}>
@@ -97,10 +100,14 @@ export function DisclosurePanel(props: { model: DisclosureModel }) {
         </div>
         {m.tokensEscrowed ? (
           <div class="tk-row" data-testid="disc-tokensEscrowed">
-            <dt>{t('ticket.disc.escrowed')}</dt>
+            <dt>
+              <span class="help-title">
+                {t('ticket.disc.escrowed')}
+                <HelpTip label={t('ticket.disc.escrowed')} data-testid="disc-escrowed-help">{t('ticket.disc.escrowedText')}</HelpTip>
+              </span>
+            </dt>
             <dd>
               <span class="tk-value">{m.tokensEscrowed}</span>
-              <span class="tk-detail">{t('ticket.disc.escrowedText')}</span>
             </dd>
           </div>
         ) : null}
