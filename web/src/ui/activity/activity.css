@@ -224,7 +224,6 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .sum-bid { background: var(--buy); }
 .sum-ask { background: var(--sell); }
 .sum-pair { background: var(--info); }
-.sum-note { margin: 0; font-size: 0.75rem; color: var(--muted); }
 /* The seven tiles come in three groups (activity 3, participants 2, payments 2) that each stay on one row, so no tile is ever left alone on a row. The breakpoints follow the
    strip's own width (a container query: browser zoom and the side column change it): wide = one row of all seven; medium = [activity + participants] / [payments]; narrow =
    one group per row. Tiles stretch equally within their row; the 1px lines are the gaps over the border colour. */

@@ -19,7 +19,7 @@ import { formatKas } from '../../kob/units';
 import type { IndexerApi } from '../../data/indexer';
 import type { ActivityStatsView, CandleView } from '../../data/indexer-types';
 import { t } from '../../i18n';
-import { formatRowTime, Segmented, useAsync } from '../kit';
+import { formatRowTime, HelpTip, Segmented, useAsync } from '../kit';
 import { useStandalone } from '../shell/standalone';
 import {
   axisTop,
@@ -210,7 +210,11 @@ export function ActivitySummary() {
   return (
     <section class={`sum${loading ? ' sum-loading' : ''}`} aria-label={t('activity.summary.label')} aria-busy={loading ? 'true' : undefined} data-testid="activity-summary">
       <div class="sum-band">
-        <h2 class="sum-h">{t('activity.summary.allTime')}</h2>
+        {/* what the figures count is behind the "?" of the first heading */}
+        <span class="help-title">
+          <h2 class="sum-h">{t('activity.summary.allTime')}</h2>
+          <HelpTip label={t('activity.summary.label')} data-testid="activity-summary-help">{t('activity.summary.note')}</HelpTip>
+        </span>
         <span class="sum-hint" data-testid="activity-summary-since">
           {view ? (view.all.since === null ? t('activity.summary.sinceNone') : t('activity.summary.since', { date: dateFmt(view.all.since) })) : NBSP}
         </span>
@@ -344,7 +348,6 @@ export function ActivitySummary() {
           testid="summary-now-markets"
         />
       </div>
-      <p class="sum-note">{t('activity.summary.note')}</p>
     </section>
   );
 }
