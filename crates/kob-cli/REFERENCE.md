@@ -43,7 +43,7 @@ Defaults (the wallet's, `docs/spec/matcher.md` §10):
 | stop trigger threshold (`--min-touch`) | max(minimum fill, 25 % of the amount) |
 | carrier (`--carrier`) | 1 KAS on every covenant UTXO; at least 0.08 KAS and the token program's floor |
 | tip (`--tip`, `--exit-tip`) | 0 on the KAS books; a pair order (`--quote`) with no tip carries the pair's keeper tip (`pair_keeper_tips.json`, the measured fee of one update, doubled) over its amount, rounded up, as the web ticket does (a crossing pair net pays its fee from the tips). A typed tip, `--tip 0` included, is kept and, below that default, prints a note that a crossing pair order may wait for a route through the KAS books |
-| GTC lifetime | 90 days idle (renew with `kob replace <id> --renew`) |
+| GTC lifetime | 90 days idle (renew with `kob replace <id> --renew`, or set a new expiry with `kob replace <id> --gtd WHEN`) |
 | IOC / FOK life (`--life`) | 300 DAA; allowed 1..600 DAA |
 | market order | an IOC auction from the best price over 200 DAA to a 3 % bound (`--slippage` changes the bound) |
 | stop band | 3 % over 300 DAA |
@@ -198,11 +198,20 @@ If-done options: `--side` is the entry's side (buy = buy first and sell the exit
 Pairs: every kind takes `--quote TOKEN_B` (a `KobPair`, `KobCondPair` or `KobIfdPair` order). Prices are B per whole A; tips
 stay in KAS (the default tip: see Defaults above). Taking pair orders and stop legs is not offered by `kob take` (an Executor fills them).
 
-`kob replace` changes: plain limits take `--price`, `--tip`, `--amount`, `--add-kas`, `--renew` (in place when a sell keeps
-its amount, or for a buy; otherwise a cancel-replace). Conditionals take `--price` (the take-profit), `--stop`,
-`--stop-limit`, `--amount`, `--tip`, `--renew` (always a cancel-replace; an armed stop restarts unarmed). Trailing stops,
-if-done entries and every pair order are re-planned from their terms with `--price`, `--take-profit`, `--stop`,
-`--stop-limit`, `--exit-tip`, `--trail-step`, `--trail-gap`, `--entry-stop`. Repeat entries are not replaced (cancel instead).
+`kob replace` changes: plain limits take `--price`, `--tip`, `--amount`, `--add-kas`, `--renew`, `--gtd` (in place when a sell
+keeps its amount, or for a buy; otherwise a cancel-replace). Conditionals take `--price` (the take-profit), `--stop`,
+`--stop-limit`, `--amount`, `--tip`, `--renew`, `--gtd` (always a cancel-replace; an armed stop restarts unarmed). Trailing
+stops, if-done entries and every pair order are re-planned from their terms with `--price`, `--take-profit`, `--stop`,
+`--stop-limit`, `--exit-tip`, `--trail-step`, `--trail-gap`, `--entry-stop`, `--renew`, `--gtd`. Repeat entries are not
+replaced (cancel instead).
+
+`--gtd WHEN` (a UTC time or `daa:N`, as for `kob place`) sets a new expiry. It must be later than now and than the
+order's activation, and at most 90 days ahead; a UTC time becomes the DAA score at or before it. It excludes `--renew`,
+and a day order given either one is no longer a day order. With no other change a plain limit is amended in place: one
+small transaction whose fee the order's own KAS pays, which keeps a short-lived quote alive (`tools/mm-bot` renews its
+quotes this way, so they lapse by themselves when the bot stops). The contracts allow any expiry in an amend, since the
+maker's `cancel` signs every output; the bounds are the wallet's. The expiry is soft: past it, conforming matchers no
+longer fill the order and anyone may refund it to the maker, but no covenant can bound when a fill happens.
 
 ## Delivery and kob claim
 

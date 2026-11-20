@@ -23,7 +23,7 @@ use super::plan::{
     select_tokens, slip_for_limit, stop_worst_price, usable_token_utxos, Issue, Severity, Side, MAX_IDLE_DAA, MAX_TOKEN_INPUTS,
 };
 use super::show::Units;
-use super::units::{self, parse_kas, parse_kas_price, parse_token_amount, TokenUnit};
+use super::units::{self, parse_kas, parse_kas_price, parse_token_amount, TokenUnit, When};
 use crate::common::Signer;
 pub use kob_protocol::payment::kas_payment;
 
@@ -213,22 +213,33 @@ pub const REPLACE_USAGE: &str = "\
 kob replace: amend a live order (in place where the protocol allows it, else cancel + new order in one transaction)
 
 USAGE
-  kob replace <COVENANT_ID> [--price P] [--amount AMOUNT] [--tip T] [--stop P] [--stop-limit P] [--add-kas KAS] [--renew]
+  kob replace <COVENANT_ID> [--price P] [--amount AMOUNT] [--tip T] [--stop P] [--stop-limit P] [--add-kas KAS]
+                            [--renew | --gtd WHEN]
   kob replace <COVENANT_ID> [...] [--take-profit P] [--exit-tip T] [--entry-stop P] [--trail-step P] [--trail-gap P]
                             [--carrier KAS] [--ack-no-guards]
 
   plain limit orders (KobAsk / KobBid): --price, --tip, --amount (a sell; a buy keeps its KAS budget: --add-kas tops it
-  up), --renew (a fresh 90-day expiry). A sell that keeps its amount, or a buy, is amended IN PLACE: same covenant id,
-  the custody stays where it is, the order's own KAS pays the fee. Otherwise the order is cancelled and the replacement
-  placed in the same transaction (custody, strays and any top-up tokens move to the new order).
-  conditional orders (stop / take-profit / OCO): --price (the take-profit), --stop, --stop-limit, --amount, --tip, --renew;
-  always a cancel-replace, an armed stop restarts unarmed.
+  up), --renew (a fresh 90-day expiry) or --gtd WHEN (a new expiry). A sell that keeps its amount, or a buy, is amended
+  IN PLACE: same covenant id, the custody stays where it is, the order's own KAS pays the fee. Otherwise the order is
+  cancelled and the replacement placed in the same transaction (custody, strays and any top-up tokens move to the new
+  order).
+  conditional orders (stop / take-profit / OCO): --price (the take-profit), --stop, --stop-limit, --amount, --tip, --renew,
+  --gtd; always a cancel-replace, an armed stop restarts unarmed.
   trailing stops, if-done entries (IFD / IFO, stop entries) and every pair order (limits, TWAP / DCA, Dutch,
   conditionals, if-done entries; prices B per whole A): the order is re-planned from its own terms with the changes
   (--price: the limit / take-profit / entry price; --take-profit, --stop, --stop-limit, --exit-tip: the exit of an
   if-done entry; --trail-step / --trail-gap: the trail; --entry-stop: a stop entry) exactly as `kob place` plans it, and
   cancelled + replaced in one transaction. A GTC is re-placed as a fresh GTC, a dated order keeps its date, a day order
-  stays a day order. Repeat entries and the exits they booked are not replaced (cancel the position instead).
+  stays a day order (--renew makes it a fresh GTC, --gtd dates it). Repeat entries and the exits they booked are not
+  replaced (cancel the position instead).
+
+  --gtd WHEN     the order's new expiry: 2026-10-20T00:00Z or 2026-10-20T00:00:30Z (UTC) or daa:N. It must be later than
+                 now and than the order's activation, and at most 90 days ahead. A UTC time becomes the DAA score of the
+                 earlier of the measured and the nominal 10 DAA/s, so the order ends at or before that time. It excludes
+                 --renew, and a day order amended with it is no longer a day order. With no other change it amends a
+                 plain limit in place: the cheapest way to keep a short-lived quote alive, so that the quotes of a market
+                 maker lapse by themselves once it stops renewing them. The expiry is soft: past it, conforming matchers
+                 no longer fill the order and anyone may refund it to you; no covenant can bound when a fill happens.
 ";
 
 /// What the user changes in an amendment.
@@ -248,6 +259,42 @@ pub struct AmendInput {
     pub add_kas: u64,
     /// Whether to renew the order with a fresh 90-day expiry.
     pub renew: bool,
+    /// A new expiry (DAA score), from `--gtd`. It excludes `renew`.
+    pub gtd: Option<i64>,
+}
+
+/// Checks a new expiry from `--gtd` against now and the order's activation.
+///
+/// It must be later than `now_daa` and than `active_from`, and at most 90 days ahead, as
+/// `kob place --gtd` requires. The contracts take any expiry in an amend (the maker's `cancel`
+/// signs every output), so these bounds are the wallet's.
+pub fn check_gtd(expiry: i64, now_daa: i64, active_from: i64) -> Result<i64, String> {
+    if expiry <= now_daa {
+        return Err(format!("--gtd is not in the future (DAA {expiry}, now {now_daa}): give a later time"));
+    }
+    if expiry > now_daa + MAX_IDLE_DAA {
+        return Err(format!(
+            "--gtd is more than 90 days ahead (DAA {expiry}, at most {}): an order lives at most 90 days",
+            now_daa + MAX_IDLE_DAA
+        ));
+    }
+    if expiry <= active_from {
+        return Err(format!(
+            "--gtd is not after the order's activation (DAA {active_from}): the order would expire before it activates"
+        ));
+    }
+    Ok(expiry)
+}
+
+/// The activation DAA score of a quick-amended order (0 when it has none).
+fn active_from_of(s: &AnyState) -> i64 {
+    match s {
+        AnyState::KobAsk(x) | AnyState::KobAskKron(x) => x.active_from,
+        AnyState::KobBid(x) | AnyState::KobBidKron(x) => x.active_from,
+        AnyState::KobCondAsk(x) | AnyState::KobCondAskKron(x) => x.active_from,
+        AnyState::KobCondBid(x) | AnyState::KobCondBidKron(x) => x.active_from,
+        _ => 0,
+    }
 }
 
 /// The replacement state and the KAS that it holds (`amend.ts` `buildReplacement`).
@@ -263,7 +310,18 @@ pub fn replacement(live: &Live, i: &AmendInput, now_daa: i64, tick: i64) -> Resu
         }
         Ok(p)
     };
-    let expiry = |old: i64| if i.renew { now_daa + MAX_IDLE_DAA } else { old };
+    if i.renew && i.gtd.is_some() {
+        return Err("--renew and --gtd exclude each other".into());
+    }
+    if let Some(d) = i.gtd {
+        check_gtd(d, now_daa, active_from_of(&live.order.state))?;
+        notes.push(format!("new expiry: DAA {d}, about {} min from now at 10 DAA/s", (d - now_daa) / 600));
+    }
+    let expiry = |old: i64| match i.gtd {
+        Some(d) => d,
+        None if i.renew => now_daa + MAX_IDLE_DAA,
+        None => old,
+    };
     if i.renew {
         notes.push("renewed: good for another 90 days from now".to_string());
     }
@@ -560,6 +618,14 @@ pub fn build_replace(
     Ok((built, false, notes))
 }
 
+/// The DAA score of a `--gtd` time: a DAA score as given, a UTC time at or before it.
+pub fn gtd_daa(clock: &super::plan::Clock, w: When) -> i64 {
+    match w {
+        When::Daa(d) => d.min(i64::MAX as u64) as i64,
+        When::Unix(u) => super::plan::unix_to_daa_bound(clock, u.min(i64::MAX as u64) as i64, true),
+    }
+}
+
 /// The value flags of `kob replace`.
 const REPLACE_VALUE_FLAGS: &[&str] = &[
     "--price",
@@ -574,6 +640,7 @@ const REPLACE_VALUE_FLAGS: &[&str] = &[
     "--trail-gap",
     "--entry-stop",
     "--carrier",
+    "--gtd",
 ];
 
 /// Runs `kob replace`.
@@ -585,20 +652,28 @@ pub fn run_replace(args: &[String]) -> i32 {
     let r = (|| -> Result<(Ready, Units), Fail> {
         let [id] = p.pos.as_slice() else { return Err(usage("give exactly one covenant id")) };
         let cov = cov_arg(id).map_err(usage)?;
+        let gtd = p.get("--gtd").map(|v| units::parse_when(v, "--gtd")).transpose().map_err(usage)?;
+        if gtd.is_some() && p.has("--renew") {
+            return Err(usage("--renew and --gtd exclude each other"));
+        }
         let node = c.need_node()?;
         let indexer = c.need_indexer()?;
-        let live = data::live_order(indexer, node, &c.network, &cov)?;
+        let mut live = data::live_order(indexer, node, &c.network, &cov)?;
+        if gtd.is_some() || p.has("--renew") {
+            // A new expiry ends a day order's wall-clock deadline: the record carries none.
+            live.deadline = None;
+        }
         if live.order.state.maker() != signer.pubkey {
             return Err("this order belongs to another key: only its maker can amend it".into());
         }
         let ms = markets_of(&c, &live)?;
         if super::replan::replans(&live.order.state) {
-            return replan_replace(&c, &p, &signer, &live, &ms);
+            return replan_replace(&c, &p, &signer, &live, &ms, gtd);
         }
         for k in ["--take-profit", "--exit-tip", "--trail-step", "--trail-gap", "--entry-stop", "--carrier"] {
             if p.get(k).is_some() {
                 return Err(Fail::from(format!(
-                    "{k} does not apply to a {} (it is amended with --price, --stop, --stop-limit, --amount, --tip, --add-kas, --renew)",
+                    "{k} does not apply to a {} (it is amended with --price, --stop, --stop-limit, --amount, --tip, --add-kas, --renew, --gtd)",
                     live.order.state.template_id().name()
                 )));
             }
@@ -614,11 +689,13 @@ pub fn run_replace(args: &[String]) -> i32 {
             tip: p.get("--tip").map(|v| parse_kas_price(v, &u, live.order.state.scale(), "--tip", true)).transpose().map_err(usage)?,
             add_kas: p.get("--add-kas").map(|v| parse_kas(v, "--add-kas", false)).transpose().map_err(usage)?.unwrap_or(0),
             renew: p.has("--renew"),
+            gtd: None,
         };
-        if input == AmendInput::default() {
-            return Err("nothing to change: give --price, --amount, --tip, --stop, --stop-limit, --add-kas or --renew".into());
+        if input == AmendInput::default() && gtd.is_none() {
+            return Err("nothing to change: give --price, --amount, --tip, --stop, --stop-limit, --add-kas, --renew or --gtd".into());
         }
         let clock = data::clock(node)?;
+        let input = AmendInput { gtd: gtd.map(|w| gtd_daa(&clock, w)), ..input };
         let (rep, value, mut notes) = replacement(&live, &input, clock.daa, m.tick)?;
         let funding = data::funding(node, &c.network, &signer.pubkey)?;
         let token_utxos = if rep.custodies().iter().any(|x| x.1 > 0) {
@@ -678,7 +755,14 @@ fn order_carrier(live: &Live) -> Option<u64> {
 ///
 /// The order is taken as its intent with the changes, and re-planned so that the own KAS and
 /// custody of the order come back. It is then cancelled and replaced in one transaction.
-fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[TokenMarket]) -> Result<(Ready, Units), Fail> {
+fn replan_replace(
+    c: &Common,
+    p: &Parsed,
+    signer: &Signer,
+    live: &Live,
+    ms: &[TokenMarket],
+    gtd: Option<When>,
+) -> Result<(Ready, Units), Fail> {
     use super::replan::{intent_from_order, lifetime_of, replace_env, Changes};
     let node = c.need_node()?;
     if p.get("--add-kas").is_some() {
@@ -721,12 +805,17 @@ fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[To
         entry_stop: price("--entry-stop")?,
         renew: p.has("--renew"),
     };
-    if ch == Changes::default() && p.get("--carrier").is_none() {
-        return Err("nothing to change: give a new price, stop, amount, tip, trail, --carrier or --renew".into());
+    if ch == Changes::default() && p.get("--carrier").is_none() && gtd.is_none() {
+        return Err("nothing to change: give a new price, stop, amount, tip, trail, --carrier, --renew or --gtd".into());
     }
     let clock = data::clock(node)?;
     let expiry = s.expiry().map(|e| e.0).unwrap_or(0);
-    let lifetime = lifetime_of(expiry, live.genesis_daa, live.deadline, ch.renew);
+    // `--gtd` dates the replacement; the plan checks it as it checks `kob place --gtd`.
+    let lifetime = match gtd {
+        Some(When::Unix(u)) => super::plan::Lifetime::GtdUnix(u.min(i64::MAX as u64) as i64),
+        Some(When::Daa(d)) => super::plan::Lifetime::GtdDaa(d.min(i64::MAX as u64) as i64),
+        None => lifetime_of(expiry, live.genesis_daa, live.deadline, ch.renew),
+    };
     let intent = intent_from_order(s, lifetime, clock.daa, &ch)?;
     // What the replacement draws on: the own KAS and custody of the order, as stand-ins, and the
     // free tokens of A and B of the maker.

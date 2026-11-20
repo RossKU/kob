@@ -53,7 +53,7 @@ TRADE (a key: --key-file PATH or --key-env NAME, else $KOB_KEY; --key was remove
                                place an order as the web wallet plans it: limit, ioc, fok, market, streaming, close,
                                twap, dca, dutch, stop-market, stop-limit, trailing-stop, take-profit, oco, ifd, ifo,
                                repeat-ifd, repeat-ifo; every kind on a pair with --quote (`kob place --help`)
-  kob replace <COVENANT_ID> [--price P] [--amount A] [--tip T] [--stop P] [--renew] [...]
+  kob replace <COVENANT_ID> [--price P] [--amount A] [--tip T] [--stop P] [--renew | --gtd WHEN] [...]
                                amend a live order in place, or cancel-replace it in one transaction (trailing stops,
                                if-done entries and pair orders are re-planned from their terms)
   kob cancel <COVENANT_ID>...  the maker's cancel by covenant id (indexer view, checked on the node); `--view FILE` instead: saved views

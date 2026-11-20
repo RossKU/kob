@@ -221,6 +221,7 @@ kob place pair-limit --token TETH --quote TUSD --side sell --amount 0.01TETH --p
 # amend, renew, cancel, refund, take
 kob replace <covenant id> --price 0.255KAS $N
 kob replace <covenant id> --amount 20TUSD --renew $N
+kob replace <covenant id> --gtd 2026-11-20T18:00Z $N            # a new expiry, amended in place
 kob cancel <covenant id> <covenant id> $N
 kob refund <covenant id> $N
 kob take <covenant id> --amount 4TUSD $N                          # shows the price and asks

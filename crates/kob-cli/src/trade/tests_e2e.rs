@@ -455,6 +455,76 @@ fn replace_amends_in_place_or_cancel_replaces() {
     assert_eq!(w.submitted(), 2);
 }
 
+/// `kob replace --gtd`: a new expiry, amended in place, within now..now + 90 days.
+///
+/// The DAA score is 1 000 000. A bad time is refused before anything is signed.
+#[test]
+fn replace_gtd_sets_a_new_expiry_in_place() {
+    let maker = pk(0x11);
+    let (a, b) = ([0xa1; 32], [0xb1; 32]);
+    let ask_state = AnyState::KobAsk(ask(maker, 10 * SCALE, 1_000_000 + 77_000_000));
+    let bid_state = bid(maker);
+    let bid_value = bid_state.escrow(10 * SCALE, 3).unwrap() as u64;
+    let w = world("replace-gtd", &[(ask_state, a, 0x10, 2 * KAS), (AnyState::KobBid(bid_state), b, 0x20, bid_value)]);
+    let replace = crate::trade::actions::run_replace;
+    let plan = || -> Value {
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(w.fresh(".replace.json")).unwrap()).unwrap();
+        doc["info"]["plan"].clone()
+    };
+    let expiry_of = |p: &Value| p["replacement"]["state"]["expiryDaa"].as_str().unwrap().parse::<i64>().unwrap();
+    // --gtd alone amends the ask in place: same covenant id, the price kept, a 1-hour expiry.
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --gtd daa:1036000 --yes", to_hex(&a)))), 0);
+    let s = w.signed(".replace.json");
+    assert_eq!(s.tx.outputs[0].covenant.as_ref().map(|c| c.covenant_id), Some(a));
+    let p = plan();
+    assert_eq!(p["inPlace"], true);
+    assert_eq!((expiry_of(&p), p["replacement"]["state"]["price"].as_str()), (1_036_000, Some("300000000")));
+    assert!(decode(&s.tx.payload).unwrap().unwrap().records.iter().any(|r| matches!(r, Record::Amend { .. })));
+    // With a new price, as a market maker's reprice: the bid in place, with both changes.
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --price 2.1KAS --gtd daa:1072000 --yes", to_hex(&b)))), 0);
+    let s = w.signed(".replace.json");
+    assert_eq!(s.tx.outputs[0].covenant.as_ref().map(|c| c.covenant_id), Some(b));
+    let p = plan();
+    assert_eq!(p["inPlace"], true);
+    assert_eq!((expiry_of(&p), p["replacement"]["state"]["price"].as_str()), (1_072_000, Some("210000000")));
+    // A UTC time one hour ahead: at most 36 000 DAA from now at 10 DAA/s (the end is never later).
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let at = super::units::fmt_utc(now + 3600);
+    let at = format!("{}T{}Z", &at[..10], &at[11..19]);
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --gtd {at} --yes", to_hex(&a)))), 0);
+    let e = expiry_of(&plan());
+    assert!((1_035_900..=1_036_000).contains(&e), "{e}");
+    assert_eq!(w.submitted(), 3);
+    // Refused: now or the past (a DAA score or a UTC time), past 90 days, with --renew, unparsable.
+    for (args, code) in [
+        ("--gtd daa:1000000", 1),
+        ("--gtd daa:999000", 1),
+        ("--gtd 2020-01-01T00:00Z", 1),
+        ("--gtd daa:78760001", 1),
+        ("--gtd daa:1036000 --renew", 2),
+        ("--gtd tomorrow", 2),
+    ] {
+        assert_eq!(run(replace, w.args(0x11, &format!("{} {args} --yes", to_hex(&a)))), code, "{args}");
+    }
+    // 90 days exactly is the last expiry taken.
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --gtd daa:78760000 --yes", to_hex(&a)))), 0);
+    assert_eq!(w.submitted(), 4);
+}
+
+/// The bounds of `--gtd` against now and the activation of the order.
+#[test]
+fn check_gtd_bounds() {
+    use crate::trade::actions::check_gtd;
+    let max = super::plan::MAX_IDLE_DAA;
+    assert_eq!(check_gtd(1_000_001, 1_000_000, 0), Ok(1_000_001));
+    assert_eq!(check_gtd(1_000_000 + max, 1_000_000, 0), Ok(1_000_000 + max));
+    assert!(check_gtd(1_000_000, 1_000_000, 0).unwrap_err().contains("not in the future"));
+    assert!(check_gtd(0, 1_000_000, 0).unwrap_err().contains("not in the future"));
+    assert!(check_gtd(1_000_001 + max, 1_000_000, 0).unwrap_err().contains("90 days"));
+    assert!(check_gtd(1_010_000, 1_000_000, 1_010_000).unwrap_err().contains("activation"));
+    assert_eq!(check_gtd(1_010_001, 1_000_000, 1_010_000), Ok(1_010_001));
+}
+
 #[test]
 fn cancel_take_and_refund() {
     let (maker, taker) = (pk(0x11), pk(0x22));
@@ -1068,6 +1138,13 @@ fn replace_replans_trailing_if_done_and_pair_orders() {
     assert_eq!((x.price, x.amount_left, x.custody, x.t_cov_id), (1_500, 5 * SCALE, 5 * SCALE, TOKEN_B));
     assert_eq!(r.custody.unwrap().state.amount(), 5 * SCALE);
     assert_eq!(w.submitted(), 3);
+    // --gtd alone re-plans it with that expiry; one in the past or past 90 days is refused.
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --gtd daa:1036000 --yes", to_hex(&p_cov)))), 0);
+    let AnyState::KobPair(x) = rec(&w.signed(".replace.json")).order else { panic!() };
+    assert_eq!((x.expiry_daa, x.price), (1_036_000, 1_600));
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --gtd daa:999999 --yes", to_hex(&p_cov)))), 1);
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --gtd daa:78760001 --yes", to_hex(&p_cov)))), 1);
+    assert_eq!(w.submitted(), 4);
     // Refused: --add-kas on a re-planned order, --trail-step on an order that does not trail, and
     // nothing to change.
     assert_eq!(run(replace, w.args(0x11, &format!("{} --price 2 --yes", to_hex(&p_cov)))), 2, "a price without a unit");
@@ -1075,7 +1152,7 @@ fn replace_replans_trailing_if_done_and_pair_orders() {
     assert_eq!(run(replace, w.args(0x11, &format!("{} --add-kas 1KAS --yes", to_hex(&t_cov)))), 1);
     assert_eq!(run(replace, w.args(0x11, &format!("{} --trail-step 0.01KAS --yes", to_hex(&i_cov)))), 1);
     assert_eq!(run(replace, w.args(0x11, &format!("{} --yes", to_hex(&p_cov)))), 1);
-    assert_eq!(w.submitted(), 3);
+    assert_eq!(w.submitted(), 4);
 }
 
 fn view_args(
