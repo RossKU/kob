@@ -124,9 +124,9 @@ body:has(.market-page) .container { max-width: none; }
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: 'id stats live'; align-items: center; column-gap: 12px; row-gap: 8px;
   position: relative; min-height: 60px; padding: 8px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
 }
-/* the shared-ticker note: in the bar's top space (a phone keeps 10 px more of it for every market, so no market moves), out of the flow (the bar's height does not change). A warn-coloured pill and a tap target (TipBadge 'bar'); the short text is never cut. */
-.mkt-bar-note { position: absolute; top: 1px; left: 14px; max-width: calc(100% - 28px); box-sizing: border-box; height: 14px; padding: 0 6px; border-radius: 7px; font-size: 0.66rem; line-height: 14px; font-weight: 600; background: var(--warn-bg); color: var(--warn); pointer-events: auto; }
-.mkt-bar-note::after { content: ''; position: absolute; inset: -4px -6px; }
+/* the shared-ticker note: in the bar's top space (a phone keeps 10 px more of it for every market, so no market moves), out of the flow (the bar's height does not change). The warning sign alone in a small warn-coloured pill, and a tap target (TipBadge 'bar'): the sentence opens on a tap, as the note is also seen on tokens that only happen to share a ticker (founder, 2026-11-20). */
+.mkt-bar-note { position: absolute; top: 1px; left: 14px; max-width: calc(100% - 28px); box-sizing: border-box; height: 14px; min-width: 22px; padding: 0 5px; border-radius: 7px; font-size: 0.72rem; line-height: 14px; text-align: center; font-weight: 600; background: var(--warn-bg); color: var(--warn); pointer-events: auto; }
+.mkt-bar-note::after { content: ''; position: absolute; inset: -4px -10px; }
 .mkt-bar-id { grid-area: id; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .mkt-bar-ids { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .mkt-bar-ids .pair-sep { font-size: 1rem; }
