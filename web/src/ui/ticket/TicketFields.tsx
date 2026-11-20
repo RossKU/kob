@@ -213,7 +213,7 @@ export function TicketFields(props: TicketFieldsProps) {
           const note = id === 'tipAuto' && value === 'true' && props.tipAutoNote ? (
             <>
               <span class="tk-sub" data-testid="field-tipAuto-total">{props.tipAutoNote}</span>
-              <span class="tk-sub" data-testid="field-tipAuto-partial">{t('ticket.tipAuto.partial')}</span>
+              <span class="tk-sub tk-help" data-testid="field-tipAuto-partial">{t('ticket.tipAuto.partial')}</span>
             </>
           ) : null;
           return (

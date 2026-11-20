@@ -329,7 +329,12 @@ test.describe('executor tip', () => {
     const tip = page.getByTestId('order-tip');
     await expect(tip).not.toHaveValue('');
     await expect(page.getByTestId('field-tipAuto-total')).toHaveText(/^Tip in all: 0\.0\d+ KAS$/);
+    // the caveat is field help: hidden until the ticket's "?" shows the help
+    await expect(page.getByTestId('field-tipAuto-partial')).toBeHidden();
+    await page.getByTestId('order-help-toggle').click();
+    await expect(page.getByTestId('field-tipAuto-partial')).toBeVisible();
     await expect(page.getByTestId('field-tipAuto-partial')).toHaveText('Covers one fill of the whole order; small partial fills may wait.');
+    await page.getByTestId('order-help-toggle').click();
     const v = Number(await tip.inputValue());
     expect(v).toBeGreaterThan(0);
     // over the whole 20 EXKCC: the tip in all is about 1.25 x one match fee, never many fees

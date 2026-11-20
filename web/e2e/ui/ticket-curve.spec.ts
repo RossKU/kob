@@ -35,7 +35,12 @@ for (const v of VARIANTS) {
     await openMarket(page, mock);
     await sellLadder(page, '3');
     await expect(page.getByTestId('order-ladder-as-curve')).toHaveAttribute('aria-checked', 'true');
+    // why a curve is cheaper is field help: hidden until the ticket's "?" shows the help
+    await expect(page.getByTestId('order-ladder-how')).toBeHidden();
+    await page.getByTestId('order-help-toggle').click();
+    await expect(page.getByTestId('order-ladder-how')).toBeVisible();
     await expect(page.getByTestId('order-ladder-how')).toContainText('One order and one UTXO');
+    await page.getByTestId('order-help-toggle').click();
     // A curve has no expiry: no "Lasts". The footer says what placing it costs (its carriers and
     // the fee).
     await expect(page.getByTestId('field-lifetime')).toHaveCount(0);
@@ -65,6 +70,7 @@ test('two levels default to separate orders; separate orders show the stepper', 
   await openMarket(page, mock);
   await sellLadder(page, '2');
   await expect(page.getByTestId('order-ladder-as-separate')).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByTestId('order-ladder-how')).toBeVisible();
   await expect(page.getByTestId('order-ladder-how')).toContainText('you sign 2 transactions');
   const placed = await placeLadder(page, mock, 2);
   expect(placed.map((p) => p.views[0].contract)).toEqual(['KobAsk', 'KobAsk']);
