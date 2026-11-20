@@ -17,7 +17,7 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
 
 ## 1. Overview
 
-* **Base path** `/v1`. **GET only**, except the one write route `POST /v1/logo-reports` (section 3.19, off unless `[logo_reports] enabled`).
+* **Base path** `/v1`. **GET only**, except the two write routes `POST /v1/logo-reports` (section 3.19, off unless `[logo_reports] enabled`) and `POST /v1/logo-votes` (section 3.19b, off unless `[logo_votes] enabled`).
   Any other method on a known path gets `405` from the router (the framework's default answer, with an empty body). `OPTIONS` is answered `204` on every path when `cors_allow_origin` is set (it is handled before
   routing), otherwise it is a `405` like any other method. An unknown path is `404` with the error envelope
   (`not_found`, "no such route").
@@ -46,7 +46,7 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
 ### Routes
 
 The list below is the router (`api/mod.rs`, `build()`), in registration order: 23 routes, plus `GET /v1/metrics` as the 24th
-only when `[api] metrics = true` (the default), the KAS price route (25) only when `[api] usd_price = true` (default false), and the two logo routes (26, 27) only when `[logo_reports] enabled = true` (default false). "Cost" is the rate-limit weight (section 5.2): `1` light, `H` heavy
+only when `[api] metrics = true` (the default), the KAS price route (25) only when `[api] usd_price = true` (default false), the two logo routes (26, 27) only when `[logo_reports] enabled = true` (default false), and the two vote routes (29, 30) only when `[logo_votes] enabled = true` (default false). "Cost" is the rate-limit weight (section 5.2): `1` light, `H` heavy
 (`heavy_route_cost`, default 5). "Cached" marks the reads kept in the response cache (section 5.6).
 
 | # | Route | Section | Cost | Cached |
@@ -79,6 +79,8 @@ only when `[api] metrics = true` (the default), the KAS price route (25) only wh
 | 26 | `POST /v1/logo-reports` (only with `[logo_reports] enabled`) | [3.19](#319-post-v1logo-reports) | 1 | no |
 | 27 | `GET /v1/logo-blocklist` (only with `[logo_reports] enabled`) | [3.20](#320-get-v1logo-blocklist) | 1 | no |
 | 28 | `GET /v1/creator-locks?key=` | [3.24](#324-get-v1creator-lockskey) | H | no |
+| 29 | `POST /v1/logo-votes` (only with `[logo_votes] enabled`) | [3.19b](#319b-post-and-get-v1logo-votes) | H | no |
+| 30 | `GET /v1/logo-votes` (only with `[logo_votes] enabled`) | [3.19b](#319b-post-and-get-v1logo-votes) | 1 | no (own cache) |
 
 ## 2. Conventions
 
@@ -892,7 +894,7 @@ node's DAA score.
 Reports the logo of a token. KOB keeps and serves no third-party image: the web app loads a token's logo, in the viewer's browser,
 from the address its creator gave. A report is how that image is taken down: **the first report of a token hides its logo at once**
 (the web app shows the letter avatar instead), the operator reviews it, and the token can be restored. Present only with
-`[logo_reports] enabled = true` (section 6; otherwise `404`, "no such route"). The only write route of the API; there is no
+`[logo_reports] enabled = true` (section 6; otherwise `404`, "no such route"). One of the two write routes of the API (votes, 3.19b, are the other); there is no
 administrative route on the network (the operator restores and hides with `kobd logo-reports`,
 [ops/executor.md](ops/executor.md)).
 
@@ -957,6 +959,58 @@ curl -s $API/v1/logo-blocklist
 ```
 
 `hidden` is sorted; `updated_ms` is when the set last changed (0 while it never has).
+
+### 3.19b `POST` and `GET /v1/logo-votes`
+
+Votes on token logos (design: [design/logo-votes.md](design/logo-votes.md)). Any wallet can vote up or down on a token's logo, holder
+or not; a vote is a message the wallet signs, no transaction and no fee. A logo is judged once at least 3 addresses voted on it, and
+a net score (up minus down) of -1 or lower then hides it by default in the web app (the viewer may show all). Votes are not reports:
+they never touch the blocklist of 3.19 and 3.20. Present only with `[logo_votes] enabled = true` (section 6; otherwise `404`).
+
+**`POST /v1/logo-votes`.** Body (JSON, `content-type: application/json`, at most 1024 bytes, unknown fields refused):
+
+| Field | Meaning |
+|---|---|
+| `covenant_id` | the token, 32 bytes of hex |
+| `vote` | `"up"` or `"down"` |
+| `address` | the Schnorr P2PK address that signed, of the indexer's network |
+| `day` | the UTC date of the message, `YYYY-MM-DD`: today or yesterday |
+| `nonce` | the proof of work, decimal (at most 20 digits) |
+| `signature` | 64 bytes of hex: the Kaspa personal-message signature (BIP340 Schnorr over BLAKE2b-256 keyed `PersonalMessageSigningHash`) of the text below by the key of `address` |
+
+The signed text is `KOB logo vote
+Token: <covenant_id, lower-case hex>
+Vote: <vote>
+Address: <address>
+Network: <network>
+Day: <day>`.
+The nonce must give `SHA-256("KOB logo vote pow/1
+<network>
+<covenant_id>
+<address>
+<day>
+<nonce>")` at least `pow_bits` leading
+zero bits (the GET says how many). The address must have KOB history in the store at least `min_history_secs` old (an order it
+placed or a token output it held; default 24 hours). One vote per wallet across all logos per `interval_secs` (default 24 hours);
+after it the vote can be changed. The same vote again is answered `unchanged` and uses nothing. Origins and the per-client and daily
+limits as for reports (`[logo_votes]`, section 6). The generic rate limit of section 5.2 applies first, at the heavy cost.
+
+| Status | When |
+|---|---|
+| `200` | `{"result": "counted" | "changed" | "unchanged", "covenant_id": "<hex32>", "up": n, "down": n}`: the token's totals after it |
+| `400` | the body's shape; `stale_day`, `bad_pow`, `bad_signature`, `unsupported_address` (not a P2PK address of this network) |
+| `403` | `forbidden_origin`; `no_history`: the address has no KOB history old enough |
+| `404` | `unknown_token` |
+| `413` / `415` | body over 1024 bytes / not `application/json` |
+| `429` | `too_soon` (the wallet voted less than `interval_secs` ago) or `rate_limited`, `Retry-After` in seconds |
+
+**`GET /v1/logo-votes`.** The totals of every token voted on, sorted, and the tokens the rule hides. It never names a voter. Rendered
+at most every 5 seconds (a vote drops it) with `Cache-Control: public, max-age=5`.
+
+```json
+{ "logos": [{ "covenant_id": "<hex32>", "up": 1, "down": 2 }], "hidden": ["<hex32>"], "min_voters": 3, "hide_at": -1,
+  "pow_bits": 20, "interval_secs": 86400, "updated_ms": 1795176000000 }
+```
 
 ### 3.21 `GET /v1/stats`
 
@@ -1382,6 +1436,23 @@ Top-level table of the same file (section 3.19). Unknown keys are refused.
 
 The state lives in the indexer's database (`logo_blocklist`, `logo_reports`), is not derived from the chain, and is not rebuilt by
 `kobd db replay` (use `kobd logo-reports export` before and `import` after).
+
+### The `[logo_votes]` table
+
+Top-level table of the same file (section 3.19b). Unknown keys are refused. The rule itself (3 voters, hidden at -1) is not a key.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Serve `POST` and `GET /v1/logo-votes`; off, both are `404`. |
+| `pow_bits` | `20` | Leading zero bits of a vote's proof of work (at most 32); about 2 s in a desktop browser. |
+| `interval_secs` | `86400` | One vote per wallet across all logos per this long. |
+| `min_history_secs` | `86400` | The voting address's KOB history (first order or token output) must be at least this old. |
+| `per_client_per_hour` | `20` | Votes one client may cast per hour; 0 = none. |
+| `max_per_day` | `20000` | Votes from all clients together per 24 hours; 0 = none. |
+| `origins` | `[]` | Origins whose pages may vote; empty: `[logo_reports] origins`, else `cors_allow_origin` if it names one origin. |
+
+Every accepted vote is kept for good with its signature (`logo_votes`; the totals in `logo_vote_totals`). Not derived from the chain:
+`kobd logo-reports export` (format `kob-logo-reports/2`) carries the votes, and `import` loads them.
 
 Related top-level keys that shape what the API reports: `settle_depth_daa` (100), `daa_per_second` (10), `lag_alarm_hours`
 (`[1, 6, 12, 24]`), `max_lag_secs` (30).
