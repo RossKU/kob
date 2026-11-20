@@ -10,7 +10,10 @@
 //! twelve `p_k = ⌊p0·2^(k/12)⌋` from the fixed Q40 table [`SEMITONES`]. `octaves` (1 to 8) sets the
 //! range: `12·octaves + 1` levels, the start level included, so the top level is exactly
 //! `2^octaves` times the first and every 12 levels exactly double the price. `total` sets the start
-//! price; no leftover is spread over the top levels, which keeps the octaves exact.
+//! price; no leftover is spread over the top levels, which keeps the octaves exact. Each price is
+//! rounded down on its own, so at a start below [`CHROMATIC_MIN_START`] two neighbours could share
+//! a price, or the first level of an octave could sit below the last of the octave under it. Such
+//! a table is refused: every level of a chromatic table is above the one below it.
 
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +29,9 @@ pub const DEFAULT_CURVE_MULTIPLE_MILLI: u64 = 5_000;
 /// The octaves a chromatic curve takes (1 to 8), and its default (2: 25 levels, the top 4 times the start).
 pub const CHROMATIC_MAX_OCTAVES: u32 = 8;
 pub const DEFAULT_CHROMATIC_OCTAVES: u32 = 2;
+/// The lowest start price (sompi per whole token) at which every chromatic table of more than one
+/// level still rises at each semitone. A lower start is refused.
+pub const CHROMATIC_MIN_START: i64 = 17;
 /// `round(2^(k/12) · 2^40)` for `k = 0..12`: one semitone apart (computed with integer 12th roots).
 pub const SEMITONES: [u128; 12] = [
     1_099_511_627_776,
@@ -179,6 +185,18 @@ fn chromatic_table(amount: i64, octaves: u32, total: i64, scale: i64, tip: i64) 
             "the first level would be priced {} sompi per whole token, below {} (raise the total or lower the amount)",
             table[0],
             tip.max(1)
+        ));
+    }
+    // a low start rounds neighbours together, or below the level under them
+    if let Some(i) = table.windows(2).position(|w| w[1] <= w[0]) {
+        return bad(format!(
+            "the start price would be {} sompi per whole token, too low for a higher price at every semitone \
+             (level {} would be {} after {}): a chromatic curve starts at {CHROMATIC_MIN_START} sompi per whole token \
+             or more (raise the total or lower the amount)",
+            table[0],
+            i + 2,
+            table[i + 1],
+            table[i]
         ));
     }
     Ok(CurveTable { level_size, table, realised: got })

@@ -205,6 +205,7 @@ export default {
   'issue.sale.average': 'Average price',
   'issue.sale.realised': 'Total if sold out',
   'issue.sale.note': 'Geometric steps, no expiry. You can cancel it any time.',
+  'issue.sale.lowStart': 'The first price is too low for this curve. Raise the total or sell fewer tokens.',
   'issue.lock.label': 'Lock my share until',
   'issue.lock.none': 'No lock',
   'issue.lock.days': '{days} days',

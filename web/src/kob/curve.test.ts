@@ -169,6 +169,30 @@ describe('chromatic curve (one semitone per level)', () => {
     }
   });
 
+  it('refuses a start too low for a higher price at every semitone, which the create form says plainly', async () => {
+    // 10^9 whole tokens for 50 KAS: rounded on their own, the levels would step down at the octave
+    let msg = '';
+    try {
+      chromatic(10n ** 17n, SCALE, 2, 50n * KAS);
+    } catch (e) {
+      msg = e instanceof Error ? e.message : String(e);
+    }
+    expect(msg).toMatch(/too low for a higher price at every semitone/);
+    const { curveErrorKey } = await import('../ui/issue/issue-model');
+    expect(curveErrorKey(msg)).toBe('issue.sale.lowStart');
+    expect(curveErrorKey('curve: amount, total and scale must be > 0, tip >= 0')).toBeNull();
+    // a start of 17 sompi and up rises at every level
+    for (const total of [60n, 100n, 1_000n]) {
+      let t: bigint[] | null = null;
+      try {
+        t = chromatic(10n ** 17n, SCALE, 2, total * KAS).table;
+      } catch {
+        t = null;
+      }
+      if (t) for (let i = 1; i < t.length; i++) expect(t[i]! > t[i - 1]!, `${total} KAS, level ${i}`).toBe(true);
+    }
+  });
+
   it('has fewer levels when the amount is small, and refuses 0 or 9 octaves', () => {
     expect(chromatic(7n, 1n, 1, 700n * KAS).table).toHaveLength(7);
     expect(() => chromatic(100n, 1n, 0)).toThrow(/octaves/);
