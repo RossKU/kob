@@ -16,6 +16,8 @@ export function orderOf(v) {
     value: Number(v.current?.value ?? 0),
     txid: v.current?.txid ?? null,
     status: v.status,
+    expired: v.expired === true, // past its expiry: conforming matchers no longer fill it, a keeper may refund it
+    expiryDaa: v.expiry_daa ?? null,
     scale: v.scale,
     live: v.status === 'open' || v.status === 'partial',
   };

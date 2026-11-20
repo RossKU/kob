@@ -49,6 +49,7 @@ function chain() {
   const file = process.env.FAKE_KOB_CHAIN;
   const c = JSON.parse(readFileSync(file, 'utf8'));
   const val = (flag) => args[args.indexOf(flag) + 1];
+  const gtd = () => (args.includes('--gtd') ? Date.parse(val('--gtd')) : null); // the expiry, ms (null: a 90-day GTC)
   const out = (o) => { process.stdout.write(JSON.stringify(o)); process.exit(0); };
   const fee = 500000;
   if (args[0] === 'balances') {
@@ -72,15 +73,15 @@ function chain() {
     const escrow = Math.ceil((amount * price) / 1e6);
     if (side === 'sell' && c.tokenUtxos > 3) { process.stderr.write('error: TOKEN_UTXOS_FRAGMENTED'); process.exit(1); }
     submit({ ids: [id], apply: () => {
-      if (side === 'sell') { c.tokenFree -= amount; c.kasFree -= 1e8; c.orders[id] = { side: 1, price, amount, value: 1e8, txid }; }
-      else { c.kasFree -= escrow + 1e8; c.orders[id] = { side: 2, price, amount, value: escrow + 1e8, txid }; }
+      if (side === 'sell') { c.tokenFree -= amount; c.kasFree -= 1e8; c.orders[id] = { side: 1, price, amount, value: 1e8, txid, expiresAt: gtd() }; }
+      else { c.kasFree -= escrow + 1e8; c.orders[id] = { side: 2, price, amount, value: escrow + 1e8, txid, expiresAt: gtd() }; }
     } });
   }
   if (args[0] === 'replace') {
     const id = args[1];
     const o = c.orders[id];
     if (!o) { process.stderr.write('error: unknown order'); process.exit(1); }
-    submit({ plan: { inPlace: true }, apply: () => { o.price = Number(val('--price').replace('sompi', '')); o.txid = txid; o.value -= fee; c.kasFree += fee; } }); // an amend's fee comes from the order
+    submit({ plan: { inPlace: true }, apply: () => { if (args.includes('--price')) o.price = Number(val('--price').replace('sompi', '')); if (args.includes('--gtd')) o.expiresAt = gtd(); o.txid = txid; o.value -= fee; c.kasFree += fee; } }); // an amend's fee comes from the order
   }
   if (args[0] === 'cancel') {
     const id = args[1];

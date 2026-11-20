@@ -146,7 +146,7 @@ function printStatus(st) {
   if (!rows.length) console.log('           none');
   for (const q of rows) {
     const tok = q.amountLeft / 10 ** cfg.token.decimals;
-    console.log(`  ${q.side.padEnd(4)} L${String(q.level).padEnd(3)} ${fmtAmount(q.price / 1e8, 8).padStart(12)} KAS  ${fmtAmount(tok, 6).padStart(12)} ${label}  value ${fmtAmount(q.value / 1e8, 4)} KAS  ${q.id}${q.pending ? ` [${q.pending} pending]` : ''}`);
+    console.log(`  ${q.side.padEnd(4)} L${String(q.level).padEnd(3)} ${fmtAmount(q.price / 1e8, 8).padStart(12)} KAS  ${fmtAmount(tok, 6).padStart(12)} ${label}  value ${fmtAmount(q.value / 1e8, 4)} KAS  ${q.id}${q.expiresAt ? `  expires ${q.expiresAt.slice(11, 16)} UTC${q.expired ? ' (EXPIRED)' : ''}` : ''}${q.pending ? ` [${q.pending} pending]` : ''}`);
   }
   for (const f of last.funds ?? []) if (f.level !== 'ok') console.log(`${f.level.toUpperCase().padEnd(10)} ${f.message}`);
   const fees = st.fees && st.fees.day === new Date().toISOString().slice(0, 10) ? st.fees : null;

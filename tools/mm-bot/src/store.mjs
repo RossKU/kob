@@ -19,7 +19,7 @@ export const paths = (dataDir) => ({
 export function freshState(nowMs) {
   return {
     version: 1,
-    orders: {}, // covenant id -> { side, level, price, amount, quotedFair, placedAt, pending: null | { kind, since, txid } }
+    orders: {}, // covenant id -> { side, level, price, amount, quotedFair, placedAt, expiresAt (ms, the --gtd sent), expired, pending: null | { kind, since, txid } }
     recent: {}, // ids that ended in the last hour -> { side, level, endedAt } (to attribute late fills)
     lastFillId: null,
     fees: null, // { day, sompi, txs, byKind: { kind: { n, sompi } } }

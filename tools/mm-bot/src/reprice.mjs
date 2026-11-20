@@ -1,14 +1,27 @@
 // The reprice decision: amend in place past the threshold, and cancel only where an amend cannot
-// work. It never reprices on a timer.
+// work. The one timer is the renewal: every quote carries a short expiry (quotes.lifeMin), and a
+// quote not amended for quotes.renewAfterMin is amended in place to its target with a fresh one. A
+// reprice renews too, so in a moving market the renewals cost nothing extra.
 
 import { bidCost, orderValue } from './ladder.mjs';
 
 /**
+ * Whether an order's expiry is due for renewal at `now`: renewAfterMs after it was set, past the
+ * expiry as the indexer reports it, or not known (an order of an older run).
+ */
+export function renewDue(o, now, life) {
+  if (!life) return false;
+  if (o.expired || o.expiresAt == null) return true;
+  return o.expiresAt - now <= life.lifeMs - life.renewAfterMs;
+}
+
+/**
  * The cycle's actions: cancels, then amends, then placements (only what the free inventory covers
- * now).
+ * now). ctx.life = { lifeMs, renewAfterMs } turns the renewals on, at ctx.now.
  */
 export function planActions(targets, orders, ctx) {
   const { fair, scale, q } = ctx;
+  const now = ctx.now ?? Date.now();
   const minValue = Math.floor(q.minOrderKas * 1e8);
   const carrierMin = Math.floor(q.askCarrierMinKas * 1e8);
   const cancels = [];
@@ -52,7 +65,9 @@ export function planActions(targets, orders, ctx) {
       // `off` follows a config or skew change on the same threshold.
       const moved = Math.abs(fair / o.quotedFair - 1);
       const off = Math.abs(t.price / o.price - 1);
-      if (Math.max(moved, off) <= q.repriceThreshold || t.price === o.price) continue;
+      const reprice = Math.max(moved, off) > q.repriceThreshold && t.price !== o.price;
+      const renew = renewDue(o, now, ctx.life);
+      if (!reprice && !renew) continue;
       if (side === 'sell' && o.value < carrierMin) {
         cancels.push({ kind: 'cancel', id: o.id, side, level: t.level, reason: 'carrier too low to amend; to be placed again' });
         continue;
@@ -61,8 +76,10 @@ export function planActions(targets, orders, ctx) {
         cancels.push({ kind: 'cancel', id: o.id, side, level: t.level, reason: 'escrow too small at the new price' });
         continue;
       }
-      amends.push({ kind: 'amend', id: o.id, side, level: t.level, from: o.price, price: t.price, quotedFair: fair,
-        reason: moved > q.repriceThreshold ? `fair moved ${(moved * 100).toFixed(3)}% since quoted` : `${(off * 100).toFixed(3)}% from its target` });
+      // A renewal moves the quote to its target too: the same transaction, no extra fee.
+      const reason = !reprice ? (o.expired ? 'renew: past its expiry' : o.expiresAt == null ? 'renew: expiry unknown' : 'renew: expiry due')
+        : moved > q.repriceThreshold ? `fair moved ${(moved * 100).toFixed(3)}% since quoted` : `${(off * 100).toFixed(3)}% from its target`;
+      amends.push({ kind: 'amend', id: o.id, side, level: t.level, from: o.price, price: t.price, quotedFair: fair, renewOnly: !reprice, reason });
     }
   }
   return [...cancels, ...amends, ...places];

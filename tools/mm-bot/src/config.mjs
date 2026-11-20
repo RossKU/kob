@@ -52,6 +52,8 @@ export const DEFAULTS = {
     resizeBelow: 0.5, // cancel and place again an order left with less than this share of its level
     askCarrierMinKas: 0.2, // an ask's amend is paid from its carrier: below this it is cancelled and placed again
     mergeAboveUtxos: 1, // merge the free token UTXOs before placing an ask when there are more than this (the limit is 3 inputs)
+    lifeMin: 90, // every quote is placed and amended with an expiry this far ahead (kob --gtd): the quotes of a dead bot lapse
+    renewAfterMin: 45, // a quote not amended for this long is amended in place to a fresh expiry (a reprice renews it too)
     skew: { enabled: false, maxShift: 0.002, targetTokenShare: 0.5 },
   },
   safety: {
@@ -156,6 +158,11 @@ export function validate(cfg) {
   num(q.resizeBelow, 'quotes.resizeBelow', { min: 0, max: 1 });
   num(q.askCarrierMinKas, 'quotes.askCarrierMinKas', { min: 0.1 });
   num(q.mergeAboveUtxos, 'quotes.mergeAboveUtxos', { min: 1, max: 3, int: true });
+  num(q.lifeMin, 'quotes.lifeMin', { min: 30, max: 1440 });
+  num(q.renewAfterMin, 'quotes.renewAfterMin', { min: 5, max: 1440 });
+  // The renewal must leave time for retries (backoff up to backoffMaxSec, an unseen amend re-read after
+  // orderVisibleTimeoutSec) before the quote lapses.
+  if (q.renewAfterMin > q.lifeMin - 15) p.push('quotes.renewAfterMin must be at least 15 minutes below quotes.lifeMin, so that a failed renewal is retried before the quote lapses');
   if (half + ((q.levels - 1) * q.levelStepPct) / 100 >= 1) p.push('quotes: the outermost bid would be at or below zero');
   if (r.pairAgreement == null ? r.minVenues < 3 : r.pairAgreement >= half) p.push('reference.pairAgreement must be below half of quotes.spreadPct (as a fraction), or two venues can move the fair value past the best quote');
   if (r.usdtAgreement >= half) p.push('reference.usdtAgreement must be below half of quotes.spreadPct (as a fraction), or one USDT/USD source can move the fair value past the best quote');

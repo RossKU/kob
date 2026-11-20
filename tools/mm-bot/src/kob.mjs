@@ -29,6 +29,9 @@ export function parseJsonStream(text) {
   return docs;
 }
 
+/** The `--gtd` argument of a time in ms: UTC to the second, `2026-11-20T12:34:56Z`. */
+export const gtdArg = (ms) => `${new Date(Math.floor(ms / 1000) * 1000).toISOString().slice(0, 19)}Z`;
+
 // Stderr lines that are progress notes, not errors.
 const NOISE = /blocks are contended|^dry run: nothing signed/;
 
@@ -113,12 +116,14 @@ export class Kob {
     };
   }
 
-  place(tokenId, side, amountBase, priceSompi) {
-    return this.sign(['place', 'limit', '--token', tokenId, '--side', side, '--amount', `${amountBase}base`, '--price', `${priceSompi}sompi`]);
+  /** A GTD limit order: `gtd` is the expiry as a UTC time (gtdArg), null for a 90-day GTC. */
+  place(tokenId, side, amountBase, priceSompi, gtd = null) {
+    return this.sign(['place', 'limit', '--token', tokenId, '--side', side, '--amount', `${amountBase}base`, '--price', `${priceSompi}sompi`, ...(gtd ? ['--gtd', gtd] : [])]);
   }
 
-  amend(id, priceSompi) {
-    return this.sign(['replace', id, '--price', `${priceSompi}sompi`]);
+  /** An amend in place to a new price and, with `gtd`, a new expiry. */
+  amend(id, priceSompi, gtd = null) {
+    return this.sign(['replace', id, '--price', `${priceSompi}sompi`, ...(gtd ? ['--gtd', gtd] : [])]);
   }
 
   cancel(id) {

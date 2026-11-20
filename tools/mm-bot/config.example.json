@@ -40,6 +40,8 @@
     "maxBidPct": 50,
     "kasReserve": 50,
     "repriceThreshold": 0.0025,
+    "lifeMin": 90,
+    "renewAfterMin": 45,
     "skew": {
       "enabled": false
     }

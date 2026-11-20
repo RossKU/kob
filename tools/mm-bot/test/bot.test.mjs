@@ -17,6 +17,8 @@ const MAKER = 'a1d9fd1347128011ad0036b077949d63274d5d3b8ac8351776c30c945ef2c2fb'
 let kasUsd = 0.025; // what every venue trades at; the tests move it
 let venuesDown = false;
 let indexerDown = false;
+let usdcUsd = 1.0; // Kraken USDC/USD; the tests move it out of the peg band
+let indexerAheadMs = 0; // the indexer judges expiry this far in the future (time passing while the bot is dead)
 
 /**
  * Raw kline responses of each venue at `kasUsd`, the last 8 minutes, the newest still in progress.
@@ -32,7 +34,7 @@ function venueResponse(url) {
   if (url.includes('gateio')) return ts.map((t) => [String(t / 1000), String(base * p), String(p), '0', '0', '0', String(base), 'true']);
   if (url.includes('mexc')) return ts.map((t) => [t, '0', '0', '0', String(p), String(base), t + 60_000, String(base * p)]);
   if (url.includes('kraken') && url.includes('OHLC')) return { error: [], result: { KASUSD: ts.map((t) => [t / 1000, '0', '0', '0', String(p), String(p), String(base), 5]), last: 0 } };
-  if (url.includes('kraken') && url.includes('Ticker')) return { error: [], result: { USDTZUSD: { a: ['1.0'], b: ['1.0'] }, USDCUSD: { a: ['1.0'], b: ['1.0'] } } };
+  if (url.includes('kraken') && url.includes('Ticker')) return { error: [], result: { USDTZUSD: { a: ['1.0'], b: ['1.0'] }, USDCUSD: { a: [String(usdcUsd)], b: [String(usdcUsd)] } } };
   throw new Error(`no stub for ${url}`);
 }
 
@@ -44,7 +46,8 @@ function stubFetch(chainFile) {
       if (indexerDown) throw new Error('fetch failed');
       const c = JSON.parse(readFileSync(chainFile, 'utf8'));
       const view = (id, o, status) => ({ covenant_id: id, contract: o.side === 1 ? 'KobAsk' : 'KobBid', side: o.side, token: c.token, scale: 1_000_000,
-        price: String(o.price), amount_left: String(o.side === 1 ? o.amount : Math.floor((o.value - 1e8) * 1e6 / o.price)), current: { txid: o.txid, index: 0, value: String(o.value) }, status });
+        price: String(o.price), amount_left: String(o.side === 1 ? o.amount : Math.floor((o.value - 1e8) * 1e6 / o.price)), current: { txid: o.txid, index: 0, value: String(o.value) }, status,
+        expired: o.expiresAt != null && Date.now() + indexerAheadMs >= o.expiresAt });
       if (u.includes('/v1/orders?')) return json({ items: Object.entries(c.orders).map(([id, o]) => view(id, o, 'open')), next_cursor: null });
       if (u.includes('/v1/fills')) return json({ items: [], next_cursor: null });
       const id = u.split('/v1/orders/')[1];
@@ -230,4 +233,139 @@ test('the indexer down while quoting normally: nothing is cancelled blind', { ti
   } finally {
     indexerDown = false;
   }
+});
+
+// Review finding E-L4: every quote carries a short expiry and is renewed in place, so the quotes of
+// a dead bot lapse by themselves.
+const MIN = 60_000;
+const gtdOf = (a) => (a.includes('--gtd') ? Date.parse(a[a.indexOf('--gtd') + 1]) : null);
+const book = (c) => {
+  const bids = Object.values(c.orders).filter((o) => o.side === 2).map((o) => o.price);
+  const asks = Object.values(c.orders).filter((o) => o.side === 1).map((o) => o.price);
+  return { bids, asks, bestBid: Math.max(...bids), bestAsk: Math.min(...asks) };
+};
+
+test('quotes expire lifeMin after their last action, are renewed in place after renewAfterMin, and lapse when the bot dies', { timeout: 90_000 }, async () => {
+  kasUsd = 0.025;
+  venuesDown = false;
+  indexerDown = false;
+  usdcUsd = 1.0;
+  indexerAheadMs = 0;
+  const { bot, chain, calls, dir } = setup();
+  const life = bot.cfg.quotes.lifeMin * MIN;
+  const t0 = Date.now();
+  await bot.cycle();
+  await bot.cycle();
+  let c = chain();
+  const ids = Object.keys(c.orders).sort();
+  assert.equal(ids.length, 6);
+  // Every placement carries --gtd lifeMin ahead (to the second), and the state file knows it.
+  const places = calls().filter((a) => a[0] === 'place');
+  assert.equal(places.length, 6);
+  for (const a of places) {
+    const g = gtdOf(a);
+    assert.ok(g > t0 + life - 2_000 && g <= Date.now() + life, `--gtd ${a[a.indexOf('--gtd') + 1]}`);
+  }
+  for (const id of ids) assert.equal(bot.state.orders[id].expiresAt, c.orders[id].expiresAt);
+
+  // Nothing moves and renewAfterMin has not passed: nothing is sent.
+  const before = calls().length;
+  await bot.cycle();
+  assert.equal(calls().length, before);
+
+  // renewAfterMin (45 min) later: the six quotes are amended in place with a fresh --gtd, at the same
+  // prices, and the ledger books them as renewals.
+  for (const id of ids) bot.state.orders[id].expiresAt -= bot.cfg.quotes.renewAfterMin * MIN;
+  const prices = Object.fromEntries(ids.map((id) => [id, c.orders[id].price]));
+  const t1 = Date.now();
+  await bot.cycle();
+  const renews = calls().slice(before);
+  assert.equal(renews.length, 6);
+  assert.ok(renews.every((a) => a[0] === 'replace' && gtdOf(a) >= t1 + life - 1_000));
+  c = chain();
+  assert.deepEqual(Object.keys(c.orders).sort(), ids, 'in place: the same covenant ids');
+  for (const id of ids) assert.equal(c.orders[id].price, prices[id]);
+  assert.equal(bot.state.fees.byKind.renew.n, 6);
+  assert.equal(bot.state.fees.byKind.renew.sompi, 6 * 500000);
+  // The founder's rules hold through the renewal: a 1 % total gap, no self-trade, 150 tokens a level.
+  const b = book(c);
+  assert.ok(b.bestBid < b.bestAsk);
+  assert.equal((b.bestAsk - b.bestBid) / 40e8, 0.01);
+  assert.ok(Object.values(c.orders).filter((o) => o.side === 1).every((o) => o.amount === 150e6));
+  // Seen by the indexer, and not due again.
+  await bot.cycle();
+  assert.equal(calls().length, before + 6);
+
+  // The bot dies here. Every quote lapses at most lifeMin after the bot's last action: once that
+  // has passed, the indexer flags every quote expired (conforming matchers no longer fill them).
+  const lastAction = Date.now();
+  c = chain();
+  assert.ok(Object.values(c.orders).every((o) => o.expiresAt != null && o.expiresAt <= lastAction + life));
+  indexerAheadMs = life + MIN;
+  const viewed = JSON.parse(JSON.stringify(c.orders));
+  assert.ok(Object.values(viewed).every((o) => Date.now() + indexerAheadMs >= o.expiresAt), 'all lapsed');
+
+  // A restart finds them expired and renews each in place at once, with no cancel and no new order.
+  const again = new Bot(bot.cfg);
+  again.log.quiet = true;
+  again.kob = bot.kob;
+  const n = calls().length;
+  await again.cycle();
+  indexerAheadMs = 0;
+  const after = calls().slice(n);
+  assert.equal(after.length, 6);
+  assert.ok(after.every((a) => a[0] === 'replace' && a.includes('--gtd')));
+  assert.deepEqual(Object.keys(chain().orders).sort(), ids);
+  assert.ok(Object.values(chain().orders).every((o) => o.expiresAt > Date.now() + life - 5_000));
+  const actions = readFileSync(paths(dir).actions, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.ok(actions.some((a) => a.type === 'amend' && a.renewOnly && a.reason === 'renew: past its expiry' && a.gtd));
+});
+
+test('renewals keep the founder rules: the peg band idles and resumes, the fee cap idles, alerts go to alerts.jsonl, the bot never stops', { timeout: 90_000 }, async () => {
+  kasUsd = 0.025;
+  venuesDown = false;
+  indexerDown = false;
+  usdcUsd = 1.0;
+  indexerAheadMs = 0;
+  const { bot, chain, calls, dir } = setup();
+  await bot.cycle();
+  await bot.cycle();
+  assert.equal(Object.keys(chain().orders).length, 6);
+  const alerts = () => (existsSync(paths(dir).alerts) ? readFileSync(paths(dir).alerts, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+
+  // USDC/USD leaves the 0.5 % band: IDLE/peg, every quote cancelled (no renewal), an alert line.
+  usdcUsd = 0.99;
+  await bot.cycle();
+  assert.equal(`${bot.state.mode.mode}/${bot.state.mode.reason}`, 'IDLE/peg');
+  assert.equal(Object.keys(chain().orders).length, 0);
+  assert.ok(alerts().some((a) => a.reason === 'peg' && a.state === 'IDLE'));
+  await bot.cycle();
+  assert.equal(bot.state.mode.mode, 'IDLE', 'never stops by itself');
+
+  // Back in the band: it resumes on its own, and the new quotes carry --gtd again.
+  usdcUsd = 1.0;
+  const n = calls().length;
+  for (let i = 0; i < 4; i++) await bot.cycle();
+  assert.equal(bot.state.mode.mode, 'QUOTING');
+  const placed = calls().slice(n).filter((a) => a[0] === 'place');
+  assert.ok(placed.length >= 5 && placed.every((a) => a.includes('--gtd')));
+  const b = book(chain());
+  assert.ok(b.bestBid < b.bestAsk, 'no self-trade');
+
+  // A renewal is due but the day's fees reached the cap less the cancel reserve: no renewal is
+  // sent, the bot idles on the fee cap and pulls its quotes (cancels always go), and does not stop.
+  const ids = Object.keys(bot.state.orders);
+  for (const id of ids) bot.state.orders[id].expiresAt -= bot.cfg.quotes.renewAfterMin * MIN;
+  const day = new Date().toISOString().slice(0, 10);
+  const cap = bot.cfg.safety.maxFeesKasPerDay - bot.cfg.safety.cancelReserveKas;
+  bot.state.fees = { day, sompi: cap * 1e8, txs: 1, byKind: { amend: { n: 1, sompi: cap * 1e8 } } };
+  const m = calls().length;
+  await bot.cycle();
+  assert.equal(`${bot.state.mode.mode}/${bot.state.mode.reason}`, 'IDLE/fee-cap');
+  const sent = calls().slice(m);
+  assert.ok(sent.every((a) => a[0] === 'cancel'), sent.map((a) => a[0]).join(','));
+  assert.equal(Object.keys(chain().orders).length, 0);
+  assert.ok(alerts().some((a) => a.reason === 'fee-cap'));
+  await bot.cycle();
+  assert.equal(bot.state.mode.mode, 'IDLE');
 });

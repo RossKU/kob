@@ -7,7 +7,7 @@ import { readReference } from './feeds.mjs';
 import { alertsToSend, fmtAmount, fundChecks } from './funds.mjs';
 import { Indexer, indexerUrl } from './indexer.mjs';
 import { sideBudgets, skewShift } from './inventory.mjs';
-import { Kob } from './kob.mjs';
+import { gtdArg, Kob } from './kob.mjs';
 import { buildLadder } from './ladder.mjs';
 import { backoffMs, feeGate, IDLE, initialMode, nextMode, QUOTING, sideStatus, STOPPING } from './modes.mjs';
 import { planActions, pullAll } from './reprice.mjs';
@@ -255,12 +255,15 @@ export class Bot {
       if (o) {
         s.amountLeft = o.amountLeft;
         s.value = o.value;
+        s.expired = o.expired;
         if (s.pending) {
           const seen = s.pending.kind === 'place' || s.pending.kind === 'reread' || (s.pending.kind === 'amend' && o.txid === s.pending.txid && o.price === s.price);
           if (seen) s.pending = null;
           else if (now - s.pending.since > timeout) {
             this.log.info(`${short(id)}: the ${s.pending.kind} was not seen after ${c.safety.orderVisibleTimeoutSec} s; taking the indexer's view (price ${o.price})`);
             if (o.price !== s.price) s.quotedFair = 0; // unknown quote: the next cycle amends it to the target
+            // An unseen amend may not have renewed the expiry: the next cycle renews it.
+            if (s.pending.kind === 'amend') s.expiresAt = null;
             s.price = o.price;
             s.pending = null;
           }
@@ -273,6 +276,7 @@ export class Bot {
       if (one?.live) {
         s.amountLeft = one.amountLeft;
         s.value = one.value;
+        s.expired = one.expired;
         byId.set(id, one);
         continue;
       }
@@ -300,7 +304,7 @@ export class Bot {
   ordersNow() {
     return Object.entries(this.state.orders).map(([id, s]) => ({
       id, side: s.side, level: s.level, price: s.price, quotedFair: s.quotedFair, amountLeft: s.amountLeft ?? s.amount, value: s.value ?? 0,
-      pending: !!s.pending, pendingKind: s.pending?.kind ?? null,
+      pending: !!s.pending, pendingKind: s.pending?.kind ?? null, expiresAt: s.expiresAt ?? null, expired: !!s.expired,
     }));
   }
 
@@ -337,7 +341,7 @@ export class Bot {
     const shift = skewShift(tokenValueKas, kasOf(bal.kasFree + mine.bidKas), c.quotes.skew);
     const targets = buildLadder(snap.fair, budgets, q, this.scale, shift);
     const free = { kas: Math.max(0, bal.kasFree - Math.floor(c.quotes.kasReserve * 1e8)), tokens: bal.token.free };
-    let actions = planActions(targets, orders, { fair: snap.fair, scale: this.scale, free, q });
+    let actions = planActions(targets, orders, { fair: snap.fair, scale: this.scale, free, q, now: Date.now(), life: this.life() });
     // The token program takes at most 3 token inputs per transaction: merge the free token UTXOs
     // before placing an ask.
     const asksToPlace = actions.some((a) => a.kind === 'place' && a.side === 'sell');
@@ -348,6 +352,11 @@ export class Bot {
       q, budgets, shift, targets, mine, actions,
       sides: { bids: sideStatus(targets.bids, budgets.bidKas), asks: sideStatus(targets.asks, budgets.askTokens) },
     };
+  }
+
+  /** The quotes' life: placed and amended with an expiry lifeMs ahead, renewed after renewAfterMs. */
+  life() {
+    return { lifeMs: this.cfg.quotes.lifeMin * 60_000, renewAfterMs: this.cfg.quotes.renewAfterMin * 60_000 };
   }
 
   /** Runs the actions in order, within the fee gate and the per-cycle limit. */
@@ -379,12 +388,15 @@ export class Bot {
     const c = this.cfg;
     const tok = c.token.covenantId;
     const desc = a.kind === 'place' ? `place ${a.side} L${a.level} ${fmtAmount(a.amount / this.scale, 6)} @ ${fmtAmount(a.price / 1e8, 8)} KAS`
-      : a.kind === 'amend' ? `amend ${short(a.id)} ${a.side} L${a.level} ${fmtAmount(a.from / 1e8, 8)} -> ${fmtAmount(a.price / 1e8, 8)} KAS`
+      : a.kind === 'amend' ? `${a.renewOnly ? 'renew' : 'amend'} ${short(a.id)} ${a.side} L${a.level} ${fmtAmount(a.from / 1e8, 8)} -> ${fmtAmount(a.price / 1e8, 8)} KAS`
         : a.kind === 'cancel' ? `cancel ${short(a.id)} ${a.side} L${a.level}` : `merge ${c.token.label ?? 'token'}`;
-    const r = a.kind === 'place' ? await this.kob.place(tok, a.side, a.amount, a.price)
-      : a.kind === 'amend' ? await this.kob.amend(a.id, a.price)
+    // Every placement and amend sets the quote's expiry lifeMin ahead (to the second, at or before it on chain).
+    const expiresAt = Math.floor((Date.now() + this.life().lifeMs) / 1000) * 1000;
+    const gtd = gtdArg(expiresAt);
+    const r = a.kind === 'place' ? await this.kob.place(tok, a.side, a.amount, a.price, gtd)
+      : a.kind === 'amend' ? await this.kob.amend(a.id, a.price, gtd)
         : a.kind === 'cancel' ? await this.kob.cancel(a.id) : await this.kob.merge(tok);
-    const rec = { type: a.kind, ...a, status: r.ok ? (r.dryRun ? 'planned' : 'submitted') : 'failed', txid: r.txid ?? null, fee: r.fee ?? null, newIds: r.newIds ?? [], error: r.error ?? null };
+    const rec = { type: a.kind, ...a, gtd: a.kind === 'place' || a.kind === 'amend' ? gtd : null, status: r.ok ? (r.dryRun ? 'planned' : 'submitted') : 'failed', txid: r.txid ?? null, fee: r.fee ?? null, newIds: r.newIds ?? [], error: r.error ?? null };
     this.log.action(rec);
     if (!r.ok) {
       this.log.info(`${desc} (${a.reason}): FAILED ${r.error}`);
@@ -395,21 +407,22 @@ export class Bot {
     }
     this.log.info(`${desc} (${a.reason}): ${r.dryRun ? 'planned (dry run)' : 'submitted'}${r.txid ? ` tx ${r.txid}` : ''}, fee ${fmtAmount(kasOf(r.fee), 8)} KAS`);
     if (r.dryRun) return r;
-    addFee(this.state, a.kind, r.fee);
+    // A renewal that moves no price is the cost of the expiry: its own line in the fee ledger.
+    addFee(this.state, a.renewOnly ? 'renew' : a.kind, r.fee);
     const now = Date.now();
     if (a.kind === 'place') {
       const id = r.newIds[0];
-      if (id) this.state.orders[id] = { side: a.side, level: a.level, price: a.price, amount: a.amount, quotedFair: a.quotedFair, placedAt: now, pending: { kind: 'place', since: now, txid: r.txid }, amountLeft: a.amount, value: 0 };
+      if (id) this.state.orders[id] = { side: a.side, level: a.level, price: a.price, amount: a.amount, quotedFair: a.quotedFair, placedAt: now, expiresAt, pending: { kind: 'place', since: now, txid: r.txid }, amountLeft: a.amount, value: 0 };
     } else if (a.kind === 'amend') {
       const s = this.state.orders[a.id];
       const inPlace = r.doc?.plan?.inPlace !== false && !r.newIds.length;
-      if (inPlace) Object.assign(s, { price: a.price, quotedFair: a.quotedFair, pending: { kind: 'amend', since: now, txid: r.txid } });
+      if (inPlace) Object.assign(s, { price: a.price, quotedFair: a.quotedFair, expiresAt, expired: false, pending: { kind: 'amend', since: now, txid: r.txid } });
       else {
         // A cancel-replace: the order has a new id.
         delete this.state.orders[a.id];
         this.state.recent[a.id] = { side: a.side, level: a.level, endedAt: now };
         const id = r.newIds[0];
-        if (id) this.state.orders[id] = { ...s, price: a.price, quotedFair: a.quotedFair, placedAt: now, pending: { kind: 'place', since: now, txid: r.txid } };
+        if (id) this.state.orders[id] = { ...s, price: a.price, quotedFair: a.quotedFair, placedAt: now, expiresAt, expired: false, pending: { kind: 'place', since: now, txid: r.txid } };
         this.log.info(`${short(a.id)} was cancel-replaced (not in place): new id ${id}`);
       }
     } else if (a.kind === 'cancel') {
@@ -505,7 +518,8 @@ export class Bot {
       wallet: { kasFree: bal.kasFree, kasTotal: bal.kasTotal, tokenFree: bal.token.free, tokenUtxos: bal.token.freeUtxos },
       inventory: { tokens, kas, ...(inv ?? {}) },
       sides,
-      quotes: after.map((o) => ({ id: o.id, side: o.side, level: o.level, price: o.price, amountLeft: o.amountLeft, value: o.value, quotedFair: o.quotedFair, pending: o.pendingKind })),
+      quotes: after.map((o) => ({ id: o.id, side: o.side, level: o.level, price: o.price, amountLeft: o.amountLeft, value: o.value, quotedFair: o.quotedFair, pending: o.pendingKind,
+        expiresAt: o.expiresAt == null ? null : new Date(o.expiresAt).toISOString(), expired: o.expired })),
       funds: (this.funds ?? []).map((f) => ({ key: f.key, level: f.level, message: f.message })),
       fees: this.state.fees,
       dryRun: this.dryRun,

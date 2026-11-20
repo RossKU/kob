@@ -2,7 +2,8 @@
 
 A market maker for a dollar-stablecoin token on its KOB KAS book: set `token` to its covenant id. It quotes a bid
 and an ask ladder around a fair value taken from the KAS/USD exchange markets, amends its orders in place when the
-market moves, and never takes an order. It drives the `kob` CLI as a child process and needs Node 22; there are no npm
+market moves, and never takes an order. Every quote has a short life (90 min by default) that the bot renews in place,
+so the quotes of a bot that died lapse by themselves. It drives the `kob` CLI as a child process and needs Node 22; there are no npm
 dependencies. The token is pinned by covenant id, never by ticker (tickers collide).
 
 ## Setup
@@ -48,8 +49,16 @@ picks the mode, and quotes or pulls its quotes.
 - **Ladder.** `spreadPct` (1 %) is the gap between the best bid and the best ask, so each sits 0.5 % from fair; further
   levels step out by `levelStepPct` (0.5 %). Sizes are % of `capitalUsd`: 15 % a level, at most 50 % a side.
 - **Repricing.** An order is amended in place (`kob replace <id> --price`) only when fair has moved more than 0.25 % since
-  it was quoted, never on a timer. Cancel and place only when an amend cannot do it: an order shrunk by a fill, an ask
-  whose carrier is too low, or a level no longer quoted. Free token UTXOs are merged before an ask.
+  it was quoted. Cancel and place only when an amend cannot do it: an order shrunk by a fill, an ask whose carrier is too
+  low, or a level no longer quoted. Free token UTXOs are merged before an ask.
+- **Expiry and renewal.** Every placement and every amend carries `--gtd`, an expiry `quotes.lifeMin` (90 min) ahead.
+  A quote that has not been amended for `quotes.renewAfterMin` (45 min) is amended in place to its target with a fresh
+  expiry (`kob replace <id> --price P --gtd WHEN`): the only timer-driven action. A reprice renews too, so in a moving
+  market the renewals cost nothing extra. A quote the indexer reports as past its expiry, after a long outage, is renewed
+  at once; one the bot has no expiry for (placed by a version without it) is renewed in the first cycle. If the bot
+  dies, every quote lapses at most `lifeMin` after the bot's last action: conforming matchers stop filling it and a
+  refund keeper returns its KAS or tokens to the key. Renewals obey the fee cap like every amend; at the cap the bot
+  idles and pulls its quotes, it does not let them lapse.
 - **Inventory.** A side without inventory stops quoting; the bot never borrows, shorts, or crosses itself.
 
 | Mode | When |
@@ -128,6 +137,8 @@ One JSON file; omitted fields take the default; relative paths are relative to t
 | `quotes.resizeBelow` | `0.5` | re-place an order below this share of its level |
 | `quotes.askCarrierMinKas` | `0.2` | re-place an ask whose carrier is lower |
 | `quotes.mergeAboveUtxos` | `1` | merge free token UTXOs above this count |
+| `quotes.lifeMin` | `90` | each quote's expiry, minutes after its last placement or amend (30 to 1440) |
+| `quotes.renewAfterMin` | `45` | renew a quote not amended for this long; at least 15 min below `lifeMin` |
 | `quotes.skew` | off | `{ enabled, maxShift: 0.002, targetTokenShare: 0.5 }` |
 | `safety.killJump` | `0.02` | one-minute move that pulls the quotes |
 | `safety.resumeAfterSec` | `180` | cool-down |
@@ -165,6 +176,14 @@ The 31-minute run (12 placements, 9 amends, 12 cancels, 1 merge) paid 0.264424 K
 An amend's fee comes from the order itself (an ask's 1 KAS carrier, a bid's escrow). The default cap of 50 KAS a day is a
 guard against a runaway, not an expected cost.
 
+**Renewals.** A renewal is an amend in place, booked as `renew` in the fee ledger (`status` shows it under "fees
+today"). With the defaults a quote that is never repriced is renewed 32 times a day (every 45 min). At the soak's amend
+fees (3.3 days on testnet-10, 2026-11-16 to 11-20: a bid amend 0.006316 KAS, an ask amend 0.004276 KAS) the bound for
+6 quotes in a flat market is 32 x (3 x 0.006316 + 3 x 0.004276) = 1.02 KAS a day, 2 % of the cap. Each ask's renewals
+also spend 0.137 KAS a day of its 1 KAS carrier, so a never-repriced ask is cancelled and placed again about every 6
+days (about 0.07 KAS with a merge). Replayed over the soak's real market, where each quote was repriced about every
+15 min, the renewals would have added 60 amends in 3.3 days: 0.10 KAS a day.
+
 ## Risks
 
 - A maker is filled when the price moves against it; the 5-minute VWAP lags fast moves, and quotes rest between cycles.
@@ -175,8 +194,13 @@ guard against a runaway, not an expected cost.
   after every upgrade.
 - The key is a hot key that signs without asking; keep on it only what the bot needs.
 - A cancel can lose a race with a fill.
+- The expiry is soft. Past it, conforming matchers and the KOB book no longer use a quote, but the chain cannot bound
+  when a fill happens: a non-conforming matcher could still fill it until a refund keeper (or the bot's next renewal or
+  cancel) spends it. The short life narrows the window of a dead bot's quotes from 90 days to `lifeMin`; STOP still
+  cancels them at once.
 
 ## Tests
 
 `npm test` (no network, no keys): the pure modules with recorded venue candles, the mode transitions, the deposit math,
-the CLI wrapper, and whole cycles against a stand-in CLI.
+the CLI wrapper, the renewal timing, and whole cycles against a stand-in CLI (among them a dead bot's quotes lapsing and
+a restart renewing them).

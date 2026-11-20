@@ -48,6 +48,22 @@ test('a signing command is planned with --dry-run, then signed with --yes; the k
   }
 });
 
+test('a quote is placed and amended with --gtd (its expiry), the same on the plan and the signing run', async () => {
+  const { kob, calls } = fake('ok');
+  assert.equal((await kob.place(TOKEN, 'buy', 2500000, 3787500000, '2026-11-20T13:30:00Z')).ok, true);
+  assert.equal((await kob.amend('cd'.repeat(32), 3790000000, '2026-11-20T13:31:00Z')).ok, true);
+  const c = calls();
+  assert.equal(c.length, 4);
+  for (const a of c.slice(0, 2)) assert.equal(a[a.indexOf('--gtd') + 1], '2026-11-20T13:30:00Z');
+  for (const a of c.slice(2)) {
+    assert.deepEqual(a.slice(0, 6), ['replace', 'cd'.repeat(32), '--price', '3790000000sompi', '--gtd', '2026-11-20T13:31:00Z']);
+  }
+  // Without one, nothing is added (a 90-day GTC).
+  const { kob: k2, calls: c2 } = fake('ok');
+  await k2.amend('cd'.repeat(32), 3790000000);
+  assert.ok(c2().every((a) => !a.includes('--gtd')));
+});
+
 test('a plan with an error issue is never signed', async () => {
   const { kob, calls } = fake('plan-error');
   const r = await kob.amend('cd'.repeat(32), 3800000000);
