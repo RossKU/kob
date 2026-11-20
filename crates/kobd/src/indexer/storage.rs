@@ -560,6 +560,8 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
         "kcc23_declarations",
         "logo_blocklist",
         "logo_reports",
+        "logo_votes",
+        "logo_vote_totals",
     ] {
         let t = Instant::now();
         let n = copy_plain(conn, table)?;
@@ -568,7 +570,7 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
 
     // The sequences. An id of an autoincrement table is never reused, so the next one is above
     // every id the old store ever gave.
-    for table in ["blocks", "order_events", "order_amends", "rejects", "token_events", "pair_fills", "logo_reports"] {
+    for table in ["blocks", "order_events", "order_amends", "rejects", "token_events", "pair_fills", "logo_reports", "logo_votes"] {
         let old: Option<i64> = conn
             .query_row("SELECT seq FROM old.sqlite_sequence WHERE name = ?1", [table], |r| r.get(0))
             .map(Some)
@@ -810,6 +812,8 @@ fn verify(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<()> {
         "kcc23_declarations",
         "logo_blocklist",
         "logo_reports",
+        "logo_votes",
+        "logo_vote_totals",
     ] {
         if !table_exists(conn, "old", table)? {
             continue;
@@ -875,6 +879,7 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, from_schema: i64, rep: &mu
     // loaded rows.
     conn.execute_batch(SCHEMA13)?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
+    conn.execute_batch(crate::logo_votes::SCHEMA)?;
     let drops: Vec<String> = {
         let mut st = conn.prepare(
             "SELECT 'DROP ' || type || ' ' || name FROM main.sqlite_master WHERE (type = 'trigger') OR (type = 'index' AND sql IS NOT NULL)",
@@ -916,6 +921,7 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, from_schema: i64, rep: &mu
     let t = Instant::now();
     conn.execute_batch(SCHEMA13)?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
+    conn.execute_batch(crate::logo_votes::SCHEMA)?;
     // The counts the triggers keep, counted once, as a store without them gets them at start-up.
     db::backfill_counters(&conn)?;
     count_programs13(&conn)?;
@@ -1048,6 +1054,7 @@ fn compact(cfg: &IndexerConfig, old: &Path, new: &Path, rep: &mut Report, say: &
     }
     conn.execute_batch(include_str!("schema.sql"))?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
+    conn.execute_batch(crate::logo_votes::SCHEMA)?;
     let drops: Vec<String> = {
         let mut st = conn.prepare(
             "SELECT 'DROP ' || type || ' ' || name FROM main.sqlite_master WHERE (type = 'trigger') OR (type = 'index' AND sql IS NOT NULL)",
@@ -1158,6 +1165,7 @@ fn compact(cfg: &IndexerConfig, old: &Path, new: &Path, rep: &mut Report, say: &
     let t = Instant::now();
     conn.execute_batch(include_str!("schema.sql"))?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
+    conn.execute_batch(crate::logo_votes::SCHEMA)?;
     // The index only the archive pruning reads, when the old store had it (it is built at the first
     // pruning otherwise). A lean store's are built when it opens.
     let spent_daa: bool =
@@ -1388,6 +1396,7 @@ fn upgrade_in_place(from: i64, old: &Path, new: &Path, rep: &mut Report, say: &m
     let t = Instant::now();
     conn.execute_batch(SCHEMA13)?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
+    conn.execute_batch(crate::logo_votes::SCHEMA)?;
     if from == 9 {
         db::backfill_activity(&conn)?;
     }

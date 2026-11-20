@@ -395,12 +395,15 @@ pub fn export(conn: &Connection) -> DbResult<serde_json::Value> {
     Ok(json!({ "format": "kob-logo-reports/1", "blocklist": blocklist, "reports": reports }))
 }
 
-/// Loads an [`export`] into an empty report store, which refuses to merge into rows that exist.
+/// Loads an [`export`] (format /1, or /2 with votes) into an empty report store, which refuses to
+/// merge into rows that exist. It ignores the votes of a /2 export.
 ///
 /// Returns (listed tokens, report rows).
 pub fn import(conn: &mut Connection, doc: &serde_json::Value) -> Result<(usize, usize), String> {
-    if doc.get("format").and_then(|f| f.as_str()) != Some("kob-logo-reports/1") {
-        return Err("not a kob-logo-reports/1 export".into());
+    // /2 is /1 with the logo votes (`crate::logo_votes::export`), which `kobd logo-reports import`
+    // loads after this.
+    if !matches!(doc.get("format").and_then(|f| f.as_str()), Some("kob-logo-reports/1" | "kob-logo-reports/2")) {
+        return Err("not a kob-logo-reports/1 or /2 export".into());
     }
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
     let n: i64 = tx

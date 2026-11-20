@@ -312,10 +312,10 @@ pub enum LogoCmd {
         /// Covenant id (64 hex characters).
         covenant_id: String,
     },
-    /// Print the whole report state as JSON (reports are not derived from the chain: export before
-    /// `kobd db replay` rebuilds the database).
+    /// Print the whole report state and the logo votes as JSON (neither is derived from the chain:
+    /// export before `kobd db replay` rebuilds the database).
     Export,
-    /// Load an export into an empty report store (after `kobd db replay`).
+    /// Load an export into an empty report and vote store (after `kobd db replay`).
     Import { file: PathBuf },
 }
 
@@ -907,6 +907,7 @@ pub fn run_logo_reports(a: LogoReportsArgs) -> Result<()> {
     use crate::logo_reports as lr;
     let (cfg, cmd) = (build_config(&IndexOpts::of_store(&a.store, None))?, a.cmd);
     let mut conn = lr::open(&cfg.db_path(), &cfg.network)?;
+    conn.execute_batch(crate::logo_votes::SCHEMA)?;
     let now = lr::system_now_ms();
     let id = |s: &str| Hash32::parse(s.trim()).map_err(|e| anyhow!("covenant id: {e}"));
     match cmd {
@@ -950,12 +951,21 @@ pub fn run_logo_reports(a: LogoReportsArgs) -> Result<()> {
             lr::hide_for_good(&mut conn, &id(&covenant_id)?, now)?;
             println!("hidden for good: {}", covenant_id.trim());
         }
-        LogoCmd::Export => println!("{}", serde_json::to_string_pretty(&lr::export(&conn)?)?),
+        LogoCmd::Export => {
+            let mut doc = lr::export(&conn)?;
+            doc["format"] = "kob-logo-reports/2".into();
+            doc["votes"] = crate::logo_votes::export(&conn)?;
+            println!("{}", serde_json::to_string_pretty(&doc)?);
+        }
         LogoCmd::Import { file } => {
             let doc: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(&file).with_context(|| file.display().to_string())?)?;
             let (tokens, rows) = lr::import(&mut conn, &doc).map_err(|e| anyhow!(e))?;
-            println!("imported {tokens} listed token(s) and {rows} report(s)");
+            let votes = match doc.get("votes") {
+                Some(v) => crate::logo_votes::import(&mut conn, v).map_err(|e| anyhow!(e))?,
+                None => 0,
+            };
+            println!("imported {tokens} listed token(s), {rows} report(s) and {votes} logo vote(s)");
         }
     }
     Ok(())
