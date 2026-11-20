@@ -11,7 +11,7 @@ import { mergeSlots, mergeTxCount } from '../../kob/merge';
 import type { Hex } from '../../kob/types';
 import { KasIcon } from '../kit/KasIcon';
 import {
-  Amount, Banner, Button, EmptyState, ErrorBanner, Section, columnFraction, scaledUnits, sortBy, unitsFraction, useSortState, type SortValue,
+  Amount, Banner, Button, EmptyState, ErrorBanner, HelpTip, Section, columnFraction, scaledUnits, sortBy, unitsFraction, useSortState, type SortValue,
 } from '../kit';
 import {
   DataTable, DtCell, DtGroup, DtRow, KAS_FRACTION_MAX, MoneyCell, type DtColumn, type DtPlain,
@@ -58,7 +58,20 @@ function BalancesSkeleton() {
  * The panel until the list it is read with is in. It shows its card and its heading in their place.
  */
 export function BalancesFrame() {
-  return <Section title={t('orders.balances.title')} subtitle={t('orders.balances.subtitle')} data-testid="balances-panel"><BalancesSkeleton /></Section>;
+  return <Section title={t('orders.balances.title')} help={<BalancesHelp />} data-testid="balances-panel"><BalancesSkeleton /></Section>;
+}
+
+/**
+ * The "?" of the panel: that wallets do not show these balances, and when tokens a wallet holds
+ * show up here. `compact` is the market page's panel, which has no title.
+ */
+function BalancesHelp(props: { compact?: boolean }) {
+  return (
+    <HelpTip label={t('orders.balances.title')} data-testid="balances-help">
+      <p>{props.compact ? t('orders.balances.notShown') : t('orders.balances.subtitle')}</p>
+      <p data-testid="balances-old-holdings">{t('orders.balances.oldHoldings')}</p>
+    </HelpTip>
+  );
 }
 
 /**
@@ -209,7 +222,7 @@ export function BalancesPanel(props: {
   );
   return (
     <Section
-      {...(props.compact ? { class: 'bal-embed' } : { title: t('orders.balances.title'), subtitle: t('orders.balances.subtitle'), actions: refresh })}
+      {...(props.compact ? { class: 'bal-embed' } : { title: t('orders.balances.title'), help: <BalancesHelp />, actions: refresh })}
       data-testid="balances-panel"
     >
       {props.compact ? (
@@ -233,6 +246,7 @@ export function BalancesPanel(props: {
             <span class="bal-item"><span class="bal-k">{t('orders.line.available')}</span>{money(sum ? sum.kasFree : null, 'portfolio-available', 2)}</span>
             <span class="bal-item"><span class="bal-k">{t('orders.line.inOrders')}</span>{money(sum ? sum.kasLocked : null, 'portfolio-in-orders', 2)}</span>
           </div>
+          <BalancesHelp compact />
           {refresh}
         </div>
       ) : null}
@@ -259,7 +273,8 @@ export function BalancesPanel(props: {
                   <span data-testid="kas-free">{free.data.kasFree !== null ? <Amount kind="kas" value={combined.kas.free} fraction={dp.free} group fiat={fiat} /> : t('common.unavailable')}</span>
                   {combined.kas.onTokens > 0n ? (
                     <div class="dt-sub" title={t('orders.balances.kasOnTokensHint')}>
-                      {t('orders.balances.kasOnTokensPlus')} <span class="dt-val" data-testid="kas-on-tokens"><Amount kind="kas" value={combined.kas.onTokens} fraction={dp.onTokens} group fiat={fiat} /></span>
+                      {t('orders.balances.kasOnTokensPlus')} <span class="dt-val" data-testid="kas-on-tokens"><Amount kind="kas" value={combined.kas.onTokens} fraction={dp.onTokens} group fiat={fiat} /></span>{' '}
+                      <HelpTip label={t('orders.balances.kasOnTokens')} data-testid="kas-on-tokens-help">{t('orders.balances.kasOnTokensNote')}</HelpTip>
                     </div>
                   ) : null}
                 </DtCell>
@@ -420,11 +435,7 @@ export function BalancesPanel(props: {
               })
             )}
           </DataTable>
-          {combined.kas.onTokens > 0n && (
-            <p class="muted small" style="margin:6px 0 0" data-testid="kas-on-tokens-note">{t('orders.balances.kasOnTokensNote')}</p>
-          )}
           {combined.tokens.some((b) => b.strays > 0n) ? <p class="small" data-testid="strays-note">{t('orders.balances.straysNote')}</p> : null}
-          <p class="small muted" data-testid="balances-old-holdings">{props.compact ? `${t('orders.balances.notShown')} ` : ''}{t('orders.balances.oldHoldings')}</p>
           {combined.lostStrayTokens > 0n ? <Banner tone="warn" data-testid="strays-lost">{t('orders.balances.straysLost')}</Banner> : null}
         </div>
       ) : null}
