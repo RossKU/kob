@@ -273,6 +273,22 @@ impl Indexer {
             } else {
                 None
             },
+            votes: if self.cfg.logo_votes.enabled {
+                let mut cfg = self.cfg.logo_votes.clone();
+                // the reports' origins, when the votes name none of their own
+                if cfg.origins.is_empty() {
+                    cfg.origins = self.cfg.logo_reports.origins.clone();
+                }
+                Some(crate::logo_votes::LogoVotes::open(
+                    &self.cfg.db_path(),
+                    &self.cfg.network,
+                    cfg,
+                    self.cfg.daa_per_second,
+                    self.cfg.api.rate_limit.ipv6_prefix_bits,
+                )?)
+            } else {
+                None
+            },
             price: self.cfg.api.usd_price.then(crate::api::price::UsdPrice::live),
         };
         st.validate().map_err(IndexerError::Config)?;

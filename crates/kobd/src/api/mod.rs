@@ -11,7 +11,7 @@
 //!
 //! # Routes
 //!
-//! All routes are `GET`, except the one `POST /v1/logo-reports`.
+//! All routes are `GET`, except `POST /v1/logo-reports` and `POST /v1/logo-votes`.
 //! - `/v1/health`, `/v1/health/ready`
 //! - `/v1/tokens` (a row carries `declaration: true` when the indexer holds a KCC-23
 //!   declaration for the token), `/v1/tokens/{covenant_id}/declaration` (its KCC-23 launch
@@ -34,6 +34,8 @@
 //!   see [`price`])
 //! - `POST /v1/logo-reports` and `GET /v1/logo-blocklist`, with `[logo_reports] enabled`
 //!   ([`crate::logo_reports`])
+//! - `POST /v1/logo-votes` and `GET /v1/logo-votes`, with `[logo_votes] enabled`
+//!   ([`crate::logo_votes`])
 
 pub mod cache;
 pub mod client_ip;
@@ -93,6 +95,10 @@ pub struct ApiState {
     ///
     /// `None` when it is off. Its two routes then answer 404.
     pub logo: Option<Arc<crate::logo_reports::LogoReports>>,
+    /// The token-logo votes (`[logo_votes]`, [`crate::logo_votes`]).
+    ///
+    /// `None` when they are off. Their two routes then answer 404.
+    pub votes: Option<Arc<crate::logo_votes::LogoVotes>>,
     /// The KAS/USD price (`[api] usd_price`, [`price`]).
     ///
     /// `None` when it is off. `GET /v1/price/kas-usd` then answers 404.
@@ -255,6 +261,13 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
             .route("/v1/logo-reports", post(rest::logo_report).layer(DefaultBodyLimit::max(rest::LOGO_REPORT_MAX_BYTES)))
             .route("/v1/logo-blocklist", get(rest::logo_blocklist));
     }
+    if app.state.votes.is_some() {
+        // A vote is a few hundred bytes of JSON: an address, a nonce and a signature.
+        router = router.route(
+            "/v1/logo-votes",
+            post(rest::logo_vote).get(rest::logo_votes).layer(DefaultBodyLimit::max(rest::LOGO_VOTE_MAX_BYTES)),
+        );
+    }
     let router = router
         .fallback(|| async { ApiError::not_found("no such route") })
         .layer(middleware::from_fn_with_state(app.clone(), guard))
@@ -344,7 +357,12 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
 
     let (method, path, query) =
         (req.method().clone(), req.uri().path().to_string(), req.uri().query().unwrap_or_default().to_string());
-    let cost = route_cost(&path, app.state.cfg.rate_limit.heavy_route_cost);
+    // A vote checks a proof of work and a signature and writes: it costs what a scanning read does.
+    let cost = if method == Method::POST && path == "/v1/logo-votes" {
+        app.state.cfg.rate_limit.heavy_route_cost.max(1)
+    } else {
+        route_cost(&path, app.state.cfg.rate_limit.heavy_route_cost)
+    };
     let mut resp = if let Err(wait) = app.limiter.check_cost(ip, cost) {
         let mut e = ApiError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "rate limit exceeded");
         e.retry_after = Some(retry_after_secs(wait));

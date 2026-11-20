@@ -674,3 +674,130 @@ pub async fn logo_blocklist(State(app): State<Arc<App>>) -> ApiResult {
     )
         .into_response())
 }
+
+// Token-logo votes.
+
+/// The largest body read for a logo vote, in bytes.
+///
+/// A vote is a covenant id, up or down, an address, a day, a nonce and a signature.
+pub const LOGO_VOTE_MAX_BYTES: usize = 1024;
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LogoVoteBody {
+    covenant_id: String,
+    vote: crate::logo_votes::Vote,
+    address: String,
+    day: String,
+    nonce: String,
+    signature: String,
+}
+
+/// Whether a browser's `Origin` may write: one of `list`, else the single `cors_allow_origin`.
+/// A request without `Origin` (a script) is not a browser's.
+fn origin_allowed(headers: &axum::http::HeaderMap, list: &[String], cors: Option<&str>) -> bool {
+    let Some(origin) = headers.get(axum::http::header::ORIGIN) else { return true };
+    let allowed: Vec<&str> = match list {
+        [] => cors.filter(|o| *o != "*").into_iter().collect(),
+        list => list.iter().map(String::as_str).collect(),
+    };
+    origin.to_str().is_ok_and(|o| allowed.iter().any(|a| a.trim_end_matches('/').eq_ignore_ascii_case(o)))
+}
+
+/// `POST /v1/logo-votes`: votes up or down on a token's logo with a wallet's signed message.
+///
+/// The body is `{covenant_id, vote: "up"|"down", address, day: "YYYY-MM-DD", nonce, signature}`.
+/// The signature (64 bytes, hex) is the Kaspa personal-message signature of the text
+/// [`crate::logo_votes::message`] by the key of `address`; the nonce carries the work
+/// `GET /v1/logo-votes` names (`pow_bits`).
+///
+/// The answer is `200 {"result":"counted"|"changed"|"unchanged","covenant_id",up,down}`. A wallet
+/// votes once per `interval_secs` across all logos: earlier, 429 `too_soon` with `Retry-After`.
+pub async fn logo_vote(
+    State(app): State<Arc<App>>,
+    axum::Extension(client): axum::Extension<super::ClientIp>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> ApiResult {
+    use crate::logo_votes::VoteError;
+    let votes = app.state.votes.clone().ok_or_else(|| ApiError::not_found("no such route"))?;
+    let json_body = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("application/json"));
+    if !json_body {
+        return Err(ApiError::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type", "the body must be application/json"));
+    }
+    if !origin_allowed(&headers, votes.origins(), app.state.cfg.cors_allow_origin.as_deref()) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden_origin", "logo votes are not accepted from this origin"));
+    }
+    let shape = "the body must be JSON {\"covenant_id\": 64 hex, \"vote\": \"up\"|\"down\", \"address\", \"day\": \"YYYY-MM-DD\", \"nonce\": decimal, \"signature\": 128 hex}";
+    let b: LogoVoteBody = serde_json::from_slice(&body).map_err(|_| ApiError::bad_request(shape))?;
+    let covenant_id = parse_hash("covenant_id", &b.covenant_id)?;
+    let nonce_ok = !b.nonce.is_empty()
+        && b.nonce.len() <= crate::logo_votes::MAX_NONCE_DIGITS
+        && b.nonce.bytes().all(|c| c.is_ascii_digit())
+        && b.nonce.parse::<u64>().is_ok();
+    let day_ok =
+        b.day.len() == 10 && b.day.bytes().enumerate().all(|(i, c)| if i == 4 || i == 7 { c == b'-' } else { c.is_ascii_digit() });
+    let signature: Option<[u8; 64]> = crate::hex::decode(&b.signature).ok().and_then(|s| <[u8; 64]>::try_from(s.as_slice()).ok());
+    let (true, true, Some(signature)) = (nonce_ok, day_ok, signature) else {
+        return Err(ApiError::bad_request(shape));
+    };
+    if b.address.len() > 100 {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "unsupported_address", "not a Kaspa address"));
+    }
+    let ballot = crate::logo_votes::Ballot { covenant_id, vote: b.vote, address: b.address, day: b.day, nonce: b.nonce, signature };
+    let ip = client.0;
+    let cast = tokio::task::spawn_blocking(move || votes.vote(ip, &ballot))
+        .await
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "internal error"))?;
+    let wait = |code: &'static str, msg: &str, secs: u64| {
+        let mut e = ApiError::new(StatusCode::TOO_MANY_REQUESTS, code, msg);
+        e.retry_after = Some(secs);
+        e
+    };
+    match cast {
+        Ok(a) => json_ok(json!({"result": a.cast.as_str(), "covenant_id": covenant_id.to_hex(), "up": a.up, "down": a.down})),
+        Err(VoteError::StaleDay) => {
+            Err(ApiError::new(StatusCode::BAD_REQUEST, "stale_day", "the day must be today or yesterday (UTC)"))
+        }
+        Err(VoteError::BadPow) => {
+            Err(ApiError::new(StatusCode::BAD_REQUEST, "bad_pow", "the nonce does not carry the work asked for"))
+        }
+        Err(VoteError::BadSignature) => {
+            Err(ApiError::new(StatusCode::BAD_REQUEST, "bad_signature", "the signature does not verify for this address and message"))
+        }
+        Err(VoteError::Address(why)) => Err(ApiError::new(StatusCode::BAD_REQUEST, "unsupported_address", why)),
+        Err(VoteError::UnknownToken) => {
+            Err(ApiError::new(StatusCode::NOT_FOUND, "unknown_token", "no token with that covenant id is indexed"))
+        }
+        Err(VoteError::NoHistory) => Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "no_history",
+            "this address has no KOB history old enough to vote (an order or a token it held, 24 hours ago)",
+        )),
+        Err(VoteError::TooSoon(secs)) => Err(wait("too_soon", "one vote per wallet per 24 hours; try again later", secs)),
+        Err(VoteError::Limited(secs)) => Err(wait("rate_limited", "too many logo votes; try again later", secs)),
+        Err(VoteError::Db(e)) => Err(e.into()),
+    }
+}
+
+/// `GET /v1/logo-votes`: the vote totals per token and the tokens the rule hides by default.
+///
+/// The body is `{"logos":[{covenant_id,up,down}],"hidden":[..],"min_voters","hide_at","pow_bits",
+/// "interval_secs","updated_ms"}`. It never names a voter. It is cached for 5 seconds.
+pub async fn logo_votes(State(app): State<Arc<App>>) -> ApiResult {
+    let votes = app.state.votes.clone().ok_or_else(|| ApiError::not_found("no such route"))?;
+    let body = tokio::task::spawn_blocking(move || votes.totals_body())
+        .await
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "internal error"))??;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json")),
+            (axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("public, max-age=5")),
+        ],
+        body,
+    )
+        .into_response())
+}
