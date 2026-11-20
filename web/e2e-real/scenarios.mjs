@@ -1,13 +1,10 @@
-// Scenarios of the real-wallet run. Every placement / cancel / amend / merge goes through the app's
-// pre-sign confirmation screen and the wallet (the REAL extension's window on TN10, the in-page
-// mock wallet with `--mock`); every accepted transaction is then checked on the node independently
-// of the app: the covenant outputs of a placement are unspent, the ones a cancel / amend spends are
-// gone and its own outputs exist. The UI is driven only through its test ids (web/e2e/testids.ts,
-// the components under web/src/ui). Nothing runs on import.
+// Scenarios of the real-wallet run. Every placement / cancel / amend / merge goes through the app's pre-sign confirmation screen and the wallet
+// (the REAL extension's window on TN10, the in-page mock wallet with `--mock`); every accepted transaction is then checked on the node
+// independently of the app: the covenant outputs of a placement are unspent, the ones a cancel / amend spends are gone and its own outputs exist.
+// The UI is driven only through its test ids (web/e2e/testids.ts, the components under web/src/ui). Nothing runs on import.
 //
-// Prices are typed as the ticket shows them: KAS per whole token on a token's KAS market, B per
-// whole A on the pair A/B. Amounts are whole tokens (the issued tokens have 8 decimals: 1 token =
-// 1e8 base units).
+// Prices are typed as the ticket shows them: KAS per whole token on a token's KAS market, B per whole A on the pair A/B. Amounts are whole tokens
+// (the issued tokens have 8 decimals: 1 token = 1e8 base units).
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
@@ -17,10 +14,7 @@ import { goto, outputsOf, pushTxLog, runFlow, signFromTicket, signLadderFromTick
 
 const tid = (h, id) => h.page.getByTestId(id);
 const short = (s) => (s ? `${s.slice(0, 10)}...` : '-');
-/**
- * Chooses in one of the app's drop-downs (src/ui/kit/Dropdown.tsx; web/e2e/helpers/dropdown.ts):
- * the button, then the row.
- */
+/** Chooses in one of the app's drop-downs (src/ui/kit/Dropdown.tsx; web/e2e/helpers/dropdown.ts): the button, then the row. */
 const chooseOption = async (h, id, value) => {
   await tid(h, id).click();
   await tid(h, `${id}-option-${value}`).click();
@@ -28,19 +22,14 @@ const chooseOption = async (h, id, value) => {
 export const TOKEN = 100_000_000n; // base units per whole token (8 decimals)
 export const SUPPLY = 1_000_000n; // whole tokens issued per token
 
-/**
- * A scenario that cannot run in this configuration (e.g. market without an indexer): reported as
- * SKIP with the reason, not as a failure.
- */
+/** A scenario that cannot run in this configuration (e.g. market without an indexer): reported as SKIP with the reason, not as a failure. */
 export class Skip extends Error {}
 
-// ------------------------------------------------------------------------------------------------
-// registry
+// ------------------------------------------------------------------------------------------------ registry
 
 /**
- * A TEST registry: the templates of registry/tokens.example.json (marked reviewed, as the mock e2e
- * does) plus the issued tokens, `verified`. The entries are the ones the issuance screen produced
- * (`issue-registry-entry`), so template id, extension commitment and decimals are the app's.
+ * A TEST registry: the templates of registry/tokens.example.json (marked reviewed, as the mock e2e does) plus the issued tokens, `verified`.
+ * The entries are the ones the issuance screen produced (`issue-registry-entry`), so template id, extension commitment and decimals are the app's.
  */
 export function buildTestRegistry(entries) {
   const reg = JSON.parse(readFileSync(join(REPO_ROOT, 'registry', 'tokens.example.json'), 'utf8'));
@@ -49,13 +38,9 @@ export function buildTestRegistry(entries) {
   return reg;
 }
 
-// ------------------------------------------------------------------------------------------------
-// step / scenario plumbing
+// ------------------------------------------------------------------------------------------------ step / scenario plumbing
 
-/**
- * Runs `fn(rec)` as a scenario: collects steps, turns a throw into a failed scenario with
- * screenshots (a `Skip` into a skipped one).
- */
+/** Runs `fn(rec)` as a scenario: collects steps, turns a throw into a failed scenario with screenshots (a `Skip` into a skipped one). */
 export async function scenario(rc, name, fn) {
   const rec = { name, ok: false, skipped: null, error: null, steps: [], startedAt: Date.now() };
   try {
@@ -73,14 +58,17 @@ export async function scenario(rc, name, fn) {
         rec.failScreenshot = await shot(rc.h.page, rc.name, `${name}-failure`);
         rec.failText = collapse(await rc.h.page.innerText('body')).slice(0, 2500);
         rec.lastSubmits = rc.h.submits.slice(-2);
+        // what the page could not read (the indexer, the node) and the shell's status banners: why a row stayed `unknown` or live
+        rec.badResponses = rc.h.badResponses.slice(-20);
+        rec.failedRequests = rc.h.failedRequests.slice(-20);
+        rec.consoleErrors = rc.h.consoleErrors.slice(-10);
+        rec.banners = await rc.h.page.evaluate(() => [...document.querySelectorAll('[data-testid^="banner"], [data-testid^="standalone"], .banner')].map((e) => (e.textContent ?? '').replace(/s+/g, ' ').trim().slice(0, 300)));
       } catch {
         /* ignore */
       }
-      // a failure must not leave a dialog (an amend form, the issuance confirmation) over the next
-      // scenario
+      // a failure must not leave a dialog (an amend form, the issuance confirmation) over the next scenario
       await closeDialogs(rc.h).catch(() => {});
-      // nor an order it placed: a live leftover would fail the later scenarios that read the
-      // balances (escrow, KAS locked)
+      // nor an order it placed: a live leftover would fail the later scenarios that read the balances (escrow, KAS locked)
       if (name !== 'issue') {
         const swept = await sweepOpenOrders(rc);
         if (swept.length) {
@@ -102,14 +90,9 @@ export async function closeDialogs(h) {
   await h.page.keyboard.press('Escape').catch(() => {});
 }
 
-/**
- * Kaspire's raw JSON lists the `signatureScriptMode` it applied per input (null for plain P2PK
- * inputs): kept as a compact list.
- */
+/** Kaspire's raw JSON lists the `signatureScriptMode` it applied per input (null for plain P2PK inputs): kept as a compact list. */
 const kaspireModes = (raw) => [...new Set([...String(raw ?? '').matchAll(/"(?:signatureScriptMode|mode)":\s*("[^"]*"|null)/g)].map((m) => m[1].replace(/"/g, '')))];
-/**
- * The raw JSON of Kaspire's approval window without the (huge, already shown) transaction string.
- */
+/** The raw JSON of Kaspire's approval window without the (huge, already shown) transaction string. */
 const compactRaw = (raw) => {
   try {
     const j = JSON.parse(raw);
@@ -153,9 +136,8 @@ export async function verifyCreated(rc, tx, txid, label) {
 }
 
 /**
- * Node check of an accepted tx whose inputs the run cannot name the address of (they were created
- * by someone else's transaction): every output with an address the node lists is looked for, at
- * least one (a covenant output, or the wallet's own KAS) must be unspent.
+ * Node check of an accepted tx whose inputs the run cannot name the address of (they were created by someone else's transaction): every output
+ * with an address the node lists is looked for, at least one (a covenant output, or the wallet's own KAS) must be unspent.
  */
 export async function verifyAccepted(rc, tx, txid, label) {
   const checks = [];
@@ -168,10 +150,7 @@ export async function verifyAccepted(rc, tx, txid, label) {
   return checks;
 }
 
-/**
- * Node check of a cancel / amend tx: the covenant outpoints it spent (created by `createdBy`) are
- * gone, its own P2SH outputs exist.
- */
+/** Node check of a cancel / amend tx: the covenant outpoints it spent (created by `createdBy`) are gone, its own P2SH outputs exist. */
 export async function verifySpent(rc, tx, txid, createdBy, what = 'cancel') {
   const checks = [];
   const created = new Map();
@@ -208,10 +187,7 @@ export async function readRecords(h) {
   });
 }
 
-/**
- * The token UTXOs the app's tracker remembers for the wallet (localStorage
- * `kob.tokens.v1.testnet-10.<pubkey>`).
- */
+/** The token UTXOs the app's tracker remembers for the wallet (localStorage `kob.tokens.v1.testnet-10.<pubkey>`). */
 export async function trackedTokens(h) {
   return h.page.evaluate(() => {
     const out = [];
@@ -223,10 +199,7 @@ export async function trackedTokens(h) {
   });
 }
 
-/**
- * Saves the token file (registry entries + tracker / records of the app) so a later `--skip-issue`
- * run can continue with the same tokens.
- */
+/** Saves the token file (registry entries + tracker / records of the app) so a later `--skip-issue` run can continue with the same tokens. */
 export async function snapshotTracker(rc, tokenFile) {
   if (!tokenFile) return;
   const ls = await rc.h.page.evaluate(() => {
@@ -240,13 +213,9 @@ export async function snapshotTracker(rc, tokenFile) {
   writeFileSync(tokenFile, JSON.stringify({ token: rc.token, tokenB: rc.tokenB ?? null, trackerLS: ls }, null, 2));
 }
 
-// ------------------------------------------------------------------------------------------------
-// issuance
+// ------------------------------------------------------------------------------------------------ issuance
 
-/**
- * Issues a fixed-supply token of the issuance screen's default program (the published public-mint
- * build, 3 / 3 slots) to the wallet. Returns its description.
- */
+/** Issues a fixed-supply token of the issuance screen's default program (the published public-mint build, 3 / 3 slots) to the wallet. Returns its description. */
 async function issueOne(rc, r, which) {
   const { h } = rc;
   const t0 = Date.now();
@@ -267,8 +236,7 @@ async function issueOne(rc, r, which) {
   await tid(h, 'issue-ticker').fill(ticker);
   await tid(h, 'issue-decimals').fill('8');
   await tid(h, 'issue-supply').fill(String(SUPPLY));
-  // 1 KAS per token output (Advanced > Carrier; the TN10 default is 10 KAS, which the token UTXO
-  // keeps)
+  // 1 KAS per token output (Advanced > Carrier; the TN10 default is 10 KAS, which the token UTXO keeps)
   await tid(h, 'issue-carrier').fill('1');
   const review = tid(h, 'issue-review');
   for (let i = 0; i < 60 && !(await review.isEnabled()); i++) await sleep(1000);
@@ -279,13 +247,11 @@ async function issueOne(rc, r, which) {
   const step = { ...stepOf(`issue ${which} (${ticker})`, s), issueSummary: summary, program };
   r.steps.push(step);
   if (!s.submitted) throw new Error('the submitted transaction was not captured from the node connection');
-  // a creation is two transactions (KCC-23): the preparation declaring the token (payload 0x00 +
-  // JSON), then the genesis spending its output 0
+  // a creation is two transactions (KCC-23): the preparation declaring the token (payload 0x00 + JSON), then the genesis spending its output 0
   const prep = h.submits.at(-2)?.tx ?? null;
   const declared = typeof prep?.payload === 'string' && prep.payload.startsWith('00') ? Buffer.from(prep.payload.slice(2), 'hex').toString('utf8') : null;
-  // the spent outpoint as the app's mock node (`transactionId`) or the node's RPC shape
-  // (`previousOutpoint.transactionId`) names it; the id of the preparation where the captured
-  // request carries it
+  // the spent outpoint as the app's mock node (`transactionId`) or the node's RPC shape (`previousOutpoint.transactionId`) names it; the id of
+  // the preparation where the captured request carries it
   const spent = s.submitted.inputs?.[0]?.transactionId ?? s.submitted.inputs?.[0]?.previousOutpoint?.transactionId;
   if (!declared || s.submitted.inputs?.length !== 1 || (prep.id && spent !== prep.id)) {
     throw new Error(`the genesis does not spend a KCC-23 preparation sent before it (prep payload ${String(prep?.payload).slice(0, 40)})`);
@@ -321,19 +287,14 @@ export async function issueTokens(rc, { withPair }) {
   return { token, tokenB, scenario: rec };
 }
 
-// ------------------------------------------------------------------------------------------------
-// the order ticket
+// ------------------------------------------------------------------------------------------------ the order ticket
 
-/**
- * The `data-testid` of a ticket field (form-state.ts `FIELDS`): amount / price / tip have the short
- * order-* ids, the rest `field-<intent path>`.
- */
+/** The `data-testid` of a ticket field (form-state.ts `FIELDS`): amount / price / tip have the short order-* ids, the rest `field-<intent path>`. */
 const fieldTestId = (id) => (id === 'amount' ? 'order-amount' : id === 'price' ? 'order-price' : id === 'tip' ? 'order-tip' : `field-${id}`);
 
 export async function fillFields(h, values) {
   for (const [id, value] of Object.entries(values)) {
-    // inside the ticket: an order row on the same page (the market's Open orders panel) has its own
-    // `order-amount` / `order-price` cells
+    // inside the ticket: an order row on the same page (the market's Open orders panel) has its own `order-amount` / `order-price` cells
     const loc = tid(h, 'order-ticket').getByTestId(fieldTestId(id));
     try {
       await loc.waitFor({ state: 'attached', timeout: 45_000 });
@@ -354,9 +315,8 @@ export async function fillFields(h, values) {
 }
 
 /**
- * The covenant-signing gate: a wallet not known to sign covenant inputs (Kastle) is asked
- * once for a TEST signature before its first order. Runs it through the wallet; a wallet that
- * cannot sign a cancel is refused by the app for good: that is a finding, thrown.
+ * The covenant-signing gate (C5-10): a wallet not known to sign covenant inputs (Kastle) is asked once for a TEST signature before its first
+ * order. Runs it through the wallet; a wallet that cannot sign a cancel is refused by the app for good: that is a finding, thrown.
  */
 async function passCovenantGate(rc) {
   const { h } = rc;
@@ -375,6 +335,20 @@ async function passCovenantGate(rc) {
   return { popups: popupView(popups) };
 }
 
+/**
+ * Closes the notification cards at the top right (an earlier step's error toast, a finished send's card): at 1280 x 900 they lie over
+ * the ticket's first rows and take the click on its side buttons (TN10 2026-11-20, `cells`: 30 s click timeout on `order-side-sell`).
+ */
+async function dismissToasts(h) {
+  await h.page
+    .evaluate(() => {
+      const sel = ['error', 'ok', 'info', 'warn'].map((t) => `[data-testid="toast-${t}"] button[aria-label]`).concat('[data-testid="send-toast-dismiss"]').join(', ');
+      for (const b of document.querySelectorAll(sel)) b.click();
+    })
+    .catch(() => {});
+  await sleep(300);
+}
+
 /** Opens the KAS market of token A (or the pair A/B with `pair`) and waits for the ticket. */
 export async function openTicket(rc, { pair = false } = {}) {
   const { h } = rc;
@@ -389,13 +363,13 @@ export async function openTicket(rc, { pair = false } = {}) {
 }
 
 /**
- * Fills the order ticket until its order button is enabled. spec: { type, side, fields: {intent
- * path: value}, pair?, expectSummary?: RegExp }. Passes the covenant check when shown. Returns how
- * to press the button.
+ * Fills the order ticket until its order button is enabled. spec: { type, side, fields: {intent path: value}, pair?, expectSummary?: RegExp }.
+ * Passes the covenant check when shown. Returns how to press the button.
  */
 export async function fillTicket(rc, spec) {
   const { h } = rc;
   await openTicket(rc, { pair: !!spec.pair });
+  await dismissToasts(h);
   const ticket = tid(h, 'order-ticket');
   await chooseOption(h, 'order-type', spec.type);
   if ((await ticket.getAttribute('data-type')) !== spec.type) throw new Error(`the ticket did not switch to ${spec.type}`);
@@ -413,23 +387,18 @@ export async function fillTicket(rc, spec) {
     throw new Error(`the order button stays disabled. reasons: ${collapse(issues)}`);
   }
   const issues = await h.page.evaluate(() => [...document.querySelectorAll('[data-testid="order-issues"] li')].map((li) => ({ code: li.dataset.code, severity: li.dataset.severity })));
-  // the ticket itself names only the side and the type (its order button); the figures are on the
-  // final confirmation (`confirm-order`)
+  // the ticket itself names only the side and the type (its order button); the figures are on the final confirmation (`confirm-order`)
   const button = collapse(await review.innerText().catch(() => ''));
   const balancesBefore = collapse(await tid(h, 'order-available').innerText().catch(() => ''));
   return { button, balancesBefore, issues, gate, click: () => review.click() };
 }
 
-/**
- * Place through the ticket, sign, verify on the node. Returns the step record plus what the cancel
- * needs.
- */
+/** Place through the ticket, sign, verify on the node. Returns the step record plus what the cancel needs. */
 export async function place(rc, r, label, spec) {
   const before = new Set(Object.keys(await readRecords(rc.h)));
   const t = await fillTicket(rc, spec);
-  // what is ordered is said by the app's final confirmation (title, net effect, the order's terms),
-  // checked BEFORE it goes to the wallet: a confirmation that does not say it is cancelled there,
-  // so a failed check leaves no order behind
+  // what is ordered is said by the app's final confirmation (title, net effect, the order's terms), checked BEFORE it goes to the wallet:
+  // a confirmation that does not say it is cancelled there, so a failed check leaves no order behind
   const s = await signFromTicket(rc.h, rc.ctx, rc.drv, label, rc.name, t.click, { expect: spec.expectSummary ? { re: spec.expectSummary } : null });
   if (!s.submitted) throw new Error('the submitted transaction was not captured from the node connection');
   const step = { ...stepOf(`place ${label}`, s), button: t.button, ticketIssues: t.issues, covenantGate: t.gate ?? undefined, balancesBefore: t.balancesBefore };
@@ -437,31 +406,24 @@ export async function place(rc, r, label, spec) {
   step.verify = await verifyCreated(rc, s.submitted, s.txid, label);
   await sleep(1500);
   const after = await readRecords(rc.h);
-  // the records new since the placement started that belong to it: the app also adopts records of
-  // the wallet's OTHER orders as the indexer lists them (orders an earlier run left live), which
-  // are new to this browser but not of this transaction
+  // the records new since the placement started that belong to it: the app also adopts records of the wallet's OTHER orders as the
+  // indexer lists them (orders an earlier run left live), which are new to this browser but not of this transaction
   const created = Object.entries(after).filter(([id, rec]) => !before.has(id) && rec.txid === s.txid);
   step.records = created.map(([id, rec]) => ({ covenantId: id, kind: rec.kind, txid: rec.txid, output: rec.output }));
   if (!created.length) throw new Error(`the app stored no placement record for the accepted transaction ${short(s.txid)}`);
-  // the record the app keeps must point at a covenant outpoint that the node lists as unspent
-  // (verified above)
+  // the record the app keeps must point at a covenant outpoint that the node lists as unspent (verified above)
   const p2sh = new Set(outputsOf(rc.node, s.submitted).filter((o) => o.p2sh).map((o) => o.index));
   for (const [id, rec] of created) if (rec.txid !== s.txid || !p2sh.has(rec.output)) throw new Error(`placement record of ${short(id)} points at ${short(rec.txid)}:${rec.output}, not at a covenant output of the accepted transaction`);
   return { step, tx: s.submitted, txid: s.txid, covenantIds: created.map(([id]) => id) };
 }
 
-// ------------------------------------------------------------------------------------------------
-// My orders
+// ------------------------------------------------------------------------------------------------ My orders
 
-/**
- * Opens My orders afresh (the view is re-mounted, no flow of an earlier action stays on it) and
- * waits for the rows of `wantIds`.
- */
+/** Opens My orders afresh (the view is re-mounted, no flow of an earlier action stays on it) and waits for the rows of `wantIds`. */
 export async function openOrders(rc, wantIds = [], { timeoutMs = 90_000, tab = 'open' } = {}) {
   const { h } = rc;
-  // the Portfolio shows one tab at a time (`#/portfolio/<tab>`): Balances, Open orders (the live
-  // ones, with their actions), Order history (the ended ones, with their status). A row is found
-  // only on its tab; the Balances rows only on Balances.
+  // the Portfolio shows one tab at a time (`#/portfolio/<tab>`): Balances, Open orders (the live ones, with their actions), Order history
+  // (the ended ones, with their status). A row is found only on its tab; the Balances rows only on Balances.
   await goto(h, '#/settings');
   await goto(h, `#/portfolio/${tab}`);
   await tid(h, 'orders-view').waitFor({ timeout: 60_000 });
@@ -483,11 +445,9 @@ export async function openOrders(rc, wantIds = [], { timeoutMs = 90_000, tab = '
 }
 
 /**
- * What My orders shows of an order row (type, side, status, live, prices, amount), read in ONE pass
- * from the page: a cell the row does not have (a limit has no stop, an indexer row no source badge)
- * is '' at once. (Reading each cell through a locator waited Playwright's 30 s default for every
- * absent one: a row was read over a minute, its `data-live` from the first render, and a 90 s poll
- * became one read.)
+ * What My orders shows of an order row (type, side, status, live, prices, amount), read in ONE pass from the page: a cell the row does not
+ * have (a limit has no stop, an indexer row no source badge) is '' at once. (Reading each cell through a locator waited Playwright's 30 s
+ * default for every absent one: a row was read over a minute, its `data-live` from the first render, and a 90 s poll became one read.)
  */
 export async function rowView(h, id) {
   return h.page.evaluate((id) => {
@@ -501,16 +461,10 @@ export async function rowView(h, id) {
   }, id);
 }
 
-/**
- * Order statuses that end an order (orders-model.ts); `unknown` is a row whose node verdict has not
- * come yet.
- */
+/** Order statuses that end an order (orders-model.ts); `unknown` is a row whose node verdict has not come yet. */
 export const ENDED = new Set(['filled', 'cancelled', 'refunded', 'killed', 'closed']);
 
-/**
- * An order that ended (filled, killed, refunded ... by someone else) before this run acted on it:
- * `views` says how.
- */
+/** An order that ended (filled, killed, refunded ... by someone else) before this run acted on it: `views` says how. */
 export class OrderEnded extends Error {
   constructor(views) {
     super(`the order ended before the run could act on it: ${JSON.stringify(views)}`);
@@ -524,9 +478,8 @@ export const clickRefresh = async (h) => {
 };
 
 /**
- * Waits until every one of `ids` is live in My orders (refreshing): a fresh placement may first
- * show as `unknown` (the list comes before the node's verdict on the placement record) or not at
- * all (the indexer has not seen it). Throws `OrderEnded` when one of them has ended.
+ * Waits until every one of `ids` is live in My orders (refreshing): a fresh placement may first show as `unknown` (the list comes before the
+ * node's verdict on the placement record) or not at all (the indexer has not seen it). Throws `OrderEnded` when one of them has ended.
  */
 export async function waitLive(rc, ids, timeoutMs = 60_000) {
   const { h } = rc;
@@ -556,10 +509,7 @@ export async function waitNotLive(rc, ids, timeoutMs = 90_000) {
   }
 }
 
-/**
- * Token amounts the app's tracker holds from `txid` (a cancel / merge output), base units, for
- * `token`.
- */
+/** Token amounts the app's tracker holds from `txid` (a cancel / merge output), base units, for `token`. */
 export async function trackedFrom(h, txid, token) {
   await sleep(1000);
   const items = (await trackedTokens(h)).filter((x) => x.txid === txid && x.token === token);
@@ -567,9 +517,8 @@ export async function trackedFrom(h, txid, token) {
 }
 
 /**
- * Cancels through My orders: the row's cancel (or the position card's, when the indexer groups an
- * IFD), the flow's confirmation screen, the node check, the tokens released to the wallet (tracked
- * by the app), the order leaving the live list.
+ * Cancels through My orders: the row's cancel (or the position card's, when the indexer groups an IFD), the flow's confirmation screen, the
+ * node check, the tokens released to the wallet (tracked by the app), the order leaving the live list.
  */
 export async function cancelStep(rc, r, label, { placed, covenantIds, position = false, tokensBack = null, looseSpent = false }) {
   const { h } = rc;
@@ -590,21 +539,18 @@ export async function cancelStep(rc, r, label, { placed, covenantIds, position =
   const step = { ...stepOf(`cancel ${label}`, s), ordersBefore: rows, balancesPanelBeforeCancel: balancesPanel };
   step.screenshots.unshift(shot1);
   r.steps.push(step);
-  // `looseSpent`: the order's current UTXO is another party's transaction (an executor's fill),
-  // whose outputs the run never saw: the cancel is checked by its own outputs on the node instead
-  // (`verifyAccepted`)
+  // `looseSpent`: the order's current UTXO is another party's transaction (an executor's fill), whose outputs the run never saw: the cancel is
+  // checked by its own outputs on the node instead (`verifyAccepted`)
   step.verify = looseSpent ? await verifySpent(rc, s.submitted, s.txid, placed).catch((e) => { if (!/spends none/.test(String(e?.message))) throw e; return verifyAccepted(rc, s.submitted, s.txid, `cancel ${label}`); }) : await verifySpent(rc, s.submitted, s.txid, placed);
   if (tokensBack) {
-    // tokens released from custody come back as a wallet-owned token UTXO of the cancel tx: the
-    // app's tracker (each entry re-verified on the node) must hold them
+    // tokens released from custody come back as a wallet-owned token UTXO of the cancel tx: the app's tracker (each entry re-verified on the node) must hold them
     const got = await trackedFrom(h, s.txid, tokensBack.token);
     step.tokensBack = { expectedAtLeast: tokensBack.amount.toString(), trackedFromCancel: got.items };
     if (got.total < tokensBack.amount) throw new Error(`the cancel should release ${tokensBack.amount} base units to the wallet, the app tracks ${got.total} (${JSON.stringify(got.items)})`);
   }
   await openOrders(rc);
   step.ordersAfter = await waitNotLive(rc, covenantIds);
-  // gone from Open orders: its row on Order history says how it ended (the indexer may list it
-  // there a moment later)
+  // gone from Open orders: its row on Order history says how it ended (the indexer may list it there a moment later)
   await openOrders(rc, [], { tab: 'history' });
   for (let i = 0; i < 5 && covenantIds.some((id) => !step.ordersAfter.find((v) => v.id === id)?.listed); i++) {
     step.ordersAfter = await Promise.all(covenantIds.map((id) => rowView(h, id)));
@@ -632,10 +578,7 @@ async function placeAndCancel(rc, r, label, spec, { position = false, tokensBack
   return { p, c };
 }
 
-/**
- * The Balances panel of My orders: free / in orders / strays of a token (whole tokens, exact
- * `data-value`s) and the KAS lines.
- */
+/** The Balances panel of My orders: free / in orders / strays of a token (whole tokens, exact `data-value`s) and the KAS lines. */
 export async function balanceRow(rc, token, { timeoutMs = 60_000 } = {}) {
   const { h } = rc;
   const row = tid(h, `balance-row-${token}`);
@@ -650,8 +593,7 @@ export async function balanceRow(rc, token, { timeoutMs = 60_000 } = {}) {
     const row = document.querySelector(`[data-testid="balance-row-${token}"]`);
     const txt = (n) => (n?.textContent ?? '').replace(/\s+/g, ' ').trim();
     const val = (cell) => cell?.querySelector('[data-value]')?.getAttribute('data-value') ?? txt(cell);
-    // the table's cells are `role="cell"` divs named by column (`dt-c-<key>`,
-    // ui/kit/DataTable.tsx), not <td>s
+    // the table's cells are `role="cell"` divs named by column (`dt-c-<key>`, ui/kit/DataTable.tsx), not <td>s
     const cell = (k) => row?.querySelector(`.dt-c-${k}`) ?? null;
     const merge = document.querySelector(`[data-testid="orders-merge-token-${token}"]`);
     return { free: val(cell('available')), escrowed: val(row?.querySelector('[data-testid="balance-escrowed"]')), strays: val(row?.querySelector('[data-testid="balance-strays"]')), kasLocked: val(cell('kasLocked')), mergeButton: merge ? (merge.getAttribute('title') ?? txt(merge)) : null };
@@ -660,10 +602,7 @@ export async function balanceRow(rc, token, { timeoutMs = 60_000 } = {}) {
 
 export const num = (s) => Number(String(s ?? '').replace(/,/g, ''));
 
-/**
- * Polls the Balances panel until `pred(row)` holds (the free / escrowed figures follow the node
- * with a delay).
- */
+/** Polls the Balances panel until `pred(row)` holds (the free / escrowed figures follow the node with a delay). */
 export async function waitBalance(rc, token, pred, what, timeoutMs = 90_000) {
   const t0 = Date.now();
   let b = null;
@@ -676,10 +615,7 @@ export async function waitBalance(rc, token, pred, what, timeoutMs = 90_000) {
   }
 }
 
-/**
- * Best-effort sweep at the end of a run: cancels any order still live (a failed scenario must not
- * leave the test wallet's KAS locked).
- */
+/** Best-effort sweep at the end of a run: cancels any order still live (a failed scenario must not leave the test wallet's KAS locked). */
 export async function sweepOpenOrders(rc) {
   const { h } = rc;
   const done = [];
@@ -705,15 +641,11 @@ export async function sweepOpenOrders(rc) {
   return done;
 }
 
-// ------------------------------------------------------------------------------------------------
-// scenarios
+// ------------------------------------------------------------------------------------------------ scenarios
 
 const A = (rc, n) => ({ token: rc.token.tokenId, amount: BigInt(n) * TOKEN });
 
-/**
- * Limit GTC sell (rests far above any market; the Balances panel shows the tokens in the order) and
- * limit GTC buy, each placed and cancelled.
- */
+/** Limit GTC sell (rests far above any market; the Balances panel shows the tokens in the order) and limit GTC buy, each placed and cancelled. */
 export async function runLimit(rc) {
   return scenario(rc, 'limit', async (r) => {
     await placeAndCancel(rc, r, 'limit-sell', { type: 'limit', side: 'sell', fields: { amount: 3, price: 50 }, expectSummary: /Sell limit order.*\b50 KAS per\b/ }, {
@@ -729,13 +661,11 @@ export async function runLimit(rc) {
 }
 
 /**
- * A limit buy ladder of 3 levels (1 token from 0.5 KAS, 2 % apart), one click: each level its own
- * transaction. A level the planner funds from the change of the level before spends an output KOB's
- * node accepted a moment ago, so the wallet is asked for it only once KOB's node lists that change
- * and the margin passed (wallet/visibility.ts); `spendsPrevious` records which did. Every level is
- * checked on the node and recorded, then each is cancelled. (A sell ladder from one token UTXO
- * chains every level on the token change, but on TN10 the ticket did not yet see the second level's
- * token change when it planned the third: "Not enough tokens".)
+ * A limit buy ladder of 3 levels (1 token from 0.5 KAS, 2 % apart), one click: each level its own transaction. A level the planner
+ * funds from the change of the level before spends an output KOB's node accepted a moment ago, so the wallet is asked for it only once
+ * KOB's node lists that change and the margin passed (wallet/visibility.ts); `spendsPrevious` records which did. Every level is checked
+ * on the node and recorded, then each is cancelled. (A sell ladder from one token UTXO chains every level on the token change, but on
+ * TN10 the ticket did not yet see the second level's token change when it planned the third: "Not enough tokens".)
  */
 export async function runLadder(rc) {
   return scenario(rc, 'ladder', async (r) => {
@@ -775,21 +705,20 @@ export async function runLadder(rc) {
   });
 }
 
-/**
- * Amend in place (AMEND record): a limit sell gets a new price; the same order (covenant id) lives
- * on at a new outpoint; then cancelled.
- */
+/** Amend in place (AMEND record): a limit sell gets a new price; the same order (covenant id) lives on at a new outpoint; then cancelled. */
 export async function runAmend(rc) {
   return scenario(rc, 'amend', async (r) => {
     const { h } = rc;
     const p = await place(rc, r, 'amend-sell', { type: 'limit', side: 'sell', fields: { amount: 2, price: 50 }, expectSummary: /Sell limit order.*\b50 KAS per\b/ });
     const id = p.covenantIds[0];
     await openOrders(rc, [id]);
+    // the app offers Amend only on a verified live row: a fresh placement first shows `unknown` ("record only") until the node's verdict
+    // on its record arrives (TN10 2026-11-20: the row was still unknown when the button was looked for)
+    await waitLive(rc, [id], 90_000);
     const before = await rowView(h, id);
     const btn = tid(h, `order-replace-${id}`);
     if (!(await btn.count())) throw new Error(`My orders offers no amend for the limit sell ${short(id)}: ${JSON.stringify(before)}`);
-    // the amend is in the row's folded details (the line itself carries only Cancel): unfolded
-    // first
+    // the amend is in the row's folded details (the line itself carries only Cancel): unfolded first
     if (!(await btn.isVisible())) await tid(h, `order-toggle-${id}`).click();
     await btn.click();
     await tid(h, 'amend-dialog').waitFor({ timeout: 30_000 });
@@ -821,18 +750,14 @@ export async function runAmend(rc) {
 }
 
 /**
- * IOC buy below any ask (nothing fills): lives for its 60 s life (the most an IOC may have, counted
- * from the ticket's clock, so a slow wallet approval eats into it); cancelled at once. On a network
- * with keepers (the TN10 soak's executors) an expired IOC is killed within seconds: one that ended
- * (killed / refunded) before the run could cancel it is reported as SKIP with its status, not as an
- * app failure.
+ * IOC buy below any ask (nothing fills): lives for its 60 s life (the most an IOC may have, counted from the ticket's clock, so a slow wallet
+ * approval eats into it); cancelled at once. On a network with keepers (the TN10 soak's executors) an expired IOC is killed within seconds: one
+ * that ended (killed / refunded) before the run could cancel it is reported as SKIP with its status, not as an app failure.
  */
 export async function runIoc(rc) {
   return scenario(rc, 'ioc', async (r) => {
     try {
-      // life is in seconds; an IOC may live at most IOC_KILL_DAA = 600 DAA (60 s): 60 s sits on
-      // that limit and is refused (LIFE_OUT_OF_RANGE) once the ticket's clock moves while the
-      // wallet approves, 50 s = 500 DAA is valid
+      // life is in seconds; an IOC may live at most IOC_KILL_DAA = 600 DAA (60 s): 60 s sits on that limit and is refused (LIFE_OUT_OF_RANGE) once the ticket's clock moves while the wallet approves, 50 s = 500 DAA is valid
       await placeAndCancel(rc, r, 'ioc-buy', { type: 'ioc', side: 'buy', fields: { amount: 2, price: 0.4, life: 50 }, expectSummary: /Buy IOC limit order/ });
     } catch (e) {
       if (!(e instanceof OrderEnded) || !e.views.every((v) => v.status === 'killed' || v.status === 'refunded')) throw e;
@@ -857,20 +782,14 @@ export async function runOco(rc) {
   });
 }
 
-/**
- * IFD buy-first (buy 2 at 0.5, exit take-profit 1): one entry, cancelled from its row (node only)
- * or its position card (indexer).
- */
+/** IFD buy-first (buy 2 at 0.5, exit take-profit 1): one entry, cancelled from its row (node only) or its position card (indexer). */
 export async function runIfd(rc) {
   return scenario(rc, 'ifd', async (r) => {
     await placeAndCancel(rc, r, 'ifd-buy-first', { type: 'ifd', side: 'buy', fields: { amount: 2, price: 0.5, 'exit.takeProfit': 1 }, expectSummary: /Buy IFD entry/ }, { position: true });
   });
 }
 
-/**
- * Pair A/B limit orders: a sell of A for B (escrows A) and a buy of A with B (escrows B), each
- * placed from the pair page and cancelled.
- */
+/** Pair A/B limit orders: a sell of A for B (escrows A) and a buy of A with B (escrows B), each placed from the pair page and cancelled. */
 export async function runPair(rc) {
   return scenario(rc, 'pair', async (r) => {
     if (!rc.tokenB) throw new Error('the pair scenario needs token B (issued with --only including pair)');
@@ -882,12 +801,10 @@ export async function runPair(rc) {
 }
 
 /**
- * Market sell against a counterparty: the market needs a book (an indexer) with a bid that is not
- * the wallet's own (self-trade prevention). The counterparty is the DEV key (the `maker` test key
- * with `--mock`), driven through the same app in a separate browser with an in-page signer: it
- * rests a limit buy of 1 token at 0.6, the wallet market-sells 1 token into it. A matcher on the
- * network may fill the market order (then it is reported filled); otherwise it is cancelled. The
- * counterparty's bid is cancelled at the end if it is still live.
+ * Market sell against a counterparty: the market needs a book (an indexer) with a bid that is not the wallet's own (self-trade prevention).
+ * The counterparty is the DEV key (the `maker` test key with `--mock`), driven through the same app in a separate browser with an in-page
+ * signer: it rests a limit buy of 1 token at 0.6, the wallet market-sells 1 token into it. A matcher on the network may fill the market order
+ * (then it is reported filled); otherwise it is cancelled. The counterparty's bid is cancelled at the end if it is still live.
  */
 export async function runMarket(rc) {
   return scenario(rc, 'market', async (r) => {
@@ -909,15 +826,12 @@ export async function runMarket(rc) {
         if (!(await tid(rc.h, 'order-issue-NO_LIQUIDITY').count())) break;
         if (Date.now() - t0 > 120_000) throw new Error('the indexer book never showed the counterparty bid (NO_LIQUIDITY after 120 s)');
       }
-      // the confirmation must start the auction from the counterparty's bid (`Expected price
-      // (auction start)` 0.6). A wallet slower to approve than the auction's lead gets
-      // `clock-moved` after the app's own re-timings (nothing was sent; the app says "try again"):
-      // tried again
+      // the confirmation must start the auction from the counterparty's bid (`Expected price (auction start)` 0.6). A wallet slower to approve
+      // than the auction's lead gets `clock-moved` after the app's own re-timings (nothing was sent; the app says "try again"): tried again
       let p = null;
       for (let attempt = 1; !p; attempt++) {
         try {
-          // life 50 s = 500 DAA, inside the 1..600 DAA range (60 s sits on the limit and fails when
-          // the clock moves)
+          // life 50 s = 500 DAA, inside the 1..600 DAA range (60 s sits on the limit and fails when the clock moves)
           p = await place(rc, r, 'market-sell', { type: 'market', side: 'sell', fields: { amount: 1, life: 50 }, expectSummary: /Sell market order \(auction\).*\b0\.6\b/ });
         } catch (e) {
           if (!/\(clock-moved\)/.test(String(e?.message)) || attempt >= 3) throw e;
@@ -941,8 +855,7 @@ export async function runMarket(rc) {
       const bidLive = await waitLive(cpRc, bid.covenantIds, 30_000).then(() => true, () => false);
       if (bidLive) await cancelStep(cpRc, r, 'counterparty-bid', { placed: new Map([[bid.txid, bid.tx]]), covenantIds: bid.covenantIds });
     } finally {
-      // a failed run must not leave the DEV key's own bid live (its KAS stays locked): cancel
-      // whatever of the counterparty is still live
+      // a failed run must not leave the DEV key's own bid live (its KAS stays locked): cancel whatever of the counterparty is still live
       const swept = await sweepOpenOrders(cpRc);
       if (swept.length) r.steps.push({ name: 'counterparty sweep', swept });
       await cp.close().catch(() => {});
@@ -951,11 +864,10 @@ export async function runMarket(rc) {
 }
 
 /**
- * Merge (My orders > Balances): after the cancels the wallet holds several plain UTXOs of token A;
- * each click on "Merge (n)" is ONE transfer to itself of the smallest up-to-3 of them (the 3 / 3
- * program) on its own confirmation screen, stating the count before / after; the scenario clicks
- * until the button disappears. The last merge's token output is on the node and holds the whole
- * supply, the free balance is the whole supply.
+ * Merge (My orders > Balances): after the cancels the wallet holds several plain UTXOs of token A; each click on "Merge (n)" is ONE transfer to
+ * itself of the smallest up-to-3 of them (the 3 / 3 program) on its own confirmation screen, stating the count before / after; the scenario
+ * clicks until the button disappears. The last merge's token output is on the node and holds the whole supply, the free balance is the whole
+ * supply.
  */
 export async function runMerge(rc) {
   return scenario(rc, 'merge', async (r) => {
@@ -969,14 +881,14 @@ export async function runMerge(rc) {
     const trackedBefore = (await trackedTokens(h)).filter((x) => x.token === token);
     const step = { name: `merge ${n0} UTXOs`, balancesBefore: before, trackedBefore, links: [], done: null };
     r.steps.push(step);
-    // Merge all: one dialog, then one transaction per wallet approval (3 -> 1 each, so n UTXOs take
-    // ceil((n - 1) / 2) of them)
+    // Merge all: one dialog, then one transaction per wallet approval (3 -> 1 each, so n UTXOs take ceil((n - 1) / 2) of them)
     const txs = Math.ceil((n0 - 1) / 2);
     await tid(h, `orders-merge-token-${token}`).click();
     await tid(h, 'merge-all-dialog').waitFor({ timeout: 30_000 });
     const summary = collapse(await tid(h, 'merge-all-summary').innerText());
     step.summary = summary;
-    const want = new RegExp(`^Merge your ${n0} ${rc.token.ticker} UTXOs into one: ${txs} transaction${txs === 1 ? '' : 's'}\\b`);
+    // the dialog's wording (orders.merge.summaryAll + .run): "Merge 4 TICKER UTXOs into 1. 2 transactions · 2 approvals · about +x KAS ..."
+    const want = new RegExp(`^Merge ${n0} ${rc.token.ticker} UTXOs into 1\\. ${txs} transaction${txs === 1 ? '' : 's'} · ${txs} approval${txs === 1 ? '' : 's'}\\b`);
     if (!want.test(summary)) throw new Error(`the merge dialog does not state the merge of ${n0} UTXOs in ${txs} transaction(s): "${summary}"`);
     await tid(h, 'merge-all-confirm').click();
     const { steps, done } = await runFlow(h, rc.ctx, rc.drv, 'merge', rc.name, txs > 12 ? { maxSteps: txs } : {});
@@ -999,10 +911,7 @@ export async function runMerge(rc) {
   });
 }
 
-/**
- * Balances at the end: every token back in the wallet (free = supply, nothing in orders, no
- * strays), no KAS locked in orders.
- */
+/** Balances at the end: every token back in the wallet (free = supply, nothing in orders, no strays), no KAS locked in orders. */
 export async function runBalances(rc) {
   return scenario(rc, 'balances', async (r) => {
     await openOrders(rc);
@@ -1030,18 +939,15 @@ export const SCENARIOS = [
   ['pair', runPair],
   ['market', runMarket],
   ['fill', runFill],
+  ['direct', runDirect],
   ['cells', runCells],
   ['merge', runMerge],
   ['balances', runBalances],
 ];
 
-// ------------------------------------------------------------------------------------------------
-// fill, cells
+// ------------------------------------------------------------------------------------------------ fill, cells
 
-/**
- * The `kob` CLI binary: `KOB_BIN`, else a cargo build under the repo's `target/`; null when there
- * is none.
- */
+/** The `kob` CLI binary: `KOB_BIN`, else a cargo build under the repo's `target/`; null when there is none. */
 function kobBinary() {
   if (process.env.KOB_BIN) return process.env.KOB_BIN;
   const exe = process.platform === 'win32' ? 'kob.exe' : 'kob';
@@ -1049,17 +955,17 @@ function kobBinary() {
 }
 
 /**
- * `kob take <id> --amount n --yes` with the DEV key (env only, never printed) against the node and
- * indexer of the run; returns the parsed outcome. `--yes` needs a price bound: `bound` is
- * `['--max-price', '0.5KAS']` (taking a sell order) or `['--min-price', '0.5KAS']` (taking a buy
- * order).
+ * `kob take <id> --amount n --token <A> --yes` with the DEV key (env only, never printed) against the node and indexer of the run; returns the
+ * parsed outcome. `--yes` needs a price bound and the token: `bound` is `['--max-price', '0.5KAS']` (taking a sell order) or
+ * `['--min-price', '0.5KAS']` (taking a buy order); `--token` is token A's covenant id (the CLI refuses an order whose node-checked state
+ * trades another token, sec-ops M15).
  */
 function kobTake(rc, covenantId, amount, bound, label, bin) {
   const env = loadRealEnv();
   const stateDir = join(OUT_DIR, 'kob-state');
   mkdirSync(stateDir, { recursive: true });
   const args = ['take', covenantId, '--amount', `${BigInt(amount) * TOKEN}base`, '--network', 'testnet-10', '--node', env.NODE_WS || TN10_NODE, '--indexer', rc.indexerUrl,
-    '--registry', join(OUT_DIR, `registry-tn10.test.${rc.name}.json`), ...bound, '--yes', '--json'];
+    '--registry', join(OUT_DIR, `registry-tn10.test.${rc.name}.json`), '--token', rc.token.tokenId, ...bound, '--yes', '--json'];
   const res = spawnSync(bin, args, { encoding: 'utf8', env: { ...process.env, KOB_KEY: env.DEV_PRIVATE_KEY, KOB_STATE_DIR: stateDir }, timeout: 180_000 });
   const scrub = (s) => String(s ?? '').split(env.DEV_PRIVATE_KEY).join('<key>');
   const out = scrub(res.stdout), err = scrub(res.stderr);
@@ -1070,10 +976,7 @@ function kobTake(rc, covenantId, amount, bound, label, bin) {
   return { status: res.status, txid, json, stderr: err.slice(0, 1500), stdoutHead: out.slice(0, 1500) };
 }
 
-/**
- * Wallet ask filled by the DEV taker (pays the ask, receives tokens); wallet bid filled by the DEV
- * taker delivering tokens to the wallet. TN10 only (`kob take` with the DEV key).
- */
+/** Wallet ask filled by the DEV taker (pays the ask, receives tokens); wallet bid filled by the DEV taker delivering tokens to the wallet. TN10 only (`kob take` with the DEV key). */
 export async function runFill(rc) {
   return scenario(rc, 'fill', async (r) => {
     if (!rc.indexer || !rc.indexerUrl) throw new Skip('the taker needs an indexer (INDEXER_URL or --indexer <url>)');
@@ -1090,9 +993,8 @@ export async function runFill(rc) {
       await waitLive(rc, p.covenantIds, 90_000);
       // the taker reads the order from the indexer: wait until it lists it
       for (let i = 0; i < 60; i++) { const rr = await fetch(`${rc.indexerUrl}/v1/orders/${p.covenantIds[0]}`).catch(() => null); if (rr?.ok) break; await sleep(3000); }
-      // the wallet's order is at 0.5 KAS with no tip: the taker buys from its sell at most at that
-      // price and sells into its buy at least at it (an order that crossed the book is an auction
-      // that reaches 0.5 within 20 s; until then the bound refuses and the retries wait)
+      // the wallet's order is at 0.5 KAS with no tip: the taker buys from its sell at most at that price and sells into its buy at least at it
+      // (an order that crossed the book is an auction that reaches 0.5 within 20 s; until then the bound refuses and the retries wait)
       const bound = side === 'sell' ? ['--max-price', '0.5KAS'] : ['--min-price', '0.5KAS'];
       let t = kobTake(rc, p.covenantIds[0], 2, bound, label, bin);
       for (let i = 0; i < 3 && !t.txid; i++) { await sleep(10_000); t = kobTake(rc, p.covenantIds[0], 2, bound, label, bin); }
@@ -1107,9 +1009,101 @@ export async function runFill(rc) {
 }
 
 /**
- * Three 1-token sells placed, then cancelled one by one: the wallet is left with three separate
- * token UTXOs (cells), which the merge scenario then takes 3 -> 1.
+ * Fills the ticket and waits until it plans a fill from the book (kob/take.ts): `order-take-fills` matches `fills` and there is no rest
+ * (`order-take-rest`: a partial cross would also place a resting order). The book comes from the indexer, then node-checked: until the
+ * counterparty's order is in it the same fields plan a resting order, so the ticket is read again (never pressed) until the take shows.
  */
+async function fillTicketForTake(rc, spec, fills, timeoutMs = 150_000) {
+  const t0 = Date.now();
+  let seen = null;
+  for (;;) {
+    const t = await fillTicket(rc, spec);
+    for (let i = 0; i < 8; i++) {
+      seen = await rc.h.page.evaluate(() => ({
+        fills: document.querySelector('[data-testid="order-take-fills"]')?.getAttribute('title') ?? null,
+        rest: document.querySelector('[data-testid="order-take-rest"]')?.getAttribute('title') ?? null,
+      }));
+      if (seen.fills) break;
+      await sleep(1000);
+    }
+    if (seen.fills && fills.test(seen.fills)) {
+      if (seen.rest) throw new Error(`the ticket fills only part of it from the book: "${seen.fills}", "${seen.rest}"`);
+      return { ...t, take: seen };
+    }
+    if (Date.now() - t0 > timeoutMs) throw new Error(`the ticket never planned the fill from the book (${fills}) within ${timeoutMs} ms: ${JSON.stringify(seen)}`);
+    await sleep(3000);
+  }
+}
+
+/**
+ * One direct fill: the wallet's crossing order of the ticket is filled from the book by the wallet itself (no executor, no order of its own),
+ * taking the counterparty's resting order `cp` whole. Checks: the app's confirmation is "Fill from the book" (1 token from 1 order), the take
+ * spends the counterparty order's covenant output on the node, the app stores no placement record for it, the counterparty's order is no
+ * longer live in its Portfolio, and the wallet's free balance of A moved by one token (`delta`).
+ */
+async function takeStep(rc, cpRc, r, label, spec, cp, { price, delta, amount = 1 }) {
+  const ticker = rc.token.ticker;
+  const before = num((await balanceRow(rc, rc.token.tokenId)).free);
+  const recs0 = new Set(Object.keys(await readRecords(rc.h)));
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const t = await fillTicketForTake(rc, spec, new RegExp(`^Fills now: ${amount} ${esc(ticker)} at ${esc(price)} avg\\b`));
+  // (the label and value cells of the confirmation may run together in its text: no word boundary before the figures)
+  const expect = { re: new RegExp(`^Fill from the book \\|.*${amount} ${esc(ticker)} from 1 order\\(s\\).*${esc(price)} KAS per ${esc(ticker)}\\b`), what: `fill ${amount} ${ticker} at ${price} from the book` };
+  const s = await signFromTicket(rc.h, rc.ctx, rc.drv, label, rc.name, t.click, { expect });
+  if (!s.submitted) throw new Error('the submitted take was not captured from the node connection');
+  const step = { ...stepOf(`take ${label}`, s), button: t.button, ticketTake: t.take, ticketIssues: t.issues, balancesBefore: t.balancesBefore, takes: cp.txid };
+  r.steps.push(step);
+  if (s.receipts.length !== 1) throw new Error(`expected one confirmation (one take, no rest), got ${s.receipts.length}: ${JSON.stringify(s.receipts.map((x) => x.title))}`);
+  step.verify = await verifySpent(rc, s.submitted, s.txid, new Map([[cp.txid, cp.tx]]), 'take');
+  await sleep(1500);
+  const own = Object.entries(await readRecords(rc.h)).filter(([id, rec]) => !recs0.has(id) && rec.txid === s.txid);
+  if (own.length) throw new Error(`the take stored placement record(s) ${own.map(([id]) => short(id)).join(', ')}: a fill from the book places no order`);
+  log(`[${rc.name}] ${label}: took ${short(cp.covenantIds[0])} (${short(cp.txid)}) in ${short(s.txid)}`);
+  await openOrders(cpRc, []);
+  step.counterpartyAfter = await waitNotLive(cpRc, cp.covenantIds, 120_000);
+  const b = await waitBalance(rc, rc.token.tokenId, (x) => num(x.free) === before + delta, `free ${before} ${delta > 0 ? '+' : ''}${delta} ${ticker}`);
+  step.balanceAfter = b;
+  return { step, txid: s.txid };
+}
+
+/**
+ * Direct fill of crossing orders (kob/take.ts) against the counterparty (DEV key on TN10, `maker` with `--mock`; in-page signer, as `market`):
+ * 1. it rests a limit buy of 1 A @ 0.6; the wallet's limit sell of 1 @ 0.6 (crossing: "Fill now from the book", the default) takes it;
+ * 2. it rests the token it got as a limit sell of 1 A @ 1.2; the wallet's FOK buy of 1 @ 1.2 (direct: from the book, the FOK default) takes it.
+ *    (1.2, not just above 0.6: an indexer with a minimum order value leaves a smaller ask out of its book, `order_value_below_minimum`;
+ *    the soak's index-a lists from 1 KAS, so an ask of 1 token @ 0.7 never reached the book, TN10 2026-11-20)
+ * The wallet ends with the token it sold. Needs an indexer (the book).
+ */
+export async function runDirect(rc) {
+  return scenario(rc, 'direct', async (r) => {
+    if (!rc.indexer) throw new Skip('a fill from the book needs an indexer with a book (INDEXER_URL or --indexer <url>; --mock --indexer uses the mock indexer)');
+    if (!rc.openCounterparty) throw new Skip('no counterparty key (DEV_PRIVATE_KEY) for the resting orders');
+    const cp = await rc.openCounterparty();
+    const cpRc = { ...rc, ...cp, name: `${rc.name}-counterparty` };
+    try {
+      const bid = await place(cpRc, r, 'direct-counterparty-bid', { type: 'limit', side: 'buy', fields: { amount: 1, price: 0.6 }, expectSummary: /Buy limit order.*\b0\.6 KAS per\b/ });
+      await openOrders(cpRc, bid.covenantIds);
+      await waitLive(cpRc, bid.covenantIds, 90_000);
+      await takeStep(rc, cpRc, r, 'direct-limit-sell', { type: 'limit', side: 'sell', fields: { amount: 1, price: 0.6 } }, bid, { price: '0.6', delta: -1 });
+      // the counterparty holds the token now (the indexer's token-utxos of its key): it rests it as an ask
+      const cpBal = await waitBalance(cpRc, rc.token.tokenId, (x) => num(x.free) >= 1, 'the counterparty holds a token of A', 120_000);
+      r.steps.push({ name: 'counterparty balance of A after the first take', row: cpBal });
+      // every token of A it holds (1 from the take; more when an earlier run's ask was swept), so the wallet ends with its whole supply
+      const held = num(cpBal.free);
+      const ask = await place(cpRc, r, 'direct-counterparty-ask', { type: 'limit', side: 'sell', fields: { amount: held, price: 1.2 }, expectSummary: /Sell limit order.*\b1\.2 KAS per\b/ });
+      await openOrders(cpRc, ask.covenantIds);
+      await waitLive(cpRc, ask.covenantIds, 90_000);
+      await takeStep(rc, cpRc, r, 'direct-fok-buy', { type: 'fok', side: 'buy', fields: { amount: held, price: 1.2 } }, ask, { price: '1.2', delta: held, amount: held });
+    } finally {
+      // a failed run must not leave the DEV key's orders live
+      const swept = await sweepOpenOrders(cpRc);
+      if (swept.length) r.steps.push({ name: 'counterparty sweep', swept });
+      await cp.close().catch(() => {});
+    }
+  });
+}
+
+/** Three 1-token sells placed, then cancelled one by one: the wallet is left with three separate token UTXOs (cells), which the merge scenario then takes 3 -> 1. */
 export async function runCells(rc) {
   return scenario(rc, 'cells', async (r) => {
     const ps = [];

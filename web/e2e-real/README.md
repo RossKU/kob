@@ -14,7 +14,8 @@ on any machine. It proves nothing about the real extensions, their popups or a r
 **Status.** The scenarios are ported to the current UI and protocol (base-unit amounts, the current ticket with its one order button and
 inline status line, the My orders flows without a confirmation screen, the compact header wallet chip) and run offline with `--mock` ("Verified offline" below) and on TN10 with the real KasWare and Kaspire ("TN10 run of
 2026-10-20" below: every scenario PASS; "TN10 run of 2026-11-14": KasWare 0.11.5 and Kaspire 0.5.31, issue, limit, amend, cells, merge PASS; "TN10 run of
-2026-11-19": the same builds, lock, curve, claim, chromatic, unlock PASS with both, issue and limit again); Kastle 2.61.0 cannot connect to the app (its provider script throws under the app's Trusted Types).
+2026-11-19": the same builds, lock, curve, claim, chromatic, unlock PASS with both, issue and limit again; "TN10 run of 2026-11-20": KasWare
+0.11.6 and Kaspire 0.5.32, every scenario PASS with both, the new `direct` included); Kastle 2.61.0 cannot connect to the app (its provider script throws under the app's Trusted Types).
 
 ## Run
 
@@ -33,7 +34,7 @@ node e2e-real/run.mjs --mock                          # node-only, like the TN10
 node e2e-real/run.mjs --mock --indexer                # with the mock indexer: market scenario and position cards
 ```
 
-Flags: `--wallet kasware,kaspire,kastle|all` (default all), `--only <ids>` (default all, in this order: `lock,limit,ladder,amend,ioc,stop,oco,ifd,pair,market,fill,curve,claim,chromatic,cells,merge,balances,unlock`;
+Flags: `--wallet kasware,kaspire,kastle|all` (default all), `--only <ids>` (default all, in this order: `lock,limit,ladder,amend,ioc,stop,oco,ifd,pair,market,fill,direct,curve,claim,chromatic,cells,merge,balances,unlock`;
 the issuance always runs first), `--indexer [url]` (TN10: that indexer, or `INDEXER_URL` of `.env`; `--mock`: the mock's), `--skip-issue` (TN10:
 reuse the tokens of the previous run of that wallet from `out/token-<wallet>.json`, with its tracker entries and placement records), `--headless`
 (Chromium `--headless=new`: works for Kaspire, KasWare needs a headed browser; `--mock` is always headless), `--keep-open`, `--rebuild` (rebuild
@@ -71,16 +72,17 @@ row does not have is empty at once, never a 30 s locator wait). A failed scenari
 | issue | Create token screen (`#/create`; the old `#/issue` leads there): the published public-mint build (`issue-program-public-mint` under Advanced, KCC20PublicMint, no minter; the default since 2026-11-04) is issued, 1,000,000 tokens with 8 decimals to the wallet. Result panel token id / txid, the registry entry (`template_id` `kcc20-ref-public-mint`, `max_token_inputs` 3), the genesis UTXO tracked with program KCC20PublicMint. Token B (the pair's quote) is issued the same way when `pair` is selected. The run then serves a test registry with both tokens listed. |
 | limit | Limit GTC sell 3 @ 50 KAS (while it rests, Balances shows 3 in orders), cancelled, 3 tokens back; limit GTC buy 2 @ 0.5 KAS, cancelled. |
 | ladder | One click on a limit buy ladder of 3 levels (1 token from 0.5 KAS, 2 % apart): one transaction and one wallet approval per level; a level funded from the change of the one before is asked for only once KOB's node lists that change and 2 s passed (`spendsPrevious` records which). Every level's covenant outputs unspent, a placement record each; then each level is cancelled. |
-| amend | Limit sell 2 @ 50, My orders `order-replace-<id>` -> amend dialog (`amend-price` 55, `amend-preview`) -> one cancel-replace transaction; the SAME order id lives on at 55 (in-place AMEND record), then cancelled, 2 tokens back. |
+| amend | Limit sell 2 @ 50, My orders `order-replace-<id>` -> amend dialog (`amend-price` 55, `amend-preview`) -> one cancel-replace transaction; the SAME order id lives on at 55 (in-place AMEND record), then cancelled, 2 tokens back. Amend is looked for once the row is live (the app offers it only on a verified row; a fresh placement first shows `unknown`, "record only"). |
 | ioc | IOC buy 2 @ 0.4 with a 50 s life (advanced field `life`; an IOC may have 1 to 600 DAA = 60 s at most, counted from the ticket's clock, so the wallet's approval eats into it: 60 s would run over the limit), cancelled while alive. An IOC that a keeper on the network killed at its expiry before the cancel could be signed is a SKIP with its status. |
 | stop | Stop-market sell 2, stop 0.2: rests unarmed, cancelled, 2 tokens back. |
 | oco | OCO sell 2, take-profit 60, stop 0.2, cancelled, 2 tokens back. |
 | ifd | IFD buy-first 2 @ 0.5 with exit take-profit 1, cancelled from its row (node only) or its position card (`position-cancel-<id>`, with an indexer). |
 | pair | On the pair page `#/market/<A>/<B>`: limit sell 2 A @ 5 B (escrows A) and limit buy 1 A @ 0.5 B (escrows B), each cancelled, the escrow back. |
 | market | Needs an indexer (SKIP otherwise): the DEV key (`maker` with `--mock`), driven through the same app in its own browser with an in-page signer (`features.test`, injected config only), rests a limit buy of 1 A @ 0.6; the wallet market-sells 1 A into it once the book shows it (the confirmation's auction must start from 0.6; a `clock-moved` stop, nothing sent, is tried again up to 3 times). If a matcher fills it, that is recorded; else it is cancelled. The counterparty bid is cancelled when still live, and whatever of the DEV key's orders is still live after a failed run is swept (cancelled). |
-| fill | TN10 with an indexer only (SKIP otherwise, and with `--mock`): a taker fills the wallet's orders with `kob take --yes` and the DEV key, bounded by `--max-price 0.5KAS` / `--min-price 0.5KAS` (`KOB_BIN`, else `target/{release,debug}/kob` of this repo; the key goes in the environment, never on the command line or into `out/`). The wallet's limit sell 2 @ 0.5 is filled (the taker pays, the wallet's order ends), then its limit buy 2 @ 0.5 is filled by the taker delivering tokens; each wallet order must end not live in My orders. |
+| fill | TN10 with an indexer only (SKIP otherwise, and with `--mock`): a taker fills the wallet's orders with `kob take --yes` and the DEV key, bounded by `--max-price 0.5KAS` / `--min-price 0.5KAS` and pinned to token A with `--token <A>` (both required with `--yes`; `KOB_BIN`, else `target/{release,debug}/kob` of this repo; the key goes in the environment, never on the command line or into `out/`). The wallet's limit sell 2 @ 0.5 is filled (the taker pays, the wallet's order ends), then its limit buy 2 @ 0.5 is filled by the taker delivering tokens; each wallet order must end not live in My orders. |
+| direct | Needs an indexer (SKIP otherwise): the direct fill of a crossing order from the book (kob/take.ts: the wallet is the taker, no executor, no order of its own). The counterparty (DEV key, `maker` with `--mock`; in-page signer, as `market`) rests a limit buy of 1 A @ 0.6; the wallet's limit sell of 1 @ 0.6 (crossing "Fill now from the book", the default) must plan "Fills now: 1 A at 0.6 avg" with no rest, its confirmation must say "Fill from the book", 1 A from 1 order(s) at 0.6; the take must spend the bid's covenant output on the node, store no placement record, the bid must end (not live in the counterparty's Portfolio) and the wallet's free A drop by 1. Then the counterparty rests every token of A it holds (the one it got; more when an earlier run's ask was swept) as a limit sell @ 1.2 and the wallet's FOK buy of that amount @ 1.2 (direct: from the book, the FOK default) takes it the same way; the wallet ends with its whole supply. The ask is worth at least 1.2 KAS because an indexer with a minimum order value (the soak's index-a: 1 KAS, `min_order_value_sompi` in its health) leaves a smaller order out of its book (`listed: false`, `order_value_below_minimum`), and then there is nothing to fill from. Whatever of the counterparty is still live after a failure is swept. |
 | cells | Three limit sells of 1 token (@ 50, 51, 52 KAS) are placed and cancelled one by one: every cancel releases a separate token UTXO, so the wallet holds three cells for the merge scenario that follows. |
-| merge | My orders > Balances: `orders-merge-token-<A>` ("Merge all", its tooltip "Merge your n UTXOs of this token into one: about +x KAS back. ...") -> `merge-all-dialog`, whose `merge-all-summary` must say "Merge your n TICKER UTXOs into one: T transactions" with T = ceil((n - 1) / 2) -> `merge-all-confirm` -> one flow of T transactions, one wallet approval each; the last merge's single token output is unspent on the node and holds the whole supply, and the button is gone. |
+| merge | My orders > Balances: `orders-merge-token-<A>` ("Merge all", its tooltip "Merge your n UTXOs of this token into one: about +x KAS back. ...") -> `merge-all-dialog`, whose `merge-all-summary` must say "Merge n TICKER UTXOs into 1. T transactions · T approvals" with T = ceil((n - 1) / 2) -> `merge-all-confirm` -> one flow of T transactions, one wallet approval each; the last merge's single token output is unspent on the node and holds the whole supply, and the button is gone. |
 | balances | Balances panel: for A and B free = 1,000,000, nothing in orders, no strays; no order left live. |
 | lock | Runs first (its time runs during the rest). Create token, keep all, "Lock my share until" a date: the lock UI offers whole days or a date (the start of that day in the viewer's zone), so the app page gets a time zone (`GMT+hh:mm`, DevTools `Emulation.setTimezoneOverride`) whose next midnight is about 6 minutes away while the creation is planned and signed. Checks: the confirmation names the lock, the KCC-23 declaration has `lock` and its script pushes the lock time, the result panel shows the locked holder, Portfolio > Balances shows "locked until" and NO Unlock before the lock time. TN10 only, in a second page of the same wallet with the test hook (`features.test`) and its clock moved past the lock time: Unlock shows, the press asks the node's past median time and is refused (nothing sent); with that check taken out (`window.__kob.services.node.getPastMedianTime` replaced by the harness) the lock coin (1 KAS to the lock's P2SH) is signed and accepted, the unlock (lock time = the lock's time) is signed by the wallet and must be refused by the node; the locked genesis output stays unspent. |
 | curve | Create token, "Sell on a curve", Linear (10% kept, 10 levels, 40 KAS if sold out, last level 5x): the curve is made unbound in the genesis; Open orders shows one Curve row "Level 1 / 10", Balances 900,000 in orders. The app refuses a buy into the wallet's own curve ("would trade against your own order"), so the counterparty (DEV key, in-page signer, as `market`) creates the same curve and the wallet places a crossing Collected limit buy of two levels at 1.15x the first level's price ("Plain limit" crossing, minimum fill one level): an executor on the network fills one level of the curve into it (`--mock`: the mock fills both). Then `claim`, then the buy, the counterparty's curve and the wallet's own curve are cancelled (the own one against its genesis, its 900,000 back as tracked tokens). Needs an indexer with an executor. |
@@ -336,6 +338,75 @@ KasWare-0.11.5 input check on TN10 (it asks the mock's HTTP node, so every prepa
 node refused is read from its card; Balances is polled without re-opening the tab every few seconds (each opening reloads it, which takes
 longer than that on TN10 with many token UTXOs). KasWare's onboarding once stopped on CreateHDWalletScreen and once its browser closed
 during it: run again, it passed. The `fill` scenario was not run: `kob take --yes` now also needs `--token`.
+
+## TN10 run of 2026-11-20 (KasWare 0.11.6, Kaspire 0.5.32, master 63cf3743e)
+
+The pins moved to KasWare 0.11.6 and Kaspire 0.5.32 (the drift reports of the daily wallet-drift check); every scenario, the new
+`direct` (fill from the book) and the `fill` taker (`kob take --token`) included, on the same throw-away wallets with the DEV key as
+counterparty and taker and the indexer of a live soak on the same TN10 (`--indexer http://127.0.0.1:8093`, index-a, kobd at c2b7a8c68,
+template generation 113cd9b8b119cdaf, `min_order_value_sompi` 100000000). The CLI was built from this tree (`cargo build --release -p
+kob-cli`), the app with fresh kob-wasm bindings. `--mock --indexer` first (KasWare: lock to pair and `direct` PASS; the machine ran out of
+memory before the rest). The DEV key held 38.6 KAS, so the wallets were topped up with 21 (Kaspire) and 9 (KasWare) instead of 100.
+
+KasWare ran headed, all scenarios in one session (01:51 to 02:24Z), every one PASS; no Sign window showed a "Critical Signing Warning".
+Kaspire ran `--headless` in several sessions (the first one is a finding below; the later ones `--skip-issue` on its tokens of the day):
+
+| Scenario | KasWare 0.11.6 | Kaspire 0.5.32 |
+|---|---|---|
+| issue (A / B) | PASS 399afca7b0671068 / cbf6e86c2f88d63b | PASS a695f508e23bd3ae / 17bee868afea0782 |
+| lock (genesis; early unlock refused by the app and by the node, "input #0 is not finalized") | PASS 4c4424bd81d05cf6 | PASS ec97aa0cc2f678c5 |
+| limit (sell, cancel, buy, cancel) | PASS fc8362bd427b7f4c 3483c8ae1c832c1e 61b6e6bb1b56ffe7 25b1783649c8038e | PASS 8182c6144d259c64 440abc5d6fbd1ccf f3222f0076970d4e 4905456354c1b648 |
+| ladder (3 levels; cancels) | PASS 1dc867b68a 8e17750317 7fc36f7021; 72d6abb17364e481 8ce9bc77f500c985 8193e4a54e855439 | PASS 9231f2cfec 162234293a e80d7469e0; e0fbd88dc9f81b0e 4daf4cc26065b6c8 d2e3daa593c4dddb |
+| amend (place, amend 50 -> 55, cancel) | PASS 440c710118ce1c00 95b8b2a03099446f 4bbf2c085e1844a0 | PASS d8b91f743c85963b 0fe312ff4c679815 c80fdfb20abd0f58 |
+| ioc | PASS 50ca29596744d97b ff5d550f19a7c506 | PASS 2286a4703167b941 1d1b66243b9f492b (again after lock: 740ec8c1bd833dd9 3356980166abb34e) |
+| stop | PASS 7e52f57f76112a11 16b9346d36e64fb9 | PASS 2155241099b0ea17 9aa1ec4a4109b274 (again after lock: 20ec4efe52c96c2a cc91736b93206bd1) |
+| oco | PASS 97aaa6ed851ecfd8 38cbdc89c1bf6b94 | PASS bff6e1a30d7ae074 c335a58b839e828c |
+| ifd | PASS 23b1b56bf96e386f 0be34ba5a0c95cc4 | PASS da70e6999bf521c8 776b733a7adfee54 |
+| pair (sell, cancel, buy, cancel) | PASS 496fa3e568abab85 6c288b816664cdf5 b24daf0928291fd1 55794f667e05ab0c | PASS e860f58afae7417b ffde588e617cad56 43eb00381c5467fe 6c25c2eddb33728e |
+| market (DEV bid, market sell, its cancel, the bid's cancel; no matcher filled it) | PASS 3a8cb4a937ebcf85 3745438b23646fb4 11cf321fde9b7271 43988feaac36e4ed | PASS 4ce7c6ef9d3be38c ec9ca1c800538980 5167486b405f6498 97cf7e534b544185 |
+| fill (wallet sell, `kob take --token` fill; wallet buy, take) | PASS c95231ca7dfe90c7 0b61eef9f044b731 f56d7f41e116db0e 7278db0fb6e5fb97 | PASS f53d9d39dd883705 61ad1a0ed66f3cd1 998544da71af273d 3ff6f9704eb69524 |
+| direct (DEV bid, the wallet's limit sell takes it; DEV ask, the wallet's FOK buy takes it) | PASS 1ce248a51c30a991 e70fc2ebfb4e7c0a 3d051b430808c590 dcffdb237ef63874 | PASS 42c1bf91b2f2bc1e ffdd85201d548ff4 fe0e6ce0d82bd19d 4908f2854b0fe4d2 |
+| curve (own curve, DEV curve, Collected buy filled one level by an executor, cancels) | PASS 599a7ccdb002c16b 7c7f85662faa67b1 327791870621a27d 4d69c3f992da0844 aa78a3a4a32977f9 50d494f43a1c504a | PASS 8547a47e08c37818 7a12ec07b801567c a0909e3e2bcedc58 d17e39288e33a058 a387b88e62a4c318 b159831397a33359 |
+| claim (90,000 to the wallet) | PASS 146127a94b23109a | PASS a31193c5dd638df2 |
+| chromatic (genesis, cancel) | PASS db04dd3d44e85c15 71fd868051c0d34f | PASS 22024bb75d91d521 3d740b15e1692309 |
+| cells (3 sells, 3 cancels) | PASS 94ad9988205e09f4 2ad95059c0112e5c 23d537621f89222b f78bac1e6f55d8cf 5e216c948a5f9827 6b23b167898bb952 | PASS 2f361abf07bc7b65 558888bd2288908a f26cc79e520eeaab 426e849446166f34 f0f2189ad65c5d97 5d7e41b14a6114e2 |
+| merge (4 UTXOs, 2 transactions) | PASS a3fe5755bdee9743 40ad31cb9133200e | PASS 521ca3e71c5aa2df 9e4ce50f47dc268e |
+| balances | PASS | PASS |
+| unlock | PASS f9ffeba57b8b4c9c | PASS ffc650399d59a738 |
+
+The wallets of the new builds: KasWare 0.11.6's onboarding, Testnet 10 switch (Settings still has "KASPA Network"; the new "Testnet
+Mode" / "Default Testnet" rows are not needed) and Sign windows work as with 0.11.5. Kaspire 0.5.32's approval ("Approve reviewed
+PSKT?") is unchanged for KOB: its new token review decodes its pinned kUSDT covenant only, so KOB's tokens show the KAS lines as before
+(no "Full token balance change unavailable" line in any window).
+
+Findings (nothing changed in web/src):
+
+* **A long Kaspire session stopped following its orders (seen once, not reproduced).** The first Kaspire session (00:24 to 00:54Z,
+  lock first, then the order scenarios) passed issue, lock, limit and ladder; from about 00:31 the app no longer took in what the indexer
+  said: a fresh placement stayed `unknown` "record only" in Open orders for over 60 s (oco 7dd745e850..., fill b81d58045b..., both listed
+  `open` by the indexer at the time), cancelled orders stayed `open` / live for over 90 s (stop 87a58a06c1..., pair 8e8858f199...,
+  market 80e08473b8..., all `cancelled` on the indexer), and the ticket of an IOC (744cd8d91c6c5429..., on the chain and listed) and an IFD
+  never reached `submitted` within 4 minutes (the status line waits for `recordAccepted`, which reads the node clock first). index-a
+  answered every request within milliseconds and reported `following`, lag 3 to 8 s, throughout; the node answered within a second. A fresh
+  page on the same wallet showed the true state at once, and the same scenarios passed in five later Kaspire sessions (one of them lock,
+  then ioc and stop) and in the 33-minute KasWare session. The machine was short of memory at the time (other jobs; a mock run was killed
+  for memory minutes before). Its screenshots were overwritten by the next run (`out/screens/<wallet>` is cleared at the start); the
+  harness now keeps the failed indexer / node requests, console errors and shell banners of a failed scenario (`badResponses`,
+  `failedRequests`, `consoleErrors`, `banners`) for the next time.
+* **Notification cards cover the ticket.** At 1280 x 900 the top-right cards ("Accepted by the network", and the red "The transaction
+  could not be built: The current state of this order is not confirmed yet. Refresh and try again." x2) lie over the ticket's Order type
+  and Amount rows and take the clicks meant for them (`cells`: a 30 s timeout on `order-side-sell`). The harness now closes them first.
+* **A just-cancelled order is offered for cancel again.** The end-of-scenario sweeps found a row still live right after its cancel and its
+  Cancel answered "The current state of this order is not confirmed yet. Refresh and try again." (both wallets, harmless).
+* **A small order is not in index-a's book.** index-a lists orders from 1 KAS (`min_order_value_sompi`): a stop sell of 2 @ 0.2, a market
+  sell of 1, an ask of 1 @ 0.7 are `listed: false`, `order_value_below_minimum`. The app says so on the row ("Not listed by the indexer:
+  the order is worth less than the minimum order value of this indexer's executor") and a FOK cannot fill from such an ask ("the book cannot
+  fill all 1 ... at your price"). As designed; `direct` now asks 1.2 KAS.
+
+Harness changes: `fill` passes `--token <A>` to `kob take` (required with `--yes` since 967168ab3); the new `direct` scenario; `amend`
+looks for Amend once the row is live (the app offers it on a verified row only); `merge` reads the dialog's current wording ("Merge 4 A
+UTXOs into 1. 2 transactions · 2 approvals ..."); the ticket's notification cards are closed before it is filled; a failed scenario keeps
+the page's failed requests, console errors and banners.
 
 ## What still needs a live run (TN10, the owner's machine)
 

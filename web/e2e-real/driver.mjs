@@ -252,7 +252,7 @@ export function walletDriver(name, env, { mock = null } = {}) {
  */
 export async function openApp(ctx, baseUrl, config) {
   const page = await ctx.newPage();
-  const h = { page, consoleErrors: [], pageErrors: [], badResponses: [], submits: [], baseUrl };
+  const h = { page, consoleErrors: [], pageErrors: [], badResponses: [], failedRequests: [], submits: [], baseUrl };
   page.on('console', (m) => {
     if (m.type() === 'error') h.consoleErrors.push(m.text().slice(0, 400));
   });
@@ -264,12 +264,14 @@ export async function openApp(ctx, baseUrl, config) {
     if (s && typeof id === 'string') s.txid = id;
   };
   page.on('response', (r) => {
-    if (r.status() >= 400) h.badResponses.push(`${r.status()} ${r.url().replace(baseUrl, '')}`.slice(0, 200));
+    if (r.status() >= 400) h.badResponses.push(`${new Date().toISOString().slice(11, 19)} ${r.status()} ${r.url().replace(baseUrl, '')}`.slice(0, 200));
     if (r.request().method() === 'POST' && /\/node\/submit$/.test(new URL(r.url()).pathname) && r.ok()) {
       r.json().then((j) => answer(j.transactionId ?? j.txid)).catch(() => {});
     }
   });
   page.on('pageerror', (e) => h.pageErrors.push(String(e.message).slice(0, 400)));
+  // a request that got no answer (network error, timeout, abort): with `badResponses` the evidence of an app that stopped reading its indexer
+  page.on('requestfailed', (r) => h.failedRequests.push({ at: Date.now(), what: `${r.failure()?.errorText ?? 'failed'} ${r.url().replace(baseUrl, '')}`.slice(0, 200) }));
   page.on('request', (req) => {
     if (req.method() !== 'POST' || !/\/node\/submit$/.test(new URL(req.url()).pathname)) return;
     try {
