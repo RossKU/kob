@@ -96,6 +96,8 @@ function LogoVotes(props: { covenantId: string }) {
   const adapter = wallet.adapter;
   const canVote = !!url && !!info && !!adapter?.signMessage && !wallet.networkMismatch;
   const totals = v.totals ?? { up: 0, down: 0 };
+  // No votes without an indexer that takes them (standalone mode included): nothing to show.
+  if (!url) return null;
   const cast = async (vote: VoteDir) => {
     if (!canVote || !url || !info || !adapter?.signMessage || step) return;
     setResult(null);
@@ -155,7 +157,7 @@ function LogoVotes(props: { covenantId: string }) {
           {'👎'} <span data-testid="logo-votes-down">{totals.down}</span>
         </Button>
         <span class="small muted" data-testid="logo-vote-hint">
-          {step ? t(`market.logo.vote.step.${step}`) : !url ? t('market.logo.vote.unavailable') : !info ? t('market.logo.vote.connect') : !adapter?.signMessage ? t('market.logo.vote.noSign') : wallet.networkMismatch ? t('market.logo.vote.network') : t('market.logo.vote.hint')}
+          {step ? t(`market.logo.vote.step.${step}`) : !info ? t('market.logo.vote.connect') : !adapter?.signMessage ? t('market.logo.vote.noSign') : wallet.networkMismatch ? t('market.logo.vote.network') : t('market.logo.vote.hint')}
         </span>
       </div>
       {m ? (

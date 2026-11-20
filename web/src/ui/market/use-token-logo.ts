@@ -21,6 +21,7 @@
 //    creator's address is not the one the creation record names.
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
+import { useStandalone } from '../shell/standalone';
 import { useCreatorImagePref, useIconPref, useVoteFilterPref } from '../../app/icon-pref';
 import { useDeclarationsVersion } from '../../app/use-declaration';
 import { logoBlocklist, logoBlocklistUrlOf } from '../../data/logo-blocklist';
@@ -77,17 +78,23 @@ export function useLogoHidden(covenantId: string): boolean {
 /** The URLs of the vote totals the app already reads (one timer each, for the whole visit). */
 const votesFeeds = new Set<string>();
 
-/** What the votes say of a token's logo. It starts reading the totals and re-renders when they change. */
+/**
+ * What the votes say of a token's logo. It starts reading the totals and re-renders when they change.
+ * In standalone mode the indexer is not asked: `url` is null (no vote can be cast) and the reads
+ * pause, while the totals kept from before still apply.
+ */
 export function useLogoVotes(covenantId: string): { verdict: VoteVerdict; totals: LogoTotals | undefined; shownOnce: boolean; own: VoteDir | undefined; url: string | null } {
-  const { config } = useServices();
-  const url = logoVotesUrlOf(logoBlocklistUrlOf(config));
+  const { config, standalone } = useServices();
+  const standaloneNow = useStandalone(standalone)?.active === true;
+  const feedUrl = logoVotesUrlOf(logoBlocklistUrlOf(config));
   const [, setN] = useState(0);
   useEffect(() => logoVotes.subscribe(() => setN((n) => n + 1)), []);
   useEffect(() => {
-    if (!url || votesFeeds.has(url)) return;
-    votesFeeds.add(url);
-    logoVotes.start(url);
-  }, [url]);
+    if (!feedUrl || votesFeeds.has(feedUrl)) return;
+    votesFeeds.add(feedUrl);
+    logoVotes.start(feedUrl, { paused: () => standalone?.state.active === true });
+  }, [feedUrl, standalone]);
+  const url = standaloneNow ? null : feedUrl;
   return { verdict: logoVotes.verdict(covenantId), totals: logoVotes.totals(covenantId), shownOnce: logoVotes.shownOnce(covenantId), own: logoVotes.ownVote(covenantId), url };
 }
 

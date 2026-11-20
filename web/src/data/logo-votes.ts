@@ -11,6 +11,8 @@
 //   (Settings), or show one hidden logo once.
 // - It fails open like the report blocklist: no list, an odd one or no such route hides nothing.
 // - Reports of illegal images are separate (data/logo-blocklist.ts). A vote never reports.
+// - Standalone mode (data/standalone.ts) asks the indexer nothing for votes: the totals are not
+//   read (the kept ones still apply) and no vote can be cast.
 import { sha256 } from '@noble/hashes/sha2.js';
 import { defaultStorage, type StorageLike } from '../config';
 
@@ -236,8 +238,11 @@ export interface LogoVotes {
   /** Takes an accepted vote: the token's totals from the answer and the viewer's own vote. */
   accepted(covenantId: string, vote: VoteDir, t: LogoTotals): void;
   subscribe(fn: () => void): () => void;
-  /** Reads the totals now and every `intervalMs`, and returns the stop (one timer per URL). */
-  start(url: string): () => void;
+  /**
+   * Reads the totals now and every `intervalMs`, and returns the stop (one timer per URL). A read
+   * is skipped while `paused()` says so (standalone mode).
+   */
+  start(url: string, o?: { paused?: () => boolean }): () => void;
   refresh(url: string): Promise<boolean>;
   version(): number;
 }
@@ -340,14 +345,14 @@ export function createLogoVotes(o: LogoVotesOptions = {}): LogoVotes {
       listeners.add(fn);
       return () => void listeners.delete(fn);
     },
-    start(url) {
+    start(url, so = {}) {
       if (url === '') return () => undefined;
       let entry = running.get(url);
       if (!entry) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         let live = true;
         const tick = async () => {
-          await refresh(url);
+          if (!so.paused?.()) await refresh(url);
           if (live) timer = setTimeout(() => void tick(), interval);
         };
         void tick();

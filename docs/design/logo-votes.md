@@ -101,6 +101,8 @@ recounts the totals.
 ## 7. The web app
 
 * `GET /v1/logo-votes` is read at start and every 2 minutes, next to the blocklist, and kept in localStorage. It fails open.
+* Standalone mode asks the indexer nothing for votes: the reads pause (the kept totals still apply) and the Logo card shows no vote
+  buttons. Only the report blocklist is still read there.
 * The rule (`verdictOf`): fewer than `min_voters` voters, not judged; else hidden at a net score of `hide_at` or lower.
 * Settings, "Token names and icons", "Logos voted down": **Show logos at 0 and above** (default) or **Show all logos**
   (`kob.icons.votes`).

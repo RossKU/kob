@@ -562,7 +562,6 @@ export default {
   'market.logo.vote.connect': 'Connect a wallet to vote.',
   'market.logo.vote.noSign': 'This wallet cannot sign messages, so it cannot vote.',
   'market.logo.vote.network': 'Switch the wallet to this network to vote.',
-  'market.logo.vote.unavailable': 'This indexer does not take votes.',
   'market.logo.vote.step.sign': 'Sign the vote in your wallet...',
   'market.logo.vote.step.work': 'Working on the vote (a few seconds)...',
   'market.logo.vote.step.send': 'Sending the vote...',

@@ -168,6 +168,24 @@ describe('the totals', () => {
     expect(odd.verdict(A)).toBe('unjudged');
   });
 
+  it('skip the reads while paused (standalone mode asks the indexer nothing)', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = json(doc([]));
+      let paused = true;
+      const v = createLogoVotes({ storage: mem(), fetch: asFetch(f), intervalMs: 1000 });
+      const stop = v.start(URL_, { paused: () => paused });
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(f).not.toHaveBeenCalled();
+      paused = false;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(f).toHaveBeenCalledTimes(1);
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('show a hidden logo once, and take the viewer\'s own accepted vote at once', () => {
     const storage = mem({ [LOGO_VOTES_KEY]: JSON.stringify(doc([{ covenant_id: A, up: 0, down: 3 }])) });
     const v = createLogoVotes({ storage });
