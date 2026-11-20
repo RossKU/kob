@@ -4,7 +4,7 @@
 // A proof may come from anyone (the indexer, a list, a file). `verifyLaunchProof` recomputes both
 // transaction ids and the covenant id, so a supplier can withhold a declaration but never forge
 // one. Decoding alone binds nothing.
-import { verifiedLockOf, parseLockScript, type VerifiedLock } from './creator-lock';
+import { verifiedLockOf, parseLockScript, type LockKind, type VerifiedLock } from './creator-lock';
 import { isTokenProgram } from './programs.generated';
 import type { Hex } from './types';
 import { KobError, type KobWasm } from './wasm';
@@ -39,6 +39,11 @@ export interface TokenDeclaration {
    * template (kob/creator-lock.ts). What it holds is `VerifiedDeclaration.lock`.
    */
   lock: Hex | null;
+  /**
+   * `lock_kind`: `auto` for an automatic creator lock (anyone may release it to the creator after
+   * its time), else null (a manual lock, or none). `lock` then holds the terms of the automatic lock.
+   */
+  lockKind: LockKind | null;
   /** Fields present but not taken, for example "decimals: not an integer from 0 to 18". */
   issues: string[];
 }
@@ -92,6 +97,7 @@ function tokenOf(v: unknown): TokenDeclaration {
     telegram: text(o.telegram, 256),
     lookalike: o.lookalike === true,
     lock: typeof o.lock === 'string' && parseLockScript(o.lock) ? o.lock.toLowerCase() : null,
+    lockKind: typeof o.lock === 'string' && parseLockScript(o.lock) && o.lock_kind === 'auto' ? 'auto' : null,
     issues: Array.isArray(o.issues) ? o.issues.filter((i): i is string => typeof i === 'string') : [],
   };
 }

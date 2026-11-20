@@ -22,7 +22,7 @@ import type { PlanIssue } from './plan-types';
 import { normalizeTicker } from './registry';
 import { hasBadChar } from './display';
 import { curveMinFill, curveNumbers, curveSpecOfSale, curveTable, parseSale, type CurveNumbers, type CurveTable, type SaleForm } from './curve';
-import { LOCK_TIME_THRESHOLD, MAX_LOCK_SPAN_MS, MAX_UNTIL } from './creator-lock';
+import { AUTO_COIN, LOCK_TIME_THRESHOLD, MAX_LOCK_SPAN_MS, MAX_UNTIL, type LockKind } from './creator-lock';
 import type { AnyState, BuiltTx, Hex, Kcc20State, KeyUtxo, TokenUtxo, U64 } from './types';
 import { KobError, type KobWasm } from './wasm';
 
@@ -122,9 +122,11 @@ export interface IssueSpec {
   /**
    * A creator lock (kob/creator-lock.ts). Holder `holder`, the funding key's (scheme 0), becomes
    * the lock's (owner scheme 0x03, its P2SH hash) and opens at `until` (unix ms) to the funding
-   * key. The declaration carries it as `lock`.
+   * key. The declaration carries it as `lock`. `kind` `auto` (kob-wasm's default is `manual`)
+   * makes it open by itself: the holder is owned by the `KobLockAuto` script, the genesis pays the
+   * 1 KAS lock coin to its address, and the declaration adds `"lock_kind":"auto"`.
    */
-  lock?: { holder: number; until: U64 };
+  lock?: { holder: number; until: U64; kind?: LockKind };
 }
 
 /** The curve of an `IssueSpec` (kob-wasm fills the maker, the token fields, `total` and `amountLeft`). */
@@ -237,9 +239,14 @@ export interface IssueLock {
   /** Unix ms. */
   until: U64;
   key: Hex;
+  /** The owner's redeem script: the terms (manual) or the `KobLockAuto` script (auto). */
   script: Hex;
   authority: Hex;
   holder: number;
+  /** Manual or automatic. An older binding says nothing: manual. */
+  kind?: LockKind;
+  /** An automatic lock's coin: the genesis output paying the lock's address. */
+  coinOutput?: number | null;
 }
 
 /** The two planned transactions of an issuance, with the token and its documents. */
@@ -409,6 +416,11 @@ export interface IssueForm {
    * the kept share, and without one it is the wallet's share.
    */
   lockUntil?: string;
+  /**
+   * How the lock opens: `auto` (the default), by itself after the date, released by anyone to
+   * the wallet; `manual`, the wallet signs the unlock (Settings, "Manual unlock").
+   */
+  lockKind?: LockKind;
 }
 
 /** A blank form with the default decimals. */
@@ -638,13 +650,13 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
  * Bytes of the declaration a form makes (codec byte included).
  * KOB's fields in KOB's order, as kob-protocol `TokenMetadata::json` writes them.
  */
-export function metadataBytes(form: Pick<IssueForm, 'name' | 'ticker' | 'decimals' | 'description' | 'icon' | 'imageHash' | 'website' | 'x' | 'telegram' | 'lockUntil'>): number {
+export function metadataBytes(form: Pick<IssueForm, 'name' | 'ticker' | 'decimals' | 'description' | 'icon' | 'imageHash' | 'website' | 'x' | 'telegram' | 'lockUntil' | 'lockKind'>): number {
   const opt = (k: string, v: string | null | undefined) => (v && v.trim() ? `,"${k}":${JSON.stringify(v.trim())}` : '');
   const x = form.x ? socialUrl('x', form.x) : null;
   const telegram = form.telegram ? socialUrl('telegram', form.telegram) : null;
   const json =
     `{"name":${JSON.stringify(form.name.trim())},"symbol":${JSON.stringify(form.ticker)},"decimals":${Number.isInteger(form.decimals) ? form.decimals : 0}` +
-    `${opt('description', form.description)}${opt('image', form.icon)}${opt('image_hash', form.imageHash?.toLowerCase())}${opt('website', form.website)}${opt('x', x)}${opt('telegram', telegram)}${opt('lock', form.lockUntil?.trim() ? LOCK_SCRIPT_PLACEHOLDER : '')}}`;
+    `${opt('description', form.description)}${opt('image', form.icon)}${opt('image_hash', form.imageHash?.toLowerCase())}${opt('website', form.website)}${opt('x', x)}${opt('telegram', telegram)}${opt('lock', form.lockUntil?.trim() ? LOCK_SCRIPT_PLACEHOLDER : '')}${opt('lock_kind', form.lockUntil?.trim() && form.lockKind !== 'manual' ? 'auto' : '')}}`;
   return 1 + new TextEncoder().encode(json).length;
 }
 
@@ -822,9 +834,11 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
       holder = holders.findIndex((h) => h.owner === maker && h.ownerScheme === 0);
       if (holder < 0) throw new IssueFormError([issue('lock.no_share', 'Your wallet receives no tokens to lock: give it a share of the supply.', 'lock')]);
     }
-    lock = { holder, until: lockUntil };
+    lock = { holder, until: lockUntil, kind: form.lockKind === 'manual' ? 'manual' : 'auto' };
   }
-  // A curve's own UTXO carries KAS too, the token carrier.
+  // A curve's own UTXO carries KAS too, the token carrier. An automatic lock's coin is one more
+  // output, of AUTO_COIN.
+  const autoCoin = lock?.kind === 'auto' ? AUTO_COIN : 0n;
   const outputs = BigInt(holders.length + (curve ? 1 : 0));
 
   // Only plain P2PK UTXOs of the maker can fund the genesis, because the wallet signs every input
@@ -832,13 +846,13 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
   const candidates = opts.funding
     .filter((u) => u.pubkey.toLowerCase() === maker && !u.covenantId)
     .sort((a, b) => (BigInt(a.amount) === BigInt(b.amount) ? 0 : BigInt(a.amount) > BigInt(b.amount) ? -1 : 1));
-  const carriers = parsed.carrier * outputs;
+  const carriers = parsed.carrier * outputs + autoCoin;
   const have = candidates.reduce((s, u) => s + BigInt(u.amount), 0n);
   const shortfall = () =>
     new IssueFormError([
       issue(
         'funds.insufficient',
-        `Not enough KAS: the issuance locks ${formatUnits(carriers, 8)} KAS in ${outputs} output(s) (returned when the tokens are spent or consolidated) plus the network fee; the wallet has ${formatUnits(have, 8)} KAS spendable.`,
+        `Not enough KAS: the issuance locks ${formatUnits(carriers, 8)} KAS in ${outputs + (autoCoin > 0n ? 1n : 0n)} output(s) (returned when the tokens are spent or consolidated) plus the network fee; the wallet has ${formatUnits(have, 8)} KAS spendable.`,
         undefined,
         { need: carriers, have },
       ),
@@ -847,7 +861,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
 
   // The smallest largest-first prefix covering the carriers and an estimated fee. It grows on
   // demand.
-  const reserve = feeRate * estimateFeeMass(Number(outputs));
+  const reserve = feeRate * estimateFeeMass(Number(outputs) + (autoCoin > 0n ? 1 : 0));
   let count = 0;
   let acc = 0n;
   while (count < candidates.length && acc < carriers + reserve) acc += BigInt(candidates[count++].amount);

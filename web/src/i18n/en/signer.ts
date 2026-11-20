@@ -64,6 +64,8 @@ export default {
   'signer.declare.toOthers': 'To other keys',
   'signer.declare.onCurve': 'On your curve sell order',
   'signer.declare.locked': 'Locked for you until {date}',
+  'signer.declare.lockedAuto': "Locked for you until {date}, opens automatically",
+  'signer.declare.lockCoin': "Lock coin, back after the date",
   'signer.declare.curve': 'Sell on a curve',
   'signer.declare.curveValue': '{levels} levels, {first} to {last} KAS per token',
   'signer.declare.curveLevelSize': 'Curve: tokens per level',

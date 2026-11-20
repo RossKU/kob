@@ -12,7 +12,7 @@
 import type { CreationRecord } from '../data/creations';
 import { issueRaw, type IssueResult, type IssueSpec } from '../kob/issue';
 import { decodeDeclaration } from '../kob/kcc23';
-import { lockOfScript } from '../kob/creator-lock';
+import { declaredLock, type LockKind } from '../kob/creator-lock';
 import type { Hex } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 
@@ -48,12 +48,13 @@ export function specOfRecord(kob: KobWasm, rec: CreationRecord): IssueSpec | str
   const opt = <K extends string>(k: K, v: string | null) => (v ? ({ [k]: v } as Record<K, string>) : {});
   // A creator lock. The holder its hash owns was planned as the funding key's, and kob-wasm turns
   // it into the lock's.
-  let lock: { holder: number; until: string; key: Hex } | null = null;
+  // An automatic lock's owner is the KobLockAuto script of the terms and the token's program.
+  let lock: { holder: number; until: string; key: Hex; kind: LockKind } | null = null;
   if (d.lock) {
-    const l = lockOfScript(kob, d.lock);
+    const l = declaredLock(kob, d, t.program === 'KCC20Ref' || t.program === 'KCC20PublicMint' ? t.program : null);
     const holder = l ? t.outputs.findIndex((o) => o.ownerScheme === 3 && o.owner === l.authority) : -1;
     if (!l || holder < 0) return 'the declared creator lock holds no output of the token';
-    lock = { holder, until: l.until, key: l.key };
+    lock = { holder, until: l.until, key: l.key, kind: l.kind };
   }
   return {
     name: d.name, ticker: d.symbol, decimals: d.decimals, supply: t.supply,
@@ -65,7 +66,7 @@ export function specOfRecord(kob: KobWasm, rec: CreationRecord): IssueSpec | str
     // A curve placed in the genesis takes its terms from its recorded state. kob-wasm writes its
     // custody's owner.
     ...(c ? { curve: { custody: c.custody, levelSize: c.state.state.levelSize, table: c.state.state.table, minFill: c.state.state.minFill, tip: c.state.state.tip, activeFrom: c.state.state.activeFrom, carrier: c.carrier } } : {}),
-    ...(lock ? { lock: { holder: lock.holder, until: lock.until } } : {}),
+    ...(lock ? { lock: { holder: lock.holder, until: lock.until, kind: lock.kind } } : {}),
   };
 }
 

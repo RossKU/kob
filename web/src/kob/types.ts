@@ -664,7 +664,13 @@ export type SigPlan =
    * The KAS coin of a creator lock (kob/creator-lock.ts), spent with `push(sig65) push(script)` and
    * a SIGHASH_ALL signature of `key`. The transaction's lock time is at least `until` (unix ms).
    */
-  | { kind: 'creatorLock'; until: U64; key: Hex };
+  | { kind: 'creatorLock'; until: U64; key: Hex }
+  /**
+   * The KAS coin of an automatic creator lock (kob/creator-lock.ts, `KobLockAuto`): `release()` and
+   * the redeem script of the template for (`until`, `key`) and the lengths of `program`, the token
+   * program of the locked tokens. Nobody signs it. The transaction's lock time is at least `until`.
+   */
+  | { kind: 'creatorLockAuto'; until: U64; key: Hex; program: TokenProgram };
 
 /** One template of the cancel-only table (kob-wasm `retiredTemplates`). Only its maker cancels. */
 export interface RetiredTemplateInfo { kind: TemplateName; hash: Hex; label: string; retiredBy: string; lastRelease: string; entries: string[] }

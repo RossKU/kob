@@ -48,7 +48,7 @@
 // The Schnorr digests in `built.sign` are produced by kob-wasm. TypeScript cannot recompute them,
 // and `kob.finalize` verifies signatures against them.
 import { curveProblems } from './curve';
-import { LOCK_COIN_MAX, creatorLock, type CreatorLockInfo } from './creator-lock';
+import { AUTO_COIN, LOCK_COIN_MAX, creatorLock, type CreatorLockInfo } from './creator-lock';
 import type { WalletId } from '../wallet/types';
 import {
   baseKind, custodiesOf, describeOrder, familyOfKind, formatKas, formatUnits, isOrderKind, isPairKind, kindFor, big, orderKindOfTemplate, pairFactsOf,
@@ -106,11 +106,12 @@ export const SIGNING_ISSUE_CODES = [
   'expected-tokens-escrowed', 'expected-cancel-ids', 'expected-max-fee', 'input-unconfirmed', 'token-state-unplain', 'token-state-mixed', 'pair-token-mismatch', 'pair-family-mismatch',
   'pair-terms-invalid', 'order-terms-invalid', 'expected-quote-escrowed', 'trigger-evidence-invalid', 'trigger-rule-unmet', 'sweep-invalid', 'expected-sweep-ids', 'sweep-custody-spent',
   'retired-not-cancel', 'claim-invalid', 'bought-custody-lost', 'expected-claim-ids', 'expected-delivery', 'curve-terms-invalid',
-  'take-amount', 'take-price', 'take-orders', 'take-token', 'unlock-invalid', 'lock-coin-stranded',
+  'take-amount', 'take-price', 'take-orders', 'take-token', 'unlock-invalid', 'lock-coin-stranded', 'release-invalid',
   // warnings
   'inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records',
   // info
   'payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed', 'take-fills', 'unlock-tokens', 'lock-coin',
+  'lock-coin-auto', 'release-kas',
 ] as const;
 /** The code of a signing finding. */
 export type SigningIssueCode = (typeof SIGNING_ISSUE_CODES)[number];
@@ -122,7 +123,7 @@ const LEVEL: Record<SigningIssueCode, IssueLevel> = Object.fromEntries(
     c,
     (['inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records'] as string[]).includes(c)
       ? 'warning'
-      : (['payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed', 'take-fills', 'unlock-tokens', 'lock-coin'] as string[]).includes(c)
+      : (['payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed', 'take-fills', 'unlock-tokens', 'lock-coin', 'lock-coin-auto', 'release-kas'] as string[]).includes(c)
         ? 'info'
         : 'blocking',
   ]),
@@ -172,6 +173,12 @@ export interface DecodedInput {
   ownedBy: 'maker' | 'covenant' | 'other';
   /** P2SH redeem script hash of the input UTXO (null for P2PK) */
   redeemScriptHash: Hex | null;
+  /**
+   * The coin of an automatic creator lock this release spends (`creatorLockAuto`). It was locked
+   * at the genesis, so its KAS come back to the wallet like a cancelled order's (`released`), not
+   * out of the free balance.
+   */
+  autoLockCoin?: { until: bigint };
   token: null | { ref: TokenRef; amount: bigint; owner: Hex; ownerScheme: number; leader: boolean; escrowOf: Hex | null; program: TokenProgram; witness: 'covenantId' | 'p2pk' | 'p2sh';
     /**
      * a token input the wallet's creator lock holds (owner scheme 0x03, the lock's hash), which
@@ -206,7 +213,7 @@ export interface DecodedOutput {
    * `fill-payout`: what a resting order this tx fills is due (an ask's maker paid, a bid's maker's
    * tokens delivered); `fill-continue`: the rest of such an order (its continuation, its custody)
    */
-  kind: 'order' | 'custody' | 'token-change' | 'token-out' | 'kas-change' | 'payment-out' | 'fill-payout' | 'fill-continue' | 'unknown-covenant' | 'unknown';
+  kind: 'order' | 'custody' | 'token-change' | 'token-out' | 'kas-change' | 'payment-out' | 'fill-payout' | 'fill-continue' | 'unknown-covenant' | 'unknown' | 'lock-coin';
   flagged: boolean;
   order: null | { covenantId: Hex; description: OrderDescription; verified: boolean; locked: LockedKas; deadline: bigint | null };
   token: null | { ref: TokenRef; amount: bigint; owner: Hex; ownerScheme: number; escrowOf: Hex | null };
@@ -584,6 +591,14 @@ export interface DecodeInput {
   locks?: readonly { until: U64; key: Hex }[];
   /** the wall clock (ms) the open locks are judged by (default Date.now()) */
   now?: number;
+  /**
+   * The automatic creator locks a creation's genesis declares, derived by the caller from the
+   * declaration and the program its token outputs are checked under (signer/summary.ts
+   * `creationSummary`, ui/confirm/issuance-model.ts). A plain output of exactly AUTO_COIN to the
+   * address of one of the wallet key is its lock coin: KAS locked until the release returns them
+   * (`lock-coin`, counted as locked). Any other output there stays unknown, which blocks.
+   */
+  autoLocks?: readonly { until: U64; key: Hex; program: TokenProgram }[];
 }
 
 // ---------------------------------------------------------------------------------- script helpers
@@ -683,6 +698,8 @@ function planSigner(p: SigPlan): Hex | null {
     case 'retiredCancel': return p.maker;
     // the coin of a creator lock: a signature of its key
     case 'creatorLock': return p.key;
+    // the coin of an automatic creator lock: nobody signs it
+    case 'creatorLockAuto': return null;
   }
 }
 
@@ -736,9 +753,9 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
    */
   const lockOf = new Map<number, CreatorLockInfo>();
   built.plans.forEach((p, i) => {
-    if (p.kind !== 'creatorLock') return;
+    if (p.kind !== 'creatorLock' && p.kind !== 'creatorLockAuto') return;
     try {
-      lockOf.set(i, creatorLock(kob, { until: p.until, key: p.key }));
+      lockOf.set(i, p.kind === 'creatorLock' ? creatorLock(kob, { until: p.until, key: p.key }) : creatorLock(kob, { until: p.until, key: p.key, kind: 'auto', program: p.program }));
     } catch {
       /* no lock of those terms: the input's script matches nothing (blocking below) */
     }
@@ -776,6 +793,17 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       // at least the lock's
       if (big(tx.lockTime) < big(plan.until)) add('unlock-invalid', `input ${i}: the transaction's lock time is before the lock's time: the node would never accept it`, { input: i, params: { reason: 'time' } });
       return { ...base, type: 'kas', ownedBy: mine ? 'maker' : 'other' };
+    }
+    if (plan.kind === 'creatorLockAuto') {
+      // the coin of an automatic creator lock: the P2SH of the KobLockAuto script of exactly the
+      // plan's terms and program. Nobody signs it, and the release pays only the lock's key
+      // (checked once the outputs are read)
+      const lock = lockOf.get(i) ?? null;
+      mustMatch(lock?.scriptPublicKey ?? null, 'automatic creator lock script of that key, time and program');
+      const mine = plan.key.toLowerCase() === maker;
+      if (inp.utxo.covenantId) add('release-invalid', `input ${i}: a creator lock's coin is plain KAS, this one is bound to a covenant`, { input: i, params: { reason: 'coin' } });
+      if (big(tx.lockTime) < big(plan.until)) add('release-invalid', `input ${i}: the transaction's lock time is before the lock's time: the node would never accept it`, { input: i, params: { reason: 'time' } });
+      return { ...base, type: 'kas', ownedBy: mine ? 'maker' : 'other', autoLockCoin: { until: big(plan.until) } };
     }
     if (plan.kind === 'entry') {
       let state: ReturnType<KobWasm['decodeState']> | null = null;
@@ -1206,8 +1234,21 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     }
   }
 
+  // the addresses of the wallet's own automatic locks a genesis declares (`autoLocks`): a plain
+  // output there is the lock coin the release later spends
+  const autoCoinSpks = new Map<string, { until: bigint }>();
+  for (const l of input.autoLocks ?? []) {
+    if (l.key.toLowerCase() !== maker) continue;
+    try {
+      autoCoinSpks.set(creatorLock(kob, { until: l.until, key: l.key, kind: 'auto', program: l.program }).scriptPublicKey, { until: big(l.until) });
+    } catch {
+      /* not a lock: its address is not recognised */
+    }
+  }
+
   // plain outputs to one of those addresses, judged once every output is read (below)
   const lockCoinOuts: { output: number; until: bigint }[] = [];
+  const autoCoinOuts: { output: number; until: bigint }[] = [];
   const orders: DecodedOrder[] = [];
   const outputs: DecodedOutput[] = tx.outputs.map((out, j) => decodeOutput(j, out));
   // A coin at a lock's address is the wallet's own only in a lock-coin transaction: the wallet's
@@ -1222,6 +1263,19 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       } else {
         outputs[j] = { ...outputs[j]!, kind: 'unknown', flagged: true };
         add('lock-coin-stranded', `output ${j}: ${formatKas(value)} KAS would go to the address of your creator lock outside a lock coin of at most ${formatKas(LOCK_COIN_MAX)} KAS: the unlock spends only one coin there, so these KAS could be stuck`, { output: j, params: { amount: value } });
+      }
+    }
+  }
+  // An automatic lock's coin is one output of exactly AUTO_COIN: its release spends exactly one,
+  // and a second there would be stuck.
+  if (autoCoinOuts.length) {
+    for (const { output: j, until } of autoCoinOuts) {
+      const value = outputs[j]!.value;
+      if (autoCoinOuts.length === 1 && value === AUTO_COIN) {
+        add('lock-coin-auto', `output ${j}: ${formatKas(value)} KAS go to your automatic creator lock: they come back with the tokens after ${isoDate(until)}, less the release fee`, { output: j, params: { amount: value, date: isoDate(until) } });
+      } else {
+        outputs[j] = { ...outputs[j]!, kind: 'unknown', flagged: true };
+        add('lock-coin-stranded', `output ${j}: ${formatKas(value)} KAS would go to the address of your creator lock outside its one coin of ${formatKas(AUTO_COIN)} KAS: the release spends only that coin, so these KAS could be stuck`, { output: j, params: { amount: value } });
       }
     }
   }
@@ -1370,6 +1424,11 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     // the coin of the wallet's own open creator lock, KAS that only its key spends now. The unlock
     // returns it, less its fee, as change. It stays the wallet's only in a lock-coin transaction
     // (checked once every output is read).
+    const autoOf = !out.covenant ? autoCoinSpks.get(out.scriptPublicKey) : undefined;
+    if (autoOf) {
+      autoCoinOuts.push({ output: j, until: autoOf.until });
+      return { ...blank, kind: 'lock-coin' };
+    }
     const coinOf = !out.covenant ? lockCoinSpks.get(out.scriptPublicKey) : undefined;
     if (coinOf) {
       lockCoinOuts.push({ output: j, until: coinOf.until });
@@ -1875,9 +1934,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
 
   // ---------------------------------------------------------------- net effects
   const sum = (xs: bigint[]): bigint => xs.reduce((a, b) => a + b, 0n);
-  const fromWallet = sum(inputs.filter((d) => d.ownedBy === 'maker').map((d) => d.amount));
+  // the coin of the wallet's own automatic lock was locked at its genesis: a release frees it
+  const fromWallet = sum(inputs.filter((d) => d.ownedBy === 'maker' && !d.autoLockCoin).map((d) => d.amount));
   const fromOthers = sum(inputs.filter((d) => d.ownedBy === 'other').map((d) => d.amount));
-  const released = sum(inputs.filter((d) => d.ownedBy === 'covenant' && !takenInputs.has(d.index)).map((d) => d.amount));
+  const released = sum(inputs.filter((d) => (d.ownedBy === 'covenant' && !takenInputs.has(d.index)) || (d.ownedBy === 'maker' && !!d.autoLockCoin)).map((d) => d.amount));
   /** KAS of the orders taken and their custodies: theirs, in and out */
   const takenKasIn = sum(inputs.filter((d) => takenInputs.has(d.index)).map((d) => d.amount));
   const takenKasOut = sum(outputs.filter((o) => o.kind === 'fill-payout' || o.kind === 'fill-continue').map((o) => o.value));
@@ -1885,7 +1945,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   const toOthers = sum(outputs.filter((o) => ['payment-out', 'token-out', 'unknown-covenant', 'unknown'].includes(o.kind)).map((o) => o.value));
   let locked = zeroLocked();
   for (const o of orders) locked = addLocked(locked, o.locked);
-  for (const o of outputs.filter((x) => x.kind === 'custody')) locked = addLocked(locked, { ...zeroLocked(), total: o.value, carriers: o.value });
+  for (const o of outputs.filter((x) => x.kind === 'custody' || x.kind === 'lock-coin')) locked = addLocked(locked, { ...zeroLocked(), total: o.value, carriers: o.value });
   const totalIn = sum(inputs.map((d) => d.amount));
   const totalOut = sum(outputs.map((o) => o.value));
   const derivedFee = totalIn - totalOut;
@@ -2121,7 +2181,26 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   const tokenOnly = spends.length === 0 && !createdOrders && tokens.length > 0;
   // an unlock spends the coin of a creator lock, with what it holds. A lock coin sends the wallet's
   // KAS to its open lock's address, and nothing else.
-  const unlocking = spends.length === 0 && !createdOrders && built.plans.some((p) => p.kind === 'creatorLock');
+  const releasing = built.plans.some((p) => p.kind === 'creatorLockAuto');
+  const unlocking = spends.length === 0 && !createdOrders && (releasing || built.plans.some((p) => p.kind === 'creatorLock'));
+  // A release spends exactly the coin (input 0) and the tokens it holds (input 1), with at most a
+  // keeper's own KAS input, and pays the tokens and the coin's KAS to the lock's key. Its coin
+  // comes back to that key less the fee: the wallet's KAS if the lock is the wallet's.
+  if (releasing) {
+    const p0 = built.plans[0];
+    const auto = p0?.kind === 'creatorLockAuto' ? p0 : null;
+    const coinInputs = built.plans.filter((p) => p.kind === 'creatorLockAuto').length;
+    const tokenIn = inputs[1];
+    const lockKey = auto?.key.toLowerCase() ?? '';
+    const own = (j: number) => p2pkOwner(tx.outputs[j]?.scriptPublicKey ?? '') === lockKey && !tx.outputs[j]?.covenant;
+    const tokenOut = outputs[0];
+    const ok =
+      !!auto && coinInputs === 1 && (tx.inputs.length === 2 || tx.inputs.length === 3) && tokenIn?.type === 'token' && tokenIn.token?.ownerScheme === 3 &&
+      (tx.inputs.length === 2 || built.plans[2]?.kind === 'p2pk') && tokenOut?.token !== null && tokenOut?.token?.owner === lockKey && tokenOut.token.ownerScheme === 0 && own(1);
+    if (!ok) add('release-invalid', 'this release does not spend exactly the coin and the tokens of one automatic creator lock, paying both to its key', { params: { reason: 'shape' } });
+    const back = inputs[0]?.autoLockCoin && inputs[0].ownedBy === 'maker' ? outputs[1]?.value ?? 0n : 0n;
+    if (ok && back > 0n) add('release-kas', `${formatKas(back)} KAS of your creator lock's coin come back to you`, { output: 1, params: { amount: back } });
+  }
   const lockCoin = spends.length === 0 && !createdOrders && tokens.length === 0 && issues.some((x) => x.code === 'lock-coin');
   const kind: SigningKind = unlocking ? 'unlock' : lockCoin ? 'lock-coin' :claimSpends.length ? (createdOrders ? 'claim-place' : mergesWallet ? 'claim-merge' : 'claim') : placesBought ? 'claim-place' : take && !createdOrders && !cancels.length ? 'take' : createdOrders && cancels.length ? 'cancel-replace' : createdOrders ? 'create' : cancels.length > 1 ? 'cancel-position' : cancels.length === 1 ? 'cancel' : refunds.length ? 'refund' : sweptSpends.length ? 'sweep' : tokenOnly ? 'send' : 'other';
   if (createdOrders && !payload) add('no-order-records', 'orders are created but the payload carries no KOB1 records');

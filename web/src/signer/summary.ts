@@ -16,7 +16,8 @@ import { decodeSigning, type DecodedOrder, type SigningKind, type SigningSummary
 import { spendsPreparation } from '../kob/issue';
 import { curveNumbersOfState, curveProblems, tablePreview } from '../kob/curve';
 import { decodeDeclaration } from '../kob/kcc23';
-import { lockOfScript } from '../kob/creator-lock';
+import { declaredLock as lockOfDeclaration } from '../kob/creator-lock';
+import { isTokenProgram } from '../kob/programs.generated';
 import { formatRowDate } from '../ui/kit/format';
 import { baseKind, isMultiFillMarket, type OrderDescription } from '../kob/order-facts';
 import { DEFAULT_BID_FILLS } from '../kob/orders/common';
@@ -597,15 +598,21 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
   });
   if (prep.tx.outputs.some((o) => o.covenant || o.scriptPublicKey !== own)) throw new Error('pays another key');
   const decl = decodeDeclaration(kob, prep.tx.payload).token;
-  // A creator lock of this key that the declaration states, its script parsed by kob-wasm. The
-  // outputs its hash owns are this key's share, locked.
-  const declaredLock = lockOfScript(kob, decl.lock);
+  // A creator lock of this key that the declaration states, its terms parsed by kob-wasm. The
+  // outputs its hash owns are this key's share, locked. An automatic lock's script is derived from
+  // the terms and the program the claimed token outputs are checked under (below), and its genesis
+  // coin, one plain output of AUTO_COIN to its address, is this key's KAS, locked until the release.
+  const program = claim && isTokenProgram(claim.program) ? claim.program : null;
+  const declaredLock = lockOfDeclaration(kob, decl, program);
   const lock = declaredLock && declaredLock.key === maker ? declaredLock : null;
   const prepIn = prep.tx.inputs.reduce((a, i) => a + BigInt(i.utxo.amount), 0n);
   const prepOut = prep.tx.outputs.reduce((a, o) => a + BigInt(o.value), 0n);
   const prepFee = prepIn - prepOut;
   if (prepFee < 0n || prepFee !== BigInt(prep.fee.fee)) throw new Error('fee');
-  const g = summarize(kob, built, maker, hints);
+  const g = summaryLines(
+    decodeSigning({ kob, built, maker, registry: null, ...(lock?.kind === 'auto' && program ? { autoLocks: [{ until: lock.until, key: lock.key, program }] } : {}) }),
+    hints, kob, true,
+  );
   // The claimed token outputs, each re-derived from its state. An output that does not match
   // refuses the request.
   const verified = new Set<number>();
@@ -678,6 +685,7 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
   // creation's, less the preparation's fee.
   const k = g.decoded.net.kas;
   const delta = k.walletDelta - prepFee;
+  const lockCoin = g.decoded.outputs.filter((o) => o.kind === 'lock-coin').reduce((a, o) => a + o.value, 0n);
   const kas = (v: bigint) => `${formatKas(v)} KAS`;
   const lines: SummaryLine[] = [
     { label: t('signer.declare.name'), value: decl.name ?? '', dir: null },
@@ -697,13 +705,15 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
           { label: t('signer.declare.supply'), value: `${formatTokenAmount(supply, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: null },
           { label: t('signer.declare.toYou'), value: `+${formatTokenAmount(toMaker, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: 'in' as const },
           ...(onCurve > 0n ? [{ label: t('signer.declare.onCurve'), value: `${formatTokenAmount(onCurve, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: null }] : []),
-          ...(lockedToMaker > 0n ? [{ label: t('signer.declare.locked', { date: formatRowDate(Number(lock!.until)) }), value: `${formatTokenAmount(lockedToMaker, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: null }] : []),
+          ...(lockedToMaker > 0n ? [{ label: t(lock!.kind === 'auto' ? 'signer.declare.lockedAuto' : 'signer.declare.locked', { date: formatRowDate(Number(lock!.until)) }), value: `${formatTokenAmount(lockedToMaker, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: null }] : []),
           ...(supply > toMaker + onCurve + lockedToMaker ? [{ label: t('signer.declare.toOthers'), value: `${formatTokenAmount(supply - toMaker - onCurve - lockedToMaker, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: 'out' as const }] : []),
           ...curveLines,
         ]
       : []),
     { label: t('signer.net.kas'), value: signed(delta, kas), dir: delta < 0n ? 'out' : delta > 0n ? 'in' : null },
-    ...g.lines.slice(1),
+    // an automatic lock's coin: this key's KAS, locked until the release (not an order's)
+    ...(lockCoin > 0n ? [{ label: t('signer.declare.lockCoin'), value: kas(lockCoin), dir: null }] : []),
+    ...g.lines.slice(1).filter((l) => !(lockCoin > 0n && l.label === t('signer.net.locked'))),
   ];
   // The token outputs checked against the claim are not "unknown scripts". Every other finding
   // still counts.

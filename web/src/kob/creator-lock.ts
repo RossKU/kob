@@ -12,6 +12,14 @@
 // its past median time passes `until`. Without a coin at that address, the wallet first sends one
 // (`buildLockCoin`).
 //
+// The automatic lock (crates/kob-protocol/src/lock_auto.rs, contracts/locks/KobLockAuto.sil) opens
+// by itself. The locked states are owned by the P2SH hash of the pinned `KobLockAuto` script of the
+// terms (until, key) and the token program, and the genesis also pays a plain 1 KAS coin
+// (AUTO_COIN) to that script's address. After the time anyone may send the release, which needs no
+// signature: input 0 the coin, input 1 the locked token UTXO (same genesis), output 0 the tokens to
+// the key, output 1 the coin's KAS back to the key less at most MAX_TAKE for the fee. The
+// declaration names the terms in `lock` (the 44-byte manual template) with `"lock_kind":"auto"`.
+//
 // Rust is the one implementation. This module wraps the kob-wasm exports, and parses the template
 // for display (`parseLockScript`, which must agree with kob-wasm `creatorLock({script})`).
 import { schnorr } from '@noble/curves/secp256k1.js';
@@ -41,13 +49,32 @@ export const LOCK_COIN = 100_000_000n;
  * coin, or a second one, could not all be spent by the one unlock.
  */
 export const LOCK_COIN_MAX = LOCK_COIN + 10_000_000n;
+/** The KAS an automatic lock's genesis pays to the lock's address, 1 KAS (kob-protocol `AUTO_COIN`). */
+export const AUTO_COIN = LOCK_COIN;
+/** The smallest coin a reader takes for an automatic lock, 0.2 KAS (kob-protocol `AUTO_COIN_MIN`). */
+export const AUTO_COIN_MIN = 20_000_000n;
+/** The most of the coin a release keeps from the creator for its fee and a tip, 0.03 KAS. */
+export const MAX_TAKE = 3_000_000n;
+
+/**
+ * How a creator lock opens after its time: `manual`, the creator signs the unlock; `auto`, anyone
+ * may send the release, which pays only the creator.
+ */
+export type LockKind = 'manual' | 'auto';
+export const isLockKind = (v: unknown): v is LockKind => v === 'manual' || v === 'auto';
 
 /** A creator lock as kob-wasm `creatorLock` returns it. */
 export interface CreatorLockInfo {
   /** Unix ms. */
   until: U64;
   key: Hex;
-  /** The 44-byte redeem script, in hex. */
+  kind: LockKind;
+  /** The 44-byte manual template of the terms, in hex: what the declaration's `lock` holds. */
+  terms: Hex;
+  /**
+   * The redeem script of the locked states' owner, in hex: the terms for a manual lock, the
+   * `KobLockAuto` script of the terms and the token program for an automatic one.
+   */
   script: Hex;
   /** The p2sh/v1 owner of the locked states, Blake2b(script). */
   authority: Hex;
@@ -58,10 +85,16 @@ export interface CreatorLockInfo {
 }
 
 /** One genesis output a verified lock holds. */
-export interface LockedOutput { index: number; amount: U64 }
+/**
+ * One genesis output a verified lock holds: `amount` is base units for a token output and sompi for
+ * an automatic lock's coin; `value` is the output's KAS (sompi), from a binding that says it.
+ */
+export interface LockedOutput { index: number; amount: U64; value?: U64 }
 
 /** A declared creator lock verified against its token's genesis (kob-wasm `kcc23Verify` `lock`). */
 export interface VerifiedLock {
+  /** Manual (the creator signs) or automatic (anyone releases it to the creator). */
+  kind: LockKind;
   until: U64;
   key: Hex;
   script: Hex;
@@ -74,6 +107,8 @@ export interface VerifiedLock {
   extensionCommitment: Hex;
   /** The token's supply when every genesis token output is proven, else null. */
   supply: U64 | null;
+  /** An automatic lock's coin: the genesis's plain KAS output at the lock's address. */
+  coin: LockedOutput | null;
 }
 
 /** The facts of a template script, its until in unix ms and its key. */
@@ -119,6 +154,7 @@ interface RawLock {
   creatorLock(request: string): string;
   buildLockCoin(request: string): string;
   buildUnlock(request: string): string;
+  buildRelease?(request: string): string;
 }
 
 function raw(kob: KobWasm): RawLock {
@@ -138,13 +174,37 @@ function call<T>(what: string, f: () => string): T {
   }
 }
 
+/** How a lock opens and, for an automatic one, the token program of the locked tokens. */
+export type LockKindRequest = { kind?: 'manual' } | { kind: 'auto'; program: TokenProgram };
+
 /**
  * A creator lock from its terms or its script (kob-wasm `creatorLock`). It throws KobError for a
- * script that is not exactly the template.
+ * script that is not exactly the template. With `kind: 'auto'` and the token program it is the
+ * automatic lock of those terms: its script, owner and address are `KobLockAuto`'s.
  */
-export function creatorLock(kob: KobWasm, l: { until: U64 | bigint; key: Hex } | { script: Hex }): CreatorLockInfo {
-  const req = 'script' in l ? { script: l.script } : { until: l.until.toString(), key: l.key };
-  return call<CreatorLockInfo>('creatorLock', () => raw(kob).creatorLock(JSON.stringify(req)));
+export function creatorLock(kob: KobWasm, l: ({ until: U64 | bigint; key: Hex } | { script: Hex }) & LockKindRequest): CreatorLockInfo {
+  const terms = 'script' in l ? { script: l.script } : { until: l.until.toString(), key: l.key };
+  const req = l.kind === 'auto' ? { ...terms, kind: 'auto', program: l.program } : terms;
+  const out = call<Partial<CreatorLockInfo> & Omit<CreatorLockInfo, 'kind' | 'terms'>>('creatorLock', () => raw(kob).creatorLock(JSON.stringify(req)));
+  // a binding before the automatic lock says no kind: its lock is the manual one
+  if (l.kind === 'auto' && out.kind !== 'auto') throw new KobError('the loaded kob-wasm bindings do not know the automatic creator lock: rebuild them (npm run build:wasm)', 'creatorLock');
+  return { until: out.until, key: out.key, kind: out.kind === 'auto' ? 'auto' : 'manual', terms: out.terms ?? out.script, script: out.script, authority: out.authority, scriptPublicKey: out.scriptPublicKey };
+}
+
+/**
+ * The creator lock a declaration states for its token program, or null. `lock` is the declared
+ * terms (the manual template); `lockKind` `auto` makes it the automatic lock of those terms and
+ * `program`, the program the genesis's token outputs are checked under. It never throws.
+ */
+export function declaredLock(kob: KobWasm, d: { lock: Hex | null; lockKind?: LockKind | null }, program: TokenProgram | null | undefined): CreatorLockInfo | null {
+  if (!d.lock) return null;
+  if (d.lockKind !== 'auto') return lockOfScript(kob, d.lock);
+  if (!program) return null;
+  try {
+    return creatorLock(kob, { script: d.lock, kind: 'auto', program });
+  } catch {
+    return null;
+  }
 }
 
 /** The `creatorLock` of a script, or null when it is no creator lock. It never throws. */
@@ -203,6 +263,33 @@ export function buildUnlock(kob: KobWasm, r: UnlockRequest): BuiltTx {
   return call<BuiltTx>('buildUnlock', () => raw(kob).buildUnlock(JSON.stringify(r)));
 }
 
+/** The request of kob-wasm `buildRelease`: an automatic lock's release, which nobody signs. */
+export interface ReleaseRequest {
+  token: { covenantId: Hex; program: TokenProgram };
+  /** The terms. */
+  lock: { until: U64; key: Hex };
+  /** The locked token UTXO, a genesis output, with its state. */
+  tokens: TokenUtxo;
+  /** The lock coin, the genesis's plain KAS output at the lock's address. */
+  coin: Utxo;
+  /** A keeper's own KAS input (signed by it); without one `built.sign` is empty. */
+  keeper?: KeyUtxo;
+  tip?: U64;
+  fee?: FeeOptions;
+  ownKeys?: Hex[];
+}
+
+/**
+ * Builds an automatic lock's release: input 0 the coin (`creatorLockAuto`, no signature), input 1
+ * the locked tokens, output 0 the tokens and output 1 the coin's KAS, both to the lock's key. Its
+ * lock time is the lock's time.
+ */
+export function buildRelease(kob: KobWasm, r: ReleaseRequest): BuiltTx {
+  const lib = raw(kob);
+  if (typeof lib.buildRelease !== 'function') throw new KobError('the loaded kob-wasm bindings do not export the release: rebuild them (npm run build:wasm)', 'buildRelease');
+  return call<BuiltTx>('buildRelease', () => lib.buildRelease!(JSON.stringify(r)));
+}
+
 const u64 = (v: unknown): v is string => typeof v === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(v);
 
 /**
@@ -217,12 +304,23 @@ export function verifiedLockOf(v: unknown, isProgram: (name: string) => name is 
     : [];
   if (!u64(o.until) || typeof o.key !== 'string' || !HEX32.test(o.key) || typeof o.script !== 'string' || typeof o.authority !== 'string' || !HEX32.test(o.authority)) return null;
   if (!u64(o.amount) || outputs.length === 0 || typeof o.program !== 'string' || !isProgram(o.program) || typeof o.extensionCommitment !== 'string' || !HEX32.test(o.extensionCommitment)) return null;
-  // The script must be the template of exactly these terms.
-  const terms = parseLockScript(o.script);
-  if (!terms || terms.until !== BigInt(o.until) || terms.key !== o.key) return null;
+  // An older binding names no kind: its lock is manual.
+  if (o.kind !== undefined && !isLockKind(o.kind)) return null;
+  const kind: LockKind = o.kind === 'auto' ? 'auto' : 'manual';
+  let coin: LockedOutput | null = null;
+  if (kind === 'manual') {
+    // The script must be the template of exactly these terms.
+    const terms = parseLockScript(o.script);
+    if (!terms || terms.until !== BigInt(o.until) || terms.key !== o.key) return null;
+  } else {
+    // kob-wasm derived the KobLockAuto script and found the coin: one locked output, one coin
+    const c = o.coin as Partial<LockedOutput> | null | undefined;
+    if (o.script.length === 0 || !HEX.test(o.script) || outputs.length !== 1 || !c || !Number.isInteger(c.index) || !u64(c.amount) || BigInt(c.amount) < AUTO_COIN_MIN || c.index === outputs[0]!.index) return null;
+    coin = { index: c.index!, amount: c.amount, ...(u64(c.value) ? { value: c.value } : {}) };
+  }
   return {
-    until: o.until, key: o.key, script: o.script, authority: o.authority, amount: o.amount, outputs: outputs.map((x) => ({ index: x.index, amount: x.amount })),
-    program: o.program, extensionCommitment: o.extensionCommitment, supply: u64(o.supply) ? o.supply : null,
+    kind, until: o.until, key: o.key, script: o.script, authority: o.authority, amount: o.amount, outputs: outputs.map((x) => ({ index: x.index, amount: x.amount, ...(u64(x.value) ? { value: x.value } : {}) })),
+    program: o.program, extensionCommitment: o.extensionCommitment, supply: u64(o.supply) ? o.supply : null, coin,
   };
 }
 
