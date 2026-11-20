@@ -529,6 +529,13 @@ body:has(.market-page) .container { max-width: none; }
 .tk-icon[data-icon="withheld"] { cursor: pointer; box-shadow: 0 0 0 1px var(--tk-outline), inset 0 0 0 1.5px rgb(255 255 255 / 0.55); }
 .tk-icon[data-icon="withheld"]::after { content: ''; position: absolute; right: 1px; bottom: 1px; width: 6px; height: 6px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 1px hsl(var(--tk-h, 200) 42% 34%); }
 .tk-icon[data-icon="withheld"]:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: 1px; }
+/* the votes of a logo, in the token details (LogoReport.tsx) */
+.logo-votes { display: grid; gap: 6px; margin-top: 8px; }
+.logo-votes-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* a logo hidden by votes: the letter with a small struck mark; a click shows the logo once */
+.tk-icon[data-logo-note="voted"] { cursor: pointer; }
+.tk-icon[data-logo-note="voted"]::after { content: ''; position: absolute; right: 0; bottom: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--surface, #fff); box-shadow: 0 0 0 1px var(--muted, #777); background-image: linear-gradient(135deg, transparent 42%, var(--muted, #777) 42%, var(--muted, #777) 58%, transparent 58%); }
+.tk-icon[data-logo-note="voted"]:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: 1px; }
 
 /* ---- identity block (Fingerprint.tsx): the icon and the fingerprint of the covenant id, the icon is --idb tall, the fingerprint 60 % of it */
 .idb { --idb: 40px; flex: none; display: inline-flex; align-items: center; gap: 6px; }
