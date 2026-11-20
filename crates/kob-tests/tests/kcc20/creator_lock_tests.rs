@@ -152,6 +152,46 @@ fn the_genesis_declares_the_lock_and_a_reader_verifies_what_it_holds() {
     }
 }
 
+/// A genesis served with an extra output that names the token's id under another authorizing
+/// input, with its state in the payload. The id still checks, because it commits only to the
+/// group of its own input, but the extra output is not the token's: it never adds to the locked
+/// amount or the supply. Named on top of the genesis's own states, it is one state too many and the
+/// lock is not shown; named in place of one, that state is the only one not proven.
+#[test]
+fn an_output_the_token_id_does_not_bind_is_not_counted() {
+    use kaspa_consensus_core::tx::CovenantBinding;
+    for program in [IssueProgram::PublicMint, IssueProgram::Ref3x3] {
+        let l = launch(program);
+        let g = &l.plan.genesis;
+        let mut tx = g.tx.clone();
+        let extra = TokenState::Kcc20(l.lock.state(5_000_000, [0; 32]));
+        let spk = extra.spk_with(kob_protocol::artifacts::token_template(l.program));
+        tx.inputs.push(TransactionInput::new_with_compute_budget(
+            TransactionOutpoint { transaction_id: TransactionId::from_bytes([0xee; 32]), index: 0 },
+            vec![],
+            0,
+            0,
+        ));
+        tx.outputs.push(TransactionOutput::with_covenant(tx.outputs[1].value, spk, Some(CovenantBinding::new(1, g.covenant_id))));
+        let own = kob_protocol::genesis_states::decode(&tx.payload).unwrap();
+        // on top of the genesis's own states: refused, so no made-up figure is shown
+        let mut more = own.clone();
+        more.push(extra.encode());
+        tx.payload = kob_protocol::genesis_states::encode(&more).unwrap();
+        assert!(verify_genesis_lock(&tx, g.covenant_id, &l.lock).is_err());
+        let v = kob_protocol::kcc23::LaunchProof::of(&l.plan.prep.tx, &tx, g.covenant_id).verify().unwrap();
+        assert!(v.lock.is_none() && v.token.issues.iter().any(|i| i.starts_with("lock:")), "{:?}", v.token.issues);
+        // in place of the free holder's state: only the bound lock counts, and the supply is unknown
+        let mut swapped = own.clone();
+        swapped[0] = extra.encode();
+        tx.payload = kob_protocol::genesis_states::encode(&swapped).unwrap();
+        let lock = verify_genesis_lock(&tx, g.covenant_id, &l.lock).unwrap();
+        assert_eq!((lock.amount, lock.outputs.iter().map(|o| o.index).collect::<Vec<_>>(), lock.supply), (LOCKED, vec![1], None));
+        let v = kob_protocol::kcc23::LaunchProof::of(&l.plan.prep.tx, &tx, g.covenant_id).verify().unwrap();
+        assert_eq!(v.lock.map(|x| (x.amount, x.supply)), Some((LOCKED, None)));
+    }
+}
+
 #[test]
 fn a_look_alike_script_is_not_a_lock() {
     let l = CreatorLock::new(UNTIL, key()).unwrap();
