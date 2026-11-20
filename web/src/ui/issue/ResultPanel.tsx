@@ -5,7 +5,7 @@ import { routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { IssuePlan } from '../../kob/issue';
 import type { Hex } from '../../kob/types';
-import { Banner, Button, CopyText, copyToClipboard, friendlyErrorText, kasText, KeyValueList, RawDetails, Section } from '../kit';
+import { Banner, Button, CopyText, copyToClipboard, friendlyErrorText, HelpTip, kasText, KeyValueList, RawDetails, Section } from '../kit';
 import { downloadText } from './download';
 import { formatRowDate } from '../kit/format';
 import { humanAmount, resultViewModel } from './issue-model';
@@ -61,7 +61,10 @@ export function ResultPanel(props: ResultPanelProps) {
             value: r.copy ? <CopyText value={r.value} short={false} data-testid={`issue-result-${r.id}`} /> : <code class="mono" data-testid={`issue-result-${r.id}`}>{r.value}</code>,
           }))}
         />
-        <h3 class="issue-h3">{t('issue.result.holders')}</h3>
+        <div class="help-title issue-h3">
+          <h3>{t('issue.result.holders')}</h3>
+          <HelpTip label={t('issue.result.holders')} data-testid="issue-result-tracked">{t('issue.result.tracked')}</HelpTip>
+        </div>
         <ul class="issue-holder-list" data-testid="issue-result-holders">
           {vm.holders.map((h) => (
             <li key={h.index} class="wrap-anywhere">
@@ -69,13 +72,15 @@ export function ResultPanel(props: ResultPanelProps) {
             </li>
           ))}
         </ul>
-        <p class="muted">{t('issue.result.tracked')}</p>
         {props.trackFailed ? <Banner tone="warn" data-testid="issue-result-track-failed">{t('issue.result.trackFailed')}</Banner> : null}
       </Section>
 
-      <Section title={t('issue.result.listingTitle')} data-testid="issue-listing">
-        <Banner tone="info" data-testid="issue-result-listing-note">{t('issue.result.listingBody')}</Banner>
-        <h3 class="issue-h3">{t('issue.result.registryTitle')}</h3>
+      <Section
+        title={t('issue.result.listingTitle')}
+        help={<HelpTip label={t('issue.result.listingTitle')} data-testid="issue-result-listing-note">{t('issue.result.listingBody')}</HelpTip>}
+        data-testid="issue-listing"
+      >
+        <h3 class="issue-h3" style="margin-top:0">{t('issue.result.registryTitle')}</h3>
         <pre class="issue-json" data-testid="issue-registry-entry" tabIndex={0}>{vm.registryEntryJson}</pre>
         <div class="row">
           <Button variant="primary" onClick={copyEntry} data-testid="issue-registry-copy">{copied === 'ok' ? t('issue.result.copied') : t('issue.result.copyEntry')}</Button>
