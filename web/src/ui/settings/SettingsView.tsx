@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
-import { useCreatorImagePref, useIconPref } from '../../app/icon-pref';
+import { useCreatorImagePref, useIconPref, useVoteFilterPref } from '../../app/icon-pref';
 import { useDisplayCurrency, type DisplayCurrency } from '../../app/currency-pref';
 import { FiatNote } from '../../app/use-fiat';
 import { displayToken } from '../../app/token-display';
@@ -12,7 +12,7 @@ import { t } from '../../i18n';
 import type { ComponentChildren } from 'preact';
 import { version as appVersion } from '../../../package.json';
 import {
-  Amount, Badge, Banner, Button, Checkbox, CopyText, downloadText, Dropdown, EmptyState, exportFileName, Field, friendlyErrorText, jsonText, KeyValueList, Modal, RawDetails, Section, Segmented, Table, TableMessage,
+  Amount, Badge, Banner, Button, Checkbox, CopyText, downloadText, Dropdown, EmptyState, exportFileName, Field, friendlyErrorText, jsonText, KeyValueList, Modal, RawDetails, Section, Segmented, Select, Table, TableMessage,
   showToast, toError,
 } from '../kit';
 import { NotifySettingsSection } from '../notify/NotifySettings';
@@ -272,14 +272,16 @@ function DeliverySettings() {
 
 /**
  * Token names and icons of the market list. It says where they come from and offers the viewer's
- * two choices, both on by default and per browser. The first is to load icons at all. The second is
- * to load logos from the address a token's creator gave, and the creator's site then sees the
- * viewer's IP address (data/logos.ts).
+ * choices, per browser. The first is to load icons at all. The second is to load logos from the
+ * address a token's creator gave, and the creator's site then sees the viewer's IP address
+ * (data/logos.ts). The third is whether logos wallets voted down are hidden (the default) or all
+ * shown (data/logo-votes.ts).
  */
 function TokenIconsSettings() {
   const { config } = useServices();
   const [on, setOn] = useIconPref();
   const [creatorOn, setCreatorOn] = useCreatorImagePref();
+  const [hideVoted, setHideVoted] = useVoteFilterPref();
   return (
     <Section title={t('settings.icons.title')} data-testid="settings-icons">
       <Learn short={t('settings.icons.short')}>{t('settings.icons.explain')}</Learn>
@@ -290,6 +292,18 @@ function TokenIconsSettings() {
       )}
       <Checkbox checked={on} onChange={setOn} label={t('settings.icons.label')} hint={t('settings.icons.hint')} data-testid="settings-icons-toggle" />
       <Checkbox checked={creatorOn} onChange={setCreatorOn} label={t('settings.icons.creator.label')} hint={t('settings.icons.creator.hint')} disabled={!on} data-testid="settings-icons-creator-toggle" />
+      <Select
+        label={t('settings.icons.votes.label')}
+        hint={t('settings.icons.votes.hint')}
+        value={hideVoted ? 'hide' : 'all'}
+        options={[
+          { value: 'hide', label: t('settings.icons.votes.hide') },
+          { value: 'all', label: t('settings.icons.votes.all') },
+        ]}
+        onValue={(v) => setHideVoted(v !== 'all')}
+        disabled={!on}
+        data-testid="settings-icons-votes"
+      />
     </Section>
   );
 }

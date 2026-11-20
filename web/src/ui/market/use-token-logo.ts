@@ -1,6 +1,9 @@
 // Which picture a token shows and where it comes from (data/logos.ts has the rules). The order is:
 // 1. The viewer turned icons off, or the token is on the blocklist because a report hid its logo.
 //    There is no picture and no request.
+// 1b. Wallets voted the logo down (data/logo-votes.ts: at least 3 voters, net -1 or lower) and the
+//    viewer keeps the default "Show logos at 0 and above" (Settings). The letter shows with a "Hidden
+//    by votes" note, and the viewer may show it once. There is no request until then.
 // 2. kascov.io's saved copy, when its bytes hash to what the creator committed to ('checked').
 // 3. Only if the viewer allows creator sites (Settings): the picture address of the token's
 //    KCC-23 declaration (`image`, or `logo`), then the one kascov.io lists for it. When the
@@ -18,9 +21,10 @@
 //    creator's address is not the one the creation record names.
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
-import { useCreatorImagePref, useIconPref } from '../../app/icon-pref';
+import { useCreatorImagePref, useIconPref, useVoteFilterPref } from '../../app/icon-pref';
 import { useDeclarationsVersion } from '../../app/use-declaration';
-import { logoBlocklist } from '../../data/logo-blocklist';
+import { logoBlocklist, logoBlocklistUrlOf } from '../../data/logo-blocklist';
+import { hiddenForViewer, logoVotes, logoVotesUrlOf, type LogoTotals, type VoteDir, type VoteVerdict } from '../../data/logo-votes';
 import { iconLoader, kascovNetwork } from '../../data/kascov';
 import { asImageHash, httpsChecker, ipfsLoader, parseLogoRef, type HttpsOutcome, type LogoRef } from '../../data/logos';
 import { useLogoAllowed, withholdsLogo } from '../../data/logo-gate';
@@ -28,6 +32,11 @@ import { declaredToken } from '../../data/token-declarations';
 
 export type TokenLogo =
   | { state: 'off' | 'hidden' | 'pending' | 'none' }
+  /**
+   * Wallets voted the logo down and the viewer hides such logos (the default). Nothing is
+   * requested; the letter shows with a "Hidden by votes" note and a "Show once" control.
+   */
+  | { state: 'voted' }
   /**
    * A wallet view, with a creator-hosted https logo of a token the user did not acquire. Nothing is
    * requested, and the letter shows with a "Show logo" control.
@@ -65,6 +74,23 @@ export function useLogoHidden(covenantId: string): boolean {
   return logoBlocklist.isHidden(covenantId);
 }
 
+/** The URLs of the vote totals the app already reads (one timer each, for the whole visit). */
+const votesFeeds = new Set<string>();
+
+/** What the votes say of a token's logo. It starts reading the totals and re-renders when they change. */
+export function useLogoVotes(covenantId: string): { verdict: VoteVerdict; totals: LogoTotals | undefined; shownOnce: boolean; own: VoteDir | undefined; url: string | null } {
+  const { config } = useServices();
+  const url = logoVotesUrlOf(logoBlocklistUrlOf(config));
+  const [, setN] = useState(0);
+  useEffect(() => logoVotes.subscribe(() => setN((n) => n + 1)), []);
+  useEffect(() => {
+    if (!url || votesFeeds.has(url)) return;
+    votesFeeds.add(url);
+    logoVotes.start(url);
+  }, [url]);
+  return { verdict: logoVotes.verdict(covenantId), totals: logoVotes.totals(covenantId), shownOnce: logoVotes.shownOnce(covenantId), own: logoVotes.ownVote(covenantId), url };
+}
+
 const refKey = (r: LogoRef): string => (r.kind === 'https' ? r.url : `ipfs://${r.cid}${r.path}`);
 const hostOf = (r: LogoRef, gateway: string): string => {
   try {
@@ -85,6 +111,9 @@ export function useTokenLogo(row: LogoSubject, active: boolean, scope?: 'wallet'
   const [creatorOn] = useCreatorImagePref();
   useDeclarationsVersion();
   const hidden = useLogoHidden(row.covenantId);
+  const [hideVoted] = useVoteFilterPref();
+  const votes = useLogoVotes(row.covenantId);
+  const votedOut = hiddenForViewer(votes.verdict, hideVoted, votes.shownOnce);
   const allowed = useLogoAllowed(row.covenantId);
   const { covenantId } = row;
   const net = kascovNetwork(config.network);
@@ -96,7 +125,7 @@ export function useTokenLogo(row: LogoSubject, active: boolean, scope?: 'wallet'
   // shown unchecked.
   const committed = asImageHash(decl?.imageHash);
   const claimed = row.kascov?.imageUrl ?? null;
-  const blocked = !iconsOn || hidden;
+  const blocked = !iconsOn || hidden || votedOut;
 
   // 2. kascov.io's checked copy.
   const checkKey = `${net}|${covenantId}|${hash}|${base}`;
@@ -179,6 +208,7 @@ export function useTokenLogo(row: LogoSubject, active: boolean, scope?: 'wallet'
   let logo: TokenLogo;
   if (!iconsOn) logo = { state: 'off' };
   else if (hidden) logo = { state: 'hidden' };
+  else if (votedOut) logo = { state: 'voted' };
   else if (checkedHere?.src) logo = { state: 'checked', src: checkedHere.src };
   else if (!active || checkedHere === null) logo = { state: 'pending' };
   else if (!creatorOn) logo = { state: 'none' };

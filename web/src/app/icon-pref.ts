@@ -1,4 +1,4 @@
-// The viewer's choices about token pictures (Settings, "Token names and icons"). Both are on by
+// The viewer's choices about token pictures (Settings, "Token names and icons"). All are on by
 // default and kept per browser in localStorage.
 //
 // - ICONS (`kob.icons`, `0` when off) is the master switch. When off, the market list shows
@@ -8,6 +8,9 @@
 //   gave (https://, or ipfs:// through a public gateway) to load when kascov.io has no checked
 //   copy. That site sees the viewer's IP address and when they looked (data/logos.ts). When off,
 //   only kascov.io's checked copies are shown, and every other token shows its letter.
+// - VOTED LOGOS (`kob.icons.votes`, `0` for "Show all logos") hides a logo that at least 3
+//   wallets voted on with a net score of -1 or lower (data/logo-votes.ts). The default is "Show
+//   logos at 0 and above". A report hides a logo whatever this says.
 //
 // The stored values are not authority, and the page works the same without storage.
 import { useEffect, useState } from 'preact/hooks';
@@ -16,6 +19,8 @@ import { useEffect, useState } from 'preact/hooks';
 export const ICON_PREF_KEY = 'kob.icons';
 /** The localStorage key of the creator-sites switch. */
 export const CREATOR_IMAGE_PREF_KEY = 'kob.icons.creator';
+/** The localStorage key of the voted-logos choice (`0`: show all logos). */
+export const VOTE_FILTER_PREF_KEY = 'kob.icons.votes';
 
 type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 const browserStore = (): Store | null => {
@@ -72,6 +77,7 @@ function makePref(key: string): Pref {
 
 const icons = makePref(ICON_PREF_KEY);
 const creator = makePref(CREATOR_IMAGE_PREF_KEY);
+const votes = makePref(VOTE_FILTER_PREF_KEY);
 
 /** Whether icons may be loaded at all. True unless the viewer turned them off. */
 export const readIconPref = (store?: Store | null): boolean => icons.read(store);
@@ -87,8 +93,19 @@ export const writeCreatorImagePref = (on: boolean, store?: Store | null): boolea
 /** `[on, set]` of the creator-sites choice. */
 export const useCreatorImagePref = (): [boolean, (on: boolean) => void] => creator.use();
 
+/**
+ * Whether a logo voted below 0 is hidden ("Show logos at 0 and above", the default). False: show
+ * all logos.
+ */
+export const readVoteFilterPref = (store?: Store | null): boolean => votes.read(store);
+/** Stores the voted-logos choice and tells every open list. False if the write was refused. */
+export const writeVoteFilterPref = (hide: boolean, store?: Store | null): boolean => votes.write(hide, store);
+/** `[hide, set]` of the voted-logos choice. */
+export const useVoteFilterPref = (): [boolean, (hide: boolean) => void] => votes.use();
+
 /** Forgets the in-page values. For tests. */
 export function resetIconPrefMemory(): void {
   icons.reset();
   creator.reset();
+  votes.reset();
 }

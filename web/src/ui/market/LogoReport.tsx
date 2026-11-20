@@ -3,13 +3,19 @@
 // hides the logo for everyone until the operator of the indexer reviews it
 // (data/logo-blocklist.ts). The dialog also links to the GitHub form, which feeds the same list.
 // KOB stores no picture, so reporting is the way a logo is taken down.
+//
+// Below it, the votes (data/logo-votes.ts): the totals and a thumbs up and down. A vote is a
+// message the connected wallet signs, with a few seconds of work in the page meanwhile. A logo
+// that 3 or more wallets voted to a net -1 or lower is hidden by default; the section then says
+// "Hidden by votes" and offers to show it once. Votes are not reports.
 import { useState } from 'preact/hooks';
-import { useServices } from '../../app/context';
+import { useServices, useWallet } from '../../app/context';
+import { castVote, logoVotes, normalizeSignature, powPrefix, solvePow, utcDay, voteMessage, type VoteDir, type VoteResult } from '../../data/logo-votes';
 import { githubReportUrl, logoBlocklist, logoBlocklistUrlOf, logoReportsUrlOf, LOGO_REASONS, reportLogo, type LogoReason, type ReportResult } from '../../data/logo-blocklist';
 import { t } from '../../i18n';
 import { Banner, Button, Modal, Section, Select } from '../kit';
 import type { TokenRow } from './token-model';
-import { useTokenLogo } from './use-token-logo';
+import { useLogoVotes, useTokenLogo } from './use-token-logo';
 
 function ReportDialog(props: { covenantId: string; onClose: () => void }) {
   const { config } = useServices();
@@ -76,6 +82,91 @@ function ReportDialog(props: { covenantId: string; onClose: () => void }) {
   );
 }
 
+type VoteStep = 'sign' | 'work' | 'send';
+
+/** The vote totals of a logo and the two buttons. */
+function LogoVotes(props: { covenantId: string }) {
+  const { config } = useServices();
+  const wallet = useWallet();
+  const v = useLogoVotes(props.covenantId);
+  const [step, setStep] = useState<VoteStep | null>(null);
+  const [result, setResult] = useState<VoteResult | { ok: false; reason: 'declined' | 'unsigned' } | null>(null);
+  const url = v.url;
+  const info = wallet.info;
+  const adapter = wallet.adapter;
+  const canVote = !!url && !!info && !!adapter?.signMessage && !wallet.networkMismatch;
+  const totals = v.totals ?? { up: 0, down: 0 };
+  const cast = async (vote: VoteDir) => {
+    if (!canVote || !url || !info || !adapter?.signMessage || step) return;
+    setResult(null);
+    const day = utcDay(Date.now());
+    // The work runs while the wallet shows the message, so the two waits overlap.
+    const ctl = new AbortController();
+    const work = solvePow(powPrefix(config.network, props.covenantId, info.address, day), logoVotes.powBits(), { signal: ctl.signal });
+    work.catch(() => undefined);
+    setStep('sign');
+    let signature: string | null;
+    try {
+      signature = normalizeSignature(await adapter.signMessage(voteMessage(config.network, props.covenantId, vote, info.address, day)));
+    } catch {
+      ctl.abort();
+      setStep(null);
+      setResult({ ok: false, reason: 'declined' });
+      return;
+    }
+    if (!signature) {
+      ctl.abort();
+      setStep(null);
+      setResult({ ok: false, reason: 'unsigned' });
+      return;
+    }
+    setStep('work');
+    let nonce: string;
+    try {
+      nonce = await work;
+    } catch {
+      setStep(null);
+      return;
+    }
+    setStep('send');
+    const r = await castVote(url, { covenant_id: props.covenantId.toLowerCase(), vote, address: info.address, day, nonce, signature });
+    setStep(null);
+    setResult(r);
+    if (r.ok) logoVotes.accepted(props.covenantId, vote, r);
+  };
+  const message = (): { tone: 'ok' | 'warn' | 'error'; text: string } | null => {
+    if (!result) return null;
+    if (result.ok) return { tone: 'ok', text: t(`market.logo.vote.${result.result}`) };
+    if (result.reason === 'too-soon' || result.reason === 'rate-limited') {
+      const hours = Math.max(1, Math.ceil((result.retryAfterSecs ?? 3600) / 3600));
+      return { tone: 'warn', text: t(`market.logo.vote.${result.reason}`, { hours }) };
+    }
+    const key = result.reason === 'network' ? 'network-error' : result.reason;
+    return { tone: result.reason === 'declined' ? 'warn' : 'error', text: t(`market.logo.vote.${key}`) };
+  };
+  const m = message();
+  return (
+    <div class="logo-votes" data-testid="logo-votes">
+      <div class="logo-votes-row">
+        <Button small onClick={() => void cast('up')} disabled={!canVote} loading={step !== null} aria-pressed={v.own === 'up' ? 'true' : 'false'} aria-label={t('market.logo.vote.up')} title={t('market.logo.vote.up')} data-testid="logo-vote-up">
+          {'👍'} <span data-testid="logo-votes-up">{totals.up}</span>
+        </Button>
+        <Button small onClick={() => void cast('down')} disabled={!canVote} loading={step !== null} aria-pressed={v.own === 'down' ? 'true' : 'false'} aria-label={t('market.logo.vote.down')} title={t('market.logo.vote.down')} data-testid="logo-vote-down">
+          {'👎'} <span data-testid="logo-votes-down">{totals.down}</span>
+        </Button>
+        <span class="small muted" data-testid="logo-vote-hint">
+          {step ? t(`market.logo.vote.step.${step}`) : !url ? t('market.logo.vote.unavailable') : !info ? t('market.logo.vote.connect') : !adapter?.signMessage ? t('market.logo.vote.noSign') : wallet.networkMismatch ? t('market.logo.vote.network') : t('market.logo.vote.hint')}
+        </span>
+      </div>
+      {m ? (
+        <Banner tone={m.tone} data-testid="logo-vote-result">
+          {m.text}
+        </Banner>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * What a token's details say about its logo. Nothing for a token with no logo to speak of, which
  * has a letter only.
@@ -85,10 +176,15 @@ export function LogoSection(props: { row: Pick<TokenRow, 'covenantId' | 'kascov'
   const [open, setOpen] = useState(false);
   if (logo.state === 'off' || logo.state === 'none' || logo.state === 'pending') return null;
   const hidden = logo.state === 'hidden';
+  const voted = logo.state === 'voted';
   return (
     <Section title={t('market.logo.title')} class="mkt-card" data-testid="token-logo-section">
       <p class="small" data-testid="token-logo-note" data-logo={logo.state}>
-        {hidden ? (
+        {voted ? (
+          <>
+            <strong>{t('market.logo.voted')}</strong> {t('market.logo.votedNote')}
+          </>
+        ) : hidden ? (
           <>
             <strong>{t('market.logo.hidden')}</strong> {t('market.logo.hiddenNote')}
           </>
@@ -104,11 +200,17 @@ export function LogoSection(props: { row: Pick<TokenRow, 'covenantId' | 'kascov'
           t('market.logo.checked')
         )}
       </p>
-      {hidden || logo.state === 'mismatch' ? null : (
+      {voted ? (
+        <Button small onClick={() => logoVotes.showOnce(props.row.covenantId)} data-testid="logo-voted-show">
+          {t('market.logo.voted.show')}
+        </Button>
+      ) : null}
+      {hidden || voted || logo.state === 'mismatch' ? null : (
         <Button small onClick={() => setOpen(true)} data-testid="logo-report-open">
           {t('market.logo.report')}
         </Button>
       )}
+      {hidden || logo.state === 'mismatch' ? null : <LogoVotes covenantId={props.row.covenantId} />}
       {open ? <ReportDialog covenantId={props.row.covenantId} onClose={() => setOpen(false)} /> : null}
     </Section>
   );
