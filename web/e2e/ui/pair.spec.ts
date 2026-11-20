@@ -365,8 +365,8 @@ test('picking a quote token keeps the layout: the chart stays in the same place 
   await expect(page.getByTestId('price-chart')).toBeVisible();
   const after = (await page.getByTestId('chart-section').boundingBox())!;
   const afterBox = (await page.getByTestId('price-chart').locator('.chart-box').boundingBox())!;
-  // The pair's chart panel has its notes under the chart (derived from the two KAS markets): its
-  // box is the token's less them, the panel the same row.
+  // The pair's chart panel can have a note under the chart (a leg that has not traded for a day):
+  // its box is the token's less it, the panel the same row.
   expect(beforeBox.height - afterBox.height, 'the pair chart is the token chart less its notes').toBeGreaterThanOrEqual(0);
   expect(beforeBox.height - afterBox.height).toBeLessThan(48);
   expect(Math.abs(after.width - before.width)).toBeLessThan(2);
@@ -379,7 +379,10 @@ test('picking a quote token keeps the layout: the chart stays in the same place 
   expect(ticket.x).toBeGreaterThanOrEqual(after.x + after.width - 1);
   // The pair chart is derived from the two KAS markets, in the pair's unit.
   await expect(page.getByTestId('chart-unit')).toHaveText('EXUSD per EXKCC');
-  await expect(page.getByTestId('pair-chart-note')).toContainText('pair fills count only as volume');
+  // its note is behind the chart title's "?"
+  await page.getByTestId('pair-chart-note').click();
+  await expect(page.getByTestId('pair-chart-note-panel')).toContainText('pair fills count only as volume');
+  await page.keyboard.press('Escape');
   await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', /^(ready|empty)$/);
 });
 

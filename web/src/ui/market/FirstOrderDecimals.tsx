@@ -5,7 +5,7 @@
 import { useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { MAX_OPEN_DECIMALS, parseOpenDecimals } from '../../kob/open-token';
-import { Banner, Button, Field, Section } from '../kit';
+import { Banner, Button, Field, HelpTip, Section } from '../kit';
 
 export function FirstOrderDecimals(props: { known: number | null; onSet: (decimals: number) => void; /** the decimals a third-party list (kascov.io) says the creator declared: shown as a claim, never prefilled */ claim?: number | null }) {
   const [text, setText] = useState(props.known === null ? '' : String(Math.min(props.known, MAX_OPEN_DECIMALS)));
@@ -22,7 +22,7 @@ export function FirstOrderDecimals(props: { known: number | null; onSet: (decima
             onValue={setText}
             inputMode="numeric"
             maxLength={1}
-            hint={props.known !== null && text === String(Math.min(props.known, MAX_OPEN_DECIMALS)) ? t('market.first.known') : undefined}
+            help={props.known !== null && text === String(Math.min(props.known, MAX_OPEN_DECIMALS)) ? <HelpTip label={t('market.first.label')} data-testid="first-order-known-help">{t('market.first.known')}</HelpTip> : undefined}
             error={text.trim() !== '' && d === null ? t('market.first.invalid') : null}
             data-testid="first-order-decimals"
           />

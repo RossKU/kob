@@ -95,7 +95,9 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   expect(low).toBeGreaterThan(0);
   // The chart is the pair price derived from the two KAS markets.
   await expect(page.getByTestId('chart-unit')).toHaveText('EXUSD per EXKCC');
-  await expect(page.getByTestId('pair-chart-note')).toContainText('derived from EXKCC/KAS and EXUSD/KAS');
+  await page.getByTestId('pair-chart-note').click();
+  await expect(page.getByTestId('pair-chart-note-panel')).toContainText('derived from EXKCC/KAS and EXUSD/KAS');
+  await page.keyboard.press('Escape');
 
   // Depth chart of the pair book (the Depth view of the book's panel, at every width): both sides,
   // in pair units.

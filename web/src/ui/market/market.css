@@ -375,7 +375,9 @@ body:has(.market-page) .container { max-width: none; }
 @container ob-mid (max-width: 250px) { .ob-mid-price { display: none; } }
 /* the book while it is held: its rows' places, its columns' titles over them */
 .ob .ob-skel { justify-self: end; width: 70%; height: 9px; margin: 0; }
-.ob-foot { margin: 6px 0 0; font-size: 0.74rem; line-height: 1.4; color: var(--muted); height: 1.4em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* ONE line (the whole sentence is its title): the note on estimated sizes comes and goes with the book */
+.ob-foot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin: 6px 0 0; font-size: 0.74rem; line-height: 1.4; color: var(--muted); height: 1.4em; white-space: nowrap; } /* ONE line: the legend of "~" comes and goes with the book; the sentences are behind its "?" (and its title) */
+.ob-foot-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ob-foot .help-tip { width: 16px; height: 16px; font-size: 0.66rem; } /* inside the line's height, on a touch screen too */
 
 /* From 760 px the book's card is as tall as its grid row and takes no height of its own (contain: size; a floor of the least 8 levels per side), and the levels it lists
    are as many as fit (book-rows.ts measures the asks' side): the header, the spread row and the foot keep their heights, the two sides share what is left (flex 1 1 0, overflow hidden: a
