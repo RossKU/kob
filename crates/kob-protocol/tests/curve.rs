@@ -499,6 +499,46 @@ fn chromatic_tables_climb_one_semitone_per_level() {
     assert!(curve_table(&CurveSpec { total: 1, ..CurveSpec::chromatic(1_000_000, 1, 8) }).is_err(), "a start below 1 sompi");
 }
 
+/// A chromatic start too low for distinct semitones is refused, never a table that stays flat or
+/// steps down at an octave. From CHROMATIC_MIN_START up no start is refused for it, and every
+/// table taken rises at each level.
+#[test]
+fn a_chromatic_table_rises_at_every_level_or_is_refused() {
+    use kob_protocol::defaults::CHROMATIC_MIN_START;
+    // 10^9 whole tokens (8 decimals) for 50 KAS over 2 octaves: rounded on its own, level 13 would
+    // be below level 12
+    let low = CurveSpec { total: 50 * 100_000_000, ..CurveSpec::chromatic(100_000_000_000_000_000, 100_000_000, 2) };
+    let e = curve_table(&low).unwrap_err().to_string();
+    assert!(e.contains("too low for a higher price at every semitone") && e.contains("starts at 17 sompi"), "{e}");
+    // every start: a table taken rises at every level, and only a start below the minimum is refused
+    let (mut taken, mut refused) = (0, 0);
+    for octaves in [1u32, 2, 8] {
+        let levels = 12 * octaves as i64 + 1;
+        for start in 1..=40i64 {
+            // a sell-out of `levels` whole tokens at about `start` each, the table's own weights
+            let spec = CurveSpec { total: start * levels * 4, ..CurveSpec::chromatic(levels * 100, 100, octaves) };
+            match curve_table(&spec) {
+                Ok(t) => {
+                    assert!(t.table.windows(2).all(|w| w[0] < w[1]), "{:?}", t.table);
+                    taken += 1;
+                }
+                Err(e) => {
+                    // only a start below the minimum is refused for its semitones
+                    let e = e.to_string();
+                    if let Some(rest) = e.split("the start price would be ").nth(1) {
+                        let start: i64 = rest.split(' ').next().unwrap().parse().unwrap();
+                        assert!(start < CHROMATIC_MIN_START, "{e}");
+                    } else {
+                        assert!(e.contains("first level"), "{e}");
+                    }
+                    refused += 1;
+                }
+            }
+        }
+    }
+    assert!(taken > 0 && refused > 0, "{taken} taken, {refused} refused");
+}
+
 const VECTOR_REALISED: i64 = 999_999_998_632;
 const VECTOR: [i64; 13] = [27_634, 29_278, 31_018, 32_863, 34_817, 36_888, 39_081, 41_405, 43_867, 46_475, 49_239, 52_167, 55_268];
 

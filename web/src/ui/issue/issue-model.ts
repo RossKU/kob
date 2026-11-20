@@ -357,6 +357,14 @@ export function salePreview(kob: KobWasm, state: IssueUiState): SalePreview | nu
   };
 }
 
+/**
+ * The plain message key of a curve the protocol refused for its start price: below 1 sompi or the
+ * tip, or a chromatic start too low for a higher price at every semitone. Null for any other error.
+ */
+export function curveErrorKey(raw: string): 'issue.sale.lowStart' | null {
+  return /first level would be priced|too low for a higher price at every semitone/.test(raw) ? 'issue.sale.lowStart' : null;
+}
+
 /** Findings only the view model knows. They are translated under `issue.*`, not `issues.*`. */
 export interface ModelIssue {
   code: 'holders.exceeds' | 'holders.duplicate';

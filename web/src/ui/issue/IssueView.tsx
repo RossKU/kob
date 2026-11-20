@@ -70,7 +70,7 @@ import { formatRowDate } from '../kit/format';
 import {
   defaultCarrierText, emptyUiState, filterDecimals, filterOwner, filterTicker, formToIssueForm, groupByField, modelIssues, parseDecimalsText, remainingText,
   humanAmount, linkedSaleFields, saleOfRecord, reviewSummary, salePreview, shortfallOf, supplyPreview, walletRowIncluded, type IssueUiState, type SaleUi,
-  LOCK_DAYS, chooseLock, lockSignerNote, lockUntilOf, type LockChoice,
+  LOCK_DAYS, chooseLock, curveErrorKey, lockSignerNote, lockUntilOf, type LockChoice,
 } from './issue-model';
 import { hashImageFile } from './image-file';
 import { ResultPanel } from './ResultPanel';
@@ -909,7 +909,7 @@ export function IssueView() {
                     />
                   )}
                 </div>
-                {sale?.curveError ? <p class="field-error" data-testid="sale-curve-error">{friendlyErrorText(sale.curveError)}</p> : null}
+                {sale?.curveError ? <p class="field-error" data-testid="sale-curve-error">{curveErrorKey(sale.curveError) ? t(curveErrorKey(sale.curveError)!) : friendlyErrorText(sale.curveError)}</p> : null}
                 {sale?.curve && n ? (
                   <div class="issue-curve" data-testid="sale-curve">
                     <CurveGraph steps={sale.curve.steps} label={t('issue.sale.graph')} axis={[t('issue.sale.axis0'), t('issue.sale.axis1')]} data-testid="sale-graph" />
