@@ -514,8 +514,7 @@ fn an_accepted_payment_whose_outputs_are_spent_is_not_taken_for_a_double_spend()
         let offer = w.kas_offer(KAS, MERCHANT);
         let id = w.invoice(vec![offer.clone()], 600_000);
         let first = w.pay_kas(&offer, &id, 0);
-        let first_tx =
-            kob_x402::safe_tx::SafeTx::parse(&first.payload.transaction, 1 << 20).unwrap().to_consensus().unwrap().tx;
+        let first_tx = kob_x402::safe_tx::SafeTx::parse(&first.payload.transaction, 1 << 20).unwrap().to_consensus().unwrap().tx;
         let txid = first_tx.id().as_bytes();
         w.fac.set_settle_wait(Duration::from_millis(50));
         assert_eq!(diag(&w.fac.pay_invoice(&id, first)), "settlement_pending");

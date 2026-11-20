@@ -32,11 +32,11 @@ use kob_x402::chain::{ChainError, ChainUtxo, ChainView, FixedClock, Outpoint, Ou
 use kob_x402::client::intent::{cancel_intent, intent_requirements, pay_intent, IntentOptions, IntentPayment};
 use kob_x402::client::swap::{MerchantGain, PayAssetSpec, PayerFunds, SwapOfferParams};
 use kob_x402::intent::{build_execution, BookView, KeeperParams};
+use kob_x402::invoice::{Invoice, InvoiceState};
 use kob_x402::policy::{AllowedToken, Custody, Policy};
 use kob_x402::safe_tx::spk_from_hex;
 use kob_x402::testkit::MockChain;
 use kob_x402::wire::{hex, FacilitatorRequest, Finality, Network, PaymentRequirements, SettlementResponse, X402_VERSION};
-use kob_x402::invoice::{Invoice, InvoiceState};
 use kobd::x402::facilitator::{Facilitator, FacilitatorConfig, IntentRuntime, InvoiceRuntime, InvoiceStore};
 use kobd::x402::ledger::{Ledger, State};
 
@@ -545,7 +545,10 @@ fn an_execution_after_the_deadline_is_recorded_as_a_late_payment() {
     w.fac.reconcile();
     let exec = hex(&ex.tx.id().as_bytes());
     let e = w.ledger.get(&hex(&p.txid)).unwrap();
-    assert_eq!(e.intent.as_ref().unwrap().expiry.as_ref().unwrap().outcome.as_deref(), Some(format!("executed_late: {exec}").as_str()));
+    assert_eq!(
+        e.intent.as_ref().unwrap().expiry.as_ref().unwrap().outcome.as_deref(),
+        Some(format!("executed_late: {exec}").as_str())
+    );
     assert!(e.reason.as_deref().unwrap().starts_with(&format!("intent_executed_late: {exec}")), "{:?}", e.reason);
     let s = w.fac.invoice_status(&id).unwrap();
     assert_eq!(s.status, InvoiceState::Expired);
