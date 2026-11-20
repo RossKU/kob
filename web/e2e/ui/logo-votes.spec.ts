@@ -29,7 +29,12 @@ test('a vote is signed and counted; 3 voters at net -1 hide the logo by default;
   await expect(note).toHaveAttribute('data-logo', 'checked');
   await expect(page.getByTestId('logo-votes-up')).toHaveText('1');
   await expect(page.getByTestId('logo-votes-down')).toHaveText('1');
-  await expect(page.getByTestId('logo-vote-hint')).toContainText('signed message, no fee');
+  // what a vote is: behind the votes' "?", nothing of it on the page until it is opened
+  await expect(page.getByTestId('logo-votes')).not.toContainText('signed message, no fee');
+  await page.getByTestId('logo-vote-help').click();
+  await expect(page.getByTestId('logo-vote-help-panel')).toContainText('signed message, no fee');
+  await page.getByTestId('logo-vote-help').click();
+  await expect(page.getByTestId('logo-vote-help-panel')).toHaveCount(0);
   const icon = page.getByTestId(`token-icon-${SAVED}`).first();
   await expect(icon).toHaveAttribute('data-icon', 'image');
   if (SHOTS) await page.getByTestId('token-logo-section').screenshot({ path: join(SHOTS, 'logo-votes-ui.png') });
