@@ -397,7 +397,9 @@ mod tests {
             let mut daa = a;
             daa.until = LOCK_TIME_THRESHOLD - 1;
             assert_eq!(AutoLock::parse(&daa.script()), None);
-            assert!(MAX_UNTIL > LOCK_TIME_THRESHOLD);
+            let mut far = a;
+            far.until = MAX_UNTIL + 1;
+            assert_eq!(AutoLock::parse(&far.script()), None);
         }
         let a = AutoLock::new(CreatorLock::new(1_800_000_000_000, key()).unwrap(), TemplateId::Kcc20Ref).unwrap();
         assert!(!a.fits(TemplateId::Kcc20PublicMint));
