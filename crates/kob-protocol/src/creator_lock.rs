@@ -27,7 +27,8 @@
 //! by the unlocker first ([`build_lock_coin`]): a plain KAS output, any amount that pays the unlock's
 //! fee (default [`LOCK_COIN`]); the unlock returns the rest as change.
 
-use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction};
+use kaspa_consensus_core::hashing::covenant_id::covenant_id as covenant_id_of;
+use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionOutput};
 use kaspa_consensus_core::Hash;
 use serde::{Deserialize, Serialize};
 
@@ -231,23 +232,39 @@ pub fn genesis_spans(payload: &[u8]) -> Option<Vec<Vec<u8>>> {
     })
 }
 
+/// The genesis outputs that `covenant_id` commits to: the group of the input whose outpoint and
+/// group hash to it (KCC-23 section 3.3, as [`crate::kcc23::is_bound`] checks it). Any other output
+/// that names the id, under another authorizing input, is not the token's: the id does not bind it,
+/// so whoever serves the genesis could have added it. Empty when no input's group hashes to the id.
+fn bound_outputs(genesis: &Transaction, covenant_id: Hash) -> Vec<usize> {
+    for (i, input) in genesis.inputs.iter().enumerate() {
+        let Ok(authorizing) = u16::try_from(i) else { break };
+        let group: Vec<(u32, &TransactionOutput)> = genesis
+            .outputs
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.covenant.is_some_and(|b| b.authorizing_input == authorizing && b.covenant_id == covenant_id))
+            .map(|(k, o)| (k as u32, o))
+            .collect();
+        if !group.is_empty() && covenant_id_of(input.previous_outpoint, group.iter().copied()) == covenant_id {
+            return group.into_iter().map(|(k, _)| k as usize).collect();
+        }
+    }
+    Vec::new()
+}
+
 /// The genesis outputs of `covenant_id` that `lock` holds, proven from the states the genesis names
-/// (a state counts only where its P2SH under a pinned token program is the output's script).
+/// (a state counts only where its P2SH under a pinned token program is the output's script). Only
+/// the outputs the id commits to count, in the locked amount and in the supply.
 ///
 /// An error says why the lock holds nothing in this genesis.
 pub fn verify_genesis_lock(genesis: &Transaction, covenant_id: Hash, lock: &CreatorLock) -> std::result::Result<VerifiedLock, String> {
-    let token_outputs: Vec<usize> = genesis
-        .outputs
-        .iter()
-        .enumerate()
-        .filter(|(_, o)| o.covenant.is_some_and(|c| c.covenant_id == covenant_id))
-        .map(|(k, _)| k)
-        .collect();
+    let token_outputs = bound_outputs(genesis, covenant_id);
     if token_outputs.is_empty() {
         return Err("the genesis has no output of the token".into());
     }
     let spans = genesis_spans(&genesis.payload).ok_or("the genesis names no states")?;
-    if spans.len() > genesis.outputs.iter().filter(|o| o.covenant.is_some()).count() {
+    if spans.len() > token_outputs.len() {
         return Err("the genesis names more states than it has outputs".into());
     }
     for tid in TemplateId::TOKEN_PROGRAMS {
