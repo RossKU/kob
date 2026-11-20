@@ -17,6 +17,7 @@ import * as V from './views.mjs';
 import * as M from './market.mjs';
 import * as P from './pairs.mjs';
 import { BlockLog, placeReal, takeReal } from './blocks.mjs';
+import { MockLogoVotes } from './logo-votes.mjs';
 
 const CORS = {
   'access-control-allow-origin': '*',
@@ -170,6 +171,8 @@ export async function startMockServer(opts = {}) {
   // what `GET /v1/stats` serves of the executors' side (`POST /mock/activity-stats`; `/mock/reset`
   // restores the default)
   let activityKnobs = { ...M.DEFAULT_ACTIVITY_KNOBS };
+  // the token-logo votes (mock/logo-votes.mjs): `POST /mock/logo-votes` sets a token's totals, `/mock/reset` clears them
+  const logoVotes = new MockLogoVotes();
 
   const seedAll = (withSeed, withFund, withHistory = false, withPair = false) => {
     if (withSeed) applyDefaultSeed(chain);
@@ -262,6 +265,9 @@ export async function startMockServer(opts = {}) {
     // the token-logo blocklist of an executor with [logo_reports] enabled (docs/api.md 3.20):
     // nothing is hidden
     if (get && path === '/v1/logo-blocklist') return ok({ hidden: [], updated_ms: 0 });
+    // the token-logo votes of an indexer with [logo_votes] enabled (docs/api-reference.md 3.19b)
+    if (get && path === '/v1/logo-votes') return ok(logoVotes.body());
+    if (post && path === '/v1/logo-votes') return ok(logoVotes.cast(await readJson(req)));
     // creator locks (docs/api-reference.md 3.24): a hint only, the web verifies each declaration
     // itself
     if (get && path === '/v1/creator-locks') {
@@ -371,6 +377,7 @@ export async function startMockServer(opts = {}) {
       feeEstimate = { ...DEFAULT_FEE_ESTIMATE };
       kasPrice = { ...DEFAULT_KAS_PRICE, mode: 'ok', ageS: 0, reads: 0 };
       activityKnobs = { ...M.DEFAULT_ACTIVITY_KNOBS };
+      logoVotes.reset();
       seedAll(body.seed !== false, body.fund === true, body.history ?? false, body.pair ?? false);
       return ok(summary(chain));
     }
@@ -400,6 +407,8 @@ export async function startMockServer(opts = {}) {
     }
     // an order placed with a real transaction (a block the node announces): { key, side: 'ask' |
     // 'bid', price, amount, token? }
+    if (post && path === '/mock/logo-votes') return ok(logoVotes.seed(body));
+    if (get && path === '/mock/logo-votes') return ok({ votes: logoVotes.votes });
     if (post && path === '/mock/place') return ok(placeReal(chain, body));
     // a plain ask or bid filled by a real batch of the mock's filler: { covenant_id, amount? }
     if (post && path === '/mock/take') {
