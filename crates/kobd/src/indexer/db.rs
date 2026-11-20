@@ -139,6 +139,7 @@ pub fn open_writer_with(path: &Path, network: &str, lean: bool) -> DbResult<Conn
     }
     conn.execute_batch(SCHEMA_SQL)?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
+    conn.execute_batch(crate::logo_votes::SCHEMA)?;
     if lean {
         // The indexes only the pruning reads (a few seconds once, on a store of a million orders).
         super::lean::ensure_indexes(&conn)?;
@@ -639,6 +640,7 @@ pub fn open_memory(network: &str) -> DbResult<Connection> {
     super::packed::register(&conn)?;
     conn.execute_batch(SCHEMA_SQL)?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
+    conn.execute_batch(crate::logo_votes::SCHEMA)?;
     migrate(&conn)?;
     init_meta(&conn, network)?;
     super::candles::configure(&conn, false)?;

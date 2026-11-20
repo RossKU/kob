@@ -313,6 +313,49 @@ impl Default for LogoReportsConfig {
     }
 }
 
+/// The token-logo votes (`[logo_votes]`; docs/design/logo-votes.md, docs/api-reference.md 3.19b).
+/// A wallet signs a message to vote up or down on a token's logo. The web app hides a logo by
+/// default once at least 3 addresses voted and the net score is -1 or lower. Reports of illegal
+/// images stay separate (`[logo_reports]`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LogoVotesConfig {
+    /// Serve `POST /v1/logo-votes` and `GET /v1/logo-votes` (default false: both answer 404).
+    pub enabled: bool,
+    /// The proof of work a vote carries: leading zero bits of its SHA-256 (default 20, about a
+    /// million hashes, a few seconds in a browser; at most 32).
+    pub pow_bits: u8,
+    /// One vote per wallet across all logos per this many seconds (default 86400, 24 hours). A
+    /// vote can be changed after it.
+    pub interval_secs: u64,
+    /// The voting address must have KOB history in the store at least this old: an order it placed
+    /// or a token output it held (default 86400, 24 hours).
+    pub min_history_secs: u64,
+    /// Votes one client may cast per hour (the client address of the guard, as for reports).
+    /// Default 20; 0: none.
+    pub per_client_per_hour: u32,
+    /// Votes from all clients together per 24 hours. Default 20000; 0: none.
+    pub max_per_day: u32,
+    /// Origins whose pages may vote. Empty (default): `[logo_reports] origins`, else
+    /// `api.cors_allow_origin` when it names one origin. A request without `Origin` is not
+    /// affected.
+    pub origins: Vec<String>,
+}
+
+impl Default for LogoVotesConfig {
+    fn default() -> Self {
+        LogoVotesConfig {
+            enabled: false,
+            pow_bits: 20,
+            interval_secs: 86_400,
+            min_history_secs: 86_400,
+            per_client_per_hour: 20,
+            max_per_day: 20_000,
+            origins: vec![],
+        }
+    }
+}
+
 /// What a node of `nodes` is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -609,6 +652,8 @@ pub struct IndexerConfig {
     /// The token-logo blocklist the web app reads and reports to (`[logo_reports]`,
     /// [`crate::logo_reports`]).
     pub logo_reports: LogoReportsConfig,
+    /// The token-logo votes (`[logo_votes]`, [`crate::logo_votes`]).
+    pub logo_votes: LogoVotesConfig,
     /// What the binary started without arguments runs with this file (`crate::setup`; `kobd setup`
     /// writes it into `kobd.toml` next to the executable). Every command given the file as
     /// `--config` ignores the table.
@@ -664,6 +709,7 @@ impl Default for IndexerConfig {
             records: RecordsConfig::default(),
             api: ApiConfig::default(),
             logo_reports: LogoReportsConfig::default(),
+            logo_votes: LogoVotesConfig::default(),
             launch: None,
             receipts: None,
         }
