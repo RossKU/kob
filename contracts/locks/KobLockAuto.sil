@@ -1,0 +1,96 @@
+pragma silverscript ^0.1.0;
+
+// KobLockAuto: a creator lock that opens by itself after its time.
+//
+// The specification is docs/spec/creator-lock-auto.md. The manual creator lock
+// (crates/kob-protocol/src/creator_lock.rs) is a plain script that needs the
+// creator's signature. This one needs no signature: after `until` anyone may
+// send the release, and the release can only pay the creator.
+//
+// How it holds tokens. The KCC-20 programs authorise a token UTXO of owner
+// scheme 0x03 (p2sh/v1) when the transaction spends an input whose script
+// public key is the P2SH of the owner. The locked genesis output's owner is
+// the hash of this script, and the genesis also pays a plain KAS output, the
+// lock coin, to this script's P2SH address. Spending the coin is what
+// authorises the tokens, and the coin runs this script.
+//
+// The one entry, release(), takes no argument. Its transaction is exactly:
+//   input 0   the lock coin (this script)
+//   input 1   the locked token UTXO, from the same transaction as the coin
+//   input 2   optional, a plain KAS input of whoever sends the release
+//   output 0  the token UTXO paid to the creator's key (P2PK owner, scheme
+//             0x00), the full amount, at least the input's KAS
+//   output 1  the creator's KAS, the coin less at most MAX_TAKE
+// Anything left (at most MAX_TAKE) pays the fee and the sender's tip.
+//
+// Why the coin and the token input must come from one transaction: nobody
+// can make a token UTXO in the genesis but the genesis, so a coin sent to
+// this address later, or a token sent to this owner later, can never be used
+// to spend the real ones. The coin of the genesis can only be spent with the
+// locked output, so nobody can use it up on something else.
+contract KobLockAuto(
+    temporal init_until,
+    pubkey init_creator,
+    int init_tplPrefixLen,
+    int init_tplSuffixLen
+) {
+    temporal until = init_until;      // unix ms, the node's past median time
+    pubkey creator = init_creator;    // the key the tokens and the KAS go to
+    int tplPrefixLen = init_tplPrefixLen; // the token program's bytes before its 112-byte state
+    int tplSuffixLen = init_tplSuffixLen; // ... and after it
+
+    byte[32] constant ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
+    // The most sompi of the coin the release may keep from the creator: a
+    // tip of 0.01 KAS and up to 0.02 KAS of fee (a release of KOB's default token
+    // program pays about 0.01 KAS at the relay floor).
+    int constant MAX_TAKE = 3000000;
+    int constant STATE_LEN = 112;
+
+    entry release() {
+        // CLTV: the lock time is a calendar time at or after `until`, and the
+        // node takes the transaction only once its past median time is past
+        // it. The compiler also refuses a DAA-score `until`.
+        require(tx.time >= until);
+        require(this.activeInputIndex == 0);
+        int n = tx.inputs.length;
+        require(n >= 2);
+        require(n <= 3);
+        if (n == 3) {
+            require(OpInputCovenantId(2) == ZERO32);
+        }
+
+        // Input 1 is a token UTXO created by the same transaction as the coin.
+        byte[32] tok = OpInputCovenantId(1);
+        require(tok != ZERO32);
+        require(OpOutpointTxId(1) == OpOutpointTxId(0));
+
+        // Its redeem script: the last bytes of its signature script, checked
+        // against its script public key. The state sits after the prefix:
+        //   0x08 amount 0x20 owner 0x01 scheme 0x01 borrow 0x20 guard 0x20 ext
+        int size = tplPrefixLen + STATE_LEN + tplSuffixLen;
+        int base = OpTxInputScriptSigLen(1) - size;
+        byte[] rs = OpTxInputScriptSigSubstr(1, base, base + size);
+        require(tx.inputs[1].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        int at = tplPrefixLen;
+        require(rs.slice(at + 9, at + 10) == byte[](0x20));
+        // Owned by this script (scheme 0x03, the P2SH of the coin's script),
+        // borrowing disabled.
+        byte[32] owner = byte[32](rs.slice(at + 10, at + 42));
+        require(rs.slice(at + 42, at + 46) == byte[](0x01030100));
+        require(tx.inputs[0].scriptPubKey == byte[](new ScriptPubKeyP2SH(owner)));
+
+        // Output 0: the only output of the token, the same state with the
+        // creator's key as owner (scheme 0x00). The amount is copied, so it is
+        // all of it.
+        require(OpCovOutputCount(tok) == 1);
+        require(OpOutputCovenantId(0) == tok);
+        require(tx.outputs[0].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+            rs.slice(0, at + 10) + byte[](creator) + byte[](0x0100) + rs.slice(at + 44, size)
+        )));
+        require(tx.outputs[0].value >= tx.inputs[1].value);
+
+        // Output 1: the coin's KAS back to the creator, less at most MAX_TAKE.
+        require(tx.outputs[1].scriptPubKey == byte[](new ScriptPubKeyP2PK(creator)));
+        require(tx.outputs[1].value + MAX_TAKE >= tx.inputs[0].value);
+    }
+}
