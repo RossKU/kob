@@ -58,6 +58,7 @@ import type { PlanIssue } from '../../kob/plan-types';
 import type { CurveShape } from '../../kob/curve';
 import { isKeyOwned } from '../../kob/token-state';
 import { MAX_LOCK_SPAN_MS } from '../../kob/creator-lock';
+import { lockKindOf, useLockManualPref } from '../../app/lock-pref';
 import type { Services } from '../../app/services';
 import { ConnectBar } from '../shell/WalletButton';
 import { visibilityCheckSupported } from '../../signer/seen';
@@ -207,15 +208,18 @@ export function IssueView() {
   const spendable = fundingList ? fundingList.reduce((s, u) => s + BigInt(u.amount), 0n) : null;
 
   // ---- Form to findings
+  // A new lock opens by itself unless Settings says "Manual unlock".
+  const [lockManual] = useLockManualPref();
+  const lockKind = lockKindOf(lockManual);
   const form = useMemo(() => {
-    const f = formToIssueForm(state, pubkey);
+    const f = formToIssueForm(state, pubkey, lockKind);
     // A blank one price is the default shown in its field (10,000 KAS over the amount).
     if (f.sale?.mode === 'ask' && f.sale.price.trim() === '') {
       const p = salePreview(kob, state)?.defaultPrice;
       if (p) return { ...f, sale: { ...f.sale, price: baseUnitsText(p, 8) } };
     }
     return f;
-  }, [state, pubkey, kob]);
+  }, [state, pubkey, kob, lockKind]);
   const walletRow = walletRowIncluded(state);
   const decimals = parseDecimalsText(state.decimals);
   const findings = useMemo<PlanIssue[]>(() => (limits ? validateIssueForm(form, limits, registryTickers) : []), [form, limits, registryTickers]);
@@ -943,7 +947,8 @@ export function IssueView() {
     // The last day a lock may open (kob/issue.ts refuses a later one).
     const latest = formatRowDate(Date.now() + Number(MAX_LOCK_SPAN_MS) - 86_400_000);
     // a wallet that may not sign the unlock: the share would then need the CLI and the private key
-    const signerNote = lockSignerNote(l.choice, wallet.adapter, pubkey);
+    const signerNote = lockSignerNote(l.choice, wallet.adapter, pubkey, lockKind);
+    const auto = lockKind === 'auto';
     return (
       <div class="issue-lock" data-testid="issue-lock">
         <div class="issue-lock-row">
@@ -951,8 +956,9 @@ export function IssueView() {
             <label for="issue-lock-choice">{t('issue.lock.label')}</label>
             <HelpTip label={t('issue.lock.label')} data-testid="issue-lock-help">
               <p>{t(state.sale.mode === 'keep' ? 'issue.lock.helpKeep' : 'issue.lock.helpSale')}</p>
-              <p>{t('issue.lock.helpHow')}</p>
-              <p>{t('issue.lock.helpUnlock')}</p>
+              <p>{t(auto ? 'issue.lock.helpHowAuto' : 'issue.lock.helpHow')}</p>
+              <p>{t(auto ? 'issue.lock.helpUnlockAuto' : 'issue.lock.helpUnlock')}</p>
+              <p>{t('issue.lock.helpKind')}</p>
             </HelpTip>
           </span>
           <select id="issue-lock-choice" class="select issue-lock-select" value={l.choice} onChange={(e) => setLock((e.currentTarget as HTMLSelectElement).value as LockChoice)} data-testid="issue-lock-choice">
@@ -973,7 +979,7 @@ export function IssueView() {
               data-testid="issue-lock-date"
             />
           ) : null}
-          {l.choice !== 'none' && /^\d+$/.test(until) && until !== '0' ? <span class="small muted" data-testid="issue-lock-until">{t('issue.lock.until', { date: formatRowDate(Number(until)) })}</span> : null}
+          {l.choice !== 'none' && /^\d+$/.test(until) && until !== '0' ? <span class="small muted" data-testid="issue-lock-until">{t(auto ? 'issue.lock.untilAuto' : 'issue.lock.untilManual', { date: formatRowDate(Number(until)) })}</span> : null}
         </div>
         {err ? <p class="field-error" data-testid="issue-lock-error">{err}</p> : null}
         {signerNote ? <Banner tone="warn" data-testid="issue-lock-signer">{t(signerNote === 'unsupported' ? 'issue.lock.signerUnsupported' : 'issue.lock.signerUnproven')}</Banner> : null}
@@ -1208,7 +1214,10 @@ export function IssueView() {
                 'data-testid': 'issue-summary-holders',
               },
               ...(plan.status === 'ready' && plan.plan.sale ? [{ label: t('issue.summary.sale'), value: saleSummaryText(plan.plan), 'data-testid': 'issue-summary-sale' }] : []),
-              ...(summary.lock ? [{ label: t('issue.summary.lock'), value: t('issue.summary.lockValue', { amount: `${summary.lock.human} ${summary.ticker}`, date: formatRowDate(Number(summary.lock.until)) }), 'data-testid': 'issue-summary-lock' }] : []),
+              ...(summary.lock
+                ? [{ label: t('issue.summary.lock'), value: t(summary.lock.kind === 'auto' ? 'issue.summary.lockValueAuto' : 'issue.summary.lockValue', { amount: `${summary.lock.human} ${summary.ticker}`, date: formatRowDate(Number(summary.lock.until)) }), 'data-testid': 'issue-summary-lock' }]
+                : []),
+              ...(summary.lock && summary.lock.coin > 0n ? [{ label: t('issue.summary.lockCoin'), value: t('issue.summary.lockCoinValue', { kas: kasText(summary.lock.coin) }), 'data-testid': 'issue-summary-lock-coin' }] : []),
               { label: t('issue.summary.program'), value: <code>{summary.program}</code> },
               {
                 label: t('issue.summary.carriers'),

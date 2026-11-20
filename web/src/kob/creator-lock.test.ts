@@ -30,7 +30,7 @@ const DAY = 86_400_000;
 const until = String(Date.now() + 90 * DAY);
 
 const utxo = (index: number, sompi: bigint, pubkey = maker): KeyUtxo => ({ transactionId: '07'.repeat(32), index, amount: sompi.toString(), blockDaaScore: '5000', pubkey });
-const form = (over: Partial<IssueForm> = {}): IssueForm => ({ ...emptyIssueForm(), name: 'Lock Token', ticker: 'LOCK', decimals: 8, supply: '1000', lockUntil: until, ...over });
+const form = (over: Partial<IssueForm> = {}): IssueForm => ({ ...emptyIssueForm(), name: 'Lock Token', ticker: 'LOCK', decimals: 8, supply: '1000', lockUntil: until, lockKind: 'manual', ...over });
 const plan = (over: Partial<IssueForm> = {}): IssuePlan => planIssue(kob, form(over), { funding: [utxo(1, 500n * KAS)], maker, network: 'testnet-10' });
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
 
@@ -296,7 +296,7 @@ describe('the form and the Portfolio', () => {
     expect(formToIssueForm({ ...ui, lock: chooseLock('none', l) }, maker).lockUntil).toBeUndefined();
     const p = plan({ sale: { ...defaultSaleForm(), mode: 'ask', keepPct: '40', price: '1' } });
     const r = reviewSummary(p, maker);
-    expect(r.lock).toEqual({ amount: 400n * 10n ** 8n, human: '400', until: BigInt(until) });
+    expect(r.lock).toEqual({ amount: 400n * 10n ** 8n, human: '400', until: BigInt(until), kind: 'manual', coin: 0n });
     expect(r.holders.map((h) => [h.isWallet, h.lockedUntil])).toEqual([[true, undefined], [false, BigInt(until)]]);
   });
 

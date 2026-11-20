@@ -2,6 +2,7 @@ import { useMemo, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { useCreatorImagePref, useIconPref, useVoteFilterPref } from '../../app/icon-pref';
 import { useDisplayCurrency, type DisplayCurrency } from '../../app/currency-pref';
+import { useLockManualPref } from '../../app/lock-pref';
 import { FiatNote } from '../../app/use-fiat';
 import { displayToken } from '../../app/token-display';
 import type { TrackedToken } from '../../data/token-tracker';
@@ -304,6 +305,21 @@ function TokenIconsSettings() {
         disabled={!on}
         data-testid="settings-icons-votes"
       />
+    </Section>
+  );
+}
+
+/**
+ * How a new creator lock opens (app/lock-pref.ts). Off, the default: by itself after its date, and
+ * anyone may send the release, which pays only the creator. On: the creator's key signs the unlock.
+ * It applies to the next Create token; a lock on chain keeps its kind. The explanation is behind
+ * the card's "?".
+ */
+function CreatorLockSettings() {
+  const [manual, setManual] = useLockManualPref();
+  return (
+    <Section title={t('settings.lock.title')} help={<><p>{t('settings.lock.helpAuto')}</p><p>{t('settings.lock.helpManual')}</p></>} data-testid="settings-lock">
+      <Checkbox checked={manual} onChange={setManual} label={t('settings.lock.manual')} data-testid="settings-lock-manual" />
     </Section>
   );
 }
@@ -645,6 +661,7 @@ export function SettingsView(props: { warnings?: ConfigWarning[] }) {
           <div class="settings-slot" style="--slot:3"><DisplayCurrencySettings /></div>
           <div class="settings-slot" style="--slot:3"><DeliverySettings /></div>
           <div class="settings-slot" style="--slot:4"><TokenIconsSettings /></div>
+          <div class="settings-slot" style="--slot:4"><CreatorLockSettings /></div>
         </div>
       </div>
       <AdvancedSettings />
