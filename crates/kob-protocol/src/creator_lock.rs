@@ -242,8 +242,12 @@ pub struct VerifiedLock {
 #[serde(rename_all = "camelCase")]
 pub struct LockedOutput {
     pub index: u32,
+    /// Base units for a token output, sompi for a lock coin.
     #[serde(with = "crate::json::field")]
     pub amount: u64,
+    /// The output's KAS (sompi).
+    #[serde(with = "crate::json::field")]
+    pub value: u64,
 }
 
 impl VerifiedLock {
@@ -358,7 +362,7 @@ pub fn verify_genesis_lock(
                 if holds(s) && s.amount > 0 {
                     amount += a;
                     ext = s.extension_commitment;
-                    outputs.push(LockedOutput { index: k as u32, amount: s.amount as u64 });
+                    outputs.push(LockedOutput { index: k as u32, amount: s.amount as u64, value: genesis.outputs[k].value });
                 }
             }
         }
@@ -380,7 +384,7 @@ pub fn verify_genesis_lock(
                         o.covenant.is_none() && o.script_public_key == spk && o.value >= crate::lock_auto::AUTO_COIN_MIN
                     });
                 let (k, o) = found.ok_or("the genesis pays no lock coin to the automatic lock's address")?;
-                Some(LockedOutput { index: k as u32, amount: o.value })
+                Some(LockedOutput { index: k as u32, amount: o.value, value: o.value })
             }
         };
         return Ok(VerifiedLock {

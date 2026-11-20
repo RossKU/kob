@@ -104,6 +104,13 @@ pub trait BookSource: Send {
         vec![]
     }
 
+    /// The automatic creator locks due at `now_ms` whose locked output is unspent, each verified
+    /// again (`GET /v1/creator-locks?due=`, `crate::indexer::kcc23::due_locks`). The keepers release
+    /// them (`crate::keepers::lock_release`). The default is none.
+    fn due_locks(&mut self, _now_ms: u64) -> Vec<kob_protocol::kcc23::VerifiedDeclaration> {
+        vec![]
+    }
+
     /// The operator's own key-owned token UTXOs, accepted and with their programs.
     ///
     /// The maintenance jobs use them ([`crate::maintenance`]). The default is none, so no
@@ -621,6 +628,9 @@ pub struct Runner<N: NodeApi, S: BookSource> {
     ///
     /// Each holds the DAA score before which the job is not built again, and the failures so far.
     pub keeper_failed: BTreeMap<super::book::Outpoint, (u64, u32)>,
+    /// Automatic creator locks whose release the node did not take, by token: the DAA score before
+    /// which it is not built again.
+    pub lock_release_after: BTreeMap<CovId, u64>,
     /// For diagnostics and tests, every transaction submitted, or built in a dry run.
     ///
     /// `None`, the default, keeps nothing.
@@ -848,6 +858,10 @@ fn listed_outpoints(orders: &[ListedOrder]) -> BTreeSet<super::book::Outpoint> {
     s
 }
 
+/// DAA a release of a creator lock that the node did not take waits before it is built again, one
+/// minute (the node's past median time may still be before the lock's time).
+pub const LOCK_RELEASE_RETRY_DAA: u64 = 600;
+
 /// DAA after its planning that a maintenance sale may still be sent again, five minutes.
 ///
 /// Its price was the book's at that tick. A later sale is planned anew (`crate::maintenance`),
@@ -983,6 +997,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             keeper_unprofitable: BTreeSet::new(),
             keeper_unprofitable_floor: 0,
             keeper_failed: BTreeMap::new(),
+            lock_release_after: BTreeMap::new(),
             capture: None,
             reservations: None,
             waiting: None,
@@ -1937,11 +1952,84 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             self.selector.observe(Role::Keep, keep_lost, keep_sent);
         }
 
+        if self.cfg.roles.keeper && self.cfg.keeper.release_locks {
+            self.lock_releases(clock, &funding, daa, &mut rep).await?;
+        }
         if self.cfg.roles.matcher && self.cfg.maintenance.enabled {
             self.maintenance(&book.orders, clock, &funding, daa, &mut rep).await?;
         }
         self.finish(&rep);
         Ok(rep)
+    }
+
+    /// The releases of the automatic creator locks that are due (`crate::keepers::lock_release`).
+    ///
+    /// They run after the keepers' other jobs and leave their inputs alone. A release the node did
+    /// not take is not built again for [`LOCK_RELEASE_RETRY_DAA`].
+    async fn lock_releases(&mut self, clock: Clock, funding: &[KeyUtxo], daa: u64, rep: &mut StepReport) -> anyhow::Result<()> {
+        use crate::keepers::lock_release::{release_jobs, DueLock, ReleaseLimits};
+        let now_ms = clock.utc.saturating_mul(1000);
+        let rate = self.cfg.keeper.fees.floor_of(self.cfg.keeper.fee_rate);
+        self.lock_release_after.retain(|_, until| *until > daa);
+        let due: Vec<DueLock> = self
+            .source
+            .due_locks(now_ms)
+            .iter()
+            .filter_map(|d| DueLock::of(d, rate))
+            .filter(|d| !self.lock_release_after.contains_key(&d.token))
+            .collect();
+        if due.is_empty() {
+            return Ok(());
+        }
+        let spent = self.reserved_or_spent();
+        let limits = ReleaseLimits { fee_rate: rate, max_tx_fee: self.cfg.keeper.fees.max_tx_fee, max_jobs: self.cfg.keeper.max_jobs };
+        let (jobs, skipped) = release_jobs(&due, funding, now_ms, limits, &spent, self.signer.as_ref());
+        for (token, why) in &skipped {
+            tracing::debug!(token = %kob_protocol::json::to_hex(token), %why, "creator lock release not built");
+            rep.skipped.push(format!("{}: release: {why}", kob_protocol::json::to_hex(token)));
+        }
+        for j in jobs {
+            rep.built.push(("release".into(), j.signed.tx.id, j.profit));
+            if let Some(c) = self.capture.as_mut() {
+                c.push(j.signed.clone());
+            }
+            if self.cfg.dry_run {
+                continue;
+            }
+            let t = Tracked {
+                txid: j.signed.tx.id,
+                spends: j.spends.clone(),
+                orders: BTreeSet::new(),
+                owners: BTreeMap::new(),
+                addresses: BTreeMap::new(),
+                parent: None,
+                submitted_daa: daa,
+                rpc_tx: rpc_json(&j.signed)?,
+                accepted: None,
+                kind: "release".into(),
+                profit: j.profit,
+                fee: j.built.fee.fee,
+                fee_rate: j.built.fee.fee_rate,
+                unconfirmed: false,
+                deadline: None,
+                resend_until: None,
+                retired: None,
+            };
+            let txid = t.txid;
+            self.send(t, daa, rep).await;
+            if rep.submitted.last() == Some(&txid) {
+                info_unless!(
+                    self.cfg.dry_run,
+                    token = %kob_protocol::json::to_hex(&j.token),
+                    txid = %kob_protocol::json::to_hex(&txid),
+                    tip = j.profit,
+                    "released an automatic creator lock"
+                );
+            } else {
+                self.lock_release_after.insert(j.token, daa.saturating_add(LOCK_RELEASE_RETRY_DAA));
+            }
+        }
+        Ok(())
     }
 
     /// The maintenance jobs (`crate::maintenance`), which merge or sell the operator's token UTXOs.

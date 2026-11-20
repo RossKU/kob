@@ -11,6 +11,8 @@
 //! - Sweep. The strays of the operator's own orders, in place: the order continues unchanged.
 //!   Nobody else may move strays. It has no tip. Its fee comes from the order's carrier (a plain
 //!   ask) or from the operator's funding.
+//! - Release. An automatic creator lock after its time ([`lock_release`]): the tokens and the lock
+//!   coin go back to the creator, and the keeper's own input comes back with a 0.01 KAS tip.
 //!
 //! Arming and trailing are not keeper jobs. An `update` reads its trigger evidence from a plain
 //! resting fill of the same transaction. The matcher therefore arms and ratchets stops inside the
@@ -39,6 +41,8 @@
 //!   in a [`SubsidyBudget`], replacements included). They are also bounded by a number of
 //!   subsidised jobs per step ([`KeeperConfig::subsidy_max_jobs`]). Once either is used up, jobs go
 //!   at the rate their own tip pays.
+
+pub mod lock_release;
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -72,6 +76,8 @@ pub struct KeeperConfig {
     /// Sweep strays of the operator's own orders in place: the order continues unchanged
     /// (`SweepOrder`).
     pub sweep_own_strays: bool,
+    /// Release the automatic creator locks that are due (`lock_release`), for their tip.
+    pub release_locks: bool,
     /// Return an order's proven FOREIGN strays to its maker inside the refund, kill or close that
     /// ends it. Foreign strays are tokens other than the order's own (`matcher.md` §1.2).
     ///
@@ -144,6 +150,7 @@ impl Default for KeeperConfig {
             fees: crate::fee::FeeRates::default(),
             refund: true,
             sweep_own_strays: false,
+            release_locks: true,
             return_foreign_strays: false,
             min_profit: 0,
             max_jobs: 32,

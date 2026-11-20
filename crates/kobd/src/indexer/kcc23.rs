@@ -500,7 +500,7 @@ pub fn apply(conn: &Connection, seq: i64, daa: u64, txid: &Hash32, d: &DeclSecti
             let mut put = conn.prepare_cached("INSERT OR IGNORE INTO kcc23_txs (txid, tx) VALUES (?1, ?2)")?;
             put.execute(params![&txid.0[..], encode_tx(&d.tx)])?;
             put.execute(params![&b.preparation_txid[..], encode_tx(&preps[b.prep])])?;
-            put_lock(conn, &preps[b.prep], seq, &b.covenant_id)?;
+            put_lock(conn, &preps[b.prep], &d.tx, seq, &b.covenant_id)?;
             declared.push(b.covenant_id);
         }
     }
@@ -688,21 +688,46 @@ fn lock_key(prep: &ProofTx) -> Option<[u8; 32]> {
     Some(kob_protocol::creator_lock::CreatorLock::parse_hex(d.lock.as_deref()?)?.key)
 }
 
+/// The time and the locked genesis output of the automatic creator lock that the proof of
+/// `covenant_id` (`prep`, `genesis`) verifies to, if it names one.
+fn auto_lock_of(prep: &ProofTx, genesis: &ProofTx, covenant_id: &Hash32) -> Option<(u64, u32)> {
+    let d = kcc23::TokenDeclaration::from_payload(&prep.payload).ok()?;
+    if d.lock_kind() != kob_protocol::creator_lock::LockKind::Auto {
+        return None;
+    }
+    let proof = LaunchProof {
+        format: kcc23::PROOF_FORMAT.into(),
+        covenant_id: covenant_id.0,
+        preparation: prep.clone(),
+        genesis: genesis.clone(),
+    };
+    let l = proof.verify().ok()?.lock?;
+    (l.kind == kob_protocol::creator_lock::LockKind::Auto).then(|| l.outputs.first().map(|o| (l.until, o.index))).flatten()
+}
+
 /// Indexes the creator lock that the declaration of `covenant_id` (genesis block `seq`, bound to
-/// `prep`) names.
-fn put_lock(conn: &Connection, prep: &ProofTx, seq: i64, covenant_id: &Hash32) -> DbResult<()> {
+/// `prep`, the genesis `genesis`) names: by its key, and an automatic one by its time.
+fn put_lock(conn: &Connection, prep: &ProofTx, genesis: &ProofTx, seq: i64, covenant_id: &Hash32) -> DbResult<()> {
     if let Some(key) = lock_key(prep) {
         conn.prepare_cached("INSERT OR IGNORE INTO kcc23_locks (lock_key, genesis_block, covenant_id) VALUES (?1, ?2, ?3)")?
             .execute(params![&key[..], seq, &covenant_id.0[..]])?;
+        if let Some((until, idx)) = auto_lock_of(prep, genesis, covenant_id) {
+            let gid = genesis.to_tx().map_err(|e| DbError::Invalid(format!("genesis: {e}")))?.id();
+            conn.prepare_cached(
+                "INSERT OR IGNORE INTO kcc23_auto_locks (until, covenant_id, genesis_block, genesis_txid, idx) VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?
+            .execute(params![until as i64, &covenant_id.0[..], seq, &gid.as_bytes()[..], idx as i64])?;
+        }
     }
     Ok(())
 }
 
-/// Fills `kcc23_locks` once for a store whose declarations an earlier build wrote (`meta.kcc23_locks`).
+/// Fills `kcc23_locks` and `kcc23_auto_locks` once for a store whose declarations an earlier build
+/// wrote (`meta.kcc23_locks`, `meta.kcc23_auto_locks`).
 ///
 /// Returns the locks indexed, or `None` when it was done before.
 pub fn backfill_locks(conn: &Connection) -> DbResult<Option<usize>> {
-    if super::db::meta_get(conn, "kcc23_locks")?.is_some() {
+    if super::db::meta_get(conn, "kcc23_locks")?.is_some() && super::db::meta_get(conn, "kcc23_auto_locks")?.is_some() {
         return Ok(None);
     }
     let tx = conn.unchecked_transaction()?;
@@ -717,11 +742,12 @@ pub fn backfill_locks(conn: &Connection) -> DbResult<Option<usize>> {
         let Some(json) = proof_json(&tx, &Hash32(id))? else { continue };
         let Ok(p) = serde_json::from_str::<LaunchProof>(&json) else { continue };
         if lock_key(&p.preparation).is_some() {
-            put_lock(&tx, &p.preparation, seq, &Hash32(id))?;
+            put_lock(&tx, &p.preparation, &p.genesis, seq, &Hash32(id))?;
             n += 1;
         }
     }
     super::db::meta_set(&tx, "kcc23_locks", "1")?;
+    super::db::meta_set(&tx, "kcc23_auto_locks", "1")?;
     tx.commit()?;
     Ok(Some(n))
 }
@@ -780,6 +806,39 @@ pub fn creator_locks(
         }
     }
     Ok((out, None))
+}
+
+/// Most automatic locks one [`due_locks`] call returns.
+pub const DUE_LOCKS_MAX: usize = 200;
+
+/// The automatic creator locks due at `now_ms` (`until <= now_ms`) whose locked output is still an
+/// unspent holding, the earliest first, at most `limit` (and [`DUE_LOCKS_MAX`]). Each is verified
+/// again from its proof. A released lock leaves the list, since its locked output is spent.
+pub fn due_locks(conn: &Connection, now_ms: u64, limit: usize) -> DbResult<Vec<kcc23::VerifiedDeclaration>> {
+    let limit = limit.min(DUE_LOCKS_MAX);
+    if limit == 0 {
+        return Ok(vec![]);
+    }
+    let rows: Vec<Vec<u8>> = {
+        let mut st = conn.prepare_cached(concat!(
+            "SELECT a.covenant_id FROM kcc23_auto_locks a WHERE a.until <= ?1 AND EXISTS (SELECT 1 FROM token_holdings h WHERE h.tx_id = ",
+            super::ids::tx_of!("a.genesis_txid"),
+            " AND h.idx = a.idx AND h.spent_block IS NULL) ORDER BY a.until, a.covenant_id LIMIT ?2"
+        ))?;
+        let v =
+            st.query_map(params![now_ms.min(i64::MAX as u64) as i64, limit as i64], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        v
+    };
+    let mut out = vec![];
+    for id in rows {
+        let Ok(cov) = <[u8; 32]>::try_from(id.as_slice()) else { continue };
+        let Some(json) = proof_json(conn, &Hash32(cov))? else { continue };
+        let Ok(v) = serde_json::from_str::<LaunchProof>(&json).map_err(|e| e.to_string()).and_then(|p| p.verify()) else { continue };
+        if v.lock.as_ref().is_some_and(|l| l.kind == kob_protocol::creator_lock::LockKind::Auto && l.until <= now_ms) {
+            out.push(v);
+        }
+    }
+    Ok(out)
 }
 
 /// Whether a verified creator lock still holds tokens: one of its genesis outputs is an unspent holding.

@@ -112,6 +112,14 @@ impl BookSource for IndexerSource {
         self.lock().watch_tx(Hash32(txid));
     }
 
+    fn due_locks(&mut self, now_ms: u64) -> Vec<kob_protocol::kcc23::VerifiedDeclaration> {
+        let g = self.lock();
+        crate::indexer::kcc23::due_locks(g.conn(), now_ms, crate::indexer::kcc23::DUE_LOCKS_MAX).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "cannot read the due creator locks from the store; no release this tick");
+            vec![]
+        })
+    }
+
     fn operator_tokens(&mut self, operator: &[u8; 32]) -> Vec<crate::maintenance::OwnToken> {
         let g = self.lock();
         let listed = |t: &crate::maintenance::OwnToken| match t.token.utxo.covenant_id {
@@ -284,6 +292,9 @@ pub struct RunArgs {
     /// Keepers: do not refund / kill / close.
     #[arg(long, help_heading = "Keepers")]
     pub no_refund: bool,
+    /// Keepers: do not release the automatic creator locks that are due (each pays a 0.01 KAS tip).
+    #[arg(long, help_heading = "Keepers")]
+    pub no_lock_release: bool,
     /// Keepers: sweep strays of the operator's own orders in place (the order continues unchanged).
     #[arg(long, help_heading = "Keepers")]
     pub sweep_own_strays: bool,
@@ -343,6 +354,7 @@ impl RunArgs {
         let mut keeper = KeeperConfig {
             fee_rate: self.fee_rate,
             refund: !self.no_refund,
+            release_locks: !self.no_lock_release,
             sweep_own_strays: self.sweep_own_strays,
             return_foreign_strays: self.return_foreign_strays,
             min_profit: self.keeper_min_profit,
