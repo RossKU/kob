@@ -358,8 +358,18 @@ fn flag_runs(flags: &[bool], start: Hash32, hashes: &[Hash32]) -> Vec<(Hash32, u
             _ => runs.push((if i == 0 { start } else { hashes[i - 1] }, i, 1)),
         }
     }
+    // More runs than that are one span from the first flagged block to the last: the cross-check
+    // then asks at most MAX_BODY_RUNS requests per window, or one copy of the span (R2C-L2).
+    if runs.len() > MAX_BODY_RUNS {
+        let (before, first, _) = runs[0];
+        let (last, len) = runs.last().map(|r| (r.1, r.2)).expect("runs");
+        runs = vec![(before, first, last + len - first)];
+    }
     runs
 }
+
+/// Most runs of flagged chain blocks a window is re-read in ([`flag_runs`]).
+pub const MAX_BODY_RUNS: usize = 4;
 
 /// `ask` of each of `items`, at most `limit` in flight, the answers in the order of `items`.
 ///
@@ -1941,6 +1951,20 @@ mod tests {
         assert!(after_first <= 5, "{after_first}");
         tokio::time::sleep(Duration::from_secs(1)).await;
         assert_eq!(asked.load(SeqCst), after_first, "an idle stream asks for nothing more");
+    }
+
+    /// R2C-L2: a flag every 5th chain block (cheap spam) gives one run each, so a window of
+    /// thousands would ask hundreds of cross-check requests. Past `MAX_BODY_RUNS` they are one span.
+    #[test]
+    fn flagged_runs_are_bounded_per_window() {
+        use super::flag_runs;
+        use crate::hex::Hash32;
+        let hashes: Vec<Hash32> = (0..2000u32).map(|i| Hash32([(i % 251) as u8; 32])).collect();
+        let few: Vec<bool> = (0..2000).map(|i| i == 10 || i == 500).collect();
+        assert_eq!(flag_runs(&few, Hash32([0xee; 32]), &hashes), vec![(hashes[9], 10, 1), (hashes[499], 500, 1)]);
+        let spam: Vec<bool> = (0..2000).map(|i| i % 5 == 2).collect();
+        let runs = flag_runs(&spam, Hash32([0xee; 32]), &hashes);
+        assert_eq!(runs, vec![(hashes[1], 2, 1996)], "one span from the first flagged block to the last");
     }
 
     #[test]
