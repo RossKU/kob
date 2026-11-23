@@ -1279,10 +1279,10 @@ stays the authority for the selected chain (`rpc::multi`):
 * two parts of a transaction are outside every hash: its signature scripts and the spent outputs the node attaches to its
   inputs. The indexer reads both for the transactions it tracks, so before a window from another node is applied, every
   chain block holding a transaction that can matter to KOB is fetched from the primary and must agree with it in
-  everything the indexer reads (`indexer::trust`). A transaction can matter when its payload is a KOB1 record, an input
-  spends an output the store tracks (or an output of such a transaction earlier in the window), or an output carries the
-  binding of a token some order trades or the allowlist tracks: all decided by the hashed parts and the store, never by
-  what the other node says alone. On TN10 that is a few percent of the chain blocks;
+  everything the indexer reads (`indexer::trust`). A transaction can matter when its payload is a KOB1 placement, amend
+  or sweep record, an input spends an output the store tracks (or an output of such a transaction earlier in the window), or an
+  output carries the binding of a token some order trades or the allowlist tracks: all decided by the hashed parts and
+  the store, never by what the other node says alone. On TN10 that is a few percent of the chain blocks;
 * a node that contradicts a hash or the primary is **dropped** until the process restarts (logged as an error, `lies` in
   its health); its window goes to the next node. A node that fails a window otherwise (transport, timeout, it does not know
   the window yet) backs off (5 s, doubling to 80 s) and the window goes to the next node, the primary last. A window that
