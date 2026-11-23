@@ -1146,6 +1146,19 @@ type Wanted = ([u8; 32], [u8; 32], Family, i64, Option<[u8; 32]>);
 ///
 /// An order's KCC-20 custody carries the extension commitment its state pins for it
 /// ([`AnyState::custody_ext`]). Records failing any check are errors.
+/// The output an ORDER record announces and the script it must carry there: the P2SH of its state
+/// under its pinned template, when the state is a valid placement. `None` for any other record, or
+/// a state that is no placement.
+///
+/// It is the first check of [`recover_orders`], which reads only the record and the transaction's
+/// outputs. An output without that script (or without a covenant binding) is no placement, so an
+/// indexer can tell from the transaction alone that the record cannot place an order (C-M4).
+pub fn placement_target(r: &Record) -> Option<(usize, kaspa_consensus_core::tx::ScriptPublicKey)> {
+    let Record::Order { output, family, template: t, state, .. } = r else { return None };
+    let order = check_order_state(*family, *t, state, true).ok()?;
+    Some((*output as usize, order.spk()))
+}
+
 pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
     let Some(p) = decode(&tx.payload)? else { return Ok(vec![]) };
     let mut out = vec![];

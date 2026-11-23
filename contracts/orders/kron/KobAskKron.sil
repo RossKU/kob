@@ -124,8 +124,10 @@ contract KobAskKron(
 
     // Stray guard. The KRON program authorises every token UTXO owned by this
     // covenant id whenever this input is spent, so settle refuses any token
-    // input owned by `me` other than `custody`. Strays are inert. Only the
-    // maker's cancel can move them.
+    // input owned by `me` other than `custody`. Such strays (this token,
+    // owned by this id) only the maker's cancel can move. A stray of another
+    // token, or one owned by the order's script hash, is not guarded
+    // (docs/spec/order-types.md, Strays).
     //
     // Every input with the token's covenant id is an instance of the token
     // template. Its redeem script, prefix || 46 B state || suffix, is the last

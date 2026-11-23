@@ -1097,6 +1097,30 @@ fn candidate_search() {
     assert!(recover::custody_target(&bid_state, A2, None).unwrap().is_none());
 }
 
+/// R2A-1: a Collected pair sell's fill moves both `amountLeft` (by the A sold) and `bought` (by the
+/// B received, `tOut`, at least ceil(n x price / scale(A))). With the amount left as a hint, the
+/// search reaches the state of one fill at the limit price and of a few fills with rounding.
+#[test]
+fn a_collected_pair_sells_search_moves_amount_left_and_bought_together() {
+    let placed = PairState { mode: 1, price: 3 * SCALE / 2 + 1, ..pair_order(1, true) };
+    let after = |sold: i64, extra: i64| PairState {
+        amount_left: placed.amount_left - sold,
+        custody: placed.amount_left - sold,
+        bought: placed.t_out_min(sold, placed.price).unwrap() + extra,
+        ..placed.clone()
+    };
+    let c = recover::candidates(TemplateId::KobPair, &[AnyState::KobPair(placed.clone())], &[6 * SCALE]);
+    for extra in [0, 1, 3] {
+        let want = AnyState::KobPair(after(4 * SCALE, extra));
+        assert!(c.iter().any(|c| c.state == want && c.via == VIA_HINT), "bought + {extra}");
+    }
+    // A pair bid's bought moves by n, which the hint grid already covers; a mode-0 sell has no bought.
+    let mode0 = AnyState::KobPair(pair_order(1, true));
+    assert!(recover::candidates(TemplateId::KobPair, &[mode0], &[6 * SCALE])
+        .iter()
+        .all(|c| c.state.delivery().is_none_or(|d| d.bought == 0)));
+}
+
 /// An order under a retired template of the cancel-only table (`KobBid` b995661f).
 ///
 /// `kob cancel` (from the single-order view of the indexer, `cancel_only`) and

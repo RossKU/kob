@@ -158,7 +158,9 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
 - Mainnet has no KOB orders under older templates, so there is **no migration window on mainnet**.
 - On TN10, orders under the templates of the cancel-only table (`docs/spec/template-retirement.md`) can only be cancelled by
   their makers. No keeper refunds or kills them.
-- An executor with another generation does not see this release's orders. Compare `template_generation` after the upgrade.
+- `template_generation` hashes the lock template too, so it differs from `113cd9b8b119cdaf` although no order template changed.
+  An executor with other **order** templates does not see this release's orders: compare `template_generation` after the
+  upgrade, and on a mismatch the `templates` of `deployment.json`.
 
 ## Changes for wallets, bots and CLI users
 

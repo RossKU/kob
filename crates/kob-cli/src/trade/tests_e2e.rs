@@ -1039,7 +1039,6 @@ fn planned(intent: crate::trade::plan::Intent, pair: bool) -> (AnyState, u64) {
             }],
             quote: b,
             kas_per_whole_a: Some(3 * KAS as i64),
-            kas_per_whole_b: Some(KAS as i64 / 5),
         }),
         delivery: Default::default(),
     };
@@ -1699,4 +1698,24 @@ fn every_trading_command_refuses_a_fee_above_the_ceiling_unless_allowed() {
     assert_eq!(m.submitted(), before, "nothing sent");
     assert_eq!(run(crate::trade::merge::run, m.args(0x11, &format!("TST {high} --allow-high-fee --yes --wait-secs 0"))), 0);
     assert_eq!(m.submitted(), 2);
+}
+
+/// R2D-3: the quote token B of a pair order is gated as token A is. BBB's decimals come from the indexer alone (no registry
+/// entry, no declaration), and the pair price and every B amount read with them, so a pair order needs `--quote-decimals`
+/// with the same value: otherwise nothing is signed.
+#[test]
+fn a_pair_whose_quote_decimals_come_from_the_indexer_alone_is_refused() {
+    let w = world_x("pair-quote-decimals", &[], with_b);
+    let place = crate::trade::place::run;
+    let sell = "limit --token TST --quote BBB --side sell --amount 1TST --price 2BBB --yes --decimals 3";
+    assert_eq!(run(place, w.args(0x11, sell)), 1);
+    assert_eq!(run(place, w.args(0x11, &format!("{sell} --quote-decimals 4"))), 1, "another scale than the indexer's");
+    assert_eq!(w.submitted(), 0);
+    assert_eq!(run(place, w.args(0x11, &format!("{sell} --quote-decimals 2"))), 0);
+    assert_eq!(w.submitted(), 1);
+    // only for a pair
+    assert_eq!(
+        run(place, w.args(0x11, "limit --token TST --side sell --amount 1TST --price 2KAS --yes --decimals 3 --quote-decimals 2")),
+        1
+    );
 }

@@ -940,6 +940,18 @@ fn kcc20_leader_next_states(sigscript: &[u8]) -> Option<(TemplateId, Vec<Kcc20St
     Some((id, kob_protocol::kcc20::transfer_next_states(tpl, sigscript)?))
 }
 
+/// Whether the ORDER record `r` can place an order in `tx`: its output carries the script of its
+/// state under its pinned template, with a covenant binding (`payload::placement_target`). One
+/// that cannot is no placement whatever else holds, so it neither forces work nor stays in the log
+/// unbounded (R2C-M2).
+pub fn places_order(tx: &Tx, r: &Record) -> bool {
+    let Some((o, spk)) = payload::placement_target(r) else { return false };
+    tx.outputs.get(o).is_some_and(|out| {
+        let s = &out.script_public_key.0;
+        out.covenant.is_some() && s.len() == spk.script().len() + 2 && s[..2] == spk.version().to_be_bytes() && s[2..] == *spk.script()
+    })
+}
+
 /// The P2PK script spent by the first input of `tx` that is signed by a lone signature.
 ///
 /// That is the submitter's own funds. The input is picked by its signature script, which the
@@ -1009,6 +1021,7 @@ impl Extractor<'_> {
         // five-byte stand-in that the processor rejects.
         let mut kept: Vec<Record> = vec![];
         let mut undecodable = false;
+        let mut junk_placement = false;
         if has_kob1 {
             match payload::decode(&tx.payload.0) {
                 Ok(Some(p)) => {
@@ -1019,7 +1032,13 @@ impl Extractor<'_> {
                     let newer_release = payload::release_of(&p).filter(|r| r.is_newer_than_build());
                     for r in p.records {
                         if let Record::Order { template: t, state, .. } = &r {
-                            relevant = true;
+                            // A record no output of the transaction carries is junk, recorded
+                            // within the bound of undecodable payloads below (R2C-M2).
+                            if places_order(tx, &r) {
+                                relevant = true;
+                            } else {
+                                junk_placement = true;
+                            }
                             if let Ok(s) = AnyState::decode(*t, state) {
                                 payload_tokens.insert(Hash32(s.token_cov_id()));
                                 if let Some(p) = s.pair_tokens() {
@@ -1163,9 +1182,12 @@ impl Extractor<'_> {
         // would be a record of the permanent log for good. So only [`MAX_UNDECODABLE_IN_WINDOW`] of
         // them are recorded per reorg window, and the others are counted in a log line (security
         // review 2026-11-19 K-L6). One relevant for another reason is recorded, and rejected, as before.
-        if undecodable && !relevant {
+        // An ORDER record that no output carries is the same junk: kept only within that bound,
+        // and stored as the stand-in (R2C-M2).
+        if (undecodable || junk_placement) && !relevant {
             if undecodable_room(self.conn)? {
                 relevant = true;
+                undecodable = true;
             } else {
                 note_unrecorded(&txid);
             }

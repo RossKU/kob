@@ -21,7 +21,15 @@ rem answer is harmless.
 rem
 rem Each restart is noted in kobd-supervise.log next to this file; why kobd stopped is in its own log (kobd.log).
 setlocal EnableExtensions DisableDelayedExpansion
-cd /d "%~dp0"
+rem Windows programs by their full path, and no search of the current folder for a bare name: another account that can
+rem create a file next to this script must not get a planted powershell.exe, ping.exe or timeout.exe run as the operator
+rem (audit 2026-11-23 R2D-2). No `cd` into this folder either: kobd changes to its configuration's folder itself.
+set "NoDefaultCurrentDirectoryInExePath=1"
+set "SYS=%SystemRoot%\System32"
+if not defined SystemRoot set "SYS=C:\Windows\System32"
+set "POWERSHELL=%SYS%\WindowsPowerShell\v1.0\powershell.exe"
+set "PING=%SYS%\PING.EXE"
+set "TIMEOUT=%SYS%\timeout.exe"
 set "KOBD=%~dp0kobd.exe"
 set "SUPLOG=%~dp0kobd-supervise.log"
 set "STOPFILE=%~dp0kobd-supervise.stop"
@@ -49,7 +57,7 @@ echo %DATE% %TIME% kobd exited with status %CODE% after %RAN% s; starting it aga
 echo kobd exited with status %CODE%; starting it again in %DELAY% s (Ctrl+C to stop).
 rem ping waits without a console too (timeout.exe refuses to run when its input is not one, as under Task Scheduler)
 set /a PINGS=DELAY+1
-ping -n %PINGS% 127.0.0.1 >nul
+"%PING%" -n %PINGS% 127.0.0.1 >nul
 if exist "%STOPFILE%" goto stopped
 set /a DELAY=DELAY*2
 if %DELAY% GTR 300 set DELAY=300
@@ -60,7 +68,7 @@ echo kobd failed 5 times in a row within 30 s of its start: not started again. S
 rem a double-clicked window would close at once: keep it for a minute (timeout.exe refuses to wait without a console, as
 rem under Task Scheduler, so a scheduled run ends at once)
 echo This window closes in 60 s (press a key to close it now).
-timeout /t 60 >nul 2>&1
+"%TIMEOUT%" /t 60 >nul 2>&1
 exit /b %CODE%
 :stopped
 echo %DATE% %TIME% kobd exited with status %CODE% and kobd-supervise.stop is there: not started again>>"%SUPLOG%"
@@ -73,5 +81,5 @@ rem The Unix time in seconds into the variable named %1 (0 when PowerShell canno
 rem no start counts as rapid).
 :now
 set "%~1=0"
-for /f "usebackq delims=" %%s in (`powershell -NoProfile -NonInteractive -Command "[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()" 2^>nul`) do set "%~1=%%s"
+for /f "usebackq delims=" %%s in (`call "%POWERSHELL%" -NoProfile -NonInteractive -Command "[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()" 2^>nul`) do set "%~1=%%s"
 exit /b 0

@@ -83,6 +83,8 @@ AMOUNTS (always with a unit; never rounded)
                  is refused). This machine keeps them for the next command until the indexer lists the order.
                  Also needed, with the same value, when only the indexer names the decimals and no order of the token
                  is confirmed on the node
+  --quote-decimals N  the same for the quote token B of a pair order (--quote): needed, with the indexer's value, when
+                 only the indexer names B's decimals, since the pair price and every B amount read with them
   WHEN           2026-10-20T00:00Z (UTC) or daa:N;   DURATION 30s, 5m or 300daa;   BPS 3% or 300bps
 
 SAFETY
@@ -137,6 +139,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--exit-slippage",
     "--repeat-count",
     "--decimals",
+    "--quote-decimals",
     "--floor-price",
     "--delivery",
     "--topup-tip",
@@ -146,8 +149,18 @@ const BOOL_FLAGS: &[&str] = &["--day", "--all-or-nothing", "--ack-no-guards", "-
 /// The options that every kind takes.
 ///
 /// `--decimals` is for the first order of a token without a registry entry and without orders.
-const ANY_KIND: &[&str] =
-    &["--token", "--quote", "--side", "--amount", "--tip", "--carrier", "--ack-no-guards", "--ack-market-start", "--decimals"];
+const ANY_KIND: &[&str] = &[
+    "--token",
+    "--quote",
+    "--side",
+    "--amount",
+    "--tip",
+    "--carrier",
+    "--ack-no-guards",
+    "--ack-market-start",
+    "--decimals",
+    "--quote-decimals",
+];
 const LIFE: &[&str] = &["--gtd", "--day", "--active-from"];
 const STOP_KNOBS: &[&str] = &["--min-touch", "--band", "--keeper-tip", "--min-rest"];
 const TRAIL: &[&str] = &["--trail-step", "--trail-gap", "--trail-wait", "--trail-updates"];
@@ -623,10 +636,14 @@ pub type PlaceEnv = (Env, TokenMarket, Option<TokenMarket>, Vec<Issue>);
 pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<PlaceEnv, String> {
     let indexer = c.need_indexer()?.to_string();
     let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(&indexer))?;
-    let entered = p
-        .get("--decimals")
-        .map(|v| v.parse::<u32>().map_err(|_| format!("--decimals must be a whole number from 0 to 9, got `{v}`")))
-        .transpose()?;
+    let decimals_of = |flag: &str| {
+        p.get(flag).map(|v| v.parse::<u32>().map_err(|_| format!("{flag} must be a whole number from 0 to 9, got `{v}`"))).transpose()
+    };
+    let entered = decimals_of("--decimals")?;
+    let quote_entered = decimals_of("--quote-decimals")?;
+    if quote_entered.is_some() && p.get("--quote").is_none() {
+        return Err("--quote-decimals is for the quote token of a pair order (--quote)".into());
+    }
     let order_scale = |cov: &[u8; 32]| data::order_scale(&indexer, cov);
     let remembered = |cov: &[u8; 32]| crate::recent::first_order_decimals(&c.network, cov);
     let declaration = |cov: &[u8; 32]| data::declaration(&indexer, cov);
@@ -640,7 +657,7 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<Pl
     };
     let mut a = market::resolve_with(p.get("--token").ok_or("--token is required")?, &reg, &idx, Some(&open(entered)))?;
     let mut b = match p.get("--quote") {
-        Some(q) => Some(market::resolve_with(q, &reg, &idx, Some(&open(None)))?),
+        Some(q) => Some(market::resolve_with(q, &reg, &idx, Some(&open(quote_entered)))?),
         None => None,
     };
     // A commitment that no source names is the one that the own holdings of the wallet for the
@@ -663,16 +680,20 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<Pl
     // price it 10^k off. An order on the node at the indexer's scale does not confirm them, since
     // whoever lies about them can place that order (audit 2026-11-23 B2-M5). `--decimals N`, which
     // `resolve_with` has checked against them, confirms them; without it nothing is signed.
-    let indexer_only = a.listing == market::Listing::Unlisted
-        && matches!(a.decimals_from, market::DecimalsFrom::Lists | market::DecimalsFrom::Market);
-    if entered.is_none() && indexer_only {
+    // The quote token B of a pair the same: the pair price is in base units of B, and every B
+    // amount reads with its decimals (R2D-3). `--quote-decimals N` confirms them.
+    let indexer_only = |m: &TokenMarket| {
+        m.listing == market::Listing::Unlisted && matches!(m.decimals_from, market::DecimalsFrom::Lists | market::DecimalsFrom::Market)
+    };
+    for (m, given, flag) in [(Some(&a), entered, "--decimals"), (b.as_ref(), quote_entered, "--quote-decimals")] {
+        let Some(m) = m.filter(|m| given.is_none() && indexer_only(m)) else { continue };
         return Err(format!(
             "{}: its decimals ({}) come from the indexer alone (no registry entry, no KCC-23 declaration), and every \
              amount and price reads with them (an order on the node at that scale does not confirm them: anyone can place \
-             one): check them, then give `--decimals {}` to confirm them; nothing signed",
-            a.name(),
-            a.decimals,
-            a.decimals
+             one): check them, then give `{flag} {}` to confirm them; nothing signed",
+            m.name(),
+            m.decimals,
+            m.decimals
         ));
     }
     notes.extend(found);
@@ -848,12 +869,7 @@ pub fn env_sized(
                     .or(data::last_fill(&indexer, m).ok().flatten())
             };
             let quote_utxos = if needs.b { data::token_utxos(&indexer, &node, &c.network, bm, &maker)? } else { vec![] };
-            (
-                book,
-                own,
-                None,
-                Some(PairPart { quote: bm.clone(), quote_utxos, kas_per_whole_a: kas_of(a), kas_per_whole_b: kas_of(bm) }),
-            )
+            (book, own, None, Some(PairPart { quote: bm.clone(), quote_utxos, kas_per_whole_a: kas_of(a) }))
         }
     };
     let env = Env {

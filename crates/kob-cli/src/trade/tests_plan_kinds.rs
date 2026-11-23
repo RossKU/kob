@@ -540,7 +540,6 @@ fn pair_env(a: &TokenMarket, b: &TokenMarket) -> Env {
             quote: b.clone(),
             quote_utxos: vec![token_utxo(b, 3, 1_000_000 * b.scale)],
             kas_per_whole_a: Some(3 * KAS),
-            kas_per_whole_b: Some(KAS / 5),
         }),
         ..env(a)
     }
@@ -1269,11 +1268,9 @@ fn a_pair_market_buy_always_needs_the_acknowledgement() {
         all_or_nothing: false,
         floor: None,
     });
-    for kas_per_whole_b in [Some(1), Some(KAS / 5), None] {
-        e.pair.as_mut().unwrap().kas_per_whole_b = kas_per_whole_b;
-        let p = plan_order(&e, &buy);
-        assert!(!p.ok && codes(&p).contains(&"MARKET_START_UNVERIFIED"), "{kas_per_whole_b:?}: {:?}", codes(&p));
-    }
+    // whatever B is worth in KAS: a pair market start has no KAS value to bound it
+    let p = plan_order(&e, &buy);
+    assert!(!p.ok && codes(&p).contains(&"MARKET_START_UNVERIFIED"), "{:?}", codes(&p));
     e.market_start_ack = true;
     let p = plan_order(&e, &buy);
     assert!(p.ok && codes(&p).contains(&"MARKET_START_UNVERIFIED_ACKNOWLEDGED"), "{:?}", p.issues);

@@ -475,70 +475,123 @@ pub fn trustee_names(trustees: &[String]) -> String {
     trustees.iter().map(|t| trustee_name(t)).collect::<Vec<_>>().join(", ")
 }
 
-/// Whether an SDDL access-rights field grants reading the file's data.
+/// The access mask of an SDDL access-rights field, `None` when it does not parse.
 ///
-/// The field is an alias (`FA` file all, `FR` file read, `GA` generic all, `GR` generic read) or a
-/// hexadecimal mask with FILE_READ_DATA (0x1), GENERIC_READ (0x80000000) or GENERIC_ALL
-/// (0x10000000). An unparsable mask counts as read, which fails towards the warning.
-fn grants_read(rights: &str) -> bool {
+/// The field is a hexadecimal mask or two-letter rights, concatenated. icacls writes specific
+/// rights without SYNCHRONIZE as the directory-service letters (`(RD)` as `CC`, `(WD)` as `DC`,
+/// `(AD)` as `LC`, `(DC)` as `DT`), so every letter of the SDDL table is read, not only the file
+/// aliases (R2D-4).
+fn rights_mask(rights: &str) -> Option<u32> {
     if let Some(hex) = rights.strip_prefix("0x").or_else(|| rights.strip_prefix("0X")) {
-        return u32::from_str_radix(hex, 16).map(|m| m & (0x1 | 0x8000_0000 | 0x1000_0000) != 0).unwrap_or(true);
+        return u32::from_str_radix(hex, 16).ok();
     }
-    // two-letter aliases, concatenated
-    rights.as_bytes().chunks(2).any(|c| matches!(c, b"FA" | b"FR" | b"GA" | b"GR"))
+    if rights.is_empty() || !rights.len().is_multiple_of(2) {
+        return None;
+    }
+    rights.as_bytes().chunks(2).try_fold(0u32, |m, c| {
+        let bits: u32 = match c.to_ascii_uppercase().as_slice() {
+            b"GA" => 0x1000_0000,
+            b"GX" => 0x2000_0000,
+            b"GW" => 0x4000_0000,
+            b"GR" => 0x8000_0000,
+            b"RC" => 0x2_0000,
+            b"SD" => 0x1_0000,
+            b"WD" => 0x4_0000,
+            b"WO" => 0x8_0000,
+            b"CC" => 0x1,
+            b"DC" => 0x2,
+            b"LC" => 0x4,
+            b"SW" => 0x8,
+            b"RP" => 0x10,
+            b"WP" => 0x20,
+            b"DT" => 0x40,
+            b"LO" => 0x80,
+            b"CR" => 0x100,
+            b"FA" | b"KA" => 0x1f_01ff,
+            b"FR" => 0x12_0089,
+            b"FW" => 0x12_0116,
+            b"FX" => 0x12_00a0,
+            b"KR" => 0x2_0019,
+            b"KW" => 0x2_0006,
+            b"KX" => 0x2_0019,
+            _ => return None,
+        };
+        Some(m | bits)
+    })
 }
+
+/// FILE_READ_DATA, GENERIC_READ and GENERIC_ALL.
+const READ_BITS: u32 = 0x1 | 0x8000_0000 | 0x1000_0000;
+
+/// Writing or appending data (in a folder: adding a file or a folder), deleting the object or a
+/// child, changing its ACL or owner, GENERIC_WRITE and GENERIC_ALL.
+const WRITE_BITS: u32 = 0x2 | 0x4 | 0x40 | 0x1_0000 | 0x4_0000 | 0x8_0000 | 0x4000_0000 | 0x1000_0000;
 
 /// The other accounts an SDDL DACL lets read the file.
 ///
-/// These are the trustees of every access-ALLOWED ACE (`A`) that grants read access, other than
-/// `me` (the SID of the account that runs the executor), SYSTEM, Administrators and the owner
-/// placeholders ([`OWN_TRUSTEES`]). Everyone, Users and the like count, and so does any named
-/// account or group. With `me` unknown (`None`) every full SID counts as another account. Deny ACEs
-/// are ignored.
+/// These are the trustees whose access-ALLOWED ACEs (`A`, inherited ones included) grant read
+/// access ([`rights_mask`]), less what access-DENIED ACEs (`D`) of the same trustee take away,
+/// other than `me` (the SID of the account that runs the executor), SYSTEM, Administrators and the
+/// owner placeholders ([`OWN_TRUSTEES`]). Everyone, Users and the like count, and so does any
+/// named account or group. With `me` unknown (`None`) every full SID counts as another account.
+/// An owner (`O:`) that is another account counts too, since an owner can always rewrite the ACL
+/// (R2D-4). An allow mask that does not parse counts as every right, a deny mask as none, which
+/// fails towards the refusal.
 ///
 /// The function is pure text. The platform-specific part only fetches the SDDL.
 pub fn sddl_readable_by_others(sddl: &str, me: Option<&str>) -> Vec<String> {
-    sddl_granted_to_others(sddl, me, grants_read)
+    sddl_granted_to_others(sddl, me, READ_BITS)
 }
 
-/// Whether an SDDL access-rights field grants changing the object: writing or appending its data
-/// (in a folder: adding a file or a folder), deleting it or a child, or changing its ACL or owner.
-///
-/// The field is an alias (`FA`, `FW`, `GA`, `GW`, `SD` delete, `WD` write DAC, `WO` write owner) or
-/// a hexadecimal mask with one of those bits (0x2, 0x4, 0x40, 0x10000, 0x40000, 0x80000,
-/// GENERIC_WRITE 0x40000000, GENERIC_ALL 0x10000000). An unparsable mask counts as write.
-fn grants_write(rights: &str) -> bool {
-    const WRITE: u32 = 0x2 | 0x4 | 0x40 | 0x1_0000 | 0x4_0000 | 0x8_0000 | 0x4000_0000 | 0x1000_0000;
-    if let Some(hex) = rights.strip_prefix("0x").or_else(|| rights.strip_prefix("0X")) {
-        return u32::from_str_radix(hex, 16).map(|m| m & WRITE != 0).unwrap_or(true);
-    }
-    rights.as_bytes().chunks(2).any(|c| matches!(c, b"FA" | b"FW" | b"GA" | b"GW" | b"SD" | b"WD" | b"WO"))
-}
-
-/// The other accounts an SDDL DACL lets change the object ([`grants_write`]), by the rules of
+/// The other accounts an SDDL DACL lets change the object ([`WRITE_BITS`]), by the rules of
 /// [`sddl_readable_by_others`]. An inherit-only entry of a folder counts: it is what the files
 /// kobd creates there get.
 pub fn sddl_writable_by_others(sddl: &str, me: Option<&str>) -> Vec<String> {
-    sddl_granted_to_others(sddl, me, grants_write)
+    sddl_granted_to_others(sddl, me, WRITE_BITS)
 }
 
-fn sddl_granted_to_others(sddl: &str, me: Option<&str>, grants: fn(&str) -> bool) -> Vec<String> {
-    let Some(dacl) = sddl.find("D:").map(|i| &sddl[i + 2..]) else { return vec![] };
-    let dacl = dacl.split("S:").next().unwrap_or(dacl); // drop a SACL
+/// Whether `trustee` is the account running kobd or a privileged principal ([`OWN_TRUSTEES`]).
+fn own_trustee(trustee: &str, me: Option<&str>) -> bool {
+    OWN_TRUSTEES.iter().any(|t| t.eq_ignore_ascii_case(trustee))
+        || builtin_administrator(trustee)
+        || me.is_some_and(|m| m.eq_ignore_ascii_case(trustee))
+}
+
+/// The owner of an SDDL (`O:<sid or alias>`), if it names one.
+fn sddl_owner(sddl: &str) -> Option<&str> {
+    let rest = &sddl[sddl.find("O:")? + 2..];
+    let end = ["G:", "D:", "S:"].iter().filter_map(|k| rest.find(k)).min().unwrap_or(rest.len());
+    Some(rest[..end].trim()).filter(|o| !o.is_empty())
+}
+
+fn sddl_granted_to_others(sddl: &str, me: Option<&str>, wanted: u32) -> Vec<String> {
     let mut out = vec![];
-    for ace in dacl.split('(').skip(1) {
-        let ace = ace.split(')').next().unwrap_or("");
-        let f: Vec<&str> = ace.split(';').collect();
-        // type;flags;rights;object;inherit-object;trustee
-        if f.len() < 6 || f[0] != "A" {
-            continue;
+    if let Some(owner) = sddl_owner(sddl).filter(|o| !own_trustee(o, me)) {
+        out.push(owner.to_string());
+    }
+    if let Some(dacl) = sddl.find("D:").map(|i| &sddl[i + 2..]) {
+        let dacl = dacl.split("S:").next().unwrap_or(dacl); // drop a SACL
+        let mut allowed: std::collections::BTreeMap<String, u32> = Default::default();
+        let mut denied: std::collections::BTreeMap<String, u32> = Default::default();
+        for ace in dacl.split('(').skip(1) {
+            let ace = ace.split(')').next().unwrap_or("");
+            let f: Vec<&str> = ace.split(';').collect();
+            // type;flags;rights;object;inherit-object;trustee
+            if f.len() < 6 {
+                continue;
+            }
+            let trustee = f[5].trim().to_ascii_uppercase();
+            match f[0] {
+                "A" => *allowed.entry(trustee).or_default() |= rights_mask(f[2]).unwrap_or(u32::MAX),
+                "D" => *denied.entry(trustee).or_default() |= rights_mask(f[2]).unwrap_or(0),
+                _ => {}
+            }
         }
-        let trustee = f[5].trim();
-        let own = OWN_TRUSTEES.iter().any(|t| t.eq_ignore_ascii_case(trustee))
-            || builtin_administrator(trustee)
-            || me.is_some_and(|m| m.eq_ignore_ascii_case(trustee));
-        if !own && grants(f[2]) {
-            out.push(trustee.to_string());
+        for (trustee, mask) in allowed {
+            let deny = denied.get(&trustee).copied().unwrap_or(0);
+            if !own_trustee(&trustee, me) && mask & !deny & wanted != 0 {
+                out.push(trustee);
+            }
         }
     }
     out.sort();
@@ -599,6 +652,134 @@ fn check_permissions(path: &Path) -> Result<(), KeyError> {
     Ok(())
 }
 
+/// The owner of a file or folder as a SID string (`GetNamedSecurityInfoW`), `None` when it cannot
+/// be read. `icacls /save` leaves the owner out, and an owner can always rewrite the ACL (R2D-4).
+#[cfg(windows)]
+fn windows_owner(path: &Path) -> Option<String> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr::null_mut;
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn GetNamedSecurityInfoW(
+            name: *const u16,
+            object_type: u32,
+            info: u32,
+            owner: *mut *mut c_void,
+            group: *mut *mut c_void,
+            dacl: *mut *mut c_void,
+            sacl: *mut *mut c_void,
+            descriptor: *mut *mut c_void,
+        ) -> u32;
+        fn ConvertSidToStringSidW(sid: *mut c_void, out: *mut *mut u16) -> i32;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn LocalFree(mem: *mut c_void) -> *mut c_void;
+    }
+    const SE_FILE_OBJECT: u32 = 1;
+    const OWNER_SECURITY_INFORMATION: u32 = 1;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let (mut owner, mut descriptor): (*mut c_void, *mut c_void) = (null_mut(), null_mut());
+    // SAFETY: the wide path is NUL-terminated and lives for the call. The owner points into the
+    // descriptor, which the call allocates and LocalFree releases below.
+    let rc = unsafe {
+        GetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            &mut descriptor,
+        )
+    };
+    let mut text: *mut u16 = null_mut();
+    // SAFETY: `owner` is a SID inside the live descriptor; the string is allocated by the call.
+    let ok = rc == 0 && !owner.is_null() && unsafe { ConvertSidToStringSidW(owner, &mut text) } != 0 && !text.is_null();
+    let sid = ok.then(|| {
+        // SAFETY: a NUL-terminated UTF-16 string from ConvertSidToStringSidW.
+        let len = (0..).take_while(|&i| unsafe { *text.add(i) } != 0).count();
+        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, len) })
+    });
+    // SAFETY: both were allocated by the calls above (or are null, which LocalFree accepts).
+    unsafe {
+        LocalFree(text.cast());
+        LocalFree(descriptor);
+    }
+    sid
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn windows_owner(_path: &Path) -> Option<String> {
+    None
+}
+
+/// Whether the account running kobd (or a privileged principal: SYSTEM, Administrators) owns
+/// `path`. `None` when it cannot be told. A key file another account owns may have been planted
+/// by it, with a secret it knows (R2D-5).
+pub fn owned_by_me(path: &Path) -> Option<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: getuid has no preconditions.
+        let me = unsafe { libc::getuid() };
+        std::fs::symlink_metadata(path).ok().map(|m| m.uid() == me)
+    }
+    #[cfg(not(unix))]
+    {
+        let owner = windows_owner(path)?;
+        let me = current_sid();
+        Some(own_trustee(&owner, me.as_deref()))
+    }
+}
+
+/// The command that leaves `path` changeable by the account running kobd, SYSTEM and
+/// Administrators only (by SID, whatever the language of Windows), with no inherited rights. On
+/// Unix: no write for group and others.
+pub fn owner_only_fix(path: &Path) -> String {
+    let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    #[cfg(unix)]
+    {
+        format!("chmod go-w \"{}\"", abs.display())
+    }
+    #[cfg(not(unix))]
+    {
+        let me = current_account().unwrap_or_else(|| "<your account>".into());
+        let inherit = if abs.is_dir() { "(OI)(CI)" } else { "" };
+        format!(
+            "icacls \"{}\" /inheritance:r /grant:r \"{me}:{inherit}F\" \"*S-1-5-18:{inherit}F\" \"*S-1-5-32-544:{inherit}F\"",
+            abs.display()
+        )
+    }
+}
+
+/// Windows: replaces the ACL of the folder `dir` by full control for the account running kobd,
+/// SYSTEM and Administrators (by SID), for it and everything in it, with no inherited entries
+/// ([`owner_only_fix`]). `kobd setup` runs it on the folder it writes (R2D-2), so that no other
+/// account can plant a program, a library or a key file there. Unix: nothing (the key file's own
+/// checks apply).
+pub fn restrict_folder(dir: &Path) -> Result<(), String> {
+    #[cfg(not(unix))]
+    {
+        let me = current_account().ok_or("cannot name the current account (whoami, USERNAME)")?;
+        let out = std::process::Command::new(system_program("icacls"))
+            .arg(dir)
+            .args(["/inheritance:r", "/grant:r"])
+            .arg(format!("{me}:(OI)(CI)F"))
+            .args(["*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"])
+            .output()
+            .map_err(|e| format!("icacls: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("icacls could not restrict {}: {}", dir.display(), String::from_utf8_lossy(&out.stdout).trim()));
+        }
+    }
+    #[cfg(unix)]
+    let _ = dir;
+    Ok(())
+}
+
 /// The SDDL of a file, from `icacls <file> /save <tmp>`. SDDL is locale-independent, unlike icacls'
 /// account names.
 #[cfg(not(unix))]
@@ -628,7 +809,12 @@ fn windows_acl_sddl(path: &Path) -> Option<String> {
     } else {
         String::from_utf8_lossy(&bytes).into_owned()
     };
-    text.lines().map(str::trim).find(|l| l.starts_with("D:")).map(str::to_string)
+    let dacl = text.lines().map(str::trim).find(|l| l.starts_with("D:"))?;
+    // The owner, which icacls leaves out, goes in front as SDDL has it.
+    Some(match windows_owner(path) {
+        Some(o) => format!("O:{o}{dacl}"),
+        None => dacl.to_string(),
+    })
 }
 
 impl Signer for HotKey {
@@ -749,7 +935,18 @@ mod tests {
         // no read bit (write attributes / synchronise only), a deny, a non-DACL section, a SACL
         assert!(others("D:(A;;0x100100;;;WD)").is_empty());
         assert!(others("D:(D;;FA;;;WD)").is_empty());
-        assert!(others("O:WDG:WD").is_empty());
+        // R2D-4: an owner that is another account can rewrite the ACL; the account itself or
+        // Administrators as owner is fine
+        assert_eq!(others("O:WDG:WD"), vec!["WD".to_string()]);
+        assert!(others("O:S-1-5-21-1-2-3-1001G:WDD:P(A;;FA;;;S-1-5-21-1-2-3-1001)").is_empty());
+        assert!(others("O:BAD:P(A;;FA;;;SY)").is_empty());
+        // R2D-4: icacls writes `(RD)` without SYNCHRONIZE as the letter CC (read data)
+        assert_eq!(others("D:P(A;;FA;;;SY)(A;;CC;;;WD)"), vec!["WD".to_string()]);
+        // a deny of the same trustee takes the right away; another trustee's does not
+        assert!(others("D:(D;;CC;;;WD)(A;;FR;;;WD)").is_empty());
+        assert_eq!(others("D:(D;;CC;;;BU)(A;;FR;;;WD)"), vec!["WD".to_string()]);
+        // inherited entries count
+        assert_eq!(others("D:AI(A;ID;FR;;;BU)"), vec!["BU".to_string()]);
         assert!(others("D:(A;;FA;;;SY)S:(A;;FR;;;WD)").is_empty());
         assert!(others("").is_empty());
         // an unparsable mask counts as read (fail towards the refusal)
@@ -773,6 +970,16 @@ mod tests {
             assert_eq!(w(&format!("D:(A;;{m};;;WD)")), vec!["WD".to_string()], "{m}");
         }
         assert!(w("D:(D;;FA;;;WD)").is_empty(), "a deny");
+        // R2D-4: the rights icacls writes as letters: (WD) add file DC, (AD) add folder LC, (DC) delete child DT, and
+        // generic write or all, write DAC or owner
+        for m in ["DC", "LC", "DT", "GW", "GA", "WDRC"] {
+            assert_eq!(w(&format!("{own}(A;;{m};;;AU)")), vec!["AU".to_string()], "{m}");
+        }
+        assert!(w(&format!("{own}(A;;CCSWRPLORC;;;AU)")).is_empty(), "read-only letters");
+        // a deny of the write bits of the same trustee
+        assert!(w(&format!("{own}(D;;DCLCDTSDWDWO;;;AU)(A;;DCLC;;;AU)")).is_empty());
+        // an owner that is another account
+        assert_eq!(w(&format!("O:AU{own}")), vec!["AU".to_string()]);
         assert_eq!(w("D:(A;;0xZZ;;;WD)"), vec!["WD".to_string()], "unparsable counts");
         assert_eq!(trustee_names(&w(&format!("{own}(A;ID;0x1301bf;;;AU)"))), "Authenticated Users");
     }

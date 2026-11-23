@@ -576,7 +576,6 @@ fn pair_limits_equal_the_golden_vectors() {
                 quote: b.clone(),
                 quote_utxos: vec![token_utxo(&b, 3, 1_000_000 * 1000)],
                 kas_per_whole_a: Some(3 * KAS),
-                kas_per_whole_b: None,
             }),
             ..env(&a)
         };

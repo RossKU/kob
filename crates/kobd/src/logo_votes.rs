@@ -277,6 +277,50 @@ pub fn token_created_daa(conn: &Connection, id: &Hash32) -> DbResult<Option<i64>
     Ok([declared, held, traded, quoted].into_iter().flatten().min())
 }
 
+/// Holdings of one owner and token that [`held_since_daa`] reads at most, newest first.
+pub const HELD_ROWS_MAX: i64 = 512;
+
+/// Since when (a DAA score) `key` has held the token `id` without a break, as far as the store
+/// can tell: the start of the longest unbroken line of its holdings that ends in one it holds
+/// now. `None`: it holds none now.
+///
+/// A holding spent by a transaction that creates another holding of the same owner and token (a
+/// merge, a send to itself, a partial sale that leaves the rest) continues the line. A holding
+/// that came by any other transaction starts a new one, so tokens received today (dust) or bought
+/// back after selling everything count from their arrival. A pruned row (lean store) breaks the
+/// line, which only makes the holding look younger. Reads at most [`HELD_ROWS_MAX`] rows of the
+/// owner's holdings of the token (the owner index), newest first.
+pub fn held_since_daa(conn: &Connection, id: &Hash32, key: &[u8; 32]) -> DbResult<Option<i64>> {
+    let ids = |h: &[u8]| -> DbResult<Option<i64>> {
+        Ok(conn.prepare_cached("SELECT id FROM ids WHERE h = ?1")?.query_row([h], |r| r.get(0)).optional()?)
+    };
+    let (Some(owner), Some(token)) = (ids(&key[..])?, ids(&id.0[..])?) else { return Ok(None) };
+    let rows: Vec<(i64, i64, Option<i64>)> = conn
+        .prepare_cached(
+            "SELECT tx_id, created_daa, spent_tx_id FROM token_holdings WHERE owner_id = ?1 AND token_id = ?2 \
+             ORDER BY created_block DESC LIMIT ?3",
+        )?
+        .query_map(params![owner, token, HELD_ROWS_MAX], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    // Newest first, so every row's parents (the holdings its creating transaction spent) come
+    // later: walk from the oldest and carry each line's start forward.
+    let mut start_of_tx: std::collections::HashMap<i64, i64> = Default::default();
+    let mut best: Option<i64> = None;
+    for &(tx, created, spent) in rows.iter().rev() {
+        let start = start_of_tx.get(&tx).copied().map_or(created, |s| s.min(created));
+        start_of_tx.entry(tx).and_modify(|s| *s = (*s).min(start)).or_insert(start);
+        match spent {
+            // Its spender continues the line only if it created a holding of the same owner and
+            // token, which the lookup below finds as a later row with that creating transaction.
+            Some(by) => {
+                start_of_tx.entry(by).and_modify(|s| *s = (*s).min(start)).or_insert(start);
+            }
+            None => best = Some(best.map_or(start, |b: i64| b.min(start))),
+        }
+    }
+    Ok(best)
+}
+
 /// The newest vote of `key` on `id`, if any.
 pub fn current_vote(conn: &Connection, id: &Hash32, key: &[u8; 32]) -> DbResult<Option<Vote>> {
     Ok(conn
@@ -607,14 +651,17 @@ impl LogoVotes {
             let (up, down) = totals_of(&conn)?;
             return Ok(Accepted { cast: Cast::Unchanged, up, down });
         }
-        // The history rule (founder decision 2026-11-23, audit C-M3): the address's first KOB
-        // history is at least `min_history_secs` old (default 7 days) AND older than the token,
-        // so keys made for a vote, or after the token they vote on, do not count.
+        // The history rule (founder decisions 2026-11-23, audit C-M3, R2C-M3): the address's
+        // first KOB history is at least `min_history_secs` old (default 7 days) AND older than the
+        // token, so keys made for a vote, or after the token they vote on, do not count. Or it has
+        // held this token without a break for as long, so holders can defend their own token's
+        // logo, and hiding a token's logo needs a week of holding it on several addresses.
         let first = first_history_daa(&conn, &key)?;
         let tip = store_tip_daa(&conn)?;
         let old = |f: i64| (tip.saturating_sub(f).max(0) as u64) / self.daa_per_second.max(1);
         let created = token_created_daa(&conn, &b.covenant_id)?;
-        let old_enough = first.is_some_and(|f| old(f) >= self.cfg.min_history_secs && created.is_some_and(|t| f < t));
+        let old_enough = first.is_some_and(|f| old(f) >= self.cfg.min_history_secs && created.is_some_and(|t| f < t))
+            || held_since_daa(&conn, &b.covenant_id, &key)?.is_some_and(|h| old(h) >= self.cfg.min_history_secs);
         if !old_enough {
             return Err(VoteError::NoHistory);
         }
@@ -929,6 +976,48 @@ mod tests {
         let c = svc.test_connection();
         assert_eq!(token_created_daa(&c, &T).unwrap(), Some(TOKEN_DAA));
         assert_eq!(token_created_daa(&c, &Hash32([0x55; 32])).unwrap(), None);
+    }
+
+    /// Founder decision 2026-11-23 (R2C-M3): an address younger than the token may still vote on its logo when it has
+    /// held the token without a break for 7 days. Dust received today does not count, nor do tokens bought back
+    /// yesterday after selling everything; a merge into a new output does not restart the clock.
+    #[test]
+    fn a_seven_day_holder_of_the_token_votes_on_its_logo() {
+        let (svc, _) = service(cfg());
+        const D: i64 = 864_000;
+        let c = svc.test_connection();
+        c.execute("INSERT OR IGNORE INTO ids (h) VALUES (?1)", [&T.0[..]]).unwrap();
+        c.execute("INSERT OR IGNORE INTO programs (id, name) VALUES (1, 'KCC20Ref_8x8')", []).unwrap();
+        let hold = |n: u8, tx: i64, daa: i64, spent_by: Option<i64>| {
+            let key = account(n).1;
+            c.execute("INSERT OR IGNORE INTO ids (h) VALUES (?1)", [&key[..]]).unwrap();
+            c.execute(
+                "INSERT INTO token_holdings (tx_id, idx, token_id, program_id, family, owner_id, owner_kind, amount, value, state, \
+                 role_code, created_block, created_daa, spent_block, spent_tx_id) VALUES (?1, 0, (SELECT id FROM ids WHERE h = ?2), 1, 1, \
+                 (SELECT id FROM ids WHERE h = ?3), 0, 5, 1000, x'00', 0, ?4, ?4, ?5, ?6)",
+                params![tx, &T.0[..], &key[..], daa, spent_by.map(|_| daa + 1), spent_by],
+            )
+            .unwrap();
+        };
+        // dust of the token today
+        hold(40, 400, TIP - 600, None);
+        // held since a moment after the token's genesis, eight days ago
+        hold(41, 410, TOKEN_DAA + 1, None);
+        // held then, sold everything (the sale made no holding of it), bought back yesterday
+        hold(42, 420, TOKEN_DAA + 1, Some(421));
+        hold(42, 422, TIP - D, None);
+        // held then, merged into a new output three days ago
+        hold(43, 430, TOKEN_DAA + 1, Some(431));
+        hold(43, 431, TIP - 3 * D, None);
+        drop(c);
+        assert!(matches!(svc.vote(ip(1), &ballot(40, T, Vote::Down, DAY, 8)), Err(VoteError::NoHistory)), "dust today");
+        assert!(matches!(svc.vote(ip(1), &ballot(42, T, Vote::Down, DAY, 8)), Err(VoteError::NoHistory)), "bought back");
+        assert_eq!(svc.vote(ip(2), &ballot(41, T, Vote::Up, DAY, 8)).unwrap().cast, Cast::Counted, "eight days");
+        assert_eq!(svc.vote(ip(3), &ballot(43, T, Vote::Up, DAY, 8)).unwrap().cast, Cast::Counted, "a merge keeps the clock");
+        let c = svc.test_connection();
+        assert_eq!(held_since_daa(&c, &T, &account(43).1).unwrap(), Some(TOKEN_DAA + 1));
+        assert_eq!(held_since_daa(&c, &T, &account(42).1).unwrap(), Some(TIP - D));
+        assert_eq!(held_since_daa(&c, &U, &account(41).1).unwrap(), None);
     }
 
     #[test]

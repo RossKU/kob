@@ -158,7 +158,9 @@ pub struct Failover<S: ChainSource> {
 
 /// A failed call that says the node is gone (not an answer such as an unknown hash).
 pub(crate) fn node_failure(e: &RpcError) -> bool {
-    matches!(e, RpcError::Transport(_) | RpcError::Timeout(_) | RpcError::Decode(_)) || e.kind() == NodeErrorKind::TransitionalIbd
+    matches!(e, RpcError::Transport(_) | RpcError::Timeout(_) | RpcError::Decode(_))
+        || e.kind() == NodeErrorKind::TransitionalIbd
+        || matches!(e, RpcError::Node(m) if m.starts_with(super::multi::AUTHORITY_BEHIND))
 }
 
 fn unix_ms() -> u64 {
@@ -589,6 +591,8 @@ mod tests {
         // an answer: the node is there
         assert!(!node_failure(&RpcError::Node("cannot find header 00".into())));
         assert!(!node_failure(&RpcError::TooLarge { size: 2, limit: 1 }));
+        // R2C-M1: an authority that withholds the chain the other node reports fails its request.
+        assert!(node_failure(&RpcError::Node(format!("{}: 100 chain blocks", super::super::multi::AUTHORITY_BEHIND))));
     }
 
     #[test]

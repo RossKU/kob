@@ -247,8 +247,9 @@ contract KobPair(
         require(tScale > 0);
         // The custody is known by its exact amount, so a stray or dust UTXO
         // sent to this id can never stand in for it. Settle refuses any other
-        // S input owned by this id. Strays are inert, and only the maker's
-        // cancel can move them.
+        // S input owned by this id. Such strays only the maker's cancel can
+        // move; a stray of a third token, or one owned by the order's script
+        // hash, is not guarded (docs/spec/order-types.md, Strays).
         require(held == custody);
         noStrays(sCovId, selfId, custIn, sOff);
 

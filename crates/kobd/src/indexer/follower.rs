@@ -147,6 +147,12 @@ pub const AUTHORITY_FAILURES: u32 = 2;
 /// is failing (module documentation).
 pub const AUTHORITY_STALL: Duration = Duration::from_secs(180);
 
+/// An idle poll (the authority reports nothing after the cursor) counts as progress for
+/// `/v1/health` only while the cursor's chain block is at most this old by the local clock
+/// (R2C-M1). The chain makes blocks every second, so a cursor this old is held back, whatever the
+/// node says; `stale` then turns on `STALE_AFTER_MS` later.
+pub const IDLE_CURSOR_MAX_AGE_MS: u64 = 10 * 60 * 1000;
+
 /// Settings of a [`Follower`].
 #[derive(Debug, Clone)]
 pub struct FollowerConfig {
@@ -288,6 +294,8 @@ pub struct Follower<S: ChainSource> {
     window: Mutex<BatchWindow>,
     /// The blue score of the cursor block, once known from a header or `getBlock`.
     cursor_blue: Mutex<Option<(Hash32, u64)>>,
+    /// The timestamp (Unix ms) of the cursor block, once a batch applied it.
+    cursor_ts: Mutex<Option<(Hash32, u64)>>,
     /// The windows fetched ahead of the cursor (parallel fetch).
     prefetch: tokio::sync::Mutex<Prefetch>,
     /// When the next pruning batch of lean storage or archive pruning is due. `None`: no pruning.
@@ -358,8 +366,18 @@ fn flag_runs(flags: &[bool], start: Hash32, hashes: &[Hash32]) -> Vec<(Hash32, u
             _ => runs.push((if i == 0 { start } else { hashes[i - 1] }, i, 1)),
         }
     }
+    // More runs than that are one span from the first flagged block to the last: the cross-check
+    // then asks at most MAX_BODY_RUNS requests per window, or one copy of the span (R2C-L2).
+    if runs.len() > MAX_BODY_RUNS {
+        let (before, first, _) = runs[0];
+        let (last, len) = runs.last().map(|r| (r.1, r.2)).expect("runs");
+        runs = vec![(before, first, last + len - first)];
+    }
     runs
 }
+
+/// Most runs of flagged chain blocks a window is re-read in ([`flag_runs`]).
+pub const MAX_BODY_RUNS: usize = 4;
 
 /// `ask` of each of `items`, at most `limit` in flight, the answers in the order of `items`.
 ///
@@ -420,6 +438,7 @@ impl<S: ChainSource> Follower<S> {
             last_status: Mutex::new(None),
             window,
             cursor_blue: Mutex::new(None),
+            cursor_ts: Mutex::new(None),
             prefetch,
             lean_next: Mutex::new(lean.then(std::time::Instant::now)),
             pace: Mutex::new((BackfillPace::default(), std::time::Instant::now())),
@@ -1469,6 +1488,7 @@ impl<S: ChainSource> Follower<S> {
         let n_txs: usize = batch.added.iter().map(|b| b.txs.len()).sum();
         let wire_bytes = batch.wire_bytes as u64;
         let last_blue = batch.added.last().map(|b| (b.header.hash, b.header.blue_score));
+        let last_ts = batch.added.last().map(|b| (b.header.hash, b.header.timestamp));
         let start = c.start;
         let t1 = std::time::Instant::now();
         let applied = self.blocking(move |i| i.apply_batch(start, &batch)).await;
@@ -1489,6 +1509,20 @@ impl<S: ChainSource> Follower<S> {
                 if let Some((h, b)) = blue.filter(|(h, _)| *h == a.cursor.hash) {
                     *self.cursor_blue.lock().unwrap_or_else(|e| e.into_inner()) = Some((h, b));
                 }
+                if let Some(t) = last_ts.filter(|(h, _)| *h == a.cursor.hash) {
+                    *self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()) = Some(t);
+                }
+                // An idle poll confirms the cursor at the sink only while the cursor block is
+                // recent: an authority that answers "nothing new" must not keep a frozen store
+                // looking current (R2C-M1). Unknown (no batch applied since the start): not
+                // confirmed.
+                let now = now_ms();
+                let moved = a.added > 0 || a.removed_hashes > 0;
+                let recent = self
+                    .cursor_ts
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_some_and(|(h, t)| h == a.cursor.hash && now.saturating_sub(t) <= IDLE_CURSOR_MAX_AGE_MS);
                 // Per-batch detail is logged at DEBUG (`RUST_LOG=kobd=debug`). The status line
                 // every `--status-secs` says how the indexer is doing, as kaspad's "Processed N
                 // blocks in the last 10s" does.
@@ -1541,8 +1575,11 @@ impl<S: ChainSource> Follower<S> {
                     }
                     h.last_error = None;
                     h.last_poll_unix_ms = now_ms();
-                    // Progress, or a poll that confirmed the cursor is at the sink of the node.
-                    h.last_progress_unix_ms = now_ms();
+                    // Progress, or a poll that confirmed the cursor is at the sink of the node
+                    // while the cursor block is recent. The first poll sets the baseline.
+                    if moved || recent || h.last_progress_unix_ms == 0 {
+                        h.last_progress_unix_ms = now;
+                    }
                     // A commit went through, so there is no storage error any more.
                     h.halt_reason = None;
                     if a.removed_hashes > 0 {
@@ -1941,6 +1978,20 @@ mod tests {
         assert!(after_first <= 5, "{after_first}");
         tokio::time::sleep(Duration::from_secs(1)).await;
         assert_eq!(asked.load(SeqCst), after_first, "an idle stream asks for nothing more");
+    }
+
+    /// R2C-L2: a flag every 5th chain block (cheap spam) gives one run each, so a window of
+    /// thousands would ask hundreds of cross-check requests. Past `MAX_BODY_RUNS` they are one span.
+    #[test]
+    fn flagged_runs_are_bounded_per_window() {
+        use super::flag_runs;
+        use crate::hex::Hash32;
+        let hashes: Vec<Hash32> = (0..2000u32).map(|i| Hash32([(i % 251) as u8; 32])).collect();
+        let few: Vec<bool> = (0..2000).map(|i| i == 10 || i == 500).collect();
+        assert_eq!(flag_runs(&few, Hash32([0xee; 32]), &hashes), vec![(hashes[9], 10, 1), (hashes[499], 500, 1)]);
+        let spam: Vec<bool> = (0..2000).map(|i| i % 5 == 2).collect();
+        let runs = flag_runs(&spam, Hash32([0xee; 32]), &hashes);
+        assert_eq!(runs, vec![(hashes[1], 2, 1996)], "one span from the first flagged block to the last");
     }
 
     #[test]

@@ -11,8 +11,10 @@
 //! A transaction can matter when one of these holds. Only the parts the hashes cover and the
 //! store decide it, never the other node alone.
 //!
-//! - Its payload is a KOB1 payload with a placement, amend or sweep record. One that does not
-//!   decode, or holds only informational records, is read from the payload alone.
+//! - Its payload is a KOB1 payload with a placement record whose output carries the record's
+//!   order script under a covenant binding (`record::places_order`). Any other KOB1 payload is
+//!   read from the payload alone. An amend or a sweep acts only next to a tracked order input,
+//!   which makes it matter by the next rule.
 //! - An input spends an output the store tracks (an order, a token output or a holding), or an
 //!   output of such a transaction earlier in the same window.
 //! - An output carries the covenant binding of a token that some order trades or the allowlist
@@ -116,7 +118,7 @@ impl TrustContext {
             .map(|b| {
                 let mut any = vec![];
                 for (k, t) in b.accepted_transactions.iter().enumerate() {
-                    let matters = places(&t.payload.0)
+                    let matters = places(t)
                         || t.inputs.iter().any(|i| {
                             let op = (i.previous_outpoint.transaction_id, i.previous_outpoint.index);
                             self.outpoints.contains(&op) || created.contains(&op)
@@ -137,19 +139,20 @@ impl TrustContext {
     }
 }
 
-/// Whether a payload is a KOB1 payload with a placement, amend or sweep record.
+/// Whether `t` holds a KOB1 placement record that one of its outputs carries
+/// ([`super::record::places_order`]).
 ///
-/// Those records are read with the transaction's signature scripts (the leaders of the custody
-/// outputs). A KOB1 payload that does not decode, or holds only informational records, is read
-/// from the payload alone, which the transaction id covers. So it needs no merged block fetched,
-/// and spam with the magic costs the follower nothing more than any other transaction (C-M4).
-fn places(payload: &[u8]) -> bool {
-    use kob_protocol::payload::{decode, Record, MAGIC};
+/// A placement is read with the transaction's signature scripts (the leaders of the custody
+/// outputs). Any other KOB1 payload is read from the payload alone, which the transaction id
+/// covers, so it needs no merged block fetched: spam with the magic, or with a record that decodes
+/// (a 12-byte sweep, an order record no output carries), costs the follower nothing more than any
+/// other transaction (C-M4, R2C-M2). An amend or a sweep is read only next to a tracked order
+/// input, which matters by its outpoint.
+fn places(t: &crate::rpc::types::Tx) -> bool {
+    use kob_protocol::payload::{decode, MAGIC};
+    let payload = &t.payload.0;
     payload.starts_with(MAGIC)
-        && decode(payload)
-            .ok()
-            .flatten()
-            .is_some_and(|p| p.records.iter().any(|r| matches!(r, Record::Order { .. } | Record::Amend { .. } | Record::Sweep { .. })))
+        && decode(payload).ok().flatten().is_some_and(|p| p.records.iter().any(|r| super::record::places_order(t, r)))
 }
 
 #[cfg(test)]
@@ -213,24 +216,51 @@ mod tests {
         assert_eq!(ctx.flag(&blocks), [true, false, true, true]);
     }
 
-    /// C-M4: the KOB1 magic alone does not make a transaction matter. A payload that does not
-    /// decode, or holds only a note, is read from the payload; a sweep (or a placement, an amend)
-    /// is read with the signature scripts and matters.
+    /// C-M4, R2C-M2: neither the KOB1 magic nor a record that decodes makes a transaction matter.
+    /// A payload that does not decode, a note, a sweep (no tracked input), an order record on a
+    /// transaction whose output does not carry its script, or carries it without a covenant
+    /// binding, are read from the payload alone; a placement its output carries matters.
     #[test]
-    fn only_a_decoded_placement_amend_or_sweep_payload_matters() {
+    fn only_a_placement_its_output_carries_matters() {
         use kob_protocol::payload::{encode, Record, MAGIC};
+        use kob_protocol::state::AnyState;
         let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
         let with = |payload: Vec<u8>| {
             let mut t = tx(0xb1, vec![input(0x55, 0)], None);
             t.payload = crate::hex::HexBytes(payload);
             block(vec![t])
         };
+        let b = crate::testkit::bid(1, 250_000_000);
+        let state = AnyState::KobBid(b.clone());
+        let id = state.template_id();
+        let order = Record::Order {
+            output: 0,
+            family: state.family().code(),
+            template: id,
+            template_hash: kob_protocol::artifacts::template(id).hash,
+            state: state.encode(),
+            custody: None,
+            prefund: None,
+            deadline: None,
+        };
+        let carried = |cov: Option<u8>, s: &AnyState| {
+            let spk = s.spk();
+            let mut t = tx(0xb2, vec![input(0x56, 0)], cov);
+            t.outputs[0].script_public_key = crate::hex::HexBytes([&spk.version().to_be_bytes()[..], spk.script()].concat());
+            t.payload = crate::hex::HexBytes(encode(std::slice::from_ref(&order)).unwrap());
+            block(vec![t])
+        };
+        let other = AnyState::KobBid(kob_protocol::state::BidState { price: b.price + 1, ..b });
         let blocks = vec![
             with([&MAGIC[..], &[0xff; 40]].concat()),
             with(encode(&[Record::Note { text: "hi".into() }]).unwrap()),
             with(encode(&[Record::Sweep { output: 0, input: 0 }]).unwrap()),
+            with(encode(std::slice::from_ref(&order)).unwrap()),
+            carried(None, &state),
+            carried(Some(0x99), &other),
+            carried(Some(0x99), &state),
         ];
         let ctx = TrustContext::load(&conn, Arc::new(TokenAllowlist::from_entries([])), &WindowKeys::of(&blocks)).unwrap();
-        assert_eq!(ctx.flag(&blocks), [false, false, true]);
+        assert_eq!(ctx.flag(&blocks), [false, false, false, false, false, false, true]);
     }
 }

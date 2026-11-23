@@ -30,9 +30,9 @@ next to it.
 
 ```
 # Linux                                         # Windows (PowerShell)
-mkdir ~/kob-tn10                                mkdir C:\kob-tn10
-cp target/release/kobd ~/kob-tn10/              copy target\release\kobd.exe C:\kob-tn10\
-cd ~/kob-tn10                                   cd C:\kob-tn10
+mkdir ~/kob-tn10                                mkdir $env:LOCALAPPDATA\kob-tn10
+cp target/release/kobd ~/kob-tn10/              copy target\release\kobd.exe $env:LOCALAPPDATA\kob-tn10\
+cd ~/kob-tn10                                   cd $env:LOCALAPPDATA\kob-tn10
 ```
 
 **3. An Indexer (no key, no funds).**

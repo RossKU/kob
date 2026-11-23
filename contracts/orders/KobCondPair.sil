@@ -647,8 +647,9 @@ contract KobCondPair(
         // by this id but the custody, none at all in an update. No T input
         // may be owned by it but the authenticated bought-custody tc of a
         // fill or a refund, none at all in an update (the T guard runs at the
-        // end, once tc is known). Strays are inert, and only the maker's
-        // cancel can move them.
+        // end, once tc is known). Such strays only the maker's cancel can
+        // move; a stray of a third token, or one owned by the order's script
+        // hash, is not guarded (docs/spec/order-types.md, Strays).
         int cust = custIn;
         if (update) { cust = 0 - 1; }
         noStrays(sCovId, selfId, cust, sOff);

@@ -297,6 +297,18 @@ pub fn candidates_under(script: OrderScript, known: &[AnyState], hints: &[i64]) 
             }
         }
     }
+    // A mode-1 pair sell changes both: amountLeft by the A it sold, bought by the B it received,
+    // at least ceil(sold x price / scale(A)) and a few base units more from rounding over several
+    // fills (R2A-1).
+    for s in known {
+        for h in hints {
+            for b in pair_sell_boughts(s, *h) {
+                if let Some(c) = with_amount_left(s, *h).and_then(|c| c.with_bought(b)) {
+                    push(c, VIA_HINT, &mut out);
+                }
+            }
+        }
+    }
     // A mode-1 order: the bought amount, as a bid has no amount left and a conditional one both.
     for s in known.iter().filter(|s| s.delivery().is_some_and(|d| d.mode == kob_protocol::state::MODE_ACCUMULATE)) {
         for h in hints {
@@ -324,6 +336,35 @@ pub fn candidates_under(script: OrderScript, known: &[AnyState], hints: &[i64]) 
             }
         }
     }
+    out
+}
+
+/// Rounding units over the fills a mode-1 pair sell's `bought` is searched for, above the least B
+/// its sold amount brings.
+const PAIR_SELL_ROUNDING: i64 = 8;
+
+/// The `bought` values a mode-1 pair sell `s` can hold once its amount left is `left`: the B the
+/// sold A brings at each price a leg can fill at, plus rounding. Empty for any other order.
+fn pair_sell_boughts(s: &AnyState, left: i64) -> Vec<i64> {
+    let (bought, sold, quotes) = match s {
+        AnyState::KobPair(x) if x.is_ask() && x.mode == kob_protocol::state::MODE_ACCUMULATE => {
+            let q = [x.price, x.price_end].into_iter().filter(|p| *p > 0).filter_map(|p| x.t_out_min(x.amount_left - left, p));
+            (x.bought, x.amount_left - left, q.collect::<Vec<_>>())
+        }
+        AnyState::KobCondPair(x) if x.is_ask() && x.mode == kob_protocol::state::MODE_ACCUMULATE => {
+            let ps = [x.tp_price, x.stop_price, if x.stop_price > 0 { x.stop_worst() } else { 0 }];
+            let q = ps.into_iter().filter(|p| *p > 0).filter_map(|p| x.t_out_min(x.amount_left - left, p));
+            (x.bought, x.amount_left - left, q.collect::<Vec<_>>())
+        }
+        _ => return vec![],
+    };
+    if sold <= 0 {
+        return vec![];
+    }
+    let mut out: Vec<i64> =
+        quotes.into_iter().flat_map(|q| (0..=PAIR_SELL_ROUNDING).filter_map(move |j| bought.checked_add(q)?.checked_add(j))).collect();
+    out.sort_unstable();
+    out.dedup();
     out
 }
 

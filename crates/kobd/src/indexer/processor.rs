@@ -1557,8 +1557,13 @@ impl Processor {
         if let Some((mut ia, mut ib)) = pair_listing(state, daa, carrier) {
             ia.proven_tpls = proven_hashes(conn, ia.token_cov_id)?;
             ib.proven_tpls = proven_hashes(conn, ib.token_cov_id)?;
-            ia.proven_ext = proven_ext(conn, ia.token_cov_id)?;
-            ib.proven_ext = proven_ext(conn, ib.token_cov_id)?;
+            // Only a KCC-20 token has an extension commitment to prove (R2C-M4).
+            if ia.family == Some(kob_protocol::family::Family::Kcc20) {
+                ia.proven_ext = proven_ext(conn, ia.token_cov_id)?;
+            }
+            if ib.family == Some(kob_protocol::family::Family::Kcc20) {
+                ib.proven_ext = proven_ext(conn, ib.token_cov_id)?;
+            }
             let r = self
                 .rules
                 .evaluate(&self.tokens, &ia)
@@ -1604,7 +1609,12 @@ impl Processor {
                 carrier,
                 keeper_tip: listing_keeper_tip(state, carrier),
                 proven_tpls: proven_hashes(conn, Some(Hash32(state.token_cov_id())))?,
-                proven_ext: proven_ext(conn, Some(Hash32(state.token_cov_id())))?,
+                // Only a KCC-20 token has an extension commitment to prove (R2C-M4).
+                proven_ext: if state.family() == kob_protocol::family::Family::Kcc20 {
+                    proven_ext(conn, Some(Hash32(state.token_cov_id())))?
+                } else {
+                    None
+                },
             },
         );
         Ok(match r {
@@ -1976,12 +1986,18 @@ impl Processor {
                 _ => {}
             }
         }
-        // `bought` of a delivering order: a mode-1 fill that continues adds n to its bought-custody
-        // (bid-delivery-spec §4). Every other spend leaves it.
+        // `bought` of a delivering order: a mode-1 fill that continues adds what it delivered to its
+        // bought-custody (bid-delivery-spec §4): n for a bid, and for a pair order the T it
+        // received, `tOut` (settle argument 5), which on an ask is not n (R2A-1). Every other spend
+        // leaves it.
         let mut boughts: Vec<Option<i64>> = vec![before.delivery().map(|d| d.bought)];
         if let (Act::Fill(n), Some(d)) = (s.act, before.delivery()) {
             if d.mode == kob_protocol::state::MODE_ACCUMULATE {
                 boughts.push(d.bought.checked_add(n));
+                if matches!(before, AnyState::KobPair(_) | AnyState::KobCondPair(_)) {
+                    let t_out = s.reveal.as_ref().and_then(|r| r.int(5));
+                    boughts.extend(t_out.map(|t| d.bought.checked_add(t)));
+                }
             }
         }
         let mut tried: HashSet<(Mutable, Option<i64>)> = HashSet::new();

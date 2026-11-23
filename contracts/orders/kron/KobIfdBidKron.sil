@@ -161,7 +161,8 @@ contract KobIfdBidKron(
 
     // Stray guard, as KobBid.noStrays. No token input may be owned by this
     // covenant id. Fill, merge and update run it, and only the maker's cancel
-    // can move a stray. The owner sits at state offset 1 of the 46 B state,
+    // can move such a stray (one of another token, or owned by the order's
+    // script hash, is not guarded: docs/spec/order-types.md). The owner sits at state offset 1 of the 46 B state,
     // found from the end of the token input's sigscript, since the state is
     // followed by the template suffix. The scan is unrolled by hand over the
     // MAX_TOK_IN slots, one line per token input k < cnt.

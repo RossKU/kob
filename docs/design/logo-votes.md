@@ -65,8 +65,22 @@ come before it. A key made for the vote, or one first funded after the token app
 it. Index seeks only (`orders_maker_genesis`, `token_holdings_owner_page`, `token_holdings_token_page`, `orders_token_genesis`,
 `orders_quote_genesis`). A pruned row only makes the history, or the token, look younger.
 
+**Or a holder of the token** (founder decision 2026-11-23, audit R2C-M3): the key may also vote on a token's logo when it has held
+that token without a break for at least `min_history_secs`. Its holdings of the token (`token_holdings` by `owner_id`, the newest
+512 rows) form lines: a holding spent by a transaction that creates another holding of the same owner and token (a merge, a send
+to itself, a partial sale that leaves the rest) continues its line; one that arrived any other way starts a new one. The line of
+each holding it holds now starts at the oldest holding it continues, and the oldest such start is when it began holding. Tokens
+received today (dust) count from today, and tokens bought back after selling everything count from the buy. A pruned row (a lean
+store) breaks a line, which only makes the holding look younger, and two holdings of one line created in the same block may not be
+linked (strict). This lets holders defend their own token's logo; hiding a token's logo now needs a week of holding it on several
+addresses, or keys with KOB history from before the token.
+
+What remains (residual): a token younger than 7 days can only be voted on by addresses whose history is older than it and at
+least 7 days old, so in its first week only such addresses decide its logo, and a stockpile of keys prepared 7 days ahead can
+still hide the logo of any token created after it (R2C-M3) until its holders have held it for a week and vote it back.
+
 What it costs a sybil: each fake address needs an order or a token output on chain (a transaction and its storage mass) and must
-then wait a day. A wallet that only ever held KAS and never touched KOB cannot vote (an open question below).
+then wait 7 days. A wallet that only ever held KAS and never touched KOB cannot vote (an open question below).
 
 ## 5. Limits
 

@@ -316,7 +316,10 @@ fn best_bid(inp: &MaintenanceInput, g: &Group, held: i64, t: i64) -> Option<(Lis
 /// floor's margin. So a low bid alone cannot take it. An ask posted to lower the reference must
 /// itself offer the whole amount at that price: an ask counts only for the part a buyer of the
 /// rest of `n` can take from it (its minimum fill, FOK range and dust bound), so an
-/// all-or-nothing ask larger than `n` counts for nothing (audit 2026-11-23 D-1).
+/// all-or-nothing ask larger than `n` counts for nothing (audit 2026-11-23 D-1). It must also
+/// take fills of many sizes (not FOK; from its minimum fill to its whole rest a range of at least
+/// `n /` [`SMALL_BUYER_DIV`]): an all-or-nothing ask of exactly `n`, or a stack of all-or-nothing
+/// asks, offers itself to buyers of exactly its size only, which is the poster's own sale (R2D-1).
 fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i128, i128)> {
     let (token, program, ext) = *g;
     let tpl = kob_protocol::artifacts::token_template(program).hash;
@@ -335,8 +338,13 @@ fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i
         .map(|c| (c.quote_frac(), c))
         .collect();
     asks.sort_by(|((a, sa), _), ((b, sb), _)| (a * sb).cmp(&(b * sa)));
+    let small = (n / SMALL_BUYER_DIV).max(1);
     let mut got: i64 = 0;
     for ((q, s), c) in asks {
+        // Buyers of many sizes can take from it: its fills range over at least half of n.
+        if c.fok.is_some() || c.rest_from.saturating_sub(c.min_fill) < small {
+            continue;
+        }
         // The most of what is still needed a buyer can take from this ask in one fill.
         let mut x = c.cap.min(n - got);
         if let Some((_, hi)) = c.fok {
@@ -355,6 +363,10 @@ fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i
     }
     None
 }
+
+/// A sale's reference counts only asks whose fill sizes range over at least `n / SMALL_BUYER_DIV`
+/// ([`ask_reference`]).
+pub const SMALL_BUYER_DIV: i64 = 2;
 
 /// The sale of `tokens` (one group) into `bid` for `amount` base units, the operator as taker.
 ///

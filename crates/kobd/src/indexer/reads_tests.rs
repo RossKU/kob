@@ -678,3 +678,44 @@ fn an_order_view_bounds_its_children() {
     }
     assert!(!order_exists(&conn, &Hash32([0xfe; 32])).unwrap());
 }
+
+/// R2C-M4: every placement on a token asks its proven extension commitment. For a KRON token the
+/// seek for its oldest KCC-20 holding found none and read every holding of it, inside the
+/// follower's write transaction. Now the work does not grow with the token's holdings.
+#[test]
+fn the_proven_extension_of_a_kron_token_does_not_read_its_holdings() {
+    use rusqlite::StatementStatus::VmStep;
+    let conn = open_memory("testnet-10").unwrap();
+    let token = tok(9);
+    let owner = vec![4u8; 32];
+    intern(&conn, &token).unwrap();
+    intern(&conn, &owner).unwrap();
+    crate::testkit::named_holdings_writable(&conn);
+    let seed = |from: u32, n: u32| {
+        let tx = conn.unchecked_transaction().unwrap();
+        for i in from..from + n {
+            let mut txid = vec![0xabu8; 32];
+            txid[..4].copy_from_slice(&i.to_le_bytes());
+            tx.execute(
+                "INSERT INTO token_holdings_named (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, \
+                 role, created_block, created_daa) VALUES (?1,0,(SELECT id FROM ids WHERE h = ?2),'KronToken2433',2,\
+                 (SELECT id FROM ids WHERE h = ?3),3,5,1,x'08','owned',?4,1)",
+                params![txid, token, owner, i64::from(i)],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    };
+    let steps = || {
+        for sql in [FIRST_HOLDING_FAMILY, FIRST_KCC20_HOLDING] {
+            conn.prepare_cached(sql).unwrap().reset_status(VmStep);
+        }
+        assert_eq!(proven_extension(&conn, &token).unwrap(), None);
+        [FIRST_HOLDING_FAMILY, FIRST_KCC20_HOLDING].iter().map(|sql| conn.prepare_cached(sql).unwrap().get_status(VmStep)).sum::<i32>()
+    };
+    seed(0, 10);
+    let few = steps();
+    seed(10, 5_000);
+    let many = steps();
+    assert!(many <= few + 10, "{few} steps with 10 holdings, {many} with 5010");
+}

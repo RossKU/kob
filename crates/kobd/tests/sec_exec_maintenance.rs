@@ -123,3 +123,31 @@ fn an_all_or_nothing_ask_does_not_set_the_sale_floor() {
     let r = sale(WHOLE);
     assert!(r.jobs.iter().any(|j| j.kind == MaintKind::Sell), "{:?}", r.skipped);
 }
+
+/// R2D-1: an all-or-nothing ask of exactly the operator's holding offers the whole amount, but only to a buyer of exactly
+/// that amount: the poster's own sale. It does not set the floor, nor does an ask whose fill sizes range over less than
+/// half the holding, or a stack of all-or-nothing asks. One that buyers of many sizes can take does.
+#[test]
+fn an_exact_size_all_or_nothing_ask_does_not_set_the_sale_floor() {
+    let cfg = MaintenanceConfig { merge: false, ..Default::default() };
+    let sale = |amount: i64, min_fill: i64| {
+        let bid = l_bid_a(100, K3, 2, 250_000_000, 2 * WHOLE);
+        let ask = l_ask_with(300, token_a(K3), K3, 2, 270_000_000, amount, |a| a.min_fill = min_fill);
+        let mut inp = input(vec![own(K3, 2 * WHOLE, CARRIER)], vec![funding(50 * KAS)]);
+        inp.orders = vec![bid, ask];
+        tick(&inp, &cfg, &signer())
+    };
+    let r = sale(2 * WHOLE, 2 * WHOLE);
+    assert!(r.jobs.iter().all(|j| j.kind != MaintKind::Sell), "sold against an exact-size all-or-nothing ask");
+    let r = sale(2 * WHOLE + 1, 2 * WHOLE);
+    assert!(r.jobs.iter().all(|j| j.kind != MaintKind::Sell), "sold against an ask for buyers of 2 whole tokens or one unit more");
+    let r = sale(2 * WHOLE, WHOLE / 5);
+    assert!(r.jobs.iter().any(|j| j.kind == MaintKind::Sell), "{:?}", r.skipped);
+    // a stack of all-or-nothing asks that together hold the amount: each sells to a buyer of exactly its size only
+    let bid = l_bid_a(100, K3, 2, 250_000_000, 2 * WHOLE);
+    let aon = |id| l_ask_with(id, token_a(K3), K3, 2, 270_000_000, WHOLE, |a| a.min_fill = WHOLE);
+    let mut inp = input(vec![own(K3, 2 * WHOLE, CARRIER)], vec![funding(50 * KAS)]);
+    inp.orders = vec![bid, aon(301), aon(302)];
+    let r = tick(&inp, &cfg, &signer());
+    assert!(r.jobs.iter().all(|j| j.kind != MaintKind::Sell), "sold against a stack of all-or-nothing asks");
+}

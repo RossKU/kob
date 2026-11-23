@@ -1011,7 +1011,9 @@ The nonce must give `SHA-256("KOB logo vote pow/1
 <nonce>")` at least `pow_bits` leading
 zero bits (the GET says how many). The address must have KOB history in the store at least `min_history_secs` old (an order it
 placed or a token output it held; default 7 days), and that first history must be older than the token voted on (its KCC-23
-genesis, else the first of its token outputs or orders in the store; founder decision 2026-11-23). One vote per wallet across all
+genesis, else the first of its token outputs or orders in the store; founder decision 2026-11-23). Or the address has held the
+token voted on without a break for at least `min_history_secs` (its holdings of it in the store; a merge or a partial sale that
+leaves it some does not restart the clock, receiving it anew does; design note section 4). Else `no_history`. One vote per wallet across all
 logos per `interval_secs` (default 24 hours);
 after it the vote can be changed. The same vote again is answered `unchanged` and uses nothing. Origins and the per-client and daily
 limits as for reports (`[logo_votes]`, section 6). The generic rate limit of section 5.2 applies first, at the heavy cost.

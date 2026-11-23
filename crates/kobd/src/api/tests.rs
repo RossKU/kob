@@ -2860,17 +2860,18 @@ fn signed_vote(n: u8, id: u8, vote: crate::logo_votes::Vote) -> crate::logo_vote
 fn votes_env(cfg: crate::config::LogoVotesConfig, tweak: impl FnOnce(&mut ApiConfig)) -> (Env, ApiState) {
     let e = env(tweak);
     let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
-    // tokens 1..=5 are indexed; accounts 1..=9 have two days of KOB history
+    // tokens 1..=5 are indexed, created at DAA 10; accounts 1..=9 have eight days of KOB history from before them (the
+    // vote rule: at least 7 days old and older than the token)
     for n in 1..=5u8 {
         conn.execute(
             "INSERT INTO kcc23_declarations (covenant_id, proof, preparation_txid, genesis_txid, genesis_block, genesis_daa) \
-             VALUES (?1, 'x', zeroblob(32), zeroblob(32), 0, 0)",
+             VALUES (?1, 'x', zeroblob(32), zeroblob(32), 0, 10)",
             [&[n; 32][..]],
         )
         .unwrap();
     }
     for n in 1..=9u8 {
-        crate::logo_votes::testing::give_history(&conn, &crate::logo_votes::testing::account(n).1, 0, 2 * 864_000, 0x40 + n);
+        crate::logo_votes::testing::give_history(&conn, &crate::logo_votes::testing::account(n).1, 0, 8 * 864_000, 0x40 + n);
     }
     let votes = Arc::new(crate::logo_votes::LogoVotes::with_connection(conn, "testnet-10", cfg, 10, 64, Box::new(|| VOTE_NOW)));
     let mut state = e.state.clone();

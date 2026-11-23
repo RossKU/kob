@@ -249,8 +249,6 @@ pub struct PairPart {
     pub quote_utxos: Vec<TokenUtxo>,
     /// KAS per whole A (the default minimum fill), when known.
     pub kas_per_whole_a: Option<i64>,
-    /// KAS per whole B (the value of a market start), when known.
-    pub kas_per_whole_b: Option<i64>,
 }
 
 /// Everything a planner needs from the outside world (`PlanEnv`).

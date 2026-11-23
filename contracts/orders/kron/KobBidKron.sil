@@ -113,7 +113,8 @@ contract KobBidKron(
     // Stray guard. A bid owns no tokens. KRON authorises every token UTXO
     // owned by this covenant id whenever this input is spent, so a fill
     // refuses any token input owned by `me`. Only the maker's cancel can move
-    // a stray.
+    // such a stray (one of another token, or owned by the order's script
+    // hash, is not guarded: docs/spec/order-types.md).
     //
     // The owner sits at a fixed distance from the end of the sigscript, as in
     // KobAskKron.noStrays. The scan is unrolled by hand over MAX_TOK_IN slots,

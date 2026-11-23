@@ -223,3 +223,41 @@ fn a_configuration_that_is_missing_or_does_not_parse_exits_with_2() {
         assert_eq!(code, Some(2));
     }
 }
+
+/// R2D-2: `kobd-supervise.cmd` runs PowerShell, ping and timeout by their full System32 path, so a `powershell.bat` or
+/// `ping.bat` that another account planted in its folder never runs as the operator, even with the folder as the working
+/// directory (Task Scheduler's *Start in*). A copy of cmd.exe stands in for kobd.exe: it fails once (one restart, one
+/// wait), then leaves the stop file.
+#[cfg(windows)]
+#[test]
+fn the_supervisor_runs_no_program_planted_in_its_folder() {
+    let dir = std::env::temp_dir().join(format!("kob-supervise-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    std::fs::copy(root.join("scripts/windows/kobd-supervise.cmd"), dir.join("kobd-supervise.cmd")).unwrap();
+    let sys = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+    std::fs::copy(sys.join("cmd.exe"), dir.join("kobd.exe")).unwrap();
+    let planted = "@echo planted>>\"%~dp0marker.txt\"\r\n@exit /b 0\r\n";
+    for name in ["powershell.bat", "powershell.cmd", "ping.bat", "timeout.bat"] {
+        std::fs::write(dir.join(name), planted).unwrap();
+    }
+    std::fs::write(
+        dir.join("fake.cmd"),
+        "@if exist \"%~dp0ran\" (type nul > \"%~dp0kobd-supervise.stop\") else (type nul > \"%~dp0ran\")\r\n@exit /b 1\r\n",
+    )
+    .unwrap();
+    let out = std::process::Command::new(sys.join("cmd.exe"))
+        .arg("/c")
+        .arg(dir.join("kobd-supervise.cmd"))
+        .arg("/c")
+        .arg(dir.join("fake.cmd"))
+        .current_dir(&dir)
+        .env_remove("NoDefaultCurrentDirectoryInExePath")
+        .output()
+        .unwrap();
+    let log = std::fs::read_to_string(dir.join("kobd-supervise.log")).unwrap_or_default();
+    assert!(log.contains("starting it again") && log.contains("kobd-supervise.stop is there"), "{log}\n{out:?}");
+    assert!(!dir.join("marker.txt").exists(), "a planted program ran: {log}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
