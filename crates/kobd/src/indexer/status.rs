@@ -9,6 +9,10 @@ use std::sync::RwLock;
 /// timeout) and a commit.
 pub const STALE_AFTER_MS: u64 = 600_000;
 
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
 /// Where the follower is in its life cycle, as `/v1/health` reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -39,6 +43,42 @@ pub enum FollowerState {
     StorageError,
 }
 
+/// Whether the chain authority keeps up with real time, by the follower's progress rule
+/// (`indexer::follower`, *Progress*): the cursor block's header time against the local clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaceState {
+    /// The cursor block is at most the tolerance old by the local clock.
+    KeepingUp,
+    /// It is older, and the authority has not failed a period: it gains on real time.
+    Gaining,
+    /// A period ended without the gain: the authority does not keep up. It is handed over where
+    /// there is another node.
+    Failing,
+    /// The cursor block's header time is not known (yet).
+    Unknown,
+}
+
+/// The progress rule's verdict at the follower's last step ([`HealthSnapshot::authority_pace`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct AuthorityPace {
+    pub state: PaceState,
+    /// The cursor block's lag behind the local clock at that step, in ms (negative: stamped ahead
+    /// of the local clock). `None` while its header time is unknown.
+    pub lag_ms: Option<i64>,
+    /// The lag up to which the authority keeps up (`AUTHORITY_LAG_TOLERANCE`, 90 s).
+    pub tolerance_ms: u64,
+    /// When the follower judged it (Unix ms).
+    pub at_unix_ms: u64,
+}
+
+impl AuthorityPace {
+    /// Whether it says the authority keeps up, judged no longer than the tolerance before `now_ms`.
+    pub fn keeping_up(&self, now_ms: u64) -> bool {
+        self.state == PaceState::KeepingUp && now_ms.saturating_sub(self.at_unix_ms) <= self.tolerance_ms
+    }
+}
+
 /// The follower's health, as `GET /v1/health` serves it.
 #[derive(Debug, Clone, Serialize)]
 pub struct HealthSnapshot {
@@ -56,6 +96,14 @@ pub struct HealthSnapshot {
     /// applied it, else from its header, which hashes to the cursor. Its miner sets it, within
     /// minutes of the real time; no node can move it once the block is on the chain.
     pub cursor_time_unix_ms: Option<u64>,
+    /// The follower's progress rule at its last step: whether the chain authority keeps up with
+    /// real time by the cursor block's header time and the local clock (`indexer::follower`,
+    /// *Progress*). `None` before the follower's first step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority_pace: Option<AuthorityPace>,
+    /// `[chain_proof] enabled = false`: no batch is proven, and the cursor block's header time is
+    /// the node's word (checked only against the block's hash).
+    pub chain_proofs_off: bool,
     /// Node virtual DAA score at the last successful poll.
     pub node_daa: Option<u64>,
     /// The most recent follower error.
@@ -455,6 +503,8 @@ impl HealthSnapshot {
             cursor_hash: None,
             cursor_daa: 0,
             cursor_time_unix_ms: None,
+            authority_pace: None,
+            chain_proofs_off: false,
             node_daa: None,
             last_error: None,
             gap_reason: None,
@@ -637,6 +687,18 @@ impl HealthSnapshot {
             "gauge",
             "1 while the follower says following or catching up but made no progress for 10 minutes (stale of /v1/health).",
             self.stale(now) as u64,
+        );
+        m(
+            "kob_indexer_authority_failing",
+            "gauge",
+            "1 while the chain authority does not keep up with real time by the cursor block's header time (authority_pace of /v1/health): it is handed over where there is another node.",
+            self.authority_failing() as u64,
+        );
+        m(
+            "kob_indexer_chain_proofs_off",
+            "gauge",
+            "1 while chain proofs are off ([chain_proof] enabled = false): batches and the cursor block's time are the node's word.",
+            self.chain_proofs_off as u64,
         );
         m(
             "kob_indexer_storage_error",
@@ -875,8 +937,25 @@ impl HealthSnapshot {
     /// it lists may already be spent. That covers `starting` after a restart, `catching_up`, node
     /// unavailable and gap. The matcher, the keepers and the maintenance jobs plan nothing in that
     /// time. `GET /v1/health` reports it as `caught_up`.
+    ///
+    /// The node's position is its own word, so it also takes the cursor block's age by the local
+    /// clock (R5C1-I2): the follower's progress rule judged at most the tolerance ago that the
+    /// authority keeps up ([`AuthorityPace::keeping_up`]), and the health is not `stale`.
     pub fn caught_up(&self) -> bool {
-        self.state == FollowerState::Following && self.node_daa.is_some()
+        self.state == FollowerState::Following && self.node_daa.is_some() && self.keeps_up(now_unix_ms())
+    }
+
+    /// Whether the follower's last verdict says the chain authority keeps up with real time and
+    /// the health is not stale at `now_ms`. Before any verdict (no follower step yet) only the
+    /// staleness counts.
+    fn keeps_up(&self, now_ms: u64) -> bool {
+        !self.stale(now_ms) && self.authority_pace.as_ref().is_none_or(|p| p.keeping_up(now_ms))
+    }
+
+    /// Whether the progress rule found that the chain authority does not keep up with real time
+    /// (`indexer::follower`, *Progress*): `/v1/health` is not `ok` and not ready meanwhile.
+    pub fn authority_failing(&self) -> bool {
+        self.authority_pace.as_ref().is_some_and(|p| p.state == PaceState::Failing)
     }
 
     /// Whether the store may be planned against although it is not caught up.
@@ -895,6 +974,7 @@ impl HealthSnapshot {
         self.lag_tolerance_daa > 0
             && matches!(self.state, FollowerState::Following | FollowerState::CatchingUp)
             && self.lag_daa().is_some_and(|l| l <= self.lag_tolerance_daa)
+            && self.keeps_up(now_unix_ms())
     }
 
     /// Why the matcher, keepers and maintenance must not plan against the store.
@@ -974,6 +1054,13 @@ impl HealthSnapshot {
         // Once the follower has said why (a single node, or no cross-checking node answering).
         if let Some(why) = self.cross_check_reason.as_deref().filter(|_| !self.cross_checked) {
             s.push_str(&format!(" | NOT cross-checked ({why})"));
+        }
+        if self.authority_failing() {
+            let lag = self.authority_pace.and_then(|p| p.lag_ms).map_or("?".to_string(), |l| human_secs(l.max(0) as u64 / 1_000));
+            s.push_str(&format!(" | CHAIN AUTHORITY NOT KEEPING UP (the cursor's chain block is {lag} old)"));
+        }
+        if self.chain_proofs_off {
+            s.push_str(" | chain proofs OFF");
         }
         if let Some(p) = &self.chain_proof {
             if p.refused_total > 0 {

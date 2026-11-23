@@ -66,7 +66,8 @@ use crate::hex::Hash32;
 use serde::Serialize;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 /// When to switch and when to come back ([`crate::config::FailoverConfig`]).
 #[derive(Debug, Clone)]
@@ -138,6 +139,14 @@ struct State {
     last_switch_reason: Option<String>,
     refused: u64,
     last_refusal: Option<String>,
+    /// The primary's stint as the chain source: since when, and whether the follower's progress
+    /// rule said it keeps up at its first step (`None`: no step yet; `ChainSource::note_pace`).
+    primary_since: Instant,
+    primary_fresh: Option<bool>,
+    /// The primary's strikes: deposals soon after it began at the tip, and the last one
+    /// (`resolver::strike` for public nodes).
+    strikes: u32,
+    last_strike: Option<Instant>,
 }
 
 const NAMES: [&str; 2] = ["primary", "fallback"];
@@ -190,6 +199,10 @@ impl<S: ChainSource> Failover<S> {
             last_switch_reason: None,
             refused: 0,
             last_refusal: None,
+            primary_since: now,
+            primary_fresh: None,
+            strikes: 0,
+            last_strike: None,
         };
         let inner = Inner {
             tiers: [primary, fallback],
@@ -249,6 +262,10 @@ impl<S: ChainSource> Inner<S> {
             s.switches += 1;
             s.last_switch_unix_ms = Some(unix_ms());
             s.last_switch_reason = Some(reason.to_string());
+            if to == 0 {
+                s.primary_since = now;
+                s.primary_fresh = None;
+            }
             Some(from)
         });
         if let Some(from) = from {
@@ -524,6 +541,27 @@ impl<S: ChainSource> ChainSource for Failover<S> {
         match self.inner.healthy(1, None).await {
             Ok(()) => {
                 self.inner.switch(1, &format!("the configured node's chain requests keep failing ({why})"));
+                // Deposed soon after it began at the tip: the primary is probed again only after
+                // a hold that doubles with each such deposal (`resolver::STRIKE_AWAY` to
+                // `STRIKE_AWAY_MAX`). One that began behind, or led long, found a stall (a halted
+                // network): probed again as after any switch, so it is back within the probes once
+                // blocks come again.
+                self.inner.with(|s| {
+                    let now = Instant::now();
+                    if s.last_strike.is_some_and(|t| now.saturating_duration_since(t) >= super::resolver::STRIKE_FORGET) {
+                        s.strikes = 0;
+                    }
+                    let soon = now.saturating_duration_since(s.primary_since) < super::resolver::STRIKE_WITHIN;
+                    if s.active == 1 && s.primary_fresh == Some(true) && soon {
+                        s.strikes = s.strikes.saturating_add(1);
+                        s.last_strike = Some(now);
+                        let hold = super::resolver::STRIKE_AWAY
+                            .saturating_mul(1u32 << (s.strikes - 1).min(10))
+                            .min(super::resolver::STRIKE_AWAY_MAX);
+                        s.next_check = now + hold;
+                        tracing::warn!(primary = %self.inner.shown[0], strikes = s.strikes, hold_secs = hold.as_secs(), "node failover: the configured node was deposed soon after it began at the tip; it is probed again only after the hold");
+                    }
+                });
                 self.active() == 1
             }
             Err(e) => {
@@ -545,6 +583,22 @@ impl<S: ChainSource> ChainSource for Failover<S> {
     fn authority_key(&self) -> String {
         let t = self.active();
         format!("{t} {}", self.inner.tiers[t].authority_key())
+    }
+    fn simulated_clock_ms(&self) -> Option<u64> {
+        self.inner.tiers[0].simulated_clock_ms()
+    }
+    fn authority_node(&self) -> String {
+        let t = self.active();
+        format!("{t} {}", self.inner.tiers[t].authority_node())
+    }
+    fn note_pace(&self, keeping_up: bool) {
+        let t = self.inner.with(|s| {
+            if s.active == 0 && s.primary_fresh.is_none() {
+                s.primary_fresh = Some(keeping_up);
+            }
+            s.active
+        });
+        self.inner.tiers[t].note_pace(keeping_up);
     }
     fn source_status(&self) -> Option<FailoverStatus> {
         Some(self.status())
@@ -573,9 +627,6 @@ impl<S: ChainSource> ChainSource for Failover<S> {
     }
     async fn confirm_bodies(&self, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun]) -> Result<bool, String> {
         self.inner.tiers[self.active()].confirm_bodies(start, raw, runs).await
-    }
-    fn chain_beyond_shown(&self) -> bool {
-        self.inner.tiers[self.active()].chain_beyond_shown()
     }
     async fn window_contradicted(&self, origin: Origin, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun], why: &str) {
         let t = (origin.tier as usize).min(1);

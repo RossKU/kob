@@ -119,7 +119,9 @@ pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
     // A follower that hangs, or a task that died before it could say so, leaves its last state in
     // place: no progress for long is not ok either (C-M1).
     let stale = snap.stale(unix_ms());
-    let ok = running && !stale && alarms.is_empty();
+    // Nor is a chain authority that does not keep up with real time by the cursor block's age
+    // (`authority_pace`, R5C1-M1, R5C1-M2): `lag_seconds` says by how much.
+    let ok = running && !stale && alarms.is_empty() && !snap.authority_failing();
     // The counters are informational. A busy database must not turn the health endpoint into an
     // error, nor make it wait: they are served from memory (`health_counters`). A lean store, the
     // one of the Executor, prunes old closed orders; `history_from` is the time from which its
@@ -221,13 +223,17 @@ pub async fn metrics(State(app): State<Arc<App>>) -> ApiResult {
 /// `GET /v1/health/ready`: the load-balancer probe.
 ///
 /// It answers 200 only while the follower is following or catching up, with a lag below the
-/// smallest alarm. Otherwise it answers 503.
+/// smallest alarm and a chain authority that keeps up with real time or gains on it. Otherwise it
+/// answers 503.
 pub async fn ready(State(app): State<Arc<App>>) -> ApiResult {
     let snap = app.state.health.snapshot();
     let lag_seconds = snap.lag_seconds(app.state.daa_per_second, unix_ms());
     let min_alarm = app.state.lag_alarm_hours.iter().copied().min();
     let (ready, reason) = match snap.state {
         FollowerState::Following | FollowerState::CatchingUp if snap.stale(unix_ms()) => (false, "no progress for 10 minutes"),
+        FollowerState::Following | FollowerState::CatchingUp if snap.authority_failing() => {
+            (false, "the chain authority does not keep up with real time")
+        }
         FollowerState::Following | FollowerState::CatchingUp => match (lag_seconds, min_alarm) {
             (None, _) => (false, "node position unknown"),
             (Some(l), Some(h)) if l >= h * 3600 => (false, "indexer lag above the first alarm threshold"),

@@ -1391,11 +1391,15 @@ async fn a_node_lacking_vspc_v2_stops_the_follower_at_once() {
     assert!(matches!(out.last(), Some(StepOutcome::Idle)), "{out:?}");
 }
 
-/// A chain world whose follower judges progress with the tolerance `tolerance` (`indexer::follower`, *Progress*).
-fn paced(tolerance: std::time::Duration) -> Ctx {
-    let hs = Harness::with_follower(MockNode::new("testnet-10"), conn(), None, wide_window(), processor(), |f| {
+/// A chain world whose follower judges progress with the tolerance `tolerance` and the period `period`, on the real
+/// clock (the test chain's blocks are stamped in 2026-09, weeks ago), with nothing to hand over to (`indexer::follower`,
+/// *Progress*).
+fn paced(tolerance: std::time::Duration, period: std::time::Duration) -> Ctx {
+    let mut hs = Harness::with_follower(MockNode::new("testnet-10"), conn(), None, wide_window(), processor(), |f| {
         f.authority_lag_tolerance = tolerance;
+        f.authority_stall = period;
     });
+    hs.follower.set_clock_at(now_ms());
     Ctx::with(hs)
 }
 
@@ -1403,67 +1407,72 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
 }
 
-/// R2C-M1, R4C1-M1: from a cursor whose chain block is long past by the local clock, an idle poll is progress only while
-/// real time has not run more than the tolerance ahead of the chain; past it, it confirms nothing, so `/v1/health` turns
-/// `stale` instead of reading current for good. `lag_seconds` is at least the cursor block's age.
+/// R2C-M1, R4C1-M1, R5C1-M1: from a cursor whose chain block is long past by the local clock, idle polls ("nothing new",
+/// the node says the cursor is at its sink) are progress only for the first period; then the authority is `failing`:
+/// `/v1/health` is not ok and not caught up, nothing more is progress, so it turns `stale` 10 minutes on, and
+/// `lag_seconds` is at least the cursor block's age all along. The node's word plays no part.
 #[tokio::test]
-async fn idle_polls_from_an_old_cursor_are_no_progress() {
-    let c = paced(std::time::Duration::from_millis(5));
+async fn idle_polls_from_an_old_cursor_turn_the_authority_failing_after_one_period() {
+    let c = paced(std::time::Duration::from_millis(5), std::time::Duration::from_millis(50));
     let create = small_ask(&c, 0);
     c.w.include(&c.hs.node, &[&create]);
     c.hs.sync().await;
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    // the test chain's blocks are stamped in 2026-09, far more than ten minutes ago
-    assert!(matches!(c.hs.follower.step().await, StepOutcome::Idle | StepOutcome::Applied { .. }));
-    let moved = c.hs.health.snapshot().last_progress_unix_ms;
-    assert!(moved > 0, "the first poll set the baseline");
+    assert!(!c.hs.health.snapshot().authority_failing(), "within the first period");
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    assert!(matches!(c.hs.follower.step().await, StepOutcome::Idle));
+    let s = c.hs.health.snapshot();
+    assert!(s.authority_failing(), "{:?}", s.authority_pace);
+    let at = s.last_progress_unix_ms;
     std::thread::sleep(std::time::Duration::from_millis(20));
     assert!(matches!(c.hs.follower.step().await, StepOutcome::Idle));
     let s = c.hs.health.snapshot();
     assert_eq!(s.state, FollowerState::Following);
-    assert_eq!(s.last_progress_unix_ms, moved, "an idle poll from an old cursor confirms nothing");
-    assert!(s.stale(moved + kobd::indexer::status::STALE_AFTER_MS + 1));
+    assert_eq!(s.last_progress_unix_ms, at, "an idle poll from an old cursor confirms nothing");
+    assert!(s.stale(at + kobd::indexer::status::STALE_AFTER_MS + 1));
+    assert!(!s.caught_up() && !s.within_lag_tolerance(), "the executor plans nothing");
     let age = (now_ms() - s.cursor_time_unix_ms.expect("the cursor block's time")) / 1_000;
     assert!(age > 3_600 && s.lag_seconds(10, now_ms()) >= Some(age), "{:?} {age}", s.lag_seconds(10, now_ms()));
     assert_eq!(s.lag_daa(), Some(0), "the node says the cursor is at its sink");
 }
 
-/// R4C1-M1: from an old cursor, a batch is progress only while the chain gains on real time, in either state: one chain
-/// block (100 ms of chain) after 300 ms is no progress at the sink (`following`), nor while `catching_up` (the window, not
-/// the sink, ended it). A batch that gains on real time is progress again, so an honest catch-up after a restart is not
-/// stale.
+/// R4C1-M1, R5C1-M2: from an old cursor, batches are progress only while the lag falls by half a period in each period,
+/// in either state: one chain block (100 ms of chain) every 300 ms is a catch-up slower than real time, at the sink
+/// (`following`) and while `catching_up` (the window, not the sink, ended it), and the authority is `failing` after a
+/// period. Whole windows gain hours on real time: the next period ends with the gain, and the batches are progress
+/// again, so an honest catch-up after a restart is not stale.
 #[tokio::test]
 async fn batches_from_an_old_cursor_are_progress_only_while_they_gain_on_real_time() {
-    let c = paced(std::time::Duration::from_millis(50));
+    let c = paced(std::time::Duration::from_millis(50), std::time::Duration::from_millis(300));
     let create = small_ask(&c, 0);
     c.w.include(&c.hs.node, &[&create]);
     c.hs.sync().await;
-    let base = c.hs.health.snapshot().last_progress_unix_ms;
-    assert!(base > 0);
-
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    c.hs.node.push_empty(1);
-    assert!(matches!(c.hs.follower.step().await, StepOutcome::Applied { added: 1, .. }));
-    let s = c.hs.health.snapshot();
-    assert_eq!(s.state, FollowerState::Following);
-    assert_eq!(s.last_progress_unix_ms, base, "a batch slower than real time confirms nothing");
-
-    // far more chain than the window, one chain block an answer: catching up, still slower than real time
+    // far more chain than the window, one chain block an answer: catching up, slower than real time
     c.hs.node.push_empty(2_000);
     c.hs.node.set_added_cap(1);
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    let out = c.hs.follower.step().await;
-    assert!(matches!(out, StepOutcome::Applied { added: 1, more: true, .. }), "{out:?}");
+    let t0 = std::time::Instant::now();
+    let mut states = vec![];
+    while !c.hs.health.snapshot().authority_failing() && t0.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let out = c.hs.follower.step().await;
+        assert!(matches!(out, StepOutcome::Applied { added: 1, .. }), "{out:?}");
+        states.push(c.hs.health.snapshot().state);
+    }
     let s = c.hs.health.snapshot();
-    assert_eq!(s.state, FollowerState::CatchingUp);
-    assert_eq!(s.last_progress_unix_ms, base, "catching up slower than real time confirms nothing either");
-    assert!(s.stale(base + kobd::indexer::status::STALE_AFTER_MS + 1));
+    assert!(s.authority_failing(), "a catch-up slower than real time fails a period: {:?}", s.authority_pace);
+    assert!(states.contains(&FollowerState::CatchingUp), "{states:?}");
+    let base = s.last_progress_unix_ms;
+    c.hs.follower.step().await;
+    assert_eq!(c.hs.health.snapshot().last_progress_unix_ms, base, "no progress while failing");
 
-    // whole windows: the chain gains on real time, each batch is progress
+    // whole windows: the chain gains on real time, and after the next period each batch is progress again
     c.hs.node.set_added_cap(2_480);
-    let out = c.hs.follower.step().await;
-    assert!(matches!(out, StepOutcome::Applied { more: true, .. }), "{out:?}");
+    let t0 = std::time::Instant::now();
+    while c.hs.health.snapshot().authority_failing() && t0.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        c.hs.node.push_empty(50);
+        c.hs.follower.step().await;
+    }
     let s = c.hs.health.snapshot();
-    assert_eq!(s.state, FollowerState::CatchingUp);
-    assert!(s.last_progress_unix_ms > base, "a catch-up batch that gains on real time is progress");
+    assert!(!s.authority_failing(), "{:?}", s.authority_pace);
+    assert!(s.last_progress_unix_ms > base, "a catch-up that gains on real time is progress");
 }

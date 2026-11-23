@@ -752,9 +752,16 @@ fn mock_header(parent: Hash32, daa: u64, n: u64, ts: u64) -> kaspa_consensus_cor
     )
 }
 
+/// The time of a mock chain block at DAA 0 (Unix ms); each DAA after it is 100 ms later, unless
+/// `MockNode::set_block_clock` says otherwise. It is in 2026-09, so a follower on the real clock
+/// sees these blocks as weeks old: a follower of a `MockNode` with no block clock runs its clock
+/// from here instead (`ChainSource::simulated_clock_ms`), so that its progress rule finds an
+/// honest authority keeping up.
+pub const MOCK_CLOCK_MS: u64 = 1_790_000_000_000;
+
 impl MBlock {
     fn new(parent: Hash32, daa: u64, txs: Vec<Tx>, n: u64) -> MBlock {
-        Self::stamped(parent, daa, txs, n, 1_790_000_000_000u64 + daa * 100)
+        Self::stamped(parent, daa, txs, n, MOCK_CLOCK_MS + daa * 100)
     }
 
     fn stamped(parent: Hash32, daa: u64, txs: Vec<Tx>, n: u64, ts: u64) -> MBlock {
@@ -1119,9 +1126,10 @@ impl MockNode {
 
     /// A chain block as the node reports it.
     ///
-    /// At `Full` it has the whole header and every transaction field. At `High` it has neither the
-    /// UTXO commitment nor the pruning point, and the transactions have neither version nor lock
-    /// time, as with the real node.
+    /// The header is whole at both verbosities, as the real node's is at `Full`, the verbosity the
+    /// indexer asks the chain authority at in production: the follower takes the cursor's time only
+    /// from a header that hashes to its block (R5C1-L2). At `High` the transactions have neither
+    /// version nor lock time, as with the real node.
     fn block_json(b: &MBlock, full: bool) -> serde_json::Value {
         let hd = &b.header;
         let txs: Vec<serde_json::Value> = b
@@ -1141,8 +1149,8 @@ impl MockNode {
                 "hash": b.hash, "daaScore": hd.daa_score, "blueScore": hd.blue_score, "timestamp": hd.timestamp,
                 "bits": hd.bits, "nonce": hd.nonce, "version": hd.version, "parentsByLevel": hd.parents_by_level,
                 "hashMerkleRoot": hd.hash_merkle_root, "acceptedIdMerkleRoot": hd.accepted_id_merkle_root, "blueWork": hd.blue_work,
-                "pruningPoint": if full { json!(hd.pruning_point) } else { json!(null) },
-                "utxoCommitment": if full { json!(hd.utxo_commitment) } else { json!(null) },
+                "pruningPoint": hd.pruning_point,
+                "utxoCommitment": hd.utxo_commitment,
             },
             "acceptedTransactions": txs
         })
@@ -1236,6 +1244,10 @@ impl MockNode {
 }
 
 impl ChainSource for MockNode {
+    fn simulated_clock_ms(&self) -> Option<u64> {
+        // Blocks stamped by `set_block_clock` are on the real clock.
+        self.with(|s| s.block_clock.is_none().then_some(MOCK_CLOCK_MS))
+    }
     async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
         let full = match req.data_verbosity_level {
             Verbosity::High => false,

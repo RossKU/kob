@@ -133,6 +133,17 @@ pub const CHURN_SPACING: Duration = Duration::from_secs(300);
 /// Resolutions all entries together may make within [`CHURN_WINDOW`].
 pub const CHURN_MAX: usize = 8;
 
+/// A chain authority that began to lead at the tip and is deposed within this long ([`strike`]):
+/// it held the index back rather than found a halted network.
+pub const STRIKE_WITHIN: Duration = Duration::from_secs(30 * 60);
+/// How long the first [`strike`] keeps a host away from every resolution. It doubles with each
+/// strike ...
+pub const STRIKE_AWAY: Duration = Duration::from_secs(10 * 60);
+/// ... up to this.
+pub const STRIKE_AWAY_MAX: Duration = Duration::from_secs(6 * 3_600);
+/// A host with no strike for this long starts again at [`STRIKE_AWAY`].
+pub const STRIKE_FORGET: Duration = Duration::from_secs(24 * 3_600);
+
 /// Whether a configured node URL is a resolver entry.
 pub fn is_resolver(url: &str) -> bool {
     url == RESOLVER || url.strip_prefix("resolver:").is_some_and(|n| n.parse::<u32>().is_ok())
@@ -285,6 +296,36 @@ struct State {
     ///
     /// A lost connection ([`failed`]) does not count.
     authority_replaced: u64,
+    /// Host -> its strikes, the last one, and until when it stays away ([`strike`]).
+    strikes: HashMap<String, (u32, Instant, Instant)>,
+}
+
+impl State {
+    /// The hosts that stay away from resolutions now ([`strike`]).
+    fn away(&self, now: Instant) -> Vec<String> {
+        self.strikes.iter().filter(|(_, (_, _, until))| *until > now).map(|(h, _)| h.clone()).collect()
+    }
+}
+
+/// The chain authority `node` was deposed soon after it began to lead at the tip
+/// (`multi::MultiNode::authority_failing`). Its host stays out of every resolution for
+/// [`STRIKE_AWAY`], doubling with each further strike up to [`STRIKE_AWAY_MAX`], and starts again
+/// after [`STRIKE_FORGET`] without one. Like the failed hosts, it is avoided, not banned: when the
+/// resolvers name no other node, it is taken. Returns how long it stays away.
+pub fn strike(node: &str) -> Duration {
+    let h = host(node);
+    let now = Instant::now();
+    let mut s = lock();
+    let e = s.strikes.entry(h.clone()).or_insert((0, now, now));
+    if now.saturating_duration_since(e.1) >= STRIKE_FORGET {
+        e.0 = 0;
+    }
+    e.0 = e.0.saturating_add(1);
+    e.1 = now;
+    let away = STRIKE_AWAY.saturating_mul(1u32 << (e.0 - 1).min(10)).min(STRIKE_AWAY_MAX);
+    e.2 = now + away;
+    tracing::warn!(node = %h, strikes = e.0, away_secs = away.as_secs(), "a public chain authority was deposed soon after it began to lead at the tip: it is not resolved again for a while");
+    away
 }
 
 impl State {
@@ -327,6 +368,7 @@ fn state() -> &'static Mutex<State> {
             reasons: HashMap::new(),
             resolutions: HashMap::new(),
             authority_replaced: 0,
+            strikes: HashMap::new(),
         })
     })
 }
@@ -433,6 +475,7 @@ pub fn endpoint(url: &str) -> Result<String, String> {
                 return Err(format!("no public node yet (nodes were replaced too often; again in {} s)", churn.as_secs() + 1));
             }
             let mut avoid: Vec<String> = s.failed.iter().cloned().collect();
+            avoid.extend(s.away(now));
             avoid.extend(in_use(&s, url));
             (s.network.clone(), avoid, s.resolve)
         };
@@ -675,6 +718,7 @@ pub(crate) mod tests {
         s.reasons.clear();
         s.resolutions.clear();
         s.authority_replaced = 0;
+        s.strikes.clear();
         s.resolve = resolve;
         s.background = false;
     }
@@ -1038,5 +1082,25 @@ pub(crate) mod tests {
         assert!(endpoint("resolver").is_err(), "still backing off");
         lock().backoff.clear();
         assert_eq!(host(&endpoint("resolver").unwrap()), "a.example");
+    }
+
+    /// A struck host stays out of the resolutions: 10 minutes, then 20, doubling up to 6 hours. It is avoided, not
+    /// banned: with every other host struck too, it is taken.
+    #[test]
+    fn a_struck_host_stays_away_longer_each_time() {
+        let _g = serial();
+        reset(fake_resolve);
+        assert_eq!(strike("wss://a.example/x/borsh"), STRIKE_AWAY);
+        assert_eq!(strike("wss://a.example/x/borsh"), STRIKE_AWAY * 2);
+        for _ in 0..20 {
+            strike("wss://a.example/x/borsh");
+        }
+        assert_eq!(strike("wss://a.example/x/borsh"), STRIKE_AWAY_MAX);
+        assert_eq!(host(&endpoint("resolver").unwrap()), "b.example", "a.example is avoided");
+        for h in ["b", "c", "d"] {
+            strike(&format!("wss://{h}.example/x/borsh"));
+        }
+        lock().current.clear();
+        assert_eq!(host(&endpoint("resolver").unwrap()), "a.example", "every host struck: the first is taken");
     }
 }
