@@ -559,6 +559,26 @@ describe('a full stream book (R3B-L2)', () => {
     expect(b.get('b2'.repeat(32))).toBeUndefined();
     expect([...b.entries()].map((e) => e.snap.covenantId.slice(0, 2)).sort()).toEqual(['b1', 'b4', 'b5']);
   });
+
+  it('unlisted entries at an extreme price do not make the honest best go: they go first (R4B-L1)', () => {
+    const b = new StreamBook(3);
+    b.focus = (t) => t === TOKEN;
+    b.listing = () => ({ kob, daa: 1_000n, nowUnix: 1_790_000_000n });
+    const expired = (id: string, nowMs: number) => {
+      const s = at(id, '100');
+      return { ...s, order: { ...s.order, state: { ...s.order.state, state: { ...s.order.state.state, expiryDaa: '900' } } as OrderState } };
+    };
+    b.put(at('b1', '250000000'), { origin: 'stream', nowMs: 1, confirmed: true });
+    b.put(expired('j1', 2), { origin: 'stream', nowMs: 2, confirmed: true });
+    b.put(expired('j2', 3), { origin: 'stream', nowMs: 3, confirmed: true });
+    b.put(expired('j3', 4), { origin: 'stream', nowMs: 4 });
+    expect(b.get('b1'.repeat(32))).toBeDefined();
+    // an unconfirmed honest order is judged by its terms, not evicted for waiting on the node
+    b.put(at('b2', '260000000'), { origin: 'stream', nowMs: 5 });
+    b.put(expired('j4', 6), { origin: 'stream', nowMs: 6 });
+    expect(b.get('b1'.repeat(32))).toBeDefined();
+    expect(b.get('b2'.repeat(32))).toBeDefined();
+  });
 });
 
 describe('what the indexer gave before the mode is kept', () => {

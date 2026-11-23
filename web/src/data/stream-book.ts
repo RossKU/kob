@@ -90,6 +90,7 @@ export interface ListingContext {
 }
 
 const ZERO32 = '0'.repeat(64);
+const TRIM_RELIST_DAA = 600n;
 const s64 = (v: bigint | null | undefined): number | null => (v === null || v === undefined ? null : Number(v));
 
 /**
@@ -311,6 +312,16 @@ export class StreamBook {
   private readonly byOutpoint = new Map<string, Hex>();
   /** Whether a view looked at this token's market lately. Absent: every market counts as looked at. */
   focus: ((token: Hex) => boolean) | null = null;
+  /**
+   * The listing context the trim judges entries by. Absent: every entry counts as listable, at its
+   * state's price.
+   */
+  listing: (() => ListingContext) | null = null;
+  /**
+   * The trim's listing of each entry, kept while its snapshot is the same, for up to TRIM_RELIST_DAA
+   * (about a minute). Only the order of eviction uses it, and a full book trims on every put.
+   */
+  private readonly listed = new WeakMap<StreamEntry, { snap: OrderSnapshot; daa: bigint; l: Listing | null }>();
   constructor(private readonly max = MAX_STREAM_ORDERS) {}
 
   get size(): number {
@@ -416,17 +427,28 @@ export class StreamBook {
 
   private trim(keep: Hex): void {
     if (this.items.size <= this.max) return;
-    // Each entry's price per base unit, and the best of its market's side.
-    const facts = new Map<StreamEntry, { token: Hex; sell: boolean; p: number }>();
+    // Each entry's price per base unit, and the best of its market's side among the entries the
+    // book would list. An entry it would never list (expired, dust, another template...) goes
+    // first and sets no best, so junk at an absurd price cannot push a market's honest orders out
+    // (R4B-L1). An entry still waiting for the node is judged by its terms.
+    const ctx = this.listing?.() ?? null;
+    const facts = new Map<StreamEntry, { token: Hex; sell: boolean; p: number; listable: boolean }>();
     const best = new Map<string, number>();
     for (const e of this.items.values()) {
       const s = e.snap.order.state.state as unknown as Record<string, string | undefined>;
-      const token = String(s.tokenCovId ?? '').toLowerCase() as Hex;
+      let l: Listing | null = null;
+      if (ctx) {
+        const c = this.listed.get(e);
+        if (c && c.snap === e.snap && ctx.daa - c.daa < TRIM_RELIST_DAA && ctx.daa >= c.daa) l = c.l;
+        else this.listed.set(e, { snap: e.snap, daa: ctx.daa, l: (l = listingOf({ ...e, confirmed: true }, ctx)) });
+      }
+      const token = (l ? l.token : String(s.tokenCovId ?? '')).toLowerCase() as Hex;
       const sell = e.snap.order.state.kind === 'KobAsk' || e.snap.order.state.kind === 'KobAskKron';
       const scale = Number(s.scale ?? 0);
       const p = scale > 0 ? Number(s.price ?? 0) / scale : 0;
-      facts.set(e, { token, sell, p });
-      if (!(p > 0)) continue;
+      const listable = !ctx || l !== null;
+      facts.set(e, { token, sell, p, listable });
+      if (!(p > 0) || !listable) continue;
       const k = `${token}:${sell ? 1 : 0}`;
       const b = best.get(k);
       if (b === undefined || (sell ? p < b : p > b)) best.set(k, p);
@@ -438,10 +460,11 @@ export class StreamBook {
       return f.p > 0 && b !== undefined ? (f.sell ? f.p / b : b / f.p) : Infinity;
     };
     const focus = this.focus;
+    const listed = (e: StreamEntry): number => (facts.get(e)!.listable ? 1 : 0);
     const seen = (e: StreamEntry): number => (focus === null || focus(facts.get(e)!.token) ? 1 : 0);
     const order = [...this.items.values()]
       .filter((e) => e.snap.covenantId !== keep)
-      .sort((a, b) => (a.origin === 'receipt' ? 1 : 0) - (b.origin === 'receipt' ? 1 : 0) || seen(a) - seen(b) || away(b) - away(a) || a.seenMs - b.seenMs);
+      .sort((a, b) => (a.origin === 'receipt' ? 1 : 0) - (b.origin === 'receipt' ? 1 : 0) || listed(a) - listed(b) || seen(a) - seen(b) || away(b) - away(a) || a.seenMs - b.seenMs);
     for (const e of order.slice(0, this.items.size - this.max)) this.remove(e.snap.covenantId);
   }
 }

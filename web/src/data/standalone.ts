@@ -316,6 +316,7 @@ export class StandaloneController {
     this.lagSwitch = d.lagSwitchSeconds ?? LAG_SWITCH_SECONDS;
     this.lagReturn = d.lagReturnSeconds ?? LAG_RETURN_SECONDS;
     this.indexer = standaloneIndexer(this);
+    this.book.listing = () => this.ctx();
     this.book.focus = (t) => {
       const at = this.looked.get(t);
       return at !== undefined && this.now() - at <= FOCUS_MS;
