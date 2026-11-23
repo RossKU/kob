@@ -280,6 +280,10 @@ describe('powers and empty tickers (GET /v1/tokens)', () => {
     expect(sharedTickerIds(rows.slice(0, 1))).toEqual(new Set([ID('5')]));
   });
 
+  it('a ticker in a look-alike script (Cherokee, Lisu) is flagged alone too (R2B-M2)', () => {
+    expect(sharedTickerIds([{ covenantId: ID('5'), ticker: 'ᏦᎪᏚ' }, { covenantId: ID('6'), ticker: 'ꓗꓮꓢ' }, { covenantId: ID('9'), ticker: 'OTH' }])).toEqual(new Set([ID('5'), ID('6')]));
+  });
+
   it('powers: freeze or seize raise the issuer-control warning, other powers do not', () => {
     expect(hasIssuerControl(['freeze'])).toBe(true);
     expect(hasIssuerControl(['burn', 'seize'])).toBe(true);
@@ -414,6 +418,18 @@ describe('the genesis line of a row: kascov\'s remark and KOB\'s own check', () 
     expect(factText(kron, 'genesis_unverified')).toMatch(/a minter its program allows may still exist/);
     expect(factText({ ...kron, genesis: { status: 'unavailable', reason: 'history' } }, 'genesis_unverified')).toMatch(/may still exist.*history is not available/);
     expect(factText(row(['genesis_unverified']), 'genesis_unverified')).not.toMatch(/minter/);
+  });
+
+  it('the mint-authority sentences name a KRON minter only for a KRON program (R2B-I3)', () => {
+    const of = (templateId: string) => ({ ...row(['genesis_unverified', 'mint-authority']), info: null, templateId, powers: ['mint-authority'] });
+    const kron = of('kron-2433');
+    const kaspacom = of('kcc20-kaspacom-0-2-5');
+    expect(factText(kron, 'genesis_unverified')).toMatch(/a KRON minter creates any amount/);
+    expect(factText(kron, 'mint-authority')).toMatch(/KRON minter/);
+    expect(factText(kaspacom, 'genesis_unverified')).toMatch(/a minter its program allows may still exist/);
+    expect(factText(kaspacom, 'genesis_unverified')).not.toMatch(/KRON/);
+    expect(factText(kaspacom, 'mint-authority')).toMatch(/a minter can create more of this token/);
+    expect(factText(kaspacom, 'mint-authority')).not.toMatch(/KRON/);
   });
 
   it('a failure is the warning "Genesis check failed", even if kascov says verified', () => {

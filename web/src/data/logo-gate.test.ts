@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { LOGO_SHOWN_KEY, acquiredTokens, logoGate, logoScope, readShown, withholdsLogo } from './logo-gate';
+import { LOGO_ACTED_KEY, LOGO_SHOWN_KEY, acquiredTokens, actedTokens, logoGate, logoScope, readShown, withholdsLogo } from './logo-gate';
 
 const A = 'a'.repeat(64);
 const B = 'b'.repeat(64);
@@ -87,5 +87,71 @@ describe('the scope a logo is gated under', () => {
     expect(logoScope(undefined, 'indexer')).toBeUndefined();
     expect(logoScope(undefined, undefined)).toBeUndefined();
     expect(logoScope('wallet', 'indexer')).toBe('wallet');
+  });
+});
+
+describe('a token the connected wallet holds (R2B-M1)', () => {
+  beforeEach(() => logoGate.reset());
+
+  it('is gated wherever it shows, a listed row included; a token it does not hold is not', () => {
+    logoGate.expectHoldings('k', '*');
+    expect(logoGate.holding('k', A)).toBe('pending');
+    logoGate.noteHoldings('k', '*', [A]);
+    expect(logoGate.holding('k', A)).toBe('held');
+    expect(logoGate.holding('k', B)).toBe('not-held');
+    expect(logoScope(undefined, 'indexer', 'held')).toBe('wallet');
+    expect(logoScope(undefined, 'indexer', 'not-held')).toBeUndefined();
+    expect(logoScope(undefined, 'held', 'not-held')).toBe('wallet');
+  });
+
+  it('a fresh check of one token waits again, whatever an older full read said', () => {
+    logoGate.noteHoldings('k', '*', []);
+    logoGate.expectHoldings('k', B);
+    expect(logoGate.holding('k', B)).toBe('pending');
+    logoGate.noteHoldings('k', B, [B]);
+    expect(logoGate.holding('k', B)).toBe('held');
+  });
+
+  it('once seen held in this visit it stays held; a token never checked is unknown', () => {
+    logoGate.noteHoldings('k', '*', [A]);
+    logoGate.noteHoldings('k', '*', []);
+    expect(logoGate.holding('k', A)).toBe('held');
+    logoGate.reset();
+    expect(logoGate.holding('k', A)).toBe('unknown');
+    expect(logoGate.holding(null, A)).toBe('unknown');
+  });
+
+  it('another wallet starts over', () => {
+    logoGate.noteHoldings('k1', '*', [A]);
+    expect(logoGate.holding('k2', A)).toBe('unknown');
+    logoGate.noteHoldings('k2', '*', []);
+    expect(logoGate.holding('k2', A)).toBe('not-held');
+  });
+});
+
+describe('what the wallet acquired by its own action (R2B-M1)', () => {
+  beforeEach(() => logoGate.reset());
+
+  const ref = (covenantId: string) => ({ covenantId });
+  it('the token of a take, of a new order (a pair quote too) and of tokens it spent', () => {
+    const ids = actedTokens({
+      take: { ref: ref(A) },
+      orders: [{ description: { tokenCovId: B, pair: { quote: { covId: C } } } }],
+      net: { tokens: [{ ref: ref(D), fromWallet: 5n }, { ref: ref('e'.repeat(64)), fromWallet: 0n }] },
+    });
+    expect([...ids].sort()).toEqual([A, B, C, D]);
+  });
+
+  it('a token that only arrived (a second unit, an airdrop beside a purchase) is not acquired', () => {
+    expect(actedTokens({ take: { ref: ref(A) }, orders: [], net: { tokens: [{ ref: ref(B), fromWallet: 0n }] } }).has(B)).toBe(false);
+    expect(actedTokens({ take: null, orders: [], net: { tokens: [] } }).size).toBe(0);
+  });
+
+  it('is remembered in storage, apart from "Show logo", and allows the logo', () => {
+    const st = mem();
+    logoGate.remember([A], st);
+    expect(logoGate.allowed(A)).toBe(true);
+    expect([...readShown(st, LOGO_ACTED_KEY)]).toEqual([A]);
+    expect(st.m.has(LOGO_SHOWN_KEY)).toBe(false);
   });
 });

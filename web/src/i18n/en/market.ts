@@ -406,11 +406,14 @@ export default {
   'market.fact.genesis_unverified.label': 'Genesis not verified',
   'market.fact.genesis_unverified.text': 'Its creation was not checked against its token program, so units minted outside the program may exist.',
   'market.fact.genesis_unverified.textMint':
+    'Its creation was not checked against its token program, so units minted outside the program may exist, and a minter its program allows may still exist and create more of the token.',
+  'market.fact.genesis_unverified.textMintKron':
     'Its creation was not checked against its token program, so units minted outside the program may exist, and a minter its program allows may still exist: a KRON minter creates any amount of the token.',
   'market.fact.live_mint_authority.label': 'Live mint authority',
   'market.fact.live_mint_authority.text': 'A mint authority still exists: more of this token can be created.',
   'market.fact.mint-authority.label': 'Mint authority',
-  'market.fact.mint-authority.text': 'Its program has a mint authority: a minter can create more of this token (a KRON minter, any amount). Whether one is still live was not checked.',
+  'market.fact.mint-authority.text': 'Its program has a mint authority: a minter can create more of this token. Whether one is still live was not checked.',
+  'market.fact.mint-authority.textKron': 'Its program has a mint authority: a minter can create more of this token (a KRON minter, any amount). Whether one is still live was not checked.',
   'market.fact.mint-authority.textNone': 'Its program has a mint authority; its creation record says none is live.',
   'market.fact.mint-authority.textLive': 'Its program has a mint authority, and one is still live (see High risk).',
   'market.fact.public-mint.label': 'Public mint',

@@ -263,9 +263,11 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   }, [d, services.kob]);
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   // The tokens this wallet acquired on its own, through its orders and its creations. Only their
-  // creator-hosted logos load here (data/logo-gate.ts). It is set during render so the rows below
+  // creator-hosted logos load here (data/logo-gate.ts). Only an order this browser placed counts
+  // (its own record, not one adopted from the indexer): anyone can fund an order that names this
+  // key as its maker, which the indexer then lists here. It is set during render so the rows below
   // read it.
-  const acquired = useMemo(() => acquiredTokens(rows, pubkey ? listCreations(services.config.network, pubkey) : []), [rows, pubkey, services.config.network]);
+  const acquired = useMemo(() => acquiredTokens(rows.filter((r) => r.entry.record && r.entry.record.origin !== 'indexer'), pubkey ? listCreations(services.config.network, pubkey) : []), [rows, pubkey, services.config.network]);
   logoGate.setAcquired(pubkey ?? null, acquired);
   const entryById = useMemo(() => new Map((d?.entries ?? []).map((e) => [e.id, e])), [d]);
   // An order of the market this panel stands on, as on a market page with "this market only". Every

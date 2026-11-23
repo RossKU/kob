@@ -6,6 +6,7 @@ import { kasValueTitle } from '../../app/fiat';
 import { TipBadge } from '../market/TipBadge';
 import { TokenNote } from '../market/TokenNote';
 import { routeToHash, tokenRoute } from '../../app/router';
+import { tickerUnit } from '../../kob/registry';
 import { t } from '../../i18n';
 import { mergeSlots, mergeTxCount } from '../../kob/merge';
 import type { Hex } from '../../kob/types';
@@ -375,7 +376,7 @@ export function BalancesPanel(props: {
                                 small
                                 disabled={!!props.busy}
                                 loading={props.busy === `release-${b.token}`}
-                                title={t('orders.release.hint', { amount: amountCell(locked!.amount, d).text, ticker: shown.ticker })}
+                                title={t('orders.release.hint', { amount: amountCell(locked!.amount, d).text, ticker: tickerUnit(shown.ticker, b.token) })}
                                 onClick={() => props.onReleaseToken!(b.token)}
                                 data-testid={`balance-release-${b.token}`}
                               >
@@ -387,7 +388,7 @@ export function BalancesPanel(props: {
                                 small
                                 disabled={!props.canSign || !!props.busy}
                                 loading={props.busy === `unlock-${b.token}`}
-                                title={t('orders.unlock.hint', { amount: amountCell(locked!.amount, d).text, ticker: shown.ticker })}
+                                title={t('orders.unlock.hint', { amount: amountCell(locked!.amount, d).text, ticker: tickerUnit(shown.ticker, b.token) })}
                                 onClick={() => props.onUnlockToken!(b.token)}
                                 data-testid={`balance-unlock-${b.token}`}
                               >
@@ -402,7 +403,7 @@ export function BalancesPanel(props: {
                                 small
                                 disabled={!props.canSign || !!props.busy}
                                 loading={props.busy === `claim-${b.token}`}
-                                title={b.boughtOrders > 1 ? t('orders.claim.allHint', { count: b.boughtOrders }) : t('orders.claim.hint', { amount: amountCell(b.bought, d).text, ticker: shown.ticker })}
+                                title={b.boughtOrders > 1 ? t('orders.claim.allHint', { count: b.boughtOrders }) : t('orders.claim.hint', { amount: amountCell(b.bought, d).text, ticker: tickerUnit(shown.ticker, b.token) })}
                                 onClick={() => props.onClaimToken!(b.token)}
                                 data-testid={`balance-claim-${b.token}`}
                               >

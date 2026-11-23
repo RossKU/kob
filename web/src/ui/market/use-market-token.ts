@@ -16,6 +16,7 @@ import { useHeldToken, type HeldTokenState } from './use-held-token';
 import { useKascov, type KascovState } from './use-kascov';
 import { useOpenToken, type OpenTokenState } from './use-open-token';
 import { usePublicToken, type PublicTokenState } from './use-public-token';
+import { useHoldingCheck } from './use-wallet-holdings';
 
 export interface MarketTokenOptions {
   /** The rows of the registry and the indexer's token list. */
@@ -72,6 +73,9 @@ export function useMarketToken(id: string, o: MarketTokenOptions): MarketToken {
   const { registry, kob } = services;
   const { rows, rowsLoading, refreshKey, decimals, declared: declaredOf } = o;
   const listedRow = useMemo(() => rows.find((r) => r.covenantId === id) ?? null, [rows, id]);
+  // Whether the connected wallet holds the token, listed or not: a creator-hosted logo of a token
+  // it holds and did not acquire waits for "Show logo" on this page too (data/logo-gate.ts).
+  useHoldingCheck(id);
   // The creator's name, ticker and icon from kascov.io, where KOB has none of its own
   // (kascov-merge.ts). The facts stay KOB's.
   const kascov = useKascov();
