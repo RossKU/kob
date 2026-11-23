@@ -5,7 +5,7 @@ import { useTxUrl } from '../../app/explorer';
 import { useFiat } from '../../app/use-fiat';
 import { pairRoute, routeToHash } from '../../app/router';
 import { t, RAW_TOKEN_DECIMALS } from '../../i18n';
-import { longId, type TokenInfo } from '../../kob/registry';
+import { longId, tickerUnit, type TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { quoteOf } from '../../kob/units';
 import {
@@ -118,13 +118,14 @@ export function WalletFills(props: {
   );
   const quoteOfPair = useMemo(() => new Map<string, TokenInfo | undefined>(), []);
   const marketOf = ({ row, token }: WalletFill): string => {
-    const ticker = token?.ticker ?? (row.token ? longId(row.token) : '?');
+    // A ticker that reads as KAS, or is not plain ASCII, carries the id (`tickerUnit`).
+    const ticker = token ? tickerUnit(token.ticker, token.covenantId) : row.token ? longId(row.token) : '?';
     let quote: TokenInfo | undefined;
     if (row.pair) {
       if (!quoteOfPair.has(row.pair.quote)) quoteOfPair.set(row.pair.quote, props.tokenOf(row.pair.quote, row.pair.quoteScale));
       quote = quoteOfPair.get(row.pair.quote);
     }
-    return row.pair ? `${ticker}/${quote?.ticker ?? longId(row.pair.quote)}` : `${ticker}/KAS`;
+    return row.pair ? `${ticker}/${quote ? tickerUnit(quote.ticker, quote.covenantId) : longId(row.pair.quote)}` : `${ticker}/KAS`;
   };
   /**
    * What a column compares. Amounts are compared as tokens, because the tokens have their own

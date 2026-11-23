@@ -19,7 +19,7 @@ import { explorerTxUrl } from '../../config';
 import { pubkeyToAddress } from '../../data/kaspa-sdk';
 import type { PairFillsView } from '../../data/indexer-types';
 import { t } from '../../i18n';
-import { longId } from '../../kob/registry';
+import { longId, tickerUnit } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { EmptyState, ErrorBanner, Section, SortButton, ariaSortOf, scaledUnits, sortBy, useSlideIndicator, useSortState, type SortColumn, type SortValue } from '../kit';
 import { ListPager, RowsControl, showListStart } from '../market/ListPaging';
@@ -115,7 +115,11 @@ function ActivityLogView(props: ActivityLogProps) {
   const declared = useDeclarationLookup();
   const { nameOf, decimalsOf } = useMemo(
     () => ({
-      nameOf: (token: Hex): string => displayToken(registry, config.network, token)?.ticker || longId(token),
+      // A ticker that reads as KAS, or is not plain ASCII, carries the id (`tickerUnit`).
+      nameOf: (token: Hex): string => {
+        const tk = displayToken(registry, config.network, token)?.ticker;
+        return tk ? tickerUnit(tk, token) : longId(token);
+      },
       decimalsOf: (token: Hex): number => displayToken(registry, config.network, token)?.decimals ?? 8,
     }),
     [registry, config.network, declared],

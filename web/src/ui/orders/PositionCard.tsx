@@ -3,7 +3,7 @@ import type { EventView } from '../../data/indexer-types';
 import type { Clock } from '../../kob/plan-types';
 import type { Hex } from '../../kob/types';
 import type { Position } from '../../kob/positions';
-import { longId, type TokenInfo } from '../../kob/registry';
+import { longId, tickerUnit, type TokenInfo } from '../../kob/registry';
 import { Badge, Button } from '../kit';
 import { OrderRow, type OrderRowActions } from './OrderRow';
 import type { OrderRowModel } from './orders-model';
@@ -100,11 +100,11 @@ export function PositionCard(props: PositionCardProps) {
           </strong>
           {token && pair ? (
             <a class="pc-token" href={`#/market/${token.covenantId}/${pair.quoteId}`} data-testid="position-token">
-              {`${token.ticker}/${pair.quote?.ticker ?? longId(pair.quoteId)}`}
+              {`${tickerUnit(token.ticker, token.covenantId)}/${pair.quote ? tickerUnit(pair.quote.ticker, pair.quote.covenantId) : longId(pair.quoteId)}`}
             </a>
           ) : token ? (
             <a class="pc-token" href={`#/market/${token.covenantId}`} data-testid="position-token">
-              {token.ticker}
+              {tickerUnit(token.ticker, token.covenantId)}
             </a>
           ) : null}
           <span class={`pc-chip pc-chip-${p.side}`}>{t(`orders.position.first.${p.side}`)}</span>
