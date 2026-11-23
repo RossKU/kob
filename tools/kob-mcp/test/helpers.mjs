@@ -24,6 +24,8 @@ export function setup(over = {}) {
     mode: 'confirm',
     planTtlSec: 300,
     limits: { perTxKas: 100, perDayKas: 150, maxFeeKas: 0.01, priceBandPct: 25 },
+    // The operator's reference for the test token (R2-T2): 0.25 KAS, its last fill in fake-kob.mjs.
+    tokens: { ['55'.repeat(32)]: { refPrice: '0.25' } },
     withdrawTo: [PRIMARY],
     killSwitchFile: null,
     cli: { timeoutSec: 30, priorityFee: false },

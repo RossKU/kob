@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { cutMiddle } from '../src/kob.mjs';
 import { KobService, sentNothing } from '../src/service.mjs';
 import { PRIMARY, setup } from './helpers.mjs';
 
@@ -183,13 +184,14 @@ test('kob_replace: a sell priced down counts its custody under the token caps; p
   assert.equal(t.yesCalls().length, 4);
 });
 
-test('kob_replace: with no band reference, or no current state in the plan, only a move for the maker passes (E-M4)', async () => {
+test('kob_replace: with no reference any reprice is refused; with one, a plan with no current state counts as against the maker (E-M4, R2-T2)', async () => {
   const { t, svc, id } = await restingSell();
-  const chain = JSON.parse(readFileSync(process.env.FAKE_KOB_CHAIN, 'utf8'));
-  writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify({ ...chain, book: { best_bid: null, best_ask: '25000000', last_fill: null } }));
-  assert.match((await svc.write('kob_replace', { id, price: '0.24KAS' })).reason, /^PRICE_BAND_UNCHECKED: no last fill/);
+  const refs = svc.cfg.refs;
+  svc.cfg.refs = new Map(); // no operator price, and the thin stand-in book gives none
+  assert.match((await svc.write('kob_replace', { id, price: '0.24KAS' })).reason, /^PRICE_BAND_UNCHECKED: no usable reference/);
+  assert.match((await svc.write('kob_replace', { id, price: '0.3KAS' })).reason, /^PRICE_BAND_UNCHECKED: no usable reference/);
+  svc.cfg.refs = refs;
   assert.equal((await svc.write('kob_replace', { id, price: '0.3KAS' })).status, 'submitted');
-  writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify({ ...JSON.parse(readFileSync(process.env.FAKE_KOB_CHAIN, 'utf8')), book: chain.book }));
   // An older CLI's plan has no current state: any new price counts as a move against the maker.
   svc.kob.env.FAKE_KOB_NO_CURRENT = '1';
   assert.equal((await svc.write('kob_replace', { id, price: '0.31KAS' })).status, 'submitted');
@@ -458,18 +460,67 @@ test('kob_replace: a buy priced up counts its whole escrow under the KAS caps (T
   assert.equal(t.yesCalls().length, 3);
 });
 
-test('price band: a printed last fill alone does not move the reference (T-3, K-L3)', async () => {
-  const t = setup({ mode: 'auto' });
+// R2-T2: the reference is the operator's price, or a book reference with refDepthKas behind it on
+// both the fills and the resting side; with neither, a priced write is refused.
+const rows = (bids, asks = []) => ({ bids, asks });
+const row = (price, amount, extra = {}) => ({ price: String(price), amount_left: String(amount), min_fill: '100000000', scale: 100000000, maker: 'aa'.repeat(32), ...extra });
+const fills = (price, amount, n = 1) => ({ items: Array.from({ length: n }, () => ({ price: String(price), amount: String(amount) })) });
+function bookService(over = {}) {
+  const t = setup({ mode: 'auto', tokens: {}, ...over });
   const svc = new KobService(t.cfg);
-  await svc.balances(); // the stand-in writes its chain
-  // A second key prints a fill at 0.4; the bids that add up to 10 KAS stand at 0.24, the ask at 0.26.
-  chainBook({ last_fill: '40000000', bids: [{ price: '24000000', amount: String(50e8), orders: 1 }], asks: [{ price: '26000000', amount: String(1e8), orders: 1 }] });
-  const r = await svc.write('kob_place_limit', { ...place, price: '0.45KAS' });
-  assert.match(r.reason, /^PRICE_BAND: a buy at 0\.45 KAS .*0\.25 KAS per whole token \(10 KAS bid depth\)/);
-  // A sell is judged against the higher one: a printed low fill does not let it sell cheap.
-  chainBook({ last_fill: '1000000' });
-  assert.match((await svc.write('kob_place_limit', { token: 'TUSD', side: 'sell', amount: '1TUSD', price: '0.1KAS' })).reason, /^PRICE_BAND: a sell/);
+  svc.book$ = { rows: rows([]), fills: { items: [] } };
+  svc.indexer.tryGet = async (path) => (path.startsWith('/v1/books/') ? svc.book$.rows : path.startsWith('/v1/fills') ? svc.book$.fills : null);
+  return { t, svc };
+}
+
+test('a take with no reference is refused (R2-T2)', async () => {
+  const { t, svc } = bookService();
+  await svc.balances();
+  chainBook({ last_fill: null, best_bid: null, bids: [], asks: [{ price: '100000000000', amount: '1', orders: 1 }] });
+  const r = await svc.write('kob_take', { id: 'ab'.repeat(32), token: TUSD, amount: '1TUSD', max_price: '1000KAS' });
+  assert.match(r.reason, /^PRICE_BAND_UNCHECKED: no usable reference/);
+  assert.match((await svc.write('kob_place_limit', place)).reason, /^PRICE_BAND_UNCHECKED/);
   assert.equal(t.yesCalls().length, 0);
+});
+
+test('a printed fill on a thin book does not set the band (R2-T2)', async () => {
+  const { t, svc } = bookService();
+  // 5 KAS of bids, and a fill printed at 100 times the bids.
+  svc.book$ = { rows: rows([row(25000000, 20e8)]), fills: fills(2500000000, 1e8) };
+  assert.match((await svc.write('kob_place_limit', { ...place, price: '30KAS' })).reason, /^PRICE_BAND_UNCHECKED: no usable reference \(under 1000 KAS of bids/);
+  // Deep bids but a thin fill history: still no reference.
+  svc.book$ = { rows: rows([row(24000000, 5000e8)]), fills: fills(25000000, 10e8) };
+  assert.match((await svc.write('kob_place_limit', place)).reason, /^PRICE_BAND_UNCHECKED: no usable reference \(under 1000 KAS of fills/);
+  assert.equal(t.yesCalls().length, 0);
+});
+
+test('a book reference needs refDepthKas of fills and of resting orders that are not the wallet\'s own (R2-T2)', async () => {
+  const { t, svc } = bookService();
+  // 1,200 KAS of bids at 0.24 and 1,250 KAS of fills at 0.25: a buy is judged against 0.24.
+  svc.book$ = { rows: rows([row(24000000, 5000e8)]), fills: fills(25000000, 1000e8, 5) };
+  assert.equal((await svc.write('kob_place_limit', { ...place, price: '0.3KAS' })).status, 'submitted');
+  assert.match((await svc.write('kob_place_limit', { ...place, price: '0.31KAS' })).reason, /^PRICE_BAND: a buy at 0\.31 KAS .*0\.24 KAS per whole token \(1000 KAS of bids\)/);
+  // A sell is judged against the higher one, the fills' VWAP: a cheap sell is refused.
+  svc.book$.rows = rows([], [row(10000000, 20000e8)]);
+  assert.match((await svc.write('kob_place_limit', { token: 'TUSD', side: 'sell', amount: '1TUSD', price: '0.18KAS' })).reason, /^PRICE_BAND: a sell at 0\.18 KAS .*0\.25 KAS per whole token \(the VWAP/);
+  // The wallet's own bids and a large-minimum bid add no depth.
+  svc.book$.rows = rows([row(24000000, 2500e8, { maker: 'ef'.repeat(32) }), row(23000000, 5000e8, { min_fill: String(5000e8) })]);
+  assert.match((await svc.write('kob_place_limit', place)).reason, /^PRICE_BAND_UNCHECKED: no usable reference \(under 1000 KAS of bids/);
+  assert.equal(t.yesCalls().length, 1);
+});
+
+test('the operator\'s refPrice bounds the band, and the book may only tighten it (R2-T2)', async () => {
+  const { t, svc } = bookService({ tokens: { [TUSD]: { refPrice: '0.25', bandPct: 10 } } });
+  // No book reference: the operator's price and band alone.
+  assert.equal((await svc.write('kob_place_limit', { ...place, price: '0.275KAS' })).status, 'submitted');
+  assert.match((await svc.write('kob_place_limit', { ...place, price: '0.276KAS' })).reason, /^PRICE_BAND: a buy at 0\.276 KAS is more than 10% above the reference 0\.25 KAS per whole token \(the operator's refPrice\)/);
+  // A deep book far higher does not loosen it.
+  svc.book$ = { rows: rows([row(40000000, 5000e8)]), fills: fills(40000000, 1000e8, 5) };
+  assert.match((await svc.write('kob_place_limit', { ...place, price: '0.3KAS' })).reason, /refPrice/);
+  // A deep book lower tightens it.
+  svc.book$ = { rows: rows([row(20000000, 10000e8)]), fills: fills(20000000, 1000e8, 10) };
+  assert.match((await svc.write('kob_place_limit', { ...place, price: '0.25KAS' })).reason, /^PRICE_BAND: a buy at 0\.25 KAS .*0\.2 KAS per whole token/);
+  assert.equal(t.yesCalls().length, 1);
 });
 
 test('kob_claim with sell_price: banded, and the claimed tokens count under the token caps (T-2, M17)', async () => {
@@ -478,8 +529,10 @@ test('kob_claim with sell_price: banded, and the claimed tokens count under the 
   try {
     const svc = new KobService(t.cfg);
     await svc.detectFeatures();
+    await svc.balances();
+    // The collected buy order, on the node: its state names TUSD.
     const id = 'ab'.repeat(32);
-    svc.indexer.get = async () => ({ covenant_id: id, token: TUSD });
+    chainSet({ orders: { [id]: { side: 'buy', price: 25000000, tip: 0, amount: 100, value: 26e8 } } });
     assert.match((await svc.write('kob_claim', { id, sell_price: '0.01KAS' })).reason, /^PRICE_BAND: a sell at 0\.01 KAS/);
     // 300 claimed TUSD for sale: above 25 % of the 1,000 held.
     chainSet({ bought: 300e8 });
@@ -487,11 +540,33 @@ test('kob_claim with sell_price: banded, and the claimed tokens count under the 
     chainSet({ bought: 200e8 });
     assert.equal((await svc.write('kob_claim', { id, sell_price: '0.25KAS' })).status, 'submitted');
     assert.deepEqual(t.ledger().at(-2).tokens, { [TUSD]: String(200e8) });
-    // No indexer view of the order: the token is not confirmed, so the sale is refused; a plain claim goes.
-    svc.indexer.get = async () => { throw new Error('down'); };
-    assert.match((await svc.write('kob_claim', { id, sell_price: '0.25KAS' })).reason, /^PRICE_BAND_UNCHECKED: the token of the claimed order/);
+    assert.equal(t.yesCalls().length, 1);
+  } finally {
+    delete process.env.FAKE_KOB_FEATURES;
+  }
+});
+
+test('kob_claim with sell_price takes the token from the node, never from the indexer (R2-T4)', async () => {
+  const t = setup({ mode: 'auto' });
+  process.env.FAKE_KOB_FEATURES = 'claim';
+  try {
+    const svc = new KobService(t.cfg);
+    await svc.detectFeatures();
+    await svc.balances();
+    const id = 'ab'.repeat(32);
+    // A lying indexer names another token, one with a loose cap and its own reference.
+    const OTHER = '66'.repeat(32);
+    svc.indexer.get = async () => ({ covenant_id: id, token: OTHER });
+    svc.cfg.refs.set(OTHER, { sompi: 1n, bandPct: null });
+    svc.cfg.caps.tokens.byToken.set(OTHER, { perTx: 10n ** 30n, perDay: 10n ** 30n });
+    chainSet({ bought: 300e8, orders: { [id]: { side: 'buy', price: 25000000, tip: 0, amount: 100, value: 26e8 } } });
+    // The node's state names TUSD: TUSD's caps apply (300 of 1,000 held is above 25 %).
+    assert.match((await svc.write('kob_claim', { id, sell_price: '0.25KAS' })).reason, /^TOKEN_PER_TX_CAP: 30000000000 base units of 5555/);
+    // The order cannot be read on the node and the plan names no token: refused; a plain claim goes.
+    chainSet({ orders: {} });
+    assert.match((await svc.write('kob_claim', { id, sell_price: '0.25KAS' })).reason, /^PRICE_BAND_UNCHECKED: the token of the claimed order is not confirmed on the node/);
     assert.equal((await svc.write('kob_claim', { id })).status, 'submitted');
-    assert.equal(t.yesCalls().length, 2);
+    assert.equal(t.yesCalls().length, 1);
   } finally {
     delete process.env.FAKE_KOB_FEATURES;
   }
@@ -533,4 +608,12 @@ test('fee estimate: enum arguments are checked, and a creation estimate leaves n
   const dir = join(t.cfg.dataDir, 'creations');
   assert.deepEqual(existsSync(dir) ? readdirSync(dir) : [], []);
   assert.equal(t.yesCalls().length, 0);
+});
+
+test('a long stderr keeps its last line, where the CLI says what failed (T-13)', () => {
+  const long = `${'x'.repeat(5000)} | error: submit: socket closed`;
+  const cut = cutMiddle(long, 1500);
+  assert.equal(cut.length, 1500);
+  assert.ok(cut.endsWith('error: submit: socket closed'));
+  assert.equal(cutMiddle('short', 1500), 'short');
 });

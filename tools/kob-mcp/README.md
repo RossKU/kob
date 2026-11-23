@@ -44,18 +44,31 @@ The limits below are what holds.
 - Caps on the tokens that leave the wallet (sends, sells, sales into buy orders): `limits.tokens` per covenant id in base
   units, else 25 % per transaction and 50 % per day of the holding confirmed on the node (`limits.tokenDefault`).
 - At most 3 token creations a day (`launchesPerDay`).
-- A price (all-in: a buy's price plus its tip, a sell's price less its tip) more than 25 % worse than the reference is
-  refused. A buy is judged against the lower of the last fill and the 10 KAS bid depth (the bid behind 10 KAS of bids,
-  midpointed with the best ask), a sell against the higher, so one printed fill moves neither bound. In a very wide book
-  (an ask above twice the bid behind 10 KAS) the depth reference is that bid, so even a buy at the best ask can be
-  refused. A book that cannot be read refuses.
+- A price (all-in: a buy's price plus its tip, a sell's price less its tip) more than 25 % worse than the reference
+  (`limits.priceBandPct`) is refused. Every priced write (`kob_place_limit`, `kob_replace`, `kob_take`, `kob_claim` with
+  `sell_price`) on a token with no usable reference is refused too (`PRICE_BAND_UNCHECKED`); plain cancels, claims
+  without a sale, merges and sends are not banded. The reference is:
+  - the operator's own price, when the config sets it: `"tokens": { "<covenant id>": { "refPrice": "0.25", "bandPct": 10 } }`
+    (KAS per whole token; `bandPct` overrides `limits.priceBandPct` for that token). The book can only tighten it: a buy
+    takes the lower of the two, a sell the higher. This is how a fresh or thin token is allowed at all;
+  - else the book's, when `limits.refDepthKas` (1,000 KAS) stands behind it twice: the resting side (for a buy the price
+    where the bids add up to 1,000 KAS, for a sell where the asks do; the wallet's own orders and orders whose minimum
+    fill is worth more than 10 KAS do not count) and the fill history (the VWAP of the newest 1,000 KAS of fills). A buy
+    is judged against the lower of the two, a sell against the higher. A book that cannot be read refuses.
+
+  What remains: someone with `refDepthKas` of orders at risk on the book (anyone may fill them) and the same in printed
+  fills can still move a book reference by up to the band. The caps bound what a steered agent then loses: 100 KAS a
+  transaction and 500 KAS a UTC day of KAS (`perTxKas`, `perDayKas`), and 25 % a transaction and 50 % a day of each
+  token's holding (`limits.tokenDefault`). With `refPrice` set, the bound is the operator's price.
 - The tip goes to the executor that fills the order: at most 1 % of the price and 1 KAS over the whole order
   (`limits.maxTipPct`, `limits.maxTipKas`).
 - `kob_replace` reads the order's side and token from the CLI's dry run (the order as checked on the node), and a new
   price, tip or amount goes through the same checks as a new order. A sell whose all-in price goes down or whose amount
   goes up counts its whole custody under the token caps; a buy whose all-in price goes up counts its whole KAS under the
-  KAS caps, as a new order would. Such a move with no reference to check it against is refused: cancel and place instead.
-- `kob_claim` with `sell_price` is banded as a sell, and the claimed tokens count under the token caps.
+  KAS caps, as a new order would.
+- `kob_claim` with `sell_price` is banded as a sell, and the claimed tokens count under the token caps. The token is the
+  one the CLI read on the node (the order's state in a dry run of `kob replace --renew`, else the one token of the plan's
+  net effect), never the indexer's: without it the sale is refused.
 - `kob_send` pays only your own addresses (`withdrawTo`).
 - A `STOP` file in the data folder blocks every write (checked again right before the send).
 - Every call is logged in `audit.jsonl`.

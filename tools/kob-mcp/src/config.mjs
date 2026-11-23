@@ -19,7 +19,12 @@ export const DEFAULTS = {
     perTxKas: 100, // the most KAS one transaction may take out of the wallet (escrow, carriers, sends, fee)
     perDayKas: 500, // the same over a UTC day, from the ledger
     maxFeeKas: 1, // the most network fee of one transaction (a token creation: of both)
-    priceBandPct: 25, // a limit price or take bound this far from the reference (a buy: the lower of the last fill and the 10 KAS bid depth; a sell: the higher; else the mid) is refused; null: off
+    // A limit price or take bound this far from the reference is refused, and so is any priced write
+    // on a token with no reference (R2-T2). The reference is tokens.<id>.refPrice when set, which the
+    // book may only tighten; else the book's, when refDepthKas stands behind it on both the fills and
+    // the resting side. null: off.
+    priceBandPct: 25,
+    refDepthKas: 1000, // the KAS of fills and of resting orders (not the wallet's own) a book reference needs
     // The tip goes to the executor that fills the order: at most this % of the price, and this
     // much KAS over the whole order (a sell's custody, a buy's escrow). null: that cap is off.
     maxTipPct: 1,
@@ -32,6 +37,8 @@ export const DEFAULTS = {
     tokens: {},
     tokenDefault: { perTxPct: 25, perDayPct: 50 },
   },
+  // The operator's reference per token: { "<covenant id>": { refPrice: "0.25" (KAS per whole token), bandPct: 10 (optional) } }.
+  tokens: {},
   withdrawTo: [], // the only addresses kob_send may pay (the primary wallet)
   killSwitchFile: null, // while this file exists every write is refused; null: <dataDir>/STOP
   cli: { timeoutSec: 180, priorityFee: false },
@@ -116,6 +123,25 @@ export function checkConfig(c, baseDir, env = process.env) {
     }
   }
   if (c.limits.priceBandPct != null && (!/^\d+(\.\d+)?$/.test(String(c.limits.priceBandPct)) || !(Number(c.limits.priceBandPct) > 0))) errs.push('limits.priceBandPct must be a number above 0, or null');
+  let refDepth = null;
+  try {
+    refDepth = toSompi(c.limits.refDepthKas);
+    if (refDepth <= 0n) errs.push('limits.refDepthKas must be above 0');
+  } catch {
+    errs.push(`limits.refDepthKas: ${JSON.stringify(c.limits.refDepthKas)}`);
+  }
+  const refs = new Map();
+  for (const [id, v] of Object.entries(c.tokens ?? {})) {
+    if (!/^[0-9a-fA-F]{64}$/.test(id)) { errs.push(`tokens: ${id} is not a covenant id (64 hex)`); continue; }
+    let sompi = null;
+    try {
+      sompi = toSompi(v?.refPrice);
+    } catch { /* below */ }
+    if (!(sompi > 0n)) errs.push(`tokens.${id}.refPrice must be a KAS price per whole token above 0 (a decimal string)`);
+    const band = v?.bandPct;
+    if (band != null && (!/^\d+(\.\d+)?$/.test(String(band)) || !(Number(band) > 0))) errs.push(`tokens.${id}.bandPct must be a number above 0`);
+    refs.set(id.toLowerCase(), { sompi, bandPct: band ?? null });
+  }
   const tokenCaps = { byToken: new Map(), perTxPct: null, perDayPct: null };
   for (const [id, v] of Object.entries(c.limits.tokens ?? {})) {
     if (!/^[0-9a-fA-F]{64}$/.test(id)) { errs.push(`limits.tokens: ${id} is not a covenant id (64 hex)`); continue; }
@@ -148,6 +174,8 @@ export function checkConfig(c, baseDir, env = process.env) {
     kobCliArgs: (c.kobCliArgs ?? []).map(String),
     dataDir,
     killSwitchFile: abs(c.killSwitchFile) ?? join(dataDir, 'STOP'),
+    refs,
+    refDepth,
     caps: { perTx: lim.perTxKas, perDay: lim.perDayKas, maxFee: lim.maxFeeKas, tokens: tokenCaps, tips: { maxTipPct: pct ?? null, maxTip } },
   };
 }

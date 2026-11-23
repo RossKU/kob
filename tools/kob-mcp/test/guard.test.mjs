@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { checkConfig, loadConfig, publicConfig } from '../src/config.mjs';
-import { Ledger, bandCheck, capRefusals, firmReference, tipRefusals } from '../src/guard.mjs';
+import { Ledger, bandCheck, bandReference, bookReference, capRefusals, tipRefusals } from '../src/guard.mjs';
 import { kas, toSompi } from '../src/units.mjs';
 import { PRIMARY } from './helpers.mjs';
 
@@ -44,51 +44,72 @@ test('caps: per transaction, per day and fee', () => {
   assert.match(capRefusals({ spend: KAS, fee: KAS / 10n }, caps, 0n)[0], /^MAX_FEE/);
 });
 
-test('price band: a buy far above or a sell far below the reference is refused', () => {
-  const book = { last_fill: String(25_000_000n), best_bid: '24000000', best_ask: '26000000', scale: 100_000_000 };
-  const at = (side, price, extra = {}) => bandCheck({ side, price, book, bandPct: 25, decimals: 8, ...extra });
+const ref = (n, d = 1n, what = 'ref') => ({ num: BigInt(n), den: BigInt(d), what });
+
+test('price band: a buy far above or a sell far below the reference is refused; no reference refuses (R2-T2)', () => {
+  const at = (side, price, extra = {}) => bandCheck({ side, price, ref: ref(25_000_000), scale: 100_000_000, bandPct: 25, decimals: 8, ...extra });
   assert.equal(at('buy', 31_250_000n).ok, true, 'exactly at +25 % passes');
   assert.match(at('buy', 31_250_001n).reason, /^PRICE_BAND/);
   assert.match(at('sell', 18_749_999n).reason, /^PRICE_BAND/);
   assert.equal(at('sell', 18_750_000n).ok, true, 'exactly at -25 % passes');
-  assert.equal(at('buy', 1n, { book: { best_bid: null, best_ask: null, last_fill: null, scale: 1e8 } }).ok, true);
+  assert.match(at('buy', 1n, { ref: null }).reason, /^PRICE_BAND_UNCHECKED: no usable reference/);
   assert.equal(at('buy', 10n ** 12n, { bandPct: null }).ok, true);
-  assert.match(at('buy', 1n, { decimals: null }).note, /decimals are unknown/);
+  assert.match(at('buy', 1n, { decimals: null }).reason, /^PRICE_BAND_UNCHECKED: the token's decimals are unknown/);
 });
 
-test('price band: exact at any number of decimals, a half-sompi mid and a fractional band', () => {
+test('price band: exact at any number of decimals, a half-sompi reference and a fractional band', () => {
   // 12 decimals: the book's scale stops at 10^9, so 25,000,000 sompi per 10^9 base units is 250 KAS
   // per whole token.
-  const b12 = { last_fill: '25000000', scale: 1_000_000_000 };
-  assert.equal(bandCheck({ side: 'buy', price: 312_50000000n, book: b12, bandPct: 25, decimals: 12 }).ok, true);
-  assert.match(bandCheck({ side: 'buy', price: 312_50000001n, book: b12, bandPct: 25, decimals: 12 }).reason, /250 KAS per whole token/);
-  assert.equal(bandCheck({ side: 'sell', price: 187_50000000n, book: b12, bandPct: 25, decimals: 12 }).ok, true);
-  assert.equal(bandCheck({ side: 'sell', price: 187_49999999n, book: b12, bandPct: 25, decimals: 12 }).ok, false);
+  const b12 = { ref: ref(25_000_000), scale: 1_000_000_000, bandPct: 25, decimals: 12 };
+  assert.equal(bandCheck({ side: 'buy', price: 312_50000000n, ...b12 }).ok, true);
+  assert.match(bandCheck({ side: 'buy', price: 312_50000001n, ...b12 }).reason, /250 KAS per whole token/);
+  assert.equal(bandCheck({ side: 'sell', price: 187_50000000n, ...b12 }).ok, true);
+  assert.equal(bandCheck({ side: 'sell', price: 187_49999999n, ...b12 }).ok, false);
   // 18 decimals: 1 sompi per 10^9 base units is 10^9 sompi (10 KAS) per whole token.
-  const b18 = { last_fill: '1', scale: 1_000_000_000 };
-  assert.equal(bandCheck({ side: 'buy', price: 1_250_000_000n, book: b18, bandPct: 25, decimals: 18 }).ok, true);
-  assert.equal(bandCheck({ side: 'buy', price: 1_250_000_001n, book: b18, bandPct: 25, decimals: 18 }).ok, false);
-  // 0 decimals, a mid of 3 and 4 sompi (3.5), a 2.5 % band: the buy limit is 3.5875 sompi.
-  const b0 = { last_fill: null, best_bid: '3', best_ask: '4', scale: 1 };
-  assert.equal(bandCheck({ side: 'buy', price: 3n, book: b0, bandPct: '2.5', decimals: 0 }).ok, true);
-  assert.equal(bandCheck({ side: 'buy', price: 4n, book: b0, bandPct: '2.5', decimals: 0 }).ok, false);
-  assert.equal(bandCheck({ side: 'sell', price: 4n, book: b0, bandPct: 150, decimals: 0 }).ok, true, 'a band over 100 % never refuses a sell');
+  const b18 = { ref: ref(1), scale: 1_000_000_000, bandPct: 25, decimals: 18 };
+  assert.equal(bandCheck({ side: 'buy', price: 1_250_000_000n, ...b18 }).ok, true);
+  assert.equal(bandCheck({ side: 'buy', price: 1_250_000_001n, ...b18 }).ok, false);
+  // 0 decimals, a reference of 3.5 sompi, a 2.5 % band: the buy limit is 3.5875 sompi.
+  const b0 = { ref: ref(7, 2), scale: 1, decimals: 0 };
+  assert.equal(bandCheck({ side: 'buy', price: 3n, bandPct: '2.5', ...b0 }).ok, true);
+  assert.equal(bandCheck({ side: 'buy', price: 4n, bandPct: '2.5', ...b0 }).ok, false);
+  assert.equal(bandCheck({ side: 'sell', price: 4n, bandPct: 150, ...b0 }).ok, true, 'a band over 100 % never refuses a sell');
 });
 
 test('price band: a state price per its own scale is judged exactly (12 decimals)', () => {
   // 25,000,000 sompi per 10^9 base units is 250 KAS per whole token: +25 % is 312.5 KAS.
-  const b12 = { last_fill: '25000000', scale: 1_000_000_000 };
-  assert.equal(bandCheck({ side: 'buy', price: 31_250_000n, priceScale: 1_000_000_000, book: b12, bandPct: 25, decimals: 12 }).ok, true);
-  assert.match(bandCheck({ side: 'buy', price: 31_250_001n, priceScale: 1_000_000_000, book: b12, bandPct: 25, decimals: 12 }).reason, /a buy at 312\.50001 KAS/);
+  const b12 = { ref: ref(25_000_000), scale: 1_000_000_000, bandPct: 25, decimals: 12 };
+  assert.equal(bandCheck({ side: 'buy', price: 31_250_000n, priceScale: 1_000_000_000, ...b12 }).ok, true);
+  assert.match(bandCheck({ side: 'buy', price: 31_250_001n, priceScale: 1_000_000_000, ...b12 }).reason, /a buy at 312\.50001 KAS/);
 });
 
-test('depth reference: the bid behind 10 KAS of bids, midpointed with an ask within twice it', () => {
-  const lv = (price, amount) => ({ price: String(price), amount: String(amount) });
+test('book reference: depth on the resting side and on the fills, the own and large-minimum orders left out (R2-T2)', () => {
   const scale = 100_000_000;
-  assert.equal(firmReference({ scale, bids: [lv(30e6, 1e8), lv(24e6, 50e8)], asks: [lv(26e6, 1e8)] }), 25_000_000n, 'a one-token bid at 0.3 is skipped');
-  assert.equal(firmReference({ scale, bids: [lv(24e6, 50e8)], asks: [lv(60e6, 1e8)] }), 24_000_000n, 'an ask past twice the bid is not used');
-  assert.equal(firmReference({ scale, bids: [lv(24e6, 4e8)], asks: [] }), null, 'under 10 KAS of bids');
-  assert.equal(firmReference({ bids: [lv(24e6, 50e8)] }), null, 'no scale');
+  const depth = 1000n * 100_000_000n;
+  const row = (price, amount, extra = {}) => ({ price: String(price), amount_left: String(amount), min_fill: '100000000', scale, maker: 'aa'.repeat(32), ...extra });
+  const fill = (price, amount) => ({ price: String(price), amount: String(amount) });
+  const fills = [fill(25e6, 2000e8), fill(30e6, 4000e8)];
+  // A one-token bid at 0.3 is passed over; 1,200 KAS of bids reach 1,000 at 0.24.
+  const bids = [row(30e6, 1e8), row(24e6, 5000e8)];
+  const buy = bookReference({ side: 'buy', rows: { bids }, fills, scale, depth });
+  assert.deepEqual([buy.ref.num * BigInt(scale) / buy.ref.den, buy.ref.what], [24_000_000n * BigInt(scale), '1000 KAS of bids'], 'a buy takes the lower: the bids');
+  // The fills' VWAP over the first 1,000 KAS: 2000 at 0.25 and 4000 at 0.3 is 0.2833..
+  const sell = bookReference({ side: 'sell', rows: { asks: [row(20e6, 6000e8)] }, fills, scale, depth });
+  assert.equal(sell.ref.num, BigInt(25e6 * 2000e8 + 30e6 * 4000e8));
+  assert.equal(sell.ref.den, BigInt(6000e8));
+  assert.match(bookReference({ side: 'buy', rows: { bids: [row(24e6, 3000e8)] }, fills, scale, depth }).why, /under 1000 KAS of bids/);
+  assert.match(bookReference({ side: 'buy', rows: { bids }, fills: fills.slice(0, 1), scale, depth }).why, /under 1000 KAS of fills/);
+  const own = [row(24e6, 5000e8, { maker: 'ef'.repeat(32) })];
+  assert.equal(bookReference({ side: 'buy', rows: { bids: own }, fills, scale, depth, maker: 'EF'.repeat(32) }).ref, null, 'the wallet\'s own bids add no depth');
+  const aon = [row(24e6, 5000e8, { min_fill: String(5000e8) })];
+  assert.equal(bookReference({ side: 'buy', rows: { bids: aon }, fills, scale, depth }).ref, null, 'an all-or-nothing bid adds no depth');
+  // The operator's price bounds; the book only tightens it.
+  const op = ref(25e6, 1n, 'op');
+  assert.equal(bandReference({ side: 'buy', op, book: ref(40e6) }), op);
+  assert.equal(bandReference({ side: 'buy', op, book: ref(20e6) }).num, 20_000_000n);
+  assert.equal(bandReference({ side: 'sell', op, book: ref(20e6) }), op);
+  assert.equal(bandReference({ side: 'sell', op, book: ref(30e6) }).num, 30_000_000n);
+  assert.equal(bandReference({ side: 'buy', op: null, book: null }), null);
 });
 
 test('tip caps: a share of the price and a KAS total over the order', () => {
