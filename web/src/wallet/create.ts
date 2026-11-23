@@ -332,6 +332,20 @@ export function checkSavedCreation(kob: KobWasm, rec: CreationRecord, maker: str
   return r.plan;
 }
 
+
+/**
+ * Whether the record's genesis is on chain, as the node lists the addresses of its outputs: one of
+ * its outputs, or a token output of its covenant, is unspent there. A read that fails says no.
+ */
+async function genesisOnChain(node: NodeApi, rec: CreationRecord, built: BuiltTx, addressOf: (spk: string) => string): Promise<boolean> {
+  try {
+    const addresses = [...new Set(built.tx.outputs.map((o) => addressOf(o.scriptPublicKey)))];
+    const id = rec.covenantId.toLowerCase();
+    return (await node.getUtxosByAddresses(addresses)).some((u) => u.transactionId === rec.genesisTxid || u.covenantId?.toLowerCase() === id);
+  } catch {
+    return false;
+  }
+}
 /**
  * Finishes a saved creation, for "Finish the creation" on the Create token page. It returns the
  * genesis txid.
@@ -343,7 +357,8 @@ export function checkSavedCreation(kob: KobWasm, rec: CreationRecord, maker: str
  * the preparation's output 0 is in the node's UTXO set, it is signed and sent at once. Otherwise
  * the saved preparation is sent again and its output awaited first. A preparation the node refuses
  * for good while its output is not listed means the coin was spent elsewhere. That is a
- * SignFlowError `creation-spent`, and only forgetting the record is left.
+ * SignFlowError `creation-spent`, and only forgetting the record is left, unless the genesis itself
+ * spent it and is on chain: then the creation is done and its txid is returned.
  */
 export async function finishCreation(a: FinishArgs): Promise<string> {
   const { node, rec } = a;
@@ -369,6 +384,9 @@ export async function finishCreation(a: FinishArgs): Promise<string> {
     } catch (e) {
       const err = e instanceof NodeError ? e : e instanceof SignFlowError ? e : describeNodeError(e);
       if (err instanceof NodeError && DEFINITE.has(err.code) && !(await listed().catch(() => false))) {
+        // The coin may be spent by this very genesis, sent before the page closed: then the token
+        // exists and the creation is done. Starting over would make a second token.
+        if (await genesisOnChain(node, rec, built, a.addressOf)) return rec.genesisTxid;
         throw new SignFlowError('submitting', err, 'The coin of the first step was spent, so this creation cannot be finished. Start a new one.', CREATION_SPENT);
       }
       // The connection failed, or the node refused while the output is listed after all because
