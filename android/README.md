@@ -58,9 +58,16 @@ The app has no unit tests.
 ## Release signing (for the maintainer)
 
 Android updates an installed app only with an APK signed by the same key. The release key is made once, outside the
-repository, and stored as four repository secrets that `android.yml` signs with (for pushes and, through `release.yml`,
-releases):
+repository, and stored as four secrets of the GitHub **environment** `android-release`, which the signing job of `android.yml`
+runs in on `master` and on `v*` tags (for pushes and, through `release.yml`, releases). They must not be repository secrets:
+GitHub gives those to every workflow of every branch, so anyone who can push a branch could sign an APK that updates the operator
+app over its key. `release.yml` fails a tag run while a repository copy exists, and a push run warns.
 
+0. **The environment.** Repository *Settings* > *Environments* > *New environment*, name `android-release` > *Configure
+   environment*. Tick **Required reviewers**, add yourself, *Save protection rules*; untick *Allow administrators to bypass
+   configured protection rules* if shown. Under *Deployment branches and tags* choose **Selected branches and tags** and add two
+   rules: *Ref type: Branch* `master`, and *Ref type: Tag* `v*`. With a reviewer, every signing run (each `master` push that
+   touches the app, and each release) waits for your approval under *Review deployments*.
 1. Run `node scripts/make-android-keystore.mjs` (needs a JDK's `keytool`). It writes the keystore, a random password file and
    the keystore as base64 to `~/.kob/android-signing` (`--out <folder>` for another one; a folder inside the repository is
    refused), prints the signer certificate's SHA-256 and the next steps, and prints no password.
@@ -68,20 +75,23 @@ releases):
 
    ```
    # bash
-   gh secret set ANDROID_KEYSTORE_B64      --repo RossKU/kob < ~/.kob/android-signing/kob-release.jks.b64.txt
-   gh secret set ANDROID_KEYSTORE_PASSWORD --repo RossKU/kob < ~/.kob/android-signing/kob-release.password.txt
-   gh secret set ANDROID_KEY_PASSWORD      --repo RossKU/kob < ~/.kob/android-signing/kob-release.password.txt
-   gh secret set ANDROID_KEY_ALIAS         --repo RossKU/kob --body kob-release
+   gh secret set ANDROID_KEYSTORE_B64      --env android-release --repo RossKU/kob < ~/.kob/android-signing/kob-release.jks.b64.txt
+   gh secret set ANDROID_KEYSTORE_PASSWORD --env android-release --repo RossKU/kob < ~/.kob/android-signing/kob-release.password.txt
+   gh secret set ANDROID_KEY_PASSWORD      --env android-release --repo RossKU/kob < ~/.kob/android-signing/kob-release.password.txt
+   gh secret set ANDROID_KEY_ALIAS         --env android-release --repo RossKU/kob --body kob-release
    # PowerShell
-   Get-Content -Raw $HOME\.kob\android-signing\kob-release.jks.b64.txt  | gh secret set ANDROID_KEYSTORE_B64      --repo RossKU/kob
-   Get-Content -Raw $HOME\.kob\android-signing\kob-release.password.txt | gh secret set ANDROID_KEYSTORE_PASSWORD --repo RossKU/kob
-   Get-Content -Raw $HOME\.kob\android-signing\kob-release.password.txt | gh secret set ANDROID_KEY_PASSWORD      --repo RossKU/kob
-   gh secret set ANDROID_KEY_ALIAS --repo RossKU/kob --body kob-release
+   Get-Content -Raw $HOME\.kob\android-signing\kob-release.jks.b64.txt  | gh secret set ANDROID_KEYSTORE_B64      --env android-release --repo RossKU/kob
+   Get-Content -Raw $HOME\.kob\android-signing\kob-release.password.txt | gh secret set ANDROID_KEYSTORE_PASSWORD --env android-release --repo RossKU/kob
+   Get-Content -Raw $HOME\.kob\android-signing\kob-release.password.txt | gh secret set ANDROID_KEY_PASSWORD      --env android-release --repo RossKU/kob
+   gh secret set ANDROID_KEY_ALIAS --env android-release --repo RossKU/kob --body kob-release
    ```
 
-   (or in the browser: Settings, Secrets and variables, Actions). `node scripts/make-android-keystore.mjs --steps` prints
-   the steps again.
-3. Run the **android** workflow: it must not warn "Android APK is debug-signed", and the signer SHA-256 in its summary must be
+   (or in the browser: *Settings* > *Environments* > `android-release` > *Environment secrets* > *Add environment secret*).
+   `node scripts/make-android-keystore.mjs --steps` prints the steps again.
+2a. **Delete the repository copies** if they exist: *Settings* > *Secrets and variables* > *Actions* > *Repository secrets*:
+   delete `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` there (only
+   after the environment has all four).
+3. Run the **android** workflow on `master`: it must not warn "Android APK is debug-signed", and the signer SHA-256 in its summary must be
    the one the script printed.
 4. **Back up the folder.** A lost keystore means installed apps can never be updated in place. Never commit it (`*.jks`,
    `*.keystore`, `*.p12` are ignored) and never paste the password anywhere.

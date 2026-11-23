@@ -2,7 +2,7 @@
 
 A live run on testnet-10 through the MCP protocol: an MCP client started `server/index.mjs` over stdio, as Claude Desktop
 does, and called its tools. The wallet was a new throwaway key; the primary wallet (the only `withdrawTo` address) was a
-second new key. The node was `ws://65.108.107.30:18210`, the indexer `https://kob-api-tn10.kaspa.ag`, the CLI a build of
+second new key. The node was the soak node (a TN10 node on a third party's server), the indexer `https://kob-api-tn10.kaspa.ag`, the CLI a build of
 commit 5d73884a1. Config: mode `confirm`, `perTxKas` 40, `perDayKas` 60, `maxFeeKas` 0.5, `priceBandPct` 25.
 
 - Funding: 300 KAS to the agent key, in one transaction spending one confirmed UTXO:

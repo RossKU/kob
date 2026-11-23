@@ -110,8 +110,8 @@ history lets the first start catch up (or restores a backup of a full store, sec
 
 ## 2. Cloudflare Tunnel
 
-The tunnel is an outbound connection from this PC to Cloudflare; Cloudflare serves `https://chart.example.org` and passes each
-request through it to `http://127.0.0.1:8090`. TLS, the certificate and DDoS filtering are Cloudflare's; the PC needs no open
+The tunnel is an outbound connection from the host to Cloudflare; Cloudflare serves `https://chart.example.org` and passes each
+request through it to `http://127.0.0.1:8090`. TLS, the certificate and DDoS filtering are Cloudflare's; the host needs no open
 port and no fixed address. It needs a domain whose DNS is on Cloudflare (free plan).
 
 1. Install `cloudflared` (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/):
@@ -178,7 +178,7 @@ WebSockets, ...). The API believes a forwarding header only from a peer in `api.
 * `client_ip_header = "cf-connecting-ip"`: Cloudflare's edge sets it to the visitor's address on every request (a value the
   visitor sent is replaced). Any header other than `x-forwarded-for` is read as one address; a missing, repeated or malformed
   header falls back to the peer address. IPv6 visitors are keyed by their /64 (`rate_limit.ipv6_prefix_bits`).
-* Keep `listen` on loopback: the API must not be reachable around the tunnel. (Any program on this PC could also connect and set
+* Keep `listen` on loopback: the API must not be reachable around the tunnel. (Any program on the host could also connect and set
   the header; on a single-user machine that is acceptable.)
 
 **CORS.** The app is served from the Pages origin (`https://kob-web.pages.dev`, a custom domain), the API from
@@ -334,9 +334,9 @@ stretch stay invisible (Part B, 7.4). To keep the history whole after a long out
 * Page yourself on `state = gap` (the indexer halted: Part B, 7.4) and on `node_unavailable` for more than a few minutes; the
   full alarm table is Part B, section 6. Nothing in KOB sends alerts, so set up one of these (free):
   * **Cloudflare Notifications** (dashboard, *Notifications* > *Add*): choose the alert for a Cloudflare Tunnel that is down or
-    unhealthy (the exact name in the list varies; look for *Tunnel*), delivered by e-mail. It tells you the PC or `cloudflared` is off.
+    unhealthy (the exact name in the list varies; look for *Tunnel*), delivered by e-mail. It tells you the host or `cloudflared` is off.
   * **An external uptime monitor** (any service that fetches a URL every few minutes and matches a keyword) on
-    `https://chart.example.org/v1/health` with the keyword `"state":"following"`. It catches the tunnel, the PC and a stuck
+    `https://chart.example.org/v1/health` with the keyword `"state":"following"`. It catches the tunnel, the host and a stuck
     indexer at once. A second check on `/v1/health/ready` gives you the status code (200 or 503, see above).
   * **A local check**, a scheduled task on another machine of yours: `curl -sf https://chart.example.org/v1/health/ready`, and send
     yourself a message when it fails.

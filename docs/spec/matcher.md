@@ -771,7 +771,16 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
   indexer lists such an order, so no one else can see it or fill it during R. The stop's band (§2.1) bounds the loss
   of the stop's owner to the band. No covenant-only fix exists: the covenant cannot tell a genesis UTXO from a
   continuation, so it cannot require that the evidence order was visible. This was found in an internal review on
-  2026-11-17 and is accepted as a known limit.
+  2026-11-17 and is accepted as a known limit. One such fill arms **every** qualifying stop of the book at once: the
+  evidence is one print, and any number of stops whose trigger it crosses may be armed or filled in the same transaction.
+- **Stale evidence counts too** (audit 2026-11-23, finding A2-1). The evidence readers check only that the evidence order
+  rested for R; none reads its expiry, its kill time or its age. So a fill of an order that has passed its `expiryDaa`, its
+  IOC/FOK kill time or its 90-day idle limit, but has not yet been refunded, is accepted as evidence, although no
+  conforming matcher fills such an order (§2.3) and the indexer marks it expired. It gives an attacker nothing beyond the
+  self-trade arming above: whoever uses it must really trade with that order at its quote (the stale order's maker is paid
+  their own limit), and the stop's owner trades at the stop, within its band. The rule that the evidence must also be open
+  for R inside its own lifetime (expiry, kill time and idle limit at least `exposed + R`) will be added in the first
+  template generation after mainnet, with the F5 fix.
 - The trailing ratchet is free to move for the same reason (audit F5, open). A trailing stop's ratchet is capped only by
   `tpPrice` (`KobCondAsk`, `KobCondPair` trailing legs and their KRON twins), so an invisible evidence order of `minTouch` can
   ratchet a sell trail toward the market, or past it, at no cost: a forced exit within the band, or a stop that no longer

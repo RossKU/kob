@@ -18,11 +18,13 @@ There is no GitHub Pages mirror (section 10).
 1. Create a Cloudflare account (free plan) at https://dash.cloudflare.com/sign-up and verify the e-mail address.
 2. Note the **Account ID**: dashboard, *Workers & Pages*, right-hand column (or the URL `dash.cloudflare.com/<account id>/...`).
 3. (Optional: the workflow's first run creates it with the API token of section 2 when it does not exist.) Create the Pages project as a **Direct Upload** project (not "Connect to Git": Cloudflare's build image cannot build the app,
-   which needs Rust and wasm-bindgen; GitHub Actions builds it and uploads the result). From a PC with Node 22:
+   which needs Rust and wasm-bindgen; GitHub Actions builds it and uploads the result). From a PC, with the wrangler pinned by
+   `scripts/deploy/package-lock.json` (never `npx wrangler`, which runs whatever version is newest) and the token of section 2 in
+   `CLOUDFLARE_API_TOKEN` (section 6, step 3; not `wrangler login`, which grants the whole account):
 
    ```
-   npx wrangler login
-   npx wrangler pages project create kob-web --production-branch=main
+   (cd scripts/deploy && npm ci --ignore-scripts --no-audit --no-fund)
+   scripts/deploy/node_modules/.bin/wrangler pages project create kob-web --production-branch=main
    ```
 
    `kob-web` is an example name (lower-case letters, digits and `-`): the app is then served at `https://kob-web.pages.dev`, unless that name is taken by another Cloudflare account: then the project gets a suffixed address (for example `kob-web-bs6.pages.dev`), and a `CNAME` to the plain name would reach someone else's site (Cloudflare error 1014). Copy the address from the project page (*Workers & Pages* > the project) and use it wherever `<project>.pages.dev` appears below.
@@ -48,22 +50,41 @@ else. Revoke it on the same page if it leaks.
 
 ## 3. GitHub secrets and variables
 
-Repository *Settings* > *Secrets and variables* > *Actions*.
-
-**Secrets** (tab *Secrets*):
+**Secrets: secrets of the environment `production`, never repository secrets.**
 
 | Name | Value |
 |---|---|
 | `CLOUDFLARE_API_TOKEN` | the token of section 2 |
 | `CLOUDFLARE_ACCOUNT_ID` | the Account ID of section 1 |
 
-**Variables** (tab *Variables*; not secrets: they end up in the public `config.json`):
+GitHub gives a **repository** secret to every workflow run of every branch, including a workflow file that someone adds on a
+branch of their own: anyone who can push any branch could read the token and upload a bundle to the site, past the reviewer and
+the branch rule of section 4a. An **environment** secret is given only to a job that runs in that environment, after its
+protection rules pass. In `deploy-pages.yml` only job `deploy` runs in `production`, so only it gets the token. Job
+`secret-scope`, which runs in no environment, asks whether a repository-level copy still exists: on a mainnet run (or with the
+internal mainnet app) it then fails the run; on testnet-10 it warns.
+
+Step by step (repository owner):
+
+1. *Settings* > *Environments* > *production* (if it is not listed: *New environment*, name `production`, *Configure
+   environment*). Set the required reviewer and the deployment-branch rule of section 4a first (steps 1 and 2 there).
+2. On the same page, under *Environment secrets*, click *Add environment secret*: name `CLOUDFLARE_API_TOKEN`, value the token of
+   section 2, *Add secret*. Again for `CLOUDFLARE_ACCOUNT_ID` with the Account ID of section 1. (CLI:
+   `gh secret set CLOUDFLARE_API_TOKEN --env production --repo RossKU/kob`, which reads the value from the prompt or stdin.)
+3. *Settings* > *Secrets and variables* > *Actions* > tab *Secrets* > *Repository secrets*: delete `CLOUDFLARE_API_TOKEN` and
+   `CLOUDFLARE_ACCOUNT_ID` there (the trash icon). Do this only after step 2. If the token may have been read while it was a
+   repository secret, roll it as well: Cloudflare > *My Profile* > *API Tokens* > the token > *Roll*, and put the new value in step 2.
+4. *Actions* > *deploy-pages* > *Run workflow* on `master`: job `secret-scope` prints "no repository-level Cloudflare secret", and
+   job `deploy` (after the approval) uploads. A `deploy` that fails at "The Cloudflare secrets of the environment production are
+   set" means step 2 is missing.
+
+**Variables** (*Settings* > *Secrets and variables* > *Actions* > tab *Variables*; not secrets: they end up in the public `config.json`):
 
 | Name | Required | Value |
 |---|---|---|
 | `KOB_PAGES_PROJECT` | yes | the Pages project name, e.g. `kob-web` |
 | `KOB_PAGES_INDEXER_URL` | yes | the indexer the app reads, `https://...` (e.g. `https://chart.example.org`, `docs/ops/chart-server.md`) |
-| `KOB_PAGES_NETWORK` | no | `testnet-10` (default) or `mainnet` |
+| `KOB_PAGES_NETWORK` | no | `testnet-10` (default) or `mainnet`, exactly: any other value, a trailing space or newline included, fails the run |
 | `KOB_PAGES_EXTRA_INDEXER_URLS` | no | further indexers, comma-separated `https://` URLs, at most 4: they cross-check the primary and take over its reads when it is down (see "Further indexers: cross-check and failover") |
 | `KOB_PAGES_NODE_URL` | no | a `wss://` wRPC node **with its path** (see "The node and the SDK resolver"); empty (default) = a public node the Kaspa SDK resolver names, reached over Borsh |
 | `KOB_PAGES_EXPLORER_URL` | no | block explorer base, `https://...`; empty = kaspa.stream of the network |
@@ -300,8 +321,10 @@ editing a repository variable (`KOB_PAGES_NETWORK=mainnet`, a new `KOB_PAGES_IND
 After a change, open *Actions* > *deploy-pages* > *Run workflow* (branch `master`), approve the `production` deployment if reviewers are set
 (section 4a) and check the result (section 7).
 
-**Until the two secrets and the two required variables are set, the workflow does nothing**: job `config` writes "Cloudflare
-Pages deploy skipped" and what is missing into the run's summary, and job `deploy` is skipped. CI stays green (forks too).
+**Until the two required variables are set, the workflow does nothing**: job `config` writes "Cloudflare Pages deploy skipped"
+and what is missing into the run's summary, and job `deploy` is skipped. CI stays green (forks too). Job `config` cannot see the
+environment's secrets, so it does not check them: with the variables set and the secrets missing from `production`, job `deploy`
+fails at its first secret step and says so.
 
 ### The incident banner
 
@@ -386,7 +409,7 @@ and its summary says the internal app is NOT protected. Then enable the policy, 
 Setup, in order (the labels are Cloudflare's current ones and may move):
 
 1. Create the project empty, so that nothing is uploaded before step 5: Cloudflare dashboard > *Workers & Pages* > *Create* > *Pages* > *Direct Upload*, or
-   `npx wrangler pages project create <name> --production-branch=main`. Set `KOB_PAGES_MAINNET_PROJECT` to its name. Do not set `KOB_PAGES_MAINNET_INTERNAL` yet
+   `scripts/deploy/node_modules/.bin/wrangler pages project create <name> --production-branch=main` (the pinned wrangler, section 6 step 3). Set `KOB_PAGES_MAINNET_PROJECT` to its name. Do not set `KOB_PAGES_MAINNET_INTERNAL` yet
    (a project without it fails the run, which is intended).
 2. Cloudflare dashboard > *Zero Trust* (set it up once if the account has not: a team name; the free plan is enough for a few users). *Settings* >
    *Authentication* > *Login methods*: **One-time PIN** must be on (it is by default).
@@ -467,7 +490,9 @@ The signer page of this deployment is where users type private keys, so whoever 
 Two guards are in the workflow, one setting is yours:
 
 * **Only `refs/heads/master` deploys.** A run of any other ref (for example *Run workflow* with a branch selected) fails in the first
-  step of job `config`, and job `deploy` also checks it. A push to a branch never deploys; the push trigger is `master` only.
+  step of job `config`, and job `deploy` also checks it. A push to a branch never runs this workflow; the push trigger is `master`
+  only. That shapes this one file only: another workflow file pushed on a branch is stopped by the environment, which is why the
+  Cloudflare secrets must be environment secrets (section 3).
 * **Job `deploy` runs in the environment `production`** (`environment: production`). GitHub creates the environment the first time
   the workflow runs. With no reviewer the environment changes nothing: deployments run as before (the gate is then only the master
   check). The two settings below make it a human gate: every deployment then waits for an approval in the run (*Review
@@ -475,14 +500,17 @@ Two guards are in the workflow, one setting is yours:
 * **A mainnet site does not deploy without that gate.** When `KOB_PAGES_NETWORK=mainnet`, job `config` reads the `production`
   environment through the API and fails the run unless it has at least one required reviewer and a deployment-branch rule (the
   branch `master` only, or "protected branches" with `master` protected). A read that shows either missing fails, whatever else is
-  set. If GitHub refuses the read itself, the run fails unless the repository variable `KOB_PAGES_PRODUCTION_GATE_CONFIRMED` is `1`:
-  set it only after the two settings below are done, as your statement that they are. A testnet-10 site is not checked, and neither
+  set. If GitHub refuses the read itself (HTTP 403), the run fails unless the repository variable `KOB_PAGES_PRODUCTION_GATE_CONFIRMED` is `1`:
+  set it only after the two settings below are done, as your statement that they are. Any other failed read fails the run whatever
+  the variable says: a 404 means there is no environment `production` (job `deploy` would create it with no protection), and a
+  server error or rate limit proves nothing (re-run). `KOB_PAGES_NETWORK` must be exactly `testnet-10` or `mainnet`: the build
+  trims the value, so the gate refuses any other spelling rather than skip itself on `mainnet ` while the build makes mainnet.
+  A testnet-10 site is not checked, and neither
   is the internal mainnet app (section 4c, behind Cloudflare Access). The run warns when administrators may bypass the reviewer.
-* Keep `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as **repository secrets** (section 3, the names are unchanged). Job `config`
-  reads whether they exist and has no environment, so secrets moved into the environment would look missing and the deploy would
-  be skipped. Also useful, outside this repository: two-factor
-  authentication with a hardware key on the GitHub and Cloudflare accounts, and a Cloudflare token limited to *Account > Cloudflare
-  Pages > Edit*.
+* **The Cloudflare secrets are environment secrets of `production`** (section 3, the names are unchanged). Only job `deploy` reads
+  them. Job `secret-scope` fails a mainnet run while a repository-level copy of either exists. Also useful, outside this
+  repository: two-factor authentication with a hardware key on the GitHub and Cloudflare accounts, and a Cloudflare token limited
+  to *Account > Cloudflare Pages > Edit*.
 
 **The two settings, step by step** (repository owner; do them before `KOB_PAGES_NETWORK=mainnet`):
 
@@ -492,10 +520,12 @@ Two guards are in the workflow, one setting is yours:
    protection rules*. Untick *Allow administrators to bypass configured protection rules* if it is shown.
 2. **Branch rule.** On the same page, under *Deployment branches and tags*, choose **Selected branches and tags**, click *Add
    deployment branch or tag rule*, choose *Ref type: Branch*, enter `master` and click *Add rule*. Remove any other rule.
-3. Only if a run says the environment could not be read: *Settings* > *Secrets and variables* > *Actions* > *Variables* > *New
+3. **The secrets** into the environment, and the repository copies deleted: section 3, steps 2 and 3.
+4. Only if a run says the API refused the read of the environment (HTTP 403): *Settings* > *Secrets and variables* > *Actions* > *Variables* > *New
    repository variable*, name `KOB_PAGES_PRODUCTION_GATE_CONFIRMED`, value `1`.
-4. Check: *Actions* > *deploy-pages* > *Run workflow* on `master`. The run must stop at *Review deployments* before job `deploy`
-   starts. On a mainnet site job `config` prints "production gate: 1 required reviewer(s)".
+5. Check: *Actions* > *deploy-pages* > *Run workflow* on `master`. The run must stop at *Review deployments* before job `deploy`
+   starts. On a mainnet site job `config` prints "production gate: 1 required reviewer(s)", and job `secret-scope` "no
+   repository-level Cloudflare secret".
 
 Also protect `master` itself: *Settings* > *Rules* > *Rulesets* > *New ruleset* > *New branch ruleset*, target `master` (*Add
 target* > *Include default branch*), enforcement *Active*, tick *Restrict deletions* and *Block force pushes* (and *Require a pull
@@ -504,7 +534,9 @@ request before merging* if you work through pull requests), *Create*. Add a seco
 
 The post-deploy check compares the deployment with the `dist` built by job `build`, so it detects a bad upload, not a bad commit: the
 reviewer approving a deployment is the one who vouches for the commit (the run names it, and the summary lists the sha256 of every
-deployed file; `reproducible` in `ci.yml` builds the same `dist` twice).
+deployed file). Nothing independent rebuilds the deployed bundle: `reproducible` in `ci.yml` builds the plain `dist` twice on one
+runner, which shows only that the build does not depend on its directory (`docs/ops/release.md` 6). The trust in the bundle is
+`web/package-lock.json` plus the reviewer.
 
 The deployment does not set `quoteTokens` (no token is marked as a dollar) and keeps the scheme-only `connect-src` of
 `_headers`: with the public resolver the node is any public Kaspa node the resolver names, and users may point the app at another indexer in
@@ -524,23 +556,55 @@ was, needs `--indexer https://kob-api-tn10.kaspa.ag` (or `KOB_INDEXER_URL`) on t
 
 ## 6. Deploying by hand from a PC
 
-The same result without GitHub Actions (Node 22, the Rust toolchain of `rust-toolchain.toml`, Git Bash on Windows):
+The same result without GitHub Actions, for when CI is red or too slow in an incident (`docs/ops/incident.md`). It skips CI and
+the `production` approval: deploy only from a clean checkout of a pushed `master` commit (`git status` clean), so the files match
+what anyone can rebuild, and say in the incident post that it was a hand deploy. Needs the Node version of the workflows
+(`node-version`, 22.23.1), the Rust toolchain of `rust-toolchain.toml`, and Git Bash on Windows.
+
+**1. Build** (job `build`). `KOB_NETWORK` and `KOB_PUBLIC_URL` are the site's network and public origin, as the workflow passes
+them: today `testnet-10` and `https://kob-tn10.kaspa.ag`; after the mainnet launch `mainnet` and `https://kob.kaspa.ag`.
 
 ```
 cd web && npm ci && npm run fetch-sdk && cd ..
 bash scripts/build-wasm.sh --install-bindgen --web --slim
-cd web && npm run build:wasm -- --copy && npm run typecheck && npm test && npm run build:release && cd ..
+cd web && npm run build:wasm -- --copy && npm run typecheck && npm test && cd ..
+(cd web && KOB_NETWORK=mainnet KOB_PUBLIC_URL=https://kob.kaspa.ag npm run build:release)
 bash scripts/release-hashes.sh                       # the record reproduces, the bundle ships the pinned registry
-
-# config.json (PowerShell: $env:KOB_PAGES_INDEXER_URL = 'https://chart.example.org'; ...)
-export KOB_PAGES_NETWORK=testnet-10 KOB_PAGES_INDEXER_URL=https://chart.example.org
-node web/scripts/pages-config.mjs --dist web/dist
-
-npx wrangler pages deploy web/dist --project-name kob-web --branch main
-node web/scripts/check-pages.mjs https://kob-web.pages.dev --dist web/dist
 ```
 
-Deploy only from a clean checkout of a pushed commit (`git status` clean), so the files match what anyone can rebuild.
+**2. config.json from the same variables the repository has.** `gh variable list -R RossKU/kob` lists them; export every
+`KOB_PAGES_*` that the workflow passes to `pages-config.mjs` (the network, the indexer URLs, node, explorer, token names, the
+networks, the host networks, the switch, the incident banner). A missing one writes a different site, for example a mainnet
+site without its testnet-10 servers, or a site pinned to one network. After the mainnet launch (`docs/releases/mainnet-launch.md`
+section 2) that is at least:
+
+```
+export KOB_PAGES_NETWORK=mainnet KOB_PAGES_INDEXER_URL=https://kob-api.kaspa.ag KOB_PAGES_NETWORK_SWITCH=1
+export KOB_PAGES_NETWORKS='{"testnet-10": {"indexerUrl": "https://kob-api-tn10.kaspa.ag"}}'
+export KOB_PAGES_HOST_NETWORKS='{"kob.kaspa.ag": "mainnet", "kob-tn10.kaspa.ag": "testnet-10"}'
+# only during an incident: export KOB_PAGES_INCIDENT_MESSAGE='...' (and _SINCE, _URL)
+node web/scripts/pages-config.mjs --dist web/dist
+```
+
+Before the launch the testnet-10 site needs only `KOB_PAGES_NETWORK=testnet-10 KOB_PAGES_INDEXER_URL=https://kob-api-tn10.kaspa.ag`
+(and the other variables the repository sets). Compare the `config.json` it prints with `curl -s https://kob.kaspa.ag/config.json`:
+any difference you did not intend means a variable is missing; stop and fix it.
+
+**3. Upload with the pinned wrangler**, never `npx wrangler` (that downloads and runs the newest wrangler and its whole tree at that
+moment), and with a token limited to Pages (section 2) instead of `wrangler login` (which grants the whole account):
+
+```
+(cd scripts/deploy && npm ci --ignore-scripts --no-audit --no-fund)
+read -rs CLOUDFLARE_API_TOKEN && export CLOUDFLARE_API_TOKEN     # paste the Pages-only token; not echoed, not in the history
+export CLOUDFLARE_ACCOUNT_ID=<the Account ID of section 1>
+scripts/deploy/node_modules/.bin/wrangler pages deploy web/dist --project-name kob-web --branch main --commit-hash "$(git rev-parse HEAD)"
+node web/scripts/check-pages.mjs https://kob-web.pages.dev --dist web/dist
+unset CLOUDFLARE_API_TOKEN
+```
+
+On Windows run these in Git Bash (`scripts/deploy/node_modules/.bin/wrangler` is a shell script there; in PowerShell use
+`scripts\deploy\node_modules\.bin\wrangler.cmd`). The next workflow run on `master` deploys over the hand deploy, so set the
+repository variables to what you exported before that run.
 
 **Both networks.** One site can serve both (`networks`, `hostNetworks`: section 4d). To publish the testnet-10 and the
 mainnet app as two sites instead, deploy the second network by hand to a second Pages project (`wrangler pages project create` with another
@@ -570,16 +634,29 @@ the chip is then a plain label. `scripts/pages-config.mjs` writes it unless `KOB
   `200` with `access-control-allow-origin`; `curl -s https://kob-web.pages.dev/config.json` shows `tokenNamesUrl` (absent = kascov.io). If you
   pinned `connect-src`, the origin must be in it (section 3). The app works without it, so a wrong source deploys green and the list simply
   shows no names.
-* Hashes: the run's summary lists the sha256 of every deployed file; anyone can rebuild the commit and compare (`ci.yml` job
-  `reproducible` checks that the bundle does not depend on the build directory). `curl -s https://kob-web.pages.dev/config.json`
+* Provenance: job `attest` records a build provenance attestation (keyless Sigstore) of every file of the deployed `dist`.
+  Check a served file with `curl -so index.html https://kob.kaspa.ag/` and `gh attestation verify index.html --repo RossKU/kob
+  --signer-workflow RossKU/kob/.github/workflows/deploy-pages.yml`: it names the run and the commit that built the file. It proves
+  where the file was built, not that the build was honest (a compromised dependency would be attested too). A hand deploy
+  (section 6) has no attestation.
+* Hashes: the run's summary lists the sha256 of every deployed file. Anyone can rebuild the commit with section 6, steps 1
+  and 2 (the same Node version, network, public URL and variables) and compare; no workflow does this for you (`ci.yml` job
+  `reproducible` only checks that the plain bundle does not depend on the build directory, `docs/ops/release.md` 6). `curl -s https://kob-web.pages.dev/config.json`
   shows the configuration in force.
 
 ## 8. Rolling back
 
 Pages keeps every deployment. Pages project > *Deployments* > the older production deployment > *...* > *Rollback to this
 deployment*: it serves at once, with that deployment's files and `config.json`. The next push to `master` deploys again; to
-stay on the old version, revert the commit (or clear `KOB_PAGES_PROJECT`, which makes the workflow skip). The list from a PC:
-`npx wrangler pages deployment list --project-name kob-web`.
+stay on the old version, revert the commit (or clear `KOB_PAGES_PROJECT`, which makes the workflow skip). The list from a PC, with the pinned wrangler and the token of section 6, step 3:
+`scripts/deploy/node_modules/.bin/wrangler pages deployment list --project-name kob-web`.
+
+**Old deployments stay online.** Every deployment keeps its own address, `https://<hash>.kob-web.pages.dev`, with the files and
+the signer page it had, after a newer one replaced it. A deployment whose app or signer page had a security bug is still served
+there to anyone who has the link. After a deploy that fixes such a bug: Pages project > *Deployments* > each older production
+deployment that carries the bug > *...* > *Delete deployment* (keep the last good one before it if you may need a rollback, and
+delete it once the fix has run a week). From a PC: `wrangler pages deployment delete <id> --project-name kob-web` with the
+pinned wrangler (section 6, step 3). The workflow does not delete them.
 
 ## 9. Neutrality rules for whoever hosts the app
 

@@ -24,9 +24,12 @@ name: deploy-pages
 # KOB_PAGES_HOST_NETWORKS (KOB_PAGES_MAINNET_HOST_NETWORKS) the default network of each host name (docs/ops/web-hosting.md, "One deployment for both
 # networks"). Both are optional; unset, config.json is what it was without them.
 #
-# Without the secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID or the variables KOB_PAGES_PROJECT and KOB_PAGES_INDEXER_URL
-# (a fork, or before the setup) nothing is built: the job config says what is missing and the deploy job is skipped. A variable that
-# is set but invalid fails the job config.
+# Without the variables KOB_PAGES_PROJECT and KOB_PAGES_INDEXER_URL (a fork, or before the setup) nothing is built: the job config
+# says what is missing and the deploy job is skipped. A variable that is set but invalid fails the job config. The secrets
+# CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are ENVIRONMENT secrets of `production` (docs/ops/web-hosting.md, section 3): only job
+# deploy reads them, and it fails when they are missing. A repository secret is given to every workflow of every branch, so a copy of
+# the token at repository level would bypass the gate below: job secret-scope, which runs in no environment, sees only such a copy,
+# and fails a mainnet run while one exists.
 #
 # The variables are not secrets: config.json is public. Never put an API key into a URL variable (the script refuses query strings).
 #
@@ -34,12 +37,16 @@ name: deploy-pages
 # of any other ref, e.g. a workflow_dispatch from a branch, fails in the first step of job config), and job deploy runs in the GitHub
 # environment `production`: Settings > Environments > production can require a reviewer (and limit the deployment branches to master)
 # before the job starts (docs/ops/web-hosting.md, section 4a). When the public site is mainnet (KOB_PAGES_NETWORK=mainnet), job config
-# fails unless it reads a required reviewer and a deployment-branch rule on `production`, or, when the API refuses the read, unless the
-# variable KOB_PAGES_PRODUCTION_GATE_CONFIRMED=1 says they are set. A testnet-10 site is not checked.
+# fails unless it reads a required reviewer and a deployment-branch rule on `production`, or, when the API refuses the read (HTTP 403
+# only; a missing environment fails), unless the variable KOB_PAGES_PRODUCTION_GATE_CONFIRMED=1 says they are set. KOB_PAGES_NETWORK
+# must be exactly `testnet-10`, `mainnet` or unset (no white space: the build trims it, the gate must not see another value). A
+# testnet-10 site is not checked.
 #
-# Jobs: build (no secret, no environment) builds and tests the bundle, writes config.json and hands web/dist and its hashes on as
+# Jobs: config (no secret) checks the variables and the gate; secret-scope (no environment) only asks whether a repository-level
+# copy of the Cloudflare token exists; build (no secret, no environment) builds and tests the bundle, writes config.json and hands web/dist and its hashes on as
 # artifacts; deploy (environment production, the Cloudflare secrets) only uploads that dist, with the wrangler of
-# scripts/deploy/package-lock.json installed with --ignore-scripts; verify (no secret) checks the live deployment against the hashes.
+# scripts/deploy/package-lock.json installed with --ignore-scripts; attest (no secret) records the build provenance of that dist;
+# verify (no secret) checks the live deployment against the hashes.
 
 on:
   push:
@@ -85,6 +92,7 @@ jobs:
       ready: ${{ steps.gate.outputs.ready }}
       matrix: ${{ steps.gate.outputs.matrix }}
       branch: ${{ steps.gate.outputs.branch }}
+      network: ${{ steps.gate.outputs.network }}
     steps:
       - name: Production deploys only from master
         if: github.ref != 'refs/heads/master'
@@ -93,11 +101,11 @@ jobs:
         run: |
           echo "::error title=deploy-pages::production is deployed only from refs/heads/master, not from $REF (docs/ops/web-hosting.md, section 4a)"
           exit 1
-      - name: Cloudflare secrets and Pages variables (missing = the deploy is skipped)
+      # the variables alone say whether a deploy is configured: this job runs in no environment, so it cannot see the environment's
+      # secrets (and must not ask for a repository copy of them: job secret-scope does that, and only that)
+      - name: Pages variables (missing = the deploy is skipped)
         id: gate
         env:
-          HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
-          HAS_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
           PROJECT: ${{ vars.KOB_PAGES_PROJECT }}
           INDEXER: ${{ vars.KOB_PAGES_INDEXER_URL }}
           BRANCH: ${{ vars.KOB_PAGES_BRANCH }}
@@ -121,15 +129,13 @@ jobs:
           SWITCH: ${{ vars.KOB_PAGES_NETWORK_SWITCH }}
         run: |
           missing=()
-          [ "$HAS_TOKEN" = true ] || missing+=("secret CLOUDFLARE_API_TOKEN")
-          [ "$HAS_ACCOUNT" = true ] || missing+=("secret CLOUDFLARE_ACCOUNT_ID")
           [ -n "$PROJECT" ] || missing+=("variable KOB_PAGES_PROJECT")
           [ -n "$INDEXER" ] || missing+=("variable KOB_PAGES_INDEXER_URL")
           if [ ${#missing[@]} -gt 0 ]; then
             {
               echo "## Cloudflare Pages deploy skipped"
               echo
-              echo "Not configured in this repository (Settings > Secrets and variables > Actions):"
+              echo "Not configured in this repository (Settings > Secrets and variables > Actions > Variables):"
               echo
               for m in "${missing[@]}"; do echo "- $m"; done
               echo
@@ -139,6 +145,13 @@ jobs:
             echo "ready=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # the network exactly as the gate below compares it: pages-config.mjs and head-meta.mjs trim it, so `mainnet ` would build
+          # mainnet while a looser comparison here skipped the production gate
+          NETWORK=${NETWORK:-testnet-10}
+          case "$NETWORK" in
+            testnet-10 | mainnet) ;;
+            *) echo "::error::KOB_PAGES_NETWORK must be exactly testnet-10 or mainnet (or unset), with no white space, not \`$NETWORK\`"; exit 1 ;;
+          esac
           # Pages project names: lower-case letters, digits and dashes; branch names: git-safe characters only
           if ! [[ "$PROJECT" =~ ^[a-z0-9][a-z0-9-]{0,57}$ ]]; then
             echo "::error::KOB_PAGES_PROJECT \`$PROJECT\` is not a Pages project name (a-z, 0-9 and -, at most 58 characters)"; exit 1
@@ -185,26 +198,30 @@ jobs:
           # (production: KOB_PAGES_BRANCH; the internal app: `internal`, a preview) and `internal` marks that preview. `networks` and `hosts` are the JSON
           # of config.json `networks` / `hostNetworks` (empty = none); `netswitch` is KOB_PAGES_NETWORK_SWITCH (the internal app stays pinned)
           matrix=$(jq -nc \
-            --arg p "$PROJECT" --arg n "${NETWORK:-testnet-10}" --arg i "$INDEXER" --arg e "$EXTRA" --arg nd "$NODE" --arg ex "$EXPLORER" --arg nm "$NAMES" --arg u "$PUBLIC" --arg br "$BRANCH" \
+            --arg p "$PROJECT" --arg n "$NETWORK" --arg i "$INDEXER" --arg e "$EXTRA" --arg nd "$NODE" --arg ex "$EXPLORER" --arg nm "$NAMES" --arg u "$PUBLIC" --arg br "$BRANCH" \
             --arg mp "$MAIN_PROJECT" --arg mi "$MAIN_INDEXER" --arg me "$MAIN_EXTRA" --arg mnd "$MAIN_NODE" --arg mex "$MAIN_EXPLORER" --arg mnm "$MAIN_NAMES" --arg mint "$MAIN_INTERNAL" \
             --arg nw "$NETWORKS" --arg hn "$HOSTS" --arg mnw "$MAIN_NETWORKS" --arg mhn "$MAIN_HOSTS" --arg sw "$SWITCH" \
             '{include: ([{site: "testnet", project: $p, network: $n, branch: $br, internal: "", indexer: $i, extra: $e, networks: $nw, hosts: $hn, netswitch: $sw, node: $nd, explorer: $ex, names: $nm, public: $u}]
               + (if $mp != "" and $mint == "1" then [{site: "mainnet-internal", project: $mp, network: "mainnet", branch: "internal", internal: "1", indexer: $mi, extra: $me, networks: $mnw, hosts: $mhn, netswitch: "", node: $mnd, explorer: $mex, names: $mnm, public: ""}] else [] end))}')
-          { echo "ready=true"; echo "branch=$BRANCH"; echo "matrix=$matrix"; } >> "$GITHUB_OUTPUT"
+          { echo "ready=true"; echo "branch=$BRANCH"; echo "network=$NETWORK"; echo "matrix=$matrix"; } >> "$GITHUB_OUTPUT"
       # The mainnet signer page must not deploy without a human approval. The workflow cannot set that (it is a repository setting), so it
       # reads it: a required reviewer on `production` and a deployment-branch rule (master only, or protected branches with master
-      # protected). A read that shows either missing fails, whatever the variable says. A refused read fails unless the founder confirms
-      # the settings with KOB_PAGES_PRODUCTION_GATE_CONFIRMED=1 (docs/ops/web-hosting.md, section 4a). testnet-10 is not checked.
+      # protected). A read that shows either missing fails, whatever the variable says. A read the API refuses (HTTP 403) fails unless
+      # the founder confirms the settings with KOB_PAGES_PRODUCTION_GATE_CONFIRMED=1 (docs/ops/web-hosting.md, section 4a); any other
+      # failure fails, a 404 above all: a missing environment would be created by job deploy with no protection. testnet-10 is not checked.
       - name: The production environment gates a mainnet deploy (a required reviewer and a branch rule)
         if: steps.gate.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          NETWORK: ${{ vars.KOB_PAGES_NETWORK }}
+          # the value the previous step checked (exactly testnet-10 or mainnet), never the raw variable
+          NETWORK: ${{ steps.gate.outputs.network }}
           CONFIRMED: ${{ vars.KOB_PAGES_PRODUCTION_GATE_CONFIRMED }}
         run: |
-          if [ "${NETWORK:-testnet-10}" != mainnet ]; then
-            echo "public site on ${NETWORK:-testnet-10}: the production gate is not checked"; exit 0
-          fi
+          case "$NETWORK" in
+            mainnet) ;;
+            testnet-10) echo "public site on testnet-10: the production gate is not checked"; exit 0 ;;
+            *) echo "::error::no checked network (\`$NETWORK\`)"; exit 1 ;;
+          esac
           if [ -n "$CONFIRMED" ] && [ "$CONFIRMED" != 1 ]; then
             echo "::error::KOB_PAGES_PRODUCTION_GATE_CONFIRMED must be 1 or unset, not \`$CONFIRMED\`"; exit 1
           fi
@@ -227,10 +244,13 @@ jobs:
               echo "::warning title=deploy-pages gate::administrators may bypass the production reviewer (Settings > Environments > production: untick 'Allow administrators to bypass')"
             fi
             echo "production gate: $reviewers required reviewer(s), deployment-branch rule $policy"
+          elif ! grep -q '(HTTP 403)' "$RUNNER_TEMP/gate.err"; then
+            # 404: no environment `production` (job deploy would create it unprotected); 5xx, a rate limit: nothing is known
+            fail "the production environment could not be read ($(head -c 200 "$RUNNER_TEMP/gate.err")): only a refused read (HTTP 403) may rely on KOB_PAGES_PRODUCTION_GATE_CONFIRMED; create the environment with its reviewer and branch rule, or re-run"
           elif [ "$CONFIRMED" = 1 ]; then
-            echo "::notice title=deploy-pages gate::the production settings could not be read ($(head -c 200 "$RUNNER_TEMP/gate.err")); KOB_PAGES_PRODUCTION_GATE_CONFIRMED=1 says the reviewer and the branch rule are set"
+            echo "::notice title=deploy-pages gate::the API refused the read of the production settings ($(head -c 200 "$RUNNER_TEMP/gate.err")); KOB_PAGES_PRODUCTION_GATE_CONFIRMED=1 says the reviewer and the branch rule are set"
           else
-            fail "the production environment could not be read ($(head -c 200 "$RUNNER_TEMP/gate.err")): set the required reviewer and the branch rule, then the variable KOB_PAGES_PRODUCTION_GATE_CONFIRMED=1"
+            fail "the API refused the read of the production environment ($(head -c 200 "$RUNNER_TEMP/gate.err")): set the required reviewer and the branch rule, then the variable KOB_PAGES_PRODUCTION_GATE_CONFIRMED=1"
           fi
       - if: steps.gate.outputs.ready == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -239,7 +259,7 @@ jobs:
       - if: steps.gate.outputs.ready == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: "22.23.1" # exact and the same in every workflow (docs/ops/release.md 6)
       - name: The variables make a valid public config.json for every site (before anything is built)
         if: steps.gate.outputs.ready == 'true'
         env:
@@ -260,6 +280,39 @@ jobs:
               node web/scripts/pages-config.mjs --check || rc=1
           done < <(jq -c '.include[]' <<< "$MATRIX")
           exit "$rc"
+
+  # The Cloudflare secrets belong to the environment `production`, whose reviewer and branch rule decide who gets them. A job with no
+  # environment sees a secret only when a repository-level copy exists, and any workflow file on any branch can read that copy and
+  # upload to the site without the gate. This job asks only whether such a copy exists (the value never reaches the runner): on a
+  # mainnet site it fails the run, on testnet-10 it warns (docs/ops/web-hosting.md, section 3).
+  secret-scope:
+    needs: config
+    if: needs.config.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: No repository-level copy of the Cloudflare secrets (they are secrets of the environment production only)
+        env:
+          REPO_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          REPO_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+          NETWORK: ${{ needs.config.outputs.network }}
+          # the internal mainnet app is uploaded with the same token
+          INTERNAL: ${{ contains(needs.config.outputs.matrix, '"mainnet-internal"') }}
+        run: |
+          found=()
+          [ "$REPO_TOKEN" != true ] || found+=(CLOUDFLARE_API_TOKEN)
+          [ "$REPO_ACCOUNT" != true ] || found+=(CLOUDFLARE_ACCOUNT_ID)
+          if [ ${#found[@]} -eq 0 ]; then echo "no repository-level Cloudflare secret"; exit 0; fi
+          msg="repository-level secret(s) ${found[*]}: every workflow on every branch can read them, past the production reviewer. Delete the repository copies after adding them as secrets of the environment production (Settings > Secrets and variables > Actions > Repository secrets; docs/ops/web-hosting.md, section 3)"
+          echo "- **secret scope:** $msg" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$NETWORK" != mainnet ] && [ "$INTERNAL" != true ]; then
+            echo "::warning title=deploy-pages secret scope::$msg. A mainnet run fails while they exist."; exit 0
+          fi
+          echo "::error title=deploy-pages secret scope::$msg"
+          exit 1
 
   # The bundle, built and tested in a job that holds no secret and runs in no environment: nothing that runs here (npm ci, a build
   # script, vite, the tests) ever shares a runner with the Cloudflare token. It hands web/dist (config.json included) and its hashes
@@ -291,7 +344,7 @@ jobs:
       # no rust cache here: the deployed bundle (the signer page among it) is built from source, never from a restored target/
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: "22.23.1" # exact and the same in every workflow (docs/ops/release.md 6)
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
@@ -382,11 +435,44 @@ jobs:
           include-hidden-files: true
           retention-days: 7
 
+  # Build provenance of every file of the dist job build made (keyless Sigstore, as release.yml does for the archives): it binds each
+  # file's sha256 to this workflow, run and commit, so a deployed file can be checked with
+  # `gh attestation verify <file> --repo RossKU/kob --signer-workflow RossKU/kob/.github/workflows/deploy-pages.yml`. It runs no
+  # code of the app or its dependencies and holds no secret; it proves where the files were built, not that the build was honest.
+  attest:
+    needs: [config, build]
+    if: needs.config.outputs.ready == 'true' && github.ref == 'refs/heads/master'
+    name: attest (${{ matrix.site }})
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.config.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: web-dist-${{ matrix.site }}
+          path: web/dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: deployed-sha256-${{ matrix.site }}
+          path: ${{ runner.temp }}/handover
+      - name: The dist is the one job build hashed
+        shell: bash
+        run: sha256sum --check --strict --quiet "$RUNNER_TEMP/handover/deployed.sha256"
+      - name: Build provenance of every file of web/dist
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: web/dist/**
+
   # The upload, and the only job that sees the Cloudflare token. It builds nothing and runs no code of the app's dependencies: it takes the
   # dist of job build, checks it against the hashes, and runs wrangler from scripts/deploy/package-lock.json (an exact version and
   # integrity pins for its whole tree, installed with --ignore-scripts). Every value reaches a command through env:, never inline.
   deploy:
-    needs: [config, build]
+    needs: [config, secret-scope, build]
     if: needs.config.outputs.ready == 'true' && github.ref == 'refs/heads/master'
     name: deploy (${{ matrix.site }})
     strategy:
@@ -409,7 +495,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: "22.23.1" # exact and the same in every workflow (docs/ops/release.md 6)
       - name: wrangler from scripts/deploy/package-lock.json (no install scripts)
         working-directory: scripts/deploy
         run: |
@@ -433,6 +519,15 @@ jobs:
           files=$(find web/dist -type f | wc -l)
           hashed=$(wc -l < "$RUNNER_TEMP/handover/deployed.sha256")
           [ "$files" = "$hashed" ] || { echo "::error::web/dist has $files files, job build hashed $hashed"; exit 1; }
+      - name: The Cloudflare secrets of the environment production are set
+        env:
+          HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+        run: |
+          if [ "$HAS_TOKEN" != true ] || [ "$HAS_ACCOUNT" != true ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must be secrets of the environment production (Settings > Environments > production > Environment secrets; docs/ops/web-hosting.md, section 3)"
+            exit 1
+          fi
       # a first run creates the Direct Upload project (docs/ops/web-hosting.md 1); on later runs it exists and this step's failure is ignored
       - name: Create the Pages project if it does not exist yet
         continue-on-error: true
@@ -559,7 +654,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: "22.23.1" # exact and the same in every workflow (docs/ops/release.md 6)
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: deployed-sha256-${{ matrix.site }}

@@ -1,5 +1,7 @@
 # Retrying an x402 payment without paying twice
 
+**x402 is experimental.** x402 (the `kob-x402` crate, the facilitator in `kobd`, the client SDK `packages/kob-x402` and `docs/spec/x402-*.md`) is outside the mainnet launch review of 2026-11-23 and has no UI in the web app; it gets a dedicated audit of its own before it is recommended for real funds or its KCC-20 profile is proposed as a standard. Open findings: [docs/security/x402-open-findings.md](../security/x402-open-findings.md).
+
 Status: implemented in the TS SDK (`packages/kob-x402`, `KobX402Client` `retry`, `payInvoiceWithIntent` `retry`), the Rust
 payer SDK (`kob_x402::client::retry`: `pay_with_retry`, `pay_intent_with_retry`) and the facilitator (`kobd`, `submitRetries`, `rebroadcasts`, the intent
 keeper). It applies the conflict rules of [x402-swap-and-pay.md](x402-swap-and-pay.md) section 10 to every profile.

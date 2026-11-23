@@ -95,7 +95,7 @@ Any registry change after the record was written makes the record stale: rerun
 ## 4. Build
 
 From a clean checkout of the release commit (`git status` clean; Rust toolchain from `rust-toolchain.toml`,
-node 22):
+Node of the workflows' `node-version`, 22.23.1):
 
 ```
 scripts/build-contracts.sh --check
@@ -180,10 +180,23 @@ anchor when one is made). Users and operators check:
 
 Rust release binaries are reproducible only on an identical toolchain and host; the hashes say what was
 built from the commit. CI (job `reproducible`) builds `web/dist` (with the kob-wasm bindings), the plain
-kobd release binary, and `kobd` and `kob` exactly as `release.yml` builds the Linux mainnet archive (`--features
+kobd release binary, and `kobd` and `kob` with the flags `release.yml` uses for the Linux mainnet archive (`--features
 deploy-mainnet`, `KOB_GIT_COMMIT` set, `--target x86_64-unknown-linux-gnu`) twice, from two checkouts at different paths,
-and fails when any file differs (the Windows and Android builds are not compared). The source-level artifacts (templates, record, registry) reproduce byte for byte
+and fails when any file differs. The source-level artifacts (templates, record, registry) reproduce byte for byte
 everywhere.
+
+**What `reproducible` proves, and what it does not.** It proves that two builds of one commit **on one runner** match: the
+output does not depend on the build directory. It does **not** prove that a published release or the deployed site rebuilds:
+
+* it never rebuilds a tagged release and compares it with that release's `SHA256SUMS` (no workflow does), and it runs on
+  `ubuntu-latest`, while `release.yml` builds the Linux archives on `ubuntu-22.04`;
+* the `web/dist` it builds is the plain `npm run build`, not the deployed bundle (`build:release` with `KOB_NETWORK`,
+  `KOB_PUBLIC_URL`, the registry and `config.json`, `deploy-pages.yml`);
+* the Windows and Android builds are not compared at all.
+
+Node is pinned to one exact version in every workflow (`node-version`), because the web bundle and the archives (written
+with Node's zlib by `scripts/package-release.mjs`) depend on it; rebuild with that same version. The manual rebuild check of the
+launch checklist (`docs/releases/mainnet-launch.md` section 3) is what ties a release to its source.
 
 **Prebuilt binaries for operators** (`.github/workflows/release.yml`; the operators' page is
 `docs/ops/executor-quickstart.md`). The tag is `v` + the workspace version (`Cargo.toml` `[workspace.package] version`, which
@@ -226,10 +239,24 @@ published (`crates/kobd/Dockerfile` builds one from the source for operators who
 `android`): `kobd-<version>-testnet-10-android.apk`, built with the testnet-10 deployment build of the executor and
 listed in the release's `SHA256SUMS` like the archives. `versionName` is the workspace version (the tag without the `v`);
 `versionCode` is the commit time in minutes, so every later commit, and so every later release, is an update of the earlier
-ones. It is signed with the Android release key when the repository secrets `ANDROID_KEYSTORE_B64`,
-`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` exist (made once with
-`node scripts/make-android-keystore.mjs`, stored as secrets, backed up; `android/README.md`, "Release signing"): a new APK then
-installs over the old one and keeps the app's data, the operator key included. **Check before publishing the draft** that the
+ones. It is signed with the Android release key when the secrets `ANDROID_KEYSTORE_B64`,
+`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` of the **environment** `android-release` exist (made
+once with `node scripts/make-android-keystore.mjs`, stored as environment secrets, backed up; `android/README.md`, "Release
+signing"): a new APK then installs over the old one and keeps the app's data, the operator key included. `release.yml` passes no
+secret to `android.yml`; only its signing job runs in `android-release`, on `master` and `v*` tags. Set up once, in this order:
+
+1. *Settings* > *Environments* > *New environment* `android-release`: **Required reviewers** (yourself), *Allow administrators to
+   bypass* unticked, *Deployment branches and tags* > **Selected branches and tags** with the branch rule `master` and the tag rule
+   `v*`, *Save protection rules*.
+2. *Environment secrets* > *Add environment secret*, four times (the names above; the values from the files the script wrote, or
+   `gh secret set <name> --env android-release --repo RossKU/kob < <file>`).
+3. *Settings* > *Secrets and variables* > *Actions* > *Repository secrets*: delete the four `ANDROID_*` there. A tag run fails in
+   job `version` while any of them exists at repository level (any workflow on any branch could read it), and a manual run of
+   `release` is refused from anything but `master` or a tag.
+4. A release run now stops at *Review deployments* for `android-release`: approve it after checking the run is the tag's.
+
+Job `version` also waits for the `ci.yml` push run of the tagged commit and fails the release unless it passed: push the release
+commit to `master` and let CI pass before pushing the tag. **Check before publishing the draft** that the
 APK file name has no `-debug-signed` (the run warns and the draft's notes say so when the secrets were missing: such an APK
 cannot be updated in place, and the fix is to set the secrets, delete the draft and re-run the tag's `release` workflow, not to publish it).
 The workflow verifies the signature with `apksigner`, that the APK is not debuggable, and its `versionName` / `versionCode`,

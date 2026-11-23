@@ -51,7 +51,8 @@ pinned, cancel-only (the table below), or classified by hand with its evidence:
   served them (the TN10 site went from KobBid dfcd78f1 to 2f6079ae), nor the soak build or a recorded TN10 run.
 - **pre-f1**, 35 templates: the October generations before `6276d5c` (2026-10-06 to 10-19). They predate the first deploy-pages
   run, but the TN10 tests of 2026-10-14/15 placed orders from local builds, so TN10 orders may exist under them; never on
-  mainnet. They stay out of the cancel-only table by the October decision above, pending a decision (A3-2).
+  mainnet. They keep the October decision above (confirmed 2026-11-23, audit A3-2): testnet-10 only, from before the site
+  existed, and not in the cancel-only table; their makers cancel them with the release they placed them with.
 
 | Retired templates | Replaced by (bytecode hash prefix) | Why |
 |---|---|---|

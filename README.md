@@ -46,6 +46,8 @@ kob watch fills --token TUSD --network testnet-10 --json        # NDJSON, one ev
 - Every command and kind: [crates/kob-cli](crates/kob-cli/README.md).
 - The read API, over HTTP and WebSocket with no key: [docs/api.md](docs/api.md).
 
+**x402 is experimental.** x402 (the `kob-x402` crate, the facilitator in `kobd`, the client SDK `packages/kob-x402` and `docs/spec/x402-*.md`) is outside the mainnet launch review of 2026-11-23 and has no UI in the web app; it gets a dedicated audit of its own before it is recommended for real funds or its KCC-20 profile is proposed as a standard. Open findings: [docs/security/x402-open-findings.md](docs/security/x402-open-findings.md).
+
 ## Review scope
 
 The live contracts are in `contracts/orders/`. [contracts/README.md](contracts/README.md) states what is deployed, what to review,

@@ -7,12 +7,14 @@ name: release
 # their files) and kob-<version>-<network>-<target>.zip / .tar.gz (the command line alone, with its README and REFERENCE).
 # The Android app for tap-to-use phones (testnet-10 only; android.yml, called by the job `android` below) goes into the release as
 # kobd-<version>-testnet-10-android.apk, with its SHA256 in the release's SHA256SUMS like the archives. It is signed with the
-# release key when the ANDROID_* repository secrets exist (a new APK then updates the old one in place and keeps the key);
-# without them it is debug-signed, named ...-android-debug-signed.apk, and the release notes say it cannot be updated.
+# release key when the ANDROID_* secrets of the environment android-release exist (a new APK then updates the old one in place and
+# keeps the key); without them it is debug-signed, named ...-android-debug-signed.apk, and the release notes say it cannot be updated.
+# A repository-level copy of those secrets fails a tag run (job version), and a manual run is allowed from master or a tag only.
 #
 # * A pushed tag must be v<version> of the workspace (Cargo.toml [workspace.package], which kobd and kob-cli (binary kob) inherit):
 #   the version is bumped in the commit that is tagged, so --version of every binary is the tag. Any other tag fails here,
-#   before anything is built (job version, scripts/package-release.mjs --check-tag).
+#   before anything is built (job version, scripts/package-release.mjs --check-tag). Job version also waits for the ci.yml push run
+#   of the tagged commit and fails the release unless it passed.
 # * A pushed tag v* builds every archive and attaches them, with a SHA256SUMS of the archives, to a DRAFT release of the tag:
 #   the maintainer adds the release notes (scripts/release-hashes.sh, docs/ops/release.md 6) and publishes it.
 # * workflow_dispatch is the dry run: the same builds, uploaded as workflow artifacts only (no release, no tag).
@@ -42,15 +44,49 @@ jobs:
   version:
     # the archives' version: the tag, which must equal the workspace version; a dry run is dev-<commit>
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # the step "ci passed for this commit" reads the ci.yml run of the same sha
+    defaults:
+      run:
+        shell: bash
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
+      # a dry run signs the APK with the release key too (android.yml), so it runs only on code that reached master or a tag
+      - name: A manual run only from master or a tag
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/master' && github.ref_type != 'tag'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error title=release::a manual run is allowed from refs/heads/master or a v* tag only, not from $REF"
+          exit 1
+      # this job runs in no environment, so it sees a signing secret only when a repository-level copy exists, which any workflow on
+      # any branch can read: a release is not built while one does (the secrets belong to the environment android-release)
+      - name: No repository-level copy of the Android signing secrets
+        env:
+          REPO_KS: ${{ secrets.ANDROID_KEYSTORE_B64 != '' }}
+          REPO_KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD != '' }}
+          REPO_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS != '' }}
+          REPO_KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD != '' }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          found=()
+          [ "$REPO_KS" != true ] || found+=(ANDROID_KEYSTORE_B64)
+          [ "$REPO_KS_PASS" != true ] || found+=(ANDROID_KEYSTORE_PASSWORD)
+          [ "$REPO_ALIAS" != true ] || found+=(ANDROID_KEY_ALIAS)
+          [ "$REPO_KEY_PASS" != true ] || found+=(ANDROID_KEY_PASSWORD)
+          if [ ${#found[@]} -eq 0 ]; then echo "no repository-level Android signing secret"; exit 0; fi
+          msg="repository-level secret(s) ${found[*]}: every workflow on every branch can read them. Add them as secrets of the environment android-release, then delete the repository copies (android/README.md, Release signing)"
+          if [ "$REF_TYPE" != tag ]; then echo "::warning title=release::$msg. A tag run fails while they exist."; exit 0; fi
+          echo "::error title=release::$msg"
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: "22.23.1" # exact and the same in every workflow (docs/ops/release.md 6)
       - name: The tag is v + the workspace version (a dry run is dev-<commit>)
         id: version
         env:
@@ -59,6 +95,23 @@ jobs:
         run: |
           if [ "$REF_TYPE" = tag ]; then v=$(node scripts/package-release.mjs --check-tag "$REF_NAME"); else v="dev-${GITHUB_SHA::7}"; fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+      # a tag builds a release only of a commit whose ci.yml push run passed (as deploy-pages.yml waits for it): the tagged commit is
+      # the release commit on master, so that run exists or is running
+      - name: ci passed for this commit (tags only; a failed or cancelled run fails the release)
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 240); do
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&per_page=1" --jq '.workflow_runs[0] | "\(.status) \(.conclusion)"')
+            echo "ci: $run"
+            case "$run" in
+              "completed success") exit 0 ;;
+              completed*) echo "::error::ci did not pass for $GITHUB_SHA ($run)"; exit 1 ;;
+            esac
+            sleep 30
+          done
+          echo "::error::ci did not finish within two hours (push the release commit to master before the tag)"; exit 1
 
   build:
     needs: version
@@ -89,7 +142,7 @@ jobs:
           targets: ${{ matrix.platform.target }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: "22.23.1" # exact and the same in every workflow (docs/ops/release.md 6)
       - name: Android NDK toolchain (NDK_VERSION; clang for API 24, Android 7.0 and later)
         if: matrix.platform.target == 'aarch64-linux-android'
         run: |
@@ -164,12 +217,13 @@ jobs:
           if-no-files-found: error
 
   android:
-    # the app: the same workflow the push to master runs, without the cargo cache, with the repository's signing secrets
+    # the app: the same workflow the push to master runs, without the cargo cache. No secret is passed (never `secrets: inherit`, which
+    # would hand it every repository secret): its signing job runs in the environment android-release and takes that environment's
+    # secrets, after its branch-and-tag rule (master, v*) and reviewer pass
     needs: version
     uses: ./.github/workflows/android.yml
     with:
       fresh: true
-    secrets: inherit
 
   release:
     # tags only: a dry run (workflow_dispatch) stops at the artifacts above
@@ -187,7 +241,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: "22.23.1" # exact and the same in every workflow (docs/ops/release.md 6)
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: kobd-*

@@ -456,6 +456,10 @@ re-accepted, the book reverted) are read from the indexer while the test node re
 
 ### A.6 The x402 facilitator in the Executor (`kobd --executor`)
 
+**x402 is experimental.** x402 (the `kob-x402` crate, the facilitator in `kobd`, the client SDK `packages/kob-x402` and `docs/spec/x402-*.md`) is outside the mainnet launch review of 2026-11-23 and has no UI in the web app; it gets a dedicated audit of its own before it is recommended for real funds or its KCC-20 profile is proposed as a standard. Open findings: [docs/security/x402-open-findings.md](../security/x402-open-findings.md). Run it on your own node only: a public node can invent a payment and the merchant delivers for nothing (audit X-2).
+
+ Run it on your own node only: a public node can invent a payment and the merchant delivers for nothing (audit X-2).
+
 `--x402-config <file>` (or `KOB_X402_CONFIG`; strict JSON, `crates/kobd/x402.example.json`)
 serves the facilitator (`GET /supported`, `POST /verify`, `POST /settle`, `GET /health`, `GET /metrics`, and with
 `invoices` the `/invoices` routes of A.7)
@@ -1338,8 +1342,8 @@ transactions with exactly the field set of a captured TN10 transfer, about 1,380
 checked and committed (`Ingest::apply_batch`: file database in WAL mode with `synchronous = FULL`, record log with
 fsync). KOB traffic is real: asks placed, filled in part (4 of 10) and cancelled with the protocol builders, and x402-style
 token payments of an allowlisted token whose ids the facilitator watches. 60 s of chain per run, generation not timed.
-Reference PC: **AMD Ryzen 7 5800HS (8 cores, 16 threads), 15.4 GB RAM, NVMe SSD, Windows 11, release build**, measured on
-2026-10-03 while the same PC ran a TN10 node, a CPU miner and the soak (so these are lower bounds) [F]:
+Reference host: **8 cores (16 threads), 16 GB RAM, NVMe SSD, Windows, release build**, measured on
+2026-10-03 while the same host ran a TN10 node, a CPU miner and the soak (so these are lower bounds) [F]:
 
 | mix (per block of 300) | follow the tip (5 blocks per commit) | catch up (100 blocks per commit) | CPU at 3,000 tx/s | disk writes |
 |---|---|---|---|---|
@@ -1358,7 +1362,7 @@ Parsing costs 2.6 to 3.2 us per transaction (about 500 MB/s of JSON); a non-KOB 
 before any database work (no `KOB1` payload, no covenant input or output). A KOB transaction costs about **0.25 to 0.3 ms** of
 one core: state derivation and its rows (the placement verification and script hashing run before, on other cores), in
 no single dominant step. The database pass is single-threaded: its ceiling is about 3,500 KOB tx/s at the tip and 4,300
-while catching up on this PC; at 10 % KOB a 3,000 tx/s chain is followed with 7x headroom at the tip.
+while catching up on this host; at 10 % KOB a 3,000 tx/s chain is followed with 7x headroom at the tip.
 Memory: 32 MB peak at the tip, about 200 MB while committing 100-block windows (one 40 MB response parsed).
 
 The per-order queries go through the order's own events, never the market index `order_events (kind, token, ts)` (a
@@ -3418,10 +3422,12 @@ and compared field by field with the authority's copy. A lying authority could t
 not exist under real ids: the read API would show orders that are not on chain and the matcher would plan on them. No funds
 are at risk: every transaction is built over the UTXO entries the node reports, signed, and validated by consensus, which
 refuses a spend of an output that is not what the transaction claims; the executor only loses races (`MissingInput`). A
-node caught contradicting the other is replaced. The x402 facilitator of the
-same process reads from the authority and submits to every node that takes submissions (both of the pair), as the
-matcher does: the first node that takes a transaction answers (`node: "resolver"` in its own configuration works too, also
-`wss://`).
+node caught contradicting the other is replaced. The x402 facilitator (experimental, below) of the same process reads from
+the authority and submits to every node that takes submissions, as the matcher does: the first node that takes a
+transaction answers. **Run the facilitator on your own node only.** Its payment facts and finality (the payer's inputs, the
+merchant output, acceptance) come from that one node, and the covenants do not protect a merchant: a public node, the
+resolver's or the public pair, can invent a payment and the merchant delivers for nothing (audit X-2). `node: "resolver"` is
+still accepted by the configuration; do not use it for x402.
 
 v2.1.0 relays transactions up to the block limits. Relays running a later release with the
 pre-Toccata standard mass cap refuse transactions above ~25 kB: pass `--max-tx-bytes 24000` there

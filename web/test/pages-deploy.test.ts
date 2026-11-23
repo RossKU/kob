@@ -1,6 +1,7 @@
 // The public deployment's helpers (.github/workflows/deploy-pages.yml): config.json from the KOB_PAGES_* variables (scripts/pages-config.mjs)
 // and the post-deploy check (scripts/check-pages.mjs), run against a local host that applies public/_headers the way Cloudflare Pages does.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -515,15 +516,18 @@ describe('the deploy workflow gate (the signer page it ships takes private keys)
   it('the deploy job runs in the environment production (a required reviewer approves there); the secret and variable names are unchanged', () => {
     expect(job('deploy')).toMatch(/\n    environment: production\n/);
     // no other job runs in an environment: build (npm ci, the build scripts, the tests) never gets the environment's secrets
-    for (const name of ['config', 'build', 'verify']) expect(job(name), name).not.toMatch(/^ +environment:/m);
+    for (const name of ['config', 'secret-scope', 'build', 'verify']) expect(job(name), name).not.toMatch(/^ +environment:/m);
     expect(wf.match(/^ +environment:/gm)).toHaveLength(1);
-    // the Cloudflare secrets are read only in deploy; config only asks whether they are set
+    // the Cloudflare secrets are environment secrets: only deploy reads them. The one other mention is secret-scope's question
+    // whether a repository-level copy exists (a job with no environment sees nothing else); config does not mention them at all
     for (const name of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID']) {
       const uses = (text: string) => text.split(`secrets.${name}`).length - 1;
       expect(job('deploy')).toContain(`${name}: \${{ secrets.${name} }}`);
-      expect(job('config').match(new RegExp(`secrets\\.${name}[^\\n]*`, 'g'))).toEqual([`secrets.${name} != '' }}`]);
+      expect(job('secret-scope').match(new RegExp(`secrets\\.${name}[^\\n]*`, 'g'))).toEqual([`secrets.${name} != '' }}`]);
       expect(uses(wf)).toBe(uses(job('deploy')) + 1);
     }
+    expect(job('config')).not.toMatch(/secrets\.|CLOUDFLARE_/);
+    expect(job('secret-scope').match(/secrets\.[A-Z_]+/g)).toEqual(['secrets.CLOUDFLARE_API_TOKEN', 'secrets.CLOUDFLARE_ACCOUNT_ID']);
     expect(job('build')).not.toContain('secrets.');
     expect(job('verify')).not.toContain('secrets.');
     for (const name of ['KOB_PAGES_PROJECT', 'KOB_PAGES_INDEXER_URL', 'KOB_PAGES_BRANCH', 'KOB_PAGES_NETWORK', 'KOB_PAGES_EXTRA_INDEXER_URLS', 'KOB_PAGES_NODE_URL', 'KOB_PAGES_EXPLORER_URL', 'KOB_PAGES_TOKEN_NAMES_URL']) expect(wf).toContain(`vars.${name}`);
@@ -573,9 +577,16 @@ describe('the deploy workflow gate (the signer page it ships takes private keys)
     expect(uploaded).toBeGreaterThan(hashed);
     expect(dist).toBeGreaterThan(hashed);
     // only build writes the hashes and the dist (an artifact name is written once per run)
-    expect(wf.match(/name: deployed-sha256-\$\{\{ matrix\.site \}\}/g)).toHaveLength(3);
+    expect(wf.match(/name: deployed-sha256-\$\{\{ matrix\.site \}\}/g)).toHaveLength(4);
+    // attest (F-04): build provenance of the hashed dist, in a job with no secret, no environment and no app code
+    const attest = job('attest');
+    expect(attest).toContain('needs: [config, build]');
+    expect(attest).not.toMatch(/secrets\.|environment:|npm |node /);
+    expect(attest).toMatch(/\n      id-token: write\n      attestations: write\n/);
+    expect(attest.indexOf('sha256sum --check --strict')).toBeLessThan(attest.indexOf('actions/attest-build-provenance@'));
+    for (const name of ['build', 'deploy', 'verify', 'config', 'secret-scope']) expect(job(name), name).not.toContain('id-token');
     const deploy = job('deploy');
-    expect(deploy).toContain('needs: [config, build]');
+    expect(deploy).toContain('needs: [config, secret-scope, build]');
     expect(deploy).not.toMatch(/upload-artifact@[0-9a-f]{40} # v[\d.]+\n\s+with:\n\s+name: (deployed-sha256|web-dist)-/);
     // deploy: the downloaded dist is exactly what build hashed (every file, nothing more), checked before the first step with the token
     const fetched = deploy.search(/download-artifact@[0-9a-f]{40} # v[\d.]+\n\s+with:\n\s+name: deployed-sha256-\$\{\{ matrix\.site \}\}/);
@@ -597,6 +608,132 @@ describe('the deploy workflow gate (the signer page it ships takes private keys)
     expect(verify).toContain('node scripts/check-pages.mjs "$URL" --hashes "$RUNNER_TEMP/handover/deployed.sha256"');
     expect(verify).toContain('node scripts/check-pages.mjs --protected "${urls[@]}"');
     expect(verify).toContain('persist-credentials: false');
+  });
+});
+
+describe('the gate scripts, run (repository-level secrets, the network value, the refused read)', () => {
+  const wf = readFileSync(fileURLToPath(new URL('../../.github/workflows/deploy-pages.yml', import.meta.url)), 'utf8');
+  // GitHub runs `shell: bash` as bash --noprofile --norc -eo pipefail; on Windows only Git's bash (System32's is WSL)
+  const gitBash = 'C:/Program Files/Git/bin/bash.exe';
+  const bash = process.platform === 'win32' ? (existsSync(gitBash) ? gitBash : null) : 'bash';
+  const job = (name: string): string => {
+    const start = wf.indexOf(`\n  ${name}:\n`);
+    const next = wf.slice(start + 1).search(/\n  [a-z][a-z-]*:\n/);
+    return next < 0 ? wf.slice(start) : wf.slice(start, start + 1 + next);
+  };
+  /** The `run: |` block of the step named `name` (a prefix of it) in the job. */
+  const stepRun = (jobName: string, name: string): string => {
+    const text = job(jobName);
+    const at = text.indexOf(`- name: ${name}`);
+    expect(at, name).toBeGreaterThan(0);
+    const rest = text.slice(at);
+    const m = rest.match(/\n( +)run: \|\n/)!;
+    const indent = m[1]!.length + 2;
+    const body: string[] = [];
+    for (const line of rest.slice(m.index! + m[0].length).split('\n')) {
+      if (line.trim() !== '' && line.length - line.trimStart().length < indent) break;
+      body.push(line.slice(indent));
+    }
+    return body.join('\n');
+  };
+  /** Runs a step script with env (and optional bash prelude, e.g. a fake gh); returns the exit code and the output. */
+  const run = (script: string, env: Record<string, string>, prelude = '') => {
+    const dir = mkdtempSync(join(tmpdir(), 'kob-gate-')).replace(/\\/g, '/');
+    try {
+      const r = spawnSync(bash!, ['--noprofile', '--norc', '-eo', 'pipefail', '-c', `${prelude}\n${script}`], {
+        env: { ...process.env, GITHUB_OUTPUT: `${dir}/out`, GITHUB_STEP_SUMMARY: `${dir}/summary`, RUNNER_TEMP: dir, GITHUB_REPOSITORY: 'o/r', ...env },
+        encoding: 'utf8',
+      });
+      return { code: r.status, out: `${r.stdout}${r.stderr}` };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('secret-scope runs in no environment, before deploy, and asks only whether a repository copy exists', () => {
+    expect(job('secret-scope')).toContain('needs: config\n');
+    expect(job('secret-scope')).toContain('permissions: {}');
+    expect(job('deploy')).toMatch(/needs: \[[^\]]*secret-scope/);
+    expect(job('secret-scope')).toContain('[ "$NETWORK" != mainnet ] && [ "$INTERNAL" != true ]');
+  });
+
+  it.skipIf(!bash)('a mainnet run fails while a repository-level copy of the token (or the account id) exists; testnet-10 only warns', () => {
+    const script = stepRun('secret-scope', 'No repository-level copy of the Cloudflare secrets');
+    const none = { REPO_TOKEN: 'false', REPO_ACCOUNT: 'false', INTERNAL: 'false' };
+    expect(run(script, { ...none, NETWORK: 'mainnet' }).code).toBe(0);
+    const main = run(script, { ...none, REPO_TOKEN: 'true', NETWORK: 'mainnet' });
+    expect(main.code).toBe(1);
+    expect(main.out).toContain('::error title=deploy-pages secret scope::repository-level secret(s) CLOUDFLARE_API_TOKEN');
+    expect(run(script, { ...none, REPO_ACCOUNT: 'true', NETWORK: 'mainnet' }).code).toBe(1);
+    // the internal mainnet app is uploaded with the same token
+    expect(run(script, { ...none, REPO_TOKEN: 'true', NETWORK: 'testnet-10', INTERNAL: 'true' }).code).toBe(1);
+    const tn = run(script, { ...none, REPO_TOKEN: 'true', NETWORK: 'testnet-10' });
+    expect(tn.code).toBe(0);
+    expect(tn.out).toContain('::warning title=deploy-pages secret scope::');
+  });
+
+  it.skipIf(!bash)('KOB_PAGES_NETWORK must be exactly testnet-10 or mainnet: white space fails job config instead of skipping the gate', () => {
+    const script = stepRun('config', 'Pages variables (missing = the deploy is skipped)');
+    for (const network of ['mainnet ', ' mainnet', 'mainnet\n', 'Mainnet', 'testnet-10 ', 'tn10']) {
+      const r = run(script, { PROJECT: 'kob-web', INDEXER: 'https://idx.example.org', NETWORK: network });
+      expect(r.code, JSON.stringify(network)).toBe(1);
+      expect(r.out).toContain('KOB_PAGES_NETWORK must be exactly testnet-10 or mainnet');
+    }
+    // the gate step takes the checked value from this step, never the raw variable
+    expect(job('config')).toContain('NETWORK: ${{ steps.gate.outputs.network }}');
+    expect(job('config')).toContain('echo "network=$NETWORK"');
+    expect(job('config').match(/vars\.KOB_PAGES_NETWORK }}/g)).toHaveLength(1);
+  });
+
+  it.skipIf(!bash)('the production gate: only a refused read (HTTP 403) may rely on KOB_PAGES_PRODUCTION_GATE_CONFIRMED=1; a 404 or any other error fails', () => {
+    const script = stepRun('config', 'The production environment gates a mainnet deploy');
+    const gh = (err: string) => `gh() { echo "${err}" >&2; return 1; }`;
+    expect(run(script, { NETWORK: 'testnet-10', CONFIRMED: '' }, gh('unused')).code).toBe(0);
+    expect(run(script, { NETWORK: 'mainnet ', CONFIRMED: '1' }, gh('gh: Resource not accessible by integration (HTTP 403)')).code).toBe(1);
+    expect(run(script, { NETWORK: 'mainnet', CONFIRMED: '1' }, gh('gh: Resource not accessible by integration (HTTP 403)')).code).toBe(0);
+    expect(run(script, { NETWORK: 'mainnet', CONFIRMED: '' }, gh('gh: Resource not accessible by integration (HTTP 403)')).code).toBe(1);
+    const missing = run(script, { NETWORK: 'mainnet', CONFIRMED: '1' }, gh('gh: Not Found (HTTP 404)'));
+    expect(missing.code).toBe(1);
+    expect(missing.out).toContain('only a refused read (HTTP 403) may rely on KOB_PAGES_PRODUCTION_GATE_CONFIRMED');
+    expect(run(script, { NETWORK: 'mainnet', CONFIRMED: '1' }, gh('gh: HTTP 502: Bad Gateway')).code).toBe(1);
+  });
+});
+
+describe('the Android release key is an environment secret too (release.yml, android.yml)', () => {
+  const read = (f: string) => readFileSync(fileURLToPath(new URL(`../../.github/workflows/${f}`, import.meta.url)), 'utf8');
+  const release = read('release.yml');
+  const android = read('android.yml');
+
+  it('release.yml passes no secret to android.yml, allows a manual run from master or a tag only, fails a tag while a repository copy exists, and waits for ci', () => {
+    expect(release).not.toMatch(/^ +secrets: *inherit/m);
+    expect(release.slice(release.indexOf('\n  android:\n'), release.indexOf('\n  release:\n'))).not.toMatch(/^ +secrets:/m);
+    expect(release).toContain("if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/master' && github.ref_type != 'tag'");
+    expect(release).toContain('if [ "$REF_TYPE" != tag ]; then echo "::warning title=release::$msg. A tag run fails while they exist."; exit 0; fi');
+    expect(release).toContain('actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push');
+  });
+
+  it('android.yml declares no secrets, and only the signing job, only on master or a v* tag, runs in the environment android-release', () => {
+    const call = android.slice(android.indexOf('workflow_call:'), android.indexOf('\n  push:'));
+    expect(call).not.toMatch(/^ +secrets:/m);
+    expect(android.match(/^ +environment:[^\n]*/gm)).toEqual([
+      "    environment: ${{ (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')) && 'android-release' || '' }}",
+    ]);
+    // the values are read only in job apk; secret-scope only asks whether a repository copy exists
+    const scope = android.slice(android.indexOf('\n  secret-scope:\n'), android.indexOf('\n  apk:\n'));
+    expect(scope.match(/secrets\.[A-Z_]+[^\n]*/g)?.every((s) => s.endsWith("!= '' }}"))).toBe(true);
+  });
+});
+
+describe('every workflow pins the same exact Node version', () => {
+  it('node-version is one exact x.y.z, the same in every workflow', () => {
+    const dir = fileURLToPath(new URL('../../.github/workflows/', import.meta.url));
+    const versions = new Set<string>();
+    for (const f of ['ci.yml', 'deploy-pages.yml', 'release.yml', 'wallet-drift.yml', 'android.yml', 'logo-report.yml', 'tx-dump.yml']) {
+      const text = readFileSync(join(dir, f), 'utf8');
+      for (const m of text.matchAll(/node-version: *([^\n#]*)/g)) versions.add(m[1]!.trim());
+    }
+    expect([...versions]).toHaveLength(1);
+    expect([...versions][0]).toMatch(/^"\d+\.\d+\.\d+"$/);
   });
 });
 

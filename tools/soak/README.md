@@ -230,12 +230,12 @@ resting ask / bid of the same token (touch trigger, checker invariant 5).
   UTXO index, coinbase counted once 1000 DAA old) falls below `lowKas` and ends at `highKas`; otherwise it idles (no templates, no CPU,
   no GPU). Without them it mines continuously. `maxDuty` (0..1] caps the mining time over `dutyWindowSec` (600).
 * The balance is read in the background on its own connection: a full UTXO listing of the bank (78k coinbase UTXOs, a 30 MB answer,
-  ~30 s from this PC) only while mining and for 200 s after, else the cheap `getBalanceByAddress` total.
+  ~30 s on the reference host) only while mining and for 200 s after, else the cheap `getBalanceByAddress` total.
 * Edit `run/miner.json` to move the watermarks of the running miner (re-read on change); the next supervisor start rewrites it from
   `config.json`. Log: `run/logs/miner.log` (`mining: burst ...` / `idle: ...` on each state change, hashrate every 30 s while mining).
 * A miner started by an older supervisor (no `MINER_CONFIG`) reads `tn10-miner.json` next to its executable instead.
 
-Measured on one test machine (a laptop RTX 3060, driver 555.97): GPU ~92 MH/s at 0.01 CPU core (work-group 128, 60 ms dispatches; the GPU ran
+Measured on one test machine (a laptop-class GPU): GPU ~92 MH/s at 0.01 CPU core (work-group 128, 60 ms dispatches; the GPU ran
 at 900 MHz SM clock, power-limited at ~37 W); the CPU miner did 2.4-2.7 MH/s on 12 threads at ~6 cores.
 
 ## Notes and limits

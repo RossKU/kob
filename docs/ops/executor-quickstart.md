@@ -722,5 +722,5 @@ builds).
 **Small funds only.** It is a hot key on a phone that Android may stop at any time: put only a few days of fees and carriers
 on it, never savings. A stopped executor loses nothing but the spreads it would have earned.
 
-**Release signing (for the maintainer)**: the release key, the four `ANDROID_*` repository secrets and `versionCode` are in
+**Release signing (for the maintainer)**: the release key, the four `ANDROID_*` secrets of the environment `android-release` and `versionCode` are in
 `android/README.md`.
