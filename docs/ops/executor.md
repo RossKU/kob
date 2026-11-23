@@ -1338,8 +1338,8 @@ transactions with exactly the field set of a captured TN10 transfer, about 1,380
 checked and committed (`Ingest::apply_batch`: file database in WAL mode with `synchronous = FULL`, record log with
 fsync). KOB traffic is real: asks placed, filled in part (4 of 10) and cancelled with the protocol builders, and x402-style
 token payments of an allowlisted token whose ids the facilitator watches. 60 s of chain per run, generation not timed.
-Reference PC: **AMD Ryzen 7 5800HS (8 cores, 16 threads), 15.4 GB RAM, NVMe SSD, Windows 11, release build**, measured on
-2026-10-03 while the same PC ran a TN10 node, a CPU miner and the soak (so these are lower bounds) [F]:
+Reference host: **8 cores (16 threads), 16 GB RAM, NVMe SSD, Windows, release build**, measured on
+2026-10-03 while the same host ran a TN10 node, a CPU miner and the soak (so these are lower bounds) [F]:
 
 | mix (per block of 300) | follow the tip (5 blocks per commit) | catch up (100 blocks per commit) | CPU at 3,000 tx/s | disk writes |
 |---|---|---|---|---|
@@ -1358,7 +1358,7 @@ Parsing costs 2.6 to 3.2 us per transaction (about 500 MB/s of JSON); a non-KOB 
 before any database work (no `KOB1` payload, no covenant input or output). A KOB transaction costs about **0.25 to 0.3 ms** of
 one core: state derivation and its rows (the placement verification and script hashing run before, on other cores), in
 no single dominant step. The database pass is single-threaded: its ceiling is about 3,500 KOB tx/s at the tip and 4,300
-while catching up on this PC; at 10 % KOB a 3,000 tx/s chain is followed with 7x headroom at the tip.
+while catching up on this host; at 10 % KOB a 3,000 tx/s chain is followed with 7x headroom at the tip.
 Memory: 32 MB peak at the tip, about 200 MB while committing 100-block windows (one 40 MB response parsed).
 
 The per-order queries go through the order's own events, never the market index `order_events (kind, token, ts)` (a

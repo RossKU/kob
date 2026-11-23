@@ -1,7 +1,7 @@
 # Consolidating bid deliveries: borrow top-up and accumulating bid (design)
 
-Status: design only, 2026-11-16. Nothing here is shipped or pinned. Base: `origin/master` `d12b28e1b`, worktree
-`KOB-wt/borrow-design` (branch `borrow-design`).
+Status: design only, 2026-11-16. Nothing here is shipped or pinned. Base: `origin/master` `d12b28e1b`, branch
+`borrow-design`.
 
 ## 0. Where this stands (read first)
 
@@ -828,7 +828,7 @@ Known shared files and the rule for them: `crates/kob-protocol/src/build.rs` (B2
 
 ### 17.4 Testnet-10 soak
 
-Never on the third-party node at 65.108.107.30. One executor of the new generation, one indexer, the web app on the test
+Never on the soak node (a third party's server). One executor of the new generation, one indexer, the web app on the test
 host.
 
 | Day | What runs | Pass condition |

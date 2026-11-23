@@ -122,7 +122,7 @@ opened twice) and fails the job. The pinned KasWare build cannot be downloaded a
 `scripts/wallet-baseline.json`; regenerate it with `--write-baseline` (from the pinned builds) whenever a pin moves. Downloads are read as text and
 hashed only. A text diff is a prompt to look, not proof.
 
-When the issue fires: read the release, run the real-wallet gate on the founder's machine (`cd web && node e2e-real/run.mjs --ext latest --wallet kasware`
+When the issue fires: read the release, run the real-wallet gate on a machine with the wallet extensions (`cd web && node e2e-real/run.mjs --ext latest --wallet kasware`
 runs the newest build without touching the pinned cache), and only then move the pin (version, sha256, and the zip URL for Kaspire) and the baseline.
 Moving a pin always needs that gate run: nothing in CI proves a wallet signs a KOB transaction.
 
@@ -131,7 +131,7 @@ Moving a pin always needs that gate run: nothing in CI proves a wallet signs a K
 A nightly job could run the `web/e2e-real` scenarios `issue`, `limit`, a 2-level ladder and `amend` against both the pinned build and
 `--ext latest` on a GitHub-hosted runner (headed Chromium under xvfb). It needs a funded THROWAWAY testnet-10 key (never the founder's dev key,
 testnet coins only) stored as a repository secret (for example `KOB_TN10_CI_KEY`) and a reachable TN10 node. It would report by issue and never block a
-push (public testnet infrastructure is flaky). Until that secret exists the real-extension run stays a manual run on the founder's machine.
+push (public testnet infrastructure is flaky). Until that secret exists the real-extension run stays a manual run on a maintainer's machine.
 
 ## Layout
 
