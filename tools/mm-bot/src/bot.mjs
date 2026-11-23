@@ -39,8 +39,10 @@ export const PROVEN_MAX = 200; // proven records kept; past it a proof frees not
 // Lookups of proven records a cycle, in rotation: each costs up to 200 candidate scripts in the
 // cycle's one getUtxosByAddresses (kob recover), so 5 add at most 1,000 scripts to that call.
 export const PROVEN_LOOKUPS = 5;
-// A proven record ends this long after its expiry: by then a keeper has refunded an expired order.
-export const PROVEN_KEEP_AFTER_EXPIRY_MS = 86_400_000;
+// A proven record ends this long after its expiry: past it no conforming matcher fills the ask and
+// keepers refund it. A record lives at most lifeMin + 2 h (3.5 h at the default 90 min), so
+// PROVEN_MAX is reached only above about 57 full fills an hour, sustained.
+export const PROVEN_KEEP_AFTER_EXPIRY_MS = 2 * 3_600_000;
 const isAsk = (s) => (s.own?.state?.kind ? /Ask/.test(s.own.state.kind) : s.side === 'sell');
 /** A URL without its user, password or query (they may carry credentials, T-11). */
 const shownUrl = (u) => String(u).replace(/\/\/[^@/]*@/, '//').replace(/\?.*$/, '');
@@ -467,7 +469,7 @@ export class Bot {
       // An unknown expiry: the earlier terms were set at most lifeMin before the proof.
       const expiry = s.expiresAt ?? s.proven.at + life;
       if (now < expiry + PROVEN_KEEP_AFTER_EXPIRY_MS) continue;
-      this.log.info(`${short(id)} (${s.side} L${s.level}): proven paid and not found on the node for ${PROVEN_KEEP_AFTER_EXPIRY_MS / 3_600_000} h past its expiry: ended (a keeper refunds an expired order by then)`);
+      this.log.info(`${short(id)} (${s.side} L${s.level}): proven paid and not found on the node for ${PROVEN_KEEP_AFTER_EXPIRY_MS / 3_600_000} h past its expiry: ended (no conforming matcher fills an expired ask, and keepers refund it)`);
       this.log.action({ type: 'ended', id, side: s.side, level: s.level, status: 'proven, past its expiry' });
       this.state.recent[id] = { side: s.side, level: s.level, endedAt: now };
       delete this.state.orders[id];
@@ -671,7 +673,7 @@ export class Bot {
       }
       // Paid in full: the payment is not bound to the ask (another ask's payout serves too, R5T-1),
       // so the ask is not forgotten. It is kept as proven: its level and cap share are free, it is
-      // still looked up and cancelled once found, and it ends on the node's word, 24 h past its
+      // still looked up and cancelled once found, and it ends on the node's word, 2 h past its
       // expiry, or by the operator.
       const proof = r.status === 'gone' && isAsk(s) ? this.paidInFull(id) : null;
       if (proof) {

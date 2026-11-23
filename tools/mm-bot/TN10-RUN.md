@@ -76,7 +76,7 @@ The stand-in CLI of `test/` imitates `kob recover`; these points need the real C
   prints the `kob recover` answer and refuses while the order is live (pass `--amount-left` of a partly filled one),
   and drops an ended one (an `operator-drop` line in `logs/actions.jsonl`).
 - R5T-1: a fully filled ask is kept as proven (`mm-bot unresolved` lists it as PROVEN, `status` shows it pending
-  `proven`), its level is placed again, and it leaves `state.json` 24 h after its expiry.
+  `proven`), its level is placed again, and it leaves `state.json` 2 h after its expiry.
 - R5T-3: `mm-bot drop` of an ask with fills reported refuses without `--force`; with it, the order's record is appended
   to `<dataDir>/dropped-orders.json`, and `kob recover --from <dataDir>/dropped-orders.json --network testnet-10`
   reads that file (the extra `dropped` field of each item is ignored). `mm-bot unresolved` writes

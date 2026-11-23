@@ -67,9 +67,15 @@ On testnet-10 it is a warning.
   hint it has: each cycle a few proven asks (5, in rotation, the ones the indexer lists first) are looked up on the
   node, in every mode, and one found live is cancelled through the node, with an error alert (`proven-live`), and
   counts again until the node shows it ended. Until its expiry its price still counts in the self-trade check. A proven
-  ask ends when the node shows it ended after that cancel, 24 h after its expiry (by then a keeper has refunded an
-  expired order), or by `mm-bot drop`. At most 200 are kept: past that a new proof frees nothing (the ask stays
-  unresolved, as without proof) and the bot warns (`proven-full`). A forged proof thus costs one level of ladder
+  ask ends when the node shows it ended after that cancel, 2 h after its expiry (past its expiry no conforming
+  matcher fills an ask, and keepers refund it), or by `mm-bot drop`. At most 200 are kept. A record lives at most
+  `lifeMin` + 2 h (a proof comes after the placement or amend, the expiry at most `lifeMin` after it): 3.5 h at the
+  default 90 min, so the cap of 200 is reached only above about 57 full fills an hour, sustained. At the cap a new
+  proof frees nothing (the ask stays unresolved, as without proof: its level is blocked until its expiry, then parked
+  and still counted in the ask cap) and the bot warns once per ask (`proven-full`). The ladder then runs short on the
+  ask side until older records end, within 3.5 h; the operator should check `mm-bot unresolved` and, if fills that
+  fast are expected, lower the fill rate (fewer or larger levels) or drop records already seen ended (`mm-bot drop
+  --id <id> --force`, bot stopped). A forged proof thus costs one level of ladder
   room until the ask is found or expires, not a forgotten order; the ask itself stays fillable at its old price until
   its expiry (at most `lifeMin`, 90 min) where the search cannot reach its amount. To see the payments the
   bot reads its own address on the node (`getUtxosByAddresses`, JSON wRPC) at the start of each cycle, before each

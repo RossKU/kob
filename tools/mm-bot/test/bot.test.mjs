@@ -1213,7 +1213,7 @@ test('the amount left after each fill the indexer reported is a lookup hint: a h
   }
 });
 
-test('a proven ask frees its level and cap share, and ends 24 h after its expiry, not before (R5T-1)', { timeout: 120_000 }, async () => {
+test('a proven ask frees its level and cap share, and ends 2 h after its expiry, not before (R5T-1)', { timeout: 120_000 }, async () => {
   reset();
   const { bot, chain, calls } = setup();
   try {
@@ -1228,12 +1228,13 @@ test('a proven ask frees its level and cap share, and ends 24 h after its expiry
     await bot.cycle();
     assert.ok(places(calls).length > placed, 'its level is placed again');
     const h = PROVEN_KEEP_AFTER_EXPIRY_MS;
+    assert.equal(h, 2 * 3_600_000);
     bot.state.orders[id].expiresAt = Date.now() - h + 60_000;
     await bot.cycle();
-    assert.ok(bot.state.orders[id], 'kept until 24 h past its expiry');
+    assert.ok(bot.state.orders[id], 'kept until 2 h past its expiry');
     bot.state.orders[id].expiresAt = Date.now() - h - 1;
     await bot.cycle();
-    assert.equal(bot.state.orders[id], undefined, 'ended 24 h past its expiry');
+    assert.equal(bot.state.orders[id], undefined, 'ended 2 h past its expiry');
     assert.ok(readFileSync(paths(bot.cfg.dataDir).actions, 'utf8').includes('"proven, past its expiry"'));
   } finally {
     reset();
