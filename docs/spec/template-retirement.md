@@ -43,6 +43,16 @@ Order templates a build no longer pins, with the build that retired them and why
 cancel-only table: the maker cancels it in the current app or CLI; nothing else is built. (The generation before F1, retired by
 `6276d5c`, is not in the table: its orders are cancelled with the release they were placed with.)
 
+Every template hash a deployment record ever listed is in `crates/kob-protocol/data/retired/record-history.tsv`
+(`scripts/record-history.mjs`), and `kob_protocol::retired`'s test ties each to exactly one class (audit 2026-11-23 A3-2):
+pinned, cancel-only (the table below), or classified by hand with its evidence:
+- **never-deployed**, 22 templates: the branch-only re-pins of 2026-11-16 to 11-18 (the delivery re-pin `68b7b3fa8`..`039a5fa6a`,
+  KobBid 0d72813a; DLV-07 `56da43736`, KobBid 1917f8ad; H1 `557f522cd`..`bc2f556f6`, KobBid f5dc8334). No deploy-pages run
+  served them (the TN10 site went from KobBid dfcd78f1 to 2f6079ae), nor the soak build or a recorded TN10 run.
+- **pre-f1**, 35 templates: the October generations before `6276d5c` (2026-10-06 to 10-19). They predate the first deploy-pages
+  run, but the TN10 tests of 2026-10-14/15 placed orders from local builds, so TN10 orders may exist under them; never on
+  mainnet. They stay out of the cancel-only table by the October decision above, pending a decision (A3-2).
+
 | Retired templates | Replaced by (bytecode hash prefix) | Why |
 |---|---|---|
 | `KobBidKron` 7cb4f6ab, `KobCondAskKron` e9930d36, `KobCondBidKron` 8aa82c81, `KobIfdBidKron` 644eeb9c, `KobIfdAskKron` 2557e020 and their delivery-0 builds `KobBidKronD0` bdf2d399, `KobCondAskKronD0` b66e1ca0, `KobCondBidKronD0` 9e2bac11, `KobIfdBidKronD0` c4742e78, `KobIfdAskKronD0` 7ae3d8b7 (bid minimum fill, `71a6c32`) | KobBidKron 4dc2420d, KobCondAskKron 75ad2407, KobCondBidKron 401b2e29, KobIfdBidKron 10c1a47f, KobIfdAskKron 8e030d24; KobBidKronD0 8a7ee676, KobCondAskKronD0 b2b6fe24, KobCondBidKronD0 82fce430, KobIfdBidKronD0 ebc5bff8, KobIfdAskKronD0 daf934fd | A bid fill below `minFill` must take all the buying power left. The KRON kinds of TN10 generation `0506de663e7837a3` that changed with `KobBidKron`; their KCC-20 twins changed with the delivery re-pin (next row), which the same switch to `113cd9b8b119cdaf` deployed. `KobAskKron` did not change. The delivery templates of `1652c9ace` (generation `1b7d75e9b5978ef1`) were never deployed and are not in the table. The last commit that carries the retired templates is `1652c9ac`. |
