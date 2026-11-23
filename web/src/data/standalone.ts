@@ -106,9 +106,12 @@ export const CALM_MS = 600_000;
 export const LAG_SWITCH_SECONDS = 120;
 /**
  * An automatic mode ends only once the indexer is within this many seconds of the chain. It is
- * well under LAG_SWITCH_SECONDS, so the two do not flap.
+ * well under LAG_SWITCH_SECONDS, so the two do not flap. `lag_seconds` includes the age of the
+ * indexer's cursor block by the indexer host's clock: a few seconds when healthy, more on a host
+ * clock that runs fast. So the bound leaves room for that, and a fast clock cannot hold every
+ * client in the mode (R5B-L2).
  */
-export const LAG_RETURN_SECONDS = 20;
+export const LAG_RETURN_SECONDS = 60;
 /**
  * With further indexers the failover gets this long to find a usable one first. Its re-checks and
  * one round of probes take about 12 s.

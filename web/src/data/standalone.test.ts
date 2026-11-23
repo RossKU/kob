@@ -313,6 +313,20 @@ describe('an indexer that falls behind the chain', () => {
     expect(h.c.state).toMatchObject({ active: false, behind: false });
   });
 
+  it('a steady 30 s cursor age (a host clock that runs fast) still lets an automatic mode end (R5B-L2)', async () => {
+    expect(LAG_RETURN_SECONDS).toBe(60);
+    expect(LAG_SWITCH_SECONDS).toBe(120);
+    const h = harness();
+    h.setHealth(lagged(500));
+    h.c.report(assess(lagged(500)));
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+    expect(h.c.state.active).toBe(true);
+    h.setHealth(lagged(30));
+    h.c.report(assess(lagged(30)));
+    await vi.advanceTimersByTimeAsync(RETURN_CHECK_MS * 3 + MIN_AUTO_MS);
+    expect(h.c.state).toMatchObject({ active: false, behind: false });
+  });
+
   it('with automatic fallback off it never switches on lag', async () => {
     const h = harness({ auto: false });
     h.setHealth(lagged(900));
