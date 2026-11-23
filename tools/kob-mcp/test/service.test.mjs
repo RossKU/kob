@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { KobService, sentNothing } from '../src/service.mjs';
 import { PRIMARY, setup } from './helpers.mjs';
@@ -396,4 +397,140 @@ test('take: the token is required and pinned (sec-ops M15)', async () => {
   const sent = t.yesCalls()[0];
   assert.equal(sent[sent.indexOf('--token') + 1], TUSD);
   assert.ok(t.calls().some((a) => a[0] === 'take' && a.includes('--dry-run') && a.includes('--token')));
+});
+
+const chainBook = (book) => {
+  const chain = JSON.parse(readFileSync(process.env.FAKE_KOB_CHAIN, 'utf8'));
+  writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify({ ...chain, book: { ...chain.book, ...book } }));
+};
+const chainSet = (over) => {
+  const chain = JSON.parse(readFileSync(process.env.FAKE_KOB_CHAIN, 'utf8'));
+  writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify({ ...chain, ...over }));
+};
+
+test('kob_replace: a tip-only amend is banded on the all-in price and its tip is capped (T-1)', async () => {
+  const { t, svc, id } = await restingSell();
+  // 0.25 - 0.2 tip = 0.05 KAS all-in to the maker: far below the reference.
+  const r = await svc.write('kob_replace', { id, tip: '0.2KAS' });
+  assert.match(r.reason, /^PRICE_BAND: a sell at 0\.05 KAS/);
+  // Within the band the tip caps still hold: 2 % of the price is above the 1 % default.
+  assert.match((await svc.write('kob_replace', { id, tip: '0.005KAS' })).reason, /^TIP_CAP: .* above 1% of the price/);
+  assert.equal(t.yesCalls().length, 1, 'only the placement was signed');
+  // A small tip passes, and the custody counts as a new sell (the all-in price went down).
+  const ok = await svc.write('kob_replace', { id, tip: '0.001KAS' });
+  assert.equal(ok.status, 'submitted');
+  assert.deepEqual(t.ledger().at(-2).tokens, { [TUSD]: String(200e8) });
+});
+
+test('kob_replace: with the band off, a tip-only amend still meets the tip caps (T-1)', async () => {
+  const t = setup({ mode: 'auto', limits: { priceBandPct: null } });
+  const svc = new KobService(t.cfg);
+  const s = await svc.write('kob_place_limit', { token: 'TUSD', side: 'sell', amount: '200TUSD', price: '0.25KAS' });
+  const r = await svc.write('kob_replace', { id: s.newCovenantIds[0], tip: '0.2499KAS' });
+  assert.match(r.reason, /TIP_CAP/);
+  assert.equal(t.yesCalls().length, 1);
+});
+
+test('kob_place_limit: the tip is capped and the band judges the all-in price (T-1, T-9)', async () => {
+  const t = setup({ mode: 'auto' });
+  const svc = new KobService(t.cfg);
+  // 0.3 + 0.02 tip = 0.32 a token: above +25 % of the 0.25 last fill.
+  assert.match((await svc.write('kob_place_limit', { ...place, price: '0.3KAS', tip: '0.02KAS' })).reason, /^PRICE_BAND: a buy at 0\.32 KAS/);
+  assert.match((await svc.write('kob_place_limit', { ...place, tip: '0.01KAS' })).reason, /^TIP_CAP: .* above 1% of the price/);
+  const sell = { token: 'TUSD', side: 'sell', amount: '200TUSD', price: '0.25KAS', tip: '0.0025KAS' };
+  assert.equal((await svc.write('kob_place_limit', sell)).status, 'submitted', '0.5 KAS of tips over 200 TUSD');
+  const t2 = setup({ mode: 'auto', limits: { maxTipKas: 0.1 } });
+  assert.match((await new KobService(t2.cfg).write('kob_place_limit', sell)).reason, /^TIP_CAP: the order's tips come to 0\.5 KAS/);
+});
+
+test('kob_replace: a buy priced up counts its whole escrow under the KAS caps (T-3)', async () => {
+  const t = setup({ mode: 'auto' }); // 100 KAS per transaction, 150 per day
+  const svc = new KobService(t.cfg);
+  const b = await svc.write('kob_place_limit', { ...place, amount: '200TUSD' }); // 50 escrow + 1 carrier
+  const id = b.newCovenantIds[0];
+  const up = await svc.write('kob_replace', { id, price: '0.26KAS' });
+  assert.equal(up.status, 'submitted');
+  assert.equal(up.spendKas, '51', 'the escrow and its carrier, at the new price');
+  assert.equal(up.spentTodayKas, '102.0005', 'the commitment stays counted after the send');
+  assert.match((await svc.write('kob_replace', { id, price: '0.27KAS' })).reason, /^DAILY_CAP/);
+  // A buy priced down moves nothing against the maker: only the fee.
+  assert.equal((await svc.write('kob_replace', { id, price: '0.25KAS' })).status, 'submitted');
+  assert.equal(t.yesCalls().length, 3);
+});
+
+test('price band: a printed last fill alone does not move the reference (T-3, K-L3)', async () => {
+  const t = setup({ mode: 'auto' });
+  const svc = new KobService(t.cfg);
+  await svc.balances(); // the stand-in writes its chain
+  // A second key prints a fill at 0.4; the bids that add up to 10 KAS stand at 0.24, the ask at 0.26.
+  chainBook({ last_fill: '40000000', bids: [{ price: '24000000', amount: String(50e8), orders: 1 }], asks: [{ price: '26000000', amount: String(1e8), orders: 1 }] });
+  const r = await svc.write('kob_place_limit', { ...place, price: '0.45KAS' });
+  assert.match(r.reason, /^PRICE_BAND: a buy at 0\.45 KAS .*0\.25 KAS per whole token \(10 KAS bid depth\)/);
+  // A sell is judged against the higher one: a printed low fill does not let it sell cheap.
+  chainBook({ last_fill: '1000000' });
+  assert.match((await svc.write('kob_place_limit', { token: 'TUSD', side: 'sell', amount: '1TUSD', price: '0.1KAS' })).reason, /^PRICE_BAND: a sell/);
+  assert.equal(t.yesCalls().length, 0);
+});
+
+test('kob_claim with sell_price: banded, and the claimed tokens count under the token caps (T-2, M17)', async () => {
+  const t = setup({ mode: 'auto' });
+  process.env.FAKE_KOB_FEATURES = 'claim';
+  try {
+    const svc = new KobService(t.cfg);
+    await svc.detectFeatures();
+    const id = 'ab'.repeat(32);
+    svc.indexer.get = async () => ({ covenant_id: id, token: TUSD });
+    assert.match((await svc.write('kob_claim', { id, sell_price: '0.01KAS' })).reason, /^PRICE_BAND: a sell at 0\.01 KAS/);
+    // 300 claimed TUSD for sale: above 25 % of the 1,000 held.
+    chainSet({ bought: 300e8 });
+    assert.match((await svc.write('kob_claim', { id, sell_price: '0.25KAS' })).reason, /^TOKEN_PER_TX_CAP/);
+    chainSet({ bought: 200e8 });
+    assert.equal((await svc.write('kob_claim', { id, sell_price: '0.25KAS' })).status, 'submitted');
+    assert.deepEqual(t.ledger().at(-2).tokens, { [TUSD]: String(200e8) });
+    // No indexer view of the order: the token is not confirmed, so the sale is refused; a plain claim goes.
+    svc.indexer.get = async () => { throw new Error('down'); };
+    assert.match((await svc.write('kob_claim', { id, sell_price: '0.25KAS' })).reason, /^PRICE_BAND_UNCHECKED: the token of the claimed order/);
+    assert.equal((await svc.write('kob_claim', { id })).status, 'submitted');
+    assert.equal(t.yesCalls().length, 2);
+  } finally {
+    delete process.env.FAKE_KOB_FEATURES;
+  }
+});
+
+test('a STOP file written during the dry run stops the send (L23)', async () => {
+  const t = setup({ mode: 'auto' });
+  const svc = new KobService(t.cfg);
+  svc.kob.env.FAKE_KOB_STOP_ON_DRY = t.cfg.killSwitchFile;
+  const r = await svc.write('kob_place_limit', place);
+  assert.match(r.reason, /^KILL_SWITCH/);
+  assert.equal(t.yesCalls().length, 0);
+  assert.equal(t.ledger().length, 0, 'nothing reserved');
+});
+
+test('a book that cannot be read refuses place and take instead of skipping the band (L23)', async () => {
+  const t = setup({ mode: 'auto' });
+  const svc = new KobService(t.cfg);
+  svc.kob.env.FAKE_KOB_BOOK_FAIL = '1';
+  assert.match((await svc.write('kob_place_limit', place)).reason, /^PRICE_BAND_UNCHECKED: the book/);
+  assert.match((await svc.write('kob_take', { id: 'ab'.repeat(32), token: TUSD, amount: '1TUSD', max_price: '0.27KAS' })).reason, /^PRICE_BAND_UNCHECKED: the book/);
+  assert.equal(t.yesCalls().length, 0);
+  // With the band off no book is read.
+  const u = setup({ mode: 'auto', limits: { priceBandPct: null } });
+  const off = new KobService(u.cfg);
+  off.kob.env.FAKE_KOB_BOOK_FAIL = '1';
+  assert.equal((await off.write('kob_place_limit', place)).status, 'submitted');
+});
+
+test('fee estimate: enum arguments are checked, and a creation estimate leaves no files (L23)', async () => {
+  const t = setup();
+  const svc = new KobService(t.cfg);
+  assert.match((await svc.write('kob_place_limit', { ...place, side: '--yes' }, { estimate: true })).reason, /^BAD_ARGUMENT: side/);
+  assert.match((await svc.write('kob_place_limit', { ...place, crossing: '--yes' }, { estimate: true })).reason, /^BAD_ARGUMENT: crossing/);
+  assert.match((await svc.write('kob_place_limit', { ...place, decimals: '--yes' }, { estimate: true })).reason, /^BAD_ARGUMENT: decimals/);
+  const args = { name: 'Test MCP', ticker: 'TMCP', decimals: 2, supply: '100000', fund_utxo: `${'aa'.repeat(32)}:1:5000000000` };
+  assert.match((await svc.write('kob_token_create', { ...args, program: '--yes' }, { estimate: true })).reason, /^BAD_ARGUMENT: program/);
+  assert.equal((await svc.write('kob_token_create', args, { estimate: true })).status, 'estimate');
+  const dir = join(t.cfg.dataDir, 'creations');
+  assert.deepEqual(existsSync(dir) ? readdirSync(dir) : [], []);
+  assert.equal(t.yesCalls().length, 0);
 });

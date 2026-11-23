@@ -4,7 +4,7 @@
   "display_name": "KOB order book",
   "version": "0.1.0",
   "description": "Read and trade KOB order books on Kaspa through the kob CLI, within local spending limits. Testnet-10 by default.",
-  "long_description": "The key stays on this computer and is read only by the kob CLI. Every write returns its plan first and sends only when confirmed. Per-transaction and per-day KAS caps, a fee cap, a cap on token creations per day, a withdrawal allow-list (your primary wallet), a kill switch file and an audit log are kept in the data folder.",
+  "long_description": "The key stays on this computer and is read only by the kob CLI. Every write returns its plan first and sends only when the agent calls it again with the plan id; the agent confirms its own plans, so the limits are what holds. Per-transaction and per-day KAS caps, a fee cap, a cap on token creations per day, a withdrawal allow-list (your primary wallet), a kill switch file and an audit log are kept in the data folder.",
   "author": {
     "name": "RossKU"
   },

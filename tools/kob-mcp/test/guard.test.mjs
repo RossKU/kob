@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { checkConfig, loadConfig, publicConfig } from '../src/config.mjs';
-import { Ledger, bandCheck, capRefusals } from '../src/guard.mjs';
+import { Ledger, bandCheck, capRefusals, firmReference, tipRefusals } from '../src/guard.mjs';
 import { kas, toSompi } from '../src/units.mjs';
 import { PRIMARY } from './helpers.mjs';
 
@@ -73,6 +73,34 @@ test('price band: exact at any number of decimals, a half-sompi mid and a fracti
   assert.equal(bandCheck({ side: 'buy', price: 3n, book: b0, bandPct: '2.5', decimals: 0 }).ok, true);
   assert.equal(bandCheck({ side: 'buy', price: 4n, book: b0, bandPct: '2.5', decimals: 0 }).ok, false);
   assert.equal(bandCheck({ side: 'sell', price: 4n, book: b0, bandPct: 150, decimals: 0 }).ok, true, 'a band over 100 % never refuses a sell');
+});
+
+test('price band: a state price per its own scale is judged exactly (12 decimals)', () => {
+  // 25,000,000 sompi per 10^9 base units is 250 KAS per whole token: +25 % is 312.5 KAS.
+  const b12 = { last_fill: '25000000', scale: 1_000_000_000 };
+  assert.equal(bandCheck({ side: 'buy', price: 31_250_000n, priceScale: 1_000_000_000, book: b12, bandPct: 25, decimals: 12 }).ok, true);
+  assert.match(bandCheck({ side: 'buy', price: 31_250_001n, priceScale: 1_000_000_000, book: b12, bandPct: 25, decimals: 12 }).reason, /a buy at 312\.50001 KAS/);
+});
+
+test('depth reference: the bid behind 10 KAS of bids, midpointed with an ask within twice it', () => {
+  const lv = (price, amount) => ({ price: String(price), amount: String(amount) });
+  const scale = 100_000_000;
+  assert.equal(firmReference({ scale, bids: [lv(30e6, 1e8), lv(24e6, 50e8)], asks: [lv(26e6, 1e8)] }), 25_000_000n, 'a one-token bid at 0.3 is skipped');
+  assert.equal(firmReference({ scale, bids: [lv(24e6, 50e8)], asks: [lv(60e6, 1e8)] }), 24_000_000n, 'an ask past twice the bid is not used');
+  assert.equal(firmReference({ scale, bids: [lv(24e6, 4e8)], asks: [] }), null, 'under 10 KAS of bids');
+  assert.equal(firmReference({ bids: [lv(24e6, 50e8)] }), null, 'no scale');
+});
+
+test('tip caps: a share of the price and a KAS total over the order', () => {
+  const caps = { maxTipPct: 1, maxTip: KAS };
+  const ask = (tip, amountLeft) => ({ kind: 'KobAsk', state: { scale: '100000000', price: '25000000', tip: String(tip), amountLeft: String(amountLeft) } });
+  assert.deepEqual(tipRefusals(ask(250000, 100e8), 0, caps), [], '1 % of 0.25 over 100 tokens is 0.25 KAS');
+  assert.match(tipRefusals(ask(250001, 1e8), 0, caps)[0], /above 1% of the price/);
+  assert.match(tipRefusals(ask(250000, 1000e8), 0, caps)[0], /come to 2\.5 KAS/);
+  const bid = { kind: 'KobBid', state: { scale: '100000000', price: '25000000', tip: '250000' } };
+  assert.match(tipRefusals(bid, 200n * KAS, caps)[0], /come to 1\.98/, 'a buy: escrow x tip / (price + tip)');
+  assert.deepEqual(tipRefusals(ask(24_000_000, 1e8), 0, { maxTipPct: null, maxTip: null }), [], 'both caps off');
+  assert.deepEqual(tipRefusals({ kind: 'KobCurveAsk', state: { tip: '5' } }, 0, caps), [], 'other kinds are not plain orders');
 });
 
 test('ledger: launches of the day, released ones not counted', () => {

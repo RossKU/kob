@@ -196,39 +196,115 @@ function fraction(x) {
   return [BigInt(m[1] + frac), 10n ** BigInt(frac.length)];
 }
 
+/** The KAS bids that a depth reference must stand behind (kob-cli `firm_reference`): 10 KAS. */
+export const FIRM_DEPTH_SOMPI = 1_000_000_000n;
+
+/**
+ * The CLI's depth reference (kob-cli `data::firm_reference`), sompi per `book.scale` base units:
+ * the bid at which the bids add up to 10 KAS, midpointed with the best ask when that ask is at
+ * least the bid and at most twice it. A one-unit trade or order cannot move it. Null when the
+ * bids are thinner or the scale is unknown.
+ */
+export function firmReference(book) {
+  if (book?.scale == null) return null;
+  const scale = BigInt(book.scale);
+  let value = 0n;
+  let bid = null;
+  for (const l of book.bids ?? []) {
+    value += (big(l.amount) * big(l.price)) / scale;
+    if (value >= FIRM_DEPTH_SOMPI) {
+      bid = big(l.price);
+      break;
+    }
+  }
+  if (bid == null || bid <= 0n) return null;
+  const ask = book.asks?.[0]?.price != null ? big(book.asks[0].price) : null;
+  return ask != null && ask >= bid && ask <= 2n * bid ? (ask + bid) / 2n : bid;
+}
+
 /**
  * The price band, in exact integers.
- * `price` is sompi per whole token (10^decimals base units). The book's prices are sompi per
- * `book.scale` base units (10^min(decimals, 9)). The reference is the last fill, else the mid of
- * the best bid and ask. A buy above ref x (1 + band) or a sell below ref x (1 - band) is refused.
- * With no reference or no decimals it passes, with a note and `checked: false` (`off: true` when
- * the band is off).
+ * `price` is sompi per whole token (10^decimals base units), or, with `priceScale`, sompi per
+ * `priceScale` base units (an order state's own price). The book's prices are sompi per
+ * `book.scale` base units (10^min(decimals, 9)).
+ * The reference is the last fill and the depth reference (firmReference): a buy is judged against
+ * the lower of the two and a sell against the higher, so a fill a second key prints (K-L3) moves
+ * neither bound alone. With neither, the mid of the best bid and ask. A buy above ref x (1 + band)
+ * or a sell below ref x (1 - band) is refused. With no reference or no decimals it passes, with a
+ * note and `checked: false` (`off: true` when the band is off).
  */
-export function bandCheck({ side, price, book, bandPct, decimals }) {
+export function bandCheck({ side, price, priceScale = null, book, bandPct, decimals }) {
   if (bandPct == null) return { ok: true, checked: false, off: true, note: 'price band off' };
   const last = book?.last_fill != null ? BigInt(book.last_fill) : null;
   const bid = book?.best_bid != null ? BigInt(book.best_bid) : null;
   const ask = book?.best_ask != null ? BigInt(book.best_ask) : null;
+  const refs = [];
+  if (last != null && last > 0n) refs.push([last, 'last fill']);
+  const firm = firmReference(book);
+  if (firm != null) refs.push([firm, '10 KAS bid depth']);
+  refs.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const pick = refs.length ? refs[side === 'buy' ? 0 : refs.length - 1] : null;
   // The reference as num / den sompi per `scale` base units (a mid keeps its half sompi).
-  const [num, den] = last != null ? [last, 1n] : bid != null && ask != null ? [bid + ask, 2n] : [null, 1n];
-  if (num == null || num <= 0n) return { ok: true, checked: false, note: 'no last fill and no two-sided book: the price band was not checked' };
+  const [num, den, what] = pick ? [pick[0], 1n, pick[1]] : bid != null && ask != null ? [bid + ask, 2n, 'mid'] : [null, 1n, null];
+  if (num == null || num <= 0n) return { ok: true, checked: false, note: 'no last fill, no 10 KAS of bids and no two-sided book: the price band was not checked' };
   if (book?.scale == null || decimals == null) return { ok: true, checked: false, note: "the token's decimals are unknown: the price band was not checked" };
   const scale = BigInt(book.scale);
   const whole = 10n ** BigInt(decimals);
   const [pn, pd] = fraction(bandPct);
-  const what = last != null ? 'last fill' : 'mid';
+  // The price per whole token as qn / qd.
+  const [qn, qd] = priceScale == null ? [price, 1n] : [price * whole, BigInt(priceScale)];
   const refText = `${kas((num * whole) / (den * scale))} KAS per whole token (${what})`;
+  const shown = kas(qn / qd);
   // Compare price with ref x (1 +- pn / (100 pd)). Both sides are multiplied by den x scale x 100
-  // pd.
-  const lhs = price * den * scale * 100n * pd;
-  const ref = num * whole;
+  // pd x qd.
+  const lhs = qn * den * scale * 100n * pd;
+  const ref = num * whole * qd;
   if (side === 'buy' && lhs > ref * (100n * pd + pn)) {
-    return { ok: false, reason: `PRICE_BAND: a buy at ${kas(price)} KAS is more than ${bandPct}% above the reference ${refText}` };
+    return { ok: false, reason: `PRICE_BAND: a buy at ${shown} KAS is more than ${bandPct}% above the reference ${refText}` };
   }
   if (side === 'sell' && 100n * pd > pn && lhs < ref * (100n * pd - pn)) {
-    return { ok: false, reason: `PRICE_BAND: a sell at ${kas(price)} KAS is more than ${bandPct}% below the reference ${refText}` };
+    return { ok: false, reason: `PRICE_BAND: a sell at ${shown} KAS is more than ${bandPct}% below the reference ${refText}` };
   }
   return { ok: true, checked: true, note: `within ${bandPct}% of ${refText}` };
+}
+
+/** The side of an order state kind on a KAS book: 'sell', 'buy' or null (any other kind). */
+export function sideOfKind(kind) {
+  const k = String(kind ?? '');
+  return /^Kob(Cond|Ifd)?Ask(Kron)?$/.test(k) ? 'sell' : /^Kob(Cond|Ifd)?Bid(Kron)?$/.test(k) ? 'buy' : null;
+}
+
+const digits = (v) => (/^\d+$/.test(String(v ?? '')) ? BigInt(v) : null);
+
+/** An order state's limit (price, else take-profit price), sompi per its scale; null if absent. */
+export const statePrice = (st) => digits(st?.price ?? st?.tpPrice);
+
+/**
+ * The tip caps a planned order breaks (T-1): the tip goes to the executor that fills it, so a
+ * large one hands it the order's value. `o` is { kind, state } as the CLI prints it, `value` the
+ * KAS it holds (a buy's escrow). Refused: a tip above `maxTipPct` % of the price, or above
+ * `maxTip` sompi over the order (a sell's custody, a buy's escrow).
+ */
+export function tipRefusals(o, value, caps) {
+  const side = sideOfKind(o?.kind);
+  const st = o?.state ?? {};
+  const tip = digits(st.tip) ?? 0n;
+  if (!side || tip === 0n) return [];
+  const price = statePrice(st);
+  const scale = digits(st.scale);
+  const out = [];
+  if (caps.maxTipPct != null && (price == null || tip * 10_000n > BigInt(Math.round(caps.maxTipPct * 100)) * price)) {
+    out.push(`TIP_CAP: the tip ${tip} sompi per ${scale ?? '?'} base units is above ${caps.maxTipPct}% of the price ${price ?? '?'}`);
+  }
+  if (caps.maxTip != null) {
+    // A sell pays tip x amount; a buy's escrow pays price + tip per unit, of which the tip.
+    const total = side === 'sell' ? (scale ? (tip * (digits(st.amountLeft) ?? 0n)) / scale : null)
+      : price != null ? (big(value) * tip) / (price + tip) : null;
+    if (total == null || total > caps.maxTip) {
+      out.push(`TIP_CAP: the order's tips come to ${total == null ? 'an unknown amount' : `${kas(total)} KAS`}, above the ${kas(caps.maxTip)} KAS cap (limits.maxTipKas)`);
+    }
+  }
+  return out;
 }
 
 export const today = () => utcDay(Date.now());
