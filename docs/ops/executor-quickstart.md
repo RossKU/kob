@@ -103,8 +103,8 @@ icacls C:\kob /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" /grant:r "SYSTEM:(O
 
 In PowerShell write the first grant as `/grant:r "${env:USERNAME}:(OI)(CI)F"`; the rest is the same. (On a Windows in another
 language, write `*S-1-5-18` for `SYSTEM` and `*S-1-5-32-544` for `Administrators`.) Then check with `icacls C:\kob`: it must list
-your account, `NT AUTHORITY\SYSTEM` and `BUILTIN\Administrators`, and nothing else. kobd checks on Windows only who can read the key
-file, not who can write the folder, the program or the configuration.
+your account, `NT AUTHORITY\SYSTEM` and `BUILTIN\Administrators`, and nothing else. At each start kobd logs an error for its program,
+its folder, the configuration and the data directory when another account can change them; it warns and does not refuse.
 
 **Extract the archive first**: do not
 double-click the program inside the zip viewer (Windows then runs it from a temporary folder and the key and the database

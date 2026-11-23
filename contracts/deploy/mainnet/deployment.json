@@ -118,6 +118,15 @@
       "suffix_len": 4083
     }
   ],
+  "locks": [
+    {
+      "name": "KobLockAuto",
+      "artifact": "contracts/artifacts/KobLockAuto.json",
+      "hash": "ed392654183dfc8e0d8ff49130b15ba142b27af33ecb3a854b98ada5c45158e4",
+      "prefix_len": 1,
+      "suffix_len": 329
+    }
+  ],
   "registry": {
     "path": "registry/tokens.json",
     "sha256": "a8949e77a76165535e70115e26020f4b4b6165d6167271ae3419e3d4668a20d8",

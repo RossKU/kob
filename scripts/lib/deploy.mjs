@@ -45,8 +45,7 @@ const names = [
   ...KINDS.map((k) => `${k}Kron`),
   ...(network === 'mainnet' ? [] : KINDS.map((k) => `${k}KronD0`)),
 ];
-const templates = names.map((name) => {
-  const file = `contracts/artifacts/${name}.json`;
+const templateOf = (name, file) => {
   if (!fs.existsSync(file)) die(`${file} is missing`);
   const c = JSON.parse(readLf(file)).contracts[name];
   if (!c) die(`${file} has no contract ${name}`);
@@ -58,7 +57,25 @@ const templates = names.map((name) => {
     prefix_len: state_span.offset,
     suffix_len: bytecode.length - state_span.offset - state_span.len,
   };
+};
+const templates = names.map((name) => templateOf(name, `contracts/artifacts/${name}.json`));
+// The lock templates: every KobLockAuto template a build ever issued (docs/spec/template-retirement.md,
+// "Lock templates"). A lock lasts up to 10 years, so the list only grows: the entries of the committed
+// record are carried over, each still checked against its artifact (a re-pin keeps the old artifact
+// under a new file name), and the current template is added when it is new.
+const LOCKS = ['KobLockAuto'];
+const recordFile = `contracts/deploy/${network}/deployment.json`;
+const locks = (fs.existsSync(recordFile) ? JSON.parse(readLf(recordFile)).locks ?? [] : []).map((l) => {
+  const t = templateOf(l.name, l.artifact);
+  if (t.hash !== l.hash || t.prefix_len !== l.prefix_len || t.suffix_len !== l.suffix_len) {
+    die(`lock template ${l.name} ${l.hash}: ${l.artifact} is now another template; an issued lock stays readable, so keep its artifact under a new name and point the record at it`);
+  }
+  return t;
 });
+for (const name of LOCKS) {
+  const t = templateOf(name, `contracts/artifacts/${name}.json`);
+  if (!locks.some((l) => l.hash === t.hash)) locks.push(t);
+}
 // The token registry of this network, when the repository ships one (registry/tokens.json is the
 // mainnet registry).
 const REGISTRY = 'registry/tokens.json';
@@ -103,6 +120,7 @@ const manifest = {
   note: 'every template is the reference artifact under contracts/artifacts; nothing is substituted per network',
   indexer_url: indexerUrl,
   templates,
+  locks,
   ...(registry ? { registry } : {}),
 };
 fs.mkdirSync(out, { recursive: true });
@@ -130,6 +148,13 @@ every network.
 | Template | Template hash | prefix / suffix |
 |---|---|---|
 ${rows.join('\n')}
+
+Lock templates: every automatic creator lock template (\`KobLockAuto\`) a build ever issued. A lock lasts up to 10 years,
+so this list only grows, and every build reads and releases each one (docs/spec/template-retirement.md, "Lock templates").
+
+| Lock template | Template hash | prefix / suffix |
+|---|---|---|
+${locks.map((t) => `| ${t.name} | \`${t.hash}\` | ${t.prefix_len} / ${t.suffix_len} |`).join('\n')}
 
 The token programs are the reference artifacts too. Binaries embedding this record: see "Deployment
 records" in contracts/README.md.
@@ -159,4 +184,4 @@ listing: every token of a supported program trades whether or not it has an entr
 ${tokens.join('\n')}
 `;
 }
-for (const t of templates) console.log(`${t.name.padEnd(16)} ${t.hash}`);
+for (const t of [...templates, ...locks]) console.log(`${t.name.padEnd(16)} ${t.hash}`);

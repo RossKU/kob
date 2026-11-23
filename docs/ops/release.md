@@ -250,8 +250,8 @@ would list none of the orders the new wallets place.
    Check `GET /v1/health` and that a placement made with `kob` is listed.
    `GET /v1/health` reports the build that answers: `version` (the crate version, the tag without the `v`), `commit` (the git
    commit of the build, `null` when the build did not say), `payload_version` (the `KOB1` payload version it reads and
-   writes), `template_generation` (16 hex digits of a hash of the order templates the build pins: two builds with the same
-   value fill the same orders, `docs/spec/template-retirement.md`) and `cancel_only_generations` (the retirements whose
+   writes), `template_generation` (16 hex digits of a hash of the order templates and the automatic creator lock the build pins: two
+   builds with the same value fill the same orders and release the same locks, `docs/spec/template-retirement.md`) and `cancel_only_generations` (the retirements whose
    orders it still serves for their makers' cancel). Compare them with the release:
    `curl -s https://<indexer>/v1/health | jq '{version, commit, payload_version, template_generation}'`. The executor's status
    line ends with the same facts (`kobd 0.1.0 (commit ...), payload v4, templates ...`), and the metrics carry them as the labels

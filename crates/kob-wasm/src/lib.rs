@@ -723,7 +723,8 @@ pub mod api {
     }
     /// The least KAS that a new order UTXO must hold, from `build::min_order_value`.
     ///
-    /// For a pair order it is its carriers and the tip of its amount.
+    /// For a pair order it is its carriers and the tip of its amount. It leaves out the keeper
+    /// reserve of a stop kind (`keeperTip` per expected arm or trail), which the caller adds.
     pub fn min_order_value(state: &str) -> R<String> {
         Ok(build::min_order_value(&any(state)?).to_string())
     }

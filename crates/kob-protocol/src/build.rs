@@ -512,6 +512,12 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
 ///
 /// For a bid it is one minimum fill, for an if-done entry its whole escrow, and for a pair order
 /// the KAS of its fills (`pair::min_pair_value`).
+///
+/// It leaves out the keeper reserve: each arm or trail of a stop kind (`KobCondBid`, `KobIfdBid`,
+/// `KobIfdAsk`, `KobCondPair`, `KobIfdPair` and their KRON twins) lets the keeper take up to
+/// `keeperTip` out of the order's KAS, and how often that happens is not in the state. A caller
+/// funds `keeperTip` per expected arm or trail on top (the CLI and the web do), or an order funded
+/// at this floor may not complete its last fill after an arm (audit 2026-11-23 B2-L7).
 pub fn min_order_value(s: &AnyState) -> i64 {
     let sat = |v: Option<i64>| v.unwrap_or(i64::MAX);
     match s {

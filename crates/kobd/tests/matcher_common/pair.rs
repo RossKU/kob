@@ -355,7 +355,21 @@ pub fn l_bid_of(id: u32, token: [u8; 32], p: TemplateId, maker: u8, price: i64, 
 
 /// A plain KAS ask of `token` (program `p`) at `price` holding `amount` base units.
 pub fn l_ask_of(id: u32, token: [u8; 32], p: TemplateId, maker: u8, price: i64, amount: i64) -> ListedOrder {
+    l_ask_with(id, token, p, maker, price, amount, |_| {})
+}
+
+/// [`l_ask_of`] with its state changed by `f` before the custody is sized (a minimum fill, a FOK).
+pub fn l_ask_with(
+    id: u32,
+    token: [u8; 32],
+    p: TemplateId,
+    maker: u8,
+    price: i64,
+    amount: i64,
+    f: impl FnOnce(&mut AskState),
+) -> ListedOrder {
     let mut a = ask(maker, price, amount, p);
+    f(&mut a);
     a.token_cov_id = token;
     a.extension_commitment = ext_of(p);
     a.refund_tip = rtip(p);

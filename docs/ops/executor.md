@@ -2038,6 +2038,11 @@ stall or drain any executor:
   (Everyone, Users, Authenticated Users, ...) or a named account or group; only the account running kobd (its SID from
   `whoami`) and the privileged principals (SYSTEM, Administrators, the built-in Administrator, TrustedInstaller, the owner placeholders: they can read any file anyway) may. An ACL that cannot be read (no `icacls`) or an account
   whose SID `whoami` cannot tell is refused too. `KOB_KEY_ACL_STRICT=0` turns each refusal into a warning (not recommended).
+  `icacls` and `whoami` run from `%SystemRoot%\System32` by their full path, never by bare name (Windows would look next to
+  kobd.exe first; audit 2026-11-23 D2-1). At each start kobd also logs an error for its program, its folder, the
+  configuration file and the data directory when another account can change them (write, add a file, delete, change the
+  ACL; Unix: group- or world-writable, a sticky folder excepted; audit D-2). It warns and does not refuse, since a folder at
+  the root of a Windows drive (`C:\kob`, the quickstart's earlier example) inherits that right for Authenticated Users.
   The refusal names the groups and accounts by name (Users, Everyone, Authenticated Users, ...), not by their SDDL aliases (BU, WD, AU), and prints the exact command, e.g. `icacls "C:\kob\kob-operator.key" /inheritance:r /grant:r "MYPC\alice:F"`. The fix: `icacls <file> /inheritance:r /grant:r <account>:F` (quickstart 5). `remove_var` does not scrub the environment
   block: prefer a key file or a systemd credential. `--pause-file` also stops resends of transactions a reorg moved back to
   pending. A submit that gets no answer (transport error, timeout) is not a rejection: the transaction is tracked as pending
@@ -3128,7 +3133,9 @@ turns both off.
 **The sale's price floor** (`MaintenanceConfig::sell_floor_bps`, default 9,000). A sale is housekeeping, not trading, so it
 never goes far below the market: the bid must pay at least 90 % of what the book's resting plain asks of the token's market
 charge for the same amount, the cheapest first, as many as it takes to cover it (the price of the ask that completes the
-amount). With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
+amount). Each ask counts only for what a buyer of the rest of the amount can take from it in one fill (its minimum fill, its
+FOK range, the dust bound of a partial fill): an all-or-nothing ask larger than the holding counts for nothing (audit
+2026-11-23 D-1). With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
 as well); the skipped sale is logged with its reason (`sell: no resting asks ...`, `sell: the best bid pays ... below 9000 bps
 of the asks' price`). A low bid alone therefore never takes a holding, and an ask posted to lower the reference must itself offer
 the whole amount at that price to everyone. `0` turns the floor off (any bid that pays the fee, the earlier rule).
@@ -3235,6 +3242,19 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   third node (or one agreeing with neither) nothing past the contradiction is indexed, and when it persists (three times in a
   row) the cross-checking node is given up for another, then (three more) the authority's. Counted per node
   (`disagreements` in `/v1/health` `nodes`, the status line).
+* **The authority's copies of KOB transactions** (audit 2026-11-23 C-H1). Transaction ids do not cover signature scripts,
+  and a block body is valid without valid signatures, so a real block may carry a same-id copy of a KOB transaction with
+  other signature scripts, which passes the chain proofs (the merged block is real). So the chain blocks of the authority's
+  answer that hold a transaction that can matter to KOB (a tracked order or token, a KOB payload) are fetched from the
+  cross-checking node too, and must agree in everything the indexer reads (signature scripts and spent outputs included;
+  `ChainSource::confirm_bodies`). A difference applies nothing and asks a third node as above: it has the authority's copy,
+  and the cross-checking node is given up; it has another, and the authority is outvoted; none, and nothing applies until
+  they agree (it counts towards replacing the nodes). A cross-checking node that cannot answer holds the batch back like any
+  of its waits. **Not covered:** a single node (an own node with no `[[nodes]]` cross-checker, or the failover's fallback
+  alone), and the time after `single_node_after_secs` (120 s) without any answer of a cross-checking node, when the
+  authority goes on alone with the chain proofs only: there a lying authority that also mines one real block can still make
+  a KOB spend read as another entry (an order leaves the book or stays as a phantom; no funds move). `/v1/health`
+  `cross_checked: false` says when that is the case. An own node of one's own is the answer for a public read server.
 * A node that cannot be reached or drops its connection gets one reconnect first (public nodes close connections now and
   then under load): the same node is tried once more with a 5 s connect timeout (`GRACE_CONNECT_TIMEOUT`). When it is the
   authority's, the other node is the authority from the next call on (no resolution, no wait) and the dropped node is
@@ -3647,7 +3667,8 @@ random traffic in both families.
 
 The executor's product-readiness audit (rounds 1 to 4, closed 2026-11-12) left these Low findings open on purpose. Each was
 accepted by the founder with the reason given; the rest of its Lows were fixed. M-7 (the authority's transaction bodies are
-not cross-checked) was accepted on 2026-11-11 (Part C, *Node*).
+not cross-checked) was accepted on 2026-11-11 (Part C, *Node*); since 2026-11-23 (C-H1) the bodies that can matter to KOB
+are compared with the cross-checking node whenever one vouches, and the rest of M-7 is the single-node case Part C names.
 
 | Id | Risk | Why it is accepted |
 |---|---|---|

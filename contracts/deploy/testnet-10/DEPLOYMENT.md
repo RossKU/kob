@@ -39,5 +39,12 @@ every network.
 | KobIfdBidKronD0 | `ebc5bff8bae73fb07ed37cb15795d4e0ef7ebe17290e745b6645224ea2361947` | 1 / 2942 |
 | KobIfdAskKronD0 | `daf934fd6a1040ed15800ba944da929d3e12886bce1d0f00374c0a96202d6cae` | 1 / 4083 |
 
+Lock templates: every automatic creator lock template (`KobLockAuto`) a build ever issued. A lock lasts up to 10 years,
+so this list only grows, and every build reads and releases each one (docs/spec/template-retirement.md, "Lock templates").
+
+| Lock template | Template hash | prefix / suffix |
+|---|---|---|
+| KobLockAuto | `ed392654183dfc8e0d8ff49130b15ba142b27af33ecb3a854b98ada5c45158e4` | 1 / 329 |
+
 The token programs are the reference artifacts too. Binaries embedding this record: see "Deployment
 records" in contracts/README.md.

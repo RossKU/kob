@@ -510,7 +510,7 @@ fn a_kept_surplus_stays_within_the_period_budget_and_a_ref_price_in_line_with_th
     // maxFee spent: nothing kept until the period ends
     let mut c = policy(vec![tusd(None, Some(rp))]);
     c.planner.inventory.max_fee = Some(10_000_000);
-    c.planner.inventory.used = InventoryUse { since: Some(1), kept: Default::default(), fee: 10_000_000 };
+    c.planner.inventory.used = InventoryUse { since: Some(1), kept: Default::default(), fee: 10_000_000, unreadable: false };
     assert_eq!(kept(&c), 0, "the fee budget is spent");
     c.planner.inventory.used.fee = 9_999_999;
     assert_eq!(kept(&c), 1);

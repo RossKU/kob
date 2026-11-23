@@ -3565,12 +3565,13 @@ pub(crate) fn market_start_issues(env: &Env, plan: &Plan, floor: Option<i64>) ->
             ),
         }];
     }
-    // The KAS value at the start. A pair converts B at its KAS reference, and when that is unknown
-    // the order is held as unverified.
+    // The KAS value at the start. A pair buy is always held for the acknowledgement: its book is
+    // the indexer's alone, and so is B's KAS price, which an indexer that under-prices B would use
+    // to bring the value below the threshold (audit 2026-11-23 B2-M2).
     let quote = d.amount as i128 * start as i128 / d.scale as i128;
     let value = match &env.pair {
         None => Some(quote),
-        Some(p) => p.kas_per_whole_b.filter(|k| *k > 0).map(|k| quote * k as i128 / p.quote.scale.max(1) as i128),
+        Some(_) => None,
     };
     if value.is_none_or(|v| v >= MARKET_START_UNVERIFIED_MIN_SOMPI) {
         vec![if ack {

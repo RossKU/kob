@@ -314,7 +314,9 @@ fn best_bid(inp: &MaintenanceInput, g: &Group, held: i64, t: i64) -> Option<(Lis
 /// This is the reference of a sale's price floor ([`MaintenanceConfig::sell_floor_bps`]). A holding
 /// is never sold below what buying the same amount back from the book would cost, less the
 /// floor's margin. So a low bid alone cannot take it. An ask posted to lower the reference must
-/// itself offer the whole amount at that price.
+/// itself offer the whole amount at that price: an ask counts only for the part a buyer of the
+/// rest of `n` can take from it (its minimum fill, FOK range and dust bound), so an
+/// all-or-nothing ask larger than `n` counts for nothing (audit 2026-11-23 D-1).
 fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i128, i128)> {
     let (token, program, ext) = *g;
     let tpl = kob_protocol::artifacts::token_template(program).hash;
@@ -326,19 +328,27 @@ fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i
     let by_id: BTreeMap<CovId, ListedOrder> = mine.iter().map(|o| (o.id(), (*o).clone())).collect();
     let none = BTreeSet::new();
     let cx = CandCtx { t, utc: inp.clock.utc, excluded: &inp.excluded, by_id: &by_id, unaccepted: &none, pair_ticks: None };
-    let mut asks: Vec<(i128, i128, i64)> = candidates_of(&mine, &cx)
+    let mut asks: Vec<_> = candidates_of(&mine, &cx)
         .into_iter()
         .filter(|c| c.side == Side::Ask && c.is_plain() && c.trigger.is_none() && c.cap > 0)
         .filter(|c| !inp.excluded_outpoints.contains(&outpoint(&mine[c.order].order.utxo)))
-        .map(|c| {
-            let (q, s) = c.quote_frac();
-            (q, s, c.cap)
-        })
+        .map(|c| (c.quote_frac(), c))
         .collect();
-    asks.sort_by(|a, b| (a.0 * b.1).cmp(&(b.0 * a.1)));
+    asks.sort_by(|((a, sa), _), ((b, sb), _)| (a * sb).cmp(&(b * sa)));
     let mut got: i64 = 0;
-    for (q, s, cap) in asks {
-        got = got.saturating_add(cap);
+    for ((q, s), c) in asks {
+        // The most of what is still needed a buyer can take from this ask in one fill.
+        let mut x = c.cap.min(n - got);
+        if let Some((_, hi)) = c.fok {
+            x = x.min(hi);
+        }
+        if x > c.part_cap && !c.ends(x) {
+            x = c.part_cap;
+        }
+        if x <= 0 || !c.quantity_ok(x) {
+            continue;
+        }
+        got += x;
         if got >= n {
             return Some((q, s));
         }

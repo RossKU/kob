@@ -157,9 +157,31 @@ pub struct InventoryUse {
     pub kept: BTreeMap<[u8; 32], i64>,
     /// Network fee, in sompi, of the batches that kept a surplus.
     pub fee: u64,
+    /// The saved use did not read: nothing is kept until it does ([`InventoryUse::unreadable`]).
+    pub unreadable: bool,
 }
 
 impl InventoryUse {
+    /// The use of a run whose saved use is damaged or cannot be read: the policy keeps nothing
+    /// until the file reads again ([`InventoryUse::reread`]), like the keepers' subsidy window. A
+    /// fresh use would start the period's budgets again (audit 2026-11-23 D2-5).
+    pub fn unreadable() -> Self {
+        InventoryUse { unreadable: true, ..InventoryUse::default() }
+    }
+    /// An unreadable use loads `path` again. True when it reads now (and replaces this one); a file
+    /// deleted by the operator reads as a fresh use.
+    pub fn reread(&mut self, path: &std::path::Path) -> bool {
+        if !self.unreadable {
+            return false;
+        }
+        match InventoryUse::load(path) {
+            Ok(u) => {
+                *self = u.unwrap_or_default();
+                true
+            }
+            Err(_) => false,
+        }
+    }
     /// Reads the use a previous run saved ([`InventoryUse::save`]). None: the file does not exist.
     pub fn load(path: &std::path::Path) -> Result<Option<Self>, String> {
         let text = match std::fs::read_to_string(path) {
@@ -179,11 +201,14 @@ impl InventoryUse {
             let token: [u8; 32] = kob_protocol::json::from_hex(k).ok().and_then(|b| b.try_into().ok()).ok_or_else(bad)?;
             kept.insert(token, a.as_i64().filter(|a| *a >= 0).ok_or_else(bad)?);
         }
-        Ok(Some(InventoryUse { since, kept, fee }))
+        Ok(Some(InventoryUse { since, kept, fee, unreadable: false }))
     }
     /// Writes the use, a small JSON file next to the indexer's database, so a restart continues the
     /// budgets of the period. It is written to a temporary file and renamed.
     pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
+        if self.unreadable {
+            return Err(format!("{}: not overwritten, it did not read", path.display()));
+        }
         let kept: serde_json::Map<String, serde_json::Value> =
             self.kept.iter().map(|(t, a)| (kob_protocol::json::to_hex(t), serde_json::Value::from(*a))).collect();
         let v = serde_json::json!({ "since": self.since, "fee": self.fee, "kept": kept });
@@ -193,7 +218,7 @@ impl InventoryUse {
     }
     /// Starts a new period when `period` DAA have passed since the current one began, or none has.
     pub fn roll(&mut self, daa: u64, period: u64) {
-        if self.since.is_none_or(|s| daa >= s.saturating_add(period.max(1))) {
+        if !self.unreadable && self.since.is_none_or(|s| daa >= s.saturating_add(period.max(1))) {
             *self = InventoryUse { since: Some(daa), ..InventoryUse::default() };
         }
     }
@@ -333,7 +358,7 @@ impl InventoryPolicy {
     /// The rule of `token` when the policy is on, lists it, and the budgets of the period
     /// (`maxFee`, the `maxAmount` of the token) are not used up.
     pub fn rule(&self, token: &[u8; 32]) -> Option<&InventoryToken> {
-        if !self.accept_surplus_tokens || self.max_fee.is_some_and(|m| self.used.fee >= m) {
+        if !self.accept_surplus_tokens || self.used.unreadable || self.max_fee.is_some_and(|m| self.used.fee >= m) {
             return None;
         }
         let r = self.tokens.iter().find(|t| &t.token == token)?;
@@ -638,6 +663,19 @@ mod inventory_tests {
         assert_eq!(InventoryUse::load(&path).unwrap(), Some(u.clone()));
         std::fs::write(&path, "{\"fee\": -1}").unwrap();
         assert!(InventoryUse::load(&path).is_err(), "a damaged file is reported");
+        // D2-5: a damaged file keeps nothing until it reads, and is not written over
+        let mut p = p.clone();
+        p.tokens =
+            vec![serde_json::from_str(r#"{"token": "7272727272727272727272727272727272727272727272727272727272727272"}"#).unwrap()];
+        p.used = InventoryUse::unreadable();
+        p.used.roll(9_000, 1_000);
+        assert!(p.used.unreadable && p.rule(&[0x72; 32]).is_none(), "nothing is kept while it does not read");
+        assert!(p.used.save(&path).is_err());
+        assert!(!p.used.reread(&path), "still damaged");
+        u.save(&path).unwrap_or_else(|e| panic!("{e}"));
+        assert!(p.used.reread(&path));
+        assert_eq!(p.used, u);
+        assert!(p.rule(&[0x72; 32]).is_some(), "it reads again: the policy keeps again");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

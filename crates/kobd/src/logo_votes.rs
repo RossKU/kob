@@ -18,8 +18,10 @@
 //! # Against one person voting as many
 //!
 //! 1. **History.** The voting address must have KOB history in the store at least
-//!    `min_history_secs` old (default 24 hours): an order it placed, or a token output it held.
-//!    The read API never asks the node, so the rule reads the store: two index seeks.
+//!    `min_history_secs` old (default 7 days) and older than the token it votes on (founder
+//!    decision 2026-11-23): an order it placed, or a token output it held, before the token's
+//!    creation (its KCC-23 genesis, else the first of its outputs or orders the store holds). The
+//!    read API never asks the node, so the rule reads the store: a few index seeks.
 //! 2. **Work.** Each vote carries a nonce whose SHA-256 over (network, token, address, day,
 //!    nonce) has `pow_bits` leading zero bits (default 20: a few seconds in a browser).
 //! 3. **Interval.** One vote per wallet across all logos per `interval_secs` (default 24 hours).
@@ -227,6 +229,18 @@ pub fn open(path: &Path, network: &str) -> DbResult<Connection> {
 /// Two seeks of the maker and the owner indexes. A pruned row only makes the history look
 /// younger.
 pub fn history_age_secs(conn: &Connection, key: &[u8; 32], daa_per_second: u64) -> DbResult<Option<u64>> {
+    let Some(first) = first_history_daa(conn, key)? else { return Ok(None) };
+    Ok(Some((store_tip_daa(conn)?.saturating_sub(first).max(0) as u64) / daa_per_second.max(1)))
+}
+
+/// The DAA score of the newest block of the store.
+fn store_tip_daa(conn: &Connection) -> DbResult<i64> {
+    Ok(conn.prepare_cached("SELECT COALESCE(MAX(daa), 0) FROM blocks")?.query_row([], |r| r.get(0))?)
+}
+
+/// The DAA score of the first KOB history of `key`: the first order it placed or the first token
+/// output it held. `None`: it has none.
+pub fn first_history_daa(conn: &Connection, key: &[u8; 32]) -> DbResult<Option<i64>> {
     let Some(id) = conn.prepare_cached("SELECT id FROM ids WHERE h = ?1")?.query_row([&key[..]], |r| r.get::<_, i64>(0)).optional()?
     else {
         return Ok(None);
@@ -239,9 +253,28 @@ pub fn history_age_secs(conn: &Connection, key: &[u8; 32], daa_per_second: u64) 
         .prepare_cached("SELECT created_daa FROM token_holdings WHERE owner_id = ?1 ORDER BY created_block LIMIT 1")?
         .query_row([id], |r| r.get(0))
         .optional()?;
-    let Some(first) = [order, held].into_iter().flatten().min() else { return Ok(None) };
-    let tip: i64 = conn.prepare_cached("SELECT COALESCE(MAX(daa), 0) FROM blocks")?.query_row([], |r| r.get(0))?;
-    Ok(Some((tip.saturating_sub(first).max(0) as u64) / daa_per_second.max(1)))
+    Ok([order, held].into_iter().flatten().min())
+}
+
+/// The DAA score the token `id` was created at, as far as the store knows: its KCC-23 genesis, else
+/// the first of its token outputs or of the orders that trade it. `None`: the store knows none.
+///
+/// Index seeks only. A pruned row only makes the token look younger.
+pub fn token_created_daa(conn: &Connection, id: &Hash32) -> DbResult<Option<i64>> {
+    let declared: Option<i64> = conn
+        .prepare_cached("SELECT genesis_daa FROM kcc23_declarations WHERE covenant_id = ?1")?
+        .query_row([&id.0[..]], |r| r.get(0))
+        .optional()?;
+    let Some(tid) =
+        conn.prepare_cached("SELECT id FROM ids WHERE h = ?1")?.query_row([&id.0[..]], |r| r.get::<_, i64>(0)).optional()?
+    else {
+        return Ok(declared);
+    };
+    let first = |sql: &str| -> DbResult<Option<i64>> { Ok(conn.prepare_cached(sql)?.query_row([tid], |r| r.get(0)).optional()?) };
+    let held = first("SELECT created_daa FROM token_holdings WHERE token_id = ?1 ORDER BY created_block LIMIT 1")?;
+    let traded = first("SELECT genesis_daa FROM orders WHERE token_id = ?1 ORDER BY genesis_block, covenant_id LIMIT 1")?;
+    let quoted = first("SELECT genesis_daa FROM orders WHERE quote_id = ?1 ORDER BY genesis_block, covenant_id LIMIT 1")?;
+    Ok([declared, held, traded, quoted].into_iter().flatten().min())
 }
 
 /// The newest vote of `key` on `id`, if any.
@@ -414,7 +447,7 @@ pub enum VoteError {
     Address(&'static str),
     /// The covenant id is not a token the indexer knows.
     UnknownToken,
-    /// The address has no KOB history old enough.
+    /// The address has no KOB history old enough, or none from before the token was created.
     NoHistory,
     /// The wallet voted less than the interval ago; it may vote again after this many seconds.
     TooSoon(u64),
@@ -574,7 +607,14 @@ impl LogoVotes {
             let (up, down) = totals_of(&conn)?;
             return Ok(Accepted { cast: Cast::Unchanged, up, down });
         }
-        let old_enough = history_age_secs(&conn, &key, self.daa_per_second)?.is_some_and(|age| age >= self.cfg.min_history_secs);
+        // The history rule (founder decision 2026-11-23, audit C-M3): the address's first KOB
+        // history is at least `min_history_secs` old (default 7 days) AND older than the token,
+        // so keys made for a vote, or after the token they vote on, do not count.
+        let first = first_history_daa(&conn, &key)?;
+        let tip = store_tip_daa(&conn)?;
+        let old = |f: i64| (tip.saturating_sub(f).max(0) as u64) / self.daa_per_second.max(1);
+        let created = token_created_daa(&conn, &b.covenant_id)?;
+        let old_enough = first.is_some_and(|f| old(f) >= self.cfg.min_history_secs && created.is_some_and(|t| f < t));
         if !old_enough {
             return Err(VoteError::NoHistory);
         }
@@ -694,6 +734,10 @@ mod tests {
     /// 2026-11-20 12:00 UTC.
     const NOW: i64 = 1_795_176_000_000;
     const DAY: &str = "2026-11-20";
+    /// The store's tip in the service tests: eight days of DAA (10 a second).
+    const TIP: i64 = 8 * 864_000;
+    /// The tokens' genesis in the service tests, after the voters' first history (DAA 0).
+    const TOKEN_DAA: i64 = 10;
 
     fn hex_bytes(s: &str) -> Vec<u8> {
         crate::hex::decode(s).unwrap()
@@ -807,14 +851,14 @@ mod tests {
         for id in [T, U] {
             conn.execute(
                 "INSERT INTO kcc23_declarations (covenant_id, proof, preparation_txid, genesis_txid, genesis_block, genesis_daa) \
-                 VALUES (?1, 'x', zeroblob(32), zeroblob(32), 0, 0)",
-                [&id.0[..]],
+                 VALUES (?1, 'x', zeroblob(32), zeroblob(32), 0, ?2)",
+                params![&id.0[..], TOKEN_DAA],
             )
             .unwrap();
         }
-        // accounts 1..=9 have two days of history
+        // accounts 1..=9 have eight days of history, from before the tokens
         for n in 1..=9u8 {
-            give_history(&conn, &account(n).1, 0, 2 * 864_000, n);
+            give_history(&conn, &account(n).1, 0, TIP, n);
         }
         let svc = LogoVotes::with_connection(conn, "testnet-10", cfg, 10, 64, Box::new(move || clock.load(Ordering::SeqCst)));
         (svc, now)
@@ -847,11 +891,44 @@ mod tests {
         assert!(matches!(svc.vote(ip(1), &ballot(1, Hash32([9; 32]), Vote::Up, DAY, 8)), Err(VoteError::UnknownToken)));
         // an address with no history, or too young
         assert!(matches!(svc.vote(ip(1), &ballot(20, T, Vote::Up, DAY, 8)), Err(VoteError::NoHistory)));
-        give_history(&svc.test_connection(), &account(21).1, 2 * 864_000 - 10, 2 * 864_000, 21);
+        give_history(&svc.test_connection(), &account(21).1, TIP - 10, TIP, 21);
         assert!(matches!(svc.vote(ip(1), &ballot(21, T, Vote::Up, DAY, 8)), Err(VoteError::NoHistory)), "one second of history");
+        // six days of history is not seven
+        give_history(&svc.test_connection(), &account(22).1, TIP - 6 * 864_000, TIP, 22);
+        assert!(matches!(svc.vote(ip(1), &ballot(22, T, Vote::Up, DAY, 8)), Err(VoteError::NoHistory)), "six days");
         // good: counted, and yesterday's day is still accepted
         let a = svc.vote(ip(1), &ballot(1, T, Vote::Up, "2026-11-19", 8)).unwrap();
         assert_eq!(a, Accepted { cast: Cast::Counted, up: 1, down: 0 });
+    }
+
+    /// Founder decision 2026-11-23 (audit C-M3): a vote counts only from an address whose first history is at least 7
+    /// days old AND older than the token. Fresh dust sent to new keys, or keys whose first output came after the token
+    /// was created, do not vote however old they are; an old address does.
+    #[test]
+    fn only_an_address_older_than_the_token_and_seven_days_votes() {
+        let (svc, _) = service(cfg());
+        // fresh dust: a one-unit token output to a new key a minute ago
+        let (_, fresh, _) = account(30);
+        let c = svc.test_connection();
+        c.execute("INSERT INTO ids (h) VALUES (?1)", [&fresh[..]]).unwrap();
+        let fid: i64 = c.query_row("SELECT id FROM ids WHERE h = ?1", [&fresh[..]], |r| r.get(0)).unwrap();
+        c.execute("INSERT OR IGNORE INTO programs (id, name) VALUES (1, 'KCC20Ref_8x8')", []).unwrap();
+        c.execute(
+            "INSERT INTO token_holdings (tx_id, idx, token_id, program_id, family, owner_id, owner_kind, amount, value, state, role_code, created_block, created_daa) \
+             VALUES (1, 0, 1, 1, 1, ?1, 0, 1, 1000, x'00', 0, 1, ?2)",
+            params![fid, TIP - 600],
+        )
+        .unwrap();
+        drop(c);
+        assert!(matches!(svc.vote(ip(1), &ballot(30, T, Vote::Down, DAY, 8)), Err(VoteError::NoHistory)), "fresh dust");
+        // eight days old, but first seen after the token's genesis
+        give_history(&svc.test_connection(), &account(31).1, TOKEN_DAA + 1, TIP, 31);
+        assert!(matches!(svc.vote(ip(1), &ballot(31, T, Vote::Down, DAY, 8)), Err(VoteError::NoHistory)), "after the token");
+        // an old address, from before the token: counted
+        assert_eq!(svc.vote(ip(1), &ballot(2, T, Vote::Down, DAY, 8)).unwrap().cast, Cast::Counted);
+        let c = svc.test_connection();
+        assert_eq!(token_created_daa(&c, &T).unwrap(), Some(TOKEN_DAA));
+        assert_eq!(token_created_daa(&c, &Hash32([0x55; 32])).unwrap(), None);
     }
 
     #[test]
@@ -920,7 +997,7 @@ mod tests {
         let c = LogoVotesConfig::default();
         assert_eq!(
             (c.enabled, c.pow_bits, c.interval_secs, c.min_history_secs, c.per_client_per_hour, c.max_per_day),
-            (false, 20, 86_400, 86_400, 20, 20_000)
+            (false, 20, 86_400, 604_800, 20, 20_000)
         );
         let cfg: crate::config::IndexerConfig = toml::from_str("[logo_votes]\nenabled = true\npow_bits = 18").unwrap();
         assert!(cfg.logo_votes.enabled);

@@ -502,4 +502,38 @@ mod tests {
         .concat();
         assert_eq!(s, want);
     }
+
+    /// Audit 2026-11-23 A3-2: every order template hash any deployment record listed (`data/retired/record-history.tsv`,
+    /// `scripts/record-history.mjs`) is exactly one of: pinned, in the cancel-only table, or classified by hand with its
+    /// evidence (`never-deployed`, or `pre-f1`: the October generations, which the table leaves out by decision). A re-pin
+    /// or a retirement that the file does not list, and a hash nobody classified, fail here.
+    #[test]
+    fn every_recorded_template_is_pinned_cancel_only_or_classified() {
+        use std::collections::BTreeMap;
+        let pinned: Vec<&str> = crate::artifacts::PINNED.iter().map(|(_, h)| *h).collect();
+        let mut classes: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut listed = std::collections::BTreeSet::new();
+        for l in include_str!("../data/retired/record-history.tsv").lines().filter(|l| !l.starts_with('#')) {
+            let f: Vec<&str> = l.split('\t').collect();
+            assert_eq!(f.len(), 6, "{l}");
+            let (hash, class, reason) = (f[0], f[4], f[5]);
+            assert!(listed.insert(hash), "{hash} listed twice");
+            let (is_pinned, is_retired) = (pinned.contains(&hash), HASHES.contains(&hash));
+            match class {
+                "pinned" => assert!(is_pinned && !is_retired, "{hash}: not pinned"),
+                "cancel-only" => assert!(is_retired && !is_pinned, "{hash}: not in the cancel-only table"),
+                "never-deployed" | "pre-f1" => {
+                    assert!(!is_pinned && !is_retired, "{hash}: {class}, yet pinned or cancel-only");
+                    assert!(reason.len() > 40, "{hash}: {class} needs its evidence");
+                }
+                other => panic!("{hash}: class {other}: classify it (scripts/record-history.mjs)"),
+            }
+            *classes.entry(class).or_default() += 1;
+        }
+        for h in pinned.iter().chain(HASHES.iter()) {
+            assert!(listed.contains(h), "{h} is pinned or cancel-only but not in record-history.tsv: run scripts/record-history.mjs");
+        }
+        // The hand-classified sets do not grow unnoticed: a new one is a decision, not a line.
+        assert_eq!((classes["never-deployed"], classes["pre-f1"]), (22, 35));
+    }
 }

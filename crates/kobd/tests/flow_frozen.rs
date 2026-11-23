@@ -189,12 +189,13 @@ async fn the_open_token_list_lists_a_token_known_only_from_an_unlisted_order() {
     assert_eq!(rows[0].covenant_id, Hash32(TOKEN_COV).to_hex());
     assert_eq!((rows[0].family, rows[0].scale), (Some("kcc20"), None));
     assert_eq!((rows[0].open_asks, rows[0].open_bids), (0, 0));
-    // the one extension commitment its placements named (a client checks it against what it knows without the indexer)
+    // the extension commitment its custody holding proves (a client checks it against what it knows without the indexer)
     assert_eq!(rows[0].extension_commitment.as_deref(), Some(Hash32(EXT).to_hex().as_str()));
     assert_eq!(rows[0].template_hash.as_deref(), Some(Hash32(token_template(TemplateId::Kcc20Ref).hash).to_hex().as_str()));
     // a strict list without the token's program: not listed
     assert!(list(TemplateId::KronToken2433).is_empty());
-    // a placement that named another commitment for the same token: no commitment is reported (a client reads its orders)
+    // a placement that names another commitment for the same token no longer erases it (C2-H1): the order's custody output
+    // is a KCC-20 holding the token's own program created, which proves EXT, and a placement proves nothing
     {
         let g = c.hs.ingest.lock().unwrap();
         g.conn()
@@ -205,7 +206,7 @@ async fn the_open_token_list_lists_a_token_known_only_from_an_unlisted_order() {
             .unwrap();
     }
     let rows = list(TemplateId::Kcc20Ref);
-    assert_eq!((rows.len(), rows[0].extension_commitment.as_deref()), (1, None));
+    assert_eq!((rows.len(), rows[0].extension_commitment.as_deref()), (1, Some(Hash32(EXT).to_hex().as_str())));
 }
 
 /// The all-zero extension commitment (the standard fixed-supply KCC-20 class: TUSD, every `kob

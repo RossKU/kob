@@ -659,14 +659,17 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<Pl
     let depth = p.get("--amount").and_then(|v| parse_token_amount(v, &a.unit(), "--amount").ok()).unwrap_or(0);
     let needs = Needs { a: side == Side::Sell, b: b.is_some() && (side == Side::Buy || if_done) };
     let (mut env, mut notes) = env_sized(c, &a, b.as_ref(), needs, maker, depth)?;
-    // Decimals that only the indexer names, with no order on the node to confirm them, read every
-    // amount and price of the order: wrong ones price it 10^k off. `--decimals N`, which
+    // Decimals that only the indexer names read every amount and price of the order: wrong ones
+    // price it 10^k off. An order on the node at the indexer's scale does not confirm them, since
+    // whoever lies about them can place that order (audit 2026-11-23 B2-M5). `--decimals N`, which
     // `resolve_with` has checked against them, confirms them; without it nothing is signed.
-    if entered.is_none() && notes.iter().any(|i| i.code == "TOKEN_DECIMALS_UNCHECKED") {
+    let indexer_only = a.listing == market::Listing::Unlisted
+        && matches!(a.decimals_from, market::DecimalsFrom::Lists | market::DecimalsFrom::Market);
+    if entered.is_none() && indexer_only {
         return Err(format!(
-            "{}: its decimals ({}) come from the indexer alone (no registry entry, no KCC-23 declaration, no order of it \
-             confirmed on the node), and every amount and price reads with them: check them, then give `--decimals {}` \
-             to confirm them; nothing signed",
+            "{}: its decimals ({}) come from the indexer alone (no registry entry, no KCC-23 declaration), and every \
+             amount and price reads with them (an order on the node at that scale does not confirm them: anyone can place \
+             one): check them, then give `--decimals {}` to confirm them; nothing signed",
             a.name(),
             a.decimals,
             a.decimals

@@ -899,8 +899,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         let inventory_use = match cfg.inventory_state.as_deref().map(super::planner::InventoryUse::load) {
             Some(Ok(Some(u))) => u,
             Some(Err(e)) => {
-                tracing::warn!(error = %e, "the inventory policy's saved use could not be read: its budgets start again");
-                super::planner::InventoryUse::default()
+                // Never fresh budgets at each restart: nothing is kept until the file reads.
+                tracing::warn!(error = %e, "the inventory policy's saved use could not be read: no surplus is kept until it reads (fix or delete the file)");
+                super::planner::InventoryUse::unreadable()
             }
             _ => super::planner::InventoryUse::default(),
         };
@@ -1670,6 +1671,11 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         if self.cfg.roles.matcher {
             // The inventory policy's budgets of the period, which bound what the tick may keep.
             let period = self.cfg.engine.planner.inventory.period_daa;
+            if let Some(path) = &self.cfg.inventory_state {
+                if self.inventory_use.reread(path) {
+                    tracing::info!("the inventory policy's saved use reads again: surplus may be kept again");
+                }
+            }
             self.inventory_use.roll(daa, period);
             self.cfg.engine.planner.inventory.used = self.inventory_use.clone();
             self.cfg.engine.select = self.selector.tick(Role::Match);

@@ -106,6 +106,11 @@ pub struct KeeperConfig {
     /// The order's outputs are what the covenant requires whatever the fee (the maker gets `value -
     /// refundTip`). The top-up only comes out of the operator's P2PK funding inputs. 0: off, and
     /// the job goes at the highest rate its tip pays. Closes and sweeps are never subsidised.
+    ///
+    /// An executor started from the command line subsidises by default: [`DEFAULT_SUBSIDY_MAX`] a
+    /// job within [`DEFAULT_SUBSIDY_BUDGET`] a day (`--keeper-subsidy-max-kas`, founder decision
+    /// 2026-11-11). `KeeperConfig::default` is 0, the library's value for a caller that sets no
+    /// subsidy (the tests, an embedding); [`LivenessArgs`] sets the executor's.
     pub subsidy_max: u64,
     /// The most sompi of subsidy ([`KeeperConfig::subsidy_max`]) all jobs together may take within
     /// any [`KeeperConfig::subsidy_window_daa`] DAA.
@@ -167,6 +172,10 @@ impl Default for KeeperConfig {
     }
 }
 
+/// The executor's default [`KeeperConfig::subsidy_max`], 0.05 KAS a job (`--keeper-subsidy-max-kas`;
+/// founder decision 2026-11-11: the subsidy is on by default, at most [`DEFAULT_SUBSIDY_BUDGET`] a
+/// day). `KeeperConfig::default` has 0.
+pub const DEFAULT_SUBSIDY_MAX: u64 = 5_000_000;
 /// Default [`KeeperConfig::subsidy_budget`]: 1 KAS.
 pub const DEFAULT_SUBSIDY_BUDGET: u64 = 100_000_000;
 /// Default [`KeeperConfig::subsidy_window_daa`]: 864,000 DAA, 24 hours at 10 blocks per second.
@@ -183,15 +192,16 @@ pub struct LivenessArgs {
     /// Keepers: the most KAS of its own funding the operator adds to the fee of ONE kill or refund
     /// whose refund tip pays it at the floor but not at its urgency's rate (the maker's outputs
     /// never change; still within `--fee-max-rate` and `--fee-max-tx-kas`). 0: never (the job goes
-    /// at the highest rate its tip pays).
-    #[arg(long, default_value_t = 0.05)]
+    /// at the highest rate its tip pays). On by default (founder decision 2026-11-11): 0.05 KAS a
+    /// job, at most 1 KAS a day (`--keeper-subsidy-budget-kas`).
+    #[arg(long, default_value_t = DEFAULT_SUBSIDY_MAX as f64 / 100_000_000.0)]
     pub keeper_subsidy_max_kas: f64,
     /// Keepers: the most KAS of its own funding the operator adds to kills and refunds ALTOGETHER
     /// (replacements included) within any `--keeper-subsidy-window-daa` (a rolling window, kept in
     /// the data directory: a restart continues it). By default at most 1 KAS a day. Once it is used
     /// up, jobs go at the highest rate their own tip pays until older subsidies leave the window.
     /// 0: never subsidise.
-    #[arg(long, default_value_t = 1.0)]
+    #[arg(long, default_value_t = DEFAULT_SUBSIDY_BUDGET as f64 / 100_000_000.0)]
     pub keeper_subsidy_budget_kas: f64,
     /// Keepers: the rolling window of `--keeper-subsidy-budget-kas`, DAA (10 per second; 864,000 =
     /// 24 hours, 36,000 = one hour).
@@ -1139,6 +1149,23 @@ pub fn tick_with_subsidy(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Sig
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D2-3: the executor's command line subsidises by default (founder decision 2026-11-11), with the documented
+    /// constants; the library default stays off.
+    #[test]
+    fn the_cli_subsidy_default_is_the_documented_one() {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct Cli {
+            #[command(flatten)]
+            l: LivenessArgs,
+        }
+        let mut c = KeeperConfig::default();
+        assert_eq!(c.subsidy_max, 0);
+        Cli::parse_from(["kobd"]).l.apply(&mut c).unwrap();
+        assert_eq!((c.subsidy_max, c.subsidy_budget, c.subsidy_window_daa), (DEFAULT_SUBSIDY_MAX, DEFAULT_SUBSIDY_BUDGET, 864_000));
+        assert_eq!(DEFAULT_SUBSIDY_MAX, 5_000_000);
+    }
 
     fn cfg(budget: u64, window: u64) -> KeeperConfig {
         KeeperConfig { subsidy_max: 50, subsidy_budget: budget, subsidy_window_daa: window, ..KeeperConfig::default() }

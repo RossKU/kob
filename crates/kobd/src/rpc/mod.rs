@@ -344,6 +344,25 @@ pub trait ChainSource: Send + Sync + 'static {
     fn report_lie(&self, origin: Origin, why: &str) {
         let _ = (origin, why);
     }
+    /// The chain blocks `runs` of the authority's own answer `raw` (from `start`), the ones that
+    /// hold a transaction that can matter to KOB, compared in full (signature scripts and spent
+    /// outputs, `verify::body_difference`) with the cross-checking node's copies (C-H1: a same-id
+    /// copy with forged signature scripts in a real block passes the chain proofs).
+    ///
+    /// `Ok(true)`: the cross-checking node reports the same. `Ok(false)`: there is no node to ask (a
+    /// single node, or the authority goes on alone, `multi::CrossCheckPolicy::single_after`).
+    /// `Err(why)`: they differ or the node did not answer; nothing of `raw` is applied.
+    fn confirm_bodies(
+        &self,
+        start: Hash32,
+        raw: &RawVspcResponse,
+        runs: &[BodyRun],
+    ) -> impl Future<Output = Result<bool, String>> + Send {
+        async move {
+            let _ = (start, raw, runs);
+            Ok(false)
+        }
+    }
     /// The chain authority's answer contradicts the store at the cursor `at` (`why`). The result is
     /// [`StoreContradiction::Replaced`] when the source gave that node up for another one (a public
     /// node, `rpc::resolver`), so the follower asks again instead of halting.
@@ -465,6 +484,38 @@ impl WindowRequest {
     pub fn new(start: Hash32, end: Hash32) -> Self {
         WindowRequest { start, end, timeout_scale: 1, min_confirmations: None, max_bytes: None, end_blue: None, sink_blue: None }
     }
+}
+
+/// A run of chain blocks of a window to compare with another node ([`ChainSource::confirm_bodies`]):
+/// the request for them, and their position and number in the window.
+#[derive(Debug, Clone, Copy)]
+pub struct BodyRun {
+    pub req: WindowRequest,
+    pub first: usize,
+    pub len: usize,
+}
+
+/// The first difference between `ours[first..first + len]` and `theirs`, the same chain blocks
+/// fetched again (from position 0), or `None`. `Err` when `theirs` does not report them.
+pub fn run_difference(ours: &RawVspcResponse, theirs: &RawVspcResponse, run: &BodyRun) -> Result<Option<String>, String> {
+    let (first, len) = (run.first, run.len);
+    if !theirs.removed_chain_block_hashes.is_empty() || theirs.added_chain_block_hashes.len() < len {
+        return Err(format!("the node no longer reports the {len} chain blocks after {}", ours.added_chain_block_hashes[first]));
+    }
+    for k in 0..len {
+        let i = first + k;
+        if theirs.added_chain_block_hashes[k] != ours.added_chain_block_hashes[i]
+            || theirs.chain_block_accepted_transactions.len() <= k
+        {
+            return Err(format!("the node's chain differs at {}", ours.added_chain_block_hashes[i]));
+        }
+        if let Some(d) =
+            verify::body_difference(&ours.chain_block_accepted_transactions[i], &theirs.chain_block_accepted_transactions[k])
+        {
+            return Ok(Some(d));
+        }
+    }
+    Ok(None)
 }
 
 /// A window as a node returned it.
