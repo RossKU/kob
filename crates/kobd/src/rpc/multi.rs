@@ -96,6 +96,8 @@
 //! - After [`CrossCheckPolicy::single_after`] without any answer, the authority goes on alone with
 //!   the chain proofs only, and `/v1/health` shows `cross_checked: false` with the reason.
 //! - The first answer of a cross-checking node ends it.
+//! - The copies of KOB transactions (`ChainSource::confirm_bodies`) follow the same policy on a
+//!   clock of their own, which a successful id check does not reset.
 //!
 //! The node has [`CROSS_CHECK_STEP_TIMEOUT`] for a single step near the sink, so that a hanging
 //! node does not hold the book back. It has [`CROSS_CHECK_TIMEOUT`] for a window.
@@ -887,8 +889,12 @@ pub struct MultiNode<N: ChainSource> {
     policy: CrossCheckPolicy,
     /// Since when the authority's answers wait for a cross-checking node (`None`: vouched).
     unvouched: Mutex<Option<Unvouched>>,
-    /// What `/v1/health` reports as `cross_checked`.
+    /// What `/v1/health` reports as `cross_checked`, from the id check alone.
     cross: Mutex<CrossCheck>,
+    /// Since when the cross-checking node cannot give its copies of KOB transactions
+    /// (`ChainSource::confirm_bodies`; `None`: the last comparison was answered). Apart from
+    /// [`MultiNode::cross`], which every id check rewrites.
+    bodies_unchecked: Mutex<Option<BodiesUnchecked>>,
     /// The third node asked when the pair contradicts each other ([`MultiNode::with_referee`]).
     referee: Option<Arc<N>>,
 }
@@ -1107,6 +1113,20 @@ struct Unvouched {
     single: bool,
 }
 
+/// Since when the cross-checking node cannot give its copies of KOB transactions
+/// (`ChainSource::confirm_bodies`).
+#[derive(Debug, Clone)]
+struct BodiesUnchecked {
+    since: tokio::time::Instant,
+    /// Past [`CrossCheckPolicy::single_after`]: the authority's copies apply on the chain proofs
+    /// alone.
+    alone: bool,
+    /// Why the node gave none, its last failure included.
+    why: String,
+    /// What `/v1/health` shows while alone.
+    reason: String,
+}
+
 /// What a third node said about a contradiction ([`MultiNode::arbitrate`]).
 #[derive(Debug)]
 enum Verdict {
@@ -1236,6 +1256,7 @@ impl<N: ChainSource> MultiNode<N> {
             policy: CrossCheckPolicy::default(),
             unvouched: Mutex::new(None),
             cross: Mutex::new(CrossCheck::single("no answer applied yet")),
+            bodies_unchecked: Mutex::new(None),
             referee: None,
             // The first check is one period after the start.
             watch: Arc::new(Mutex::new(Watch {
@@ -1857,6 +1878,56 @@ impl<N: ChainSource> MultiNode<N> {
         Ok(None)
     }
 
+    /// The cross-checking node could not give its copies of KOB transactions (`j`, `None` when
+    /// none can be asked, and `why`). `Err` while they are waited for, `Ok(false)` past
+    /// [`CrossCheckPolicy::single_after`] (`ChainSource::confirm_bodies`).
+    fn bodies_unchecked(&self, j: Option<usize>, why: String) -> Result<bool, String> {
+        let name = j.or(self.cross_node()).map(|j| self.board.shown(j)).unwrap_or_default();
+        let now = tokio::time::Instant::now();
+        let single = self.policy.single_after;
+        let (waited, first, why) = {
+            let mut g = self.bodies_unchecked.lock().unwrap_or_else(|e| e.into_inner());
+            let u = g.get_or_insert(BodiesUnchecked { since: now, alone: false, why: String::new(), reason: String::new() });
+            // A node that backs off is not asked: the reason keeps its last failure.
+            if j.is_some() || u.why.is_empty() {
+                u.why = why;
+            } else {
+                u.why = format!("{why}; last: {}", u.why.rsplit("; last: ").next().unwrap_or_default());
+            }
+            let waited = now.saturating_duration_since(u.since);
+            let first = waited >= single && !u.alone;
+            if waited >= single {
+                u.alone = true;
+                u.reason = format!(
+                    "the copies of KOB transactions are not compared: the cross-checking node {name} gave none for {} s ({}); the chain authority's copies apply with chain proofs alone",
+                    waited.as_secs(),
+                    u.why
+                );
+            }
+            (waited, first, u.why.clone())
+        };
+        if waited < single {
+            return Err(format!(
+                "{WAITING_FOR_CROSS_CHECK} for the copies of KOB transactions ({} of {} s): {name}: {why}",
+                waited.as_secs(),
+                single.as_secs()
+            ));
+        }
+        if first {
+            tracing::warn!(cross_check = %name, waited_secs = waited.as_secs(), reason = %why, "the copies of KOB transactions are not compared until the cross-checking node gives them again: the chain authority's copies apply with chain proofs alone");
+        }
+        Ok(false)
+    }
+
+    /// The cross-checking node `j` gave its copies of KOB transactions (`same`: they agree). A
+    /// wait for them ends, and the clock starts again at the next failure.
+    fn bodies_answered(&self, j: usize, same: bool) {
+        let was = self.bodies_unchecked.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if same && was.is_some_and(|b| b.alone) {
+            tracing::info!(cross_check = %self.board.shown(j), "the copies of KOB transactions are compared with the cross-checking node again");
+        }
+    }
+
     /// The authority was outvoted 2:1 at `start`: the role moves to the cross-checking node `j`.
     ///
     /// A resolver entry gives the authority's node up, and the other node of the pair is the
@@ -2434,30 +2505,64 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
             self.board.failed(origin.node, Fault::Lie, &format!("chain proof: {why}"));
         }
     }
+    /// The id check's state ([`MultiNode::cross`]). While the copies of KOB transactions go
+    /// unchecked past `single_after` it is `alone` with that reason; `checked` stays the id
+    /// check's, which the follower reads to ask for the copies again (`confirm_with_cross`).
     fn cross_check(&self) -> CrossCheck {
-        self.cross.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        let mut c = self.cross.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if !c.alone {
+            if let Some(b) = self.bodies_unchecked.lock().unwrap_or_else(|e| e.into_inner()).as_ref().filter(|b| b.alone) {
+                c.alone = true;
+                c.reason = Some(b.reason.clone());
+            }
+        }
+        c
     }
     /// The cross-checking node's copies of the chain blocks (C-H1). On a difference a third node
     /// decides, as for a contradiction of the acceptance data ([`MultiNode::contradicted`]): it
     /// agrees with the authority, and the cross-checking node is given up; it agrees with the
     /// cross-checking node, and the authority is outvoted; else nothing applies and the
     /// disagreement counts towards replacing the nodes ([`MultiNode::stalled`]).
+    ///
+    /// A node that cannot give its copies (none usable now, or its answer fails or times out) is
+    /// the id check's case ([`MultiNode::unvouched`]): nothing applies until
+    /// [`CrossCheckPolicy::single_after`] has passed since the first such failure in a row, then
+    /// the authority's copies apply on the chain proofs alone and `/v1/health` says so
+    /// (`cross_check_alone` with the node and the reason, an alarm). Any answer of the node ends
+    /// it. Only a lying authority gains from unchecked copies, and it cannot make the honest
+    /// node's windows fail; the wait is the exposure the id check accepts already (K-M3: running
+    /// alone is visible). A difference never goes on alone.
     async fn confirm_bodies(&self, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun]) -> Result<bool, String> {
         if self.cross_node().is_none() || self.cross.lock().unwrap_or_else(|e| e.into_inner()).alone {
             return Ok(false);
         }
         let Some(j) = self.cross_checker() else {
-            return Err(format!("{WAITING_FOR_CROSS_CHECK}: none can be asked for the copies of KOB transactions now"));
+            return self.bodies_unchecked(None, "none can be asked for them now".into());
         };
+        let alone = self.bodies_unchecked.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|b| b.alone);
+        let now = tokio::time::Instant::now();
+        if alone && (self.board.benched(j) || self.board.with(j, |p| p.backoff_until.is_some_and(|t| t > now))) {
+            // Going on alone, a node that backs off or is benched is not waited for. It is asked
+            // again once it is neither, so a node that keeps failing costs one
+            // `CROSS_CHECK_TIMEOUT` (30 s) per backoff or bench period (up to `BENCH_MAX`).
+            return Ok(false);
+        }
         let why = match self.bodies_differ(&*self.nodes[j], raw, runs).await {
             Ok(None) => {
                 self.body_stalls.store(0, Ordering::Relaxed);
+                self.bodies_answered(j, true);
                 return Ok(true);
             }
-            Ok(Some(d)) => d,
+            Ok(Some(d)) => {
+                self.bodies_answered(j, false);
+                d
+            }
             Err(e) => {
-                self.board.failed(j, Fault::Failed, &format!("cross-check of KOB transactions: {e}"));
-                return Err(format!("{WAITING_FOR_CROSS_CHECK}: {}: {e}", self.board.shown(j)));
+                // It counts like a failed window: strikes bench the node for bodies.
+                let e = format!("cross-check of KOB transactions: {e}");
+                self.board.failed(j, Fault::Failed, &e);
+                self.board.strike(j, &e);
+                return self.bodies_unchecked(Some(j), e);
             }
         };
         let why = format!("the cross-checking node's copy differs: {why}");
@@ -3083,6 +3188,8 @@ mod tests {
         /// When not 0, every chain block accepts one transaction whose signature script is this
         /// byte (the same id whatever it is).
         sig: Mutex<u8>,
+        /// When set, every window request fails with this lost connection. Its ids stay fine.
+        down: Mutex<Option<String>>,
     }
 
     impl Fixed {
@@ -3095,7 +3202,13 @@ mod tests {
             let ids = ids
                 .map(|a| ChainIds { added_chain_block_hashes: a.iter().map(h).collect(), ..ChainIds::default() })
                 .map_err(str::to_string);
-            Arc::new(Fixed { added: added.iter().map(h).collect(), ids: Mutex::new(ids), daa, sig: Mutex::new(0) })
+            Arc::new(Fixed {
+                added: added.iter().map(h).collect(),
+                ids: Mutex::new(ids),
+                daa,
+                sig: Mutex::new(0),
+                down: Mutex::new(None),
+            })
         }
         fn answer(&self, ids: Result<&[u8], &str>) {
             let h = |b: &u8| Hash32([*b; 32]);
@@ -3107,6 +3220,9 @@ mod tests {
 
     impl ChainSource for Fixed {
         async fn vspc_v2(&self, _req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
+            if let Some(e) = self.down.lock().unwrap().clone() {
+                return Err(RpcError::Transport(e));
+            }
             let blocks = self
                 .added
                 .iter()
@@ -3249,6 +3365,115 @@ mod tests {
         let m = three(2, None);
         m.cross.lock().unwrap().alone = true;
         assert_eq!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await, Ok(false));
+    }
+
+    /// The copies of KOB transactions follow the id check's policy (C-H1 follow-up). A
+    /// cross-checking node that cannot give them holds the authority's answers back until
+    /// `single_after`; then they apply on the chain proofs alone, visibly, and the node is asked
+    /// again only when it neither backs off nor is benched. Its next answer ends it. A difference
+    /// never applies, also past `single_after`. No usable node takes the same path.
+    #[tokio::test(start_paused = true)]
+    async fn a_cross_checking_node_that_cannot_give_its_copies_is_waited_for_until_single_after_only() {
+        let spec = |url: &str, cross_check| NodeSpec {
+            url: url.into(),
+            fetch: true,
+            submit: true,
+            connections: 1,
+            cross_check,
+            may_lead: true,
+        };
+        let node = |sig: u8| {
+            let n = Fixed::new(&[1, 2], Ok(&[1, 2]));
+            *n.sig.lock().unwrap() = sig;
+            n
+        };
+        let run = crate::rpc::BodyRun {
+            req: WindowRequest { end_blue: Some(0), sink_blue: Some(0), ..WindowRequest::new(Hash32([0; 32]), Hash32([2; 32])) },
+            first: 0,
+            len: 2,
+        };
+        let raw = node(1).vspc_v2(req()).await.unwrap();
+        let pair = |b: Arc<Fixed>| {
+            let a = node(1);
+            MultiNode::new(vec![(spec("ws://a", false), a.clone()), (spec("ws://b", true), b)], a)
+                .with_policy(CrossCheckPolicy { single_after: Duration::from_secs(120), ..CrossCheckPolicy::default() })
+        };
+        let advance = |s: u64| tokio::time::advance(Duration::from_secs(s));
+        let failed = |m: &MultiNode<Fixed>| m.board.snapshot()[1].windows_failed;
+
+        // (a) Its windows fail: nothing applies before `single_after`, an id check that agrees
+        // does not end the wait, and past it the authority's copies apply and health says so.
+        let b = node(1);
+        let m = pair(b.clone());
+        *b.down.lock().unwrap() = Some("connection reset by peer".into());
+        let e = m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err();
+        assert!(e.starts_with(WAITING_FOR_CROSS_CHECK) && e.contains("(0 of 120 s)") && e.contains("reset"), "{e}");
+        assert!(!m.cross_check().alone, "waiting is not running alone");
+        advance(60).await;
+        m.set_cross(true, "");
+        assert!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err().contains("(60 of 120 s)"));
+        advance(59).await;
+        assert!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err().contains("(119 of 120 s)"));
+        assert!(m.board.benched(1), "failed copies count like failed windows: {:?}", m.board.snapshot()[1]);
+        assert_eq!(failed(&m), 3);
+        advance(1).await;
+        assert_eq!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await, Ok(false));
+        let c = m.cross_check();
+        let why = c.reason.clone().unwrap_or_default();
+        assert!(c.checked && c.alone, "{c:?}");
+        assert!(why.contains("copies of KOB transactions are not compared") && why.contains("ws://b"), "{why}");
+        assert!(why.contains("gave none for 120 s") && why.contains("reset"), "{why}");
+        // Benched, it is not waited for, and an id check that agrees does not hide it.
+        m.set_cross(true, "");
+        assert_eq!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await, Ok(false));
+        assert_eq!(failed(&m), 3, "a benched node is not asked");
+        assert!(m.cross_check().alone);
+
+        // (b) It serves again after the bench: compared again, and the state ends at once.
+        *b.down.lock().unwrap() = None;
+        advance(BENCH_FIRST.as_secs()).await;
+        assert_eq!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await, Ok(true));
+        assert_eq!(m.cross_check(), CrossCheck { checked: true, reason: None, alone: false });
+        // The clock starts again at the next failure.
+        *b.down.lock().unwrap() = Some("connection reset by peer".into());
+        let e = m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err();
+        assert!(e.contains("(0 of 120 s)"), "{e}");
+
+        // (c) A difference never applies, also past `single_after` and after running alone.
+        let b = node(1);
+        let m = pair(b.clone());
+        *b.down.lock().unwrap() = Some("connection reset by peer".into());
+        assert!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.is_err());
+        advance(130).await;
+        assert_eq!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await, Ok(false));
+        assert!(m.cross_check().alone);
+        *b.down.lock().unwrap() = None;
+        *b.sig.lock().unwrap() = 2;
+        advance(11).await;
+        for _ in 0..2 {
+            let e = m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err();
+            assert!(e.contains("signature script") && e.contains("no third node"), "{e}");
+            assert!(!m.cross_check().alone, "a difference is no failure to answer");
+            advance(200).await;
+        }
+        // A failure after a difference waits the whole `single_after` again.
+        *b.down.lock().unwrap() = Some("connection reset by peer".into());
+        let e = m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err();
+        assert!(e.contains("(0 of 120 s)"), "{e}");
+
+        // (d) No usable cross-checking node (dropped; cut off or being replaced is the same
+        // `cross_checker`): the same path as (a).
+        let m = pair(node(1));
+        m.board.with(1, |p| p.status.dropped_reason = Some("a test".into()));
+        let e = m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err();
+        assert!(e.starts_with(WAITING_FOR_CROSS_CHECK) && e.contains("none can be asked"), "{e}");
+        advance(119).await;
+        assert!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.is_err());
+        advance(1).await;
+        assert_eq!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await, Ok(false));
+        let c = m.cross_check();
+        assert!(c.alone && c.reason.as_deref().unwrap_or_default().contains("none can be asked"), "{c:?}");
+        assert_eq!(failed(&m), 0, "nobody was asked");
     }
 
     /// A node other than the authority that lacks a call is dropped from the chain roles with an

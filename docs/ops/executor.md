@@ -3254,8 +3254,16 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   `ChainSource::confirm_bodies`). A difference applies nothing and asks a third node as above: it has the authority's copy,
   and the cross-checking node is given up; it has another, and the authority is outvoted; none, and nothing applies until
   they agree (three such disagreements in a row give the cross-checking node up for another, three more the authority's
-  node; a successful comparison starts the count again). A cross-checking node that cannot answer holds the batch back like any
-  of its waits. **What can matter, and the extra load** (R2C-M2, R2C-L2): a transaction matters when it spends a tracked
+  node; a successful comparison starts the count again). A cross-checking node that cannot give its copies (none can be asked
+  now, or its window requests fail or time out while it still answers the id check) holds the batch back like the id check
+  does, but only for `single_node_after_secs` (120 s) from the first such failure in a row: after that the authority's copies
+  apply on the chain proofs alone, and `/v1/health` shows it (`cross_check_alone: true`, `cross_check_reason` naming the
+  node and its last failure, a `cross-check:` entry in `node_alarms`). Its failed copies count as failed windows, so it is
+  benched for bodies, and while it backs off or is benched it is not waited for; it is asked again after that, so a node
+  that keeps failing costs at most one 30 s timeout per bench (60 s doubling to 15 minutes). Its first comparison ends it
+  and starts the clock again. A difference is never this case: it applies nothing, as above. Only a lying authority gains
+  from unchecked copies, and it cannot make an honest cross-checking node's windows fail; the 120 s are the exposure the id
+  check accepts already. **What can matter, and the extra load** (R2C-M2, R2C-L2): a transaction matters when it spends a tracked
   output, carries a token output of a traded or allowlisted token, or holds a KOB1 placement record whose output carries the
   record's order script under a covenant binding. Any other KOB1 payload (one that does not decode, a note, a sweep or an
   amend next to no tracked order, an order record no output carries) is read from the payload alone, and an order record no

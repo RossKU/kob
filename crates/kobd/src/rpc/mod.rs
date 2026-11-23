@@ -360,8 +360,9 @@ pub trait ChainSource: Send + Sync + 'static {
     /// copy with forged signature scripts in a real block passes the chain proofs).
     ///
     /// `Ok(true)`: the cross-checking node reports the same. `Ok(false)`: there is no node to ask (a
-    /// single node, or the authority goes on alone, `multi::CrossCheckPolicy::single_after`).
-    /// `Err(why)`: they differ or the node did not answer; nothing of `raw` is applied.
+    /// single node, or the authority goes on alone, `multi::CrossCheckPolicy::single_after`, for
+    /// the ids or for these copies). `Err(why)`: they differ, or the node gave no copies and
+    /// `single_after` has not passed yet; nothing of `raw` is applied.
     fn confirm_bodies(
         &self,
         start: Hash32,

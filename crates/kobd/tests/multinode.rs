@@ -16,7 +16,7 @@ use kobd::indexer::db::open_memory;
 use kobd::indexer::follower::{Follower, FollowerConfig, StepOutcome};
 use kobd::indexer::ingest::Ingest;
 use kobd::indexer::status::{FollowerState, HealthState};
-use kobd::rpc::multi::{MultiNode, NodeSpec, BENCH_FIRST, BENCH_STRIKES};
+use kobd::rpc::multi::{CrossCheckPolicy, MultiNode, NodeSpec, BENCH_FIRST, BENCH_STRIKES};
 use kobd::rpc::types::*;
 use kobd::rpc::{ChainSource, RpcError, WindowRequest};
 use kobd::testkit::*;
@@ -220,8 +220,12 @@ struct Multi {
 }
 
 fn multi(anchor: Hash32, nodes: Vec<(NodeSpec, Arc<Peer>)>) -> Multi {
+    multi_with(anchor, nodes, CrossCheckPolicy::default())
+}
+
+fn multi_with(anchor: Hash32, nodes: Vec<(NodeSpec, Arc<Peer>)>, policy: CrossCheckPolicy) -> Multi {
     let verifier = nodes[0].1.clone();
-    let source = Arc::new(MultiNode::new(nodes, verifier));
+    let source = Arc::new(MultiNode::new(nodes, verifier).with_policy(policy));
     let ingest = Arc::new(Mutex::new(Ingest::new(open_memory("testnet-10").unwrap(), processor(), None).with_config(wide_window())));
     let health = Arc::new(HealthState::new("testnet-10"));
     let (events, _) = tokio::sync::broadcast::channel(64);
@@ -256,6 +260,11 @@ impl Multi {
             assert!(!matches!(o, StepOutcome::Gap(_)), "gap: {o:?}");
             if matches!(o, StepOutcome::Idle) {
                 return;
+            }
+            // The follower's run loop backs off after a retry (`FollowerConfig::backoff`). On a paused
+            // clock that is what lets time pass for a wait that ends with time (`single_after`).
+            if matches!(o, StepOutcome::Retry(_)) {
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
         }
         panic!("the follower did not reach the sink in {max_steps} steps");
@@ -623,9 +632,13 @@ async fn a_failing_secondary_is_benched_for_bodies_still_cross_checks_and_return
         flaky.down.store(down, Ordering::Relaxed);
         let peer =
             NodeSpec { url: format!("flaky-{k}"), fetch: true, submit: true, connections: 2, cross_check: true, may_lead: true };
-        let m = multi(
+        // The chain carries KOB transactions, whose copies the flaky node cannot give (C-H1): they
+        // apply on the chain proofs alone after `single_after`, kept short here.
+        let policy = CrossCheckPolicy { single_after: Duration::from_secs(1), ..CrossCheckPolicy::default() };
+        let m = multi_with(
             node.anchor(),
             vec![(spec(&format!("flaky-primary-{k}"), true, 2), Peer::new(&node, Mode::Honest)), (peer, flaky.clone())],
+            policy,
         );
         let salt = 100_000_000 * (k as u64 + 1);
         // Catch-ups until it is benched. A node that lost its connection backs off first, so time passes between them.
