@@ -696,6 +696,44 @@ pub struct ReadPool {
     inner: Arc<PoolInner>,
 }
 
+/// Reads one API client may have on the light lane at once, waiting or running (R3C2-1).
+pub const CLIENT_LIGHT_READS: usize = 1;
+/// Reads one API client may have on the heavy lane at once, waiting or running: two of its
+/// `read_pool_size` (4) connections at most.
+pub const CLIENT_HEAVY_READS: usize = 2;
+/// Requests one API client may have in flight at once; the guard answers `503 overloaded` past it,
+/// so a few clients cannot hold the server's `max_concurrent_requests` (256) waiting for a lane.
+pub const CLIENT_IN_FLIGHT: usize = 32;
+
+/// What one API client (a rate-limit key: an IPv4 address or an IPv6 prefix) may use at once.
+///
+/// The API guard runs each request in [`CLIENT_LANES`] scope, and [`ReadPool`] takes the client's
+/// permit of a lane before the lane's own. A client's extra reads then wait on its own permits, not
+/// in the lane's queue, so each client has at most one place in that queue and the lanes are shared
+/// in turn however many requests one client sends (R3C2-1).
+pub struct ClientLanes {
+    light: Arc<Semaphore>,
+    heavy: Arc<Semaphore>,
+    /// Requests in flight (`CLIENT_IN_FLIGHT`), taken by the guard.
+    pub in_flight: Arc<Semaphore>,
+}
+
+impl Default for ClientLanes {
+    fn default() -> Self {
+        ClientLanes {
+            light: Arc::new(Semaphore::new(CLIENT_LIGHT_READS)),
+            heavy: Arc::new(Semaphore::new(CLIENT_HEAVY_READS)),
+            in_flight: Arc::new(Semaphore::new(CLIENT_IN_FLIGHT)),
+        }
+    }
+}
+
+tokio::task_local! {
+    /// The client a request reads for, set by the API guard. Reads outside it (the follower, the
+    /// executor, the API's own refreshes) take no client permit.
+    pub static CLIENT_LANES: Arc<ClientLanes>;
+}
+
 /// One lane: its connections and the permits bounding the reads in flight on them.
 struct Lane {
     conns: Mutex<Vec<Connection>>,
@@ -784,6 +822,13 @@ impl ReadPool {
         F: FnOnce(&Connection) -> DbResult<T> + Send + 'static,
     {
         let permits = if light { &self.inner.light.permits } else { &self.inner.heavy.permits };
+        // The client's permit first, so it never holds a place in the lane's queue while it waits.
+        // It travels into the blocking task with the lane's.
+        let client = CLIENT_LANES.try_with(|c| if light { c.light.clone() } else { c.heavy.clone() }).ok();
+        let client_permit = match client {
+            Some(c) => Some(c.acquire_owned().await.map_err(|_| DbError::Invalid("read pool closed".into()))?),
+            None => None,
+        };
         // The permit travels into the blocking task and is released only when the task ends. A
         // caller that is cancelled (request timeout, client disconnect) must not hand its permit to
         // the next request while the read still holds its pooled connection. Otherwise the pool
@@ -793,7 +838,7 @@ impl ReadPool {
         let cancel = Arc::new(Cancel::default());
         let guard = CancelOnDrop(cancel.clone(), true);
         let r = tokio::task::spawn_blocking(move || {
-            let _permit = permit;
+            let _permit = (permit, client_permit);
             let lane = if light { &inner.light } else { &inner.heavy };
             let conn = lane.conns.lock().unwrap_or_else(|e| e.into_inner()).pop();
             let Some(conn) = conn else { return Err(DbError::Invalid("read pool exhausted".into())) };

@@ -99,12 +99,10 @@ pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
     let stale = snap.stale(unix_ms());
     let ok = running && !stale && alarms.is_empty();
     // The counters are informational. A busy database must not turn the health endpoint into an
-    // error. They are a few rows, kept by the write path, and are read on the light lane, so
-    // never behind the heavy reads.
-    let counters = app.state.pool.with_light(reads::counters).await.ok();
-    // A lean store, the one of the Executor, prunes old closed orders. This is the time from
-    // which its trade history is complete. It is null for a full store.
-    let history_from = if snap.lean { app.state.pool.with_light(reads::history_from).await.ok().flatten() } else { None };
+    // error, nor make it wait: they are served from memory (`health_counters`). A lean store, the
+    // one of the Executor, prunes old closed orders; `history_from` is the time from which its
+    // trade history is complete. It is null for a full store.
+    let (counters, history_from) = health_counters(&app, snap.lean).await;
     let mut v = serde_json::to_value(&snap).unwrap_or(Value::Null);
     if let Some(o) = v.as_object_mut() {
         o.insert("ok".into(), json!(ok));
@@ -131,6 +129,61 @@ pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
         }
     }
     json_ok(v)
+}
+
+/// How old the store counters of `/v1/health` may be before a request reads them again. A commit
+/// (a new data generation) makes them old at once.
+pub const HEALTH_COUNTERS_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long `/v1/health` waits for a read of the counters it started before it answers with the
+/// ones it has.
+pub const HEALTH_COUNTERS_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The store counters of `/v1/health`, read at most once a second ([`health_counters`]).
+#[derive(Default)]
+pub(crate) struct HealthCounters {
+    /// When they were read, for which data generation, and whether for a lean store.
+    at: Option<(std::time::Instant, u64, bool)>,
+    counters: Option<reads::Counters>,
+    history_from: Option<i64>,
+    reading: bool,
+}
+
+/// The store counters of `/v1/health` and, for a lean store, `history_from` (R3C2-1).
+///
+/// They come from memory. One read on the light lane refreshes them when they are more than
+/// [`HEALTH_COUNTERS_EVERY`] old or a commit went through since, at most one at a time and outside the requests' own lane
+/// limits; a request waits for it at most [`HEALTH_COUNTERS_WAIT`]. So a starved light lane delays
+/// the counters, never the health answer, and a flood of health checks reads the store at most
+/// once a second.
+async fn health_counters(app: &Arc<App>, lean: bool) -> (Option<reads::Counters>, Option<i64>) {
+    let start = {
+        let mut g = app.health_counters.lock().unwrap_or_else(|e| e.into_inner());
+        let generation = app.state.generation.get();
+        let fresh = g.at.is_some_and(|(t, gen, l)| t.elapsed() < HEALTH_COUNTERS_EVERY && gen == generation && l == lean);
+        let start = !fresh && !g.reading;
+        g.reading |= start;
+        start
+    };
+    if start {
+        let a = app.clone();
+        let generation = app.state.generation.get();
+        let read = tokio::spawn(async move {
+            let counters = a.state.pool.with_light(reads::counters).await.ok();
+            let history_from = if lean { a.state.pool.with_light(reads::history_from).await.ok().flatten() } else { None };
+            let mut g = a.health_counters.lock().unwrap_or_else(|e| e.into_inner());
+            g.at = Some((std::time::Instant::now(), generation, lean));
+            // A failed read keeps the last counters.
+            if counters.is_some() {
+                g.counters = counters;
+                g.history_from = history_from;
+            }
+            g.reading = false;
+        });
+        let _ = tokio::time::timeout(HEALTH_COUNTERS_WAIT, read).await;
+    }
+    let g = app.health_counters.lock().unwrap_or_else(|e| e.into_inner());
+    (g.counters.clone(), if lean { g.history_from } else { None })
 }
 
 /// `GET /v1/metrics`: the follower state in the Prometheus text format.

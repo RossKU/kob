@@ -1924,6 +1924,15 @@ candles 0.61 s for all (16 distinct ones: 4.2 s), stats 71 ms, tokens 51 ms, boo
 (the request timeout, a disconnect) stops costing its connection: a read not started yet is not run, a running statement
 is interrupted (`sqlite3_interrupt`) and the connection goes back to the pool at once (before, it ran to its end, or to the
 20 s watchdog).
+**Per client** (R3C2-1, while the per-client rate limit is on): one client (a rate-limit key: an IPv4 address or an IPv6
+prefix) has at most 1 read on the light lane and 2 on the heavy lane at once, waiting or running, and at most 32 requests in
+flight (`503 overloaded` past it), so its extra reads wait on its own permits, never in a lane's queue, and a few clients
+cannot hold the 256 request permits. `/v1/health` serves the store counters from memory: one light read refreshes them at
+most once a second or per commit, and a request waits for it at most 250 ms, so a busy light lane delays the counters, never
+the health answer. The order view reads its children and live strays in index order (`orders_parent_page`,
+`token_utxos_strays_live`, created in place at the first open of a writer of this build, schema 14 unchanged) and counts
+each up to 10,000. The pair candles read the pair fills of the buckets they show only (at most 200,000), and a creator
+lock's proof is decoded and verified once per process (4,096 kept), so `?due=` costs a seek per row.
 
 **WAL size.** A checkpoint can reset the write-ahead log only at a moment no read holds an older snapshot; the history-wide
 reads of earlier builds overlapped without a gap and the TN10 soak's WAL grew to 785 MB. A simulation (one writer, four

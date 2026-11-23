@@ -192,6 +192,34 @@ fn ids(v: &Value) -> Vec<String> {
     v.as_array().unwrap().iter().map(|o| o["covenant_id"].as_str().unwrap().to_string()).collect()
 }
 
+/// R3C2-1: `/v1/health` serves the store counters from memory. With the light lane held by a long read, it still answers
+/// at once, with the counters it read last; it never queues behind the lane.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn health_answers_while_the_light_lane_is_busy() {
+    let e = env(|_| {});
+    seed_all(&e.w);
+    let app = router(e.state.clone());
+    let (_, v) = get(&app, "/v1/health").await;
+    assert_eq!(v["counters"]["orders_total"], 7);
+    let pool = e.state.pool.clone();
+    let busy = tokio::spawn(async move {
+        pool.with_light(|_| {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            Ok(())
+        })
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // a commit makes the counters old, and the read that refreshes them waits for the lane
+    e.state.generation.bump();
+    let t0 = std::time::Instant::now();
+    let (s, v) = get(&app, "/v1/health").await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(t0.elapsed() < std::time::Duration::from_secs(1), "{:?}", t0.elapsed());
+    assert_eq!(v["counters"]["orders_total"], 7, "the last counters: {v}");
+    busy.await.unwrap().unwrap();
+}
+
 #[tokio::test]
 async fn health_and_ready() {
     let e = env(|_| {});

@@ -89,7 +89,11 @@ CREATE INDEX IF NOT EXISTS orders_maker_genesis ON orders (maker_id, genesis_blo
 -- every order newest first (`GET /v1/orders` with no filter, keyset paged): the index is the whole sort order, so a page is read
 -- in order and stops at its end, however many orders share a genesis block
 CREATE INDEX IF NOT EXISTS orders_genesis_page ON orders (genesis_block, covenant_id);
-CREATE INDEX IF NOT EXISTS orders_parent ON orders (parent) WHERE parent IS NOT NULL;
+-- the children of an order newest first (`GET /v1/orders/{id}`, on the light lane): a page is read in index order and stops at its
+-- end, however many exits a repeating entry booked (R3C2-1). It replaces `orders_parent (parent)`, which made the view read and sort
+-- every child; a writer of this build creates it in place at its first open (schema 14 unchanged).
+CREATE INDEX IF NOT EXISTS orders_parent_page ON orders (parent, genesis_block, covenant_id) WHERE parent IS NOT NULL;
+DROP INDEX IF EXISTS main.orders_parent;
 
 -- Every unspent-or-spent output of an order covenant the indexer has seen.
 CREATE TABLE IF NOT EXISTS order_utxos (
@@ -211,6 +215,9 @@ CREATE INDEX IF NOT EXISTS token_utxos_owner ON token_utxos (order_id);
 -- The live custody of an order (`reads::CUSTODY_OK`, once per live ask in every book, count and stats read): strays sent to an order id
 -- are not in it, so they cost those reads nothing.
 CREATE INDEX IF NOT EXISTS token_utxos_custody_live ON token_utxos (order_id, amount) WHERE role = 'custody' AND spent_block IS NULL;
+-- The live strays of an order in page order (`GET /v1/orders/{id}`, on the light lane): anyone can send them to any order id, and the
+-- view reads only the live ones it lists, not every token UTXO the order ever had (R3C2-1). Created in place like `orders_parent_page`.
+CREATE INDEX IF NOT EXISTS token_utxos_strays_live ON token_utxos (order_id, created_block, txid, idx) WHERE role = 'stray' AND spent_block IS NULL;
 CREATE INDEX IF NOT EXISTS token_utxos_created ON token_utxos (created_block);
 CREATE INDEX IF NOT EXISTS token_utxos_spent ON token_utxos (spent_block);
 

@@ -799,13 +799,47 @@ pub fn creator_locks(
             return Ok((out, Some((s, i))));
         }
         let Ok(cov) = <[u8; 32]>::try_from(id.as_slice()) else { continue };
-        let Some(json) = proof_json(conn, &Hash32(cov))? else { continue };
-        let Ok(v) = serde_json::from_str::<LaunchProof>(&json).map_err(|e| e.to_string()).and_then(|p| p.verify()) else { continue };
+        let Some(v) = verified(conn, &Hash32(cov))? else { continue };
         if v.lock.as_ref().is_some_and(|l| l.key == *key) && lock_holds(conn, &v)? {
             out.push(v);
         }
     }
     Ok((out, None))
+}
+
+/// Verified declarations [`verified`] keeps; it starts again when full.
+const VERIFIED_CACHE_MAX: usize = 4_096;
+
+/// The stored launch proof of `covenant_id`, verified (`LaunchProof::verify`); `None` when there is
+/// none or it does not verify.
+///
+/// A proof is decoded and verified once per process: the result is kept under the covenant id and
+/// the two transaction ids, which commit to everything it is made of. A list of locks then costs a
+/// seek per row, not two transactions decoded and verified per row and request (R3C2-1, `?due=`).
+fn verified(conn: &Connection, covenant_id: &Hash32) -> DbResult<Option<kcc23::VerifiedDeclaration>> {
+    type Key = ([u8; 32], Vec<u8>, Vec<u8>);
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<Key, kcc23::VerifiedDeclaration>>> =
+        std::sync::OnceLock::new();
+    let ids: Option<(Vec<u8>, Vec<u8>)> = conn
+        .prepare_cached("SELECT preparation_txid, genesis_txid FROM kcc23_declarations WHERE covenant_id = ?1")?
+        .query_row([&covenant_id.0[..]], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let Some((prep, gen)) = ids else { return Ok(None) };
+    let key = (covenant_id.0, prep, gen);
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(v) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return Ok(Some(v.clone()));
+    }
+    let Some(json) = proof_json(conn, covenant_id)? else { return Ok(None) };
+    let Ok(v) = serde_json::from_str::<LaunchProof>(&json).map_err(|e| e.to_string()).and_then(|p| p.verify()) else {
+        return Ok(None);
+    };
+    let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if c.len() >= VERIFIED_CACHE_MAX {
+        c.clear();
+    }
+    c.insert(key, v.clone());
+    Ok(Some(v))
 }
 
 /// Most automatic locks one [`due_locks`] call returns.
@@ -832,8 +866,7 @@ pub fn due_locks(conn: &Connection, now_ms: u64, limit: usize) -> DbResult<Vec<k
     let mut out = vec![];
     for id in rows {
         let Ok(cov) = <[u8; 32]>::try_from(id.as_slice()) else { continue };
-        let Some(json) = proof_json(conn, &Hash32(cov))? else { continue };
-        let Ok(v) = serde_json::from_str::<LaunchProof>(&json).map_err(|e| e.to_string()).and_then(|p| p.verify()) else { continue };
+        let Some(v) = verified(conn, &Hash32(cov))? else { continue };
         if v.lock.as_ref().is_some_and(|l| l.kind == kob_protocol::creator_lock::LockKind::Auto && l.until <= now_ms) {
             out.push(v);
         }
