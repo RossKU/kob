@@ -3097,7 +3097,13 @@ pub fn holdings(
             } else {
                 ("token_holdings_live_owner", " AND spent_block IS NULL")
             };
-            let from = cursor.as_ref().map_or(i64::MIN, |c| c.0);
+            // The budget counts from the block after a cursor that ends one (a short page's), so a
+            // block of more rows than the budget is passed, never read again (R5C2-2).
+            let from = match cursor.as_ref() {
+                None => i64::MIN,
+                Some((b, t, i)) if *i == i64::MAX && t.len() == 32 && t.iter().all(|x| *x == 0xff) => b.saturating_add(1),
+                Some((b, _, _)) => *b,
+            };
             let end: Option<i64> = conn
                 .query_row(
                     &format!(

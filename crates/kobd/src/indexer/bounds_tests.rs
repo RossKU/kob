@@ -730,6 +730,43 @@ fn the_market_reads_do_not_grow_with_fills() {
     }
 }
 
+/// R5C2-2: a block holding more of the owner's rows than one page reads (`HOLDINGS_SCAN_MAX`) is passed, not read
+/// again: following `next_cursor` reaches the owner's holding of the token after it, and the paging ends.
+#[test]
+fn holdings_paging_moves_past_a_block_of_more_than_the_budget() {
+    let conn = open_memory("testnet-10").unwrap();
+    let (other, mine, owner) = (id(&conn, &[0x6c; 32]), id(&conn, &TOKEN_COV), [0x0f; 32]);
+    let owner_id = id(&conn, &owner);
+    crate::testkit::named_holdings_writable(&conn);
+    // 10,001 live holdings of another token in block 5, then one of the token in block 6
+    let n = "WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)";
+    let put = |from: i64, to: i64, token: i64, block: i64| {
+        conn.execute(
+            &format!(
+                "{n} INSERT INTO token_holdings_named (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, \
+                 created_block, created_daa) SELECT CAST(printf('h%031d', i) AS BLOB), 0, ?3, 'KCC20Ref', 1, ?4, 0, 5, 1, x'08', 'owned', ?5, ?5 FROM n"
+            ),
+            params![from, to, token, owner_id, block],
+        )
+        .unwrap();
+    };
+    put(0, HOLDINGS_SCAN_MAX as i64 + 1, other, 5);
+    put(HOLDINGS_SCAN_MAX as i64 + 1, HOLDINGS_SCAN_MAX as i64 + 2, mine, 6);
+    let f = HoldingFilter { owner: Some(owner.to_vec()), token: Some(Hash32(TOKEN_COV)), include_spent: false };
+    let (mut cursor, mut found, mut pages) = (None, 0, 0);
+    loop {
+        let page = holdings(&conn, &ctx(), &f, 500, cursor.take()).unwrap();
+        found += page.items.len();
+        pages += 1;
+        assert!(pages <= 5, "the paging does not advance");
+        match page.next_cursor {
+            Some(c) => cursor = parse_holding_cursor(&c),
+            None => break,
+        }
+    }
+    assert_eq!(found, 1, "the holding after the big block is reached");
+}
+
 /// R3C2-1 items 6 and 7: the strays (all, and a maker's) and an owner's holdings of one token do not
 /// grow with the live strays of the store or the owner's other holdings: a page, or the stated
 /// budgets ([`STRAYS_SCAN_MAX`], [`HOLDINGS_SCAN_MAX`]).
