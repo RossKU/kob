@@ -265,7 +265,8 @@ pub fn token_created_daa(conn: &Connection, id: &Hash32) -> DbResult<Option<i64>
         .prepare_cached("SELECT genesis_daa FROM kcc23_declarations WHERE covenant_id = ?1")?
         .query_row([&id.0[..]], |r| r.get(0))
         .optional()?;
-    let Some(tid) = conn.prepare_cached("SELECT id FROM ids WHERE h = ?1")?.query_row([&id.0[..]], |r| r.get::<_, i64>(0)).optional()?
+    let Some(tid) =
+        conn.prepare_cached("SELECT id FROM ids WHERE h = ?1")?.query_row([&id.0[..]], |r| r.get::<_, i64>(0)).optional()?
     else {
         return Ok(declared);
     };
@@ -613,8 +614,7 @@ impl LogoVotes {
         let tip = store_tip_daa(&conn)?;
         let old = |f: i64| (tip.saturating_sub(f).max(0) as u64) / self.daa_per_second.max(1);
         let created = token_created_daa(&conn, &b.covenant_id)?;
-        let old_enough =
-            first.is_some_and(|f| old(f) >= self.cfg.min_history_secs && created.is_some_and(|t| f < t));
+        let old_enough = first.is_some_and(|f| old(f) >= self.cfg.min_history_secs && created.is_some_and(|t| f < t));
         if !old_enough {
             return Err(VoteError::NoHistory);
         }
