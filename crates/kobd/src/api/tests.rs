@@ -3254,3 +3254,21 @@ async fn one_client_holds_at_most_its_in_flight_server_permits() {
         h.await.unwrap();
     }
 }
+
+/// R5C2-6: a book, depth or pair-book read is computed at a fixed step of `depth` and cut: a request for fewer levels gets
+/// exactly the first levels of a larger one, and the two share one computation.
+#[tokio::test]
+async fn a_book_of_a_small_depth_is_the_head_of_its_step() {
+    let e = env(|_| {});
+    seed_all(&e.w);
+    let app = router(e.state.clone());
+    for (route, param) in [("books", "depth"), ("depth", "levels")] {
+        let (_, big) = get(&app, &format!("/v1/{route}/{}?{param}=20", h(TOKEN))).await;
+        let (_, small) = get(&app, &format!("/v1/{route}/{}?{param}=1", h(TOKEN))).await;
+        for side in ["asks", "bids"] {
+            let b = big[side].as_array().unwrap();
+            assert!(!b.is_empty(), "{route} {side}: {big}");
+            assert_eq!(small[side].as_array().unwrap().as_slice(), &b[..1], "{route} {side}");
+        }
+    }
+}

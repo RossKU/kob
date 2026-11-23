@@ -34,17 +34,27 @@ pub(crate) fn steps<T>(conn: &Connection, f: impl FnOnce() -> T) -> (T, u64) {
         0
     }
     let n = Box::new(AtomicU64::new(0));
+    let t = std::time::Instant::now();
     // SAFETY: the handle is this connection's, and the handler is removed before the counter goes.
     unsafe { rusqlite::ffi::sqlite3_progress_handler(conn.handle(), 1, Some(tick), &*n as *const AtomicU64 as *mut std::ffi::c_void) };
     let r = f();
     // SAFETY: as above.
     unsafe { rusqlite::ffi::sqlite3_progress_handler(conn.handle(), 0, None, std::ptr::null_mut()) };
-    (r, n.load(Ordering::Relaxed))
+    let n = n.load(Ordering::Relaxed);
+    WALLS.with(|w| w.borrow_mut().push((n, t.elapsed())));
+    (r, n)
+}
+
+thread_local! {
+    /// The wall time of each [`steps`] measurement of this thread, by its VM steps: [`flat`] prints the one of its 2 N
+    /// read (R5C2-6). The time includes the progress handler, about a third more than without it.
+    static WALLS: std::cell::RefCell<Vec<(u64, std::time::Duration)>> = Default::default();
 }
 
 /// The work of a read with 2 N attacker rows is that with N, within 5 % and a few hundred steps.
 fn flat(name: &str, few: u64, many: u64) {
-    eprintln!("{name}: {few} VM steps with N rows, {many} with 2 N");
+    let wall = WALLS.with(|w| w.borrow().iter().rev().find(|(n, _)| *n == many).map(|(_, d)| *d));
+    eprintln!("{name}: {few} VM steps with N rows, {many} with 2 N, wall {wall:?} with 2 N");
     assert!(many <= few + few / 20 + 500, "{name}: {few} VM steps with N rows, {many} with 2 N");
 }
 
@@ -1368,4 +1378,49 @@ fn worst_case_pair_reads_over_real_pair_orders() {
         let n = f();
         eprintln!("{name}: {:?} wall, {n} VM steps", t.elapsed());
     }
+}
+
+/// R5C2-4: a store whose trigger and index an earlier build created with another body gets this build's at open (`CREATE
+/// ... IF NOT EXISTS` keeps the old one), in the open's transaction; under this build's bodies nothing is recreated.
+#[test]
+fn triggers_and_indexes_of_an_older_body_are_recreated() {
+    let conn = open_memory("testnet-10").unwrap();
+    let stored =
+        |name: &str| -> String { conn.query_row("SELECT sql FROM sqlite_master WHERE name = ?1", [name], |r| r.get(0)).unwrap() };
+    let (trigger, index) = (stored("book_live_flag_update"), stored("book_live_pending"));
+    assert!(crate::indexer::db::refresh_schema_objects(&conn).unwrap().is_empty());
+    conn.execute_batch(
+        "DROP TRIGGER book_live_flag_update; CREATE TRIGGER book_live_flag_update AFTER UPDATE ON order_flags BEGIN SELECT 1; END; \
+         DROP INDEX book_live_pending; CREATE INDEX book_live_pending ON book_live (token_id, side);",
+    )
+    .unwrap();
+    let mut done = crate::indexer::db::refresh_schema_objects(&conn).unwrap();
+    done.sort();
+    assert_eq!(done, vec!["book_live_flag_update".to_string(), "book_live_pending".to_string()]);
+    assert_eq!((stored("book_live_flag_update"), stored("book_live_pending")), (trigger, index));
+    assert!(crate::indexer::db::refresh_schema_objects(&conn).unwrap().is_empty());
+}
+
+/// R5C2-6: a store an earlier build of schema 14 created has `book_live` and `pair_live` without the columns the reads take
+/// now; the next open adds them, and the rules reset fills them.
+#[test]
+fn a_store_without_the_live_read_columns_gains_them_at_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite3");
+    {
+        let conn = crate::indexer::db::open_writer(&path, "testnet-10").unwrap();
+        honest_book(&conn);
+        conn.execute_batch(
+            "ALTER TABLE book_live DROP COLUMN levels; ALTER TABLE pair_live DROP COLUMN q_origin; ALTER TABLE pair_live DROP COLUMN ask; \
+             DELETE FROM meta WHERE k = 'book_live_rules';",
+        )
+        .unwrap();
+    }
+    let conn = crate::indexer::db::open_writer(&path, "testnet-10").unwrap();
+    let levels: i64 = conn.query_row("SELECT COUNT(*) FROM book_live WHERE levels = 1 AND ok = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(levels, 20);
+    let cols: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pragma_table_info('pair_live') WHERE name IN ('ask', 'q_origin')", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(cols, 2);
 }

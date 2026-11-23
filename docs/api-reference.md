@@ -1426,7 +1426,7 @@ connection over a cap gets the bare `503` of section 5.1 and is closed. These ca
 and `/v1/depth/{token}` are kept in a response cache per **data generation** of the store (the generation moves after every
 committed batch, revert, operator import and possibly-frozen flag). The key is the request's parameters plus, for the reads that
 depend on the clock (books, pairs, pair books, stats, depth), the node's DAA score and the wall-clock second, so a cached body is
-byte for byte what the request would have computed.
+byte for byte what the request would have computed. The books, the depth and the pair books are computed at a `depth` (`levels`) of 20, 50, 100 or 200, the first at or above the one asked (at most `max_page_size`), and the answer is cut to the levels asked: the same levels, since the reads are exact by price.
 Concurrent requests of one key wait for one read; a failed read is not kept. The read is started by the first request (which
 needs a heavy read of its own client free within 2 s, section 5.3) and then runs on its own: a request that goes away does not
 stop it, and the others do not wait for the first client's other reads (R4C2-3). At most 1,024 bodies and 32 MiB per generation are

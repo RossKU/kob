@@ -856,7 +856,10 @@ CREATE TABLE IF NOT EXISTS book_live (
     deadline      INTEGER,
     ok            INTEGER,
     open          INTEGER NOT NULL DEFAULT 1,
-    auction       INTEGER NOT NULL DEFAULT 0
+    auction       INTEGER NOT NULL DEFAULT 0,
+    -- The resting levels a read counts (a curve: its remaining levels), set by the writer (R5C2-6). An older store gains the
+    -- column at open (`db::migrate`).
+    levels        INTEGER
 );
 CREATE INDEX IF NOT EXISTS book_live_key ON book_live (token_id, side, open, auction, key, genesis_block, covenant_id);
 CREATE INDEX IF NOT EXISTS book_live_pending ON book_live (token_id, side, open, open_from);
@@ -880,7 +883,20 @@ CREATE TABLE IF NOT EXISTS pair_live (
     closed_from   INTEGER,
     deadline      INTEGER,
     ok            INTEGER,
-    open          INTEGER NOT NULL DEFAULT 1
+    open          INTEGER NOT NULL DEFAULT 1,
+    -- What the reads take of the order, set by the writer with `ok` (`pairs::PairSpec`, R5C2-6): its side (ask: it sells A),
+    -- `entry` (a `KobIfdPair`), scale(A), the amount one fill can take, and its quote as a function of the DAA score. An
+    -- older store gains the columns at open (`db::migrate`).
+    ask           INTEGER,
+    entry         INTEGER,
+    scale         INTEGER,
+    amount        INTEGER,
+    q_kind        INTEGER,
+    quote         INTEGER,
+    q_end         INTEGER,
+    q_slope       INTEGER,
+    q_step        INTEGER,
+    q_origin      INTEGER
 );
 CREATE INDEX IF NOT EXISTS pair_live_pair ON pair_live (token_id, quote_id, open, genesis_block, covenant_id);
 CREATE INDEX IF NOT EXISTS pair_live_base ON pair_live (token_id, open, genesis_block, covenant_id);

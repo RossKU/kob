@@ -70,7 +70,7 @@ use super::db::DbResult;
 use super::ids::id_of;
 use super::market::{self, Candle};
 use super::packed::{GENESIS_O, ORDER_IDS_O};
-use super::reads::{fillable_now, pinned_template, reduce, tip_state, ReadCtx, CUSTODY_OK, NOT_FROZEN, RESTING_TIF};
+use super::reads::{pinned_template, reduce, tip_state, ReadCtx, CUSTODY_OK, NOT_FROZEN, RESTING_TIF};
 use crate::hex::Hash32;
 use kob_protocol::state::{AnyState, TIF_GTC};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -249,14 +249,140 @@ fn custodies_match(rows: &[(Vec<u8>, i64, i64)], state: &AnyState) -> bool {
     live == want
 }
 
-/// A listed live pair order of the pair, with its tip state and the DAA score of its UTXO.
-struct LivePair {
-    state: AnyState,
-    udaa: i64,
-    /// The order UTXO's sompi and its live custodies ([`pair_custodies`]): what one fill can take
-    /// ([`super::takeable::pair_takeable`]).
-    value: i64,
-    custodies: Vec<(Vec<u8>, i64, i64)>,
+/// What a pair book takes of a fillable pair order, kept by the writer in `pair_live`
+/// ([`pair_window_of`], R5C2-6), so the reads decode no state: its side and source, scale(A), the
+/// amount one fill can take (one slice of a TWAP order, at most what its UTXO and custodies fund at
+/// the highest quote it reaches), and its quote as a function of the DAA score.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PairSpec {
+    pub ask: bool,
+    pub entry: bool,
+    pub scale: i64,
+    pub amount: i64,
+    /// 0: `quote`, fixed. 1: a `KobPair` auction, from `quote` by `slope` every `step` DAA after
+    /// `origin`, never past `end`. 2: an armed `KobIfdPair` stop entry, from `end` (its stop) to
+    /// `quote` over `step` DAA after `origin`.
+    pub kind: i64,
+    pub quote: i64,
+    pub end: i64,
+    pub slope: i64,
+    pub step: i64,
+    pub origin: i64,
+}
+
+impl PairSpec {
+    /// The spec of a pair order's tip state `s` (UTXO DAA `udaa`, `value` sompi, its live custodies).
+    fn of(s: &AnyState, udaa: i64, value: i64, custodies: &[(Vec<u8>, i64, i64)]) -> Option<PairSpec> {
+        match s {
+            AnyState::KobPair(p) => {
+                let (kind, origin) = if p.slope == 0 { (0, 0) } else { (1, p.origin(udaa)?) };
+                let slice = if p.max_fill > 0 { p.amount_left.min(p.max_fill) } else { p.amount_left };
+                let take = super::takeable::pair_takeable(s, value, custodies, p.price_max())?;
+                Some(PairSpec {
+                    ask: p.is_ask(),
+                    entry: false,
+                    scale: p.a_scale(),
+                    amount: slice.min(take),
+                    kind,
+                    quote: p.price,
+                    end: p.price_end,
+                    slope: p.slope,
+                    step: p.decay_step,
+                    origin,
+                })
+            }
+            AnyState::KobIfdPair(e) => {
+                let armed = if e.entry_stop > 0 { kob_protocol::state::armed_origin(e.armed, udaa) } else { None };
+                let (kind, origin) = match armed {
+                    Some(o) if e.band_daa > 0 => (2, o),
+                    _ => (0, 0),
+                };
+                let take = super::takeable::pair_takeable(s, value, custodies, e.price)?;
+                Some(PairSpec {
+                    ask: !e.is_buy_first(),
+                    entry: true,
+                    scale: e.a_scale,
+                    amount: e.amount_left.min(take),
+                    kind,
+                    quote: e.price,
+                    end: e.entry_stop,
+                    slope: 0,
+                    step: e.band_daa,
+                    origin,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// The quote at DAA `t`, as `PairState::price_at` and `IfdPairState::price_at` (no trigger) give
+    /// it; `None` where their arithmetic fails.
+    pub(crate) fn quote_at(&self, t: i64) -> Option<i64> {
+        match self.kind {
+            0 => Some(self.quote),
+            1 => {
+                if self.slope < 0 || self.step <= 0 {
+                    return None;
+                }
+                let moved = self.slope.checked_mul(t.checked_sub(self.origin)? / self.step)?;
+                Some(if self.ask {
+                    self.quote.checked_sub(moved)?.max(self.end)
+                } else {
+                    self.quote.checked_add(moved)?.min(self.end)
+                })
+            }
+            _ => {
+                let elapsed = t.checked_sub(self.origin)?;
+                if self.step > 0 && elapsed < self.step {
+                    self.end.checked_add(self.quote.checked_sub(self.end)?.checked_mul(elapsed)? / self.step)
+                } else {
+                    Some(self.quote)
+                }
+            }
+        }
+    }
+
+    /// The level now: `(ask, source, quote, scale(A), amount)`, `None` when a term is not positive.
+    fn level(&self, now: i64) -> Option<(bool, &'static str, i64, i64, i64)> {
+        let q = self.quote_at(now)?;
+        (q > 0 && self.scale > 0 && self.amount > 0).then_some((
+            self.ask,
+            if self.entry { "entry" } else { "direct" },
+            q,
+            self.scale,
+            self.amount,
+        ))
+    }
+}
+
+/// The `pair_live` columns of a [`PairSpec`], in the order the reads select them.
+const PAIR_SPEC_COLS: &str =
+    "pl.ask, pl.entry, pl.scale, pl.amount, pl.q_kind, pl.quote, pl.q_end, pl.q_slope, pl.q_step, pl.q_origin";
+
+/// A [`PairSpec`] from the row's columns at `at` ([`PAIR_SPEC_COLS`]); `None` when unset.
+fn spec_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<Option<PairSpec>> {
+    let Some(ask) = r.get::<_, Option<bool>>(at)? else { return Ok(None) };
+    let g = |k: usize| -> rusqlite::Result<i64> { Ok(r.get::<_, Option<i64>>(at + k)?.unwrap_or(0)) };
+    Ok(Some(PairSpec {
+        ask,
+        entry: g(1)? != 0,
+        scale: g(2)?,
+        amount: g(3)?,
+        kind: g(4)?,
+        quote: g(5)?,
+        end: g(6)?,
+        slope: g(7)?,
+        step: g(8)?,
+        origin: g(9)?,
+    }))
+}
+
+/// The spec of a row the writer has not set yet (`ok` NULL: an older build's write), decided as the
+/// writer would, at DAA `now` and the read's clock; `None` when it cannot be filled now.
+fn unset_spec(conn: &Connection, order_id: i64, now: i64, ctx: &ReadCtx) -> DbResult<Option<PairSpec>> {
+    let Some(w) = pair_window_of(conn, order_id)? else { return Ok(None) };
+    let past_deadline = matches!((w.deadline, ctx.now_unix), (Some(d), Some(u)) if u as i64 >= d);
+    Ok(w.pair.filter(|_| w.ok && w.open_from <= now && now < w.closed_from && !past_deadline))
 }
 
 /// The most pair orders a pair book is built from: the oldest that rest at a level.
@@ -271,37 +397,33 @@ pub const PAIR_BOOK_ORDERS_MAX: usize = 2_000;
 /// a bounded amount of work, and the pair book says when they cut it (`orders_truncated`).
 pub const PAIR_SCAN_MAX: usize = 20_000;
 
-/// The listed live pair orders of `base / quote`, that orientation only, that are eligible now,
-/// have an exact custody and rest at a level ([`resting_level`]).
+/// The resting levels `(ask, source, quote B per whole A, scale(A), amount of A)` of the listed live
+/// pair orders of `base / quote`, that orientation only, that can be filled now.
 ///
 /// These are the oldest [`PAIR_BOOK_ORDERS_MAX`] such orders among the oldest [`PAIR_SCAN_MAX`]
-/// candidates. The flag is true when either bound cut the set.
-fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: &ReadCtx) -> DbResult<(Vec<LivePair>, bool)> {
+/// candidates. The flag is true when either bound cut the set. Each comes from its `pair_live` row as
+/// the writer decided it ([`PairSpec`]): no state is decoded, no custody read (R5C2-6). A row the
+/// writer has not set yet is decided here, row by row.
+fn pair_orders(
+    conn: &Connection,
+    base: &Hash32,
+    quote: &Hash32,
+    now: i64,
+    ctx: &ReadCtx,
+) -> DbResult<(Vec<(bool, &'static str, i64, i64, i64)>, bool)> {
     // The oldest `PAIR_SCAN_MAX + 1` pair orders of the pair fillable now (`pair_live`, `open` 1,
     // R4C2-2), then at most `reads::BOOK_MOVING_MAX` that opened after the store's DAA score and by
     // `now`. An order that cannot be filled now is outside the ranges read and takes no place.
-    let live = fillable_now(now, ctx.now_unix);
     let (open, pending) = pair_arms(now, ctx.now_unix);
     let sql = format!(
-        "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline, u.value \
+        "SELECT p.order_id, pl.ok, {PAIR_SPEC_COLS} \
          FROM (SELECT order_id FROM ({open} LIMIT ?3) UNION ALL SELECT order_id FROM ({pending} LIMIT {moving})) p \
-         CROSS JOIN order_state s ON s.order_id = p.order_id CROSS JOIN orders o ON o.id = p.order_id \
-         JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
-         WHERE o.listed = 1 AND s.status IN ('open','partial') AND s.state_known = 1 \
-         AND u.spent_block IS NULL AND o.contract IN ('KobPair','KobIfdPair') AND {RESTING_TIF} AND {live} AND {NOT_FROZEN} AND {pinned}",
-        pinned = pinned_template(),
+         CROSS JOIN pair_live pl ON pl.order_id = p.order_id",
         moving = super::reads::BOOK_MOVING_MAX
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params![base.0.to_vec(), quote.0.to_vec(), PAIR_SCAN_MAX as i64 + 1], |r| {
-        Ok((
-            r.get::<_, Vec<u8>>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, Option<Vec<u8>>>(2)?,
-            r.get::<_, i64>(3)?,
-            r.get::<_, Option<i64>>(4)?,
-            r.get::<_, i64>(5)?,
-        ))
+        Ok((r.get::<_, i64>(0)?, r.get::<_, Option<bool>>(1)?, spec_at(r, 2)?))
     })?;
     let mut out = vec![];
     for (scanned, r) in rows.enumerate() {
@@ -309,20 +431,15 @@ fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: 
         if scanned == PAIR_SCAN_MAX || out.len() == PAIR_BOOK_ORDERS_MAX {
             return Ok((out, true));
         }
-        let (cov, contract, state, udaa, deadline, value) = r?;
-        let Some(s) = tip_state(&contract, state) else { continue };
-        if !s.is_pair() || !eligible(&s, udaa, deadline, now, ctx) {
-            continue;
+        let (id, ok, spec) = r?;
+        let spec = match ok {
+            Some(true) => spec,
+            Some(false) => None,
+            None => unset_spec(conn, id, now, ctx)?,
+        };
+        if let Some(l) = spec.and_then(|s| s.level(now)) {
+            out.push(l);
         }
-        let custodies = pair_custodies(conn, &cov)?;
-        if !custodies_match(&custodies, &s) {
-            continue;
-        }
-        let p = LivePair { state: s, udaa, value, custodies };
-        if resting_level(&p, now).is_none() {
-            continue;
-        }
-        out.push(p);
     }
     // A range the read took was full: the rest of the pair was not read.
     let beyond = conn.prepare(&format!("{open} LIMIT 1 OFFSET ?3"))?.exists(params![
@@ -360,8 +477,9 @@ fn pair_window(now: i64, unix: Option<u64>) -> String {
 }
 
 /// When the current state of a live listed pair order can be filled, as `db::maintain_live_books`
-/// stores it in `pair_live` (R4C2-2): the rules of [`eligible`], [`resting_level`] and
-/// [`pair_custody_ok`] as DAA bounds. `None` when it has no state row.
+/// stores it in `pair_live` (R4C2-2): the rules of [`eligible`], a resting level and
+/// [`pair_custody_ok`] as DAA bounds, and what the reads take of it ([`PairSpec`], R5C2-6). `None`
+/// when it has no state row.
 pub(crate) fn pair_window_of(conn: &Connection, order_id: i64) -> DbResult<Option<super::reads::LiveWindow>> {
     let sql = format!(
         "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline, s.cur_value, \
@@ -378,19 +496,18 @@ pub(crate) fn pair_window_of(conn: &Connection, order_id: i64) -> DbResult<Optio
     let Some((cov, contract, raw, udaa, deadline, value, sql_ok)) = row else { return Ok(None) };
     let udaa = udaa.unwrap_or(0);
     let state = tip_state(&contract, raw);
-    let (mut ok, mut open_from, mut closed_from) = (false, 0, i64::MAX);
+    let (mut ok, mut open_from, mut closed_from, mut pair) = (false, 0, i64::MAX, None);
     if let Some(s) = state.as_ref().filter(|s| s.is_pair()) {
         // Something left (a sold-out repeating entry lives on for its exits' re-arms, R5A-2), and one
         // fill its UTXO and custodies pay for at the highest quote the order reaches (R5A-1).
-        let (resting, top) = match s {
-            AnyState::KobPair(p) => (p.tif == TIF_GTC && p.amount_left > 0, p.price_max()),
-            AnyState::KobIfdPair(e) => ((e.entry_stop == 0 || e.armed != 0) && e.amount_left > 0, e.price),
-            _ => (false, 0),
+        let resting = match s {
+            AnyState::KobPair(p) => p.tif == TIF_GTC && p.amount_left > 0,
+            AnyState::KobIfdPair(e) => (e.entry_stop == 0 || e.armed != 0) && e.amount_left > 0,
+            _ => false,
         };
         let custodies = pair_custodies(conn, &cov)?;
-        let funded = crate::indexer::processor::guarded(|| super::takeable::pair_takeable(s, value.unwrap_or(0), &custodies, top))
-            .unwrap_or(Some(0))
-            != Some(0);
+        pair = crate::indexer::processor::guarded(|| PairSpec::of(s, udaa, value.unwrap_or(0), &custodies)).flatten();
+        let funded = pair.is_some_and(|p| p.amount > 0);
         ok = sql_ok.unwrap_or(false) && resting && funded && crate::sanity::check(s).is_ok() && custodies_match(&custodies, s);
         open_from = crate::model::terms_of(s).active_from;
         if let AnyState::KobPair(p) = s {
@@ -400,7 +517,17 @@ pub(crate) fn pair_window_of(conn: &Connection, order_id: i64) -> DbResult<Optio
         }
         closed_from = crate::indexer::processor::guarded(|| s.refund_due(udaa)).flatten().unwrap_or(i64::MAX);
     }
-    Ok(Some(super::reads::LiveWindow { ok, open_from, closed_from, deadline, auction: false, dust: false, key: None }))
+    Ok(Some(super::reads::LiveWindow {
+        ok,
+        open_from,
+        closed_from,
+        deadline,
+        auction: false,
+        dust: false,
+        key: None,
+        levels: 1,
+        pair,
+    }))
 }
 
 /// The plain KAS orders of one token and side (1 asks, 2 bids) that a route can use, best first.
@@ -553,33 +680,6 @@ fn finish(mut levels: Vec<Lvl>, asks: bool, depth: usize) -> Vec<PairLevel> {
     levels.into_iter().take(depth).map(to_view).collect()
 }
 
-/// The resting level of a pair order now: `(ask, source, quote B per whole A, scale(A), amount of
-/// A)`.
-///
-/// It is `None` for the orders that the book leaves out: a `KobCondPair`, an unarmed stop entry, an
-/// IOC or FOK taker, a TWAP slice that is not due yet, and an order with nothing left. The amount is
-/// at most what one fill can take now from the order's UTXO and custodies (R5A-1).
-fn resting_level(p: &LivePair, now: i64) -> Option<(bool, &'static str, i64, i64, i64)> {
-    let takeable = |q: i64, amount: i64| match super::takeable::pair_takeable(&p.state, p.value, &p.custodies, q) {
-        Some(t) => amount.min(t),
-        None => amount,
-    };
-    crate::indexer::processor::guarded(|| match &p.state {
-        AnyState::KobPair(s) if s.tif == TIF_GTC && (s.interval <= 0 || now >= p.udaa.saturating_add(s.interval)) => {
-            let amount = if s.max_fill > 0 { s.amount_left.min(s.max_fill) } else { s.amount_left };
-            let q = s.price_at(now, p.udaa)?;
-            Some((s.is_ask(), "direct", q, s.a_scale(), takeable(q, amount)))
-        }
-        AnyState::KobIfdPair(e) if e.entry_stop == 0 || e.armed != 0 => {
-            let q = e.price_at(false, now, p.udaa)?;
-            Some((!e.is_buy_first(), "entry", q, e.a_scale, takeable(q, e.amount_left)))
-        }
-        _ => None,
-    })
-    .flatten()
-    .filter(|l| l.2 > 0 && l.3 > 0 && l.4 > 0)
-}
-
 /// Whether the token has any listed order: an index seek on the token, then the first listed row.
 ///
 /// The live-set scans below walk every open order of the store whatever the token, so a leg
@@ -610,8 +710,7 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
         let mut grouped: BTreeMap<(bool, &'static str, (u128, u128)), Lvl> = BTreeMap::new();
         let (orders, truncated) = pair_orders(conn, base, quote, now, ctx)?;
         orders_truncated = truncated;
-        for (k, p) in orders.iter().enumerate() {
-            let Some((ask, source, price, scale, amount)) = resting_level(p, now) else { continue };
+        for (k, &(ask, source, price, scale, amount)) in orders.iter().enumerate() {
             let Some(pr) = bounded_price(price as u128, scale as u128, ask) else { continue };
             let l = grouped.entry((ask, source, pr)).or_insert_with(|| Lvl {
                 source,
@@ -664,48 +763,61 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
 /// counted under B/A. They are sorted by (base, quote).
 pub fn pairs(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResult<Vec<PairSummary>> {
     let now = eval_daa(conn, ctx)?.min(i64::MAX as u64) as i64;
-    // The order columns leave out what `eligible` would drop before the bound counts
-    // ([`PAIR_SCAN_MAX`]).
-    let live = fillable_now(now, ctx.now_unix);
-    // The oldest `PAIR_SCAN_MAX` live listed pair orders (`pair_live`, R4C2-2): of all pairs, or of
-    // those naming `token` as base and as quote, each read in its index and merged by age.
-    let read = |picked: &str| -> DbResult<Vec<(i64, Row)>> {
+    // The oldest `PAIR_SCAN_MAX` pair orders fillable now (`pair_live`, R4C2-2): of all pairs, or of those naming
+    // `token` as base and as quote, each read in its index and merged by age. Each is counted from its row as the writer
+    // decided it (its side and source, R5C2-6): no state is decoded; a row not set yet is decided here.
+    let read = |picked: &str| -> DbResult<Vec<Row>> {
         let sql = format!(
-            "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline, o_tk.h, o_qt.h, o.genesis_block \
-             FROM (SELECT pl.order_id FROM pair_live pl {picked} AND pl.open = 1 AND {window} ORDER BY pl.genesis_block, pl.covenant_id \
-                   LIMIT {PAIR_SCAN_MAX}) p \
-             CROSS JOIN order_state s ON s.order_id = p.order_id CROSS JOIN orders o ON o.id = p.order_id \
-             JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
-             WHERE o.listed = 1 AND o.quote_id IS NOT NULL AND s.status IN ('open','partial') AND s.state_known = 1 \
-             AND u.spent_block IS NULL AND {live} AND {NOT_FROZEN} AND {pinned}",
-            pinned = pinned_template(),
+            "SELECT p.order_id, pl.ok, {PAIR_SPEC_COLS}, tk.h, qt.h, pl.genesis_block, pl.covenant_id \
+                    FROM (SELECT pl.order_id FROM pair_live pl {picked} AND pl.open = 1 AND {window} ORDER BY pl.genesis_block, pl.covenant_id \
+                    LIMIT {PAIR_SCAN_MAX}) p \
+                    CROSS JOIN pair_live pl ON pl.order_id = p.order_id JOIN ids tk ON tk.id = pl.token_id JOIN ids qt ON qt.id = pl.quote_id",
             window = pair_window(now, ctx.now_unix)
         );
         let mut st = conn.prepare(&sql)?;
         let rows = st
             .query_map(params![token.map(|t| t.0.to_vec())], |r| {
-                Ok((r.get(7)?, (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))
+                Ok(Row {
+                    id: r.get(0)?,
+                    ok: r.get(1)?,
+                    spec: spec_at(r, 2)?,
+                    a: r.get(12)?,
+                    b: r.get(13)?,
+                    age: (r.get(14)?, r.get(15)?),
+                })
             })?
             .collect::<rusqlite::Result<_>>()?;
         Ok(rows)
     };
-    type Row = (Vec<u8>, String, Option<Vec<u8>>, i64, Option<i64>, Vec<u8>, Vec<u8>);
+    struct Row {
+        id: i64,
+        ok: Option<bool>,
+        spec: Option<PairSpec>,
+        a: Vec<u8>,
+        b: Vec<u8>,
+        age: (i64, Vec<u8>),
+    }
     let rows: Vec<Row> = match token {
-        None => read("INDEXED BY pair_live_age WHERE ?1 IS NULL")?.into_iter().map(|(_, r)| r).collect(),
+        None => read("INDEXED BY pair_live_age WHERE ?1 IS NULL")?,
         Some(_) => {
             let mut all = read("INDEXED BY pair_live_base WHERE pl.token_id = (SELECT id FROM ids WHERE h = ?1)")?;
             all.extend(read("INDEXED BY pair_live_quote WHERE pl.quote_id = (SELECT id FROM ids WHERE h = ?1)")?);
-            all.sort_by(|(ga, a), (gb, b)| ga.cmp(gb).then_with(|| a.0.cmp(&b.0)));
-            all.dedup_by(|(_, a), (_, b)| a.0 == b.0);
+            all.sort_by(|x, y| x.age.cmp(&y.age));
+            all.dedup_by(|x, y| x.id == y.id);
             all.truncate(PAIR_SCAN_MAX);
-            all.into_iter().map(|(_, r)| r).collect()
+            all
         }
     };
     let mut counts: BTreeMap<(Hash32, Hash32), PairSummary> = BTreeMap::new();
-    for (cov, contract, state, udaa, deadline, a, b) in rows {
-        let (Some(a), Some(b)) = (Hash32::from_slice(&a), Hash32::from_slice(&b)) else { continue };
-        let Some(s) = tip_state(&contract, state) else { continue };
-        if a == b || !s.is_pair() || !eligible(&s, udaa, deadline, now, ctx) || !pair_custody_ok(conn, &cov, &s)? {
+    for r in rows {
+        let (Some(a), Some(b)) = (Hash32::from_slice(&r.a), Hash32::from_slice(&r.b)) else { continue };
+        let spec = match r.ok {
+            Some(true) => r.spec,
+            Some(false) => None,
+            None => unset_spec(conn, r.id, now, ctx)?,
+        };
+        let Some(spec) = spec else { continue };
+        if a == b {
             continue;
         }
         let e = counts.entry((a, b)).or_insert_with(|| PairSummary {
@@ -717,12 +829,11 @@ pub fn pairs(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResu
             entry_bids: 0,
             conditionals: 0,
         });
-        match &s {
-            AnyState::KobPair(p) if p.is_ask() => e.direct_asks += 1,
-            AnyState::KobPair(_) => e.direct_bids += 1,
-            AnyState::KobIfdPair(x) if x.is_buy_first() => e.entry_bids += 1,
-            AnyState::KobIfdPair(_) => e.entry_asks += 1,
-            _ => e.conditionals += 1,
+        match (spec.entry, spec.ask) {
+            (false, true) => e.direct_asks += 1,
+            (false, false) => e.direct_bids += 1,
+            (true, false) => e.entry_bids += 1,
+            (true, true) => e.entry_asks += 1,
         }
     }
     Ok(counts.into_values().collect())
@@ -1132,6 +1243,58 @@ pub fn pair_fills(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn compiled(id: kob_protocol::artifacts::TemplateId) -> AnyState {
+        let t = kob_protocol::artifacts::template(id);
+        AnyState::decode(id, &t.contract().compiled.bytecode[1..1 + t.state_len]).unwrap()
+    }
+
+    /// R5C2-6: the quote a pair book computes from the stored spec is the state's own `price_at`, at every DAA score
+    /// around an auction's origin and end: a decaying ask, a rising bid, an armed entry with a band.
+    #[test]
+    fn the_stored_quote_is_the_states_price_at() {
+        use kob_protocol::state::{IfdPairState, PairState, SIDE_ASK, SIDE_BID};
+        let AnyState::KobPair(p) = compiled(kob_protocol::artifacts::TemplateId::KobPair) else { panic!() };
+        let AnyState::KobIfdPair(e) = compiled(kob_protocol::artifacts::TemplateId::KobIfdPair) else { panic!() };
+        let big = [(p.s_cov_id.to_vec(), i64::MAX / 4, 1_000_000), (p.t_cov_id.to_vec(), i64::MAX / 4, 1_000_000)];
+        let udaa = 5_000;
+        for (side, price, end) in [(SIDE_ASK, 9_000, 4_000), (SIDE_BID, 4_000, 9_000)] {
+            let x = PairState {
+                side,
+                price,
+                price_end: end,
+                slope: 7,
+                decay_step: 13,
+                active_from: 4_000,
+                interval: 0,
+                amount_left: 1_000,
+                custody: 1_000,
+                min_fill: 1,
+                ..p.clone()
+            };
+            let s = AnyState::KobPair(x.clone());
+            let spec = PairSpec::of(&s, udaa, i64::MAX / 4, &big).unwrap();
+            for t in (3_900..6_000).step_by(7) {
+                assert_eq!(spec.quote_at(t), x.price_at(t, udaa), "KobPair side {side} at {t}");
+            }
+        }
+        for armed in [1, 4_200] {
+            let x = IfdPairState {
+                side: SIDE_BID,
+                price: 9_000,
+                entry_stop: 5_000,
+                band_daa: 300,
+                armed,
+                amount_left: 1_000,
+                ..e.clone()
+            };
+            let s = AnyState::KobIfdPair(x.clone());
+            let spec = PairSpec::of(&s, udaa, i64::MAX / 4, &big).unwrap();
+            for t in (3_900..6_000).step_by(7) {
+                assert_eq!(spec.quote_at(t), x.price_at(false, t, udaa), "KobIfdPair armed {armed} at {t}");
+            }
+        }
+    }
 
     /// The 24 h pair volume reads at most `MAX_FILL_ROWS` rows, the newest, says so, and drops the
     /// transaction at the cut.

@@ -218,6 +218,7 @@ pub fn refuse_pre_v3(conn: &Connection, path: &Path) -> DbResult<()> {
 /// of the new store repairs them. A store of an older schema is refused before this runs
 /// ([`refuse_old_layout`]). The layout of the tables is what `schema.sql` says.
 fn migrate(conn: &Connection) -> DbResult<()> {
+    ensure_live_columns(conn)?;
     if backfill_counters(conn)? {
         tracing::info!("counted the orders, statuses, fills and rejects once for the health counters (kept by triggers from now on)");
     }
@@ -272,6 +273,10 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     // One transaction: outside one, every row's update is a commit and a disk sync (R5F-2).
     let daa = super::book::cursor_daa(conn)?.min(i64::MAX as u64) as i64;
     let tx = conn.unchecked_transaction()?;
+    let recreated = refresh_schema_objects(&tx)?;
+    if !recreated.is_empty() {
+        tracing::info!(objects = ?recreated, "recreated the triggers and indexes an earlier build stored with another body");
+    }
     let dust = book_dust_sompi(&tx)?;
     if ensure_book_rules(&tx, dust)? {
         tracing::info!("the live books are decided again: the rules behind them changed with this build");
@@ -410,7 +415,12 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
                 conn.prepare_cached(&format!("DELETE FROM {table} WHERE order_id = ?1"))?.execute([id])?;
                 continue;
             };
-            let extra = if table == "book_live" { ", auction = ?8, key = COALESCE(?9, key)" } else { "" };
+            // What the reads take of the row without decoding its state (R5C2-6).
+            let extra = if table == "book_live" {
+                ", auction = ?8, key = COALESCE(?9, key), levels = ?10"
+            } else {
+                ", ask = ?8, entry = ?9, scale = ?10, amount = ?11, q_kind = ?12, quote = ?13, q_end = ?14, q_slope = ?15, q_step = ?16, q_origin = ?17"
+            };
             let sql = format!(
                 "UPDATE {table} SET ok = ?3, open_from = ?4, closed_from = ?5, deadline = ?6{extra}, open = \
                  CASE WHEN ?3 = 0 THEN 3 WHEN ?6 IS NOT NULL AND ?6 <= ?2 THEN 4 WHEN ?4 > ?1 THEN 0 WHEN ?5 <= ?1 THEN 2 ELSE 1 END \
@@ -418,9 +428,39 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
             );
             let mut st = conn.prepare_cached(&sql)?;
             if table == "book_live" {
-                st.execute(rusqlite::params![daa, unix, w.ok as i64, w.open_from, w.closed_from, w.deadline, id, w.class(), w.key])?;
+                st.execute(rusqlite::params![
+                    daa,
+                    unix,
+                    w.ok as i64,
+                    w.open_from,
+                    w.closed_from,
+                    w.deadline,
+                    id,
+                    w.class(),
+                    w.key,
+                    w.levels
+                ])?;
             } else {
-                st.execute(rusqlite::params![daa, unix, w.ok as i64, w.open_from, w.closed_from, w.deadline, id])?;
+                let p = w.pair;
+                st.execute(rusqlite::params![
+                    daa,
+                    unix,
+                    w.ok as i64,
+                    w.open_from,
+                    w.closed_from,
+                    w.deadline,
+                    id,
+                    p.map(|p| p.ask),
+                    p.map(|p| p.entry),
+                    p.map(|p| p.scale),
+                    p.map(|p| p.amount),
+                    p.map(|p| p.kind),
+                    p.map(|p| p.quote),
+                    p.map(|p| p.end),
+                    p.map(|p| p.slope),
+                    p.map(|p| p.step),
+                    p.map(|p| p.origin)
+                ])?;
             }
             set += 1;
         }
@@ -447,8 +487,58 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
 /// an older rule set decided recomputes them all at its next open or commit ([`ensure_book_rules`],
 /// R5C2-4).
 ///
-/// 2: what one fill can take (R5A-1, R5A-2) and the dust class (R5C2-1).
-pub const BOOK_RULES_VERSION: u32 = 2;
+/// 2: what one fill can take (R5A-1, R5A-2) and the dust class (R5C2-1). 3: the columns the reads take
+/// instead of decoding states (`book_live.levels`, the `pair_live` spec, R5C2-6).
+pub const BOOK_RULES_VERSION: u32 = 3;
+
+/// The columns of `book_live` and `pair_live` that a store an earlier build of schema 14 created lacks
+/// (`CREATE TABLE IF NOT EXISTS` keeps an existing table as it is). They are derived: added empty, they
+/// are set by the reset [`BOOK_RULES_VERSION`] triggers.
+fn ensure_live_columns(conn: &Connection) -> DbResult<()> {
+    let want: [(&str, &[&str]); 2] = [
+        ("book_live", &["levels"]),
+        ("pair_live", &["ask", "entry", "scale", "amount", "q_kind", "quote", "q_end", "q_slope", "q_step", "q_origin"]),
+    ];
+    for (table, cols) in want {
+        let have: Vec<String> = conn
+            .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for c in cols {
+            if !have.iter().any(|h| h == c) {
+                conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {c} INTEGER"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Drops and recreates every trigger and index of this build's schema whose stored SQL differs from
+/// this build's (`CREATE ... IF NOT EXISTS` keeps an older body as it is): an older trigger body would
+/// go on firing, an older index would serve another column list. The build's SQL is that of the
+/// schema applied to an empty store in memory, so the texts compare as SQLite stores them. Objects only
+/// an older build had are left (none of them is in a path this build reads). Returns their names.
+pub fn refresh_schema_objects(conn: &Connection) -> DbResult<Vec<String>> {
+    let mem = Connection::open_in_memory()?;
+    super::packed::register(&mem)?;
+    mem.execute_batch(SCHEMA_SQL)?;
+    mem.execute_batch(crate::logo_reports::SCHEMA)?;
+    mem.execute_batch(crate::logo_votes::SCHEMA)?;
+    let want: Vec<(String, String, String)> = mem
+        .prepare("SELECT type, name, sql FROM sqlite_master WHERE type IN ('trigger', 'index') AND sql IS NOT NULL ORDER BY type DESC, name")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut done = vec![];
+    for (kind, name, sql) in want {
+        let stored: Option<String> =
+            conn.query_row("SELECT sql FROM sqlite_master WHERE type = ?1 AND name = ?2", [&kind, &name], |r| r.get(0)).optional()?;
+        if stored.is_some_and(|s| s != sql) {
+            conn.execute_batch(&format!("DROP {kind} {name}; {sql};"))?;
+            done.push(name);
+        }
+    }
+    Ok(done)
+}
 
 /// The listing minimum the book class was decided with (`meta.book_dust_sompi`), else the default.
 pub fn book_dust_sompi(conn: &Connection) -> DbResult<i64> {

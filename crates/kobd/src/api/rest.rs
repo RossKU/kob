@@ -38,6 +38,48 @@ where
     T: Serialize + Send + 'static,
     F: FnOnce(&rusqlite::Connection) -> crate::indexer::db::DbResult<T> + Send + 'static,
 {
+    let body = cached_body(app, key, read).await?;
+    Ok(([(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json"))], body).into_response())
+}
+
+/// The depths a book route computes: a request's `depth` (or `levels`) is computed at the first of
+/// these at or above it (at most `max`) and its answer cut to what it asked, so one client can cause
+/// a handful of distinct computations per key and second, not one per number (R5C2-6).
+const DEPTH_STEPS: [usize; 4] = [20, 50, 100, 200];
+
+fn depth_step(n: usize, max: usize) -> usize {
+    DEPTH_STEPS.into_iter().find(|s| *s >= n).unwrap_or(max).min(max).max(n)
+}
+
+/// [`cached`] computed at `step` and cut to the first `n` of each array `fields` of the answer. The
+/// reads are exact by price, so the first `n` of the levels at `step` are the levels at `n`.
+async fn cached_cut<T, F>(app: &Arc<App>, key: String, n: usize, step: usize, fields: &'static [&'static str], read: F) -> ApiResult
+where
+    T: Serialize + Send + 'static,
+    F: FnOnce(&rusqlite::Connection) -> crate::indexer::db::DbResult<T> + Send + 'static,
+{
+    let mut body = cached_body(app, key, read).await?;
+    if n < step {
+        let mut v: Value = serde_json::from_slice(&body)
+            .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "internal error"))?;
+        for f in fields {
+            if let Some(a) = v.get_mut(*f).and_then(Value::as_array_mut) {
+                a.truncate(n);
+            }
+        }
+        body = serde_json::to_vec(&v)
+            .map(axum::body::Bytes::from)
+            .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "internal error"))?;
+    }
+    Ok(([(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json"))], body).into_response())
+}
+
+/// The JSON body of [`cached`].
+async fn cached_body<T, F>(app: &Arc<App>, key: String, read: F) -> Result<axum::body::Bytes, ApiError>
+where
+    T: Serialize + Send + 'static,
+    F: FnOnce(&rusqlite::Connection) -> crate::indexer::db::DbResult<T> + Send + 'static,
+{
     let generation = app.state.generation.get();
     let permit = if app.cache.contains(generation, &key) { None } else { crate::indexer::db::client_permit(false).await? };
     let pool = app.state.pool.clone();
@@ -63,7 +105,7 @@ where
             })
         })
         .await?;
-    Ok(([(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json"))], body).into_response())
+    Ok(body)
 }
 
 fn parse_hash(what: &str, s: &str) -> Result<Hash32, ApiError> {
@@ -323,8 +365,9 @@ pub async fn book(State(app): State<Arc<App>>, Path(token): Path<String>, Query(
     let depth = limit(&q, "depth", 20, app.state.cfg.max_page_size)?;
     let aggregate = flag(&q, "aggregate")?.unwrap_or(true);
     let ctx = app.ctx();
-    let key = format!("book {token} {depth} {aggregate} {:?} {:?}", ctx.node_daa, ctx.now_unix);
-    cached(&app, key, move |c| reads::book(c, &ctx, &token, depth, aggregate)).await
+    let step = depth_step(depth, app.state.cfg.max_page_size);
+    let key = format!("book {token} {step} {aggregate} {:?} {:?}", ctx.node_daa, ctx.now_unix);
+    cached_cut(&app, key, depth, step, &["asks", "bids"], move |c| reads::book(c, &ctx, &token, step, aggregate)).await
 }
 
 /// `GET /v1/pairs?token=`: the pairs with listed live pair orders, a JSON array.
@@ -347,8 +390,10 @@ pub async fn pair_book(State(app): State<Arc<App>>, Path((base, quote)): Path<(S
     let (base, quote) = pair_path(&base, &quote)?;
     let depth = limit(&q, "depth", 20, app.state.cfg.max_page_size)?;
     let ctx = app.ctx();
-    let key = format!("pair-book {base} {quote} {depth} {:?} {:?}", ctx.node_daa, ctx.now_unix);
-    cached(&app, key, move |c| crate::indexer::pairs::pair_book(c, &ctx, &base, &quote, depth)).await
+    let step = depth_step(depth, app.state.cfg.max_page_size);
+    let key = format!("pair-book {base} {quote} {step} {:?} {:?}", ctx.node_daa, ctx.now_unix);
+    cached_cut(&app, key, depth, step, &["asks", "bids"], move |c| crate::indexer::pairs::pair_book(c, &ctx, &base, &quote, step))
+        .await
 }
 
 fn pair_path(base: &str, quote: &str) -> Result<(Hash32, Hash32), ApiError> {
@@ -655,10 +700,11 @@ pub async fn depth(State(app): State<Arc<App>>, Path(token): Path<String>, Query
     let n = limit(&q, "levels", 50, app.state.cfg.max_page_size)?;
     let tokens = app.state.tokens.clone();
     let ctx = app.ctx();
-    let key = format!("depth {token} {n} {:?} {:?}", ctx.node_daa, ctx.now_unix);
-    cached(&app, key, move |c| {
+    let step = depth_step(n, app.state.cfg.max_page_size);
+    let key = format!("depth {token} {step} {:?} {:?}", ctx.node_daa, ctx.now_unix);
+    cached_cut(&app, key, n, step, &["asks", "bids"], move |c| {
         let decimals = reads::token_decimals(c, &tokens, &token)?;
-        market::depth(c, &ctx, &token, decimals, n)
+        market::depth(c, &ctx, &token, decimals, step)
     })
     .await
 }
