@@ -83,7 +83,8 @@ are the same in every contract of both families, so `lib/touch.mjs` generates on
 by its header: `<prefix>-push08` (the evidence sigscript starts with the 8-byte push of n), `-npos` (n > 0), `-tpl` (template
 hash only; the P2SH check kept), `-p2sh` (P2SH only; the template hash kept), `-token`, `-scale` (the evidence quotes per the
 same scale), `-mintouch` (n >= minTouch base units), `-slope`, `-cltv` (tx.daa >= exposed + minRestDaa), the three exposure terms `-interval`, `-active`,
-`-tokdaa`, and for ask evidence `-tkcov` / `-owner` (the custody input carries the token and is owned by the evidence ask)
+`-tokdaa`, `-ivpos` (the evidence interval is not negative, audit 2026-10-29 F1: scenarios 04n2 / 04n3, interval -R / -10^12 on an
+evidence UTXO one DAA old; 04n1 is also refused by another input of its transaction), and for ask evidence `-tkcov` / `-owner` (the custody input carries the token and is owned by the evidence ask)
 and `-tktpl` / `-tkp2sh` (the custody is a holder UTXO of the token's program: template hash only / P2SH only, the other
 kept; their scenarios 02c / 02d are also refused by the evidence ask's stray guard and the token program, so they are
 `inputOnly`). The KCC-20 batteries run on the 8/8 program (`v2_touch_*`) and on the reference 3/3 program

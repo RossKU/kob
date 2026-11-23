@@ -372,6 +372,7 @@ export const mutations = withPublicMint([
       slope: { [T_SET]: ['NTA05'] },
       cltv: { [T_SET]: ['NTA01', 'NTA02', 'NTA03', 'NTA04'] },
       interval: { [T_SET]: ['NTA04'] },
+      ivpos: { [T_SET]: ['NTA04n2', 'NTA04n3'] },
       active: { [T_SET]: ['NTA03'] },
       tokdaa: { [T_SET]: ['NTA02'] },
       tkcov: { [T_SET]: ['NTA02b'] },
@@ -408,6 +409,7 @@ export const mutations = withPublicMint([
       slope: { [T_ARM]: ['NTU05'], [T_TRL]: ['NTT05'] },
       cltv: { [T_ARM]: ['NTU01', 'NTU02', 'NTU03', 'NTU04'], [T_TRL]: ['NTT01', 'NTT03', 'NTT04'] },
       interval: { [T_ARM]: ['NTU04'], [T_TRL]: ['NTT04'] },
+      ivpos: { [T_ARM]: ['NTU04n2', 'NTU04n3'], [T_TRL]: ['NTT04n2', 'NTT04n3'] },
       active: { [T_ARM]: ['NTU03'], [T_TRL]: ['NTT03'] },
       tokdaa: { [T_ARM]: ['NTU02'] },
       tkcov: { [T_ARM]: ['NTU02b'] },
@@ -490,6 +492,7 @@ export const mutations = withPublicMint([
       slope: { [T_IF]: ['NTI05'], [T_IA]: ['NTJ05'] },
       cltv: { [T_IF]: ['NTI01', 'NTI03', 'NTI04'], [T_IA]: ['NTJ01', 'NTJ03', 'NTJ04'] },
       interval: { [T_IF]: ['NTI04'], [T_IA]: ['NTJ04'] },
+      ivpos: { [T_IF]: ['NTI04n2', 'NTI04n3'], [T_IA]: ['NTJ04n2', 'NTJ04n3'] },
       active: { [T_IF]: ['NTI03'], [T_IA]: ['NTJ03'] },
       // In the entry's fill only the evidence bid moves (the token program refuses the mix).
       bidext: { run: { [T_AUD]: ['NAUD-EXT-IB1', 'NAUD-EXT-IB2'] }, inputOnly: ['NAUD-EXT-IB2'] },
