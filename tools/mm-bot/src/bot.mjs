@@ -17,6 +17,8 @@ import { addFee, feesToday, loadState, Logger, paths, saveState } from './store.
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const kasOf = (sompi) => sompi / 1e8;
+// kob recover's note for an order whose script never changes and has no unspent output (a bid).
+const SPENT = /\bspent: no unspent output at the order's script\b/;
 const ENDED = new Set(['filled', 'cancelled', 'refunded', 'killed', 'closed']);
 const short = (id) => `${id.slice(0, 8)}..${id.slice(-4)}`;
 const ERROR_ALERT_AFTER = 3; // consecutive failed cycles before an error alert
@@ -339,7 +341,7 @@ export class Bot {
         if (!sent.includes(id)) continue;
         const t = this.tplOf(this.state.orders[id]);
         if (e.status === 'live') out.set(id, { status: 'live', txid: String(e.outpoint ?? '').split(':')[0], amountLeft: e.amount_left ?? null, value: Number(e.value ?? 0), prev });
-        else if (e.status === 'not_found') out.set(id, { status: 'gone', verified: t.verified && t.hash === e.template_hash });
+        else if (e.status === 'not_found') out.set(id, { status: 'gone', verified: t.verified && t.hash === e.template_hash, spent: SPENT.test(e.note ?? '') });
         else if (e.status === 'other_maker') out.set(id, { status: 'foreign' });
         else out.set(id, { status: 'unknown', why: `${e.status}: ${e.note ?? ''}` });
       }
@@ -365,7 +367,7 @@ export class Bot {
     const run = async (list, pick) => {
       const sent = this.writeRecords(list, pick);
       if (!sent) return;
-      const hints = Object.fromEntries(sent.filter((id) => isAsk(s0(id)) && s0(id).amountLeft > 0).map((id) => [id, s0(id).amountLeft]));
+      const hints = Object.fromEntries(sent.filter((id) => isAsk(s0(id))).map((id) => [id, this.hintsOf(id)]));
       const r = await this.kob.recover(this.p.check, { maker: this.maker, hints, cancel: true });
       if (!r.ok) {
         for (const id of sent) if (!out.get(id).ok) out.set(id, { ok: false, live: null, error: r.error });
@@ -383,6 +385,17 @@ export class Bot {
     const again = withPrev.filter((id) => !out.get(id).ok && out.get(id).live === false);
     if (again.length) await run(again, (s) => s.own.prev);
     return out;
+  }
+
+  /**
+   * Every amount left the bot knows of an ask, for kob recover's --amount-left (R3T-3): its last
+   * record, the indexer's list and per-order view, and the placed amount less the fills the
+   * indexer reported. The node checks each; none is trusted.
+   */
+  hintsOf(id, listed = null) {
+    const s = this.state.orders[id];
+    const all = [s?.amountLeft, listed, s?.idxAmount, s?.amount != null && s?.filledSeen ? s.amount - s.filledSeen : null];
+    return [...new Set(all.filter((n) => Number.isSafeInteger(n) && n > 0))];
   }
 
   /**
@@ -420,9 +433,16 @@ export class Bot {
       if (!o) {
         if (s.pending?.kind === 'place' && !due(s.pending)) continue;
         check.push(id);
+        // An ask the list leaves out: the indexer's own view of it may still name its amount, which
+        // the node then checks (R3T-3).
+        if (isAsk(s)) {
+          const v = await this.idx.order(id).catch(() => null);
+          if (v?.amountLeft > 0) s.idxAmount = v.amountLeft;
+          hints[id] = this.hintsOf(id);
+        }
         continue;
       }
-      if (isAsk(s) && o.amountLeft > 0) hints[id] = o.amountLeft;
+      if (isAsk(s)) hints[id] = this.hintsOf(id, o.amountLeft);
       // The expiry is the bot's own record; the indexer's flag only fills a gap (T-8).
       if (s.expiresAt == null) s.expired = o.expired;
       const atOwn = s.own?.txid == null || o.txid === s.own.txid;
@@ -526,7 +546,11 @@ export class Bot {
     }
     if (r.status === 'gone' || r.status === 'foreign') {
       const cancelled = s.pending?.kind === 'cancel' || s.cancelSentAt != null;
-      const ended = r.status === 'gone' && r.verified && (!o || cancelled);
+      // Proof that it ended: no output at a script that never changes (a bid), the bot's own
+      // cancel, or a placement of unknown fate that neither the node nor the indexer shows. An ask
+      // the node does not find may sit at an amount the search did not reach (a fill of any
+      // amount), so that alone is no proof: it is kept as unresolved (R3T-3).
+      const ended = r.status === 'gone' && r.verified && (r.spent || cancelled || (s.fate && !o));
       if (ended) {
         const status = s.fate ? 'the placement never went out' : cancelled ? 'cancelled' : 'spent on the node (filled or ended)';
         this.log.info(`${tag} ended: ${status}`);
@@ -536,8 +560,9 @@ export class Bot {
         return;
       }
       if (!s.unconfirmed) {
-        const what = r.status === 'foreign' ? 'names another maker' : !r.verified ? 'is not found under a template not yet proven on the node' : 'is not found at any state the bot can follow, but the indexer lists it';
-        this.alert('error', 'node-unconfirmed', `Order ${tag} ${what}: it is kept (it counts toward the capital cap and its level is not quoted again) until the node shows it ended; check it by hand (kob recover, kob orders).`);
+        const what = r.status === 'foreign' ? 'names another maker' : !r.verified ? 'is not found under a template not yet proven on the node'
+          : `is not found at any state the bot can follow (a fill by an amount the search does not reach, or a full fill)${o ? ', though the indexer lists it' : ''}`;
+        this.alert('error', 'node-unconfirmed', `Order ${tag} ${what}: it is kept as unresolved (it counts toward the capital cap, its level is not quoted again, and pulls and STOP wait for it); each cycle the bot looks it up on the node with every amount it knows and cancels it once found. Check it by hand (kob recover --from ${this.p.check} --amount-left ${id}=<amount left>); once it has ended, stop the bot and remove it from state.json.`);
       }
       s.unconfirmed = true;
       return;
@@ -553,7 +578,8 @@ export class Bot {
   ordersNow() {
     return Object.entries(this.state.orders).map(([id, s]) => ({
       id, side: s.side, level: s.level, price: s.price, quotedFair: s.quotedFair, amountLeft: s.amountLeft ?? s.amount, value: s.value ?? 0,
-      pending: !!s.pending, pendingKind: s.pending?.kind ?? null, expiresAt: s.expiresAt ?? null, expired: !!s.expired,
+      // An unresolved order (R3T-3) holds its level and is never amended; a pull still cancels it.
+      pending: !!s.pending || !!s.unconfirmed, pendingKind: s.pending?.kind ?? (s.unconfirmed ? 'unresolved' : null), expiresAt: s.expiresAt ?? null, expired: !!s.expired,
     }));
   }
 
@@ -571,6 +597,8 @@ export class Bot {
       const mine = this.state.orders[f.covenant_id] ?? this.state.recent[f.covenant_id];
       if (!mine) continue;
       const amount = Number(f.amount ?? 0);
+      // What the indexer says was filled: a hint for kob recover, which the node checks (R3T-3).
+      if (this.state.orders[f.covenant_id] && amount > 0) mine.filledSeen = (mine.filledSeen ?? 0) + amount;
       const price = f.price == null ? null : Number(f.price);
       const tokens = amount / this.scale;
       const kas = price == null ? null : (amount * price) / this.scale / 1e8;

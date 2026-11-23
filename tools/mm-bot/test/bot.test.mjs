@@ -24,6 +24,7 @@ let venuesDown = false;
 let indexerDown = false;
 let usdcUsd = 1.0; // Kraken USDC/USD; the tests move it out of the peg band (null: Kraken does not quote it)
 let hiddenIds = new Set(); // orders a lying indexer leaves out of every answer (T-4)
+let listHidden = new Set(); // orders it leaves out of the maker's list only (its per-order view still answers)
 let showOnly = null; // a Set: the indexer lists only these ids (every new order is never listed, R2-T1 case A)
 let staleViews = new Map(); // id -> a view a lying indexer keeps serving (R2-T1 case C), listed even once the order ended
 let indexerAheadMs = 0; // the indexer judges expiry this far in the future (time passing while the bot is dead)
@@ -60,7 +61,7 @@ function stubFetch(chainFile) {
         price: String(o.price), amount_left: String(o.side === 1 ? o.amount : Math.floor((o.value - 1e8) * 1e6 / o.price)), current: { txid: o.txid, index: 0, value: String(o.value) }, status,
         expired: o.expiresAt != null && Date.now() + indexerAheadMs >= o.expiresAt });
       if (u.includes('/v1/orders?')) {
-        const items = Object.entries(c.orders).filter(([id]) => !hidden(id)).map(([id, o]) => view(id, o, 'open'));
+        const items = Object.entries(c.orders).filter(([id]) => !hidden(id) && !listHidden.has(id)).map(([id, o]) => view(id, o, 'open'));
         for (const [id, v] of staleViews) if (!c.orders[id]) items.push(v);
         return json({ items, next_cursor: null });
       }
@@ -535,6 +536,7 @@ const reset = () => {
   usdcUsd = 1.0;
   indexerAheadMs = 0;
   hiddenIds = new Set();
+  listHidden = new Set();
   showOnly = null;
   staleViews = new Map();
 };
@@ -641,6 +643,8 @@ test('placements refused by the CLI raise an alert and IDLE, and resume by thems
     await bot.cycle();
     assert.equal(`${bot.state.mode.mode}/${bot.state.mode.reason}`, 'IDLE/placement');
     assert.ok(alertsOf(dir).some((a) => a.reason === 'placement' && a.level === 'error'));
+    // The alert names the CLI's refusal, so a refusal the bot cannot fix (R3T-5) is not silent.
+    assert.ok(alertsOf(dir).some((a) => a.reason === 'placement' && /decimals come from the indexer alone/.test(a.message)));
     await bot.cycle();
     assert.equal(bot.state.mode.mode, 'IDLE', 'never stops by itself');
     delete bot.kob.env.FAKE_KOB_REFUSE_PLACE;
@@ -678,11 +682,12 @@ test('an uncancellable order someone else made under the bot\'s key does not fre
     await bot.cycle();
     const amended = calls().slice(before).filter((a) => a[0] === 'replace').map((a) => a[1]);
     for (const id of mine) assert.ok(amended.includes(id), `order ${id} amended`);
-    // An ask filled away is placed again: the fake's amount fills no cap.
+    // An ask the bot cancelled is placed again: the fake's amount fills no cap.
     const c2 = chain();
     const ask = mine.find((id) => c2.orders[id].side === 1);
     delete c2.orders[ask];
-    c2.ended[ask] = 'filled';
+    c2.ended[ask] = 'cancelled';
+    bot.state.orders[ask].cancelSentAt = Date.now();
     writeFileSync(file, JSON.stringify(c2));
     const placedBefore = places(calls).length;
     for (let i = 0; i < 2; i++) await bot.cycle();
@@ -719,6 +724,70 @@ test('a retired token\'s order whose cancel keeps failing is given up after thre
   assert.equal(bot.state.retired[OLD].done, true, 'the clean-up is not held by it');
   assert.equal(alertsOf(dir).filter((a) => a.reason === 'retired-cancel-failed').length, 1);
   reset();
+});
+
+// R3T-3: an ask the node cannot find is kept until there is proof it ended.
+test('a partly filled ask hidden by the indexer is kept, counted and not placed again; the indexer\'s per-order view finds it (R3T-3)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain, calls, dir } = setup();
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const id = Object.keys(c.orders).sort().find((k) => c.orders[k].side === 1);
+    // Someone fills 7 base units, an amount k x minFill does not reach; the indexer hides it.
+    c.orders[id].amount -= 7;
+    writeFileSync(file, JSON.stringify(c));
+    hiddenIds = new Set([id]);
+    const placed = places(calls).length;
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    assert.ok(bot.state.orders[id], 'not forgotten');
+    assert.equal(bot.state.orders[id].unconfirmed, true);
+    assert.equal(places(calls).length, placed, 'its level is not placed again');
+    assert.equal(alertsOf(dir).filter((a) => a.reason === 'node-unconfirmed').length, 1, 'one alert');
+    // Its record goes to kob recover with every hint the bot has; the indexer's per-order view
+    // names the amount, the node confirms it, and the order is cancelled through the node.
+    hiddenIds = new Set();
+    listHidden = new Set([id]);
+    await bot.cycle();
+    assert.equal(chain().orders[id], undefined, 'found and cancelled on chain');
+    assert.equal(bot.state.orders[id]?.unconfirmed, false);
+  } finally {
+    reset();
+  }
+});
+
+test('an ask the node cannot find is not forgotten on that alone; a bid not found is spent and ends (R3T-3)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain, calls } = setup();
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const c = chain();
+    const ask = Object.keys(c.orders).sort().find((k) => c.orders[k].side === 1);
+    const bid = Object.keys(c.orders).sort().find((k) => c.orders[k].side === 2);
+    // Both gone from the node (filled), and the indexer lists neither.
+    delete c.orders[ask];
+    delete c.orders[bid];
+    c.ended[ask] = 'filled';
+    c.ended[bid] = 'filled';
+    writeFileSync(file, JSON.stringify(c));
+    for (let i = 0; i < 2; i++) await bot.cycle();
+    assert.equal(bot.state.orders[bid], undefined, 'a bid\'s script never changes: not found is spent');
+    assert.ok(bot.state.orders[ask], 'an ask may sit at an amount the search did not reach: kept');
+    assert.equal(bot.state.orders[ask].unconfirmed, true);
+    // STOP pulls it too: a cancel through the node is tried, and STOP waits for it.
+    writeFileSync(bot.p.stop, 'stop\n');
+    assert.notEqual(await bot.cycle(), 'stopped');
+    const recent = readFileSync(process.env.FAKE_KOB_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).slice(-20);
+    // kob recover --cancel from its record finds nothing, then kob cancel <id> (checked on the node).
+    assert.ok(recent.some((a) => a[0] === 'recover' && a.includes('--cancel')));
+    assert.ok(recent.some((a) => a[0] === 'cancel' && a[1] === ask), 'its cancel is tried');
+    assert.ok(bot.state.orders[ask], 'and STOP waits for it');
+  } finally {
+    rmSync(bot.p.stop, { force: true });
+    reset();
+  }
 });
 
 // T-7: a placement or amend that would meet the bot's own order on the other side is skipped.
