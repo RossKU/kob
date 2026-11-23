@@ -117,6 +117,28 @@ describe('a Collected order after a partial fill, from node data only (R3A-1)', 
     expect(d.net.tokens.find((t) => t.ref.covenantId === s.tCovId)!.toMaker).toBe(60n);
   });
 
+  for (const name of ['pair.create.bid', 'pair.create.condBid'] as const) {
+    it(`${name} (pair buy) at 1.5 B per A: 100 A wanted, 40 bought; the escrow pays floor(40 x 1.5) = 60 B, bought + 40; escrow and bought both return`, async () => {
+      const p0 = collectedRecord(name, {});
+      const aS = BigInt(F(p0.st).tScale);
+      const price = ((3n * aS) / 2n).toString();
+      const leg = name === 'pair.create.bid' ? { price, priceEnd: price, slope: '0', maxFill: '0', interval: '0' } : { tpPrice: price, stopPrice: '0' };
+      const { rec, st } = collectedRecord(name, { bought: '0', amountLeft: '100', custody: '150', minFill: '1', ...leg });
+      const cont = { ...st, state: { ...st.state, amountLeft: '60', custody: '90', bought: '40' } } as OrderState;
+      const s = F(st);
+      const chain = chainWith(rec, cont, { custody: { tpl: s.sTplHash, token: s.sCovId, ext: s.sExt, amount: 90n } });
+      const r = await resolveRecord(kob, chain, rec, testAddress);
+      expect(r.status).toBe('live');
+      expect(F(r.order!.state)).toMatchObject({ amountLeft: '60', custody: '90', bought: '40' });
+      expect(r.custody?.state.amount).toBe('90');
+      expect(r.boughtCustody?.state.amount).toBe('40');
+      const plan = planCancel(env(), snapshotFromRecord(r));
+      const d = expectCancels(plan);
+      expect(d.net.tokens.find((t) => t.ref.covenantId === s.sCovId)!.toMaker).toBe(90n);
+      expect(d.net.tokens.find((t) => t.ref.covenantId === s.tCovId)!.toMaker).toBe(40n);
+    });
+  }
+
   it('negative: a hint for a state outside the candidate set is not accepted (bought beyond the rounding the walk tries)', async () => {
     const p0 = collectedRecord('pair.create.ask', {});
     const price = (3n * BigInt(F(p0.st).sScale)) / 2n;

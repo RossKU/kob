@@ -797,14 +797,35 @@ function candidates(
   //   of kob recover `pair_sell_boughts`: ceil(sold x p / scale(A)) + 0..8 at each price a leg fills
   //   at, as variants of each amount.
   // - A KobBid has no amount: bought walks in steps of its minimum fill, never exhaustive.
+  // A pair buy (KobPair, KobCondPair bid, any mode) also pays its B escrow: custody -
+  // floor(n x p / scale(A)) at each leg price, + 0..8 for the rounding of several fills (kob
+  // recover `buy_fill_states`), and in mode 1 bought + n.
   // A claim restarts `bought` at 0. It is built from the indexer's view, which refreshes the record,
   // so a claim the record has not seen is not followed.
   const mode1 = fields.includes('bought') && String(s.mode ?? '0') === '1';
   const boughtRec = mode1 ? big(s.bought) : 0n;
   const amountRec = hasAmount ? big(s.amountLeft) : 0n;
   const pairSell = mode1 && !!pf && pf.side === 'sell' && (base.kind === 'KobPair' || base.kind === 'KobCondPair');
+  const pairBuy = !!pf && pf.side === 'buy' && (base.kind === 'KobPair' || base.kind === 'KobCondPair') && fields.includes('custody') && hasAmount;
   const variants: ((sold: bigint) => Record<string, string>)[] = [];
-  if (pairSell) {
+  if (pairBuy) {
+    const aS = big(s.tScale);
+    const cust = big(s.custody);
+    const stop = big(s.stopPrice ?? '0');
+    const prices = (base.kind === 'KobPair' ? [big(s.price), big(s.priceEnd)] : [big(s.tpPrice), stop, stop > 0n ? stop + (stop * big(s.slipBps)) / 10_000n : 0n]).filter((p) => p > 0n);
+    for (let j = 0n; j <= PAIR_SELL_ROUNDING; j++) {
+      for (const p of [...new Set(prices)]) {
+        variants.push((sold): Record<string, string> => {
+          if (sold <= 0n || aS <= 0n) return {};
+          const left = cust - quoteOf(sold, p, aS, 'down') + j;
+          // Not a reachable escrow: the template refuses it below, so it is the base and dropped.
+          if (left < 0n || left > cust) return {};
+          return { custody: left.toString(), ...(mode1 ? { bought: (boughtRec + sold).toString() } : {}) };
+        });
+      }
+    }
+    if (variants.length) dims.push({ values: variants.map(() => ({})), complete: false });
+  } else if (pairSell) {
     const sA = big(s.sScale);
     const stop = big(s.stopPrice ?? '0');
     const prices = (base.kind === 'KobPair' ? [big(s.price), big(s.priceEnd)] : [big(s.tpPrice), stop, stop > 0n ? stop - (stop * big(s.slipBps)) / 10_000n : 0n]).filter((p) => p > 0n);
@@ -832,10 +853,15 @@ function candidates(
       const st = { ...s };
       dims.forEach((d, i) => Object.assign(st, d.values[idx[i]]));
       if (jointCustody && st.amountLeft !== undefined) st.custody = st.amountLeft;
-      if (mode1 && hasAmount) {
+      if (variantDim >= 0 && hasAmount) {
         const sold = amountRec - big(st.amountLeft);
-        if (variantDim >= 0) Object.assign(st, variants[idx[variantDim]]!(sold));
-        else if (sold > 0n) st.bought = (boughtRec + sold).toString();
+        const v = variants[idx[variantDim]]!(sold);
+        // A pair buy that moved its amount must have paid from its escrow.
+        if (pairBuy && sold > 0n && v.custody === undefined) return true;
+        Object.assign(st, v);
+      } else if (mode1 && hasAmount) {
+        const sold = amountRec - big(st.amountLeft);
+        if (sold > 0n) st.bought = (boughtRec + sold).toString();
       }
       const cand = { kind: base.kind, state: st } as unknown as OrderState;
       let spk: string;
