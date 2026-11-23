@@ -312,12 +312,21 @@ impl Indexer {
         };
         // A follower task that ends on its own (a panic) leaves a book that no longer moves. Exit
         // non-zero then, so that the supervisor restarts the process (C-M1).
+        tokio::pin!(shutdown);
         let died = tokio::select! {
-            _ = shutdown => None,
+            _ = &mut shutdown => None,
             why = running.ended() => Some(why),
         };
         if died.is_none() {
             tracing::info!("shutting down");
+        }
+        // The same failure at the same cursor as the run before is no chance event: a restart
+        // would only repeat it, and the supervisor's start limit would then take the API down too.
+        // So the second time the API stays up, its health `stopped`, until the operator acts
+        // (R2C-L4).
+        if failed_as_before(&self.cfg.data_dir, self.health.snapshot().cursor_hash, died.as_deref()) {
+            tracing::error!(reason = %died.as_deref().unwrap_or_default(), "the follower failed the same way at the same cursor as the run before: the API stays up with state `stopped` until kobd is stopped (no restart loop); see the reason in /v1/health");
+            shutdown.await;
         }
         running.stop().await;
         self.flush().await;
@@ -498,6 +507,29 @@ fn watched(
         let _ = ended_tx.send(Some(msg));
     });
     (follow, ended_rx)
+}
+
+/// The file in the data directory that notes the cursor and the reason of a follower that ended
+/// on its own ([`Indexer::run`]).
+pub const FOLLOWER_DIED_FILE: &str = "follower-died.txt";
+
+/// Whether the follower ended on its own (`died`) with the same reason at the same cursor `at` as
+/// the run before, as noted in [`FOLLOWER_DIED_FILE`] of `dir`. This failure is noted for the
+/// next run, and a clean stop (`None`) clears the note.
+fn failed_as_before(dir: &std::path::Path, at: Option<crate::hex::Hash32>, died: Option<&str>) -> bool {
+    let marker = dir.join(FOLLOWER_DIED_FILE);
+    let Some(why) = died else {
+        let _ = std::fs::remove_file(&marker);
+        return false;
+    };
+    let this = format!("{}\n{why}", at.map(|h| h.to_hex()).unwrap_or_default());
+    if std::fs::read_to_string(&marker).ok().as_deref() == Some(this.as_str()) {
+        return true;
+    }
+    if let Err(e) = std::fs::write(&marker, &this) {
+        tracing::warn!(file = %marker.display(), error = %e, "could not note the follower's failure");
+    }
+    false
 }
 
 /// The follower and API tasks of a running indexer.
@@ -878,5 +910,24 @@ mod tests {
         });
         Running { stop, follow, ended, api: None }.stop().await;
         assert_eq!(health.snapshot().state, status::FollowerState::Following);
+    }
+
+    /// R2C-L4: the first failure exits for the supervisor to restart; the same failure at the same
+    /// cursor right after keeps the API up instead of a restart loop. Another reason or cursor, or
+    /// a clean stop in between, starts over.
+    #[test]
+    fn the_same_failure_at_the_same_cursor_twice_keeps_the_api_up() {
+        use crate::hex::Hash32;
+        let dir = std::env::temp_dir().join(format!("kobd-died-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (Some(Hash32([1; 32])), Some(Hash32([2; 32])));
+        assert!(!failed_as_before(&dir, a, Some("panicked: x")));
+        assert!(failed_as_before(&dir, a, Some("panicked: x")));
+        assert!(!failed_as_before(&dir, b, Some("panicked: x")), "another cursor");
+        assert!(!failed_as_before(&dir, b, Some("panicked: y")), "another reason");
+        assert!(!failed_as_before(&dir, b, None));
+        assert!(!dir.join(FOLLOWER_DIED_FILE).exists(), "a clean stop clears the note");
+        assert!(!failed_as_before(&dir, b, Some("panicked: y")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

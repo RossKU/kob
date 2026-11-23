@@ -3614,7 +3614,11 @@ let the hold above deal with a coin a forgotten transaction spends. `<data_dir>/
 **Exit for the supervisor.** `kobd --executor` ends with exit status 1 (`exiting so that a supervisor restarts the
 executor`) when its indexer stays stopped (`stopped`: its record log could not be written) or cannot write its database
 (`storage_error`) for 3 minutes, or at once when its read API stops serving; a read API that cannot take its port fails the
-start. Run it under a supervisor that restarts it (A.3; on Windows the archive's `kobd-supervise.cmd`, quickstart 6). A
+start. Run it under a supervisor that restarts it (A.3; on Windows the archive's `kobd-supervise.cmd`, quickstart 6).
+`kobd --indexer` ends with exit status 1 when its follower task ends on its own (a panic), so that it is restarted. When
+the follower ends again with the same reason at the same cursor right after a restart (`<data_dir>/follower-died.txt`
+notes the last one; a clean stop removes it), a restart would only repeat it: the process then stays up, its read API
+serving with `/v1/health` state `stopped` and the reason, until you stop it (audit R2C-L4). A
 store halted at a **gap** does not end the process: the follower moves a pruned gap on its own, and a gap it gave up on
 (moved 10 times in one run, or a store the node contradicts) needs you (7.4); a restart would only move the store again and
 reset that bound, every few minutes. The process stays up and says so (`kob_indexer_halted` 1, the status line, and the
