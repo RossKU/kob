@@ -88,7 +88,10 @@ the repository passes). It does not protect against a compromised workflow or
 repository at the tagged commit: for an executor that will hold funds, also compare the hashes with the release announcement
 and rebuild it from the tagged commit. The binaries are not code-signed.
 
-Unzip the archive (or copy the binary you built) into a folder of its own that your account can write to (for example `C:\kob` or `~/kob`; not `Program Files`):
+Unzip the archive (or copy the binary you built) into a folder of its own that only your account can write to (for example
+`%LOCALAPPDATA%\kob` or `~/kob`; not `Program Files`, and not a folder at the root of a drive such as `C:\kob`, which on
+Windows lets every signed-in account change its files: kobd logs an error at each start for its program, folder,
+configuration or data directory when another account can change them):
 the setup writes its configuration, the key file and the database next to the program. **Extract the archive first**: do not
 double-click the program inside the zip viewer (Windows then runs it from a temporary folder and the key and the database
 would be written there), and avoid a folder that a cloud service syncs (OneDrive, Dropbox, ...), which would upload the key file.

@@ -275,6 +275,52 @@ fn create_owner_only(path: &Path) -> std::io::Result<()> {
     std::fs::OpenOptions::new().write(true).create_new(true).open(path).map(|_| ())
 }
 
+/// A Windows system program (`icacls`, `whoami`) by its full path, `%SystemRoot%\System32\<name>.exe`.
+///
+/// Never by bare name: Windows looks a bare name up in the folder of kobd.exe first, where another
+/// account may have planted one that would then run as the operator (audit 2026-11-23 D2-1). A
+/// `SystemRoot` that is not an absolute path counts as unset (`C:\Windows`).
+#[cfg(not(unix))]
+pub fn system_program(name: &str) -> PathBuf {
+    let root =
+        std::env::var_os("SystemRoot").map(PathBuf::from).filter(|p| p.is_absolute()).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    root.join("System32").join(format!("{name}.exe"))
+}
+
+/// The paths another account must not be able to change (audit 2026-11-23 D-2), with who can:
+/// kobd's executable and its folder (a replaced or planted program runs as the operator), the
+/// configuration file (it names the key file and the node) and the data directory (the in-flight
+/// journal and the budget files). A path that does not exist, or whose rights cannot be read, is
+/// left out.
+///
+/// Windows reads each ACL (`icacls /save`, [`sddl_writable_by_others`]). Unix mirrors the key
+/// file's directory rule: writable by group or others, unless sticky.
+pub fn writable_by_others(paths: &[PathBuf]) -> Vec<(PathBuf, String)> {
+    let mut out = vec![];
+    for p in paths.iter().filter(|p| p.exists()) {
+        #[cfg(not(unix))]
+        let who = windows_acl_sddl(p).map(|s| sddl_writable_by_others(&s, current_sid().as_deref())).unwrap_or_default();
+        #[cfg(unix)]
+        let who: Vec<String> = {
+            use std::os::unix::fs::MetadataExt;
+            match std::fs::metadata(p) {
+                Ok(m) if m.mode() & 0o022 != 0 && !(m.is_dir() && m.mode() & 0o1000 != 0) => {
+                    vec![format!("group or others (mode {:o})", m.mode() & 0o777)]
+                }
+                _ => vec![],
+            }
+        };
+        if !who.is_empty() {
+            #[cfg(not(unix))]
+            let who = trustee_names(&who);
+            #[cfg(unix)]
+            let who = who.join(", ");
+            out.push((p.clone(), who));
+        }
+    }
+    out
+}
+
 /// Replaces the file's ACL by one full-control entry for the current account (no inherited
 /// entries), then requires that no other account or group may read it.
 ///
@@ -284,7 +330,7 @@ fn create_owner_only(path: &Path) -> std::io::Result<()> {
 fn restrict_to_owner(path: &Path) -> Result<(), KeyError> {
     let file_err = |m: String| KeyError::File(path.to_path_buf(), m);
     let me = current_account().ok_or_else(|| file_err("cannot name the current account (whoami, USERNAME)".into()))?;
-    let out = std::process::Command::new("icacls")
+    let out = std::process::Command::new(system_program("icacls"))
         .arg(path)
         .args(["/inheritance:r", "/grant:r"])
         .arg(format!("{me}:F"))
@@ -323,7 +369,7 @@ fn acl_fix(path: &Path) -> String {
 fn current_sid() -> Option<String> {
     static SID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     SID.get_or_init(|| {
-        std::process::Command::new("whoami")
+        std::process::Command::new(system_program("whoami"))
             .args(["/user", "/fo", "csv", "/nh"])
             .output()
             .ok()
@@ -452,6 +498,31 @@ fn grants_read(rights: &str) -> bool {
 ///
 /// The function is pure text. The platform-specific part only fetches the SDDL.
 pub fn sddl_readable_by_others(sddl: &str, me: Option<&str>) -> Vec<String> {
+    sddl_granted_to_others(sddl, me, grants_read)
+}
+
+/// Whether an SDDL access-rights field grants changing the object: writing or appending its data
+/// (in a folder: adding a file or a folder), deleting it or a child, or changing its ACL or owner.
+///
+/// The field is an alias (`FA`, `FW`, `GA`, `GW`, `SD` delete, `WD` write DAC, `WO` write owner) or
+/// a hexadecimal mask with one of those bits (0x2, 0x4, 0x40, 0x10000, 0x40000, 0x80000,
+/// GENERIC_WRITE 0x40000000, GENERIC_ALL 0x10000000). An unparsable mask counts as write.
+fn grants_write(rights: &str) -> bool {
+    const WRITE: u32 = 0x2 | 0x4 | 0x40 | 0x1_0000 | 0x4_0000 | 0x8_0000 | 0x4000_0000 | 0x1000_0000;
+    if let Some(hex) = rights.strip_prefix("0x").or_else(|| rights.strip_prefix("0X")) {
+        return u32::from_str_radix(hex, 16).map(|m| m & WRITE != 0).unwrap_or(true);
+    }
+    rights.as_bytes().chunks(2).any(|c| matches!(c, b"FA" | b"FW" | b"GA" | b"GW" | b"SD" | b"WD" | b"WO"))
+}
+
+/// The other accounts an SDDL DACL lets change the object ([`grants_write`]), by the rules of
+/// [`sddl_readable_by_others`]. An inherit-only entry of a folder counts: it is what the files
+/// kobd creates there get.
+pub fn sddl_writable_by_others(sddl: &str, me: Option<&str>) -> Vec<String> {
+    sddl_granted_to_others(sddl, me, grants_write)
+}
+
+fn sddl_granted_to_others(sddl: &str, me: Option<&str>, grants: fn(&str) -> bool) -> Vec<String> {
     let Some(dacl) = sddl.find("D:").map(|i| &sddl[i + 2..]) else { return vec![] };
     let dacl = dacl.split("S:").next().unwrap_or(dacl); // drop a SACL
     let mut out = vec![];
@@ -466,7 +537,7 @@ pub fn sddl_readable_by_others(sddl: &str, me: Option<&str>) -> Vec<String> {
         let own = OWN_TRUSTEES.iter().any(|t| t.eq_ignore_ascii_case(trustee))
             || builtin_administrator(trustee)
             || me.is_some_and(|m| m.eq_ignore_ascii_case(trustee));
-        if !own && grants_read(f[2]) {
+        if !own && grants(f[2]) {
             out.push(trustee.to_string());
         }
     }
@@ -543,7 +614,7 @@ fn windows_acl_sddl(path: &Path) -> Option<String> {
     let name = path.file_name()?;
     // `icacls` saves paths relative to the working directory of the call, so run it in the file's
     // directory.
-    let out = std::process::Command::new("icacls").current_dir(dir).arg(name).arg("/save").arg(&tmp).output().ok()?;
+    let out = std::process::Command::new(system_program("icacls")).current_dir(dir).arg(name).arg("/save").arg(&tmp).output().ok()?;
     let saved = if out.status.success() { std::fs::read(&tmp).ok() } else { None };
     let _ = std::fs::remove_file(&tmp);
     let bytes = saved?;
@@ -685,6 +756,62 @@ mod tests {
         assert_eq!(others("D:(A;;0xZZ;;;WD)"), vec!["WD".to_string()]);
     }
 
+    /// D-2: who else may change kobd's folder, program, configuration or data. A folder at the root of a Windows drive
+    /// inherits Authenticated Users' Modify (0x1301bf); read and execute alone (0x1200a9) is not a write.
+    #[test]
+    fn sddl_names_the_other_accounts_that_can_write() {
+        let me = "S-1-5-21-1-2-3-1001";
+        let w = |s: &str| sddl_writable_by_others(s, Some(me));
+        let own = format!("D:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;{me})");
+        assert!(w(&own).is_empty());
+        assert!(w(&format!("{own}(A;OICIID;0x1200a9;;;BU)")).is_empty(), "read and execute");
+        assert_eq!(w(&format!("{own}(A;ID;0x1301bf;;;AU)")), vec!["AU".to_string()], "Modify");
+        // an inherit-only entry of a folder: the files kobd creates there get it
+        assert_eq!(w(&format!("{own}(A;OICIIOID;SDGXGWGR;;;AU)")), vec!["AU".to_string()]);
+        // add a file (0x2), add a folder (0x4), delete a child (0x40), the ACL or the owner
+        for m in ["0x2", "0x4", "0x40", "0x40000", "0x80000", "FW", "WD", "WO"] {
+            assert_eq!(w(&format!("D:(A;;{m};;;WD)")), vec!["WD".to_string()], "{m}");
+        }
+        assert!(w("D:(D;;FA;;;WD)").is_empty(), "a deny");
+        assert_eq!(w("D:(A;;0xZZ;;;WD)"), vec!["WD".to_string()], "unparsable counts");
+        assert_eq!(trustee_names(&w(&format!("{own}(A;ID;0x1301bf;;;AU)"))), "Authenticated Users");
+    }
+
+    /// D2-1: icacls and whoami are run from System32 by their full path, never by a bare name found next to kobd.exe.
+    #[cfg(windows)]
+    #[test]
+    fn system_programs_are_named_by_their_full_path() {
+        for name in ["icacls", "whoami"] {
+            let p = system_program(name);
+            assert!(p.is_absolute() && p.ends_with(format!("System32\\{name}.exe")), "{}", p.display());
+            assert!(p.exists(), "{}", p.display());
+        }
+    }
+
+    /// D-2 on a real folder: the user's own temp folder passes; granting Everyone write is reported.
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_another_account_can_write_is_reported() {
+        let dir = std::env::temp_dir().join(format!("kob-acl-dir-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let me = current_account().expect("the account");
+        let own = std::process::Command::new(system_program("icacls"))
+            .arg(&dir)
+            .args(["/inheritance:r", "/grant:r"])
+            .arg(format!("{me}:(OI)(CI)F"))
+            .output()
+            .unwrap();
+        assert!(own.status.success());
+        assert!(writable_by_others(std::slice::from_ref(&dir)).is_empty());
+        let ok = std::process::Command::new(system_program("icacls")).arg(&dir).args(["/grant", "*S-1-1-0:(M)"]).output().unwrap();
+        assert!(ok.status.success());
+        let r = writable_by_others(std::slice::from_ref(&dir));
+        assert_eq!(r.len(), 1, "{r:?}");
+        assert!(r[0].1.contains("Everyone"), "{r:?}");
+        assert!(writable_by_others(&[dir.join("missing")]).is_empty(), "a path that does not exist");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The Windows check against the real ACL of a real file.
     ///
     /// After `icacls /inheritance:r /grant:r <me>:F` nobody else may read it. Granting Everyone
@@ -697,7 +824,7 @@ mod tests {
         let p = dir.join("key");
         std::fs::write(&p, format!("{}\n", "33".repeat(32))).unwrap();
         let user = std::env::var("USERNAME").unwrap_or_default();
-        let ok = std::process::Command::new("icacls")
+        let ok = std::process::Command::new(system_program("icacls"))
             .arg(&p)
             .args(["/inheritance:r", "/grant:r"])
             .arg(format!("{user}:F"))
@@ -712,7 +839,14 @@ mod tests {
             // folder grants them), and the file still loads.
             if let Some(admin) = current_sid().and_then(|s| s.rsplit_once('-').map(|(m, _)| format!("{m}-500"))) {
                 for who in [format!("*{admin}:R"), "*S-1-5-18:F".into(), "*S-1-5-32-544:F".into()] {
-                    let ok = std::process::Command::new("icacls").arg(&p).arg("/grant").arg(&who).output().unwrap().status.success();
+                    let ok = std::process::Command::new(system_program("icacls"))
+                        .arg(&p)
+                        .arg("/grant")
+                        .arg(&who)
+                        .output()
+                        .unwrap()
+                        .status
+                        .success();
                     assert!(ok, "icacls /grant {who}");
                 }
                 let sddl = windows_acl_sddl(&p).expect("the ACL is readable");
@@ -720,7 +854,13 @@ mod tests {
                 assert!(HotKey::from_file(&p).is_ok(), "{sddl}");
             }
             // Everyone may read: refused by default.
-            assert!(std::process::Command::new("icacls").arg(&p).args(["/grant", "*S-1-1-0:R"]).output().unwrap().status.success());
+            assert!(std::process::Command::new(system_program("icacls"))
+                .arg(&p)
+                .args(["/grant", "*S-1-1-0:R"])
+                .output()
+                .unwrap()
+                .status
+                .success());
             let sddl = windows_acl_sddl(&p).expect("the ACL is readable");
             assert_eq!(sddl_readable_by_others(&sddl, current_sid().as_deref()), vec!["WD".to_string()], "{sddl}");
             if std::env::var_os(STRICT_ACL_ENV).is_none() {

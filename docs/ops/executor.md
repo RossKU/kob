@@ -2038,6 +2038,11 @@ stall or drain any executor:
   (Everyone, Users, Authenticated Users, ...) or a named account or group; only the account running kobd (its SID from
   `whoami`) and the privileged principals (SYSTEM, Administrators, the built-in Administrator, TrustedInstaller, the owner placeholders: they can read any file anyway) may. An ACL that cannot be read (no `icacls`) or an account
   whose SID `whoami` cannot tell is refused too. `KOB_KEY_ACL_STRICT=0` turns each refusal into a warning (not recommended).
+  `icacls` and `whoami` run from `%SystemRoot%\System32` by their full path, never by bare name (Windows would look next to
+  kobd.exe first; audit 2026-11-23 D2-1). At each start kobd also logs an error for its program, its folder, the
+  configuration file and the data directory when another account can change them (write, add a file, delete, change the
+  ACL; Unix: group- or world-writable, a sticky folder excepted; audit D-2). It warns and does not refuse, since a folder at
+  the root of a Windows drive (`C:\kob`, the quickstart's earlier example) inherits that right for Authenticated Users.
   The refusal names the groups and accounts by name (Users, Everyone, Authenticated Users, ...), not by their SDDL aliases (BU, WD, AU), and prints the exact command, e.g. `icacls "C:kobkob-operator.key" /inheritance:r /grant:r "LAPTOPmomot:F"`. The fix: `icacls <file> /inheritance:r /grant:r <account>:F` (quickstart 5). `remove_var` does not scrub the environment
   block: prefer a key file or a systemd credential. `--pause-file` also stops resends of transactions a reorg moved back to
   pending. A submit that gets no answer (transport error, timeout) is not a rejection: the transaction is tracked as pending

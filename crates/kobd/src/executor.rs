@@ -653,6 +653,28 @@ pub(crate) fn refuse_files_in_data_dir(
     Ok(())
 }
 
+/// Logs an error for each of kobd's executable, its folder, the configuration file and the data
+/// directory that another account can change (audit 2026-11-23 D-2,
+/// [`crate::matcher::wallet::writable_by_others`]). It warns and does not refuse: the quickstart's
+/// folder at the root of a Windows drive inherits such a right, and a refusal would stop every
+/// executor set up that way.
+fn warn_writable_by_others(config: Option<&std::path::Path>, data_dir: &std::path::Path) {
+    let mut paths: Vec<PathBuf> = vec![];
+    if let Ok(exe) = std::env::current_exe() {
+        paths.extend(exe.parent().map(std::path::Path::to_path_buf));
+        paths.push(exe);
+    }
+    paths.extend(config.map(std::path::Path::to_path_buf));
+    paths.push(data_dir.to_path_buf());
+    for (path, who) in crate::matcher::wallet::writable_by_others(&paths) {
+        tracing::error!(
+            path = %path.display(),
+            writable_by = %who,
+            "another account can change this path: it could replace kobd, point the configuration at its own key or node, or edit the journal and budget files. Keep kobd in a folder of your own account (docs/ops/executor-quickstart.md: %LOCALAPPDATA%\\kob on Windows) and remove the other accounts' write rights"
+        );
+    }
+}
+
 /// Runs `kobd --executor`.
 pub async fn run(a: RunArgs) -> Result<()> {
     if a.no_match && a.no_keep {
@@ -664,6 +686,7 @@ pub async fn run(a: RunArgs) -> Result<()> {
     let cfg = build_config(&a.index)?;
     refuse_failover(&cfg)?;
     refuse_files_in_data_dir(a.key_file.as_deref(), a.pause_file.as_deref(), &cfg.data_dir)?;
+    warn_writable_by_others(a.index.store.config.as_deref(), &cfg.data_dir);
     // The operator's funds are read from the nodes' UTXO index: a node without it is unusable
     // (`rpc::judge`).
     crate::rpc::judge::require_utxo_index();
