@@ -10,6 +10,10 @@ import { MockNode } from '../testing/mock-node';
 import { MAKER_PK, MAKER_SK, OTHER_SK } from '../testing/token-fixtures';
 import { buildCancel, buildSend, kob } from '../testing/wallet-fixtures';
 import { addressOfSpk, p2pkSpk } from '../../mock/address.mjs';
+import { planOrder } from '../kob/plan';
+import { MAKER_SK as TICKET_SK } from '../testing/fixtures';
+import { buildIntent } from '../ui/ticket/form-state';
+import { CTX, form, ticketEnv } from '../ui/ticket/ticket-fixtures';
 import type { BuiltTx } from '../kob/types';
 import { emptyIssueForm, planIssue } from '../kob/issue';
 import { formatKas } from '../kob/units';
@@ -204,14 +208,19 @@ describe('private-key adapter (the app side of the signer frame)', () => {
       prompts++;
       return 'approve';
     });
-    await connect();
-    const built = buildSend();
-    await host.sign(built, []);
+    await connect(TICKET_SK);
+    // what the app re-times: an auction (a market buy), planned again by the ticket on the same
+    // environment with a later clock (OrderTicket.tsx `retimer`), so it spends the same inputs
+    const env = ticketEnv();
+    const market = buildIntent(form('market', 'buy', { amount: '2' }), CTX).intent!;
+    const plan = (daa: bigint) => planOrder({ ...env, clock: { ...env.clock, daa: env.clock.daa + daa, unixSeconds: env.clock.unixSeconds + daa / 10n } }, market).built!;
+    await host.sign(plan(0n), []);
     expect(prompts).toBe(1);
     expect(log.filter((l) => l === 'request true')).toHaveLength(1);
-    // the same transaction again as the re-timing of the one just signed: signed in the frame at
+    // the order planned 15 s later as the re-timing of the one just signed: signed in the frame at
     // once, the frame never shown, no prompt
-    expect(await host.sign(built, [], undefined, true)).toHaveLength(built.sign.length);
+    const retimed = plan(150n);
+    expect(await host.sign(retimed, [], undefined, true)).toHaveLength(retimed.sign.length);
     expect(prompts).toBe(1);
     expect(log.filter((l) => l === 'request true')).toHaveLength(1);
   });
