@@ -40,8 +40,13 @@
 //!   proof is asked for only when the batch has a transaction in it.
 //! - The spent outputs attached to inputs. No hash the indexer can check covers them. A spend
 //!   of a tracked output is read from the store's own output, looked up by outpoint
-//!   (`indexer::record::tracked_in`); the node's entry is used for untracked trigger evidence
-//!   only.
+//!   (`indexer::record::tracked_in`). An input signed by a lone signature must spend a P2PK entry
+//!   that its signature verifies against, so the payer of a transaction (`indexer::record::payer_of`)
+//!   and the amount of that input are the real ones ([`check_merged_block`]). The node's entry is
+//!   still read, unchecked, for the trigger evidence of untracked inputs (display only), for the
+//!   amounts of other inputs when the store cannot resolve them (the network fee in the
+//!   statistics), and for the covenant id of an authorising input, which only names the reason a
+//!   placement is refused (`kob_protocol::payload` recomputes the genesis id).
 //! - On testnet-10 the proof of work is cheap. A single GPU mines a block there in seconds.
 //!
 //! # Cost
@@ -314,6 +319,73 @@ pub(crate) mod skip {
     pub const LANES: u8 = 16;
     pub const MERKLE: u8 = 32;
     pub const SCRIPTS: u8 = 64;
+    pub const SIGNED: u8 = 128;
+}
+
+/// Whether a signature script is one push of a 64-byte signature and its hash type: the spend of
+/// a P2PK output (Schnorr or ECDSA), such as the funding input of an Executor or a wallet.
+pub fn lone_signature(sigscript: &[u8]) -> bool {
+    sigscript.len() == 66 && sigscript[0] == 65
+}
+
+/// Whether `spk` (version, then script, as the node reports it) is a P2PK script, Schnorr or
+/// ECDSA.
+pub fn is_p2pk(spk: &[u8]) -> bool {
+    matches!(spk, [0, 0, 0x20, key @ .., 0xac] if key.len() == 32) || matches!(spk, [0, 0, 0x21, key @ .., 0xab] if key.len() == 33)
+}
+
+/// Checks the spent outputs the node attached to the signed inputs of `tx` (the merged block's
+/// copy of `t`) against their signatures.
+///
+/// No hash covers those entries, and they decide who paid for a fill (`record::payer_of`), which
+/// decides what counts as a self-trade (C-M2). The signature hash of an input covers its own spent
+/// script and amount, so an input whose signature script is a lone signature
+/// ([`lone_signature`]) must spend a P2PK entry that the script engine accepts. A node that names
+/// another key or amount for it, or another kind of script, is refused.
+fn signed_inputs(tx: &kaspa_consensus_core::tx::Transaction, t: &Tx) -> Result<(), String> {
+    use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
+    use kaspa_consensus_core::tx::{PopulatedTransaction, ScriptPublicKey, UtxoEntry};
+    use kaspa_txscript::caches::Cache;
+    use kaspa_txscript::{EngineCtx, EngineFlags, TxScriptEngine};
+    let signed: Vec<usize> = (0..tx.inputs.len()).filter(|&j| lone_signature(&tx.inputs[j].signature_script)).collect();
+    if signed.is_empty() {
+        return Ok(());
+    }
+    let entry = |j: usize| t.inputs.get(j).and_then(|i| i.verbose_data.as_ref()).and_then(|v| v.utxo_entry.as_ref());
+    let entries: Vec<UtxoEntry> = (0..tx.inputs.len())
+        .map(|j| {
+            let e = entry(j).filter(|e| e.script_public_key.0.len() >= 2);
+            let spk = e.map(|e| &e.script_public_key.0);
+            UtxoEntry::new(
+                e.and_then(|e| e.amount).unwrap_or(0),
+                spk.map(|s| ScriptPublicKey::from_vec(u16::from_be_bytes([s[0], s[1]]), s[2..].to_vec())).unwrap_or_default(),
+                e.and_then(|e| e.block_daa_score).unwrap_or(0),
+                false,
+                e.and_then(|e| e.covenant_id).map(kh),
+            )
+        })
+        .collect();
+    let populated = PopulatedTransaction::new(tx, entries.clone());
+    let reused = SigHashReusedValuesUnsync::new();
+    let cache = Cache::new(0);
+    for j in signed {
+        let Some(e) = entry(j) else { return Err(format!("input {j} is signed, and the node gave no spent output for it")) };
+        if !is_p2pk(&e.script_public_key.0) || e.amount.is_none() {
+            return Err(format!("input {j} is a P2PK spend, and the node gave its spent output as another kind of script"));
+        }
+        let mut vm = TxScriptEngine::from_transaction_input(
+            &populated,
+            &tx.inputs[j],
+            j,
+            &entries[j],
+            EngineCtx::new(&cache).with_reused(&reused),
+            EngineFlags { sigop_script_units: kob_protocol::verify::SIGOP_SCRIPT_UNITS.into() },
+        );
+        if let Err(err) = vm.execute() {
+            return Err(format!("the signature of input {j} does not verify against the spent output the node gave ({err})"));
+        }
+    }
+    Ok(())
 }
 
 /// How often the floor's targets are handed to the store ([`ChainProof::floor_due`]).
@@ -711,6 +783,9 @@ impl ChainProof {
                 && k.inputs.iter().zip(&t.inputs).all(|(a, b)| a.signature_script == b.signature_script.0);
             if self.on(skip::SCRIPTS) && !same {
                 return refuse(format!("the signature scripts of transaction {id} differ from merged block {hash}"));
+            }
+            if self.on(skip::SIGNED) {
+                signed_inputs(k, t).map_err(|w| ProofError::Refused(format!("transaction {id}: {w}")))?;
             }
         }
         self.status.merged_blocks_total += 1;
@@ -1138,6 +1213,40 @@ pub(crate) mod tests {
             let block = Block::new(fx.merged.header.as_ref().clone(), txs);
             refused(fx.checker().check_merged_block(m, &block, &fx.merged_txs(&raw), Origin::PRIMARY), "Merkle root");
             fx.checker().skipping(skip::MERKLE).check_merged_block(m, &block, &fx.merged_txs(&raw), Origin::PRIMARY).unwrap();
+        }
+    }
+
+    /// C-M2: the spent output a node attaches to an input signed by a lone signature must be the
+    /// P2PK script and amount the signature verifies against. The real entries of the recorded
+    /// batches pass; another key, another amount, or a script of another kind is refused, and
+    /// passes once the check is left out.
+    #[test]
+    fn the_spent_outputs_of_signed_inputs_are_checked_against_their_signatures() {
+        for fx in both() {
+            let m = Hash32(fx.merged.header.hash.as_bytes());
+            let raw = fx.raw();
+            let signed = fx.merged_txs(&raw).iter().filter(|t| t.inputs.iter().any(|i| lone_signature(&i.signature_script.0))).count();
+            assert!(signed > 0, "{}: the recorded merged block has signed P2PK inputs", fx.network);
+            fx.checker().check_merged_block(m, &fx.merged, &fx.merged_txs(&raw), Origin::PRIMARY).unwrap();
+            let forgeries: [(&str, fn(&mut crate::rpc::types::SpentUtxo)); 3] = [
+                ("another key", |u| u.script_public_key.0[5] ^= 1),
+                ("another amount", |u| u.amount = u.amount.map(|a| a + 1)),
+                ("a script hash", |u| u.script_public_key.0 = [&[0u8, 0, 0xaa, 0x20][..], &[9; 32], &[0x87]].concat()),
+            ];
+            for (what, forge) in forgeries {
+                let mut raw = fx.raw();
+                let t = raw
+                    .chain_block_accepted_transactions
+                    .iter_mut()
+                    .flat_map(|b| &mut b.accepted_transactions)
+                    .find(|t| t.verbose_data.block_hash == Some(m) && t.inputs.iter().any(|i| lone_signature(&i.signature_script.0)))
+                    .unwrap();
+                let i = t.inputs.iter_mut().find(|i| lone_signature(&i.signature_script.0)).unwrap();
+                forge(i.verbose_data.as_mut().unwrap().utxo_entry.as_mut().unwrap());
+                let r = fx.checker().check_merged_block(m, &fx.merged, &fx.merged_txs(&raw), Origin::PRIMARY);
+                assert!(matches!(r, Err(ProofError::Refused(_))), "{} {what}: {r:?}", fx.network);
+                fx.checker().skipping(skip::SIGNED).check_merged_block(m, &fx.merged, &fx.merged_txs(&raw), Origin::PRIMARY).unwrap();
+            }
         }
     }
 

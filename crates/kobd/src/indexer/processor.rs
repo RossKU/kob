@@ -2527,17 +2527,18 @@ impl Processor {
             Some((v, own)) => (Some(v), own),
             None => (None, false),
         };
-        // The input values of the node when the record has them, else what the inputs held
-        // according to the outputs this store recorded, see `super::outputs`. The latter is known
-        // only when every input resolves.
+        // What the inputs held according to the outputs this store recorded (`super::outputs`),
+        // known only when every input resolves, else the input values of the node from the record.
+        // No hash covers the node's (C-M2): the chain proofs check only those of signed P2PK
+        // inputs.
         let resolved = resolved_in.and_then(|v| u64::try_from(v).ok());
         if let (Some(node), Some(ours)) = (rec.in_value, resolved) {
             if node != ours {
+                // A warning only: a node can lie here, and an assert would end the follower (C2-I2).
                 tracing::warn!(txid = %rec.txid.to_hex(), node, ours, "the inputs' values the node reported differ from the recorded outputs'");
-                debug_assert_eq!(node, ours, "input values of {}", rec.txid.to_hex());
             }
         }
-        let fee = income::miner_fee(rec.in_value.or(resolved), &rec.outputs);
+        let fee = income::miner_fee(resolved.or(rec.in_value), &rec.outputs);
         conn.prepare_cached(
             "INSERT INTO executor_txs (block_seq, daa, ts, txid, income, miner_fee, own_trade) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?
