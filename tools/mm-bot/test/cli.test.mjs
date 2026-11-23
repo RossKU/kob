@@ -112,6 +112,10 @@ test('config: the defaults plus a token pass; bad values are listed together', (
   // E-L5: one USDT/USD source may sit up to usdtAgreement from 1, so it too stays below half the spread.
   assert.ok(validate({ ...ok, reference: { ...ok.reference, usdtAgreement: 0.006 } }).some((p) => /usdtAgreement must be below half/.test(p)));
   assert.ok(bad.some((p) => /must not exceed 100/.test(p)));
+  // R4T-6: a wrong token USD rate inside the peg band moves fair by up to the band: at most half the spread.
+  assert.deepEqual(validate({ ...ok, token: { ...ok.token, pegBand: 0.005 } }), [], 'the default: half the 1 % spread');
+  assert.ok(validate({ ...ok, token: { ...ok.token, pegBand: 0.02 } }).some((p) => /pegBand must be at most half/.test(p)));
+  assert.deepEqual(validate({ ...ok, token: { ...ok.token, pegBand: 0.02 }, quotes: { ...ok.quotes, spreadPct: 4 } }), []);
   const p = join(dir, 'cfg.json');
   writeFileSync(p, JSON.stringify({ network: 'testnet-10', keyFile: 'bot.key', dataDir: 'run', token: { covenantId: TOKEN, decimals: 6 } }));
   const cfg = loadConfig(p);

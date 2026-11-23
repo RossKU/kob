@@ -162,7 +162,7 @@ One JSON file; omitted fields take the default; relative paths are relative to t
 | `token.label` | `null` | name in messages |
 | `token.usdSource` | `kraken:USDCUSD` | token USD rate: `kraken:<PAIR>` or `fixed` |
 | `token.usdFallback` | `null` | rate to use when the live one is stale (the peg band is then not checked); `null`: IDLE until it is live again |
-| `token.pegUsd`, `token.pegBand` | `1.0`, `0.005` | IDLE `peg` outside the band |
+| `token.pegUsd`, `token.pegBand` | `1.0`, `0.005` | IDLE `peg` outside the band; the band must be at most half the spread (`quotes.spreadPct / 200`), since a wrong token USD rate inside it moves the fair value by up to the band |
 | `retiredTokens` | `[]` | old instances: recovery only |
 | `reference.pollSec` | `30` | seconds per cycle |
 | `reference.windowMin` | `5` | closed candles per VWAP |
