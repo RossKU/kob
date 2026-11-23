@@ -40,9 +40,11 @@
 //!   proof is asked for only when the batch has a transaction in it.
 //! - The spent outputs attached to inputs. No hash the indexer can check covers them. A spend
 //!   of a tracked output is read from the store's own output, looked up by outpoint
-//!   (`indexer::record::tracked_in`). An input signed by a lone signature must spend a P2PK entry
-//!   that its signature verifies against, so the payer of a transaction (`indexer::record::payer_of`)
-//!   and the amount of that input are the real ones ([`check_merged_block`]). The node's entry is
+//!   (`indexer::record::tracked_in`). An input signed by a lone signature whose entry is P2PK must
+//!   verify against that entry, so the payer of a transaction (`indexer::record::payer_of`) and the
+//!   amount of that input are the real ones ([`check_merged_block`]). An entry of another kind is
+//!   taken as given and names no payer: an honest P2SH spend can have that signature script
+//!   (R2C-H1). The node's entry is
 //!   still read, unchecked, for the trigger evidence of untracked inputs (display only), for the
 //!   amounts of other inputs when the store cannot resolve them (the network fee in the
 //!   statistics), and for the covenant id of an authorising input, which only names the reason a
@@ -340,8 +342,15 @@ pub fn is_p2pk(spk: &[u8]) -> bool {
 /// No hash covers those entries, and they decide who paid for a fill (`record::payer_of`), which
 /// decides what counts as a self-trade (C-M2). The signature hash of an input covers its own spent
 /// script and amount, so an input whose signature script is a lone signature
-/// ([`lone_signature`]) must spend a P2PK entry that the script engine accepts. A node that names
-/// another key or amount for it, or another kind of script, is refused.
+/// ([`lone_signature`]) and whose entry the node gives as P2PK must verify against that entry in
+/// the script engine. A node that names another key or amount is refused.
+///
+/// An entry of another kind is not refused (R2C-H1). The spend of a P2SH output whose redeem
+/// script is 65 bytes long has exactly this signature script, and the chain accepts it; its
+/// redeem script may need chain context (a sequencing commitment, covenant outputs) this checker
+/// does not have, so a failure here would blame an honest node. Such an entry names no payer
+/// (`payer_of` keeps P2PK scripts only), so a node that gives one for a real P2PK spend can only
+/// hide the payer, which the submitter can do on chain with a non-P2PK funding input anyway.
 fn signed_inputs(tx: &kaspa_consensus_core::tx::Transaction, t: &Tx) -> Result<(), String> {
     use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
     use kaspa_consensus_core::tx::{PopulatedTransaction, ScriptPublicKey, UtxoEntry};
@@ -369,9 +378,10 @@ fn signed_inputs(tx: &kaspa_consensus_core::tx::Transaction, t: &Tx) -> Result<(
     let reused = SigHashReusedValuesUnsync::new();
     let cache = Cache::new(0);
     for j in signed {
-        let Some(e) = entry(j) else { return Err(format!("input {j} is signed, and the node gave no spent output for it")) };
-        if !is_p2pk(&e.script_public_key.0) || e.amount.is_none() {
-            return Err(format!("input {j} is a P2PK spend, and the node gave its spent output as another kind of script"));
+        // No entry, or not P2PK: no payer is read from it (see above).
+        let Some(e) = entry(j).filter(|e| is_p2pk(&e.script_public_key.0)) else { continue };
+        if e.amount.is_none() {
+            return Err(format!("input {j} spends a P2PK output, and the node gave no amount for it"));
         }
         let mut vm = TxScriptEngine::from_transaction_input(
             &populated,
@@ -1216,10 +1226,10 @@ pub(crate) mod tests {
         }
     }
 
-    /// C-M2: the spent output a node attaches to an input signed by a lone signature must be the
-    /// P2PK script and amount the signature verifies against. The real entries of the recorded
-    /// batches pass; another key, another amount, or a script of another kind is refused, and
-    /// passes once the check is left out.
+    /// C-M2: a P2PK spent output a node attaches to an input signed by a lone signature must be the
+    /// script and amount the signature verifies against. The real entries of the recorded batches
+    /// pass; another key or another amount is refused, and passes once the check is left out. A
+    /// script of another kind passes (R2C-H1) and names no payer.
     #[test]
     fn the_spent_outputs_of_signed_inputs_are_checked_against_their_signatures() {
         for fx in both() {
@@ -1235,6 +1245,7 @@ pub(crate) mod tests {
                 ("a script hash", |u| u.script_public_key.0 = [&[0u8, 0, 0xaa, 0x20][..], &[9; 32], &[0x87]].concat()),
             ];
             for (what, forge) in forgeries {
+                let hides = what == "a script hash";
                 let mut raw = fx.raw();
                 let t = raw
                     .chain_block_accepted_transactions
@@ -1244,10 +1255,54 @@ pub(crate) mod tests {
                     .unwrap();
                 let i = t.inputs.iter_mut().find(|i| lone_signature(&i.signature_script.0)).unwrap();
                 forge(i.verbose_data.as_mut().unwrap().utxo_entry.as_mut().unwrap());
+                let payer = crate::indexer::record::payer_of(t);
                 let r = fx.checker().check_merged_block(m, &fx.merged, &fx.merged_txs(&raw), Origin::PRIMARY);
+                if hides {
+                    assert!(r.is_ok(), "{} {what}: {r:?}", fx.network);
+                    assert_eq!(payer, None, "{}: no payer is read from it", fx.network);
+                    continue;
+                }
                 assert!(matches!(r, Err(ProofError::Refused(_))), "{} {what}: {r:?}", fx.network);
                 fx.checker().skipping(skip::SIGNED).check_merged_block(m, &fx.merged, &fx.merged_txs(&raw), Origin::PRIMARY).unwrap();
             }
+        }
+    }
+
+    /// R2C-H1: an honest spend of a P2SH output whose redeem script is 65 bytes long has a
+    /// signature script of one 65-byte push, the shape of a P2PK spend. The chain accepts it, so it
+    /// must pass, whatever its redeem script needs to run (here one that verifies on chain, and one
+    /// that reads chain context the checker does not have). A real P2PK input whose entry is swapped
+    /// for another key is still refused.
+    #[test]
+    fn a_p2sh_spend_whose_script_is_one_65_byte_push_is_not_refused() {
+        use kaspa_txscript::standard::pay_to_script_hash_script;
+        for fx in both() {
+            let m = Hash32(fx.merged.header.hash.as_bytes());
+            let raw = fx.raw();
+            let t = fx.merged_txs(&raw).into_iter().find(|t| t.inputs.iter().any(|i| lone_signature(&i.signature_script.0))).unwrap();
+            let id = t.verbose_data.transaction_id;
+            let k = fx.merged.transactions.iter().find(|x| x.id().as_bytes() == id.0).unwrap().clone();
+            let j = t.inputs.iter().position(|i| lone_signature(&i.signature_script.0)).unwrap();
+            // OP_DATA_62 <62 bytes> OP_DROP OP_TRUE; and <27 bytes> OP_DROP <chain block>
+            // OP_CHAINBLOCKSEQCOMMIT OP_DROP OP_TRUE, which needs chain context the checker lacks.
+            let drop_true = [&[0x3e][..], &[7; 62], &[0x75, 0x51]].concat();
+            let reads_chain = [&[0x1b][..], &[7; 27], &[0x75, 0x20], &m.0, &[0xd4, 0x75, 0x51]].concat();
+            for redeem in [drop_true, reads_chain] {
+                assert_eq!(redeem.len(), 65);
+                let sigscript = [&[0x41][..], &redeem].concat();
+                assert!(lone_signature(&sigscript));
+                let (mut k, mut t) = (k.clone(), t.clone());
+                k.inputs[j].signature_script = sigscript.clone();
+                t.inputs[j].signature_script.0 = sigscript;
+                let spk = pay_to_script_hash_script(&redeem);
+                let u = t.inputs[j].verbose_data.as_mut().unwrap().utxo_entry.as_mut().unwrap();
+                u.script_public_key.0 = [&spk.version().to_be_bytes()[..], spk.script()].concat();
+                signed_inputs(&k, &t).unwrap();
+            }
+            // The real P2PK input with another key is still refused.
+            let mut t = t.clone();
+            t.inputs[j].verbose_data.as_mut().unwrap().utxo_entry.as_mut().unwrap().script_public_key.0[5] ^= 1;
+            assert!(signed_inputs(&k, &t).is_err(), "{}", fx.network);
         }
     }
 
