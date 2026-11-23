@@ -31,6 +31,7 @@ import type { OrderSnapshot } from './cancel';
 import { fillArg } from './decode';
 import { outpointKey } from './node-verify';
 import { custodiesOf, describeOrder, extensionOf, tokenCovIdOf } from './order-facts';
+import { boughtOf } from './bought';
 import { pinnedTemplateHash, resolveRecord, type PlacementRecord } from './records';
 import type { Hex, OrderKind, OrderState, PayloadRecord, RecoveredOrder, TemplateInfo, TemplateName, TxJson } from './types';
 import type { KobWasm } from './wasm';
@@ -296,6 +297,9 @@ export async function followSpend(kob: KobWasm, spend: RevealedSpend, tx: TxJson
   // outputs.
   const r = await resolveIn(kob, tx, daa, network, cov, st0, true);
   if (!r || !r.order || r.order.transactionId !== tx.id || r.order.index !== out.index) return null;
+  // A Collected bid that has bought is not followed (R3A-3): a fill of it spends its bought-custody,
+  // which the app's take does not pass (kob/take.ts), so listing it would show a bid it cannot fill.
+  if (boughtOf(r.order.state)) return null;
   return at(r.order.state, r.custody ?? keep(known?.custody));
 }
 
