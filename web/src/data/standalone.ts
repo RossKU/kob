@@ -89,9 +89,9 @@ export const ENTER_CHECK_MS = 1_000;
 export const RETURN_CHECK_MS = 5_000;
 /**
  * An automatic mode ends no sooner than this after it started, so an indexer that goes up and down
- * switches the page at most once a minute each way (the up/down side of the lag rule's hysteresis).
+ * switches the page at most twice a minute each way (the up/down side of the lag rule's hysteresis).
  */
-export const MIN_AUTO_MS = 60_000;
+export const MIN_AUTO_MS = 30_000;
 /**
  * An indexer that answers but is more than this many seconds behind the chain is not used. An
  * automatic mode starts, as for an indexer that is down.

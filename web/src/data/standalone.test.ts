@@ -84,7 +84,7 @@ describe('the mode', () => {
     expect(h.subs).toHaveLength(0);
   });
 
-  it('an indexer that goes up and down every 10 s switches the page at most once a minute each way (R3B-I1)', async () => {
+  it('an indexer that goes up and down every 10 s switches the page at most twice a minute each way (R3B-I1)', async () => {
     const h = harness();
     let starts = 0;
     let was = false;
@@ -99,7 +99,7 @@ describe('the mode', () => {
       await vi.advanceTimersByTimeAsync(10_000);
     }
     expect(starts).toBeGreaterThan(0);
-    expect(starts).toBeLessThanOrEqual(60);
+    expect(starts).toBeLessThanOrEqual(120);
   });
 
   it('a flickering indexer does not end the mode: a bad look before the second one keeps it', async () => {
