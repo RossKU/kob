@@ -340,7 +340,7 @@ export interface OrderRowModel {
    * - 'custody-missing': there is no custody UTXO at its address.
    * - 'old-template': it was placed with an older contract version.
    */
-  cancelBlocked: 'no-extension' | 'custody-missing' | 'old-template' | null;
+  cancelBlocked: 'no-extension' | 'custody-missing' | 'bought-missing' | 'bought-unsearched' | 'old-template' | null;
   /**
    * The wallet's record of this order names an order template that this build neither pins nor
    * keeps in its cancel-only table, an older contract version. Nothing can be built for it here, so
@@ -574,14 +574,18 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
   const cancelOnly = isCancelOnly(e, ctx.kob);
   const bf = es ? boughtOf(es.state) : null;
   const bought = bf ? { token: bf.token, amount: bf.amount, ok: v?.bought_custody ? v.bought_custody.ok : null } : null;
-  const needsCustody = !!es && ((holdsTokens(es.state.kind) && (custodyAmountOf(es.state) ?? 0n) > 0n) || !!bf);
+  const needsCustody = !!es && holdsTokens(es.state.kind) && (custodyAmountOf(es.state) ?? 0n) > 0n;
+  // A Collected order's bought-custody is looked up on the node at the script its state implies.
+  // The cancel returns it, so it must have been found.
   const cancelBlocked: OrderRowModel['cancelBlocked'] = viaView
     ? null
     : oldTemplate
       ? 'old-template'
-      : r?.status === 'live' && needsCustody && (bf ? true : !r.custody)
+      : r?.status === 'live' && needsCustody && !r.custody
         ? r.custodyIssue === 'no-extension' ? 'no-extension' : 'custody-missing'
-        : null;
+        : r?.status === 'live' && bf && !r.boughtCustody
+          ? r.boughtIssue === 'not-found' ? 'bought-missing' : 'bought-unsearched'
+          : null;
   const viaRecord = r?.status === 'live' && cancelBlocked === null;
 
   return {

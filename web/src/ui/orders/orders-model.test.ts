@@ -372,6 +372,20 @@ describe('merging with placement records', () => {
     expect(row.price).toBe(250_000_000n);
   });
 
+  it('a node-resolved Collected bid holding bought tokens is cancellable only once its bought-custody was found; the block says whether it was looked for (R3A-1)', () => {
+    const bid = placeGolden(kob, 'create.bid');
+    const brec = recordsFromBuilt(kob, bid.built, { maker: MAKER.pk, network: 'testnet-10', placedAtUnix: 1n, placedAtDaa: 1000n })[0]!;
+    const o = bid.snapshots[0]!.order;
+    const order = { ...o, state: { ...o.state, state: { ...o.state.state, mode: '1', bought: '4000' } } as OrderState };
+    const res: ResolvedRecord = { status: 'live', covenantId: brec.covenantId, order, custody: null, strays: [], stateChanged: true, checked: 2 };
+    const row = (r: ResolvedRecord) => describeEntry(buildEntries([], [brec], new Map([[brec.covenantId, r]]))[0], ctx);
+    const custody = { transactionId: 'ab'.repeat(32), index: 1, amount: '1', covenantId: '70'.repeat(32), state: { amount: '4000', owner: brec.covenantId, owner_scheme: 4, borrow_scheme: 0, borrow_guard: '00'.repeat(32), extension_commitment: 'ee'.repeat(32) } };
+    expect(row({ ...res, boughtCustody: custody, boughtIssue: null })).toMatchObject({ canCancel: true, cancelBlocked: null });
+    expect(row({ ...res, boughtCustody: null, boughtIssue: 'not-found' })).toMatchObject({ canCancel: false, cancelBlocked: 'bought-missing' });
+    expect(row({ ...res, boughtCustody: null, boughtIssue: 'not-searched' })).toMatchObject({ canCancel: false, cancelBlocked: 'bought-unsearched' });
+    expect(row(res)).toMatchObject({ canCancel: false, cancelBlocked: 'bought-unsearched' });
+  });
+
   it('a record whose UTXO is gone is closed; an unresolved one is unknown (nothing can be cancelled)', () => {
     const spent = describeEntry(buildEntries([], [rec], new Map([[rec.covenantId, { ...live, status: 'spent' as const, order: null, custody: null }]]))[0], ctx);
     expect(spent).toMatchObject({ status: 'closed', live: false, canCancel: false });

@@ -49,6 +49,9 @@
 //   amountOrig - filled + merged).
 // - A trailing stop's stopPrice walks in trailStep steps.
 // - `armed` takes the values {recorded, 0, 1, last seen UTXO DAA, placement DAA}.
+// - A Collected (mode 1) order's `bought` moves with its fills, and its bought-custody is looked up
+//   at the script the resolved state implies (one more read).
+// - An unbound curve is walked bound to the token its record keeps, as its first fill binds it.
 //
 // Amounts are base units. Every value is tried while the amount is small. A larger amount is walked
 // in steps of the order's minimum fill, which covers fills of exactly minFill, and is never
@@ -57,8 +60,10 @@
 import type { OrderView } from '../data/indexer-types';
 import type { NodeApi, NodeUtxo } from '../data/node';
 import { asOrderState, big, curveFactsOf, custodiesOf, extensionOf, familyOfKind, familyOfOrder, isIfdKind, isOrderKind, pairExtFor, pairFactsOf, sideOf, tokenTplHashOf } from './order-facts';
-import { custodyState, extensionOfState } from './token-state';
+import { custodyState, extensionOfState, familyOfProgram } from './token-state';
 import { recoverSweeps } from './sweep';
+import { quoteOf } from './units';
+import { boughtOf } from './bought';
 import type { Hex, OrderKind, OrderState, OrderUtxo, RetiredTemplateInfo, SigPlan, TokenProgram, TokenState, TokenUtxo, TxJson, U64 } from './types';
 import type { KobWasm } from './wasm';
 
@@ -553,6 +558,16 @@ export interface ResolvedRecord {
   custody: TokenUtxo | null;
   /** A live sell-first `KobIfdPair`: its B prefund custody found on the node. */
   prefund?: TokenUtxo | null;
+  /**
+   * A live Collected (mode 1) order holding what it bought: its bought-custody found on the node at
+   * the script its state implies. Null when looked for and not there.
+   */
+  boughtCustody?: TokenUtxo | null;
+  /**
+   * Why a bought-custody is missing: 'not-found' (looked for on the node, not there) or
+   * 'not-searched' (its token program is not one this build knows, so its script cannot be built).
+   */
+  boughtIssue?: 'not-found' | 'not-searched' | null;
   /** Always empty here, because strays are known only to the indexer. */
   strays: TokenUtxo[];
   stateChanged: boolean;
@@ -581,6 +596,8 @@ interface Candidate { state: OrderState; spk: string }
 
 /** Upper bound on the trailing-stop steps tried. */
 const MAX_TRAIL_STEPS = 256n;
+/** Rounding units over the fills a Collected pair sell's `bought` is tried with (kob recover `PAIR_SELL_ROUNDING`). */
+const PAIR_SELL_ROUNDING = 8n;
 
 /** The template hash this build pins for `kind`, or null. */
 export function pinnedTemplateHash(kob: KobWasm, kind: RecordKind): Hex | null {
@@ -774,6 +791,35 @@ function candidates(
     dims.push({ values, complete: false });
   }
 
+  // A Collected (mode 1) order's `bought` grows with each continuing fill (bid-delivery-spec §2).
+  // - KobCondBid and a pair buy: bought + n, so it moves jointly with the amount.
+  // - A pair sell: bought + tOut, the B its sold A brings. The leg prices and rounding are those
+  //   of kob recover `pair_sell_boughts`: ceil(sold x p / scale(A)) + 0..8 at each price a leg fills
+  //   at, as variants of each amount.
+  // - A KobBid has no amount: bought walks in steps of its minimum fill, never exhaustive.
+  // A claim restarts `bought` at 0. It is built from the indexer's view, which refreshes the record,
+  // so a claim the record has not seen is not followed.
+  const mode1 = fields.includes('bought') && String(s.mode ?? '0') === '1';
+  const boughtRec = mode1 ? big(s.bought) : 0n;
+  const amountRec = hasAmount ? big(s.amountLeft) : 0n;
+  const pairSell = mode1 && !!pf && pf.side === 'sell' && (base.kind === 'KobPair' || base.kind === 'KobCondPair');
+  const variants: ((sold: bigint) => Record<string, string>)[] = [];
+  if (pairSell) {
+    const sA = big(s.sScale);
+    const stop = big(s.stopPrice ?? '0');
+    const prices = (base.kind === 'KobPair' ? [big(s.price), big(s.priceEnd)] : [big(s.tpPrice), stop, stop > 0n ? stop - (stop * big(s.slipBps)) / 10_000n : 0n]).filter((p) => p > 0n);
+    for (let j = 0n; j <= PAIR_SELL_ROUNDING; j++) {
+      for (const p of prices) variants.push((sold): Record<string, string> => (sold > 0n && sA > 0n ? { bought: (boughtRec + quoteOf(sold, p, sA, 'up') + j).toString() } : {}));
+    }
+    if (variants.length) dims.push({ values: variants.map(() => ({})), complete: false });
+  } else if (mode1 && !hasAmount) {
+    const minFill = s.minFill !== undefined && big(s.minFill) > 0n ? big(s.minFill) : 1n;
+    const values: Record<string, string>[] = [];
+    for (let k = 0n; k < BigInt(cap); k++) values.push({ bought: (boughtRec + k * minFill).toString() });
+    dims.push({ values, complete: false });
+  }
+  const variantDim = variants.length ? dims.length - 1 : -1;
+
   const list: Candidate[] = [];
   const seen = new Set<string>([spkOf(base)]);
   let truncated = dims.some((d) => !d.complete) || (fields.includes('custody') && !jointCustody);
@@ -786,6 +832,11 @@ function candidates(
       const st = { ...s };
       dims.forEach((d, i) => Object.assign(st, d.values[idx[i]]));
       if (jointCustody && st.amountLeft !== undefined) st.custody = st.amountLeft;
+      if (mode1 && hasAmount) {
+        const sold = amountRec - big(st.amountLeft);
+        if (variantDim >= 0) Object.assign(st, variants[idx[variantDim]]!(sold));
+        else if (sold > 0n) st.bought = (boughtRec + sold).toString();
+      }
       const cand = { kind: base.kind, state: st } as unknown as OrderState;
       let spk: string;
       try {
@@ -861,7 +912,11 @@ export async function resolveRecord(
   });
   const live = async (u: NodeUtxo, state: OrderState, changed: boolean): Promise<ResolvedRecord> => {
     const c = await findCustody(kob, ask, record, state, u.transactionId);
-    return { ...result('live', asOrder(u, state), c.utxo, changed, c.issue), ...(c.prefund ? { prefund: c.prefund } : {}) };
+    const b = await findBoughtCustody(kob, ask, record, state);
+    return {
+      ...result('live', asOrder(u, state), c.utxo, changed, c.issue), ...(c.prefund ? { prefund: c.prefund } : {}),
+      ...(b ? { boughtCustody: b.utxo, boughtIssue: b.issue } : {}),
+    };
   };
 
   // 1. The placed state and the last proven one.
@@ -873,7 +928,12 @@ export async function resolveRecord(
   // 2. Candidate continuations of the last proven state, else the placed one. The DAA of the last
   //    seen UTXO may be an `armed` value.
   const extraArmed = [record.last?.daa, record.placedAtDaa].filter((v): v is string => typeof v === 'string' && v !== '0');
-  const { list, truncated, fields, jointCustody } = candidates(kob, last ?? base, max, extraArmed, spkOf);
+  //    An unbound curve's first fill writes its token, its custody's covenant id, into the state
+  //    (KobCurveAsk.sil), so every continuation is bound. The record keeps that id.
+  const start = last ?? base;
+  const bindTo = curveFactsOf(start)?.unbound && record.token ? record.token : null;
+  const walkFrom = bindTo ? ({ ...start, state: { ...start.state, tokenCovId: bindTo } } as OrderState) : start;
+  const { list, truncated, fields, jointCustody } = candidates(kob, walkFrom, max, extraArmed, spkOf);
   const bySpk = new Map(list.map((c) => [c.spk, c.state]));
   for (const [spk, st] of known) bySpk.set(spk, st);
 
@@ -935,6 +995,35 @@ async function findCustody(
   const first = await one(0);
   const second = cs.length > 1 ? await one(1) : { utxo: null, issue: null };
   return { utxo: first.utxo, prefund: second.utxo, issue: first.issue ?? second.issue };
+}
+
+/**
+ * The bought-custody of a live Collected order (`bought` > 0), looked up at the one script its
+ * state implies: `bought` units of the bought token, owned by the order's covenant id, under the
+ * state's extension commitment (kob-cli `bought_target`). One node read. Null when the state holds
+ * nothing bought.
+ */
+async function findBoughtCustody(
+  kob: KobWasm,
+  ask: (spks: string[]) => Promise<NodeUtxo[]>,
+  record: PlacementRecord,
+  state: OrderState,
+): Promise<{ utxo: TokenUtxo | null; issue: 'not-found' | 'not-searched' | null } | null> {
+  const bf = boughtOf(state);
+  if (!bf) return null;
+  const s = state.state as unknown as Record<string, unknown>;
+  const program = tokenProgramOf(kob, String(pairFactsOf(state) ? s.tTplHash : s.tokenTplHash));
+  if (!program) return { utxo: null, issue: 'not-searched' };
+  const st = custodyState(familyOfProgram(program), bf.amount, record.covenantId, bf.ext);
+  let spk: string;
+  try {
+    spk = kob.tokenScriptPublicKey(program, st);
+  } catch {
+    return { utxo: null, issue: 'not-searched' };
+  }
+  const u = (await ask([spk])).find((x) => x.covenantId === bf.token && x.scriptPublicKey === spk);
+  if (!u) return { utxo: null, issue: 'not-found' };
+  return { utxo: { transactionId: u.transactionId, index: u.index, amount: u.amount, blockDaaScore: u.blockDaaScore, covenantId: u.covenantId, state: st }, issue: null };
 }
 
 // ------------------------------------------------------------------------- keeping records current

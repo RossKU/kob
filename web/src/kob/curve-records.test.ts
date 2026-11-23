@@ -269,3 +269,28 @@ describe('an unbound curve on the node (its custody the genesis output of its to
     expect(c.issues.map((i) => i.code)).toContain('cancel.custody-missing');
   });
 });
+
+describe('an unbound curve after its first fill, from node data only (R3A-2)', () => {
+  it('is found bound to the token its record keeps, with its custody (negative: an older record without the token is not)', async () => {
+    const { FakeChain, testAddress } = await import('../testing/chain-fixtures');
+    const { resolveRecord } = await import('./records');
+    const { custodyState } = await import('./token-state');
+    const g = genesisWithCurve();
+    const rec = recordsFromBuilt(kob, g.built, { maker, network: 'testnet-10', placedAtUnix: 1, placedAtDaa: 2 })[0]!;
+    const token = g.token.covenantId;
+    const st = kob.decodeState('KobCurveAsk', rec.state);
+    const left = 900n * SCALE - 1000n;
+    const cont = { ...st, state: { ...st.state, tokenCovId: token, amountLeft: left.toString() } } as never;
+    const chain = new FakeChain();
+    chain.add({ transactionId: 'cd'.repeat(32), index: 0, amount: '100000000', scriptPublicKey: kob.scriptPublicKey(cont), covenantId: rec.covenantId });
+    const placed = rec.custody!.tokenState!;
+    const cst = custodyState('kcc20', left, rec.covenantId, (placed as { extension_commitment: string }).extension_commitment);
+    chain.add({ transactionId: 'cd'.repeat(32), index: 1, amount: '100000000', scriptPublicKey: kob.tokenScriptPublicKey(kob.templates().find((t) => t.hash === (kob.decodeState('KobCurveAsk', rec.state).state as unknown as { tokenTplHash: string }).tokenTplHash)!.name as never, cst), covenantId: token });
+    const r = await resolveRecord(kob, chain, rec, testAddress);
+    expect(r.status).toBe('live');
+    expect((r.order!.state.state as unknown as { tokenCovId: string; amountLeft: string })).toMatchObject({ tokenCovId: token, amountLeft: left.toString() });
+    expect(r.custody).toMatchObject({ transactionId: 'cd'.repeat(32), index: 1, covenantId: token });
+    const { token: _t, ...old } = rec;
+    expect((await resolveRecord(kob, chain, old, testAddress)).status).toBe('unknown');
+  });
+});

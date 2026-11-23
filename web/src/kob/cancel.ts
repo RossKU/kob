@@ -289,6 +289,8 @@ export function snapshotFromRecord(resolved: ResolvedRecord, strays: TokenUtxo[]
   return {
     covenantId: resolved.covenantId, order: resolved.order, custody: resolved.custody, ...(resolved.prefund ? { prefund: resolved.prefund } : {}), strays, refundDueDaa: null, deadline, source: 'record',
     ...(resolved.retired ? { retired: resolved.retired } : {}),
+    // A Collected order's bought-custody, found on the node at the script its state implies.
+    ...(resolved.boughtCustody ? { boughtCustody: resolved.boughtCustody } : {}),
   };
 }
 

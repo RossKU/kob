@@ -166,6 +166,8 @@ export default {
   'orders.source.noneHint': 'Neither the indexer nor a record describes this order.',
   'orders.cancelBlocked.no-extension': 'Cannot cancel yet: the token\'s extension commitment is unknown (old recovery file). Import a backup or a version 2 recovery file, or wait for the indexer.',
   'orders.cancelBlocked.custody-missing': 'Cannot cancel yet: its token custody was not found. Refresh or wait for the indexer.',
+  'orders.cancelBlocked.bought-missing': 'Cannot cancel yet: the token UTXO holding what it bought was not found on the node. Refresh or wait for the indexer.',
+  'orders.cancelBlocked.bought-unsearched': 'Cannot cancel yet: the token UTXO holding what it bought cannot be looked up on the node (its token program is unknown to this app). Wait for the indexer.',
   'orders.cancelBlocked.old-template': 'Placed with an older contract version this app cannot build for.',
   'orders.oldTemplate.badge': 'older contract version',
   'orders.oldTemplate.hint': 'Older contract version: this app cannot look it up or cancel it.',
