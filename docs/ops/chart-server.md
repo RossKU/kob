@@ -313,19 +313,7 @@ another drive or machine, and encrypt anything that leaves the house. Also back 
 credentials), its `config.yml` and the `cert.pem` that `cloudflared tunnel login` wrote. Losing them loses no data: a new tunnel
 and a new `route dns` bring the hostname back, but until then the app has no indexer.
 
-**Sleep, updates, reboots.** A PC that sleeps or hibernates serves nothing, and its network stops with it (on 2026-11-23 a
-10-minute sleep timer on AC power cut the founder's tunnel). Set it to never sleep and never hibernate; the display may turn off.
-In an elevated prompt:
-
-```
-powercfg /change standby-timeout-ac 0
-powercfg /change hibernate-timeout-ac 0
-powercfg /change monitor-timeout-ac 10
-```
-
-On a laptop also run the two `-dc` forms (`standby-timeout-dc 0`, `hibernate-timeout-dc 0`) or keep it on AC power, and in
-*Device Manager* > the network adapter > *Power Management* untick *Allow the computer to turn off this device to save power*.
-`powercfg /query SCHEME_CURRENT SUB_SLEEP` shows the values in force (0 = never). Windows Update may
+**Sleep, updates, reboots.** A host that sleeps serves nothing: the indexer host must not sleep, hibernate or suspend its network while it serves the public API (on Windows: the sleep and display-off timers set to never on mains power; check them again after an OS or vendor power-profile change). Windows Update may
 reboot it: set active hours, and run both the indexer and `cloudflared` as start-at-boot tasks (section 2, step 5;
 `docs/ops/executor-quickstart.md`, section 6) so they come back by themselves. An outage longer than the node's retention (7 days
 with the flags of the quickstart, about 30 hours by default; public nodes do not state theirs) no longer halts the follower: it moves

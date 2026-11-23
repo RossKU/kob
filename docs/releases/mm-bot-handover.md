@@ -84,7 +84,7 @@ With the defaults (`capitalUsd` 1000, 3 levels of 15 % a side, side cap 50 %):
 
 ## 6. It trusts the public indexer
 
-- Default indexer: `https://kob-api.kaspa.ag` (index-main). It runs on one Windows PC behind a Cloudflare tunnel, with no
+- Default indexer: `https://kob-api.kaspa.ag` (index-main). It runs on a single host behind a Cloudflare tunnel, with no
   uptime promise (`mainnet-launch.md` 9). The bot reads its live orders, their state and its fills from it.
 - **If the indexer lies** (internal review 2026-11-23, not fixed):
   - It can hide a live quote. The bot then forgets it, does not pull it, and STOP exits while it is still on chain. It rests

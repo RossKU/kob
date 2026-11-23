@@ -49,9 +49,9 @@ app, or cancel an order for its maker.
 * **A web change that stops offering the kind**, merged to `master`: `ci.yml` must pass on the commit (the full suite and the
   sharded e2e), then deploy-pages builds, waits for that CI run (at most two hours, then it fails), asks for the `production`
   approval and uploads. Expect an hour or more; a flaky test makes it longer (re-run the failed job).
-* **The hand deploy from a PC** (`docs/ops/web-hosting.md`, section 6) when CI is red or too slow: it skips CI and the `production`
-  approval, so do it only from a clean checkout of a pushed commit, and say so in the post. It needs the wasm and web build on that
-  PC (tens of minutes) and a wrangler login.
+* **The hand deploy** (`docs/ops/web-hosting.md`, section 6) when CI is red or too slow: it skips CI and the `production`
+  approval, so do it only from a clean checkout of a pushed commit, and say so in the post. It needs the wasm and web build on the deploying
+  machine (tens of minutes) and a wrangler login.
 * **A new `kob` / `kobd` release** for CLI users and executors (tag, `release.yml`, publish, `docs/ops/release.md` 4-6): the build
   itself plus the checks before publishing, then each operator upgrades at their own pace. The founder cannot make anyone upgrade.
 * **A contract fix** is a template re-version: a new template, a new record, a release, and a retirement of the old template into

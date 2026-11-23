@@ -22,7 +22,7 @@ After the launch:
    rate limits of section 5 and the logo tables of section 7, step 6.
 5. **The host stays up** (section 9): never sleeps, the indexer and `cloudflared` start at boot, and one reboot brought everything back.
 6. **The Cloudflare Cache Rule** of `docs/ops/chart-server.md` section 3 (*The Cache Rule*) is on for `kob-api.kaspa.ag` and its check
-   shows `HIT` (or the rule was removed because the plan does not honour short TTLs). Without it every visitor's read reaches the home PC.
+   shows `HIT` (or the rule was removed because the plan does not honour short TTLs). Without it every visitor's read reaches the indexer host.
 7. index-main is synced and answers for both hosts:
    `curl -si -H "Origin: https://kob.kaspa.ag" https://kob-api.kaspa.ag/v1/health` returns 200, `access-control-allow-origin`, and `"network":"mainnet"`.
    Run it again with `Origin: https://kob-tn10.kaspa.ag`, and against `https://kob-api-tn10.kaspa.ag` (`"network":"testnet-10"`).
@@ -209,7 +209,7 @@ builds the schema-13 layout in `index.sqlite3.migrating13`, then schema 14 in `i
    against the release's `SHA256SUMS` and with `gh attestation verify` (`docs/ops/release.md` 6), and unpack it into a folder of its own
    under your user profile (for example `%LOCALAPPDATA%\kob-mainnet\`), not into a worktree: a clean-up must not delete the running binary.
    `kobd --version` must say `mainnet build`, the release commit and its `templates` generation.
-2. **Stop index-main** the way it is run (and keep it from being restarted by its keepalive while you work).
+2. **Stop index-main** the way it is run (and keep it from being restarted while you work).
 3. **Back up** its data directory to another drive: `index.sqlite3` (a plain copy is consistent while it is stopped) and the whole
    `records` folder (the newest segment is the one that changes; the way back needs it as it was), and `index.toml`.
 4. **Check the store**: `kobd db info --data-dir <data dir>` with the new build says schema 9 and network mainnet.
@@ -262,12 +262,10 @@ Any failure: do not announce; roll back (section 6) and follow `docs/ops/inciden
 
 ## 9. The host of index-main
 
-index-main runs on one Windows PC behind a Cloudflare tunnel. Before the launch (`docs/ops/chart-server.md`, section 4, *Sleep, updates,
+index-main runs on a single host behind a Cloudflare tunnel. Before the launch (`docs/ops/chart-server.md`, section 4, *Sleep, updates,
 reboots*):
 
-1. **Power**: never sleep, never hibernate; the display may turn off. A 10-minute sleep timer on AC power cut the tunnel on 2026-11-23. In an
-   elevated prompt: `powercfg /change standby-timeout-ac 0`, `powercfg /change hibernate-timeout-ac 0` (and the `-dc` forms on a laptop),
-   and untick *Allow the computer to turn off this device to save power* on the network adapter.
+1. **Power**: the indexer host must not sleep, hibernate or suspend its network while it serves the public API (on Windows: the sleep and display-off timers set to never on mains power; check them again after an OS or vendor power-profile change).
 2. **Start at boot**: index-main as a scheduled task at boot, `cloudflared` as a service (`cloudflared service install`).
 3. **Windows Update**: active hours set, no automatic restart outside them.
 4. **Reboot once** and check that the tunnel, index-main and the TN10 indexer come back without a hand.

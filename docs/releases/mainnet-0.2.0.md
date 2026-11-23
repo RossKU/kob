@@ -187,7 +187,7 @@ end-to-end tests only. Mainnet smoke run (`mainnet-launch.md` 8): `<txids and wa
 - **Nothing on chain can pause or rescue an order.** A maker's way out is always the cancel.
 - **The founder runs no executor.** Executors are run by community operators. Until one runs, nothing fills market and IOC
   orders and no keeper refunds or releases locks. Direct fills, cancels and manual releases work without one.
-- **The public indexer `https://kob-api.kaspa.ag`** runs on one Windows PC behind a Cloudflare tunnel, with no uptime
+- **The public indexer `https://kob-api.kaspa.ag`** runs on a single host behind a Cloudflare tunnel, with no uptime
   promise. The app and bots trust what it lists. Run your own indexer for anything that matters.
 - **Expiry is soft.** After an order's expiry, conforming matchers stop filling it, but the chain cannot stop a fill until a
   refund spends the order.
