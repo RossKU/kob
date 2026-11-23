@@ -492,6 +492,41 @@ describe('listing rules (stream-book)', () => {
   });
 });
 
+describe('a full stream book (R3B-L2)', () => {
+  const askSnap = () => legSnapshot('take.ask.partial');
+  const at = (id: string, price: string, token?: string): OrderSnapshot => {
+    const s0 = askSnap();
+    return { ...s0, covenantId: id.repeat(32), order: { ...s0.order, transactionId: id.repeat(32), state: { ...s0.order.state, state: { ...s0.order.state.state, price, ...(token ? { tokenCovId: token } : {}) } } as OrderState } };
+  };
+
+  it('still takes a new placement: the entry put is never the one forgotten, the oldest confirmed one goes', () => {
+    const b = new StreamBook(3);
+    for (const [i, id] of ['a1', 'a2', 'a3'].entries()) b.put(at(id, '250000000'), { origin: 'stream', nowMs: i, confirmed: true });
+    b.put(at('a4', '250000000'), { origin: 'stream', nowMs: 10 });
+    expect(b.get('a4'.repeat(32))).toBeDefined();
+    expect(b.get('a1'.repeat(32))).toBeUndefined();
+    expect(b.size).toBe(3);
+    // a continuation of a kept entry replaces it and is kept
+    b.put(at('a2', '240000000'), { origin: 'stream', nowMs: 11 });
+    expect(b.get('a2'.repeat(32))?.confirmed).toBe(false);
+    expect(b.size).toBe(3);
+  });
+
+  it('forgets the markets no view looks at first, then the orders farthest from the best price', () => {
+    const OTHER = '72'.repeat(32);
+    const b = new StreamBook(3);
+    b.focus = (t) => t === TOKEN;
+    b.put(at('b1', '250000000'), { origin: 'stream', nowMs: 1, confirmed: true });
+    b.put(at('b2', '900000000'), { origin: 'stream', nowMs: 2, confirmed: true });
+    b.put(at('b3', '250000000', OTHER), { origin: 'stream', nowMs: 3, confirmed: true });
+    b.put(at('b4', '260000000'), { origin: 'stream', nowMs: 4 });
+    expect(b.get('b3'.repeat(32))).toBeUndefined();
+    b.put(at('b5', '255000000'), { origin: 'stream', nowMs: 5 });
+    expect(b.get('b2'.repeat(32))).toBeUndefined();
+    expect([...b.entries()].map((e) => e.snap.covenantId.slice(0, 2)).sort()).toEqual(['b1', 'b4', 'b5']);
+  });
+});
+
 describe('what the indexer gave before the mode is kept', () => {
   const OTHER = '71'.repeat(32);
   const TEMPLATE = '173ca6a796c2c05f171c31b9a73aaca161a3226a9e8f57d2f3d833ff18dbe41b';
