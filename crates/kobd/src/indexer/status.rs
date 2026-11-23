@@ -52,6 +52,10 @@ pub struct HealthSnapshot {
     pub cursor_hash: Option<Hash32>,
     /// DAA score of the cursor.
     pub cursor_daa: u64,
+    /// The header time (Unix ms) of the cursor's chain block, once known: from a batch that
+    /// applied it, else from its header, which hashes to the cursor. Its miner sets it, within
+    /// minutes of the real time; no node can move it once the block is on the chain.
+    pub cursor_time_unix_ms: Option<u64>,
     /// Node virtual DAA score at the last successful poll.
     pub node_daa: Option<u64>,
     /// The most recent follower error.
@@ -450,6 +454,7 @@ impl HealthSnapshot {
             node_version: None,
             cursor_hash: None,
             cursor_daa: 0,
+            cursor_time_unix_ms: None,
             node_daa: None,
             last_error: None,
             gap_reason: None,
@@ -851,6 +856,16 @@ impl HealthSnapshot {
     /// Lag behind the node in DAA score. At 10 DAA per second, one DAA is a tenth of a second.
     pub fn lag_daa(&self) -> Option<u64> {
         self.node_daa.map(|n| n.saturating_sub(self.cursor_daa))
+    }
+
+    /// The lag in seconds that `/v1/health` reports at `now_ms`: the lag behind the node's DAA
+    /// score (`daa_per_second`), and at least the age of the cursor's chain block by the local
+    /// clock (R4C1-M1). The node's position is its own word, so a node that claims to be just
+    /// ahead of an old cursor does not hide the lag. A block stamped ahead of the local clock
+    /// counts as 0 s old. `None` while the node's position is unknown.
+    pub fn lag_seconds(&self, daa_per_second: u64, now_ms: u64) -> Option<u64> {
+        let age = self.cursor_time_unix_ms.map_or(0, |t| now_ms.saturating_sub(t) / 1_000);
+        self.lag_daa().map(|d| (d / daa_per_second.max(1)).max(age))
     }
 
     /// Whether the store is caught up with the node.

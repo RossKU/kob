@@ -20,7 +20,7 @@ use kobd::rpc::multi::{MultiNode, NodeSpec};
 use kobd::rpc::types::*;
 use kobd::rpc::{ChainSource, RpcError};
 use kobd::testkit::*;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -37,6 +37,16 @@ struct Flaky {
     /// Serves its VSPC answers from this node instead (another view of the chain), while every other call answers from
     /// `node`.
     vspc_from: Mutex<Option<Arc<MockNode>>>,
+    /// Drips the chain (R4C1-M1): every VSPC answer is at most this many chain blocks, whatever the window asked
+    /// (`minConfirmationCount` ignored), after this delay.
+    drip: Mutex<Option<(usize, Duration)>>,
+    /// Claims a sink and a virtual DAA score this far past its real ones.
+    lead: AtomicU64,
+    /// Claims its sink just past the cursor it was last asked from, so a request is never bounded by a window and the
+    /// follower reads `following`.
+    hides: AtomicBool,
+    /// The DAA score of the start of its last VSPC request.
+    last_start: AtomicU64,
 }
 
 impl Flaky {
@@ -48,7 +58,19 @@ impl Flaky {
             chain_calls: AtomicUsize::new(0),
             no_utxo_index: AtomicBool::new(false),
             vspc_from: Mutex::new(None),
+            drip: Mutex::new(None),
+            lead: AtomicU64::new(0),
+            hides: AtomicBool::new(false),
+            last_start: AtomicU64::new(0),
         })
+    }
+
+    /// The sink it claims: past the real one by `lead`, or just past the last cursor while it `hides`.
+    async fn claimed(&self, real: u64) -> u64 {
+        if self.hides.load(Ordering::Relaxed) {
+            return self.last_start.load(Ordering::Relaxed) + 1;
+        }
+        real + self.lead.load(Ordering::Relaxed)
     }
 
     fn chain_gate(&self) -> Result<(), RpcError> {
@@ -61,11 +83,23 @@ impl Flaky {
 }
 
 impl ChainSource for Flaky {
-    async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
+    async fn vspc_v2(&self, mut req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
         self.chain_gate()?;
         let full = req.data_verbosity_level == Verbosity::Full;
+        if let Ok(Some(d)) = self.node.block_daa_score(req.start_hash).await {
+            self.last_start.store(d, Ordering::Relaxed);
+        }
+        let drip = *self.drip.lock().unwrap();
+        if let Some((_, delay)) = drip {
+            req.min_confirmation_count = None;
+            tokio::time::sleep(delay).await;
+        }
         let from = self.vspc_from.lock().unwrap().clone().unwrap_or_else(|| self.node.clone());
         let mut r = from.vspc_v2(req).await?;
+        if let Some((n, _)) = drip {
+            r.added_chain_block_hashes.truncate(n);
+            r.chain_block_accepted_transactions.truncate(n);
+        }
         if full && self.alters.load(Ordering::Relaxed) {
             let tx = r.chain_block_accepted_transactions.iter_mut().flat_map(|b| b.accepted_transactions.iter_mut());
             if let Some(t) = tx.into_iter().find(|t| !t.outputs.is_empty()) {
@@ -75,7 +109,9 @@ impl ChainSource for Flaky {
         Ok(r)
     }
     async fn dag_info(&self) -> Result<DagInfo, RpcError> {
-        self.node.dag_info().await
+        let mut d = self.node.dag_info().await?;
+        d.virtual_daa_score = self.claimed(d.virtual_daa_score).await;
+        Ok(d)
     }
     async fn server_info(&self) -> Result<ServerInfo, RpcError> {
         let mut info = self.node.server_info().await?;
@@ -89,7 +125,8 @@ impl ChainSource for Flaky {
         self.node.block_exists(hash).await
     }
     async fn sink_blue_score(&self) -> Result<u64, RpcError> {
-        self.node.sink_blue_score().await
+        let real = self.node.sink_blue_score().await?;
+        Ok(self.claimed(real).await)
     }
     async fn block_blue_score(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
         self.node.block_blue_score(hash).await
@@ -135,12 +172,23 @@ struct Run {
 /// chain requests in a row (no wait for the stall: `authority_stall` zero), on a fresh database. The health watch runs
 /// only when the test asks (`check_health`).
 fn run(anchor: Hash32, nodes: Vec<(NodeSpec, Arc<Flaky>)>, fetch_parallel: usize, backoff: Duration) -> Run {
+    run_with(anchor, nodes, fetch_parallel, backoff, |_| {})
+}
+
+/// [`run`] with the follower's configuration adjusted.
+fn run_with(
+    anchor: Hash32,
+    nodes: Vec<(NodeSpec, Arc<Flaky>)>,
+    fetch_parallel: usize,
+    backoff: Duration,
+    adjust: impl FnOnce(&mut FollowerConfig),
+) -> Run {
     let verifier = nodes[0].1.clone();
     let source = Arc::new(MultiNode::new(nodes, verifier).with_watch(Duration::from_secs(3_600), 6));
     let ingest = Arc::new(Mutex::new(Ingest::new(open_memory("testnet-10").unwrap(), processor(), None).with_config(wide_window())));
     let health = Arc::new(HealthState::new("testnet-10"));
     let (events, _) = tokio::sync::broadcast::channel(64);
-    let cfg = FollowerConfig {
+    let mut cfg = FollowerConfig {
         network: "testnet-10".into(),
         start: StartMode::Hash(anchor),
         poll_interval: Duration::from_millis(1),
@@ -158,8 +206,10 @@ fn run(anchor: Hash32, nodes: Vec<(NodeSpec, Arc<Flaky>)>, fetch_parallel: usize
         prefetch_initial_blocks: 6,
         authority_failures: 2,
         authority_stall: Duration::ZERO,
+        authority_lag_tolerance: kobd::indexer::follower::AUTHORITY_LAG_TOLERANCE,
         chain_proof: None,
     };
+    adjust(&mut cfg);
     let follower = Follower::new(source.clone(), ingest.clone(), cfg, health.clone(), events);
     Run { source, follower, ingest, health }
 }
@@ -465,4 +515,188 @@ async fn a_candidate_without_a_utxo_index_is_not_promoted_when_the_role_needs_on
     assert_eq!(r.source.board().authority(), 0, "not promoted");
     assert_eq!(r.health.snapshot().nodes[1].promoted, 0);
     assert_eq!(r.health.snapshot().cursor_hash, Some(node.chain()[20].hash));
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
+}
+
+/// The pace rule at test scale (`indexer::follower`, *Progress*): a chain 100 ms behind real time is too slow, and
+/// another node takes over 300 ms after the last progress.
+fn paced(c: &mut FollowerConfig) {
+    c.authority_lag_tolerance = Duration::from_millis(100);
+    c.authority_stall = Duration::from_millis(300);
+}
+
+/// R4C1-M1: a chain authority that gives the chain slower than real time from an old cursor is handed over, whatever it
+/// says of its own position: one chain block a poll with its sink claimed just past the cursor (`following`, an unbounded
+/// request), exactly 100 a poll the same way, and one a poll with a sink and a virtual DAA claimed far ahead
+/// (`catching_up`, bounded windows). Each answer applies, but none is progress, so after the stall (3 minutes in
+/// production, 300 ms here) the other node leads and catches up to the tip. `/v1/health` reports the lag by the cursor
+/// block's age, whatever the authority claims.
+#[tokio::test]
+async fn an_authority_that_gives_the_chain_slower_than_real_time_is_handed_over() {
+    let _g = serial().await;
+    // (chain blocks an answer, ms of chain a block, ms an answer takes, claims far ahead)
+    for (k, (blocks, per, delay, far)) in
+        [(1usize, 10u64, 40u64, false), (100, 1, 200, false), (1, 10, 40, true)].into_iter().enumerate()
+    {
+        let node = MockNode::new("testnet-10");
+        // two hours ago: the cursor is never fresh
+        node.set_block_clock(now_ms() - 2 * 3_600_000, per);
+        node.push_empty(3_000);
+        let (a, b) = (Flaky::new(&node), Flaky::new(&node));
+        *a.drip.lock().unwrap() = Some((blocks, Duration::from_millis(delay)));
+        if far {
+            a.lead.store(1_000_000, Ordering::Relaxed);
+        } else {
+            a.hides.store(true, Ordering::Relaxed);
+        }
+        let (ua, ub) = (format!("ws://10.8.{k}.1:18210"), format!("ws://10.8.{k}.2:18210"));
+        let nodes = vec![(spec(&ua, true), a.clone()), (spec(&ub, true), b.clone())];
+        let r = run_with(node.anchor(), nodes, 1, Duration::from_millis(1), paced);
+        let t0 = std::time::Instant::now();
+        let states = Mutex::new(vec![]);
+        r.until(200, "handed over", |r| {
+            states.lock().unwrap().push(r.health.snapshot().state);
+            r.source.board().authority() == 1
+        })
+        .await;
+        let took = t0.elapsed();
+        let states = states.into_inner().unwrap();
+        let want = if far { FollowerState::CatchingUp } else { FollowerState::Following };
+        assert!(states.contains(&want), "case {k}: the authority kept the follower in {want:?}: {states:?}");
+        assert!(took < Duration::from_secs(10), "case {k}: {took:?}");
+        let h = r.health.snapshot();
+        assert!(h.blocks_applied_total >= blocks as u64, "case {k}: its answers applied");
+        let lag = h.lag_seconds(10, now_ms()).unwrap();
+        assert!(lag >= 2 * 3_600 - 60, "case {k}: lag_seconds {lag}: at least the cursor block's age");
+        r.until(200, "caught up on the other node", |r| r.cursor() == Some(node.tip())).await;
+        assert_eq!(r.source.board().authority(), 1, "case {k}");
+    }
+}
+
+/// R4C1-M1 with no other node: the dripping authority stays, its answers apply, but none is progress, so `/v1/health`
+/// turns `stale` ten minutes after the last progress, and `lag_seconds` shows the cursor block's age meanwhile.
+#[tokio::test]
+async fn a_lone_authority_that_drips_the_chain_turns_the_health_stale() {
+    let _g = serial().await;
+    let node = MockNode::new("testnet-10");
+    node.set_block_clock(now_ms() - 2 * 3_600_000, 10);
+    node.push_empty(2_000);
+    let a = Flaky::new(&node);
+    *a.drip.lock().unwrap() = Some((1, Duration::from_millis(40)));
+    a.lead.store(1_000_000, Ordering::Relaxed);
+    let r = run_with(node.anchor(), vec![(spec("ws://10.9.0.1:18210", true), a.clone())], 1, Duration::from_millis(1), paced);
+    r.steps(5).await;
+    let at = r.health.snapshot().last_progress_unix_ms;
+    let out = r.steps(15).await;
+    assert!(out.iter().all(|o| matches!(o, StepOutcome::Applied { .. })), "{out:?}");
+    let h = r.health.snapshot();
+    assert_eq!(h.state, FollowerState::CatchingUp);
+    assert_eq!(h.last_progress_unix_ms, at, "no progress");
+    let stale_after = kobd::indexer::status::STALE_AFTER_MS;
+    assert!(!h.stale(at + stale_after) && h.stale(at + stale_after + 1));
+    let lag = h.lag_seconds(10, now_ms()).unwrap();
+    assert!(lag >= 2 * 3_600 - 60, "the node claims 1,000,000 DAA ahead, the cursor is 2 h old: {lag}");
+    assert_eq!(r.source.board().authority(), 0);
+}
+
+/// The honest cases of the pace rule (R4C1-M1), none of which ever counts against the authority:
+/// - a restart 15 minutes behind on an honest node: it catches up faster than real time, is never failing, and the
+///   health shows the real lag until it is fresh;
+/// - a deep reorg, from a fresh cursor and from an old one;
+/// - an answer that pauses (here 50 ms, under the tolerance; a minute against the 3 minutes in production) in a catch-up;
+/// - a halted network (nothing new, no node shows chain past the cursor) from an old cursor: no progress for the health,
+///   but no node is blamed;
+/// - at the tip, the state flickering between `following` and `catching_up` (R4C1-I3): a fresh cursor is progress
+///   whatever the state.
+#[tokio::test]
+async fn honest_nodes_are_never_failing_by_the_pace_rule() {
+    let _g = serial().await;
+    let tolerant = |c: &mut FollowerConfig| {
+        c.authority_lag_tolerance = Duration::from_millis(500);
+        c.authority_stall = Duration::ZERO;
+    };
+    // a restart 15 minutes behind: 9,000 chain blocks of 100 ms, the last one now
+    let node = MockNode::new("testnet-10");
+    node.set_block_clock(now_ms() - 900_000, 100);
+    node.push_empty(9_000);
+    let (a, b) = (Flaky::new(&node), Flaky::new(&node));
+    let nodes = vec![(spec("ws://10.10.0.1:18210", true), a.clone()), (spec("ws://10.10.0.2:18210", true), b.clone())];
+    let r = run_with(node.anchor(), nodes, 2, Duration::from_millis(1), tolerant);
+    r.steps(2).await;
+    let lag = r.health.snapshot().lag_seconds(10, now_ms()).unwrap();
+    assert!(lag >= 800, "the real lag shows: {lag}");
+    r.until(500, "caught up", |r| r.cursor() == Some(node.tip())).await;
+    let h = r.health.snapshot();
+    assert_eq!(r.source.board().authority(), 0, "never handed over");
+    assert!(!h.stale(now_ms()) && now_ms() - h.last_progress_unix_ms < 5_000, "{h:?}");
+    assert!(h.lag_seconds(10, now_ms()).unwrap() < 60);
+
+    // a deep reorg from the fresh cursor
+    node.reorg(500, vec![vec![]; 520]);
+    r.until(200, "the reorg applied", |r| r.cursor() == Some(node.tip())).await;
+    assert!(r.health.snapshot().reorgs_total >= 1);
+    assert_eq!(r.source.board().authority(), 0);
+
+    // an old cursor: two hours ago, followed at its own pace
+    let node = MockNode::new("testnet-10");
+    node.set_block_clock(now_ms() - 2 * 3_600_000, 100);
+    node.push_empty(300);
+    let (a, b) = (Flaky::new(&node), Flaky::new(&node));
+    let nodes = vec![(spec("ws://10.10.1.1:18210", true), a.clone()), (spec("ws://10.10.1.2:18210", true), b.clone())];
+    let r = run_with(node.anchor(), nodes, 1, Duration::from_millis(1), tolerant);
+    r.until(200, "first sync", |r| r.cursor() == Some(node.tip())).await;
+    // a deep reorg there
+    node.reorg(200, vec![vec![]; 210]);
+    r.until(200, "the reorg applied", |r| r.cursor() == Some(node.tip())).await;
+    // a pause of 300 ms in a catch-up (one chain block after it), then fast again
+    node.push_empty(2_000);
+    *a.drip.lock().unwrap() = Some((1, Duration::from_millis(300)));
+    let before = r.health.snapshot().last_progress_unix_ms;
+    let out = r.steps(1).await;
+    assert!(matches!(out[..], [StepOutcome::Applied { added: 1, .. }]), "{out:?}");
+    assert!(r.health.snapshot().last_progress_unix_ms > before, "within the tolerance: progress");
+    *a.drip.lock().unwrap() = None;
+    r.until(200, "caught up after the pause", |r| r.cursor() == Some(node.tip())).await;
+    assert_eq!(r.source.board().authority(), 0, "a pause is no failure");
+    // a halted network: nothing new for longer than the tolerance, and nobody shows more
+    for _ in 0..4 {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let out = r.steps(1).await;
+        assert!(matches!(out[..], [StepOutcome::Idle]), "{out:?}");
+    }
+    let at = r.health.snapshot().last_progress_unix_ms;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    r.steps(3).await;
+    assert_eq!(r.source.board().authority(), 0, "a halted network blames no node");
+    assert_eq!(r.health.snapshot().last_progress_unix_ms, at, "no progress past the tolerance: stale ten minutes on");
+
+    // at the tip with a fresh cursor: the state flickers, every answer is progress
+    let node = MockNode::new("testnet-10");
+    node.set_block_clock(now_ms(), 1);
+    node.push_empty(10);
+    let (a, b) = (Flaky::new(&node), Flaky::new(&node));
+    let nodes = vec![(spec("ws://10.10.2.1:18210", true), a.clone()), (spec("ws://10.10.2.2:18210", true), b.clone())];
+    let r = run_with(node.anchor(), nodes, 1, Duration::from_millis(1), |c| {
+        c.authority_lag_tolerance = Duration::ZERO;
+        c.authority_stall = Duration::ZERO;
+    });
+    r.until(200, "first sync", |r| r.cursor() == Some(node.tip())).await;
+    let mut states = vec![];
+    for i in 0..10u64 {
+        // claims far ahead and answers what there is: `catching_up`; or not: `following`
+        a.lead.store(if i % 2 == 0 { 1_000_000 } else { 0 }, Ordering::Relaxed);
+        *a.drip.lock().unwrap() = (i % 2 == 0).then_some((2_480, Duration::ZERO));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        node.push_empty(1);
+        let before = r.health.snapshot().last_progress_unix_ms;
+        r.steps(1).await;
+        let h = r.health.snapshot();
+        states.push(h.state);
+        assert!(h.last_progress_unix_ms > before, "a fresh cursor is progress in {:?}", h.state);
+    }
+    assert!(states.contains(&FollowerState::CatchingUp) && states.contains(&FollowerState::Following), "{states:?}");
+    assert_eq!(r.source.board().authority(), 0);
 }

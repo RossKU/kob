@@ -208,6 +208,7 @@ curl -s $API/v1/health
   "node_version": "<string>",
   "cursor_hash": "<hex32>",
   "cursor_daa": 123456789,
+  "cursor_time_unix_ms": 1789999999800,
   "node_daa": 123456791,
   "last_error": null,
   "gap_reason": null,
@@ -283,18 +284,19 @@ Every key the handler returns:
 | `node_version` | string or `null` | The node's server version; `null` until the first successful contact. |
 | `cursor_hash` | hex or `null` | The last applied chain block. |
 | `cursor_daa` | number | DAA score of the cursor. |
+| `cursor_time_unix_ms` | number or `null` | Header time (Unix ms) of the cursor's chain block, set by its miner; `null` until a batch applied it or its header was read after a start. |
 | `node_daa` | number or `null` | The node's virtual DAA score at the last successful poll; `null` until known. |
 | `last_error` | string or `null` | The last follower error (set while `node_unavailable`, cleared on progress). |
 | `gap_reason` | string or `null` | Why the chain cannot be continued (set with `state = gap`). |
 | `last_poll_unix_ms` | number | Wall time of the last poll. |
-| `last_progress_unix_ms` | number | Last time the cursor advanced or the node confirmed the store is at its sink (stamped on every successful poll, including "nothing new"). |
+| `last_progress_unix_ms` | number | Last poll that was progress: one from a cursor whose chain block is at most 10 minutes old by the local clock, or whose chain keeps up with real time (its lag behind the local monotonic clock at most 3 minutes above the least it reached since the chain authority leads). What the node says of its own position plays no part (`docs/ops/executor.md`, Part C). |
 | `ok` | bool | `state` is `following` or `catching_up`, `stale` is false **and** `alarms` is empty. Note a catching-up store can be `ok`. |
-| `stale` | bool | `following` or `catching_up`, but no progress (`last_progress_unix_ms`) for 10 minutes: the follower hangs. A follower task that died is `stopped`, with `halt_reason`, and the process exits so that its supervisor restarts it. |
+| `stale` | bool | `following` or `catching_up`, but no progress (`last_progress_unix_ms`) for 10 minutes: the follower hangs, or its chain authority gives the chain slower than real time, or the network stands still (then 20 minutes after its last chain block). A follower task that died is `stopped`, with `halt_reason`, and the process exits so that its supervisor restarts it. |
 | `caught_up` | bool | `state = following` and `node_daa` known. The matcher and keepers plan only against a caught-up store (or within the tolerance below). |
 | `within_lag_tolerance` | bool | `caught_up`, or `following` / `catching_up` with a lag of at most `lag_tolerance_daa` (when that is above 0). What the matcher, keepers and maintenance gate on. |
 | `lag_tolerance_daa` | number | The tolerance in DAA: `max_lag_secs` (default 30) times `daa_per_second` (10) = 300; 0 means strict (only `following`). |
 | `lag_daa` | number or `null` | `node_daa` minus `cursor_daa` (not below 0); `null` while `node_daa` is unknown. |
-| `lag_seconds` | number or `null` | `lag_daa / daa_per_second` (integer division; `daa_per_second` default 10); `null` with `lag_daa`. |
+| `lag_seconds` | number or `null` | `lag_daa / daa_per_second` (integer division; `daa_per_second` default 10), and at least the age in seconds of the cursor's chain block by the local clock (`cursor_time_unix_ms`), so a node that claims to be just ahead of an old cursor does not hide the lag; `null` with `lag_daa`. A host clock that runs ahead shows that much lag. |
 | `lag_blue` | number or `null` | Blue score between the cursor and the node's sink at the last request; `null` before it is measured. |
 | `alarms` | array | One entry `{"lag_hours_at_least": h, "lag_seconds": s}` per configured threshold the lag has reached. Thresholds are the top-level `lag_alarm_hours` (default `[1, 6, 12, 24]`). Empty while `lag_seconds` is unknown. |
 | `settle_depth_daa` | number | The depth (in DAA) at which a view counts as `settled`; default 100. |

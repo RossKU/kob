@@ -374,6 +374,30 @@ pub trait ChainSource: Send + Sync + 'static {
             Ok(false)
         }
     }
+    /// Whether the last chain answer of the authority came with chain past it that another node
+    /// showed: a header that hashes to its claimed id, with its proof of work, well past the
+    /// authority's answer (`multi::MultiNode`, R4C1-M2). It never counts against the authority by
+    /// itself. The follower uses it only to tell a halted network from an authority that holds the
+    /// chain back, once the cursor is old by the local clock. The default is `false`.
+    fn chain_beyond_shown(&self) -> bool {
+        false
+    }
+    /// The primary's copy of `runs` of a window `raw` from another node (`origin`, from `start`)
+    /// differs from it (`why`). The default drops that node ([`ChainSource::report_lie`]). A
+    /// source with a third node asks it first when the primary is a public node too
+    /// (`multi::MultiNode`, R4C1-L1).
+    fn window_contradicted(
+        &self,
+        origin: Origin,
+        start: Hash32,
+        raw: &RawVspcResponse,
+        runs: &[BodyRun],
+        why: &str,
+    ) -> impl Future<Output = ()> + Send {
+        let _ = (start, raw, runs);
+        self.report_lie(origin, why);
+        async {}
+    }
     /// The chain authority's answer contradicts the store at the cursor `at` (`why`). The result is
     /// [`StoreContradiction::Replaced`] when the source gave that node up for another one (a public
     /// node, `rpc::resolver`), so the follower asks again instead of halting.

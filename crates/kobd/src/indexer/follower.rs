@@ -63,6 +63,31 @@
 //! the source ([`ChainSource::authority_failing`]). With several nodes, another node that can lead
 //! becomes the chain authority (`rpc::multi`), and the follower asks it at once
 //! ([`StepOutcome::Handover`]). With a single node nothing changes: it retries with its backoff.
+//!
+//! # Progress
+//!
+//! A node's word about its own position (its sink, its virtual DAA score, `catching_up` or not)
+//! never decides whether its answers are progress (R4C1-M1). What does is the header time of the
+//! cursor's chain block, which the chain proofs bind to the block and its miner can move by
+//! minutes, not hours, against the local clock:
+//! - The cursor is *fresh* while that time is at most [`IDLE_CURSOR_MAX_AGE_MS`] (10 minutes) old
+//!   by the local wall clock. An answer from a fresh cursor is progress.
+//! - Otherwise an answer is progress only while the chain keeps up with real time: the lag of the
+//!   header time behind the local monotonic clock is at most
+//!   [`FollowerConfig::authority_lag_tolerance`] (3 minutes) above the least it reached since this
+//!   authority leads. Catching up shrinks that lag, and following at the tip keeps it, so both
+//!   are progress, whatever the state. An authority that gives chain slower than real time, one
+//!   block or a hundred a poll, in any state, is not: its answers still apply, but each counts as
+//!   a failed chain request, so after [`FollowerConfig::authority_stall`] another node takes
+//!   over, and `/v1/health` turns `stale` [`super::status::STALE_AFTER_MS`] after the last
+//!   progress.
+//! - An answer with nothing new from a cursor that is not fresh is no progress either. It counts
+//!   against the authority only when the chain moves on: the authority itself claims more, or
+//!   the cross-checking node showed a real block well past it
+//!   ([`ChainSource::chain_beyond_shown`]). With both nodes standing still (a halted network) no
+//!   node is blamed.
+//!
+//! `/v1/health` reports `lag_seconds` as at least the cursor block's age by the local clock.
 
 /// The start of a retry reason that says a tip reorg took a block of the batch off the chain.
 pub const TIP_REORG: &str = "the batch left the selected parent chain (a tip reorg)";
@@ -147,12 +172,16 @@ pub const AUTHORITY_FAILURES: u32 = 2;
 /// is failing (module documentation).
 pub const AUTHORITY_STALL: Duration = Duration::from_secs(180);
 
-/// A poll while `following` (an idle one, or a batch that leaves the cursor within
-/// `caught_up_daa` of the authority's sink) counts as progress for `/v1/health` only while the
-/// cursor's chain block is at most this old by the local clock (R2C-M1, R3C1-M1). A batch while
-/// `catching_up` always counts. The chain makes blocks every second, so a cursor this old is held back, whatever the
-/// node says; `stale` then turns on `STALE_AFTER_MS` later.
+/// The cursor is fresh while its chain block is at most this old by the local clock. An answer
+/// from a fresh cursor is progress, whatever the node says (module documentation, *Progress*).
+/// The chain makes blocks every second, so a cursor this old is held back or the network halted.
 pub const IDLE_CURSOR_MAX_AGE_MS: u64 = 10 * 60 * 1000;
+
+/// From a cursor that is not fresh, an answer is progress only while the cursor block's header
+/// time has kept up with the local monotonic clock to within this, measured from the best it
+/// reached since this authority leads (module documentation, *Progress*, R4C1-M1). It is above
+/// the 132 s a miner may stamp a block ahead of the time, and above a node's pause of a minute.
+pub const AUTHORITY_LAG_TOLERANCE: Duration = Duration::from_secs(180);
 
 /// Settings of a [`Follower`].
 #[derive(Debug, Clone)]
@@ -196,6 +225,10 @@ pub struct FollowerConfig {
     /// ... while the cursor does not move for this long, before another node may take over as the
     /// chain authority ([`AUTHORITY_STALL`], module documentation).
     pub authority_stall: Duration,
+    /// How far the chain from a cursor that is not fresh may fall behind real time before the
+    /// authority's answers are no progress ([`AUTHORITY_LAG_TOLERANCE`], module documentation,
+    /// *Progress*).
+    pub authority_lag_tolerance: Duration,
     /// The chain proofs of every batch (`rpc::proof`). `None`: off. They also need a source that
     /// serves them (`ChainSource::proves_chain`).
     pub chain_proof: Option<ChainProofConfig>,
@@ -222,6 +255,7 @@ impl FollowerConfig {
             prefetch_initial_blocks: 64,
             authority_failures: AUTHORITY_FAILURES,
             authority_stall: AUTHORITY_STALL,
+            authority_lag_tolerance: AUTHORITY_LAG_TOLERANCE,
             chain_proof: Some(c.chain_proof.clone()).filter(|p| p.enabled),
         }
     }
@@ -321,6 +355,31 @@ pub struct Follower<S: ChainSource> {
     contradiction_unsynced: std::sync::atomic::AtomicBool,
     /// The `ChainSource::authority_key` whose calls passed the check.
     checked_authority: Mutex<Option<String>>,
+    /// The local monotonic clock as Unix ms: an instant and the wall clock then.
+    clock: (std::time::Instant, u64),
+    /// The least lag of the cursor block's header time behind [`Follower::mono_ms`] since this
+    /// authority leads (module documentation, *Progress*).
+    best_lag_ms: Mutex<Option<i64>>,
+    /// The cursor whose header time was asked of the node, once per cursor.
+    time_asked: Mutex<Option<Hash32>>,
+    /// A step's answer counted as a failure because the chain falls behind real time: the hand-over
+    /// check runs after it too.
+    behind: std::sync::atomic::AtomicBool,
+    /// When a hand-over after such an answer last found no other node: tried again only after
+    /// `authority_stall`, not at every poll.
+    behind_tried: Mutex<Option<std::time::Instant>>,
+}
+
+/// How the cursor stands against real time (module documentation, *Progress*).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Pace {
+    /// Its chain block's time is not known.
+    Unknown,
+    Fresh,
+    /// Not fresh, but the chain keeps up with real time.
+    Keeping,
+    /// It falls behind real time: why.
+    Behind(String),
 }
 
 /// How often the free space of the data directory and the size of the database are measured.
@@ -451,6 +510,93 @@ impl<S: ChainSource> Follower<S> {
             proof,
             contradiction_unsynced: std::sync::atomic::AtomicBool::new(false),
             checked_authority: Mutex::new(None),
+            clock: (std::time::Instant::now(), now_ms()),
+            best_lag_ms: Mutex::new(None),
+            time_asked: Mutex::new(None),
+            behind: std::sync::atomic::AtomicBool::new(false),
+            behind_tried: Mutex::new(None),
+        }
+    }
+
+    /// The local monotonic clock in Unix ms: the wall clock at the start plus the monotonic time
+    /// since, so a step of the wall clock does not move it.
+    fn mono_ms(&self) -> u64 {
+        self.clock.1 + self.clock.0.elapsed().as_millis() as u64
+    }
+
+    /// The header time of the cursor's chain block, from its header when no batch applied it
+    /// (after a start), asked once per cursor. A header counts only when it hashes to the cursor.
+    async fn learn_cursor_time(&self, cursor: Hash32) {
+        if self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|(h, _)| h == cursor) {
+            return;
+        }
+        if self.time_asked.lock().unwrap_or_else(|e| e.into_inner()).replace(cursor) == Some(cursor) {
+            return;
+        }
+        if let Ok(Some((b, _))) = self.source.block(cursor, false).await {
+            let h = &b.header;
+            if h.hash.as_bytes() == cursor.0 && kaspa_consensus_core::hashing::header::hash(h) == h.hash {
+                *self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()) = Some((cursor, h.timestamp));
+                self.health.update(|s| s.cursor_time_unix_ms = Some(h.timestamp));
+            }
+        }
+    }
+
+    /// How the cursor stands against real time (module documentation, *Progress*). It also takes
+    /// the least lag in.
+    fn pace(&self, cursor: Hash32) -> Pace {
+        let Some(ts) = self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()).filter(|(h, _)| *h == cursor).map(|(_, t)| t) else {
+            return Pace::Unknown;
+        };
+        let lag = self.mono_ms() as i64 - ts as i64;
+        let best = {
+            let mut g = self.best_lag_ms.lock().unwrap_or_else(|e| e.into_inner());
+            let b = g.map_or(lag, |b| b.min(lag));
+            *g = Some(b);
+            b
+        };
+        let age = now_ms().saturating_sub(ts);
+        if age <= IDLE_CURSOR_MAX_AGE_MS {
+            return Pace::Fresh;
+        }
+        let over = lag.saturating_sub(best);
+        if over <= self.cfg.authority_lag_tolerance.as_millis() as i64 {
+            return Pace::Keeping;
+        }
+        Pace::Behind(format!(
+            "the chain falls behind real time: the cursor's chain block is {} s old by the local clock, {} s more behind it than at best",
+            age / 1_000,
+            over / 1_000
+        ))
+    }
+
+    /// The authority answered from `cursor`: whether that is progress (module documentation,
+    /// *Progress*). `chain`: it gave chain, or claimed more by its window. `claims_more`: its own
+    /// position says it has more. An answer that is no progress counts against it as a failed chain
+    /// request, except one with nothing new while no node shows the chain moving.
+    async fn judge_answer(&self, cursor: Hash32, chain: bool, claims_more: bool) -> bool {
+        self.learn_cursor_time(cursor).await;
+        match self.pace(cursor) {
+            Pace::Fresh | Pace::Keeping => {
+                self.chain_answered();
+                true
+            }
+            Pace::Behind(why) if chain || claims_more || self.source.chain_beyond_shown() => {
+                tracing::debug!(reason = %why, "the chain authority's answer is no progress");
+                self.count_chain_failure(why);
+                self.behind.store(true, std::sync::atomic::Ordering::Relaxed);
+                false
+            }
+            // Nothing new and no sign that the chain moves: a halted network, or a quiet one.
+            Pace::Behind(_) => {
+                self.chain_answered();
+                false
+            }
+            // No time known (no header served): judged as before, by the node's answer.
+            Pace::Unknown => {
+                self.chain_answered();
+                chain
+            }
         }
     }
 
@@ -473,6 +619,7 @@ impl<S: ChainSource> Follower<S> {
         self.chain_failures.lock().unwrap_or_else(|e| e.into_inner()).0 = 0;
         *self.progress_at.lock().unwrap_or_else(|e| e.into_inner()) = std::time::Instant::now();
         *self.tip_reorgs.lock().unwrap_or_else(|e| e.into_inner()) = TipReorgs::default();
+        self.behind.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// After a failed step: when the authority's chain requests failed often enough in a row and
@@ -485,14 +632,28 @@ impl<S: ChainSource> Follower<S> {
         if n < self.cfg.authority_failures.max(1) || (stalled < self.cfg.authority_stall && !reorg_stall) {
             return None;
         }
+        // Answers that keep coming slower than real time ask at every poll, not at every backoff:
+        // once no other node could take over, again only after another stall.
+        let behind = self.behind.swap(false, std::sync::atomic::Ordering::Relaxed);
+        if behind
+            && self.behind_tried.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t.elapsed() < self.cfg.authority_stall)
+        {
+            return None;
+        }
         let cursor = self.blocking(|i| i.cursor()).await.ok().flatten()?;
-        let why = format!("{n} chain requests failed in a row, the last {last}; the cursor has not moved for {} s", stalled.as_secs());
+        let why = format!("{n} chain requests failed in a row, the last {last}; no progress for {} s", stalled.as_secs());
         let moved = self.source.authority_failing(cursor.hash, &why).await;
         // Whatever the source did, the count begins again: the next try needs as many failures.
         self.chain_failures.lock().unwrap_or_else(|e| e.into_inner()).0 = 0;
         if !moved {
+            if behind {
+                *self.behind_tried.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+            }
             return None;
         }
+        *self.behind_tried.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        // The new authority is judged from where it starts.
+        *self.best_lag_ms.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.progress_at.lock().unwrap_or_else(|e| e.into_inner()) = std::time::Instant::now();
         // The plan was made on the old authority's chain, and the window sized for its link.
         self.prefetch.lock().await.discard();
@@ -803,7 +964,9 @@ impl<S: ChainSource> Follower<S> {
             None if self.cfg.fetch_parallel > 1 => self.step_prefetch().await,
             None => self.step_sequential().await,
         };
-        if matches!(outcome, StepOutcome::Retry(_)) {
+        // After a failure, or an answer whose chain falls behind real time (module documentation,
+        // *Progress*): the batch applied, but it is no progress.
+        if matches!(outcome, StepOutcome::Retry(_)) || self.behind.load(std::sync::atomic::Ordering::Relaxed) {
             if let Some(o) = self.hand_over().await {
                 outcome = o;
             }
@@ -957,7 +1120,9 @@ impl<S: ChainSource> Follower<S> {
                 h.batch_window_blue = Some(window);
                 h.last_poll_unix_ms = now_ms();
             });
-            self.chain_answered();
+            // It claims chain past the window and gives none: from an old cursor, that is no
+            // progress either.
+            self.judge_answer(cursor.hash, true, true).await;
             return StepOutcome::Widened { window };
         }
         let committed = Committed {
@@ -1041,7 +1206,12 @@ impl<S: ChainSource> Follower<S> {
                     return o;
                 }
                 if let Err(why) = confirmed {
-                    self.prefetch.lock().await.discard();
+                    let mut pf = self.prefetch.lock().await;
+                    if why.contains(crate::rpc::multi::WAITING_FOR_CROSS_CHECK) {
+                        pf.shrink();
+                    }
+                    pf.discard();
+                    drop(pf);
                     tracing::warn!(reason = %why, "window from another node not applied; one step from the cursor");
                     return self.step_sequential().await;
                 }
@@ -1414,27 +1584,30 @@ impl<S: ChainSource> Follower<S> {
         })?;
         let hashes = &raw.added_chain_block_hashes;
         let blocks = &raw.chain_block_accepted_transactions;
-        let fetches = runs.iter().map(|(prev, first, len)| {
-            let last = first + len - 1;
-            let w = WindowRequest {
-                min_confirmations: self.cfg.min_confirmations,
-                end_blue: Some(blocks[last].chain_block_header.blue_score),
-                sink_blue: Some(sink_blue),
-                ..WindowRequest::new(*prev, hashes[last])
-            };
-            self.source.fetch_window_primary(w)
-        });
-        let answers = futures_util::future::join_all(fetches).await;
-        for (&(_, first, len), answer) in runs.iter().zip(answers) {
+        let runs: Vec<crate::rpc::BodyRun> = runs
+            .iter()
+            .map(|&(prev, first, len)| {
+                let last = first + len - 1;
+                let req = WindowRequest {
+                    min_confirmations: self.cfg.min_confirmations,
+                    end_blue: Some(blocks[last].chain_block_header.blue_score),
+                    sink_blue: Some(sink_blue),
+                    ..WindowRequest::new(prev, hashes[last])
+                };
+                crate::rpc::BodyRun { req, first, len }
+            })
+            .collect();
+        let answers = futures_util::future::join_all(runs.iter().map(|r| self.source.fetch_window_primary(r.req))).await;
+        for (run, answer) in runs.iter().zip(answers) {
             let f = answer.map_err(|e| {
                 self.chain_failed("its copy of a window", &e);
-                format!("the primary's copy of {} chain blocks: {e}", len)
+                format!("the primary's copy of {} chain blocks: {e}", run.len)
             })?;
-            let run = crate::rpc::BodyRun { req: WindowRequest::new(Hash32::default(), Hash32::default()), first, len };
-            match crate::rpc::run_difference(raw, &f.raw, &run).map_err(|e| format!("the primary: {e}"))? {
+            match crate::rpc::run_difference(raw, &f.raw, run).map_err(|e| format!("the primary: {e}"))? {
                 None => {}
                 Some(d) => {
-                    self.source.report_lie(origin, &d);
+                    // A third node may decide first (R4C1-L1).
+                    self.source.window_contradicted(origin, start, raw, &runs, &d).await;
                     self.health.update(|h| h.lies_total += 1);
                     return Err(format!("node #{} contradicts the primary: {d}", origin.node));
                 }
@@ -1526,19 +1699,8 @@ impl<S: ChainSource> Follower<S> {
                 if let Some(t) = last_ts.filter(|(h, _)| *h == a.cursor.hash) {
                     *self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()) = Some(t);
                 }
-                // At the sink (`following`), a poll is progress only while the cursor block is
-                // recent: an authority that answers "nothing new", or one chain block a poll, must
-                // not keep a store that falls behind looking current (R2C-M1, R3C1-M1). While
-                // `catching_up` the authority itself reports chain past the cursor, so a batch is
-                // progress whatever its age (an honest catch-up after a restart). Unknown (no
-                // batch applied since the start): not recent.
                 let now = now_ms();
                 let moved = a.added > 0 || a.removed_hashes > 0;
-                let recent = self
-                    .cursor_ts
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .is_some_and(|(h, t)| h == a.cursor.hash && now.saturating_sub(t) <= IDLE_CURSOR_MAX_AGE_MS);
                 // Per-batch detail is logged at DEBUG (`RUST_LOG=kobd=debug`). The status line
                 // every `--status-secs` says how the indexer is doing, as kaspad's "Processed N
                 // blocks in the last 10s" does.
@@ -1583,18 +1745,24 @@ impl<S: ChainSource> Follower<S> {
                     }
                 }
                 let state = if a.added == 0 || !more { FollowerState::Following } else { FollowerState::CatchingUp };
+                // Progress by the cursor block's time, whatever the state or the node's position
+                // (module documentation, *Progress*, R4C1-M1). An answer that is no progress
+                // still applies, and counts against the authority.
+                let progress = self.judge_answer(a.cursor.hash, moved, more).await;
+                let cursor_time =
+                    self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()).filter(|(h, _)| *h == a.cursor.hash).map(|(_, t)| t);
                 self.health.update(|h| {
                     h.state = state;
                     h.cursor_hash = Some(a.cursor.hash);
                     h.cursor_daa = a.cursor.daa;
+                    h.cursor_time_unix_ms = cursor_time;
                     if !c.prefetched {
                         h.batch_window_blue = Some(window);
                     }
                     h.last_error = None;
                     h.last_poll_unix_ms = now_ms();
-                    // A batch while catching up, or a poll at the sink from a recent cursor block.
                     // The first poll sets the baseline.
-                    if (moved && state == FollowerState::CatchingUp) || recent || h.last_progress_unix_ms == 0 {
+                    if progress || h.last_progress_unix_ms == 0 {
                         h.last_progress_unix_ms = now;
                     }
                     // A commit went through, so there is no storage error any more.
@@ -1616,7 +1784,6 @@ impl<S: ChainSource> Follower<S> {
                     }
                 });
                 self.note_catch_up();
-                self.chain_answered();
                 self.save_floor().await;
                 if !a.event.is_empty() {
                     let _ = self.events.send(Arc::new(a.event));
@@ -1800,6 +1967,7 @@ impl<S: ChainSource> Follower<S> {
                     self.health.update(|h| {
                         h.cursor_hash = Some(hash);
                         h.cursor_daa = daa;
+                        h.cursor_time_unix_ms = None;
                         h.reverted_blocks_total += a.reverted_rows_blocks as u64;
                         h.reorgs_total += 1;
                     });
