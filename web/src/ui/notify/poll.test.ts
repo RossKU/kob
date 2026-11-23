@@ -80,3 +80,23 @@ describe('pollWallet: chain re-organisations', () => {
     expect(st.snapshots()!.has(ID as never)).toBe(true);
   });
 });
+
+describe('pollWallet: incoming token payments', () => {
+  const held = (n: number) => ({ txid: 'ee'.repeat(32), index: n, token: TOKEN, owner: PK, amount: '5', value: '10', role: 'owned', spent: false });
+  const withTokens = (list: unknown[] & { truncated?: true }): Services => {
+    const s = services({ active: [], recent: [], byId: new Map() });
+    (s.indexer as unknown as { tokenUtxos: () => Promise<unknown> }).tokenUtxos = async () => list;
+    return s;
+  };
+  const payments = (r: { events: { kind: string }[] }) => r.events.filter((e) => e.kind === 'payment').length;
+
+  it('a holding left out of a list cut at its page bound is not a new payment when it is listed again (R5B-I3)', async () => {
+    const st = store();
+    await pollWallet(withTokens([held(0), held(1)]), st, PK, NOW);
+    expect(payments(await pollWallet(withTokens(Object.assign([held(0)], { truncated: true as const })), st, PK, NOW + 15_000))).toBe(0);
+    expect(payments(await pollWallet(withTokens([held(0), held(1)]), st, PK, NOW + 30_000))).toBe(0);
+    // a whole list is complete: what it leaves out is gone, and a later listing is new
+    await pollWallet(withTokens([held(0)]), st, PK, NOW + 45_000);
+    expect(payments(await pollWallet(withTokens([held(0), held(1)]), st, PK, NOW + 60_000))).toBe(1);
+  });
+});

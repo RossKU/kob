@@ -179,6 +179,9 @@ export interface TokenUtxosQuery {
   maxPages?: number;
 }
 
+/** What `tokenUtxos` lists. `truncated` is set when it stopped at `maxPages` with more to read. */
+export type TokenUtxoList = TokenUtxoView[] & { truncated?: true };
+
 /** The paging of `GET /v1/trades/{token}` and of the pair fills. */
 export interface TradesQuery {
   limit?: number;
@@ -266,9 +269,10 @@ export interface IndexerApi {
    * their decoded state. It follows `next_cursor`. An indexer without the endpoint (404, 501 or
    * 405) resolves to `null`, never an error toast, and callers fall back to the local token
    * tracker. The indexer cannot list issuance (genesis) outputs and may list a holding the chain
-   * has since spent, so callers verify every UTXO on the node.
+   * has since spent, so callers verify every UTXO on the node. A list cut at `maxPages`, with a
+   * cursor still set, carries `truncated: true`: more may exist.
    */
-  tokenUtxos(q: TokenUtxosQuery, o?: RequestOptions): Promise<TokenUtxoView[] | null>;
+  tokenUtxos(q: TokenUtxosQuery, o?: RequestOptions): Promise<TokenUtxoList | null>;
   /**
    * `GET /v1/creator-locks?key=`: the covenant ids of the tokens whose declaration locks a share
    * for `key`. It is a hint only. The caller loads and verifies each declaration itself
@@ -616,9 +620,9 @@ export class HttpIndexer implements IndexerApi {
     return Array.isArray(r?.items) ? r.items : [];
   }
 
-  async tokenUtxos(q: TokenUtxosQuery, o?: RequestOptions): Promise<TokenUtxoView[] | null> {
+  async tokenUtxos(q: TokenUtxosQuery, o?: RequestOptions): Promise<TokenUtxoList | null> {
     if (this.now() < this.tokenUtxosUnsupportedUntil) return null;
-    const out: TokenUtxoView[] = [];
+    const out: TokenUtxoList = [];
     let cursor: string | undefined;
     try {
       for (let page = 0; page < (q.maxPages ?? 10); page++) {
@@ -639,6 +643,8 @@ export class HttpIndexer implements IndexerApi {
       }
       throw e;
     }
+    // Stopped at `maxPages` with more to read: the caller must not take the list as complete.
+    if (cursor !== undefined) out.truncated = true;
     return out;
   }
 

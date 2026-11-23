@@ -84,8 +84,11 @@ async function pollPayments(s: Services, store: NotificationStore, pubkey: Hex, 
   ]);
   const next: IncomingPayment[] = kas.map((u) => ({ key: `${u.transactionId}:${u.index}`, amount: BigInt(u.amount) }));
   for (const u of tokens ?? []) if (u.role === 'owned' && !u.spent) next.push({ key: `${u.txid}:${u.index}`, amount: BigInt(u.amount), token: u.token });
-  const events = diffPayments(store.paymentKeys(), next, nowMs, settled);
-  store.setPaymentKeys(next.map((p) => p.key));
+  const prev = store.paymentKeys();
+  const events = diffPayments(prev, next, nowMs, settled);
+  // A token list cut at its page bound may leave out holdings seen before. They are kept, or they
+  // would read as new payments once listed again.
+  store.setPaymentKeys(tokens?.truncated && prev ? [...new Set([...next.map((p) => p.key), ...prev])] : next.map((p) => p.key));
   return events;
 }
 

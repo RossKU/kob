@@ -244,9 +244,16 @@ export function tokenPriceDp(decimals: number, ref: bigint | null, basis: bigint
   return displayPriceDp(ref !== null && basis ? basisToTokenSompi(ref, decimals, basis) : null);
 }
 
-/** The open order counts as a tooltip note (`3 asks · 4 bids`). Null when neither is known. */
+/**
+ * The most open orders the indexer counts on one side (`docs/api-reference.md` 3.4: the bounds of
+ * the book read, 1,000 with a fixed quote and twice 200 auctions). A side at it may hold more.
+ */
+export const OPEN_COUNT_CAP = 1400;
+const openCount = (n: number): string => (n >= OPEN_COUNT_CAP ? `${n}+` : String(n));
+
+/** The open order counts as a tooltip note (`3 asks · 4 bids`; `1400+` at the cap). Null when neither is known. */
 const ordersNote = (asks: number | null, bids: number | null): string | null =>
-  asks === null && bids === null ? null : t('market.list.ordersTitle', { asks: asks ?? 0, bids: bids ?? 0 });
+  asks === null && bids === null ? null : t('market.list.ordersTitle', { asks: openCount(asks ?? 0), bids: openCount(bids ?? 0) });
 
 /** The total supply a market cap divides by, in base units, and where it comes from. */
 export interface Supply { units: bigint; source: 'registry' | 'kascov' }

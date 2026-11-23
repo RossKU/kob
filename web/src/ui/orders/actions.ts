@@ -108,7 +108,8 @@ async function straysOfOrder(s: Services, id: Hex, strays: readonly StrayView[] 
   if (s.indexer && typeof s.indexer.tokenUtxos === 'function') {
     try {
       const per = await s.indexer.tokenUtxos({ owner: id, limit: 200 });
-      if (per) return { views: per.filter((u) => u.role === 'stray' && !u.spent && u.owner === id), unknown: false };
+      // A list cut at its page bound may miss strays, so the cancel warns as for an unread list.
+      if (per) return { views: per.filter((u) => u.role === 'stray' && !u.spent && u.owner === id), unknown: per.truncated === true };
     } catch {
       return { views: fromList, unknown: true };
     }

@@ -5,7 +5,7 @@ import type { TokenInfo } from '../../kob/registry';
 import {
   DEFAULT_LIST_PAGE_SIZE, keepOrder, listPageSizeOf, pageWindow, pairHasDecimals,
   ariaSort, changeCell, DEFAULT_SORT, filterPairs, firstDir, kascovEntry, listedPairs, LOADING, nextSort, NONE, pairEntry, pairLabelOf, priceCell, runPool, settled, sortEntries,
-  depthCell, marketCapCell, pairDepthCell, supplyOf, tokenEntry, volumeCell, type ListEntry, type Slot,
+  depthCell, marketCapCell, OPEN_COUNT_CAP, pairDepthCell, supplyOf, tokenEntry, volumeCell, type ListEntry, type Slot,
 } from './market-list';
 import type { KascovMeta, TokenRow } from './token-model';
 
@@ -421,6 +421,10 @@ describe('depth within 2 %', () => {
     expect(tokenEntry(r, ok(stats(ID('a'), { depth_2pct_quote: 'oops' }))).cells.depth).toEqual({ text: null, title: null });
     // without order counts there is no note
     expect(depthCell(150_000_000n, null)).toEqual({ cell: { text: '1.50', title: '1.50 KAS' }, value: 1.5 });
+    // a side at the indexer's cap of 1,400 may hold more: "+" (R5B-I3)
+    expect(OPEN_COUNT_CAP).toBe(1400);
+    const capped = row('EXKCC', ID('a'), { openAsks: 1400, openBids: 1399 });
+    expect(tokenEntry(capped, ok(stats(ID('a'), { depth_2pct_quote: '0' }))).cells.depth.title).toBe('0.00 KAS · 1400+ asks · 1399 bids');
   });
 
   it('a pair: the QUOTE value from its book, a lower bound marked "≥"; the pair table has no market cap', () => {

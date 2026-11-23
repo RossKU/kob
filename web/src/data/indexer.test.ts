@@ -289,10 +289,15 @@ describe('HttpIndexer.tokenUtxos', () => {
       return c === null ? json({ items: [mk(0), mk(1)], next_cursor: 'c1' }) : c === 'c1' ? json({ items: [mk(2)], next_cursor: 'c2' }) : json({ items: [mk(3)], next_cursor: null });
     });
     const ix = new HttpIndexer({ baseUrl: 'http://x', fetch: f });
-    expect((await ix.tokenUtxos({ owner: H1, token: H2 }))!.map((x) => x.index)).toEqual([0, 1, 2, 3]);
+    const all = await ix.tokenUtxos({ owner: H1, token: H2 });
+    expect(all!.map((x) => x.index)).toEqual([0, 1, 2, 3]);
+    expect(all!.truncated).toBeUndefined();
     expect(calls.map((u) => u.searchParams.get('cursor'))).toEqual([null, 'c1', 'c2']);
+    // cut at maxPages with a cursor still set: the same items, marked as maybe incomplete (R5B-I3)
     const capped = stub(() => json({ items: [mk(0)], next_cursor: 'again' }));
-    expect(await new HttpIndexer({ baseUrl: 'http://x', fetch: capped.f }).tokenUtxos({ owner: H1, maxPages: 3 })).toHaveLength(3);
+    const cut = await new HttpIndexer({ baseUrl: 'http://x', fetch: capped.f }).tokenUtxos({ owner: H1, maxPages: 3 });
+    expect(cut).toHaveLength(3);
+    expect(cut!.truncated).toBe(true);
     expect(capped.calls).toHaveLength(3);
   });
 
