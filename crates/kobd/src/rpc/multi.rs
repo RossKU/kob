@@ -1054,15 +1054,17 @@ impl LagTrack {
 /// it until it repeats.
 pub const TIPS_DIFFER: &str = "the two nodes' newest chain blocks differ for a moment";
 
-/// The start of the error when the authority answers nothing new while the cross-checking node
-/// reports at least [`WITHHELD_CHAIN_BLOCKS`] chain blocks after the same cursor (R2C-M1).
+/// The start of the error when the authority answers nothing new, or fewer than
+/// [`WITHHELD_CHAIN_BLOCKS`] chain blocks, while the cross-checking node reports at least
+/// [`WITHHELD_CHAIN_BLOCKS`] more after the same cursor (R2C-M1, R3C1-M1).
 ///
 /// It counts as a failed chain request of the authority (`failover::node_failure`), so the cursor
 /// does not count as confirmed at the sink and a node that keeps doing it is handed over from.
 pub const AUTHORITY_BEHIND: &str = "the chain authority reports no new chain block that the cross-checking node has";
 
-/// Chain blocks after the cursor that the cross-checking node must report, while the authority
-/// reports none, for [`AUTHORITY_BEHIND`]: well past a moment's difference of two tips.
+/// Chain blocks after the cursor that the cross-checking node must report beyond the authority's
+/// answer, while that answer is shorter than this, for [`AUTHORITY_BEHIND`]: well past a moment's
+/// difference of two tips, and far below the hundreds of chain blocks a node caps an answer at.
 pub const WITHHELD_CHAIN_BLOCKS: usize = 100;
 
 /// The start of the error while the authority's answers wait for a cross-checking node.
@@ -1118,6 +1120,9 @@ struct Unvouched {
 #[derive(Debug, Clone)]
 struct BodiesUnchecked {
     since: tokio::time::Instant,
+    /// The last failure: one more than [`CrossCheckPolicy::single_after`] after it starts a new
+    /// streak, and the clock again (R3C1-L2).
+    last: tokio::time::Instant,
     /// Past [`CrossCheckPolicy::single_after`]: the authority's copies apply on the chain proofs
     /// alone.
     alone: bool,
@@ -1673,6 +1678,15 @@ impl<N: ChainSource> MultiNode<N> {
         }
         let a = super::verify::agreement(&raw, &ids, self.policy.deep_daa);
         let Some(why) = a.contradiction else {
+            // One that answers a few chain blocks a poll drifts the index behind just as well
+            // (R3C1-M1). An honest answer is never that short against such a lead: a node caps
+            // its answers at hundreds of chain blocks or more, and a window answers all of itself.
+            let (n, cross_n) = (raw.added_chain_block_hashes.len(), ids.added_chain_block_hashes.len());
+            if n < WITHHELD_CHAIN_BLOCKS && cross_n >= n + WITHHELD_CHAIN_BLOCKS {
+                return Err(RpcError::Node(format!(
+                    "{AUTHORITY_BEHIND}: it reports {n} chain blocks after the cursor, the cross-checking node {cross_n}"
+                )));
+            }
             self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
             if a.keep == 0 && !raw.added_chain_block_hashes.is_empty() {
                 return Err(RpcError::Node(format!(
@@ -1887,7 +1901,14 @@ impl<N: ChainSource> MultiNode<N> {
         let single = self.policy.single_after;
         let (waited, first, why) = {
             let mut g = self.bodies_unchecked.lock().unwrap_or_else(|e| e.into_inner());
-            let u = g.get_or_insert(BodiesUnchecked { since: now, alone: false, why: String::new(), reason: String::new() });
+            let u =
+                g.get_or_insert(BodiesUnchecked { since: now, last: now, alone: false, why: String::new(), reason: String::new() });
+            // A window with nothing to compare never ends a wait, so an old failure must not
+            // count towards a new one.
+            if !u.alone && now.saturating_duration_since(u.last) >= single {
+                u.since = now;
+            }
+            u.last = now;
             // A node that backs off is not asked: the reason keeps its last failure.
             if j.is_some() || u.why.is_empty() {
                 u.why = why;
@@ -2529,9 +2550,11 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     /// [`CrossCheckPolicy::single_after`] has passed since the first such failure in a row, then
     /// the authority's copies apply on the chain proofs alone and `/v1/health` says so
     /// (`cross_check_alone` with the node and the reason, an alarm). Any answer of the node ends
-    /// it. Only a lying authority gains from unchecked copies, and it cannot make the honest
-    /// node's windows fail; the wait is the exposure the id check accepts already (K-M3: running
-    /// alone is visible). A difference never goes on alone.
+    /// it. Only a lying authority gains from unchecked copies. It cannot forge a copy, but it can
+    /// make the windows large, so a comparison that gets no copy shrinks the follower's window
+    /// (`indexer::follower`, R3C1-L1); the wait is the exposure the id check accepts already (K-M3:
+    /// running alone is visible). A failure more than `single_after` after the previous one starts
+    /// the clock again (R3C1-L2). A difference never goes on alone.
     async fn confirm_bodies(&self, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun]) -> Result<bool, String> {
         if self.cross_node().is_none() || self.cross.lock().unwrap_or_else(|e| e.into_inner()).alone {
             return Ok(false);
@@ -3438,18 +3461,27 @@ mod tests {
         *b.down.lock().unwrap() = Some("connection reset by peer".into());
         let e = m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err();
         assert!(e.contains("(0 of 120 s)"), "{e}");
+        // R3C1-L2: a quiet time with nothing to compare, then one more failure, is a new streak:
+        // it waits the whole `single_after`, not at once alone.
+        advance(200).await;
+        let e = m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err();
+        assert!(e.contains("(0 of 120 s)"), "{e}");
+        assert!(!m.cross_check().alone);
 
         // (c) A difference never applies, also past `single_after` and after running alone.
         let b = node(1);
         let m = pair(b.clone());
         *b.down.lock().unwrap() = Some("connection reset by peer".into());
         assert!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.is_err());
-        advance(130).await;
+        advance(65).await;
+        assert!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.is_err());
+        advance(65).await;
         assert_eq!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await, Ok(false));
         assert!(m.cross_check().alone);
         *b.down.lock().unwrap() = None;
         *b.sig.lock().unwrap() = 2;
-        advance(11).await;
+        // three failures in a row bench it: asked again after the bench
+        advance(BENCH_FIRST.as_secs() + 1).await;
         for _ in 0..2 {
             let e = m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err();
             assert!(e.contains("signature script") && e.contains("no third node"), "{e}");
@@ -3661,6 +3693,20 @@ mod tests {
         assert!(super::super::failover::node_failure(&e));
         let m = pair(Fixed::new(&[], Ok(&[])), Fixed::new(&[], Ok(&many[..3])));
         assert!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.is_empty());
+        // R3C1-M1: one chain block a poll against the same lead is no better than none.
+        let more: Vec<u8> = (1..=(WITHHELD_CHAIN_BLOCKS + 1) as u8).collect();
+        let m = pair(Fixed::new(&[1], Ok(&[])), Fixed::new(&[], Ok(&more)));
+        let e = m.vspc_v2(req()).await.unwrap_err();
+        assert!(e.to_string().contains(AUTHORITY_BEHIND), "{e}");
+        assert!(super::super::failover::node_failure(&e));
+        // A lead short of it is a moment's lag: what both report applies.
+        let m = pair(Fixed::new(&[1], Ok(&[])), Fixed::new(&[], Ok(&more[..WITHHELD_CHAIN_BLOCKS])));
+        assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 1);
+        // A long answer is a node's cap or a whole window, not withholding, whatever the other
+        // node reports.
+        let longer: Vec<u8> = (1..=250u8).collect();
+        let m = pair(Fixed::new(&many, Ok(&[])), Fixed::new(&[], Ok(&longer)));
+        assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), WITHHELD_CHAIN_BLOCKS);
         // Another third block, so the first two are kept.
         let m = pair(Fixed::new(&[1, 2, 3], Ok(&[])), Fixed::new(&[], Ok(&[1, 2, 9])));
         let r = m.vspc_v2(req()).await.unwrap();

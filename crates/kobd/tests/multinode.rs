@@ -51,6 +51,8 @@ enum Mode {
     IdsTimeOutUnbounded,
     /// Every window it serves arrives as a frame header claiming 3 GiB, beyond the client's absolute limit (1 GiB).
     Oversize,
+    /// A copy of more than this many chain blocks times out: a node that cannot copy a large window in time.
+    WindowsTimeOutAbove(usize),
 }
 
 /// What a node forges about the cursor once `forge` is set: that it does not know it, or that it is below its retention
@@ -120,6 +122,15 @@ impl ChainSource for Peer {
             return Err(RpcError::TooLarge { size: 3 << 30, limit: req.max_bytes.unwrap_or(1 << 30) });
         }
         let mut r = self.node.vspc_v2(req).await?;
+        // Its only chain requests are the copies the cross-check asks (`High` without chain proofs).
+        if let Mode::WindowsTimeOutAbove(n) = self.mode {
+            if !windowed {
+                self.windows.fetch_add(1, Ordering::Relaxed);
+            }
+            if r.added_chain_block_hashes.len() > n {
+                return Err(RpcError::Timeout(Duration::from_secs(30)));
+            }
+        }
         if let Mode::HidesTxFrom(daa) = self.mode {
             for b in r.chain_block_accepted_transactions.iter_mut().filter(|b| b.chain_block_header.daa_score >= daa) {
                 b.accepted_transactions.pop();
@@ -719,4 +730,43 @@ async fn two_hanging_secondaries_do_not_hold_a_window_for_the_request_timeout() 
     assert_eq!(h.cursor_hash, Some(node.tip()));
     assert_eq!(m.snapshot(), fresh_snapshot(&node.chain()), "the same rows as a clean replay");
     assert!(h.nodes[1..].iter().all(|n| n.windows_ok == 0), "{:?}", h.nodes);
+}
+
+/// R3C1-L1: a fast authority grows the sequential window, and the cross-checking node must copy the window's KOB
+/// transactions. One that cannot copy a large window in time shrinks the window, as a timeout of the authority does, so the
+/// copies are compared on smaller windows and never go on alone. Before, the window stayed as large, every comparison
+/// failed again, and after `single_after` the authority's copies applied alone.
+#[tokio::test(start_paused = true)]
+async fn a_cross_checking_node_that_cannot_copy_a_large_window_shrinks_it_and_never_goes_alone() {
+    let c = Ctx::new();
+    let _ = chain(&c, 200);
+    let node = c.hs.node.clone();
+    let slow = Peer::new(&node, Mode::WindowsTimeOutAbove(12));
+    // The default 120 s. A failed copy also backs the node off (5 s, doubling), and it is not asked meanwhile.
+    let policy = CrossCheckPolicy::default();
+    let m = multi_with(
+        node.anchor(),
+        vec![(spec("primary", true, 1), Peer::new(&node, Mode::Honest)), (cross_check("second"), slow.clone())],
+        policy,
+    );
+    let mut failed_copies = 0;
+    for _ in 0..20_000 {
+        let o = m.follower.step().await;
+        assert!(!matches!(o, StepOutcome::Gap(_)), "gap: {o:?}");
+        assert!(!m.health.snapshot().cross_check_alone, "the copies went on alone after {o:?}");
+        if matches!(&o, StepOutcome::Retry(r) if r.contains("copies of KOB transactions")) {
+            failed_copies += 1;
+        }
+        if matches!(o, StepOutcome::Idle) {
+            break;
+        }
+        if matches!(o, StepOutcome::Retry(_)) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+    let h = m.health.snapshot();
+    assert_eq!(h.cursor_hash, Some(node.tip()));
+    assert_eq!(m.snapshot(), fresh_snapshot(&node.chain()), "the same rows as a clean replay");
+    assert!(failed_copies > 0, "the window grew past what the node can copy");
+    assert!(slow.windows.load(Ordering::Relaxed) > 1, "smaller windows were copied: {:?}", h.nodes[1]);
 }

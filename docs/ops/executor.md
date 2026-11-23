@@ -1283,8 +1283,8 @@ stays the authority for the selected chain (`rpc::multi`):
 * two parts of a transaction are outside every hash: its signature scripts and the spent outputs the node attaches to its
   inputs. The indexer reads both for the transactions it tracks, so before a window from another node is applied, every
   chain block holding a transaction that can matter to KOB is fetched from the primary and must agree with it in
-  everything the indexer reads (`indexer::trust`). A transaction can matter when its payload is a KOB1 placement, amend
-  or sweep record, an input spends an output the store tracks (or an output of such a transaction earlier in the window), or an
+  everything the indexer reads (`indexer::trust`). A transaction can matter when it holds a KOB1 placement record whose
+  output carries the record's order script under a covenant binding, an input spends an output the store tracks (or an output of such a transaction earlier in the window), or an
   output carries the binding of a token some order trades or the allowlist tracks: all decided by the hashed parts and
   the store, never by what the other node says alone. On TN10 that is a few percent of the chain blocks;
 * a node that contradicts a hash or the primary is **dropped** until the process restarts (logged as an error, `lies` in
@@ -3261,23 +3261,34 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   node and its last failure, a `cross-check:` entry in `node_alarms`). Its failed copies count as failed windows, so it is
   benched for bodies, and while it backs off or is benched it is not waited for; it is asked again after that, so a node
   that keeps failing costs at most one 30 s timeout per bench (60 s doubling to 15 minutes). Its first comparison ends it
-  and starts the clock again. A difference is never this case: it applies nothing, as above. Only a lying authority gains
-  from unchecked copies, and it cannot make an honest cross-checking node's windows fail; the 120 s are the exposure the id
-  check accepts already. **What can matter, and the extra load** (R2C-M2, R2C-L2): a transaction matters when it spends a tracked
+  and starts the clock again, and so does a failure more than 120 s after the previous one (a new streak, R3C1-L2). A
+  difference is never this case: it applies nothing, as above. Only a lying authority gains from unchecked copies. It cannot
+  forge a copy, but it can make the windows large (a sequential window doubles while the authority answers fast, up to
+  2^20 blue score or 256 MiB), so a comparison that gets no copy shrinks the follower's window as a timeout of the authority
+  does (to a quarter, R3C1-L1). A failed copy also backs the node off (5 s, doubling), so within the 120 s it is asked
+  for the window, a quarter and a sixteenth of it (30 s each), and the window grows again only after a comparison succeeded. The 120 s are the
+  exposure the id check accepts already. **What can matter, and the extra load** (R2C-M2, R2C-L2): a transaction matters when it spends a tracked
   output, carries a token output of a traded or allowlisted token, or holds a KOB1 placement record whose output carries the
   record's order script under a covenant binding. Any other KOB1 payload (one that does not decode, a note, a sweep or an
   amend next to no tracked order, an order record no output carries) is read from the payload alone, and an order record no
   output carries is recorded only within the same bound as an undecodable payload (256 per reorg window, as the stand-in
-  `KOB1\xff`). So forcing work costs a real covenant output per transaction (its KAS carrier, at least 0.08 KAS, stays
-  locked in it until the order is spent). In the worst case, a flagged transaction in every chain block of a window: one `getBlock` per merged block that
+  `KOB1\xff`). So forcing work takes a real placement per transaction, but not more capital: a maker's cancel constrains no
+  output, so one transaction can cancel the previous order (a tracked input) and place the next one, reusing the same KAS
+  carrier (about 0.1 KAS). Flagging every chain block costs about one network fee per block (R3C1-L3); the load per window
+  stays bounded as follows. In the worst case, a flagged transaction in every chain block of a window: one `getBlock` per merged block that
   holds one (from the authority), and from the cross-checking node at most 4 window requests per window, or, past 4 runs,
   one copy of the window from its first flagged chain block to its last (at most one extra copy of the authority's window,
   each answer at most 256 MiB, asked one after another). The referee is asked the same only on a difference.
-  **A chain authority that answers nothing new** (R2C-M1): when the cross-checking node reports 100 or more chain blocks
-  after the cursor and the authority none, the answer is a failed chain request of the authority (it counts towards handing
-  the role over, *A failing chain authority*), not a confirmation that the cursor is at the sink. And an idle poll counts as
-  progress for `/v1/health` only while the cursor's chain block is at most 10 minutes old by the local clock, so a frozen
-  store turns `stale` within about 20 minutes, with or without a cross-checking node. **Window answers** (R2C-M5) take at
+  **A chain authority that answers nothing new, or a few chain blocks a poll** (R2C-M1, R3C1-M1): when its answer has
+  fewer than 100 chain blocks after the cursor and the cross-checking node reports 100 or more beyond it, the answer is a
+  failed chain request of the authority (it counts towards handing the role over, *A failing chain authority*), not a
+  confirmation that the cursor is at the sink. An honest answer is never that short against such a lead: a node caps an
+  answer at hundreds of chain blocks or more, and a catch-up window answers all of itself. And while the follower is
+  `following` (the authority puts its sink within `caught_up_daa`, 100 DAA, of the cursor), a poll counts as progress for
+  `/v1/health`, idle or not, only while the cursor's chain block is at most 10 minutes old by the local clock; a batch
+  while `catching_up` always counts, so an honest catch-up after a restart (an old cursor, the authority reporting far more
+  chain) is not taken for a failing authority. A store that falls behind turns `stale` within about 20 minutes, with or
+  without a cross-checking node. **Window answers** (R2C-M5) take at
   most 256 MiB each when the request names no smaller limit (the prefetch does): one chain block's acceptance data is far
   below that, and a larger honest window is split. **Not covered:** a single node (an own node with no `[[nodes]]` cross-checker, or the failover's fallback
   alone), and the time after `single_node_after_secs` (120 s) without any answer of a cross-checking node, when the

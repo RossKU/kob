@@ -147,9 +147,10 @@ pub const AUTHORITY_FAILURES: u32 = 2;
 /// is failing (module documentation).
 pub const AUTHORITY_STALL: Duration = Duration::from_secs(180);
 
-/// An idle poll (the authority reports nothing after the cursor) counts as progress for
-/// `/v1/health` only while the cursor's chain block is at most this old by the local clock
-/// (R2C-M1). The chain makes blocks every second, so a cursor this old is held back, whatever the
+/// A poll while `following` (an idle one, or a batch that leaves the cursor within
+/// `caught_up_daa` of the authority's sink) counts as progress for `/v1/health` only while the
+/// cursor's chain block is at most this old by the local clock (R2C-M1, R3C1-M1). A batch while
+/// `catching_up` always counts. The chain makes blocks every second, so a cursor this old is held back, whatever the
 /// node says; `stale` then turns on `STALE_AFTER_MS` later.
 pub const IDLE_CURSOR_MAX_AGE_MS: u64 = 10 * 60 * 1000;
 
@@ -916,7 +917,20 @@ impl<S: ChainSource> Follower<S> {
                     confirmations = Some(confirmations.unwrap_or(0).max(TIP_REORG_CONFIRMATIONS));
                 }
                 Err(StepOutcome::Retry(m)) if m.starts_with(TIP_REORG) => return self.tip_reorg_wait(m),
-                Err(o) => return o,
+                Err(o) => {
+                    // The cross-checking node gave no copy of the window's KOB transactions: ask
+                    // for a smaller window, as for a timeout of the authority. A fast authority
+                    // grows the window, and the copy must not grow with it (R3C1-L1).
+                    if matches!(&o, StepOutcome::Retry(m) if m.contains(crate::rpc::multi::WAITING_FOR_CROSS_CHECK)) {
+                        let window = {
+                            let mut w = self.win();
+                            w.on_timeout(plan.span);
+                            w.current()
+                        };
+                        self.health.update(|h| h.batch_window_blue = Some(window));
+                    }
+                    return o;
+                }
             }
         };
         let batch = match tokio::task::spawn_blocking(move || raw.into_batch()).await.expect("parse task panicked") {
@@ -1512,10 +1526,12 @@ impl<S: ChainSource> Follower<S> {
                 if let Some(t) = last_ts.filter(|(h, _)| *h == a.cursor.hash) {
                     *self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()) = Some(t);
                 }
-                // An idle poll confirms the cursor at the sink only while the cursor block is
-                // recent: an authority that answers "nothing new" must not keep a frozen store
-                // looking current (R2C-M1). Unknown (no batch applied since the start): not
-                // confirmed.
+                // At the sink (`following`), a poll is progress only while the cursor block is
+                // recent: an authority that answers "nothing new", or one chain block a poll, must
+                // not keep a store that falls behind looking current (R2C-M1, R3C1-M1). While
+                // `catching_up` the authority itself reports chain past the cursor, so a batch is
+                // progress whatever its age (an honest catch-up after a restart). Unknown (no
+                // batch applied since the start): not recent.
                 let now = now_ms();
                 let moved = a.added > 0 || a.removed_hashes > 0;
                 let recent = self
@@ -1566,8 +1582,9 @@ impl<S: ChainSource> Follower<S> {
                         super::release::publish(&self.health, n);
                     }
                 }
+                let state = if a.added == 0 || !more { FollowerState::Following } else { FollowerState::CatchingUp };
                 self.health.update(|h| {
-                    h.state = if a.added == 0 || !more { FollowerState::Following } else { FollowerState::CatchingUp };
+                    h.state = state;
                     h.cursor_hash = Some(a.cursor.hash);
                     h.cursor_daa = a.cursor.daa;
                     if !c.prefetched {
@@ -1575,9 +1592,9 @@ impl<S: ChainSource> Follower<S> {
                     }
                     h.last_error = None;
                     h.last_poll_unix_ms = now_ms();
-                    // Progress, or a poll that confirmed the cursor is at the sink of the node
-                    // while the cursor block is recent. The first poll sets the baseline.
-                    if moved || recent || h.last_progress_unix_ms == 0 {
+                    // A batch while catching up, or a poll at the sink from a recent cursor block.
+                    // The first poll sets the baseline.
+                    if (moved && state == FollowerState::CatchingUp) || recent || h.last_progress_unix_ms == 0 {
                         h.last_progress_unix_ms = now;
                     }
                     // A commit went through, so there is no storage error any more.
