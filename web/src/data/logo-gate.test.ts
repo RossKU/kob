@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { LOGO_SHOWN_KEY, acquiredTokens, logoGate, readShown, withholdsLogo } from './logo-gate';
+import { LOGO_SHOWN_KEY, acquiredTokens, logoGate, logoScope, readShown, withholdsLogo } from './logo-gate';
 
 const A = 'a'.repeat(64);
 const B = 'b'.repeat(64);
@@ -78,5 +78,14 @@ describe('what a wallet view withholds', () => {
   });
   it('ipfs:// is never withheld', () => {
     expect(withholdsLogo('wallet', false, 'ipfs')).toBe(false);
+  });
+});
+
+describe('the scope a logo is gated under', () => {
+  it('a row only the holdings name is a wallet view wherever it shows; other market rows are not gated', () => {
+    expect(logoScope(undefined, 'held')).toBe('wallet');
+    expect(logoScope(undefined, 'indexer')).toBeUndefined();
+    expect(logoScope(undefined, undefined)).toBeUndefined();
+    expect(logoScope('wallet', 'indexer')).toBe('wallet');
   });
 });

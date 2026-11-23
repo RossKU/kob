@@ -8,7 +8,8 @@
 //   delivered it (claims included), or it sold it,
 // - the user created it, by the creation records,
 // - or the user clicked "Show logo" on it, which is remembered per token in this browser.
-// Anything unknown counts as not acquired. Market views are not gated. ipfs:// logos and
+// Anything unknown counts as not acquired. Market views are not gated, except for a token only
+// the wallet's holdings name (`logoScope`). ipfs:// logos and
 // kascov.io's checked copies are not gated here either.
 import { useEffect, useState } from 'preact/hooks';
 
@@ -60,6 +61,14 @@ export function readShown(store: Store | null = browserStore()): Set<string> {
  * shown by choice. Everything else is not gated here.
  */
 export const withholdsLogo = (scope: 'wallet' | undefined, allowed: boolean, kind: 'https' | 'ipfs'): boolean => scope === 'wallet' && !allowed && kind === 'https';
+
+/**
+ * The scope a token's logo is gated under. A row only the wallet's holdings name (`source: 'held'`,
+ * ui/market/held-list.ts) is a wallet view wherever it shows, the market list and the token's own
+ * page included: no list but the holder's names that token, so its logo would tell its creator's
+ * host who holds it.
+ */
+export const logoScope = (scope: 'wallet' | undefined, source: string | undefined): 'wallet' | undefined => scope ?? (source === 'held' ? 'wallet' : undefined);
 
 class LogoGate {
   private acquired = new Set<string>();

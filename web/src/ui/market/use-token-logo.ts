@@ -28,7 +28,7 @@ import { logoBlocklist, logoBlocklistUrlOf } from '../../data/logo-blocklist';
 import { hiddenForViewer, logoVotes, logoVotesUrlOf, type LogoTotals, type VoteDir, type VoteVerdict } from '../../data/logo-votes';
 import { iconLoader, kascovNetwork } from '../../data/kascov';
 import { asImageHash, httpsChecker, ipfsLoader, parseLogoRef, type HttpsOutcome, type LogoRef } from '../../data/logos';
-import { useLogoAllowed, withholdsLogo } from '../../data/logo-gate';
+import { logoScope, useLogoAllowed, withholdsLogo } from '../../data/logo-gate';
 import { declaredToken } from '../../data/token-declarations';
 
 export type TokenLogo =
@@ -64,6 +64,8 @@ export type TokenLogo =
   | { state: 'creator'; src: string; host: string };
 
 export interface LogoSubject {
+  /** A row's source. A `held` row is gated as a wallet view (data/logo-gate.ts `logoScope`). */
+  source?: string;
   covenantId: string;
   kascov?: { imageHash: string | null; imageUrl: string | null } | null | undefined;
 }
@@ -169,7 +171,7 @@ export function useTokenLogo(row: LogoSubject, active: boolean, scope?: 'wallet'
   const advance = () => setTried((t) => ({ key: candKey, n: (t.key === candKey ? t.n : 0) + 1 }));
   const next0 = !blocked && active && creatorOn && checkedHere !== null && checkedHere.src === null ? candidates[n] : undefined;
   // A wallet view asks a creator's host nothing for a token the user did not acquire.
-  const withheld = next0 && withholdsLogo(scope, allowed, next0.kind) ? next0 : null;
+  const withheld = next0 && withholdsLogo(logoScope(scope, row.source), allowed, next0.kind) ? next0 : null;
   const cur = withheld ? undefined : next0;
 
   // 3a. ipfs:// through the gateway, compared with the committed hash when there is one.

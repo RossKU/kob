@@ -48,7 +48,7 @@ export function Fingerprint(props: { covenantId: string; height?: number; 'data-
  * a line of a table on the Portfolio page. `bar` is the market bar, 32 px and smaller on a phone.
  * The sizes are in market.css, which also narrows them on a phone.
  */
-export function IdentityBlock(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'>; size?: 'sm' | 'md' | 'bar'; 'data-testid'?: string; /** wallet views: see TokenIcon */ scope?: 'wallet' }) {
+export function IdentityBlock(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'> & Partial<Pick<TokenRow, 'source'>>; size?: 'sm' | 'md' | 'bar'; 'data-testid'?: string; /** wallet views: see TokenIcon */ scope?: 'wallet' }) {
   return (
     <span class={`idb idb-${props.size ?? 'md'}`} data-testid={props['data-testid'] ?? `identity-${props.row.covenantId}`}>
       <TokenIcon row={props.row} {...(props.scope ? { scope: props.scope } : {})} />

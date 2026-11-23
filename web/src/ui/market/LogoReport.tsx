@@ -178,10 +178,11 @@ function LogoVotes(props: { covenantId: string }) {
  * What a token's details say about its logo. Nothing for a token with no logo to speak of, which
  * has a letter only.
  */
-export function LogoSection(props: { row: Pick<TokenRow, 'covenantId' | 'kascov'> }) {
+export function LogoSection(props: { row: Pick<TokenRow, 'covenantId' | 'kascov'> & Partial<Pick<TokenRow, 'source'>> }) {
   const { logo } = useTokenLogo(props.row, true);
   const [open, setOpen] = useState(false);
-  if (logo.state === 'off' || logo.state === 'none' || logo.state === 'pending') return null;
+  // A withheld logo has its "Show logo" control on the icon and nothing to describe here.
+  if (logo.state === 'off' || logo.state === 'none' || logo.state === 'pending' || logo.state === 'withheld') return null;
   const hidden = logo.state === 'hidden';
   const voted = logo.state === 'voted';
   return (
