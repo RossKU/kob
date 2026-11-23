@@ -355,7 +355,7 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
     const verdicts = await checkRows(deps, batch.map((b) => ({ row: b.row, side: b.s.side })));
     batch.forEach((b, i) => {
       const { v, snap } = verdicts[i]!;
-      if (typeof v === 'object' && snap) orders.set(b.row.covenant_id.toLowerCase(), { covenantId: snap.covenantId, order: snap.order, custody: snap.custody });
+      if (typeof v === 'object' && snap) orders.set(b.row.covenant_id.toLowerCase(), { covenantId: snap.covenantId, order: snap.order, custody: snap.custody, ...(snap.boughtCustody ? { boughtCustody: snap.boughtCustody } : {}) });
       if (typeof v === 'object' && b.row.curve_level != null) {
         // A curve sell order has one row per remaining level and is checked once. Its levels stay
         // rows of their own, each at its price, within the custody the node holds. A level row

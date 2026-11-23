@@ -262,6 +262,8 @@ export function orderViewOf(e: StreamEntry, ctx: Pick<ListingContext, 'kob'>): O
     deadline: s64(snap.deadline), refund_due_daa: null, quote: d.price.toString(),
     custody: snap.custody ? { expected_amount: snap.custody.state.amount, utxo: tokenUtxoView(snap.custody, snap.covenantId, 'custody'), ok: true } : { expected_amount: null, utxo: null, ok: d.side === 'buy' },
     strays: [], last_block: 0, last_daa: daa, confirmations: null, settled: false, expired: false,
+    // A Collected bid that has bought: its bought-custody, which a taker's fill spends.
+    ...(snap.boughtCustody ? { bought_custody: { expected_amount: snap.boughtCustody.state.amount, utxo: tokenUtxoView(snap.boughtCustody, snap.covenantId, 'bought'), ok: true } } : {}),
   };
 }
 

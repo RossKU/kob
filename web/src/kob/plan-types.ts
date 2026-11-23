@@ -252,6 +252,12 @@ export interface BookOrderUtxo {
   order: OrderUtxo<OrderState>;
   /** An ask's custody, null for a bid. */
   custody: TokenUtxo | null;
+  /**
+   * A Collected (mode 1) bid that has bought: its bought-custody, which every fill spends and
+   * continues (bid-delivery-spec §3). Its state is the one the order's state implies, confirmed on
+   * the node with the order.
+   */
+  boughtCustody?: TokenUtxo | null;
 }
 
 /** How serious a plan finding is. */

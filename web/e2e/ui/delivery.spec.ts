@@ -7,14 +7,14 @@
 // With KOB_DELIVERY_SHOTS=<dir> the spec also saves the three screenshots of the change (Advanced
 // default, Advanced with Top-up, Settings).
 //
-// Not covered here (the fill builders of the delivery modes are later work packages): a fill of a
-// Collected or a Top-up order.
+// A sell into a Collected bid that has bought is covered (its fill spends the bought-custody). Not
+// covered here: a fill of a Top-up order.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { STD, openStd } from '../helpers/delivery';
 import { expect, test } from '../fixtures';
-import { listExkcc } from '../helpers/env';
-import { fillFields, pickType, placeOrder, settlePlan, waitReviewable } from '../helpers/ticket';
+import { TOKEN, fund, listExkcc, openMarket } from '../helpers/env';
+import { clickPlaceOnly, confirmUntil, fillFields, pickType, placeOrder, settlePlan, waitReviewable, waitSubmitted } from '../helpers/ticket';
 import { chooseOption } from '../helpers/dropdown';
 
 test.use({ autoOpen: false });
@@ -201,3 +201,22 @@ test('reduced motion: the help opens paused on the final state', async ({ appPag
   await expect(help.getByTestId('delivery-help-caption')).toHaveText('Order ends');
 });
 
+
+test('selling into a Collected bid that has bought: the take spends its bought-custody, the bid continues with bought + n', async ({ appPage: page, mock }) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  const tok = await mock.token();
+  await mock.seed({ orders: [{ token: tok.covenant_id, side: 'bid', maker: 'bob', price: 2_499_000, amount: (10n * TOKEN).toString(), min_fill: TOKEN.toString(), state: { mode: '1', recvThreshold: '0', topupTip: '0', bought: '0' } }] });
+  const [bid] = (await mock.ordersOf('bob')).filter((o: any) => o.state?.state?.mode === '1');
+  await mock.fill(bid.covenant_id, TOKEN);
+  await mock.until(() => mock.ordersOf('bob'), (os: any[]) => os.some((o) => o.covenant_id === bid.covenant_id && o.state?.state?.bought === TOKEN.toString()));
+  await fund(mock);
+  await openMarket(page, mock);
+  await pickType(page, 'limit', 'sell');
+  await fillFields(page, { amount: '2', price: '0.02499' });
+  await expect(page.getByTestId('order-take')).toBeVisible({ timeout: 15_000 });
+  await clickPlaceOnly(page);
+  await confirmUntil(page, page.getByTestId('order-take-step-1').and(page.locator('[data-state="done"]')));
+  await waitSubmitted(page);
+  const after = await mock.until(() => mock.ordersOf('bob'), (os: any[]) => os.some((o) => o.covenant_id === bid.covenant_id && o.state?.state?.bought === (3n * TOKEN).toString()), 20_000);
+  expect(after.find((o: any) => o.covenant_id === bid.covenant_id).state.state.bought).toBe((3n * TOKEN).toString());
+});

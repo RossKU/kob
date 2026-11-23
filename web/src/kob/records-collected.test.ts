@@ -122,7 +122,7 @@ describe('a Collected order after a partial fill, from node data only (R3A-1)', 
       const p0 = collectedRecord(name, {});
       const aS = BigInt(F(p0.st).tScale);
       const price = ((3n * aS) / 2n).toString();
-      const leg = name === 'pair.create.bid' ? { price, priceEnd: price, slope: '0', maxFill: '0', interval: '0' } : { tpPrice: price, stopPrice: '0' };
+      const leg: Record<string, string> = name === 'pair.create.bid' ? { price, priceEnd: price, slope: '0', maxFill: '0', interval: '0' } : { tpPrice: price, stopPrice: '0' };
       const { rec, st } = collectedRecord(name, { bought: '0', amountLeft: '100', custody: '150', minFill: '1', ...leg });
       const cont = { ...st, state: { ...st.state, amountLeft: '60', custody: '90', bought: '40' } } as OrderState;
       const s = F(st);

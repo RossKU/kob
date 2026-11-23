@@ -57,6 +57,10 @@ describe('bought-custody facts', () => {
     const fromBoth = snapshotFromOrderView({ ...view, custody: cv, bought_custody: cv });
     expect(fromBoth.custody).toBeNull();
     expect(fromBoth.boughtCustody).toMatchObject({ transactionId: custody.transactionId, index: custody.index });
+    // the state is the one the order's state implies, whatever the view claims: the node then
+    // checks that script
+    const lying = { ...cv, utxo: { ...cv.utxo, state: { ...cv.utxo.state!, amount: (BOUGHT + 1n).toString() } } };
+    expect(snapshotFromOrderView({ ...view, bought_custody: lying }).boughtCustody?.state).toMatchObject({ amount: BOUGHT.toString(), owner: snap.covenantId, extension_commitment: TOKEN.ext });
     // an older view with only `custody` still finds it
     expect(snapshotFromOrderView({ ...view, custody: cv }).boughtCustody?.index).toBe(custody.index);
   });
