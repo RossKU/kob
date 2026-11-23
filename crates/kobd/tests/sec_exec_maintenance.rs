@@ -120,6 +120,27 @@ fn an_all_or_nothing_ask_does_not_set_the_sale_floor() {
     };
     let r = sale(10 * WHOLE);
     assert!(r.jobs.iter().all(|j| j.kind != MaintKind::Sell), "sold against an ask no buyer of 2 can take: {:?}", r.jobs.len());
-    let r = sale(WHOLE);
+    let r = sale(WHOLE / 10);
+    assert!(r.jobs.iter().any(|j| j.kind == MaintKind::Sell), "{:?}", r.skipped);
+}
+
+/// R2D-1: an all-or-nothing ask of exactly the operator's holding offers the whole amount, but only to a buyer of exactly
+/// that amount: the poster's own sale. It does not set the floor, nor does an ask whose minimum fill is above what a small
+/// buyer (a tenth of the holding) takes. One a small buyer can take does.
+#[test]
+fn an_exact_size_all_or_nothing_ask_does_not_set_the_sale_floor() {
+    let cfg = MaintenanceConfig { merge: false, ..Default::default() };
+    let sale = |amount: i64, min_fill: i64| {
+        let bid = l_bid_a(100, K3, 2, 250_000_000, 2 * WHOLE);
+        let ask = l_ask_with(300, token_a(K3), K3, 2, 270_000_000, amount, |a| a.min_fill = min_fill);
+        let mut inp = input(vec![own(K3, 2 * WHOLE, CARRIER)], vec![funding(50 * KAS)]);
+        inp.orders = vec![bid, ask];
+        tick(&inp, &cfg, &signer())
+    };
+    let r = sale(2 * WHOLE, 2 * WHOLE);
+    assert!(r.jobs.iter().all(|j| j.kind != MaintKind::Sell), "sold against an exact-size all-or-nothing ask");
+    let r = sale(10 * WHOLE, WHOLE);
+    assert!(r.jobs.iter().all(|j| j.kind != MaintKind::Sell), "sold against an ask no small buyer can take");
+    let r = sale(2 * WHOLE, WHOLE / 5);
     assert!(r.jobs.iter().any(|j| j.kind == MaintKind::Sell), "{:?}", r.skipped);
 }
