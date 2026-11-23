@@ -49,7 +49,7 @@ picks the mode, and quotes or pulls its quotes.
   closed 1-minute candles. Median of the venues; a venue more than 1 % off the median, stale or silent is dropped; MEXC is
   a fallback. Fewer than 2 venues: IDLE; exactly 2 must agree within `pairAgreement` (0.125 %). USDT/USD is asked of
   Kraken and Coinbase: a reading more than 1 % from 1, or two more than 0.2 % apart, gives no rate.
-- **Fair value** = token USD / KAS USD; token USD is Kraken's USDC/USD (fallback 1.0). KAS/USDT is used because it
+- **Fair value** = token USD / KAS USD; token USD is Kraken's USDC/USD; while it is missing or stale (`stableMaxAgeSec`) the bot is IDLE and resumes by itself, so the peg band is never skipped. KAS/USDT is used because it
   trades about USD 1 million a day per venue against USD 5k to 75k for KAS/USDC; the USDC books are only cross-checked
   in the log.
 - **Ladder.** `spreadPct` (1 %) is the gap between the best bid and the best ask, so each sits 0.5 % from fair; further
@@ -116,7 +116,7 @@ One JSON file; omitted fields take the default; relative paths are relative to t
 | `token.decimals` | required | checked against the CLI |
 | `token.label` | `null` | name in messages |
 | `token.usdSource` | `kraken:USDCUSD` | token USD rate: `kraken:<PAIR>` or `fixed` |
-| `token.usdFallback` | `1.0` | rate when the live one is stale; `null`: IDLE |
+| `token.usdFallback` | `null` | rate to use when the live one is stale (the peg band is then not checked); `null`: IDLE until it is live again |
 | `token.pegUsd`, `token.pegBand` | `1.0`, `0.005` | IDLE `peg` outside the band |
 | `retiredTokens` | `[]` | old instances: recovery only |
 | `reference.pollSec` | `30` | seconds per cycle |

@@ -17,7 +17,7 @@ export const DEFAULTS = {
     decimals: null, // checked against what the CLI reports
     label: null, // a name for logs and messages only
     usdSource: 'kraken:USDCUSD', // what one token is worth in USD: 'kraken:<PAIR>' or 'fixed'
-    usdFallback: 1.0, // used when the live rate is missing or stale (null: pull the quotes instead)
+    usdFallback: null, // a rate to use when the live one is missing or stale; null: IDLE (quotes pulled) until it is live again, so the peg band is always checked (L25)
     pegUsd: 1.0, // the token's peg
     pegBand: 0.005, // IDLE when the live USD rate is further than this from the peg (a fraction)
   },

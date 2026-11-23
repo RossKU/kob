@@ -11,6 +11,6 @@
     "decimals": 6,
     "label": "TUSDC6",
     "usdSource": "kraken:USDCUSD",
-    "usdFallback": 1.0
+    "usdFallback": null
   }
 }

@@ -17,7 +17,7 @@ const MAKER = 'a1d9fd1347128011ad0036b077949d63274d5d3b8ac8351776c30c945ef2c2fb'
 let kasUsd = 0.025; // what every venue trades at; the tests move it
 let venuesDown = false;
 let indexerDown = false;
-let usdcUsd = 1.0; // Kraken USDC/USD; the tests move it out of the peg band
+let usdcUsd = 1.0; // Kraken USDC/USD; the tests move it out of the peg band (null: Kraken does not quote it)
 let hiddenIds = new Set(); // orders a lying indexer leaves out of every answer (T-4)
 let indexerAheadMs = 0; // the indexer judges expiry this far in the future (time passing while the bot is dead)
 
@@ -35,7 +35,7 @@ function venueResponse(url) {
   if (url.includes('gateio')) return ts.map((t) => [String(t / 1000), String(base * p), String(p), '0', '0', '0', String(base), 'true']);
   if (url.includes('mexc')) return ts.map((t) => [t, '0', '0', '0', String(p), String(base), t + 60_000, String(base * p)]);
   if (url.includes('kraken') && url.includes('OHLC')) return { error: [], result: { KASUSD: ts.map((t) => [t / 1000, '0', '0', '0', String(p), String(p), String(base), 5]), last: 0 } };
-  if (url.includes('kraken') && url.includes('Ticker')) return { error: [], result: { USDTZUSD: { a: ['1.0'], b: ['1.0'] }, USDCUSD: { a: [String(usdcUsd)], b: [String(usdcUsd)] } } };
+  if (url.includes('kraken') && url.includes('Ticker')) return { error: [], result: { USDTZUSD: { a: ['1.0'], b: ['1.0'] }, ...(usdcUsd == null ? {} : { USDCUSD: { a: [String(usdcUsd)], b: [String(usdcUsd)] } }) } };
   throw new Error(`no stub for ${url}`);
 }
 
@@ -474,5 +474,27 @@ test('an indexer view whose covenant_id is not 64 hex is ignored (sec-ops L21)',
     assert.deepEqual(live.map((o) => o.id), ['cd'.repeat(32)]);
   } finally {
     globalThis.fetch = saved;
+  }
+});
+
+test('no live USDC/USD and no fallback (the default): IDLE, nothing quoted, and it resumes by itself (L25)', { timeout: 60_000 }, async () => {
+  kasUsd = 0.025;
+  venuesDown = false;
+  indexerDown = false;
+  usdcUsd = null;
+  const { bot, chain } = setup();
+  assert.equal(bot.cfg.token.usdFallback, null);
+  try {
+    await bot.cycle();
+    await bot.cycle();
+    assert.equal(`${bot.state.mode.mode}/${bot.state.mode.reason}`, 'IDLE/reference');
+    assert.match(bot.state.last.reference.reason, /no USD rate for the token/);
+    assert.equal(Object.keys(chain().orders).length, 0, 'no quote at an unchecked 1.0');
+    usdcUsd = 1.0;
+    for (let i = 0; i < 4; i++) await bot.cycle();
+    assert.equal(bot.state.mode.mode, 'QUOTING');
+    assert.ok(Object.keys(chain().orders).length > 0);
+  } finally {
+    usdcUsd = 1.0;
   }
 });
