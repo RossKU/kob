@@ -1109,3 +1109,67 @@ async fn junk_pair_orders_ahead_of_a_real_one_do_not_hide_it_from_the_pair_book(
     let (asks, truncated, _) = direct(&c);
     assert!(asks.is_empty() && truncated, "{asks:?} {truncated}");
 }
+
+/// R2A-1: a pair sell with Collected delivery (mode 1) writes `bought + tOut` into its continuation, where `tOut` is the B
+/// it received, not the A it sold. At a price other than 1 B per A the two differ. The order must stay proven and listed
+/// after a partial fill, take a second fill into its bought-custody, and be cancellable by its maker with both custodies.
+#[tokio::test]
+async fn a_collected_pair_sell_stays_listed_after_a_partial_fill() {
+    // B must be a KCC-20 token: a KRON T is delivered new
+    let p = BA;
+    let (ta, tb) = (p.a(), p.b());
+    let c = Ctx::new();
+    let x = PairState { mode: MODE_ACCUMULATE, ..pair_order(p, MAKER_A, true, 3 * RATE / 2, 10) };
+    let placed = place_pair(&c, p, AnyState::KobPair(x.clone()), PV, MAKER_A).await;
+    let cov = placed.cov;
+
+    // first fill: 4 whole A for 6 whole B from the taker's inventory
+    let leg = pair_leg(&c, p, &placed.create, 0, &x, &placed.create, 4 * WHOLE);
+    let mut b = batch(&c.w, c.daa(), vec![leg]);
+    b.taker_tokens = vec![taker_coin(&c, p.fb, 6 * WHOLE)];
+    let fill1 = sign_batch(&c, b);
+    c.push(&[&fill1]).await;
+    let x6 = PairState { amount_left: 6 * WHOLE, custody: 6 * WHOLE, bought: 6 * WHOLE, ..x.clone() };
+    assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobPair(x6.clone())), "the continuation's `bought` is proven");
+    assert_eq!(c.hs.status(&cov), "partial");
+    let v = view(&c, &cov);
+    assert!(v.listed, "{:?}", v.unlisted_reason);
+    assert!(book(&c).iter().any(|o| o.id() == cov.0), "still in the matcher's book");
+
+    // second fill: 2 whole A for 3 whole B, into the bought-custody
+    let oi = find_cov(&fill1, &cov).unwrap();
+    let held = custody_at(&c, p, &fill1, &cov, tb.0, 6 * WHOLE).expect("the bought-custody");
+    let Leg::Pair { order, custody, amount, t, receive, form, .. } = pair_leg(&c, p, &fill1, oi, &x6, &fill1, 2 * WHOLE) else {
+        unreachable!()
+    };
+    let leg = Leg::Pair { order, custody, amount, t, bought_custody: Some(held), receive, form };
+    let mut b = batch(&c.w, c.daa(), vec![leg]);
+    b.taker_tokens = vec![taker_coin(&c, p.fb, 3 * WHOLE)];
+    let fill2 = sign_batch(&c, b);
+    c.push(&[&fill2]).await;
+    let x4 = PairState { amount_left: 4 * WHOLE, custody: 4 * WHOLE, bought: 9 * WHOLE, ..x.clone() };
+    assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobPair(x4.clone())));
+    assert!(book(&c).iter().any(|o| o.id() == cov.0));
+
+    // the maker's cancel: the A custody and the bought-custody of B come back
+    let oi = find_cov(&fill2, &cov).unwrap();
+    let held = custody_at(&c, p, &fill2, &cov, tb.0, 9 * WHOLE).expect("the bought-custody");
+    let cancel = c.w.sign(&Action::CancelOrder(CancelOrder {
+        retired: None,
+        order: c.w.order(&fill2, oi, AnyState::KobPair(x4.clone())),
+        custody: custody_at(&c, p, &fill2, &cov, ta.0, 4 * WHOLE),
+        prefund: None,
+        foreign: vec![],
+        strays: vec![held],
+        tokens: vec![],
+        funding: vec![c.w.coin(MAKER_A, 10)],
+        change: None,
+        replace: None,
+        lock_time: 0,
+        records: vec![],
+        fee: FeeOptions::default(),
+    }));
+    c.push(&[&cancel]).await;
+    assert_eq!(c.hs.status(&cov), "cancelled");
+    assert_eq!(c.hs.event_kinds(&cov), ["create", "fill", "fill", "cancel"]);
+}

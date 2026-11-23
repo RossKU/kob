@@ -1976,12 +1976,18 @@ impl Processor {
                 _ => {}
             }
         }
-        // `bought` of a delivering order: a mode-1 fill that continues adds n to its bought-custody
-        // (bid-delivery-spec §4). Every other spend leaves it.
+        // `bought` of a delivering order: a mode-1 fill that continues adds what it delivered to its
+        // bought-custody (bid-delivery-spec §4): n for a bid, and for a pair order the T it
+        // received, `tOut` (settle argument 5), which on an ask is not n (R2A-1). Every other spend
+        // leaves it.
         let mut boughts: Vec<Option<i64>> = vec![before.delivery().map(|d| d.bought)];
         if let (Act::Fill(n), Some(d)) = (s.act, before.delivery()) {
             if d.mode == kob_protocol::state::MODE_ACCUMULATE {
                 boughts.push(d.bought.checked_add(n));
+                if matches!(before, AnyState::KobPair(_) | AnyState::KobCondPair(_)) {
+                    let t_out = s.reveal.as_ref().and_then(|r| r.int(5));
+                    boughts.extend(t_out.map(|t| d.bought.checked_add(t)));
+                }
             }
         }
         let mut tried: HashSet<(Mutable, Option<i64>)> = HashSet::new();
