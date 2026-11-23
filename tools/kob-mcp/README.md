@@ -14,7 +14,10 @@ cd tools/kob-mcp && npm ci --omit=dev
 npx @anthropic-ai/mcpb@2.1.2 pack . kob-mcp.mcpb   # open the .mcpb with Claude Desktop
 ```
 
-The install form asks for the `kob` binary, the key file, your primary wallet, the caps and a data folder.
+The install form asks for the `kob` binary, the key file, your primary wallet, the caps and a data folder. Its caps
+default to 50 KAS a transaction and 200 KAS a UTC day, tighter than the config file's defaults (100 and 500, below);
+a value set in the form wins over the file. The form has no field for `mode`, the price band or `tokens.<id>.refPrice`:
+the extension runs in `confirm` mode with the 25 % band and no `refPrice`, unless the config file it names sets them.
 
 Claude Code:
 
@@ -54,21 +57,24 @@ The limits below are what holds.
   - else the book's, when `limits.refDepthKas` (1,000 KAS) stands behind it twice: the resting side (for a buy the price
     where what a taker can fill now of the bids adds up to 1,000 KAS, for a sell where the asks' does; each order counts
     the indexer's `fillable_now`, so a TWAP or DCA order counts only the slice that is due, and an order the indexer
-    names no `fillable_now` for (an older kobd) counts as nothing; the wallet's own orders and orders whose minimum fill
-    is worth more than 10 KAS do not count either) and the fill history (the VWAP of the newest 1,000 KAS of fills). A
+    names no `fillable_now` for (an older kobd) counts as nothing; each order is valued at the price a taker gets
+    now, the lower of its limit and its `quote` for a bid and the higher for an ask, so an auction (an armed stop or
+    if-done entry, a decaying ask, a rising bid) counts at its current quote, never at a far limit; orders that are not
+    settled, are expired or past their deadline, or whose minimum fill is above the slice due now or worth more than
+    10 KAS, a bid beyond the KAS of its escrow, and the wallet's own orders do not count either) and the fill history (the VWAP of the newest 1,000 KAS of fills). A
     buy is judged against the lower of the two, a sell against the higher. A book that cannot be read refuses. Against
     an older kobd every priced write on a token without `refPrice` is therefore refused.
 
   What remains:
-  - Someone who puts `refDepthKas` of orders on the book that anyone can fill at once can move a book reference by up
-    to the band, for as long as the orders stand. The printed fills cost almost nothing (two keys of one owner trade
+  - Someone who puts `refDepthKas` of orders on the book that anyone can fill at once, at the price they set the
+    reference to, can move a book reference by up to the band, for as long as the orders stand. The printed fills cost almost nothing (two keys of one owner trade
     with each other for the fees), so the fills never move the reference by themselves: a buy takes the lower of the
     two, a sell the higher. The cost is the 1,000 KAS at risk on the book.
   - The book and the fills come from the indexer alone (`indexer` in the config): a lying or hijacked indexer serves
     whatever depth and fills it likes and so sets the reference. Use an indexer you run or trust, and set `refPrice` for
     every token the agent trades: then the bound is the operator's price, which the book can only tighten.
   - The caps bound what a steered agent then loses: 100 KAS a transaction and 500 KAS a UTC day of KAS (`perTxKas`,
-    `perDayKas`), and 25 % a transaction and 50 % a day of each token's holding (`limits.tokenDefault`).
+    `perDayKas`; the Claude Desktop extension's defaults are 50 and 200), and 25 % a transaction and 50 % a day of each token's holding (`limits.tokenDefault`).
 - The tip goes to the executor that fills the order: at most 1 % of the price and 1 KAS over the whole order
   (`limits.maxTipPct`, `limits.maxTipKas`).
 - `kob_replace` reads the order's side and token from the CLI's dry run (the order as checked on the node), and a new

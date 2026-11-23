@@ -463,7 +463,7 @@ test('kob_replace: a buy priced up counts its whole escrow under the KAS caps (T
 // R2-T2: the reference is the operator's price, or a book reference with refDepthKas behind it on
 // both the fills and the resting side; with neither, a priced write is refused.
 const rows = (bids, asks = []) => ({ bids, asks });
-const row = (price, amount, extra = {}) => ({ price: String(price), amount_left: String(amount), fillable_now: String(amount), min_fill: '100000000', scale: 100000000, maker: 'aa'.repeat(32), ...extra });
+const row = (price, amount, extra = {}) => ({ price: String(price), amount_left: String(amount), fillable_now: String(amount), min_fill: '100000000', scale: 100000000, maker: 'aa'.repeat(32), quote: String(price), status: 'open', settled: true, expired: false, deadline_passed: false, ...extra });
 const fills = (price, amount, n = 1) => ({ items: Array.from({ length: n }, () => ({ price: String(price), amount: String(amount) })) });
 function bookService(over = {}) {
   const t = setup({ mode: 'auto', tokens: {}, ...over });

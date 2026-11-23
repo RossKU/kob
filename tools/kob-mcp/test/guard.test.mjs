@@ -83,10 +83,13 @@ test('price band: a state price per its own scale is judged exactly (12 decimals
   assert.match(bandCheck({ side: 'buy', price: 31_250_001n, priceScale: 1_000_000_000, ...b12 }).reason, /a buy at 312\.50001 KAS/);
 });
 
+// The fields of a book row a taker can fill now: quoted at its limit, live, settled.
+const live = (price) => ({ quote: String(price), status: 'open', settled: true, expired: false, deadline_passed: false });
+
 test('book reference: depth on the resting side and on the fills, the own and large-minimum orders left out (R2-T2)', () => {
   const scale = 100_000_000;
   const depth = 1000n * 100_000_000n;
-  const row = (price, amount, extra = {}) => ({ price: String(price), amount_left: String(amount), fillable_now: String(amount), min_fill: '100000000', scale, maker: 'aa'.repeat(32), ...extra });
+  const row = (price, amount, extra = {}) => ({ price: String(price), amount_left: String(amount), fillable_now: String(amount), min_fill: '100000000', scale, maker: 'aa'.repeat(32), ...live(price), ...extra });
   const fill = (price, amount) => ({ price: String(price), amount: String(amount) });
   const fills = [fill(25e6, 2000e8), fill(30e6, 4000e8)];
   // A one-token bid at 0.3 is passed over; 1,200 KAS of bids reach 1,000 at 0.24.
@@ -115,7 +118,7 @@ test('book reference: depth on the resting side and on the fills, the own and la
 test('book reference: a TWAP or DCA order counts only what a taker can fill now; a row without fillable_now counts nothing (R3T-1)', () => {
   const scale = 100_000_000;
   const depth = 1000n * 100_000_000n;
-  const row = (price, amount, fillable, extra = {}) => ({ price: String(price), amount_left: String(amount), ...(fillable == null ? {} : { fillable_now: String(fillable) }), min_fill: '100000000', scale, maker: 'aa'.repeat(32), ...extra });
+  const row = (price, amount, fillable, extra = {}) => ({ price: String(price), amount_left: String(amount), ...(fillable == null ? {} : { fillable_now: String(fillable) }), min_fill: '100000000', scale, maker: 'aa'.repeat(32), ...live(price), ...extra });
   const fills = [{ price: String(250e6), amount: String(5000e8) }];
   // 1,250 KAS left at 2.5 KAS a token, but one 10-token slice (25 KAS) fillable per interval.
   const r = bookReference({ side: 'buy', rows: { bids: [row(250e6, 500e8, 10e8)] }, fills, scale, depth });
@@ -134,13 +137,60 @@ test('book reference: a TWAP or DCA order counts only what a taker can fill now;
 test('book reference: printed fills never loosen it past the resting side (R3T-1)', () => {
   const scale = 100_000_000;
   const depth = 1000n * 100_000_000n;
-  const row = (price, amount) => ({ price: String(price), amount_left: String(amount), fillable_now: String(amount), min_fill: '100000000', scale, maker: 'aa'.repeat(32) });
+  const row = (price, amount) => ({ price: String(price), amount_left: String(amount), fillable_now: String(amount), min_fill: '100000000', scale, maker: 'aa'.repeat(32), ...live(price) });
   // Wash fills at 10 times the bids: a buy is still judged against the bids.
   const high = [{ price: String(250e6), amount: String(5000e8) }];
   assert.equal(bookReference({ side: 'buy', rows: { bids: [row(25e6, 5000e8)] }, fills: high, scale, depth }).ref.num, 25_000_000n);
   // Wash fills at a 25th of the asks: a sell is still judged against the asks.
   const low = [{ price: String(1e6), amount: String(200000e8) }];
   assert.equal(bookReference({ side: 'sell', rows: { asks: [row(25e6, 5000e8)] }, fills: low, scale, depth }).ref.num, 25_000_000n);
+});
+
+test('book reference: an armed if-done entry counts at its quote, not its limit (R4T-1)', () => {
+  const scale = 100_000_000;
+  const depth = 1000n * 100_000_000n;
+  // Fair 0.25 KAS a token. An entry bid: limit 2.5 (10x fair), quote 0.225 (its band auction at
+  // the entry stop), 400 tokens: 1,000 KAS at the limit, 90 KAS at the quote.
+  const row = (price, quote, amount, extra = {}) => ({ price: String(price), quote: String(quote), amount_left: String(amount), fillable_now: String(amount), min_fill: '100000000', scale, maker: 'aa'.repeat(32), status: 'open', settled: true, expired: false, deadline_passed: false, ...extra });
+  const entry = row(250e6, 22.5e6, 400e8, { contract: 'KobIfdBid', auction: { kind: 'entry', current_price: String(22.5e6) } });
+  const fills = [{ price: String(250e6), amount: String(400e8) }];
+  assert.equal(bookReference({ side: 'buy', rows: { bids: [entry] }, fills, scale, depth }).ref, null, 'the entry is 90 KAS a taker can sell into now');
+  // With enough of it, the reference is its quote, never its limit.
+  const deep = row(250e6, 22.5e6, 5000e8, { contract: 'KobIfdBid' });
+  assert.equal(bookReference({ side: 'buy', rows: { bids: [deep] }, fills, scale, depth }).ref.num, 22_500_000n);
+  // An armed if-done ask: limit 0.025, quote 0.3: a sell is judged at the quote.
+  const ask = row(2.5e6, 30e6, 5000e8, { contract: 'KobIfdAsk' });
+  const low = [{ price: String(2.5e6), amount: String(100000e8) }];
+  assert.equal(bookReference({ side: 'sell', rows: { asks: [ask] }, fills: low, scale, depth }).ref.num, 30_000_000n);
+  // A rising bid whose quote is above its start: counted at the lower, its start.
+  assert.equal(bookReference({ side: 'buy', rows: { bids: [row(24e6, 30e6, 5000e8)] }, fills, scale, depth }).ref.num, 24_000_000n);
+});
+
+test('book reference: a row a taker cannot fill now counts nothing (R4T-1)', () => {
+  const scale = 100_000_000;
+  const depth = 1000n * 100_000_000n;
+  const row = (extra = {}) => ({ price: String(24e6), quote: String(24e6), amount_left: String(5000e8), fillable_now: String(5000e8), min_fill: '100000000', scale, maker: 'aa'.repeat(32), status: 'open', settled: true, expired: false, deadline_passed: false, ...extra });
+  const fills = [{ price: String(25e6), amount: String(5000e8) }];
+  const ref = (r, side = 'buy') => bookReference({ side, rows: side === 'buy' ? { bids: [r] } : { asks: [r] }, fills, scale, depth }).ref;
+  assert.equal(ref(row()).num, 24_000_000n, 'the live row sets it');
+  for (const [what, extra] of [
+    ['no quote (an older indexer)', { quote: undefined }],
+    ['a zero quote', { quote: '0' }],
+    ['not settled', { settled: false }],
+    ['no settled field', { settled: undefined }],
+    ['expired', { expired: true }],
+    ['deadline passed', { deadline_passed: true }],
+    ['filled', { status: 'filled' }],
+    ['cancelled', { status: 'cancelled' }],
+    ['a minimum fill above what is fillable now', { fillable_now: String(10e8), amount_left: String(5000e8), min_fill: String(20e8) }],
+    ['a minimum fill worth over 10 KAS at its limit', { price: String(250e6), min_fill: String(5e8) }],
+    ['fillable now above the amount left', { fillable_now: String(5000e8), amount_left: String(1e8) }],
+    ['an ask kind on the bid side', { contract: 'KobAsk' }],
+    ['no scale (kobd sorts it as scale 1)', { scale: null }],
+  ]) assert.equal(ref(row(extra)), null, what);
+  // A bid counts at most its escrow (cur_value): 100 KAS of KAS behind 1,200 KAS of tokens.
+  assert.equal(ref(row({ cur_value: String(100e8) })), null, 'a bid is worth at most its escrow');
+  assert.equal(ref(row({ cur_value: String(1200e8) })).num, 24_000_000n);
 });
 
 test('tip caps: a share of the price and a KAS total over the order', () => {

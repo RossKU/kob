@@ -96,9 +96,16 @@ if (process.env.KOB_DEPLOY_NO_HISTORY === '1') {
   if (git('git rev-parse --is-shallow-repository').trim() !== 'false') {
     die(`the lock-history check needs the full history of ${recordFile}, and this clone is shallow: git fetch --unshallow (actions/checkout: fetch-depth: 0)`);
   }
-  // --diff-filter=d: a commit that deleted the record has no copy of it to read
-  const commits = git(`git log --diff-filter=d --format=%h -- ${recordFile}`).split('\n').filter(Boolean);
+  // No diff filter: without a diff format git log selects no commit by one (audit 2026-11-24
+  // R4F-1). A commit that deleted the record has no copy of it to read, so it is skipped.
+  const commits = git(`git log --format=%h -- ${recordFile}`).split('\n').filter(Boolean);
+  if (!commits.length && git(`git ls-files -- ${recordFile}`).trim()) die(`git log lists no commit of the tracked ${recordFile}: the lock-history check would compare nothing`);
   for (const c of commits) {
+    try {
+      execSync(`git cat-file -e ${c}:${recordFile}`, { stdio: 'ignore' });
+    } catch {
+      continue;
+    }
     const issued = JSON.parse(git(`git show ${c}:${recordFile}`)).locks ?? [];
     for (const l of issued) {
       if (!locks.some((x) => x.hash === l.hash)) {

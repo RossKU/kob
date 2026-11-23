@@ -1,6 +1,7 @@
 // The CLI wrapper (against a stand-in CLI), the config checks and the address encoding.
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -112,6 +113,10 @@ test('config: the defaults plus a token pass; bad values are listed together', (
   // E-L5: one USDT/USD source may sit up to usdtAgreement from 1, so it too stays below half the spread.
   assert.ok(validate({ ...ok, reference: { ...ok.reference, usdtAgreement: 0.006 } }).some((p) => /usdtAgreement must be below half/.test(p)));
   assert.ok(bad.some((p) => /must not exceed 100/.test(p)));
+  // R4T-6: a wrong token USD rate inside the peg band moves fair by up to the band: at most half the spread.
+  assert.deepEqual(validate({ ...ok, token: { ...ok.token, pegBand: 0.005 } }), [], 'the default: half the 1 % spread');
+  assert.ok(validate({ ...ok, token: { ...ok.token, pegBand: 0.02 } }).some((p) => /pegBand must be at most half/.test(p)));
+  assert.deepEqual(validate({ ...ok, token: { ...ok.token, pegBand: 0.02 }, quotes: { ...ok.quotes, spreadPct: 4 } }), []);
   const p = join(dir, 'cfg.json');
   writeFileSync(p, JSON.stringify({ network: 'testnet-10', keyFile: 'bot.key', dataDir: 'run', token: { covenantId: TOKEN, decimals: 6 } }));
   const cfg = loadConfig(p);
@@ -133,4 +138,27 @@ test('a failed --yes reports its planned fee to count, unless the CLI says nothi
   assert.equal((await kob.cancel('cd'.repeat(32))).sentFee, 427000, 'a failed submission may have been relayed');
   ({ kob } = fake('plan-error'));
   assert.equal((await kob.cancel('cd'.repeat(32))).sentFee, undefined, 'refused at the plan: nothing sent');
+});
+
+// R4T-5: on mainnet a full fill is proven only with a JSON wRPC node, so check, run and once refuse without one.
+test('mainnet without a JSON wRPC node: check, run and once refuse; testnet-10 warns', () => {
+  const bin = fileURLToPath(new URL('../bin/mm-bot.mjs', import.meta.url));
+  const cfgFile = (over) => {
+    const f = join(dir, `node-${Math.random()}.json`);
+    writeFileSync(f, JSON.stringify({ keyFile: 'bot.key', dataDir: 'run-node', token: { covenantId: TOKEN, decimals: 6 }, ...over }));
+    return f;
+  };
+  const run = (cmd, f) => spawnSync(process.execPath, [bin, cmd, '--config', f], { encoding: 'utf8', timeout: 30_000 });
+  for (const cmd of ['check', 'run', 'once']) {
+    for (const node of [undefined, 'ws://127.0.0.1:17110', 'wss://node.example/borsh']) {
+      const r = run(cmd, cfgFile({ network: 'mainnet', ...(node ? { node } : {}) }));
+      assert.equal(r.status, 2, `${cmd} ${node}: ${r.stdout}${r.stderr}`);
+      assert.match(r.stderr, /mainnet needs "node": a JSON wRPC URL/);
+    }
+  }
+  const ok = run('check', cfgFile({ network: 'mainnet', node: 'ws://127.0.0.1:18110' }));
+  assert.equal(ok.status, 0, ok.stderr);
+  const tn = run('check', cfgFile({ network: 'testnet-10' }));
+  assert.equal(tn.status, 0, tn.stderr);
+  assert.match(tn.stdout, /WARNING: node: a JSON wRPC node/);
 });

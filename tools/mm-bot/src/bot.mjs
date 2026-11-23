@@ -26,7 +26,8 @@ const ERROR_ALERT_AFTER = 3; // consecutive failed cycles before an error alert
 const PLACE_FAILS_IDLE = 3; // placements refused in a row before IDLE/placement (R2-T3)
 const BLIND_KEEP_MS = 86_400_000; // how long a placement of no known id counts toward the caps
 const FOREIGN_TRIES = 3; // cancels tried of an order on the bot's key the bot did not place (R3T-2)
-const FOREIGN_PER_CYCLE = 2; // and at most this many of them a cycle
+const FOREIGN_PER_CYCLE = 2; // and at most this many of them a cycle (and of a retired token's, R4T-4)
+const RETIRED_BUDGET_MS = 20_000; // no retired cancel starts once this much of a cycle went to them
 const OWN_TX_KEEP = 2000; // the bot's own transaction ids kept: never taken for a payment to it (R3T-3)
 const PAYMENTS_KEEP = 2000; // payments to the bot's address seen on the node, kept ...
 const PAYMENT_KEEP_MS = 7 * 86_400_000; // ... for a week
@@ -501,7 +502,7 @@ export class Bot {
       this.state.foreign[o.id] = { side: o.side, price: o.price, amountLeft: o.amountLeft, firstSeen: now, tries: 0, lastTry: null };
       fresh.push(o.id);
     }
-    for (const id of Object.keys(this.state.foreign)) if (!seen.has(id)) delete this.state.foreign[id];
+    if (!this.idx.cut[c.token.covenantId]) for (const id of Object.keys(this.state.foreign)) if (!seen.has(id)) delete this.state.foreign[id];
     if (fresh.length) {
       this.alert('warn', 'foreign-order', `${fresh.length} order(s) of the token on the bot's key that the bot did not place (${fresh.map(short).join(', ')}; ${Object.keys(this.state.foreign).length} in all): ignored for the caps and the self-trade check; a cancel is tried at most ${FOREIGN_TRIES} times. Anyone can make such an order; if one is yours, cancel it by hand (kob cancel <id>).`);
     }
@@ -537,6 +538,7 @@ export class Bot {
         this.log.info(`${tag}: the amend ${s.pending?.txid ?? ''} did not land; the order is at its earlier terms`);
         s.own.state = s.own.prev;
         s.price = Number(s.own.state.state?.price ?? s.price);
+        if (/^\d+$/.test(String(s.own.state.state?.amountLeft ?? ''))) s.ownAmount = Number(s.own.state.state.amountLeft);
         s.quotedFair = 0; // unknown quote: the next cycle amends it to the target
         s.expiresAt = null; // and renews its expiry
       }
@@ -550,7 +552,8 @@ export class Bot {
       s.fate = null;
       s.unconfirmed = false;
       if (s.pending?.kind === 'cancel' ? now - s.pending.since > timeout : s.pending) s.pending = null; // an unseen cancel is sent again
-      const why = !o ? 'does not list it' : o.txid !== r.txid ? `lists it at another outpoint (${o.txid})` : null;
+      // A list cut at its page cap may leave an older order out: no proof that the indexer hides it (R4T-3).
+      const why = !o ? (this.idx.cut[this.cfg.token.covenantId] ? null : 'does not list it') : o.txid !== r.txid ? `lists it at another outpoint (${o.txid})` : null;
       if (!why || s.pending?.kind === 'cancel') {
         s.idxBad = false;
         return;
@@ -568,9 +571,12 @@ export class Bot {
       // amount), so that alone is no proof: it is kept as unresolved (R3T-3).
       // An ask also ends once the fills of its whole amount are paid in outputs to the bot that
       // the node showed: a lying indexer would need a real payment to make the bot forget it.
-      const paid = r.status === 'gone' && isAsk(s) && this.paidInFull(id);
+      const proof = r.status === 'gone' && isAsk(s) ? this.paidInFull(id) : null;
+      const paid = proof != null;
       const ended = paid || (r.status === 'gone' && r.verified && (r.spent || cancelled || (s.fate && !o)));
       if (ended) {
+        // Each output proves one fill once, saved with the state file (R4T-2).
+        if (paid) for (const k of proof) this.state.payments[k].usedBy = id;
         const status = paid && !cancelled ? 'filled (its fills are paid in outputs the node showed)' : s.fate ? 'the placement never went out' : cancelled ? 'cancelled' : 'spent on the node (filled or ended)';
         this.log.info(`${tag} ended: ${status}`);
         this.log.action({ type: 'ended', id, side: s.side, level: s.level, status });
@@ -581,14 +587,14 @@ export class Bot {
       if (!s.unconfirmed) {
         const what = r.status === 'foreign' ? 'names another maker' : !r.verified ? 'is not found under a template not yet proven on the node'
           : `is not found at any state the bot can follow (a fill by an amount the search does not reach, or a full fill)${o ? ', though the indexer lists it' : ''}`;
-        this.alert('error', 'node-unconfirmed', `Order ${tag} ${what}: it is kept as unresolved (it counts toward the capital cap, its level is not quoted again, and pulls and STOP wait for it); each cycle the bot looks it up on the node with every amount it knows and cancels it once found. Check it by hand (kob recover --from ${this.p.check} --amount-left ${id}=<amount left>); once it has ended, stop the bot and remove it from state.json.`);
+        this.alert('error', 'node-unconfirmed', `Order ${tag} ${what}: it is kept as unresolved (it counts toward the capital cap, its level is not quoted again, and pulls and STOP wait for it); each cycle the bot looks it up on the node with every amount it knows and cancels it once found. Check it by hand (kob recover --from ${this.p.check} --amount-left ${id}=<amount left>); once it has ended, stop the bot and drop it (mm-bot drop --config FILE --id ${id}), which asks the node first.`);
       }
       s.unconfirmed = true;
       // Past its own expiry, conforming matchers no longer fill it: its level is quoted again,
       // while its tokens still count toward the cap until proof or the operator.
       if (isAsk(s) && !s.parked && s.expiresAt != null && now >= s.expiresAt) {
         s.parked = true;
-        this.alert('error', 'unresolved-expired', `Order ${tag} is still unresolved past its expiry: its level is free, but its ${fmtAmount((s.amountLeft ?? 0) / this.scale, 6)} tokens still count toward the ask cap (the ladder may stay a level short), STOP no longer waits for it, and the bot keeps looking for it. Non-conforming takers can still fill it until a refund ends it; check it by hand and, once it has ended, remove it from state.json with the bot stopped.`);
+        this.alert('error', 'unresolved-expired', `Order ${tag} is still unresolved past its expiry: its level is free, but its ${fmtAmount((s.amountLeft ?? 0) / this.scale, 6)} tokens still count toward the ask cap (the ladder may stay a level short), STOP no longer waits for it, and the bot keeps looking for it. Non-conforming takers can still fill it until a refund ends it; check it by hand and, once it has ended, drop it with the bot stopped (mm-bot drop --config FILE --id ${id}): the level comes back.`);
       }
       return;
     }
@@ -611,13 +617,15 @@ export class Bot {
 
   /** Logs the fills of the bot's orders that the indexer reports and the bot has not logged yet. */
   async recordFills() {
-    const items = await this.idx.fills(this.cfg.token.covenantId, 100);
     const lastId = this.state.lastFillId;
     if (lastId == null) {
       // The first run: start from the newest fill, do not replay history.
-      this.state.lastFillId = items[0]?.id ?? 0;
+      this.state.lastFillId = (await this.idx.fills(this.cfg.token.covenantId, 1))[0]?.id ?? 0;
       return;
     }
+    // Every fill since the last read, up to 1,000 (R4T-5): one missed would leave its ask unproven.
+    const { items, complete } = await this.idx.fillsSince(this.cfg.token.covenantId, lastId);
+    if (!complete) this.alert('warn', 'fills-missed', `More than ${items.length} fills of the token since the last read: older ones are not recorded, so an ask they filled in full may stay unresolved (check it with mm-bot unresolved).`);
     const fresh = items.filter((f) => f.id > lastId).sort((a, b) => a.id - b.id);
     for (const f of fresh) {
       const mine = this.state.orders[f.covenant_id] ?? this.state.recent[f.covenant_id];
@@ -647,38 +655,52 @@ export class Bot {
   }
 
   /**
-   * Records what the node shows paid to the bot's address, by transaction, so that a payment the
-   * bot spends later still counts (R3T-3). One getUtxosByAddresses of its own address, at the start
-   * of a cycle and after a cycle that sent. A failure is logged; nothing is proven then.
+   * Records what the node shows paid to the bot's address, by output, so that a payment the bot
+   * spends later still counts (R3T-3). One getUtxosByAddresses of its own address, at the start of
+   * a cycle, before each placement or amend, and after a cycle that sent. An output keeps the time
+   * the node first showed it (`at`) for as long as the node still shows it, so it never comes back
+   * as new (R4T-2). An order whose own outpoint has no read after it yet (`ownAt` null) takes
+   * this read's time: what this read first showed may predate it. A failure is logged; nothing is
+   * proven then. Returns whether the node answered.
    */
   async seePayments(now) {
     this.sentSince = false;
-    if (!this.nodeOutputs || !this.maker || !this.address) return;
+    if (!this.nodeOutputs || !this.maker || !this.address) return false;
     let outs;
     try {
       outs = await this.nodeOutputs(this.address, this.maker);
     } catch (e) {
       this.log.info(`payments to the bot not read from the node: ${e.message}`);
-      return;
+      return false;
     }
     const own = new Set(this.state.ownTx ?? []);
-    const byTx = new Map();
-    for (const u of outs) if (!own.has(u.txid)) byTx.set(u.txid, (byTx.get(u.txid) ?? 0) + u.amount);
     const pay = this.state.payments;
-    for (const [txid, sompi] of byTx) pay[txid] = { sompi: Math.max(sompi, pay[txid]?.sompi ?? 0), at: pay[txid]?.at ?? now };
-    const keep = Object.entries(pay).filter(([, p]) => now - p.at < PAYMENT_KEEP_MS).sort((a, b) => b[1].at - a[1].at).slice(0, PAYMENTS_KEEP);
-    this.state.payments = Object.fromEntries(keep);
+    const shown = new Set();
+    for (const u of outs) {
+      if (own.has(u.txid) || !Number.isSafeInteger(u.index)) continue;
+      const k = `${u.txid}:${u.index}`;
+      shown.add(k);
+      pay[k] ??= { txid: u.txid, sompi: u.amount, at: now };
+    }
+    const gone = Object.entries(pay).filter(([k, p]) => !shown.has(k) && now - p.at < PAYMENT_KEEP_MS).sort((a, b) => b[1].at - a[1].at).slice(0, PAYMENTS_KEEP);
+    this.state.payments = Object.fromEntries([...Object.entries(pay).filter(([k]) => shown.has(k)), ...gone]);
+    for (const o of Object.values(this.state.orders)) if (o.ownAt == null) o.ownAt = now;
+    return true;
   }
 
   /**
-   * Whether the fills the indexer reported for ask `id` add up to its whole amount, each paid in
-   * its transaction by outputs to the bot that the node showed (not the bot's own transactions)
-   * of at least what the covenant pays the maker, ceil(n x (price - tip) / scale), summed over
-   * every fill of the bot's asks the indexer puts in that transaction.
+   * The payment outputs that prove ask `id` filled in full, or null. The fills the indexer
+   * reported must add up to what the ask's last own outpoint held (`ownAmount`), each paid in its
+   * transaction by one output to the bot (not in one of the bot's own transactions) of at least
+   * what the covenant pays the maker, ceil(n x (price - tip) / scale). The output must be one the
+   * node first showed after that outpoint was sent (`ownAt`), and one that proved no other fill
+   * (R4T-2): a lying indexer then needs a real payment to the bot, made after the placement or
+   * amend, of the ask's whole proceeds, to make the bot forget it.
    */
   paidInFull(id) {
     const s = this.state.orders[id];
-    if (!s?.fills?.length || !(s.amount > 0)) return false;
+    const base = s?.ownAmount ?? s?.amountLeft ?? s?.amount;
+    if (!s?.fills?.length || !(base > 0) || s.ownAt == null) return null;
     const need = (o, n) => {
       const st = o.own?.state?.state ?? {};
       const p = BigInt(st.price ?? Math.round(o.price ?? 0));
@@ -686,23 +708,55 @@ export class Bot {
       const sc = BigInt(st.scale ?? this.scale);
       return p > tip ? (BigInt(n) * (p - tip) + sc - 1n) / sc : null;
     };
-    const claimed = new Map();
-    for (const o of Object.values(this.state.orders)) {
-      if (!isAsk(o)) continue;
-      for (const f of o.fills ?? []) {
-        const q = need(o, f.amount);
-        const was = claimed.get(f.txid);
-        claimed.set(f.txid, q == null || was === null ? null : (was ?? 0n) + q);
-      }
-    }
     const own = new Set(this.state.ownTx ?? []);
+    const picked = [];
     let proven = 0;
     for (const f of s.fills) {
-      const p = this.state.payments[f.txid];
-      const q = claimed.get(f.txid);
-      if (p && q != null && !own.has(f.txid) && BigInt(p.sompi) >= q) proven += f.amount;
+      const q = need(s, f.amount);
+      if (q == null || own.has(f.txid)) continue;
+      // The smallest free output of the fill's transaction that covers it.
+      const k = Object.entries(this.state.payments)
+        .filter(([key, p]) => p.txid === f.txid && !p.usedBy && !picked.includes(key) && p.at > s.ownAt && BigInt(p.sompi) >= q)
+        .sort((a, b) => a[1].sompi - b[1].sompi)[0]?.[0];
+      if (!k) continue;
+      picked.push(k);
+      proven += f.amount;
     }
-    return proven >= s.amount;
+    return proven >= base ? picked : null;
+  }
+
+  /** The orders kept with no proof that they ended (R3T-3): unresolved, or parked past their expiry. */
+  unresolvedOrders() {
+    return Object.entries(this.state.orders).filter(([, s]) => s.unconfirmed || s.parked).map(([id, s]) => ({
+      id, side: s.side, level: s.level, price: s.price, amount: s.amount ?? null, amountLeft: s.amountLeft ?? null, filledSeen: s.filledSeen ?? 0,
+      parked: !!s.parked, placedAt: s.placedAt ?? null, expiresAt: s.expiresAt ?? null, hints: isAsk(s) ? this.hintsOf(id) : [],
+    }));
+  }
+
+  /**
+   * The operator's drop of one unresolved or parked order, after checking it (R4T-5). The node is
+   * asked first, from the bot's record and every amount known (plus `amountLeft`, the operator's):
+   * an order it shows live, or that it cannot be asked about, is kept. Returns { ok, node, message }.
+   */
+  async operatorDrop(id, { amountLeft = null } = {}) {
+    const s = this.state.orders[id];
+    if (!s) return { ok: false, node: null, message: `${id} is not in state.json` };
+    if (!s.unconfirmed && !s.parked) return { ok: false, node: null, message: `${short(id)} is not unresolved: the bot tracks it and ends it by itself` };
+    const bal = await this.kob.balances(this.cfg.token.covenantId);
+    this.maker = bal.maker;
+    const v = await this.idx.order(id).catch(() => null);
+    if (v?.amountLeft > 0) s.idxAmount = v.amountLeft;
+    const hints = isAsk(s) ? [...new Set([...this.hintsOf(id), ...(Number.isSafeInteger(amountLeft) && amountLeft > 0 ? [amountLeft] : [])])] : [];
+    const r = (await this.nodeCheck([id], hints.length ? { [id]: hints } : {})).get(id);
+    if (r.status === 'live') return { ok: false, node: r, message: `the node holds ${short(id)} live at ${r.txid} (amount left ${r.amountLeft ?? '?'}): not dropped; cancel it (kob cancel ${id})` };
+    if (r.status === 'unknown') return { ok: false, node: r, message: `the node could not be asked about ${short(id)} (${r.why}): not dropped` };
+    const what = r.status === 'foreign' ? 'names another maker' : `is not found on the node at the amounts ${hints.join(', ') || '(a bid: its script)'}${isAsk(s) ? ' (the search is not exhaustive)' : ''}`;
+    delete this.state.orders[id];
+    this.state.recent[id] = { side: s.side, level: s.level, endedAt: Date.now() };
+    this.log.info(`${short(id)} dropped by the operator: it ${what}`);
+    this.log.action({ type: 'operator-drop', id, side: s.side, level: s.level, node: r.status, hints });
+    this.save();
+    return { ok: true, node: r, message: `${id} ${what}: dropped from state.json` };
   }
 
   /** The target ladder and the cycle's actions. */
@@ -802,6 +856,10 @@ export class Bot {
     // Every placement and amend sets the quote's expiry lifeMin ahead (to the second, at or before it on chain).
     const expiresAt = Math.floor((Date.now() + this.life().lifeMs) / 1000) * 1000;
     const gtd = gtdArg(expiresAt);
+    // The payments shown before a new own outpoint never prove its fills (R4T-2): read them first.
+    // Without an answer the next read that succeeds stands for the time (ownAt null).
+    const sends = (a.kind === 'place' || a.kind === 'amend') && !this.dryRun;
+    const ownAt = sends && (await this.seePayments(Date.now())) ? Date.now() : null;
     const r = a.kind === 'place' ? await this.kob.place(tok, a.side, a.amount, a.price, gtd)
       : a.kind === 'amend' ? await this.kob.amend(a.id, a.price, gtd)
         : a.kind === 'cancel' ? await this.cancelOrder(a.id) : await this.kob.merge(tok);
@@ -829,7 +887,7 @@ export class Bot {
     if (a.kind === 'place') {
       const id = r.newIds[0];
       // The order is tracked from the CLI's own result: its state and outpoint (R2-T1).
-      if (id) this.state.orders[id] = { ...this.placed(a, r.doc, r.txid, now, expiresAt), pending: { kind: 'place', since: now, txid: r.txid } };
+      if (id) this.state.orders[id] = { ...this.placed(a, r.doc, r.txid, now, expiresAt), ownAt, pending: { kind: 'place', since: now, txid: r.txid } };
       this.state.placeFails = 0;
       this.placeError = null;
     } else if (a.kind === 'amend') {
@@ -840,14 +898,17 @@ export class Bot {
         const rep = r.doc?.plan?.replacement;
         s.own = { ...(s.own ?? { tpl: null }), prev: s.own?.state ?? null, state: rep?.kind ? rep : s.own?.state ?? null, txid: r.txid };
         if (/^\d+$/.test(String(r.doc?.plan?.value ?? ''))) s.value = Number(r.doc.plan.value);
-        Object.assign(s, { price: a.price, quotedFair: a.quotedFair, expiresAt, expired: false, pending: { kind: 'amend', since: now, txid: r.txid } });
+        // What the new outpoint holds: the fills before it are in it already.
+        const left = rep?.state?.amountLeft;
+        Object.assign(s, { price: a.price, quotedFair: a.quotedFair, expiresAt, expired: false, ownAt, ownAmount: /^\d+$/.test(String(left ?? '')) ? Number(left) : s.amountLeft ?? s.amount,
+          pending: { kind: 'amend', since: now, txid: r.txid } });
       }
       else {
         // A cancel-replace: the order has a new id.
         delete this.state.orders[a.id];
         this.state.recent[a.id] = { side: a.side, level: a.level, endedAt: now };
         const id = r.newIds[0];
-        if (id) this.state.orders[id] = { ...this.placed({ ...s, ...a, amount: s.amountLeft ?? s.amount }, r.doc, r.txid, now, expiresAt), pending: { kind: 'place', since: now, txid: r.txid } };
+        if (id) this.state.orders[id] = { ...this.placed({ ...s, ...a, amount: s.amountLeft ?? s.amount }, r.doc, r.txid, now, expiresAt), ownAt, pending: { kind: 'place', since: now, txid: r.txid } };
         this.log.info(`${short(a.id)} was cancel-replaced (not in place): new id ${id}`);
       }
     } else if (a.kind === 'cancel') {
@@ -862,7 +923,7 @@ export class Bot {
   placed(a, doc, txid, now, expiresAt) {
     const st = doc?.plan?.states?.[0];
     const value = Number(doc?.plan?.request?.value ?? 0) || (a.side === 'buy' ? bidCost(a.amount, a.price, this.scale) : 0);
-    return { side: a.side, level: a.level, price: a.price, amount: a.amount, quotedFair: a.quotedFair, placedAt: now, expiresAt, amountLeft: a.amount, value,
+    return { side: a.side, level: a.level, price: a.price, amount: a.amount, ownAmount: a.amount, ownAt: null, quotedFair: a.quotedFair, placedAt: now, expiresAt, amountLeft: a.amount, value,
       own: st?.kind ? { state: st, prev: null, txid: txid ?? null, tpl: null } : null };
   }
 
@@ -916,15 +977,23 @@ export class Bot {
     if (this.cfg.alerts.webhookUrl) this.webhook(rec);
   }
 
-  /** Retired tokens: cancel the bot's orders and merge the returned UTXOs. Never place or amend. */
+  /**
+   * Retired tokens: cancel the bot's orders and merge the returned UTXOs. Never place or amend. At
+   * most FOREIGN_PER_CYCLE cancels a cycle in all, and none starts once RETIRED_BUDGET_MS have
+   * gone in this call (R4T-4), so that the next reprice of the live quotes waits for them no longer
+   * than that plus one call.
+   */
   async retire(bal, stopping) {
     const now = Date.now();
+    let cancels = 0;
     for (const id of this.cfg.retiredTokens) {
       const r = (this.state.retired[id] ??= { done: false, cancels: {} });
       r.failed ??= {};
       // An order whose cancel failed FOREIGN_TRIES times (one anyone made under the key, with no
       // custody) is given up, so that it neither repeats every cycle nor holds the clean-up (R3T-2).
       const listed = await this.idx.liveOrders(this.maker, id);
+      // Only the orders still listed keep a failure count.
+      r.failed = Object.fromEntries(Object.entries(r.failed).filter(([oid]) => listed.some((o) => o.id === oid)));
       const given = listed.filter((o) => (r.failed[o.id] ?? 0) >= FOREIGN_TRIES);
       const live = listed.filter((o) => !given.includes(o)).map((o) => ({ ...o, cancelSentAt: r.cancels[o.id] ?? null }));
       const row = bal.tokens?.[id] ?? { free: 0, freeUtxos: 0, decimals: null };
@@ -938,6 +1007,8 @@ export class Bot {
       r.done = false;
       for (const a of actions) {
         if (a.kind === 'merge' && (stopping || now - (r.mergeSentAt ?? 0) < this.cfg.safety.orderVisibleTimeoutSec * 1000)) continue;
+        if (a.kind === 'cancel' && (cancels >= FOREIGN_PER_CYCLE || Date.now() - now > RETIRED_BUDGET_MS)) continue;
+        if (a.kind === 'cancel') cancels++;
         const res = a.kind === 'cancel' ? await this.kob.cancel(a.id) : await this.kob.merge(id);
         const status = res.ok ? (res.dryRun ? 'planned' : 'submitted') : 'failed';
         this.log.action({ type: `retired-${a.kind}`, token: id, id: a.id ?? null, status, txid: res.txid ?? null, fee: res.fee ?? null, error: res.error ?? null });

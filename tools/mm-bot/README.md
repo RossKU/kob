@@ -27,7 +27,13 @@ node bin/mm-bot.mjs run    --config config.json          # the bot, restarted 60
 node bin/mm-bot.mjs status --config config.json [--json] # mode, fair value, venues, quotes, inventory, fees today
 node bin/mm-bot.mjs stop   --config config.json          # writes <dataDir>/STOP
 node bin/mm-bot.mjs once   --config config.json          # one cycle (add --dry-run to sign nothing)
+node bin/mm-bot.mjs unresolved --config config.json      # the asks kept with no proof that they ended
+node bin/mm-bot.mjs drop   --config config.json --id ID [--amount-left N]  # drop one of them, after checking it
 ```
+
+On mainnet `check`, `run` and `once` refuse to start without `node` set to a JSON wRPC URL (`ws://host:18110`): the
+proof that a fully filled ask paid the bot reads the node, and without it every full fill would park its ask (below).
+On testnet-10 it is a warning.
 
 - **Stop:** the STOP file, `stop`, or Ctrl-C/SIGTERM. The bot cancels every quote, waits until the node shows none left, and exits.
   Delete the STOP file to start again.
@@ -46,23 +52,41 @@ node bin/mm-bot.mjs once   --config config.json          # one cycle (add --dry-
   error alert. Until an order leaves, it counts toward the side caps, its level is not quoted again, it is never
   amended, every pull and STOP try to cancel it, and each cycle it is looked up again.
 - **A fully filled ask** leaves no output on the node either. It ends when the fills the indexer reports for it add up
-  to its whole amount and each is paid: the node shows (or showed earlier) outputs to the bot's own address in that
-  fill's transaction worth at least what the covenant pays the maker, `ceil(amount x (price - tip) / scale)`, for all
-  the bot's fills the indexer puts in that transaction, and the transaction is not one the bot sent. The indexer's word
-  alone never ends it: a lying indexer would need a real payment to the bot. To see the payments the bot reads its own
-  address on the node (`getUtxosByAddresses`, JSON wRPC) at the start of each cycle and again after a cycle that sent,
-  and keeps what it saw for a week (at most 2,000 transactions), so a payment it spends later still counts. That is one
-  extra node call per 30 s cycle, two after a send. It needs `node` set to a JSON wRPC URL (`ws://host:18110`,
+  to what its last own outpoint held (the amount at its last placement or amend) and each is paid: for each fill, one
+  output to the bot's own address in that fill's transaction, worth at least what the covenant pays the maker,
+  `ceil(amount x (price - tip) / scale)`, in a transaction the bot did not send. The output must be one the node first
+  showed after that placement or amend (the bot reads its outputs just before each placement and amend), and one that
+  proved no other fill: each output proves one fill once, and `state.json` keeps which ask it proved. The indexer's
+  word alone never ends an ask: a lying indexer needs a real payment to the bot, made after the ask's last placement or
+  amend and not used before, of the ask's whole proceeds at its price. Paid by the attacker, that is no loss to the
+  bot: it holds the full proceeds while the forgotten ask's tokens stay its own. Any other such receipt (an operator
+  top-up after the placement) can make it forget one ask per receipt: that ask stays fillable at its old price,
+  outside the reprices, the pulls and STOP, until its expiry (at most `lifeMin`, 90 min; then a refund returns its
+  tokens), so the exposure is one level times the move in that time. One residue: a fill of the earlier outpoint whose payment lands in the second between the bot's read and
+  the CLI's own read before an amend is in neither, so it may count for the new outpoint too; the ask then forgotten
+  holds at most that fill's amount, which its taker paid in full. The bot cannot check that the paying transaction
+  spent the ask: a node returns a transaction by id only from its mempool (there is no transaction index over wRPC), and a UTXO read shows no inputs. To see the payments the
+  bot reads its own address on the node (`getUtxosByAddresses`, JSON wRPC) at the start of each cycle, before each
+  placement or amend, and after a cycle that sent. An output keeps the time the node first showed it for as long as the
+  node shows it; once spent, its record is kept for a week (at most 2,000), so a payment the bot spends later still
+  counts. That is one node call per 30 s cycle, plus one per placement or amend (at most `maxActionsPerCycle`, 12) and
+  one after a cycle that sent. It needs `node` set to a JSON wRPC URL (`ws://host:18110`,
   testnet-10 `18210`): with the CLI's default or a Borsh node no full fill is ever proven (`check` and the log warn).
 - **When a fill cannot be proven** (no JSON wRPC node; the node read failed; the indexer never reports the fill; the
   payment landed while the bot was sending and the CLI spent it in that same cycle, before the read after the send;
-  the indexer reports it more than a week or 2,000 payments late) the ask stays unresolved: its level is not quoted
+  more than 1,000 fills of the token between two reads, 10 pages of 100, with a `fills-missed` alert; the indexer
+  reports it more than a week or 2,000 spent payments late) the ask stays unresolved: its level is not quoted
   again until the ask's own expiry, at most `lifeMin` (90 min) after its last placement or amend, so 45 to 90 min with
   the renewals. Past its expiry it is parked: STOP no longer waits for it, the bot keeps looking for it, but its tokens
   still count toward the ask cap until proof, because a non-conforming taker can still fill an expired ask until a
   refund ends it. With the defaults (15 % of `capitalUsd` a level, `maxAskPct` 50 %) one parked ask leaves the ask
-  ladder a level short until the operator checks it (`kob recover --amount-left <id>=<amount>`) and removes it from
-  `state.json` with the bot stopped. With a JSON wRPC node and an honest indexer this should be rare: the bot reads its
+  ladder a level short until the operator checks it (`kob recover --amount-left <id>=<amount>`) and drops it with the
+  bot stopped: `mm-bot unresolved` lists these asks, and `mm-bot drop --id <id> [--amount-left <n>]` asks the node
+  first, from the bot's record with every amount it knows (and `n`), prints the answer, and refuses while the node
+  shows the order live or cannot be asked. The node finds a partly filled ask only at an amount it is told, so check
+  the amount left first. The limits stay as they are, and bounded: a proof needs only the payments after the ask's
+  last placement or amend, at most `lifeMin` (up to 1 day) before its expiry, so the week that spent payments are kept
+  covers it unless the indexer reports the fill days late. With a JSON wRPC node and an honest indexer this should be rare: the bot reads its
   outputs every cycle before it sends, so it misses a payment only when it lands within the seconds of one cycle's
   sends and the CLI picks that very output to fund one of them.
 - **An indexer that hides a quote or shows it at an old outpoint.** The node still holds it: it is cancelled through the
@@ -70,6 +94,9 @@ node bin/mm-bot.mjs once   --config config.json          # one cycle (add --dry-
   while the indexer still lists it, or that cannot be looked up yet (no order template proven: the indexer never listed
   one of the bot's orders), is kept, with an error alert, until the node shows it ended. STOP ends when no order is left
   by that rule, whatever the indexer lists.
+  The bot reads the maker list for its token only, newest first, at most 1,000 orders (10 pages of 100). When that cap
+  is reached with more left (anyone can post orders under the bot's key), an order the list leaves out may only be
+  older: it is not taken as hidden and not cancelled for it, and the bot goes on from its own record and the node.
 - **Indexer down.** When a pull is due and the wallet or indexer read fails, the bot cancels through the node from its
   records, with no indexer. While the reads fail, the quotes are also pulled this way once fair has moved more than half
   the spread from the fair they were set at, and the 1-minute jump compares with the newest reading at least a minute
@@ -131,7 +158,10 @@ INFO: Funds received, ask quoting resumed.
 
 **New bridge instance.** Set `token` to the new covenant id and move the old one to `retiredTokens`. For a retired token
 the bot only cancels its orders and merges the returned UTXOs, then logs "retired instance ...: quotes pulled, N tokens
-back in the wallet". Moving them through the bridge is manual.
+back in the wallet". Moving them through the bridge is manual. At most 2 such cancels go out a cycle, and none starts
+once 20 s of the cycle went to them, so the next reprice of the live quotes waits at most 20 s plus one `kob` call
+(`cli.timeoutSec` per step) for them. An order whose cancel fails 3 times (one anyone made under the key, with no
+custody) is given up.
 
 ## Watching the bot with Claude
 
@@ -151,7 +181,7 @@ One JSON file; omitted fields take the default; relative paths are relative to t
 | Field | Default | Meaning |
 |---|---|---|
 | `network` | `mainnet` | `mainnet` or `testnet-10` |
-| `node` | `null` | wRPC URL; `null`: `KOB_NODE_WRPC`, else the CLI's two public nodes |
+| `node` | `null` | wRPC URL; `null`: `KOB_NODE_WRPC`, else the CLI's two public nodes. Mainnet needs a JSON wRPC URL (`check`, `run` and `once` refuse without one). The bot passes it to every CLI call too, so it then trusts that one node instead of the CLI's two public nodes that must agree: run your own |
 | `indexer` | `null` | KOB indexer URL; `null`: the network's public one |
 | `kobCli` | `kob` | path of the CLI |
 | `keyFile` | `null` | key file; `null`: `KOB_KEY` |
@@ -162,7 +192,7 @@ One JSON file; omitted fields take the default; relative paths are relative to t
 | `token.label` | `null` | name in messages |
 | `token.usdSource` | `kraken:USDCUSD` | token USD rate: `kraken:<PAIR>` or `fixed` |
 | `token.usdFallback` | `null` | rate to use when the live one is stale (the peg band is then not checked); `null`: IDLE until it is live again |
-| `token.pegUsd`, `token.pegBand` | `1.0`, `0.005` | IDLE `peg` outside the band |
+| `token.pegUsd`, `token.pegBand` | `1.0`, `0.005` | IDLE `peg` outside the band; the band must be at most half the spread (`quotes.spreadPct / 200`), since a wrong token USD rate inside it moves the fair value by up to the band |
 | `retiredTokens` | `[]` | old instances: recovery only |
 | `reference.pollSec` | `30` | seconds per cycle |
 | `reference.windowMin` | `5` | closed candles per VWAP |
@@ -247,6 +277,10 @@ days (about 0.07 KAS with a merge). Replayed over the soak's real market, where 
   after every upgrade.
 - The key is a hot key that signs without asking; keep on it only what the bot needs.
 - A cancel can lose a race with a fill.
+- The trust in the services the bot reads: the indexer (`indexer`) says which orders and fills exist, and
+  `node` is the one node the bot and every CLI call it makes then trust (without `node` the CLI asks two public nodes
+  that must agree). A lying node alone cannot end an ask (the fills come from the indexer), but a lying node and a
+  lying indexer together can invent both the payment and the fill. Run your own node, and an indexer you run or trust.
 - The expiry is soft. Past it, conforming matchers and the KOB book no longer use a quote, but the chain cannot bound
   when a fill happens: a non-conforming matcher could still fill it until a refund keeper (or the bot's next renewal or
   cancel) spends it. The short life narrows the window of a dead bot's quotes from 90 days to `lifeMin`; STOP still

@@ -166,6 +166,9 @@ export function validate(cfg) {
   if (half + ((q.levels - 1) * q.levelStepPct) / 100 >= 1) p.push('quotes: the outermost bid would be at or below zero');
   if (r.pairAgreement == null ? r.minVenues < 3 : r.pairAgreement >= half) p.push('reference.pairAgreement must be below half of quotes.spreadPct (as a fraction), or two venues can move the fair value past the best quote');
   if (r.usdtAgreement >= half) p.push('reference.usdtAgreement must be below half of quotes.spreadPct (as a fraction), or one USDT/USD source can move the fair value past the best quote');
+  // A wrong token USD rate inside the band moves fair by up to the band (R4T-6): at half the spread
+  // the best quotes can reach the true fair value, never cross it.
+  if (t.pegBand > half) p.push('token.pegBand must be at most half of quotes.spreadPct (as a fraction), or a wrong token USD rate inside the band can move the best quote past the fair value');
   if (q.repriceThreshold >= half) p.push('quotes.repriceThreshold must be below half of quotes.spreadPct (as a fraction), or a quote can drift through the fair value');
   if (q.skew?.enabled) {
     num(q.skew.maxShift, 'quotes.skew.maxShift', { min: 0, max: 0.5 });

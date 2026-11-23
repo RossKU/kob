@@ -58,3 +58,20 @@ The stand-in CLI of `test/` imitates `kob recover`; these points need the real C
   `/v1/fills` items carry `txid` and `amount` (base units), and that the fill's payout to the maker is an output of that
   transaction of at least `ceil(amount x (price - tip) / scale)`. With `node` null the same fill leaves the ask
   unresolved, parked after its expiry, and `check` warns.
+
+## To check on the next live run (round-4 fixes, not testable offline)
+
+- R4T-2: the real node's `getUtxosByAddresses` entries carry `outpoint.index` as a number (an output is keyed
+  `txid:index`). A fully filled ask whose taker paid after its last placement or amend ends with "filled (its fills are
+  paid in outputs the node showed)", and `state.json` `payments` marks that output `usedBy` the ask. A KAS send to the
+  bot's address made before a placement never proves a fill of that ask. Each placement and amend adds one
+  `getUtxosByAddresses` call just before it (count them in the node log: at most 12 extra a cycle).
+- R4T-3: `GET /v1/orders?maker=<key>&token=<id>&status=active` of the real indexer returns only that token's orders,
+  with `next_cursor` while more are left.
+- R4T-4: `retiredTokens` with a few custody-less orders of the retired token on the key: at most 2 `kob cancel` calls a
+  cycle, none after 20 s, and the reprice of the live quotes in the next cycle is on time.
+- R4T-5: `mm-bot check` on a mainnet config with `node` null (or a Borsh URL) exits 2 naming `node`; on testnet-10 it
+  warns. `/v1/fills?token=<id>&limit=100&before=<id>` pages back (the bot reads up to 10 pages to its last fill id).
+  `mm-bot unresolved` lists a parked ask; `mm-bot drop --id <id>` with the bot running refuses, with the bot stopped
+  prints the `kob recover` answer and refuses while the order is live (pass `--amount-left` of a partly filled one),
+  and drops an ended one (an `operator-drop` line in `logs/actions.jsonl`).

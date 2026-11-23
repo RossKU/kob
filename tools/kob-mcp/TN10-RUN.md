@@ -50,3 +50,15 @@ Seen during the run:
 - `kob_token_create` without `fund_utxo` against a node URL that accepts the socket and never answers: the write fails
   within 20 s ("did not answer"), and a `kob_cancel` sent right after is not held behind it (R3T-4).
 - `kob_status` shows the indexer URL without a user, password or query.
+
+## To check on the next live run (round-4 fixes, not testable offline)
+
+- R4T-1: the deployed kobd's book rows carry `quote`, `status`, `settled`, `expired`, `deadline_passed`, `scale` and
+  `cur_value` as the guard reads them (`settled` a JSON boolean; `quote` a string of digits). A plain bid row has
+  `quote` equal to `price`; a row counts nothing without `settled: true`, so against an indexer started without a node
+  (no `node_daa`) every priced write on a token without `refPrice` is refused.
+- R4T-1: an armed KobIfdBid entry with a long `band_daa` and a limit far above fair: `kob_book` shows its `quote` near the
+  entry stop, and a `kob_take` priced at its limit is refused (`PRICE_BAND`, or `PRICE_BAND_UNCHECKED` while under
+  1,000 KAS of bids at their quote rest on the book).
+- R4T-I4: the Claude Desktop extension's install form defaults to 50 and 200 KAS; a config file named in the form can
+  set `mode`, the band and `refPrice`.

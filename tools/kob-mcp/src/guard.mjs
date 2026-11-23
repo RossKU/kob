@@ -205,13 +205,33 @@ export const MAX_MIN_FILL_SOMPI = 1_000_000_000n;
 const lt = (a, b) => a.num * b.den < b.num * a.den;
 
 /**
+ * The price a taker gets from a book row now (R4T-1), sompi per its scale, or null when a taker
+ * cannot fill it now. An auction (an armed stop or if-done entry, a decaying ask, a rising bid)
+ * rests at its `quote`, which may be far from its limit `price`: a bid counts at the lower of
+ * the two, an ask at the higher. A row that is not live, settled and of its side's kind counts
+ * nothing, and so does one without a quote (an older indexer).
+ */
+function nowPrice(side, r) {
+  if (!/^\d+$/.test(String(r.price ?? '')) || !/^\d+$/.test(String(r.quote ?? ''))) return null;
+  if (r.settled !== true || r.expired === true || r.deadline_passed === true) return null;
+  if (r.status !== 'open' && r.status !== 'partial') return null;
+  const kind = sideOfKind(r.contract);
+  if (kind && kind !== side) return null;
+  const price = BigInt(r.price);
+  const quote = BigInt(r.quote);
+  const now = side === 'buy' ? (quote < price ? quote : price) : quote > price ? quote : price;
+  return now > 0n ? now : null;
+}
+
+/**
  * The book-derived reference (R2-T2), sompi per `scale` base units as { num, den, what }, or null
  * with `why`. It needs `depth` sompi on both of:
  * - the resting side an attacker must fill-risk to move it: for a buy the bids from the best down,
  *   for a sell the asks from the best up; the price where what a taker can fill now adds up to
  *   `depth`. Each row counts its `fillable_now` (R3T-1): a TWAP or DCA order only the slice that is
- *   due, not its whole `amount_left`, and a row without the field (an older indexer) nothing. The
- *   wallet's own orders and orders whose minimum fill is worth more than 10 KAS do not count.
+ *   due, not its whole `amount_left`, and a row without the field (an older indexer) nothing. A
+ *   row is valued and priced at what a taker gets now (`nowPrice`, R4T-1), a bid at most its escrow.
+ *   The wallet's own orders and orders whose minimum fill is worth more than 10 KAS do not count.
  * - the fill history, newest first: the VWAP of the fills that add up to `depth`.
  * A buy is judged against the lower of the two and a sell against the higher. Fills between two
  * keys of one owner cost only fees, so the fills alone never move the bound the attacker's way:
@@ -226,14 +246,23 @@ export function bookReference({ side, rows, fills, scale, depth, maker = null })
   let unsized = 0;
   for (const r of (side === 'buy' ? rows?.bids : rows?.asks) ?? []) {
     if (own && String(r.maker ?? '').toLowerCase() === own) continue;
-    const price = big(r.price);
-    const rs = r.scale != null ? BigInt(r.scale) : sc;
-    if (price <= 0n || rs !== sc) continue;
-    if ((big(r.min_fill) * price) / sc > MAX_MIN_FILL_SOMPI) continue;
     if (r.fillable_now == null) unsized++;
-    value += (big(r.fillable_now) * price) / sc;
+    const now = nowPrice(side, r);
+    if (now == null || r.scale == null || BigInt(r.scale) !== sc) continue;
+    // What a taker can fill now, never more than is left; a bid at most the KAS of its escrow.
+    const left = big(r.amount_left);
+    const fillable = big(r.fillable_now) < left ? big(r.fillable_now) : left;
+    // A minimum fill above the slice that is due cannot be met now; one worth over 10 KAS at the
+    // higher of limit and quote leaves few who can fill it.
+    const minFill = big(r.min_fill);
+    if (minFill > fillable && fillable < left) continue;
+    const high = big(r.price) > now ? big(r.price) : now;
+    if ((minFill * high) / sc > MAX_MIN_FILL_SOMPI) continue;
+    let worth = (fillable * now) / sc;
+    if (side === 'buy' && r.cur_value != null && big(r.cur_value) < worth) worth = big(r.cur_value);
+    value += worth;
     if (value >= depth) {
-      rest = { num: price, den: 1n, what: `${kas(depth)} KAS of ${side === 'buy' ? 'bids' : 'asks'}` };
+      rest = { num: now, den: 1n, what: `${kas(depth)} KAS of ${side === 'buy' ? 'bids' : 'asks'}` };
       break;
     }
   }
