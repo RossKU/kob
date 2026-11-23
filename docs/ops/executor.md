@@ -303,7 +303,7 @@ matcher and keeper options (C, "Running"):
 | `--no-fee-estimate`, `--fee-max-rate`, `--fee-max-tx-kas`, `--fee-refresh-ms`, `--fee-max-age-ms` | off, 1000, 1, 10000, 60000 | the fee policy (C, "Fee policy"): each transaction pays its urgency's bucket of the node's fee estimate within these bounds, the x402 facilitator's intent executions and expiries included |
 | `--min-profit`, `--max-tx-bytes`, `--no-chain`, `--no-arm` | as C | matcher (`--no-arm`: no updates; stops the batch fills next to their evidence still trigger) |
 | `--max-funding-inputs`, `--funding-target-utxos`, `--consolidate-funding` | 8, 4, 2 | how a batch picks the operator's funding (C, "Keys and funds") |
-| `--no-maintenance`, `--no-dust-sell`, `--maintenance-max-jobs` | off, off, 2 | the operator's own token UTXOs: merge and sell (C, "Maintenance") |
+| `--no-maintenance`, `--dust-sell`, `--maintenance-max-jobs` | off, off, 2 | the operator's own token UTXOs: merge, and with `--dust-sell` (opt-in; also `$KOB_DUST_SELL`) sell above the book's price floor (C, "Maintenance"); `--no-dust-sell` is accepted and does nothing |
 | `--inventory-policy <file>` | none (off) | the surplus-inventory policy (C, "Surplus inventory"): the pair surpluses the operator may accumulate as inventory; maintenance never sells a listed token (also on `match`) |
 | `--no-refund`, `--sweep-own-strays`, `--return-foreign-strays`, `--keeper-min-profit` | as C | keepers (`--keeper-min-profit` is `keep --min-profit`) |
 | `--no-lock-release` | off | keepers: do not release the automatic creator locks that are due (`docs/spec/creator-lock-auto.md`) |
@@ -3152,7 +3152,7 @@ matcher enabled (the Executor's default), the runner runs the maintenance jobs
 
 | Job | When | Transaction |
 |---|---|---|
-| sell | a plain `KobBid` of the token's market (program, extension commitment), live, not spent by a pending transaction or backed off, accepts a fill of what the operator holds (at least its minimum fill, or a fill that ends it), the `--inventory-policy` file does not list the token (surplus inventory is the owner's to sell), the bid pays at least 90 % of what the book's resting plain asks of the market charge for the same amount (the price floor, below), and the sale pays more than its fee (`proceeds − fee ≥ 0`) | the operator, as taker, sells as many base units as the best such bid takes (highest all-in per base unit, then age) from up to the program's token inputs; the bid delivery is the bid's; the unsold rest comes back as one token UTXO; the bid's KAS and the freed carriers go to the change |
+| sell (opt-in: `--dust-sell`) | a plain `KobBid` of the token's market (program, extension commitment), live, not spent by a pending transaction or backed off, accepts a fill of what the operator holds (at least its minimum fill, or a fill that ends it), the `--inventory-policy` file does not list the token (surplus inventory is the owner's to sell), the bid pays at least 90 % of what the book's resting plain asks of the market charge for the same amount (the price floor, below), and the sale pays more than its fee (`proceeds − fee ≥ 0`) | the operator, as taker, sells as many base units as the best such bid takes (highest all-in per base unit, then age) from up to the program's token inputs; the bid delivery is the bid's; the unsold rest comes back as one token UTXO; the bid's KAS and the freed carriers go to the change |
 | merge | otherwise, the operator holds at least 2 token UTXOs of the token | up to the program's token inputs (`Kcc20Ref` 3, 8/8 8, KRON 4; the oldest first) become one token UTXO; the other carriers go to the change (fee only, about 0.01 KAS) |
 
 At most `--maintenance-max-jobs` (2) per tick; their inputs are reserved like every pending transaction's, so the next tick
@@ -3160,10 +3160,15 @@ continues with what is left. KCC-20 jobs pay their fee from the carriers they fr
 presence takes the smallest funding UTXO (the presence; its change returns it). Every job is built with the `kob-protocol`
 builders (`SendTokens`, a taker `Batch`), signed and validated in the engine, submitted with kind `merge` / `sell` and logged
 (`maintenance: the operator's token UTXOs`, with `released`: the carriers it moves back to the funding). A sale runs only on
-bids the matcher's tick left: a bid that crosses an ask is the matcher's. `--no-dust-sell` merges only; `--no-maintenance`
-turns both off.
+bids the matcher's tick left: a bid that crosses an ask is the matcher's. `--no-maintenance` turns both off.
 
-**The sale's price floor** (`MaintenanceConfig::sell_floor_bps`, default 9,000). A sale is housekeeping, not trading, so it
+**The sale is opt-in** (`--dust-sell`, also `$KOB_DUST_SELL`; in `kobd.toml` `[launch] args = ["--dust-sell"]`; `kobd match --dust-sell`).
+By default maintenance only merges, and unsold holdings stay with the operator key, merged. Why: a third-party operator must be
+safe by default, and any price floor taken from the book can be posted into (the residual in the floor section below). An
+operator who turns the sale on accepts that residual for the tokens the `--inventory-policy` file does not list. `--no-dust-sell`,
+the earlier switch, is still accepted and does nothing (one line in the log says so).
+
+**The sale's price floor** (`MaintenanceConfig::sell_floor_bps`, default 9,000; only with `--dust-sell`). A sale is housekeeping, not trading, so it
 never goes far below the market: the bid must pay at least 90 % of what the book's resting plain asks of the token's market
 charge for the same amount, the cheapest first, as many as it takes to cover it (the price of the ask that completes the
 amount). Each ask counts only for what a buyer of the rest of the amount can take from it in one fill (its minimum fill, its
@@ -3202,8 +3207,8 @@ bid rests, the sale goes to it rather than to the attacker's lower bid. Where th
 taker who notices the ask within the minute stands in the way, which in a quiet market is little. So the loss is bounded
 by the operator key's holding of tokens the `--inventory-policy` file does not list: the matcher leaves none there by
 default (a route delivers every unit it buys), so it is tokens sent to the key, or inventory left after its token was
-removed from the policy file. Keep that holding at zero, list such tokens in the policy file (they are then only merged),
-or run with `--no-dust-sell`. With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
+removed from the policy file. This is why the sale is off by default: an operator who passes `--dust-sell` accepts it. With
+the sale on, keep that holding at zero or list such tokens in the policy file (they are then only merged). With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
 as well); the skipped sale is logged with its reason (`sell: no resting asks ...`, `sell: the best bid pays ... below 9000 bps
 of the asks' price`). A low bid alone therefore never takes a holding, and an ask posted to lower the reference must itself offer
 the whole amount at that price to everyone. `0` turns the floor off (any bid that pays the fee, the earlier rule).
@@ -3212,7 +3217,7 @@ the whole amount at that price to everyone. `0` turns the floor off (any bid tha
 accumulates on purpose; the owner sells it off-matcher. The sale job skips it (`sell: surplus inventory (the owner sells
 it off-matcher)`), whether or not `acceptSurplusTokens` is on, and only merges its UTXOs. This also keeps the inventory
 away from the sale entirely; the price floor above covers what the policy file does not list (a token removed from it, or a
-run without the file). Unlisted tokens (stray dust) are sold under the floor.
+run without the file). Unlisted tokens (stray dust) are only merged, or with `--dust-sell` sold under the floor.
 
 ### Node
 
@@ -3593,6 +3598,7 @@ kobd keep --network testnet-10 --book-file book.json --metrics-file /var/lib/nod
 | `--select-min-share` | 0.1 | the lowest share of the optional work per tick the races may push the executor to (room for `1 / share` executors) |
 | `--select-seed` | OS randomness | seed of the selection's random source (a reproducible run) |
 | `--keep` (match) | off | run the keepers too |
+| `--dust-sell` (match) | off | maintenance also sells the operator's token UTXOs above the book's price floor (opt-in; also `$KOB_DUST_SELL`; C, "Maintenance"); off, it only merges them |
 | `--state-dir` | none | the folder of what must survive a restart, one per process (also `$KOB_STATE_DIR`; created if missing; covered by the start check): the in-flight journal, the keepers' subsidy window and the start count (Restarts). Without it they are in memory only, and the keepers pay no subsidy |
 | `--no-refund` (keep) | off | disable refunds, kills and closes |
 | `--keeper-subsidy-max-kas` (keep, match) | 0.05 | the most KAS of the operator's funding added to the fee of one kill or refund whose tip pays the floor but not its urgency's rate (0: off; see Fee policy) |

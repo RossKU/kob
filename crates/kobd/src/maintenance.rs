@@ -12,7 +12,8 @@
 //!
 //! There are two jobs:
 //!
-//! - **Sell** runs when the token is not held as surplus inventory, because the owner sells
+//! - **Sell** (opt-in, `--dust-sell`; off by default, since its floor comes from a book anyone
+//!   can post into) runs when the token is not held as surplus inventory, because the owner sells
 //!   `inventory` tokens off-matcher. It also needs a bid that is left after the matcher's tick,
 //!   of which the operator holds at least one minimum fill. The bid must pay at least
 //!   `sell_floor_bps` (90 % by default) of what the book's resting asks charge for the same
@@ -59,7 +60,9 @@ pub struct MaintenanceConfig {
     /// Merge the operator's token UTXOs of one token.
     pub merge: bool,
     /// Sell the operator's tokens into the book (at least a bid's minimum fill) when that pays
-    /// more than the fee.
+    /// more than the fee. Off by default (`--dust-sell` turns it on): a third-party operator must
+    /// be safe by default, and the sale's price floor comes from a book anyone can post into
+    /// (the residual of the floor, `docs/ops/executor.md`). Off, the holdings are only merged.
     pub sell: bool,
     /// Smallest number of token UTXOs of one token worth a merge.
     pub min_utxos: usize,
@@ -101,7 +104,8 @@ impl Default for MaintenanceConfig {
         MaintenanceConfig {
             enabled: true,
             merge: true,
-            sell: true,
+            // Opt-in (--dust-sell): any price floor taken from the book can be posted into.
+            sell: false,
             min_utxos: 2,
             max_jobs: 2,
             min_sell_profit: 0,

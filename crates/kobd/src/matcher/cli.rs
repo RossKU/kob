@@ -119,6 +119,10 @@ pub struct MatchArgs {
     /// Also run the keepers in this process.
     #[arg(long)]
     pub keep: bool,
+    /// Maintenance: also sell the operator's token UTXOs into the book, above a price floor taken
+    /// from the book's asks (default: off, they are only merged; see `kobd --executor --help`).
+    #[arg(long, env = "KOB_DUST_SELL")]
+    pub dust_sell: bool,
 }
 
 /// `kobd keep`.
@@ -312,6 +316,7 @@ pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     a.liveness.apply(&mut cfg.keeper).map_err(anyhow::Error::msg)?;
     cfg.maintenance.fee_rate = a.common.fee_rate;
     cfg.maintenance.inventory = inventory;
+    cfg.maintenance.sell = a.dust_sell;
     state_rule(&mut cfg)?;
     let node = WrpcNode::new(WrpcConfig::new(rpc_url.clone()));
     tracing::info!(network = %cfg.network, rpc = %crate::rpc::redact_url(&rpc_url), operator = %kob_protocol::json::to_hex(&signer.pubkey()), dry_run = cfg.dry_run, "matcher starting");

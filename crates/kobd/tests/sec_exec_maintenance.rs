@@ -81,7 +81,7 @@ fn a_merge_of_full_carriers_keeps_the_configured_carrier() {
 /// carrier is what the sold carrier and the proceeds pay after the fee, and the funding (the presence) comes back whole.
 #[test]
 fn a_kron_sale_leaves_its_rest_on_what_the_sale_pays() {
-    let cfg = MaintenanceConfig { merge: false, ..Default::default() };
+    let cfg = MaintenanceConfig { merge: false, sell: true, ..Default::default() };
     // 2 whole junk tokens on a 0.5 KAS carrier; a bid for 1 whole at 2.60 (pays about 2.6 KAS), an ask at 2.70
     let bid = l_bid_a(100, K3, 2, P260, WHOLE);
     let ask = l_ask_a(300, K3, 9, 270_000_000, 10 * WHOLE);
@@ -110,7 +110,7 @@ fn a_kron_sale_leaves_its_rest_on_what_the_sale_pays() {
 /// ask that a buyer of the holding can take does.
 #[test]
 fn an_all_or_nothing_ask_does_not_set_the_sale_floor() {
-    let cfg = MaintenanceConfig { merge: false, ..Default::default() };
+    let cfg = MaintenanceConfig { merge: false, sell: true, ..Default::default() };
     let sale = |min_fill: i64| {
         let bid = l_bid_a(100, K3, 2, 250_000_000, 2 * WHOLE);
         let ask = l_ask_with(300, token_a(K3), K3, 2, 270_000_000, 10 * WHOLE, |a| a.min_fill = min_fill);
@@ -129,7 +129,7 @@ fn an_all_or_nothing_ask_does_not_set_the_sale_floor() {
 /// half the holding, or a stack of all-or-nothing asks. One that buyers of many sizes can take does.
 #[test]
 fn an_exact_size_all_or_nothing_ask_does_not_set_the_sale_floor() {
-    let cfg = MaintenanceConfig { merge: false, ..Default::default() };
+    let cfg = MaintenanceConfig { merge: false, sell: true, ..Default::default() };
     let sale = |amount: i64, min_fill: i64| {
         let bid = l_bid_a(100, K3, 2, 250_000_000, 2 * WHOLE);
         let ask = l_ask_with(300, token_a(K3), K3, 2, 270_000_000, amount, |a| a.min_fill = min_fill);
@@ -157,7 +157,7 @@ fn an_exact_size_all_or_nothing_ask_does_not_set_the_sale_floor() {
 /// takes fills from a fifth of the holding does.
 #[test]
 fn a_max_fill_capped_ask_does_not_set_the_sale_floor() {
-    let cfg = MaintenanceConfig { merge: false, ..Default::default() };
+    let cfg = MaintenanceConfig { merge: false, sell: true, ..Default::default() };
     let sale = |min_fill: i64| {
         let bid = l_bid_a(100, K3, 2, 250_000_000, 2 * WHOLE);
         let ask = l_ask_with(300, token_a(K3), K3, 2, 270_000_000, 3 * WHOLE, |a| {
@@ -178,7 +178,7 @@ fn a_max_fill_capped_ask_does_not_set_the_sale_floor() {
 /// filled or amended) less than a minute ago is ignored, so there is no sale; the same ask a minute old sets the floor.
 #[test]
 fn a_fresh_ask_does_not_set_the_sale_floor() {
-    let cfg = MaintenanceConfig { merge: false, ..Default::default() };
+    let cfg = MaintenanceConfig { merge: false, sell: true, ..Default::default() };
     let sale = |age: u64| {
         let bid = l_bid_a(100, K3, 2, 250_000_000, 2 * WHOLE);
         let mut ask = l_ask_with(300, token_a(K3), K3, 2, 270_000_000, 10 * WHOLE, |a| a.min_fill = WHOLE / 5);
@@ -206,7 +206,7 @@ const AGE: u64 = kobd::maintenance::ASK_REFERENCE_AGE;
 /// Whether the operator's 2 whole tokens of program `p` are sold into a bid at 2.50 when `asks` are the book's asks. With
 /// no ask that counts there is no reference and so no sale: a sale means one of `asks` counted.
 fn sells(p: TemplateId, asks: Vec<kobd::matcher::book::ListedOrder>) -> bool {
-    let cfg = MaintenanceConfig { merge: false, ..Default::default() };
+    let cfg = MaintenanceConfig { merge: false, sell: true, ..Default::default() };
     let mut inp = input(vec![own(p, 2 * WHOLE, CARRIER)], vec![funding(50 * KAS)]);
     inp.orders = vec![l_bid_a(100, p, 2, 250_000_000, 2 * WHOLE)];
     inp.orders.extend(asks);

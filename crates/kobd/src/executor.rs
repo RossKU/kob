@@ -278,8 +278,15 @@ pub struct RunArgs {
     /// matcher).
     #[arg(long, help_heading = "Maintenance")]
     pub no_maintenance: bool,
-    /// Maintenance: merge the operator's token UTXOs only, never sell them into the book.
-    #[arg(long, help_heading = "Maintenance")]
+    /// Maintenance: also sell the operator's token UTXOs into the book, above a price floor taken
+    /// from the book's asks (default: off, they are only merged). The floor can be set by anyone
+    /// who leaves an ask open at a low price for a minute: turning the sale on accepts that for
+    /// the tokens the inventory policy does not list (`docs/ops/executor.md`, "The sale's price
+    /// floor"). In `kobd.toml`: `[launch] args = ["--dust-sell"]`.
+    #[arg(long, env = "KOB_DUST_SELL", help_heading = "Maintenance")]
+    pub dust_sell: bool,
+    /// Accepted and ignored: merging only is the default now (`--dust-sell` sells).
+    #[arg(long, hide = true, help_heading = "Maintenance")]
     pub no_dust_sell: bool,
     /// Maintenance: most transactions per tick.
     #[arg(long, default_value_t = 2, help_heading = "Maintenance")]
@@ -344,7 +351,7 @@ impl RunArgs {
         };
         let maintenance = crate::maintenance::MaintenanceConfig {
             enabled: !self.no_maintenance,
-            sell: !self.no_dust_sell,
+            sell: self.dust_sell,
             max_jobs: self.maintenance_max_jobs,
             fee_rate: self.fee_rate,
             token_carrier: engine.token_carrier,
@@ -779,6 +786,9 @@ pub async fn run(a: RunArgs) -> Result<()> {
     let fee_policy = a.fees.policy(a.fee_rate).map_err(anyhow::Error::msg)?;
     a.liveness.apply(&mut KeeperConfig::default()).map_err(anyhow::Error::msg)?;
     a.select.config().map_err(anyhow::Error::msg)?;
+    if a.no_dust_sell && !a.dust_sell {
+        tracing::info!("--no-dust-sell is the default now and does nothing: maintenance only merges unless --dust-sell is given");
+    }
     let cfg = build_config(&a.index)?;
     // First, before anything is read from these paths (R2D-2).
     check_writable_by_others(
@@ -889,6 +899,25 @@ pub async fn run(a: RunArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The maintenance sale is opt-in: off by default, on with `--dust-sell`; `--no-dust-sell` (the earlier switch) still
+    /// parses and leaves it off.
+    #[test]
+    fn the_dust_sale_is_opt_in() {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct T {
+            #[command(flatten)]
+            a: RunArgs,
+        }
+        let sell = |args: &[&str]| {
+            let a = T::try_parse_from(std::iter::once("kobd").chain(args.iter().copied())).unwrap().a;
+            a.run_config("testnet-10").maintenance.sell
+        };
+        assert!(!sell(&[]));
+        assert!(sell(&["--dust-sell"]));
+        assert!(!sell(&["--no-dust-sell"]));
+    }
 
     /// A key file inside the data directory is refused. A pause file there is refused when the data
     /// directory is gone (a pause set there went with it) and only warned about while it exists.
