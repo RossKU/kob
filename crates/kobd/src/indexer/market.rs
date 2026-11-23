@@ -713,6 +713,11 @@ pub struct StatsView {
     /// The 24 h window held more fills than one query reads ([`MAX_FILL_ROWS`]), so the figures
     /// cover the newest ones.
     pub window_truncated: bool,
+    /// A side of the book was read only in part, its best `reads::BOOK_SCAN_MAX` live listed or
+    /// `reads::BOOK_ORDERS_MAX` fillable orders by limit price (R4C2-2): the touch, depth and open
+    /// counts are of those. Not sent when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub book_truncated: bool,
     pub best_bid: Option<String>,
     pub best_ask: Option<String>,
     pub mid: Option<String>,
@@ -753,6 +758,8 @@ struct Touch {
     /// The orders of the levels of each side, from the same book.
     bid_orders: i64,
     ask_orders: i64,
+    /// A read of a side stopped at its bound (`reads::for_each_resting`).
+    truncated: bool,
 }
 
 /// The band of `depth_2pct_quote`: the percent above (asks) and below (bids) the reference price.
@@ -791,9 +798,10 @@ fn depth_bands(bids: &[(i128, i128)], asks: &[(i128, i128)]) -> Option<(i128, i1
 /// 2026-11-19 K-L4). A level's value is its amount at its price, rounded down per order.
 fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbResult<Touch> {
     // The best (price, scale) of a side by the exact price per base unit, and its levels.
-    let best = |side: i64| -> DbResult<(Option<(i64, i64)>, i64)> {
+    let mut truncated = false;
+    let mut best = |side: i64| -> DbResult<(Option<(i64, i64)>, i64)> {
         let (mut best, mut n): (Option<(i64, i64)>, i64) = (None, 0);
-        reads::for_each_resting(conn, ctx, token, side, |levels, scale, _| {
+        truncated |= reads::for_each_resting(conn, ctx, token, side, |levels, scale, _| {
             let s = scale.max(1);
             for (_, p, _) in levels {
                 n += 1;
@@ -820,7 +828,7 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
     // at least that.
     let band = |side: i64, bound: i128| -> DbResult<i128> {
         let mut sum = 0i128;
-        reads::for_each_resting(conn, ctx, token, side, |levels, scale, _| {
+        let _ = reads::for_each_resting(conn, ctx, token, side, |levels, scale, _| {
             let s = scale.max(1);
             for (_, p, amount) in levels {
                 let at = per_basis(p, s, basis).saturating_mul(100);
@@ -841,7 +849,7 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
     };
     let (depth_bid, depth_ask) = bands.unwrap_or((0, 0));
     let depth = bands.map(|(b, a)| a.saturating_add(b));
-    Ok(Touch { bid, ask, depth, depth_bid, depth_ask, bid_orders, ask_orders })
+    Ok(Touch { bid, ask, depth, depth_bid, depth_ask, bid_orders, ask_orders, truncated })
 }
 
 /// The 24 h statistics and the touch of the book of `token`.
@@ -870,8 +878,16 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
         (Some(o), Some(l)) if o > 0 => i64::try_from(l.saturating_sub(o).saturating_mul(10_000) / o).ok(),
         _ => None,
     };
-    let Touch { bid, ask, depth: depth_2pct, depth_bid, depth_ask, bid_orders: open_bids, ask_orders: open_asks } =
-        touch(conn, ctx, token, basis)?;
+    let Touch {
+        bid,
+        ask,
+        depth: depth_2pct,
+        depth_bid,
+        depth_ask,
+        bid_orders: open_bids,
+        ask_orders: open_asks,
+        truncated: book_truncated,
+    } = touch(conn, ctx, token, basis)?;
     let mid = bid.zip(ask).map(|(b, a)| a.saturating_add(b) / 2);
     let spread = match (bid, ask, mid) {
         (Some(b), Some(a), Some(m)) if m > 0 => i64::try_from(a.saturating_sub(b).saturating_mul(10_000) / m).ok(),
@@ -893,6 +909,7 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
         quote_volume_24h: window.iter().fold(0i128, |s, t| s.saturating_add(t.quote)).to_string(),
         trades_24h: window.len() as u64,
         window_truncated,
+        book_truncated,
         best_bid: bid.map(|v| v.to_string()),
         best_ask: ask.map(|v| v.to_string()),
         mid: mid.map(|v| v.to_string()),
@@ -929,6 +946,9 @@ pub struct DepthView {
     pub daa: Option<u64>,
     pub bids: Vec<DepthLevel>,
     pub asks: Vec<DepthLevel>,
+    /// The book read was cut (`reads::BookView::truncated`). Not sent when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 /// One aggregated book level in per-basis terms, before merging: (price, amount, orders,
@@ -996,6 +1016,7 @@ pub fn depth(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
         daa: ctx.node_daa,
         bids: depth_side(&raw(&b.bids, false), basis, levels),
         asks: depth_side(&raw(&b.asks, true), basis, levels),
+        truncated: b.truncated,
     })
 }
 

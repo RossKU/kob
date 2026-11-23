@@ -800,3 +800,91 @@ CREATE INDEX IF NOT EXISTS recorded_outputs_created ON recorded_outputs (created
 CREATE INDEX IF NOT EXISTS recorded_outputs_spent ON recorded_outputs (spent_block) WHERE spent_block IS NOT NULL;
 CREATE INDEX IF NOT EXISTS recorded_outputs_spent_daa ON recorded_outputs (spent_daa) WHERE spent_daa IS NOT NULL;
 CREATE INDEX IF NOT EXISTS recorded_outputs_live_daa ON recorded_outputs (created_daa) WHERE spent_daa IS NULL;
+
+-- (R4C2-2) The live books, kept by the triggers below from `orders` and `order_state`; `db::backfill_book_live` fills them once
+-- (`meta.book_live`). The book and pair reads take a bounded prefix of them in their order, instead of every live order of the
+-- store, sorted.
+-- `book_live`: each order of a KAS book that is open or partial, listed, in a book and priced, best first per token side: keyed by
+-- its limit price per base unit (`price / scale`, a REAL; a bid's negated, so both sides read ascending), then age and covenant id
+-- (`reads::book_from`).
+CREATE TABLE IF NOT EXISTS book_live (
+    order_id      INTEGER PRIMARY KEY,    -- orders.id
+    token_id      INTEGER NOT NULL,
+    side          INTEGER NOT NULL,
+    key           REAL NOT NULL,
+    genesis_block INTEGER NOT NULL,
+    covenant_id   BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS book_live_key ON book_live (token_id, side, key, genesis_block, covenant_id);
+-- `pair_live`: each pair order that is open or partial and listed, oldest first (`pairs::pair_orders`, `pairs::pairs`).
+CREATE TABLE IF NOT EXISTS pair_live (
+    order_id      INTEGER PRIMARY KEY,    -- orders.id
+    token_id      INTEGER NOT NULL,       -- the base token A
+    quote_id      INTEGER NOT NULL,       -- the quote token B
+    genesis_block INTEGER NOT NULL,
+    covenant_id   BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pair_live_pair ON pair_live (token_id, quote_id, genesis_block, covenant_id);
+CREATE INDEX IF NOT EXISTS pair_live_quote ON pair_live (quote_id, genesis_block, covenant_id);
+CREATE INDEX IF NOT EXISTS pair_live_age ON pair_live (genesis_block, covenant_id);
+CREATE TRIGGER IF NOT EXISTS book_live_state_insert AFTER INSERT ON order_state BEGIN
+    DELETE FROM book_live WHERE order_id = NEW.order_id;
+    DELETE FROM pair_live WHERE order_id = NEW.order_id;
+    INSERT INTO book_live (order_id, token_id, side, key, genesis_block, covenant_id)
+        SELECT o.id, o.token_id, o.side, CASE o.side WHEN 2 THEN -1.0 ELSE 1.0 END * o.price / MAX(COALESCE(o.scale, 1), 1),
+               o.genesis_block, o.covenant_id
+        FROM orders o WHERE o.id = NEW.order_id AND NEW.status IN ('open','partial') AND o.listed = 1 AND o.in_book = 1
+            AND o.price IS NOT NULL AND o.token_id IS NOT NULL;
+    INSERT INTO pair_live (order_id, token_id, quote_id, genesis_block, covenant_id)
+        SELECT o.id, o.token_id, o.quote_id, o.genesis_block, o.covenant_id
+        FROM orders o WHERE o.id = NEW.order_id AND NEW.status IN ('open','partial') AND o.listed = 1 AND o.quote_id IS NOT NULL
+            AND o.token_id IS NOT NULL;
+END;
+CREATE TRIGGER IF NOT EXISTS book_live_state_update AFTER UPDATE OF status ON order_state BEGIN
+    DELETE FROM book_live WHERE order_id = OLD.order_id;
+    DELETE FROM pair_live WHERE order_id = OLD.order_id;
+    INSERT INTO book_live (order_id, token_id, side, key, genesis_block, covenant_id)
+        SELECT o.id, o.token_id, o.side, CASE o.side WHEN 2 THEN -1.0 ELSE 1.0 END * o.price / MAX(COALESCE(o.scale, 1), 1),
+               o.genesis_block, o.covenant_id
+        FROM orders o WHERE o.id = NEW.order_id AND NEW.status IN ('open','partial') AND o.listed = 1 AND o.in_book = 1
+            AND o.price IS NOT NULL AND o.token_id IS NOT NULL;
+    INSERT INTO pair_live (order_id, token_id, quote_id, genesis_block, covenant_id)
+        SELECT o.id, o.token_id, o.quote_id, o.genesis_block, o.covenant_id
+        FROM orders o WHERE o.id = NEW.order_id AND NEW.status IN ('open','partial') AND o.listed = 1 AND o.quote_id IS NOT NULL
+            AND o.token_id IS NOT NULL;
+END;
+CREATE TRIGGER IF NOT EXISTS book_live_state_delete AFTER DELETE ON order_state BEGIN
+    DELETE FROM book_live WHERE order_id = OLD.order_id;
+    DELETE FROM pair_live WHERE order_id = OLD.order_id;
+END;
+CREATE TRIGGER IF NOT EXISTS book_live_order_insert AFTER INSERT ON orders BEGIN
+    DELETE FROM book_live WHERE order_id = NEW.id;
+    DELETE FROM pair_live WHERE order_id = NEW.id;
+    INSERT INTO book_live (order_id, token_id, side, key, genesis_block, covenant_id)
+        SELECT NEW.id, NEW.token_id, NEW.side, CASE NEW.side WHEN 2 THEN -1.0 ELSE 1.0 END * NEW.price / MAX(COALESCE(NEW.scale, 1), 1),
+               NEW.genesis_block, NEW.covenant_id
+        FROM order_state s WHERE s.order_id = NEW.id AND s.status IN ('open','partial') AND NEW.listed = 1 AND NEW.in_book = 1
+            AND NEW.price IS NOT NULL AND NEW.token_id IS NOT NULL;
+    INSERT INTO pair_live (order_id, token_id, quote_id, genesis_block, covenant_id)
+        SELECT NEW.id, NEW.token_id, NEW.quote_id, NEW.genesis_block, NEW.covenant_id
+        FROM order_state s WHERE s.order_id = NEW.id AND s.status IN ('open','partial') AND NEW.listed = 1 AND NEW.quote_id IS NOT NULL
+            AND NEW.token_id IS NOT NULL;
+END;
+CREATE TRIGGER IF NOT EXISTS book_live_order_update
+    AFTER UPDATE OF id, token_id, side, price, scale, listed, in_book, genesis_block, covenant_id, quote_id ON orders BEGIN
+    DELETE FROM book_live WHERE order_id = OLD.id;
+    DELETE FROM pair_live WHERE order_id = OLD.id;
+    INSERT INTO book_live (order_id, token_id, side, key, genesis_block, covenant_id)
+        SELECT NEW.id, NEW.token_id, NEW.side, CASE NEW.side WHEN 2 THEN -1.0 ELSE 1.0 END * NEW.price / MAX(COALESCE(NEW.scale, 1), 1),
+               NEW.genesis_block, NEW.covenant_id
+        FROM order_state s WHERE s.order_id = NEW.id AND s.status IN ('open','partial') AND NEW.listed = 1 AND NEW.in_book = 1
+            AND NEW.price IS NOT NULL AND NEW.token_id IS NOT NULL;
+    INSERT INTO pair_live (order_id, token_id, quote_id, genesis_block, covenant_id)
+        SELECT NEW.id, NEW.token_id, NEW.quote_id, NEW.genesis_block, NEW.covenant_id
+        FROM order_state s WHERE s.order_id = NEW.id AND s.status IN ('open','partial') AND NEW.listed = 1 AND NEW.quote_id IS NOT NULL
+            AND NEW.token_id IS NOT NULL;
+END;
+CREATE TRIGGER IF NOT EXISTS book_live_order_delete AFTER DELETE ON orders BEGIN
+    DELETE FROM book_live WHERE order_id = OLD.id;
+    DELETE FROM pair_live WHERE order_id = OLD.id;
+END;

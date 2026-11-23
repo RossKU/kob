@@ -260,6 +260,9 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     if backfill_activity(conn)? {
         tracing::info!("counted the activity totals once (kept by triggers from now on)");
     }
+    if let Some(n) = backfill_book_live(conn)? {
+        tracing::info!(orders = n, "indexed the live KAS books once (kept by triggers from now on)");
+    }
     let unknown_txs = backfill_executor_txs(conn)?;
     if unknown_txs > 0 {
         tracing::info!(
@@ -297,6 +300,38 @@ pub fn backfill_counters(conn: &Connection) -> DbResult<bool> {
     meta_set(&tx, "counters", "1")?;
     tx.commit()?;
     Ok(true)
+}
+
+/// Fills `book_live` and `pair_live` (schema.sql, R4C2-2) once, for a store whose rows were written
+/// without their triggers.
+///
+/// It is one pass over the live orders (`order_state_status`), at the first open of this build. It
+/// does nothing (`None`) once done (`meta.book_live`); the triggers keep them from then on.
+pub fn backfill_book_live(conn: &Connection) -> DbResult<Option<usize>> {
+    if meta_get(conn, "book_live")?.is_some() {
+        return Ok(None);
+    }
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch("DELETE FROM book_live; DELETE FROM pair_live;")?;
+    let pairs = tx.execute(
+        "INSERT INTO pair_live (order_id, token_id, quote_id, genesis_block, covenant_id) \
+         SELECT o.id, o.token_id, o.quote_id, o.genesis_block, o.covenant_id \
+         FROM order_state s CROSS JOIN orders o ON o.id = s.order_id \
+         WHERE s.status IN ('open','partial') AND o.listed = 1 AND o.quote_id IS NOT NULL AND o.token_id IS NOT NULL",
+        [],
+    )?;
+    let n = pairs
+        + tx.execute(
+            "INSERT INTO book_live (order_id, token_id, side, key, genesis_block, covenant_id) \
+         SELECT o.id, o.token_id, o.side, CASE o.side WHEN 2 THEN -1.0 ELSE 1.0 END * o.price / MAX(COALESCE(o.scale, 1), 1), \
+                o.genesis_block, o.covenant_id \
+         FROM order_state s CROSS JOIN orders o ON o.id = s.order_id \
+         WHERE s.status IN ('open','partial') AND o.listed = 1 AND o.in_book = 1 AND o.price IS NOT NULL AND o.token_id IS NOT NULL",
+            [],
+        )?;
+    meta_set(&tx, "book_live", "1")?;
+    tx.commit()?;
+    Ok(Some(n))
 }
 
 /// Counts the bytes the KCC-23 candidates hold (`counters.kcc23_candidate_bytes`, schema.sql) once, for

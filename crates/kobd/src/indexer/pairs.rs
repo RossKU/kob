@@ -257,15 +257,18 @@ pub const PAIR_SCAN_MAX: usize = 20_000;
 /// These are the oldest [`PAIR_BOOK_ORDERS_MAX`] such orders among the oldest [`PAIR_SCAN_MAX`]
 /// candidates. The flag is true when either bound cut the set.
 fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: &ReadCtx) -> DbResult<(Vec<LivePair>, bool)> {
-    // Every row the SQL leaves out is one that `eligible` or `resting_level` would drop, so the
-    // order columns filter before the bounds count.
+    // The oldest `PAIR_SCAN_MAX + 1` live listed pair orders of the pair (`pair_live`, R4C2-2), in
+    // that order; the order columns filter them, and the rows the SQL leaves out are ones that
+    // `eligible` or `resting_level` would drop.
     let live = fillable_now(now, ctx.now_unix);
     let sql = format!(
-        "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline FROM order_state s \
-         CROSS JOIN orders o ON o.id = s.order_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
-         WHERE o.listed = 1 AND o.token_id = (SELECT id FROM ids WHERE h = ?1) AND o.quote_id = (SELECT id FROM ids WHERE h = ?2) AND s.status IN ('open','partial') AND s.state_known = 1 \
-         AND u.spent_block IS NULL AND o.contract IN ('KobPair','KobIfdPair') AND {RESTING_TIF} AND {live} AND {NOT_FROZEN} AND {pinned} \
-         ORDER BY o.genesis_block, o.covenant_id LIMIT ?3",
+        "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline \
+         FROM (SELECT pl.order_id FROM pair_live pl WHERE pl.token_id = (SELECT id FROM ids WHERE h = ?1) \
+               AND pl.quote_id = (SELECT id FROM ids WHERE h = ?2) ORDER BY pl.genesis_block, pl.covenant_id LIMIT ?3) p \
+         CROSS JOIN order_state s ON s.order_id = p.order_id CROSS JOIN orders o ON o.id = p.order_id \
+         JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
+         WHERE o.listed = 1 AND s.status IN ('open','partial') AND s.state_known = 1 \
+         AND u.spent_block IS NULL AND o.contract IN ('KobPair','KobIfdPair') AND {RESTING_TIF} AND {live} AND {NOT_FROZEN} AND {pinned}",
         pinned = pinned_template()
     );
     let mut st = conn.prepare(&sql)?;
@@ -295,19 +298,30 @@ fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: 
         }
         out.push(p);
     }
-    Ok((out, false))
+    // The prefix of `pair_live` the read took was full: older orders the order columns left out
+    // took places in it, and the rest of the pair was not read.
+    let beyond = conn
+        .prepare_cached(
+            "SELECT 1 FROM pair_live WHERE token_id = (SELECT id FROM ids WHERE h = ?1) AND quote_id = (SELECT id FROM ids WHERE h = ?2) \
+             LIMIT 1 OFFSET ?3",
+        )?
+        .exists(params![base.0.to_vec(), quote.0.to_vec(), PAIR_SCAN_MAX as i64 + 1])?;
+    Ok((out, beyond))
 }
 
 /// The plain KAS orders of one token and side (1 asks, 2 bids) that a route can use, best first.
 fn kas_orders(conn: &Connection, token: &Hash32, side: i64, limit: usize, now: i64, ctx: &ReadCtx) -> DbResult<Vec<KasOrder>> {
-    let (kinds, dir) = if side == 1 { ("'KobAsk','KobAskKron'", "ASC") } else { ("'KobBid','KobBidKron'", "DESC") };
+    let kinds = if side == 1 { "'KobAsk','KobAskKron'" } else { "'KobBid','KobBidKron'" };
+    // The live book of the side in its order (`reads::book_from`, R4C2-2): its best rows by limit
+    // price, never every live listed order of the token, sorted.
     let sql = format!(
-        "SELECT o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, s.remaining_amount, o.deadline FROM order_state s \
-         CROSS JOIN orders o ON o.id = s.order_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
+        "SELECT o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, s.remaining_amount, o.deadline {from} \
+         JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
          WHERE o.token_id = (SELECT id FROM ids WHERE h = ?1) AND o.side = ?2 AND o.listed = 1 AND o.in_book = 1 AND o.contract IN ({kinds}) \
          AND s.status IN ('open','partial') AND s.state_known = 1 AND u.spent_block IS NULL AND {NOT_FROZEN} AND {CUSTODY_OK} \
-         AND {pinned} ORDER BY (o.price * 1.0 / MAX(COALESCE(o.scale, 1), 1)) {dir}, o.genesis_block ASC, o.covenant_id ASC LIMIT ?3",
-        pinned = pinned_template()
+         AND {pinned} LIMIT ?3",
+        pinned = pinned_template(),
+        from = super::reads::book_from()
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params![token.0.to_vec(), side, limit as i64], |r| {
@@ -545,21 +559,38 @@ pub fn pairs(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResu
     // The order columns leave out what `eligible` would drop before the bound counts
     // ([`PAIR_SCAN_MAX`]).
     let live = fillable_now(now, ctx.now_unix);
-    let sql = format!(
-        "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline, o_tk.h, o_qt.h FROM order_state s \
-         CROSS JOIN orders o ON o.id = s.order_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
-         WHERE o.listed = 1 AND o.quote_id IS NOT NULL AND s.status IN ('open','partial') AND s.state_known = 1 \
-         AND u.spent_block IS NULL AND (?1 IS NULL OR o_tk.h = ?1 OR o_qt.h = ?1) AND {live} AND {NOT_FROZEN} \
-         AND {pinned} ORDER BY o.genesis_block, o.covenant_id LIMIT {PAIR_SCAN_MAX}",
-        pinned = pinned_template()
-    );
-    let mut st = conn.prepare(&sql)?;
+    // The oldest `PAIR_SCAN_MAX` live listed pair orders (`pair_live`, R4C2-2): of all pairs, or of
+    // those naming `token` as base and as quote, each read in its index and merged by age.
+    let read = |picked: &str| -> DbResult<Vec<(i64, Row)>> {
+        let sql = format!(
+            "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline, o_tk.h, o_qt.h, o.genesis_block \
+             FROM (SELECT pl.order_id FROM pair_live pl {picked} ORDER BY pl.genesis_block, pl.covenant_id LIMIT {PAIR_SCAN_MAX}) p \
+             CROSS JOIN order_state s ON s.order_id = p.order_id CROSS JOIN orders o ON o.id = p.order_id \
+             JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
+             WHERE o.listed = 1 AND o.quote_id IS NOT NULL AND s.status IN ('open','partial') AND s.state_known = 1 \
+             AND u.spent_block IS NULL AND {live} AND {NOT_FROZEN} AND {pinned}",
+            pinned = pinned_template()
+        );
+        let mut st = conn.prepare(&sql)?;
+        let rows = st
+            .query_map(params![token.map(|t| t.0.to_vec())], |r| {
+                Ok((r.get(7)?, (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    };
     type Row = (Vec<u8>, String, Option<Vec<u8>>, i64, Option<i64>, Vec<u8>, Vec<u8>);
-    let rows: Vec<Row> = st
-        .query_map(params![token.map(|t| t.0.to_vec())], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
+    let rows: Vec<Row> = match token {
+        None => read("WHERE ?1 IS NULL")?.into_iter().map(|(_, r)| r).collect(),
+        Some(_) => {
+            let mut all = read("WHERE pl.token_id = (SELECT id FROM ids WHERE h = ?1)")?;
+            all.extend(read("WHERE pl.quote_id = (SELECT id FROM ids WHERE h = ?1)")?);
+            all.sort_by(|(ga, a), (gb, b)| ga.cmp(gb).then_with(|| a.0.cmp(&b.0)));
+            all.dedup_by(|(_, a), (_, b)| a.0 == b.0);
+            all.truncate(PAIR_SCAN_MAX);
+            all.into_iter().map(|(_, r)| r).collect()
+        }
+    };
     let mut counts: BTreeMap<(Hash32, Hash32), PairSummary> = BTreeMap::new();
     for (cov, contract, state, udaa, deadline, a, b) in rows {
         let (Some(a), Some(b)) = (Hash32::from_slice(&a), Hash32::from_slice(&b)) else { continue };

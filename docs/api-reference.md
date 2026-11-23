@@ -416,7 +416,7 @@ curl -s $API/v1/tokens
 | `genesis_verified` | bool or null | The registry's fact: every genesis output was checked against the pinned program; `null` when it does not say. |
 | `warnings` | array of string | Derived from facts: `genesis_unverified` (unless `genesis_verified` is true), `live_mint_authority` (a genesis record lists a live mint authority; supply can still grow). Show them. |
 | `powers` | array of string | Capabilities of the program that reach balances or supply (`freeze`, `seize`, `blacklist`, `mint-authority`, ...). |
-| `open_asks`, `open_bids` | number | Listed live asks / bids (the orders the KAS book lists, section 3.6). |
+| `open_asks`, `open_bids` | number | Listed live asks / bids (the orders the KAS book lists, section 3.6), at most 10,000: a side of more says 10,000. |
 | `declaration` | `true`, **omitted** | Present only when the indexer holds a verified KCC-23 declaration for the token. |
 
 KOB makes no per-token judgement: there is no standing or "official" flag.
@@ -488,6 +488,12 @@ amount counts once: an aggregated level counts it as one of its `orders`; with `
 with its `covenant_id` and `curve_level` (the table index, omitted for other orders), `price` and `quote` the level's price and
 `amount_left` and `fillable_now` the level's size. A curve is never idle (it has no refund).
 
+**Cap (R4C2-2).** A side is read from its live listed orders in the order of their limit price per base unit, best first: at most
+10,000 of them (`BOOK_SCAN_MAX`), and at most 1,000 that a matcher may fill now (`BOOK_ORDERS_MAX`). A side of more is its best that
+many, and `truncated: true` (sent only then) says so; an auction whose quote has moved ahead of them may then be missing. A smaller
+book is read whole, as before. `/v1/depth` (`truncated`), `/v1/stats/{token}` (`book_truncated`), the counts of `/v1/tokens` (at
+most 10,000 a side) and the KAS route of a pair book read the same prefix.
+
 ### 3.7 Pairs
 
 A pair `base/quote` (two token covenant ids) is **oriented**: its pair orders are those whose base token A is `base` and quote
@@ -519,8 +525,9 @@ through the two KAS books; indicative). The price of a level is `price_num / pri
 descending. `daa_score` (number) is the DAA score the quotes are evaluated at (the node's, else the cursor's).
 The direct and entry levels come from the oldest 2,000 pair orders that rest at a level, found among the oldest 20,000 listed
 live candidates that are active, GTC, not expired and not past their deadline (an unarmed stop entry, a TWAP slice not due yet
-or an inexact custody counts toward the 20,000 but not the 2,000). `orders_truncated` (bool) is true when either bound cut them,
-so newer resting orders may be missing.
+or an inexact custody counts toward the 20,000 but not the 2,000). The candidates are taken from the oldest 20,001 live listed
+pair orders of the pair, so one not active yet or expired takes a place among them too (R4C2-2). `orders_truncated` (bool) is true
+when a bound cut them, so newer resting orders may be missing.
 
 **`GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=`** takes the parameters of `/v1/candles/{token}`
 (section 3.16: `interval` default `5m`, `limit` default 500, at most 1500). The candles are **derived from the two KAS series**,
@@ -899,6 +906,10 @@ asks up to 2 % above it, same reference, same value and both bounds inclusive. A
 are always present; an older indexer sends neither). The web app marks a thin book from them (the smaller side worth less than 0.1 % of the token's value, $100 at least and $10,000 at most).
 `window_truncated` is true when the day held more than 20,000 fill rows and the figures cover the newest ones. `best_bid`,
 `best_ask`, `mid`, the depth and the open counts (`open_asks` / `open_bids`: the orders of its two sides) come from the resting book of section 3.6.
+
+**Cap.** As the book of section 3.6, the touch, the depth band and the open counts are read from at most 10,000 live listed
+orders of a side (1,000 a matcher may fill now), the best by limit price. `book_truncated: true` (sent only then) says a side
+was cut.
 
 ### 3.18 `GET /v1/depth/{token}`
 
