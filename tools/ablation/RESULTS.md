@@ -1,5 +1,15 @@
 # Ablation results
 
+## Release candidate dry run (2026-11-23, audit AUD-COV)
+
+On the templates of the 2026-11-23 release candidate (after the delivery, DLV-07, H1, minimum-fill and curve re-pins), no
+cargo: `node tools/ablation/ablate.mjs --dry-run --suite all`: 1,557 edits applied, **0 edit errors** (18 s). `node
+tools/ablation/coverage.mjs`: of 1,337 `require` lines, **99 are not mutated** by any catalog entry (35 on 2026-10-13, all
+documented then). Most new ones are the November delivery-mode checks: KobCondPair 25, KobPair 16, KobCondBid 10, KobBid 5,
+KobCondAsk 5, KobCondAskKron 5, KobCondBidKron 5, KobIfdPair 5, KobIfdAsk 4, KobIfdAskKron 4, KobCurveAsk 3, KobIfdBid 3,
+KobIfdBidKron 3, KobAsk 2, KobAskKron 2, KobBidKron 2. They are neither witnessed nor documented yet. No mutation was run
+(the full run is cargo test executables, about 2 hours at `--jobs 2` by the Runtime section of README.md).
+
 ## KaspaRocket's program (2026-10-27, its mainnet review)
 
 `kasparocket-token-11458` (`KaspaRocketToken11458`: the public-mint `KCC20` actor at 10 / 10 slots, reviewed 2026-10-27) was run
