@@ -1135,7 +1135,13 @@ export function OrderTicket(props: OrderTicketProps) {
       if (helpWasOn) tk.classList.add('tk-help-off');
       const top = scroll.getBoundingClientRect().top - scroll.scrollTop;
       const content = formEl.getBoundingClientRect().bottom - top + parseFloat(getComputedStyle(scroll).paddingBottom || '0');
-      const chrome = holder.offsetHeight - scroll.clientHeight;
+      // A reason slot that only says the data is still being read goes once it is in. It is not part
+      // of the fit, or the row, and the chart in it, would shrink when the line goes.
+      const reason = tk.querySelector<HTMLElement>('.tk-foot > .tk-reason');
+      const said = reason ? [...reason.querySelectorAll('[data-code]')] : [];
+      const loadingOnly = said.length > 0 && said.every((x) => x.getAttribute('data-code') === 'loading');
+      const reasonH = reason && loadingOnly ? reason.offsetHeight + (parseFloat(getComputedStyle(reason.parentElement!).rowGap) || 0) : 0;
+      const chrome = holder.offsetHeight - scroll.clientHeight - reasonH;
       if (helpWasOn) tk.classList.remove('tk-help-off');
       fit.current.w = w;
       grid.style.setProperty('--tk-fit', `${Math.ceil(chrome + content)}px`);
