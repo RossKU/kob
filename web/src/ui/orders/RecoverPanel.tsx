@@ -3,7 +3,7 @@ import { useServices } from '../../app/context';
 import { t } from '../../i18n';
 import type { PlacementRecord, RecordStore, ResolvedRecord } from '../../kob/records';
 import type { Hex } from '../../kob/types';
-import { Badge, Banner, Button, CopyText, Section, Table, TableMessage, downloadText, exportFileName, readFileText, showToast, toError } from '../kit';
+import { Badge, Banner, Button, CopyText, HelpTip, Section, Table, TableMessage, downloadText, exportFileName, readFileText, showToast, toError } from '../kit';
 import { resolveRecords } from './orders-data';
 import { countText, tCount } from './plural';
 import { applyImport, backupFileText, parseImport, recoveryFileText, type ParsedImport } from './recover';
@@ -109,8 +109,16 @@ export function RecoverPanel(props: RecoverPanelProps) {
             : { tone: 'warn', key: 'unknown' };
 
   return (
-    <Section title={t("orders.recover.title")} data-testid="recover-panel">
-      <p>{t('orders.recover.why')}</p>
+    <Section
+      title={t("orders.recover.title")}
+      help={
+        <HelpTip label={t('orders.recover.title')} data-testid="recover-help">
+          <p>{t('orders.recover.why')}</p>
+          <p>{t('orders.recover.formats')}</p>
+        </HelpTip>
+      }
+      data-testid="recover-panel"
+    >
       <p class="small muted" data-testid="recover-count">{tCount('orders.recover.count', n)}</p>
       <div class="row">
         <Button onClick={exportBackup} disabled={n === 0} data-testid="orders-export">{t('orders.recover.exportBackup')}</Button>
@@ -119,7 +127,6 @@ export function RecoverPanel(props: RecoverPanelProps) {
         <input ref={fileInput} type="file" accept=".json,application/json" class="sr-only" tabIndex={-1} aria-label={t('orders.recover.import')} onChange={(e) => void onFile(e)} data-testid="orders-import" />
         <Button onClick={() => void doRescan()} loading={busy === 'rescan'} disabled={n === 0} data-testid="orders-rescan">{t('orders.recover.rescan')}</Button>
       </div>
-      <p class="small muted" style="margin-top:8px">{t('orders.recover.formats')}</p>
 
       {message ? <Banner tone={message.tone} data-testid="recover-message">{message.text}</Banner> : null}
 

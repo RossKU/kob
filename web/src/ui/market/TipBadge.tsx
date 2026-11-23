@@ -9,8 +9,10 @@ import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 /**
  * `variant` 'warn' is the default warning badge. 'tag' is a small muted tag with a (?), such as
  * the summary cards' "Estimate (?)". It has the same panel and behaviour, and no space before it,
- * because the caller places it. 'bar' is the market bar's shared-ticker note: a warn-coloured pill that
- * the bar's CSS places (.mkt-bar-note), with no title tooltip, because the panel is the way to read it.
+ * because the caller places it. 'bar' is the market bar's shared-ticker note: the warning sign alone
+ * in a small warn-coloured pill that the bar's CSS places (.mkt-bar-note). The label and the
+ * sentence are its accessible name, and the panel is the way to read them, so it has no title
+ * tooltip.
  */
 export function TipBadge(props: { label: string; detail: string; 'data-testid': string; 'data-detail-testid': string; variant?: 'warn' | 'tag' | 'bar' }) {
   const tag = props.variant === 'tag';
@@ -74,6 +76,8 @@ export function TipBadge(props: { label: string; detail: string; 'data-testid': 
       >
         {tag ? (
           <span class="chip-label"><span class="tip-word">{props.label} </span><span aria-hidden="true">(?)</span></span>
+        ) : bar ? (
+          <span aria-hidden="true">{'\u26A0\uFE0E'}</span>
         ) : (
           <span class="chip-label"><span aria-hidden="true">{'\u26A0\uFE0E'}</span> {props.label}</span>
         )}

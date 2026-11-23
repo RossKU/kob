@@ -161,7 +161,9 @@ test.describe('shell and token list', () => {
     // of it.
     await regRow.getByTestId(`token-link-${id}`).click();
     const tag = appPage.getByTestId('market-bar').getByTestId('token-shared-ticker');
-    await expect(tag).toHaveText(/Shared ticker: check the id/);
+    // The bar shows the warning sign alone. Its name carries the short text and the sentence.
+    await expect(tag).toHaveText('\u26A0\uFE0E');
+    await expect(tag).toHaveAccessibleName(`Shared ticker: check the id: ${note}`);
     await expect(tag).not.toHaveAttribute('title');
     // A tap opens the full sentence in the tip panel.
     await tag.click();

@@ -598,7 +598,7 @@ export function IssueView() {
               <summary>{t('issue.imageHash.advanced')}</summary>
               <Field
                 label={t('issue.field.imageHash')}
-                hint={t('issue.field.imageHash.advancedHint')}
+                help={<HelpTip label={t('issue.field.imageHash')} data-testid="issue-image-hash-help">{t('issue.field.imageHash.advancedHint')}</HelpTip>}
                 value={state.imageHash}
                 onValue={(v) => {
                   setFileError(null);
@@ -622,7 +622,7 @@ export function IssueView() {
             />
             <Field
               label={t('issue.field.website')}
-              hint={t('issue.field.website.hint')}
+              help={<HelpTip label={t('issue.field.website')} data-testid="issue-website-help">{t('issue.field.website.hint')}</HelpTip>}
               value={state.website}
               onValue={(v) => set({ website: v })}
               onBlur={() => touch('website')}
@@ -632,7 +632,7 @@ export function IssueView() {
             />
             <Field
               label={t('issue.field.x')}
-              hint={t('issue.field.x.hint')}
+              help={<HelpTip label={t('issue.field.x')} data-testid="issue-x-help">{t('issue.field.x.hint')}</HelpTip>}
               value={state.x}
               onValue={(v) => set({ x: v.trim() })}
               onBlur={() => touch('x')}
@@ -642,7 +642,7 @@ export function IssueView() {
             />
             <Field
               label={t('issue.field.telegram')}
-              hint={t('issue.field.telegram.hint')}
+              help={<HelpTip label={t('issue.field.telegram')} data-testid="issue-telegram-help">{t('issue.field.telegram.hint')}</HelpTip>}
               value={state.telegram}
               onValue={(v) => set({ telegram: v.trim() })}
               onBlur={() => touch('telegram')}
@@ -801,8 +801,13 @@ export function IssueView() {
       <label class={`issue-after-option${u.mode === mode ? ' is-on' : ''}`} data-testid={`issue-after-${mode}`}>
         <input type="radio" name="issue-after" value={mode} checked={u.mode === mode} onChange={() => setSale({ mode })} />
         <span class="issue-after-text">
-          <strong>{t(`issue.after.${mode}`)}</strong>
-          <span class="small muted">{t(`issue.after.${mode}.hint`)}</span>
+          <span class="help-title">
+            <strong>{t(`issue.after.${mode}`)}</strong>
+            <HelpTip label={t(`issue.after.${mode}`)} data-testid={`issue-after-${mode}-help`}>
+              <p>{t(`issue.after.${mode}.hint`)}</p>
+              {mode === 'curve' ? <p>{t('issue.sale.note')}</p> : null}
+            </HelpTip>
+          </span>
         </span>
       </label>
     );
@@ -925,7 +930,6 @@ export function IssueView() {
                     </dl>
                   </div>
                 ) : null}
-                <p class="small muted">{t('issue.sale.note')}</p>
               </>
             )}
           </div>

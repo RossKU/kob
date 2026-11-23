@@ -1,6 +1,6 @@
 import { useState } from 'preact/hooks';
 import { t } from '../../i18n';
-import { Dropdown, unitParts } from '../kit';
+import { Dropdown, HelpTip, unitParts } from '../kit';
 import { tapeTime } from './market-model';
 import type { BookRowView, BookView } from './orientation';
 
@@ -197,11 +197,14 @@ export function OrderBook(props: OrderBookProps) {
         {Array.from({ length: blanksOf(m.bids.length) }, (_, i) => <Blank key={`bid-blank-${i}`} kind="bid" />)}
         {m.bids.length ? null : <div class="ob-none muted small">{t('market.book.noBids')}</div>}
       </div>
-      {/* one short line; the whole sentences are its title */}
-      <p class="ob-foot" title={`${m.anyEstimated ? `~ ${estimatedNote(props.inverted, props.token)} ` : ''}${t('market.book.clickHint', { base: props.inverted ? 'KAS' : (props.token ?? '') })}`} data-testid="book-foot">
-        {m.anyEstimated ? `~ ${t('market.book.footEstimated')} · ` : ''}
-        {t('market.book.footClick')}
-      </p>
+      {/* one short line: the legend of "~" when the book has estimated sizes, and a "?" with the whole sentences (also its title) */}
+      <div class="ob-foot" title={`${m.anyEstimated ? `~ ${estimatedNote(props.inverted, props.token)} ` : ''}${t('market.book.clickHint', { base: props.inverted ? 'KAS' : (props.token ?? '') })}`} data-testid="book-foot">
+        {m.anyEstimated ? <span class="ob-foot-text">{`~ ${t('market.book.footEstimated')}`}</span> : null}
+        <HelpTip label={t('market.book.title')} class="ob-foot-help" data-testid="book-help">
+          <p>{t('market.book.clickHint', { base: props.inverted ? 'KAS' : (props.token ?? '') })}</p>
+          {m.anyEstimated ? <p>{`~ ${estimatedNote(props.inverted, props.token)}`}</p> : null}
+        </HelpTip>
+      </div>
       {hover && cum ? (
         <div class="ob-hover-tip" role="status" style={{ top: `${hover.top < 44 ? hover.top + 24 : hover.top - 30}px` }} data-testid="book-hover-tip">
           {t(props.inverted ? 'market.book.hoverInv' : 'market.book.hover', { avg: cum.avg, amount: cum.amount, total: cum.total, token: props.token ?? '' })}

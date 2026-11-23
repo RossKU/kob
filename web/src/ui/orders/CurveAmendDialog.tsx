@@ -10,7 +10,7 @@ import { curveRestKas, curveSteps, currentLevel } from '../../kob/curve';
 import type { TokenInfo } from '../../kob/registry';
 import type { CurveAskState, Hex, OrderState } from '../../kob/types';
 import { formatUnits, parsePricePerToken, tokenPriceToStatePrice, tryParseKas, tryParseUnits } from '../../kob/units';
-import { Banner, Button, CurveGraph, Field, IssueLine, Modal, kasText, pricePerTokenText, toError } from '../kit';
+import { Banner, Button, CurveGraph, Field, HelpTip, IssueLine, Modal, kasText, pricePerTokenText, toError } from '../kit';
 import { describeActionError, planAmendFor } from './actions';
 import { buildReplacement, type AmendInput } from './amend';
 import { graphSteps } from './CurveDetails';
@@ -134,6 +134,7 @@ export function CurveAmendDialog(props: CurveAmendDialogProps) {
   return (
     <Modal
       title={t('curve.amend.title')}
+      help={<HelpTip label={t('curve.amend.title')} data-testid="curve-amend-help">{t('curve.amend.explain')}</HelpTip>}
       onClose={props.onClose}
       data-testid="curve-amend-dialog"
       dismissable={!busy}
@@ -146,7 +147,6 @@ export function CurveAmendDialog(props: CurveAmendDialogProps) {
         </>
       }
     >
-      <p class="small muted">{t('curve.amend.explain')}</p>
       <div class="stack-sm">
         <div class="row" style="gap:8px;align-items:flex-start">
           <Field class="grow" label={t('curve.amend.now', { unit })} value={form.now} onValue={(v) => set('now', v)} inputMode="decimal" error={errText('now')} data-testid="curve-amend-now" />
@@ -158,7 +158,7 @@ export function CurveAmendDialog(props: CurveAmendDialogProps) {
           <Field class="grow" label={t('curve.amend.levelSize', { ticker: token?.ticker ?? '' })} value={form.levelSize} onValue={(v) => set('levelSize', v)} inputMode="decimal" error={errText('levelSize')} data-testid="curve-amend-level-size" />
           <Field class="grow" label={t('curve.amend.minFill', { ticker: token?.ticker ?? '' })} value={form.minFill} onValue={(v) => set('minFill', v)} inputMode="decimal" error={errText('minFill')} data-testid="curve-amend-min-fill" />
         </div>
-        <Field label={t('orders.amend.tip')} value={form.tip} onValue={(v) => set('tip', v)} inputMode="decimal" error={errText('tip')} hint={t('orders.amend.tipHint')} data-testid="curve-amend-tip" />
+        <Field label={t('orders.amend.tip')} value={form.tip} onValue={(v) => set('tip', v)} inputMode="decimal" error={errText('tip')} help={<HelpTip label={t('orders.amend.tip')}>{t('orders.amend.tipHint')}</HelpTip>} data-testid="curve-amend-tip" />
       </div>
       {serverIssues.length ? (
         <Banner tone="error" data-testid="amend-error">

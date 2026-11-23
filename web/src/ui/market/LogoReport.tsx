@@ -13,7 +13,7 @@ import { useServices, useWallet } from '../../app/context';
 import { castVote, logoVotes, normalizeSignature, powPrefix, solvePow, utcDay, voteMessage, type VoteDir, type VoteResult } from '../../data/logo-votes';
 import { githubReportUrl, logoBlocklist, logoBlocklistUrlOf, logoReportsUrlOf, LOGO_REASONS, reportLogo, type LogoReason, type ReportResult } from '../../data/logo-blocklist';
 import { t } from '../../i18n';
-import { Banner, Button, Modal, Section, Select } from '../kit';
+import { Banner, Button, HelpTip, Modal, Section, Select } from '../kit';
 import type { TokenRow } from './token-model';
 import { useLogoVotes, useTokenLogo } from './use-token-logo';
 
@@ -156,9 +156,14 @@ function LogoVotes(props: { covenantId: string }) {
         <Button small onClick={() => void cast('down')} disabled={!canVote} loading={step !== null} aria-pressed={v.own === 'down' ? 'true' : 'false'} aria-label={t('market.logo.vote.down')} title={t('market.logo.vote.down')} data-testid="logo-vote-down">
           {'👎'} <span data-testid="logo-votes-down">{totals.down}</span>
         </Button>
-        <span class="small muted" data-testid="logo-vote-hint">
-          {step ? t(`market.logo.vote.step.${step}`) : !info ? t('market.logo.vote.connect') : !adapter?.signMessage ? t('market.logo.vote.noSign') : wallet.networkMismatch ? t('market.logo.vote.network') : t('market.logo.vote.hint')}
-        </span>
+        {/* why a vote cannot be cast, or its progress; else the "?" with what a vote is */}
+        {step || !info || !adapter?.signMessage || wallet.networkMismatch ? (
+          <span class="small muted" data-testid="logo-vote-hint">
+            {step ? t(`market.logo.vote.step.${step}`) : !info ? t('market.logo.vote.connect') : !adapter?.signMessage ? t('market.logo.vote.noSign') : t('market.logo.vote.network')}
+          </span>
+        ) : (
+          <HelpTip label={t('market.logo.votes.label')} data-testid="logo-vote-help">{t('market.logo.vote.hint')}</HelpTip>
+        )}
       </div>
       {m ? (
         <Banner tone={m.tone} data-testid="logo-vote-result">
@@ -184,22 +189,28 @@ export function LogoSection(props: { row: Pick<TokenRow, 'covenantId' | 'kascov'
       <p class="small" data-testid="token-logo-note" data-logo={logo.state}>
         {voted ? (
           <>
-            <strong>{t('market.logo.voted')}</strong> {t('market.logo.votedNote')}
+            <strong>{t('market.logo.voted')}</strong> <HelpTip label={t('market.logo.voted')} data-testid="token-logo-help">{t('market.logo.votedNote')}</HelpTip>
           </>
         ) : hidden ? (
           <>
-            <strong>{t('market.logo.hidden')}</strong> {t('market.logo.hiddenNote')}
+            <strong>{t('market.logo.hidden')}</strong> <HelpTip label={t('market.logo.hidden')} data-testid="token-logo-help">{t('market.logo.hiddenNote')}</HelpTip>
           </>
         ) : logo.state === 'creator' ? (
           t('market.logo.creator', { host: logo.host })
         ) : logo.state === 'mismatch' ? (
           t('market.logo.mismatch')
         ) : logo.state === 'verified' ? (
-          t('market.logo.verified')
+          <>
+            {t('market.logo.verified.short')} <HelpTip label={t('market.logo.title')} data-testid="token-logo-help">{t('market.logo.verified')}</HelpTip>
+          </>
         ) : logo.state === 'ipfs' ? (
-          t('market.logo.ipfs')
+          <>
+            {t('market.logo.ipfs.short')} <HelpTip label={t('market.logo.title')} data-testid="token-logo-help">{t('market.logo.ipfs')}</HelpTip>
+          </>
         ) : (
-          t('market.logo.checked')
+          <>
+            {t('market.logo.checked.short')} <HelpTip label={t('market.logo.title')} data-testid="token-logo-help">{t('market.logo.checked')}</HelpTip>
+          </>
         )}
       </p>
       {voted ? (

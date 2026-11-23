@@ -149,8 +149,12 @@ test.describe('token issuance', () => {
     expect(entry.display).toMatchObject({ x: 'https://x.com/newkcc', telegram: 'https://t.me/newkcc_chat' });
     for (const gone of ['issue-result-unverified', 'issue-result-pending', 'issue-result-nottradable']) await expect(page.getByTestId(gone)).toHaveCount(0);
     await expect(page.getByTestId('issue-result')).not.toContainText(/unverified|not tradable/i);
-    await expect(page.getByTestId('issue-result-listing-note')).toContainText('KOB keeps no list of approved tokens');
-    await expect(page.getByTestId('issue-result-listing-note')).not.toContainText(/pull request|official/i);
+    // the note on its market and name is behind the section's "?"
+    await expect(page.getByTestId('issue-listing')).not.toContainText('KOB keeps no list of approved tokens');
+    await page.getByTestId('issue-result-listing-note').click();
+    await expect(page.getByTestId('issue-result-listing-note-panel')).toContainText('KOB keeps no list of approved tokens');
+    await expect(page.getByTestId('issue-result-listing-note-panel')).not.toContainText(/pull request|official/i);
+    await page.getByTestId('issue-result-listing-note').click();
 
     // Download of the entry.
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('issue-registry-download').click()]);
@@ -362,7 +366,13 @@ test.describe('token issuance', () => {
       await page.keyboard.press('Space');
       await expect(panel).toBeVisible();
       await page.keyboard.press('Escape');
-      for (const id of ['issue-name-help', 'issue-supply-help', 'issue-decimals-help', 'issue-icon-help', 'issue-image-file-help', 'issue-intro-help']) await expect(page.getByTestId(id), id).toHaveAttribute('aria-label', /^More about /);
+      for (const id of ['issue-name-help', 'issue-supply-help', 'issue-decimals-help', 'issue-icon-help', 'issue-image-file-help', 'issue-intro-help', 'issue-website-help', 'issue-x-help', 'issue-telegram-help', 'issue-after-keep-help', 'issue-after-ask-help', 'issue-after-curve-help']) await expect(page.getByTestId(id), id).toHaveAttribute('aria-label', /^More about /);
+      // the link formats and what each sale choice does are behind their "?" too
+      await expect(page.getByTestId('issue-form')).not.toContainText('https:// only');
+      await expect(page.getByTestId('issue-after')).not.toContainText('Nobody can buy until you place a sell order.');
+      await page.getByTestId('issue-after-keep-help').click();
+      await expect(page.getByTestId('issue-after-keep-help-panel')).toHaveText('Nobody can buy until you place a sell order.');
+      await page.keyboard.press('Escape');
       // Validation errors stay at their field.
       await page.getByTestId('issue-ticker').fill('A');
       await page.getByTestId('issue-ticker').blur();

@@ -16,7 +16,7 @@ import { pickType, settlePlan } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
-test('My orders: the KAS on token coins has a one-line muted explanation', async ({ appPage: page, mock }) => {
+test('My orders: the KAS on token coins has its explanation behind a "?" next to the figure', async ({ appPage: page, mock }) => {
   const STD = '5a'.repeat(32);
   const EXT = 'ee'.repeat(32);
   await mock.seed({ tokens: [{ ticker: 'EXSTD', covenant_id: STD, program: 'KCC20Ref', extension_commitment: EXT, decimals: 8, template_id: 'kcc20-ref-3x3' }] });
@@ -31,13 +31,14 @@ test('My orders: the KAS on token coins has a one-line muted explanation', async
   await page.goto('/#/portfolio');
   await connectWallet(page, 'kasware');
   await expect(page.getByTestId('kas-on-tokens')).toBeVisible({ timeout: 20_000 });
-  const note = page.getByTestId('kas-on-tokens-note');
-  await expect(note).toHaveText('KAS held by your token coins; it comes back when they move.');
-  await expect(note).toHaveClass(/muted/);
-  // One line at a desktop width, right under the figures.
-  const box = (await note.boundingBox())!;
-  expect(box.height).toBeLessThan(28);
-  expect(box.y).toBeGreaterThan((await page.getByTestId('kas-on-tokens').boundingBox())!.y);
+  // The note is behind the "?" right after the figure, on its line: no footnote under the table.
+  await expect(page.getByTestId('balances-panel')).not.toContainText('KAS held by your token coins');
+  const help = page.getByTestId('kas-on-tokens-help');
+  const [hb, fb] = [(await help.boundingBox())!, (await page.getByTestId('kas-on-tokens').boundingBox())!];
+  expect(Math.abs(hb.y + hb.height / 2 - (fb.y + fb.height / 2))).toBeLessThan(8);
+  expect(hb.x).toBeGreaterThan(fb.x);
+  await help.click();
+  await expect(page.getByTestId('kas-on-tokens-help-panel')).toHaveText('KAS held by your token coins; it comes back when they move.');
 });
 
 test('token creation: the image address says each viewer loads the logo from it, and that ipfs:// is tamper-proof', async ({ appPage: page }) => {

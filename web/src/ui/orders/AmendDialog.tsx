@@ -7,7 +7,7 @@ import type { TokenInfo } from '../../kob/registry';
 import type { Hex, OrderState } from '../../kob/types';
 import { stopWorstPrice } from '../../kob/orders/cond-legs';
 import { formatUnits, parseKas, parsePricePerToken, safeRounding, tokenPriceToStatePrice, tryParseKas, tryParseUnits } from '../../kob/units';
-import { Banner, Button, Field, IssueLine, Modal, kasText, pricePerTokenText, toError, unitParts } from '../kit';
+import { Banner, Button, Field, HelpTip, IssueLine, Modal, kasText, pricePerTokenText, toError, unitParts } from '../kit';
 import { planAmendFor, describeActionError } from './actions';
 import { buildReplacement, type AmendInput, type AmendKind } from './amend';
 import type { OrderRowModel } from './orders-model';
@@ -182,6 +182,12 @@ export function AmendDialog(props: AmendDialogProps) {
   return (
     <Modal
       title={t('orders.amend.title')}
+      help={
+        <HelpTip label={t('orders.amend.title')} data-testid="amend-help">
+          <p>{t('orders.amend.explain')}</p>
+          {!('amountLeft' in s) && kind !== 'limit' ? <p>{t('orders.amend.budgetKept')}</p> : null}
+        </HelpTip>
+      }
       onClose={props.onClose}
       data-testid="amend-dialog"
       dismissable={!busy}
@@ -194,7 +200,6 @@ export function AmendDialog(props: AmendDialogProps) {
         </>
       }
     >
-      <p class="small muted">{t('orders.amend.explain')}</p>
       {kind === 'cond' && row.armed === true ? <Banner tone="warn">{t('orders.amend.restartsUnarmed')}</Banner> : null}
       <div class="stack-sm">
         {hasTp ? (
@@ -217,7 +222,7 @@ export function AmendDialog(props: AmendDialogProps) {
             onValue={(v) => set('stopLimit', v)}
             inputMode="decimal"
             error={errText('stopLimit', 'stopLimit')}
-            hint={t('orders.amend.stopLimitHint')}
+            help={<HelpTip label={t('orders.amend.stopLimit', { unit })}>{t('orders.amend.stopLimitHint')}</HelpTip>}
             data-testid="amend-stop-limit"
           />
         ) : null}
@@ -228,7 +233,7 @@ export function AmendDialog(props: AmendDialogProps) {
             onValue={(v) => set('amount', v)}
             inputMode="decimal"
             error={errText('amount', 'amount')}
-            hint={sell ? t('orders.amend.amountHint') : undefined}
+            help={sell ? <HelpTip label={t('orders.amend.amount', { ticker: token?.ticker ?? '?' })}>{t('orders.amend.amountHint')}</HelpTip> : undefined}
             data-testid="amend-amount"
           />
         ) : kind === 'limit' ? (
@@ -238,19 +243,18 @@ export function AmendDialog(props: AmendDialogProps) {
             onValue={(v) => set('addKas', v)}
             inputMode="decimal"
             error={errText('addKas', 'addKas')}
-            hint={t(row.unfundable ? 'orders.amend.addKasHintUnfunded' : 'orders.amend.addKasHint')}
+            help={row.unfundable ? undefined : <HelpTip label={t('orders.amend.addKas')}>{t('orders.amend.addKasHint')}</HelpTip>}
+            hint={row.unfundable ? t('orders.amend.addKasHintUnfunded') : undefined}
             data-testid="amend-add-kas"
           />
-        ) : (
-          <p class="small muted">{t('orders.amend.budgetKept')}</p>
-        )}
+        ) : null}
         {canRenew ? (
           <label class="row small ord-check" style="gap:8px" data-testid="amend-renew-label">
             <input type="checkbox" checked={renew} onChange={(e) => { setRenew((e.currentTarget as HTMLInputElement).checked); setServerIssues([]); }} data-testid="amend-renew" />
             <span>{t('orders.amend.renew', { days: 90 })}</span>
           </label>
         ) : null}
-        <Field label={t('orders.amend.tip')} value={form.tip} onValue={(v) => set('tip', v)} inputMode="decimal" error={errText('tip', 'tip')} hint={t('orders.amend.tipHint')} data-testid="amend-tip" />
+        <Field label={t('orders.amend.tip')} value={form.tip} onValue={(v) => set('tip', v)} inputMode="decimal" error={errText('tip', 'tip')} help={<HelpTip label={t('orders.amend.tip')}>{t('orders.amend.tipHint')}</HelpTip>} data-testid="amend-tip" />
       </div>
       {preview && preview.ok && preview.next ? (
         <p class="small" data-testid="amend-preview">

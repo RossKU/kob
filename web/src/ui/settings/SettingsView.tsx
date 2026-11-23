@@ -13,7 +13,7 @@ import { t } from '../../i18n';
 import type { ComponentChildren } from 'preact';
 import { version as appVersion } from '../../../package.json';
 import {
-  Amount, Badge, Banner, Button, Checkbox, CopyText, downloadText, Dropdown, EmptyState, exportFileName, Field, friendlyErrorText, jsonText, KeyValueList, Modal, RawDetails, Section, Segmented, Select, Table, TableMessage,
+  Amount, Badge, Banner, Button, Checkbox, CopyText, downloadText, Dropdown, EmptyState, exportFileName, Field, friendlyErrorText, HelpTip, jsonText, KeyValueList, Modal, RawDetails, Section, Segmented, Select, Table, TableMessage,
   showToast, toError,
 } from '../kit';
 import { NotifySettingsSection } from '../notify/NotifySettings';
@@ -28,6 +28,13 @@ import { listThresholds, resetThreshold, useDeliveryPref } from './delivery-pref
 import { changedFields, changesServers, clearKobStorage, configWithForm, describeStorageKey, formFromConfig, kobStorageKeys, resetServersPatch, settingsPatch, storedServerFields, validateSettings, type SettingsForm } from './settings-model';
 
 const reload = () => window.location.reload();
+
+/** A "?" with a setting's whole explanation (kit/HelpTip.tsx), after its label or its card's title. */
+const helpTip = (label: string, text: ComponentChildren, testid?: string) => (
+  <HelpTip label={label} {...(testid ? { 'data-testid': testid } : {})}>
+    {text}
+  </HelpTip>
+);
 
 /** A count in a sentence, using the singular or the plural key. It never writes "(s)". */
 const tCount = (base: string, count: number) => t(`${base}.${count === 1 ? 'one' : 'other'}`, { count });
@@ -95,7 +102,7 @@ function ConnectionSettings() {
           options={[{ value: 'mainnet', label: 'mainnet' }, { value: 'testnet-10', label: 'testnet-10' }]}
           onValue={(x) => set('network', x as NetworkName)}
           error={err(v.errors.network)}
-          hint={t('settings.network.hint')}
+          help={helpTip(t('settings.network'), t('settings.network.hint'), 'settings-network-help')}
           data-testid="settings-network"
         />
         <Checkbox checked={form.kastle} onChange={(c) => set('kastle', c)} label={t('settings.kastle')} hint={t('settings.kastle.hint')} data-testid="settings-kastle" />
@@ -103,48 +110,48 @@ function ConnectionSettings() {
           checked={form.priorityFee}
           onChange={(c) => set('priorityFee', c)}
           label={t('settings.priorityFee')}
-          hint={<Learn short={t('settings.priorityFee.short')}>{t('settings.priorityFee.hint')}</Learn>}
+          help={helpTip(t('settings.priorityFee'), t('settings.priorityFee.hint'))}
           data-testid="settings-priority-fee"
         />
         <Checkbox
           checked={form.dynamicFee}
           onChange={(c) => set('dynamicFee', c)}
           label={t('settings.dynamicFee')}
-          hint={<Learn short={t('settings.dynamicFee.short')}>{t('settings.dynamicFee.hint')}</Learn>}
+          help={helpTip(t('settings.dynamicFee'), t('settings.dynamicFee.hint'))}
           data-testid="settings-dynamic-fee"
         />
         <Checkbox
           checked={form.standaloneManual}
           onChange={(c) => set('standaloneManual', c)}
           label={t('settings.standalone.manual')}
-          hint={<Learn short={t('settings.standalone.manual.short')}>{t('settings.standalone.manual.hint')}</Learn>}
+          help={helpTip(t('settings.standalone.manual'), t('settings.standalone.manual.hint'))}
           data-testid="settings-standalone"
         />
         <Checkbox
           checked={form.standaloneAuto}
           onChange={(c) => set('standaloneAuto', c)}
           label={t('settings.standalone.auto')}
-          hint={<Learn short={t('settings.standalone.auto.short')}>{t('settings.standalone.auto.hint')}</Learn>}
+          help={helpTip(t('settings.standalone.auto'), t('settings.standalone.auto.hint'))}
           data-testid="settings-standalone-auto"
         />
-        <Checkbox checked={form.standaloneAutoReturn} onChange={(c) => set('standaloneAutoReturn', c)} label={t('settings.standalone.autoReturn')} hint={t('settings.standalone.autoReturn.hint')} data-testid="settings-standalone-return" />
+        <Checkbox checked={form.standaloneAutoReturn} onChange={(c) => set('standaloneAutoReturn', c)} label={t('settings.standalone.autoReturn')} help={helpTip(t('settings.standalone.autoReturn'), t('settings.standalone.autoReturn.hint'))} data-testid="settings-standalone-return" />
         {/* the servers are settings of this card too (one Save for all), folded: an operator's choice, not a trader's */}
         <Fold title={t('settings.servers.title')} data-testid="settings-servers-fold">
           <div class="stack-sm" data-testid="settings-servers">
             <Banner tone="warn" title={t('settings.servers.warnTitle')} data-testid="settings-server-warning">
               <Learn short={t('settings.servers.warn.short')}>{t('settings.servers.warn')}</Learn>
             </Banner>
-            <Field label={t('settings.indexerUrl')} value={form.indexerUrl} onValue={(x) => set('indexerUrl', x)} error={err(v.errors.indexerUrl)} hint={t('settings.indexerUrl.hint')} placeholder="https://" data-testid="settings-indexer-url" />
+            <Field label={t('settings.indexerUrl')} value={form.indexerUrl} onValue={(x) => set('indexerUrl', x)} error={err(v.errors.indexerUrl)} help={helpTip(t('settings.indexerUrl'), t('settings.indexerUrl.hint'))} placeholder="https://" data-testid="settings-indexer-url" />
             <Field
               label={t('settings.nodeUrl')}
               value={form.nodeUrl}
               onValue={(x) => set('nodeUrl', x)}
               error={err(v.errors.nodeUrl)}
-              hint={<Learn short={t('settings.nodeUrl.short')}>{t('settings.nodeUrl.hint')}</Learn>}
+              help={helpTip(t('settings.nodeUrl'), t('settings.nodeUrl.hint'))}
               placeholder="wss://"
               data-testid="settings-node-url"
             />
-            <Field label={t('settings.registryUrl')} value={form.registryUrl} onValue={(x) => set('registryUrl', x)} error={err(v.errors.registryUrl)} hint={t('settings.registryUrl.hint')} data-testid="settings-registry-url" />
+            <Field label={t('settings.registryUrl')} value={form.registryUrl} onValue={(x) => set('registryUrl', x)} error={err(v.errors.registryUrl)} help={helpTip(t('settings.registryUrl'), t('settings.registryUrl.hint'))} data-testid="settings-registry-url" />
             {storedServers.length ? (
               <div class="row">
                 <Button onClick={resetServers} title={t('settings.resetServers.hint')} data-testid="settings-reset-servers">
@@ -196,12 +203,14 @@ function AdvancedSettings() {
 function DisplayCurrencySettings() {
   const [currency, setCurrency] = useDisplayCurrency();
   return (
-    <Section title={t('settings.currency.title')} data-testid="settings-currency">
-      <Learn short={t('settings.currency.short')}>{t('settings.currency.explain')}</Learn>
+    <Section title={t('settings.currency.title')} help={helpTip(t('settings.currency.title'), t('settings.currency.explain'), 'settings-currency-help')} data-testid="settings-currency">
       {/* what the dollars are now: the source, how old, an estimate (the pages say nothing of it, only why they show KAS when they do) */}
       <FiatNote full />
       <div class="stack-sm">
-        <span class="small" id="settings-currency-label">{t('settings.currency.label')}</span>
+        <span class="small help-title">
+          <span id="settings-currency-label">{t('settings.currency.label')}</span>
+          {helpTip(t('settings.currency.label'), t('settings.currency.hint'), 'settings-currency-hint-help')}
+        </span>
         <Segmented<DisplayCurrency>
           options={[
             { value: 'kas', label: t('settings.currency.kas'), 'data-testid': 'settings-currency-kas' },
@@ -212,7 +221,6 @@ function DisplayCurrencySettings() {
           aria-label={t('settings.currency.label')}
           data-testid="settings-currency-choice"
         />
-        <Learn short={t('settings.currency.hint.short')}>{t('settings.currency.hint')}</Learn>
       </div>
     </Section>
   );
@@ -232,8 +240,7 @@ function DeliverySettings() {
   const [tick, setTick] = useState(0);
   const rows = useMemo(() => (pubkey ? listThresholds(pubkey) : []), [pubkey, tick]);
   return (
-    <Section title={t('settings.delivery.title')} data-testid="settings-delivery">
-      <Learn short={t('settings.delivery.short')}>{t('settings.delivery.explain')}</Learn>
+    <Section title={t('settings.delivery.title')} help={helpTip(t('settings.delivery.title'), t('settings.delivery.explain'), 'settings-delivery-help')} data-testid="settings-delivery">
       <div class="stack-sm">
         <span class="small" id="settings-delivery-label">{t('settings.delivery.label')}</span>
         {/* a drop-down: the long names of the three choices do not fit side by side */}
@@ -284,18 +291,17 @@ function TokenIconsSettings() {
   const [creatorOn, setCreatorOn] = useCreatorImagePref();
   const [hideVoted, setHideVoted] = useVoteFilterPref();
   return (
-    <Section title={t('settings.icons.title')} data-testid="settings-icons">
-      <Learn short={t('settings.icons.short')}>{t('settings.icons.explain')}</Learn>
+    <Section title={t('settings.icons.title')} help={helpTip(t('settings.icons.title'), t('settings.icons.explain'), 'settings-icons-help')} data-testid="settings-icons">
       {config.tokenNamesUrl ? (
         <p class="small muted wrap-anywhere" data-testid="settings-icons-source">{t('settings.icons.source', { url: config.tokenNamesUrl })}</p>
       ) : (
         <Banner tone="info" data-testid="settings-icons-off">{t('settings.icons.off')}</Banner>
       )}
-      <Checkbox checked={on} onChange={setOn} label={t('settings.icons.label')} hint={t('settings.icons.hint')} data-testid="settings-icons-toggle" />
+      <Checkbox checked={on} onChange={setOn} label={t('settings.icons.label')} help={helpTip(t('settings.icons.label'), t('settings.icons.hint'))} data-testid="settings-icons-toggle" />
       <Checkbox checked={creatorOn} onChange={setCreatorOn} label={t('settings.icons.creator.label')} hint={t('settings.icons.creator.hint')} disabled={!on} data-testid="settings-icons-creator-toggle" />
       <Select
         label={t('settings.icons.votes.label')}
-        hint={t('settings.icons.votes.hint')}
+        help={helpTip(t('settings.icons.votes.label'), t('settings.icons.votes.hint'), 'settings-icons-votes-help')}
         value={hideVoted ? 'hide' : 'all'}
         options={[
           { value: 'hide', label: t('settings.icons.votes.hide') },
@@ -341,8 +347,7 @@ function PrivateKeySettings() {
     );
   }
   return (
-    <Section title={t('settings.key.title')} data-testid="settings-private-key-section">
-      <Learn short={t('settings.key.short')}>{t('settings.key.explain')}</Learn>
+    <Section title={t('settings.key.title')} help={helpTip(t('settings.key.title'), t('settings.key.explain'), 'settings-key-help')} data-testid="settings-private-key-section">
       {supported ? null : <p class="small muted" data-testid="settings-private-key-unsupported">{t('signer.unsupportedWhy')}</p>}
       <Button disabled={!supported || !!w.info || w.connecting} onClick={w.openPrivateKey} data-testid="settings-private-key">
         {t('settings.key.open')}
@@ -513,8 +518,7 @@ function TrackerSettings() {
     }
   };
   return (
-    <Section title={t('settings.tracker.title')} data-testid="settings-tracker">
-      <Learn short={t('settings.tracker.short')}>{t('settings.tracker.explain')}</Learn>
+    <Section title={t('settings.tracker.title')} help={helpTip(t('settings.tracker.title'), t('settings.tracker.explain'), 'settings-tracker-help')} data-testid="settings-tracker">
       <Learn short={t('settings.tracker.backup.short')} data-testid="tracker-backup">{t('settings.tracker.backup')}</Learn>
       <Table dense data-testid="tracker-list">
         <thead>
@@ -549,15 +553,17 @@ function TrackerSettings() {
           {t('common.export')}
         </Button>
       </div>
-      <Field as="textarea" label={t('settings.tracker.importLabel')} rows={4} value={text} onValue={setText} hint={t('settings.tracker.importHint')} data-testid="tracker-import-text" />
+      <Field as="textarea" label={t('settings.tracker.importLabel')} rows={4} value={text} onValue={setText} help={helpTip(t('settings.tracker.importLabel'), t('settings.tracker.importHint'))} data-testid="tracker-import-text" />
       <div class="row" style="margin-top:8px">
         <Button disabled={!text.trim()} onClick={doImport} data-testid="tracker-import">{t('common.import')}</Button>
       </div>
       {message ? <Banner tone={message.tone} data-testid="tracker-message">{message.text}</Banner> : null}
-      <h3 style="margin-top:16px">{t('settings.recover.title')}</h3>
-      <Learn short={t('settings.recover.short')}>{t('settings.recover.explain')}</Learn>
+      <div class="help-title" style="margin-top:16px">
+        <h3>{t('settings.recover.title')}</h3>
+        {helpTip(t('settings.recover.title'), t('settings.recover.explain'), 'settings-recover-help')}
+      </div>
       <Field label={t('settings.recover.id')} value={findId} onValue={setFindId} data-testid="recover-id" />
-      <Field label={t('settings.recover.amount')} value={findAmount} onValue={setFindAmount} hint={t('settings.recover.amountHint')} data-testid="recover-amount" />
+      <Field label={t('settings.recover.amount')} value={findAmount} onValue={setFindAmount} help={helpTip(t('settings.recover.amount'), t('settings.recover.amountHint'))} data-testid="recover-amount" />
       {needDecimals ? (
         <Field label={t('settings.recover.decimals')} value={findDecimals} onValue={setFindDecimals} hint={t('settings.recover.decimalsHint')} data-testid="recover-decimals" />
       ) : null}
@@ -594,8 +600,7 @@ function LocalData() {
     reload();
   };
   return (
-    <Section title={t('settings.local.title')} data-testid="settings-local">
-      <Learn short={t('settings.local.short')}>{t('settings.local.explain')}</Learn>
+    <Section title={t('settings.local.title')} help={helpTip(t('settings.local.title'), t('settings.local.explain'), 'settings-local-help')} data-testid="settings-local">
       <ul data-testid="local-data-list">
         {(['settings', 'records', 'tokens', 'other'] as const)
           .filter((k) => counts[k])

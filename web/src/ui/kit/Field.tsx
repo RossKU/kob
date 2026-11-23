@@ -214,8 +214,11 @@ export function Select(props: SelectProps) {
   return <Field {...props} as="select" />;
 }
 
-/** A checkbox with its label to the right. `data-testid` goes on the input. */
-export function Checkbox(props: { checked: boolean; onChange: (checked: boolean) => void; label: ComponentChildren; hint?: ComponentChildren; disabled?: boolean; 'data-testid'?: string; id?: string }) {
+/**
+ * A checkbox with its label to the right. `data-testid` goes on the input. `help` is a "?" right
+ * after the label (kit/HelpTip.tsx), outside the `<label>`, so a press on it does not toggle the box.
+ */
+export function Checkbox(props: { checked: boolean; onChange: (checked: boolean) => void; label: ComponentChildren; help?: ComponentChildren; hint?: ComponentChildren; disabled?: boolean; 'data-testid'?: string; id?: string }) {
   return (
     <FieldShell hint={props.hint} id={props.id}>
       {({ id, describedBy }) => (
@@ -230,6 +233,7 @@ export function Checkbox(props: { checked: boolean; onChange: (checked: boolean)
             onChange={(e) => props.onChange((e.currentTarget as HTMLInputElement).checked)}
           />
           <label for={id} style="font-weight:400">{props.label}</label>
+          {props.help}
         </div>
       )}
     </FieldShell>

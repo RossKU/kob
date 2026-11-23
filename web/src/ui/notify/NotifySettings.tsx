@@ -3,8 +3,7 @@
 import { useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { NOTIFY_KINDS } from '../../kob/notifications';
-import { Banner, Checkbox, Section } from '../kit';
-import { Learn } from '../settings/Learn';
+import { Banner, Checkbox, HelpTip, Section } from '../kit';
 import { useNotify, type BrowserPermission } from './NotifyProvider';
 
 export function NotifySettingsSection() {
@@ -23,18 +22,15 @@ export function NotifySettingsSection() {
   };
 
   return (
-    <Section title={t('notify.settings.title')} data-testid="settings-notify">
+    <Section title={t('notify.settings.title')} help={<HelpTip label={t('notify.settings.title')} data-testid="notify-intro">{t('notify.settings.intro')}</HelpTip>} data-testid="settings-notify">
       <div class="stack-sm">
-        <Learn short={t('notify.settings.intro.short')} data-testid="notify-intro">
-          <p>{t('notify.settings.intro')}</p>
-        </Learn>
-        <Checkbox checked={s.enabled} onChange={(c) => n.update({ enabled: c })} label={t('notify.settings.enable')} hint={t('notify.settings.enable.hint')} data-testid="notify-enable" />
+        <Checkbox checked={s.enabled} onChange={(c) => n.update({ enabled: c })} label={t('notify.settings.enable')} help={<HelpTip label={t('notify.settings.enable')}>{t('notify.settings.enable.hint')}</HelpTip>} data-testid="notify-enable" />
         <Checkbox
           checked={s.browser && perm === 'granted'}
           onChange={(c) => void toggleBrowser(c)}
           disabled={perm === 'unsupported'}
           label={t('notify.settings.browser')}
-          hint={t('notify.settings.browser.hint')}
+          help={<HelpTip label={t('notify.settings.browser')}>{t('notify.settings.browser.hint')}</HelpTip>}
           data-testid="notify-browser"
         />
         {perm === 'denied' ? <Banner tone="warn" data-testid="notify-browser-denied">{t('notify.settings.browser.denied')}</Banner> : null}

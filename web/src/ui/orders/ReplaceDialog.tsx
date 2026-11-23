@@ -17,7 +17,7 @@ import { planOrder } from '../../kob/plan';
 import { errors } from '../../kob/plan-types';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex, OrderState } from '../../kob/types';
-import { Banner, Button, IssueLine, Loading, Modal, RawDetails, toError } from '../kit';
+import { Banner, Button, HelpTip, IssueLine, Loading, Modal, RawDetails, toError } from '../kit';
 import { DisclosurePanel } from '../ticket/DisclosurePanel';
 import { buildDisclosureModel } from '../ticket/disclosure-model';
 import { TicketFields } from '../ticket/TicketFields';
@@ -96,6 +96,8 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; raw?: string | null } | null>(null);
   const [serverIssues, setServerIssues] = useState<{ code: string; message: string; params?: Record<string, string | number | bigint> }[]>([]);
+  // the field help of the form, off at first as on the ticket
+  const [helpOn, setHelpOn] = useState(false);
 
   const shownPlan = current ? plan : null;
   const planErrors = shownPlan ? errors(shownPlan) : [];
@@ -147,6 +149,7 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
   return (
     <Modal
       title={t('orders.replace.title', { type: t(`orders.type.${row.typeKey}`) })}
+      help={<HelpTip label={t('orders.replace.title', { type: t(`orders.type.${row.typeKey}`) })} data-testid="replace-help">{t('orders.replace.explain')}</HelpTip>}
       onClose={props.onClose}
       data-testid="replace-dialog"
       dismissable={!busy}
@@ -159,17 +162,30 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
         </>
       }
     >
-      <p class="small muted">{t('orders.replace.explain')}</p>
       {row.armed === true ? <Banner tone="warn">{t('orders.amend.restartsUnarmed')}</Banner> : null}
       {row.typeKey === 'ifd' || row.typeKey === 'ifo' ? <p class="small muted" data-testid="replace-ifd-note">{t('orders.replace.ifdNote')}</p> : null}
       {row.typeKey === 'dutch' ? <p class="small muted" data-testid="replace-dutch-note">{t('orders.replace.dutchNote')}</p> : null}
       {!source.ok ? (
         <Banner tone="warn" data-testid="replace-unsupported">{t(`orders.replace.unsupported.${source.reason}`)}</Banner>
       ) : !shownForm || !layout ? null : (
-        <div class="stack-sm tk" data-testid="replace-form" data-type={shownForm.type} data-side={shownForm.side}>
-          <p class="small" data-testid="replace-type">
-            <strong>{t(`ticket.type.${shownForm.type}.name`)}</strong> · {t(shownForm.side === 'buy' ? 'common.side.buy' : 'common.side.sell')}
-          </p>
+        <div class={`stack-sm tk${helpOn ? '' : ' tk-help-off'}`} data-testid="replace-form" data-type={shownForm.type} data-side={shownForm.side}>
+          {/* the field help is off at first, as on the ticket: the "?" at the end of this row shows it */}
+          <div class="tk-siderow">
+            <p class="small grow" style="margin:0" data-testid="replace-type">
+              <strong>{t(`ticket.type.${shownForm.type}.name`)}</strong> · {t(shownForm.side === 'buy' ? 'common.side.buy' : 'common.side.sell')}
+            </p>
+            <button
+              type="button"
+              class="tk-help-toggle"
+              aria-pressed={helpOn ? 'true' : 'false'}
+              title={t(helpOn ? 'ticket.helpToggle.hide' : 'ticket.helpToggle.show')}
+              aria-label={t('ticket.helpToggle.label')}
+              data-testid="replace-help-toggle"
+              onClick={() => setHelpOn(!helpOn)}
+            >
+              ?
+            </button>
+          </div>
           <TicketFields form={shownForm} ctx={ctx} ticker={token.ticker} ids={layout.main} errors={errs} onChange={onChange} {...(quote ? { quoteTicker: quote.ticker } : {})} />
           <details class="tk-advanced" data-testid="replace-advanced">
             <summary>{t('ticket.advanced')}</summary>

@@ -1282,8 +1282,9 @@ export function OrderTicket(props: OrderTicketProps) {
                   />
                 </div>
               ) : null}
-              <p class="muted" data-testid="order-ladder-how">{asCurve ? t('ticket.ladder.curveNote') : t('ticket.ladder.separate', { levels: ladder.levels.length })}</p>
-              {delivery === 'collected' ? <p class="muted" data-testid="order-ladder-custodies">{t('ticket.ladder.custodies', { levels: ladder.levels.length })}</p> : null}
+              {/* why a curve is cheaper is field help (the title row's "?"); that separate orders ask for one approval each is not */}
+              <p class={asCurve ? 'muted tk-help' : 'muted'} data-testid="order-ladder-how">{asCurve ? t('ticket.ladder.curveNote') : t('ticket.ladder.separate', { levels: ladder.levels.length })}</p>
+              {delivery === 'collected' ? <p class="muted tk-help" data-testid="order-ladder-custodies">{t('ticket.ladder.custodies', { levels: ladder.levels.length })}</p> : null}
             </>
           ) : null}
         </div>
