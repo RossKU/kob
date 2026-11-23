@@ -748,9 +748,13 @@ fn kcc1_every_kob_artifact_conforms() {
             for fld in &c.runtime_state.fields {
                 match kcc1::type_name(&fld.ty) {
                     Ok(_) => {}
-                    // the Argent router's `temporal` state fields: SilverScript's time type, encoded exactly as a KCC-1
-                    // `int` (8-byte signed magnitude) but named `temporal` in the ABI (see docs/spec/kcc-conformance.md)
-                    Err(_) if rel.ends_with("router_sil_abi.json") && fld.ty == TypeArtifact::Temporal => {}
+                    // `temporal` state fields: SilverScript's time type, encoded exactly as a KCC-1 `int` (8-byte signed
+                    // magnitude) but named `temporal` in the ABI; the compiler takes no `int` in a `tx.time` check. Only
+                    // the programs recorded in docs/spec/kcc-conformance.md: the Argent router, KobLockAuto's `until`.
+                    Err(_)
+                        if fld.ty == TypeArtifact::Temporal
+                            && (rel.ends_with("router_sil_abi.json")
+                                || (rel.ends_with("KobLockAuto.json") && fld.name == "until")) => {}
                     Err(e) => panic!("{rel} {cn} state field {}: {e}", fld.name),
                 }
             }
