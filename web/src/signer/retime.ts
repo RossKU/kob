@@ -8,10 +8,13 @@
 // - prices unchanged or better for the user,
 // - only the time fields later,
 // - the KAS the wallet spends, the fee and what goes to other keys within a tiny tolerance.
+// The signer frame also takes a re-time only of an approved auction (`retimable`), and only one
+// that spends exactly the approved wallet inputs (`signedOutpoints`), so copies cannot add up.
 //
 // Anything else is shown again. The app's popup for an external wallet uses the same rule.
 import type { DecodedOrder, SigningSummary } from '../kob/decode';
 import type { OrderDescription } from '../kob/order-facts';
+import type { BuiltTx } from '../kob/types';
 
 /**
  * How much more KAS, in sompi, a re-timed transaction may take from the wallet or pay as fee than
@@ -105,4 +108,24 @@ export function sameOrBetter(approved: SigningSummary, next: SigningSummary): bo
   const a = approved.net.kas;
   const b = next.net.kas;
   return b.toOthers <= a.toOthers && b.walletDelta >= a.walletDelta - RETIME_TOLERANCE_SOMPI && b.fee <= a.fee + RETIME_TOLERANCE_SOMPI;
+}
+
+/**
+ * Whether an approved transaction may stand for re-timed ones at all. It must place an auction (a
+ * start and a decay), the only order whose start a slow approval can pass (wallet/sign.ts
+ * `auctionSubmitBy`). Anything else is never re-timed by the app.
+ */
+export function retimable(s: SigningSummary): boolean {
+  return s.orders.some((o) => o.sweptFrom === undefined && o.claimedFrom === undefined && o.description.activeFrom > 0n && !!o.description.auction && o.description.auction.slope > 0n);
+}
+
+/**
+ * The inputs the wallet signs in `built`, as sorted outpoints. A re-timed copy must spend exactly
+ * the approved transaction's, so the approval and its copies conflict and at most one confirms.
+ */
+export function signedOutpoints(built: Pick<BuiltTx, 'tx' | 'sign'>): string[] {
+  return built.sign.map((r) => {
+    const i = built.tx.inputs[r.inputIndex];
+    return i ? `${i.transactionId.toLowerCase()}:${i.index}` : `?${r.inputIndex}`;
+  }).sort();
 }

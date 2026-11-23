@@ -197,47 +197,78 @@ describe('signer summary: decoded in the frame, net effect, order terms and fee'
 });
 
 describe('signer core: a request re-timed after the user confirmed it', () => {
+  // A market buy (an auction starting now), planned on one environment as the ticket does
+  // (OrderTicket.tsx `retimer`): only the clock moves, so the wallet inputs stay the same.
+  const base = ticketEnv();
+  const at = (daa: bigint, env = base) => ({ ...env, clock: { ...env.clock, daa: env.clock.daa + daa, unixSeconds: env.clock.unixSeconds + daa / 10n } });
+  const market = buildIntent(form('market', 'buy', { amount: '2' }), CTX).intent!;
+  const plan = (daa: bigint, env = base) => planOrder(at(daa, env), market).built!;
   const retimeSetup = (now: { t: number }) => {
     const sent: SignerToApp[] = [];
     const core = createSignerCore({ sdk, kob, post: (m) => sent.push(structuredClone(m)), now: () => now.t });
     const send = (m: Record<string, unknown>) => core.receive(parseAppMessage(structuredClone({ p: P, ...m }))!);
-    core.importKey(MAKER_SK);
+    core.importKey(FIXTURE_SK);
     return { core, sent, send };
   };
+  const req = (built: BuiltTx, id: string) => ({ type: 'sign' as const, id, built, tokens: [] });
 
   it('is signed at once when it re-times the confirmed one with nothing worse; anything else is shown', () => {
     const now = { t: 1_000 };
     const { core, sent, send } = retimeSetup(now);
-    expect(send(signReq(buildSend(), 'r1'))).not.toBeNull();
+    expect(send(req(plan(0n), 'r1'))).not.toBeNull();
     expect(core.approve('r1')).toBe(true);
-    // the same transaction again, naming the confirmed request: no prompt, a signature
-    expect(send({ ...signReq(buildSend(), 'r2'), retimeOf: 'r1' })).toBeNull();
+    // the same order planned 15 s later on the same inputs, naming the confirmed request: no prompt
+    expect(send({ ...req(plan(150n), 'r2'), retimeOf: 'r1' })).toBeNull();
     expect(sent.at(-1)).toMatchObject({ type: 'signed', id: 'r2' });
     expect(core.pending()).toBeNull();
-    // another transaction (a cancel instead of the send): shown and waiting for the user
-    expect(send({ ...signReq(buildCancel(), 'r3'), retimeOf: 'r2' })).not.toBeNull();
-    core.reject('r3');
     // naming a request that was not the confirmed one, or too late: shown
-    expect(send({ ...signReq(buildSend(), 'r4'), retimeOf: 'r9' })).not.toBeNull();
+    expect(send({ ...req(plan(160n), 'r4'), retimeOf: 'r9' })).not.toBeNull();
     core.reject('r4');
     now.t += 121_000;
-    expect(send({ ...signReq(buildSend(), 'r5'), retimeOf: 'r2' })).not.toBeNull();
+    expect(send({ ...req(plan(170n), 'r5'), retimeOf: 'r2' })).not.toBeNull();
   });
-});
 
-describe('signer core: a silent re-time is bounded (audit 2026-10-29 S3)', () => {
-  it('one approval covers at most RETIME_MAX_COUNT re-timed transactions; the next one is shown', () => {
-    const now = { t: 1_000 };
+  it('a copy on other wallet inputs is shown, not signed (audit 2026-11-23 B3-M1)', () => {
+    const { core, sent, send } = retimeSetup({ t: 1_000 });
+    send(req(plan(0n), 'r1'));
+    core.approve('r1');
+    const signed = sent.filter((m) => m.type === 'signed').length;
+    // the same terms on another coin: both could confirm, so it needs the user
+    const other = plan(150n, ticketEnv());
+    expect(send({ ...req(other, 'r2'), retimeOf: 'r1' })).not.toBeNull();
+    expect(core.pending()?.id).toBe('r2');
+    expect(sent.filter((m) => m.type === 'signed').length).toBe(signed);
+  });
+
+  it('an approval of anything but an auction covers no re-time (audit 2026-11-23 B3-M1)', () => {
     const sent: SignerToApp[] = [];
-    const core = createSignerCore({ sdk, kob, post: (m) => sent.push(structuredClone(m)), now: () => now.t });
+    const core = createSignerCore({ sdk, kob, post: (m) => sent.push(structuredClone(m)), now: () => 1_000 });
     const send = (m: Record<string, unknown>) => core.receive(parseAppMessage(structuredClone({ p: P, ...m }))!);
     core.importKey(MAKER_SK);
-    expect(send(signReq(buildSend(), 'r0'))).not.toBeNull();
+    const send1 = buildSend();
+    expect(send(signReq(send1, 'r1'))).not.toBeNull();
+    expect(core.approve('r1')).toBe(true);
+    // the very same transaction again, naming the approval: shown
+    expect(send({ ...signReq(send1, 'r2'), retimeOf: 'r1' })).not.toBeNull();
+    expect(core.pending()?.id).toBe('r2');
+  });
+
+  it('a different transaction on the same inputs is shown', () => {
+    const { core, send } = retimeSetup({ t: 1_000 });
+    send(req(plan(0n), 'r1'));
+    core.approve('r1');
+    const sell = planOrder(at(150n), buildIntent(form('market', 'sell', { amount: '2' }), CTX).intent!).built!;
+    expect(send({ ...req(sell, 'r2'), retimeOf: 'r1' })).not.toBeNull();
+  });
+
+  it('one approval covers at most RETIME_MAX_COUNT re-timed transactions; the next one is shown (audit 2026-10-29 S3)', () => {
+    const { core, send } = retimeSetup({ t: 1_000 });
+    expect(send(req(plan(0n), 'r0'))).not.toBeNull();
     expect(core.approve('r0')).toBe(true);
     for (let i = 1; i <= RETIME_MAX_COUNT; i++) {
-      expect(send({ ...signReq(buildSend(), 'r' + i), retimeOf: 'r' + (i - 1) }), 'silent re-time ' + i).toBeNull();
+      expect(send({ ...req(plan(BigInt(i) * 10n), 'r' + i), retimeOf: 'r' + (i - 1) }), 'silent re-time ' + i).toBeNull();
     }
-    expect(send({ ...signReq(buildSend(), 'rx'), retimeOf: 'r' + RETIME_MAX_COUNT })).not.toBeNull();
+    expect(send({ ...req(plan(200n), 'rx'), retimeOf: 'r' + RETIME_MAX_COUNT })).not.toBeNull();
     expect(core.pending()?.id).toBe('rx');
   });
 });
