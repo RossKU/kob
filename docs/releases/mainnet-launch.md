@@ -15,12 +15,23 @@ After the launch:
 
 1. The release gates of `docs/ops/release.md` section 2 hold.
 2. The launch commit is on `master` (the `KOB_PAGES_NETWORK_SWITCH` passthrough in `deploy-pages.yml`) and CI is green. It is inert while the variable is unset.
-3. index-main is synced and answers for both hosts:
+3. **The deploy gate is set** (`docs/ops/web-hosting.md`, 4a): `production` has a required reviewer and the deployment branch `master` only,
+   `master` and the `v*` tags are protected. With `KOB_PAGES_NETWORK=mainnet` the workflow refuses to deploy until it reads both settings
+   (or, if GitHub refuses that read, until `KOB_PAGES_PRODUCTION_GATE_CONFIRMED=1` is set).
+4. **index-main runs the release build** (section 7): schema 14, the release's `commit` and `template_generation` in `/v1/health`, the
+   rate limits of section 5 and the logo tables of section 7, step 6.
+5. **The host stays up** (section 9): never sleeps, the indexer and `cloudflared` start at boot, and one reboot brought everything back.
+6. **The Cloudflare Cache Rule** of `docs/ops/chart-server.md` section 3 (*The Cache Rule*) is on for `kob-api.kaspa.ag` and its check
+   shows `HIT` (or the rule was removed because the plan does not honour short TTLs). Without it every visitor's read reaches the home PC.
+7. index-main is synced and answers for both hosts:
    `curl -si -H "Origin: https://kob.kaspa.ag" https://kob-api.kaspa.ag/v1/health` returns 200, `access-control-allow-origin`, and `"network":"mainnet"`.
    Run it again with `Origin: https://kob-tn10.kaspa.ag`, and against `https://kob-api-tn10.kaspa.ag` (`"network":"testnet-10"`).
-4. index-main has the mainnet rate limits of section 5. Apply them first: launch traffic arrives as soon as the deploy is live.
-5. Release notes are ready. They must say: **`kobd --node` is now `--extra-node`** (a further node). The node itself is `--rpc-url` (`rpc_url`).
-   A bare `--node` on a start is a usage error (exit 2).
+8. index-main has the mainnet rate limits of section 5. Apply them first: launch traffic arrives as soon as the deploy is live.
+9. Release notes are ready (`docs/releases/mainnet-0.2.0.md`, draft). They must say, among the rest: **`kobd --node` is now `--extra-node`**
+   (a further node). The node itself is `--rpc-url` (`rpc_url`). A bare `--node` on a start is a usage error (exit 2).
+10. The launch-day docs change is ready: `docs/releases/launch-day-docs.patch` (README, SECURITY.md, executor-quickstart: "mainnet is
+    not launched" becomes the launch wording). It is applied in section 3, step 6, not before.
+11. The incident runbook (`docs/ops/incident.md`) is read, and its TN10 drill done.
 
 ## 2. Repository variables (set by hand; do not set them before step 1 holds)
 
@@ -35,15 +46,23 @@ gh variable set KOB_PAGES_PUBLIC_URL     -R RossKU/kob --body https://kob.kaspa.
 
 Unchanged: `KOB_PAGES_PROJECT=kob-web`. `KOB_PAGES_MAINNET_*` stays unset.
 `KOB_LOGO_REPORT_URL` (GitHub logo-report form) stays on the testnet-10 indexer until you decide which list it feeds. For mainnet, use
-`https://kob-api.kaspa.ag/v1/logo-reports`.
+`https://kob-api.kaspa.ag/v1/logo-reports`, and only once index-main has `[logo_reports]` on with the origins of section 7, step 6
+(otherwise it refuses every report from the app).
+Only if a run says the `production` environment could not be read: `gh variable set KOB_PAGES_PRODUCTION_GATE_CONFIRMED -R RossKU/kob --body 1`,
+after the settings of `docs/ops/web-hosting.md` 4a are done.
 
 ## 3. Order of steps
 
-1. Apply the index-main rate limits (section 5), then restart index-main and check `/v1/health`.
+1. Upgrade index-main to the release (section 7), with the rate limits of section 5, then check `/v1/health`.
 2. Set the variables of section 2, all of them, before any run. A run with only some of them set deploys a mixed config.
-3. *Actions* > *deploy-pages* > *Run workflow* on `master`. Then approve the `production` environment.
-4. The job validates the config, builds with `KOB_NETWORK=mainnet`, uploads, and checks headers and files. Read the job summary: `config.json` must match section 4.
-5. Do the checks of section 4. Then publish the release notes.
+3. *Actions* > *deploy-pages* > *Run workflow* on `master`. Job `config` checks the `production` gate; job `build` builds with `KOB_NETWORK=mainnet`
+   and waits for CI of the commit; then approve the `production` environment (*Review deployments*).
+4. Job `deploy` uploads, job `verify` checks headers and files. Read the job summary: `config.json` must match section 4.
+5. Do the checks of section 4, then the **mainnet smoke run** of section 8. Announce nothing before it passes. If it fails, roll back (section 6).
+6. Apply the launch-day docs change and push it (no deploy runs for these files):
+   `git apply docs/releases/launch-day-docs.patch && git rm docs/releases/launch-day-docs.patch`, review the diff, fill in the date, commit.
+7. Publish the release (`docs/ops/release.md` 6) and its notes, then the X post with the hashes.
+8. First 24 hours: watch 429s, `lag_seconds`, `cross_checked`, `node_alarms` and the disk of index-main; keep `docs/ops/incident.md` at hand.
 
 ## 4. Checks after the deploy
 
@@ -64,7 +83,7 @@ Unchanged: `KOB_PAGES_PROJECT=kob-web`. `KOB_PAGES_MAINNET_*` stays unset.
 
 ## 5. index-main rate limits
 
-Today (`tools/soak/run/index-main/index.toml`, read-only check 2026-11-19):
+index-main's `index.toml` on 2026-11-19 (read-only check):
 
 ```
 [api]
@@ -163,3 +182,98 @@ How to apply:
    - A visitor who stayed on mainnet on `kob.kaspa.ag` stored nothing, so they are back on testnet-10.
    - A visitor who switched `kob-tn10.kaspa.ag` to mainnet keeps that choice. On the pinned site their mainnet page has no servers, so they pick testnet-10 in Settings.
 4. Rate limits: the old `index.toml` from the backup also works on mainnet. Restore it only if the new limits cause trouble.
+
+### 6a. Rolling back a release of the binaries
+
+A published `kobd` / `kob` release that turns out to be bad:
+
+1. On GitHub, edit the release: tick *Set as a pre-release* (so it is no longer the latest) and put a warning at the top of its notes. Do not
+   delete it or its tag: its hashes and attestations stay checkable, and operators can see what they ran.
+2. Post on X (and in a GitHub issue): what is wrong, which version to run instead, and whether funds are at risk (`docs/ops/incident.md`).
+3. Operators go back to the last good tag's archive. **v0.2.0 is the first mainnet release**: there is no earlier mainnet build to go back
+   to, so a bad v0.2.0 is fixed forward with v0.2.1; until then operators stop (or pause, `--pause-file`) the executor and keep the indexer
+   on v0.2.0 if only the executor is wrong.
+4. A store that a release migrated is not readable by an older build (`kobd db migrate` keeps `index.sqlite3.before-migrate`, the way back),
+   and a build before 2026-11-19 does not read zstd log segments (`zstd -d --rm seg-*.kobrec.zst` first). Going back means the old store
+   and log as they were before the upgrade (section 7, *Rollback*).
+5. The web app: roll the Pages project back (step 1 above) or revert the commit on `master`, which deploys again.
+
+## 7. index-main upgrade (schema 9 -> 13 -> 14)
+
+index-main ran build `7f5f307a` (2026-11-09), a **schema 9** store (9.5 MB, no orders on 2026-11-20) that knows 2 of the 16 current
+templates. It must run the release build before the launch. `kobd db migrate` takes a schema-9 store to 14 in one offline run: it first
+builds the schema-13 layout in `index.sqlite3.migrating13`, then schema 14 in `index.sqlite3.migrating`, checks it and swaps
+(`docs/ops/executor.md`, 7.6a). The old store is never altered.
+
+1. **The binary.** Download the mainnet Windows archive of the release (`kobd-<version>-mainnet-x86_64-pc-windows-msvc.zip`), check it
+   against the release's `SHA256SUMS` and with `gh attestation verify` (`docs/ops/release.md` 6), and unpack it into a folder of its own
+   under your user profile (for example `%LOCALAPPDATA%\kob-mainnet\`), not into a worktree: a clean-up must not delete the running binary.
+   `kobd --version` must say `mainnet build`, the release commit and its `templates` generation.
+2. **Stop index-main** the way it is run (and keep it from being restarted by its keepalive while you work).
+3. **Back up** its data directory to another drive: `index.sqlite3` (a plain copy is consistent while it is stopped) and the whole
+   `records` folder (the newest segment is the one that changes; the way back needs it as it was), and `index.toml`.
+4. **Check the store**: `kobd db info --data-dir <data dir>` with the new build says schema 9 and network mainnet.
+5. **Migrate**: `kobd db migrate --data-dir <data dir>`. Seconds for a store this small. It keeps `index.sqlite3.before-migrate`. Its last
+   step compresses the sealed log segments as zstd (none yet on a log this small); `--no-compress-log` leaves that out.
+   (Instead of migrating, `kobd db replay --data-dir <data dir>` rebuilds a schema-14 store from the record log; with no orders it is as
+   quick. Move the old `index.sqlite3` aside first.)
+6. **Configuration** (`index.toml`): the `[api.rate_limit]` of section 5, and the logo tables, so the app's reports and votes are taken:
+   ```toml
+   [logo_reports]
+   enabled = true
+   origins = ["https://kob.kaspa.ag", "https://kob-tn10.kaspa.ag"]   # the hosts whose pages may report (the second can switch to mainnet)
+
+   [logo_votes]
+   enabled = true                                                    # origins: empty = the [logo_reports] origins
+   ```
+   With `cors_allow_origin = "*"` and no `origins`, no browser report or vote is taken (`docs/api-reference.md`, `[logo_reports]`).
+   Then `kobd config check --config index.toml`: no `PROBLEM:` line.
+7. **Start** the new build with the same configuration and check:
+   ```
+   curl -s https://kob-api.kaspa.ag/v1/health | jq '{version, commit, payload_version, template_generation, state, cross_checked, node_alarms}'
+   ```
+   `version`, `commit` and `template_generation` equal the release (`kobd --version`), `state` becomes `following`. Then run it for at least
+   three days on the resolver pair before the launch, watching `cross_checked`, `lies_total`, `windows_failed`, `node_alarms` and the lag.
+8. Keep `index.sqlite3.before-migrate` and the backup until the canary has run a week; then delete `before-migrate`.
+
+**Rollback** (the old build again): stop index-main; move the new `index.sqlite3` (with `-wal` / `-shm`) aside; rename
+`index.sqlite3.before-migrate` to `index.sqlite3`; put the backed-up `records` folder back (delete the segments the new build wrote after it,
+and decompress any `.zst` segment with `zstd -d --rm seg-*.kobrec.zst`); restore the old `index.toml` (an older build may refuse the new
+keys); start the old binary. It re-syncs the blocks since the cut-over from the node, within the node's pruning window.
+
+## 8. Mainnet smoke run (before the announcement)
+
+Mainnet has never been signed on with the release. Before the announcement, with real wallets and small amounts, on the public site
+right after the deploy (or before the flip on the internal mainnet app, `docs/ops/web-hosting.md` 4c):
+
+1. With the CLI (the release's mainnet `kob`, a key of your own with a few KAS and a little of one listed token): place one small resting
+   sell (`kob place limit --token <ticker> --side sell --amount <n> --price <p>KAS --yes`) for the wallets to fill. Note its covenant id.
+2. **With KasWare** (the version the release notes name), then again **with Kaspire**, each from a fresh browser profile:
+   - connect; the network chip says mainnet; the status strip says "following";
+   - place a small limit buy far from the market (it rests), see it in Portfolio > Open orders and in the book;
+   - cancel it; it is gone from the book after the next block and the KAS is back;
+   - **Fill now** a small part of the CLI's sell of step 1 (a direct fill, no executor); the tokens arrive in the wallet and the fill is
+     listed.
+3. Optional, if the release ships the automatic creator lock as the default: create a test token with a lock whose unlock time is minutes
+   away, and check that it is released (by a keeper or from Portfolio).
+4. Cancel the CLI's order (`kob cancel <covenant id>`). Write the transaction ids and wallet versions into the release notes.
+
+Any failure: do not announce; roll back (section 6) and follow `docs/ops/incident.md` if funds were at risk.
+
+## 9. The host of index-main
+
+index-main runs on one Windows PC behind a Cloudflare tunnel. Before the launch (`docs/ops/chart-server.md`, section 4, *Sleep, updates,
+reboots*):
+
+1. **Power**: never sleep, never hibernate; the display may turn off. A 10-minute sleep timer on AC power cut the tunnel on 2026-11-23. In an
+   elevated prompt: `powercfg /change standby-timeout-ac 0`, `powercfg /change hibernate-timeout-ac 0` (and the `-dc` forms on a laptop),
+   and untick *Allow the computer to turn off this device to save power* on the network adapter.
+2. **Start at boot**: index-main as a scheduled task at boot, `cloudflared` as a service (`cloudflared service install`).
+3. **Windows Update**: active hours set, no automatic restart outside them.
+4. **Reboot once** and check that the tunnel, index-main and the TN10 indexer come back without a hand.
+5. **Backups and monitoring** (`docs/ops/chart-server.md`, sections 4 and 5): a daily copy of `records` (and a `VACUUM INTO` of the store)
+   to another machine, one restore tried; an external probe of `https://kob-api.kaspa.ag/v1/health` that pages you; a disk alarm.
+
+## 10. Incidents
+
+A contract or app bug after the launch, or index-main serving wrong data: `docs/ops/incident.md`.

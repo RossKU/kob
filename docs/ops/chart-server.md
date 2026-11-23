@@ -258,9 +258,28 @@ depth, trades, books, holdings, strays, pairs, the order list, fills, token even
 1,000). WebSockets are capped per client address and in all (`docs/api.md`). Past a limit the answer is 429 with `Retry-After`. Two
 consequences: visitors behind one carrier-grade NAT address share one bucket (a market list reads one `/v1/stats` per token), and a
 flood spread over many addresses can drain the global bucket; half of it is kept for quiet clients (within a quarter of their own
-rate, each taking at most 1/256 of it, at least 1/s), so they still get through. If that happens, add rules at Cloudflare in
-front of the tunnel instead of raising the limits: a rate-limiting rule for the heavy paths (`/v1/candles/`, `/v1/stats/`,
-`/v1/depth/`, `/v1/trades/`, `/v1/books/`, `/v1/pairs`) and Bot Fight Mode. What the free plan allows changes; check the dashboard.
+rate, each taking at most 1/256 of it, at least 1/s), so they still get through.
+
+**The defaults are for a private indexer, not for one that serves the web app.** One visitor of the web app costs more than 20 per
+second for a few seconds on every cold screen (measured: `docs/releases/mainnet-launch.md`, section 5), so at the defaults every
+cold screen except Portfolio is refused part-way, retried twice, then shown as unavailable. An indexer that the public app (or a
+host's own deployment of it) points at sets the measured values:
+
+```toml
+[api.rate_limit]
+per_ip_rps = 200.0
+per_ip_burst = 3000
+global_rps = 2000.0
+global_burst = 4000
+per_site_rps = 400.0
+per_site_burst = 6000
+heavy_route_cost = 5
+```
+
+(`kobd config check` must report no `PROBLEM:` line; why each value: the runbook, section 5.) Against a flood spread over many
+addresses, add rules at Cloudflare in front of the tunnel rather than lowering these again: the Cache Rule above, a rate-limiting rule
+for the heavy paths (`/v1/candles/`, `/v1/stats/`, `/v1/depth/`, `/v1/trades/`, `/v1/books/`, `/v1/pairs`) and Bot Fight Mode.
+What the free plan allows changes; check the dashboard.
 
 ## 4. Data directory, size and backups
 
@@ -294,7 +313,19 @@ another drive or machine, and encrypt anything that leaves the house. Also back 
 credentials), its `config.yml` and the `cert.pem` that `cloudflared tunnel login` wrote. Losing them loses no data: a new tunnel
 and a new `route dns` bring the hostname back, but until then the app has no indexer.
 
-**Sleep, updates, reboots.** A PC that sleeps or hibernates serves nothing: set the power plan to never sleep. Windows Update may
+**Sleep, updates, reboots.** A PC that sleeps or hibernates serves nothing, and its network stops with it (on 2026-11-23 a
+10-minute sleep timer on AC power cut the founder's tunnel). Set it to never sleep and never hibernate; the display may turn off.
+In an elevated prompt:
+
+```
+powercfg /change standby-timeout-ac 0
+powercfg /change hibernate-timeout-ac 0
+powercfg /change monitor-timeout-ac 10
+```
+
+On a laptop also run the two `-dc` forms (`standby-timeout-dc 0`, `hibernate-timeout-dc 0`) or keep it on AC power, and in
+*Device Manager* > the network adapter > *Power Management* untick *Allow the computer to turn off this device to save power*.
+`powercfg /query SCHEME_CURRENT SUB_SLEEP` shows the values in force (0 = never). Windows Update may
 reboot it: set active hours, and run both the indexer and `cloudflared` as start-at-boot tasks (section 2, step 5;
 `docs/ops/executor-quickstart.md`, section 6) so they come back by themselves. An outage longer than the node's retention (7 days
 with the flags of the quickstart, about 30 hours by default; public nodes do not state theirs) no longer halts the follower: it moves
