@@ -42,46 +42,53 @@ On testnet-10 it is a warning.
   says where to look: an order it does not list, lists at another outpoint, or that has an open question is looked up
   on the node from that record (`kob recover --from <dataDir>/own-orders.json`). A partial fill moves an ask to a new
   script, and `kob recover` finds it only at an amount it is told (the bot passes every amount left it knows: its own
-  record, the indexer's list and per-order view, and the placed amount less the fills the indexer reported) or reaches
+  record, the indexer's list and per-order view, and the amount left after each fill the indexer reported, at most 32) or reaches
   by its bounded search (`amountLeft - k x minFill`); a fill of another amount is not followed. Cancels go through the
   node from the record too (`kob recover --cancel`); `kob cancel <id>` is the fallback for an order the record cannot
   find. An order leaves the state file only on proof that it ended, under an order template the node has proven (an
   order found live under it): a bid has no unspent output at its script (a bid's script never changes), the bot's own
-  cancel of it went out, an ask's fills are paid in full (below), or a placement of unknown outcome is shown by neither the node nor the indexer. An ask the node
+  cancel of it went out, or a placement of unknown outcome is shown by neither the node nor the indexer. An ask the node
   does not find is not proof (it may sit at an amount the search did not reach): it is kept as unresolved, with one
   error alert. Until an order leaves, it counts toward the side caps, its level is not quoted again, it is never
   amended, every pull and STOP try to cancel it, and each cycle it is looked up again.
-- **A fully filled ask** leaves no output on the node either. It ends when the fills the indexer reports for it add up
+- **A fully filled ask** leaves no output on the node either. It is *proven* when the fills the indexer reports for it add up
   to what its last own outpoint held (the amount at its last placement or amend) and each is paid: for each fill, one
   output to the bot's own address in that fill's transaction, worth at least what the covenant pays the maker,
   `ceil(amount x (price - tip) / scale)`, in a transaction the bot did not send. The output must be one the node first
   showed after that placement or amend (the bot reads its outputs just before each placement and amend), and one that
-  proved no other fill: each output proves one fill once, and `state.json` keeps which ask it proved. The indexer's
-  word alone never ends an ask: a lying indexer needs a real payment to the bot, made after the ask's last placement or
-  amend and not used before, of the ask's whole proceeds at its price. Paid by the attacker, that is no loss to the
-  bot: it holds the full proceeds while the forgotten ask's tokens stay its own. Any other such receipt (an operator
-  top-up after the placement) can make it forget one ask per receipt: that ask stays fillable at its old price,
-  outside the reprices, the pulls and STOP, until its expiry (at most `lifeMin`, 90 min; then a refund returns its
-  tokens), so the exposure is one level times the move in that time. One residue: a fill of the earlier outpoint whose payment lands in the second between the bot's read and
-  the CLI's own read before an amend is in neither, so it may count for the new outpoint too; the ask then forgotten
-  holds at most that fill's amount, which its taker paid in full. The bot cannot check that the paying transaction
-  spent the ask: a node returns a transaction by id only from its mempool (there is no transaction index over wRPC), and a UTXO read shows no inputs. To see the payments the
+  proved no other fill: each output proves one fill once, and `state.json` keeps which ask it proved. An output of
+  one of the bot's own transactions (its change) is recorded as own and never counts, however long it stays unspent.
+  A proof is not bound to the ask: the bot cannot check that the paying transaction spent it (a node returns a
+  transaction by id only from its mempool, there is no transaction index over wRPC, and a UTXO read shows no inputs).
+  A lying indexer that also trades can therefore name the payout of a fill of another of the bot's asks, or any other
+  receipt after the placement (an operator top-up), as this ask's payment. So a proof never makes the bot forget an
+  ask. A proven ask gives its ladder level back and no longer counts toward the ask cap (the wallet's real token
+  balance, read from the node, bounds what the bot can place), but its record stays in `state.json` with every amount
+  hint it has: each cycle a few proven asks (5, in rotation, the ones the indexer lists first) are looked up on the
+  node, in every mode, and one found live is cancelled through the node, with an error alert (`proven-live`), and
+  counts again until the node shows it ended. Until its expiry its price still counts in the self-trade check. A proven
+  ask ends when the node shows it ended after that cancel, 24 h after its expiry (by then a keeper has refunded an
+  expired order), or by `mm-bot drop`. At most 200 are kept: past that a new proof frees nothing (the ask stays
+  unresolved, as without proof) and the bot warns (`proven-full`). A forged proof thus costs one level of ladder
+  room until the ask is found or expires, not a forgotten order; the ask itself stays fillable at its old price until
+  its expiry (at most `lifeMin`, 90 min) where the search cannot reach its amount. To see the payments the
   bot reads its own address on the node (`getUtxosByAddresses`, JSON wRPC) at the start of each cycle, before each
   placement or amend, and after a cycle that sent. An output keeps the time the node first showed it for as long as the
-  node shows it; once spent, its record is kept for a week (at most 2,000), so a payment the bot spends later still
-  counts. That is one node call per 30 s cycle, plus one per placement or amend (at most `maxActionsPerCycle`, 12) and
+  node shows it; once the node stops showing it, its record is kept for a week (at most 2,000 that proved nothing and
+  are not own; the others all week), so a payment the bot spends later still counts and one read that misses an
+  output does not make it new. That is one node call per 30 s cycle, plus one per placement or amend (at most `maxActionsPerCycle`, 12) and
   one after a cycle that sent. It needs `node` set to a JSON wRPC URL (`ws://host:18110`,
   testnet-10 `18210`): with the CLI's default or a Borsh node no full fill is ever proven (`check` and the log warn).
 - **When a fill cannot be proven** (no JSON wRPC node; the node read failed; the indexer never reports the fill; the
   payment landed while the bot was sending and the CLI spent it in that same cycle, before the read after the send;
   more than 1,000 fills of the token between two reads, 10 pages of 100, with a `fills-missed` alert; the indexer
-  reports it more than a week or 2,000 spent payments late) the ask stays unresolved: its level is not quoted
+  reports it more than a week or 2,000 spent payments late; 200 proven asks kept already) the ask stays unresolved: its level is not quoted
   again until the ask's own expiry, at most `lifeMin` (90 min) after its last placement or amend, so 45 to 90 min with
   the renewals. Past its expiry it is parked: STOP no longer waits for it, the bot keeps looking for it, but its tokens
   still count toward the ask cap until proof, because a non-conforming taker can still fill an expired ask until a
   refund ends it. With the defaults (15 % of `capitalUsd` a level, `maxAskPct` 50 %) one parked ask leaves the ask
   ladder a level short until the operator checks it (`kob recover --amount-left <id>=<amount>`) and drops it with the
-  bot stopped: `mm-bot unresolved` lists these asks, and `mm-bot drop --id <id> [--amount-left <n>]` asks the node
+  bot stopped: `mm-bot unresolved` lists these asks (and the proven ones), and `mm-bot drop --id <id> [--amount-left <n>]` asks the node
   first, from the bot's record with every amount it knows (and `n`), prints the answer, and refuses while the node
   shows the order live or cannot be asked. The node finds a partly filled ask only at an amount it is told, so check
   the amount left first. The limits stay as they are, and bounded: a proof needs only the payments after the ask's
