@@ -117,7 +117,7 @@ describe('the standalone book follows such a bid through a fill (R3A-3)', () => 
     expect(next).not.toBeNull();
     expect((next.order.state.state as unknown as { bought: string }).bought).toBe((BOUGHT + 2n * TOK).toString());
     expect(next.boughtCustody).toMatchObject({ transactionId: signed.tx.id, state: { amount: (BOUGHT + 2n * TOK).toString(), owner: bid.utxo.covenantId } });
-    const view = orderViewOf({ snap: next, confirmed: true, origin: 'stream', genesis: { txid: null, out: null, daa: 0n }, firstAmount: null, seenMs: 0, misses: 0 }, { kob: K });
+    const view = orderViewOf({ snap: next, confirmed: true, origin: 'stream', genesis: { txid: null, out: null, daa: 0n }, firstAmount: null, seenMs: 0, misses: 0 }, { kob: K, daa: CLOCK.daa, nowUnix: CLOCK.unixSeconds });
     expect(view.bought_custody?.utxo).toMatchObject({ txid: signed.tx.id, amount: (BOUGHT + 2n * TOK).toString() });
   });
 

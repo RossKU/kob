@@ -235,7 +235,7 @@ function tokenUtxoView(u: NonNullable<OrderSnapshot['custody']>, owner: Hex, rol
  * The `/v1/orders/{id}` view of an entry, whose current state the node proved. The book check and
  * the ticket read it.
  */
-export function orderViewOf(e: StreamEntry, ctx: Pick<ListingContext, 'kob'>): OrderView {
+export function orderViewOf(e: StreamEntry, ctx: ListingContext): OrderView {
   const snap = e.snap;
   const st = snap.order.state;
   const d = describeOrder(st, ctx.kob);
@@ -251,18 +251,21 @@ export function orderViewOf(e: StreamEntry, ctx: Pick<ListingContext, 'kob'>): O
   })();
   const filled = e.firstAmount !== null && d.amountLeft !== null && d.amountLeft < e.firstAmount ? e.firstAmount - d.amountLeft : 0n;
   const daa = Number(snap.order.blockDaaScore ?? 0);
+  // What the book shows of it now, by the listing rule (R4B-I5).
+  const listed = listingOf(e, ctx) !== null;
+  const expired = (d.expiryDaa > 0n && ctx.daa >= d.expiryDaa) || (snap.deadline !== null && snap.deadline <= ctx.nowUnix);
   return {
     covenant_id: snap.covenantId, contract: st.kind, template_hash: tpl?.hash ?? '', family: st.kind.endsWith('Kron') ? 2 : 1, side: d.side === 'sell' ? 1 : 2, maker: d.maker,
     token: d.tokenCovId, token_template_hash: s.tokenTplHash ?? null, extension_commitment: ext ?? null, scale: Number(d.scale), min_fill: d.minFill.toString(),
     price: d.price.toString(), tip: d.tip.toString(), tif: s.tif !== undefined ? Number(s.tif) : null, expiry_daa: d.expiryDaa > 0n ? Number(d.expiryDaa) : null,
-    active_from: Number(d.activeFrom), in_book: true, budget_rate: null, reserve: s.reserve ?? null, initial_amount: e.firstAmount?.toString() ?? null, listed: true,
+    active_from: Number(d.activeFrom), in_book: listed, budget_rate: null, reserve: s.reserve ?? null, initial_amount: e.firstAmount?.toString() ?? null, listed,
     unlisted_reason: null, origin: e.origin, parent: null,
     genesis: { txid: e.genesis.txid, out: e.genesis.out, block_seq: 0, daa: Number(e.genesis.daa), confirmations: null, settled: false },
     status: statusOf(e, d.amountLeft), filled_amount: filled.toString(), amount_left: left?.toString() ?? null, amount_estimated: d.side === 'buy',
     current: { txid: snap.order.transactionId, index: snap.order.index, value: snap.order.amount }, state_known: true, state: st as AnyState, current_daa: daa,
     deadline: s64(snap.deadline), refund_due_daa: null, quote: d.price.toString(),
     custody: snap.custody ? { expected_amount: snap.custody.state.amount, utxo: tokenUtxoView(snap.custody, snap.covenantId, 'custody'), ok: true } : { expected_amount: null, utxo: null, ok: d.side === 'buy' },
-    strays: [], last_block: 0, last_daa: daa, confirmations: null, settled: false, expired: false,
+    strays: [], last_block: 0, last_daa: daa, confirmations: null, settled: false, expired,
     // A Collected bid that has bought: its bought-custody, which a taker's fill spends.
     ...(snap.boughtCustody ? { bought_custody: { expected_amount: snap.boughtCustody.state.amount, utxo: tokenUtxoView(snap.boughtCustody, snap.covenantId, 'bought'), ok: true } } : {}),
   };

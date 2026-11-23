@@ -555,6 +555,11 @@ describe('listing rules (stream-book)', () => {
       ['no custody', { ...askSnap(), custody: null }],
     ];
     for (const [what, s] of cases) expect(listingOf(put(s).get(s.covenantId)!, ctx), what).toBeNull();
+    // the order view says so too, instead of claiming every entry listed (R4B-I5)
+    for (const [what, s] of cases) expect(orderViewOf(put(s).get(s.covenantId)!, ctx), what).toMatchObject({ listed: false, in_book: false });
+    expect(orderViewOf(put(withState(askSnap(), { expiryDaa: '900' })).get(askSnap().covenantId)!, ctx).expired).toBe(true);
+    expect(orderViewOf(put({ ...askSnap(), deadline: 1_700_000_000n }).get(askSnap().covenantId)!, ctx).expired).toBe(true);
+    expect(orderViewOf(put(askSnap()).get(askSnap().covenantId)!, ctx)).toMatchObject({ listed: true, in_book: true, expired: false });
     expect(MIN_ORDER_VALUE_SOMPI).toBe(100_000_000n);
   });
 
