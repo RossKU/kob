@@ -73,4 +73,22 @@ export class Indexer {
     const body = await this.get(`/v1/fills?token=${token}&limit=${limit}`);
     return body?.items ?? [];
   }
+
+  /**
+   * The token's fills newer than `afterId`, newest first, paged back (`before`) at most `pages`
+   * pages of 100 (R4T-5). `complete` is false when the cap stopped it before `afterId`.
+   */
+  async fillsSince(token, afterId, pages = LIST_PAGES) {
+    const items = [];
+    let before = null;
+    for (let page = 0; page < pages; page++) {
+      const body = await this.get(`/v1/fills?token=${token}&limit=100${before != null ? `&before=${before}` : ''}`);
+      const got = body?.items ?? [];
+      items.push(...got);
+      const oldest = got.at(-1)?.id;
+      if (!body?.next_cursor || oldest == null || oldest <= afterId) return { items, complete: true };
+      before = oldest;
+    }
+    return { items, complete: false };
+  }
 }

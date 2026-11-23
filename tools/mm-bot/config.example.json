@@ -1,6 +1,6 @@
 {
   "network": "mainnet",
-  "node": null,
+  "node": "ws://127.0.0.1:18110",
   "indexer": "https://kob-api.kaspa.ag",
   "kobCli": "/opt/kob/kob",
   "keyFile": "/home/mm/.kob/mm.key",

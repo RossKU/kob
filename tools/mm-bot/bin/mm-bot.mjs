@@ -9,6 +9,12 @@
 //                                                          quotes and exits
 //   node bin/mm-bot.mjs check  --config FILE               check the config and print it
 //                                                          merged with the defaults
+//   node bin/mm-bot.mjs unresolved --config FILE           the asks kept with no proof that they
+//                                                          ended (unresolved or parked)
+//   node bin/mm-bot.mjs drop   --config FILE --id ID [--amount-left N]
+//                                                          after checking it: drop one of them,
+//                                                          unless the node shows it live (the bot
+//                                                          must not be running)
 // --dry-run plans with the CLI's --dry-run only: nothing is signed and the state file is not
 // written.
 
@@ -21,7 +27,7 @@ import { loadConfig } from '../src/config.mjs';
 import { fmtAmount } from '../src/funds.mjs';
 import { Logger, paths } from '../src/store.mjs';
 
-const USAGE = 'usage: mm-bot.mjs run|once|status|stop|check --config FILE [--dry-run] [--json]';
+const USAGE = 'usage: mm-bot.mjs run|once|status|stop|check|unresolved --config FILE [--dry-run] [--json] | drop --config FILE --id ID [--amount-left N]';
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 const opt = (name) => {
@@ -30,7 +36,7 @@ const opt = (name) => {
 };
 const flag = (name) => argv.includes(name);
 const configPath = opt('--config');
-if (!cmd || !configPath || !['run', 'once', 'status', 'stop', 'check'].includes(cmd)) {
+if (!cmd || !configPath || !['run', 'once', 'status', 'stop', 'check', 'unresolved', 'drop'].includes(cmd)) {
   console.error(USAGE);
   process.exit(2);
 }
@@ -40,6 +46,13 @@ try {
   cfg = loadConfig(configPath);
 } catch (e) {
   console.error(e.message);
+  process.exit(2);
+}
+// On mainnet a fully filled ask is proven only through a JSON wRPC node: without one every honest
+// full fill parks its ask and takes a ladder level for good (R4T-5). Testnet-10 only warns.
+const NODE_NEEDED = 'a JSON wRPC node (ws://host:18110, testnet-10 18210) is needed to prove a fully filled ask paid; without one it stays unresolved and holds its share of the ask cap (README, tracking)';
+if (cfg.network === 'mainnet' && ['run', 'once', 'check'].includes(cmd) && !isJsonWrpc(cfg.node)) {
+  console.error(`config ${configPath}: mainnet needs "node": a JSON wRPC URL of a node you run (ws://host:18110), not ${cfg.node ? 'a Borsh endpoint' : 'null (the CLI default)'}: ${NODE_NEEDED}`);
   process.exit(2);
 }
 mkdirSync(cfg.dataDir, { recursive: true });
@@ -54,7 +67,7 @@ if (cmd === 'check') {
   if (shown.alerts?.webhookUrl) shown.alerts = { ...shown.alerts, webhookUrl: '(set)' };
   console.log(JSON.stringify(shown, null, 2));
   console.log(`config ok${cfg.keyFile ? '' : process.env.KOB_KEY ? ' (key from KOB_KEY)' : '; WARNING: no keyFile and no KOB_KEY: signing will fail'}`);
-  if (!isJsonWrpc(cfg.node)) console.log('WARNING: node: a JSON wRPC node (ws://host:18110, testnet-10 18210) is needed to prove a fully filled ask paid; without one it stays unresolved and holds its share of the ask cap (README, tracking)');
+  if (!isJsonWrpc(cfg.node)) console.log(`WARNING: node: ${NODE_NEEDED}`);
   process.exit(0);
 }
 
@@ -76,6 +89,43 @@ if (cmd === 'status') {
   }
   printStatus(st);
   process.exit(0);
+}
+
+if (cmd === 'unresolved') {
+  const bot = new Bot(cfg, { dryRun: true });
+  const rows = bot.unresolvedOrders();
+  if (flag('--json')) console.log(JSON.stringify(rows, null, 2));
+  else if (!rows.length) console.log('no unresolved order');
+  else {
+    for (const o of rows) {
+      console.log(`${o.id}  ${o.side} L${o.level}  ${o.parked ? 'PARKED (past its expiry)' : 'unresolved'}  placed ${o.amount ?? '?'} base, left ${o.amountLeft ?? '?'} (last known), fills seen ${o.filledSeen}, expires ${o.expiresAt ? new Date(o.expiresAt).toISOString() : '-'}`);
+    }
+    console.log('Check each with kob recover --from <dataDir>/own-orders.json --amount-left <id>=<amount left>; once it has ended: mm-bot drop --config FILE --id <id> (with the bot stopped).');
+  }
+  process.exit(0);
+}
+
+if (cmd === 'drop') {
+  const id = String(opt('--id') ?? '');
+  const n = opt('--amount-left');
+  if (!/^[0-9a-f]{64}$/.test(id) || (n != null && !/^\d+$/.test(n))) {
+    console.error('usage: mm-bot.mjs drop --config FILE --id <64 hex> [--amount-left <base units>]');
+    process.exit(2);
+  }
+  // The running bot would write its own state over the drop.
+  if (existsSync(P.pid)) {
+    const pid = Number(readFileSync(P.pid, 'utf8'));
+    if (pid && alive(pid)) {
+      console.error(`a bot (pid ${pid}) runs with this dataDir: stop it first (mm-bot stop)`);
+      process.exit(1);
+    }
+  }
+  const bot = new Bot(cfg);
+  bot.log.quiet = true;
+  const r = await bot.operatorDrop(id, { amountLeft: n == null ? null : Number(n) });
+  console.log(`node: ${r.node ? JSON.stringify(r.node) : '-'}`);
+  console.log(r.message);
+  process.exit(r.ok ? 0 : 1);
 }
 
 if (cmd === 'once') {

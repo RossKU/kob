@@ -587,14 +587,14 @@ export class Bot {
       if (!s.unconfirmed) {
         const what = r.status === 'foreign' ? 'names another maker' : !r.verified ? 'is not found under a template not yet proven on the node'
           : `is not found at any state the bot can follow (a fill by an amount the search does not reach, or a full fill)${o ? ', though the indexer lists it' : ''}`;
-        this.alert('error', 'node-unconfirmed', `Order ${tag} ${what}: it is kept as unresolved (it counts toward the capital cap, its level is not quoted again, and pulls and STOP wait for it); each cycle the bot looks it up on the node with every amount it knows and cancels it once found. Check it by hand (kob recover --from ${this.p.check} --amount-left ${id}=<amount left>); once it has ended, stop the bot and remove it from state.json.`);
+        this.alert('error', 'node-unconfirmed', `Order ${tag} ${what}: it is kept as unresolved (it counts toward the capital cap, its level is not quoted again, and pulls and STOP wait for it); each cycle the bot looks it up on the node with every amount it knows and cancels it once found. Check it by hand (kob recover --from ${this.p.check} --amount-left ${id}=<amount left>); once it has ended, stop the bot and drop it (mm-bot drop --config FILE --id ${id}), which asks the node first.`);
       }
       s.unconfirmed = true;
       // Past its own expiry, conforming matchers no longer fill it: its level is quoted again,
       // while its tokens still count toward the cap until proof or the operator.
       if (isAsk(s) && !s.parked && s.expiresAt != null && now >= s.expiresAt) {
         s.parked = true;
-        this.alert('error', 'unresolved-expired', `Order ${tag} is still unresolved past its expiry: its level is free, but its ${fmtAmount((s.amountLeft ?? 0) / this.scale, 6)} tokens still count toward the ask cap (the ladder may stay a level short), STOP no longer waits for it, and the bot keeps looking for it. Non-conforming takers can still fill it until a refund ends it; check it by hand and, once it has ended, remove it from state.json with the bot stopped.`);
+        this.alert('error', 'unresolved-expired', `Order ${tag} is still unresolved past its expiry: its level is free, but its ${fmtAmount((s.amountLeft ?? 0) / this.scale, 6)} tokens still count toward the ask cap (the ladder may stay a level short), STOP no longer waits for it, and the bot keeps looking for it. Non-conforming takers can still fill it until a refund ends it; check it by hand and, once it has ended, drop it with the bot stopped (mm-bot drop --config FILE --id ${id}): the level comes back.`);
       }
       return;
     }
@@ -617,13 +617,15 @@ export class Bot {
 
   /** Logs the fills of the bot's orders that the indexer reports and the bot has not logged yet. */
   async recordFills() {
-    const items = await this.idx.fills(this.cfg.token.covenantId, 100);
     const lastId = this.state.lastFillId;
     if (lastId == null) {
       // The first run: start from the newest fill, do not replay history.
-      this.state.lastFillId = items[0]?.id ?? 0;
+      this.state.lastFillId = (await this.idx.fills(this.cfg.token.covenantId, 1))[0]?.id ?? 0;
       return;
     }
+    // Every fill since the last read, up to 1,000 (R4T-5): one missed would leave its ask unproven.
+    const { items, complete } = await this.idx.fillsSince(this.cfg.token.covenantId, lastId);
+    if (!complete) this.alert('warn', 'fills-missed', `More than ${items.length} fills of the token since the last read: older ones are not recorded, so an ask they filled in full may stay unresolved (check it with mm-bot unresolved).`);
     const fresh = items.filter((f) => f.id > lastId).sort((a, b) => a.id - b.id);
     for (const f of fresh) {
       const mine = this.state.orders[f.covenant_id] ?? this.state.recent[f.covenant_id];
@@ -721,6 +723,40 @@ export class Bot {
       proven += f.amount;
     }
     return proven >= base ? picked : null;
+  }
+
+  /** The orders kept with no proof that they ended (R3T-3): unresolved, or parked past their expiry. */
+  unresolvedOrders() {
+    return Object.entries(this.state.orders).filter(([, s]) => s.unconfirmed || s.parked).map(([id, s]) => ({
+      id, side: s.side, level: s.level, price: s.price, amount: s.amount ?? null, amountLeft: s.amountLeft ?? null, filledSeen: s.filledSeen ?? 0,
+      parked: !!s.parked, placedAt: s.placedAt ?? null, expiresAt: s.expiresAt ?? null, hints: isAsk(s) ? this.hintsOf(id) : [],
+    }));
+  }
+
+  /**
+   * The operator's drop of one unresolved or parked order, after checking it (R4T-5). The node is
+   * asked first, from the bot's record and every amount known (plus `amountLeft`, the operator's):
+   * an order it shows live, or that it cannot be asked about, is kept. Returns { ok, node, message }.
+   */
+  async operatorDrop(id, { amountLeft = null } = {}) {
+    const s = this.state.orders[id];
+    if (!s) return { ok: false, node: null, message: `${id} is not in state.json` };
+    if (!s.unconfirmed && !s.parked) return { ok: false, node: null, message: `${short(id)} is not unresolved: the bot tracks it and ends it by itself` };
+    const bal = await this.kob.balances(this.cfg.token.covenantId);
+    this.maker = bal.maker;
+    const v = await this.idx.order(id).catch(() => null);
+    if (v?.amountLeft > 0) s.idxAmount = v.amountLeft;
+    const hints = isAsk(s) ? [...new Set([...this.hintsOf(id), ...(Number.isSafeInteger(amountLeft) && amountLeft > 0 ? [amountLeft] : [])])] : [];
+    const r = (await this.nodeCheck([id], hints.length ? { [id]: hints } : {})).get(id);
+    if (r.status === 'live') return { ok: false, node: r, message: `the node holds ${short(id)} live at ${r.txid} (amount left ${r.amountLeft ?? '?'}): not dropped; cancel it (kob cancel ${id})` };
+    if (r.status === 'unknown') return { ok: false, node: r, message: `the node could not be asked about ${short(id)} (${r.why}): not dropped` };
+    const what = r.status === 'foreign' ? 'names another maker' : `is not found on the node at the amounts ${hints.join(', ') || '(a bid: its script)'}${isAsk(s) ? ' (the search is not exhaustive)' : ''}`;
+    delete this.state.orders[id];
+    this.state.recent[id] = { side: s.side, level: s.level, endedAt: Date.now() };
+    this.log.info(`${short(id)} dropped by the operator: it ${what}`);
+    this.log.action({ type: 'operator-drop', id, side: s.side, level: s.level, node: r.status, hints });
+    this.save();
+    return { ok: true, node: r, message: `${id} ${what}: dropped from state.json` };
   }
 
   /** The target ladder and the cycle's actions. */

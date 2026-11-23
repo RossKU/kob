@@ -70,7 +70,14 @@ function stubFetch(chainFile) {
         for (const [id, v] of staleViews) if (!c.orders[id]) items.push(v);
         return json({ items, next_cursor: null });
       }
-      if (u.includes('/v1/fills')) return json({ items: fillsFeed, next_cursor: null });
+      if (u.includes('/v1/fills')) {
+        const q = new URL(u).searchParams;
+        const before = q.get('before') == null ? Infinity : Number(q.get('before'));
+        const limit = Number(q.get('limit') ?? 50);
+        const rest = fillsFeed.filter((f) => f.id < before);
+        const items = rest.slice(0, limit);
+        return json({ items, next_cursor: rest.length > limit ? String(items.at(-1).id) : null });
+      }
       const id = u.split('/v1/orders/')[1];
       if (hidden(id)) return json({ error: 'not_found' }, 404);
       if (c.orders[id]) return json(view(id, c.orders[id], 'open'));
@@ -982,6 +989,62 @@ test('a payment record proves one fill once (R4T-2)', { timeout: 120_000 }, asyn
     // Saved with the state file: a restart does not forget it.
     const again = new Bot(bot.cfg);
     assert.ok(Object.values(again.state.payments).some((p) => p.usedBy === id));
+  } finally {
+    reset();
+  }
+});
+
+// R4T-5: more than one page of fills between two reads is read back to the last one seen.
+test('a fill behind 150 newer fills of the token is still recorded and proves the ask (R4T-5)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    const { id, txid, proceeds } = await filledAsk(bot, chain);
+    const noise = Array.from({ length: 150 }, (_, i) => ({ id: 151 - i, covenant_id: 'ee'.repeat(32), txid: '5e'.repeat(32), amount: '1', price: '1' }));
+    fillsFeed = [...noise, ...fillsFeed];
+    bot.nodeOutputs = async () => [{ txid, index: 1, amount: proceeds }];
+    await bot.cycle();
+    assert.equal(bot.state.orders[id], undefined, 'its fill was read and proven');
+    assert.equal(bot.state.lastFillId, 151);
+  } finally {
+    reset();
+  }
+});
+
+// R4T-5: the operator drops an unresolved ask by id, after the node was asked, never while it is live.
+test('an unresolved ask is dropped by the operator only when the node does not show it live (R4T-5)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain, dir } = setup();
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    const { id } = await filledAsk(bot, chain);
+    await bot.cycle();
+    assert.equal(bot.state.orders[id].unconfirmed, true);
+    // A second ask partly filled by an odd amount and hidden: live, at an amount the bot does not know.
+    const c = chain();
+    const b = Object.keys(c.orders).sort().find((k) => c.orders[k].side === 1 && k !== id);
+    c.orders[b].amount -= 7;
+    writeFileSync(file, JSON.stringify(c));
+    hiddenIds = new Set([id, b]);
+    await bot.cycle();
+    assert.deepEqual(bot.unresolvedOrders().map((o) => o.id).sort(), [id, b].sort());
+    // Told its amount, the node finds it live: refused, and kept.
+    const live = await bot.operatorDrop(b, { amountLeft: chain().orders[b].amount });
+    assert.equal(live.ok, false);
+    assert.equal(live.node.status, 'live');
+    assert.ok(bot.state.orders[b]);
+    // A tracked order that is not unresolved is refused too.
+    const normal = Object.keys(bot.state.orders).find((k) => !bot.state.orders[k].unconfirmed && !bot.state.orders[k].parked);
+    assert.equal((await bot.operatorDrop(normal)).ok, false);
+    // The filled one: not found on the node, so dropped, saved and logged.
+    const gone = await bot.operatorDrop(id);
+    assert.equal(gone.ok, true, gone.message);
+    assert.equal(gone.node.status, 'gone');
+    assert.equal(bot.state.orders[id], undefined);
+    assert.equal(new Bot(bot.cfg).state.orders[id], undefined, 'saved');
+    assert.ok(readFileSync(paths(dir).actions, 'utf8').includes('"operator-drop"'));
   } finally {
     reset();
   }
