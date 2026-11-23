@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { Audit } from './audit.mjs';
-import { Ledger, allowListed, bandCheck, capRefusals, killSwitchOn, sideOfKind, statePrice, tipRefusals, today, tokenCapRefusals, tokenOutflows } from './guard.mjs';
+import { DEFAULT_REF_DEPTH_KAS, Ledger, allowListed, bandCheck, bandReference, bookReference, capRefusals, killSwitchOn, sideOfKind, statePrice, tipRefusals, today, tokenCapRefusals, tokenOutflows } from './guard.mjs';
 import { Indexer } from './indexer.mjs';
 import { Kob } from './kob.mjs';
 import { big, kas, toSompi } from './units.mjs';
@@ -589,9 +589,12 @@ export class KobService {
    * cannot be read refuses: a band that was never checked must not pass as one (L23).
    */
   async band({ side, price, priceScale = null, token }) {
-    const bandPct = this.cfg.limits.priceBandPct;
-    if (bandPct == null) return bandCheck({ bandPct });
+    if (this.cfg.limits.priceBandPct == null && !this.cfg.refs?.size) return bandCheck({ bandPct: null });
     const book = await this.bookFor(token);
+    const cov = String(book?.token ?? (RE.id.test(String(token)) ? token : '')).toLowerCase();
+    const op = this.cfg.refs?.get(cov) ?? null;
+    const bandPct = op?.bandPct ?? this.cfg.limits.priceBandPct;
+    if (bandPct == null) return bandCheck({ bandPct });
     if (!book) return { ok: false, reason: `PRICE_BAND_UNCHECKED: the book of ${token} could not be read, so the price band cannot be checked; try again later` };
     let decimals = null;
     const scale = book?.scale != null ? BigInt(book.scale) : null;
@@ -600,7 +603,18 @@ export class KobService {
       const list = await this.tokens({ search: book.token }).catch(() => null);
       decimals = (list?.tokens ?? []).find((t) => t.covenant_id === book.token)?.decimals ?? null;
     }
-    return bandCheck({ side, price, priceScale, book, decimals, bandPct });
+    // The operator's price, sompi per whole token, as sompi per `scale` base units.
+    const opRef = op && scale != null && decimals != null ? { num: op.sompi * scale, den: 10n ** BigInt(decimals), what: 'the operator\'s refPrice' } : null;
+    // The book's reference needs refDepthKas on its fills and on its resting side (R2-T2): one fill
+    // two keys print, or a few KAS of orders, cannot set it.
+    const [rows, fills, maker] = cov ? await Promise.all([
+      this.indexer.tryGet(`/v1/books/${cov}?depth=200&aggregate=false`),
+      this.indexer.tryGet(`/v1/fills?token=${cov}&limit=200`),
+      this.makerKey().catch(() => null),
+    ]) : [null, null, null];
+    const b = bookReference({ side, rows, fills: fills?.items, scale, depth: this.cfg.refDepth ?? toSompi(DEFAULT_REF_DEPTH_KAS), maker });
+    const ref = bandReference({ side, op: opRef, book: b.ref });
+    return bandCheck({ side, price, priceScale, ref, scale, decimals, bandPct, why: b.why });
   }
 
   /**
@@ -664,17 +678,22 @@ export class KobService {
    * price is banded, and the claimed tokens count under the token caps, as a new sell of them.
    * They are not the wallet's UTXOs, so the plan's net effect leaves them out: the tokens out are
    * the plan's `bought` (read on the node) less what of the token the net effect brings back
-   * (or plus what joins from the wallet). The plan does not name the token, so it is the
-   * indexer's view of the order, and the net effect must name no other token.
+   * (or plus what joins from the wallet). The claim plan does not name the token, so it is taken
+   * from what the CLI read on the node (R2-T4): the order's state in a dry run of `kob replace
+   * --renew`, else the one token of the net effect. The indexer's view of the order is never used,
+   * and the net effect must name no other token.
    */
   async claimChecks({ price }, id, doc) {
     const bought = String(doc?.plan?.bought ?? '');
     if (!/^\d+$/.test(bought)) throw new Refusal('PRICE_BAND_UNCHECKED: the claim plan does not name the bought amount; claim without sell_price, then place the sell');
-    const view = await this.indexer.get(`/v1/orders/${String(id).toLowerCase()}`).catch(() => null);
-    const token = String(view?.token ?? '').toLowerCase();
     const net = doc?.transaction?.net?.tokens ?? {};
-    if (!RE.id.test(token) || Object.keys(net).some((c) => c.toLowerCase() !== token)) {
-      throw new Refusal('PRICE_BAND_UNCHECKED: the token of the claimed order is not confirmed (indexer view missing or another token in the plan); claim without sell_price, then place the sell');
+    const netIds = Object.keys(net).map((c) => c.toLowerCase());
+    const read = await this.kob.exec(['replace', String(id).toLowerCase(), '--renew', '--dry-run']);
+    const cur = read.json?.plan?.current;
+    const onNode = sideOfKind(cur?.kind) === 'buy' ? String(cur.state?.tokenCovId ?? '').toLowerCase() : '';
+    const token = RE.id.test(onNode) && !/^0+$/.test(onNode) ? onNode : netIds.length === 1 ? netIds[0] : '';
+    if (!RE.id.test(token) || netIds.some((c) => c !== token)) {
+      throw new Refusal('PRICE_BAND_UNCHECKED: the token of the claimed order is not confirmed on the node (or the plan moves another token); claim without sell_price, then place the sell');
     }
     const band = await this.band({ side: 'sell', price, token });
     if (!band.ok) throw new Refusal(band.reason);

@@ -2,8 +2,9 @@
 
 A market maker for a dollar-stablecoin token on its KOB KAS book: set `token` to its covenant id. It quotes a bid
 and an ask ladder around a fair value taken from the KAS/USD exchange markets, amends its orders in place when the
-market moves, and never takes an order. Every quote has a short life (90 min by default) that the bot renews in place,
-so the quotes of a bot that died lapse by themselves (a soft expiry: see the limits below). It drives the `kob` CLI as a child process and needs Node 22; there are no npm
+market moves, and never takes an order. Every quote has a short life (90 min by default) that the bot renews in place.
+The expiry is soft: once a dead bot's quotes pass it, conforming matchers stop filling them, but they stay fillable at
+their price until a refund keeper ends them (see Risks). It drives the `kob` CLI as a child process and needs Node 22; there are no npm
 dependencies. The token is pinned by covenant id, never by ticker (tickers collide).
 
 ## Setup
@@ -25,17 +26,27 @@ node bin/mm-bot.mjs stop   --config config.json          # writes <dataDir>/STOP
 node bin/mm-bot.mjs once   --config config.json          # one cycle (add --dry-run to sign nothing)
 ```
 
-- **Stop:** the STOP file, `stop`, or Ctrl-C/SIGTERM. The bot cancels every quote, waits until none is listed, and exits.
+- **Stop:** the STOP file, `stop`, or Ctrl-C/SIGTERM. The bot cancels every quote, waits until the node shows none left, and exits.
   Delete the STOP file to start again.
-- **Indexer down.** When a pull is due and the wallet or indexer read fails, the bot cancels from its last saved views
-  (`<dataDir>/order-views.json`, `kob cancel --view`: checked on the node). An order amended, filled or placed since that
-  read waits for the indexer, with an error alert. While the reads fail, the quotes are also pulled this way once fair
-  has moved more than half the spread from the fair they were set at, and the 1-minute jump compares with the newest
-  reading at least a minute old, however old.
-- **An indexer that hides a quote.** An order leaves the state file only once the node shows its saved view's UTXO
-  spent (`kob cancel --view --dry-run`). An order the indexer no longer lists but the node still holds is cancelled from
-  its view, with an error alert, and STOP waits for it. An order the indexer never showed has no view and is forgotten
-  after `orderVisibleTimeoutSec`: its `--gtd` expiry (soft, below) is then the bound.
+- **The bot's own record of each order.** Every placement and amend is recorded in `state.json` with the order's
+  state and outpoint as the CLI's own result for that transaction gives them, before the next action. The indexer only
+  says where to look: an order it does not list, lists at another outpoint, or that has an open question is looked up
+  on the node from that record (`kob recover --from <dataDir>/own-orders.json`), which follows a partial fill to its new
+  outpoint. Cancels go through the node from the record too (`kob recover --cancel`); `kob cancel <id>` is the fallback
+  for an order the record cannot find. An order leaves the state file only when the node finds no unspent output of it
+  under an order template the node has proven (an order found live under it), and the indexer does not list it or the
+  bot cancelled it. Until then it counts toward the side caps and its level is not quoted again.
+- **An indexer that hides a quote or shows it at an old outpoint.** The node still holds it: it is cancelled through the
+  node, with an error alert, and its level is quoted again once the node shows it ended. An order the node cannot find
+  while the indexer still lists it, or that cannot be looked up yet (no order template proven: the indexer never listed
+  one of the bot's orders), is kept, with an error alert, until the node shows it ended. STOP ends when no order is left
+  by that rule, whatever the indexer lists.
+- **Indexer down.** When a pull is due and the wallet or indexer read fails, the bot cancels through the node from its
+  records, with no indexer. While the reads fail, the quotes are also pulled this way once fair has moved more than half
+  the spread from the fair they were set at, and the 1-minute jump compares with the newest reading at least a minute
+  old, however old.
+- **A placement of unknown outcome** (a lost reply) is tracked under the covenant id its plan names until the node says;
+  with no id known it counts toward the side caps for a day.
 - **It never stops by itself.** Every safety condition makes it IDLE: quotes pulled, nothing new sent, and it resumes on
   its own. Errors are retried with a backoff (15 s doubling to 5 min).
 - One bot per `dataDir`.
@@ -60,12 +71,16 @@ picks the mode, and quotes or pulls its quotes.
 - **Expiry and renewal.** Every placement and every amend carries `--gtd`, an expiry `quotes.lifeMin` (90 min) ahead.
   A quote that has not been amended for `quotes.renewAfterMin` (45 min) is amended in place to its target with a fresh
   expiry (`kob replace <id> --price P --gtd WHEN`): the only timer-driven action. A reprice renews too, so in a moving
-  market the renewals cost nothing extra. A quote the indexer reports as past its expiry, after a long outage, is renewed
-  at once; one the bot has no expiry for (placed by a version without it) is renewed in the first cycle. If the bot
+  market the renewals cost nothing extra. A quote whose recorded expiry has passed, after a long outage, is renewed at once
+  (the expiry and the amount left are the bot's own record, not the indexer's); one the bot has no expiry for (placed by a version without it) is renewed in the first cycle. If the bot
   dies, every quote lapses at most `lifeMin` after the bot's last action: conforming matchers stop filling it and a
   refund keeper returns its KAS or tokens to the key. Renewals obey the fee cap like every amend; at the cap the bot
   idles and pulls its quotes, it does not let them lapse.
-- **Inventory.** A side without inventory stops quoting; the bot never borrows, shorts, or crosses itself.
+- **Inventory.** A side without inventory stops quoting; the bot never borrows or shorts. New placements fit inside the
+  side caps less every order it tracks (`maxBidPct`, `maxAskPct` of `capitalUsd`).
+- **No self-trade.** A placement or amend that would meet the bot's own order on the other side is skipped, and the
+  amends that move a quote away from the other side go first.
+- **Decimals.** Every placement names `--decimals` from `token.decimals`; the CLI checks it against every other source.
 
 | Mode | When |
 |---|---|
@@ -73,6 +88,7 @@ picks the mode, and quotes or pulls its quotes.
 | IDLE `reference` | fewer than 2 fresh venues |
 | IDLE `jump` | the reference moved more than 2 % within a minute |
 | IDLE `peg` | USDC/USD more than 0.5 % from 1.0 |
+| IDLE `placement` | the CLI refused 3 placements in a row (an error alert); a dry run of a placement is tried every cycle and the bot resumes once one passes |
 | IDLE `fee-cap` | the day's fees reached the cap less the cancel reserve; resumes at 00:00 UTC |
 | IDLE `cooldown` | the condition cleared; quoting resumes after 3 min of a steady reference |
 | STOPPING | the operator's STOP or a signal |
@@ -165,6 +181,8 @@ One JSON file; omitted fields take the default; relative paths are relative to t
 
 Under `dataDir`: `logs/mm-bot.log` (readable), `logs/actions.jsonl` (every action with tx id and fee, mode changes,
 errors), `logs/fills.jsonl`, `logs/alerts.jsonl`, and `state.json` (the bot's orders, fee ledger, mode, last snapshot).
+`mm-bot.log` and `actions.jsonl` move to `<file>.1` past 50 MB. `state.prev.json` is the state before the last save: the
+bot refuses to start on a `state.json` that does not read (it would forget its quotes) and names that copy.
 
 ## Fees
 

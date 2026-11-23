@@ -7,8 +7,11 @@ appendFileSync(process.env.FAKE_KOB_LOG, JSON.stringify(args) + '\n');
 const mode = process.env.FAKE_KOB_MODE ?? 'ok';
 const dry = args.includes('--dry-run');
 const tx = 'ab'.repeat(32);
+// The template hash of each order kind in this build (the indexer names it in its views).
+export const TPL = { KobAsk: 'a5'.repeat(32), KobBid: 'b5'.repeat(32) };
 const doc = (extra) => JSON.stringify({ action: 'place limit sell', network: 'testnet-10', plan: {}, issues: [], transaction: { txid: tx, fee: '427000' }, new_covenant_ids: ['cd'.repeat(32)], result: null, ...extra }, null, 2);
 
+if (args[0] === '--version') { process.stdout.write('kob 0.0.0 (fake build)\n'); process.exit(0); }
 if (mode === 'usage') {
   process.stderr.write('error: the amount needs a unit\n');
   process.exit(2);
@@ -85,13 +88,16 @@ function chain() {
     out({ issues: [], transaction: { txid, fee: String(fee) }, new_covenant_ids: extra.ids ?? [], plan: extra.plan ?? {}, result: { status: 'submitted', txid, fee: String(fee), covenant_ids: extra.ids ?? [] } });
   };
   if (args[0] === 'place') {
+    // FAKE_KOB_REFUSE_PLACE: every placement is refused before signing (R2-T3).
+    if (process.env.FAKE_KOB_REFUSE_PLACE) { process.stderr.write('error: its decimals come from the indexer alone: give --decimals 6; nothing signed\n'); process.exit(1); }
     const side = val('--side');
     const amount = Number(val('--amount').replace('base', ''));
     const price = Number(val('--price').replace('sompi', ''));
     const id = ('c' + (c.n + 1).toString(16)).padStart(64, '0');
     const escrow = Math.ceil((amount * price) / 1e6);
     if (side === 'sell' && c.tokenUtxos > 3) { process.stderr.write('error: TOKEN_UTXOS_FRAGMENTED'); process.exit(1); }
-    submit({ ids: [id], apply: () => {
+    const st = stateOf(side === 'sell' ? 1 : 2, price, amount);
+    submit({ ids: [id], plan: { states: [st], request: { value: String(side === 'sell' ? 1e8 : escrow + 1e8) } }, apply: () => {
       if (side === 'sell') { c.tokenFree -= amount; c.kasFree -= 1e8; c.orders[id] = { side: 1, price, amount, value: 1e8, txid, expiresAt: gtd() }; }
       else { c.kasFree -= escrow + 1e8; c.orders[id] = { side: 2, price, amount, value: escrow + 1e8, txid, expiresAt: gtd() }; }
     } });
@@ -100,7 +106,8 @@ function chain() {
     const id = args[1];
     const o = c.orders[id];
     if (!o) { process.stderr.write('error: unknown order'); process.exit(1); }
-    submit({ plan: { inPlace: true }, apply: () => { if (args.includes('--price')) o.price = Number(val('--price').replace('sompi', '')); if (args.includes('--gtd')) o.expiresAt = gtd(); o.txid = txid; o.value -= fee; c.kasFree += fee; } }); // an amend's fee comes from the order
+    const np = args.includes('--price') ? Number(val('--price').replace('sompi', '')) : o.price;
+    submit({ plan: { inPlace: true, current: stateOf(o.side, o.price, o.amount), replacement: stateOf(o.side, np, o.amount), value: String(o.value - fee) }, apply:() => { if (args.includes('--price')) o.price = Number(val('--price').replace('sompi', '')); if (args.includes('--gtd')) o.expiresAt = gtd(); o.txid = txid; o.value -= fee; c.kasFree += fee; } }); // an amend's fee comes from the order
   }
   if (args[0] === 'cancel') {
     const id = args[1];
@@ -108,9 +115,64 @@ function chain() {
     if (!o) { process.stderr.write('error: the order is not live'); process.exit(1); }
     submit({ apply: () => { if (o.side === 1) { c.tokenFree += o.amount; c.tokenUtxos += 1; } c.kasFree += o.value; c.ended[id] = 'cancelled'; delete c.orders[id]; } });
   }
+  if (args[0] === 'recover') recover(c, fee);
   if (args[0] === 'merge') {
     submit({ apply: () => { c.tokenUtxos = 1; } });
   }
   process.stderr.write('error: unknown command');
   process.exit(2);
+}
+
+/** The order state as the CLI prints it (serde AnyState), with the fields the bot reads. */
+function stateOf(side, price, amount) {
+  const st = { maker: 'a1d9fd1347128011ad0036b077949d63274d5d3b8ac8351776c30c945ef2c2fb', tokenCovId: '01'.repeat(32), scale: '1000000', price: String(price), extensionCommitment: '00'.repeat(32) };
+  return side === 1 ? { kind: 'KobAsk', state: { ...st, amountLeft: String(amount) } } : { kind: 'KobBid', state: st };
+}
+
+/**
+ * kob recover: a record is live when the chain holds its order, its kind's template and its state
+ * (the price; an ask's amountLeft, or the --amount-left hint for it). With --cancel the live ones
+ * are cancelled (--yes) or signed only (--dry-run). FAKE_KOB_NODE_DOWN: the node does not answer.
+ */
+function recover(c, fee) {
+  if (process.env.FAKE_KOB_NODE_DOWN) { process.stderr.write('error: node: connection refused\n'); process.exit(1); }
+  const val = (flag) => args[args.indexOf(flag) + 1];
+  const items = JSON.parse(readFileSync(val('--from'), 'utf8')).items;
+  const hints = {};
+  args.forEach((a, i) => { if (a === '--amount-left') { const [id, n] = args[i + 1].split('='); hints[id] = Number(n); } });
+  const byId = new Map();
+  for (const it of items) {
+    const id = it.covenant_id;
+    if (byId.get(id)?.status === 'live') continue;
+    const o = c.orders[id];
+    const kind = it.state.kind;
+    const e = { covenant_id: id, kind, template_hash: it.template_hash, status: 'not_found', note: 'spent' };
+    const st = it.state.state;
+    if (it.template_hash === TPL[kind] && o && (o.side === 1) === (kind === 'KobAsk') && o.price === Number(st.price)
+      && (o.side === 2 || o.amount === Number(st.amountLeft) || o.amount === hints[id])) {
+      const left = o.side === 1 ? o.amount : Math.floor(((o.value - 1e8) * 1e6) / o.price);
+      Object.assign(e, { status: 'live', note: '', outpoint: `${o.txid}:0`, value: String(o.value), amount_left: String(left) });
+    }
+    byId.set(id, e);
+  }
+  let code = 0;
+  if (args.includes('--cancel')) {
+    for (const e of byId.values()) {
+      if (e.status !== 'live') continue;
+      if (process.env.FAKE_KOB_CANCEL_FAIL) { e.cancel = { status: 'failed', reason: 'submit: orphan' }; code = 1; continue; }
+      const o = c.orders[e.covenant_id];
+      const txid = (c.n + 1).toString(16).padStart(64, '0');
+      if (args.includes('--yes')) {
+        c.n += 1;
+        if (o.side === 1) { c.tokenFree += o.amount; c.tokenUtxos += 1; }
+        c.kasFree += o.value - fee;
+        c.ended[e.covenant_id] = 'cancelled';
+        delete c.orders[e.covenant_id];
+      }
+      e.cancel = { status: args.includes('--yes') ? 'submitted' : 'signed', txid, fee: String(fee) };
+    }
+  }
+  writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify(c));
+  process.stdout.write(JSON.stringify({ network: 'testnet-10', orders: [...byId.values()], rejected: [], summary: {} }, null, 2));
+  process.exit(code);
 }

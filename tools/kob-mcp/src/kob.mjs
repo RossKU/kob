@@ -33,6 +33,9 @@ export function parseJsonStream(text) {
 // Stderr lines that are progress notes, not errors.
 const NOISE = /blocks are contended|^dry run: nothing signed/;
 
+/** A long stderr cut in the middle: the last error line decides whether anything was sent (T-13). */
+export const cutMiddle = (s, n) => (s.length <= n ? s : `${s.slice(0, Math.floor(n / 4))} .. ${s.slice(s.length - (n - Math.floor(n / 4) - 4))}`);
+
 export class Kob {
   constructor(cfg) {
     this.cfg = cfg;
@@ -70,8 +73,9 @@ export class Kob {
         if (opts.json !== false) {
           try { docs = parseJsonStream(out); } catch { /* not JSON */ }
         }
-        const stderr = err.split(/\r?\n/).filter((l) => l.trim() && !NOISE.test(l)).join(' | ').slice(0, 1500);
-        resolve({ code: code ?? -1, docs, json: docs[0] ?? null, stdout: out, stderr: timedOut ? `${stderr} | timed out` : stderr, timedOut });
+        const stderr = err.split(/\r?\n/).filter((l) => l.trim() && !NOISE.test(l)).join(' | ');
+        const cut = cutMiddle(stderr, 1500);
+        resolve({ code: code ?? -1, docs, json: docs[0] ?? null, stdout: out, stderr: timedOut ? `${cut} | timed out` : cut, timedOut });
       });
     });
   }

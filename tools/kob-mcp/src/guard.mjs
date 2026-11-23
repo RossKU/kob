@@ -196,73 +196,103 @@ function fraction(x) {
   return [BigInt(m[1] + frac), 10n ** BigInt(frac.length)];
 }
 
-/** The KAS bids that a depth reference must stand behind (kob-cli `firm_reference`): 10 KAS. */
-export const FIRM_DEPTH_SOMPI = 1_000_000_000n;
+/** The default KAS a book-derived reference must stand behind, on the fills and on the resting side. */
+export const DEFAULT_REF_DEPTH_KAS = 1000;
+
+/** A resting order whose minimum fill is worth more than this (10 KAS) adds no depth: few can fill it. */
+export const MAX_MIN_FILL_SOMPI = 1_000_000_000n;
+
+const lt = (a, b) => a.num * b.den < b.num * a.den;
 
 /**
- * The CLI's depth reference (kob-cli `data::firm_reference`), sompi per `book.scale` base units:
- * the bid at which the bids add up to 10 KAS, midpointed with the best ask when that ask is at
- * least the bid and at most twice it. A one-unit trade or order cannot move it. Null when the
- * bids are thinner or the scale is unknown.
+ * The book-derived reference (R2-T2), sompi per `scale` base units as { num, den, what }, or null
+ * with `why`. It needs `depth` sompi on both of:
+ * - the resting side an attacker must fill-risk to move it: for a buy the bids from the best down,
+ *   for a sell the asks from the best up; the price where they add up to `depth`. The wallet's own
+ *   orders and orders whose minimum fill is worth more than 10 KAS do not count.
+ * - the fill history, newest first: the VWAP of the fills that add up to `depth`.
+ * A buy is judged against the lower of the two and a sell against the higher, so moving the bound
+ * takes both: printed fills and `depth` of orders anyone can fill.
  */
-export function firmReference(book) {
-  if (book?.scale == null) return null;
-  const scale = BigInt(book.scale);
+export function bookReference({ side, rows, fills, scale, depth, maker = null }) {
+  if (scale == null) return { ref: null, why: 'the book has no price scale' };
+  const sc = BigInt(scale);
+  const own = String(maker ?? '').toLowerCase();
   let value = 0n;
-  let bid = null;
-  for (const l of book.bids ?? []) {
-    value += (big(l.amount) * big(l.price)) / scale;
-    if (value >= FIRM_DEPTH_SOMPI) {
-      bid = big(l.price);
+  let rest = null;
+  for (const r of (side === 'buy' ? rows?.bids : rows?.asks) ?? []) {
+    if (own && String(r.maker ?? '').toLowerCase() === own) continue;
+    const price = big(r.price);
+    const rs = r.scale != null ? BigInt(r.scale) : sc;
+    if (price <= 0n || rs !== sc) continue;
+    if ((big(r.min_fill) * price) / sc > MAX_MIN_FILL_SOMPI) continue;
+    value += (big(r.amount_left ?? r.amount) * price) / sc;
+    if (value >= depth) {
+      rest = { num: price, den: 1n, what: `${kas(depth)} KAS of ${side === 'buy' ? 'bids' : 'asks'}` };
       break;
     }
   }
-  if (bid == null || bid <= 0n) return null;
-  const ask = book.asks?.[0]?.price != null ? big(book.asks[0].price) : null;
-  return ask != null && ask >= bid && ask <= 2n * bid ? (ask + bid) / 2n : bid;
+  if (!rest) return { ref: null, why: `under ${kas(depth)} KAS of ${side === 'buy' ? 'bids' : 'asks'} rest on the book (the wallet's own and large-minimum orders left out)` };
+  let vol = 0n;
+  let units = 0n;
+  let fill = null;
+  for (const f of fills ?? []) {
+    const price = big(f.price);
+    const amount = big(f.amount);
+    if (price <= 0n || amount <= 0n) continue;
+    vol += amount * price;
+    units += amount;
+    if (vol / sc >= depth) {
+      fill = { num: vol, den: units, what: `the VWAP of the last ${kas(depth)} KAS of fills` };
+      break;
+    }
+  }
+  if (!fill) return { ref: null, why: `under ${kas(depth)} KAS of fills in the recent history` };
+  const lower = lt(fill, rest) ? fill : rest;
+  const higher = lower === fill ? rest : fill;
+  return { ref: side === 'buy' ? lower : higher };
+}
+
+/**
+ * The reference that bounds the band: the operator's own price for the token when set (sompi per
+ * whole token), which a book reference may only tighten (a buy takes the lower, a sell the
+ * higher); else the book reference alone. Both as { num, den, what } sompi per `scale` base units.
+ */
+export function bandReference({ side, op, book }) {
+  if (op && book) return (side === 'buy' ? lt(book, op) : lt(op, book)) ? book : op;
+  return op ?? book ?? null;
 }
 
 /**
  * The price band, in exact integers.
  * `price` is sompi per whole token (10^decimals base units), or, with `priceScale`, sompi per
- * `priceScale` base units (an order state's own price). The book's prices are sompi per
- * `book.scale` base units (10^min(decimals, 9)).
- * The reference is the last fill and the depth reference (firmReference): a buy is judged against
- * the lower of the two and a sell against the higher, so a fill a second key prints (K-L3) moves
- * neither bound alone. With neither, the mid of the best bid and ask. A buy above ref x (1 + band)
- * or a sell below ref x (1 - band) is refused. With no reference or no decimals it passes, with a
- * note and `checked: false` (`off: true` when the band is off).
+ * `priceScale` base units (an order state's own price). `ref` is { num, den, what }: num / den
+ * sompi per `scale` base units (10^min(decimals, 9)), from bandReference. A buy above
+ * ref x (1 + band) or a sell below ref x (1 - band) is refused, and so is any price when there is
+ * no reference or no decimals (PRICE_BAND_UNCHECKED, R2-T2). `off: true` when the band is off.
  */
-export function bandCheck({ side, price, priceScale = null, book, bandPct, decimals }) {
+export function bandCheck({ side, price, priceScale = null, ref, scale, bandPct, decimals, why = null }) {
   if (bandPct == null) return { ok: true, checked: false, off: true, note: 'price band off' };
-  const last = book?.last_fill != null ? BigInt(book.last_fill) : null;
-  const bid = book?.best_bid != null ? BigInt(book.best_bid) : null;
-  const ask = book?.best_ask != null ? BigInt(book.best_ask) : null;
-  const refs = [];
-  if (last != null && last > 0n) refs.push([last, 'last fill']);
-  const firm = firmReference(book);
-  if (firm != null) refs.push([firm, '10 KAS bid depth']);
-  refs.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-  const pick = refs.length ? refs[side === 'buy' ? 0 : refs.length - 1] : null;
-  // The reference as num / den sompi per `scale` base units (a mid keeps its half sompi).
-  const [num, den, what] = pick ? [pick[0], 1n, pick[1]] : bid != null && ask != null ? [bid + ask, 2n, 'mid'] : [null, 1n, null];
-  if (num == null || num <= 0n) return { ok: true, checked: false, note: 'no last fill, no 10 KAS of bids and no two-sided book: the price band was not checked' };
-  if (book?.scale == null || decimals == null) return { ok: true, checked: false, note: "the token's decimals are unknown: the price band was not checked" };
-  const scale = BigInt(book.scale);
+  if (!ref || ref.num <= 0n) {
+    return { ok: false, checked: false, reason: `PRICE_BAND_UNCHECKED: no usable reference${why ? ` (${why})` : ''}; the operator can set tokens.<covenant id>.refPrice in the config` };
+  }
+  if (scale == null || decimals == null) return { ok: false, checked: false, reason: "PRICE_BAND_UNCHECKED: the token's decimals are unknown, so the price band cannot be checked" };
+  const { num, den, what } = ref;
+  const sc = BigInt(scale);
   const whole = 10n ** BigInt(decimals);
   const [pn, pd] = fraction(bandPct);
   // The price per whole token as qn / qd.
   const [qn, qd] = priceScale == null ? [price, 1n] : [price * whole, BigInt(priceScale)];
-  const refText = `${kas((num * whole) / (den * scale))} KAS per whole token (${what})`;
+  const refText = `${kas((num * whole) / (den * sc))} KAS per whole token (${what})`;
   const shown = kas(qn / qd);
   // Compare price with ref x (1 +- pn / (100 pd)). Both sides are multiplied by den x scale x 100
   // pd x qd.
-  const lhs = qn * den * scale * 100n * pd;
-  const ref = num * whole * qd;
-  if (side === 'buy' && lhs > ref * (100n * pd + pn)) {
+  const lhs = qn * den * sc * 100n * pd;
+  const r = num * whole * qd;
+  if (side === 'buy' && lhs > r * (100n * pd + pn)) {
     return { ok: false, reason: `PRICE_BAND: a buy at ${shown} KAS is more than ${bandPct}% above the reference ${refText}` };
   }
-  if (side === 'sell' && 100n * pd > pn && lhs < ref * (100n * pd - pn)) {
+  if (side === 'sell' && 100n * pd > pn && lhs < r * (100n * pd - pn)) {
     return { ok: false, reason: `PRICE_BAND: a sell at ${shown} KAS is more than ${bandPct}% below the reference ${refText}` };
   }
   return { ok: true, checked: true, note: `within ${bandPct}% of ${refText}` };

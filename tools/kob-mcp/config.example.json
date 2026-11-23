@@ -5,8 +5,9 @@
   "keyFile": "C:/kob/agent.key",
   "dataDir": "./kob-mcp-data",
   "mode": "confirm",
-  "limits": { "perTxKas": 50, "perDayKas": 200, "maxFeeKas": 1, "priceBandPct": 25, "maxTipPct": 1, "maxTipKas": 1, "launchesPerDay": 3,
+  "limits": { "perTxKas": 50, "perDayKas": 200, "maxFeeKas": 1, "priceBandPct": 25, "refDepthKas": 1000, "maxTipPct": 1, "maxTipKas": 1, "launchesPerDay": 3,
     "tokens": { "<covenant id>": { "perTx": "100000000000", "perDay": "500000000000" } },
     "tokenDefault": { "perTxPct": 25, "perDayPct": 50 } },
+  "tokens": { "<covenant id>": { "refPrice": "0.25", "bandPct": 10 } },
   "withdrawTo": ["kaspatest:<your primary wallet>"]
 }
