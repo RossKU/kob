@@ -1859,7 +1859,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       // the order's own token(s): its token (a pair order: A and B, each with its custody per the
       // state) and, apart, FOREIGN strays of any other token owned by the same id (matcher.md 1.2)
       const pair = o.description?.pair ?? null;
-      const ownToken = o.description?.tokenCovId ?? null;
+      // An unbound curve's state names token 0. Its custody's token is its own (as listingOf,
+      // data/stream-book.ts): the owned input holding its custody amount.
+      const unbound = o.description?.curve?.unbound ? (owned.find((t) => t.token!.amount === o.description!.tokenAmount) ?? owned[0]) : undefined;
+      const ownToken = unbound ? unbound.token!.ref.covenantId : (o.description?.tokenCovId ?? null);
       const quoteToken = pair && pair.quote.covId !== pair.base.covId ? pair.quote.covId : null;
       const mine = owned.filter((t) => ownToken === null || t.token!.ref.covenantId === ownToken);
       const total = sum(mine);
