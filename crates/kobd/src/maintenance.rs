@@ -12,7 +12,8 @@
 //!
 //! There are two jobs:
 //!
-//! - **Sell** runs when the token is not held as surplus inventory, because the owner sells
+//! - **Sell** (opt-in, `--dust-sell`; off by default, since its floor comes from a book anyone
+//!   can post into) runs when the token is not held as surplus inventory, because the owner sells
 //!   `inventory` tokens off-matcher. It also needs a bid that is left after the matcher's tick,
 //!   of which the operator holds at least one minimum fill. The bid must pay at least
 //!   `sell_floor_bps` (90 % by default) of what the book's resting asks charge for the same
@@ -59,7 +60,9 @@ pub struct MaintenanceConfig {
     /// Merge the operator's token UTXOs of one token.
     pub merge: bool,
     /// Sell the operator's tokens into the book (at least a bid's minimum fill) when that pays
-    /// more than the fee.
+    /// more than the fee. Off by default (`--dust-sell` turns it on): a third-party operator must
+    /// be safe by default, and the sale's price floor comes from a book anyone can post into
+    /// (the residual of the floor, `docs/ops/executor.md`). Off, the holdings are only merged.
     pub sell: bool,
     /// Smallest number of token UTXOs of one token worth a merge.
     pub min_utxos: usize,
@@ -101,7 +104,8 @@ impl Default for MaintenanceConfig {
         MaintenanceConfig {
             enabled: true,
             merge: true,
-            sell: true,
+            // Opt-in (--dust-sell): any price floor taken from the book can be posted into.
+            sell: false,
             min_utxos: 2,
             max_jobs: 2,
             min_sell_profit: 0,
@@ -321,10 +325,29 @@ fn best_bid(inp: &MaintenanceInput, g: &Group, held: i64, t: i64) -> Option<(Lis
 /// `n /` [`SMALL_BUYER_DIV`]): an all-or-nothing ask of exactly `n`, or a stack of all-or-nothing
 /// asks, offers itself to buyers of exactly its size only, which is the poster's own sale (R2D-1).
 /// The range is what one fill may take (its `maxFill` and dust bound), not its whole rest: an ask
-/// of 1.5·n that takes fills of exactly n only is the same sale (R3D-1). The ask's UTXO must also
-/// be at least [`ASK_REFERENCE_AGE`] DAA old, which bounds how long a planted ask is exposed to
-/// buyers whatever its shape. The age is the UTXO's, not the order's: an amend continues the
-/// order at a new price, so after a fill or an amend an ask counts again a minute later.
+/// of 1.5·n that takes fills of exactly n only is the same sale (R3D-1).
+///
+/// The ask must also have been open to every buyer at the quote it now offers for at least
+/// [`ASK_REFERENCE_AGE`] DAA: `TouchSrc::exposed_since` (the latest of its UTXO's DAA score plus
+/// its TWAP `interval`, its custody's DAA score and its `activeFrom`, as the covenants measure a
+/// stop's evidence) that long before the clock (R4D-1). This is what the floor rests on, field
+/// by field:
+/// - `activeFrom`, TWAP / DCA `interval`: no fill is valid before them, so the minute starts there.
+/// - decay or auction (`slope != 0`): the quote falls, so today's price was not on offer a minute
+///   ago. Such an ask has no exposure start and never counts, even resting at its `priceEnd`.
+/// - a fill, an amend, a merge or a sweep that spends the order: the next state is a new UTXO, so
+///   the minute starts again, whatever the order's history; a fill never moves the quote of a
+///   non-decaying ask. A newer custody counts from its own DAA score.
+/// - `minFill`, `maxFill`, FOK / all-or-nothing, the KIP-9 dust bound: the fill-range rule above.
+/// - expiry (soft expiry, the IOC / FOK kill time, the UTC deadline): an ask past it is no
+///   candidate; one not yet past it was live for the whole minute, since these only end it.
+/// - stop / if-done arming, booked exits, curves, pair orders: only plain `KobAsk`s of the
+///   token's own KAS market count. KRON asks are the same states and the same rule.
+/// - unaccepted (mempool) asks: no DAA score, so no exposure.
+///
+/// What is left is real: an ask that buyers of many sizes could take at the low price for a
+/// minute sets the floor at that price. Its poster risks that someone buys it there first
+/// (`docs/ops/executor.md`, "The sale's price floor").
 fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i128, i128)> {
     let (token, program, ext) = *g;
     let tpl = kob_protocol::artifacts::token_template(program).hash;
@@ -340,7 +363,9 @@ fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i
         .into_iter()
         .filter(|c| c.side == Side::Ask && c.is_plain() && c.trigger.is_none() && c.cap > 0)
         .filter(|c| !inp.excluded_outpoints.contains(&outpoint(&mine[c.order].order.utxo)))
-        .filter(|c| mine[c.order].utxo_daa().saturating_add(ASK_REFERENCE_AGE) <= inp.clock.daa)
+        // Open to buyers at this quote for the whole age: a decaying or unaccepted ask has no
+        // exposure start and never counts (R4D-1).
+        .filter(|c| c.touch.is_some_and(|x| x.exposed_since.saturating_add(ASK_REFERENCE_AGE as i64) <= inp.clock.daa as i64))
         .map(|c| (c.quote_frac(), c))
         .collect();
     asks.sort_by(|((a, sa), _), ((b, sb), _)| (a * sb).cmp(&(b * sa)));
@@ -376,8 +401,8 @@ fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i
 /// ([`ask_reference`]).
 pub const SMALL_BUYER_DIV: i64 = 2;
 
-/// A sale's reference counts only asks whose UTXO is at least this many DAA old, about one minute
-/// at 10 blocks a second ([`ask_reference`], R3D-1).
+/// A sale's reference counts only asks open to buyers at their quote for at least this many DAA,
+/// about one minute at 10 blocks a second ([`ask_reference`], R3D-1, R4D-1).
 pub const ASK_REFERENCE_AGE: u64 = 600;
 
 /// The sale of `tokens` (one group) into `bid` for `amount` base units, the operator as taker.

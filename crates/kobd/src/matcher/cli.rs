@@ -38,6 +38,12 @@ pub struct CommonArgs {
     /// File holding the operator's secret key (64 hex, mode 0600). Not the key itself.
     #[arg(long, env = "KOB_OPERATOR_KEY_FILE")]
     pub key_file: Option<PathBuf>,
+    /// Folder of what must survive a restart: the in-flight journal, the keepers' subsidy window
+    /// and the start count, as `kobd --executor` keeps them in its data directory. One folder per
+    /// process; it is created if missing. Without it they live in memory only, so the keepers pay
+    /// no subsidy: a restart would start a fresh budget (R4F-2).
+    #[arg(long, env = "KOB_STATE_DIR")]
+    pub state_dir: Option<PathBuf>,
     /// Build and validate everything, submit nothing.
     #[arg(long)]
     pub dry_run: bool,
@@ -113,6 +119,10 @@ pub struct MatchArgs {
     /// Also run the keepers in this process.
     #[arg(long)]
     pub keep: bool,
+    /// Maintenance: also sell the operator's token UTXOs into the book, above a price floor taken
+    /// from the book's asks (default: off, they are only merged; see `kobd --executor --help`).
+    #[arg(long, env = "KOB_DUST_SELL")]
+    pub dust_sell: bool,
 }
 
 /// `kobd keep`.
@@ -178,8 +188,41 @@ fn run_cfg(c: &CommonArgs, network: String, roles: Roles) -> RunConfig {
         max_book_lag: (c.max_book_lag_daa > 0).then_some(c.max_book_lag_daa),
         // Checked by the command before it gets here.
         select: c.select.config().unwrap_or_default(),
+        state_dir: c.state_dir.clone(),
         ..RunConfig::default()
     }
+}
+
+/// The start check's paths of a keyed role ([`crate::executor::start_paths`]), with the state
+/// folder (or, before it exists, the folder it is made in): its journal and budget files steer
+/// what the runner resends and spends.
+fn keyed_paths(c: &CommonArgs, policy: Option<&std::path::Path>) -> Vec<PathBuf> {
+    let mut paths = crate::executor::start_paths(c.key_file.as_deref(), policy);
+    if let Some(d) = &c.state_dir {
+        let d = std::path::absolute(d).unwrap_or_else(|_| d.clone());
+        paths.extend(d.ancestors().find(|a| a.exists()).map(std::path::Path::to_path_buf));
+    }
+    paths
+}
+
+/// A live run without a state folder keeps its journal and subsidy window in memory only. Each
+/// start would bring a fresh subsidy budget, so it pays none (R4F-2). With one, the folder is
+/// created.
+fn state_rule(cfg: &mut RunConfig) -> anyhow::Result<()> {
+    if cfg.dry_run {
+        return Ok(());
+    }
+    match &cfg.state_dir {
+        Some(d) => std::fs::create_dir_all(d).map_err(|e| anyhow::anyhow!("--state-dir {}: {e}", d.display()))?,
+        None => {
+            if cfg.roles.keeper && cfg.keeper.subsidy_budget > 0 && cfg.keeper.subsidy_max > 0 {
+                tracing::warn!("no --state-dir: the keepers pay no subsidy (its budget would restart with each process); give --state-dir to keep it");
+            }
+            cfg.keeper.subsidy_budget = 0;
+            tracing::warn!("no --state-dir: the in-flight journal is in memory only, so a restart forgets what this run left in the mempool and may plan its coins again (the node refuses those)");
+        }
+    }
+    Ok(())
 }
 
 fn load_key(c: &CommonArgs) -> anyhow::Result<Box<dyn Signer>> {
@@ -255,10 +298,7 @@ pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     let (network, rpc_url) = if a.common.offline { Default::default() } else { a.common.endpoint()? };
     // The start check of `kobd --executor` (R3D-4): this role holds the hot key too.
     if !a.common.offline {
-        crate::executor::refuse_writable_by_others(
-            &network,
-            &crate::executor::start_paths(a.common.key_file.as_deref(), a.inventory_policy.as_deref()),
-        )?;
+        crate::executor::refuse_writable_by_others(&network, &keyed_paths(&a.common, a.inventory_policy.as_deref()))?;
     }
     let signer = load_key(&a.common)?;
     let mut engine = engine_cfg(&a);
@@ -276,6 +316,8 @@ pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     a.liveness.apply(&mut cfg.keeper).map_err(anyhow::Error::msg)?;
     cfg.maintenance.fee_rate = a.common.fee_rate;
     cfg.maintenance.inventory = inventory;
+    cfg.maintenance.sell = a.dust_sell;
+    state_rule(&mut cfg)?;
     let node = WrpcNode::new(WrpcConfig::new(rpc_url.clone()));
     tracing::info!(network = %cfg.network, rpc = %crate::rpc::redact_url(&rpc_url), operator = %kob_protocol::json::to_hex(&signer.pubkey()), dry_run = cfg.dry_run, "matcher starting");
     let mut r = Runner::new(node, FileSource::new(a.common.book_file.clone()), signer, cfg);
@@ -289,7 +331,7 @@ pub async fn run_keep(a: KeepArgs) -> anyhow::Result<()> {
     // `--offline` needs no node (and no network).
     let (network, rpc_url) = if a.common.offline { Default::default() } else { a.common.endpoint()? };
     if !a.common.offline {
-        crate::executor::refuse_writable_by_others(&network, &crate::executor::start_paths(a.common.key_file.as_deref(), None))?;
+        crate::executor::refuse_writable_by_others(&network, &keyed_paths(&a.common, None))?;
     }
     let signer = load_key(&a.common)?;
     let mut cfg = run_cfg(&a.common, network, Roles { matcher: false, keeper: true });
@@ -325,8 +367,51 @@ pub async fn run_keep(a: KeepArgs) -> anyhow::Result<()> {
         }
         return Ok(());
     }
+    state_rule(&mut cfg)?;
     let node = WrpcNode::new(WrpcConfig::new(rpc_url.clone()));
     tracing::info!(network = %cfg.network, rpc = %crate::rpc::redact_url(&rpc_url), operator = %kob_protocol::json::to_hex(&signer.pubkey()), dry_run = cfg.dry_run, "keeper starting");
     let mut r = Runner::new(node, FileSource::new(a.common.book_file.clone()), signer, cfg);
     r.run(shutdown_signal()).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Keep {
+        #[command(flatten)]
+        k: KeepArgs,
+    }
+
+    /// R4F-2: `--state-dir` gives `kobd keep` / `kobd match` the runner's state folder (journal, subsidy window,
+    /// start count), created at the start; without one a live run pays no keeper subsidy, since each start would bring
+    /// a fresh budget. A dry run is left alone.
+    #[test]
+    fn the_state_folder_keeps_the_subsidy_budget_and_without_one_there_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("keep-state");
+        let a = Keep::try_parse_from(["kobd", "--book-file", "book.json", "--state-dir", state.to_str().unwrap()]).unwrap().k;
+        let mut cfg = run_cfg(&a.common, "testnet-10".into(), Roles { matcher: false, keeper: true });
+        a.liveness.apply(&mut cfg.keeper).unwrap();
+        assert_eq!(cfg.state_dir.as_deref(), Some(state.as_path()));
+        let budget = cfg.keeper.subsidy_budget;
+        assert!(budget > 0);
+        state_rule(&mut cfg).unwrap();
+        assert!(state.is_dir(), "created at the start");
+        assert_eq!(cfg.keeper.subsidy_budget, budget);
+        assert!(keyed_paths(&a.common, None).contains(&state), "the start check covers it");
+        // none: no subsidy on a live run, a dry run unchanged
+        let a = Keep::try_parse_from(["kobd", "--book-file", "book.json"]).unwrap().k;
+        let mut cfg = run_cfg(&a.common, "testnet-10".into(), Roles { matcher: false, keeper: true });
+        a.liveness.apply(&mut cfg.keeper).unwrap();
+        assert!(cfg.state_dir.is_none());
+        let mut dry = cfg.clone();
+        dry.dry_run = true;
+        state_rule(&mut dry).unwrap();
+        assert_eq!(dry.keeper.subsidy_budget, budget);
+        state_rule(&mut cfg).unwrap();
+        assert_eq!(cfg.keeper.subsidy_budget, 0);
+    }
 }

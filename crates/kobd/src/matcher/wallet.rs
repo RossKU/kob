@@ -400,6 +400,281 @@ pub fn writable_by_others(paths: &[PathBuf]) -> Vec<(PathBuf, String)> {
 /// volume (no ACL), a folder whose ACL denies this account `READ_CONTROL`, or a drive's root.
 pub const RIGHTS_UNREADABLE: &str = "unknown accounts: its permissions or owner could not be read (a FAT or exFAT drive has none, or its ACL hides them from this account)";
 
+/// DELETE, FILE_DELETE_CHILD, WRITE_DAC, WRITE_OWNER and GENERIC_ALL: the rights that rename or
+/// replace a folder (DELETE on it, FILE_DELETE_CHILD on its parent) or grant them.
+#[cfg_attr(unix, allow(dead_code))]
+const RENAME_BITS: u32 = 0x1_0000 | 0x40 | 0x4_0000 | 0x8_0000 | 0x1000_0000;
+
+/// FILE_WRITE_DATA, FILE_WRITE_ATTRIBUTES and GENERIC_WRITE: on a symbolic link or a junction, what
+/// rewrites its target.
+#[cfg_attr(unix, allow(dead_code))]
+const RETARGET_BITS: u32 = 0x2 | 0x100 | 0x4000_0000;
+
+/// The folders above `paths` that another account can rename or replace, with who can (R4D-2).
+///
+/// Another account that can rename a folder above the kob folder (or a link on the way to it) can
+/// put a whole kob folder of its own in its place, which kobd's checks of the paths themselves
+/// never see. Each folder above each path is checked, on the path as given and on its real path
+/// (links and junctions resolved), up to the drive's or the file system's root; the paths
+/// themselves are [`writable_by_others`]'s. A folder counts when another account has, on it,
+/// DELETE (not on a root, which cannot be renamed), FILE_DELETE_CHILD (it can rename what is in
+/// it), or the right to grant them (WRITE_DAC, WRITE_OWNER, being its owner); an inherit-only
+/// entry does not count, since it grants nothing on the folder itself. A link counts also when
+/// another account can rewrite its target. Unix: an owner other than this account or root, or
+/// writable by group or others without the sticky bit (a link: its owner only).
+///
+/// Whatever kobd creates in `C:\` gets Authenticated Users Modify by inheritance, so a folder made
+/// there by hand (`C:\tools`, holding the kob folder) counts: restrict it as `kobd setup` restricts
+/// the kob folder, or keep kob in the profile (`%LOCALAPPDATA%\kob`). The quickstart folders pass:
+/// the profile, `C:\ProgramData\kob` (ProgramData lets Users add, not delete), `/opt`, `/var/lib`,
+/// the Docker image's `/data`, `/tmp`-like sticky folders.
+pub fn ancestors_changeable_by_others(paths: &[PathBuf]) -> Vec<(PathBuf, String)> {
+    let mut checked: std::collections::BTreeSet<PathBuf> = Default::default();
+    let mut dirs: std::collections::BTreeSet<PathBuf> = Default::default();
+    let mut links: std::collections::BTreeSet<PathBuf> = Default::default();
+    for p in paths.iter().filter(|p| p.exists()) {
+        let given = std::path::absolute(p).unwrap_or_else(|_| p.clone());
+        let real = real_path(p).unwrap_or_else(|| given.clone());
+        checked.insert(given.clone());
+        checked.insert(real.clone());
+        for q in given.ancestors().filter(|q| q.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())) {
+            links.insert(q.to_path_buf());
+        }
+        dirs.extend(given.ancestors().skip(1).map(Path::to_path_buf));
+        dirs.extend(real.ancestors().skip(1).map(Path::to_path_buf));
+    }
+    let mut out = vec![];
+    for d in dirs.iter().filter(|d| !checked.contains(*d)).chain(links.iter()) {
+        let link = links.contains(d);
+        match ancestor_who(d, link) {
+            None => out.push((d.clone(), RIGHTS_UNREADABLE.to_string())),
+            Some(w) if !w.is_empty() => out.push((d.clone(), w)),
+            Some(_) => {}
+        }
+    }
+    out.sort();
+    out.dedup_by(|a, b| a.0 == b.0);
+    out
+}
+
+/// The real path of `p` (links and junctions resolved), without Windows' `\\?\` prefix where a
+/// plain path names the same file.
+fn real_path(p: &Path) -> Option<PathBuf> {
+    let r = std::fs::canonicalize(p).ok()?;
+    #[cfg(windows)]
+    {
+        let s = r.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            return Some(PathBuf::from(format!(r"\\{rest}")));
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\").filter(|x| x.as_bytes().get(1) == Some(&b':')) {
+            return Some(PathBuf::from(rest));
+        }
+    }
+    Some(r)
+}
+
+/// Who other than this account can rename or replace the folder (or retarget the link) `d`
+/// ([`ancestors_changeable_by_others`]), `None` when that cannot be read.
+fn ancestor_who(d: &Path, link: bool) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::symlink_metadata(d).ok()?;
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let me = unsafe { libc::geteuid() };
+        let mut w = vec![];
+        if m.uid() != me && m.uid() != 0 {
+            w.push(format!("its owner, uid {}", m.uid()));
+        }
+        if !link && m.mode() & 0o022 != 0 && !(m.is_dir() && m.mode() & 0o1000 != 0) {
+            w.push(format!("group or others (mode {:o})", m.mode() & 0o777));
+        }
+        Some(w.join(", "))
+    }
+    #[cfg(not(unix))]
+    {
+        let sddl = windows_sddl_of(d)?;
+        let mut mask = RENAME_BITS;
+        if d.parent().is_none() {
+            mask &= !0x1_0000; // a root cannot be renamed
+        }
+        if link {
+            mask |= RETARGET_BITS;
+        }
+        Some(trustee_names(&sddl_on_folder(&sddl, current_sid().as_deref(), mask)))
+    }
+}
+
+/// The other accounts an SDDL lets have `mask` on the object itself (inherit-only entries left
+/// out). A missing DACL (`D:NO_ACCESS_CONTROL`, a FAT drive) lets everyone do everything.
+pub fn sddl_on_folder(sddl: &str, me: Option<&str>, mask: u32) -> Vec<String> {
+    if !sddl.contains("D:") || sddl.contains("D:NO_ACCESS_CONTROL") {
+        return vec!["WD".into()];
+    }
+    sddl_granted(sddl, me, mask, true)
+}
+
+/// The owner and DACL of a file, folder or drive root as SDDL, read from the object itself (a link
+/// or junction is not followed), `None` when they cannot be read.
+#[cfg(windows)]
+fn windows_sddl_of(path: &Path) -> Option<String> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr::null_mut;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateFileW(
+            name: *const u16,
+            access: u32,
+            share: u32,
+            sa: *mut c_void,
+            disp: u32,
+            flags: u32,
+            tpl: *mut c_void,
+        ) -> *mut c_void;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+        fn LocalFree(mem: *mut c_void) -> *mut c_void;
+    }
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn GetSecurityInfo(
+            handle: *mut c_void,
+            object_type: u32,
+            info: u32,
+            owner: *mut *mut c_void,
+            group: *mut *mut c_void,
+            dacl: *mut *mut c_void,
+            sacl: *mut *mut c_void,
+            descriptor: *mut *mut c_void,
+        ) -> u32;
+        fn ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            descriptor: *mut c_void,
+            revision: u32,
+            info: u32,
+            out: *mut *mut u16,
+            len: *mut u32,
+        ) -> i32;
+    }
+    const READ_CONTROL: u32 = 0x2_0000;
+    const SHARE_ALL: u32 = 0x7;
+    const OPEN_EXISTING: u32 = 3;
+    const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const SE_FILE_OBJECT: u32 = 1;
+    const OWNER_AND_DACL: u32 = 0x1 | 0x4;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    // SAFETY: the wide path is NUL-terminated and lives for the call.
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            READ_CONTROL,
+            SHARE_ALL,
+            null_mut(),
+            OPEN_EXISTING,
+            BACKUP_SEMANTICS | OPEN_REPARSE_POINT,
+            null_mut(),
+        )
+    };
+    if handle.is_null() || handle as isize == -1 {
+        return None;
+    }
+    let mut descriptor: *mut c_void = null_mut();
+    // SAFETY: a live handle; the descriptor is allocated by the call and freed below.
+    let rc = unsafe {
+        GetSecurityInfo(handle, SE_FILE_OBJECT, OWNER_AND_DACL, null_mut(), null_mut(), null_mut(), null_mut(), &mut descriptor)
+    };
+    let mut text: *mut u16 = null_mut();
+    // SAFETY: the descriptor is live; the string is allocated by the call.
+    let ok = rc == 0
+        && !descriptor.is_null()
+        && unsafe { ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, 1, OWNER_AND_DACL, &mut text, null_mut()) } != 0
+        && !text.is_null();
+    let sddl = ok.then(|| {
+        // SAFETY: a NUL-terminated UTF-16 string from the conversion.
+        let len = (0..).take_while(|&i| unsafe { *text.add(i) } != 0).count();
+        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, len) })
+    });
+    // SAFETY: allocated by the calls above (or null, which LocalFree accepts); the handle is live.
+    unsafe {
+        LocalFree(text.cast());
+        LocalFree(descriptor);
+        CloseHandle(handle);
+    }
+    sddl
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn windows_sddl_of(_path: &Path) -> Option<String> {
+    None
+}
+
+/// A file system on which Linux cannot set permissions, so `chmod` cannot fix what the start check
+/// finds (R4D-4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForeignMount {
+    /// A Windows drive in WSL (`/mnt/c`: drvfs, 9p).
+    WindowsDrive,
+    /// A host folder bind-mounted into a container (Docker Desktop: grpcfuse, virtiofs, fakeowner).
+    HostFolder,
+    /// A network or shared folder (SMB / CIFS, VirtualBox shared folders).
+    Shared,
+}
+
+impl ForeignMount {
+    /// What is wrong and what to do.
+    pub fn advice(self) -> &'static str {
+        match self {
+            ForeignMount::WindowsDrive => {
+                "it is on a Windows drive mounted in WSL (drvfs), where every file shows mode 777 and chmod changes nothing: move kob to the Linux file system (for example ~/kob inside WSL), or run the Windows kobd.exe on the Windows folder"
+            }
+            ForeignMount::HostFolder => {
+                "it is a host folder bind-mounted into the container (Docker Desktop), whose permissions cannot be set from inside: use a named volume for /data (docker volume create kob-data, then -v kob-data:/data)"
+            }
+            ForeignMount::Shared => {
+                "it is on a network or shared folder whose permissions Linux cannot set: move kob to a local Linux file system"
+            }
+        }
+    }
+}
+
+/// The kind of the mount that holds `path` in a `/proc/self/mountinfo` text, when it is one Linux
+/// cannot set permissions on. The mount is the one with the longest mount point that contains
+/// `path`.
+pub fn foreign_mount_in(mountinfo: &str, path: &Path) -> Option<ForeignMount> {
+    let mut best: Option<(usize, &str)> = None;
+    for line in mountinfo.lines() {
+        let Some((head, tail)) = line.split_once(" - ") else { continue };
+        let Some(point) = head.split(' ').nth(4) else { continue };
+        let Some(fstype) = tail.split(' ').next() else { continue };
+        // mountinfo escapes a space in a path as \040
+        let point = point.replace("\\040", " ");
+        if path.starts_with(&point) && best.is_none_or(|(n, _)| point.len() >= n) {
+            best = Some((point.len(), fstype));
+        }
+    }
+    match best?.1 {
+        "9p" | "v9fs" | "drvfs" => Some(ForeignMount::WindowsDrive),
+        "fuse.grpcfuse" | "grpcfuse" | "virtiofs" | "fakeowner" | "fuse.osxfs" => Some(ForeignMount::HostFolder),
+        "cifs" | "smb3" | "smbfs" | "vboxsf" => Some(ForeignMount::Shared),
+        _ => None,
+    }
+}
+
+/// [`foreign_mount_in`] of this system (Linux), `None` elsewhere.
+pub fn foreign_mount(path: &Path) -> Option<ForeignMount> {
+    #[cfg(target_os = "linux")]
+    {
+        let real = real_path(path).unwrap_or_else(|| path.to_path_buf());
+        foreign_mount_in(&std::fs::read_to_string("/proc/self/mountinfo").ok()?, &real)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 /// Replaces the file's ACL by one full-control entry for the current account (no inherited
 /// entries), then requires that no other account or group may read it.
 ///
@@ -650,6 +925,22 @@ fn sddl_owner(sddl: &str) -> Option<&str> {
 }
 
 fn sddl_granted_to_others(sddl: &str, me: Option<&str>, wanted: u32) -> Vec<String> {
+    sddl_granted(sddl, me, wanted, false)
+}
+
+/// Whether the flags field of an SDDL ACE has the two-letter flag `flag` (`IO`, `ID`, ...), read in
+/// pairs, or as a hexadecimal mask (`bit`).
+fn ace_flag(flags: &str, flag: &[u8; 2], bit: u32) -> bool {
+    if let Some(hex) = flags.strip_prefix("0x").or_else(|| flags.strip_prefix("0X")) {
+        // a mask that does not parse has no flag: an allow then counts
+        return matches!(u32::from_str_radix(hex, 16), Ok(m) if m & bit != 0);
+    }
+    flags.as_bytes().chunks(2).any(|c| c.eq_ignore_ascii_case(flag))
+}
+
+/// [`sddl_granted_to_others`]. With `here_only`, an inherit-only allow is left out: it grants nothing on
+/// the object itself (a folder above the kob folder, R4D-2).
+fn sddl_granted(sddl: &str, me: Option<&str>, wanted: u32, here_only: bool) -> Vec<String> {
     let mut out = vec![];
     if let Some(owner) = sddl_owner(sddl).filter(|o| !own_trustee(o, me)) {
         out.push(owner.to_string());
@@ -670,6 +961,9 @@ fn sddl_granted_to_others(sddl: &str, me: Option<&str>, wanted: u32) -> Vec<Stri
             // order an inherited deny comes after the explicit allows, and an inherit-only one does
             // not apply here. An object or callback allow counts as allowing everything (R3D-6).
             let inherited_or_inherit_only = f[1].contains("ID") || f[1].contains("IO");
+            if here_only && f[0] != "D" && ace_flag(f[1], b"IO", 0x8) {
+                continue;
+            }
             match f[0] {
                 "A" => *allowed.entry(trustee).or_default() |= rights_mask(f[2]).unwrap_or(u32::MAX),
                 "OA" | "XA" | "ZA" => *allowed.entry(trustee).or_default() |= u32::MAX,
@@ -1253,5 +1547,132 @@ mod tests {
         let mut b = b"00112233".to_vec();
         wipe(&mut b);
         assert!(b.iter().all(|x| *x == 0));
+    }
+
+    /// R4D-2: a folder above the kob folder counts when another account can rename it (DELETE, also inherited) or what
+    /// is in it (FILE_DELETE_CHILD), or grant itself that; an inherit-only entry does not count. A folder made in `C:\`
+    /// by hand counts, `C:\`, a profile folder and `C:\ProgramData` do not, and a folder with no DACL (FAT) lets
+    /// everyone.
+    #[test]
+    fn a_folder_above_counts_when_another_account_can_rename_it() {
+        let me = "S-1-5-21-1-2-3-1001";
+        // C:\tools: Authenticated Users Modify inherited from the root's inherit-only entry
+        let tools = format!("O:{me}D:(A;OICIID;FA;;;BA)(A;OICIID;FA;;;SY)(A;OICIID;0x1301bf;;;AU)(A;OICIID;0x1200a9;;;BU)");
+        assert_eq!(sddl_on_folder(&tools, Some(me), RENAME_BITS), vec!["AU".to_string()]);
+        // the root itself: Authenticated Users may add folders, and Modify only inherit-only
+        let root = "O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464D:(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)\
+                    (A;OICI;0x1200a9;;;BU)(A;OICIIO;SDGXGWGR;;;AU)(A;;LC;;;AU)(A;OICIIO;GA;;;CO)";
+        assert!(sddl_on_folder(root, Some(me), RENAME_BITS & !0x1_0000).is_empty());
+        let profile = format!("O:{me}D:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;{me})");
+        assert!(sddl_on_folder(&profile, Some(me), RENAME_BITS).is_empty());
+        // C:\ProgramData: Users may add files and folders (DC, LC: write data, add subfolder), not delete
+        let program_data = "O:SYD:(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICIIO;GA;;;CO)(A;OICI;0x1200a9;;;BU)(A;CI;DCLCRPCR;;;BU)";
+        assert!(sddl_on_folder(program_data, Some(me), RENAME_BITS).is_empty());
+        // delete-child, WRITE_DAC, another owner, no DACL
+        assert_eq!(sddl_on_folder(&format!("O:{me}D:(A;;DT;;;BU)"), Some(me), RENAME_BITS), vec!["BU".to_string()]);
+        assert_eq!(sddl_on_folder(&format!("O:{me}D:(A;;WD;;;WD)"), Some(me), RENAME_BITS), vec!["WD".to_string()]);
+        assert_eq!(
+            sddl_on_folder("O:S-1-5-21-9-9-9-1002D:(A;;FA;;;SY)", Some(me), RENAME_BITS),
+            vec!["S-1-5-21-9-9-9-1002".to_string()]
+        );
+        assert_eq!(sddl_on_folder(&format!("O:{me}D:NO_ACCESS_CONTROL"), Some(me), RENAME_BITS), vec!["WD".to_string()]);
+        // a link others may write (retarget) counts; the same right on a folder does not
+        let w = format!("O:{me}D:(A;;0x12019f;;;BU)");
+        assert!(sddl_on_folder(&w, Some(me), RENAME_BITS).is_empty());
+        assert_eq!(sddl_on_folder(&w, Some(me), RENAME_BITS | RETARGET_BITS), vec!["BU".to_string()]);
+        // the flags are read in pairs: `CIOI` is not inherit-only
+        assert_eq!(sddl_on_folder(&format!("O:{me}D:(A;CIOI;SD;;;BU)"), Some(me), RENAME_BITS), vec!["BU".to_string()]);
+    }
+
+    /// R4D-4: the mount that holds a path, read from `/proc/self/mountinfo`: a Windows drive in WSL, a Docker Desktop
+    /// bind mount and a share are told apart from a native file system (the longest mount point wins).
+    #[test]
+    fn mounts_whose_permissions_linux_cannot_set_are_named() {
+        let info = "\
+22 1 8:32 / / rw,relatime shared:1 - ext4 /dev/sdc rw
+90 22 0:61 / /mnt/c rw,noatime - 9p C:\\134 rw,aname=drvfs;path=C:\\;uid=1000
+91 22 0:62 / /data rw,relatime - fakeowner /run/host_mark/Users rw
+92 22 0:63 / /data/inner rw,relatime - ext4 /dev/sdd rw
+93 22 0:64 / /srv/my\\040share rw - cifs //nas/share rw
+";
+        assert_eq!(foreign_mount_in(info, Path::new("/mnt/c/Users/me/kob")), Some(ForeignMount::WindowsDrive));
+        assert_eq!(foreign_mount_in(info, Path::new("/data/kob.toml")), Some(ForeignMount::HostFolder));
+        assert_eq!(foreign_mount_in(info, Path::new("/data/inner/x")), None, "the longest mount point");
+        assert_eq!(foreign_mount_in(info, Path::new("/srv/my share/kob")), Some(ForeignMount::Shared));
+        assert_eq!(foreign_mount_in(info, Path::new("/home/me/kob")), None);
+        assert_eq!(foreign_mount_in(info, Path::new("/mnt/cc")), None, "a path prefix is not a mount point");
+        for m in [ForeignMount::WindowsDrive, ForeignMount::HostFolder, ForeignMount::Shared] {
+            assert!(!m.advice().contains("chmod go-w"), "{m:?}");
+        }
+    }
+
+    /// R4D-2 on the real file system: a kob folder inside a folder others can change is found through that folder, a
+    /// link on the way is judged itself, and the standard places pass.
+    #[cfg(windows)]
+    #[test]
+    fn a_kob_folder_in_a_folder_others_can_rename_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let icacls = system_program("icacls");
+        let (tools, kob) = (dir.path().join("tools"), dir.path().join("tools").join("kob"));
+        std::fs::create_dir_all(&kob).unwrap();
+        let key = kob.join("op.key");
+        std::fs::write(&key, "x").unwrap();
+        restrict_folder(&kob).unwrap();
+        assert!(ancestors_changeable_by_others(std::slice::from_ref(&key)).is_empty(), "{:?}", dir.path());
+        let ok = std::process::Command::new(&icacls).arg(&tools).args(["/grant", "*S-1-5-11:(OI)(CI)(M)"]).output().unwrap();
+        assert!(ok.status.success());
+        let found = ancestors_changeable_by_others(std::slice::from_ref(&key));
+        assert!(found.iter().any(|(p, who)| p == &tools && who.contains("Authenticated Users")), "{found:?}");
+        assert!(!found.iter().any(|(p, _)| p == &kob), "the restricted kob folder itself cannot be renamed");
+        // a junction in that folder to a clean kob folder: the link itself is judged
+        let clean = dir.path().join("clean");
+        std::fs::create_dir_all(&clean).unwrap();
+        let link = tools.join("j");
+        let ok = std::process::Command::new(system_program("cmd"))
+            .arg("/c")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&link)
+            .arg(&clean)
+            .output()
+            .unwrap();
+        assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stdout));
+        let found = ancestors_changeable_by_others(std::slice::from_ref(&link));
+        assert!(found.iter().any(|(p, _)| p == &link), "{found:?}");
+        // the standard places: the profile, the root, ProgramData
+        let mut standard = vec![PathBuf::from(r"C:\Users")];
+        standard.extend(std::env::var_os("LOCALAPPDATA").map(PathBuf::from));
+        let pd = PathBuf::from(r"C:\ProgramData\Microsoft");
+        if pd.exists() {
+            standard.push(pd);
+        }
+        assert!(ancestors_changeable_by_others(&standard).is_empty(), "{:?}", ancestors_changeable_by_others(&standard));
+    }
+
+    /// The same on Unix: a group- or world-writable folder above (not sticky) counts, a sticky one does not, and a link
+    /// on the way is followed to its real path.
+    #[cfg(unix)]
+    #[test]
+    fn a_kob_folder_in_a_folder_others_can_rename_is_found() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (shared, kob) = (dir.path().join("shared"), dir.path().join("shared").join("kob"));
+        std::fs::create_dir_all(&kob).unwrap();
+        std::fs::set_permissions(&kob, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(ancestors_changeable_by_others(std::slice::from_ref(&kob)).is_empty());
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let found = ancestors_changeable_by_others(std::slice::from_ref(&kob));
+        assert!(found.iter().any(|(p, _)| p == &shared), "{found:?}");
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o1777)).unwrap();
+        assert!(ancestors_changeable_by_others(std::slice::from_ref(&kob)).is_empty(), "a sticky folder");
+        // a link from a clean folder into the shared one: the real path's folders count
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let clean = dir.path().join("clean");
+        std::fs::create_dir_all(&clean).unwrap();
+        std::os::unix::fs::symlink(&kob, clean.join("kob")).unwrap();
+        let found = ancestors_changeable_by_others(&[clean.join("kob")]);
+        assert!(found.iter().any(|(p, _)| p.ends_with("shared")), "{found:?}");
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 }

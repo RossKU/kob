@@ -160,6 +160,15 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
   An executor with other **order** templates does not see this release's orders: compare `template_generation` after the
   upgrade, and on a mismatch the `templates` of `deployment.json`.
 
+### Behaviour changes
+
+- **Maintenance no longer sells by default.** The operator's own token UTXOs are only merged; `--dust-sell` (also
+  `KOB_DUST_SELL`, or `[launch] args = ["--dust-sell"]`) turns the sale on, which accepts that its price floor comes from a
+  book anyone can post into. `--no-dust-sell` is still accepted and does nothing.
+- **Standalone `kobd match` / `kobd keep` take `--state-dir`** (also `KOB_STATE_DIR`) for the in-flight journal and the
+  keepers' subsidy window. Without it they keep both in memory only and pay no keeper subsidy. **Do:** add `--state-dir` to
+  such units (`kobd --executor` is unchanged: it uses its data directory).
+
 ## Changes for wallets, bots and CLI users
 
 - **Direct fill.** A crossing order in the web app can fill from the book directly: the wallet takes the resting orders at

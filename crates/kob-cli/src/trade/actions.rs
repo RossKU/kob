@@ -1801,7 +1801,7 @@ pub fn run_send(args: &[String]) -> i32 {
         // them. An amount in base units reads without them.
         let indexer_only = m.listing == market::Listing::Unlisted
             && matches!(m.decimals_from, market::DecimalsFrom::Lists | market::DecimalsFrom::Market);
-        if indexer_only && entered.is_none() && !amount.trim().to_ascii_lowercase().ends_with("base") {
+        if indexer_only && entered.is_none() && !units::is_base_units(amount) {
             return Err(Fail::from(format!(
                 "{}: its decimals ({}) come from the indexer alone (no registry entry, no KCC-23 declaration), and the amount \
                  reads with them: check them, then give `--decimals {}` to confirm them, or give the amount in base units \

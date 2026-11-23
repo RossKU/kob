@@ -82,6 +82,15 @@ pub fn parse_token_amount(raw: &str, t: &TokenUnit, what: &str) -> Result<i64, S
     Ok(v)
 }
 
+/// Whether `raw` is an amount in base units: digits, then the literal unit `base`.
+///
+/// Such an amount reads without the token's decimals. A ticker that ends in "base" (`5XBASE`)
+/// is not one: its amount reads with them (R4D-3).
+pub fn is_base_units(raw: &str) -> bool {
+    let (num, unit) = split_unit(raw);
+    !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()) && unit == "base"
+}
+
 /// A KAS amount in sompi. `zero_ok` allows zero.
 pub fn parse_kas(raw: &str, what: &str, zero_ok: bool) -> Result<u64, String> {
     let (num, unit) = split_unit(raw);
@@ -301,6 +310,16 @@ mod tests {
             assert!(parse_token_amount(bad, &t, "amount").is_err(), "{bad}");
         }
         assert!(parse_token_amount("12.5", &t, "amount").unwrap_err().contains("no unit"));
+    }
+
+    #[test]
+    fn base_units_are_the_literal_unit_after_digits() {
+        for yes in ["1250base", " 1250base ", "1250 base"] {
+            assert!(is_base_units(yes), "{yes}");
+        }
+        for no in ["5XBASE", "5xbase", "5BASE", "5.0base", "base", "5tokbase", "5base5", "12.5TUSD", ""] {
+            assert!(!is_base_units(no), "{no}");
+        }
     }
 
     #[test]

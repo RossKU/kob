@@ -38,6 +38,11 @@ fn input(tokens: Vec<OwnToken>, orders: Vec<ListedOrder>, funding: Vec<KeyUtxo>)
     }
 }
 
+/// The maintenance defaults with the sale turned on (it is opt-in, `--dust-sell`).
+fn sale() -> MaintenanceConfig {
+    MaintenanceConfig { sell: true, ..Default::default() }
+}
+
 fn run(inp: &MaintenanceInput, cfg: &MaintenanceConfig) -> MaintReport {
     let r = tick(inp, cfg, &signer());
     for j in &r.jobs {
@@ -63,7 +68,7 @@ fn token_outs(j: &kobd::maintenance::MaintJob, p: TemplateId, amount: i64) -> (u
 fn dust_of_one_token_is_merged_into_one_utxo_and_the_carriers_come_back() {
     // five route remainders of an 8x8 token: one transaction, one token UTXO, 40 KAS of carriers back in the change
     let tokens: Vec<OwnToken> = [120, 7, 999, 1, 33].into_iter().map(|a| own(T8, a)).collect();
-    let r = run(&input(tokens, vec![], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(tokens, vec![], vec![]), &sale());
     assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
     let j = &r.jobs[0];
     assert_eq!(j.kind, MaintKind::Merge);
@@ -79,26 +84,39 @@ fn dust_of_one_token_is_merged_into_one_utxo_and_the_carriers_come_back() {
 fn a_merge_takes_what_the_program_allows_and_a_single_utxo_is_left_alone() {
     // Kcc20Ref: three token inputs per transaction
     let tokens: Vec<OwnToken> = (1..=5).map(|a| own(T3, a)).collect();
-    let r = run(&input(tokens, vec![], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(tokens, vec![], vec![]), &sale());
     assert_eq!(r.jobs[0].spends.len(), 3);
     assert_eq!(token_outs(&r.jobs[0], T3, 1 + 2 + 3), (1, Some(CARRIER)), "the oldest first, deterministic");
-    let r = run(&input(vec![own(T8, 5)], vec![], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(vec![own(T8, 5)], vec![], vec![]), &sale());
     assert!(r.jobs.is_empty());
 }
 
 #[test]
 fn kron_tokens_need_the_operators_p2pk_input() {
     let tokens = vec![own(K3, 10), own(K3, 20)];
-    let r = run(&input(tokens.clone(), vec![], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(tokens.clone(), vec![], vec![]), &sale());
     assert!(r.jobs.is_empty());
     assert!(r.skipped.iter().any(|(_, why)| why.contains("P2PK input")), "{:?}", r.skipped);
     // the smallest funding UTXO is the presence; its change returns it
-    let r = run(&input(tokens, vec![], vec![funding(50 * KAS), funding(3 * KAS)]), &MaintenanceConfig::default());
+    let r = run(&input(tokens, vec![], vec![funding(50 * KAS), funding(3 * KAS)]), &sale());
     assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
     let j = &r.jobs[0];
     assert_eq!(j.built.roles.iter().filter(|r| *r == "p2pk").count(), 1);
     assert_eq!(j.built.tx.inputs.iter().filter(|i| i.utxo.amount == 3 * KAS && i.utxo.covenant_id.is_none()).count(), 1);
     assert_eq!(token_outs(j, K3, 30), (1, Some(CARRIER)));
+}
+
+/// The sale is opt-in (`--dust-sell`): any price floor taken from the book can be posted into, so a default operator only
+/// merges. The same holdings and book that sell with the sale on are merged by default.
+#[test]
+fn by_default_the_operators_tokens_are_merged_never_sold() {
+    assert!(!MaintenanceConfig::default().sell);
+    let tokens = vec![own(T8, 1_200), own(T8, 800), own(T8, 500)];
+    let book = vec![l_bid_a(100, T8, 2, P260, 2 * WHOLE), market_ask()];
+    assert_eq!(run(&input(tokens.clone(), book.clone(), vec![]), &sale()).jobs[0].kind, MaintKind::Sell);
+    let r = run(&input(tokens, book, vec![]), &MaintenanceConfig::default());
+    assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
+    assert_eq!(r.jobs[0].kind, MaintKind::Merge);
 }
 
 #[test]
@@ -108,7 +126,7 @@ fn the_operators_tokens_are_sold_into_a_bid_left_after_the_tick() {
     // as one UTXO, the bid pays floor(2,000 x (2.60 + tip) / 1,000) = 5.2 KAS (+ its tips) to the operator
     let tokens = vec![own(T8, 1_200), own(T8, 800), own(T8, 500)];
     let bid = l_bid_a(100, T8, 2, P260, 2 * WHOLE);
-    let r = run(&input(tokens.clone(), vec![bid, market_ask()], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(tokens.clone(), vec![bid, market_ask()], vec![]), &sale());
     assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
     let j = &r.jobs[0];
     assert_eq!(j.kind, MaintKind::Sell, "{:?}", r.skipped);
@@ -118,7 +136,7 @@ fn the_operators_tokens_are_sold_into_a_bid_left_after_the_tick() {
     assert!(j.profit > 2 * P260 - KAS as i64 / 10 && j.profit <= 2 * P260 + 2 * TIP, "proceeds less the fee: {}", j.profit);
     // a bid with room for 4 whole tokens takes all 2,500 base units (no whole-lot remainder any more): one token output, the
     // bid's delivery, and every carrier comes back
-    let r = run(&input(tokens, vec![l_bid_a(100, T8, 2, P260, 4 * WHOLE), market_ask()], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(tokens, vec![l_bid_a(100, T8, 2, P260, 4 * WHOLE), market_ask()], vec![]), &sale());
     assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
     let j = &r.jobs[0];
     assert_eq!(j.kind, MaintKind::Sell, "{:?}", r.skipped);
@@ -127,7 +145,7 @@ fn the_operators_tokens_are_sold_into_a_bid_left_after_the_tick() {
     let pays = 2_500 * (P260 + TIP) / WHOLE; // exact: 2,500 x 260,100,000 is a multiple of 1,000
     assert!(j.profit > pays - KAS as i64 / 10 && j.profit <= pays, "proceeds less the fee: {}", j.profit);
     // selling off: the same dust is merged instead
-    let cfg = MaintenanceConfig { sell: false, ..Default::default() };
+    let cfg = MaintenanceConfig { sell: false, ..sale() };
     let r = run(&input(vec![own(T8, 1_200), own(T8, 800)], vec![l_bid_a(100, T8, 2, P260, 4 * WHOLE)], vec![]), &cfg);
     assert_eq!(r.jobs[0].kind, MaintKind::Merge);
 }
@@ -155,7 +173,7 @@ fn a_sale_that_does_not_pay_its_fee_is_a_merge() {
         receive: vec![],
     };
     // (no price floor here: this is the fee rule alone)
-    let cfg = MaintenanceConfig { sell_floor_bps: 0, ..Default::default() };
+    let cfg = MaintenanceConfig { sell_floor_bps: 0, ..sale() };
     let r = run(&input(tokens, vec![low], vec![]), &cfg);
     assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
     assert_eq!(r.jobs[0].kind, MaintKind::Merge);
@@ -173,21 +191,21 @@ fn bounded_per_tick_and_nothing_a_pending_transaction_spends() {
             tokens.push(o);
         }
     }
-    let cfg = MaintenanceConfig { max_jobs: 2, ..Default::default() };
+    let cfg = MaintenanceConfig { max_jobs: 2, ..sale() };
     let r = run(&input(tokens.clone(), vec![], vec![]), &cfg);
     assert_eq!(r.jobs.len(), 2);
     // the outpoints pending transactions spend are left alone: one UTXO of the first token is not enough for a merge
     let mut inp = input(tokens, vec![], vec![]);
     inp.excluded_outpoints.insert(outpoint(&inp.tokens[0].token.utxo));
-    let r = run(&inp, &MaintenanceConfig::default());
+    let r = run(&inp, &sale());
     assert_eq!(r.jobs.len(), 2);
     assert!(r.jobs.iter().all(|j| j.token != token_a(T8)));
     // a bid a pending transaction fills is not sold into either
     let mut inp = input(vec![own(T8, 1_000), own(T8, 1_000)], vec![l_bid_a(100, T8, 2, P260, 4 * WHOLE)], vec![]);
     inp.excluded.insert(cid(100));
-    assert_eq!(run(&inp, &MaintenanceConfig::default()).jobs[0].kind, MaintKind::Merge);
+    assert_eq!(run(&inp, &sale()).jobs[0].kind, MaintKind::Merge);
     // and nothing at all when switched off
-    let off = MaintenanceConfig { enabled: false, ..Default::default() };
+    let off = MaintenanceConfig { enabled: false, ..sale() };
     assert!(run(&input(vec![own(T8, 1), own(T8, 2)], vec![], vec![]), &off).jobs.is_empty());
 }
 
@@ -197,7 +215,7 @@ fn tokens_of_other_owners_or_in_custody_are_never_touched() {
     other.token.state = tstate(T8, 5, pk(2), false);
     let mut custody = own(T8, 6);
     custody.token.state = tstate(T8, 6, pk(MATCHER), true);
-    let r = run(&input(vec![own(T8, 1), other, custody], vec![], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(vec![own(T8, 1), other, custody], vec![], vec![]), &sale());
     assert!(r.jobs.is_empty(), "one own UTXO only");
 }
 
@@ -205,15 +223,15 @@ fn tokens_of_other_owners_or_in_custody_are_never_touched() {
 fn maintenance_pays_the_low_rate_and_a_sale_only_what_it_earns() {
     let fees = |low: u64| kobd::fee::FeeRates { floor: 100, low, normal: 500, high: 900, max_tx_fee: 0, estimated: true };
     // a merge: housekeeping, the low rate
-    let cfg = MaintenanceConfig { sell: false, fees: fees(130), ..Default::default() };
+    let cfg = MaintenanceConfig { sell: false, fees: fees(130), ..sale() };
     let r = run(&input(vec![own(T8, 1_200), own(T8, 800)], vec![], vec![]), &cfg);
     assert_eq!(r.jobs[0].kind, MaintKind::Merge, "{:?}", r.skipped);
     assert_eq!(r.jobs[0].built.fee.fee_rate, 130);
     // the default: the floor
-    let r = run(&input(vec![own(T8, 1_200), own(T8, 800)], vec![], vec![]), &MaintenanceConfig { sell: false, ..Default::default() });
+    let r = run(&input(vec![own(T8, 1_200), own(T8, 800)], vec![], vec![]), &MaintenanceConfig { sell: false, ..sale() });
     assert_eq!(r.jobs[0].built.fee.fee_rate, 100);
     // a sale at a low rate it pays easily
-    let cfg = MaintenanceConfig { fees: fees(150), ..Default::default() };
+    let cfg = MaintenanceConfig { fees: fees(150), ..sale() };
     let bids = vec![l_bid_a(100, T8, 2, P260, 4 * WHOLE), market_ask()];
     let r = run(&input(vec![own(T8, 1_200), own(T8, 800)], bids, vec![]), &cfg);
     assert_eq!((r.jobs[0].kind, r.jobs[0].built.fee.fee_rate), (MaintKind::Sell, 150), "{:?}", r.skipped);
@@ -229,12 +247,12 @@ fn accumulated_surplus_inventory_is_never_sold() {
     let tokens = vec![own(T8, 1_200), own(T8, 800)];
     let bids = vec![l_bid_a(100, T8, 2, 50_000_000, 4 * WHOLE), l_bid_a(101, T8, 3, P260, 4 * WHOLE), market_ask()];
     // unlisted: sold into the best bid
-    let r = run(&input(tokens.clone(), bids.clone(), vec![]), &MaintenanceConfig::default());
+    let r = run(&input(tokens.clone(), bids.clone(), vec![]), &sale());
     assert_eq!(r.jobs[0].kind, MaintKind::Sell);
     let listed = InventoryToken { token: token_a(T8), ref_price: None, min_amount: None, max_amount: None };
     for on in [true, false] {
         let inventory = InventoryPolicy { accept_surplus_tokens: on, tokens: vec![listed.clone()], ..Default::default() };
-        let cfg = MaintenanceConfig { inventory, ..Default::default() };
+        let cfg = MaintenanceConfig { inventory, ..sale() };
         let r = run(&input(tokens.clone(), bids.clone(), vec![]), &cfg);
         assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
         assert_eq!(r.jobs[0].kind, MaintKind::Merge, "switch {on}: merged, never sold");
@@ -275,28 +293,28 @@ fn a_sale_never_goes_below_the_price_floor() {
     let held = vec![own(T8, 500 * WHOLE), own(T8, 500 * WHOLE)];
     let low = untipped_bid(900, 7, 100_000, 1_000 * WHOLE);
     // no asks at all: nothing to price the sale against, merged
-    let r = run(&input(held.clone(), vec![low.clone()], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(held.clone(), vec![low.clone()], vec![]), &sale());
     assert!(r.jobs.iter().all(|j| j.kind == MaintKind::Merge), "{:?}", r.skipped);
     assert!(r.skipped.iter().any(|(_, why)| why.starts_with("sell: no resting asks")), "{:?}", r.skipped);
     // asks at the market (2.70, 10 whole): too few to price 1,000 whole tokens, merged
-    let r = run(&input(held.clone(), vec![low.clone(), market_ask()], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(held.clone(), vec![low.clone(), market_ask()], vec![]), &sale());
     assert!(r.jobs.iter().all(|j| j.kind == MaintKind::Merge), "{:?}", r.skipped);
     // asks deep enough at the market: the low bid is far below 90 % of their price, merged
     let deep = l_ask_a(301, T8, 9, 270_000_000, 2_000 * WHOLE);
-    let r = run(&input(held.clone(), vec![low.clone(), deep.clone()], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(held.clone(), vec![low.clone(), deep.clone()], vec![]), &sale());
     assert!(r.jobs.iter().all(|j| j.kind == MaintKind::Merge), "{:?}", r.skipped);
     assert!(r.skipped.iter().any(|(_, why)| why.contains("below 9000 bps")), "{:?}", r.skipped);
     // a bid at 2.50 (93 % of the asks' 2.70) with room for all of it: sold
     let fair = untipped_bid(901, 8, 250_000_000, 1_000 * WHOLE);
-    let r = run(&input(held.clone(), vec![low.clone(), fair, deep.clone()], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(held.clone(), vec![low.clone(), fair, deep.clone()], vec![]), &sale());
     assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
     assert_eq!((r.jobs[0].kind, r.jobs[0].order), (MaintKind::Sell, Some(cid(901))));
     // a bid at 2.40 (89 %): merged
     let under = untipped_bid(902, 8, 240_000_000, 1_000 * WHOLE);
-    let r = run(&input(held.clone(), vec![under, deep], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(held.clone(), vec![under, deep], vec![]), &sale());
     assert!(r.jobs.iter().all(|j| j.kind == MaintKind::Merge), "{:?}", r.skipped);
     // the floor switched off (0): any bid that pays the fee, as before
-    let off = MaintenanceConfig { sell_floor_bps: 0, ..Default::default() };
+    let off = MaintenanceConfig { sell_floor_bps: 0, ..sale() };
     let r = run(&input(held, vec![low], vec![]), &off);
     assert_eq!((r.jobs[0].kind, r.jobs[0].order), (MaintKind::Sell, Some(cid(900))), "{:?}", r.skipped);
 }
@@ -311,7 +329,7 @@ fn overflowing_holdings_are_left_alone() {
         o.token.utxo.covenant_id = Some([0x01; 32]);
         held.push(o);
     }
-    let r = run(&input(held, vec![], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(held, vec![], vec![]), &sale());
     assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
     assert_eq!((r.jobs[0].kind, r.jobs[0].token), (MaintKind::Merge, [0x01; 32]));
     assert!(r.skipped.iter().any(|(t, why)| *t == token_a(T8) && why.contains("overflow")), "{:?}", r.skipped);
@@ -327,11 +345,11 @@ fn a_sale_into_a_mode1_bid_goes_through_its_bought_custody() {
     let held = TokenUtxo { utxo: utxo(CARRIER, 900, Some(token_a(T8))), state: tstate(T8, 500, cid(100), true) };
     let mut with = bid.clone();
     with.bought_custody = Some(held);
-    let r = run(&input(tokens.clone(), vec![with, market_ask()], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(tokens.clone(), vec![with, market_ask()], vec![]), &sale());
     let j = &r.jobs[0];
     assert_eq!((j.kind, j.order), (MaintKind::Sell, Some(cid(100))), "{:?}", r.skipped);
     assert!(j.spends.len() >= 3, "the operator's tokens and the bought-custody are spent");
     // custody missing: the covenant would refuse, so the bid is not a buyer (the dust is merged)
-    let r = run(&input(tokens, vec![bid, market_ask()], vec![]), &MaintenanceConfig::default());
+    let r = run(&input(tokens, vec![bid, market_ask()], vec![]), &sale());
     assert_eq!(r.jobs[0].kind, MaintKind::Merge, "{:?}", r.skipped);
 }

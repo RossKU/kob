@@ -303,12 +303,12 @@ matcher and keeper options (C, "Running"):
 | `--no-fee-estimate`, `--fee-max-rate`, `--fee-max-tx-kas`, `--fee-refresh-ms`, `--fee-max-age-ms` | off, 1000, 1, 10000, 60000 | the fee policy (C, "Fee policy"): each transaction pays its urgency's bucket of the node's fee estimate within these bounds, the x402 facilitator's intent executions and expiries included |
 | `--min-profit`, `--max-tx-bytes`, `--no-chain`, `--no-arm` | as C | matcher (`--no-arm`: no updates; stops the batch fills next to their evidence still trigger) |
 | `--max-funding-inputs`, `--funding-target-utxos`, `--consolidate-funding` | 8, 4, 2 | how a batch picks the operator's funding (C, "Keys and funds") |
-| `--no-maintenance`, `--no-dust-sell`, `--maintenance-max-jobs` | off, off, 2 | the operator's own token UTXOs: merge and sell (C, "Maintenance") |
+| `--no-maintenance`, `--dust-sell`, `--maintenance-max-jobs` | off, off, 2 | the operator's own token UTXOs: merge, and with `--dust-sell` (opt-in; also `$KOB_DUST_SELL`) sell above the book's price floor (C, "Maintenance"); `--no-dust-sell` is accepted and does nothing |
 | `--inventory-policy <file>` | none (off) | the surplus-inventory policy (C, "Surplus inventory"): the pair surpluses the operator may accumulate as inventory; maintenance never sells a listed token (also on `match`) |
 | `--no-refund`, `--sweep-own-strays`, `--return-foreign-strays`, `--keeper-min-profit` | as C | keepers (`--keeper-min-profit` is `keep --min-profit`) |
 | `--no-lock-release` | off | keepers: do not release the automatic creator locks that are due (`docs/spec/creator-lock-auto.md`) |
 | `--keeper-subsidy-max-kas`, `--keeper-replace-after-daa`, `--keeper-max-replacements` | 0.05, 100, 3 | keepers' liveness under fee pressure (C, "Fee policy"): the most KAS of its own funding the operator adds to one kill or refund its tip cannot pay at its urgency's rate (0: off); replace a stuck kill or refund of this process after this many DAA, at most this many times (0: never). Also on `keep` and `match --keep` |
-| `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` | 1, 864000, 8 | the operator's total keeper subsidy: at most this many KAS within any rolling window of this many DAA (864,000 = 24 hours: 1 KAS a day by default; kept across restarts), replacements included, and at most this many subsidised kills and refunds per tick; past either, jobs go at the rate their own tip pays (budget 0 or max jobs 0: no subsidy). Also on `keep` and `match --keep` |
+| `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` | 1, 864000, 8 | the operator's total keeper subsidy: at most this many KAS within any rolling window of this many DAA (864,000 = 24 hours: 1 KAS a day by default; kept across restarts), replacements included, and at most this many subsidised kills and refunds per tick; past either, jobs go at the rate their own tip pays (budget 0 or max jobs 0: no subsidy). Also on `keep` and `match --keep`, kept across restarts there only with `--state-dir` (without it: no subsidy) |
 | `--no-weighted-select`, `--select-alpha`, `--select-max-defer-daa`, `--select-min-share`, `--select-seed` | on, 1, 30, 0.1, OS randomness | the weighted selection among competing executors (C, "Competing executors"; `docs/spec/matcher.md` §3.6): off plans deterministically; the weight exponent; the starvation bound in DAA; the lowest share of the optional work per tick; a fixed seed for a reproducible run. Also on `match` and `keep` |
 
 Next to `kobd --executor`: `kobd address-balance [--dir D]` (the key's address and plain balance as one JSON object, from the configured
@@ -987,7 +987,7 @@ kaspad --utxoindex --retention-period-days=7 --disable-upnp \
 * `--unsaferpc` is **not** needed and must not be set: VSPC v2, `getUtxosByAddresses`,
   `getBlock` and `getBlockDagInfo` all work in safe mode [F]. CI should grep the unit file.
 * wRPC JSON is plain `ws://`; keep it on loopback or a private network and never expose it.
-  Firewall everything except P2P 16111.
+  Firewall everything except P2P (16111 on mainnet, 16211 on testnet-10).
 * The node DB upgrade is one-way and a missed fork splits the node: upgrade TN10 first, then the
   standby, then the primary. `getServerInfo.serverVersion` is exposed in `/v1/health`
   (`node_version`); alert when it trails the newest release.
@@ -2057,7 +2057,19 @@ stall or drain any executor:
   folder and the `--inventory-policy` file when another account can change them (write, add a file, delete, change the
   ACL, own it; Unix: owned by another account than this one or root, or group- or world-writable, a sticky folder excepted;
   audit D-2, R3D-3, R3D-6), or when their permissions or owner cannot be read (refused on mainnet: nobody can tell who may
-  change them). `kobd match` and `kobd keep` check the same. On mainnet it refuses to start; on testnet-10 it warns and goes on, since a folder at
+  change them). The log file and its folder are checked too (R4D-I2). So is every folder above these paths, up to the
+  drive's or file system's root, on the path as given and on its real path (links and junctions resolved; a link others
+  can retarget counts): a folder counts when another account can rename it or what is in it (Windows: DELETE on it,
+  delete-child, or the right to grant them, an inherit-only entry not counting; Unix: owned by another account than this
+  one or root, or group- or world-writable without the sticky bit), since it could then put a whole kob folder of its own
+  in place of yours (R4D-2). The quickstart folders pass (`%LOCALAPPDATA%\kob`, `C:\ProgramData\kob` after `kobd setup`,
+  `/opt/kob`, `/var/lib/...` under systemd, the Docker image's `/data`). A folder made by hand directly under a drive's root
+  (`C:\tools`, holding `C:\tools\kob`) gets Authenticated Users Modify by inheritance and is refused: restrict it as `kobd
+  setup` restricts the kob folder (the printed `icacls` line) or move kob into the profile. Where permissions cannot be
+  set the refusal says so instead of printing a command that cannot work (R4D-4): a Windows drive in WSL (`/mnt/c`, every
+  file mode 777: move kob to the Linux file system, e.g. `~/kob`), a Windows folder bind-mounted into Docker Desktop as
+  `/data` (use a named volume), a network share, and a drive's root (`D:\kobd.exe`: use a folder). `kobd match`, `kobd
+  keep` and `kobd withdraw` check the same. On mainnet it refuses to start; on testnet-10 it warns and goes on, since a folder at
   the root of a Windows drive (`C:\kob`, the quickstart's earlier example) inherits that right for Authenticated Users.
   The refusal names the groups and accounts by name (Users, Everyone, Authenticated Users, ...), not by their SDDL aliases (BU, WD, AU), and prints the exact command, e.g. `icacls "C:\kob\kob-operator.key" /inheritance:r /grant:r "MYPC\alice:F"`. The fix: `icacls <file> /inheritance:r /grant:r <account>:F` (quickstart 5). `remove_var` does not scrub the environment
   block: prefer a key file or a systemd credential. `--pause-file` also stops resends of transactions a reorg moved back to
@@ -2530,14 +2542,14 @@ runs and is down only for the swap:
 
 **What is not done, and why.** Folding `token_utxos` into `token_holdings` (they overlap for the custody UTXOs whose state was proven; there is no constraint that makes that
 true for every row, and a strayed or unproven UTXO is only in `token_utxos`), deriving the `create` events from the orders (1.09 million events, about 0.17 GB net or 4 % of the file; the create item of an order would need an id of its own
-in the event pages, which are cursored by event id, and the revert and lean paths read the rows) and a zstd record log (on a 64 MiB sample of a segment gzip level 6 gives 2.9x and zstd level 3 gives 3.7x: about 0.2 GB of the 0.9 GB of sealed segments; it needs a C dependency, and an older build could not read the segments) are left out. What remains large (schema 9): the holdings (881 MB: the table 483, the `(txid, idx)` key 179, the five other indexes 219), the order UTXOs (605, of which the key 110) and
+in the event pages, which are cursored by event id, and the revert and lean paths read the rows) are left out (the record log's sealed segments have been zstd since 2026-11-19, below). What remains large (schema 9): the holdings (881 MB: the table 483, the `(txid, idx)` key 179, the five other indexes 219), the order UTXOs (605, of which the key 110) and
 the order events (602). `ids` keeps a row per owner and token ever seen (65 bytes each); the lean pruning does not delete them.
 
 The tools in `tools/soak` that read a database file directly (`chart-history.mjs`; `import-history.mjs` and `carry-history`, which copy the rows
-of older stores into a stopped executor's) use the candles and the fills' prices, which are unchanged. They write a store of schema 9 (the executor must have migrated it first) and read a
+of older stores into a stopped executor's) use the candles and the fills' prices, which are unchanged. They write a store of schema 14 (the executor must have migrated it first) and read a
 source store of any layout. The two importers copy
 `orders.genesis_state` and `order_events.detail` as they are: from a source of schema 6 or older (whole values) that is a valid row; a source
-written by schema 7, 8 or 9 has packed values that name dictionary columns (maker, token) the destination row may not have, so it must not be
+written by schema 7 or later has packed values that name dictionary columns (maker, token) the destination row may not have, so it must not be
 imported that way.
 
 #### 7.6b Giving the pruned space back: `kobd db vacuum`
@@ -2643,7 +2655,7 @@ To keep a public read server up during a rebuild, build the new store beside the
 (`docs/ops/chart-server.md`, section 6).
 
 **Backups on Windows.** `sqlite3` is not part of Windows: use SQLite's command-line tools from sqlite.org for `VACUUM INTO`, or
-back up the record log only (it is the asset; `robocopy <kob-data>ecords <backup>ecords /E`) and rebuild the database from it.
+back up the record log only (it is the asset; `robocopy <kob-data>\records <backup>\records /E`) and rebuild the database from it.
 A plain copy of `index.sqlite3` is consistent only while the indexer is stopped.
 
 Or move the database aside and rebuild it from the whole log with a plain `replay` (7.6). `replay --onto-database`
@@ -3052,8 +3064,8 @@ bucket of its urgency:
   them costs the operator up to `--keeper-subsidy-max-kas`, with no bound on the total. A subsidy is charged when its
   transaction is submitted (also a submit or replacement without a verdict, which may still be accepted) and never given
   back for a transaction that is not accepted: the budget counts at least what the operator paid. The window is kept in
-  `<data_dir>/keeper-subsidy.json` (written on every charge): a restart continues it, so restarts add no budget; a deleted
-  data directory starts it empty. Each charge also records the local time: it counts for at least one window of local
+  `<data_dir>/keeper-subsidy.json` (written on every charge; `kobd keep` and `kobd match --keep`: in the `--state-dir` folder, and
+  without one no subsidy at all): a restart continues it, so restarts add no budget; a deleted data directory starts it empty. Each charge also records the local time: it counts for at least one window of local
   time (at 10 DAA a second) and at most two, and in between while the chain's DAA score says it is in the window, so a
   node reporting a DAA score far ahead cannot erase the window. A per-maker cap would not help
   (maker keys are free). Using it up is logged once (`keeper subsidy budget of the window used up`); metric
@@ -3140,7 +3152,7 @@ matcher enabled (the Executor's default), the runner runs the maintenance jobs
 
 | Job | When | Transaction |
 |---|---|---|
-| sell | a plain `KobBid` of the token's market (program, extension commitment), live, not spent by a pending transaction or backed off, accepts a fill of what the operator holds (at least its minimum fill, or a fill that ends it), the `--inventory-policy` file does not list the token (surplus inventory is the owner's to sell), the bid pays at least 90 % of what the book's resting plain asks of the market charge for the same amount (the price floor, below), and the sale pays more than its fee (`proceeds − fee ≥ 0`) | the operator, as taker, sells as many base units as the best such bid takes (highest all-in per base unit, then age) from up to the program's token inputs; the bid delivery is the bid's; the unsold rest comes back as one token UTXO; the bid's KAS and the freed carriers go to the change |
+| sell (opt-in: `--dust-sell`) | a plain `KobBid` of the token's market (program, extension commitment), live, not spent by a pending transaction or backed off, accepts a fill of what the operator holds (at least its minimum fill, or a fill that ends it), the `--inventory-policy` file does not list the token (surplus inventory is the owner's to sell), the bid pays at least 90 % of what the book's resting plain asks of the market charge for the same amount (the price floor, below), and the sale pays more than its fee (`proceeds − fee ≥ 0`) | the operator, as taker, sells as many base units as the best such bid takes (highest all-in per base unit, then age) from up to the program's token inputs; the bid delivery is the bid's; the unsold rest comes back as one token UTXO; the bid's KAS and the freed carriers go to the change |
 | merge | otherwise, the operator holds at least 2 token UTXOs of the token | up to the program's token inputs (`Kcc20Ref` 3, 8/8 8, KRON 4; the oldest first) become one token UTXO; the other carriers go to the change (fee only, about 0.01 KAS) |
 
 At most `--maintenance-max-jobs` (2) per tick; their inputs are reserved like every pending transaction's, so the next tick
@@ -3148,20 +3160,55 @@ continues with what is left. KCC-20 jobs pay their fee from the carriers they fr
 presence takes the smallest funding UTXO (the presence; its change returns it). Every job is built with the `kob-protocol`
 builders (`SendTokens`, a taker `Batch`), signed and validated in the engine, submitted with kind `merge` / `sell` and logged
 (`maintenance: the operator's token UTXOs`, with `released`: the carriers it moves back to the funding). A sale runs only on
-bids the matcher's tick left: a bid that crosses an ask is the matcher's. `--no-dust-sell` merges only; `--no-maintenance`
-turns both off.
+bids the matcher's tick left: a bid that crosses an ask is the matcher's. `--no-maintenance` turns both off.
 
-**The sale's price floor** (`MaintenanceConfig::sell_floor_bps`, default 9,000). A sale is housekeeping, not trading, so it
+**The sale is opt-in** (`--dust-sell`, also `$KOB_DUST_SELL`; in `kobd.toml` `[launch] args = ["--dust-sell"]`; `kobd match --dust-sell`).
+By default maintenance only merges, and unsold holdings stay with the operator key, merged. Why: a third-party operator must be
+safe by default, and any price floor taken from the book can be posted into (the residual in the floor section below). An
+operator who turns the sale on accepts that residual for the tokens the `--inventory-policy` file does not list. `--no-dust-sell`,
+the earlier switch, is still accepted and does nothing (one line in the log says so).
+
+**The sale's price floor** (`MaintenanceConfig::sell_floor_bps`, default 9,000; only with `--dust-sell`). A sale is housekeeping, not trading, so it
 never goes far below the market: the bid must pay at least 90 % of what the book's resting plain asks of the token's market
 charge for the same amount, the cheapest first, as many as it takes to cover it (the price of the ask that completes the
 amount). Each ask counts only for what a buyer of the rest of the amount can take from it in one fill (its minimum fill, its
 FOK range, the dust bound of a partial fill): an all-or-nothing ask larger than the holding counts for nothing (audit
 2026-11-23 D-1). An ask also counts only when one fill of it ranges over at least half the amount, from its minimum fill
 to the most one fill takes (its `maxFill` and dust bound), and only when it is not FOK: an ask that sells to buyers of one
-size only is the poster's own sale (R2D-1, R3D-1). And its UTXO must be at least 600 DAA (about one minute) old: an ask
-placed, filled or amended in the last minute is left out until it is a minute old, which bounds how long a planted ask is
-open to other buyers. These rules leave out honest small asks and honest asks that just traded, never the other way, so in
-a thin or busy book the sale is skipped (`sell: no resting asks ...`) rather than priced too low. With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
+size only is the poster's own sale (R2D-1, R3D-1). And it must have been open to every buyer at the price it now offers
+for at least 600 DAA (about one minute): from the latest of its UTXO's DAA score plus its TWAP `interval`, its custody's DAA
+score and its `activeFrom`, the exposure the covenants measure for a stop's evidence (R4D-1). An ask placed, filled or
+amended in the last minute is left out until it has been open a minute, and a decaying ask (an auction) never counts.
+These rules leave out honest small asks, honest asks that just traded and honest auctions, never the other way, so in
+a thin or busy book the sale is skipped (`sell: no resting asks ...`) rather than priced too low.
+
+Why no order kind or field makes an ask count for longer or for more than buyers could take (each has a test in
+`crates/kobd/tests/sec_exec_maintenance.rs`):
+
+| Kind or field | Why it cannot fake the floor |
+|---|---|
+| `activeFrom` | no fill is valid before it, so the minute starts there (`an_ask_that_activates_late_...`) |
+| TWAP / DCA `interval` | a slice is fillable only `interval` DAA after its UTXO, so the minute starts there (`a_twap_slice_counts_a_minute_after_it_opens`) |
+| decay, auction (`slope`, `priceEnd`) | the quote only falls, so today's price was not on offer a minute ago; such an ask never counts, even resting at its end price (`a_decaying_ask_...`) |
+| `minFill`, `maxFill`, the dust bound of a partial fill | one fill must range over at least half the amount (`a_max_fill_capped_ask_...`, `an_all_or_nothing_ask_...`) |
+| FOK, all-or-nothing, stacks of them | never count (`a_fok_ask_...`, `an_exact_size_all_or_nothing_ask_...`) |
+| a fill, a partial fill, an amend, a merge or sweep that spends the order | the next state is a new UTXO, so the minute starts again; a fill never moves a non-decaying quote (`a_fresh_ask_...`) |
+| a custody newer than the order UTXO | the minute starts at the custody's DAA score (`an_ask_counts_from_its_newer_custody`) |
+| expiry (soft expiry, the IOC / FOK kill time, the 90-day idle limit, a UTC deadline) | an ask past it is no candidate; one not yet past it was live the whole minute, since these only end an ask (`an_expired_ask_...`) |
+| stop and if-done arming, booked exits that merge their entry, curve levels, pair asks | only plain `KobAsk`s of the token's own KAS market count (`only_plain_asks_set_the_sale_floor`) |
+| KRON forms | the same states and the same rule; every test runs in both families |
+| an unaccepted (mempool) ask | no DAA score, so no exposure (`an_unaccepted_ask_...`) |
+
+**What is left.** An attacker who leaves a real ask of at least half the sale's size buyable at a low price P for a minute
+sets the floor at P, and its own bid at 90 % of P then takes the holding. The cost is the risk that someone else buys the
+ask at P first. Where executors are active and any bid at or above P rests on the book, the first executor tick fills the
+ask against it (the operator's own matcher included), so the attack loses the attacker the difference; and while such a
+bid rests, the sale goes to it rather than to the attacker's lower bid. Where there are no executors and no such bid, only a
+taker who notices the ask within the minute stands in the way, which in a quiet market is little. So the loss is bounded
+by the operator key's holding of tokens the `--inventory-policy` file does not list: the matcher leaves none there by
+default (a route delivers every unit it buys), so it is tokens sent to the key, or inventory left after its token was
+removed from the policy file. This is why the sale is off by default: an operator who passes `--dust-sell` accepts it. With
+the sale on, keep that holding at zero or list such tokens in the policy file (they are then only merged). With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
 as well); the skipped sale is logged with its reason (`sell: no resting asks ...`, `sell: the best bid pays ... below 9000 bps
 of the asks' price`). A low bid alone therefore never takes a holding, and an ask posted to lower the reference must itself offer
 the whole amount at that price to everyone. `0` turns the floor off (any bid that pays the fee, the earlier rule).
@@ -3170,7 +3217,7 @@ the whole amount at that price to everyone. `0` turns the floor off (any bid tha
 accumulates on purpose; the owner sells it off-matcher. The sale job skips it (`sell: surplus inventory (the owner sells
 it off-matcher)`), whether or not `acceptSurplusTokens` is on, and only merges its UTXOs. This also keeps the inventory
 away from the sale entirely; the price floor above covers what the policy file does not list (a token removed from it, or a
-run without the file). Unlisted tokens (stray dust) are sold under the floor.
+run without the file). Unlisted tokens (stray dust) are only merged, or with `--dust-sell` sold under the floor.
 
 ### Node
 
@@ -3570,6 +3617,8 @@ kobd keep --network testnet-10 --book-file book.json --metrics-file /var/lib/nod
 | `--select-min-share` | 0.1 | the lowest share of the optional work per tick the races may push the executor to (room for `1 / share` executors) |
 | `--select-seed` | OS randomness | seed of the selection's random source (a reproducible run) |
 | `--keep` (match) | off | run the keepers too |
+| `--dust-sell` (match) | off | maintenance also sells the operator's token UTXOs above the book's price floor (opt-in; also `$KOB_DUST_SELL`; C, "Maintenance"); off, it only merges them |
+| `--state-dir` | none | the folder of what must survive a restart, one per process (also `$KOB_STATE_DIR`; created if missing; covered by the start check): the in-flight journal, the keepers' subsidy window and the start count (Restarts). Without it they are in memory only, and the keepers pay no subsidy |
 | `--no-refund` (keep) | off | disable refunds, kills and closes |
 | `--keeper-subsidy-max-kas` (keep, match) | 0.05 | the most KAS of the operator's funding added to the fee of one kill or refund whose tip pays the floor but not its urgency's rate (0: off; see Fee policy) |
 | `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` (keep, match) | 1, 864000, 8 | the most KAS of subsidy all kills and refunds together (replacements included) take within any rolling window of this many DAA, and the most subsidised jobs per tick; past either, jobs go at the rate their tip pays (0: no subsidy; see Fee policy, Subsidy budget) |
@@ -3584,11 +3633,13 @@ A systemd unit for the keyed role:
 ```
 [Service]
 ExecStart=/usr/local/bin/kobd match --network testnet-10 --book-file /var/lib/kob/book.json --keep \
-  --rpc-url ws://127.0.0.1:18210 --pause-file /var/lib/kob/pause --metrics-file /var/lib/node_exporter/kob.prom
+  --rpc-url ws://127.0.0.1:18210 --pause-file /var/lib/kob/pause --state-dir /var/lib/kob-keyed \
+  --metrics-file /var/lib/node_exporter/kob.prom
 LoadCredential=kob-operator-key:/etc/kob/operator.key
 DynamicUser=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
+StateDirectory=kob-keyed
 ReadWritePaths=/var/lib/node_exporter
 Restart=always
 ```
@@ -3675,7 +3726,10 @@ pending); one whose compaction fails at the start is appended to as it is; one t
 held (an error says that this run's submissions are not kept). A dry run neither reads nor writes it. Deleting the data
 directory deletes it: first wait for `kob_matcher_pending_txs` 0 (the status line's `0 pending`), then stop the executor, or
 let the hold above deal with a coin a forgotten transaction spends. `<data_dir>/executor-starts` counts the starts
-(`kob_executor_restarts_total`).
+(`kob_executor_restarts_total`). The standalone `kobd match` and `kobd keep` keep these files, and the keepers' subsidy window,
+in their `--state-dir` folder (one per process). Without `--state-dir` they keep them in memory only: a restart forgets what the
+last run left in the mempool (the node then refuses a coin planned again), and the keepers pay no subsidy, since each start
+would bring a fresh budget (R4F-2).
 
 **Exit for the supervisor.** `kobd --executor` ends with exit status 1 (`exiting so that a supervisor restarts the
 executor`) when its indexer stays stopped (`stopped`: its record log could not be written) or cannot write its database

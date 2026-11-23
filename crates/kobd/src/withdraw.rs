@@ -223,11 +223,18 @@ pub fn withdraw(cfg_path: &Path, base: &Path, req: &Request, node: &mut dyn With
         bail!("{} has no operator key (index-only role): there is nothing to withdraw", cfg_path.display());
     }
     let network = crate::config::resolve_network(Some(&cfg.network)).map_err(|e| anyhow!(e))?;
-    let key = match (&req.key_file, launch_key) {
-        (Some(p), _) => HotKey::load(Some(p))?,
-        (None, Some(p)) => HotKey::load(Some(&under(base, &p)))?,
-        (None, None) => HotKey::load(None)?,
+    let key_file = match (&req.key_file, launch_key) {
+        (Some(p), _) => Some(p.clone()),
+        (None, Some(p)) => Some(under(base, &p)),
+        (None, None) => None,
     };
+    // The start check of `kobd --executor` and `kobd match`, before the key is read: this command
+    // holds the hot key too.
+    crate::executor::refuse_writable_by_others(
+        &network,
+        &crate::executor::executor_paths(Some(cfg_path), &under(base, &cfg.data_dir), key_file.as_deref(), None),
+    )?;
+    let key = HotKey::load(key_file.as_deref())?;
     let pubkey = key.pubkey();
     let from = key.address(&network).to_string();
 
@@ -781,5 +788,36 @@ mod tests {
         assert!(
             withdraw(&empty.path().join(CONFIG_FILE), empty.path(), &fx.req(Amount::All), &mut node, &mut Script::default()).is_err()
         );
+    }
+
+    /// The start check of `kobd match` runs before the key is read: on mainnet a kob folder another account can change is
+    /// refused and nothing is sent.
+    #[test]
+    fn a_mainnet_withdrawal_refuses_a_folder_others_can_change() {
+        if kob_protocol::artifacts::deployment_network().is_some_and(|n| n != "mainnet") {
+            return; // a testnet build has no mainnet configuration
+        }
+        let fx = fixture();
+        let p = fx.dir.path().join(CONFIG_FILE);
+        let text = std::fs::read_to_string(&p).unwrap().replace(&format!("\"{}\"", fx.network), "\"mainnet\"");
+        std::fs::write(&p, text).unwrap();
+        #[cfg(windows)]
+        {
+            let icacls = crate::matcher::wallet::system_program("icacls");
+            let ok = std::process::Command::new(icacls).arg(fx.dir.path()).args(["/grant", "*S-1-1-0:(OI)(CI)(M)"]).output().unwrap();
+            assert!(ok.status.success());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(fx.dir.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+        }
+        let mut node = fx.node(vec![fx.coin(1, 5 * KAS)]);
+        node.info.network_id = "mainnet".into();
+        let mut r = fx.req(Amount::All);
+        r.to = crate::matcher::wallet::address_of(&[5; 32], "mainnet").to_string();
+        let e = fx.run(&r, &mut node, &mut Script::default()).unwrap_err().to_string();
+        assert!(e.contains("another account can change"), "{e}");
+        assert!(node.submitted.is_empty());
     }
 }

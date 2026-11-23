@@ -643,6 +643,11 @@ mod dict_tests {
     use super::*;
     use sha2::{Digest, Sha256};
 
+    /// The hash of the frozen dictionaries, pinned here by hand (R3F-6). The generator rewrites
+    /// `packed_dicts::FROZEN_SHA256` with the file it writes, so that one cannot catch an
+    /// overwrite; this one changes only by an edit of this file, when dictionaries are appended.
+    const FROZEN_DICTIONARIES_SHA256: &str = "6b08de1f23abbe705b4c127116d39c0e614eb5909e91ac6844c617493aab2e9d";
+
     #[test]
     fn dictionaries_are_frozen() {
         // An entry is never edited or removed, because a stored value names its dictionary by id.
@@ -655,7 +660,8 @@ mod dict_tests {
             }
         }
         let got: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(got, super::super::packed_dicts::FROZEN_SHA256);
+        assert_eq!(got, FROZEN_DICTIONARIES_SHA256, "a frozen dictionary changed (or one was appended: pin its hash here by hand)");
+        assert_eq!(super::super::packed_dicts::FROZEN_SHA256, FROZEN_DICTIONARIES_SHA256);
         // Ids are unique, and a contract or kind has one newest dictionary.
         let mut ids: Vec<u8> = dicts().iter().map(|d| d.id).collect();
         ids.sort_unstable();
