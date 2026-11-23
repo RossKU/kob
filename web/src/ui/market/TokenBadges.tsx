@@ -3,13 +3,21 @@ import { t, tokenAmountText } from '../../i18n';
 import { Badge, Banner } from '../kit';
 import { TipBadge } from './TipBadge';
 import { type TokenInfo } from '../../kob/registry';
+import { PROGRAM_OF_REGISTRY_ID } from '../../kob/programs.generated';
+import { familyOfProgram } from '../../kob/token-state';
 import { hasIssuerControl, KNOWN_POWERS, riskFactIds, tokenLabel, tokenRiskCodes, type RiskCode, type TokenBadge, type TokenFactId, type TokenRow } from './token-model';
 
 /**
  * What a row's facts are printed from. They are the facts and, on a token page, KOB's own genesis
  * check, which adds a reason and the public mint to some of them.
  */
-type FactRow = Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'> & Partial<Pick<TokenRow, 'genesis' | 'info' | 'powers'>>;
+type FactRow = Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'> & Partial<Pick<TokenRow, 'genesis' | 'info' | 'powers' | 'templateId'>>;
+
+/** Whether the row's program is a KRON one, whose minter creates any amount. Unknown is not. */
+const kronProgram = (r: FactRow): boolean => {
+  const program = r.templateId && Object.hasOwn(PROGRAM_OF_REGISTRY_ID, r.templateId) ? PROGRAM_OF_REGISTRY_ID[r.templateId] : undefined;
+  return (r.info?.family ?? (program ? familyOfProgram(program) : null)) === 'kron';
+};
 
 /**
  * The badge text of a fact. "Genesis not verified" says why when KOB's check could not be done. The
@@ -34,13 +42,13 @@ export function factText(r: FactRow, id: TokenFactId): string {
     // still live is the registry's `live_minters`, or the indexer's warning.
     const live = r.facts.includes('live_mint_authority');
     const minters = r.info?.json?.genesis?.live_minters;
-    return t(live ? 'market.fact.mint-authority.textLive' : minters && minters.length === 0 ? 'market.fact.mint-authority.textNone' : 'market.fact.mint-authority.text');
+    return t(live ? 'market.fact.mint-authority.textLive' : minters && minters.length === 0 ? 'market.fact.mint-authority.textNone' : kronProgram(r) ? 'market.fact.mint-authority.textKron' : 'market.fact.mint-authority.text');
   }
   if (id === 'genesis_failed' && g?.status === 'failed') return t(`market.genesis.failed.${g.code}`);
   // A program with a mint authority (KRON's minter cell) can mint inside the program too, so an
   // unchecked creation may hold a live minter: the sentence says so.
   if (id === 'genesis_unverified' && r.powers?.includes('mint-authority')) {
-    const base = t('market.fact.genesis_unverified.textMint');
+    const base = t(kronProgram(r) ? 'market.fact.genesis_unverified.textMintKron' : 'market.fact.genesis_unverified.textMint');
     return g?.status === 'unavailable' ? `${base} ${t(`market.genesis.reasonSentence.${g.reason}`)}` : base;
   }
   if ((id === 'genesis_unverified' || id === 'genesis_kascov') && g?.status === 'unavailable') return `${t(`market.fact.${id}.text`)} ${t(`market.genesis.reasonSentence.${g.reason}`)}`;

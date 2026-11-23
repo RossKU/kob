@@ -420,6 +420,18 @@ describe('the genesis line of a row: kascov\'s remark and KOB\'s own check', () 
     expect(factText(row(['genesis_unverified']), 'genesis_unverified')).not.toMatch(/minter/);
   });
 
+  it('the mint-authority sentences name a KRON minter only for a KRON program (R2B-I3)', () => {
+    const of = (templateId: string) => ({ ...row(['genesis_unverified', 'mint-authority']), info: null, templateId, powers: ['mint-authority'] });
+    const kron = of('kron-2433');
+    const kaspacom = of('kcc20-kaspacom-0-2-5');
+    expect(factText(kron, 'genesis_unverified')).toMatch(/a KRON minter creates any amount/);
+    expect(factText(kron, 'mint-authority')).toMatch(/KRON minter/);
+    expect(factText(kaspacom, 'genesis_unverified')).toMatch(/a minter its program allows may still exist/);
+    expect(factText(kaspacom, 'genesis_unverified')).not.toMatch(/KRON/);
+    expect(factText(kaspacom, 'mint-authority')).toMatch(/a minter can create more of this token/);
+    expect(factText(kaspacom, 'mint-authority')).not.toMatch(/KRON/);
+  });
+
   it('a failure is the warning "Genesis check failed", even if kascov says verified', () => {
     const failed: GenesisCheck = { status: 'failed', code: 'contaminated', message: 'x' };
     expect(applyGenesisCheck(row(['genesis_kascov']), failed).facts).toEqual(['genesis_failed']);
