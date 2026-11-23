@@ -38,7 +38,7 @@ export default {
   'settings.advanced.title': 'Advanced / self-hosting',
   'settings.advanced.explain': 'For operators and power users: the token registry and its template hashes, the token tracker (import and export) and the indexer cross-check. Your own servers are in the first card, under "Servers (advanced)", and are saved with its Save button. You do not need any of this to trade.',
   'settings.servers.warnTitle': 'Only point KOB at servers you trust',
-  'settings.servers.warn': 'The node, the indexer and the registry decide what this app shows you: prices, order status, balances and which tokens exist. A wrong or malicious server can show wrong data. Signing stays protected, because every transaction is decoded locally from the transaction itself before you sign, but wrong data can still lead you to make bad trades.',
+  'settings.servers.warn': 'The node, the indexer and the registry decide what this app shows you: prices, order status, balances and which tokens exist. A wrong or malicious server can show wrong data. Signing stays protected, because every transaction is decoded locally from the transaction itself before you sign, but wrong data can still lead you to make bad trades. An indexer can also leave orders out, and a market, close or streaming order starts from the best price it shows. To rely on neither, run your own Kaspa node and your own indexer (kobd) and enter them here.',
   'settings.servers.ack': 'I understand that another server can show wrong data.',
   'settings.network': 'Network',
   'settings.network.hint': 'Your wallet must be on the same network. The registry must be for this network too.',

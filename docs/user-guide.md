@@ -351,6 +351,12 @@ Only a wallet on another network than the app stays at the top of the page, as o
 The indexer is the server that lists the book, trades and order status; the node is a Kaspa node that gives balances and takes
 your transactions.
 
+**What the app cannot check for you.** Before you sign, the app asks the node about every order it is about to trade against, so an
+order the indexer invented cannot be traded. It cannot see an order the indexer left out: a market, close or streaming order starts
+from the best price the indexer shows, and a dishonest indexer could hide better ones. A limit order is not affected, because its
+price is the one you typed. If you do not want to rely on someone else's indexer, run your own Kaspa node and your own indexer
+(`kobd --indexer`, [ops/executor-quickstart.md](ops/executor-quickstart.md)) and enter both under Settings, "Servers (advanced)".
+
 | You see | Meaning and what to do |
 |---|---|
 | "Switching to your node…" | The indexer just stopped answering. With the standalone fallback on (the default) the page switches to standalone mode at once (below); the ticket says the same for that moment. |

@@ -2,7 +2,7 @@
 // network.
 export default {
   'legal.title': 'Disclaimer',
-  'legal.updated': 'Last updated 2026-11-09',
+  'legal.updated': 'Last updated 2026-11-23',
   'legal.intro': 'What KOB is and what it is not. Please read this before you use it.',
   'legal.network': 'This app runs on Kaspa.',
 
@@ -13,7 +13,7 @@ export default {
   'legal.tokens.title': 'Tokens',
   'legal.tokens.body': 'Anyone can issue a token. Names, tickers and icons are claims of their creators, and two tokens can share a ticker: a token is identified by its covenant id, so check it yourself. KOB does not endorse any token. A token may be worthless, impossible to sell, or a scam.',
   'legal.market.title': 'Prices and execution',
-  'legal.market.body': 'Prices come from orders and fills on Kaspa, not from an oracle. An order may not fill, may fill in part, or may expire; network congestion, chain reorganisations and independent executors affect when and whether it does. Book and chart data may be late or wrong. The app decodes each transaction before you sign it: what you sign is what counts.',
+  'legal.market.body': 'Prices come from orders and fills on Kaspa, not from an oracle. An order may not fill, may fill in part, or may expire; network congestion, chain reorganisations and independent executors affect when and whether it does. Book and chart data come from an indexer and may be late, wrong or incomplete; a market order starts from the best price the indexer shows. If you do not want to rely on it, run your own Kaspa node and your own indexer and set them in Settings. The app decodes each transaction before you sign it: what you sign is what counts.',
   'legal.services.title': 'Third-party services',
   'legal.services.body': 'The app connects to services KOB does not control, such as Kaspa nodes, indexers, token-data sources, image hosts and its web host. They can be slow, wrong or unavailable, and they see the requests your browser makes to them.',
   'legal.advice.title': 'Not advice',
