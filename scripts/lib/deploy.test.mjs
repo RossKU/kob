@@ -95,3 +95,24 @@ test('a shallow clone fails; KOB_DEPLOY_NO_HISTORY=1 skips the check and says so
   assert.equal(skip.status, 0, skip.stderr);
   assert.match(skip.stderr, /KOB_DEPLOY_NO_HISTORY=1: the lock-history check of .* is skipped/);
 });
+
+test('a merge that takes the side branch\'s copy of the record does not hide the copies behind it: fails (R5F-1)', () => {
+  const d = repo();
+  commit(d, [cur], 'base');
+  const main = git(d, 'rev-parse', '--abbrev-ref', 'HEAD').trim();
+  git(d, 'branch', 'f');
+  commit(d, [cur, old], 'M1: re-pin');
+  git(d, 'checkout', '-q', 'f');
+  commit(d, [cur], 'F1', { note: 'a branch edit' });
+  git(d, 'checkout', '-q', main);
+  // The resolution keeps the branch's copy: the merge is TREESAME to F1, and git's default history
+  // simplification would follow F1 only and never reach M1.
+  spawnSync('git', ['merge', '-q', '--no-commit', '--no-ff', 'f'], { cwd: d, encoding: 'utf8' });
+  git(d, 'checkout', 'f', '--', RECORD);
+  git(d, 'add', RECORD);
+  git(d, 'commit', '-q', '-m', 'merge f');
+  assert.equal(git(d, 'diff', 'f', 'HEAD', '--', RECORD), '', 'the merge holds the branch\'s copy');
+  const r = run(d);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, new RegExp(`lock template KobLockAuto ${oldHash} was issued`));
+});
