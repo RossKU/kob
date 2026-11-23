@@ -37,6 +37,9 @@ pub struct Entry {
     ///
     /// That is a backup record's `last`, the current state of an export, or a proven view.
     pub later: bool,
+    /// The token of an unbound curve (placed in its token's genesis, `tokenCovId` zero), when the file
+    /// names it: its first fill writes it into the state (R3A-2).
+    pub token: Option<[u8; 32]>,
 }
 
 /// A token UTXO of an indexer view.
@@ -113,6 +116,7 @@ impl View {
             ext: self.ext,
             claimed_maker: None,
             claimed_kind: None,
+            token: self.custody.as_ref().map(|c| c.token),
         }
     }
 }
@@ -285,6 +289,7 @@ fn backup_record(r: &Value, network: &str) -> Result<Entry, String> {
         ext,
         claimed_maker: Some(h32(o.get("maker"), "maker")?),
         claimed_kind: Some(o.get("kind").and_then(Value::as_str).ok_or("kind is missing")?.to_string()),
+        token: opt_h32(o.get("token"), "token")?,
     })
 }
 
@@ -304,6 +309,7 @@ fn export_entry(e: &Value) -> Result<Entry, String> {
         claimed_kind: None,
         // The export carries the current script when the exporter knew it (executor.md 7.5).
         later: true,
+        token: None,
     })
 }
 
@@ -424,6 +430,7 @@ pub fn merge(entries: Vec<Entry>) -> (Vec<Entry>, Vec<Rejected>) {
                 }
                 x.ext = x.ext.or(e.ext);
                 x.claimed_maker = x.claimed_maker.or(e.claimed_maker);
+                x.token = x.token.or(e.token);
                 x.claimed_kind = x.claimed_kind.take().or(e.claimed_kind);
                 x.source = format!("{}, {}", x.source, e.source);
             }

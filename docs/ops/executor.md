@@ -2269,7 +2269,11 @@ Inputs: the web wallet's backup (`kob-backup`), this export format (version 1 or
 candidate and nothing else in a file is trusted. Each order's template must be one this build pins or a retired one of its
 cancel-only table, searched under that template's own script and cancelled through its own cancel entry (any other is
 `unsupported`: `docs/spec/template-retirement.md`). The candidates are, in this order: the last proven
-state and the given state; each with `amountLeft` = the `--amount-left` hints; each with `amountLeft` = original −
+state and the given state (an unbound curve, placed in its token's genesis, also bound to the token its backup record names,
+which its first fill writes into its state); each with `amountLeft` = the `--amount-left` hints, with what a fill of the
+difference writes besides: a Collected (mode 1) order's `bought` (a pair sell: the B the sold A brings at each price it fills
+at, plus rounding; a stop-buy: `bought` + the difference, `armed` as placed or 1), a pair buy's B escrow at each price it
+fills at, plus rounding; each with `amountLeft` = original −
 k × `minFill` for k = 1, 2, … (at most 200 candidates in all). A partial fill splices the new `amountLeft` into the
 script and any amount of at least `minFill` may have been filled, so **this search is not exhaustive**: a partly
 filled order the grid does not reach is reported `not_found` until the maker passes its amount with
@@ -2286,7 +2290,8 @@ this build, or the state does not decode. The report is JSON (one entry per orde
 (base units; a bid: its remaining buying power), `scale`, `min_fill`, `found_by`, custody).
 
 `--cancel` builds the maker's cancel of every live order of the key's maker (custody verified when it has one), one
-transaction per order: custody and KAS back to the maker, fee from the order's released KAS, else the smallest sufficient
+transaction per order: custody, a Collected order's bought tokens (its bought-custody, rebuilt from the live state and
+verified on the node, reported as `bought`; a cancel without it is refused) and KAS back to the maker, fee from the order's released KAS, else the smallest sufficient
 plain KAS UTXO of the maker on the node. Every transaction is signed with the key (a key that is not the maker is
 refused), validated in the script engine before anything is written or submitted, written to `<covenant id>.cancel.json`
 (signed transaction and `submitTransaction` request), and submitted unless `--dry-run`. Like every command that submits, it

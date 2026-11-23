@@ -1013,8 +1013,19 @@ fn run_ops(op: crate::order::Op, args: &[String], usage_text: &str) -> i32 {
 /// The order of a covenant id, read from the indexer.
 fn order_of_id(c: &Common, signer: &Signer, op: crate::order::Op, id: &str) -> Result<Prepared, Fail> {
     let cov = cov_arg(id).map_err(usage)?;
-    let indexer = c.need_indexer()?;
-    let v = super::http::get_ok(indexer, &format!("/v1/orders/{}", to_hex(&cov)), data::INDEXER_TIMEOUT)?;
+    // A cancel needs no indexer: say how, when it cannot be asked (R3A-1).
+    let no_indexer = |e: String| -> Fail {
+        match op {
+            crate::order::Op::Cancel => Fail::from(format!(
+                "{e}\n  without an indexer: `kob recover --from <backup or export file> --cancel` finds and cancels the order \
+                 from the node alone (a partly filled order: add --amount-left; `kob recover --help`), or `kob cancel --view \
+                 FILE` with a saved view of its current UTXO"
+            )),
+            crate::order::Op::Sweep => Fail::from(e),
+        }
+    };
+    let indexer = c.need_indexer().map_err(no_indexer)?;
+    let v = super::http::get_ok(indexer, &format!("/v1/orders/{}", to_hex(&cov)), data::INDEXER_TIMEOUT).map_err(no_indexer)?;
     let parsed = crate::inputs::parse(&v, &format!("indexer order {}", to_hex(&cov)), &c.network)?;
     let view = parsed.views.into_iter().next().ok_or("the indexer's view of the order is not usable")?;
     order_of_view(c, signer, op, &view, Some(indexer))
