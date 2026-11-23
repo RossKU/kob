@@ -76,6 +76,9 @@ KOB's"). At launch:
   way; a token whose genesis carries a `PublicMint` can grow up to `supply + mint_allowance` (recorded by verify-genesis,
   and reported as the warning `live_mint_authority` while a minter with allowance lives). The 8/8 prototype and KaspaCom's
   KCC20 0.2.5 (finding K-1) stay `pending-review`: this build does not trade their tokens on mainnet.
+* **Two launchpad builds of the public-mint actor** are supported too, by internal review only: KaspaRocket's 10 / 10 build
+  (`kasparocket-token-11458`, maintainer decision 2026-10-27) and KForge's 6 / 6 build (`kforge-token-7214`, 2026-11-05), both with
+  the supply fixed at genesis (`registry/README.md`). With the four above that makes **six supported programs**.
 * **Token entries:** the eight KRON tokens of the census (KRON, KASCOV, PEPE, ANSEM, IFWEN, PEEPS, DNBT, KDIST) have
   entries with their identity check (`verified`) and genesis records (every genesis output an instance of the program on
   mainnet data, no live mint authority). An entry states facts only: it does not make a token tradable, and KOB says
@@ -239,9 +242,11 @@ before the wallets: an indexer refuses a payload version it does not know (`payl
 would list none of the orders the new wallets place.
 
 1. Operators upgrade their **executors / indexers** first. A database schema change says in the release notes whether
-   the database is brought up to date in place, migrated offline with `kobd db migrate` (schema 5 to 9 to schema 10, the current one; `kobd db info` shows a store's schema: free disk about
+   the database is brought up to date in place, migrated offline with `kobd db migrate` (any older schema to the current one in one run, for
+   example 9 or 13 to 14; `docs/ops/executor.md` 7.6a has the steps of each; `kobd db info` shows a store's schema: free disk about
    the size of the store, the old file kept as `index.sqlite3.before-migrate`, and an older build refuses the migrated store) or rebuilt with `kobd db replay`
-   (`docs/ops/executor.md` 7.6 and 7.6a).
+   (`docs/ops/executor.md` 7.6 and 7.6a). Since 2026-11-19 the sealed record-log segments are zstd, which an older build cannot read:
+   a rollback decompresses them first (`executor.md` 7.6c).
    Check `GET /v1/health` and that a placement made with `kob` is listed.
    `GET /v1/health` reports the build that answers: `version` (the crate version, the tag without the `v`), `commit` (the git
    commit of the build, `null` when the build did not say), `payload_version` (the `KOB1` payload version it reads and
@@ -308,6 +313,13 @@ There is no project server to ask (founder decision, 2026-11-11): an operator le
 The RELEASE record is optional, so it adds no upgrade order: an older indexer skips it and lists the placement as before.
 Anyone can write any release into a payload, which is why the notice needs several makers' placements and only ever informs;
 check a release against its tag and its published hashes (section 6) before installing it.
+
+## 7b. Rollback and incidents
+
+* A bad binary release: `docs/releases/mainnet-launch.md`, 6a (mark it a pre-release, post, fix forward; a migrated store goes back only
+  with its `before-migrate` file and the log as it was).
+* A contract or app bug after a release, or an indexer serving wrong data: `docs/ops/incident.md`. Nothing on chain can pause or rescue an
+  order: the maker's cancel is the protection, and the incident runbook is about getting makers to use it.
 
 ## 8. Operator requirements
 
