@@ -867,6 +867,32 @@ fn cond_rpt_profit() {
             give(&mut e, TOKEN_B, 1);
             r.bad(&e, x);
         }
+        // NCR1b a sell-first re-arm: the re-arming exit (a KobCondPair BID take-profit) pays its profit in its S token, B, at
+        // output i. The maker gets one base unit of B less than the profit (the difference is skimmed). The exit input
+        // rejects.
+        {
+            let mut e = ed_shape(pa, pb, "pair.rearm.ask.sellout", "NCR1b re-arm BID exit maker profit (in S) short");
+            let x = xin(&e);
+            let k = maker_out(&e, TOKEN_B);
+            let short = out_amount(&e, k) - 1;
+            set_out_amount(&mut e, k, short);
+            give(&mut e, TOKEN_B, 1);
+            r.bad(&e, x);
+        }
+        // NCR1c the same re-arm: the BID exit's profit output carries B's script but no covenant binding, and the profit
+        // goes to the matcher. The exit input rejects.
+        {
+            let mut e = ed_shape(pa, pb, "pair.rearm.ask.sellout", "NCR1c re-arm BID exit maker profit (in S) unbound");
+            let x = xin(&e);
+            let k = maker_out(&e, TOKEN_B);
+            let st = e.out_state(k);
+            let p = prog(&e, TOKEN_B);
+            e.tok_out.remove(&k);
+            e.tx.outputs[k].covenant = None;
+            e.tx.outputs[k].script_public_key = st.spk_with(kob_protocol::artifacts::token_template(p));
+            give(&mut e, TOKEN_B, st.amount());
+            r.bad(&e, x);
+        }
     });
 }
 
@@ -1745,6 +1771,14 @@ fn ev_slope(s: &mut AnyState) {
         _ => panic!("not an evidence order"),
     }
 }
+fn ev_neg_interval(s: &mut AnyState) {
+    match s {
+        AnyState::KobAsk(x) | AnyState::KobAskKron(x) => x.interval = -1_000_000_000_000,
+        AnyState::KobBid(x) | AnyState::KobBidKron(x) => x.interval = -1_000_000_000_000,
+        AnyState::KobPair(x) => x.interval = -1_000_000_000_000,
+        _ => panic!("not an evidence order"),
+    }
+}
 fn ev_scale(s: &mut AnyState) {
     match s {
         AnyState::KobAsk(x) | AnyState::KobAskKron(x) => x.scale = 100,
@@ -1827,6 +1861,20 @@ fn ev_battery(r: &Run, pa: TemplateId, pb: TemplateId) {
                 let mut e = base(&format!("{} {} evidence decaying", x("NE05"), if mode == 0 { "A" } else { "pair" }));
                 let i = ein(&e);
                 set_ev(&mut e, cov(0x93), &ev_slope);
+                r.bad(&e, i);
+            }
+            // NE27 the evidence UTXO one DAA old with interval -10^12 in its state: a negative interval must not cancel the
+            // UTXO's age (audit 2026-10-29 F1)
+            {
+                let mut e = base(&format!(
+                    "{} {} evidence interval -10^12, its UTXO one DAA old",
+                    x("NE27"),
+                    if mode == 0 { "A" } else { "pair" }
+                ));
+                let i = ein(&e);
+                let ai = e.input_of_cov(cov(0x93));
+                e.set_input_daa(ai, NOW - 1);
+                set_ev(&mut e, cov(0x93), &ev_neg_interval);
                 r.bad(&e, i);
             }
             // NE07 below minTouch (minTouch one above the fill; mode 0 also moves the stop so the B threshold stays met)
@@ -1973,6 +2021,15 @@ fn ev_battery(r: &Run, pa: TemplateId, pb: TemplateId) {
                     r.bad(&e, i);
                     let mut e = base(&format!("{} B evidence of another token", x("NE12")));
                     set_ev(&mut e, cov(0x94), &ev_token);
+                    r.bad(&e, i);
+                }
+                // NE28 the B evidence UTXO one DAA old with interval -10^12 in its state (audit 2026-10-29 F1)
+                {
+                    let mut e = base(&format!("{} B evidence interval -10^12, its UTXO one DAA old", x("NE28")));
+                    let i = ein(&e);
+                    let bi = e.input_of_cov(cov(0x94));
+                    e.set_input_daa(bi, NOW - 1);
+                    set_ev(&mut e, cov(0x94), &ev_neg_interval);
                     r.bad(&e, i);
                 }
                 // NE08 the B evidence one base unit below its threshold ceil(minTouch * stop / scale(A)) (the stop moved up by

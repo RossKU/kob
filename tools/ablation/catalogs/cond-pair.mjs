@@ -50,6 +50,15 @@
 //     comparison with it fails anyway.
 //   - For a BID, it is the scale of A, the BID twin of NC114. It is a hostile field of the maker's
 //     own order and has no scenario of its own.
+// - The top-up `require(have >= 0)`, as in KobPair: `have` is read from the P2SH input tTplIn of
+//   T's template, a UTXO the token program created, whose amount is non-negative.
+//
+// Delivery modes (AUD-COV, 2026-11-24): every delivery-mode require is a DM-CP* entry, witnessed by
+// pair_harness::mode_battery and kron_t_battery (shared with KobPair, pair DM-P*). DM-CP4 (the
+// bought-custody's `tFamily == FAM_KCC20`) is defence in depth, as pair DM-P12. The BID exit's S
+// profit pins under dS (DM-CP21 / DM-CP22) are witnessed by the sell-first re-arms NCR1b / NCR1c of
+// kob_ifd_pair_tests::cond_rpt_profit. The evidence interval sign `iv >= 0` (audit 2026-10-29 F1)
+// is EVIV (rd: NC5V, NC3V) and EVBIV (evLeg: NC2V).
 import { del, rep, rx } from '../lib/edits.mjs';
 
 export const suite = {
@@ -75,6 +84,8 @@ const FIL = 'cond_pair_fills';
 const CAR = 'cond_pair_carriers';
 const MISC = 'cond_pair_evidence_misc';
 const DM = 'cond_pair_delivery_modes';
+// The re-arm profit of a BID exit (dS), in the kob_ifd_pair_tests binary.
+const RPT = 'kob_ifd_pair_tests::cond_rpt_profit';
 // The evidence of another extension commitment (another kob-tests binary).
 const AUDC = 'audit_pair_sec_tests::aud_ext_cond_pair_refuses_evidence_of_another_extension_commitment';
 
@@ -151,6 +162,7 @@ export const mutations = [
   { id: 'EVID', file: F, run: { [EV0]: [...both('NC22'), ...both('NC23')], [EV1]: [...both('NC32'), ...both('NC33'), ...both('NC35')] }, inputOnly: [...both('NC22'), ...both('NC23'), ...both('NC32'), ...both('NC33'), ...both('NC35')], note: 'rd: token and scale (mode 1: side, S, T and both scales) are the order\'s', edits: [rx(A_RD, /require\(got == want\);/, 'require(true);')] },
   { id: 'EVSLOPE', file: F, run: { [EV0]: both('NC21'), [EV1]: both('NC31') }, inputOnly: [...both('NC21'), ...both('NC31')], note: 'rd: the evidence is not decaying', edits: [rx(A_RD, /require\(int\(byte\[8\]\(o\.slice\(208 \+ w, 216 \+ w\)\)\) == 0\);/, '')] },
   { id: 'EVREST', file: F, run: { [EXP]: ['NC50', 'NC52', 'NC53', 'NC51a'], [EV1]: both('NC3E') }, inputOnly: ['NC52', 'NC53'], note: 'rd: rested >= minRestDaa before the lock (every exposure term)', edits: [rx(A_RD, /require\(tx\.daa >= exposed \+ minRestDaa\);/, 'require(true);')] },
+  { id: 'EVIV', file: F, run: { [EXP]: ['NC5V'], [EV1]: both('NC3V') }, inputOnly: ['NC5V', ...both('NC3V')], note: 'rd: the evidence interval is not negative (an A evidence / pair evidence one DAA old with interval -10^12 would arm the stop; audit 2026-10-29 F1)', edits: [rx(A_RD, /\n\s*require\(iv >= 0\);/, '')] },
   { id: 'EVINT', file: F, test: EXP, expect: ['NC53'], inputOnly: ['NC53'], note: 'rd: the interval exposure term', edits: [rx(A_RD, /int exposed = OpTxInputDaaScore\(ev\) \+ iv;/, 'int exposed = OpTxInputDaaScore(ev);')] },
   { id: 'EVACT', file: F, test: EXP, expect: ['NC52'], inputOnly: ['NC52'], note: 'rd: the activeFrom exposure term', edits: [rx(A_RD, /int act = int\(byte\[8\]\(o\.slice\(163 \+ d, 171 \+ d\)\)\);/, 'int act = 0;')] },
   { id: 'EVTKDAA', file: F, test: EXP, expect: ['NC51a'], note: "rd: the ask evidence's custody DAA exposure term", edits: [rx(A_RD, /int td = OpTxInputDaaScore\(tk\);/, 'int td = 0;')] },
@@ -179,6 +191,7 @@ export const mutations = [
   { id: 'EVBSCALE', file: F, test: EV0, expect: both('NC28'), inputOnly: both('NC28'), note: "evLeg: the B evidence quotes at B's scale", edits: [rx(A_EVLEG, /require\(int\(byte\[8\]\(q\.slice\(0, 8\)\)\) == sc\);/, '')] },
   { id: 'EVBSLOPE', file: F, test: EV0, expect: both('NC29'), inputOnly: both('NC29'), note: 'evLeg: the B evidence is not decaying', edits: [rx(A_EVLEG, /require\(int\(byte\[8\]\(r\.slice\(18, 26\)\)\) == 0\);/, '')] },
   { id: 'EVBREST', file: F, run: { [EV0]: [...both('NC2E'), ...both('NC2I'), ...both('NC2A')], [EXP]: ['NC51b'] }, inputOnly: [...both('NC2I'), ...both('NC2A')], note: 'evLeg: rested >= minRestDaa (every exposure term)', edits: [rx(A_EVLEG, /require\(tx\.daa >= exposed \+ minRestDaa\);/, 'require(true);')] },
+  { id: 'EVBIV', file: F, test: EV0, expect: both('NC2V'), inputOnly: both('NC2V'), note: 'evLeg: the B evidence interval is not negative (a B evidence one DAA old with interval -10^12 would arm the stop; audit 2026-10-29 F1)', edits: [rx(A_EVLEG, /\n\s*require\(iv >= 0\);/, '')] },
   { id: 'EVBINT', file: F, test: EV0, expect: both('NC2I'), inputOnly: both('NC2I'), note: 'evLeg: the interval exposure term', edits: [rx(A_EVLEG, /int exposed = OpTxInputDaaScore\(ev\) \+ iv;/, 'int exposed = OpTxInputDaaScore(ev);')] },
   { id: 'EVBACT', file: F, test: EV0, expect: both('NC2A'), inputOnly: both('NC2A'), note: 'evLeg: the activeFrom exposure term', edits: [rx(A_EVLEG, /int act = int\(byte\[8\]\(q\.slice\(45, 53\)\)\);/, 'int act = 0;')] },
   { id: 'EVBTKDAA', file: F, test: EXP, expect: ['NC51b'], note: "evLeg: the ask evidence's custody DAA exposure term", edits: [rx(A_EVLEG, /int td = OpTxInputDaaScore\(tk\);/, 'int td = 0;')] },
@@ -274,6 +287,28 @@ export const mutations = [
   { id: 'TRGAP', file: F, test: MISC, expect: ['NC143'], note: 'trailGap >= 0 (hostile field: a sell stop would trail above the rate)', edits: [rx(A_TRAIL, /require\(trailGap >= 0\);/, 'require(true);')] },
   { id: 'TRSTEP', file: F, hold: { [MISC]: ['NC144'] }, note: 'trailStep > 0: defence in depth (a zero / negative step makes validity and maximality contradict)', edits: [rx(A_TRAIL, /require\(trailStep > 0\);/, 'require(true);')] },
   { id: 'TRX', file: F, hold: { [MISC]: ['NC145'] }, note: "a buy stop's s' - gap >= 0: defence in depth (a negative x makes the validity a <= floor(x * b / sB) fail)", edits: [rx(A_TRAIL, /require\(x >= 0\);/, 'require(true);')] },
+  // AUD-COV (2026-11-24): the delivery-mode lines no entry mutated before. The mode battery is
+  // pair_harness::mode_battery, shared with KobPair (pair DM-P12 .. DM-P25).
+  { id: "DM-CP4", file: F, hold: { [DM]: ["atrNM93","btrNM93"] }, note: "a bought-custody is KCC-20 only: defence in depth (a KRON T held as a custody is also refused by the custody's KCC-20 state equality, a KRON state starting with its owner push, not 0x08, and in a fill by mode == 0)", edits: [rep("            if (bought > 0) {\n                require(tFamily == FAM_KCC20);\n", "            if (bought > 0) {\n")] },
+  { id: "DM-CP5", file: F, test: DM, expect: ["atkNM08","btkNM08"], inputOnly: ["atkNM08","btkNM08"], note: "mode 1 later fill: the bought-custody is the P2SH of the script its state is read from (a planted non-P2SH input of T's covenant id with the genuine custody redeem; on the public-mint and KaspaRocket programs the token program also refuses it)", edits: [rep("                require(tx.inputs[tTplIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(tr)));\n                require(tr.slice(tPre, tPre + 112)", "                require(tr.slice(tPre, tPre + 112)")] },
+  { id: "DM-CP6", file: F, test: DM, expect: ["atkNM01","btkNM01","atkNM02","btkNM02","atkNM03","btkNM03","atkNM04","btkNM04","atkNM07","btkNM07","atkNM05","btkNM05","atkNM06","btkNM06","atkNM19","btkNM19"], inputOnly: ["atkNM05","btkNM05","atkNM06","btkNM06"], note: "the bought-custody is known by its exact state (amount bought, plain owner = the order id, zero guard, the commitment)", edits: [del("                require(tr.slice(tPre, tPre + 112) == byte[](0x08) + byte[](bought as byte[8]) + cMid + tail);\n")] },
+  { id: "DM-CP7", file: F, test: DM, expect: ["atkNM42","btkNM42"], note: "refund: the released bought-custody keeps its KAS", edits: [del("                    require(tx.outputs[tTplIn].value >= haveKas);\n")] },
+  { id: "DM-CP8", file: F, test: DM, expect: ["atkNM51","btkNM51"], note: "mode >= 0 (hostile field: mode -1 would fill as mode 0)", edits: [del("                require(mode >= 0);\n")] },
+  { id: "DM-CP9", file: F, test: DM, expect: ["atkNM50","btkNM50"], note: "mode <= 2 (hostile field: mode 3 would fill as mode 0)", edits: [del("                require(mode <= 2);\n")] },
+  { id: "DM-CP10", file: F, test: DM, expect: ["atrNM91","btrNM91","atrNM92","btrNM92"], note: "a KRON T is delivered new: mode 0 only (NM90, mode 1, is not listed: its continuation keeps bought 0, which the continuation pin also refuses)", edits: [rep("                    // A KRON T is delivered new.\n                    require(mode == 0);\n", "                    // A KRON T is delivered new.\n")] },
+  { id: "DM-CP11", file: F, test: DM, expect: ["atkNM67","btkNM67"], note: "mode 1: bought >= 0 (hostile field: bought -5 delivers a custody of n - 5, the matcher keeps 5)", edits: [del("                    require(bought >= 0);\n")] },
+  { id: "DM-CP12", file: F, test: DM, expect: ["atkNM52b","btkNM52b","atkNM53b","btkNM53b"], hold: { [DM]: ["atkNM52","btkNM52","atkNM53","btkNM53"] }, note: "modes 0 and 2: bought == 0 (a mode-0 / mode-2 order with bought > 0 and its custody spent delivers n and leaves the custody's units to the matcher, NM52b / NM53b; without the custody, NM52 / NM53, the bought-custody check refuses it too)", edits: [del("                    require(bought == 0);\n")] },
+  { id: "DM-CP13", file: F, test: DM, expect: ["atkNM62","btkNM62","atkNM77","btkNM77"], note: "mode 2 forms 1 and 2: recvThreshold > 0", edits: [del("                        require(recvThreshold > 0);\n")] },
+  { id: "DM-CP14", file: F, test: DM, expect: ["atkNM65","btkNM65"], note: "mode 2 forms 1 and 2: topupTip >= 0 (hostile field)", edits: [del("                        require(topupTip >= 0);\n")] },
+  { id: "DM-CP15", file: F, test: DM, expect: ["atkNM64","btkNM64","atkNM86","btkNM86","atkNM87","btkNM87"], note: "mode 2: topupTip <= deliveryCarrier", edits: [del("                        require(topupTip <= deliveryCarrier);\n")] },
+  { id: "DM-CP16", file: F, test: DM, expect: ["atkNM63b","btkNM63b"], hold: { [DM]: ["atkNM63","btkNM63"] }, note: "mode 2: form is 0, 1 or 2 (form 3 would fill as a top-up, NM63b; form 3 on a form-1 build, NM63, is also refused by the top-up's receive-state checks)", edits: [del("                            require(form == 2);\n")] },
+  { id: "DM-CP17", file: F, test: DM, expect: ["atkNM79","btkNM79"], inputOnly: ["atkNM79","btkNM79"], note: "mode 2 top-up: the receive UTXO is the P2SH of the script its state is read from", edits: [rep("                            require(OpAuthOutputIdx(tTplIn, 0) == self);\n                            require(tx.inputs[tTplIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(tr)));\n", "                            require(OpAuthOutputIdx(tTplIn, 0) == self);\n")] },
+  { id: "DM-CP18", file: F, test: DM, expect: ["atkNM70","btkNM70"], note: "top-up: the receive UTXO is the maker's", edits: [del("                            require(rst.slice(9, 47) == rcv);\n")] },
+  { id: "DM-CP19", file: F, test: DM, expect: ["atkNM71","btkNM71"], note: "top-up: the receive UTXO's threshold is at least recvThreshold", edits: [del("                            require(int(byte[8](rst.slice(47, 55))) >= recvThreshold);\n")] },
+  { id: "DM-CP20", file: F, test: DM, expect: ["atkNM72","btkNM72"], hold: { [DM]: ["atkNM73","btkNM73"] }, note: "top-up: the receive UTXO's guard is canonical (NM72) and it carries tExt: defence in depth for the commitment, since output i is pinned with tExt and the token program keeps the successor's commitment (NM73 held)", edits: [del("                            require(rst.slice(55, 112) == zg.slice(8, 32) + tail);\n")] },
+  // The BID exit's re-arm pays its profit in S (dS) at output i (kob_ifd_pair_tests::cond_rpt_profit).
+  { id: "DM-CP21", file: F, run: { [RPT]: ["NCR1b"] }, note: "a re-arming BID exit pays the maker exactly its S profit dOut at output i (the S twin of cond-pair-rpt CR1)", edits: [rx("                if (dS) {", /\n\s*require\(tx\.outputs\[self\]\.scriptPubKey == [\s\S]*?\)\)\);/, '')] },
+  { id: "DM-CP22", file: F, run: { [RPT]: ["NCR1c"] }, note: "a re-arming BID exit's S profit is bound to S's covenant (an unbound copy of the profit script holds nothing; the profit goes to the matcher)", edits: [rx("                if (dS) {", /\n\s*require\(OpOutputCovenantId\(self\) == sCovId\);/, '')] },
 ];
 mutations.push(
   // Both template checks of the evidence removed. The evidence is the order's own counterparties
