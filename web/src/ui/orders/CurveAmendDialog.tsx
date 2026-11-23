@@ -7,7 +7,7 @@ import type { StrayView } from '../../data/indexer-types';
 import { t, tIssue } from '../../i18n';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
 import { curveRestKas, curveSteps, currentLevel } from '../../kob/curve';
-import type { TokenInfo } from '../../kob/registry';
+import { tickerUnit, type TokenInfo } from '../../kob/registry';
 import type { CurveAskState, Hex, OrderState } from '../../kob/types';
 import { formatUnits, parsePricePerToken, tokenPriceToStatePrice, tryParseKas, tryParseUnits } from '../../kob/units';
 import { Banner, Button, CurveGraph, Field, HelpTip, IssueLine, Modal, kasText, pricePerTokenText, toError } from '../kit';
@@ -130,7 +130,7 @@ export function CurveAmendDialog(props: CurveAmendDialogProps) {
     }
   };
 
-  const unit = t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' });
+  const unit = t('orders.unit.kasPer', { ticker: token ? tickerUnit(token.ticker, token.covenantId) : '?' });
   return (
     <Modal
       title={t('curve.amend.title')}
@@ -155,8 +155,8 @@ export function CurveAmendDialog(props: CurveAmendDialogProps) {
         <CurveGraph steps={steps} label={t('curve.details.graph')} data-testid="curve-amend-graph" />
         <p class="small" data-testid="curve-amend-rest">{t('curve.amend.rest', { kas: kasText(rest), levels: nextTable.length })}</p>
         <div class="row" style="gap:8px;align-items:flex-start">
-          <Field class="grow" label={t('curve.amend.levelSize', { ticker: token?.ticker ?? '' })} value={form.levelSize} onValue={(v) => set('levelSize', v)} inputMode="decimal" error={errText('levelSize')} data-testid="curve-amend-level-size" />
-          <Field class="grow" label={t('curve.amend.minFill', { ticker: token?.ticker ?? '' })} value={form.minFill} onValue={(v) => set('minFill', v)} inputMode="decimal" error={errText('minFill')} data-testid="curve-amend-min-fill" />
+          <Field class="grow" label={t('curve.amend.levelSize', { ticker: token ? tickerUnit(token.ticker, token.covenantId) : '' })} value={form.levelSize} onValue={(v) => set('levelSize', v)} inputMode="decimal" error={errText('levelSize')} data-testid="curve-amend-level-size" />
+          <Field class="grow" label={t('curve.amend.minFill', { ticker: token ? tickerUnit(token.ticker, token.covenantId) : '' })} value={form.minFill} onValue={(v) => set('minFill', v)} inputMode="decimal" error={errText('minFill')} data-testid="curve-amend-min-fill" />
         </div>
         <Field label={t('orders.amend.tip')} value={form.tip} onValue={(v) => set('tip', v)} inputMode="decimal" error={errText('tip')} help={<HelpTip label={t('orders.amend.tip')}>{t('orders.amend.tipHint')}</HelpTip>} data-testid="curve-amend-tip" />
       </div>
