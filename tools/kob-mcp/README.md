@@ -54,14 +54,17 @@ The limits below are what holds.
   - else the book's, when `limits.refDepthKas` (1,000 KAS) stands behind it twice: the resting side (for a buy the price
     where what a taker can fill now of the bids adds up to 1,000 KAS, for a sell where the asks' does; each order counts
     the indexer's `fillable_now`, so a TWAP or DCA order counts only the slice that is due, and an order the indexer
-    names no `fillable_now` for (an older kobd) counts as nothing; the wallet's own orders and orders whose minimum fill
-    is worth more than 10 KAS do not count either) and the fill history (the VWAP of the newest 1,000 KAS of fills). A
+    names no `fillable_now` for (an older kobd) counts as nothing; each order is valued at the price a taker gets
+    now, the lower of its limit and its `quote` for a bid and the higher for an ask, so an auction (an armed stop or
+    if-done entry, a decaying ask, a rising bid) counts at its current quote, never at a far limit; orders that are not
+    settled, are expired or past their deadline, or whose minimum fill is above the slice due now or worth more than
+    10 KAS, a bid beyond the KAS of its escrow, and the wallet's own orders do not count either) and the fill history (the VWAP of the newest 1,000 KAS of fills). A
     buy is judged against the lower of the two, a sell against the higher. A book that cannot be read refuses. Against
     an older kobd every priced write on a token without `refPrice` is therefore refused.
 
   What remains:
-  - Someone who puts `refDepthKas` of orders on the book that anyone can fill at once can move a book reference by up
-    to the band, for as long as the orders stand. The printed fills cost almost nothing (two keys of one owner trade
+  - Someone who puts `refDepthKas` of orders on the book that anyone can fill at once, at the price they set the
+    reference to, can move a book reference by up to the band, for as long as the orders stand. The printed fills cost almost nothing (two keys of one owner trade
     with each other for the fees), so the fills never move the reference by themselves: a buy takes the lower of the
     two, a sell the higher. The cost is the 1,000 KAS at risk on the book.
   - The book and the fills come from the indexer alone (`indexer` in the config): a lying or hijacked indexer serves
