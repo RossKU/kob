@@ -113,6 +113,8 @@ function chain() {
     const id = args[1];
     const o = c.orders[id];
     if (!o) { process.stderr.write('error: the order is not live'); process.exit(1); }
+    // An order someone else made under the bot's key, with no custody (R3T-2).
+    if (o.foreign) { process.stderr.write('error: custody not found on the node: not cancelled; nothing signed\n'); process.exit(1); }
     submit({ apply: () => { if (o.side === 1) { c.tokenFree += o.amount; c.tokenUtxos += 1; } c.kasFree += o.value; c.ended[id] = 'cancelled'; delete c.orders[id]; } });
   }
   if (args[0] === 'recover') recover(c, fee);

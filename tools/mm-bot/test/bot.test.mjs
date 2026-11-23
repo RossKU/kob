@@ -656,6 +656,71 @@ test('placements refused by the CLI raise an alert and IDLE, and resume by thems
   }
 });
 
+// R3T-2: an order anyone made under the bot's key is not the bot's.
+test('an uncancellable order someone else made under the bot\'s key does not freeze quoting (R3T-2)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain, calls, dir } = setup();
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const mine = Object.keys(chain().orders);
+    assert.equal(mine.length, 6);
+    // A custody-less ask at 1 sompi with a huge amount, under the bot's key.
+    const fake = 'fe'.repeat(32);
+    const c = chain();
+    c.orders[fake] = { side: 1, price: 1, amount: 1e15, value: 1e8, txid: '77'.repeat(32), expiresAt: null, foreign: true };
+    writeFileSync(file, JSON.stringify(c));
+    await bot.cycle();
+    assert.equal(bot.state.orders[fake], undefined, 'not taken for the bot\'s own');
+    // Fair moves: every bid is amended, none skipped as a self-trade against the fake ask.
+    const before = calls().length;
+    kasUsd = 0.025 / 1.004;
+    await bot.cycle();
+    const amended = calls().slice(before).filter((a) => a[0] === 'replace').map((a) => a[1]);
+    for (const id of mine) assert.ok(amended.includes(id), `order ${id} amended`);
+    // An ask filled away is placed again: the fake's amount fills no cap.
+    const c2 = chain();
+    const ask = mine.find((id) => c2.orders[id].side === 1);
+    delete c2.orders[ask];
+    c2.ended[ask] = 'filled';
+    writeFileSync(file, JSON.stringify(c2));
+    const placedBefore = places(calls).length;
+    for (let i = 0; i < 2; i++) await bot.cycle();
+    assert.ok(places(calls).length > placedBefore, 'the empty ask level is placed again');
+    // Its cancel is tried a bounded number of times, and one alert names it.
+    for (let i = 0; i < 6; i++) {
+      for (const f of Object.values(bot.state.foreign ?? {})) if (f.lastTry) f.lastTry -= 600_000;
+      await bot.cycle();
+    }
+    const tries = readFileSync(process.env.FAKE_KOB_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((a) => a[0] === 'cancel' && a[1] === fake);
+    assert.equal(bot.state.foreign[fake].tries, 3, 'tried three times');
+    assert.ok(tries.length >= 3 && tries.length <= 6, `bounded cancel calls (${tries.length}: a dry run and a send each at most)`);
+    assert.equal(alertsOf(dir).filter((a) => a.reason === 'foreign-order').length, 1, 'one alert');
+    // The bot's own orders still pass the self-trade check.
+    assert.equal(bot.crossesOwn({ kind: 'place', side: 'buy', price: 1e12 }) != null, true);
+  } finally {
+    reset();
+  }
+});
+
+test('a retired token\'s order whose cancel keeps failing is given up after three tries, with one alert (R3T-2)', async () => {
+  reset();
+  const { bot, dir } = setup({ orderVisibleTimeoutSec: 0 });
+  const OLD = '0f'.repeat(32);
+  const fake = { id: 'fe'.repeat(32), side: 'sell', price: 1, amountLeft: 1e15 };
+  bot.cfg.retiredTokens = [OLD];
+  bot.maker = MAKER;
+  bot.idx.liveOrders = async () => [fake];
+  let n = 0;
+  bot.kob.cancel = async () => { n++; return { ok: false, error: 'exit 1: error: custody not found on the node: not cancelled' }; };
+  const bal = { tokens: { [OLD]: { free: 0, freeUtxos: 0, decimals: 6 } } };
+  for (let i = 0; i < 6; i++) await bot.retire(bal, false);
+  assert.equal(n, 3, 'three tries, then none');
+  assert.equal(bot.state.retired[OLD].done, true, 'the clean-up is not held by it');
+  assert.equal(alertsOf(dir).filter((a) => a.reason === 'retired-cancel-failed').length, 1);
+  reset();
+});
+
 // T-7: a placement or amend that would meet the bot's own order on the other side is skipped.
 test('the bot never sends a quote that meets its own (T-7)', () => {
   reset();

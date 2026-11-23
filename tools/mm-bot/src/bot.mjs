@@ -22,6 +22,8 @@ const short = (id) => `${id.slice(0, 8)}..${id.slice(-4)}`;
 const ERROR_ALERT_AFTER = 3; // consecutive failed cycles before an error alert
 const PLACE_FAILS_IDLE = 3; // placements refused in a row before IDLE/placement (R2-T3)
 const BLIND_KEEP_MS = 86_400_000; // how long a placement of no known id counts toward the caps
+const FOREIGN_TRIES = 3; // cancels tried of an order on the bot's key the bot did not place (R3T-2)
+const FOREIGN_PER_CYCLE = 2; // and at most this many of them a cycle
 const isAsk = (s) => (s.own?.state?.kind ? /Ask/.test(s.own.state.kind) : s.side === 'sell');
 /** A URL without its user, password or query (they may carry credentials, T-11). */
 const shownUrl = (u) => String(u).replace(/\/\/[^@/]*@/, '//').replace(/\?.*$/, '');
@@ -138,6 +140,12 @@ export class Bot {
       if (!this.cliVersion || t.cli !== this.cliVersion) this.state.templates = { cli: this.cliVersion, kinds: {} };
     }
     this.state.blind = (this.state.blind ?? []).filter((b) => now - b.at < BLIND_KEEP_MS);
+    // An order an older version adopted from the indexer is not the bot's (R3T-2).
+    for (const [id, s] of Object.entries(this.state.orders)) {
+      if (!s.adopted) continue;
+      this.state.foreign[id] = { side: s.side, price: s.price, amountLeft: s.amountLeft, firstSeen: now, tries: 0, lastTry: null };
+      delete this.state.orders[id];
+    }
 
     let bal;
     let orders;
@@ -187,6 +195,7 @@ export class Bot {
       sides = plan.sides;
       await this.execute(plan.actions);
     }
+    if (Object.keys(this.state.foreign).length) await this.cancelForeign(now);
 
     if (c.retiredTokens.length) await this.retire(bal, mode.mode === STOPPING);
     const after = this.ordersNow();
@@ -280,8 +289,8 @@ export class Bot {
 
   /**
    * What the indexer's view adds to the bot's own record: a candidate template hash (proven only
-   * by the node), and the whole record for an order the bot has none of (an older state file, an
-   * adopted order).
+   * by the node), and the whole record for an order the bot placed but has no state of (an older
+   * state file).
    */
   learn(s, v) {
     if (!v || !/^[0-9a-f]{64}$/.test(v.template_hash ?? '')) return;
@@ -393,7 +402,8 @@ export class Bot {
    * an order it does not list, lists at another outpoint, or that has an open question is looked
    * up on the node from the bot's record. An order leaves the state file only when the node finds
    * no unspent output of it under a proven template, and the indexer does not list it or the bot
-   * cancelled it. An unknown order of the token on the bot's key is adopted to be cancelled.
+   * cancelled it. An order of the token on the bot's key that the bot did not place is not
+   * adopted (R3T-2).
    */
   async reconcile(now) {
     const c = this.cfg;
@@ -441,17 +451,43 @@ export class Bot {
     }
     for (const [id, r] of Object.entries(this.state.recent)) if (now - r.endedAt > 3_600_000) delete this.state.recent[id];
 
-    // An unknown order of the token on the bot's key gets a level past the ladder, so the planner
-    // cancels it.
+    // An order of the token on the bot's key that the bot did not place: anyone can make one, with
+    // any price and amount and no custody (R3T-2). It is not the bot's: it counts toward no cap
+    // and no self-trade check, and is never planned. Its cancel is tried a few times (it may be a
+    // quote of a lost state file), and one alert names the new ones.
+    const seen = new Set();
+    const fresh = [];
     for (const o of live) {
       if (this.state.orders[o.id] || this.state.recent[o.id] || !o.side || (o.contract !== 'KobAsk' && o.contract !== 'KobBid')) continue;
-      this.log.info(`${short(o.id)}: a live ${o.side} of this token on the bot's key that the state file does not know: treated as a stale quote of the bot's own and cancelled`);
+      seen.add(o.id);
+      if (this.state.foreign[o.id]) continue;
+      this.log.info(`${short(o.id)}: a live ${o.side} of this token on the bot's key that the bot did not place: not counted as the bot's; its cancel is tried at most ${FOREIGN_TRIES} times`);
       this.log.action({ type: 'unknown-order', id: o.id, side: o.side, price: o.price, amountLeft: o.amountLeft });
-      const s = { side: o.side, level: 999, price: o.price, amount: o.amountLeft, quotedFair: 0, placedAt: now, pending: null, amountLeft: o.amountLeft, value: o.value, adopted: true };
-      this.state.orders[o.id] = s;
-      this.learn(s, raw.get(o.id));
+      this.state.foreign[o.id] = { side: o.side, price: o.price, amountLeft: o.amountLeft, firstSeen: now, tries: 0, lastTry: null };
+      fresh.push(o.id);
+    }
+    for (const id of Object.keys(this.state.foreign)) if (!seen.has(id)) delete this.state.foreign[id];
+    if (fresh.length) {
+      this.alert('warn', 'foreign-order', `${fresh.length} order(s) of the token on the bot's key that the bot did not place (${fresh.map(short).join(', ')}; ${Object.keys(this.state.foreign).length} in all): ignored for the caps and the self-trade check; a cancel is tried at most ${FOREIGN_TRIES} times. Anyone can make such an order; if one is yours, cancel it by hand (kob cancel <id>).`);
     }
     return this.ordersNow();
+  }
+
+  /** A few cancels of the orders on the bot's key it did not place, each tried at most FOREIGN_TRIES times (R3T-2). */
+  async cancelForeign(now) {
+    const gap = this.cfg.safety.orderVisibleTimeoutSec * 1000;
+    const due = Object.entries(this.state.foreign).filter(([, f]) => f.tries < FOREIGN_TRIES && (f.lastTry == null || now - f.lastTry > gap)).slice(0, FOREIGN_PER_CYCLE);
+    for (const [id, f] of due) {
+      const r = await this.kob.cancel(id);
+      f.tries += 1;
+      f.lastTry = now;
+      this.log.action({ type: 'foreign-cancel', id, status: r.ok ? (r.dryRun ? 'planned' : 'submitted') : 'failed', txid: r.txid ?? null, fee: r.fee ?? null, error: r.error ?? null, tries: f.tries });
+      this.log.info(`${short(id)} (not placed by the bot): cancel ${r.ok ? `${r.dryRun ? 'planned' : 'submitted'} tx ${r.txid ?? '-'}` : `FAILED ${r.error}`}${!r.ok && f.tries >= FOREIGN_TRIES ? '; not tried again' : ''}`);
+      if (r.ok && !r.dryRun) {
+        addFee(this.state, 'cancel', r.fee);
+        f.tries = FOREIGN_TRIES;
+      }
+    }
   }
 
   /** Applies the node's word on one order (reconcile). */
@@ -490,7 +526,7 @@ export class Bot {
     }
     if (r.status === 'gone' || r.status === 'foreign') {
       const cancelled = s.pending?.kind === 'cancel' || s.cancelSentAt != null;
-      const ended = s.adopted || (r.status === 'gone' && r.verified && (!o || cancelled));
+      const ended = r.status === 'gone' && r.verified && (!o || cancelled);
       if (ended) {
         const status = s.fate ? 'the placement never went out' : cancelled ? 'cancelled' : 'spent on the node (filled or ended)';
         this.log.info(`${tag} ended: ${status}`);
@@ -756,7 +792,12 @@ export class Bot {
     const now = Date.now();
     for (const id of this.cfg.retiredTokens) {
       const r = (this.state.retired[id] ??= { done: false, cancels: {} });
-      const live = (await this.idx.liveOrders(this.maker, id)).map((o) => ({ ...o, cancelSentAt: r.cancels[o.id] ?? null }));
+      r.failed ??= {};
+      // An order whose cancel failed FOREIGN_TRIES times (one anyone made under the key, with no
+      // custody) is given up, so that it neither repeats every cycle nor holds the clean-up (R3T-2).
+      const listed = await this.idx.liveOrders(this.maker, id);
+      const given = listed.filter((o) => (r.failed[o.id] ?? 0) >= FOREIGN_TRIES);
+      const live = listed.filter((o) => !given.includes(o)).map((o) => ({ ...o, cancelSentAt: r.cancels[o.id] ?? null }));
       const row = bal.tokens?.[id] ?? { free: 0, freeUtxos: 0, decimals: null };
       const { actions, done } = retiredPlan(live, row.freeUtxos, now, this.cfg.safety.orderVisibleTimeoutSec * 1000);
       if (done) {
@@ -772,6 +813,9 @@ export class Bot {
         const status = res.ok ? (res.dryRun ? 'planned' : 'submitted') : 'failed';
         this.log.action({ type: `retired-${a.kind}`, token: id, id: a.id ?? null, status, txid: res.txid ?? null, fee: res.fee ?? null, error: res.error ?? null });
         this.log.info(`retired ${short(id)}: ${a.kind}${a.id ? ` ${short(a.id)}` : ''}: ${res.ok ? `${status} tx ${res.txid ?? '-'}, fee ${fmtAmount(kasOf(res.fee ?? 0), 8)} KAS` : `FAILED ${res.error}`}`);
+        if (!res.ok && a.kind === 'cancel' && (r.failed[a.id] = (r.failed[a.id] ?? 0) + 1) === FOREIGN_TRIES) {
+          this.alert('warn', 'retired-cancel-failed', `retired ${short(id)}: the cancel of ${short(a.id)} failed ${FOREIGN_TRIES} times (${res.error}); it is not tried again. Check it by hand (kob recover, kob cancel).`, { asset: id });
+        }
         if (res.ok && !res.dryRun) {
           addFee(this.state, `retired-${a.kind}`, res.fee);
           if (a.kind === 'cancel') r.cancels[a.id] = now;

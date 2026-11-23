@@ -10,8 +10,11 @@ dependencies. The token is pinned by covenant id, never by ticker (tickers colli
 ## Setup
 
 1. Get the `kob` CLI (a release build checked against `SHA256SUMS`, or `cargo build --release --locked --bin kob`).
-2. Make a key used **only by the bot**, in a file readable by the bot's user only (or in `KOB_KEY`). The bot treats every
-   order of the token on that key as its own: an order it does not know is taken for a stale quote, cancelled and logged.
+2. Make a key used **only by the bot**, in a file readable by the bot's user only (or in `KOB_KEY`). The bot's own orders
+   are the ones it placed (its records in `state.json`). Anyone can make an order that names the key, at any price and
+   amount and without custody, so an order of the token on the key that the bot did not place is not taken for its own:
+   it counts toward no cap and no self-trade check, its cancel is tried at most 3 times (it may be a quote of a lost
+   state file), and one alert names it. Cancel such an order by hand if it is yours.
 3. Fund the key's address with KAS (bids and a 50 KAS reserve) and the token (asks). With the defaults each side needs
    about 450 USD. Fund the token first if no KOB order of the token exists yet: until then only a holder can buy it.
 4. Copy `config.example.json` to `config.json` (git ignores it), edit it, and check it with `node bin/mm-bot.mjs check --config config.json`.
