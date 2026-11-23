@@ -177,6 +177,7 @@ test('config: testnet by default, mainnet only with allowMainnet, the allow-list
   assert.throws(() => checkConfig({ ...base, keyFile: null }, '.', {}), /KOB_KEY/);
   assert.doesNotThrow(() => checkConfig({ ...base, keyFile: null }, '.', { KOB_KEY: 'x' }));
   assert.equal(JSON.stringify(publicConfig(c)).includes('k.key'), false, 'the key path is not shown');
+  assert.equal(publicConfig({ ...c, indexer: 'https://u:secret@idx.example/api?key=secret' }).indexer, 'https://idx.example/api', 'no indexer credentials (R3T-I3)');
 });
 
 test('config: KOB_MCP_* variables (the extension form) override the file; placeholders and empty values do not', () => {

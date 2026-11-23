@@ -631,7 +631,7 @@ export class KobService {
    * under the token caps, a buy its whole KAS (the plan's `value`) under the KAS caps. The tip
    * caps apply to the replacement. Returns { band, held: { cov: base units }, commit, tips }.
    */
-  async replaceChecks({ priceGiven }, doc) {
+  async replaceChecks(_reprice, doc) {
     const rep = doc?.plan?.replacement;
     const cur = doc?.plan?.current;
     const kind = String(rep?.kind ?? '');
@@ -655,11 +655,9 @@ export class KobService {
       throw new Refusal(`PRICE_BAND_UNCHECKED: the plan does not name the ${side}'s all-in price and scale; cancel it and place a new order`);
     }
     const band = await this.band({ side, price: now, priceScale: scale, token });
+    // An unchecked band is never ok unless the operator turned it off (R2-T2), so any priced
+    // amend, toward the maker or against it, needs a checked band here.
     if (!band.ok) throw new Refusal(band.reason);
-    if (against && !band.checked && !band.off) {
-      const what = priceGiven ? `a ${side} priced ${side === 'sell' ? 'down' : 'up'}` : `a ${side} amended against its maker`;
-      throw new Refusal(`PRICE_BAND_UNCHECKED: ${band.note}; ${what} needs a checked band. Cancel it and place a new order (the caps then apply)`);
-    }
     const held = {};
     let commit = 0n;
     if (side === 'sell' && against) {

@@ -186,7 +186,8 @@ export function publicConfig(c) {
     network: c.network,
     mode: c.mode,
     node: c.node ? c.node.replace(/\/\/[^@/]*@/, '//') : '(the CLI default: public nodes)',
-    indexer: c.indexer ?? '(the network default)',
+    // A user, password or query of the indexer URL may carry credentials, like the node's (R3T-I3).
+    indexer: c.indexer ? c.indexer.replace(/\/\/[^@/]*@/, '//').replace(/\?.*$/, '') : '(the network default)',
     key: c.keyFile ? 'a key file is set' : 'KOB_KEY',
     limits: c.limits,
     withdrawTo: c.withdrawTo,
