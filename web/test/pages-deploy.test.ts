@@ -514,8 +514,18 @@ describe('the deploy workflow gate (the signer page it ships takes private keys)
 
   it('the deploy job runs in the environment production (a required reviewer approves there); the secret and variable names are unchanged', () => {
     expect(job('deploy')).toMatch(/\n    environment: production\n/);
-    expect(job('config')).not.toContain('environment:');
-    for (const name of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID']) expect(wf).toContain(`secrets.${name}`);
+    // no other job runs in an environment: build (npm ci, the build scripts, the tests) never gets the environment's secrets
+    for (const name of ['config', 'build', 'verify']) expect(job(name), name).not.toMatch(/^ +environment:/m);
+    expect(wf.match(/^ +environment:/gm)).toHaveLength(1);
+    // the Cloudflare secrets are read only in deploy; config only asks whether they are set
+    for (const name of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID']) {
+      const uses = (text: string) => text.split(`secrets.${name}`).length - 1;
+      expect(job('deploy')).toContain(`${name}: \${{ secrets.${name} }}`);
+      expect(job('config').match(new RegExp(`secrets\\.${name}[^\\n]*`, 'g'))).toEqual([`secrets.${name} != '' }}`]);
+      expect(uses(wf)).toBe(uses(job('deploy')) + 1);
+    }
+    expect(job('build')).not.toContain('secrets.');
+    expect(job('verify')).not.toContain('secrets.');
     for (const name of ['KOB_PAGES_PROJECT', 'KOB_PAGES_INDEXER_URL', 'KOB_PAGES_BRANCH', 'KOB_PAGES_NETWORK', 'KOB_PAGES_EXTRA_INDEXER_URLS', 'KOB_PAGES_NODE_URL', 'KOB_PAGES_EXPLORER_URL', 'KOB_PAGES_TOKEN_NAMES_URL']) expect(wf).toContain(`vars.${name}`);
   });
 
@@ -526,29 +536,60 @@ describe('the deploy workflow gate (the signer page it ships takes private keys)
     expect(job('config')).not.toContain('site: "mainnet",');
     for (const name of ['KOB_PAGES_MAINNET_PROJECT', 'KOB_PAGES_MAINNET_INDEXER_URL']) expect(wf).toContain(`vars.${name}`);
     expect(wf).not.toContain('KOB_PAGES_MAINNET_PUBLIC_URL');
-    // the wrangler commands keep their options apart (an earlier edit glued the project name to `--branch`)
-    expect(wf).toMatch(/pages project create \$\{\{ matrix\.project \}\} --production-branch=/);
-    expect(wf).toMatch(/--project-name=\$\{\{ matrix\.project \}\} --branch=/);
+    // the wrangler commands keep their options apart (an earlier edit glued the project name to `--branch`); every value reaches them through env:
+    const create = job('deploy').slice(job('deploy').indexOf('- name: Create the Pages project if it does not exist yet'));
+    expect(create).toMatch(/^- name: Create the Pages project if it does not exist yet\n\s+continue-on-error: true\n/);
+    expect(create).toContain('PROJECT: ${{ matrix.project }}\n          PRODUCTION_BRANCH: ${{ needs.config.outputs.branch }}\n');
+    expect(create).toContain('"$WRANGLER" pages project create "$PROJECT" --production-branch="$PRODUCTION_BRANCH"\n');
+    expect(job('deploy')).toContain('"$WRANGLER" pages deploy web/dist --project-name="$PROJECT" --branch="$PAGES_BRANCH" --commit-hash="$GITHUB_SHA" --commit-dirty=true');
+    expect(job('deploy')).not.toMatch(/^ *(run: )?"\$WRANGLER"[^\n]*\$\{\{/m);
+    // the wrangler is the one of scripts/deploy/package-lock.json, installed without its install scripts
+    expect(job('deploy')).toContain('WRANGLER: ${{ github.workspace }}/scripts/deploy/node_modules/.bin/wrangler');
+    expect(job('deploy')).toMatch(/working-directory: scripts\/deploy\n\s+run: \|\n\s+npm ci --ignore-scripts /);
+    expect(job('deploy')).not.toMatch(/wrangler-action|npx /);
+    const lock = JSON.parse(readFileSync(fileURLToPath(new URL('../../scripts/deploy/package-lock.json', import.meta.url)), 'utf8')) as { packages: Record<string, { version?: string; integrity?: string }> };
+    const wrangler = lock.packages['node_modules/wrangler']!;
+    expect(wrangler.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(wrangler.integrity).toMatch(/^sha512-/);
     // no deploy step reads a site's value from a variable directly: the matrix carries it
     expect(job('deploy')).not.toContain('vars.');
   });
 
-  it('builds the deployed bundle from source: no build cache is restored in the deploy job', () => {
-    expect(job('deploy')).not.toMatch(/rust-cache|actions\/cache@/);
+  it('builds the deployed bundle from source: no build cache is restored in the build or the deploy job', () => {
+    for (const name of ['build', 'deploy']) expect(job(name), name).not.toMatch(/rust-cache|actions\/cache@/);
+    // the deploy job builds nothing: it uploads the build job's dist
+    expect(job('deploy')).not.toMatch(/npm run|npm test|build-wasm|vite/);
   });
 
-  it('the hashes leave the deploy runner before the first step with the Cloudflare token, and a job with no secret checks the deployment', () => {
-    const deploy = job('deploy');
-    const hashed = deploy.indexOf('xargs sha256sum > "$RUNNER_TEMP/deployed.sha256"');
-    const uploaded = deploy.search(/upload-artifact@[0-9a-f]{40} # v[\d.]+\n\s+with:\n\s+name: deployed-sha256-\$\{\{ matrix\.site \}\}/);
-    const token = deploy.indexOf('secrets.CLOUDFLARE_API_TOKEN');
-    expect(hashed).toBeGreaterThan(0);
+  it('the hashes are recorded in the build job, which never sees the Cloudflare token; deploy checks its dist against them before the token, and a job with no secret checks the deployment', () => {
+    const build = job('build');
+    // the hashes cover config.json (and the internal app's robots.txt and _headers): taken after that step, they leave as an artifact
+    const config = build.indexOf('run: node scripts/pages-config.mjs --dist dist');
+    const hashed = build.indexOf('xargs sha256sum > "$RUNNER_TEMP/deployed.sha256"');
+    const uploaded = build.search(/upload-artifact@[0-9a-f]{40} # v[\d.]+\n\s+with:\n\s+name: deployed-sha256-\$\{\{ matrix\.site \}\}/);
+    const dist = build.search(/upload-artifact@[0-9a-f]{40} # v[\d.]+\n\s+with:\n\s+name: web-dist-\$\{\{ matrix\.site \}\}\n\s+path: web\/dist\n/);
+    expect(config).toBeGreaterThan(0);
+    expect(hashed).toBeGreaterThan(config);
     expect(uploaded).toBeGreaterThan(hashed);
-    expect(token).toBeGreaterThan(uploaded);
+    expect(dist).toBeGreaterThan(hashed);
+    // only build writes the hashes and the dist (an artifact name is written once per run)
+    expect(wf.match(/name: deployed-sha256-\$\{\{ matrix\.site \}\}/g)).toHaveLength(3);
+    const deploy = job('deploy');
+    expect(deploy).toContain('needs: [config, build]');
+    expect(deploy).not.toMatch(/upload-artifact@[0-9a-f]{40} # v[\d.]+\n\s+with:\n\s+name: (deployed-sha256|web-dist)-/);
+    // deploy: the downloaded dist is exactly what build hashed (every file, nothing more), checked before the first step with the token
+    const fetched = deploy.search(/download-artifact@[0-9a-f]{40} # v[\d.]+\n\s+with:\n\s+name: deployed-sha256-\$\{\{ matrix\.site \}\}/);
+    const checked = deploy.indexOf('sha256sum --check --strict --quiet "$RUNNER_TEMP/handover/deployed.sha256"');
+    const counted = deploy.indexOf('[ "$files" = "$hashed" ] ||');
+    const token = deploy.indexOf('secrets.CLOUDFLARE_API_TOKEN');
+    expect(fetched).toBeGreaterThan(0);
+    expect(checked).toBeGreaterThan(fetched);
+    expect(counted).toBeGreaterThan(checked);
+    expect(token).toBeGreaterThan(counted);
     // the checker does not run beside the token
     expect(deploy).not.toContain('node scripts/check-pages.mjs');
     const verify = job('verify');
-    expect(verify).toContain('needs: [config, deploy]');
+    expect(verify).toContain('needs: [config, build, deploy]');
     expect(verify).toContain("github.ref == 'refs/heads/master'");
     expect(verify).toMatch(/\n    permissions:\n      contents: read\n/);
     expect(verify).not.toMatch(/secrets\.|environment:|GH_TOKEN|github\.token/);
@@ -587,7 +628,8 @@ describe('the internal mainnet app: a preview of the mainnet project behind Clou
     expect(wf).toContain('names: $mnm, public: ""}] else [] end))}');
     // the production entries upload to KOB_PAGES_BRANCH
     expect(wf.match(/branch: \$br, internal: ""/g)).toHaveLength(1);
-    expect(deploy).toContain('--branch=${{ matrix.branch }}');
+    expect(deploy).toContain('--branch="$PAGES_BRANCH"');
+    expect(deploy.match(/PAGES_BRANCH: [^\n]*/g)).toEqual(['PAGES_BRANCH: ${{ matrix.branch }}']);
     expect(deploy).not.toContain('--branch=${{ needs.config.outputs.branch }}');
   });
 
@@ -610,7 +652,11 @@ describe('the internal mainnet app: a preview of the mainnet project behind Clou
   });
 
   it('keeps the internal build out of search engines: robots.txt disallows everything, X-Robots-Tag noindex in its _headers; the source _headers is untouched', () => {
-    expect(deploy).toContain('KOB_PAGES_INTERNAL: ${{ matrix.internal }}');
+    // the flag reaches the config.json step of the build job, whose output the hashes (and so the deploy job's check) cover
+    const build = wf.slice(wf.indexOf('\n  build:\n'), wf.indexOf('\n  deploy:\n'));
+    const step = build.slice(build.indexOf('- name: config.json from the repository variables'), build.indexOf('run: node scripts/pages-config.mjs --dist dist'));
+    expect(step).toContain('KOB_PAGES_INTERNAL: ${{ matrix.internal }}\n');
+    expect(build.indexOf('xargs sha256sum')).toBeGreaterThan(build.indexOf('run: node scripts/pages-config.mjs --dist dist'));
     const dir = mkdtempSync(join(tmpdir(), 'kob-internal-'));
     try {
       const headers = readFileSync(fileURLToPath(new URL('../public/_headers', import.meta.url)), 'utf8');
