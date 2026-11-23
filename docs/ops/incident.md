@@ -16,8 +16,12 @@ new code.
   maker's key, finds the order on the node and cancels it (a partly filled order: add `--amount-left`, the amount it has left), and
   `kob cancel --view FILE` cancels from a saved indexer view of the order's current UTXO (`crates/kob-cli/README.md`).
   `kob cancel <covenant id>` reads the order from an indexer. The web app also cancels from the node and the records kept in the
-  browser when no indexer answers (`docs/ops/chart-server.md`, section 5), except a Collected order that already holds bought tokens:
-  cancel that one with `kob recover --cancel`, which moves the bought tokens back with it.
+  browser when no indexer answers (`docs/ops/chart-server.md`, section 5), a partly filled Collected order included: it finds the
+  order and its bought tokens on the node and the cancel returns both. Both searches are bounded, so neither is exhaustive: the web
+  app tries at most 2,000 candidate states per order, `kob recover` at most 200, and an order they miss stays "unknown" until the
+  indexer is back or the maker passes `--amount-left`. For a Collected bid the web app walks the amount collected up from the
+  value its record holds, `kob recover` from 0 (in steps of the minimum fill). A claim (taking the bought tokens and keeping the
+  order) needs the indexer.
 * What the founder controls is the hosted web app (`kob.kaspa.ag`, the Pages project `kob-web`), the public indexer index-main
   (`kob-api.kaspa.ag`) and what is published in this repository and on X. Executors are run by others; the founder runs none.
 
