@@ -383,7 +383,7 @@ hours, indexed in the background). To move an executor:
    other account can read (Everyone, Users, or a named second account; only your account, SYSTEM, Administrators, the built-in Administrator and TrustedInstaller may). Restrict
    it in a terminal in the folder (PowerShell or cmd). The refusal names the groups that may read the file by name (Users,
    Everyone, Authenticated Users, ...) and prints the exact command, for example
-   `icacls "C:\kob\kob-operator.key" /inheritance:r /grant:r "LAPTOP\momot:F"`:
+   `icacls "C:\kob\kob-operator.key" /inheritance:r /grant:r "MYPC\alice:F"`:
 
    ```
    icacls kob-operator.key /inheritance:r /grant:r "%USERNAME%:F"      # cmd

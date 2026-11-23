@@ -1,7 +1,7 @@
 # A public read server for the web app (`kobd --indexer` behind Cloudflare Tunnel)
 
 The hosted web app (`docs/ops/web-hosting.md`) reads the order books, charts, trades and orders from an indexer: the read API of
-`kobd --indexer` (`docs/ops/executor.md`, Part B). This page runs one for the public on a home PC (or a VPS) and publishes
+`kobd --indexer` (`docs/ops/executor.md`, Part B). This page runs one for the public on a single host (a PC or a VPS) and publishes
 it through Cloudflare Tunnel (free), without opening a port on the router.
 
 **What this server is not.** It runs the Indexer role only (`kobd --indexer`): it holds **no key**, has **no funds**, does **no matching**, keeps
@@ -192,7 +192,7 @@ subject to CORS (the API checks no `Origin`).
 **Caching.** The API sends `Cache-Control` on every successful answer by route class (`docs/api-reference.md` 5.7): `public, max-age=N, s-maxage=N` with N = 1 s for the books, orders, fills and
 trades, 2 to 3 s for the 24 h stats and the open candles, 5 s (+ `stale-while-revalidate=5`) for the token and pair lists, 10 s for `/v1/stats`, 1 h for candles whose range ended an hour ago;
 `no-store` for health, metrics, the WebSocket, errors and any request carrying `_nc=` (the web app adds it right after the user's own order action). Its paths have no file extension, so Cloudflare
-caches **nothing** until a Cache Rule makes them eligible; with the rule below the home PC behind the tunnel serves each distinct read about once per TTL, whatever the number of visitors.
+caches **nothing** until a Cache Rule makes them eligible; with the rule below the host behind the tunnel serves each distinct read about once per TTL, whatever the number of visitors.
 (The API also keeps the hot reads in its own response cache per data generation of its store.)
 
 *Cloudflare and short TTLs.* Cloudflare documents that it follows the origin's `s-maxage` / `max-age` / `no-store` ("Origin Cache Control", on by default for Free, Pro and Business) and that the
@@ -299,7 +299,7 @@ orders a day mainnet will bring is not known yet: read the growth of `kob-data` 
 took minutes; a full `kobd db replay` of a 1.2 GB log (367,916 frames, 306,552 orders) took 2,634 seconds (about 44 minutes) and
 prints nothing until it is done. The chart is dark that long if you rebuild in place; section 6 shows how to avoid that.
 
-**Backups on a Windows home PC.** The recipe of `executor.md` 8 uses the `sqlite3` command line for `VACUUM INTO`, which Windows
+**Backups on a Windows host.** The recipe of `executor.md` 8 uses the `sqlite3` command line for `VACUUM INTO`, which Windows
 does not ship. Either download SQLite's command-line tools from sqlite.org, or skip the database: it is rebuildable from the log, so
 the log is the backup that matters. Copy it with a scheduled task (a segment never changes once the next one has started):
 
