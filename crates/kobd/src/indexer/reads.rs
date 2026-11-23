@@ -1330,7 +1330,8 @@ pub(crate) fn book_side_sorted(
 ) -> DbResult<(Vec<RawBookLevel>, bool)> {
     // Maps (price, scale) to (amount, orders, estimated). A curve adds each remaining level's size
     // at its price, so its amount is counted once.
-    let levels: std::cell::RefCell<BTreeMap<(i64, i64), (i128, i64, bool)>> = Default::default();
+    type Levels = BTreeMap<(i64, i64), (i128, i64, bool)>;
+    let levels: std::cell::RefCell<Levels> = Default::default();
     // The keys of the best `top` distinct prices so far, ascending: a later row of a ranked arm whose
     // key is worse than the last cannot add to them (R5C2-6). An equal one can: its amount counts.
     let kept: std::cell::RefCell<Vec<f64>> = Default::default();

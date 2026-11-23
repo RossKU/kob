@@ -343,7 +343,7 @@ impl PairSpec {
     }
 
     /// The level now: `(ask, source, quote, scale(A), amount)`, `None` when a term is not positive.
-    fn level(&self, now: i64) -> Option<(bool, &'static str, i64, i64, i64)> {
+    fn level(&self, now: i64) -> Option<PairLevelNow> {
         let q = self.quote_at(now)?;
         (q > 0 && self.scale > 0 && self.amount > 0).then_some((
             self.ask,
@@ -397,20 +397,17 @@ pub const PAIR_BOOK_ORDERS_MAX: usize = 2_000;
 /// a bounded amount of work, and the pair book says when they cut it (`orders_truncated`).
 pub const PAIR_SCAN_MAX: usize = 20_000;
 
-/// The resting levels `(ask, source, quote B per whole A, scale(A), amount of A)` of the listed live
+/// A pair order's level now: `(ask, source, quote B per whole A, scale(A), amount of A)`.
+type PairLevelNow = (bool, &'static str, i64, i64, i64);
+
+/// The resting levels ([`PairLevelNow`]) of the listed live
 /// pair orders of `base / quote`, that orientation only, that can be filled now.
 ///
 /// These are the oldest [`PAIR_BOOK_ORDERS_MAX`] such orders among the oldest [`PAIR_SCAN_MAX`]
 /// candidates. The flag is true when either bound cut the set. Each comes from its `pair_live` row as
 /// the writer decided it ([`PairSpec`]): no state is decoded, no custody read (R5C2-6). A row the
 /// writer has not set yet is decided here, row by row.
-fn pair_orders(
-    conn: &Connection,
-    base: &Hash32,
-    quote: &Hash32,
-    now: i64,
-    ctx: &ReadCtx,
-) -> DbResult<(Vec<(bool, &'static str, i64, i64, i64)>, bool)> {
+fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: &ReadCtx) -> DbResult<(Vec<PairLevelNow>, bool)> {
     // The oldest `PAIR_SCAN_MAX + 1` pair orders of the pair fillable now (`pair_live`, `open` 1,
     // R4C2-2), then at most `reads::BOOK_MOVING_MAX` that opened after the store's DAA score and by
     // `now`. An order that cannot be filled now is outside the ranges read and takes no place.
