@@ -1228,7 +1228,8 @@ pub(crate) mod tests {
             let signed = fx.merged_txs(&raw).iter().filter(|t| t.inputs.iter().any(|i| lone_signature(&i.signature_script.0))).count();
             assert!(signed > 0, "{}: the recorded merged block has signed P2PK inputs", fx.network);
             fx.checker().check_merged_block(m, &fx.merged, &fx.merged_txs(&raw), Origin::PRIMARY).unwrap();
-            let forgeries: [(&str, fn(&mut crate::rpc::types::SpentUtxo)); 3] = [
+            type Forge = fn(&mut crate::rpc::types::SpentUtxo);
+            let forgeries: [(&str, Forge); 3] = [
                 ("another key", |u| u.script_public_key.0[5] ^= 1),
                 ("another amount", |u| u.amount = u.amount.map(|a| a + 1)),
                 ("a script hash", |u| u.script_public_key.0 = [&[0u8, 0, 0xaa, 0x20][..], &[9; 32], &[0x87]].concat()),
