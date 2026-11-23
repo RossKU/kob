@@ -1556,7 +1556,7 @@ standalone `kobd --indexer`. Templates whose registry `capabilities` include `fr
 `scale`). An order is an amount of BASE UNITS at a price in sompi per WHOLE token, `scale` base units of its token; orders of
 one token are comparable only at one scale, so an order of a token whose entry has `decimals` is listed only at its standard
 scale (`non_standard_scale` otherwise). Rules evaluated per order: token allowlisted, template hash, family and extension
-match, standard scale (skipped when the entry has no `decimals`), minimum order value (`min_order_value_sompi`: the order's
+match (for a KCC-20 token, the extension its holdings prove: `extension_not_proven` otherwise), standard scale (skipped when the entry has no `decimals`), minimum order value (`min_order_value_sompi`: the order's
 amount at its quote, `quoteOf(amountLeft, price, scale)` rounded down, a conditional order at its take-profit leg; a bid, whose
 quantity is its escrow, the KAS of its output: `order_value_below_minimum` otherwise), expiry at most 90 days (plus slack)
 after the accepting chain block, minimum carrier (`min_carrier_sompi`, default 0: the wallet default carrier is 1 KAS,

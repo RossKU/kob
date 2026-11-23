@@ -388,7 +388,7 @@ curl -s $API/v1/tokens
 | `ticker` | string | The registry ticker; empty string for a token without a registry entry (identify tokens by covenant id plus template hash; tickers collide). |
 | `covenant_id` | hex | The token's covenant id (its identity). |
 | `template_hash`, `template_id` | hex / string, may be null | The token program's hash and registry id. |
-| `extension_commitment` | hex, may be null | KCC-20 extension commitment. Without an entry: the one commitment the token's order placements named; `null` when they named several or none. |
+| `extension_commitment` | hex, may be null | KCC-20 extension commitment. Without an entry: the one the token's holdings prove, else the one commitment its order placements named; `null` when they named several or none. A KCC-20 order that names another commitment than the proven one is not listed (`extension_not_proven`): no holder could deliver to it. |
 | `family` | `"kcc20"`, `"kron"` or null | The token's program family. |
 | `decimals` | number or null | The token's decimals: its verified KCC-23 declaration, else its registry entry, else the default of its token program (KaspaRocket 3); `null` when none of them says. |
 | `decimals_source` | `"declaration"`, `"registry"`, `"program"`, **omitted** | Where `decimals` come from; omitted with `decimals: null`. |

@@ -170,14 +170,19 @@ pub struct TokenView {
     pub declaration: Option<bool>,
 }
 
-/// The one KCC-20 extension commitment that the order placements of a token and program named.
+/// The KCC-20 extension commitment of a token and program: the one its holdings prove
+/// ([`proven_extension`]), else the one that the order placements named.
 ///
-/// The source is `token_events`. The result is `None` when the placements named none or more
+/// The source of the latter is `token_events`. The result is `None` when the placements named none or more
 /// than one (a genesis that minted a second commitment, or an order that claims another). A
 /// client then takes it from the token's orders and shows where it came from. The all-zero
 /// commitment (the standard fixed-supply class) is one like any other: a placement that does not
 /// know a token's commitment records none (NULL), not zero.
 fn sole_extension(conn: &Connection, cov: &[u8], tpl: &[u8]) -> DbResult<Option<String>> {
+    // A holding proves the commitment, so a placement that names another cannot erase it (C2-H1).
+    if let Some(e) = proven_extension(conn, cov)? {
+        return Ok(Some(hex::encode(&e)));
+    }
     // Two seeks of `token_events_token_tpl` (the smallest commitment, then the smallest above it),
     // however many events the token has.
     let mut st =
@@ -275,6 +280,29 @@ pub fn market_scale(conn: &Connection, cov: &[u8]) -> DbResult<Option<i64>> {
          ORDER BY listed DESC, genesis_block, covenant_id LIMIT 1",
     )?;
     Ok(st.query_row(rusqlite::params![cov, MARKET_SCALE_SCAN_MAX], |r| r.get(0)).optional()?)
+}
+
+/// The KCC-20 extension commitment the chain proves a token has: the one of its oldest KCC-20
+/// holding. `None` when the store holds none.
+///
+/// Every input and every next state of a KCC-20 transfer carries the leader's commitment
+/// (`KCC20Ref.sil`), so the holdings of one covenant id share one. A holding is an output the
+/// covenant created, so it proves it. Order placements prove nothing: a bid can name any
+/// commitment, and one that no holder carries can never be delivered to (C2-H1). One seek of
+/// `token_holdings_token_page`.
+pub fn proven_extension(conn: &Connection, token: &[u8]) -> DbResult<Option<[u8; 32]>> {
+    let row: Option<(Vec<u8>, String)> = conn
+        .prepare_cached(concat!(
+            "SELECT kob_hstate(h.state, h.family, ow.h, h.owner_kind, h.amount), p.name FROM token_holdings h \
+             JOIN ids ow ON ow.id = h.owner_id JOIN programs p ON p.id = h.program_id WHERE h.token_id = ",
+            id_of!("?1"),
+            " AND h.family = 1 ORDER BY h.created_block LIMIT 1"
+        ))?
+        .query_row([token], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let Some((span, program)) = row else { return Ok(None) };
+    let tpl = TemplateId::from_name(&program).and_then(kob_protocol::artifacts::try_token_template);
+    Ok(tpl.and_then(|t| kob_protocol::state::TokenState::decode_with(t, &span).ok()).map(|s| s.extension()))
 }
 
 /// The programs the chain proves a token has, as template hashes.

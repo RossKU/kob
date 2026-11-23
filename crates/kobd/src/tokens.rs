@@ -446,6 +446,10 @@ pub struct ListingInput {
     /// `reads::proven_programs`); empty: nothing proves one. An order that pins another program is
     /// not listed.
     pub proven_tpls: Vec<Hash32>,
+    /// The KCC-20 extension commitment the chain proves the order's token has (its holdings,
+    /// `reads::proven_extension`); `None`: nothing proves one. A KCC-20 order that names another
+    /// is not listed: no holder could ever deliver to it or take it (C2-H1).
+    pub proven_ext: Option<Hash32>,
 }
 
 impl ListingRules {
@@ -467,6 +471,11 @@ impl ListingRules {
         if let Some(h) = o.token_tpl_hash.as_ref() {
             if !o.proven_tpls.is_empty() && !o.proven_tpls.contains(h) {
                 return Err("token_program_conflict".into());
+            }
+        }
+        if let (Some(want), Some(got), Some(Family::Kcc20)) = (o.proven_ext, o.extension_commitment, o.family) {
+            if want != got {
+                return Err("extension_not_proven".into());
             }
         }
         if self.require_genesis_verified && tokens.genesis_verified(&tok_id) != Some(true) {
