@@ -485,7 +485,7 @@ fn rights_mask(rights: &str) -> Option<u32> {
     if let Some(hex) = rights.strip_prefix("0x").or_else(|| rights.strip_prefix("0X")) {
         return u32::from_str_radix(hex, 16).ok();
     }
-    if rights.is_empty() || rights.len() % 2 != 0 {
+    if rights.is_empty() || !rights.len().is_multiple_of(2) {
         return None;
     }
     rights.as_bytes().chunks(2).try_fold(0u32, |m, c| {
