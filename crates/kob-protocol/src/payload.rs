@@ -1010,9 +1010,9 @@ fn verify_genesis(tx: &TxJson, o: usize, spk: &str) -> Result<([u8; 32], u64)> {
     let Some(cov) = &txo.covenant else { return bad("output has no covenant binding") };
     let auth = cov.authorizing_input as usize;
     let Some(inp) = tx.inputs.get(auth) else { return bad("authorising input missing") };
-    if inp.utxo.covenant_id == Some(cov.covenant_id) {
-        return bad("output continues an existing covenant (not a genesis)");
-    }
+    // The spent output's covenant id is not asked: it is the node's word, which no hash covers. A
+    // binding equal to the genesis id recomputed below is a genesis whatever the node says,
+    // because no earlier output can carry an id that commits to the outpoint spending it.
     let group: Vec<(u32, TransactionOutput)> = tx
         .outputs
         .iter()
@@ -1028,6 +1028,9 @@ fn verify_genesis(tx: &TxJson, o: usize, spk: &str) -> Result<([u8; 32], u64)> {
     let op = TransactionOutpoint { transaction_id: TransactionId::from_bytes(inp.transaction_id), index: inp.index };
     let id = covenant_id(op, group.iter().map(|(k, x)| (*k, x))).as_bytes();
     if id != cov.covenant_id {
+        if inp.utxo.covenant_id == Some(cov.covenant_id) {
+            return bad("output continues an existing covenant (not a genesis)");
+        }
         return bad("covenant id is not the genesis id of its group");
     }
     // The genesis group is the order output alone. A sibling bound to the same covenant id would

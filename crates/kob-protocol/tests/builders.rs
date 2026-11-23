@@ -191,6 +191,25 @@ fn recovery_rejects_a_sibling_of_the_order_covenant() {
     }
 }
 
+/// The covenant id a node attaches to the spent output of the authorising input is no hash's.
+/// A node that gives it the new order's own id must not hide a real placement (K-H1 residual): a
+/// binding equal to the recomputed genesis id is a genesis whatever the node says.
+#[test]
+fn a_node_claimed_covenant_id_on_the_funding_input_does_not_hide_a_placement() {
+    let (name, action) = common::scenarios().into_iter().find(|(n, _)| n == "create.ask").unwrap();
+    let signed = run(&name, &action);
+    let honest = recover_orders(&signed.tx).unwrap();
+    let mut tx = signed.tx.clone();
+    let binding = tx.outputs[0].covenant.clone().unwrap();
+    tx.inputs[binding.authorizing_input as usize].utxo.covenant_id = Some(binding.covenant_id);
+    assert_eq!(recover_orders(&tx).unwrap(), honest);
+    // A binding that is not the genesis id still reads as the continuation the node names.
+    tx.outputs[0].covenant.as_mut().unwrap().covenant_id = [7; 32];
+    tx.inputs[binding.authorizing_input as usize].utxo.covenant_id = Some([7; 32]);
+    let e = recover_orders(&tx).unwrap_err().to_string();
+    assert!(e.contains("continues an existing covenant"), "{e}");
+}
+
 #[test]
 fn recovery_rejects_a_forged_record() {
     for (fam, scenarios) in families() {
