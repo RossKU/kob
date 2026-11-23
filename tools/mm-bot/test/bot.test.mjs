@@ -27,6 +27,7 @@ let hiddenIds = new Set(); // orders a lying indexer leaves out of every answer 
 let listHidden = new Set(); // orders it leaves out of the maker's list only (its per-order view still answers)
 let showOnly = null; // a Set: the indexer lists only these ids (every new order is never listed, R2-T1 case A)
 let staleViews = new Map(); // id -> a view a lying indexer keeps serving (R2-T1 case C), listed even once the order ended
+let fillsFeed = []; // the indexer's fill events, newest first
 let indexerAheadMs = 0; // the indexer judges expiry this far in the future (time passing while the bot is dead)
 
 /**
@@ -65,7 +66,7 @@ function stubFetch(chainFile) {
         for (const [id, v] of staleViews) if (!c.orders[id]) items.push(v);
         return json({ items, next_cursor: null });
       }
-      if (u.includes('/v1/fills')) return json({ items: [], next_cursor: null });
+      if (u.includes('/v1/fills')) return json({ items: fillsFeed, next_cursor: null });
       const id = u.split('/v1/orders/')[1];
       if (hidden(id)) return json({ error: 'not_found' }, 404);
       if (c.orders[id]) return json(view(id, c.orders[id], 'open'));
@@ -539,6 +540,7 @@ const reset = () => {
   listHidden = new Set();
   showOnly = null;
   staleViews = new Map();
+  fillsFeed = [];
 };
 const places = (calls) => calls().filter((a) => a[0] === 'place');
 
@@ -784,6 +786,120 @@ test('an ask the node cannot find is not forgotten on that alone; a bid not foun
     assert.ok(recent.some((a) => a[0] === 'recover' && a.includes('--cancel')));
     assert.ok(recent.some((a) => a[0] === 'cancel' && a[1] === ask), 'its cancel is tried');
     assert.ok(bot.state.orders[ask], 'and STOP waits for it');
+  } finally {
+    rmSync(bot.p.stop, { force: true });
+    reset();
+  }
+});
+
+// R3T-3 follow-up: a fully filled ask ends on a payment the node shows, never on the indexer's
+// word alone; an unproven one gives its level back at its own expiry.
+async function filledAsk(bot, chain) {
+  for (let i = 0; i < 3; i++) await bot.cycle();
+  const c = chain();
+  const id = Object.keys(c.orders).sort().find((k) => c.orders[k].side === 1);
+  const o = c.orders[id];
+  // A taker buys it all in one transaction; the order leaves the node and the indexer's list.
+  delete c.orders[id];
+  c.ended[id] = 'filled';
+  writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify(c));
+  hiddenIds = new Set([id]);
+  const txid = '9a'.repeat(32);
+  fillsFeed = [{ id: 1, covenant_id: id, txid, amount: String(o.amount), price: String(o.price) }];
+  // What the maker receives: ceil(amount x (price - tip) / scale), the carriers on top.
+  const proceeds = Math.ceil((o.amount * o.price) / 1e6);
+  return { id, o, txid, proceeds };
+}
+
+test('a fully filled ask whose payment the node shows ends in the same cycle (R3T-3)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain, calls, dir } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    const { id, txid, proceeds } = await filledAsk(bot, chain);
+    bot.nodeOutputs = async () => [{ txid, index: 1, amount: proceeds + 2e8 }];
+    const placed = places(calls).length;
+    await bot.cycle();
+    assert.equal(bot.state.orders[id], undefined, 'ended on the payment');
+    assert.equal(alertsOf(dir).filter((a) => a.reason === 'node-unconfirmed').length, 0, 'no alert');
+    await bot.cycle();
+    assert.ok(places(calls).length > placed, 'its level is placed again');
+  } finally {
+    reset();
+  }
+});
+
+test('fills the indexer reports with no payment on the node do not end an ask (R3T-3)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    const { id, txid, proceeds } = await filledAsk(bot, chain);
+    // No output, then one that pays less than the proceeds, then the bot's own transaction.
+    await bot.cycle();
+    assert.ok(bot.state.orders[id]);
+    bot.nodeOutputs = async () => [{ txid, index: 0, amount: proceeds - 1 }];
+    await bot.cycle();
+    assert.ok(bot.state.orders[id], 'a payment short of the proceeds is no proof');
+    const own = bot.state.ownTx.at(-1);
+    fillsFeed = [{ id: 2, covenant_id: id, txid: own, amount: fillsFeed[0].amount, price: fillsFeed[0].price }, ...fillsFeed];
+    bot.nodeOutputs = async () => [{ txid: own, index: 0, amount: 1e15 }];
+    await bot.cycle();
+    assert.ok(bot.state.orders[id], 'the bot\'s own transaction is no payment');
+    assert.equal(bot.state.orders[id].unconfirmed, true);
+  } finally {
+    reset();
+  }
+});
+
+test('a payment the bot saw on the node and later spent still proves the fill (R3T-3)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    const { id, txid, proceeds } = await filledAsk(bot, chain);
+    const feed = fillsFeed;
+    fillsFeed = []; // the indexer lags: no fill yet
+    bot.nodeOutputs = async () => [{ txid, index: 1, amount: proceeds }];
+    await bot.cycle();
+    assert.ok(bot.state.orders[id], 'no fill reported yet: kept');
+    bot.nodeOutputs = async () => []; // the bot spent it since
+    fillsFeed = feed;
+    await bot.cycle();
+    assert.equal(bot.state.orders[id], undefined, 'the recorded payment counts');
+  } finally {
+    reset();
+  }
+});
+
+test('an unproven ask past its own expiry is parked: still counted, and STOP does not wait for it (R3T-3)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain, calls, dir } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    const { id, o } = await filledAsk(bot, chain);
+    await bot.cycle();
+    assert.equal(bot.state.orders[id].unconfirmed, true);
+    const placed = places(calls).length;
+    await bot.cycle();
+    assert.equal(places(calls).length, placed, 'before its expiry the level stays blocked');
+    bot.state.orders[id].expiresAt = Date.now() - 1000;
+    await bot.cycle();
+    await bot.cycle();
+    assert.ok(bot.state.orders[id], 'still kept');
+    assert.equal(bot.state.orders[id].parked, true);
+    assert.ok(alertsOf(dir).some((a) => a.reason === 'unresolved-expired'));
+    // Its tokens still count toward the ask cap.
+    const on = bot.ordersNow().filter((x) => x.side === 'sell').reduce((a, x) => a + x.amountLeft, 0);
+    assert.ok(on >= o.amount);
+    writeFileSync(bot.p.stop, 'stop\n');
+    let r;
+    for (let i = 0; i < 4 && r !== 'stopped'; i++) {
+      r = await bot.cycle();
+      for (const s of Object.values(bot.state.orders)) if (s.pending) s.pending.since -= 200_000;
+    }
+    assert.equal(r, 'stopped');
+    assert.ok(bot.state.orders[id], 'kept for the operator');
   } finally {
     rmSync(bot.p.stop, { force: true });
     reset();

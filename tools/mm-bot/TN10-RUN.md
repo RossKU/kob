@@ -52,3 +52,9 @@ The stand-in CLI of `test/` imitates `kob recover`; these points need the real C
   tries the cancel at most 3 times, keeps quoting bids at their targets and places asks.
 - A `kob place` refused for another-scale orders on an indexer-only-decimals token (R3T-5, fixed in the CLI): after 3
   refusals the `placement` alert carries the CLI's refusal text.
+- A fully filled ask with `node` set to the JSON wRPC URL: the next cycle ends it with "filled (its fills are paid in
+  outputs the node showed)" and no `node-unconfirmed` alert. This checks that the real node's `getUtxosByAddresses`
+  entries carry `outpoint.transactionId` and `utxoEntry.scriptPublicKey` as `000020<key>ac`, that the indexer's
+  `/v1/fills` items carry `txid` and `amount` (base units), and that the fill's payout to the maker is an output of that
+  transaction of at least `ceil(amount x (price - tip) / scale)`. With `node` null the same fill leaves the ask
+  unresolved, parked after its expiry, and `check` warns.

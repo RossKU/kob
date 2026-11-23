@@ -41,13 +41,30 @@ node bin/mm-bot.mjs once   --config config.json          # one cycle (add --dry-
   node from the record too (`kob recover --cancel`); `kob cancel <id>` is the fallback for an order the record cannot
   find. An order leaves the state file only on proof that it ended, under an order template the node has proven (an
   order found live under it): a bid has no unspent output at its script (a bid's script never changes), the bot's own
-  cancel of it went out, or a placement of unknown outcome is shown by neither the node nor the indexer. An ask the node
+  cancel of it went out, an ask's fills are paid in full (below), or a placement of unknown outcome is shown by neither the node nor the indexer. An ask the node
   does not find is not proof (it may sit at an amount the search did not reach): it is kept as unresolved, with one
   error alert. Until an order leaves, it counts toward the side caps, its level is not quoted again, it is never
-  amended, every pull and STOP try to cancel it, and each cycle it is looked up again. A fully filled ask is left
-  unresolved too (the node shows no output for it either), and STOP does not end while one is kept: its alert asks the
-  operator to check it (`kob recover --amount-left <id>=<amount>`, the amount from an explorer) and, once it has ended,
-  to remove it from `state.json` with the bot stopped.
+  amended, every pull and STOP try to cancel it, and each cycle it is looked up again.
+- **A fully filled ask** leaves no output on the node either. It ends when the fills the indexer reports for it add up
+  to its whole amount and each is paid: the node shows (or showed earlier) outputs to the bot's own address in that
+  fill's transaction worth at least what the covenant pays the maker, `ceil(amount x (price - tip) / scale)`, for all
+  the bot's fills the indexer puts in that transaction, and the transaction is not one the bot sent. The indexer's word
+  alone never ends it: a lying indexer would need a real payment to the bot. To see the payments the bot reads its own
+  address on the node (`getUtxosByAddresses`, JSON wRPC) at the start of each cycle and again after a cycle that sent,
+  and keeps what it saw for a week (at most 2,000 transactions), so a payment it spends later still counts. That is one
+  extra node call per 30 s cycle, two after a send. It needs `node` set to a JSON wRPC URL (`ws://host:18110`,
+  testnet-10 `18210`): with the CLI's default or a Borsh node no full fill is ever proven (`check` and the log warn).
+- **When a fill cannot be proven** (no JSON wRPC node; the node read failed; the indexer never reports the fill; the
+  payment landed while the bot was sending and the CLI spent it in that same cycle, before the read after the send;
+  the indexer reports it more than a week or 2,000 payments late) the ask stays unresolved: its level is not quoted
+  again until the ask's own expiry, at most `lifeMin` (90 min) after its last placement or amend, so 45 to 90 min with
+  the renewals. Past its expiry it is parked: STOP no longer waits for it, the bot keeps looking for it, but its tokens
+  still count toward the ask cap until proof, because a non-conforming taker can still fill an expired ask until a
+  refund ends it. With the defaults (15 % of `capitalUsd` a level, `maxAskPct` 50 %) one parked ask leaves the ask
+  ladder a level short until the operator checks it (`kob recover --amount-left <id>=<amount>`) and removes it from
+  `state.json` with the bot stopped. With a JSON wRPC node and an honest indexer this should be rare: the bot reads its
+  outputs every cycle before it sends, so it misses a payment only when it lands within the seconds of one cycle's
+  sends and the CLI picks that very output to fund one of them.
 - **An indexer that hides a quote or shows it at an old outpoint.** The node still holds it: it is cancelled through the
   node, with an error alert, and its level is quoted again once the node shows it ended. An order the node cannot find
   while the indexer still lists it, or that cannot be looked up yet (no order template proven: the indexer never listed

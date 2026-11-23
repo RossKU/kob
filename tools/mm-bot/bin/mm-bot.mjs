@@ -16,6 +16,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Bot } from '../src/bot.mjs';
+import { isJsonWrpc } from '../src/node.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { fmtAmount } from '../src/funds.mjs';
 import { Logger, paths } from '../src/store.mjs';
@@ -53,6 +54,7 @@ if (cmd === 'check') {
   if (shown.alerts?.webhookUrl) shown.alerts = { ...shown.alerts, webhookUrl: '(set)' };
   console.log(JSON.stringify(shown, null, 2));
   console.log(`config ok${cfg.keyFile ? '' : process.env.KOB_KEY ? ' (key from KOB_KEY)' : '; WARNING: no keyFile and no KOB_KEY: signing will fail'}`);
+  if (!isJsonWrpc(cfg.node)) console.log('WARNING: node: a JSON wRPC node (ws://host:18110, testnet-10 18210) is needed to prove a fully filled ask paid; without one it stays unresolved and holds its share of the ask cap (README, tracking)');
   process.exit(0);
 }
 
