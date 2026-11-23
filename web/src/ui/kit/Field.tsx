@@ -1,4 +1,4 @@
-import { isValidElement, type ComponentChildren } from 'preact';
+import type { ComponentChildren } from 'preact';
 import { useId } from 'preact/hooks';
 import { Dropdown } from './Dropdown';
 import type { DropdownOption } from './dropdown-model';
@@ -41,16 +41,6 @@ export interface FieldShellProps {
 const keyed = (c: ComponentChildren): ComponentChildren => (typeof c === 'string' ? <span key={c}>{c}</span> : c);
 
 /**
- * The plain text behind a "?" (`help`, a HelpTip with a text), else null. The panel exists only
- * while it is open, so the control is described by a hidden copy of the text instead.
- */
-const helpText = (help: ComponentChildren): string | null => {
-  if (!isValidElement(help)) return null;
-  const c = (help.props as { children?: unknown }).children;
-  return typeof c === 'string' && c !== '' ? c : null;
-};
-
-/**
  * Label, control, hint and error scaffolding for controls the kit does not render itself
  * (checkboxes, custom pickers).
  */
@@ -58,9 +48,7 @@ export function FieldShell(props: FieldShellProps) {
   const auto = useId();
   const id = props.id ?? `f${auto}`;
   const labelId = props.label ? `${id}-label` : undefined;
-  // A hint is shown under the control. A text behind the "?" describes it too, from a hidden copy.
-  const described = props.hint ? null : helpText(props.help);
-  const hintId = props.hint || described ? `${id}-hint` : undefined;
+  const hintId = props.hint ? `${id}-hint` : undefined;
   const errId = props.error ? `${id}-err` : undefined;
   const describedBy = [hintId, errId].filter(Boolean).join(' ') || undefined;
   return (
@@ -79,7 +67,7 @@ export function FieldShell(props: FieldShellProps) {
         </div>
       ) : props.label ? <label id={labelId} for={id}>{keyed(props.label)}</label> : null}
       {props.children({ id, labelId, describedBy, invalid: !!props.error })}
-      {props.hint ? <div class="field-hint" id={hintId}>{keyed(props.hint)}</div> : described ? <span id={hintId} hidden>{described}</span> : null}
+      {props.hint ? <div class="field-hint" id={hintId}>{keyed(props.hint)}</div> : null}
       {props.error ? <div class="field-error" id={errId} role="alert">{keyed(props.error)}</div> : null}
     </div>
   );
