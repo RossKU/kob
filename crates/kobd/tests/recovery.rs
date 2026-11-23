@@ -209,7 +209,8 @@ async fn open_refuses_empty_database_next_to_a_populated_log_and_repairs_a_crash
     let db_cursor = {
         let conn = open_writer(&cfg.db_path(), "testnet-10").unwrap();
         let next = kobd::indexer::ingest::records_next_n(&conn).unwrap();
-        assert_eq!(next, 1);
+        // the frame of the start (its history begins at the anchor: `LogOp::HistoryFrom`) and the batch
+        assert_eq!(next, 2);
         let c: String = conn.query_row("SELECT v FROM meta WHERE k = 'cursor_hash'", [], |r| r.get(0)).unwrap();
         drop(conn);
         let (mut log, _) = RecordLog::open(&cfg.records_dir(), 1 << 20, next).unwrap();
@@ -224,17 +225,17 @@ async fn open_refuses_empty_database_next_to_a_populated_log_and_repairs_a_crash
             0,
         )
         .unwrap();
-        assert_eq!(log.next_n(), 2);
+        assert_eq!(log.next_n(), 3);
         c
     };
     // a frame that does not continue the database's cursor is refused, and kept
     let err = Indexer::open(cfg.clone()).err().expect("another history is refused");
     assert!(err.to_string().contains("do not belong together"), "{err}");
-    assert_eq!(recordlog::record_count(&cfg.records_dir()).unwrap(), 2, "nothing was cut");
+    assert_eq!(recordlog::record_count(&cfg.records_dir()).unwrap(), 3, "nothing was cut");
     // the frame the crash really leaves continues the cursor: applied, never cut
     {
-        let (mut log, _) = RecordLog::open(&cfg.records_dir(), 1 << 20, 2).unwrap();
-        log.truncate_to(1).unwrap();
+        let (mut log, _) = RecordLog::open(&cfg.records_dir(), 1 << 20, 3).unwrap();
+        log.truncate_to(2).unwrap();
         log.append(
             &LogBatch {
                 start: Hash32::parse(&db_cursor).unwrap(),
@@ -248,8 +249,8 @@ async fn open_refuses_empty_database_next_to_a_populated_log_and_repairs_a_crash
         .unwrap();
     }
     let idx = Indexer::open(cfg.clone()).unwrap();
-    assert_eq!(idx.ingest.lock().unwrap().records_next(), Some(2), "the uncommitted frame was applied");
-    assert_eq!(recordlog::record_count(&cfg.records_dir()).unwrap(), 2);
+    assert_eq!(idx.ingest.lock().unwrap().records_next(), Some(3), "the uncommitted frame was applied");
+    assert_eq!(recordlog::record_count(&cfg.records_dir()).unwrap(), 3);
     drop(idx);
     // database deleted, log kept: `open` must not start over next to the log
     std::fs::remove_file(cfg.db_path()).unwrap();
@@ -916,6 +917,15 @@ async fn a_store_that_began_late_or_skipped_chain_is_not_a_complete_book_for_goo
     let old = node.chain()[3].hash;
     rebase(&idx.ingest, node.as_ref(), "testnet-10", &StartMode::Hash(old), false).await.unwrap();
     assert_eq!(idx.ingest.lock().unwrap().history_from_daa().unwrap(), Some(tip));
+    // R3C2-4: the marker is in the record log, so a store rebuilt from it says the same
+    let log_dir = idx.cfg.records_dir();
+    drop(idx);
+    let mut rebuilt = cfg.clone();
+    rebuilt.data_dir = dir.path().join("rebuilt");
+    rebuilt.records.dir = Some(log_dir);
+    replay_from_log(&rebuilt).unwrap();
+    let h = Indexer::open(rebuilt).unwrap().health.snapshot();
+    assert_eq!((h.book_complete, h.history_from_daa), (false, Some(tip)), "a replay keeps the partial history");
 
     // a start at the node's pruning point reads everything it retains: complete, and it stays so
     let dir2 = tempfile::tempdir().unwrap();

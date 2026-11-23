@@ -744,7 +744,7 @@ impl<S: ChainSource> Follower<S> {
             Ok(())
         })
         .await
-        .map_err(|e: super::db::DbError| StepOutcome::Retry(format!("database: {e}")))?;
+        .map_err(|e: IngestError| StepOutcome::Retry(format!("database: {e}")))?;
         if partial {
             self.health.update(|h| {
                 h.book_complete = false;

@@ -173,6 +173,10 @@ pub enum LogOp {
         /// live, and every other one is closed.
         keep: Vec<(Hash32, u32)>,
     },
+    /// The store's history begins at this DAA score: a start other than at the pruning point, or a
+    /// rebase past unread chain (the `meta` key `history_from_daa`, which only moves forward). A
+    /// replay keeps it so (R3C2-4). Op code 8: a build before it skips the frame.
+    HistoryFrom { daa: u64 },
 }
 
 /// One committed batch, which is one frame of the log.
@@ -293,6 +297,10 @@ impl LogOp {
                     w.var(*i as u64);
                 }
             }
+            LogOp::HistoryFrom { daa } => {
+                w.u8(8);
+                w.var(*daa);
+            }
         }
     }
 
@@ -347,6 +355,7 @@ impl LogOp {
                 };
                 LogOp::Adopt { covenant_id, old_txid, old_index, txid, index, value, spk, daa, custody, keep }
             }
+            8 => LogOp::HistoryFrom { daa: r.var()? },
             _ => return Err(WireError("unknown operation")),
         }))
     }
