@@ -29,7 +29,7 @@ Config: [config.example.json](config.example.json) (defaults in [src/config.mjs]
 - Read: `kob_status`, `kob_tokens`, `kob_book`, `kob_stats`, `kob_candles`, `kob_balances`, `kob_orders`, `kob_order`,
   `kob_fee_estimate`.
 - Write: `kob_place_limit`, `kob_replace`, `kob_cancel`, `kob_take` (token id and price bound required), `kob_merge`, `kob_claim`,
-  `kob_token_create` (`sell: "curve"` puts the new supply on a sell curve in the genesis, `keep_percent` of it kept; `lock_until: "+90d"` locks the kept share on chain until then, without a sale `keep_percent` of the supply, default all), `kob_send`.
+  `kob_token_create` (`sell: "curve"` puts the new supply on a sell curve in the genesis, `keep_percent` of it kept; `lock_until: "+90d"` locks the kept share on chain until then, without a sale `keep_percent` of the supply, default all; `lock_until` is `+N` days, hours or minutes, a UTC date, or unix time in milliseconds, exactly 13 digits, at most 10 years ahead), `kob_send`.
 
 A write first returns its dry-run plan and a `planId`; it is sent only when the same call comes back with
 `confirm: "<planId>"` within 5 minutes (or at once in `"mode": "auto"`, still within the limits). The agent itself sends
@@ -46,8 +46,9 @@ The limits below are what holds.
 - At most 3 token creations a day (`launchesPerDay`).
 - A price (all-in: a buy's price plus its tip, a sell's price less its tip) more than 25 % worse than the reference is
   refused. A buy is judged against the lower of the last fill and the 10 KAS bid depth (the bid behind 10 KAS of bids,
-  midpointed with the best ask), a sell against the higher, so one printed fill moves neither bound. A book that cannot
-  be read refuses.
+  midpointed with the best ask), a sell against the higher, so one printed fill moves neither bound. In a very wide book
+  (an ask above twice the bid behind 10 KAS) the depth reference is that bid, so even a buy at the best ask can be
+  refused. A book that cannot be read refuses.
 - The tip goes to the executor that fills the order: at most 1 % of the price and 1 KAS over the whole order
   (`limits.maxTipPct`, `limits.maxTipKas`).
 - `kob_replace` reads the order's side and token from the CLI's dry run (the order as checked on the node), and a new
