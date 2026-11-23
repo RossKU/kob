@@ -30,6 +30,16 @@ function place(root: HTMLElement, ind: HTMLElement, selected: HTMLElement | null
   // No transition for a place that is not a move (first paint, resize). '' hands the property back
   // to the stylesheet.
   ind.style.transition = animate ? '' : 'none';
+  measure(root, ind, selected, mode);
+  if (!animate) {
+    // The jump is applied with the transition off (the read flushes the style), then the
+    // stylesheet's transition is back: the mark at rest is never left without it.
+    void ind.offsetWidth;
+    ind.style.transition = '';
+  }
+}
+
+function measure(root: HTMLElement, ind: HTMLElement, selected: HTMLElement | null, mode: SlideMode): void {
   if (!selected || selected.offsetWidth === 0) {
     // Nothing is selected, or the control is not on screen (display: none). The mark has no size
     // until the next measure.
@@ -68,7 +78,9 @@ export function useSlideIndicator(root: RefObject<HTMLElement>, ind: RefObject<H
     const animate = !!sel && !!last.current && last.current !== sel && last.current.isConnected;
     last.current = sel;
     if (animate) movedAt.current = performance.now();
-    place(r, i, sel, mode, animate);
+    // A render that keeps the selection during a slide (the ticket re-renders right after a click)
+    // must not turn the transition off: that cancels the slide and the mark jumps.
+    place(r, i, sel, mode, animate || performance.now() - movedAt.current < SLIDE_MS);
     if (typeof ResizeObserver === 'function') {
       observer.current ??= new ResizeObserver(() => place(r, i, r.querySelector<HTMLElement>(selector), mode, performance.now() - movedAt.current < SLIDE_MS));
       // Observing an element twice is a no-op. New buttons join, and the control itself is watched

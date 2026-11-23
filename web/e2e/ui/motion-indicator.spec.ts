@@ -120,7 +120,8 @@ test.describe('motion is subtle, and reduced motion turns it off', () => {
     await expect(side).toBeVisible();
     expect(await everyTransitionOff(page, '[data-testid="order-side-buy"]')).toBe(false);
     // A slide (a click on the other side) has the stylesheet's transition on. The first paint and a
-    // resize have it off.
+    // resize turn it off only for their jump; a later render (the ticket's, after the click) leaves it
+    // on (it once stayed off, and cut the slide short).
     await page.getByTestId('order-side-sell').click();
     await page.getByTestId('order-side-buy').click();
     // The durations are the quick ones (100-200 ms). Polled: right after the clicks the transition can
