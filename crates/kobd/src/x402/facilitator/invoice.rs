@@ -298,8 +298,34 @@ pub struct InvoiceRuntime {
     pub max_open_per_merchant: usize,
     /// Most refused payments (duplicate or late) kept as evidence per invoice. Further ones are
     /// rejected without being recorded. Anyone may submit them, so this bounds the record, its
-    /// rewrites and the reconcile watch list.
+    /// rewrites and the reconcile watch list. The payments released and still watched (`released`)
+    /// have the same bound of their own (audit 2026-11-23 X-1).
     pub max_extra_payments: usize,
+}
+
+impl InvoiceRuntime {
+    /// Whether invoice `id` keeps as many `released` payments as it may (X-1). Each costs its payer
+    /// two small fees, and each rewrote the record and joined the reconcile watch list without
+    /// limit: past the bound, a payment the payer spends elsewhere is no longer released early (it
+    /// waits for the grace periods), and a release is not watched.
+    fn released_full(&self, id: &str) -> bool {
+        self.store.get(id).is_some_and(|r| released_count(&r.extra) >= self.max_extra_payments)
+    }
+}
+
+/// The `released` payments among an invoice's extra records.
+fn released_count(extra: &[ExtraRecord]) -> usize {
+    extra.iter().filter(|e| e.kind == "released").count()
+}
+
+/// Adds the `released` record `x` unless `extra` has it or already `max` released ones (X-1). True
+/// when it was added.
+fn keep_released(extra: &mut Vec<ExtraRecord>, x: ExtraRecord, max: usize) -> bool {
+    if extra.iter().any(|y| y.txid == x.txid) || released_count(extra) >= max {
+        return false;
+    }
+    extra.push(x);
+    true
 }
 
 /// How long refused payments are watched for (they are evidence for refunds).
@@ -661,6 +687,10 @@ impl Facilitator {
             let Some(_g) = self.locks.try_lock(txid) else { continue };
             // re-read under the lock
             let Some(e) = self.ledger.get(&e.txid).filter(|x| x.state == e.state) else { continue };
+            // An invoice that kept its bound of released payments waits for the grace periods (X-1).
+            if !e.is_intent() && e.invoice.as_deref().zip(self.invoices.as_ref()).is_some_and(|(id, rt)| rt.released_full(id)) {
+                continue;
+            }
             if !matches!(self.spent_elsewhere(&e, now), Ok(true)) {
                 continue;
             }
@@ -754,9 +784,12 @@ impl Facilitator {
                 at_ms: now,
                 spends: vec![],
             };
+            let max = rt.max_extra_payments;
             if let Err(err) = rt.store.update(inv, |r| {
-                if !r.extra.iter().any(|y| y.txid == x.txid) {
-                    r.extra.push(x);
+                let full = released_count(&r.extra) >= max && !r.extra.iter().any(|y| y.txid == x.txid);
+                let txid = x.txid.clone();
+                if !keep_released(&mut r.extra, x, max) && full {
+                    warn!("x402: invoice {inv}: {max} released payments kept already; {txid} is released but not watched");
                 }
             }) {
                 error!("x402: invoice {inv}: cannot record the released payment {}: {err}", e.txid);
@@ -806,5 +839,39 @@ impl Facilitator {
             }
         }
         seen
+    }
+}
+
+#[cfg(test)]
+mod released_tests {
+    use super::*;
+
+    fn released(txid: &str) -> ExtraRecord {
+        ExtraRecord {
+            kind: "released".into(),
+            txid: txid.into(),
+            payer: None,
+            watch_txid: String::new(),
+            watch_index: 0,
+            watch_spk: String::new(),
+            intent: false,
+            observed: "refused".into(),
+            accepted_daa: None,
+            at_ms: 0,
+            spends: vec![],
+        }
+    }
+
+    /// X-1: pay, spend the payment back, pay again: each cycle released one payment and grew the record without limit.
+    /// The released ones have a bound of their own, and the refused evidence's bound is unchanged.
+    #[test]
+    fn released_payments_of_an_invoice_are_bounded() {
+        let mut extra = vec![ExtraRecord { kind: "duplicate".into(), ..released("d") }];
+        for k in 0..3 {
+            assert!(keep_released(&mut extra, released(&format!("r{k}")), 3));
+        }
+        assert!(!keep_released(&mut extra, released("r0"), 3), "the same payment once");
+        assert!(!keep_released(&mut extra, released("r3"), 3), "past the bound");
+        assert_eq!((extra.len(), released_count(&extra)), (4, 3));
     }
 }

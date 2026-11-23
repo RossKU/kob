@@ -522,6 +522,9 @@ Ambiguous outcomes stay consumed. Two profile-specific points:
   operator's confirmation depth; the reference depth is 100 DAA (about 10 seconds at the current
   block rate). The effective finality is the stronger of the offer and the server's policy, as in
   the binding.
+- **Run the facilitator on your own node.** The payer's inputs and the acceptance are that node's
+  word, so a public node (`node = "resolver"`) can make a payment look settled that never paid the
+  merchant (audit 2026-11-23 X-2).
 
 A reorg or node disagreement after a response is delivered is an ambiguous settlement: consumed
 evidence stays consumed and the payment is reconciled, never released, as in the binding.
