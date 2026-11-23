@@ -10,11 +10,12 @@
 //   node bin/mm-bot.mjs check  --config FILE               check the config and print it
 //                                                          merged with the defaults
 //   node bin/mm-bot.mjs unresolved --config FILE           the asks kept with no proof that they
-//                                                          ended (unresolved or parked)
-//   node bin/mm-bot.mjs drop   --config FILE --id ID [--amount-left N]
+//                                                          ended (unresolved, parked or proven)
+//   node bin/mm-bot.mjs drop   --config FILE --id ID [--amount-left N] [--force]
 //                                                          after checking it: drop one of them,
 //                                                          unless the node shows it live (the bot
-//                                                          must not be running)
+//                                                          must not be running); --force past an
+//                                                          unproven template or reported fills
 // --dry-run plans with the CLI's --dry-run only: nothing is signed and the state file is not
 // written.
 
@@ -27,7 +28,7 @@ import { loadConfig } from '../src/config.mjs';
 import { fmtAmount } from '../src/funds.mjs';
 import { Logger, paths } from '../src/store.mjs';
 
-const USAGE = 'usage: mm-bot.mjs run|once|status|stop|check|unresolved --config FILE [--dry-run] [--json] | drop --config FILE --id ID [--amount-left N]';
+const USAGE = 'usage: mm-bot.mjs run|once|status|stop|check|unresolved --config FILE [--dry-run] [--json] | drop --config FILE --id ID [--amount-left N] [--force]';
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 const opt = (name) => {
@@ -94,13 +95,16 @@ if (cmd === 'status') {
 if (cmd === 'unresolved') {
   const bot = new Bot(cfg, { dryRun: true });
   const rows = bot.unresolvedOrders();
+  // Their records, for kob recover: own-orders.json holds only what the bot last looked up (R5T-I3).
+  const written = rows.length ? bot.writeRecords(rows.map((o) => o.id), undefined, P.unresolved) : null;
   if (flag('--json')) console.log(JSON.stringify(rows, null, 2));
   else if (!rows.length) console.log('no unresolved order');
   else {
     for (const o of rows) {
-      console.log(`${o.id}  ${o.side} L${o.level}  ${o.parked ? 'PARKED (past its expiry)' : 'unresolved'}  placed ${o.amount ?? '?'} base, left ${o.amountLeft ?? '?'} (last known), fills seen ${o.filledSeen}, expires ${o.expiresAt ? new Date(o.expiresAt).toISOString() : '-'}`);
+      const what = o.proven ? 'PROVEN (paid; still looked up, level free)' : o.parked ? 'PARKED (past its expiry)' : 'unresolved';
+      console.log(`${o.id}  ${o.side} L${o.level}  ${what}  placed ${o.amount ?? '?'} base, left ${o.amountLeft ?? '?'} (last known), fills seen ${o.filledSeen}, expires ${o.expiresAt ? new Date(o.expiresAt).toISOString() : '-'}, hints ${o.hints.join(',') || '-'}`);
     }
-    console.log('Check each with kob recover --from <dataDir>/own-orders.json --amount-left <id>=<amount left>; once it has ended: mm-bot drop --config FILE --id <id> (with the bot stopped).');
+    console.log(`Check each with kob recover --from ${written ? P.unresolved : '<no record to look it up by>'} --network ${cfg.network} --amount-left <id>=<amount left>; once it has ended: mm-bot drop --config FILE --id <id> (with the bot stopped).`);
   }
   process.exit(0);
 }
@@ -109,7 +113,7 @@ if (cmd === 'drop') {
   const id = String(opt('--id') ?? '');
   const n = opt('--amount-left');
   if (!/^[0-9a-f]{64}$/.test(id) || (n != null && !/^\d+$/.test(n))) {
-    console.error('usage: mm-bot.mjs drop --config FILE --id <64 hex> [--amount-left <base units>]');
+    console.error('usage: mm-bot.mjs drop --config FILE --id <64 hex> [--amount-left <base units>] [--force]');
     process.exit(2);
   }
   // The running bot would write its own state over the drop.
@@ -122,7 +126,7 @@ if (cmd === 'drop') {
   }
   const bot = new Bot(cfg);
   bot.log.quiet = true;
-  const r = await bot.operatorDrop(id, { amountLeft: n == null ? null : Number(n) });
+  const r = await bot.operatorDrop(id, { amountLeft: n == null ? null : Number(n), force: flag('--force') });
   console.log(`node: ${r.node ? JSON.stringify(r.node) : '-'}`);
   console.log(r.message);
   process.exit(r.ok ? 0 : 1);

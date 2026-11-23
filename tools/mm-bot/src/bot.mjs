@@ -1,7 +1,7 @@
 // The cycle: reference, wallet and orders, reconcile, mode, actions, funds. Only the operator ends
 // the loop.
 
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { addressOfXOnly } from './address.mjs';
 import { readReference } from './feeds.mjs';
 import { alertsToSend, fmtAmount, fundChecks } from './funds.mjs';
@@ -340,17 +340,19 @@ export class Bot {
     if (kind && !this.state.templates.kinds[kind]?.verified) this.state.templates.kinds[kind] = { hash: v.template_hash, verified: false };
   }
 
-  /** The records of `ids` as kob recover reads them (an indexer-view shape), written to one file. */
-  writeRecords(ids, pick = (s) => s.own?.state) {
-    const items = [];
-    for (const id of ids) {
-      const s = this.state.orders[id];
-      const st = s && pick(s);
-      const { hash } = this.tplOf(s);
-      if (st?.kind && hash) items.push({ covenant_id: id, template_hash: hash, status: 'open', state_known: true, state: st, extension_commitment: st.state?.extensionCommitment ?? null });
-    }
+  /** The record of order `id` as kob recover reads it (an indexer-view shape), or null. */
+  recordOf(id, pick = (s) => s.own?.state) {
+    const s = this.state.orders[id];
+    const st = s && pick(s);
+    const { hash } = this.tplOf(s);
+    return st?.kind && hash ? { covenant_id: id, template_hash: hash, status: 'open', state_known: true, state: st, extension_commitment: st.state?.extensionCommitment ?? null } : null;
+  }
+
+  /** The records of `ids` as kob recover reads them, written to one file (own-orders.json). */
+  writeRecords(ids, pick = (s) => s.own?.state, file = this.p.check) {
+    const items = ids.map((id) => this.recordOf(id, pick)).filter(Boolean);
     if (!items.length) return null;
-    writeFileSync(this.p.check, `${JSON.stringify({ items })}\n`);
+    writeFileSync(file, `${JSON.stringify({ items })}\n`);
     return items.map((i) => i.covenant_id);
   }
 
@@ -854,11 +856,15 @@ export class Bot {
   }
 
   /**
-   * The operator's drop of one unresolved or parked order, after checking it (R4T-5). The node is
-   * asked first, from the bot's record and every amount known (plus `amountLeft`, the operator's):
-   * an order it shows live, or that it cannot be asked about, is kept. Returns { ok, node, message }.
+   * The operator's drop of one unresolved, parked or proven order, after checking it (R4T-5). The
+   * node is asked first, from the bot's record and every amount known (plus `amountLeft`, the
+   * operator's): an order it shows live, or that it cannot be asked about, is kept. Without
+   * `force` an order is kept too when the lookup proves nothing (its template is not proven on the
+   * node) or the indexer reported fills of it since its last own outpoint (its amount left may be
+   * one the search did not reach) (R5T-3). A dropped order's record is appended to
+   * dropped-orders.json, which kob recover reads. Returns { ok, node, message }.
    */
-  async operatorDrop(id, { amountLeft = null } = {}) {
+  async operatorDrop(id, { amountLeft = null, force = false } = {}) {
     const s = this.state.orders[id];
     if (!s) return { ok: false, node: null, message: `${id} is not in state.json` };
     if (!s.unconfirmed && !s.parked && !s.proven) return { ok: false, node: null, message: `${short(id)} is not unresolved: the bot tracks it and ends it by itself` };
@@ -871,12 +877,41 @@ export class Bot {
     if (r.status === 'live') return { ok: false, node: r, message: `the node holds ${short(id)} live at ${r.txid} (amount left ${r.amountLeft ?? '?'}): not dropped; cancel it (kob cancel ${id})` };
     if (r.status === 'unknown') return { ok: false, node: r, message: `the node could not be asked about ${short(id)} (${r.why}): not dropped` };
     const what = r.status === 'foreign' ? 'names another maker' : `is not found on the node at the amounts ${hints.join(', ') || '(a bid: its script)'}${isAsk(s) ? ' (the search is not exhaustive)' : ''}`;
+    const fills = (s.fills ?? []).filter((f) => f.at == null || s.ownAt == null || f.at > s.ownAt);
+    const doubt = r.status !== 'gone' ? null
+      : !r.verified ? `it was looked up under an order template not yet proven on the node (no order of its kind found live under it), so not finding it proves nothing`
+        : isAsk(s) && fills.length ? `the indexer reported ${fills.length} fill(s) of it since its last placement or amend (${fills.reduce((a, f) => a + f.amount, 0)} base units in all): it may be live at an amount left the search did not reach`
+          : null;
+    const warn = 'A dropped order that is still live stays fillable, and the bot no longer cancels it (not by a pull, IDLE or STOP).';
+    if (doubt && !force) {
+      return { ok: false, node: r, message: `${short(id)} ${what}, but ${doubt}: not dropped. Check it first (kob recover --from ${this.p.unresolved} --amount-left ${id}=<amount left>, after mm-bot unresolved), then drop it with --force. ${warn}` };
+    }
+    const at = new Date().toISOString();
+    const why = `the operator: it ${what}${doubt ? `; forced past: ${doubt}` : ''}`;
+    this.recordDropped(id, { at, why, node: r.status, hints, forced: !!(doubt && force) });
     delete this.state.orders[id];
     this.state.recent[id] = { side: s.side, level: s.level, endedAt: Date.now() };
-    this.log.info(`${short(id)} dropped by the operator: it ${what}`);
-    this.log.action({ type: 'operator-drop', id, side: s.side, level: s.level, node: r.status, hints });
+    this.log.info(`${short(id)} dropped by the operator: it ${what}${doubt ? ` (forced: ${doubt})` : ''}`);
+    this.log.action({ type: 'operator-drop', id, side: s.side, level: s.level, node: r.status, hints, forced: !!(doubt && force), record: this.p.dropped });
     this.save();
-    return { ok: true, node: r, message: `${id} ${what}: dropped from state.json` };
+    return { ok: true, node: r, message: `${id} ${what}: dropped from state.json. ${warn} Its record is kept in ${this.p.dropped}; to look for it later: kob recover --from ${this.p.dropped} --network ${this.cfg.network} --amount-left ${id}=<amount left> (add --cancel to cancel it once found).` };
+  }
+
+  /** Appends a dropped order's record to dropped-orders.json, in the shape kob recover reads (R5T-3). */
+  recordDropped(id, info) {
+    const s = this.state.orders[id];
+    let doc = { items: [] };
+    if (existsSync(this.p.dropped)) {
+      try {
+        doc = JSON.parse(readFileSync(this.p.dropped, 'utf8'));
+      } catch (e) {
+        throw new Error(`${this.p.dropped} does not read (${e.message}): fix it before dropping another order; nothing dropped`);
+      }
+    }
+    const view = this.recordOf(id) ?? { covenant_id: id, template_hash: this.tplOf(s).hash, status: 'open', state_known: false };
+    doc.items = [...(doc.items ?? []), { ...view, dropped: { ...info, side: s.side, level: s.level, price: s.price, amount: s.amount ?? null, amountLeft: s.amountLeft ?? null,
+      filledSeen: s.filledSeen ?? 0, lastTxid: s.own?.txid ?? null, prevState: s.own?.prev ?? null, placedAt: s.placedAt ?? null, expiresAt: s.expiresAt ?? null, proven: s.proven ?? null, fills: s.fills ?? [] } }];
+    if (!this.dryRun) writeFileSync(this.p.dropped, `${JSON.stringify(doc, null, 1)}\n`);
   }
 
   /** The target ladder and the cycle's actions. */

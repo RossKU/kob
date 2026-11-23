@@ -1,6 +1,7 @@
 // Whole cycles against a stand-in CLI with a small ledger (fake-kob.mjs "chain") and a stubbed
 // fetch, with no network.
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1031,6 +1032,13 @@ test('an unresolved ask is dropped by the operator only when the node does not s
     hiddenIds = new Set([id, b]);
     await bot.cycle();
     assert.deepEqual(bot.unresolvedOrders().map((o) => o.id).sort(), [id, b].sort());
+    // mm-bot unresolved writes the records it lists for kob recover, whatever the last cycle looked up (R5T-I3).
+    const cfgFile = join(dir, 'config.json');
+    writeFileSync(cfgFile, JSON.stringify({ network: 'testnet-10', keyFile: 'bot.key', dataDir: dir, indexer: 'http://indexer.test', token: { covenantId: TOKEN, decimals: 6 } }));
+    const u = spawnSync(process.execPath, [fileURLToPath(new URL('../bin/mm-bot.mjs', import.meta.url)), 'unresolved', '--config', cfgFile], { encoding: 'utf8', timeout: 30_000 });
+    assert.equal(u.status, 0, u.stderr);
+    assert.ok(u.stdout.includes(paths(dir).unresolved), u.stdout);
+    assert.deepEqual(JSON.parse(readFileSync(paths(dir).unresolved, 'utf8')).items.map((i) => i.covenant_id).sort(), [id, b].sort());
     // Told its amount, the node finds it live: refused, and kept.
     const live = await bot.operatorDrop(b, { amountLeft: chain().orders[b].amount });
     assert.equal(live.ok, false);
@@ -1039,13 +1047,37 @@ test('an unresolved ask is dropped by the operator only when the node does not s
     // A tracked order that is not unresolved is refused too.
     const normal = Object.keys(bot.state.orders).find((k) => !bot.state.orders[k].unconfirmed && !bot.state.orders[k].parked);
     assert.equal((await bot.operatorDrop(normal)).ok, false);
-    // The filled one: not found on the node, so dropped, saved and logged.
-    const gone = await bot.operatorDrop(id);
+    // The filled one: not found on the node, but the indexer reported a fill of it since its
+    // placement, so it may sit at an amount the search did not reach: refused without --force (R5T-3).
+    const doubt = await bot.operatorDrop(id);
+    assert.equal(doubt.ok, false);
+    assert.match(doubt.message, /the indexer reported 1 fill\(s\) of it since its last placement or amend/);
+    assert.match(doubt.message, /--force/);
+    assert.match(doubt.message, /still live stays fillable, and the bot no longer cancels it/);
+    assert.ok(bot.state.orders[id], 'kept');
+    // Under a template not proven on the node, not finding it proves nothing: refused too.
+    const kinds = bot.state.templates.kinds;
+    bot.state.templates.kinds = { KobAsk: { hash: kinds.KobAsk.hash, verified: false } };
+    const unproven = await bot.operatorDrop(id, { amountLeft: 5 });
+    assert.equal(unproven.ok, false);
+    assert.match(unproven.message, /template not yet proven on the node/);
+    bot.state.templates.kinds = kinds;
+    // Forced: dropped, saved and logged, and its record kept for kob recover.
+    const gone = await bot.operatorDrop(id, { force: true });
     assert.equal(gone.ok, true, gone.message);
     assert.equal(gone.node.status, 'gone');
+    assert.match(gone.message, /still live stays fillable/);
+    assert.ok(gone.message.includes(`kob recover --from ${paths(dir).dropped}`), gone.message);
     assert.equal(bot.state.orders[id], undefined);
     assert.equal(new Bot(bot.cfg).state.orders[id], undefined, 'saved');
     assert.ok(readFileSync(paths(dir).actions, 'utf8').includes('"operator-drop"'));
+    const kept = JSON.parse(readFileSync(paths(dir).dropped, 'utf8')).items;
+    assert.equal(kept.length, 1);
+    assert.equal(kept[0].covenant_id, id);
+    assert.equal(kept[0].state.kind, 'KobAsk', 'the record kob recover reads');
+    assert.equal(kept[0].dropped.forced, true);
+    assert.match(kept[0].dropped.why, /forced past/);
+    assert.ok(kept[0].dropped.at && kept[0].dropped.amount > 0 && kept[0].dropped.fills.length === 1);
   } finally {
     reset();
   }
