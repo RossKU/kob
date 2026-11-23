@@ -1252,3 +1252,29 @@ fn a_replacement_keeps_its_orders_delivery() {
         assert_eq!(modes(&again, 0), modes(&p, 0), "{c:?}");
     }
 }
+
+/// Audit 2026-11-23 B2-M2: a pair market buy always waits for `--ack-market-start`. Its book and the KAS price of B
+/// both come from the indexer alone, so an indexer that under-prices B cannot bring the buy below the 100 KAS threshold.
+#[test]
+fn a_pair_market_buy_always_needs_the_acknowledgement() {
+    let (a, b) = (TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) }, tok_b());
+    let mut e = pair_env(&a, &b);
+    e.market_start_ack = false;
+    let buy = Intent::Market(MarketIntent {
+        side: Side::Buy,
+        amount: 5_000,
+        tip: 0,
+        min_fill: None,
+        slippage_bps: None,
+        all_or_nothing: false,
+        floor: None,
+    });
+    for kas_per_whole_b in [Some(1), Some(KAS / 5), None] {
+        e.pair.as_mut().unwrap().kas_per_whole_b = kas_per_whole_b;
+        let p = plan_order(&e, &buy);
+        assert!(!p.ok && codes(&p).contains(&"MARKET_START_UNVERIFIED"), "{kas_per_whole_b:?}: {:?}", codes(&p));
+    }
+    e.market_start_ack = true;
+    let p = plan_order(&e, &buy);
+    assert!(p.ok && codes(&p).contains(&"MARKET_START_UNVERIFIED_ACKNOWLEDGED"), "{:?}", p.issues);
+}
