@@ -127,3 +127,10 @@ test('the Kaspa address of an x-only key (vectors from the Kaspa SDK)', () => {
   assert.equal(addressOfXOnly(key, 'testnet-10'), 'kaspatest:qzsanlgngufgqyddqqmtqau5n43jwn2a8w9vsdghwmpse9z77tp0kmzydclw7');
   assert.throws(() => addressOfXOnly('xyz', 'mainnet'));
 });
+
+test('a failed --yes reports its planned fee to count, unless the CLI says nothing was sent (L25)', async () => {
+  let { kob } = fake('submit-fail');
+  assert.equal((await kob.cancel('cd'.repeat(32))).sentFee, 427000, 'a failed submission may have been relayed');
+  ({ kob } = fake('plan-error'));
+  assert.equal((await kob.cancel('cd'.repeat(32))).sentFee, undefined, 'refused at the plan: nothing sent');
+});

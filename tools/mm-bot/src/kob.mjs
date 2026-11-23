@@ -79,25 +79,31 @@ export class Kob {
    */
   async sign(args) {
     const extra = this.cfg.cli.priorityFee ? ['--priority-fee'] : [];
+    let plannedFee = null;
     if (this.cfg.cli.preflight || this.dryRun) {
       const plan = await this.exec([...args, ...extra, '--dry-run']);
       const errs = (plan.json?.issues ?? []).filter((i) => i.severity === 'error');
       if (plan.code !== 0 || errs.length) {
         return { ok: false, error: `plan refused (exit ${plan.code}): ${errs.map((i) => `${i.code} ${i.message}`).join('; ') || plan.stderr || 'no output'}`, doc: plan.json };
       }
+      plannedFee = Number(plan.json?.transaction?.fee ?? plan.json?.fee ?? 0);
       if (this.dryRun) {
-        return { ok: true, dryRun: true, txid: null, fee: Number(plan.json?.transaction?.fee ?? plan.json?.fee ?? 0), newIds: plan.json?.new_covenant_ids ?? [], doc: plan.json };
+        return { ok: true, dryRun: true, txid: null, fee: plannedFee, newIds: plan.json?.new_covenant_ids ?? [], doc: plan.json };
       }
     }
     const r = await this.exec([...args, ...extra, '--yes']);
-    if (r.code !== 0) return { ok: false, error: `exit ${r.code}: ${r.stderr || 'no output'}`, doc: r.json };
+    // A failed --yes may have been sent all the same (a lost reply, a node that relays and answers
+    // with an error): `sentFee` is its planned fee, to count, unless the CLI says nothing was sent.
+    const sentFee = /nothing signed|nothing submitted|nothing sent|engine validation failed/i.test(r.stderr) ? null
+      : Number(r.json?.transaction?.fee ?? r.json?.fee ?? 0) || plannedFee || null;
+    if (r.code !== 0) return { ok: false, error: `exit ${r.code}: ${r.stderr || 'no output'}`, doc: r.json, sentFee };
     const doc = r.json;
     if (doc?.links) {
       // Merge: a summary with one link per transaction.
       const links = doc.links.filter((l) => l.status === 'submitted');
       return { ok: true, txid: links.map((l) => l.txid).join(','), txids: links.map((l) => l.txid), fee: Number(doc.fee ?? 0), newIds: [], doc };
     }
-    if (doc?.result?.status !== 'submitted') return { ok: false, error: `not submitted: ${r.stderr || 'no result'}`, doc };
+    if (doc?.result?.status !== 'submitted') return { ok: false, error: `not submitted: ${r.stderr || 'no result'}`, doc, sentFee };
     return { ok: true, txid: doc.result.txid, fee: Number(doc.result.fee ?? doc.transaction?.fee ?? 0), newIds: doc.new_covenant_ids ?? [], doc };
   }
 
@@ -140,6 +146,17 @@ export class Kob {
     const ids = sent.map((d) => /^cancel ([0-9a-f]{64})/.exec(d.action ?? '')?.[1]).filter(Boolean);
     const fee = sent.reduce((s, d) => s + Number(d.result?.fee ?? d.transaction?.fee ?? 0), 0);
     return { ok: r.code === 0, ids, fee, txids: sent.map((d) => d.result?.txid).filter(Boolean), error: r.code === 0 ? null : `exit ${r.code}: ${r.stderr || 'no output'}` };
+  }
+
+  /**
+   * Whether the order of a saved view still sits at the view's UTXO on the node: a dry run of
+   * `kob cancel --view` (no indexer, nothing signed). 'live', 'gone' (refused as stale: the UTXO is
+   * spent, the order ended or moved) or 'unknown' (the node did not answer).
+   */
+  async viewLive(file) {
+    const r = await this.exec(['cancel', '--view', file, '--dry-run']);
+    if (r.code === 0 && r.docs.some((d) => /^cancel [0-9a-f]{64}/.test(d?.action ?? ''))) return 'live';
+    return /stale view/.test(r.stderr) ? 'gone' : 'unknown';
   }
 
   merge(tokenId) {

@@ -167,7 +167,9 @@ export class Bot {
     this.save();
 
     if (mode.mode === STOPPING) {
-      const left = (await this.idx.liveOrders(this.maker, c.token.covenantId)).length;
+      // An order leaves the state file only once the node shows it ended (reconcile), so STOP does
+      // not end on the indexer's count alone (T-4).
+      const left = Math.max((await this.idx.liveOrders(this.maker, c.token.covenantId)).length, Object.keys(this.state.orders).length);
       if (left === 0 || this.dryRun) {
         this.log.info('stopped: no quote left');
         return 'stopped';
@@ -202,26 +204,31 @@ export class Bot {
   async blindPull(stop, snap, now, cause) {
     const c = this.cfg;
     const mode = nextMode(this.state.mode, { stop, refOk: snap.ok, jump: snap.jump ?? 0, feeBlocked: false, pegOk: snap.peg?.ok ?? true }, c.safety, now);
-    if (!mode.pull) return;
+    // Quotes the bot cannot amend go stale: once fair has moved half the spread from the fair a
+    // quote was set at, it would cross fair, so it is pulled too (T-5).
+    const drift = snap.ok ? Math.max(0, ...Object.values(this.state.orders).filter((s) => s.quotedFair > 0).map((s) => Math.abs(snap.fair / s.quotedFair - 1))) : 0;
+    const drifted = drift > c.quotes.spreadPct / 200;
+    if (!mode.pull && !drifted) return;
+    const why = mode.pull ? mode.reason ?? mode.mode : `drift: fair moved ${(drift * 100).toFixed(2)}% from a quote's`;
     const timeout = c.safety.orderVisibleTimeoutSec * 1000;
     const due = Object.entries(this.state.orders).filter(([, s]) => s.pending?.kind !== 'cancel' || now - s.pending.since > timeout);
     if (!due.length) return;
     const { changed: _c, pull: _p, ...rec } = mode;
-    this.state.mode = rec;
+    if (mode.pull) this.state.mode = rec;
     if (!existsSync(this.p.views)) {
-      this.alert('error', 'blind-pull', `Quotes are due to be pulled (${mode.reason ?? mode.mode}) but the wallet or indexer read failed (${cause.message}) and no order view is saved: cancel ${due.length} order(s) by hand.`, {}, mode);
+      this.alert('error', 'blind-pull', `Quotes are due to be pulled (${why}) but the wallet or indexer read failed (${cause.message}) and no order view is saved: cancel ${due.length} order(s) by hand.`, {}, mode);
       this.save();
       return;
     }
     this.log.info(`pull ${due.length} quote(s) without the indexer (${cause.message}): kob cancel --view ${this.p.views}`);
     const r = await this.kob.cancelViews(this.p.views);
-    this.log.action({ type: 'blind-cancel', reason: mode.reason ?? mode.mode, ids: r.ids, txids: r.txids, fee: r.fee, error: r.error });
+    this.log.action({ type: 'blind-cancel', reason: why, ids: r.ids, txids: r.txids, fee: r.fee, error: r.error });
     if (!this.dryRun) {
       if (r.fee) addFee(this.state, 'cancel', r.fee);
       for (const id of r.ids) if (this.state.orders[id]) this.state.orders[id].pending = { kind: 'cancel', since: now, txid: null };
     }
     const left = due.length - r.ids.length;
-    this.alert(left ? 'error' : 'warn', 'blind-pull', `Quotes pulled without the indexer (${mode.reason ?? mode.mode}): ${r.ids.length} cancel(s) sent through the node${left ? `; ${left} order(s) could not be cancelled from the saved views (${r.error ?? 'stale'}): check them by hand` : ''}.`, {}, mode);
+    this.alert(left ? 'error' : 'warn', 'blind-pull', `Quotes pulled without the indexer (${why}): ${r.ids.length} cancel(s) sent through the node${left ? `; ${left} order(s) could not be cancelled from the saved views (${r.error ?? 'stale'}): check them by hand` : ''}.`, {}, mode);
     this.save();
   }
 
@@ -231,13 +238,39 @@ export class Bot {
    */
   saveViews() {
     if (this.dryRun) return;
-    const items = this.idx.views[this.cfg.token.covenantId] ?? [];
+    const items = [...(this.idx.views[this.cfg.token.covenantId] ?? [])];
+    // An order the indexer stops listing keeps its last view while the state file tracks it: the
+    // node, not the indexer, decides when it has ended (T-4).
+    const listed = new Set(items.map((v) => v.covenant_id));
+    for (const v of this.savedViews()) if (!listed.has(v.covenant_id) && this.state.orders[v.covenant_id]) items.push(v);
     const text = `${JSON.stringify({ items }, null, 1)}\n`;
     try {
       if (existsSync(this.p.views) && readFileSync(this.p.views, 'utf8') === text) return;
     } catch { /* rewrite */ }
     writeFileSync(`${this.p.views}.tmp`, text);
     renameSync(`${this.p.views}.tmp`, this.p.views);
+  }
+
+  /** The saved order views ([] when none or unreadable). */
+  savedViews() {
+    try {
+      return JSON.parse(readFileSync(this.p.views, 'utf8')).items ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * An order the indexer no longer shows live, checked on the node from its saved view (T-4):
+   * 'live' (the indexer hides it), 'gone' (its UTXO is spent), 'unknown' (no view, or the node did
+   * not answer).
+   */
+  async onNode(id) {
+    const v = this.savedViews().find((x) => x.covenant_id === id);
+    if (!v) return 'unknown';
+    const file = `${this.p.views}.one.json`;
+    writeFileSync(file, `${JSON.stringify({ items: [v] })}\n`);
+    return this.kob.viewLive(file);
   }
 
   /**
@@ -281,6 +314,27 @@ export class Bot {
         continue;
       }
       if (!one && s.pending && now - s.pending.since <= timeout) continue;
+      // The indexer's word alone does not end an order: a lying one could hide a quote from every
+      // pull and from STOP (T-4). The node decides from the last saved view.
+      const node = this.dryRun ? 'gone' : await this.onNode(id);
+      if (node === 'live') {
+        if (!s.hidden) {
+          this.alert('error', 'indexer-hides', `The indexer does not list order ${short(id)} (${s.side} L${s.level}) as live, but the node still holds it: it is cancelled from its saved view; check the indexer.`);
+          s.hidden = true;
+        }
+        if (s.pending?.kind !== 'cancel' || now - s.pending.since > timeout) {
+          const file = `${this.p.views}.one.json`;
+          const r = await this.kob.cancelViews(file);
+          this.log.action({ type: 'hidden-cancel', id, txids: r.txids, fee: r.fee, error: r.error });
+          if (r.fee) addFee(this.state, 'cancel', r.fee);
+          if (r.ids.includes(id)) s.pending = { kind: 'cancel', since: now, txid: r.txids[0] ?? null };
+        }
+        continue;
+      }
+      if (node === 'unknown' && this.savedViews().some((x) => x.covenant_id === id)) {
+        this.log.info(`${short(id)}: not live on the indexer and the node did not answer: kept until the node confirms it ended`);
+        continue;
+      }
       const status = one?.status ?? 'unknown to the indexer';
       this.log.info(`${short(id)} (${s.side} L${s.level}) ended: ${status}`);
       this.log.action({ type: 'ended', id, side: s.side, level: s.level, status });
@@ -402,6 +456,8 @@ export class Bot {
       this.log.info(`${desc} (${a.reason}): FAILED ${r.error}`);
       // The order's state is unknown now: leave it alone until the next cycle has re-read it.
       if (a.id && this.state.orders[a.id]) this.state.orders[a.id].pending = { kind: 'reread', since: Date.now() };
+      // A send that may have gone out counts its planned fee toward the daily cap (L25).
+      if (r.sentFee && !this.dryRun) addFee(this.state, `${a.kind}-unknown`, r.sentFee);
       this.save();
       return r;
     }

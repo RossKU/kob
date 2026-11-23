@@ -110,7 +110,8 @@ export async function readReference(cfg, memory, nowMs = Date.now()) {
     snap.fair = fairValueKas(tokenUsd.value, c.kasUsd);
     snap.jump = oneMinuteJump(venues, c.used, c.kasUsd, memory.history, nowMs);
     memory.history.push({ at: nowMs, kasUsd: c.kasUsd });
-    memory.history = memory.history.filter((h) => nowMs - h.at <= 300_000);
+    // Kept past the longest backoff (5 min) plus a cycle, so a failing bot still has a reading to compare.
+    memory.history = memory.history.filter((h) => nowMs - h.at <= 900_000);
   } else {
     memory.history = [];
   }

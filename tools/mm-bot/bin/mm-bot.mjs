@@ -48,6 +48,9 @@ const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { retu
 
 if (cmd === 'check') {
   const { configPath: _p, ...shown } = cfg;
+  // Where the key lives and the webhook's URL (it may carry a token) stay out of the output (L25).
+  if (shown.keyFile) shown.keyFile = '(set)';
+  if (shown.alerts?.webhookUrl) shown.alerts = { ...shown.alerts, webhookUrl: '(set)' };
   console.log(JSON.stringify(shown, null, 2));
   console.log(`config ok${cfg.keyFile ? '' : process.env.KOB_KEY ? ' (key from KOB_KEY)' : '; WARNING: no keyFile and no KOB_KEY: signing will fail'}`);
   process.exit(0);

@@ -117,13 +117,15 @@ export function fairValueKas(tokenUsd, kasUsd) {
 }
 
 /**
- * The larger of the venues' median last-minute move and the reference's move against about a minute
- * ago.
+ * The larger of the venues' median last-minute move and the reference's move against its newest
+ * reading at least a minute old.
  */
 export function oneMinuteJump(venues, used, kasUsd, history, nowMs) {
   const moves = used.map((n) => venues[n]).filter((v) => v?.fresh && v.prevClose > 0).map((v) => Math.abs(v.lastClose / v.prevClose - 1));
   const candleMove = moves.length ? median(moves) : 0;
-  const earlier = [...history].reverse().find((h) => nowMs - h.at >= 55_000 && nowMs - h.at <= 120_000);
+  // The newest reading at least a minute old, whatever its age: while cycles fail and back off
+  // (up to 5 min apart), a steady drift is still measured against the last reading (T-5).
+  const earlier = [...history].reverse().find((h) => nowMs - h.at >= 55_000);
   const refMove = earlier ? Math.abs(kasUsd / earlier.kasUsd - 1) : 0;
   return Math.max(candleMove, refMove);
 }
