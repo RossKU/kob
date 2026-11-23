@@ -218,6 +218,12 @@ CREATE INDEX IF NOT EXISTS token_utxos_custody_live ON token_utxos (order_id, am
 -- The live strays of an order in page order (`GET /v1/orders/{id}`, on the light lane): anyone can send them to any order id, and the
 -- view reads only the live ones it lists, not every token UTXO the order ever had (R3C2-1). Created in place like `orders_parent_page`.
 CREATE INDEX IF NOT EXISTS token_utxos_strays_live ON token_utxos (order_id, created_block, txid, idx) WHERE role = 'stray' AND spent_block IS NULL;
+-- The live strays of all orders newest first (`GET /v1/strays`): a page stops at its end, not after a sort of every live stray
+-- (R3C2-1 item 7). Created in place like `token_utxos_strays_live`.
+CREATE INDEX IF NOT EXISTS token_utxos_strays_new ON token_utxos (created_block DESC, txid, idx) WHERE role = 'stray' AND spent_block IS NULL;
+-- The live bought-custody of a Collected (mode-1) order (`reads::attach_holdings`, on the light lane): not every token UTXO the order
+-- ever had, strays included (R4C2-5). Created in place.
+CREATE INDEX IF NOT EXISTS token_utxos_bought_live ON token_utxos (order_id, created_block, txid, idx) WHERE role = 'bought' AND spent_block IS NULL;
 CREATE INDEX IF NOT EXISTS token_utxos_created ON token_utxos (created_block);
 CREATE INDEX IF NOT EXISTS token_utxos_spent ON token_utxos (spent_block);
 
@@ -535,6 +541,37 @@ CREATE INDEX IF NOT EXISTS kcc23_auto_locks_covenant ON kcc23_auto_locks (covena
 CREATE TRIGGER IF NOT EXISTS kcc23_auto_locks_delete AFTER DELETE ON kcc23_declarations BEGIN
     DELETE FROM kcc23_auto_locks WHERE covenant_id = OLD.covenant_id;
 END;
+-- The automatic locks whose locked output is still an unspent holding, by their time (`kcc23::due_locks`): a released lock leaves
+-- it, so the keepers' read does not walk every lock released so far (R4C2-6). Kept by the triggers below from the locks and the
+-- holdings; `db::backfill_auto_live` fills it once (`meta.kcc23_auto_live`). Created in place.
+CREATE INDEX IF NOT EXISTS kcc23_auto_locks_output ON kcc23_auto_locks (genesis_txid, idx);
+CREATE TABLE IF NOT EXISTS kcc23_auto_live (
+    until         INTEGER NOT NULL,
+    covenant_id   BLOB NOT NULL,
+    PRIMARY KEY (until, covenant_id)
+) WITHOUT ROWID;
+CREATE TRIGGER IF NOT EXISTS kcc23_auto_live_lock_insert AFTER INSERT ON kcc23_auto_locks BEGIN
+    INSERT OR IGNORE INTO kcc23_auto_live (until, covenant_id) SELECT NEW.until, NEW.covenant_id
+        WHERE EXISTS (SELECT 1 FROM token_holdings h WHERE h.idx = NEW.idx AND h.spent_block IS NULL
+                      AND h.tx_id = (SELECT id FROM txs WHERE substr(h, 1, 8) = substr(NEW.genesis_txid, 1, 8) AND h = NEW.genesis_txid));
+END;
+CREATE TRIGGER IF NOT EXISTS kcc23_auto_live_lock_delete AFTER DELETE ON kcc23_auto_locks BEGIN
+    DELETE FROM kcc23_auto_live WHERE until = OLD.until AND covenant_id = OLD.covenant_id;
+END;
+CREATE TRIGGER IF NOT EXISTS kcc23_auto_live_holding_insert AFTER INSERT ON token_holdings WHEN NEW.spent_block IS NULL BEGIN
+    INSERT OR IGNORE INTO kcc23_auto_live (until, covenant_id) SELECT a.until, a.covenant_id FROM kcc23_auto_locks a
+        WHERE a.genesis_txid = (SELECT h FROM txs WHERE id = NEW.tx_id) AND a.idx = NEW.idx;
+END;
+CREATE TRIGGER IF NOT EXISTS kcc23_auto_live_holding_update AFTER UPDATE OF spent_block, tx_id, idx ON token_holdings BEGIN
+    DELETE FROM kcc23_auto_live WHERE (until, covenant_id) IN (SELECT a.until, a.covenant_id FROM kcc23_auto_locks a
+        WHERE a.genesis_txid = (SELECT h FROM txs WHERE id = OLD.tx_id) AND a.idx = OLD.idx);
+    INSERT OR IGNORE INTO kcc23_auto_live (until, covenant_id) SELECT a.until, a.covenant_id FROM kcc23_auto_locks a
+        WHERE NEW.spent_block IS NULL AND a.genesis_txid = (SELECT h FROM txs WHERE id = NEW.tx_id) AND a.idx = NEW.idx;
+END;
+CREATE TRIGGER IF NOT EXISTS kcc23_auto_live_holding_delete AFTER DELETE ON token_holdings BEGIN
+    DELETE FROM kcc23_auto_live WHERE (until, covenant_id) IN (SELECT a.until, a.covenant_id FROM kcc23_auto_locks a
+        WHERE a.genesis_txid = (SELECT h FROM txs WHERE id = OLD.tx_id) AND a.idx = OLD.idx);
+END;
 
 -- Row counts `GET /v1/health` reports (`reads::counters`), kept by the triggers below in the transaction of every write
 -- (a batch, a revert, a replay, an operator import), so a health check reads a few rows instead of counting the history.
@@ -794,3 +831,147 @@ CREATE INDEX IF NOT EXISTS recorded_outputs_created ON recorded_outputs (created
 CREATE INDEX IF NOT EXISTS recorded_outputs_spent ON recorded_outputs (spent_block) WHERE spent_block IS NOT NULL;
 CREATE INDEX IF NOT EXISTS recorded_outputs_spent_daa ON recorded_outputs (spent_daa) WHERE spent_daa IS NOT NULL;
 CREATE INDEX IF NOT EXISTS recorded_outputs_live_daa ON recorded_outputs (created_daa) WHERE spent_daa IS NULL;
+
+-- (R4C2-2) The live books, kept by the triggers below from `orders` and `order_state`, and their fillable window by the writer
+-- (`db::maintain_live_books`, at every commit); `db::backfill_book_live` fills them once (`meta.book_live`). The book and pair
+-- reads take a bounded prefix of the rows fillable now (`open` = 1), in their order: a row that cannot be filled now is outside
+-- the index range they read, so it costs them nothing and takes no place.
+-- `book_live`: each order of a KAS book that is open or partial, listed, in a book and priced, best first per token side: keyed by
+-- its price per base unit (`price / scale`, a REAL; a bid's negated, so both sides read ascending; a curve's current level), then
+-- age and covenant id (`reads::book_from`). `auction`: its quote moves (a decaying ask, a rising bid, an armed entry), read apart.
+CREATE TABLE IF NOT EXISTS book_live (
+    order_id      INTEGER PRIMARY KEY,    -- orders.id
+    token_id      INTEGER NOT NULL,
+    side          INTEGER NOT NULL,
+    key           REAL NOT NULL,
+    genesis_block INTEGER NOT NULL,
+    covenant_id   BLOB NOT NULL,
+    -- When the current state can be filled, set by the writer (`db::maintain_live_books`): NULL until then. `open`: 0 not yet
+    -- (`open_from` after the store's DAA score), 1 fillable, 2 past `closed_from` (soft expiry, idle, expiry), 3 never as it
+    -- stands (`ok` 0: no exact custody, possibly frozen, a taker kind, an unarmed entry, nothing left), 4 past its day-order
+    -- `deadline` (unix seconds). A row the writer has not set yet (`ok` NULL, an older build's write) counts as 1, and the
+    -- reads decide it row by row.
+    open_from     INTEGER,
+    closed_from   INTEGER,
+    deadline      INTEGER,
+    ok            INTEGER,
+    open          INTEGER NOT NULL DEFAULT 1,
+    auction       INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS book_live_key ON book_live (token_id, side, open, auction, key, genesis_block, covenant_id);
+CREATE INDEX IF NOT EXISTS book_live_pending ON book_live (token_id, side, open, open_from);
+CREATE INDEX IF NOT EXISTS book_live_unset ON book_live (order_id) WHERE ok IS NULL;
+CREATE INDEX IF NOT EXISTS book_live_opens ON book_live (open, open_from);
+CREATE INDEX IF NOT EXISTS book_live_closes ON book_live (open, closed_from);
+CREATE INDEX IF NOT EXISTS book_live_deadline ON book_live (open, deadline) WHERE deadline IS NOT NULL;
+-- `pair_live`: each pair order that is open or partial and listed, oldest first (`pairs::pair_orders`, `pairs::pairs`).
+CREATE TABLE IF NOT EXISTS pair_live (
+    order_id      INTEGER PRIMARY KEY,    -- orders.id
+    token_id      INTEGER NOT NULL,       -- the base token A
+    quote_id      INTEGER NOT NULL,       -- the quote token B
+    genesis_block INTEGER NOT NULL,
+    covenant_id   BLOB NOT NULL,
+    -- When the current state can be filled, set by the writer (`db::maintain_live_books`): NULL until then. `open`: 0 not yet
+    -- (`open_from` after the store's DAA score), 1 fillable, 2 past `closed_from` (soft expiry, idle, expiry), 3 never as it
+    -- stands (`ok` 0: no exact custody, possibly frozen, a taker kind, an unarmed entry, nothing left), 4 past its day-order
+    -- `deadline` (unix seconds). A row the writer has not set yet (`ok` NULL, an older build's write) counts as 1, and the
+    -- reads decide it row by row.
+    open_from     INTEGER,
+    closed_from   INTEGER,
+    deadline      INTEGER,
+    ok            INTEGER,
+    open          INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS pair_live_pair ON pair_live (token_id, quote_id, open, genesis_block, covenant_id);
+CREATE INDEX IF NOT EXISTS pair_live_base ON pair_live (token_id, open, genesis_block, covenant_id);
+CREATE INDEX IF NOT EXISTS pair_live_quote ON pair_live (quote_id, open, genesis_block, covenant_id);
+CREATE INDEX IF NOT EXISTS pair_live_age ON pair_live (open, genesis_block, covenant_id);
+CREATE INDEX IF NOT EXISTS pair_live_pending ON pair_live (token_id, quote_id, open, open_from);
+CREATE INDEX IF NOT EXISTS pair_live_unset ON pair_live (order_id) WHERE ok IS NULL;
+CREATE INDEX IF NOT EXISTS pair_live_opens ON pair_live (open, open_from);
+CREATE INDEX IF NOT EXISTS pair_live_closes ON pair_live (open, closed_from);
+CREATE INDEX IF NOT EXISTS pair_live_deadline ON pair_live (open, deadline) WHERE deadline IS NOT NULL;
+CREATE TRIGGER IF NOT EXISTS book_live_state_insert AFTER INSERT ON order_state BEGIN
+    DELETE FROM book_live WHERE order_id = NEW.order_id;
+    DELETE FROM pair_live WHERE order_id = NEW.order_id;
+    INSERT INTO book_live (order_id, token_id, side, key, genesis_block, covenant_id)
+        SELECT o.id, o.token_id, o.side, CASE o.side WHEN 2 THEN -1.0 ELSE 1.0 END * o.price / MAX(COALESCE(o.scale, 1), 1),
+               o.genesis_block, o.covenant_id
+        FROM orders o WHERE o.id = NEW.order_id AND NEW.status IN ('open','partial') AND o.listed = 1 AND o.in_book = 1
+            AND o.price IS NOT NULL AND o.token_id IS NOT NULL;
+    INSERT INTO pair_live (order_id, token_id, quote_id, genesis_block, covenant_id)
+        SELECT o.id, o.token_id, o.quote_id, o.genesis_block, o.covenant_id
+        FROM orders o WHERE o.id = NEW.order_id AND NEW.status IN ('open','partial') AND o.listed = 1 AND o.quote_id IS NOT NULL
+            AND o.token_id IS NOT NULL;
+END;
+CREATE TRIGGER IF NOT EXISTS book_live_state_update AFTER UPDATE OF status ON order_state BEGIN
+    DELETE FROM book_live WHERE order_id = OLD.order_id;
+    DELETE FROM pair_live WHERE order_id = OLD.order_id;
+    INSERT INTO book_live (order_id, token_id, side, key, genesis_block, covenant_id)
+        SELECT o.id, o.token_id, o.side, CASE o.side WHEN 2 THEN -1.0 ELSE 1.0 END * o.price / MAX(COALESCE(o.scale, 1), 1),
+               o.genesis_block, o.covenant_id
+        FROM orders o WHERE o.id = NEW.order_id AND NEW.status IN ('open','partial') AND o.listed = 1 AND o.in_book = 1
+            AND o.price IS NOT NULL AND o.token_id IS NOT NULL;
+    INSERT INTO pair_live (order_id, token_id, quote_id, genesis_block, covenant_id)
+        SELECT o.id, o.token_id, o.quote_id, o.genesis_block, o.covenant_id
+        FROM orders o WHERE o.id = NEW.order_id AND NEW.status IN ('open','partial') AND o.listed = 1 AND o.quote_id IS NOT NULL
+            AND o.token_id IS NOT NULL;
+END;
+CREATE TRIGGER IF NOT EXISTS book_live_state_delete AFTER DELETE ON order_state BEGIN
+    DELETE FROM book_live WHERE order_id = OLD.order_id;
+    DELETE FROM pair_live WHERE order_id = OLD.order_id;
+END;
+CREATE TRIGGER IF NOT EXISTS book_live_order_insert AFTER INSERT ON orders BEGIN
+    DELETE FROM book_live WHERE order_id = NEW.id;
+    DELETE FROM pair_live WHERE order_id = NEW.id;
+    INSERT INTO book_live (order_id, token_id, side, key, genesis_block, covenant_id)
+        SELECT NEW.id, NEW.token_id, NEW.side, CASE NEW.side WHEN 2 THEN -1.0 ELSE 1.0 END * NEW.price / MAX(COALESCE(NEW.scale, 1), 1),
+               NEW.genesis_block, NEW.covenant_id
+        FROM order_state s WHERE s.order_id = NEW.id AND s.status IN ('open','partial') AND NEW.listed = 1 AND NEW.in_book = 1
+            AND NEW.price IS NOT NULL AND NEW.token_id IS NOT NULL;
+    INSERT INTO pair_live (order_id, token_id, quote_id, genesis_block, covenant_id)
+        SELECT NEW.id, NEW.token_id, NEW.quote_id, NEW.genesis_block, NEW.covenant_id
+        FROM order_state s WHERE s.order_id = NEW.id AND s.status IN ('open','partial') AND NEW.listed = 1 AND NEW.quote_id IS NOT NULL
+            AND NEW.token_id IS NOT NULL;
+END;
+CREATE TRIGGER IF NOT EXISTS book_live_order_update
+    AFTER UPDATE OF id, token_id, side, price, scale, listed, in_book, genesis_block, covenant_id, quote_id, tif, active_from, expiry_daa,
+    deadline ON orders BEGIN
+    DELETE FROM book_live WHERE order_id = OLD.id;
+    DELETE FROM pair_live WHERE order_id = OLD.id;
+    INSERT INTO book_live (order_id, token_id, side, key, genesis_block, covenant_id)
+        SELECT NEW.id, NEW.token_id, NEW.side, CASE NEW.side WHEN 2 THEN -1.0 ELSE 1.0 END * NEW.price / MAX(COALESCE(NEW.scale, 1), 1),
+               NEW.genesis_block, NEW.covenant_id
+        FROM order_state s WHERE s.order_id = NEW.id AND s.status IN ('open','partial') AND NEW.listed = 1 AND NEW.in_book = 1
+            AND NEW.price IS NOT NULL AND NEW.token_id IS NOT NULL;
+    INSERT INTO pair_live (order_id, token_id, quote_id, genesis_block, covenant_id)
+        SELECT NEW.id, NEW.token_id, NEW.quote_id, NEW.genesis_block, NEW.covenant_id
+        FROM order_state s WHERE s.order_id = NEW.id AND s.status IN ('open','partial') AND NEW.listed = 1 AND NEW.quote_id IS NOT NULL
+            AND NEW.token_id IS NOT NULL;
+END;
+CREATE TRIGGER IF NOT EXISTS book_live_order_delete AFTER DELETE ON orders BEGIN
+    DELETE FROM book_live WHERE order_id = OLD.id;
+    DELETE FROM pair_live WHERE order_id = OLD.id;
+END;
+-- What else decides whether a live order can be filled: its custody and the possibly-frozen flag. A change sends its rows back to
+-- the writer (`ok` NULL).
+CREATE TRIGGER IF NOT EXISTS book_live_custody_insert AFTER INSERT ON token_utxos WHEN NEW.role IN ('custody','bought') BEGIN
+    UPDATE book_live SET ok = NULL, open = 1 WHERE order_id = NEW.order_id;
+    UPDATE pair_live SET ok = NULL, open = 1 WHERE order_id = NEW.order_id;
+END;
+CREATE TRIGGER IF NOT EXISTS book_live_custody_update AFTER UPDATE OF spent_block, amount, role, order_id ON token_utxos WHEN OLD.role IN ('custody','bought') OR NEW.role IN ('custody','bought') BEGIN
+    UPDATE book_live SET ok = NULL, open = 1 WHERE order_id = NEW.order_id;
+    UPDATE pair_live SET ok = NULL, open = 1 WHERE order_id = NEW.order_id;
+END;
+CREATE TRIGGER IF NOT EXISTS book_live_custody_delete AFTER DELETE ON token_utxos WHEN OLD.role IN ('custody','bought') BEGIN
+    UPDATE book_live SET ok = NULL, open = 1 WHERE order_id = OLD.order_id;
+    UPDATE pair_live SET ok = NULL, open = 1 WHERE order_id = OLD.order_id;
+END;
+CREATE TRIGGER IF NOT EXISTS book_live_flag_insert AFTER INSERT ON order_flags BEGIN
+    UPDATE book_live SET ok = NULL, open = 1 WHERE order_id = (SELECT id FROM orders WHERE covenant_id = NEW.covenant_id);
+    UPDATE pair_live SET ok = NULL, open = 1 WHERE order_id = (SELECT id FROM orders WHERE covenant_id = NEW.covenant_id);
+END;
+CREATE TRIGGER IF NOT EXISTS book_live_flag_delete AFTER DELETE ON order_flags BEGIN
+    UPDATE book_live SET ok = NULL, open = 1 WHERE order_id = (SELECT id FROM orders WHERE covenant_id = OLD.covenant_id);
+    UPDATE pair_live SET ok = NULL, open = 1 WHERE order_id = (SELECT id FROM orders WHERE covenant_id = OLD.covenant_id);
+END;

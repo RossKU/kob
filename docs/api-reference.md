@@ -418,7 +418,7 @@ curl -s $API/v1/tokens
 | `genesis_verified` | bool or null | The registry's fact: every genesis output was checked against the pinned program; `null` when it does not say. |
 | `warnings` | array of string | Derived from facts: `genesis_unverified` (unless `genesis_verified` is true), `live_mint_authority` (a genesis record lists a live mint authority; supply can still grow). Show them. |
 | `powers` | array of string | Capabilities of the program that reach balances or supply (`freeze`, `seize`, `blacklist`, `mint-authority`, ...). |
-| `open_asks`, `open_bids` | number | Listed live asks / bids (the orders the KAS book lists, section 3.6). |
+| `open_asks`, `open_bids` | number | Listed live asks / bids (the orders the KAS book lists, section 3.6), at most 1,400 (its bounds). |
 | `declaration` | `true`, **omitted** | Present only when the indexer holds a verified KCC-23 declaration for the token. |
 
 KOB makes no per-token judgement: there is no standing or "official" flag.
@@ -490,6 +490,16 @@ amount counts once: an aggregated level counts it as one of its `orders`; with `
 with its `covenant_id` and `curve_level` (the table index, omitted for other orders), `price` and `quote` the level's price and
 `amount_left` and `fillable_now` the level's size. A curve is never idle (it has no refund).
 
+**Cap (R4C2-2).** A side is read only from its orders a taker can fill now, best first by price per base unit (a curve by its
+current level's price): at most 1,000 with a fixed quote (`BOOK_ORDERS_MAX`), and apart at most 200 auctions (a decaying ask, a
+rising bid, an armed entry: their limit is not their quote, so they are ranked apart and cannot take the places of the others) and
+at most 200 orders that became fillable after the indexer's last commit (`BOOK_MOVING_MAX`). An order that cannot be filled now
+(not active yet, a TWAP or DCA slice not open yet, expired, idle 90 days, past its day-order deadline, an IOC or FOK taker, no
+exact custody, possibly frozen, a curve sold out) takes no place: the indexer keeps the window in which each order can be filled
+and the read never sees the others. A side of more is cut, and `truncated: true` (sent only then) says so. A smaller book is read
+whole, as before. `/v1/depth` (`truncated`), `/v1/stats/{token}` (`book_truncated`), the counts of `/v1/tokens` (at most 1,400 a
+side) and the KAS route of a pair book read the same rows.
+
 ### 3.7 Pairs
 
 A pair `base/quote` (two token covenant ids) is **oriented**: its pair orders are those whose base token A is `base` and quote
@@ -521,8 +531,10 @@ through the two KAS books; indicative). The price of a level is `price_num / pri
 descending. `daa_score` (number) is the DAA score the quotes are evaluated at (the node's, else the cursor's).
 The direct and entry levels come from the oldest 2,000 pair orders that rest at a level, found among the oldest 20,000 listed
 live candidates that are active, GTC, not expired and not past their deadline (an unarmed stop entry, a TWAP slice not due yet
-or an inexact custody counts toward the 20,000 but not the 2,000). `orders_truncated` (bool) is true when either bound cut them,
-so newer resting orders may be missing.
+or an inexact custody counts toward the 20,000 but not the 2,000). The candidates are the oldest 20,001 pair orders of the pair a
+taker can fill now, and at most 200 that became fillable after the indexer's last commit: an order not active yet, expired, past
+its deadline, between TWAP slices, an unarmed entry or without its exact custody takes no place (R4C2-2). `orders_truncated` (bool)
+is true when a bound cut them, so newer resting orders may be missing.
 
 **`GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=`** takes the parameters of `/v1/candles/{token}`
 (section 3.16: `interval` default `5m`, `limit` default 500, at most 1500). The candles are **derived from the two KAS series**,
@@ -729,6 +741,9 @@ Heavy. No cursor.
 Response `{"items": [...]}`. Each item has the token UTXO fields of section 3.9 plus `order_status` (the order's status or
 null), `maker` (hex or null) and `lost` (true when the order has terminated, so the maker's cancel can no longer sweep it).
 
+**Cap.** With `maker`, only the newest 10,000 live strays of all makers are searched (`STRAYS_SCAN_MAX`; anyone can send strays to
+any order id), so an older stray of the maker may be missing; `GET /v1/orders/{covenant_id}` lists an order's own strays.
+
 ### 3.13 `GET /v1/token-events`
 
 Token identities first seen in placement records, **oldest first**. There is no cursor, so this returns the oldest `limit` rows.
@@ -766,6 +781,10 @@ gap) and why a consumer must still check a UTXO against the node before spending
 
 At least one of `owner` and `token` is required: `400` ("owner or token is required"). The query matches the 32-byte owner
 whatever its kind, so filter on `owner_kind` when spending. Items come **oldest first** (created block, txid, index).
+
+**Short pages.** With both `owner` and `token`, a page reads at most 10,000 of the owner's holdings (`HOLDINGS_SCAN_MAX`; the
+token is a filter on them, and an owner may hold any number of other tokens). Such a page may hold fewer than `limit` items, none at
+all, and still carry a `next_cursor`: keep paging while `next_cursor` is set.
 
 **Retention of spent holdings.** The live holdings are always all there. With `spent=true` an indexer that keeps the history (`lean =
 false`) lists **every** spent holding: it keeps them all by default (`archive_pruning = false`). An indexer whose operator turned on
@@ -894,6 +913,10 @@ asks up to 2 % above it, same reference, same value and both bounds inclusive. A
 are always present; an older indexer sends neither). The web app marks a thin book from them (the smaller side worth less than 0.1 % of the token's value, $100 at least and $10,000 at most).
 `window_truncated` is true when the day held more than 20,000 fill rows and the figures cover the newest ones. `best_bid`,
 `best_ask`, `mid`, the depth and the open counts (`open_asks` / `open_bids`: the orders of its two sides) come from the resting book of section 3.6.
+
+**Cap.** As the book of section 3.6, the touch, the depth band and the open counts are read from the orders of a side a taker
+can fill now, at most 1,000 with a fixed quote and 200 auctions, the best by price. `book_truncated: true` (sent only then) says a
+side was cut.
 
 ### 3.18 `GET /v1/depth/{token}`
 
@@ -1350,6 +1373,13 @@ too; WebSocket messages after the upgrade do not, they have their own cap).
 ### 5.3 Request timeout and concurrency
 
 * `max_concurrent_requests` (default 256) requests may be in flight; the next one is answered `503 overloaded` immediately.
+  `/v1/health`, `/v1/health/ready` and `/v1/metrics` answer from memory and take no place in it, so they answer while it is
+  full (R4C2-1).
+* With the per-client rate limit on, one client (its rate-limit key: an IPv4 address or an IPv6 `/64`) may have 8 requests in
+  flight, and the `/64`s of one IPv6 `/48` site 32 together; past either the request is answered `503 overloaded`
+  (`Retry-After: 1`). A client has 1 read on the light lane and 2 on the heavy lane at once; a further read of the same client
+  waits for one of them at most 500 ms, then is answered `503 overloaded`, to that client only. It takes 32 client keys (IPv4
+  addresses or IPv6 sites) that each keep 8 requests in flight to fill the 256; health answers even then.
 * A request that runs longer than `request_timeout_ms` (default 10,000) is answered `504 timeout`. The wait for a free
   read-pool connection counts. The abandoned read is cancelled (not started if still queued; interrupted if running) and its
   connection returns to the pool.
@@ -1392,7 +1422,9 @@ and `/v1/depth/{token}` are kept in a response cache per **data generation** of 
 committed batch, revert, operator import and possibly-frozen flag). The key is the request's parameters plus, for the reads that
 depend on the clock (books, pairs, pair books, stats, depth), the node's DAA score and the wall-clock second, so a cached body is
 byte for byte what the request would have computed.
-Concurrent requests of one key wait for one read; a failed read is not kept. At most 1,024 bodies and 32 MiB per generation are
+Concurrent requests of one key wait for one read; a failed read is not kept. The read is started by the first request (which
+needs a heavy read of its own client free within 500 ms, section 5.3) and then runs on its own: a request that goes away does not
+stop it, and the others do not wait for the first client's other reads (R4C2-3). At most 1,024 bodies and 32 MiB per generation are
 held; a new key past either bound evicts the least recently used bodies. This is invisible to clients except as lower latency: it adds no header and no staleness beyond the store's own.
 
 ### 5.7 Cache-Control

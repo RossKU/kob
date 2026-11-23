@@ -245,7 +245,8 @@ async fn lean_pruning_keeps_what_the_matcher_reads_and_the_file_bounded() {
         grew_lean * 3 < grew_full,
         "second half: the lean file grew {grew_lean} bytes ({size_mid} to {end_lean}), the full one {grew_full}"
     );
-    assert!(end_full as f64 > size_full_mid as f64 * 1.4, "the full file grows with the chain: {size_full_mid} to {end_full}");
+    // (1.35: the live books' tables and indexes, R4C2-2, are pages of the start size that do not grow with the history)
+    assert!(end_full as f64 > size_full_mid as f64 * 1.35, "the full file grows with the chain: {size_full_mid} to {end_full}");
 
     // the store goes on after the pruning: a revert inside the window, and a fill of the oldest live order
     let tip_before = node.tip();

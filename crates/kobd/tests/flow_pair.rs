@@ -1077,7 +1077,8 @@ fn junk_copies(c: &Ctx, cov: &Hash32, n: usize, custody: bool) {
 }
 
 /// Pair orders that never rest, ahead of a real one, cannot hide it from the pair book. Those the order columns rule out (not
-/// active for a long time) are left out by the SQL. Those only their rows tell (no exact custody) do not count toward the
+/// active for a long time) are left out by the SQL, among the oldest `PAIR_SCAN_MAX` + 1 it reads (R4C2-2). Those only their rows
+/// tell (no exact custody) do not count toward the
 /// orders a book is built from. Past the scan bound the book says it was cut.
 #[tokio::test]
 async fn junk_pair_orders_ahead_of_a_real_one_do_not_hide_it_from_the_pair_book() {

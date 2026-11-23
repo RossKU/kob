@@ -43,7 +43,7 @@ fn tok(n: u8) -> Vec<u8> {
 ///   (a stale state).
 /// - Custody rows: none, one, two, or the wrong amount.
 /// - Frozen flags, and token identities and holdings with ties of created blocks.
-fn store(seed: u64, n: usize) -> Connection {
+pub(super) fn store(seed: u64, n: usize) -> Connection {
     let conn = open_memory("testnet-10").unwrap();
     let mut r = Rng(seed);
     let contracts = ["KobAsk", "KobBid", "KobAskKron", "KobCondAsk", "KobIfdBid", "KobPair"];

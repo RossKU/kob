@@ -233,6 +233,7 @@ fn timed<T>(what: &str, limit: Duration, f: impl FnOnce() -> T) -> T {
 
 #[test]
 fn the_per_order_and_per_request_reads_stay_fast_on_a_store_of_soak_size() {
+    let _heavy = super::bounds_tests::HEAVY.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("kob-scale-{}-{}", std::process::id(), rows()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

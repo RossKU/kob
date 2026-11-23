@@ -180,6 +180,14 @@ WebSockets, ...). The API believes a forwarding header only from a peer in `api.
   header falls back to the peer address. IPv6 visitors are keyed by their /64 (`rate_limit.ipv6_prefix_bits`).
 * Keep `listen` on loopback: the API must not be reachable around the tunnel. (Any program on the host could also connect and set
   the header; on a single-user machine that is acceptable.)
+* Leave Cloudflare's **Pseudo IPv4** off (*Network* > *Pseudo IPv4*: "Off"; never "Overwrite headers"). With it,
+  `cf-connecting-ip` carries a made-up Class E IPv4 address hashed from the visitor's IPv6 address, so every /64 of one
+  allocation becomes a separate IPv4 key: the /64 and /48 grouping of IPv6 clients (`ipv6_prefix_bits`, `ipv6_site_prefix_bits`)
+  no longer applies, and one IPv6 allocation counts as thousands of clients for the rate limits and the requests in flight.
+* Visitors behind one carrier-grade NAT or company address share one key: one client's rate limit (20 requests per second),
+  8 requests in flight, and 1 light and 2 heavy reads at a time (`docs/api-reference.md` 5.2 and 5.3). A co-located heavy
+  user can use them up for the others; past them a visitor gets `503 overloaded` or `429` with `Retry-After`, which the web
+  app retries. Nothing in the API can tell such visitors apart.
 
 **CORS.** The app is served from the Pages origin (`https://kob-web.pages.dev`, a custom domain), the API from
 `https://chart.example.org`: the browser reads the API's answers only when they carry `Access-Control-Allow-Origin`. The API

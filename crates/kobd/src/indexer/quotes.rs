@@ -23,7 +23,7 @@ const MINUTE: i64 = 60_000;
 type Side = Option<(i64, i64)>;
 
 fn best(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64) -> DbResult<Side> {
-    Ok(book_side_sorted(conn, ctx, token, side, Some(1))?.first().map(|l| l.0))
+    Ok(book_side_sorted(conn, ctx, token, side, Some(1))?.0.first().map(|l| l.0))
 }
 
 /// The tokens to sample: those with a live listed order, and those that have rows (so an emptied
