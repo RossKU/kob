@@ -121,6 +121,19 @@ describe('a token the connected wallet holds (R2B-M1)', () => {
     expect(logoGate.holding(null, A)).toBe('unknown');
   });
 
+  it('a token in an order naming the key counts as held, and stays so after a holdings read without it (R3B-M1)', () => {
+    logoGate.noteHoldings('k', '*', []);
+    expect(logoGate.holding('k', A)).toBe('not-held');
+    logoGate.noteRelated('k', [A.toUpperCase(), 'junk']);
+    expect(logoGate.holding('k', A)).toBe('held');
+    logoGate.noteHoldings('k', '*', []);
+    expect(logoGate.holding('k', A)).toBe('held');
+    expect(logoScope(undefined, 'indexer', logoGate.holding('k', A))).toBe('wallet');
+    // another key's orders say nothing of this one
+    logoGate.noteRelated('k2', [B]);
+    expect(logoGate.holding('k', B)).toBe('unknown');
+  });
+
   it('another wallet starts over', () => {
     logoGate.noteHoldings('k1', '*', [A]);
     expect(logoGate.holding('k2', A)).toBe('unknown');

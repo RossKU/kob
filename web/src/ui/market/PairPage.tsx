@@ -59,7 +59,7 @@ import { RiskChip, TokenFacts, tokenTitle } from './TokenBadges';
 import { IdentityBlock } from './Fingerprint';
 import { PairDetails } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
-import { applyGenesisCheck, buildTokenRows, scaleNeedsIndexer, sharedTickerIds, tokenLabel, tradableRows, withShownRows } from './token-model';
+import { applyGenesisCheck, buildTokenRows, scaleNeedsIndexer, tokenLabel, tradableRows, withShownRows } from './token-model';
 import { useHeldUntil } from './use-market-list';
 import { useMarketToken } from './use-market-token';
 import { useStandalone } from '../shell/standalone';
@@ -90,7 +90,6 @@ export function PairPage(props: { base: string; quote: string }) {
   const choiceRows = useMemo(() => tradableRows(rows, kob.templates()), [rows, kob]);
   // Listed tokens that share a ticker with another listed token. Each token's facts and the ticket
   // get a short note.
-  const shared = useMemo(() => sharedTickerIds(choiceRows), [choiceRows]);
   // Each token as its own page resolves it. No decimals are entered here, and a first order is
   // placed on the token's page.
   const sideOptions = { rows, rowsLoading: tokenList.loading, refreshKey: liveKey, decimals: null, declared };
@@ -460,7 +459,7 @@ export function PairPage(props: { base: string; quote: string }) {
       }
       mine={wallet.info ? <OrdersView embed={{ base: props.base, quote: props.quote }} /> : undefined}
       activity={<MarketActivity market={{ kind: 'pair', base: props.base, quote: props.quote }} pairFills={pairFillsSrc} />}
-      details={<PairDetails shared={shared} rows={checkedRows} services={services} />}
+      details={<PairDetails listed={choiceRows} rows={checkedRows} services={services} />}
     />
   );
 }

@@ -269,6 +269,9 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   // read it.
   const acquired = useMemo(() => acquiredTokens(rows.filter((r) => r.entry.record && r.entry.record.origin !== 'indexer'), pubkey ? listCreations(services.config.network, pubkey) : []), [rows, pubkey, services.config.network]);
   logoGate.setAcquired(pubkey ?? null, acquired);
+  // Every order listed under this key, adopted ones included, makes its tokens held for the gate,
+  // so their logos are gated on every page, not only here.
+  if (pubkey) logoGate.noteRelated(pubkey, acquiredTokens(rows, []));
   const entryById = useMemo(() => new Map((d?.entries ?? []).map((e) => [e.id, e])), [d]);
   // An order of the market this panel stands on, as on a market page with "this market only". Every
   // order elsewhere is filtered out.
@@ -296,7 +299,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const marketText = (r: OrderRowModel): string => {
     const tk = shownToken(r.token, r.scale);
     const b = r.pair ? shownToken(r.pair.quote, r.pair.quoteScale) : undefined;
-    return tk && r.pair ? `${tk.ticker}/${b?.ticker ?? longId(r.pair.quote)}` : tk ? `${tk.ticker}/KAS` : r.token ? longId(r.token) : '—';
+    return tk && r.pair ? `${tickerUnit(tk.ticker, tk.covenantId)}/${b ? tickerUnit(b.ticker, b.covenantId) : longId(r.pair.quote)}` : tk ? `${tickerUnit(tk.ticker, tk.covenantId)}/KAS` : r.token ? longId(r.token) : '—';
   };
   // The average fill price of an order in Order history. It is read from its events once, for the
   // orders of the page shown (`useAvgPrices` below).
@@ -334,7 +337,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   // An amount of a token in base units as its token amount with the ticker.
   const coverText = (token: Hex, amount: bigint): string => {
     const tk = shownToken(token)!;
-    return `${formatUnits(amount, tk.decimals, { group: ',' })} ${tk.ticker}`;
+    return `${formatUnits(amount, tk.decimals, { group: ',' })} ${tickerUnit(tk.ticker, token)}`;
   };
   const strays = d?.strays ?? [];
   // A failed stray fetch is passed on as "unknown" (null). A record-path cancel then warns instead

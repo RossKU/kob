@@ -7,7 +7,7 @@ import { useState } from 'preact/hooks';
 import type { EventView } from '../../data/indexer-types';
 import { useTxUrl } from '../../app/explorer';
 import { has, t, RAW_TOKEN_DECIMALS } from '../../i18n';
-import type { TokenInfo } from '../../kob/registry';
+import { tickerUnit, type TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { formatKas } from '../../kob/units';
 import { Button, CopyText, ErrorBanner, unitParts, displayPriceText, exactPriceText, formatRowTimeUnix, Loading, rowTimeTitleUnix, Table, useAsync } from '../kit';
@@ -88,7 +88,7 @@ export function OrderFills(props: OrderFillsProps) {
                       <th class="right">{t('orders.fills.amountIn', { unit: unit.text || '?' })}</th>
                       {pairOrder ? (
                         <>
-                          <th class="right">{t('orders.fills.amountIn', { unit: quote?.ticker ?? '?' })}</th>
+                          <th class="right">{t('orders.fills.amountIn', { unit: quote ? tickerUnit(quote.ticker, quote.covenantId) : '?' })}</th>
                           <th>{t('orders.fills.via')}</th>
                         </>
                       ) : (

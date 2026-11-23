@@ -3,7 +3,7 @@ import { useServices } from '../../app/context';
 import type { StrayView } from '../../data/indexer-types';
 import { t, tIssue } from '../../i18n';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
-import type { TokenInfo } from '../../kob/registry';
+import { tickerUnit, type TokenInfo } from '../../kob/registry';
 import type { Hex, OrderState } from '../../kob/types';
 import { stopWorstPrice } from '../../kob/orders/cond-legs';
 import { formatUnits, parseKas, parsePricePerToken, safeRounding, tokenPriceToStatePrice, tryParseKas, tryParseUnits } from '../../kob/units';
@@ -269,7 +269,7 @@ export function AmendDialog(props: AmendDialogProps) {
             <>
               {' '}
               <span data-testid="amend-budget">
-                {t('orders.amend.previewBudget', { kas: kasText(preview.next.value), amount: `${formatUnits(preview.next.maxAmount, decimals, { group: ',' })} ${token?.ticker ?? ''}`.trim() })}
+                {t('orders.amend.previewBudget', { kas: kasText(preview.next.value), amount: `${formatUnits(preview.next.maxAmount, decimals, { group: ',' })} ${token ? tickerUnit(token.ticker, token.covenantId) : ''}`.trim() })}
               </span>
             </>
           ) : null}

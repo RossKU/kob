@@ -46,8 +46,8 @@ import { TokenFacts, tokenTitle } from './TokenBadges';
 import { TokenDetails, TokenHeader } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
 import { useGenesisCheck } from './use-genesis-check';
-import { applyGenesisCheck, buildTokenRows, scaleNeedsIndexer, sharedTickerIds, tradableRows, withShownRows } from './token-model';
-import { sharesKasTicker, tickerUnit } from '../../kob/registry';
+import { applyGenesisCheck, buildTokenRows, scaleNeedsIndexer, tickerNoteOf, tradableRows, withShownRows } from './token-model';
+import { tickerUnit } from '../../kob/registry';
 import { MarketActivity } from '../activity/ActivityPage';
 import { tradeRows } from './trades-model';
 import './market.css';
@@ -112,7 +112,6 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const choiceRows = useMemo(() => tradableRows(allRows, kob.templates()), [allRows, kob]);
   // Another listed token uses this ticker, or it reads as KAS, so the title and the ticket get a short
   // note.
-  const sharedIds = useMemo(() => sharedTickerIds(choiceRows), [choiceRows]);
   // The decimals entered for the token's first order, per token. They are used only while no order
   // tells the scale.
   const [entered, setEntered] = useState<{ id: string; decimals: number } | null>(null);
@@ -203,7 +202,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   // here reads as native KAS.
   const ticker = headerRow?.ticker || shown?.ticker || '';
   const name = tickerUnit(ticker, id);
-  const sharedTicker = sharedIds.has(id) || sharesKasTicker(ticker);
+  const sharedTicker = tickerNoteOf(choiceRows, id, ticker);
   // The tab title is `EXKCC/KAS · KOB`. A token still being looked up, or with no name, is named
   // by its short id and never a whole covenant id. It is `Token not found` when nothing names it.
   useDocumentTitle(row || tokens.loading || held.loading || pub.loading ? marketPageTitle({ name: row ? name : null, id }, { name: 'KAS', id: 'kas' }) : pageTitle(t('market.token.notFound')));

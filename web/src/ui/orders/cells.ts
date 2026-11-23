@@ -7,7 +7,7 @@
 // - A token without a name of its own shows its short id (`8347…cd64`) in the muted unit slot,
 //   never the long hex as a unit.
 import { formatUnits, statePriceToTokenPrice } from '../../kob/units';
-import { longId, shortId as covenantFragment } from '../../kob/registry';
+import { longId, shortId as covenantFragment, tickerNeedsId } from '../../kob/registry';
 import { columnPriceDp, formatRowTime, shortId } from '../kit/format';
 
 /** Most fraction digits an amount shows in a table or a strip. The title carries the rest. */
@@ -48,10 +48,13 @@ export interface UnitText {
 
 /**
  * The unit of a token's amount in a table. It is its ticker, or without one the short id of its
- * covenant id (`8347…cd64`) with the full id as the title.
+ * covenant id (`8347…cd64`) with the full id as the title. A ticker that reads as KAS or is not
+ * plain ASCII (`tickerNeedsId`) carries that short id too (`KAS (8347…cd64)`), so a token amount
+ * never reads as KAS. The short form keeps the table's columns as they are; the title has the id.
  */
 export function tokenUnit(ticker: string | undefined | null, covenantId: string | null | undefined): UnitText {
   if (isUnnamed(ticker, covenantId)) return covenantId ? { text: covenantFragment(covenantId), title: covenantId } : { text: '', title: undefined };
+  if (covenantId && tickerNeedsId(ticker)) return { text: `${ticker as string} (${covenantFragment(covenantId)})`, title: covenantId };
   return { text: ticker as string, title: undefined };
 }
 

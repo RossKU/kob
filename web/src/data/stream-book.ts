@@ -39,8 +39,12 @@ import type { KobWasm } from '../kob/wasm';
  */
 export const MIN_ORDER_VALUE_SOMPI = 100_000_000n;
 /**
- * The most orders a streamed book holds. Past it the oldest unconfirmed entries are forgotten
- * first, then the oldest confirmed ones, and the wallet's own orders last.
+ * The most orders a streamed book holds. Past it entries are forgotten in this order (`trim`):
+ * - the entry just put never, so a new placement or a continuation of a kept entry stays;
+ * - the wallet's own orders last;
+ * - first those of markets no view looked at lately (`focus`), then those farthest from their
+ *   market's best price on their side, then the oldest.
+ * Each trim sorts the book once: at most 2,001 entries.
  */
 export const MAX_STREAM_ORDERS = 2_000;
 
@@ -258,6 +262,8 @@ export function orderViewOf(e: StreamEntry, ctx: Pick<ListingContext, 'kob'>): O
     deadline: s64(snap.deadline), refund_due_daa: null, quote: d.price.toString(),
     custody: snap.custody ? { expected_amount: snap.custody.state.amount, utxo: tokenUtxoView(snap.custody, snap.covenantId, 'custody'), ok: true } : { expected_amount: null, utxo: null, ok: d.side === 'buy' },
     strays: [], last_block: 0, last_daa: daa, confirmations: null, settled: false, expired: false,
+    // A Collected bid that has bought: its bought-custody, which a taker's fill spends.
+    ...(snap.boughtCustody ? { bought_custody: { expected_amount: snap.boughtCustody.state.amount, utxo: tokenUtxoView(snap.boughtCustody, snap.covenantId, 'bought'), ok: true } } : {}),
   };
 }
 
@@ -303,6 +309,8 @@ export function tokensViewOf(entries: Iterable<StreamEntry>, ctx: ListingContext
 export class StreamBook {
   private readonly items = new Map<Hex, StreamEntry>();
   private readonly byOutpoint = new Map<string, Hex>();
+  /** Whether a view looked at this token's market lately. Absent: every market counts as looked at. */
+  focus: ((token: Hex) => boolean) | null = null;
   constructor(private readonly max = MAX_STREAM_ORDERS) {}
 
   get size(): number {
@@ -343,7 +351,7 @@ export class StreamBook {
     };
     this.items.set(id, e);
     this.index(e);
-    this.trim();
+    this.trim(id);
     return e;
   }
 
@@ -406,9 +414,34 @@ export class StreamBook {
     this.byOutpoint.clear();
   }
 
-  private trim(): void {
+  private trim(keep: Hex): void {
     if (this.items.size <= this.max) return;
-    const order = [...this.items.values()].sort((a, b) => Number(a.confirmed) - Number(b.confirmed) || (a.origin === 'receipt' ? 1 : 0) - (b.origin === 'receipt' ? 1 : 0) || a.seenMs - b.seenMs);
+    // Each entry's price per base unit, and the best of its market's side.
+    const facts = new Map<StreamEntry, { token: Hex; sell: boolean; p: number }>();
+    const best = new Map<string, number>();
+    for (const e of this.items.values()) {
+      const s = e.snap.order.state.state as unknown as Record<string, string | undefined>;
+      const token = String(s.tokenCovId ?? '').toLowerCase() as Hex;
+      const sell = e.snap.order.state.kind === 'KobAsk' || e.snap.order.state.kind === 'KobAskKron';
+      const scale = Number(s.scale ?? 0);
+      const p = scale > 0 ? Number(s.price ?? 0) / scale : 0;
+      facts.set(e, { token, sell, p });
+      if (!(p > 0)) continue;
+      const k = `${token}:${sell ? 1 : 0}`;
+      const b = best.get(k);
+      if (b === undefined || (sell ? p < b : p > b)) best.set(k, p);
+    }
+    // How far from the touch: 1 at the best price, more further out, Infinity without a price.
+    const away = (e: StreamEntry): number => {
+      const f = facts.get(e)!;
+      const b = best.get(`${f.token}:${f.sell ? 1 : 0}`);
+      return f.p > 0 && b !== undefined ? (f.sell ? f.p / b : b / f.p) : Infinity;
+    };
+    const focus = this.focus;
+    const seen = (e: StreamEntry): number => (focus === null || focus(facts.get(e)!.token) ? 1 : 0);
+    const order = [...this.items.values()]
+      .filter((e) => e.snap.covenantId !== keep)
+      .sort((a, b) => (a.origin === 'receipt' ? 1 : 0) - (b.origin === 'receipt' ? 1 : 0) || seen(a) - seen(b) || away(b) - away(a) || a.seenMs - b.seenMs);
     for (const e of order.slice(0, this.items.size - this.max)) this.remove(e.snap.covenantId);
   }
 }

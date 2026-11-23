@@ -88,6 +88,11 @@ export const ENTER_CHECK_MS = 1_000;
  */
 export const RETURN_CHECK_MS = 5_000;
 /**
+ * An automatic mode ends no sooner than this after it started, so an indexer that goes up and down
+ * switches the page at most twice a minute each way (the up/down side of the lag rule's hysteresis).
+ */
+export const MIN_AUTO_MS = 30_000;
+/**
  * An indexer that answers but is more than this many seconds behind the chain is not used. An
  * automatic mode starts, as for an indexer that is down.
  */
@@ -128,6 +133,8 @@ export const STALL_MS = 30_000;
 /** A failed subscription is tried again after this long, doubled up to SUBSCRIBE_RETRY_MAX_MS. */
 export const SUBSCRIBE_RETRY_MS = 5_000;
 export const SUBSCRIBE_RETRY_MAX_MS = 60_000;
+/** A market a view read the book of within this many ms counts as on screen when a full book trims. */
+const FOCUS_MS = 120_000;
 /** The housekeeping tick of the stall watch and the rechecks, in ms. */
 const TICK_MS = 5_000;
 /** Most orders or fills confirmed in one node read. */
@@ -250,6 +257,8 @@ export class StandaloneController {
   private readonly lagReturn: number;
   private readonly fastFallback: boolean;
   private readonly book = new StreamBook();
+  /** When a view last read each market's book. A full book forgets the others' orders first. */
+  private readonly looked = new Map<string, number>();
   private readonly listeners = new Set<(s: StandaloneState) => void>();
   private snap: StandaloneState = { active: false, reason: null, phase: 'off', sinceMs: null, version: 0, orders: 0, indexerBack: false, behind: false };
   private gen = 0;
@@ -307,6 +316,10 @@ export class StandaloneController {
     this.lagSwitch = d.lagSwitchSeconds ?? LAG_SWITCH_SECONDS;
     this.lagReturn = d.lagReturnSeconds ?? LAG_RETURN_SECONDS;
     this.indexer = standaloneIndexer(this);
+    this.book.focus = (t) => {
+      const at = this.looked.get(t);
+      return at !== undefined && this.now() - at <= FOCUS_MS;
+    };
     if (this.prefsNow.manual) this.enter('manual');
   }
 
@@ -372,6 +385,13 @@ export class StandaloneController {
    */
   report(a: HealthAssessment): void {
     if (this.disposed || this.manual) return;
+    // The banner's reason follows the indexer while an automatic mode is on: behind the chain, or
+    // not usable at all.
+    if (this.snap.active && this.snap.reason === 'auto') {
+      const answering = (a.level === 'ok' || a.level === 'warn') && !this.isCaughtUp(a) && typeof a.lagEstimate === 'number';
+      const behind = this.isUnfit(a) ? this.isBehind(a) : answering ? true : this.snap.behind;
+      if (behind !== this.snap.behind) this.set({ behind });
+    }
     if (this.isUnfit(a)) {
       this.disarmReturn();
       if (this.snap.indexerBack) this.set({ indexerBack: false });
@@ -441,6 +461,8 @@ export class StandaloneController {
         if (seq !== this.returnSeq) return;
         this.returnTimer = null;
         if (gen !== this.gen || !this.snap.active || this.snap.reason !== 'auto' || this.disposed || !this.isCaughtUp(b)) return;
+        // Too soon after the start: the next usable report looks again.
+        if (this.prefsNow.autoReturn && this.now() - (this.snap.sinceMs ?? 0) < MIN_AUTO_MS) return;
         if (this.prefsNow.autoReturn) this.exit();
         else if (!this.snap.indexerBack) this.set({ indexerBack: true });
       });
@@ -509,6 +531,7 @@ export class StandaloneController {
     return { kob: this.kob, daa: this.daa, nowUnix: BigInt(Math.floor(this.now() / 1000)), registry: (t) => this.registry?.(t) ?? this.carry.factsOf(t) };
   }
   bookView(token: Hex, q: { depth?: number; aggregate?: boolean } = {}): BookView {
+    this.looked.set(token.toLowerCase(), this.now());
     return bookViewOf(this.book.entries(), token, this.ctx(), q);
   }
   orderView(id: Hex): OrderView | null {

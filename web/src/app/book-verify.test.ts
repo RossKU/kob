@@ -227,3 +227,26 @@ describe('a book that was cut tells the planners nothing to show', () => {
     expect(p.issues.map((i) => i.code).filter((c) => /BOOK/.test(c))).toEqual([]);
   });
 });
+
+describe('a Collected bid that has bought (its fills spend its bought-custody)', () => {
+  it('is kept with its bought-custody, confirmed in the same node read; without that custody on the node it is left out', async () => {
+    const { holding } = await import('../testing/claim-fixtures');
+    const { tokenUtxoView } = await import('../testing/chain-fixtures');
+    const { snap, custody } = holding('create.bid');
+    const w = world();
+    w.chain.add({ transactionId: snap.order.transactionId, index: snap.order.index, amount: snap.order.amount, scriptPublicKey: kob.scriptPublicKey(snap.order.state), covenantId: snap.covenantId });
+    const view = { ...orderViewOf(kob, snap), delivery_mode: 1, bought: custody.state.amount, bought_custody: { expected_amount: custody.state.amount, utxo: tokenUtxoView(custody, 'custody', { role: 'bought' }), ok: true } };
+    w.views.set(snap.covenantId, view as OrderView);
+    const row = rowOf(snap, { side: 2 } as Partial<BookOrderView>);
+    const v = book([rowOf(w.real)], [row]);
+    // the custody is not on the node yet: the bid is no liquidity
+    const missing = await verifyBook(w.deps, v);
+    expect(missing.orders.get(snap.covenantId)).toBeUndefined();
+    expect(missing.dropped.map((d) => d.covenantId)).toContain(snap.covenantId);
+    w.chain.add({ transactionId: custody.transactionId, index: custody.index, amount: custody.amount, scriptPublicKey: kob.tokenScriptPublicKey('KCC20Ref', custody.state), covenantId: custody.covenantId });
+    const calls = w.nodeCalls();
+    const out = await verifyBook(w.deps, v);
+    expect(out.orders.get(snap.covenantId)?.boughtCustody).toMatchObject({ transactionId: custody.transactionId, index: custody.index });
+    expect(w.nodeCalls() - calls).toBe(1);
+  });
+});

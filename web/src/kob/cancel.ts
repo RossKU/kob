@@ -219,7 +219,9 @@ export function snapshotFromOrderView(view: OrderView): OrderSnapshot {
   // A bid's `custody` is its bought-custody too (kobd reads.rs).
   const bf = boughtOf(st);
   const bv = view.bought_custody?.utxo ?? (!pv && !cs.length ? (view.custody?.utxo ?? null) : null);
-  const boughtCustody = bf && bv && !bv.spent && bv.token === bf.token ? tokenUtxoFromView(bv, view.covenant_id, bf.ext, 'kcc20') : null;
+  // Its state is the one the order's state implies (bought units owned by the order under the
+  // state's commitment), never the view's: the node then confirms that script (node-verify.ts).
+  const boughtCustody = bf && bv && !bv.spent && bv.token === bf.token ? { ...tokenUtxoFromView(bv, view.covenant_id, bf.ext, 'kcc20'), state: custodyState('kcc20', bf.amount, view.covenant_id, bf.ext) } : null;
   return {
     ...(boughtCustody ? { boughtCustody } : {}),
     ...(split.foreign.length ? { foreign: split.foreign } : {}),
@@ -289,6 +291,8 @@ export function snapshotFromRecord(resolved: ResolvedRecord, strays: TokenUtxo[]
   return {
     covenantId: resolved.covenantId, order: resolved.order, custody: resolved.custody, ...(resolved.prefund ? { prefund: resolved.prefund } : {}), strays, refundDueDaa: null, deadline, source: 'record',
     ...(resolved.retired ? { retired: resolved.retired } : {}),
+    // A Collected order's bought-custody, found on the node at the script its state implies.
+    ...(resolved.boughtCustody ? { boughtCustody: resolved.boughtCustody } : {}),
   };
 }
 

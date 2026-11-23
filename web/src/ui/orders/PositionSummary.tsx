@@ -3,7 +3,7 @@ import { useState } from 'preact/hooks';
 import { formatNumber, t, RAW_TOKEN_DECIMALS } from '../../i18n';
 import type { EventView } from '../../data/indexer-types';
 import type { Position } from '../../kob/positions';
-import type { TokenInfo } from '../../kob/registry';
+import { tickerUnit, type TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { useFiat } from '../../app/use-fiat';
 import { Amount, Button, Loading, scaleOfDecimals, toError, unitParts, useAsync } from '../kit';
@@ -37,8 +37,8 @@ function Price(p: { value: bigint | null; token: TokenInfo | undefined; scale: b
   const tk = p.token;
   if (p.pair) {
     const q = p.pair.quote;
-    const base = tk?.ticker ?? '?';
-    return <span data-unit="pair">{unitParts(`${amountCell(p.value, q?.decimals ?? RAW_TOKEN_DECIMALS).text} ${q?.ticker ?? '?'} per ${base}`, true)}</span>;
+    const base = tk ? tickerUnit(tk.ticker, tk.covenantId) : '?';
+    return <span data-unit="pair">{unitParts(`${amountCell(p.value, q?.decimals ?? RAW_TOKEN_DECIMALS).text} ${q ? tickerUnit(q.ticker, q.covenantId) : '?'} per ${base}`, true)}</span>;
   }
   // One number of decimals for every price of the card: entry, exits and averages (`priceDpOf`, 5
   // significant digits, at most 6). The exact price is in the title.

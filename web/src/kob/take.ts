@@ -12,6 +12,7 @@
 import type { BookOrder, BookOrderUtxo, BookView, OrderPlan, PlanEnv, PlanIssue, TakeFacts, TakeFill, TakeStep } from './plan-types';
 import type { BuiltTx, KeyUtxo, TokenUtxo } from './types';
 import { baseKind, describeOrder } from './order-facts';
+import { boughtOf } from './bought';
 import { atFloor, buildWithCap, recordFee } from './fee-policy';
 import { guardRequest } from './request-guard';
 import { KobError } from './wasm';
@@ -62,6 +63,8 @@ function pickOf(env: PlanEnv, o: BookOrderUtxo, listed: bigint, side: 'buy' | 's
   const k = baseKind(st.kind);
   if (side === 'buy' ? k !== 'KobAsk' : k !== 'KobBid') return null;
   if (side === 'buy' && !o.custody) return null;
+  // A Collected bid that has bought is filled through its bought-custody, which must be known.
+  if (side === 'sell' && boughtOf(st) && !o.boughtCustody) return null;
   let d;
   try {
     d = describeOrder(st, env.kob);
@@ -182,7 +185,7 @@ const legOf = (p: Taken) => {
   const order = { transactionId: o.transactionId, index: o.index, amount: o.amount, blockDaaScore: o.blockDaaScore ?? '0', covenantId: o.covenantId ?? p.utxo.covenantId, state: o.state.state };
   return p.fill.side === 'ask'
     ? { kind: 'ask', order, custody: p.utxo.custody, amount: str(p.fill.amount), t: null }
-    : { kind: 'bid', order, amount: str(p.fill.amount), t: null };
+    : { kind: 'bid', order, amount: str(p.fill.amount), t: null, ...(boughtOf(o.state) && p.utxo.boughtCustody ? { delivery: { custody: p.utxo.boughtCustody } } : {}) };
 };
 
 const INSUFFICIENT_RE = /insufficient funds: need (\d+) sompi, have (\d+) sompi/;

@@ -13,7 +13,7 @@ import type { GenesisCheck } from '../../data/genesis-check';
 import type { KascovSpot } from '../../data/kascov';
 import type { DeclaredToken } from '../../data/token-declarations';
 import {
-  longId, normalizeTicker, sanitizeUntrusted, sharesKasTicker, verifyIndexerToken, type TokenInfo, type TokenRegistry, type UntradableReason,
+  longId, normalizeTicker, readsAsKas, sanitizeUntrusted, sharesKasTicker, verifyIndexerToken, type TokenInfo, type TokenRegistry, type UntradableReason,
 } from '../../kob/registry';
 import type { TemplateInfo } from '../../kob/types';
 import { TOKEN_PROGRAMS, programDefaultDecimals } from '../../kob/programs.generated';
@@ -448,6 +448,18 @@ export function scaleNeedsIndexer(row: Pick<TokenRow, 'source' | 'info'>, reason
  * ticker are never compared. A ticker that reads as KAS, or that has a look-alike character
  * (`sharesKasTicker`), is shared with native KAS, alone too.
  */
+/**
+ * What the shared-ticker note of a token says: `true` another token uses its ticker, or it reads
+ * as KAS; `'lookalike'` it only has look-alike letters (`sharesKasTicker`) and no other listed
+ * token uses it; `false` nothing. `rows` are the listed tokens.
+ */
+export function tickerNoteOf(rows: readonly Pick<TokenRow, 'covenantId' | 'ticker'>[], covenantId: string, ticker: string): boolean | 'lookalike' {
+  const key = normalizeTicker(ticker);
+  const other = ticker !== '' && key !== '' && rows.some((r) => r.covenantId !== covenantId && r.ticker !== '' && normalizeTicker(r.ticker) === key);
+  if (other || readsAsKas(ticker)) return true;
+  return sharesKasTicker(ticker) ? 'lookalike' : false;
+}
+
 export function sharedTickerIds(rows: readonly Pick<TokenRow, 'covenantId' | 'ticker'>[]): Set<string> {
   const byTicker = new Map<string, string[]>();
   const kasLike = new Set<string>();
