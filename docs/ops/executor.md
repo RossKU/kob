@@ -303,7 +303,7 @@ matcher and keeper options (C, "Running"):
 | `--no-fee-estimate`, `--fee-max-rate`, `--fee-max-tx-kas`, `--fee-refresh-ms`, `--fee-max-age-ms` | off, 1000, 1, 10000, 60000 | the fee policy (C, "Fee policy"): each transaction pays its urgency's bucket of the node's fee estimate within these bounds, the x402 facilitator's intent executions and expiries included |
 | `--min-profit`, `--max-tx-bytes`, `--no-chain`, `--no-arm` | as C | matcher (`--no-arm`: no updates; stops the batch fills next to their evidence still trigger) |
 | `--max-funding-inputs`, `--funding-target-utxos`, `--consolidate-funding` | 8, 4, 2 | how a batch picks the operator's funding (C, "Keys and funds") |
-| `--no-maintenance`, `--dust-sell`, `--maintenance-max-jobs` | off, off, 2 | the operator's own token UTXOs: merge, and with `--dust-sell` (opt-in; also `$KOB_DUST_SELL`) sell above the book's price floor (C, "Maintenance"); `--no-dust-sell` is accepted and does nothing |
+| `--no-maintenance`, `--dust-sell`, `--maintenance-max-jobs` | off, off, 2 | the operator's own token UTXOs: merge, and with `--dust-sell` (opt-in; also `KOB_DUST_SELL=1`, which takes `1`/`0`, `true`/`false`, `yes`/`no`, `on`/`off`) sell above the book's price floor (C, "Maintenance"); `--no-dust-sell` is accepted and does nothing |
 | `--inventory-policy <file>` | none (off) | the surplus-inventory policy (C, "Surplus inventory"): the pair surpluses the operator may accumulate as inventory; maintenance never sells a listed token (also on `match`) |
 | `--no-refund`, `--sweep-own-strays`, `--return-foreign-strays`, `--keeper-min-profit` | as C | keepers (`--keeper-min-profit` is `keep --min-profit`) |
 | `--no-lock-release` | off | keepers: do not release the automatic creator locks that are due (`docs/spec/creator-lock-auto.md`) |
@@ -3162,7 +3162,7 @@ builders (`SendTokens`, a taker `Batch`), signed and validated in the engine, su
 (`maintenance: the operator's token UTXOs`, with `released`: the carriers it moves back to the funding). A sale runs only on
 bids the matcher's tick left: a bid that crosses an ask is the matcher's. `--no-maintenance` turns both off.
 
-**The sale is opt-in** (`--dust-sell`, also `$KOB_DUST_SELL`; in `kobd.toml` `[launch] args = ["--dust-sell"]`; `kobd match --dust-sell`).
+**The sale is opt-in** (`--dust-sell`, also `KOB_DUST_SELL=1` (or `true`, `yes`, `on`; `0`, `false`, `no`, `off` leave it off); in `kobd.toml` `[launch] args = ["--dust-sell"]`; `kobd match --dust-sell`).
 By default maintenance only merges, and unsold holdings stay with the operator key, merged. Why: a third-party operator must be
 safe by default, and any price floor taken from the book can be posted into (the residual in the floor section below). An
 operator who turns the sale on accepts that residual for the tokens the `--inventory-policy` file does not list. `--no-dust-sell`,
@@ -3617,7 +3617,7 @@ kobd keep --network testnet-10 --book-file book.json --metrics-file /var/lib/nod
 | `--select-min-share` | 0.1 | the lowest share of the optional work per tick the races may push the executor to (room for `1 / share` executors) |
 | `--select-seed` | OS randomness | seed of the selection's random source (a reproducible run) |
 | `--keep` (match) | off | run the keepers too |
-| `--dust-sell` (match) | off | maintenance also sells the operator's token UTXOs above the book's price floor (opt-in; also `$KOB_DUST_SELL`; C, "Maintenance"); off, it only merges them |
+| `--dust-sell` (match) | off | maintenance also sells the operator's token UTXOs above the book's price floor (opt-in; also `KOB_DUST_SELL=1`; C, "Maintenance"); off, it only merges them |
 | `--state-dir` | none | the folder of what must survive a restart, one per process (also `$KOB_STATE_DIR`; created if missing; covered by the start check): the in-flight journal, the keepers' subsidy window and the start count (Restarts). Without it they are in memory only, and the keepers pay no subsidy |
 | `--no-refund` (keep) | off | disable refunds, kills and closes |
 | `--keeper-subsidy-max-kas` (keep, match) | 0.05 | the most KAS of the operator's funding added to the fee of one kill or refund whose tip pays the floor but not its urgency's rate (0: off; see Fee policy) |

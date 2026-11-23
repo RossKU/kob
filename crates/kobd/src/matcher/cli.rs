@@ -121,7 +121,7 @@ pub struct MatchArgs {
     pub keep: bool,
     /// Maintenance: also sell the operator's token UTXOs into the book, above a price floor taken
     /// from the book's asks (default: off, they are only merged; see `kobd --executor --help`).
-    #[arg(long, env = "KOB_DUST_SELL")]
+    #[arg(long, env = "KOB_DUST_SELL", value_parser = clap::builder::BoolishValueParser::new())]
     pub dust_sell: bool,
 }
 

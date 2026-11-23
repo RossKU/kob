@@ -163,7 +163,7 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
 ### Behaviour changes
 
 - **Maintenance no longer sells by default.** The operator's own token UTXOs are only merged; `--dust-sell` (also
-  `KOB_DUST_SELL`, or `[launch] args = ["--dust-sell"]`) turns the sale on, which accepts that its price floor comes from a
+  `KOB_DUST_SELL=1`, which also takes `true`, `yes` or `on`, or `[launch] args = ["--dust-sell"]`) turns the sale on, which accepts that its price floor comes from a
   book anyone can post into. `--no-dust-sell` is still accepted and does nothing.
 - **Standalone `kobd match` / `kobd keep` take `--state-dir`** (also `KOB_STATE_DIR`) for the in-flight journal and the
   keepers' subsidy window. Without it they keep both in memory only and pay no keeper subsidy. **Do:** add `--state-dir` to
