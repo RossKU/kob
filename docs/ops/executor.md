@@ -456,6 +456,10 @@ re-accepted, the book reverted) are read from the indexer while the test node re
 
 ### A.6 The x402 facilitator in the Executor (`kobd --executor`)
 
+**x402 is experimental.** x402 (the `kob-x402` crate, the facilitator in `kobd`, the client SDK `packages/kob-x402` and `docs/spec/x402-*.md`) is outside the mainnet launch review of 2026-11-23 and has no UI in the web app; it gets a dedicated audit of its own before it is recommended for real funds or its KCC-20 profile is proposed as a standard. Open findings: [docs/security/x402-open-findings.md](../security/x402-open-findings.md). Run it on your own node only: a public node can invent a payment and the merchant delivers for nothing (audit X-2).
+
+ Run it on your own node only: a public node can invent a payment and the merchant delivers for nothing (audit X-2).
+
 `--x402-config <file>` (or `KOB_X402_CONFIG`; strict JSON, `crates/kobd/x402.example.json`)
 serves the facilitator (`GET /supported`, `POST /verify`, `POST /settle`, `GET /health`, `GET /metrics`, and with
 `invoices` the `/invoices` routes of A.7)
@@ -3418,10 +3422,12 @@ and compared field by field with the authority's copy. A lying authority could t
 not exist under real ids: the read API would show orders that are not on chain and the matcher would plan on them. No funds
 are at risk: every transaction is built over the UTXO entries the node reports, signed, and validated by consensus, which
 refuses a spend of an output that is not what the transaction claims; the executor only loses races (`MissingInput`). A
-node caught contradicting the other is replaced. The x402 facilitator of the
-same process reads from the authority and submits to every node that takes submissions (both of the pair), as the
-matcher does: the first node that takes a transaction answers (`node: "resolver"` in its own configuration works too, also
-`wss://`).
+node caught contradicting the other is replaced. The x402 facilitator (experimental, below) of the same process reads from
+the authority and submits to every node that takes submissions, as the matcher does: the first node that takes a
+transaction answers. **Run the facilitator on your own node only.** Its payment facts and finality (the payer's inputs, the
+merchant output, acceptance) come from that one node, and the covenants do not protect a merchant: a public node, the
+resolver's or the public pair, can invent a payment and the merchant delivers for nothing (audit X-2). `node: "resolver"` is
+still accepted by the configuration; do not use it for x402.
 
 v2.1.0 relays transactions up to the block limits. Relays running a later release with the
 pre-Toccata standard mass cap refuse transactions above ~25 kB: pass `--max-tx-bytes 24000` there

@@ -7,6 +7,10 @@
 Tag `v0.2.0`, commit `<commit>`. This note lists what an operator must act on since `v0.1.0`. The user-facing changes of
 testnet-10 are in `tn10-2026-11-18.md`. The launch steps for the web app and index-main are in `mainnet-launch.md`.
 
+ Nothing in this release asks anyone to use it with real funds.
+
+**x402 is experimental.** x402 (the `kob-x402` crate, the facilitator in `kobd`, the client SDK `packages/kob-x402` and `docs/spec/x402-*.md`) is outside the mainnet launch review of 2026-11-23 and has no UI in the web app; it gets a dedicated audit of its own before it is recommended for real funds or its KCC-20 profile is proposed as a standard. Open findings: [docs/security/x402-open-findings.md](../security/x402-open-findings.md). Nothing in this release asks anyone to use it with real funds.
+
 ## Get it and check it
 
 - The release has one archive per network and target: `kobd-0.2.0-mainnet-<target>` (`kobd`, `kob`, `QUICKSTART.md`) and

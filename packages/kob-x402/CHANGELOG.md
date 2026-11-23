@@ -1,5 +1,9 @@
 # @kob/x402 changelog
 
+**x402 is experimental.** x402 (the `kob-x402` crate, the facilitator in `kobd`, the client SDK `packages/kob-x402` and `docs/spec/x402-*.md`) is outside the mainnet launch review of 2026-11-23 and has no UI in the web app; it gets a dedicated audit of its own before it is recommended for real funds or its KCC-20 profile is proposed as a standard. Open findings: [docs/security/x402-open-findings.md](../../docs/security/x402-open-findings.md).
+
+
+
 The package is pre-release (testnet); breaking changes are listed here.
 
 ## Unreleased

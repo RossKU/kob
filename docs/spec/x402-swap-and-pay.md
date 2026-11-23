@@ -1,5 +1,7 @@
 # Kaspa x402 exact: swap-and-pay extension (`extra.route`)
 
+**x402 is experimental.** x402 (the `kob-x402` crate, the facilitator in `kobd`, the client SDK `packages/kob-x402` and `docs/spec/x402-*.md`) is outside the mainnet launch review of 2026-11-23 and has no UI in the web app; it gets a dedicated audit of its own before it is recommended for real funds or its KCC-20 profile is proposed as a standard. Open findings: [docs/security/x402-open-findings.md](../security/x402-open-findings.md).
+
 Status: Draft proposal. Addressed to [elldeeone/kaspa-x402](https://github.com/elldeeone/kaspa-x402)
 (v1.0.0-rc.1, binding `kaspa-exact-v2`, checked against commit `040b1ec`). Optional extension of
 the `exact` scheme; it does not change requirements or payloads that do not carry `extra.route`.

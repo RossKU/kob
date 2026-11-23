@@ -1,5 +1,9 @@
 # Example: a paid API on the Kaspa x402 `exact` binding
 
+**x402 is experimental.** x402 (the `kob-x402` crate, the facilitator in `kobd`, the client SDK `packages/kob-x402` and `docs/spec/x402-*.md`) is outside the mainnet launch review of 2026-11-23 and has no UI in the web app; it gets a dedicated audit of its own before it is recommended for real funds or its KCC-20 profile is proposed as a standard. Open findings: [docs/security/x402-open-findings.md](../../../../docs/security/x402-open-findings.md).
+
+
+
 `server.ts` sells `GET /report` for 0.5 KAS (or N units of a KCC-20 token, or by swapping token A), `client.ts` pays for it
 with a dev key. The facilitator is the `kobd x402` service (usually the same operator as the Indexer and the Executor; it holds no keys).
 
