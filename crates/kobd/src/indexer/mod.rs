@@ -91,6 +91,9 @@ pub enum IndexerError {
     Config(String),
     #[error(transparent)]
     Locked(#[from] lock::LockError),
+    /// The follower task ended while the process ran.
+    #[error("{0}")]
+    Halted(String),
 }
 
 /// Everything a running indexer shares between the follower and the API.
@@ -302,16 +305,26 @@ impl Indexer {
     pub async fn run(self, shutdown: impl std::future::Future<Output = ()> + Send + 'static) -> Result<(), IndexerError> {
         // With `[failover]`, the public pair takes over when the configured node stops answering,
         // see `rpc::failover`.
-        let running = if self.cfg.failover.enabled() {
+        let mut running = if self.cfg.failover.enabled() {
             self.spawn(crate::index_cli::failover_client(&self.cfg))?
         } else {
             self.spawn(crate::index_cli::node_client(&self.cfg))?
         };
-        shutdown.await;
-        tracing::info!("shutting down");
+        // A follower task that ends on its own (a panic) leaves a book that no longer moves. Exit
+        // non-zero then, so that the supervisor restarts the process (C-M1).
+        let died = tokio::select! {
+            _ = shutdown => None,
+            why = running.ended() => Some(why),
+        };
+        if died.is_none() {
+            tracing::info!("shutting down");
+        }
         running.stop().await;
         self.flush().await;
-        Ok(())
+        match died {
+            Some(why) => Err(IndexerError::Halted(why)),
+            None => Ok(()),
+        }
     }
 
     /// Writes the write-ahead log into the database file and cuts it back, so that the file alone
@@ -358,8 +371,8 @@ impl Indexer {
     pub fn spawn_follower<S: ChainSource>(&self, source: Arc<S>) -> Running {
         let follower = Arc::new(self.follower(source));
         let (stop_tx, stop_rx) = watch::channel(false);
-        let follow = tokio::spawn(async move { follower.run(stop_rx).await });
-        Running { stop: stop_tx, follow, api: None }
+        let (follow, ended) = watched(self.health.clone(), stop_rx.clone(), async move { follower.run(stop_rx).await });
+        Running { stop: stop_tx, follow, ended, api: None }
     }
 
     /// Like [`Indexer::spawn_follower`], except that a gap the pruning of the node caused does not
@@ -377,8 +390,8 @@ impl Indexer {
             events: self.events.clone(),
         };
         let (stop_tx, stop_rx) = watch::channel(false);
-        let follow = tokio::spawn(recovery::follow(parts, stop_rx));
-        Running { stop: stop_tx, follow, api: None }
+        let (follow, ended) = watched(self.health.clone(), stop_rx.clone(), recovery::follow(parts, stop_rx));
+        Running { stop: stop_tx, follow, ended, api: None }
     }
 
     /// Starts the read API server over this indexer's store, whatever `api.enabled` says.
@@ -449,14 +462,63 @@ impl ApiTask {
     }
 }
 
+/// Runs the follower `task` and watches it.
+///
+/// The follower returns only on a stop. When it ends without one (a panic on chain data, a bug),
+/// the health says `stopped` with the reason in `halt_reason`, so `/v1/health` no longer reports a
+/// frozen book as current and `kobd --executor` exits (`HealthSnapshot::halted`). The receiver
+/// gets the reason, for `kobd --indexer` to exit on.
+fn watched(
+    health: Arc<HealthState>,
+    stop: watch::Receiver<bool>,
+    task: impl std::future::Future<Output = ()> + Send + 'static,
+) -> (tokio::task::JoinHandle<()>, watch::Receiver<Option<String>>) {
+    let (ended_tx, ended_rx) = watch::channel(None);
+    let follow = tokio::spawn(async move {
+        let r = tokio::spawn(task).await;
+        if *stop.borrow() {
+            return;
+        }
+        let why = match r {
+            Ok(()) => "the follower task ended".to_string(),
+            Err(e) if e.is_panic() => {
+                let p = e.into_panic();
+                let msg = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned());
+                format!("the follower task panicked: {}", msg.unwrap_or_else(|| "no message".into()))
+            }
+            Err(e) => format!("the follower task ended: {e}"),
+        };
+        let msg = format!("{why}; the store no longer follows the chain (restart kobd)");
+        tracing::error!("{msg}");
+        health.update(|h| {
+            h.state = status::FollowerState::Stopped;
+            h.halt_reason = Some(msg.clone());
+            h.last_error = Some(msg.clone());
+        });
+        let _ = ended_tx.send(Some(msg));
+    });
+    (follow, ended_rx)
+}
+
 /// The follower and API tasks of a running indexer.
 pub struct Running {
     stop: watch::Sender<bool>,
     follow: tokio::task::JoinHandle<()>,
+    /// Why the follower task ended on its own ([`watched`]).
+    ended: watch::Receiver<Option<String>>,
     api: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Running {
+    /// Resolves, with the reason, once the follower task has ended without a stop. It never
+    /// resolves otherwise.
+    pub async fn ended(&mut self) -> String {
+        match self.ended.wait_for(Option::is_some).await {
+            Ok(v) => v.clone().unwrap_or_default(),
+            Err(_) => std::future::pending().await,
+        }
+    }
+
     /// Asks both tasks to stop and waits for them.
     pub async fn stop(self) {
         let _ = self.stop.send(true);
@@ -788,5 +850,33 @@ mod tests {
         idx.health.update(|h| h.api_error = Some("accept failed".into()));
         let (now, why) = idx.health.snapshot().halted().expect("halted");
         assert!(now && why.contains("read API stopped"), "{why}");
+    }
+
+    /// A follower task that panics turns the health `stopped`, with the panic in `halt_reason`,
+    /// so `halted()` ends `kobd --executor` and `Running::ended` ends `kobd --indexer` (C-M1). A
+    /// requested stop is no failure.
+    #[tokio::test]
+    async fn a_follower_that_panics_turns_the_health_stopped() {
+        let health = Arc::new(HealthState::new("testnet-10"));
+        health.update(|h| h.state = status::FollowerState::Following);
+        let (stop, rx) = watch::channel(false);
+        let (follow, ended) = watched(health.clone(), rx, async { panic!("bad chain data") });
+        let mut running = Running { stop, follow, ended, api: None };
+        let why = tokio::time::timeout(std::time::Duration::from_secs(5), running.ended()).await.expect("ended");
+        assert!(why.contains("panicked: bad chain data"), "{why}");
+        let snap = health.snapshot();
+        assert_eq!(snap.state, status::FollowerState::Stopped);
+        assert!(snap.halted().is_some_and(|(_, w)| w.contains("bad chain data")));
+        running.stop().await;
+
+        let health = Arc::new(HealthState::new("testnet-10"));
+        health.update(|h| h.state = status::FollowerState::Following);
+        let (stop, rx) = watch::channel(false);
+        let mut stopped = rx.clone();
+        let (follow, ended) = watched(health.clone(), rx, async move {
+            let _ = stopped.wait_for(|s| *s).await;
+        });
+        Running { stop, follow, ended, api: None }.stop().await;
+        assert_eq!(health.snapshot().state, status::FollowerState::Following);
     }
 }

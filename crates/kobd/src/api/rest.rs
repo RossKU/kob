@@ -77,6 +77,10 @@ fn flag(q: &HashMap<String, String>, key: &str) -> Result<Option<bool>, ApiError
     }
 }
 
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
 /// `GET /v1/health`: the follower state, the lag and alarms, and the counters of the store.
 pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
     let snap = app.state.health.snapshot();
@@ -90,7 +94,10 @@ pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
         .map(|h| json!({"lag_hours_at_least": h, "lag_seconds": lag_seconds}))
         .collect();
     let running = matches!(snap.state, FollowerState::Following | FollowerState::CatchingUp);
-    let ok = running && alarms.is_empty();
+    // A follower that hangs, or a task that died before it could say so, leaves its last state in
+    // place: no progress for long is not ok either (C-M1).
+    let stale = snap.stale(unix_ms());
+    let ok = running && !stale && alarms.is_empty();
     // The counters are informational. A busy database must not turn the health endpoint into an
     // error. They are a few rows, kept by the write path, and are read on the light lane, so
     // never behind the heavy reads.
@@ -102,6 +109,7 @@ pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
     if let Some(o) = v.as_object_mut() {
         o.insert("ok".into(), json!(ok));
         o.insert("caught_up".into(), json!(snap.caught_up()));
+        o.insert("stale".into(), json!(stale));
         // What the matcher, keepers and maintenance gate on: caught up, or within `max_lag_secs`
         // of the node.
         o.insert("within_lag_tolerance".into(), json!(snap.within_lag_tolerance()));
@@ -144,6 +152,7 @@ pub async fn ready(State(app): State<Arc<App>>) -> ApiResult {
     let lag_seconds = snap.lag_daa().map(|d| d / app.state.daa_per_second.max(1));
     let min_alarm = app.state.lag_alarm_hours.iter().copied().min();
     let (ready, reason) = match snap.state {
+        FollowerState::Following | FollowerState::CatchingUp if snap.stale(unix_ms()) => (false, "no progress for 10 minutes"),
         FollowerState::Following | FollowerState::CatchingUp => match (lag_seconds, min_alarm) {
             (None, _) => (false, "node position unknown"),
             (Some(l), Some(h)) if l >= h * 3600 => (false, "indexer lag above the first alarm threshold"),
