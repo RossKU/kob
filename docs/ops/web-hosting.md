@@ -634,6 +634,11 @@ the chip is then a plain label. `scripts/pages-config.mjs` writes it unless `KOB
   `200` with `access-control-allow-origin`; `curl -s https://kob-web.pages.dev/config.json` shows `tokenNamesUrl` (absent = kascov.io). If you
   pinned `connect-src`, the origin must be in it (section 3). The app works without it, so a wrong source deploys green and the list simply
   shows no names.
+* Provenance: job `attest` records a build provenance attestation (keyless Sigstore) of every file of the deployed `dist`.
+  Check a served file with `curl -so index.html https://kob.kaspa.ag/` and `gh attestation verify index.html --repo RossKU/kob
+  --signer-workflow RossKU/kob/.github/workflows/deploy-pages.yml`: it names the run and the commit that built the file. It proves
+  where the file was built, not that the build was honest (a compromised dependency would be attested too). A hand deploy
+  (section 6) has no attestation.
 * Hashes: the run's summary lists the sha256 of every deployed file. Anyone can rebuild the commit with section 6, steps 1
   and 2 (the same Node version, network, public URL and variables) and compare; no workflow does this for you (`ci.yml` job
   `reproducible` only checks that the plain bundle does not depend on the build directory, `docs/ops/release.md` 6). `curl -s https://kob-web.pages.dev/config.json`

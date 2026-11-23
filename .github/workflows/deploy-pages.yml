@@ -434,6 +434,39 @@ jobs:
           include-hidden-files: true
           retention-days: 7
 
+  # Build provenance of every file of the dist job build made (keyless Sigstore, as release.yml does for the archives): it binds each
+  # file's sha256 to this workflow, run and commit, so a deployed file can be checked with
+  # `gh attestation verify <file> --repo RossKU/kob --signer-workflow RossKU/kob/.github/workflows/deploy-pages.yml`. It runs no
+  # code of the app or its dependencies and holds no secret; it proves where the files were built, not that the build was honest.
+  attest:
+    needs: [config, build]
+    if: needs.config.outputs.ready == 'true' && github.ref == 'refs/heads/master'
+    name: attest (${{ matrix.site }})
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.config.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: web-dist-${{ matrix.site }}
+          path: web/dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: deployed-sha256-${{ matrix.site }}
+          path: ${{ runner.temp }}/handover
+      - name: The dist is the one job build hashed
+        shell: bash
+        run: sha256sum --check --strict --quiet "$RUNNER_TEMP/handover/deployed.sha256"
+      - name: Build provenance of every file of web/dist
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: web/dist/**
+
   # The upload, and the only job that sees the Cloudflare token. It builds nothing and runs no code of the app's dependencies: it takes the
   # dist of job build, checks it against the hashes, and runs wrangler from scripts/deploy/package-lock.json (an exact version and
   # integrity pins for its whole tree, installed with --ignore-scripts). Every value reaches a command through env:, never inline.

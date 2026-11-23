@@ -577,7 +577,14 @@ describe('the deploy workflow gate (the signer page it ships takes private keys)
     expect(uploaded).toBeGreaterThan(hashed);
     expect(dist).toBeGreaterThan(hashed);
     // only build writes the hashes and the dist (an artifact name is written once per run)
-    expect(wf.match(/name: deployed-sha256-\$\{\{ matrix\.site \}\}/g)).toHaveLength(3);
+    expect(wf.match(/name: deployed-sha256-\$\{\{ matrix\.site \}\}/g)).toHaveLength(4);
+    // attest (F-04): build provenance of the hashed dist, in a job with no secret, no environment and no app code
+    const attest = job('attest');
+    expect(attest).toContain('needs: [config, build]');
+    expect(attest).not.toMatch(/secrets\.|environment:|npm |node /);
+    expect(attest).toMatch(/\n      id-token: write\n      attestations: write\n/);
+    expect(attest.indexOf('sha256sum --check --strict')).toBeLessThan(attest.indexOf('actions/attest-build-provenance@'));
+    for (const name of ['build', 'deploy', 'verify', 'config', 'secret-scope']) expect(job(name), name).not.toContain('id-token');
     const deploy = job('deploy');
     expect(deploy).toContain('needs: [config, secret-scope, build]');
     expect(deploy).not.toMatch(/upload-artifact@[0-9a-f]{40} # v[\d.]+\n\s+with:\n\s+name: (deployed-sha256|web-dist)-/);
