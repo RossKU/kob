@@ -2,6 +2,9 @@
 
 const DEFAULT_INDEXER = { mainnet: 'https://kob-api.kaspa.ag', 'testnet-10': 'https://kob-api-tn10.kaspa.ag' };
 
+/** Pages of 100 read of the maker's list: 1,000 orders of the token. */
+export const LIST_PAGES = 10;
+
 export const indexerUrl = (cfg) => (cfg.indexer ?? DEFAULT_INDEXER[cfg.network]).replace(/\/+$/, '');
 
 /** An indexer order view in the bot's terms (numbers in sompi and base units). */
@@ -28,6 +31,7 @@ export class Indexer {
     this.url = url;
     this.timeoutMs = timeoutMs;
     this.views = {}; // token -> the raw views of the last liveOrders read (kob cancel --view reads them without the indexer)
+    this.cut = {}; // token -> true when the last liveOrders read stopped at its page cap with more pages left (R4T-3)
   }
 
   async get(path) {
@@ -37,19 +41,24 @@ export class Indexer {
     return res.json();
   }
 
-  /** The maker's live plain limit orders of one token (asks and bids on the KAS book). */
+  /**
+   * The maker's live plain limit orders of one token (asks and bids on the KAS book), newest first:
+   * at most LIST_PAGES pages of 100, read for that token only (R4T-3). `cut[token]` says the list
+   * stopped at the cap with more left, so an order it leaves out may just be older.
+   */
   async liveOrders(maker, token) {
     const out = [];
     const raw = [];
     let cursor = null;
-    for (let page = 0; page < 10; page++) {
-      const body = await this.get(`/v1/orders?maker=${maker}&status=active&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+    for (let page = 0; page < LIST_PAGES; page++) {
+      const body = await this.get(`/v1/orders?maker=${maker}&token=${token}&status=active&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
       // An id that is not 64 hex would reach kob cancel / replace as an argument (sec-ops L21).
       for (const v of body?.items ?? []) if (v.token === token && /^[0-9a-f]{64}$/.test(v.covenant_id ?? '')) { out.push(orderOf(v)); raw.push(v); }
       cursor = body?.next_cursor;
       if (!cursor) break;
     }
     this.views[token] = raw;
+    this.cut[token] = !!cursor;
     return out;
   }
 

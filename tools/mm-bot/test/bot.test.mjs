@@ -28,7 +28,9 @@ let listHidden = new Set(); // orders it leaves out of the maker's list only (it
 let showOnly = null; // a Set: the indexer lists only these ids (every new order is never listed, R2-T1 case A)
 let staleViews = new Map(); // id -> a view a lying indexer keeps serving (R2-T1 case C), listed even once the order ended
 let fillsFeed = []; // the indexer's fill events, newest first
-let indexerAheadMs = 0; // the indexer judges expiry this far in the future (time passing while the bot is dead)
+let indexerAheadMs = 0;
+let listCut = false; // the maker's list is all newer orders of others, with more pages left (R4T-3)
+let orderUrls = []; // the list reads the bot made // the indexer judges expiry this far in the future (time passing while the bot is dead)
 
 /**
  * Raw kline responses of each venue at `kasUsd`, the last 8 minutes, the newest still in progress.
@@ -62,6 +64,8 @@ function stubFetch(chainFile) {
         price: String(o.price), amount_left: String(o.side === 1 ? o.amount : Math.floor((o.value - 1e8) * 1e6 / o.price)), current: { txid: o.txid, index: 0, value: String(o.value) }, status,
         expired: o.expiresAt != null && Date.now() + indexerAheadMs >= o.expiresAt });
       if (u.includes('/v1/orders?')) {
+        orderUrls.push(u);
+        if (listCut) return json({ items: [], next_cursor: 'older' });
         const items = Object.entries(c.orders).filter(([id]) => !hidden(id) && !listHidden.has(id)).map(([id, o]) => view(id, o, 'open'));
         for (const [id, v] of staleViews) if (!c.orders[id]) items.push(v);
         return json({ items, next_cursor: null });
@@ -541,6 +545,8 @@ const reset = () => {
   showOnly = null;
   staleViews = new Map();
   fillsFeed = [];
+  listCut = false;
+  orderUrls = [];
 };
 const places = (calls) => calls().filter((a) => a[0] === 'place');
 
@@ -725,6 +731,66 @@ test('a retired token\'s order whose cancel keeps failing is given up after thre
   assert.equal(n, 3, 'three tries, then none');
   assert.equal(bot.state.retired[OLD].done, true, 'the clean-up is not held by it');
   assert.equal(alertsOf(dir).filter((a) => a.reason === 'retired-cancel-failed').length, 1);
+  reset();
+});
+
+// R4T-3: the list is read for the quoted token only, and a list cut at its page cap is no proof
+// that the indexer hides an order.
+test('a maker list cut at its page cap does not cancel the quotes as hidden (R4T-3)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain, calls, dir } = setup();
+  try {
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    assert.equal(Object.keys(chain().orders).length, 6);
+    assert.ok(orderUrls.every((u) => u.includes(`&token=${TOKEN}`)), 'the list asks for the token');
+    listCut = true;
+    orderUrls = [];
+    const before = calls().length;
+    await bot.cycle();
+    assert.equal(orderUrls.length, 10, 'at most 10 pages of 100');
+    assert.equal(Object.keys(chain().orders).length, 6, 'no quote cancelled');
+    assert.ok(!calls().slice(before).some((a) => a[0] === 'cancel' || (a[0] === 'recover' && a.includes('--cancel'))));
+    assert.equal(alertsOf(dir).filter((a) => a.reason === 'indexer-hides').length, 0);
+  } finally {
+    reset();
+  }
+});
+
+test('a retired token\'s cancels are bounded per cycle, and its failure counts cover only listed orders (R4T-4)', async () => {
+  reset();
+  const { bot } = setup({ orderVisibleTimeoutSec: 0 });
+  const OLD = '0f'.repeat(32);
+  const many = Array.from({ length: 50 }, (_, i) => ({ id: (i + 16).toString(16).padStart(64, 'e'), side: 'sell', price: 1, amountLeft: 1e15 }));
+  bot.cfg.retiredTokens = [OLD];
+  bot.maker = MAKER;
+  let listed = many;
+  bot.idx.liveOrders = async () => listed;
+  let n = 0;
+  bot.kob.cancel = async () => { n++; return { ok: false, error: 'exit 1: error: custody not found on the node: not cancelled' }; };
+  const bal = { tokens: { [OLD]: { free: 0, freeUtxos: 0, decimals: 6 } } };
+  await bot.retire(bal, false);
+  assert.equal(n, 2, 'two cancels a cycle, as for the quoted token');
+  for (let i = 0; i < 80; i++) await bot.retire(bal, false);
+  assert.equal(n, 150, 'each order tried three times in all');
+  assert.equal(bot.state.retired[OLD].done, true);
+  // The orders are gone from the list: their failure counts go too.
+  listed = [];
+  await bot.retire(bal, false);
+  assert.deepEqual(bot.state.retired[OLD].failed, {});
+  // A slow CLI: no new cancel starts once the cycle's retired budget is spent.
+  listed = many.slice(0, 5);
+  bot.state.retired[OLD] = { done: false, cancels: {}, failed: {} };
+  n = 0;
+  const realNow = Date.now;
+  let t = realNow();
+  Date.now = () => t;
+  bot.kob.cancel = async () => { n++; t += 60_000; return { ok: false, error: 'timeout' }; };
+  try {
+    await bot.retire(bal, false);
+  } finally {
+    Date.now = realNow;
+  }
+  assert.equal(n, 1, 'one call past the budget, then none this cycle');
   reset();
 });
 

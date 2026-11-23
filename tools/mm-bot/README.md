@@ -82,6 +82,9 @@ node bin/mm-bot.mjs once   --config config.json          # one cycle (add --dry-
   while the indexer still lists it, or that cannot be looked up yet (no order template proven: the indexer never listed
   one of the bot's orders), is kept, with an error alert, until the node shows it ended. STOP ends when no order is left
   by that rule, whatever the indexer lists.
+  The bot reads the maker list for its token only, newest first, at most 1,000 orders (10 pages of 100). When that cap
+  is reached with more left (anyone can post orders under the bot's key), an order the list leaves out may only be
+  older: it is not taken as hidden and not cancelled for it, and the bot goes on from its own record and the node.
 - **Indexer down.** When a pull is due and the wallet or indexer read fails, the bot cancels through the node from its
   records, with no indexer. While the reads fail, the quotes are also pulled this way once fair has moved more than half
   the spread from the fair they were set at, and the 1-minute jump compares with the newest reading at least a minute
@@ -143,7 +146,10 @@ INFO: Funds received, ask quoting resumed.
 
 **New bridge instance.** Set `token` to the new covenant id and move the old one to `retiredTokens`. For a retired token
 the bot only cancels its orders and merges the returned UTXOs, then logs "retired instance ...: quotes pulled, N tokens
-back in the wallet". Moving them through the bridge is manual.
+back in the wallet". Moving them through the bridge is manual. At most 2 such cancels go out a cycle, and none starts
+once 20 s of the cycle went to them, so the next reprice of the live quotes waits at most 20 s plus one `kob` call
+(`cli.timeoutSec` per step) for them. An order whose cancel fails 3 times (one anyone made under the key, with no
+custody) is given up.
 
 ## Watching the bot with Claude
 

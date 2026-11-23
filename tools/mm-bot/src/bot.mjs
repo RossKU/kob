@@ -26,7 +26,8 @@ const ERROR_ALERT_AFTER = 3; // consecutive failed cycles before an error alert
 const PLACE_FAILS_IDLE = 3; // placements refused in a row before IDLE/placement (R2-T3)
 const BLIND_KEEP_MS = 86_400_000; // how long a placement of no known id counts toward the caps
 const FOREIGN_TRIES = 3; // cancels tried of an order on the bot's key the bot did not place (R3T-2)
-const FOREIGN_PER_CYCLE = 2; // and at most this many of them a cycle
+const FOREIGN_PER_CYCLE = 2; // and at most this many of them a cycle (and of a retired token's, R4T-4)
+const RETIRED_BUDGET_MS = 20_000; // no retired cancel starts once this much of a cycle went to them
 const OWN_TX_KEEP = 2000; // the bot's own transaction ids kept: never taken for a payment to it (R3T-3)
 const PAYMENTS_KEEP = 2000; // payments to the bot's address seen on the node, kept ...
 const PAYMENT_KEEP_MS = 7 * 86_400_000; // ... for a week
@@ -501,7 +502,7 @@ export class Bot {
       this.state.foreign[o.id] = { side: o.side, price: o.price, amountLeft: o.amountLeft, firstSeen: now, tries: 0, lastTry: null };
       fresh.push(o.id);
     }
-    for (const id of Object.keys(this.state.foreign)) if (!seen.has(id)) delete this.state.foreign[id];
+    if (!this.idx.cut[c.token.covenantId]) for (const id of Object.keys(this.state.foreign)) if (!seen.has(id)) delete this.state.foreign[id];
     if (fresh.length) {
       this.alert('warn', 'foreign-order', `${fresh.length} order(s) of the token on the bot's key that the bot did not place (${fresh.map(short).join(', ')}; ${Object.keys(this.state.foreign).length} in all): ignored for the caps and the self-trade check; a cancel is tried at most ${FOREIGN_TRIES} times. Anyone can make such an order; if one is yours, cancel it by hand (kob cancel <id>).`);
     }
@@ -551,7 +552,8 @@ export class Bot {
       s.fate = null;
       s.unconfirmed = false;
       if (s.pending?.kind === 'cancel' ? now - s.pending.since > timeout : s.pending) s.pending = null; // an unseen cancel is sent again
-      const why = !o ? 'does not list it' : o.txid !== r.txid ? `lists it at another outpoint (${o.txid})` : null;
+      // A list cut at its page cap may leave an older order out: no proof that the indexer hides it (R4T-3).
+      const why = !o ? (this.idx.cut[this.cfg.token.covenantId] ? null : 'does not list it') : o.txid !== r.txid ? `lists it at another outpoint (${o.txid})` : null;
       if (!why || s.pending?.kind === 'cancel') {
         s.idxBad = false;
         return;
@@ -939,15 +941,23 @@ export class Bot {
     if (this.cfg.alerts.webhookUrl) this.webhook(rec);
   }
 
-  /** Retired tokens: cancel the bot's orders and merge the returned UTXOs. Never place or amend. */
+  /**
+   * Retired tokens: cancel the bot's orders and merge the returned UTXOs. Never place or amend. At
+   * most FOREIGN_PER_CYCLE cancels a cycle in all, and none starts once RETIRED_BUDGET_MS have
+   * gone in this call (R4T-4), so that the next reprice of the live quotes waits for them no longer
+   * than that plus one call.
+   */
   async retire(bal, stopping) {
     const now = Date.now();
+    let cancels = 0;
     for (const id of this.cfg.retiredTokens) {
       const r = (this.state.retired[id] ??= { done: false, cancels: {} });
       r.failed ??= {};
       // An order whose cancel failed FOREIGN_TRIES times (one anyone made under the key, with no
       // custody) is given up, so that it neither repeats every cycle nor holds the clean-up (R3T-2).
       const listed = await this.idx.liveOrders(this.maker, id);
+      // Only the orders still listed keep a failure count.
+      r.failed = Object.fromEntries(Object.entries(r.failed).filter(([oid]) => listed.some((o) => o.id === oid)));
       const given = listed.filter((o) => (r.failed[o.id] ?? 0) >= FOREIGN_TRIES);
       const live = listed.filter((o) => !given.includes(o)).map((o) => ({ ...o, cancelSentAt: r.cancels[o.id] ?? null }));
       const row = bal.tokens?.[id] ?? { free: 0, freeUtxos: 0, decimals: null };
@@ -961,6 +971,8 @@ export class Bot {
       r.done = false;
       for (const a of actions) {
         if (a.kind === 'merge' && (stopping || now - (r.mergeSentAt ?? 0) < this.cfg.safety.orderVisibleTimeoutSec * 1000)) continue;
+        if (a.kind === 'cancel' && (cancels >= FOREIGN_PER_CYCLE || Date.now() - now > RETIRED_BUDGET_MS)) continue;
+        if (a.kind === 'cancel') cancels++;
         const res = a.kind === 'cancel' ? await this.kob.cancel(a.id) : await this.kob.merge(id);
         const status = res.ok ? (res.dryRun ? 'planned' : 'submitted') : 'failed';
         this.log.action({ type: `retired-${a.kind}`, token: id, id: a.id ?? null, status, txid: res.txid ?? null, fee: res.fee ?? null, error: res.error ?? null });
