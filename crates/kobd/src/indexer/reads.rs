@@ -290,20 +290,34 @@ pub fn market_scale(conn: &Connection, cov: &[u8]) -> DbResult<Option<i64>> {
 /// covenant created, so it proves it. Order placements prove nothing: a bid can name any
 /// commitment, and one that no holder carries can never be delivered to (C2-H1). One seek of
 /// `token_holdings_token_page`.
+///
+/// A token whose oldest holding is of another family (KRON) has none: the seek for a KCC-20 row
+/// would read every holding of it (R2C-M4). Only the token's creator can mint both families under
+/// one covenant id, so only its own token falls back to no proof.
 pub fn proven_extension(conn: &Connection, token: &[u8]) -> DbResult<Option<[u8; 32]>> {
-    let row: Option<(Vec<u8>, String)> = conn
-        .prepare_cached(concat!(
-            "SELECT kob_hstate(h.state, h.family, ow.h, h.owner_kind, h.amount), p.name FROM token_holdings h \
-             JOIN ids ow ON ow.id = h.owner_id JOIN programs p ON p.id = h.program_id WHERE h.token_id = ",
-            id_of!("?1"),
-            " AND h.family = 1 ORDER BY h.created_block LIMIT 1"
-        ))?
-        .query_row([token], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()?;
+    let first: Option<i64> = conn.prepare_cached(FIRST_HOLDING_FAMILY)?.query_row([token], |r| r.get(0)).optional()?;
+    if first != Some(i64::from(kob_protocol::family::Family::Kcc20.code())) {
+        return Ok(None);
+    }
+    let row: Option<(Vec<u8>, String)> =
+        conn.prepare_cached(FIRST_KCC20_HOLDING)?.query_row([token], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
     let Some((span, program)) = row else { return Ok(None) };
     let tpl = TemplateId::from_name(&program).and_then(kob_protocol::artifacts::try_token_template);
     Ok(tpl.and_then(|t| kob_protocol::state::TokenState::decode_with(t, &span).ok()).map(|s| s.extension()))
 }
+
+/// The family of a token's oldest holding: one seek of `token_holdings_token_page`.
+const FIRST_HOLDING_FAMILY: &str =
+    concat!("SELECT family FROM token_holdings WHERE token_id = ", id_of!("?1"), " ORDER BY created_block LIMIT 1");
+
+/// A token's oldest KCC-20 holding. It reads the token's holdings in age order up to the first
+/// KCC-20 one, so it is asked only when the oldest is one ([`proven_extension`]).
+const FIRST_KCC20_HOLDING: &str = concat!(
+    "SELECT kob_hstate(h.state, h.family, ow.h, h.owner_kind, h.amount), p.name FROM token_holdings h \
+     JOIN ids ow ON ow.id = h.owner_id JOIN programs p ON p.id = h.program_id WHERE h.token_id = ",
+    id_of!("?1"),
+    " AND h.family = 1 ORDER BY h.created_block LIMIT 1"
+);
 
 /// The programs the chain proves a token has, as template hashes.
 ///

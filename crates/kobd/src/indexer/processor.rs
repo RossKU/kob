@@ -1557,8 +1557,13 @@ impl Processor {
         if let Some((mut ia, mut ib)) = pair_listing(state, daa, carrier) {
             ia.proven_tpls = proven_hashes(conn, ia.token_cov_id)?;
             ib.proven_tpls = proven_hashes(conn, ib.token_cov_id)?;
-            ia.proven_ext = proven_ext(conn, ia.token_cov_id)?;
-            ib.proven_ext = proven_ext(conn, ib.token_cov_id)?;
+            // Only a KCC-20 token has an extension commitment to prove (R2C-M4).
+            if ia.family == Some(kob_protocol::family::Family::Kcc20) {
+                ia.proven_ext = proven_ext(conn, ia.token_cov_id)?;
+            }
+            if ib.family == Some(kob_protocol::family::Family::Kcc20) {
+                ib.proven_ext = proven_ext(conn, ib.token_cov_id)?;
+            }
             let r = self
                 .rules
                 .evaluate(&self.tokens, &ia)
@@ -1604,7 +1609,12 @@ impl Processor {
                 carrier,
                 keeper_tip: listing_keeper_tip(state, carrier),
                 proven_tpls: proven_hashes(conn, Some(Hash32(state.token_cov_id())))?,
-                proven_ext: proven_ext(conn, Some(Hash32(state.token_cov_id())))?,
+                // Only a KCC-20 token has an extension commitment to prove (R2C-M4).
+                proven_ext: if state.family() == kob_protocol::family::Family::Kcc20 {
+                    proven_ext(conn, Some(Hash32(state.token_cov_id())))?
+                } else {
+                    None
+                },
             },
         );
         Ok(match r {
