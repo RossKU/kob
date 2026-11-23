@@ -848,12 +848,7 @@ pub fn env_sized(
                     .or(data::last_fill(&indexer, m).ok().flatten())
             };
             let quote_utxos = if needs.b { data::token_utxos(&indexer, &node, &c.network, bm, &maker)? } else { vec![] };
-            (
-                book,
-                own,
-                None,
-                Some(PairPart { quote: bm.clone(), quote_utxos, kas_per_whole_a: kas_of(a), kas_per_whole_b: kas_of(bm) }),
-            )
+            (book, own, None, Some(PairPart { quote: bm.clone(), quote_utxos, kas_per_whole_a: kas_of(a) }))
         }
     };
     let env = Env {

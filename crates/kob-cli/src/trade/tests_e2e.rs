@@ -1039,7 +1039,6 @@ fn planned(intent: crate::trade::plan::Intent, pair: bool) -> (AnyState, u64) {
             }],
             quote: b,
             kas_per_whole_a: Some(3 * KAS as i64),
-            kas_per_whole_b: Some(KAS as i64 / 5),
         }),
         delivery: Default::default(),
     };
