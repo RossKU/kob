@@ -1461,11 +1461,19 @@ fn swap(path: &Path, new: &Path) -> DbResult<PathBuf> {
 }
 
 /// `new` takes the place of `path`. The old file, with its `-wal` and `-shm`, is kept as `suffix`.
+///
+/// Crash-safe (R3C2-3): the old store's write-ahead log is checkpointed into it first and must be
+/// empty, so no log of the old store can sit beside a missing or new file. The new file is synced
+/// before it takes the place, and the directory after each rename (`fsync` on Unix; on Windows
+/// `sync_all` is `FlushFileBuffers` and a directory cannot be synced, NTFS journals the renames). A
+/// start that finds the store missing puts the old file back ([`recover_interrupted_swap`]).
 fn swap_as(path: &Path, new: &Path, suffix: &str) -> DbResult<PathBuf> {
     let old = suffixed(path, suffix);
     if old.exists() {
         return Err(bad(format!("{} exists already: delete it (or move it away) first", old.display())));
     }
+    checkpoint_out(path)?;
+    std::fs::OpenOptions::new().write(true).open(new)?.sync_all()?;
     // The old file's -wal and -shm belong to it. The new file starts clean.
     std::fs::rename(path, &old)?;
     for suffix in ["-wal", "-shm"] {
@@ -1474,6 +1482,7 @@ fn swap_as(path: &Path, new: &Path, suffix: &str) -> DbResult<PathBuf> {
             std::fs::rename(&from, format!("{}{suffix}", old.display()))?;
         }
     }
+    recordlog::sync_dir(path)?;
     if let Err(e) = std::fs::rename(new, path) {
         // Put the store back.
         let _ = std::fs::rename(&old, path);
@@ -1482,7 +1491,57 @@ fn swap_as(path: &Path, new: &Path, suffix: &str) -> DbResult<PathBuf> {
         }
         return Err(e.into());
     }
+    recordlog::sync_dir(path)?;
     Ok(old)
+}
+
+/// Moves every frame of the store's write-ahead log into the store and empties the log.
+///
+/// It fails while another connection holds the log (a writer still runs).
+fn checkpoint_out(path: &Path) -> DbResult<()> {
+    let conn = Connection::open(path)?;
+    conn.busy_timeout(Duration::from_secs(30))?;
+    let (busy, log, done): (i64, i64, i64) =
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    drop(conn);
+    let wal = format!("{}-wal", path.display());
+    let left = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+    if busy != 0 || log != done || left > 0 {
+        return Err(bad(format!(
+            "{}: its write-ahead log cannot be emptied ({left} bytes left): stop every writer of the data directory first",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Puts the old store back when `path` is missing beside a copy a `kobd db migrate` or `vacuum`
+/// swap set aside (`.before-migrate`, `.before-vacuum`): the swap stopped between its renames
+/// (R3C2-3). Without this, a lean store would start fresh and a store with a record log would be
+/// refused. The old file comes back with its `-wal` and `-shm`; the half-swapped new file stays
+/// where it was. Returns whether it did.
+pub fn recover_interrupted_swap(path: &Path) -> DbResult<bool> {
+    if path.exists() {
+        return Ok(false);
+    }
+    for suffix in [BEFORE_MIGRATE, BEFORE_VACUUM] {
+        let old = suffixed(path, suffix);
+        if !old.exists() {
+            continue;
+        }
+        // The log first: a stop between the two leaves the same state, which this repeats.
+        for s in ["-wal", "-shm"] {
+            let from = format!("{}{s}", old.display());
+            if Path::new(&from).exists() {
+                std::fs::rename(&from, format!("{}{s}", path.display()))?;
+            }
+        }
+        std::fs::rename(&old, path)?;
+        recordlog::sync_dir(path)?;
+        tracing::warn!(store = %path.display(), from = %old.display(), "the store was missing after an interrupted swap of `kobd db migrate` or `vacuum`: the old store is back in its place; run the command again");
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 /// The schema version a store file says it is (0: none).
@@ -1691,4 +1750,40 @@ pub fn vacuum(cfg: &IndexerConfig, mut say: impl FnMut(&str)) -> Result<VacuumRe
     rep.bytes_after = file_bytes(&path);
     say(&format!("store: {} bytes -> {} bytes ({:.1} s in all)", rep.bytes_before, rep.bytes_after, t.elapsed().as_secs_f64()));
     Ok(rep)
+}
+
+#[cfg(test)]
+mod swap_tests {
+    use super::*;
+
+    fn store(p: &Path, rows: i64) {
+        let c = db::open_writer(p, "testnet-10").unwrap();
+        for i in 0..rows {
+            db::meta_set(&c, &format!("zz{i}"), "v").unwrap();
+        }
+    }
+
+    fn keys(p: &Path) -> i64 {
+        Connection::open(p).unwrap().query_row("SELECT COUNT(*) FROM meta WHERE k LIKE 'zz%'", [], |r| r.get(0)).unwrap()
+    }
+
+    /// R3C2-3: the swap checkpoints the old store's log into it and syncs; a start that finds the store missing between the
+    /// renames puts the old one back, with its rows, instead of starting fresh.
+    #[test]
+    fn an_interrupted_swap_is_undone_at_the_next_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, new) = (dir.path().join("index.sqlite3"), dir.path().join("index.sqlite3.vacuuming"));
+        store(&path, 3);
+        store(&new, 5);
+        let old = swap_as(&path, &new, BEFORE_VACUUM).unwrap();
+        assert_eq!((keys(&path), keys(&old)), (5, 3));
+        assert!(!Path::new(&format!("{}-wal", old.display())).exists(), "no log beside the old store");
+        assert!(!recover_interrupted_swap(&path).unwrap(), "nothing to undo");
+
+        // stopped after the first rename: the store is missing, its old copy is set aside
+        std::fs::remove_file(&path).unwrap();
+        assert!(recover_interrupted_swap(&path).unwrap());
+        assert_eq!(keys(&path), 3, "the old rows are back");
+        assert!(!old.exists());
+    }
 }

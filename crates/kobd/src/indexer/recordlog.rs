@@ -1111,7 +1111,7 @@ fn tmp_path(p: &Path) -> PathBuf {
 }
 
 /// Makes a rename or a removal in the directory of `p` durable (Unix; NTFS journals it).
-fn sync_dir(p: &Path) -> std::io::Result<()> {
+pub(crate) fn sync_dir(p: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     if let Some(d) = p.parent() {
         File::open(d)?.sync_all()?;
