@@ -9,7 +9,7 @@ import { unitsText } from '../../kob/pair';
 import { quoteOf, statePriceToTokenPrice } from '../../kob/units';
 import { formatLocal, formatUtc } from '../../kob/daa';
 import type { Clock } from '../../kob/plan-types';
-import { longId, type TokenInfo } from '../../kob/registry';
+import { longId, tickerUnit, type TokenInfo } from '../../kob/registry';
 import { useFiat } from '../../app/use-fiat';
 import {
   Amount, Badge, Banner, Button, CopyText, KeyValueList, RawDetails, type Tone,
@@ -175,12 +175,12 @@ const shortId = longId;
  * not.
  */
 function pairPriceText(value: bigint, row: OrderRowModel, a: TokenInfo | undefined, b: TokenInfo | undefined): string {
-  const aName = a?.ticker ?? (row.token ? shortId(row.token) : '?');
+  const aName = a ? tickerUnit(a.ticker, a.covenantId) : row.token ? shortId(row.token) : '?';
   // Whole tokens. A token of unknown decimals is on the assumed 8, never "base units".
   const perA = row.scale > 0n ? statePriceToTokenPrice(value, a?.decimals ?? RAW_TOKEN_DECIMALS, row.scale, 'nearest') : value;
   // "X B per A", never the pair notation "A/B", which reads as A per B.
   if (!b) return `${unitsText(perA, RAW_TOKEN_DECIMALS, ',')} ${shortId(row.pair!.quote)} per ${aName}`;
-  return `${unitsText(perA, b.decimals, ',')} ${b.ticker} per ${aName}`;
+  return `${unitsText(perA, b.decimals, ',')} ${tickerUnit(b.ticker, b.covenantId)} per ${aName}`;
 }
 
 /**
@@ -223,7 +223,7 @@ function ExpiryText({ row }: { row: OrderRowModel }) {
  */
 function pairItems(row: OrderRowModel, a: TokenInfo | undefined, b: TokenInfo | undefined) {
   const x = row.pair!;
-  const aName = a?.ticker ?? (row.token ? shortId(row.token) : '?');
+  const aName = a ? tickerUnit(a.ticker, a.covenantId) : row.token ? shortId(row.token) : '?';
   const bName = b?.ticker ?? shortId(x.quote);
   const aText = (v: bigint): string => `${unitsText(v, a?.decimals ?? RAW_TOKEN_DECIMALS, ',')} ${aName}`;
   const bText = (v: bigint): string => `${unitsText(v, b?.decimals ?? RAW_TOKEN_DECIMALS, ',')} ${bName}`;
@@ -301,7 +301,7 @@ export function OrderRow(props: OrderRowProps) {
     ) : (
       <Num value={text} />
     );
-  const marketText = tk && row.pair ? `${tk.ticker}/${bToken?.ticker ?? shortId(row.pair.quote)}` : tk ? `${tk.ticker}/KAS` : row.token ? longId(row.token) : '—';
+  const marketText = tk && row.pair ? `${tickerUnit(tk.ticker, tk.covenantId)}/${bToken ? tickerUnit(bToken.ticker, bToken.covenantId) : shortId(row.pair.quote)}` : tk ? `${tickerUnit(tk.ticker, tk.covenantId)}/KAS` : row.token ? longId(row.token) : '—';
   const cancellable = !row.oldTemplate && (row.live || row.status === 'unknown');
   // What a mode-1 order bought and holds, in the bought token. A pair order's T may be B.
   const boughtTk = row.bought && row.pair && row.bought.token === row.pair.quote ? bToken : tk;
@@ -446,7 +446,7 @@ export function OrderRow(props: OrderRowProps) {
         </div>
         <div class="small muted">
           {tk && row.pair ? (
-            <a href={routeToHash(pairRoute(row.pair.base, row.pair.quote))} data-testid="order-token">{`${tk.ticker}/${bToken?.ticker ?? shortId(row.pair.quote)}`}</a>
+            <a href={routeToHash(pairRoute(row.pair.base, row.pair.quote))} data-testid="order-token">{`${tickerUnit(tk.ticker, tk.covenantId)}/${bToken ? tickerUnit(bToken.ticker, bToken.covenantId) : shortId(row.pair.quote)}`}</a>
           ) : tk ? (
             <>
               <a href={`#/market/${tk.covenantId}`} data-testid="order-token">{tokenLabel(tk)}</a>

@@ -24,6 +24,7 @@ import { privateKeySigningAllowed } from '../../app/mirror';
 import './settings.css';
 import { DELIVERY_CHOICES, type DeliveryChoice } from '../../kob/orders/delivery';
 import { formatUnits } from '../../kob/units';
+import { tickerUnit } from '../../kob/registry';
 import { listThresholds, resetThreshold, useDeliveryPref } from './delivery-pref';
 import { changedFields, changesServers, clearKobStorage, configWithForm, describeStorageKey, formFromConfig, kobStorageKeys, resetServersPatch, settingsPatch, storedServerFields, validateSettings, type SettingsForm } from './settings-model';
 
@@ -261,7 +262,7 @@ function DeliverySettings() {
               label: r.ticker || r.tokenCovId,
               value: (
                 <span class="settings-threshold">
-                  <span>{formatUnits(r.threshold, r.decimals, { group: ',' })} {r.ticker}</span>
+                  <span>{formatUnits(r.threshold, r.decimals, { group: ',' })} {r.ticker ? tickerUnit(r.ticker, r.tokenCovId) : ''}</span>
                   <Button small onClick={() => (resetThreshold(r), setTick((n) => n + 1))} title={t('settings.delivery.reset.hint')} data-testid={`settings-delivery-reset-${r.tokenCovId}`}>
                     {t('settings.delivery.reset')}
                   </Button>
@@ -458,7 +459,7 @@ function TrackedAmount(props: { utxo: TrackedToken }) {
   const tk = displayToken(registry, config.network, props.utxo.tokenCovId)!;
   return (
     <>
-      <Amount kind="token" value={BigInt(props.utxo.state.amount)} decimals={tk.decimals} unit={tk.ticker} group />
+      <Amount kind="token" value={BigInt(props.utxo.state.amount)} decimals={tk.decimals} unit={tickerUnit(tk.ticker, props.utxo.tokenCovId)} group />
       <TokenNote token={tk} />
     </>
   );

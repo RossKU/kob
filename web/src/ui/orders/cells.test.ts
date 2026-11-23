@@ -27,6 +27,11 @@ describe('the unit of a token in a table', () => {
     expect(tokenUnit(undefined, ID)).toEqual({ text: '8347…cd64', title: ID });
     expect(isUnnamed('EXKCC', ID)).toBe(false);
   });
+
+  it('a ticker that reads as KAS or is not plain ASCII carries its id (R3B-L1)', () => {
+    for (const tk of ['ᏦᎪᏚ', 'KAS', 'ΚΑΣ']) expect(tokenUnit(tk, ID)).toEqual({ text: `${tk} (8347…cd64)`, title: ID });
+    expect(tokenUnit('EXKCC', ID).text).toBe('EXKCC');
+  });
 });
 
 describe('a price column has one number of decimals', () => {
