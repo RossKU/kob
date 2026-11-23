@@ -27,15 +27,20 @@ jobs:
   changes:
     # Decides from the diff of the push (the before sha) or of the pull request (its base) which areas changed, and so which jobs run. A job
     # that does not run is skipped, and a skipped job counts as passed (job ci-ok, the one result to look at, fails when a job failed or was cancelled).
-    # Everything runs when the diff cannot be had (a new branch, a force push, schedule, workflow_dispatch) and on any path not classified below.
-    #   rust      crates/, vendor/, contracts/, registry/, scripts/, tools/, packages/, Cargo.*, toolchain files, and the two docs the Rust tests
-    #             include (docs/spec/kob1-payload.md, docs/ops/executor.md): fmt, clippy, test, budget-table, wasm, x402-sdk, tools, contracts, deps,
-    #             reproducible, and web (the web build embeds kob-wasm and reads crates/, contracts/ and registry/)
+    # Everything runs on every push to master or main, when the diff cannot be had (a new branch, a force push, schedule, workflow_dispatch)
+    # and on any path not classified below. A master push is never filtered: deploy-pages.yml and release.yml take a green master run of a
+    # commit as "every test passed on this commit", and a diff from the previous push would skip the jobs that push failed. On such a run
+    # (output all) ci-ok fails when any job was skipped.
+    #   rust      crates/, vendor/, contracts/, registry/, scripts/, tools/, packages/, Cargo.*, toolchain files, and the files outside them
+    #             that a Rust test reads (docs/spec/kob1-payload.md, docs/ops/executor.md, docs/argent/argent.md and
+    #             web/src/kob/orders/c6-economics.vectors.json; web/test/pages-deploy.test.ts checks the list): fmt, clippy, test, budget-table,
+    #             wasm, x402-sdk, tools, contracts, deps, reproducible, and web (the web build embeds kob-wasm and reads crates/, contracts/ and registry/)
     #   web       web/ and the root README.md (a web unit test reads it): web, web-build, web-e2e
     #   docs      other Markdown, docs/, LICENSE, NOTICE: contracts (scripts/check-pins.mjs reads every doc for pinned hashes)
     # .github/ and every other path: all of it.
     runs-on: ubuntu-latest
     outputs:
+      all: ${{ steps.diff.outputs.all }}
       rust: ${{ steps.diff.outputs.rust }}
       web: ${{ steps.diff.outputs.web }}
       contracts: ${{ steps.diff.outputs.contracts }}
@@ -47,6 +52,7 @@ jobs:
       - id: diff
         env:
           EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           BEFORE: ${{ github.event.before }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           REPO: ${{ github.repository }}
@@ -58,7 +64,10 @@ jobs:
             pull_request) base="$PR_BASE" ;;
           esac
           files=
-          if [ -n "$base" ] && ! [[ "$base" =~ ^0+$ ]] \
+          if [ "$EVENT" = push ] && { [ "$REF" = refs/heads/master ] || [ "$REF" = refs/heads/main ]; }; then
+            echo "a push to $REF: everything runs (a green run of a master commit means every job ran and passed on it)"
+            all=true
+          elif [ -n "$base" ] && ! [[ "$base" =~ ^0+$ ]] \
             && git fetch --no-tags --depth=1 "https://github.com/$REPO.git" "$base" \
             && files=$(git diff --name-only --no-renames "$base" HEAD) && [ -n "$files" ]; then
             echo "changed files against $base:"; echo "$files" | sed 's/^/  /'
@@ -71,8 +80,9 @@ jobs:
             case "$f" in
               .github/*) all=true ;;
               web/package.json|web/package-lock.json) web=true; pkg=true ;;
+              web/src/kob/orders/c6-economics.vectors.json) web=true; rust=true ;;
               web/*) web=true ;;
-              docs/spec/kob1-payload.md|docs/ops/executor.md) rust=true ;;
+              docs/spec/kob1-payload.md|docs/ops/executor.md|docs/argent/argent.md) rust=true ;;
               docs/*|LICENSE|NOTICE) docs=true ;;
               README.md) docs=true; web=true ;;
               crates/*|vendor/*|contracts/*|registry/*|scripts/*|tools/*|packages/*|.cargo/*) rust=true ;;
@@ -84,6 +94,7 @@ jobs:
           if [ "$all" = true ]; then rust=true web=true docs=true pkg=true; fi
           out() { echo "$1=$2" | tee -a "$GITHUB_OUTPUT"; }
           anyof() { for v in "$@"; do [ "$v" = true ] && { echo true; return; }; done; echo false; }
+          out all "$all"
           out rust "$rust"
           out web "$(anyof "$web" "$rust")"
           out contracts "$(anyof "$rust" "$docs")"
@@ -91,7 +102,9 @@ jobs:
 
   ci-ok:
     # The one result of this workflow (a required check, or what a script reads, names this job): it passes when every job passed or was
-    # skipped by the diff, and fails when any job failed or was cancelled. Its `needs` lists every other job.
+    # skipped by the diff, and fails when any job failed or was cancelled. On a push to master or main, and on any run where job changes
+    # said everything runs (output all), a skipped job fails it too: there every job must have run and passed. Its `needs` lists every
+    # other job.
     if: always()
     needs: [changes, fmt, clippy, test, budget-table, wasm, contracts, x402-sdk, tools, deps, web, web-build, web-e2e, reproducible]
     runs-on: ubuntu-latest
@@ -99,11 +112,16 @@ jobs:
       - name: Every job passed or was skipped
         env:
           NEEDS: ${{ toJSON(needs) }}
+          FULL: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')) || needs.changes.outputs.all == 'true' }}
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result != "success" and .value.result != "skipped")] | length')
           [ "$bad" = 0 ] || { echo "a job failed or was cancelled" >&2; exit 1; }
           [ "$(echo "$NEEDS" | jq -r .changes.result)" = success ] || { echo "the changes job did not run" >&2; exit 1; }
+          if [ "$FULL" = true ]; then
+            skipped=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result != "success") | .key] | join(" ")')
+            [ -z "$skipped" ] || { echo "every job must run and pass on this run (a master push, or everything changed); not run: $skipped" >&2; exit 1; }
+          fi
 
   fmt:
     needs: changes
@@ -155,13 +173,15 @@ jobs:
           toolchain: "1.94.0"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # the budget table measurements (kob-protocol/tests/budget_table.rs, about 9 minutes of CPU) run in their own job beside this one
+      # --no-fail-fast on every cargo test: without it cargo stops at the first failing test binary, and the failures of the binaries after it
+      # stay hidden until that one is fixed
       - name: Workspace tests (KRON template 2433)
         if: runner.os == 'Linux'
         env:
           # the live TN10 tests (node follow, x402 end-to-end) need a reachable testnet node and mine their own funds: not for CI
           KOB_SKIP_NETWORK_TESTS: "1"
         run: >
-          cargo test --workspace --locked --
+          cargo test --workspace --locked --no-fail-fast --
           --skip compute_budget_table_is_generated_exact_and_current
           --skip wide_pad_shapes_are_measured_on_every_program
           --skip pair_shapes_are_measured_on_every_program_pair
@@ -174,7 +194,7 @@ jobs:
         env:
           KOB_SKIP_NETWORK_TESTS: "1"
         run: >
-          cargo test --workspace --locked --exclude kob-tests --
+          cargo test --workspace --locked --no-fail-fast --exclude kob-tests --
           --skip compute_budget_table_is_generated_exact_and_current
           --skip wide_pad_shapes_are_measured_on_every_program
           --skip pair_shapes_are_measured_on_every_program_pair
@@ -182,11 +202,11 @@ jobs:
       - name: Engine harness smoke set, Windows (the tests that read artifacts, registries and pinned files)
         if: runner.os == 'Windows'
         run: >
-          cargo test --locked -p kob-tests --test artifacts_tests --test registry_tests --test protocol_lib_tests
+          cargo test --locked --no-fail-fast -p kob-tests --test artifacts_tests --test registry_tests --test protocol_lib_tests
           --test argent_import_pin_tests --test retired_cancel_tests
       - name: "Mainnet deployment build (feature deploy-mainnet: the embedded record, the pinned registry, the network checks; docs/ops/release.md 5)"
         if: runner.os == 'Linux'
-        run: cargo test --locked -p kob-protocol -p kobd --lib --features deploy-mainnet
+        run: cargo test --locked --no-fail-fast -p kob-protocol -p kobd --lib --features deploy-mainnet
 
   budget-table:
     needs: changes
@@ -201,7 +221,7 @@ jobs:
           toolchain: "1.94.0"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Budget table measurements (every builder shape on every program, the generated table exact and current)
-        run: cargo test --locked -p kob-protocol --test budget_table
+        run: cargo test --locked --no-fail-fast -p kob-protocol --test budget_table
 
   wasm:
     needs: changes
@@ -235,6 +255,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # the whole history: scripts/lib/deploy.mjs holds the lock templates of the deployment record to every earlier copy of it,
+          # and fails on a shallow clone
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master as of 2026-10-01 (the action has no release tags)
         with:
           toolchain: "1.94.0"
@@ -370,6 +393,9 @@ jobs:
       - run: npm run build:release
       - name: Release hashes (the deployment record reproduces, the bundle embeds and ships the registry the mainnet record pins)
         working-directory: .
+        env:
+          # a shallow checkout: the lock-history check of scripts/lib/deploy.mjs runs in job contracts, with the whole history
+          KOB_DEPLOY_NO_HISTORY: "1"
         run: bash scripts/release-hashes.sh
 
   web-build:
@@ -443,6 +469,8 @@ jobs:
       - run: npm run e2e -- --shard=${{ matrix.shard }}/10
         env:
           KOB_E2E_NO_BUILD: "1"
+          # the app suite, never the infra fallback: a missing dist/ fails the shard (playwright.config.ts)
+          KOB_E2E_TARGET: app
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

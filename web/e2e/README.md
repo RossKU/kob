@@ -10,7 +10,7 @@ transaction through the same script engine (`kob.validate`), so a tx the mock ac
 cd web
 npm run build:wasm -- --copy      # once: kob-wasm bindings (web/wasm)
 npm run build                     # the app under test (dist/)
-npm run e2e                       # mock server + vite preview + specs   (KOB_E2E_TARGET=app when dist/ exists)
+npm run e2e                       # mock server + vite preview + specs   (KOB_E2E_TARGET=app when dist/ exists, and always in CI)
 KOB_E2E_TARGET=infra npm run e2e  # only the infra specs against the placeholder page (e2e/fixtures-site)
 npm run mock                      # just the mock server (node mock/server.mjs [--port 8790] [--fund] [--no-seed] [--history])
 node mock/server.mjs --history    # dev mode with 48 h of seeded trades, so the charts / stats / trades panels show a real market

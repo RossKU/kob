@@ -1,7 +1,7 @@
 // Playwright configuration of the mock e2e stack (see e2e/README.md).
 //   webServer 1: the mock indexer + node       node mock/server.mjs           (KOB_MOCK_PORT, default 8790; skipped with KOB_MOCK_PER_WORKER=1)
 //   webServer 2: the app under test            npm run preview   -> dist/     (KOB_E2E_TARGET=app, default when dist/index.html exists)
-//                or the infra placeholder page  node e2e/serve-static.mjs      (KOB_E2E_TARGET=infra, default while there is no dist/)
+//                or the infra placeholder page  node e2e/serve-static.mjs      (KOB_E2E_TARGET=infra, default while there is no dist/, never in CI)
 // The browser is the Chromium already in Playwright's cache (no downloads). If Playwright cannot resolve it, set KOB_CHROME_PATH to a chrome.exe.
 import { defineConfig, devices } from '@playwright/test';
 import { existsSync, readdirSync } from 'node:fs';
@@ -14,7 +14,16 @@ const MOCK_PORT = Number(process.env.KOB_MOCK_PORT ?? 8790);
 const APP_PORT = Number(process.env.KOB_APP_PORT ?? 4173);
 const INFRA_PORT = Number(process.env.KOB_INFRA_PORT ?? 4174);
 const perWorker = process.env.KOB_MOCK_PER_WORKER === '1';
-const target: 'app' | 'infra' = process.env.KOB_E2E_TARGET === 'app' || process.env.KOB_E2E_TARGET === 'infra' ? process.env.KOB_E2E_TARGET : existsSync(join(HERE, 'dist', 'index.html')) ? 'app' : 'infra';
+// CI runs the app suite unless told otherwise: a missing dist/ there must fail the run, not shrink it to the infra placeholder suite
+const target: 'app' | 'infra' =
+  process.env.KOB_E2E_TARGET === 'app' || process.env.KOB_E2E_TARGET === 'infra'
+    ? process.env.KOB_E2E_TARGET
+    : process.env.CI || existsSync(join(HERE, 'dist', 'index.html'))
+      ? 'app'
+      : 'infra';
+if (target === 'app' && process.env.CI && process.env.KOB_E2E_NO_BUILD && !process.env.KOB_DIST && !existsSync(join(HERE, 'dist', 'index.html'))) {
+  throw new Error('KOB_E2E_NO_BUILD=1 in CI, but there is no dist/index.html to test (the build artifact is missing)');
+}
 
 /** The newest Chromium in the local Playwright cache (used only when KOB_CHROME_PATH is set to `cache`). */
 function cachedChromium(): string | undefined {
@@ -49,6 +58,8 @@ export default defineConfig({
   // the shared mock server holds global state: one worker unless every worker gets its own server
   workers: perWorker ? undefined : 1,
   fullyParallel: perWorker,
+  // a committed test.only would run that test alone and pass the suite
+  forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   // CI: `github` turns each failure (and flaky retry) into a check-run annotation, readable through the public API without the job log
   reporter: process.env.CI ? [['list'], ['github'], ['html', { open: 'never' }]] : [['list']],

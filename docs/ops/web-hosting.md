@@ -349,7 +349,8 @@ on *Actions* > *deploy-pages* > *Run workflow*:
 
 1. in job `build`, which holds no secret and runs in no environment, builds and tests the app as the `web` job of `ci.yml` does, from source with no build cache restored (kob-wasm slim bindings, the pinned kaspa-wasm SDK,
    typecheck, unit tests, then `npm run build:release` and `scripts/release-hashes.sh`, so the upload is the release bundle), and uploads nothing
-   until the `ci.yml` run of the same commit has passed: that run carries the mock e2e suite (sharded), which the deploy does not run again;
+   until the `ci.yml` master push run of the same commit has passed (a master push runs every job, and its `ci-ok` fails when one was
+   skipped): that run carries the mock e2e suite (sharded), which the deploy does not run again;
 2. writes `web/dist/config.json` from the variables (still in job `build`, which then hands `web/dist` and the sha256 of every file on as
    artifacts); on `testnet-10` also `web/dist/registry/tokens.json` as the supported
    token programs with no token entries (the shipped registry names mainnet tokens; it is the same list `kobd setup`

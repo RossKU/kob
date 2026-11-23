@@ -14,7 +14,7 @@ After the launch:
 ## 1. Before the launch
 
 1. The release gates of `docs/ops/release.md` section 2 hold.
-2. The launch commit is on `master` (the `KOB_PAGES_NETWORK_SWITCH` passthrough in `deploy-pages.yml`) and CI is green. It is inert while the variable is unset.
+2. The launch commit is on `master` (the `KOB_PAGES_NETWORK_SWITCH` passthrough in `deploy-pages.yml`) and CI is fully green on that exact commit (its `ci.yml` master push run: every job ran and passed). It is inert while the variable is unset.
 3. **The deploy gate is set** (`docs/ops/web-hosting.md`, 4a): `production` has a required reviewer and the deployment branch `master` only,
    `master` and the `v*` tags are protected. `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are secrets of `production` only (no
    repository copy: a mainnet run fails while one exists, `docs/ops/web-hosting.md` 3), and the `ANDROID_*` signing secrets are
@@ -52,7 +52,7 @@ Unchanged: `KOB_PAGES_PROJECT=kob-web`. `KOB_PAGES_MAINNET_*` stays unset.
 `KOB_LOGO_REPORT_URL` (GitHub logo-report form) stays on the testnet-10 indexer until you decide which list it feeds. For mainnet, use
 `https://kob-api.kaspa.ag/v1/logo-reports`, and only once index-main has `[logo_reports]` on with the origins of section 7, step 6
 (otherwise it refuses every report from the app).
-Only if a run says the `production` environment could not be read: `gh variable set KOB_PAGES_PRODUCTION_GATE_CONFIRMED -R RossKU/kob --body 1`,
+Only if a run says the `production` environment could not be read (HTTP 403): `gh variable set KOB_PAGES_PRODUCTION_GATE_CONFIRMED -R RossKU/kob --body 1`,
 after the settings of `docs/ops/web-hosting.md` 4a are done.
 
 ## 3. Order of steps
