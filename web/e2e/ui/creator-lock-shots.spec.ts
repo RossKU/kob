@@ -16,6 +16,8 @@ test('creator lock shots', async ({ appPage: page, mock }) => {
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.addInitScript(() => localStorage.setItem('kob.theme', 'light'));
+  // the manual lock, which the wallet signs open (Settings, Manual unlock)
+  await page.addInitScript(() => localStorage.setItem('kob.lock.manual', '1'));
   await mock.giveKas('alice', 500n * KAS);
   await page.goto('/#/create');
   await clickConnectOption(page, 'wallet-connect-kasware');

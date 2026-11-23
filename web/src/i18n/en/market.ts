@@ -187,6 +187,7 @@ export default {
   'market.token.creatorLockValueNoShare': '{amount} until {date}',
   'market.token.creatorLockOpen': '{amount} ({pct}% of supply) until {date} (open)',
   'market.token.creatorLockOpenNoShare': '{amount} until {date} (open)',
+  'market.token.creatorLockAuto': "{text}, opens automatically",
   'market.token.openOrdersUnknown': 'unknown (the indexer has not been read)',
   'market.token.openOrdersValue': '{asks} asks, {bids} bids',
 

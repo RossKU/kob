@@ -10,7 +10,7 @@ import { planUnlock } from './unlock';
 
 const kob = loadKobNode();
 const UNTIL = 1_800_000_000_000n;
-const holding: LockedHolding = { token: 'ab'.repeat(32), program: 'KCC20PublicMint', until: UNTIL, key: MAKER.pk, authority: 'cd'.repeat(32), utxos: [], amount: 1000n };
+const holding: LockedHolding = { token: 'ab'.repeat(32), program: 'KCC20PublicMint', until: UNTIL, key: MAKER.pk, authority: 'cd'.repeat(32), utxos: [], amount: 1000n, kind: 'manual', coin: null };
 const services = (median: bigint | null) => ({ kob, config: { network: 'testnet-10' }, node: { getPastMedianTime: async () => median } }) as unknown as Services;
 
 describe('planUnlock before the node clock is past the lock time', () => {

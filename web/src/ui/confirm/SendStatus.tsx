@@ -310,7 +310,9 @@ export function useSend(): Sender {
     let final = checked.job;
     // The final confirmation. The private-key signer shows it in its frame. For any other wallet
     // the app shows it first, unless the user confirmed it in the app before (a merge run).
-    if (w.adapter!.id !== 'local-key' && !final.preconfirmed) {
+    // A transaction nobody signs (an automatic lock's release) never reaches the wallet, so the app
+    // asks for it whatever the wallet.
+    if ((w.adapter!.id !== 'local-key' || final.built.sign.length === 0) && !final.preconfirmed) {
       const confirmed = await confirmInApp(id, final, checked.decoded);
       if ('phase' in confirmed) return stopped(confirmed);
       final = confirmed;
@@ -328,7 +330,7 @@ export function useSend(): Sender {
       const live: LiveSigning | null =
         // A session step is not followed while it waits. The frame signs it at once or shows it as
         // a new request.
-        walletId === 'local-key' && !final.retimed && !final.session
+        walletId === 'local-key' && !final.retimed && !final.session && final.built.sign.length > 0
           ? {
               attach: (to) => {
                 follow(final, () => reading, (j) => {

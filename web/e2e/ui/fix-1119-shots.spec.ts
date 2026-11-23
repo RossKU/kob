@@ -31,6 +31,8 @@ test('creator lock: Unlock by the node clock, its refusal, the program mark', as
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.addInitScript(() => localStorage.setItem('kob.theme', 'light'));
+  // the manual lock, which the wallet signs open (Settings, Manual unlock)
+  await page.addInitScript(() => localStorage.setItem('kob.lock.manual', '1'));
   await page.clock.install({ time: Date.now() });
   await mock.giveKas('alice', 500n * KAS);
   await page.goto('/#/create');

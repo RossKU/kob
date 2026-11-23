@@ -512,6 +512,23 @@ CREATE TRIGGER IF NOT EXISTS kcc23_locks_delete AFTER DELETE ON kcc23_declaratio
     DELETE FROM kcc23_locks WHERE covenant_id = OLD.covenant_id;
 END;
 
+-- The automatic creator locks (`docs/spec/creator-lock-auto.md`) by their time, for the keepers that release them
+-- (`GET /v1/creator-locks?due=`, `kcc23::due_locks`). Written with the declaration when its proof verifies to an automatic
+-- lock (`kcc23::put_lock`), deleted with it by the trigger. A store without it gets it filled once (`kcc23::backfill_locks`,
+-- `meta.kcc23_auto_locks`).
+CREATE TABLE IF NOT EXISTS kcc23_auto_locks (
+    until         INTEGER NOT NULL,          -- unix ms
+    covenant_id   BLOB NOT NULL,
+    genesis_block INTEGER NOT NULL,
+    genesis_txid  BLOB NOT NULL,
+    idx           INTEGER NOT NULL,          -- the locked genesis output
+    PRIMARY KEY (until, covenant_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS kcc23_auto_locks_covenant ON kcc23_auto_locks (covenant_id);
+CREATE TRIGGER IF NOT EXISTS kcc23_auto_locks_delete AFTER DELETE ON kcc23_declarations BEGIN
+    DELETE FROM kcc23_auto_locks WHERE covenant_id = OLD.covenant_id;
+END;
+
 -- Row counts `GET /v1/health` reports (`reads::counters`), kept by the triggers below in the transaction of every write
 -- (a batch, a revert, a replay, an operator import), so a health check reads a few rows instead of counting the history.
 -- name: orders | orders_listed | rejects | fills | status:<order_state.status>. A database without them gets them at

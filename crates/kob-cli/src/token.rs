@@ -47,7 +47,7 @@ their owners from the genesis on, so the holder's key finds and spends them from
 USAGE
   kob token create --name <NAME> --ticker <TICKER> --decimals <N> [--fund-utxo <TXID:INDEX:AMOUNT:OWNER>...]
                   [--supply <UNITS>] [--holder <OWNER:SCHEME:AMOUNT[:BORROW_SCHEME:GUARD]>...]
-                  [--sell price|curve [--keep PERCENT] [sale options]] [--lock-until WHEN]
+                  [--sell price|curve [--keep PERCENT] [sale options]] [--lock-until WHEN [--lock-manual]]
                   [--key-file <PATH> | --key-env <NAME>] [--out-dir <DIR>] [--yes | --dry-run] [--node ws://HOST:PORT]
 
 REQUIRED
@@ -77,8 +77,11 @@ AFTER CREATION (as the web app's Create token; default: the wallet keeps everyth
   --lock-until WHEN     lock the kept share on chain until WHEN: +90d, +12h, +15m, YYYY-MM-DD (00:00 UTC),
                         YYYY-MM-DDTHH:MMZ or unix ms. With --sell it is the --keep part; without --sell, --keep PERCENT
                         of the share (default all of it), the rest stays free. Nobody, the key included, can move it
-                        before then (a P2SH owner `<until> OP_CHECKLOCKTIMEVERIFY <key> OP_CHECKSIG`, published in the
-                        declaration as `lock`); afterwards `kob token unlock` releases it to the key.
+                        before then. It opens by itself: after WHEN anyone may send the release, which pays the
+                        tokens and the 1 KAS lock coin of the genesis back to the key (less a fee and a 0.01 KAS
+                        tip, 0.02 KAS at most); executors' keepers send it (`kob token unlock` also does).
+  --lock-manual         ... or the older lock that opens only to a signature of the key: `kob token unlock`
+                        with the key releases it (a P2SH owner `<until> OP_CHECKLOCKTIMEVERIFY <key> OP_CHECKSIG`).
 
 SUPPLY
   --holder              initial holder, repeatable, one token output each. OWNER = 64-hex | `self` (the funding
@@ -463,6 +466,7 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
             "--lock-until" => {
                 a.sale.lock_until = Some(crate::token_lock::parse_lock_until(&val("--lock-until")?, crate::token_lock::now_ms())?)
             }
+            "--lock-manual" => a.sale.lock_manual = true,
             other => return Err(format!("unknown argument `{other}` (see `kob token create --help`)")),
         }
     }
@@ -471,6 +475,9 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
     }
     if image_hash.is_some() && a.icon.is_none() {
         return Err("--image-file / --image-hash need --image (the picture's address)".into());
+    }
+    if a.sale.lock_manual && a.sale.lock_until.is_none() {
+        return Err("--lock-manual needs --lock-until".into());
     }
     a.image_hash = image_hash;
     a.sale.check()?;
@@ -743,12 +750,17 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
     print_sale(&plan, sale.as_ref(), ask.as_ref(), ask_tx);
     if let Some(l) = &locked {
         println!(
-            "lock         {} base units (output {}) locked until {} ({} ms), opening to {}; release it then with `kob token unlock`",
+            "lock         {} base units (output {}) locked until {} ({} ms), opening to {}; {}",
             l.amount,
             l.at,
             crate::token_lock::utc(l.lock.until),
             l.lock.until,
-            hex(&l.lock.key)
+            hex(&l.lock.key),
+            match l.kind {
+                kob_protocol::creator_lock::LockKind::Auto =>
+                    "it opens by itself then (anyone may release it to the key; lock coin 1 KAS)",
+                kob_protocol::creator_lock::LockKind::Manual => "release it then with `kob token unlock` and the key",
+            }
         );
     }
     println!(
@@ -1522,17 +1534,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(dry);
     }
 
-    /// `--lock-until` without `--sell` locks `--keep` percent of the share (the rest stays free) and
-    /// declares the lock; `kob token unlock <DIR>` refuses before the node's median time passes it,
-    /// then sends a lock coin and the unlock (lock time = the lock's time) under one --yes.
+    /// `--lock-until --lock-manual` without `--sell` locks `--keep` percent of the share (the rest
+    /// stays free) and declares the lock; `kob token unlock <DIR>` refuses before the node's median
+    /// time passes it, then sends a lock coin and the unlock (lock time = the lock's time) under one
+    /// --yes.
     #[test]
     fn a_creator_lock_is_declared_and_released_by_unlock() {
         use kob_protocol::creator_lock::CreatorLock;
         let (kf, pk) = key33("klock");
         let dir = std::env::temp_dir().join(format!("kob-create-lock-{}", std::process::id()));
+        assert!(parse_issue_args(&v(&format!("{} --supply 100 --lock-manual", base()))).unwrap_err().contains("--lock-manual needs"));
         let cmd = format!(
             "--name Lock --ticker LCK --decimals 0 --fund-utxo {TX}:0:10000000000:{} --supply 1000 --keep 20 --lock-until 2030-01-01 \
-             --dry-run --network testnet-10 --key-file {kf} --out-dir {}",
+             --lock-manual --dry-run --network testnet-10 --key-file {kf} --out-dir {}",
             hex(&pk),
             dir.display()
         );
@@ -1583,6 +1597,85 @@ mod tests {
         let ins = sent[1]["inputs"].as_array().unwrap();
         assert_eq!(ins[1]["previousOutpoint"]["transactionId"], hex(&gtx));
         assert_ne!(ins[0]["sequence"].to_string().trim_matches('"'), u64::MAX.to_string());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `--lock-until` makes an automatic lock by default: the genesis pays the lock coin, the
+    /// declaration says `lock_kind` auto. `kob token unlock <DIR>` with no key at all (a third party)
+    /// refuses before the node's median time passes the lock's time, then sends one release that
+    /// pays the tokens and the coin's KAS to the creator's key.
+    #[test]
+    fn an_automatic_lock_is_released_by_anyone() {
+        use kob_protocol::creator_lock::{CreatorLock, LockKind};
+        let (kf, pk) = key33("kauto");
+        let dir = std::env::temp_dir().join(format!("kob-create-auto-{}", std::process::id()));
+        let cmd = format!(
+            "--name Auto --ticker AUT --decimals 0 --fund-utxo {TX}:0:10000000000:{} --supply 1000 --keep 20 --lock-until 2030-01-01 \
+             --dry-run --network testnet-10 --key-file {kf} --out-dir {}",
+            hex(&pk),
+            dir.display()
+        );
+        assert_eq!(run_issue(&v(&cmd)), 0);
+        let until = 1_893_456_000_000u64; // 2030-01-01T00:00:00Z
+        let terms = CreatorLock::new(until, pk).unwrap();
+        let proof: kob_protocol::kcc23::LaunchProof =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("launch_proof.json")).unwrap()).unwrap();
+        let decl = proof.verify().unwrap();
+        assert_eq!(decl.token.lock.as_deref(), Some(terms.script_hex().as_str()));
+        assert_eq!(decl.token.lock_kind.as_deref(), Some("auto"));
+        let held = decl.lock.clone().unwrap();
+        assert_eq!((held.kind, held.amount, held.supply), (LockKind::Auto, 200, Some(1000)));
+        let auto = held.auto().unwrap();
+        let coin = held.coin.clone().unwrap();
+        let g: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("creation.json")).unwrap()).unwrap();
+        let gtx = hex_array::<32>(g["genesis_txid"].as_str().unwrap()).unwrap();
+        let (index, state) = held.states()[0].clone();
+        let tspk = kob_protocol::state::TokenState::Kcc20(state).spk_with(kob_protocol::artifacts::token_template(held.program));
+        let node_utxo =
+            |spk: &kaspa_consensus_core::tx::ScriptPublicKey, txid: [u8; 32], index: u32, amount: u64, cov: Option<[u8; 32]>| {
+                crate::wrpc::NodeUtxo {
+                    address: Some(crate::common::address_of(spk, "testnet-10").unwrap()),
+                    txid,
+                    index,
+                    amount,
+                    spk: crate::common::spk_bytes(spk),
+                    daa: 990_000,
+                    coinbase: false,
+                    covenant_id: cov,
+                }
+            };
+        let (url, state) = crate::wrpc::mock::start(vec![
+            node_utxo(&tspk, gtx, index, 1_000_000_000, Some(decl.covenant_id)),
+            node_utxo(&auto.spk(), gtx, coin.index, coin.amount, None),
+        ]);
+        // no --key-file: anyone may release it
+        let unlock = format!("{} --node {url} --network testnet-10 --yes", dir.display());
+        state.lock().unwrap().median = until - 60_000;
+        assert_eq!(crate::token_lock::run_unlock(&v(&unlock)), 1, "still locked");
+        assert!(state.lock().unwrap().submitted.is_empty());
+        state.lock().unwrap().median = until + 1;
+        assert_eq!(crate::token_lock::run_unlock(&v(&unlock)), 0);
+        let sent = state.lock().unwrap().submitted.clone();
+        assert_eq!(sent.len(), 1, "one release, no lock coin to send");
+        let tx = &sent[0];
+        assert_eq!(tx["lockTime"].to_string().trim_matches('"'), until.to_string());
+        let ins = tx["inputs"].as_array().unwrap();
+        assert_eq!(ins.len(), 2);
+        assert_eq!(ins[0]["previousOutpoint"]["transactionId"], hex(&gtx));
+        assert_eq!(ins[1]["previousOutpoint"]["transactionId"], hex(&gtx));
+        let outs = tx["outputs"].as_array().unwrap();
+        let creator = crate::common::spk_bytes(&kob_protocol::issue::p2pk_script(&pk));
+        assert!(
+            outs[1]["scriptPublicKey"].to_string().contains(&hex(&creator[2..])),
+            "the coin's KAS goes to the creator: {}",
+            outs[1]
+        );
+        let paid: u64 = outs[1]["value"].as_str().map(|s| s.parse().unwrap()).or(outs[1]["value"].as_u64()).unwrap();
+        assert!(paid + kob_protocol::lock_auto::MAX_TAKE >= coin.amount, "at most MAX_TAKE kept: {paid}");
+        let to_creator = kob_protocol::state::TokenState::Kcc20(kob_protocol::state::Kcc20State::p2pk(200, pk, [0; 32]))
+            .spk_with(kob_protocol::artifacts::token_template(held.program));
+        assert!(outs[0]["scriptPublicKey"].to_string().contains(&hex(&crate::common::spk_bytes(&to_creator)[2..])));
+        // released: nothing left to release
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -2,22 +2,31 @@
 //! (`kob_protocol::creator_lock`, `docs/spec/token-metadata.md` *Creator lock*).
 //!
 //! `--lock-until` locks the share the funding key keeps: with `--sell`, the `--keep` part; without
-//! it, `--keep` percent of the share (default all of it), the rest staying free in the wallet. The
-//! locked genesis output is owned by the P2SH hash of `<until> OP_CHECKLOCKTIMEVERIFY <key>
-//! OP_CHECKSIG`, and the declaration publishes that script as `lock`.
+//! it, `--keep` percent of the share (default all of it), the rest staying free in the wallet.
+//!
+//! By default the lock opens by itself (`kob_protocol::lock_auto`): the locked genesis output is
+//! owned by the `KobLockAuto` script of the terms, the genesis pays the 1 KAS lock coin to its
+//! address, and the declaration names the terms in `lock` with `"lock_kind": "auto"`. After the
+//! time anyone may send the release, which pays the tokens and the coin's KAS to the key. With
+//! `--lock-manual` the owner is the P2SH hash of `<until> OP_CHECKLOCKTIMEVERIFY <key>
+//! OP_CHECKSIG`, and only the key's signature opens it.
 //!
 //! `kob token unlock` reads the lock from the token's launch proof (the indexer's, or the
 //! `launch_proof.json` of the creation's directory), verifies it against the genesis, and once the
-//! node's past median time is past the lock's time spends the locked outputs with a KAS coin at
-//! the lock's address, paying the tokens to the key. Without such a coin it first sends one (1 KAS,
-//! returned as the unlock's change): two transactions, signed before one confirmation.
+//! node's past median time is past the lock's time:
+//! - an automatic lock: sends the release, with no key (the coin pays the fee);
+//! - a manual lock: spends the locked outputs with a KAS coin at the lock's address, signed by the
+//!   key. Without such a coin it first sends one (1 KAS, returned as the unlock's change): two
+//!   transactions, signed before one confirmation.
 
 use std::path::Path;
 use std::time::Duration;
 
 use kob_protocol::artifacts::token_template;
 use kob_protocol::build::TokenRef;
-use kob_protocol::creator_lock::{build_lock_coin, build_unlock, CreatorLock, LockCoin, UnlockCreatorLock, VerifiedLock, LOCK_COIN};
+use kob_protocol::creator_lock::{
+    build_lock_coin, build_unlock, CreatorLock, LockCoin, LockKind, UnlockCreatorLock, VerifiedLock, LOCK_COIN,
+};
 use kob_protocol::issue::{Holder, IssueSpec, SCHEME_P2SH};
 use kob_protocol::json::to_hex;
 use kob_protocol::kcc23::{LaunchProof, VerifiedDeclaration};
@@ -152,19 +161,19 @@ pub struct Locked {
     pub at: usize,
     pub amount: u64,
     pub lock: CreatorLock,
+    pub kind: LockKind,
 }
 
 /// Locks the share the funding key keeps (see the module docs) and declares the lock.
 pub fn apply_lock(spec: &mut IssueSpec, s: &SaleArgs, sale: Option<&Sale>, funder: [u8; 32]) -> Result<Option<Locked>, String> {
     let Some(until) = s.lock_until else { return Ok(None) };
     let lock = CreatorLock::new(until, funder).map_err(|e| e.to_string())?;
-    let locked = |h: &Holder| Holder {
-        owner: lock.authority(),
-        owner_scheme: SCHEME_P2SH,
-        borrow_scheme: 0,
-        borrow_guard: [0; 32],
-        ..h.clone()
-    };
+    let kind = if s.lock_manual { LockKind::Manual } else { LockKind::Auto };
+    spec.lock = Some(lock);
+    spec.lock_kind = kind;
+    let authority = spec.lock_authority().map_err(|e| e.to_string())?.ok_or("--lock-until: no lock")?;
+    let locked =
+        |h: &Holder| Holder { owner: authority, owner_scheme: SCHEME_P2SH, borrow_scheme: 0, borrow_guard: [0; 32], ..h.clone() };
     let at = match sale {
         Some(sale) => {
             if sale.keep == 0 {
@@ -201,8 +210,7 @@ pub fn apply_lock(spec: &mut IssueSpec, s: &SaleArgs, sale: Option<&Sale>, funde
             }
         }
     };
-    spec.lock = Some(lock);
-    Ok(Some(Locked { at, amount: spec.holders[at].amount, lock }))
+    Ok(Some(Locked { at, amount: spec.holders[at].amount, lock, kind }))
 }
 
 /// Usage text of `kob token unlock`.
@@ -210,19 +218,24 @@ pub const UNLOCK_USAGE: &str = "\
 kob token unlock: release a creator lock's tokens after its time (`kob token create --lock-until`)
 
 USAGE
-  kob token unlock <TOKEN_ID | DIR> [--outpoint TXID:INDEX] [--key-file PATH | --key-env NAME]
+  kob token unlock <TOKEN_ID | DIR> [--outpoint TXID:INDEX] [--tip] [--key-file PATH | --key-env NAME]
                    [--dry-run | --yes] [--node URL] [--indexer URL] [--network NET]
 
   TOKEN_ID          the token's covenant id: its lock is read from the indexer's launch proof
                     (GET /v1/tokens/<id>/declaration), verified against the genesis
   DIR               ... or the directory `kob token create` wrote (its launch_proof.json; no indexer needed)
   --outpoint        unlock only this locked output (default: every locked output still unspent)
+  --tip             an automatic lock: the signing key adds a KAS input and takes the 0.01 KAS tip back on it
 
-The lock opens at its time to its key: the signing key must be it. The node takes the unlock only once its past
-median time is past that time (a minute or two after the clock). The unlock spends the locked output(s) and a KAS coin
-at the lock's address and pays the tokens to the key. Without such a coin, a first transaction sends one (1 KAS from
-the key's UTXOs, returned as the unlock's change); both are signed before the one confirmation (or --yes).
-A dry run signs, runs both in the script engine and sends nothing.
+The node takes it only once its past median time is past the lock's time (a minute or two after the clock).
+
+An automatic lock (the default of `kob token create --lock-until`) needs no key: anyone may send the release. It
+spends the locked output and the lock coin of the genesis and pays both to the lock's key (the coin less the fee).
+
+A manual lock (`--lock-manual`) opens to its key: the signing key must be it. The unlock spends the locked output(s)
+and a KAS coin at the lock's address and pays the tokens to the key. Without such a coin, a first transaction sends one
+(1 KAS from the key's UTXOs, returned as the unlock's change); both are signed before the one confirmation (or --yes).
+A dry run signs, runs everything in the script engine and sends nothing.
 ";
 
 fn parse_outpoint(s: &str) -> Result<([u8; 32], u32), String> {
@@ -280,6 +293,117 @@ fn load(arg: &str, indexer: Option<&str>) -> Result<Source, String> {
     Ok(Source { decl, lock })
 }
 
+/// `kob token unlock` of an automatic lock: the release, which nobody signs.
+fn release(p: &opts::Parsed, c: &opts::Common, src: &Source, argv: &[String]) -> Result<(), String> {
+    use kob_protocol::lock_auto::{build_release, ReleaseAutoLock};
+    let auto = src.lock.auto().ok_or("the automatic lock does not fit its token program")?;
+    let coin_at = src.lock.coin.as_ref().ok_or("the automatic lock has no lock coin")?;
+    let node = c.need_node()?.to_string();
+    crate::wrpc::check_node_network(&node, &c.network, Duration::from_secs(30))?;
+    let cov = src.decl.covenant_id;
+    let gid = src.decl.genesis_txid;
+    let (index, state) = src.lock.states().into_iter().next().ok_or("the lock holds no output")?;
+    if p.get("--outpoint").map(parse_outpoint).transpose()?.is_some_and(|(t, i)| t != gid || i != index) {
+        return Err("that outpoint is not the lock's output".into());
+    }
+    let tpl = token_template(src.lock.program);
+    let st = TokenState::Kcc20(state);
+    let spk = st.spk_with(tpl);
+    let found = lookup(&node, &c.network, &[spk.clone(), auto.spk()])?;
+    let token = found
+        .get(&spk_bytes(&spk))
+        .and_then(|v| v.iter().find(|u| u.txid == gid && u.index == index && u.covenant_id == Some(cov)))
+        .map(|u| TokenUtxo { utxo: utxo_of(u), state: st.clone() });
+    let coin = found
+        .get(&spk_bytes(&auto.spk()))
+        .and_then(|v| v.iter().find(|u| u.txid == gid && u.index == coin_at.index && u.covenant_id.is_none()))
+        .map(utxo_of);
+    let unit =
+        TokenUnit { ticker: src.decl.token.symbol.clone().unwrap_or_default(), decimals: src.decl.token.decimals.unwrap_or(0).into() };
+    println!("token        {} ({})", to_hex(&cov), unit.ticker);
+    println!(
+        "lock         {} until {} ({} ms), opens by itself to the key {}",
+        tokens(src.lock.amount as i128, &unit),
+        utc(auto.until),
+        auto.until,
+        to_hex(&auto.key)
+    );
+    println!("lock address {}", address_of(&auto.spk(), &c.network)?);
+    let (Some(token), Some(coin)) = (token, coin) else {
+        return Err("nothing to release: the locked output is spent (already released)".into());
+    };
+    let median = median_time(&node)?;
+    if median < auto.until && !c.dry_run {
+        let left = (auto.until - median).div_ceil(60_000);
+        return Err(format!("still locked: the node's past median time is {} ({left} min before the lock's time)", utc(median)));
+    }
+    // --tip: the signing key adds its smallest KAS UTXO and takes the keeper's tip back on it
+    let keeper = if p.has("--tip") {
+        let s = c.signer(argv)?;
+        let mut f = maker_funding(&node, &c.network, &s.pubkey)?;
+        f.sort_by_key(|k| k.utxo.amount);
+        let k = f.into_iter().next().ok_or("--tip: the signing key holds no KAS for the keeper input")?;
+        Some((s, k))
+    } else {
+        None
+    };
+    let req = ReleaseAutoLock {
+        token: TokenRef { covenant_id: cov, program: src.lock.program },
+        lock: auto.terms(),
+        tokens: token,
+        coin,
+        keeper: keeper.as_ref().map(|(_, k)| k.clone()),
+        tip: if keeper.is_some() { kob_protocol::lock_auto::RELEASE_TIP } else { 0 },
+        fee: c.fee_options(),
+    };
+    let b = build_release(&req, &kob_protocol::budget::lookup).map_err(|e| format!("the release: {e}"))?;
+    println!(
+        "release      {}  ({} and {} sompi of the lock coin to {}, lock time {}, fee {} sompi, {})",
+        to_hex(&b.tx.id),
+        tokens(src.lock.amount as i128, &unit),
+        req.coin.amount.saturating_sub(b.fee.fee + req.tip),
+        to_hex(&auto.key),
+        auto.until,
+        b.fee.fee,
+        match &keeper {
+            Some((s, _)) => format!("tip {} sompi to {} on its own input", req.tip, to_hex(&s.pubkey)),
+            None => "no signature".into(),
+        }
+    );
+    if median < auto.until {
+        println!(
+            "note         still locked: the node takes the release after {} (its past median time is {})",
+            utc(auto.until),
+            utc(median)
+        );
+    }
+    let ceiling = if c.dry_run {
+        crate::feecap::Ceiling::offline(c.allow_high_fee)
+    } else {
+        crate::feecap::Ceiling::read(&node, c.allow_high_fee)
+    };
+    if let Some(m) = ceiling.violation_of(&b) {
+        return Err(format!("the release: {m} [{}]", crate::feecap::CODE));
+    }
+    if !c.dry_run {
+        opts::confirm(c, &format!("the release of {} of {} to its creator", tokens(src.lock.amount as i128, &unit), to_hex(&cov)))?;
+    }
+    // Nobody signs a release but a keeper input: without one, any key stands in for the sender.
+    let nobody = match keeper {
+        Some((s, _)) => s,
+        None => crate::common::Signer { secret: [1; 32], pubkey: kob_protocol::tx::pubkey_of(&[1; 32]).map_err(|e| e.to_string())? },
+    };
+    let info = json!({ "token": to_hex(&cov), "until": auto.until.to_string(), "kind": "auto" });
+    crate::common::sign_validate_send(&b, &nobody, None, "", Value::Null, true, &node, &c.network)?;
+    if c.dry_run {
+        println!("dry run: built and executed in the script engine; nothing submitted");
+        return Ok(());
+    }
+    let sent = crate::common::sign_validate_send(&b, &nobody, c.out_dir.as_deref(), "release.json", info, false, &node, &c.network)?;
+    println!("submitted    release {}", sent.txid);
+    Ok(())
+}
+
 /// The node's past median time (unix ms), the clock the node checks a lock time against.
 fn median_time(node: &str) -> Result<u64, String> {
     let p = crate::wrpc::call(node, "getBlockDagInfo", json!({}), NODE_TIMEOUT).map_err(|e| crate::wrpc::node_failure(node, &e))?;
@@ -296,7 +420,7 @@ pub fn run_unlock(args: &[String]) -> i32 {
     if let Some(code) = crate::help::help_or_usage(args, &[UNLOCK_USAGE], true) {
         return code;
     }
-    let parsed = match opts::parse(args, &["--outpoint"], &[]) {
+    let parsed = match opts::parse(args, &["--outpoint"], &["--tip"]) {
         Ok(p) if p.pos.len() == 1 => p,
         Ok(_) => {
             eprintln!("error: give one token id or creation directory (see `kob token unlock --help`)");
@@ -319,6 +443,12 @@ pub fn run_unlock(args: &[String]) -> i32 {
 fn unlock(p: &opts::Parsed, argv: &[String]) -> Result<(), String> {
     let c = opts::Common::from(p)?;
     let src = load(&p.pos[0], c.indexer.as_deref())?;
+    if src.lock.kind == LockKind::Auto {
+        return release(p, &c, &src, argv);
+    }
+    if p.has("--tip") {
+        return Err("--tip is for an automatic lock (this one is manual: its key signs the unlock)".into());
+    }
     let lock = src.lock.lock();
     let signer = c.signer(argv)?;
     if signer.pubkey != lock.key {

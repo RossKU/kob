@@ -187,6 +187,16 @@ pub async fn token_declaration(State(app): State<Arc<App>>, Path(id): Path<Strin
 /// (`GET /v1/tokens/{covenant_id}/declaration`). The locked UTXOs still unspent are
 /// `GET /v1/token-utxos?owner=<authority>&token=<covenant_id>`.
 pub async fn creator_locks(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
+    // `?due=<unix ms>`: the automatic locks due then, for keepers (no key)
+    if let Some(due) = q.get("due") {
+        if q.contains_key("key") {
+            return Err(ApiError::bad_request("give key or due, not both"));
+        }
+        let due: u64 = due.parse().map_err(|_| ApiError::bad_request("due must be a unix time in milliseconds"))?;
+        let n = limit(&q, "limit", 50, app.state.cfg.max_page_size)?;
+        let v = app.state.pool.with(move |c| crate::indexer::kcc23::due_locks(c, due, n)).await?;
+        return json_ok(json!({ "items": lock_items(v), "next_cursor": null }));
+    }
     let key: [u8; 32] = q
         .get("key")
         .map(|s| parse_owner(s))
@@ -205,8 +215,13 @@ pub async fn creator_locks(State(app): State<Arc<App>>, Query(q): Params) -> Api
         .with(move |c| crate::indexer::kcc23::creator_locks(c, &key, n, cursor.as_ref().map(|(b, id)| (*b, id.as_slice()))))
         .await?;
     let next_cursor = next.map(|(b, id)| format!("{b}:{}", hex::encode(&id)));
-    let items: Vec<Value> = v
-        .into_iter()
+    json_ok(json!({ "items": lock_items(v), "next_cursor": next_cursor }))
+}
+
+/// The items of `GET /v1/creator-locks`: each verified lock with its token's covenant id, genesis
+/// and symbol.
+fn lock_items(v: Vec<kob_protocol::kcc23::VerifiedDeclaration>) -> Vec<Value> {
+    v.into_iter()
         .filter_map(|d| {
             let l = d.lock?;
             let mut lock = serde_json::to_value(&l).ok()?;
@@ -215,8 +230,7 @@ pub async fn creator_locks(State(app): State<Arc<App>>, Query(q): Params) -> Api
             lock["symbol"] = json!(d.token.symbol);
             Some(lock)
         })
-        .collect();
-    json_ok(json!({ "items": items, "next_cursor": next_cursor }))
+        .collect()
 }
 
 /// `GET /v1/books/{token}?depth=&aggregate=`: the KAS book of a token. Pair orders are not in it.

@@ -306,15 +306,18 @@ describe('the creator lock and the wallet that will unlock it', () => {
     try {
       const kastle = { id: 'kastle' as const, covenantSigning: 'unknown' as const };
       const kasware = { id: 'kasware' as const, covenantSigning: 'proven' as const };
-      expect(lockSignerNote('180', kasware, wallet)).toBeNull();
-      expect(lockSignerNote('none', kastle, wallet)).toBeNull();
-      expect(lockSignerNote('180', null, wallet)).toBeNull();
-      expect(lockSignerNote('180', kastle, wallet)).toBe('unproven');
-      expect(lockSignerNote('date', kastle, wallet)).toBe('unproven');
+      expect(lockSignerNote('180', kasware, wallet, 'manual')).toBeNull();
+      expect(lockSignerNote('none', kastle, wallet, 'manual')).toBeNull();
+      expect(lockSignerNote('180', null, wallet, 'manual')).toBeNull();
+      expect(lockSignerNote('180', kastle, wallet, 'manual')).toBe('unproven');
+      expect(lockSignerNote('date', kastle, wallet, 'manual')).toBe('unproven');
       store.set(`kob.covenantSign.v1:kastle:${wallet}`, 'unsupported');
-      expect(lockSignerNote('180', kastle, wallet)).toBe('unsupported');
-      store.set(`kob.covenantSign.v1:kastle:${wallet}`, 'ok');
+      expect(lockSignerNote('180', kastle, wallet, 'manual')).toBe('unsupported');
+      // an automatic lock needs no signature: never a warning, whatever the wallet
+      expect(lockSignerNote('180', kastle, wallet, 'auto')).toBeNull();
       expect(lockSignerNote('180', kastle, wallet)).toBeNull();
+      store.set(`kob.covenantSign.v1:kastle:${wallet}`, 'ok');
+      expect(lockSignerNote('180', kastle, wallet, 'manual')).toBeNull();
     } finally {
       g.localStorage = before;
     }

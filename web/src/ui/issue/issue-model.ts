@@ -13,6 +13,7 @@ import type { KobWasm } from '../../kob/wasm';
 import { curveNumbersOfState } from '../../kob/curve';
 import type { CreationRecord } from '../../data/creations';
 import type { IssueLock, PlannedSale } from '../../kob/issue';
+import { AUTO_COIN, type LockKind } from '../../kob/creator-lock';
 import type { Hex } from '../../kob/types';
 import { storedVerdict } from '../../wallet/covenant-probe';
 import type { WalletAdapter } from '../../wallet/types';
@@ -102,8 +103,9 @@ export function lockUntilIn(days: number, now: number = Date.now()): string {
  * signs script inputs. 'unsupported' when its test signature failed, 'unproven' when it was never
  * checked. Either way the unlock would need the CLI and the wallet's private key.
  */
-export function lockSignerNote(choice: LockChoice, adapter: Pick<WalletAdapter, 'id' | 'covenantSigning'> | null | undefined, pubkey: Hex | null | undefined): 'unproven' | 'unsupported' | null {
-  if (choice === 'none' || !adapter || !pubkey) return null;
+export function lockSignerNote(choice: LockChoice, adapter: Pick<WalletAdapter, 'id' | 'covenantSigning'> | null | undefined, pubkey: Hex | null | undefined, kind: LockKind = 'auto'): 'unproven' | 'unsupported' | null {
+  // an automatic lock opens with no signature at all: any wallet, or none, can release it
+  if (kind === 'auto' || choice === 'none' || !adapter || !pubkey) return null;
   if (unlockSigner(adapter, pubkey) === 'wallet') return null;
   return storedVerdict(adapter.id, pubkey) === 'unsupported' ? 'unsupported' : 'unproven';
 }
@@ -232,9 +234,10 @@ export function remainingText(state: IssueUiState): string {
  * is the protocol default of everything to the maker. Otherwise the wallet is holder 0 with the
  * remaining amount, followed by the extras (scheme 0 = a wallet key). A wallet share of zero drops
  * the wallet row. A negative one becomes "0", so validation fails with a holder amount error and
- * the view adds `holders.exceeds`.
+ * the view adds `holders.exceeds`. A lock is of `lockKind` (Settings: automatic unless "Manual
+ * unlock" is on).
  */
-export function formToIssueForm(state: IssueUiState, walletKey: Hex | null): IssueForm {
+export function formToIssueForm(state: IssueUiState, walletKey: Hex | null, lockKind: LockKind = 'auto'): IssueForm {
   const holders: IssueForm['holders'] = [];
   if (state.extras.length > 0) {
     if (walletRowIncluded(state)) {
@@ -258,7 +261,7 @@ export function formToIssueForm(state: IssueUiState, walletKey: Hex | null): Iss
     ...(state.x.trim() ? { x: state.x.trim() } : {}),
     ...(state.telegram.trim() ? { telegram: state.telegram.trim() } : {}),
     ...(state.sale.mode !== 'keep' ? { sale: saleFormOf(state.sale) } : {}),
-    ...(state.lock && lockUntilOf(state.lock) !== '' ? { lockUntil: lockUntilOf(state.lock) } : {}),
+    ...(state.lock && lockUntilOf(state.lock) !== '' ? { lockUntil: lockUntilOf(state.lock), lockKind } : {}),
   };
 }
 
@@ -506,8 +509,11 @@ export interface ReviewSummary {
   fee: bigint;
   program: string;
   outputCount: number;
-  /** The creator lock: what it holds and when it opens (unix ms). Null means none. */
-  lock: { amount: bigint; human: string; until: bigint } | null;
+  /**
+   * The creator lock: what it holds, when it opens (unix ms) and how. `coin` is an automatic
+   * lock's KAS coin in the genesis (sompi), back with the tokens at the release. Null means none.
+   */
+  lock: { amount: bigint; human: string; until: bigint; kind: LockKind; coin: bigint } | null;
 }
 
 export function holderViews(token: Pick<IssueToken, 'outputs' | 'decimals'>, walletKey: Hex | null, curveId?: Hex | null, lock?: Pick<IssueLock, 'authority' | 'key' | 'until'> | null): HolderView[] {
@@ -548,7 +554,9 @@ export function reviewSummary(plan: Pick<IssuePlan, 'token' | 'fee' | 'curve' | 
     fee: plan.fee,
     program: token.program,
     outputCount: token.outputs.length + (plan.curve ? 1 : 0),
-    lock: locked.length && plan.lock ? { amount: lockAmount, human: humanAmount(lockAmount, token.decimals), until: BigInt(plan.lock.until) } : null,
+    lock: locked.length && plan.lock
+      ? { amount: lockAmount, human: humanAmount(lockAmount, token.decimals), until: BigInt(plan.lock.until), kind: plan.lock.kind === 'auto' ? 'auto' : 'manual', coin: plan.lock.kind === 'auto' ? AUTO_COIN : 0n }
+      : null,
   };
 }
 

@@ -2701,6 +2701,112 @@ async fn creator_locks_are_listed_by_key() {
     assert_eq!(page("").await["items"][0]["covenant_id"], covs[0].to_hex());
 }
 
+/// `GET /v1/creator-locks?due=`: the automatic creator locks due by then, for the keepers; a manual
+/// lock, a lock not yet due and a released one are not listed.
+#[tokio::test]
+async fn automatic_creator_locks_are_listed_when_due() {
+    use crate::indexer::kcc23::{apply, proof_tx, DeclSection};
+    use crate::testkit::{kcc23_txid, kcc23_wire};
+    use kob_protocol::creator_lock::{CreatorLock, LockKind};
+    use kob_protocol::issue::{build_creation, FundingUtxo, Holder, IssueProgram, IssueSpec};
+    use kob_protocol::lock_auto::AutoLock;
+    let e = env(|_| {});
+    seed_all(&e.w);
+    let key = kob_protocol::tx::pubkey_of(&[0x41; 32]).unwrap();
+    let until = 1_900_000_000_000u64;
+    let lock = CreatorLock::new(until, key).unwrap();
+    let launch = |tag: u8, kind: LockKind| {
+        let funding = FundingUtxo {
+            outpoint: kaspa_consensus_core::tx::TransactionOutpoint {
+                transaction_id: kaspa_consensus_core::tx::TransactionId::from_bytes([tag; 32]),
+                index: 0,
+            },
+            amount: 500 * 100_000_000,
+            owner_pubkey: key,
+        };
+        let owner = match kind {
+            LockKind::Auto => AutoLock::new(lock, IssueProgram::PublicMint.template_id()).unwrap().authority(),
+            LockKind::Manual => lock.authority(),
+        };
+        let holders = vec![Holder::new(key, 0, 800), Holder::new(owner, 0x03, 200)];
+        let mut spec = IssueSpec::new("Locked", "LOCK", 0, 1000, holders, vec![funding]);
+        spec.lock = Some(lock);
+        spec.lock_kind = kind;
+        build_creation(&spec).unwrap()
+    };
+    fn ptx(t: &kaspa_consensus_core::tx::Transaction) -> kob_protocol::kcc23::ProofTx {
+        proof_tx(&kcc23_wire(t, false)).unwrap()
+    }
+    let mut covs = vec![];
+    let mut gens = vec![];
+    for (tag, kind) in [(1u8, LockKind::Auto), (2, LockKind::Manual)] {
+        let plan = launch(tag, kind);
+        let (prep, gen) = (&plan.prep.tx, &plan.genesis.tx);
+        apply(&e.w, 9, 990, &kcc23_txid(prep), &DeclSection { tx: ptx(prep), preparation: true, binds: vec![], refs: vec![] })
+            .unwrap();
+        let d = apply(
+            &e.w,
+            9,
+            990,
+            &kcc23_txid(gen),
+            &DeclSection { tx: ptx(gen), preparation: false, binds: vec![ptx(prep)], refs: vec![] },
+        )
+        .unwrap();
+        covs.push(d[0]);
+        gens.push(gen.id().as_bytes());
+    }
+    let holding = |n: usize, idx: i64, spent: bool| {
+        intern(&e.w, &covs[n].0).unwrap();
+        intern(&e.w, &[0x99; 32]).unwrap();
+        crate::testkit::named_holdings_writable(&e.w);
+        e.w.execute(
+            "INSERT OR REPLACE INTO token_holdings_named (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, \
+             created_block, created_daa, spent_block, spent_txid) VALUES (?1, ?2, (SELECT id FROM ids WHERE h = ?3), 'KCC20PublicMint', 1, \
+             (SELECT id FROM ids WHERE h = ?4), 3, 200, 100000000, x'00', 'owned', 9, 990, ?5, ?6)",
+            rusqlite::params![&gens[n][..], idx, &covs[n].0[..], &[0x99u8; 32][..], spent.then_some(10i64), spent.then_some(vec![0x98u8; 32])],
+        )
+        .unwrap();
+    };
+    for n in 0..2 {
+        for idx in 0..2 {
+            holding(n, idx, false);
+        }
+    }
+    let app = router(e.state.clone());
+    let (s, v) = get(&app, &format!("/v1/creator-locks?due={}", until - 1)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(v["items"].as_array().unwrap().is_empty(), "not due yet: {v}");
+    let (_, v) = get(&app, &format!("/v1/creator-locks?due={until}")).await;
+    let items = v["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "the automatic lock only: {v}");
+    assert_eq!(items[0]["covenant_id"], covs[0].to_hex());
+    assert_eq!(items[0]["kind"], "auto");
+    assert_eq!(items[0]["coin"]["index"], 2, "{v}");
+    assert_eq!(items[0]["outputs"][0]["index"], 1);
+    // the key's listing names both, each with its kind
+    let (_, v) = get(&app, &format!("/v1/creator-locks?key={}", kob_protocol::json::to_hex(&key))).await;
+    let kinds: Vec<&str> = v["items"].as_array().unwrap().iter().map(|i| i["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds.len(), 2, "{v}");
+    assert!(kinds.contains(&"auto") && kinds.contains(&"manual"));
+    for bad in [format!("/v1/creator-locks?due={until}&key={}", kob_protocol::json::to_hex(&key)), "/v1/creator-locks?due=soon".into()]
+    {
+        assert_eq!(get(&app, &bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    // released: its locked output spent
+    holding(0, 1, true);
+    let (_, v) = get(&app, &format!("/v1/creator-locks?due={until}")).await;
+    assert!(v["items"].as_array().unwrap().is_empty(), "a released lock is not listed: {v}");
+    holding(0, 1, false);
+    // a store whose declarations an earlier build wrote gets the time index filled once; a revert takes it out
+    e.w.execute_batch("DELETE FROM kcc23_auto_locks; DELETE FROM meta WHERE k = 'kcc23_auto_locks';").unwrap();
+    assert_eq!(crate::indexer::kcc23::backfill_locks(&e.w).unwrap(), Some(2));
+    let (_, v) = get(&app, &format!("/v1/creator-locks?due={until}")).await;
+    assert_eq!(v["items"].as_array().unwrap().len(), 1);
+    crate::indexer::kcc23::revert(&e.w, 9).unwrap();
+    let n: i64 = e.w.query_row("SELECT COUNT(*) FROM kcc23_auto_locks", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 0);
+}
+
 // Logo votes.
 
 /// 2026-11-20 12:00 UTC, the clock of the vote service in these tests.

@@ -1,6 +1,7 @@
 // Create token, "Lock my share until": a wallet that has not shown it signs script inputs (the
 // unlock's coin is one) gets a warning under the choice, because the unlock would then need the CLI
-// and the private key. A wallet that signs them (KasWare) gets none. Mock stack.
+// and the private key. A wallet that signs them (KasWare) gets none. The warning is only for a
+// manual lock (Settings, "Manual unlock"): the default automatic lock needs no signature. Mock stack.
 import { mkdirSync } from 'node:fs';
 import { test, expect } from '../fixtures';
 import { KAS, clickConnectOption } from '../helpers/env';
@@ -19,7 +20,8 @@ async function lockForm(page: import('@playwright/test').Page, wallet: string): 
 
 test.describe('a wallet not proven to sign the unlock', () => {
   test.use({ walletId: 'kastle', covenantChecked: false });
-  test('is warned under "Lock my share until", and not without a lock', async ({ appPage: page, mock }) => {
+  test('is warned under "Lock my share until" for a manual lock, and not without a lock', async ({ appPage: page, mock }) => {
+    await page.addInitScript(() => localStorage.setItem('kob.lock.manual', '1'));
     await mock.giveKas('alice', 500n * KAS);
     await lockForm(page, 'wallet-connect-kastle');
     const dir = process.env.KOB_SHOTS;
@@ -34,6 +36,13 @@ test.describe('a wallet not proven to sign the unlock', () => {
     await expect(note).toContainText('This wallet has not shown that it can sign the unlock');
     await page.getByTestId('issue-lock-choice').selectOption('none');
     await expect(note).toHaveCount(0);
+  });
+
+  test('is not warned for the default automatic lock, which nobody signs', async ({ appPage: page, mock }) => {
+    await mock.giveKas('alice', 500n * KAS);
+    await lockForm(page, 'wallet-connect-kastle');
+    await expect(page.getByTestId('issue-lock-until')).toContainText('opens automatically');
+    await expect(page.getByTestId('issue-lock-signer')).toHaveCount(0);
   });
 });
 

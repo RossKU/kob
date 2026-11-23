@@ -450,8 +450,12 @@ pub struct TokenMetadata {
     /// `https://t.me/<handle>`.
     pub telegram: Option<String>,
     /// A creator lock's redeem script, 88 lowercase hex characters (`crate::creator_lock`): the
-    /// genesis outputs owned by its P2SH hash open at its time.
+    /// genesis outputs owned by its P2SH hash open at its time. For an automatic lock it holds the
+    /// terms (`until`, key) and the owner is the `KobLockAuto` script of them (`crate::lock_auto`).
     pub lock: Option<String>,
+    /// `"auto"` for an automatic creator lock (anyone may release it to the creator after its
+    /// time); unset for a manual one. Needs `lock`.
+    pub lock_kind: Option<String>,
 }
 
 impl TokenMetadata {
@@ -501,6 +505,14 @@ impl TokenMetadata {
         {
             return Err("lock must be a creator lock script in lowercase hex".into());
         }
+        if let Some(k) = &self.lock_kind {
+            if crate::creator_lock::LockKind::parse(k).is_none() {
+                return Err("lock_kind must be \"auto\" or \"manual\"".into());
+            }
+            if self.lock.is_none() {
+                return Err("lock_kind needs a lock".into());
+            }
+        }
         let len = self.payload_unchecked().len();
         if len > MAX_TOKEN_PAYLOAD {
             return Err(format!(
@@ -513,7 +525,7 @@ impl TokenMetadata {
     /// The compact JSON text, with the members in a fixed order.
     ///
     /// The order is `name, symbol, decimals, description, image, image_hash, website, x, telegram,
-    /// lock`.
+    /// lock, lock_kind`.
     /// Unset optional members are left out.
     pub fn json(&self) -> String {
         let s = |v: &str| serde_json::to_string(v).expect("json string");
@@ -526,6 +538,7 @@ impl TokenMetadata {
             ("x", &self.x),
             ("telegram", &self.telegram),
             ("lock", &self.lock),
+            ("lock_kind", &self.lock_kind),
         ] {
             if let Some(v) = v {
                 out.push_str(&format!(",\"{k}\":{}", s(v)));
@@ -581,6 +594,8 @@ pub struct TokenDeclaration {
     /// template (`crate::creator_lock::CreatorLock::parse`). What it holds is
     /// [`VerifiedDeclaration::lock`].
     pub lock: Option<String>,
+    /// `lock_kind`: `"auto"` or `"manual"` (absent: manual). Another value drops the lock.
+    pub lock_kind: Option<String>,
     /// Whether the `name` or `symbol` has a character drawn like a Latin letter
     /// ([`crate::display::has_lookalike`]). A warning for display: the fields are still taken.
     pub lookalike: bool,
@@ -589,6 +604,11 @@ pub struct TokenDeclaration {
 }
 
 impl TokenDeclaration {
+    /// The kind of the declared lock (`lock_kind`; manual when absent).
+    pub fn lock_kind(&self) -> crate::creator_lock::LockKind {
+        self.lock_kind.as_deref().and_then(crate::creator_lock::LockKind::parse).unwrap_or_default()
+    }
+
     /// Reads KOB's token fields from a decoded declaration object.
     pub fn from_object(obj: &Map<String, Value>) -> Self {
         let mut d = TokenDeclaration::default();
@@ -654,6 +674,22 @@ impl TokenDeclaration {
             },
             Some(_) => {
                 issues.push(issue("lock", "not a string"));
+                None
+            }
+        };
+        d.lock_kind = match obj.get("lock_kind") {
+            None => None,
+            Some(Value::String(k)) if crate::creator_lock::LockKind::parse(k).is_some() && d.lock.is_some() => Some(k.clone()),
+            Some(Value::String(k)) if crate::creator_lock::LockKind::parse(k).is_some() => {
+                issues.push(issue("lock_kind", "no lock"));
+                None
+            }
+            Some(_) => {
+                // a kind this reader does not know: the lock's terms do not say how it opens
+                if d.lock.take().is_some() {
+                    issues.push(issue("lock", "lock_kind is not auto or manual"));
+                }
+                issues.push(issue("lock_kind", "not auto or manual"));
                 None
             }
         };
@@ -939,7 +975,7 @@ impl LaunchProof {
         let mut token = TokenDeclaration::from_object(&parse_object(&json).map_err(|e| e.to_string())?);
         let lock = match token.lock.as_deref().and_then(crate::creator_lock::CreatorLock::parse_hex) {
             None => None,
-            Some(l) => match crate::creator_lock::verify_genesis_lock(&genesis, id, &l) {
+            Some(l) => match crate::creator_lock::verify_genesis_lock(&genesis, id, &l, token.lock_kind()) {
                 Ok(v) => Some(v),
                 Err(why) => {
                     token.issues.push(issue("lock", &why));

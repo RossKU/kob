@@ -16,7 +16,7 @@
 import { issuedTokenUtxos, spendsPreparation, type IssueCurve, type IssueToken } from '../../kob/issue';
 import { curveNumbersOfState, curveProblems, tablePreview } from '../../kob/curve';
 import { decodeDeclaration } from '../../kob/kcc23';
-import { lockOfScript, type CreatorLockInfo } from '../../kob/creator-lock';
+import { AUTO_COIN, declaredLock, type CreatorLockInfo } from '../../kob/creator-lock';
 import { formatRowDate } from '../kit/format';
 import type { BuiltTx, Hex } from '../../kob/types';
 import type { KobWasm } from '../../kob/wasm';
@@ -146,13 +146,16 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     const d = declared?.token;
     if (!d || d.name !== token.name || d.symbol !== token.ticker || d.decimals !== token.decimals) block('declaration');
   }
-  // ---- A creator lock: only as the declaration states it (its script, parsed by kob-wasm), of
+  // ---- A creator lock: only as the declaration states it (its terms, parsed by kob-wasm), of
   // this wallet's key. The outputs its hash owns (owner scheme 0x03, no borrow setting) are the
-  // wallet's share, locked until its time. Anything else of scheme 0x03 is another's.
+  // wallet's share, locked until its time. Anything else of scheme 0x03 is another's. An automatic
+  // lock's script is derived from the terms and the issued program, and its coin is one plain output
+  // of AUTO_COIN to its address: the wallet's KAS, locked until the release returns them.
   const lock: CreatorLockInfo | null = (() => {
-    const l = lockOfScript(kob, declared?.token.lock ?? null);
+    const l = declared ? declaredLock(kob, declared.token, token.program) : null;
     return l && l.key === maker ? l : null;
   })();
+  const autoLock = lock?.kind === 'auto' ? lock : null;
   const lockedForYou = (o: IssueToken['outputs'][number]): boolean => !!lock && o.ownerScheme === 3 && o.owner === lock.authority && o.borrowScheme === 0;
 
   // ---- Token outputs: exactly what the planner claims.
@@ -213,13 +216,25 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   const tpl = kob.templates().find((x) => x.name === token.program);
   if (!tpl || tpl.hash !== token.templateHash) block('template');
 
-  // ---- Everything else must be change back to the wallet.
+  // ---- Everything else must be change back to the wallet, but an automatic lock's one coin.
   let change = prepChange;
+  let lockCoin = 0n;
+  let lockCoinAt: number | null = null;
+  const coinOuts = autoLock ? tx.outputs.flatMap((out, n) => (!out.covenant && out.scriptPublicKey === autoLock.scriptPublicKey ? [n] : [])) : [];
+  if (autoLock && (coinOuts.length !== 1 || BigInt(tx.outputs[coinOuts[0]!]!.value) !== AUTO_COIN)) block('lockCoin');
   tx.outputs.forEach((out, n) => {
     if (tokenIdx.has(n) || (curve && n === curve.output)) return;
+    if (autoLock && coinOuts.length === 1 && n === coinOuts[0]) {
+      lockCoin = BigInt(out.value);
+      lockCoinAt = n;
+      carriers += lockCoin;
+      return;
+    }
     if (out.covenant || out.scriptPublicKey !== p2pkSpk(maker)) block('outputOther', { output: n });
     else change += BigInt(out.value);
   });
+  // an automatic lock that holds no share is no lock of the wallet's (the protocol refuses it)
+  if (autoLock && lockedToMaker === 0n) block('lockCoin');
 
   // ---- Fee: the genesis's, plus the preparation's.
   const totalOut = tx.outputs.reduce((a, o) => a + BigInt(o.value), 0n);
@@ -313,7 +328,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
         row('declare-symbol', tr('confirm.issue.ticker'), d.symbol ?? ''),
         row('declare-decimals', tr('confirm.issue.decimals'), String(d.decimals ?? '')),
         ...opt('description', d.description), ...opt('image', d.image), ...opt('imageHash', d.imageHash), ...opt('website', d.website), ...opt('x', d.x), ...opt('telegram', d.telegram),
-        ...(lock ? [row('declare-lock', tr('confirm.issue.declare.lock'), tr('confirm.issue.declare.lockValue', { date: lockDate }), 'muted')] : []),
+        ...(lock ? [row('declare-lock', tr('confirm.issue.declare.lock'), tr(autoLock ? 'confirm.issue.declare.lockValueAuto' : 'confirm.issue.declare.lockValue', { date: lockDate }), 'muted')] : []),
       ],
     });
   }
@@ -324,6 +339,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
       row('locked-total', tr('confirm.locked.total'), kas(carriers), 'warn'),
       row('locked-carriers', tr(token.outputs.length === 1 ? 'confirm.issue.carriers.one' : 'confirm.issue.carriers.other', { count: token.outputs.length }), kas(BigInt(token.carrier)), 'normal', tr('confirm.locked.carriersHint')),
       ...(curve ? [row('locked-curve', tr('confirm.issue.carrierCurve'), kas(BigInt(curve.carrier)), 'normal', tr('confirm.locked.carriersHint'))] : []),
+      ...(lockCoin > 0n ? [row('locked-lock-coin', tr('confirm.issue.lockCoin'), kas(lockCoin), 'normal', tr('confirm.issue.lockCoinHint', { date: lockDate }))] : []),
     ],
   });
   if (change > 0n) sections.push({ id: 'back', title: tr('confirm.section.back'), rows: [row('kas-back', tr('confirm.back.kas'), kas(change), 'good')], fold: true });
@@ -355,7 +371,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     outputs: [
       ...tx.outputs.map((out, n) => ({
         index: n,
-        text: tr('confirm.adv.output', { index: n, kind: tokenIdx.has(n) ? tr('confirm.outkind.issued') : curve && n === curve.output ? tr('confirm.outkind.curve') : tr('confirm.outkind.kas-change'), kas: formatKas(BigInt(out.value), GROUP) }),
+        text: tr('confirm.adv.output', { index: n, kind: tokenIdx.has(n) ? tr('confirm.outkind.issued') : curve && n === curve.output ? tr('confirm.outkind.curve') : n === lockCoinAt ? tr('confirm.outkind.lock-coin') : tr('confirm.outkind.kas-change'), kas: formatKas(BigInt(out.value), GROUP) }),
         flagged: findings.some((f) => f.severity === 'blocking' && f.params?.output === n),
       })),
       ...(prep ? prep.tx.outputs.slice(1).map((out, n) => ({ index: tx.outputs.length + n, text: tr('confirm.adv.output', { index: tx.outputs.length + n, kind: tr('confirm.outkind.kas-change'), kas: formatKas(BigInt(out.value), GROUP) }), flagged: false })) : []),
@@ -370,7 +386,12 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     { ...row('create', tr('confirm.brief.create'), amountText(supply), 'normal', tr('confirm.brief.createDetail', { name: token.name, decimals })), help: [tr('confirm.kind.issueIntro')] },
     { ...row('keep', tr('confirm.brief.keep'), amountText(toMaker), 'good'), help: [cap(tr('confirm.issue.netTokenHint'))] },
   ];
-  if (lockedToMaker > 0n) brief.push({ ...row('lock', tr('confirm.brief.lock'), amountText(lockedToMaker), 'good', tr('confirm.brief.lockDetail', { date: lockDate })), help: [tr('confirm.issue.lockNote')] });
+  if (lockedToMaker > 0n) {
+    brief.push({
+      ...row('lock', tr('confirm.brief.lock'), amountText(lockedToMaker), 'good', tr(autoLock ? 'confirm.brief.lockDetailAuto' : 'confirm.brief.lockDetail', { date: lockDate })),
+      help: [tr(autoLock ? 'confirm.issue.lockNoteAuto' : 'confirm.issue.lockNote')],
+    });
+  }
   if (curve) {
     const st = curve.state.state;
     const n = curveNumbersOfState(st);

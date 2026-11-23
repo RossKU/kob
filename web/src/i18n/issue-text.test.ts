@@ -283,6 +283,7 @@ describe('issueText: pre-sign findings of the decoder', () => {
       'expected-claim-ids': { params: { expected: 1, actual: 0 } }, 'expected-delivery': { params: { fields: 'topupTip' } }, 'bought-claimed': { input: 0, output: 0 },
       'take-amount': { params: { expected: 2000n, actual: 3000n } }, 'take-price': { params: { kas: 5n * KAS, bound: 4n * KAS } }, 'take-fills': { params: { orders: 2 } }, 'take-orders': {}, 'take-token': { input: 1, params: { token: 'ab'.repeat(32) } },
       'unlock-invalid': { input: 0, params: { reason: 'key' } }, 'unlock-tokens': { params: { amount: '400 LOCK', date: '2027-01-15' } }, 'lock-coin': { output: 0, params: { amount: 1n * KAS, date: '2027-01-15' } }, 'lock-coin-stranded': { output: 1, params: { amount: 5n * KAS } },
+      'release-invalid': { input: 0, params: { reason: 'shape' } }, 'lock-coin-auto': { output: 2, params: { amount: 1n * KAS, date: '2027-01-15' } }, 'release-kas': { output: 1, params: { amount: 99n * KAS / 100n } },
     };
     expect(Object.keys(sample).sort()).toEqual([...SIGNING_ISSUE_CODES].sort());
     for (const code of SIGNING_ISSUE_CODES) {

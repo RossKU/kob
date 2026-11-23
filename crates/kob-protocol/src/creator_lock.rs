@@ -1,5 +1,8 @@
 //! Creator lock: a cliff time lock on a share of a token's genesis (`docs/spec/token-metadata.md`, *Creator lock*).
 //!
+//! This module is the manual lock (the creator signs the unlock) and what both kinds share. New locks
+//! open by themselves ([`LockKind::Auto`], `crate::lock_auto`, `docs/spec/creator-lock-auto.md`).
+//!
 //! No contract changes. The KCC-20 programs already authorise a token UTXO whose owner scheme is
 //! `0x03` (`p2sh/v1`) when the transaction spends an input whose script public key is the P2SH of
 //! that owner; the owner witness is the index of that input. A creator lock is such an owner with
@@ -60,6 +63,39 @@ const OP_DATA_8: u8 = 0x08;
 const OP_DATA_32: u8 = 0x20;
 const OP_CHECKLOCKTIMEVERIFY: u8 = 0xb0;
 const OP_CHECKSIG: u8 = 0xac;
+
+/// How a creator lock opens after its time.
+///
+/// `Manual` is the 44-byte script of this module: the creator signs the unlock. `Auto` is the
+/// pinned `KobLockAuto` template (`crate::lock_auto`): anyone may send the release, which pays
+/// only the creator. A declaration names the kind in `lock_kind` (`"auto"`; absent or `"manual"`
+/// is manual).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LockKind {
+    #[default]
+    Manual,
+    Auto,
+}
+
+impl LockKind {
+    /// `manual` or `auto`, as the declaration's `lock_kind` spells it.
+    pub fn name(self) -> &'static str {
+        match self {
+            LockKind::Manual => "manual",
+            LockKind::Auto => "auto",
+        }
+    }
+
+    /// The kind a `lock_kind` names.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "manual" => Some(LockKind::Manual),
+            "auto" => Some(LockKind::Auto),
+            _ => None,
+        }
+    }
+}
 
 /// A creator lock: the tokens it holds open at `until` (unix ms) to a signature of `key`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -169,12 +205,15 @@ impl CreatorLock {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifiedLock {
+    /// Manual (the creator signs) or automatic (anyone releases to the creator).
+    pub kind: LockKind,
     /// Unix ms.
     #[serde(with = "crate::json::field")]
     pub until: u64,
     #[serde(with = "crate::json::field")]
     pub key: [u8; 32],
-    /// The redeem script, as declared.
+    /// The redeem script of the locked states' owner: the declared one for a manual lock, the
+    /// `KobLockAuto` script of the terms and the program for an automatic one.
     #[serde(with = "crate::json::field")]
     pub script: Vec<u8>,
     /// The `p2sh/v1` owner of the locked states (`Blake2b(script)`).
@@ -194,6 +233,8 @@ pub struct VerifiedLock {
     /// proven.
     #[serde(with = "crate::json::field")]
     pub supply: Option<u64>,
+    /// An automatic lock's coin: the genesis's plain KAS output at the lock's address.
+    pub coin: Option<LockedOutput>,
 }
 
 /// A genesis output a creator lock holds.
@@ -201,19 +242,34 @@ pub struct VerifiedLock {
 #[serde(rename_all = "camelCase")]
 pub struct LockedOutput {
     pub index: u32,
+    /// Base units for a token output, sompi for a lock coin.
     #[serde(with = "crate::json::field")]
     pub amount: u64,
+    /// The output's KAS (sompi).
+    #[serde(with = "crate::json::field")]
+    pub value: u64,
 }
 
 impl VerifiedLock {
-    /// The lock.
+    /// The lock's terms (`until`, key).
     pub fn lock(&self) -> CreatorLock {
         CreatorLock { until: self.until, key: self.key }
     }
+    /// The automatic lock, for kind auto.
+    pub fn auto(&self) -> Option<crate::lock_auto::AutoLock> {
+        (self.kind == LockKind::Auto).then(|| crate::lock_auto::AutoLock::new(self.lock(), self.program).ok()).flatten()
+    }
     /// The locked token states, with their genesis output indices.
     pub fn states(&self) -> Vec<(u32, Kcc20State)> {
-        let l = self.lock();
-        self.outputs.iter().map(|o| (o.index, l.state(o.amount as i64, self.extension_commitment))).collect()
+        let state = |amount: u64| Kcc20State {
+            amount: amount as i64,
+            owner: self.authority,
+            owner_scheme: crate::kcc2::P2SH,
+            borrow_scheme: 0,
+            borrow_guard: [0; 32],
+            extension_commitment: self.extension_commitment,
+        };
+        self.outputs.iter().map(|o| (o.index, state(o.amount))).collect()
     }
 }
 
@@ -257,8 +313,18 @@ fn bound_outputs(genesis: &Transaction, covenant_id: Hash) -> Vec<usize> {
 /// (a state counts only where its P2SH under a pinned token program is the output's script). Only
 /// the outputs the id commits to count, in the locked amount and in the supply.
 ///
+/// For [`LockKind::Auto`] the owner is the `KobLockAuto` script of the terms and the proven
+/// program (`crate::lock_auto`). The lock must then hold exactly one output, and the genesis must
+/// pay a plain coin of at least `crate::lock_auto::AUTO_COIN_MIN` to the lock's address: else
+/// nobody could release it.
+///
 /// An error says why the lock holds nothing in this genesis.
-pub fn verify_genesis_lock(genesis: &Transaction, covenant_id: Hash, lock: &CreatorLock) -> std::result::Result<VerifiedLock, String> {
+pub fn verify_genesis_lock(
+    genesis: &Transaction,
+    covenant_id: Hash,
+    lock: &CreatorLock,
+    kind: LockKind,
+) -> std::result::Result<VerifiedLock, String> {
     let token_outputs = bound_outputs(genesis, covenant_id);
     if token_outputs.is_empty() {
         return Err("the genesis has no output of the token".into());
@@ -271,6 +337,17 @@ pub fn verify_genesis_lock(genesis: &Transaction, covenant_id: Hash, lock: &Crea
         let tpl = token_template(tid);
         let Some(states) = spans.iter().map(|b| TokenState::decode_with(tpl, b).ok()).collect::<Option<Vec<_>>>() else { continue };
         let scripts: Vec<ScriptPublicKey> = states.iter().map(|s| s.spk_with(tpl)).collect();
+        // the owner of the locked states under this program
+        let (script, authority, auto) = match kind {
+            LockKind::Manual => (lock.script(), lock.authority(), None),
+            LockKind::Auto => match crate::lock_auto::AutoLock::new(*lock, tid) {
+                Ok(a) => (a.script(), a.authority(), Some(a)),
+                Err(_) => continue,
+            },
+        };
+        let holds = |s: &Kcc20State| {
+            s.owner_scheme == crate::kcc2::P2SH && s.owner == authority && s.borrow_scheme == 0 && s.borrow_guard == [0; 32]
+        };
         let mut proven = 0usize;
         let mut supply: u128 = 0;
         let mut amount: u128 = 0;
@@ -282,10 +359,10 @@ pub fn verify_genesis_lock(genesis: &Transaction, covenant_id: Hash, lock: &Crea
             let a = states[at].amount().max(0) as u128;
             supply += a;
             if let TokenState::Kcc20(s) = &states[at] {
-                if lock.holds(s) && s.amount > 0 {
+                if holds(s) && s.amount > 0 {
                     amount += a;
                     ext = s.extension_commitment;
-                    outputs.push(LockedOutput { index: k as u32, amount: s.amount as u64 });
+                    outputs.push(LockedOutput { index: k as u32, amount: s.amount as u64, value: genesis.outputs[k].value });
                 }
             }
         }
@@ -295,16 +372,33 @@ pub fn verify_genesis_lock(genesis: &Transaction, covenant_id: Hash, lock: &Crea
         if outputs.is_empty() {
             return Err("no genesis output is held by the lock".into());
         }
+        let coin = match auto {
+            None => None,
+            Some(a) => {
+                if outputs.len() != 1 {
+                    return Err("an automatic lock holds exactly one genesis output".into());
+                }
+                let spk = a.spk();
+                let found =
+                    genesis.outputs.iter().enumerate().find(|(_, o)| {
+                        o.covenant.is_none() && o.script_public_key == spk && o.value >= crate::lock_auto::AUTO_COIN_MIN
+                    });
+                let (k, o) = found.ok_or("the genesis pays no lock coin to the automatic lock's address")?;
+                Some(LockedOutput { index: k as u32, amount: o.value, value: o.value })
+            }
+        };
         return Ok(VerifiedLock {
+            kind,
             until: lock.until,
             key: lock.key,
-            script: lock.script(),
-            authority: lock.authority(),
+            script,
+            authority,
             amount: u64::try_from(amount).map_err(|_| "the locked amount overflows")?,
             outputs,
             program: tid,
             extension_commitment: ext,
             supply: (proven == token_outputs.len()).then(|| u64::try_from(supply).ok()).flatten(),
+            coin,
         });
     }
     Err("no state the genesis names is proven under a token program".into())

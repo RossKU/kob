@@ -68,7 +68,7 @@ export interface TokenBalance {
    * Tokens held by the maker's creator lock (kob/creator-lock.ts). They are the maker's own but not
    * spendable before `until` (unix ms), and they are not in `free`.
    */
-  locked?: { amount: bigint; until: bigint };
+  locked?: { amount: bigint; until: bigint; /** `auto`: it opens by itself (anyone may send the release) */ kind?: 'manual' | 'auto' };
 }
 
 /** An order that could not be counted, with the reason. */

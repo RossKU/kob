@@ -45,6 +45,9 @@ pub struct SaleArgs {
     /// `--lock-until`, resolved to unix ms: the kept share is locked until then
     /// (`crate::token_lock`).
     pub lock_until: Option<u64>,
+    /// `--lock-manual`: the lock opens to a signature of the key (`kob token unlock` signs), not by
+    /// itself (the default: anyone may release it to the key, `kob_protocol::lock_auto`).
+    pub lock_manual: bool,
 }
 
 impl SaleArgs {

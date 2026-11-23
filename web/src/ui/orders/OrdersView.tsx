@@ -42,7 +42,7 @@ import { AutoRefundToggle } from './AutoRefund';
 import { listCreations } from '../../data/creations';
 import { acquiredTokens, logoGate } from '../../data/logo-gate';
 import { BalancesFrame, BalancesPanel } from './BalancesPanel';
-import { planUnlock, unlockSigner } from './unlock';
+import { planRelease, planUnlock, unlockSigner } from './unlock';
 import { OrderRow, type OrderRowActions } from './OrderRow';
 import { PositionCard } from './PositionCard';
 import { RecoverPanel } from './RecoverPanel';
@@ -513,6 +513,19 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       startFlow(t('orders.unlock.heading', { ticker }), run.steps, run.next ? { next: run.next } : {});
     });
 
+  /**
+   * Balances' Release now of an automatic creator lock: one transaction nobody signs, which pays the
+   * tokens and the lock's coin back to the wallet (ui/orders/unlock.ts `planRelease`).
+   */
+  const releaseToken = (token: Hex) =>
+    void guarded(`release-${token}`, async () => {
+      const h = balances.free.data?.locked?.find((x) => x.token === token && x.kind === 'auto');
+      if (!pubkey || !h) return;
+      const ticker = tickerOrId(shownToken(token)?.ticker ?? '', token);
+      const run = await planRelease(services, pubkey, h, ticker);
+      startFlow(t('orders.release.heading', { ticker }), run.steps);
+    });
+
   /** Balances' Claim opens the dialog for one order, else runs one claim per order in one flow. */
   const claimToken = (token: Hex) => {
     const holders = rows.filter((r) => r.canClaim && r.bought?.token === token);
@@ -880,6 +893,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                 onClaimToken={claimToken}
                 onConvertToken={(token) => mergeToken(token, true)}
                 onUnlockToken={unlockToken}
+                onReleaseToken={releaseToken}
                 unlockBy={unlockSigner(wallet.adapter, wallet.info.pubkey)}
                 balances={balances}
                 iconOf={iconOf}

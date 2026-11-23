@@ -306,12 +306,15 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
   };
 
   stage('signing');
-  if ((a.checkWallet ?? true) && adapter.refresh) await assertWalletMatches(adapter, built, network);
+  // A transaction nobody signs (an automatic creator lock's release, kob/creator-lock.ts) never goes
+  // to the wallet: it is finalized with no signature, and every check after it still runs.
+  const unsigned = built.sign.length === 0;
+  if (!unsigned && (a.checkWallet ?? true) && adapter.refresh) await assertWalletMatches(adapter, built, network);
   if (a.inputAddress) await assertInputsOnNode(node, built, a.inputAddress);
-  await assertVisibleToWallet(a, built);
-  let sigs;
+  if (!unsigned) await assertVisibleToWallet(a, built);
+  let sigs: Awaited<ReturnType<WalletAdapter['signTx']>> = [];
   const sleep = a.visibility?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  for (let n = 1; ; n++) {
+  for (let n = 1; !unsigned; n++) {
     try {
       sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}), ...(a.clockDaa !== undefined ? { clockDaa: a.clockDaa } : {}), ...(a.signerNotes?.length ? { signerNotes: a.signerNotes } : {}), ...(a.locks?.length ? { locks: a.locks } : {}), ...(a.live ? { live: a.live.signing } : {}), ...(a.session ? { session: a.session } : {}) });
       break;

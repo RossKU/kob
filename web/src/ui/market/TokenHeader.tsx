@@ -29,7 +29,9 @@ function creatorLockText(lock: VerifiedLock, decimals: number | null, ticker: st
   const pct = lockSharePercent(lock.amount, lock.supply);
   const date = formatRowDate(Number(lock.until));
   const key = lockOpen(lock.until) ? 'market.token.creatorLockOpen' : 'market.token.creatorLockValue';
-  return pct === null ? t(`${key}NoShare`, { amount, date }) : t(key, { amount, pct, date });
+  const text = pct === null ? t(`${key}NoShare`, { amount, date }) : t(key, { amount, pct, date });
+  // an automatic lock opens by itself: anyone may release it to its creator after the date
+  return lock.kind === 'auto' ? t('market.token.creatorLockAuto', { text }) : text;
 }
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */

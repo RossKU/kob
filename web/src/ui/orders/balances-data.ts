@@ -7,7 +7,8 @@ import type { Services } from '../../app/services';
 import type { OrderView, StrayView } from '../../data/indexer-types';
 import type { OrderSnapshot } from '../../kob/cancel';
 import type { TokenInfo } from '../../kob/registry';
-import type { Hex, TokenProgram, TokenUtxo } from '../../kob/types';
+import type { Hex, TokenProgram, TokenUtxo, Utxo } from '../../kob/types';
+import type { LockKind } from '../../kob/creator-lock';
 import { knownDeclarations, loadDeclaration, noteTokenProgram, restoreDeclarations } from '../../data/token-declarations';
 import { toError } from '../kit/hooks';
 import { combineBalances, type CombinedBalances } from './balances-model';
@@ -47,6 +48,13 @@ export interface LockedHolding {
   utxos: TokenUtxo[];
   /** Base units. */
   amount: bigint;
+  /** Manual (the wallet signs the unlock) or automatic (anyone may send the release). */
+  kind: LockKind;
+  /**
+   * An automatic lock's coin, the genesis's plain KAS output at the lock's address, as its outpoint.
+   * The release spends it with the locked genesis output. Null for a manual lock.
+   */
+  coin: Utxo | null;
 }
 
 /**
@@ -75,7 +83,8 @@ export async function loadLockedHoldings(s: Pick<Services, 'kob' | 'tracker' | '
       covenantId: d.covenantId, program: l.program, authority: l.authority, extensionCommitment: l.extensionCommitment, genesis: { txid: d.genesisTxid!, outputs: l.outputs },
     });
     const amount = utxos.reduce((a, u) => a + BigInt(u.state.amount), 0n);
-    if (amount > 0n) out.push({ token: d.covenantId, program: l.program, until: BigInt(l.until), key: l.key, authority: l.authority, utxos, amount });
+    const coin = l.kind === 'auto' && l.coin ? { transactionId: d.genesisTxid!, index: l.coin.index, amount: l.coin.amount } : null;
+    if (amount > 0n) out.push({ token: d.covenantId, program: l.program, until: BigInt(l.until), key: l.key, authority: l.authority, utxos, amount, kind: l.kind === 'auto' ? 'auto' : 'manual', coin });
   }
   return out;
 }

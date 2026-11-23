@@ -77,6 +77,7 @@ pub mod kcc20;
 pub mod kcc23;
 pub mod kozmic;
 pub mod kusdt;
+pub mod lock_auto;
 pub mod payload;
 pub mod payment;
 pub mod profile;

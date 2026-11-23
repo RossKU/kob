@@ -112,6 +112,11 @@ export function BalancesPanel(props: {
    */
   onUnlockToken?(token: Hex): void;
   /**
+   * Release what the wallet's automatic creator lock of a token holds. Its button shows once the
+   * lock is open, for any wallet: the release needs no signature.
+   */
+  onReleaseToken?(token: Hex): void;
+  /**
    * Who can sign the unlock, the connected wallet or only the CLI. For a wallet that cannot sign
    * its script input, a muted note is shown instead.
    */
@@ -292,10 +297,13 @@ export function BalancesPanel(props: {
                 const program = balanceProgram(b.token, { listed: info?.program, free: free.data!.programs, locked: free.data!.locked, orders: orderPrograms });
                 // The wallet's creator lock of the token is a sub-line under Available. Once it is
                 // open, Unlock, or the CLI's command, is in the action cell.
+                // An automatic lock opens by itself: Release now, with no signature, for any wallet.
                 const locked = b.locked && b.locked.amount > 0n ? b.locked : null;
                 const open = !!locked && unlockOpen(locked.until, nodeMedian);
-                const showUnlock = open && !!props.onUnlockToken && props.unlockBy !== 'cli';
-                const showCli = open && props.unlockBy === 'cli';
+                const auto = locked?.kind === 'auto';
+                const showUnlock = open && !auto && !!props.onUnlockToken && props.unlockBy !== 'cli';
+                const showCli = open && !auto && props.unlockBy === 'cli';
+                const showRelease = open && auto && !!props.onReleaseToken;
                 return (
                   <DtGroup key={b.token} data-testid={`balance-row-${b.token}`}>
                     <DtRow>
@@ -323,8 +331,8 @@ export function BalancesPanel(props: {
                           </div>
                         ) : null}
                         {locked ? (
-                          <div class="dt-sub" title={`${t(open ? 'orders.balances.lockedOpenHint' : 'orders.balances.lockedHint')} ${rowTimeTitle(Number(locked.until))}`} data-testid="balance-locked">
-                            {t(open ? 'orders.balances.lockedOpen' : 'orders.balances.locked', { amount: amountCell(locked.amount, d).text, date: formatRowDate(Number(locked.until)) })}
+                          <div class="dt-sub" title={`${t(auto ? (open ? 'orders.balances.lockedAutoOpenHint' : 'orders.balances.lockedAutoHint') : open ? 'orders.balances.lockedOpenHint' : 'orders.balances.lockedHint')} ${rowTimeTitle(Number(locked.until))}`} data-testid="balance-locked">
+                            {t(auto ? (open ? 'orders.balances.lockedAutoOpen' : 'orders.balances.lockedAuto') : open ? 'orders.balances.lockedOpen' : 'orders.balances.locked', { amount: amountCell(locked.amount, d).text, date: formatRowDate(Number(locked.until)) })}
                           </div>
                         ) : null}
                       </DtCell>
@@ -345,8 +353,20 @@ export function BalancesPanel(props: {
                         {valueOf(b) !== null ? <MoneyCell kas={valueOf(b)!} unit={false} fraction={dp.value} /> : <span class="dt-muted" title={t('orders.balances.noPrice')}>—</span>}
                       </DtCell>
                       <DtCell k="act" card="action">
-                        {showMerge || showConvert || b.orderCount > 0 || claimable || showUnlock || showCli ? (
+                        {showMerge || showConvert || b.orderCount > 0 || claimable || showUnlock || showCli || showRelease ? (
                           <span class="dt-act">
+                            {showRelease ? (
+                              <Button
+                                small
+                                disabled={!!props.busy}
+                                loading={props.busy === `release-${b.token}`}
+                                title={t('orders.release.hint', { amount: amountCell(locked!.amount, d).text, ticker: shown.ticker })}
+                                onClick={() => props.onReleaseToken!(b.token)}
+                                data-testid={`balance-release-${b.token}`}
+                              >
+                                {t('orders.release.button')}
+                              </Button>
+                            ) : null}
                             {showUnlock ? (
                               <Button
                                 small

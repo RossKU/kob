@@ -3,7 +3,9 @@
 `kobd` (the KOB daemon; its files are `kobd.toml`, `kobd.log` and `kob-operator.key`, in its own folder or `$KOBD_DIR`; an older build's `kob-executor.toml` and `kob-executor.log` are not read, rename them; the Cargo package is `kobd`, in `crates/kobd`) is one binary with two roles, the **Executor** and the **Indexer**, started with role flags. It follows a Kaspa node's selected chain,
 indexes every KOB order into a reorg-safe database, serves a read API (REST +
 WebSocket), and, with the operator's hot key, matches crossing orders (arming and triggering stops inside its batches) and keeps them (refund,
-kill, close). The normative rules are `docs/spec/matcher.md`, `docs/spec/order-types.md` and
+kill, close). Its keepers also release the automatic creator locks that are due, for a 0.01 KAS tip each out of the lock
+coin (`docs/spec/creator-lock-auto.md`; the operator's own KAS input comes back with the tip, the fee is the coin's and at
+most 0.02 KAS, within `--fee-max-tx-kas`). The normative rules are `docs/spec/matcher.md`, `docs/spec/order-types.md` and
 `docs/spec/kob1-payload.md`; this guide covers operation.
 
 Both token families are handled end to end: **KCC-20** (112-byte token state, owner scheme `0x04`
@@ -304,6 +306,7 @@ matcher and keeper options (C, "Running"):
 | `--no-maintenance`, `--no-dust-sell`, `--maintenance-max-jobs` | off, off, 2 | the operator's own token UTXOs: merge and sell (C, "Maintenance") |
 | `--inventory-policy <file>` | none (off) | the surplus-inventory policy (C, "Surplus inventory"): the pair surpluses the operator may accumulate as inventory; maintenance never sells a listed token (also on `match`) |
 | `--no-refund`, `--sweep-own-strays`, `--return-foreign-strays`, `--keeper-min-profit` | as C | keepers (`--keeper-min-profit` is `keep --min-profit`) |
+| `--no-lock-release` | off | keepers: do not release the automatic creator locks that are due (`docs/spec/creator-lock-auto.md`) |
 | `--keeper-subsidy-max-kas`, `--keeper-replace-after-daa`, `--keeper-max-replacements` | 0.05, 100, 3 | keepers' liveness under fee pressure (C, "Fee policy"): the most KAS of its own funding the operator adds to one kill or refund its tip cannot pay at its urgency's rate (0: off); replace a stuck kill or refund of this process after this many DAA, at most this many times (0: never). Also on `keep` and `match --keep` |
 | `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` | 1, 864000, 8 | the operator's total keeper subsidy: at most this many KAS within any rolling window of this many DAA (864,000 = 24 hours: 1 KAS a day by default; kept across restarts), replacements included, and at most this many subsidised kills and refunds per tick; past either, jobs go at the rate their own tip pays (budget 0 or max jobs 0: no subsidy). Also on `keep` and `match --keep` |
 | `--no-weighted-select`, `--select-alpha`, `--select-max-defer-daa`, `--select-min-share`, `--select-seed` | on, 1, 30, 0.1, OS randomness | the weighted selection among competing executors (C, "Competing executors"; `docs/spec/matcher.md` §3.6): off plans deterministically; the weight exponent; the starvation bound in DAA; the lowest share of the optional work per tick; a fixed seed for a reproducible run. Also on `match` and `keep` |

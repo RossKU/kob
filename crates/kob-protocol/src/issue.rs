@@ -576,6 +576,11 @@ pub struct IssueSpec {
     /// A creator lock (`crate::creator_lock`): declared as `lock`; the holders it owns (owner
     /// scheme 0x03, its P2SH hash, borrow disabled) open at its time.
     pub lock: Option<crate::creator_lock::CreatorLock>,
+    /// How the lock opens: manual (the creator signs) or automatic (`crate::lock_auto`: the
+    /// holder is owned by the `KobLockAuto` script of the terms and the issued program, and the
+    /// genesis pays the lock coin, [`crate::lock_auto::AUTO_COIN`], to its address after the token
+    /// outputs and the curve). Declared as `lock_kind`.
+    pub lock_kind: crate::creator_lock::LockKind,
 }
 
 /// A `KobCurveAsk` created in its token's genesis, unbound.
@@ -630,6 +635,7 @@ impl IssueSpec {
             mass_margin_percent: DEFAULT_MASS_MARGIN_PERCENT,
             curve: None,
             lock: None,
+            lock_kind: crate::creator_lock::LockKind::Manual,
         }
     }
 
@@ -647,7 +653,41 @@ impl IssueSpec {
             x: self.x.clone(),
             telegram: self.telegram.clone(),
             lock: self.lock.map(|l| l.script_hex()),
+            lock_kind: (self.lock.is_some() && self.lock_kind == crate::creator_lock::LockKind::Auto).then(|| "auto".to_string()),
         }
+    }
+
+    /// The owner of the locked holders: the manual lock's P2SH hash, or the `KobLockAuto` script's
+    /// for the issued program. `None` without a lock.
+    pub fn lock_authority(&self) -> Result<Option<[u8; 32]>> {
+        let Some(l) = self.lock else { return Ok(None) };
+        Ok(Some(match self.lock_kind {
+            crate::creator_lock::LockKind::Manual => l.authority(),
+            crate::creator_lock::LockKind::Auto => crate::lock_auto::AutoLock::new(l, self.program.template_id())
+                .map_err(|e| IssueError::Invalid(e.to_string()))?
+                .authority(),
+        }))
+    }
+
+    /// The automatic lock's coin output (value, script), for an automatic lock.
+    pub fn lock_coin(&self) -> Result<Option<(u64, ScriptPublicKey)>> {
+        match (self.lock, self.lock_kind) {
+            (Some(l), crate::creator_lock::LockKind::Auto) => {
+                let a =
+                    crate::lock_auto::AutoLock::new(l, self.program.template_id()).map_err(|e| IssueError::Invalid(e.to_string()))?;
+                Ok(Some((crate::lock_auto::AUTO_COIN, a.spk())))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// The KAS of the genesis's fixed outputs: the token carriers, the curve's and the lock coin.
+    fn fixed_outputs(&self) -> Result<u64> {
+        self.carrier
+            .checked_mul(self.holders.len() as u64)
+            .and_then(|c| c.checked_add(self.curve.as_ref().map_or(0, |c| c.carrier)))
+            .and_then(|c| c.checked_add(crate::lock_auto::AUTO_COIN * u64::from(self.lock_coin().ok().flatten().is_some())))
+            .ok_or_else(|| IssueError::Invalid("carrier overflow".into()))
     }
 
     /// Validate every rule that does not need the transaction. Returns warnings.
@@ -753,7 +793,11 @@ impl IssueSpec {
         }
         if let Some(l) = &self.lock {
             let l = crate::creator_lock::CreatorLock::new(l.until, l.key).map_err(|e| IssueError::Invalid(e.to_string()))?;
-            let held = self.holders.iter().filter(|h| h.owner_scheme == SCHEME_P2SH && h.owner == l.authority());
+            let authority = self.lock_authority()?.unwrap_or_else(|| l.authority());
+            let held = self.holders.iter().filter(|h| h.owner_scheme == SCHEME_P2SH && h.owner == authority);
+            if self.lock_kind == crate::creator_lock::LockKind::Auto && held.clone().count() > 1 {
+                return invalid("creator lock: an automatic lock holds one holder");
+            }
             if held.clone().count() == 0 {
                 return invalid("creator lock: no holder is owned by the lock (owner scheme 0x03, its P2SH hash)");
             }
@@ -987,6 +1031,10 @@ impl GenesisDraft {
             outputs.push(o);
             placed
         });
+        // an automatic creator lock's coin: a plain output to the lock's address
+        if let Some((value, spk)) = spec.lock_coin()? {
+            outputs.push(TransactionOutput { value, script_public_key: spk, covenant: None });
+        }
         Ok(GenesisDraft {
             program,
             curve,
@@ -1090,11 +1138,7 @@ pub fn build_genesis(spec: &IssueSpec) -> Result<GenesisPlan> {
     let mut warnings = spec.validate()?;
     let draft = GenesisDraft::new(spec)?;
     let total_in: u64 = spec.funding.iter().map(|f| f.amount).sum();
-    let carriers = spec
-        .carrier
-        .checked_mul(draft.states.len() as u64)
-        .and_then(|c| c.checked_add(spec.curve.as_ref().map_or(0, |c| c.carrier)))
-        .ok_or_else(|| IssueError::Invalid("carrier overflow".into()))?;
+    let carriers = spec.fixed_outputs()?;
     let need_base = carriers;
     if total_in < need_base {
         return Err(IssueError::InsufficientFunds { need: need_base, have: total_in });
@@ -1228,11 +1272,7 @@ pub fn build_creation(spec: &IssueSpec) -> Result<CreationPlan> {
     if spec.funding.iter().any(|f| f.owner_pubkey != maker) {
         return invalid("every funding UTXO of a creation must belong to the creator (the owner of the first one)");
     }
-    let carriers = spec
-        .carrier
-        .checked_mul(spec.holders.len() as u64)
-        .and_then(|c| c.checked_add(spec.curve.as_ref().map_or(0, |c| c.carrier)))
-        .ok_or_else(|| IssueError::Invalid("carrier overflow".into()))?;
+    let carriers = spec.fixed_outputs()?;
 
     // the genesis fee: its floor without a change output (it spends exactly carriers + fee), or the
     // explicit one
