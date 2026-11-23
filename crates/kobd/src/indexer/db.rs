@@ -401,7 +401,11 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
             .query_map([], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         for id in ids {
-            let w = if table == "book_live" { super::reads::book_window(conn, id, dust)? } else { super::pairs::pair_window_of(conn, id)? };
+            let w = if table == "book_live" {
+                super::reads::book_window(conn, id, dust)?
+            } else {
+                super::pairs::pair_window_of(conn, id)?
+            };
             let Some(w) = w else {
                 conn.prepare_cached(&format!("DELETE FROM {table} WHERE order_id = ?1"))?.execute([id])?;
                 continue;
@@ -414,17 +418,7 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
             );
             let mut st = conn.prepare_cached(&sql)?;
             if table == "book_live" {
-                st.execute(rusqlite::params![
-                    daa,
-                    unix,
-                    w.ok as i64,
-                    w.open_from,
-                    w.closed_from,
-                    w.deadline,
-                    id,
-                    w.class(),
-                    w.key
-                ])?;
+                st.execute(rusqlite::params![daa, unix, w.ok as i64, w.open_from, w.closed_from, w.deadline, id, w.class(), w.key])?;
             } else {
                 st.execute(rusqlite::params![daa, unix, w.ok as i64, w.open_from, w.closed_from, w.deadline, id])?;
             }
@@ -913,7 +907,7 @@ pub const CLIENT_SITE_QUEUED: usize = 96;
 /// A client holds at most 8 server permits however long this is ([`CLIENT_IN_FLIGHT`]), so the bound on what fills
 /// the 256 does not depend on it. It is sized for an honest burst: of 8 requests in flight, 6 wait behind the 2 heavy
 /// reads, 3 reads in turn, 0.2 s at 70 ms and 1.8 s for 500-candle charts (0.6 s each); and 6 order views of one page's
-/// book check wait on the single light permit, 5 x 3.5 ms (an order view at its bound, about 220,000 VM steps, debug build).
+/// book check wait on the single light permit, 5 x 3.5 ms (an order view at its bound, about 220,000 VM steps, test profile).
 pub const CLIENT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// What one API client (a rate-limit key: an IPv4 address or an IPv6 prefix) may use at once.

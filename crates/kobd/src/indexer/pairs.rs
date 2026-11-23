@@ -388,7 +388,9 @@ pub(crate) fn pair_window_of(conn: &Connection, order_id: i64) -> DbResult<Optio
             _ => (false, 0),
         };
         let custodies = pair_custodies(conn, &cov)?;
-        let funded = crate::indexer::processor::guarded(|| super::takeable::pair_takeable(s, value.unwrap_or(0), &custodies, top)).unwrap_or(Some(0)) != Some(0);
+        let funded = crate::indexer::processor::guarded(|| super::takeable::pair_takeable(s, value.unwrap_or(0), &custodies, top))
+            .unwrap_or(Some(0))
+            != Some(0);
         ok = sql_ok.unwrap_or(false) && resting && funded && crate::sanity::check(s).is_ok() && custodies_match(&custodies, s);
         open_from = crate::model::terms_of(s).active_from;
         if let AnyState::KobPair(p) = s {

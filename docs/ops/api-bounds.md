@@ -49,7 +49,7 @@ work, a hidden logo a report within the daily report budget. They are one list e
 ## Wall time of the worst cases (R5C2-6)
 
 The VM steps above count SQLite's work, not the Rust work of a read (decoding states, a curve's levels, building the views).
-These worst cases were measured for wall time too, on the build PC (Windows), **debug build** (a release build is several times
+These worst cases were measured for wall time too, on the build PC (Windows), **test profile** (`profile.dev`: `opt-level = 1`; a release build, `opt-level = 3`, is
 faster; not measured), one computation, store in memory (`bounds::worst_case_*` and `bounds::the_order_view_does_not_grow_*`,
 `cargo test -p kobd --lib worst_case -- --ignored --nocapture`):
 
@@ -125,7 +125,7 @@ and 96 of a site (`CLIENT_SITE_QUEUED`) wait, and one more is answered `503 over
 12 to 20 reads at once, and the web, the Android app and other clients keep doing so). A read that waits for its own client's lane
 permit (1 light, 2 heavy) gives up after 2 s (`CLIENT_WAIT`) with `503 overloaded`; it is sized for a burst (6 reads behind the
 2 heavy ones: 3 in turn, 0.2 s at the 70 ms of `/v1/stats` and 1.8 s at the 0.6 s of a 500-candle chart on the TN10 soak copy;
-6 order views of one book check on the single light permit, 5 in turn at 3.5 ms each at the view's bound, measured in a debug build) and does not change what one client
+6 order views of one book check on the single light permit, 5 in turn at 3.5 ms each at the view's bound, measured in the test profile) and does not change what one client
 holds: at most 8 server permits. So filling the 256 takes 32 IPv4 addresses or 8 IPv6 /48s, each keeping 8 requests in flight
 (at the per-client rate limit of 20 a second); `api::one_client_holds_at_most_its_in_flight_server_permits` and
 `api::the_64s_of_one_ipv6_site_share_its_requests_in_flight` prove the per-key bounds, `api::an_honest_pages_burst_is_served_whole`
@@ -143,5 +143,5 @@ entries (each locks its order value) and in exits (one per fill of an entry), se
 API listens. They are not reachable from the API. `db::backfill_book_live` and `db::backfill_auto_live` fill `book_live`,
 `pair_live` and `kcc23_auto_live` once (`meta.book_live`, `meta.kcc23_auto_live`): one pass over the live orders and the
 automatic locks; then `db::maintain_live_books` sets the windows of the rows not set yet, in one transaction (R5F-2: 22 s for
-100,000 live listed orders, debug build on the build PC; `bounds::first_open_time_of_a_store_of_live_orders`). When the rules
+100,000 live listed orders, test profile (`opt-level = 1`) on the build PC; `bounds::first_open_time_of_a_store_of_live_orders`). When the rules
 behind the windows change (`db::BOOK_RULES_VERSION`, the pinned templates, the listing minimum) every row is decided again, once.

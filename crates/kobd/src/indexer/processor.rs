@@ -1604,7 +1604,8 @@ impl Processor {
                 // amount it states (R5A-1).
                 amount: match (state.amount_left(), terms.price) {
                     (Some(a), Some(p)) => {
-                        let t = guarded(|| super::takeable::kas_takeable(state, carrier.min(i64::MAX as u64) as i64, p)).unwrap_or(Some(0));
+                        let t = guarded(|| super::takeable::kas_takeable(state, carrier.min(i64::MAX as u64) as i64, p))
+                            .unwrap_or(Some(0));
                         Some(t.map_or(a, |t| a.min(t)))
                     }
                     (a, _) => a,

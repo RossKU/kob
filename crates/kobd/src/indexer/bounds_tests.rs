@@ -439,7 +439,11 @@ fn an_if_done_bid_without_its_escrow_takes_no_place() {
     assert!(stats.get("book_truncated").is_none(), "{stats}");
     assert_eq!(token_list(&conn, &list).unwrap()[0].open_bids, 10);
     let open: i64 = conn
-        .query_row("SELECT COUNT(*) FROM book_live bl JOIN orders o ON o.id = bl.order_id WHERE o.contract = 'KobIfdBid' AND bl.open = 1", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM book_live bl JOIN orders o ON o.id = bl.order_id WHERE o.contract = 'KobIfdBid' AND bl.open = 1",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(open, 0);
 
@@ -450,7 +454,11 @@ fn an_if_done_bid_without_its_escrow_takes_no_place() {
     seed(&conn, &s, 0, 1);
     conn.execute("UPDATE order_state SET cur_value = ?1 WHERE order_id = (SELECT id FROM orders WHERE substr(covenant_id, 1, 1) = CAST('g' AS BLOB))", [three])
         .unwrap();
-    conn.execute("UPDATE book_live SET ok = NULL WHERE order_id = (SELECT id FROM orders WHERE substr(covenant_id, 1, 1) = CAST('g' AS BLOB))", []).unwrap();
+    conn.execute(
+        "UPDATE book_live SET ok = NULL WHERE order_id = (SELECT id FROM orders WHERE substr(covenant_id, 1, 1) = CAST('g' AS BLOB))",
+        [],
+    )
+    .unwrap();
     maintain();
     let now = serde_json::to_value(book(&conn, &ctx, &token, 20, false).unwrap()).unwrap();
     let best = &now["bids"][0];
@@ -1205,8 +1213,10 @@ fn first_open_time_of_a_store_of_live_orders() {
         };
         seed(&conn, &s, 0, n);
         // as the previous build left it: no live-book rows, no rules
-        conn.execute_batch("DELETE FROM book_live; DELETE FROM pair_live; DELETE FROM meta WHERE k IN ('book_live', 'book_live_rules');")
-            .unwrap();
+        conn.execute_batch(
+            "DELETE FROM book_live; DELETE FROM pair_live; DELETE FROM meta WHERE k IN ('book_live', 'book_live_rules');",
+        )
+        .unwrap();
     }
     let t = std::time::Instant::now();
     let conn = crate::indexer::db::open_writer(&path, "testnet-10").unwrap();

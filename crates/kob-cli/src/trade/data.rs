@@ -188,10 +188,7 @@ fn owner_token_items(indexer: &str, owner: &[u8; 32], cov: &[u8; 32]) -> Result<
             None => return Ok(items),
         }
     }
-    Err(format!(
-        "{}: the indexer's list of your token UTXOs did not end after {OWNER_TOKEN_PAGES} pages: incomplete",
-        to_hex(cov)
-    ))
+    Err(format!("{}: the indexer's list of your token UTXOs did not end after {OWNER_TOKEN_PAGES} pages: incomplete", to_hex(cov)))
 }
 
 fn i64_of(v: Option<&Value>) -> Option<i64> {

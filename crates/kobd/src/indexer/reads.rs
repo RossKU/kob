@@ -1001,11 +1001,12 @@ fn resting_level_of(
         _ => remaining,
     };
     let quote = auction_of(s, udaa, Some(now.max(0) as u64)).and_then(|a| a.current_price.parse::<i64>().ok()).unwrap_or(price);
-    let amount = match crate::indexer::processor::guarded(|| super::takeable::kas_takeable(s, value.unwrap_or(0), quote)).unwrap_or(Some(0)) {
-        Some(0) => return None,
-        Some(t) => amount.map(|a| a.min(t)),
-        None => amount,
-    };
+    let amount =
+        match crate::indexer::processor::guarded(|| super::takeable::kas_takeable(s, value.unwrap_or(0), quote)).unwrap_or(Some(0)) {
+            Some(0) => return None,
+            Some(t) => amount.map(|a| a.min(t)),
+            None => amount,
+        };
     Some((quote, amount))
 }
 
@@ -1117,7 +1118,14 @@ pub(crate) fn book_from(now: i64, unix: Option<u64>, dust: bool) -> String {
 }
 
 /// Whether a book side at DAA `now` holds more fillable rows than one read takes.
-pub(crate) fn book_beyond_scan(conn: &Connection, token: &Hash32, side: i64, now: i64, unix: Option<u64>, dust: bool) -> DbResult<bool> {
+pub(crate) fn book_beyond_scan(
+    conn: &Connection,
+    token: &Hash32,
+    side: i64,
+    now: i64,
+    unix: Option<u64>,
+    dust: bool,
+) -> DbResult<bool> {
     for (arm, cap) in book_arms(now, unix, dust) {
         if conn.prepare(&format!("{arm} LIMIT 1 OFFSET {cap}"))?.exists(rusqlite::params![token.0.to_vec(), side])? {
             return Ok(true);
@@ -1466,7 +1474,9 @@ pub(crate) fn book_window(conn: &Connection, order_id: i64, dust_below: i64) -> 
     // quote its auction reaches (none: it cannot be filled and takes no place, R5A-1), a TWAP / DCA
     // order one slice.
     let takeable = match (&state, price) {
-        (Some(s), Some(p)) => crate::indexer::processor::guarded(|| super::takeable::kas_takeable(s, value.unwrap_or(0), p)).unwrap_or(Some(0)),
+        (Some(s), Some(p)) => {
+            crate::indexer::processor::guarded(|| super::takeable::kas_takeable(s, value.unwrap_or(0), p)).unwrap_or(Some(0))
+        }
         _ => None,
     };
     let max_fill = match &state {
