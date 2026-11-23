@@ -83,3 +83,6 @@
 .cf-ack:has(input:checked) { border-color: var(--primary); }
 
 .cf-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+/* the network line (one site serves both): small, and bold on mainnet */
+.cf-net { margin: 0; font-size: 0.85rem; color: var(--muted); }
+.cf-net-main { color: var(--bad); font-weight: 700; }

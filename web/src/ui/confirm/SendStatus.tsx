@@ -511,6 +511,7 @@ function TimeValue(props: { daa: bigint; value: string; now: bigint | null }) {
  * Cancel and Continue in wallet.
  */
 function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }) {
+  const { config } = useServices();
   const st = props.status;
   const s = st.table!;
   // Held after a plan worse for the user: re-rendered when the hold ends.
@@ -539,6 +540,8 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
     >
       <div class="send-confirm">
         <h2 data-testid="confirm-order-title"><span key={s.title}>{s.title}</span></h2>
+        {/* one site serves both networks, and the wallet's popup may not say which: mainnet says the funds are real */}
+        <p class={`send-net${config.network === 'mainnet' ? ' send-net-main' : ''}`} data-testid="confirm-order-network" data-network={config.network}>{t(config.network === 'mainnet' ? 'signer.network.mainnet' : 'signer.network.other', { network: config.network })}</p>
         {/* what to know before continuing (an order below the minimum value never fills ...): a warning callout above the figures, not a bullet under them */}
         {st.notes?.length ? (
           <aside class="send-warn" role="note" data-testid="confirm-order-notes">

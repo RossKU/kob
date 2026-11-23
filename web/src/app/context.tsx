@@ -236,7 +236,7 @@ export function WalletProvider(props: { services: Services; children: ComponentC
   return (
     <WalletContext.Provider value={session}>
       {props.children}
-      <SignerFrame mode={signerMode} events={signerEvents} onHost={(h) => (hostRef.current = h)} onClose={closeSigner} />
+      <SignerFrame mode={signerMode} network={config.network} events={signerEvents} onHost={(h) => (hostRef.current = h)} onClose={closeSigner} />
     </WalletContext.Provider>
   );
 }

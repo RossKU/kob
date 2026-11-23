@@ -17,6 +17,8 @@ export type SignerMode = 'closed' | 'connect' | 'hidden' | 'sign';
 
 export interface SignerFrameProps {
   mode: SignerMode;
+  /** The app's network, which the frame names on each request. */
+  network: string;
   /** The host of the mounted frame. It is null after unmount. */
   onHost(host: SignerHost | null): void;
   events: SignerHostEvents;
@@ -27,13 +29,11 @@ export interface SignerFrameProps {
 export const SIGNER_URL = `${import.meta.env.BASE_URL}signer.html`;
 
 /**
- * The app's theme for the frame's URL. A change of the fragment reaches the frame without a reload,
- * which would forget the key.
+ * The frame's URL fragment: the network, which the frame names on every request, and the app's
+ * theme. A change of the fragment reaches the frame without a reload, which would forget the key.
  */
-const themeFragment = (): string => {
-  const theme = document.documentElement.dataset.theme;
-  return theme === 'dark' || theme === 'light' ? `#theme=${theme}` : '';
-};
+export const signerFragment = (network: string, theme: string | undefined): string =>
+  `#net=${encodeURIComponent(network)}${theme === 'dark' || theme === 'light' ? `&theme=${theme}` : ''}`;
 
 /**
  * What the panel takes of the viewport below the frame: the layer's bottom padding and the box's
@@ -51,9 +51,9 @@ function SignerPanel(props: SignerFrameProps) {
   const events = useRef(props.events);
   events.current = props.events;
   const [content, setContent] = useState<number | null>(null);
-  const [theme, setTheme] = useState(themeFragment);
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme);
   useEffect(() => {
-    const watch = new MutationObserver(() => setTheme(themeFragment()));
+    const watch = new MutationObserver(() => setTheme(document.documentElement.dataset.theme));
     watch.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     return () => watch.disconnect();
   }, []);
@@ -99,7 +99,7 @@ function SignerPanel(props: SignerFrameProps) {
         <iframe
           ref={frame}
           class={`signer-frame signer-frame-${props.mode}`}
-          src={`${SIGNER_URL}${theme}`}
+          src={`${SIGNER_URL}${signerFragment(props.network, theme)}`}
           sandbox="allow-scripts"
           referrerpolicy="no-referrer"
           title={t('signer.frameTitle')}

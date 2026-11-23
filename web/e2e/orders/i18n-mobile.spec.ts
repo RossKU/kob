@@ -119,6 +119,9 @@ test.describe('phone, 390 px wide', () => {
     expect(popup.x).toBeGreaterThanOrEqual(0);
     expect(popup.x + popup.width).toBeLessThanOrEqual(390 + 1);
     await expect(page.getByTestId('confirm-order-ok')).toBeInViewport();
+    // the network is named, inside the screen (one site serves both networks)
+    await expect(page.getByTestId('confirm-order-network')).toHaveText('Network: testnet-10. Test funds.');
+    await expect(page.getByTestId('confirm-order-network')).toBeInViewport();
     await confirmReceipt(page);
     // the confirmed status line under the button stays inside the screen
     const status = page.getByTestId('order-status');

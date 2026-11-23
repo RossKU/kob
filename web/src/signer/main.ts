@@ -49,12 +49,18 @@ const root = document.getElementById('signer') as HTMLElement;
  * reload. It sets colours only, one of two fixed palettes (signer.css), else the OS's.
  */
 function applyTheme(): void {
-  const m = /^#theme=(dark|light)$/.exec(location.hash);
+  const m = /(?:^#|&)theme=(dark|light)(?:&|$)/.exec(location.hash);
   if (m) document.documentElement.dataset.theme = m[1]!;
   else delete document.documentElement.dataset.theme;
 }
 applyTheme();
 window.addEventListener('hashchange', applyTheme);
+
+/**
+ * The network the app runs on, from the same fragment (`net=`). It is a label only: neither the
+ * key nor the transaction names a network, and one site serves both, so each request says which.
+ */
+const networkOf = (): string | null => /(?:^#|&)net=(mainnet|testnet-10)(?:&|$)/.exec(location.hash)?.[1] ?? null;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, ...children: (Node | string)[]): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -436,7 +442,10 @@ function requestView(core: SignerCore, req: PendingRequest): void {
     idleView(core);
   });
   onScreen = { id: req.id, shape: shapeOf(s), cells, hold };
-  show(title, list, ...orders, ...hintsView, ...sessionNote, ...problems, actions, waitWhy);
+  // Which network this is, under the title. Mainnet says that the funds are real.
+  const net = networkOf();
+  const netLine = net ? [el('p', { class: net === 'mainnet' ? 'net net-main' : 'net', 'data-testid': 'signer-network', 'data-network': net }, t(net === 'mainnet' ? 'signer.network.mainnet' : 'signer.network.other', { network: net }))] : [];
+  show(title, ...netLine, list, ...orders, ...hintsView, ...sessionNote, ...problems, actions, waitWhy);
 }
 
 // --- Boot ---

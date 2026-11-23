@@ -363,6 +363,8 @@ export function ConfirmSign(props: ConfirmSignProps) {
   return (
     <Modal title={title} large dismissable={!busy} hideClose={busy} onClose={close} data-testid="confirm-screen">
       <div class="cf" data-phase={phase} data-kind={model.kind}>
+        {/* one site serves both networks: mainnet says the funds are real */}
+        <p class={`cf-net${config.network === 'mainnet' ? ' cf-net-main' : ''}`} data-testid="confirm-network" data-network={config.network}>{t(config.network === 'mainnet' ? 'signer.network.mainnet' : 'signer.network.other', { network: config.network })}</p>
         {blocking.length > 0 ? (
           <div class="cf-blocking" data-testid="confirm-blocking" role="alert">
             <h3>{t('confirm.blockingTitle')}</h3>
