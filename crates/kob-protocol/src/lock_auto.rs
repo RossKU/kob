@@ -427,7 +427,11 @@ mod tests {
                 let c = &art.contracts[name];
                 let (bc, span) = (&c.compiled.bytecode, c.compiled.state_span);
                 let (prefix, suffix) = (&bc[..span.offset], &bc[span.offset + span.len..]);
-                assert_eq!(to_hex(&silverscript_abi::template_hash(prefix, suffix)), hash, "{name}: the artifact is not the issued template");
+                assert_eq!(
+                    to_hex(&silverscript_abi::template_hash(prefix, suffix)),
+                    hash,
+                    "{name}: the artifact is not the issued template"
+                );
                 assert_eq!(span.len, STATE_LEN, "{name} {hash}");
                 for p in TemplateId::TOKEN_PROGRAMS {
                     let Ok(lock) = AutoLock::new(CreatorLock::new(1_800_000_000_000, key()).unwrap(), p) else { continue };
