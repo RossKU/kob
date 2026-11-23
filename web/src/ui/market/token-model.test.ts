@@ -273,6 +273,12 @@ describe('powers and empty tickers (GET /v1/tokens)', () => {
     expect(rows.map((r) => r.index?.template_hash)).toEqual([tpl.hash, 'ff'.repeat(32)]);
   });
 
+  it('a ticker that reads as KAS is shared with native KAS, alone too', () => {
+    const rows = buildTokenRows(reg, [view('KAS', ID('5')), view('ka5', ID('6')), view('OTH', ID('9'))]).slice(1);
+    expect(sharedTickerIds(rows)).toEqual(new Set([ID('5'), ID('6')]));
+    expect(sharedTickerIds(rows.slice(0, 1))).toEqual(new Set([ID('5')]));
+  });
+
   it('powers: freeze or seize raise the issuer-control warning, other powers do not', () => {
     expect(hasIssuerControl(['freeze'])).toBe(true);
     expect(hasIssuerControl(['burn', 'seize'])).toBe(true);

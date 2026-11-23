@@ -228,6 +228,20 @@ export function normalizeTicker(ticker: string): string {
   return [...latin.replace(/RN/g, 'M').replace(/VV/g, 'W')].map((c) => (c === 'O' ? '0' : c === 'I' || c === 'L' ? '1' : c === 'S' ? '5' : c === 'B' ? '8' : c)).join('');
 }
 
+const KAS_SKELETON = 'KA5'; // normalizeTicker('KAS')
+
+/**
+ * Whether a token's ticker reads as native KAS: `KAS`, `kas`, `KA5`, `K A S`, Cyrillic look-alikes,
+ * invisible characters. Any token may take such a ticker, so it counts as shared with KAS.
+ */
+export const readsAsKas = (ticker: string | null | undefined): boolean => !!ticker && normalizeTicker(ticker).replace(/[^\p{L}\p{N}]/gu, '') === KAS_SKELETON;
+
+/**
+ * The ticker a token's amounts and prices are printed with. One that reads as KAS carries 8 + 8
+ * hex of the covenant id (`KAS (abcdef01…12345678)`), so a token amount never reads as native KAS.
+ */
+export const tickerUnit = (ticker: string, covenantId: string): string => (readsAsKas(ticker) ? `${ticker} (${longId(covenantId)})` : ticker);
+
 /**
  * Makes an untrusted name (indexer, pasted) safe to render.
  * Control, zero-width and bidi characters become U+FFFD, and the length is capped.

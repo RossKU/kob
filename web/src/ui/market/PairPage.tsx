@@ -25,7 +25,7 @@ import { marketPageTitle, useDocumentTitle } from '../../app/page-title';
 import { navigate, pairRoute, replaceRoute, routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { PairToken } from '../../kob/pair';
-import type { TokenInfo } from '../../kob/registry';
+import { tickerUnit, type TokenInfo } from '../../kob/registry';
 import { Badge, Banner, Button, ErrorBanner, scaleOfDecimals, HelpTip, Section, useAsync } from '../kit';
 import { OrderTicket } from '../ticket/OrderTicket';
 import { requestPairFlip } from '../ticket/pair-flip';
@@ -70,7 +70,9 @@ import '../ticket/ticket.css';
 const FILLS = 50;
 const CANDLE_INTERVAL = '5m' as const;
 const CANDLE_LIMIT = 600;
-const pairToken = (x: TokenInfo): PairToken => ({ covenantId: x.covenantId, ticker: x.ticker, decimals: x.decimals, scale: scaleOfDecimals(x.decimals) });
+const pairToken = (x: TokenInfo): PairToken => ({ covenantId: x.covenantId, ticker: tickerUnit(x.ticker, x.covenantId), decimals: x.decimals, scale: scaleOfDecimals(x.decimals) });
+/** The ticker a side's amounts and prices are printed with (`tickerUnit`: one that reads as KAS carries its id). */
+const unitOf = (x: TokenInfo): string => tickerUnit(x.ticker, x.covenantId);
 
 export function PairPage(props: { base: string; quote: string }) {
   const services = useServices();
@@ -113,7 +115,7 @@ export function PairPage(props: { base: string; quote: string }) {
   const selectorRows = useMemo(() => withShownRows(choiceRows, [baseRow, quoteRow]), [choiceRows, baseRow, quoteRow]);
   // The tab is `BASE/QUOTE · KOB`, by the tickers the page shows. A token without one is named by
   // its short id and never a whole covenant id.
-  useDocumentTitle(marketPageTitle({ name: baseRow?.ticker, id: props.base }, { name: quoteRow?.ticker, id: props.quote }));
+  useDocumentTitle(marketPageTitle({ name: baseRow && tickerUnit(baseRow.ticker, baseRow.covenantId), id: props.base }, { name: quoteRow && tickerUnit(quoteRow.ticker, quoteRow.covenantId), id: props.quote }));
 
   // The book of BASE/QUOTE with the resting orders of QUOTE/BASE turned round (pair-model.ts
   // `mergeOrientations`). It is one book whichever way the pair is shown.
@@ -290,7 +292,7 @@ export function PairPage(props: { base: string; quote: string }) {
   const idleNote = idleBase && idleQuote
     ? t('pair.chart.idleBoth')
     : idleBase || idleQuote
-      ? t('pair.chart.idle', { ticker: (idleBase ? baseInfo : quoteInfo).ticker, other: (idleBase ? quoteInfo : baseInfo).ticker })
+      ? t('pair.chart.idle', { ticker: unitOf(idleBase ? baseInfo : quoteInfo), other: unitOf(idleBase ? quoteInfo : baseInfo) })
       : null;
   const spec: UsdChartSpec = { base: { token: props.base, decimals: baseInfo.decimals }, quote: { token: props.quote, decimals: quoteInfo.decimals }, pairCandles: true };
   const statsModel = pairStats.model;
@@ -312,8 +314,8 @@ export function PairPage(props: { base: string; quote: string }) {
       series={depthSeries}
       loading={!!indexer && book.data === undefined && !book.error}
       unavailable={!!book.error && !depthSeries}
-      ticker={baseInfo.ticker}
-      priceUnit={t('market.stats.unitOf', { base: baseInfo.ticker, quote: quoteInfo.ticker })}
+      ticker={unitOf(baseInfo)}
+      priceUnit={t('market.stats.unitOf', { base: unitOf(baseInfo), quote: unitOf(quoteInfo) })}
       dp={dp}
       amountDp={Math.min(base.decimals, 4)}
       source="book"
@@ -341,7 +343,7 @@ export function PairPage(props: { base: string; quote: string }) {
                 <PairSelector pair={displayedPair(props.base, props.quote, false)} rows={selectorRows} onChange={openPair} />
                 <span class="sr-only" data-testid="pair-subtitle">{t('pair.subtitle', { base: baseRow ? tokenTitle(baseRow) : baseInfo.ticker, quote: quoteRow ? tokenTitle(quoteRow) : quoteInfo.ticker })}</span>
                 <FlipButton
-                  pair={`${quoteInfo.ticker}/${baseInfo.ticker}`}
+                  pair={`${unitOf(quoteInfo)}/${unitOf(baseInfo)}`}
                   onClick={() => {
                     // The ticket of the other pair takes the order across. The side turns over, and
                     // amounts and prices are converted (pair-flip.ts).
@@ -366,8 +368,8 @@ export function PairPage(props: { base: string; quote: string }) {
               <MarketStats
                 open={panelsOpen}
                 model={panelsOpen ? statsModel : noStats(null, 0)}
-                ticker={baseInfo.ticker}
-                quoteTicker={quoteInfo.ticker}
+                ticker={unitOf(baseInfo)}
+                quoteTicker={unitOf(quoteInfo)}
                 loading={!panelsOpen || statsLoading}
                 unsupported={false}
                 volumeSource={src}
@@ -406,10 +408,10 @@ export function PairPage(props: { base: string; quote: string }) {
             {unavailable ? <Banner tone="warn" data-testid="pair-book-unavailable" title={t('pair.book.unavailable')}>{t('pair.book.unavailableBody')}</Banner> : null}
             {book.data && !model ? <Banner tone="warn" data-testid="pair-book-mismatch">{t('pair.book.mismatch')}</Banner> : null}
             {indexer && (model ? !panelsOpen : book.loading && !book.data) ? (
-              <BookFrame head={{ price: t('pair.book.price', { base: baseInfo.ticker, quote: quoteInfo.ticker }), size: t('pair.book.amount', { base: baseInfo.ticker }), total: t('pair.book.total', { quote: quoteInfo.ticker }) }} rows={bookRows} fitRef={bookFit} data-testid="pair-book-loading" />
+              <BookFrame head={{ price: t('pair.book.price', { base: unitOf(baseInfo), quote: unitOf(quoteInfo) }), size: t('pair.book.amount', { base: unitOf(baseInfo) }), total: t('pair.book.total', { quote: unitOf(quoteInfo) }) }} rows={bookRows} fitRef={bookFit} data-testid="pair-book-loading" />
             ) : null}
             {panelsOpen && model && model.empty ? <p class="muted center" data-testid="pair-book-empty">{t('pair.book.empty')}</p> : null}
-            {panelsOpen && model && !model.empty ? <PairBook model={model} rows={bookRows} fitRef={bookFit} base={baseInfo.ticker} quote={quoteInfo.ticker} last={statsModel.last} onPick={onPick} /> : null}
+            {panelsOpen && model && !model.empty ? <PairBook model={model} rows={bookRows} fitRef={bookFit} base={unitOf(baseInfo)} quote={unitOf(quoteInfo)} last={statsModel.last} onPick={onPick} /> : null}
             {/* the three sources of a level, said once (a bar at the row's left edge; the via-KAS price in italics) */}
             <div class="pair-legend" data-testid="pair-legend">
               {([['direct', 'Direct'], ['entry', 'Entry'], ['route', 'Route']] as const).map(([k, key]) => (
@@ -425,11 +427,11 @@ export function PairPage(props: { base: string; quote: string }) {
       chart={
         <Section
           title={t('market.chart.title')}
-          help={<HelpTip label={t('market.chart.title')} data-testid="pair-chart-note">{t('pair.chart.note', { base: baseInfo.ticker, quote: quoteInfo.ticker })}</HelpTip>}
+          help={<HelpTip label={t('market.chart.title')} data-testid="pair-chart-note">{t('pair.chart.note', { base: unitOf(baseInfo), quote: unitOf(quoteInfo) })}</HelpTip>}
           data-testid="chart-section"
           class="mkt-area-chart mkt-card"
         >
-          <PriceChart indexer={indexer} token={`${props.base}/${props.quote}`} decimals={baseInfo.decimals} ticker={baseInfo.ticker} quoteTicker={quoteInfo.ticker} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} usd={spec} {...kascovChartGate(baseToken.kascovStatus, [{ token: props.base, decimals: baseInfo.decimals, priced: !!baseRow?.kascov?.spot }, { token: props.quote, decimals: quoteInfo.decimals, priced: !!quoteRow?.kascov?.spot }])} />
+          <PriceChart indexer={indexer} token={`${props.base}/${props.quote}`} decimals={baseInfo.decimals} ticker={unitOf(baseInfo)} quoteTicker={unitOf(quoteInfo)} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} usd={spec} {...kascovChartGate(baseToken.kascovStatus, [{ token: props.base, decimals: baseInfo.decimals, priced: !!baseRow?.kascov?.spot }, { token: props.quote, decimals: quoteInfo.decimals, priced: !!quoteRow?.kascov?.spot }])} />
           {idleNote ? <p class="small muted" style="margin:6px 0 0" data-testid="pair-chart-idle">{idleNote}</p> : null}
         </Section>
       }

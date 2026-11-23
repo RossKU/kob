@@ -21,7 +21,7 @@ import { isTokenProgram } from '../kob/programs.generated';
 import { formatRowDate } from '../ui/kit/format';
 import { baseKind, isMultiFillMarket, type OrderDescription } from '../kob/order-facts';
 import { DEFAULT_BID_FILLS } from '../kob/orders/common';
-import { longId, type TokenInfo, type TokenRegistry } from '../kob/registry';
+import { longId, tickerUnit, type TokenInfo, type TokenRegistry } from '../kob/registry';
 import type { BuiltTx, Hex } from '../kob/types';
 import { decimalsOfScale, formatKas, formatTokenAmount } from '../kob/units';
 import type { KobWasm } from '../kob/wasm';
@@ -241,7 +241,7 @@ function flippedSummary(o: DecodedOrder, hint: TokenHint | undefined, kob: KobWa
   const d = o.description;
   const kind = baseKind(d.kind);
   if (!hint?.inverted || d.pair || d.entry || (kind !== 'KobAsk' && kind !== 'KobBid') || d.scale <= 0n || d.price <= 0n) return null;
-  const T = hint.ticker || longId(d.tokenCovId);
+  const T = hint.ticker ? tickerUnit(hint.ticker, d.tokenCovId) : longId(d.tokenCovId);
   const dec = hint.decimals;
   const scale = d.scale;
   // A price that decays to 0 is still a decay. Its bound is 0 KAS, and the summary says so.
@@ -493,7 +493,7 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   lines.push({ label: t('signer.net.kas'), value: signed(k.walletDelta, kas), dir: k.walletDelta < 0n ? 'out' : k.walletDelta > 0n ? 'in' : null });
   // Every token figure carries its unit, as in "−2 EXKCC". A token nothing names has none to
   // carry. That is an assumed one, whose amount is raw and whose label is its covenant id.
-  const unitOf = (hint: TokenHint | undefined): string => (hint && hint.source !== 'assumed' && hint.ticker ? ` ${hint.ticker}` : '');
+  const unitOf = (hint: TokenHint | undefined): string => (hint && hint.source !== 'assumed' && hint.ticker ? ` ${tickerUnit(hint.ticker, hint.covenantId)}` : '');
   for (const tok of s.net.tokens) {
     const hint = hints.find((h) => h.covenantId === tok.ref.covenantId);
     const label = tokenName(tok.ref.covenantId, hint, terms);
@@ -540,7 +540,7 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   if (s.take) {
     const tk = s.take;
     const hint = hints.find((h) => h.covenantId === tk.ref.covenantId);
-    const unit = hint && hint.source !== 'assumed' && hint.ticker ? hint.ticker : longId(tk.ref.covenantId);
+    const unit = hint && hint.source !== 'assumed' && hint.ticker ? tickerUnit(hint.ticker, hint.covenantId) : longId(tk.ref.covenantId);
     lines.push({ label: t('signer.take.fills'), value: t('signer.take.fillsValue', { orders: tk.fills.length, amount: `${formatTokenAmount(tk.amount, hint ? hint.decimals : RAW_TOKEN_DECIMALS)} ${unit}` }), dir: null });
     if (tk.avgPrice !== null) lines.push({ label: t('signer.take.price'), value: t('signer.take.priceValue', { price: formatKas(tk.avgPrice), unit }), dir: null });
   }
@@ -743,7 +743,7 @@ function durationWords(ms: number): string {
  */
 export function sessionSummary(terms: Pick<SessionTermsView, 'covenantId' | 'links' | 'utxos' | 'outputs' | 'amount' | 'feeMax' | 'plannedFee' | 'ttlMs'>, hints: TokenHint[], decoded: SigningSummary): SignerSummary {
   const hint = hints.find((h) => h.covenantId === terms.covenantId);
-  const unit = hint && hint.source !== 'assumed' && hint.ticker ? ` ${hint.ticker}` : '';
+  const unit = hint && hint.source !== 'assumed' && hint.ticker ? ` ${tickerUnit(hint.ticker, hint.covenantId)}` : '';
   // Nothing this frame can check states the decimals. No pinned table lists the token, and no
   // declaration or convention was hinted. So the amount is in base units and says so, never as a
   // bare integer.
@@ -755,7 +755,7 @@ export function sessionSummary(terms: Pick<SessionTermsView, 'covenantId' | 'lin
     { label: t('signer.session.txs'), value: t('signer.session.txsValue', { count: terms.links.length }), dir: null },
     { label: t('signer.session.valid'), value: t('signer.session.validValue', { time: durationWords(terms.ttlMs) }), dir: null },
   ];
-  const title = hint && hint.source !== 'assumed' && hint.ticker ? t('signer.session.title', { ticker: hint.ticker }) : t('signer.session.titleToken');
+  const title = hint && hint.source !== 'assumed' && hint.ticker ? t('signer.session.title', { ticker: tickerUnit(hint.ticker, hint.covenantId) }) : t('signer.session.titleToken');
   return {
     title, lines, orders: [],
     fee: t('signer.session.feeValue', { max: formatKas(terms.feeMax), planned: formatKas(terms.plannedFee) }),

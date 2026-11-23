@@ -228,6 +228,8 @@ describe('token labels and order types', () => {
     expect(codes(summary.warnings)).toContain('token-unlisted');
     // nothing states its decimals (a token movement with no order): the raw amount, said so
     expect(tokenAmountText({ ...ref, decimals: null, ticker: null }, 500_000_000n, (k, p) => t(k, p))).toBe('500,000,000 70707070…70707070 (raw amount)');
+    // a ticker that reads as KAS is never a bare unit
+    expect(tokenAmountText({ ...ref, decimals: 0, ticker: 'KAS' }, 5n)).toBe('5 KAS (70707070…70707070)');
   });
 
   it('classifies order types from the state, not from anything the form claimed', () => {

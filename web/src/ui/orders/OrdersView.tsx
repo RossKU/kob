@@ -19,7 +19,7 @@ import { t, tIssue } from '../../i18n';
 import { failureText } from '../notify/failure-toast';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
 import type { Position } from '../../kob/positions';
-import { longId } from '../../kob/registry';
+import { longId, tickerUnit } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import {
   Banner, Button, EmptyState, ErrorBanner, HelpTip, Modal, RawDetails, Section, Segmented, Tabs, columnFraction, formatRowTimeUnix, rowTimeTitleUnix, showToast, sortBy, sortKeyOf, toError, useAsync, useSortState,
@@ -388,7 +388,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const withReturns = (step: FlowStep, row: OrderRowModel): FlowStep => {
     if (!row.bought || !step.plan.ok) return step;
     const amount = step.plan.quoteReturned !== undefined && row.pair && row.bought.token === row.pair.quote ? step.plan.quoteReturned : step.plan.tokensReturned;
-    return { ...step, toast: t('orders.flow.returnsSubmitted', { kas: formatUnits(step.plan.kasReleased, 8), amount: amountOf(row.bought.token, amount), ticker: shownToken(row.bought.token)?.ticker ?? '' }) };
+    return { ...step, toast: t('orders.flow.returnsSubmitted', { kas: formatUnits(step.plan.kasReleased, 8), amount: amountOf(row.bought.token, amount), ticker: tickerUnit(shownToken(row.bought.token)?.ticker ?? '', row.bought.token) }) };
   };
 
   const cancelOne = (row: OrderRowModel) =>
@@ -481,7 +481,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       // For holdings with a borrow setting the Merge all dialog also offers to convert them to
       // plain.
       const canConvert = !convert && convertibleCounts(free!.freeTokens, services.registry.byCovenantId, pubkey, reserved, unlisted).has(token);
-      const ticker = tokenOf(token)?.ticker ?? tickerOrId(shownToken(token)?.ticker ?? '', token);
+      const ticker = tickerUnit(tokenOf(token)?.ticker ?? tickerOrId(shownToken(token)?.ticker ?? '', token), token);
       const plan = await planMergeFor(services, pubkey, mt, reserved, convert ? { convert } : {});
       if (!plan.ok) return setPlanFail({ plans: [mergeFailure(plan)], failed: [] });
       setMergeAsk({ id: token, token: mt, ticker, plan, summary: mergeSummary(plan, ticker, mergeApprovedOnce(wallet.adapter, mt, convert)), ...(convert ? { convert } : {}), ...(canConvert ? { canConvert } : {}) });
@@ -508,7 +508,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     void guarded(`unlock-${token}`, async () => {
       const h = balances.free.data?.locked?.find((x) => x.token === token);
       if (!pubkey || !h) return;
-      const ticker = tickerOrId(shownToken(token)?.ticker ?? '', token);
+      const ticker = tickerUnit(tickerOrId(shownToken(token)?.ticker ?? '', token), token);
       const run = await planUnlock(services, pubkey, h, ticker);
       startFlow(t('orders.unlock.heading', { ticker }), run.steps, run.next ? { next: run.next } : {});
     });
@@ -521,7 +521,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     void guarded(`release-${token}`, async () => {
       const h = balances.free.data?.locked?.find((x) => x.token === token && x.kind === 'auto');
       if (!pubkey || !h) return;
-      const ticker = tickerOrId(shownToken(token)?.ticker ?? '', token);
+      const ticker = tickerUnit(tickerOrId(shownToken(token)?.ticker ?? '', token), token);
       const run = await planRelease(services, pubkey, h, ticker);
       startFlow(t('orders.release.heading', { ticker }), run.steps);
     });
@@ -539,7 +539,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       const failed = out.failed.map((f) => ({ id: f.id, message: describeActionError(f.error) }));
       if (bad.length || failed.length) setPlanFail({ plans: bad, failed });
       if (!good.length) return;
-      const ticker = shownToken(token)?.ticker ?? '';
+      const ticker = tickerUnit(shownToken(token)?.ticker ?? '', token);
       startFlow(
         t('orders.flow.claimHeading', { ticker }),
         good.map((p, i) => ({
@@ -1006,7 +1006,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
           ctx={claim.ctx}
           onClose={() => setClaim(null)}
           onPlanned={(plan, toast) => {
-            const ticker = shownToken(claim.ctx.token?.covenantId ?? claim.row.bought?.token ?? null)?.ticker ?? '';
+            const id = claim.ctx.token?.covenantId ?? claim.row.bought?.token ?? null;
+            const ticker = tickerUnit(shownToken(id)?.ticker ?? '', id ?? '');
             setClaim(null);
             startFlow(t('orders.flow.claimHeading', { ticker }), [{ ...stepOf(t('orders.flow.claimTitle'), plan), toast }]);
           }}
