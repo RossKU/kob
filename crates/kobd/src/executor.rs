@@ -675,7 +675,7 @@ fn check_writable_by_others(
 }
 
 /// The paths [`check_writable_by_others`] checks.
-fn executor_paths(
+pub(crate) fn executor_paths(
     config: Option<&std::path::Path>,
     data_dir: &std::path::Path,
     key_file: Option<&std::path::Path>,
