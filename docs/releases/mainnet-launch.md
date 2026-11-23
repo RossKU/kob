@@ -168,7 +168,7 @@ How to apply:
 ## 6. Rollback
 
 1. Cloudflare dashboard > *Workers & Pages* > `kob-web` > *Deployments*. Pick the last testnet-10 production deployment, then *...* > *Rollback to this deployment*.
-   It serves at once on both hosts. From a PC, `npx wrangler pages deployment list --project-name kob-web` lists the deployments.
+   It serves at once on both hosts. From a PC, `scripts/deploy/node_modules/.bin/wrangler pages deployment list --project-name kob-web` (the pinned wrangler, `docs/ops/web-hosting.md` section 6, step 3) lists the deployments.
 2. Restore the variables, so the next push to `master` does not deploy mainnet again:
    ```
    gh variable set    KOB_PAGES_NETWORK        -R RossKU/kob --body testnet-10
