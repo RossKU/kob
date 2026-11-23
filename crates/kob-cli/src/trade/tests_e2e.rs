@@ -714,6 +714,27 @@ fn send_kas_and_tokens() {
     let _ = Path::new(".");
 }
 
+/// R4D-3: the base-units exemption from `--decimals` is the literal `base` unit after digits, never a ticker that ends in
+/// "base": `5XBASE` reads with the indexer's decimals, so it needs them confirmed.
+#[test]
+fn a_send_whose_ticker_ends_in_base_still_needs_decimals() {
+    let w = world_x("send-xbase", &[], |_, routes| {
+        routes.insert(
+            "/v1/tokens".into(),
+            json!({"tokens": [{"ticker": "XBASE", "covenant_id": to_hex(&TOKEN), "template_hash": to_hex(&token_template(P).hash),
+                               "extension_commitment": to_hex(&EXT), "decimals": 3, "open_asks": 0, "open_bids": 0}]}),
+        );
+    });
+    let send = crate::trade::actions::run_send;
+    let to = to_hex(&pk(0x22));
+    assert_eq!(run(send, w.args(0x11, &format!("XBASE {to} 5XBASE --yes"))), 1, "a whole-token amount, decimals unconfirmed");
+    assert_eq!(run(send, w.args(0x11, &format!("XBASE {to} 5xbase --yes"))), 1);
+    assert_eq!(w.submitted(), 0, "nothing signed");
+    assert_eq!(run(send, w.args(0x11, &format!("XBASE {to} 5XBASE --decimals 3 --yes"))), 0);
+    assert_eq!(run(send, w.args(0x11, &format!("XBASE {to} 1000base --yes"))), 0, "base units read without decimals");
+    assert_eq!(w.submitted(), 2);
+}
+
 /// `kob send` of a token needs no `--indexer` when the record of this machine names the token.
 ///
 /// The record holds the facts that `kob token create` kept, which are the decimals and the
