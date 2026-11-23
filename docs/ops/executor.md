@@ -987,7 +987,7 @@ kaspad --utxoindex --retention-period-days=7 --disable-upnp \
 * `--unsaferpc` is **not** needed and must not be set: VSPC v2, `getUtxosByAddresses`,
   `getBlock` and `getBlockDagInfo` all work in safe mode [F]. CI should grep the unit file.
 * wRPC JSON is plain `ws://`; keep it on loopback or a private network and never expose it.
-  Firewall everything except P2P 16111.
+  Firewall everything except P2P (16111 on mainnet, 16211 on testnet-10).
 * The node DB upgrade is one-way and a missed fork splits the node: upgrade TN10 first, then the
   standby, then the primary. `getServerInfo.serverVersion` is exposed in `/v1/health`
   (`node_version`); alert when it trails the newest release.
@@ -2530,14 +2530,14 @@ runs and is down only for the swap:
 
 **What is not done, and why.** Folding `token_utxos` into `token_holdings` (they overlap for the custody UTXOs whose state was proven; there is no constraint that makes that
 true for every row, and a strayed or unproven UTXO is only in `token_utxos`), deriving the `create` events from the orders (1.09 million events, about 0.17 GB net or 4 % of the file; the create item of an order would need an id of its own
-in the event pages, which are cursored by event id, and the revert and lean paths read the rows) and a zstd record log (on a 64 MiB sample of a segment gzip level 6 gives 2.9x and zstd level 3 gives 3.7x: about 0.2 GB of the 0.9 GB of sealed segments; it needs a C dependency, and an older build could not read the segments) are left out. What remains large (schema 9): the holdings (881 MB: the table 483, the `(txid, idx)` key 179, the five other indexes 219), the order UTXOs (605, of which the key 110) and
+in the event pages, which are cursored by event id, and the revert and lean paths read the rows) are left out (the record log's sealed segments have been zstd since 2026-11-19, below). What remains large (schema 9): the holdings (881 MB: the table 483, the `(txid, idx)` key 179, the five other indexes 219), the order UTXOs (605, of which the key 110) and
 the order events (602). `ids` keeps a row per owner and token ever seen (65 bytes each); the lean pruning does not delete them.
 
 The tools in `tools/soak` that read a database file directly (`chart-history.mjs`; `import-history.mjs` and `carry-history`, which copy the rows
-of older stores into a stopped executor's) use the candles and the fills' prices, which are unchanged. They write a store of schema 9 (the executor must have migrated it first) and read a
+of older stores into a stopped executor's) use the candles and the fills' prices, which are unchanged. They write a store of schema 14 (the executor must have migrated it first) and read a
 source store of any layout. The two importers copy
 `orders.genesis_state` and `order_events.detail` as they are: from a source of schema 6 or older (whole values) that is a valid row; a source
-written by schema 7, 8 or 9 has packed values that name dictionary columns (maker, token) the destination row may not have, so it must not be
+written by schema 7 or later has packed values that name dictionary columns (maker, token) the destination row may not have, so it must not be
 imported that way.
 
 #### 7.6b Giving the pruned space back: `kobd db vacuum`
@@ -2643,7 +2643,7 @@ To keep a public read server up during a rebuild, build the new store beside the
 (`docs/ops/chart-server.md`, section 6).
 
 **Backups on Windows.** `sqlite3` is not part of Windows: use SQLite's command-line tools from sqlite.org for `VACUUM INTO`, or
-back up the record log only (it is the asset; `robocopy <kob-data>ecords <backup>ecords /E`) and rebuild the database from it.
+back up the record log only (it is the asset; `robocopy <kob-data>\records <backup>\records /E`) and rebuild the database from it.
 A plain copy of `index.sqlite3` is consistent only while the indexer is stopped.
 
 Or move the database aside and rebuild it from the whole log with a plain `replay` (7.6). `replay --onto-database`
