@@ -66,7 +66,13 @@ On testnet-10 it is a warning.
   balance, read from the node, bounds what the bot can place), but its record stays in `state.json` with every amount
   hint it has: each cycle a few proven asks (5, in rotation, the ones the indexer lists first) are looked up on the
   node, in every mode, and one found live is cancelled through the node, with an error alert (`proven-live`), and
-  counts again until the node shows it ended. Until its expiry its price still counts in the self-trade check. A proven
+  counts again until the node shows it ended. When a STOP or an IDLE pull begins (once per STOP, once each time
+  quoting stops), every proven ask gets one more lookup, 20 a cycle (one `kob recover --cancel` call of at most 4,000
+  candidate scripts), with every hint and the indexer's per-order view when it answers; a STOP ends only after that
+  pass (at most 10 cycles for 200 records; a record the node does not answer for is tried in 3 calls, then reported),
+  and the stop line says how many were looked up, found live and cancelled, and not found, the last listed in
+  `<dataDir>/proven-not-found.json` (the shape `kob recover --from` reads). A proven ask is cancelled through the node
+  only, never through the indexer's view (`kob cancel <id>`). Until its expiry its price still counts in the self-trade check. A proven
   ask ends when the node shows it ended after that cancel, 2 h after its expiry (past its expiry no conforming
   matcher fills an ask, and keepers refund it), or by `mm-bot drop`. At most 200 are kept. A record lives at most
   `lifeMin` + 2 h (a proof comes after the placement or amend, the expiry at most `lifeMin` after it): 3.5 h at the

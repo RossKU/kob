@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { Bot, PROVEN_KEEP_AFTER_EXPIRY_MS, PROVEN_LOOKUPS, PROVEN_MAX } from '../src/bot.mjs';
+import { Bot, PROVEN_KEEP_AFTER_EXPIRY_MS, PROVEN_LOOKUPS, PROVEN_MAX, PROVEN_PASS_BATCH } from '../src/bot.mjs';
 import { DEFAULTS } from '../src/config.mjs';
 import { cutMiddle, Kob } from '../src/kob.mjs';
 import { paths } from '../src/store.mjs';
@@ -1365,6 +1365,79 @@ test('a state file of the previous format loads and nothing in it is dropped (R5
     await again.cycle();
     assert.ok(again.state.orders[id]?.proven);
   } finally {
+    reset();
+  }
+});
+
+// R5T-1 follow-up: when a STOP (or an IDLE pull) begins, every proven ask gets one node lookup
+// before the pull counts as finished, PROVEN_PASS_BATCH a cycle.
+async function stopUntilDone(bot, max) {
+  writeFileSync(bot.p.stop, 'stop\n');
+  for (let i = 1; i <= max; i++) {
+    const r = await bot.cycle();
+    if (r === 'stopped') return i;
+    for (const s of Object.values(bot.state.orders)) if (s.pending) s.pending.since -= 200_000;
+  }
+  return null;
+}
+
+test('a STOP looks up every proven ask: one live on the node is cancelled before the stop is reported done (R5T-1)', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain, dir } = setup();
+  const file = process.env.FAKE_KOB_CHAIN;
+  try {
+    bot.nodeOutputs = async () => [];
+    const { id, o, txid, proceeds } = await filledAsk(bot, chain);
+    bot.nodeOutputs = async () => [{ txid, index: 1, amount: proceeds }];
+    await bot.cycle();
+    assert.ok(bot.state.orders[id].proven);
+    // Ten other proven records the rotation reaches first, so that only the pass reaches this one.
+    cloneProven(bot, id, 10);
+    bot.state.orders[id].proven.lookedAt = Date.now();
+    // The ask is live on the node after all (the indexer named a fill wrongly) and stays hidden.
+    const c = chain();
+    c.orders[id] = o;
+    delete c.ended[id];
+    writeFileSync(file, JSON.stringify(c));
+    writeFileSync(bot.p.stop, 'stop\n');
+    assert.notEqual(await bot.cycle(), 'stopped', 'the first STOP cycle does not end it');
+    assert.equal(chain().ended[id], 'cancelled', 'the pass found it and cancelled it through the node');
+    assert.ok(alertsOf(dir).some((x) => x.reason === 'proven-live'));
+    const n = await stopUntilDone(bot, 6);
+    assert.ok(n != null, 'the stop ends');
+    assert.equal(bot.state.orders[id], undefined, 'it ended on the node\'s word before the stop was done');
+    const log = readFileSync(paths(dir).log, 'utf8');
+    assert.match(log, /stopped: no quote left.*proven asks: 11 of 11 looked up on the node, 1 found live and cancelled, 10 not found \(listed in .*proven-not-found\.json\)/);
+    assert.equal(JSON.parse(readFileSync(paths(dir).provenNotFound, 'utf8')).items.length, 10);
+    // Never through the indexer's view.
+    const cancels = readFileSync(process.env.FAKE_KOB_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((a) => a[0] === 'cancel' && a[1] === id);
+    assert.deepEqual(cancels, []);
+  } finally {
+    rmSync(bot.p.stop, { force: true });
+    reset();
+  }
+});
+
+test('a STOP with 60 proven asks that are gone ends within the bounded number of cycles (R5T-1)', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain, dir } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    const { id, txid, proceeds } = await filledAsk(bot, chain);
+    bot.nodeOutputs = async () => [{ txid, index: 1, amount: proceeds }];
+    await bot.cycle();
+    cloneProven(bot, id, 59);
+    const looked = [];
+    const many = bot.cancelMany.bind(bot);
+    bot.cancelMany = async (ids) => { looked.push(ids.filter((k) => bot.state.orders[k]?.proven).length); return many(ids); };
+    const n = await stopUntilDone(bot, Math.ceil(60 / PROVEN_PASS_BATCH) + 2);
+    assert.ok(n != null && n >= Math.ceil(60 / PROVEN_PASS_BATCH), `stopped after ${n} cycles`);
+    assert.ok(Math.max(...looked) <= PROVEN_PASS_BATCH, 'at most one batch a call');
+    assert.equal(Object.keys(bot.state.orders).filter((k) => bot.state.orders[k].proven).length, 60, 'none forgotten');
+    assert.match(readFileSync(paths(dir).log, 'utf8'), /proven asks: 60 of 60 looked up on the node, 0 found live and cancelled, 60 not found/);
+    assert.equal(JSON.parse(readFileSync(paths(dir).provenNotFound, 'utf8')).items.length, 60);
+  } finally {
+    rmSync(bot.p.stop, { force: true });
     reset();
   }
 });

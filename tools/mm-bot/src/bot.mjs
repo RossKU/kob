@@ -39,11 +39,18 @@ export const PROVEN_MAX = 200; // proven records kept; past it a proof frees not
 // Lookups of proven records a cycle, in rotation: each costs up to 200 candidate scripts in the
 // cycle's one getUtxosByAddresses (kob recover), so 5 add at most 1,000 scripts to that call.
 export const PROVEN_LOOKUPS = 5;
+// When a STOP or an IDLE pull begins, every proven ask gets one lookup, this many a cycle: one kob
+// recover --cancel call of up to 4,000 candidate scripts, 80 getUtxosByAddresses requests of 50
+// on one connection, well inside cli.timeoutSec (180 s). PROVEN_MAX takes 10 cycles.
+export const PROVEN_PASS_BATCH = 20;
+const PROVEN_PASS_TRIES = 3; // calls a record is tried in when the node does not answer, then reported not looked up
 // A proven record ends this long after its expiry: past it no conforming matcher fills the ask and
 // keepers refund it. A record lives at most lifeMin + 2 h (3.5 h at the default 90 min), so
 // PROVEN_MAX is reached only above about 57 full fills an hour, sustained.
 export const PROVEN_KEEP_AFTER_EXPIRY_MS = 2 * 3_600_000;
 const isAsk = (s) => (s.own?.state?.kind ? /Ask/.test(s.own.state.kind) : s.side === 'sell');
+/** What a pass over the proven asks did (R5T-1), for the stop line and the log. */
+const passText = (p, file) => `proven asks: ${p.looked} of ${p.total} looked up on the node, ${p.cancelled} found live and cancelled${p.found > p.cancelled ? `, ${p.found - p.cancelled} found live and not yet cancelled` : ''}, ${p.notFound.length} not found${p.unasked.length ? `, ${p.unasked.length} not looked up (the node did not answer)` : ''}${p.notFound.length + p.unasked.length ? ` (listed in ${file})` : ''}`;
 /** A URL without its user, password or query (they may carry credentials, T-11). */
 const shownUrl = (u) => String(u).replace(/\/\/[^@/]*@/, '//').replace(/\?.*$/, '');
 
@@ -100,6 +107,8 @@ export class Bot {
     this.state = loadState(cfg.dataDir);
     // A stop is final for the run that was stopped, not for the next start.
     if (this.state.mode.mode === STOPPING) this.state.mode = initialMode(Date.now());
+    // A pass of an earlier run that did not end goes on; the next STOP or IDLE pull starts its own.
+    this.state.provenPassFor = null;
     // `once` skips the start-up cool-down.
     if (once && this.state.mode.reason === 'cooldown') this.state.mode = { ...this.state.mode, steadySince: Date.now() - cfg.safety.resumeAfterSec * 1000 };
     this.refMemory = {};
@@ -206,11 +215,13 @@ export class Bot {
     }
     const { changed: _c, pull: _p, ...rec } = mode;
     this.state.mode = rec;
+    this.provenPassBegin(mode, now);
+    if (this.state.provenPass) await this.provenPassStep(now, { indexer: true });
 
     let sides = { bids: { quoting: false, reason: 'idle' }, asks: { quoting: false, reason: 'idle' } };
     let plan = null;
     if (mode.pull) {
-      // A proven ask is cancelled by its lookup in reconcile, in every mode, once the node finds it.
+      // A proven ask is looked up by the pass of this pull (provenPassStep) and by the rotation.
       const toCancel = orders.filter((o) => o.pendingKind !== 'cancel' && o.pendingKind !== 'proven');
       if (toCancel.length) {
         this.log.info(`pull ${toCancel.length} quote(s): ${mode.mode}${mode.reason ? `/${mode.reason}` : ''}`);
@@ -239,11 +250,15 @@ export class Bot {
       const parked = Object.values(this.state.orders).filter((s) => s.parked && !s.proven).length;
       const proven = Object.values(this.state.orders).filter((s) => s.proven && !s.proven.liveAt).length;
       const left = Object.values(this.state.orders).filter((s) => (s.proven ? s.proven.liveAt : !s.parked)).length;
-      if (left === 0 || this.dryRun) {
-        this.log.info(`stopped: no quote left${parked ? `; ${parked} unresolved ask(s) past their expiry kept in the state file for the operator` : ''}${proven ? `; ${proven} paid ask(s) kept as proven: the next run keeps looking for them` : ''}`);
+      // STOP ends only once its pass has looked up every proven ask (R5T-1).
+      const pass = this.state.provenPass;
+      if ((left === 0 && !pass) || this.dryRun) {
+        const last = this.state.provenPassLast?.why === 'stop' ? this.state.provenPassLast : null;
+        this.log.info(`stopped: no quote left${parked ? `; ${parked} unresolved ask(s) past their expiry kept in the state file for the operator` : ''}${last ? `; ${passText(last, this.p.provenNotFound)}` : ''}${proven ? `; ${proven} paid ask(s) kept as proven: the next run keeps looking for them` : ''}`);
         return 'stopped';
       }
-      this.log.info(`stopping: ${left} order(s) not yet shown ended on the node; waiting for the cancels (a cancel not seen in ${c.safety.orderVisibleTimeoutSec} s is sent again)`);
+      if (pass) this.log.info(`stopping: proven asks: ${pass.looked} of ${pass.total} looked up on the node, ${pass.left.length} to go (${PROVEN_PASS_BATCH} a cycle)`);
+      if (left) this.log.info(`stopping: ${left} order(s) not yet shown ended on the node; waiting for the cancels (a cancel not seen in ${c.safety.orderVisibleTimeoutSec} s is sent again)`);
     }
     return true;
   }
@@ -277,11 +292,15 @@ export class Bot {
     // quote was set at, it would cross fair, so it is pulled too (T-5).
     const drift = snap.ok ? Math.max(0, ...Object.values(this.state.orders).filter((s) => s.quotedFair > 0 && !s.proven).map((s) => Math.abs(snap.fair / s.quotedFair - 1))) : 0;
     const drifted = drift > c.quotes.spreadPct / 200;
+    // The pass of a STOP or IDLE pull needs no indexer either.
+    this.provenPassBegin(mode, now);
+    const passing = !!this.state.provenPass;
+    if (passing) await this.provenPassStep(now, { indexer: false });
     if (!mode.pull && !drifted) return;
     const why = mode.pull ? mode.reason ?? mode.mode : `drift: fair moved ${(drift * 100).toFixed(2)}% from a quote's`;
     const timeout = c.safety.orderVisibleTimeoutSec * 1000;
-    // Proven asks (R5T-1): only this cycle's share of the rotation.
-    const look = new Set(this.provenSlice(now));
+    // Proven asks (R5T-1): the pass's batch above, else this cycle's share of the rotation.
+    const look = new Set(passing ? [] : this.provenSlice(now));
     const due = Object.keys(this.state.orders).filter((id) => {
       const s = this.state.orders[id];
       if (s.proven && !s.proven.liveAt && !look.has(id)) return false;
@@ -448,6 +467,92 @@ export class Bot {
     return [...new Set(all.filter((n) => Number.isSafeInteger(n) && n > 0))].slice(0, HINTS_MAX);
   }
 
+  /** One cancel through the node from the bot's record only (kob recover --cancel). */
+  async cancelNode(id) {
+    const r = (await this.cancelMany([id])).get(id);
+    return r.ok ? r : { ok: false, error: r.error };
+  }
+
+  /**
+   * Starts the pass over every proven ask when a STOP or an IDLE pull begins (R5T-1): one STOP pass
+   * a run, one IDLE pass each time quoting stops; back to QUOTING clears it.
+   */
+  provenPassBegin(mode, now) {
+    if (!mode.pull) {
+      this.state.provenPassFor = null;
+      return;
+    }
+    const stop = mode.mode === STOPPING;
+    if (stop ? this.state.provenPassFor === 'stop' : mode.reason === 'cooldown' || this.state.provenPassFor != null) return;
+    const why = stop ? 'stop' : `idle/${mode.reason}`;
+    this.state.provenPassFor = why;
+    const ids = Object.entries(this.state.orders).filter(([, s]) => s.proven && !s.proven.liveAt).map(([id]) => id);
+    if (!ids.length) {
+      this.state.provenPass = null;
+      this.state.provenPassLast = { why, at: now, total: 0, looked: 0, cancelled: 0, found: 0, notFound: [], unasked: [] };
+      return;
+    }
+    this.state.provenPass = { why, at: now, total: ids.length, left: ids, looked: 0, cancelled: 0, found: 0, notFound: [], unasked: [], tries: {} };
+    this.log.info(`${stop ? 'STOP' : `IDLE/${mode.reason}`}: every proven ask (${ids.length}) is looked up on the node once, ${PROVEN_PASS_BATCH} a cycle, and cancelled if found`);
+  }
+
+  /**
+   * One batch of the pass: kob recover --cancel from the records, with every hint (the indexer's
+   * per-order view refreshes its amount when it answers). Never kob cancel through the indexer.
+   */
+  async provenPassStep(now, { indexer }) {
+    const pass = this.state.provenPass;
+    const batch = [];
+    while (batch.length < PROVEN_PASS_BATCH && pass.left.length) {
+      const id = pass.left.shift();
+      const s = this.state.orders[id];
+      if (s?.proven && !s.proven.liveAt) batch.push(id);
+      else if (s) { pass.looked++; pass.found++; } // found live by the rotation since
+    }
+    if (batch.length) {
+      if (indexer) {
+        for (const id of batch) {
+          const v = await this.idx.order(id).catch(() => null);
+          if (v?.amountLeft > 0) this.state.orders[id].idxAmount = v.amountLeft;
+        }
+      }
+      const res = this.maker ? await this.cancelMany(batch) : new Map();
+      for (const id of batch) {
+        const s = this.state.orders[id];
+        const r = res.get(id);
+        s.proven.lookedAt = now;
+        if (r?.ok || r?.live === true) {
+          pass.looked++;
+          pass.found++;
+          s.proven.liveAt = now;
+          if (r.ok) pass.cancelled++;
+          this.alert('error', 'proven-live', `Order ${short(id)} (${s.side} L${s.level}) was taken as paid in full, but the node holds it live: ${r.ok ? `cancelled through the node (tx ${r.txid ?? '-'})` : `its cancel failed (${r.error}); it is tried again`}; the fills the indexer reported for it were wrong, so check the indexer.`);
+          if (r.ok && !this.dryRun) {
+            this.ownTx(r.txid);
+            if (r.fee) addFee(this.state, 'cancel', r.fee);
+            Object.assign(s, { pending: { kind: 'cancel', since: now, txid: r.txid ?? null }, cancelSentAt: now });
+          }
+        } else if (r?.live === false) {
+          pass.looked++;
+          pass.notFound.push(id);
+        } else {
+          // The node did not answer: tried again, then reported as not looked up.
+          pass.tries[id] = (pass.tries[id] ?? 0) + 1;
+          if (pass.tries[id] < PROVEN_PASS_TRIES) pass.left.push(id);
+          else pass.unasked.push(id);
+        }
+      }
+    }
+    if (pass.left.length) return;
+    const { tries: _t, left: _l, ...last } = pass;
+    this.state.provenPass = null;
+    this.state.provenPassLast = { ...last, done: now };
+    const open = [...last.notFound, ...last.unasked].filter((id) => this.state.orders[id]);
+    if (open.length) this.writeRecords(open, undefined, this.p.provenNotFound);
+    this.log.info(`${last.why === 'stop' ? 'STOP' : last.why.toUpperCase()}: ${passText(last, this.p.provenNotFound)}`);
+    this.log.action({ type: 'proven-pass', ...last, file: open.length ? this.p.provenNotFound : null });
+  }
+
   /**
    * The proven asks to look up this cycle (R5T-1): at most PROVEN_LOOKUPS, the ones the indexer
    * lists first (at most 2 of them), then the ones looked up least recently. Marks them looked up.
@@ -482,6 +587,8 @@ export class Bot {
    * filled by an amount the record cannot follow.
    */
   async cancelOrder(id) {
+    // A proven ask is cancelled through the node only, never from the indexer's view (R5T-1).
+    if (this.state.orders[id]?.proven) return this.cancelNode(id);
     const r = (await this.cancelMany([id])).get(id);
     if (r.ok || r.live) return r.ok ? r : { ok: false, error: r.error };
     return this.kob.cancel(id);

@@ -11,6 +11,7 @@ export const paths = (dataDir) => ({
   check: join(dataDir, 'own-orders.json'), // the bot's own order records, as kob recover reads them
   unresolved: join(dataDir, 'unresolved-orders.json'), // the records mm-bot unresolved lists (R5T-I3)
   dropped: join(dataDir, 'dropped-orders.json'), // every order mm-bot drop dropped, as kob recover reads them (R5T-3)
+  provenNotFound: join(dataDir, 'proven-not-found.json'), // proven asks the last STOP or IDLE pass did not find (R5T-1)
   stop: join(dataDir, 'STOP'),
   pid: join(dataDir, 'mm-bot.pid'),
   log: join(dataDir, 'logs', 'mm-bot.log'),
