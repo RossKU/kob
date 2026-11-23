@@ -3037,3 +3037,144 @@ async fn a_vote_costs_the_heavy_route_weight_and_the_client_hour_bounds_votes() 
     // another client votes
     assert_eq!(vote_post(&app, &vote_json(&signed_vote(2, 1, Up)), "10.0.0.8", &[]).await.0, StatusCode::OK);
 }
+
+/// Holds every connection of the heavy lane with reads outside any client's scope, for `ms`.
+fn hold_heavy_lane(pool: &ReadPool, conns: usize, ms: u64) -> Vec<tokio::task::JoinHandle<()>> {
+    (0..conns)
+        .map(|_| {
+            let pool = pool.clone();
+            tokio::spawn(async move {
+                let _ = pool
+                    .with(move |_| {
+                        std::thread::sleep(std::time::Duration::from_millis(ms));
+                        Ok(())
+                    })
+                    .await;
+            })
+        })
+        .collect()
+}
+
+/// R4C2-1: requests that wait for a lane hold every request permit of the server. `/v1/health` (and `/ready`,
+/// `/metrics`) still answer, because they take no permit; another read is refused with `503 overloaded`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn health_answers_while_every_request_permit_is_taken() {
+    let e = env(|c| {
+        c.max_concurrent_requests = 2;
+        c.metrics = true;
+    });
+    let app = router(e.state.clone());
+    let held = hold_heavy_lane(&e.state.pool, 2, 2_000);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // two clients' reads wait for the lane and hold both permits
+    let waiting: Vec<_> = ["198.51.100.1", "198.51.100.2"]
+        .into_iter()
+        .map(|ip| {
+            let app = app.clone();
+            tokio::spawn(async move { get_from(&app, "/v1/strays", ip, &[]).await.0 })
+        })
+        .collect();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let (s, _, v) = get_from(&app, "/v1/strays", "198.51.100.3", &[]).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("overloaded")));
+    for uri in ["/v1/health", "/v1/health/ready", "/v1/metrics"] {
+        let t0 = std::time::Instant::now();
+        let (s, _, _) = get_from(&app, uri, "198.51.100.4", &[]).await;
+        assert_eq!(s, StatusCode::OK, "{uri}");
+        assert!(t0.elapsed() < std::time::Duration::from_millis(500), "{uri}: {:?}", t0.elapsed());
+    }
+    for w in waiting {
+        assert_eq!(w.await.unwrap(), StatusCode::OK);
+    }
+    for h in held {
+        h.await.unwrap();
+    }
+}
+
+/// R4C2-1: a read that waits for its own client's lane permit, held by that client's other reads, waits at most
+/// `CLIENT_WAIT` and is refused with `503 overloaded`, to that client only, instead of holding a request permit of the
+/// server until the request times out. Another client is served.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_read_waiting_for_its_own_clients_permit_gives_up_after_the_client_wait() {
+    let e = env(|c| {
+        c.rate_limit.per_ip_rps = 1_000.0;
+        c.rate_limit.per_ip_burst = 1_000;
+    });
+    let (app, state) = build(e.state.clone(), None);
+    let lanes = client_lanes(&state, "198.51.100.7".parse().unwrap());
+    let mine: Vec<_> = (0..crate::indexer::db::CLIENT_HEAVY_READS).map(|_| lanes.heavy.clone().try_acquire_owned().unwrap()).collect();
+    let t0 = std::time::Instant::now();
+    let (s, h, v) = get_from(&app, "/v1/strays", "198.51.100.7", &[]).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("overloaded")));
+    assert_eq!(h.get("retry-after").unwrap(), "1");
+    let waited = t0.elapsed();
+    assert!(waited >= crate::indexer::db::CLIENT_WAIT && waited < crate::indexer::db::CLIENT_WAIT * 3, "{waited:?}");
+    assert_eq!(get_from(&app, "/v1/strays", "198.51.100.8", &[]).await.0, StatusCode::OK, "another client is served");
+    drop(mine);
+    assert_eq!(get_from(&app, "/v1/strays", "198.51.100.7", &[]).await.0, StatusCode::OK);
+}
+
+/// R4C2-3: a client whose own heavy reads hold its permits asks for a hot key first. The computation that everyone of that
+/// key shares does not wait for that client's queue: another client asking for the same URL right after is answered at
+/// once, and the first one is refused after `CLIENT_WAIT`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_busy_client_does_not_hold_up_a_shared_book_key() {
+    let e = env(|c| {
+        c.rate_limit.per_ip_rps = 1_000.0;
+        c.rate_limit.per_ip_burst = 1_000;
+    });
+    seed_all(&e.w);
+    let (app, state) = build(e.state.clone(), None);
+    let busy = client_lanes(&state, "198.51.100.9".parse().unwrap());
+    let held: Vec<_> = (0..crate::indexer::db::CLIENT_HEAVY_READS).map(|_| busy.heavy.clone().try_acquire_owned().unwrap()).collect();
+    let uri = format!("/v1/books/{}?depth=20&aggregate=true", h(TOKEN));
+    let first = {
+        let (app, uri) = (app.clone(), uri.clone());
+        tokio::spawn(async move { get_from(&app, &uri, "198.51.100.9", &[]).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    let t0 = std::time::Instant::now();
+    let (s, _, v) = get_from(&app, &uri, "198.51.100.10", &[]).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(t0.elapsed() < std::time::Duration::from_millis(400), "{:?}", t0.elapsed());
+    assert!(!v["asks"].as_array().unwrap().is_empty());
+    let (s, _, v) = first.await.unwrap();
+    // The busy client either joined the computation the other started, or gave up waiting for its own permit.
+    assert!(s == StatusCode::OK || v["error"]["code"] == "overloaded", "{s} {v}");
+    drop(held);
+}
+
+/// R4C2-1: the /64s of one IPv6 /48 site share `CLIENT_SITE_IN_FLIGHT` requests in flight, so rotating through the free
+/// /64s of one allocation does not multiply what it may hold. Another site is not affected.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_64s_of_one_ipv6_site_share_its_requests_in_flight() {
+    use crate::indexer::db::CLIENT_SITE_IN_FLIGHT;
+    let e = env(|c| {
+        c.rate_limit.per_ip_rps = 1_000.0;
+        c.rate_limit.per_ip_burst = 1_000;
+        c.rate_limit.per_site_rps = 0.0;
+    });
+    let app = router(e.state.clone());
+    let held = hold_heavy_lane(&e.state.pool, 2, 1_500);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let waiting: Vec<_> = (0..CLIENT_SITE_IN_FLIGHT)
+        .map(|i| {
+            let app = app.clone();
+            tokio::spawn(async move { get_from(&app, "/v1/strays", &format!("2001:db8:7:{i:x}::1"), &[]).await.0 })
+        })
+        .collect();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let (s, _, v) = get_from(&app, "/v1/strays", "2001:db8:7:ffff::1", &[]).await;
+    assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("overloaded")), "the site is full");
+    let other = {
+        let app = app.clone();
+        tokio::spawn(async move { get_from(&app, "/v1/strays", "2001:db8:8::1", &[]).await.0 })
+    };
+    assert_eq!(other.await.unwrap(), StatusCode::OK, "another site waits for the lane and is served");
+    for w in waiting {
+        assert_eq!(w.await.unwrap(), StatusCode::OK);
+    }
+    for h in held {
+        h.await.unwrap();
+    }
+}

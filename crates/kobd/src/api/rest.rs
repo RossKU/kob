@@ -26,16 +26,37 @@ fn json_ok<T: Serialize>(v: T) -> ApiResult {
 /// The JSON body of `read` is kept for the data generation of the store under `key`. The key is
 /// made of the parameters of the request, with the DAA score of the node and the wall-clock
 /// second for the reads that depend on them. The body is the one `Json` would send.
+///
+/// Everyone who asks for the key shares one computation, so it must not wait for its starter's
+/// own queue (R4C2-3). The starter takes its heavy permit first, waiting at most
+/// `db::CLIENT_WAIT`, and only then starts the computation; a request that finds the key kept or
+/// being computed takes none and joins. The read runs in a task of its own, outside any client's
+/// scope, and holds the starter's permit, so it still counts against the starter's reads and
+/// queues in the lane like any other read. A request that goes away leaves it running.
 async fn cached<T, F>(app: &Arc<App>, key: String, read: F) -> ApiResult
 where
     T: Serialize + Send + 'static,
     F: FnOnce(&rusqlite::Connection) -> crate::indexer::db::DbResult<T> + Send + 'static,
 {
     let generation = app.state.generation.get();
+    let permit = if app.cache.contains(generation, &key) { None } else { crate::indexer::db::client_permit(false).await? };
+    let pool = app.state.pool.clone();
     let body = app
         .cache
-        .get_or_compute(generation, key, || async {
-            let v = app.state.pool.with(read).await?;
+        .get_or_compute(generation, key, move || async move {
+            // The entry was found and has gone since (a failure): this request starts it after all.
+            let permit = match permit {
+                Some(p) => Some(p),
+                None => crate::indexer::db::client_permit(false).await?,
+            };
+            let task = tokio::spawn(async move {
+                let _permit = permit;
+                pool.with(read).await
+            });
+            let v = task.await.map_err(|e| {
+                tracing::error!("api: a cached read failed: {e}");
+                ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "internal error")
+            })??;
             serde_json::to_vec(&v).map(axum::body::Bytes::from).map_err(|e| {
                 tracing::error!("api: cannot serialise a response: {e}");
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "internal error")

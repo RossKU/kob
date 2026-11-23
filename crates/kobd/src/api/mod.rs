@@ -125,11 +125,13 @@ pub struct App {
     pub(crate) ws: ws::WsRegistry,
     pub(crate) shutdown: watch::Sender<bool>,
     /// The responses of the hot reads for the current data generation ([`cache`]).
-    pub(crate) cache: cache::ResponseCache,
+    pub(crate) cache: cache::ResponseCache<ApiError>,
     /// The store counters `/v1/health` serves from memory (`rest::health_counters`).
     pub(crate) health_counters: std::sync::Mutex<rest::HealthCounters>,
     /// The lane permits and requests in flight of each client (`indexer::db::ClientLanes`).
     pub(crate) clients: std::sync::Mutex<std::collections::HashMap<IpAddr, Arc<crate::indexer::db::ClientLanes>>>,
+    /// The requests in flight of each IPv6 site (`indexer::db::CLIENT_SITE_IN_FLIGHT`).
+    pub(crate) sites: std::sync::Mutex<std::collections::HashMap<IpAddr, Arc<Semaphore>>>,
 }
 
 impl App {
@@ -147,7 +149,9 @@ impl App {
 pub struct ClientIp(pub IpAddr);
 
 /// An API error. It is sent as the JSON body `{"error":{"code":..,"message":..}}`.
-#[derive(Debug)]
+///
+/// It is `Clone` because the requests that share one cached computation all get its error.
+#[derive(Debug, Clone)]
 pub struct ApiError {
     /// HTTP status.
     pub status: StatusCode,
@@ -170,6 +174,14 @@ impl ApiError {
         Self::new(StatusCode::BAD_REQUEST, "bad_request", message)
     }
 
+    /// A 503 error with the code `overloaded` and `Retry-After: 1`: this client has too many requests or reads in
+    /// flight, or the server has.
+    pub fn overloaded() -> Self {
+        let mut e = ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "overloaded", "too many requests in flight");
+        e.retry_after = Some(1);
+        e
+    }
+
     /// A 404 error with the code `not_found`.
     pub fn not_found(message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_FOUND, "not_found", message)
@@ -178,6 +190,9 @@ impl ApiError {
 
 impl From<DbError> for ApiError {
     fn from(e: DbError) -> Self {
+        if matches!(e, DbError::Overloaded) {
+            return ApiError::overloaded();
+        }
         let busy = matches!(&e, DbError::Sqlite(rusqlite::Error::SqliteFailure(f, _))
             if matches!(f.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked));
         if busy {
@@ -225,6 +240,7 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         cache: cache::ResponseCache::default(),
         health_counters: Default::default(),
         clients: Default::default(),
+        sites: Default::default(),
         state,
     });
     // The JSON reads are compressed. The WebSocket upgrade, the Prometheus text and the logo
@@ -375,21 +391,29 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
         e.into_response()
     } else if req.method() == Method::OPTIONS && cors.is_some() {
         StatusCode::NO_CONTENT.into_response()
+    } else if matches!(path.as_str(), "/v1/health" | "/v1/health/ready" | "/v1/metrics") {
+        // These read only memory (`rest::health_counters`), so they take no permit: clients that hold every request
+        // permit cannot make the indexer look down (R4C2-1). The rate limit above still applies.
+        let limit = Duration::from_millis(app.state.cfg.request_timeout_ms.max(1));
+        match tokio::time::timeout(limit, next.run(req)).await {
+            Ok(r) => r,
+            Err(_) => ApiError::new(StatusCode::GATEWAY_TIMEOUT, "timeout", "request timed out").into_response(),
+        }
     } else {
-        // Per client while the per-client rate limit is on: its requests in flight and its reads
-        // on each lane (`db::ClientLanes`, R3C2-1).
+        // Per client while the per-client rate limit is on: its requests in flight (and its IPv6 site's) and its reads
+        // on each lane (`db::ClientLanes`, R3C2-1, R4C2-1).
         let lanes = (app.state.cfg.rate_limit.per_ip_rps > 0.0).then(|| client_lanes(&app, ip));
         let mine = match &lanes {
             Some(l) => l.in_flight.clone().try_acquire_owned().map(Some),
             None => Ok(None),
         };
-        match (mine, app.concurrency.clone().try_acquire_owned()) {
-            (Err(_), _) | (_, Err(_)) => {
-                let mut e = ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "overloaded", "too many requests in flight");
-                e.retry_after = Some(1);
-                e.into_response()
-            }
-            (Ok(_mine), Ok(_permit)) => {
+        let site = match lanes.as_ref().and_then(|_| site_in_flight(&app, ip)) {
+            Some(s) => s.try_acquire_owned().map(Some),
+            None => Ok(None),
+        };
+        match (mine, site, app.concurrency.clone().try_acquire_owned()) {
+            (Err(_), _, _) | (_, Err(_), _) | (_, _, Err(_)) => ApiError::overloaded().into_response(),
+            (Ok(_mine), Ok(_site), Ok(_permit)) => {
                 let limit = Duration::from_millis(app.state.cfg.request_timeout_ms.max(1));
                 let run = async {
                     match lanes {
@@ -440,6 +464,20 @@ fn client_lanes(app: &App, ip: IpAddr) -> Arc<crate::indexer::db::ClientLanes> {
         m.retain(|_, l| Arc::strong_count(l) > 1);
     }
     m.entry(key).or_default().clone()
+}
+
+/// The in-flight permits of the IPv6 site of `ip` (`ipv6_site_prefix_bits`), `None` for IPv4 or without sites.
+fn site_in_flight(app: &App, ip: IpAddr) -> Option<Arc<Semaphore>> {
+    let bits = app.state.cfg.rate_limit.ipv6_site_prefix_bits;
+    if bits == 0 || !client_ip::unmap(ip).is_ipv6() {
+        return None;
+    }
+    let key = client_ip::rate_key(ip, bits);
+    let mut m = app.sites.lock().unwrap_or_else(|e| e.into_inner());
+    if m.len() >= CLIENTS_KEPT && !m.contains_key(&key) {
+        m.retain(|_, s| Arc::strong_count(s) > 1);
+    }
+    Some(m.entry(key).or_insert_with(|| Arc::new(Semaphore::new(crate::indexer::db::CLIENT_SITE_IN_FLIGHT))).clone())
 }
 
 /// Binds `cfg.listen` and serves until `shutdown` resolves.

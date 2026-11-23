@@ -47,6 +47,10 @@ pub enum DbError {
     OldLayout(String, i64),
     #[error("{0}")]
     Invalid(String),
+    /// An API client's read waited [`CLIENT_WAIT`] for one of its own lane permits, which its other reads hold. The API
+    /// answers `503 overloaded` to that client (R4C2-1).
+    #[error("too many reads of this client in flight")]
+    Overloaded,
 }
 
 /// Result of a database operation.
@@ -701,9 +705,19 @@ pub const CLIENT_LIGHT_READS: usize = 1;
 /// Reads one API client may have on the heavy lane at once, waiting or running: two of its
 /// `read_pool_size` (4) connections at most.
 pub const CLIENT_HEAVY_READS: usize = 2;
-/// Requests one API client may have in flight at once; the guard answers `503 overloaded` past it,
-/// so a few clients cannot hold the server's `max_concurrent_requests` (256) waiting for a lane.
-pub const CLIENT_IN_FLIGHT: usize = 32;
+/// Requests one API client may have in flight at once; the guard answers `503 overloaded` past it.
+///
+/// With [`CLIENT_WAIT`] a request keeps its place only while it reads or is about to, so it takes 32 client keys (IPv4
+/// addresses, or IPv6 /48 sites, [`CLIENT_SITE_IN_FLIGHT`]) that each keep 8 requests in flight to fill the server's
+/// `max_concurrent_requests` (256). `/v1/health` is outside that cap (R4C2-1).
+pub const CLIENT_IN_FLIGHT: usize = 8;
+/// Requests the IPv6 /64s of one site (`ipv6_site_prefix_bits`, a /48) may have in flight together. The /64s of one
+/// allocation cost nothing to rotate through, so the site is the key that costs an attacker something (R4C2-1).
+pub const CLIENT_SITE_IN_FLIGHT: usize = 32;
+/// Longest a read waits for its client's own lane permit, which that client's other reads hold. Past it the read fails
+/// with [`DbError::Overloaded`] (`503` to that client only), so a client's backlog does not hold the server's request
+/// permits while it waits (R4C2-1). An honest page makes a few reads at once, and a light read takes milliseconds.
+pub const CLIENT_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// What one API client (a rate-limit key: an IPv4 address or an IPv6 prefix) may use at once.
 ///
@@ -712,8 +726,8 @@ pub const CLIENT_IN_FLIGHT: usize = 32;
 /// in the lane's queue, so each client has at most one place in that queue and the lanes are shared
 /// in turn however many requests one client sends (R3C2-1).
 pub struct ClientLanes {
-    light: Arc<Semaphore>,
-    heavy: Arc<Semaphore>,
+    pub(crate) light: Arc<Semaphore>,
+    pub(crate) heavy: Arc<Semaphore>,
     /// Requests in flight (`CLIENT_IN_FLIGHT`), taken by the guard.
     pub in_flight: Arc<Semaphore>,
 }
@@ -725,6 +739,19 @@ impl Default for ClientLanes {
             heavy: Arc::new(Semaphore::new(CLIENT_HEAVY_READS)),
             in_flight: Arc::new(Semaphore::new(CLIENT_IN_FLIGHT)),
         }
+    }
+}
+
+/// The permit of the current API client ([`CLIENT_LANES`]) on the light or the heavy lane, waited for at most
+/// [`CLIENT_WAIT`]. `None` outside a client's request.
+///
+/// A response the cache shares takes it before its computation starts and moves it into the computation, so the others
+/// who ask for the same key never wait for this client's own queue (R4C2-3).
+pub async fn client_permit(light: bool) -> DbResult<Option<tokio::sync::OwnedSemaphorePermit>> {
+    let Ok(c) = CLIENT_LANES.try_with(|c| if light { c.light.clone() } else { c.heavy.clone() }) else { return Ok(None) };
+    match tokio::time::timeout(CLIENT_WAIT, c.acquire_owned()).await {
+        Ok(p) => Ok(Some(p.map_err(|_| DbError::Invalid("read pool closed".into()))?)),
+        Err(_) => Err(DbError::Overloaded),
     }
 }
 
@@ -824,11 +851,7 @@ impl ReadPool {
         let permits = if light { &self.inner.light.permits } else { &self.inner.heavy.permits };
         // The client's permit first, so it never holds a place in the lane's queue while it waits.
         // It travels into the blocking task with the lane's.
-        let client = CLIENT_LANES.try_with(|c| if light { c.light.clone() } else { c.heavy.clone() }).ok();
-        let client_permit = match client {
-            Some(c) => Some(c.acquire_owned().await.map_err(|_| DbError::Invalid("read pool closed".into()))?),
-            None => None,
-        };
+        let client_permit = client_permit(light).await?;
         // The permit travels into the blocking task and is released only when the task ends. A
         // caller that is cancelled (request timeout, client disconnect) must not hand its permit to
         // the next request while the read still holds its pooled connection. Otherwise the pool

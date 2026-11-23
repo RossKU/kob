@@ -110,7 +110,8 @@ async fn a_light_read_does_not_queue_behind_heavy_ones() {
 }
 
 /// R3C2-1: a client's reads wait on its own permits (`ClientLanes`), not in the lane's queue, so a client that sends many
-/// reads at once holds one place in it, and another client's read is served next, not after all of them.
+/// reads at once holds one place in it, and another client's read is served next, not after all of them. A read of a that
+/// waits for a's own permit longer than `CLIENT_WAIT` is refused (`Overloaded`, R4C2-1); b's never is.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn one_client_holds_one_place_in_the_light_lane_queue() {
     use kobd::indexer::db::{ClientLanes, CLIENT_LANES};
@@ -124,13 +125,17 @@ async fn one_client_holds_one_place_in_the_light_lane_queue() {
     let read = |who: Arc<ClientLanes>, name: &'static str| {
         let (pool, done) = (pool.clone(), done.clone());
         tokio::spawn(CLIENT_LANES.scope(who, async move {
-            pool.with_light(move |c| {
-                std::thread::sleep(Duration::from_millis(150));
-                Ok(meta_get(c, "network")?)
-            })
-            .await
-            .unwrap();
-            done.lock().unwrap().push(name);
+            let r = pool
+                .with_light(move |c| {
+                    std::thread::sleep(Duration::from_millis(150));
+                    Ok(meta_get(c, "network")?)
+                })
+                .await;
+            match r {
+                Ok(_) => done.lock().unwrap().push(name),
+                Err(kobd::indexer::db::DbError::Overloaded) => assert!(name.starts_with('a'), "{name} refused"),
+                Err(e) => panic!("{name}: {e}"),
+            }
         }))
     };
     // client a sends four reads at once, then client b one
