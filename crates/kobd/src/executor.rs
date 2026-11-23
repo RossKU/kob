@@ -653,31 +653,81 @@ pub(crate) fn refuse_files_in_data_dir(
     Ok(())
 }
 
-/// Checks kobd's executable, its folder, the configuration file and the data directory: another
-/// account that can change one of them can replace kobd, plant a program or library it loads,
-/// point the configuration at its own key or node, or edit the journal and budget files (audit
-/// 2026-11-23 D-2, R2D-2, [`crate::matcher::wallet::writable_by_others`]).
+/// Checks kobd's executable, its folder, the configuration file and its folder, the data
+/// directory, the key file and its folder, and the inventory policy file: another account that
+/// can change one of them can replace kobd, plant a program or library it loads, point the
+/// configuration at its own key or node, swap the key, drop a token from the policy, or edit the
+/// journal and budget files (audit 2026-11-23 D-2, R2D-2, R3D-3,
+/// [`crate::matcher::wallet::writable_by_others`]). A data directory that does not exist yet is
+/// checked through the nearest folder above it, whose rights it is created with.
 ///
-/// On mainnet kobd refuses to start, naming each path and the command that fixes it. On
-/// testnet-10 it logs the same as an error and goes on, so that the testers' existing setups keep
-/// running.
-fn check_writable_by_others(network: &str, config: Option<&std::path::Path>, data_dir: &std::path::Path) -> Result<()> {
+/// On mainnet kobd refuses to start, naming each path and the command that fixes it, also when a
+/// path's rights cannot be read. On testnet-10 it logs the same as an error and goes on, so that
+/// the testers' existing setups keep running.
+fn check_writable_by_others(
+    network: &str,
+    config: Option<&std::path::Path>,
+    data_dir: &std::path::Path,
+    key_file: Option<&std::path::Path>,
+    policy: Option<&std::path::Path>,
+) -> Result<()> {
+    refuse_writable_by_others(network, &executor_paths(config, data_dir, key_file, policy))
+}
+
+/// The paths [`check_writable_by_others`] checks.
+fn executor_paths(
+    config: Option<&std::path::Path>,
+    data_dir: &std::path::Path,
+    key_file: Option<&std::path::Path>,
+    policy: Option<&std::path::Path>,
+) -> Vec<PathBuf> {
+    let mut paths = start_paths(key_file, policy);
+    if let Some(c) = config {
+        let c = std::path::absolute(c).unwrap_or_else(|_| c.to_path_buf());
+        paths.extend(c.parent().map(std::path::Path::to_path_buf));
+        paths.push(c);
+    }
+    let data = std::path::absolute(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
+    paths.extend(data.ancestors().find(|a| a.exists()).map(std::path::Path::to_path_buf));
+    paths
+}
+
+/// The program, its folder, the key file `HotKey::load` reads and its folder, and the inventory
+/// policy file: the paths of every role that holds the hot key (R3D-4).
+pub(crate) fn start_paths(key_file: Option<&std::path::Path>, policy: Option<&std::path::Path>) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = vec![];
     if let Ok(exe) = std::env::current_exe() {
         paths.extend(exe.parent().map(std::path::Path::to_path_buf));
         paths.push(exe);
     }
-    paths.extend(config.map(std::path::Path::to_path_buf));
-    paths.push(data_dir.to_path_buf());
-    let found = crate::matcher::wallet::writable_by_others(&paths);
+    if let Some(k) = crate::matcher::wallet::HotKey::file_of(key_file) {
+        let k = std::path::absolute(&k).unwrap_or(k);
+        paths.extend(k.parent().map(std::path::Path::to_path_buf));
+        paths.push(k);
+    }
+    paths.extend(policy.map(|p| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())));
+    paths
+}
+
+/// Refuses on mainnet (logs on testnet-10) when another account can change one of `paths`, or
+/// when who can cannot be read ([`check_writable_by_others`]).
+pub(crate) fn refuse_writable_by_others(network: &str, paths: &[PathBuf]) -> Result<()> {
+    let found = crate::matcher::wallet::writable_by_others(paths);
     if found.is_empty() {
         return Ok(());
     }
     let lines: Vec<String> = found
         .iter()
-        .map(|(path, who)| format!("{} (changeable by {who}); fix: {}", path.display(), crate::matcher::wallet::owner_only_fix(path)))
+        .map(|(path, who)| {
+            let fix = if who == crate::matcher::wallet::RIGHTS_UNREADABLE {
+                "keep it on an NTFS (Unix: a local) folder of your own whose rights this account can read".to_string()
+            } else {
+                crate::matcher::wallet::owner_only_fix(path)
+            };
+            format!("{} (changeable by {who}); fix: {fix}", path.display())
+        })
         .collect();
-    let why = "another account can change these paths: it could replace kobd, plant a program or library it loads, point the configuration at its own key or node, or edit the journal and budget files. Keep kobd in a folder of your own account (docs/ops/executor-quickstart.md: %LOCALAPPDATA%\\kob on Windows)";
+    let why = "another account can change these paths, or nobody can tell who can: it could replace kobd, plant a program or library it loads, point the configuration at its own key or node, swap the key, change the inventory policy, or edit the journal and budget files. Keep kobd in a folder of your own account (docs/ops/executor-quickstart.md: %LOCALAPPDATA%\\kob on Windows)";
     if network == "mainnet" {
         bail!("{why}:\n  {}", lines.join("\n  "));
     }
@@ -697,7 +747,13 @@ pub async fn run(a: RunArgs) -> Result<()> {
     a.select.config().map_err(anyhow::Error::msg)?;
     let cfg = build_config(&a.index)?;
     // First, before anything is read from these paths (R2D-2).
-    check_writable_by_others(&cfg.network, a.index.store.config.as_deref(), &cfg.data_dir)?;
+    check_writable_by_others(
+        &cfg.network,
+        a.index.store.config.as_deref(),
+        &cfg.data_dir,
+        a.key_file.as_deref(),
+        a.inventory_policy.as_deref(),
+    )?;
     refuse_failover(&cfg)?;
     refuse_files_in_data_dir(a.key_file.as_deref(), a.pause_file.as_deref(), &cfg.data_dir)?;
     // The operator's funds are read from the nodes' UTXO index: a node without it is unusable
@@ -822,5 +878,41 @@ mod tests {
         assert!(!inside(&dir.path().join("kob-data2").join("k"), &data));
         assert!(inside(&dir.path().join("x").join("..").join("kob-data").join(".").join("k"), &data));
         assert!(!inside(&data, &data), "the directory itself is not a file inside it");
+    }
+
+    /// R3D-3: the start check covers the key file and its folder, the inventory policy, the configuration's folder and,
+    /// before it exists, the folder the data directory is made in.
+    #[test]
+    fn the_start_check_covers_the_key_the_policy_the_config_folder_and_a_new_data_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cfgd, keyd) = (dir.path().join("cfg"), dir.path().join("keys"));
+        std::fs::create_dir_all(&cfgd).unwrap();
+        std::fs::create_dir_all(&keyd).unwrap();
+        let (key, policy, config) = (keyd.join("op.key"), dir.path().join("policy.json"), cfgd.join("kobd.toml"));
+        let data = dir.path().join("not-yet").join("kob-data");
+        let p = executor_paths(Some(&config), &data, Some(&key), Some(&policy));
+        for want in [&key, &keyd, &policy, &config, &cfgd, &dir.path().to_path_buf()] {
+            assert!(p.contains(want), "{} not in {p:?}", want.display());
+        }
+        assert!(!p.iter().any(|x| x.starts_with(dir.path().join("not-yet"))), "a path that does not exist yet: its folder above");
+    }
+
+    /// R3D-3: a path whose rights cannot be read (here a drive's root, which icacls names no file in) is refused on
+    /// mainnet and logged on testnet-10; a folder another account can change is refused with the command that fixes it.
+    #[cfg(windows)]
+    #[test]
+    fn the_start_check_fails_closed_on_mainnet() {
+        let root = PathBuf::from(r"C:\");
+        let e = refuse_writable_by_others("mainnet", std::slice::from_ref(&root)).unwrap_err().to_string();
+        assert!(e.contains("could not be read") && e.contains("NTFS"), "{e}");
+        assert!(refuse_writable_by_others("testnet-10", &[root]).is_ok());
+        let dir = tempfile::tempdir().unwrap();
+        let open = dir.path().join("open");
+        std::fs::create_dir(&open).unwrap();
+        let icacls = crate::matcher::wallet::system_program("icacls");
+        let ok = std::process::Command::new(icacls).arg(&open).args(["/grant", "*S-1-1-0:(OI)(CI)(M)"]).output().unwrap();
+        assert!(ok.status.success());
+        let e = refuse_writable_by_others("mainnet", std::slice::from_ref(&open)).unwrap_err().to_string();
+        assert!(e.contains("Everyone") && e.contains("icacls"), "{e}");
     }
 }

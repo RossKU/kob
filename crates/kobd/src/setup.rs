@@ -903,7 +903,9 @@ fn operator_key(io: &mut dyn Console, dir: &Path, launch: &mut LaunchConfig) -> 
             io.say("WARNING: this key file is not owned by this account. Whoever made it may know its secret and take the funds you send to it. Use it only if you made it yourself.");
         }
         if ask_yes(io, "Use it (the funds on it stay usable)?", mine)? {
-            let k = HotKey::from_file(&own)?;
+            // Another account's file never passes the key check: it is rewritten as this
+            // account's, with the same secret (R3D-5).
+            let k = if mine { HotKey::from_file(&own)? } else { HotKey::adopt_file(&own)? };
             launch.key_file = Some(PathBuf::from(KEY_FILE));
             return Ok(k);
         }
