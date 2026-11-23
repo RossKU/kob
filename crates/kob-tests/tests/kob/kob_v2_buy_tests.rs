@@ -6964,6 +6964,13 @@ fn dm_refund_releases_the_custody() {
     s.inputs.push(t_in(t, CARRIER, &TSt::custody(2 * WHOLE, c), Some(&[st]), Wit::CovId, 1_500));
     s.outputs.push(t_out(t, CARRIER, &st, 1));
     bad(s, "DM6-09 refund with bought 0 and a token UTXO of the order's id");
+    // output 1 carries the release's script but no covenant binding; the bound release behind it goes to the taker
+    let mut s = dm_refund(&f, &held);
+    let copy = out(DM_CUST_KAS, s.outputs[1].script_public_key.clone(), None);
+    dm_set_tok_out(&f, &mut s, 1, 1, 0, &TSt::plain(3 * WHOLE, &taker));
+    s.outputs.insert(1, copy);
+    s.inputs.push(p2pk_in(&f.taker, DM_CUST_KAS));
+    bad(s, "DM6-10 refund: output 1 an unbound copy of the release, the custody to the taker");
 }
 
 /// DM7: claims through cancel (spec section 7): the maker's SIGHASH_ALL signature moves the custody in every shape.

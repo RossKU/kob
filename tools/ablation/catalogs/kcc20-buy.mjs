@@ -36,6 +36,10 @@
 //   only use is `tx.outputs[self].value + refundTip >= <escrow / carriers>`. A negative refundTip
 //   only raises what the maker must receive (the keeper takes less), so no transaction becomes
 //   acceptable when the check is removed.
+// - KobCondBid top-up `require(have >= 0)` (as KobBid, kcc20-sell). `have` is the amount of the
+//   receive UTXO, read from a P2SH input whose template hash is the token's, so a UTXO the token
+//   program created; the program keeps amounts non-negative. A negative amount would only shrink
+//   the maker's receive UTXO before the gain.
 // - KobCondBid update `require(side == SIDE_ASK)`. touch() returns SIDE_ASK or SIDE_BID only
 //   (SIDE_ASK when tk >= 0), so the else branch of `side == SIDE_BID` always has
 //   side == SIDE_ASK.
@@ -423,6 +427,7 @@ export const mutations = withPublicMint([
       slope: { [T_BS]: ['NTB05'] },
       cltv: { [T_BS]: ['NTB01', 'NTB03', 'NTB04'] },
       interval: { [T_BS]: ['NTB04'] },
+      ivpos: { [T_BS]: ['NTB04n2', 'NTB04n3'] },
       active: { [T_BS]: ['NTB03'] },
       // Only the evidence bid trades the other commitment (the token program refuses the mix).
       bidext: { run: { [T_AUD]: ['NAUD-EXT-CB3'] }, inputOnly: ['NAUD-EXT-CB3'] },
@@ -451,6 +456,7 @@ export const mutations = withPublicMint([
       slope: { [T_BA]: ['NTV05'], [T_BT]: ['NTW05'] },
       cltv: { [T_BA]: ['NTV01', 'NTV03', 'NTV04'], [T_BT]: ['NTW01', 'NTW02', 'NTW03', 'NTW04'] },
       interval: { [T_BA]: ['NTV04'], [T_BT]: ['NTW04'] },
+      ivpos: { [T_BA]: ['NTV04n2', 'NTV04n3'], [T_BT]: ['NTW04n2', 'NTW04n3'] },
       active: { [T_BA]: ['NTV03'], [T_BT]: ['NTW03'] },
       tokdaa: { [T_BT]: ['NTW02'] },
       tkcov: { [T_BT]: ['NTW02b'] },
@@ -532,6 +538,7 @@ export const mutations = withPublicMint([
       slope: { [T_AF]: ['NTK05'], [T_AA]: ['NTL05'] },
       cltv: { [T_AF]: ['NTK01', 'NTK02', 'NTK03', 'NTK04'], [T_AA]: ['NTL01', 'NTL02', 'NTL03', 'NTL04'] },
       interval: { [T_AF]: ['NTK04'], [T_AA]: ['NTL04'] },
+      ivpos: { [T_AF]: ['NTK04n2', 'NTK04n3'], [T_AA]: ['NTL04n2', 'NTL04n3'] },
       active: { [T_AF]: ['NTK03'], [T_AA]: ['NTL03'] },
       tokdaa: { [T_AF]: ['NTK02'], [T_AA]: ['NTL02'] },
       tkcov: { [T_AF]: ['NTK02b'], [T_AA]: ['NTL02b'] },
@@ -884,6 +891,11 @@ export const mutations = withPublicMint([
   { id: "DM-CB-refund-kas", file: "KobCondBid", run: { "dm_refund_releases_the_custody": ["DM6-04"] }, note: "delivery modes (bid-delivery-spec): refund: the custody output keeps its KAS", edits: [del("require(tx.outputs[custIn].value >= tx.inputs[custIn].value);")] },
   { id: "DM-CB-refund-zero", file: "KobCondBid", run: { "dm_refund_releases_the_custody": ["DM6-09"] }, note: "delivery modes (bid-delivery-spec): refund with bought 0: no token input of the token (strays)", edits: [rep("require(OpCovInputCount(tokenCovId) == 0);  // strays", "// strays")] },
   { id: "DM-CB-update-strays", file: "KobCondBid", run: { "dm_trigger_interplay": ["DM4-04"] }, note: "delivery modes (bid-delivery-spec): update: no stray of the order", edits: [del("noStrays(selfId, -1);")] },
+  // isCustody and the refund's release (AUD-COV 2026-11-24: lines no entry mutated before).
+  { id: "DM-CB-iscust-p2sh", file: "KobCondBid", run: { "dm_stray_guard": ["DM3-05"] }, inputOnly: ["DM3-05"], note: "isCustody: the bought-custody is the P2SH of the script it pushes (a planted non-P2SH input of the token's covenant id with the genuine custody redeem; the token program also refuses it on its own input)", edits: [rxDel("    function isCustody(int idx, byte[] rs, byte[32] me) {", /^\s*require\(tx\.inputs\[idx\]\.scriptPubKey == byte\[\]\(new ScriptPubKeyP2SHFromRedeemScript\(rs\)\)\);$/m)] },
+  { id: "DM-CB-iscust-state", file: "KobCondBid", run: { "dm_stray_guard": ["DM3-02", "DM3-03", "DM3-04"], "dm_refund_releases_the_custody": ["DM6-07"] }, inputOnly: ["DM3-03"], note: "isCustody (DM3-03: the token program also refuses the mix of commitments on its own input): the custody is known by its exact state (amount == bought, owner the id, scheme 0x04, borrowing disabled, zero guard, the commitment), in a fill and in the refund", edits: [del("        require(rs.slice(tplPrefixLen, tplPrefixLen + 112) == byte[](0x08) + byte[](bought as byte[8]) + byte[](0x20) + byte[](me)\n            + byte[](0x0104010020) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8])\n            + byte[](0x20) + extensionCommitment);\n")] },
+  { id: "DM-CB-refund-pin", file: "KobCondBid", run: { "dm_refund_releases_the_custody": ["DM6-01", "DM6-02", "DM6-03"] }, note: "refund: the custody goes whole to the maker's key as one plain UTXO (not another key, not kept under the id, not borrow-enabled; DM6-05, the release at another index, is also refused by the release's KAS check at the custody index)", edits: [del("            require(tx.outputs[custIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(\n                trs.slice(0, tplPrefixLen) + byte[](0x08) + byte[](bought as byte[8]) + byte[](0x20) + byte[](maker) + byte[](0x0100010020)\n                    + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8])\n                    + byte[](0x20) + extensionCommitment + trs.slice(tplPrefixLen + 112, tplPrefixLen + 112 + tplSuffixLen)\n            )));\n")] },
+  { id: "DM-CB-refund-cov", file: "KobCondBid", run: { "dm_refund_releases_the_custody": ["DM6-10"] }, note: "refund: the release is bound to the token covenant (an unbound copy of the release script at the custody's index holds nothing; the custody goes to the taker)", edits: [del("            require(OpOutputCovenantId(custIn) == tokenCovId);\n")] },
   { id: "DM-IA-rpt-mode", file: "KobIfdAsk", run: { "dm_ifd_exit_fields": ["DM8-05"] }, note: "delivery modes (bid-delivery-spec): KobIfdAsk: a repeating entry commits exitMode 0", edits: [del("require(exitMode == 0);")] },
   { id: "DM-IA-merge-tail", file: "KobIfdAsk", run: { "dm_ifd_exit_fields": ["DM8-07"] }, note: "delivery modes (bid-delivery-spec): KobIfdAsk merge: the merged exit carries the entry delivery tail", edits: [del("require(x.slice(381, 417) == exitTail());")] },
 ], { batteries: new Set(Object.keys(ON3)), skip: NOT_ON3 });

@@ -6,7 +6,9 @@ repo root is derived from the script location, `tools/ablation/../..`).
 
 Bid delivery (modes 0 / 1 / 2): the `KobBid`, `KobCondBid`, `KobIfdAsk` and pair catalogs carry entries for the delivery rules (bought-custody, top-up, stray guard, release at the end); the Suites table counts are the current catalog sizes.
 
-Latest results: [RESULTS.md](RESULTS.md). Audit completion (2026-10-13): every `require` of the KAS-kind templates has an
+Latest results: [RESULTS.md](RESULTS.md). Full run of 2026-11-24 (audit AUD-COV, `a7e9d9ef2`, re-run of three repaired entries at
+`ed2f83f70`): every entry of the nine suites, **1,559/1,559 confirmed, 52/52 held**; `coverage.mjs`: 99 -> 46 require lines
+without a mutation, all 46 documented in the catalog headers as checks without a witness attack. Audit completion (2026-10-13): every `require` of the KAS-kind templates has an
 entry or is documented as unwitnessable in its catalog header (`coverage.mjs`: 598 -> 35 require lines without a mutation over
 all eight catalogs, the 35 all documented), **562/562 new entries confirmed, 14/14 held**. Pre-mainnet covenant fixes
 (2026-10-12): every suite of the changed templates in full, **698/698 confirmed, 30/30 held**. Template version after the
@@ -49,14 +51,15 @@ directory (line endings normalised to LF) and mutates only the copies.
 
 | Suite | Family | Test binary | Contracts (`srcDir`) | Contracts mutated | Mutations |
 |---|---|---|---|---|---|
-| `kcc20-sell` | KCC-20, sell side: repeat IFD lifecycle, touch trigger (the `TA` / `TU` / `TI` entries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale) | `kob_v2_tests` | `contracts/orders` | KobAsk, KobBid, KobCondAsk, KobIfdBid | 342 |
-| `kcc20-buy` | KCC-20, buy side: repeat IFD lifecycle, touch trigger (the `TB` / `TV` / `TW` / `TK` / `TL` entries of the touch batteries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale, re-arm bound) | `kob_v2_buy_tests` | `contracts/orders` | KobCondBid, KobIfdAsk | 256 |
-| `kron-sell` | KRON adapter, sell side (v3) | `kob_kron_v2_tests` | `contracts/orders/kron` | KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron | 321 |
-| `kron-buy` | KRON adapter, buy side (v3) | `kob_kron_v2_buy_tests` | `contracts/orders/kron` | KobCondBidKron, KobIfdAskKron | 218 |
-| `pair` | pair orders, plain (`KobPair`, both sides, both families of A and B) | `kob_pair_tests` | `contracts/orders` | KobPair | 89 |
-| `cond-pair` | pair conditionals (`KobCondPair`): legs, trigger evidence in both modes, trailing, updates | `kob_cond_pair_tests` | `contracts/orders` | KobCondPair | 134 |
+| `kcc20-sell` | KCC-20, sell side: repeat IFD lifecycle, touch trigger (the `TA` / `TU` / `TI` entries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale) | `kob_v2_tests` | `contracts/orders` | KobAsk, KobBid, KobCondAsk, KobIfdBid | 348 |
+| `kcc20-buy` | KCC-20, buy side: repeat IFD lifecycle, touch trigger (the `TB` / `TV` / `TW` / `TK` / `TL` entries of the touch batteries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale, re-arm bound) | `kob_v2_buy_tests` | `contracts/orders` | KobCondBid, KobIfdAsk | 263 |
+| `kron-sell` | KRON adapter, sell side (v3) | `kob_kron_v2_tests` | `contracts/orders/kron` | KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron | 326 |
+| `kron-buy` | KRON adapter, buy side (v3) | `kob_kron_v2_buy_tests` | `contracts/orders/kron` | KobCondBidKron, KobIfdAskKron | 221 |
+| `pair` | pair orders, plain (`KobPair`, both sides, both families of A and B) | `kob_pair_tests` | `contracts/orders` | KobPair | 104 |
+| `cond-pair` | pair conditionals (`KobCondPair`): legs, trigger evidence in both modes, trailing, updates | `kob_cond_pair_tests` | `contracts/orders` | KobCondPair | 156 |
 | `cond-pair-rpt` | the repeat-IFD checks of `KobCondPair` (TP fills with / without the entry, re-arm profit, budget, prefund, the merge bound) | `kob_ifd_pair_tests` | `contracts/orders` | KobCondPair | 12 |
-| `ifd-pair` | pair if-done entries (`KobIfdPair`, buy-first and sell-first, merges, stop entries) | `kob_ifd_pair_tests` | `contracts/orders` | KobIfdPair | 135 |
+| `ifd-pair` | pair if-done entries (`KobIfdPair`, buy-first and sell-first, merges, stop entries) | `kob_ifd_pair_tests` | `contracts/orders` | KobIfdPair | 137 |
+| `curve-ask` | stepped curve ask (`KobCurveAsk`): the level walk, its rounding, custody, refund, cancel | `kob_curve_ask_tests` | `contracts/orders` | KobCurveAsk | 44 |
 
 The pair suites run every scenario on token pairs of both families (`common/pair_harness.rs`: the three pair templates are
 compiled from source in dependency order, KobCondPair against the compiled KobPair and KobIfdPair against both, so a
@@ -83,7 +86,8 @@ are the same in every contract of both families, so `lib/touch.mjs` generates on
 by its header: `<prefix>-push08` (the evidence sigscript starts with the 8-byte push of n), `-npos` (n > 0), `-tpl` (template
 hash only; the P2SH check kept), `-p2sh` (P2SH only; the template hash kept), `-token`, `-scale` (the evidence quotes per the
 same scale), `-mintouch` (n >= minTouch base units), `-slope`, `-cltv` (tx.daa >= exposed + minRestDaa), the three exposure terms `-interval`, `-active`,
-`-tokdaa`, and for ask evidence `-tkcov` / `-owner` (the custody input carries the token and is owned by the evidence ask)
+`-tokdaa`, `-ivpos` (the evidence interval is not negative, audit 2026-10-29 F1: scenarios 04n2 / 04n3, interval -R / -10^12 on an
+evidence UTXO one DAA old; 04n1 is also refused by another input of its transaction), and for ask evidence `-tkcov` / `-owner` (the custody input carries the token and is owned by the evidence ask)
 and `-tktpl` / `-tkp2sh` (the custody is a holder UTXO of the token's program: template hash only / P2SH only, the other
 kept; their scenarios 02c / 02d are also refused by the evidence ask's stray guard and the token program, so they are
 `inputOnly`). The KCC-20 batteries run on the 8/8 program (`v2_touch_*`) and on the reference 3/3 program
@@ -111,7 +115,7 @@ price rule or the own-token guard (the ids `I2`..`I4` and `IA8b` are not used).
 ## Usage
 
 ```
-node tools/ablation/ablate.mjs [--suite kcc20-sell|kcc20-buy|kron-sell|kron-buy|pair|cond-pair|cond-pair-rpt|ifd-pair|all] [--only ID,ID]
+node tools/ablation/ablate.mjs [--suite kcc20-sell|kcc20-buy|kron-sell|kron-buy|pair|cond-pair|cond-pair-rpt|ifd-pair|curve-ask|all] [--only ID,ID]
      [--jobs N] [--exe-dir DIR] [--out DIR] [--dry-run] [--baseline] [--no-baseline] [--list] [--keep]
      [--release] [--timeout SEC]
 ```
@@ -230,7 +234,7 @@ exact LCS line diff, so a check that merely lies between two edits of a multi-ed
 the mutations of all of them; commented-out lines are ignored. `--summary` prints the counts only; `--root` points at
 another checkout's contracts (e.g. to measure an older catalog). Completion criterion of the catalogs: every line it lists
 is documented in the catalog's header as a check without a witness attack (with the reason). Since the audit completion of
-2026-10-13 it lists, over all eight catalogs, only such documented lines (see RESULTS.md).
+2026-10-13 it lists only such documented lines (2026-11-24: 46 lines over the nine catalogs, see RESULTS.md).
 
 ```
 node tools/ablation/coverage.mjs --suite ... --results A/results.json,B/results.json [--program KCC20PublicMint]

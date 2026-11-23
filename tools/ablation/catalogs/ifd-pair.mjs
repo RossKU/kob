@@ -291,4 +291,8 @@ export const mutations = [
   // The scenarios are ifd_pair_exit_delivery_modes. The ids a / b are the side.
   { id: "DM-IP1", file: F, test: T_DM, expect: ["aNX11","aNX12","bNX11","bNX12","aNX13","aNX14","bNX13","bNX14"], inputOnly: ["aNX13","aNX14","bNX13","bNX14"], note: "merge: the merged exit carries the entry delivery tail (exitMode, exitRecvThreshold, exitTopupTip, bought 0)", edits: [rep("require(x.slice(510, 579) == byte[](0x20) + byte[](xsExt) + xDlv);", "require(x.slice(510, 543) == byte[](0x20) + byte[](xsExt));")] },
   { id: "DM-IP2", file: F, test: T_DM, expect: ["aNX08","aNX09","bNX08","bNX09"], note: "a repeating entry commits exitMode 0", edits: [del("                if (rptAmount != 0) { require(exitMode == 0); }\n")] },
+  // AUD-COV (2026-11-24): the evidence interval sign (audit 2026-10-29 F1). The edited evidence
+  // order refuses its doctored state by its own script, so only the entry input flips.
+  { id: 'IF125', file: F, test: T_EVB, expect: ['NE27a0', 'NE27b0', 'NE27a1', 'NE27b1'], inputOnly: ['NE27a0', 'NE27b0', 'NE27a1', 'NE27b1'], note: 'rd: the A / pair evidence interval is not negative (an evidence one DAA old with interval -10^12 would arm the stop entry)', edits: [rx(A_RD, /\n\s*require\(iv >= 0\);/, '')] },
+  { id: 'IF126', file: F, test: T_EVB, expect: ['NE28a0', 'NE28b0'], inputOnly: ['NE28a0', 'NE28b0'], note: 'evLeg: the B evidence interval is not negative (a B evidence one DAA old with interval -10^12 would arm the stop entry)', edits: [rx(A_EVLEG, /\n\s*require\(iv >= 0\);/, '')] },
 ];

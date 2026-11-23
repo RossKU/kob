@@ -28,9 +28,10 @@
 // - The re-arm path (rearm) sends the remainder back to the entry, which checks it. There is no
 //   refund there.
 //
-// Not in this catalog: the two `require(iv >= 0)` lines of KobCondBidKron.touchBid / touch (a
-// negative evidence interval). Their reproducers are in audit_rest_interval_tests, which is not an
-// ablation suite.
+// The `require(iv >= 0)` lines of the touch readers (a negative evidence interval, audit 2026-10-29
+// F1) are the generated `-ivpos` entries (TB, TV, TK), witnessed by the touch batteries' 04n2 / 04n3
+// (interval -R / -10^12 on an evidence UTXO one DAA old). 04n1 (interval -1 on a UTXO R - 1 DAA old)
+// is not listed: another input of its transaction refuses it too.
 //
 // Checks without a witness attack (not in the catalog):
 // - KobCondBidKron.update `require(side == SIDE_ASK)`. touch() returns SIDE_ASK (tk >= 0) or
@@ -601,6 +602,7 @@ export const mutations = [
       slope: { [T_BS]: ['NTB05'] },
       cltv: { [T_BS]: ['NTB01', 'NTB03', 'NTB04'] },
       interval: { [T_BS]: ['NTB04'] },
+      ivpos: { [T_BS]: ['NTB04n2', 'NTB04n3'] },
       active: { [T_BS]: ['NTB03'] },
     },
   }),
@@ -627,6 +629,7 @@ export const mutations = [
       slope: { [T_BA]: ['NTV05'], [T_BT]: ['NTW05'] },
       cltv: { [T_BA]: ['NTV01', 'NTV03', 'NTV04'], [T_BT]: ['NTW01', 'NTW02', 'NTW03', 'NTW04'] },
       interval: { [T_BA]: ['NTV04'], [T_BT]: ['NTW04'] },
+      ivpos: { [T_BA]: ['NTV04n2', 'NTV04n3'], [T_BT]: ['NTW04n2', 'NTW04n3'] },
       active: { [T_BA]: ['NTV03'], [T_BT]: ['NTW03'] },
       tokdaa: { [T_BT]: ['NTW02'] },
       tkcov: { [T_BT]: ['NTW02b'] },
@@ -683,6 +686,7 @@ export const mutations = [
       slope: { [T_AF]: ['NTK05'], [T_AA]: ['NTL05'] },
       cltv: { [T_AF]: ['NTK01', 'NTK02', 'NTK03', 'NTK04'], [T_AA]: ['NTL01', 'NTL02', 'NTL03', 'NTL04'] },
       interval: { [T_AF]: ['NTK04'], [T_AA]: ['NTL04'] },
+      ivpos: { [T_AF]: ['NTK04n2', 'NTK04n3'], [T_AA]: ['NTL04n2', 'NTL04n3'] },
       active: { [T_AF]: ['NTK03'], [T_AA]: ['NTL03'] },
       tokdaa: { [T_AF]: ['NTK02'], [T_AA]: ['NTL02'] },
       tkcov: { [T_AF]: ['NTK02b'], [T_AA]: ['NTL02b'] },

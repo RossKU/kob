@@ -6225,8 +6225,9 @@ fn v3_audit_bid_kron_body(f: &Fx) {
         ),
         0,
     );
-    // n = 0 on a bid with less than one minimum fill of buying power left: closes it before its expiry
-    let v = DC + KAS;
+    // n = 0 on a bid whose buying power is exhausted (its spare, 0.001 KAS, buys less than one base unit at the budget
+    // rate, so the minimum-fill rule lets a fill take less than minFill): closes it before its expiry
+    let v = DC + 100_000;
     let (dv, refund) = bid_terminal(&mb, v, 0, DC);
     let mut s = Scn {
         name: "NAU-KB03 zero fill (n = 0) closing an exhausted bid before its expiry".into(),

@@ -620,6 +620,17 @@ fn evidence_ev0(r: &Run, pa: TemplateId, pb: TemplateId) {
             _ => {}
         });
         r.bad(&e, i);
+        // NC2V the B evidence UTXO one DAA old with interval -10^12 in its state: a negative interval must not cancel the
+        // UTXO's age (audit 2026-10-29 F1)
+        let (mut e, i) = ev0_ed(ask, pa, pb, &format!("NC2V{side} B evidence interval -10^12, its UTXO one DAA old"));
+        let bi = e.input_of_cov(cov(0x94));
+        e.set_input_daa(bi, NOW - 1);
+        set_b(&mut e, &|s| match s {
+            AnyState::KobAsk(x) | AnyState::KobAskKron(x) => x.interval = -1_000_000_000_000,
+            AnyState::KobBid(x) | AnyState::KobBidKron(x) => x.interval = -1_000_000_000_000,
+            _ => {}
+        });
+        r.bad(&e, i);
         let (mut e, i) = ev0_ed(ask, pa, pb, &format!("NC2A{side} B evidence activeFrom after the lock time"));
         set_b(&mut e, &|s| match s {
             AnyState::KobAsk(x) | AnyState::KobAskKron(x) => x.active_from = NOW as i64 + 10,
@@ -711,6 +722,13 @@ fn evidence_ev1(r: &Run, pa: TemplateId, pb: TemplateId) {
         let vi = e.input_of_cov(cov(0x93));
         e.set_input_daa(vi, NOW - 10);
         r.bad(&e, i);
+        // NC3V the pair evidence UTXO one DAA old with interval -10^12 in its state: a negative interval must not cancel the
+        // UTXO's age (audit 2026-10-29 F1)
+        let (mut e, i) = ev1_ed(&format!("NC3V{side} pair evidence interval -10^12, its UTXO one DAA old"));
+        let vi = e.input_of_cov(cov(0x93));
+        e.set_input_daa(vi, NOW - 1);
+        set_ev(&mut e, &|s| s.interval = -1_000_000_000_000);
+        r.bad(&e, i);
         // NC36 the implied-rate edge: one unit past the stop refused (the boundary positive is PC37)
         let (mut e, i) = ev1_ed(&format!("NC36{side} pair evidence one unit past the stop"));
         set_ev(&mut e, &|s| s.price = if s.is_ask() { RATE + 1 } else { RATE - 1 });
@@ -747,6 +765,17 @@ fn evidence_exposure(r: &Run, pa: TemplateId, pb: TemplateId) {
     set_a(&mut e, |s| {
         if let AnyState::KobAsk(x) | AnyState::KobAskKron(x) = s {
             x.interval = NOW as i64;
+        }
+    });
+    r.bad(&e, i);
+    // NC5V the A evidence UTXO one DAA old with interval -10^12 in its state: a negative interval must not cancel the UTXO's
+    // age (audit 2026-10-29 F1)
+    let (mut e, i) = honest("NC5V A evidence interval -10^12, its UTXO one DAA old");
+    let ai = e.input_of_cov(cov(0x93));
+    e.set_input_daa(ai, NOW - 1);
+    set_a(&mut e, |s| {
+        if let AnyState::KobAsk(x) | AnyState::KobAskKron(x) = s {
+            x.interval = -1_000_000_000_000;
         }
     });
     r.bad(&e, i);

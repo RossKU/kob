@@ -77,9 +77,15 @@ pub fn is_pair(id: TemplateId) -> bool {
 
 // ---------------------------------------------------------------- the pair templates under test
 
-/// The delivery block of int fields `v` (`0x08` + 8 bytes little-endian each).
+/// The delivery block of int fields `v` (`0x08` + the 8-byte little-endian sign-magnitude number each).
 pub fn dlv_block(v: &[i64]) -> Vec<u8> {
-    v.iter().flat_map(|x| [vec![0x08u8], x.to_le_bytes().to_vec()].concat()).collect()
+    // each field a fixed 8-byte push of the sign-magnitude script number the contract reads with int(byte[8](..))
+    v.iter()
+        .flat_map(|x| {
+            let b = kob_protocol::kcc1::int_state_payload(*x).expect("delivery field in the 8-byte int range");
+            [vec![0x08u8], b.to_vec()].concat()
+        })
+        .collect()
 }
 
 /// Delivery block of `KobPair` / `KobCondPair`: mode, recvThreshold, topupTip, bought.
@@ -1863,6 +1869,34 @@ pub fn mode_battery(r: &Run, c: &ModeCase, sh: &ModeShapes, pfx: &str) {
     let mut e = (sh.part)(&id("NM53 mode 2 with bought > 0"));
     c.set_mode(&mut e, i, 2, M_THR, M_TIP, b, b);
     bad(&e);
+    // NM52b / NM53b the same dead field with the order's custody named and spent: the delivery is mode 0's / mode 2's (n
+    // to the maker's key) and the custody's units go to the matcher
+    for (name, mode, thr, tip) in [
+        ("NM52b mode 0 with bought > 0, its custody spent: the custody's units to the matcher", 0, 0, 0),
+        ("NM53b mode 2 with bought > 0, its custody spent: the custody's units to the matcher", 2, M_THR, M_TIP),
+    ] {
+        let honest = (sh.part)(&id(name));
+        let t = c.t_out(&honest, i);
+        let k = honest.cont_out(c.oid).expect("a partial fill continues");
+        let (dv, kv) = (honest.value(i), honest.value(k));
+        let mut e = m1_later(c, honest, b);
+        e.set_out_state(i, c.plain(t, MAKER_A));
+        e.set_value(i, dv + M_KAS);
+        e.set_value(k, kv);
+        let mt = c.matcher_t(&e);
+        e.add_out_amount(mt, b);
+        c.set_mode(&mut e, i, mode, thr, tip, b, b);
+        bad(&e);
+    }
+    // a negative bought (the maker's own hostile field): mode 1 adds it to the delivery, so the custody holds n - 5 and the
+    // matcher keeps 5
+    let mut e = m1_first(c, (sh.part)(&id("NM67 mode 1 with bought -5: a custody of n - 5, the matcher keeps 5")));
+    let t = c.t_out(&e, i);
+    e.set_out_state(i, c.cust(t - 5));
+    let mt = c.matcher_t(&e);
+    e.add_out_amount(mt, 5);
+    c.set_mode(&mut e, i, 1, 0, 0, -5, t - 5);
+    bad(&e);
     let mut e = m1_first(c, (sh.part)(&id("NM54 a mode-0 order delivering into a custody")));
     c.set_mode(&mut e, i, 0, 0, 0, 0, c.t_out(&first, i));
     bad(&e);
@@ -1913,6 +1947,9 @@ pub fn mode_battery(r: &Run, c: &ModeCase, sh: &ModeShapes, pfx: &str) {
     let li = c.t_in(&topup, i);
     let t = c.t_out(&topup, i) - M_HAVE;
     let k = topup.cont_out(c.oid).unwrap();
+    let mut e = topup.clone().named(&id("NM63b a top-up claimed as form 3"));
+    c.set_form(&mut e, i, 3);
+    bad(&e);
     let mut e = topup.clone().named(&id("NM70 top-up of a receive UTXO of another key"));
     e.set_in_tok(li, c.recv(M_HAVE, MATCHER, M_THR));
     e.set_out_state(i, c.recv(M_HAVE + t, MATCHER, M_THR));
@@ -1974,7 +2011,7 @@ pub fn mode_battery(r: &Run, c: &ModeCase, sh: &ModeShapes, pfx: &str) {
     bad(&e);
 }
 
-/// A KRON T is delivered new: modes 1 and 2 refuse every fill (names `<pfx>NM9.`).
+/// A KRON T is delivered new: modes 1 and 2 refuse every fill, and no KRON T is held as a bought-custody (names `<pfx>NM9.`).
 pub fn kron_t_battery(r: &Run, c: &ModeCase, part: &dyn Fn(&str) -> Ed, pfx: &str) {
     for (n, (mode, form, what)) in [(1, 0, "mode 1"), (2, 0, "mode 2 form 0"), (2, 1, "mode 2 form 1")].into_iter().enumerate() {
         let mut e = part(&format!("{pfx}NM9{n} a KRON T in {what}"));
@@ -1983,4 +2020,9 @@ pub fn kron_t_battery(r: &Run, c: &ModeCase, part: &dyn Fn(&str) -> Ed, pfx: &st
         c.set_mode(&mut e, i, mode, M_THR, M_TIP, 0, 0);
         r.bad(&e, i);
     }
+    // NM93 a KRON T held as a bought-custody (a mode-1 later fill): a KRON T is delivered new and never held, so the
+    // bought-custody is KCC-20 only
+    let e = m1_later(c, part(&format!("{pfx}NM93 a KRON T held as a bought-custody (mode 1 later fill)")), M_BOUGHT);
+    let i = c.order(&e);
+    r.bad(&e, i);
 }

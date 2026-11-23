@@ -26,6 +26,17 @@
 //   `tx.outputs[self].value + refundTip >= carriers`. A negative refundTip raises the KAS the
 //   maker must receive, because the keeper may take at most refundTip. It only tightens the
 //   keeper's payout and never loosens it, so no transaction is accepted when the check is removed.
+// - The top-up `require(have >= 0)`. `have` is the amount of the receive UTXO, read from the P2SH
+//   input tTplIn whose template hash is T's, so a UTXO the token program created; the program keeps
+//   amounts non-negative. A negative amount would only shrink the maker's receive UTXO before the
+//   gain.
+//
+// Delivery modes (AUD-COV, 2026-11-24): every delivery-mode require is a DM-P* entry, witnessed by
+// pair_harness::mode_battery (shared with KobCondPair: NM01..NM88, the a / b side and the T family
+// k / r in the id prefix) and kron_t_battery (NM90..NM93). DM-P12 (the bought-custody's
+// `tFamily == FAM_KCC20`) is defence in depth: a KRON T held as a custody (NM93) is also refused by
+// the custody's KCC-20 state equality, since a KRON state starts with its owner push, not 0x08, and
+// in a fill by `mode == 0`. No transaction becomes acceptable without it.
 import { del, rep, rx } from '../lib/edits.mjs';
 
 export const suite = {
@@ -160,4 +171,19 @@ export const mutations = [
   { id: "DM-P10", file: F, test: "pair_second_topup", expect: ["aNM20","bNM20"], note: "mode 2 top-up: output i is the receive UTXO's successor (DLV-07: a second order claims the receive UTXO another order tops up)", edits: [del("                        require(OpAuthOutputIdx(tTplIn, 0) == self);\n")] },
   { id: "DM-P11", file: F, test: DM, expect: ["atkNM85","btkNM85"], note: "mode 2 top-up: output i is the receive UTXO's successor (DLV-07, one order: the successor at a lower output, output i a copy of its state)", edits: [del("                        require(OpAuthOutputIdx(tTplIn, 0) == self);\n")] },
   { id: "DM-P9", file: F, test: DM, expect: ["atkNM42","btkNM42"], note: "mode 1 later fill: the grown custody keeps its KAS", edits: [del("                require(tx.outputs[tTplIn].value >= haveKas);\n")] },
+  // AUD-COV (2026-11-24): the delivery-mode lines no entry mutated before.
+  { id: "DM-P12", file: F, hold: { [DM]: ["atrNM93","btrNM93"] }, note: "a bought-custody is KCC-20 only: defence in depth (a KRON T held as a custody is also refused by the custody's KCC-20 state equality, a KRON state starting with its owner push, not 0x08, and in a fill by mode == 0)", edits: [rep("        if (bought > 0) {\n            require(tFamily == FAM_KCC20);\n", "        if (bought > 0) {\n")] },
+  { id: "DM-P13", file: F, test: DM, expect: ["atkNM08","btkNM08"], inputOnly: ["atkNM08","btkNM08"], note: "mode 1 later fill: the bought-custody is the P2SH of the script its state is read from (a planted non-P2SH input of T's covenant id with the genuine custody redeem; on the public-mint and KaspaRocket programs the token program also refuses it)", edits: [rep("            require(tx.inputs[tTplIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(tr)));\n            require(tr.slice(tPre, tPre + 112)", "            require(tr.slice(tPre, tPre + 112)")] },
+  { id: "DM-P14", file: F, test: DM, expect: ["atkNM51","btkNM51"], note: "mode >= 0 (hostile field: mode -1 would fill as mode 0)", edits: [del("            require(mode >= 0);\n")] },
+  { id: "DM-P15", file: F, test: DM, expect: ["atkNM50","btkNM50"], note: "mode <= 2 (hostile field: mode 3 would fill as mode 0)", edits: [del("            require(mode <= 2);\n")] },
+  { id: "DM-P16", file: F, test: DM, expect: ["atrNM91","btrNM91","atrNM92","btrNM92"], note: "a KRON T is delivered new: mode 0 only (NM90, mode 1, is not listed: its continuation keeps bought 0, which the continuation pin also refuses) (modes 1 and 2 would record a bought amount or a receive form the KRON delivery ignores)", edits: [rep("                // A KRON T is delivered new.\n                require(mode == 0);\n", "                // A KRON T is delivered new.\n")] },
+  { id: "DM-P17", file: F, test: DM, expect: ["atkNM67","btkNM67"], note: "mode 1: bought >= 0 (hostile field: bought -5 delivers a custody of n - 5, the matcher keeps 5)", edits: [del("                require(bought >= 0);\n")] },
+  { id: "DM-P18", file: F, test: DM, expect: ["atkNM52b","btkNM52b","atkNM53b","btkNM53b"], hold: { [DM]: ["atkNM52","btkNM52","atkNM53","btkNM53"] }, note: "modes 0 and 2: bought == 0 (a mode-0 / mode-2 order with bought > 0 and its custody spent delivers n and leaves the custody's units to the matcher, NM52b / NM53b; without the custody, NM52 / NM53, the bought-custody check refuses it too)", edits: [del("                require(bought == 0);\n")] },
+  { id: "DM-P19", file: F, test: DM, expect: ["atkNM62","btkNM62","atkNM77","btkNM77"], note: "mode 2 forms 1 and 2: recvThreshold > 0 (a receive UTXO of threshold 0; a top-up into any threshold)", edits: [del("                    require(recvThreshold > 0);\n")] },
+  { id: "DM-P20", file: F, test: DM, expect: ["atkNM65","btkNM65"], note: "mode 2 forms 1 and 2: topupTip >= 0 (hostile field)", edits: [del("                    require(topupTip >= 0);\n")] },
+  { id: "DM-P21", file: F, test: DM, expect: ["atkNM64","btkNM64","atkNM86","btkNM86","atkNM87","btkNM87"], note: "mode 2: topupTip <= deliveryCarrier (the filler of a top-up takes more than the carrier it saves, up to the order's whole KAS)", edits: [del("                    require(topupTip <= deliveryCarrier);\n")] },
+  { id: "DM-P22", file: F, test: DM, expect: ["atkNM63b","btkNM63b"], hold: { [DM]: ["atkNM63","btkNM63"] }, note: "mode 2: form is 0, 1 or 2 (form 3 would fill as a top-up, NM63b; form 3 on a form-1 build, NM63, is also refused by the top-up's receive-state checks)", edits: [del("                        require(form == 2);\n")] },
+  { id: "DM-P23", file: F, test: DM, expect: ["atkNM70","btkNM70"], note: "top-up: the receive UTXO is the maker's (owner, schemes 0x00 / 0x01, amount-threshold): a receive UTXO of another key topped up", edits: [del("                        require(rst.slice(9, 47) == rcv);\n")] },
+  { id: "DM-P24", file: F, test: DM, expect: ["atkNM71","btkNM71"], note: "top-up: the receive UTXO's threshold is at least recvThreshold", edits: [del("                        require(int(byte[8](rst.slice(47, 55))) >= recvThreshold);\n")] },
+  { id: "DM-P25", file: F, test: DM, expect: ["atkNM72","btkNM72"], hold: { [DM]: ["atkNM73","btkNM73"] }, note: "top-up: the receive UTXO's guard is canonical (NM72) and it carries tExt: defence in depth for the commitment, since output i is pinned with tExt and the token program keeps the successor's commitment (NM73 held)", edits: [del("                        require(rst.slice(55, 112) == zg.slice(8, 32) + tail);\n")] },
 ];

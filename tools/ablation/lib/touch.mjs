@@ -26,6 +26,7 @@
 // - slope: slope == 0.
 // - cltv: tx.daa >= exposed + minRestDaa.
 // - interval, active, tokdaa: the three exposure terms.
+// - ivpos: the evidence interval is not negative (iv >= 0, audit 2026-10-29 F1).
 // - tkcov: the custody carries the token's covenant id.
 // - owner: the custody is owned by the evidence ask, scheme covenant id.
 // - tktpl, tkp2sh: the custody is a holder UTXO of the token's program, by template hash or by
@@ -75,6 +76,10 @@ const CHECKS = {
   interval: {
     note: 'exposure counts the TWAP / DCA interval (UTXO DAA + interval)',
     edits: f => [rx(f, /int exposed = OpTxInputDaaScore\(ev\) \+ (?:int\(byte\[8\]\([or]\.slice\([^)]*\)\)\)|iv);/, 'int exposed = OpTxInputDaaScore(ev);')],
+  },
+  ivpos: {
+    note: 'the evidence interval is not negative (a negative one cancels the UTXO age, so a quote of the same transaction arms the stop; audit 2026-10-29 F1)',
+    edits: f => [rxDel(f, /^\s*require\(iv >= 0\);$/m)],
   },
   active: { note: 'exposure counts the evidence activeFrom', edits: f => [rxDel(f, /^\s*if \(act > exposed\) \{ exposed = act; \}$/m)] },
   tokdaa: { note: 'exposure counts the evidence ask custody DAA', edits: f => [rxDel(f, /^\s*if \(td > exposed\) \{ exposed = td; \}$/m)] },
