@@ -211,8 +211,25 @@ now" and "Fills to fund (optional)". "Ladder" places several limit orders at ste
 each transaction in turn (stopping keeps the levels already placed).
 
 *If your limit crosses the book* (a buy at or above the best ask, a sell at or below the best bid), the default
-"Auction to my limit (default)" fills it at once as a taker through a short auction from the best price to your limit and rests
-whatever is left at your limit. "Plain limit" fills at your limit price; the matcher keeps the difference. "Refuse" rejects it.
+"Fill now from the book (default)" takes the resting orders at their prices yourself, with no executor, and rests whatever is left
+at your limit ("Your limit crosses the book: it fills now from N resting order(s) at their prices. No executor; you pay only the
+network fee."). "Auction to my limit" fills it as a taker through a short auction from the best price to your limit, then rests the
+rest. "Plain limit" fills at your limit price; the matcher keeps the difference. "Refuse" rejects it. On a pair market there is no
+direct fill: a crossing pair order uses the auction.
+
+**Fill now, or an order for executors.** Executors are independent programs that anyone may run; they fill the orders in the book
+for a tip. On a KAS market, Advanced > "If it crosses the book now" decides who fills an immediate order:
+
+* **Limit** and **FOK**: "Fill now from the book" is the default. Your wallet takes the resting orders at their prices in its own
+  transaction (a FOK all in one transaction or nothing). No executor is needed. What the book cannot fill now is rested (a limit) or
+  not placed ("What the book cannot fill now (...) is not placed.").
+* **Market** and **IOC**: "Send an order for executors (default)". The order goes on chain and an executor fills it (a market order
+  through its auction, within your slippage). "Fill now from the book" is one choice away.
+
+An order for executors fills only while an executor runs. If none does, it is not filled: it expires at the end of its life and its
+escrow waits for a refund ("expired: refund pending", section 7). Anyone may send that refund; with no executor running, press
+**Refund** in My orders or keep the automatic refund on with the app open. A resting limit order can still be filled without an
+executor, by another user's Fill now.
 
 **Market.** "Fills now in a short auction, never beyond your slippage; the rest is returned." The price moves from the best price
 toward your worst price over about 20 seconds. **Slippage allowed** (default 3%) bounds the worst price against the best price now.
@@ -285,7 +302,9 @@ Status words: open, partly filled, filled, cancelled, refunded, expired (IOC/FOK
 * **Renew.** A "Good till cancelled" order lasts 90 days. "Renew before {date} (day N of 90)" warns you; press **Renew**
   (the new order is good for another 90 days from now).
 * **Stray tokens.** Tokens sent to an order from outside are not liquidity. "Sweep strays" returns them and keeps the order open;
-  a cancel returns them too. Once an order closes, its strays are lost for good.
+  a cancel returns them too. Once an order closes, its strays are lost for good. Only the order's own token sent to the order
+  itself is kept for you this way; another token, or a send to the order's script (P2SH) address, can be taken by whoever next
+  fills or refunds it. Never send tokens to an order or a lock address.
 * **Older contract versions.** A contract change gives new orders a new contract version; an order you placed before keeps its own
   until it ends. Nothing fills it any more, arms or trails its stop or runs its exits. An order of a version this app still knows is
   marked "older contract version — cancel only": its terms are shown, **Cancel** (and "Cancel all") returns its tokens, carriers,
@@ -471,6 +490,26 @@ token is created.
 KOB has no "everyone mints" feature: a creation here makes the whole supply at once and never sets up a public minter or a seed. A token
 whose program has a public mint is minted on other services; it trades on KOB like any token of an allowlisted program (the published KCC-20 app
 is one), and what is left to mint shows as "Mint left" in its token details ("Status and checks").
+
+**After creation: keep, sell at one price, or sell on a curve.** The **After creation** section offers "Keep all in my wallet"
+(nobody can buy until you place a sell order), "Sell at one price" (one sell order at a fixed price, placed right after the token
+exists) and "Sell on a curve" (one sell order whose price steps up as it sells, created with the token). For both sales, "For sale"
+sets the tokens offered and "Keep in my wallet" the rest. A curve has **Levels**, **Total if sold out** and a **Shape**:
+
+* **Linear**: you choose the levels and the **Last level** as a multiple of the first price.
+* **Chromatic**: each level is one semitone (2^(1/12), about +5.95 %) above the one before, as Kaspa's emission falls one semitone a
+  month; every 12 levels double the price. You choose **Octaves**; the top level is 2^octaves times the first.
+
+The form draws "Price by share sold" and shows the first, last and average price. A curve has no expiry, and you can cancel it any time.
+
+**Creator lock.** "Lock my share until" (No lock, 30, 90, 180 or 365 days, or a date within 10 years) locks the share you keep on
+chain (with a sale, the part you keep, not the part for sale). Nobody can move it before the date, not even you. Buyers see the lock on
+the token page. By default the lock **opens automatically** ("until {date}, opens automatically"): the creation also sends 1 KAS to the
+lock (the "Lock coin"). After the date anyone may send the release, and it can pay only you: the tokens and that KAS, less a small fee
+and a tip. Executors release open locks for a 0.01 KAS tip; you can also press **Release now** in Portfolio (no signature needed).
+To sign the unlock yourself instead, turn on **Manual unlock** in Settings, Creator lock, before you create the token. Such a lock opens
+only with your own signature after the date: Portfolio offers **Unlock** (your wallet must sign script inputs; otherwise the CLI and your
+private key). A lock already created keeps its kind.
 
 After creation the page shows the token id and "Open its market". The token appears in the Market list once a first sell order exists;
 until then only a wallet that holds it can open it. KOB keeps no listing. The "registry entry" the page offers is optional: apps read

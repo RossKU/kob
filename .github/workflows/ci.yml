@@ -29,7 +29,7 @@ jobs:
     # that does not run is skipped, and a skipped job counts as passed (job ci-ok, the one result to look at, fails when a job failed or was cancelled).
     # Everything runs when the diff cannot be had (a new branch, a force push, schedule, workflow_dispatch) and on any path not classified below.
     #   rust      crates/, vendor/, contracts/, registry/, scripts/, tools/, packages/, Cargo.*, toolchain files, and the two docs the Rust tests
-    #             include (docs/spec/kob1-payload.md, docs/ops/executor.md): fmt, clippy, test, budget-table, wasm, x402-sdk, contracts, deps,
+    #             include (docs/spec/kob1-payload.md, docs/ops/executor.md): fmt, clippy, test, budget-table, wasm, x402-sdk, tools, contracts, deps,
     #             reproducible, and web (the web build embeds kob-wasm and reads crates/, contracts/ and registry/)
     #   web       web/ and the root README.md (a web unit test reads it): web, web-build, web-e2e
     #   docs      other Markdown, docs/, LICENSE, NOTICE: contracts (scripts/check-pins.mjs reads every doc for pinned hashes)
@@ -93,7 +93,7 @@ jobs:
     # The one result of this workflow (a required check, or what a script reads, names this job): it passes when every job passed or was
     # skipped by the diff, and fails when any job failed or was cancelled. Its `needs` lists every other job.
     if: always()
-    needs: [changes, fmt, clippy, test, budget-table, wasm, contracts, x402-sdk, deps, web, web-build, web-e2e, reproducible]
+    needs: [changes, fmt, clippy, test, budget-table, wasm, contracts, x402-sdk, tools, deps, web, web-build, web-e2e, reproducible]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed or was skipped
@@ -280,11 +280,33 @@ jobs:
       - name: kob-wasm golden vectors and SDK tests (installs wasm-bindgen-cli under target/tools)
         run: bash scripts/build-wasm.sh --install-bindgen --test
 
+  tools:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    # The two Node tools that drive the kob CLI with a key: tools/mm-bot (a market maker, no dependencies) and tools/kob-mcp (an MCP server
+    # for agents). Their tests run against a stand-in kob (test/fake-kob.mjs), so a change to kob's --json output or to a cap shows here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: mm-bot tests
+        working-directory: tools/mm-bot
+        run: npm test
+      - name: kob-mcp tests
+        working-directory: tools/kob-mcp
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
+
   deps:
     needs: changes
     if: needs.changes.outputs.deps == 'true'
     # Dependency policy: RustSec advisories, licences and sources (.cargo/deny.toml lists every accepted advisory with its reason), and the
-    # npm advisories of the three lockfiles. New advisories make this job fail until they are fixed or accepted in .cargo/deny.toml.
+    # npm advisories of the five lockfiles. New advisories make this job fail until they are fixed or accepted in .cargo/deny.toml.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -300,12 +322,13 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - name: npm audit (web, packages/kob-x402, tools/wallet-gate)
-        # web through scripts/npm-audit.mjs: the advisories accepted in scripts/npm-audit-allow.json, each with its reason
+      - name: npm audit (web, packages/kob-x402, tools/wallet-gate, tools/kob-mcp, scripts/deploy)
+        # web through scripts/npm-audit.mjs: the advisories accepted in scripts/npm-audit-allow.json, each with its reason. tools/mm-bot
+        # has no dependencies (no lockfile); scripts/deploy is the wrangler of the Pages deploy.
         run: |
           echo "== web"
           node scripts/npm-audit.mjs web
-          for d in packages/kob-x402 tools/wallet-gate; do
+          for d in packages/kob-x402 tools/wallet-gate tools/kob-mcp scripts/deploy; do
             echo "== $d"
             (cd "$d" && npm audit --package-lock-only --audit-level=high)
           done

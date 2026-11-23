@@ -163,11 +163,17 @@ is at most 0.6% of 10 KAS on every token program and 0.3% to 1.4% for a pair fil
   commitment the state names (`extensionCommitment` of `KobAsk` / `KobCondAsk`, the committed exit's of `KobIfdAsk`;
   `sExt` / `aExt` / `bExt` of the pair orders; an if-done entry writes its own into its exit): units of the token's
   covenant id with another commitment are another token, and every entry that reads the custody (fill, refund, IOC / FOK
-  end, merge) refuses them. Tokens of the order's own token(s) sent to it from outside (a pair order: of A or of B) are
-  inert and only the maker's cancel moves them. Tokens
-  of any OTHER token (another covenant id) sent to an order are NOT protected: every spend of the order (fill, refund,
-  update, cancel) authorises them, so whoever builds that transaction may move them. Never send tokens to an order
-  (`matcher.md` §1.2).
+  end, merge) refuses them. **Strays.** Only one kind of stray is protected: a KCC-20 transfer of the order's OWN token
+  (a pair order: of A or of B; the pair kinds scan both of their tokens, but no third) to the order's covenant id (owner
+  scheme `0x04`). Settle (fill, refund, IOC / FOK end) refuses any such token input other than the custody (`noStrays`), so only the maker's cancel
+  (or an in-place sweep, `matcher.md` §1.2) moves it. NOT protected:
+  (a) a transfer to the order UTXO's P2SH address (owner scheme `0x03`, owner = the hash of the order's redeem script).
+  Spending that order UTXO authorises it, and `noStrays` refuses only an owner equal to the covenant id, which a script
+  hash never is, so the next fill or refund of that exact UTXO can take it. The continuation has a new script, so if that UTXO is spent
+  without it, it is stuck for good.
+  (b) a transfer of any OTHER token (another covenant id) to the order's covenant id: every spend of the order (fill,
+  refund, update, cancel) authorises it, so the next filler or keeper may move it.
+  No KOB flow creates either. Never send tokens to an order or lock address.
 - **Positional outputs.** Everything an order owes the maker is paid, delivered or returned at a position no
   other order can claim: its own input index, or (the unsold rest of an IOC sell, a pair order's custody rest or return)
   the index of its own custody input. One output never serves two orders. The custody of a `KobAsk` / `KobCondAsk` that

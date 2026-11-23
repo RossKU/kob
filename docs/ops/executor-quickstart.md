@@ -88,8 +88,25 @@ the repository passes). It does not protect against a compromised workflow or
 repository at the tagged commit: for an executor that will hold funds, also compare the hashes with the release announcement
 and rebuild it from the tagged commit. The binaries are not code-signed.
 
-Unzip the archive (or copy the binary you built) into a folder of its own that your account can write to (for example `C:\kob` or `~/kob`; not `Program Files`):
-the setup writes its configuration, the key file and the database next to the program. **Extract the archive first**: do not
+Unzip the archive (or copy the binary you built) into a folder of its own that only your account can write to (for example
+`%LOCALAPPDATA%\kob` on Windows or `~/kob`; not `Program Files`):
+the setup writes its configuration, the key file and the database next to the program.
+
+**Windows: not a folder at the root of `C:\`.** A folder such as `C:\kob` inherits "Authenticated Users: Modify" from `C:\`, so
+every other local account could replace `kobd.exe` or edit `kobd.toml` (point it at another key file or node). A folder under
+your profile (`%LOCALAPPDATA%\kob`, in PowerShell `$env:LOCALAPPDATA\kob`) has no such entry. If you use a folder at the root
+anyway, create it empty and remove the inherited rights before you unzip into it. In `cmd`:
+
+```
+icacls C:\kob /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" /grant:r "SYSTEM:(OI)(CI)F" /grant:r "Administrators:(OI)(CI)F"
+```
+
+In PowerShell write the first grant as `/grant:r "${env:USERNAME}:(OI)(CI)F"`; the rest is the same. (On a Windows in another
+language, write `*S-1-5-18` for `SYSTEM` and `*S-1-5-32-544` for `Administrators`.) Then check with `icacls C:\kob`: it must list
+your account, `NT AUTHORITY\SYSTEM` and `BUILTIN\Administrators`, and nothing else. kobd checks on Windows only who can read the key
+file, not who can write the folder, the program or the configuration.
+
+**Extract the archive first**: do not
 double-click the program inside the zip viewer (Windows then runs it from a temporary folder and the key and the database
 would be written there), and avoid a folder that a cloud service syncs (OneDrive, Dropbox, ...), which would upload the key file.
 
@@ -531,10 +548,13 @@ program changes. The program is not replaced while it runs, and it does not upda
    the fast start rebuilds the live book within seconds. Make sure neither the key file nor the pause file is inside `kob-data`
    (the setup puts both next to the program; a configuration from an older setup has `pause_file = "kob-data/pause"`:
    change it to `"kob-pause"` first: the pause would go with the folder, so the executor refuses to start with a pause file inside a
-   missing data directory, and it refuses a key file inside the data directory always). An Indexer's archive of schema 5 to 9 is brought
-   to schema 10 (the current one) offline with `kobd db --config kobd.toml migrate` in its folder (stop it first;
-   free disk about the size of the store; the old file stays as `index.sqlite3.before-migrate` until you delete it; an older build refuses
-   the migrated store; `docs/ops/executor.md`, 7.6a); any other archive rebuilds with `kobd db --config kobd.toml
+   missing data directory, and it refuses a key file inside the data directory always). An Indexer's archive of schema 5 to 13 is brought
+   to the current schema (`docs/ops/executor.md`, 7.6a) offline with `kobd db --config kobd.toml migrate` in its folder (stop it
+   first: it takes the writer lock). A store of schema 9 to 12 is first brought to schema 13 in `index.sqlite3.migrating13`, which is
+   deleted once the schema 14 store is built from it; a store of schema 13 is compacted directly. Free disk: the new store (about
+   three quarters of the old one), plus the schema 13 file for an older store. The old file stays as `index.sqlite3.before-migrate`
+   until you delete it; an older build refuses the migrated store. The same run compresses the sealed record-log segments to zstd
+   (`--no-compress-log` leaves that out; `kobd db compact-log` does it later, 7.6c). Any other archive rebuilds with `kobd db --config kobd.toml
    replay` while offline; the public read server has a way without downtime (`docs/ops/chart-server.md`, section 6).
 7. **Rollback**: stop, put `kobd.old` back, restore the `kob-data` copy of step 4 if the database changed. An indexer must
    not go below the payload version in use (`docs/ops/release.md`, 7).
@@ -684,7 +704,7 @@ to a newer build is uninstalling, which deletes the key. Withdraw first.
 
 **Database update.** Each time you switch the executor on, the app first runs `kobd db migrate` on its database (the
 status says `updating the database`). On a current database this takes a moment and changes nothing. A database of an
-earlier version (v0.1.0 wrote schema 5; this build reads schema 10) is rebuilt beside the old one, checked row by row and
+earlier version (v0.1.0 wrote schema 5; this build reads the current schema, `docs/ops/executor.md`, 7.6a) is rebuilt beside the old one, checked row by row and
 only then swapped in; the key file is not touched and the orders are kept. It needs free storage about the size of the
 database (the Executor's is at most 500 MB) and can take some minutes. The old file stays in the app's storage as
 `index.sqlite3.before-migrate` until the executor has run on the new database: the app deletes it by itself once the

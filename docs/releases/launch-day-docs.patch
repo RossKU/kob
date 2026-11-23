@@ -1,0 +1,65 @@
+diff --git a/README.md b/README.md
+index 93a1ee8d3..2e8a9cde2 100644
+--- a/README.md
++++ b/README.md
+@@ -10,11 +10,11 @@ spread. There is no bridge, no sequencer, no admin key, no oracle and no protoco
+ 
+ ## Quick start
+ 
+-To trade, open the testnet-10 web app, [kob-tn10.kaspa.ag](https://kob-tn10.kaspa.ag), with KasWare or Kaspire. Its tokens are test
+-tokens with no value. See the [user guide](docs/user-guide.md).
+-
+-[kob.kaspa.ag](https://kob.kaspa.ag) serves the same testnet-10 app today: both hosts are one deployment, and kob-tn10.kaspa.ag is an alias of it.
+-Mainnet is not launched. At launch, kob.kaspa.ag opens on mainnet by default and the header network switch is turned on; testnet-10 stays one click away.
++To trade on mainnet, open [kob.kaspa.ag](https://kob.kaspa.ag) with KasWare or Kaspire. Mainnet launched on <date> as a canary, with no
++external audit: use only funds you can afford to lose. To test first, open the testnet-10 app,
++[kob-tn10.kaspa.ag](https://kob-tn10.kaspa.ag), or pick testnet-10 with the header network switch; its tokens are test tokens with no
++value. See the [user guide](docs/user-guide.md). Both hosts are one deployment: kob.kaspa.ag opens on mainnet, kob-tn10.kaspa.ag on
++testnet-10.
+ 
+ To run `kobd` on testnet-10, install Git, [rustup](https://rustup.rs) and a C compiler. `kobd` is either an Indexer, which is
+ keyless, or an Executor, which matches orders.
+diff --git a/SECURITY.md b/SECURITY.md
+index 9998f8dfb..18d38953b 100644
+--- a/SECURITY.md
++++ b/SECURITY.md
+@@ -9,7 +9,7 @@ contracts run in the real rusty-kaspa script engine), the ablation (mutation) su
+ which check rejects which attack (`tools/ablation/README.md`) and fuzz/soak tests. None of that
+ is an independent audit, and a passing test suite is not one either.
+ 
+-Mainnet launches as a **canary**, with a visible open review notice in the app (a header badge and a
++Mainnet launched on <date> as a **canary**, with a visible open review notice in the app (a header badge and a
+ footer line on every page, and an entry of the bell's current status until it is dismissed). **Use it
+ at your own risk, and only with funds you can afford to lose.**
+ 
+diff --git a/docs/ops/executor-quickstart.md b/docs/ops/executor-quickstart.md
+index 4166e37a2..425aa706f 100644
+--- a/docs/ops/executor-quickstart.md
++++ b/docs/ops/executor-quickstart.md
+@@ -9,8 +9,8 @@ crossing orders and refunds expired ones, earning the spreads and the makers' ti
+ The executor talks to nothing but the Kaspa node you point it at (public nodes found through the Kaspa resolvers by default,
+ or your own). It sends no telemetry, charges no fee, does not update itself and connects to no server of the KOB project.
+ 
+-**Risk.** KOB is in open review: its contracts have had no external security review and mainnet launches as a canary
+-(`SECURITY.md`, `docs/security/AUDIT-2026-10.md`). The executor signs unattended with a **hot key**, so it holds working
++**Risk.** KOB is in open review: its contracts have had no external security review and mainnet runs as a canary
++since <date> (`SECURITY.md`, `docs/security/AUDIT-2026-10.md`). The executor signs unattended with a **hot key**, so it holds working
+ capital only (section 3). What one of its transactions can pay in fees is capped by `--fee-max-tx-kas` (default 1 KAS) and
+ `--fee-max-rate` (default 1,000 sompi per gram, the relay floor being 100; `docs/ops/executor.md`, Part C, *Fee policy*). The
+ executor signs only inputs of its own key and the covenants enforce every order, but a bad node can still stall it or make it
+@@ -36,11 +36,11 @@ The command-line client `kob` is `cargo build --release --locked -p kob-cli`
+ (`crates/kob-cli/README.md`).
+ 
+ **Download.** Prebuilt binaries are attached to a [GitHub release](https://github.com/RossKU/kob/releases) when one is cut, and a
+-release can lag `master`. **The only release so far is `v0.1.0`, testnet-10 only: no mainnet archive has been published.** Its
+-files still carry the earlier program name: `kob-executor-0.1.0-testnet-10-x86_64-pc-windows-msvc.zip`,
++release can lag `master`. **The first mainnet release is `v0.2.0` (<date>).** The earlier `v0.1.0` was testnet-10 only; its
++files carry the earlier program name: `kob-executor-0.1.0-testnet-10-x86_64-pc-windows-msvc.zip`,
+ `...-x86_64-unknown-linux-gnu.tar.gz`, `...-aarch64-linux-android.tar.gz`, `kob-executor-0.1.0-testnet-10-android.apk` and a
+-`SHA256SUMS`. The table is the naming of later releases (`scripts/package-release.mjs`); the mainnet rows apply only once a
+-mainnet release exists:
++`SHA256SUMS`. The table is the naming of later releases (`scripts/package-release.mjs`); the mainnet rows apply from
++`v0.2.0` on:
+ 
+ | Archive | For |
+ |---|---|

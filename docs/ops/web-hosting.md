@@ -306,26 +306,32 @@ Pages deploy skipped" and what is missing into the run's summary, and job `deplo
 On a push to `master` that changes `web/` or an input of the app (kob-wasm, kob-protocol, contracts, registry, the toolchain), and
 on *Actions* > *deploy-pages* > *Run workflow*:
 
-1. builds and tests the app as the `web` job of `ci.yml` does, from source with no build cache restored (kob-wasm slim bindings, the pinned kaspa-wasm SDK,
+1. in job `build`, which holds no secret and runs in no environment, builds and tests the app as the `web` job of `ci.yml` does, from source with no build cache restored (kob-wasm slim bindings, the pinned kaspa-wasm SDK,
    typecheck, unit tests, then `npm run build:release` and `scripts/release-hashes.sh`, so the upload is the release bundle), and uploads nothing
    until the `ci.yml` run of the same commit has passed: that run carries the mock e2e suite (sharded), which the deploy does not run again;
-2. writes `web/dist/config.json` from the variables; on `testnet-10` also `web/dist/registry/tokens.json` as the supported
+2. writes `web/dist/config.json` from the variables (still in job `build`, which then hands `web/dist` and the sha256 of every file on as
+   artifacts); on `testnet-10` also `web/dist/registry/tokens.json` as the supported
    token programs with no token entries (the shipped registry names mainnet tokens; it is the same list `kobd setup`
    writes as `kob-tokens.json`), on `mainnet` the pinned registry of `build:release` stays. With no token entries the app names no
    token: it opens on the tokens that have a ticker or declared decimals, and lists the others (no ticker, no declaration) only
    behind "Show N token(s) without a name" on the market page (a search or a covenant id finds them anyway); a testnet-10 page can
    therefore open on "No tokens yet." while the indexer holds tokens;
-3. uploads `web/dist` with Cloudflare's wrangler action (pinned by commit, wrangler version pinned) to the production branch;
+3. in job `deploy` (environment `production`, the only job with the Cloudflare secrets): checks the downloaded `web/dist` against those
+   hashes and uploads it with wrangler to the production branch. Wrangler and its whole dependency tree are pinned by
+   `scripts/deploy/package-lock.json` (exact versions and integrity hashes) and installed with `npm ci --ignore-scripts`; this job
+   builds nothing and runs no install script. To move wrangler, change the version in `scripts/deploy/package.json`, run
+   `npm install --package-lock-only --ignore-scripts` in that folder and commit both files (CI job `deps` audits the lockfile);
 4. writes the deployment URL, `config.json`, the sha256 of every deployed file and the output of `scripts/release-hashes.sh`
    into the run's summary;
-5. checks the live deployment in a job of its own, `verify`, which holds no secret and reads the hashes the deploy job uploaded as an artifact before its first step with the Cloudflare token (`web/scripts/check-pages.mjs`, from a fresh checkout): `/` sends the app's Content-Security-Policy (with
+5. checks the live deployment in a job of its own, `verify`, which holds no secret and reads the hashes job `build` uploaded as an artifact (job `build` never sees the Cloudflare token) (`web/scripts/check-pages.mjs`, from a fresh checkout): `/` sends the app's Content-Security-Policy (with
    `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`;
    `/signer.html` and `/signer` send the signer's own policy and `X-Frame-Options: SAMEORIGIN`, never the app's; `/assets/*`
    sends `Access-Control-Allow-Origin: *`; every built file is served byte for byte. Any failure fails the run.
 
-Job `deploy` is a matrix with one entry, `testnet` (project `KOB_PAGES_PROJECT`, network `KOB_PAGES_NETWORK`, today `testnet-10`): the one public site. With `KOB_PAGES_MAINNET_INTERNAL=1` a second entry, `mainnet-internal`, uploads the full mainnet app as a protected preview of its own project on the branch `internal` (section 4c); its post-deploy check is the protection check instead of the headers and files one. The site's custom domain (section 5) is the host of `KOB_PAGES_PUBLIC_URL`: the last step, `web/scripts/pages-domain.mjs`, attaches it to the project through the Pages API when it is not attached yet.
+Jobs `build` and `deploy` are a matrix with one entry, `testnet` (project `KOB_PAGES_PROJECT`, network `KOB_PAGES_NETWORK`, today `testnet-10`): the one public site. With `KOB_PAGES_MAINNET_INTERNAL=1` a second entry, `mainnet-internal`, uploads the full mainnet app as a protected preview of its own project on the branch `internal` (section 4c); its post-deploy check is the protection check instead of the headers and files one. The site's custom domain (section 5) is the host of `KOB_PAGES_PUBLIC_URL`: the last step, `web/scripts/pages-domain.mjs`, attaches it to the project through the Pages API when it is not attached yet.
 
-One deployment runs at a time; a newer push cancels an older run. The job has read access to the repository only.
+One deployment runs at a time; a newer push cancels an older run. Every job has read access to the repository only. With required
+reviewers set (section 4a), the approval is asked once job `build` has finished and the `ci.yml` run of the commit has passed.
 
 ### 4b. Hosts today, and what the mainnet launch changes
 
@@ -445,17 +451,40 @@ Two guards are in the workflow, one setting is yours:
 * **Only `refs/heads/master` deploys.** A run of any other ref (for example *Run workflow* with a branch selected) fails in the first
   step of job `config`, and job `deploy` also checks it. A push to a branch never deploys; the push trigger is `master` only.
 * **Job `deploy` runs in the environment `production`** (`environment: production`). GitHub creates the environment the first time
-  the workflow runs. Repository *Settings* > *Environments* > *production*: add **Required reviewers** (yourself, and a second
-  person if there is one) so that every deployment waits for an approval in the run (*Review deployments*) before the job, and the
-  Cloudflare upload, starts; under *Deployment branches and tags* choose *Selected branches and tags* and add `master`. With no
-  reviewer the environment changes nothing: deployments run as before (the gate is then only the master check).
+  the workflow runs. With no reviewer the environment changes nothing: deployments run as before (the gate is then only the master
+  check). The two settings below make it a human gate: every deployment then waits for an approval in the run (*Review
+  deployments*) before the job, and the Cloudflare upload, starts.
+* **A mainnet site does not deploy without that gate.** When `KOB_PAGES_NETWORK=mainnet`, job `config` reads the `production`
+  environment through the API and fails the run unless it has at least one required reviewer and a deployment-branch rule (the
+  branch `master` only, or "protected branches" with `master` protected). A read that shows either missing fails, whatever else is
+  set. If GitHub refuses the read itself, the run fails unless the repository variable `KOB_PAGES_PRODUCTION_GATE_CONFIRMED` is `1`:
+  set it only after the two settings below are done, as your statement that they are. A testnet-10 site is not checked, and neither
+  is the internal mainnet app (section 4c, behind Cloudflare Access). The run warns when administrators may bypass the reviewer.
 * Keep `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as **repository secrets** (section 3, the names are unchanged). Job `config`
   reads whether they exist and has no environment, so secrets moved into the environment would look missing and the deploy would
-  be skipped. Also useful, outside this repository: branch protection on `master` (pull request or at least no force push), two-factor
+  be skipped. Also useful, outside this repository: two-factor
   authentication with a hardware key on the GitHub and Cloudflare accounts, and a Cloudflare token limited to *Account > Cloudflare
   Pages > Edit*.
 
-The post-deploy check compares the deployment with the `dist` built in the same job, so it detects a bad upload, not a bad commit: the
+**The two settings, step by step** (repository owner; do them before `KOB_PAGES_NETWORK=mainnet`):
+
+1. **Required reviewer.** Repository *Settings* > *Environments* > *production* (if it is not listed, run the workflow once, or
+   click *New environment* and name it `production`). Under *Deployment protection rules* tick **Required reviewers**, add yourself
+   (and a second person if there is one), leave *Prevent self-review* unticked when you are the only reviewer, and click *Save
+   protection rules*. Untick *Allow administrators to bypass configured protection rules* if it is shown.
+2. **Branch rule.** On the same page, under *Deployment branches and tags*, choose **Selected branches and tags**, click *Add
+   deployment branch or tag rule*, choose *Ref type: Branch*, enter `master` and click *Add rule*. Remove any other rule.
+3. Only if a run says the environment could not be read: *Settings* > *Secrets and variables* > *Actions* > *Variables* > *New
+   repository variable*, name `KOB_PAGES_PRODUCTION_GATE_CONFIRMED`, value `1`.
+4. Check: *Actions* > *deploy-pages* > *Run workflow* on `master`. The run must stop at *Review deployments* before job `deploy`
+   starts. On a mainnet site job `config` prints "production gate: 1 required reviewer(s)".
+
+Also protect `master` itself: *Settings* > *Rules* > *Rulesets* > *New ruleset* > *New branch ruleset*, target `master` (*Add
+target* > *Include default branch*), enforcement *Active*, tick *Restrict deletions* and *Block force pushes* (and *Require a pull
+request before merging* if you work through pull requests), *Create*. Add a second one for the release tags: *New tag ruleset*,
+*Include by pattern* `v*`, tick *Restrict deletions*, *Restrict updates* and *Block force pushes*, *Create*.
+
+The post-deploy check compares the deployment with the `dist` built by job `build`, so it detects a bad upload, not a bad commit: the
 reviewer approving a deployment is the one who vouches for the commit (the run names it, and the summary lists the sha256 of every
 deployed file; `reproducible` in `ci.yml` builds the same `dist` twice).
 

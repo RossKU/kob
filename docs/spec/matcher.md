@@ -109,7 +109,10 @@ committed exit's of `KobIfdAsk`; the covenants refuse a custody of another commi
   back) or with the `cancel` itself. Only the maker's `cancel` moves them (maker-signed, SIGHASH_ALL). A stray left when
   its order terminates is lost: no input can carry a terminated order's covenant id again, so nothing can authorise it.
 
-These rules cover tokens of the order's OWN token (its `tokenCovId`; a pair order: A and B). A token UTXO of ANY OTHER token
+These rules cover tokens of the order's OWN token (its `tokenCovId`; a pair order: A and B) sent to the order id (KCC-20 owner
+scheme 0x04). A transfer to the order UTXO's P2SH address (scheme 0x03, owner = the hash of its redeem script) is not one of
+them: spending that exact UTXO authorises it and `noStrays` never matches a script hash, so the next fill or refund of that
+UTXO can take it, and it is stuck for good once the UTXO is spent without it (`order-types.md`, common semantics). A token UTXO of ANY OTHER token
 (another covenant id, of any program or family) owned by an order id (KCC-20 owner scheme 0x04, KRON
 `id_type` 2) is a **foreign stray** and is NOT protected: its program authorises it
 whenever an input carrying the order's covenant id is spent, and an order cannot recognise another

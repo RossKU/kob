@@ -178,10 +178,13 @@ tip 0. A pair order (`--quote`) with no `--tip` carries the keeper tip of the pa
 Every option per kind: [REFERENCE.md](REFERENCE.md#order-kinds-every-option).
 
 **Market orders start at a node-confirmed price.** Every order in the KAS book is looked up on the
-node before planning, and orders only the indexer lists are left out (`BOOK_ORDERS_DROPPED`). A
-start far from the last fill still needs `--ack-market-start` (or `--floor-price P` for a sell). On a
-pair book, which is not checked, every `market` or `close` sell needs `--ack-market-start` or
-`--floor-price P`, and so does a buy worth 100 KAS or more.
+node before planning, and orders only the indexer lists are left out (`BOOK_ORDERS_DROPPED`). That
+proves the listed orders exist, not that the indexer hides none, so a checked KAS book and an
+unchecked pair book follow the same rules. A `market` or `close` start more than 10 % on the costly
+side of the last fill (above it for a buy, below it for a sell) needs `--ack-market-start`, even with
+`--floor-price`. Otherwise every sell needs `--floor-price P` or `--ack-market-start`, and a buy worth
+100 KAS or more at the start needs `--ack-market-start` (a pair buy also when the pair has no KAS
+reference). A smaller buy only prints a note.
 
 **A take with `--yes` needs a price bound.** `kob take` fills a resting order at the order's terms
 at the transaction's lock time. The maker can amend the order before you sign, and a Dutch ask or a
@@ -310,7 +313,8 @@ kob token create --name "Test USD" --ticker TUSD --decimals 6 --supply 100000000
   semitone per level) puts a curve (no expiry) in the
   genesis. `--keep PERCENT` of the share stays in the wallet. One confirmation (or `--yes`) covers
   everything.
-- `--lock-until +90d` (or a date `YYYY-MM-DD`, UTC) locks the kept share on chain until then: the
+- `--lock-until +90d` (or a date `YYYY-MM-DD`, UTC, or unix milliseconds, 13 digits; at most 3,653 days,
+  about 10 years, ahead) locks the kept share on chain until then: the
   `--keep` part with `--sell`, else `--keep` percent of the share (default all of it). Nobody, the
   key included, can move it before. It opens by itself: afterwards anyone may release it to the
   key (executors' keepers do, for a 0.01 KAS tip out of the 1 KAS lock coin; `kob token unlock

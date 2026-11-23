@@ -123,10 +123,11 @@ test.describe('motion is subtle, and reduced motion turns it off', () => {
     // resize have it off.
     await page.getByTestId('order-side-sell').click();
     await page.getByTestId('order-side-buy').click();
-    // The durations are the quick ones (100-200 ms).
-    const ms = await side.locator(':scope > .slide-ind').evaluate((e) => Math.max(...getComputedStyle(e).transitionDuration.split(',').map((d) => parseFloat(d) * 1000)));
-    expect(ms).toBeGreaterThanOrEqual(100);
-    expect(ms).toBeLessThanOrEqual(200);
+    // The durations are the quick ones (100-200 ms). Polled: right after the clicks the transition can
+    // still be off from the first paint or a resize.
+    const slideMs = () => side.locator(':scope > .slide-ind').evaluate((e) => Math.max(...getComputedStyle(e).transitionDuration.split(',').map((d) => parseFloat(d) * 1000)));
+    await expect.poll(slideMs).toBeGreaterThanOrEqual(100);
+    expect(await slideMs()).toBeLessThanOrEqual(200);
 
     await page.emulateMedia({ reducedMotion: 'reduce' });
     for (const selector of ['[data-testid="order-side-buy"]', '.slide-ind', '.btn', '.tabs button']) {

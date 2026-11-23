@@ -196,6 +196,7 @@ fn grow(c: &Ctx, blocks: u64, salt: u64) {
 /// switch is in the health; the database equals a clean replay of the chain.
 #[tokio::test]
 async fn the_fallback_takes_over_when_the_configured_node_dies_and_hands_back_when_it_returns() {
+    let _g = pair_serial().await;
     for fetch_parallel in [1, 3] {
         let c = Ctx::new();
         grow(&c, 40, 0);
@@ -237,6 +238,7 @@ async fn the_fallback_takes_over_when_the_configured_node_dies_and_hands_back_wh
 /// it: applied as an ordinary reorg and followed.
 #[tokio::test]
 async fn a_fallback_whose_chain_diverges_deep_is_refused_and_a_shallow_reorg_is_followed() {
+    let _g = pair_serial().await;
     for (depth, refused) in [(25usize, true), (3, false)] {
         // two nodes with the same 40 chain blocks (the mock's blocks are deterministic), then the second reorganises
         let (a, b) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
@@ -272,6 +274,7 @@ async fn a_fallback_whose_chain_diverges_deep_is_refused_and_a_shallow_reorg_is_
 /// configured node and waits, as it would without a failover.
 #[tokio::test]
 async fn a_fallback_that_does_not_know_the_cursor_is_never_switched_to() {
+    let _g = pair_serial().await;
     let (a, b) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
     a.push_empty(30);
     b.push_empty(20);
@@ -289,7 +292,7 @@ async fn a_fallback_that_does_not_know_the_cursor_is_never_switched_to() {
     assert_eq!(r.cursor(), Some(a.tip()));
 }
 
-/// The resolver state and the judge are process-wide: the pair tests run one at a time.
+/// The resolver state and the judge are process-wide: every test in this file takes this lock, so they run one at a time.
 async fn pair_serial() -> tokio::sync::MutexGuard<'static, ()> {
     static M: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     M.lock().await
@@ -349,6 +352,7 @@ async fn a_named_node_that_is_behind_or_on_another_network_raises_an_alarm_and_i
     let (uc, ud) = ("ws://10.0.0.3:18210", "ws://10.0.0.4:18210");
     let d = MockNode::new("testnet-10");
     d.push_empty(10);
+    drop(m);
     let m = pair((ud, &d), (uc, &c));
     m.check_health().await;
     assert!(kobd::rpc::judge::alarm_of(uc).unwrap().contains("it is on testnet-11, not testnet-10"));
@@ -356,6 +360,7 @@ async fn a_named_node_that_is_behind_or_on_another_network_raises_an_alarm_and_i
     // the authority is compared with the other answers only (the node on another network gave none): judged on its own here
     let e = MockNode::new("testnet-10");
     e.push_empty(900);
+    drop(m);
     let m = pair((ud, &d), ("ws://10.0.0.5:18210", &e));
     m.check_health().await;
     m.check_health().await;
@@ -428,6 +433,8 @@ async fn a_public_node_that_is_behind_or_on_another_network_is_replaced_whicheve
     // the authority stays behind the (new) cross-checking node: given up, the cross-checking node is the authority at once
     let c = MockNode::new("testnet-10");
     c.push_empty(900);
+    // dropped, not shadowed: a pair that stays alive can still act on the shared resolver entries
+    drop(m);
     let m = pair(("resolver", &a), ("resolver:2", &c));
     // two checks in a row (the watch's bound here), on the test's task only (as above: no check the test does not see)
     m.check_health().await;
@@ -545,6 +552,7 @@ async fn a_frozen_authority_whose_sink_stands_still_is_given_up() {
     b.push_empty(500);
     let (offset, clock) = test_clock();
     let before = resolver::replacements("resolver") + resolver::replacements("resolver:2");
+    drop(m);
     let m = pair(("resolver", &a), ("resolver:2", &b)).with_clock(clock);
     for s in [0, 200, 400] {
         offset.store(s, Ordering::Relaxed);

@@ -2362,7 +2362,7 @@ systemctl start kob-index
 rm /var/lib/kob-index/index.sqlite3.before-migrate                 # once the executor has run on the new store
 ```
 
-One run takes a store of schema 5 to 12 to schema 13 (a store of schema 9 to 12 by the short way below, *Schema 9 to 10*, *Schema 10 to 11*, *Schema 11 to 12* and *Schema 12 to 13*). **The old store is not altered**: a new file, `index.sqlite3.migrating`, is built beside it and
+One run takes a store of schema 5 to 13 to the current schema, 14: a store of schema 5 to 12 is first brought to schema 13 (a store of schema 9 to 12 by the short way below, *Schema 9 to 10*, *Schema 10 to 11*, *Schema 11 to 12* and *Schema 12 to 13*) in `index.sqlite3.migrating13`, then compacted to 14 (*Schema 13 to 14*). **The old store is not altered**: a new file, `index.sqlite3.migrating`, is built beside it and
 replaces it only when it has been verified, so a run that fails or is stopped leaves the old store as it was (the next run deletes the partial file). In order:
 (1) **copy**: the tables are created from `schema.sql` (and the token-logo tables of `logo_reports.sql`, whose rows no chain gives back, are carried over) without
 their indexes and triggers and filled from the old store in bulk (`INSERT ... SELECT`, about 7 minutes) through views that give every layout the shape of schema 7: the values the
@@ -2768,7 +2768,7 @@ evidence filled in the same transaction, so arming is the matcher's, inside its 
 need no special handling: matchers stop at the `deadline`, the refund opens at `expiryDaa`.
 Pair orders are refunded and killed the same way (their custodies back to the maker for the `refundTip`: a sell-first
 `KobIfdPair` returns its A custody and its B prefund, each at its own index); a refund never moves strays of either token
-(only the maker's cancel does).
+owned by the order's covenant id (only the maker's cancel does; what is not protected: `docs/spec/order-types.md`, *Strays*).
 
 ### Stops: triggered and armed in the batch
 
@@ -3180,6 +3180,39 @@ removed chain block moves its transactions back to pending and they are resent (
 the Executor, the indexer's follower supplies acceptance (Part A); with `match` / `keep --book-file` the
 process follows it itself with `getVirtualChainFromBlockV2` at `Low` verbosity (a second follower
 that only knows the ids it submitted).
+
+**Calls the follower needs, and the node-call check** (`rpc::probe_calls`). A chain authority must serve
+`getVirtualChainFromBlockV2` and, with chain proofs on, `getSeqCommitLaneProof`. Before its first step, and again whenever
+the authority changes (a promotion, a replaced public node, a failover switch), the follower asks both at the node's sink.
+Any answer of the call, an error such as "too deep" included, counts as served. The outcomes:
+
+* The node says it has no such call ("method not found", "not implemented", "not supported", "unavailable in safe mode"):
+  the follower stops (`state = stopped`, the status line `indexer STOPPED`), with `halt_reason` `the chain authority lacks a
+  call the indexer needs: it does not serve <call> (...); run a node of rusty-kaspa v2.1.0 or later, then restart` (for
+  `getSeqCommitLaneProof` also `or set [chain_proof] enabled = false`).
+* The node closes the connection on the call twice while it answers `getServerInfo` (an older node, or a flaky link): a
+  warning in the log, `the chain authority may lack a call the indexer needs (an older node?); not stopping on it, checked
+  again`. The check runs again at the next step; the follower never stops on this.
+* No answer, a timeout or IBD: checked again at the next step.
+
+Every other node that may serve windows, cross-check or lead is checked too, within 30 s each. One that lacks a call, or
+closes the connection on it, is dropped from the chain roles (it still takes submissions): a public node is given up for
+another, a named node raises a node alarm (`node_alarms` in `/v1/health`, `NODE ALARM: <url>: <why>` on the status line).
+A dropped node is checked again after 5 min, the wait doubling while it still lacks the call, up to 40 min; once it serves
+the calls it is back in its roles and the alarm ends. kobd checks no minimum node version.
+
+**Sync gate.** Nothing is rewound, halted or moved on the word of a node that is not synced (a reset or re-syncing node may
+not know the cursor yet). Before a rewind or a gap on a cursor the node disowns (`cannot find header`, `retention root`),
+before a halt on a `removed` list that contradicts the store, and before a gap on a lane proof that is too deep,
+`getServerInfo` must say synced. While it does not, the follower retries in `node_unavailable` (status line `indexer
+waiting for the node (the node is not synced: ...)`). Once the node is synced the question is asked again: a cursor it knows
+now is followed on with no rewind and no gap (`the synced node knows the cursor again: <hash>; following on, no gap`), and a
+contradiction is fetched again (`the node is synced now; asking it again before halting: ...`); only one that still holds
+halts. The recovery past a gap (Part B 7.4) likewise moves the store only when the synced node still disowns the cursor
+(`the node is not synced: the store is not moved past the gap until it is`). A lane proof the synced node can no longer
+serve because the cursor is before its pruning point is a gap (`the node can no longer prove the chain at the cursor: ...`)
+that names the ways out: a node that still proves it, `kobd db rebase`, or `[chain_proof] enabled = false`. It is not a
+pruned gap, so the recovery does not move the store past it.
 
 **Public nodes** (`rpc_url = "resolver"`, `--rpc-url resolver`; the default: the setup's first choice, and what a configuration
 without `rpc_url` uses). The executor asks the Kaspa
