@@ -3008,3 +3008,7 @@ mod tests;
 #[cfg(test)]
 #[path = "reads_scale_tests.rs"]
 mod scale_tests;
+
+#[cfg(test)]
+#[path = "bounds_tests.rs"]
+mod bounds_tests;
