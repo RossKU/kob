@@ -269,12 +269,18 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     // The windows of rows an older build wrote (or the fill above), and of every row when the rules
     // behind them changed (R5C2-4), are set before anything reads. The listing minimum is the one the
     // store last ran with; the writer's first commit applies its own.
+    // One transaction: outside one, every row's update is a commit and a disk sync (R5F-2).
     let daa = super::book::cursor_daa(conn)?.min(i64::MAX as u64) as i64;
-    let dust = book_dust_sompi(conn)?;
-    if ensure_book_rules(conn, dust)? {
+    let tx = conn.unchecked_transaction()?;
+    let dust = book_dust_sompi(&tx)?;
+    if ensure_book_rules(&tx, dust)? {
         tracing::info!("the live books are decided again: the rules behind them changed with this build");
     }
-    maintain_live_books(conn, daa, unix_now())?;
+    let set = maintain_live_books(&tx, daa, unix_now())?;
+    tx.commit()?;
+    if set > 0 {
+        tracing::info!(rows = set, "set the fillable windows of the live books");
+    }
     let unknown_txs = backfill_executor_txs(conn)?;
     if unknown_txs > 0 {
         tracing::info!(
@@ -905,7 +911,7 @@ pub const CLIENT_SITE_QUEUED: usize = 96;
 /// A client holds at most 8 server permits however long this is ([`CLIENT_IN_FLIGHT`]), so the bound on what fills
 /// the 256 does not depend on it. It is sized for an honest burst: of 8 requests in flight, 6 wait behind the 2 heavy
 /// reads, 3 reads in turn, 0.2 s at 70 ms and 1.8 s for 500-candle charts (0.6 s each); and 6 order views of one page's
-/// book check wait on the single light permit, 5 x at most 30 ms (an order view at its bound, about 220,000 VM steps).
+/// book check wait on the single light permit, 5 x 3.5 ms (an order view at its bound, about 220,000 VM steps, debug build).
 pub const CLIENT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// What one API client (a rate-limit key: an IPv4 address or an IPv6 prefix) may use at once.

@@ -673,7 +673,9 @@ fn the_order_view_does_not_grow_with_children_strays_or_spent_custody() {
     for ((name, f), (_, m)) in few.iter().zip(&many) {
         flat(name, *f, *m);
     }
+    let t = std::time::Instant::now();
     let v = order(&conn, &ctx, &c).unwrap().unwrap();
+    eprintln!("order view at its bound: {:?} wall (this build's profile)", t.elapsed());
     assert_eq!((v.children_total, v.strays_total), (Some(VIEW_COUNT_MAX), Some(VIEW_COUNT_MAX)));
     let p = plan(
         &conn,
@@ -1173,5 +1175,187 @@ fn the_logo_lists_do_not_grow_with_votes_or_reports() {
     let many = measure();
     for ((name, f), (_, m)) in few.iter().zip(&many) {
         flat(name, *f, *m);
+    }
+}
+
+/// R5F-2, measured once (`cargo test -p kobd --lib first_open_time -- --ignored --nocapture`; `KOB_LIVE_ORDERS`, default
+/// 100,000): the first open of this build over a store whose live-book tables an older build never filled. The fill and the
+/// windows of every row run in one transaction; for comparison, 2,000 rows' windows set one commit each, as before.
+#[test]
+#[ignore]
+fn first_open_time_of_a_store_of_live_orders() {
+    let n: i64 = std::env::var("KOB_LIVE_ORDERS").ok().and_then(|v| v.parse().ok()).unwrap_or(100_000);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite3");
+    {
+        let conn = crate::indexer::db::open_writer(&path, "testnet-10").unwrap();
+        let s = Seed {
+            prefix: "l",
+            contract: "KobAsk",
+            side: 1,
+            token: TOKEN_COV,
+            quote: None,
+            parent: None,
+            state: Some(AnyState::KobAsk(ask(1, 100_000_000)).encode()),
+            price0: Some(100_000_000),
+            remaining: 10 * WHOLE,
+            custody: true,
+            listed: true,
+            maker: pk(1),
+        };
+        seed(&conn, &s, 0, n);
+        // as the previous build left it: no live-book rows, no rules
+        conn.execute_batch("DELETE FROM book_live; DELETE FROM pair_live; DELETE FROM meta WHERE k IN ('book_live', 'book_live_rules');")
+            .unwrap();
+    }
+    let t = std::time::Instant::now();
+    let conn = crate::indexer::db::open_writer(&path, "testnet-10").unwrap();
+    let first = t.elapsed();
+    let set: i64 = conn.query_row("SELECT COUNT(*) FROM book_live WHERE ok IS NOT NULL", [], |r| r.get(0)).unwrap();
+    assert_eq!(set, n);
+    let t = std::time::Instant::now();
+    drop(conn);
+    let conn = crate::indexer::db::open_writer(&path, "testnet-10").unwrap();
+    let again = t.elapsed();
+    conn.execute("UPDATE book_live SET ok = NULL WHERE rowid IN (SELECT rowid FROM book_live LIMIT 2000)", []).unwrap();
+    let t = std::time::Instant::now();
+    crate::indexer::db::maintain_live_books(&conn, 1_000, None).unwrap();
+    let autocommit = t.elapsed();
+    eprintln!("first open over {n} live orders: {first:?}; a later open: {again:?}; 2,000 windows one commit each: {autocommit:?}");
+}
+
+/// R5C2-6, the worst case of a book read, measured (`cargo test -p kobd --lib worst_case -- --ignored --nocapture`): 1,000
+/// curve asks of 1,000 levels each (`CURVE_MAX_LEVELS`) at a better price than every honest ask fill the 1,000 places of the
+/// side, and each read decodes them all. Prints the wall time per read (of this build's profile) beside the VM steps.
+#[test]
+#[ignore]
+fn worst_case_book_reads_over_1000_level_curves() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    honest_book(&conn);
+    let (hh, p, s) = tok_fields(T3);
+    let levels = kob_protocol::state::CURVE_MAX_LEVELS as i64;
+    let c = AnyState::KobCurveAsk(kob_protocol::state::CurveAskState {
+        maker: pk(9),
+        token_cov_id: TOKEN_COV,
+        token_tpl_hash: hh,
+        tpl_prefix_len: p,
+        tpl_suffix_len: s,
+        scale: SCALE,
+        min_fill: 1,
+        tip: 0,
+        active_from: 0,
+        level_size: WHOLE,
+        total: levels * WHOLE,
+        amount_left: levels * WHOLE,
+        extension_commitment: EXT,
+        table: (0..levels).map(|k| 50_000_000 + k * 10_000).collect(),
+    });
+    let seedc = Seed {
+        prefix: "k",
+        contract: "KobCurveAsk",
+        side: 1,
+        token: TOKEN_COV,
+        quote: None,
+        parent: None,
+        state: Some(c.encode()),
+        price0: Some(50_000_000),
+        remaining: levels * WHOLE,
+        custody: true,
+        listed: true,
+        maker: pk(9),
+    };
+    seed(&conn, &seedc, 0, BOOK_ORDERS_MAX as i64 + 200);
+    crate::indexer::db::maintain_live_books(&conn, 1_000, None).unwrap();
+    let (token, ctx) = (Hash32(TOKEN_COV), ctx());
+    let time = |name: &str, f: &dyn Fn() -> u64| {
+        let t = std::time::Instant::now();
+        let n = f();
+        eprintln!("{name}: {:?} wall, {n} VM steps", t.elapsed());
+    };
+    time("book orders depth 200", &|| steps(&conn, || book(&conn, &ctx, &token, 200, false).unwrap()).1);
+    time("book levels depth 200", &|| steps(&conn, || book(&conn, &ctx, &token, 200, true).unwrap()).1);
+    time("depth 200", &|| steps(&conn, || market::depth(&conn, &ctx, &token, Some(3), 200).unwrap()).1);
+    time("stats", &|| steps(&conn, || market::stats(&conn, &ctx, &token, Some(3)).unwrap()).1);
+    let b = book(&conn, &ctx, &token, 200, false).unwrap();
+    assert!(b.truncated);
+}
+
+/// R5C2-6: the pair reads over 20,001 fillable `KobPair` asks of one pair with a real state each and its exact custody (each
+/// read decodes them, checks them and their custody), measured (`-- --ignored --nocapture`).
+#[test]
+#[ignore]
+fn worst_case_pair_reads_over_real_pair_orders() {
+    use crate::testkit::rtip;
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    let (th, p, s) = tok_fields(T3);
+    let quote = [0x5a; 32];
+    let x = kob_protocol::state::PairState {
+        maker: pk(3),
+        side: kob_protocol::state::SIDE_ASK,
+        s_cov_id: TOKEN_COV,
+        s_tpl_hash: th,
+        s_pre: p,
+        s_suf: s,
+        s_family: 1,
+        s_scale: 1000,
+        t_cov_id: quote,
+        t_tpl_hash: th,
+        t_pre: p,
+        t_suf: s,
+        t_family: 1,
+        t_ext: [0xee; 32],
+        t_scale: 1000,
+        min_fill: 1000,
+        price: 2_000,
+        tip: 0,
+        tif: 0,
+        active_from: 0,
+        expiry_daa: 400_000_000,
+        refund_tip: rtip(T3),
+        delivery_carrier: 200_000_000,
+        interval: 0,
+        max_fill: 0,
+        slope: 0,
+        price_end: 0,
+        decay_step: 0,
+        amount_left: 10_000,
+        custody: 10_000,
+        s_ext: [0xee; 32],
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
+    };
+    let st = AnyState::KobPair(x);
+    assert!(crate::sanity::check(&st).is_ok());
+    let sd = Seed {
+        prefix: "r",
+        contract: "KobPair",
+        side: 1,
+        token: TOKEN_COV,
+        quote: Some(quote),
+        parent: None,
+        state: Some(st.encode()),
+        price0: None,
+        remaining: 10_000,
+        custody: true,
+        listed: true,
+        maker: pk(3),
+    };
+    seed(&conn, &sd, 0, pairs::PAIR_SCAN_MAX as i64 + 1);
+    crate::indexer::db::maintain_live_books(&conn, 1_000, None).unwrap();
+    let open: i64 = conn.query_row("SELECT COUNT(*) FROM pair_live WHERE open = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(open, pairs::PAIR_SCAN_MAX as i64 + 1, "every pair order is fillable");
+    let ctx = ctx();
+    let (base, q) = (Hash32(TOKEN_COV), Hash32(quote));
+    for (name, f) in [
+        ("pair book", &(|| steps(&conn, || pairs::pair_book(&conn, &ctx, &base, &q, 20).unwrap()).1) as &dyn Fn() -> u64),
+        ("pairs of a token", &|| steps(&conn, || pairs::pairs(&conn, &ctx, Some(&base)).unwrap()).1),
+    ] {
+        let t = std::time::Instant::now();
+        let n = f();
+        eprintln!("{name}: {:?} wall, {n} VM steps", t.elapsed());
     }
 }
