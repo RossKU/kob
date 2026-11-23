@@ -45,7 +45,8 @@ name: deploy-pages
 # Jobs: config (no secret) checks the variables and the gate; secret-scope (no environment) only asks whether a repository-level
 # copy of the Cloudflare token exists; build (no secret, no environment) builds and tests the bundle, writes config.json and hands web/dist and its hashes on as
 # artifacts; deploy (environment production, the Cloudflare secrets) only uploads that dist, with the wrangler of
-# scripts/deploy/package-lock.json installed with --ignore-scripts; verify (no secret) checks the live deployment against the hashes.
+# scripts/deploy/package-lock.json installed with --ignore-scripts; attest (no secret) records the build provenance of that dist;
+# verify (no secret) checks the live deployment against the hashes.
 
 on:
   push:
