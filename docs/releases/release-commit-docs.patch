@@ -1,0 +1,20 @@
+diff --git a/docs/ops/executor-quickstart.md b/docs/ops/executor-quickstart.md
+index bcc1d5774..ecee1c3fd 100644
+--- a/docs/ops/executor-quickstart.md
++++ b/docs/ops/executor-quickstart.md
+@@ -36,11 +36,11 @@ The command-line client `kob` is `cargo build --release --locked -p kob-cli`
+ (`crates/kob-cli/README.md`).
+ 
+ **Download.** Prebuilt binaries are attached to a [GitHub release](https://github.com/RossKU/kob/releases) when one is cut, and a
+-release can lag `master`. **The only release so far is `v0.1.0`, testnet-10 only: no mainnet archive has been published.** Its
+-files still carry the earlier program name: `kob-executor-0.1.0-testnet-10-x86_64-pc-windows-msvc.zip`,
++release can lag `master`. **The first mainnet release is `v0.2.0`.** The earlier `v0.1.0` was testnet-10 only; its
++files carry the earlier program name: `kob-executor-0.1.0-testnet-10-x86_64-pc-windows-msvc.zip`,
+ `...-x86_64-unknown-linux-gnu.tar.gz`, `...-aarch64-linux-android.tar.gz`, `kob-executor-0.1.0-testnet-10-android.apk` and a
+-`SHA256SUMS`. The table is the naming of later releases (`scripts/package-release.mjs`); the mainnet rows apply only once a
+-mainnet release exists:
++`SHA256SUMS`. The table is the naming of later releases (`scripts/package-release.mjs`); the mainnet rows apply from
++`v0.2.0` on:
+ 
+ | Archive | For |
+ |---|---|

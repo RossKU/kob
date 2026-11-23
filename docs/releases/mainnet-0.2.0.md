@@ -106,8 +106,9 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
 - New: a wallet can vote thumbs-up or thumbs-down on a token's logo. The vote is a signed personal message: no transaction,
   no fee. The web app hides a logo by default once at least 3 addresses voted and the net score is -1 or lower. The viewer
   can show all logos.
-- Anti-abuse: the voter needs KOB history in the store at least 24 h old, a proof of work (20 bits), and one vote per wallet per
-  24 h. The indexer keeps every accepted vote with its signature. `GET /v1/logo-votes` gives totals, never voters.
+- Anti-abuse: an address counts only if its first KOB history in the store is at least 7 days old (`min_history_secs`,
+  604800) **and** earlier than the token's creation, so keys made for a vote, or after the token, do not count. It also needs a
+  proof of work (20 bits), and one vote per wallet per 24 h. The indexer keeps every accepted vote with its signature. `GET /v1/logo-votes` gives totals, never voters.
 - Reports of illegal images stay separate (`[logo_reports]`): they hide a logo at once until the operator reviews it.
 - Both are off by default (the routes answer 404).
 - **Do (public indexer):**
@@ -143,8 +144,13 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
 ### Template generation
 
 - `template_generation` of this release: `<16 hex>`.
-- No order template has changed since the TN10 switch of 2026-11-18 (generation `113cd9b8b119cdaf`). KobLockAuto is a new
-  lock template and changes no order pin. Confirm before the cut.
+- **The generation changes.** No order template has changed since the TN10 switch of 2026-11-18 (generation
+  `113cd9b8b119cdaf`), but the generation now also hashes the automatic creator-lock template (KobLockAuto,
+  `crates/kobd/src/version.rs`), so this release has a new value. **Every executor and indexer must run the release build (a
+  roll is required)**, on TN10 too: a build with the old generation is not the release (its `/v1/health` and
+  `kob_build_info` differ from the release's), and a build from before KobLockAuto neither indexes nor releases the automatic
+  creator locks.
+  Confirm the value before the cut.
 - Mainnet has no KOB orders under older templates, so there is **no migration window on mainnet**.
 - On TN10, orders under the templates of the cancel-only table (`docs/spec/template-retirement.md`) can only be cancelled by
   their makers. No keeper refunds or kills them.
