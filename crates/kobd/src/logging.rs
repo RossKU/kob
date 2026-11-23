@@ -135,6 +135,11 @@ pub fn attach_file(opts: LogOptions) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The attached log file, if any (the start check covers it, R4D-I2).
+pub fn attached_file() -> Option<PathBuf> {
+    FILE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|f| f.opts.file.clone())
+}
+
 /// Whether the console half of the log goes to stderr.
 pub fn on_stderr() -> bool {
     TO_STDERR.load(Ordering::Relaxed)

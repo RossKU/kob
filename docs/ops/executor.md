@@ -2057,7 +2057,19 @@ stall or drain any executor:
   folder and the `--inventory-policy` file when another account can change them (write, add a file, delete, change the
   ACL, own it; Unix: owned by another account than this one or root, or group- or world-writable, a sticky folder excepted;
   audit D-2, R3D-3, R3D-6), or when their permissions or owner cannot be read (refused on mainnet: nobody can tell who may
-  change them). `kobd match` and `kobd keep` check the same. On mainnet it refuses to start; on testnet-10 it warns and goes on, since a folder at
+  change them). The log file and its folder are checked too (R4D-I2). So is every folder above these paths, up to the
+  drive's or file system's root, on the path as given and on its real path (links and junctions resolved; a link others
+  can retarget counts): a folder counts when another account can rename it or what is in it (Windows: DELETE on it,
+  delete-child, or the right to grant them, an inherit-only entry not counting; Unix: owned by another account than this
+  one or root, or group- or world-writable without the sticky bit), since it could then put a whole kob folder of its own
+  in place of yours (R4D-2). The quickstart folders pass (`%LOCALAPPDATA%\kob`, `C:\ProgramData\kob` after `kobd setup`,
+  `/opt/kob`, `/var/lib/...` under systemd, the Docker image's `/data`). A folder made by hand directly under a drive's root
+  (`C:\tools`, holding `C:\tools\kob`) gets Authenticated Users Modify by inheritance and is refused: restrict it as `kobd
+  setup` restricts the kob folder (the printed `icacls` line) or move kob into the profile. Where permissions cannot be
+  set the refusal says so instead of printing a command that cannot work (R4D-4): a Windows drive in WSL (`/mnt/c`, every
+  file mode 777: move kob to the Linux file system, e.g. `~/kob`), a Windows folder bind-mounted into Docker Desktop as
+  `/data` (use a named volume), a network share, and a drive's root (`D:\kobd.exe`: use a folder). `kobd match`, `kobd
+  keep` and `kobd withdraw` check the same. On mainnet it refuses to start; on testnet-10 it warns and goes on, since a folder at
   the root of a Windows drive (`C:\kob`, the quickstart's earlier example) inherits that right for Authenticated Users.
   The refusal names the groups and accounts by name (Users, Everyone, Authenticated Users, ...), not by their SDDL aliases (BU, WD, AU), and prints the exact command, e.g. `icacls "C:\kob\kob-operator.key" /inheritance:r /grant:r "MYPC\alice:F"`. The fix: `icacls <file> /inheritance:r /grant:r <account>:F` (quickstart 5). `remove_var` does not scrub the environment
   block: prefer a key file or a systemd credential. `--pause-file` also stops resends of transactions a reorg moved back to

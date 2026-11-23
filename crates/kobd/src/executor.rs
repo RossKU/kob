@@ -706,26 +706,36 @@ pub(crate) fn start_paths(key_file: Option<&std::path::Path>, policy: Option<&st
         paths.push(k);
     }
     paths.extend(policy.map(|p| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())));
+    // The log file and its folder (R4D-I2): attached before this check, but another account that
+    // can change them can forge or rotate away what the log says.
+    if let Some(l) = crate::logging::attached_file() {
+        let l = std::path::absolute(&l).unwrap_or(l);
+        paths.extend(l.parent().map(std::path::Path::to_path_buf));
+        paths.push(l);
+    }
     paths
 }
 
 /// Refuses on mainnet (logs on testnet-10) when another account can change one of `paths`, or
-/// when who can cannot be read ([`check_writable_by_others`]).
+/// when another account can rename or replace a folder above one of them (R4D-2), or when who can
+/// cannot be read ([`check_writable_by_others`]).
 pub(crate) fn refuse_writable_by_others(network: &str, paths: &[PathBuf]) -> Result<()> {
-    let found = crate::matcher::wallet::writable_by_others(paths);
-    if found.is_empty() {
+    use crate::matcher::wallet;
+    let own = wallet::writable_by_others(paths);
+    let above = wallet::ancestors_changeable_by_others(paths);
+    if own.is_empty() && above.is_empty() {
         return Ok(());
     }
-    let lines: Vec<String> = found
+    let lines: Vec<String> = own
         .iter()
-        .map(|(path, who)| {
-            let fix = if who == crate::matcher::wallet::RIGHTS_UNREADABLE {
-                "keep it on an NTFS (Unix: a local) folder of your own whose rights this account can read".to_string()
-            } else {
-                crate::matcher::wallet::owner_only_fix(path)
-            };
-            format!("{} (changeable by {who}); fix: {fix}", path.display())
-        })
+        .map(|(path, who)| format!("{} (changeable by {who}); fix: {}", path.display(), start_fix(path, who, false)))
+        .chain(above.iter().map(|(path, who)| {
+            format!(
+                "{} (a folder above: {who} can rename or replace it or what is in it); fix: {}",
+                path.display(),
+                start_fix(path, who, true)
+            )
+        }))
         .collect();
     let why = "another account can change these paths, or nobody can tell who can: it could replace kobd, plant a program or library it loads, point the configuration at its own key or node, swap the key, change the inventory policy, or edit the journal and budget files. Keep kobd in a folder of your own account (docs/ops/executor-quickstart.md: %LOCALAPPDATA%\\kob on Windows)";
     if network == "mainnet" {
@@ -735,6 +745,30 @@ pub(crate) fn refuse_writable_by_others(network: &str, paths: &[PathBuf]) -> Res
         tracing::error!(path = %l, "{why} (testnet-10 goes on; mainnet refuses to start)");
     }
     Ok(())
+}
+
+/// What to do about a path the start check found (`above`: a folder above the checked paths).
+///
+/// It is the command that fixes it where there is one. On a file system whose permissions cannot
+/// be set (a Windows drive in WSL, a Docker Desktop bind mount, a share), and for a drive's root,
+/// it says where to move kob instead (R4D-4).
+fn start_fix(path: &std::path::Path, who: &str, above: bool) -> String {
+    use crate::matcher::wallet;
+    if let Some(m) = wallet::foreign_mount(path) {
+        return m.advice().to_string();
+    }
+    if path.parent().is_none() {
+        return "it is a drive's (or the file system's) root, which no setup keeps to one account: put kobd and its files in a folder of your own (the quickstart's %LOCALAPPDATA%\\kob on Windows, ~/kob or /opt/kob on Linux)".into();
+    }
+    if who == wallet::RIGHTS_UNREADABLE {
+        return "keep it on an NTFS (Unix: a local) folder of your own whose rights this account can read".into();
+    }
+    let fix = wallet::owner_only_fix(path);
+    if above {
+        format!("keep kob in a folder only your account can change (the quickstart's %LOCALAPPDATA%\\kob on Windows, ~/kob on Linux), or restrict this folder: {fix}")
+    } else {
+        fix
+    }
 }
 
 /// Runs `kobd --executor`.
@@ -904,7 +938,8 @@ mod tests {
     fn the_start_check_fails_closed_on_mainnet() {
         let root = PathBuf::from(r"C:\");
         let e = refuse_writable_by_others("mainnet", std::slice::from_ref(&root)).unwrap_err().to_string();
-        assert!(e.contains("could not be read") && e.contains("NTFS"), "{e}");
+        // R4D-4: the fix says what to do (a folder of your own), not an icacls line that cannot work on a root
+        assert!(e.contains("could not be read") && e.contains("drive's") && !e.contains("icacls"), "{e}");
         assert!(refuse_writable_by_others("testnet-10", &[root]).is_ok());
         let dir = tempfile::tempdir().unwrap();
         let open = dir.path().join("open");
@@ -914,5 +949,12 @@ mod tests {
         assert!(ok.status.success());
         let e = refuse_writable_by_others("mainnet", std::slice::from_ref(&open)).unwrap_err().to_string();
         assert!(e.contains("Everyone") && e.contains("icacls"), "{e}");
+        // R4D-2: a restricted kob folder inside that folder is refused through the folder above
+        let kob = open.join("kob");
+        std::fs::create_dir(&kob).unwrap();
+        crate::matcher::wallet::restrict_folder(&kob).unwrap();
+        let e = refuse_writable_by_others("mainnet", std::slice::from_ref(&kob)).unwrap_err().to_string();
+        assert!(e.contains("a folder above") && e.contains("Everyone") && e.contains("LOCALAPPDATA"), "{e}");
+        assert!(refuse_writable_by_others("testnet-10", &[kob]).is_ok());
     }
 }

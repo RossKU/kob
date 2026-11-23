@@ -294,10 +294,7 @@ pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     let (network, rpc_url) = if a.common.offline { Default::default() } else { a.common.endpoint()? };
     // The start check of `kobd --executor` (R3D-4): this role holds the hot key too.
     if !a.common.offline {
-        crate::executor::refuse_writable_by_others(
-            &network,
-            &keyed_paths(&a.common, a.inventory_policy.as_deref()),
-        )?;
+        crate::executor::refuse_writable_by_others(&network, &keyed_paths(&a.common, a.inventory_policy.as_deref()))?;
     }
     let signer = load_key(&a.common)?;
     let mut engine = engine_cfg(&a);
