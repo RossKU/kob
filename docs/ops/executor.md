@@ -3139,7 +3139,12 @@ never goes far below the market: the bid must pay at least 90 % of what the book
 charge for the same amount, the cheapest first, as many as it takes to cover it (the price of the ask that completes the
 amount). Each ask counts only for what a buyer of the rest of the amount can take from it in one fill (its minimum fill, its
 FOK range, the dust bound of a partial fill): an all-or-nothing ask larger than the holding counts for nothing (audit
-2026-11-23 D-1). With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
+2026-11-23 D-1). An ask also counts only when one fill of it ranges over at least half the amount, from its minimum fill
+to the most one fill takes (its `maxFill` and dust bound), and only when it is not FOK: an ask that sells to buyers of one
+size only is the poster's own sale (R2D-1, R3D-1). And its UTXO must be at least 600 DAA (about one minute) old: an ask
+placed, filled or amended in the last minute is left out until it is a minute old, which bounds how long a planted ask is
+open to other buyers. These rules leave out honest small asks and honest asks that just traded, never the other way, so in
+a thin or busy book the sale is skipped (`sell: no resting asks ...`) rather than priced too low. With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
 as well); the skipped sale is logged with its reason (`sell: no resting asks ...`, `sell: the best bid pays ... below 9000 bps
 of the asks' price`). A low bid alone therefore never takes a holding, and an ask posted to lower the reference must itself offer
 the whole amount at that price to everyone. `0` turns the floor off (any bid that pays the fee, the earlier rule).
