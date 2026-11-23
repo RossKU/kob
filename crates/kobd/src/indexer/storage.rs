@@ -1475,13 +1475,25 @@ fn swap(path: &Path, new: &Path) -> DbResult<PathBuf> {
 /// start that finds the store missing puts the old file back ([`recover_interrupted_swap`]).
 fn swap_as(path: &Path, new: &Path, suffix: &str) -> DbResult<PathBuf> {
     let old = suffixed(path, suffix);
+    // Refused before the first rename, the new file goes: left beside a kept copy, a later start
+    // without the store would take it for a swap that stopped and restore that copy (R5C2-I2).
+    let discard = |e: DbError| {
+        for s in ["", "-wal", "-shm", "-journal"] {
+            let _ = std::fs::remove_file(format!("{}{s}", new.display()));
+        }
+        e
+    };
     if old.exists() {
-        return Err(bad(format!("{} exists already: delete it (or move it away) first", old.display())));
+        return Err(discard(bad(format!(
+            "{} exists already: delete it (or move it away) first; the new copy {} was removed",
+            old.display(),
+            new.display()
+        ))));
     }
-    checkpoint_out(path)?;
-    std::fs::OpenOptions::new().write(true).open(new)?.sync_all()?;
+    checkpoint_out(path).map_err(discard)?;
+    std::fs::OpenOptions::new().write(true).open(new).and_then(|f| f.sync_all()).map_err(|e| discard(e.into()))?;
     // The old file's -wal and -shm belong to it. The new file starts clean.
-    std::fs::rename(path, &old)?;
+    std::fs::rename(path, &old).map_err(|e| discard(e.into()))?;
     for suffix in ["-wal", "-shm"] {
         let from = format!("{}{suffix}", path.display());
         if Path::new(&from).exists() {
@@ -1834,5 +1846,21 @@ mod swap_tests {
         assert!(recover_interrupted_swap(&path).unwrap());
         assert_eq!(keys(&path), 7, "the store from before the vacuum, not the older one from before the migrate");
         assert!(before_migrate.exists());
+    }
+
+    /// R5C2-I2: a migrate whose swap is refused (a `.before-migrate` is kept already) removes its new file, so a later
+    /// fresh start (the store moved away) does not take the pair for a swap that stopped and restore the old copy.
+    #[test]
+    fn a_refused_swap_leaves_no_new_file_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.sqlite3");
+        let (kept, new) = (suffixed(&path, BEFORE_MIGRATE), suffixed(&path, MIGRATING));
+        store(&path, 3);
+        store(&kept, 1);
+        store(&new, 5);
+        assert!(swap_as(&path, &new, BEFORE_MIGRATE).unwrap_err().to_string().contains("was removed"));
+        assert!(!new.exists() && keys(&path) == 3 && kept.exists());
+        std::fs::remove_file(&path).unwrap();
+        assert!(!recover_interrupted_swap(&path).unwrap(), "an operator's fresh start");
     }
 }

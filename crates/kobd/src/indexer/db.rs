@@ -438,6 +438,8 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
             "open = 1 AND deadline <= ?2",
             "open = 1 AND open_from > ?1",
             "open = 2 AND closed_from > ?1",
+            // a host clock that jumped ahead and came back (R5C2-I4)
+            "open = 4 AND deadline > ?2",
         ] {
             conn.prepare_cached(&format!("UPDATE {table} SET open = {OPEN_AT} WHERE {cand}"))?
                 .execute(rusqlite::params![daa, unix])?;
