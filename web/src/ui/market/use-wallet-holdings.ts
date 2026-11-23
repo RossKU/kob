@@ -10,7 +10,7 @@ import type { HeldTokenUtxo } from '../../data/token-tracker';
 import { logoGate } from '../../data/logo-gate';
 import type { Hex } from '../../kob/types';
 import { useAsync } from '../kit';
-import { heldIds, throttledKey } from './held-list';
+import { heldIds, holdingVerdict, throttledKey } from './held-list';
 import { ownTokenIdsOf } from '../../kob/order-facts';
 import type { PlacementRecord } from '../../kob/records';
 import type { KobWasm } from '../../kob/wasm';
@@ -126,7 +126,9 @@ export function useHeldDeclarations(ids: readonly string[]): void {
  * A token in an order naming the key as its maker counts as held too: anyone can fund such an
  * order, and its custody is owned by the order, not the key. The check asks the indexer for one
  * order of the key under the token (base or a pair's quote) and reads the wallet's records, which
- * keep the orders it adopted from the indexer.
+ * keep the orders it adopted from the indexer. A failed order check is no answer: unless another
+ * check found the token, the gate is told nothing and the logo waits, and the checks run again
+ * after RETRY_MS (at most two more times per page open).
  */
 export function useHoldingCheck(covenantId: Hex): void {
   const { tracker, indexer, kob } = useServices();
@@ -140,20 +142,30 @@ export function useHoldingCheck(covenantId: Hex): void {
     logoGate.expectHoldings(pubkey, id);
   }
   const records = wallet.records;
+  const [retry, setRetry] = useState({ key: null as string | null, n: 0 });
+  const tries = retry.key === key ? retry.n : 0;
   useEffect(() => {
     if (!pubkey) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let live = true;
     const fromIndexer = indexer ? indexer.tokenUtxos({ owner: pubkey, token: id, spent: false }).catch(() => null) : Promise.resolve(null);
-    const inOrders = indexer ? indexer.orders({ maker: pubkey, token: id, limit: 1 }).then((p) => p.items.some((o) => o.maker === pubkey), () => false) : Promise.resolve(false);
+    const inOrders = indexer ? indexer.orders({ maker: pubkey, token: id, limit: 1 }).then((p) => p.items.some((o) => o.maker === pubkey), (): null => null) : Promise.resolve(false);
     const inRecords = records.list().then((rs) => rs.some((r) => recordTokens(kob, r).has(id)), () => false);
     void Promise.all([inOrders, inRecords]).then(([o, r]) => {
-      if (o || r) logoGate.noteRelated(pubkey, [id]);
+      if (o === true || r) logoGate.noteRelated(pubkey, [id]);
     });
     void fromIndexer
       .then(async (views) => (views ? views.some((v) => !v.spent && v.token.toLowerCase() === id && v.amount !== '0') : heldIds(await tracker.heldTokens(pubkey)).has(id)))
       .then(async (holds) => {
         // The gate is told once the order checks answered too, so the logo waits for them.
         const [o, r] = await Promise.all([inOrders, inRecords]);
-        logoGate.noteHoldings(pubkey, id, holds || o || r ? [id] : []);
+        const held = holdingVerdict(holds, o, r);
+        if (held !== null) return logoGate.noteHoldings(pubkey, id, held ? [id] : []);
+        if (live && tries < RETRY_MS.length) timer = setTimeout(() => setRetry({ key, n: tries + 1 }), RETRY_MS[tries]);
       }, () => undefined);
-  }, [pubkey, id, indexer, tracker, records, kob]);
+    return () => {
+      live = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [pubkey, id, indexer, tracker, records, kob, tries]);
 }

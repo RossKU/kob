@@ -156,3 +156,13 @@ export function throttledKey<T>(shown: { key: T; at: number }, key: T, now: numb
   const wait = shown.at + ms - now;
   return wait <= 0 ? { shown: { key, at: now }, wait: null } : { shown, wait };
 }
+
+/**
+ * What the token page's holding check tells the logo gate: held (gated) when any check found the
+ * token, not held when every check answered without it, and nothing yet (the logo waits) when the
+ * order check failed and nothing else found it (R4B-I1). A failed check never reads as "no order".
+ */
+export function holdingVerdict(holds: boolean, inOrders: boolean | null, inRecords: boolean): boolean | null {
+  if (holds || inOrders === true || inRecords) return true;
+  return inOrders === null ? null : false;
+}

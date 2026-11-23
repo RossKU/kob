@@ -3,7 +3,7 @@ import type { DeclaredToken } from '../../data/token-declarations';
 import { parseRegistry, type TokenRegistry } from '../../kob/registry';
 import type { TokenState } from '../../kob/types';
 import { loadKobNode } from '../../kob/wasm.node';
-import { activeFilters, filterRows, heldIds, heldRows, NO_FILTERS, STANDALONE_HOLDINGS_MS, throttledKey, toggleFilter, withHeldRows, type Holding, type ListFilters } from './held-list';
+import { activeFilters, filterRows, heldIds, heldRows, NO_FILTERS, STANDALONE_HOLDINGS_MS, holdingVerdict, throttledKey, toggleFilter, withHeldRows, type Holding, type ListFilters } from './held-list';
 import { heldEntry } from './market-list';
 import { buildTokenRows, idOnlyRow, isNameless, tradableRows, unknownRow, type TokenRow } from './token-model';
 
@@ -147,5 +147,15 @@ describe('the holdings key in standalone mode (R4B-L2)', () => {
     const later = throttledKey(shown, 'sa:10', 1_100 + STANDALONE_HOLDINGS_MS, STANDALONE_HOLDINGS_MS);
     expect(later.shown.key).toBe('sa:10');
     expect(throttledKey(later.shown, 'sa:10', 99_999, STANDALONE_HOLDINGS_MS).shown).toBe(later.shown);
+  });
+});
+
+describe('the token page holding check (R4B-I1)', () => {
+  it('a failed order check gates the logo (tells nothing) unless another check found the token', () => {
+    expect(holdingVerdict(false, null, false)).toBeNull();
+    expect(holdingVerdict(false, false, false)).toBe(false);
+    expect(holdingVerdict(true, null, false)).toBe(true);
+    expect(holdingVerdict(false, null, true)).toBe(true);
+    expect(holdingVerdict(false, true, false)).toBe(true);
   });
 });
