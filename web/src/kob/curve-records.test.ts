@@ -163,6 +163,40 @@ describe('cancel of an unbound curve (made in its token genesis)', () => {
     signAndValidate(kob, withStray.built!, [MAKER.sk]);
     const s2 = decodeSigning({ kob, built: withStray.built!, maker: MAKER.pk, registry: null, expected: withStray.expected, nodeInputs: nodeFactsOf(withStray.built!) });
     expect(s2.blocking).toEqual([]);
+
+    // a stray of ANOTHER token with exactly the custody's amount does not take the custody's place:
+    // the own token is the custody's, the output of the curve's own transaction (R5B-I1)
+    const { parseRegistry } = await import('./registry');
+    const { tradableRegistryJson, ZERO32 } = await import('../testing/chain-fixtures');
+    const EIGHT = { covenantId: '80'.repeat(32), program: 'KCC20Ref_8x8' as const };
+    const alien = {
+      token: EIGHT,
+      utxos: [{
+        transactionId: 'a1'.repeat(32), index: 0, amount: (5n * SCALE).toString(), blockDaaScore: '1300', covenantId: EIGHT.covenantId,
+        state: { amount: sell.toString(), owner: snap.covenantId, owner_scheme: 4, borrow_scheme: 0, borrow_guard: ZERO32, extension_commitment: 'cc'.repeat(32) },
+      }],
+    };
+    const withAlien = planCancel({ kob, maker: MAKER.pk, funding: [], tokenUtxos: [], clock: { daa: 78_000_000n } }, { ...snap, foreign: [alien] } as never);
+    expect(withAlien.ok).toBe(true);
+    signAndValidate(kob, withAlien.built!, [MAKER.sk]);
+    const s3 = decodeSigning({ kob, built: withAlien.built!, maker: MAKER.pk, registry: parseRegistry(tradableRegistryJson(), { kob }), expected: withAlien.expected, nodeInputs: nodeFactsOf(withAlien.built!) });
+    expect(s3.blocking).toEqual([]);
+    const sp3 = s3.spends.find((x) => x.covenantId === snap.covenantId)!;
+    expect(sp3.tokensReleased).toBe(sell);
+    expect(sp3.strays).toBe(0n);
+    expect(sp3.otherStrays.map((x) => [x.ref.covenantId, x.amount, x.foreign])).toEqual([[EIGHT.covenantId, sell, true]]);
+    // the same with the stray put first among the inputs, where the amount alone picked it (the
+    // swapped transaction is not signable; only the wording of its spend is read)
+    const owned = s3.inputs.filter((i) => i.token?.escrowOf === snap.covenantId).map((i) => i.index);
+    expect(owned.map((k) => s3.inputs[k]!.token!.ref.covenantId)).toEqual([plan.token.covenantId, EIGHT.covenantId]);
+    const [a, b] = owned as [number, number];
+    const swapped = JSON.parse(JSON.stringify(withAlien.built!)) as typeof withAlien.built & object;
+    [swapped.tx.inputs[a], swapped.tx.inputs[b]] = [swapped.tx.inputs[b]!, swapped.tx.inputs[a]!];
+    [swapped.roles[a], swapped.roles[b]] = [swapped.roles[b]!, swapped.roles[a]!];
+    const s4 = decodeSigning({ kob, built: swapped, maker: MAKER.pk, registry: parseRegistry(tradableRegistryJson(), { kob }), expected: withAlien.expected, nodeInputs: nodeFactsOf(swapped) });
+    const sp4 = s4.spends.find((x) => x.covenantId === snap.covenantId)!;
+    expect(sp4.tokensReleased).toBe(sell);
+    expect(sp4.otherStrays.map((x) => [x.ref.covenantId, x.amount, x.foreign])).toEqual([[EIGHT.covenantId, sell, true]]);
   });
 });
 
