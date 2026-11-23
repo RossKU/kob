@@ -797,6 +797,10 @@ pub struct BookOrderView {
     pub scale: Option<i64>,
     /// Base units left. For a bid it is its buying power, an upper bound.
     pub amount_left: Option<String>,
+    /// Base units a taker can fill now, in the unit of `amount_left`: a TWAP or DCA order's slice
+    /// (`min(amount_left, maxFill)`), else `amount_left` (R3T-1). The book lists an order only while
+    /// it can be filled, so it is never 0 here.
+    pub fillable_now: Option<String>,
     pub amount_estimated: bool,
     pub status: String,
     pub cur_value: Option<String>,
@@ -1055,6 +1059,11 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
         let scale: Option<i64> = r.get(6)?;
         let state = tip_state(&contract, raw_state);
         let auction = state.as_ref().zip(utxo_daa).and_then(|(s, d)| auction_of(s, d, ctx.node_daa));
+        // A single level's amount is what can be filled now: a TWAP order's slice.
+        let fillable = match levels.as_slice() {
+            [(None, _, a)] => *a,
+            _ => remaining,
+        };
         let view = BookOrderView {
             covenant_id: hx(r.get(0)?),
             contract,
@@ -1066,6 +1075,7 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
             min_fill: sompi(r.get(5)?),
             scale,
             amount_left: sompi(remaining),
+            fillable_now: sompi(fillable),
             amount_estimated: exact == 0 || remaining.is_none(),
             expired: expiry.is_some_and(|e| ctx.node_daa.is_some_and(|n| n as i64 >= e)),
             expiry_daa: expiry,
@@ -1088,6 +1098,7 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
                         price: p.to_string(),
                         quote: Some(p.to_string()),
                         amount_left: sompi(a),
+                        fillable_now: sompi(a),
                         curve_level: l.map(|l| l as i64),
                         ..view.clone()
                     };

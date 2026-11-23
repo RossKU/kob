@@ -491,6 +491,12 @@ async fn the_kas_book_depth_and_stats_read_resting_orders_at_their_current_quote
     assert_eq!(ids(&v["asks"]), vec![h(0x54), h(0x51), h(0x52)]);
     assert_eq!((v["asks"][0]["price"].as_str(), v["asks"][0]["quote"].as_str()), (Some("320000"), Some("290000")));
     assert_eq!(ids(&v["bids"]), vec![h(0x62), h(0x61)]);
+    // R3T-1: what a taker can fill now. The TWAP ask has 10 000 left and a slice of 3 000, as its
+    // level counts; a plain order can fill all it has left.
+    let row = |i: usize| (v["asks"][i]["amount_left"].as_str(), v["asks"][i]["fillable_now"].as_str());
+    assert_eq!(row(2), (Some("10000"), Some("3000")), "{v}");
+    assert_eq!(row(1), (Some("10000"), Some("10000")));
+    assert_eq!((v["bids"][1]["amount_left"].as_str(), v["bids"][1]["fillable_now"].as_str()), (Some("5000"), Some("5000")));
 
     // Depth is cumulative over the same levels (2.90 x 10 = 29 KAS, then 3.00 x 13 = 39 KAS).
     let (_, v) = get(&app, &format!("/v1/depth/{}", h(TOKEN))).await;

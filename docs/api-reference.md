@@ -477,13 +477,16 @@ without `decimals` may have several, and then equal `price / scale` can appear a
 With `aggregate=false`, each of `asks` / `bids` is an array of the same orders, best `quote` first: `covenant_id`, `contract`, `maker` (hex or null), `price`
 (the limit; an auction's start), `quote` (the price at the node's DAA score), `auction` (object or null: `kind` `decay`, `rise`,
 `stop` or `entry` (pair kinds `pair_*`), `origin_daa`, `start_price`, `end_price`, `current_price`, `elapsed_daa`, `complete`),
-`tip`, `min_fill`, `scale`, `amount_left`, `amount_estimated`, `status`, `cur_value`, `expiry_daa`, `expired`, `deadline`
-(unix seconds or null), `deadline_passed`, `genesis_daa`, `confirmations`, `settled`.
+`tip`, `min_fill`, `scale`, `amount_left`, `fillable_now`, `amount_estimated`, `status`, `cur_value`, `expiry_daa`, `expired`, `deadline`
+(unix seconds or null), `deadline_passed`, `genesis_daa`, `confirmations`, `settled`. `fillable_now` (string or null, base units like
+`amount_left`) is what a taker can fill from the order now: a TWAP or DCA order's one slice, `min(amount_left, maxFill)`, as its
+aggregated level counts it; for any other order it equals `amount_left`. An order is listed only while it can be filled (a TWAP order
+once its next slice is due), so it is never `"0"` in the book. Sum `fillable_now`, not `amount_left`, for the depth a taker can reach.
 
 A `KobCurveAsk` is in the book as its remaining levels, each at its own price with its own size (base units left in it), so its
 amount counts once: an aggregated level counts it as one of its `orders`; with `aggregate=false` it is one row per level, all
 with its `covenant_id` and `curve_level` (the table index, omitted for other orders), `price` and `quote` the level's price and
-`amount_left` the level's size. A curve is never idle (it has no refund).
+`amount_left` and `fillable_now` the level's size. A curve is never idle (it has no refund).
 
 ### 3.7 Pairs
 
