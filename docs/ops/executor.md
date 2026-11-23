@@ -308,7 +308,7 @@ matcher and keeper options (C, "Running"):
 | `--no-refund`, `--sweep-own-strays`, `--return-foreign-strays`, `--keeper-min-profit` | as C | keepers (`--keeper-min-profit` is `keep --min-profit`) |
 | `--no-lock-release` | off | keepers: do not release the automatic creator locks that are due (`docs/spec/creator-lock-auto.md`) |
 | `--keeper-subsidy-max-kas`, `--keeper-replace-after-daa`, `--keeper-max-replacements` | 0.05, 100, 3 | keepers' liveness under fee pressure (C, "Fee policy"): the most KAS of its own funding the operator adds to one kill or refund its tip cannot pay at its urgency's rate (0: off); replace a stuck kill or refund of this process after this many DAA, at most this many times (0: never). Also on `keep` and `match --keep` |
-| `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` | 1, 864000, 8 | the operator's total keeper subsidy: at most this many KAS within any rolling window of this many DAA (864,000 = 24 hours: 1 KAS a day by default; kept across restarts), replacements included, and at most this many subsidised kills and refunds per tick; past either, jobs go at the rate their own tip pays (budget 0 or max jobs 0: no subsidy). Also on `keep` and `match --keep` |
+| `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` | 1, 864000, 8 | the operator's total keeper subsidy: at most this many KAS within any rolling window of this many DAA (864,000 = 24 hours: 1 KAS a day by default; kept across restarts), replacements included, and at most this many subsidised kills and refunds per tick; past either, jobs go at the rate their own tip pays (budget 0 or max jobs 0: no subsidy). Also on `keep` and `match --keep`, kept across restarts there only with `--state-dir` (without it: no subsidy) |
 | `--no-weighted-select`, `--select-alpha`, `--select-max-defer-daa`, `--select-min-share`, `--select-seed` | on, 1, 30, 0.1, OS randomness | the weighted selection among competing executors (C, "Competing executors"; `docs/spec/matcher.md` §3.6): off plans deterministically; the weight exponent; the starvation bound in DAA; the lowest share of the optional work per tick; a fixed seed for a reproducible run. Also on `match` and `keep` |
 
 Next to `kobd --executor`: `kobd address-balance [--dir D]` (the key's address and plain balance as one JSON object, from the configured
@@ -3052,8 +3052,8 @@ bucket of its urgency:
   them costs the operator up to `--keeper-subsidy-max-kas`, with no bound on the total. A subsidy is charged when its
   transaction is submitted (also a submit or replacement without a verdict, which may still be accepted) and never given
   back for a transaction that is not accepted: the budget counts at least what the operator paid. The window is kept in
-  `<data_dir>/keeper-subsidy.json` (written on every charge): a restart continues it, so restarts add no budget; a deleted
-  data directory starts it empty. Each charge also records the local time: it counts for at least one window of local
+  `<data_dir>/keeper-subsidy.json` (written on every charge; `kobd keep` and `kobd match --keep`: in the `--state-dir` folder, and
+  without one no subsidy at all): a restart continues it, so restarts add no budget; a deleted data directory starts it empty. Each charge also records the local time: it counts for at least one window of local
   time (at 10 DAA a second) and at most two, and in between while the chain's DAA score says it is in the window, so a
   node reporting a DAA score far ahead cannot erase the window. A per-maker cap would not help
   (maker keys are free). Using it up is logged once (`keeper subsidy budget of the window used up`); metric
@@ -3581,6 +3581,7 @@ kobd keep --network testnet-10 --book-file book.json --metrics-file /var/lib/nod
 | `--select-min-share` | 0.1 | the lowest share of the optional work per tick the races may push the executor to (room for `1 / share` executors) |
 | `--select-seed` | OS randomness | seed of the selection's random source (a reproducible run) |
 | `--keep` (match) | off | run the keepers too |
+| `--state-dir` | none | the folder of what must survive a restart, one per process (also `$KOB_STATE_DIR`; created if missing; covered by the start check): the in-flight journal, the keepers' subsidy window and the start count (Restarts). Without it they are in memory only, and the keepers pay no subsidy |
 | `--no-refund` (keep) | off | disable refunds, kills and closes |
 | `--keeper-subsidy-max-kas` (keep, match) | 0.05 | the most KAS of the operator's funding added to the fee of one kill or refund whose tip pays the floor but not its urgency's rate (0: off; see Fee policy) |
 | `--keeper-subsidy-budget-kas`, `--keeper-subsidy-window-daa`, `--keeper-subsidy-max-jobs` (keep, match) | 1, 864000, 8 | the most KAS of subsidy all kills and refunds together (replacements included) take within any rolling window of this many DAA, and the most subsidised jobs per tick; past either, jobs go at the rate their tip pays (0: no subsidy; see Fee policy, Subsidy budget) |
@@ -3595,11 +3596,13 @@ A systemd unit for the keyed role:
 ```
 [Service]
 ExecStart=/usr/local/bin/kobd match --network testnet-10 --book-file /var/lib/kob/book.json --keep \
-  --rpc-url ws://127.0.0.1:18210 --pause-file /var/lib/kob/pause --metrics-file /var/lib/node_exporter/kob.prom
+  --rpc-url ws://127.0.0.1:18210 --pause-file /var/lib/kob/pause --state-dir /var/lib/kob-keyed \
+  --metrics-file /var/lib/node_exporter/kob.prom
 LoadCredential=kob-operator-key:/etc/kob/operator.key
 DynamicUser=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
+StateDirectory=kob-keyed
 ReadWritePaths=/var/lib/node_exporter
 Restart=always
 ```
@@ -3686,7 +3689,10 @@ pending); one whose compaction fails at the start is appended to as it is; one t
 held (an error says that this run's submissions are not kept). A dry run neither reads nor writes it. Deleting the data
 directory deletes it: first wait for `kob_matcher_pending_txs` 0 (the status line's `0 pending`), then stop the executor, or
 let the hold above deal with a coin a forgotten transaction spends. `<data_dir>/executor-starts` counts the starts
-(`kob_executor_restarts_total`).
+(`kob_executor_restarts_total`). The standalone `kobd match` and `kobd keep` keep these files, and the keepers' subsidy window,
+in their `--state-dir` folder (one per process). Without `--state-dir` they keep them in memory only: a restart forgets what the
+last run left in the mempool (the node then refuses a coin planned again), and the keepers pay no subsidy, since each start
+would bring a fresh budget (R4F-2).
 
 **Exit for the supervisor.** `kobd --executor` ends with exit status 1 (`exiting so that a supervisor restarts the
 executor`) when its indexer stays stopped (`stopped`: its record log could not be written) or cannot write its database
