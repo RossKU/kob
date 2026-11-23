@@ -158,6 +158,80 @@ describe('HttpIndexer errors and backoff', () => {
     expect(s3.calls).toHaveLength(1);
   });
 
+  it('a 503 overloaded is retried 3 times, each after a jittered 1-1.5 x Retry-After (R5B-L1)', async () => {
+    const waits: number[] = [];
+    const rnd = [0, 0.5, 0.999];
+    const s = stub(() => json({ error: { code: 'overloaded', message: 'too many requests in flight' } }, 503, { 'retry-after': '1' }));
+    const ix = new HttpIndexer({ baseUrl: 'http://overloaded-a', fetch: s.f, sleep: async (ms) => void waits.push(ms), random: () => rnd.shift() ?? 0 });
+    expect(await ix.stats(H1).catch((e) => e)).toMatchObject({ status: 503, code: 'overloaded', retryAfterSec: 1 });
+    expect(s.calls).toHaveLength(4);
+    expect(waits).toEqual([1000, 1250, 1499.5]);
+    // a later success ends the retries; other 503s keep their own budget of maxRetries
+    const ok = stub((_u, n) => (n < 3 ? json({ error: { code: 'overloaded', message: 'x' } }, 503, { 'retry-after': '1' }) : json({ ok: true })));
+    expect(await new HttpIndexer({ baseUrl: 'http://overloaded-b', fetch: ok.f, sleep: async () => undefined }).health()).toEqual({ ok: true });
+    const busy = stub(() => json({ error: { code: 'db_busy', message: 'busy' } }, 503, { 'retry-after': '1' }));
+    await new HttpIndexer({ baseUrl: 'http://overloaded-c', fetch: busy.f, sleep: async () => undefined }).health().catch(() => undefined);
+    expect(busy.calls).toHaveLength(3);
+  });
+
+  it('never has more than 6 reads in flight per base URL, across clients (R5B-L1)', async () => {
+    let open = 0;
+    let peak = 0;
+    const f = (async () => {
+      open++;
+      peak = Math.max(peak, open);
+      await new Promise((r) => setTimeout(r, 5));
+      open--;
+      return json({ token: H1, price_basis: 'kas' });
+    }) as typeof fetch;
+    // two clients of one base URL, as the failover may build, share the limit
+    const a = new HttpIndexer({ baseUrl: 'http://limit-a', fetch: f });
+    const b = new HttpIndexer({ baseUrl: 'http://limit-a/', fetch: f });
+    const got = await Promise.all(Array.from({ length: 20 }, (_, i) => (i % 2 ? a : b).stats(H1)));
+    expect(got).toHaveLength(20);
+    expect(got.every((g) => g !== null)).toBe(true);
+    expect(peak).toBe(6);
+  });
+
+  it('the health probe does not wait behind a full queue, and a queued read that is aborted never reaches fetch (R5B-L1)', async () => {
+    const pending: (() => void)[] = [];
+    const urls: string[] = [];
+    const f = ((input: RequestInfo | URL) => {
+      urls.push(new URL(String(input)).pathname);
+      if (new URL(String(input)).pathname === '/v1/health') return Promise.resolve(json({ ok: true }));
+      return new Promise<Response>((r) => pending.push(() => r(json({ token: H1, price_basis: 'kas' }))));
+    }) as typeof fetch;
+    const ix = new HttpIndexer({ baseUrl: 'http://limit-b', fetch: f, timeoutMs: 60_000 });
+    const held = Array.from({ length: 6 }, () => ix.stats(H1));
+    const ctl = new AbortController();
+    const queued = ix.stats(H1, { signal: ctl.signal });
+    const later = ix.stats(H1);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(urls).toHaveLength(6);
+    expect(await ix.health()).toEqual({ ok: true });
+    ctl.abort();
+    expect(await queued.catch((e) => e)).toMatchObject({ kind: 'aborted' });
+    pending.shift()!();
+    await held[0];
+    await new Promise((r) => setTimeout(r, 0));
+    // the freed place went to `later`, not to the aborted read
+    expect(urls.filter((u) => u.startsWith('/v1/stats/'))).toHaveLength(7);
+    while (pending.length) pending.shift()!();
+    await Promise.all([...held, later]);
+    expect(urls.filter((u) => u.startsWith('/v1/stats/'))).toHaveLength(7);
+  });
+
+  it('time spent in the queue does not count against the timeout (R5B-L1)', async () => {
+    const f = (async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      return json({ token: H1, price_basis: 'kas' });
+    }) as typeof fetch;
+    const ix = new HttpIndexer({ baseUrl: 'http://limit-c', fetch: f, timeoutMs: 50 });
+    // 18 reads of 30 ms each through 6 places take about 90 ms, longer than the 50 ms timeout
+    const got = await Promise.all(Array.from({ length: 18 }, () => ix.stats(H1)));
+    expect(got.every((g) => g !== null)).toBe(true);
+  });
+
   it('times out, and cancels on the caller AbortSignal, including during a backoff wait', async () => {
     const hang = ((_i: unknown, init?: RequestInit) =>
       new Promise((_r, rej) => init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))))) as unknown as typeof fetch;
@@ -215,10 +289,15 @@ describe('HttpIndexer.tokenUtxos', () => {
       return c === null ? json({ items: [mk(0), mk(1)], next_cursor: 'c1' }) : c === 'c1' ? json({ items: [mk(2)], next_cursor: 'c2' }) : json({ items: [mk(3)], next_cursor: null });
     });
     const ix = new HttpIndexer({ baseUrl: 'http://x', fetch: f });
-    expect((await ix.tokenUtxos({ owner: H1, token: H2 }))!.map((x) => x.index)).toEqual([0, 1, 2, 3]);
+    const all = await ix.tokenUtxos({ owner: H1, token: H2 });
+    expect(all!.map((x) => x.index)).toEqual([0, 1, 2, 3]);
+    expect(all!.truncated).toBeUndefined();
     expect(calls.map((u) => u.searchParams.get('cursor'))).toEqual([null, 'c1', 'c2']);
+    // cut at maxPages with a cursor still set: the same items, marked as maybe incomplete (R5B-I3)
     const capped = stub(() => json({ items: [mk(0)], next_cursor: 'again' }));
-    expect(await new HttpIndexer({ baseUrl: 'http://x', fetch: capped.f }).tokenUtxos({ owner: H1, maxPages: 3 })).toHaveLength(3);
+    const cut = await new HttpIndexer({ baseUrl: 'http://x', fetch: capped.f }).tokenUtxos({ owner: H1, maxPages: 3 });
+    expect(cut).toHaveLength(3);
+    expect(cut!.truncated).toBe(true);
     expect(capped.calls).toHaveLength(3);
   });
 

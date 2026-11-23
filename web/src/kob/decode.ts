@@ -1860,8 +1860,13 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       // state) and, apart, FOREIGN strays of any other token owned by the same id (matcher.md 1.2)
       const pair = o.description?.pair ?? null;
       // An unbound curve's state names token 0. Its custody's token is its own (as listingOf,
-      // data/stream-book.ts): the owned input holding its custody amount.
-      const unbound = o.description?.curve?.unbound ? (owned.find((t) => t.token!.amount === o.description!.tokenAmount) ?? owned[0]) : undefined;
+      // data/stream-book.ts). The custody is an output of the curve's own transaction, its token's
+      // genesis (`unboundCustodyToken`, kob/cancel.ts), so it is picked by that first: a stray of
+      // another token with the same amount must not take its place (R5B-I1). The amount is the
+      // fallback.
+      const unbound = o.description?.curve?.unbound
+        ? (owned.find((t) => t.outpoint.txid.toLowerCase() === d.outpoint.txid.toLowerCase()) ?? owned.find((t) => t.token!.amount === o.description!.tokenAmount) ?? owned[0])
+        : undefined;
       const ownToken = unbound ? unbound.token!.ref.covenantId : (o.description?.tokenCovId ?? null);
       const quoteToken = pair && pair.quote.covId !== pair.base.covId ? pair.quote.covId : null;
       const mine = owned.filter((t) => ownToken === null || t.token!.ref.covenantId === ownToken);

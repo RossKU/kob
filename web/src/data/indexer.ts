@@ -9,7 +9,8 @@
 // - JSON with snake_case keys. Ids and keys are lower-case hex.
 // - Sompi are decimal strings (`sompi()` turns one into a bigint).
 // - Errors are `{"error":{"code","message"}}`.
-// - Rate limiting is a 429 and a busy database a 503, both with Retry-After.
+// - Rate limiting is a 429 and a busy database a 503, both with Retry-After. Too many reads in
+//   flight from one client is a 503 `overloaded`, also with Retry-After.
 import type {
   BookView, EventView, HealthView, IndexerTokenView, OrderView, Page, StrayView, TokenEventView, TokenUtxoView, WsFrame,
   FillNoticeView, BookNotice, OrderNotice, ReorgNotice, HealthCursorNotice, HealthTickNotice,
@@ -178,6 +179,9 @@ export interface TokenUtxosQuery {
   maxPages?: number;
 }
 
+/** What `tokenUtxos` lists. `truncated` is set when it stopped at `maxPages` with more to read. */
+export type TokenUtxoList = TokenUtxoView[] & { truncated?: true };
+
 /** The paging of `GET /v1/trades/{token}` and of the pair fills. */
 export interface TradesQuery {
   limit?: number;
@@ -265,9 +269,10 @@ export interface IndexerApi {
    * their decoded state. It follows `next_cursor`. An indexer without the endpoint (404, 501 or
    * 405) resolves to `null`, never an error toast, and callers fall back to the local token
    * tracker. The indexer cannot list issuance (genesis) outputs and may list a holding the chain
-   * has since spent, so callers verify every UTXO on the node.
+   * has since spent, so callers verify every UTXO on the node. A list cut at `maxPages`, with a
+   * cursor still set, carries `truncated: true`: more may exist.
    */
-  tokenUtxos(q: TokenUtxosQuery, o?: RequestOptions): Promise<TokenUtxoView[] | null>;
+  tokenUtxos(q: TokenUtxosQuery, o?: RequestOptions): Promise<TokenUtxoList | null>;
   /**
    * `GET /v1/creator-locks?key=`: the covenant ids of the tokens whose declaration locks a share
    * for `key`. It is a hint only. The caller loads and verifies each declaration itself
@@ -328,7 +333,7 @@ export interface HttpIndexerOptions {
   fetch?: typeof fetch;
   /** The default per-request timeout in ms (default 10 s). */
   timeoutMs?: number;
-  /** Retries after a 429, or a 503 with Retry-After (default 2). */
+  /** Retries after a 429, or a 503 with Retry-After (default 2). A 503 `overloaded` has its own `OVERLOADED_RETRIES`. */
   maxRetries?: number;
   /** The upper bound of one backoff wait in ms (default 10 s). */
   maxBackoffMs?: number;
@@ -338,6 +343,62 @@ export interface HttpIndexerOptions {
   now?: () => number;
   /** The largest response body read, in bytes (default `MAX_INDEXER_BODY_BYTES`). */
   maxBodyBytes?: number;
+  /** A number in [0, 1), for the jitter of the `overloaded` retry (default `Math.random`). */
+  random?: () => number;
+}
+
+/**
+ * The most reads one page has in flight to one indexer. kobd admits 8 per client and answers the
+ * rest `503 overloaded`, and a page burst is 12-20 reads. The rest wait here, in order.
+ */
+export const INDEXER_MAX_IN_FLIGHT = 6;
+/** Retries of a `503 overloaded`, apart from the other retries. */
+export const OVERLOADED_RETRIES = 3;
+
+const cancelled = () => new IndexerError('aborted', 0, 'aborted', 'The request was cancelled.');
+
+/** A FIFO limit of requests in flight. A waiter whose signal aborts leaves the queue at once. */
+class InFlightLimit {
+  private open = 0;
+  private readonly waiting: (() => void)[] = [];
+  constructor(private readonly max: number) {}
+
+  acquire(signal?: AbortSignal): Promise<() => void> {
+    if (signal?.aborted) return Promise.reject(cancelled());
+    const take = () => {
+      this.open++;
+      let done = false;
+      return () => {
+        if (done) return;
+        done = true;
+        this.open--;
+        this.waiting.shift()?.();
+      };
+    };
+    if (this.open < this.max) return Promise.resolve(take());
+    return new Promise((resolve, reject) => {
+      const go = () => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve(take());
+      };
+      const onAbort = () => {
+        const i = this.waiting.indexOf(go);
+        if (i >= 0) this.waiting.splice(i, 1);
+        reject(cancelled());
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      this.waiting.push(go);
+    });
+  }
+}
+
+// One limit per base URL for the whole page, so every client of one indexer (the failover builds
+// several) shares it.
+const inFlightLimits = new Map<string, InFlightLimit>();
+function inFlightLimitOf(base: string): InFlightLimit {
+  let l = inFlightLimits.get(base);
+  if (!l) inFlightLimits.set(base, (l = new InFlightLimit(INDEXER_MAX_IN_FLIGHT)));
+  return l;
 }
 
 const abortableSleep = (ms: number, signal?: AbortSignal) =>
@@ -365,6 +426,8 @@ export class HttpIndexer implements IndexerApi {
   private readonly unsupportedTtlMs: number;
   private readonly now: () => number;
   private readonly maxBodyBytes: number;
+  private readonly random: () => number;
+  private readonly limit: InFlightLimit;
   private tokenUtxosUnsupportedUntil = 0;
 
   constructor(o: HttpIndexerOptions) {
@@ -377,6 +440,8 @@ export class HttpIndexer implements IndexerApi {
     this.unsupportedTtlMs = o.unsupportedTtlMs ?? 5 * 60_000;
     this.now = o.now ?? Date.now;
     this.maxBodyBytes = o.maxBodyBytes ?? MAX_INDEXER_BODY_BYTES;
+    this.random = o.random ?? Math.random;
+    this.limit = inFlightLimitOf(this.base);
   }
 
   /** Base URL of the WebSocket feed derived from this client's base. */
@@ -394,9 +459,17 @@ export class HttpIndexer implements IndexerApi {
   /**
    * One GET with a timeout, caller cancellation and backoff on 429 and 503. Returns the status and
    * the parsed body.
+   *
+   * Each attempt first takes a place in the base URL's in-flight limit, and its timeout starts only
+   * then: time spent behind the page's own reads is not the indexer being slow. The place is given
+   * back before a backoff wait. `unlimited` (the health probe) skips the limit, because a probe
+   * held behind data reads must never look like a dead indexer.
    */
-  private async request(url: string, o: RequestOptions = {}): Promise<{ status: number; body: unknown }> {
-    for (let attempt = 0; ; attempt++) {
+  private async request(url: string, o: RequestOptions = {}, unlimited = false): Promise<{ status: number; body: unknown }> {
+    let retries = 0;
+    let overloadedRetries = 0;
+    for (;;) {
+      const release = unlimited ? () => undefined : await this.limit.acquire(o.signal);
       const ctl = new AbortController();
       const timeoutMs = o.timeoutMs ?? this.timeoutMs;
       let timedOut = false;
@@ -407,7 +480,8 @@ export class HttpIndexer implements IndexerApi {
       const onCallerAbort = () => ctl.abort();
       if (o.signal?.aborted) {
         clearTimeout(timer);
-        throw new IndexerError('aborted', 0, 'aborted', 'The request was cancelled.');
+        release();
+        throw cancelled();
       }
       o.signal?.addEventListener('abort', onCallerAbort, { once: true });
       let res: Response;
@@ -423,6 +497,7 @@ export class HttpIndexer implements IndexerApi {
       } finally {
         clearTimeout(timer);
         o.signal?.removeEventListener('abort', onCallerAbort);
+        release();
       }
       let body: unknown = null;
       if (text) {
@@ -434,9 +509,18 @@ export class HttpIndexer implements IndexerApi {
         }
       }
       const retryAfter = parseRetryAfter(res.headers.get('retry-after'));
-      const retryable = res.status === 429 || (res.status === 503 && retryAfter !== undefined);
-      if (retryable && attempt < this.maxRetries) {
-        const wait = Math.min(this.maxBackoffMs, retryAfter !== undefined ? retryAfter * 1000 : 500 * 2 ** attempt);
+      // `overloaded` goes to every read of a burst at once. Its retries wait a random 1-1.5 x
+      // Retry-After, so they do not all come back in the same instant, and have their own budget.
+      const overloaded = res.status === 503 && retryAfter !== undefined && errorCodeOf(body) === 'overloaded';
+      if (overloaded && overloadedRetries < OVERLOADED_RETRIES) {
+        overloadedRetries++;
+        await this.sleep(Math.min(this.maxBackoffMs, retryAfter * 1000 * (1 + 0.5 * this.random())), o.signal);
+        continue;
+      }
+      const retryable = !overloaded && (res.status === 429 || (res.status === 503 && retryAfter !== undefined));
+      if (retryable && retries < this.maxRetries) {
+        const wait = Math.min(this.maxBackoffMs, retryAfter !== undefined ? retryAfter * 1000 : 500 * 2 ** retries);
+        retries++;
         await this.sleep(wait, o.signal);
         continue;
       }
@@ -447,7 +531,7 @@ export class HttpIndexer implements IndexerApi {
 
   private async get<T>(path: string, query: Record<string, string | number | boolean | undefined>, o?: RequestOptions): Promise<T> {
     const bypass = o?.fresh ?? (isLiveRoute(path) && recentOwnAction());
-    return (await this.request(this.url(path, bypass ? { ...query, [BYPASS_PARAM]: bypassValue() } : query), o)).body as T;
+    return (await this.request(this.url(path, bypass ? { ...query, [BYPASS_PARAM]: bypassValue() } : query), o, path === '/v1/health')).body as T;
   }
 
   /** GET that maps 404 to null (unknown resource). */
@@ -536,9 +620,9 @@ export class HttpIndexer implements IndexerApi {
     return Array.isArray(r?.items) ? r.items : [];
   }
 
-  async tokenUtxos(q: TokenUtxosQuery, o?: RequestOptions): Promise<TokenUtxoView[] | null> {
+  async tokenUtxos(q: TokenUtxosQuery, o?: RequestOptions): Promise<TokenUtxoList | null> {
     if (this.now() < this.tokenUtxosUnsupportedUntil) return null;
-    const out: TokenUtxoView[] = [];
+    const out: TokenUtxoList = [];
     let cursor: string | undefined;
     try {
       for (let page = 0; page < (q.maxPages ?? 10); page++) {
@@ -559,6 +643,8 @@ export class HttpIndexer implements IndexerApi {
       }
       throw e;
     }
+    // Stopped at `maxPages` with more to read: the caller must not take the list as complete.
+    if (cursor !== undefined) out.truncated = true;
     return out;
   }
 
@@ -673,6 +759,11 @@ function parseRetryAfter(v: string | null): number | undefined {
   if (v === null) return undefined;
   const n = Number(v.trim());
   return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
+function errorCodeOf(body: unknown): string | undefined {
+  const code = (body as { error?: { code?: unknown } } | null)?.error?.code;
+  return typeof code === 'string' ? code : undefined;
 }
 
 function httpError(status: number, body: unknown, retryAfterSec?: number): IndexerError {

@@ -110,6 +110,19 @@ describe('snapshotFor', () => {
     expect(snap.strays[0].state.amount).toBe('9');
   });
 
+  it('a per-order token list cut at its page bound marks the strays unknown (R5B-I3)', async () => {
+    const a = place('create.ask');
+    const stray = strayFor(a.snap, 9n);
+    const view = { ...tokenUtxoView(stray, 'stray'), owner: a.rec.covenantId };
+    const listed = (truncated: boolean) => async () => Object.assign([view], truncated ? { truncated: true as const } : {});
+    const whole = await snapshotFor(services({ chain: withStrays(chainOf(a), [stray]), indexer: { tokenUtxos: listed(false) } }), entryOf(a, false, true), []);
+    expect(whole.strays).toHaveLength(1);
+    expect(whole.straysUnknown).toBeFalsy();
+    const cut = await snapshotFor(services({ chain: withStrays(chainOf(a), [stray]), indexer: { tokenUtxos: listed(true) } }), entryOf(a, false, true), []);
+    expect(cut.strays).toHaveLength(1);
+    expect(cut.straysUnknown).toBe(true);
+  });
+
   it('refuses an order that is gone or that nothing can locate', async () => {
     // gone: the node search over every continuation amount finds nothing (an order small enough to
     // search exhaustively).

@@ -155,7 +155,11 @@ export function useHoldingCheck(covenantId: Hex): void {
       if (o === true || r) logoGate.noteRelated(pubkey, [id]);
     });
     void fromIndexer
-      .then(async (views) => (views ? views.some((v) => !v.spent && v.token.toLowerCase() === id && v.amount !== '0') : heldIds(await tracker.heldTokens(pubkey)).has(id)))
+      // A list cut at its page bound that does not name the token is no answer: the tracker decides.
+      .then(async (views) => {
+        if (views?.some((v) => !v.spent && v.token.toLowerCase() === id && v.amount !== '0')) return true;
+        return views && !views.truncated ? false : heldIds(await tracker.heldTokens(pubkey)).has(id);
+      })
       .then(async (holds) => {
         // The gate is told once the order checks answered too, so the logo waits for them.
         const [o, r] = await Promise.all([inOrders, inRecords]);
