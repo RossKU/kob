@@ -25,7 +25,10 @@ next to the order button, market list) it prints neutral badges for the indexer'
 mint and blacklist powers, and a stop on a token whose genesis is not verified gets a one-line note next to the order button; none of them blocks an
 order or asks for a click (the order flow has no acknowledgement boxes). Both programs (`kcc20-ref-3x3`, 2026-10-12, and
 `kcc20-ref-public-mint`, 2026-10-13) are `reviewed` by internal review only; a public-mint token
-with a live `PublicMint` can still grow up to its genesis allowance. The other KCC-20 programs (the
+with a live `PublicMint` can still grow up to its genesis allowance. Two launchpad builds of the public-mint actor are
+`reviewed`, and so tradable, by internal review only as well: KaspaRocket's 10 / 10 build `kasparocket-token-11458`
+(2026-10-27) and KForge's 6 / 6 build `kforge-token-7214` (2026-11-05), both with the supply fixed at genesis. That makes six
+supported programs. The other KCC-20 programs (the
 8 / 8 prototype, KaspaCom's) are `pending-review` and not tradable on mainnet.
 
 ## Reporting a vulnerability
