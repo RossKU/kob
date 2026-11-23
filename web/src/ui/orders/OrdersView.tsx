@@ -269,6 +269,9 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   // read it.
   const acquired = useMemo(() => acquiredTokens(rows.filter((r) => r.entry.record && r.entry.record.origin !== 'indexer'), pubkey ? listCreations(services.config.network, pubkey) : []), [rows, pubkey, services.config.network]);
   logoGate.setAcquired(pubkey ?? null, acquired);
+  // Every order listed under this key, adopted ones included, makes its tokens held for the gate,
+  // so their logos are gated on every page, not only here.
+  if (pubkey) logoGate.noteRelated(pubkey, acquiredTokens(rows, []));
   const entryById = useMemo(() => new Map((d?.entries ?? []).map((e) => [e.id, e])), [d]);
   // An order of the market this panel stands on, as on a market page with "this market only". Every
   // order elsewhere is filtered out.

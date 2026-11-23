@@ -129,6 +129,8 @@ export interface RowProps {
   /** The fraction digits of the whole Price column (`logPriceDp`), so decimal points line up. */
   priceDp: number;
   fmt: RowFormat;
+  /** An order of the row names the connected key: its icons are gated as the wallet's. */
+  mine?: boolean;
 }
 
 /** One row: a link to the transaction in a new tab, keyed by its txid. It moves by a transform. */
@@ -182,7 +184,7 @@ const RowCells = memo(
           <KindIcon kind={r.kind} side={r.side} />
         </span>
         <span class="act-c-mk" role="cell" title={fmt.marketText(r.market)}>
-          <MarketIcons market={r.market} nameOf={fmt.nameOf} label={fmt.marketText(r.market)} />
+          <MarketIcons market={r.market} nameOf={fmt.nameOf} label={fmt.marketText(r.market)} mine={props.mine} />
           {r.moreMarkets > 0 ? <span class="act-more" title={t(r.moreMarkets === 1 ? 'activity.moreMarketsTitle.one' : 'activity.moreMarketsTitle.other', { n: r.moreMarkets })}>{t('activity.moreMarkets', { n: r.moreMarkets })}</span> : null}
           <span class="act-txm" title={r.txid}>{r.txid}</span>
         </span>
@@ -247,9 +249,9 @@ function amountOf(r: ActivityRow, fmt: RowFormat): { text: string; sub: string; 
  * One token icon for a KAS book, and `A / B` for a pair, with the tickers in the cell's title and
  * the row's label. It leads to that market, and the rest of the row leads to the transaction.
  */
-function MarketIcons(props: { market: MarketRef; nameOf: (t: Hex) => string; label: string }) {
+function MarketIcons(props: { market: MarketRef; nameOf: (t: Hex) => string; label: string; mine?: boolean }) {
   const m = props.market;
-  const icon = (id: Hex) => <TokenIcon row={{ covenantId: id, ticker: props.nameOf(id), kascov: null }} size={22} anonymous />;
+  const icon = (id: Hex) => <TokenIcon row={{ covenantId: id, ticker: props.nameOf(id), kascov: null }} size={22} anonymous scope={props.mine ? 'wallet' : undefined} />;
   const open = (e: Event) => {
     e.preventDefault();
     e.stopPropagation();

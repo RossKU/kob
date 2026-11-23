@@ -11,6 +11,24 @@ import { logoGate } from '../../data/logo-gate';
 import type { Hex } from '../../kob/types';
 import { useAsync } from '../kit';
 import { heldIds } from './held-list';
+import { ownTokenIdsOf } from '../../kob/order-facts';
+import type { PlacementRecord } from '../../kob/records';
+import type { KobWasm } from '../../kob/wasm';
+
+/** The tokens a record's order trades (its token, a pair's A and B, an unbound curve's), lower case. */
+function recordTokens(kob: KobWasm | null, r: PlacementRecord): Set<string> {
+  const out = new Set<string>();
+  if (r.token) out.add(r.token.toLowerCase());
+  for (const hex of [r.state, r.last?.state]) {
+    if (!hex || !kob) continue;
+    try {
+      for (const t of ownTokenIdsOf(kob.decodeState(r.kind as never, hex))) out.add(t.toLowerCase());
+    } catch {
+      /* a state this build cannot decode names nothing */
+    }
+  }
+  return out;
+}
 
 export interface WalletHoldings {
   /** Null without a connected wallet. Empty while it is read or when it could not be. */
@@ -77,9 +95,14 @@ export function useHeldDeclarations(ids: readonly string[]): void {
  * may have arrived since the list read them. It asks the indexer for the key's outputs of that
  * token, and the node-verified holdings when the indexer cannot answer. Any output named counts,
  * verified or not, since it only gates. A failed read tells the gate nothing, so its logo waits.
+ *
+ * A token in an order naming the key as its maker counts as held too: anyone can fund such an
+ * order, and its custody is owned by the order, not the key. The check asks the indexer for one
+ * order of the key under the token (base or a pair's quote) and reads the wallet's records, which
+ * keep the orders it adopted from the indexer.
  */
 export function useHoldingCheck(covenantId: Hex): void {
-  const { tracker, indexer } = useServices();
+  const { tracker, indexer, kob } = useServices();
   const wallet = useWallet();
   const pubkey = wallet.networkMismatch ? null : (wallet.info?.pubkey ?? null);
   const id = covenantId.toLowerCase();
@@ -89,14 +112,21 @@ export function useHoldingCheck(covenantId: Hex): void {
     asked.current = key;
     logoGate.expectHoldings(pubkey, id);
   }
+  const records = wallet.records;
   useEffect(() => {
     if (!pubkey) return;
     const fromIndexer = indexer ? indexer.tokenUtxos({ owner: pubkey, token: id, spent: false }).catch(() => null) : Promise.resolve(null);
+    const inOrders = indexer ? indexer.orders({ maker: pubkey, token: id, limit: 1 }).then((p) => p.items.some((o) => o.maker === pubkey), () => false) : Promise.resolve(false);
+    const inRecords = records.list().then((rs) => rs.some((r) => recordTokens(kob, r).has(id)), () => false);
+    void Promise.all([inOrders, inRecords]).then(([o, r]) => {
+      if (o || r) logoGate.noteRelated(pubkey, [id]);
+    });
     void fromIndexer
       .then(async (views) => (views ? views.some((v) => !v.spent && v.token.toLowerCase() === id && v.amount !== '0') : heldIds(await tracker.heldTokens(pubkey)).has(id)))
-      .then(
-        (holds) => logoGate.noteHoldings(pubkey, id, holds ? [id] : []),
-        () => undefined,
-      );
-  }, [pubkey, id, indexer, tracker]);
+      .then(async (holds) => {
+        // The gate is told once the order checks answered too, so the logo waits for them.
+        const [o, r] = await Promise.all([inOrders, inRecords]);
+        logoGate.noteHoldings(pubkey, id, holds || o || r ? [id] : []);
+      }, () => undefined);
+  }, [pubkey, id, indexer, tracker, records, kob]);
 }

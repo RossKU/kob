@@ -132,3 +132,44 @@ test('a listed token the wallet only received is not asked of its creator\'s hos
   expect(hits).toBe(0);
   expect(log.requests).not.toContain(DUST_URL);
 });
+
+test('a token only in an order naming the key is not asked of its creator\'s host: Portfolio, token page, Activity "Mine"', async ({ appPage: page, mock }) => {
+  // R3B-M1: the creator funds an ask of its token that names the wallet as its maker. The wallet
+  // holds no unit (the custody is owned by the order), and the order was not placed here.
+  await mock.seed({
+    tokens: [{ ticker: 'DUST', covenant_id: DUST, program: 'KCC20Ref', template_id: 'KCC20Ref', extension_commitment: 'ee'.repeat(32), powers: [], decimals: null, order_scale: 100_000_000 }],
+    orders: [{ token: DUST, side: 'ask', maker: 'alice', amount: TOKEN.toString(), price: 1_100_000 }],
+  });
+  let hits = 0;
+  const log = await mockKascov(page, { tokens: [{ covenant_id: DUST, claimed_ticker: 'DUST', claimed_image: DUST_URL }], hosts: { [DUST_URL]: PNG } });
+  await page.route('https://assets.example/**', (r) => {
+    hits++;
+    return r.abort();
+  });
+  await page.goto('/#/settings');
+  await connectWallet(page, 'kasware');
+  // The Portfolio lists the order (adopted from the indexer): its token is the wallet's from then on.
+  await page.evaluate(() => (location.hash = '#/portfolio/open'));
+  await expect(page.getByTestId('orders-list').getByTestId(`token-icon-${DUST}`).first()).toHaveAttribute('data-icon', 'withheld', { timeout: 20_000 });
+  await page.evaluate(() => (location.hash = '#/market'));
+  const row = page.getByTestId(`token-row-${DUST}`);
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  const listIcon = row.getByTestId(`token-icon-${DUST}`);
+  await listIcon.scrollIntoViewIfNeeded();
+  await expect(listIcon).toHaveAttribute('data-icon', 'withheld');
+  await page.getByTestId(`token-link-${DUST}`).click();
+  await expect(page.getByTestId('token-page')).toBeVisible();
+  await expect(page.getByTestId('token-identity').getByTestId(`token-icon-${DUST}`)).toHaveAttribute('data-icon', 'withheld', { timeout: 20_000 });
+  await expect(page.getByTestId('token-logo-section')).toHaveCount(0);
+
+  await page.evaluate(() => (location.hash = '#/activity'));
+  const mine = page.getByTestId('activity-mine');
+  await expect(mine).toBeVisible();
+  if ((await mine.getAttribute('aria-pressed')) !== 'true') await mine.click();
+  const icon = page.getByTestId('activity-list').getByTestId('activity-row').first().locator('[data-icon]').first();
+  // Activity icons name no kascov listing, so without a KCC-23 declaration the mock has no logo for it: a letter or the withheld control, never the picture.
+  await expect(icon).toHaveAttribute('data-icon', /^(withheld|letter)$/, { timeout: 20_000 });
+  await page.waitForTimeout(500);
+  expect(hits).toBe(0);
+  expect(log.requests).not.toContain(DUST_URL);
+});

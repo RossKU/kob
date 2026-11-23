@@ -177,6 +177,24 @@ class LogoGate {
     else this.checks.set(id, 'read');
     this.emit();
   }
+  /**
+   * Tokens that sit in orders naming `owner` as their maker (their custody, escrow or bought
+   * tokens), listed by the indexer or kept in the wallet's records. They count as held: anyone can
+   * fund an order that names another key as its maker, and its token's logo would then tell the
+   * creator's host who that maker is. A token once noted stays so for the visit.
+   */
+  noteRelated(owner: string, ids: Iterable<string>): void {
+    this.holderIs(owner);
+    let added = false;
+    for (const i of ids) {
+      const id = i.toLowerCase();
+      if (HEX64.test(id) && !this.held.has(id)) {
+        this.held.add(id);
+        added = true;
+      }
+    }
+    if (added) this.emit();
+  }
   /** Whether `owner` (the connected wallet's key) holds `covenantId`, as far as this visit read. */
   holding(owner: string | null, covenantId: string): Holding {
     if (!owner || owner !== this.holder) return 'unknown';

@@ -37,6 +37,7 @@ import { FIRST_LIMIT } from './activity-store';
 import { useActivity } from './use-activity';
 import '../market/market.css';
 import './activity.css';
+import { logoGate } from '../../data/logo-gate';
 
 const addressCache = new Map<string, string | null>();
 
@@ -424,6 +425,10 @@ function ActivityLogView(props: ActivityLogProps) {
           {rowsShown ? (
             shown.map((r, i) => {
               const makers = rowMakers(r, data);
+              // A row of an order naming the connected key: its tokens are the wallet's, and their
+              // creator-hosted logos are gated (data/logo-gate.ts).
+              const mine = !!me && makers.some((pk) => pk.toLowerCase() === me);
+              if (mine) logoGate.noteRelated(me, r.market.kind === 'token' ? [r.market.token] : [r.market.base, r.market.quote]);
               return (
                 <ActivityRowView
                   key={r.key}
@@ -439,6 +444,7 @@ function ActivityLogView(props: ActivityLogProps) {
                   today={today}
                   priceDp={priceDp}
                   fmt={fmt}
+                  mine={mine}
                 />
               );
             })
