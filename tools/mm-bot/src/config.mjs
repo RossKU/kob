@@ -17,7 +17,7 @@ export const DEFAULTS = {
     decimals: null, // checked against what the CLI reports
     label: null, // a name for logs and messages only
     usdSource: 'kraken:USDCUSD', // what one token is worth in USD: 'kraken:<PAIR>' or 'fixed'
-    usdFallback: 1.0, // used when the live rate is missing or stale (null: pull the quotes instead)
+    usdFallback: null, // a rate to use when the live one is missing or stale; null: IDLE (quotes pulled) until it is live again, so the peg band is always checked (L25)
     pegUsd: 1.0, // the token's peg
     pegBand: 0.005, // IDLE when the live USD rate is further than this from the peg (a fraction)
   },
@@ -52,7 +52,7 @@ export const DEFAULTS = {
     resizeBelow: 0.5, // cancel and place again an order left with less than this share of its level
     askCarrierMinKas: 0.2, // an ask's amend is paid from its carrier: below this it is cancelled and placed again
     mergeAboveUtxos: 1, // merge the free token UTXOs before placing an ask when there are more than this (the limit is 3 inputs)
-    lifeMin: 90, // every quote is placed and amended with an expiry this far ahead (kob --gtd): the quotes of a dead bot lapse
+    lifeMin: 90, // every quote is placed and amended with an expiry this far ahead (kob --gtd): the quotes of a dead bot lapse (soft: conforming matchers stop, a refund ends them)
     renewAfterMin: 45, // a quote not amended for this long is amended in place to a fresh expiry (a reprice renews it too)
     skew: { enabled: false, maxShift: 0.002, targetTokenShare: 0.5 },
   },

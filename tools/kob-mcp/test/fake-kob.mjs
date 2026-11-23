@@ -25,6 +25,8 @@ function sign(action, net, plan = {}, ids = [], apply = () => {}, issues = [], t
   const tokens = tusdNet ? { [TUSD]: String(tusdNet) } : {};
   const doc = { action, network: 'testnet-10', plan, issues, transaction: { txid: txid(), inputs: ['in #0 your KAS'], outputs: ['out #0'], fee: String(FEE), net: { kas: String(net), tokens }, signatures: 1 }, new_covenant_ids: ids, result: null };
   if (issues.some((i) => i.severity === 'error')) { process.stderr.write('error: the plan has errors: nothing signed\n'); print(doc, 1); }
+  // FAKE_KOB_STOP_ON_DRY=<file>: the operator writes the STOP file while the dry run runs.
+  if (dry && process.env.FAKE_KOB_STOP_ON_DRY) writeFileSync(process.env.FAKE_KOB_STOP_ON_DRY, '');
   if (dry) { process.stderr.write('dry run: nothing signed or submitted\n'); print(doc); }
   if (!yes) { process.stderr.write('not signed: pass --yes to sign and submit\n'); print(doc, 1); }
   if (process.env.FAKE_KOB_SUBMIT_FAIL) { process.stderr.write('error: submit: node rejected the request: orphan\n'); print(doc, 1); }
@@ -48,7 +50,8 @@ if (args.includes('--help')) {
 
 switch (args[0]) {
   case 'claim':
-    sign(`claim ${args[1]}`, -FEE, { order: args[1] });
+    // The plan names what the order bought (kob-cli: `bought`), not the token.
+    sign(`claim ${args[1]}`, -FEE, { order: args[1], bought: String(c.bought ?? 100e8), merged: 0, sell: args.includes('--sell'), ends: args.includes('--end') });
     break;
   case 'balances':
     print({ maker: MAKER, kas: { free: String(c.kasFree), locked: '0', total: String(c.kasFree) },
@@ -58,6 +61,7 @@ switch (args[0]) {
     print({ network: 'testnet-10', tokens: [{ ticker: 'TUSD', covenant_id: '55'.repeat(32), decimals: 8, open_asks: 1, open_bids: 1, warnings: [] }] });
     break;
   case 'book':
+    if (process.env.FAKE_KOB_BOOK_FAIL) { process.stderr.write('error: indexer: HTTP 502\n'); process.exit(1); }
     print({ token: '55'.repeat(32), quote: null, network: 'testnet-10', scale: 1e8, asks: [], bids: [], ...c.book, crossed: false });
     break;
   case 'orders':
@@ -68,8 +72,11 @@ switch (args[0]) {
     const price = kasOf(val('--price'));
     const amount = units(val('--amount'));
     const id = (`c${c.n + 1}`).padStart(64, '0');
-    const value = (side === 'buy' ? Math.round(amount * price) : 0) + 1e8;
-    sign(`place limit ${side}`, -(value + FEE), { states: [] }, [id], () => { c.orders[id] = { side, price, amount, value }; }, [], side === 'sell' ? -base(val('--amount')) : 0);
+    const tip = val('--tip') ? kasOf(val('--tip')) : 0;
+    const value = (side === 'buy' ? Math.round(amount * (price + tip)) : 0) + 1e8;
+    const state = { tokenCovId: TUSD, scale: '100000000', price: String(price), tip: String(tip), amountLeft: String(base(val('--amount'))) };
+    sign(`place limit ${side}`, -(value + FEE), { states: [{ kind: side === 'sell' ? 'KobAsk' : 'KobBid', state }], request: { value: String(value) } }, [id],
+      () => { c.orders[id] = { side, price, tip, amount, value }; }, [], side === 'sell' ? -base(val('--amount')) : 0);
     break;
   }
   case 'replace': {
@@ -78,9 +85,10 @@ switch (args[0]) {
     // The plan names the order as read on the node (current) and its replacement, as kob-cli does.
     const kind = o.side === 'sell' ? 'KobAsk' : 'KobBid';
     const price = val('--price') ? kasOf(val('--price')) : o.price;
-    const st = (p) => ({ kind, state: { tokenCovId: TUSD, scale: '100000000', price: String(p), amountLeft: String(base(String(o.amount))) } });
-    const plan = { order: args[1], inPlace: true, ...(process.env.FAKE_KOB_NO_CURRENT ? {} : { current: st(o.price) }), replacement: st(price) };
-    sign(`amend in place ${args[1]}`, -FEE, plan, [], () => { o.price = price; });
+    const tip = val('--tip') ? kasOf(val('--tip')) : (o.tip ?? 0);
+    const st = (p, t) => ({ kind, state: { tokenCovId: TUSD, scale: '100000000', price: String(p), tip: String(t), amountLeft: String(base(String(o.amount))) } });
+    const plan = { order: args[1], inPlace: true, ...(process.env.FAKE_KOB_NO_CURRENT ? {} : { current: st(o.price, o.tip ?? 0) }), replacement: st(price, tip), value: String(o.value) };
+    sign(`amend in place ${args[1]}`, -FEE, plan, [], () => { o.price = price; o.tip = tip; });
     break;
   }
   case 'cancel': {

@@ -1,10 +1,10 @@
 // What the tools do: reads through the CLI and the indexer; writes as plan, check, then send.
 
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { Audit } from './audit.mjs';
-import { Ledger, allowListed, bandCheck, capRefusals, killSwitchOn, today, tokenCapRefusals, tokenOutflows } from './guard.mjs';
+import { Ledger, allowListed, bandCheck, capRefusals, killSwitchOn, sideOfKind, statePrice, tipRefusals, today, tokenCapRefusals, tokenOutflows } from './guard.mjs';
 import { Indexer } from './indexer.mjs';
 import { Kob } from './kob.mjs';
 import { big, kas, toSompi } from './units.mjs';
@@ -32,6 +32,18 @@ function text(v, what, max = 1024) {
     throw new Refusal(`BAD_ARGUMENT: ${what} must be one line of 1..${max} characters, not starting with "-"`);
   }
   return v;
+}
+
+/** Throws a refusal unless `v` is one of `list` (enum arguments reach the CLI as they are). */
+function oneOf(v, list, what) {
+  if (!list.includes(v)) throw new Refusal(`BAD_ARGUMENT: ${what} ${JSON.stringify(v)} is not one of ${list.join(', ')}`);
+  return v;
+}
+
+/** Throws a refusal unless `v` is a whole number lo..hi; returns it as text. */
+function whole(v, lo, hi, what) {
+  if (!Number.isInteger(v) || v < lo || v > hi) throw new Refusal(`BAD_ARGUMENT: ${what} ${JSON.stringify(v)} is not a whole number ${lo}..${hi}`);
+  return String(v);
 }
 
 export class Refusal extends Error {}
@@ -209,17 +221,20 @@ export class KobService {
     const px = (v, w) => need(RE.kasAmount, v, w);
     switch (tool) {
       case 'kob_place_limit': {
-        const argv = ['place', 'limit', '--token', need(RE.token, a.token, 'token'), '--side', a.side, '--amount', amt(a.amount, 'amount'), '--price', px(a.price, 'price')];
+        const argv = ['place', 'limit', '--token', need(RE.token, a.token, 'token'), '--side', oneOf(a.side, ['buy', 'sell'], 'side'), '--amount', amt(a.amount, 'amount'), '--price', px(a.price, 'price')];
         if (a.delivery) {
           if (!this.features.delivery) throw new Refusal('NOT_OFFERED: this kob CLI build has no --delivery');
-          argv.push('--delivery', a.delivery);
+          argv.push('--delivery', oneOf(a.delivery, ['each', 'collected', 'one-utxo'], 'delivery'));
         }
         if (a.tip) argv.push('--tip', px(a.tip, 'tip'));
         if (a.gtd) argv.push('--gtd', need(RE.when, a.gtd, 'gtd'));
         if (a.day) argv.push('--day');
-        if (a.crossing) argv.push('--crossing', a.crossing);
-        if (a.decimals != null) argv.push('--decimals', String(a.decimals));
-        return { argv, band: { side: a.side, price: toSompi(a.price), token: a.token } };
+        if (a.crossing) argv.push('--crossing', oneOf(a.crossing, ['auction', 'limit', 'reject'], 'crossing'));
+        if (a.decimals != null) argv.push('--decimals', whole(a.decimals, 0, 9, 'decimals'));
+        // The band judges the all-in price: a buy pays price + tip, a sell receives price - tip (T-9).
+        const price = toSompi(a.price);
+        const tip = a.tip ? toSompi(a.tip) : 0n;
+        return { argv, band: { side: a.side, price: a.side === 'buy' ? price + tip : price > tip ? price - tip : 0n, token: a.token }, tips: true };
       }
       case 'kob_replace': {
         const argv = ['replace', need(RE.id, a.id, 'id').toLowerCase()];
@@ -228,9 +243,10 @@ export class KobService {
         if (a.tip) argv.push('--tip', px(a.tip, 'tip'));
         if (a.renew) argv.push('--renew');
         if (argv.length === 2) throw new Refusal('BAD_ARGUMENT: name what changes: price, amount, tip or renew');
-        // A new price is checked after the dry run, against the order as the CLI checked it on
-        // the node (replaceChecks), never against the indexer's view of it.
-        return { argv, reprice: a.price ? { price: toSompi(a.price) } : null };
+        // A new price, tip or amount is checked after the dry run, against the order as the CLI
+        // checked it on the node (replaceChecks), never against the indexer's view of it. Only a
+        // bare renew moves no value.
+        return { argv, reprice: a.price || a.tip || a.amount ? { priceGiven: Boolean(a.price) } : null };
       }
       case 'kob_cancel':
         return { argv: ['cancel', need(RE.id, a.id, 'id').toLowerCase()] };
@@ -258,7 +274,7 @@ export class KobService {
           if (a.sell_amount) argv.push('--amount', amt(a.sell_amount, 'sell_amount'));
         }
         if (a.end) argv.push('--end');
-        return { argv };
+        return { argv, claimSell: a.sell_price ? { price: toSompi(a.sell_price) } : null };
       }
       case 'kob_send': {
         const to = String(a.to ?? '').trim().toLowerCase();
@@ -279,8 +295,8 @@ export class KobService {
   async buildCreate(a) {
     const px = (v, w) => need(RE.kasAmount, v, w);
     const argv = ['token', 'create', '--name', text(a.name, 'name', 64), '--ticker', need(/^[A-Z0-9]{2,12}$/, a.ticker, 'ticker'),
-      '--decimals', String(a.decimals), '--supply', need(/^[1-9]\d{0,38}$/, a.supply, 'supply (base units)')];
-    if (a.program) argv.push('--program', a.program);
+      '--decimals', whole(a.decimals, 0, 18, 'decimals'), '--supply', need(/^[1-9]\d{0,38}$/, a.supply, 'supply (base units)')];
+    if (a.program) argv.push('--program', oneOf(a.program, ['public-mint', '3x3'], 'program'));
     if (a.description) argv.push('--description', text(a.description, 'description'));
     if (a.website) argv.push('--website', text(a.website, 'website', 256));
     if (a.image) argv.push('--image', text(a.image, 'image', 256));
@@ -420,6 +436,7 @@ export class KobService {
 
   async writeNow(tool, args, estimate) {
     const log = (outcome, extra = {}) => this.audit.log({ tool, args: this.redactArgs(args), outcome, ...extra });
+    let planDir = null;
     try {
       if (!estimate && killSwitchOn(this.cfg)) throw new Refusal(`KILL_SWITCH: the kill switch file ${this.cfg.killSwitchFile.split(/[\\/]/).pop()} exists; every write is refused until it is removed`);
       for (const [k, p] of this.plans) if (k !== args.confirm && this.now() > p.expires) this.plans.delete(k);
@@ -442,17 +459,31 @@ export class KobService {
       let band = built.band ? await this.band(built.band) : null;
       if (band && !band.ok) throw new Refusal(band.reason);
       const planId = plan?.id ?? randomBytes(6).toString('hex');
-      const planDir = join(this.cfg.dataDir, 'creations', `${planId}-plan-${this.now()}`);
+      planDir = join(this.cfg.dataDir, 'creations', `${planId}-plan-${this.now()}`);
       const d = await this.dryRun(tool, built, args, planDir);
       if (!d.ok) throw new Refusal(d.error);
       const day = today();
       const spentToday = this.ledger.spentOn(day);
       d.tokens = built.create ? {} : tokenOutflows(d.doc);
+      const tips = [];
+      if (built.tips) {
+        const value = big(d.doc?.plan?.request?.value) || -big(d.doc?.transaction?.net?.kas);
+        for (const o of d.doc?.plan?.states ?? []) tips.push(...tipRefusals(o, value, this.cfg.caps.tips));
+      }
       if (built.reprice) {
         const r = await this.replaceChecks(built.reprice, d.doc);
         band = r.band;
+        tips.push(...r.tips);
         for (const [cov, n] of Object.entries(r.held)) if (BigInt(n) > big(d.tokens[cov])) d.tokens[cov] = n;
+        // A buy priced up commits its whole escrow at the new price, as a new buy would (T-3).
+        if (r.commit > d.spend) d.spend = d.commit = r.commit;
       }
+      if (built.claimSell) {
+        const r = await this.claimChecks(built.claimSell, args.id, d.doc);
+        band = r.band;
+        d.tokens = r.tokens;
+      }
+      if (tips.length) throw new Refusal(tips.join('; '));
       const caps = [...capRefusals(d, this.cfg.caps, spentToday),
         ...await tokenCapRefusals(d.tokens, this.cfg.caps.tokens, (c) => this.ledger.tokensOutOn(day, c), (c) => this.freeHolding(c))];
       const limits = { perTxKas: kas(this.cfg.caps.perTx), perDayKas: kas(this.cfg.caps.perDay), spentTodayKas: kas(spentToday), maxFeeKas: kas(this.cfg.caps.maxFee) };
@@ -486,10 +517,15 @@ export class KobService {
       }
       log('error', { error: this.redact(String(e.message)) });
       throw e;
+    } finally {
+      // An estimate keeps no creation files.
+      if (estimate && planDir) rmSync(planDir, { recursive: true, force: true });
     }
   }
 
   async send(tool, built, args, planId, d, day, summary, log) {
+    // The STOP file may have appeared while the dry run ran.
+    if (killSwitchOn(this.cfg)) throw new Refusal(`KILL_SWITCH: the kill switch file ${this.cfg.killSwitchFile.split(/[\\/]/).pop()} exists; every write is refused until it is removed`);
     this.ledger.reserve(planId, day, d.spend, { tool, ...(Object.keys(d.tokens ?? {}).length ? { tokens: d.tokens } : {}) });
     let doc = null;
     let failure = null;
@@ -522,7 +558,8 @@ export class KobService {
         ...(counted ? { note: 'the outcome is unknown: the spend counts toward today\'s cap; check kob_orders / kob_balances before trying again' } : {}) };
     }
     const actual = spendOf(doc);
-    const spend = built.create ? d.spend : actual.spend;
+    // A raised buy's escrow stays counted after the send: the transaction itself only pays the fee.
+    const spend = built.create ? d.spend : d.commit != null && d.commit > actual.spend ? d.commit : actual.spend;
     this.ledger.settle(planId, spend, txids);
     log('submitted', { planId, txids, spend: String(spend), fee: String(actual.fee) });
     return {
@@ -548,10 +585,14 @@ export class KobService {
 
   /**
    * The price band of a limit price or take bound, with the token's decimals for books whose scale
-   * is capped at 10^9.
+   * is capped at 10^9. `priceScale`: the price is per that many base units (bandCheck). A book that
+   * cannot be read refuses: a band that was never checked must not pass as one (L23).
    */
-  async band({ side, price, token }) {
+  async band({ side, price, priceScale = null, token }) {
+    const bandPct = this.cfg.limits.priceBandPct;
+    if (bandPct == null) return bandCheck({ bandPct });
     const book = await this.bookFor(token);
+    if (!book) return { ok: false, reason: `PRICE_BAND_UNCHECKED: the book of ${token} could not be read, so the price band cannot be checked; try again later` };
     let decimals = null;
     const scale = book?.scale != null ? BigInt(book.scale) : null;
     if (scale != null && scale < 1_000_000_000n) decimals = scale.toString().length - 1;
@@ -559,52 +600,93 @@ export class KobService {
       const list = await this.tokens({ search: book.token }).catch(() => null);
       decimals = (list?.tokens ?? []).find((t) => t.covenant_id === book.token)?.decimals ?? null;
     }
-    return bandCheck({ side, price, book, decimals, bandPct: this.cfg.limits.priceBandPct });
+    return bandCheck({ side, price, priceScale, book, decimals, bandPct });
   }
 
   /**
-   * The checks of a new price for a resting order (E-M4). The side and the token come from the
-   * dry run's `current` and `replacement` states, which the CLI read from the order's UTXO on the
-   * node, never from the indexer's view of the order.
+   * The checks of an amended resting order (E-M4, T-1, T-3), the same as for a new order. The side
+   * and the token come from the dry run's `current` and `replacement` states, which the CLI read
+   * from the order's UTXO on the node, never from the indexer's view of the order.
    *
-   * A move against the maker (a sell priced down, a buy priced up; any move when the plan has no
-   * comparable current price) needs a band that was checked, unless the operator turned the band
-   * off. A sell priced down also counts its whole custody as tokens leaving the wallet, under the
-   * token caps: it is a new sell of those tokens. Returns { band, held: { cov: base units } }.
+   * Prices are all-in: a sell receives price - tip, a buy pays price + tip, so a tip raise is a
+   * price move. The all-in price is always banded. A move against the maker (a sell's all-in
+   * price down or its amount up, a buy's all-in price up; any change when the plan has no
+   * comparable current state) needs a band that was checked, unless the operator turned the band
+   * off. Such a move is a new order of what the order holds: a sell counts its whole custody
+   * under the token caps, a buy its whole KAS (the plan's `value`) under the KAS caps. The tip
+   * caps apply to the replacement. Returns { band, held: { cov: base units }, commit, tips }.
    */
-  async replaceChecks({ price }, doc) {
+  async replaceChecks({ priceGiven }, doc) {
     const rep = doc?.plan?.replacement;
     const cur = doc?.plan?.current;
     const kind = String(rep?.kind ?? '');
-    const side = /^Kob(Cond|Ifd)?Ask(Kron)?$/.test(kind) ? 'sell' : /^Kob(Cond|Ifd)?Bid(Kron)?$/.test(kind) ? 'buy' : null;
+    const side = sideOfKind(kind);
     const token = String(rep?.state?.tokenCovId ?? '').toLowerCase();
     if (!side || !RE.id.test(token) || /^0+$/.test(token)) {
-      throw new Refusal(`PRICE_BAND_UNCHECKED: the plan names ${kind ? `a ${kind}` : 'no replacement order'}, whose new price this server cannot check against a KAS book; cancel it and place a new order`);
+      throw new Refusal(`PRICE_BAND_UNCHECKED: the plan names ${kind ? `a ${kind}` : 'no replacement order'}, whose new terms this server cannot check against a KAS book; cancel it and place a new order`);
     }
-    const px = (st) => {
-      const v = st?.price ?? st?.tpPrice;
-      return /^\d+$/.test(String(v ?? '')) ? BigInt(v) : null;
+    const allIn = (st) => {
+      const p = statePrice(st);
+      const tip = big(st?.tip);
+      return p == null ? null : side === 'sell' ? p - tip : p + tip;
     };
-    const was = cur?.kind === kind ? px(cur.state) : null;
-    const now = px(rep.state);
-    const against = was == null || now == null || (side === 'sell' ? now < was : now > was);
-    const band = await this.band({ side, price, token });
+    const comparable = cur?.kind === kind;
+    const was = comparable ? allIn(cur.state) : null;
+    const now = allIn(rep.state);
+    const more = side === 'sell' && (!comparable || big(rep.state.amountLeft) > big(cur.state?.amountLeft));
+    const against = was == null || now == null || more || (side === 'sell' ? now < was : now > was);
+    const scale = /^\d+$/.test(String(rep.state.scale ?? '')) ? rep.state.scale : null;
+    if (now == null || now <= 0n || scale == null) {
+      throw new Refusal(`PRICE_BAND_UNCHECKED: the plan does not name the ${side}'s all-in price and scale; cancel it and place a new order`);
+    }
+    const band = await this.band({ side, price: now, priceScale: scale, token });
     if (!band.ok) throw new Refusal(band.reason);
     if (against && !band.checked && !band.off) {
-      throw new Refusal(`PRICE_BAND_UNCHECKED: ${band.note}; a ${side} priced ${side === 'sell' ? 'down' : 'up'} needs a checked band. Cancel it and place a new order (the caps then apply)`);
+      const what = priceGiven ? `a ${side} priced ${side === 'sell' ? 'down' : 'up'}` : `a ${side} amended against its maker`;
+      throw new Refusal(`PRICE_BAND_UNCHECKED: ${band.note}; ${what} needs a checked band. Cancel it and place a new order (the caps then apply)`);
     }
     const held = {};
+    let commit = 0n;
     if (side === 'sell' && against) {
       const left = rep.state.amountLeft;
       if (!/^\d+$/.test(String(left ?? ''))) throw new Refusal('PRICE_BAND_UNCHECKED: the plan does not name the sell\'s custody; cancel it and place a new order');
       held[token] = String(left);
     }
-    return { band, held };
+    if (side === 'buy' && against) {
+      if (!/^\d+$/.test(String(doc.plan.value ?? ''))) throw new Refusal('PRICE_BAND_UNCHECKED: the plan does not name the buy\'s KAS; cancel it and place a new order');
+      commit = BigInt(doc.plan.value);
+    }
+    return { band, held, commit, tips: tipRefusals(rep, doc.plan.value, this.cfg.caps.tips) };
+  }
+
+  /**
+   * The checks of a claim that sells what a collected buy bought (T-2, sec-ops M17): the sell
+   * price is banded, and the claimed tokens count under the token caps, as a new sell of them.
+   * They are not the wallet's UTXOs, so the plan's net effect leaves them out: the tokens out are
+   * the plan's `bought` (read on the node) less what of the token the net effect brings back
+   * (or plus what joins from the wallet). The plan does not name the token, so it is the
+   * indexer's view of the order, and the net effect must name no other token.
+   */
+  async claimChecks({ price }, id, doc) {
+    const bought = String(doc?.plan?.bought ?? '');
+    if (!/^\d+$/.test(bought)) throw new Refusal('PRICE_BAND_UNCHECKED: the claim plan does not name the bought amount; claim without sell_price, then place the sell');
+    const view = await this.indexer.get(`/v1/orders/${String(id).toLowerCase()}`).catch(() => null);
+    const token = String(view?.token ?? '').toLowerCase();
+    const net = doc?.transaction?.net?.tokens ?? {};
+    if (!RE.id.test(token) || Object.keys(net).some((c) => c.toLowerCase() !== token)) {
+      throw new Refusal('PRICE_BAND_UNCHECKED: the token of the claimed order is not confirmed (indexer view missing or another token in the plan); claim without sell_price, then place the sell');
+    }
+    const band = await this.band({ side: 'sell', price, token });
+    if (!band.ok) throw new Refusal(band.reason);
+    const back = big(Object.entries(net).find(([c]) => c.toLowerCase() === token)?.[1]);
+    const out = BigInt(bought) - back;
+    return { band, tokens: out > 0n ? { [token]: String(out) } : {} };
   }
 
   async bookFor(token) {
     try {
-      return await this.cli(['book', token, '--depth', '1']);
+      // Deep enough for the depth reference (10 KAS of bids).
+      return await this.cli(['book', token, '--depth', '50']);
     } catch {
       return null;
     }

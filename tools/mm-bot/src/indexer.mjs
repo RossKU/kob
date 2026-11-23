@@ -44,7 +44,8 @@ export class Indexer {
     let cursor = null;
     for (let page = 0; page < 10; page++) {
       const body = await this.get(`/v1/orders?maker=${maker}&status=active&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
-      for (const v of body?.items ?? []) if (v.token === token) { out.push(orderOf(v)); raw.push(v); }
+      // An id that is not 64 hex would reach kob cancel / replace as an argument (sec-ops L21).
+      for (const v of body?.items ?? []) if (v.token === token && /^[0-9a-f]{64}$/.test(v.covenant_id ?? '')) { out.push(orderOf(v)); raw.push(v); }
       cursor = body?.next_cursor;
       if (!cursor) break;
     }

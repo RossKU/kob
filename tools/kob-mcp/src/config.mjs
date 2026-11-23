@@ -19,7 +19,11 @@ export const DEFAULTS = {
     perTxKas: 100, // the most KAS one transaction may take out of the wallet (escrow, carriers, sends, fee)
     perDayKas: 500, // the same over a UTC day, from the ledger
     maxFeeKas: 1, // the most network fee of one transaction (a token creation: of both)
-    priceBandPct: 25, // a limit price or take bound this far from the last fill (else the mid) is refused; null: off
+    priceBandPct: 25, // a limit price or take bound this far from the reference (a buy: the lower of the last fill and the 10 KAS bid depth; a sell: the higher; else the mid) is refused; null: off
+    // The tip goes to the executor that fills the order: at most this % of the price, and this
+    // much KAS over the whole order (a sell's custody, a buy's escrow). null: that cap is off.
+    maxTipPct: 1,
+    maxTipKas: 1,
     launchesPerDay: 3, // token creations per UTC day
     // Tokens that leave the wallet (a send, the escrow of a sell, a sale into a buy order), from
     // the dry run's net effect. Per token: { "<covenant id>": { perTx, perDay } } in base units.
@@ -99,6 +103,18 @@ export function checkConfig(c, baseDir, env = process.env) {
       errs.push(`limits.${k}: ${JSON.stringify(c.limits[k])}`);
     }
   }
+  const pct = c.limits.maxTipPct;
+  if (pct != null && !(typeof pct === 'number' && pct >= 0 && pct <= 100 && Math.abs(pct * 100 - Math.round(pct * 100)) < 1e-9)) {
+    errs.push('limits.maxTipPct must be a number 0..100 (two decimals at most), or null');
+  }
+  let maxTip = null;
+  if (c.limits.maxTipKas != null) {
+    try {
+      maxTip = toSompi(c.limits.maxTipKas);
+    } catch {
+      errs.push(`limits.maxTipKas: ${JSON.stringify(c.limits.maxTipKas)}`);
+    }
+  }
   if (c.limits.priceBandPct != null && (!/^\d+(\.\d+)?$/.test(String(c.limits.priceBandPct)) || !(Number(c.limits.priceBandPct) > 0))) errs.push('limits.priceBandPct must be a number above 0, or null');
   const tokenCaps = { byToken: new Map(), perTxPct: null, perDayPct: null };
   for (const [id, v] of Object.entries(c.limits.tokens ?? {})) {
@@ -132,7 +148,7 @@ export function checkConfig(c, baseDir, env = process.env) {
     kobCliArgs: (c.kobCliArgs ?? []).map(String),
     dataDir,
     killSwitchFile: abs(c.killSwitchFile) ?? join(dataDir, 'STOP'),
-    caps: { perTx: lim.perTxKas, perDay: lim.perDayKas, maxFee: lim.maxFeeKas, tokens: tokenCaps },
+    caps: { perTx: lim.perTxKas, perDay: lim.perDayKas, maxFee: lim.maxFeeKas, tokens: tokenCaps, tips: { maxTipPct: pct ?? null, maxTip } },
   };
 }
 

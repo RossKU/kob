@@ -125,8 +125,11 @@ test('one-minute jump: the median candle move and the reference against a minute
   close(oneMinuteJump(venues, ['a', 'b', 'c'], 1, [], 0), 0.02);
   const history = [{ at: 0, kasUsd: 1.0 }, { at: 30_000, kasUsd: 1.01 }];
   close(oneMinuteJump({}, [], 1.05, history, 60_000), 0.05);
-  // A sample older than 2 minutes is not "a minute ago".
-  assert.equal(oneMinuteJump({}, [], 1.05, [{ at: 0, kasUsd: 1 }], 200_000), 0);
+  // While cycles back off, the newest reading at least a minute old counts whatever its age (T-5):
+  // a 5 % drift over 200 s is still seen.
+  close(oneMinuteJump({}, [], 1.05, [{ at: 0, kasUsd: 1 }], 200_000), 0.05);
+  // A reading under a minute old is not one to compare with.
+  assert.equal(oneMinuteJump({}, [], 1.05, [{ at: 0, kasUsd: 1 }], 50_000), 0);
 });
 
 test('stable rate: live while fresh, then the fallback, else none', () => {

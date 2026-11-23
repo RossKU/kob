@@ -16,11 +16,30 @@ if (mode === 'usage') {
 if (args[0] === 'cancel' && args.includes('--view')) {
   // A cancel per saved view, checked on the node only (no indexer): one document each.
   const items = JSON.parse(readFileSync(args[args.indexOf('--view') + 1], 'utf8')).items ?? [];
+  // In chain mode the node is the ledger: a view whose order is gone or has moved is stale.
+  const c = mode === 'chain' ? JSON.parse(readFileSync(process.env.FAKE_KOB_CHAIN, 'utf8')) : null;
+  if (c && process.env.FAKE_KOB_NODE_DOWN) { process.stderr.write('error: node: connection refused\n'); process.exit(1); }
+  let code = 0;
   for (const v of items) {
+    if (c) {
+      const o = c.orders[v.covenant_id];
+      if (!o || o.txid !== v.current?.txid) {
+        process.stderr.write(`refused: stale view: the node holds no unspent output at the order's script with its covenant id at ${v.current?.txid}:0\n`);
+        code = 1;
+        continue;
+      }
+      if (!dry) {
+        if (o.side === 1) { c.tokenFree += o.amount; c.tokenUtxos += 1; }
+        c.kasFree += o.value - 427000;
+        c.ended[v.covenant_id] = 'cancelled';
+        delete c.orders[v.covenant_id];
+        writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify(c));
+      }
+    }
     process.stdout.write(JSON.stringify({ action: `cancel ${v.covenant_id}`, network: 'testnet-10', plan: {}, issues: [], transaction: { txid: tx, fee: '427000' }, new_covenant_ids: [],
       result: dry ? null : { status: 'submitted', txid: tx, fee: '427000', covenant_ids: [], file: null, engine_validated: true } }));
   }
-  process.exit(0);
+  process.exit(code);
 }
 if (mode === 'chain') chain();
 if (args[0] === 'balances') {

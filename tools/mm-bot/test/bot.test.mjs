@@ -17,7 +17,8 @@ const MAKER = 'a1d9fd1347128011ad0036b077949d63274d5d3b8ac8351776c30c945ef2c2fb'
 let kasUsd = 0.025; // what every venue trades at; the tests move it
 let venuesDown = false;
 let indexerDown = false;
-let usdcUsd = 1.0; // Kraken USDC/USD; the tests move it out of the peg band
+let usdcUsd = 1.0; // Kraken USDC/USD; the tests move it out of the peg band (null: Kraken does not quote it)
+let hiddenIds = new Set(); // orders a lying indexer leaves out of every answer (T-4)
 let indexerAheadMs = 0; // the indexer judges expiry this far in the future (time passing while the bot is dead)
 
 /**
@@ -34,7 +35,7 @@ function venueResponse(url) {
   if (url.includes('gateio')) return ts.map((t) => [String(t / 1000), String(base * p), String(p), '0', '0', '0', String(base), 'true']);
   if (url.includes('mexc')) return ts.map((t) => [t, '0', '0', '0', String(p), String(base), t + 60_000, String(base * p)]);
   if (url.includes('kraken') && url.includes('OHLC')) return { error: [], result: { KASUSD: ts.map((t) => [t / 1000, '0', '0', '0', String(p), String(p), String(base), 5]), last: 0 } };
-  if (url.includes('kraken') && url.includes('Ticker')) return { error: [], result: { USDTZUSD: { a: ['1.0'], b: ['1.0'] }, USDCUSD: { a: [String(usdcUsd)], b: [String(usdcUsd)] } } };
+  if (url.includes('kraken') && url.includes('Ticker')) return { error: [], result: { USDTZUSD: { a: ['1.0'], b: ['1.0'] }, ...(usdcUsd == null ? {} : { USDCUSD: { a: [String(usdcUsd)], b: [String(usdcUsd)] } }) } };
   throw new Error(`no stub for ${url}`);
 }
 
@@ -48,9 +49,10 @@ function stubFetch(chainFile) {
       const view = (id, o, status) => ({ covenant_id: id, contract: o.side === 1 ? 'KobAsk' : 'KobBid', side: o.side, token: c.token, scale: 1_000_000,
         price: String(o.price), amount_left: String(o.side === 1 ? o.amount : Math.floor((o.value - 1e8) * 1e6 / o.price)), current: { txid: o.txid, index: 0, value: String(o.value) }, status,
         expired: o.expiresAt != null && Date.now() + indexerAheadMs >= o.expiresAt });
-      if (u.includes('/v1/orders?')) return json({ items: Object.entries(c.orders).map(([id, o]) => view(id, o, 'open')), next_cursor: null });
+      if (u.includes('/v1/orders?')) return json({ items: Object.entries(c.orders).filter(([id]) => !hiddenIds.has(id)).map(([id, o]) => view(id, o, 'open')), next_cursor: null });
       if (u.includes('/v1/fills')) return json({ items: [], next_cursor: null });
       const id = u.split('/v1/orders/')[1];
+      if (hiddenIds.has(id)) return json({ error: 'not_found' }, 404);
       if (c.orders[id]) return json(view(id, c.orders[id], 'open'));
       if (c.ended[id]) return json({ covenant_id: id, side: 1, status: c.ended[id], current: null });
       return json({ error: 'not_found' }, 404);
@@ -368,4 +370,131 @@ test('renewals keep the founder rules: the peg band idles and resumes, the fee c
   assert.ok(alerts().some((a) => a.reason === 'fee-cap'));
   await bot.cycle();
   assert.equal(bot.state.mode.mode, 'IDLE');
+});
+
+const alertsOf = (dir) => (existsSync(paths(dir).alerts) ? readFileSync(paths(dir).alerts, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+
+test('a lying indexer that hides a quote: the node keeps it in the state file and it is cancelled from its view (T-4)', { timeout: 60_000 }, async () => {
+  kasUsd = 0.025;
+  venuesDown = false;
+  indexerDown = false;
+  usdcUsd = 1.0;
+  const { bot, chain, dir } = setup();
+  await bot.cycle();
+  await bot.cycle();
+  await bot.cycle();
+  const ids = Object.keys(chain().orders).sort();
+  assert.equal(ids.length, 6);
+  hiddenIds = new Set([ids[0]]);
+  try {
+    // The node still holds it: it stays in the state file and goes through kob cancel --view.
+    await bot.cycle();
+    assert.ok(bot.state.orders[ids[0]], 'not forgotten on the indexer\'s word');
+    assert.equal(bot.state.orders[ids[0]].pending?.kind, 'cancel');
+    assert.equal(chain().orders[ids[0]], undefined, 'cancelled on chain');
+    assert.ok(alertsOf(dir).some((a) => a.reason === 'indexer-hides'));
+    // Once the cancel is due to be seen, the node shows its UTXO spent: now it is forgotten.
+    bot.state.orders[ids[0]].pending.since -= 200_000;
+    await bot.cycle();
+    assert.equal(bot.state.orders[ids[0]], undefined);
+  } finally {
+    hiddenIds = new Set();
+  }
+});
+
+test('STOP does not end on the indexer\'s count while the node has not confirmed the quotes ended (T-4)', { timeout: 60_000 }, async () => {
+  kasUsd = 0.025;
+  venuesDown = false;
+  indexerDown = false;
+  usdcUsd = 1.0;
+  const { bot, chain } = setup();
+  await bot.cycle();
+  await bot.cycle();
+  await bot.cycle();
+  const ids = Object.keys(chain().orders);
+  assert.equal(ids.length, 6);
+  hiddenIds = new Set(ids); // the indexer lists nothing
+  writeFileSync(bot.p.stop, 'stop\n');
+  bot.kob.env.FAKE_KOB_NODE_DOWN = '1';
+  try {
+    assert.notEqual(await bot.cycle(), 'stopped');
+    // The node does not answer: nothing is forgotten, the bot does not report stopped.
+    for (const s of Object.values(bot.state.orders)) if (s.pending) s.pending.since -= 200_000;
+    assert.notEqual(await bot.cycle(), 'stopped');
+    assert.equal(Object.keys(bot.state.orders).length, 6);
+    delete bot.kob.env.FAKE_KOB_NODE_DOWN;
+    // The node shows every quote ended (once their cancels are due to be seen): forgotten, then stopped.
+    for (const s of Object.values(bot.state.orders)) if (s.pending) s.pending.since -= 200_000;
+    assert.equal(await bot.cycle(), 'stopped');
+    assert.equal(Object.keys(bot.state.orders).length, 0);
+  } finally {
+    delete bot.kob.env.FAKE_KOB_NODE_DOWN;
+    hiddenIds = new Set();
+    rmSync(bot.p.stop, { force: true });
+  }
+});
+
+test('the indexer down while fair drifts past half the spread: the quotes are pulled through the node (T-5)', { timeout: 60_000 }, async () => {
+  kasUsd = 0.025;
+  venuesDown = false;
+  indexerDown = false;
+  usdcUsd = 1.0;
+  const { bot, chain, calls } = setup();
+  await bot.cycle();
+  await bot.cycle();
+  await bot.cycle();
+  assert.equal(Object.keys(chain().orders).length, 6);
+  indexerDown = true;
+  try {
+    // 0.3 %: within half the 1 % spread, and no jump: nothing is cancelled.
+    kasUsd = 0.025 / 1.003;
+    await assert.rejects(bot.cycle(), /fetch failed/);
+    assert.equal(calls().filter((a) => a[0] === 'cancel').length, 0);
+    // 0.6 %: every quote would sit past fair; pulled from the saved views, the mode left as it is.
+    kasUsd = 0.025 / 1.006;
+    await assert.rejects(bot.cycle(), /fetch failed/);
+    assert.equal(calls().filter((a) => a[0] === 'cancel' && a.includes('--view')).length, 1);
+    assert.equal(Object.keys(chain().orders).length, 0);
+    assert.equal(bot.state.mode.mode, 'QUOTING');
+  } finally {
+    indexerDown = false;
+    kasUsd = 0.025;
+  }
+});
+
+test('an indexer view whose covenant_id is not 64 hex is ignored (sec-ops L21)', async () => {
+  const saved = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ items: [
+    { covenant_id: '--yes', token: TOKEN, side: 1, status: 'open', price: '1', current: {} },
+    { covenant_id: 'cd'.repeat(32), token: TOKEN, side: 1, status: 'open', price: '1', current: {} },
+  ], next_cursor: null }) });
+  try {
+    const { Indexer } = await import('../src/indexer.mjs');
+    const live = await new Indexer('http://indexer.test').liveOrders(MAKER, TOKEN);
+    assert.deepEqual(live.map((o) => o.id), ['cd'.repeat(32)]);
+  } finally {
+    globalThis.fetch = saved;
+  }
+});
+
+test('no live USDC/USD and no fallback (the default): IDLE, nothing quoted, and it resumes by itself (L25)', { timeout: 60_000 }, async () => {
+  kasUsd = 0.025;
+  venuesDown = false;
+  indexerDown = false;
+  usdcUsd = null;
+  const { bot, chain } = setup();
+  assert.equal(bot.cfg.token.usdFallback, null);
+  try {
+    await bot.cycle();
+    await bot.cycle();
+    assert.equal(`${bot.state.mode.mode}/${bot.state.mode.reason}`, 'IDLE/reference');
+    assert.match(bot.state.last.reference.reason, /no USD rate for the token/);
+    assert.equal(Object.keys(chain().orders).length, 0, 'no quote at an unchecked 1.0');
+    usdcUsd = 1.0;
+    for (let i = 0; i < 4; i++) await bot.cycle();
+    assert.equal(bot.state.mode.mode, 'QUOTING');
+    assert.ok(Object.keys(chain().orders).length > 0);
+  } finally {
+    usdcUsd = 1.0;
+  }
 });

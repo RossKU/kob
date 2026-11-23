@@ -3,7 +3,7 @@
 A market maker for a dollar-stablecoin token on its KOB KAS book: set `token` to its covenant id. It quotes a bid
 and an ask ladder around a fair value taken from the KAS/USD exchange markets, amends its orders in place when the
 market moves, and never takes an order. Every quote has a short life (90 min by default) that the bot renews in place,
-so the quotes of a bot that died lapse by themselves. It drives the `kob` CLI as a child process and needs Node 22; there are no npm
+so the quotes of a bot that died lapse by themselves (a soft expiry: see the limits below). It drives the `kob` CLI as a child process and needs Node 22; there are no npm
 dependencies. The token is pinned by covenant id, never by ticker (tickers collide).
 
 ## Setup
@@ -29,7 +29,13 @@ node bin/mm-bot.mjs once   --config config.json          # one cycle (add --dry-
   Delete the STOP file to start again.
 - **Indexer down.** When a pull is due and the wallet or indexer read fails, the bot cancels from its last saved views
   (`<dataDir>/order-views.json`, `kob cancel --view`: checked on the node). An order amended, filled or placed since that
-  read waits for the indexer, with an error alert.
+  read waits for the indexer, with an error alert. While the reads fail, the quotes are also pulled this way once fair
+  has moved more than half the spread from the fair they were set at, and the 1-minute jump compares with the newest
+  reading at least a minute old, however old.
+- **An indexer that hides a quote.** An order leaves the state file only once the node shows its saved view's UTXO
+  spent (`kob cancel --view --dry-run`). An order the indexer no longer lists but the node still holds is cancelled from
+  its view, with an error alert, and STOP waits for it. An order the indexer never showed has no view and is forgotten
+  after `orderVisibleTimeoutSec`: its `--gtd` expiry (soft, below) is then the bound.
 - **It never stops by itself.** Every safety condition makes it IDLE: quotes pulled, nothing new sent, and it resumes on
   its own. Errors are retried with a backoff (15 s doubling to 5 min).
 - One bot per `dataDir`.
@@ -43,7 +49,7 @@ picks the mode, and quotes or pulls its quotes.
   closed 1-minute candles. Median of the venues; a venue more than 1 % off the median, stale or silent is dropped; MEXC is
   a fallback. Fewer than 2 venues: IDLE; exactly 2 must agree within `pairAgreement` (0.125 %). USDT/USD is asked of
   Kraken and Coinbase: a reading more than 1 % from 1, or two more than 0.2 % apart, gives no rate.
-- **Fair value** = token USD / KAS USD; token USD is Kraken's USDC/USD (fallback 1.0). KAS/USDT is used because it
+- **Fair value** = token USD / KAS USD; token USD is Kraken's USDC/USD; while it is missing or stale (`stableMaxAgeSec`) the bot is IDLE and resumes by itself, so the peg band is never skipped. KAS/USDT is used because it
   trades about USD 1 million a day per venue against USD 5k to 75k for KAS/USDC; the USDC books are only cross-checked
   in the log.
 - **Ladder.** `spreadPct` (1 %) is the gap between the best bid and the best ask, so each sits 0.5 % from fair; further
@@ -110,7 +116,7 @@ One JSON file; omitted fields take the default; relative paths are relative to t
 | `token.decimals` | required | checked against the CLI |
 | `token.label` | `null` | name in messages |
 | `token.usdSource` | `kraken:USDCUSD` | token USD rate: `kraken:<PAIR>` or `fixed` |
-| `token.usdFallback` | `1.0` | rate when the live one is stale; `null`: IDLE |
+| `token.usdFallback` | `null` | rate to use when the live one is stale (the peg band is then not checked); `null`: IDLE until it is live again |
 | `token.pegUsd`, `token.pegBand` | `1.0`, `0.005` | IDLE `peg` outside the band |
 | `retiredTokens` | `[]` | old instances: recovery only |
 | `reference.pollSec` | `30` | seconds per cycle |

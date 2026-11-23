@@ -11,7 +11,7 @@
     "decimals": 6,
     "label": "kzUSDC",
     "usdSource": "kraken:USDCUSD",
-    "usdFallback": 1,
+    "usdFallback": null,
     "pegUsd": 1,
     "pegBand": 0.005
   },
