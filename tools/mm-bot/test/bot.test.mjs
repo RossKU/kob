@@ -872,6 +872,55 @@ test('a payment the bot saw on the node and later spent still proves the fill (R
   }
 });
 
+// R4T-2: a payment proves a fill only once, and only when the node first showed it after the
+// ask's last placement or amend.
+test('a payment the node showed before the ask was placed proves nothing (R4T-2)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  try {
+    // An operator top-up, on the node from the start.
+    const topUp = '7c'.repeat(32);
+    bot.nodeOutputs = async () => [{ txid: topUp, index: 0, amount: 1e15 }];
+    const { id } = await filledAsk(bot, chain);
+    fillsFeed = [{ ...fillsFeed[0], txid: topUp }];
+    for (let i = 0; i < 2; i++) await bot.cycle();
+    assert.ok(bot.state.orders[id], 'kept: the payment predates the ask');
+    assert.equal(bot.state.orders[id].unconfirmed, true);
+  } finally {
+    reset();
+  }
+});
+
+test('a payment record proves one fill once (R4T-2)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    const { id, txid } = await filledAsk(bot, chain);
+    // One payment output big enough for every ask.
+    bot.nodeOutputs = async () => [{ txid, index: 1, amount: 1e15 }];
+    await bot.cycle();
+    assert.equal(bot.state.orders[id], undefined, 'the first ask ends on it');
+    // A second ask leaves the node; the indexer names the same payment for its whole amount.
+    const c = chain();
+    const b = Object.keys(c.orders).sort().find((k) => c.orders[k].side === 1 && bot.state.orders[k]);
+    const amount = bot.state.orders[b].amount;
+    delete c.orders[b];
+    c.ended[b] = 'filled';
+    writeFileSync(process.env.FAKE_KOB_CHAIN, JSON.stringify(c));
+    hiddenIds = new Set([id, b]);
+    fillsFeed = [{ id: 2, covenant_id: b, txid, amount: String(amount), price: String(bot.state.orders[b].price) }, ...fillsFeed];
+    for (let i = 0; i < 2; i++) await bot.cycle();
+    assert.ok(bot.state.orders[b], 'kept: the payment already proved a fill');
+    assert.equal(bot.state.orders[b].unconfirmed, true);
+    // Saved with the state file: a restart does not forget it.
+    const again = new Bot(bot.cfg);
+    assert.ok(Object.values(again.state.payments).some((p) => p.usedBy === id));
+  } finally {
+    reset();
+  }
+});
+
 test('an unproven ask past its own expiry is parked: still counted, and STOP does not wait for it (R3T-3)', { timeout: 120_000 }, async () => {
   reset();
   const { bot, chain, calls, dir } = setup();

@@ -537,6 +537,7 @@ export class Bot {
         this.log.info(`${tag}: the amend ${s.pending?.txid ?? ''} did not land; the order is at its earlier terms`);
         s.own.state = s.own.prev;
         s.price = Number(s.own.state.state?.price ?? s.price);
+        if (/^\d+$/.test(String(s.own.state.state?.amountLeft ?? ''))) s.ownAmount = Number(s.own.state.state.amountLeft);
         s.quotedFair = 0; // unknown quote: the next cycle amends it to the target
         s.expiresAt = null; // and renews its expiry
       }
@@ -568,9 +569,12 @@ export class Bot {
       // amount), so that alone is no proof: it is kept as unresolved (R3T-3).
       // An ask also ends once the fills of its whole amount are paid in outputs to the bot that
       // the node showed: a lying indexer would need a real payment to make the bot forget it.
-      const paid = r.status === 'gone' && isAsk(s) && this.paidInFull(id);
+      const proof = r.status === 'gone' && isAsk(s) ? this.paidInFull(id) : null;
+      const paid = proof != null;
       const ended = paid || (r.status === 'gone' && r.verified && (r.spent || cancelled || (s.fate && !o)));
       if (ended) {
+        // Each output proves one fill once, saved with the state file (R4T-2).
+        if (paid) for (const k of proof) this.state.payments[k].usedBy = id;
         const status = paid && !cancelled ? 'filled (its fills are paid in outputs the node showed)' : s.fate ? 'the placement never went out' : cancelled ? 'cancelled' : 'spent on the node (filled or ended)';
         this.log.info(`${tag} ended: ${status}`);
         this.log.action({ type: 'ended', id, side: s.side, level: s.level, status });
@@ -647,38 +651,52 @@ export class Bot {
   }
 
   /**
-   * Records what the node shows paid to the bot's address, by transaction, so that a payment the
-   * bot spends later still counts (R3T-3). One getUtxosByAddresses of its own address, at the start
-   * of a cycle and after a cycle that sent. A failure is logged; nothing is proven then.
+   * Records what the node shows paid to the bot's address, by output, so that a payment the bot
+   * spends later still counts (R3T-3). One getUtxosByAddresses of its own address, at the start of
+   * a cycle, before each placement or amend, and after a cycle that sent. An output keeps the time
+   * the node first showed it (`at`) for as long as the node still shows it, so it never comes back
+   * as new (R4T-2). An order whose own outpoint has no read after it yet (`ownAt` null) takes
+   * this read's time: what this read first showed may predate it. A failure is logged; nothing is
+   * proven then. Returns whether the node answered.
    */
   async seePayments(now) {
     this.sentSince = false;
-    if (!this.nodeOutputs || !this.maker || !this.address) return;
+    if (!this.nodeOutputs || !this.maker || !this.address) return false;
     let outs;
     try {
       outs = await this.nodeOutputs(this.address, this.maker);
     } catch (e) {
       this.log.info(`payments to the bot not read from the node: ${e.message}`);
-      return;
+      return false;
     }
     const own = new Set(this.state.ownTx ?? []);
-    const byTx = new Map();
-    for (const u of outs) if (!own.has(u.txid)) byTx.set(u.txid, (byTx.get(u.txid) ?? 0) + u.amount);
     const pay = this.state.payments;
-    for (const [txid, sompi] of byTx) pay[txid] = { sompi: Math.max(sompi, pay[txid]?.sompi ?? 0), at: pay[txid]?.at ?? now };
-    const keep = Object.entries(pay).filter(([, p]) => now - p.at < PAYMENT_KEEP_MS).sort((a, b) => b[1].at - a[1].at).slice(0, PAYMENTS_KEEP);
-    this.state.payments = Object.fromEntries(keep);
+    const shown = new Set();
+    for (const u of outs) {
+      if (own.has(u.txid) || !Number.isSafeInteger(u.index)) continue;
+      const k = `${u.txid}:${u.index}`;
+      shown.add(k);
+      pay[k] ??= { txid: u.txid, sompi: u.amount, at: now };
+    }
+    const gone = Object.entries(pay).filter(([k, p]) => !shown.has(k) && now - p.at < PAYMENT_KEEP_MS).sort((a, b) => b[1].at - a[1].at).slice(0, PAYMENTS_KEEP);
+    this.state.payments = Object.fromEntries([...Object.entries(pay).filter(([k]) => shown.has(k)), ...gone]);
+    for (const o of Object.values(this.state.orders)) if (o.ownAt == null) o.ownAt = now;
+    return true;
   }
 
   /**
-   * Whether the fills the indexer reported for ask `id` add up to its whole amount, each paid in
-   * its transaction by outputs to the bot that the node showed (not the bot's own transactions)
-   * of at least what the covenant pays the maker, ceil(n x (price - tip) / scale), summed over
-   * every fill of the bot's asks the indexer puts in that transaction.
+   * The payment outputs that prove ask `id` filled in full, or null. The fills the indexer
+   * reported must add up to what the ask's last own outpoint held (`ownAmount`), each paid in its
+   * transaction by one output to the bot (not in one of the bot's own transactions) of at least
+   * what the covenant pays the maker, ceil(n x (price - tip) / scale). The output must be one the
+   * node first showed after that outpoint was sent (`ownAt`), and one that proved no other fill
+   * (R4T-2): a lying indexer then needs a real payment to the bot, made after the placement or
+   * amend, of the ask's whole proceeds, to make the bot forget it.
    */
   paidInFull(id) {
     const s = this.state.orders[id];
-    if (!s?.fills?.length || !(s.amount > 0)) return false;
+    const base = s?.ownAmount ?? s?.amountLeft ?? s?.amount;
+    if (!s?.fills?.length || !(base > 0) || s.ownAt == null) return null;
     const need = (o, n) => {
       const st = o.own?.state?.state ?? {};
       const p = BigInt(st.price ?? Math.round(o.price ?? 0));
@@ -686,23 +704,21 @@ export class Bot {
       const sc = BigInt(st.scale ?? this.scale);
       return p > tip ? (BigInt(n) * (p - tip) + sc - 1n) / sc : null;
     };
-    const claimed = new Map();
-    for (const o of Object.values(this.state.orders)) {
-      if (!isAsk(o)) continue;
-      for (const f of o.fills ?? []) {
-        const q = need(o, f.amount);
-        const was = claimed.get(f.txid);
-        claimed.set(f.txid, q == null || was === null ? null : (was ?? 0n) + q);
-      }
-    }
     const own = new Set(this.state.ownTx ?? []);
+    const picked = [];
     let proven = 0;
     for (const f of s.fills) {
-      const p = this.state.payments[f.txid];
-      const q = claimed.get(f.txid);
-      if (p && q != null && !own.has(f.txid) && BigInt(p.sompi) >= q) proven += f.amount;
+      const q = need(s, f.amount);
+      if (q == null || own.has(f.txid)) continue;
+      // The smallest free output of the fill's transaction that covers it.
+      const k = Object.entries(this.state.payments)
+        .filter(([key, p]) => p.txid === f.txid && !p.usedBy && !picked.includes(key) && p.at > s.ownAt && BigInt(p.sompi) >= q)
+        .sort((a, b) => a[1].sompi - b[1].sompi)[0]?.[0];
+      if (!k) continue;
+      picked.push(k);
+      proven += f.amount;
     }
-    return proven >= s.amount;
+    return proven >= base ? picked : null;
   }
 
   /** The target ladder and the cycle's actions. */
@@ -802,6 +818,10 @@ export class Bot {
     // Every placement and amend sets the quote's expiry lifeMin ahead (to the second, at or before it on chain).
     const expiresAt = Math.floor((Date.now() + this.life().lifeMs) / 1000) * 1000;
     const gtd = gtdArg(expiresAt);
+    // The payments shown before a new own outpoint never prove its fills (R4T-2): read them first.
+    // Without an answer the next read that succeeds stands for the time (ownAt null).
+    const sends = (a.kind === 'place' || a.kind === 'amend') && !this.dryRun;
+    const ownAt = sends && (await this.seePayments(Date.now())) ? Date.now() : null;
     const r = a.kind === 'place' ? await this.kob.place(tok, a.side, a.amount, a.price, gtd)
       : a.kind === 'amend' ? await this.kob.amend(a.id, a.price, gtd)
         : a.kind === 'cancel' ? await this.cancelOrder(a.id) : await this.kob.merge(tok);
@@ -829,7 +849,7 @@ export class Bot {
     if (a.kind === 'place') {
       const id = r.newIds[0];
       // The order is tracked from the CLI's own result: its state and outpoint (R2-T1).
-      if (id) this.state.orders[id] = { ...this.placed(a, r.doc, r.txid, now, expiresAt), pending: { kind: 'place', since: now, txid: r.txid } };
+      if (id) this.state.orders[id] = { ...this.placed(a, r.doc, r.txid, now, expiresAt), ownAt, pending: { kind: 'place', since: now, txid: r.txid } };
       this.state.placeFails = 0;
       this.placeError = null;
     } else if (a.kind === 'amend') {
@@ -840,14 +860,17 @@ export class Bot {
         const rep = r.doc?.plan?.replacement;
         s.own = { ...(s.own ?? { tpl: null }), prev: s.own?.state ?? null, state: rep?.kind ? rep : s.own?.state ?? null, txid: r.txid };
         if (/^\d+$/.test(String(r.doc?.plan?.value ?? ''))) s.value = Number(r.doc.plan.value);
-        Object.assign(s, { price: a.price, quotedFair: a.quotedFair, expiresAt, expired: false, pending: { kind: 'amend', since: now, txid: r.txid } });
+        // What the new outpoint holds: the fills before it are in it already.
+        const left = rep?.state?.amountLeft;
+        Object.assign(s, { price: a.price, quotedFair: a.quotedFair, expiresAt, expired: false, ownAt, ownAmount: /^\d+$/.test(String(left ?? '')) ? Number(left) : s.amountLeft ?? s.amount,
+          pending: { kind: 'amend', since: now, txid: r.txid } });
       }
       else {
         // A cancel-replace: the order has a new id.
         delete this.state.orders[a.id];
         this.state.recent[a.id] = { side: a.side, level: a.level, endedAt: now };
         const id = r.newIds[0];
-        if (id) this.state.orders[id] = { ...this.placed({ ...s, ...a, amount: s.amountLeft ?? s.amount }, r.doc, r.txid, now, expiresAt), pending: { kind: 'place', since: now, txid: r.txid } };
+        if (id) this.state.orders[id] = { ...this.placed({ ...s, ...a, amount: s.amountLeft ?? s.amount }, r.doc, r.txid, now, expiresAt), ownAt, pending: { kind: 'place', since: now, txid: r.txid } };
         this.log.info(`${short(a.id)} was cancel-replaced (not in place): new id ${id}`);
       }
     } else if (a.kind === 'cancel') {
@@ -862,7 +885,7 @@ export class Bot {
   placed(a, doc, txid, now, expiresAt) {
     const st = doc?.plan?.states?.[0];
     const value = Number(doc?.plan?.request?.value ?? 0) || (a.side === 'buy' ? bidCost(a.amount, a.price, this.scale) : 0);
-    return { side: a.side, level: a.level, price: a.price, amount: a.amount, quotedFair: a.quotedFair, placedAt: now, expiresAt, amountLeft: a.amount, value,
+    return { side: a.side, level: a.level, price: a.price, amount: a.amount, ownAmount: a.amount, ownAt: null, quotedFair: a.quotedFair, placedAt: now, expiresAt, amountLeft: a.amount, value,
       own: st?.kind ? { state: st, prev: null, txid: txid ?? null, tpl: null } : null };
   }
 

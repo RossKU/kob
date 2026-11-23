@@ -46,17 +46,29 @@ node bin/mm-bot.mjs once   --config config.json          # one cycle (add --dry-
   error alert. Until an order leaves, it counts toward the side caps, its level is not quoted again, it is never
   amended, every pull and STOP try to cancel it, and each cycle it is looked up again.
 - **A fully filled ask** leaves no output on the node either. It ends when the fills the indexer reports for it add up
-  to its whole amount and each is paid: the node shows (or showed earlier) outputs to the bot's own address in that
-  fill's transaction worth at least what the covenant pays the maker, `ceil(amount x (price - tip) / scale)`, for all
-  the bot's fills the indexer puts in that transaction, and the transaction is not one the bot sent. The indexer's word
-  alone never ends it: a lying indexer would need a real payment to the bot. To see the payments the bot reads its own
-  address on the node (`getUtxosByAddresses`, JSON wRPC) at the start of each cycle and again after a cycle that sent,
-  and keeps what it saw for a week (at most 2,000 transactions), so a payment it spends later still counts. That is one
-  extra node call per 30 s cycle, two after a send. It needs `node` set to a JSON wRPC URL (`ws://host:18110`,
+  to what its last own outpoint held (the amount at its last placement or amend) and each is paid: for each fill, one
+  output to the bot's own address in that fill's transaction, worth at least what the covenant pays the maker,
+  `ceil(amount x (price - tip) / scale)`, in a transaction the bot did not send. The output must be one the node first
+  showed after that placement or amend (the bot reads its outputs just before each placement and amend), and one that
+  proved no other fill: each output proves one fill once, and `state.json` keeps which ask it proved. The indexer's
+  word alone never ends an ask: a lying indexer needs a real payment to the bot, made after the ask's last placement or
+  amend and not used before, of the ask's whole proceeds at its price. Paid by the attacker, that is no loss to the
+  bot: it holds the full proceeds while the forgotten ask's tokens stay its own. Any other such receipt (an operator
+  top-up after the placement) can make it forget one ask per receipt: that ask stays fillable at its old price,
+  outside the reprices, the pulls and STOP, until its expiry (at most `lifeMin`, 90 min; then a refund returns its
+  tokens), so the exposure is one level times the move in that time. One residue: a fill of the earlier outpoint whose payment lands in the second between the bot's read and
+  the CLI's own read before an amend is in neither, so it may count for the new outpoint too; the ask then forgotten
+  holds at most that fill's amount, which its taker paid in full. The bot cannot check that the paying transaction
+  spent the ask: a node returns a transaction by id only from its mempool (there is no transaction index over wRPC), and a UTXO read shows no inputs. To see the payments the
+  bot reads its own address on the node (`getUtxosByAddresses`, JSON wRPC) at the start of each cycle, before each
+  placement or amend, and after a cycle that sent. An output keeps the time the node first showed it for as long as the
+  node shows it; once spent, its record is kept for a week (at most 2,000), so a payment the bot spends later still
+  counts. That is one node call per 30 s cycle, plus one per placement or amend (at most `maxActionsPerCycle`, 12) and
+  one after a cycle that sent. It needs `node` set to a JSON wRPC URL (`ws://host:18110`,
   testnet-10 `18210`): with the CLI's default or a Borsh node no full fill is ever proven (`check` and the log warn).
 - **When a fill cannot be proven** (no JSON wRPC node; the node read failed; the indexer never reports the fill; the
   payment landed while the bot was sending and the CLI spent it in that same cycle, before the read after the send;
-  the indexer reports it more than a week or 2,000 payments late) the ask stays unresolved: its level is not quoted
+  the indexer reports it more than a week or 2,000 spent payments late) the ask stays unresolved: its level is not quoted
   again until the ask's own expiry, at most `lifeMin` (90 min) after its last placement or amend, so 45 to 90 min with
   the renewals. Past its expiry it is parked: STOP no longer waits for it, the bot keeps looking for it, but its tokens
   still count toward the ask cap until proof, because a non-conforming taker can still fill an expired ask until a
