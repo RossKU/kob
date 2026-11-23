@@ -258,6 +258,15 @@ impl Prefetch {
         self.refresh_stats();
     }
 
+    /// Halves the windows to come: the cross-checking node gave no copy of the head window's KOB
+    /// transactions, so the plan is dropped, and windows as large would only fail their copies
+    /// again (R4C1-L2). So each such failure halves what the next plan fetches and drops, instead
+    /// of dropping as much every time. Fast windows grow it again.
+    pub fn shrink(&mut self) {
+        self.k = (self.k / 2).max(1);
+        self.refresh_stats();
+    }
+
     /// Resets because the plan no longer matches the chain, and counts it if a plan was active.
     pub fn discard(&mut self) {
         if self.active() {

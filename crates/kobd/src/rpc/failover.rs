@@ -158,9 +158,7 @@ pub struct Failover<S: ChainSource> {
 
 /// A failed call that says the node is gone (not an answer such as an unknown hash).
 pub(crate) fn node_failure(e: &RpcError) -> bool {
-    matches!(e, RpcError::Transport(_) | RpcError::Timeout(_) | RpcError::Decode(_))
-        || e.kind() == NodeErrorKind::TransitionalIbd
-        || matches!(e, RpcError::Node(m) if m.starts_with(super::multi::AUTHORITY_BEHIND))
+    matches!(e, RpcError::Transport(_) | RpcError::Timeout(_) | RpcError::Decode(_)) || e.kind() == NodeErrorKind::TransitionalIbd
 }
 
 fn unix_ms() -> u64 {
@@ -576,6 +574,13 @@ impl<S: ChainSource> ChainSource for Failover<S> {
     async fn confirm_bodies(&self, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun]) -> Result<bool, String> {
         self.inner.tiers[self.active()].confirm_bodies(start, raw, runs).await
     }
+    fn chain_beyond_shown(&self) -> bool {
+        self.inner.tiers[self.active()].chain_beyond_shown()
+    }
+    async fn window_contradicted(&self, origin: Origin, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun], why: &str) {
+        let t = (origin.tier as usize).min(1);
+        self.inner.tiers[t].window_contradicted(Origin { tier: 0, ..origin }, start, raw, runs, why).await
+    }
 }
 
 #[cfg(test)]
@@ -591,8 +596,6 @@ mod tests {
         // an answer: the node is there
         assert!(!node_failure(&RpcError::Node("cannot find header 00".into())));
         assert!(!node_failure(&RpcError::TooLarge { size: 2, limit: 1 }));
-        // R2C-M1: an authority that withholds the chain the other node reports fails its request.
-        assert!(node_failure(&RpcError::Node(format!("{}: 100 chain blocks", super::super::multi::AUTHORITY_BEHIND))));
     }
 
     #[test]

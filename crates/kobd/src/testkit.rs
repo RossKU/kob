@@ -732,7 +732,7 @@ pub struct MBlock {
 }
 
 /// A real header of a mock chain block: `n` makes it unique.
-fn mock_header(parent: Hash32, daa: u64, n: u64) -> kaspa_consensus_core::header::Header {
+fn mock_header(parent: Hash32, daa: u64, n: u64, ts: u64) -> kaspa_consensus_core::header::Header {
     use kaspa_consensus_core::header::{CompressedParents, Header};
     use kaspa_consensus_core::Hash;
     let parents = CompressedParents::try_from(vec![vec![Hash::from_bytes(parent.0)]]).expect("one level");
@@ -742,7 +742,7 @@ fn mock_header(parent: Hash32, daa: u64, n: u64) -> kaspa_consensus_core::header
         Hash::from_bytes(h("hash-merkle", n).0),
         Hash::from_bytes(h("root", daa).0),
         Hash::from_bytes(h("utxo-commitment", n).0),
-        1_790_000_000_000u64 + daa * 100,
+        ts,
         503_498_770,
         n,
         daa,
@@ -754,7 +754,11 @@ fn mock_header(parent: Hash32, daa: u64, n: u64) -> kaspa_consensus_core::header
 
 impl MBlock {
     fn new(parent: Hash32, daa: u64, txs: Vec<Tx>, n: u64) -> MBlock {
-        let header = mock_header(parent, daa, n);
+        Self::stamped(parent, daa, txs, n, 1_790_000_000_000u64 + daa * 100)
+    }
+
+    fn stamped(parent: Hash32, daa: u64, txs: Vec<Tx>, n: u64, ts: u64) -> MBlock {
+        let header = mock_header(parent, daa, n, ts);
         MBlock { hash: Hash32(header.hash.as_bytes()), parent, daa, txs, header }
     }
 }
@@ -804,6 +808,9 @@ struct MockState {
     no_vspc_v2: bool,
     /// `getVirtualChainFromBlockV2` answers "RPC method not found".
     vspc_v2_not_found: bool,
+    /// The header time of new blocks: `(DAA score, its time in Unix ms, ms per DAA)`. `None`: the
+    /// fixed 2026-09 clock of 100 ms per DAA.
+    block_clock: Option<(u64, u64, u64)>,
 }
 
 /// An in-memory node that answers the `ChainSource` calls from a scripted chain.
@@ -854,6 +861,7 @@ impl MockNode {
                 contradict: false,
                 no_vspc_v2: false,
                 vspc_v2_not_found: false,
+                block_clock: None,
             }),
         })
     }
@@ -889,7 +897,16 @@ impl MockNode {
 
     fn make_block(s: &mut MockState, parent: Hash32, daa: u64, txs: Vec<Tx>) -> MBlock {
         s.counter += 1;
-        MBlock::new(parent, daa, txs, s.counter)
+        match s.block_clock {
+            Some((d0, t0, per)) => MBlock::stamped(parent, daa, txs, s.counter, t0 + daa.saturating_sub(d0) * per),
+            None => MBlock::new(parent, daa, txs, s.counter),
+        }
+    }
+
+    /// Stamps the blocks pushed from now on: the next one at `next_ms` (Unix ms), each later one
+    /// `ms_per_block` after the one before.
+    pub fn set_block_clock(&self, next_ms: u64, ms_per_block: u64) {
+        self.with(|s| s.block_clock = Some((s.chain.last().unwrap().daa + 1, next_ms, ms_per_block)))
     }
 
     /// Pushes a chain block with `txs` and returns its hash.
@@ -1712,6 +1729,7 @@ impl Harness {
             prefetch_initial_blocks: 64,
             authority_failures: crate::indexer::follower::AUTHORITY_FAILURES,
             authority_stall: crate::indexer::follower::AUTHORITY_STALL,
+            authority_lag_tolerance: crate::indexer::follower::AUTHORITY_LAG_TOLERANCE,
             chain_proof: None,
         };
         let mut fcfg = fcfg;

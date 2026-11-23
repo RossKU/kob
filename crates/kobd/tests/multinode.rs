@@ -258,6 +258,7 @@ fn multi_with(anchor: Hash32, nodes: Vec<(NodeSpec, Arc<Peer>)>, policy: CrossCh
         prefetch_initial_blocks: 6,
         authority_failures: kobd::indexer::follower::AUTHORITY_FAILURES,
         authority_stall: kobd::indexer::follower::AUTHORITY_STALL,
+        authority_lag_tolerance: kobd::indexer::follower::AUTHORITY_LAG_TOLERANCE,
         chain_proof: None,
     };
     let follower = Follower::new(source.clone(), ingest.clone(), cfg, health.clone(), events);

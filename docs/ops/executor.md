@@ -2115,7 +2115,7 @@ Poll `/v1/health`, or scrape `GET /v1/metrics` (the same numbers as Prometheus t
 | `kob_indexer_node_replaced_total` rising every few minutes | the public nodes keep failing; `nodes[].cut_reason` says which host and why |
 | `kob_indexer_authority_replaced_total` rising | chain authorities given up for a finding (useless, a disagreement that did not settle, an answer contradicting the store, chain requests that keep failing: Part C, *A failing chain authority*); `nodes[].cut_reason` says why, `nodes[].promoted` which named node took over |
 | `lag_seconds` above 1 h / 6 h / 12 h / 24 h | approaching the node's retention; 12 h is consensus finality, 24 h leaves little of the default 30 h pruning window |
-| `last_progress_unix_ms` older than 60 s | the follower is stuck (progress is stamped on every successful poll, including "nothing new") |
+| `last_progress_unix_ms` older than 60 s | the follower is stuck, or its chain authority holds the chain back (progress is stamped on every answer from a cursor whose chain block is at most 10 minutes old, or whose chain keeps up with real time: Part C, *A chain authority that answers nothing new*) |
 | `vspc_timeouts_total` rising, `batch_window_blue` small, `lag_blue` not falling | the link to the node is slower than the chain (section 3, *Bandwidth*): run the indexer next to its node |
 | `prefetch_discards_total` rising steadily | the chain keeps reorganising under the windows fetched ahead (a node far behind its own peers, or a deep reorg); each discard costs one window of traffic, the state stays exact |
 | `prefetch_bytes_peak` at `prefetch_max_mb` and `lag_blue` falling slowly | the budget, not the link, limits the catch-up: raise `prefetch_max_mb` if memory allows |
@@ -3301,16 +3301,35 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   holds one (from the authority), and from the cross-checking node at most 4 window requests per window, or, past 4 runs,
   one copy of the window from its first flagged chain block to its last (at most one extra copy of the authority's window,
   each answer at most 256 MiB, asked one after another). The referee is asked the same only on a difference.
-  **A chain authority that answers nothing new, or a few chain blocks a poll** (R2C-M1, R3C1-M1): when its answer has
-  fewer than 100 chain blocks after the cursor and the cross-checking node reports 100 or more beyond it, the answer is a
-  failed chain request of the authority (it counts towards handing the role over, *A failing chain authority*), not a
-  confirmation that the cursor is at the sink. An honest answer is never that short against such a lead: a node caps an
-  answer at hundreds of chain blocks or more, and a catch-up window answers all of itself. And while the follower is
-  `following` (the authority puts its sink within `caught_up_daa`, 100 DAA, of the cursor), a poll counts as progress for
-  `/v1/health`, idle or not, only while the cursor's chain block is at most 10 minutes old by the local clock; a batch
-  while `catching_up` always counts, so an honest catch-up after a restart (an old cursor, the authority reporting far more
-  chain) is not taken for a failing authority. A store that falls behind turns `stale` within about 20 minutes, with or
-  without a cross-checking node. **Window answers** (R2C-M5) take at
+  **A chain authority that answers nothing new, or gives the chain slower than real time** (R2C-M1, R3C1-M1, R4C1-M1):
+  no node's word about its own position (its sink, its virtual DAA score, `catching_up` or not) decides whether its
+  answers are progress, and neither does the other node's claim to be ahead. What decides is the header time of the
+  cursor's chain block (bound to the block by its hash and proof of work; its miner can move it by about two minutes, not
+  hours) against the local clock. The cursor is *fresh* while that time is at most 10 minutes old by the local wall
+  clock, and an answer from a fresh cursor is progress. From an older cursor an answer is progress only while the chain
+  keeps up with real time: its lag behind the local monotonic clock may rise at most 3 minutes
+  (`AUTHORITY_LAG_TOLERANCE`) above the least it reached since this authority leads. An honest catch-up gains on real
+  time (14.6 s of chain a second measured), and following at the tip holds it, so both count, in either state. An
+  authority that gives the chain slower than real time from an old cursor, one chain block or a hundred a poll, its sink
+  claimed just ahead or far ahead, does not: its answers still apply (they are real chain), but each counts as a failed
+  chain request, so after the 3-minute stall another node takes over (*A failing chain authority*), and `/v1/health`
+  turns `stale` 10 minutes after the last progress. `lag_seconds` is at least the cursor block's age, so the web sees
+  the lag (and goes to standalone mode past 120 s) whatever the authority claims. Timing, an attacker as chain authority
+  that drips from the tip: progress until the cursor is 10 minutes old, then a handover about 3 minutes later; with no
+  other node, `stale` 10 minutes after that, at a lag of about 20 minutes, shown all the while. So the most it can hold
+  for good with `ok: true` and no handover is a lag of 10 minutes, which `lag_seconds` shows. An honest node slower than real time is handed over
+  the same way, which is the point. An answer with nothing new from a cursor older than 10 minutes is no progress either;
+  it counts against the authority only when the chain moves on: the authority itself claims more, or the cross-checking
+  node showed a real block well past it (below). A halted network, both nodes standing still, blames no node: `stale`
+  turns on 20 minutes after the last chain block, as before. A cross-checking node that reports 100 chain blocks or more
+  beyond a short answer must show the block 100 past it (`getBlock`: a header that hashes to its id, its proof of work
+  met at a target at most 16 times the cursor block's, a blue score that far past it); one it cannot show is a lie, and
+  the node is given up (a public node replaced, a named one dropped). A shown block counts against nobody (R4C1-M2).
+  **A window from another node whose KOB transactions differ from the authority's copy** (R4C1-L1): when the authority
+  is a public node, its copy is only vouched for by ids, so the referee (or a third cross-checking node) decides before
+  anyone is given up, as for the authority's own windows; with no third node, nobody is given up yet and the difference
+  counts towards replacing the nodes. A named authority drops the other node at once.
+  **Window answers** (R2C-M5) take at
   most 256 MiB each when the request names no smaller limit (the prefetch does): one chain block's acceptance data is far
   below that, and a larger honest window is split. **Not covered:** a single node (an own node with no `[[nodes]]` cross-checker, or the failover's fallback
   alone), and the time after `single_node_after_secs` (120 s) without any answer of a cross-checking node, when the
@@ -3398,7 +3417,7 @@ the node as `benched`. So a slow public node can stay listed without slowing the
 **A failing chain authority** (`indexer::follower`, `rpc::multi`; every role, the Executor's indexer included). A node can
 answer its small calls (health, sink) while its chain requests (a VSPC batch, the chain hashes, its copy of a window from
 another node) time out or lose the connection: on 2026-11-13 such a primary held index-a still for over 18 minutes, its
-status `authority, ok`. When **2 chain requests in a row fail on the wire and the cursor has not moved for 3 minutes**
+status `authority, ok`. When **2 chain requests in a row fail on the wire, or are answers that are no progress (the chain from an old cursor slower than real time, R4C1-M1), and there was no progress for 3 minutes**
 (the local monotonic clock; `AUTHORITY_FAILURES`, `AUTHORITY_STALL`, not configurable), or when **5 steps in a row over at least
 a minute gave up on a claimed tip reorg** (a lane proof answered "not in the selected parent chain" every time;
 `TIP_REORG_STALL_STEPS`, `TIP_REORG_STALL`; the state is `node_unavailable`), the authority is handed over:

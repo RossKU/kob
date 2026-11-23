@@ -150,8 +150,9 @@
 //! # A failing authority
 //!
 //! A node can answer its small calls (`getServerInfo`, the sink) while its chain requests time out
-//! or lose the connection. The follower finds this when 2 chain requests in a row fail on the wire
-//! and the cursor has not moved for 3 minutes (`indexer::follower`, "A failing chain authority").
+//! or lose the connection, or gives the chain slower than real time. The follower finds this when 2
+//! chain requests in a row fail on the wire or are no progress, and there was no progress for 3
+//! minutes (`indexer::follower`, "A failing chain authority", "Progress").
 //! It then calls [`MultiNode::authority_failing`].
 //!
 //! The old authority gets a chain alarm (`judge::chain_failing`). What follows depends on the
@@ -897,6 +898,9 @@ pub struct MultiNode<N: ChainSource> {
     bodies_unchecked: Mutex<Option<BodiesUnchecked>>,
     /// The third node asked when the pair contradicts each other ([`MultiNode::with_referee`]).
     referee: Option<Arc<N>>,
+    /// The cross-checking node showed chain well past the authority's last answer
+    /// (`ChainSource::chain_beyond_shown`, [`MultiNode::lead_shown`]).
+    beyond: AtomicBool,
 }
 
 /// The state of the health watch.
@@ -1054,18 +1058,34 @@ impl LagTrack {
 /// it until it repeats.
 pub const TIPS_DIFFER: &str = "the two nodes' newest chain blocks differ for a moment";
 
-/// The start of the error when the authority answers nothing new, or fewer than
-/// [`WITHHELD_CHAIN_BLOCKS`] chain blocks, while the cross-checking node reports at least
-/// [`WITHHELD_CHAIN_BLOCKS`] more after the same cursor (R2C-M1, R3C1-M1).
-///
-/// It counts as a failed chain request of the authority (`failover::node_failure`), so the cursor
-/// does not count as confirmed at the sink and a node that keeps doing it is handed over from.
-pub const AUTHORITY_BEHIND: &str = "the chain authority reports no new chain block that the cross-checking node has";
-
 /// Chain blocks after the cursor that the cross-checking node must report beyond the authority's
-/// answer, while that answer is shorter than this, for [`AUTHORITY_BEHIND`]: well past a moment's
-/// difference of two tips, and far below the hundreds of chain blocks a node caps an answer at.
+/// answer, while that answer is shorter than this, before that claim is checked
+/// ([`MultiNode::lead_shown`]): well past a moment's difference of two tips, and far below the
+/// hundreds of chain blocks a node caps an answer at.
+///
+/// The claim never counts against the authority (R4C1-M2): the follower judges the authority by
+/// the cursor block's header time against the local clock (`indexer::follower`, R4C1-M1).
 pub const WITHHELD_CHAIN_BLOCKS: usize = 100;
+
+/// The start of the reason a cross-checking node is given up for a claim of chain it cannot show
+/// ([`MultiNode::lead_shown`]).
+pub const LEAD_UNSHOWN: &str = "the cross-checking node claims chain blocks it cannot show";
+
+/// How much easier than the cursor block's target a block shown for a claimed lead may be
+/// ([`MultiNode::lead_shown`]). The difficulty moves slowly; a header mined that far below it is
+/// no block of the network.
+const LEAD_TARGET_SLACK: u64 = 16;
+
+/// What showing a claimed lead found ([`MultiNode::lead_shown`]).
+#[derive(Debug, PartialEq, Eq)]
+enum Lead {
+    /// A real block well past the authority's answer.
+    Shown,
+    /// The node answered, but not with such a block.
+    Unshown(String),
+    /// No answer: nothing is decided.
+    Unknown,
+}
 
 /// The start of the error while the authority's answers wait for a cross-checking node.
 pub const WAITING_FOR_CROSS_CHECK: &str = "waiting for a cross-checking node";
@@ -1263,6 +1283,7 @@ impl<N: ChainSource> MultiNode<N> {
             cross: Mutex::new(CrossCheck::single("no answer applied yet")),
             bodies_unchecked: Mutex::new(None),
             referee: None,
+            beyond: AtomicBool::new(false),
             // The first check is one period after the start.
             watch: Arc::new(Mutex::new(Watch {
                 every: WATCH_EVERY,
@@ -1665,27 +1686,27 @@ impl<N: ChainSource> MultiNode<N> {
             Err(f) => return self.unvouched(raw, f),
         };
         self.vouched_by(j);
-        // An authority that answers nothing new holds the cursor still for good, and no agreement
-        // check below can see it (R2C-M1).
-        if raw.added_chain_block_hashes.is_empty()
-            && raw.removed_chain_block_hashes == ids.removed_chain_block_hashes
-            && ids.added_chain_block_hashes.len() >= WITHHELD_CHAIN_BLOCKS
-        {
-            return Err(RpcError::Node(format!(
-                "{AUTHORITY_BEHIND}: the cross-checking node reports {} chain blocks after the cursor",
-                ids.added_chain_block_hashes.len()
-            )));
-        }
         let a = super::verify::agreement(&raw, &ids, self.policy.deep_daa);
         let Some(why) = a.contradiction else {
-            // One that answers a few chain blocks a poll drifts the index behind just as well
-            // (R3C1-M1). An honest answer is never that short against such a lead: a node caps
-            // its answers at hundreds of chain blocks or more, and a window answers all of itself.
+            // A claim of chain well past a short answer never counts against the authority: the
+            // follower judges it by the cursor block's time (R4C1-M1). It is checked, so that a
+            // node that makes chain up is given up (R4C1-M2), and one shown tells a moving network
+            // from a halted one (`ChainSource::chain_beyond_shown`).
             let (n, cross_n) = (raw.added_chain_block_hashes.len(), ids.added_chain_block_hashes.len());
-            if n < WITHHELD_CHAIN_BLOCKS && cross_n >= n + WITHHELD_CHAIN_BLOCKS {
-                return Err(RpcError::Node(format!(
-                    "{AUTHORITY_BEHIND}: it reports {n} chain blocks after the cursor, the cross-checking node {cross_n}"
-                )));
+            if n < WITHHELD_CHAIN_BLOCKS
+                && cross_n >= n + WITHHELD_CHAIN_BLOCKS
+                && raw.removed_chain_block_hashes == ids.removed_chain_block_hashes
+            {
+                match self.lead_shown(j, start, n, &ids).await {
+                    Lead::Shown => self.beyond.store(true, Ordering::Relaxed),
+                    Lead::Unshown(why) => {
+                        let why = format!("{LEAD_UNSHOWN}: {why}");
+                        tracing::warn!(cross_check = %self.board.shown(j), reason = %why, "the cross-checking node made chain up: it is given up");
+                        self.board.disagreed(j, &why, false);
+                        self.board.failed(j, Fault::Lie, &why);
+                    }
+                    Lead::Unknown => {}
+                }
             }
             self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
             if a.keep == 0 && !raw.added_chain_block_hashes.is_empty() {
@@ -1872,6 +1893,56 @@ impl<N: ChainSource> MultiNode<N> {
     /// The first difference between the authority's chain blocks `runs` of `raw` and `node`'s
     /// copies of them, `None` when they agree (`ChainSource::confirm_bodies`). Each run has
     /// [`CROSS_CHECK_TIMEOUT`]; `Err` when the node cannot answer.
+    /// Checks the claim of the cross-checking node `j` (its chain `ids` from `start`) to chain well
+    /// past the authority's answer of `n` chain blocks (R4C1-M2).
+    ///
+    /// It must show its chain block [`WITHHELD_CHAIN_BLOCKS`] past that answer: a header that
+    /// hashes to the claimed id, meets the proof of work of its `bits`, at a target at most
+    /// [`LEAD_TARGET_SLACK`] times the cursor block's, and has a blue score at least that many
+    /// chain blocks above the cursor block's (each chain block adds at least one). The cursor
+    /// block's header is any node's that hashes to `start`. A made-up id has no such header, and
+    /// mining one costs real work at the network's difficulty. That is one or two `getBlock` calls,
+    /// only while such a claim stands against a short answer.
+    async fn lead_shown(&self, j: usize, start: Hash32, n: usize, ids: &ChainIds) -> Lead {
+        use kaspa_consensus_core::header::Header;
+        let claimed = ids.added_chain_block_hashes[n + WITHHELD_CHAIN_BLOCKS - 1];
+        let hashes_to = |h: &Header, id: Hash32| h.hash.as_bytes() == id.0 && kaspa_consensus_core::hashing::header::hash(h) == h.hash;
+        let tip = match tokio::time::timeout(CROSS_CHECK_STEP_TIMEOUT, self.nodes[j].block(claimed, false)).await {
+            Ok(Ok(Some((b, _)))) => b.header,
+            Ok(Ok(None)) => return Lead::Unshown(format!("it does not know {claimed}, a chain block it reports")),
+            _ => return Lead::Unknown,
+        };
+        if !hashes_to(&tip, claimed) {
+            return Lead::Unshown(format!("its header of {claimed} does not hash to it"));
+        }
+        if !super::proof::pow_ok(&tip) {
+            return Lead::Unshown(format!("its block {claimed} fails its proof of work (bits {:#x})", tip.bits));
+        }
+        let base = match tokio::time::timeout(CROSS_CHECK_STEP_TIMEOUT, ChainSource::block(self, start, false)).await {
+            Ok(Ok(Some((b, _)))) if hashes_to(&b.header, start) => b.header,
+            _ => return Lead::Unknown,
+        };
+        let target = kaspa_math::Uint256::from_compact_target_bits(tip.bits);
+        let easiest = match kaspa_math::Uint256::from_compact_target_bits(base.bits).overflowing_mul_u64(LEAD_TARGET_SLACK) {
+            (t, false) => Some(t),
+            _ => None,
+        };
+        if easiest.is_some_and(|e| target > e) {
+            return Lead::Unshown(format!(
+                "its block {claimed} claims bits {:#x}, far easier than the cursor block's {:#x}",
+                tip.bits, base.bits
+            ));
+        }
+        let need = base.blue_score.saturating_add((n + WITHHELD_CHAIN_BLOCKS) as u64);
+        if tip.blue_score < need {
+            return Lead::Unshown(format!(
+                "its block {claimed} has the blue score {}, below {need}, the least that far past the cursor",
+                tip.blue_score
+            ));
+        }
+        Lead::Shown
+    }
+
     async fn bodies_differ(&self, node: &N, raw: &RawVspcResponse, runs: &[super::BodyRun]) -> Result<Option<String>, String> {
         let level = self.authority_verbosity();
         // The answer's origin is not used: what fails here blames through the caller.
@@ -2467,6 +2538,7 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
         self.health_watch();
         self.asked_from(start);
         *self.last_step.lock().unwrap_or_else(|e| e.into_inner()) = Some(start);
+        self.beyond.store(false, Ordering::Relaxed);
         if self.cross_node().is_none() {
             let raw = self.settle(start, self.primary().vspc_v2(req).await, |r| r.removed_chain_block_hashes.len(), true)?;
             self.set_cross(false, "no cross-checking node is configured");
@@ -2714,6 +2786,47 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
 
     fn report_lie(&self, origin: Origin, why: &str) {
         self.board.drop_node(origin.node, why);
+    }
+
+    fn chain_beyond_shown(&self) -> bool {
+        self.beyond.load(Ordering::Relaxed)
+    }
+
+    /// A public authority's copy is only vouched for by ids, never proven, so on a difference with
+    /// another node's window a third node decides, as in [`ChainSource::confirm_bodies`]
+    /// (R4C1-L1): it agrees with the primary, and the other node is dropped; it agrees with the
+    /// other node, and the authority is outvoted; with none, neither is blamed yet and the
+    /// difference counts towards replacing the nodes ([`MultiNode::stalled`]). A named authority
+    /// is the operator's own node: the other node is dropped at once, as before.
+    async fn window_contradicted(&self, origin: Origin, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun], why: &str) {
+        let a = self.board.authority();
+        let j = origin.node;
+        if !super::resolver::is_resolver(self.board.entry(a)) || j == a || j >= self.nodes.len() {
+            self.report_lie(origin, why);
+            return;
+        }
+        let third = (0..self.nodes.len())
+            .find(|&k| k != a && k != j && self.specs[k].cross_check && !self.board.dropped(k) && !self.board.cut(k))
+            .map(|k| (self.nodes[k].clone(), self.board.shown(k)))
+            .or_else(|| self.referee.clone().map(|r| (r, "the referee".to_string())));
+        let verdict = match &third {
+            None => Err("there is no third node".to_string()),
+            Some((node, _)) => self.bodies_differ(&**node, raw, runs).await,
+        };
+        let name = third.map(|(_, n)| n).unwrap_or_default();
+        match verdict {
+            // The third node's copy differs from the other node's window: it lied.
+            Ok(Some(_)) => self.report_lie(origin, &format!("a third node ({name}) contradicts it: {why}")),
+            Ok(None) => {
+                tracing::error!(authority = %self.board.shown(a), node = %self.board.shown(j), third = %name, reason = %why, "a window differs from the chain authority's copy and a third node agrees with the window: the authority is outvoted");
+                self.outvoted(start, j, why).await;
+            }
+            Err(no) => {
+                tracing::warn!(authority = %self.board.shown(a), node = %self.board.shown(j), reason = %why, third = %no, "a window differs from the chain authority's copy and no third node settles it: nothing is applied");
+                self.board.disagreed(j, why, false);
+                self.stalled_on(&self.body_stalls, j);
+            }
+        }
     }
 
     /// Handles a public chain authority that contradicts the store at the cursor `at`.
@@ -3213,6 +3326,8 @@ mod tests {
         sig: Mutex<u8>,
         /// When set, every window request fails with this lost connection. Its ids stay fine.
         down: Mutex<Option<String>>,
+        /// When set, the blocks `getBlock` knows (another is unknown). Else `getBlock` fails.
+        blocks: Mutex<Option<std::collections::HashMap<Hash32, kaspa_consensus_core::block::Block>>>,
     }
 
     impl Fixed {
@@ -3231,6 +3346,7 @@ mod tests {
                 daa,
                 sig: Mutex::new(0),
                 down: Mutex::new(None),
+                blocks: Mutex::new(None),
             })
         }
         fn answer(&self, ids: Result<&[u8], &str>) {
@@ -3307,6 +3423,40 @@ mod tests {
         async fn chain_hashes(&self, _s: Hash32) -> Result<ChainHashes, RpcError> {
             Err(RpcError::Node("unused".into()))
         }
+        async fn block(&self, hash: Hash32, _txs: bool) -> Result<Option<(kaspa_consensus_core::block::Block, Origin)>, RpcError> {
+            match &*self.blocks.lock().unwrap() {
+                None => Err(RpcError::Node("unused".into())),
+                Some(m) => Ok(m.get(&hash).map(|b| (b.clone(), Origin::PRIMARY))),
+            }
+        }
+    }
+
+    /// A header at `blue` with the easiest `bits` and a nonce that meets them, so that its proof
+    /// of work holds.
+    fn mined(blue: u64, bits: u32) -> kaspa_consensus_core::block::Block {
+        use kaspa_consensus_core::header::{CompressedParents, Header};
+        use kaspa_consensus_core::Hash;
+        let parents = CompressedParents::try_from(vec![vec![Hash::from_bytes([3; 32])]]).expect("one level");
+        for nonce in 0.. {
+            let h = Header::new_finalized(
+                1,
+                parents.clone(),
+                Hash::default(),
+                Hash::default(),
+                Hash::default(),
+                1_790_000_000_000,
+                bits,
+                nonce,
+                blue,
+                kaspa_consensus_core::BlueWorkType::from_u64(blue),
+                blue,
+                Hash::default(),
+            );
+            if super::super::proof::pow_ok(&h) {
+                return kaspa_consensus_core::block::Block::from_header(h);
+            }
+        }
+        unreachable!()
     }
 
     fn pair(primary: Arc<Fixed>, second: Arc<Fixed>) -> MultiNode<Fixed> {
@@ -3654,6 +3804,161 @@ mod tests {
         assert_eq!(m.board.authority(), 0, "the entries take other nodes; the authority's entry stays the first");
     }
 
+    /// R4C1-M2: a cross-checking node that appends made-up chain blocks to its answer never fails
+    /// the authority's answer. Asked to show the block well past it, it cannot, and it is given up
+    /// as a liar. A block it shows (its header hashes to the id, its proof of work holds, its blue
+    /// score is that far past the cursor block's) blames nobody and says the chain moves on.
+    #[tokio::test]
+    // The guard only serialises the tests that share the process-wide resolver state (a
+    // current-thread runtime).
+    #[allow(clippy::await_holding_lock)]
+    async fn a_made_up_lead_counts_against_the_cross_checking_node_never_the_authority() {
+        let _g = super::super::resolver::tests::serial();
+        let fresh = || {
+            super::super::resolver::tests::reset(|_, avoid| {
+                let nodes =
+                    ["wss://a.example/x/borsh", "wss://b.example/x/borsh", "wss://c.example/x/borsh", "wss://d.example/x/borsh"];
+                let pick = nodes.iter().find(|n| !avoid.contains(&super::super::resolver::host(n))).unwrap_or(&nodes[0]);
+                Ok(super::super::resolver::Resolved { url: pick.to_string(), resolver: "fake".into() })
+            });
+            (super::super::resolver::endpoint("resolver").unwrap(), super::super::resolver::endpoint("resolver:2").unwrap())
+        };
+        let with_blocks = |f: Arc<Fixed>, blocks: Vec<kaspa_consensus_core::block::Block>| {
+            *f.blocks.lock().unwrap() = Some(blocks.into_iter().map(|b| (Hash32(b.header.hash.as_bytes()), b)).collect());
+            f
+        };
+        let set_ids = |f: &Fixed, ids: Vec<Hash32>| {
+            *f.ids.lock().unwrap() = Ok(ChainIds { added_chain_block_hashes: ids, ..ChainIds::default() });
+        };
+
+        // 100 made-up hashes after the one chain block both report: it knows none of them.
+        let (a, b) = fresh();
+        let more: Vec<u8> = (1..=(WITHHELD_CHAIN_BLOCKS + 1) as u8).collect();
+        let m = pair(Fixed::new(&[1], Ok(&[])), with_blocks(Fixed::new(&[], Ok(&more)), vec![]));
+        let r = m.vspc_v2(req()).await.unwrap();
+        assert_eq!(r.added_chain_block_hashes, vec![Hash32([1; 32])], "the authority's answer applies");
+        let s = &m.board.snapshot()[1];
+        assert!(s.disagreements == 1 && s.lies == 1, "{s:?}");
+        assert!(s.last_error.as_deref().is_some_and(|e| e.contains(LEAD_UNSHOWN)), "{s:?}");
+        assert_eq!(super::super::resolver::current("resolver"), Some(a), "the authority stays");
+        assert_ne!(super::super::resolver::current("resolver:2"), Some(b), "the cross-checking node is given up");
+        assert!(!m.chain_beyond_shown());
+
+        // A real block that far past the cursor block: shown, nobody blamed.
+        let easy = 0x207f_ffff;
+        let base = mined(1_000, easy);
+        let start = Hash32(base.header.hash.as_bytes());
+        let need = 1_000 + 1 + WITHHELD_CHAIN_BLOCKS as u64;
+        let shown = |tip: &kaspa_consensus_core::block::Block| {
+            let mut ids: Vec<Hash32> = (1..=WITHHELD_CHAIN_BLOCKS as u8).map(|x| Hash32([x; 32])).collect();
+            ids.push(Hash32(tip.header.hash.as_bytes()));
+            let cross = with_blocks(Fixed::new(&[], Ok(&[])), vec![tip.clone()]);
+            set_ids(&cross, ids);
+            pair(with_blocks(Fixed::new(&[1], Ok(&[])), vec![base.clone()]), cross)
+        };
+        let (a, b) = fresh();
+        let m = shown(&mined(need, easy));
+        let r = m.vspc_v2(VspcRequest::new(start, Verbosity::High, None)).await.unwrap();
+        assert_eq!(r.added_chain_block_hashes.len(), 1);
+        assert!(m.chain_beyond_shown());
+        assert_eq!((m.board.snapshot()[1].lies, m.board.snapshot()[1].disagreements), (0, 0));
+        assert_eq!((super::super::resolver::current("resolver"), super::super::resolver::current("resolver:2")), (Some(a), Some(b)));
+        // The next answer is judged anew.
+        let m2 = pair(Fixed::new(&[1], Ok(&[])), Fixed::new(&[], Ok(&[1])));
+        m2.vspc_v2(req()).await.unwrap();
+        assert!(!m2.chain_beyond_shown());
+
+        // Too low a blue score: not that far past the cursor block, a lie.
+        let _ = fresh();
+        let m = shown(&mined(need - 1, easy));
+        m.vspc_v2(VspcRequest::new(start, Verbosity::High, None)).await.unwrap();
+        assert!(!m.chain_beyond_shown());
+        assert_eq!(m.board.snapshot()[1].lies, 1);
+        // Far easier bits than the cursor block's (256 times its target): mined below the
+        // network's difficulty, a lie.
+        let _ = fresh();
+        let hard = mined(1_000, 0x1f7f_ffff);
+        let mut ids: Vec<Hash32> = (1..=WITHHELD_CHAIN_BLOCKS as u8).map(|x| Hash32([x; 32])).collect();
+        let tip = mined(need, easy);
+        ids.push(Hash32(tip.header.hash.as_bytes()));
+        let cross = with_blocks(Fixed::new(&[], Ok(&[])), vec![tip]);
+        set_ids(&cross, ids);
+        let m = pair(with_blocks(Fixed::new(&[1], Ok(&[])), vec![hard.clone()]), cross);
+        m.vspc_v2(VspcRequest::new(Hash32(hard.header.hash.as_bytes()), Verbosity::High, None)).await.unwrap();
+        assert!(!m.chain_beyond_shown());
+        let s = &m.board.snapshot()[1];
+        assert!(s.lies == 1 && s.last_error.as_deref().is_some_and(|e| e.contains("easier")), "{s:?}");
+    }
+
+    /// R4C1-L1: a window from the other node of a resolver pair whose KOB transactions differ
+    /// from the public authority's copy (which no chain proof covers) asks the referee before
+    /// anyone is given up: it has the window's copy, and the authority is outvoted; it has the
+    /// authority's, and the other node is given up; with none, nobody is, and the difference counts
+    /// towards replacing the nodes. A named authority (the operator's own node) drops the other node
+    /// at once, as before.
+    #[tokio::test]
+    // The guard only serialises the tests that share the process-wide resolver state (a
+    // current-thread runtime).
+    #[allow(clippy::await_holding_lock)]
+    async fn a_window_against_a_public_authoritys_copy_asks_the_referee_first() {
+        let _g = super::super::resolver::tests::serial();
+        let fresh = || {
+            super::super::resolver::tests::reset(|_, avoid| {
+                let nodes =
+                    ["wss://a.example/x/borsh", "wss://b.example/x/borsh", "wss://c.example/x/borsh", "wss://d.example/x/borsh"];
+                let pick = nodes.iter().find(|n| !avoid.contains(&super::super::resolver::host(n))).unwrap_or(&nodes[0]);
+                Ok(super::super::resolver::Resolved { url: pick.to_string(), resolver: "fake".into() })
+            });
+            (super::super::resolver::endpoint("resolver").unwrap(), super::super::resolver::endpoint("resolver:2").unwrap())
+        };
+        let node = |sig: u8| {
+            let n = Fixed::new(&[1, 2], Ok(&[1, 2]));
+            *n.sig.lock().unwrap() = sig;
+            n
+        };
+        let run = crate::rpc::BodyRun {
+            req: WindowRequest { end_blue: Some(0), sink_blue: Some(0), ..WindowRequest::new(Hash32([0; 32]), Hash32([2; 32])) },
+            first: 0,
+            len: 2,
+        };
+        let origin = Origin { node: 1, trusted: false, tier: 0 };
+        // the other node's window; the authority's copy has another signature script
+        let window = node(2).vspc_v2(req()).await.unwrap();
+        let current = |e: &str| super::super::resolver::current(e);
+
+        let (a, b) = fresh();
+        let m = pair(node(1), node(2));
+        m.window_contradicted(origin, Hash32([0; 32]), &window, &[run], "a copy differs").await;
+        assert_eq!((current("resolver"), current("resolver:2")), (Some(a), Some(b)), "no referee: nobody given up yet");
+        assert_eq!(m.body_stalls.load(Ordering::Relaxed), 1);
+        assert!(!m.board.dropped(1));
+
+        let (a, _) = fresh();
+        let m = pair(node(1), node(2)).with_referee(node(2));
+        m.window_contradicted(origin, Hash32([0; 32]), &window, &[run], "a copy differs").await;
+        assert_ne!(current("resolver"), Some(a), "the referee has the window's copy: the authority is outvoted");
+        assert!(!m.board.dropped(1));
+
+        let (a, b) = fresh();
+        let m = pair(node(1), node(2)).with_referee(node(1));
+        m.window_contradicted(origin, Hash32([0; 32]), &window, &[run], "a copy differs").await;
+        assert_eq!(current("resolver"), Some(a), "the referee has the authority's copy: it stays");
+        assert_ne!(current("resolver:2"), Some(b), "and the other node is given up");
+
+        let spec = |url: &str, cross_check| NodeSpec {
+            url: url.into(),
+            fetch: true,
+            submit: true,
+            connections: 1,
+            cross_check,
+            may_lead: true,
+        };
+        let a = node(1);
+        let m = MultiNode::new(vec![(spec("ws://a", false), a.clone()), (spec("ws://b", true), node(2))], a).with_referee(node(1));
+        m.window_contradicted(origin, Hash32([0; 32]), &window, &[run], "a copy differs").await;
+        assert!(m.board.dropped(1), "a named authority drops the other node at once");
+    }
+
     /// The pair's disagreement rules on the authority's single steps.
     ///
     /// - The blocks both nodes report are kept.
@@ -3683,27 +3988,18 @@ mod tests {
         // It reports nothing after the cursor yet: nothing is applied.
         let m = pair(Fixed::new(&[1, 2, 3], Ok(&[])), Fixed::new(&[], Ok(&[])));
         assert!(m.vspc_v2(req()).await.unwrap_err().to_string().contains(TIPS_DIFFER));
-        // R2C-M1: the authority answers nothing new while the other node reports many chain blocks
-        // after the cursor. That is no confirmation at the sink but a failed chain request, which
-        // the follower counts towards handing the role over. A few blocks are a moment's lag.
+        // R4C1-M2: the other node's claim of chain past a short answer, or past none, never fails
+        // the authority's answer (the follower judges the authority by the cursor block's time).
+        // Unchecked (its `getBlock` does not answer here), it decides nothing either way.
         let many: Vec<u8> = (1..=WITHHELD_CHAIN_BLOCKS as u8).collect();
         let m = pair(Fixed::new(&[], Ok(&[])), Fixed::new(&[], Ok(&many)));
-        let e = m.vspc_v2(req()).await.unwrap_err();
-        assert!(e.to_string().contains(AUTHORITY_BEHIND), "{e}");
-        assert!(super::super::failover::node_failure(&e));
-        let m = pair(Fixed::new(&[], Ok(&[])), Fixed::new(&[], Ok(&many[..3])));
         assert!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.is_empty());
-        // R3C1-M1: one chain block a poll against the same lead is no better than none.
+        assert!(!m.chain_beyond_shown());
         let more: Vec<u8> = (1..=(WITHHELD_CHAIN_BLOCKS + 1) as u8).collect();
         let m = pair(Fixed::new(&[1], Ok(&[])), Fixed::new(&[], Ok(&more)));
-        let e = m.vspc_v2(req()).await.unwrap_err();
-        assert!(e.to_string().contains(AUTHORITY_BEHIND), "{e}");
-        assert!(super::super::failover::node_failure(&e));
-        // A lead short of it is a moment's lag: what both report applies.
-        let m = pair(Fixed::new(&[1], Ok(&[])), Fixed::new(&[], Ok(&more[..WITHHELD_CHAIN_BLOCKS])));
         assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 1);
-        // A long answer is a node's cap or a whole window, not withholding, whatever the other
-        // node reports.
+        assert_eq!(m.board.snapshot()[1].disagreements, 0);
+        // A long answer is a node's cap or a whole window, whatever the other node reports.
         let longer: Vec<u8> = (1..=250u8).collect();
         let m = pair(Fixed::new(&many, Ok(&[])), Fixed::new(&[], Ok(&longer)));
         assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), WITHHELD_CHAIN_BLOCKS);
