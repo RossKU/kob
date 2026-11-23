@@ -67,7 +67,8 @@ The automatic creator lock (`KobLockAuto`, `docs/spec/creator-lock-auto.md`) is 
 with no cancel, so the rule above does not apply to it: **no lock template a build ever issued is retired.** Both deployment
 records list every one in `locks` (`scripts/lib/deploy.mjs` carries the committed entries over and adds the current template
 when it is new; it refuses an entry whose artifact file became another template, so a re-pin keeps the old artifact under a new
-name), and it refuses a record that no longer lists a lock template any committed record of the network listed (a hand
+name, outside `contracts/artifacts`, which `scripts/build-contracts.sh` holds to exactly the artifacts its sources produce; where
+it lives is to be settled before the first lock re-pin), and it refuses a record that no longer lists a lock template any committed record of the network listed (a hand
 deletion). Every build reads each listed template (the genesis owner of the declared terms, so Portfolio and the indexer show the
 lock) and releases it (the keeper's and the creator's release spend exactly its script):
 `kob_protocol::lock_auto` test `every_issued_lock_template_stays_readable_and_releasable` checks each listed artifact against

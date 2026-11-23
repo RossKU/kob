@@ -1,8 +1,8 @@
 # x402: open findings (experimental, outside the launch review)
 
 **x402 is experimental.** x402 (the `kob-x402` crate, the facilitator in `kobd`, the client SDK `packages/kob-x402` and
-`docs/spec/x402-*.md`) is outside the mainnet launch review of 2026-11-23 (`REVIEW-2026-11-23.md`, *Not covered*) and has no UI
-in the web app; it gets a dedicated audit of its own before it is recommended for real funds or its KCC-20 profile is proposed
+`docs/spec/x402-*.md`) is outside the mainnet launch review of 2026-11-23 (`REVIEW-2026-11-23.md`, *Not covered*) and has no payment UI
+in the web app (it only has a read-only watch of an invoice's status, in the notification panel); it gets a dedicated audit of its own before it is recommended for real funds or its KCC-20 profile is proposed
 as a standard (founder decision, 2026-11-23).
 
 The launch review still read parts of x402 on the way (areas B, D, A, G and the second-round tools pass). This page keeps what it

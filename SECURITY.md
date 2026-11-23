@@ -55,7 +55,7 @@ In scope: the SilverScript order contracts, the Argent shell and router (`contra
 the Rust protocol library and the `kobd` daemon (the Indexer; the Executor with its matcher and keepers; the x402 facilitator), the
 WebAssembly bindings and the web UI, and the specifications in `docs/spec/`.
 
-**x402 is experimental.** x402 (the `kob-x402` crate, the facilitator in `kobd`, the client SDK `packages/kob-x402` and `docs/spec/x402-*.md`) is outside the mainnet launch review of 2026-11-23 and has no UI in the web app; it gets a dedicated audit of its own before it is recommended for real funds or its KCC-20 profile is proposed as a standard. Open findings: [docs/security/x402-open-findings.md](docs/security/x402-open-findings.md). Reports on x402 are welcome and go into that list.
+**x402 is experimental.** x402 (the `kob-x402` crate, the facilitator in `kobd`, the client SDK `packages/kob-x402` and `docs/spec/x402-*.md`) is outside the mainnet launch review of 2026-11-23 and has no payment UI in the web app (it only has a read-only watch of an invoice's status, in the notification panel); it gets a dedicated audit of its own before it is recommended for real funds or its KCC-20 profile is proposed as a standard. Open findings: [docs/security/x402-open-findings.md](docs/security/x402-open-findings.md). Reports on x402 are welcome and go into that list.
 
 Out of scope: vulnerabilities in third-party code that KOB only uses (rusty-kaspa, SilverScript,
 Argent, token programs such as KaspaCom's KCC20 or the KRON programs, wallets); please report

@@ -136,6 +136,8 @@ export async function checkPages(base, { dist, hashes, fetchFn = fetch, attempts
   }
 
   if (hashes || dist) {
+    // an empty or unparseable hash list (or an empty dist) must not pass as "all 0 files served"
+    if (files.length === 0) fail('no built file to compare: the hash list or the dist is empty');
     let same = 0;
     for (const f of files) {
       const res = await get(f);
@@ -145,7 +147,7 @@ export async function checkPages(base, { dist, hashes, fetchFn = fetch, attempts
       else if (sha256(body) !== want) fail(`${f} served bytes differ from the build (sha256 ${sha256(body)}, built ${want})`);
       else same++;
     }
-    if (same === files.length) pass(`all ${files.length} built files are served byte for byte`);
+    if (files.length > 0 && same === files.length) pass(`all ${files.length} built files are served byte for byte`);
   }
   return { ok, lines };
 }
