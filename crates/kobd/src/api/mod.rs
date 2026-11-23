@@ -389,7 +389,10 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-    edge_cache::apply(&mut resp, &method, &path, &query, now_ms);
+    edge_cache::apply(&mut resp, &method, &path, &query, now_ms, || {
+        let h = app.state.health.snapshot();
+        h.caught_up() && !h.stale(u64::try_from(now_ms).unwrap_or(0))
+    });
     // No content sniffing of an answer.
     resp.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     if let Some(origin) = cors {
