@@ -344,8 +344,10 @@ stretch stay invisible (Part B, 7.4). To keep the history whole after a long out
 * The disk of `kob-data` (a few GB) and of the node.
 
 When this server is down, the hosted app still loads and users' funds are safe (everything is on chain). Cancelling an order still
-works, from the node and the records kept in the browser; a Collected order that already holds bought tokens is cancelled with
-`kob recover --from <backup> --cancel` instead, from the node alone (`docs/ops/incident.md`, section 1). The app cannot show the order book, charts, trades or order status from
+works, from the node and the records kept in the browser, a partly filled Collected order with its bought tokens included; the
+search is bounded (2,000 candidate states per order in the app, 200 in `kob recover --from <backup> --cancel`), so an order it
+misses waits for the indexer or for `kob recover --amount-left` (`docs/ops/incident.md`, section 1). A claim needs the indexer.
+The app cannot show the order book, charts, trades or order status from
 it, and it refuses to place a new order until an indexer answers. Users can switch to another indexer in Settings; listing
 third-party indexers in the deployment helps them.
 

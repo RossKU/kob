@@ -93,6 +93,13 @@ export const RETURN_CHECK_MS = 5_000;
  */
 export const MIN_AUTO_MS = 30_000;
 /**
+ * Back-off of a flapping indexer (R4B-I2). An automatic mode that starts within CALM_MS of the
+ * last automatic exit stays twice as long as that one had to, up to MAX_AUTO_MS. CALM_MS without
+ * a re-entry starts again from MIN_AUTO_MS.
+ */
+export const MAX_AUTO_MS = 300_000;
+export const CALM_MS = 600_000;
+/**
  * An indexer that answers but is more than this many seconds behind the chain is not used. An
  * automatic mode starts, as for an indexer that is down.
  */
@@ -125,6 +132,12 @@ export const VERIFY_RETRY_MS: readonly number[] = [2_000, 4_000, 8_000, 16_000];
  */
 export const RECHECK_MS = 30_000;
 export const RECHECK_BATCH = 100;
+/**
+ * The shortest wait between two node checks. Orders put in consecutive blocks are then checked
+ * together, so KOB activity in every block costs at most one check a second (each a node read per
+ * VERIFY_CHUNK entries and one per VERIFY_CHUNK fills), not one per block.
+ */
+const VERIFY_MIN_GAP_MS = 1_000;
 /**
  * After this long without a block while following, the subscription is made again and every order
  * is confirmed again.
@@ -276,6 +289,9 @@ export class StandaloneController {
   private returnSeq = 0;
   /** The mode's own look at the indexer's health is under way. */
   private watching = false;
+  /** How long the automatic mode on now stays at least, and when the last one ended. */
+  private minAuto = MIN_AUTO_MS;
+  private lastAutoExitMs: number | null = null;
   /** Entries started from the kept resting orders, not asked on the node yet. */
   private readonly carried = new Set<Hex>();
   private verifyTimer: unknown = null;
@@ -316,6 +332,7 @@ export class StandaloneController {
     this.lagSwitch = d.lagSwitchSeconds ?? LAG_SWITCH_SECONDS;
     this.lagReturn = d.lagReturnSeconds ?? LAG_RETURN_SECONDS;
     this.indexer = standaloneIndexer(this);
+    this.book.listing = () => this.ctx();
     this.book.focus = (t) => {
       const at = this.looked.get(t);
       return at !== undefined && this.now() - at <= FOCUS_MS;
@@ -462,7 +479,7 @@ export class StandaloneController {
         this.returnTimer = null;
         if (gen !== this.gen || !this.snap.active || this.snap.reason !== 'auto' || this.disposed || !this.isCaughtUp(b)) return;
         // Too soon after the start: the next usable report looks again.
-        if (this.prefsNow.autoReturn && this.now() - (this.snap.sinceMs ?? 0) < MIN_AUTO_MS) return;
+        if (this.prefsNow.autoReturn && this.now() - (this.snap.sinceMs ?? 0) < this.minAuto) return;
         if (this.prefsNow.autoReturn) this.exit();
         else if (!this.snap.indexerBack) this.set({ indexerBack: true });
       });
@@ -643,6 +660,10 @@ export class StandaloneController {
   }
 
   private enter(reason: 'manual' | 'auto', behind = false): void {
+    if (reason === 'auto') {
+      const soon = this.lastAutoExitMs !== null && this.now() - this.lastAutoExitMs < CALM_MS;
+      this.minAuto = soon ? Math.min(MAX_AUTO_MS, this.minAuto * 2) : MIN_AUTO_MS;
+    }
     this.gen++;
     this.reset();
     this.subscribeFails = 0;
@@ -687,6 +708,7 @@ export class StandaloneController {
 
   private exit(): void {
     const wasActive = this.snap.active;
+    if (wasActive && this.snap.reason === 'auto') this.lastAutoExitMs = this.now();
     this.gen++;
     for (const k of ['verifyTimer', 'tickTimer', 'retryTimer'] as const) this.cancel(k);
     this.disarmReturn();
@@ -996,7 +1018,7 @@ export class StandaloneController {
     }
     if (gen !== this.gen) return;
     const next = [...this.due.values(), ...this.pendingFills.map((f) => f.due), ...(this.carried.size ? [this.now() + VERIFY_RETRY_MS[0]!] : [])];
-    if (next.length) this.scheduleVerify(Math.max(200, Math.min(...next) - this.now()));
+    if (next.length) this.scheduleVerify(Math.max(VERIFY_MIN_GAP_MS, Math.min(...next) - this.now()));
   }
 
   /**

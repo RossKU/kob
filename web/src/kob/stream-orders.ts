@@ -259,6 +259,9 @@ export async function followSpend(kob: KobWasm, spend: RevealedSpend, tx: TxJson
       source: 'chain',
     };
   };
+  // A Collected bid that has bought is listed only with its bought-custody, since no fill can take
+  // it without (R4A-2).
+  const listable = (s: OrderSnapshot): OrderSnapshot | null => (boughtOf(s.order.state) && !s.boughtCustody ? null : s);
   const spkOf = (st: OrderState): string | null => {
     try {
       return kob.scriptPublicKey(st);
@@ -266,15 +269,13 @@ export async function followSpend(kob: KobWasm, spend: RevealedSpend, tx: TxJson
       return null;
     }
   };
-  // The continuation `state` with its custody. That is the one its state implies among this
-  // transaction's outputs, else the one the transaction did not spend.
+  // The continuation `state` with its custodies. Each is the one its state implies among this
+  // transaction's outputs, else the one the transaction did not spend (a sweep in place leaves the
+  // bought-custody where it was).
   const withCustody = async (state: OrderState): Promise<OrderSnapshot | null> => {
     const r = await resolveIn(kob, tx, daa, network, cov, state);
     if (!r) return null;
-    // A Collected bid that has bought is listed only with its bought-custody, which this
-    // transaction's fill continued among its outputs.
-    if (boughtOf(state) && !r.boughtCustody) return null;
-    return at(state, r.custody ?? keep(known?.custody), r.boughtCustody ?? null);
+    return listable(at(state, r.custody ?? keep(known?.custody), r.boughtCustody ?? keep(known?.boughtCustody)));
   };
   // 1. An in-place amend. The record names the new state, which counts only when its script is the
   //    continuation's.
@@ -283,14 +284,15 @@ export async function followSpend(kob: KobWasm, spend: RevealedSpend, tx: TxJson
     try {
       const st = kob.decodeState(amend.template as TemplateName, amend.state) as OrderState;
       if (st.kind !== st0.kind || spkOf(st) !== out.o.scriptPublicKey) return null;
-      return at(st, keep(known?.custody));
+      // an amend keeps `bought` and leaves the bought-custody where it was
+      return listable(at(st, keep(known?.custody), keep(known?.boughtCustody)));
     } catch {
       return null;
     }
   }
   // 2. The same state. A bid's fill keeps its state and spends from its escrow, and a sweep stays
   // in place.
-  if (spkOf(st0) === out.o.scriptPublicKey) return keep(known?.custody) ? at(st0, keep(known?.custody), keep(known?.boughtCustody)) : withCustody(st0);
+  if (spkOf(st0) === out.o.scriptPublicKey) return keep(known?.custody) ? listable(at(st0, keep(known?.custody), keep(known?.boughtCustody))) : withCustody(st0);
   // 3. An ask's fill of n. The covenant leaves amountLeft - n.
   const s = st0.state as unknown as Record<string, string | undefined>;
   if (spend.n !== null && s.amountLeft !== undefined) {
@@ -303,6 +305,12 @@ export async function followSpend(kob: KobWasm, spend: RevealedSpend, tx: TxJson
   // 3b. A Collected bid's fill of n. The covenant leaves bought + n (KobBid.sil fill).
   if (spend.n !== null && String(s.mode ?? '0') === '1' && s.bought !== undefined && s.amountLeft === undefined) {
     const next = { kind: st0.kind, state: { ...st0.state, bought: (BigInt(s.bought) + spend.n).toString() } } as OrderState;
+    if (spkOf(next) === out.o.scriptPublicKey) return withCustody(next);
+  }
+  // 3c. A claim: the maker's cancel continues a Collected bid with bought = 0, its bought tokens
+  // released (KobBid.sil cancel).
+  if (spend.entry === 'cancel' && s.bought !== undefined && s.bought !== '0') {
+    const next = { kind: st0.kind, state: { ...st0.state, bought: '0' } } as OrderState;
     if (spkOf(next) === out.o.scriptPublicKey) return withCustody(next);
   }
   // 4. Any other continuation. Match the candidates of the spent state against this transaction's

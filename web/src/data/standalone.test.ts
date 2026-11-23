@@ -6,7 +6,7 @@ import { loadKobNode } from '../kob/wasm.node';
 import { snapshotFromOrderView, type OrderSnapshot } from '../kob/cancel';
 import { confirmSnapshotsOnNode } from '../kob/node-verify';
 import type { OrderState, TokenUtxo, TxJson } from '../kob/types';
-import { FakeChain, goldenTx, placeGolden, testAddress } from '../testing/chain-fixtures';
+import { FakeChain, KEEPER, MAKER, OTHER, goldenTx, placeGolden, testAddress } from '../testing/chain-fixtures';
 import { assessIndexerHealth } from '../ui/shell/health';
 import type { StreamBlock } from './block-stream';
 import type { IndexerApi } from './indexer';
@@ -100,6 +100,50 @@ describe('the mode', () => {
     }
     expect(starts).toBeGreaterThan(0);
     expect(starts).toBeLessThanOrEqual(120);
+  });
+
+  it('re-entries back off: each one soon after an exit stays twice as long, up to 5 min; 10 calm minutes reset it (R4B-I2)', async () => {
+    const h = harness();
+    const stays: number[] = [];
+    let since = 0;
+    let was = false;
+    h.c.subscribe((s) => {
+      if (s.active && !was) since = Date.now();
+      if (!s.active && was) stays.push(Date.now() - since);
+      was = s.active;
+    });
+    for (let t = 0; t < 3_600_000; t += 10_000) {
+      const up = (t / 10_000) % 2 === 1;
+      h.setHealth(up ? health('following') : new Error('down'));
+      h.c.report(up ? good : bad);
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    // a 10 s flap: about 13 entries in the hour instead of 90 (each entry is one block subscription and
+    // up to 20 node reads of the carried orders)
+    expect(stays.length).toBeLessThanOrEqual(15);
+    expect(stays[0]).toBeGreaterThanOrEqual(MIN_AUTO_MS);
+    expect(stays[1]).toBeGreaterThanOrEqual(2 * MIN_AUTO_MS);
+    expect(stays[2]).toBeGreaterThanOrEqual(4 * MIN_AUTO_MS);
+    expect(Math.min(...stays.slice(5))).toBeGreaterThanOrEqual(300_000);
+    expect(Math.max(...stays)).toBeLessThan(300_000 + 30_000);
+    // 10 calm minutes: the next stay is the first one's again
+    h.setHealth(health('following'));
+    h.c.report(good);
+    await vi.advanceTimersByTimeAsync(400_000);
+    expect(h.c.state.active).toBe(false);
+    await vi.advanceTimersByTimeAsync(600_000);
+    const n = stays.length;
+    h.setHealth(new Error('down'));
+    h.c.report(bad);
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+    expect(h.c.state.active).toBe(true);
+    h.setHealth(health('following'));
+    for (let t = 0; t < 60_000 && h.c.state.active; t += 5_000) {
+      h.c.report(good);
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    expect(stays.length).toBe(n + 1);
+    expect(stays[n]).toBeLessThan(2 * MIN_AUTO_MS);
   });
 
   it('a flickering indexer does not end the mode: a bad look before the second one keeps it', async () => {
@@ -327,6 +371,21 @@ describe('the book from the node', () => {
     expect((h.c.bookView(TOKEN, { aggregate: true }).asks[0] as LevelView)).toMatchObject({ price: '250000000', amount: '10000', orders: 1, scale: 1000 });
   });
 
+  it('placements in consecutive blocks are checked on the node together, at most once a second', async () => {
+    const h = harness({ manual: true });
+    await vi.advanceTimersByTimeAsync(0);
+    const reads = vi.spyOn(h.node, 'getUtxosByAddresses');
+    const placed = [MAKER, OTHER, KEEPER].flatMap((k) => [placeGolden(kob, 'create.ask', k), placeGolden(kob, 'create.bid', k)]);
+    for (const p of placed) h.chain.applyTx(p.signed.tx);
+    for (const p of placed) {
+      h.block([p.signed.tx]);
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    await vi.advanceTimersByTimeAsync(VERIFY_DELAY_MS + 1_500);
+    expect(h.c.state.orders).toBe(6);
+    expect(reads.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
   it('a placement the node never shows is dropped after a few looks', async () => {
     const h = harness({ manual: true });
     await vi.advanceTimersByTimeAsync(0);
@@ -496,6 +555,11 @@ describe('listing rules (stream-book)', () => {
       ['no custody', { ...askSnap(), custody: null }],
     ];
     for (const [what, s] of cases) expect(listingOf(put(s).get(s.covenantId)!, ctx), what).toBeNull();
+    // the order view says so too, instead of claiming every entry listed (R4B-I5)
+    for (const [what, s] of cases) expect(orderViewOf(put(s).get(s.covenantId)!, ctx), what).toMatchObject({ listed: false, in_book: false });
+    expect(orderViewOf(put(withState(askSnap(), { expiryDaa: '900' })).get(askSnap().covenantId)!, ctx).expired).toBe(true);
+    expect(orderViewOf(put({ ...askSnap(), deadline: 1_700_000_000n }).get(askSnap().covenantId)!, ctx).expired).toBe(true);
+    expect(orderViewOf(put(askSnap()).get(askSnap().covenantId)!, ctx)).toMatchObject({ listed: true, in_book: true, expired: false });
     expect(MIN_ORDER_VALUE_SOMPI).toBe(100_000_000n);
   });
 
@@ -558,6 +622,26 @@ describe('a full stream book (R3B-L2)', () => {
     b.put(at('b5', '255000000'), { origin: 'stream', nowMs: 5 });
     expect(b.get('b2'.repeat(32))).toBeUndefined();
     expect([...b.entries()].map((e) => e.snap.covenantId.slice(0, 2)).sort()).toEqual(['b1', 'b4', 'b5']);
+  });
+
+  it('unlisted entries at an extreme price do not make the honest best go: they go first (R4B-L1)', () => {
+    const b = new StreamBook(3);
+    b.focus = (t) => t === TOKEN;
+    b.listing = () => ({ kob, daa: 1_000n, nowUnix: 1_790_000_000n });
+    const expired = (id: string, nowMs: number) => {
+      const s = at(id, '100');
+      return { ...s, order: { ...s.order, state: { ...s.order.state, state: { ...s.order.state.state, expiryDaa: '900' } } as OrderState } };
+    };
+    b.put(at('b1', '250000000'), { origin: 'stream', nowMs: 1, confirmed: true });
+    b.put(expired('j1', 2), { origin: 'stream', nowMs: 2, confirmed: true });
+    b.put(expired('j2', 3), { origin: 'stream', nowMs: 3, confirmed: true });
+    b.put(expired('j3', 4), { origin: 'stream', nowMs: 4 });
+    expect(b.get('b1'.repeat(32))).toBeDefined();
+    // an unconfirmed honest order is judged by its terms, not evicted for waiting on the node
+    b.put(at('b2', '260000000'), { origin: 'stream', nowMs: 5 });
+    b.put(expired('j4', 6), { origin: 'stream', nowMs: 6 });
+    expect(b.get('b1'.repeat(32))).toBeDefined();
+    expect(b.get('b2'.repeat(32))).toBeDefined();
   });
 });
 

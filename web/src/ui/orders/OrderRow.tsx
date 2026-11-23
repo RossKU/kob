@@ -224,7 +224,7 @@ function ExpiryText({ row }: { row: OrderRowModel }) {
 function pairItems(row: OrderRowModel, a: TokenInfo | undefined, b: TokenInfo | undefined) {
   const x = row.pair!;
   const aName = a ? tickerUnit(a.ticker, a.covenantId) : row.token ? shortId(row.token) : '?';
-  const bName = b?.ticker ?? shortId(x.quote);
+  const bName = b ? tickerUnit(b.ticker, b.covenantId) : shortId(x.quote);
   const aText = (v: bigint): string => `${unitsText(v, a?.decimals ?? RAW_TOKEN_DECIMALS, ',')} ${aName}`;
   const bText = (v: bigint): string => `${unitsText(v, b?.decimals ?? RAW_TOKEN_DECIMALS, ',')} ${bName}`;
   const r = x.trigger;

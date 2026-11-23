@@ -9,7 +9,7 @@ import { planOrder } from './plan';
 import { decodeSigning } from './decode';
 import { expectedFromPlan } from '../ui/ticket/plan-expected';
 import { custodyState } from './token-state';
-import type { OrderState, TokenUtxo } from './types';
+import type { OrderState, TemplateName, TokenUtxo, TxJson } from './types';
 import { CLOCK, KAS, MAKER_PK, MAKER_SK, OTHER_PK, TOK, consensusCheck, keyUtxo, kob, makeEnv, market3x3, tokenUtxo } from '../testing/fixtures';
 import { nodeFactsOf, snapshotOfRecovered } from '../testing/chain-fixtures';
 
@@ -19,9 +19,9 @@ const BOUGHT = 3n * TOK;
 const PRICE = 250_000_000n;
 
 /** A Collected bid of OTHER_PK for `amount` that has bought BOUGHT, with its bought-custody. */
-function collectedBid(amount: bigint): { row: { covenantId: string; price: bigint; amount: bigint; tip: bigint }; utxo: BookOrderUtxo; custody: TokenUtxo } {
+function collectedBid(amount: bigint, minFill = TOK): { row: { covenantId: string; price: bigint; amount: bigint; tip: bigint }; utxo: BookOrderUtxo; custody: TokenUtxo } {
   const env: PlanEnv = { ...makeEnv({ market: M, book: { asks: [], bids: [] } }), maker: OTHER_PK, funding: [keyUtxo(10_000n * KAS, OTHER_PK)], tokenUtxos: [tokenUtxo(M, 1_000n * TOK, 10n * KAS, OTHER_PK)] };
-  const p = planOrder(env, { type: 'limit', side: 'buy', amount, price: PRICE, minFill: TOK });
+  const p = planOrder(env, { type: 'limit', side: 'buy', amount, price: PRICE, minFill });
   expect(errors(p)).toEqual([]);
   const snap = snapshotOfRecovered(K.recoverOrders(p.built!.tx)[0]!, CLOCK.daa - 1000n);
   const st = { ...snap.order.state, state: { ...snap.order.state.state, mode: '1', recvThreshold: '0', topupTip: '0', bought: BOUGHT.toString() } } as OrderState;
@@ -77,6 +77,24 @@ describe('selling into a Collected bid that has bought', () => {
     expect(d.blocking.map((b) => `${b.code}: ${b.message}`)).toEqual([]);
   });
 
+  it('an ending fill with 1 KAS or more left refunds it to the maker; consensus-valid; the decoder accepts it (R4A-1)', () => {
+    // 55 KAS of escrow (it buys 22), minFill 3: selling 21 leaves 2.5 KAS, less than one more minimum
+    // fill buys
+    const bid0 = collectedBid(10n * TOK, 3n * TOK);
+    const bid = { ...bid0, row: { ...bid0.row, amount: 21n * TOK } };
+    const p = sell(takerEnv(bid), 21n * TOK);
+    expect(errors(p)).toEqual([]);
+    expect(p.take!.amount).toBe(21n * TOK);
+    consensusCheck(K, p.built!, [MAKER_SK]);
+    const tx = p.built!.tx;
+    const i = tx.inputs.findIndex((x) => x.utxo.covenantId === bid.utxo.covenantId);
+    const r = tx.outputs.length - 1 - i;
+    expect(tx.outputs[r]).toMatchObject({ scriptPublicKey: `000020${OTHER_PK}ac`, value: (BigInt(bid.utxo.order.amount) - 21n * PRICE).toString(), covenant: null });
+    const d = decodeSigning({ kob: K, built: p.built!, maker: MAKER_PK, expected: expectedFromPlan(p), nodeInputs: nodeFactsOf(p.built!) });
+    expect(d.blocking.map((b) => `${b.code}: ${b.message}`)).toEqual([]);
+    expect(d.outputs[r]).toMatchObject({ kind: 'fill-payout', recipient: OTHER_PK });
+  });
+
   it('negative: without its bought-custody the bid is not taken (it was refused at build before)', () => {
     const bid = collectedBid(10n * TOK);
     const p = sell(takerEnv(bid, { ...bid.utxo, boughtCustody: null }), 2n * TOK);
@@ -99,7 +117,48 @@ describe('the standalone book follows such a bid through a fill (R3A-3)', () => 
     expect(next).not.toBeNull();
     expect((next.order.state.state as unknown as { bought: string }).bought).toBe((BOUGHT + 2n * TOK).toString());
     expect(next.boughtCustody).toMatchObject({ transactionId: signed.tx.id, state: { amount: (BOUGHT + 2n * TOK).toString(), owner: bid.utxo.covenantId } });
-    const view = orderViewOf({ snap: next, confirmed: true, origin: 'stream', genesis: { txid: null, out: null, daa: 0n }, firstAmount: null, seenMs: 0, misses: 0 }, { kob: K });
+    const view = orderViewOf({ snap: next, confirmed: true, origin: 'stream', genesis: { txid: null, out: null, daa: 0n }, firstAmount: null, seenMs: 0, misses: 0 }, { kob: K, daa: CLOCK.daa, nowUnix: CLOCK.unixSeconds });
     expect(view.bought_custody?.utxo).toMatchObject({ txid: signed.tx.id, amount: (BOUGHT + 2n * TOK).toString() });
+  });
+
+  // A transaction that spends the bid (input 0) by its cancel entry and continues it at output 0,
+  // as the stream sees it: only the outpoints, the outputs and the payload are read.
+  const cancelSpend = async (state: OrderState, payload = '', spendCustody = false) => {
+    const { followSpend } = await import('./stream-orders');
+    const bid = collectedBid(10n * TOK);
+    const utxo = (u: { transactionId: string; index: number; amount: string }) => ({ transactionId: u.transactionId, index: u.index, sequence: '0', sigOpCount: 1, computeBudget: 0, signatureScript: '', utxo: { address: null, amount: u.amount, scriptPublicKey: '', blockDaaScore: '0', isCoinbase: false, covenantId: null } });
+    const tx = {
+      id: 'dd'.repeat(32), version: 0, subnetworkId: '00'.repeat(20), lockTime: '0', gas: '0', storageMass: '0', payload,
+      inputs: [utxo(bid.utxo.order), ...(spendCustody ? [utxo(bid.custody)] : [])],
+      outputs: [{ value: bid.utxo.order.amount, scriptPublicKey: K.scriptPublicKey(state), covenant: { authorizingInput: 0, covenantId: bid.utxo.covenantId } }],
+    } as unknown as TxJson;
+    const known = { covenantId: bid.utxo.covenantId, order: bid.utxo.order, custody: null, boughtCustody: bid.custody, strays: [], refundDueDaa: null, deadline: null, source: 'chain' as const };
+    return { bid, next: await followSpend(K, { input: 0, state: bid.utxo.order.state, entry: 'cancel', n: null }, tx, CLOCK.daa, 'testnet-10', known) };
+  };
+  const bidState = (b: ReturnType<typeof collectedBid>, edit: Record<string, string>) => ({ ...b.utxo.order.state, state: { ...b.utxo.order.state.state, ...edit } }) as OrderState;
+
+  it('a sweep in place keeps the bid listed with the bought-custody it did not move (R4A-2)', async () => {
+    const st = collectedBid(10n * TOK).utxo.order.state;
+    const { bid, next } = await cancelSpend(st);
+    expect(next).not.toBeNull();
+    expect(next!.boughtCustody).toMatchObject({ transactionId: bid.custody.transactionId, index: bid.custody.index });
+  });
+
+  it('an in-place amend keeps the bought-custody too; one that spends it drops the bid rather than list it untakeable (R4A-2)', async () => {
+    const st = bidState(collectedBid(10n * TOK), { price: (PRICE + 1_000_000n).toString() });
+    const payload = K.encodePayload([{ type: 'amend', output: 0, input: 0, family: 1, template: st.kind as TemplateName, state: K.encodeState(st) }]);
+    const { bid, next } = await cancelSpend(st, payload);
+    expect(next).not.toBeNull();
+    expect((next!.order.state.state as unknown as { price: string }).price).toBe((PRICE + 1_000_000n).toString());
+    expect(next!.boughtCustody).toMatchObject({ transactionId: bid.custody.transactionId, index: bid.custody.index });
+    expect((await cancelSpend(st, payload, true)).next).toBeNull();
+  });
+
+  it('a claim continues the bid with bought = 0, listed without a custody (R4A-2)', async () => {
+    const st = bidState(collectedBid(10n * TOK), { bought: '0' });
+    const { next } = await cancelSpend(st, '', true);
+    expect(next).not.toBeNull();
+    expect((next!.order.state.state as unknown as { bought: string }).bought).toBe('0');
+    expect(next!.boughtCustody ?? null).toBeNull();
   });
 });

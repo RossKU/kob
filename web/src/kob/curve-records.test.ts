@@ -142,6 +142,12 @@ describe('cancel of an unbound curve (made in its token genesis)', () => {
     const s = decodeSigning({ kob, built: c.built!, maker: MAKER.pk, registry: null, expected: c.expected, nodeInputs: nodeFactsOf(c.built!) });
     expect(s.blocking).toEqual([]);
     expect(c.tokensReturned).toBe(sell);
+    // its custody is its own tokens, not strays of another token (R4B-I4)
+    const sp = s.spends.find((x) => x.covenantId === snap.covenantId)!;
+    expect(sp.otherStrays).toEqual([]);
+    expect(sp.strays).toBe(0n);
+    expect(sp.tokensReleased).toBe(sell);
+    expect([...s.info, ...s.warnings].map((f) => f.code)).not.toContain('other-strays-swept');
 
     // a stray of its own token (sent to the curve's id before its first fill) is swept by the same
     // cancel, never left behind

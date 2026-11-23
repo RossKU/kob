@@ -172,7 +172,7 @@ export function AmendDialog(props: AmendDialogProps) {
 
   // KAS per whole token. For an order of a token nothing names, it is per the whole token of its
   // price scale, `scale`, which My orders shows it with.
-  const unit = t('orders.unit.kasPer', { ticker: token?.ticker ?? '?' });
+  const unit = t('orders.unit.kasPer', { ticker: token ? tickerUnit(token.ticker, token.covenantId) : '?' });
   const errText = (k: FieldKey, field: string): string | null => {
     if (parsed.errors[k]) return parsed.errors[k]!;
     const i = fieldIssue(field);
@@ -228,12 +228,12 @@ export function AmendDialog(props: AmendDialogProps) {
         ) : null}
         {'amountLeft' in s ? (
           <Field
-            label={t('orders.amend.amount', { ticker: token?.ticker ?? '?' })}
+            label={t('orders.amend.amount', { ticker: token ? tickerUnit(token.ticker, token.covenantId) : '?' })}
             value={form.amount}
             onValue={(v) => set('amount', v)}
             inputMode="decimal"
             error={errText('amount', 'amount')}
-            help={sell ? <HelpTip label={t('orders.amend.amount', { ticker: token?.ticker ?? '?' })}>{t('orders.amend.amountHint')}</HelpTip> : undefined}
+            help={sell ? <HelpTip label={t('orders.amend.amount', { ticker: token ? tickerUnit(token.ticker, token.covenantId) : '?' })}>{t('orders.amend.amountHint')}</HelpTip> : undefined}
             data-testid="amend-amount"
           />
         ) : kind === 'limit' ? (
