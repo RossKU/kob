@@ -113,6 +113,8 @@ function chain() {
     const id = args[1];
     const o = c.orders[id];
     if (!o) { process.stderr.write('error: the order is not live'); process.exit(1); }
+    // An order someone else made under the bot's key, with no custody (R3T-2).
+    if (o.foreign) { process.stderr.write('error: custody not found on the node: not cancelled; nothing signed\n'); process.exit(1); }
     submit({ apply: () => { if (o.side === 1) { c.tokenFree += o.amount; c.tokenUtxos += 1; } c.kasFree += o.value; c.ended[id] = 'cancelled'; delete c.orders[id]; } });
   }
   if (args[0] === 'recover') recover(c, fee);
@@ -139,17 +141,21 @@ function recover(c, fee) {
   const val = (flag) => args[args.indexOf(flag) + 1];
   const items = JSON.parse(readFileSync(val('--from'), 'utf8')).items;
   const hints = {};
-  args.forEach((a, i) => { if (a === '--amount-left') { const [id, n] = args[i + 1].split('='); hints[id] = Number(n); } });
+  args.forEach((a, i) => { if (a === '--amount-left') { const [id, n] = args[i + 1].split('='); (hints[id] ??= []).push(Number(n)); } });
   const byId = new Map();
   for (const it of items) {
     const id = it.covenant_id;
     if (byId.get(id)?.status === 'live') continue;
     const o = c.orders[id];
     const kind = it.state.kind;
-    const e = { covenant_id: id, kind, template_hash: it.template_hash, status: 'not_found', note: 'spent' };
+    // The CLI's notes: a bid's script never changes, so not finding it is proof it is spent; an
+    // ask's amount may have moved to one the search did not reach.
+    const note = kind === 'KobBid' ? "spent: no unspent output at the order's script (1 candidate)"
+      : "spent, or partly filled to an amount the search did not reach (3 candidates: the known states, the --amount-left hints, then amountLeft - k x minFill; that search is not exhaustive: pass the order's amount left from an indexer view with --amount-left)";
+    const e = { covenant_id: id, kind, template_hash: it.template_hash, status: 'not_found', note };
     const st = it.state.state;
     if (it.template_hash === TPL[kind] && o && (o.side === 1) === (kind === 'KobAsk') && o.price === Number(st.price)
-      && (o.side === 2 || o.amount === Number(st.amountLeft) || o.amount === hints[id])) {
+      && (o.side === 2 || o.amount === Number(st.amountLeft) || (hints[id] ?? []).includes(o.amount))) {
       const left = o.side === 1 ? o.amount : Math.floor(((o.value - 1e8) * 1e6) / o.price);
       Object.assign(e, { status: 'live', note: '', outpoint: `${o.txid}:0`, value: String(o.value), amount_left: String(left) });
     }

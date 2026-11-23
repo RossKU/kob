@@ -29,3 +29,32 @@ The bot paid 0.264424 KAS in fees over 34 transactions (12 placements, 9 amends,
 each kind. Found and fixed during the run:
 - a restart after STOP stayed in STOPPING;
 - the pull log line counted cancels that were already sent.
+
+## To check on the next live run (round-3 fixes, not testable offline)
+
+The stand-in CLI of `test/` imitates `kob recover`; these points need the real CLI, node and indexer:
+- `kob recover` report shape: each entry has `covenant_id`, `status` (`live`, `not_found`, `other_maker`,
+  `unsupported`), `template_hash`, `note`, and for a live order `outpoint`, `value`, `amount_left`; `--cancel` adds
+  `cancel.status` (`submitted`, `signed`, `refused`, `failed`, `skipped`) and `cancel.txid`/`fee`. The bot reads exactly
+  these.
+- A cancelled or fully bought **bid**: `not_found` with a note that contains "spent: no unspent output at the order's
+  script". The bot takes that text as proof the bid ended (R3T-3); if the wording differs, every ended bid stays
+  unresolved with a `node-unconfirmed` alert.
+- An **ask** partly filled by an amount that is not k x minFill, listed by the indexer: found `live` through
+  `--amount-left <id>=<indexer amount_left>`, its `amount_left` updated in `state.json`. Repeated `--amount-left` for one
+  id (the bot may pass up to 4) is accepted.
+- The same ask with the indexer's list hiding it (or a fully filled ask): `not_found` with the "spent, or partly filled
+  to an amount the search did not reach" note; the bot keeps it as unresolved (one `node-unconfirmed` alert, the level not
+  placed again, STOP waits). Check that `GET /v1/orders/<id>` of the real indexer returns `amount_left`, which the bot
+  passes as a hint.
+- An order someone else makes under the bot's key without custody (R3T-2): `kob cancel <id>` refuses before signing
+  (exit 1, "custody not found on the node: not cancelled"; no fee). The bot logs it, raises one `foreign-order` alert,
+  tries the cancel at most 3 times, keeps quoting bids at their targets and places asks.
+- A `kob place` refused for another-scale orders on an indexer-only-decimals token (R3T-5, fixed in the CLI): after 3
+  refusals the `placement` alert carries the CLI's refusal text.
+- A fully filled ask with `node` set to the JSON wRPC URL: the next cycle ends it with "filled (its fills are paid in
+  outputs the node showed)" and no `node-unconfirmed` alert. This checks that the real node's `getUtxosByAddresses`
+  entries carry `outpoint.transactionId` and `utxoEntry.scriptPublicKey` as `000020<key>ac`, that the indexer's
+  `/v1/fills` items carry `txid` and `amount` (base units), and that the fill's payout to the maker is an output of that
+  transaction of at least `ceil(amount x (price - tip) / scale)`. With `node` null the same fill leaves the ask
+  unresolved, parked after its expiry, and `check` warns.

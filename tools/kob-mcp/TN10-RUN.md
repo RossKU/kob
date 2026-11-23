@@ -40,3 +40,13 @@ Seen during the run:
   check on confirm is the KAS it takes, not the ids.
 - The packed extension (`mcpb pack`) was unpacked and started with only the form's `KOB_MCP_*` variables; it listed
   the 17 tools and answered `kob_status`.
+
+## To check on the next live run (round-3 fixes, not testable offline)
+
+- `GET /v1/books/<covenant id>?depth=200&aggregate=false` of the deployed kobd has `fillable_now` on each row, as a
+  string in the unit of `amount_left`: a plain order's whole `amount_left`, a TWAP or DCA order's due slice, `0` while
+  no slice is due (R3T-1). Against a kobd without the field, a priced write on a token without `refPrice` is refused
+  with "an older kobd" in the reason.
+- `kob_token_create` without `fund_utxo` against a node URL that accepts the socket and never answers: the write fails
+  within 20 s ("did not answer"), and a `kob_cancel` sent right after is not held behind it (R3T-4).
+- `kob_status` shows the indexer URL without a user, password or query.

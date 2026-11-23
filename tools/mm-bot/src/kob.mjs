@@ -168,15 +168,15 @@ export class Kob {
 
   /**
    * `kob recover` over a file of the bot's own order records (R2-T1). Each order is looked up on the
-   * node at the script its state makes; a partial fill is followed through the `--amount-left`
-   * hints and the CLI's bounded search. No indexer is read. `cancel` also cancels every live one
-   * (--yes, or --dry-run when dry). Returns { ok, orders (the report's entries), error }.
+   * node at the script its state makes; a partial fill is found only at an amount named by an
+   * `--amount-left` hint (one number or a list per id) or reached by the CLI's bounded search. No
+   * indexer is read. `cancel` also cancels every live one (--yes, or --dry-run when dry). Returns { ok, orders (the report's entries), error }.
    */
   async recover(file, { maker = null, hints = {}, cancel = false } = {}) {
     const a = ['recover', '--from', file, '--network', this.cfg.network];
     if (this.cfg.node) a.push('--node', this.cfg.node);
     if (maker) a.push('--maker', maker);
-    for (const [id, n] of Object.entries(hints)) if (Number.isSafeInteger(n) && n > 0) a.push('--amount-left', `${id}=${n}`);
+    for (const [id, h] of Object.entries(hints)) for (const n of [h].flat()) if (Number.isSafeInteger(n) && n > 0) a.push('--amount-left', `${id}=${n}`);
     if (cancel) {
       a.push('--cancel');
       if (this.cfg.keyFile) a.push('--key-file', this.cfg.keyFile);

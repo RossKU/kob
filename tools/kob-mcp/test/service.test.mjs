@@ -463,7 +463,7 @@ test('kob_replace: a buy priced up counts its whole escrow under the KAS caps (T
 // R2-T2: the reference is the operator's price, or a book reference with refDepthKas behind it on
 // both the fills and the resting side; with neither, a priced write is refused.
 const rows = (bids, asks = []) => ({ bids, asks });
-const row = (price, amount, extra = {}) => ({ price: String(price), amount_left: String(amount), min_fill: '100000000', scale: 100000000, maker: 'aa'.repeat(32), ...extra });
+const row = (price, amount, extra = {}) => ({ price: String(price), amount_left: String(amount), fillable_now: String(amount), min_fill: '100000000', scale: 100000000, maker: 'aa'.repeat(32), ...extra });
 const fills = (price, amount, n = 1) => ({ items: Array.from({ length: n }, () => ({ price: String(price), amount: String(amount) })) });
 function bookService(over = {}) {
   const t = setup({ mode: 'auto', tokens: {}, ...over });
@@ -507,6 +507,18 @@ test('a book reference needs refDepthKas of fills and of resting orders that are
   svc.book$.rows = rows([row(24000000, 2500e8, { maker: 'ef'.repeat(32) }), row(23000000, 5000e8, { min_fill: String(5000e8) })]);
   assert.match((await svc.write('kob_place_limit', place)).reason, /^PRICE_BAND_UNCHECKED: no usable reference \(under 1000 KAS of bids/);
   assert.equal(t.yesCalls().length, 1);
+});
+
+test('a TWAP slice or an older indexer without fillable_now sets no book reference: refused, refPrice named (R3T-1)', async () => {
+  const { t, svc } = bookService();
+  // 1,200 KAS left at 0.24, but 10 KAS fillable now (one slice): no reference.
+  svc.book$ = { rows: rows([row(24000000, 5000e8, { fillable_now: String(40e8) })]), fills: fills(25000000, 1000e8, 5) };
+  assert.match((await svc.write('kob_place_limit', place)).reason, /^PRICE_BAND_UNCHECKED: no usable reference \(under 1000 KAS of bids fillable now.*refPrice/);
+  // A kobd that names no fillable_now: its book counts as nothing.
+  const { fillable_now: _f, ...old } = row(24000000, 5000e8);
+  svc.book$.rows = rows([old]);
+  assert.match((await svc.write('kob_place_limit', place)).reason, /an older kobd.*refPrice/);
+  assert.equal(t.yesCalls().length, 0);
 });
 
 test('the operator\'s refPrice bounds the band, and the book may only tighten it (R2-T2)', async () => {

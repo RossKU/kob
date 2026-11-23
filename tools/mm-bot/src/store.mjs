@@ -33,6 +33,9 @@ export function freshState(nowMs) {
     alerts: {},
     retired: {}, // retired token id -> { done, cancels: { order id: sentAt } }
     templates: { cli: null, kinds: {} }, // order kind -> { hash, verified }: verified once the node held an order under it
+    ownTx: [], // transaction ids the bot sent, newest last (R3T-3)
+    payments: {}, // txid -> { sompi, at }: outputs to the bot's address the node showed (R3T-3)
+    foreign: {}, // orders on the bot's key it did not place (R3T-2): id -> { side, price, amountLeft, firstSeen, tries, lastTry }
     blind: [], // placements that may have gone out under no known covenant id: { side, cost, tokens, at }, counted for a day
     placeFails: 0, // placements refused in a row (R2-T3)
     last: null,

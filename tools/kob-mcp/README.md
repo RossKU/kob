@@ -52,14 +52,23 @@ The limits below are what holds.
     (KAS per whole token; `bandPct` overrides `limits.priceBandPct` for that token). The book can only tighten it: a buy
     takes the lower of the two, a sell the higher. This is how a fresh or thin token is allowed at all;
   - else the book's, when `limits.refDepthKas` (1,000 KAS) stands behind it twice: the resting side (for a buy the price
-    where the bids add up to 1,000 KAS, for a sell where the asks do; the wallet's own orders and orders whose minimum
-    fill is worth more than 10 KAS do not count) and the fill history (the VWAP of the newest 1,000 KAS of fills). A buy
-    is judged against the lower of the two, a sell against the higher. A book that cannot be read refuses.
+    where what a taker can fill now of the bids adds up to 1,000 KAS, for a sell where the asks' does; each order counts
+    the indexer's `fillable_now`, so a TWAP or DCA order counts only the slice that is due, and an order the indexer
+    names no `fillable_now` for (an older kobd) counts as nothing; the wallet's own orders and orders whose minimum fill
+    is worth more than 10 KAS do not count either) and the fill history (the VWAP of the newest 1,000 KAS of fills). A
+    buy is judged against the lower of the two, a sell against the higher. A book that cannot be read refuses. Against
+    an older kobd every priced write on a token without `refPrice` is therefore refused.
 
-  What remains: someone with `refDepthKas` of orders at risk on the book (anyone may fill them) and the same in printed
-  fills can still move a book reference by up to the band. The caps bound what a steered agent then loses: 100 KAS a
-  transaction and 500 KAS a UTC day of KAS (`perTxKas`, `perDayKas`), and 25 % a transaction and 50 % a day of each
-  token's holding (`limits.tokenDefault`). With `refPrice` set, the bound is the operator's price.
+  What remains:
+  - Someone who puts `refDepthKas` of orders on the book that anyone can fill at once can move a book reference by up
+    to the band, for as long as the orders stand. The printed fills cost almost nothing (two keys of one owner trade
+    with each other for the fees), so the fills never move the reference by themselves: a buy takes the lower of the
+    two, a sell the higher. The cost is the 1,000 KAS at risk on the book.
+  - The book and the fills come from the indexer alone (`indexer` in the config): a lying or hijacked indexer serves
+    whatever depth and fills it likes and so sets the reference. Use an indexer you run or trust, and set `refPrice` for
+    every token the agent trades: then the bound is the operator's price, which the book can only tighten.
+  - The caps bound what a steered agent then loses: 100 KAS a transaction and 500 KAS a UTC day of KAS (`perTxKas`,
+    `perDayKas`), and 25 % a transaction and 50 % a day of each token's holding (`limits.tokenDefault`).
 - The tip goes to the executor that fills the order: at most 1 % of the price and 1 KAS over the whole order
   (`limits.maxTipPct`, `limits.maxTipKas`).
 - `kob_replace` reads the order's side and token from the CLI's dry run (the order as checked on the node), and a new
