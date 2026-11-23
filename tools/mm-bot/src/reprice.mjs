@@ -82,6 +82,10 @@ export function planActions(targets, orders, ctx) {
       amends.push({ kind: 'amend', id: o.id, side, level: t.level, from: o.price, price: t.price, quotedFair: fair, renewOnly: !reprice, reason });
     }
   }
+  // A quote moving away from the other side goes first, so a failed or later amend never leaves a
+  // bid at or above the bot's own ask (T-7).
+  const away = (a) => (a.side === 'sell' ? a.price > a.from : a.price < a.from);
+  amends.sort((a, b) => Number(away(b)) - Number(away(a)));
   return [...cancels, ...amends, ...places];
 }
 

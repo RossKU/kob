@@ -1,14 +1,15 @@
 // Files under dataDir: state.json, logs/ (mm-bot.log, actions.jsonl, fills.jsonl, alerts.jsonl) and
 // STOP.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { initialMode } from './modes.mjs';
 
 export const paths = (dataDir) => ({
   state: join(dataDir, 'state.json'),
+  statePrev: join(dataDir, 'state.prev.json'), // the state file before the last save
+  check: join(dataDir, 'own-orders.json'), // the bot's own order records, as kob recover reads them
   stop: join(dataDir, 'STOP'),
-  views: join(dataDir, 'order-views.json'), // the last indexer views of the bot's live orders
   pid: join(dataDir, 'mm-bot.pid'),
   log: join(dataDir, 'logs', 'mm-bot.log'),
   actions: join(dataDir, 'logs', 'actions.jsonl'),
@@ -19,7 +20,11 @@ export const paths = (dataDir) => ({
 export function freshState(nowMs) {
   return {
     version: 1,
-    orders: {}, // covenant id -> { side, level, price, amount, quotedFair, placedAt, expiresAt (ms, the --gtd sent), expired, pending: null | { kind, since, txid } }
+    // covenant id -> { side, level, price, amount, quotedFair, placedAt, expiresAt (ms, the --gtd sent), expired,
+    // pending: null | { kind, since, txid }, own: { state, prev, txid, tpl } (the order as the bot's own
+    // transactions or the node left it, R2-T1), fate: 'unknown' (a placement that may have gone out),
+    // idxBad (the indexer does not show it where the node holds it), unconfirmed, cancelSentAt }
+    orders: {},
     recent: {}, // ids that ended in the last hour -> { side, level, endedAt } (to attribute late fills)
     lastFillId: null,
     fees: null, // { day, sompi, txs, byKind: { kind: { n, sompi } } }
@@ -27,6 +32,9 @@ export function freshState(nowMs) {
     mode: initialMode(nowMs),
     alerts: {},
     retired: {}, // retired token id -> { done, cancels: { order id: sentAt } }
+    templates: { cli: null, kinds: {} }, // order kind -> { hash, verified }: verified once the node held an order under it
+    blind: [], // placements that may have gone out under no known covenant id: { side, cost, tokens, at }, counted for a day
+    placeFails: 0, // placements refused in a row (R2-T3)
     last: null,
   };
 }
@@ -34,14 +42,30 @@ export function freshState(nowMs) {
 export function loadState(dataDir, nowMs = Date.now()) {
   const p = paths(dataDir).state;
   if (!existsSync(p)) return freshState(nowMs);
-  const s = JSON.parse(readFileSync(p, 'utf8'));
+  let s;
+  try {
+    s = JSON.parse(readFileSync(p, 'utf8'));
+  } catch (e) {
+    // A fresh state would forget the bot's live quotes, so the operator decides (T-11).
+    throw new Error(`${p} does not read (${e.message}): fix it, or replace it with ${paths(dataDir).statePrev} (the state before the last save); the bot does not start without its orders`);
+  }
   return { ...freshState(nowMs), ...s };
 }
 
 export function saveState(dataDir, state) {
   const p = paths(dataDir).state;
   writeFileSync(`${p}.tmp`, JSON.stringify(state, null, 1) + '\n');
+  if (existsSync(p)) copyFileSync(p, paths(dataDir).statePrev);
   renameSync(`${p}.tmp`, p);
+}
+
+/** A log past this size moves to <file>.1, replacing the one before (T-11). */
+export const LOG_ROTATE_BYTES = 50 * 1024 * 1024;
+
+function rotate(file) {
+  try {
+    if (statSync(file).size > LOG_ROTATE_BYTES) renameSync(file, `${file}.1`);
+  } catch { /* no file yet */ }
 }
 
 export class Logger {
@@ -54,11 +78,13 @@ export class Logger {
 
   info(msg) {
     const line = `${new Date().toISOString()} ${this.tag} ${msg}`;
+    rotate(this.p.log);
     appendFileSync(this.p.log, line + '\n');
     if (!this.quiet) console.log(line);
   }
 
   action(rec) {
+    rotate(this.p.actions);
     appendFileSync(this.p.actions, JSON.stringify({ at: new Date().toISOString(), ...rec }) + '\n');
   }
 

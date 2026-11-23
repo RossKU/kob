@@ -1,4 +1,4 @@
-// Modes: QUOTING, IDLE (reference, jump, peg, fee-cap, cooldown) and STOPPING. Only the operator
+// Modes: QUOTING, IDLE (reference, jump, peg, placement, fee-cap, cooldown) and STOPPING. Only the operator
 // stops the bot.
 
 export const QUOTING = 'QUOTING';
@@ -16,7 +16,7 @@ export function initialMode(nowMs) {
   return { mode: IDLE, reason: 'cooldown', since: nowMs, steadySince: null, feeDay: null };
 }
 
-/** The next mode from { stop, refOk, jump, feeBlocked, pegOk }. `pull` means cancel every quote. */
+/** The next mode from { stop, refOk, jump, feeBlocked, pegOk, placeBlocked }. `pull` means cancel every quote. */
 export function nextMode(prev, input, cfg, nowMs) {
   const day = utcDay(nowMs);
   const to = (mode, reason, extra = {}) => {
@@ -42,6 +42,8 @@ export function nextMode(prev, input, cfg, nowMs) {
   if (!input.refOk) return to(IDLE, 'reference', { steadySince: null });
   if (input.jump > cfg.killJump) return to(IDLE, 'jump', { steadySince: null });
   if (input.pegOk === false) return to(IDLE, 'peg', { steadySince: null });
+  // The CLI refuses every placement (R2-T3): cleared once a planned placement passes again.
+  if (input.placeBlocked) return to(IDLE, 'placement', { steadySince: null });
 
   if (prev.mode === QUOTING) return to(QUOTING, null, { steadySince: prev.steadySince ?? nowMs });
 

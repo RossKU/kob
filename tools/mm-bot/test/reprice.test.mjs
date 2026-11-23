@@ -107,3 +107,14 @@ test('a changed spread is followed on the same threshold, without a fair-value m
   const near = { ...Q, spreadPct: 1.2 };
   assert.deepEqual(planActions(buildLadder(37.5, BUDGET, near, SCALE), orders, { fair: 37.5, scale: SCALE, free: FREE, q: near }), []);
 });
+
+test('amends that move a quote away from the other side go first (T-7)', () => {
+  // Fair up 1 %: the asks move up (away from the bids) before the bids move up toward the asks.
+  const up = plan(37.5 * 1.01, quotedAt(37.5)).filter((x) => x.kind === 'amend');
+  const firstBid = up.findIndex((x) => x.side === 'buy');
+  assert.ok(firstBid > 0 && up.slice(0, firstBid).every((x) => x.side === 'sell'), up.map((x) => x.side).join(','));
+  // Fair down 1 %: the bids move down first.
+  const down = plan(37.5 * 0.99, quotedAt(37.5)).filter((x) => x.kind === 'amend');
+  const firstAsk = down.findIndex((x) => x.side === 'sell');
+  assert.ok(firstAsk > 0 && down.slice(0, firstAsk).every((x) => x.side === 'buy'), down.map((x) => x.side).join(','));
+});

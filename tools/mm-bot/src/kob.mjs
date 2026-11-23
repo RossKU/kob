@@ -35,6 +35,9 @@ export const gtdArg = (ms) => `${new Date(Math.floor(ms / 1000) * 1000).toISOStr
 // Stderr lines that are progress notes, not errors.
 const NOISE = /blocks are contended|^dry run: nothing signed/;
 
+/** A long stderr cut in the middle: the last line, where the CLI says what failed, stays (T-13). */
+export const cutMiddle = (s, n) => (s.length <= n ? s : `${s.slice(0, Math.floor(n / 4))} .. ${s.slice(s.length - (n - Math.floor(n / 4) - 4))}`);
+
 export class Kob {
   /** opts: `dryRun` never signs. `prefixArgs` go before the command (tests). */
   constructor(cfg, { dryRun = false, prefixArgs = [] } = {}) {
@@ -52,9 +55,9 @@ export class Kob {
     return a;
   }
 
-  /** One CLI run: { code, docs, json (the first document), stderr }. */
-  exec(args) {
-    const argv = [...this.prefixArgs, ...args, ...this.common()];
+  /** One CLI run: { code, docs, json (the first document), stdout, stderr }. `bare`: no common options. */
+  exec(args, { bare = false } = {}) {
+    const argv = [...this.prefixArgs, ...args, ...(bare ? [] : this.common())];
     return new Promise((resolve) => {
       const child = spawn(this.cfg.kobCli, argv, { env: this.env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
       let out = '';
@@ -62,13 +65,13 @@ export class Kob {
       child.stdout.on('data', (d) => { out += d; });
       child.stderr.on('data', (d) => { err += d; });
       const timer = setTimeout(() => { child.kill(); err += '\nerror: timed out'; }, this.cfg.cli.timeoutSec * 1000);
-      child.on('error', (e) => { clearTimeout(timer); resolve({ code: -1, docs: [], json: null, stderr: `cannot run ${this.cfg.kobCli}: ${e.message}` }); });
+      child.on('error', (e) => { clearTimeout(timer); resolve({ code: -1, docs: [], json: null, stdout: '', stderr: `cannot run ${this.cfg.kobCli}: ${e.message}` }); });
       child.on('close', (code) => {
         clearTimeout(timer);
         let docs = [];
         try { docs = parseJsonStream(out); } catch { /* not JSON */ }
-        const stderr = err.split(/\r?\n/).filter((l) => l.trim() && !NOISE.test(l)).join(' | ').slice(0, 600);
-        resolve({ code: code ?? -1, docs, json: docs[0] ?? null, stderr });
+        const stderr = cutMiddle(err.split(/\r?\n/).filter((l) => l.trim() && !NOISE.test(l)).join(' | '), 600);
+        resolve({ code: code ?? -1, docs, json: docs[0] ?? null, stdout: out, stderr });
       });
     });
   }
@@ -80,6 +83,7 @@ export class Kob {
   async sign(args) {
     const extra = this.cfg.cli.priorityFee ? ['--priority-fee'] : [];
     let plannedFee = null;
+    let planDoc = null;
     if (this.cfg.cli.preflight || this.dryRun) {
       const plan = await this.exec([...args, ...extra, '--dry-run']);
       const errs = (plan.json?.issues ?? []).filter((i) => i.severity === 'error');
@@ -87,6 +91,7 @@ export class Kob {
         return { ok: false, error: `plan refused (exit ${plan.code}): ${errs.map((i) => `${i.code} ${i.message}`).join('; ') || plan.stderr || 'no output'}`, doc: plan.json };
       }
       plannedFee = Number(plan.json?.transaction?.fee ?? plan.json?.fee ?? 0);
+      planDoc = plan.json;
       if (this.dryRun) {
         return { ok: true, dryRun: true, txid: null, fee: plannedFee, newIds: plan.json?.new_covenant_ids ?? [], doc: plan.json };
       }
@@ -96,7 +101,8 @@ export class Kob {
     // with an error): `sentFee` is its planned fee, to count, unless the CLI says nothing was sent.
     const sentFee = /nothing signed|nothing submitted|nothing sent|engine validation failed/i.test(r.stderr) ? null
       : Number(r.json?.transaction?.fee ?? r.json?.fee ?? 0) || plannedFee || null;
-    if (r.code !== 0) return { ok: false, error: `exit ${r.code}: ${r.stderr || 'no output'}`, doc: r.json, sentFee };
+    // `doc` names what may have gone out (its covenant ids and states): the --yes run's plan, else the dry run's.
+    if (r.code !== 0) return { ok: false, error: `exit ${r.code}: ${r.stderr || 'no output'}`, doc: r.json ?? planDoc, sentFee };
     const doc = r.json;
     if (doc?.links) {
       // Merge: a summary with one link per transaction.
@@ -122,9 +128,33 @@ export class Kob {
     };
   }
 
-  /** A GTD limit order: `gtd` is the expiry as a UTC time (gtdArg), null for a 90-day GTC. */
+  /**
+   * A GTD limit order: `gtd` is the expiry as a UTC time (gtdArg), null for a 90-day GTC. It names
+   * the config's decimals: the CLI needs them for a token whose decimals only the indexer names,
+   * and refuses them when another source names others (R2-T3). `kob replace` reads the order's own
+   * scale and takes no --decimals.
+   */
+  placeArgs(tokenId, side, amountBase, priceSompi, gtd = null) {
+    const dec = this.cfg.token?.decimals;
+    return ['place', 'limit', '--token', tokenId, '--side', side, '--amount', `${amountBase}base`, '--price', `${priceSompi}sompi`,
+      ...(dec != null ? ['--decimals', String(dec)] : []), ...(gtd ? ['--gtd', gtd] : [])];
+  }
+
   place(tokenId, side, amountBase, priceSompi, gtd = null) {
-    return this.sign(['place', 'limit', '--token', tokenId, '--side', side, '--amount', `${amountBase}base`, '--price', `${priceSompi}sompi`, ...(gtd ? ['--gtd', gtd] : [])]);
+    return this.sign(this.placeArgs(tokenId, side, amountBase, priceSompi, gtd));
+  }
+
+  /** Whether the CLI would plan this placement now (a dry run, nothing signed): { ok, error }. */
+  async probePlace(tokenId, side, amountBase, priceSompi, gtd = null) {
+    const r = await this.exec([...this.placeArgs(tokenId, side, amountBase, priceSompi, gtd), '--dry-run']);
+    const errs = (r.json?.issues ?? []).filter((i) => i.severity === 'error');
+    return r.code === 0 && !errs.length ? { ok: true } : { ok: false, error: `exit ${r.code}: ${errs.map((i) => `${i.code} ${i.message}`).join('; ') || r.stderr || 'no output'}` };
+  }
+
+  /** The CLI's version line (`kob --version`), null when it does not answer. */
+  async version() {
+    const r = await this.exec(['--version'], { bare: true });
+    return r.code === 0 ? r.stdout.trim() || null : null;
   }
 
   /** An amend in place to a new price and, with `gtd`, a new expiry. */
@@ -137,26 +167,26 @@ export class Kob {
   }
 
   /**
-   * Cancels every order of a saved page of indexer views (`kob cancel --view`: checked on the node,
-   * no indexer). Returns { ok, ids (cancels sent or planned), fee, error }.
+   * `kob recover` over a file of the bot's own order records (R2-T1). Each order is looked up on the
+   * node at the script its state makes; a partial fill is followed through the `--amount-left`
+   * hints and the CLI's bounded search. No indexer is read. `cancel` also cancels every live one
+   * (--yes, or --dry-run when dry). Returns { ok, orders (the report's entries), error }.
    */
-  async cancelViews(file) {
-    const r = await this.exec(['cancel', '--view', file, ...(this.cfg.cli.priorityFee ? ['--priority-fee'] : []), this.dryRun ? '--dry-run' : '--yes']);
-    const sent = r.docs.filter((d) => this.dryRun || d?.result?.status === 'submitted');
-    const ids = sent.map((d) => /^cancel ([0-9a-f]{64})/.exec(d.action ?? '')?.[1]).filter(Boolean);
-    const fee = sent.reduce((s, d) => s + Number(d.result?.fee ?? d.transaction?.fee ?? 0), 0);
-    return { ok: r.code === 0, ids, fee, txids: sent.map((d) => d.result?.txid).filter(Boolean), error: r.code === 0 ? null : `exit ${r.code}: ${r.stderr || 'no output'}` };
-  }
-
-  /**
-   * Whether the order of a saved view still sits at the view's UTXO on the node: a dry run of
-   * `kob cancel --view` (no indexer, nothing signed). 'live', 'gone' (refused as stale: the UTXO is
-   * spent, the order ended or moved) or 'unknown' (the node did not answer).
-   */
-  async viewLive(file) {
-    const r = await this.exec(['cancel', '--view', file, '--dry-run']);
-    if (r.code === 0 && r.docs.some((d) => /^cancel [0-9a-f]{64}/.test(d?.action ?? ''))) return 'live';
-    return /stale view/.test(r.stderr) ? 'gone' : 'unknown';
+  async recover(file, { maker = null, hints = {}, cancel = false } = {}) {
+    const a = ['recover', '--from', file, '--network', this.cfg.network];
+    if (this.cfg.node) a.push('--node', this.cfg.node);
+    if (maker) a.push('--maker', maker);
+    for (const [id, n] of Object.entries(hints)) if (Number.isSafeInteger(n) && n > 0) a.push('--amount-left', `${id}=${n}`);
+    if (cancel) {
+      a.push('--cancel');
+      if (this.cfg.keyFile) a.push('--key-file', this.cfg.keyFile);
+      if (this.cfg.cli.priorityFee) a.push('--priority-fee');
+      a.push(this.dryRun ? '--dry-run' : '--yes');
+    }
+    const r = await this.exec(a, { bare: true });
+    const report = r.docs.find((d) => Array.isArray(d?.orders));
+    if (!report) return { ok: false, orders: [], error: `kob recover: exit ${r.code}: ${r.stderr || 'no report'}` };
+    return { ok: true, orders: report.orders, error: r.code === 0 ? null : `kob recover: exit ${r.code}: ${r.stderr || 'a cancel failed'}` };
   }
 
   merge(tokenId) {

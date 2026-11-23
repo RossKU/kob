@@ -8,17 +8,24 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { Bot } from '../src/bot.mjs';
 import { DEFAULTS } from '../src/config.mjs';
-import { Kob } from '../src/kob.mjs';
+import { cutMiddle, Kob } from '../src/kob.mjs';
 import { paths } from '../src/store.mjs';
 
 const TOKEN = '01'.repeat(32);
 const MAKER = 'a1d9fd1347128011ad0036b077949d63274d5d3b8ac8351776c30c945ef2c2fb'; // an address vector of cli.test.mjs
+const TPL = { KobAsk: 'a5'.repeat(32), KobBid: 'b5'.repeat(32) }; // fake-kob.mjs: the template hashes of this build
+const stateOf = (o) => {
+  const st = { maker: MAKER, tokenCovId: TOKEN, scale: '1000000', price: String(o.price), extensionCommitment: '00'.repeat(32) };
+  return o.side === 1 ? { kind: 'KobAsk', state: { ...st, amountLeft: String(o.amount) } } : { kind: 'KobBid', state: st };
+};
 
 let kasUsd = 0.025; // what every venue trades at; the tests move it
 let venuesDown = false;
 let indexerDown = false;
 let usdcUsd = 1.0; // Kraken USDC/USD; the tests move it out of the peg band (null: Kraken does not quote it)
 let hiddenIds = new Set(); // orders a lying indexer leaves out of every answer (T-4)
+let showOnly = null; // a Set: the indexer lists only these ids (every new order is never listed, R2-T1 case A)
+let staleViews = new Map(); // id -> a view a lying indexer keeps serving (R2-T1 case C), listed even once the order ended
 let indexerAheadMs = 0; // the indexer judges expiry this far in the future (time passing while the bot is dead)
 
 /**
@@ -39,6 +46,8 @@ function venueResponse(url) {
   throw new Error(`no stub for ${url}`);
 }
 
+const hidden = (id) => hiddenIds.has(id) || (showOnly != null && !showOnly.has(id));
+
 function stubFetch(chainFile) {
   globalThis.fetch = async (url) => {
     const u = String(url);
@@ -46,13 +55,18 @@ function stubFetch(chainFile) {
     if (u.startsWith('http://indexer.test')) {
       if (indexerDown) throw new Error('fetch failed');
       const c = JSON.parse(readFileSync(chainFile, 'utf8'));
-      const view = (id, o, status) => ({ covenant_id: id, contract: o.side === 1 ? 'KobAsk' : 'KobBid', side: o.side, token: c.token, scale: 1_000_000,
+      const view = (id, o, status) => staleViews.get(id) ?? ({ covenant_id: id, contract: o.side === 1 ? 'KobAsk' : 'KobBid', side: o.side, token: c.token, scale: 1_000_000,
+        template_hash: TPL[o.side === 1 ? 'KobAsk' : 'KobBid'], state_known: true, state: stateOf(o),
         price: String(o.price), amount_left: String(o.side === 1 ? o.amount : Math.floor((o.value - 1e8) * 1e6 / o.price)), current: { txid: o.txid, index: 0, value: String(o.value) }, status,
         expired: o.expiresAt != null && Date.now() + indexerAheadMs >= o.expiresAt });
-      if (u.includes('/v1/orders?')) return json({ items: Object.entries(c.orders).filter(([id]) => !hiddenIds.has(id)).map(([id, o]) => view(id, o, 'open')), next_cursor: null });
+      if (u.includes('/v1/orders?')) {
+        const items = Object.entries(c.orders).filter(([id]) => !hidden(id)).map(([id, o]) => view(id, o, 'open'));
+        for (const [id, v] of staleViews) if (!c.orders[id]) items.push(v);
+        return json({ items, next_cursor: null });
+      }
       if (u.includes('/v1/fills')) return json({ items: [], next_cursor: null });
       const id = u.split('/v1/orders/')[1];
-      if (hiddenIds.has(id)) return json({ error: 'not_found' }, 404);
+      if (hidden(id)) return json({ error: 'not_found' }, 404);
       if (c.orders[id]) return json(view(id, c.orders[id], 'open'));
       if (c.ended[id]) return json({ covenant_id: id, side: 1, status: c.ended[id], current: null });
       return json({ error: 'not_found' }, 404);
@@ -62,7 +76,7 @@ function stubFetch(chainFile) {
   };
 }
 
-function setup() {
+function setup(safety = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'mm-bot-cycle-'));
   const chainFile = join(dir, 'chain.json');
   // 30,000 KAS and 600 tokens in 2 UTXOs (a merge is due before the first ask).
@@ -76,7 +90,7 @@ function setup() {
     ...DEFAULTS, network: 'testnet-10', indexer: 'http://indexer.test', kobCli: process.execPath, keyFile: join(dir, 'bot.key'), dataDir: dir,
     token: { ...DEFAULTS.token, covenantId: TOKEN, decimals: 6, label: 'TUSDC6' },
     reference: { ...DEFAULTS.reference, crossCheck: { ...DEFAULTS.reference.crossCheck, enabled: false } },
-    safety: { ...DEFAULTS.safety, resumeAfterSec: 0, placeGapSec: 0 },
+    safety: { ...DEFAULTS.safety, resumeAfterSec: 0, placeGapSec: 0, ...safety },
   };
   const bot = new Bot(cfg);
   bot.log.quiet = true;
@@ -192,29 +206,30 @@ test('one side without inventory idles alone, with a deposit message; the other 
   assert.match(asks.message, /^Insufficient TUSDC6 \(0101.*\): asks need 45% = 450 USD = 450 TUSDC6, 0 TUSDC6 \(0%\) held; deposit 450 TUSDC6 to kaspatest:qzsanlgngufgqyddqqmtqau5n43jwn2a8w9vsdghwmpse9z77tp0kmzydclw7 to resume asks\.$/);
 });
 
-test('STOP with the indexer down: the quotes are cancelled from the saved views through the node (sec-ops MM-4)', { timeout: 60_000 }, async () => {
+test('STOP with the indexer down: the quotes are cancelled through the node from the bot\'s own records (sec-ops MM-4, R2-T1)', { timeout: 60_000 }, async () => {
   kasUsd = 0.025;
   venuesDown = false;
   indexerDown = false;
   const { bot, chain, calls } = setup();
   await bot.cycle();
   await bot.cycle();
-  await bot.cycle(); // the views of all six quotes are saved
+  await bot.cycle();
   const ids = Object.keys(chain().orders).sort();
   assert.equal(ids.length, 6);
-  const saved = JSON.parse(readFileSync(paths(bot.cfg.dataDir).views, 'utf8')).items.map((v) => v.covenant_id).sort();
-  assert.deepEqual(saved, ids);
+  // Every order carries the state and outpoint its own placement produced.
+  for (const id of ids) assert.equal(bot.state.orders[id].own.txid, chain().orders[id].txid);
   indexerDown = true;
   try {
     writeFileSync(bot.p.stop, 'stop\n');
     await assert.rejects(bot.cycle(), /fetch failed/);
-    const blind = calls().filter((a) => a[0] === 'cancel' && a.includes('--view'));
-    assert.equal(blind.length, 1, 'one kob cancel --view --yes');
+    const blind = calls().filter((a) => a[0] === 'recover' && a.includes('--cancel'));
+    assert.equal(blind.length, 1, 'one kob recover --cancel --yes');
+    assert.equal(Object.keys(chain().orders).length, 0, 'cancelled on chain');
     assert.ok(ids.every((id) => bot.state.orders[id].pending?.kind === 'cancel'));
     assert.equal(bot.state.mode.mode, 'STOPPING');
     // The next failed cycle does not send the cancels again within orderVisibleTimeoutSec.
     await assert.rejects(bot.cycle(), /fetch failed/);
-    assert.equal(calls().filter((a) => a[0] === 'cancel' && a.includes('--view')).length, 1);
+    assert.equal(calls().filter((a) => a[0] === 'recover' && a.includes('--cancel')).length, 1);
   } finally {
     indexerDown = false;
     rmSync(bot.p.stop, { force: true });
@@ -231,7 +246,7 @@ test('the indexer down while quoting normally: nothing is cancelled blind', { ti
   indexerDown = true;
   try {
     await assert.rejects(bot.cycle(), /fetch failed/);
-    assert.equal(calls().filter((a) => a[0] === 'cancel').length, 0, 'no pull is due');
+    assert.equal(calls().filter((a) => a[0] === 'cancel' || a[0] === 'recover').length, 0, 'no pull is due');
   } finally {
     indexerDown = false;
   }
@@ -307,7 +322,19 @@ test('quotes expire lifeMin after their last action, are renewed in place after 
   const viewed = JSON.parse(JSON.stringify(c.orders));
   assert.ok(Object.values(viewed).every((o) => Date.now() + indexerAheadMs >= o.expiresAt), 'all lapsed');
 
-  // A restart finds them expired and renews each in place at once, with no cancel and no new order.
+  // The indexer's 'expired' flag alone moves nothing: the expiry is the bot's own record (T-8).
+  const early = new Bot(bot.cfg);
+  early.log.quiet = true;
+  early.kob = bot.kob;
+  const n0 = calls().length;
+  await early.cycle();
+  assert.equal(calls().length, n0, 'no renewal on the indexer\'s word');
+
+  // A restart once the bot's own record has lapsed renews each in place at once, with no cancel
+  // and no new order.
+  const st = JSON.parse(readFileSync(paths(dir).state, 'utf8'));
+  for (const o of Object.values(st.orders)) o.expiresAt -= life + MIN;
+  writeFileSync(paths(dir).state, JSON.stringify(st));
   const again = new Bot(bot.cfg);
   again.log.quiet = true;
   again.kob = bot.kob;
@@ -320,7 +347,7 @@ test('quotes expire lifeMin after their last action, are renewed in place after 
   assert.deepEqual(Object.keys(chain().orders).sort(), ids);
   assert.ok(Object.values(chain().orders).every((o) => o.expiresAt > Date.now() + life - 5_000));
   const actions = readFileSync(paths(dir).actions, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-  assert.ok(actions.some((a) => a.type === 'amend' && a.renewOnly && a.reason === 'renew: past its expiry' && a.gtd));
+  assert.ok(actions.some((a) => a.type === 'amend' && a.renewOnly && /^renew: expiry due/.test(a.reason) && a.gtd));
 });
 
 test('renewals keep the founder rules: the peg band idles and resumes, the fee cap idles, alerts go to alerts.jsonl, the bot never stops', { timeout: 90_000 }, async () => {
@@ -365,7 +392,7 @@ test('renewals keep the founder rules: the peg band idles and resumes, the fee c
   await bot.cycle();
   assert.equal(`${bot.state.mode.mode}/${bot.state.mode.reason}`, 'IDLE/fee-cap');
   const sent = calls().slice(m);
-  assert.ok(sent.every((a) => a[0] === 'cancel'), sent.map((a) => a[0]).join(','));
+  assert.ok(sent.every((a) => a[0] === 'recover' && a.includes('--cancel')), sent.map((a) => a[0]).join(','));
   assert.equal(Object.keys(chain().orders).length, 0);
   assert.ok(alerts().some((a) => a.reason === 'fee-cap'));
   await bot.cycle();
@@ -449,11 +476,11 @@ test('the indexer down while fair drifts past half the spread: the quotes are pu
     // 0.3 %: within half the 1 % spread, and no jump: nothing is cancelled.
     kasUsd = 0.025 / 1.003;
     await assert.rejects(bot.cycle(), /fetch failed/);
-    assert.equal(calls().filter((a) => a[0] === 'cancel').length, 0);
+    assert.equal(calls().filter((a) => a[0] === 'cancel' || a[0] === 'recover').length, 0);
     // 0.6 %: every quote would sit past fair; pulled from the saved views, the mode left as it is.
     kasUsd = 0.025 / 1.006;
     await assert.rejects(bot.cycle(), /fetch failed/);
-    assert.equal(calls().filter((a) => a[0] === 'cancel' && a.includes('--view')).length, 1);
+    assert.equal(calls().filter((a) => a[0] === 'recover' && a.includes('--cancel')).length, 1);
     assert.equal(Object.keys(chain().orders).length, 0);
     assert.equal(bot.state.mode.mode, 'QUOTING');
   } finally {
@@ -497,4 +524,153 @@ test('no live USDC/USD and no fallback (the default): IDLE, nothing quoted, and 
   } finally {
     usdcUsd = 1.0;
   }
+});
+
+// R2-T1: the bot tracks every order by the outpoint its own place or amend produced, never by the
+// indexer's listing.
+const reset = () => {
+  kasUsd = 0.025;
+  venuesDown = false;
+  indexerDown = false;
+  usdcUsd = 1.0;
+  indexerAheadMs = 0;
+  hiddenIds = new Set();
+  showOnly = null;
+  staleViews = new Map();
+};
+const places = (calls) => calls().filter((a) => a[0] === 'place');
+
+test('a placed order the indexer never lists is kept, counted and not placed again (R2-T1 case A)', { timeout: 60_000 }, async () => {
+  reset();
+  showOnly = new Set(); // the indexer lists nothing, ever: no template can be learned either
+  const { bot, chain, calls, dir } = setup({ orderVisibleTimeoutSec: 0 });
+  try {
+    for (let i = 0; i < 5; i++) await bot.cycle();
+    assert.equal(Object.keys(chain().orders).length, 6, 'three bids and three asks on chain');
+    assert.equal(places(calls).length, 6, 'each level placed once');
+    assert.equal(Object.keys(bot.state.orders).length, 6, 'all kept in the state file');
+    assert.ok(alertsOf(dir).some((a) => a.reason === 'node-unconfirmed'));
+  } finally {
+    reset();
+  }
+});
+
+test('the capital cap holds while the indexer never lists the new orders (R2-T1 case A)', { timeout: 120_000 }, async () => {
+  reset();
+  const { bot, chain, calls } = setup({ orderVisibleTimeoutSec: 0 });
+  try {
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    assert.equal(Object.keys(chain().orders).length, 6);
+    assert.ok(Object.values(bot.state.templates.kinds).every((k) => k.verified), 'templates proven on the node');
+    showOnly = new Set(Object.keys(chain().orders)); // from now on no new order is ever listed
+    // Pull and quote again: every new order is one the indexer never shows.
+    venuesDown = true;
+    await bot.cycle();
+    await bot.cycle();
+    venuesDown = false;
+    const cap = Math.floor((1000 * 0.5) / 0.025) * 1e8; // maxBidPct of capitalUsd in sompi
+    for (let i = 0; i < 8; i++) {
+      await bot.cycle();
+      const c = chain();
+      const bids = Object.values(c.orders).filter((o) => o.side === 2);
+      assert.ok(Object.keys(c.orders).length <= 6, `at most the ladder on chain (cycle ${i}: ${Object.keys(c.orders).length})`);
+      assert.ok(bids.reduce((a, o) => a + o.value - 1e8, 0) <= cap, 'bid escrow within the cap');
+      for (const id of Object.keys(c.orders)) assert.ok(bot.state.orders[id], `order ${id} on chain is tracked`);
+    }
+    assert.ok(places(calls).length > 6, 'levels are quoted again once the node shows the hidden ones cancelled');
+  } finally {
+    reset();
+  }
+});
+
+test('an amended order the indexer hides is kept and cancelled through the node (R2-T1 case B)', { timeout: 60_000 }, async () => {
+  reset();
+  const { bot, chain, dir } = setup();
+  try {
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const id = Object.keys(chain().orders).sort()[0];
+    kasUsd = 0.025 / 1.004; // every quote is amended in place
+    await bot.cycle();
+    assert.equal(bot.state.orders[id].own.txid, chain().orders[id].txid, 'the amend\'s outpoint is the bot\'s record');
+    hiddenIds = new Set([id]); // the indexer drops it (or calls it filled)
+    await bot.cycle();
+    assert.ok(bot.state.orders[id], 'not forgotten');
+    assert.equal(bot.state.orders[id].pending?.kind, 'cancel');
+    assert.equal(chain().orders[id], undefined, 'cancelled on chain from the bot\'s own record');
+    assert.ok(alertsOf(dir).some((a) => a.reason === 'indexer-hides'));
+    bot.state.orders[id].pending.since -= 200_000;
+    await bot.cycle();
+    assert.equal(bot.state.orders[id], undefined, 'gone once the node shows it spent');
+  } finally {
+    reset();
+  }
+});
+
+test('STOP cancels an order whose indexer view is stale and ends (R2-T1 case C)', { timeout: 60_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  try {
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const id = Object.keys(chain().orders).sort()[0];
+    const before = (await (await fetch('http://indexer.test/v1/orders?maker=x&status=active&limit=100')).json()).items.find((v) => v.covenant_id === id);
+    kasUsd = 0.025 / 1.004;
+    await bot.cycle(); // amended in place
+    staleViews = new Map([[id, before]]); // the indexer keeps showing the pre-amend outpoint, forever
+    writeFileSync(bot.p.stop, 'stop\n');
+    let r;
+    for (let i = 0; i < 6 && r !== 'stopped'; i++) {
+      r = await bot.cycle();
+      for (const s of Object.values(bot.state.orders)) if (s.pending) s.pending.since -= 200_000;
+    }
+    assert.equal(r, 'stopped');
+    assert.equal(Object.keys(chain().orders).length, 0, 'nothing left on chain');
+  } finally {
+    rmSync(bot.p.stop, { force: true });
+    reset();
+  }
+});
+
+// R2-T3: every placement names --decimals; refused placements idle the bot with an alert, and it
+// resumes by itself.
+test('placements refused by the CLI raise an alert and IDLE, and resume by themselves (R2-T3)', { timeout: 60_000 }, async () => {
+  reset();
+  const { bot, chain, calls, dir } = setup();
+  bot.kob.env.FAKE_KOB_REFUSE_PLACE = '1';
+  try {
+    await bot.cycle();
+    await bot.cycle();
+    assert.equal(`${bot.state.mode.mode}/${bot.state.mode.reason}`, 'IDLE/placement');
+    assert.ok(alertsOf(dir).some((a) => a.reason === 'placement' && a.level === 'error'));
+    await bot.cycle();
+    assert.equal(bot.state.mode.mode, 'IDLE', 'never stops by itself');
+    delete bot.kob.env.FAKE_KOB_REFUSE_PLACE;
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    assert.equal(bot.state.mode.mode, 'QUOTING');
+    assert.ok(Object.keys(chain().orders).length > 0);
+    const placed = readFileSync(process.env.FAKE_KOB_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((a) => a[0] === 'place');
+    assert.ok(placed.length && placed.every((a) => a[a.indexOf('--decimals') + 1] === '6'), 'every placement names --decimals');
+    assert.ok(calls().length > 0);
+  } finally {
+    delete bot.kob.env.FAKE_KOB_REFUSE_PLACE;
+    reset();
+  }
+});
+
+// T-7: a placement or amend that would meet the bot's own order on the other side is skipped.
+test('the bot never sends a quote that meets its own (T-7)', () => {
+  reset();
+  const { bot } = setup();
+  bot.state.orders = { a: { side: 'sell', price: 4020000000 }, b: { side: 'buy', price: 3980000000 } };
+  assert.equal(bot.crossesOwn({ kind: 'amend', id: 'b', side: 'buy', price: 4020000000 }), 4020000000);
+  assert.equal(bot.crossesOwn({ kind: 'amend', id: 'b', side: 'buy', price: 4019999999 }), null);
+  assert.equal(bot.crossesOwn({ kind: 'place', side: 'sell', price: 3980000000 }), 3980000000);
+  assert.equal(bot.crossesOwn({ kind: 'cancel', id: 'a', side: 'sell' }), null);
+});
+
+test('a long stderr keeps its last line, where the CLI says what failed (T-13)', () => {
+  const long = `${'x'.repeat(5000)} | error: submit: socket closed`;
+  const cut = cutMiddle(long, 600);
+  assert.equal(cut.length, 600);
+  assert.ok(cut.endsWith('error: submit: socket closed'));
+  assert.equal(cutMiddle('short', 600), 'short');
 });

@@ -52,7 +52,7 @@ export const DEFAULTS = {
     resizeBelow: 0.5, // cancel and place again an order left with less than this share of its level
     askCarrierMinKas: 0.2, // an ask's amend is paid from its carrier: below this it is cancelled and placed again
     mergeAboveUtxos: 1, // merge the free token UTXOs before placing an ask when there are more than this (the limit is 3 inputs)
-    lifeMin: 90, // every quote is placed and amended with an expiry this far ahead (kob --gtd): the quotes of a dead bot lapse (soft: conforming matchers stop, a refund ends them)
+    lifeMin: 90, // every quote is placed and amended with an expiry this far ahead (kob --gtd): conforming matchers stop filling a dead bot's quotes past it; they stay fillable until a refund ends them (soft)
     renewAfterMin: 45, // a quote not amended for this long is amended in place to a fresh expiry (a reprice renews it too)
     skew: { enabled: false, maxShift: 0.002, targetTokenShare: 0.5 },
   },
