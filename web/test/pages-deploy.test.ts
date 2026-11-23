@@ -28,6 +28,24 @@ describe('pages-config: config.json from the repository variables', () => {
     expect(patch).toMatchObject({ network: 'testnet-10', indexerUrl: IDX, nodeUrl: '', extraIndexerUrls: config!.extraIndexerUrls });
   });
 
+  it('KOB_PAGES_INCIDENT_*: an incident banner the app takes without a warning; a wrong one is an error', () => {
+    const { config, errors } = pagesConfig({ KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_INCIDENT_MESSAGE: ' Indexer maintenance:\n books may lag. ', KOB_PAGES_INCIDENT_SINCE: '2026-11-23T10:00Z', KOB_PAGES_INCIDENT_URL: 'https://status.example.org/1' });
+    expect(errors).toEqual([]);
+    expect(config!.incident).toEqual({ message: 'Indexer maintenance: books may lag.', since: '2026-11-23T10:00Z', url: 'https://status.example.org/1' });
+    const warnings: ConfigWarning[] = [];
+    const patch = sanitizeLayer('config.json', JSON.parse(JSON.stringify(config)), false, warnings);
+    expect(warnings).toEqual([]);
+    expect(patch.incident).toEqual({ message: 'Indexer maintenance: books may lag.', since: '2026-11-23T10:00:00.000Z', url: 'https://status.example.org/1' });
+    // unset: no incident
+    expect(pagesConfig({ KOB_PAGES_INDEXER_URL: IDX }).config).not.toHaveProperty('incident');
+    for (const env of [
+      { KOB_PAGES_INCIDENT_URL: 'https://status.example.org' },
+      { KOB_PAGES_INCIDENT_MESSAGE: 'x', KOB_PAGES_INCIDENT_URL: 'http://status.example.org' },
+      { KOB_PAGES_INCIDENT_MESSAGE: 'x', KOB_PAGES_INCIDENT_SINCE: 'yesterday' },
+      { KOB_PAGES_INCIDENT_MESSAGE: 'x'.repeat(281) },
+    ]) expect(pagesConfig({ KOB_PAGES_INDEXER_URL: IDX, ...env }).errors.join(' '), JSON.stringify(env)).toContain('KOB_PAGES_INCIDENT');
+  });
+
   it('a node URL without its wRPC path gets a note (a bare public host answers 404 at the handshake); with the path none', () => {
     const note = (nodeUrl: string) => pagesConfig({ KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_NODE_URL: nodeUrl }).notes.filter((n) => n.startsWith('KOB_PAGES_NODE_URL'));
     expect(note('wss://node.example.org')).toEqual([expect.stringContaining('has no /wrpc/ path; a public node needs the whole endpoint, e.g. wss://<host>/kaspa/testnet-10/wrpc/json')]);

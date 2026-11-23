@@ -11,7 +11,7 @@ import { LandingPage } from '../ui/landing/LandingPage';
 import { homeTargetOf, showsLanding } from '../ui/landing/landing-model';
 import { OrdersView } from '../ui/orders/OrdersView';
 import { SettingsView } from '../ui/settings/SettingsView';
-import { NetworkMismatchBanner } from '../ui/shell/Banners';
+import { IncidentBanner, NetworkMismatchBanner } from '../ui/shell/Banners';
 import { DisclaimerPage } from '../ui/shell/DisclaimerPage';
 import { SiteFooter, SkipLink } from '../ui/shell/Frame';
 import { Header } from '../ui/shell/Header';
@@ -219,6 +219,7 @@ function AppShell(props: { route: Route; routeKey: string; warnings: ConfigWarni
           </ViewBoundary>
           <main class="container main" id="main" tabIndex={-1} data-testid="main" data-route={routeKey}>
             <ViewBoundary resetKey={routeKey}>
+              <IncidentBanner />
               <NetworkMismatchBanner />
             </ViewBoundary>
             <ViewBoundary resetKey={routeKey}>

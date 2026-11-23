@@ -81,6 +81,9 @@ export default {
   'shell.health.stopped': 'stopped',
   'shell.health.standalone': 'not used (standalone mode)',
 
+  'shell.incident.title': 'Service notice',
+  'shell.incident.since': '(since {time})',
+  'shell.incident.more': 'More',
   'shell.banner.indexerTitle': 'Order book data may be out of date',
   'shell.banner.unreachable': 'The indexer cannot be reached: books, trades and order status may be missing or old. Cancelling your orders still works.',
   'shell.banner.lagging': 'The indexer is behind the chain by {lag}. Prices and order status shown may be older than the chain.',

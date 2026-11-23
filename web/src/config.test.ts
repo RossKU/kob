@@ -42,7 +42,7 @@ describe('mergeConfig', () => {
       features: { kastle: false, test: false, priorityFee: false }, fees: { dynamic: true, maxRate: 1000, maxFeeKas: 1 }, allowQueryOverrides: false,
       quoteTokens: {}, home: 'landing', explorerUrl: '', tokenNamesUrl: 'https://kascov.io/data', marketStartToleranceBps: 1000,
       logoBlocklistUrl: '', ipfsGatewayUrl: 'https://dweb.link/ipfs', standalone: { manual: false, auto: true, autoReturn: true },
-      deploymentNetwork: 'mainnet', hostNetwork: 'mainnet', serverNetworks: ['mainnet'], lockNetwork: false,
+      deploymentNetwork: 'mainnet', hostNetwork: 'mainnet', serverNetworks: ['mainnet'], lockNetwork: false, incident: null,
     });
     expect(DEFAULT_CONFIG.features.kastle).toBe(false);
   });
@@ -552,5 +552,38 @@ describe('per-network servers (`networks`) and the default network by host name 
     const fetchJson = (async () => new Response(JSON.stringify(launch))) as unknown as typeof fetch;
     const c = await loadConfig({ fetch: fetchJson, injected: undefined, storage: new MemStorage(), search: '', hostname: 'kob-tn10.example' });
     expect(c).toMatchObject(tn10);
+  });
+});
+
+describe('incident: an operator notice from the deployment (audit 2026-11-23, founder decision: banner only)', () => {
+  it('is read from config.json only, as plain text, with an optional date and https link', () => {
+    const r = resolveConfig({ file: { incident: { message: '  Indexer  maintenance:\nbooks may lag.  ', since: '2026-11-23T10:00:00Z', url: 'https://status.example/incident/1?x=1' } } });
+    expect(r.warnings).toEqual([]);
+    expect(r.config.incident).toEqual({ message: 'Indexer maintenance: books may lag.', since: '2026-11-23T10:00:00.000Z', url: 'https://status.example/incident/1?x=1' });
+    expect(resolveConfig({ file: { incident: { message: 'Down' } } }).config.incident).toEqual({ message: 'Down', since: null, url: null });
+    // a link or a stored setting cannot set one
+    const s = resolveConfig({ settings: { incident: { message: 'fake' } } });
+    expect(s.config.incident).toBeNull();
+    expect(s.warnings.map((w) => w.field)).toEqual(['incident']);
+    expect(mergeConfig().incident).toBeNull();
+  });
+
+  it('a malformed one is ignored with a warning, never breaks the config', () => {
+    for (const bad of [
+      'text', null, {}, { message: '' }, { message: '   ' }, { message: 5 }, { message: 'x', url: 'http://status.example' }, { message: 'x', url: 'javascript:alert(1)' },
+      { message: 'x', url: 'https://u:p@status.example' }, { message: 'x', since: 'yesterday' }, { message: 'x', since: 5 }, { message: 'x', html: '<b>' },
+    ]) {
+      const r = resolveConfig({ file: { indexerUrl: 'https://idx.example', incident: bad } });
+      expect(r.config.incident, JSON.stringify(bad)).toBeNull();
+      expect(r.config.indexerUrl).toBe('https://idx.example');
+      expect(r.warnings.map((w) => w.field)).toContain('incident');
+    }
+  });
+
+  it('markup stays text, invisible and control characters go, and a long message is cut', () => {
+    expect(resolveConfig({ file: { incident: { message: '<img src=x onerror=alert(1)>‮evil\u0007' } } }).config.incident!.message).toBe('<img src=x onerror=alert(1)> evil');
+    const long = resolveConfig({ file: { incident: { message: 'a'.repeat(1000) } } }).config.incident!.message;
+    expect([...long]).toHaveLength(280);
+    expect(long.endsWith('…')).toBe(true);
   });
 });
