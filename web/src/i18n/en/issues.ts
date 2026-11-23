@@ -188,6 +188,7 @@ export default {
   'issues.lock-coin-auto': "Output {output}: {amount} go to your automatic creator lock; they come back with the tokens after {date}, less the release fee.",
   'issues.release-kas': "{amount} of your creator lock's coin come back to you.",
   'issues.swept-in-place': 'Input {input}: the order continues unchanged at output {output}; only its {utxos} stray token UTXO(s) return to you.',
+  'issues.swept-in-place-kas': 'Input {input}: the order continues at output {output} under the same terms, holding {now} KAS instead of {was} KAS; only its {utxos} stray token UTXO(s) return to you.',
   'issues.claim-invalid': 'Input {input}: not a valid claim of the order\'s bought tokens ({reason}). Not signing.',
   'issues.bought-custody-lost': 'Input {input}: the cancel ends the order but leaves its bought tokens behind, where nothing can move them again. Not signing.',
   'issues.expected-claim-ids': 'The plan claims from {expected} order(s), the transaction from {actual}. Not signing.',

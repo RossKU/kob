@@ -94,7 +94,9 @@ describe('planSweep: the order continues under the same script, its strays retur
     expect(s.spends).toHaveLength(1);
     expect(s.spends[0]).toMatchObject({ action: 'sweep', strays: 12n, sweptTo: { output: 0, utxos: 3, kas: 25n * KAS } });
     expect(s.spends[0]!.otherStrays.map((x) => [x.ref.covenantId, x.amount, x.foreign])).toEqual([[EIGHT.covenantId, 300n, true]]);
-    expect(codes(s.info)).toEqual(expect.arrayContaining(['swept-in-place', 'strays-swept', 'other-strays-swept']));
+    // a plain ask's sweep pays its fee from the order's carrier, so the KAS on it is said; a funded
+    // one keeps it and continues unchanged
+    expect(codes(s.info)).toEqual(expect.arrayContaining([ask ? 'swept-in-place-kas' : 'swept-in-place', 'strays-swept', 'other-strays-swept']));
     // the tokens come back to the maker; nothing goes to anyone else
     const byToken = new Map(s.net.tokens.map((x) => [x.ref.covenantId, x]));
     expect(byToken.get(tokenCovIdOf(snap.order.state))).toMatchObject({ released: 12n, toMaker: 12n, toOthers: 0n });
@@ -125,7 +127,23 @@ describe('planSweep: the order continues under the same script, its strays retur
     expect(tokenLabel(sp.otherStrays[0]!.ref, tr, registry)).toBe('81818181…81818181');
     expect(sp.otherStrays[0]!.ref.covenantId).toBe(ALIEN.covenantId);
     // 3 stray UTXOs and their 25 KAS return to the maker; the order continues at output 0
-    expect(sp.sweptTo).toEqual({ output: 0, utxos: 3, kas: 25n * KAS });
+    expect(sp.sweptTo).toMatchObject({ output: 0, utxos: 3, kas: 25n * KAS });
+  });
+
+  it('"continues unchanged" only when the continuation keeps the order input\'s KAS; else it says both values (R2B-I5)', () => {
+    const plan = planSweep(env(), withStrays(snapOf('create.ask'), [foreignGroup(snapOf('create.ask'), EIGHT, [300n], 0xa1)]));
+    const built = plan.built!;
+    const same = decode(built, plan.expected);
+    const kept = BigInt(built.tx.outputs[0]!.value) === BigInt(built.tx.inputs[0]!.utxo.amount);
+    expect(codes(same.info)).toContain(kept ? 'swept-in-place' : 'swept-in-place-kas');
+    const b = clone(built);
+    b.tx.outputs[0]!.value = String(BigInt(b.tx.inputs[0]!.utxo.amount) - 1000n);
+    const moved = decode(b, plan.expected);
+    expect(codes(moved.info)).toContain('swept-in-place-kas');
+    expect(codes(moved.info)).not.toContain('swept-in-place');
+    const f = moved.info.find((x) => x.code === 'swept-in-place-kas')!;
+    expect(f.message).toMatch(/KAS/);
+    expect(f.message).not.toMatch(/unchanged/);
   });
 
   it('a bid needs a wallet coin; without one the plan says so', () => {

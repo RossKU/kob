@@ -110,7 +110,7 @@ export const SIGNING_ISSUE_CODES = [
   // warnings
   'inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records',
   // info
-  'payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed', 'take-fills', 'unlock-tokens', 'lock-coin',
+  'payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'swept-in-place-kas', 'bought-claimed', 'take-fills', 'unlock-tokens', 'lock-coin',
   'lock-coin-auto', 'release-kas',
 ] as const;
 /** The code of a signing finding. */
@@ -123,7 +123,7 @@ const LEVEL: Record<SigningIssueCode, IssueLevel> = Object.fromEntries(
     c,
     (['inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records'] as string[]).includes(c)
       ? 'warning'
-      : (['payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed', 'take-fills', 'unlock-tokens', 'lock-coin', 'lock-coin-auto', 'release-kas'] as string[]).includes(c)
+      : (['payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'swept-in-place-kas', 'bought-claimed', 'take-fills', 'unlock-tokens', 'lock-coin', 'lock-coin-auto', 'release-kas'] as string[]).includes(c)
         ? 'info'
         : 'blocking',
   ]),
@@ -304,7 +304,7 @@ export interface DecodedSpend {
    * a sweep: the output the order continues at, the stray token UTXOs it returns and the KAS they
    * carry
    */
-  sweptTo?: { output: number; utxos: number; kas: bigint };
+  sweptTo?: { output: number; utxos: number; kas: bigint; value: { was: bigint; now: bigint } };
   /** the order is armed / trailed by this tx: its trigger evidence (null for every other spend) */
   trigger: DecodedTrigger | null;
   /**
@@ -1868,7 +1868,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
           ...(o.retired ? { retired: o.retired } : {}),
           input: d.index, covenantId: cov, description: o.description, action: 'sweep' as const, makerIsWallet: o.makerIsWallet,
           tokensReleased: total, strays: total, otherStrays: [...others.values()], pairTokens, trigger: null, ...boughtPart,
-          sweptTo: { output: sw!.output, utxos: owned.length, kas: owned.reduce((x, t) => x + t.amount, 0n) },
+          sweptTo: { output: sw!.output, utxos: owned.length, kas: owned.reduce((x, t) => x + t.amount, 0n), value: { was: d.amount, now: sw!.value } },
         };
       }
       return {
@@ -1883,7 +1883,15 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     for (const x of s.otherStrays) {
       add('other-strays-swept', `input ${s.input}: ${human(x.ref, x.amount)} of ${x.ref.display} sent to this order are swept back to you`, { input: s.input, params: { amount: human(x.ref, x.amount), token: x.ref.display } });
     }
-    if (s.sweptTo) {
+    // "unchanged" only when the continuation also keeps the order input's KAS: an unfunded sweep's
+    // fee comes out of the carrier, and a plan may move KAS between the order and the wallet
+    const v = s.sweptTo?.value;
+    if (s.sweptTo && v && v.now !== v.was) {
+      const { output, utxos } = s.sweptTo;
+      add('swept-in-place-kas', `input ${s.input}: the order continues at output ${output} under the same script (price, amount and custody), holding ${formatKas(v.now)} KAS instead of ${formatKas(v.was)} KAS; only its ${utxos} stray token UTXO(s) move back to you`, {
+        input: s.input, output, params: { utxos, now: formatKas(v.now), was: formatKas(v.was) },
+      });
+    } else if (s.sweptTo) {
       add('swept-in-place', `input ${s.input}: the order continues unchanged at output ${s.sweptTo.output} (same script: price, amount and custody); only its ${s.sweptTo.utxos} stray token UTXO(s) move back to you`, {
         input: s.input, output: s.sweptTo.output, params: { utxos: s.sweptTo.utxos },
       });
