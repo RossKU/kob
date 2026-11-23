@@ -42,26 +42,54 @@ export function addressOfXOnly(xOnlyHex, network) {
   return `${prefix}:${[...payload, ...check].map((w) => CHARSET[w]).join('')}`;
 }
 
-/** A few JSON wRPC calls on one connection: `fn(call)` gets `call(method, params)`. */
+/**
+ * A few JSON wRPC calls on one connection: `fn(call)` gets `call(method, params)`. A node that
+ * does not answer within `timeoutMs`, closes the socket or sends a frame that is not JSON fails
+ * every pending call, so the caller (and the write queue behind it) goes on (R3T-4).
+ */
 export async function withNode(url, fn, timeoutMs = 20_000) {
+  const shown = url.replace(/\/\/[^@/]*@/, '//');
   const ws = new WebSocket(url);
   const pend = new Map();
   let id = 0;
+  let failed = null;
+  let failOpen = null;
+  const fail = (e) => {
+    failed ??= e;
+    failOpen?.(failed);
+    for (const p of pend.values()) p.reject(failed);
+    pend.clear();
+  };
   const opened = new Promise((resolve, reject) => {
     ws.onopen = resolve;
-    ws.onerror = () => reject(new Error(`cannot reach the node at ${url.replace(/\/\/[^@/]*@/, '//')}`));
+    failOpen = reject;
   });
+  ws.onerror = () => fail(new Error(`cannot reach the node at ${shown}`));
+  ws.onclose = () => fail(new Error(`the node at ${shown} closed the connection`));
   ws.onmessage = (e) => {
-    const m = JSON.parse(e.data);
-    pend.get(m.id)?.(m);
+    let m;
+    try {
+      m = JSON.parse(e.data);
+    } catch {
+      fail(new Error(`the node at ${shown} sent a frame that is not JSON`));
+      ws.close();
+      return;
+    }
+    const p = pend.get(m?.id);
+    if (!p) return;
     pend.delete(m.id);
+    p.settle(m);
   };
-  const timer = setTimeout(() => ws.close(), timeoutMs);
+  const timer = setTimeout(() => {
+    fail(new Error(`the node at ${shown} did not answer within ${Math.round(timeoutMs / 1000)} s`));
+    ws.close();
+  }, timeoutMs);
   try {
     await opened;
     const call = (method, params = {}) => new Promise((resolve, reject) => {
+      if (failed) return reject(failed);
       const i = ++id;
-      pend.set(i, (m) => (m.error ? reject(new Error(`${method}: ${JSON.stringify(m.error)}`)) : resolve(m.params)));
+      pend.set(i, { reject, settle: (m) => (m.error ? reject(new Error(`${method}: ${JSON.stringify(m.error)}`)) : resolve(m.params)) });
       ws.send(JSON.stringify({ id: i, method, params }));
     });
     return await fn(call);
@@ -75,7 +103,7 @@ export async function withNode(url, fn, timeoutMs = 20_000) {
  * The smallest plain, mature UTXO of the key worth at least `needSompi` that no mempool transaction
  * spends: `{ txid, index, amount }` (amount a BigInt), or null.
  */
-export async function pickFundingUtxo(nodeUrl, xOnly, network, needSompi) {
+export async function pickFundingUtxo(nodeUrl, xOnly, network, needSompi, timeoutMs = 20_000) {
   const address = addressOfXOnly(xOnly, network);
   const plainSpk = `000020${xOnly}ac`;
   return withNode(nodeUrl, async (call) => {
@@ -97,5 +125,5 @@ export async function pickFundingUtxo(nodeUrl, xOnly, network, needSompi) {
     ok.sort((a, b) => (BigInt(a.utxoEntry.amount) < BigInt(b.utxoEntry.amount) ? -1 : 1));
     const e = ok[0];
     return e ? { txid: e.outpoint.transactionId, index: e.outpoint.index, amount: BigInt(e.utxoEntry.amount) } : null;
-  });
+  }, timeoutMs);
 }

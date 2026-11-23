@@ -94,6 +94,7 @@ export class KobService {
     this.audit = new Audit(join(cfg.dataDir, 'audit.jsonl'));
     this.plans = new Map();
     this.queue = Promise.resolve();
+    this.nodeTimeoutMs = 20_000; // the funding lookup on the node (R3T-4)
     this.maker = null;
     this.features = { claim: false, delivery: false };
   }
@@ -348,7 +349,7 @@ export class KobService {
     if (!this.cfg.node || !/^wss?:\/\/[^/]+:(18110|18210)\b/.test(this.cfg.node)) {
       throw new Refusal('NO_FUNDING: set node to a JSON wRPC URL (ws://host:18210) in the config, or pass fund_utxo');
     }
-    const u = await pickFundingUtxo(this.cfg.node, maker, this.cfg.network, carrier + 100_000_000n);
+    const u = await pickFundingUtxo(this.cfg.node, maker, this.cfg.network, carrier + 100_000_000n, this.nodeTimeoutMs);
     if (!u) throw new Refusal(`NO_FUNDING: no confirmed plain UTXO of at least ${kas(carrier + 100_000_000n)} KAS`);
     return { ...u, maker };
   }
