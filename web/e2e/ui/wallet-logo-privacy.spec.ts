@@ -1,7 +1,8 @@
-// A creator-hosted logo loads in a wallet view only for a token the user acquired (an order of
-// theirs names it) or chose to show ("Show logo", kept per token in this browser).
-// A token dusted to the address shows its letter and makes no request to the creator's host.
-// Market views load logos as usual.
+// A creator-hosted logo of a token the connected wallet holds loads only for a token the user
+// acquired (an order placed in this browser or a transaction signed here names it) or chose to
+// show ("Show logo", kept per token in this browser), in the wallet views and the market views
+// alike. A token dusted to the address shows its letter and makes no request to the creator's
+// host, listed or not. Market views load other tokens' logos as usual.
 // Mock stack, kascov mocked (e2e/helpers/kascov.ts).
 import { expect, test } from '../fixtures';
 import { connectWallet, TOKEN } from '../helpers/env';
@@ -30,7 +31,15 @@ test('wallet views: an acquired token loads its creator-hosted logo, a dusted on
   await connectWallet(page, 'kasware');
   await page.getByTestId('orders-tab-balances').click();
 
+  // The seeded orders of OWN are only listed under the key by the indexer, which anyone can make
+  // happen, so they acquire nothing.
   const ownIcon = page.getByTestId(`token-icon-${own}`).first();
+  await expect(ownIcon).toHaveAttribute('data-icon', 'withheld');
+  // A transaction signed here that took, placed or spent OWN acquired it (what the send stores).
+  await page.evaluate((id) => localStorage.setItem('kob.logo.acted', JSON.stringify([id])), own);
+  await page.reload();
+  await connectWallet(page, 'kasware');
+  await page.getByTestId('orders-tab-balances').click();
   await expect(ownIcon).toHaveAttribute('data-icon', 'creator-image');
   const dust = page.getByTestId(`token-icon-${DUST}`).first();
   await expect(dust).toHaveAttribute('data-icon', 'withheld');
@@ -79,5 +88,47 @@ test('a token only the wallet holds, which no list names, waits for "Show logo" 
   await expect(page.getByTestId('token-identity').getByTestId(`token-icon-${DUST}`)).toHaveAttribute('data-icon', 'withheld');
   await expect(page.getByTestId('token-logo-section')).toHaveCount(0);
   await page.waitForTimeout(500);
+  expect(log.requests).not.toContain(DUST_URL);
+});
+
+test('a listed token the wallet only received is not asked of its creator\'s host: list, token page, pair page', async ({ appPage: page, mock }) => {
+  // R2B-M1: the creator lists the token with one small ask (and one naming the wallet as its
+  // maker, which anyone can fund), then sends the wallet one unit. The row is the indexer's, not a
+  // held-only row, and its logo must still wait for "Show logo" everywhere.
+  const quote = (await mock.token()).covenant_id;
+  await mock.seed({
+    tokens: [{ ticker: 'DUST', covenant_id: DUST, program: 'KCC20Ref', template_id: 'KCC20Ref', extension_commitment: 'ee'.repeat(32), powers: [], decimals: null, order_scale: 100_000_000 }],
+    orders: [
+      { token: DUST, side: 'ask', maker: 'bob', amount: TOKEN.toString(), price: 1_000_000 },
+      { token: DUST, side: 'ask', maker: 'alice', amount: TOKEN.toString(), price: 1_100_000 },
+    ],
+  });
+  await mock.giveTokens('alice', 1n, { token: DUST });
+  let hits = 0;
+  const log = await mockKascov(page, { tokens: [{ covenant_id: DUST, claimed_ticker: 'DUST', claimed_image: DUST_URL }], hosts: { [DUST_URL]: PNG } });
+  await page.route('https://assets.example/**', (r) => {
+    hits++;
+    return r.abort();
+  });
+  // Connected first: before a wallet is connected a logo tells its host no address.
+  await page.goto('/#/settings');
+  await connectWallet(page, 'kasware');
+  await page.evaluate(() => (location.hash = '#/market'));
+  const row = page.getByTestId(`token-row-${DUST}`);
+  await expect(row).toHaveAttribute('data-held', '1', { timeout: 20_000 });
+  await expect(row).toHaveAttribute('data-source', 'indexer');
+  const icon = row.getByTestId(`token-icon-${DUST}`);
+  await icon.scrollIntoViewIfNeeded();
+  await expect(icon).toHaveAttribute('data-icon', 'withheld');
+
+  await page.getByTestId(`token-link-${DUST}`).click();
+  await expect(page.getByTestId('token-page')).toBeVisible();
+  await expect(page.getByTestId('token-identity').getByTestId(`token-icon-${DUST}`)).toHaveAttribute('data-icon', 'withheld');
+  await expect(page.getByTestId('token-logo-section')).toHaveCount(0);
+
+  await page.evaluate((h) => (location.hash = h), `#/market/${DUST}/${quote}`);
+  await expect(page.getByTestId('pair-base-identity').getByTestId(`token-icon-${DUST}`)).toHaveAttribute('data-icon', 'withheld');
+  await page.waitForTimeout(500);
+  expect(hits).toBe(0);
   expect(log.requests).not.toContain(DUST_URL);
 });

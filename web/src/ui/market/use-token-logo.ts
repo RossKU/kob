@@ -15,12 +15,14 @@
 //    - `https://` is read in CORS mode. Equal gives 'verified' (a blob) and different gives
 //      'mismatch'. Not readable, which is the usual case with no CORS header, or no hash gives a
 //      plain <img> the page cannot read or check ('creator').
-//    In a wallet view (`scope: 'wallet'`) an https address loads only for a token the user
-//    acquired or chose to show (data/logo-gate.ts). Otherwise the state is 'withheld'.
+//    In a wallet view (`scope: 'wallet'`), and for a token the connected wallet holds wherever it
+//    shows, an https address loads only for a token the user acquired or chose to show
+//    (data/logo-gate.ts). Otherwise the state is 'withheld'. While the wallet's holdings are
+//    being read, it waits ('pending').
 // 4. None: the letter avatar. For 'mismatch' it comes with the note that the picture at the
 //    creator's address is not the one the creation record names.
-import { useEffect, useMemo, useState } from 'preact/hooks';
-import { useServices } from '../../app/context';
+import { useContext, useEffect, useMemo, useState } from 'preact/hooks';
+import { useServices, WalletContext } from '../../app/context';
 import { useStandalone } from '../shell/standalone';
 import { useCreatorImagePref, useIconPref, useVoteFilterPref } from '../../app/icon-pref';
 import { useDeclarationsVersion } from '../../app/use-declaration';
@@ -28,7 +30,7 @@ import { logoBlocklist, logoBlocklistUrlOf } from '../../data/logo-blocklist';
 import { hiddenForViewer, logoVotes, logoVotesUrlOf, type LogoTotals, type VoteDir, type VoteVerdict } from '../../data/logo-votes';
 import { iconLoader, kascovNetwork } from '../../data/kascov';
 import { asImageHash, httpsChecker, ipfsLoader, parseLogoRef, type HttpsOutcome, type LogoRef } from '../../data/logos';
-import { logoScope, useLogoAllowed, withholdsLogo } from '../../data/logo-gate';
+import { logoScope, useLogoAllowed, useLogoHolding, withholdsLogo } from '../../data/logo-gate';
 import { declaredToken } from '../../data/token-declarations';
 
 export type TokenLogo =
@@ -124,6 +126,8 @@ export function useTokenLogo(row: LogoSubject, active: boolean, scope?: 'wallet'
   const votes = useLogoVotes(row.covenantId);
   const votedOut = hiddenForViewer(votes.verdict, hideVoted, votes.shownOnce);
   const allowed = useLogoAllowed(row.covenantId);
+  const wallet = useContext(WalletContext);
+  const holding = useLogoHolding(wallet && !wallet.networkMismatch ? (wallet.info?.pubkey ?? null) : null, row.covenantId);
   const { covenantId } = row;
   const net = kascovNetwork(config.network);
   const base = config.tokenNamesUrl;
@@ -170,9 +174,12 @@ export function useTokenLogo(row: LogoSubject, active: boolean, scope?: 'wallet'
   const next = () => setTried({ key: candKey, n: n + 1 });
   const advance = () => setTried((t) => ({ key: candKey, n: (t.key === candKey ? t.n : 0) + 1 }));
   const next0 = !blocked && active && creatorOn && checkedHere !== null && checkedHere.src === null ? candidates[n] : undefined;
-  // A wallet view asks a creator's host nothing for a token the user did not acquire.
-  const withheld = next0 && withholdsLogo(logoScope(scope, row.source), allowed, next0.kind) ? next0 : null;
-  const cur = withheld ? undefined : next0;
+  // A wallet view, or any view of a token the wallet holds, asks a creator's host nothing for a
+  // token the user did not acquire. Until the holdings answer, the token may be one of them.
+  const gated = logoScope(scope, row.source, holding);
+  const withheld = next0 && withholdsLogo(gated, allowed, next0.kind) ? next0 : null;
+  const waits = !withheld && next0?.kind === 'https' && !allowed && holding === 'pending';
+  const cur = withheld || waits ? undefined : next0;
 
   // 3a. ipfs:// through the gateway, compared with the committed hash when there is one.
   const gateway = config.ipfsGatewayUrl;
@@ -222,6 +229,7 @@ export function useTokenLogo(row: LogoSubject, active: boolean, scope?: 'wallet'
   else if (!active || checkedHere === null) logo = { state: 'pending' };
   else if (!creatorOn) logo = { state: 'none' };
   else if (withheld) logo = { state: 'withheld', host: hostOf(withheld, gateway) };
+  else if (waits) logo = { state: 'pending' };
   else if (!cur) logo = { state: 'none' };
   else if (cur.kind === 'https') {
     if (cur.svg && (httpsKey === null || httpsHere?.kind === 'unreadable')) logo = { state: 'none' };

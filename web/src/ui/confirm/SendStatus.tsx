@@ -41,6 +41,7 @@ import { expectedOutputs, signAndSubmit, waitForAcceptance } from '../../wallet/
 import type { LiveSigning } from '../../wallet/types';
 import { Button, CopyText, Modal, RawDetails, Spinner, showToast, unitParts } from '../kit';
 import { toasts } from '../kit/toast-store';
+import { actedTokens, logoGate } from '../../data/logo-gate';
 import { failureToast } from '../notify/failure-toast';
 import { classifyFailure } from './confirm-flow';
 import { checkBeforeSigning, inputAddressOf, recordAccepted, registryOfJob, type SendJob } from './send';
@@ -412,6 +413,9 @@ export function useSend(): Sender {
       }
     }
     const { built } = final;
+    // The tokens this transaction takes, places or spends were acquired by the user's own action, so
+    // their creator-hosted logos load from now on (data/logo-gate.ts). A re-timed copy names the same.
+    logoGate.remember(actedTokens(checked.decoded));
     const { records } = await recordAccepted(services, w, built, txid, final.label);
     set(id, { phase: 'submitted', txid, confirmed: 'waiting' });
     void (async () => {
