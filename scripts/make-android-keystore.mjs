@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Creates the release signing key of the Android app (once, by the maintainer) and prints the steps
-// that store it as the GitHub repository secrets android.yml and release.yml sign with.
+// that store it as the secrets of the GitHub environment android-release, which android.yml signs with.
 //
 //   node scripts/make-android-keystore.mjs [--out <dir>] [--alias kob-release] [--repo RossKU/kob]
 //        [--keytool <path>]
@@ -103,29 +103,37 @@ function restrict(file) {
 function printSteps({ dir, jks, pass, b64, alias, repo, sha256 }) {
   const q = (p) => `"${p}"`;
   console.log(`
-Steps to store the secrets (do this once; the values are read from the files, so no password is typed or shown):
+Steps to store the secrets (do this once; the values are read from the files, so no password is typed or shown). They are secrets
+of the ENVIRONMENT android-release, never repository secrets (any workflow on any branch reads those; a release tag fails while a
+repository copy exists):
+
+0. github.com/${repo} -> Settings -> Environments -> New environment "android-release" (or open it): tick "Required reviewers" and
+   add yourself; "Deployment branches and tags" -> "Selected branches and tags" -> add the branch rule master and the tag rule v*;
+   untick "Allow administrators to bypass" if shown; Save.
 
 A. With the GitHub CLI (gh auth login, as an admin of ${repo}):
 
    bash / Git Bash / zsh:
-     gh secret set ANDROID_KEYSTORE_B64      --repo ${repo} < ${q(b64)}
-     gh secret set ANDROID_KEYSTORE_PASSWORD --repo ${repo} < ${q(pass)}
-     gh secret set ANDROID_KEY_PASSWORD      --repo ${repo} < ${q(pass)}
-     gh secret set ANDROID_KEY_ALIAS         --repo ${repo} --body ${alias}
+     gh secret set ANDROID_KEYSTORE_B64      --env android-release --repo ${repo} < ${q(b64)}
+     gh secret set ANDROID_KEYSTORE_PASSWORD --env android-release --repo ${repo} < ${q(pass)}
+     gh secret set ANDROID_KEY_PASSWORD      --env android-release --repo ${repo} < ${q(pass)}
+     gh secret set ANDROID_KEY_ALIAS         --env android-release --repo ${repo} --body ${alias}
 
    PowerShell:
-     Get-Content -Raw ${q(b64)}  | gh secret set ANDROID_KEYSTORE_B64      --repo ${repo}
-     Get-Content -Raw ${q(pass)} | gh secret set ANDROID_KEYSTORE_PASSWORD --repo ${repo}
-     Get-Content -Raw ${q(pass)} | gh secret set ANDROID_KEY_PASSWORD      --repo ${repo}
-     gh secret set ANDROID_KEY_ALIAS --repo ${repo} --body ${alias}
+     Get-Content -Raw ${q(b64)}  | gh secret set ANDROID_KEYSTORE_B64      --env android-release --repo ${repo}
+     Get-Content -Raw ${q(pass)} | gh secret set ANDROID_KEYSTORE_PASSWORD --env android-release --repo ${repo}
+     Get-Content -Raw ${q(pass)} | gh secret set ANDROID_KEY_PASSWORD      --env android-release --repo ${repo}
+     gh secret set ANDROID_KEY_ALIAS --env android-release --repo ${repo} --body ${alias}
 
-B. Or in the browser: github.com/${repo} -> Settings -> Secrets and variables -> Actions -> "New repository secret", four times:
+B. Or in the browser: github.com/${repo} -> Settings -> Environments -> android-release -> Environment secrets -> "Add environment
+   secret", four times:
      ANDROID_KEYSTORE_B64       the whole content of ${b64}   (open the file, select all, copy; one line)
      ANDROID_KEYSTORE_PASSWORD  the whole content of ${pass}
      ANDROID_KEY_PASSWORD       the same content again
      ANDROID_KEY_ALIAS          ${alias}
 
-C. Check: github.com/${repo}/settings/secrets/actions lists the four names. Then run the android workflow (Actions -> android -> Run
+C. Check: Settings -> Environments -> android-release lists the four names, and github.com/${repo}/settings/secrets/actions
+   (Repository secrets) lists none of them (delete any you find there). Then run the android workflow on master (Actions -> android -> Run
    workflow) or push a release tag: the run must NOT warn "Android APK is debug-signed", and its summary shows the signer
    certificate SHA-256, which must be:
      ${sha256}
