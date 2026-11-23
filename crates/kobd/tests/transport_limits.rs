@@ -389,3 +389,38 @@ async fn small_node_calls_overlap_on_their_own_connections() {
     assert_eq!(conns.load(SeqCst), 5);
     server.abort();
 }
+
+/// R2C-M5: a window request that names no limit of its own (every window but the prefetch's) takes at most
+/// `WINDOW_MAX_BYTES`, not the 1 GiB the client takes at all. The node here announces a 300 MiB frame and sends none
+/// of it: the client refuses it from the frame header alone.
+#[tokio::test]
+async fn a_window_without_its_own_limit_refuses_an_answer_above_the_window_bound() {
+    use kobd::hex::Hash32;
+    use kobd::rpc::types::{Verbosity, VspcRequest};
+    use kobd::rpc::{ChainSource, RpcError, WrpcClient, WrpcConfig, WINDOW_MAX_BYTES};
+    use tokio::io::AsyncWriteExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let Ok((s, _)) = listener.accept().await else { return };
+        let Ok(mut ws) = tokio_tungstenite::accept_async(s).await else { return };
+        if let Some(Ok(Message::Text(_))) = ws.next().await {
+            // A text frame header with a 64-bit length of 300 MiB, then a few bytes.
+            let mut head = vec![0x81u8, 127];
+            head.extend_from_slice(&(300u64 << 20).to_be_bytes());
+            let tcp = ws.get_mut();
+            let _ = tcp.write_all(&head).await;
+            let _ = tcp.write_all(b"{\"id\":").await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+    });
+    let client = WrpcClient::new(WrpcConfig::new(format!("ws://{addr}")));
+    let req = VspcRequest::new(Hash32([1; 32]), Verbosity::High, None);
+    assert_eq!(req.max_bytes, None);
+    match client.vspc_v2(req).await {
+        Err(RpcError::TooLarge { size, limit }) => assert!(limit == WINDOW_MAX_BYTES && size == 300 << 20, "{size} {limit}"),
+        r => panic!("{r:?}"),
+    }
+    server.abort();
+}

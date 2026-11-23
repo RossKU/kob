@@ -3249,8 +3249,25 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   cross-checking node too, and must agree in everything the indexer reads (signature scripts and spent outputs included;
   `ChainSource::confirm_bodies`). A difference applies nothing and asks a third node as above: it has the authority's copy,
   and the cross-checking node is given up; it has another, and the authority is outvoted; none, and nothing applies until
-  they agree (it counts towards replacing the nodes). A cross-checking node that cannot answer holds the batch back like any
-  of its waits. **Not covered:** a single node (an own node with no `[[nodes]]` cross-checker, or the failover's fallback
+  they agree (three such disagreements in a row give the cross-checking node up for another, three more the authority's
+  node; a successful comparison starts the count again). A cross-checking node that cannot answer holds the batch back like any
+  of its waits. **What can matter, and the extra load** (R2C-M2, R2C-L2): a transaction matters when it spends a tracked
+  output, carries a token output of a traded or allowlisted token, or holds a KOB1 placement record whose output carries the
+  record's order script under a covenant binding. Any other KOB1 payload (one that does not decode, a note, a sweep or an
+  amend next to no tracked order, an order record no output carries) is read from the payload alone, and an order record no
+  output carries is recorded only within the same bound as an undecodable payload (256 per reorg window, as the stand-in
+  `KOB1\xff`). So forcing work costs a real covenant output per transaction (its KAS carrier, at least 0.08 KAS, stays
+  locked in it until the order is spent). In the worst case, a flagged transaction in every chain block of a window: one `getBlock` per merged block that
+  holds one (from the authority), and from the cross-checking node at most 4 window requests per window, or, past 4 runs,
+  one copy of the window from its first flagged chain block to its last (at most one extra copy of the authority's window,
+  each answer at most 256 MiB, asked one after another). The referee is asked the same only on a difference.
+  **A chain authority that answers nothing new** (R2C-M1): when the cross-checking node reports 100 or more chain blocks
+  after the cursor and the authority none, the answer is a failed chain request of the authority (it counts towards handing
+  the role over, *A failing chain authority*), not a confirmation that the cursor is at the sink. And an idle poll counts as
+  progress for `/v1/health` only while the cursor's chain block is at most 10 minutes old by the local clock, so a frozen
+  store turns `stale` within about 20 minutes, with or without a cross-checking node. **Window answers** (R2C-M5) take at
+  most 256 MiB each when the request names no smaller limit (the prefetch does): one chain block's acceptance data is far
+  below that, and a larger honest window is split. **Not covered:** a single node (an own node with no `[[nodes]]` cross-checker, or the failover's fallback
   alone), and the time after `single_node_after_secs` (120 s) without any answer of a cross-checking node, when the
   authority goes on alone with the chain proofs only: there a lying authority that also mines one real block can still make
   a KOB spend read as another entry (an order leaves the book or stays as a phantom; no funds move). `/v1/health`

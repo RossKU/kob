@@ -854,6 +854,9 @@ pub struct MultiNode<N: ChainSource> {
     sink: Mutex<Option<(Instant, u64)>>,
     /// Contradictions in a row that left nothing to apply (`MultiNode::vouched`).
     stalls: std::sync::atomic::AtomicU32,
+    /// Body disagreements in a row that no third node settled (`ChainSource::confirm_bodies`).
+    /// Apart from [`MultiNode::stalls`], which every agreeing id check resets (R2C-L1).
+    body_stalls: std::sync::atomic::AtomicU32,
     /// When a contradiction was last logged. One line per ten seconds is logged, and the counters
     /// keep every one.
     last_warn: Mutex<Option<Instant>>,
@@ -1045,6 +1048,17 @@ impl LagTrack {
 /// it until it repeats.
 pub const TIPS_DIFFER: &str = "the two nodes' newest chain blocks differ for a moment";
 
+/// The start of the error when the authority answers nothing new while the cross-checking node
+/// reports at least [`WITHHELD_CHAIN_BLOCKS`] chain blocks after the same cursor (R2C-M1).
+///
+/// It counts as a failed chain request of the authority (`failover::node_failure`), so the cursor
+/// does not count as confirmed at the sink and a node that keeps doing it is handed over from.
+pub const AUTHORITY_BEHIND: &str = "the chain authority reports no new chain block that the cross-checking node has";
+
+/// Chain blocks after the cursor that the cross-checking node must report, while the authority
+/// reports none, for [`AUTHORITY_BEHIND`]: well past a moment's difference of two tips.
+pub const WITHHELD_CHAIN_BLOCKS: usize = 100;
+
 /// The start of the error while the authority's answers wait for a cross-checking node.
 pub const WAITING_FOR_CROSS_CHECK: &str = "waiting for a cross-checking node";
 
@@ -1210,6 +1224,7 @@ impl<N: ChainSource> MultiNode<N> {
             rr: std::sync::atomic::AtomicUsize::new(0),
             sink: Mutex::new(None),
             stalls: std::sync::atomic::AtomicU32::new(0),
+            body_stalls: std::sync::atomic::AtomicU32::new(0),
             last_warn: Mutex::new(None),
             store_contradictions: Mutex::new(None),
             settling: Mutex::new(None),
@@ -1624,6 +1639,17 @@ impl<N: ChainSource> MultiNode<N> {
             Err(f) => return self.unvouched(raw, f),
         };
         self.vouched_by(j);
+        // An authority that answers nothing new holds the cursor still for good, and no agreement
+        // check below can see it (R2C-M1).
+        if raw.added_chain_block_hashes.is_empty()
+            && raw.removed_chain_block_hashes == ids.removed_chain_block_hashes
+            && ids.added_chain_block_hashes.len() >= WITHHELD_CHAIN_BLOCKS
+        {
+            return Err(RpcError::Node(format!(
+                "{AUTHORITY_BEHIND}: the cross-checking node reports {} chain blocks after the cursor",
+                ids.added_chain_block_hashes.len()
+            )));
+        }
         let a = super::verify::agreement(&raw, &ids, self.policy.deep_daa);
         let Some(why) = a.contradiction else {
             self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -1815,8 +1841,10 @@ impl<N: ChainSource> MultiNode<N> {
         let level = self.authority_verbosity();
         // The answer's origin is not used: what fails here blames through the caller.
         let origin = Origin { node: usize::MAX, trusted: false, tier: 0 };
-        let asked = runs.iter().map(|r| tokio::time::timeout(CROSS_CHECK_TIMEOUT, fetch_window_from(node, &r.req, level, origin)));
-        for (r, answer) in runs.iter().zip(futures_util::future::join_all(asked).await) {
+        // One run at a time: at most one answer of this node is held at once (R2C-M5), and there
+        // are at most `indexer::follower::MAX_BODY_RUNS` runs (R2C-L2).
+        for r in runs {
+            let answer = tokio::time::timeout(CROSS_CHECK_TIMEOUT, fetch_window_from(node, &r.req, level, origin)).await;
             let f = match answer {
                 Ok(Ok(f)) => f,
                 Ok(Err(e)) => return Err(e.to_string()),
@@ -1863,7 +1891,12 @@ impl<N: ChainSource> MultiNode<N> {
     /// [`STALLS_BEFORE_REPLACING`] in a row, then the authority's after as many more. This applies
     /// to resolver entries only.
     fn stalled(&self, j: usize) {
-        let n = self.stalls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        self.stalled_on(&self.stalls, j)
+    }
+
+    /// [`MultiNode::stalled`] on the counter `stalls`.
+    fn stalled_on(&self, stalls: &std::sync::atomic::AtomicU32, j: usize) {
+        let n = stalls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let give_up = |i: usize| {
             let e = self.board.entry(i).to_string();
             if let Some(node) = super::resolver::current(&e) {
@@ -1875,7 +1908,7 @@ impl<N: ChainSource> MultiNode<N> {
             give_up(j);
         } else if n >= 2 * STALLS_BEFORE_REPLACING {
             give_up(self.board.authority());
-            self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
+            stalls.store(0, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -2417,7 +2450,10 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
             return Err(format!("{WAITING_FOR_CROSS_CHECK}: none can be asked for the copies of KOB transactions now"));
         };
         let why = match self.bodies_differ(&*self.nodes[j], raw, runs).await {
-            Ok(None) => return Ok(true),
+            Ok(None) => {
+                self.body_stalls.store(0, Ordering::Relaxed);
+                return Ok(true);
+            }
             Ok(Some(d)) => d,
             Err(e) => {
                 self.board.failed(j, Fault::Failed, &format!("cross-check of KOB transactions: {e}"));
@@ -2449,7 +2485,7 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
             }
             Err(no) => {
                 tracing::warn!(authority = %self.board.shown(a), cross_check = %self.board.shown(j), reason = %why, third = %no, "the nodes' copies of a KOB transaction differ and no third node settles it: nothing is applied");
-                self.stalled(j);
+                self.stalled_on(&self.body_stalls, j);
                 Err(format!("{why}: nothing is applied until they agree ({no})"))
             }
         }
@@ -3189,6 +3225,14 @@ mod tests {
         let e = m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err();
         assert!(e.contains("signature script") && e.contains("no third node"), "{e}");
         assert!(!m.board.dropped(1));
+        // R2C-L1: each retry's ids check agrees and resets the id stalls, but the body
+        // disagreements still count towards replacing a node.
+        for _ in 0..2 {
+            m.stalls.store(0, Ordering::Relaxed);
+            assert!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.is_err());
+        }
+        assert_eq!(m.body_stalls.load(Ordering::Relaxed), STALLS_BEFORE_REPLACING);
+        assert_eq!(three(1, None).body_stalls.load(Ordering::Relaxed), 0);
         // The referee has the authority's copy: the cross-checking node is given up.
         let m = three(2, Some(1));
         let e = m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err();
@@ -3382,6 +3426,16 @@ mod tests {
         // It reports nothing after the cursor yet: nothing is applied.
         let m = pair(Fixed::new(&[1, 2, 3], Ok(&[])), Fixed::new(&[], Ok(&[])));
         assert!(m.vspc_v2(req()).await.unwrap_err().to_string().contains(TIPS_DIFFER));
+        // R2C-M1: the authority answers nothing new while the other node reports many chain blocks
+        // after the cursor. That is no confirmation at the sink but a failed chain request, which
+        // the follower counts towards handing the role over. A few blocks are a moment's lag.
+        let many: Vec<u8> = (1..=WITHHELD_CHAIN_BLOCKS as u8).collect();
+        let m = pair(Fixed::new(&[], Ok(&[])), Fixed::new(&[], Ok(&many)));
+        let e = m.vspc_v2(req()).await.unwrap_err();
+        assert!(e.to_string().contains(AUTHORITY_BEHIND), "{e}");
+        assert!(super::super::failover::node_failure(&e));
+        let m = pair(Fixed::new(&[], Ok(&[])), Fixed::new(&[], Ok(&many[..3])));
+        assert!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.is_empty());
         // Another third block, so the first two are kept.
         let m = pair(Fixed::new(&[1, 2, 3], Ok(&[])), Fixed::new(&[], Ok(&[1, 2, 9])));
         let r = m.vspc_v2(req()).await.unwrap();

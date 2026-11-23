@@ -69,6 +69,16 @@ pub enum RpcError {
 /// itself (`multi`).
 pub const MAX_MESSAGE_BYTES: usize = 1 << 30;
 
+/// The largest window answer (`getVirtualChainFromBlockV2`) a request takes when it names no
+/// limit of its own, 256 MiB (R2C-M5).
+///
+/// One chain block accepts at most its merge set: about 250 blocks at 10 BPS, each of at most
+/// 500,000 mass, some 125 KB of transactions. With the spent outputs at full verbosity that is
+/// well under 128 MiB even as JSON, so no honest chain block reaches this. A larger honest window
+/// is refused as its frame header arrives and split (`indexer::follower`). A hostile node can
+/// thus make the client hold at most this much per request, not 1 GiB.
+pub const WINDOW_MAX_BYTES: usize = 256 << 20;
+
 /// The largest answer a small call takes, 16 MiB.
 ///
 /// These are the status, blue scores, a block header, the DAG info and the chain hashes (at most
@@ -980,7 +990,7 @@ impl WrpcClient {
 impl ChainSource for WrpcClient {
     async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
         let timeout = self.cfg.request_timeout.saturating_mul(req.timeout_scale.max(1));
-        let cap = req.max_bytes.unwrap_or(self.cfg.max_message_bytes).min(self.cfg.max_message_bytes);
+        let cap = req.max_bytes.unwrap_or(WINDOW_MAX_BYTES).min(self.cfg.max_message_bytes);
         if self.borsh_url().is_some() {
             let (start, level, min_conf) = (req.start_hash, req.data_verbosity_level, req.min_confirmation_count);
             let frame = move |id| borsh::vspc_v2_request(id, start, level, min_conf);

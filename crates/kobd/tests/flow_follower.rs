@@ -1390,3 +1390,23 @@ async fn a_node_lacking_vspc_v2_stops_the_follower_at_once() {
     let out = d.hs.sync().await;
     assert!(matches!(out.last(), Some(StepOutcome::Idle)), "{out:?}");
 }
+
+/// R2C-M1: an authority that answers "nothing new" from a cursor whose chain block is long past by the local clock does not
+/// count as a poll that confirmed the cursor at the sink, so `/v1/health` turns `stale` instead of reading current for good.
+/// A batch that moves the cursor is progress, whatever its age.
+#[tokio::test]
+async fn idle_polls_from_an_old_cursor_are_no_progress() {
+    let c = Ctx::new();
+    let create = small_ask(&c, 0);
+    c.w.include(&c.hs.node, &[&create]);
+    c.hs.sync().await;
+    let moved = c.hs.health.snapshot().last_progress_unix_ms;
+    assert!(moved > 0, "the batch was progress");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    // the test chain's blocks are stamped in 2026-09, far more than ten minutes ago
+    assert!(matches!(c.hs.follower.step().await, StepOutcome::Idle | StepOutcome::Applied { .. }));
+    let s = c.hs.health.snapshot();
+    assert_eq!(s.state, FollowerState::Following);
+    assert_eq!(s.last_progress_unix_ms, moved, "an idle poll from an old cursor confirms nothing");
+    assert!(s.stale(moved + kobd::indexer::status::STALE_AFTER_MS + 1));
+}
