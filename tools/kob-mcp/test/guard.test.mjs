@@ -86,7 +86,7 @@ test('price band: a state price per its own scale is judged exactly (12 decimals
 test('book reference: depth on the resting side and on the fills, the own and large-minimum orders left out (R2-T2)', () => {
   const scale = 100_000_000;
   const depth = 1000n * 100_000_000n;
-  const row = (price, amount, extra = {}) => ({ price: String(price), amount_left: String(amount), min_fill: '100000000', scale, maker: 'aa'.repeat(32), ...extra });
+  const row = (price, amount, extra = {}) => ({ price: String(price), amount_left: String(amount), fillable_now: String(amount), min_fill: '100000000', scale, maker: 'aa'.repeat(32), ...extra });
   const fill = (price, amount) => ({ price: String(price), amount: String(amount) });
   const fills = [fill(25e6, 2000e8), fill(30e6, 4000e8)];
   // A one-token bid at 0.3 is passed over; 1,200 KAS of bids reach 1,000 at 0.24.
@@ -110,6 +110,37 @@ test('book reference: depth on the resting side and on the fills, the own and la
   assert.equal(bandReference({ side: 'sell', op, book: ref(20e6) }), op);
   assert.equal(bandReference({ side: 'sell', op, book: ref(30e6) }).num, 30_000_000n);
   assert.equal(bandReference({ side: 'buy', op: null, book: null }), null);
+});
+
+test('book reference: a TWAP or DCA order counts only what a taker can fill now; a row without fillable_now counts nothing (R3T-1)', () => {
+  const scale = 100_000_000;
+  const depth = 1000n * 100_000_000n;
+  const row = (price, amount, fillable, extra = {}) => ({ price: String(price), amount_left: String(amount), ...(fillable == null ? {} : { fillable_now: String(fillable) }), min_fill: '100000000', scale, maker: 'aa'.repeat(32), ...extra });
+  const fills = [{ price: String(250e6), amount: String(5000e8) }];
+  // 1,250 KAS left at 2.5 KAS a token, but one 10-token slice (25 KAS) fillable per interval.
+  const r = bookReference({ side: 'buy', rows: { bids: [row(250e6, 500e8, 10e8)] }, fills, scale, depth });
+  assert.equal(r.ref, null, 'one slice is not 1,000 KAS at risk');
+  assert.match(r.why, /under 1000 KAS of bids fillable now/);
+  // A slice not due now (fillable_now 0) adds nothing either.
+  assert.equal(bookReference({ side: 'buy', rows: { bids: [row(250e6, 500e8, 0)] }, fills, scale, depth }).ref, null);
+  // An older indexer that names no fillable_now: the book gives no reference, and says why.
+  const old = bookReference({ side: 'buy', rows: { bids: [row(250e6, 500e8, null)] }, fills, scale, depth });
+  assert.equal(old.ref, null);
+  assert.match(old.why, /fillable_now/);
+  // A plain order fillable in full sets it.
+  assert.equal(bookReference({ side: 'buy', rows: { bids: [row(250e6, 500e8, 500e8)] }, fills, scale, depth }).ref.num, 250_000_000n);
+});
+
+test('book reference: printed fills never loosen it past the resting side (R3T-1)', () => {
+  const scale = 100_000_000;
+  const depth = 1000n * 100_000_000n;
+  const row = (price, amount) => ({ price: String(price), amount_left: String(amount), fillable_now: String(amount), min_fill: '100000000', scale, maker: 'aa'.repeat(32) });
+  // Wash fills at 10 times the bids: a buy is still judged against the bids.
+  const high = [{ price: String(250e6), amount: String(5000e8) }];
+  assert.equal(bookReference({ side: 'buy', rows: { bids: [row(25e6, 5000e8)] }, fills: high, scale, depth }).ref.num, 25_000_000n);
+  // Wash fills at a 25th of the asks: a sell is still judged against the asks.
+  const low = [{ price: String(1e6), amount: String(200000e8) }];
+  assert.equal(bookReference({ side: 'sell', rows: { asks: [row(25e6, 5000e8)] }, fills: low, scale, depth }).ref.num, 25_000_000n);
 });
 
 test('tip caps: a share of the price and a KAS total over the order', () => {

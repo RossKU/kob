@@ -208,11 +208,14 @@ const lt = (a, b) => a.num * b.den < b.num * a.den;
  * The book-derived reference (R2-T2), sompi per `scale` base units as { num, den, what }, or null
  * with `why`. It needs `depth` sompi on both of:
  * - the resting side an attacker must fill-risk to move it: for a buy the bids from the best down,
- *   for a sell the asks from the best up; the price where they add up to `depth`. The wallet's own
- *   orders and orders whose minimum fill is worth more than 10 KAS do not count.
+ *   for a sell the asks from the best up; the price where what a taker can fill now adds up to
+ *   `depth`. Each row counts its `fillable_now` (R3T-1): a TWAP or DCA order only the slice that is
+ *   due, not its whole `amount_left`, and a row without the field (an older indexer) nothing. The
+ *   wallet's own orders and orders whose minimum fill is worth more than 10 KAS do not count.
  * - the fill history, newest first: the VWAP of the fills that add up to `depth`.
- * A buy is judged against the lower of the two and a sell against the higher, so moving the bound
- * takes both: printed fills and `depth` of orders anyone can fill.
+ * A buy is judged against the lower of the two and a sell against the higher. Fills between two
+ * keys of one owner cost only fees, so the fills alone never move the bound the attacker's way:
+ * only `depth` of orders anyone can fill now does. The fills keep a book with no trading out.
  */
 export function bookReference({ side, rows, fills, scale, depth, maker = null }) {
   if (scale == null) return { ref: null, why: 'the book has no price scale' };
@@ -220,19 +223,24 @@ export function bookReference({ side, rows, fills, scale, depth, maker = null })
   const own = String(maker ?? '').toLowerCase();
   let value = 0n;
   let rest = null;
+  let unsized = 0;
   for (const r of (side === 'buy' ? rows?.bids : rows?.asks) ?? []) {
     if (own && String(r.maker ?? '').toLowerCase() === own) continue;
     const price = big(r.price);
     const rs = r.scale != null ? BigInt(r.scale) : sc;
     if (price <= 0n || rs !== sc) continue;
     if ((big(r.min_fill) * price) / sc > MAX_MIN_FILL_SOMPI) continue;
-    value += (big(r.amount_left ?? r.amount) * price) / sc;
+    if (r.fillable_now == null) unsized++;
+    value += (big(r.fillable_now) * price) / sc;
     if (value >= depth) {
       rest = { num: price, den: 1n, what: `${kas(depth)} KAS of ${side === 'buy' ? 'bids' : 'asks'}` };
       break;
     }
   }
-  if (!rest) return { ref: null, why: `under ${kas(depth)} KAS of ${side === 'buy' ? 'bids' : 'asks'} rest on the book (the wallet's own and large-minimum orders left out)` };
+  if (!rest) {
+    const old = unsized ? `; the indexer names no fillable_now for ${unsized} order(s) (an older kobd), and they count as nothing` : '';
+    return { ref: null, why: `under ${kas(depth)} KAS of ${side === 'buy' ? 'bids' : 'asks'} fillable now rest on the book (the wallet's own and large-minimum orders left out${old})` };
+  }
   let vol = 0n;
   let units = 0n;
   let fill = null;
