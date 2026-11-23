@@ -951,6 +951,35 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   const askMakers = new Set(takeFills.filter((f) => f.side === 'ask').map((f) => f.maker));
   const bidMakers = new Set(takeFills.filter((f) => f.side === 'bid').map((f) => f.maker));
   /**
+   * The refund of a bid this tx ends, by output: KobBid.fill (and its KRON twin) sends the KAS the
+   * bid no longer spends, rem = its value - allIn - released, to its maker at output M - 1 - i for
+   * the bid at input i once rem is REFUND_MIN (1 KAS) or more. released is the carrier, a top-up's
+   * tip, or nothing once the bought-custody exists. Only exactly that payment is the bid's.
+   */
+  const bidRefunds = new Map<number, { maker: Hex; value: bigint }>();
+  for (const f of takeFills) {
+    if (f.side !== 'bid' || tx.outputs.some((o) => o.covenant?.covenantId === f.covenantId)) continue;
+    const os = orderStates.get(f.input)!;
+    const st = os.state as unknown as Record<string, string | undefined>;
+    const plan = built.plans[f.input] as Extract<SigPlan, { kind: 'entry' }>;
+    const intAt = (k: number): bigint | null => {
+      const a = plan.args[k];
+      return a && a.kind === 'int' && /^-?\d+$/.test(a.value) ? BigInt(a.value) : null;
+    };
+    const t = intAt(2);
+    let spend: bigint | null = null;
+    try {
+      spend = t === null ? null : kob.bidSpend(os, f.amount, t, big(tx.inputs[f.input]!.utxo.blockDaaScore));
+    } catch {
+      spend = null;
+    }
+    if (spend === null) continue;
+    const mode = big(st.mode ?? '0');
+    const released = mode === 1n && big(st.bought ?? '0') > 0n ? 0n : mode === 2n && intAt(3) === 2n ? big(st.topupTip ?? '0') : big(st.deliveryCarrier ?? '0');
+    const rem = big(tx.inputs[f.input]!.utxo.amount) - spend - released;
+    if (rem >= ONE_KAS) bidRefunds.set(tx.outputs.length - 1 - f.input, { maker: f.maker, value: rem });
+  }
+  /**
    * inputs that belong to the orders taken (each order and its custody), which are not the wallet's
    * and not released to it
    */
@@ -1412,6 +1441,9 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       if (pk === maker) return { ...blank, kind: 'kas-change' };
       // what an ask this tx fills is due, paid to its maker
       if (askMakers.has(pk)) return { ...blank, kind: 'fill-payout', recipient: pk };
+      // the refund an ending bid fill is due to its maker, exactly
+      const rf = bidRefunds.get(j);
+      if (rf && rf.maker === pk.toLowerCase() && rf.value === value) return { ...blank, kind: 'fill-payout', recipient: pk };
       const ix = expectedPayments.findIndex((p) => p.pubkey === pk && p.amount === value);
       if (ix >= 0) {
         expectedPayments.splice(ix, 1);

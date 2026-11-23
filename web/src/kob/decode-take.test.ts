@@ -39,6 +39,13 @@ function takerEnv(asks: ReturnType<typeof resting>[], bids: ReturnType<typeof re
   return { ...env, bookOrders: new Map([...asks, ...bids].map((r) => [r.row.covenantId.toLowerCase(), r.utxo])) };
 }
 
+/** A bid of OTHER_PK for 3 tokens at 2.5 KAS, all or nothing, whose escrow holds 5 KAS more. */
+function overFunded(): ReturnType<typeof resting> {
+  const b = resting('buy', 250_000_000n, 3n * TOK, { minFill: 3n * TOK });
+  b.utxo.order.amount = String(BigInt(b.utxo.order.amount) + 5n * KAS);
+  return b;
+}
+
 const take = (env: PlanEnv, side: 'buy' | 'sell', amount: bigint, price: bigint): OrderPlan => planOrder(env, { type: 'limit', side, amount, price, crossing: 'take' });
 
 const decode = (p: OrderPlan, expected: Parameters<typeof decodeSigning>[0]['expected'] | undefined = expectedFromPlan(p), built = p.built!) =>
@@ -90,6 +97,42 @@ describe('a take decodes as what it is', () => {
     expect(codes(s)).toEqual([]);
     expect(s.kind).toBe('take');
     expect(s.take!.avgPrice).toBe(250_000_000n);
+  });
+
+  it('an ending fill of a bid refunds its maker exactly what the covenant leaves: no blocking finding', () => {
+    // a bid for 3 tokens at 2.5 KAS, all or nothing, funded 5 KAS beyond its price and carrier:
+    // the take ends it, and the 5 KAS it can no longer spend go back to its maker (KobBid.fill
+    // refundTo, REFUND_MIN or more)
+    const b = overFunded();
+    const p = take(takerEnv([], [b]), 'sell', 3n * TOK, 249_000_000n);
+    expect(errors(p)).toEqual([]);
+    const outs = p.built!.tx.outputs;
+    // the refund slot: output M - 1 - i for the bid at input i
+    const i = p.built!.tx.inputs.findIndex((x) => x.utxo.covenantId === b.row.covenantId);
+    const r = outs.length - 1 - i;
+    expect(outs[r]!.scriptPublicKey).toBe(`000020${OTHER_PK}ac`);
+    expect(BigInt(outs[r]!.value)).toBe(5n * KAS);
+    const s = decode(p);
+    expect(codes(s)).toEqual([]);
+    expect(s.outputs[r]!.kind).toBe('fill-payout');
+    expect(s.outputs[r]!.recipient).toBe(OTHER_PK);
+    // the signer frame too
+    expect(codes(decode(p, undefined))).toEqual([]);
+  });
+
+  it('a refund to a filled bid\'s maker above what the covenant leaves, or to another key, still blocks', () => {
+    const b = overFunded();
+    const p = take(takerEnv([], [b]), 'sell', 3n * TOK, 249_000_000n);
+    const outs = p.built!.tx.outputs;
+    const r = outs.length - 1 - p.built!.tx.inputs.findIndex((x) => x.utxo.covenantId === b.row.covenantId);
+    expect(outs[r]!.scriptPublicKey).toBe(`000020${OTHER_PK}ac`);
+    const more = clone(p.built!);
+    more.tx.outputs[r]!.value = String(BigInt(outs[r]!.value) + 1n);
+    expect(codes(decode(p, expectedFromPlan(p), more))).toContain('payment-out');
+    expect(decode(p, undefined, more).outputs[r]!.kind).toBe('payment-out');
+    const third = clone(p.built!);
+    third.tx.outputs[r]!.scriptPublicKey = `000020${THIRD}ac`;
+    expect(codes(decode(p, expectedFromPlan(p), third))).toContain('payment-out');
   });
 });
 

@@ -19,9 +19,9 @@ const BOUGHT = 3n * TOK;
 const PRICE = 250_000_000n;
 
 /** A Collected bid of OTHER_PK for `amount` that has bought BOUGHT, with its bought-custody. */
-function collectedBid(amount: bigint): { row: { covenantId: string; price: bigint; amount: bigint; tip: bigint }; utxo: BookOrderUtxo; custody: TokenUtxo } {
+function collectedBid(amount: bigint, minFill = TOK): { row: { covenantId: string; price: bigint; amount: bigint; tip: bigint }; utxo: BookOrderUtxo; custody: TokenUtxo } {
   const env: PlanEnv = { ...makeEnv({ market: M, book: { asks: [], bids: [] } }), maker: OTHER_PK, funding: [keyUtxo(10_000n * KAS, OTHER_PK)], tokenUtxos: [tokenUtxo(M, 1_000n * TOK, 10n * KAS, OTHER_PK)] };
-  const p = planOrder(env, { type: 'limit', side: 'buy', amount, price: PRICE, minFill: TOK });
+  const p = planOrder(env, { type: 'limit', side: 'buy', amount, price: PRICE, minFill });
   expect(errors(p)).toEqual([]);
   const snap = snapshotOfRecovered(K.recoverOrders(p.built!.tx)[0]!, CLOCK.daa - 1000n);
   const st = { ...snap.order.state, state: { ...snap.order.state.state, mode: '1', recvThreshold: '0', topupTip: '0', bought: BOUGHT.toString() } } as OrderState;
@@ -75,6 +75,24 @@ describe('selling into a Collected bid that has bought', () => {
     expect(p.built!.tx.outputs.some((o) => o.covenant?.covenantId === bid.utxo.covenantId)).toBe(false);
     const d = decodeSigning({ kob: K, built: p.built!, maker: MAKER_PK, expected: expectedFromPlan(p), nodeInputs: nodeFactsOf(p.built!) });
     expect(d.blocking.map((b) => `${b.code}: ${b.message}`)).toEqual([]);
+  });
+
+  it('an ending fill with 1 KAS or more left refunds it to the maker; consensus-valid; the decoder accepts it (R4A-1)', () => {
+    // 55 KAS of escrow (it buys 22), minFill 3: selling 21 leaves 2.5 KAS, less than one more minimum
+    // fill buys
+    const bid0 = collectedBid(10n * TOK, 3n * TOK);
+    const bid = { ...bid0, row: { ...bid0.row, amount: 21n * TOK } };
+    const p = sell(takerEnv(bid), 21n * TOK);
+    expect(errors(p)).toEqual([]);
+    expect(p.take!.amount).toBe(21n * TOK);
+    consensusCheck(K, p.built!, [MAKER_SK]);
+    const tx = p.built!.tx;
+    const i = tx.inputs.findIndex((x) => x.utxo.covenantId === bid.utxo.covenantId);
+    const r = tx.outputs.length - 1 - i;
+    expect(tx.outputs[r]).toMatchObject({ scriptPublicKey: `000020${OTHER_PK}ac`, value: (BigInt(bid.utxo.order.amount) - 21n * PRICE).toString(), covenant: null });
+    const d = decodeSigning({ kob: K, built: p.built!, maker: MAKER_PK, expected: expectedFromPlan(p), nodeInputs: nodeFactsOf(p.built!) });
+    expect(d.blocking.map((b) => `${b.code}: ${b.message}`)).toEqual([]);
+    expect(d.outputs[r]).toMatchObject({ kind: 'fill-payout', recipient: OTHER_PK });
   });
 
   it('negative: without its bought-custody the bid is not taken (it was refused at build before)', () => {
