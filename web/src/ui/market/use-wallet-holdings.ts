@@ -3,7 +3,7 @@
 // the key and this browser's candidates, each confirmed on the node), so the list adds no fetch
 // path of its own. Without a wallet, or with one on another network, there are none: the rows they
 // add are only ever in the connected wallet's own view.
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { loadDeclaration, noteTokenProgram } from '../../data/token-declarations';
 import type { HeldTokenUtxo } from '../../data/token-tracker';
@@ -38,6 +38,11 @@ export interface WalletHoldings {
 }
 
 const NONE: readonly HeldTokenUtxo[] = [];
+/**
+ * A failed holdings read is tried again after these delays, then left: until one answers, the
+ * gated logos wait. At most two more reads per wallet and list key.
+ */
+const RETRY_MS = [15_000, 60_000] as const;
 
 /** `reloadKey`: a new value reads the holdings again, as the list's refresh does. */
 export function useWalletHoldings(reloadKey: unknown): WalletHoldings {
@@ -48,17 +53,26 @@ export function useWalletHoldings(reloadKey: unknown): WalletHoldings {
   // names its key, so the last answer of a wallet that was switched away from is never shown as the
   // new one's while that one is read. The logo gate learns the answer too (data/logo-gate.ts): a
   // creator-hosted logo of a token the wallet holds is gated in the list as well, and every one
-  // waits while the holdings are read. A failed read tells it nothing, so they keep waiting.
+  // waits while the holdings are read. A failed read tells it nothing, so they keep waiting, and
+  // it is tried again (RETRY_MS).
+  const [retry, setRetry] = useState({ key: null as unknown, n: 0 });
+  const tries = retry.key === reloadKey ? retry.n : 0;
   const read = useAsync(
     async (_signal) => {
       if (!pubkey || !tracker) return null;
       let ok = true;
       const list = await tracker.heldTokens(pubkey).catch((): HeldTokenUtxo[] => ((ok = false), []));
       if (ok) logoGate.noteHoldings(pubkey, '*', heldIds(list));
-      return { pubkey, list };
+      return { pubkey, list, ok };
     },
-    [pubkey, tracker, reloadKey],
+    [pubkey, tracker, reloadKey, tries],
   );
+  const failed = !!read.data && !read.data.ok && read.data.pubkey === pubkey;
+  useEffect(() => {
+    if (!failed || tries >= RETRY_MS.length) return;
+    const h = setTimeout(() => setRetry({ key: reloadKey, n: tries + 1 }), RETRY_MS[tries]);
+    return () => clearTimeout(h);
+  }, [failed, tries, reloadKey]);
   const mine = read.data && read.data.pubkey === pubkey ? read.data.list : null;
   // The gate waits from the render that starts a read, before any icon of it asks for a logo.
   const asked = useRef<readonly unknown[]>([]);
