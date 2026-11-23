@@ -146,7 +146,9 @@ impl BatchWindow {
             self.cur = next;
         } else {
             // The smallest window that can hold the next block timed out before. Give it more time.
-            self.cur = self.timeout_at;
+            // With no timeout learnt, the window is at its maximum already and stays there: an
+            // unbounded request would follow from repeated empty answers (R3C2-6).
+            self.cur = self.timeout_at.min(self.max);
             self.escalate();
         }
     }
@@ -204,6 +206,19 @@ mod tests {
         assert_eq!(w.plan(1_000, 5_000, Some(4_000)).min_confirmations, Some(4_000));
         // A sink behind the cursor (another node, a reorg): no window.
         assert_eq!(w.plan(6_000, 5_000, None).min_confirmations, None);
+    }
+
+    /// R3C2-6: empty answers at the largest window, with no timeout learnt, keep the window at its maximum: the
+    /// request stays bounded, however often a node answers nothing.
+    #[test]
+    fn empty_answers_never_make_the_window_unbounded() {
+        let mut w = BatchWindow::new(1_000, 1, 1 << 20, Duration::from_secs(30));
+        for _ in 0..40 {
+            w.on_empty();
+            assert!(w.current() <= 1 << 20, "{}", w.current());
+        }
+        assert_eq!(w.current(), 1 << 20);
+        assert_eq!(w.plan(0, u64::MAX, None).until_blue, Some(1 << 20));
     }
 
     #[test]
