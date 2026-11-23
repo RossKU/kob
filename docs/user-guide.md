@@ -280,10 +280,10 @@ A buy order that delivers KCC-20 tokens has three delivery choices (ticket, "Adv
 
 While an order collects (only if you chose Collected), the tokens show as **Bought tokens** ("held by the order"), counted as yours. Press **Claim** to take
 them now (also "Claim and sell", "Claim and merge"); the order stays open. A cancel or a refund also sends them to you.
-Once a Collected order has been partly filled, the app can cancel or claim it only while the indexer answers, because it needs the
-indexer for the amount collected so far (and checks it on the node). While the indexer is down the order shows as unknown with
-"Cannot cancel yet"; the command line `kob recover` can look for it on the node and cancel it (after a fill of an uneven amount it
-needs the amount collected so far, `--amount-left`).
+While the indexer is down you can still cancel a Collected order: the app looks for it and for its collected tokens on the node,
+and the cancel sends you both. After many fills of uneven amounts the app may not find it and shows it as unknown; it can be
+cancelled once the indexer is back, or with the command line (`kob recover`, with `--amount-left` if you know the amount left).
+**Claim** needs the indexer.
 
 ## 7. Your orders: cancel, refund, renew
 
