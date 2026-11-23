@@ -59,7 +59,7 @@ import { RiskChip, TokenFacts, tokenTitle } from './TokenBadges';
 import { IdentityBlock } from './Fingerprint';
 import { PairDetails } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
-import { buildTokenRows, scaleNeedsIndexer, sharedTickerIds, tokenLabel, tradableRows, withShownRows } from './token-model';
+import { applyGenesisCheck, buildTokenRows, scaleNeedsIndexer, sharedTickerIds, tokenLabel, tradableRows, withShownRows } from './token-model';
 import { useHeldUntil } from './use-market-list';
 import { useMarketToken } from './use-market-token';
 import { useStandalone } from '../shell/standalone';
@@ -111,6 +111,12 @@ export function PairPage(props: { base: string; quote: string }) {
   useEffect(() => {
     if (bridgeQuoteFlip(baseGenesis, quoteGenesis)) replaceRoute(pairRoute(props.quote, props.base));
   }, [baseGenesis, quoteGenesis, props.base, props.quote]);
+  // Each token's facts with KOB's own genesis check applied, as its own page shows them: the risk
+  // chips, the ticket's panel and the details say what the check found (a live or bridge minter).
+  const checkedRows = useMemo(
+    () => [baseRow ? applyGenesisCheck(baseRow, baseGenesis) : null, quoteRow ? applyGenesisCheck(quoteRow, quoteGenesis) : null].filter((r): r is NonNullable<typeof r> => !!r),
+    [baseRow, quoteRow, baseGenesis, quoteGenesis],
+  );
   // The two tokens are always among the choices, also when no list names them.
   const selectorRows = useMemo(() => withShownRows(choiceRows, [baseRow, quoteRow]), [choiceRows, baseRow, quoteRow]);
   // The tab is `BASE/QUOTE · KOB`, by the tickers the page shows. A token without one is named by
@@ -361,7 +367,7 @@ export function PairPage(props: { base: string; quote: string }) {
                   onToggle={() => changeFavorites((f) => togglePair(f, props.base, props.quote))}
                   data-testid="pair-favorite"
                 />
-                {[baseRow, quoteRow].map((r) => (r ? <span class="mkt-bar-risk" key={r.covenantId}><RiskChip row={r} /></span> : null))}
+                {checkedRows.map((r) => <span class="mkt-bar-risk" key={r.covenantId}><RiskChip row={r} /></span>)}
               </>
             }
             stats={
@@ -445,7 +451,7 @@ export function PairPage(props: { base: string; quote: string }) {
               <Banner tone="warn" data-testid="ticket-standalone-scale">{t('market.ticket.standaloneScale')}</Banner>
             </Section>
           ) : (
-            <OrderTicket token={baseInfo} quote={quoteInfo} prefill={prefill} facts={<TokenFacts rows={[baseRow, quoteRow].filter((r): r is NonNullable<typeof r> => !!r)} compact data-testid="ticket-token-facts" />} />
+            <OrderTicket token={baseInfo} quote={quoteInfo} prefill={prefill} facts={<TokenFacts rows={checkedRows} compact data-testid="ticket-token-facts" />} />
           )}
           <p class="small muted pair-my-orders-row">
             <a href="#/portfolio/open" data-testid="pair-my-orders">{t('pair.myOrders')}</a>
@@ -454,7 +460,7 @@ export function PairPage(props: { base: string; quote: string }) {
       }
       mine={wallet.info ? <OrdersView embed={{ base: props.base, quote: props.quote }} /> : undefined}
       activity={<MarketActivity market={{ kind: 'pair', base: props.base, quote: props.quote }} pairFills={pairFillsSrc} />}
-      details={<PairDetails shared={shared} rows={[baseRow, quoteRow].filter((r): r is NonNullable<typeof r> => !!r)} services={services} />}
+      details={<PairDetails shared={shared} rows={checkedRows} services={services} />}
     />
   );
 }

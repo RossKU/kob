@@ -405,10 +405,12 @@ export default {
   'market.fact.more': 'what is this?',
   'market.fact.genesis_unverified.label': 'Genesis not verified',
   'market.fact.genesis_unverified.text': 'Its creation was not checked against its token program, so units minted outside the program may exist.',
+  'market.fact.genesis_unverified.textMint':
+    'Its creation was not checked against its token program, so units minted outside the program may exist, and a minter its program allows may still exist: a KRON minter creates any amount of the token.',
   'market.fact.live_mint_authority.label': 'Live mint authority',
   'market.fact.live_mint_authority.text': 'A mint authority still exists: more of this token can be created.',
   'market.fact.mint-authority.label': 'Mint authority',
-  'market.fact.mint-authority.text': 'Its program has a mint authority; whether one is still live was not checked.',
+  'market.fact.mint-authority.text': 'Its program has a mint authority: a minter can create more of this token (a KRON minter, any amount). Whether one is still live was not checked.',
   'market.fact.mint-authority.textNone': 'Its program has a mint authority; its creation record says none is live.',
   'market.fact.mint-authority.textLive': 'Its program has a mint authority, and one is still live (see High risk).',
   'market.fact.public-mint.label': 'Public mint',
@@ -431,6 +433,9 @@ export default {
   'market.fact.mint_allowance.label': 'Mint left: {amount}',
   'market.fact.mint_allowance.labelUpTo': 'Mint left: up to {amount}',
   'market.fact.mint_allowance.labelUnbounded': 'Mint: unbounded',
+  'market.fact.mint_allowance.labelBridge': 'Mint: by a bridge',
+  'market.fact.mint_allowance.textBridge':
+    "The creation gave this token a bridge minter: whoever controls the bridge (its signers, or its bridge covenant) can create more of the token. KOB has not verified the bridge, its signers or what backs it, and anyone can deploy the same minter. 'Genesis verified' does not mean a fixed supply.",
   'market.fact.mint_allowance.textUnbounded':
     "The creation gave this token a minter (a KRON holder with the minter flag): it can create any amount of the token, with no limit. 'Genesis verified' does not mean a fixed supply.",
   'market.fact.mint_allowance.text':
@@ -459,7 +464,7 @@ export default {
   'market.issuance.zkNote': 'per issuer docs; bridge not verified by KOB',
   'market.bridge.title': 'Bridge custody',
   'market.bridge.text':
-    "This token is minted by a bridge against USDT locked on Ethereum and BNB Chain. That backing is held by the bridge's signers, not by this token or by KOB: if they misbehave or lose their keys, the backing, and with it the token's value, can be lost. KOB does not check the bridge or its backing, and does not verify its signer set: compare the values below with the ones the issuer publishes.",
+    "Minted by BridgeMint, a federated bridge program: a set of signers mints this token, and its issuer says it does so against USDT locked on Ethereum and BNB Chain. KOB has not verified the bridge, its signers or that vault, and anyone can deploy the same program with signers of their own. Whoever holds those keys can create more of the token; if they misbehave or lose their keys, its value can be lost. Compare the signer set below with the one the issuer publishes.",
   'market.bridge.zkText':
     'Minted by Kozmic BridgeMint (ZK bridge). The bridge covenant and its Ethereum vault are not verified by KOB: anyone can deploy the same minter with a bridge of their own. Compare the bridge covenant below with the one the issuer publishes.',
   'market.bridge.signerSet': 'Signer set (hash of the signer keys)',

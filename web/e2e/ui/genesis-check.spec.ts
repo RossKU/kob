@@ -148,7 +148,7 @@ for (const vp of VIEWPORTS) {
       await expect(header.getByTestId('token-fact-genesis_verified')).toHaveCount(0);
     });
 
-    test('a federated-bridge token (kUSDT): the Issuance row names the bridge, the custody note is folded, no public mint is counted', async ({ appPage: page }) => {
+    test('a federated-bridge token (kUSDT): the Issuance row names the bridge, the custody note is folded and asserts no backing, the minter is High risk', async ({ appPage: page }) => {
       const k = kusdtRecording();
       const entry = { covenant_id: k.covenantId, claimed_ticker: k.ticker, claimed_name: k.ticker, program: PM, status: 'unvalidated' };
       await open(page, `/market/${k.covenantId}`, { tokens: [entry], files: { [k.covenantId]: k.kascov }, txs: { [k.genesisTxid]: k.explorerTx } });
@@ -165,16 +165,18 @@ for (const vp of VIEWPORTS) {
       await expect(note).toBeVisible();
       await expect(note.getByTestId('token-bridge-note-text')).toBeHidden();
       await note.getByRole('button', { name: 'Bridge custody' }).click();
-      await expect(note.getByTestId('token-bridge-note-text')).toContainText("held by the bridge's signers");
+      await expect(note.getByTestId('token-bridge-note-text')).toContainText('KOB has not verified the bridge, its signers or that vault');
       await expect(note.getByTestId('token-bridge-note-text')).toContainText('can be lost');
-      await expect(note.getByTestId('token-bridge-note-text')).toContainText('does not verify its signer set');
+      await expect(note.getByTestId('token-bridge-note-text')).toContainText('anyone can deploy the same program');
       // What the minter's state names, unchecked, for a holder to compare with the issuer's values.
       await expect(note.getByTestId('token-bridge-signer-set')).toHaveAttribute('data-value', 'b563c26ffc9f94f977e9d580f02a0b8501c023a8455f2f35b74e79f8df3c0301');
       await expect(note.getByTestId('token-bridge-guardian')).toHaveAttribute('data-value', '3c4c0ef3d985fb93ebdb30c5dd8ff8d6ffffa1e411565a21cc33aa2365a89566');
       await expect(note.getByTestId('token-bridge-covenant')).toHaveCount(0);
-      // A bridge's minter is no public mint: no allowance line, no High risk.
-      await expect(page.getByTestId('status-fact-mint_allowance')).toHaveCount(0);
-      await expect(header.getByTestId('badge-high-risk')).toHaveCount(0);
+      // A bridge's minter mints what whoever controls the bridge decides: High risk, and the mint
+      // reason says it is a bridge minter (audit 2026-11-23 A3-1).
+      await expect(page.getByTestId('status-fact-mint_allowance')).toHaveCount(0); // said as the High risk reason
+      await expect(header.getByTestId('badge-high-risk')).toHaveAttribute('data-reasons', 'mint_unbounded');
+      await expect(page.getByTestId('token-status-details')).toContainText('this token a bridge minter');
       expect(await horizontalOverflow(page)).toBe(0);
     });
 
@@ -193,8 +195,9 @@ for (const vp of VIEWPORTS) {
       await expect(note.getByTestId('token-bridge-note-text')).toContainText('not verified by KOB');
       await expect(note.getByTestId('token-bridge-covenant')).toHaveAttribute('data-value', k.bridgeCovenantId);
       await expect(note.getByTestId('token-bridge-signer-set')).toHaveCount(0);
-      await expect(page.getByTestId('status-fact-mint_allowance')).toHaveCount(0);
-      await expect(header.getByTestId('badge-high-risk')).toHaveCount(0);
+      await expect(page.getByTestId('status-fact-mint_allowance')).toHaveCount(0); // said as the High risk reason
+      await expect(page.getByTestId('token-status-details')).toContainText('this token a bridge minter');
+      await expect(header.getByTestId('badge-high-risk')).toHaveAttribute('data-reasons', 'mint_unbounded');
       expect(await horizontalOverflow(page)).toBe(0);
     });
 

@@ -4,7 +4,8 @@ import { normalizeTokenView } from '../../data/indexer';
 import { parseRegistry, displayName, type TokenInfo, type TokenRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import { TOKEN_PROGRAMS } from '../../kob/programs.generated';
-import { tokenTitle } from './TokenBadges';
+import { factLabel, factText, tokenTitle } from './TokenBadges';
+import { t } from '../../i18n';
 import type { GenesisCheck } from '../../data/genesis-check';
 import { riskFactIds, tokenRiskCodes, applyGenesisCheck, buildTokenRows, filterTokens, scaleNeedsIndexer, withShownRows, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenFactIds, tokenLabel, tradableHere, tradableRows, unknownRow, withKascovRemark, type TokenRow } from './token-model';
 
@@ -396,6 +397,23 @@ describe('the genesis line of a row: kascov\'s remark and KOB\'s own check', () 
     // A KRON minter mints without bound: the fact is there, with no allowance.
     expect(applyGenesisCheck(row(['genesis_unverified', 'mint-authority']), verified({ program: 'KronToken2433', mintUnbounded: true })).facts).toEqual(['genesis_verified', 'mint-authority', 'mint_allowance']);
     expect(mint.genesis).toMatchObject({ status: 'verified', mintAllowance: 500n });
+  });
+
+  it('a bridge-issued genesis is a ticket risk: its minter counts as a live mint authority, and the words assert no backing (audit 2026-11-23 A3-1, B2-M1)', () => {
+    const bridged = applyGenesisCheck(row(['genesis_unverified']), verified({ bridge: true, mintUnbounded: true, bridgeMinter: { kind: 'federated', facts: {} } }));
+    expect(tokenRiskCodes(bridged)).toContain('mint_unbounded');
+    expect(riskFactIds(bridged)).toEqual(['mint_allowance']);
+    expect(factLabel(bridged, 'mint_allowance')).toBe('Mint: by a bridge');
+    expect(factText(bridged, 'mint_allowance')).toMatch(/anyone can deploy the same minter/);
+    expect(t('market.bridge.text')).toMatch(/anyone can deploy the same program/);
+    expect(t('market.bridge.text')).not.toMatch(/This token is minted by a bridge against/);
+  });
+
+  it('an unchecked creation of a program with a mint authority says a minter may still exist (audit 2026-11-23 A3-3)', () => {
+    const kron = { ...row(['genesis_unverified']), powers: ['mint-authority'] };
+    expect(factText(kron, 'genesis_unverified')).toMatch(/a minter its program allows may still exist/);
+    expect(factText({ ...kron, genesis: { status: 'unavailable', reason: 'history' } }, 'genesis_unverified')).toMatch(/may still exist.*history is not available/);
+    expect(factText(row(['genesis_unverified']), 'genesis_unverified')).not.toMatch(/minter/);
   });
 
   it('a failure is the warning "Genesis check failed", even if kascov says verified', () => {
