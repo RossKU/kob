@@ -1,0 +1,10 @@
+{
+  "name": "kob-pages-deploy",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The wrangler that uploads web/dist to Cloudflare Pages (job deploy of .github/workflows/deploy-pages.yml), pinned with its whole tree by package-lock.json",
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "wrangler": "4.155.0"
+  }
+}

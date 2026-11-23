@@ -33,7 +33,13 @@ name: deploy-pages
 # Gate: the signer page this deploys is where users type private keys, so production is deployed only from refs/heads/master (a run
 # of any other ref, e.g. a workflow_dispatch from a branch, fails in the first step of job config), and job deploy runs in the GitHub
 # environment `production`: Settings > Environments > production can require a reviewer (and limit the deployment branches to master)
-# before the job starts (docs/ops/web-hosting.md, section 4a).
+# before the job starts (docs/ops/web-hosting.md, section 4a). When the public site is mainnet (KOB_PAGES_NETWORK=mainnet), job config
+# fails unless it reads a required reviewer and a deployment-branch rule on `production`, or, when the API refuses the read, unless the
+# variable KOB_PAGES_PRODUCTION_GATE_CONFIRMED=1 says they are set. A testnet-10 site is not checked.
+#
+# Jobs: build (no secret, no environment) builds and tests the bundle, writes config.json and hands web/dist and its hashes on as
+# artifacts; deploy (environment production, the Cloudflare secrets) only uploads that dist, with the wrangler of
+# scripts/deploy/package-lock.json installed with --ignore-scripts; verify (no secret) checks the live deployment against the hashes.
 
 on:
   push:
@@ -52,6 +58,7 @@ on:
       - "scripts/build-deploy.sh"
       - "scripts/release-hashes.sh"
       - "scripts/lib/**"
+      - "scripts/deploy/**"
       - ".github/workflows/deploy-pages.yml"
   workflow_dispatch:
 
@@ -184,6 +191,47 @@ jobs:
             '{include: ([{site: "testnet", project: $p, network: $n, branch: $br, internal: "", indexer: $i, extra: $e, networks: $nw, hosts: $hn, netswitch: $sw, node: $nd, explorer: $ex, names: $nm, public: $u}]
               + (if $mp != "" and $mint == "1" then [{site: "mainnet-internal", project: $mp, network: "mainnet", branch: "internal", internal: "1", indexer: $mi, extra: $me, networks: $mnw, hosts: $mhn, netswitch: "", node: $mnd, explorer: $mex, names: $mnm, public: ""}] else [] end))}')
           { echo "ready=true"; echo "branch=$BRANCH"; echo "matrix=$matrix"; } >> "$GITHUB_OUTPUT"
+      # The mainnet signer page must not deploy without a human approval. The workflow cannot set that (it is a repository setting), so it
+      # reads it: a required reviewer on `production` and a deployment-branch rule (master only, or protected branches with master
+      # protected). A read that shows either missing fails, whatever the variable says. A refused read fails unless the founder confirms
+      # the settings with KOB_PAGES_PRODUCTION_GATE_CONFIRMED=1 (docs/ops/web-hosting.md, section 4a). testnet-10 is not checked.
+      - name: The production environment gates a mainnet deploy (a required reviewer and a branch rule)
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NETWORK: ${{ vars.KOB_PAGES_NETWORK }}
+          CONFIRMED: ${{ vars.KOB_PAGES_PRODUCTION_GATE_CONFIRMED }}
+        run: |
+          if [ "${NETWORK:-testnet-10}" != mainnet ]; then
+            echo "public site on ${NETWORK:-testnet-10}: the production gate is not checked"; exit 0
+          fi
+          if [ -n "$CONFIRMED" ] && [ "$CONFIRMED" != 1 ]; then
+            echo "::error::KOB_PAGES_PRODUCTION_GATE_CONFIRMED must be 1 or unset, not \`$CONFIRMED\`"; exit 1
+          fi
+          fail() { echo "::error title=deploy-pages gate::$1 (docs/ops/web-hosting.md, section 4a)"; echo "- **gate:** $1" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          if env_json=$(gh api "repos/$GITHUB_REPOSITORY/environments/production" 2> "$RUNNER_TEMP/gate.err"); then
+            reviewers=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' <<< "$env_json")
+            [ "$reviewers" -gt 0 ] || fail "the production environment has no required reviewer: a mainnet deploy would run with no approval"
+            policy=$(jq -c '.deployment_branch_policy' <<< "$env_json")
+            if [ "$policy" = null ]; then
+              fail "the production environment has no deployment-branch rule (every branch may deploy)"
+            elif [ "$(jq -r '.custom_branch_policies' <<< "$policy")" = true ]; then
+              names=$(gh api "repos/$GITHUB_REPOSITORY/environments/production/deployment-branch-policies" \
+                --jq '[.branch_policies[] | "\(.type // "branch"):\(.name)"] | sort | join(",")') || fail "the deployment-branch rules of production could not be read"
+              [ "$names" = "branch:master" ] || fail "the deployment-branch rule of production must be the branch master only, not \`$names\`"
+            else
+              protected=$(gh api "repos/$GITHUB_REPOSITORY/branches/master" --jq .protected) || fail "whether master is protected could not be read"
+              [ "$protected" = true ] || fail "production deploys from protected branches, but master is not protected"
+            fi
+            if [ "$(jq -r '.can_admins_bypass' <<< "$env_json")" = true ]; then
+              echo "::warning title=deploy-pages gate::administrators may bypass the production reviewer (Settings > Environments > production: untick 'Allow administrators to bypass')"
+            fi
+            echo "production gate: $reviewers required reviewer(s), deployment-branch rule $policy"
+          elif [ "$CONFIRMED" = 1 ]; then
+            echo "::notice title=deploy-pages gate::the production settings could not be read ($(head -c 200 "$RUNNER_TEMP/gate.err")); KOB_PAGES_PRODUCTION_GATE_CONFIRMED=1 says the reviewer and the branch rule are set"
+          else
+            fail "the production environment could not be read ($(head -c 200 "$RUNNER_TEMP/gate.err")): set the required reviewer and the branch rule, then the variable KOB_PAGES_PRODUCTION_GATE_CONFIRMED=1"
+          fi
       - if: steps.gate.outputs.ready == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -209,16 +257,20 @@ jobs:
           done < <(jq -c '.include[]' <<< "$MATRIX")
           exit "$rc"
 
-  deploy:
+  # The bundle, built and tested in a job that holds no secret and runs in no environment: nothing that runs here (npm ci, a build
+  # script, vite, the tests) ever shares a runner with the Cloudflare token. It hands web/dist (config.json included) and its hashes
+  # to the deploy and verify jobs as artifacts, which a later job cannot change.
+  build:
     needs: config
     if: needs.config.outputs.ready == 'true' && github.ref == 'refs/heads/master'
-    name: deploy (${{ matrix.site }})
+    name: build (${{ matrix.site }})
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.config.outputs.matrix) }}
-    # a required reviewer of the environment approves here, before the job (and the Cloudflare secrets) start
-    environment: production
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # the step "ci passed for this commit" reads the ci.yml run of the same sha
     defaults:
       run:
         shell: bash # -eo pipefail: a failing command before a pipe fails the step
@@ -247,7 +299,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       # the app's e2e suite is not run again here: ci.yml runs it on the same commit (sharded), and the step "ci passed for this commit" below waits for
-      # that run before anything is uploaded
+      # that run before anything is handed to the deploy job
 
       # the release bundle (vite build plus dist/registry/tokens.json, docs/ops/release.md 4); the link-preview head (web/head-meta.mjs) takes the
       # network and, when set, the public origin the deployment is served from (og:url, og:image)
@@ -295,44 +347,125 @@ jobs:
       - name: sha256 of every file deployed (the logic of scripts/release-hashes.sh)
         working-directory: .
         run: find web/dist -type f | LC_ALL=C sort | xargs sha256sum > "$RUNNER_TEMP/deployed.sha256"
-      # the hashes go to the verify job as an artifact uploaded here, before the first step that holds the Cloudflare token: a later step of this
-      # runner cannot replace them (an artifact name is written once per run, and the job cannot delete artifacts)
-      - name: The hashes, for the verify job
+      # the hashes go to the deploy and verify jobs, the dist to the deploy job; an artifact name is written once per run, so no later job
+      # can replace either
+      - name: The hashes, for the deploy and verify jobs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deployed-sha256-${{ matrix.site }}
           path: ${{ runner.temp }}/deployed.sha256
           if-no-files-found: error
           retention-days: 7
+      - name: The config.json and release-hashes output, for the deploy job's summary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-notes-${{ matrix.site }}
+          path: |
+            ${{ runner.temp }}/pages-config.txt
+            ${{ runner.temp }}/release-hashes.md
+          if-no-files-found: error
+          retention-days: 7
+      - name: web/dist, for the deploy job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-dist-${{ matrix.site }}
+          path: web/dist
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
+  # The upload, and the only job that sees the Cloudflare token. It builds nothing and runs no code of the app's dependencies: it takes the
+  # dist of job build, checks it against the hashes, and runs wrangler from scripts/deploy/package-lock.json (an exact version and
+  # integrity pins for its whole tree, installed with --ignore-scripts). Every value reaches a command through env:, never inline.
+  deploy:
+    needs: [config, build]
+    if: needs.config.outputs.ready == 'true' && github.ref == 'refs/heads/master'
+    name: deploy (${{ matrix.site }})
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.config.outputs.matrix) }}
+    # a required reviewer of the environment approves here, before the job (and the Cloudflare secrets) start
+    environment: production
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash # -eo pipefail: a failing command before a pipe fails the step
+    env:
+      WRANGLER: ${{ github.workspace }}/scripts/deploy/node_modules/.bin/wrangler
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: wrangler from scripts/deploy/package-lock.json (no install scripts)
+        working-directory: scripts/deploy
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          "$WRANGLER" --version
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: web-dist-${{ matrix.site }}
+          path: web/dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: deployed-sha256-${{ matrix.site }}
+          path: ${{ runner.temp }}/handover
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build-notes-${{ matrix.site }}
+          path: ${{ runner.temp }}/handover
+      - name: The dist to upload is the one job build hashed (every file, nothing more)
+        run: |
+          sha256sum --check --strict --quiet "$RUNNER_TEMP/handover/deployed.sha256"
+          files=$(find web/dist -type f | wc -l)
+          hashed=$(wc -l < "$RUNNER_TEMP/handover/deployed.sha256")
+          [ "$files" = "$hashed" ] || { echo "::error::web/dist has $files files, job build hashed $hashed"; exit 1; }
       # a first run creates the Direct Upload project (docs/ops/web-hosting.md 1); on later runs it exists and this step's failure is ignored
       - name: Create the Pages project if it does not exist yet
         continue-on-error: true
-        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: "4.152.0"
-          packageManager: npm
-          command: pages project create ${{ matrix.project }} --production-branch=${{ needs.config.outputs.branch }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PROJECT: ${{ matrix.project }}
+          PRODUCTION_BRANCH: ${{ needs.config.outputs.branch }}
+        run: |
+          "$WRANGLER" pages project create "$PROJECT" --production-branch="$PRODUCTION_BRANCH"
+      # wrangler writes what the deployment became (url, alias, environment, id) to WRANGLER_OUTPUT_FILE_PATH, one JSON object per line
       - name: Upload web/dist to Cloudflare Pages
         id: deploy
-        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: "4.152.0"
-          packageManager: npm
-          command: pages deploy web/dist --project-name=${{ matrix.project }} --branch=${{ matrix.branch }} --commit-hash=${{ github.sha }} --commit-dirty=true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PROJECT: ${{ matrix.project }}
+          PAGES_BRANCH: ${{ matrix.branch }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.ndjson
+        run: |
+          "$WRANGLER" pages deploy web/dist --project-name="$PROJECT" --branch="$PAGES_BRANCH" --commit-hash="$GITHUB_SHA" --commit-dirty=true
+          d=$(jq -cs 'map(select(.type == "pages-deploy-detailed")) | last // empty' "$WRANGLER_OUTPUT_FILE_PATH")
+          [ -n "$d" ] || { echo "::error::wrangler reported no pages deployment"; exit 1; }
+          {
+            echo "deployment-url=$(jq -r '.url // ""' <<< "$d")"
+            echo "pages-deployment-alias-url=$(jq -r '.alias // ""' <<< "$d")"
+            echo "pages-environment=$(jq -r '.environment // ""' <<< "$d")"
+            echo "pages-deployment-id=$(jq -r '.deployment_id // ""' <<< "$d")"
+          } >> "$GITHUB_OUTPUT"
       - name: Summary (deployment URL, config.json, sha256 of every deployed file)
-        working-directory: .
         env:
           URL: ${{ steps.deploy.outputs.deployment-url }}
           ALIAS: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
           PAGES_ENV: ${{ steps.deploy.outputs.pages-environment }}
           DEPLOYMENT_ID: ${{ steps.deploy.outputs.pages-deployment-id }}
+          SITE: ${{ matrix.site }}
+          NETWORK: ${{ matrix.network }}
+          PROJECT: ${{ matrix.project }}
         run: |
           {
-            echo "## Cloudflare Pages deployment: ${{ matrix.site }} (${{ matrix.network }}, project ${{ matrix.project }})"
+            echo "## Cloudflare Pages deployment: $SITE ($NETWORK, project $PROJECT)"
             echo
             echo "- deployment: $URL"
             [ -z "$ALIAS" ] || echo "- alias: $ALIAS"
@@ -342,18 +475,18 @@ jobs:
             echo "### config.json"
             echo
             echo '```'
-            cat "$RUNNER_TEMP/pages-config.txt"
+            cat "$RUNNER_TEMP/handover/pages-config.txt"
             echo '```'
             echo
             echo "### Deployed files (sha256)"
             echo
             echo '```'
-            cat "$RUNNER_TEMP/deployed.sha256"
+            cat "$RUNNER_TEMP/handover/deployed.sha256"
             echo '```'
             echo
             echo "<details><summary>scripts/release-hashes.sh (the bundle as built, before config.json)</summary>"
             echo
-            cat "$RUNNER_TEMP/release-hashes.md"
+            cat "$RUNNER_TEMP/handover/release-hashes.md"
             echo
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -372,7 +505,7 @@ jobs:
             echo "::error::the upload became a ${PAGES_ENV:-unknown} deployment, not production: set KOB_PAGES_BRANCH to the production branch of the Pages project (docs/ops/web-hosting.md)"
             exit 1
           fi
-      # the URLs wrangler gave, for the verify job (which checks them with the hashes recorded before the upload)
+      # the URLs wrangler gave, for the verify job (which checks them with the hashes recorded by job build)
       - name: The deployment URLs, for the verify job
         env:
           URL: ${{ steps.deploy.outputs.deployment-url }}
@@ -393,13 +526,13 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PROJECT: ${{ matrix.project }}
           PUBLIC_URL: ${{ matrix.public }}
-        run: node scripts/pages-domain.mjs --project "$PROJECT" --public-url "$PUBLIC_URL" | tee -a "$GITHUB_STEP_SUMMARY"
+        run: node web/scripts/pages-domain.mjs --project "$PROJECT" --public-url "$PUBLIC_URL" | tee -a "$GITHUB_STEP_SUMMARY"
 
   # The post-deploy checks, on a runner of their own: no secret, no environment, read access to the repository only. The hashes are the
-  # artifact the deploy job uploaded before its first step with the Cloudflare token, and scripts/check-pages.mjs comes from a fresh
-  # checkout of the same commit, so nothing that ran beside the token can rewrite either (the deployment URLs are still wrangler's).
+  # artifact of job build, which never sees the Cloudflare token, and scripts/check-pages.mjs comes from a fresh checkout of the same
+  # commit, so nothing that ran beside the token can rewrite either (the deployment URLs are still wrangler's).
   verify:
-    needs: [config, deploy]
+    needs: [config, build, deploy]
     if: needs.config.outputs.ready == 'true' && github.ref == 'refs/heads/master'
     name: verify (${{ matrix.site }})
     strategy:
