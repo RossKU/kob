@@ -260,9 +260,15 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     if backfill_activity(conn)? {
         tracing::info!("counted the activity totals once (kept by triggers from now on)");
     }
+    if let Some(n) = backfill_auto_live(conn)? {
+        tracing::info!(locks = n, "indexed the automatic creator locks still holding once (kept by triggers from now on)");
+    }
     if let Some(n) = backfill_book_live(conn)? {
         tracing::info!(orders = n, "indexed the live KAS books once (kept by triggers from now on)");
     }
+    // The windows of rows an older build wrote (or the fill above) are set before anything reads.
+    let daa = super::book::cursor_daa(conn)?.min(i64::MAX as u64) as i64;
+    maintain_live_books(conn, daa, unix_now())?;
     let unknown_txs = backfill_executor_txs(conn)?;
     if unknown_txs > 0 {
         tracing::info!(
@@ -332,6 +338,99 @@ pub fn backfill_book_live(conn: &Connection) -> DbResult<Option<usize>> {
     meta_set(&tx, "book_live", "1")?;
     tx.commit()?;
     Ok(Some(n))
+}
+
+/// Fills `kcc23_auto_live` (schema.sql, R4C2-6) once: the automatic locks whose locked output is an
+/// unspent holding. It does nothing (`None`) once done (`meta.kcc23_auto_live`).
+pub fn backfill_auto_live(conn: &Connection) -> DbResult<Option<usize>> {
+    if meta_get(conn, "kcc23_auto_live")?.is_some() {
+        return Ok(None);
+    }
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM kcc23_auto_live", [])?;
+    let n = tx.execute(
+        "INSERT OR IGNORE INTO kcc23_auto_live (until, covenant_id) SELECT a.until, a.covenant_id FROM kcc23_auto_locks a \
+         WHERE EXISTS (SELECT 1 FROM token_holdings h WHERE h.idx = a.idx AND h.spent_block IS NULL \
+                       AND h.tx_id = (SELECT id FROM txs WHERE substr(h, 1, 8) = substr(a.genesis_txid, 1, 8) AND h = a.genesis_txid))",
+        [],
+    )?;
+    meta_set(&tx, "kcc23_auto_live", "1")?;
+    tx.commit()?;
+    Ok(Some(n))
+}
+
+fn unix_now() -> Option<i64> {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs().min(i64::MAX as u64) as i64)
+}
+
+/// The `open` of a row whose window the writer set, at DAA `?1` and the wall clock `?2` (unix
+/// seconds, `i64::MIN`: none): 4 past its deadline, 0 not yet open, 2 closed, else 1.
+const OPEN_AT: &str = "CASE WHEN ok = 0 THEN 3 WHEN deadline IS NOT NULL AND deadline <= ?2 THEN 4 WHEN open_from > ?1 THEN 0 \
+                       WHEN closed_from <= ?1 THEN 2 ELSE 1 END";
+
+/// Keeps the fillable windows of `book_live` and `pair_live` (schema.sql, R4C2-2) at DAA `daa`
+/// and the wall clock `unix`. The writer runs it in every commit (`ingest::commit_batch`).
+///
+/// - A row the triggers wrote or sent back (`ok` NULL: a new state, custody or flag) gets its
+///   window from the order's state ([`super::reads::book_window`], [`super::pairs::pair_window_of`]).
+/// - A row whose window opened or closed at `daa` (or opened again after a revert) moves, through
+///   the `(open, open_from)`, `(open, closed_from)` and `(open, deadline)` indexes: the work is the
+///   rows that change, never the rows that wait.
+///
+/// The reads take only rows with `open` 1 (a row the writer has not set yet counts as 1 and is
+/// decided row by row). Returns the rows set.
+pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> DbResult<usize> {
+    let unix = unix.unwrap_or(i64::MIN);
+    let mut set = 0;
+    for table in ["book_live", "pair_live"] {
+        let ids: Vec<i64> = conn
+            .prepare_cached(&format!("SELECT order_id FROM {table} INDEXED BY {table}_unset WHERE ok IS NULL"))?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for id in ids {
+            let w = if table == "book_live" { super::reads::book_window(conn, id)? } else { super::pairs::pair_window_of(conn, id)? };
+            let Some(w) = w else {
+                conn.prepare_cached(&format!("DELETE FROM {table} WHERE order_id = ?1"))?.execute([id])?;
+                continue;
+            };
+            let extra = if table == "book_live" { ", auction = ?8, key = COALESCE(?9, key)" } else { "" };
+            let sql = format!(
+                "UPDATE {table} SET ok = ?3, open_from = ?4, closed_from = ?5, deadline = ?6{extra}, open = \
+                 CASE WHEN ?3 = 0 THEN 3 WHEN ?6 IS NOT NULL AND ?6 <= ?2 THEN 4 WHEN ?4 > ?1 THEN 0 WHEN ?5 <= ?1 THEN 2 ELSE 1 END \
+                 WHERE order_id = ?7"
+            );
+            let mut st = conn.prepare_cached(&sql)?;
+            if table == "book_live" {
+                st.execute(rusqlite::params![
+                    daa,
+                    unix,
+                    w.ok as i64,
+                    w.open_from,
+                    w.closed_from,
+                    w.deadline,
+                    id,
+                    w.auction as i64,
+                    w.key
+                ])?;
+            } else {
+                st.execute(rusqlite::params![daa, unix, w.ok as i64, w.open_from, w.closed_from, w.deadline, id])?;
+            }
+            set += 1;
+        }
+        // The rows whose window opened or closed, and after a revert the other way: each through an
+        // index range of the rows that change.
+        for cand in [
+            "open = 0 AND open_from <= ?1",
+            "open = 1 AND closed_from <= ?1",
+            "open = 1 AND deadline <= ?2",
+            "open = 1 AND open_from > ?1",
+            "open = 2 AND closed_from > ?1",
+        ] {
+            conn.prepare_cached(&format!("UPDATE {table} SET open = {OPEN_AT} WHERE {cand}"))?
+                .execute(rusqlite::params![daa, unix])?;
+        }
+    }
+    Ok(set)
 }
 
 /// Counts the bytes the KCC-23 candidates hold (`counters.kcc23_candidate_bytes`, schema.sql) once, for

@@ -713,8 +713,8 @@ pub struct StatsView {
     /// The 24 h window held more fills than one query reads ([`MAX_FILL_ROWS`]), so the figures
     /// cover the newest ones.
     pub window_truncated: bool,
-    /// A side of the book was read only in part, its best `reads::BOOK_SCAN_MAX` live listed or
-    /// `reads::BOOK_ORDERS_MAX` fillable orders by limit price (R4C2-2): the touch, depth and open
+    /// A side of the book was read only in part: more than `reads::BOOK_ORDERS_MAX` fillable orders, or
+    /// `reads::BOOK_MOVING_MAX` auctions (R4C2-2): the touch, depth and open
     /// counts are of those. Not sent when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub book_truncated: bool,

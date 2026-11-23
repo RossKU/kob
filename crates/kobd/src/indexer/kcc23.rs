@@ -855,9 +855,11 @@ pub fn due_locks(conn: &Connection, now_ms: u64, limit: usize) -> DbResult<Vec<k
     }
     let rows: Vec<Vec<u8>> = {
         let mut st = conn.prepare_cached(concat!(
-            "SELECT a.covenant_id FROM kcc23_auto_locks a WHERE a.until <= ?1 AND EXISTS (SELECT 1 FROM token_holdings h WHERE h.tx_id = ",
+            // The locks still holding (`kcc23_auto_live`): the released ones are not read (R4C2-6).
+            "SELECT a.covenant_id FROM kcc23_auto_live l CROSS JOIN kcc23_auto_locks a ON a.until = l.until AND a.covenant_id = l.covenant_id \
+             WHERE l.until <= ?1 AND EXISTS (SELECT 1 FROM token_holdings h WHERE h.tx_id = ",
             super::ids::tx_of!("a.genesis_txid"),
-            " AND h.idx = a.idx AND h.spent_block IS NULL) ORDER BY a.until, a.covenant_id LIMIT ?2"
+            " AND h.idx = a.idx AND h.spent_block IS NULL) ORDER BY l.until, l.covenant_id LIMIT ?2"
         ))?;
         let v =
             st.query_map(params![now_ms.min(i64::MAX as u64) as i64, limit as i64], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;

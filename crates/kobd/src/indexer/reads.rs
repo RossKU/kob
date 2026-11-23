@@ -362,15 +362,19 @@ pub const OPEN_TOKEN_ROWS_MAX: i64 = 5_000;
 ///
 /// Each view carries the open ask and bid counts and the decimals of its token.
 pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<TokenView>> {
-    // The orders the books list (`BOOK_WHERE`, a template this build pins): an ask only with its
-    // exact custody, and nothing with no amount left. Each side of each listed token is counted
-    // from its live book (`book_live`, the book reads' rows): at most `BOOK_SCAN_MAX`, so a side
-    // of more says that many (R4C2-2). No read of every live order of the store.
+    // The orders the books list: each side of each listed token is counted from the rows of its live
+    // book that a taker can fill at the store's DAA score (`book_live`, `open` 1: exact custody, not
+    // possibly frozen, an amount left, a pinned template, inside its window), by the index alone. At
+    // most `BOOK_ORDERS_MAX` + 2 `BOOK_MOVING_MAX`, so a side of more says that many (R4C2-2). No
+    // read of every live order. A row the writer has not set yet (`ok` NULL) is checked as the
+    // books check it.
     let pinned = pinned_template();
     let count_sql = format!(
-        "SELECT COUNT(*) FROM (SELECT 1 {from} WHERE o.listed = 1 AND o.in_book = 1 AND s.status IN ('open','partial') \
-         AND s.state_known = 1 AND {NOT_FROZEN} AND {HAS_AMOUNT} AND {CUSTODY_OK} AND {pinned})",
-        from = book_from()
+        "SELECT COUNT(*) FROM (SELECT bl.order_id, bl.ok FROM book_live bl INDEXED BY book_live_key \
+               WHERE bl.token_id = (SELECT id FROM ids WHERE h = ?1) AND bl.side = ?2 AND bl.open = 1 LIMIT {cap}) b \
+         CROSS JOIN order_state s ON s.order_id = b.order_id CROSS JOIN orders o ON o.id = b.order_id \
+         WHERE b.ok = 1 OR (b.ok IS NULL AND s.state_known = 1 AND {NOT_FROZEN} AND {HAS_AMOUNT} AND {CUSTODY_OK} AND {pinned})",
+        cap = BOOK_ORDERS_MAX + 2 * BOOK_MOVING_MAX
     );
     let count = |cov: &[u8], side: i64| -> DbResult<i64> {
         Ok(conn.prepare_cached(&count_sql)?.query_row(rusqlite::params![cov, side], |r| r.get(0))?)
@@ -833,8 +837,8 @@ pub struct BookView {
     pub asks: BookSide,
     /// Descending by price per base unit.
     pub bids: BookSide,
-    /// A side was read only in part: its best `BOOK_SCAN_MAX` live listed orders, or `BOOK_ORDERS_MAX`
-    /// fillable ones, by limit price per base unit (R4C2-2). Not sent when false.
+    /// A side was read only in part: it has more than `BOOK_ORDERS_MAX` fillable orders, or `BOOK_MOVING_MAX`
+    /// auctions or orders opened since the last commit (R4C2-2). Not sent when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub truncated: bool,
 }
@@ -1017,37 +1021,78 @@ fn resting_levels_of(
     resting_level_of(s, udaa, price, remaining, now).map(|(q, a)| (None, q, a)).into_iter().collect()
 }
 
-/// Most rows of `book_live` one read of a book side takes: the best by limit price per base unit
-/// (R4C2-2). The rows past it are not read, and the answer says `truncated`.
-pub const BOOK_SCAN_MAX: usize = 10_000;
-
-/// Most orders a matcher may fill now that one read of a book side takes, best by limit price per
-/// base unit, before it stops (R4C2-2). Each costs the decoding of its tip state, a curve's up to
-/// 1,000 levels.
+/// Most orders with a fixed quote one read of a book side takes: those a taker can fill now, best
+/// by price per base unit (R4C2-2). Each costs the decoding of its tip state (a curve's up to 1,000
+/// levels). A side of more is cut, and the answer says `truncated`.
 pub const BOOK_ORDERS_MAX: usize = 1_000;
 
-/// FROM of a read of one book side (`?1` the token, `?2` the side): the best [`BOOK_SCAN_MAX`]
-/// rows of `book_live` in its order, then their state and order rows (aliases `s` and `o`).
+/// Most auction orders (their quote moves: a decaying ask, a rising bid, an armed entry), and apart
+/// most orders that became fillable since the store's last commit, one read of a book side takes
+/// (R4C2-2). Auctions are read apart because their limit, the order key, is not their quote: they
+/// cannot take the places of the orders with a fixed quote.
+pub const BOOK_MOVING_MAX: usize = 200;
+
+/// The `book_live` rows of one side (`?1` the token, `?2` the side) that a read takes, as a subquery
+/// of `order_id`: the fillable rows at DAA `now` (and the wall clock `unix`), best first by key, at
+/// most [`BOOK_ORDERS_MAX`] with a fixed quote and [`BOOK_MOVING_MAX`] auctions; and at most
+/// [`BOOK_MOVING_MAX`] rows that opened after the store's DAA score and by `now`.
 ///
-/// The rows come in `book_live` order: the subquery is the outer loop (a LIMIT keeps it from being
-/// flattened into the join), and no ORDER BY sorts the joined rows.
-pub(crate) fn book_from() -> String {
+/// A row that cannot be filled now (not active yet, a slice not open, expired, idle, past its
+/// deadline, no exact custody, possibly frozen, a taker kind) has `open` != 1 and is outside the
+/// index ranges read, so it costs nothing and takes no place (`db::maintain_live_books`). The
+/// window terms skip only the rows whose window passed since the store's last commit.
+fn book_rows(now: i64, unix: Option<u64>) -> String {
+    book_arms(now, unix)
+        .iter()
+        .map(|(arm, cap)| format!("SELECT order_id FROM ({arm} LIMIT {cap})"))
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ")
+}
+
+/// The three index ranges of [`book_rows`], each without its LIMIT, and its bound.
+fn book_arms(now: i64, unix: Option<u64>) -> [(String, usize); 3] {
+    let mut window = format!("(bl.closed_from IS NULL OR bl.closed_from > {now}) AND (bl.open_from IS NULL OR bl.open_from <= {now})");
+    if let Some(u) = unix {
+        window.push_str(&format!(" AND (bl.deadline IS NULL OR bl.deadline > {})", u.min(i64::MAX as u64)));
+    }
+    let side = "bl.token_id = (SELECT id FROM ids WHERE h = ?1) AND bl.side = ?2";
+    let ranked = |auction: i64| {
+        format!(
+            "SELECT bl.order_id FROM book_live bl INDEXED BY book_live_key WHERE {side} AND bl.open = 1 AND bl.auction = {auction} \
+             AND {window} ORDER BY bl.key, bl.genesis_block, bl.covenant_id"
+        )
+    };
+    [
+        (ranked(0), BOOK_ORDERS_MAX),
+        (ranked(1), BOOK_MOVING_MAX),
+        (
+            format!("SELECT bl.order_id FROM book_live bl INDEXED BY book_live_pending WHERE {side} AND bl.open = 0 AND bl.open_from <= {now} AND {window}"),
+            BOOK_MOVING_MAX,
+        ),
+    ]
+}
+
+/// FROM of a read of one book side (`?1` the token, `?2` the side) at DAA `now`: the rows of
+/// [`book_rows`], then their state and order rows (aliases `s` and `o`).
+pub(crate) fn book_from(now: i64, unix: Option<u64>) -> String {
     format!(
-        "FROM (SELECT bl.order_id FROM book_live bl WHERE bl.token_id = (SELECT id FROM ids WHERE h = ?1) AND bl.side = ?2 \
-               ORDER BY bl.key, bl.genesis_block, bl.covenant_id LIMIT {BOOK_SCAN_MAX}) b \
-         CROSS JOIN order_state s ON s.order_id = b.order_id CROSS JOIN orders o ON o.id = b.order_id"
+        "FROM ({}) b CROSS JOIN order_state s ON s.order_id = b.order_id CROSS JOIN orders o ON o.id = b.order_id",
+        book_rows(now, unix)
     )
 }
 
-/// Whether a book side holds more rows of `book_live` than one read takes ([`BOOK_SCAN_MAX`]).
-fn book_beyond_scan(conn: &Connection, token: &Hash32, side: i64) -> DbResult<bool> {
-    Ok(conn
-        .prepare_cached("SELECT 1 FROM book_live WHERE token_id = (SELECT id FROM ids WHERE h = ?1) AND side = ?2 LIMIT 1 OFFSET ?3")?
-        .exists(rusqlite::params![token.0.to_vec(), side, BOOK_SCAN_MAX as i64])?)
+/// Whether a book side at DAA `now` holds more fillable rows than one read takes.
+fn book_beyond_scan(conn: &Connection, token: &Hash32, side: i64, now: i64, unix: Option<u64>) -> DbResult<bool> {
+    for (arm, cap) in book_arms(now, unix) {
+        if conn.prepare(&format!("{arm} LIMIT 1 OFFSET {cap}"))?.exists(rusqlite::params![token.0.to_vec(), side])? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The orders of one side of the book of a token, best first, at most `depth`, and whether the
-/// read stopped at [`BOOK_SCAN_MAX`] or [`BOOK_ORDERS_MAX`].
+/// read was cut at [`BOOK_ORDERS_MAX`] or [`BOOK_MOVING_MAX`].
 ///
 /// A `KobCurveAsk` is one row per remaining level (`curve_level`), each with that level's price
 /// and size, all of one covenant id.
@@ -1061,7 +1106,7 @@ fn book_side_orders(
     let now = book_daa(conn, ctx)?;
     let live = fillable_now(now, ctx.now_unix);
     let pinned = pinned_template();
-    let from = book_from();
+    let from = book_from(now, ctx.now_unix);
     let sql = format!(
         "SELECT o.covenant_id, o.contract, o_mk.h, o.price, o.tip, o.min_fill, o.scale, o.expiry_daa, o.genesis_daa, \
                 s.amount_exact, s.status, s.remaining_amount, s.cur_value, o.deadline, kob_ustate(u.state, {GENESIS_O}), u.created_daa, s.last_daa \
@@ -1157,13 +1202,7 @@ fn book_side_orders(
     };
     let trim_at = depth.saturating_mul(4).max(256);
     let mut out: Vec<(i64, i64, BookOrderView)> = vec![];
-    let mut truncated = false;
-    for (n, r) in rows.enumerate() {
-        // A row past the bound: the read stops (R4C2-2).
-        if n == BOOK_ORDERS_MAX {
-            truncated = true;
-            break;
-        }
+    for r in rows {
         if let Some(v) = r? {
             out.extend(v);
             if out.len() > trim_at {
@@ -1173,7 +1212,7 @@ fn book_side_orders(
         }
     }
     sort(&mut out);
-    let truncated = truncated || book_beyond_scan(conn, token, side)?;
+    let truncated = book_beyond_scan(conn, token, side, now, ctx.now_unix)?;
     Ok((out.into_iter().take(depth).map(|(_, _, v)| v).collect(), truncated))
 }
 
@@ -1254,7 +1293,7 @@ pub(crate) fn book_side_sorted(
 /// Calls `f` with the resting levels of each live listed order of one side of the book of a
 /// token, as [`book_side_sorted`] reads them: `(levels, scale, amount_exact)`, the levels as
 /// [`resting_levels`] gives them, in no order. It returns whether the read stopped at
-/// [`BOOK_SCAN_MAX`] or [`BOOK_ORDERS_MAX`] (R4C2-2): the orders it read are the best by limit
+/// [`BOOK_ORDERS_MAX`] or [`BOOK_MOVING_MAX`] (R4C2-2): the orders it read are the best fillable ones by
 /// price per base unit.
 ///
 /// One order's levels are held at a time, so a reader that keeps what it needs as it goes holds
@@ -1269,7 +1308,7 @@ pub(crate) fn for_each_resting(
     let now = book_daa(conn, ctx)?;
     let live = fillable_now(now, ctx.now_unix);
     let pinned = pinned_template();
-    let from = book_from();
+    let from = book_from(now, ctx.now_unix);
     let sql = format!(
         "SELECT o.price, COALESCE(o.scale, 1), s.remaining_amount, s.amount_exact, o.contract, kob_ustate(u.state, {GENESIS_O}), \
                 COALESCE(u.created_daa, s.last_daa) \
@@ -1283,14 +1322,95 @@ pub(crate) fn for_each_resting(
         let level = resting_levels(&r.get::<_, String>(4)?, r.get(5)?, r.get(6)?, price, remaining, now);
         Ok((level, r.get::<_, i64>(1)?, r.get::<_, i64>(3)?))
     })?;
-    for (n, r) in rows.enumerate() {
-        if n == BOOK_ORDERS_MAX {
-            return Ok(true);
-        }
+    for r in rows {
         let (level, scale, exact) = r?;
         f(level, scale, exact);
     }
-    book_beyond_scan(conn, token, side)
+    book_beyond_scan(conn, token, side, now, ctx.now_unix)
+}
+
+/// When the current state of a live KAS-book order can be filled, as `db::maintain_live_books`
+/// stores it in `book_live` (R4C2-2): the rules of [`fillable_now`], [`RESTING_TIF`],
+/// [`CUSTODY_OK`], [`NOT_FROZEN`] and [`resting_level_of`], as DAA bounds.
+pub(crate) struct LiveWindow {
+    /// The order can be filled while the window is open: exact custody, not possibly frozen, a
+    /// known state with an amount left, a pinned template, a resting (GTC) kind, not an empty curve.
+    pub ok: bool,
+    /// `activeFrom`; for a TWAP / DCA order, also its UTXO's DAA plus `interval` (its slice).
+    pub open_from: i64,
+    /// The expiry, and for every kind but a curve the soft expiry (its UTXO's DAA plus 90 days).
+    pub closed_from: i64,
+    /// The day-order deadline (unix seconds).
+    pub deadline: Option<i64>,
+    /// The quote moves ([`auction_of`]).
+    pub auction: bool,
+    /// The key of a curve: its current level's price per base unit (negated for a bid). `None`:
+    /// the limit, as the trigger wrote it.
+    pub key: Option<f64>,
+}
+
+/// The [`LiveWindow`] of the live KAS-book order `order_id`; `None` when it has no state row.
+pub(crate) fn book_window(conn: &Connection, order_id: i64) -> DbResult<Option<LiveWindow>> {
+    use kob_protocol::state::{MAX_IDLE, TIF_GTC};
+    let sql = format!(
+        "SELECT o.contract, kob_ustate(u.state, {GENESIS_O}), COALESCE(u.created_daa, s.last_daa), COALESCE(o.active_from, 0), \
+                o.expiry_daa, o.deadline, o.price, COALESCE(o.scale, 1), o.side, s.remaining_amount, \
+                (s.status IN ('open','partial') AND s.state_known = 1 AND {HAS_AMOUNT} AND {NOT_FROZEN} AND {CUSTODY_OK} AND {pinned} AND {RESTING_TIF}) \
+         FROM order_state s CROSS JOIN orders o ON o.id = s.order_id \
+         LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} WHERE s.order_id = ?1",
+        pinned = pinned_template()
+    );
+    let row = conn
+        .prepare_cached(&sql)?
+        .query_row([order_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<Vec<u8>>>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, Option<i64>>(4)?,
+                r.get::<_, Option<i64>>(5)?,
+                r.get::<_, Option<i64>>(6)?,
+                r.get::<_, i64>(7)?,
+                r.get::<_, i64>(8)?,
+                r.get::<_, Option<i64>>(9)?,
+                r.get::<_, bool>(10)?,
+            ))
+        })
+        .optional()?;
+    let Some((contract, raw, udaa, active_from, expiry, deadline, price, scale, side, remaining, sql_ok)) = row else {
+        return Ok(None);
+    };
+    let state = tip_state(&contract, raw);
+    let curve = contract == TemplateId::KobCurveAsk.name();
+    // A TWAP / DCA slice opens `interval` after the UTXO; a taker kind never rests.
+    let (resting, slice_open) = match &state {
+        Some(AnyState::KobAsk(a) | AnyState::KobAskKron(a)) => {
+            (a.tif == TIF_GTC, if a.interval > 0 { udaa.saturating_add(a.interval) } else { 0 })
+        }
+        Some(AnyState::KobBid(b) | AnyState::KobBidKron(b)) => {
+            (b.tif == TIF_GTC, if b.interval > 0 { udaa.saturating_add(b.interval) } else { 0 })
+        }
+        _ => (true, 0),
+    };
+    let sign = if side == 2 { -1.0 } else { 1.0 };
+    let (curve_ok, key) = match &state {
+        Some(AnyState::KobCurveAsk(c)) => match c.price_now() {
+            Some(p) if !crate::model::curve_levels(c).is_empty() => (true, Some(sign * p as f64 / scale.max(1) as f64)),
+            _ => (false, None),
+        },
+        _ => (true, None),
+    };
+    let priced = price.is_some() || curve;
+    let _ = remaining;
+    Ok(Some(LiveWindow {
+        ok: sql_ok && resting && curve_ok && priced,
+        open_from: active_from.max(slice_open),
+        closed_from: expiry.unwrap_or(i64::MAX).min(if curve { i64::MAX } else { udaa.saturating_add(MAX_IDLE) }),
+        deadline,
+        auction: state.as_ref().is_some_and(|s| auction_of(s, udaa, None).is_some()),
+        key,
+    }))
 }
 
 fn book_side_levels(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64, depth: usize) -> DbResult<(Vec<LevelView>, bool)> {
@@ -1402,9 +1522,9 @@ pub fn auction_of(state: &AnyState, utxo_daa: i64, node_daa: Option<u64>) -> Opt
 
 /// The listed book of one token: asks ascending, bids descending (ties by age, then covenant id).
 ///
-/// A side of more than [`BOOK_SCAN_MAX`] live listed orders, or [`BOOK_ORDERS_MAX`] that a matcher
-/// may fill now, is read as its best that many by limit price per base unit, and `truncated` says
-/// so (R4C2-2). An auction whose quote has moved past them may then be missing.
+/// A side of more than [`BOOK_ORDERS_MAX`] orders a taker can fill now (or [`BOOK_MOVING_MAX`] auctions) is
+/// read as its best that many by price per base unit, and `truncated` says so (R4C2-2). Orders that
+/// cannot be filled now take no place ([`book_from`]).
 pub fn book(conn: &Connection, ctx: &ReadCtx, token: &Hash32, depth: usize, aggregate: bool) -> DbResult<BookView> {
     let (asks, bids, truncated) = if aggregate {
         let (a, ta) = book_side_levels(conn, ctx, token, 1, depth)?;

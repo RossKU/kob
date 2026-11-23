@@ -17,6 +17,14 @@ use crate::tokens::TokenEntry;
 use rusqlite::params;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Held by the tests that build large stores, and by the timed scale test (`reads_scale_tests`), so that its timings are
+/// not taken while they load.
+pub(super) static HEAVY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn heavy() -> std::sync::MutexGuard<'static, ()> {
+    HEAVY.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// The VM steps of `f` on `conn`: the progress handler is called at every VM instruction it checks
 /// (`sqlite3_progress_handler` with N = 1), for every statement `f` runs.
 pub(crate) fn steps<T>(conn: &Connection, f: impl FnOnce() -> T) -> (T, u64) {
@@ -57,7 +65,7 @@ fn indexed(name: &str, p: &str, subqueries: &[&str]) {
     for step in p.split("; ") {
         if let Some(what) = step.strip_prefix("SCAN ") {
             let what = what.split(' ').next().unwrap_or("");
-            assert!(subqueries.contains(&what), "{name}: {step} in {p}");
+            assert!(subqueries.contains(&what) || what.starts_with("(subquery"), "{name}: {step} in {p}");
         }
     }
 }
@@ -227,6 +235,7 @@ fn honest_book(conn: &Connection) {
 /// listed on the token. The answer of the honest book in front of them does not change.
 #[test]
 fn the_book_reads_do_not_grow_with_listed_curve_asks() {
+    let _heavy = heavy();
     let conn = open_memory("testnet-10").unwrap();
     honest_book(&conn);
     let (token, other) = (Hash32(TOKEN_COV), Hash32([0x5a; 32]));
@@ -258,10 +267,13 @@ fn the_book_reads_do_not_grow_with_listed_curve_asks() {
         listed: true,
         maker: pk(9),
     };
-    let n = BOOK_SCAN_MAX as i64 + 2_000;
+    let n = 12_000;
+    let maintain = || crate::indexer::db::maintain_live_books(&conn, 1_000, None).unwrap();
     seed(&conn, &s, 0, n);
+    maintain();
     let few = measure();
     seed(&conn, &s, n, 2 * n);
+    maintain();
     let many = measure();
     for ((name, f), (_, m)) in few.iter().zip(&many) {
         flat(name, *f, *m);
@@ -276,21 +288,125 @@ fn the_book_reads_do_not_grow_with_listed_curve_asks() {
     assert_eq!(serde_json::to_value(market::stats(&conn, &ctx, &token, Some(3)).unwrap()).unwrap()["book_truncated"], true);
     // the count of a side says the bound, "this many or more"
     let t = token_list(&conn, &list).unwrap();
-    assert_eq!(t[0].open_asks, BOOK_SCAN_MAX as i64);
+    assert_eq!(t[0].open_asks, (BOOK_ORDERS_MAX + 2 * BOOK_MOVING_MAX) as i64);
     // the rows of a book side are a prefix of `book_live`, read by its index
     let p = plan(
         &conn,
-        &format!("SELECT o.id {} LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx", book_from()),
+        &format!("SELECT o.id {} LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx", book_from(1_000, None)),
         params![TOKEN_COV.to_vec(), 1],
     );
     assert!(p.contains("book_live_key"), "{p}");
     indexed("book side", &p, &["b"]);
 }
 
+/// Asks at the best price that a taker cannot fill now: `n` of them from `from`, covenant ids `prefix`, each a plain ask
+/// of `state` with an exact custody, 0.50 KAS a whole token and up (below the honest asks of [`honest_book`]).
+fn junk_asks(conn: &Connection, prefix: &str, state: AnyState, from: i64, n: i64) {
+    let s = Seed {
+        prefix,
+        contract: "KobAsk",
+        side: 1,
+        token: TOKEN_COV,
+        quote: None,
+        parent: None,
+        state: Some(state.encode()),
+        price0: Some(50_000_000),
+        remaining: 10 * WHOLE,
+        custody: true,
+        listed: true,
+        maker: pk(7),
+    };
+    seed(conn, &s, from, from + n);
+}
+
+/// R4C2-2 (round 4, closed): orders that a taker cannot fill now take no place in a book read and cost it nothing. 12,000
+/// asks not active yet, then 12,000 TWAP asks whose slice is not open, then 12,000 expired asks, all at a better limit
+/// than every honest ask: the honest book is returned whole, not `truncated`, and the VM steps of the reads stay those of
+/// the honest book alone (the rows are outside the index range read). Auctions at the best limit fill only their own
+/// bound (`BOOK_MOVING_MAX`): the honest orders with a fixed quote are all still there.
+#[test]
+fn orders_that_cannot_be_filled_now_take_no_place_in_the_book() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    honest_book(&conn);
+    let maintain = || crate::indexer::db::maintain_live_books(&conn, 1_000, None).unwrap();
+    maintain();
+    let (token, ctx, list) = (Hash32(TOKEN_COV), ctx(), allowlist());
+    let honest = serde_json::to_value(book(&conn, &ctx, &token, 20, true).unwrap()).unwrap();
+    let honest_orders = serde_json::to_value(book(&conn, &ctx, &token, 20, false).unwrap()).unwrap();
+    let measure = || -> Vec<(&'static str, u64)> {
+        vec![
+            ("book aggregate", steps(&conn, || book(&conn, &ctx, &token, 20, true).unwrap()).1),
+            ("book orders", steps(&conn, || book(&conn, &ctx, &token, 20, false).unwrap()).1),
+            ("depth", steps(&conn, || market::depth(&conn, &ctx, &token, Some(3), 20).unwrap()).1),
+            ("stats", steps(&conn, || market::stats(&conn, &ctx, &token, Some(3)).unwrap()).1),
+            ("tokens", steps(&conn, || token_list(&conn, &list).unwrap()).1),
+        ]
+    };
+    let base = measure();
+    let check = |what: &str| {
+        let now = serde_json::to_value(book(&conn, &ctx, &token, 20, true).unwrap()).unwrap();
+        assert_eq!(now, honest, "{what}: the honest levels, whole and not truncated");
+        let now = serde_json::to_value(book(&conn, &ctx, &token, 20, false).unwrap()).unwrap();
+        assert_eq!(now, honest_orders, "{what}: the honest orders");
+        let stats = serde_json::to_value(market::stats(&conn, &ctx, &token, Some(3)).unwrap()).unwrap();
+        assert!(stats.get("book_truncated").is_none(), "{what}: {stats}");
+        assert_eq!(token_list(&conn, &list).unwrap()[0].open_asks, 10, "{what}");
+        for ((name, b), (_, m)) in base.iter().zip(&measure()) {
+            flat(&format!("{what}: {name}"), *b, *m);
+        }
+    };
+    // not active yet: `activeFrom` far ahead (the column and the state)
+    let later = AnyState::KobAsk(kob_protocol::state::AskState { active_from: 1 << 40, ..ask(7, 50_000_000) });
+    junk_asks(&conn, "x", later, 0, 12_000);
+    conn.execute("UPDATE orders SET active_from = 1099511627776 WHERE substr(covenant_id, 1, 1) = CAST('x' AS BLOB)", []).unwrap();
+    maintain();
+    check("12,000 asks not active yet");
+    // a TWAP ask whose next slice opens `interval` after its UTXO (DAA 1)
+    let twap = AnyState::KobAsk(kob_protocol::state::AskState { interval: 10_000, max_fill: WHOLE, ..ask(7, 50_000_000) });
+    junk_asks(&conn, "y", twap, 0, 12_000);
+    maintain();
+    check("and 12,000 TWAP asks between slices");
+    // expired: `expiryDaa` passed
+    junk_asks(&conn, "z", AnyState::KobAsk(ask(7, 50_000_000)), 0, 12_000);
+    conn.execute("UPDATE orders SET expiry_daa = 500 WHERE substr(covenant_id, 1, 1) = CAST('z' AS BLOB)", []).unwrap();
+    maintain();
+    check("and 12,000 expired asks");
+    let open: Vec<(i64, i64)> = conn
+        .prepare("SELECT open, COUNT(*) FROM book_live GROUP BY open ORDER BY open")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(open, vec![(0, 24_000), (1, 20), (2, 12_000)], "not yet / fillable / closed");
+
+    // the slice of the TWAP asks opens at DAA 10,001: they are real asks at the best price then, and the commit at that
+    // score lists them; the other junk stays out
+    crate::indexer::db::maintain_live_books(&conn, 20_000, None).unwrap();
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM book_live WHERE open = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 20 + 12_000);
+    maintain();
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM book_live WHERE open = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 20, "a revert of the DAA score moves them back");
+
+    // auctions at the best limit: they fill their own bound only
+    let decay = AnyState::KobAsk(kob_protocol::state::AskState { slope: 1, price_end: 40_000_000, ..ask(7, 50_000_000) });
+    junk_asks(&conn, "w", decay, 0, 2_000);
+    maintain();
+    let now = serde_json::to_value(book(&conn, &ctx, &token, 2_000, false).unwrap()).unwrap();
+    let ids: Vec<&str> = now["asks"].as_array().unwrap().iter().map(|o| o["covenant_id"].as_str().unwrap()).collect();
+    for o in honest_orders["asks"].as_array().unwrap() {
+        assert!(ids.contains(&o["covenant_id"].as_str().unwrap()), "an honest ask is still read");
+    }
+    assert_eq!(now["truncated"], true, "the auctions past their bound are cut");
+}
+
 /// R4C2-1, R4C2-5 and R3C2-1: one order's view (on the light lane), its events and a maker's order
 /// page do not grow with its children, its live and spent strays, or a spent bought-custody history.
 #[test]
 fn the_order_view_does_not_grow_with_children_strays_or_spent_custody() {
+    let _heavy = heavy();
     let conn = open_memory("testnet-10").unwrap();
     let parent = AnyState::KobAsk(ask(3, 100_000_000)).encode();
     let p = Seed {
@@ -375,6 +491,7 @@ fn the_order_view_does_not_grow_with_children_strays_or_spent_custody() {
 /// ([`market::MAX_FILL_ROWS`]).
 #[test]
 fn the_market_reads_do_not_grow_with_fills() {
+    let _heavy = heavy();
     let conn = open_memory("testnet-10").unwrap();
     honest_book(&conn);
     let token = Hash32(TOKEN_COV);
@@ -450,7 +567,7 @@ fn strays_and_an_owners_holdings_of_a_token_do_not_grow() {
         conn.execute(
             &format!(
                 "{n} INSERT INTO token_holdings_named (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, \
-                 created_block, created_daa, spent_block) SELECT CAST(printf('h%031d', i) AS BLOB), 0, ?3, 'KCC20Ref', 1, ?4, 0, 5, 1, x'08', \
+                 created_block, created_daa, spent_block) SELECT CAST(printf('%08d%024d', (i * 104729) % 100000000, i) AS BLOB), 0, ?3, 'KCC20Ref', 1, ?4, 0, 5, 1, x'08', \
                  'owned', 2 + i, 2 + i, 3 + i FROM n"
             ),
             params![from, to, token, owner_id],
@@ -496,6 +613,7 @@ fn strays_and_an_owners_holdings_of_a_token_do_not_grow() {
 /// orders of the pair from `pair_live`, not every live order of the store.
 #[test]
 fn the_pair_reads_do_not_grow_with_pair_orders() {
+    let _heavy = heavy();
     let conn = open_memory("testnet-10").unwrap();
     let (a, b) = (TOKEN_COV, [0x5b; 32]);
     let s = Seed {
@@ -535,6 +653,7 @@ fn the_pair_reads_do_not_grow_with_pair_orders() {
         )
         .unwrap();
     };
+    // The rows the writer has not set yet (an older build's) are read row by row, within the bound.
     let n = pairs::PAIR_SCAN_MAX as i64 + 2_000;
     grow(0, n);
     let few = measure();
@@ -542,6 +661,13 @@ fn the_pair_reads_do_not_grow_with_pair_orders() {
     let many = measure();
     for ((name, f), (_, m)) in few.iter().zip(&many) {
         flat(name, *f, *m);
+    }
+    // Once set, these orders (no state the indexer knows) cannot be filled: they are outside the ranges read.
+    crate::indexer::db::maintain_live_books(&conn, 1_000, None).unwrap();
+    let open: i64 = conn.query_row("SELECT COUNT(*) FROM pair_live WHERE open = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(open, 0);
+    for ((name, f), (_, m)) in few.iter().zip(&measure()).filter(|((name, _), _)| *name != "pair fills") {
+        assert!(m * 20 < *f, "{name}: {f} VM steps over unset rows, {m} once they are set");
     }
 }
 
@@ -649,5 +775,165 @@ fn the_live_books_follow_the_orders_and_their_states() {
         assert!(crate::indexer::db::backfill_book_live(&conn).unwrap().is_some());
         assert_eq!(kept(&conn), want, "seed {seed}: filled once");
         assert_eq!(crate::indexer::db::backfill_book_live(&conn).unwrap(), None, "once");
+    }
+}
+
+/// R4C2-6: the keepers' read of the automatic creator locks due (`/v1/creator-locks?due=`) reads the locks still holding
+/// (`kcc23_auto_live`), not every lock released before them; the triggers move a lock out when its output is spent.
+#[test]
+fn the_due_creator_locks_do_not_grow_with_released_ones() {
+    let conn = open_memory("testnet-10").unwrap();
+    crate::testkit::named_holdings_writable(&conn);
+    let (token, owner) = (id(&conn, &TOKEN_COV), id(&conn, &[0x0f; 32]));
+    let grow = |from: i64, to: i64, spent: bool| {
+        let n = "WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)";
+        conn.execute(
+            &format!(
+                "{n} INSERT INTO token_holdings_named (txid, idx, token_id, program, family, owner_id, owner_kind, amount, value, state, role, \
+                 created_block, created_daa) SELECT CAST(printf('%08d%024d', (i * 7919) % 100000000, i) AS BLOB), 0, ?3, 'KCC20Ref', 1, ?4, 0, 5, 1, x'08', 'owned', 2, 2 FROM n"
+            ),
+            params![from, to, token, owner],
+        )
+        .unwrap();
+        conn.execute(
+            &format!(
+                "{n} INSERT INTO kcc23_auto_locks (until, covenant_id, genesis_block, genesis_txid, idx) \
+                 SELECT 1000 + i, CAST(printf('m%031d', i) AS BLOB), 2, CAST(printf('%08d%024d', (i * 7919) % 100000000, i) AS BLOB), 0 FROM n"
+            ),
+            params![from, to],
+        )
+        .unwrap();
+        if spent {
+            // released: the locked output is spent
+            conn.execute(
+                &format!(
+                    "{n} UPDATE token_holdings SET spent_block = 3 WHERE tx_id IN (SELECT t.id FROM n JOIN txs t \
+                     ON substr(t.h, 1, 8) = substr(CAST(printf('%08d%024d', (i * 7919) % 100000000, i) AS BLOB), 1, 8) AND t.h = CAST(printf('%08d%024d', (i * 7919) % 100000000, i) AS BLOB))"
+                ),
+                params![from, to],
+            )
+            .unwrap();
+        }
+    };
+    let live = |c: &Connection| -> i64 { c.query_row("SELECT COUNT(*) FROM kcc23_auto_live", [], |r| r.get(0)).unwrap() };
+    grow(0, 5_000, true);
+    grow(1_000_000, 1_000_010, false);
+    assert_eq!(live(&conn), 10, "the released locks left");
+    let few = steps(&conn, || crate::indexer::kcc23::due_locks(&conn, u64::MAX, 200).unwrap()).1;
+    grow(5_000, 10_000, true);
+    let many = steps(&conn, || crate::indexer::kcc23::due_locks(&conn, u64::MAX, 200).unwrap()).1;
+    flat("creator-locks due", few, many);
+    // the once-only fill gives the same rows
+    conn.execute_batch("DELETE FROM kcc23_auto_live; DELETE FROM meta WHERE k = 'kcc23_auto_live';").unwrap();
+    assert_eq!(crate::indexer::db::backfill_auto_live(&conn).unwrap(), Some(10));
+    assert_eq!(live(&conn), 10);
+}
+
+/// The pair candles read the fills of the buckets they show, at most `PAIR_VOLUME_ROWS_MAX` (200,000): with more fills in
+/// those buckets the work stops at the cap.
+#[test]
+fn the_pair_candles_stop_at_their_row_cap() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    let (a, b) = ([0x5c; 32], [0x5d; 32]);
+    let (aid, bid_) = (id(&conn, &a), id(&conn, &b));
+    // a KAS trade of each token in each of the ten minutes, so that the ten buckets have a rate
+    let s = Seed {
+        prefix: "r",
+        contract: "KobAsk",
+        side: 1,
+        token: a,
+        quote: None,
+        parent: None,
+        state: None,
+        price0: Some(100_000_000),
+        remaining: 1,
+        custody: false,
+        listed: false,
+        maker: pk(8),
+    };
+    seed(&conn, &s, 0, 1);
+    seed(&conn, &Seed { prefix: "s", token: b, ..s }, 0, 1);
+    let t0 = 1_700_000_000_000i64;
+    for (prefix, tok) in [("r", aid), ("s", bid_)] {
+        conn.execute(
+            "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 9) \
+             INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes, detail) \
+             SELECT (SELECT id FROM orders WHERE substr(covenant_id, 1, 1) = CAST(?1 AS BLOB)), 1, 1, ?3 + i * 60000, CAST(printf('k%s%030d', ?1, i) AS BLOB), 0, \
+             'fill', ?2, 1, 1000, 100000000, 0, '{}' FROM n",
+            params![prefix, tok, t0],
+        )
+        .unwrap();
+    }
+    for t in [a, b] {
+        crate::indexer::candles::rebuild(&conn, &Hash32(t), 1_000).unwrap();
+    }
+    let oid: i64 = conn.query_row("SELECT MIN(id) FROM orders", [], |r| r.get(0)).unwrap();
+    let grow = |from: i64, to: i64| {
+        conn.execute(
+            "WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1) \
+             INSERT INTO pair_fills (block_seq, daa, ts, txid, tx_pos, order_id, contract, base_id, quote_id, side, amount_a, amount_b, price, \
+             a_scale, tip_kas, counterparty) SELECT 1, 1, ?3 + (i % 600000), CAST(printf('p%031d', i) AS BLOB), 0, ?4, 'KobPair', ?5, ?6, 1, 10, 10, \
+             1000, 1000, 0, 'route' FROM n",
+            params![from, to, t0, oid, aid, bid_],
+        )
+        .unwrap();
+    };
+    let read =
+        || pairs::pair_candles(&conn, &Hash32(a), &Hash32(b), (Some(3), Some(3)), "1m", 60_000, Some(t0), Some(t0 + 600_000), 500);
+    let cap = pairs::PAIR_VOLUME_ROWS_MAX;
+    grow(0, cap + 10_000);
+    let (v, few) = steps(&conn, || read().unwrap());
+    assert_eq!(v.items.len(), 10);
+    grow(cap + 10_000, 2 * cap + 20_000);
+    let many = steps(&conn, || read().unwrap()).1;
+    flat("pair candles at the cap", few, many);
+}
+
+/// The logo lists (`GET /v1/logo-votes`, `GET /v1/logo-blocklist`) read one row per token, not one per vote or report:
+/// 5,000 then 10,000 votes and reports on the same 100 tokens cost the same.
+#[test]
+fn the_logo_lists_do_not_grow_with_votes_or_reports() {
+    let conn = open_memory("testnet-10").unwrap();
+    conn.execute_batch(crate::logo_votes::SCHEMA).unwrap();
+    conn.execute_batch(crate::logo_reports::SCHEMA).unwrap();
+    for sql in [
+        "INSERT INTO logo_vote_totals (covenant_id, up, down, updated_ms) SELECT CAST(printf('t%031d', i) AS BLOB), 1, 2, 1 FROM n",
+        "INSERT INTO logo_blocklist (covenant_id, state, first_ms, hidden_ms, restored_ms, report_count, updated_ms) \
+         SELECT CAST(printf('t%031d', i) AS BLOB), 'hidden', 1, 1, NULL, 1, 1 FROM n",
+    ] {
+        conn.execute(&format!("WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 99) {sql}"), []).unwrap();
+    }
+    let grow = |from: i64, to: i64| {
+        let n = "WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)";
+        conn.execute(
+            &format!(
+                "{n} INSERT INTO logo_votes (covenant_id, voter, vote, day, nonce, signature, created_ms, outcome) \
+                 SELECT CAST(printf('t%031d', i % 100) AS BLOB), CAST(printf('v%031d', i) AS BLOB), 1, '2026-11-20', '0', zeroblob(64), 1, 'counted' FROM n"
+            ),
+            params![from, to],
+        )
+        .unwrap();
+        conn.execute(
+            &format!(
+                "{n} INSERT INTO logo_reports (covenant_id, reason, source, ref, created_ms, outcome) \
+                 SELECT CAST(printf('t%031d', i % 100) AS BLOB), 'other', 'web', NULL, 1, 'recorded' FROM n"
+            ),
+            params![from, to],
+        )
+        .unwrap();
+    };
+    let measure = || -> Vec<(&'static str, u64)> {
+        vec![
+            ("logo votes", steps(&conn, || crate::logo_votes::totals(&conn).unwrap()).1),
+            ("logo blocklist", steps(&conn, || crate::logo_reports::blocklist(&conn).unwrap()).1),
+        ]
+    };
+    grow(0, 5_000);
+    let few = measure();
+    grow(5_000, 10_000);
+    let many = measure();
+    for ((name, f), (_, m)) in few.iter().zip(&many) {
+        flat(name, *f, *m);
     }
 }

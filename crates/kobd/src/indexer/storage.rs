@@ -358,7 +358,7 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
     {
         let t = Instant::now();
         conn.execute(
-            "INSERT INTO main.meta (k, v) SELECT k, v FROM old.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs', 'activity', 'executor_txs', 'orders_all', 'book_live')",
+            "INSERT INTO main.meta (k, v) SELECT k, v FROM old.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs', 'activity', 'executor_txs', 'orders_all', 'book_live', 'kcc23_auto_live')",
             [],
         )?;
         done("meta", count(conn, "main", "meta")?, t, say);
@@ -836,11 +836,11 @@ fn verify(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<()> {
     }
     let (a, _) = digest(
         conn,
-        "SELECT k, v FROM old.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs', 'activity', 'executor_txs', 'orders_all', 'book_live') ORDER BY k",
+        "SELECT k, v FROM old.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs', 'activity', 'executor_txs', 'orders_all', 'book_live', 'kcc23_auto_live') ORDER BY k",
     )?;
     let (b, _) = digest(
         conn,
-        "SELECT k, v FROM main.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs', 'activity', 'executor_txs', 'orders_all', 'book_live') ORDER BY k",
+        "SELECT k, v FROM main.meta WHERE k NOT IN ('schema_version', 'counters', 'holding_programs', 'activity', 'executor_txs', 'orders_all', 'book_live', 'kcc23_auto_live') ORDER BY k",
     )?;
     if a != b {
         return Err(bad(
@@ -1186,9 +1186,12 @@ fn compact(cfg: &IndexerConfig, old: &Path, new: &Path, rep: &mut Report, say: &
     say("verify:");
     verify_compact(&conn, &tables, say)?;
     rep.steps.push(("verify", t.elapsed()));
-    // The live books are derived (R4C2-2): the copy was made without their triggers, so they are
-    // filled again when the check below opens the store (`db::backfill_book_live`).
-    conn.execute_batch("DELETE FROM main.book_live; DELETE FROM main.pair_live; DELETE FROM main.meta WHERE k = 'book_live';")?;
+    // The live books and the holding auto locks are derived (R4C2-2, R4C2-6): the copy was made without their triggers, so
+    // they are filled again when the check below opens the store (`db::backfill_book_live`, `db::backfill_auto_live`).
+    conn.execute_batch(
+        "DELETE FROM main.book_live; DELETE FROM main.pair_live; DELETE FROM main.kcc23_auto_live; \
+         DELETE FROM main.meta WHERE k IN ('book_live', 'kcc23_auto_live');",
+    )?;
     conn.execute_batch("DETACH DATABASE old")?;
     drop(conn);
     opens_and_checks(cfg, new, say)

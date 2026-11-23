@@ -73,7 +73,7 @@ use super::packed::{GENESIS_O, ORDER_IDS_O};
 use super::reads::{fillable_now, pinned_template, reduce, tip_state, ReadCtx, CUSTODY_OK, NOT_FROZEN, RESTING_TIF};
 use crate::hex::Hash32;
 use kob_protocol::state::{AnyState, TIF_GTC};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -257,19 +257,20 @@ pub const PAIR_SCAN_MAX: usize = 20_000;
 /// These are the oldest [`PAIR_BOOK_ORDERS_MAX`] such orders among the oldest [`PAIR_SCAN_MAX`]
 /// candidates. The flag is true when either bound cut the set.
 fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: &ReadCtx) -> DbResult<(Vec<LivePair>, bool)> {
-    // The oldest `PAIR_SCAN_MAX + 1` live listed pair orders of the pair (`pair_live`, R4C2-2), in
-    // that order; the order columns filter them, and the rows the SQL leaves out are ones that
-    // `eligible` or `resting_level` would drop.
+    // The oldest `PAIR_SCAN_MAX + 1` pair orders of the pair fillable now (`pair_live`, `open` 1,
+    // R4C2-2), then at most `reads::BOOK_MOVING_MAX` that opened after the store's DAA score and by
+    // `now`. An order that cannot be filled now is outside the ranges read and takes no place.
     let live = fillable_now(now, ctx.now_unix);
+    let (open, pending) = pair_arms(now, ctx.now_unix);
     let sql = format!(
         "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline \
-         FROM (SELECT pl.order_id FROM pair_live pl WHERE pl.token_id = (SELECT id FROM ids WHERE h = ?1) \
-               AND pl.quote_id = (SELECT id FROM ids WHERE h = ?2) ORDER BY pl.genesis_block, pl.covenant_id LIMIT ?3) p \
+         FROM (SELECT order_id FROM ({open} LIMIT ?3) UNION ALL SELECT order_id FROM ({pending} LIMIT {moving})) p \
          CROSS JOIN order_state s ON s.order_id = p.order_id CROSS JOIN orders o ON o.id = p.order_id \
          JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
          WHERE o.listed = 1 AND s.status IN ('open','partial') AND s.state_known = 1 \
          AND u.spent_block IS NULL AND o.contract IN ('KobPair','KobIfdPair') AND {RESTING_TIF} AND {live} AND {NOT_FROZEN} AND {pinned}",
-        pinned = pinned_template()
+        pinned = pinned_template(),
+        moving = super::reads::BOOK_MOVING_MAX
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params![base.0.to_vec(), quote.0.to_vec(), PAIR_SCAN_MAX as i64 + 1], |r| {
@@ -298,15 +299,77 @@ fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: 
         }
         out.push(p);
     }
-    // The prefix of `pair_live` the read took was full: older orders the order columns left out
-    // took places in it, and the rest of the pair was not read.
-    let beyond = conn
-        .prepare_cached(
-            "SELECT 1 FROM pair_live WHERE token_id = (SELECT id FROM ids WHERE h = ?1) AND quote_id = (SELECT id FROM ids WHERE h = ?2) \
-             LIMIT 1 OFFSET ?3",
-        )?
-        .exists(params![base.0.to_vec(), quote.0.to_vec(), PAIR_SCAN_MAX as i64 + 1])?;
+    // A range the read took was full: the rest of the pair was not read.
+    let beyond = conn.prepare(&format!("{open} LIMIT 1 OFFSET ?3"))?.exists(params![
+        base.0.to_vec(),
+        quote.0.to_vec(),
+        PAIR_SCAN_MAX as i64 + 1
+    ])? || conn
+        .prepare(&format!("{pending} LIMIT 1 OFFSET {}", super::reads::BOOK_MOVING_MAX))?
+        .exists(params![base.0.to_vec(), quote.0.to_vec()])?;
     Ok((out, beyond))
+}
+
+/// The ranges of `pair_live` a pair book reads (`?1` the base, `?2` the quote), without their
+/// LIMIT: the rows fillable now oldest first, and those that opened since the store's last commit.
+fn pair_arms(now: i64, unix: Option<u64>) -> (String, String) {
+    let window = pair_window(now, unix);
+    let pair = "pl.token_id = (SELECT id FROM ids WHERE h = ?1) AND pl.quote_id = (SELECT id FROM ids WHERE h = ?2)";
+    (
+        format!(
+            "SELECT pl.order_id FROM pair_live pl INDEXED BY pair_live_pair WHERE {pair} AND pl.open = 1 AND {window} \
+             ORDER BY pl.genesis_block, pl.covenant_id"
+        ),
+        format!("SELECT pl.order_id FROM pair_live pl INDEXED BY pair_live_pending WHERE {pair} AND pl.open = 0 AND pl.open_from <= {now} AND {window}"),
+    )
+}
+
+/// The window terms of a `pair_live` row (alias `pl`) at DAA `now`: they skip the rows whose window
+/// passed since the store's last commit.
+fn pair_window(now: i64, unix: Option<u64>) -> String {
+    let mut w = format!("(pl.closed_from IS NULL OR pl.closed_from > {now}) AND (pl.open_from IS NULL OR pl.open_from <= {now})");
+    if let Some(u) = unix {
+        w.push_str(&format!(" AND (pl.deadline IS NULL OR pl.deadline > {})", u.min(i64::MAX as u64)));
+    }
+    w
+}
+
+/// When the current state of a live listed pair order can be filled, as `db::maintain_live_books`
+/// stores it in `pair_live` (R4C2-2): the rules of [`eligible`], [`resting_level`] and
+/// [`pair_custody_ok`] as DAA bounds. `None` when it has no state row.
+pub(crate) fn pair_window_of(conn: &Connection, order_id: i64) -> DbResult<Option<super::reads::LiveWindow>> {
+    let sql = format!(
+        "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline, \
+                (s.status IN ('open','partial') AND s.state_known = 1 AND u.spent_block IS NULL AND {RESTING_TIF} AND {NOT_FROZEN} AND {pinned}) \
+         FROM order_state s CROSS JOIN orders o ON o.id = s.order_id \
+         LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} WHERE s.order_id = ?1",
+        pinned = pinned_template()
+    );
+    type Row = (Vec<u8>, String, Option<Vec<u8>>, Option<i64>, Option<i64>, Option<bool>);
+    let row: Option<Row> = conn
+        .prepare_cached(&sql)?
+        .query_row([order_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))
+        .optional()?;
+    let Some((cov, contract, raw, udaa, deadline, sql_ok)) = row else { return Ok(None) };
+    let udaa = udaa.unwrap_or(0);
+    let state = tip_state(&contract, raw);
+    let (mut ok, mut open_from, mut closed_from) = (false, 0, i64::MAX);
+    if let Some(s) = state.as_ref().filter(|s| s.is_pair()) {
+        let resting = match s {
+            AnyState::KobPair(p) => p.tif == TIF_GTC,
+            AnyState::KobIfdPair(e) => e.entry_stop == 0 || e.armed != 0,
+            _ => false,
+        };
+        ok = sql_ok.unwrap_or(false) && resting && crate::sanity::check(s).is_ok() && pair_custody_ok(conn, &cov, s)?;
+        open_from = crate::model::terms_of(s).active_from;
+        if let AnyState::KobPair(p) = s {
+            if p.interval > 0 {
+                open_from = open_from.max(udaa.saturating_add(p.interval));
+            }
+        }
+        closed_from = crate::indexer::processor::guarded(|| s.refund_due(udaa)).flatten().unwrap_or(i64::MAX);
+    }
+    Ok(Some(super::reads::LiveWindow { ok, open_from, closed_from, deadline, auction: false, key: None }))
 }
 
 /// The plain KAS orders of one token and side (1 asks, 2 bids) that a route can use, best first.
@@ -321,7 +384,7 @@ fn kas_orders(conn: &Connection, token: &Hash32, side: i64, limit: usize, now: i
          AND s.status IN ('open','partial') AND s.state_known = 1 AND u.spent_block IS NULL AND {NOT_FROZEN} AND {CUSTODY_OK} \
          AND {pinned} LIMIT ?3",
         pinned = pinned_template(),
-        from = super::reads::book_from()
+        from = super::reads::book_from(now, ctx.now_unix)
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params![token.0.to_vec(), side, limit as i64], |r| {
@@ -564,12 +627,14 @@ pub fn pairs(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResu
     let read = |picked: &str| -> DbResult<Vec<(i64, Row)>> {
         let sql = format!(
             "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline, o_tk.h, o_qt.h, o.genesis_block \
-             FROM (SELECT pl.order_id FROM pair_live pl {picked} ORDER BY pl.genesis_block, pl.covenant_id LIMIT {PAIR_SCAN_MAX}) p \
+             FROM (SELECT pl.order_id FROM pair_live pl {picked} AND pl.open = 1 AND {window} ORDER BY pl.genesis_block, pl.covenant_id \
+                   LIMIT {PAIR_SCAN_MAX}) p \
              CROSS JOIN order_state s ON s.order_id = p.order_id CROSS JOIN orders o ON o.id = p.order_id \
              JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
              WHERE o.listed = 1 AND o.quote_id IS NOT NULL AND s.status IN ('open','partial') AND s.state_known = 1 \
              AND u.spent_block IS NULL AND {live} AND {NOT_FROZEN} AND {pinned}",
-            pinned = pinned_template()
+            pinned = pinned_template(),
+            window = pair_window(now, ctx.now_unix)
         );
         let mut st = conn.prepare(&sql)?;
         let rows = st
@@ -581,10 +646,10 @@ pub fn pairs(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResu
     };
     type Row = (Vec<u8>, String, Option<Vec<u8>>, i64, Option<i64>, Vec<u8>, Vec<u8>);
     let rows: Vec<Row> = match token {
-        None => read("WHERE ?1 IS NULL")?.into_iter().map(|(_, r)| r).collect(),
+        None => read("INDEXED BY pair_live_age WHERE ?1 IS NULL")?.into_iter().map(|(_, r)| r).collect(),
         Some(_) => {
-            let mut all = read("WHERE pl.token_id = (SELECT id FROM ids WHERE h = ?1)")?;
-            all.extend(read("WHERE pl.quote_id = (SELECT id FROM ids WHERE h = ?1)")?);
+            let mut all = read("INDEXED BY pair_live_base WHERE pl.token_id = (SELECT id FROM ids WHERE h = ?1)")?;
+            all.extend(read("INDEXED BY pair_live_quote WHERE pl.quote_id = (SELECT id FROM ids WHERE h = ?1)")?);
             all.sort_by(|(ga, a), (gb, b)| ga.cmp(gb).then_with(|| a.0.cmp(&b.0)));
             all.dedup_by(|(_, a), (_, b)| a.0 == b.0);
             all.truncate(PAIR_SCAN_MAX);
@@ -714,7 +779,7 @@ fn pair_fill_rows(conn: &Connection, query: &str, params: impl rusqlite::Params)
 }
 
 /// Pair fills [`pair_volume`] reads at most per call.
-const PAIR_VOLUME_ROWS_MAX: i64 = 200_000;
+pub(crate) const PAIR_VOLUME_ROWS_MAX: i64 = 200_000;
 
 /// The pair volume of the buckets `buckets` (starts, ascending, `iv` apart or more):
 /// `t -> (A base units, B base units, transactions)`.
