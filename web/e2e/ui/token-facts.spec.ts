@@ -157,7 +157,7 @@ test.describe('token facts', () => {
     await page.goto(`/#/market/${id}`);
     const details = page.getByTestId('token-status-details');
     await details.getByRole('button').first().click();
-    await expect(details.getByTestId('status-fact-mint-authority')).toContainText('whether one is still live was not checked');
+    await expect(details.getByTestId('status-fact-mint-authority')).toContainText('Whether one is still live was not checked');
     await expect(details.locator('[data-testid^="status-risk-"]')).toHaveCount(0);
   });
 
