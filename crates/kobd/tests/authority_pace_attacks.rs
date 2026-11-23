@@ -24,26 +24,33 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
 }
 
-/// Keeps the shared chain at the real time: a block every `per` ms.
+/// Keeps the shared chain at the real time, or `offset` ms behind it: a block every `per` ms.
 struct Miner {
     node: Arc<MockNode>,
     next: AtomicU64,
     per: u64,
+    offset: u64,
 }
 
 impl Miner {
     /// A chain whose blocks run from `age` ms ago to now, one every `per` ms.
     fn new(age: u64, per: u64) -> Arc<Miner> {
+        Self::late(age, per, 0)
+    }
+
+    /// A chain whose blocks run from `age` ms ago to `offset` ms ago, and on at the rate of real time: a network
+    /// whose newest block stays `offset` behind the local clock, as an authority that holds the lag level serves it.
+    fn late(age: u64, per: u64, offset: u64) -> Arc<Miner> {
         let node = MockNode::new("testnet-10");
         let from = now_ms() - age;
         node.set_block_clock(from, per);
-        let m = Arc::new(Miner { node, next: AtomicU64::new(from), per });
+        let m = Arc::new(Miner { node, next: AtomicU64::new(from), per, offset });
         m.mine();
         m
     }
 
     fn mine(&self) {
-        let now = now_ms();
+        let now = now_ms() - self.offset;
         let next = self.next.load(Ordering::Relaxed);
         if now >= next {
             let n = (now - next) / self.per + 1;
@@ -75,6 +82,10 @@ struct Node {
     stamps_now: AtomicBool,
     /// Claims a sink and a virtual DAA score this far ahead, and this many made-up chain blocks past its real chain.
     claims_ahead: AtomicU64,
+    /// Serves no `getBlock` (an error). The cross-checking nodes here: the mock blocks carry no real proof of work, so
+    /// a node that served them would fail the round-4 lead check and be dropped, which is not what these tests are
+    /// about.
+    no_blocks: AtomicBool,
 }
 
 impl Node {
@@ -88,6 +99,7 @@ impl Node {
             hold_ms: Mutex::new(None),
             stamps_now: AtomicBool::new(false),
             claims_ahead: AtomicU64::new(0),
+            no_blocks: AtomicBool::new(false),
         })
     }
 
@@ -97,7 +109,7 @@ impl Node {
 
     fn claimed(&self, real: u64) -> u64 {
         if self.hides.load(Ordering::Relaxed) {
-            return self.last_start.load(Ordering::Relaxed) + 1;
+            return self.last_start.load(Ordering::Relaxed) + 10;
         }
         real + self.claims_ahead.load(Ordering::Relaxed)
     }
@@ -162,10 +174,15 @@ impl ChainSource for Node {
         self.miner.mine();
         let mut ids = self.chain().chain_with_ids(start, m).await?;
         let extra = self.claims_ahead.load(Ordering::Relaxed).min(150);
-        ids.added_chain_block_hashes.extend((0..extra).map(|i| Hash32([0xa0, (i % 251) as u8, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7])));
+        ids.added_chain_block_hashes.extend((0..extra).map(|i| {
+            Hash32([0xa0, (i % 251) as u8, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7])
+        }));
         Ok(ids)
     }
     async fn block(&self, hash: Hash32, _txs: bool) -> Result<Option<(kaspa_consensus_core::block::Block, Origin)>, RpcError> {
+        if self.no_blocks.load(Ordering::Relaxed) {
+            return Err(RpcError::Node("getBlock is not served here".into()));
+        }
         let delay = self.block_delay_ms.load(Ordering::Relaxed);
         if delay > 0 {
             tokio::time::sleep(Duration::from_millis(delay)).await;
@@ -208,9 +225,12 @@ fn run(start: Hash32, nodes: Vec<(NodeSpec, Arc<Node>)>) -> Run {
 
 /// [`run`] with another tolerance and period.
 fn run_with(start: Hash32, nodes: Vec<(NodeSpec, Arc<Node>)>, tolerance: Duration, period: Duration) -> Run {
+    let daa = nodes[0].1.chain().chain().iter().find(|b| b.hash == start).map_or(0, |b| b.daa);
     let verifier = nodes[0].1.clone();
     let source = Arc::new(MultiNode::new(nodes, verifier).with_watch(Duration::from_secs(3_600), 6));
     let ingest = Arc::new(Mutex::new(Ingest::new(open_memory("testnet-10").unwrap(), processor(), None).with_config(wide_window())));
+    // A store that stands at `start` already, as after a restart: its cursor's DAA score is known.
+    ingest.lock().unwrap().init_cursor(&kobd::indexer::ingest::Cursor { hash: start, daa }).unwrap();
     let health = Arc::new(HealthState::new("testnet-10"));
     let (events, _) = tokio::sync::broadcast::channel(64);
     let cfg = FollowerConfig {
@@ -272,8 +292,10 @@ async fn an_authority_that_answers_nothing_new_from_an_old_cursor_is_handed_over
     for (k, per) in [1_000u64, 15_000].into_iter().enumerate() {
         let miner = Miner::new(11 * 60_000, per);
         let (a, b) = (Node::new(&miner), Node::new(&miner));
+        b.no_blocks.store(true, Ordering::Relaxed);
         a.empty.store(true, Ordering::Relaxed);
         a.hides.store(true, Ordering::Relaxed);
+        a.last_start.store(miner.node.chain()[1].daa, Ordering::Relaxed);
         a.block_delay_ms.store(6_000, Ordering::Relaxed);
         let (ua, ub) = (format!("ws://10.40.{k}.1:18210"), format!("ws://10.40.{k}.2:18210"));
         let r = run(miner.first(), vec![(spec(&ua), a.clone()), (spec(&ub), b.clone())]);
@@ -287,15 +309,18 @@ async fn an_authority_that_answers_nothing_new_from_an_old_cursor_is_handed_over
 }
 
 /// R5C1-M2: the store starts (a restart, a handover) with a cursor 40 minutes old, and the authority serves the chain at
-/// the rate of real time from there, so the lag stays level at 40 minutes. Before, the rule only forbade the lag to grow
+/// the rate of real time from there, so the lag stays level at 40 minutes (both mock nodes serve that chain here; the
+/// other one is only there to take over). Before, the rule only forbade the lag to grow
 /// above the least it reached since this authority leads, which a level lag never does: no handover at any lag. Now the
 /// lag must fall by half a period within each period, so it is handed over after one.
 #[tokio::test]
 async fn an_authority_that_holds_an_old_lag_level_is_handed_over_after_one_period() {
     let _g = serial().await;
-    let miner = Miner::new(40 * 60_000, 1_000);
+    // the chain as the authority serves it: from 40 minutes ago on at the rate of real time, a block every 10 ms (far
+    // below the tolerance, so the old rule saw a level lag)
+    let miner = Miner::late(40 * 60_000 + 2_000, 10, 40 * 60_000);
     let (a, b) = (Node::new(&miner), Node::new(&miner));
-    *a.hold_ms.lock().unwrap() = Some(40 * 60_000);
+    b.no_blocks.store(true, Ordering::Relaxed);
     let r = run(miner.first(), vec![(spec("ws://10.41.0.1:18210"), a.clone()), (spec("ws://10.41.0.2:18210"), b.clone())]);
     let took = r.until_handed_over(Duration::from_secs(10)).await;
     let h = r.health.snapshot();
@@ -312,6 +337,7 @@ async fn a_drip_that_holds_the_lag_above_the_tolerance_is_handed_over() {
     let _g = serial().await;
     let miner = Miner::new(2_000, 10);
     let (a, b) = (Node::new(&miner), Node::new(&miner));
+    b.no_blocks.store(true, Ordering::Relaxed);
     *a.hold_ms.lock().unwrap() = Some(TOLERANCE.as_millis() as u64 * 10 / 9 + 1);
     let r = run(miner.first(), vec![(spec("ws://10.42.0.1:18210"), a.clone()), (spec("ws://10.42.0.2:18210"), b.clone())]);
     let took = r.until_handed_over(Duration::from_secs(8)).await;
@@ -327,6 +353,7 @@ async fn an_authority_that_stamps_its_headers_now_with_chain_proofs_off_is_hande
     let _g = serial().await;
     let miner = Miner::new(40 * 60_000, 1_000);
     let (a, b) = (Node::new(&miner), Node::new(&miner));
+    b.no_blocks.store(true, Ordering::Relaxed);
     *a.hold_ms.lock().unwrap() = Some(40 * 60_000);
     a.stamps_now.store(true, Ordering::Relaxed);
     let r = run(miner.first(), vec![(spec("ws://10.43.0.1:18210"), a.clone()), (spec("ws://10.43.0.2:18210"), b.clone())]);
@@ -342,6 +369,7 @@ async fn a_cross_checking_node_that_claims_more_chain_never_deposes_an_honest_au
     let _g = serial().await;
     let miner = Miner::new(2_000, 10);
     let (a, b) = (Node::new(&miner), Node::new(&miner));
+    b.no_blocks.store(true, Ordering::Relaxed);
     b.claims_ahead.store(1_000_000, Ordering::Relaxed);
     // a wider tolerance here: a step of a debug build on a busy host must not look like a lag
     let (tolerance, period) = (Duration::from_millis(400), Duration::from_millis(800));
