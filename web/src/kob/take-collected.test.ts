@@ -9,7 +9,7 @@ import { planOrder } from './plan';
 import { decodeSigning } from './decode';
 import { expectedFromPlan } from '../ui/ticket/plan-expected';
 import { custodyState } from './token-state';
-import type { OrderState, TokenUtxo } from './types';
+import type { OrderState, TemplateName, TokenUtxo, TxJson } from './types';
 import { CLOCK, KAS, MAKER_PK, MAKER_SK, OTHER_PK, TOK, consensusCheck, keyUtxo, kob, makeEnv, market3x3, tokenUtxo } from '../testing/fixtures';
 import { nodeFactsOf, snapshotOfRecovered } from '../testing/chain-fixtures';
 
@@ -119,5 +119,46 @@ describe('the standalone book follows such a bid through a fill (R3A-3)', () => 
     expect(next.boughtCustody).toMatchObject({ transactionId: signed.tx.id, state: { amount: (BOUGHT + 2n * TOK).toString(), owner: bid.utxo.covenantId } });
     const view = orderViewOf({ snap: next, confirmed: true, origin: 'stream', genesis: { txid: null, out: null, daa: 0n }, firstAmount: null, seenMs: 0, misses: 0 }, { kob: K });
     expect(view.bought_custody?.utxo).toMatchObject({ txid: signed.tx.id, amount: (BOUGHT + 2n * TOK).toString() });
+  });
+
+  // A transaction that spends the bid (input 0) by its cancel entry and continues it at output 0,
+  // as the stream sees it: only the outpoints, the outputs and the payload are read.
+  const cancelSpend = async (state: OrderState, payload = '', spendCustody = false) => {
+    const { followSpend } = await import('./stream-orders');
+    const bid = collectedBid(10n * TOK);
+    const utxo = (u: { transactionId: string; index: number; amount: string }) => ({ transactionId: u.transactionId, index: u.index, sequence: '0', sigOpCount: 1, computeBudget: 0, signatureScript: '', utxo: { address: null, amount: u.amount, scriptPublicKey: '', blockDaaScore: '0', isCoinbase: false, covenantId: null } });
+    const tx = {
+      id: 'dd'.repeat(32), version: 0, subnetworkId: '00'.repeat(20), lockTime: '0', gas: '0', storageMass: '0', payload,
+      inputs: [utxo(bid.utxo.order), ...(spendCustody ? [utxo(bid.custody)] : [])],
+      outputs: [{ value: bid.utxo.order.amount, scriptPublicKey: K.scriptPublicKey(state), covenant: { authorizingInput: 0, covenantId: bid.utxo.covenantId } }],
+    } as unknown as TxJson;
+    const known = { covenantId: bid.utxo.covenantId, order: bid.utxo.order, custody: null, boughtCustody: bid.custody, strays: [], refundDueDaa: null, deadline: null, source: 'chain' as const };
+    return { bid, next: await followSpend(K, { input: 0, state: bid.utxo.order.state, entry: 'cancel', n: null }, tx, CLOCK.daa, 'testnet-10', known) };
+  };
+  const bidState = (b: ReturnType<typeof collectedBid>, edit: Record<string, string>) => ({ ...b.utxo.order.state, state: { ...b.utxo.order.state.state, ...edit } }) as OrderState;
+
+  it('a sweep in place keeps the bid listed with the bought-custody it did not move (R4A-2)', async () => {
+    const st = collectedBid(10n * TOK).utxo.order.state;
+    const { bid, next } = await cancelSpend(st);
+    expect(next).not.toBeNull();
+    expect(next!.boughtCustody).toMatchObject({ transactionId: bid.custody.transactionId, index: bid.custody.index });
+  });
+
+  it('an in-place amend keeps the bought-custody too; one that spends it drops the bid rather than list it untakeable (R4A-2)', async () => {
+    const st = bidState(collectedBid(10n * TOK), { price: (PRICE + 1_000_000n).toString() });
+    const payload = K.encodePayload([{ type: 'amend', output: 0, input: 0, family: 1, template: st.kind as TemplateName, state: K.encodeState(st) }]);
+    const { bid, next } = await cancelSpend(st, payload);
+    expect(next).not.toBeNull();
+    expect((next!.order.state.state as unknown as { price: string }).price).toBe((PRICE + 1_000_000n).toString());
+    expect(next!.boughtCustody).toMatchObject({ transactionId: bid.custody.transactionId, index: bid.custody.index });
+    expect((await cancelSpend(st, payload, true)).next).toBeNull();
+  });
+
+  it('a claim continues the bid with bought = 0, listed without a custody (R4A-2)', async () => {
+    const st = bidState(collectedBid(10n * TOK), { bought: '0' });
+    const { next } = await cancelSpend(st, '', true);
+    expect(next).not.toBeNull();
+    expect((next!.order.state.state as unknown as { bought: string }).bought).toBe('0');
+    expect(next!.boughtCustody ?? null).toBeNull();
   });
 });
