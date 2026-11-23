@@ -1,34 +1,34 @@
 pragma silverscript ^0.1.0;
 
-// KOB code, not upstream. KCC-20 batch leader of KOB's "proposal P2" (P2 = holders on the small
-// 3-in/3-out program KCC20P2.sil, plus this separate leader template; "Batch" = the leader that
-// moves up to 16 holder UTXOs in one transaction). Both are templates of ONE token covenant
-// domain, so only batches pay for batch capacity (the unrolled 16-slot code).
+// Batch leader of the optional batch-leader extension of KCC-20 (KOB prototype, not upstream, not
+// audited). It leads holders of KCC20Opt.sil whose constructor commits to this template, so one
+// transaction can move up to 16 holder UTXOs, for example merge 16 UTXOs of one wallet into one.
+// Holders stay on the 3-in / 3-out program; only batch transactions carry the unrolled 16-slot code.
 //
-// A leader holds no tokens: it is the covenant's first input (cov[0]) and only checks the move;
-// each holder input (delegator) still authorises its own owner and accepts as leader only its own
-// template or this one (the two-entry allowlist in KCC20P2.sil).
+// The leader holds no tokens. It is the covenant's first input (cov[0]) and checks the move as a
+// whole. Each holder input still requires its own owner's authorisation (the KCC20Opt delegator
+// path) and accepts as leader only its own template or the committed one.
 //
 // Entries:
-//   batch(outs, cPos, sig)   owner (matcher key): move up to 16 holder inputs to up to 16 holder
-//                            outputs with the same holder template; the leader continues itself
-//   clone(newOwner, w)       anyone for the public seed (owner 0, w empty), else the owner: new
-//                            amount-0 leader owned by newOwner; no holder input may be present
-//   retire(sig)              owner: take the carrier back; no holder input may be present
+//   batch(outs, cPos, sig)   leader owner: move 1..16 holder inputs to 1..16 holder outputs of the
+//                            same holder template; the leader continues itself
+//   clone(newOwner, w)       anyone, from the public seed (owner 0, w empty); else the owner:
+//                            a new amount-0 leader owned by newOwner; no holder input
+//   retire(sig)              leader owner: take the carrier KAS back; no holder input
 //
-// State (template per kind): amount (always 0), owner (matcher key; the public seed has owner 0
-// and may only be cloned), extension_commitment, holder template (hTpl, hPre, hSuf), copied from
-// the seed that the token genesis creates.
+// State: amount (always 0), owner (the key that runs batches, a wallet or an executor; the public
+// seed has owner 0 and can only be cloned), extension_commitment and the holder template it serves
+// (hTpl, hPre, hSuf). All but the owner are copied from the seed that the token genesis creates.
 //
-// Key invariants (batch):
-//   - holder inputs are authenticated by P2SH of (prefix || own state || suffix) where the template
-//     bytes come once from the first holder input and hash to hTpl; same extension_commitment
-//   - conservation: sum of holder input amounts == sum of holder output amounts
-//   - every holder output is a canonical 112-byte KCC-20 state obeying the per-output rules
+// Invariants of batch:
+//   - each holder input is P2SH(prefix || its state || suffix); the template bytes are read once,
+//     from the first holder input, and must hash to hTpl; same extension_commitment
+//   - conservation: the holder input amounts sum to the holder output amounts
+//   - each holder output is a canonical 112-byte KCC-20 state obeying the per-output rules
 //     (owner_scheme <= 4, borrow_scheme <= 3, borrow guard >= 0 for the amount-threshold scheme,
 //     same extension_commitment) and is P2SH of the holder template with that state
-//   - the leader continues byte-for-byte (same script, carrier value not reduced), so batches chain
-//   - the matcher's signature moves only the leader; it never authorises a holder
+//   - the leader continues byte for byte (same script, carrier value not reduced), so batches chain
+//   - the leader owner's signature moves only the leader; it never authorises a holder
 contract KCC20Batch(
     int init_amount,
     pubkey init_owner,

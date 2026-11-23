@@ -298,9 +298,11 @@ forbid this owner. KOB issuance cannot create it (the covenant id is derived fro
 
 ## 6. Optional batch leader (prototype, not issued)
 
-KOB proposed this for upstream KCC-20 and withdrew the proposal on 2026-10-10 (a batch leader is not the standard's
-role; KOB uses the standard 3 / 3). The prototype stays as a measurement. The default configuration compiles
-`max_token_inputs` / `max_token_outputs` = 3 into the holder program, and every token
+First raised in the KCC-20 thread (2026-10-08) and withdrawn there on 2026-10-10: a batch leader is not the standard's
+role, and at most an optional extension in a separate KCC. Proposed again in 2026-11 as that separate KCC, for merging
+fragmented token UTXOs (overview: `contracts/prototypes/kcc20/p2/README.md`). KOB issues the standard 3 / 3.
+
+The default configuration compiles `max_token_inputs` / `max_token_outputs` = 3 into the holder program, and every token
 input pushes the whole program, so larger limits make every transfer dearer (1 -> 1 payment: 3/3 0.00667 KAS, 8/8
 0.01354, 16/16 0.02454). `contracts/prototypes/kcc20/p2/KCC20Opt.sil` (generated from the reference by
 `kob_protocol::kcc20::kcc20_opt_holder_source`) keeps holders on the 3/3 program and adds an optional batch-leader
