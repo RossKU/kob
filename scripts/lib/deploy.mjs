@@ -17,6 +17,7 @@
 // The registry is a snapshot of facts, with no listing state and no standing. A deploy-mainnet
 // binary embeds the same file and checks the pin, so a changed registry makes the record stale.
 import { createHash } from 'node:crypto';
+import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 
 const [network, out] = process.argv.slice(2);
@@ -75,6 +76,31 @@ const locks = (fs.existsSync(recordFile) ? JSON.parse(readLf(recordFile)).locks 
 for (const name of LOCKS) {
   const t = templateOf(name, `contracts/artifacts/${name}.json`);
   if (!locks.some((l) => l.hash === t.hash)) locks.push(t);
+}
+// A hand edit that deletes an entry would pass the checks above: every lock template any committed
+// record of this network listed must still be listed (audit 2026-11-23 R2A-3). Without git (an
+// archive) there is no history to hold it to.
+{
+  const git = (c) => execSync(c, { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'ignore'] });
+  let commits = [];
+  try {
+    commits = git(`git log --format=%h -- ${recordFile}`).split('\n').filter(Boolean);
+  } catch {
+    commits = [];
+  }
+  for (const c of commits) {
+    let issued = [];
+    try {
+      issued = JSON.parse(git(`git show ${c}:${recordFile}`)).locks ?? [];
+    } catch {
+      continue;
+    }
+    for (const l of issued) {
+      if (!locks.some((x) => x.hash === l.hash)) {
+        die(`lock template ${l.name} ${l.hash} was issued (${recordFile} at ${c} lists it) and is missing from locks: an issued lock stays readable for up to 10 years, so its entry and its artifact stay`);
+      }
+    }
+  }
 }
 // The token registry of this network, when the repository ships one (registry/tokens.json is the
 // mainnet registry).

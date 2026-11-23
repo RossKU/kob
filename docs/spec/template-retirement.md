@@ -66,9 +66,12 @@ The automatic creator lock (`KobLockAuto`, `docs/spec/creator-lock-auto.md`) is 
 with no cancel, so the rule above does not apply to it: **no lock template a build ever issued is retired.** Both deployment
 records list every one in `locks` (`scripts/lib/deploy.mjs` carries the committed entries over and adds the current template
 when it is new; it refuses an entry whose artifact file became another template, so a re-pin keeps the old artifact under a new
-name). Every build reads each listed template (the genesis owner of the declared terms, so Portfolio and the indexer show the
+name), and it refuses a record that no longer lists a lock template any committed record of the network listed (a hand
+deletion). Every build reads each listed template (the genesis owner of the declared terms, so Portfolio and the indexer show the
 lock) and releases it (the keeper's and the creator's release spend exactly its script):
-`kob_protocol::lock_auto` test `every_issued_lock_template_stays_readable_and_releasable` fails otherwise. A lock re-pin also
+`kob_protocol::lock_auto` test `every_issued_lock_template_stays_readable_and_releasable` checks each listed artifact against
+the reader. With one issued template the reader is built on that template, so the test is a tripwire: the next lock template
+fails it until `AutoLock` carries its template and the readers and the keeper serve each listed one (audit 2026-11-23 R2A-3). A lock re-pin also
 changes `template_generation` (below). Issued so far: `KobLockAuto` `ed392654` (2026-11-20).
 
 ## Which generation a build serves
@@ -78,7 +81,10 @@ changes `template_generation` (below). Issued so far: `KobLockAuto` `ed392654` (
 `kobd::version::template_generation`), and `cancel_only_generations`: the commits
 that retired the templates of the cancel-only table (`acf39cf`, `da35841`, `0714451`, `71a6c32`). The executor's status line ends with the same
 generation (`kobd <version> (commit ...), payload v<n>, templates <generation>`) and the metrics carry it as a label of
-`kob_build_info`. Two executors with the same generation fill the same orders. An executor whose generation is older than the
+`kob_build_info`. Two executors with the same generation fill the same orders. A different generation means different order
+templates **or** a different lock template: a lock-only re-pin changes it although every order template stays (as the
+KobLockAuto entry did for rc2: no longer `113cd9b8b119cdaf`, with no order template changed), so compare the order pins
+(`deployment.json` `templates`) before reading a mismatch as missed orders. An executor whose order templates are older than the
 release's does not see the orders placed under the new templates (it fills none of them until it is upgraded), and an upgraded
 one stops serving the orders of the previous generation (this document): a re-version of the mainnet templates therefore comes
 with a published migration window, and operators compare `template_generation` with the release's before and after it

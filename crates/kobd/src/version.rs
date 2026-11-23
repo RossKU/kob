@@ -30,8 +30,9 @@ fn commit_of(env: Option<&'static str>) -> Option<&'static str> {
 /// the build pins (`kob_protocol::artifacts::PINNED`, in order), then of the automatic creator lock
 /// it pins (`kob_protocol::lock_auto::TEMPLATE_HASH_HEX`, since 2026-11-23: a lock re-pin is a new
 /// generation too). Two builds with the same generation fill the same orders and release the same
-/// locks. An executor whose generation differs from the release's
-/// misses the orders of the other. See `docs/ops/release.md`, section 7, and
+/// locks. A different generation means different order templates or a different lock template:
+/// only the first makes an executor miss the orders of the other; a lock-only change does not
+/// (audit 2026-11-23 R2A-3). See `docs/ops/release.md`, section 7, and
 /// `docs/spec/template-retirement.md`.
 pub fn template_generation() -> &'static str {
     static GEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
