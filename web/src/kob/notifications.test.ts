@@ -253,9 +253,10 @@ describe('NotificationStore', () => {
     a.setSnapshots(m([ID, snap({ armed: 9n })]));
     a.setPaymentKeys(['t:0']);
     a.ingest([ev('a')]);
-    expect(a.addInvoice({ url: 'u', id: 'i', reference: null, status: null, addedAt: 1 })).toBe(true);
-    expect(a.addInvoice({ url: 'u', id: 'i', reference: null, status: null, addedAt: 1 })).toBe(false);
-    a.updateInvoice('i', { status: 'pending' });
+    const inv = { url: `https://pay.example.com/invoices/${'ab'.repeat(32)}`, id: 'ab'.repeat(32), reference: null, status: null, addedAt: 1 };
+    expect(a.addInvoice(inv)).toBe(true);
+    expect(a.addInvoice(inv)).toBe(false);
+    a.updateInvoice(inv.id, { status: 'pending' });
     expect(st.data.has(storeKey('mainnet', 'pk'))).toBe(true);
     const b = new NotificationStore(st, 'mainnet', 'pk');
     expect(b.snapshots()!.get(ID)!.armed).toBe(9n);
@@ -264,8 +265,24 @@ describe('NotificationStore', () => {
     expect(b.invoices()[0]!.status).toBe('pending');
     expect(b.ingest([ev('a')])).toEqual([]);
     expect(new NotificationStore(st, 'testnet-10', 'pk').snapshots()).toBeNull();
-    b.removeInvoice('i');
+    b.removeInvoice(inv.id);
     expect(b.invoices()).toEqual([]);
+  });
+  it('re-validates watched invoices on load and drops malformed ones (R2B-I6)', () => {
+    const st = new MemStorage();
+    const H = 'cd'.repeat(32);
+    const good = { url: `https://pay.example.com/invoices/${H}`, id: H, reference: 'r', status: 'pending', addedAt: 5 };
+    const bad = [
+      { ...good, url: `http://pay.example.com/invoices/${H}` },
+      { ...good, url: `https://u:p@pay.example.com/invoices/${H}` },
+      { ...good, url: `https://pay.example.com/invoices/${H}?x=1` },
+      { ...good, id: 'ef'.repeat(32) },
+      { ...good, url: 'https://evil.example/anything', id: 'x' },
+      { ...good, status: 5 },
+      null,
+    ];
+    st.setItem(storeKey('mainnet', 'pk'), JSON.stringify({ v: 1, snaps: null, payments: null, items: [], seen: [], invoices: [good, ...bad] }));
+    expect(new NotificationStore(st, 'mainnet', 'pk').invoices()).toEqual([good]);
   });
   it('a fill while the tab was closed shows on the next load', () => {
     const st = new MemStorage();

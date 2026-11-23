@@ -357,6 +357,20 @@ export function parseInvoiceUrl(input: string): { url: string; id: string } | nu
 }
 
 /**
+ * Whether a watched invoice read back from storage is well formed: its URL is one
+ * `parseInvoiceUrl` accepts, already normalised, its id is that URL's, and its fields have their
+ * types.
+ */
+function isStoredInvoice(x: unknown): x is WatchedInvoice {
+  if (!x || typeof x !== 'object') return false;
+  const w = x as Record<string, unknown>;
+  if (typeof w.url !== 'string' || typeof w.id !== 'string') return false;
+  const p = parseInvoiceUrl(w.url);
+  const nullOrString = (v: unknown) => v === null || typeof v === 'string';
+  return !!p && p.url === w.url && p.id === w.id && nullOrString(w.reference) && nullOrString(w.status) && typeof w.addedAt === 'number';
+}
+
+/**
  * Returns an `invoice` event when the status moved to paid, expired or failed, else null. Moving
  * from unpaid to pending, or repeating a status, gives null.
  */
@@ -478,7 +492,9 @@ export class NotificationStore {
         payments: Array.isArray(j.payments) ? j.payments.filter((x) => typeof x === 'string') : null,
         items: Array.isArray(j.items) ? j.items.filter((x) => x && typeof x.id === 'string').slice(0, MAX_NOTIFICATIONS) : [],
         seen: Array.isArray(j.seen) ? j.seen.filter((x) => typeof x === 'string') : [],
-        invoices: Array.isArray(j.invoices) ? j.invoices.filter((x) => x && typeof x.url === 'string' && typeof x.id === 'string') : [],
+        // Only what `addInvoice`'s callers accept is polled: a stored entry is checked again as a
+        // pasted URL is, since anything that can write this store could plant one.
+        invoices: Array.isArray(j.invoices) ? j.invoices.filter(isStoredInvoice).slice(0, MAX_INVOICES) : [],
       };
     } catch {
       /* Unreadable or corrupt data starts empty, in memory only. */
