@@ -3158,10 +3158,40 @@ amount). Each ask counts only for what a buyer of the rest of the amount can tak
 FOK range, the dust bound of a partial fill): an all-or-nothing ask larger than the holding counts for nothing (audit
 2026-11-23 D-1). An ask also counts only when one fill of it ranges over at least half the amount, from its minimum fill
 to the most one fill takes (its `maxFill` and dust bound), and only when it is not FOK: an ask that sells to buyers of one
-size only is the poster's own sale (R2D-1, R3D-1). And its UTXO must be at least 600 DAA (about one minute) old: an ask
-placed, filled or amended in the last minute is left out until it is a minute old, which bounds how long a planted ask is
-open to other buyers. These rules leave out honest small asks and honest asks that just traded, never the other way, so in
-a thin or busy book the sale is skipped (`sell: no resting asks ...`) rather than priced too low. With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
+size only is the poster's own sale (R2D-1, R3D-1). And it must have been open to every buyer at the price it now offers
+for at least 600 DAA (about one minute): from the latest of its UTXO's DAA score plus its TWAP `interval`, its custody's DAA
+score and its `activeFrom`, the exposure the covenants measure for a stop's evidence (R4D-1). An ask placed, filled or
+amended in the last minute is left out until it has been open a minute, and a decaying ask (an auction) never counts.
+These rules leave out honest small asks, honest asks that just traded and honest auctions, never the other way, so in
+a thin or busy book the sale is skipped (`sell: no resting asks ...`) rather than priced too low.
+
+Why no order kind or field makes an ask count for longer or for more than buyers could take (each has a test in
+`crates/kobd/tests/sec_exec_maintenance.rs`):
+
+| Kind or field | Why it cannot fake the floor |
+|---|---|
+| `activeFrom` | no fill is valid before it, so the minute starts there (`an_ask_that_activates_late_...`) |
+| TWAP / DCA `interval` | a slice is fillable only `interval` DAA after its UTXO, so the minute starts there (`a_twap_slice_counts_a_minute_after_it_opens`) |
+| decay, auction (`slope`, `priceEnd`) | the quote only falls, so today's price was not on offer a minute ago; such an ask never counts, even resting at its end price (`a_decaying_ask_...`) |
+| `minFill`, `maxFill`, the dust bound of a partial fill | one fill must range over at least half the amount (`a_max_fill_capped_ask_...`, `an_all_or_nothing_ask_...`) |
+| FOK, all-or-nothing, stacks of them | never count (`a_fok_ask_...`, `an_exact_size_all_or_nothing_ask_...`) |
+| a fill, a partial fill, an amend, a merge or sweep that spends the order | the next state is a new UTXO, so the minute starts again; a fill never moves a non-decaying quote (`a_fresh_ask_...`) |
+| a custody newer than the order UTXO | the minute starts at the custody's DAA score (`an_ask_counts_from_its_newer_custody`) |
+| expiry (soft expiry, the IOC / FOK kill time, the 90-day idle limit, a UTC deadline) | an ask past it is no candidate; one not yet past it was live the whole minute, since these only end an ask (`an_expired_ask_...`) |
+| stop and if-done arming, booked exits that merge their entry, curve levels, pair asks | only plain `KobAsk`s of the token's own KAS market count (`only_plain_asks_set_the_sale_floor`) |
+| KRON forms | the same states and the same rule; every test runs in both families |
+| an unaccepted (mempool) ask | no DAA score, so no exposure (`an_unaccepted_ask_...`) |
+
+**What is left.** An attacker who leaves a real ask of at least half the sale's size buyable at a low price P for a minute
+sets the floor at P, and its own bid at 90 % of P then takes the holding. The cost is the risk that someone else buys the
+ask at P first. Where executors are active and any bid at or above P rests on the book, the first executor tick fills the
+ask against it (the operator's own matcher included), so the attack loses the attacker the difference; and while such a
+bid rests, the sale goes to it rather than to the attacker's lower bid. Where there are no executors and no such bid, only a
+taker who notices the ask within the minute stands in the way, which in a quiet market is little. So the loss is bounded
+by the operator key's holding of tokens the `--inventory-policy` file does not list: the matcher leaves none there by
+default (a route delivers every unit it buys), so it is tokens sent to the key, or inventory left after its token was
+removed from the policy file. Keep that holding at zero, list such tokens in the policy file (they are then only merged),
+or run with `--no-dust-sell`. With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
 as well); the skipped sale is logged with its reason (`sell: no resting asks ...`, `sell: the best bid pays ... below 9000 bps
 of the asks' price`). A low bid alone therefore never takes a holding, and an ask posted to lower the reference must itself offer
 the whole amount at that price to everyone. `0` turns the floor off (any bid that pays the fee, the earlier rule).
