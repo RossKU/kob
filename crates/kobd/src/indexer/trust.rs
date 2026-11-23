@@ -11,7 +11,8 @@
 //! A transaction can matter when one of these holds. Only the parts the hashes cover and the
 //! store decide it, never the other node alone.
 //!
-//! - Its payload is a KOB1 record.
+//! - Its payload is a KOB1 payload with a placement, amend or sweep record. One that does not
+//!   decode, or holds only informational records, is read from the payload alone.
 //! - An input spends an output the store tracks (an order, a token output or a holding), or an
 //!   output of such a transaction earlier in the same window.
 //! - An output carries the covenant binding of a token that some order trades or the allowlist
@@ -115,7 +116,7 @@ impl TrustContext {
             .map(|b| {
                 let mut any = vec![];
                 for (k, t) in b.accepted_transactions.iter().enumerate() {
-                    let matters = t.payload.0.starts_with(kob_protocol::payload::MAGIC)
+                    let matters = places(&t.payload.0)
                         || t.inputs.iter().any(|i| {
                             let op = (i.previous_outpoint.transaction_id, i.previous_outpoint.index);
                             self.outpoints.contains(&op) || created.contains(&op)
@@ -134,6 +135,21 @@ impl TrustContext {
             })
             .collect()
     }
+}
+
+/// Whether a payload is a KOB1 payload with a placement, amend or sweep record.
+///
+/// Those records are read with the transaction's signature scripts (the leaders of the custody
+/// outputs). A KOB1 payload that does not decode, or holds only informational records, is read
+/// from the payload alone, which the transaction id covers. So it needs no merged block fetched,
+/// and spam with the magic costs the follower nothing more than any other transaction (C-M4).
+fn places(payload: &[u8]) -> bool {
+    use kob_protocol::payload::{decode, Record, MAGIC};
+    payload.starts_with(MAGIC)
+        && decode(payload)
+            .ok()
+            .flatten()
+            .is_some_and(|p| p.records.iter().any(|r| matches!(r, Record::Order { .. } | Record::Amend { .. } | Record::Sweep { .. })))
 }
 
 #[cfg(test)]
@@ -195,5 +211,26 @@ mod tests {
         assert_eq!(ctx.outpoints, HashSet::from([(Hash32([0x11; 32]), 0)]));
         assert_eq!(ctx.tokens, HashSet::from([Hash32([0x77; 32])]));
         assert_eq!(ctx.flag(&blocks), [true, false, true, true]);
+    }
+
+    /// C-M4: the KOB1 magic alone does not make a transaction matter. A payload that does not
+    /// decode, or holds only a note, is read from the payload; a sweep (or a placement, an amend)
+    /// is read with the signature scripts and matters.
+    #[test]
+    fn only_a_decoded_placement_amend_or_sweep_payload_matters() {
+        use kob_protocol::payload::{encode, Record, MAGIC};
+        let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
+        let with = |payload: Vec<u8>| {
+            let mut t = tx(0xb1, vec![input(0x55, 0)], None);
+            t.payload = crate::hex::HexBytes(payload);
+            block(vec![t])
+        };
+        let blocks = vec![
+            with([&MAGIC[..], &[0xff; 40]].concat()),
+            with(encode(&[Record::Note { text: "hi".into() }]).unwrap()),
+            with(encode(&[Record::Sweep { output: 0, input: 0 }]).unwrap()),
+        ];
+        let ctx = TrustContext::load(&conn, Arc::new(TokenAllowlist::from_entries([])), &WindowKeys::of(&blocks)).unwrap();
+        assert_eq!(ctx.flag(&blocks), [false, false, true]);
     }
 }

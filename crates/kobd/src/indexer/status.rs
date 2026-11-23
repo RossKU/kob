@@ -4,6 +4,11 @@ use crate::hex::Hash32;
 use serde::Serialize;
 use std::sync::RwLock;
 
+/// No progress for this long while `following` or `catching_up` makes the health `stale`
+/// ([`HealthSnapshot::stale`]): 10 minutes, above the longest window fetch (8 times the request
+/// timeout) and a commit.
+pub const STALE_AFTER_MS: u64 = 600_000;
+
 /// Where the follower is in its life cycle, as `/v1/health` reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -621,6 +626,13 @@ impl HealthSnapshot {
             "1 while the follower is halted (stopped, gap) or cannot write its database (storage_error): halt_reason of /v1/health says why.",
             matches!(self.state, FollowerState::Stopped | FollowerState::Gap | FollowerState::StorageError) as u64,
         );
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        m(
+            "kob_indexer_stale",
+            "gauge",
+            "1 while the follower says following or catching up but made no progress for 10 minutes (stale of /v1/health).",
+            self.stale(now) as u64,
+        );
         m(
             "kob_indexer_storage_error",
             "gauge",
@@ -821,6 +833,19 @@ impl HealthSnapshot {
             ));
         }
         s
+    }
+
+    /// Whether the follower says it is applying the chain (`following`, `catching_up`) but has
+    /// made no progress for [`STALE_AFTER_MS`] at `now_ms`.
+    ///
+    /// A follower that hangs writes no new state, so its last snapshot would read as current for
+    /// good (C-M1). Every step is bounded far below this, and a follower at the sink confirms its
+    /// position at each poll.
+    pub fn stale(&self, now_ms: u64) -> bool {
+        let at = if self.last_progress_unix_ms > 0 { self.last_progress_unix_ms } else { self.last_poll_unix_ms };
+        matches!(self.state, FollowerState::Following | FollowerState::CatchingUp)
+            && at > 0
+            && now_ms.saturating_sub(at) > STALE_AFTER_MS
     }
 
     /// Lag behind the node in DAA score. At 10 DAA per second, one DAA is a tenth of a second.
@@ -1287,6 +1312,26 @@ mod tests {
     /// What ends `kobd --executor`: a halted follower, a storage error that node errors
     /// interrupt, or a dead API. What does not: the node away, or catching up. The metrics and
     /// the status line name it.
+    /// A follower that says `following` but made no progress for 10 minutes is stale; one that
+    /// is halted already says so in its state (C-M1).
+    #[test]
+    fn no_progress_for_long_is_stale() {
+        let mut h = HealthSnapshot::new("testnet-10");
+        let now = 1_800_000_000_000u64;
+        h.state = FollowerState::Following;
+        assert!(!h.stale(now), "nothing polled yet");
+        h.last_poll_unix_ms = now - STALE_AFTER_MS - 1;
+        assert!(h.stale(now), "polled once, no progress since");
+        h.last_progress_unix_ms = now - 1_000;
+        assert!(!h.stale(now));
+        h.last_progress_unix_ms = now - STALE_AFTER_MS - 1;
+        assert!(h.stale(now));
+        h.state = FollowerState::CatchingUp;
+        assert!(h.stale(now));
+        h.state = FollowerState::Stopped;
+        assert!(!h.stale(now), "a halt is reported by its state");
+    }
+
     #[test]
     fn a_halt_or_a_storage_error_is_named_and_ends_the_executor() {
         let mut h = HealthSnapshot::new("testnet-10");

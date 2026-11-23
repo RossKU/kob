@@ -231,6 +231,20 @@ async fn health_and_ready() {
     let (s, _) = get(&app, "/v1/health/ready").await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
 
+    // Still "following", but no progress for 11 minutes: a hung follower is not ok (C-M1).
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    e.state.health.update(|h| {
+        h.node_daa = Some(1000);
+        h.last_progress_unix_ms = now - 660_000;
+    });
+    let (_, v) = get(&app, "/v1/health").await;
+    assert_eq!((&v["ok"], &v["stale"]), (&Value::Bool(false), &Value::Bool(true)));
+    let (s, v) = get(&app, "/v1/health/ready").await;
+    assert_eq!((s, v["reason"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("no progress for 10 minutes")));
+    e.state.health.update(|h| h.last_progress_unix_ms = now);
+    let (_, v) = get(&app, "/v1/health").await;
+    assert_eq!((&v["ok"], &v["stale"]), (&Value::Bool(true), &Value::Bool(false)));
+
     e.state.health.update(|h| {
         h.node_daa = Some(1000);
         h.state = FollowerState::Gap;

@@ -436,3 +436,30 @@ fn a_rule_rebuild_never_leaves_a_reader_without_the_old_rows() {
     stop.store(true, Ordering::Relaxed);
     assert!(reader.join().unwrap() > 0);
 }
+
+/// C2-L1: a run of crosses of one maker, each in its own block, is no trade, and must not hide the
+/// last real trade behind the look-back of the last price.
+#[test]
+fn crosses_of_one_maker_do_not_hide_the_last_price() {
+    let conn = open_memory("testnet-10").unwrap();
+    let tokens = TokenAllowlist::from_entries([]);
+    let t = token(9);
+    for cov in 1..=4 {
+        add_order(&conn, cov, 9, 100_000_000, 1, 1);
+    }
+    // orders 3 and 4 are of one maker
+    conn.execute(
+        "UPDATE orders SET maker_id = (SELECT maker_id FROM orders WHERE covenant_id = ?1) WHERE covenant_id = ?2",
+        params![vec![3u8; 32], vec![4u8; 32]],
+    )
+    .unwrap();
+    add_tx(&conn, 1, 1, 1_000, 9, &[(1, 1, 100, 5_000), (2, 2, 100, 5_000)]);
+    for k in 0..40u64 {
+        add_tx(&conn, 2 + k, 2 + k as i64, 2_000 + 1_000 * k as i64, 9, &[(3, 1, 1, 9_000), (4, 2, 1, 9_000)]);
+    }
+    let basis = token_basis(&conn, &tokens, &t).unwrap();
+    let last = crate::indexer::market::last_trade_price_before(&conn, &t, basis, i64::MAX).unwrap();
+    let real = crate::indexer::market::last_trade_price_before(&conn, &t, basis, 1_001).unwrap();
+    assert!(real.is_some());
+    assert_eq!(last, real, "the crosses make no price, the trade before them is the last");
+}

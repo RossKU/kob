@@ -14,8 +14,8 @@
 //! - Activity totals, N = 10 with `stale-while-revalidate=10`.
 //! - KAS/USD price (`/v1/price/kas-usd`, opt-in), N = 60.
 //! - Token declarations (the KCC-23 launch proof of a token), N = 60.
-//! - Closed candles, N = 3600: a candle query whose `to` is at least an hour in the past. No
-//!   bucket in it can change.
+//! - Closed candles, N = 3600: a candle query whose `to` is at least an hour in the past, while
+//!   the store is caught up (N = 3 otherwise). No bucket in it can change.
 //! - Never, `no-store`: health, readiness, metrics, the WebSocket, every method other than `GET`
 //!   and `HEAD`, every answer that is not a success, and a request that carries the bypass
 //!   parameter.
@@ -39,8 +39,12 @@ pub const BYPASS_PARAM: &str = "_nc";
 
 /// A candle query whose `to` is at least this old is closed.
 ///
-/// No bucket in it can still change, because fills reach the indexer well within this time.
+/// No bucket in it can still change, because fills reach a caught-up indexer well within this
+/// time. A store that is behind gets the short TTL instead ([`apply`]).
 const CLOSED_AFTER_MS: i64 = 3_600_000;
+
+/// The TTL of a closed candle window.
+const CLOSED_SECS: u32 = 3_600;
 
 /// The `Cache-Control` choice for one answer.
 ///
@@ -137,7 +141,7 @@ pub fn policy(method: &Method, path: &str, query: &str, now_ms: i64) -> Policy {
                 && query_value(query, "to")
                     .and_then(|v| v.parse::<i64>().ok())
                     .is_some_and(|to| to <= now_ms.saturating_sub(CLOSED_AFTER_MS));
-            public(if closed { 3_600 } else { 3 })
+            public(if closed { CLOSED_SECS } else { 3 })
         }
         // Books, depth, orders, fills, trades, strays, token UTXOs and events, the pair book and
         // pair fills.
@@ -148,12 +152,15 @@ pub fn policy(method: &Method, path: &str, query: &str, now_ms: i64) -> Policy {
 
 /// Sets the `Cache-Control` of a response, unless it has one or is a protocol switch.
 ///
-/// A success gets the policy of its route. Anything else gets `no-store`.
-pub fn apply<B>(resp: &mut Response<B>, method: &Method, path: &str, query: &str, now_ms: i64) {
+/// A success gets the policy of its route. Anything else gets `no-store`. A closed candle window
+/// gets the TTL of an open one unless `current()` says the store is caught up: a store that is
+/// catching up or halted may not hold every fill of the window yet (C2-L5).
+pub fn apply<B>(resp: &mut Response<B>, method: &Method, path: &str, query: &str, now_ms: i64, current: impl FnOnce() -> bool) {
     if resp.status() == StatusCode::SWITCHING_PROTOCOLS || resp.headers().contains_key(header::CACHE_CONTROL) {
         return;
     }
     let p = if resp.status() == StatusCode::OK { policy(method, path, query, now_ms) } else { Policy::NoStore };
+    let p = if matches!(p, Policy::Public { secs: CLOSED_SECS, .. }) && !current() { public(3) } else { p };
     resp.headers_mut().insert(header::CACHE_CONTROL, p.header_value());
 }
 
@@ -242,19 +249,32 @@ mod tests {
     #[test]
     fn apply_keeps_an_own_header_and_never_caches_an_error() {
         let mut ok = Response::new(());
-        apply(&mut ok, &Method::GET, "/v1/books/ab", "", NOW);
+        apply(&mut ok, &Method::GET, "/v1/books/ab", "", NOW, || true);
         assert_eq!(ok.headers()[header::CACHE_CONTROL], "public, max-age=1, s-maxage=1");
         let mut err = Response::new(());
         *err.status_mut() = StatusCode::TOO_MANY_REQUESTS;
-        apply(&mut err, &Method::GET, "/v1/books/ab", "", NOW);
+        apply(&mut err, &Method::GET, "/v1/books/ab", "", NOW, || true);
         assert_eq!(err.headers()[header::CACHE_CONTROL], "no-store");
         let mut own = Response::new(());
         own.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=5"));
-        apply(&mut own, &Method::GET, "/v1/logo-blocklist", "", NOW);
+        apply(&mut own, &Method::GET, "/v1/logo-blocklist", "", NOW, || true);
         assert_eq!(own.headers()[header::CACHE_CONTROL], "public, max-age=5");
         let mut ws = Response::new(());
         *ws.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
-        apply(&mut ws, &Method::GET, "/v1/ws", "", NOW);
+        apply(&mut ws, &Method::GET, "/v1/ws", "", NOW, || true);
         assert!(ws.headers().get(header::CACHE_CONTROL).is_none());
+    }
+
+    /// C2-L5: a closed candle window is kept for an hour only while the store is caught up.
+    #[test]
+    fn closed_candles_are_short_lived_while_the_store_is_behind() {
+        let q = format!("to={}", NOW - 2 * CLOSED_AFTER_MS);
+        let cc = |current: bool| {
+            let mut r = Response::new(());
+            apply(&mut r, &Method::GET, "/v1/candles/ab", &q, NOW, || current);
+            r.headers()[header::CACHE_CONTROL].to_str().unwrap().to_string()
+        };
+        assert_eq!(cc(true), "public, max-age=3600, s-maxage=3600");
+        assert_eq!(cc(false), "public, max-age=3, s-maxage=3");
     }
 }

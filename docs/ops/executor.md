@@ -1279,10 +1279,10 @@ stays the authority for the selected chain (`rpc::multi`):
 * two parts of a transaction are outside every hash: its signature scripts and the spent outputs the node attaches to its
   inputs. The indexer reads both for the transactions it tracks, so before a window from another node is applied, every
   chain block holding a transaction that can matter to KOB is fetched from the primary and must agree with it in
-  everything the indexer reads (`indexer::trust`). A transaction can matter when its payload is a KOB1 record, an input
-  spends an output the store tracks (or an output of such a transaction earlier in the window), or an output carries the
-  binding of a token some order trades or the allowlist tracks: all decided by the hashed parts and the store, never by
-  what the other node says alone. On TN10 that is a few percent of the chain blocks;
+  everything the indexer reads (`indexer::trust`). A transaction can matter when its payload is a KOB1 placement, amend
+  or sweep record, an input spends an output the store tracks (or an output of such a transaction earlier in the window), or an
+  output carries the binding of a token some order trades or the allowlist tracks: all decided by the hashed parts and
+  the store, never by what the other node says alone. On TN10 that is a few percent of the chain blocks;
 * a node that contradicts a hash or the primary is **dropped** until the process restarts (logged as an error, `lies` in
   its health); its window goes to the next node. A node that fails a window otherwise (transport, timeout, it does not know
   the window yet) backs off (5 s, doubling to 80 s) and the window goes to the next node, the primary last. A window that
@@ -1556,7 +1556,7 @@ standalone `kobd --indexer`. Templates whose registry `capabilities` include `fr
 `scale`). An order is an amount of BASE UNITS at a price in sompi per WHOLE token, `scale` base units of its token; orders of
 one token are comparable only at one scale, so an order of a token whose entry has `decimals` is listed only at its standard
 scale (`non_standard_scale` otherwise). Rules evaluated per order: token allowlisted, template hash, family and extension
-match, standard scale (skipped when the entry has no `decimals`), minimum order value (`min_order_value_sompi`: the order's
+match (for a KCC-20 token, the extension its holdings prove: `extension_not_proven` otherwise), standard scale (skipped when the entry has no `decimals`), minimum order value (`min_order_value_sompi`: the order's
 amount at its quote, `quoteOf(amountLeft, price, scale)` rounded down, a conditional order at its take-profit leg; a bid, whose
 quantity is its escrow, the KAS of its output: `order_value_below_minimum` otherwise), expiry at most 90 days (plus slack)
 after the accepting chain block, minimum carrier (`min_carrier_sompi`, default 0: the wallet default carrier is 1 KAS,

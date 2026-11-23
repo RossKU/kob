@@ -288,7 +288,8 @@ Every key the handler returns:
 | `gap_reason` | string or `null` | Why the chain cannot be continued (set with `state = gap`). |
 | `last_poll_unix_ms` | number | Wall time of the last poll. |
 | `last_progress_unix_ms` | number | Last time the cursor advanced or the node confirmed the store is at its sink (stamped on every successful poll, including "nothing new"). |
-| `ok` | bool | `state` is `following` or `catching_up` **and** `alarms` is empty. Note a catching-up store can be `ok`. |
+| `ok` | bool | `state` is `following` or `catching_up`, `stale` is false **and** `alarms` is empty. Note a catching-up store can be `ok`. |
+| `stale` | bool | `following` or `catching_up`, but no progress (`last_progress_unix_ms`) for 10 minutes: the follower hangs. A follower task that died is `stopped`, with `halt_reason`, and the process exits so that its supervisor restarts it. |
 | `caught_up` | bool | `state = following` and `node_daa` known. The matcher and keepers plan only against a caught-up store (or within the tolerance below). |
 | `within_lag_tolerance` | bool | `caught_up`, or `following` / `catching_up` with a lag of at most `lag_tolerance_daa` (when that is above 0). What the matcher, keepers and maintenance gate on. |
 | `lag_tolerance_daa` | number | The tolerance in DAA: `max_lag_secs` (default 30) times `daa_per_second` (10) = 300; 0 means strict (only `following`). |
@@ -363,6 +364,7 @@ A load-balancer probe. No parameters. Body: `{"ready": bool, "reason": string, "
 | Status | `reason` | When |
 |---|---|---|
 | `200` | `ok` | `state` is `following` or `catching_up`, `lag_seconds` is known, and the lag is below the smallest `lag_alarm_hours` threshold (default 1 hour; with no thresholds configured the lag check is skipped). |
+| `503` | `no progress for 10 minutes` | `following` / `catching_up` but `stale`. |
 | `503` | `node position unknown` | `following` / `catching_up` but `node_daa` is not known yet. |
 | `503` | `indexer lag above the first alarm threshold` | `following` / `catching_up` with `lag_seconds` at or above the smallest threshold times 3600. |
 | `503` | `indexer is not following the chain` | any other state (`starting`, `node_unavailable`, `gap`, `stopped`). |
@@ -403,7 +405,7 @@ curl -s $API/v1/tokens
 | `ticker` | string | The registry ticker; empty string for a token without a registry entry (identify tokens by covenant id plus template hash; tickers collide). |
 | `covenant_id` | hex | The token's covenant id (its identity). |
 | `template_hash`, `template_id` | hex / string, may be null | The token program's hash and registry id. |
-| `extension_commitment` | hex, may be null | KCC-20 extension commitment. Without an entry: the one commitment the token's order placements named; `null` when they named several or none. |
+| `extension_commitment` | hex, may be null | KCC-20 extension commitment. Without an entry: the one the token's holdings prove, else the one commitment its order placements named; `null` when they named several or none. A KCC-20 order that names another commitment than the proven one is not listed (`extension_not_proven`): no holder could deliver to it. |
 | `family` | `"kcc20"`, `"kron"` or null | The token's program family. |
 | `decimals` | number or null | The token's decimals: its verified KCC-23 declaration, else its registry entry, else the default of its token program (KaspaRocket 3); `null` when none of them says. |
 | `decimals_source` | `"declaration"`, `"registry"`, `"program"`, **omitted** | Where `decimals` come from; omitted with `decimals: null`. |

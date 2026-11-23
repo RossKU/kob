@@ -261,10 +261,17 @@ pub(crate) const FILL_SELECT: &str = concat!(
 );
 
 /// The time of the newest fill of a token (`?1`) that makes a price, before `?2`.
+///
+/// A fill of a maker with a fill on the other side of the same transaction is skipped, as
+/// [`trade_of`] drops it: otherwise a run of such crosses, one a block, used up the look-back of
+/// [`last_trade_before`] and hid the last price (C2-L1). The other fills of the transaction share
+/// its token and block time, so the check is one seek of `order_events_fill_ts`.
 const NEWEST_PRICED: &str = concat!(
     "SELECT e.ts FROM order_events e JOIN orders o ON o.id = e.order_id \
      WHERE e.kind = 'fill' AND e.token_id = (SELECT id FROM ids WHERE h = ?1) AND e.ts < ?2 AND e.amount > 0 AND e.price IS NOT NULL \
-     AND e.side IN (1, 2) AND ",
+     AND e.side IN (1, 2) AND NOT EXISTS (SELECT 1 FROM order_events e2 JOIN orders o2 ON o2.id = e2.order_id \
+       WHERE e2.kind = 'fill' AND e2.token_id = e.token_id AND e2.ts = e.ts AND e2.txid = e.txid AND e2.side = 3 - e.side \
+       AND e2.amount > 0 AND e2.price IS NOT NULL AND o2.maker_id = o.maker_id) AND ",
     priced_fill!(),
     " ORDER BY e.ts DESC LIMIT 1"
 );

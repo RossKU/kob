@@ -1089,6 +1089,9 @@ impl Processor {
         let proven_before = conn
             .prepare_cached("SELECT 1 FROM holding_programs WHERE token_id = ?1 AND program = ?2")?
             .exists(params![token_id, program.name()])?;
+        // The first KCC-20 holding proves the token's extension commitment (C2-H1).
+        let ext_first =
+            matches!(state, kob_protocol::state::TokenState::Kcc20(_)) && super::reads::proven_extension(conn, &token.0)?.is_none();
         conn.prepare_cached(
             "INSERT OR IGNORE INTO token_holdings (tx_id, idx, token_id, program_id, family, owner_id, owner_kind, amount, value, state, role_code, created_block, created_daa) \
              VALUES (?1,?2,?3,?4,?5,?14,?7,?8,?9,kob_hpack(?10,?5,?6,?7,?8),?11,?12,?13)",
@@ -1112,6 +1115,11 @@ impl Processor {
         if !proven_before {
             self.unlist_conflicting(conn, token, seq)?;
             self.relist_proven(conn, token, program, seq)?;
+        }
+        if ext_first {
+            if let Some(e) = super::reads::proven_extension(conn, &token.0)? {
+                self.unlist_other_extensions(conn, token, &e, seq)?;
+            }
         }
         Ok(())
     }
@@ -1205,6 +1213,27 @@ impl Processor {
             )?
             .execute(params![&token.0[..], tpl_id])?;
         }
+        Ok(())
+    }
+
+    /// Unlists the KCC-20 orders of `token` that name an extension commitment other than `ext`,
+    /// the one its first holding just proved.
+    ///
+    /// They were listed while nothing proved one. A new order is refused as
+    /// `extension_not_proven`, see [`Processor::listing`] (C2-H1). The rows they had are kept in
+    /// `order_amends`, stamped with the block, so a reorg gives them back exactly
+    /// ([`revert_block`]). An order that names no commitment is left alone, and so is a pair
+    /// order, whose `ext_id` may be its other token's: its legs are checked at placement.
+    fn unlist_other_extensions(&self, conn: &Connection, token: &Hash32, ext: &[u8; 32], seq: i64) -> DbResult<()> {
+        const OTHER: &str = "WHERE token_id = (SELECT id FROM ids WHERE h = ?1) AND listed = 1 AND family = 1 AND quote_id IS NULL \
+             AND ext_id IS NOT NULL AND ext_id IS NOT (SELECT id FROM ids WHERE h = ?2)";
+        conn.prepare_cached(&format!(
+            "INSERT INTO order_amends (order_id, block_seq, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill) \
+             SELECT id, ?3, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill FROM orders {OTHER}"
+        ))?
+        .execute(params![&token.0[..], &ext[..], seq])?;
+        conn.prepare_cached(&format!("UPDATE orders SET listed = 0, unlisted_reason = 'extension_not_proven' {OTHER}"))?
+            .execute(params![&token.0[..], &ext[..]])?;
         Ok(())
     }
 
@@ -1528,6 +1557,8 @@ impl Processor {
         if let Some((mut ia, mut ib)) = pair_listing(state, daa, carrier) {
             ia.proven_tpls = proven_hashes(conn, ia.token_cov_id)?;
             ib.proven_tpls = proven_hashes(conn, ib.token_cov_id)?;
+            ia.proven_ext = proven_ext(conn, ia.token_cov_id)?;
+            ib.proven_ext = proven_ext(conn, ib.token_cov_id)?;
             let r = self
                 .rules
                 .evaluate(&self.tokens, &ia)
@@ -1573,6 +1604,7 @@ impl Processor {
                 carrier,
                 keeper_tip: listing_keeper_tip(state, carrier),
                 proven_tpls: proven_hashes(conn, Some(Hash32(state.token_cov_id())))?,
+                proven_ext: proven_ext(conn, Some(Hash32(state.token_cov_id())))?,
             },
         );
         Ok(match r {
@@ -2527,17 +2559,18 @@ impl Processor {
             Some((v, own)) => (Some(v), own),
             None => (None, false),
         };
-        // The input values of the node when the record has them, else what the inputs held
-        // according to the outputs this store recorded, see `super::outputs`. The latter is known
-        // only when every input resolves.
+        // What the inputs held according to the outputs this store recorded (`super::outputs`),
+        // known only when every input resolves, else the input values of the node from the record.
+        // No hash covers the node's (C-M2): the chain proofs check only those of signed P2PK
+        // inputs.
         let resolved = resolved_in.and_then(|v| u64::try_from(v).ok());
         if let (Some(node), Some(ours)) = (rec.in_value, resolved) {
             if node != ours {
+                // A warning only: a node can lie here, and an assert would end the follower (C2-I2).
                 tracing::warn!(txid = %rec.txid.to_hex(), node, ours, "the inputs' values the node reported differ from the recorded outputs'");
-                debug_assert_eq!(node, ours, "input values of {}", rec.txid.to_hex());
             }
         }
-        let fee = income::miner_fee(rec.in_value.or(resolved), &rec.outputs);
+        let fee = income::miner_fee(resolved.or(rec.in_value), &rec.outputs);
         conn.prepare_cached(
             "INSERT INTO executor_txs (block_seq, daa, ts, txid, income, miner_fee, own_trade) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?
@@ -2611,6 +2644,7 @@ fn pair_listing(state: &AnyState, genesis_daa: u64, carrier: u64) -> Option<(Lis
             carrier,
             keeper_tip: if base { listing_keeper_tip(state, carrier) } else { None },
             proven_tpls: vec![],
+            proven_ext: None,
         }
     };
     Some((input(&t.a, ea, true), input(&t.b, eb, false)))
@@ -2620,6 +2654,11 @@ fn pair_listing(state: &AnyState, genesis_daa: u64, carrier: u64) -> Option<(Lis
 fn proven_hashes(conn: &Connection, token: Option<Hash32>) -> DbResult<Vec<Hash32>> {
     let Some(t) = token else { return Ok(vec![]) };
     Ok(super::reads::proven_programs(conn, &t.0)?.into_iter().filter_map(|h| <[u8; 32]>::try_from(h).ok().map(Hash32)).collect())
+}
+
+fn proven_ext(conn: &Connection, token: Option<Hash32>) -> DbResult<Option<Hash32>> {
+    let Some(t) = token else { return Ok(None) };
+    Ok(super::reads::proven_extension(conn, &t.0)?.map(Hash32))
 }
 
 /// What a keeper's update may take from the order's output of `carrier` sompi.

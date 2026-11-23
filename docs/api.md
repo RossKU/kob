@@ -237,7 +237,7 @@ curl -s "$API/v1/health"
 | Field | Use it for |
 |---|---|
 | `state` | `starting`, `catching_up`, `following`, `node_unavailable`, `gap`, `stopped`, `storage_error` (the database cannot be written or is corrupt; `halt_reason` says why) |
-| `ok` | Following or catching up, with no lag alarm |
+| `ok` | Following or catching up, with progress in the last 10 minutes and no lag alarm |
 | `caught_up` | `state` is `following` and the node's position is known |
 | `lag_seconds` | How far the store is behind the node (`null` while unknown) |
 | `book_complete` | `false` while history is still being indexed, or for a store that began after the oldest history |

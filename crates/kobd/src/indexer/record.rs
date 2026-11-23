@@ -940,14 +940,17 @@ fn kcc20_leader_next_states(sigscript: &[u8]) -> Option<(TemplateId, Vec<Kcc20St
     Some((id, kob_protocol::kcc20::transfer_next_states(tpl, sigscript)?))
 }
 
-/// The script public key of the output spent by the first input of `tx` that spends no covenant.
+/// The P2PK script spent by the first input of `tx` that is signed by a lone signature.
 ///
-/// That is the submitter's own funds. It is returned when the node reported it and it is of a
-/// standard length ([`MAX_PAYER_SPK`]).
+/// That is the submitter's own funds. The input is picked by its signature script, which the
+/// merged block proves, not by the node's spent-output entry, which no hash covers (C-M2). With
+/// chain proofs on, the entry of such an input was checked against its signature
+/// (`rpc::proof::check_merged_block`), so the key and the amount are the real ones. `None` when no
+/// input is signed that way, or the node reported no P2PK script for it.
 pub fn payer_of(tx: &Tx) -> Option<Vec<u8>> {
-    let u = tx.inputs.iter().filter_map(spent_of).find(|u| u.covenant_id.is_none())?;
-    let spk = &u.script_public_key.0;
-    (!spk.is_empty() && spk.len() <= MAX_PAYER_SPK).then(|| spk.clone())
+    let inp = tx.inputs.iter().find(|i| crate::rpc::proof::lone_signature(&i.signature_script.0))?;
+    let spk = &spent_of(inp)?.script_public_key.0;
+    (crate::rpc::proof::is_p2pk(spk) && spk.len() <= MAX_PAYER_SPK).then(|| spk.clone())
 }
 
 /// The sum of the values of the outputs `tx` spends, when the node reported every one.
@@ -1188,9 +1191,10 @@ impl Extractor<'_> {
             payload::encode(&kept).unwrap_or_else(|_| UNDECODABLE_PAYLOAD.to_vec())
         };
         // Who funded the transaction, when it spends a tracked order (a fill, a cancel, a keeper's
-        // call): the script of the first input that spends no covenant output (an Executor's
-        // funding), as the node reports it. Also what its inputs held, whose difference with its
-        // outputs is its network fee (`activity`).
+        // call): the P2PK script of its first input signed by a lone signature (an Executor's
+        // funding), checked against that signature by the chain proofs ([`payer_of`]). Also what
+        // its inputs held as the node reports it, whose difference with its outputs is its network
+        // fee (`activity`).
         let spends_order = inputs.iter().any(|i| i.daa > 0 || i.reveal.is_some());
         let payer = if spends_order { payer_of(tx) } else { None };
         let in_value = if spends_order { in_value_of(tx) } else { None };
