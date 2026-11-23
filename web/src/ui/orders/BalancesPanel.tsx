@@ -251,8 +251,8 @@ export function BalancesPanel(props: {
             <span class="bal-item"><span class="bal-k">{t('orders.line.available')}</span>{money(sum ? sum.kasFree : null, 'portfolio-available', 2)}</span>
             <span class="bal-item"><span class="bal-k">{t('orders.line.inOrders')}</span>{money(sum ? sum.kasLocked : null, 'portfolio-in-orders', 2)}</span>
           </div>
-          <BalancesHelp compact />
-          {refresh}
+          {/* the "?" and Refresh stay together at the right end, also when the items wrap */}
+          <span class="bal-tools"><BalancesHelp compact />{refresh}</span>
         </div>
       ) : null}
       {free.loading && !free.data ? <BalancesSkeleton /> : null}

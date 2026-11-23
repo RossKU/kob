@@ -55,9 +55,8 @@
 .bal-v .dt-unit { margin-left: 0; font-size: 0.8em; font-weight: 600; color: var(--muted); }
 .bal-item .tip-tag { align-self: center; }
 .bal-line .bal-refresh { margin-left: auto; }
-/* the panel's "?" sits against Refresh */
-.bal-line > .help-tip { margin-left: auto; }
-.bal-line > .help-tip + .bal-refresh { margin-left: 0; }
+/* the panel's "?" sits against Refresh, the two together at the line's right end */
+.bal-line > .bal-tools { margin-left: auto; display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 12px; }
 /* a "?" in a table cell: its tap area does not reach past the cell, which would count as content that spills and fold the table into cards (DataTable.tsx) */
 .dt-c .help-tip::after { inset: -6px 0; }
 /* Refresh is an icon (the book's ↻): a square target */
