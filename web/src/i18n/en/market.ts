@@ -394,6 +394,8 @@ export default {
   'market.token.info': 'Token details',
   'market.sharedTickerShort': 'Shared ticker: check the id',
   'market.sharedTicker': 'Another token uses this ticker — check the covenant id',
+  'market.lookalikeTickerShort': 'Look-alike letters: check the id',
+  'market.lookalikeTicker': 'This ticker has letters that look like others — check the covenant id',
 
   'market.badge.highRisk': 'High risk',
   'market.risk.mintAuthorityLive': 'A mint authority still exists: whoever holds it can create more of this token.',

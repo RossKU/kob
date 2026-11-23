@@ -1,7 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import type { Services } from '../../app/services';
 import { t } from '../../i18n';
-import { longId, sharesKasTicker } from '../../kob/registry';
+import { longId } from '../../kob/registry';
 import { formatUnits } from '../../kob/units';
 import { Amount, Badge, CopyText, KeyValueList, Section } from '../kit';
 import type { TokenInfo } from '../../kob/registry';
@@ -13,7 +13,7 @@ import { MarketBar } from './MarketBar';
 import { TokenNote } from './TokenNote';
 import { decimalsNote } from '../../app/token-display';
 import { FamilyChip, GenesisFailedBanner, PowersWarning, RiskChip, SharedTickerBarNote, SharedTickerNote, FactLabel, FactSentence, StatusBadges, powerName, riskReasons, tokenTitle } from './TokenBadges';
-import { riskFactIds, templateDetail, type TemplateDetail, type TokenRow } from './token-model';
+import { riskFactIds, templateDetail, tickerNoteOf, type TemplateDetail, type TokenRow } from './token-model';
 import type { BridgeMinter } from '../../data/genesis-check';
 import { useDeclaration } from '../../app/use-declaration';
 import { lockOpen, lockSharePercent, type VerifiedLock } from '../../kob/creator-lock';
@@ -84,11 +84,11 @@ function TemplateChecks(props: { detail: TemplateDetail }) {
  * are badges with their sentence as the tooltip, and the tooltip of the token-family chip (token
  * page header, pair facts).
  */
-export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean }) {
+export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean | 'lookalike' }) {
   const r = props.row;
   return (
     <>
-      <SharedTickerNote shared={!!props.sharedTicker} block data-testid="token-shared-ticker" />
+      <SharedTickerNote shared={props.sharedTicker ?? false} block data-testid="token-shared-ticker" />
       <IndexerProblems codes={r.indexerProblems} />
       <GenesisFailedBanner row={r} />
       <PowersWarning powers={r.powers} />
@@ -112,8 +112,8 @@ export function TokenWarnings(props: { row: TokenRow; sharedTicker?: boolean }) 
  */
 export function TokenHeader(props: {
   row: TokenRow;
-  /** Another listed token uses this ticker. */
-  sharedTicker?: boolean;
+  /** Another listed token uses this ticker (`'lookalike'`: it only has look-alike letters). */
+  sharedTicker?: boolean | 'lookalike';
   /** The live state chip. */
   badges?: ComponentChildren;
   /** The star. */
@@ -132,7 +132,7 @@ export function TokenHeader(props: {
         tools={<>{props.tools}<RiskChip row={r} /></>}
         stats={props.stats}
         live={props.badges}
-        note={<SharedTickerBarNote shared={!!props.sharedTicker} />}
+        note={<SharedTickerBarNote shared={props.sharedTicker ?? false} />}
       />
       <h1 class="sr-only" data-testid="token-title" data-covenant-id={r.covenantId}>
         {tokenTitle(r)}
@@ -326,7 +326,7 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
  * market's. Each token has its title with the badges and warnings, then the covenant id, decimals,
  * price scale, tick, open orders and the program.
  */
-export function PairDetails(props: { rows: readonly TokenRow[]; shared?: ReadonlySet<string>; services: Pick<Services, 'registry' | 'kob'> }) {
+export function PairDetails(props: { rows: readonly TokenRow[]; listed?: readonly Pick<TokenRow, 'covenantId' | 'ticker'>[]; services: Pick<Services, 'registry' | 'kob'> }) {
   return (
     <div class="stack" data-testid="pair-details">
       {props.rows.map((r) => (
@@ -339,7 +339,7 @@ export function PairDetails(props: { rows: readonly TokenRow[]; shared?: Readonl
           <div class="mkt-badges">
             <StatusBadges row={r} family={false} />
           </div>
-          <TokenWarnings row={r} sharedTicker={(props.shared?.has(r.covenantId) ?? false) || sharesKasTicker(r.ticker)} />
+          <TokenWarnings row={r} sharedTicker={tickerNoteOf(props.listed ?? [], r.covenantId, r.ticker)} />
           <TokenDetails row={r} services={props.services} />
         </div>
       ))}

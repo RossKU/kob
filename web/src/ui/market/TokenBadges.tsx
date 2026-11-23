@@ -236,13 +236,15 @@ export const powerName = (p: string): string => ((KNOWN_POWERS as readonly strin
  * otherwise an inline line. It renders nothing for other tokens. The market list shows no such
  * note, because its rows tell tokens apart by the fingerprint and the short covenant id.
  */
-export function SharedTickerNote(props: { shared: boolean; block?: boolean; 'data-testid'?: string }) {
+export function SharedTickerNote(props: { shared: boolean | 'lookalike'; block?: boolean; 'data-testid'?: string }) {
   if (!props.shared) return null;
   const testid = props['data-testid'] ?? 'shared-ticker-note';
+  // A ticker no other token uses, with look-alike letters only, says that and not "another token".
+  const text = t(props.shared === 'lookalike' ? 'market.lookalikeTicker' : 'market.sharedTicker');
   return props.block ? (
-    <p class="small" style="margin:0" role="note" data-testid={testid}>{t('market.sharedTicker')}</p>
+    <p class="small" style="margin:0" role="note" data-testid={testid}>{text}</p>
   ) : (
-    <div class="small muted" role="note" data-testid={testid}>{t('market.sharedTicker')}</div>
+    <div class="small muted" role="note" data-testid={testid}>{text}</div>
   );
 }
 
@@ -253,9 +255,10 @@ export function SharedTickerNote(props: { shared: boolean; block?: boolean; 'dat
  * screen. It is out of the flow, so the bar has the same height with and without it. It renders
  * nothing for other tokens.
  */
-export function SharedTickerBarNote(props: { shared: boolean }) {
+export function SharedTickerBarNote(props: { shared: boolean | 'lookalike' }) {
   if (!props.shared) return null;
-  return <TipBadge variant="bar" label={t('market.sharedTickerShort')} detail={t('market.sharedTicker')} data-testid="token-shared-ticker" data-detail-testid="token-shared-ticker-detail" />;
+  const look = props.shared === 'lookalike';
+  return <TipBadge variant="bar" label={t(look ? 'market.lookalikeTickerShort' : 'market.sharedTickerShort')} detail={t(look ? 'market.lookalikeTicker' : 'market.sharedTicker')} data-testid="token-shared-ticker" data-detail-testid="token-shared-ticker-detail" />;
 }
 
 /**

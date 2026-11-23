@@ -7,7 +7,7 @@ import { TOKEN_PROGRAMS } from '../../kob/programs.generated';
 import { factLabel, factText, tokenTitle } from './TokenBadges';
 import { t } from '../../i18n';
 import type { GenesisCheck } from '../../data/genesis-check';
-import { riskFactIds, tokenRiskCodes, applyGenesisCheck, buildTokenRows, filterTokens, scaleNeedsIndexer, withShownRows, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerOrId, tokenBadges, tokenFactIds, tokenLabel, tradableHere, tradableRows, unknownRow, withKascovRemark, type TokenRow } from './token-model';
+import { riskFactIds, tokenRiskCodes, applyGenesisCheck, buildTokenRows, filterTokens, scaleNeedsIndexer, withShownRows, hasIssuerControl, isNameless, parseCovenantId, sharedTickerIds, templateDetail, tickerNoteOf, tickerOrId, tokenBadges, tokenFactIds, tokenLabel, tradableHere, tradableRows, unknownRow, withKascovRemark, type TokenRow } from './token-model';
 
 const kob = await loadKobNode();
 const tpl = kob.templates().find((t) => t.name === 'KCC20Ref_8x8')!;
@@ -282,6 +282,16 @@ describe('powers and empty tickers (GET /v1/tokens)', () => {
 
   it('a ticker in a look-alike script (Cherokee, Lisu) is flagged alone too (R2B-M2)', () => {
     expect(sharedTickerIds([{ covenantId: ID('5'), ticker: 'ᏦᎪᏚ' }, { covenantId: ID('6'), ticker: 'ꓗꓮꓢ' }, { covenantId: ID('9'), ticker: 'OTH' }])).toEqual(new Set([ID('5'), ID('6')]));
+  });
+
+  it('the note says what is true: another token, KAS, or look-alike letters only (R3B-I4)', () => {
+    const rows = [{ covenantId: ID('5'), ticker: 'SAME' }, { covenantId: ID('6'), ticker: 'SAME' }, { covenantId: ID('7'), ticker: 'ΒΕΤΑ' }, { covenantId: ID('8'), ticker: 'KA5' }, { covenantId: ID('9'), ticker: 'OTH' }];
+    expect(tickerNoteOf(rows, ID('5'), 'SAME')).toBe(true);
+    expect(tickerNoteOf(rows, ID('8'), 'KA5')).toBe(true);
+    expect(tickerNoteOf(rows, ID('7'), 'ΒΕΤΑ')).toBe('lookalike');
+    expect(tickerNoteOf([...rows, { covenantId: ID('a'), ticker: 'BETA' }], ID('7'), 'ΒΕΤΑ')).toBe(true);
+    expect(tickerNoteOf(rows, ID('9'), 'OTH')).toBe(false);
+    expect(tickerNoteOf([], ID('9'), '')).toBe(false);
   });
 
   it('powers: freeze or seize raise the issuer-control warning, other powers do not', () => {
