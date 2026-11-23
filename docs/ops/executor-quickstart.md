@@ -104,12 +104,16 @@ icacls C:\kob /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" /grant:r "SYSTEM:(O
 In PowerShell write the first grant as `/grant:r "${env:USERNAME}:(OI)(CI)F"`; the rest is the same. (On a Windows in another
 language, write `*S-1-5-18` for `SYSTEM` and `*S-1-5-32-544` for `Administrators`.) Then check with `icacls C:\kob`: it must list
 your account, `NT AUTHORITY\SYSTEM` and `BUILTIN\Administrators`, and nothing else. At each start kobd logs an error for its program,
-its folder, the configuration and the data directory when another account can change them (also through the owner of a
-path, or a right such as "create files" alone). On **mainnet it refuses to start** then, naming each path and the `icacls`
-command that fixes it; on testnet-10 it logs the error and goes on. `kobd setup` restricts the folder it writes this way by
+its folder, the configuration and its folder, the data directory (before it exists: the folder it is made in), the key file
+and its folder and the `--inventory-policy` file when another account can change them (also through the owner of a path, or
+a right such as "create files" alone), or when their permissions cannot be read (a FAT or exFAT drive, a drive's root). On
+**mainnet it refuses to start** then, naming each path and the command that fixes it (for a path another account owns: a
+copy of your own, or `takeown` as an administrator, since `icacls` cannot change an owner); on testnet-10 it logs the
+error and goes on. `kobd match` and `kobd keep` check the same. `kobd setup` restricts the folder it writes this way by
 itself (your account, SYSTEM and Administrators, by SID, no inherited rights), and refuses a `kob-operator.key` it finds
-there that another account owns, since whoever made it may know the secret (`--adopt-key` with `--non-interactive` uses it
-all the same; the interactive setup warns and asks).
+there that another account owns, since whoever made it may know the secret (`--adopt-key` with `--non-interactive` takes it
+over: the same secret is rewritten into a new file of your account, which replaces it; the interactive setup warns, asks
+and does the same).
 
 **Extract the archive first**: do not
 double-click the program inside the zip viewer (Windows then runs it from a temporary folder and the key and the database

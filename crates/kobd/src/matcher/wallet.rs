@@ -116,6 +116,19 @@ impl HotKey {
         r
     }
 
+    /// The key file [`HotKey::load`] reads, `None` when it reads the key from the environment or
+    /// finds none. The start check covers it (R3D-3).
+    pub fn file_of(key_file: Option<&Path>) -> Option<PathBuf> {
+        if let Some(p) = key_file {
+            return Some(p.to_path_buf());
+        }
+        if let Some(p) = std::env::var_os(KEY_FILE_ENV) {
+            return Some(PathBuf::from(p));
+        }
+        let dir = std::env::var_os("CREDENTIALS_DIRECTORY")?;
+        Some(Path::new(&dir).join(CREDENTIAL_NAME)).filter(|p| p.exists())
+    }
+
     /// Loads the key from the sources listed in the module documentation, in that order.
     pub fn load(key_file: Option<&Path>) -> Result<HotKey, KeyError> {
         if let Some(p) = key_file {
@@ -182,6 +195,49 @@ impl HotKey {
         })();
         if let Err(e) = written {
             let _ = std::fs::remove_file(path);
+            return Err(e);
+        }
+        Ok(key)
+    }
+
+    /// Takes over a key file another account owns (`kobd setup --adopt-key`, R3D-5): the same
+    /// secret is written to a new file of this account, readable by it only (as
+    /// [`HotKey::create_file`] writes one), which then replaces the file. Another account's file
+    /// can never pass [`HotKey::from_file`], and icacls cannot change its owner.
+    ///
+    /// The file is read without the permission check: the operator has said it is theirs.
+    pub fn adopt_file(path: &Path) -> Result<HotKey, KeyError> {
+        let err = |e: std::io::Error| KeyError::File(path.to_path_buf(), e.to_string());
+        let mut buf = std::fs::read(path).map_err(err)?;
+        let parsed = match std::str::from_utf8(&buf) {
+            Ok(s) => HotKey::from_hex(s),
+            Err(_) => Err(KeyError::Invalid("the key file is not text".into())),
+        };
+        wipe(&mut buf);
+        let key = parsed?;
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(".adopt");
+        let tmp = path.with_file_name(name);
+        let _ = std::fs::remove_file(&tmp);
+        create_owner_only(&tmp).map_err(err)?;
+        let written = (|| {
+            restrict_to_owner(&tmp)?;
+            use std::io::Write;
+            let mut text = format!("{}\n", kob_protocol::json::to_hex(&key.secret)).into_bytes();
+            let mut f = std::fs::OpenOptions::new().write(true).truncate(true).open(&tmp).map_err(err)?;
+            let w = f.write_all(&text).and_then(|_| f.sync_all());
+            wipe(&mut text);
+            w.map_err(err)?;
+            drop(f);
+            std::fs::rename(&tmp, path).map_err(err)?;
+            let back = HotKey::from_file(path)?;
+            if back.pubkey != key.pubkey {
+                return Err(KeyError::Invalid("the key file does not read back as the key written".into()));
+            }
+            Ok(())
+        })();
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&tmp);
             return Err(e);
         }
         Ok(key)
@@ -289,37 +345,60 @@ pub fn system_program(name: &str) -> PathBuf {
 
 /// The paths another account must not be able to change (audit 2026-11-23 D-2), with who can:
 /// kobd's executable and its folder (a replaced or planted program runs as the operator), the
-/// configuration file (it names the key file and the node) and the data directory (the in-flight
-/// journal and the budget files). A path that does not exist, or whose rights cannot be read, is
-/// left out.
+/// configuration file (it names the key file and the node), the data directory (the in-flight
+/// journal and the budget files), the key file and the inventory policy. A path that does not
+/// exist is left out. A path whose rights or owner cannot be read is reported with
+/// [`RIGHTS_UNREADABLE`] (R3D-3): nobody can tell who may change it.
 ///
-/// Windows reads each ACL (`icacls /save`, [`sddl_writable_by_others`]). Unix mirrors the key
-/// file's directory rule: writable by group or others, unless sticky.
+/// Windows reads each ACL (`icacls /save`, [`sddl_writable_by_others`]) and the owner. Unix: an
+/// owner other than this account or root, or writable by group or others unless a sticky folder
+/// (R3D-6).
 pub fn writable_by_others(paths: &[PathBuf]) -> Vec<(PathBuf, String)> {
     let mut out = vec![];
+    let mut seen = std::collections::BTreeSet::new();
     for p in paths.iter().filter(|p| p.exists()) {
+        if !seen.insert(p.clone()) {
+            continue;
+        }
         #[cfg(not(unix))]
-        let who = windows_acl_sddl(p).map(|s| sddl_writable_by_others(&s, current_sid().as_deref())).unwrap_or_default();
-        #[cfg(unix)]
-        let who: Vec<String> = {
-            use std::os::unix::fs::MetadataExt;
-            match std::fs::metadata(p) {
-                Ok(m) if m.mode() & 0o022 != 0 && !(m.is_dir() && m.mode() & 0o1000 != 0) => {
-                    vec![format!("group or others (mode {:o})", m.mode() & 0o777)]
-                }
-                _ => vec![],
-            }
+        let who: Option<Vec<String>> = match (windows_acl_sddl(p), windows_owner(p)) {
+            (Some(s), Some(_)) => Some(sddl_writable_by_others(&s, current_sid().as_deref())),
+            _ => None,
         };
-        if !who.is_empty() {
-            #[cfg(not(unix))]
-            let who = trustee_names(&who);
-            #[cfg(unix)]
-            let who = who.join(", ");
-            out.push((p.clone(), who));
+        #[cfg(unix)]
+        let who: Option<Vec<String>> = {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(p).ok().map(|m| {
+                // SAFETY: geteuid has no preconditions and cannot fail.
+                let me = unsafe { libc::geteuid() };
+                let mut w = vec![];
+                if m.uid() != me && m.uid() != 0 {
+                    w.push(format!("its owner, uid {}", m.uid()));
+                }
+                if m.mode() & 0o022 != 0 && !(m.is_dir() && m.mode() & 0o1000 != 0) {
+                    w.push(format!("group or others (mode {:o})", m.mode() & 0o777));
+                }
+                w
+            })
+        };
+        match who {
+            None => out.push((p.clone(), RIGHTS_UNREADABLE.to_string())),
+            Some(w) if !w.is_empty() => {
+                #[cfg(not(unix))]
+                let w = trustee_names(&w);
+                #[cfg(unix)]
+                let w = w.join(", ");
+                out.push((p.clone(), w));
+            }
+            Some(_) => {}
         }
     }
     out
 }
+
+/// Who [`writable_by_others`] names for a path whose rights or owner cannot be read: a FAT or exFAT
+/// volume (no ACL), a folder whose ACL denies this account `READ_CONTROL`, or a drive's root.
+pub const RIGHTS_UNREADABLE: &str = "unknown accounts: its permissions or owner could not be read (a FAT or exFAT drive has none, or its ACL hides them from this account)";
 
 /// Replaces the file's ACL by one full-control entry for the current account (no inherited
 /// entries), then requires that no other account or group may read it.
@@ -361,7 +440,13 @@ fn acl_fix(path: &Path) -> String {
             (None, Some(u)) => u,
             _ => current_account().unwrap_or_else(|| "<your account>".into()),
         };
-    format!("icacls \"{}\" /inheritance:r /grant:r \"{me}:F\"", abs.display())
+    let icacls = format!("icacls \"{}\" /inheritance:r /grant:r \"{me}:F\"", abs.display());
+    // icacls cannot change an owner that is another account: a copy of this account replaces the
+    // file first (R3D-5).
+    match owned_by_me(&abs) {
+        Some(false) => format!("{} && {icacls}", take_file_fix(&abs)),
+        _ => icacls,
+    }
 }
 
 /// The SID of the account that runs this process (`whoami /user`), once.
@@ -581,9 +666,14 @@ fn sddl_granted_to_others(sddl: &str, me: Option<&str>, wanted: u32) -> Vec<Stri
                 continue;
             }
             let trustee = f[5].trim().to_ascii_uppercase();
+            // Only an explicit deny that applies to the object itself is subtracted: in canonical
+            // order an inherited deny comes after the explicit allows, and an inherit-only one does
+            // not apply here. An object or callback allow counts as allowing everything (R3D-6).
+            let inherited_or_inherit_only = f[1].contains("ID") || f[1].contains("IO");
             match f[0] {
                 "A" => *allowed.entry(trustee).or_default() |= rights_mask(f[2]).unwrap_or(u32::MAX),
-                "D" => *denied.entry(trustee).or_default() |= rights_mask(f[2]).unwrap_or(0),
+                "OA" | "XA" | "ZA" => *allowed.entry(trustee).or_default() |= u32::MAX,
+                "D" if !inherited_or_inherit_only => *denied.entry(trustee).or_default() |= rights_mask(f[2]).unwrap_or(0),
                 _ => {}
             }
         }
@@ -738,21 +828,42 @@ pub fn owned_by_me(path: &Path) -> Option<bool> {
 /// The command that leaves `path` changeable by the account running kobd, SYSTEM and
 /// Administrators only (by SID, whatever the language of Windows), with no inherited rights. On
 /// Unix: no write for group and others.
+///
+/// An owner that is another account can rewrite the rights again, and only an administrator can
+/// take a file or folder from it (R3D-5): the command then starts with that, or for a file with a
+/// copy of your own that replaces it.
 pub fn owner_only_fix(path: &Path) -> String {
     let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let foreign = owned_by_me(&abs) == Some(false);
     #[cfg(unix)]
     {
-        format!("chmod go-w \"{}\"", abs.display())
+        let chmod = format!("chmod go-w \"{}\"", abs.display());
+        match foreign {
+            true => format!("sudo chown \"$(id -un)\" \"{}\" && {chmod}", abs.display()),
+            false => chmod,
+        }
     }
     #[cfg(not(unix))]
     {
         let me = current_account().unwrap_or_else(|| "<your account>".into());
         let inherit = if abs.is_dir() { "(OI)(CI)" } else { "" };
-        format!(
+        let icacls = format!(
             "icacls \"{}\" /inheritance:r /grant:r \"{me}:{inherit}F\" \"*S-1-5-18:{inherit}F\" \"*S-1-5-32-544:{inherit}F\"",
             abs.display()
-        )
+        );
+        match (foreign, abs.is_dir()) {
+            (false, _) => icacls,
+            (true, false) => format!("{} && {icacls}", take_file_fix(&abs)),
+            (true, true) => format!("(as an administrator) takeown /f \"{}\" && {icacls}", abs.display()),
+        }
     }
+}
+
+/// A command that replaces the file at `abs` by a copy of this account (the copy's owner is the
+/// account that makes it), for a file another account owns. `cmd.exe` syntax.
+#[cfg(not(unix))]
+fn take_file_fix(abs: &Path) -> String {
+    format!("copy /y \"{0}\" \"{0}.mine\" && move /y \"{0}.mine\" \"{0}\"", abs.display())
 }
 
 /// Windows: replaces the ACL of the folder `dir` by full control for the account running kobd,
@@ -982,6 +1093,28 @@ mod tests {
         assert_eq!(w(&format!("O:AU{own}")), vec!["AU".to_string()]);
         assert_eq!(w("D:(A;;0xZZ;;;WD)"), vec!["WD".to_string()], "unparsable counts");
         assert_eq!(trustee_names(&w(&format!("{own}(A;ID;0x1301bf;;;AU)"))), "Authenticated Users");
+        // R3D-6: an inherited or an inherit-only deny does not cancel an explicit allow, and an object or callback allow
+        // counts as allowing everything
+        assert_eq!(w("D:(A;;FA;;;AU)(D;ID;FA;;;AU)"), vec!["AU".to_string()]);
+        assert_eq!(w("D:(A;;FA;;;AU)(D;OICIIO;FA;;;AU)"), vec!["AU".to_string()]);
+        assert!(w("D:(D;;FA;;;AU)(A;;FA;;;AU)").is_empty(), "an explicit deny still does");
+        assert_eq!(w("D:(XA;;0x1;;;AU)(OA;;0x1;;;WD)"), vec!["AU".to_string(), "WD".to_string()]);
+    }
+
+    /// R3D-5: `--adopt-key` rewrites the key file as a file of this account with the same secret, which then passes the
+    /// key check. (A file another account owns cannot be made here without administrator rights.)
+    #[test]
+    fn an_adopted_key_file_is_rewritten_as_this_accounts() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("kob-operator.key");
+        let made = HotKey::create_file(&p).unwrap();
+        let k = HotKey::adopt_file(&p).unwrap();
+        assert_eq!(k.pubkey(), made.pubkey());
+        assert_eq!(HotKey::from_file(&p).unwrap().pubkey(), made.pubkey());
+        assert_eq!(owned_by_me(&p), Some(true));
+        assert!(!dir.path().join("kob-operator.key.adopt").exists());
+        std::fs::write(&p, "zz").unwrap();
+        assert!(HotKey::adopt_file(&p).is_err(), "not a key");
     }
 
     /// D2-1: icacls and whoami are run from System32 by their full path, never by a bare name found next to kobd.exe.

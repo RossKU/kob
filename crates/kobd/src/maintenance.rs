@@ -320,6 +320,11 @@ fn best_bid(inp: &MaintenanceInput, g: &Group, held: i64, t: i64) -> Option<(Lis
 /// take fills of many sizes (not FOK; from its minimum fill to its whole rest a range of at least
 /// `n /` [`SMALL_BUYER_DIV`]): an all-or-nothing ask of exactly `n`, or a stack of all-or-nothing
 /// asks, offers itself to buyers of exactly its size only, which is the poster's own sale (R2D-1).
+/// The range is what one fill may take (its `maxFill` and dust bound), not its whole rest: an ask
+/// of 1.5·n that takes fills of exactly n only is the same sale (R3D-1). The ask's UTXO must also
+/// be at least [`ASK_REFERENCE_AGE`] DAA old, which bounds how long a planted ask is exposed to
+/// buyers whatever its shape. The age is the UTXO's, not the order's: an amend continues the
+/// order at a new price, so after a fill or an amend an ask counts again a minute later.
 fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i128, i128)> {
     let (token, program, ext) = *g;
     let tpl = kob_protocol::artifacts::token_template(program).hash;
@@ -335,14 +340,17 @@ fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i
         .into_iter()
         .filter(|c| c.side == Side::Ask && c.is_plain() && c.trigger.is_none() && c.cap > 0)
         .filter(|c| !inp.excluded_outpoints.contains(&outpoint(&mine[c.order].order.utxo)))
+        .filter(|c| mine[c.order].utxo_daa().saturating_add(ASK_REFERENCE_AGE) <= inp.clock.daa)
         .map(|c| (c.quote_frac(), c))
         .collect();
     asks.sort_by(|((a, sa), _), ((b, sb), _)| (a * sb).cmp(&(b * sa)));
     let small = (n / SMALL_BUYER_DIV).max(1);
     let mut got: i64 = 0;
     for ((q, s), c) in asks {
-        // Buyers of many sizes can take from it: its fills range over at least half of n.
-        if c.fok.is_some() || c.rest_from.saturating_sub(c.min_fill) < small {
+        // Buyers of many sizes can take from it: one fill of it ranges over at least half of n,
+        // from its minimum fill to the most one fill takes (a partial one, or the ending one).
+        let one_fill = if c.rest_from <= c.cap { c.cap } else { c.cap.min(c.part_cap) };
+        if c.fok.is_some() || one_fill.saturating_sub(c.min_fill) < small {
             continue;
         }
         // The most of what is still needed a buyer can take from this ask in one fill.
@@ -367,6 +375,10 @@ fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i
 /// A sale's reference counts only asks whose fill sizes range over at least `n / SMALL_BUYER_DIV`
 /// ([`ask_reference`]).
 pub const SMALL_BUYER_DIV: i64 = 2;
+
+/// A sale's reference counts only asks whose UTXO is at least this many DAA old, about one minute
+/// at 10 blocks a second ([`ask_reference`], R3D-1).
+pub const ASK_REFERENCE_AGE: u64 = 600;
 
 /// The sale of `tokens` (one group) into `bid` for `amount` base units, the operator as taker.
 ///

@@ -60,7 +60,7 @@ use crate::withdraw::{self, WithdrawArgs};
 use crate::x402::{self, X402Args};
 use clap::{CommandFactory, Parser, Subcommand};
 
-const ABOUT: &str = "kobd, the KOB daemon: the Executor (matcher, keepers, x402 facilitator) and the Indexer (full history, read API)";
+const ABOUT: &str = "kobd, the KOB daemon: the Executor (matcher, keepers, the experimental x402 facilitator) and the Indexer (full history, read API)";
 
 /// The top-level usage: the three kinds of start and the commands.
 const USAGE: &str = "kobd                        run kobd.toml of this folder (or the setup when there is none)
@@ -203,8 +203,8 @@ enum Cmd {
     /// Refund / kill / close expired orders (paid by the orders' tips), sweep own strays, from a
     /// book snapshot file.
     Keep(KeepArgs),
-    /// The x402 facilitator alone: GET /supported, POST /verify, POST /settle, GET /health, GET
-    /// /metrics.
+    /// The x402 facilitator alone (experimental at launch): GET /supported, POST /verify, POST
+    /// /settle, GET /health, GET /metrics.
     X402(X402Args),
     /// Whether a running kobd is healthy: GET /v1/health of its read API (exit 0 when it answers
     /// 200 with "ok": true, else 1): a container's HEALTHCHECK, a monitoring probe.

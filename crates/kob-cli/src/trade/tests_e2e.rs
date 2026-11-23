@@ -686,7 +686,11 @@ fn send_kas_and_tokens() {
     assert_eq!(run(send, w.args(0x11, &format!("KAS {to} 2.5KAS --yes"))), 0);
     let s = w.signed(".json");
     assert_eq!(paid_to(&s, &taker), 250_000_000);
-    assert_eq!(run(send, w.args(0x11, &format!("TST {} 12.5TST --yes", to_hex(&taker)))), 0);
+    // TST's decimals come from the indexer alone: a whole-token amount needs --decimals (R3D-7)
+    assert_eq!(run(send, w.args(0x11, &format!("TST {} 12.5TST --yes", to_hex(&taker)))), 1);
+    assert_eq!(run(send, w.args(0x11, &format!("TST {} 12.5TST --decimals 2 --yes", to_hex(&taker)))), 1, "another scale");
+    assert_eq!(w.submitted(), 1);
+    assert_eq!(run(send, w.args(0x11, &format!("TST {} 12.5TST --decimals 3 --yes", to_hex(&taker)))), 0);
     let s = w.signed(".json");
     let spk = spk_to_string(&token_spk(&user_token(taker, 12_500)));
     assert!(s.tx.outputs.iter().any(|o| o.script_public_key == spk && o.value == KAS), "the recipient's token output");
@@ -696,11 +700,17 @@ fn send_kas_and_tokens() {
     let main = address_of(&p2pk_spk(&taker), "mainnet").unwrap();
     assert_eq!(run(send, w.args(0x11, &format!("KAS {main} 1KAS --yes"))), 1);
     assert_eq!(run(send, w.args(0x11, &format!("KAS {to} 1 --yes"))), 2, "an amount without a unit is a usage error");
-    assert_eq!(run(send, w.args(0x11, &format!("TST {to} 101TST --yes"))), 1);
-    assert_eq!(run(send, w.args(0x11, &format!("TST {to} 12.5 --yes"))), 2, "a token amount without a unit");
+    assert_eq!(run(send, w.args(0x11, &format!("TST {to} 101TST --decimals 3 --yes"))), 1);
+    assert_eq!(run(send, w.args(0x11, &format!("TST {to} 12.5 --decimals 3 --yes"))), 2, "a token amount without a unit");
     assert_eq!(run(send, w.args(0x11, &format!("KAS {to} 1KAS --carrier 1 --yes"))), 1, "--carrier does not apply to KAS");
-    assert_eq!(run(send, w.args(0x11, &format!("TST {to} 1TST --carrier 0.01KAS --yes"))), 2, "a carrier below the floor");
-    assert_eq!(w.submitted(), 2);
+    assert_eq!(
+        run(send, w.args(0x11, &format!("TST {to} 1TST --decimals 3 --carrier 0.01KAS --yes"))),
+        2,
+        "a carrier below the floor"
+    );
+    // an amount in base units reads without decimals
+    assert_eq!(run(send, w.args(0x11, &format!("TST {to} 1000base --yes"))), 0);
+    assert_eq!(w.submitted(), 3);
     let _ = Path::new(".");
 }
 
@@ -983,6 +993,12 @@ fn indexer_decimals_that_the_orders_on_the_node_contradict_are_refused() {
     assert_eq!(w.submitted(), 0);
     assert_eq!(run(place, w.args(0x11, &format!("{sell} --decimals 3"))), 0);
     assert!(w.issue_codes(".place.json").iter().any(|c| c == "TOKEN_DECIMALS_CHECKED"));
+    // R3T-5: once the user confirms the indexer's decimals, orders at another scale (anyone can post them) only warn
+    w.indexer_state.lock().unwrap().routes.get_mut("/v1/tokens").unwrap()["tokens"][0]["decimals"] = json!(5);
+    let small = "limit --token TST --side sell --amount 0.1TST --price 3KAS --yes --decimals 5";
+    assert_eq!(run(place, w.args(0x11, small)), 0);
+    assert!(w.issue_codes(".place.json").iter().any(|c| c == "TOKEN_DECIMALS_OTHER_SCALE"));
+    assert_eq!(w.submitted(), 2);
 }
 
 /// Decimals of an unlisted token that only the indexer names, with no order on the node to
@@ -1184,6 +1200,37 @@ fn replace_replans_trailing_if_done_and_pair_orders() {
     assert_eq!(run(replace, w.args(0x11, &format!("{} --trail-step 0.01KAS --yes", to_hex(&i_cov)))), 1);
     assert_eq!(run(replace, w.args(0x11, &format!("{} --yes", to_hex(&p_cov)))), 1);
     assert_eq!(w.submitted(), 4);
+}
+
+/// R3D-2: `kob replace` of a pair order reads the new price in B with B's decimals. When only the indexer names them and
+/// they disagree with the B scale the order commits on chain (read from the node), nothing is signed.
+#[test]
+fn a_pair_replace_whose_quote_decimals_come_from_the_indexer_alone_is_refused() {
+    use crate::trade::plan::*;
+    let p_cov = [0xc3; 32];
+    let pair = planned(
+        Intent::Limit(LimitIntent {
+            side: Side::Sell,
+            amount: 5 * SCALE,
+            price: 1_600,
+            tip: 0,
+            min_fill: None,
+            lifetime: Lifetime::Gtc,
+            active_from: None,
+            crossing: Crossing::Auction,
+            max_fills: None,
+        }),
+        true,
+    );
+    // the order commits B at 2 decimals; the indexer now lists BBB with 0
+    let lying = |u: &mut Vec<NodeUtxo>, r: &mut BTreeMap<String, Value>| {
+        with_b(u, r);
+        r.get_mut("/v1/tokens").unwrap()["tokens"][1]["decimals"] = json!(0);
+    };
+    let w = world_x("pair-replace-decimals", &[(pair.0, p_cov, 0x50, pair.1)], lying);
+    let replace = crate::trade::actions::run_replace;
+    assert_eq!(run(replace, w.args(0x11, &format!("{} --price 3BBB --yes", to_hex(&p_cov)))), 1);
+    assert_eq!(w.submitted(), 0);
 }
 
 fn view_args(

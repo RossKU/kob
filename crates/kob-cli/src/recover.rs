@@ -71,7 +71,8 @@ INPUT
 SEARCH
   For each order: its template (pinned by this build), the candidate states and the P2SH address of each; the order is `live` when the node holds an unspent output at that
   exact script carrying the order's covenant id. Candidates, in this order: the last proven state and the given state;
-  each with `amountLeft` = the --amount-left hints; each with `amountLeft` = original - k x minFill for k = 1, 2, ...
+  each with `amountLeft` = the --amount-left hints (and what a fill of the difference writes besides: a Collected
+  order's `bought`, a stop-buy's arming, a pair buy's B escrow); each with `amountLeft` = original - k x minFill for k = 1, 2, ...
   (at most 200 candidates in all). A partial fill splices the new `amountLeft` into the script, and any amount of at
   least `minFill` may have been filled, so this search is NOT exhaustive: an order partly filled by another amount is
   reported `not_found` unless you pass its amount with --amount-left. Ask-side kinds: the
@@ -90,7 +91,8 @@ OUTPUT
 
 CANCEL
   --cancel      build the maker's cancel of every live order of the key's maker (custody verified when it has one): the
-                custody and the order's KAS back to the maker, one transaction per order. Strays are not swept (the node cannot tell them apart;
+                custody, a Collected order's bought tokens (its bought-custody, verified on the node) and the order's KAS back to
+                the maker, one transaction per order. Strays are not swept (the node cannot tell them apart;
                 sweep them with `kob sweep --view FILE` or `kob cancel --view FILE` first).
                 The fee comes from the order's released KAS; if that is not enough, the smallest sufficient plain KAS UTXO
                 of the maker on the node is added.
@@ -309,6 +311,15 @@ pub fn candidates_under(script: OrderScript, known: &[AnyState], hints: &[i64]) 
             }
         }
     }
+    // A buy that keeps an amount left changes more than it: a mode-1 stop-buy also its bought
+    // amount, and its arming fill `armed`; a pair buy its B escrow (R3A-1).
+    for s in known {
+        for h in hints {
+            for c in buy_fill_states(s, *h) {
+                push(c, VIA_HINT, &mut out);
+            }
+        }
+    }
     // A mode-1 order: the bought amount, as a bid has no amount left and a conditional one both.
     for s in known.iter().filter(|s| s.delivery().is_some_and(|d| d.mode == kob_protocol::state::MODE_ACCUMULATE)) {
         for h in hints {
@@ -366,6 +377,79 @@ fn pair_sell_boughts(s: &AnyState, left: i64) -> Vec<i64> {
     out.sort_unstable();
     out.dedup();
     out
+}
+
+/// The states a buy `s` with an amount left can hold once `left` is left, beyond the amount
+/// itself, as its contract writes a fill (R3A-1):
+/// - a mode-1 `KobCondBid`: `bought + n`, with `armed` as it was or 1 (an unarmed stop leg arms in
+///   its own fill; an armed band's origin is a DAA the search cannot know);
+/// - a `KobPair` or `KobCondPair` bid: its B escrow `custody - floor(n x p / scale(A))` at each price
+///   a leg fills at, plus rounding over several fills, and in mode 1 `bought + n`; a
+///   `KobCondPair` with `armed` as it was or 1.
+///
+/// Empty for any other order. Not exhaustive: a decayed price, a band, a re-arm are not tried.
+fn buy_fill_states(s: &AnyState, left: i64) -> Vec<AnyState> {
+    use kob_protocol::state::MODE_ACCUMULATE;
+    let mut out = vec![];
+    match s {
+        AnyState::KobCondBid(x) | AnyState::KobCondBidKron(x) if x.mode == MODE_ACCUMULATE => {
+            let n = x.amount_left - left;
+            let Some(bought) = x.bought.checked_add(n).filter(|_| n > 0 && left >= 1) else { return out };
+            for armed in [x.armed, 1] {
+                let mut t = s.clone();
+                if let AnyState::KobCondBid(y) | AnyState::KobCondBidKron(y) = &mut t {
+                    (y.amount_left, y.bought, y.armed) = (left, bought, armed);
+                }
+                out.push(t);
+            }
+        }
+        AnyState::KobPair(x) if !x.is_ask() => {
+            let n = x.amount_left - left;
+            if n <= 0 || left < 1 {
+                return out;
+            }
+            let bought = if x.mode == MODE_ACCUMULATE { x.bought.checked_add(n) } else { Some(x.bought) };
+            for p in [x.price, x.price_end].into_iter().filter(|p| *p > 0) {
+                for custody in escrows_after(x.custody, x.s_out(n, p)) {
+                    let mut y = x.clone();
+                    (y.amount_left, y.custody) = (left, custody);
+                    if let Some(b) = bought {
+                        y.bought = b;
+                        out.push(AnyState::KobPair(y));
+                    }
+                }
+            }
+        }
+        AnyState::KobCondPair(x) if !x.is_ask() => {
+            let n = x.amount_left - left;
+            if n <= 0 || left < 1 {
+                return out;
+            }
+            let bought = if x.mode == MODE_ACCUMULATE { x.bought.checked_add(n) } else { Some(x.bought) };
+            let ps = [x.tp_price, x.stop_price, if x.stop_price > 0 { x.stop_worst() } else { 0 }];
+            for p in ps.into_iter().filter(|p| *p > 0) {
+                for custody in escrows_after(x.custody, x.s_out(n, p)) {
+                    for armed in [x.armed, 1] {
+                        let mut y = x.clone();
+                        (y.amount_left, y.custody, y.armed) = (left, custody, armed);
+                        if let Some(b) = bought {
+                            y.bought = b;
+                            out.push(AnyState::KobCondPair(y));
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// A pair bid's escrow after paying `spent` (one fill's rounding down) over one or more fills:
+/// each fill rounds down on its own, so up to [`PAIR_SELL_ROUNDING`] base units more stay.
+fn escrows_after(custody: i64, spent: Option<i64>) -> Vec<i64> {
+    let Some(left) = spent.and_then(|s| custody.checked_sub(s)) else { return vec![] };
+    (0..=PAIR_SELL_ROUNDING).filter_map(|j| left.checked_add(j)).filter(|c| *c >= 0 && *c <= custody).collect()
 }
 
 /// Custody of a live order.
@@ -522,6 +606,9 @@ pub struct Found {
     ///
     /// It is `Custody::None` for every other order.
     pub prefund: Custody,
+    /// A mode-1 order's bought-custody (`bought > 0`), looked up from its state. `Custody::None`
+    /// for every other order.
+    pub bought: Custody,
     /// The cancel outcome (`--cancel`).
     pub cancel: Option<Value>,
 }
@@ -555,6 +642,7 @@ fn prepare(e: Entry, maker: Option<[u8; 32]>, hints: &[(Option<[u8; 32]>, String
         via: None,
         custody: Custody::None,
         prefund: Custody::None,
+        bought: Custody::None,
         cancel: None,
     };
     let (Some(tpl), Some(script)) = (f.tpl, f.script) else {
@@ -579,6 +667,20 @@ fn prepare(e: Entry, maker: Option<[u8; 32]>, hints: &[(Option<[u8; 32]>, String
     };
     // Every known state must be the same order: kind, maker and token.
     known.retain(|s| s.template_id() == first.template_id() && s.maker() == first.maker() && s.token_cov_id() == first.token_cov_id());
+    // An unbound curve's first fill writes its token (its custody's covenant id) into the state
+    // (R3A-2). With the token the file names, its bound states come first: they are the later ones.
+    if let Some(t) = e.token {
+        let bound: Vec<AnyState> = known
+            .iter()
+            .filter_map(|s| match s {
+                AnyState::KobCurveAsk(c) if c.is_unbound() => {
+                    Some(AnyState::KobCurveAsk(kob_protocol::state::CurveAskState { token_cov_id: t, ..c.clone() }))
+                }
+                _ => None,
+            })
+            .collect();
+        known.splice(0..0, bound);
+    }
     f.known = Some(first.clone());
     if let Some(k) = &e.claimed_kind {
         if k != first.template_id().name() {
@@ -664,8 +766,32 @@ pub fn search(
         };
         targets.push(t);
     }
-    let spks: Vec<ScriptPublicKey> = targets.iter().flatten().map(|(_, s, _)| s.clone()).collect();
+    // A mode-1 order's bought-custody, from its state: a cancel must move it (R3A-1).
+    let mut boughts: Vec<Option<CustodyTarget>> = vec![];
+    for f in found.iter_mut() {
+        let b = match &f.live {
+            Some((_, st)) => match crate::trade::data::bought_target(st, f.entry.covenant_id) {
+                Ok(b) => b,
+                Err(e) => {
+                    f.bought = Custody::Unknown(e);
+                    None
+                }
+            },
+            None => None,
+        };
+        boughts.push(b);
+    }
+    let spks: Vec<ScriptPublicKey> = targets.iter().flatten().chain(boughts.iter().flatten()).map(|(_, s, _)| s.clone()).collect();
     let at = if spks.is_empty() { Default::default() } else { lookup(node, network, &spks)? };
+    for (f, b) in found.iter_mut().zip(boughts) {
+        if let Some((st, spk, token)) = b {
+            let hit = at.get(&spk_bytes(&spk)).and_then(|v| v.iter().find(|u| u.covenant_id == Some(token))).cloned();
+            f.bought = match hit {
+                Some(u) => Custody::Verified(u, st),
+                None => Custody::Missing(st),
+            };
+        }
+    }
     for (f, t) in found.iter_mut().zip(targets) {
         // An unbound curve names no token: its custody is the output of its own transaction (its
         // token's genesis) at the custody script, and its token is that output's covenant id.
@@ -735,6 +861,9 @@ pub fn order_json(f: &Found) -> Value {
         if !matches!(f.prefund, Custody::None) {
             v["prefund"] = custody_json(&f.prefund);
         }
+        if !matches!(f.bought, Custody::None) {
+            v["bought"] = custody_json(&f.bought);
+        }
     }
     if let Some(c) = &f.cancel {
         v["cancel"] = c.clone();
@@ -780,6 +909,13 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
         Custody::Missing(_) => return Err("the B prefund custody was not found on the node: not cancelled".into()),
         Custody::Unknown(why) => return Err(format!("prefund custody {why}: not cancelled")),
     };
+    // A collected order's bought tokens go to the maker with the cancel (R3A-1).
+    let bought: Vec<TokenUtxo> = match &f.bought {
+        Custody::None => vec![],
+        Custody::Verified(c, st) => vec![TokenUtxo { utxo: utxo_of(c), state: st.clone() }],
+        Custody::Missing(_) => return Err("the bought-custody was not found on the node: not cancelled".into()),
+        Custody::Unknown(why) => return Err(format!("bought-custody {why}: not cancelled")),
+    };
     let utxo = utxo_of(u);
     let fee = FeeOptions { fee_rate: Some(a.fee_rate), fee_mode: if a.priority_fee { FeeMode::Priority } else { FeeMode::Relay } };
     let (built, funding) = build_funded(true, &a.node, &a.network, &maker, |funding| {
@@ -788,7 +924,7 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
             order: OrderUtxo { utxo: utxo.clone(), state: state.clone() },
             custody: custody.clone(),
             prefund: prefund.clone(),
-            strays: vec![],
+            strays: bought.clone(),
             foreign: vec![],
             tokens: vec![],
             funding,

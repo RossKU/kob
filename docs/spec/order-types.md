@@ -276,8 +276,9 @@ The builder adds one base unit per possible fill but the last (`IfdPairState::b_
 of a non-repeating entry. A repeating entry can take more fills than that over its life, so after enough fills and merges
 (about nine transactions in the reviewer's model: scale 10, prefund 13, 40 units, minimum fill 10) the prefund can be a few
 base units short of the next fill's ceiling: the covenant then refuses that fill (`used <= custody`) until a merge restores a
-unit, and the last remainder may wait. Nothing is lost: every exit is fully funded, and the maker can refund or cancel at any
-time. A builder slack that provably covers every sequence of a repeating entry was not found without a contract change (the
+unit, which may never come when no unmerged exit is left; the remainder then waits for the maker. Nothing is lost: every exit is
+fully funded, the maker can cancel at any time, and anyone can refund the entry at its expiry or after 90 days idle. A builder
+slack that provably covers every sequence of a repeating entry was not found without a contract change (the
 next template generation can let a fill take `min(⌈n·prefund / scale(A)⌉, custody)` within a few units).
 
 **Keeper tip per cycle.** On every repeating entry (`KobIfdBid`, `KobIfdAsk`, `KobIfdPair` and their KRON twins) `update` pays

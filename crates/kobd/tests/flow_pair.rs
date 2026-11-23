@@ -1173,3 +1173,66 @@ async fn a_collected_pair_sell_stays_listed_after_a_partial_fill() {
     assert_eq!(c.hs.status(&cov), "cancelled");
     assert_eq!(c.hs.event_kinds(&cov), ["create", "fill", "fill", "cancel"]);
 }
+
+/// R3A-6 (the `KobCondPair` case of R2A-1): a conditional pair sell with Collected delivery (mode 1) writes `bought + tOut`
+/// into its continuation, `tOut` the B its take-profit fill received. It must stay proven and listed after a partial
+/// fill, and be cancellable by its maker with both custodies.
+#[tokio::test]
+async fn a_collected_cond_pair_sell_stays_listed_after_a_partial_fill() {
+    // B must be a KCC-20 token: a KRON T is delivered new
+    let p = BA;
+    let (ta, tb) = (p.a(), p.b());
+    let c = Ctx::new();
+    let x = CondPairState { mode: MODE_ACCUMULATE, ..cond_pair_ask(p, MAKER_A) };
+    let placed = place_pair(&c, p, AnyState::KobCondPair(x.clone()), PV, MAKER_A).await;
+    let cov = placed.cov;
+
+    // the take-profit leg sells 4 whole A at `tpPrice` from the taker's inventory of B
+    let t_out = x.t_out_min(4 * WHOLE, x.tp_price).unwrap();
+    assert_ne!(t_out, 4 * WHOLE, "tOut differs from the A sold");
+    let leg = Leg::CondPair {
+        order: c.w.order(&placed.create, 0, x.clone()),
+        custody: custody_at(&c, p, &placed.create, &cov, ta.0, 10 * WHOLE).expect("the A custody"),
+        amount: 4 * WHOLE,
+        leg: 0,
+        evidence: None,
+        evidence_b: None,
+        t: None,
+        merge: None,
+        bought_custody: None,
+        receive: None,
+        form: None,
+    };
+    let mut b = batch(&c.w, c.daa(), vec![leg]);
+    b.taker_tokens = vec![taker_coin(&c, p.fb, t_out)];
+    let fill = sign_batch(&c, b);
+    c.push(&[&fill]).await;
+    let x6 = CondPairState { amount_left: 6 * WHOLE, custody: 6 * WHOLE, bought: t_out, ..x.clone() };
+    assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobCondPair(x6.clone())), "the continuation's `bought` is proven");
+    assert_eq!(c.hs.status(&cov), "partial");
+    let v = view(&c, &cov);
+    assert!(v.listed, "{:?}", v.unlisted_reason);
+    assert!(book(&c).iter().any(|o| o.id() == cov.0), "still in the matcher's book");
+
+    // the maker's cancel: the A custody and the bought-custody of B come back
+    let oi = find_cov(&fill, &cov).unwrap();
+    let held = custody_at(&c, p, &fill, &cov, tb.0, t_out).expect("the bought-custody");
+    let cancel = c.w.sign(&Action::CancelOrder(CancelOrder {
+        retired: None,
+        order: c.w.order(&fill, oi, AnyState::KobCondPair(x6.clone())),
+        custody: custody_at(&c, p, &fill, &cov, ta.0, 6 * WHOLE),
+        prefund: None,
+        foreign: vec![],
+        strays: vec![held],
+        tokens: vec![],
+        funding: vec![c.w.coin(MAKER_A, 10)],
+        change: None,
+        replace: None,
+        lock_time: 0,
+        records: vec![],
+        fee: FeeOptions::default(),
+    }));
+    c.push(&[&cancel]).await;
+    assert_eq!(c.hs.status(&cov), "cancelled");
+    assert_eq!(c.hs.event_kinds(&cov), ["create", "fill", "cancel"]);
+}

@@ -151,3 +151,46 @@ fn an_exact_size_all_or_nothing_ask_does_not_set_the_sale_floor() {
     let r = tick(&inp, &cfg, &signer());
     assert!(r.jobs.iter().all(|j| j.kind != MaintKind::Sell), "sold against a stack of all-or-nothing asks");
 }
+
+/// R3D-1: the fill-size range is measured on what one fill may take. An ask of 1.5 times the holding whose `maxFill`
+/// equals its minimum fill sells to a buyer of exactly that size only, so it does not set the floor; the same ask that
+/// takes fills from a fifth of the holding does.
+#[test]
+fn a_max_fill_capped_ask_does_not_set_the_sale_floor() {
+    let cfg = MaintenanceConfig { merge: false, ..Default::default() };
+    let sale = |min_fill: i64| {
+        let bid = l_bid_a(100, K3, 2, 250_000_000, 2 * WHOLE);
+        let ask = l_ask_with(300, token_a(K3), K3, 2, 270_000_000, 3 * WHOLE, |a| {
+            a.min_fill = min_fill;
+            a.max_fill = 2 * WHOLE;
+        });
+        let mut inp = input(vec![own(K3, 2 * WHOLE, CARRIER)], vec![funding(50 * KAS)]);
+        inp.orders = vec![bid, ask];
+        tick(&inp, &cfg, &signer())
+    };
+    let r = sale(2 * WHOLE);
+    assert!(r.jobs.iter().all(|j| j.kind != MaintKind::Sell), "sold against an ask for buyers of exactly 2 whole tokens");
+    let r = sale(WHOLE / 5);
+    assert!(r.jobs.iter().any(|j| j.kind == MaintKind::Sell), "{:?}", r.skipped);
+}
+
+/// R3D-1: an ask counts for the floor only once its UTXO is `ASK_REFERENCE_AGE` DAA old. An honest ask placed (or last
+/// filled or amended) less than a minute ago is ignored, so there is no sale; the same ask a minute old sets the floor.
+#[test]
+fn a_fresh_ask_does_not_set_the_sale_floor() {
+    let cfg = MaintenanceConfig { merge: false, ..Default::default() };
+    let sale = |age: u64| {
+        let bid = l_bid_a(100, K3, 2, 250_000_000, 2 * WHOLE);
+        let mut ask = l_ask_with(300, token_a(K3), K3, 2, 270_000_000, 10 * WHOLE, |a| a.min_fill = WHOLE / 5);
+        let inp0 = input(vec![], vec![]);
+        ask.order.utxo.block_daa_score = inp0.clock.daa - age;
+        let mut inp = input(vec![own(K3, 2 * WHOLE, CARRIER)], vec![funding(50 * KAS)]);
+        inp.orders = vec![bid, ask];
+        tick(&inp, &cfg, &signer())
+    };
+    let r = sale(kobd::maintenance::ASK_REFERENCE_AGE - 1);
+    assert!(r.jobs.iter().all(|j| j.kind != MaintKind::Sell), "sold against an ask younger than a minute");
+    assert!(r.skipped.iter().any(|(_, why)| why.contains("no resting asks")), "{:?}", r.skipped);
+    let r = sale(kobd::maintenance::ASK_REFERENCE_AGE);
+    assert!(r.jobs.iter().any(|j| j.kind == MaintKind::Sell), "{:?}", r.skipped);
+}

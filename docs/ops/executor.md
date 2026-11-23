@@ -348,7 +348,9 @@ withdraw what came back. From the executor's folder, with `--network` and `--nod
 3. Stop the executor, delete `kob-pause`, and withdraw the plain KAS (`kobd withdraw --to <address> --amount all`, Quick start
    section 5). `kobd address-balance` shows what is left.
 
-The units are required (`125TUSD`, `1250base`, `0.08KAS`); `kob send --help` and `kob merge --help` list every option.
+The units are required (`125TUSD`, `1250base`, `0.08KAS`); `kob send --help` and `kob merge --help` list every option. A
+token whose decimals only the indexer names (no registry entry, no KCC-23 declaration) needs `--decimals N` for a
+whole-token amount, or the amount in base units.
 
 `kobd --indexer` (with the database tools `kobd db info`, `replay`, `export-orders`, `export-book`, `import-orders`, `rebase`), `match` and `keep` stay as
 standalone modes. The database and the record log are the same files in every mode; never run two
@@ -2042,8 +2044,11 @@ stall or drain any executor:
   whose SID `whoami` cannot tell is refused too. `KOB_KEY_ACL_STRICT=0` turns each refusal into a warning (not recommended).
   `icacls` and `whoami` run from `%SystemRoot%\System32` by their full path, never by bare name (Windows would look next to
   kobd.exe first; audit 2026-11-23 D2-1). At each start kobd also logs an error for its program, its folder, the
-  configuration file and the data directory when another account can change them (write, add a file, delete, change the
-  ACL; Unix: group- or world-writable, a sticky folder excepted; audit D-2). It warns and does not refuse, since a folder at
+  configuration file and its folder, the data directory (before it exists: the folder it is made in), the key file and its
+  folder and the `--inventory-policy` file when another account can change them (write, add a file, delete, change the
+  ACL, own it; Unix: owned by another account than this one or root, or group- or world-writable, a sticky folder excepted;
+  audit D-2, R3D-3, R3D-6), or when their permissions or owner cannot be read (refused on mainnet: nobody can tell who may
+  change them). `kobd match` and `kobd keep` check the same. On mainnet it refuses to start; on testnet-10 it warns and goes on, since a folder at
   the root of a Windows drive (`C:\kob`, the quickstart's earlier example) inherits that right for Authenticated Users.
   The refusal names the groups and accounts by name (Users, Everyone, Authenticated Users, ...), not by their SDDL aliases (BU, WD, AU), and prints the exact command, e.g. `icacls "C:\kob\kob-operator.key" /inheritance:r /grant:r "MYPC\alice:F"`. The fix: `icacls <file> /inheritance:r /grant:r <account>:F` (quickstart 5). `remove_var` does not scrub the environment
   block: prefer a key file or a systemd credential. `--pause-file` also stops resends of transactions a reorg moved back to
@@ -2265,7 +2270,11 @@ Inputs: the web wallet's backup (`kob-backup`), this export format (version 1 or
 candidate and nothing else in a file is trusted. Each order's template must be one this build pins or a retired one of its
 cancel-only table, searched under that template's own script and cancelled through its own cancel entry (any other is
 `unsupported`: `docs/spec/template-retirement.md`). The candidates are, in this order: the last proven
-state and the given state; each with `amountLeft` = the `--amount-left` hints; each with `amountLeft` = original −
+state and the given state (an unbound curve, placed in its token's genesis, also bound to the token its backup record names,
+which its first fill writes into its state); each with `amountLeft` = the `--amount-left` hints, with what a fill of the
+difference writes besides: a Collected (mode 1) order's `bought` (a pair sell: the B the sold A brings at each price it fills
+at, plus rounding; a stop-buy: `bought` + the difference, `armed` as placed or 1), a pair buy's B escrow at each price it
+fills at, plus rounding; each with `amountLeft` = original −
 k × `minFill` for k = 1, 2, … (at most 200 candidates in all). A partial fill splices the new `amountLeft` into the
 script and any amount of at least `minFill` may have been filled, so **this search is not exhaustive**: a partly
 filled order the grid does not reach is reported `not_found` until the maker passes its amount with
@@ -2282,7 +2291,8 @@ this build, or the state does not decode. The report is JSON (one entry per orde
 (base units; a bid: its remaining buying power), `scale`, `min_fill`, `found_by`, custody).
 
 `--cancel` builds the maker's cancel of every live order of the key's maker (custody verified when it has one), one
-transaction per order: custody and KAS back to the maker, fee from the order's released KAS, else the smallest sufficient
+transaction per order: custody, a Collected order's bought tokens (its bought-custody, rebuilt from the live state and
+verified on the node, reported as `bought`; a cancel without it is refused) and KAS back to the maker, fee from the order's released KAS, else the smallest sufficient
 plain KAS UTXO of the maker on the node. Every transaction is signed with the key (a key that is not the maker is
 refused), validated in the script engine before anything is written or submitted, written to `<covenant id>.cancel.json`
 (signed transaction and `submitTransaction` request), and submitted unless `--dry-run`. Like every command that submits, it
@@ -3137,7 +3147,12 @@ never goes far below the market: the bid must pay at least 90 % of what the book
 charge for the same amount, the cheapest first, as many as it takes to cover it (the price of the ask that completes the
 amount). Each ask counts only for what a buyer of the rest of the amount can take from it in one fill (its minimum fill, its
 FOK range, the dust bound of a partial fill): an all-or-nothing ask larger than the holding counts for nothing (audit
-2026-11-23 D-1). With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
+2026-11-23 D-1). An ask also counts only when one fill of it ranges over at least half the amount, from its minimum fill
+to the most one fill takes (its `maxFill` and dust bound), and only when it is not FOK: an ask that sells to buyers of one
+size only is the poster's own sale (R2D-1, R3D-1). And its UTXO must be at least 600 DAA (about one minute) old: an ask
+placed, filled or amended in the last minute is left out until it is a minute old, which bounds how long a planted ask is
+open to other buyers. These rules leave out honest small asks and honest asks that just traded, never the other way, so in
+a thin or busy book the sale is skipped (`sell: no resting asks ...`) rather than priced too low. With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
 as well); the skipped sale is logged with its reason (`sell: no resting asks ...`, `sell: the best bid pays ... below 9000 bps
 of the asks' price`). A low bid alone therefore never takes a holding, and an ask posted to lower the reference must itself offer
 the whole amount at that price to everyone. `0` turns the floor off (any bid that pays the fee, the earlier rule).

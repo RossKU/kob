@@ -180,6 +180,13 @@ fn markets_of(c: &Common, live: &Live) -> Result<Vec<TokenMarket>, String> {
     for m in ms.iter().filter(|m| m.cov == own_token) {
         market::check_order_scale(m, own_scale)?;
     }
+    // A pair order commits the scale of both its tokens: a quote token B whose decimals only the
+    // indexer names must agree with the state read from the node (R3D-2), as A does.
+    if let Some(p) = named.pair_tokens() {
+        for m in ms.iter().filter(|m| m.cov == p.b.cov_id) {
+            market::check_order_scale(m, p.b.scale)?;
+        }
+    }
     Ok(ms)
 }
 
@@ -1006,8 +1013,19 @@ fn run_ops(op: crate::order::Op, args: &[String], usage_text: &str) -> i32 {
 /// The order of a covenant id, read from the indexer.
 fn order_of_id(c: &Common, signer: &Signer, op: crate::order::Op, id: &str) -> Result<Prepared, Fail> {
     let cov = cov_arg(id).map_err(usage)?;
-    let indexer = c.need_indexer()?;
-    let v = super::http::get_ok(indexer, &format!("/v1/orders/{}", to_hex(&cov)), data::INDEXER_TIMEOUT)?;
+    // A cancel needs no indexer: say how, when it cannot be asked (R3A-1).
+    let no_indexer = |e: String| -> Fail {
+        match op {
+            crate::order::Op::Cancel => Fail::from(format!(
+                "{e}\n  without an indexer: `kob recover --from <backup or export file> --cancel` finds and cancels the order \
+                 from the node alone (a partly filled order: add --amount-left; `kob recover --help`), or `kob cancel --view \
+                 FILE` with a saved view of its current UTXO"
+            )),
+            crate::order::Op::Sweep => Fail::from(e),
+        }
+    };
+    let indexer = c.need_indexer().map_err(no_indexer)?;
+    let v = super::http::get_ok(indexer, &format!("/v1/orders/{}", to_hex(&cov)), data::INDEXER_TIMEOUT).map_err(no_indexer)?;
     let parsed = crate::inputs::parse(&v, &format!("indexer order {}", to_hex(&cov)), &c.network)?;
     let view = parsed.views.into_iter().next().ok_or("the indexer's view of the order is not usable")?;
     order_of_view(c, signer, op, &view, Some(indexer))
@@ -1671,6 +1689,9 @@ USAGE
   outputs: the recipient and your change), taking the fewest of your token UTXOs; KAS for the carrier and the fee
   come from your KAS UTXOs, largest first.
 
+  --decimals N  confirms the token's decimals when only the indexer names them (no registry entry, no KCC-23
+                declaration): a whole-token AMOUNT is refused without it; an AMOUNT in base units needs none
+
   --indexer is optional for a token: without one, the token is named by the registry or by this machine's record of
   tokens it issued (`kob token create`) and of your recent token outputs (kept a day, each confirmed on the node, in
   %LOCALAPPDATA%\\kob or ~/.local/state/kob). A token or holding that record does not cover needs --indexer.
@@ -1699,7 +1720,7 @@ pub fn recipient(to: &str, network: &str) -> Result<(kaspa_consensus_core::tx::S
 
 /// Runs `kob send`.
 pub fn run_send(args: &[String]) -> i32 {
-    let (p, c, signer) = match ctx(args, &["--carrier"], &[], SEND_USAGE) {
+    let (p, c, signer) = match ctx(args, &["--carrier", "--decimals"], &[], SEND_USAGE) {
         Ok(x) => x,
         Err(code) => return code,
     };
@@ -1763,13 +1784,33 @@ pub fn run_send(args: &[String]) -> i32 {
             })),
         };
         let held_program = |cov: &[u8; 32]| data::held_program_from(indexer, node, &c.network, cov, &signer.pubkey);
+        let entered = p
+            .get("--decimals")
+            .map(|v| v.parse::<u32>().map_err(|_| usage(format!("--decimals must be a whole number from 0 to 9, got `{v}`"))))
+            .transpose()?;
         let open = market::OpenToken {
+            entered,
             remembered: Some(&remembered),
             declaration: Some(&declaration),
             held_program: Some(&held_program),
             ..market::OpenToken::new(&c.network, &order_scale)
         };
         let mut m = market::resolve_with(what, &reg, &idx, Some(&open)).map_err(&without_indexer)?;
+        // Decimals that only the indexer names read a whole-token amount 10^k off (R3D-7, as
+        // B2-M5 for `kob place`): they need `--decimals N`, which `resolve_with` checked against
+        // them. An amount in base units reads without them.
+        let indexer_only = m.listing == market::Listing::Unlisted
+            && matches!(m.decimals_from, market::DecimalsFrom::Lists | market::DecimalsFrom::Market);
+        if indexer_only && entered.is_none() && !amount.trim().to_ascii_lowercase().ends_with("base") {
+            return Err(Fail::from(format!(
+                "{}: its decimals ({}) come from the indexer alone (no registry entry, no KCC-23 declaration), and the amount \
+                 reads with them: check them, then give `--decimals {}` to confirm them, or give the amount in base units \
+                 (e.g. 1250base); nothing signed",
+                m.name(),
+                m.decimals,
+                m.decimals
+            )));
+        }
         let key = key.ok_or("a token goes to a P2PK address or an x-only key (the token state names its owner key)")?;
         let base = parse_token_amount(amount, &m.unit(), "the amount").map_err(usage)?;
         let carrier = match p.get("--carrier") {

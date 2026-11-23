@@ -12,9 +12,12 @@ new code.
 * So a fund-moving contract bug cannot be stopped on chain. An attacker needs no KOB software: any Kaspa transaction that the
   contract accepts works. **The only protection for a resting order is its maker's cancel**, and the cancel works as long as the
   attacker has not spent the order first.
-* The maker's cancel needs no indexer and no hosted app: `kob cancel <covenant id>` with the maker's key, `kob cancel --view FILE`
-  from saved indexer views, or `kob recover --from FILE --cancel` from a backup or export (`crates/kob-cli/README.md`). The web app
-  also cancels from the node and the records kept in the browser when no indexer answers (`docs/ops/chart-server.md`, section 5).
+* The maker's cancel needs no indexer and no hosted app: `kob recover --from FILE --cancel` from a backup or export, with the
+  maker's key, finds the order on the node and cancels it (a partly filled order: add `--amount-left`, the amount it has left), and
+  `kob cancel --view FILE` cancels from a saved indexer view of the order's current UTXO (`crates/kob-cli/README.md`).
+  `kob cancel <covenant id>` reads the order from an indexer. The web app also cancels from the node and the records kept in the
+  browser when no indexer answers (`docs/ops/chart-server.md`, section 5), except a Collected order that already holds bought tokens:
+  cancel that one with `kob recover --cancel`, which moves the bought tokens back with it.
 * What the founder controls is the hosted web app (`kob.kaspa.ag`, the Pages project `kob-web`), the public indexer index-main
   (`kob-api.kaspa.ag`) and what is published in this repository and on X. Executors are run by others; the founder runs none.
 

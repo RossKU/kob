@@ -1373,3 +1373,208 @@ fn an_unbound_curve_is_cancelled_from_its_view_and_its_backup() {
     assert_eq!(b["cancel"]["status"], "signed", "{b}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A Collected (mode 1) buy-stop of 10 whole tokens, unarmed: take-profit 2.00, stop 3.00 with a 3 % band.
+fn collected_cond_bid(maker: u8) -> kob_protocol::state::CondBidState {
+    let (h, p, s) = tok_fields(P);
+    kob_protocol::state::CondBidState {
+        maker: pk(maker),
+        token_cov_id: TOKEN,
+        token_tpl_hash: h,
+        tpl_prefix_len: p,
+        tpl_suffix_len: s,
+        extension_commitment: EXT,
+        scale: SCALE,
+        min_fill: SCALE,
+        tip: 0,
+        active_from: 0,
+        expiry_daa: 400_000_000,
+        refund_tip: rtip(),
+        delivery_carrier: CARRIER as i64,
+        tp_price: 200_000_000,
+        stop_price: 300_000_000,
+        slip_bps: 300,
+        trail_step: 0,
+        trail_gap: 0,
+        trail_wait: 0,
+        min_touch: 1,
+        min_rest_daa: 50,
+        amount_left: 10 * SCALE,
+        armed: 0,
+        band_daa: 0,
+        keeper_tip: kob_protocol::defaults::tips(P).map(|t| t.keeper_tip as i64).unwrap_or(10_000_000),
+        parent: [0; 32],
+        rpt_price: 0,
+        rpt_pre: 0,
+        rpt_until: 0,
+        mode: 1,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
+    }
+}
+
+/// R3A-1: `kob recover --cancel` cancels, from a backup and the node alone, a Collected order that holds bought tokens:
+/// its bought-custody is looked up from the state and goes back to the maker in the cancel. A `KobBid` after one fill of
+/// 3 whole tokens, a buy-stop (`KobCondBid`) after its arming fill of 4 (`amountLeft`, `bought` and `armed` all move)
+/// and a pair sell after one fill of 4 whole A, each placed in mode 1; the latter two with `--amount-left`.
+#[test]
+fn recover_cancels_collected_orders_with_their_bought_custody() {
+    const CB: [u8; 32] = [0xe1; 32];
+    const CC: [u8; 32] = [0xe2; 32];
+    const CP: [u8; 32] = [0xe3; 32];
+    let b0 = BidState { mode: 1, ..bid(1) };
+    let b_value = b0.escrow(10 * SCALE, 3).unwrap() as u64;
+    let b_now = AnyState::KobBid(BidState { bought: 3 * SCALE, ..b0.clone() });
+    let c0 = collected_cond_bid(1);
+    let c_value = c0.escrow(3).unwrap() as u64;
+    let c_now =
+        AnyState::KobCondBid(kob_protocol::state::CondBidState { amount_left: 6 * SCALE, bought: 4 * SCALE, armed: 1, ..c0.clone() });
+    let p0 = PairState { mode: 1, ..pair_order(1, true) };
+    let p_now = AnyState::KobPair(PairState {
+        amount_left: 6 * SCALE,
+        custody: 6 * SCALE,
+        bought: p0.t_out_min(4 * SCALE, p0.price).unwrap(),
+        ..p0.clone()
+    });
+    let utxos = vec![
+        node_utxo(&b_now.spk(), 0xe1, 0, b_value, Some(CB)),
+        token_node_utxo(P, TOKEN, 0xe4, 3 * SCALE, CB),
+        node_utxo(&c_now.spk(), 0xe2, 0, c_value, Some(CC)),
+        token_node_utxo(P, TOKEN, 0xe5, 4 * SCALE, CC),
+        node_utxo(&p_now.spk(), 0xe3, 0, 5 * KAS, Some(CP)),
+        token_node_utxo(P, TOKEN, 0xe6, 6 * SCALE, CP),
+        token_node_utxo(P, TOKEN_B, 0xe7, 4 * SCALE, CP),
+        node_utxo(&p2pk_spk(&pk(1)), 0x91, 0, 50 * KAS, None),
+    ];
+    let (url, node) = mock::start(utxos);
+    let dir = tmp("collected");
+    let rec = |cov: [u8; 32], kind: TemplateId, s: AnyState| {
+        let mut r = record(cov, kind.name(), template(kind).hash, &hex_state(&s), pk(1));
+        r["ext"] = json!(to_hex(&EXT));
+        r
+    };
+    let records = vec![
+        rec(CB, TemplateId::KobBid, AnyState::KobBid(b0)),
+        rec(CC, TemplateId::KobCondBid, AnyState::KobCondBid(c0)),
+        rec(CP, TemplateId::KobPair, AnyState::KobPair(p0)),
+    ];
+    let backup = write(
+        &dir,
+        "backup.json",
+        &json!({"format": "kob-backup", "version": 1, "network": NET, "exportedAt": "2026-10-02T00:00:00Z", "records": records, "txs": {}}),
+    );
+    let out = dir.join("out");
+    let a = recover::parse_args(&v(&format!(
+        "--from {} --node {url} --network {NET} --maker {} --amount-left {}=6000 --amount-left {}=6000 --cancel --dry-run --key-file {} --out-dir {}",
+        backup.display(),
+        to_hex(&pk(1)),
+        to_hex(&CC),
+        to_hex(&CP),
+        keyf(1),
+        out.display()
+    )))
+    .unwrap();
+    let (report, ok) = recover::execute(&a).unwrap();
+    assert!(ok, "{report}");
+    for (cov, bought, token) in [(CB, 3 * SCALE, TOKEN), (CC, 4 * SCALE, TOKEN), (CP, 4 * SCALE, TOKEN_B)] {
+        let o = by_cov(&report, cov);
+        assert_eq!(o["status"], "live", "{o}");
+        assert_eq!(o["bought"]["status"], "verified", "{o}");
+        assert_eq!(o["cancel"]["status"], "signed", "{o}");
+        let s = signed_from(o["cancel"]["file"].as_str().unwrap());
+        let spk = spk_to_string(&TokenState::user(P, bought, pk(1), EXT).spk_with(token_template(P)));
+        assert!(
+            s.tx.outputs.iter().any(|x| x.script_public_key == spk && x.covenant.as_ref().map(|c| c.covenant_id) == Some(token)),
+            "{}: the bought tokens back to the maker",
+            to_hex(&cov)
+        );
+    }
+    assert!(node.lock().unwrap().submitted.is_empty());
+    // the bought-custody gone from the node: the cancel is refused, never built without it
+    let (url2, _n2) =
+        mock::start(vec![node_utxo(&b_now.spk(), 0xe1, 0, b_value, Some(CB)), node_utxo(&p2pk_spk(&pk(1)), 0x91, 0, 50 * KAS, None)]);
+    let a = recover::parse_args(&v(&format!(
+        "--from {} --node {url2} --network {NET} --maker {} --cancel --dry-run --key-file {} --out-dir {}",
+        backup.display(),
+        to_hex(&pk(1)),
+        keyf(1),
+        out.display()
+    )))
+    .unwrap();
+    let (report, ok) = recover::execute(&a).unwrap();
+    assert!(!ok);
+    let o = by_cov(&report, CB);
+    assert_eq!(o["cancel"]["status"], "failed", "{o}");
+    assert!(o["cancel"]["reason"].as_str().unwrap().contains("bought-custody"), "{o}");
+    // a Collected pair buy: amountLeft, the B escrow and bought all move with a fill
+    let pb = PairState { mode: 1, ..pair_order(1, false) };
+    let after = PairState {
+        amount_left: 6 * SCALE,
+        custody: pb.custody - pb.s_out(4 * SCALE, pb.price).unwrap(),
+        bought: 4 * SCALE,
+        ..pb.clone()
+    };
+    let c = recover::candidates(TemplateId::KobPair, &[AnyState::KobPair(pb)], &[6 * SCALE]);
+    assert!(c.iter().any(|c| c.state == AnyState::KobPair(after.clone()) && c.via == VIA_HINT));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// R3A-2: a token-launch curve placed in its token's genesis (unbound) writes its token into its state at its first
+/// fill. `kob recover` tries that bound state with the token the backup record names, finds the curve after a fill and
+/// cancels it.
+#[test]
+fn recover_finds_an_unbound_curve_after_its_first_fill() {
+    const CV: [u8; 32] = [0xc6; 32];
+    let (h, pl, sl) = tok_fields(P);
+    let curve = kob_protocol::state::CurveAskState {
+        maker: pk(1),
+        token_cov_id: [0; 32],
+        token_tpl_hash: h,
+        tpl_prefix_len: pl,
+        tpl_suffix_len: sl,
+        scale: SCALE,
+        min_fill: SCALE,
+        tip: 0,
+        active_from: 0,
+        level_size: 5 * SCALE,
+        total: 10 * SCALE,
+        amount_left: 10 * SCALE,
+        extension_commitment: EXT,
+        table: vec![250_000_000, 260_000_000],
+    };
+    let placed = AnyState::KobCurveAsk(curve.clone());
+    let now = AnyState::KobCurveAsk(kob_protocol::state::CurveAskState { token_cov_id: TOKEN, amount_left: 9 * SCALE, ..curve });
+    let utxos = vec![
+        node_utxo(&now.spk(), 0xd3, 0, CARRIER, Some(CV)),
+        token_node_utxo(P, TOKEN, 0xd4, 9 * SCALE, CV),
+        node_utxo(&p2pk_spk(&pk(1)), 0x91, 0, 50 * KAS, None),
+    ];
+    let (url, _node) = mock::start(utxos);
+    let dir = tmp("unbound-filled");
+    let mut r = record(CV, "KobCurveAsk", template(TemplateId::KobCurveAsk).hash, &hex_state(&placed), pk(1));
+    r["ext"] = json!(to_hex(&EXT));
+    let run = |r: &Value| {
+        let backup = write(
+            &dir,
+            "backup.json",
+            &json!({"format": "kob-backup", "version": 1, "network": NET, "exportedAt": "2026-10-02T00:00:00Z", "records": [r], "txs": {}}),
+        );
+        let a = recover::parse_args(&v(&format!(
+            "--from {} --node {url} --network {NET} --maker {} --cancel --dry-run --key-file {} --out-dir {}",
+            backup.display(),
+            to_hex(&pk(1)),
+            keyf(1),
+            dir.join("out").display()
+        )))
+        .unwrap();
+        recover::execute(&a).unwrap().0
+    };
+    assert_eq!(by_cov(&run(&r), CV)["status"], "not_found", "without the token the bound state is never tried");
+    r["token"] = json!(to_hex(&TOKEN));
+    let o = by_cov(&run(&r), CV);
+    assert_eq!(o["status"], "live", "{o}");
+    assert_eq!(o["custody"]["status"], "verified", "{o}");
+    assert_eq!(o["cancel"]["status"], "signed", "{o}");
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -206,10 +206,12 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
     let mut address = Value::Null;
     if a.role.has_key() {
         // An existing key file is used, never replaced, unless another account owns it.
-        if key_path.exists() {
-            refuse_foreign_key(&key_path, a.adopt_key)?;
-        }
-        let key = if key_path.exists() { HotKey::from_file(&key_path)? } else { HotKey::create_file(&key_path)? };
+        let adopted = if key_path.exists() { refuse_foreign_key(&key_path, a.adopt_key)? } else { None };
+        let key = match adopted {
+            Some(k) => k,
+            None if key_path.exists() => HotKey::from_file(&key_path)?,
+            None => HotKey::create_file(&key_path)?,
+        };
         address = json!(key.address(&network).to_string());
         launch.key_file = Some(PathBuf::from(KEY_FILE));
         launch.pause_file = Some(PathBuf::from(crate::setup::PAUSE_FILE));
@@ -255,12 +257,16 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
 /// Refuses an existing key file that the account running the setup does not own (or whose owner
 /// cannot be read), unless `adopt` (`--adopt-key`): another account that could write the folder
 /// before the setup may have left a key whose secret it knows (R2D-5).
-pub fn refuse_foreign_key(path: &Path, adopt: bool) -> Result<()> {
+///
+/// An adopted file is rewritten as a file of this account with the same secret
+/// (`HotKey::adopt_file`), and that key is returned: a key file another account owns never passes
+/// the key check, and icacls cannot change its owner (R3D-5). `None`: the file is this account's.
+pub fn refuse_foreign_key(path: &Path, adopt: bool) -> Result<Option<HotKey>> {
     match crate::matcher::wallet::owned_by_me(path) {
-        Some(true) => Ok(()),
+        Some(true) => Ok(None),
         _ if adopt => {
-            tracing::warn!(key_file = %path.display(), "using a key file another account owns (--adopt-key)");
-            Ok(())
+            tracing::warn!(key_file = %path.display(), "taking over a key file another account owns (--adopt-key): rewritten as this account's");
+            Ok(Some(HotKey::adopt_file(path)?))
         }
         Some(false) => bail!(
             "the key file {} is owned by another account, which may know its secret: move it away to make a new key, or pass --adopt-key if you made it",

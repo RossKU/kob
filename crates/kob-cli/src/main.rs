@@ -102,6 +102,23 @@ GLOBAL OPTIONS (`kob <command> --help` lists the ones a command takes)
   The options, the key rule, the exit codes and the configuration: crates/kob-cli/README.md
 ";
 
+/// Every library loaded from here on comes from System32 (or a full path), never from the folder of
+/// kob.exe or the working directory, where another account might have planted one: this process
+/// reads signing keys (R3D-4, as kobd). The imports loaded before `main` are restricted by the
+/// linker flag of `build.rs`.
+#[cfg(windows)]
+fn system32_dlls_only() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetDefaultDllDirectories(flags: u32) -> i32;
+    }
+    const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x800;
+    // SAFETY: a flags-only call with no pointers; a failure leaves the default search order.
+    unsafe {
+        SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+    }
+}
+
 /// Help of `kob token`.
 const TOKEN_USAGE: &str = "\
 kob token: create a KCC-20 token, send a creation that did not go out, release a creator lock, check a launch proof
@@ -168,6 +185,8 @@ fn removed(old: &str, new: &str) -> i32 {
 }
 
 fn main() {
+    #[cfg(windows)]
+    system32_dlls_only();
     // `--testnet` and `--netsuffix=10`, as in kaspad, name testnet-10 for every command. Mainnet is
     // the default.
     let args = match common::network_switches(&std::env::args().skip(1).collect::<Vec<_>>()) {

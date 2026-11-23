@@ -253,6 +253,13 @@ pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     // The network and the node first (`--offline` needs neither), so nothing secret is read for a
     // run that cannot start.
     let (network, rpc_url) = if a.common.offline { Default::default() } else { a.common.endpoint()? };
+    // The start check of `kobd --executor` (R3D-4): this role holds the hot key too.
+    if !a.common.offline {
+        crate::executor::refuse_writable_by_others(
+            &network,
+            &crate::executor::start_paths(a.common.key_file.as_deref(), a.inventory_policy.as_deref()),
+        )?;
+    }
     let signer = load_key(&a.common)?;
     let mut engine = engine_cfg(&a);
     let inventory = match &a.inventory_policy {
@@ -281,6 +288,9 @@ pub async fn run_keep(a: KeepArgs) -> anyhow::Result<()> {
     a.common.select.config().map_err(anyhow::Error::msg)?;
     // `--offline` needs no node (and no network).
     let (network, rpc_url) = if a.common.offline { Default::default() } else { a.common.endpoint()? };
+    if !a.common.offline {
+        crate::executor::refuse_writable_by_others(&network, &crate::executor::start_paths(a.common.key_file.as_deref(), None))?;
+    }
     let signer = load_key(&a.common)?;
     let mut cfg = run_cfg(&a.common, network, Roles { matcher: false, keeper: true });
     cfg.keeper = KeeperConfig {
