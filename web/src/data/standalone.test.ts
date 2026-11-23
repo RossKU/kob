@@ -261,6 +261,18 @@ describe('an indexer that falls behind the chain', () => {
     await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
     expect(h.c.state).toMatchObject({ active: true, behind: false });
   });
+
+  it('the reason follows the indexer while the mode is on: behind, then down, then behind again (R3B-I2)', async () => {
+    const h = harness();
+    h.setHealth(lagged(500));
+    h.c.report(assess(lagged(500)));
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+    expect(h.c.state).toMatchObject({ active: true, behind: true });
+    h.c.report(bad);
+    expect(h.c.state).toMatchObject({ active: true, behind: false });
+    h.c.report(assess(lagged(LAG_SWITCH_SECONDS - 30)));
+    expect(h.c.state).toMatchObject({ active: true, behind: true });
+  });
 });
 
 describe('the book from the node', () => {

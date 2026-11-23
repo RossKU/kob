@@ -380,6 +380,13 @@ export class StandaloneController {
    */
   report(a: HealthAssessment): void {
     if (this.disposed || this.manual) return;
+    // The banner's reason follows the indexer while an automatic mode is on: behind the chain, or
+    // not usable at all.
+    if (this.snap.active && this.snap.reason === 'auto') {
+      const answering = (a.level === 'ok' || a.level === 'warn') && !this.isCaughtUp(a) && typeof a.lagEstimate === 'number';
+      const behind = this.isUnfit(a) ? this.isBehind(a) : answering ? true : this.snap.behind;
+      if (behind !== this.snap.behind) this.set({ behind });
+    }
     if (this.isUnfit(a)) {
       this.disarmReturn();
       if (this.snap.indexerBack) this.set({ indexerBack: false });
