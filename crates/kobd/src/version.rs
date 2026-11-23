@@ -27,8 +27,10 @@ fn commit_of(env: Option<&'static str>) -> Option<&'static str> {
 /// The template generation of this build.
 ///
 /// It is the first 16 hex digits of the blake3 hash of the template hashes of the order templates
-/// the build pins (`kob_protocol::artifacts::PINNED`, in order). Two builds with the same
-/// generation fill the same orders. An executor whose generation differs from the release's
+/// the build pins (`kob_protocol::artifacts::PINNED`, in order), then of the automatic creator lock
+/// it pins (`kob_protocol::lock_auto::TEMPLATE_HASH_HEX`, since 2026-11-23: a lock re-pin is a new
+/// generation too). Two builds with the same generation fill the same orders and release the same
+/// locks. An executor whose generation differs from the release's
 /// misses the orders of the other. See `docs/ops/release.md`, section 7, and
 /// `docs/spec/template-retirement.md`.
 pub fn template_generation() -> &'static str {
@@ -38,6 +40,7 @@ pub fn template_generation() -> &'static str {
         for (_, hash) in kob_protocol::artifacts::PINNED.iter() {
             h.update(hash.as_bytes());
         }
+        h.update(kob_protocol::lock_auto::TEMPLATE_HASH_HEX.as_bytes());
         h.finalize().to_hex()[..16].to_string()
     })
 }

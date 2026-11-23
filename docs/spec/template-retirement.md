@@ -50,10 +50,22 @@ cancel-only table: the maker cancels it in the current app or CLI; nothing else 
 | `KobBid` b995661f, `KobCondBid` 26042aff, `KobCondAsk` 770314aa, `KobIfdBid` 5740a65d, `KobIfdAsk` afb74446, `KobCondPair` 699c30cc, `KobIfdPair` bb9937a1; the KRON twins `KobBidKron` 6ec1a3dd, `KobCondBidKron` f3181d85, `KobCondAskKron` 63263983, `KobIfdBidKron` b240e0ac, `KobIfdAskKron` f7e04243 and their delivery-0 builds (terminal bid fill returns the spare KAS to the maker) | KobBid dfcd78f1, KobCondBid 07952223, KobCondAsk 23431719, KobIfdBid 956f81e8, KobIfdAsk 2328ea8f, KobCondPair 0d9918cc, KobIfdPair 43c721c5; KobBidKron 4dc2420d, KobCondBidKron 401b2e29, KobCondAskKron 75ad2407, KobIfdBidKron 10c1a47f, KobIfdAskKron 8e030d24 | The terminal fill of a bid (`KobBid`, `KobCondBid` and the KRON twins) now sends the KAS above the delivery carrier that the order did not spend to its maker as a plain P2PK output when it is at least 1 KAS. `KobCondAsk`, `KobIfdBid`, `KobIfdAsk`, `KobCondPair`, `KobIfdPair` and the other KRON kinds only embed the changed templates as build constants, so their hashes changed with them. A resting bid, conditional order or if-done order under a retired template is not filled, armed, trailed or run by this build: cancel it and place it again. The previous generation (`da358415`: the F1 row below) was retired the same way by this build. The last commit that carries the retired templates is `59d9ea30` (the release before this re-version); this repository no longer carries their sources, only their bytecode in the cancel-only table. |
 | `KobCondAsk` 02a34664, `KobCondBid` 28d702e2, `KobIfdBid` cc77a57d, `KobIfdAsk` eb2c6e97, `KobCondPair` 3cae3ae3, `KobIfdPair` 670bbecf; the KRON twins `KobCondAskKron` 27fa0ee2, `KobCondBidKron` 296a2ffb, `KobIfdBidKron` b705e2c3, `KobIfdAskKron` 4797dc30 and their delivery-0 builds (audit 2026-10-29, F1) | KobCondAsk 770314aa, KobCondBid 26042aff, KobIfdBid 5740a65d, KobIfdAsk afb74446, KobCondPair 699c30cc, KobIfdPair bb9937a1; KobCondAskKron 63263983, KobCondBidKron f3181d85, KobIfdBidKron b240e0ac, KobIfdAskKron f7e04243 | A negative `interval` in the state of a trigger-evidence order switched off the `minRestDaa` check of every stop: a stop could be armed by a quote created in the same transaction (`docs/security/AUDIT-2026-10.md` section 12). A resting stop, trailing stop, stop entry or if-done exit under a retired template is not armed, trailed or run by this build: cancel it and place it again. The previous generation (`6276d5c`: 1e1285bf, 2dcca638, 8ba34b33, ce1ccf8e, 98b137f6, a9c04066) was retired the same way by that build. |
 
+## Lock templates
+
+The automatic creator lock (`KobLockAuto`, `docs/spec/creator-lock-auto.md`) is not an order, and a lock lasts up to 10 years
+with no cancel, so the rule above does not apply to it: **no lock template a build ever issued is retired.** Both deployment
+records list every one in `locks` (`scripts/lib/deploy.mjs` carries the committed entries over and adds the current template
+when it is new; it refuses an entry whose artifact file became another template, so a re-pin keeps the old artifact under a new
+name). Every build reads each listed template (the genesis owner of the declared terms, so Portfolio and the indexer show the
+lock) and releases it (the keeper's and the creator's release spend exactly its script):
+`kob_protocol::lock_auto` test `every_issued_lock_template_stays_readable_and_releasable` fails otherwise. A lock re-pin also
+changes `template_generation` (below). Issued so far: `KobLockAuto` `ed392654` (2026-11-20).
+
 ## Which generation a build serves
 
 `GET /v1/health` reports `template_generation`: the first 16 hex digits of the blake3 hash of the template hashes this build pins
-(`kob_protocol::artifacts::PINNED`, in order; `kobd::version::template_generation`), and `cancel_only_generations`: the commits
+(`kob_protocol::artifacts::PINNED`, in order, then the automatic creator lock's `kob_protocol::lock_auto::TEMPLATE_HASH_HEX`;
+`kobd::version::template_generation`), and `cancel_only_generations`: the commits
 that retired the templates of the cancel-only table (`acf39cf`, `da35841`, `0714451`, `71a6c32`). The executor's status line ends with the same
 generation (`kobd <version> (commit ...), payload v<n>, templates <generation>`) and the metrics carry it as a label of
 `kob_build_info`. Two executors with the same generation fill the same orders. An executor whose generation is older than the

@@ -3,7 +3,7 @@
 #
 #   scripts/release-hashes.sh [--network mainnet] [binary ...]
 #
-# Prints, in one Markdown block: the commit, the order template hashes and the pinned registry of the
+# Prints, in one Markdown block: the commit, the order and lock template hashes and the pinned registry of the
 # deployment record (contracts/deploy/<network>), the sha256 of the record files, of contracts/SHA256SUMS,
 # of every file of the built web app (web/dist) and of each binary given (e.g. target/release/kobd).
 # Fails when the deployment record does not reproduce (scripts/build-deploy.sh --check), when web/dist is
@@ -43,6 +43,10 @@ echo
 echo "### Order templates (contracts/deploy/$NETWORK/deployment.json)"
 echo
 node -e 'for (const t of JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).templates) console.log(`- ${t.name}: \`${t.hash}\``)' "$DIR/deployment.json"
+echo
+echo "### Lock templates (every one ever issued; contracts/deploy/$NETWORK/deployment.json \`locks\`)"
+echo
+node -e 'for (const t of JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).locks ?? []) console.log(`- ${t.name}: \`${t.hash}\``)' "$DIR/deployment.json"
 if [ -n "$PIN" ]; then
   echo
   echo "### Token registry"

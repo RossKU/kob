@@ -48,7 +48,7 @@ file_sha() {
   (cd "$OUT" && find . -type f | sed 's#^\./##') | while IFS= read -r f; do
     printf '%s  %s\n' "$(file_sha "$OUT/$f")" "$DIR/$f"
   done
-  node -e 'const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); for (const t of m.templates) console.log(t.artifact); if (m.registry) console.log(m.registry.path)' "$OUT/deployment.json" \
+  node -e 'const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); for (const t of [...m.templates, ...(m.locks ?? [])]) console.log(t.artifact); if (m.registry) console.log(m.registry.path)' "$OUT/deployment.json" \
     | tr -d '\r' | while IFS= read -r f; do
         printf '%s  %s\n' "$(file_sha "$f")" "$f"
       done

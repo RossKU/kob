@@ -404,4 +404,39 @@ mod tests {
         let a = AutoLock::new(CreatorLock::new(1_800_000_000_000, key()).unwrap(), TemplateId::Kcc20Ref).unwrap();
         assert!(!a.fits(TemplateId::Kcc20PublicMint));
     }
+
+    /// A lock lasts up to 10 years, so every lock template a build ever issued (the `locks` of both
+    /// deployment records, which only grow: `scripts/lib/deploy.mjs`) must stay readable and
+    /// releasable: the reader takes its genesis owner for the declared terms, and the release (the
+    /// keeper's and the creator's) spends exactly its script. A re-pin that drops an old template
+    /// fails here (docs/spec/template-retirement.md, "Lock templates").
+    #[test]
+    fn every_issued_lock_template_stays_readable_and_releasable() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for record in [
+            include_str!("../../../contracts/deploy/mainnet/deployment.json"),
+            include_str!("../../../contracts/deploy/testnet-10/deployment.json"),
+        ] {
+            let m: serde_json::Value = serde_json::from_str(record).unwrap();
+            let locks = m["locks"].as_array().expect("the record lists its lock templates");
+            assert!(locks.iter().any(|l| l["hash"] == TEMPLATE_HASH_HEX), "{}: the pinned lock is not in the record", m["network"]);
+            for l in locks {
+                let (name, hash) = (l["name"].as_str().unwrap(), l["hash"].as_str().unwrap());
+                let text = std::fs::read_to_string(root.join(l["artifact"].as_str().unwrap())).unwrap();
+                let art = parse_artifact(&text).unwrap();
+                let c = &art.contracts[name];
+                let (bc, span) = (&c.compiled.bytecode, c.compiled.state_span);
+                let (prefix, suffix) = (&bc[..span.offset], &bc[span.offset + span.len..]);
+                assert_eq!(to_hex(&silverscript_abi::template_hash(prefix, suffix)), hash, "{name}: the artifact is not the issued template");
+                assert_eq!(span.len, STATE_LEN, "{name} {hash}");
+                for p in TemplateId::TOKEN_PROGRAMS {
+                    let Ok(lock) = AutoLock::new(CreatorLock::new(1_800_000_000_000, key()).unwrap(), p) else { continue };
+                    let script = [prefix, &lock.state(), suffix].concat();
+                    assert_eq!(AutoLock::parse(&script), Some(lock), "{hash} {}: not readable", p.name());
+                    assert_eq!(lock.authority(), crate::kcc2::p2sh_authority(&script), "{hash} {}: another owner", p.name());
+                    assert!(lock.sig_script().unwrap().ends_with(&push_data(&script)), "{hash} {}: not releasable", p.name());
+                }
+            }
+        }
+    }
 }
