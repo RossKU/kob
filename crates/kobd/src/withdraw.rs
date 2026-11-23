@@ -509,7 +509,13 @@ mod tests {
                 poll: Duration::ZERO,
                 program: "kobd".into(),
             },
-            &crate::app::AppSetup { node: "resolver".into(), role: crate::app::AppRole::Executor, new_key: true, network: None },
+            &crate::app::AppSetup {
+                node: "resolver".into(),
+                role: crate::app::AppRole::Executor,
+                new_key: true,
+                adopt_key: false,
+                network: None,
+            },
         )
         .unwrap();
         assert!(o["address"].is_string());
@@ -759,7 +765,13 @@ mod tests {
                 poll: Duration::ZERO,
                 program: "kobd".into(),
             },
-            &crate::app::AppSetup { node: "resolver".into(), role: crate::app::AppRole::Indexer, new_key: false, network: None },
+            &crate::app::AppSetup {
+                node: "resolver".into(),
+                role: crate::app::AppRole::Indexer,
+                new_key: false,
+                adopt_key: false,
+                network: None,
+            },
         )
         .unwrap();
         let mut node = fx.node(vec![fx.coin(1, 5 * KAS)]);

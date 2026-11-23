@@ -104,7 +104,12 @@ icacls C:\kob /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" /grant:r "SYSTEM:(O
 In PowerShell write the first grant as `/grant:r "${env:USERNAME}:(OI)(CI)F"`; the rest is the same. (On a Windows in another
 language, write `*S-1-5-18` for `SYSTEM` and `*S-1-5-32-544` for `Administrators`.) Then check with `icacls C:\kob`: it must list
 your account, `NT AUTHORITY\SYSTEM` and `BUILTIN\Administrators`, and nothing else. At each start kobd logs an error for its program,
-its folder, the configuration and the data directory when another account can change them; it warns and does not refuse.
+its folder, the configuration and the data directory when another account can change them (also through the owner of a
+path, or a right such as "create files" alone). On **mainnet it refuses to start** then, naming each path and the `icacls`
+command that fixes it; on testnet-10 it logs the error and goes on. `kobd setup` restricts the folder it writes this way by
+itself (your account, SYSTEM and Administrators, by SID, no inherited rights), and refuses a `kob-operator.key` it finds
+there that another account owns, since whoever made it may know the secret (`--adopt-key` with `--non-interactive` uses it
+all the same; the interactive setup warns and asks).
 
 **Extract the archive first**: do not
 double-click the program inside the zip viewer (Windows then runs it from a temporary folder and the key and the database
@@ -198,7 +203,7 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
 
 It then writes `kobd.toml` next to the program (plus `kob-tokens.json`, the supported token programs, on
 testnet-10; the mainnet binary carries its pinned registry), prints the line that starts it (for example
-`C:\kob\kobd.exe --executor`, section 6), and asks `Start the executor now? [Y/n]` (`Start the Indexer now?` for the Indexer role): Enter starts it, `n` leaves the files
+`%LOCALAPPDATA%\kob\kobd.exe --executor`, section 6), and asks `Start the executor now? [Y/n]` (`Start the Indexer now?` for the Indexer role): Enter starts it, `n` leaves the files
 and ends the setup (`setup --no-start` does not ask). From then on, a double-click runs that configuration directly when the
 folder is the one a start without arguments reads (the program's own folder, or `$KOBD_DIR`); for another folder the setup's
 last sentence says to use the printed line or to set `KOBD_DIR`. If another kobd already runs from the same folder,
@@ -383,7 +388,7 @@ hours, indexed in the background). To move an executor:
    other account can read (Everyone, Users, or a named second account; only your account, SYSTEM, Administrators, the built-in Administrator and TrustedInstaller may). Restrict
    it in a terminal in the folder (PowerShell or cmd). The refusal names the groups that may read the file by name (Users,
    Everyone, Authenticated Users, ...) and prints the exact command, for example
-   `icacls "C:\kob\kob-operator.key" /inheritance:r /grant:r "MYPC\alice:F"`:
+   `icacls "C:\Users\alice\AppData\Local\kob\kob-operator.key" /inheritance:r /grant:r "MYPC\alice:F"`:
 
    ```
    icacls kob-operator.key /inheritance:r /grant:r "%USERNAME%:F"      # cmd
@@ -397,7 +402,7 @@ hours, indexed in the background). To move an executor:
 
 ## 6. Move to a service
 
-The setup printed the line that starts it, for example `C:\kob\kobd.exe --executor` (`--indexer` for the Indexer, both
+The setup printed the line that starts it, for example `%LOCALAPPDATA%\kob\kobd.exe --executor` (`--indexer` for the Indexer, both
 flags for both roles; it adds `--config <file>` when the configuration is not in the program's folder). The program reads
 `kobd.toml` from its own folder, and relative paths are relative to that file. To change options, edit
 `kobd.toml` (every key of `docs/ops/executor.md`, Part B 4; `[launch] args` takes further start options, e.g.
@@ -406,16 +411,19 @@ flags for both roles; it adds `--config <file>` when the configuration is not in
 **Windows**: the archive holds `kobd-supervise.cmd`, the supervisor: it runs `kobd.exe` (next to it) with the arguments you
 give it and starts it again when it exits with an error (any exit status but 0, a stop, and 2, a stop that did not finish in
 time or a wrong option, and 130, a second Ctrl+C), after 10 s, the wait doubling to 5 min while it keeps failing within 10
-min of its start; each restart is noted in `kobd-supervise.log` next to it. Five starts in a row that each end within 30 s are
+min of its start; each restart is noted in `kobd-supervise.log` next to it. It runs PowerShell, `ping` and `timeout` from
+System32 by their full path, never a program of that name in its folder, and `kobd.exe` loads its system libraries from
+System32 only. Five starts in a row that each end within 30 s are
 not restarted again (another kobd holds the data directory, the key file is refused, a configuration error: a restart does not
 cure it; `kobd-supervise.log` says so, `kobd.log` says which; run in a console (a double click), the window then stays for up to 60 s,
 or until a key is pressed, so the message can be read). Task Scheduler's own "If the task fails, restart every" is not enough:
 it is not documented to act on a program's exit status. Make a Task Scheduler task "At startup" (run whether the user is
-logged on or not, as the account that owns the key file) with program `C:\kob\kobd-supervise.cmd`, arguments `--executor`
-and *Start in* `C:\kob`, and in its settings **untick "Stop the task if it runs longer than"** (checked with 3 days by
+logged on or not, as the account that owns the key file) with program `kobd-supervise.cmd` in the folder of section 1, written out (Task Scheduler does not expand
+`%LOCALAPPDATA%`: for example `C:\Users\alice\AppData\Local\kob\kobd-supervise.cmd`), arguments `--executor`
+and *Start in* that folder, and in its settings **untick "Stop the task if it runs longer than"** (checked with 3 days by
 default: the executor would be stopped after three days) and keep "If the task is already running: Do not start a new
 instance"; on a laptop also untick the conditions "Start the task only if the computer is on AC power" and "Stop if the
-computer switches to battery power". **To stop it**: create the file `kobd-supervise.stop` next to the script (`type nul > C:\kob\kobd-supervise.stop`), then
+computer switches to battery power". **To stop it**: create the file `kobd-supervise.stop` next to the script (`type nul > "%LOCALAPPDATA%\kob\kobd-supervise.stop"`), then
 end that one `kobd.exe` (`taskkill /f /pid <pid>`, with the pid in `kob-data\kob-writer.owner`; not `taskkill /f /im kobd.exe`,
 which ends every `kobd.exe` on the machine, one per network for example; the database survives a kill, section 7): the
 supervisor sees the file and does not start it again, and ends. The next start of the script deletes the file. *End* on the task alone stops the supervisor
@@ -423,7 +431,7 @@ but may leave `kobd.exe` running unsupervised: check with `tasklist /fi "imagena
 Ctrl+C in that window ends kobd (exit status 0, not started again) and `cmd` then asks "Terminate batch job (Y/N)?": either
 answer is harmless. A task has no
 console: its log is the file `kobd.log` the setup configured (see *Logs* below); read it with
-`Get-Content C:\kob\kobd.log -Tail 50 -Wait`. In a window you opened yourself, do not click inside the console
+`Get-Content $env:LOCALAPPDATA\kob\kobd.log -Tail 50 -Wait`. In a window you opened yourself, do not click inside the console
 while the executor runs: a mouse selection in the classic Windows console (Quick Edit mode) pauses the program's output
 and with it the executor until you press Enter or Esc. That freeze is standard Windows behaviour that we have not been able
 to reproduce on the executor, so treat it as a precaution (console window Properties, Options, untick *QuickEdit Mode*, if

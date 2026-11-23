@@ -80,6 +80,10 @@ pub struct SetupArgs {
     /// never replaced).
     #[arg(long, requires = "non_interactive")]
     pub new_key: bool,
+    /// Non-interactive: use an existing key file that another account owns. Without it such a
+    /// file is refused, since whoever made it may know the secret.
+    #[arg(long, requires = "non_interactive")]
+    pub adopt_key: bool,
     /// Non-interactive, development builds only: `mainnet` or `testnet-10` (a deployment build
     /// knows its network).
     #[arg(long, requires = "non_interactive")]
@@ -893,7 +897,12 @@ fn operator_key(io: &mut dyn Console, dir: &Path, launch: &mut LaunchConfig) -> 
     let own = dir.join(KEY_FILE);
     if own.exists() {
         io.say(&format!("Found the key file {}.", own.display()));
-        if ask_yes(io, "Use it (the funds on it stay usable)?", true)? {
+        // A key file another account owns may hold a secret that account knows (R2D-5).
+        let mine = crate::matcher::wallet::owned_by_me(&own) == Some(true);
+        if !mine {
+            io.say("WARNING: this key file is not owned by this account. Whoever made it may know its secret and take the funds you send to it. Use it only if you made it yourself.");
+        }
+        if ask_yes(io, "Use it (the funds on it stay usable)?", mine)? {
             let k = HotKey::from_file(&own)?;
             launch.key_file = Some(PathBuf::from(KEY_FILE));
             return Ok(k);

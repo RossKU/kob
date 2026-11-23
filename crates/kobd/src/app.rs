@@ -147,6 +147,9 @@ pub struct AppSetup {
     pub role: AppRole,
     /// Make the operator key when the directory has none. An existing key file is always kept.
     pub new_key: bool,
+    /// Use an existing key file that another account owns (`--adopt-key`). Without it such a file
+    /// is refused: whoever made it may know the secret (R2D-5).
+    pub adopt_key: bool,
     /// Needed by a build with no deployment network; a deployment build accepts only its own.
     pub network: Option<String>,
 }
@@ -195,12 +198,17 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
         bail!("the Executor role needs a key and {} has none: pass --new-key", key_path.display());
     }
     std::fs::create_dir_all(&opts.dir).with_context(|| opts.dir.display().to_string())?;
+    // No other account may plant a program, a library or a key file here (R2D-2).
+    crate::matcher::wallet::restrict_folder(&opts.dir).map_err(anyhow::Error::msg)?;
 
     let mut launch = LaunchConfig { role, ..LaunchConfig::default() };
     let data_dir = DATA_DIR.to_string();
     let mut address = Value::Null;
     if a.role.has_key() {
-        // An existing key file is used, never replaced.
+        // An existing key file is used, never replaced, unless another account owns it.
+        if key_path.exists() {
+            refuse_foreign_key(&key_path, a.adopt_key)?;
+        }
         let key = if key_path.exists() { HotKey::from_file(&key_path)? } else { HotKey::create_file(&key_path)? };
         address = json!(key.address(&network).to_string());
         launch.key_file = Some(PathBuf::from(KEY_FILE));
@@ -242,6 +250,24 @@ pub fn setup_non_interactive(opts: &SetupOptions, a: &AppSetup) -> Result<Value>
         "node": crate::rpc::redact_url(&url),
         "data_dir": opts.dir.join(&data_dir).to_string_lossy(),
     }))
+}
+
+/// Refuses an existing key file that the account running the setup does not own (or whose owner
+/// cannot be read), unless `adopt` (`--adopt-key`): another account that could write the folder
+/// before the setup may have left a key whose secret it knows (R2D-5).
+pub fn refuse_foreign_key(path: &Path, adopt: bool) -> Result<()> {
+    match crate::matcher::wallet::owned_by_me(path) {
+        Some(true) => Ok(()),
+        _ if adopt => {
+            tracing::warn!(key_file = %path.display(), "using a key file another account owns (--adopt-key)");
+            Ok(())
+        }
+        Some(false) => bail!(
+            "the key file {} is owned by another account, which may know its secret: move it away to make a new key, or pass --adopt-key if you made it",
+            path.display()
+        ),
+        None => bail!("cannot read who owns the key file {}: move it away to make a new key, or pass --adopt-key if you made it", path.display()),
+    }
 }
 
 /// The operator's address of the configuration at `cfg_path`, as the start banner shows it.
@@ -330,7 +356,7 @@ mod tests {
     }
 
     fn ask(node: &str, role: AppRole, new_key: bool) -> AppSetup {
-        AppSetup { node: node.into(), role, new_key, network: None }
+        AppSetup { node: node.into(), role, new_key, adopt_key: false, network: None }
     }
 
     #[test]

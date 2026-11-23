@@ -657,7 +657,7 @@ fn setup_json(dir: std::path::PathBuf, a: &SetupArgs) -> anyhow::Result<()> {
         return Err(usage("--non-interactive needs a role: --executor, --indexer or both"));
     };
     let opts = SetupOptions::for_build(dir);
-    let ask = AppSetup { node, role, new_key: a.new_key, network: a.network.clone() };
+    let ask = AppSetup { node, role, new_key: a.new_key, adopt_key: a.adopt_key, network: a.network.clone() };
     println!("{}", app::setup_non_interactive(&opts, &ask)?);
     Ok(())
 }
@@ -706,6 +706,8 @@ fn setup_then_launch(
     roles: Option<AppRole>,
 ) -> anyhow::Result<()> {
     std::fs::create_dir_all(&dir)?;
+    // No other account may plant a program, a library or a key file here (R2D-2).
+    crate::matcher::wallet::restrict_folder(&dir).map_err(anyhow::Error::msg)?;
     // Keep the dialogue clean. The log lines of the node checks go to the log file only, the one
     // that a run appends to. The console shows the log again for what follows.
     let console_was = logging::console_shows_log();
@@ -1210,7 +1212,8 @@ fast_start = false
         let net = kob_protocol::artifacts::deployment_network().unwrap_or("testnet-10");
         let mut opts = SetupOptions::for_build(d.path().to_path_buf());
         opts.build_network = Some(net.to_string());
-        let ask = AppSetup { node: "resolver".into(), role: AppRole::Executor, new_key: true, network: Some(net.into()) };
+        let ask =
+            AppSetup { node: "resolver".into(), role: AppRole::Executor, new_key: true, adopt_key: false, network: Some(net.into()) };
         app::setup_non_interactive(&opts, &ask).unwrap();
         let (lines, problems) = check_lines(&d.path().join(setup::CONFIG_FILE)).unwrap();
         let text = lines.join("\n");

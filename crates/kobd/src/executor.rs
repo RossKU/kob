@@ -653,12 +653,15 @@ pub(crate) fn refuse_files_in_data_dir(
     Ok(())
 }
 
-/// Logs an error for each of kobd's executable, its folder, the configuration file and the data
-/// directory that another account can change (audit 2026-11-23 D-2,
-/// [`crate::matcher::wallet::writable_by_others`]). It warns and does not refuse: the quickstart's
-/// folder at the root of a Windows drive inherits such a right, and a refusal would stop every
-/// executor set up that way.
-fn warn_writable_by_others(config: Option<&std::path::Path>, data_dir: &std::path::Path) {
+/// Checks kobd's executable, its folder, the configuration file and the data directory: another
+/// account that can change one of them can replace kobd, plant a program or library it loads,
+/// point the configuration at its own key or node, or edit the journal and budget files (audit
+/// 2026-11-23 D-2, R2D-2, [`crate::matcher::wallet::writable_by_others`]).
+///
+/// On mainnet kobd refuses to start, naming each path and the command that fixes it. On
+/// testnet-10 it logs the same as an error and goes on, so that the testers' existing setups keep
+/// running.
+fn check_writable_by_others(network: &str, config: Option<&std::path::Path>, data_dir: &std::path::Path) -> Result<()> {
     let mut paths: Vec<PathBuf> = vec![];
     if let Ok(exe) = std::env::current_exe() {
         paths.extend(exe.parent().map(std::path::Path::to_path_buf));
@@ -666,13 +669,22 @@ fn warn_writable_by_others(config: Option<&std::path::Path>, data_dir: &std::pat
     }
     paths.extend(config.map(std::path::Path::to_path_buf));
     paths.push(data_dir.to_path_buf());
-    for (path, who) in crate::matcher::wallet::writable_by_others(&paths) {
-        tracing::error!(
-            path = %path.display(),
-            writable_by = %who,
-            "another account can change this path: it could replace kobd, point the configuration at its own key or node, or edit the journal and budget files. Keep kobd in a folder of your own account (docs/ops/executor-quickstart.md: %LOCALAPPDATA%\\kob on Windows) and remove the other accounts' write rights"
-        );
+    let found = crate::matcher::wallet::writable_by_others(&paths);
+    if found.is_empty() {
+        return Ok(());
     }
+    let lines: Vec<String> = found
+        .iter()
+        .map(|(path, who)| format!("{} (changeable by {who}); fix: {}", path.display(), crate::matcher::wallet::owner_only_fix(path)))
+        .collect();
+    let why = "another account can change these paths: it could replace kobd, plant a program or library it loads, point the configuration at its own key or node, or edit the journal and budget files. Keep kobd in a folder of your own account (docs/ops/executor-quickstart.md: %LOCALAPPDATA%\\kob on Windows)";
+    if network == "mainnet" {
+        bail!("{why}:\n  {}", lines.join("\n  "));
+    }
+    for l in &lines {
+        tracing::error!(path = %l, "{why} (testnet-10 goes on; mainnet refuses to start)");
+    }
+    Ok(())
 }
 
 /// Runs `kobd --executor`.
@@ -684,9 +696,10 @@ pub async fn run(a: RunArgs) -> Result<()> {
     a.liveness.apply(&mut KeeperConfig::default()).map_err(anyhow::Error::msg)?;
     a.select.config().map_err(anyhow::Error::msg)?;
     let cfg = build_config(&a.index)?;
+    // First, before anything is read from these paths (R2D-2).
+    check_writable_by_others(&cfg.network, a.index.store.config.as_deref(), &cfg.data_dir)?;
     refuse_failover(&cfg)?;
     refuse_files_in_data_dir(a.key_file.as_deref(), a.pause_file.as_deref(), &cfg.data_dir)?;
-    warn_writable_by_others(a.index.store.config.as_deref(), &cfg.data_dir);
     // The operator's funds are read from the nodes' UTXO index: a node without it is unusable
     // (`rpc::judge`).
     crate::rpc::judge::require_utxo_index();
