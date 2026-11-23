@@ -180,6 +180,17 @@ describe('the mode', () => {
     expect((await ix.book(TOKEN)).asks).toEqual([]);
     expect(real.book).toHaveBeenCalledTimes(1);
   });
+
+  it('a hung follower (stale) and a stopped one start it as a down indexer does (audit 2026-11-23 C-M1)', async () => {
+    for (const h0 of [{ ...health('following'), ok: false, stale: true }, { ...health('stopped'), ok: false, halt_reason: 'follower died' }] as HealthView[]) {
+      const h = harness();
+      h.setHealth(h0);
+      h.c.report(assess(h0));
+      await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+      expect(h.c.state).toMatchObject({ active: true, reason: 'auto' });
+      h.c.dispose();
+    }
+  });
 });
 
 describe('an indexer that falls behind the chain', () => {

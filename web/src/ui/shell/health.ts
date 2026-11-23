@@ -8,6 +8,8 @@ import { normalizeNetwork } from '../../data/kaspa-sdk';
 export type HealthLevel = 'ok' | 'warn' | 'bad' | 'unknown';
 export const HEALTH_CODES = [
   'ok', 'not-configured', 'loading', 'unreachable', 'starting', 'catching-up', 'lagging', 'stale', 'node-unavailable', 'gap', 'unknown-state', 'wrong-network',
+  // The follower reports no progress for 10 minutes (`stale: true`), or it died (state `stopped`).
+  'hung', 'stopped',
   // Standalone mode switched on in Settings: the indexer is not asked (ui/shell/status.ts).
   'standalone',
 ] as const;
@@ -59,6 +61,10 @@ export function assessIndexerHealth(i: HealthInput): HealthAssessment {
   // unknown.
   const lagKnown = lag ?? (typeof h.lag_daa === 'number' ? h.lag_daa / 10 : null);
   const withinTolerance = lagKnown !== null && lagKnown <= LAG_WARN_SECONDS;
+  // A follower that died, or one that still says following but has not moved for 10 minutes, is
+  // as unusable as an indexer that does not answer. An older indexer sends no `stale`: false.
+  if (h.state === 'stopped') return mk('bad', 'stopped', lag);
+  if (h.stale === true) return mk('bad', 'hung', lag);
   switch (h.state) {
     case 'following':
       if (lag === null || lag <= LAG_WARN_SECONDS) return mk('ok', 'ok', lag);

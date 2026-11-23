@@ -77,6 +77,8 @@ export default {
   'shell.health.gap': 'has a gap in its data',
   'shell.health.unknown-state': 'unknown state',
   'shell.health.wrong-network': 'wrong network',
+  'shell.health.hung': 'not advancing',
+  'shell.health.stopped': 'stopped',
   'shell.health.standalone': 'not used (standalone mode)',
 
   'shell.banner.indexerTitle': 'Order book data may be out of date',
@@ -88,6 +90,8 @@ export default {
   'shell.banner.node-unavailable': 'The indexer lost its connection to the Kaspa node. Its data is frozen until it reconnects.',
   'shell.banner.gap': 'The indexer reports a gap in its data. Order status may be wrong until it recovers.',
   'shell.banner.unknown-state': 'The indexer reports an unknown state. Treat its data with care.',
+  'shell.banner.hung': 'The indexer has not moved with the chain for at least 10 minutes. Do not trust the book shown: orders may already be filled or cancelled.',
+  'shell.banner.stopped': 'The indexer has stopped following the chain. Do not trust the book shown: orders may already be filled or cancelled.',
   'shell.banner.wrong-network': 'The indexer serves another network than this app ({network}). Its data is ignored for trading: fix the indexer URL in Settings.',
   'shell.banner.standalone': 'Trading through your node: standalone mode is on in Settings. Every order is checked on the node before it is signed.',
   'shell.banner.standaloneBehind': 'Trading through your node since {time}: the indexer is behind the chain. Every order is checked on the node before it is signed.',
