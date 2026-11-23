@@ -237,10 +237,26 @@ const KAS_SKELETON = 'KA5'; // normalizeTicker('KAS')
 export const readsAsKas = (ticker: string | null | undefined): boolean => !!ticker && normalizeTicker(ticker).replace(/[^\p{L}\p{N}]/gu, '') === KAS_SKELETON;
 
 /**
- * The ticker a token's amounts and prices are printed with. One that reads as KAS carries 8 + 8
- * hex of the covenant id (`KAS (abcdef01…12345678)`), so a token amount never reads as native KAS.
+ * Whether a ticker is printed with its token's id: it reads as KAS, or it is not plain printable
+ * ASCII. Whole scripts draw Latin letters (Cherokee `ᏦᎪᏚ`, Lisu, Coptic, small capitals), and no
+ * fold table catches them all, so any such ticker carries the id, as the signer frame refuses any.
  */
-export const tickerUnit = (ticker: string, covenantId: string): string => (readsAsKas(ticker) ? `${ticker} (${longId(covenantId)})` : ticker);
+export const tickerNeedsId = (ticker: string | null | undefined): boolean => !!ticker && (readsAsKas(ticker) || /[^\x20-\x7e]/.test(ticker));
+
+/**
+ * Whether a ticker gets the shared-ticker warning on its own: it reads as KAS, or it has a
+ * character the look-alike table flags (`hasLookalike`, kob/display.ts).
+ */
+export const sharesKasTicker = (ticker: string | null | undefined): boolean => !!ticker && (readsAsKas(ticker) || hasLookalike(ticker));
+
+/**
+ * The ticker a token's amounts and prices are printed with. One that reads as KAS, or is not plain
+ * printable ASCII (`tickerNeedsId`), carries 8 + 8 hex of the covenant id
+ * (`KAS (abcdef01…12345678)`), so a token amount never reads as native KAS. A token named by its
+ * own id fragment already is its id.
+ */
+export const tickerUnit = (ticker: string, covenantId: string): string =>
+  tickerNeedsId(ticker) && ticker !== longId(covenantId) && ticker !== shortId(covenantId) ? `${ticker} (${longId(covenantId)})` : ticker;
 
 /**
  * Makes an untrusted name (indexer, pasted) safe to render.

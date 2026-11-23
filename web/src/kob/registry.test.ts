@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  RegistryError, displayName, hasBadChar, normalizeTicker, parseRegistry, readsAsKas, tickerUnit, sanitizeUntrusted, tokenById, tokenMarketInput, tradableTokens,
+  RegistryError, displayName, hasBadChar, normalizeTicker, parseRegistry, readsAsKas, sharesKasTicker, tickerUnit, sanitizeUntrusted, tokenById, tokenMarketInput, tradableTokens,
   verifyIndexerToken, verifyTokenUtxo, type ChainTokenUtxo, type RegistryIssueCode, type TokenRegistry,
 } from './registry';
 import { cleanGenesis, exampleRegistryJson, placeGolden, shippedRegistryJson, TOKEN, tradableRegistryJson } from '../testing/chain-fixtures';
@@ -359,6 +359,23 @@ describe('display and ticker skeletons', () => {
     expect(tickerUnit('KAS', id)).toBe('KAS (abababab…cdcdcdcd)');
     expect(tickerUnit('KRON', id)).toBe('KRON');
     expect(tickerUnit('', id)).toBe('');
+  });
+
+  it('a ticker in a look-alike script is never a bare unit, and is flagged as shared (R2B-M2)', () => {
+    const id = 'ab'.repeat(4) + '0'.repeat(48) + 'cd'.repeat(4);
+    // Cherokee, Lisu, Coptic with a Latin S, Latin small capitals
+    for (const t of ['ᏦᎪᏚ', 'ꓗꓮꓢ', 'ⲔⲀS', 'ᴋᴀꜱ']) {
+      expect(readsAsKas(t)).toBe(false);
+      expect(tickerUnit(t, id)).toBe(`${t} (abababab…cdcdcdcd)`);
+    }
+    // any ticker outside printable ASCII carries the id; a plain ASCII one does not
+    for (const t of ['狗', 'KRÖN', 'K RON', 'ＫＲＯＮ']) expect(tickerUnit(t, id)).toContain('abababab…cdcdcdcd');
+    for (const t of ['KRON', 'wKAS', 'USD-T', 'A B']) expect(tickerUnit(t, id)).toBe(t);
+    // a token named by its own id fragment is not given it twice
+    expect(tickerUnit('abababab…cdcdcdcd', id)).toBe('abababab…cdcdcdcd');
+    // the shared-ticker warning: reads as KAS, or the repo's look-alike table flags it
+    for (const t of ['KAS', 'ᏦᎪᏚ', 'ꓗꓮꓢ', 'ᴋᴀꜱ', 'ＫＡＳ']) expect(sharesKasTicker(t)).toBe(true);
+    for (const t of ['', 'KRON', 'wKAS', '狗']) expect(sharesKasTicker(t)).toBe(false);
   });
 
   it('normalizeTicker matches the Rust homoglyph rule', () => {

@@ -47,7 +47,7 @@ import { TokenDetails, TokenHeader } from './TokenHeader';
 import { NotTradablePage } from './NotTradablePage';
 import { useGenesisCheck } from './use-genesis-check';
 import { applyGenesisCheck, buildTokenRows, scaleNeedsIndexer, sharedTickerIds, tradableRows, withShownRows } from './token-model';
-import { readsAsKas, tickerUnit } from '../../kob/registry';
+import { sharesKasTicker, tickerUnit } from '../../kob/registry';
 import { MarketActivity } from '../activity/ActivityPage';
 import { tradeRows } from './trades-model';
 import './market.css';
@@ -199,10 +199,11 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const inverted = invertedChoice && canFlip;
   // The unit of every price and amount on the page. It is KOB's name of the token, else the
   // creator's ticker (the same label rule as the list), else its covenant id.
-  // A ticker that reads as KAS carries 8 + 8 hex of the id, so no amount here reads as native KAS.
+  // A ticker that reads as KAS, or is not plain ASCII, carries 8 + 8 hex of the id, so no amount
+  // here reads as native KAS.
   const ticker = headerRow?.ticker || shown?.ticker || '';
   const name = tickerUnit(ticker, id);
-  const sharedTicker = sharedIds.has(id) || readsAsKas(ticker);
+  const sharedTicker = sharedIds.has(id) || sharesKasTicker(ticker);
   // The tab title is `EXKCC/KAS · KOB`. A token still being looked up, or with no name, is named
   // by its short id and never a whole covenant id. It is `Token not found` when nothing names it.
   useDocumentTitle(row || tokens.loading || held.loading || pub.loading ? marketPageTitle({ name: row ? name : null, id }, { name: 'KAS', id: 'kas' }) : pageTitle(t('market.token.notFound')));

@@ -280,6 +280,10 @@ describe('powers and empty tickers (GET /v1/tokens)', () => {
     expect(sharedTickerIds(rows.slice(0, 1))).toEqual(new Set([ID('5')]));
   });
 
+  it('a ticker in a look-alike script (Cherokee, Lisu) is flagged alone too (R2B-M2)', () => {
+    expect(sharedTickerIds([{ covenantId: ID('5'), ticker: 'ᏦᎪᏚ' }, { covenantId: ID('6'), ticker: 'ꓗꓮꓢ' }, { covenantId: ID('9'), ticker: 'OTH' }])).toEqual(new Set([ID('5'), ID('6')]));
+  });
+
   it('powers: freeze or seize raise the issuer-control warning, other powers do not', () => {
     expect(hasIssuerControl(['freeze'])).toBe(true);
     expect(hasIssuerControl(['burn', 'seize'])).toBe(true);
