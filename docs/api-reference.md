@@ -993,7 +993,9 @@ The nonce must give `SHA-256("KOB logo vote pow/1
 <day>
 <nonce>")` at least `pow_bits` leading
 zero bits (the GET says how many). The address must have KOB history in the store at least `min_history_secs` old (an order it
-placed or a token output it held; default 24 hours). One vote per wallet across all logos per `interval_secs` (default 24 hours);
+placed or a token output it held; default 7 days), and that first history must be older than the token voted on (its KCC-23
+genesis, else the first of its token outputs or orders in the store; founder decision 2026-11-23). One vote per wallet across all
+logos per `interval_secs` (default 24 hours);
 after it the vote can be changed. The same vote again is answered `unchanged` and uses nothing. Origins and the per-client and daily
 limits as for reports (`[logo_votes]`, section 6). The generic rate limit of section 5.2 applies first, at the heavy cost.
 
@@ -1001,7 +1003,7 @@ limits as for reports (`[logo_votes]`, section 6). The generic rate limit of sec
 |---|---|
 | `200` | `{"result": "counted" | "changed" | "unchanged", "covenant_id": "<hex32>", "up": n, "down": n}`: the token's totals after it |
 | `400` | the body's shape; `stale_day`, `bad_pow`, `bad_signature`, `unsupported_address` (not a P2PK address of this network) |
-| `403` | `forbidden_origin`; `no_history`: the address has no KOB history old enough |
+| `403` | `forbidden_origin`; `no_history`: the address has no KOB history old enough, or none from before the token was created |
 | `404` | `unknown_token` |
 | `413` / `415` | body over 1024 bytes / not `application/json` |
 | `429` | `too_soon` (the wallet voted less than `interval_secs` ago) or `rate_limited`, `Retry-After` in seconds |
@@ -1457,7 +1459,7 @@ Top-level table of the same file (section 3.19b). Unknown keys are refused. The 
 | `enabled` | `false` | Serve `POST` and `GET /v1/logo-votes`; off, both are `404`. |
 | `pow_bits` | `20` | Leading zero bits of a vote's proof of work (at most 32); about 2 s in a desktop browser. |
 | `interval_secs` | `86400` | One vote per wallet across all logos per this long. |
-| `min_history_secs` | `86400` | The voting address's KOB history (first order or token output) must be at least this old. |
+| `min_history_secs` | `604800` | The voting address's KOB history (first order or token output) must be at least this old (7 days), and older than the token. |
 | `per_client_per_hour` | `20` | Votes one client may cast per hour; 0 = none. |
 | `max_per_day` | `20000` | Votes from all clients together per 24 hours; 0 = none. |
 | `origins` | `[]` | Origins whose pages may vote; empty: `[logo_reports] origins`, else `cors_allow_origin` if it names one origin. |

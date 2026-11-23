@@ -798,7 +798,7 @@ pub async fn logo_vote(
         Err(VoteError::NoHistory) => Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "no_history",
-            "this address has no KOB history old enough to vote (an order or a token it held, 24 hours ago)",
+            "this address has no KOB history old enough to vote (an order it placed or a token it held, at least 7 days ago and before the token was created)",
         )),
         Err(VoteError::TooSoon(secs)) => Err(wait("too_soon", "one vote per wallet per 24 hours; try again later", secs)),
         Err(VoteError::Limited(secs)) => Err(wait("rate_limited", "too many logo votes; try again later", secs)),

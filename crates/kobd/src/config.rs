@@ -329,7 +329,8 @@ pub struct LogoVotesConfig {
     /// vote can be changed after it.
     pub interval_secs: u64,
     /// The voting address must have KOB history in the store at least this old: an order it placed
-    /// or a token output it held (default 86400, 24 hours).
+    /// or a token output it held (default 604800, 7 days; founder decision 2026-11-23). That history
+    /// must also be older than the token voted on.
     pub min_history_secs: u64,
     /// Votes one client may cast per hour (the client address of the guard, as for reports).
     /// Default 20; 0: none.
@@ -348,7 +349,7 @@ impl Default for LogoVotesConfig {
             enabled: false,
             pow_bits: 20,
             interval_secs: 86_400,
-            min_history_secs: 86_400,
+            min_history_secs: 604_800,
             per_client_per_hour: 20,
             max_per_day: 20_000,
             origins: vec![],

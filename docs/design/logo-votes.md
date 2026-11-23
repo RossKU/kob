@@ -57,10 +57,13 @@ direction is not in the hash: the work buys one vote of this address on this tok
 ## 4. The history rule
 
 The read API never asks the node (`api/mod.rs`: public load must not reach it), so the rule reads the store. The voting address's
-key must have **KOB history at least `min_history_secs` old** (default 24 hours): an order it placed (`orders.maker_id`) or a token
-output it held (`token_holdings.owner_id`). Its age is the newest block's DAA score (`blocks`) minus the first such row's DAA score,
-divided by `daa_per_second`. Two index seeks (`orders_maker_genesis`, `token_holdings_owner_page`). A pruned row only makes the
-history look younger, never older.
+key must have **KOB history at least `min_history_secs` old** (default 7 days) **and older than the token** (founder decision
+2026-11-23, audit C-M3): an order it placed (`orders.maker_id`) or a token output it held (`token_holdings.owner_id`). Its age is
+the newest block's DAA score (`blocks`) minus the first such row's DAA score, divided by `daa_per_second`. The token's creation is
+its KCC-23 genesis DAA, else the first of its token outputs or of the orders that trade it the store holds; the first history must
+come before it. A key made for the vote, or one first funded after the token appeared (the cheap sybil of C-M3), cannot vote on
+it. Index seeks only (`orders_maker_genesis`, `token_holdings_owner_page`, `token_holdings_token_page`, `orders_token_genesis`,
+`orders_quote_genesis`). A pruned row only makes the history, or the token, look younger.
 
 What it costs a sybil: each fake address needs an order or a token output on chain (a transaction and its storage mass) and must
 then wait a day. A wallet that only ever held KAS and never touched KOB cannot vote (an open question below).
