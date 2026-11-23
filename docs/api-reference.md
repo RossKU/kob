@@ -529,12 +529,14 @@ listed live pair orders that are active, not expired and not past their deadline
 through the two KAS books; indicative). The price of a level is `price_num / price_den` quote base units per base base unit;
 `amount` is base-token base units; `orders` is a number. `asks` are ways to buy base with quote, ascending; `bids` ways to sell,
 descending. `daa_score` (number) is the DAA score the quotes are evaluated at (the node's, else the cursor's).
-The direct and entry levels come from the oldest 2,000 pair orders that rest at a level, found among the oldest 20,000 listed
-live candidates that are active, GTC, not expired and not past their deadline (an unarmed stop entry, a TWAP slice not due yet
-or an inexact custody counts toward the 20,000 but not the 2,000). The candidates are the oldest 20,001 pair orders of the pair a
-taker can fill now, and at most 200 that became fillable after the indexer's last commit: an order not active yet, expired, past
-its deadline, between TWAP slices, an unarmed entry or without its exact custody takes no place (R4C2-2). `orders_truncated` (bool)
-is true when a bound cut them, so newer resting orders may be missing.
+The direct and entry levels come from the oldest 2,000 pair orders that rest at a level, found among at most 20,000 candidates:
+the oldest pair orders of the pair a taker can fill now, then at most 200 that became fillable after the indexer's last commit
+(the read takes 20,001 of the first kind only to know whether more are there). An order not active yet, expired, past its
+deadline, between TWAP slices, an unarmed entry, without its exact custody, with nothing left or unable to fund one fill from its
+custody and KAS takes no place (R4C2-2, R5A-1, R5A-2). A level's amount is at most what one fill can take from the order now.
+`orders_truncated` (bool) is true when a bound cut them, so newer resting orders may be missing. `route_truncated` (bool, sent
+only when true) says that a KAS leg of the route was read in part (its book holds more fillable orders than one read takes), so
+a better route level may be missing.
 
 **`GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=`** takes the parameters of `/v1/candles/{token}`
 (section 3.16: `interval` default `5m`, `limit` default 500, at most 1500). The candles are **derived from the two KAS series**,

@@ -62,12 +62,35 @@ Auction orders (a decaying ask, a rising bid, an armed entry) are ranked by thei
 read apart, at most 200 a side: they cannot take the places of the orders with a fixed quote. Orders whose window opened after the
 store's last commit and by the node's DAA score are read apart too, at most 200.
 
-**What an attacker must do now to push a real order out of a book read:** put on the side at least 1,000 orders that a taker can
-fill right now at a better price than the real ones: each one listed (worth at least the listing minimum, 1 KAS), with its exact
-custody, active, not expired, a resting kind with an open slice. That is at least 1,000 KAS of tokens (asks) or KAS (bids)
-really on offer, below the market for asks or above it for bids, which anyone can take at once. Auctions take at most their own
-200 places. Orders not active yet, between slices, expired, past their deadline, without custody or possibly frozen take none,
-whatever their number or price. The pair book is the same with the 20,001 oldest fillable pair orders.
+**The rule of the places (R5A-1, R5C2-1):** a place among the best 1,000 of a side is taken only by an order that offers a taker
+at least the listing minimum (`min_order_value_sompi`, 1 KAS by default) of real value right now. Real value is what one fill can
+take from the order's UTXOs now under the covenant's own arithmetic (`indexer::takeable`), at its limit: an ask's exact custody; a
+bid's buying power; a buy-first if-done entry what its KAS escrow pays after the carriers of the fill; a sell-first entry what its
+KAS funds of the prefund and exit carrier of a fill it outlives; a TWAP or DCA order one slice; a curve its amount at its current
+level. An order that can fund no fill takes no place at all (`ok` 0); one worth less than the minimum (for example one its own
+maker filled down to one base unit) is **dust**: it stays listed, executors fill it, and the book and depth show it from a range
+of its own of at most 200 (`auction` = 2), never from the 1,000. The 24 h statistics' best bid and ask (and so mid, spread and
+the 2 % depth), the sampled quotes of `/v1/quotes` and the KAS legs of a pair book's route read no dust at all, since one base
+unit at any price would set them; the `/v1/tokens` counts count it (it is a fillable order), within their bound.
+
+**What an attacker must do now to push a real order out of a book read**, per kind on the side (each listed, active, not expired,
+a resting kind with an open slice):
+
+| Kind | What each of the 1,000 must hold | Who can take it |
+|---|---|---|
+| `KobAsk`, `KobAskKron`, `KobCurveAsk`, `KobIfdAsk` (+ KRON) | tokens worth at least 1 KAS at its price in its exact custody (a TWAP ask: per slice); a sell-first entry also the KAS of the prefund and exit carrier of a partial fill, else it can only be taken whole | anyone, at once, below the market |
+| `KobBid`, `KobBidKron` | at least 1 KAS of buying power (a DCA bid: per slice) above the carriers and reserve | anyone, at once, above the market |
+| `KobIfdBid` (+ KRON) | at least 1 KAS that one fill can spend from its escrow after its delivery and exit carriers | anyone, at once, above the market |
+| unarmed stops, conditionals (`KobCond*`), IOC / FOK takers | not in the books | |
+
+That is at least 1,000 KAS of tokens (asks) or KAS (bids) really on offer, which anyone can take at once. Auctions and dust take
+at most their own 200 places each. Orders not active yet, between slices, expired, past their deadline, without custody, possibly
+frozen or unable to fund a fill take none, whatever their number or price.
+
+The pair book reads the 20,001 oldest fillable pair orders. Pair orders have no KAS listing minimum (a pair order has no KAS
+quote), so there is no dust class there: each must fund one fill (a `KobPair` bid or a buy-first `KobIfdPair` with its B custody,
+a sell-first one with its prefund, the carriers and tip in KAS) and have something left (R5A-1, R5A-2), but it may be small; the
+cost of filling the 20,001 is their carriers, about 0.16 KAS each, recoverable (accepted, R5A-2).
 
 Rows an older build (schema 14) writes through the triggers have no window yet (`ok` NULL): they count as fillable and are
 decided row by row, within the same bounds, until this build's next commit or start sets them.

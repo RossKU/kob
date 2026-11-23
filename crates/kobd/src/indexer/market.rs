@@ -801,7 +801,7 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
     let mut truncated = false;
     let mut best = |side: i64| -> DbResult<(Option<(i64, i64)>, i64)> {
         let (mut best, mut n): (Option<(i64, i64)>, i64) = (None, 0);
-        truncated |= reads::for_each_resting(conn, ctx, token, side, |levels, scale, _| {
+        truncated |= reads::for_each_resting(conn, ctx, token, side, false, |levels, scale, _| {
             let s = scale.max(1);
             for (_, p, _) in levels {
                 n += 1;
@@ -828,7 +828,7 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
     // at least that.
     let band = |side: i64, bound: i128| -> DbResult<i128> {
         let mut sum = 0i128;
-        let _ = reads::for_each_resting(conn, ctx, token, side, |levels, scale, _| {
+        let _ = reads::for_each_resting(conn, ctx, token, side, false, |levels, scale, _| {
             let s = scale.max(1);
             for (_, p, amount) in levels {
                 let at = per_basis(p, s, basis).saturating_mul(100);

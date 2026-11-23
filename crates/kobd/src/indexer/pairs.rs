@@ -107,6 +107,11 @@ pub struct PairBook {
     /// [`PAIR_BOOK_ORDERS_MAX`] that rest at a level, among the oldest [`PAIR_SCAN_MAX`]
     /// candidates. Newer orders may be missing.
     pub orders_truncated: bool,
+    /// A KAS book a route level is built from was read in part (`reads::book_beyond_scan`): its
+    /// side holds more fillable orders than one read takes, so a better route level may be missing
+    /// (R5C2-5). Not sent when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub route_truncated: bool,
 }
 
 /// A pair with listed live pair orders. It is oriented: `base` is A and `quote` is B.
@@ -383,7 +388,7 @@ pub(crate) fn pair_window_of(conn: &Connection, order_id: i64) -> DbResult<Optio
             _ => (false, 0),
         };
         let custodies = pair_custodies(conn, &cov)?;
-        let funded = super::takeable::pair_takeable(s, value.unwrap_or(0), &custodies, top) != Some(0);
+        let funded = crate::indexer::processor::guarded(|| super::takeable::pair_takeable(s, value.unwrap_or(0), &custodies, top)).unwrap_or(Some(0)) != Some(0);
         ok = sql_ok.unwrap_or(false) && resting && funded && crate::sanity::check(s).is_ok() && custodies_match(&custodies, s);
         open_from = crate::model::terms_of(s).active_from;
         if let AnyState::KobPair(p) = s {
@@ -393,7 +398,7 @@ pub(crate) fn pair_window_of(conn: &Connection, order_id: i64) -> DbResult<Optio
         }
         closed_from = crate::indexer::processor::guarded(|| s.refund_due(udaa)).flatten().unwrap_or(i64::MAX);
     }
-    Ok(Some(super::reads::LiveWindow { ok, open_from, closed_from, deadline, auction: false, key: None }))
+    Ok(Some(super::reads::LiveWindow { ok, open_from, closed_from, deadline, auction: false, dust: false, key: None }))
 }
 
 /// The plain KAS orders of one token and side (1 asks, 2 bids) that a route can use, best first.
@@ -408,7 +413,7 @@ fn kas_orders(conn: &Connection, token: &Hash32, side: i64, limit: usize, now: i
          AND s.status IN ('open','partial') AND s.state_known = 1 AND u.spent_block IS NULL AND {NOT_FROZEN} AND {CUSTODY_OK} \
          AND {pinned} LIMIT ?3",
         pinned = pinned_template(),
-        from = super::reads::book_from(now, ctx.now_unix)
+        from = super::reads::book_from(now, ctx.now_unix, false)
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params![token.0.to_vec(), side, limit as i64], |r| {
@@ -593,6 +598,7 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
     let mut asks: Vec<Lvl> = vec![];
     let mut bids: Vec<Lvl> = vec![];
     let mut orders_truncated = false;
+    let mut route_truncated = false;
     // Pair orders are listed under their base token. A route needs a listed order on both legs.
     let base_live = base != quote && has_listed(conn, base)?;
     let routes = base_live && has_listed(conn, quote)?;
@@ -631,6 +637,11 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
             let base_asks = kas_orders(conn, base, 1, n, now, ctx)?;
             let quote_bids = kas_orders(conn, quote, 2, n, now, ctx)?;
             asks.extend(route_levels(&base_asks, &quote_bids, false, depth));
+            // The route reads the plain orders among a KAS side's bounded prefix, so curves, entries
+            // and auctions there can leave it short; say so.
+            for (t, side) in [(base, 1), (base, 2), (quote, 1), (quote, 2)] {
+                route_truncated |= super::reads::book_beyond_scan(conn, t, side, now, ctx.now_unix, false)?;
+            }
         }
     }
     Ok(PairBook {
@@ -640,6 +651,7 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
         asks: finish(asks, true, depth),
         bids: finish(bids, false, depth),
         orders_truncated,
+        route_truncated,
     })
 }
 

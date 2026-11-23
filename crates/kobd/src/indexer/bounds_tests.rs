@@ -173,7 +173,7 @@ fn allowlist() -> TokenAllowlist {
     }])
 }
 
-/// A curve ask of two levels of 10 base units, at 5 and 6 KAS per whole token.
+/// A curve ask of two levels of 10 whole tokens, at 5 and 6 KAS per whole token (worth more than the listing minimum).
 fn curve() -> Vec<u8> {
     let (hh, p, s) = tok_fields(T3);
     AnyState::KobCurveAsk(kob_protocol::state::CurveAskState {
@@ -186,9 +186,9 @@ fn curve() -> Vec<u8> {
         min_fill: 1,
         tip: 0,
         active_from: 0,
-        level_size: 10,
-        total: 20,
-        amount_left: 20,
+        level_size: 10 * WHOLE,
+        total: 20 * WHOLE,
+        amount_left: 20 * WHOLE,
         extension_commitment: EXT,
         table: vec![500_000_000, 600_000_000],
     })
@@ -250,7 +250,7 @@ fn the_book_reads_do_not_grow_with_listed_curve_asks() {
             ("stats", steps(&conn, || market::stats(&conn, &ctx, &token, Some(3)).unwrap()).1),
             ("tokens", steps(&conn, || token_list(&conn, &list).unwrap()).1),
             ("pair book", steps(&conn, || pairs::pair_book(&conn, &ctx, &token, &other, 20).unwrap()).1),
-            ("quotes sample", steps(&conn, || book_side_sorted(&conn, &ctx, &token, 1, Some(1)).unwrap()).1),
+            ("quotes sample", steps(&conn, || book_side_sorted(&conn, &ctx, &token, 1, Some(1), false).unwrap()).1),
         ]
     };
     let s = Seed {
@@ -262,7 +262,7 @@ fn the_book_reads_do_not_grow_with_listed_curve_asks() {
         parent: None,
         state: Some(curve()),
         price0: Some(500_000_000),
-        remaining: 20,
+        remaining: 20 * WHOLE,
         custody: true,
         listed: true,
         maker: pk(9),
@@ -292,7 +292,7 @@ fn the_book_reads_do_not_grow_with_listed_curve_asks() {
     // the rows of a book side are a prefix of `book_live`, read by its index
     let p = plan(
         &conn,
-        &format!("SELECT o.id {} LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx", book_from(1_000, None)),
+        &format!("SELECT o.id {} LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx", book_from(1_000, None, true)),
         params![TOKEN_COV.to_vec(), 1],
     );
     assert!(p.contains("book_live_key"), "{p}");
@@ -456,6 +456,151 @@ fn an_if_done_bid_without_its_escrow_takes_no_place() {
     let best = &now["bids"][0];
     assert_eq!(best["contract"], "KobIfdBid");
     assert_eq!(best["fillable_now"], (3 * WHOLE).to_string());
+}
+
+/// R5C2-1: orders their own maker filled down to one base unit stay listed and fillable, but worth less than the listing
+/// minimum to a taker they are dust: 1,200 such asks below every honest ask and 1,200 such bids above every honest bid take
+/// none of the 1,000 places of a side. The honest orders are all read, the stats' best bid and ask and the sampled quote
+/// are honest ones, the pair route has no dust, and the dust is read in its own range of 200 (`truncated` says the rest).
+#[test]
+fn dust_left_by_partial_fills_takes_no_place() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    honest_book(&conn);
+    let maintain = || crate::indexer::db::maintain_live_books(&conn, 1_000, None).unwrap();
+    maintain();
+    let (token, ctx) = (Hash32(TOKEN_COV), ctx());
+    let honest_orders = serde_json::to_value(book(&conn, &ctx, &token, 20, false).unwrap()).unwrap();
+    let honest_stats = serde_json::to_value(market::stats(&conn, &ctx, &token, Some(3)).unwrap()).unwrap();
+    let a = AnyState::KobAsk(kob_protocol::state::AskState { amount_left: 1, min_fill: 1, ..ask(7, 50_000_000) });
+    let s = Seed {
+        prefix: "d",
+        contract: "KobAsk",
+        side: 1,
+        token: TOKEN_COV,
+        quote: None,
+        parent: None,
+        state: Some(a.encode()),
+        price0: Some(50_000_000),
+        remaining: 1,
+        custody: true,
+        listed: true,
+        maker: pk(7),
+    };
+    seed(&conn, &s, 0, 1_200);
+    let b = AnyState::KobBid(bid(7, 150_000_000));
+    let s = Seed { prefix: "e", contract: "KobBid", side: 2, state: Some(b.encode()), price0: Some(150_000_000), custody: false, ..s };
+    seed(&conn, &s, 0, 1_200);
+    conn.execute("UPDATE order_state SET status = 'partial' WHERE remaining_amount = 1", []).unwrap();
+    maintain();
+    let dust: i64 = conn.query_row("SELECT COUNT(*) FROM book_live WHERE open = 1 AND auction = 2", [], |r| r.get(0)).unwrap();
+    assert_eq!(dust, 2_400, "dust, fillable");
+    let now = serde_json::to_value(book(&conn, &ctx, &token, 2_000, false).unwrap()).unwrap();
+    for side in ["asks", "bids"] {
+        let ids: Vec<&str> = now[side].as_array().unwrap().iter().map(|o| o["covenant_id"].as_str().unwrap()).collect();
+        for o in honest_orders[side].as_array().unwrap() {
+            assert!(ids.contains(&o["covenant_id"].as_str().unwrap()), "{side}: an honest order is still read");
+        }
+        assert_eq!(ids.len(), 10 + BOOK_MOVING_MAX, "{side}: the honest orders and the dust's own range");
+    }
+    assert_eq!(now["truncated"], true, "the dust past its range is cut");
+    let stats = serde_json::to_value(market::stats(&conn, &ctx, &token, Some(3)).unwrap()).unwrap();
+    for k in ["best_bid", "best_ask", "mid", "spread_bps"] {
+        assert_eq!(stats[k], honest_stats[k], "{k}");
+    }
+    assert!(stats.get("book_truncated").is_none(), "{stats}");
+    let best_ask = book_side_sorted(&conn, &ctx, &token, 1, Some(1), false).unwrap().0[0].0;
+    assert_eq!(best_ask.0, 100_000_000, "the sampled quote is an honest ask");
+}
+
+/// R5C2-4: the rows a store's writer decided under other rules (an older build, other pinned templates, another listing
+/// minimum) are all decided again, once; under the same rules nothing is reset.
+#[test]
+fn the_live_books_are_decided_again_when_their_rules_change() {
+    use crate::indexer::db::{ensure_book_rules, maintain_live_books, meta_set};
+    let conn = open_memory("testnet-10").unwrap();
+    honest_book(&conn);
+    maintain_live_books(&conn, 1_000, None).unwrap();
+    let unset = || -> i64 { conn.query_row("SELECT COUNT(*) FROM book_live WHERE ok IS NULL", [], |r| r.get(0)).unwrap() };
+    let dust = || -> i64 { conn.query_row("SELECT COUNT(*) FROM book_live WHERE auction = 2", [], |r| r.get(0)).unwrap() };
+    assert_eq!((unset(), dust()), (0, 0));
+    assert!(!ensure_book_rules(&conn, 100_000_000).unwrap(), "the rules this store was opened with");
+    // an older build's rows
+    meta_set(&conn, "book_live_rules", "1/0000000000000000/100000000").unwrap();
+    assert!(ensure_book_rules(&conn, 100_000_000).unwrap());
+    assert_eq!(unset(), 20);
+    maintain_live_books(&conn, 1_000, None).unwrap();
+    assert_eq!((unset(), dust()), (0, 0));
+    // a listing minimum of 20 KAS: every honest order (about 10 KAS) is now dust
+    assert!(ensure_book_rules(&conn, 2_000_000_000).unwrap());
+    maintain_live_books(&conn, 1_000, None).unwrap();
+    assert_eq!(dust(), 20);
+    assert!(!ensure_book_rules(&conn, 2_000_000_000).unwrap());
+}
+
+/// R5C1-L3, R5C2-I3: an ask row with one custody and no stored amount makes the window's condition NULL. The writer reads
+/// that as not fillable: the commit's maintenance succeeds and the row takes no place.
+#[test]
+fn a_null_in_the_window_condition_does_not_fail_the_commit() {
+    let conn = open_memory("testnet-10").unwrap();
+    let s = Seed {
+        prefix: "n",
+        contract: "KobAsk",
+        side: 1,
+        token: TOKEN_COV,
+        quote: None,
+        parent: None,
+        state: Some(AnyState::KobAsk(ask(1, 100_000_000)).encode()),
+        price0: Some(100_000_000),
+        remaining: 10 * WHOLE,
+        custody: true,
+        listed: true,
+        maker: pk(1),
+    };
+    seed(&conn, &s, 0, 1);
+    conn.execute("UPDATE order_state SET remaining_amount = NULL", []).unwrap();
+    crate::indexer::db::maintain_live_books(&conn, 1_000, None).unwrap();
+    let open: i64 = conn.query_row("SELECT open FROM book_live", [], |r| r.get(0)).unwrap();
+    assert_eq!(open, 3);
+}
+
+/// R5C2-3: a possibly-frozen flag that moves to the order's next UTXO (an upsert) sends the row back to the writer, so the
+/// row does not keep `open = 1` and a place it then fails.
+#[test]
+fn a_moved_frozen_flag_takes_the_row_out_of_the_book() {
+    let conn = open_memory("testnet-10").unwrap();
+    let s = Seed {
+        prefix: "q",
+        contract: "KobAsk",
+        side: 1,
+        token: TOKEN_COV,
+        quote: None,
+        parent: None,
+        state: Some(AnyState::KobAsk(ask(1, 100_000_000)).encode()),
+        price0: Some(100_000_000),
+        remaining: 10 * WHOLE,
+        custody: true,
+        listed: true,
+        maker: pk(1),
+    };
+    seed(&conn, &s, 0, 1);
+    let maintain = || crate::indexer::db::maintain_live_books(&conn, 1_000, None).unwrap();
+    let open = || -> i64 { conn.query_row("SELECT open FROM book_live", [], |r| r.get(0)).unwrap() };
+    maintain();
+    assert_eq!(open(), 1);
+    let cov: [u8; 32] = conn.query_row("SELECT covenant_id FROM orders", [], |r| r.get::<_, Vec<u8>>(0)).unwrap().try_into().unwrap();
+    assert!(crate::indexer::flags::set(&conn, &cov, "test", 1).unwrap());
+    maintain();
+    assert_eq!(open(), 3, "flagged at its UTXO");
+    // a fill moves the order to its next UTXO: the flag names the old one, so the row is fillable again
+    conn.execute("UPDATE order_state SET cur_txid = x'0102'", []).unwrap();
+    conn.execute("UPDATE book_live SET ok = NULL", []).unwrap();
+    maintain();
+    assert_eq!(open(), 1);
+    // the pre-simulation fails again and the flag moves to the new UTXO
+    assert!(crate::indexer::flags::set(&conn, &cov, "test", 2).unwrap());
+    maintain();
+    assert_eq!(open(), 3, "flagged at its new UTXO");
 }
 
 /// R4C2-1, R4C2-5 and R3C2-1: one order's view (on the light lane), its events and a maker's order

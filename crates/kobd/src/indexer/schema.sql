@@ -971,6 +971,11 @@ CREATE TRIGGER IF NOT EXISTS book_live_flag_insert AFTER INSERT ON order_flags B
     UPDATE book_live SET ok = NULL, open = 1 WHERE order_id = (SELECT id FROM orders WHERE covenant_id = NEW.covenant_id);
     UPDATE pair_live SET ok = NULL, open = 1 WHERE order_id = (SELECT id FROM orders WHERE covenant_id = NEW.covenant_id);
 END;
+-- A flag moved to the order's next UTXO is an upsert (`flags::set`), which fires no insert or delete trigger (R5C2-3).
+CREATE TRIGGER IF NOT EXISTS book_live_flag_update AFTER UPDATE ON order_flags BEGIN
+    UPDATE book_live SET ok = NULL, open = 1 WHERE order_id IN (SELECT id FROM orders WHERE covenant_id IN (OLD.covenant_id, NEW.covenant_id));
+    UPDATE pair_live SET ok = NULL, open = 1 WHERE order_id IN (SELECT id FROM orders WHERE covenant_id IN (OLD.covenant_id, NEW.covenant_id));
+END;
 CREATE TRIGGER IF NOT EXISTS book_live_flag_delete AFTER DELETE ON order_flags BEGIN
     UPDATE book_live SET ok = NULL, open = 1 WHERE order_id = (SELECT id FROM orders WHERE covenant_id = OLD.covenant_id);
     UPDATE pair_live SET ok = NULL, open = 1 WHERE order_id = (SELECT id FROM orders WHERE covenant_id = OLD.covenant_id);

@@ -266,8 +266,14 @@ fn migrate(conn: &Connection) -> DbResult<()> {
     if let Some(n) = backfill_book_live(conn)? {
         tracing::info!(orders = n, "indexed the live KAS books once (kept by triggers from now on)");
     }
-    // The windows of rows an older build wrote (or the fill above) are set before anything reads.
+    // The windows of rows an older build wrote (or the fill above), and of every row when the rules
+    // behind them changed (R5C2-4), are set before anything reads. The listing minimum is the one the
+    // store last ran with; the writer's first commit applies its own.
     let daa = super::book::cursor_daa(conn)?.min(i64::MAX as u64) as i64;
+    let dust = book_dust_sompi(conn)?;
+    if ensure_book_rules(conn, dust)? {
+        tracing::info!("the live books are decided again: the rules behind them changed with this build");
+    }
     maintain_live_books(conn, daa, unix_now())?;
     let unknown_txs = backfill_executor_txs(conn)?;
     if unknown_txs > 0 {
@@ -381,6 +387,7 @@ const OPEN_AT: &str = "CASE WHEN ok = 0 THEN 3 WHEN deadline IS NOT NULL AND dea
 /// decided row by row). Returns the rows set.
 pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> DbResult<usize> {
     let unix = unix.unwrap_or(i64::MIN);
+    let dust = book_dust_sompi(conn)?;
     let mut set = 0;
     for table in ["book_live", "pair_live"] {
         let ids: Vec<i64> = conn
@@ -388,7 +395,7 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
             .query_map([], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         for id in ids {
-            let w = if table == "book_live" { super::reads::book_window(conn, id)? } else { super::pairs::pair_window_of(conn, id)? };
+            let w = if table == "book_live" { super::reads::book_window(conn, id, dust)? } else { super::pairs::pair_window_of(conn, id)? };
             let Some(w) = w else {
                 conn.prepare_cached(&format!("DELETE FROM {table} WHERE order_id = ?1"))?.execute([id])?;
                 continue;
@@ -409,7 +416,7 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
                     w.closed_from,
                     w.deadline,
                     id,
-                    w.auction as i64,
+                    w.class(),
                     w.key
                 ])?;
             } else {
@@ -431,6 +438,39 @@ pub fn maintain_live_books(conn: &Connection, daa: i64, unix: Option<i64>) -> Db
         }
     }
     Ok(set)
+}
+
+/// The version of the rules behind `book_live.ok` / `pair_live.ok` and the book class
+/// (`reads::book_window`, `pairs::pair_window_of`). Bump it whenever they change: a store whose rows
+/// an older rule set decided recomputes them all at its next open or commit ([`ensure_book_rules`],
+/// R5C2-4).
+///
+/// 2: what one fill can take (R5A-1, R5A-2) and the dust class (R5C2-1).
+pub const BOOK_RULES_VERSION: u32 = 2;
+
+/// The listing minimum the book class was decided with (`meta.book_dust_sompi`), else the default.
+pub fn book_dust_sompi(conn: &Connection) -> DbResult<i64> {
+    Ok(meta_get(conn, "book_dust_sompi")?
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(crate::tokens::ListingRules::default().min_order_value_sompi))
+}
+
+/// Sends every row of `book_live` and `pair_live` back to the writer (`ok` NULL) when the rules that
+/// decided them differ from this build's: [`BOOK_RULES_VERSION`], the pinned templates and the
+/// listing minimum `dust_sompi` (`meta.book_live_rules`). The writer runs it in its transaction
+/// before [`maintain_live_books`], which then decides them again; when nothing changed it reads one
+/// meta row. Returns whether the rows were reset.
+pub fn ensure_book_rules(conn: &Connection, dust_sompi: i64) -> DbResult<bool> {
+    let dust = dust_sompi.max(0);
+    let pinned = blake3::hash(super::reads::pinned_template().as_bytes()).to_hex();
+    let want = format!("{BOOK_RULES_VERSION}/{}/{dust}", &pinned[..16]);
+    if meta_get(conn, "book_live_rules")?.as_deref() == Some(want.as_str()) {
+        return Ok(false);
+    }
+    conn.execute_batch("UPDATE book_live SET ok = NULL, open = 1; UPDATE pair_live SET ok = NULL, open = 1;")?;
+    meta_set(conn, "book_dust_sompi", &dust.to_string())?;
+    meta_set(conn, "book_live_rules", &want)?;
+    Ok(true)
 }
 
 /// Counts the bytes the KCC-23 candidates hold (`counters.kcc23_candidate_bytes`, schema.sql) once, for

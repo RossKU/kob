@@ -1001,7 +1001,7 @@ fn resting_level_of(
         _ => remaining,
     };
     let quote = auction_of(s, udaa, Some(now.max(0) as u64)).and_then(|a| a.current_price.parse::<i64>().ok()).unwrap_or(price);
-    let amount = match super::takeable::kas_takeable(s, value.unwrap_or(0), quote) {
+    let amount = match crate::indexer::processor::guarded(|| super::takeable::kas_takeable(s, value.unwrap_or(0), quote)).unwrap_or(Some(0)) {
         Some(0) => return None,
         Some(t) => amount.map(|a| a.min(t)),
         None => amount,
@@ -1049,25 +1049,38 @@ pub const BOOK_ORDERS_MAX: usize = 1_000;
 /// cannot take the places of the orders with a fixed quote.
 pub const BOOK_MOVING_MAX: usize = 200;
 
+/// The `book_live.auction` class of a row (R4C2-2, R5C2-1): a fixed quote, an auction, or dust.
+///
+/// **The rule of the book's places:** a place among the best [`BOOK_ORDERS_MAX`] of a side is taken only by an order that
+/// offers a taker at least the listing minimum (`min_order_value_sompi`) of real value right now: what one fill can take
+/// from it now ([`super::takeable`]; a bid its buying power, a TWAP order one slice) at its limit. An order below it is
+/// dust (for example one its own maker filled down to one base unit): it stays listed and fillable, executors fill it, and
+/// the reads take it from a range of its own of at most [`BOOK_MOVING_MAX`], as auctions, never from the 1,000.
+pub(crate) const CLASS_FIXED: i64 = 0;
+pub(crate) const CLASS_AUCTION: i64 = 1;
+pub(crate) const CLASS_DUST: i64 = 2;
+
 /// The `book_live` rows of one side (`?1` the token, `?2` the side) that a read takes, as a subquery
 /// of `order_id`: the fillable rows at DAA `now` (and the wall clock `unix`), best first by key, at
-/// most [`BOOK_ORDERS_MAX`] with a fixed quote and [`BOOK_MOVING_MAX`] auctions; and at most
-/// [`BOOK_MOVING_MAX`] rows that opened after the store's DAA score and by `now`.
+/// most [`BOOK_ORDERS_MAX`] with a fixed quote, [`BOOK_MOVING_MAX`] auctions and, with `dust`,
+/// [`BOOK_MOVING_MAX`] dust rows ([`CLASS_DUST`]); and at most [`BOOK_MOVING_MAX`] rows that opened
+/// after the store's DAA score and by `now`.
 ///
 /// A row that cannot be filled now (not active yet, a slice not open, expired, idle, past its
-/// deadline, no exact custody, possibly frozen, a taker kind) has `open` != 1 and is outside the
-/// index ranges read, so it costs nothing and takes no place (`db::maintain_live_books`). The
-/// window terms skip only the rows whose window passed since the store's last commit.
-fn book_rows(now: i64, unix: Option<u64>) -> String {
-    book_arms(now, unix)
+/// deadline, no exact custody, possibly frozen, a taker kind, an entry its UTXO cannot fund) has
+/// `open` != 1 and is outside the index ranges read, so it costs nothing and takes no place
+/// (`db::maintain_live_books`). The window terms skip only the rows whose window passed since the
+/// store's last commit.
+fn book_rows(now: i64, unix: Option<u64>, dust: bool) -> String {
+    book_arms(now, unix, dust)
         .iter()
         .map(|(arm, cap)| format!("SELECT order_id FROM ({arm} LIMIT {cap})"))
         .collect::<Vec<_>>()
         .join(" UNION ALL ")
 }
 
-/// The three index ranges of [`book_rows`], each without its LIMIT, and its bound.
-fn book_arms(now: i64, unix: Option<u64>) -> [(String, usize); 3] {
+/// The index ranges of [`book_rows`], each without its LIMIT, and its bound.
+fn book_arms(now: i64, unix: Option<u64>, dust: bool) -> Vec<(String, usize)> {
     let mut window = format!("(bl.closed_from IS NULL OR bl.closed_from > {now}) AND (bl.open_from IS NULL OR bl.open_from <= {now})");
     if let Some(u) = unix {
         window.push_str(&format!(" AND (bl.deadline IS NULL OR bl.deadline > {})", u.min(i64::MAX as u64)));
@@ -1079,28 +1092,33 @@ fn book_arms(now: i64, unix: Option<u64>) -> [(String, usize); 3] {
              AND {window} ORDER BY bl.key, bl.genesis_block, bl.covenant_id"
         )
     };
-    [
-        (ranked(0), BOOK_ORDERS_MAX),
-        (ranked(1), BOOK_MOVING_MAX),
-        (
-            format!("SELECT bl.order_id FROM book_live bl INDEXED BY book_live_pending WHERE {side} AND bl.open = 0 AND bl.open_from <= {now} AND {window}"),
-            BOOK_MOVING_MAX,
+    let pending_dust = if dust { String::new() } else { format!(" AND bl.auction != {CLASS_DUST}") };
+    let mut arms = vec![(ranked(CLASS_FIXED), BOOK_ORDERS_MAX), (ranked(CLASS_AUCTION), BOOK_MOVING_MAX)];
+    if dust {
+        arms.push((ranked(CLASS_DUST), BOOK_MOVING_MAX));
+    }
+    arms.push((
+        format!(
+            "SELECT bl.order_id FROM book_live bl INDEXED BY book_live_pending WHERE {side} AND bl.open = 0 AND bl.open_from <= {now} AND {window}{pending_dust}"
         ),
-    ]
+        BOOK_MOVING_MAX,
+    ));
+    arms
 }
 
 /// FROM of a read of one book side (`?1` the token, `?2` the side) at DAA `now`: the rows of
-/// [`book_rows`], then their state and order rows (aliases `s` and `o`).
-pub(crate) fn book_from(now: i64, unix: Option<u64>) -> String {
+/// [`book_rows`], then their state and order rows (aliases `s` and `o`). With `dust` it takes the
+/// dust rows too ([`CLASS_DUST`]).
+pub(crate) fn book_from(now: i64, unix: Option<u64>, dust: bool) -> String {
     format!(
         "FROM ({}) b CROSS JOIN order_state s ON s.order_id = b.order_id CROSS JOIN orders o ON o.id = b.order_id",
-        book_rows(now, unix)
+        book_rows(now, unix, dust)
     )
 }
 
 /// Whether a book side at DAA `now` holds more fillable rows than one read takes.
-fn book_beyond_scan(conn: &Connection, token: &Hash32, side: i64, now: i64, unix: Option<u64>) -> DbResult<bool> {
-    for (arm, cap) in book_arms(now, unix) {
+pub(crate) fn book_beyond_scan(conn: &Connection, token: &Hash32, side: i64, now: i64, unix: Option<u64>, dust: bool) -> DbResult<bool> {
+    for (arm, cap) in book_arms(now, unix, dust) {
         if conn.prepare(&format!("{arm} LIMIT 1 OFFSET {cap}"))?.exists(rusqlite::params![token.0.to_vec(), side])? {
             return Ok(true);
         }
@@ -1123,7 +1141,7 @@ fn book_side_orders(
     let now = book_daa(conn, ctx)?;
     let live = fillable_now(now, ctx.now_unix);
     let pinned = pinned_template();
-    let from = book_from(now, ctx.now_unix);
+    let from = book_from(now, ctx.now_unix, true);
     let sql = format!(
         "SELECT o.covenant_id, o.contract, o_mk.h, o.price, o.tip, o.min_fill, o.scale, o.expiry_daa, o.genesis_daa, \
                 s.amount_exact, s.status, s.remaining_amount, s.cur_value, o.deadline, kob_ustate(u.state, {GENESIS_O}), u.created_daa, s.last_daa \
@@ -1229,7 +1247,7 @@ fn book_side_orders(
         }
     }
     sort(&mut out);
-    let truncated = book_beyond_scan(conn, token, side, now, ctx.now_unix)?;
+    let truncated = book_beyond_scan(conn, token, side, now, ctx.now_unix, true)?;
     Ok((out.into_iter().take(depth).map(|(_, _, v)| v).collect(), truncated))
 }
 
@@ -1280,11 +1298,12 @@ pub(crate) fn book_side_sorted(
     token: &Hash32,
     side: i64,
     top: Option<usize>,
+    dust: bool,
 ) -> DbResult<(Vec<RawBookLevel>, bool)> {
     // Maps (price, scale) to (amount, orders, estimated). A curve adds each remaining level's size
     // at its price, so its amount is counted once.
     let mut levels: BTreeMap<(i64, i64), (i128, i64, bool)> = BTreeMap::new();
-    let truncated = for_each_resting(conn, ctx, token, side, |mut level, scale, exact| {
+    let truncated = for_each_resting(conn, ctx, token, side, dust, |mut level, scale, exact| {
         if let Some(d) = top {
             best_prices(&mut level, side, d);
         }
@@ -1315,17 +1334,21 @@ pub(crate) fn book_side_sorted(
 ///
 /// One order's levels are held at a time, so a reader that keeps what it needs as it goes holds
 /// no more than that, whatever the book holds (security review 2026-11-19 K-L4).
+///
+/// With `dust` it reads the dust rows too ([`CLASS_DUST`]); a read of the best price leaves them out,
+/// since one base unit at any price would set it (R5C2-1).
 pub(crate) fn for_each_resting(
     conn: &Connection,
     ctx: &ReadCtx,
     token: &Hash32,
     side: i64,
+    dust: bool,
     mut f: impl FnMut(Vec<(Option<usize>, i64, Option<i64>)>, i64, i64),
 ) -> DbResult<bool> {
     let now = book_daa(conn, ctx)?;
     let live = fillable_now(now, ctx.now_unix);
     let pinned = pinned_template();
-    let from = book_from(now, ctx.now_unix);
+    let from = book_from(now, ctx.now_unix, dust);
     let sql = format!(
         "SELECT o.price, COALESCE(o.scale, 1), s.remaining_amount, s.amount_exact, o.contract, kob_ustate(u.state, {GENESIS_O}), \
                 COALESCE(u.created_daa, s.last_daa), s.cur_value \
@@ -1343,7 +1366,7 @@ pub(crate) fn for_each_resting(
         let (level, scale, exact) = r?;
         f(level, scale, exact);
     }
-    book_beyond_scan(conn, token, side, now, ctx.now_unix)
+    book_beyond_scan(conn, token, side, now, ctx.now_unix, dust)
 }
 
 /// When the current state of a live KAS-book order can be filled, as `db::maintain_live_books`
@@ -1361,38 +1384,56 @@ pub(crate) struct LiveWindow {
     pub deadline: Option<i64>,
     /// The quote moves ([`auction_of`]).
     pub auction: bool,
+    /// Worth less than the listing minimum to a taker now ([`CLASS_DUST`]).
+    pub dust: bool,
     /// The key of a curve: its current level's price per base unit (negated for a bid). `None`:
     /// the limit, as the trigger wrote it.
     pub key: Option<f64>,
 }
 
-/// The [`LiveWindow`] of the live KAS-book order `order_id`; `None` when it has no state row.
-pub(crate) fn book_window(conn: &Connection, order_id: i64) -> DbResult<Option<LiveWindow>> {
+impl LiveWindow {
+    /// The `book_live.auction` class the reads take the row by.
+    pub fn class(&self) -> i64 {
+        if self.dust {
+            CLASS_DUST
+        } else if self.auction {
+            CLASS_AUCTION
+        } else {
+            CLASS_FIXED
+        }
+    }
+}
+
+/// The [`LiveWindow`] of the live KAS-book order `order_id`, its dust bound `dust_below` sompi (the
+/// listing minimum); `None` when it has no state row.
+pub(crate) fn book_window(conn: &Connection, order_id: i64, dust_below: i64) -> DbResult<Option<LiveWindow>> {
     use kob_protocol::state::{MAX_IDLE, TIF_GTC};
     let sql = format!(
         "SELECT o.contract, kob_ustate(u.state, {GENESIS_O}), COALESCE(u.created_daa, s.last_daa), COALESCE(o.active_from, 0), \
                 o.expiry_daa, o.deadline, o.price, COALESCE(o.scale, 1), o.side, s.remaining_amount, \
-                (s.status IN ('open','partial') AND s.state_known = 1 AND {HAS_AMOUNT} AND {NOT_FROZEN} AND {CUSTODY_OK} AND {pinned} AND {RESTING_TIF}), \
+                COALESCE((s.status IN ('open','partial') AND s.state_known = 1 AND {HAS_AMOUNT} AND {NOT_FROZEN} AND {CUSTODY_OK} AND {pinned} AND {RESTING_TIF}), 0), \
                 s.cur_value \
          FROM order_state s CROSS JOIN orders o ON o.id = s.order_id \
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} WHERE s.order_id = ?1",
         pinned = pinned_template()
     );
+    // It runs in every commit: a NULL anywhere (a compound condition over a NULL column is NULL) reads
+    // as not fillable, never as an error that would fail every commit (R5C1-L3).
     let row = conn
         .prepare_cached(&sql)?
         .query_row([order_id], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, Option<Vec<u8>>>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, i64>(3)?,
+                r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                r.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 r.get::<_, Option<i64>>(4)?,
                 r.get::<_, Option<i64>>(5)?,
                 r.get::<_, Option<i64>>(6)?,
-                r.get::<_, i64>(7)?,
-                r.get::<_, i64>(8)?,
+                r.get::<_, Option<i64>>(7)?.unwrap_or(1),
+                r.get::<_, Option<i64>>(8)?.unwrap_or(0),
                 r.get::<_, Option<i64>>(9)?,
-                r.get::<_, bool>(10)?,
+                r.get::<_, Option<bool>>(10)?.unwrap_or(false),
                 r.get::<_, Option<i64>>(11)?,
             ))
         })
@@ -1421,25 +1462,44 @@ pub(crate) fn book_window(conn: &Connection, order_id: i64) -> DbResult<Option<L
         _ => (true, None),
     };
     let priced = price.is_some() || curve;
-    let _ = remaining;
-    // An if-done entry whose UTXO cannot pay for one fill at its limit, the highest quote its
-    // auction reaches, cannot be filled: it takes no place (R5A-1).
-    let funded = match (&state, price) {
-        (Some(s), Some(p)) => super::takeable::kas_takeable(s, value.unwrap_or(0), p) != Some(0),
-        _ => true,
+    // What one fill can take now: an if-done entry what its UTXO funds at its limit, the highest
+    // quote its auction reaches (none: it cannot be filled and takes no place, R5A-1), a TWAP / DCA
+    // order one slice.
+    let takeable = match (&state, price) {
+        (Some(s), Some(p)) => crate::indexer::processor::guarded(|| super::takeable::kas_takeable(s, value.unwrap_or(0), p)).unwrap_or(Some(0)),
+        _ => None,
+    };
+    let max_fill = match &state {
+        Some(AnyState::KobAsk(a) | AnyState::KobAskKron(a)) if a.max_fill > 0 => Some(a.max_fill),
+        Some(AnyState::KobBid(b) | AnyState::KobBidKron(b)) if b.max_fill > 0 => Some(b.max_fill),
+        _ => None,
+    };
+    let offer = remaining.map(|r| r.min(takeable.unwrap_or(i64::MAX)).min(max_fill.unwrap_or(i64::MAX)));
+    // Dust: worth less than the listing minimum to a taker now, at the limit (a curve: its current
+    // level). It is read in a range of its own ([`CLASS_DUST`], R5C2-1).
+    let quote = match &state {
+        Some(AnyState::KobCurveAsk(c)) => c.price_now(),
+        _ => price,
+    };
+    let dust = match (offer, quote) {
+        (Some(n), Some(p)) => {
+            kob_protocol::state::quote_exact(n, p, scale.max(1), kob_protocol::state::Round::Down).unwrap_or(0) < dust_below as i128
+        }
+        _ => false,
     };
     Ok(Some(LiveWindow {
-        ok: sql_ok && resting && curve_ok && priced && funded,
+        ok: sql_ok && resting && curve_ok && priced && takeable != Some(0),
         open_from: active_from.max(slice_open),
         closed_from: expiry.unwrap_or(i64::MAX).min(if curve { i64::MAX } else { udaa.saturating_add(MAX_IDLE) }),
         deadline,
         auction: state.as_ref().is_some_and(|s| auction_of(s, udaa, None).is_some()),
+        dust,
         key,
     }))
 }
 
 fn book_side_levels(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64, depth: usize) -> DbResult<(Vec<LevelView>, bool)> {
-    let (levels, truncated) = book_side_sorted(conn, ctx, token, side, Some(depth))?;
+    let (levels, truncated) = book_side_sorted(conn, ctx, token, side, Some(depth), true)?;
     let levels = levels
         .into_iter()
         .take(depth)
