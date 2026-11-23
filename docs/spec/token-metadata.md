@@ -219,7 +219,10 @@ send the release, which pays only the creator. This section is the manual lock (
 A creation can lock the share its creator keeps until a calendar time (web: *After creation, Lock my share until*; CLI
 `--lock-until`). No contract or template changes: the KCC-20 programs already authorise an owner of scheme `0x03`
 (`p2sh/v1`) when the transaction spends an input whose script public key is the P2SH of that owner (the owner witness is
-that input's index). The locked genesis output's owner is the P2SH hash of the 44-byte redeem script
+that input's index). The web app and `kob` refuse a time more than 3,653 days (about 10 years) ahead (web `lock.far`), and
+`kob --lock-until` takes a unix time only as 13-digit milliseconds (seconds and microseconds are refused): a wrong unit would
+lock the share for millennia. These are checks of the tools: a reader takes a lock whose `until` is up to 2^53 - 1 ms. The locked
+genesis output's owner is the P2SH hash of the 44-byte redeem script
 
 ```text
 OP_DATA_8 <until: u64 LE, unix ms> OP_CHECKLOCKTIMEVERIFY OP_DATA_32 <x-only key> OP_CHECKSIG

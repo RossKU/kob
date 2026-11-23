@@ -54,9 +54,13 @@ Guards (also the wallet's): tick, value and 90-day bounds, self-trade, the FOK d
 - **Crossing limits.** A limit that crosses the book becomes an auction by default (`--crossing auction|limit|reject`).
 - **Market start.** Every order in the KAS book is looked up on the node first (best price first, up to 18 rows a side);
   an order only the indexer lists is left out (`BOOK_ORDERS_DROPPED`), so a market / close auction starts at a node-confirmed
-  price (`MARKET_START_CONFIRMED`). A start far from the last fill still needs `--ack-market-start` on its own command line
-  (`--yes` is not enough), or for a sell `--floor-price P` (the bound is max(slippage bound, P)). On a pair book, which is
-  not checked, every market or close sell needs it (or `--floor-price`), and so does a buy worth 100 KAS or more.
+  price. That proves the listed orders exist, not that the indexer hides none, so a checked KAS book and an unchecked pair
+  book follow the same rules. A start more than 10 % on the costly side of the last fill (above it for a buy, below it for
+  a sell) needs `--ack-market-start` on its own command line (`--yes` is not enough; `MARKET_START_VS_LAST_FILL`), even
+  with `--floor-price`. Otherwise every market or close sell needs `--floor-price P` (the bound is max(slippage bound, P))
+  or `--ack-market-start` (`MARKET_START_UNVERIFIED`), and so does a buy worth 100 KAS or more at the start
+  (`--ack-market-start` only; a pair buy also when the pair has no KAS reference). A smaller buy gets a note
+  (`MARKET_START_CONFIRMED` on the KAS book).
 - **Indexer checks.** Self-trade and book checks need the indexer; `--ack-no-guards` places the order when it cannot answer.
 - Every UTXO the indexer names is looked up on the node before it is spent.
 - The token outputs a command's own transaction creates (its token change) are recorded locally (`$KOB_STATE_DIR`, else
@@ -607,7 +611,7 @@ declaration. Both are signed at once; the genesis is sent right after the prepar
 | `--name`, `--ticker`, `--decimals` | required: name (1..=64 chars), ticker (2..=12 of A-Z 0-9), decimals (0..=18) |
 | `--fund-utxo TXID:INDEX:AMOUNT:OWNER` | repeatable, all of one key; AMOUNT in sompi; OWNER a 64-hex x-only key or a P2PK address. Without it the key's plain KAS UTXOs on the node fund it, the fewest that cover it, largest first (a dry run then reads the node) |
 | `--sell price|curve`, `--keep PERCENT` | after creation, as the web app (default: keep everything). The sale takes the funding key's share; `--keep` of it (0 to 100, default 0) stays in the wallet as its own output |
-| `--lock-until WHEN` | lock the kept share until WHEN (`+90d`, `+12h`, `+15m`, `YYYY-MM-DD` 00:00 UTC, `YYYY-MM-DDTHH:MMZ`, unix ms): with `--sell` the `--keep` part, else `--keep` of the share (default all), the rest free. By default it opens by itself (`docs/spec/creator-lock-auto.md`): the locked output's owner is the P2SH hash (scheme 0x03) of the `KobLockAuto` script of the terms, the genesis pays a 1 KAS lock coin to its address, and the declaration says `"lock_kind": "auto"`; after WHEN anyone may release it to the key |
+| `--lock-until WHEN` | lock the kept share until WHEN (`+90d`, `+12h`, `+15m`, `YYYY-MM-DD` 00:00 UTC, `YYYY-MM-DDTHH:MMZ`, unix ms as exactly 13 digits; in the future and at most 3,653 days, about 10 years, ahead): with `--sell` the `--keep` part, else `--keep` of the share (default all), the rest free. By default it opens by itself (`docs/spec/creator-lock-auto.md`): the locked output's owner is the P2SH hash (scheme 0x03) of the `KobLockAuto` script of the terms, the genesis pays a 1 KAS lock coin to its address, and the declaration says `"lock_kind": "auto"`; after WHEN anyone may release it to the key |
 | `--lock-manual` | with `--lock-until`: the older lock whose owner is the P2SH hash of `<until ms> OP_CHECKLOCKTIMEVERIFY <key> OP_CHECKSIG` (`docs/spec/token-metadata.md`, *Creator lock*); only the key's signature opens it |
 | `--price P` | `--sell price`: KAS per whole token (default 10,000 KAS over the amount). A limit sell (GTC) sent right after the genesis, spending its output and the preparation's change; saved as `sell_order.json` |
 | `--levels N`, `--total KAS`, `--multiple M` | `--sell curve`: a `KobCurveAsk` in the genesis (unbound, no expiry); defaults 100, 10000KAS, 5 |
