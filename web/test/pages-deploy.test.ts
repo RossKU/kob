@@ -845,6 +845,9 @@ describe('"ci passed for this commit" means every job ran and passed on it (audi
     expect(job(ci, 'web')).toContain('KOB_DEPLOY_NO_HISTORY: "1"');
     expect(job(read('.github/workflows/deploy-pages.yml'), 'build')).toContain('KOB_DEPLOY_NO_HISTORY: "1"');
     expect(read('scripts/lib/deploy.mjs')).toContain("git('git rev-parse --is-shallow-repository').trim() !== 'false'");
+    // R4F-1: the check itself runs against a real temporary git history in the same job.
+    expect(job(ci, 'contracts')).toContain('node --test scripts/lib/deploy.test.mjs');
+    expect(read('scripts/lib/deploy.mjs')).not.toContain('--diff-filter');
   });
 });
 

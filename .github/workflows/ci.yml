@@ -270,6 +270,8 @@ jobs:
         run: |
           scripts/build-deploy.sh testnet-10 --check
           scripts/build-deploy.sh mainnet --check
+      - name: The lock-history check of scripts/lib/deploy.mjs on a real temporary git history (R4F-1)
+        run: node --test scripts/lib/deploy.test.mjs
       - name: Every pinned hash (Rust and TS pin tables, router head, examples, registry templates, docs) is in the reproduced artifacts
         run: node scripts/check-pins.mjs
 
