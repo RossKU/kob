@@ -59,3 +59,25 @@ test('market views are not gated', async ({ appPage: page, mock }) => {
   await expect(icon).toHaveAttribute('data-icon', 'creator-image');
   expect(log.requests).toContain(DUST_URL);
 });
+
+test('a token only the wallet holds, which no list names, waits for "Show logo" in the market list and on its page', async ({ appPage: page, mock }) => {
+  // The creator sent one unit and placed no order, so only the holder's own list has a row for it.
+  await mock.seed({ tokens: [{ ticker: '', covenant_id: DUST, program: 'KCC20Ref', extension_commitment: 'ee'.repeat(32), decimals: null, hidden: true }] });
+  await mock.giveTokens('alice', 1n, { token: DUST });
+  const log = await mockKascov(page, { tokens: [{ covenant_id: DUST, claimed_ticker: 'DUST', claimed_image: DUST_URL }], hosts: { [DUST_URL]: PNG } });
+  await page.goto('/#/market');
+  await connectWallet(page, 'kasware');
+  const row = page.getByTestId(`token-row-${DUST}`);
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  await expect(row).toHaveAttribute('data-source', 'held');
+  const icon = row.getByTestId(`token-icon-${DUST}`);
+  await icon.scrollIntoViewIfNeeded();
+  await expect(icon).toHaveAttribute('data-icon', 'withheld');
+
+  await page.getByTestId(`token-link-${DUST}`).click();
+  await expect(page.getByTestId('token-page')).toBeVisible();
+  await expect(page.getByTestId('token-identity').getByTestId(`token-icon-${DUST}`)).toHaveAttribute('data-icon', 'withheld');
+  await expect(page.getByTestId('token-logo-section')).toHaveCount(0);
+  await page.waitForTimeout(500);
+  expect(log.requests).not.toContain(DUST_URL);
+});

@@ -67,14 +67,15 @@ export type GenesisCheck =
       mintAllowance: bigint | null;
       /**
        * Set when the genesis holds a KRON minter (`is_minter = 1`). It mints any amount, so there
-       * is no allowance to state, and `mintAllowance` is null.
+       * is no allowance to state, and `mintAllowance` is null. Also set with `bridge`: a bridge
+       * minter mints whatever whoever controls the bridge decides.
        */
       mintUnbounded?: boolean;
       /**
        * Set when the token is issued by a bridge. The genesis then holds a minter KOB pins as a
        * bridge's. That is kUSDT's BridgeMint, a federated bridge whose signers sign every mint, or
        * Kozmic's BridgeMint, a ZK bridge that mints only beside its bridge covenant. It is not a
-       * public mint, so it adds nothing to `mintAllowance`.
+       * public mint, so it adds nothing to `mintAllowance`, and it sets `mintUnbounded`.
        */
       bridge?: boolean;
       /**
@@ -388,7 +389,9 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
       // A KRON minter has no allowance, because it mints without bound. The verdict's allowance of
       // 0 does not mean 'Mint left: 0'.
       mintAllowance: minters.length > 0 && !kron ? v.mintAllowance : null,
-      ...(minters.length > 0 && kron ? { mintUnbounded: true } : {}),
+      // A bridge minter mints whatever its signers or its bridge covenant decide. KOB verifies
+      // neither, so it is a live mint authority like an unbounded minter (the High risk chip).
+      ...((minters.length > 0 && kron) || bridgeMinter ? { mintUnbounded: true } : {}),
       mintersUnspent: minters.length === 0 ? null : minters.every((m) => liveOf(m) === true) ? true : minters.some((m) => liveOf(m) === false) ? false : null,
       ...(bridgeMinter ? { bridge: true, bridgeMinter } : {}),
     };

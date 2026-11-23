@@ -1,7 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import type { Services } from '../../app/services';
 import { t } from '../../i18n';
-import { longId } from '../../kob/registry';
+import { longId, readsAsKas } from '../../kob/registry';
 import { formatUnits } from '../../kob/units';
 import { Amount, Badge, CopyText, KeyValueList, Section } from '../kit';
 import type { TokenInfo } from '../../kob/registry';
@@ -339,7 +339,7 @@ export function PairDetails(props: { rows: readonly TokenRow[]; shared?: Readonl
           <div class="mkt-badges">
             <StatusBadges row={r} family={false} />
           </div>
-          <TokenWarnings row={r} sharedTicker={props.shared?.has(r.covenantId) ?? false} />
+          <TokenWarnings row={r} sharedTicker={(props.shared?.has(r.covenantId) ?? false) || readsAsKas(r.ticker)} />
           <TokenDetails row={r} services={props.services} />
         </div>
       ))}

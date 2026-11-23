@@ -39,7 +39,10 @@ test('a node that does not answer is named as the node', async ({ appPage: page,
 
 test('the dynamic fee hint says where the fee is shown and that the rate is not', async ({ appPage: page }) => {
   await page.goto('/#/settings');
-  const hint = page.getByTestId('settings-view');
+  // The explanation is behind the setting's "?".
+  await page.getByRole('button', { name: 'More about Dynamic network fee' }).click();
+  const hint = page.getByRole('note', { name: 'Dynamic network fee' });
+  await expect(hint).toBeVisible();
   await expect(hint).not.toContainText('review screen');
   await expect(hint).toContainText('The fee is shown where you approve');
   await expect(hint).toContainText('the rate itself is not shown');

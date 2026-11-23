@@ -167,9 +167,19 @@ export interface AppConfig {
    * screen still saves a network.
    */
   lockNetwork: boolean;
+  /**
+   * An operator's notice of an incident (config.json `incident`), shown as one banner at the top.
+   * It blocks nothing. Null without one, and for a malformed one.
+   */
+  incident: Incident | null;
 }
 
 export interface StandaloneSettings { manual: boolean; auto: boolean; autoReturn: boolean }
+
+/** An incident notice: plain text, when it began (ISO) and an https link to more. */
+export interface Incident { message: string; since: string | null; url: string | null }
+/** The longest incident message shown. A longer one is cut with an ellipsis. */
+export const INCIDENT_MAX_CHARS = 280;
 
 export const MARKET_START_TOLERANCE_MIN = 10;
 export const MARKET_START_TOLERANCE_MAX = 5_000;
@@ -210,6 +220,7 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   hostNetwork: 'mainnet' as NetworkName,
   serverNetworks: Object.freeze(['mainnet']) as unknown as NetworkName[],
   lockNetwork: false,
+  incident: null,
 });
 
 /** Default block explorer of each network (kaspa.stream: `<base>/transactions/<txid>`). */
@@ -236,6 +247,40 @@ const MAX_EXTRA_INDEXERS = 4;
 const RPC_SCHEMES = ['ws:', 'wss:', 'http:', 'https:'];
 const HTTP_SCHEMES = ['http:', 'https:'];
 
+
+/**
+ * A config.json `incident`, or null when it is not one. The message is plain text: control and
+ * invisible characters become spaces, runs of white space one space, and it is cut to
+ * INCIDENT_MAX_CHARS. `since` must be a date, `url` an https link without credentials; a wrong
+ * optional field makes the whole notice wrong, so nothing half-checked is shown.
+ */
+export function parseIncident(v: unknown): Incident | null {
+  if (!isObj(v) || typeof v.message !== 'string') return null;
+  if (Object.keys(v).some((k) => !['message', 'since', 'url'].includes(k))) return null;
+  // eslint-disable-next-line no-control-regex
+  const clean = v.message.replace(/[\u0000-\u001F\u007F-\u009F​-‏‪-‮⁦-⁩﻿]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (clean === '') return null;
+  const chars = [...clean];
+  const message = chars.length > INCIDENT_MAX_CHARS ? `${chars.slice(0, INCIDENT_MAX_CHARS - 1).join('')}…` : clean;
+  let since: string | null = null;
+  if (v.since !== undefined) {
+    if (typeof v.since !== 'string' || v.since.length > 40 || !/^\d{4}-\d{2}-\d{2}/.test(v.since.trim()) || Number.isNaN(Date.parse(v.since))) return null;
+    since = new Date(Date.parse(v.since)).toISOString();
+  }
+  let url: string | null = null;
+  if (v.url !== undefined) {
+    if (typeof v.url !== 'string' || v.url.length > 500) return null;
+    let u: URL;
+    try {
+      u = new URL(v.url.trim());
+    } catch {
+      return null;
+    }
+    if (u.protocol !== 'https:' || !u.hostname || u.username || u.password) return null;
+    url = u.href;
+  }
+  return { message, since, url };
+}
 /**
  * Trimmed absolute URL of an allowed scheme, without a trailing slash. It is null when invalid,
  * and '' is valid and means unset. A query string or a fragment is refused on every layer. The
@@ -362,6 +407,8 @@ export interface ConfigPatch {
    * deployment only: the default network of a host name (`hostNetworks`, keys in `hostKey` form)
    */
   hostNetworks?: Record<string, NetworkName>;
+  /** deployment only: an incident notice (`incident`) */
+  incident?: Incident;
 }
 
 export interface ConfigWarning { layer: string; field: string; message: string }
@@ -502,6 +549,14 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
       out.networks = networks;
     }
   }
+  if ('incident' in raw) {
+    if (!deployment) warnings.push({ layer, field: 'incident', message: 'only honoured in config.json / window.__KOB_CONFIG__, ignored' });
+    else {
+      const n = parseIncident(raw.incident);
+      if (n) out.incident = n;
+      else bad('incident', 'incident ({ "message": text, "since"?: ISO date, "url"?: https link })');
+    }
+  }
   if ('hostNetworks' in raw) {
     if (!deployment) warnings.push({ layer, field: 'hostNetworks', message: 'only honoured in config.json / window.__KOB_CONFIG__, ignored' });
     else if (!isObj(raw.hostNetworks)) bad('hostNetworks', 'map of host name -> network');
@@ -631,6 +686,7 @@ function apply(base: AppConfig, p: ConfigPatch): AppConfig {
     hostNetwork: base.hostNetwork,
     serverNetworks: base.serverNetworks,
     lockNetwork: p.lockNetwork ?? base.lockNetwork,
+    incident: p.incident ?? base.incident,
   };
 }
 

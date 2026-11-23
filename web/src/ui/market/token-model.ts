@@ -13,7 +13,7 @@ import type { GenesisCheck } from '../../data/genesis-check';
 import type { KascovSpot } from '../../data/kascov';
 import type { DeclaredToken } from '../../data/token-declarations';
 import {
-  longId, normalizeTicker, sanitizeUntrusted, verifyIndexerToken, type TokenInfo, type TokenRegistry, type UntradableReason,
+  longId, normalizeTicker, readsAsKas, sanitizeUntrusted, verifyIndexerToken, type TokenInfo, type TokenRegistry, type UntradableReason,
 } from '../../kob/registry';
 import type { TemplateInfo } from '../../kob/types';
 import { TOKEN_PROGRAMS, programDefaultDecimals } from '../../kob/programs.generated';
@@ -445,16 +445,19 @@ export function scaleNeedsIndexer(row: Pick<TokenRow, 'source' | 'info'>, reason
  * Covenant ids of the listed tokens that share their ticker with another listed token. Case,
  * look-alike letters and homoglyphs are ignored, so `KR0N` is `KRON`. The UI shows a short note on
  * those, because tickers are not unique and the covenant id is the identity. Tokens without a
- * ticker are never compared.
+ * ticker are never compared. A ticker that reads as KAS (`readsAsKas`) is shared with native KAS,
+ * alone too.
  */
 export function sharedTickerIds(rows: readonly Pick<TokenRow, 'covenantId' | 'ticker'>[]): Set<string> {
   const byTicker = new Map<string, string[]>();
+  const kasLike = new Set<string>();
   for (const r of rows) {
+    if (readsAsKas(r.ticker)) kasLike.add(r.covenantId);
     const key = normalizeTicker(r.ticker);
     if (r.ticker === '' || key === '') continue;
     byTicker.set(key, [...(byTicker.get(key) ?? []), r.covenantId]);
   }
-  return new Set([...byTicker.values()].filter((ids) => new Set(ids).size > 1).flat());
+  return new Set([...kasLike, ...[...byTicker.values()].filter((ids) => new Set(ids).size > 1).flat()]);
 }
 
 /**

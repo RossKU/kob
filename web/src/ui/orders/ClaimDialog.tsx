@@ -7,6 +7,7 @@ import { parsePricePerToken } from '../../kob/units';
 import { Banner, Button, Field, HelpTip, IssueLine, Modal, Segmented, kasText, pricePerTokenText, tokenText } from '../kit';
 import { HEAVY_CLAIM_FEE, claimAskSpec, planClaimChoice, sellCrossesOwnBid, type ClaimChoice, type ClaimContext } from './claim';
 import type { OrderRowModel } from './orders-model';
+import { tickerUnit } from '../../kob/registry';
 
 export interface ClaimDialogProps {
   row: OrderRowModel;
@@ -30,7 +31,7 @@ export function ClaimDialog(props: ClaimDialogProps) {
   const bf = boughtOf(st);
   const tk = ctx.token;
   const decimals = tk?.decimals ?? 0;
-  const ticker = tk?.ticker ?? '?';
+  const ticker = tk ? tickerUnit(tk.ticker, tk.covenantId) : '?';
   const s = st.state as unknown as Record<string, string>;
   // The sell's prices are per whole token of the token market's scale.
   const scale = ctx.scale ?? 1n;

@@ -15,7 +15,14 @@ export interface Page<T> { items: T[]; next_cursor: string | null }
 
 /** `GET /v1/health`: the indexer's sync state against its node. */
 export interface HealthView {
-  state: 'starting' | 'following' | 'catching_up' | 'node_unavailable' | 'gap' | string;
+  state: 'starting' | 'following' | 'catching_up' | 'node_unavailable' | 'gap' | 'stopped' | string;
+  /**
+   * The follower made no progress for 10 minutes while its state still says it follows. Older
+   * indexers omit it, which means false.
+   */
+  stale?: boolean;
+  /** Why the follower stopped (state `stopped`). */
+  halt_reason?: string | null;
   ok: boolean;
   network: string;
   node_version?: string | null;

@@ -32,7 +32,7 @@ export const avatarHue = (covenantId: string): number => (parseInt(covenantId.sl
  * The icon of a token. `size` (px) is the diameter when the icon is not sized by its container
  * (`.idb`, `.ml-name`). The default is 24 px, and the letter follows it.
  */
-export function TokenIcon(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'>; size?: number; /** a repeated icon (the rows of a list) carries no test id of its own */ anonymous?: boolean; /** a view of the wallet's own tokens: a creator-hosted picture waits for the user's "Show logo" unless the token was acquired (data/logo-gate.ts) */ scope?: 'wallet' }) {
+export function TokenIcon(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'> & Partial<Pick<TokenRow, 'source'>>; size?: number; /** a repeated icon (the rows of a list) carries no test id of its own */ anonymous?: boolean; /** a view of the wallet's own tokens: a creator-hosted picture waits for the user's "Show logo" unless the token was acquired (data/logo-gate.ts) */ scope?: 'wallet' }) {
   const root = useRef<HTMLSpanElement>(null);
   const [seen, setSeen] = useState(() => typeof IntersectionObserver === 'undefined');
   const [loaded, setLoaded] = useState<string | null>(null);

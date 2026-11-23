@@ -14,7 +14,7 @@ import type { KobWasm } from '../kob/wasm';
 import { toApp, type AppToSigner, type RejectReason, type SessionCloseReason, type SignerNote, type SignerToApp, type TokenHint } from './protocol';
 import { creationSummary, sessionSummary, summarize, type SignerSummary } from './summary';
 import { admitStep, mergeFacts, openState, recordStep, sessionTerms, stepsLeft, type MergeFacts, type SessionState, type SessionTerms } from './session';
-import { RETIME_MAX_COUNT, RETIME_WINDOW_MS, sameOrBetter } from './retime';
+import { RETIME_MAX_COUNT, RETIME_WINDOW_MS, retimable, sameOrBetter, signedOutpoints } from './retime';
 import type { RegistryRow } from './table';
 import { trustedHints } from './trusted-hints';
 
@@ -139,7 +139,9 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
   // - `summary` is what the user approved, never a re-timed one. Each re-time is compared with it,
   //   so small differences cannot add up over many re-times.
   // - `retimes` counts the transactions signed without asking on this approval.
-  let approved: { id: string; summary: SignerSummary; at: number; retimes: number } | null = null;
+  // - `outpoints` are the wallet inputs it spends. A re-timed copy spends exactly these, so the
+  //   approval and its copies conflict and at most one of them confirms.
+  let approved: { id: string; summary: SignerSummary; at: number; retimes: number; outpoints: string } | null = null;
   // The one-approval merge session the user allowed (session.ts). It lives in this closure only and
   // is never stored or sent.
   let session: SessionState | null = null;
@@ -361,7 +363,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         }
         endSession(why === 'expired' ? 'expired' : m.session === undefined ? 'closed' : 'refused');
       }
-      const base = m.retimeOf !== undefined && approved && approved.id === m.retimeOf && now() - approved.at <= RETIME_WINDOW_MS && approved.retimes < RETIME_MAX_COUNT ? approved : null;
+      const base = m.retimeOf !== undefined && approved && approved.id === m.retimeOf && now() - approved.at <= RETIME_WINDOW_MS && approved.retimes < RETIME_MAX_COUNT && approved.outpoints === signedOutpoints(m.built).join(',') ? approved : null;
       if (base && summary.problems === 0 && sameOrBetter(base.summary.decoded, summary.decoded)) {
         // The transaction the user confirmed, planned again with a later clock. Its terms are the
         // same or better, so their confirmation covers it.
@@ -372,7 +374,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
           post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
           return null;
         }
-        approved = { id: m.id, summary: base.summary, at: base.at, retimes: base.retimes + 1 };
+        approved = { ...base, id: m.id, retimes: base.retimes + 1 };
         post(toApp({ type: 'signed', id: m.id, txid: m.built.tx.id, signatures: sigs }));
         return null;
       }
@@ -407,7 +409,8 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         return false;
       }
       // A creation is never what a re-timed request stands in for.
-      approved = req.prep ? null : { id, summary: req.summary, at: now(), retimes: 0 };
+      // Only an auction is ever re-timed (`retimable`).
+      approved = req.prep || !retimable(req.summary.decoded) ? null : { id, summary: req.summary, at: now(), retimes: 0, outpoints: signedOutpoints(req.built).join(',') };
       post(toApp({ type: 'signed', id, txid: req.built.tx.id, signatures: sigs, ...(prepSigs ? { prepSignatures: prepSigs } : {}) }));
       return true;
     },

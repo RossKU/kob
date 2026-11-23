@@ -23,7 +23,7 @@ import { useSystemStatus } from '../shell/StatusProvider';
 import { useTradingStatus } from '../shell/StatusBar';
 import { planOrder, type Intent } from '../../kob/plan';
 import { errors, isPairEnv, type Clock, type OrderPlan, type TakeFacts } from '../../kob/plan-types';
-import type { TokenInfo } from '../../kob/registry';
+import { tickerUnit, type TokenInfo } from '../../kob/registry';
 import { formatKas, formatUnits, quoteOf } from '../../kob/units';
 import { costLine, costPreview } from './cost-preview';
 import { DEFAULT_CARRIER, heldAmount, unusableTokenHeld } from '../../kob/orders/common';
@@ -167,9 +167,11 @@ export function OrderTicket(props: OrderTicketProps) {
   // A pair is never shown inverted here. The pair page flips by swapping base and quote, which is
   // another pair and another route.
   const inverted = !quote && !!props.inverted;
-  const name = token.ticker;
+  // A ticker that reads as KAS carries 8 + 8 hex of the id (`tickerUnit`), so no amount here reads as
+  // native KAS.
+  const name = tickerUnit(token.ticker, token.covenantId);
   /** The ticker the prices are in: KAS, or the pair's quote token B. */
-  const quoteTicker = quote ? quote.ticker : 'KAS';
+  const quoteTicker = quote ? tickerUnit(quote.ticker, quote.covenantId) : 'KAS';
   const services = useServices();
   const contended = useCongestion();
   const wallet = useWallet();
@@ -356,7 +358,7 @@ export function OrderTicket(props: OrderTicketProps) {
 
   const layout = layoutOf(form, ctx);
   const errs = visibleErrors(built.errors).filter((e) => (form.values[e.field] ?? '') !== '');
-  const ticker = token.ticker;
+  const ticker = name;
 
   // Balances the wallet can spend. The planner does the exact funding check.
   const tokenBalance = env ? heldAmount(env) : 0n;
@@ -557,7 +559,7 @@ export function OrderTicket(props: OrderTicketProps) {
   // One line under the select that follows the choice. For Added to one UTXO, its tip and the tip
   // total follow under the tip box.
   // A pair sell receives token B, so the line names it.
-  if (delivery) deliverySubs.delivery = { text: quote && form.side === 'sell' ? t(`ticket.delivery.hint.${delivery}.pairSell`, { quote: quote.ticker }) : t(`ticket.delivery.hint.${delivery}`), testid: 'order-delivery-note' };
+  if (delivery) deliverySubs.delivery = { text: quote && form.side === 'sell' ? t(`ticket.delivery.hint.${delivery}.pairSell`, { quote: quoteTicker }) : t(`ticket.delivery.hint.${delivery}`), testid: 'order-delivery-note' };
   if (delivery === 'topup' && planned?.delivery.choice === 'topup') {
     const tip = BigInt(planned.delivery.fields.topupTip);
     const kas = formatKas(topupTipTotal(tip, planned.fills), { group: ',' });
@@ -583,10 +585,10 @@ export function OrderTicket(props: OrderTicketProps) {
     // The dollars of the estimate. Only a KAS quote has a price in dollars. The slot stays while
     // USD is chosen, so nothing moves when a figure comes or goes.
     const usd = fiat && !quote ? { text: pv.kind === 'cost' ? `≈ ${usdTextFit(sompiToUsd(pv.estimate, fiat.rate), 11)}` : '', title: pv.kind === 'cost' ? kasTitleOf(formatKas(pv.estimate, { group: ',' }), fiat) : '' } : null;
-    return { text, unit: pv.kind === 'empty' ? '' : pv.kind === 'thin' ? ticker : quote ? quote.ticker : 'KAS', usd };
+    return { text, unit: pv.kind === 'empty' ? '' : pv.kind === 'thin' ? ticker : quote ? quoteTicker : 'KAS', usd };
   }, [env, built.intent, plan, quote, token.decimals, ticker, fiat]);
   /** An amount of the market's quote (KAS, or a pair's token B) in words. */
-  const quoteText = (v: bigint): string => (quote ? `${formatUnits(v, quote.decimals, { group: ',' })} ${quote.ticker}` : `${formatKas(v, { group: ',' })} KAS`);
+  const quoteText = (v: bigint): string => (quote ? `${formatUnits(v, quote.decimals, { group: ',' })} ${quoteTicker}` : `${formatKas(v, { group: ',' })} KAS`);
   // The last order of a limit ladder is the one furthest from the typed price. It is planned too,
   // so a level that could never be placed is refused before the first is signed.
   // One curve order: its own plan. Its errors stop the button, and its carriers and fee are what
@@ -635,7 +637,7 @@ export function OrderTicket(props: OrderTicketProps) {
   // because a ladder's levels and a pair's quote token are planned apart.
   const [sellAfterMerge, setSellAfterMerge] = useState<{ leaves: ReadonlySet<string>; at: number } | null>(null);
   const merge = useMergeBeforeSale({
-    token, ticker: token.ticker, pubkey: wallet.info?.pubkey ?? null, env,
+    token, ticker: name, pubkey: wallet.info?.pubkey ?? null, env,
     issue: enabled && !quote && !ladder ? planErrors.find((i) => MERGE_ANSWERS.has(i.code)) : undefined,
     refresh,
     onMerged: (leaves) => setSellAfterMerge({ leaves, at: Date.now() }),
@@ -996,7 +998,7 @@ export function OrderTicket(props: OrderTicketProps) {
     void refresh().catch(() => null);
   };
 
-  const issueCtx = { tokenDecimals: token.decimals, tokenTicker: ticker, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quote.ticker } : {}) };
+  const issueCtx = { tokenDecimals: token.decimals, tokenTicker: ticker, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quoteTicker } : {}) };
   // ---- The reasons the order cannot be placed, and nothing else: one fixed-height slot above the
   // button. Warnings that never stop the order (a price far through the market, a low order value,
   // the fills of a market order) are not shown on the ticket at all. So nothing appears, changes or
@@ -1074,7 +1076,7 @@ export function OrderTicket(props: OrderTicketProps) {
   const spendBalance =
     form.side === 'buy'
       ? quote
-        ? { amount: formatUnits(quoteBalance, quote.decimals, { group: ',' }), unit: quote.ticker }
+        ? { amount: formatUnits(quoteBalance, quote.decimals, { group: ',' }), unit: quoteTicker }
         : { amount: formatKas(kasBalance, { group: ',' }), unit: 'KAS' }
       : { amount: formatUnits(tokenBalance, token.decimals, { group: ',' }), unit: ticker };
   const available = enabled && env ? spendBalance : undefined;

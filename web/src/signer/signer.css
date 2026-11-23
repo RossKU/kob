@@ -79,3 +79,6 @@ button:disabled { color: var(--muted); background: var(--bg); border-color: var(
 
 /* The GitHub Pages mirror (app/mirror.ts): the page shows only why there is no key entry, and a link to the app. */
 .frame-guard-url { color: var(--muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+/* the network of a request (main.ts `networkOf`): small, and bold on mainnet */
+.net { margin: -4px 0 8px; font-size: 0.85rem; color: var(--muted); }
+.net-main { color: var(--bad); font-weight: 700; }

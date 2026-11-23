@@ -159,4 +159,6 @@ export default {
   'signer.waitWhy': 'Approve is locked until you have seen the whole request. Keep this window fully on screen and scroll through every line. Anything over it, a zoomed page or a cut-off window keeps it locked.',
   'signer.waitCounts': 'Check: buttons {buttons}, lines seen {lines}, covered parts {covered}.',
   'signer.reject': 'Reject',
+  'signer.network.mainnet': 'Network: mainnet. Real funds.',
+  'signer.network.other': 'Network: {network}. Test funds.',
 };

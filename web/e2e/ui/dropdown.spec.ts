@@ -203,7 +203,14 @@ test('Settings: the kit\'s Field keeps its label on the control', async ({ appPa
   const label = page.locator(`label[for="${id}"]`);
   await expect(label).toHaveText('Network');
   await expect(network).toHaveAttribute('aria-labelledby', `${id}-label ${id}`);
-  await expect(network).toHaveAttribute('aria-describedby', `${id}-hint`);
+  // Its explanation is behind the label's "?" (no hint under the control, so nothing in the page
+  // describes it): the "?" is named after the field and opens the text.
+  await expect(network).not.toHaveAttribute('aria-describedby', /./);
+  const help = page.getByTestId('settings-network-help');
+  await expect(help).toHaveAttribute('aria-label', 'More about Network');
+  await help.click();
+  await expect(page.getByTestId('settings-network-help-panel')).not.toBeEmpty();
+  await page.keyboard.press('Escape');
   await label.click();
   await expect(page.getByTestId('settings-network-panel')).toBeVisible();
   await page.keyboard.press('Escape');

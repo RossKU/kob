@@ -1,6 +1,7 @@
 export const NETWORKS: string[];
 export const MAX_EXTRA_INDEXERS: number;
-export interface PagesConfig { network: string; indexerUrl?: string; extraIndexerUrls?: string[]; nodeUrl?: string; explorerUrl?: string; tokenNamesUrl?: string; /** pinned to its network: the header offers no network switch (unless KOB_PAGES_NETWORK_SWITCH) */ lockNetwork?: boolean }
+export const MAX_INCIDENT_CHARS: number;
+export interface PagesConfig { network: string; indexerUrl?: string; extraIndexerUrls?: string[]; nodeUrl?: string; explorerUrl?: string; tokenNamesUrl?: string; /** pinned to its network: the header offers no network switch (unless KOB_PAGES_NETWORK_SWITCH) */ lockNetwork?: boolean; /** KOB_PAGES_INCIDENT_*: the incident banner */ incident?: { message: string; since?: string; url?: string } }
 /**
  * True for a host name that is not reachable from the public internet (loopback, private,
  * link-local, unspecified).

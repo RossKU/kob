@@ -15,7 +15,7 @@ import { daaToUnix } from '../../kob/daa';
 import { scaleOf } from '../../kob/order-facts';
 import { planOrder } from '../../kob/plan';
 import { errors } from '../../kob/plan-types';
-import type { TokenInfo } from '../../kob/registry';
+import { tickerUnit, type TokenInfo } from '../../kob/registry';
 import type { Hex, OrderState } from '../../kob/types';
 import { Banner, Button, HelpTip, IssueLine, Loading, Modal, RawDetails, toError } from '../kit';
 import { DisclosurePanel } from '../ticket/DisclosurePanel';
@@ -55,6 +55,9 @@ const orderValueOf = (row: OrderRowModel): bigint | null => {
 export function ReplaceDialog(props: ReplaceDialogProps) {
   const services = useServices();
   const { row, state, token, quote } = props;
+  // A ticker that reads as KAS carries 8 + 8 hex of the id (`tickerUnit`).
+  const unit = tickerUnit(token.ticker, token.covenantId);
+  const quoteUnit = quote ? tickerUnit(quote.ticker, quote.covenantId) : null;
   // A pair order re-plans against the pair environment, with both tokens and the pair book. A KAS
   // order re-plans against its token's market.
   const kasEnv = useTicketEnv(token, !quote);
@@ -105,10 +108,10 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
     () =>
       shownPlan?.disclosure && env
         ? buildDisclosureModel(shownPlan, {
-            ticker: token.ticker, decimals: token.decimals, scale: shownPlan.disclosure.scale, clock: env.clock, ...(quote ? { quote: { ticker: quote.ticker, decimals: quote.decimals } } : {}),
+            ticker: unit, decimals: token.decimals, scale: shownPlan.disclosure.scale, clock: env.clock, ...(quote ? { quote: { ticker: quoteUnit!, decimals: quote.decimals } } : {}),
           })
         : null,
-    [shownPlan, env, token.ticker, token.decimals, quote?.ticker, quote?.decimals],
+    [shownPlan, env, unit, token.decimals, quoteUnit, quote?.decimals],
   );
   const canReview = !!shownPlan && shownPlan.ok && planErrors.length === 0 && !!shownPlan.request && !pending && !busy && !crash;
 
@@ -144,7 +147,7 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
 
   const layout = shownForm ? layoutOf(shownForm, ctx) : null;
   const errs = built && shownForm ? visibleErrors(built.errors).filter((e) => (shownForm.values[e.field] ?? '') !== '') : [];
-  const issueCtx = { tokenDecimals: token.decimals, tokenTicker: token.ticker, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quote.ticker } : {}) };
+  const issueCtx = { tokenDecimals: token.decimals, tokenTicker: unit, ...(quote ? { quoteDecimals: quote.decimals, quoteTicker: quoteUnit! } : {}) };
 
   return (
     <Modal
@@ -186,11 +189,11 @@ export function ReplaceDialog(props: ReplaceDialogProps) {
               ?
             </button>
           </div>
-          <TicketFields form={shownForm} ctx={ctx} ticker={token.ticker} ids={layout.main} errors={errs} onChange={onChange} {...(quote ? { quoteTicker: quote.ticker } : {})} />
+          <TicketFields form={shownForm} ctx={ctx} ticker={unit} ids={layout.main} errors={errs} onChange={onChange} {...(quote ? { quoteTicker: quoteUnit! } : {})} />
           <details class="tk-advanced" data-testid="replace-advanced">
             <summary>{t('ticket.advanced')}</summary>
             <div class="tk-advanced-body">
-              <TicketFields form={shownForm} ctx={ctx} ticker={token.ticker} ids={layout.advanced} errors={errs} onChange={onChange} {...(quote ? { quoteTicker: quote.ticker } : {})} />
+              <TicketFields form={shownForm} ctx={ctx} ticker={unit} ids={layout.advanced} errors={errs} onChange={onChange} {...(quote ? { quoteTicker: quoteUnit! } : {})} />
             </div>
           </details>
         </div>

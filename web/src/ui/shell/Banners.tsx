@@ -84,3 +84,23 @@ export function StatusBanner(props: { entry: StatusEntry; onNavigate: () => void
     </Banner>
   );
 }
+
+/**
+ * The operator's incident notice (config.json `incident`): one warning at the top of every page,
+ * with no dismiss. Its message is plain text and its link an https address, both checked by the
+ * config loader. It blocks nothing.
+ */
+export function IncidentBanner() {
+  const { config } = useServices();
+  const n = config.incident;
+  if (!n) return null;
+  return (
+    <div style="margin-bottom:16px">
+      <Banner tone="warn" class="banner-compact" title={t('shell.incident.title')} data-testid="banner-incident">
+        <span data-testid="banner-incident-text">{n.message}</span>
+        {n.since ? <> <span class="muted" data-testid="banner-incident-since">{t('shell.incident.since', { time: `${n.since.slice(0, 16).replace('T', ' ')} UTC` })}</span></> : null}
+        {n.url ? <> <a href={n.url} target="_blank" rel="noopener noreferrer" data-testid="banner-incident-link">{t('shell.incident.more')}</a></> : null}
+      </Banner>
+    </div>
+  );
+}

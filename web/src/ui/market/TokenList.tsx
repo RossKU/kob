@@ -385,7 +385,9 @@ export function TokenList(props: { invalidToken?: string }) {
   const kascovTokens = kascov.status === 'ok' ? kascov.tokens : null;
   // The connected wallet's tokens (use-wallet-holdings.ts). Each one the lists do not name gets a
   // row, so its holder finds its market and places its first order there, and every one the
-  // wallet holds is marked. Nothing of this reaches anyone else's list.
+  // wallet holds is marked. Nothing of this reaches anyone else's list, which is why such a row's
+  // creator-hosted logo is gated as in the wallet views (data/logo-gate.ts `logoScope`): only the
+  // holder would ever ask for it.
   const { holdings, connected } = useWalletHoldings(`${generation}|${saKey}`);
   const heldSet = useMemo(() => heldIds(holdings), [holdings]);
   const built = useMemo(() => buildTokenRows(registry, tokens.data ?? null, pasted, declared), [registry, tokens.data, pasted, declared]);

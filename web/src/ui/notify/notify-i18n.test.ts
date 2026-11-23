@@ -97,6 +97,15 @@ describe('payment notifications name the amount and the unit like the portfolio 
     expect(describeEvent(ev({ token: id, params: { amount: '2663250640' } }), none, fiat, 'testnet-10').body).toBe('Received 26.6325 55aa…07bf at your address.');
   });
 
+  it('a token ticker KAS is never printed bare: it carries 8 + 8 hex of the id', () => {
+    for (const ticker of ['KAS', 'kas', 'KA5', 'КАS', 'KAS​']) {
+      const reg = { byCovenantId: new Map([[id, { ticker, decimals: 0 } as unknown as TokenInfo]]) };
+      const body = describeEvent(ev({ token: id, params: { amount: '1000000' } }), reg, null, 'testnet-10').body;
+      expect(body).toBe(`Received 1,000,000 ${ticker} (55aac2b5…773e07bf) at your address.`);
+      expect(body).not.toBe(describeEvent(ev({ params: { amount: '100000000000000' } }), null, null, 'testnet-10').body);
+    }
+  });
+
   it('KAS without USD, and with USD after the KAS amount', () => {
     expect(describeEvent(ev({ params: { amount: '2946000' } }), null, null, 'testnet-10').body).toBe('Received 0.0295 KAS at your address.');
     const usd = describeEvent(ev({ params: { amount: '2946000' } }), null, fiat, 'testnet-10');

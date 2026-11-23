@@ -15,7 +15,7 @@ import { UNLIMITED_REPEAT_COUNT } from '../../kob/orders/cond-common';
 import { stopWorstPrice } from '../../kob/orders/cond-legs';
 import { baseKind, isMultiFillMarket, type OrderDescription } from '../../kob/order-facts';
 import type { Clock } from '../../kob/plan-types';
-import { longId, type ExtensionReference, type TokenInfo, type TokenRegistry } from '../../kob/registry';
+import { longId, tickerUnit, type ExtensionReference, type TokenInfo, type TokenRegistry } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { decimalsOfScale, formatKas, formatPricePerToken, formatTokenAmount, quoteOf, statePriceToTokenPrice } from '../../kob/units';
 import { t, type Params, RAW_TOKEN_DECIMALS } from '../../i18n';
@@ -202,13 +202,19 @@ export function tokenLabel(ref: TokenRef, tr: Translate = t, registry?: TokenReg
 }
 
 /**
+ * The unit a token's amounts and prices are printed in: its ticker, with 8 + 8 hex of its id where
+ * the ticker reads as KAS (`tickerUnit`), else its id.
+ */
+const unitOf = (ref: TokenRef): string => (ref.ticker == null ? longId(ref.covenantId) : tickerUnit(ref.ticker, ref.covenantId));
+
+/**
  * A token amount in whole tokens, of its decimals when known (a hint, the scale of its order),
  * else its raw amount, said so.
  */
 export function tokenAmountText(ref: TokenRef, amount: bigint, tr: Translate = t): string {
   return ref.decimals === null
-    ? tr('token.amount.assumed', { amount: formatTokenAmount(amount, RAW_TOKEN_DECIMALS, GROUP), token: ref.ticker ?? longId(ref.covenantId) })
-    : `${formatTokenAmount(amount, ref.decimals, GROUP)} ${ref.ticker ?? longId(ref.covenantId)}`;
+    ? tr('token.amount.assumed', { amount: formatTokenAmount(amount, RAW_TOKEN_DECIMALS, GROUP), token: unitOf(ref) })
+    : `${formatTokenAmount(amount, ref.decimals, GROUP)} ${unitOf(ref)}`;
 }
 
 /**
@@ -308,7 +314,7 @@ function priceText(price: bigint, d: OrderDescription, f: Fmt): { value: string;
   if (d.scale <= 0n) return { value: `${formatKas(price, GROUP)} KAS` };
   return {
     // "X KAS per TOKEN" (whole tokens), never the pair notation "X TOKEN / KAS".
-    value: f.tr('confirm.f.perUnit', { price: formatPricePerToken(price, decimalsOf(f.ref), d.scale, GROUP), unit: 'KAS', per: f.ref.ticker ?? longId(f.ref.covenantId) }),
+    value: f.tr('confirm.f.perUnit', { price: formatPricePerToken(price, decimalsOf(f.ref), d.scale, GROUP), unit: 'KAS', per: unitOf(f.ref) }),
   };
 }
 
@@ -323,11 +329,11 @@ const approxTime = (daa: bigint, f: Fmt): string | null => (f.clock ? f.time(daa
  */
 /** The bare amount of a pair price, whole B. The unit follows as "B per A". */
 const pairNumber = (ref: TokenRef, amount: bigint): string => formatTokenAmount(amount, decimalsOf(ref), GROUP);
-const bUnit = (ref: TokenRef): string => ref.ticker ?? longId(ref.covenantId);
+const bUnit = (ref: TokenRef): string => unitOf(ref);
 
 function pairPriceText(price: bigint, d: OrderDescription, f: Fmt): { value: string; detail?: string } {
   const bRef = onScale(refOf(f.registry, d.pair!.quote.covId), d.pair!.quote.scale);
-  const aName = f.ref.ticker ?? longId(f.ref.covenantId);
+  const aName = unitOf(f.ref);
   if (d.scale <= 0n) return { value: f.tr('confirm.f.perUnit', { price: pairNumber(bRef, price), unit: bUnit(bRef), per: aName }) };
   const perWholeA = statePriceToTokenPrice(price, decimalsOf(f.ref), d.scale, 'nearest');
   return { value: f.tr('confirm.f.perUnit', { price: pairNumber(bRef, perWholeA), unit: bUnit(bRef), per: aName }) };
@@ -351,8 +357,8 @@ function pairRows(d: OrderDescription, f: Fmt): Row[] {
   const { tr } = f;
   const x = d.pair!;
   const bRef = onScale(refOf(f.registry, x.quote.covId), x.quote.scale);
-  const aName = f.ref.ticker ?? longId(f.ref.covenantId);
-  const bName = bRef.ticker ?? longId(x.quote.covId);
+  const aName = unitOf(f.ref);
+  const bName = unitOf(bRef);
   const rows: Row[] = [];
   rows.push(row('pairPair', tr('confirm.f.pairPair'), tr(d.side === 'sell' ? 'confirm.f.pairSells' : 'confirm.f.pairBuys', { base: aName, quote: bName })));
   if (x.escrowA > 0n) rows.push(row('pairEscrowA', tr('confirm.f.pairEscrowA'), tokenAmountText(f.ref, x.escrowA, tr)));

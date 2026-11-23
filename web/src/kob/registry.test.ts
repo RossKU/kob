@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  RegistryError, displayName, hasBadChar, normalizeTicker, parseRegistry, sanitizeUntrusted, tokenById, tokenMarketInput, tradableTokens,
+  RegistryError, displayName, hasBadChar, normalizeTicker, parseRegistry, readsAsKas, tickerUnit, sanitizeUntrusted, tokenById, tokenMarketInput, tradableTokens,
   verifyIndexerToken, verifyTokenUtxo, type ChainTokenUtxo, type RegistryIssueCode, type TokenRegistry,
 } from './registry';
 import { cleanGenesis, exampleRegistryJson, placeGolden, shippedRegistryJson, TOKEN, tradableRegistryJson } from '../testing/chain-fixtures';
@@ -350,6 +350,15 @@ describe('display and ticker skeletons', () => {
   it('normalizeTicker ignores characters that show nothing (soft hyphen, fillers, tags, selectors)', () => {
     const hid = ['\u00AD', '\u061C', '\u3164', '\u2800', '\uFE0F', '\u{E0041}'];
     for (const c of hid) expect(normalizeTicker('KRON' + c)).toBe(normalizeTicker('KRON'));
+  });
+
+  it('readsAsKas: KAS in any case, look-alike letters, invisible characters and spaces; tickerUnit adds the id to those only', () => {
+    for (const t of ['KAS', 'kas', 'Kas', 'KA5', 'K A S', 'КАS', 'KAS​', 'KA️S', 'ＫＡＳ']) expect(readsAsKas(t)).toBe(true);
+    for (const t of ['', 'KASX', 'WKAS', 'KRON', 'KA']) expect(readsAsKas(t)).toBe(false);
+    const id = 'ab'.repeat(4) + '0'.repeat(48) + 'cd'.repeat(4);
+    expect(tickerUnit('KAS', id)).toBe('KAS (abababab…cdcdcdcd)');
+    expect(tickerUnit('KRON', id)).toBe('KRON');
+    expect(tickerUnit('', id)).toBe('');
   });
 
   it('normalizeTicker matches the Rust homoglyph rule', () => {

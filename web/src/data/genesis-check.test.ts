@@ -174,7 +174,7 @@ describe.each([
     const r = await checkerFor(n).check('testnet-10', k.covenantId, { kascovBase: BASE });
     // The TokenSeed nobody revealed is rebuilt from the creator's key, which only the explorer's
     // transaction names.
-    expect(r).toMatchObject({ status: 'verified', source: 'explorer', program: 'KCC20PublicMint', supply: 0n, bridge: true, mintAllowance: null, mintersUnspent: null });
+    expect(r).toMatchObject({ status: 'verified', source: 'explorer', program: 'KCC20PublicMint', supply: 0n, bridge: true, mintUnbounded: true, mintAllowance: null, mintersUnspent: null });
     expect(n.urls).toHaveLength(2);
     // A federated bridge. What its minter names, unchecked: the hash of the signer keys and the
     // guardian key.
@@ -425,7 +425,7 @@ describe.each([
   it("verifies from kascov's file alone, says the issuance is a ZK bridge, names the bridge covenant its minter names and counts no public mint", async () => {
     const n = net();
     const r = await checkerFor(n).check('mainnet', k.covenantId, { kascovBase: BASE });
-    expect(r).toMatchObject({ status: 'verified', source: 'kascov', program: 'KCC20PublicMint', supply: 0n, bridge: true, mintAllowance: null, mintersUnspent: null });
+    expect(r).toMatchObject({ status: 'verified', source: 'kascov', program: 'KCC20PublicMint', supply: 0n, bridge: true, mintUnbounded: true, mintAllowance: null, mintersUnspent: null });
     expect(r).toMatchObject({ bridgeMinter: { kind: 'zk', facts: { bridgeCovenantId: k.bridgeCovenantId } } });
     expect(n.urls).toHaveLength(1);
     const sent: GenesisRequest[] = [];

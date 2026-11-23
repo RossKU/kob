@@ -9,6 +9,8 @@
 /* the head of the final confirmation (the user's intent, above the confirmation screen's sections): also drawn by the signer frame */
 /* the final confirmation of an external wallet: the private-key signer's table (signer/signer.css), the same rows and look */
 .send-confirm h2 { font-size: 1rem; margin: 0 0 8px; }
+.send-confirm .send-net { margin: -4px 0 8px; font-size: 0.85rem; color: var(--muted); }
+.send-confirm .send-net-main { color: var(--bad); font-weight: 700; }
 .send-lines { margin: 0; }
 .send-line { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); }
 .send-line dt { color: var(--muted); }

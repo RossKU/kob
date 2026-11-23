@@ -71,6 +71,8 @@ Repository *Settings* > *Secrets and variables* > *Actions*.
 | `KOB_PAGES_NETWORKS` | no | the servers of the site's other network, as JSON: `config.json` `networks` (section 4d). Only `testnet-10` on a mainnet site; unset = none |
 | `KOB_PAGES_HOST_NETWORKS` | no | the default network of each host name, as JSON: `config.json` `hostNetworks` (section 4d); unset = the site's network on every host |
 | `KOB_PAGES_NETWORK_SWITCH` | no | `1` / `true` = the header network switch (section 6); unset or `0` = the site is pinned (`"lockNetwork": true`); any other value fails the run. The internal mainnet app is always pinned |
+| `KOB_PAGES_INCIDENT_MESSAGE` | no | an incident notice: every page of the app shows it as one warning banner at the top (`config.json` `incident`, see "The incident banner" below). Plain text, at most 280 characters; unset = no banner. Every site of the run gets it |
+| `KOB_PAGES_INCIDENT_SINCE`, `KOB_PAGES_INCIDENT_URL` | no | with the message only: when the incident began (an ISO date, e.g. `2026-11-23T10:00Z`) and an `https://` link to more (a status page); a wrong value fails the run |
 | `KOB_PAGES_BRANCH` | no | the project's production branch, default `main` |
 | `KOB_PAGES_MAINNET_PROJECT` | no | the Pages project of the **internal mainnet app** only (e.g. `kob-web-mainnet`, section 4c). There is no public mainnet site: set without `KOB_PAGES_MAINNET_INTERNAL=1` it fails the run. Create the project empty first (section 4c, step 1) |
 | `KOB_PAGES_MAINNET_INDEXER_URL` | no | the indexer of the internal mainnet app (section 4c); set without `KOB_PAGES_MAINNET_PROJECT` it fails the run |
@@ -300,6 +302,22 @@ After a change, open *Actions* > *deploy-pages* > *Run workflow* (branch `master
 
 **Until the two secrets and the two required variables are set, the workflow does nothing**: job `config` writes "Cloudflare
 Pages deploy skipped" and what is missing into the run's summary, and job `deploy` is skipped. CI stays green (forks too).
+
+### The incident banner
+
+During an incident (an indexer down or behind, a bug being fixed) the operator can tell every visitor without a code change:
+set `KOB_PAGES_INCIDENT_MESSAGE` (and optionally `KOB_PAGES_INCIDENT_SINCE` and `KOB_PAGES_INCIDENT_URL`), then *Run workflow*
+(a variable change alone does not deploy, see above). `scripts/pages-config.mjs` writes it into `config.json`:
+
+```json
+"incident": { "message": "The indexer is behind the chain; books may be out of date.", "since": "2026-11-23T10:00Z", "url": "https://status.example.org/1" }
+```
+
+The app (`web/src/config.ts` `parseIncident`, `ui/shell/Banners.tsx` `IncidentBanner`) shows one warning banner with no dismiss at the
+top of every page. The message is plain text, never HTML: control and invisible characters become spaces and it is cut at 280
+characters. The link is shown only if it is `https://` without credentials. The banner blocks nothing and changes no order flow.
+A malformed `incident` is ignored with a configuration warning, and the app works as without it. Only `config.json` (or
+`window.__KOB_CONFIG__`) can set it, never a link or a stored setting. To end it, delete the variables and run the workflow again.
 
 ## 4. What the workflow does
 

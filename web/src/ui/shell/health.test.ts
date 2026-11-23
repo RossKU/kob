@@ -50,6 +50,16 @@ describe('assessIndexerHealth', () => {
     expect(assessIndexerHealth({ ...base, health: view({ state: 'weird', ok: false }) })).toMatchObject({ level: 'warn', code: 'unknown-state' });
   });
 
+  it('a hung follower (stale) and a stopped one are as unusable as an unreachable indexer (audit 2026-11-23 C-M1)', () => {
+    // Still says following, a lag of 0, but no progress for 10 minutes.
+    expect(assessIndexerHealth({ ...base, health: view({ ok: false, stale: true }) })).toMatchObject({ level: 'bad', code: 'hung', fresh: false });
+    expect(assessIndexerHealth({ ...base, health: view({ state: 'catching_up', stale: true, lag_seconds: 3 }) })).toMatchObject({ level: 'bad', code: 'hung' });
+    expect(assessIndexerHealth({ ...base, health: view({ state: 'stopped', ok: false, halt_reason: 'follower panicked' }) })).toMatchObject({ level: 'bad', code: 'stopped', fresh: false });
+    // An older indexer sends no `stale`: absent is false.
+    expect(assessIndexerHealth({ ...base, health: view() })).toMatchObject({ level: 'ok', code: 'ok' });
+    expect(assessIndexerHealth({ ...base, health: view({ stale: false }) }).code).toBe('ok');
+  });
+
   it('flags an indexer on another network (spelling differences do not count)', () => {
     expect(assessIndexerHealth({ ...base, health: view({ network: 'mainnet' }) })).toMatchObject({ level: 'bad', code: 'wrong-network' });
     expect(assessIndexerHealth({ ...base, health: view({ network: 'kaspa_testnet_10' }) }).code).toBe('ok');

@@ -9,7 +9,7 @@ import { hasIssuerControl, KNOWN_POWERS, riskFactIds, tokenLabel, tokenRiskCodes
  * What a row's facts are printed from. They are the facts and, on a token page, KOB's own genesis
  * check, which adds a reason and the public mint to some of them.
  */
-type FactRow = Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'> & Partial<Pick<TokenRow, 'genesis' | 'info'>>;
+type FactRow = Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'> & Partial<Pick<TokenRow, 'genesis' | 'info' | 'powers'>>;
 
 /**
  * The badge text of a fact. "Genesis not verified" says why when KOB's check could not be done. The
@@ -18,6 +18,7 @@ type FactRow = Pick<TokenRow, 'covenantId' | 'ticker' | 'facts'> & Partial<Pick<
 export function factLabel(r: FactRow, id: TokenFactId): string {
   const g = r.genesis;
   if (id === 'genesis_unverified' && g?.status === 'unavailable') return `${t('market.fact.genesis_unverified.label')}: ${t(`market.genesis.reason.${g.reason}`)}`;
+  if (id === 'mint_allowance' && g?.status === 'verified' && g.bridge === true) return t('market.fact.mint_allowance.labelBridge');
   if (id === 'mint_allowance' && g?.status === 'verified' && g.mintUnbounded === true) return t('market.fact.mint_allowance.labelUnbounded');
   if (id === 'mint_allowance' && g?.status === 'verified' && g.mintAllowance !== null) {
     return t(g.mintersUnspent === true ? 'market.fact.mint_allowance.label' : 'market.fact.mint_allowance.labelUpTo', { amount: tokenAmountText(r.covenantId, g.mintAllowance) });
@@ -36,7 +37,14 @@ export function factText(r: FactRow, id: TokenFactId): string {
     return t(live ? 'market.fact.mint-authority.textLive' : minters && minters.length === 0 ? 'market.fact.mint-authority.textNone' : 'market.fact.mint-authority.text');
   }
   if (id === 'genesis_failed' && g?.status === 'failed') return t(`market.genesis.failed.${g.code}`);
+  // A program with a mint authority (KRON's minter cell) can mint inside the program too, so an
+  // unchecked creation may hold a live minter: the sentence says so.
+  if (id === 'genesis_unverified' && r.powers?.includes('mint-authority')) {
+    const base = t('market.fact.genesis_unverified.textMint');
+    return g?.status === 'unavailable' ? `${base} ${t(`market.genesis.reasonSentence.${g.reason}`)}` : base;
+  }
   if ((id === 'genesis_unverified' || id === 'genesis_kascov') && g?.status === 'unavailable') return `${t(`market.fact.${id}.text`)} ${t(`market.genesis.reasonSentence.${g.reason}`)}`;
+  if (id === 'mint_allowance' && g?.status === 'verified' && g.bridge === true) return t('market.fact.mint_allowance.textBridge');
   if (id === 'mint_allowance' && g?.status === 'verified' && g.mintUnbounded === true) return t('market.fact.mint_allowance.textUnbounded');
   if (id === 'mint_allowance' && g?.status === 'verified' && g.mintAllowance !== null) {
     return t(g.mintersUnspent === true ? 'market.fact.mint_allowance.text' : 'market.fact.mint_allowance.textUpTo', { amount: tokenAmountText(r.covenantId, g.mintAllowance) });

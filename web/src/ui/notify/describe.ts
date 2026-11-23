@@ -10,7 +10,7 @@ import { pow10 } from '../../kob/units';
 import type { NotificationEvent } from '../../kob/notifications';
 import type { TokenRegistry } from '../../kob/registry';
 import { kasText, pricePerTokenText, scaleOfDecimals, shortId, tokenText } from '../kit/format';
-import { shortId as covenantFragment } from '../../kob/registry';
+import { shortId as covenantFragment, tickerUnit } from '../../kob/registry';
 
 /**
  * `what` of a `reorg` event, the kinds of change a chain re-organisation can make to an own order.
@@ -34,7 +34,8 @@ export function describeEvent(e: NotificationEvent, registry: Pick<TokenRegistry
   const info = e.token ? displayToken(registry ?? NO_REGISTRY, network, e.token) : undefined;
   // `displayToken` names an unnamed token by its long id, and a notification says it short.
   const named = !!info && !isUnnamed(info.ticker, e.token);
-  const token = named ? info.ticker : e.token ? covenantFragment(e.token) : '?';
+  // A ticker that reads as KAS carries 8 + 8 hex of the id, so "Received 1,000 KAS" is only ever KAS.
+  const token = named ? tickerUnit(info.ticker, e.token!) : e.token ? covenantFragment(e.token) : '?';
   const side = e.side ? t(`notify.side.${e.side}`) : '';
   const p = e.params;
   // Amounts are base units as decimal strings, shown in token units when the token is known.
@@ -75,8 +76,8 @@ export function describeEvent(e: NotificationEvent, registry: Pick<TokenRegistry
       if (p.price !== undefined && info && named && fiat) {
         // KAS per whole token = price x 10^decimals / (scale x 1e8).
         const scale = scaleOfDecimals(info.decimals);
-        price = `${usdText(kasPerTokenToUsd({ num: BigInt(String(p.price)) * pow10(info.decimals), den: scale * 100_000_000n }, fiat.rate))} per ${info.ticker}`;
-      } else if (p.price !== undefined) price = info && named ? `${pricePerTokenText(BigInt(String(p.price)), info.decimals, scaleOfDecimals(info.decimals))} KAS per ${info.ticker}` : t('notify.reorg.perScale', { price: kasText(BigInt(String(p.price))) });
+        price = `${usdText(kasPerTokenToUsd({ num: BigInt(String(p.price)) * pow10(info.decimals), den: scale * 100_000_000n }, fiat.rate))} per ${token}`;
+      } else if (p.price !== undefined) price = info && named ? `${pricePerTokenText(BigInt(String(p.price)), info.decimals, scaleOfDecimals(info.decimals))} KAS per ${token}` : t('notify.reorg.perScale', { price: kasText(BigInt(String(p.price))) });
     } catch {
       price = '';
     }

@@ -24,7 +24,7 @@ import { MAKER_PK, MAKER_SK, OTHER_PK } from '../testing/token-fixtures';
 import { kob } from '../testing/wallet-fixtures';
 import { signBuilt } from '../testing/local-signer';
 import { emptyIssueForm, planIssue, type IssuePlan } from '../kob/issue';
-import { listCreations, type CreationRecord } from '../data/creations';
+import { listCreations, saveCreation, type CreationRecord } from '../data/creations';
 import type { StorageLike } from '../config';
 import type { BuiltTx, InputSignature } from '../kob/types';
 
@@ -375,6 +375,20 @@ describe('signAndSubmitCreation: an extension wallet that checks its inputs on i
     expect(e.code).toBe(CREATION_SPENT);
     expect(e.message).toMatch(/cannot be finished/);
     expect(w.signs()).toBe(1);
+  });
+
+  it('a creation whose genesis is on chain but whose record stayed (the page closed first) finishes: no "start a new one", nothing signed (audit 2026-11-23 B3-L4)', async () => {
+    const s = setup();
+    const w = kasware(s);
+    s.node.rejectNext(new Error('websocket closed'));
+    await signAndSubmitCreation(args(s, w.adapter)).catch(() => undefined);
+    const rec = onlyRecord(s);
+    expect(await finishCreation(finishArgs(s, w.adapter, rec))).toBe(s.plan.built.tx.id);
+    // the page died before the record was removed: the same record is offered again
+    saveCreation(rec, s.storage);
+    const signs = w.signs();
+    expect(await finishCreation(finishArgs(s, w.adapter, rec))).toBe(rec.genesisTxid);
+    expect(w.signs()).toBe(signs);
   });
 
   it('the gate times out (the preparation is not listed): the wallet is not asked, the record stays', async () => {

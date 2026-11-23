@@ -51,6 +51,13 @@
 //                                 the other, and switching a public site to mainnet is the mainnet
 //                                 launch.
 //
+//   KOB_PAGES_INCIDENT_MESSAGE    optional: an incident notice, shown as one warning banner at the
+//                                 top of every page of the app (config.json `incident`, plain text,
+//                                 at most 280 characters). It blocks nothing. Unset = no banner.
+//   KOB_PAGES_INCIDENT_SINCE      optional, with the message: when it began (an ISO date, e.g.
+//                                 2026-11-23T10:00Z)
+//   KOB_PAGES_INCIDENT_URL        optional, with the message: an https link to more (a status page)
+//
 //   KOB_PAGES_INTERNAL            `1`: the build is the internal mainnet app (a protected preview
 //                                 deployment, docs/ops/web-hosting.md 4c): `--dist` also writes
 //                                 robots.txt (Disallow: /) and adds `X-Robots-Tag: noindex,
@@ -68,6 +75,8 @@ import { DEFAULT_REGISTRY_PATH } from '../registry-pin.mjs';
 
 export const NETWORKS = ['testnet-10', 'mainnet'];
 export const MAX_EXTRA_INDEXERS = 4;
+/** The longest incident message (web/src/config.ts INCIDENT_MAX_CHARS). */
+export const MAX_INCIDENT_CHARS = 280;
 
 /**
  * True for a host name that is not reachable from the public internet (loopback, private,
@@ -140,6 +149,7 @@ export function pagesConfig(env) {
     else tokenNamesUrl = r.url;
   }
 
+  const incident = incidentNotice(env, errors, notes);
   if (errors.length) return { config: null, errors, notes };
   const config = { network, indexerUrl, extraIndexerUrls, nodeUrl };
   if (!switchOn) config.lockNetwork = true;
@@ -147,6 +157,7 @@ export function pagesConfig(env) {
   if (tokenNamesUrl !== undefined) config.tokenNamesUrl = tokenNamesUrl;
   if (networks) config.networks = networks;
   if (hostNetworks) config.hostNetworks = hostNetworks;
+  if (incident) config.incident = incident;
   return { config, errors, notes };
 }
 
@@ -198,6 +209,34 @@ function siteServers(name, v, network, errors, notes) {
     else explorerUrl = r.url;
   }
   return { indexerUrl, extraIndexerUrls, nodeUrl, explorerUrl };
+}
+
+/**
+ * KOB_PAGES_INCIDENT_*: config.json `incident` (`{ message, since?, url? }`), or undefined when no
+ * message is set. The app checks it again and shows it as plain text.
+ */
+function incidentNotice(env, errors, notes) {
+  const message = String(env.KOB_PAGES_INCIDENT_MESSAGE ?? '').replace(/\s+/g, ' ').trim();
+  const since = String(env.KOB_PAGES_INCIDENT_SINCE ?? '').trim();
+  const url = String(env.KOB_PAGES_INCIDENT_URL ?? '').trim();
+  if (!message) {
+    if (since || url) errors.push('KOB_PAGES_INCIDENT_SINCE / KOB_PAGES_INCIDENT_URL: set without KOB_PAGES_INCIDENT_MESSAGE');
+    return undefined;
+  }
+  if ([...message].length > MAX_INCIDENT_CHARS) errors.push(`KOB_PAGES_INCIDENT_MESSAGE: ${[...message].length} characters, at most ${MAX_INCIDENT_CHARS}`);
+  if (/[<>]/.test(message)) notes.push('KOB_PAGES_INCIDENT_MESSAGE: shown as plain text, so markup appears as typed');
+  const out = { message };
+  if (since) {
+    if (!/^\d{4}-\d{2}-\d{2}/.test(since) || Number.isNaN(Date.parse(since))) errors.push(`KOB_PAGES_INCIDENT_SINCE: \`${since}\` is not an ISO date (e.g. 2026-11-23T10:00Z)`);
+    else out.since = since;
+  }
+  if (url) {
+    const r = publicUrl('KOB_PAGES_INCIDENT_URL', url, ['https:']);
+    if (r.error) errors.push(r.error);
+    else out.url = r.url;
+  }
+  notes.push(`KOB_PAGES_INCIDENT_MESSAGE: every page shows the incident banner "${message}"`);
+  return out;
 }
 
 const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
