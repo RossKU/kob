@@ -30,9 +30,9 @@ import { mergeOrientations } from './pair-model';
 import { mergePairFills } from '../activity/activity-model';
 import { PAIR_DEPTH_LEVELS, pairDepthOf, pairVolumeOf, type PairDepth, type PairVolume } from './pair-market';
 import { buildTokenRows, idOnlyRow, isNameless, parseCovenantId, tokenLabel, tradableHere, tradableRows, type TokenRow } from './token-model';
-import { filterRows, heldIds, heldRows, NO_FILTERS, toggleFilter, withHeldRows, type FilterKey, type ListFilters } from './held-list';
+import { filterRows, heldIds, heldRows, NO_FILTERS, STANDALONE_HOLDINGS_MS, toggleFilter, withHeldRows, type FilterKey, type ListFilters } from './held-list';
 import { ListFilterMenu, type FilterItem } from './ListFilterMenu';
-import { useHeldDeclarations, useWalletHoldings } from './use-wallet-holdings';
+import { useHeldDeclarations, useThrottledKey, useWalletHoldings } from './use-wallet-holdings';
 import { useKascov } from './use-kascov';
 import { useHeldUntil, useListPage, useListPageSize, usePooledSlots } from './use-market-list';
 import { isAbort } from '../kit/hooks';
@@ -367,6 +367,7 @@ export function TokenList(props: { invalidToken?: string }) {
   const [pasted, setPasted] = useState<IndexerTokenView[]>([]);
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
   const [generation, setGeneration] = useState(0);
+  const [refreshes, setRefreshes] = useState(0);
   const firstKey = useRef(saKey);
   useEffect(() => {
     if (firstKey.current === saKey) return;
@@ -388,7 +389,11 @@ export function TokenList(props: { invalidToken?: string }) {
   // wallet holds is marked. The logo gate learns the holdings from this read: the creator-hosted
   // logo of every token the wallet holds, a listed one included, is gated as in the wallet views
   // (data/logo-gate.ts `logoScope`), since loading it would tell its creator's host who holds it.
-  const { holdings, connected } = useWalletHoldings(`${generation}|${saKey}`);
+  // In standalone mode the book's version moves once or twice a block, but other people's orders
+  // do not move the wallet's holdings: each read is a node request, so the version is followed at
+  // most every 30 s. A mode change and the refresh read them at once.
+  const saHoldings = useThrottledKey(sa?.active ? sa.version : -1, STANDALONE_HOLDINGS_MS);
+  const { holdings, connected } = useWalletHoldings(`${refreshes}|${sa?.active ? 'standalone' : 'indexer'}|${saHoldings}`);
   const heldSet = useMemo(() => heldIds(holdings), [holdings]);
   const built = useMemo(() => buildTokenRows(registry, tokens.data ?? null, pasted, declared), [registry, tokens.data, pasted, declared]);
   const mine = useMemo(
@@ -531,6 +536,7 @@ export function TokenList(props: { invalidToken?: string }) {
     tokens.reload();
     pairs.reload();
     setGeneration((g) => g + 1);
+    setRefreshes((g) => g + 1);
   };
   const cols = TOKEN_FIGURES.length + 1;
   // The menu offers a filter only where it can change something: the wallet's tokens with a

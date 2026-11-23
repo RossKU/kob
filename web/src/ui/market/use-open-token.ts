@@ -7,7 +7,7 @@
 // scale of orders that may exist.
 import { issuedToken } from '../../data/issued-decimals';
 import { noteMarketDecimals, noteTokenProgram, type DeclaredToken } from '../../data/token-declarations';
-import { useEffect, useMemo } from 'preact/hooks';
+import { useEffect, useMemo, useRef } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { extensionReferences, synthesizeOpenToken, type ScaleSample, type OpenTokenIssue } from '../../kob/open-token';
 import { familyOfProgram } from '../../kob/token-state';
@@ -15,6 +15,7 @@ import type { TokenInfo } from '../../kob/registry';
 import type { Hex, TokenProgram, TokenUtxo } from '../../kob/types';
 import { useAsync } from '../kit';
 import type { TokenRow } from './token-model';
+import { STANDALONE_HOLDINGS_MS } from './held-list';
 
 export interface OpenTokenState {
   /**
@@ -37,6 +38,10 @@ export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: num
   const { indexer, kob, registry, tracker, config } = useServices();
   const pubkey = useWallet().info?.pubkey ?? null;
   const view = row && row.source !== 'registry' && row.index ? row.index : null;
+  // The holdings are one node read. `refreshKey` moves with the book, once or twice a block in
+  // standalone mode, and other people's orders do not move them: an answer is used again for up
+  // to 30 s, a failure (none) too.
+  const held = useRef<{ key: string; at: number; list: TokenUtxo[] } | null>(null);
   const facts = useAsync(
     async (signal): Promise<{ scales: ScaleSample[]; ext: Hex | null; holdings: TokenUtxo[] } | null> => {
       if (!view || !indexer) return null;
@@ -51,9 +56,13 @@ export function useOpenToken(row: TokenRow | null, refreshKey = 0, decimals: num
       // the pick unchecked and never blocks the page.
       const program = kob.templates().find((t) => t.hash === view.template_hash && t.tokenSlots)?.name as TokenProgram | undefined;
       noteTokenProgram(config.network, view.covenant_id, program);
+      const key = `${pubkey}|${view.covenant_id}|${program}`;
+      const last = held.current;
       const holdings =
         pubkey && tracker && program && familyOfProgram(program) === 'kcc20'
-          ? await tracker.tokenUtxosFor(pubkey, { covenantId: view.covenant_id, program }).catch(() => [])
+          ? last && last.key === key && Date.now() - last.at < STANDALONE_HOLDINGS_MS
+            ? last.list
+            : await tracker.tokenUtxosFor(pubkey, { covenantId: view.covenant_id, program }).catch((): TokenUtxo[] => []).then((list) => ((held.current = { key, at: Date.now(), list }), list))
           : [];
       return { scales, ext, holdings };
     },

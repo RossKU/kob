@@ -10,7 +10,7 @@ import type { HeldTokenUtxo } from '../../data/token-tracker';
 import { logoGate } from '../../data/logo-gate';
 import type { Hex } from '../../kob/types';
 import { useAsync } from '../kit';
-import { heldIds } from './held-list';
+import { heldIds, throttledKey } from './held-list';
 import { ownTokenIdsOf } from '../../kob/order-facts';
 import type { PlacementRecord } from '../../kob/records';
 import type { KobWasm } from '../../kob/wasm';
@@ -43,6 +43,19 @@ const NONE: readonly HeldTokenUtxo[] = [];
  * gated logos wait. At most two more reads per wallet and list key.
  */
 const RETRY_MS = [15_000, 60_000] as const;
+
+/** `key`, taken at most once every `ms`: the newest value once the wait is over. */
+export function useThrottledKey<T>(key: T, ms: number): T {
+  const [shown, setShown] = useState<{ key: T; at: number }>(() => ({ key, at: Number.NEGATIVE_INFINITY }));
+  const step = throttledKey(shown, key, Date.now(), ms);
+  useEffect(() => {
+    if (step.shown !== shown) return setShown(step.shown);
+    if (step.wait === null) return;
+    const h = setTimeout(() => setShown({ key, at: Date.now() }), step.wait);
+    return () => clearTimeout(h);
+  }, [shown, key, ms]);
+  return step.shown.key;
+}
 
 /** `reloadKey`: a new value reads the holdings again, as the list's refresh does. */
 export function useWalletHoldings(reloadKey: unknown): WalletHoldings {

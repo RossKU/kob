@@ -139,3 +139,20 @@ export function filterRows<R extends TokenRow>(o: FilterInput<R>): R[] {
   const kept = f.held ? view.filter((r) => o.heldIds.has(r.covenantId.toLowerCase())) : view;
   return filterTokens(kept, o.query) as R[];
 }
+
+/**
+ * How often, at most, the market list reads the wallet's holdings again as the standalone book
+ * moves (R4B-L2). The book's version moves once or twice a block, and other people's orders do not
+ * move the wallet's holdings. Each read is one node `getUtxosByAddresses`.
+ */
+export const STANDALONE_HOLDINGS_MS = 30_000;
+
+/**
+ * One step of a key that follows `key` at most once every `ms`. `shown` is the key in use and when
+ * it was taken. The result is the key to use now and, while `key` waits, the ms until it may be.
+ */
+export function throttledKey<T>(shown: { key: T; at: number }, key: T, now: number, ms: number): { shown: { key: T; at: number }; wait: number | null } {
+  if (Object.is(shown.key, key)) return { shown, wait: null };
+  const wait = shown.at + ms - now;
+  return wait <= 0 ? { shown: { key, at: now }, wait: null } : { shown, wait };
+}

@@ -3,7 +3,7 @@ import type { DeclaredToken } from '../../data/token-declarations';
 import { parseRegistry, type TokenRegistry } from '../../kob/registry';
 import type { TokenState } from '../../kob/types';
 import { loadKobNode } from '../../kob/wasm.node';
-import { activeFilters, filterRows, heldIds, heldRows, NO_FILTERS, toggleFilter, withHeldRows, type Holding, type ListFilters } from './held-list';
+import { activeFilters, filterRows, heldIds, heldRows, NO_FILTERS, STANDALONE_HOLDINGS_MS, throttledKey, toggleFilter, withHeldRows, type Holding, type ListFilters } from './held-list';
 import { heldEntry } from './market-list';
 import { buildTokenRows, idOnlyRow, isNameless, tradableRows, unknownRow, type TokenRow } from './token-model';
 
@@ -126,5 +126,26 @@ describe('filters', () => {
     f = toggleFilter(toggleFilter(f, 'nameless'), 'hidden');
     expect(f).toEqual({ favorites: false, hidden: false, held: true, nameless: true });
     expect(activeFilters(NO_FILTERS)).toBe(0);
+  });
+});
+
+describe('the holdings key in standalone mode (R4B-L2)', () => {
+  it('follows ten book versions in one second with one read, and the last version after 30 s', () => {
+    let shown = { key: 'sa:0', at: Number.NEGATIVE_INFINITY };
+    let reads = 0;
+    const waits: number[] = [];
+    for (let v = 1; v <= 10; v++) {
+      const s = throttledKey(shown, `sa:${v}`, 1_000 + v * 100, STANDALONE_HOLDINGS_MS);
+      if (s.shown !== shown) reads++;
+      if (s.wait !== null) waits.push(s.wait);
+      shown = s.shown;
+    }
+    expect(reads).toBe(1);
+    expect(shown.key).toBe('sa:1');
+    // the newest version waits for the rest of the 30 s, then is read once
+    expect(Math.max(...waits)).toBeLessThanOrEqual(STANDALONE_HOLDINGS_MS);
+    const later = throttledKey(shown, 'sa:10', 1_100 + STANDALONE_HOLDINGS_MS, STANDALONE_HOLDINGS_MS);
+    expect(later.shown.key).toBe('sa:10');
+    expect(throttledKey(later.shown, 'sa:10', 99_999, STANDALONE_HOLDINGS_MS).shown).toBe(later.shown);
   });
 });
