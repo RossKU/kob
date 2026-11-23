@@ -899,6 +899,8 @@ fn an_unlisted_token_commitment_must_match_the_wallets_holdings() {
 /// The node proves the listed bids exist, not that the indexer hides none, so the sell still needs
 /// a floor price of the user's or `--ack-market-start` (E-M2). A start far below the last fill
 /// needs the acknowledgement. The same holds for `close`.
+///
+/// TST's decimals come from the indexer alone, so every placement confirms them with `--decimals 3` (B2-M5).
 #[test]
 fn a_market_sell_starts_at_a_node_confirmed_bid() {
     let real = [0xb1; 32];
@@ -911,7 +913,7 @@ fn a_market_sell_starts_at_a_node_confirmed_bid() {
     };
     let row = |cov: [u8; 32], price: &str| json!({"covenant_id": to_hex(&cov), "price": price, "amount_left": "40000", "scale": 1000});
     let place = crate::trade::place::run;
-    let sell = "market --token TST --side sell --amount 1TST --floor-price 1.9KAS --yes";
+    let sell = "market --token TST --side sell --amount 1TST --floor-price 1.9KAS --yes --decimals 3";
     // Only a phantom bid: nothing the node confirms, so there is no start to sell at.
     book(json!([row([0xb2; 32], "250000000")]));
     assert_eq!(run(place, w.args(0x11, sell)), 1);
@@ -919,7 +921,7 @@ fn a_market_sell_starts_at_a_node_confirmed_bid() {
     // The phantom above the real bid is left out; the sell starts at the real 2 KAS. With no
     // bound of the user's, it is refused all the same: a hidden better bid would not show.
     book(json!([row([0xb2; 32], "250000000"), row(real, "200000000")]));
-    assert_eq!(run(place, w.args(0x11, "market --token TST --side sell --amount 1TST --yes")), 1);
+    assert_eq!(run(place, w.args(0x11, "market --token TST --side sell --amount 1TST --yes --decimals 3")), 1);
     assert_eq!(w.submitted(), 0);
     assert_eq!(run(place, w.args(0x11, sell)), 0);
     assert_eq!(w.submitted(), 1);
@@ -931,13 +933,13 @@ fn a_market_sell_starts_at_a_node_confirmed_bid() {
     let fill = json!({"items": [{"price": "300000000"}], "price_basis": "1000"});
     w.indexer_state.lock().unwrap().routes.insert(format!("/v1/trades/{}?limit=1", to_hex(&TOKEN)), fill);
     assert_eq!(run(place, w.args(0x11, sell)), 1);
-    assert_eq!(run(place, w.args(0x11, "close --token TST --amount 1TST --yes")), 1);
+    assert_eq!(run(place, w.args(0x11, "close --token TST --amount 1TST --yes --decimals 3")), 1);
     assert_eq!(w.submitted(), 1);
     assert_eq!(run(place, w.args(0x11, &format!("{sell} --ack-market-start"))), 0);
     assert_eq!(w.submitted(), 2);
     assert!(w.issue_codes(".place.json").iter().any(|c| c == "MARKET_START_ACKNOWLEDGED"));
     // A floor names the bound of a sell only.
-    assert_eq!(run(place, w.args(0x11, "market --token TST --side buy --amount 1TST --floor-price 2KAS --yes")), 1);
+    assert_eq!(run(place, w.args(0x11, "market --token TST --side buy --amount 1TST --floor-price 2KAS --yes --decimals 3")), 1);
     assert_eq!(w.submitted(), 2);
 }
 
@@ -953,7 +955,7 @@ fn a_market_buy_skips_a_phantom_ask() {
             {"covenant_id": to_hex(&[0xa2; 32]), "price": "100000000", "amount_left": "5000", "scale": 1000},
             {"covenant_id": to_hex(&real), "price": "300000000", "amount_left": "5000", "scale": 1000}]}),
     );
-    assert_eq!(run(crate::trade::place::run, w.args(0x22, "market --token TST --side buy --amount 1TST --yes")), 0);
+    assert_eq!(run(crate::trade::place::run, w.args(0x22, "market --token TST --side buy --amount 1TST --yes --decimals 3")), 0);
     assert!(w.issue_codes(".place.json").iter().any(|c| c == "BOOK_ORDERS_DROPPED"));
     let AnyState::KobBid(b) = &recover_orders(&w.signed(".place.json").tx).unwrap()[0].order else { panic!() };
     assert_eq!(b.price, 300_000_000);
@@ -976,7 +978,10 @@ fn indexer_decimals_that_the_orders_on_the_node_contradict_are_refused() {
     assert_eq!(run(place, w.args(0x11, sell)), 1);
     assert_eq!(w.submitted(), 0);
     w.indexer_state.lock().unwrap().routes.get_mut("/v1/tokens").unwrap()["tokens"][0]["decimals"] = json!(3);
-    assert_eq!(run(place, w.args(0x11, sell)), 0);
+    // B2-M5: an order on the node at the indexer's scale does not confirm them on its own (its maker may be the indexer)
+    assert_eq!(run(place, w.args(0x11, sell)), 1);
+    assert_eq!(w.submitted(), 0);
+    assert_eq!(run(place, w.args(0x11, &format!("{sell} --decimals 3"))), 0);
     assert!(w.issue_codes(".place.json").iter().any(|c| c == "TOKEN_DECIMALS_CHECKED"));
 }
 
