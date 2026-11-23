@@ -744,7 +744,7 @@ pub fn run_setup_with(
         io.say("");
         let x402 = ask_yes(
             io,
-            "Also serve the x402 facilitator (payments for other services; it needs its own configuration file, docs/ops/executor.md A.6)?",
+            "Also serve the x402 facilitator (experimental at launch: payments for other services; it needs its own configuration file, docs/ops/executor.md A.6)?",
             false,
         )?;
         if x402 {

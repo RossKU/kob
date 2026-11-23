@@ -310,7 +310,7 @@ pub struct RunArgs {
     pub liveness: crate::keepers::LivenessArgs,
     #[command(flatten, next_help_heading = "Work selection among executors (advanced)")]
     pub select: crate::matcher::select::SelectArgs,
-    /// Also serve the x402 facilitator (strict JSON configuration,
+    /// Also serve the x402 facilitator (experimental at launch; strict JSON configuration,
     /// `crates/kobd/x402.example.json`). Its `node` is the indexer's `--rpc-url`; its `network`
     /// must be the indexer's. Not served with `--dry-run`; with it the first start has no fast
     /// start (its book is bound to one store).
