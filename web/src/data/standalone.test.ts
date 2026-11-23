@@ -12,7 +12,7 @@ import type { StreamBlock } from './block-stream';
 import type { IndexerApi } from './indexer';
 import type { BookOrderView, HealthView, LevelView } from './indexer-types';
 import { IndexerError } from './indexer';
-import { ENTER_CHECK_MS, LAG_RETURN_SECONDS, LAG_SWITCH_SECONDS, RECHECK_MS, RETURN_CHECK_MS, StandaloneController, VERIFY_DELAY_MS, isIndexerDown, modeIndexer, type StandalonePrefs } from './standalone';
+import { ENTER_CHECK_MS, LAG_RETURN_SECONDS, MIN_AUTO_MS, LAG_SWITCH_SECONDS, RECHECK_MS, RETURN_CHECK_MS, StandaloneController, VERIFY_DELAY_MS, isIndexerDown, modeIndexer, type StandalonePrefs } from './standalone';
 import { StreamBook, bookViewOf, listingOf, MIN_ORDER_VALUE_SOMPI, orderViewOf, tokensViewOf } from './stream-book';
 
 const kob = loadKobNode();
@@ -77,8 +77,29 @@ describe('the mode', () => {
     h.c.report(good);
     expect(h.c.state.active).toBe(true);
     await vi.advanceTimersByTimeAsync(RETURN_CHECK_MS + 10);
+    // not before MIN_AUTO_MS after it started (R3B-I1)
+    expect(h.c.state.active).toBe(true);
+    await vi.advanceTimersByTimeAsync(MIN_AUTO_MS);
     expect(h.c.state).toMatchObject({ active: false, reason: null, phase: 'off' });
     expect(h.subs).toHaveLength(0);
+  });
+
+  it('an indexer that goes up and down every 10 s switches the page at most once a minute each way (R3B-I1)', async () => {
+    const h = harness();
+    let starts = 0;
+    let was = false;
+    h.c.subscribe((s) => {
+      if (s.active && !was) starts++;
+      was = s.active;
+    });
+    for (let t = 0; t < 3_600_000; t += 10_000) {
+      const up = (t / 10_000) % 2 === 1;
+      h.setHealth(up ? health('following') : new Error('down'));
+      h.c.report(up ? good : bad);
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(starts).toBeGreaterThan(0);
+    expect(starts).toBeLessThanOrEqual(60);
   });
 
   it('a flickering indexer does not end the mode: a bad look before the second one keeps it', async () => {
@@ -91,7 +112,8 @@ describe('the mode', () => {
     await vi.advanceTimersByTimeAsync(RETURN_CHECK_MS + 10);
     expect(h.c.state.active).toBe(true);
     // the mode looks at the indexer itself: usable twice in a row, it ends without the status poll
-    await vi.advanceTimersByTimeAsync(5_000 + RETURN_CHECK_MS + 10);
+    // (once MIN_AUTO_MS has passed)
+    await vi.advanceTimersByTimeAsync(MIN_AUTO_MS + 5_000 + RETURN_CHECK_MS + 10);
     expect(h.c.state.active).toBe(false);
   });
 
@@ -241,9 +263,9 @@ describe('an indexer that falls behind the chain', () => {
     h.setHealth(lagged(LAG_SWITCH_SECONDS - 30));
     await vi.advanceTimersByTimeAsync(RETURN_CHECK_MS + 10);
     expect(h.c.state.active).toBe(true);
-    // caught up on two looks in a row: it ends
+    // caught up on two looks in a row: it ends (once MIN_AUTO_MS has passed)
     h.setHealth(lagged(LAG_RETURN_SECONDS - 5));
-    await vi.advanceTimersByTimeAsync(RETURN_CHECK_MS * 3);
+    await vi.advanceTimersByTimeAsync(RETURN_CHECK_MS * 3 + MIN_AUTO_MS);
     expect(h.c.state).toMatchObject({ active: false, behind: false });
   });
 
