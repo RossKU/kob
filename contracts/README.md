@@ -121,16 +121,8 @@ programs the tests run against.
   per-transaction slot limits (4/5, 8/8, 16/16).
   - `KCC20Ref_8x8` stays pinned so that testnet tokens issued with it remain tradable.
   - No tool issues it any more (the CLI refuses `--program 8x8-prototype`); tokens that exist on it are held, traded and recovered as before.
-- **`prototypes/kcc20/p2/`.** The optional batch-leader extension of KCC-20 (KOB code), proposed as a separate KCC. Implemented
-  and tested, not used for issuance; KOB issues the standard 3/3. Overview: `prototypes/kcc20/p2/README.md`.
-  - `KCC20Opt` is the 3/3 reference holder program. Its delegator accepts as leader its own template, or the batch-leader
-    template committed by the constructor constants `B_TPL` / `B_PRE` / `B_SUF`. All zeros disables it, and the committed
-    artifact is that disabled instance. `kob_protocol::kcc20::kcc20_opt_holder_source` generates it; it is tested in
-    `kcc20_opt_tests.rs` and in the KCC-20 conformance harness (`docs/spec/kcc-conformance.md` section 6).
-  - `KCC20Batch` is the 16-slot batch leader. It has amount 0; anyone can clone one from the public seed, and its owner (a wallet
-    or an executor) runs batches.
-  - `KCC20P2` is the earlier form of `KCC20Opt` (a two-entry leader allowlist without the all-zeros switch), kept as a
-    measurement.
+- **`prototypes/kcc20/p2/`.** Optional batch leader for KCC-20 (KOB code): holder `KCC20Opt`, leader `KCC20Batch`. Tested, not
+  used for issuance; see `prototypes/kcc20/p2/README.md`.
 - **`adapters/kron/templates/*.bin`.** The two KRON token programs (2,433 B and 2,732 B), see `adapters/kron/templates/README.md`.
   They stay at this path because `registry/tokens.json` names it, and the mainnet deployment record pins that file.
 - **`third-party/kaspacom-kcc20/`.** KaspaCom's KCC20 0.2.5 token program artifact, vendored unmodified (Apache-2.0, provenance in
