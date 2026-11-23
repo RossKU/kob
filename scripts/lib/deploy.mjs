@@ -98,7 +98,11 @@ if (process.env.KOB_DEPLOY_NO_HISTORY === '1') {
   }
   // No diff filter: without a diff format git log selects no commit by one (audit 2026-11-24
   // R4F-1). A commit that deleted the record has no copy of it to read, so it is skipped.
-  const commits = git(`git log --format=%h -- ${recordFile}`).split('\n').filter(Boolean);
+  // --full-history: by default git follows only the parent a merge is TREESAME to, so a merge that
+  // took a branch's copy hides every commit behind its other parent (audit 2026-11-24 R5F-1). With it
+  // every commit that changed the record on any path into HEAD is read, whatever the merge direction;
+  // --first-parent would depend on it. A lock dropped on a branch before its merge then refuses too.
+  const commits = git(`git log --full-history --format=%h -- ${recordFile}`).split('\n').filter(Boolean);
   if (!commits.length && git(`git ls-files -- ${recordFile}`).trim()) die(`git log lists no commit of the tracked ${recordFile}: the lock-history check would compare nothing`);
   for (const c of commits) {
     try {

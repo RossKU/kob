@@ -75,3 +75,11 @@ The stand-in CLI of `test/` imitates `kob recover`; these points need the real C
   `mm-bot unresolved` lists a parked ask; `mm-bot drop --id <id>` with the bot running refuses, with the bot stopped
   prints the `kob recover` answer and refuses while the order is live (pass `--amount-left` of a partly filled one),
   and drops an ended one (an `operator-drop` line in `logs/actions.jsonl`).
+- R5T-1: a fully filled ask is kept as proven (`mm-bot unresolved` lists it as PROVEN, `status` shows it pending
+  `proven`), its level is placed again, and it leaves `state.json` 2 h after its expiry. `mm-bot stop` with proven
+  asks: the stop line names the lookups, the cancels and `<dataDir>/proven-not-found.json`; a real `kob recover --cancel`
+  of 20 records (4,000 candidate scripts) ends well inside `cli.timeoutSec`.
+- R5T-3: `mm-bot drop` of an ask with fills reported refuses without `--force`; with it, the order's record is appended
+  to `<dataDir>/dropped-orders.json`, and `kob recover --from <dataDir>/dropped-orders.json --network testnet-10`
+  reads that file (the extra `dropped` field of each item is ignored). `mm-bot unresolved` writes
+  `<dataDir>/unresolved-orders.json`, which `kob recover --from` reads too.
