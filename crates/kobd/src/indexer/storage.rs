@@ -1520,28 +1520,50 @@ fn checkpoint_out(path: &Path) -> DbResult<()> {
 /// (R3C2-3). Without this, a lean store would start fresh and a store with a record log would be
 /// refused. The old file comes back with its `-wal` and `-shm`; the half-swapped new file stays
 /// where it was. Returns whether it did.
+///
+/// Only a swap that stopped is undone: its new file (`.migrating`, `.vacuuming`) is still beside the
+/// copy, which proves that the last rename did not happen, and names the command. A `.before-migrate`
+/// is kept on purpose for days, so a store that is merely missing (an operator's fresh start) is
+/// left missing, with a warning that names the copies (R4C2-4).
 pub fn recover_interrupted_swap(path: &Path) -> DbResult<bool> {
     if path.exists() {
         return Ok(false);
     }
-    for suffix in [BEFORE_MIGRATE, BEFORE_VACUUM] {
-        let old = suffixed(path, suffix);
-        if !old.exists() {
-            continue;
-        }
-        // The log first: a stop between the two leaves the same state, which this repeats.
-        for s in ["-wal", "-shm"] {
-            let from = format!("{}{s}", old.display());
-            if Path::new(&from).exists() {
-                std::fs::rename(&from, format!("{}{s}", path.display()))?;
-            }
-        }
-        std::fs::rename(&old, path)?;
-        recordlog::sync_dir(path)?;
-        tracing::warn!(store = %path.display(), from = %old.display(), "the store was missing after an interrupted swap of `kobd db migrate` or `vacuum`: the old store is back in its place; run the command again");
-        return Ok(true);
+    let stopped: Vec<&str> = [(BEFORE_MIGRATE, MIGRATING), (BEFORE_VACUUM, VACUUMING)]
+        .into_iter()
+        .filter(|(before, new)| suffixed(path, before).exists() && suffixed(path, new).exists())
+        .map(|(before, _)| before)
+        .collect();
+    if stopped.len() > 1 {
+        return Err(bad(format!(
+            "{} is missing and both a stopped migrate and a stopped vacuum left their files beside it: put the right copy back by hand",
+            path.display()
+        )));
     }
-    Ok(false)
+    if stopped.is_empty() {
+        let copies: Vec<String> = [BEFORE_MIGRATE, BEFORE_VACUUM]
+            .into_iter()
+            .map(|s| suffixed(path, s))
+            .filter(|p| p.exists())
+            .map(|p| p.display().to_string())
+            .collect();
+        if !copies.is_empty() {
+            tracing::warn!(store = %path.display(), copies = %copies.join(", "), "the store is missing and no swap of `kobd db migrate` or `vacuum` was in progress: the copies beside it are not put back (move one to the store's name to use it)");
+        }
+        return Ok(false);
+    }
+    let old = suffixed(path, stopped[0]);
+    // The log first: a stop between the two leaves the same state, which this repeats.
+    for s in ["-wal", "-shm"] {
+        let from = format!("{}{s}", old.display());
+        if Path::new(&from).exists() {
+            std::fs::rename(&from, format!("{}{s}", path.display()))?;
+        }
+    }
+    std::fs::rename(&old, path)?;
+    recordlog::sync_dir(path)?;
+    tracing::warn!(store = %path.display(), from = %old.display(), "the store was missing after an interrupted swap of `kobd db migrate` or `vacuum`: the old store is back in its place; run the command again");
+    Ok(true)
 }
 
 /// The schema version a store file says it is (0: none).
@@ -1782,8 +1804,29 @@ mod swap_tests {
 
         // stopped after the first rename: the store is missing, its old copy is set aside
         std::fs::remove_file(&path).unwrap();
+        // a stop between the renames leaves the new file beside the copy
+        store(&new, 5);
         assert!(recover_interrupted_swap(&path).unwrap());
         assert_eq!(keys(&path), 3, "the old rows are back");
         assert!(!old.exists());
+    }
+
+    /// R4C2-4: a store that is merely missing, beside an old `.before-migrate` kept on purpose (and no swap's new file), is
+    /// not replaced by that copy. A migrate whose copy is kept followed by a vacuum that stopped puts back the vacuum's copy.
+    #[test]
+    fn a_missing_store_with_only_an_old_before_migrate_is_not_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.sqlite3");
+        let (before_migrate, before_vacuum) = (suffixed(&path, BEFORE_MIGRATE), suffixed(&path, BEFORE_VACUUM));
+        store(&before_migrate, 1);
+        assert!(!recover_interrupted_swap(&path).unwrap(), "an operator's fresh start");
+        assert!(!path.exists() && before_migrate.exists());
+
+        // a vacuum stopped between its renames, with the migrate's copy still kept
+        store(&before_vacuum, 7);
+        store(&suffixed(&path, VACUUMING), 9);
+        assert!(recover_interrupted_swap(&path).unwrap());
+        assert_eq!(keys(&path), 7, "the store from before the vacuum, not the older one from before the migrate");
+        assert!(before_migrate.exists());
     }
 }
