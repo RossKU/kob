@@ -186,7 +186,8 @@ contract KobIfdBid(
 
     // Stray guard, as KobBid.noStrays. No token input may be owned by this
     // covenant id. Fill, merge and update run it, and only the maker's cancel
-    // can move a stray. Every input carrying tokenCovId is a genuine token
+    // can move such a stray (one of another token, or owned by the order's
+    // script hash, is not guarded: docs/spec/order-types.md). Every input carrying tokenCovId is a genuine token
     // UTXO. Its owner sits at state offset 10, found from the end of its
     // sigscript, since the 112 B state is followed by the template suffix.
     // The scan is unrolled by hand over the MAX_TOK_IN slots, one line per

@@ -269,6 +269,17 @@ costs the entry.
 
 The pair entries (`KobIfdPair`) repeat the same way in the quote token B (*Pair if-done entries*).
 
+**Known limit: a repeating sell-first `KobIfdPair` can stall on its prefund's rounding** (audit 2026-11-23 R2A-2). Each fill of
+n moves `⌈n·prefund / scale(A)⌉` of the B prefund to its exit, and each merge of m returns `⌈m·prefund / scale(A)⌉`; the
+ceilings of a split cost up to one base unit of B more than the ceiling of the whole, and a merge may give one back or not.
+The builder adds one base unit per possible fill but the last (`IfdPairState::b_custody_needed`), which covers every split
+of a non-repeating entry. A repeating entry can take more fills than that over its life, so after enough fills and merges
+(about nine transactions in the reviewer's model: scale 10, prefund 13, 40 units, minimum fill 10) the prefund can be a few
+base units short of the next fill's ceiling: the covenant then refuses that fill (`used <= custody`) until a merge restores a
+unit, and the last remainder may wait. Nothing is lost: every exit is fully funded, and the maker can refund or cancel at any
+time. A builder slack that provably covers every sequence of a repeating entry was not found without a contract change (the
+next template generation can let a fill take `min(⌈n·prefund / scale(A)⌉, custody)` within a few units).
+
 **Keeper tip per cycle.** On every repeating entry (`KobIfdBid`, `KobIfdAsk`, `KobIfdPair` and their KRON twins) `update` pays
 `keeperTip` out of the entry's own KAS, and the placement amounts do not include it. Each re-arm cycle (fill, take profit,
 merge, keeper `update`) therefore costs the entry one keeper tip, up to 0.022 KAS. After many cycles a fill may need the
