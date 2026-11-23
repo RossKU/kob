@@ -910,20 +910,28 @@ fn decimals_unchecked(a: &TokenMarket) -> Issue {
 }
 
 /// The decimals of an unlisted token that come from the indexer, against the scales of the orders
-/// the node confirms (`book_check`). The indexer reading every amount and price with decimals the
-/// orders on the node do not use is refused.
+/// the node confirms (`book_check`).
+///
+/// Orders at another scale are a warning, not a refusal (R3T-5): anyone can post them, so they
+/// prove nothing, and a refusal let them block every placement. The decimals are confirmed
+/// elsewhere before anything is signed: by `--decimals N` (`env_for`), or by the scale the order's
+/// own state commits on the node (`kob replace`, `kob claim`).
 fn decimals_check(a: &TokenMarket, v: &super::book_check::VerifiedBook) -> Result<Option<Issue>, String> {
     let other = v.other_scales.iter().max_by_key(|(s, n)| (**n, std::cmp::Reverse(**s)));
     if let Some((s, n)) = other.filter(|(_, n)| **n > v.confirmed) {
-        return Err(format!(
-            "{}: its decimals ({}, {} base units per whole token) come from the indexer, but {n} of its orders confirmed on the \
-             node use {s} base units per whole token and {} use the indexer's: refused (the indexer's decimals disagree with \
-             the orders on the node)",
-            a.name(),
-            a.decimals,
-            a.scale,
-            v.confirmed
-        ));
+        return Ok(Some(Issue {
+            code: "TOKEN_DECIMALS_OTHER_SCALE",
+            severity: Severity::Warning,
+            message: format!(
+                "{}: its decimals ({}, {} base units per whole token) come from the indexer and were confirmed, but {n} of its \
+                 orders confirmed on the node use {s} base units per whole token and {} use these: check the decimals the \
+                 issuer published",
+                a.name(),
+                a.decimals,
+                a.scale,
+                v.confirmed
+            ),
+        }));
     }
     Ok(Some(if v.confirmed == 0 {
         decimals_unchecked(a)

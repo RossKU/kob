@@ -91,7 +91,8 @@ The unit is required everywhere, also on `kob send` and `kob take`. A bare `2.5`
 "the amount: `2.5` has no unit (amounts always carry one: e.g. 2KAS or 200000000sompi)".
 
 Recipients of `kob send`: a token goes to a P2PK address or a 64-hex x-only key; KAS to any address of the network or a
-64-hex key.
+64-hex key. A token whose decimals only the indexer names (no registry entry, no KCC-23 declaration) needs `--decimals N`
+for a whole-token amount, as `kob place` does; an amount in base units (`1250base`) needs none.
 
 ## Which token a name means
 

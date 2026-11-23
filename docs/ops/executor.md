@@ -348,7 +348,9 @@ withdraw what came back. From the executor's folder, with `--network` and `--nod
 3. Stop the executor, delete `kob-pause`, and withdraw the plain KAS (`kobd withdraw --to <address> --amount all`, Quick start
    section 5). `kobd address-balance` shows what is left.
 
-The units are required (`125TUSD`, `1250base`, `0.08KAS`); `kob send --help` and `kob merge --help` list every option.
+The units are required (`125TUSD`, `1250base`, `0.08KAS`); `kob send --help` and `kob merge --help` list every option. A
+token whose decimals only the indexer names (no registry entry, no KCC-23 declaration) needs `--decimals N` for a
+whole-token amount, or the amount in base units.
 
 `kobd --indexer` (with the database tools `kobd db info`, `replay`, `export-orders`, `export-book`, `import-orders`, `rebase`), `match` and `keep` stay as
 standalone modes. The database and the record log are the same files in every mode; never run two
