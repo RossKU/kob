@@ -16,8 +16,8 @@
 // a new id. An existing entry is never edited or removed. When --out exists, a run keeps its entries
 // byte for byte and appends the new ones after its highest id (--first-id, if given, must be above
 // it), and it refuses a file whose entries no longer match its FROZEN_SHA256. The test
-// `dictionaries_are_frozen` compares that hash with the entries of the same file, so it cannot see
-// an overwrite: this script must not make one. Only --refreeze rewrites the file from --first-id
+// `dictionaries_are_frozen` compares the entries with a hash pinned by hand in indexer/packed.rs,
+// which this script never writes: after an append, pin the new hash there. Only --refreeze rewrites the file from --first-id
 // (default 1), and says so: a value stored against a replaced dictionary is then unreadable until
 // `kobd db replay`.
 //
