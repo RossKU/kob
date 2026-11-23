@@ -83,6 +83,15 @@
 //!   the authority's failure: it is handed over as a failing authority
 //!   ([`ChainSource::authority_failing`]), and with nothing to hand over to the health says so
 //!   (`authority_pace` `failing`: `/v1/health` is not `ok` and not ready).
+//! - Once an authority has kept up, the running time it spends with the lag above the
+//!   tolerance is limited to [`EXCURSION_BUDGET`] (300 s) within any [`EXCURSION_WINDOW`] (an
+//!   hour) of running time; past it, it fails the same way. A lag that swings above the tolerance
+//!   and back within each period is not kept up. A stint's catch-up before it first keeps up is
+//!   not charged.
+//! - A deposal is a strike against the deposed node ([`ChainSource::deposal_confirmed`]: longer
+//!   away each time) only once its successor keeps up after serving chain stamped between the
+//!   cursor block (plus the tolerance) and the deposal: chain that existed and was held back. A
+//!   halted network serves none, so it strikes no one.
 //! - The running time is the follower's own: it advances while a step or the pause after it
 //!   runs, in ticks of at most [`PAUSE_CAP`]. Whatever a node takes to answer is in it (every wait
 //!   on a node is a wait inside a step), the follower's own database work is not, and a gap
@@ -191,6 +200,14 @@ pub const AUTHORITY_LAG_TOLERANCE: Duration = Duration::from_secs(90);
 /// second while a step or the pause after it runs). A longer gap is a pause of the follower
 /// itself, which starts the progress rule's period again (module documentation, *Progress*).
 pub const PAUSE_CAP: Duration = Duration::from_secs(30);
+
+/// An authority that has kept up may spend at most this much of the follower's running time with
+/// the lag above the tolerance within any [`EXCURSION_WINDOW`] of it; past it, it is failing
+/// (module documentation, *Progress*). A lag that swings above the tolerance and back within each
+/// period passes the period rule, and would keep the web leaving and coming back for good.
+pub const EXCURSION_BUDGET: Duration = Duration::from_secs(300);
+/// The rolling window of [`EXCURSION_BUDGET`], on the running time.
+pub const EXCURSION_WINDOW: Duration = Duration::from_secs(3_600);
 
 /// How often the running time ticks while a step or the pause after it runs ([`PAUSE_CAP`]).
 const TICK: Duration = Duration::from_secs(1);
@@ -409,6 +426,29 @@ struct Rule {
     failed: Option<String>,
     /// When a slow host clock was last warned about.
     clock_warned: Option<tokio::time::Instant>,
+    /// This authority has kept up (its lag within the tolerance) since it leads: from then on its
+    /// time above the tolerance is charged to [`EXCURSION_BUDGET`].
+    kept_up: bool,
+    /// The running time of the last check and whether the lag was above the tolerance then.
+    last_check: Option<(u64, bool)>,
+    /// The spans of running time this authority spent above the tolerance after it kept up, oldest
+    /// first, within the last [`EXCURSION_WINDOW`].
+    excursions: std::collections::VecDeque<(u64, u64)>,
+    /// The authority deposed last, until its successor shows whether it was to blame.
+    blame: Option<Blame>,
+}
+
+/// A deposal waiting for its successor ([`ChainSource::deposal_confirmed`]).
+#[derive(Debug, Clone)]
+struct Blame {
+    /// The deposed authority (`ChainSource::authority_node`).
+    deposed: String,
+    /// The cursor block's time at the deposal, and the local clock then (ms).
+    cursor_ts: Option<u64>,
+    at_ms: u64,
+    /// The successor applied a block stamped between the two: chain that existed and the deposed
+    /// authority did not serve.
+    withheld: bool,
 }
 
 /// A period of the progress rule.
@@ -562,6 +602,10 @@ impl<S: ChainSource> Follower<S> {
                 restart: false,
                 failed: None,
                 clock_warned: None,
+                kept_up: false,
+                last_check: None,
+                excursions: Default::default(),
+                blame: None,
             }),
             own_busy: std::sync::atomic::AtomicUsize::new(0),
             cursor_seen: Mutex::new(None),
@@ -613,7 +657,7 @@ impl<S: ChainSource> Follower<S> {
 
     /// The progress rule at the cursor `cursor` (module documentation, *Progress*): the verdict,
     /// also published in `/v1/health` (`authority_pace`) and told the source
-    /// ([`ChainSource::note_pace`]). A period that failed is left for [`Follower::hand_over`].
+    /// ([`ChainSource::deposal_confirmed`]). A period that failed is left for [`Follower::hand_over`].
     async fn pace(&self, cursor: Hash32) -> PaceState {
         self.learn_cursor_time(cursor).await;
         let ts = self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()).filter(|(h, _)| *h == cursor).map(|(_, t)| t);
@@ -621,15 +665,20 @@ impl<S: ChainSource> Follower<S> {
         let key = self.source.authority_node();
         let tol = self.cfg.authority_lag_tolerance.as_millis() as i64;
         let stall = self.cfg.authority_stall.as_millis() as u64;
-        let (state, warn_clock) = {
+        let budget = EXCURSION_BUDGET.as_millis() as u64;
+        let window = EXCURSION_WINDOW.as_millis() as u64;
+        let (state, warn_clock, confirm) = {
             let mut g = self.rule();
             let r = &mut *g;
             if r.authority.as_deref() != Some(key.as_str()) {
-                // A new authority, or the first step: it begins with no period.
-                r.authority = Some(key);
+                // A new authority, or the first step: it begins with no period, and has not kept up.
+                r.authority = Some(key.clone());
                 r.period = None;
                 r.failing = false;
                 r.failed = None;
+                r.kept_up = false;
+                r.last_check = None;
+                r.excursions.clear();
             }
             let run = r.run_ms;
             if std::mem::take(&mut r.restart) {
@@ -637,6 +686,25 @@ impl<S: ChainSource> Follower<S> {
                     *p = Period { start_ms: run, start_lag: lag, calm_since: None };
                 }
             }
+            // The running time since the last check is charged as the lag stood then: above the
+            // tolerance, after this authority kept up, it is an excursion. The follower's own
+            // pauses are not on the running time, so they charge nothing.
+            let above = lag.is_none_or(|l| l > tol);
+            if let Some((prev, was_above)) = r.last_check {
+                if was_above && r.kept_up && run > prev {
+                    match r.excursions.back_mut() {
+                        Some(last) if last.1 == prev => last.1 = run,
+                        _ => r.excursions.push_back((prev, run)),
+                    }
+                }
+            }
+            r.last_check = Some((run, above));
+            let from = run.saturating_sub(window);
+            while r.excursions.front().is_some_and(|e| e.1 <= from) {
+                r.excursions.pop_front();
+            }
+            let used: u64 = r.excursions.iter().map(|&(a, b)| b - a.max(from)).sum();
+            let mut gained_period = false;
             let state = match lag {
                 Some(l) if l <= tol => {
                     if let Some(p) = r.period.as_mut() {
@@ -646,6 +714,7 @@ impl<S: ChainSource> Follower<S> {
                         }
                     }
                     r.failing = false;
+                    r.kept_up = true;
                     PaceState::KeepingUp
                 }
                 _ => {
@@ -668,8 +737,21 @@ impl<S: ChainSource> Follower<S> {
                                 tol / 1_000
                             ));
                         }
+                        gained_period = gained;
                         r.failing = !gained;
                         *p = Period { start_ms: run, start_lag: lag, calm_since: None };
+                    }
+                    // Past the budget of excursions: failing as well, and the budget starts again.
+                    if !r.failing && r.kept_up && used > budget {
+                        r.failed = Some(format!(
+                            "the chain authority does not keep up with real time: after it kept up it held the lag above {} s for {} s of the follower's running time within the last {} minutes (at most {} s)",
+                            tol / 1_000,
+                            used / 1_000,
+                            window / 60_000,
+                            budget / 1_000
+                        ));
+                        r.failing = true;
+                        r.excursions.clear();
                     }
                     match (r.failing, lag) {
                         (true, _) => PaceState::Failing,
@@ -678,13 +760,28 @@ impl<S: ChainSource> Follower<S> {
                     }
                 }
             };
+            // The authority deposed last: to blame once its successor keeps up after serving chain
+            // the deposed one had not; no one is, if the successor fails too, or the deposed one
+            // leads again.
+            let mut confirm = false;
+            if let Some(b) = &r.blame {
+                if b.deposed == key || state == PaceState::Failing {
+                    r.blame = None;
+                } else if b.withheld && (state == PaceState::KeepingUp || gained_period) {
+                    confirm = true;
+                    r.blame = None;
+                } else if ts.is_some_and(|t| t >= b.at_ms) {
+                    // It served everything that existed at the deposal, none of it held back.
+                    r.blame = None;
+                }
+            }
             // The cursor block stamped far ahead of the local clock: the host clock is slow.
             let ahead = lag.is_some_and(|l| -l > CLOCK_AHEAD_WARN.as_millis() as i64);
             let warn = ahead && r.clock_warned.is_none_or(|t| t.elapsed() >= CLOCK_WARN_EVERY);
             if warn {
                 r.clock_warned = Some(tokio::time::Instant::now());
             }
-            (state, warn)
+            (state, warn, confirm)
         };
         if warn_clock {
             tracing::warn!(
@@ -692,7 +789,10 @@ impl<S: ChainSource> Follower<S> {
                 "the cursor's chain block is stamped ahead of the local clock by more than a miner may stamp it: the host clock is slow (set it: NTP). The rule that judges the chain authority assumes a clock within 30 s of real time"
             );
         }
-        self.source.note_pace(state == PaceState::KeepingUp);
+        if confirm {
+            tracing::info!("the chain authority deposed last held back chain its successor served: it stays away longer (a strike)");
+            self.source.deposal_confirmed();
+        }
         let pace = AuthorityPace {
             state,
             lag_ms: lag,
@@ -778,10 +878,13 @@ impl<S: ChainSource> Follower<S> {
         if !moved {
             return None;
         }
-        // The new authority gets a period of its own.
+        // The new authority gets a period of its own. The deposed one is to blame (a strike, longer
+        // away) only if its successor keeps up after serving chain that existed at the deposal.
+        let cursor_ts = self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()).filter(|(h, _)| *h == cursor.hash).map(|(_, t)| t);
         {
             let mut r = self.rule();
-            r.authority = None;
+            let deposed = r.authority.take().unwrap_or_default();
+            r.blame = Some(Blame { deposed, cursor_ts, at_ms: self.mono_ms(), withheld: false });
             r.period = None;
             r.failing = false;
         }
@@ -1845,6 +1948,18 @@ impl<S: ChainSource> Follower<S> {
             .last()
             .filter(|b| proven || crate::rpc::verify::header_hash(&b.header) == Some(b.header.hash))
             .map(|b| (b.header.hash, b.header.timestamp));
+        // A deposal waiting for its successor: this batch serves chain stamped more than the
+        // tolerance after the cursor block and before the deposal, that is, chain that existed and
+        // the deposed authority held back. A halted network has none (`Blame`).
+        let tol = self.cfg.authority_lag_tolerance.as_millis() as u64;
+        let span = self.rule().blame.as_ref().filter(|b| !b.withheld).and_then(|b| b.cursor_ts.map(|c| (c + tol, b.at_ms)));
+        let withheld = span.is_some_and(|(lo, hi)| {
+            batch.added.iter().any(|b| {
+                b.header.timestamp > lo
+                    && b.header.timestamp <= hi
+                    && (proven || crate::rpc::verify::header_hash(&b.header) == Some(b.header.hash))
+            })
+        });
         let start = c.start;
         let t1 = std::time::Instant::now();
         let applied = self.blocking(move |i| i.apply_batch(start, &batch)).await;
@@ -1852,6 +1967,11 @@ impl<S: ChainSource> Follower<S> {
         match applied {
             Ok(a) => {
                 self.contradiction_unsynced.store(false, std::sync::atomic::Ordering::Relaxed);
+                if withheld {
+                    if let Some(b) = self.rule().blame.as_mut() {
+                        b.withheld = true;
+                    }
+                }
                 let window = {
                     let mut w = self.win();
                     if c.prefetched {

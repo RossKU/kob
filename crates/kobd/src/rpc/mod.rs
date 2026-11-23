@@ -374,13 +374,12 @@ pub trait ChainSource: Send + Sync + 'static {
             Ok(false)
         }
     }
-    /// The follower's progress rule at its last step: whether the chain authority keeps up with
-    /// real time (`indexer::follower`, *Progress*). A source that hands the authority over notes
-    /// whether a node began to lead at the tip, so that one deposed soon after from there stays
-    /// away longer each time (`multi::MultiNode`, `failover::Failover`). The default ignores it.
-    fn note_pace(&self, keeping_up: bool) {
-        let _ = keeping_up;
-    }
+    /// The chain authority this source deposed last ([`ChainSource::authority_failing`]) was to
+    /// blame: its successor kept up after serving chain that existed at the deposal and the deposed
+    /// one had not served (`indexer::follower`, *Progress*). A source that hands the authority
+    /// over keeps that node away longer each time (`multi::MultiNode`: `resolver::strike`;
+    /// `failover::Failover`: the primary's probe hold). The default ignores it.
+    fn deposal_confirmed(&self) {}
     /// The primary's copy of `runs` of a window `raw` from another node (`origin`, from `start`)
     /// differs from it (`why`). The default drops that node ([`ChainSource::report_lie`]). A
     /// source with a third node asks it first when the primary is a public node too

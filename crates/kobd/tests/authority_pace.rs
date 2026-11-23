@@ -100,11 +100,20 @@ struct Node {
     /// Holds the chain back by an amount that wanders between 2 and 30 s from answer to answer (ordinary jitter at the
     /// tip: a slow answer, a block that took long).
     jitter: AtomicU64,
+    /// Swings the lag: in every cycle of `.1` ms from `.0`, it serves the chain for the first `.2` ms and then
+    /// nothing new until the cycle ends (the lag rises at the rate of real time), then all of it at once.
+    swing: Mutex<Option<(u64, u64, u64)>>,
 }
 
 impl Node {
     fn new(miner: &Arc<Miner>) -> Arc<Node> {
-        Arc::new(Node { miner: miner.clone(), hold_ms: Mutex::new(None), speed: Mutex::new(None), jitter: AtomicU64::new(0) })
+        Arc::new(Node {
+            miner: miner.clone(),
+            hold_ms: Mutex::new(None),
+            speed: Mutex::new(None),
+            jitter: AtomicU64::new(0),
+            swing: Mutex::new(None),
+        })
     }
 
     fn chain(&self) -> &Arc<MockNode> {
@@ -133,6 +142,12 @@ impl ChainSource for Node {
             let phase = (now / 1_000) % 600;
             let tri = (if phase < 300 { phase } else { 600 - phase }) * 26_000 / 300;
             until = until.min(now.saturating_sub(2_000 + tri + k));
+        }
+        if let Some((t0, cycle, served)) = *self.swing.lock().unwrap() {
+            let into = now.saturating_sub(t0) % cycle;
+            if into >= served {
+                until = until.min(now - (into - served) - 1_000);
+            }
         }
         if let Some((x, at, from)) = *self.speed.lock().unwrap() {
             until = until.min(from + x * now.saturating_sub(at));
@@ -424,8 +439,9 @@ async fn a_halted_network_with_an_own_node_and_a_fallback_costs_only_switches() 
     };
     let source = Arc::new(Failover::new(own.clone(), fallback.clone(), "ws://10.52.0.1:18210", "resolver", "testnet-10", policy));
     let (f, health) = follower(&source, config(miner.first(), Duration::from_secs(1)), &clock);
-    // a while on the own node first (a deposal more than 30 minutes into a stint is no strike), then 20 minutes of halt
-    let (halt, resume) = (2_400u64, 2_400 + 1_200);
+    // 5 minutes after the start, 20 minutes of halt: a deposal for it is no strike (the successor serves no chain the
+    // own node held back), so it is not held off when blocks come again
+    let (halt, resume) = (300u64, 300 + 1_200);
     let (mut fresh_at, mut own_at, mut stopped) = (None, None, false);
     drive(&f, |s| {
         if s == halt {
@@ -454,4 +470,102 @@ async fn a_halted_network_with_an_own_node_and_a_fallback_costs_only_switches() 
     assert!(fresh <= 180, "fresh {fresh} s after blocks came again");
     let own = own_at.expect("back on the own node");
     assert!(own <= 180 + 3 * 30 + 30, "on the own node {own} s after blocks came again: {st:?}");
+}
+
+/// The budget of excursions: a node that kept up and then swings the lag up to 250 s and back every 7.5 minutes (161 s
+/// above the tolerance each time, then 200 s of serving everything) passes the period rule every time, and would keep
+/// the web leaving and coming back for good. Its time above the tolerance after it kept up is charged on the running
+/// time: past 300 s within the hour, in its second swing, it is failing and handed over.
+#[tokio::test(start_paused = true)]
+async fn a_lag_that_swings_above_the_tolerance_is_handed_over_once_its_budget_is_spent() {
+    let _g = serial().await;
+    let clock = Clock::new();
+    let miner = Miner::new(&clock, 5_000, 1_000);
+    let (a, b) = (Node::new(&miner), Node::new(&miner));
+    *a.swing.lock().unwrap() = Some((clock.now() + 60_000, 450_000, 200_000));
+    let source = pair(&a, &b, 20);
+    let (f, health) = follower(&source, config(miner.first(), Duration::from_secs(1)), &clock);
+    let (mut at, mut max_lag) = (None, 0);
+    drive(&f, |s| {
+        max_lag = max_lag.max(lag_secs(&health, &clock).unwrap_or(0));
+        if at.is_none() && source.board().authority() != 0 {
+            at = Some(s);
+        }
+        s < 3_600 && at.is_none()
+    })
+    .await;
+    assert!(max_lag >= 240, "it swung to {max_lag} s");
+    let at = at.expect("handed over within the hour");
+    // the first swing passes; the second spends the rest of the 300 s
+    assert!((800..=1_000).contains(&at), "handed over after {at} s");
+}
+
+/// Three pauses of kobd itself in an hour (two minutes each with no step: a long commit, a compaction, a stopped
+/// process): each leaves the lag above the tolerance, and the honest node needs seconds to catch up. Those seconds, not
+/// the pause, are charged to the budget: never failing, never handed over.
+#[tokio::test(start_paused = true)]
+async fn an_honest_node_after_three_own_pauses_an_hour_is_never_blamed() {
+    let _g = serial().await;
+    let clock = Clock::new();
+    let miner = Miner::new(&clock, 5_000, 1_000);
+    let (a, b) = (Node::new(&miner), Node::new(&miner));
+    let source = pair(&a, &b, 21);
+    let (f, health) = follower(&source, config(miner.first(), Duration::from_secs(1)), &clock);
+    let mut failing = 0;
+    for _ in 0..3 {
+        drive(&f, |s| {
+            failing += health.snapshot().authority_failing() as u32;
+            s < 1_080
+        })
+        .await;
+        tokio::time::sleep(Duration::from_secs(120)).await;
+        miner.mine();
+    }
+    drive(&f, |s| {
+        failing += health.snapshot().authority_failing() as u32;
+        s < 60
+    })
+    .await;
+    assert_eq!(source.board().authority(), 0, "never handed over");
+    assert_eq!(failing, 0, "never failing");
+    assert!(lag_secs(&health, &clock).is_some_and(|l| l <= 5));
+}
+
+/// A strike only when the successor shows the deposed node was to blame: the own node keeps up, then holds the lag at
+/// 100 s; it is deposed for the fallback, which serves the chain the own node held back and keeps up. That confirms
+/// the deposal: the own node is probed again only after a hold of 10 minutes, not after the usual 3 probes.
+#[tokio::test(start_paused = true)]
+async fn an_own_node_that_held_back_chain_is_held_off_after_its_deposal() {
+    let _g = serial().await;
+    let clock = Clock::new();
+    let miner = Miner::new(&clock, 5_000, 1_000);
+    let (own, fallback) = (Node::new(&miner), Node::new(&miner));
+    let policy = FailoverPolicy {
+        after_failures: 5,
+        after: Duration::from_secs(60),
+        probe_every: Duration::from_secs(30),
+        return_after_probes: 3,
+        max_reorg_blocks: 100,
+        max_behind_blue: 600,
+        check_timeout: Duration::from_secs(20),
+    };
+    let source = Arc::new(Failover::new(own.clone(), fallback.clone(), "ws://10.53.0.1:18210", "resolver", "testnet-10", policy));
+    let (f, _health) = follower(&source, config(miner.first(), Duration::from_secs(1)), &clock);
+    let (mut deposed, mut back) = (None, None);
+    drive(&f, |s| {
+        if s == 60 {
+            *own.hold_ms.lock().unwrap() = Some(100_000);
+        }
+        if deposed.is_none() && source.active() == 1 {
+            deposed = Some(s);
+        }
+        if deposed.is_some() && back.is_none() && source.active() == 0 {
+            back = Some(s);
+        }
+        s < 2_400 && back.is_none()
+    })
+    .await;
+    let (deposed, back) = (deposed.expect("deposed"), back.expect("back on the own node"));
+    assert!(back - deposed >= 600, "held off {} s after its deposal", back - deposed);
+    assert!(back - deposed <= 600 + 180, "then probed back: {} s", back - deposed);
 }

@@ -133,9 +133,6 @@ pub const CHURN_SPACING: Duration = Duration::from_secs(300);
 /// Resolutions all entries together may make within [`CHURN_WINDOW`].
 pub const CHURN_MAX: usize = 8;
 
-/// A chain authority that began to lead at the tip and is deposed within this long ([`strike`]):
-/// it held the index back rather than found a halted network.
-pub const STRIKE_WITHIN: Duration = Duration::from_secs(30 * 60);
 /// How long the first [`strike`] keeps a host away from every resolution. It doubles with each
 /// strike ...
 pub const STRIKE_AWAY: Duration = Duration::from_secs(10 * 60);
@@ -307,8 +304,8 @@ impl State {
     }
 }
 
-/// The chain authority `node` was deposed soon after it began to lead at the tip
-/// (`multi::MultiNode::authority_failing`). Its host stays out of every resolution for
+/// The chain authority `node` was deposed (`multi::MultiNode::authority_failing`) and held back chain
+/// that its successor then served (`multi::MultiNode::deposal_confirmed`). Its host stays out of every resolution for
 /// [`STRIKE_AWAY`], doubling with each further strike up to [`STRIKE_AWAY_MAX`], and starts again
 /// after [`STRIKE_FORGET`] without one. Like the failed hosts, it is avoided, not banned: when the
 /// resolvers name no other node, it is taken. Returns how long it stays away.
@@ -324,7 +321,7 @@ pub fn strike(node: &str) -> Duration {
     e.1 = now;
     let away = STRIKE_AWAY.saturating_mul(1u32 << (e.0 - 1).min(10)).min(STRIKE_AWAY_MAX);
     e.2 = now + away;
-    tracing::warn!(node = %h, strikes = e.0, away_secs = away.as_secs(), "a public chain authority was deposed soon after it began to lead at the tip: it is not resolved again for a while");
+    tracing::warn!(node = %h, strikes = e.0, away_secs = away.as_secs(), "a public chain authority that was deposed held back chain its successor served: it is not resolved again for a while");
     away
 }
 

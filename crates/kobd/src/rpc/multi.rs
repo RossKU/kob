@@ -898,18 +898,9 @@ pub struct MultiNode<N: ChainSource> {
     bodies_unchecked: Mutex<Option<BodiesUnchecked>>,
     /// The third node asked when the pair contradicts each other ([`MultiNode::with_referee`]).
     referee: Option<Arc<N>>,
-    /// The authority node and how it began to lead ([`ChainSource::note_pace`]): a public node
-    /// deposed soon after it began at the tip stays away longer each time (`resolver::strike`).
-    led: Mutex<Option<Led>>,
-}
-
-/// The chain authority's node and how it began to lead (`MultiNode::led`).
-#[derive(Debug, Clone)]
-struct Led {
-    node: String,
-    /// The follower's progress rule said it keeps up at its first step with this node.
-    fresh: bool,
-    since: std::time::Instant,
+    /// The public node the authority's entry gave up last for failing ([`ChainSource::authority_failing`]),
+    /// until the follower says whether it was to blame ([`ChainSource::deposal_confirmed`]).
+    deposed: Mutex<Option<String>>,
 }
 
 /// The state of the health watch.
@@ -1263,7 +1254,7 @@ impl<N: ChainSource> MultiNode<N> {
             cross: Mutex::new(CrossCheck::single("no answer applied yet")),
             bodies_unchecked: Mutex::new(None),
             referee: None,
-            led: Mutex::new(None),
+            deposed: Mutex::new(None),
             // The first check is one period after the start.
             watch: Arc::new(Mutex::new(Watch {
                 every: WATCH_EVERY,
@@ -2800,11 +2791,12 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
         format!("{a} {}", self.board.node_of(a).unwrap_or_default())
     }
 
-    fn note_pace(&self, keeping_up: bool) {
-        let Some(node) = self.board.node_of(self.board.authority()) else { return };
-        let mut led = self.led.lock().unwrap_or_else(|e| e.into_inner());
-        if led.as_ref().is_none_or(|l| l.node != node) {
-            *led = Some(Led { node, fresh: keeping_up, since: std::time::Instant::now() });
+    /// A public node given up for failing held back chain its successor then served: it stays out
+    /// of the resolutions longer each time (`resolver::strike`). A named node leads again only when
+    /// the node that took over fails the same way.
+    fn deposal_confirmed(&self) {
+        if let Some(node) = self.deposed.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            super::resolver::strike(&node);
         }
     }
 
@@ -2841,13 +2833,17 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
 
     /// Hands the chain authority over when its chain requests keep failing.
     ///
-    /// The follower calls this when 2 chain requests in a row failed on the wire and the cursor
-    /// `at` has not moved for 3 minutes (`why` says what failed, `indexer::follower`). The old
-    /// authority gets a chain alarm (`judge::chain_failing`). What follows depends on the node.
+    /// The follower calls this when its progress rule finds that the authority does not keep up
+    /// with real time (a period of the rule ended without the gain, or its excursions above the
+    /// tolerance used up their budget), or when 2 chain requests in a row failed on the wire and
+    /// the cursor `at` has not moved for 3 minutes (`why` says which, `indexer::follower`,
+    /// *Progress*). The old authority gets a chain alarm (`judge::chain_failing`). What follows
+    /// depends on the node.
     ///
     /// - A resolver entry gives its public node up (`rpc::resolver::replace`). The other node of
     ///   the pair is the authority at once, unless the judge suspects it. The entry resolves a
-    ///   replacement on another host.
+    ///   replacement on another host. Once the follower finds that the node held back chain its
+    ///   successor served, the node is struck (`deposal_confirmed`, `resolver::strike`).
     /// - Among named nodes, the first of [`MultiNode::candidates`] that passes
     ///   [`MultiNode::can_lead`] becomes the authority, and the roles swap. A node that cannot lead
     ///   is logged and skipped.
@@ -2867,15 +2863,6 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
         let entry = self.board.entry(a).to_string();
         // A resolver entry being replaced has no node to give up. It is being replaced already.
         let Some(node) = self.board.node_of(a) else { return false };
-        // A public node that began to lead at the tip and is deposed soon after stays away longer
-        // each time (`resolver::strike`). One that began behind, or led long, was deposed by a
-        // stall it found (a halted network): no strike.
-        let strike = self
-            .led
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-            .is_some_and(|l| l.node == node && l.fresh && l.since.elapsed() < super::resolver::STRIKE_WITHIN);
         let why = format!("its chain requests keep failing ({why})");
         super::judge::chain_failing(&entry, &node, &why);
         // The pair's authority. The resolver state moved the role to the other node, or resolves a
@@ -2883,9 +2870,8 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
         if entry == super::resolver::RESOLVER {
             let moved = super::resolver::current(&entry).as_deref() != Some(node.as_str());
             if moved {
-                if strike {
-                    super::resolver::strike(&node);
-                }
+                // Struck only once the follower finds it was to blame (`deposal_confirmed`).
+                *self.deposed.lock().unwrap_or_else(|e| e.into_inner()) = Some(node.clone());
                 // The other node of the pair, or a replacement, is unproven from the cursor.
                 self.settle_from(at);
             }
