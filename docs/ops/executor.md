@@ -456,9 +456,7 @@ re-accepted, the book reverted) are read from the indexer while the test node re
 
 ### A.6 The x402 facilitator in the Executor (`kobd --executor`)
 
-**x402 is experimental.** x402 (the `kob-x402` crate, the facilitator in `kobd`, the client SDK `packages/kob-x402` and `docs/spec/x402-*.md`) is outside the mainnet launch review of 2026-11-23 and has no UI in the web app; it gets a dedicated audit of its own before it is recommended for real funds or its KCC-20 profile is proposed as a standard. Open findings: [docs/security/x402-open-findings.md](../security/x402-open-findings.md). Run it on your own node only: a public node can invent a payment and the merchant delivers for nothing (audit X-2).
-
- Run it on your own node only: a public node can invent a payment and the merchant delivers for nothing (audit X-2).
+**x402 is experimental.** x402 (the `kob-x402` crate, the facilitator in `kobd`, the client SDK `packages/kob-x402` and `docs/spec/x402-*.md`) is outside the mainnet launch review of 2026-11-23 and has no payment UI in the web app (it only has a read-only watch of an invoice's status, in the notification panel); it gets a dedicated audit of its own before it is recommended for real funds or its KCC-20 profile is proposed as a standard. Open findings: [docs/security/x402-open-findings.md](../security/x402-open-findings.md). Run it on your own node only: a public node can invent a payment and the merchant delivers for nothing (audit X-2).
 
 `--x402-config <file>` (or `KOB_X402_CONFIG`; strict JSON, `crates/kobd/x402.example.json`)
 serves the facilitator (`GET /supported`, `POST /verify`, `POST /settle`, `GET /health`, `GET /metrics`, and with

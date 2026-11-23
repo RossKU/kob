@@ -78,23 +78,28 @@ for (const name of LOCKS) {
   if (!locks.some((l) => l.hash === t.hash)) locks.push(t);
 }
 // A hand edit that deletes an entry would pass the checks above: every lock template any committed
-// record of this network listed must still be listed (audit 2026-11-23 R2A-3). Without git (an
-// archive) there is no history to hold it to.
-{
-  const git = (c) => execSync(c, { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'ignore'] });
-  let commits = [];
-  try {
-    commits = git(`git log --format=%h -- ${recordFile}`).split('\n').filter(Boolean);
-  } catch {
-    commits = [];
-  }
-  for (const c of commits) {
-    let issued = [];
+// record of this network listed must still be listed (audit 2026-11-23 R2A-3). The check needs the
+// whole history of the record: a shallow clone (actions/checkout's default, depth 1) holds only the
+// record itself, and the check would compare it with itself (audit 2026-11-24 R3F-5). So a shallow
+// clone or a git error fails; KOB_DEPLOY_NO_HISTORY=1 skips the check and says so (a tree without
+// history, e.g. an archive, or a CI job whose commit job contracts of ci.yml checks with full history).
+if (process.env.KOB_DEPLOY_NO_HISTORY === '1') {
+  console.error(`build-deploy: KOB_DEPLOY_NO_HISTORY=1: the lock-history check of ${recordFile} is skipped`);
+} else {
+  const git = (c) => {
     try {
-      issued = JSON.parse(git(`git show ${c}:${recordFile}`)).locks ?? [];
-    } catch {
-      continue;
+      return execSync(c, { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) {
+      return die(`the lock-history check needs git and the full history (${c} failed: ${String(e.stderr || e.message).trim()}); KOB_DEPLOY_NO_HISTORY=1 skips it in a tree without history`);
     }
+  };
+  if (git('git rev-parse --is-shallow-repository').trim() !== 'false') {
+    die(`the lock-history check needs the full history of ${recordFile}, and this clone is shallow: git fetch --unshallow (actions/checkout: fetch-depth: 0)`);
+  }
+  // --diff-filter=d: a commit that deleted the record has no copy of it to read
+  const commits = git(`git log --diff-filter=d --format=%h -- ${recordFile}`).split('\n').filter(Boolean);
+  for (const c of commits) {
+    const issued = JSON.parse(git(`git show ${c}:${recordFile}`)).locks ?? [];
     for (const l of issued) {
       if (!locks.some((x) => x.hash === l.hash)) {
         die(`lock template ${l.name} ${l.hash} was issued (${recordFile} at ${c} lists it) and is missing from locks: an issued lock stays readable for up to 10 years, so its entry and its artifact stay`);

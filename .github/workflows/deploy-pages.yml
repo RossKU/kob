@@ -366,19 +366,23 @@ jobs:
           KOB_PUBLIC_URL: ${{ matrix.public }}
       - name: Release hashes (the deployment record reproduces, the bundle embeds and ships the registry the mainnet record pins)
         working-directory: .
+        env:
+          # a shallow checkout: the lock-history check of scripts/lib/deploy.mjs runs in job contracts of ci.yml (whole history),
+          # whose pass on this commit the step below waits for
+          KOB_DEPLOY_NO_HISTORY: "1"
         run: |
           bash scripts/release-hashes.sh > "$RUNNER_TEMP/release-hashes.md"
           cat "$RUNNER_TEMP/release-hashes.md"
-      - name: ci passed for this commit (the run of ci.yml on the same sha, whose ci-ok covers the e2e suite; a failed or cancelled run fails the deploy)
+      - name: ci passed for this commit (the master push run of ci.yml on the same sha, which runs every job and whose ci-ok covers the e2e suite; a failed or cancelled run fails the deploy)
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           for i in $(seq 1 240); do
-            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&per_page=1" --jq '.workflow_runs[0] | "\(.status) \(.conclusion)"')
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&branch=master&event=push&per_page=1" --jq '.workflow_runs[0] | "\(.status) \(.conclusion) \(.head_sha)"')
             echo "ci: $run"
             case "$run" in
-              "completed success") exit 0 ;;
+              "completed success $GITHUB_SHA") exit 0 ;;
               completed*) echo "::error::ci did not pass for $GITHUB_SHA ($run)"; exit 1 ;;
             esac
             sleep 30

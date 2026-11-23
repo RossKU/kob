@@ -709,7 +709,7 @@ describe('the Android release key is an environment secret too (release.yml, and
     expect(release.slice(release.indexOf('\n  android:\n'), release.indexOf('\n  release:\n'))).not.toMatch(/^ +secrets:/m);
     expect(release).toContain("if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/master' && github.ref_type != 'tag'");
     expect(release).toContain('if [ "$REF_TYPE" != tag ]; then echo "::warning title=release::$msg. A tag run fails while they exist."; exit 0; fi');
-    expect(release).toContain('actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push');
+    expect(release).toContain('actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&branch=master&event=push');
   });
 
   it('android.yml declares no secrets, and only the signing job, only on master or a v* tag, runs in the environment android-release', () => {
@@ -721,6 +721,130 @@ describe('the Android release key is an environment secret too (release.yml, and
     // the values are read only in job apk; secret-scope only asks whether a repository copy exists
     const scope = android.slice(android.indexOf('\n  secret-scope:\n'), android.indexOf('\n  apk:\n'));
     expect(scope.match(/secrets\.[A-Z_]+[^\n]*/g)?.every((s) => s.endsWith("!= '' }}"))).toBe(true);
+  });
+});
+
+describe('"ci passed for this commit" means every job ran and passed on it (audit 2026-11-24 R3F-1 to R3F-5)', () => {
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const read = (f: string) => readFileSync(join(root, f), 'utf8').replace(/\r/g, '');
+  const ci = read('.github/workflows/ci.yml');
+  const gitBash = 'C:/Program Files/Git/bin/bash.exe';
+  const bash = process.platform === 'win32' ? (existsSync(gitBash) ? gitBash : null) : 'bash';
+  // ci-ok's script uses jq, which the runner has and Git's bash on Windows may not
+  const jq = !!bash && spawnSync(bash, ['--noprofile', '--norc', '-c', 'command -v jq']).status === 0;
+  const job = (text: string, name: string): string => {
+    const start = text.indexOf(`\n  ${name}:\n`);
+    expect(start, `job ${name}`).toBeGreaterThan(0);
+    const next = text.slice(start + 1).search(/\n  [a-z][a-z0-9-]*:\n/);
+    return next < 0 ? text.slice(start) : text.slice(start, start + 1 + next);
+  };
+  /** The `run: |` block that follows `marker` in the job. */
+  const runAfter = (text: string, marker: string): string => {
+    const at = text.indexOf(marker);
+    expect(at, marker).toBeGreaterThan(0);
+    const rest = text.slice(at);
+    const m = rest.match(/\n( +)run: \|\n/)!;
+    const indent = m[1]!.length + 2;
+    const body: string[] = [];
+    for (const line of rest.slice(m.index! + m[0].length).split('\n')) {
+      if (line.trim() !== '' && line.length - line.trimStart().length < indent) break;
+      body.push(line.slice(indent));
+    }
+    return body.join('\n');
+  };
+  const run = (script: string, env: Record<string, string>, prelude = '') => {
+    const dir = mkdtempSync(join(tmpdir(), 'kob-ci-')).replace(/\\/g, '/');
+    try {
+      const r = spawnSync(bash!, ['--noprofile', '--norc', '-eo', 'pipefail', '-c', `${prelude}\n${script}`], {
+        env: { ...process.env, GITHUB_OUTPUT: `${dir}/out`, GITHUB_REPOSITORY: 'o/r', ...env },
+        encoding: 'utf8',
+      });
+      return { code: r.status, out: `${r.stdout}${r.stderr}` };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  // git fetch succeeds, git diff names one web file: on a branch only the web jobs would run
+  const fakeGit = 'git() { case "$1" in fetch) return 0 ;; diff) echo web/src/x.ts ;; esac; }';
+  const outputs = (out: string) => Object.fromEntries([...out.matchAll(/^(all|rust|web|contracts|deps)=(true|false)$/gm)].map((m) => [m[1], m[2]]));
+
+  it.skipIf(!bash)('a push to master runs everything, whatever its diff; a branch push and a pull request keep the path filter', () => {
+    const script = runAfter(job(ci, 'changes'), '- id: diff');
+    const base = { BEFORE: 'a'.repeat(40), PR_BASE: 'b'.repeat(40) };
+    for (const ref of ['refs/heads/master', 'refs/heads/main']) {
+      const r = run(script, { ...base, EVENT: 'push', REF: ref }, fakeGit);
+      expect(r.code, r.out).toBe(0);
+      expect(outputs(r.out), ref).toEqual({ all: 'true', rust: 'true', web: 'true', contracts: 'true', deps: 'true' });
+    }
+    for (const [EVENT, REF] of [['push', 'refs/heads/ci/x'], ['pull_request', 'refs/pull/1/merge']]) {
+      const r = run(script, { ...base, EVENT: EVENT!, REF: REF! }, fakeGit);
+      expect(r.code, r.out).toBe(0);
+      expect(outputs(r.out), `${EVENT} ${REF}`).toEqual({ all: 'false', rust: 'false', web: 'true', contracts: 'false', deps: 'false' });
+    }
+  });
+
+  it.skipIf(!jq)('ci-ok fails on a skipped job where every job must run (a master push, or output all), and passes it on a filtered run', () => {
+    const okJob = job(ci, 'ci-ok');
+    expect(okJob).toContain("FULL: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')) || needs.changes.outputs.all == 'true' }}");
+    const script = runAfter(okJob, '- name: Every job passed or was skipped');
+    const needs = JSON.stringify({ changes: { result: 'success' }, test: { result: 'skipped' }, web: { result: 'success' } });
+    expect(run(script, { NEEDS: needs, FULL: 'false' }).code).toBe(0);
+    const full = run(script, { NEEDS: needs, FULL: 'true' });
+    expect(full.code).toBe(1);
+    expect(full.out).toContain('not run: test');
+    expect(run(script, { NEEDS: needs.replace('skipped', 'success'), FULL: 'true' }).code).toBe(0);
+    // every other job is in its needs, so none can be left out of the check
+    const jobs = [...ci.slice(ci.indexOf('\njobs:\n')).matchAll(/^ {2}([a-z][a-z0-9-]*):\n/gm)].map((m) => m[1]).filter((n) => n !== 'ci-ok');
+    const listed = okJob.match(/needs: \[([^\]]*)\]/)![1]!.split(',').map((s) => s.trim());
+    expect(listed.sort()).toEqual(jobs.sort());
+  });
+
+  it.skipIf(!bash)('the deploy and release gates take only a successful master push run of this very sha', () => {
+    for (const f of ['.github/workflows/deploy-pages.yml', '.github/workflows/release.yml']) {
+      const text = read(f);
+      const script = runAfter(text, '- name: ci passed for this commit');
+      expect(script, f).toContain('actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&branch=master&event=push&per_page=1');
+      const gh = (line: string) => `gh() { echo "${line}"; }; sleep() { :; }; seq() { echo 1; }`;
+      const sha = 'c'.repeat(40);
+      expect(run(script, { GITHUB_SHA: sha }, gh(`completed success ${sha}`)).code, f).toBe(0);
+      expect(run(script, { GITHUB_SHA: sha }, gh(`completed success ${'d'.repeat(40)}`)).code, f).toBe(1);
+      expect(run(script, { GITHUB_SHA: sha }, gh(`completed failure ${sha}`)).code, f).toBe(1);
+      expect(run(script, { GITHUB_SHA: sha }, gh(`in_progress null ${sha}`)).code, f).toBe(1);
+    }
+  });
+
+  it('every cargo test of ci.yml runs with --no-fail-fast (R3F-2)', () => {
+    const lines = ci.split('\n').filter((l) => /cargo test /.test(l) && !l.trimStart().startsWith('#'));
+    expect(lines.length).toBeGreaterThan(3);
+    for (const l of lines) expect(l).toContain('--no-fail-fast');
+  });
+
+  it('a file outside the Rust areas that a Rust test reads makes job changes run the Rust jobs (R3F-3)', () => {
+    // the tracked Rust sources only (no target/, node_modules/ or soak run data)
+    const ls = spawnSync('git', ['ls-files', '--', 'crates/*.rs', 'tools/*.rs'], { cwd: root, encoding: 'utf8' });
+    expect(ls.status, ls.stderr).toBe(0);
+    const rs = ls.stdout.split('\n').filter(Boolean);
+    expect(rs.length).toBeGreaterThan(100);
+    const read_ = new Set<string>();
+    for (const f of rs) {
+      for (const m of read(f).matchAll(/(?:include_str!\(|include_bytes!\(|read_to_string\(|\.join\()[^;\n]*?"(?:\.\.\/)*((?:docs|web|android)\/[^"]+)"/g)) read_.add(m[1]!);
+    }
+    expect([...read_].sort()).toEqual(['docs/argent/argent.md', 'docs/ops/executor.md', 'docs/spec/kob1-payload.md', 'web/src/kob/orders/c6-economics.vectors.json']);
+    const cases = job(ci, 'changes').split('\n').filter((l) => /rust=true/.test(l) && /\) /.test(l));
+    for (const p of read_) expect(cases.some((l) => l.trim().split(')')[0]!.split('|').includes(p)), p).toBe(true);
+  });
+
+  it('the Playwright configs forbid test.only in CI, and the CI e2e runs the app suite (R3F-4)', () => {
+    for (const f of ['web/playwright.config.ts', 'web/playwright.ghpages.config.ts']) expect(read(f), f).toContain('forbidOnly: !!process.env.CI,');
+    expect(read('web/playwright.config.ts')).toContain("throw new Error('KOB_E2E_NO_BUILD=1 in CI, but there is no dist/index.html");
+    expect(job(ci, 'web-e2e')).toContain('KOB_E2E_TARGET: app');
+  });
+
+  it('the job that checks the deployment records has the whole history; the others say they skip the lock-history check (R3F-5)', () => {
+    expect(job(ci, 'contracts')).toContain('fetch-depth: 0');
+    expect(job(ci, 'web')).toContain('KOB_DEPLOY_NO_HISTORY: "1"');
+    expect(job(read('.github/workflows/deploy-pages.yml'), 'build')).toContain('KOB_DEPLOY_NO_HISTORY: "1"');
+    expect(read('scripts/lib/deploy.mjs')).toContain("git('git rev-parse --is-shallow-repository').trim() !== 'false'");
   });
 });
 

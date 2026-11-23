@@ -198,8 +198,10 @@ configuration next to it, it runs the setup, which asks (Enter takes the default
    empty key settled two matches and earned a fee that way). What needs the key's own coins waits (`skipped why=lowering:
    insufficient funds`): a batch whose fee or carriers the orders do not cover, and the keeper subsidy of a kill or refund. The
    100 KAS is therefore an alert level (`--low-funds-kas`), not a minimum the executor enforces; below it, expect to miss work.
-7. **x402 facilitator**: off by default (it needs its own configuration, `docs/ops/executor.md`, A.6). With it the first start
-   has no fast start (the history first, which takes hours; a warning says so), and `--dry-run` does not serve it.
+7. **x402 facilitator**: off by default (it needs its own configuration, `docs/ops/executor.md`, A.6). **x402 is experimental**
+   (outside the mainnet launch review; open findings in `docs/security/x402-open-findings.md`): answer `n` on mainnet, and turn it on
+   only with your own node. With it the first start has no fast start (the history first, which takes hours; a warning says so),
+   and `--dry-run` does not serve it.
 
 It then writes `kobd.toml` next to the program (plus `kob-tokens.json`, the supported token programs, on
 testnet-10; the mainnet binary carries its pinned registry), prints the line that starts it (for example

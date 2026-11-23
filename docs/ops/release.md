@@ -145,7 +145,7 @@ There is no landing-only build: every deployment is the app. The build is indepe
 cargo fmt --all --check
 cargo clippy --locked --all-targets -p kob-protocol -p kob-wasm -p kobd -p kob-cli -p kob-tests -p sil2argent -- -D warnings
 KOB_SKIP_NETWORK_TESTS=1 cargo test --workspace --locked --no-fail-fast
-cargo test --locked -p kob-protocol -p kobd --lib --features deploy-mainnet
+cargo test --locked --no-fail-fast -p kob-protocol -p kobd --lib --features deploy-mainnet
 scripts/build-wasm.sh --test
 cd web && npm test && npm run e2e
 node scripts/check-pins.mjs                                     # every 64-hex constant in the pinned docs and sources matches a generated artifact
@@ -156,8 +156,11 @@ cargo deny --locked --config .cargo/deny.toml check             # advisories, ba
 `node scripts/check-pins.mjs` fails when a 64-hex constant in a pinned file (the docs among them) is not a hash the generated
 artifacts carry: do not paste a real covenant id, transaction id or hash into a document; write a placeholder such as `<64 hex>`.
 
-CI runs all of these on every push (`.github/workflows/ci.yml`: the `deploy-mainnet` lib tests in job `test`), and
-`scripts/release-hashes.sh` over the release bundle (`npm run build:release`) in job `web`.
+CI runs all of these on every push to `master` (`.github/workflows/ci.yml`: the `deploy-mainnet` lib tests in job `test`), and
+`scripts/release-hashes.sh` over the release bundle (`npm run build:release`) in job `web`. A push to `master` runs every job,
+whatever it changed, and its `ci-ok` fails when a job was skipped (other branches and pull requests run only the jobs their diff
+touches). **Tag only a commit whose own `ci.yml` master push run is fully green**: every job ran and passed on that exact commit, not
+on an earlier one. Every `cargo test` there runs with `--no-fail-fast`, so a failing test binary does not hide the ones after it.
 
 ## 6. Hashes to publish
 
@@ -214,7 +217,8 @@ checked to be an arm64 ELF). `scripts/package-release.mjs` packs each into two a
 and a `SHA256SUMS` of those files, and `kob-<version>-<network>-<target>` (the command line alone, with its `README.md` and `REFERENCE.md`); the archive bytes depend only on the files and `SOURCE_DATE_EPOCH` (the commit time). The
 release job attaches the twelve archives, the Android app and a `SHA256SUMS` of them all to a **draft** release of the tag: add the output of
 `scripts/release-hashes.sh` (above, with the binaries of the archives) to its notes, then publish it. `workflow_dispatch`
-runs the same builds as a dry run that only uploads workflow artifacts. **No paid code signing** (founder decision, audit
+from `master` runs the same builds as a dry run that only uploads workflow artifacts (a manual run from a tag is not a dry run:
+it builds the draft release of that tag again). **No paid code signing** (founder decision, audit
 2026-11-11 M-12): the binaries and archives are not code-signed, and the Windows binary shows SmartScreen ("More info", "Run
 anyway"); what an operator checks instead is `SHA256SUMS`, the build provenance below and, for an executor that holds funds,
 a rebuild from the tagged commit. The Android app is signed with the **release key** (below).
@@ -232,7 +236,7 @@ gh attestation verify kobd-<version>-mainnet-x86_64-unknown-linux-gnu.tar.gz --r
 (it prints the workflow, `.github/workflows/release.yml`, and the commit; `--signer-workflow` requires that workflow and
 `--source-ref` the tag: without them a file any workflow of the repository built, on any ref, passes). A file or a `SHA256SUMS` swapped into the release afterwards fails it. It proves where a file was built,
 not that the tagged source is sound: the release hashes above and a rebuild remain the check of the source. A dry run
-(`workflow_dispatch`) attests nothing. No container image is
+(`workflow_dispatch` from `master`) attests nothing. No container image is
 published (`crates/kobd/Dockerfile` builds one from the source for operators who want a container, quickstart 6).
 
 **The Android app in the release** (`android/`, built by `.github/workflows/android.yml`, which `release.yml` calls as the job
@@ -255,8 +259,8 @@ secret to `android.yml`; only its signing job runs in `android-release`, on `mas
    `release` is refused from anything but `master` or a tag.
 4. A release run now stops at *Review deployments* for `android-release`: approve it after checking the run is the tag's.
 
-Job `version` also waits for the `ci.yml` push run of the tagged commit and fails the release unless it passed: push the release
-commit to `master` and let CI pass before pushing the tag. **Check before publishing the draft** that the
+Job `version` also waits for the `ci.yml` master push run of the tagged commit (the same `head_sha`) and fails the release unless
+it concluded `success`: push the release commit to `master` and let CI pass, fully green, before pushing the tag. **Check before publishing the draft** that the
 APK file name has no `-debug-signed` (the run warns and the draft's notes say so when the secrets were missing: such an APK
 cannot be updated in place, and the fix is to set the secrets, delete the draft and re-run the tag's `release` workflow, not to publish it).
 The workflow verifies the signature with `apksigner`, that the APK is not debuggable, and its `versionName` / `versionCode`,
