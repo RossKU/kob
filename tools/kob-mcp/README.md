@@ -58,8 +58,9 @@ The limits below are what holds.
     where what a taker can fill now of the bids adds up to 1,000 KAS, for a sell where the asks' does; each order counts
     the indexer's `fillable_now`, so a TWAP or DCA order counts only the slice that is due, and an order the indexer
     names no `fillable_now` for (an older kobd) counts as nothing; each order is valued at the price a taker gets
-    now, the lower of its limit and its `quote` for a bid and the higher for an ask, so an auction (an armed stop or
-    if-done entry, a decaying ask, a rising bid) counts at its current quote, never at a far limit; orders that are not
+    now, its `quote`, so an auction (an armed stop or if-done entry, a decaying ask, a rising bid) counts at its
+    current quote, never at a far limit or start (a decaying ask only gets cheaper and a rising bid only higher for the
+    taker after the read, so the quote never favours the wallet's trade); orders that are not
     settled, are expired or past their deadline, or whose minimum fill is above the slice due now or worth more than
     10 KAS, a bid beyond the KAS of its escrow, and the wallet's own orders do not count either) and the fill history (the VWAP of the newest 1,000 KAS of fills). A
     buy is judged against the lower of the two, a sell against the higher. A book that cannot be read refuses. Against

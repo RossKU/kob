@@ -162,8 +162,31 @@ test('book reference: an armed if-done entry counts at its quote, not its limit 
   const ask = row(2.5e6, 30e6, 5000e8, { contract: 'KobIfdAsk' });
   const low = [{ price: String(2.5e6), amount: String(100000e8) }];
   assert.equal(bookReference({ side: 'sell', rows: { asks: [ask] }, fills: low, scale, depth }).ref.num, 30_000_000n);
-  // A rising bid whose quote is above its start: counted at the lower, its start.
-  assert.equal(bookReference({ side: 'buy', rows: { bids: [row(24e6, 30e6, 5000e8)] }, fills, scale, depth }).ref.num, 24_000_000n);
+  // A rising bid whose quote is above its start: a taker sells into it at the quote (R5T-2).
+  assert.equal(bookReference({ side: 'buy', rows: { bids: [row(24e6, 30e6, 5000e8, { auction: { kind: 'rise' } })] }, fills, scale, depth }).ref.num, 30_000_000n);
+});
+
+test('book reference: a decaying ask counts at its quote, not its far start (R5T-2)', () => {
+  const scale = 100_000_000;
+  const depth = 1000n * 100_000_000n;
+  // Fair 0.25 KAS a token. A decaying ask that started at 100x fair and rests at fair: 40 tokens,
+  // 10 KAS at its quote (1,000 KAS at its start), a small minimum fill.
+  const row = (price, quote, amount, extra = {}) => ({ price: String(price), quote: String(quote), amount_left: String(amount), fillable_now: String(amount), min_fill: '1000000', scale, maker: 'aa'.repeat(32), status: 'open', settled: true, expired: false, deadline_passed: false, ...extra });
+  const decay = row(2500e6, 25e6, 40e8, { contract: 'KobAsk', auction: { kind: 'decay', current_price: String(25e6) } });
+  const fills = [{ price: String(25e6), amount: String(5000e8) }];
+  const r = bookReference({ side: 'sell', rows: { asks: [decay] }, fills, scale, depth });
+  assert.equal(r.ref, null, '10 KAS a taker can buy now is not 1,000 KAS at risk');
+  // With refPrice set at fair, a sell at fair passes: the book does not tighten it to the start.
+  const op = ref(25e6, 1n, 'op');
+  const band = bandReference({ side: 'sell', op, book: r.ref });
+  assert.equal(band, op);
+  assert.equal(bandCheck({ side: 'sell', price: 25_000_000n, ref: band, scale, bandPct: 25, decimals: 8 }).ok, true);
+  // Behind honest asks at fair, it counts its quote too.
+  const honest = row(25e6, 25e6, 5000e8, { contract: 'KobAsk' });
+  const both = bookReference({ side: 'sell', rows: { asks: [decay, honest] }, fills, scale, depth }).ref;
+  assert.equal(both.num / both.den, 25_000_000n);
+  // Counted at its start it would have set the reference alone, at 25 KAS.
+  assert.equal(bookReference({ side: 'sell', rows: { asks: [{ ...decay, quote: decay.price }] }, fills, scale, depth }).ref.num, 2_500_000_000n);
 });
 
 test('book reference: a row a taker cannot fill now counts nothing (R4T-1)', () => {

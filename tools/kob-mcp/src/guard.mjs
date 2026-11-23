@@ -206,9 +206,12 @@ const lt = (a, b) => a.num * b.den < b.num * a.den;
 
 /**
  * The price a taker gets from a book row now (R4T-1), sompi per its scale, or null when a taker
- * cannot fill it now. An auction (an armed stop or if-done entry, a decaying ask, a rising bid)
- * rests at its `quote`, which may be far from its limit `price`: a bid counts at the lower of
- * the two, an ask at the higher. A row that is not live, settled and of its side's kind counts
+ * cannot fill it now: its `quote`. An auction (an armed stop or if-done entry, a decaying ask, a
+ * rising bid) rests at its quote, which may be far from its limit `price` (the start of a decay or
+ * a rise). The filler of an auction picks a time no later than its transaction's, so an ask is
+ * bought at the quote of the node's DAA score or lower and a bid sold into at that quote or higher:
+ * the quote is never better for the wallet's trade than what a taker gets. An ask is not counted
+ * at a far start any longer (R5T-2). A row that is not live, settled and of its side's kind counts
  * nothing, and so does one without a quote (an older indexer).
  */
 function nowPrice(side, r) {
@@ -217,9 +220,7 @@ function nowPrice(side, r) {
   if (r.status !== 'open' && r.status !== 'partial') return null;
   const kind = sideOfKind(r.contract);
   if (kind && kind !== side) return null;
-  const price = BigInt(r.price);
-  const quote = BigInt(r.quote);
-  const now = side === 'buy' ? (quote < price ? quote : price) : quote > price ? quote : price;
+  const now = BigInt(r.quote);
   return now > 0n ? now : null;
 }
 
