@@ -14,7 +14,10 @@ cd tools/kob-mcp && npm ci --omit=dev
 npx @anthropic-ai/mcpb@2.1.2 pack . kob-mcp.mcpb   # open the .mcpb with Claude Desktop
 ```
 
-The install form asks for the `kob` binary, the key file, your primary wallet, the caps and a data folder.
+The install form asks for the `kob` binary, the key file, your primary wallet, the caps and a data folder. Its caps
+default to 50 KAS a transaction and 200 KAS a UTC day, tighter than the config file's defaults (100 and 500, below);
+a value set in the form wins over the file. The form has no field for `mode`, the price band or `tokens.<id>.refPrice`:
+the extension runs in `confirm` mode with the 25 % band and no `refPrice`, unless the config file it names sets them.
 
 Claude Code:
 
@@ -71,7 +74,7 @@ The limits below are what holds.
     whatever depth and fills it likes and so sets the reference. Use an indexer you run or trust, and set `refPrice` for
     every token the agent trades: then the bound is the operator's price, which the book can only tighten.
   - The caps bound what a steered agent then loses: 100 KAS a transaction and 500 KAS a UTC day of KAS (`perTxKas`,
-    `perDayKas`), and 25 % a transaction and 50 % a day of each token's holding (`limits.tokenDefault`).
+    `perDayKas`; the Claude Desktop extension's defaults are 50 and 200), and 25 % a transaction and 50 % a day of each token's holding (`limits.tokenDefault`).
 - The tip goes to the executor that fills the order: at most 1 % of the price and 1 KAS over the whole order
   (`limits.maxTipPct`, `limits.maxTipKas`).
 - `kob_replace` reads the order's side and token from the CLI's dry run (the order as checked on the node), and a new
