@@ -104,3 +104,22 @@ fn a_kron_sale_leaves_its_rest_on_what_the_sale_pays() {
     let r = tick(&inp, &cfg, &signer());
     assert!(r.jobs.iter().all(|j| change(j) >= 50 * KAS), "{:?}", r.skipped);
 }
+
+/// Audit 2026-11-23 D-1: the sale's price floor counts only asks that can deliver the amount. An all-or-nothing ask (its
+/// minimum fill above the holding) posted at a low price next to the poster's own bid does not lower the floor; the same
+/// ask that a buyer of the holding can take does.
+#[test]
+fn an_all_or_nothing_ask_does_not_set_the_sale_floor() {
+    let cfg = MaintenanceConfig { merge: false, ..Default::default() };
+    let sale = |min_fill: i64| {
+        let bid = l_bid_a(100, K3, 2, 250_000_000, 2 * WHOLE);
+        let ask = l_ask_with(300, token_a(K3), K3, 2, 270_000_000, 10 * WHOLE, |a| a.min_fill = min_fill);
+        let mut inp = input(vec![own(K3, 2 * WHOLE, CARRIER)], vec![funding(50 * KAS)]);
+        inp.orders = vec![bid, ask];
+        tick(&inp, &cfg, &signer())
+    };
+    let r = sale(10 * WHOLE);
+    assert!(r.jobs.iter().all(|j| j.kind != MaintKind::Sell), "sold against an ask no buyer of 2 can take: {:?}", r.jobs.len());
+    let r = sale(WHOLE);
+    assert!(r.jobs.iter().any(|j| j.kind == MaintKind::Sell), "{:?}", r.skipped);
+}

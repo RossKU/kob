@@ -3128,7 +3128,9 @@ turns both off.
 **The sale's price floor** (`MaintenanceConfig::sell_floor_bps`, default 9,000). A sale is housekeeping, not trading, so it
 never goes far below the market: the bid must pay at least 90 % of what the book's resting plain asks of the token's market
 charge for the same amount, the cheapest first, as many as it takes to cover it (the price of the ask that completes the
-amount). With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
+amount). Each ask counts only for what a buyer of the rest of the amount can take from it in one fill (its minimum fill, its
+FOK range, the dust bound of a partial fill): an all-or-nothing ask larger than the holding counts for nothing (audit
+2026-11-23 D-1). With too few asks to price the amount nothing is sold, and the UTXOs are merged instead (the merge frees the carriers
 as well); the skipped sale is logged with its reason (`sell: no resting asks ...`, `sell: the best bid pays ... below 9000 bps
 of the asks' price`). A low bid alone therefore never takes a holding, and an ask posted to lower the reference must itself offer
 the whole amount at that price to everyone. `0` turns the floor off (any bid that pays the fee, the earlier rule).
