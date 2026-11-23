@@ -3202,6 +3202,19 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   third node (or one agreeing with neither) nothing past the contradiction is indexed, and when it persists (three times in a
   row) the cross-checking node is given up for another, then (three more) the authority's. Counted per node
   (`disagreements` in `/v1/health` `nodes`, the status line).
+* **The authority's copies of KOB transactions** (audit 2026-11-23 C-H1). Transaction ids do not cover signature scripts,
+  and a block body is valid without valid signatures, so a real block may carry a same-id copy of a KOB transaction with
+  other signature scripts, which passes the chain proofs (the merged block is real). So the chain blocks of the authority's
+  answer that hold a transaction that can matter to KOB (a tracked order or token, a KOB payload) are fetched from the
+  cross-checking node too, and must agree in everything the indexer reads (signature scripts and spent outputs included;
+  `ChainSource::confirm_bodies`). A difference applies nothing and asks a third node as above: it has the authority's copy,
+  and the cross-checking node is given up; it has another, and the authority is outvoted; none, and nothing applies until
+  they agree (it counts towards replacing the nodes). A cross-checking node that cannot answer holds the batch back like any
+  of its waits. **Not covered:** a single node (an own node with no `[[nodes]]` cross-checker, or the failover's fallback
+  alone), and the time after `single_node_after_secs` (120 s) without any answer of a cross-checking node, when the
+  authority goes on alone with the chain proofs only: there a lying authority that also mines one real block can still make
+  a KOB spend read as another entry (an order leaves the book or stays as a phantom; no funds move). `/v1/health`
+  `cross_checked: false` says when that is the case. An own node of one's own is the answer for a public read server.
 * A node that cannot be reached or drops its connection gets one reconnect first (public nodes close connections now and
   then under load): the same node is tried once more with a 5 s connect timeout (`GRACE_CONNECT_TIMEOUT`). When it is the
   authority's, the other node is the authority from the next call on (no resolution, no wait) and the dropped node is
@@ -3614,7 +3627,8 @@ random traffic in both families.
 
 The executor's product-readiness audit (rounds 1 to 4, closed 2026-11-12) left these Low findings open on purpose. Each was
 accepted by the founder with the reason given; the rest of its Lows were fixed. M-7 (the authority's transaction bodies are
-not cross-checked) was accepted on 2026-11-11 (Part C, *Node*).
+not cross-checked) was accepted on 2026-11-11 (Part C, *Node*); since 2026-11-23 (C-H1) the bodies that can matter to KOB
+are compared with the cross-checking node whenever one vouches, and the rest of M-7 is the single-node case Part C names.
 
 | Id | Risk | Why it is accepted |
 |---|---|---|

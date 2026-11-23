@@ -342,6 +342,25 @@ pub const PROOF_FETCHES: usize = 8;
 /// matter to KOB, those transactions, and the block.
 type MergedBlock<'a> = (Hash32, Vec<usize>, Vec<&'a crate::rpc::types::Tx>, (kaspa_consensus_core::block::Block, Origin));
 
+/// Runs of flagged chain blocks of a window from `start` (chain `hashes`), as (the chain block
+/// before the run, the index of its first block, the number of blocks). Runs with no more than
+/// `MERGE_GAP` unflagged chain blocks between them are fetched as one, because a round trip costs
+/// more than a few chain blocks.
+fn flag_runs(flags: &[bool], start: Hash32, hashes: &[Hash32]) -> Vec<(Hash32, usize, usize)> {
+    const MERGE_GAP: usize = 3;
+    let mut runs: Vec<(Hash32, usize, usize)> = vec![];
+    for (i, f) in flags.iter().enumerate() {
+        if !*f {
+            continue;
+        }
+        match runs.last_mut() {
+            Some((_, first, len)) if *first + *len + MERGE_GAP >= i => *len = i + 1 - *first,
+            _ => runs.push((if i == 0 { start } else { hashes[i - 1] }, i, 1)),
+        }
+    }
+    runs
+}
+
 /// `ask` of each of `items`, at most `limit` in flight, the answers in the order of `items`.
 ///
 /// Nothing is asked before the stream is polled. Dropping it cancels what is in flight, so a
@@ -1045,8 +1064,29 @@ impl<S: ChainSource> Follower<S> {
     /// (`ChainSource::chain_refused`) and the step is retried. A proof the node could not serve
     /// is retried without blame.
     async fn prove(&self, start: Hash32, raw: RawVspcResponse, origin: Origin) -> Result<RawVspcResponse, StepOutcome> {
-        let (raw, proved, _) = self.check_batch(start, raw, origin, false).await;
-        proved.map(|()| raw)
+        let (raw, proved, confirmed) = self.check_batch(start, raw, origin, false).await;
+        proved?;
+        // The authority's copies of KOB transactions against the cross-checking node's (C-H1).
+        confirmed.map_err(|why| {
+            let msg = format!("not applied: {why}");
+            tracing::warn!(reason = %why, "the chain authority's batch was not applied");
+            self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
+            StepOutcome::Retry(msg)
+        })?;
+        Ok(raw)
+    }
+
+    /// The comparison of a batch from `origin` with another node: a window from another node with
+    /// the primary (`confirm`, [`Follower::confirm_with_primary`]), the chain authority's own with
+    /// the cross-checking node ([`Follower::confirm_with_cross`]).
+    async fn confirm(&self, start: Hash32, raw: &RawVspcResponse, origin: Origin, confirm: bool) -> Result<(), String> {
+        if confirm {
+            self.confirm_with_primary(start, raw, origin).await
+        } else if origin.trusted {
+            self.confirm_with_cross(start, raw).await
+        } else {
+            Ok(())
+        }
     }
 
     /// The chain proofs of a batch `raw` from `start` ([`Follower::prove`]) and, with `confirm`,
@@ -1065,7 +1105,7 @@ impl<S: ChainSource> Follower<S> {
         confirm: bool,
     ) -> (RawVspcResponse, Result<(), StepOutcome>, Result<(), String>) {
         let Some(proof) = self.proof.clone() else {
-            let confirmed = if confirm { self.confirm_with_primary(start, &raw, origin).await } else { Ok(()) };
+            let confirmed = self.confirm(start, &raw, origin, confirm).await;
             return (raw, Ok(()), confirmed);
         };
         let p = proof.clone();
@@ -1088,13 +1128,7 @@ impl<S: ChainSource> Follower<S> {
                 Some(plan) => self.prove_scripts(&proof, &raw, self.prove_lanes(&proof, plan)).await,
             }
         };
-        let confirmed = async {
-            if confirm {
-                self.confirm_with_primary(start, &raw, origin).await
-            } else {
-                Ok(())
-            }
-        };
+        let confirmed = self.confirm(start, &raw, origin, confirm);
         let (proved, confirmed) = tokio::join!(proved, confirmed);
         let verdict = self.proof_verdict(&proof, origin, proved).await;
         (raw, verdict, confirmed)
@@ -1329,20 +1363,7 @@ impl<S: ChainSource> Follower<S> {
             .await
             .map_err(|e| format!("database: {e}"))?;
         let flags = ctx.flag(&raw.chain_block_accepted_transactions);
-        // Runs of flagged chain blocks, as (the chain block before the run, the index of its first
-        // block, the number of blocks). Runs with no more than `MERGE_GAP` unflagged chain blocks
-        // between them are fetched as one, because a round trip costs more than a few chain blocks.
-        const MERGE_GAP: usize = 3;
-        let mut runs: Vec<(Hash32, usize, usize)> = vec![];
-        for (i, f) in flags.iter().enumerate() {
-            if !*f {
-                continue;
-            }
-            match runs.last_mut() {
-                Some((_, first, len)) if *first + *len + MERGE_GAP >= i => *len = i + 1 - *first,
-                _ => runs.push((if i == 0 { start } else { raw.added_chain_block_hashes[i - 1] }, i, 1)),
-            }
-        }
+        let runs = flag_runs(&flags, start, &raw.added_chain_block_hashes);
         let flagged = flags.iter().filter(|f| **f).count() as u64;
         self.health.update(|h| {
             h.untrusted_windows_total += 1;
@@ -1371,22 +1392,15 @@ impl<S: ChainSource> Follower<S> {
             self.source.fetch_window_primary(w)
         });
         let answers = futures_util::future::join_all(fetches).await;
-        for ((_, first, len), answer) in runs.iter().zip(answers) {
+        for (&(_, first, len), answer) in runs.iter().zip(answers) {
             let f = answer.map_err(|e| {
                 self.chain_failed("its copy of a window", &e);
                 format!("the primary's copy of {} chain blocks: {e}", len)
             })?;
-            let p = &f.raw;
-            if !p.removed_chain_block_hashes.is_empty() || p.added_chain_block_hashes.len() < *len {
-                return Err(format!("the primary no longer reports the {len} chain blocks after {}", hashes[*first]));
-            }
-            for k in 0..*len {
-                let i = first + k;
-                if p.added_chain_block_hashes[k] != hashes[i] || p.chain_block_accepted_transactions.len() <= k {
-                    return Err(format!("the primary's chain differs at {}", hashes[i]));
-                }
-                let mine = &raw.chain_block_accepted_transactions[i];
-                if let Some(d) = crate::rpc::verify::body_difference(mine, &p.chain_block_accepted_transactions[k]) {
+            let run = crate::rpc::BodyRun { req: WindowRequest::new(Hash32::default(), Hash32::default()), first, len };
+            match crate::rpc::run_difference(raw, &f.raw, &run).map_err(|e| format!("the primary: {e}"))? {
+                None => {}
+                Some(d) => {
                     self.source.report_lie(origin, &d);
                     self.health.update(|h| h.lies_total += 1);
                     return Err(format!("node #{} contradicts the primary: {d}", origin.node));
@@ -1394,6 +1408,46 @@ impl<S: ChainSource> Follower<S> {
             }
         }
         Ok(())
+    }
+
+    /// Checks a window `raw` of the chain authority (`start`) against the cross-checking node, as
+    /// far as it can matter to KOB (C-H1).
+    ///
+    /// The cross-checking node vouches for the chain blocks and their transaction ids
+    /// (`rpc::multi`), and the chain proofs for the merged block each KOB transaction names. Neither
+    /// covers which copy of a transaction was accepted: a real block may carry a same-id copy with
+    /// other signature scripts. So the chain blocks that hold a transaction that can matter
+    /// (`super::trust`) are fetched from the cross-checking node too, and must agree in everything the
+    /// indexer reads (`ChainSource::confirm_bodies`, which blames on a difference). With no node to
+    /// ask (a single node, or the authority alone after `single_after`) it passes.
+    async fn confirm_with_cross(&self, start: Hash32, raw: &RawVspcResponse) -> Result<(), String> {
+        if !self.source.cross_check().checked {
+            // No cross-checking node vouched for this answer (single node, or alone): nobody to ask.
+            return Ok(());
+        }
+        let keys = super::trust::WindowKeys::of(&raw.chain_block_accepted_transactions);
+        let ctx = self
+            .blocking(move |i| super::trust::TrustContext::load(i.conn(), i.processor().tokens.clone(), &keys))
+            .await
+            .map_err(|e| format!("database: {e}"))?;
+        let flags = ctx.flag(&raw.chain_block_accepted_transactions);
+        let blocks = &raw.chain_block_accepted_transactions;
+        let runs: Vec<crate::rpc::BodyRun> = flag_runs(&flags, start, &raw.added_chain_block_hashes)
+            .into_iter()
+            .map(|(prev, first, len)| {
+                let last = first + len - 1;
+                let req = WindowRequest {
+                    min_confirmations: self.cfg.min_confirmations,
+                    end_blue: Some(blocks[last].chain_block_header.blue_score),
+                    ..WindowRequest::new(prev, raw.added_chain_block_hashes[last])
+                };
+                crate::rpc::BodyRun { req, first, len }
+            })
+            .collect();
+        if runs.is_empty() {
+            return Ok(());
+        }
+        self.source.confirm_bodies(start, raw, &runs).await.map(|_| ())
     }
 
     fn record_fetch(&self, batch: &VspcBatch, t_fetch: std::time::Duration) {

@@ -1808,6 +1808,27 @@ impl<N: ChainSource> MultiNode<N> {
         Verdict::None(format!("{name} agrees with neither"))
     }
 
+    /// The first difference between the authority's chain blocks `runs` of `raw` and `node`'s
+    /// copies of them, `None` when they agree (`ChainSource::confirm_bodies`). Each run has
+    /// [`CROSS_CHECK_TIMEOUT`]; `Err` when the node cannot answer.
+    async fn bodies_differ(&self, node: &N, raw: &RawVspcResponse, runs: &[super::BodyRun]) -> Result<Option<String>, String> {
+        let level = self.authority_verbosity();
+        // The answer's origin is not used: what fails here blames through the caller.
+        let origin = Origin { node: usize::MAX, trusted: false, tier: 0 };
+        let asked = runs.iter().map(|r| tokio::time::timeout(CROSS_CHECK_TIMEOUT, fetch_window_from(node, &r.req, level, origin)));
+        for (r, answer) in runs.iter().zip(futures_util::future::join_all(asked).await) {
+            let f = match answer {
+                Ok(Ok(f)) => f,
+                Ok(Err(e)) => return Err(e.to_string()),
+                Err(_) => return Err(format!("no answer within {} s", CROSS_CHECK_TIMEOUT.as_secs())),
+            };
+            if let Some(d) = super::run_difference(raw, &f.raw, r)? {
+                return Ok(Some(d));
+            }
+        }
+        Ok(None)
+    }
+
     /// The authority was outvoted 2:1 at `start`: the role moves to the cross-checking node `j`.
     ///
     /// A resolver entry gives the authority's node up, and the other node of the pair is the
@@ -2382,6 +2403,56 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     }
     fn cross_check(&self) -> CrossCheck {
         self.cross.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+    /// The cross-checking node's copies of the chain blocks (C-H1). On a difference a third node
+    /// decides, as for a contradiction of the acceptance data ([`MultiNode::contradicted`]): it
+    /// agrees with the authority, and the cross-checking node is given up; it agrees with the
+    /// cross-checking node, and the authority is outvoted; else nothing applies and the
+    /// disagreement counts towards replacing the nodes ([`MultiNode::stalled`]).
+    async fn confirm_bodies(&self, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun]) -> Result<bool, String> {
+        if self.cross_node().is_none() || self.cross.lock().unwrap_or_else(|e| e.into_inner()).alone {
+            return Ok(false);
+        }
+        let Some(j) = self.cross_checker() else {
+            return Err(format!("{WAITING_FOR_CROSS_CHECK}: none can be asked for the copies of KOB transactions now"));
+        };
+        let why = match self.bodies_differ(&*self.nodes[j], raw, runs).await {
+            Ok(None) => return Ok(true),
+            Ok(Some(d)) => d,
+            Err(e) => {
+                self.board.failed(j, Fault::Failed, &format!("cross-check of KOB transactions: {e}"));
+                return Err(format!("{WAITING_FOR_CROSS_CHECK}: {}: {e}", self.board.shown(j)));
+            }
+        };
+        let why = format!("the cross-checking node's copy differs: {why}");
+        self.board.disagreed(j, &why, false);
+        let a = self.board.authority();
+        let third = (0..self.nodes.len())
+            .find(|&k| k != a && k != j && self.specs[k].cross_check && !self.board.dropped(k) && !self.board.cut(k))
+            .map(|k| (self.nodes[k].clone(), self.board.shown(k)))
+            .or_else(|| self.referee.clone().map(|r| (r, "the referee".to_string())));
+        let verdict = match &third {
+            None => Err("there is no third node".to_string()),
+            Some((node, _)) => self.bodies_differ(&**node, raw, runs).await,
+        };
+        let name = third.map(|(_, n)| n).unwrap_or_default();
+        match verdict {
+            Ok(None) => {
+                tracing::warn!(authority = %self.board.shown(a), cross_check = %self.board.shown(j), third = %name, reason = %why, "the nodes' copies of a KOB transaction differ and a third node agrees with the chain authority: the cross-checking node is given up");
+                self.board.failed(j, Fault::Lie, &format!("a third node ({name}) contradicts it: {why}"));
+                Err(format!("{why}; a third node agrees with the chain authority, asked again"))
+            }
+            Ok(Some(_)) => {
+                tracing::error!(authority = %self.board.shown(a), cross_check = %self.board.shown(j), third = %name, reason = %why, "the nodes' copies of a KOB transaction differ and a third node contradicts the chain authority: it is outvoted, nothing of its answer is applied");
+                self.outvoted(start, j, &why).await;
+                Err(format!("{OUTVOTED} 2:1 ({why}); nothing of its answer is applied"))
+            }
+            Err(no) => {
+                tracing::warn!(authority = %self.board.shown(a), cross_check = %self.board.shown(j), reason = %why, third = %no, "the nodes' copies of a KOB transaction differ and no third node settles it: nothing is applied");
+                self.stalled(j);
+                Err(format!("{why}: nothing is applied until they agree ({no})"))
+            }
+        }
     }
     async fn dag_info(&self) -> Result<DagInfo, RpcError> {
         self.primary().dag_info().await
@@ -2973,6 +3044,9 @@ mod tests {
         ids: Mutex<Result<ChainIds, String>>,
         /// The DAA score between two of its chain blocks (0: all at the tip).
         daa: u64,
+        /// When not 0, every chain block accepts one transaction whose signature script is this
+        /// byte (the same id whatever it is).
+        sig: Mutex<u8>,
     }
 
     impl Fixed {
@@ -2985,7 +3059,7 @@ mod tests {
             let ids = ids
                 .map(|a| ChainIds { added_chain_block_hashes: a.iter().map(h).collect(), ..ChainIds::default() })
                 .map_err(str::to_string);
-            Arc::new(Fixed { added: added.iter().map(h).collect(), ids: Mutex::new(ids), daa })
+            Arc::new(Fixed { added: added.iter().map(h).collect(), ids: Mutex::new(ids), daa, sig: Mutex::new(0) })
         }
         fn answer(&self, ids: Result<&[u8], &str>) {
             let h = |b: &u8| Hash32([*b; 32]);
@@ -3007,7 +3081,19 @@ mod tests {
                         daa_score: self.daa * i as u64,
                         ..Default::default()
                     },
-                    accepted_transactions: vec![],
+                    accepted_transactions: match *self.sig.lock().unwrap() {
+                        0 => vec![],
+                        s => vec![super::super::types::Tx {
+                            inputs: vec![super::super::types::TxInput {
+                                previous_outpoint: super::super::types::Outpoint { transaction_id: Hash32([7; 32]), index: 0 },
+                                signature_script: crate::hex::HexBytes(vec![s]),
+                                sequence: Some(0),
+                                verbose_data: None,
+                            }],
+                            verbose_data: super::super::types::TxVerbose { transaction_id: Hash32([8; 32]), ..Default::default() },
+                            ..Default::default()
+                        }],
+                    },
                 })
                 .collect();
             Ok(RawVspcResponse {
@@ -3062,6 +3148,63 @@ mod tests {
 
     fn req() -> VspcRequest {
         VspcRequest::new(Hash32([0; 32]), Verbosity::High, None)
+    }
+
+    /// C-H1: the authority's copy of a KOB transaction (its chain blocks that can matter) must be
+    /// the cross-checking node's. A same-id copy with another signature script is not applied; a
+    /// third node decides who is given up.
+    #[tokio::test]
+    async fn the_authoritys_copy_of_a_kob_transaction_must_be_the_cross_checking_nodes() {
+        let spec = |url: &str, cross_check| NodeSpec {
+            url: url.into(),
+            fetch: true,
+            submit: true,
+            connections: 1,
+            cross_check,
+            may_lead: true,
+        };
+        let node = |sig: u8| {
+            let n = Fixed::new(&[1, 2], Ok(&[1, 2]));
+            *n.sig.lock().unwrap() = sig;
+            n
+        };
+        let run = crate::rpc::BodyRun {
+            req: WindowRequest { end_blue: Some(0), sink_blue: Some(0), ..WindowRequest::new(Hash32([0; 32]), Hash32([2; 32])) },
+            first: 0,
+            len: 2,
+        };
+        let three = |b: u8, referee: Option<u8>| {
+            let a = node(1);
+            let m = MultiNode::new(vec![(spec("ws://a", false), a.clone()), (spec("ws://b", true), node(b))], a);
+            match referee {
+                Some(c) => m.with_referee(node(c)),
+                None => m,
+            }
+        };
+        let raw = node(1).vspc_v2(req()).await.unwrap();
+        // The same copy: vouched.
+        assert_eq!(three(1, None).confirm_bodies(Hash32([0; 32]), &raw, &[run]).await, Ok(true));
+        // Another signature script and no third node: nothing applies, nobody is given up yet.
+        let m = three(2, None);
+        let e = m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err();
+        assert!(e.contains("signature script") && e.contains("no third node"), "{e}");
+        assert!(!m.board.dropped(1));
+        // The referee has the authority's copy: the cross-checking node is given up.
+        let m = three(2, Some(1));
+        let e = m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err();
+        assert!(e.contains("agrees with the chain authority"), "{e}");
+        assert!(m.board.dropped(1));
+        // The referee has the other copy: the authority is outvoted.
+        let m = three(2, Some(2));
+        let e = m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await.unwrap_err();
+        assert!(e.starts_with(OUTVOTED), "{e}");
+        // A single node, or the authority alone after `single_after`: nothing to compare.
+        let a = node(1);
+        let single = MultiNode::new(vec![(spec("ws://a", false), a.clone())], a);
+        assert_eq!(single.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await, Ok(false));
+        let m = three(2, None);
+        m.cross.lock().unwrap().alone = true;
+        assert_eq!(m.confirm_bodies(Hash32([0; 32]), &raw, &[run]).await, Ok(false));
     }
 
     /// A node other than the authority that lacks a call is dropped from the chain roles with an
