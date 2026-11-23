@@ -727,6 +727,9 @@ Heavy. No cursor.
 Response `{"items": [...]}`. Each item has the token UTXO fields of section 3.9 plus `order_status` (the order's status or
 null), `maker` (hex or null) and `lost` (true when the order has terminated, so the maker's cancel can no longer sweep it).
 
+**Cap.** With `maker`, only the newest 10,000 live strays of all makers are searched (`STRAYS_SCAN_MAX`; anyone can send strays to
+any order id), so an older stray of the maker may be missing; `GET /v1/orders/{covenant_id}` lists an order's own strays.
+
 ### 3.13 `GET /v1/token-events`
 
 Token identities first seen in placement records, **oldest first**. There is no cursor, so this returns the oldest `limit` rows.
@@ -764,6 +767,10 @@ gap) and why a consumer must still check a UTXO against the node before spending
 
 At least one of `owner` and `token` is required: `400` ("owner or token is required"). The query matches the 32-byte owner
 whatever its kind, so filter on `owner_kind` when spending. Items come **oldest first** (created block, txid, index).
+
+**Short pages.** With both `owner` and `token`, a page reads at most 10,000 of the owner's holdings (`HOLDINGS_SCAN_MAX`; the
+token is a filter on them, and an owner may hold any number of other tokens). Such a page may hold fewer than `limit` items, none at
+all, and still carry a `next_cursor`: keep paging while `next_cursor` is set.
 
 **Retention of spent holdings.** The live holdings are always all there. With `spent=true` an indexer that keeps the history (`lean =
 false`) lists **every** spent holding: it keeps them all by default (`archive_pruning = false`). An indexer whose operator turned on

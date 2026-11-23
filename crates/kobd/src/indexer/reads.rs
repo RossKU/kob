@@ -2180,7 +2180,9 @@ pub fn order(conn: &Connection, ctx: &ReadCtx, covenant_id: &Hash32) -> DbResult
     if kids.len() > MAX_VIEW_CHILDREN {
         kids.truncate(MAX_VIEW_CHILDREN);
         v.children_total = Some(conn.query_row(
-            &format!("SELECT COUNT(*) FROM (SELECT 1 FROM orders o WHERE o.parent = ?1 AND {pinned} LIMIT {VIEW_COUNT_MAX})"),
+            // The index alone, no row lookup (R4C2-1): every child this build books is of a pinned template, and the
+            // count is "this many or more" anyway.
+            &format!("SELECT COUNT(*) FROM (SELECT 1 FROM orders o INDEXED BY orders_parent_page WHERE o.parent = ?1 LIMIT {VIEW_COUNT_MAX})"),
             [covenant_id.0.to_vec()],
             |r| r.get(0),
         )?);
@@ -2278,16 +2280,39 @@ pub struct StrayView {
     pub lost: bool,
 }
 
+/// Most live strays `GET /v1/strays?maker=` reads, newest first, to find the maker's ([`strays`]).
+pub const STRAYS_SCAN_MAX: usize = 10_000;
+
 /// Stray token UTXOs (sent to an order id outside the protocol), newest first.
+///
+/// They are read in the order of `token_utxos_strays_new`, the live strays only. With a maker,
+/// only the newest [`STRAYS_SCAN_MAX`] live strays of all makers are searched: the maker is a
+/// filter on each, and anyone can send strays (R3C2-1 item 7).
 pub fn strays(conn: &Connection, ctx: &ReadCtx, maker: Option<&[u8]>, limit: usize) -> DbResult<Vec<StrayView>> {
+    let floor: Option<i64> = match maker {
+        Some(_) => conn
+            .query_row(
+                &format!(
+                    "SELECT created_block FROM token_utxos INDEXED BY token_utxos_strays_new WHERE role = 'stray' AND spent_block IS NULL \
+                     ORDER BY created_block DESC LIMIT 1 OFFSET {}",
+                    STRAYS_SCAN_MAX - 1
+                ),
+                [],
+                |r| r.get(0),
+            )
+            .optional()?,
+        None => None,
+    };
+    // In the index's order, so that a page stops at its end (the planner would sort otherwise).
+    let from = TOKEN_UTXO_FROM.replacen("FROM token_utxos t", "FROM token_utxos t INDEXED BY token_utxos_strays_new", 1);
     let sql = format!(
         "SELECT {TOKEN_UTXO_COLUMNS}, s.status, fo_mk.h \
-         {TOKEN_UTXO_FROM} LEFT JOIN order_state s ON s.order_id = t.order_id LEFT JOIN ids fo_mk ON fo_mk.id = fo.maker_id \
+         {from} LEFT JOIN order_state s ON s.order_id = t.order_id LEFT JOIN ids fo_mk ON fo_mk.id = fo.maker_id \
          WHERE t.role = 'stray' AND t.spent_block IS NULL AND (?1 IS NULL OR fo.maker_id = (SELECT id FROM ids WHERE h = ?1)) \
-         ORDER BY t.created_block DESC, t.txid, t.idx LIMIT ?2"
+         AND t.created_block >= ?3 ORDER BY t.created_block DESC, t.txid, t.idx LIMIT ?2"
     );
     let mut st = conn.prepare(&sql)?;
-    let rows = st.query_map(rusqlite::params![maker, limit as i64], |r| {
+    let rows = st.query_map(rusqlite::params![maker, limit as i64, floor.unwrap_or(i64::MIN)], |r| {
         let status: Option<String> = r.get(13)?;
         let lost = !matches!(status.as_deref(), Some("open") | Some("partial"));
         Ok(StrayView { utxo: token_utxo_from_row(r, ctx)?, order_status: status, maker: hxo(r.get(14)?), lost })
@@ -2308,10 +2333,15 @@ pub struct TokenEventView {
 
 /// The token registry events, oldest first, of one token or of all, at most `limit`.
 pub fn token_events(conn: &Connection, token: Option<&Hash32>, limit: usize) -> DbResult<Vec<TokenEventView>> {
-    let mut st = conn.prepare(
-        "SELECT token_cov_id, tpl_hash, ext_commit, kind, txid, daa FROM token_events \
-         WHERE (?1 IS NULL OR token_cov_id = ?1) ORDER BY id ASC LIMIT ?2",
-    )?;
+    // One statement per case: `?1 IS NULL OR token_cov_id = ?1` would read every event in id order
+    // for one token's (R4C2 route table). With a token, `token_events_token` holds its events in id
+    // order.
+    let mut st = conn.prepare(if token.is_some() {
+        "SELECT token_cov_id, tpl_hash, ext_commit, kind, txid, daa FROM token_events INDEXED BY token_events_token \
+         WHERE token_cov_id = ?1 ORDER BY id ASC LIMIT ?2"
+    } else {
+        "SELECT token_cov_id, tpl_hash, ext_commit, kind, txid, daa FROM token_events WHERE ?1 IS NULL ORDER BY id ASC LIMIT ?2"
+    })?;
     let rows = st.query_map(rusqlite::params![token.map(|t| t.0.to_vec()), limit as i64], |r| {
         Ok(TokenEventView {
             token: hx(r.get(0)?),
@@ -2800,6 +2830,36 @@ pub fn holdings(
 ) -> DbResult<Page<HoldingView>> {
     let mut conds: Vec<String> = Vec::new();
     let mut args: Vec<SqlValue> = Vec::new();
+    // With an owner and a token the token is a filter on the owner's rows, and an owner may hold
+    // any number of other tokens. So a page reads at most `HOLDINGS_SCAN_MAX` of the owner's rows:
+    // it ends at the block of the next one, and a short page then carries the cursor of that point
+    // (R3C2-1 item 6, R4C2-1). The rows of one block are read whole.
+    let scan_end = match (&f.owner, &f.token) {
+        (Some(o), Some(_)) => {
+            let (index, live) = if f.include_spent {
+                ("token_holdings_owner_page", "")
+            } else {
+                ("token_holdings_live_owner", " AND spent_block IS NULL")
+            };
+            let from = cursor.as_ref().map_or(i64::MIN, |c| c.0);
+            let end: Option<i64> = conn
+                .query_row(
+                    &format!(
+                        "SELECT created_block FROM token_holdings INDEXED BY {index} WHERE owner_id = (SELECT id FROM ids WHERE h = ?1){live} \
+                         AND created_block >= ?2 ORDER BY created_block LIMIT 1 OFFSET {HOLDINGS_SCAN_MAX}"
+                    ),
+                    rusqlite::params![o, from],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            // A block of more rows than the budget is read whole.
+            end.map(|e| if e <= from { (e, true) } else { (e, false) })
+        }
+        _ => None,
+    };
+    if let Some((end, inclusive)) = scan_end {
+        conds.push(format!("x.created_block {} {end}", if inclusive { "<=" } else { "<" }));
+    }
     if let Some(o) = &f.owner {
         args.push(SqlValue::Blob(o.clone()));
         conds.push(format!("x.owner_id = (SELECT id FROM ids WHERE h = ?{})", args.len()));
@@ -2810,7 +2870,7 @@ pub fn holdings(
         // only, in page order). The token is a filter on them (`+`: no index may take it). They
         // are never read through `token_holdings_owner` (owner, token), which holds every spent
         // row of the pair as well. Measured: `docs/ops/executor.md`, 5.5.
-        let col = if f.owner.is_some() && !f.include_spent { "+x.token_id" } else { "x.token_id" };
+        let col = if f.owner.is_some() { "+x.token_id" } else { "x.token_id" };
         conds.push(format!("{col} = (SELECT id FROM ids WHERE h = ?{})", args.len()));
     }
     if !f.include_spent {
@@ -2878,10 +2938,17 @@ pub fn holdings(
         all.truncate(limit);
         all.last().map(|(b, v)| format!("{b}:{}:{}", v.txid, v.index))
     } else {
-        None
+        // The budget ended the page: the next one starts after the last block read.
+        scan_end.map(|(end, inclusive)| {
+            let last = if inclusive { end } else { end - 1 };
+            format!("{last}:{}:{}", "ff".repeat(32), i64::MAX)
+        })
     };
     Ok(Page { items: all.into_iter().map(|(_, v)| v).collect(), next_cursor })
 }
+
+/// Most of an owner's holdings one page of `GET /v1/token-utxos?owner=&token=` reads ([`holdings`]).
+pub const HOLDINGS_SCAN_MAX: usize = 10_000;
 
 #[cfg(test)]
 #[path = "reads_tests.rs"]

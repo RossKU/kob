@@ -218,6 +218,12 @@ CREATE INDEX IF NOT EXISTS token_utxos_custody_live ON token_utxos (order_id, am
 -- The live strays of an order in page order (`GET /v1/orders/{id}`, on the light lane): anyone can send them to any order id, and the
 -- view reads only the live ones it lists, not every token UTXO the order ever had (R3C2-1). Created in place like `orders_parent_page`.
 CREATE INDEX IF NOT EXISTS token_utxos_strays_live ON token_utxos (order_id, created_block, txid, idx) WHERE role = 'stray' AND spent_block IS NULL;
+-- The live strays of all orders newest first (`GET /v1/strays`): a page stops at its end, not after a sort of every live stray
+-- (R3C2-1 item 7). Created in place like `token_utxos_strays_live`.
+CREATE INDEX IF NOT EXISTS token_utxos_strays_new ON token_utxos (created_block DESC, txid, idx) WHERE role = 'stray' AND spent_block IS NULL;
+-- The live bought-custody of a Collected (mode-1) order (`reads::attach_holdings`, on the light lane): not every token UTXO the order
+-- ever had, strays included (R4C2-5). Created in place.
+CREATE INDEX IF NOT EXISTS token_utxos_bought_live ON token_utxos (order_id, created_block, txid, idx) WHERE role = 'bought' AND spent_block IS NULL;
 CREATE INDEX IF NOT EXISTS token_utxos_created ON token_utxos (created_block);
 CREATE INDEX IF NOT EXISTS token_utxos_spent ON token_utxos (spent_block);
 
