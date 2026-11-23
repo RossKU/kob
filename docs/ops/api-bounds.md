@@ -75,10 +75,17 @@ decided row by row, within the same bounds, until this build's next commit or st
 ## What fills the request permits
 
 The server keeps at most `max_concurrent_requests` (256) requests in flight. One client key (an IPv4 address, an IPv6 /64) keeps at
-most 8 (`CLIENT_IN_FLIGHT`), the /64s of one IPv6 /48 at most 32 together (`CLIENT_SITE_IN_FLIGHT`). A request holds its place only
-while it reads or is about to: a read that waits for its own client's lane permit gives up after 500 ms (`CLIENT_WAIT`) with
-`503 overloaded`. So filling the 256 takes 32 IPv4 addresses or 8 IPv6 /48s, each sending at least 16 requests a second that
-wait (at the per-client rate limit of 20 a second). The others then get `503 overloaded` with `Retry-After: 1`; `/v1/health`,
+most 8 (`CLIENT_IN_FLIGHT`), the /64s of one IPv6 /48 at most 32 together (`CLIENT_SITE_IN_FLIGHT`). A request past them waits
+for one, at most 2 s (`CLIENT_QUEUE_WAIT`), and holds no server permit while it waits; at most 24 of a client (`CLIENT_QUEUED`)
+and 96 of a site (`CLIENT_SITE_QUEUED`) wait, and one more is answered `503 overloaded` at once (R5B-L1: one honest page sends
+12 to 20 reads at once, and the web, the Android app and other clients keep doing so). A read that waits for its own client's lane
+permit (1 light, 2 heavy) gives up after 2 s (`CLIENT_WAIT`) with `503 overloaded`; it is sized for a burst (6 reads behind the
+2 heavy ones: 3 in turn, 0.2 s at the 70 ms of `/v1/stats` and 1.8 s at the 0.6 s of a 500-candle chart on the TN10 soak copy;
+6 order views of one book check on the single light permit, 5 in turn at most 30 ms each) and does not change what one client
+holds: at most 8 server permits. So filling the 256 takes 32 IPv4 addresses or 8 IPv6 /48s, each keeping 8 requests in flight
+(at the per-client rate limit of 20 a second); `api::one_client_holds_at_most_its_in_flight_server_permits` and
+`api::the_64s_of_one_ipv6_site_share_its_requests_in_flight` prove the per-key bounds, `api::an_honest_pages_burst_is_served_whole`
+the burst. The others then get `503 overloaded` with `Retry-After: 1`; `/v1/health`,
 `/v1/health/ready` and `/v1/metrics` take no permit and keep answering. A response the cache shares is computed under the
 permit of the client that starts it, taken before the computation exists, so the other viewers of a hot key never wait for that
 client's queue (R4C2-3).

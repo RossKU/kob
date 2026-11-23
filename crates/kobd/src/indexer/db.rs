@@ -839,19 +839,34 @@ pub const CLIENT_LIGHT_READS: usize = 1;
 /// Reads one API client may have on the heavy lane at once, waiting or running: two of its
 /// `read_pool_size` (4) connections at most.
 pub const CLIENT_HEAVY_READS: usize = 2;
-/// Requests one API client may have in flight at once; the guard answers `503 overloaded` past it.
+/// Requests one API client may have in flight at once, each holding one of the server's request permits.
 ///
-/// With [`CLIENT_WAIT`] a request keeps its place only while it reads or is about to, so it takes 32 client keys (IPv4
-/// addresses, or IPv6 /48 sites, [`CLIENT_SITE_IN_FLIGHT`]) that each keep 8 requests in flight to fill the server's
-/// `max_concurrent_requests` (256). `/v1/health` is outside that cap (R4C2-1).
+/// A request past them waits for one of its client's own ([`CLIENT_QUEUE_WAIT`], at most [`CLIENT_QUEUED`] waiting) and
+/// holds no server permit while it waits. So it takes 32 client keys (IPv4 addresses, or IPv6 /48 sites,
+/// [`CLIENT_SITE_IN_FLIGHT`]) that each keep 8 requests in flight to fill the server's `max_concurrent_requests` (256),
+/// however long they wait. `/v1/health` is outside that cap (R4C2-1).
 pub const CLIENT_IN_FLIGHT: usize = 8;
 /// Requests the IPv6 /64s of one site (`ipv6_site_prefix_bits`, a /48) may have in flight together. The /64s of one
 /// allocation cost nothing to rotate through, so the site is the key that costs an attacker something (R4C2-1).
 pub const CLIENT_SITE_IN_FLIGHT: usize = 32;
-/// Longest a read waits for its client's own lane permit, which that client's other reads hold. Past it the read fails
-/// with [`DbError::Overloaded`] (`503` to that client only), so a client's backlog does not hold the server's request
-/// permits while it waits (R4C2-1). An honest page makes a few reads at once, and a light read takes milliseconds.
-pub const CLIENT_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+/// Longest a request past its client's [`CLIENT_IN_FLIGHT`] waits for one of them (and for its site's, the same), holding
+/// no server permit. One honest page sends 12 to 20 reads at once (R5B-L1); the 20th waits for 12 to end, about 6
+/// heavy reads in turn on the client's 2 heavy permits: 6 x 70 ms (the slowest common read, `/v1/stats`, on the TN10 soak
+/// copy, `docs/ops/executor.md` 5.5) is 0.4 s, so 2 s leaves room for a cold cache. Past it: `503 overloaded`.
+pub const CLIENT_QUEUE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+/// Requests one client may have waiting for its in-flight permits; one more is answered `503 overloaded` at once. With
+/// the 8 in flight it covers a page's burst of 20 and a second page opened beside it.
+pub const CLIENT_QUEUED: usize = 24;
+/// Requests the /64s of one IPv6 site may have waiting together for the site's [`CLIENT_SITE_IN_FLIGHT`].
+pub const CLIENT_SITE_QUEUED: usize = 96;
+/// Longest a read waits for its client's own lane permit, which that client's other reads hold, while its request holds a
+/// server permit. Past it the read fails with [`DbError::Overloaded`] (`503` to that client only).
+///
+/// A client holds at most 8 server permits however long this is ([`CLIENT_IN_FLIGHT`]), so the bound on what fills
+/// the 256 does not depend on it. It is sized for an honest burst: of 8 requests in flight, 6 wait behind the 2 heavy
+/// reads, 3 reads in turn, 0.2 s at 70 ms and 1.8 s for 500-candle charts (0.6 s each); and 6 order views of one page's
+/// book check wait on the single light permit, 5 x at most 30 ms (an order view at its bound, about 220,000 VM steps).
+pub const CLIENT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// What one API client (a rate-limit key: an IPv4 address or an IPv6 prefix) may use at once.
 ///
@@ -864,6 +879,8 @@ pub struct ClientLanes {
     pub(crate) heavy: Arc<Semaphore>,
     /// Requests in flight (`CLIENT_IN_FLIGHT`), taken by the guard.
     pub in_flight: Arc<Semaphore>,
+    /// Requests waiting for `in_flight` (at most `CLIENT_QUEUED`).
+    pub queued: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Default for ClientLanes {
@@ -872,8 +889,36 @@ impl Default for ClientLanes {
             light: Arc::new(Semaphore::new(CLIENT_LIGHT_READS)),
             heavy: Arc::new(Semaphore::new(CLIENT_HEAVY_READS)),
             in_flight: Arc::new(Semaphore::new(CLIENT_IN_FLIGHT)),
+            queued: Default::default(),
         }
     }
+}
+
+/// One of `permits`, waited for at most [`CLIENT_QUEUE_WAIT`] with at most `max_queued` others waiting (`queued`).
+/// `None` when the wait is refused or runs out: the guard answers `503 overloaded`.
+pub async fn queued_permit(
+    permits: &Arc<Semaphore>,
+    queued: &std::sync::atomic::AtomicUsize,
+    max_queued: usize,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    use std::sync::atomic::Ordering;
+    if let Ok(p) = permits.clone().try_acquire_owned() {
+        return Some(p);
+    }
+    // Counted out when the wait ends, also when the request goes away while it waits.
+    struct Waiting<'a>(&'a std::sync::atomic::AtomicUsize);
+    impl Drop for Waiting<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+    let waiting = Waiting(queued);
+    if queued.fetch_add(1, Ordering::AcqRel) >= max_queued {
+        return None;
+    }
+    let p = tokio::time::timeout(CLIENT_QUEUE_WAIT, permits.clone().acquire_owned()).await;
+    drop(waiting);
+    p.ok().and_then(Result::ok)
 }
 
 /// The permit of the current API client ([`CLIENT_LANES`]) on the light or the heavy lane, waited for at most

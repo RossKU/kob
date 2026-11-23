@@ -1332,7 +1332,7 @@ Every error the handlers and the guard produce is JSON:
 | 429 | `ws_per_ip_limit` | WebSocket upgrade over the per-client cap. | 5 |
 | 429 | `ws_per_site_limit` | WebSocket upgrade over the per-IPv6-site cap. | 5 |
 | 500 | `internal` | A database or serialisation error ("internal error"); logged server side. | no |
-| 503 | `overloaded` | `max_concurrent_requests` requests already in flight; rejected at once, not queued. | 1 |
+| 503 | `overloaded` | `max_concurrent_requests` requests already in flight (rejected at once, not queued), or the client's own requests in flight and waiting are full (section 5.3). | 1 |
 | 503 | `db_busy` | SQLite reported the database busy or locked ("database busy, retry shortly"). | 1 |
 | 503 | `ws_capacity` | WebSocket upgrade over `max_ws_connections`. | 5 |
 | 504 | `timeout` | The request ran longer than `request_timeout_ms` ("request timed out"). | no |
@@ -1376,13 +1376,16 @@ too; WebSocket messages after the upgrade do not, they have their own cap).
   `/v1/health`, `/v1/health/ready` and `/v1/metrics` answer from memory and take no place in it, so they answer while it is
   full (R4C2-1).
 * With the per-client rate limit on, one client (its rate-limit key: an IPv4 address or an IPv6 `/64`) may have 8 requests in
-  flight, and the `/64`s of one IPv6 `/48` site 32 together; past either the request is answered `503 overloaded`
-  (`Retry-After: 1`). A client has 1 read on the light lane and 2 on the heavy lane at once; a further read of the same client
-  waits for one of them at most 500 ms, then is answered `503 overloaded`, to that client only. It takes 32 client keys (IPv4
-  addresses or IPv6 sites) that each keep 8 requests in flight to fill the 256; health answers even then.
+  flight, and the `/64`s of one IPv6 `/48` site 32 together. A request past them waits for one, at most 2 s, holding no place
+  in the 256 while it waits; at most 24 requests of a client (96 of a site) wait, and one more, or one whose wait runs out, is
+  answered `503 overloaded` (`Retry-After: 1`), to that client only. So a page may send its 12 to 20 reads at once. A client
+  has 1 read on the light lane and 2 on the heavy lane at once; a further read of the same client waits for one of them at most
+  2 s, then is answered `503 overloaded`. It takes 32 client keys (IPv4 addresses or IPv6 sites) that each keep 8 requests in
+  flight to fill the 256, however long they wait; health answers even then.
 * A request that runs longer than `request_timeout_ms` (default 10,000) is answered `504 timeout`. The wait for a free
-  read-pool connection counts. The abandoned read is cancelled (not started if still queued; interrupted if running) and its
-  connection returns to the pool.
+  read-pool connection counts. An abandoned uncached read is cancelled (not started if still queued; interrupted if running) and
+  its connection returns to the pool. A read the response cache shares (section 5.6) is not: it runs on for the others who ask
+  for the same key, at most 20 s, under the heavy-read permit of the client that started it.
 * Reads run on `read_pool_size` (default 4) database connections, plus one more "light lane" connection for the reads bounded by a
   few index lookups (`/v1/health` counters, `/v1/orders/{id}` and its events, the declaration), so those never queue behind
   heavy reads. Independent of the request timeout, a single pooled read is interrupted by the database after 20 seconds
@@ -1423,7 +1426,7 @@ committed batch, revert, operator import and possibly-frozen flag). The key is t
 depend on the clock (books, pairs, pair books, stats, depth), the node's DAA score and the wall-clock second, so a cached body is
 byte for byte what the request would have computed.
 Concurrent requests of one key wait for one read; a failed read is not kept. The read is started by the first request (which
-needs a heavy read of its own client free within 500 ms, section 5.3) and then runs on its own: a request that goes away does not
+needs a heavy read of its own client free within 2 s, section 5.3) and then runs on its own: a request that goes away does not
 stop it, and the others do not wait for the first client's other reads (R4C2-3). At most 1,024 bodies and 32 MiB per generation are
 held; a new key past either bound evicts the least recently used bodies. This is invisible to clients except as lower latency: it adds no header and no staleness beyond the store's own.
 

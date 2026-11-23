@@ -131,7 +131,7 @@ pub struct App {
     /// The lane permits and requests in flight of each client (`indexer::db::ClientLanes`).
     pub(crate) clients: std::sync::Mutex<std::collections::HashMap<IpAddr, Arc<crate::indexer::db::ClientLanes>>>,
     /// The requests in flight of each IPv6 site (`indexer::db::CLIENT_SITE_IN_FLIGHT`).
-    pub(crate) sites: std::sync::Mutex<std::collections::HashMap<IpAddr, Arc<Semaphore>>>,
+    pub(crate) sites: std::sync::Mutex<std::collections::HashMap<IpAddr, Arc<SiteGate>>>,
 }
 
 impl App {
@@ -403,15 +403,23 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
         // Per client while the per-client rate limit is on: its requests in flight (and its IPv6 site's) and its reads
         // on each lane (`db::ClientLanes`, R3C2-1, R4C2-1).
         let lanes = (app.state.cfg.rate_limit.per_ip_rps > 0.0).then(|| client_lanes(&app, ip));
+        // A request past its client's (or site's) in-flight permits waits for one of them, at most `CLIENT_QUEUE_WAIT` and
+        // with at most `CLIENT_QUEUED` others, holding no server permit while it waits (R5B-L1). Only then does it take
+        // one of the server's request permits, at once or `503 overloaded`.
+        use crate::indexer::db::{queued_permit, CLIENT_QUEUED, CLIENT_SITE_QUEUED};
         let mine = match &lanes {
-            Some(l) => l.in_flight.clone().try_acquire_owned().map(Some),
+            Some(l) => queued_permit(&l.in_flight, &l.queued, CLIENT_QUEUED).await.ok_or(()).map(Some),
             None => Ok(None),
         };
-        let site = match lanes.as_ref().and_then(|_| site_in_flight(&app, ip)) {
-            Some(s) => s.try_acquire_owned().map(Some),
-            None => Ok(None),
+        let site = match (&mine, lanes.as_ref().and_then(|_| site_in_flight(&app, ip))) {
+            (Ok(_), Some(s)) => queued_permit(&s.permits, &s.queued, CLIENT_SITE_QUEUED).await.ok_or(()).map(Some),
+            _ => Ok(None),
         };
-        match (mine, site, app.concurrency.clone().try_acquire_owned()) {
+        let server = match (&mine, &site) {
+            (Ok(_), Ok(_)) => app.concurrency.clone().try_acquire_owned().map_err(|_| ()),
+            _ => Err(()),
+        };
+        match (mine, site, server) {
             (Err(_), _, _) | (_, Err(_), _) | (_, _, Err(_)) => ApiError::overloaded().into_response(),
             (Ok(_mine), Ok(_site), Ok(_permit)) => {
                 let limit = Duration::from_millis(app.state.cfg.request_timeout_ms.max(1));
@@ -466,8 +474,14 @@ fn client_lanes(app: &App, ip: IpAddr) -> Arc<crate::indexer::db::ClientLanes> {
     m.entry(key).or_default().clone()
 }
 
+/// The in-flight permits of one IPv6 site and the requests waiting for them.
+pub(crate) struct SiteGate {
+    permits: Arc<Semaphore>,
+    queued: std::sync::atomic::AtomicUsize,
+}
+
 /// The in-flight permits of the IPv6 site of `ip` (`ipv6_site_prefix_bits`), `None` for IPv4 or without sites.
-fn site_in_flight(app: &App, ip: IpAddr) -> Option<Arc<Semaphore>> {
+fn site_in_flight(app: &App, ip: IpAddr) -> Option<Arc<SiteGate>> {
     let bits = app.state.cfg.rate_limit.ipv6_site_prefix_bits;
     if bits == 0 || !client_ip::unmap(ip).is_ipv6() {
         return None;
@@ -477,7 +491,16 @@ fn site_in_flight(app: &App, ip: IpAddr) -> Option<Arc<Semaphore>> {
     if m.len() >= CLIENTS_KEPT && !m.contains_key(&key) {
         m.retain(|_, s| Arc::strong_count(s) > 1);
     }
-    Some(m.entry(key).or_insert_with(|| Arc::new(Semaphore::new(crate::indexer::db::CLIENT_SITE_IN_FLIGHT))).clone())
+    Some(
+        m.entry(key)
+            .or_insert_with(|| {
+                Arc::new(SiteGate {
+                    permits: Arc::new(Semaphore::new(crate::indexer::db::CLIENT_SITE_IN_FLIGHT)),
+                    queued: Default::default(),
+                })
+            })
+            .clone(),
+    )
 }
 
 /// Binds `cfg.listen` and serves until `shutdown` resolves.
