@@ -402,6 +402,62 @@ fn orders_that_cannot_be_filled_now_take_no_place_in_the_book() {
     assert_eq!(now["truncated"], true, "the auctions past their bound are cut");
 }
 
+/// R5A-1: a buy-first if-done entry pays its seller from the KAS it holds. 1,001 entries at a better price than every
+/// honest bid, each stating 1,000 whole tokens and holding 0.2 KAS, can fill none: they take no place, the honest bids
+/// are read whole and not `truncated`, and no entry is a level, the stats' best bid or a count.
+#[test]
+fn an_if_done_bid_without_its_escrow_takes_no_place() {
+    let _heavy = heavy();
+    let conn = open_memory("testnet-10").unwrap();
+    honest_book(&conn);
+    let maintain = || crate::indexer::db::maintain_live_books(&conn, 1_000, None).unwrap();
+    maintain();
+    let (token, ctx, list) = (Hash32(TOKEN_COV), ctx(), allowlist());
+    let honest = serde_json::to_value(book(&conn, &ctx, &token, 20, true).unwrap()).unwrap();
+    let honest_orders = serde_json::to_value(book(&conn, &ctx, &token, 20, false).unwrap()).unwrap();
+    let entry = kob_protocol::state::IfdBidState { min_fill: 1_000 * WHOLE, ..crate::testkit::ifd_bid(7, 1_000) };
+    assert!(entry.escrow().unwrap() > 20_000_000, "the seeded 0.2 KAS is far below its escrow");
+    let s = Seed {
+        prefix: "f",
+        contract: "KobIfdBid",
+        side: 2,
+        token: TOKEN_COV,
+        quote: None,
+        parent: None,
+        state: Some(AnyState::KobIfdBid(entry.clone()).encode()),
+        price0: Some(entry.price),
+        remaining: entry.amount_left,
+        custody: false,
+        listed: true,
+        maker: pk(7),
+    };
+    seed(&conn, &s, 0, 1_001);
+    maintain();
+    assert_eq!(serde_json::to_value(book(&conn, &ctx, &token, 20, true).unwrap()).unwrap(), honest);
+    assert_eq!(serde_json::to_value(book(&conn, &ctx, &token, 20, false).unwrap()).unwrap(), honest_orders);
+    let stats = serde_json::to_value(market::stats(&conn, &ctx, &token, Some(3)).unwrap()).unwrap();
+    assert!(stats.get("book_truncated").is_none(), "{stats}");
+    assert_eq!(token_list(&conn, &list).unwrap()[0].open_bids, 10);
+    let open: i64 = conn
+        .query_row("SELECT COUNT(*) FROM book_live bl JOIN orders o ON o.id = bl.order_id WHERE o.contract = 'KobIfdBid' AND bl.open = 1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(open, 0);
+
+    // one entry funded for three whole tokens: it is a bid of three, not of 1,000
+    let three = entry.spend(3 * WHOLE, entry.price).unwrap() + entry.delivery_carrier + entry.exit_carrier + 1;
+    let funded = kob_protocol::state::IfdBidState { min_fill: WHOLE, ..entry.clone() };
+    let s = Seed { prefix: "g", state: Some(AnyState::KobIfdBid(funded.clone()).encode()), ..s };
+    seed(&conn, &s, 0, 1);
+    conn.execute("UPDATE order_state SET cur_value = ?1 WHERE order_id = (SELECT id FROM orders WHERE substr(covenant_id, 1, 1) = CAST('g' AS BLOB))", [three])
+        .unwrap();
+    conn.execute("UPDATE book_live SET ok = NULL WHERE order_id = (SELECT id FROM orders WHERE substr(covenant_id, 1, 1) = CAST('g' AS BLOB))", []).unwrap();
+    maintain();
+    let now = serde_json::to_value(book(&conn, &ctx, &token, 20, false).unwrap()).unwrap();
+    let best = &now["bids"][0];
+    assert_eq!(best["contract"], "KobIfdBid");
+    assert_eq!(best["fillable_now"], (3 * WHOLE).to_string());
+}
+
 /// R4C2-1, R4C2-5 and R3C2-1: one order's view (on the light lane), its events and a maker's order
 /// page do not grow with its children, its live and spent strays, or a spent bought-custody history.
 #[test]

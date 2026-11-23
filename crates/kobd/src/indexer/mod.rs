@@ -40,6 +40,7 @@ pub mod recovery;
 pub mod release;
 pub mod status;
 pub mod storage;
+pub(crate) mod takeable;
 pub mod trust;
 
 use crate::api::{self, ApiState};

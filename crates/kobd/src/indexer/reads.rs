@@ -980,7 +980,17 @@ pub(crate) const RESTING_TIF: &str = "COALESCE(o.tif, 0) = 0";
 /// now: an IOC / FOK taker, or a TWAP order whose next slice is not due, because its UTXO,
 /// created at `udaa`, is not yet `interval` DAA old (the covenant's CSV). An order whose tip
 /// state (`s`) is unknown rests at its limit.
-fn resting_level_of(s: Option<&AnyState>, udaa: i64, price: i64, remaining: Option<i64>, now: i64) -> Option<(i64, Option<i64>)> {
+///
+/// An if-done entry rests with what one fill can take now from its UTXO of `value` sompi
+/// ([`super::takeable::kas_takeable`], R5A-1), and not at all when that is nothing.
+fn resting_level_of(
+    s: Option<&AnyState>,
+    udaa: i64,
+    price: i64,
+    remaining: Option<i64>,
+    value: Option<i64>,
+    now: i64,
+) -> Option<(i64, Option<i64>)> {
     use kob_protocol::state::TIF_GTC;
     let Some(s) = s else { return Some((price, remaining)) };
     let resting = |tif: i64, interval: i64| tif == TIF_GTC && (interval <= 0 || now >= udaa.saturating_add(interval));
@@ -991,6 +1001,11 @@ fn resting_level_of(s: Option<&AnyState>, udaa: i64, price: i64, remaining: Opti
         _ => remaining,
     };
     let quote = auction_of(s, udaa, Some(now.max(0) as u64)).and_then(|a| a.current_price.parse::<i64>().ok()).unwrap_or(price);
+    let amount = match super::takeable::kas_takeable(s, value.unwrap_or(0), quote) {
+        Some(0) => return None,
+        Some(t) => amount.map(|a| a.min(t)),
+        None => amount,
+    };
     Some((quote, amount))
 }
 
@@ -1002,9 +1017,10 @@ pub(crate) fn resting_levels(
     udaa: i64,
     price: i64,
     remaining: Option<i64>,
+    value: Option<i64>,
     now: i64,
 ) -> Vec<(Option<usize>, i64, Option<i64>)> {
-    resting_levels_of(tip_state(contract, state).as_ref(), udaa, price, remaining, now)
+    resting_levels_of(tip_state(contract, state).as_ref(), udaa, price, remaining, value, now)
 }
 
 /// [`resting_levels`] of a decoded tip state (`None`: unknown).
@@ -1013,12 +1029,13 @@ fn resting_levels_of(
     udaa: i64,
     price: i64,
     remaining: Option<i64>,
+    value: Option<i64>,
     now: i64,
 ) -> Vec<(Option<usize>, i64, Option<i64>)> {
     if let Some(AnyState::KobCurveAsk(c)) = s {
         return crate::model::curve_levels(c).into_iter().map(|(l, p, a)| (Some(l), p, Some(a))).collect();
     }
-    resting_level_of(s, udaa, price, remaining, now).map(|(q, a)| (None, q, a)).into_iter().collect()
+    resting_level_of(s, udaa, price, remaining, value, now).map(|(q, a)| (None, q, a)).into_iter().collect()
 }
 
 /// Most orders with a fixed quote one read of a book side takes: those a taker can fill now, best
@@ -1130,7 +1147,7 @@ fn book_side_orders(
         // A taker in flight or a TWAP order between its slices is not in the book. The aggregated
         // levels leave it out the same way. The state is decoded once.
         let state = tip_state(&contract, raw_state);
-        let mut levels = resting_levels_of(state.as_ref(), utxo_daa.unwrap_or(last_daa), price, remaining, now);
+        let mut levels = resting_levels_of(state.as_ref(), utxo_daa.unwrap_or(last_daa), price, remaining, r.get(12)?, now);
         if levels.is_empty() {
             return Ok(None);
         }
@@ -1311,7 +1328,7 @@ pub(crate) fn for_each_resting(
     let from = book_from(now, ctx.now_unix);
     let sql = format!(
         "SELECT o.price, COALESCE(o.scale, 1), s.remaining_amount, s.amount_exact, o.contract, kob_ustate(u.state, {GENESIS_O}), \
-                COALESCE(u.created_daa, s.last_daa) \
+                COALESCE(u.created_daa, s.last_daa), s.cur_value \
          {from} \
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
          WHERE {BOOK_WHERE} AND {CUSTODY_OK} AND {live} AND {pinned} AND {RESTING_TIF}"
@@ -1319,7 +1336,7 @@ pub(crate) fn for_each_resting(
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(rusqlite::params![token.0.to_vec(), side], |r| {
         let (price, remaining): (i64, Option<i64>) = (r.get(0)?, r.get(2)?);
-        let level = resting_levels(&r.get::<_, String>(4)?, r.get(5)?, r.get(6)?, price, remaining, now);
+        let level = resting_levels(&r.get::<_, String>(4)?, r.get(5)?, r.get(6)?, price, remaining, r.get(7)?, now);
         Ok((level, r.get::<_, i64>(1)?, r.get::<_, i64>(3)?))
     })?;
     for r in rows {
@@ -1355,7 +1372,8 @@ pub(crate) fn book_window(conn: &Connection, order_id: i64) -> DbResult<Option<L
     let sql = format!(
         "SELECT o.contract, kob_ustate(u.state, {GENESIS_O}), COALESCE(u.created_daa, s.last_daa), COALESCE(o.active_from, 0), \
                 o.expiry_daa, o.deadline, o.price, COALESCE(o.scale, 1), o.side, s.remaining_amount, \
-                (s.status IN ('open','partial') AND s.state_known = 1 AND {HAS_AMOUNT} AND {NOT_FROZEN} AND {CUSTODY_OK} AND {pinned} AND {RESTING_TIF}) \
+                (s.status IN ('open','partial') AND s.state_known = 1 AND {HAS_AMOUNT} AND {NOT_FROZEN} AND {CUSTODY_OK} AND {pinned} AND {RESTING_TIF}), \
+                s.cur_value \
          FROM order_state s CROSS JOIN orders o ON o.id = s.order_id \
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} WHERE s.order_id = ?1",
         pinned = pinned_template()
@@ -1375,10 +1393,11 @@ pub(crate) fn book_window(conn: &Connection, order_id: i64) -> DbResult<Option<L
                 r.get::<_, i64>(8)?,
                 r.get::<_, Option<i64>>(9)?,
                 r.get::<_, bool>(10)?,
+                r.get::<_, Option<i64>>(11)?,
             ))
         })
         .optional()?;
-    let Some((contract, raw, udaa, active_from, expiry, deadline, price, scale, side, remaining, sql_ok)) = row else {
+    let Some((contract, raw, udaa, active_from, expiry, deadline, price, scale, side, remaining, sql_ok, value)) = row else {
         return Ok(None);
     };
     let state = tip_state(&contract, raw);
@@ -1403,8 +1422,14 @@ pub(crate) fn book_window(conn: &Connection, order_id: i64) -> DbResult<Option<L
     };
     let priced = price.is_some() || curve;
     let _ = remaining;
+    // An if-done entry whose UTXO cannot pay for one fill at its limit, the highest quote its
+    // auction reaches, cannot be filled: it takes no place (R5A-1).
+    let funded = match (&state, price) {
+        (Some(s), Some(p)) => super::takeable::kas_takeable(s, value.unwrap_or(0), p) != Some(0),
+        _ => true,
+    };
     Ok(Some(LiveWindow {
-        ok: sql_ok && resting && curve_ok && priced,
+        ok: sql_ok && resting && curve_ok && priced && funded,
         open_from: active_from.max(slice_open),
         closed_from: expiry.unwrap_or(i64::MAX).min(if curve { i64::MAX } else { udaa.saturating_add(MAX_IDLE) }),
         deadline,

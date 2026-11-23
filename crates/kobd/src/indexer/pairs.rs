@@ -222,21 +222,36 @@ fn eligible(state: &AnyState, udaa: i64, deadline: Option<i64>, now: i64, ctx: &
 ///
 /// That is one live custody UTXO per custody token, at the exact amount, and no other custody row.
 pub fn pair_custody_ok(conn: &Connection, cov: &[u8], state: &AnyState) -> DbResult<bool> {
+    Ok(custodies_match(&pair_custodies(conn, cov)?, state))
+}
+
+/// The live custody rows of an order: (token, amount, carrier sompi).
+fn pair_custodies(conn: &Connection, cov: &[u8]) -> DbResult<Vec<(Vec<u8>, i64, i64)>> {
     let mut st = conn.prepare_cached(
-        "SELECT tk.h, t.amount FROM token_utxos t JOIN ids tk ON tk.id = t.token_id \
+        "SELECT tk.h, t.amount, t.value FROM token_utxos t JOIN ids tk ON tk.id = t.token_id \
          WHERE t.order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND t.role = 'custody' AND t.spent_block IS NULL",
     )?;
-    let mut live: Vec<(Vec<u8>, i64)> = st.query_map([cov], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let rows = st.query_map([cov], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// [`pair_custody_ok`] of the rows [`pair_custodies`] read.
+fn custodies_match(rows: &[(Vec<u8>, i64, i64)], state: &AnyState) -> bool {
+    let mut live: Vec<(Vec<u8>, i64)> = rows.iter().map(|c| (c.0.clone(), c.1)).collect();
     let mut want: Vec<(Vec<u8>, i64)> = state.custodies().into_iter().filter(|c| c.1 != 0).map(|(t, a)| (t.to_vec(), a)).collect();
     live.sort();
     want.sort();
-    Ok(live == want)
+    live == want
 }
 
 /// A listed live pair order of the pair, with its tip state and the DAA score of its UTXO.
 struct LivePair {
     state: AnyState,
     udaa: i64,
+    /// The order UTXO's sompi and its live custodies ([`pair_custodies`]): what one fill can take
+    /// ([`super::takeable::pair_takeable`]).
+    value: i64,
+    custodies: Vec<(Vec<u8>, i64, i64)>,
 }
 
 /// The most pair orders a pair book is built from: the oldest that rest at a level.
@@ -263,7 +278,7 @@ fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: 
     let live = fillable_now(now, ctx.now_unix);
     let (open, pending) = pair_arms(now, ctx.now_unix);
     let sql = format!(
-        "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline \
+        "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline, u.value \
          FROM (SELECT order_id FROM ({open} LIMIT ?3) UNION ALL SELECT order_id FROM ({pending} LIMIT {moving})) p \
          CROSS JOIN order_state s ON s.order_id = p.order_id CROSS JOIN orders o ON o.id = p.order_id \
          JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
@@ -280,6 +295,7 @@ fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: 
             r.get::<_, Option<Vec<u8>>>(2)?,
             r.get::<_, i64>(3)?,
             r.get::<_, Option<i64>>(4)?,
+            r.get::<_, i64>(5)?,
         ))
     })?;
     let mut out = vec![];
@@ -288,13 +304,17 @@ fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: 
         if scanned == PAIR_SCAN_MAX || out.len() == PAIR_BOOK_ORDERS_MAX {
             return Ok((out, true));
         }
-        let (cov, contract, state, udaa, deadline) = r?;
+        let (cov, contract, state, udaa, deadline, value) = r?;
         let Some(s) = tip_state(&contract, state) else { continue };
         if !s.is_pair() || !eligible(&s, udaa, deadline, now, ctx) {
             continue;
         }
-        let p = LivePair { state: s, udaa };
-        if resting_level(&p, now).is_none() || !pair_custody_ok(conn, &cov, &p.state)? {
+        let custodies = pair_custodies(conn, &cov)?;
+        if !custodies_match(&custodies, &s) {
+            continue;
+        }
+        let p = LivePair { state: s, udaa, value, custodies };
+        if resting_level(&p, now).is_none() {
             continue;
         }
         out.push(p);
@@ -339,28 +359,32 @@ fn pair_window(now: i64, unix: Option<u64>) -> String {
 /// [`pair_custody_ok`] as DAA bounds. `None` when it has no state row.
 pub(crate) fn pair_window_of(conn: &Connection, order_id: i64) -> DbResult<Option<super::reads::LiveWindow>> {
     let sql = format!(
-        "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline, \
+        "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline, s.cur_value, \
                 (s.status IN ('open','partial') AND s.state_known = 1 AND u.spent_block IS NULL AND {RESTING_TIF} AND {NOT_FROZEN} AND {pinned}) \
          FROM order_state s CROSS JOIN orders o ON o.id = s.order_id \
          LEFT JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} WHERE s.order_id = ?1",
         pinned = pinned_template()
     );
-    type Row = (Vec<u8>, String, Option<Vec<u8>>, Option<i64>, Option<i64>, Option<bool>);
+    type Row = (Vec<u8>, String, Option<Vec<u8>>, Option<i64>, Option<i64>, Option<i64>, Option<bool>);
     let row: Option<Row> = conn
         .prepare_cached(&sql)?
-        .query_row([order_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))
+        .query_row([order_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))
         .optional()?;
-    let Some((cov, contract, raw, udaa, deadline, sql_ok)) = row else { return Ok(None) };
+    let Some((cov, contract, raw, udaa, deadline, value, sql_ok)) = row else { return Ok(None) };
     let udaa = udaa.unwrap_or(0);
     let state = tip_state(&contract, raw);
     let (mut ok, mut open_from, mut closed_from) = (false, 0, i64::MAX);
     if let Some(s) = state.as_ref().filter(|s| s.is_pair()) {
-        let resting = match s {
-            AnyState::KobPair(p) => p.tif == TIF_GTC,
-            AnyState::KobIfdPair(e) => e.entry_stop == 0 || e.armed != 0,
-            _ => false,
+        // Something left (a sold-out repeating entry lives on for its exits' re-arms, R5A-2), and one
+        // fill its UTXO and custodies pay for at the highest quote the order reaches (R5A-1).
+        let (resting, top) = match s {
+            AnyState::KobPair(p) => (p.tif == TIF_GTC && p.amount_left > 0, p.price_max()),
+            AnyState::KobIfdPair(e) => ((e.entry_stop == 0 || e.armed != 0) && e.amount_left > 0, e.price),
+            _ => (false, 0),
         };
-        ok = sql_ok.unwrap_or(false) && resting && crate::sanity::check(s).is_ok() && pair_custody_ok(conn, &cov, s)?;
+        let custodies = pair_custodies(conn, &cov)?;
+        let funded = super::takeable::pair_takeable(s, value.unwrap_or(0), &custodies, top) != Some(0);
+        ok = sql_ok.unwrap_or(false) && resting && funded && crate::sanity::check(s).is_ok() && custodies_match(&custodies, s);
         open_from = crate::model::terms_of(s).active_from;
         if let AnyState::KobPair(p) = s {
             if p.interval > 0 {
@@ -526,15 +550,22 @@ fn finish(mut levels: Vec<Lvl>, asks: bool, depth: usize) -> Vec<PairLevel> {
 /// A)`.
 ///
 /// It is `None` for the orders that the book leaves out: a `KobCondPair`, an unarmed stop entry, an
-/// IOC or FOK taker, a TWAP slice that is not due yet, and an order with nothing left.
+/// IOC or FOK taker, a TWAP slice that is not due yet, and an order with nothing left. The amount is
+/// at most what one fill can take now from the order's UTXO and custodies (R5A-1).
 fn resting_level(p: &LivePair, now: i64) -> Option<(bool, &'static str, i64, i64, i64)> {
+    let takeable = |q: i64, amount: i64| match super::takeable::pair_takeable(&p.state, p.value, &p.custodies, q) {
+        Some(t) => amount.min(t),
+        None => amount,
+    };
     crate::indexer::processor::guarded(|| match &p.state {
         AnyState::KobPair(s) if s.tif == TIF_GTC && (s.interval <= 0 || now >= p.udaa.saturating_add(s.interval)) => {
             let amount = if s.max_fill > 0 { s.amount_left.min(s.max_fill) } else { s.amount_left };
-            Some((s.is_ask(), "direct", s.price_at(now, p.udaa)?, s.a_scale(), amount))
+            let q = s.price_at(now, p.udaa)?;
+            Some((s.is_ask(), "direct", q, s.a_scale(), takeable(q, amount)))
         }
         AnyState::KobIfdPair(e) if e.entry_stop == 0 || e.armed != 0 => {
-            Some((!e.is_buy_first(), "entry", e.price_at(false, now, p.udaa)?, e.a_scale, e.amount_left))
+            let q = e.price_at(false, now, p.udaa)?;
+            Some((!e.is_buy_first(), "entry", q, e.a_scale, takeable(q, e.amount_left)))
         }
         _ => None,
     })
