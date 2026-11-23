@@ -164,6 +164,7 @@ impl Indexer {
         }
         let writer = lock::WriterLock::acquire(&cfg)?;
         let tokens = load_tokens(&cfg)?;
+        storage::recover_interrupted_swap(&cfg.db_path())?;
         let conn = db::open_writer_with(&cfg.db_path(), &cfg.network, cfg.lean)?;
         if !cfg.lean && cfg.archive_pruning {
             // The index that the archive pruning reads. It takes a few seconds once, on a store of

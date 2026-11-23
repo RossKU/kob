@@ -126,6 +126,10 @@ pub struct App {
     pub(crate) shutdown: watch::Sender<bool>,
     /// The responses of the hot reads for the current data generation ([`cache`]).
     pub(crate) cache: cache::ResponseCache,
+    /// The store counters `/v1/health` serves from memory (`rest::health_counters`).
+    pub(crate) health_counters: std::sync::Mutex<rest::HealthCounters>,
+    /// The lane permits and requests in flight of each client (`indexer::db::ClientLanes`).
+    pub(crate) clients: std::sync::Mutex<std::collections::HashMap<IpAddr, Arc<crate::indexer::db::ClientLanes>>>,
 }
 
 impl App {
@@ -219,6 +223,8 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         ws: ws::WsRegistry::default(),
         shutdown,
         cache: cache::ResponseCache::default(),
+        health_counters: Default::default(),
+        clients: Default::default(),
         state,
     });
     // The JSON reads are compressed. The WebSocket upgrade, the Prometheus text and the logo
@@ -370,15 +376,28 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
     } else if req.method() == Method::OPTIONS && cors.is_some() {
         StatusCode::NO_CONTENT.into_response()
     } else {
-        match app.concurrency.clone().try_acquire_owned() {
-            Err(_) => {
+        // Per client while the per-client rate limit is on: its requests in flight and its reads
+        // on each lane (`db::ClientLanes`, R3C2-1).
+        let lanes = (app.state.cfg.rate_limit.per_ip_rps > 0.0).then(|| client_lanes(&app, ip));
+        let mine = match &lanes {
+            Some(l) => l.in_flight.clone().try_acquire_owned().map(Some),
+            None => Ok(None),
+        };
+        match (mine, app.concurrency.clone().try_acquire_owned()) {
+            (Err(_), _) | (_, Err(_)) => {
                 let mut e = ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "overloaded", "too many requests in flight");
                 e.retry_after = Some(1);
                 e.into_response()
             }
-            Ok(_permit) => {
+            (Ok(_mine), Ok(_permit)) => {
                 let limit = Duration::from_millis(app.state.cfg.request_timeout_ms.max(1));
-                match tokio::time::timeout(limit, next.run(req)).await {
+                let run = async {
+                    match lanes {
+                        Some(l) => crate::indexer::db::CLIENT_LANES.scope(l, next.run(req)).await,
+                        None => next.run(req).await,
+                    }
+                };
+                match tokio::time::timeout(limit, run).await {
                     Ok(r) => r,
                     Err(_) => ApiError::new(StatusCode::GATEWAY_TIMEOUT, "timeout", "request timed out").into_response(),
                 }
@@ -407,6 +426,20 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
         }
     }
     resp
+}
+
+/// Clients whose lane permits are kept before the ones no request holds are dropped.
+const CLIENTS_KEPT: usize = 4_096;
+
+/// The lane permits of the client `ip` (its rate-limit key).
+fn client_lanes(app: &App, ip: IpAddr) -> Arc<crate::indexer::db::ClientLanes> {
+    let key = client_ip::rate_key(ip, app.state.cfg.rate_limit.ipv6_prefix_bits);
+    let mut m = app.clients.lock().unwrap_or_else(|e| e.into_inner());
+    if m.len() >= CLIENTS_KEPT && !m.contains_key(&key) {
+        // Only a request in flight holds one: the others are idle clients.
+        m.retain(|_, l| Arc::strong_count(l) > 1);
+    }
+    m.entry(key).or_default().clone()
 }
 
 /// Binds `cfg.listen` and serves until `shutdown` resolves.

@@ -280,6 +280,10 @@ pub fn token_created_daa(conn: &Connection, id: &Hash32) -> DbResult<Option<i64>
 /// Holdings of one owner and token that [`held_since_daa`] reads at most, newest first.
 pub const HELD_ROWS_MAX: i64 = 512;
 
+/// Holdings of one owner, of any token, that [`held_since_daa`] reads at most, newest first: the
+/// bound of its work per vote, whatever the owner or the token holds.
+pub const HELD_READ_MAX: i64 = 4_096;
+
 /// Since when (a DAA score) `key` has held the token `id` without a break, as far as the store
 /// can tell: the start of the longest unbroken line of its holdings that ends in one it holds
 /// now. `None`: it holds none now.
@@ -288,19 +292,24 @@ pub const HELD_ROWS_MAX: i64 = 512;
 /// merge, a send to itself, a partial sale that leaves the rest) continues the line. A holding
 /// that came by any other transaction starts a new one, so tokens received today (dust) or bought
 /// back after selling everything count from their arrival. A pruned row (lean store) breaks the
-/// line, which only makes the holding look younger. Reads at most [`HELD_ROWS_MAX`] rows of the
-/// owner's holdings of the token (the owner index), newest first.
+/// line, which only makes the holding look younger. Reads the owner's newest [`HELD_READ_MAX`]
+/// holdings of any token (the owner index) and keeps at most [`HELD_ROWS_MAX`] of the token.
 pub fn held_since_daa(conn: &Connection, id: &Hash32, key: &[u8; 32]) -> DbResult<Option<i64>> {
     let ids = |h: &[u8]| -> DbResult<Option<i64>> {
         Ok(conn.prepare_cached("SELECT id FROM ids WHERE h = ?1")?.query_row([h], |r| r.get(0)).optional()?)
     };
     let (Some(owner), Some(token)) = (ids(&key[..])?, ids(&id.0[..])?) else { return Ok(None) };
+    // The newest `HELD_READ_MAX` holdings of the owner, of any token, in the owner's index: the
+    // rows read are bounded, not only the rows returned (R3C1-L4). An owner with more holdings of
+    // other tokens since only looks younger, the strict side.
     let rows: Vec<(i64, i64, Option<i64>)> = conn
         .prepare_cached(
-            "SELECT tx_id, created_daa, spent_tx_id FROM token_holdings WHERE owner_id = ?1 AND token_id = ?2 \
-             ORDER BY created_block DESC LIMIT ?3",
+            "SELECT tx_id, created_daa, spent_tx_id FROM ( \
+               SELECT tx_id, created_daa, spent_tx_id, token_id, created_block FROM token_holdings \
+               INDEXED BY token_holdings_owner_page WHERE owner_id = ?1 ORDER BY created_block DESC LIMIT ?4) \
+             WHERE token_id = ?2 ORDER BY created_block DESC LIMIT ?3",
         )?
-        .query_map(params![owner, token, HELD_ROWS_MAX], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .query_map(params![owner, token, HELD_ROWS_MAX, HELD_READ_MAX], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<rusqlite::Result<_>>()?;
     // Newest first, so every row's parents (the holdings its creating transaction spent) come
     // later: walk from the oldest and carry each line's start forward.
@@ -513,8 +522,9 @@ impl From<rusqlite::Error> for VoteError {
     }
 }
 
-/// Sliding-window limits: `per_client` per client key per hour and `per_day` in all. Only
-/// admitted votes are remembered.
+/// Sliding-window limits: `per_client` per client key per hour and `per_day` in all. Admitted
+/// votes are remembered in both, votes refused for want of history in the client's only, so they
+/// cannot use up the day of everyone else.
 struct Limiter {
     clients: HashMap<IpAddr, VecDeque<i64>>,
     day: VecDeque<i64>,
@@ -526,6 +536,19 @@ impl Limiter {
     }
 
     fn admit(&mut self, key: IpAddr, now: i64, per_client: u32, per_day: u32) -> Result<(), u64> {
+        self.check(key, now, per_client, per_day)?;
+        self.clients.entry(key).or_default().push_back(now);
+        self.day.push_back(now);
+        Ok(())
+    }
+
+    /// A vote of `key` refused for want of history, counted against the client's hour.
+    fn refused(&mut self, key: IpAddr, now: i64) {
+        self.clients.entry(key).or_default().push_back(now);
+    }
+
+    /// Whether `key` may vote now; the seconds to wait if not. Remembers nothing.
+    fn check(&mut self, key: IpAddr, now: i64, per_client: u32, per_day: u32) -> Result<(), u64> {
         while self.day.front().is_some_and(|t| now - t >= DAY_MS) {
             self.day.pop_front();
         }
@@ -543,8 +566,6 @@ impl Limiter {
         if q.map_or(0, VecDeque::len) >= per_client as usize {
             return Err(secs(q.and_then(|q| q.front()).map_or(HOUR_MS, |t| t + HOUR_MS - now)));
         }
-        self.clients.entry(key).or_default().push_back(now);
-        self.day.push_back(now);
         Ok(())
     }
 }
@@ -651,6 +672,21 @@ impl LogoVotes {
             let (up, down) = totals_of(&conn)?;
             return Ok(Accepted { cast: Cast::Unchanged, up, down });
         }
+        // The interval and the limits first: they cost a seek or nothing, the history reads up to
+        // a few thousand rows (R3C1-L4).
+        let interval_ms = i64::try_from(self.cfg.interval_secs).unwrap_or(i64::MAX / 2).saturating_mul(1000);
+        if let Some(last) = last_vote_ms(&conn, &key)? {
+            let wait = last.saturating_add(interval_ms) - now;
+            if wait > 0 {
+                return Err(VoteError::TooSoon((wait as u64).div_ceil(1000)));
+            }
+        }
+        let ip = crate::api::client_ip::rate_key(client, self.ipv6_prefix_bits);
+        self.limiter
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .check(ip, now, self.cfg.per_client_per_hour, self.cfg.max_per_day)
+            .map_err(VoteError::Limited)?;
         // The history rule (founder decisions 2026-11-23, audit C-M3, R2C-M3): the address's
         // first KOB history is at least `min_history_secs` old (default 7 days) AND older than the
         // token, so keys made for a vote, or after the token they vote on, do not count. Or it has
@@ -663,16 +699,9 @@ impl LogoVotes {
         let old_enough = first.is_some_and(|f| old(f) >= self.cfg.min_history_secs && created.is_some_and(|t| f < t))
             || held_since_daa(&conn, &b.covenant_id, &key)?.is_some_and(|h| old(h) >= self.cfg.min_history_secs);
         if !old_enough {
+            self.limiter.lock().unwrap_or_else(|e| e.into_inner()).refused(ip, now);
             return Err(VoteError::NoHistory);
         }
-        let interval_ms = i64::try_from(self.cfg.interval_secs).unwrap_or(i64::MAX / 2).saturating_mul(1000);
-        if let Some(last) = last_vote_ms(&conn, &key)? {
-            let wait = last.saturating_add(interval_ms) - now;
-            if wait > 0 {
-                return Err(VoteError::TooSoon((wait as u64).div_ceil(1000)));
-            }
-        }
-        let ip = crate::api::client_ip::rate_key(client, self.ipv6_prefix_bits);
         self.limiter
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1079,6 +1108,69 @@ mod tests {
         // a refused vote is not written
         let rows: i64 = svc.test_connection().query_row("SELECT COUNT(*) FROM logo_votes", [], |r| r.get(0)).unwrap();
         assert_eq!(rows, 3);
+    }
+
+    /// R3C1-L4: the limits run before the history reads, and a vote refused for want of history counts against the
+    /// client's hour (never against the day of everyone else), so a client cannot have the history read without end.
+    #[test]
+    fn votes_without_history_use_the_clients_hour_and_the_limit_comes_first() {
+        let (svc, _) = service(LogoVotesConfig { per_client_per_hour: 2, max_per_day: 3, ..cfg() });
+        for n in [20, 21] {
+            assert!(matches!(svc.vote(ip(1), &ballot(n, T, Vote::Up, DAY, 8)), Err(VoteError::NoHistory)));
+        }
+        assert!(matches!(svc.vote(ip(1), &ballot(1, T, Vote::Up, DAY, 8)), Err(VoteError::Limited(_))), "the client's hour");
+        assert!(matches!(svc.vote(ip(1), &ballot(22, T, Vote::Up, DAY, 8)), Err(VoteError::Limited(_))), "before the history");
+        // the day of the others is untouched
+        for n in 1..=3 {
+            svc.vote(ip(10 + n), &ballot(n, T, Vote::Up, DAY, 8)).unwrap();
+        }
+    }
+
+    /// R3C1-L4: the holder check reads at most `HELD_READ_MAX` holdings of the owner, however many it has of other
+    /// tokens; a line older than them only looks younger (the strict side).
+    #[test]
+    fn the_holder_check_reads_a_bounded_number_of_rows() {
+        let (svc, _) = service(cfg());
+        let c = svc.test_connection();
+        let (_, key, _) = account(50);
+        c.execute("INSERT INTO ids (h) VALUES (?1)", [&key[..]]).unwrap();
+        let owner: i64 = c.query_row("SELECT id FROM ids WHERE h = ?1", [&key[..]], |r| r.get(0)).unwrap();
+        c.execute("INSERT OR IGNORE INTO ids (h) VALUES (?1)", [&T.0[..]]).unwrap();
+        let token: i64 = c.query_row("SELECT id FROM ids WHERE h = ?1", [&T.0[..]], |r| r.get(0)).unwrap();
+        c.execute("INSERT OR IGNORE INTO programs (id, name) VALUES (1, 'KCC20Ref_8x8')", []).unwrap();
+        let hold = |tx: i64, token_id: i64, block: i64| {
+            c.execute(
+                "INSERT INTO token_holdings (tx_id, idx, token_id, program_id, family, owner_id, owner_kind, amount, value, state, role_code, created_block, created_daa) \
+                 VALUES (?1, 0, ?2, 1, 1, ?3, 0, 1, 1000, x'00', 0, ?4, ?4)",
+                params![tx, token_id, owner, block],
+            )
+            .unwrap();
+        };
+        hold(1_000_000, token, 10);
+        assert_eq!(held_since_daa(&c, &T, &key).unwrap(), Some(10));
+        let other = token + 1_000;
+        for i in 0..HELD_READ_MAX {
+            hold(2_000_000 + i, other, 100 + i);
+        }
+        assert_eq!(held_since_daa(&c, &T, &key).unwrap(), None, "past the bound: not read, so not held");
+        let steps = |c: &Connection| {
+            let mut st = c
+                .prepare(
+                    "SELECT tx_id, created_daa, spent_tx_id FROM ( \
+                       SELECT tx_id, created_daa, spent_tx_id, token_id, created_block FROM token_holdings \
+                       INDEXED BY token_holdings_owner_page WHERE owner_id = ?1 ORDER BY created_block DESC LIMIT ?4) \
+                     WHERE token_id = ?2 ORDER BY created_block DESC LIMIT ?3",
+                )
+                .unwrap();
+            let n = st.query_map(params![owner, token, HELD_ROWS_MAX, HELD_READ_MAX], |_| Ok(())).unwrap().count();
+            (n, st.get_status(rusqlite::StatementStatus::VmStep))
+        };
+        let (_, before) = steps(&c);
+        for i in 0..HELD_READ_MAX {
+            hold(3_000_000 + i, other, 10_000 + i);
+        }
+        let (_, after) = steps(&c);
+        assert!(after <= before + before / 10, "the work does not grow with the owner's holdings: {before} then {after} VM steps");
     }
 
     #[test]

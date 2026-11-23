@@ -719,3 +719,31 @@ fn the_proven_extension_of_a_kron_token_does_not_read_its_holdings() {
     let many = steps();
     assert!(many <= few + 10, "{few} steps with 10 holdings, {many} with 5010");
 }
+
+/// R3C2-1: the order view's children and live strays are read in the order of an index that holds only them, so a page
+/// stops at its end: no sort of every child, and no read of every token UTXO the order ever had. Both counts stop at
+/// `VIEW_COUNT_MAX`.
+#[test]
+fn an_order_view_reads_its_children_and_strays_by_index() {
+    let conn = store(4, 50);
+    let plan = |sql: &str| -> String {
+        conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            .query_map(params![vec![0u8; 32], 101], |r| r.get::<_, String>(3))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    let pinned = pinned_template();
+    let kids = plan(&format!(
+        "SELECT o.covenant_id FROM orders o WHERE o.parent = ?1 AND {pinned} ORDER BY o.genesis_block DESC, o.covenant_id DESC LIMIT ?2"
+    ));
+    assert!(kids.contains("orders_parent_page") && !kids.contains("TEMP B-TREE"), "{kids}");
+    let strays = plan(&format!(
+        "SELECT {TOKEN_UTXO_COLUMNS} {TOKEN_UTXO_FROM} WHERE t.order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND t.role = 'stray' AND t.spent_block IS NULL \
+         ORDER BY t.created_block, t.txid, t.idx LIMIT ?2"
+    ));
+    assert!(strays.contains("token_utxos_strays_live") && !strays.contains("TEMP B-TREE"), "{strays}");
+    assert!(!conn.prepare("SELECT 1 FROM sqlite_master WHERE name = 'orders_parent'").unwrap().exists([]).unwrap(), "replaced");
+}

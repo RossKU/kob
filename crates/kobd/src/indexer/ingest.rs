@@ -559,10 +559,11 @@ impl Ingest {
     ///
     /// That happens after a start at the sink or at a block, and after a rebase past unread chain.
     /// The marker only ever moves forward. It returns the value now stored.
-    pub fn mark_history_from(&self, daa: u64) -> DbResult<u64> {
-        let now = history_from_daa(&self.conn)?.map_or(daa, |d| d.max(daa));
-        meta_set(&self.conn, "history_from_daa", &now.to_string())?;
-        Ok(now)
+    ///
+    /// It is a logged operation (`LogOp::HistoryFrom`), so `kobd db replay` keeps it (R3C2-4).
+    pub fn mark_history_from(&mut self, daa: u64) -> Result<u64, IngestError> {
+        self.apply_ops(vec![LogOp::HistoryFrom { daa }], None)?;
+        Ok(history_from_daa(&self.conn)?.unwrap_or(daa))
     }
 
     /// The number of the next record-log frame, or `None` without a log.

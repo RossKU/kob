@@ -682,28 +682,48 @@ fn pair_fill_rows(conn: &Connection, query: &str, params: impl rusqlite::Params)
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// The pair volume per bucket in `[start, end)`: `t -> (A base units, B base units, transactions)`.
+/// Pair fills [`pair_volume`] reads at most per call.
+const PAIR_VOLUME_ROWS_MAX: i64 = 200_000;
+
+/// The pair volume of the buckets `buckets` (starts, ascending, `iv` apart or more):
+/// `t -> (A base units, B base units, transactions)`.
 ///
-/// A netting fill counts once, see [`tx_volumes`].
+/// Only the fills inside those buckets are read, one range per run of adjacent buckets, at most
+/// [`PAIR_VOLUME_ROWS_MAX`] in all: a window the client chose (`from`) costs the fills of the
+/// candles it gets, not of the whole time between (R3C2-1). A netting fill counts once, see
+/// [`tx_volumes`].
 fn pair_volume(
     conn: &Connection,
     a: &Hash32,
     b: &Hash32,
     iv: i64,
-    start: i64,
-    end: i64,
+    buckets: &BTreeSet<i64>,
 ) -> DbResult<BTreeMap<i64, (i128, i128, u64)>> {
-    let rows = pair_fill_rows(
-        conn,
-        concat!(
-            "SELECT txid, ts, side, amount_a, amount_b FROM pair_fills WHERE base_id = ",
-            id_of!("?1"),
-            " AND quote_id = ",
-            id_of!("?2"),
-            " AND ts >= ?3 AND ts < ?4 ORDER BY ts LIMIT 200000"
-        ),
-        params![a.0.to_vec(), b.0.to_vec(), start, end],
-    )?;
+    let mut ranges: Vec<(i64, i64)> = vec![];
+    for &t in buckets {
+        match ranges.last_mut() {
+            Some((_, end)) if *end == t => *end = t.saturating_add(iv),
+            _ => ranges.push((t, t.saturating_add(iv))),
+        }
+    }
+    let mut rows = vec![];
+    for (start, end) in ranges {
+        let left = PAIR_VOLUME_ROWS_MAX - rows.len() as i64;
+        if left <= 0 {
+            break;
+        }
+        rows.extend(pair_fill_rows(
+            conn,
+            concat!(
+                "SELECT txid, ts, side, amount_a, amount_b FROM pair_fills WHERE base_id = ",
+                id_of!("?1"),
+                " AND quote_id = ",
+                id_of!("?2"),
+                " AND ts >= ?3 AND ts < ?4 ORDER BY ts LIMIT ?5"
+            ),
+            params![a.0.to_vec(), b.0.to_vec(), start, end, left],
+        )?);
+    }
     let mut m: BTreeMap<i64, (i128, i128, u64)> = BTreeMap::new();
     for (ts, x, y) in tx_volumes(rows) {
         let e = m.entry(ts.div_euclid(iv) * iv).or_default();
@@ -770,7 +790,7 @@ pub fn pair_candles(
             ca.retain(|t, _| *t >= first);
             cb.retain(|t, _| *t >= first);
         }
-        let vol = pair_volume(conn, base, quote, iv, first, end)?;
+        let vol = pair_volume(conn, base, quote, iv, &buckets)?;
         let mut last_a = market::last_trade_price_before(conn, base, basis_a, first)?;
         let mut last_b = market::last_trade_price_before(conn, quote, basis_b, first)?;
         for t in buckets {

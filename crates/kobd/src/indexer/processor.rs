@@ -3265,6 +3265,10 @@ impl Processor {
                     CreateOutcome::Rejected(r) => rep.rejected.push(format!("{label}: {r}")),
                 }
             }
+            LogOp::HistoryFrom { daa } => {
+                let now = super::ingest::history_from_daa(conn)?.map_or(*daa, |d| d.max(*daa));
+                super::db::meta_set(conn, "history_from_daa", &now.to_string())?;
+            }
             LogOp::CloseGap { txid, index, covenant_id } => {
                 let n = conn
                     .prepare_cached("UPDATE order_utxos SET spent_block = 0, spent_entry = 'gap' WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?

@@ -477,13 +477,16 @@ without `decimals` may have several, and then equal `price / scale` can appear a
 With `aggregate=false`, each of `asks` / `bids` is an array of the same orders, best `quote` first: `covenant_id`, `contract`, `maker` (hex or null), `price`
 (the limit; an auction's start), `quote` (the price at the node's DAA score), `auction` (object or null: `kind` `decay`, `rise`,
 `stop` or `entry` (pair kinds `pair_*`), `origin_daa`, `start_price`, `end_price`, `current_price`, `elapsed_daa`, `complete`),
-`tip`, `min_fill`, `scale`, `amount_left`, `amount_estimated`, `status`, `cur_value`, `expiry_daa`, `expired`, `deadline`
-(unix seconds or null), `deadline_passed`, `genesis_daa`, `confirmations`, `settled`.
+`tip`, `min_fill`, `scale`, `amount_left`, `fillable_now`, `amount_estimated`, `status`, `cur_value`, `expiry_daa`, `expired`, `deadline`
+(unix seconds or null), `deadline_passed`, `genesis_daa`, `confirmations`, `settled`. `fillable_now` (string or null, base units like
+`amount_left`) is what a taker can fill from the order now: a TWAP or DCA order's one slice, `min(amount_left, maxFill)`, as its
+aggregated level counts it; for any other order it equals `amount_left`. An order is listed only while it can be filled (a TWAP order
+once its next slice is due), so it is never `"0"` in the book. Sum `fillable_now`, not `amount_left`, for the depth a taker can reach.
 
 A `KobCurveAsk` is in the book as its remaining levels, each at its own price with its own size (base units left in it), so its
 amount counts once: an aggregated level counts it as one of its `orders`; with `aggregate=false` it is one row per level, all
 with its `covenant_id` and `curve_level` (the table index, omitted for other orders), `price` and `quote` the level's price and
-`amount_left` the level's size. A curve is never idle (it has no refund).
+`amount_left` and `fillable_now` the level's size. A curve is never idle (it has no refund).
 
 ### 3.7 Pairs
 
@@ -644,12 +647,12 @@ curl -s $API/v1/orders/$ORDER
 | `topup_tip`, `recv_threshold` | string, **omitted** | Mode 2: the sompi a top-up fill keeps and the smallest guard threshold (base units) of a receive UTXO it may top up; `"0"` otherwise. |
 | `bought_custody` | object, **omitted** | Mode 1, single lookups and live orders of a `maker=` list: like `custody` for the bought-custody: `expected_amount` (= `bought`), `utxo` (the live token UTXO of role `bought`), `ok` (exactly one holds `bought`; none when `bought` is 0). |
 | `strays` | array, **omitted** | Live token UTXOs owned by the order id that are not its custody or bought-custody (never liquidity). Single lookups and live orders of a `maker=` list. At most 100 are listed. |
-| `strays_total` | number, **omitted** | Present only when the order has more live strays than `strays` lists: how many it has. |
+| `strays_total` | number, **omitted** | Present only when the order has more live strays than `strays` lists: how many it has, counted up to 10,000 (`10000` means that many or more). |
 | `last_block`, `last_daa`, `confirmations`, `settled` | number, number, number or null, bool | Latest event position of the order. |
 | `expired` | bool | Live and past `expiry_daa`: a refund is pending. |
 | `possibly_frozen`, `possibly_frozen_basis`, `frozen_reason` | bool, string or null, string **omitted** | The operator's own engine pre-simulation was rejected by the token program (a judgement of this operator's matcher, not chain data); such an order is not listed as liquidity. `frozen_reason` is omitted when not flagged. |
 | `children` | array, **omitted** | Covenant ids of orders created by this order (if-done exits): the newest 100, oldest first. Single lookups only. |
-| `children_total` | number, **omitted** | Present only when the order has more children than `children` lists: how many it has. |
+| `children_total` | number, **omitted** | Present only when the order has more children than `children` lists: how many it has, counted up to 10,000 (`10000` means that many or more). |
 | `pair` | object, **omitted** | Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`): `base`, `quote`, `base_family`, `quote_family`, `base_template_hash`, `quote_template_hash`, `base_scale`, `quote_scale`, `side` (`ask`/`bid`), `price`, `price_num`, `price_den`, `stop_price` (omitted), `quote_now`, `amount_left`, `custodies` (`token`, `role` `base`/`quote`, `expected_amount`, and `utxo` and `ok`, both omitted outside single lookups and the live orders of a `maker=` list), `prefund` (omitted), `delivery_carrier`. See [ops/executor.md](ops/executor.md) 5.4. |
 | `curve` | object, **omitted** | A `KobCurveAsk` (`docs/design/curve-ask-spec.md`), from its current state: `level` (the current level, number), `levels` (number), `level_size`, `total`, `price_now` (the current level's price, null when sold out), `max_fill` (the most one fill takes from here: the rest of 8 levels), `unbound` (bool: created in its token's genesis and not yet filled or amended; `tokenCovId` is zero in `state`, `token` is the custody's), `remaining` (array of `level` number, `price`, `amount`: the levels left, the current first, at most 50; `state` has them all). Its `price` and `quote` are `price_now`; `expiry_daa` and `refund_due_daa` are null (it rests until sold out or cancelled). |
 | `warnings` | array of string | Show these with the order: `genesis_unverified` unless every token it trades is `genesis_verified`, `live_mint_authority`. |

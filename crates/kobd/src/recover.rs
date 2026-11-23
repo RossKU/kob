@@ -516,7 +516,7 @@ pub async fn rebase<S: ChainSource>(
     // The chain between the old cursor and the new one is not read. Orders created in it are not
     // in this store (`book_complete`).
     {
-        let g = lock(ingest);
+        let mut g = lock(ingest);
         let old = g.cursor()?.map_or(0, |c| c.daa);
         if cursor.daa > old {
             g.mark_history_from(cursor.daa)?;

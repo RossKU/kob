@@ -108,3 +108,42 @@ async fn a_light_read_does_not_queue_behind_heavy_ones() {
         assert!(h.await.unwrap().is_ok());
     }
 }
+
+/// R3C2-1: a client's reads wait on its own permits (`ClientLanes`), not in the lane's queue, so a client that sends many
+/// reads at once holds one place in it, and another client's read is served next, not after all of them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_client_holds_one_place_in_the_light_lane_queue() {
+    use kobd::indexer::db::{ClientLanes, CLIENT_LANES};
+    use std::sync::{Arc, Mutex};
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("x.sqlite3");
+    drop(open_writer(&p, "testnet-10").unwrap());
+    let pool = ReadPool::open(&p, 1).unwrap();
+    let done: Arc<Mutex<Vec<&'static str>>> = Arc::default();
+    let (a, b) = (Arc::new(ClientLanes::default()), Arc::new(ClientLanes::default()));
+    let read = |who: Arc<ClientLanes>, name: &'static str| {
+        let (pool, done) = (pool.clone(), done.clone());
+        tokio::spawn(CLIENT_LANES.scope(who, async move {
+            pool.with_light(move |c| {
+                std::thread::sleep(Duration::from_millis(150));
+                Ok(meta_get(c, "network")?)
+            })
+            .await
+            .unwrap();
+            done.lock().unwrap().push(name);
+        }))
+    };
+    // client a sends four reads at once, then client b one
+    let mut tasks = vec![];
+    for name in ["a1", "a2", "a3", "a4"] {
+        tasks.push(read(a.clone(), name));
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tasks.push(read(b.clone(), "b1"));
+    for t in tasks {
+        t.await.unwrap();
+    }
+    let order = done.lock().unwrap().clone();
+    let at = |n: &str| order.iter().position(|x| *x == n).unwrap();
+    assert!(at("b1") <= 2, "b waits behind at most one read of a besides the running one: {order:?}");
+}

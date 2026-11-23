@@ -1410,3 +1410,34 @@ async fn idle_polls_from_an_old_cursor_are_no_progress() {
     assert_eq!(s.last_progress_unix_ms, moved, "an idle poll from an old cursor confirms nothing");
     assert!(s.stale(moved + kobd::indexer::status::STALE_AFTER_MS + 1));
 }
+
+/// R3C1-M1: at the sink (`following`), a batch from an old cursor is no progress either: an authority that answers one
+/// chain block a poll must not keep a store that falls behind looking current. While `catching_up` (the authority reports
+/// chain past the cursor), a batch is progress whatever its age, so an honest catch-up after a restart is not stale.
+#[tokio::test]
+async fn batches_from_an_old_cursor_are_progress_only_while_catching_up() {
+    let c = Ctx::new();
+    let create = small_ask(&c, 0);
+    c.w.include(&c.hs.node, &[&create]);
+    c.hs.sync().await;
+    let base = c.hs.health.snapshot().last_progress_unix_ms;
+    assert!(base > 0, "the first poll sets the baseline");
+
+    // one more chain block, applied at the sink: the test chain's blocks are stamped in 2026-09
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    c.hs.node.push_empty(1);
+    assert!(matches!(c.hs.follower.step().await, StepOutcome::Applied { added: 1, .. }));
+    let s = c.hs.health.snapshot();
+    assert_eq!(s.state, FollowerState::Following);
+    assert_eq!(s.last_progress_unix_ms, base, "a batch at the sink from an old cursor confirms nothing");
+    assert!(s.stale(base + kobd::indexer::status::STALE_AFTER_MS + 1));
+
+    // far more chain than the window: catching up, and each batch is progress
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    c.hs.node.push_empty(2_000);
+    let out = c.hs.follower.step().await;
+    assert!(matches!(out, StepOutcome::Applied { more: true, .. }), "{out:?}");
+    let s = c.hs.health.snapshot();
+    assert_eq!(s.state, FollowerState::CatchingUp);
+    assert!(s.last_progress_unix_ms > base, "a catch-up batch is progress");
+}
