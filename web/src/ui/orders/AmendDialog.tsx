@@ -277,6 +277,15 @@ export function AmendDialog(props: AmendDialogProps) {
           ) : null}
         </p>
       ) : null}
+      {/* what a price amend does to a schedule (it ends, or a sliced auction is refused) and that a
+          crossing price fills at once: said before the wallet is asked (R9FC2-1) */}
+      {preview?.issues.some((i) => ['schedule-ends', 'may-cross', 'sliced-auction-not-amendable'].includes(i.code)) ? (
+        <ul class="small" data-testid="amend-notes">
+          {preview.issues.filter((i) => ['schedule-ends', 'may-cross', 'sliced-auction-not-amendable'].includes(i.code)).map((i) => (
+            <li key={i.code} data-code={i.code}><IssueLine prefix="orders.amend" issue={i} /></li>
+          ))}
+        </ul>
+      ) : null}
       {serverIssues.length ? (
         <Banner tone="error" data-testid="amend-error">
           <ul>
