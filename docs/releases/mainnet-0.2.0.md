@@ -201,8 +201,10 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
   work, a full disk or a slow cross-checking node is not the node's; which time is whose comes from kobd's own code, never
   from the text of a node's answer, and a stretch above 90 s that lasts 30 minutes by the wall clock without the lag
   falling by 90 s fails whoever's time it was. A window whose transactions use many subnetwork lanes is proven
-  whatever their number (in pieces of at most 4,096 lanes, one chain block always whole): before, more than 64 lanes
-  stopped every indexer at that block. A lane proof a node calls "too deep" halts nothing: of a recent cursor it is that
+  whatever their number: in pieces sized by what one step proves at the measured lane-proof time (at most 4,096 lanes,
+  one chain block always whole), every lane proof fetched is kept across steps, and a period in which the lane proofs
+  answered rise (each call within its 30 s bound) counts as progress, so a lane-heavy window is never thrown away by
+  the progress rule. KOB never reads a coinbase (a coinbase whose blue score reads `KOB1` was refused before). A lane proof a node calls "too deep" halts nothing: of a recent cursor it is that
   node's failure, of one older than the pruning depth a `gap` that is left by itself once a node serves the proof.
   `state`, `caught_up` and `within_lag_tolerance` (the executor's gate) and lean pruning now follow the cursor block's
   verified time; the node's DAA claim is shown, never used. A public node deposed for it that held back chain

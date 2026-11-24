@@ -610,6 +610,8 @@ impl ChainProof {
         let mut targets = Vec::with_capacity(n);
         let mut blocks = Vec::with_capacity(n);
         let mut lanes: Vec<Hash> = vec![native_lane()];
+        // A set beside the ordered list: a window may touch thousands of lanes (R9C1-L1).
+        let mut seen_lanes: std::collections::HashSet<Hash> = std::collections::HashSet::from([native_lane()]);
         let coinbase = SUBNETWORK_ID_COINBASE.as_bytes();
         let mut prev: Option<Header> = None;
         let mut parent = start;
@@ -649,9 +651,11 @@ impl ChainProof {
                     None => return refuse(format!("transaction {id} has no 20-byte subnetwork id")),
                 };
                 if &sub == coinbase {
-                    let kob = t.payload.0.starts_with(kob_protocol::payload::MAGIC);
-                    if !t.inputs.is_empty() || t.outputs.iter().any(|o| o.covenant.is_some()) || kob {
-                        return refuse(format!("coinbase-lane transaction {id} has inputs, covenant outputs or a KOB payload"));
+                    // Not proven, so it must carry nothing KOB reads: no inputs, no covenant outputs. Its payload is
+                    // consensus's (the blue score first), may start with any bytes, and KOB never reads a coinbase
+                    // (`indexer::record::is_coinbase`, R9C1-M1).
+                    if !t.inputs.is_empty() || t.outputs.iter().any(|o| o.covenant.is_some()) {
+                        return refuse(format!("coinbase-lane transaction {id} has inputs or covenant outputs"));
                     }
                     continue;
                 }
@@ -660,7 +664,7 @@ impl ChainProof {
             }
             let mut digests = BTreeMap::new();
             for (lane, l) in leaves {
-                if !lanes.contains(&lane) {
+                if seen_lanes.insert(lane) {
                     lanes.push(lane);
                 }
                 digests.insert(lane, activity_digest_lane(l.into_iter()));
@@ -900,16 +904,44 @@ pub const MERGESET_WALK_MAX: usize = 1_024;
 /// followed. `chain` is proven (its hash, the lane proofs, the pair), so only real blocks are in
 /// its past. Returns the headers fetched.
 pub async fn check_merged_into<H: HeaderSource>(chain: &Header, merged: &Header, src: &H) -> Result<usize, ProofError> {
+    check_merged_into_from(chain, merged, src, &mut MergeWalk::default()).await
+}
+
+/// Where a walk of [`check_merged_into_from`] stands: the headers seen and the next level to fetch. Kept by the caller
+/// across attempts, so that a walk longer than one attempt's [`MERGESET_WALK_MAX`] headers goes on where it stopped
+/// (R9C1-L3): the walk is bounded only by the chain block's past above the merged block's blue work, which consensus
+/// bounds by its merge depth, never by a constant of kobd's.
+#[derive(Debug, Default, Clone)]
+pub struct MergeWalk {
+    seen: HashSet<Hash>,
+    level: Vec<Hash>,
+    started: bool,
+    /// Headers fetched by all attempts.
+    pub fetched: usize,
+}
+
+/// [`check_merged_into`], resuming `walk`: at most [`MERGESET_WALK_MAX`] headers in this call (at least one level),
+/// then `Unavailable` with the walk kept for the next attempt.
+pub async fn check_merged_into_from<H: HeaderSource>(
+    chain: &Header,
+    merged: &Header,
+    src: &H,
+    walk: &mut MergeWalk,
+) -> Result<usize, ProofError> {
     let target = merged.hash;
     let parents = chain.direct_parents();
     if parents.contains(&target) {
         return Ok(0);
     }
-    let mut seen: HashSet<Hash> = parents.iter().copied().collect();
-    let mut level: Vec<Hash> = parents.iter().skip(1).copied().collect();
-    let mut fetched = 0;
-    while !level.is_empty() && fetched + level.len() <= MERGESET_WALK_MAX {
-        fetched += level.len();
+    if !walk.started {
+        walk.seen = parents.iter().copied().collect();
+        walk.level = parents.iter().skip(1).copied().collect();
+        walk.started = true;
+    }
+    let mut this_call = 0usize;
+    while !walk.level.is_empty() && (this_call == 0 || this_call + walk.level.len() <= MERGESET_WALK_MAX) {
+        let level = walk.level.clone();
+        this_call += level.len();
         // Collected first: a lazy map over borrowed hashes makes the future not `Send` for every lifetime.
         let asks: Vec<_> = level.iter().map(|h| src.header(Hash32(h.as_bytes()))).collect();
         let headers = futures_util::future::join_all(asks).await;
@@ -932,24 +964,26 @@ pub async fn check_merged_into<H: HeaderSource>(chain: &Header, merged: &Header,
             }
             for p in x.direct_parents() {
                 if *p == target {
-                    return Ok(fetched);
+                    walk.fetched += level.len();
+                    return Ok(walk.fetched);
                 }
-                if seen.insert(*p) {
+                if walk.seen.insert(*p) {
                     next.push(*p);
                 }
             }
         }
-        level = next;
+        walk.fetched += level.len();
+        walk.level = next;
     }
-    if !level.is_empty() {
+    if !walk.level.is_empty() {
         return Err(ProofError::Unavailable(format!(
-            "merged block {target}: no parent path below chain block {} within {MERGESET_WALK_MAX} headers yet",
-            chain.hash
+            "merged block {target}: no parent path below chain block {} yet ({} headers walked; the walk goes on at the next attempt)",
+            chain.hash, walk.fetched
         )));
     }
     refuse(format!(
-        "merged block {target} is not in the merge set of chain block {} (no parent path within {MERGESET_WALK_MAX} headers)",
-        chain.hash
+        "merged block {target} is not in the merge set of chain block {} (no parent path, {} headers walked)",
+        chain.hash, walk.fetched
     ))
 }
 
@@ -1314,14 +1348,33 @@ pub(crate) mod tests {
         }
     }
 
-    /// A coinbase-lane transaction is not proven, so it may carry nothing KOB reads.
+    /// R9C1-M1: a coinbase's payload is the block's blue score first (little-endian), so at blue score 826,429,259 it
+    /// starts with `KOB1`. Such a real coinbase is proven (KOB never reads a coinbase, `indexer::record::is_coinbase`).
+    /// Before, the coinbase-lane rule refused it, and every kobd stopped at that chain block.
     #[test]
-    fn a_coinbase_lane_transaction_with_kob_data_is_refused() {
+    fn a_real_coinbase_at_the_kob1_blue_score_is_proven() {
         for fx in both() {
             let mut raw = fx.raw();
             let t = &mut raw.chain_block_accepted_transactions[0].accepted_transactions[0];
             assert_eq!(t.subnetwork_id.as_ref().unwrap().0[0], 1, "the first is the coinbase");
-            t.payload.0 = kob_protocol::payload::MAGIC.to_vec();
+            assert!(t.payload.0.len() >= 8);
+            t.payload.0[..8].copy_from_slice(&826_429_259u64.to_le_bytes());
+            assert!(t.payload.0.starts_with(kob_protocol::payload::MAGIC));
+            reid(t);
+            let r = fx.run(&mut fx.checker(), &raw);
+            assert!(r.is_ok(), "{}: {r:?}", fx.network);
+        }
+    }
+
+    /// A coinbase-lane transaction is not proven, so it may carry nothing KOB could read: one with an input is refused.
+    #[test]
+    fn a_coinbase_lane_transaction_with_an_input_is_refused() {
+        for fx in both() {
+            let mut raw = fx.raw();
+            let (b, k) = native_tx(&raw);
+            let input = raw.chain_block_accepted_transactions[b].accepted_transactions[k].inputs[0].clone();
+            let t = &mut raw.chain_block_accepted_transactions[0].accepted_transactions[0];
+            t.inputs.push(input);
             reid(t);
             refused(fx.run(&mut fx.checker(), &raw), "coinbase-lane");
         }

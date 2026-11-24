@@ -756,24 +756,37 @@ async fn a_single_chain_block_larger_than_the_link_gets_a_longer_timeout_not_the
     assert_no_repeated_failure(&c.hs.node);
 }
 
+/// The gate the matcher reads (`caught_up`) follows the cursor block's verified age, never the node's sink claim
+/// (R9C1-L2): while the follower pages through a backlog, it stays closed on every cursor older than the tolerance
+/// (`caught_up_daa`, 100 DAA = 10 s), and opens at the tip. Before, it stayed closed on any window cut short of the
+/// claimed sink, a fresh cursor too.
 #[tokio::test]
 async fn the_matcher_gate_stays_closed_while_the_follower_pages() {
     let c = Ctx::new();
+    // the follower of a mock node runs on the mock clock from `MOCK_CLOCK_MS` (`ChainSource::simulated_clock_ms`)
+    let t0 = std::time::Instant::now();
+    let now = || kobd::testkit::MOCK_CLOCK_MS + t0.elapsed().as_millis() as u64;
+    // 30 chain blocks 2 s apart, the last one now: all but the last few are older than the tolerance
+    c.hs.node.set_block_clock(now() - 29 * 2_000, 2_000);
     for i in 0..30 {
         c.hs.node.push_block((0..20).map(|j| noise_tx(i * 100 + j, false)).collect());
     }
     c.hs.node.set_link_txs(Some(50));
-    // the health the matcher's gate reads: never caught up before the cursor reaches the sink
+    let mut closed_on_old = 0;
     for _ in 0..500 {
         let o = c.hs.follower.step().await;
         let h = c.hs.health.snapshot();
-        if h.cursor_hash != Some(c.hs.node.tip()) {
-            assert!(!h.caught_up(), "caught up while {:?} blue behind the sink: {o:?}", h.lag_blue);
+        if h.caught_up() {
+            let age = now().saturating_sub(h.cursor_time_unix_ms.expect("caught up needs the cursor's time"));
+            assert!(age <= 12_000, "caught up on a cursor {age} ms old, {:?} blue behind the sink: {o:?}", h.lag_blue);
+        } else if h.cursor_time_unix_ms.is_some_and(|t| now().saturating_sub(t) > 12_000) {
+            closed_on_old += 1;
         }
         if matches!(o, StepOutcome::Idle) {
             break;
         }
     }
+    assert!(closed_on_old > 0, "the gate was closed on an old cursor while paging");
     assert_eq!(c.hs.health.snapshot().cursor_hash, Some(c.hs.node.tip()));
     assert!(c.hs.health.snapshot().caught_up());
 }

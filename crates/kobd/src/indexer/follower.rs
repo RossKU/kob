@@ -474,6 +474,18 @@ pub struct Follower<S: ChainSource> {
     /// (`cross_check_alone_secs_total`): from a step's start or end that found it alone to the next
     /// one that still does, so time not alone in between is not counted (R7C1-I3).
     alone_at: Mutex<Option<tokio::time::Instant>>,
+    /// The lane proofs at a piece's end fetched so far, kept across steps, so that a step given up or failed in the
+    /// middle resumes where it stopped (R9C1-H1): the piece's end and, per lane, the answer and who served it.
+    end_proofs: Mutex<EndProofs>,
+    /// Lane proofs answered (at the anchor and at a piece's end), for the progress rule ([`PROOF_PROGRESS_MIN`]).
+    proofs_answered: std::sync::atomic::AtomicU64,
+    /// Lane-proof calls that failed or timed out: a period with one is not excused by its proofs.
+    proof_failures: std::sync::atomic::AtomicU64,
+    /// The lanes one new piece takes ([`LANE_BUDGET_MIN`] to `MAX_BATCH_LANES`): what one step proves in its share of
+    /// a period ([`PIECE_PROOF_SHARE`]) at the measured lane-proof call time.
+    lane_budget: std::sync::atomic::AtomicUsize,
+    /// Merged-block walks that ran out of one attempt's headers, by (chain block, merged block) (R9C1-L3).
+    merge_walks: Mutex<std::collections::HashMap<(Hash32, Hash32), crate::rpc::proof::MergeWalk>>,
 }
 
 /// The state of the progress rule (module documentation, *Progress*).
@@ -553,6 +565,25 @@ struct Blame {
     withheld: bool,
 }
 
+/// The lane proofs at one piece's end fetched so far ([`Follower::prove_lanes`]).
+#[derive(Default)]
+struct EndProofs {
+    end: Option<Hash32>,
+    got: std::collections::HashMap<kaspa_hashes::Hash, (kaspa_rpc_core::GetSeqCommitLaneProofResponse, Origin)>,
+}
+
+/// The least rise of the lane proofs answered over one period that counts as progress while the cursor waits for
+/// them (R9C1-H1): what [`PROOF_FETCHES`] calls in flight answer when each takes the whole per-call bound
+/// (`rpc::SMALL_CALL_TIMEOUT`, 30 s), 48 a period of 180 s, and at least 8. A node slower than the bound times its calls
+/// out (a failure, which no proof progress excuses); one within it answers at least this many.
+const PROOF_PROGRESS_MIN: u64 = 8;
+
+/// The share of a period one step's lane proofs may take when a new piece is sized: a third of `AUTHORITY_STALL`.
+const PIECE_PROOF_SHARE: Duration = Duration::from_secs(60);
+
+/// The fewest lanes a new piece is sized to (one chain block is always a piece, whatever its lanes).
+const LANE_BUDGET_MIN: usize = 64;
+
 /// A count of running waits of one kind, down again when this drops: whatever ends the wait, its
 /// answer or a step given up in the middle (R7C1-M2).
 struct Counted<'a>(&'a std::sync::atomic::AtomicUsize);
@@ -585,6 +616,9 @@ struct Period {
     /// The lag at `wall_start`: the backstop fires only if the lag has not fallen by
     /// [`PERIOD_WALL_GAIN`] since (R8C1-L1).
     wall_lag: Option<i64>,
+    /// The lane proofs answered, and the lane-proof calls failed, when it began ([`PROOF_PROGRESS_MIN`]).
+    proofs: u64,
+    proof_failures: u64,
 }
 
 /// How often the free space of the data directory and the size of the database are measured.
@@ -753,6 +787,11 @@ impl<S: ChainSource> Follower<S> {
             }),
             cursor_seen: Mutex::new(None),
             alone_at: Mutex::new(None),
+            end_proofs: Mutex::new(EndProofs::default()),
+            proofs_answered: std::sync::atomic::AtomicU64::new(0),
+            proof_failures: std::sync::atomic::AtomicU64::new(0),
+            lane_budget: std::sync::atomic::AtomicUsize::new(crate::rpc::proof::MAX_BATCH_LANES),
+            merge_walks: Mutex::new(Default::default()),
         }
     }
 
@@ -903,6 +942,10 @@ impl<S: ChainSource> Follower<S> {
         let ts = self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()).filter(|(h, _)| *h == cursor).map(|(_, t)| t);
         let wall = self.wall_ms();
         let lag = ts.map(|t| wall as i64 - t as i64);
+        let (answered, pfail) = (
+            self.proofs_answered.load(std::sync::atomic::Ordering::Relaxed),
+            self.proof_failures.load(std::sync::atomic::Ordering::Relaxed),
+        );
         // A cursor whose time is not known yet (a start, a rewind, a header that did not hash) is
         // judged at the end of a step, after its header was asked for, not by the ticks before.
         if at_tick && lag.is_none() {
@@ -938,7 +981,15 @@ impl<S: ChainSource> Follower<S> {
                 let host = std::mem::take(&mut r.host_pause);
                 if let Some(p) = r.period.as_mut() {
                     let (wall_start, wall_lag) = if host { (wall, lag) } else { (p.wall_start, p.wall_lag) };
-                    *p = Period { start_ms: run, start_lag: lag, calm_since: None, wall_start, wall_lag };
+                    *p = Period {
+                        start_ms: run,
+                        start_lag: lag,
+                        calm_since: None,
+                        wall_start,
+                        wall_lag,
+                        proofs: answered,
+                        proof_failures: pfail,
+                    };
                 }
                 // The pause is not an excursion of the authority.
                 r.last_check = None;
@@ -981,6 +1032,8 @@ impl<S: ChainSource> Follower<S> {
                         calm_since: None,
                         wall_start: wall,
                         wall_lag: lag,
+                        proofs: answered,
+                        proof_failures: pfail,
                     });
                     p.calm_since = None;
                     if p.start_lag.is_none() {
@@ -1001,7 +1054,15 @@ impl<S: ChainSource> Follower<S> {
                             wall_max / 60_000,
                             PERIOD_WALL_GAIN.as_secs()
                         );
-                        *p = Period { start_ms: run, start_lag: lag, calm_since: None, wall_start: wall, wall_lag: lag };
+                        *p = Period {
+                            start_ms: run,
+                            start_lag: lag,
+                            calm_since: None,
+                            wall_start: wall,
+                            wall_lag: lag,
+                            proofs: answered,
+                            proof_failures: pfail,
+                        };
                         if !r.lone {
                             r.failed = Some(why);
                         }
@@ -1009,7 +1070,13 @@ impl<S: ChainSource> Follower<S> {
                     } else if run.saturating_sub(p.start_ms) >= stall {
                         let need = (stall / 2) as i64;
                         let gained = matches!((p.start_lag, lag), (Some(a), Some(b)) if a - b >= need);
-                        if !gained {
+                        // The chain's own proving load is no failure of the node (R9C1-H1): a period in which the lane
+                        // proofs answered rose by at least PROOF_PROGRESS_MIN, every lane-proof call answered within its
+                        // own bound, is progress although the cursor waits for them.
+                        let proof_min = PROOF_PROGRESS_MIN
+                            .max(stall.saturating_mul(PROOF_FETCHES as u64) / crate::rpc::SMALL_CALL_TIMEOUT.as_millis() as u64);
+                        let proved = answered.saturating_sub(p.proofs) >= proof_min && pfail == p.proof_failures;
+                        if !gained && !proved {
                             let secs = |l: Option<i64>| l.map_or("an unknown time".to_string(), |l| format!("{} s", l / 1_000));
                             r.failed = Some(format!(
                                 "the chain authority does not keep up with real time: in {} s of the time the follower waited on it the cursor's chain block went from {} to {} behind the local clock; it must gain {} s on it, or come within {} s",
@@ -1021,8 +1088,16 @@ impl<S: ChainSource> Follower<S> {
                             ));
                         }
                         gained_period = gained;
-                        r.failing = !gained;
-                        *p = Period { start_ms: run, start_lag: lag, calm_since: None, wall_start: wall, wall_lag: lag };
+                        r.failing = !gained && !proved;
+                        *p = Period {
+                            start_ms: run,
+                            start_lag: lag,
+                            calm_since: None,
+                            wall_start: wall,
+                            wall_lag: lag,
+                            proofs: answered,
+                            proof_failures: pfail,
+                        };
                     }
                     // Past the budget of excursions: failing as well, and the budget starts again.
                     if !r.failing && r.kept_up && used > budget {
@@ -1928,38 +2003,31 @@ impl<S: ChainSource> Follower<S> {
             return (raw, Ok(()), confirmed);
         };
         let mut raw = raw;
-        let plan = loop {
-            let p = proof.clone();
-            // kobd's own CPU, not the authority's time (R6C1-I4).
-            let (r, plan) = self
-                .waiting_on(
-                    WAIT_OWN,
-                    tokio::task::spawn_blocking(move || {
-                        let r = p.lock().unwrap_or_else(|e| e.into_inner()).check_local(start, &raw);
-                        (raw, r)
-                    }),
-                )
-                .await
-                .expect("proof task panicked");
-            raw = r;
-            match plan {
-                // More lanes than one batch proves (`MAX_BATCH_LANES`): the window is proven and
-                // applied in pieces, its longest prefix within the bound first, at least one chain
-                // block. kobd's own bound: no refusal, no blame (R8C1-H1).
-                Ok(Some(p)) if p.lanes.len() > crate::rpc::proof::MAX_BATCH_LANES && p.blocks() > 1 => {
-                    let k = p.lane_prefix(crate::rpc::proof::MAX_BATCH_LANES);
-                    tracing::info!(
-                        lanes = p.lanes.len(),
-                        chain_blocks = p.blocks(),
-                        first = k,
-                        "a window needs more lanes than one batch proves: it is proven and applied in pieces"
-                    );
-                    raw.added_chain_block_hashes.truncate(k);
-                    raw.chain_block_accepted_transactions.truncate(k);
-                }
-                other => break other,
-            }
-        };
+        // More lanes than one step proves in time: the window is proven and applied in pieces, cut once on the raw
+        // subnetwork ids before the check (R9C1-L1), resuming the piece whose end proofs are kept (R9C1-H1). kobd's own
+        // bound: no refusal, no blame (R8C1-H1).
+        if let Some(k) = self.piece_of(&raw) {
+            tracing::info!(
+                chain_blocks = raw.added_chain_block_hashes.len(),
+                first = k,
+                "a window needs more lane proofs than one step makes in time: it is proven and applied in pieces"
+            );
+            raw.added_chain_block_hashes.truncate(k);
+            raw.chain_block_accepted_transactions.truncate(k);
+        }
+        let p = proof.clone();
+        // kobd's own CPU, not the authority's time (R6C1-I4).
+        let (r, plan) = self
+            .waiting_on(
+                WAIT_OWN,
+                tokio::task::spawn_blocking(move || {
+                    let r = p.lock().unwrap_or_else(|e| e.into_inner()).check_local(start, &raw);
+                    (raw, r)
+                }),
+            )
+            .await
+            .expect("proof task panicked");
+        let raw = r;
         let plan = match plan {
             Ok(p) => p,
             Err(e) => {
@@ -2107,6 +2175,45 @@ impl<S: ChainSource> Follower<S> {
         StepOutcome::Retry(msg)
     }
 
+    /// Sizes the next new piece from the measured time of `calls` lane-proof calls, [`PROOF_FETCHES`] in flight, that
+    /// took `took`: the lanes whose two calls each (at the anchor and at the end) fit [`PIECE_PROOF_SHARE`], within
+    /// [`LANE_BUDGET_MIN`] and `MAX_BATCH_LANES` (R9C1-H1). Never a figure in the source.
+    fn measure_lane_calls(&self, calls: usize, took: Duration) {
+        if calls < PROOF_FETCHES {
+            return;
+        }
+        let per_call_ms = (took.as_millis() as u64).saturating_mul(PROOF_FETCHES as u64) / calls as u64;
+        let fit = (PIECE_PROOF_SHARE.as_millis() as u64).saturating_mul(PROOF_FETCHES as u64) / per_call_ms.max(1).saturating_mul(2);
+        let budget = (fit as usize).clamp(LANE_BUDGET_MIN, crate::rpc::proof::MAX_BATCH_LANES);
+        self.lane_budget.store(budget, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The piece of `raw` a step proves and applies (R9C1-H1, R9C1-L1): the one whose end proofs are kept, when that
+    /// end is in the window (work is never thrown away), else its longest prefix within [`Follower::lane_budget`] lanes
+    /// counted on the raw subnetwork ids, at least one chain block. `None`: the whole window.
+    fn piece_of(&self, raw: &RawVspcResponse) -> Option<usize> {
+        let kept = self.end_proofs.lock().unwrap_or_else(|e| e.into_inner()).end;
+        if let Some(i) = kept.and_then(|e| raw.added_chain_block_hashes.iter().position(|h| *h == e)) {
+            return (i + 1 < raw.added_chain_block_hashes.len()).then_some(i + 1);
+        }
+        let budget = self.lane_budget.load(std::sync::atomic::Ordering::Relaxed);
+        let coinbase = kaspa_consensus_core::subnets::SUBNETWORK_ID_COINBASE.as_bytes();
+        let mut seen: std::collections::HashSet<&[u8]> =
+            std::collections::HashSet::from([kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE.as_bytes().as_slice()]);
+        for (k, b) in raw.chain_block_accepted_transactions.iter().enumerate() {
+            for t in &b.accepted_transactions {
+                if let Some(s) = t.subnetwork_id.as_ref().filter(|s| s.0.as_slice() != coinbase.as_slice()) {
+                    seen.insert(s.0.as_slice());
+                }
+            }
+            if seen.len() > budget {
+                let k = k.max(1);
+                return (k < raw.added_chain_block_hashes.len()).then_some(k);
+            }
+        }
+        None
+    }
+
     /// The node part of the acceptance proof: the anchor's header when it moved, the lanes new at
     /// the anchor, and the lane proofs at the batch's last chain block.
     async fn prove_lanes(&self, proof: &Mutex<ChainProof>, plan: crate::rpc::proof::Plan) -> Result<(), ProofError> {
@@ -2135,23 +2242,49 @@ impl<S: ChainSource> Follower<S> {
             self.source.lane_proof(anchor, Hash32(lane.as_bytes()))
         }));
         for lane in unknown.iter().copied() {
-            let (p, from) =
-                asked.next().await.expect("one answer per lane").map_err(|e| unavailable("a lane proof at the cursor", e))?;
+            let (p, from) = asked.next().await.expect("one answer per lane").map_err(|e| {
+                self.proof_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                unavailable("a lane proof at the cursor", e)
+            })?;
             lock().learn_lane(lane, &p, from)?;
+            self.proofs_answered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         let expected = lock().expected(&plan)?;
-        // At most `PROOF_FETCHES` at a time: a batch may need thousands of lanes (R8C1-H1).
+        // At most `PROOF_FETCHES` at a time: a batch may need thousands of lanes (R8C1-H1). The answers are kept across
+        // steps by the piece's end (a proof at a chain block is a fact of that block), so a step given up or failed in
+        // the middle loses none of them and the next one asks only what is missing (R9C1-H1).
         let (end, lanes): (Hash32, Vec<_>) = (plan.end, expected.iter().map(|(lane, _)| *lane).collect());
-        let mut asked = std::pin::pin!(asked_in_order(lanes.iter().copied(), PROOF_FETCHES, |lane| {
+        let missing: Vec<kaspa_hashes::Hash> = {
+            let mut g = self.end_proofs.lock().unwrap_or_else(|e| e.into_inner());
+            if g.end != Some(end) {
+                *g = EndProofs { end: Some(end), got: Default::default() };
+            }
+            lanes.iter().copied().filter(|l| !g.got.contains_key(l)).collect()
+        };
+        let t0 = tokio::time::Instant::now();
+        let mut asked = std::pin::pin!(asked_in_order(missing.iter().copied(), PROOF_FETCHES, |lane| {
             self.source.lane_proof(end, Hash32(lane.as_bytes()))
         }));
-        let mut proofs = Vec::with_capacity(lanes.len());
-        for _ in &lanes {
-            proofs.push(
-                asked.next().await.expect("one answer per lane").map_err(|e| unavailable("a lane proof at the batch's end", e))?,
-            );
+        for lane in missing.iter().copied() {
+            let answer = asked.next().await.expect("one answer per lane").map_err(|e| {
+                self.proof_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                unavailable("a lane proof at the batch's end", e)
+            })?;
+            self.end_proofs.lock().unwrap_or_else(|e| e.into_inner()).got.insert(lane, answer);
+            self.proofs_answered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-        lock().finish(plan, &expected, &proofs)
+        self.measure_lane_calls(missing.len(), t0.elapsed());
+        let proofs: Vec<_> = {
+            let g = self.end_proofs.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(p) = lanes.iter().map(|l| g.got.get(l).cloned()).collect::<Option<Vec<_>>>() else {
+                return Err(ProofError::Unavailable("a kept lane proof of the piece's end is gone".into()));
+            };
+            p
+        };
+        let r = lock().finish(plan, &expected, &proofs);
+        // Used up either way: proven, or refused (and its servers blamed).
+        *self.end_proofs.lock().unwrap_or_else(|e| e.into_inner()) = EndProofs::default();
+        r
     }
 
     /// The signature scripts of the batch's transactions that can matter to KOB
@@ -2177,7 +2310,18 @@ impl<S: ChainSource> Follower<S> {
             for b in chain_blocks {
                 let chain = crate::rpc::proof::consensus_header(&raw.chain_block_accepted_transactions[b].chain_block_header)
                     .ok_or_else(|| ProofError::Refused(format!("the header of chain block #{b} is incomplete")))?;
-                crate::rpc::proof::check_merged_into(&chain, &block.header, &*self.source).await?;
+                // The walk is kept across attempts: one longer than an attempt goes on where it stopped (R9C1-L3).
+                let key = (Hash32(chain.hash.as_bytes()), m);
+                let mut walk = self.merge_walks.lock().unwrap_or_else(|e| e.into_inner()).remove(&key).unwrap_or_default();
+                let r = crate::rpc::proof::check_merged_into_from(&chain, &block.header, &*self.source, &mut walk).await;
+                if matches!(r, Err(ProofError::Unavailable(_))) {
+                    let mut g = self.merge_walks.lock().unwrap_or_else(|e| e.into_inner());
+                    if g.len() >= 64 {
+                        g.clear();
+                    }
+                    g.insert(key, walk);
+                }
+                r?;
             }
         }
         Ok(())
@@ -2453,7 +2597,12 @@ impl<S: ChainSource> Follower<S> {
                 // verified age decides (more than `caught_up_daa` at 10 DAA a second), never the
                 // node's claimed position (R8C1-L4).
                 let age = last_ts.filter(|(h, _)| *h == a.cursor.hash).map(|(_, t)| self.wall_ms() as i64 - t as i64);
-                let more = c.by_window || age.map(|ms| ms > self.cfg.caught_up_daa as i64 * 100).unwrap_or(a.added > 0);
+                // The verified age decides when it is known; the window (which the node's sink claim bounds) only when
+                // it is not (R9C1-L2).
+                let more = match age {
+                    Some(ms) => ms > self.cfg.caught_up_daa as i64 * 100,
+                    None => c.by_window || a.added > 0,
+                };
                 let orders_total =
                     if a.new_orders > 0 || a.reverted_rows_blocks > 0 { self.blocking(|i| i.order_count().ok()).await } else { None };
                 let records_next = self.blocking(|i| i.records_next()).await;
@@ -2963,6 +3112,9 @@ mod tests {
             blamed: Mutex<Vec<Origin>>,
             /// Lane proofs that do not give the header's commitment.
             bad_proofs: std::sync::atomic::AtomicBool,
+            /// User lanes added to the first chain block, each with a transaction of its own (R9C1-H1); their proofs
+            /// are the native lane's (the tests leave the lane checks out).
+            extra_lanes: std::sync::atomic::AtomicUsize,
         }
 
         impl Recorded {
@@ -2994,6 +3146,28 @@ mod tests {
                     r.chain_block_accepted_transactions.clear();
                 }
                 (self.tamper)(&mut r);
+                let extra = self.extra_lanes.load(SeqCst);
+                if extra > 0 && !r.chain_block_accepted_transactions.is_empty() {
+                    let t0 = r
+                        .chain_block_accepted_transactions
+                        .iter()
+                        .flat_map(|b| &b.accepted_transactions)
+                        .find(|t| t.subnetwork_id.as_ref().is_some_and(|s| s.0 == [0; 20]) && !t.inputs.is_empty())
+                        .cloned()
+                        .expect("a native transaction");
+                    for i in 0..extra {
+                        let mut t = t0.clone();
+                        let mut sub = [0u8; 20];
+                        sub[..4].copy_from_slice(&[i as u8, (i >> 8) as u8, (i >> 16) as u8, 1]);
+                        t.subnetwork_id = Some(crate::hex::HexBytes(sub.to_vec()));
+                        t.payload.0.clear();
+                        for o in &mut t.outputs {
+                            o.covenant = None;
+                        }
+                        t.verbose_data.transaction_id = crate::rpc::verify::tx_id(&t).unwrap();
+                        r.chain_block_accepted_transactions[0].accepted_transactions.push(t);
+                    }
+                }
                 Ok(r)
             }
             async fn dag_info(&self) -> Result<DagInfo, RpcError> {
@@ -3041,13 +3215,17 @@ mod tests {
                 block: Hash32,
                 lane: Hash32,
             ) -> Result<(kaspa_rpc_core::GetSeqCommitLaneProofResponse, Origin), RpcError> {
+                // A node slower than the per-call bound: the call times out at the bound.
+                if self.delay > crate::rpc::SMALL_CALL_TIMEOUT {
+                    tokio::time::sleep(crate::rpc::SMALL_CALL_TIMEOUT).await;
+                    return Err(RpcError::Timeout(crate::rpc::SMALL_CALL_TIMEOUT));
+                }
                 self.round_trip().await;
                 let from = *self.proof_origin.lock().unwrap();
-                let p = self
-                    .fx
-                    .proofs
-                    .get(&kaspa_hashes::Hash::from_bytes(lane.0))
-                    .ok_or_else(|| RpcError::Node("no such lane".into()))?;
+                let native = crate::rpc::proof::native_lane();
+                let key = kaspa_hashes::Hash::from_bytes(lane.0);
+                let key = if self.extra_lanes.load(SeqCst) > 0 && !self.fx.proofs.contains_key(&key) { native } else { key };
+                let p = self.fx.proofs.get(&key).ok_or_else(|| RpcError::Node("no such lane".into()))?;
                 let mut p = p.clone();
                 if self.bad_proofs.load(SeqCst) {
                     p.1.payload_and_ctx_digest = kaspa_hashes::Hash::from_bytes([7; 32]);
@@ -3113,6 +3291,7 @@ mod tests {
                 proof_origin: Mutex::new(Origin::PRIMARY),
                 blamed: Mutex::new(vec![]),
                 bad_proofs: Default::default(),
+                extra_lanes: Default::default(),
             });
             let conn = crate::indexer::db::open_memory(&network).unwrap();
             let ingest =
@@ -3125,6 +3304,54 @@ mod tests {
             assert!(cfg.chain_proof.is_some(), "on by default");
             let f = Follower::new(source.clone(), ingest.clone(), cfg, health.clone(), events);
             (f, source, ingest, health)
+        }
+
+        /// R9C1-H1: one chain block with thousands of lanes against a node whose lane proofs take long. Every lane proof
+        /// answered is kept across steps (a step the progress rule gives up resumes where it stopped), and a period in
+        /// which the proofs answered rise is progress although the cursor waits for them. So the block is applied:
+        /// at 0.4 s a call with 4,000 lanes in one chain block (8,000 calls, more than two periods of the rule), and at
+        /// 28 s a call (just under the 30 s per-call bound) with 300. The recorded node proves only at its last chain
+        /// block, so a piece cannot end inside the window here. The cursor is an hour behind with its time known, so the
+        /// rule judges from the first step. A node over the bound times its calls out, which no proof count excuses:
+        /// nothing is applied and the health says failing. Before, the end proofs were dropped at every abort and the
+        /// 0.4 s block was never applied within 30 minutes.
+        #[tokio::test(start_paused = true)]
+        async fn a_lane_heavy_chain_block_is_proven_across_steps_against_a_slow_node() {
+            for (delay_ms, lanes, applies, within_s) in
+                [(400u64, 4_000usize, true, 1_800u64), (28_000, 300, true, 3 * 3_600), (31_000, 300, false, 1_800)]
+            {
+                let (mut f, src, ingest, health) = follower_with(MAINNET, |_| {}, Duration::from_millis(delay_ms));
+                src.extra_lanes.store(lanes, SeqCst);
+                // an hour behind, its time known from the start: the progress rule judges the first step too
+                f.set_clock_at(src.fx.start_header.timestamp + 3_600_000);
+                *f.cursor_ts.lock().unwrap() = Some((src.fx.start, src.fx.start_header.timestamp));
+                {
+                    let p = f.proof.as_ref().unwrap();
+                    let mut g = p.lock().unwrap();
+                    let old = std::mem::replace(&mut *g, ChainProof::new(ChainProofConfig::default(), "mainnet"));
+                    *g = old.skipping(crate::rpc::proof::skip::LANES);
+                }
+                let (stop, rx) = watch::channel(false);
+                let start = src.fx.start;
+                let watcher = async {
+                    let t0 = tokio::time::Instant::now();
+                    while t0.elapsed() < Duration::from_secs(within_s) {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        if cursor(&ingest) != start {
+                            break;
+                        }
+                    }
+                    let _ = stop.send(true);
+                    t0.elapsed()
+                };
+                let ((), took) = tokio::join!(f.run(rx), watcher);
+                let moved = cursor(&ingest) != start;
+                assert_eq!(moved, applies, "{delay_ms} ms a call, {lanes} lanes: applied after {took:?}");
+                if !applies {
+                    let h = health.snapshot();
+                    assert_eq!(h.authority_pace.map(|p| p.state), Some(PaceState::Failing), "a node over the bound fails");
+                }
+            }
         }
 
         fn cursor(ingest: &Mutex<Ingest>) -> Hash32 {
