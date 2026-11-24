@@ -801,6 +801,11 @@ pub struct SweepOrder {
     /// Strays of the order's own token (a pair order: of either of its tokens).
     #[serde(default)]
     pub strays: Vec<TokenUtxo>,
+    /// The order's custodies as the node shows them, which the sweep leaves where they are. A
+    /// stray of exactly a custody's state is a twin and may be swept only next to one of these
+    /// (R8FX-1): a sweep never takes the unit the continuing order pins.
+    #[serde(default)]
+    pub kept: Vec<TokenUtxo>,
     #[serde(default)]
     pub foreign: Vec<ForeignStrays>,
     #[serde(default)]
@@ -1362,6 +1367,48 @@ pub fn build_cancel_order(r: &CancelOrder, budgets: BudgetFn) -> Result<BuiltTx>
     Ok(built)
 }
 
+/// The maker's cancel of an order whose custody is gone: a way back, not a cancel (R8FX-1).
+///
+/// [`build_cancel_order`] releases exactly what the order's state holds, so an order that lost its
+/// custody (moved out by an earlier transaction, or never made) cannot be cancelled by it. Its
+/// covenant's `cancel` needs only the maker's signature, so this ends the order and returns its
+/// own KAS without the custody. A custody that still exists would stay owned by the ended
+/// covenant id for ever, so the caller builds this only after the node shows no unit at the
+/// pinned custody scripts, and says so to the maker. Strays and a bought-custody may still be
+/// passed; there is no replacement and no top-up.
+pub fn build_cancel_custody_gone(r: &CancelOrder, budgets: BudgetFn) -> Result<BuiltTx> {
+    if r.custody.is_some() || r.prefund.is_some() {
+        return invalid("a custody-gone cancel takes no custody: an order with its custody is cancelled by CancelOrder");
+    }
+    if r.replace.is_some() || !r.tokens.is_empty() {
+        return invalid("a custody-gone cancel only ends the order: no replacement or top-up");
+    }
+    let order = &r.order;
+    let id = order.state.template_id();
+    let (tokens, _, suffix) = own_tokens(&order.state)?;
+    let subject = CancelSubject {
+        maker: order.state.maker(),
+        tokens,
+        custodies: vec![],
+        plan: cancel_plan(&order.state, r.retired)?,
+        role: format!("{}.cancel{suffix}", id.name()),
+    };
+    let parts = CancelParts {
+        custody: None,
+        prefund: None,
+        strays: &r.strays,
+        foreign: &r.foreign,
+        tokens: &[],
+        funding: &r.funding,
+        change: r.change,
+        replace: None,
+        lock_time: r.lock_time,
+        records: &r.records,
+        fee: &r.fee,
+    };
+    cancel_with(subject, &order.utxo, parts, budgets)
+}
+
 /// The signing plan of the maker's cancel of an order.
 ///
 /// It is the template's `cancel(sig)`. For an order under a retired template (`retired`, its
@@ -1860,6 +1907,11 @@ pub fn build_sweep_order(r: &SweepOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     if r.strays.is_empty() && r.foreign.is_empty() {
         return invalid("nothing to sweep: no strays");
     }
+    // An unbound curve names no token, so its custody (its token's genesis output) could pass as a
+    // foreign stray: it is swept once a fill or an amend binds it (R8FX-1).
+    if matches!(&order.state, AnyState::KobCurveAsk(c) if c.is_unbound()) {
+        return invalid("an unbound curve is not swept: its first fill or an amend binds it to its token first");
+    }
     let funded = !r.funding.is_empty();
     // Without funding only a plain ask's carrier pays. Every other kind's value is an escrow, a
     // prefund or keeper tips.
@@ -1873,6 +1925,29 @@ pub fn build_sweep_order(r: &SweepOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     if let Some(b) = bought_of(&order.state)? {
         if r.strays.iter().any(|t| b.is(t, order_cov)) {
             return invalid("a sweep never moves the order's bought-custody: claim it (ClaimOrder)");
+        }
+    }
+    // The continuation keeps every custody its state pins (R8FX-1). A unit of exactly a custody's state
+    // is that custody unless a kept twin of it stays: the sweep may take the extra twin, never the
+    // last one, else the order lives on with no custody and no KOB tool could fill, refund or
+    // cancel it.
+    for h in held_custodies(&order.state, order_cov)?.iter().filter(|h| !h.bought) {
+        let same = |t: &&TokenUtxo| t.utxo.covenant_id == Some(h.token.covenant_id) && t.state == h.state;
+        let swept: Vec<&TokenUtxo> = r.strays.iter().filter(same).collect();
+        if swept.is_empty() {
+            continue;
+        }
+        let stays = r
+            .kept
+            .iter()
+            .filter(same)
+            .filter(|k| !r.strays.iter().any(|s| s.utxo.transaction_id == k.utxo.transaction_id && s.utxo.index == k.utxo.index))
+            .count();
+        if stays == 0 {
+            return invalid(format!(
+                "a sweep never moves the order's custody ({} base units of exactly the state its order pins): a unit of that state is swept only as a twin, next to the custody it keeps (`kept`)",
+                h.state.amount()
+            ));
         }
     }
     let order_input = draft.add_input(
