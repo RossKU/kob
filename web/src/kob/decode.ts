@@ -51,7 +51,7 @@ import { curveProblems } from './curve';
 import { AUTO_COIN, LOCK_COIN_MAX, creatorLock, type CreatorLockInfo } from './creator-lock';
 import type { WalletId } from '../wallet/types';
 import {
-  baseKind, custodiesOf, describeOrder, familyOfKind, formatKas, formatUnits, isOrderKind, isPairKind, kindFor, big, orderKindOfTemplate, pairFactsOf,
+  baseKind, custodiesOf, describeOrder, extensionOf, familyOfKind, formatKas, formatUnits, isOrderKind, isPairKind, kindFor, big, orderKindOfTemplate, pairFactsOf,
   type OrderDescription,
   type PairTokenFacts,
 } from './order-facts';
@@ -105,7 +105,7 @@ export const SIGNING_ISSUE_CODES = [
   'output-unknown', 'sign-foreign-key', 'sign-mismatch', 'sign-unexpected', 'sighash-type', 'expected-orders', 'expected-kas-locked',
   'expected-tokens-escrowed', 'expected-cancel-ids', 'expected-max-fee', 'input-unconfirmed', 'token-state-unplain', 'token-state-mixed', 'pair-token-mismatch', 'pair-family-mismatch',
   'pair-terms-invalid', 'order-terms-invalid', 'expected-quote-escrowed', 'trigger-evidence-invalid', 'trigger-rule-unmet', 'sweep-invalid', 'expected-sweep-ids', 'sweep-custody-spent',
-  'retired-not-cancel', 'claim-invalid', 'bought-custody-lost', 'expected-claim-ids', 'expected-delivery', 'curve-terms-invalid',
+  'retired-not-cancel', 'claim-invalid', 'bought-custody-lost', 'custody-unreleased', 'expected-claim-ids', 'expected-delivery', 'curve-terms-invalid',
   'take-amount', 'take-price', 'take-orders', 'take-token', 'unlock-invalid', 'lock-coin-stranded', 'release-invalid',
   // warnings
   'inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records',
@@ -1918,6 +1918,45 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         trigger: triggers.get(d.index) ?? null, ...boughtPart,
       };
     });
+  // An order-ending cancel or refund must spend every custody its state holds (R8F2b-1, R8F2-I4):
+  // the tokens the state holds of each of its tokens, as one input owned by the order's covenant id,
+  // plain, under the class (extension commitment) the state pins. Once the covenant id has ended,
+  // nothing can move a custody left unspent. The check reads only the signed order input's state and
+  // the token inputs' plan states, which their scripts bind, so it holds with no node facts too (the
+  // private-key frame). Where the tokens then go is held by the output checks.
+  for (const d of inputs) {
+    const o = d.order;
+    const st = orderStates.get(d.index);
+    const cov = o?.covenantId ?? null;
+    if (!o || !st || !cov || (o.action !== 'cancel' && o.action !== 'refund')) continue;
+    if (sweepByInput.has(d.index) || amends.some((a) => a.input === d.index) || tx.outputs.some((x) => x.covenant?.covenantId === cov)) continue;
+    let held: { token: Hex; amount: bigint }[];
+    try {
+      held = custodiesOf(st, kob).filter((c) => c.amount > 0n);
+    } catch {
+      held = [];
+    }
+    const pf = pairFactsOf(st);
+    const owned = inputs.filter((t) => t.token?.escrowOf === cov);
+    for (const c of held) {
+      const facts = pf ? (c.token === pf.a.covId ? pf.a : c.token === pf.b.covId ? pf.b : null) : null;
+      const family = facts ? (facts.family ?? 'kcc20') : familyOfKind(st.kind);
+      const ext = family === 'kron' ? null : facts ? facts.ext : extensionOf(st);
+      // an unbound curve names token 0: its custody is the output of its own transaction
+      const zero = /^0+$/.test(c.token);
+      const isCustody = (t: DecodedInput): boolean => {
+        const plan = built.plans[t.index]!;
+        const ps = (plan as { state?: unknown }).state as Record<string, unknown> | undefined;
+        if (!ps || big(String(ps.amount ?? '-1')) !== c.amount || ps.owner !== cov) return false;
+        if (zero ? t.outpoint.txid.toLowerCase() !== d.outpoint.txid.toLowerCase() : t.token!.ref.covenantId !== c.token) return false;
+        if (family === 'kron') return true;
+        return isKcc20State(ps as never) && ps.owner_scheme === KCC20_SCHEME_COVID && borrowKeyOf(ps as never) === PLAIN_BORROW && (ext === null || ps.extension_commitment === ext);
+      };
+      if (!owned.some(isCustody)) {
+        add('custody-unreleased', `input ${d.index}: the ${o.action} ends order ${cov} but does not spend the custody its state holds (on-chain amount ${c.amount} of token ${c.token}${ext ? `, class ${ext}` : ''}): those tokens could never be moved again`, { input: d.index, params: { amount: c.amount } });
+      }
+    }
+  }
   for (const s of spends) {
     if (s.strays > 0n) add('strays-swept', `input ${s.input}: stray tokens sent to this order (on-chain amount ${s.strays}) are swept back to you`, { input: s.input, params: { amount: s.strays } });
     for (const x of s.otherStrays) {

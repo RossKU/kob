@@ -190,6 +190,7 @@ export default {
   'issues.swept-in-place': 'Input {input}: the order continues unchanged at output {output}; only its {utxos} stray token UTXO(s) return to you.',
   'issues.swept-in-place-kas': 'Input {input}: the order continues at output {output} under the same terms, holding {now} KAS instead of {was} KAS; only its {utxos} stray token UTXO(s) return to you.',
   'issues.claim-invalid': 'Input {input}: not a valid claim of the order\'s bought tokens ({reason}). Not signing.',
+  'issues.custody-unreleased': 'Input {input}: the transaction ends the order but does not take back the tokens it holds, where nothing can move them again. Not signing.',
   'issues.bought-custody-lost': 'Input {input}: the cancel ends the order but leaves its bought tokens behind, where nothing can move them again. Not signing.',
   'issues.expected-claim-ids': 'The plan claims from {expected} order(s), the transaction from {actual}. Not signing.',
   'issues.expected-delivery': 'An order\'s delivery differs from what you chose ({fields}). Not signing.',
