@@ -179,7 +179,9 @@ export const REFERENCE_DIVERGENCE_BPS = 5_000n;
 export function envIssues(env: PlanEnv): PlanIssue[] {
   const out: PlanIssue[] = [];
   if (env.guardsUnavailable?.length) {
-    out.push(issue('GUARDS_UNAVAILABLE', { guards: env.guardsUnavailable.join(', ') }));
+    // a list longer than the app reads does not clear by waiting: said as such (R9B-L4)
+    if (env.guardsUnavailable.includes('list-too-long')) out.push(issue('GUARDS_LIST_TOO_LONG', { guards: env.guardsUnavailable.filter((g) => g !== 'list-too-long').join(', ') }));
+    else out.push(issue('GUARDS_UNAVAILABLE', { guards: env.guardsUnavailable.join(', ') }));
   }
   const ref = referencePrice(env.book);
   const last = env.lastFillPrice ?? null;

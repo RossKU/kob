@@ -72,6 +72,7 @@ export const ISSUE_CATALOG = {
   PRICE_AGGRESSIVE_VS_MARKET: e('warning', 'Your price is {percent}% through the market ({reference:kas}): check for a typing error.'),
   PRICE_FAR_FROM_MARKET: e('warning', 'Your price is {percent}% away from the market ({reference:kas}): it is unlikely to fill soon.'),
   // ---- guards
+  GUARDS_LIST_TOO_LONG: e('error', 'There are more open orders here than this app reads in one go, so self-trade prevention and the price checks cannot run. Waiting does not clear this; the CLI can place the order.'),
   GUARDS_UNAVAILABLE: e('error', "Could not read the token's guard data: self-trade prevention and the price checks cannot run. The order waits until the data is read again."),
   MARKET_REFERENCE_DIVERGES: e('warning', 'The order book shows {reference:kas} per token, but the last fill was at {lastFill:kas} ({percent}% apart). Both come from the indexer: check the price yourself before signing.'),
   MARKET_REFERENCE_SOURCE: e('info', 'Market reference: {reference:kas} per token from the order book, checked against the node. The order can fill at {worst:kas} per token at worst.'),

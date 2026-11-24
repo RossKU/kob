@@ -195,7 +195,7 @@ export interface PlanEnv {
    * on an empty book. Planning then reports GUARDS_UNAVAILABLE, an error, and the order waits for
    * the data.
    */
-  guardsUnavailable?: readonly ('own-orders' | 'book')[];
+  guardsUnavailable?: readonly ('own-orders' | 'book' | 'list-too-long')[];
   /**
    * Price in sompi per whole token of the newest fill. Indexer trades are a data path independent
    * of the book, so it cross-checks the book reference price.

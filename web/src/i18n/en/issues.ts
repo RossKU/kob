@@ -71,6 +71,7 @@ export default {
   // The book is empty, so the reference is the last trade price (finding param basis = 'last').
   'issues.last.PRICE_AGGRESSIVE_VS_MARKET': 'Your price is {percent}% through the last trade price ({reference}). Check for a typing error.',
   'issues.last.PRICE_FAR_FROM_MARKET': 'Your price is {percent}% from the last trade price ({reference}): unlikely to fill soon.',
+  'issues.GUARDS_LIST_TOO_LONG': 'There are more open orders here than this app reads in one go, so self-trade prevention and the price checks cannot run. Waiting does not clear this; the CLI can place the order.',
   'issues.GUARDS_UNAVAILABLE': "Could not read the token's guard data; try again in a moment.",
   'issues.MARKET_REFERENCE_DIVERGES': 'The book shows {reference} per token, the last fill {lastFill} ({percent}% apart), both from the indexer: check the price before signing.',
   'issues.MARKET_REFERENCE_SOURCE': 'Reference: {reference} per token (book checked against the node); worst fill {worst} per token.',

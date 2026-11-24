@@ -212,6 +212,8 @@ export interface CoinsPart {
 export interface HoldingsPart {
   tokenUtxos: TokenUtxo[];
   ownOrders: OwnOrderRef[] | null;
+  /** The own-order list was cut at its page bound (more than OWN_LIST_PAGES of 200). */
+  ownOrdersTooMany?: boolean;
 }
 
 /**
@@ -288,13 +290,15 @@ export async function readHoldingsPart(
     ? Promise.resolve(own())
     : s.indexer && !o.offline
       ? // A list cut at its page bound is not read: self-trade prevention needs every own order.
-        s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active', limit: 200 }, { priority: 'high', maxPages: OWN_LIST_PAGES }).then(incompleteAsNull, async (e: unknown) => {
+        s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active', limit: 200 }, { priority: 'high', maxPages: OWN_LIST_PAGES }).then((l) => (l.truncated ? 'too-many' as const : l), async (e: unknown) => {
           // The indexer is down. Once standalone mode is on, its book lists the wallet's orders,
           // and the failed read starts its check.
           return c && typeof c.readFailed === 'function' && (await c.readFailed(e)) ? own() : null;
         })
       : Promise.resolve([]);
   const [tokenUtxos, orders] = await Promise.all([s.tracker.tokenUtxosFor(wallet.pubkey, { covenantId: token.covenantId, program: token.program }), mine]);
+  // more own orders than the app reads: said as such, it does not clear by waiting (R9B-L4)
+  if (orders === 'too-many') return { tokenUtxos, ownOrders: null, ownOrdersTooMany: true };
   return { tokenUtxos, ownOrders: orders ? ownOrderRefs(market, orders) : null };
 }
 
@@ -320,7 +324,21 @@ export const PAIR_LIST_PAGES = 20;
  * old can, and then the order waits, it is never planned against a book that may miss them
  * (R7B-L3). The indexer's pair book names no covenant ids, so its orders cannot be read one by one.
  */
-async function pairOrdersOf(indexer: NonNullable<Services['indexer']>, a: Hex, b: Hex, pv: PairBookView): Promise<OrderView[] | null> {
+async function pairOrdersOf(indexer: NonNullable<Services['indexer']>, a: Hex, b: Hex, pv: PairBookView): Promise<OrderView[] | 'too-many' | null> {
+  // The pair's own live orders, both directions (kobd's pair route, R9B-L4): what other orders
+  // either token has does not matter. A pair with more than this reads is "too many" (it does not
+  // clear by waiting). An older indexer without the route falls back to the two tokens' lists.
+  if (typeof indexer.allPairOrders === 'function') {
+    const pages = { priority: 'high' as const, maxPages: PAIR_LIST_PAGES };
+    const [ab, ba] = await Promise.all([indexer.allPairOrders(a, b, pages).catch(() => undefined), indexer.allPairOrders(b, a, pages).catch(() => undefined)]);
+    if (ab !== undefined && ba !== undefined && ab !== null && ba !== null) {
+      if (ab.truncated || ba.truncated) return 'too-many';
+      const byId = new Map<Hex, OrderView>();
+      for (const v of [...ab, ...ba]) byId.set(v.covenant_id, v);
+      return [...byId.values()];
+    }
+    if (ab === undefined || ba === undefined) return null;
+  }
   const list = (token: Hex) => indexer.allOrders({ token, status: 'active', limit: 200 }, { priority: 'high', maxPages: PAIR_LIST_PAGES }).catch(() => null);
   const [la, lb] = await Promise.all([list(a), list(b)]);
   const whole = [la, lb].find((l) => l && !l.truncated);
@@ -350,9 +368,10 @@ export function assemblePlanEnv(
 ): PlanEnv {
   // A guard whose data could not be read is reported, so the planner refuses the order until a
   // read succeeds. It is never silently switched off.
-  const guardsUnavailable: ('own-orders' | 'book')[] = [];
+  const guardsUnavailable: ('own-orders' | 'book' | 'list-too-long')[] = [];
   if (parts.market.bookUnavailable) guardsUnavailable.push('book');
   if (parts.holdings && parts.holdings.ownOrders === null) guardsUnavailable.push('own-orders');
+  if (parts.holdings?.ownOrdersTooMany) guardsUnavailable.push('list-too-long');
   // An order this page has just taken, its outpoint spent by a transaction not yet in a block, is
   // gone. It is out of the book and of what can be taken.
   const orders = new Map<string, BookOrderUtxo>();
@@ -528,7 +547,7 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
   let kasPerWholeA: bigint | null = null;
   let kasPerWholeB: bigint | null = null;
   let lastFillPrice: bigint | null = null;
-  const guardsUnavailable: ('own-orders' | 'book')[] = [];
+  const guardsUnavailable: ('own-orders' | 'book' | 'list-too-long')[] = [];
   if (indexed) {
     const [pv, mine, refA, refB] = await indexed;
     const [ma, mb] = await kasBooks!;
@@ -541,6 +560,7 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
       const hasOrders = [...pv.asks, ...pv.bids].some((l) => l.source !== 'route');
       const listed = hasOrders && indexer ? await pairOrdersOf(indexer, a.covenantId, b.covenantId, pv) : [];
       if (listed === null) guardsUnavailable.push('book');
+      else if (listed === 'too-many') guardsUnavailable.push('book', 'list-too-long');
       else {
         const checked = await verifyPairBook(
           {

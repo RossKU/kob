@@ -1111,6 +1111,7 @@ function standaloneIndexer(c: StandaloneController): IndexerApi {
     pairs: no('the pair list'),
     pairCandles: no('the pair chart'),
     pairFills: no('the pair fills'),
+    allPairOrders: no('the pair orders'),
   };
 }
 
