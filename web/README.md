@@ -269,7 +269,9 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   (`kob/node-verify.ts` `confirmSnapshotsOnNode`, the reconciliation cancel and amend use) must find the order UTXO (and an ask's custody) unspent at that
   script, with the KAS value and token amount the book row lists and the side, price and scale the state commits. An order the node does not confirm is
   left out of `PlanEnv.book` (`PlanEnv.bookDropped` names it; a taking order shows the warning `BOOK_ORDERS_NOT_ON_NODE`); when none of the first 3 x 3 orders of a
-  side is confirmed, the side is empty. A node that does not answer within 5 s rejects the read with a `NodeError`, so the ticket shows its node banner and plans
+  side is confirmed, the side is empty. When an order read of the indexer fails or times out ahead of a side's confirmed touch, the side is not known, and the book
+  counts as unreadable (the guard error above), so a crossing limit is never planned as a resting one against it. These reads, the book, the wallet's orders
+  and holdings go ahead of the page's other indexer reads in its in-flight queue (`RequestOptions.priority` `high`; chart, stats and tape are `low`). A node that does not answer within 5 s rejects the read with a `NodeError`, so the ticket shows its node banner and plans
   nothing. The check is invisible when everything matches and needs no acknowledgement. Pair books (aggregated levels, no orders) are not covered.
 * **Market start.** A market or close order starts at the best price of the indexer book, whose touch is confirmed on the node (above). Its start is compared
   with the best price of every `extraIndexerUrls` indexer (a pair market: the rate the further indexer's two KAS books imply); more than

@@ -10,9 +10,10 @@ import { planOrder } from '../kob/plan';
 import type { OrderState, TxJson } from '../kob/types';
 import { loadKobNode } from '../kob/wasm.node';
 import { FakeChain, MAKER, orderViewOf, placeGolden, testAddress, TOKEN } from '../testing/chain-fixtures';
-import { CLOCK, KAS, TOK, makeEnv } from '../testing/fixtures';
+import { CLOCK, KAS, TOK, defaultBook, makeEnv } from '../testing/fixtures';
+import { withinTerms } from '../ui/ticket/review-check';
 import { BOOK_CHECK_MAX_ROWS, BOOK_CHECK_PER_SIDE, BOOK_CHECK_ROUNDS, verifyBook, type BookVerifyDeps } from './book-verify';
-import { readMarketPart } from './env';
+import { assemblePlanEnv, readMarketPart } from './env';
 import type { Services } from './services';
 
 const kob = loadKobNode();
@@ -187,6 +188,35 @@ describe('verifyBook: the orders of the book must exist on the node as the index
     expect(err.code).toBe('unavailable');
     expect(Date.now() - t0).toBeLessThan(2_000);
   });
+
+  it('an order read goes first in the indexer queue, and one that times out is cancelled and marks its side unread (R6B-L1)', async () => {
+    const w = world();
+    const asked: { priority?: string; signal?: AbortSignal }[] = [];
+    const deps: BookVerifyDeps = { ...w.deps, timeoutMs: 30, indexer: { order: (_id, o) => (asked.push(o ?? {}), new Promise(() => undefined)) } };
+    const out = await verifyBook(deps, book([rowOf(w.real)]));
+    expect(out.view.asks).toEqual([]);
+    expect(out.unread).toEqual(['sell']);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.priority).toBe('high');
+    expect(asked[0]!.signal?.aborted).toBe(true);
+  });
+
+  it('a failed read ahead of the confirmed touch marks the side unread; an order the indexer does not know (404) does not (R6B-L1)', async () => {
+    const real0 = world().real;
+    const better = forge(real0, 0xe1, priceOf(real0) / 2n);
+    const w = world([better]);
+    const failing: BookVerifyDeps = { ...w.deps, indexer: { order: async (id) => (id === better.covenantId ? Promise.reject(new Error('503')) : w.views.get(id) ?? null) } };
+    const out = await verifyBook(failing, book([rowOf(better), rowOf(w.real)]));
+    expect(ids(out.view.asks)).toEqual([w.real.covenantId]);
+    expect(out.unread).toEqual(['sell']);
+    // the same row behind the confirmed one, or unknown to the indexer: the touch is checked
+    const behind = forge(real0, 0xe2, priceOf(real0) * 2n);
+    const w2 = world([behind]);
+    const late: BookVerifyDeps = { ...w2.deps, indexer: { order: async (id) => (id === behind.covenantId ? Promise.reject(new Error('503')) : w2.views.get(id) ?? null) } };
+    expect((await verifyBook(late, book([rowOf(w2.real), rowOf(behind)]))).unread).toEqual([]);
+    w.views.set(better.covenantId, null);
+    expect((await verifyBook(w.deps, book([rowOf(better), rowOf(w.real)]))).unread).toEqual([]);
+  });
 });
 
 describe('readMarketPart hands the planners the book the node confirms', () => {
@@ -209,6 +239,32 @@ describe('readMarketPart hands the planners the book the node confirms', () => {
     expect(part.book.asks.map((l) => l.price)).toEqual([priceOf(w.real)]);
     expect(part.dropped).toMatchObject([{ covenantId: phantom.covenantId, reason: 'not-on-node' }]);
     expect(part.bookUnavailable).toBe(false);
+  });
+
+  it('a "Fill now" limit is not re-planned at the click as a plain resting limit when the ask side could not be checked (R6B-L1)', async () => {
+    const w = world();
+    const s = services(w, w.chain, [rowOf(w.real)]);
+    const slow = { ...s, indexer: { ...s.indexer!, order: async () => { throw new Error('The indexer did not answer within 5s.'); } } } as typeof s;
+    const part = await readMarketPart(slow, market);
+    expect(part.book.asks).toEqual([]);
+    expect(part.bookUnavailable).toBe(true);
+    // The plan at the click: the ticket showed a take (limit 2.60 over the real ask at 2.50); the
+    // node-checked book has lost its ask side.
+    const base = makeEnv();
+    const lost = { ...part, book: { asks: [], bids: defaultBook().bids } };
+    const env = (m: typeof lost) =>
+      assemblePlanEnv({ kob: base.kob, config: {} } as never, { pubkey: base.maker }, base.token, { market: m, coins: { clock: CLOCK, funding: base.funding, fees: undefined as never }, holdings: { tokenUtxos: base.tokenUtxos, ownOrders: [] } });
+    const intent = { type: 'limit', side: 'buy', price: 260_000_000n, amount: 5n * TOK, crossing: 'take' } as const;
+    const shown = planOrder({ ...base, clock: CLOCK }, intent);
+    const marketable = (p: typeof shown) => !!p.take || p.issues.some((i) => i.code.startsWith('MARKETABLE'));
+    expect(marketable(shown)).toBe(true);
+    const atClick = planOrder(env(lost), intent);
+    expect(atClick.issues.filter((i) => i.severity === 'error').map((i) => i.code)).toContain('GUARDS_UNAVAILABLE');
+    // what it was before: read as an empty side, a resting bid with no marketable warning, kept as
+    // within the shown terms
+    const asEmpty = planOrder(env({ ...lost, bookUnavailable: false }), intent);
+    expect(marketable(asEmpty)).toBe(false);
+    expect(withinTerms(shown, asEmpty)).toBe(true);
   });
 
   it('the node down rejects the read (nothing is planned on an unchecked book)', async () => {

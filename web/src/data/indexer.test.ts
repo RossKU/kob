@@ -193,6 +193,57 @@ describe('HttpIndexer errors and backoff', () => {
     expect(peak).toBe(6);
   });
 
+  it('a waiting high read gets the next free place, then the unmarked ones, then low; reads in flight are not interrupted (R6B-L1)', async () => {
+    const pending: (() => void)[] = [];
+    const order: string[] = [];
+    const aborted: string[] = [];
+    const f = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const tag = new URL(String(input)).searchParams.get('limit') ?? '?';
+      order.push(tag);
+      init?.signal?.addEventListener('abort', () => aborted.push(tag));
+      return new Promise<Response>((r) => pending.push(() => r(json({ token: H1, price_basis: 'kas', items: [] }))));
+    }) as typeof fetch;
+    const ix = new HttpIndexer({ baseUrl: 'http://limit-prio', fetch: f, timeoutMs: 60_000 });
+    // six background reads hold every place
+    const held = Array.from({ length: 6 }, (_, i) => ix.trades(H1, { limit: 100 + i }, { priority: 'low' }));
+    await new Promise((r) => setTimeout(r, 0));
+    const low = ix.trades(H1, { limit: 1 }, { priority: 'low' });
+    const plain = ix.trades(H1, { limit: 2 });
+    const high = ix.trades(H1, { limit: 3 }, { priority: 'high' });
+    const high2 = ix.trades(H1, { limit: 4 }, { priority: 'high' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(order).toEqual(['100', '101', '102', '103', '104', '105']);
+    for (let i = 0; i < 4; i++) {
+      pending.shift()!();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    expect(order.slice(6)).toEqual(['3', '4', '2', '1']);
+    expect(aborted).toEqual([]);
+    while (pending.length) pending.shift()!();
+    await Promise.all([...held, low, plain, high, high2]);
+  });
+
+  it('a read in flight that its caller gives up on frees its place at once (R6B-L1)', async () => {
+    const urls: string[] = [];
+    const f = ((input: RequestInfo | URL, init?: RequestInit) => {
+      urls.push(new URL(String(input)).searchParams.get('limit') ?? '?');
+      return new Promise<Response>((_r, rej) => init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))));
+    }) as typeof fetch;
+    const ix = new HttpIndexer({ baseUrl: 'http://limit-giveup', fetch: f, timeoutMs: 60_000 });
+    const ctls = Array.from({ length: 6 }, () => new AbortController());
+    const held = ctls.map((c, i) => ix.trades(H1, { limit: 100 + i }, { signal: c.signal }).catch((e) => e));
+    const c2 = new AbortController();
+    const next = ix.trades(H1, { limit: 1 }, { priority: 'high', signal: c2.signal }).catch((e) => e);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(urls).toHaveLength(6);
+    ctls[0]!.abort();
+    expect(await held[0]).toMatchObject({ kind: 'aborted' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(urls).toEqual(['100', '101', '102', '103', '104', '105', '1']);
+    for (const c of [...ctls, c2]) c.abort();
+    await Promise.all([...held, next]);
+  });
+
   it('the health probe does not wait behind a full queue, and a queued read that is aborted never reaches fetch (R5B-L1)', async () => {
     const pending: (() => void)[] = [];
     const urls: string[] = [];
