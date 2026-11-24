@@ -479,7 +479,7 @@ export default {
   'orders.issue.cancel.stray-other-extension': "A stray with another extension commitment stays behind ({amount}).",
   'orders.issue.cancel.strays-abandoned': 'Stray token outputs that do not fit and will be abandoned: {count} ({amount}).',
   'orders.issue.cancel.stray-other-token': "A stray of another token stays behind ({amount}).",
-  'orders.issue.cancel.strays-unknown': 'Strays could not be read: any that exist are lost when the order closes. Refresh and retry to include them.',
+  'orders.issue.cancel.strays-unknown': 'The stray tokens of this order are more than the indexer lists at once: sweep them first (Sweep strays, the order stays open), then cancel. Any left when it closes are lost.',
   'orders.issue.cancel.repeat-entry-only': 'Only the repeat entry is cancelled: its live exits ({exits}) keep their stop-loss but cannot take profit for up to 90 days. Cancel the position to close everything.',
   'orders.issue.cancel.replacement-restarts-unarmed': 'An amended stop starts unarmed: it must trigger again.',
   'orders.issue.cancel.top-up': "{amount} are added from your free tokens.",

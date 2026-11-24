@@ -239,6 +239,9 @@ export function snapshotFromOrderView(view: OrderView): OrderSnapshot {
     custody,
     ...(prefund ? { prefund } : {}),
     strays,
+    // The view lists at most 100 strays and counts the rest: a list the indexer cut (R8B-I1), so an
+    // ending cancel offers the sweep first instead of losing the unlisted ones without a count.
+    ...(typeof view.strays_total === 'number' && view.strays_total > (view.strays ?? []).filter((s) => !s.spent).length ? { straysUnknown: true, straysCut: true } : {}),
     refundDueDaa: view.refund_due_daa != null ? BigInt(view.refund_due_daa) : null,
     deadline: view.deadline != null ? BigInt(view.deadline) : null,
     source: 'indexer',
