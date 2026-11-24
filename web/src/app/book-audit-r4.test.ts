@@ -63,12 +63,13 @@ function variant(w: ReturnType<typeof pairWorld>, id: number, patch: Record<stri
   const snap: OrderSnapshot = {
     ...clone(w.askSnap), covenantId: txid,
     order: { ...w.askSnap.order, transactionId: txid, covenantId: txid, state: st },
-    custody: { ...w.askSnap.custody!, transactionId: txid },
+    custody: { ...w.askSnap.custody!, transactionId: txid, state: { ...w.askSnap.custody!.state, owner: txid } },
   } as OrderSnapshot;
   w.chain.add({ transactionId: txid, index: snap.order.index, amount: snap.order.amount, scriptPublicKey: kob.scriptPublicKey(st), covenantId: txid });
   const c = snap.custody!;
   const cOut = (w.ask as any).signed.tx.outputs[c.index];
-  w.chain.add({ transactionId: txid, index: c.index, amount: c.amount, scriptPublicKey: cOut.scriptPublicKey, covenantId: cOut.covenant?.covenantId ?? (c.covenantId as string) });
+  // the custody is owned by this order (its covenant id), so its script is derived again
+  w.chain.add({ transactionId: txid, index: c.index, amount: c.amount, scriptPublicKey: kob.tokenScriptPublicKey('KCC20Ref', c.state as never), covenantId: cOut.covenant?.covenantId ?? (c.covenantId as string) });
   return w.reg(viewOf(snap));
 }
 

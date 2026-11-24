@@ -16,6 +16,7 @@ import type { NodeApi } from '../data/node';
 import type { OrderSnapshot } from './cancel';
 import { SnapshotError, ownTokenFacts, unboundCustodyToken } from './cancel';
 import { curveFactsOf, custodiesOf } from './order-facts';
+import { custodyState } from './token-state';
 import type { BuiltTx, Hex, TokenProgram, TokenState, TokenUtxo, TxInputJson } from './types';
 import type { KobWasm } from './wasm';
 
@@ -136,7 +137,11 @@ function tokenSpk(kob: KobWasm, tplHash: Hex, state: TokenState): string | null 
  * with the node's amounts.
  *
  * It fails with SnapshotError `node-mismatch` when the order or a custody is not on the node with
- * the script derived from its state and the expected token covenant id. A pair order has custodies
+ * the script derived from its state and the expected token covenant id. A custody (and a prefund)
+ * is the one the ORDER's state implies: the amount it holds, owned by the order's covenant id,
+ * under the class (extension commitment) the state pins. The custody UTXO a view or a record names
+ * is used only if it is that one, so a decoy of another class owned by the order is never spent as
+ * the custody (R8F4-1). A pair order has custodies
  * of A and B, and a sell-first entry also has a prefund. A stray the node does not hold in that
  * form is dropped, because it is spent or invented and spending it would invalidate the
  * transaction. A pair order's strays may be of either of its tokens.
@@ -212,8 +217,19 @@ export function snapshotCheck(kob: KobWasm, snap: OrderSnapshot): SnapshotCheck 
   // custodies[1].
   const custodyToken = cs[0]?.token ?? own[0]!.covenantId;
   const prefundToken = cs[1]?.token ?? null;
-  const custodySpk = snap.custody ? tokenSpk(kob, tplOf(custodyToken), snap.custody.state) : null;
-  const prefundSpk = snap.prefund && prefundToken ? tokenSpk(kob, tplOf(prefundToken), snap.prefund.state) : null;
+  // The state each custody must have: what the order's state holds of that token, owned by the order,
+  // under the class the state pins. Never the state a view or a record claims for it (R8F4-1).
+  const expectedCustody = (k: number): TokenState => {
+    const c = cs[k];
+    const t = own.find((x) => x.covenantId === c?.token) ?? (k === 0 ? own[0] : undefined);
+    if (!c || !t) throw new SnapshotError('node-mismatch', `order ${snap.covenantId}: its state holds no custody ${k === 0 ? '' : 'prefund '}that a UTXO could be`);
+    if (t.family !== 'kron' && !t.ext) throw new SnapshotError('no-extension-commitment', `order ${snap.covenantId}: its state names no class for its custody, so the custody cannot be checked`);
+    return custodyState(t.family, c.amount, snap.covenantId, t.family === 'kron' ? null : t.ext);
+  };
+  const custodyState0 = snap.custody ? expectedCustody(0) : null;
+  const prefundState = snap.prefund && prefundToken ? expectedCustody(1) : null;
+  const custodySpk = custodyState0 ? tokenSpk(kob, tplOf(custodyToken), custodyState0) : null;
+  const prefundSpk = prefundState ? tokenSpk(kob, tplOf(prefundToken), prefundState) : null;
   // The order's covenant id may own strays of any of its own tokens, A and B for a pair order.
   // Each is checked against its token's program.
   const strayToken = (s: TokenUtxo): { tpl: Hex; cov: Hex } => {
@@ -258,13 +274,13 @@ export function snapshotCheck(kob: KobWasm, snap: OrderSnapshot): SnapshotCheck 
     if (snap.custody) {
       const cf = confirmed(snap.custody, custodySpk, custodyToken);
       if (!cf) throw new SnapshotError('node-mismatch', `order ${snap.covenantId}: its custody token UTXO is not on the node with the claimed script and token covenant id`);
-      custody = { ...snap.custody, amount: cf.amount.toString(), covenantId: custodyToken };
+      custody = { ...snap.custody, amount: cf.amount.toString(), covenantId: custodyToken, state: custodyState0! };
     }
     let prefund: TokenUtxo | null = null;
     if (snap.prefund) {
       const pf = prefundToken ? confirmed(snap.prefund, prefundSpk, prefundToken) : null;
       if (!pf || !prefundToken) throw new SnapshotError('node-mismatch', `order ${snap.covenantId}: its prefund custody UTXO is not on the node with the claimed script and token covenant id`);
-      prefund = { ...snap.prefund, amount: pf.amount.toString(), covenantId: prefundToken };
+      prefund = { ...snap.prefund, amount: pf.amount.toString(), covenantId: prefundToken, state: prefundState! };
     }
     let boughtCustody: TokenUtxo | null = null;
     if (bc && bcTok) {

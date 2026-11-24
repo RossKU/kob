@@ -187,6 +187,59 @@ describe('snapshotFor: every UTXO is re-read from the node', () => {
   });
 });
 
+describe('a decoy of another class named as the custody is never spent (R8F4-1)', () => {
+  /**
+   * The golden ask with a decoy on the chain: the same amount, owned by the order, of another class
+   * (extension commitment). A hostile indexer names the decoy as the custody and lists the real
+   * custody as a stray.
+   */
+  const decoyed = () => {
+    const a = place('create.ask');
+    const real = a.snap.custody!;
+    const decoy: TokenUtxo = { ...real, transactionId: 'dd'.repeat(32), index: 7, state: { ...(real.state as Kcc20State), extension_commitment: '99'.repeat(32) } };
+    const chain = withStrays(chainOf(a), [decoy]);
+    const view = orderViewOf(kob, { ...a.snap, custody: decoy, strays: [real] });
+    return { a, real, decoy, chain, view };
+  };
+  const spends = (p: CancelPlan, u: TokenUtxo): boolean => p.built!.tx.inputs.some((i) => i.transactionId === u.transactionId && i.index === u.index);
+
+  it('the node check does not confirm the decoy as the custody: without a record nothing is built', async () => {
+    const d = decoyed();
+    await expect(snapshotFor(services({ chain: d.chain, indexer: { order: async () => d.view } }), entryOf(d.a, true, false))).rejects.toMatchObject({ code: 'node-mismatch' });
+  });
+
+  it('cancel: built with the real custody (the node-resolved record), never with the decoy', async () => {
+    const d = decoyed();
+    const { plan } = await planCancelFor(services({ chain: d.chain, indexer: { order: async () => d.view } }), MAKER.pk, entryOf(d.a));
+    validate(plan);
+    expect(spends(plan, d.real)).toBe(true);
+    expect(spends(plan, d.decoy)).toBe(false);
+  });
+
+  it('cancel-all: the same', async () => {
+    const d = decoyed();
+    const many = await planCancelMany(services({ chain: d.chain, indexer: { order: async () => d.view } }), MAKER.pk, [entryOf(d.a)]);
+    expect(many.plans.length).toBe(1);
+    validate(many.plans[0]!);
+    expect(spends(many.plans[0]!, d.real)).toBe(true);
+    expect(spends(many.plans[0]!, d.decoy)).toBe(false);
+    // without a record it stops
+    const none = await planCancelMany(services({ chain: d.chain, indexer: { order: async () => d.view } }), MAKER.pk, [entryOf(d.a, true, false)]);
+    expect(none.plans).toEqual([]);
+    expect(none.failed.map((f) => (f.error as SnapshotError).code)).toEqual(['node-mismatch']);
+  });
+
+  it('cancel-replace: the same', async () => {
+    const d = decoyed();
+    const out = await planAmendFor(services({ chain: d.chain, indexer: { order: async () => d.view } }), MAKER.pk, entryOf(d.a), 'limit', { price: 260_000_000n, amount: 6_000n });
+    expect(out.plan).not.toBeNull();
+    validate(out.plan!);
+    expect(spends(out.plan!, d.real)).toBe(true);
+    expect(spends(out.plan!, d.decoy)).toBe(false);
+    await expect(planAmendFor(services({ chain: d.chain, indexer: { order: async () => d.view } }), MAKER.pk, entryOf(d.a, true, false), 'limit', { price: 260_000_000n, amount: 6_000n })).rejects.toMatchObject({ code: 'node-mismatch' });
+  });
+});
+
 describe('snapshotFor: a hostile order state from the indexer', () => {
   it('a view whose committed exit is malformed (wasm trap) does not block the cancel: the node-resolved record path takes over', async () => {
     const a = place('create.ifdBid');
