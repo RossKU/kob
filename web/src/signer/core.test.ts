@@ -355,3 +355,43 @@ describe('G7 (b): a listed token is shown as listed only when the app sent the p
     }
   });
 });
+
+describe('signer core: the ids it answers with (R9FB2-5, R9FB2-9)', () => {
+  it('the signed message carries the id of the transaction signed, not the request\'s echo', () => {
+    const { core, app, send } = setup();
+    core.importKey(MAKER_SK);
+    const built = buildSend();
+    const lying = { ...built, tx: { ...built.tx, id: 'ab'.repeat(32) } };
+    send(signReq(lying as BuiltTx));
+    expect(core.approve('r1')).toBe(true);
+    {
+      const signed = app().at(-1) as Extract<SignerToApp, { type: 'signed' }>;
+      expect(signed.txid).not.toBe('ab'.repeat(32));
+      expect(signed.txid).toBe(built.tx.id);
+    }
+  });
+
+  it('a creation whose genesis names another preparation id than the preparation signed is refused at Approve', async () => {
+    const { defaultSaleForm } = await import('../kob/curve');
+    const { emptyIssueForm, planIssue } = await import('../kob/issue');
+    const { genesisClaimOf } = await import('../wallet/create');
+    const utxo = { transactionId: '07'.repeat(32), index: 1, amount: (500n * 100_000_000n).toString(), blockDaaScore: '5000', pubkey: MAKER_PK };
+    const plan = planIssue(kob, { ...emptyIssueForm(), name: 'Curve Coin', ticker: 'CURV', decimals: 8, supply: '1000000', sale: { ...defaultSaleForm(), mode: 'keep' } } as never, { funding: [utxo], maker: MAKER_PK, network: 'testnet-10' });
+    const mk = (prep: BuiltTx, built: BuiltTx) => ({ type: 'sign' as const, id: 'c1', built, prep, genesis: genesisClaimOf(plan.token), tokens: [], registry: TABLE });
+    // honest: signed
+    const a = setup();
+    a.core.importKey(MAKER_SK);
+    expect(a.send(mk(plan.prep, plan.built))).not.toBeNull();
+    expect(a.core.approve('c1')).toBe(true);
+    // the request names an id for the preparation that is not the one signed, and the genesis
+    // spends that id: the summary agrees with itself, the signature step refuses it
+    const fake = 'cd'.repeat(32);
+    const prep = { ...plan.prep, tx: { ...plan.prep.tx, id: fake } };
+    const built = JSON.parse(JSON.stringify(plan.built)) as BuiltTx;
+    for (const i of built.tx.inputs) if (i.transactionId === plan.prep.tx.id) i.transactionId = fake;
+    const b = setup();
+    b.core.importKey(MAKER_SK);
+    expect(b.send(mk(prep as BuiltTx, built))).not.toBeNull();
+    expect(b.core.approve('c1')).toBe(false);
+  });
+});

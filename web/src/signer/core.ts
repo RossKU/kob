@@ -399,11 +399,21 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
       }
       let sigs: InputSignature[];
       let prepSigs: InputSignature[] | undefined;
+      let txid: Hex;
       try {
         // For a creation, the preparation is signed first, then the genesis spending it. Each is
-        // checked by finalize and the script engine.
-        prepSigs = req.prep ? sign(req.prep) : undefined;
-        sigs = sign(req.built);
+        // checked by finalize and the script engine. The genesis spends the preparation's output 0
+        // by the id the request names: that id must be the one of the preparation signed here, or
+        // the genesis would spend another coin and the declaration shown attach to nothing (R9FB2-5).
+        if (req.prep) {
+          const p = signWithId(req.prep);
+          if (p.txid.toLowerCase() !== req.prep.tx.id.toLowerCase()) throw new Error('preparation id');
+          prepSigs = p.sigs;
+        }
+        const g = signWithId(req.built);
+        sigs = g.sigs;
+        // the id of what was signed, never the request's echo (R9FB2-9)
+        txid = g.txid;
       } catch {
         post(toApp({ type: 'rejected', id, reason: 'invalid' }));
         return false;
@@ -411,7 +421,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
       // A creation is never what a re-timed request stands in for.
       // Only an auction is ever re-timed (`retimable`).
       approved = req.prep || !retimable(req.summary.decoded) ? null : { id, summary: req.summary, at: now(), retimes: 0, outpoints: signedOutpoints(req.built).join(',') };
-      post(toApp({ type: 'signed', id, txid: req.built.tx.id, signatures: sigs, ...(prepSigs ? { prepSignatures: prepSigs } : {}) }));
+      post(toApp({ type: 'signed', id, txid, signatures: sigs, ...(prepSigs ? { prepSignatures: prepSigs } : {}) }));
       return true;
     },
     reject(id, reason = 'user') {

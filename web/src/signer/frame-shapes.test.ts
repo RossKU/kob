@@ -181,3 +181,13 @@ describe('R9FB2-1, both lines: the wasm recovery refuses a genesis-bound amend, 
     });
   }
 });
+
+describe('R9FB2-9: the decoder\'s info findings are shown in the frame', () => {
+  it('a sweep says what it sweeps as a note line', () => {
+    const snap = placeGolden(kob, 'create.ask').snapshots[0]!;
+    const b = planSweep(cancelEnv(), { ...snap, strays: [strayFor(snap, 4n, 92)] }).built!;
+    const s = frame(b);
+    expect(s.decoded!.info.length).toBeGreaterThan(0);
+    expect(s.lines.filter((l) => l.label === 'Note').length).toBe(s.decoded!.info.length);
+  });
+});

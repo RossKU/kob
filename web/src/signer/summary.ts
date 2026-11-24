@@ -28,6 +28,7 @@ import type { KobWasm } from '../kob/wasm';
 import { RAW_TOKEN_DECIMALS, t } from '../i18n';
 import { formatRowTime } from '../ui/kit/format';
 import { frameShape } from './shapes';
+import { issueText } from '../i18n/issue-text';
 import { auctionSeconds, orderRows, orderTitle, orderTypeCode, type Fmt, type MarketFillsFacts } from '../ui/confirm/confirm-model';
 import type { GenesisClaim, LockHint, TokenHint } from './protocol';
 import { div, kasWords, tokensPerKasWords, tokenWords, type Rounding } from './words';
@@ -575,6 +576,9 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     return withDelivery(flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain, terms) ?? chain, o, hints);
   });
   const found: { code: string }[] = [...s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)), ...(terms ? scaleMismatches(s, hints) : [])];
+  // The decoder's info findings are said in the frame too (a swept order's KAS, strays swept), as
+  // the app's confirmation shows them (R9FB2-9).
+  if (terms) for (const f of s.info) lines.push({ label: t('signer.info'), value: issueText(f), dir: null });
   // the frame signs only its closed list of shapes, judged on bound data (signer/shapes.ts)
   if (terms && kob && built) {
     const v = frameShape(s, built, s.maker, kob);

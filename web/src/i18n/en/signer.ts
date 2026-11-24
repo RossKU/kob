@@ -85,6 +85,7 @@ export default {
   'signer.net.released': 'Released from orders',
   'signer.net.closes': 'Closes order',
   'signer.net.orderTerms': '{id} (the id is the app\'s word): {terms}',
+  'signer.info': 'Note',
   'signer.shape.refused': 'This signer does not sign this transaction',
   'signer.shape.signedOther': 'Input {input} that you would sign is not a coin, token or order of your key.',
   'signer.shape.unknownOutput': 'An output is not one this action makes.',
