@@ -232,7 +232,7 @@ test('the frame has the palette and theme of the app; a change reaches it withou
   await sellTicket(page);
   await clickPlace(page);
   // the frame names the network on each request (the fragment it is framed with), the theme kept
-  await expect(signer(page).getByTestId('signer-network')).toHaveText('Network: testnet-10. Test funds.');
+  await expect(signer(page).getByTestId('signer-network')).toHaveText('Network: testnet-10, as the app says (the transaction names none). Test funds.');
   await expect(signer(page).getByTestId('signer-network')).toHaveAttribute('data-network', 'testnet-10');
   await approveInFrame(page, { title: 'Place order', lines: { 'Locked in orders': '2 KAS' }, orderTitles: ['Sell limit order'] });
   await waitSubmitted(page);

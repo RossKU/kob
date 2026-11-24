@@ -461,6 +461,11 @@ function scaleMismatches(s: SigningSummary, hints: TokenHint[]): { code: string 
   // of ten (R8F2b-3, R8F2-I2).
   for (const d of [...s.orders.map((o) => o.description), ...s.spends.map((x) => x.description)]) {
     if (d && !d.pair) check(d.tokenCovId, d.scale);
+    // a pair order names the scale of both its tokens (R9FB2-8)
+    if (d?.pair) {
+      check(d.pair.base.covId, d.pair.base.scale);
+      check(d.pair.quote.covId, d.pair.quote.scale);
+    }
   }
   if (s.take) check(s.take.ref.covenantId, s.take.scale);
   return out;

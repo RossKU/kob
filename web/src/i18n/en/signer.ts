@@ -136,7 +136,7 @@ export default {
   'signer.rel.min': 'in {n} min',
   'signer.rel.h': 'in {n} h',
   'signer.rel.d': 'in {n} d',
-  'signer.rel.daa': 'DAA {daa}',
+  'signer.rel.daa': 'DAA {daa}; the time is by the app\'s clock',
   'signer.problems.one': 'The decoder found a problem with this transaction ({codes}). It cannot be approved here: reject it.',
   'signer.problems.other': 'The decoder found {count} problems with this transaction ({codes}). It cannot be approved here: reject it.',
   'signer.flip.title': '{side} KAS · {type}',
@@ -182,6 +182,6 @@ export default {
   'signer.waitWhy': 'Approve is locked until you have seen the whole request. Keep this window fully on screen and scroll through every line. Anything over it, a zoomed page or a cut-off window keeps it locked.',
   'signer.waitCounts': 'Check: buttons {buttons}, lines seen {lines}, covered parts {covered}.',
   'signer.reject': 'Reject',
-  'signer.network.mainnet': 'Network: mainnet. Real funds.',
-  'signer.network.other': 'Network: {network}. Test funds.',
+  'signer.network.mainnet': 'Network: mainnet, as the app says (the transaction names none). Real funds.',
+  'signer.network.other': 'Network: {network}, as the app says (the transaction names none). Test funds.',
 };

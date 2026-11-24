@@ -116,3 +116,13 @@ describe('the honest shapes the app sends pass in the frame, with their lines', 
     expect(s.lines.some((l) => /to other keys/.test(l.label))).toBe(true);
   });
 });
+
+describe('R9FB2-8: a pair order is checked against the decimals the frame shows for both its tokens', () => {
+  it('a hint whose decimals do not match the order state blocks', () => {
+    const b = build('pair.create.ask');
+    const order = frame(b).decoded!.orders[0]!.description.pair!;
+    const wrong = (covenantId: string, scale: bigint) => ({ covenantId, ticker: 'XX', decimals: Math.max(0, scale.toString().length - 1) + 2, source: 'declared' as const });
+    expect(summarize(kob, b, MAKER.pk, [wrong(order.base.covId, order.base.scale)]).problemCodes).toContain('token-scale');
+    expect(summarize(kob, b, MAKER.pk, [wrong(order.quote.covId, order.quote.scale)]).problemCodes).toContain('token-scale');
+  });
+});
