@@ -247,3 +247,11 @@ describe('signer summary: prices that cannot be misread, the flipped view in its
     expect(Number(r['Worst price (all-in)']!.split(' ')[0])).toBeGreaterThan(Number(r['Expected price (auction start)']!.split(' ')[0]));
   });
 });
+
+describe("the frame holds a cancel's token line to the spent order's scale (R8F2b-3, R8F2-I2)", () => {
+  it('app decimals that do not fit the cancelled order block Approve', () => {
+    const b = build('cancel.ask');
+    expect(summarize(kob, b, MAKER_PK, [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 3, source: 'declared' }]).problemCodes).not.toContain('token-scale');
+    expect(summarize(kob, b, MAKER_PK, [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 8, source: 'declared' }]).problemCodes).toContain('token-scale');
+  });
+});

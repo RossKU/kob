@@ -439,8 +439,8 @@ const MAX_CLOSED_LINES = 8;
 const MAX_FILLS_SEARCHED = 64n;
 
 /**
- * The orders whose price scale does not fit the decimals the app gave their token. Any such order
- * blocks Approve.
+ * The orders whose price scale does not fit the decimals the app gave their token: those it creates,
+ * spends or takes. Any such order blocks Approve.
  *
  * Take a plain order of a token whose decimals the app says it knows, meaning any hint but an
  * `assumed` one. It quotes its price per the standard scale of `10^min(decimals, 9)` base units,
@@ -450,12 +450,18 @@ const MAX_FILLS_SEARCHED = 64n;
  */
 function scaleMismatches(s: SigningSummary, hints: TokenHint[]): { code: string }[] {
   const out: { code: string }[] = [];
-  for (const o of s.orders) {
-    const d = o.description;
-    const h = hints.find((x) => x.covenantId === d.tokenCovId);
-    if (!h || h.source === 'assumed' || d.pair || d.scale <= 0n) continue;
-    if (d.scale !== 10n ** BigInt(Math.min(h.decimals, 9))) out.push({ code: 'token-scale' });
+  const check = (token: Hex, scale: bigint): void => {
+    const h = hints.find((x) => x.covenantId === token);
+    if (!h || h.source === 'assumed' || scale <= 0n) return;
+    if (scale !== 10n ** BigInt(Math.min(h.decimals, 9))) out.push({ code: 'token-scale' });
+  };
+  // The orders it creates, the orders it spends (a cancel's token line uses the same decimals) and
+  // the orders a take fills (its token line), so app decimals cannot misstate any of them by a power
+  // of ten (R8F2b-3, R8F2-I2).
+  for (const d of [...s.orders.map((o) => o.description), ...s.spends.map((x) => x.description)]) {
+    if (d && !d.pair) check(d.tokenCovId, d.scale);
   }
+  if (s.take) check(s.take.ref.covenantId, s.take.scale);
   return out;
 }
 

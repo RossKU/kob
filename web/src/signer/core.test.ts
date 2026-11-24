@@ -18,7 +18,8 @@ const sdk = loadKaspaSdkNode();
 const P = SIGNER_PROTOCOL;
 // the registry table the bundle pins (table.ts) and the app sends: the listed token of these
 // requests
-const TABLE: RegistryRow[] = [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 8 }];
+// the golden orders of this token quote per 10^3 base units: the table says 3 decimals, as an honest one would
+const TABLE: RegistryRow[] = [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 3 }];
 const PINNED = tableHash(TABLE);
 
 function setup() {
@@ -30,7 +31,7 @@ function setup() {
   return { core, sent, app, send };
 }
 
-const signReq = (built: BuiltTx, id = 'r1') => ({ type: 'sign' as const, id, built, tokens: [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 8 }], registry: TABLE });
+const signReq = (built: BuiltTx, id = 'r1') => ({ type: 'sign' as const, id, built, tokens: [{ covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 3 }], registry: TABLE });
 
 describe('signer core: the key', () => {
   it('derives the x-only public key and announces only that', () => {
@@ -333,7 +334,7 @@ describe('G7 (b): a listed token is shown as listed only when the app sent the p
   }
 
   it('the pinned table: the ticker and its decimals are shown as the app lists them', () => {
-    expect(shown({})).toContain('EXKCC (70707070…70707070, 8 decimals as the app lists them)');
+    expect(shown({})).toContain('EXKCC (70707070…70707070, 3 decimals as the app lists them)');
   });
 
   it('a tampered table, no table, no pin, another pin: a token movement with no order is its raw amount, without the ticker', () => {
@@ -349,7 +350,7 @@ describe('G7 (b): a listed token is shown as listed only when the app sent the p
   it('a hint that contradicts the pinned table is shown as the table says (the app\'s ticker and decimals are not used)', () => {
     for (const hint of [{ covenantId: TOKEN_COV_ID, ticker: 'RUG', decimals: 8 }, { covenantId: TOKEN_COV_ID, ticker: 'EXKCC', decimals: 6 }]) {
       const t = shown({ tokens: [hint] });
-      expect(t).toContain('EXKCC (70707070…70707070, 8 decimals as the app lists them)');
+      expect(t).toContain('EXKCC (70707070…70707070, 3 decimals as the app lists them)');
       expect(t).not.toContain('RUG');
     }
   });
