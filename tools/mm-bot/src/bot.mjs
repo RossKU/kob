@@ -146,6 +146,8 @@ export class Bot {
     const c = this.cfg;
     const m = this.state.mode;
     this.log.info(`start: ${c.network}, token ${c.token.label ?? ''} ${c.token.covenantId}, indexer ${indexerUrl(c)}, node ${c.node ? shownUrl(c.node) : '(CLI default)'}${this.dryRun ? ', DRY RUN (nothing is signed)' : ''}`);
+    if (c.quotes.askPartialFills == null) this.log.info('asks: partial fills (quotes.askPartialFills is not set: the testnet-10 default); set it to false for whole-fill asks, which the node alone tracks (README, tracking)');
+    else this.log.info(`asks: ${c.quotes.askPartialFills ? 'partial fills (quotes.askPartialFills true)' : 'whole fills only (quotes.askPartialFills false): each ask is filled in full or not at all'}`);
     if (!this.nodeOutputs) this.log.info('WARNING: node: a JSON wRPC node (ws://host:18110, testnet-10 18210) is needed to prove a fully filled ask paid (without one it stays unresolved and holds its share of the ask cap) and that a cancel confirmed (without one an ask ends once its cancel went out, with no proof that it confirmed) (README, tracking)');
     this.log.info(`mode ${m.mode}${m.reason ? `/${m.reason}` : ''}${m.reason === 'cooldown' ? `: quoting starts once the reference has been fresh and steady for ${c.safety.resumeAfterSec} s` : ''}`);
     for (;;) {
@@ -477,6 +479,8 @@ export class Bot {
    * indexer reported. The node checks each; none is trusted.
    */
   hintsOf(id, listed = null, { pay = true } = {}) {
+    // A whole-fill ask is looked up at its own state only: one candidate.
+    if (this.isWhole(this.state.orders[id])) return [];
     const base = this.indexerHints(id, listed);
     if (!pay) return base;
     const p = this.payHints(id);
@@ -610,6 +614,34 @@ export class Bot {
     if (!this.nodeOutputs || s.replaceSeen) return true;
     const txs = new Set([...(s.cancelTxids ?? []), s.pending?.kind === 'cancel' ? s.pending.txid : null].filter(Boolean));
     return Object.values(this.state.payments).some((p) => txs.has(p.txid));
+  }
+
+  /**
+   * Whether `s` is a whole-fill ask (quotes.askPartialFills false): a plain KobAsk or KobAskKron
+   * whose own recorded state has minFill at least its amount left. The contract takes a fill of at
+   * least minFill or of all that is left, never more than is left, so such an ask is only filled in
+   * full, cancelled, amended by the bot or refunded: its amount never changes without the bot. A
+   * state the bot took from the indexer (an older state file) is not its own record.
+   */
+  isWhole(s) {
+    const st = s?.own?.state;
+    if (!st || s.own.fromIndexer || !/^KobAsk(Kron)?$/.test(st.kind ?? '')) return false;
+    const m = String(st.state?.minFill ?? '');
+    const left = String(st.state?.amountLeft ?? '');
+    return /^\d+$/.test(m) && /^\d+$/.test(left) && BigInt(left) > 0n && BigInt(m) >= BigInt(left);
+  }
+
+  /**
+   * Whether a verified "not found" of whole-fill ask `s` is the node's word that it ended: the
+   * lookup covered every state it can be in (its own, and the one before an amend not yet seen),
+   * under the template it was placed with, and no action of unknown outcome (a failed send that
+   * may have gone out with a state the bot did not record) or cancel-replace is open on it.
+   */
+  wholeGone(s) {
+    if (!this.isWhole(s) || s.stateUnknown || s.fate || s.pending?.kind === 'reread') return false;
+    if (s.own.prev && !this.isWhole({ own: { state: s.own.prev } })) return false;
+    const t = this.tplOf(s);
+    return t.verified && s.own.cli != null && s.own.cli === this.cliVersion && (s.own.tpl == null || s.own.tpl === t.hash);
   }
 
   /** Whether the node showed an output of a placement of unknown outcome: it went out (R6T-2). */
@@ -900,6 +932,7 @@ export class Bot {
       if (s.fate) this.log.info(`${tag}: the placement whose outcome was unknown is on chain`);
       s.fate = null;
       s.cancelUnseen = false;
+      s.stateUnknown = false;
       if (s.replacedBy) {
         // Its cancel-replace never landed (it spends this very output): the replacement record is
         // a placement that may not have gone out, and this order is tracked again (R6T-2).
@@ -952,6 +985,17 @@ export class Bot {
       // not reach (a fill of any amount), so that alone is no proof: it is kept as unresolved
       // (R3T-3). So is one whose cancel went out but never showed on the node: a fill that landed
       // first leaves it live (R6T-2); it is looked up, and cancelled again once found.
+      // A whole-fill ask (minFill = its amount) never moves without the bot: not found at its
+      // recorded state(s) is the node's word that it ended (filled in full, cancelled or refunded).
+      const whole = r.status === 'gone' && r.verified && this.wholeGone(s);
+      if (whole) {
+        const status = 'not on the node at its own state: a whole-fill ask cannot move, so it was filled in full, cancelled or refunded';
+        this.log.info(`${tag} ended: ${status}`);
+        this.log.action({ type: 'ended', id, side: s.side, level: s.level, status: 'whole-fill ask not on the node' });
+        this.state.recent[id] = { side: s.side, level: s.level, endedAt: now };
+        delete this.state.orders[id];
+        return;
+      }
       const ended = r.status === 'gone' && r.verified && (r.spent || cancelled || (s.fate && !o));
       if (!ended && sent && !s.cancelUnseen && r.status === 'gone' && r.verified) {
         s.cancelUnseen = true;
@@ -1185,7 +1229,7 @@ export class Bot {
     // Without --force an ask is dropped only when the node showed that it ended (its cancel
     // confirmed) or its record is past the end rule of a proven ask (2 h past its expiry) (R6T-3).
     const expiry = s.expiresAt ?? (s.proven ? s.proven.at + this.life().lifeMs : null);
-    const settled = (r.status === 'gone' && r.verified && (r.spent || this.cancelConfirmed(s))) || (expiry != null && Date.now() >= expiry + PROVEN_KEEP_AFTER_EXPIRY_MS);
+    const settled = (r.status === 'gone' && r.verified && (r.spent || this.cancelConfirmed(s) || this.wholeGone(s))) || (expiry != null && Date.now() >= expiry + PROVEN_KEEP_AFTER_EXPIRY_MS);
     const doubt = settled ? null
       : r.status === 'foreign' ? (isAsk(s) ? 'the node names another maker at its script, which is no proof that the ask ended' : null)
         : !r.verified ? `it was looked up under an order template not yet proven on the node (no order of its kind found live under it), so not finding it proves nothing`
@@ -1344,6 +1388,18 @@ export class Bot {
       if (r.sentFee && !this.dryRun) {
         addFee(this.state, `${a.kind}-unknown`, r.sentFee);
         this.ownTx(r.doc?.result?.txid ?? r.doc?.transaction?.txid);
+        // An amend that may have gone out leaves the order at one of two states: the one it
+        // planned is recorded as an amend not yet seen, so that both are looked up. One whose plan
+        // names no in-place state may sit anywhere: no whole-fill end for it until the node finds
+        // it (wholeGone).
+        const s = this.state.orders[a.id];
+        const rep = r.doc?.plan?.replacement;
+        if (a.kind === 'amend' && s) {
+          if (rep?.kind && r.doc?.plan?.inPlace !== false && s.own?.state) {
+            s.own = { ...s.own, prev: s.own.state, state: rep };
+            s.pending = { kind: 'amend', since: Date.now(), txid: r.doc?.result?.txid ?? r.doc?.transaction?.txid ?? null };
+          } else s.stateUnknown = true;
+        }
       }
       this.save();
       return r;
@@ -1358,6 +1414,10 @@ export class Bot {
       const id = r.newIds[0];
       // The order is tracked from the CLI's own result: its state and outpoint (R2-T1).
       if (id) this.state.orders[id] = { ...this.placed(a, r.doc, r.txid, now, expiresAt), ownAt, pending: { kind: 'place', since: now, txid: r.txid } };
+      // The CLI's own plan says whether the ask is whole-fill: one that is not follows the partial-fill rules.
+      if (id && a.side === 'sell' && c.quotes.askPartialFills === false && !this.isWhole(this.state.orders[id])) {
+        this.log.info(`WARNING: ${short(id)}: placed with --min-fill ${a.amount}base, but the CLI's plan names minFill ${this.state.orders[id].own?.state?.state?.minFill ?? '?'}: it is tracked as a partial-fill ask`);
+      }
       this.state.placeFails = 0;
       this.placeError = null;
     } else if (a.kind === 'amend') {
@@ -1372,6 +1432,7 @@ export class Bot {
         const left = rep?.state?.amountLeft;
         Object.assign(s, { price: a.price, quotedFair: a.quotedFair, expiresAt, expired: false, ownAt, ownAmount: /^\d+$/.test(String(left ?? '')) ? Number(left) : s.amountLeft ?? s.amount,
           pending: { kind: 'amend', since: now, txid: r.txid } });
+        if (a.side === 'sell' && c.quotes.askPartialFills === false && !this.isWhole(s)) this.log.info(`WARNING: ${short(a.id)}: the amend's plan names minFill ${s.own?.state?.state?.minFill ?? '?'} below the amount left: it is tracked as a partial-fill ask`);
       }
       else {
         // A cancel-replace: the order has a new id. The old record stays, as cancelled, until the
@@ -1396,7 +1457,8 @@ export class Bot {
     const st = doc?.plan?.states?.[0];
     const value = Number(doc?.plan?.request?.value ?? 0) || (a.side === 'buy' ? bidCost(a.amount, a.price, this.scale) : 0);
     return { side: a.side, level: a.level, price: a.price, amount: a.amount, ownAmount: a.amount, ownAt: null, quotedFair: a.quotedFair, placedAt: now, expiresAt, amountLeft: a.amount, value,
-      own: st?.kind ? { state: st, prev: null, txid: txid ?? null, tpl: null } : null };
+      // `cli`: the build that placed it, whose templates a whole-fill lookup must be under (wholeGone).
+      own: st?.kind ? { state: st, prev: null, txid: txid ?? null, tpl: null, cli: this.cliVersion ?? null } : null };
   }
 
   /**

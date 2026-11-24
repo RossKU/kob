@@ -97,9 +97,11 @@ function chain() {
     const id = ('c' + (c.n + 1).toString(16)).padStart(64, '0');
     const escrow = Math.ceil((amount * price) / 1e6);
     if (side === 'sell' && c.tokenUtxos > 3) { process.stderr.write('error: TOKEN_UTXOS_FRAGMENTED'); process.exit(1); }
-    const st = stateOf(side === 'sell' ? 1 : 2, price, amount);
+    // --min-fill: kept in the order's state (a whole-fill ask has it equal to its amount).
+    const minFill = args.includes('--min-fill') ? Number(val('--min-fill').replace('base', '')) : null;
+    const st = stateOf(side === 'sell' ? 1 : 2, price, amount, minFill);
     submit({ ids: [id], plan: { states: [st], request: { value: String(side === 'sell' ? 1e8 : escrow + 1e8) } }, apply: () => {
-      if (side === 'sell') { c.tokenFree -= amount; c.kasFree -= 1e8; c.orders[id] = { side: 1, price, amount, value: 1e8, txid, expiresAt: gtd() }; }
+      if (side === 'sell') { c.tokenFree -= amount; c.kasFree -= 1e8; c.orders[id] = { side: 1, price, amount, value: 1e8, txid, expiresAt: gtd(), ...(minFill != null ? { minFill } : {}) }; }
       else { c.kasFree -= escrow + 1e8; c.orders[id] = { side: 2, price, amount, value: escrow + 1e8, txid, expiresAt: gtd() }; }
     } });
   }
@@ -114,7 +116,7 @@ function chain() {
     const how = process.env.FAKE_KOB_REPLACE_NEW;
     if (how) {
       const nid = ('d' + (c.n + 1).toString(16)).padStart(64, '0');
-      submit({ ids: [nid], plan: { inPlace: false, current: stateOf(o.side, o.price, o.amount), states: [stateOf(o.side, np, o.amount)], value: String(o.value - fee) }, apply: () => {
+      submit({ ids: [nid], plan: { inPlace: false, current: stateOf(o.side, o.price, o.amount, o.minFill), states: [stateOf(o.side, np, o.amount, o.minFill)], value: String(o.value - fee) }, apply: () => {
         if (how === 'lost') { o.amount -= 1_500_007; return; }
         c.orders[nid] = { ...o, price: np, txid, expiresAt: gtd(), value: o.value - fee };
         c.ended[id] = 'cancelled';
@@ -122,7 +124,7 @@ function chain() {
         c.kasFree += fee;
       } });
     }
-    submit({ plan: { inPlace: true, current: stateOf(o.side, o.price, o.amount), replacement: stateOf(o.side, np, o.amount), value: String(o.value - fee) }, apply:() => { if (args.includes('--price')) o.price = Number(val('--price').replace('sompi', '')); if (args.includes('--gtd')) o.expiresAt = gtd(); o.txid = txid; o.value -= fee; c.kasFree += fee; } }); // an amend's fee comes from the order
+    submit({ plan: { inPlace: true, current: stateOf(o.side, o.price, o.amount, o.minFill), replacement: stateOf(o.side, np, o.amount, o.minFill), value: String(o.value - fee) }, apply:() => { if (args.includes('--price')) o.price = Number(val('--price').replace('sompi', '')); if (args.includes('--gtd')) o.expiresAt = gtd(); o.txid = txid; o.value -= fee; c.kasFree += fee; } }); // an amend's fee comes from the order
   }
   if (args[0] === 'cancel') {
     const id = args[1];
@@ -141,9 +143,11 @@ function chain() {
 }
 
 /** The order state as the CLI prints it (serde AnyState), with the fields the bot reads. */
-function stateOf(side, price, amount) {
+// An amend keeps the minimum fill, at most the amount left (kob replace).
+function stateOf(side, price, amount, minFill = null) {
   const st = { maker: 'a1d9fd1347128011ad0036b077949d63274d5d3b8ac8351776c30c945ef2c2fb', tokenCovId: '01'.repeat(32), scale: '1000000', price: String(price), extensionCommitment: '00'.repeat(32) };
-  return side === 1 ? { kind: 'KobAsk', state: { ...st, amountLeft: String(amount) } } : { kind: 'KobBid', state: st };
+  const mf = minFill == null ? {} : { minFill: String(Math.min(minFill, amount)) };
+  return side === 1 ? { kind: 'KobAsk', state: { ...st, ...mf, amountLeft: String(amount) } } : { kind: 'KobBid', state: st };
 }
 
 /**

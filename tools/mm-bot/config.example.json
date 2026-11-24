@@ -42,6 +42,8 @@
     "repriceThreshold": 0.0025,
     "lifeMin": 90,
     "renewAfterMin": 45,
+    "//askPartialFills": "true: smaller takers can trade, but an indexer that is hostile and also trades can keep one ask level at a stale price for up to lifeMin. false: every ask is all-or-nothing (a taker takes a whole level), and the node alone tells the bot which asks are live. Mainnet refuses to start until you set it (README, Partial or whole fills).",
+    "askPartialFills": false,
     "skew": {
       "enabled": false
     }

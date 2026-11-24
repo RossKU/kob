@@ -96,8 +96,17 @@ The stand-in CLI of `test/` imitates `kob recover`; these points need the real C
   Check that a real matcher's payout of a partial fill is exactly `ceil(n x (price - tip) / scale)`.
 - R6T-6: in a STOP with proven asks the pull's `kob recover --cancel` comes before the pass's in `logs/actions.jsonl`.
 - R6T-3: `mm-bot drop` of an unresolved ask with no fill reported refuses without `--force`.
+- Whole fills (`quotes.askPartialFills: false`): each `kob place` of an ask carries `--min-fill <amount>base` and the
+  placed state (`state.json`, `own.state.state.minFill`) equals `amountLeft`; an amend in place keeps it. Fill one ask in
+  full from another key: the next cycle logs "ended: not on the node at its own state" and places its level again, with
+  no `node-unconfirmed` alert and no proven record. Try a partial take of another (`kob take` of less than its amount):
+  the CLI or the node refuses it (the contract needs `n >= minFill` or `n == amountLeft`), and the ask stays live.
 
 ## What the lookup still cannot find (round 6, R6T-1)
+
+This applies to partial-fill asks (`quotes.askPartialFills: true`, the testnet-10 default) only: with `false` every ask
+is filled in full or not at all, the node alone says whether it is live, and the residue below does not exist (a taker
+must take a whole level).
 
 The node can only be asked for an ask at an amount. With a hostile indexer the amounts the bot has are its own and the
 ones the payments to its address name (README, "Amounts from the payments"). An ask stays unfindable when the filler paid

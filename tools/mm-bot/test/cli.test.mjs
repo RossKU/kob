@@ -156,9 +156,31 @@ test('mainnet without a JSON wRPC node: check, run and once refuse; testnet-10 w
       assert.match(r.stderr, /mainnet needs "node": a JSON wRPC URL/);
     }
   }
-  const ok = run('check', cfgFile({ network: 'mainnet', node: 'ws://127.0.0.1:18110' }));
+  const ok = run('check', cfgFile({ network: 'mainnet', node: 'ws://127.0.0.1:18110', quotes: { askPartialFills: true } }));
   assert.equal(ok.status, 0, ok.stderr);
   const tn = run('check', cfgFile({ network: 'testnet-10' }));
   assert.equal(tn.status, 0, tn.stderr);
   assert.match(tn.stdout, /WARNING: node: a JSON wRPC node/);
+});
+
+// Partial or whole fills of the asks is an informed choice on mainnet: check, run and once refuse
+// while quotes.askPartialFills is not set; testnet-10 takes partial fills.
+test('mainnet without quotes.askPartialFills: check, run and once refuse, naming the trade-off', () => {
+  const bin = fileURLToPath(new URL('../bin/mm-bot.mjs', import.meta.url));
+  const cfgFile = (over) => {
+    const f = join(dir, `fills-${Math.random()}.json`);
+    writeFileSync(f, JSON.stringify({ keyFile: 'bot.key', dataDir: 'run-fills', node: 'ws://127.0.0.1:18110', token: { covenantId: TOKEN, decimals: 6 }, ...over }));
+    return f;
+  };
+  const run = (cmd, f) => spawnSync(process.execPath, [bin, cmd, '--config', f], { encoding: 'utf8', timeout: 30_000 });
+  for (const cmd of ['check', 'run', 'once']) {
+    const r = run(cmd, cfgFile({ network: 'mainnet' }));
+    assert.equal(r.status, 2, `${cmd}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /mainnet needs "quotes": \{ "askPartialFills": true \| false \}, set by you/);
+    assert.match(r.stderr, /true: smaller takers can trade, but an indexer that is hostile and also trades can keep one ask level at a stale price for up to quotes.lifeMin/);
+    assert.match(r.stderr, /false: every ask is all-or-nothing .* the node alone tells the bot which asks are live/);
+  }
+  for (const v of [true, false]) assert.equal(run('check', cfgFile({ network: 'mainnet', quotes: { askPartialFills: v } })).status, 0);
+  assert.equal(run('check', cfgFile({ network: 'mainnet', quotes: { askPartialFills: 'no' } })).status, 2, 'a boolean or null');
+  assert.equal(run('check', cfgFile({ network: 'testnet-10' })).status, 0, 'testnet-10: partial fills by default');
 });

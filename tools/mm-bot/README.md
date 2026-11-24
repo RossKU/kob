@@ -33,7 +33,7 @@ node bin/mm-bot.mjs drop   --config config.json --id ID [--amount-left N] [--for
 
 On mainnet `check`, `run` and `once` refuse to start without `node` set to a JSON wRPC URL (`ws://host:18110`): the
 proof that a fully filled ask paid the bot reads the node, and without it every full fill would park its ask (below).
-On testnet-10 it is a warning.
+On testnet-10 it is a warning. They also refuse until `quotes.askPartialFills` is set, `true` or `false` (below, "Partial or whole fills"); on testnet-10 it defaults to `true`.
 
 - **Stop:** the STOP file, `stop`, or Ctrl-C/SIGTERM. The bot cancels every quote, waits until the node shows none left, and exits.
   Delete the STOP file to start again.
@@ -133,7 +133,19 @@ On testnet-10 it is a warning.
   already searched per order, so the node calls do not grow. A payment that could pay for more than 200 fill amounts
   (a base unit worth under 1/200 sompi) is skipped, with a log line. An ask found that way marks those payments as its
   fills (the log names them); they then prove nothing else.
-- **What the lookup cannot find.** The node can only be asked for an ask at an amount, and with a hostile indexer
+- **Partial or whole fills (`quotes.askPartialFills`).** With `false` every ask is placed with its minimum fill equal
+  to its amount (`kob place ... --min-fill <amount>base`; an amend in place keeps it, since it changes only price and
+  expiry). The contract takes a fill of at least `minFill` or of all that is left, never more than is left, so such an
+  ask is filled in full, cancelled, amended by the bot or refunded: its amount never changes without the bot. The bot
+  then looks it up at its own state only (one candidate, no hints), and "not found at its state under the template it
+  was placed with" is the node's word that it ended: its level and cap share are free in the same cycle, with no
+  payment proof, no proven or parked state, and nothing the indexer says involved. The exceptions stay under the rules
+  above until the node finds the ask: an amend whose outcome is unknown and whose plan names no state, a placement by
+  another CLI build (another template), a template the indexer names differently. The cost: a taker must take a whole
+  level, so use more and smaller levels (`levels`, `levelSizePct`) if takers are small. On mainnet `check`, `run` and
+  `once` refuse until the key is set, `true` or `false`; on testnet-10 it defaults to `true` (partial fills) and the
+  start log says so. The amounts from the payments (above) and the residue (next) concern `true` only.
+- **What the lookup cannot find (`askPartialFills: true`).** The node can only be asked for an ask at an amount, and with a hostile indexer
   the only amounts the bot has are its own and the payments'. An ask stays unfindable when the filler paid the maker
   more than `allIn` (the payout then names a larger fill than was made: escaping costs him the value of one base unit,
   4,000 sompi at the TUSDC6 defaults), when more than 3 fills (or more than 12 payments) landed since the bot last
@@ -146,7 +158,7 @@ On testnet-10 it is a warning.
   (unresolved). With the defaults a level is 15 % of `capitalUsd` (150 USD at 1,000 USD) and `lifeMin` is 90 min: the
   loss is that level times the move against the bot within 90 min, about 3 to 8 USD per attack at 1,000 USD for a 2
   to 5 % move. The attacker needs the indexer the bot reads (or a man in the middle of an `http://` one) and pays the
-  spread of two trades at the bot's own prices. The remedy is the operator's: point the bot at an indexer you run
+  spread of two trades at the bot's own prices. The remedy is the operator's: whole fills (`askPartialFills: false`, above) remove it; with partial fills, point the bot at an indexer you run
   yourself (`indexer`); keep `lifeMin` short (the exposure lasts at most `lifeMin`; its floor, 30 min, is a third of the
   default); and watch `<dataDir>/proven-not-found.json` (written by each STOP and
   IDLE pass) and `mm-bot unresolved`, with its `node-unconfirmed` and `proven-live` alerts: an ask there you cannot
@@ -279,6 +291,7 @@ One JSON file; omitted fields take the default; relative paths are relative to t
 | `quotes.repriceThreshold` | `0.0025` | fair move that triggers an amend |
 | `quotes.resizeBelow` | `0.5` | re-place an order below this share of its level |
 | `quotes.askCarrierMinKas` | `0.2` | re-place an ask whose carrier is lower |
+| `quotes.askPartialFills` | `null` | `true`: asks take partial fills; `false`: each ask is filled in full or not at all, and the node alone tracks it (tracking, "Partial or whole fills"). Mainnet refuses `null`; testnet-10 takes it as `true` |
 | `quotes.mergeAboveUtxos` | `1` | merge free token UTXOs above this count |
 | `quotes.lifeMin` | `90` | each quote's expiry, minutes after its last placement or amend (30 to 1440) |
 | `quotes.renewAfterMin` | `45` | renew a quote not amended for this long; at least 15 min below `lifeMin` |
