@@ -28,6 +28,10 @@ export interface HealthView {
   node_version?: string | null;
   cursor_hash?: Hex | null;
   cursor_daa: number;
+  /** Verified header time (Unix ms) of the cursor's chain block; null until known. Older indexers omit it. */
+  cursor_time_unix_ms?: number | null;
+  /** Chain proofs are off: the cursor block's time is the node's word. */
+  chain_proofs_off?: boolean;
   /** The node's virtual DAA score at the last poll. */
   node_daa: number | null;
   lag_daa: number | null;

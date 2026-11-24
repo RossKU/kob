@@ -2,7 +2,7 @@
 // (amend) and refund. Everything here only plans. It builds an unsigned transaction with kob-wasm
 // through the cancel.ts planners. Signing and broadcasting go through <TxFlow> only
 // (ui/confirm/send.ts).
-import { buildCancelEnv, readClock } from '../../app/env';
+import { buildCancelEnv, readClock, readAgreedClock } from '../../app/env';
 import type { Services } from '../../app/services';
 import type { StrayView, TokenUtxoView } from '../../data/indexer-types';
 import {
@@ -325,8 +325,10 @@ export async function planAmendFor(s: Services, pubkey: Hex, entry: OrderEntry, 
   const snapshot = await snapshotFor(s, entry, strays);
   const token = tokenOf(s, tokenCovIdOf(snapshot.order.state));
   // A renewal needs the current DAA, because the new expiry is now + 90 days.
-  const nowDaa = input.renew ? (await readClock(s)).daa : undefined;
-  const amend = buildReplacement(snapshot, kind, input, { tick: token?.tick ?? undefined, kob: s.kob, ...(nowDaa !== undefined ? { nowDaa } : {}) });
+  // judged against the indexer's verified present (R9FB3-1)
+  const now = input.renew ? await readAgreedClock(s) : undefined;
+  const nowDaa = now?.daa;
+  const amend = buildReplacement(snapshot, kind, input, { tick: token?.tick ?? undefined, kob: s.kob, ...(nowDaa !== undefined ? { nowDaa } : {}), ...(now?.witness ? { nowWitness: now.witness } : {}) });
   if (!amend.ok || !amend.spec) return { amend, plan: null, snapshot };
   const env = await buildCancelEnv(s, { pubkey }, token);
   return { amend, plan: stopOnUnreadStrays(planCancelReplace(env, snapshot, amend.spec)), snapshot };

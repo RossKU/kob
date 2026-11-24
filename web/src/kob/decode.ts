@@ -49,6 +49,7 @@
 // and `kob.finalize` verifies signatures against them.
 import { curveProblems } from './curve';
 import { isGenesisBinding } from './covenant-id';
+import { DAA_PER_SECOND, PRESENT_MARGIN_DAA } from './chain-present';
 import { AUTO_COIN, LOCK_COIN_MAX, creatorLock, type CreatorLockInfo } from './creator-lock';
 import type { WalletId } from '../wallet/types';
 import {
@@ -101,7 +102,7 @@ export const FEE_WARN_SLACK = 100_000n;
 /** Every code a signing finding can carry, grouped by level. The UI has a message for each. */
 export const SIGNING_ISSUE_CODES = [
   // blocking
-  'malformed-built', 'recover-failed', 'order-spk-mismatch', 'order-not-maker', 'order-unrecorded', 'order-token-mismatch', 'input-script-mismatch', 'output-script-mismatch',
+  'malformed-built', 'recover-failed', 'chain-time', 'order-spk-mismatch', 'order-not-maker', 'order-unrecorded', 'order-token-mismatch', 'input-script-mismatch', 'output-script-mismatch',
   'token-output-count', 'token-unbalanced', 'kas-unbalanced', 'fee-mismatch', 'fee-excessive', 'fee-rate-excessive', 'payment-out', 'transfer-out', 'token-to-unknown-owner',
   'output-unknown', 'sign-foreign-key', 'sign-mismatch', 'sign-unexpected', 'sighash-type', 'expected-orders', 'expected-kas-locked',
   'expected-tokens-escrowed', 'expected-cancel-ids', 'expected-max-fee', 'input-unconfirmed', 'token-state-unplain', 'token-state-mixed', 'pair-token-mismatch', 'pair-family-mismatch',
@@ -502,6 +503,12 @@ export interface SigningSummary {
 /** What the planner claims; compared against the derived facts, any disagreement is blocking. */
 export interface ExpectedSigning {
   orders?: OrderState[];
+  /**
+   * The present the planner signed times from, judged against a second witness (kob/chain-present.ts,
+   * R9FB3-1). The decoder checks the built orders' times against it, projected to now by the browser
+   * clock: an expiry already past, or an auction's start further than the margin from now, blocks.
+   */
+  present?: { daa: bigint; unixSeconds: bigint; witness?: 'agreed' | 'unverified' | 'disagree' };
   /**
    * KAS moved into covenants (order outputs + custody token outputs), see `decodeSigning` for the
    * accepted definitions
@@ -2026,6 +2033,31 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     if (!bind || bind.authorizingInput !== from) add('order-spk-mismatch', `output ${o.output}: the continued order is not authorised by the order input ${from}`, { output: o.output, input: from });
     else if (isGenesisBinding(tx, from, bind.covenantId)) add('order-spk-mismatch', `output ${o.output}: it starts a new covenant from input ${from}'s outpoint: it does not continue the order, which would end with everything it holds locked`, { output: o.output, input: from });
     else if (group !== 1) add('order-spk-mismatch', `output ${o.output}: ${group} outputs continue the order; an order continues as one output`, { output: o.output, input: from });
+  }
+  presentTimes();
+  /** The created and amended orders' signed times against the agreed present (R9FB3-1). */
+  function presentTimes(): void {
+    const p = expected?.present;
+    if (!p) return;
+    const nowSec = BigInt(Math.floor((input.now ?? Date.now()) / 1000));
+    const now = p.daa + (nowSec > p.unixSeconds ? (nowSec - p.unixSeconds) * DAA_PER_SECOND : 0n);
+    for (const o of orders) {
+      if (o.sweptFrom !== undefined || o.claimedFrom !== undefined) continue;
+      const s = o.state.state as unknown as Record<string, string | undefined>;
+      if (p.witness === 'disagree') {
+        add('chain-time', `output ${o.output}: the node and the indexer disagree about the chain's time, so no time this order signs can be checked`, { output: o.output });
+        continue;
+      }
+      const expiry = s.expiryDaa !== undefined ? BigInt(s.expiryDaa) : 0n;
+      if (expiry > 0n && expiry <= now) add('chain-time', `output ${o.output}: the order expires at DAA ${expiry}, already past (the chain is at about ${now}): it would be born expired`, { output: o.output });
+      const start = s.activeFrom !== undefined ? BigInt(s.activeFrom) : 0n;
+      const scheduled = (s.slope !== undefined && BigInt(s.slope) !== 0n) || (s.interval !== undefined && BigInt(s.interval) !== 0n);
+      if (scheduled && start > 0n && o.amendedFrom === undefined) {
+        const d = start > now ? start - now : now - start;
+        // an auction starts now (plus its 30 DAA lead and a re-timing's lead), never far from it
+        if (d > PRESENT_MARGIN_DAA + 600n) add('chain-time', `output ${o.output}: its schedule starts at DAA ${start}, ${d / DAA_PER_SECOND} s from the chain's present: it would not trade along the schedule shown`, { output: o.output });
+      }
+    }
   }
   outputSideHoldings();
   /**

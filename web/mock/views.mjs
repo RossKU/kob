@@ -95,6 +95,9 @@ export function healthView(chain) {
     node_version: 'kob-mock-node/1.0',
     cursor_hash: chain.blockSeq === 0 ? null : chain.events.length ? chain.events[chain.events.length - 1].txid : null,
     cursor_daa: ctx.nodeDaa === null ? 0 : ctx.nodeDaa - (chain.health.lagDaa ?? 0),
+    // the cursor block's verified header time, as kobd reports it: the mock cursor is lagDaa behind
+    // the node, so its block is that many seconds old (R9FB3-1: the web's second witness of the present)
+    cursor_time_unix_ms: ctx.nodeDaa === null ? null : Date.now() - Math.floor((chain.health.lagDaa ?? 0) / 10) * 1000,
     node_daa: ctx.nodeDaa,
     last_error: st === 'node_unavailable' ? 'mock: node unavailable' : null,
     gap_reason: null,

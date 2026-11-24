@@ -189,6 +189,8 @@ export default {
   'confirm.f.expiryExit': 'when the exit is created (then 90 days idle)',
   'confirm.f.expiryHint': 'then anyone may refund it',
   'confirm.f.daa': 'DAA score {daa}',
+  'confirm.f.timeAtDaa': '{time} (DAA {daa})',
+  'confirm.f.timeUnverified': '{time}, chain time unverified',
   'confirm.f.refundTip': 'Refund tip kept in the order',
   'confirm.f.refundTipHint': 'Paid only to whoever refunds the expired order; otherwise returned to you.',
   'confirm.f.orderValue': 'KAS on the order output',

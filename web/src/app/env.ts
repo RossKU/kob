@@ -2,6 +2,7 @@
 // clock and UTXOs, the indexer book and own orders, and the token tracker. Every dependency comes
 // through `Services` and nothing touches the DOM, so tests can use fakes.
 import type { BookOrderView, LevelView, OrderView, PairBookView, PairLevelView } from '../data/indexer-types';
+import { indexerPresent, judgePresent } from '../kob/chain-present';
 import { incompleteAsNull } from '../data/indexer';
 import { declaredToken } from '../data/token-declarations';
 import type { CancelEnv } from '../kob/cancel';
@@ -29,6 +30,30 @@ const DEFAULT_RATE_MILLI = 10_000;
 /** The TokenMarket of a registry token. Throws for a token this build cannot trade. */
 export function tokenMarketOf(s: Pick<Services, 'kob' | 'registry'>, token: TokenInfo): TokenMarket {
   return toTokenMarket(s.kob, token.json, s.registry.templates);
+}
+
+/**
+ * The clock the planners sign times from (R9FB3-1): the node's DAA judged against the indexer's
+ * verified present (its cursor's verified header time advanced by the wall clock, never the node DAA
+ * it relays) and, when given, the highest `blockDaaScore` the plan read. Added load: none on the node
+ * (the same one call as `readClock`); one `/v1/health` read of the indexer, at plan time only.
+ */
+export async function readAgreedClock(s: Pick<Services, 'node'> & Partial<Pick<Services, 'indexer'>>, floorDaa: bigint | null = null): Promise<Clock> {
+  const ix = s.indexer;
+  const [c, h] = await Promise.all([readClock(s), ix && typeof ix.health === 'function' ? Promise.resolve().then(() => ix.health({ priority: 'high' })).catch(() => null) : Promise.resolve(null)]);
+  const p = judgePresent(c.daa, { indexer: indexerPresent(h, Date.now()), floor: floorDaa });
+  return { ...c, witness: p.verdict, witnessReason: p.reason };
+}
+
+/** The highest `blockDaaScore` of the coins a plan read: the present is not below it. */
+export function floorOf(...lists: readonly (readonly { blockDaaScore?: string | number | bigint | null }[] | undefined)[]): bigint | null {
+  let top: bigint | null = null;
+  for (const l of lists) for (const u of l ?? []) {
+    if (u.blockDaaScore === undefined || u.blockDaaScore === null) continue;
+    const v = BigInt(u.blockDaaScore);
+    if (top === null || v > top) top = v;
+  }
+  return top;
 }
 
 /** Reads the node clock. The rate falls back to a default when the node gives none. */
@@ -236,8 +261,11 @@ export async function readMarketPart(s: Pick<Services, 'indexer' | 'kob' | 'node
 }
 
 /** Reads the node part of the environment. */
-export async function readCoinsPart(s: Pick<Services, 'node' | 'utxos' | 'fees'>, wallet: Pick<WalletInfo, 'pubkey'>): Promise<CoinsPart> {
-  const [clock, funding, fees] = await Promise.all([readClock(s), s.utxos.fundingFor(wallet.pubkey), readFees(s)]);
+export async function readCoinsPart(s: Pick<Services, 'node' | 'utxos' | 'fees'> & Partial<Pick<Services, 'indexer'>>, wallet: Pick<WalletInfo, 'pubkey'>): Promise<CoinsPart> {
+  const [clock0, funding, fees] = await Promise.all([readAgreedClock(s), s.utxos.fundingFor(wallet.pubkey), readFees(s)]);
+  // the node's DAA is not below a coin it reported itself
+  const floor = floorOf(funding as never);
+  const clock = floor !== null && clock0.daa < floor ? { ...clock0, witness: 'disagree' as const, witnessReason: `the node's DAA ${clock0.daa} is below ${floor}, the DAA of a coin it reported itself` } : clock0;
   return { clock, funding, fees };
 }
 
@@ -486,7 +514,7 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
   indexed?.catch(() => undefined);
   kasBooks?.catch(() => undefined);
   const [clock, funding, tokenUtxos, quoteTokenUtxos, fees] = await Promise.all([
-    readClock(s),
+    readAgreedClock(s),
     s.utxos.fundingFor(wallet.pubkey),
     s.tracker.tokenUtxosFor(wallet.pubkey, { covenantId: base.covenantId, program: base.program! }),
     s.tracker.tokenUtxosFor(wallet.pubkey, { covenantId: quote.covenantId, program: quote.program! }),

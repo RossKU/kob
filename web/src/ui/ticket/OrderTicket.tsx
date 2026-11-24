@@ -11,6 +11,7 @@
 // Progress is the label of the button itself ("Confirm in KasWare...", "Sending..."). The result is
 // a card of the notifications at the top right.
 import type { ComponentChildren } from 'preact';
+import { followWitness } from '../../kob/chain-present';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { NO_FLASH, dustLineOf, nextDustFlash, wouldBeDust, type DustFlash } from './dust-hint';
 import { HelpToggle } from './HelpToggle';
@@ -748,8 +749,9 @@ export function OrderTicket(props: OrderTicketProps) {
       // count from it, never from the clock of the environment on hand. That is the background
       // clock projected to the click when it is fresh, else a read. A node slower than
       // CLOCK_WAIT_MS gives the clock on hand projected to now (review-check.ts `projectClock`).
-      let clock = liveClockAt(liveClock.current, clickAt)
-        ?? (await reviewClock(() => readClock(services), base.clock, cached ? cached.clockAt : (snapshot()?.clockAt ?? clickAt), { waitMs: CLOCK_WAIT_MS })).clock;
+      // the verdict on the chain's time (R9FB3-1) follows the judged clock of the environment
+      let clock = followWitness(liveClockAt(liveClock.current, clickAt)
+        ?? (await reviewClock(() => readClock(services), base.clock, cached ? cached.clockAt : (snapshot()?.clockAt ?? clickAt), { waitMs: CLOCK_WAIT_MS })).clock, base.clock);
       let refsNow = touches.data ?? noRefs();
       const planWith = (e: PlanEnv, refs: References, i: Intent = intent): OrderPlan => planOrder(withRefs({ ...e, clock }, refs), i);
       let p = planWith(base, refsNow);
@@ -806,10 +808,10 @@ export function OrderTicket(props: OrderTicketProps) {
       // A take was planned on a book read just now and has no auction, so it has no re-check, no
       // re-timing and no following of the market. A lost race is the node's answer, and the take is
       // planned again (placeTake).
-      if (planned.take) return { built: planned.built!, expected: expectedFromPlan(planned), label, openTokens, notes, signerNotes, submitByDaa: null, plan: planned };
+      if (planned.take) return { built: planned.built!, expected: expectedFromPlan(planned, clock), label, openTokens, notes, signerNotes, submitByDaa: null, plan: planned };
       return {
         plan: planned,
-        built: planned.built!, expected: expectedFromPlan(planned), label, openTokens, notes, signerNotes,
+        built: planned.built!, expected: expectedFromPlan(planned, clock), label, openTokens, notes, signerNotes,
         gate: !settled || verifiers.length > 0 ? recheck(planned, intent, clock, base.fees, settled ? base : null, clickAt, toRead, shown, label, openTokens, shift) : undefined,
         submitByDaa: auctionSubmitBy(planned.states, clock.daa),
         retime: retimer(env0, refsNow, intent, null, label, openTokens, shift + RETIME_LEAD_DAA),
@@ -851,7 +853,7 @@ export function OrderTicket(props: OrderTicketProps) {
       if (planned.built && sameTransaction(planned.built, p.built)) return null;
       const kept = keepTerms(p, intent, plan, shown);
       if (!('p' in kept)) return stop(kept.text, kept.code);
-      return { replace: { built: kept.p.built!, expected: expectedFromPlan(kept.p), submitByDaa: auctionSubmitBy(kept.p.states, clock.daa), retime: retimer(fresh, refs, kept.intent, fees, label, openTokens, shift + RETIME_LEAD_DAA) } };
+      return { replace: { built: kept.p.built!, expected: expectedFromPlan(kept.p, clock), submitByDaa: auctionSubmitBy(kept.p.states, clock.daa), retime: retimer(fresh, refs, kept.intent, fees, label, openTokens, shift + RETIME_LEAD_DAA) } };
     } catch (e) {
       return stop(buildErrorText(e instanceof Error ? e.message : String(e)));
     }
@@ -870,13 +872,13 @@ export function OrderTicket(props: OrderTicketProps) {
   const retimer = (env: PlanEnv, refs: References, intent: Intent, fees: PlanEnv['fees'] | null, label: string, openTokens: SendJob['openTokens'], lead = RETIME_LEAD_DAA): SendJob['retime'] =>
     async (o) => {
       try {
-        const now = liveClockAt(liveClock.current, Date.now()) ?? (await readClock(services));
+        const now = followWitness(liveClockAt(liveClock.current, Date.now()) ?? (await readClock(services)), env.clock);
         const used = retimeLead(lead, o?.signingMs, now.rateMilli);
         const clock = laterClock(now, used);
         const p = planOrder(withRefs({ ...env, clock, ...(fees ? { fees } : {}) }, refs), intent);
         const firstError = errors(p)[0];
         if (!p.ok || !p.built || firstError) return { stop: { code: 'changed', text: firstError ? issueText(firstError, issueCtx) : t('ticket.reviewChanged') } };
-        return { built: p.built, expected: expectedFromPlan(p), label, openTokens, submitByDaa: auctionSubmitBy(p.states, clock.daa), retime: retimer(env, refs, intent, fees, label, openTokens, used + RETIME_LEAD_DAA) };
+        return { built: p.built, expected: expectedFromPlan(p, clock), label, openTokens, submitByDaa: auctionSubmitBy(p.states, clock.daa), retime: retimer(env, refs, intent, fees, label, openTokens, used + RETIME_LEAD_DAA) };
       } catch (e) {
         return { stop: { code: 'plan', text: buildErrorText(e instanceof Error ? e.message : String(e)) } };
       }

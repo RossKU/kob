@@ -85,11 +85,18 @@ export interface AmendOptions {
    * covenant's arithmetic. Without it the same quote rule runs in bigint.
    */
   kob?: KobWasm;
+  /** The verdict on the chain's present the renewal counts from (kob/chain-present.ts). */
+  nowWitness?: 'agreed' | 'unverified' | 'disagree';
 }
 
 /** The renewed expiry, or an issue when the clock is unknown. */
 function renewedExpiry(input: AmendInput, o: AmendOptions, issues: PlanIssue[]): { expiryDaa: string } | Record<string, never> {
   if (!input.renew) return {};
+  if (o.nowWitness === 'disagree') {
+    // R9FB3-1: a renewal is a signed time; one node's DAA the indexer contradicts builds none
+    issues.push(issue('renew-chain-time', 'error', 'the node and the indexer disagree about the chain time: the order cannot be renewed until they agree'));
+    return {};
+  }
   if (o.nowDaa === undefined) {
     issues.push(issue('renew-no-clock', 'error', 'the current DAA score is needed to renew the order'));
     return {};

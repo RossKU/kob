@@ -80,6 +80,14 @@ export interface Clock {
    * 9_500..10_500.
    */
   rateMilli: number;
+  /**
+   * Whether a second witness agreed with this DAA (kob/chain-present.ts, R9FB3-1): `agreed` (the
+   * indexer's verified present within the margin), `unverified` (no second witness), `disagree`
+   * (nothing timed is built). Absent: not judged (tests, or a clock read for display only).
+   */
+  witness?: 'agreed' | 'unverified' | 'disagree';
+  /** Why the witness is not `agreed`, in plain words. */
+  witnessReason?: string | null;
 }
 
 /**
