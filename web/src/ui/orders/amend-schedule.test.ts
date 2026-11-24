@@ -106,3 +106,27 @@ describe('the amend follows the builder\'s check_amend_terms', () => {
     expect(r.issues.map((i) => i.code)).toContain('sliced-auction-not-amendable');
   });
 });
+
+describe('R9FC2-1, both lines: the wasm recovery refuses a repriced auction that keeps its schedule, and the decoder\'s own rule still fires when it does not', () => {
+  it('first line blocks with the verifier\'s reason; with the recovery stubbed, order-terms-invalid blocks', () => {
+    const base = BigInt((placeGolden(kob, 'create.ask').snapshots[0]!.order.state.state as unknown as { price: string }).price);
+    const snap = auctionShaped('create.ask', base * 2n, base);
+    const want = base + base / 10n;
+    const r = buildReplacement(snap, 'limit', { price: want }, { kob, nowDaa: 5_000n });
+    const good = planCancelReplace(env(), snap, r.spec!);
+    const b = oldConstruction(snap, good.built!, want);
+    for (const s of [decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null, expected: { orders: [r.spec!.order] } }), decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null })]) {
+      const f = s.blocking.find((x) => x.code === 'recover-failed');
+      expect(f).toBeTruthy();
+      expect(String(f!.params?.reason ?? '')).not.toBe('');
+    }
+    // second line: the recovery as it was before this round, returning the old construction's state
+    const old = clone(snap.order.state) as OrderState & { state: Record<string, string> };
+    old.state.price = want.toString();
+    const recovered = kob.recoverAmends(good.built!.tx, good.built!.plans).map((x) => ({ ...x, order: old }));
+    const stub = { ...kob, recoverAmends: () => recovered } as typeof kob;
+    const s = decodeSigning({ kob: stub, built: b, maker: MAKER.pk, registry: null });
+    expect(s.blocking.map((x) => x.code)).not.toContain('recover-failed');
+    expect(s.blocking.map((x) => x.code)).toContain('order-terms-invalid');
+  });
+});

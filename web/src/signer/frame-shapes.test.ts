@@ -13,6 +13,7 @@ import { KAS as FKAS, OTHER_PK, TOK, keyUtxo as fKeyUtxo, makeEnv, market3x3, to
 import { snapshotOfRecovered } from '../testing/chain-fixtures';
 import { bundle, continuationAsGenesis } from '../testing/hostile-tx';
 import { summarize } from './summary';
+import { decodeSigning } from '../kob/decode';
 
 const kob = loadKobNode();
 const build = (name: string): BuiltTx => kob.build(goldenRequest(name, MAKER.pk) as never);
@@ -152,4 +153,31 @@ describe('a sale curve placed at its token creation, before its first sale, in t
     expect(s.problems).toBeGreaterThan(0);
     expect(s.problemCodes).toContain('custody-unreleased');
   });
+});
+
+describe('R9FB2-1, both lines: the wasm recovery refuses a genesis-bound amend, and the decoder\'s own test still fires when it does not', () => {
+  for (const name of ['amend.ask', 'amend.bid', 'kron.amend.ask', 'amend.curve']) {
+    it(name, () => {
+      const honest = build(name);
+      const at = orderInput(honest);
+      const b = continuationAsGenesis(honest, at, (op, outs) => genesisCovenantId(kob, op, outs));
+      const g = b.tx.outputs.find((o) => o.covenant?.authorizingInput === at)!.covenant!.covenantId;
+      // first line: the recovery refuses it, blocking in the app decode, the frame decode and the
+      // frame summary, with the verifier's reason carried
+      for (const s of [decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null, expected: { orders: [] } }), decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null })]) {
+        const f = s.blocking.find((x) => x.code === 'recover-failed');
+        expect(f).toBeTruthy();
+        expect(String(f!.params?.reason ?? '')).not.toBe('');
+      }
+      expect(frame(b).problemCodes).toContain('recover-failed');
+      // second line: a recovery that takes the claimed id (as the wasm did before this round) still
+      // meets the decoder's genesis test
+      const recovered = kob.recoverAmends(honest.tx, honest.plans).map((r) => ({ ...r, covenantId: g }));
+      const stub = { ...kob, recoverAmends: () => recovered } as typeof kob;
+      const s = decodeSigning({ kob: stub, built: b, maker: MAKER.pk, registry: null });
+      expect(s.blocking.map((x) => x.code)).not.toContain('recover-failed');
+      expect(s.blocking.map((x) => x.code)).toContain('order-spk-mismatch');
+      expect(summarize(stub, b, MAKER.pk, []).problemCodes).toContain('order-spk-mismatch');
+    });
+  }
 });

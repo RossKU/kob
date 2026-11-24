@@ -261,7 +261,7 @@ describe('issueText: pre-sign findings of the decoder', () => {
 
   it('renders a hand-made finding for every SIGNING_ISSUE_CODE with realistic params', () => {
     const sample: Record<string, Partial<SigningIssue>> = {
-      'malformed-built': {}, 'recover-failed': {}, 'order-spk-mismatch': { output: 1 }, 'order-not-maker': { output: 0, params: { maker: OTHER.pk } },
+      'malformed-built': {}, 'recover-failed': { params: { record: 'amend', reason: 'the output would start a new covenant, not continue the order' } }, 'order-spk-mismatch': { output: 1 }, 'order-not-maker': { output: 0, params: { maker: OTHER.pk } },
       'order-unrecorded': { output: 0 }, 'order-token-mismatch': { output: 0, params: { covenantId: COV } }, 'input-script-mismatch': { input: 1 },
       'output-script-mismatch': { output: 2 }, 'token-output-count': {}, 'token-unbalanced': { params: { in: 1000n, out: 900n } }, 'kas-unbalanced': {},
       'fee-mismatch': { params: { derived: 5_000_000n, declared: 4_000_000n } }, 'fee-excessive': { params: { fee: 500_000_000n, moved: 20n * KAS } }, 'fee-rate-excessive': { params: { rate: '1500', max: 1000n } },

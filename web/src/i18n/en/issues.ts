@@ -134,7 +134,7 @@ export default {
   // Pre-sign screen (SIGNING_ISSUE_CODES of decode.ts).
   // blocking
   'issues.malformed-built': 'Malformed transaction: inputs, signing plans and roles do not match. Do not sign it.',
-  'issues.recover-failed': 'A placement record does not verify: the orders this transaction creates cannot be trusted.',
+  'issues.recover-failed': 'A record of this transaction does not verify ({reason}): the orders it creates or changes cannot be trusted. Not signing.',
   'issues.order-spk-mismatch': 'Output {output}: the script does not match its placement record.',
   'issues.order-not-maker': '{where}The order belongs to another key ({maker}), not your wallet: this wallet cannot create or cancel it.',
   'issues.order-unrecorded': 'Output {output}: no valid placement record, so neither matchers nor you would see this order.',

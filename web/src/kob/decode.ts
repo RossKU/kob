@@ -1029,7 +1029,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   try {
     recovered = kob.recoverOrders(tx);
   } catch (e) {
-    add('recover-failed', `a placement record in the payload does not verify: ${e instanceof Error ? e.message : String(e)}`);
+    const reason = e instanceof Error ? e.message : String(e);
+    add('recover-failed', `a placement record in the payload does not verify: ${reason}`, { params: { record: 'placement', reason } });
   }
   let payload: SigningSummary['payload'] = null;
   if (tx.payload) {
@@ -1049,7 +1050,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     try {
       amends = kob.recoverAmends(tx, built.plans);
     } catch (e) {
-      add('recover-failed', `an in-place amend record in the payload does not verify: ${e instanceof Error ? e.message : String(e)}`);
+      // the verifier's own reason is carried to the user: a continuation that would start a new
+      // covenant, an amended price that keeps its old schedule (kob-protocol verify_amend)
+      const reason = e instanceof Error ? e.message : String(e);
+      add('recover-failed', `an in-place amend record in the payload does not verify: ${reason}`, { params: { record: 'amend', reason } });
     }
   }
   const amendByOutput = new Map(amends.map((a) => [a.output, a]));
