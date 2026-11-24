@@ -610,7 +610,7 @@ impl<S: ChainSource> ChainSource for Failover<S> {
     fn cross_check(&self) -> crate::rpc::CrossCheck {
         self.inner.tiers[self.active()].cross_check()
     }
-    async fn confirm_bodies(&self, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun]) -> Result<bool, String> {
+    async fn confirm_bodies(&self, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun]) -> Result<bool, super::BodiesError> {
         self.inner.tiers[self.active()].confirm_bodies(start, raw, runs).await
     }
     async fn window_contradicted(&self, origin: Origin, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun], why: &str) {

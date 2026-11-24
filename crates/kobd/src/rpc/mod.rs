@@ -61,6 +61,41 @@ pub enum RpcError {
     /// its frame header arrives, its payload is never buffered, and the connection is closed.
     #[error("answer of {size} bytes exceeds the {limit}-byte limit of the request")]
     TooLarge { size: usize, limit: usize },
+    /// kobd's own refusal to apply the chain authority's answer while no cross-checking node has
+    /// vouched for it yet (`multi::WAITING_FOR_CROSS_CHECK`). kobd raises it itself, never from a
+    /// node's bytes: the wait after it is another node's time (indexer follower, *Progress*).
+    #[error("{0}")]
+    Unvouched(String),
+}
+
+/// Why the copies of KOB transactions were not confirmed ([`ChainSource::confirm_bodies`]). It
+/// reads as its text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BodiesError {
+    /// The cross-checking node gave no copies and `multi::CrossCheckPolicy::single_after` has not
+    /// passed: kobd waits on that node. kobd sets it where it decides so, never from a node's text.
+    pub waiting: bool,
+    pub why: String,
+}
+
+impl BodiesError {
+    /// The copies differ, or a difference is not settled.
+    pub fn refused(why: String) -> Self {
+        BodiesError { waiting: false, why }
+    }
+}
+
+impl std::ops::Deref for BodiesError {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.why
+    }
+}
+
+impl std::fmt::Display for BodiesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.why)
+    }
 }
 
 /// The largest answer a client takes at all (`WrpcConfig::max_message_bytes`), 1 GiB.
@@ -373,7 +408,7 @@ pub trait ChainSource: Send + Sync + 'static {
         start: Hash32,
         raw: &RawVspcResponse,
         runs: &[BodyRun],
-    ) -> impl Future<Output = Result<bool, String>> + Send {
+    ) -> impl Future<Output = Result<bool, BodiesError>> + Send {
         async move {
             let _ = (start, raw, runs);
             Ok(false)

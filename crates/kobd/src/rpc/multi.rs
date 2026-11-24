@@ -1728,7 +1728,7 @@ impl<N: ChainSource> MultiNode<N> {
             let why =
                 format!("{WAITING_FOR_CROSS_CHECK} ({} of {} s): {}", waited.as_secs(), self.policy.single_after.as_secs(), f.why);
             self.set_cross(false, &why);
-            return Err(RpcError::Node(why));
+            return Err(RpcError::Unvouched(why));
         }
         let why = format!(
             "no cross-checking node answered for {} s ({}): the chain authority goes on alone, with chain proofs",
@@ -1870,7 +1870,7 @@ impl<N: ChainSource> MultiNode<N> {
     /// The cross-checking node could not give its copies of KOB transactions (`j`, `None` when
     /// none can be asked, and `why`). `Err` while they are waited for, `Ok(false)` past
     /// [`CrossCheckPolicy::single_after`] (`ChainSource::confirm_bodies`).
-    fn bodies_unchecked(&self, j: Option<usize>, why: String) -> Result<bool, String> {
+    fn bodies_unchecked(&self, j: Option<usize>, why: String) -> Result<bool, super::BodiesError> {
         let name = j.or(self.cross_node()).map(|j| self.board.shown(j)).unwrap_or_default();
         let now = tokio::time::Instant::now();
         let single = self.policy.single_after;
@@ -1903,11 +1903,12 @@ impl<N: ChainSource> MultiNode<N> {
             (waited, first, u.why.clone())
         };
         if waited < single {
-            return Err(format!(
+            let why = format!(
                 "{WAITING_FOR_CROSS_CHECK} for the copies of KOB transactions ({} of {} s): {name}: {why}",
                 waited.as_secs(),
                 single.as_secs()
-            ));
+            );
+            return Err(super::BodiesError { waiting: true, why });
         }
         if first {
             tracing::warn!(cross_check = %name, waited_secs = waited.as_secs(), reason = %why, "the copies of KOB transactions are not compared until the cross-checking node gives them again: the chain authority's copies apply with chain proofs alone");
@@ -2536,7 +2537,7 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     /// (`indexer::follower`, R3C1-L1); the wait is the exposure the id check accepts already (K-M3:
     /// running alone is visible). A failure more than `single_after` after the previous one starts
     /// the clock again (R3C1-L2). A difference never goes on alone.
-    async fn confirm_bodies(&self, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun]) -> Result<bool, String> {
+    async fn confirm_bodies(&self, start: Hash32, raw: &RawVspcResponse, runs: &[super::BodyRun]) -> Result<bool, super::BodiesError> {
         if self.cross_node().is_none() || self.cross.lock().unwrap_or_else(|e| e.into_inner()).alone {
             return Ok(false);
         }
@@ -2585,17 +2586,17 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
             Ok(None) => {
                 tracing::warn!(authority = %self.board.shown(a), cross_check = %self.board.shown(j), third = %name, reason = %why, "the nodes' copies of a KOB transaction differ and a third node agrees with the chain authority: the cross-checking node is given up");
                 self.board.failed(j, Fault::Lie, &format!("a third node ({name}) contradicts it: {why}"));
-                Err(format!("{why}; a third node agrees with the chain authority, asked again"))
+                Err(super::BodiesError::refused(format!("{why}; a third node agrees with the chain authority, asked again")))
             }
             Ok(Some(_)) => {
                 tracing::error!(authority = %self.board.shown(a), cross_check = %self.board.shown(j), third = %name, reason = %why, "the nodes' copies of a KOB transaction differ and a third node contradicts the chain authority: it is outvoted, nothing of its answer is applied");
                 self.outvoted(start, j, &why).await;
-                Err(format!("{OUTVOTED} 2:1 ({why}); nothing of its answer is applied"))
+                Err(super::BodiesError::refused(format!("{OUTVOTED} 2:1 ({why}); nothing of its answer is applied")))
             }
             Err(no) => {
                 tracing::warn!(authority = %self.board.shown(a), cross_check = %self.board.shown(j), reason = %why, third = %no, "the nodes' copies of a KOB transaction differ and no third node settles it: nothing is applied");
                 self.stalled_on(&self.body_stalls, j);
-                Err(format!("{why}: nothing is applied until they agree ({no})"))
+                Err(super::BodiesError::refused(format!("{why}: nothing is applied until they agree ({no})")))
             }
         }
     }

@@ -237,10 +237,7 @@ async fn an_abort_inside_a_parse_or_a_proof_check_leaves_the_next_wait_the_autho
         assert!(charged(&f).await >= 350, "the authority's time to begin with");
         fail(&f, true);
         let _ = f
-            .ticked(
-                true,
-                f.waiting_on(WAIT_OWN, tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_millis(1_500)))),
-            )
+            .ticked(true, f.waiting_on(WAIT_OWN, tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_millis(1_500)))))
             .await;
         fail(&f, false);
         let c = charged(&f).await;
