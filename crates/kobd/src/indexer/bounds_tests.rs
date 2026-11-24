@@ -2117,3 +2117,32 @@ fn an_ordinary_curve_shows_every_level() {
     let b = serde_json::to_value(book(&conn, &ctx, &token, 200, false).unwrap()).unwrap();
     assert_eq!(b["asks"].as_array().unwrap().len(), 50);
 }
+
+/// R8 (CI): a fill a migration, a compaction or an import copied without its priced flag gets it at the next open of the
+/// store, whatever its meta says (a store migrated from a copy carries the meta of the store it came from), so a migrated
+/// store and a replay of its frames answer the same trades.
+#[test]
+fn a_fill_copied_without_its_priced_flag_gets_it_at_the_next_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite3");
+    {
+        let conn = crate::indexer::db::open_writer(&path, "testnet-10").unwrap();
+        honest_book(&conn);
+        let oid: i64 = conn.query_row("SELECT id FROM orders WHERE contract = 'KobAsk' LIMIT 1", [], |r| r.get(0)).unwrap();
+        conn.execute(
+            "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes, detail) \
+             VALUES (?1, 1, 1, 1700000000000, x'01', 0, 'fill', ?2, 1, 1000, 100000000, 0, '{}')",
+            params![oid, id(&conn, &TOKEN_COV)],
+        )
+        .unwrap();
+        // as a copy writes it: no flag, and a meta that came from a store where every fill had one
+        conn.execute("UPDATE order_events SET priced = NULL WHERE kind = 'fill'", []).unwrap();
+        crate::indexer::db::meta_set(&conn, "priced_fills", "1").unwrap();
+    }
+    let conn = crate::indexer::db::open_writer(&path, "testnet-10").unwrap();
+    let priced: i64 =
+        conn.query_row("SELECT COUNT(*) FROM order_events WHERE kind = 'fill' AND priced = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(priced, 1);
+    let ctx = ctx();
+    assert_eq!(market::trades(&conn, &ctx, &Hash32(TOKEN_COV), Some(3), None, 10).unwrap().items.len(), 1);
+}

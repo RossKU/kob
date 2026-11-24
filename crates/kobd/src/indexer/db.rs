@@ -590,23 +590,23 @@ pub(crate) fn ensure_priced_fills(conn: &Connection) -> DbResult<usize> {
     conn.execute_batch(&format!(
         "CREATE INDEX IF NOT EXISTS order_events_priced ON order_events (token_id, id) WHERE kind = 'fill' AND priced = 1; \
          CREATE INDEX IF NOT EXISTS order_events_priced_ts ON order_events (token_id, ts) WHERE kind = 'fill' AND priced = 1; \
+         CREATE INDEX IF NOT EXISTS order_events_unpriced ON order_events (id) WHERE kind = 'fill' AND priced IS NULL; \
          CREATE TRIGGER IF NOT EXISTS order_events_priced_ins AFTER INSERT ON order_events WHEN NEW.kind = 'fill' BEGIN {} END; \
          CREATE TRIGGER IF NOT EXISTS order_events_priced_upd AFTER UPDATE OF executor_id, amount, price, side, order_id ON order_events \
          WHEN NEW.kind = 'fill' BEGIN {} END;",
         set,
         set
     ))?;
-    if meta_get(conn, "priced_fills")?.as_deref() == Some("1") {
-        return Ok(0);
-    }
+    // Every fill without its flag gets it, at every open, whatever wrote the row (a migration or a compaction copies the
+    // rows without it, an import, a store whose meta came from elsewhere): no marker of "done" is trusted, the rows are
+    // (R8). With none left it is one probe of `order_events_unpriced`.
     let n = conn.execute(
         &format!(
-            "UPDATE order_events SET priced = {} WHERE kind = 'fill' AND priced IS NULL",
+            "UPDATE order_events SET priced = {} WHERE id IN (SELECT id FROM order_events INDEXED BY order_events_unpriced WHERE kind = 'fill' AND priced IS NULL)",
             PRICED_EXPR.replace("e.", "order_events.")
         ),
         [],
     )?;
-    meta_set(conn, "priced_fills", "1")?;
     Ok(n)
 }
 

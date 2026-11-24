@@ -1149,6 +1149,15 @@ pub(crate) fn curve_shown(
     out
 }
 
+/// The table levels of curve `c` that its next `units` base units span (from its current position).
+fn curve_levels_covered(c: &kob_protocol::state::CurveAskState, units: i64) -> i64 {
+    if units <= 0 || c.level_size <= 0 {
+        return 0;
+    }
+    let (from, to) = (c.sold() / c.level_size, (c.sold().saturating_add(units) - 1) / c.level_size);
+    to - from + 1
+}
+
 /// The smallest fill of curve `s` inside its current level (at `price`): its minimum fill, raised to a payout KIP-9
 /// accepts at that price (`proceeds` of `n` units of one level is `ceil(n x (price - tip) / scale)`). `None` when the
 /// level pays nothing (a price at the tip).
@@ -1814,7 +1823,11 @@ pub(crate) fn book_window(conn: &Connection, order_id: i64, dust_below: i64, daa
         take_min: matches!(state, Some(AnyState::KobCurveAsk(_))).then_some(offer.take_min),
         key,
         levels: match &state {
-            Some(AnyState::KobCurveAsk(c)) => curve_shown(c, Some(offer.take_min), usize::MAX).len() as i64,
+            // every table level the shown sequence covers (a bundle covers several): the counts of the statistics
+            Some(AnyState::KobCurveAsk(c)) => {
+                let covered: i64 = curve_shown(c, Some(offer.take_min), usize::MAX).iter().map(|l| l.2.unwrap_or(0)).sum();
+                curve_levels_covered(c, covered)
+            }
             _ => 1,
         },
         pair: None,
