@@ -616,6 +616,9 @@ pub struct Runner<N: NodeApi, S: BookSource> {
     /// when the builder refused it on its own. So one malformed order costs a skipped order, never
     /// the process or the other books.
     pub quarantined_until: BTreeMap<CovId, u64>,
+    /// The outpoint each quarantined order had then: a new state of the order lifts its quarantine
+    /// (R8F3b-3).
+    pub quarantined_at: BTreeMap<CovId, super::book::Outpoint>,
     /// Refunds found unprofitable at their fixed tip, by (order, order outpoint). They are not
     /// built again.
     pub keeper_unprofitable: BTreeSet<(CovId, super::book::Outpoint)>,
@@ -995,6 +998,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             steps: 0,
             frozen_until: BTreeMap::new(),
             quarantined_until: BTreeMap::new(),
+            quarantined_at: BTreeMap::new(),
             keeper_unprofitable: BTreeSet::new(),
             keeper_unprofitable_floor: 0,
             keeper_failed: BTreeMap::new(),
@@ -1664,7 +1668,17 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         excluded.extend(busy_orders(&book.orders, &spent));
         self.frozen_until.retain(|_, until| *until > daa);
         excluded.extend(self.frozen_until.keys().copied());
-        self.quarantined_until.retain(|_, until| *until > daa);
+        // A quarantine ends with its hour, or once the order's state changed (another outpoint).
+        let now_at: BTreeMap<CovId, super::book::Outpoint> = book
+            .orders
+            .iter()
+            .filter(|o| self.quarantined_until.contains_key(&o.id()))
+            .map(|o| (o.id(), super::book::outpoint(&o.order.utxo)))
+            .collect();
+        let at = &self.quarantined_at;
+        self.quarantined_until.retain(|id, until| *until > daa && at.get(id).is_none_or(|a| now_at.get(id).is_none_or(|n| n == a)));
+        let kept = &self.quarantined_until;
+        self.quarantined_at.retain(|id, _| kept.contains_key(id));
         excluded.extend(self.quarantined_until.keys().copied());
         excluded.extend(self.deadline_near.iter().copied());
 
@@ -1699,8 +1713,14 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             let mut match_sent = 0usize;
             for (id, why) in &report.quarantined {
                 tracing::error!(order = %kob_protocol::json::to_hex(id), %why, "order quarantined: left out of the matcher's book");
-                if why == super::engine::PLANNING_PANICKED || why.starts_with(super::engine::REFUSED_BY_THE_BUILDER) {
+                if why == super::engine::PLANNING_PANICKED
+                    || why.starts_with(super::engine::REFUSED_BY_THE_BUILDER)
+                    || why.starts_with(super::engine::REFUSED_BY_THE_ENGINE)
+                {
                     self.quarantined_until.insert(*id, daa.saturating_add(QUARANTINE_DAA));
+                    if let Some(o) = book.orders.iter().find(|o| o.id() == *id) {
+                        self.quarantined_at.insert(*id, super::book::outpoint(&o.order.utxo));
+                    }
                 }
                 rep.quarantined += 1;
             }

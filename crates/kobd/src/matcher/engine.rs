@@ -454,6 +454,11 @@ pub const PLANNING_PANICKED: &str = "planning panicked";
 /// same way every time it is planned.
 pub const REFUSED_BY_THE_BUILDER: &str = "refused by the builder";
 
+/// Reason prefix of an order quarantined because the script engine refused its input
+/// ([`named_victim`], R8F3b-3): planned again every tick, it would cost an attempt each time. The
+/// runner keys the quarantine by the order's outpoint, so a changed order state lifts it.
+pub const REFUSED_BY_THE_ENGINE: &str = "refused by the script engine";
+
 /// The leg that a lowering error names as the order at fault.
 ///
 /// The batch builder (`kob_protocol::build`) names the leg of a refusal that depends on that order
@@ -980,6 +985,11 @@ impl<'a> Tick<'a> {
                         token_why = Some(why);
                     }
                     if let Some(v) = named_victim(&plan, &lowered, &e) {
+                        // Quarantined like a builder refusal, unless it is a continuation of this
+                        // tick's own transactions (R8F3b-3).
+                        if !self.unaccepted.contains(&v) && !report.quarantined.iter().any(|q| q.0 == v) {
+                            report.quarantined.push((v, format!("{REFUSED_BY_THE_ENGINE}: {e}")));
+                        }
                         ex.insert(v);
                         probe.clear();
                         continue;
@@ -1119,6 +1129,17 @@ impl<'a> Tick<'a> {
             }
         }
         // No single order explains it. Those books wait for the next tick, and the process lives.
+        // So do the pair orders, which belong to no book: one beyond the tries would otherwise make
+        // every later pass of the tick panic again, until the tick's budget (R8F3b-6).
+        let pairs: Vec<CovId> =
+            self.by_id.values().filter(|o| o.order.state.is_pair()).map(|o| o.id()).filter(|id| !self.excluded.contains(id)).collect();
+        if !pairs.is_empty() {
+            tracing::warn!(
+                orders = pairs.len(),
+                "planning panicked and no single order explains it: the pair orders wait for the next tick"
+            );
+            self.excluded.extend(pairs);
+        }
         if books_of.is_empty() {
             books_of = books(&self.by_id.values().cloned().collect::<Vec<_>>()).into_keys().collect();
         }
