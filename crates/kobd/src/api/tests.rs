@@ -34,6 +34,10 @@ struct Env {
     state: ApiState,
 }
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
+}
+
 fn env(tweak: impl FnOnce(&mut ApiConfig)) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.sqlite3");
@@ -44,6 +48,8 @@ fn env(tweak: impl FnOnce(&mut ApiConfig)) -> Env {
         s.state = FollowerState::Following;
         s.node_daa = Some(1000);
         s.cursor_daa = 990;
+        // The cursor block's verified time, a second ago: `lag_seconds` is its age.
+        s.cursor_time_unix_ms = Some(now_ms() - 1_000);
     });
     let mut cfg = ApiConfig::default();
     cfg.rate_limit.per_ip_rps = 0.0;
@@ -231,7 +237,7 @@ async fn health_and_ready() {
     assert_eq!(v["ok"], true);
     assert_eq!(v["caught_up"], true, "the matcher plans only while the store is caught up");
     assert_eq!(v["lag_daa"], 10);
-    assert_eq!(v["lag_seconds"], 1);
+    assert!(v["lag_seconds"].as_u64().is_some_and(|l| (1..=5).contains(&l)), "the cursor block's age: {v}");
     assert!(v["alarms"].as_array().unwrap().is_empty());
     assert_eq!(v["counters"]["orders_total"], 7);
     assert_eq!(v["counters"]["orders_by_status"]["open"], 5);
@@ -247,9 +253,19 @@ async fn health_and_ready() {
     let (s, v) = get(&app, "/v1/health/ready").await;
     assert_eq!((s, &v["ready"]), (StatusCode::OK, &Value::Bool(true)));
 
-    // 2 hours behind: alarm at 1h, not ready, health still 200.
+    // The node claims to be 2 hours ahead of a current cursor: its claim is shown (`lag_daa`) and
+    // decides nothing (R7B-M1).
+    e.state.health.update(|h| h.node_daa = Some(990 + 2 * 3600 * 10));
+    let (s, v) = get(&app, "/v1/health").await;
+    assert_eq!((s, &v["ok"], v["lag_daa"].as_u64()), (StatusCode::OK, &Value::Bool(true), Some(2 * 3600 * 10)));
+    assert!(v["lag_seconds"].as_u64().is_some_and(|l| l <= 5) && v["alarms"].as_array().unwrap().is_empty(), "{v}");
+    let (s, _) = get(&app, "/v1/health/ready").await;
+    assert_eq!(s, StatusCode::OK);
+
+    // The cursor block 2 hours old by the local clock: alarm at 1h, not ready, health still 200.
     e.state.health.update(|h| {
-        h.node_daa = Some(990 + 2 * 3600 * 10);
+        h.node_daa = Some(1000);
+        h.cursor_time_unix_ms = Some(now_ms() - 2 * 3_600_000);
     });
     let (s, v) = get(&app, "/v1/health").await;
     assert_eq!(s, StatusCode::OK);
@@ -263,6 +279,7 @@ async fn health_and_ready() {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
     e.state.health.update(|h| {
         h.node_daa = Some(1000);
+        h.cursor_time_unix_ms = Some(now - 1_000);
         h.last_progress_unix_ms = now - 660_000;
     });
     let (_, v) = get(&app, "/v1/health").await;

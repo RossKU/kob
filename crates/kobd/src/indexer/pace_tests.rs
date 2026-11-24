@@ -186,3 +186,75 @@ async fn a_halted_network_under_a_public_pair_costs_only_handovers() {
     assert!(age().is_some_and(|a| a <= 400), "fresh again: {:?}", age());
     assert!(took <= Duration::from_millis(1_200 + 400 + 3_000), "fresh {took:?} after blocks came again");
 }
+
+/// R7C1-M2, R7DF-1: a follower on a single mock node for the tests of waits that end in the middle.
+fn wait_follower() -> Follower<MockNode> {
+    let node = MockNode::new("testnet-10");
+    node.push_empty(3);
+    let ingest =
+        Arc::new(Mutex::new(Ingest::new(crate::indexer::db::open_memory("testnet-10").unwrap(), crate::testkit::processor(), None)));
+    let health = Arc::new(HealthState::new("testnet-10"));
+    let (events, _) = broadcast::channel(8);
+    let cfg = FollowerConfig::from_indexer(&crate::config::IndexerConfig { network: "testnet-10".into(), ..Default::default() });
+    Follower::new(node, ingest, cfg, health, events)
+}
+
+/// The running time that 400 ms of a wait on nobody in particular adds: all of it is the authority's.
+async fn charged(f: &Follower<MockNode>) -> u64 {
+    f.tick();
+    let r0 = f.rule().run_ms;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    f.tick();
+    f.rule().run_ms - r0
+}
+
+fn fail(f: &Follower<MockNode>, on: bool) {
+    f.rule().failed = on.then(|| "the test's failed period".to_string());
+}
+
+/// R7C1-M2, R7DF-1: the abort of a step (the rule found the authority failing) inside the wait for the cross-checking
+/// node's copies (`confirm_bodies`) leaves no label behind: the next wait is the authority's time again. Before, the
+/// label stayed on "other" for good, and the authority's period never ran again until a restart.
+#[tokio::test]
+async fn an_abort_inside_the_cross_checking_nodes_copies_leaves_the_next_wait_the_authoritys() {
+    let f = wait_follower();
+    assert!(charged(&f).await >= 350, "the authority's time to begin with");
+    fail(&f, true);
+    let r = f.ticked(true, f.waiting_on(WAIT_OTHER, tokio::time::sleep(Duration::from_secs(5)))).await;
+    fail(&f, false);
+    assert!(r.is_none(), "given up");
+    let c = charged(&f).await;
+    assert!(c >= 350, "after the cross-checking node's wait was given up: {c} ms of 400 charged");
+}
+
+/// R7C1-M2, R7DF-1: the same for the parse of an answer and the local proof check (kobd's own CPU on the blocking
+/// pool): such a wait is now let run to its end, and either way the next wait is the authority's. Before, an abort
+/// inside one left the label on "own" for good.
+#[tokio::test]
+async fn an_abort_inside_a_parse_or_a_proof_check_leaves_the_next_wait_the_authoritys() {
+    for what in ["the parse", "the proof check"] {
+        let f = wait_follower();
+        assert!(charged(&f).await >= 350, "the authority's time to begin with");
+        fail(&f, true);
+        let _ = f
+            .ticked(true, f.waiting_on(WAIT_OWN, tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_millis(1_500)))))
+            .await;
+        fail(&f, false);
+        let c = charged(&f).await;
+        assert!(c >= 350, "after {what}: {c} ms of 400 charged");
+    }
+}
+
+/// R7C1-M2: a database task whose wait is dropped (a step given up, a shutdown) leaves no count behind. Before, the
+/// follower's own work stayed counted for good: no time was the authority's again, and no step could be given up.
+#[tokio::test]
+async fn a_dropped_database_wait_leaves_the_next_wait_the_authoritys() {
+    let f = wait_follower();
+    assert!(charged(&f).await >= 350, "the authority's time to begin with");
+    let dropped =
+        tokio::time::timeout(Duration::from_millis(200), f.blocking(|_| std::thread::sleep(Duration::from_millis(600)))).await;
+    assert!(dropped.is_err(), "dropped");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let c = charged(&f).await;
+    assert!(c >= 350, "after a dropped database wait: {c} ms of 400 charged");
+}

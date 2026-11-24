@@ -163,8 +163,9 @@ fn unix_ms() -> u64 {
 pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
     let snap = app.state.health.snapshot();
     let lag_daa = snap.lag_daa();
-    // At least the cursor block's age by the local clock: the node's position is its word (R4C1-M1).
-    let lag_seconds = snap.lag_seconds(app.state.daa_per_second, unix_ms());
+    // The cursor block's age by the local clock alone: the node's position (`lag_daa`) is its
+    // unverified word and decides nothing here (R4C1-M1, R7B-M1).
+    let lag_seconds = snap.lag_seconds(unix_ms());
     let mut hours = app.state.lag_alarm_hours.clone();
     hours.sort_unstable();
     let alarms: Vec<Value> = hours
@@ -284,7 +285,7 @@ pub async fn metrics(State(app): State<Arc<App>>) -> ApiResult {
 /// answers 503.
 pub async fn ready(State(app): State<Arc<App>>) -> ApiResult {
     let snap = app.state.health.snapshot();
-    let lag_seconds = snap.lag_seconds(app.state.daa_per_second, unix_ms());
+    let lag_seconds = snap.lag_seconds(unix_ms());
     let min_alarm = app.state.lag_alarm_hours.iter().copied().min();
     let (ready, reason) = match snap.state {
         FollowerState::Following | FollowerState::CatchingUp if snap.stale(unix_ms()) => (false, "no progress for 10 minutes"),
@@ -292,7 +293,7 @@ pub async fn ready(State(app): State<Arc<App>>) -> ApiResult {
             (false, "the chain authority does not keep up with real time")
         }
         FollowerState::Following | FollowerState::CatchingUp => match (lag_seconds, min_alarm) {
-            (None, _) => (false, "node position unknown"),
+            (None, _) => (false, "the cursor block's time is not known yet"),
             (Some(l), Some(h)) if l >= h * 3600 => (false, "indexer lag above the first alarm threshold"),
             _ => (true, "ok"),
         },

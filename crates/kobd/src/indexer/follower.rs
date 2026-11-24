@@ -71,7 +71,7 @@
 //! clock (R4C1-M1, R5C1-M1, R5C1-M2). No field of any answer of the authority (its sink, its
 //! virtual DAA score, "more follows", an empty answer, how long it took) and no claim of another
 //! node enters it.
-//! - The *lag* is the local monotonic clock (as Unix ms) minus that header time.
+//! - The *lag* is the local wall clock (Unix ms) minus that header time.
 //! - While the lag is at most [`FollowerConfig::authority_lag_tolerance`] (90 s), the authority
 //!   keeps up.
 //! - Above it, the authority must gain on real time: over every
@@ -92,21 +92,37 @@
 //!   away each time) only once its successor keeps up after serving chain stamped between the
 //!   cursor block (plus the tolerance) and the deposal: chain that existed and was held back. A
 //!   halted network serves none, so it strikes no one.
-//! - The running time is the follower's own: it advances while a step or the pause after it
-//!   runs, in ticks of at most [`PAUSE_CAP`]. Whatever a node takes to answer is in it (every wait
-//!   on a node is a wait inside a step), the follower's own database work is not, and a gap
-//!   longer than [`PAUSE_CAP`] (the process stopped, the host asleep, a commit or a storage error
-//!   that took that long) starts the period again from the lag at that moment (R5C1-L1).
+//! - The running time is the authority's: it advances, in ticks of a second, while the
+//!   follower waits on the authority (its calls, the pause after a normal step, the backoff after
+//!   its failure). Time that is not the authority's moves the period's starting lag up by as much
+//!   instead, so the lag it adds is not charged either. Only kobd's own code says whose time it
+//!   is, by guards around its own awaits and by the failure's origin set where kobd raises it,
+//!   never from what a node sent (R7C1-M1, R7C1-M2). Not the authority's are only:
+//!   - kobd's own work: its database tasks, the parse of an answer and the local proof checks
+//!     (CPU), and the backoff after its own failure (a database error, a storage error);
+//!   - a cross-checking node's: its copies of KOB transactions, and the backoff after kobd's own
+//!     refusal to go on unvouched (`rpc::RpcError::Unvouched`, a `rpc::BodiesError` that waits),
+//!     which ends after `multi::CrossCheckPolicy::single_after` (120 s) at most.
+//!
+//!   While the authority's calls run at the same time as another node's, the time is the
+//!   authority's. Every error, timeout or malformed answer of an authority call is the
+//!   authority's. A gap longer than [`PAUSE_CAP`] between ticks or between the two clocks (the
+//!   process stopped, the host asleep, a clock step) and a database task that took that long
+//!   start the period again from the lag at that moment (R5C1-L1).
+//! - A backstop bounds the mix: a period that began more than [`PERIOD_WALL_MAX`] (30 minutes)
+//!   ago by the wall clock, the lag above the tolerance, fails whoever's time it was. A pause of
+//!   the host starts this clock again; kobd's own slow work does not.
 //! - A new chain authority ([`ChainSource::authority_node`]: a handover, a failover switch, a
 //!   resolver entry on another node) and a restart begin with no period: the new one has one
-//!   period to show the gain.
+//!   period to show the gain. A node that had the role within the last hour of running time,
+//!   deposed or not, goes on with whether it kept up and its excursions (R6C1-I3, R7C1-L2).
 //! - A network that stops making blocks fails every authority the same way: the nodes are handed
 //!   over in turn every period until blocks come again, which costs nothing but the handovers.
 //!
 //! The header time is the proven header's with chain proofs on. With them off it is taken only
 //! from a header that hashes to the block's hash (R5C1-L2), and a time not known counts as not
-//! keeping up. `/v1/health` reports `lag_seconds` as at least the cursor block's age by the local
-//! clock, and `authority_pace` as this rule's verdict.
+//! keeping up. `/v1/health` reports `lag_seconds` as the cursor block's age by the local clock
+//! alone (R7B-M1), and `authority_pace` as this rule's verdict.
 
 /// The start of a retry reason that says a tip reorg took a block of the batch off the chain.
 pub const TIP_REORG: &str = "the batch left the selected parent chain (a tip reorg)";
@@ -162,9 +178,15 @@ pub const PROOF_TOO_DEEP: &str = "the node can no longer prove the chain at the 
 /// pruning point of the node and follows from there with a new follower.
 pub const PRUNED_GAP: &str = "downtime exceeded";
 
+/// The start of the gap reason of a node that knows neither the cursor nor any stored block.
+const NOTHING_KNOWN: &str = "the node does not know the cursor or any stored block: ";
+
 /// Whether a gap reason says the node pruned the history the cursor stood in, see [`PRUNED_GAP`].
+///
+/// By the start of the reason, which kobd writes itself: a node's text inside a reason (its
+/// network name, an error) cannot make it one (R7C1-M1).
 pub fn is_pruned_gap(reason: &str) -> bool {
-    reason.contains(PRUNED_GAP)
+    reason.strip_prefix(NOTHING_KNOWN).unwrap_or(reason).starts_with(PRUNED_GAP)
 }
 
 use super::ingest::{Cursor, Ingest, IngestError};
@@ -217,6 +239,11 @@ pub const PAUSE_CAP: Duration = Duration::from_secs(30);
 pub const EXCURSION_BUDGET: Duration = Duration::from_secs(300);
 /// The rolling window of [`EXCURSION_BUDGET`], on the running time.
 pub const EXCURSION_WINDOW: Duration = Duration::from_secs(3_600);
+
+/// A period that has lasted this long by the wall clock, the lag still above the tolerance, fails
+/// whoever's time it was (R7C1-M1): a backstop, so that no mix of the authority's, another
+/// node's and kobd's own time can hold the role longer. Ordinary periods end long before.
+pub const PERIOD_WALL_MAX: Duration = Duration::from_secs(30 * 60);
 
 /// Whose time the follower waits on (module documentation, *Progress*): the chain authority's,
 /// the only time that runs the progress rule's clock ...
@@ -416,18 +443,25 @@ pub struct Follower<S: ChainSource> {
     /// Tests: the local clock as an instant and the Unix ms it read then ([`Follower::set_clock_at`]).
     /// `None`: the wall clock.
     test_clock: Option<(tokio::time::Instant, u64)>,
-    /// Whose time the follower waits on now ([`WAIT_AUTHORITY`], [`WAIT_OTHER`], [`WAIT_OWN`]).
-    waiting: std::sync::atomic::AtomicU8,
+    /// The waits running now, by whose time they are ([`WAIT_AUTHORITY`], [`WAIT_OTHER`],
+    /// [`WAIT_OWN`]), each counted up by a guard and down when the guard drops, also when its step
+    /// is given up (R7C1-M2). Own waits (the database, kobd's own CPU) are never given up.
+    waits: [std::sync::atomic::AtomicUsize; 3],
+    /// Waits after which the step may not be given up: the bookkeeping of a commit that went
+    /// through (R7C1-L1).
+    no_abort: std::sync::atomic::AtomicUsize,
+    /// Whose failure the step's retry is, set by kobd's own code where it raises the failure, never
+    /// read from an error's text (R7C1-M1): the pause after it is that one's time.
+    fault: std::sync::atomic::AtomicU8,
     /// The cursor whose header time was last asked of the node, and when.
     time_asked: Mutex<Option<(Hash32, tokio::time::Instant)>>,
     /// The progress rule (module documentation, *Progress*).
     rule: Mutex<Rule>,
-    /// The follower's own database tasks running now: their time is not the authority's.
-    own_busy: std::sync::atomic::AtomicUsize,
     /// The cursor the last step stood at.
     cursor_seen: Mutex<Option<Hash32>>,
     /// Since when the chain authority goes on alone, counted in whole seconds
-    /// (`cross_check_alone_secs_total`).
+    /// (`cross_check_alone_secs_total`): from a step's start or end that found it alone to the next
+    /// one that still does, so time not alone in between is not counted (R7C1-I3).
     alone_at: Mutex<Option<tokio::time::Instant>>,
 }
 
@@ -451,6 +485,9 @@ struct Rule {
     failing: bool,
     /// The follower paused: the period starts again at the next check.
     restart: bool,
+    /// The pause was the host's (a gap of the clocks): the period's wall-clock start
+    /// ([`PERIOD_WALL_MAX`]) starts again too. A pause of kobd's own work keeps it.
+    host_pause: bool,
     /// A period that failed, to hand the authority over for: why.
     failed: Option<String>,
     /// When a slow host clock was last warned about.
@@ -465,6 +502,21 @@ struct Rule {
     excursions: std::collections::VecDeque<(u64, u64)>,
     /// The authority deposed last, until its successor shows whether it was to blame.
     blame: Option<Blame>,
+}
+
+impl Rule {
+    /// Keeps the stint of the authority `old` that ends now (whether it kept up, its excursions),
+    /// for an hour of running time: a node that gets the role back within it goes on with them
+    /// (R6C1-I3, R7C1-L2).
+    fn keep_stint(&mut self, old: String) {
+        let kept = (self.kept_up, std::mem::take(&mut self.excursions), self.run_ms);
+        self.kept_up = false;
+        self.past.retain(|(k, _)| *k != old);
+        self.past.push((old, kept));
+        if self.past.len() > 8 {
+            self.past.remove(0);
+        }
+    }
 }
 
 /// What an earlier authority left: whether it kept up, its excursions, and the running time then.
@@ -483,6 +535,23 @@ struct Blame {
     withheld: bool,
 }
 
+/// A count of running waits of one kind, down again when this drops: whatever ends the wait, its
+/// answer or a step given up in the middle (R7C1-M2).
+struct Counted<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl<'a> Counted<'a> {
+    fn up(c: &'a std::sync::atomic::AtomicUsize) -> Self {
+        c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Counted(c)
+    }
+}
+
+impl Drop for Counted<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// A period of the progress rule.
 #[derive(Debug, Clone, Copy)]
 struct Period {
@@ -492,6 +561,9 @@ struct Period {
     start_lag: Option<i64>,
     /// Since when the lag is within the tolerance (running time).
     calm_since: Option<u64>,
+    /// The wall clock (ms) when it began: a period older than [`PERIOD_WALL_MAX`] fails whoever's
+    /// time it was (R7C1-M1).
+    wall_start: u64,
 }
 
 /// How often the free space of the data directory and the size of the database are measured.
@@ -568,29 +640,12 @@ where
 /// A routine failure is the tips of two nodes differing for a moment, until it has repeated as
 /// often as it takes to replace a node (`attempt` failures in a row), and a tip reorg
 /// ([`TIP_REORG`]) that did not repeat yet.
-fn retry_is_routine(reason: &str, attempt: u32) -> bool {
-    // Waiting for a cross-checking node is logged by `rpc::multi` and shown in `/v1/health`.
-    reason.contains(crate::rpc::multi::WAITING_FOR_CROSS_CHECK)
+fn retry_is_routine(reason: &str, attempt: u32, cross_wait: bool) -> bool {
+    // Waiting for a cross-checking node (kobd's own typed verdict, `cross_wait`) is logged by
+    // `rpc::multi` and shown in `/v1/health`. The rest decides only the log level.
+    cross_wait
         || (reason.contains(crate::rpc::multi::TIPS_DIFFER) && attempt < crate::rpc::multi::STALLS_BEFORE_REPLACING)
         || (reason.starts_with(TIP_REORG) && attempt < 3)
-}
-
-/// Whose time the backoff after a failed step is (module documentation, *Progress*): the
-/// follower's own after its own failure (its database, its store), a cross-checking node's while
-/// the authority's answers wait for one, else the authority's.
-fn whose_failure(reason: &str, state: FollowerState) -> u8 {
-    let own = state == FollowerState::StorageError
-        || ["commit failed", "database:", "rewind failed", "chain proof unavailable: database", "the database cannot be written"]
-            .iter()
-            .any(|p| reason.starts_with(p))
-        || reason.contains(": database: ");
-    if own {
-        WAIT_OWN
-    } else if reason.contains(crate::rpc::multi::WAITING_FOR_CROSS_CHECK) {
-        WAIT_OTHER
-    } else {
-        WAIT_AUTHORITY
-    }
 }
 
 fn now_ms() -> u64 {
@@ -643,7 +698,9 @@ impl<S: ChainSource> Follower<S> {
             contradiction_unsynced: std::sync::atomic::AtomicBool::new(false),
             checked_authority: Mutex::new(None),
             test_clock: sim.map(|ms| (tokio::time::Instant::now(), ms)),
-            waiting: std::sync::atomic::AtomicU8::new(WAIT_AUTHORITY),
+            waits: Default::default(),
+            no_abort: std::sync::atomic::AtomicUsize::new(0),
+            fault: std::sync::atomic::AtomicU8::new(WAIT_AUTHORITY),
             time_asked: Mutex::new(None),
             rule: Mutex::new(Rule {
                 run_ms: 0,
@@ -654,6 +711,7 @@ impl<S: ChainSource> Follower<S> {
                 period: None,
                 failing: false,
                 restart: false,
+                host_pause: false,
                 failed: None,
                 clock_warned: None,
                 kept_up: false,
@@ -661,7 +719,6 @@ impl<S: ChainSource> Follower<S> {
                 excursions: Default::default(),
                 blame: None,
             }),
-            own_busy: std::sync::atomic::AtomicUsize::new(0),
             cursor_seen: Mutex::new(None),
             alone_at: Mutex::new(None),
         }
@@ -692,13 +749,36 @@ impl<S: ChainSource> Follower<S> {
     /// another node's ([`WAIT_OTHER`]) or its own ([`WAIT_OWN`]) does not advance the authority's
     /// running time.
     async fn waiting_on<T>(&self, whose: u8, f: impl std::future::Future<Output = T>) -> T {
-        use std::sync::atomic::Ordering::Relaxed;
         self.tick();
-        let before = self.waiting.swap(whose, Relaxed);
+        let _wait = Counted::up(&self.waits[whose as usize]);
         let r = f.await;
         self.tick();
-        self.waiting.store(before, Relaxed);
         r
+    }
+
+    /// Whose time it is now (module documentation, *Progress*): the follower's own while one of its
+    /// own waits runs, else the authority's while a wait on it is marked, else another node's while
+    /// one on another node runs, else the authority's. Only kobd's own guards decide it.
+    fn whose_time(&self) -> u8 {
+        use std::sync::atomic::Ordering::Relaxed;
+        if self.waits[WAIT_OWN as usize].load(Relaxed) > 0 {
+            WAIT_OWN
+        } else if self.waits[WAIT_AUTHORITY as usize].load(Relaxed) == 0 && self.waits[WAIT_OTHER as usize].load(Relaxed) > 0 {
+            WAIT_OTHER
+        } else {
+            WAIT_AUTHORITY
+        }
+    }
+
+    /// The step's retry is `whose` failure (kobd's own call site says so, R7C1-M1).
+    fn fault(&self, whose: u8) {
+        self.fault.store(whose, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A retry after kobd's own failure (its database): the pause after it is its own time.
+    fn own_failure(&self, msg: String) -> StepOutcome {
+        self.fault(WAIT_OWN);
+        StepOutcome::Retry(msg)
     }
 
     /// One tick of the follower's running time (module documentation, *Progress*), then the
@@ -709,10 +789,9 @@ impl<S: ChainSource> Follower<S> {
     /// or between it and the wall clock (a host suspend, a step of the wall clock), is a pause of
     /// the follower, which starts the period again.
     fn tick(&self) {
-        use std::sync::atomic::Ordering::Relaxed;
         let now = tokio::time::Instant::now();
         let wall = self.wall_ms();
-        let whose = if self.own_busy.load(Relaxed) > 0 { WAIT_OWN } else { self.waiting.load(Relaxed) };
+        let whose = self.whose_time();
         let jumped = {
             let mut r = self.rule();
             let gap = now.saturating_duration_since(r.last_tick).as_millis() as i64;
@@ -723,6 +802,7 @@ impl<S: ChainSource> Follower<S> {
             let skew = wall_gap - gap;
             if gap > cap || skew.abs() > cap {
                 r.restart = true;
+                r.host_pause = true;
                 (skew.abs() > cap).then_some(skew)
             } else {
                 if whose == WAIT_AUTHORITY {
@@ -752,7 +832,8 @@ impl<S: ChainSource> Follower<S> {
                 _ = tokio::time::sleep(TICK) => {
                     self.tick();
                     if abort
-                        && self.own_busy.load(std::sync::atomic::Ordering::Relaxed) == 0
+                        && self.waits[WAIT_OWN as usize].load(std::sync::atomic::Ordering::Relaxed) == 0
+                        && self.no_abort.load(std::sync::atomic::Ordering::Relaxed) == 0
                         && self.rule().failed.is_some()
                     {
                         return None;
@@ -781,7 +862,8 @@ impl<S: ChainSource> Follower<S> {
             return PaceState::Unknown;
         };
         let ts = self.cursor_ts.lock().unwrap_or_else(|e| e.into_inner()).filter(|(h, _)| *h == cursor).map(|(_, t)| t);
-        let lag = ts.map(|t| self.wall_ms() as i64 - t as i64);
+        let wall = self.wall_ms();
+        let lag = ts.map(|t| wall as i64 - t as i64);
         // A cursor whose time is not known yet (a start, a rewind, a header that did not hash) is
         // judged at the end of a step, after its header was asked for, not by the ticks before.
         if at_tick && lag.is_none() {
@@ -799,12 +881,7 @@ impl<S: ChainSource> Follower<S> {
                 // A new authority, or the first step: it begins with no period. Whether it kept up
                 // and its excursions follow the node within the hour (R6C1-I3).
                 if let Some(old) = r.authority.take() {
-                    let kept = (r.kept_up, std::mem::take(&mut r.excursions), r.run_ms);
-                    r.past.retain(|(k, _)| *k != old);
-                    r.past.push((old, kept));
-                    if r.past.len() > 8 {
-                        r.past.remove(0);
-                    }
+                    r.keep_stint(old);
                 }
                 let back = r.past.iter().position(|(k, _)| *k == key).map(|i| r.past.remove(i).1);
                 (r.kept_up, r.excursions) = match back {
@@ -819,8 +896,10 @@ impl<S: ChainSource> Follower<S> {
             }
             let run = r.run_ms;
             if std::mem::take(&mut r.restart) {
+                let host = std::mem::take(&mut r.host_pause);
                 if let Some(p) = r.period.as_mut() {
-                    *p = Period { start_ms: run, start_lag: lag, calm_since: None };
+                    let wall_start = if host { wall } else { p.wall_start };
+                    *p = Period { start_ms: run, start_lag: lag, calm_since: None, wall_start };
                 }
                 // The pause is not an excursion of the authority.
                 r.last_check = None;
@@ -857,12 +936,22 @@ impl<S: ChainSource> Follower<S> {
                     PaceState::KeepingUp
                 }
                 _ => {
-                    let p = r.period.get_or_insert(Period { start_ms: run, start_lag: lag, calm_since: None });
+                    let p = r.period.get_or_insert(Period { start_ms: run, start_lag: lag, calm_since: None, wall_start: wall });
                     p.calm_since = None;
                     if p.start_lag.is_none() {
                         p.start_lag = lag;
                     }
-                    if run.saturating_sub(p.start_ms) >= stall {
+                    let wall_max = PERIOD_WALL_MAX.as_millis() as u64;
+                    if wall.saturating_sub(p.wall_start) > wall_max {
+                        // The backstop: so long above the tolerance, whoever's time it was.
+                        r.failed = Some(format!(
+                            "the chain authority does not keep up with real time: the cursor's chain block has been more than {} s behind the local clock for {} minutes",
+                            tol / 1_000,
+                            wall_max / 60_000
+                        ));
+                        r.failing = true;
+                        *p = Period { start_ms: run, start_lag: lag, calm_since: None, wall_start: wall };
+                    } else if run.saturating_sub(p.start_ms) >= stall {
                         let need = (stall / 2) as i64;
                         let gained = matches!((p.start_lag, lag), (Some(a), Some(b)) if a - b >= need);
                         if !gained {
@@ -878,7 +967,7 @@ impl<S: ChainSource> Follower<S> {
                         }
                         gained_period = gained;
                         r.failing = !gained;
-                        *p = Period { start_ms: run, start_lag: lag, calm_since: None };
+                        *p = Period { start_ms: run, start_lag: lag, calm_since: None, wall_start: wall };
                     }
                     // Past the budget of excursions: failing as well, and the budget starts again.
                     if !r.failing && r.kept_up && used > budget {
@@ -1025,6 +1114,8 @@ impl<S: ChainSource> Follower<S> {
         {
             let mut r = self.rule();
             let deposed = r.authority.take().unwrap_or_default();
+            // Its stint is kept: back within the hour, it goes on with its budget spent (R7C1-L2).
+            r.keep_stint(deposed.clone());
             r.blame = Some(Blame { deposed, cursor_ts, at_ms: self.wall_ms(), withheld: false });
             r.period = None;
             r.failing = false;
@@ -1204,10 +1295,9 @@ impl<S: ChainSource> Follower<S> {
     /// it does not count on the running time, and one longer than [`PAUSE_CAP`] (a slow disk) is a
     /// pause of the follower (module documentation, *Progress*).
     async fn blocking<T: Send + 'static>(&self, f: impl FnOnce(&mut Ingest) -> T + Send + 'static) -> T {
-        use std::sync::atomic::Ordering::Relaxed;
         let ing = self.ingest.clone();
         self.tick();
-        self.own_busy.fetch_add(1, Relaxed);
+        let _own = Counted::up(&self.waits[WAIT_OWN as usize]);
         let t0 = tokio::time::Instant::now();
         let r = tokio::task::spawn_blocking(move || f(&mut ing.lock().unwrap_or_else(|e| e.into_inner()))).await;
         if t0.elapsed() > PAUSE_CAP {
@@ -1215,7 +1305,6 @@ impl<S: ChainSource> Follower<S> {
         }
         // The time since the last tick is the follower's own.
         self.tick();
-        self.own_busy.fetch_sub(1, Relaxed);
         r.expect("blocking task panicked")
     }
 
@@ -1253,13 +1342,14 @@ impl<S: ChainSource> Follower<S> {
         // The follower's own failure: its time is not the authority's (module documentation,
         // *Progress*).
         self.rule().restart = true;
+        self.fault(WAIT_OWN);
         self.set_state(FollowerState::StorageError, Some(msg.clone()));
         self.health.update(|h| h.halt_reason = Some(msg.clone()));
         StepOutcome::Retry(msg)
     }
 
     async fn ensure_cursor(&self) -> Result<Cursor, StepOutcome> {
-        if let Some(c) = self.blocking(|i| i.cursor()).await.map_err(|e| StepOutcome::Retry(format!("database: {e}")))? {
+        if let Some(c) = self.blocking(|i| i.cursor()).await.map_err(|e| self.own_failure(format!("database: {e}")))? {
             *self.cursor_seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(c.hash);
             // Its time before the step's requests, so that the ticks meanwhile judge a known lag.
             self.learn_cursor_time(c.hash).await;
@@ -1298,7 +1388,7 @@ impl<S: ChainSource> Follower<S> {
             Ok(())
         })
         .await
-        .map_err(|e: IngestError| StepOutcome::Retry(format!("database: {e}")))?;
+        .map_err(|e: IngestError| self.own_failure(format!("database: {e}")))?;
         if partial {
             self.health.update(|h| {
                 h.book_complete = false;
@@ -1357,6 +1447,19 @@ impl<S: ChainSource> Follower<S> {
         // whatever the authority takes is in it, and a lag that rises above the tolerance while it
         // takes it is seen then (module documentation, *Progress*, R6C1-M1).
         self.tick();
+        // Whose failure a retry of this step is, kobd says at the failure: the authority's unless so.
+        self.fault(WAIT_AUTHORITY);
+        // Alone since the last step ended, and still at this one's start: else the time since is not
+        // counted alone (R7C1-I3).
+        {
+            let alone = self.source.cross_check().alone;
+            let mut at = self.alone_at.lock().unwrap_or_else(|e| e.into_inner());
+            if alone {
+                at.get_or_insert_with(tokio::time::Instant::now);
+            } else {
+                *at = None;
+            }
+        }
         let inner = self
             .ticked(true, async {
                 match self.check_authority().await {
@@ -1368,6 +1471,10 @@ impl<S: ChainSource> Follower<S> {
             .await;
         // Given up on: the authority failed the rule while the follower waited on it.
         let outcome = inner.unwrap_or_else(|| {
+            // The step's waits ended with it: each guard counted itself down as the step was
+            // dropped, so whose time it is now is the neutral state again (R7C1-M2).
+            debug_assert!(self.waits.iter().all(|w| w.load(std::sync::atomic::Ordering::Relaxed) == 0));
+            self.fault(WAIT_AUTHORITY);
             StepOutcome::Retry("the chain authority does not keep up with real time while it answers: the step was given up".into())
         });
         let outcome = self
@@ -1516,7 +1623,7 @@ impl<S: ChainSource> Follower<S> {
                     // The cross-checking node gave no copy of the window's KOB transactions: ask
                     // for a smaller window, as for a timeout of the authority. A fast authority
                     // grows the window, and the copy must not grow with it (R3C1-L1).
-                    if matches!(&o, StepOutcome::Retry(m) if m.contains(crate::rpc::multi::WAITING_FOR_CROSS_CHECK)) {
+                    if self.fault.load(std::sync::atomic::Ordering::Relaxed) == WAIT_OTHER {
                         let window = {
                             let mut w = self.win();
                             w.on_timeout(plan.span);
@@ -1640,9 +1747,11 @@ impl<S: ChainSource> Follower<S> {
                 }
                 if let Err(why) = confirmed {
                     let mut pf = self.prefetch.lock().await;
-                    if why.contains(crate::rpc::multi::WAITING_FOR_CROSS_CHECK) {
+                    if self.fault.load(std::sync::atomic::Ordering::Relaxed) == WAIT_OTHER {
                         pf.shrink();
                     }
+                    // The step goes on with the authority: a failure from here is its own.
+                    self.fault(WAIT_AUTHORITY);
                     pf.discard();
                     drop(pf);
                     tracing::warn!(reason = %why, "window from another node not applied; one step from the cursor");
@@ -1675,6 +1784,8 @@ impl<S: ChainSource> Follower<S> {
                 }
                 let committed = Committed { start, by_window: true, t_fetch: elapsed, t_parse, t_check, end_blue, prefetched: true };
                 let out = self.commit(batch, committed).await;
+                // A batch in the store: the plan's end is kept with it, not given up (R7C1-L1).
+                let _keep = matches!(out, StepOutcome::Applied { .. }).then(|| Counted::up(&self.no_abort));
                 if !matches!(out, StepOutcome::Applied { .. }) {
                     self.prefetch.lock().await.discard();
                 } else if near_sink {
@@ -1767,12 +1878,14 @@ impl<S: ChainSource> Follower<S> {
                 return (raw, verdict, Ok(()));
             }
         };
-        let proved = async {
+        // The lane proofs and merged blocks are asked of the authority while the cross-checking node
+        // may be asked for its copies: that time is the authority's, not the other node's.
+        let proved = self.waiting_on(WAIT_AUTHORITY, async {
             match plan {
                 None => Ok(()),
                 Some(plan) => self.prove_scripts(&proof, &raw, self.prove_lanes(&proof, plan)).await,
             }
-        };
+        });
         let confirmed = self.confirm(start, &raw, origin, confirm);
         let (proved, confirmed) = tokio::join!(proved, confirmed);
         let verdict = self.proof_verdict(&proof, origin, proved).await;
@@ -1959,7 +2072,10 @@ impl<S: ChainSource> Follower<S> {
         let ctx = self
             .blocking(move |i| super::trust::TrustContext::load(i.conn(), i.processor().tokens.clone(), &keys))
             .await
-            .map_err(|e| ProofError::Unavailable(format!("database: {e}")))?;
+            .map_err(|e| {
+                self.fault(WAIT_OWN);
+                ProofError::Unavailable(format!("database: {e}"))
+            })?;
         let blocks = &raw.chain_block_accepted_transactions;
         let mut by_block: std::collections::BTreeMap<Hash32, (Vec<usize>, Vec<&crate::rpc::types::Tx>)> = Default::default();
         for (b, txs) in ctx.matters(blocks).into_iter().enumerate() {
@@ -2006,7 +2122,10 @@ impl<S: ChainSource> Follower<S> {
         let ctx = self
             .blocking(move |i| super::trust::TrustContext::load(i.conn(), i.processor().tokens.clone(), &keys))
             .await
-            .map_err(|e| format!("database: {e}"))?;
+            .map_err(|e| {
+                self.fault(WAIT_OWN);
+                format!("database: {e}")
+            })?;
         let flags = ctx.flag(&raw.chain_block_accepted_transactions);
         let runs = flag_runs(&flags, start, &raw.added_chain_block_hashes);
         let flagged = flags.iter().filter(|f| **f).count() as u64;
@@ -2022,6 +2141,7 @@ impl<S: ChainSource> Follower<S> {
         // header.
         let sink_blue = self.source.sink_blue_score().await.map_err(|e| {
             self.chain_failed("the primary's sink", &e);
+            self.fault(WAIT_AUTHORITY);
             format!("the primary's sink: {e}")
         })?;
         let hashes = &raw.added_chain_block_hashes;
@@ -2077,7 +2197,10 @@ impl<S: ChainSource> Follower<S> {
         let ctx = self
             .blocking(move |i| super::trust::TrustContext::load(i.conn(), i.processor().tokens.clone(), &keys))
             .await
-            .map_err(|e| format!("database: {e}"))?;
+            .map_err(|e| {
+                self.fault(WAIT_OWN);
+                format!("database: {e}")
+            })?;
         let flags = ctx.flag(&raw.chain_block_accepted_transactions);
         let blocks = &raw.chain_block_accepted_transactions;
         let runs: Vec<crate::rpc::BodyRun> = flag_runs(&flags, start, &raw.added_chain_block_hashes)
@@ -2097,7 +2220,11 @@ impl<S: ChainSource> Follower<S> {
         }
         // The cross-checking node's time, not the authority's: a node that stalls its copies is benched
         // and rotated for it, and must not get the authority deposed (R6C1-L3).
-        self.waiting_on(WAIT_OTHER, self.source.confirm_bodies(start, raw, &runs)).await.map(|_| ())
+        self.waiting_on(WAIT_OTHER, self.source.confirm_bodies(start, raw, &runs)).await.map(|_| ()).map_err(|e| {
+            // kobd's own verdict says whose the failure is, never its text (R7C1-M1).
+            self.fault(if e.waiting { WAIT_OTHER } else { WAIT_AUTHORITY });
+            e.why
+        })
     }
 
     fn record_fetch(&self, batch: &VspcBatch, t_fetch: std::time::Duration) {
@@ -2146,6 +2273,10 @@ impl<S: ChainSource> Follower<S> {
         let t_commit = t1.elapsed();
         match applied {
             Ok(a) => {
+                // The batch is in the store: its bookkeeping (the cursor's time, the health report,
+                // the answer of the authority, the floor, the notices) is not given up half done
+                // (R7C1-L1). Its awaits are the store's and small node calls (`SMALL_CALL_TIMEOUT`).
+                let _keep = Counted::up(&self.no_abort);
                 self.contradiction_unsynced.store(false, std::sync::atomic::Ordering::Relaxed);
                 if withheld {
                     if let Some(b) = self.rule().blame.as_mut() {
@@ -2308,6 +2439,9 @@ impl<S: ChainSource> Follower<S> {
             Err(e) => match super::db::storage_problem(&e) {
                 Some(what) => self.storage_error(what, &e),
                 None => {
+                    // Not a storage problem: no sign it is kobd's own, and the batch came from the
+                    // authority, so the pause after it is the authority's time (R7C1-M1).
+                    self.fault(WAIT_AUTHORITY);
                     let msg = format!("commit failed: {e}");
                     self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
                     StepOutcome::Retry(msg)
@@ -2317,7 +2451,11 @@ impl<S: ChainSource> Follower<S> {
     }
 
     async fn on_rpc_error(&self, e: RpcError) -> StepOutcome {
-        // Every caller asked the chain authority.
+        // Every caller asked the chain authority. Whatever it answered (an error, a timeout, an
+        // answer that does not decode) is its failure, and the pause after it its time; only kobd's
+        // own refusal to go on unvouched (`RpcError::Unvouched`, raised by `rpc::multi` itself) is
+        // the cross-checking node's (R7C1-M1).
+        self.fault(if matches!(e, RpcError::Unvouched(_)) { WAIT_OTHER } else { WAIT_AUTHORITY });
         self.chain_failed("a chain request", &e);
         let mut kind = e.kind();
         if matches!(kind, NodeErrorKind::UnknownHash | NodeErrorKind::RetentionRootMissing) {
@@ -2404,7 +2542,7 @@ impl<S: ChainSource> Follower<S> {
         let limit = self.cfg.max_walkback_blocks as usize;
         let candidates = match self.blocking(move |i| i.stored_blocks_desc(limit)).await {
             Ok(c) => c,
-            Err(e) => return StepOutcome::Retry(format!("database: {e}")),
+            Err(e) => return self.own_failure(format!("database: {e}")),
         };
         // Knowledge is monotone along the chain, because a node that knows a block knows its
         // ancestors. So the newest known stored block is found by bisection: O(log n) node calls
@@ -2449,10 +2587,10 @@ impl<S: ChainSource> Follower<S> {
                     StepOutcome::Rewound { blocks: a.reverted_rows_blocks }
                 }
                 Err(e @ IngestError::Log(_)) => self.halt(&e),
-                Err(e) => StepOutcome::Retry(format!("rewind failed: {e}")),
+                Err(e) => self.own_failure(format!("rewind failed: {e}")),
             };
         }
-        let msg = format!("the node does not know the cursor or any stored block: {PRUNED_GAP} pruning, or the node was reset");
+        let msg = format!("{NOTHING_KNOWN}{PRUNED_GAP} pruning, or the node was reset");
         self.health.update(|h| {
             h.state = FollowerState::Gap;
             h.gap_reason = Some(msg.clone());
@@ -2517,7 +2655,7 @@ impl<S: ChainSource> Follower<S> {
                 }
                 StepOutcome::Retry(r) => {
                     failures = failures.saturating_add(1);
-                    if retry_is_routine(r, failures) {
+                    if retry_is_routine(r, failures, self.fault.load(std::sync::atomic::Ordering::Relaxed) == WAIT_OTHER) {
                         tracing::debug!(attempt = failures, "{r}");
                     } else {
                         tracing::warn!(attempt = failures, "{r}");
@@ -2565,7 +2703,8 @@ impl<S: ChainSource> Follower<S> {
             // failure its own, after a cross-checking node's its, else the authority's (a poll
             // after a normal step, a backoff after the authority's failure).
             let whose = match &outcome {
-                StepOutcome::Retry(r) => whose_failure(r, self.health.snapshot().state),
+                // Set by kobd at the failure itself, never read from its text (R7C1-M1).
+                StepOutcome::Retry(_) => self.fault.load(std::sync::atomic::Ordering::Relaxed),
                 _ => WAIT_AUTHORITY,
             };
             tokio::select! {
@@ -2664,10 +2803,11 @@ mod tests {
     #[test]
     fn differing_tips_warn_only_when_they_repeat() {
         let r = format!("node error: {TIPS_DIFFER} (chain block #0 differs): nothing is indexed until they agree");
-        assert!(retry_is_routine(&r, 1) && retry_is_routine(&r, 2));
-        assert!(!retry_is_routine(&r, 3));
-        assert!(!retry_is_routine("node error: the nodes disagree on the next chain block (x): nothing is indexed", 1));
-        assert!(!retry_is_routine("transport: closed", 1));
+        assert!(retry_is_routine(&r, 1, false) && retry_is_routine(&r, 2, false));
+        assert!(!retry_is_routine(&r, 3, false));
+        assert!(!retry_is_routine("node error: the nodes disagree on the next chain block (x): nothing is indexed", 1, false));
+        assert!(retry_is_routine("node error: anything", 1, true));
+        assert!(!retry_is_routine("transport: closed", 1, false));
     }
 
     /// The follower runs the chain proofs on a real recorded batch (`rpc::proof` fixtures): the
@@ -2993,7 +3133,8 @@ mod tests {
                     StepOutcome::Retry(m) => m,
                     _ => unreachable!(),
                 },
-                1
+                1,
+                false
             ));
             assert_eq!(src.asked.lock().unwrap().len(), 1 + TIP_REORG_REFETCHES as usize);
             assert_eq!(cursor(&ingest), src.fx.start, "nothing applied");

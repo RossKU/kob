@@ -1431,7 +1431,7 @@ async fn idle_polls_from_an_old_cursor_turn_the_authority_failing_after_one_peri
     assert!(s.stale(at + kobd::indexer::status::STALE_AFTER_MS + 1));
     assert!(!s.caught_up() && !s.within_lag_tolerance(), "the executor plans nothing");
     let age = (now_ms() - s.cursor_time_unix_ms.expect("the cursor block's time")) / 1_000;
-    assert!(age > 3_600 && s.lag_seconds(10, now_ms()) >= Some(age), "{:?} {age}", s.lag_seconds(10, now_ms()));
+    assert!(age > 3_600 && s.lag_seconds(now_ms()) >= Some(age), "{:?} {age}", s.lag_seconds(now_ms()));
     assert_eq!(s.lag_daa(), Some(0), "the node says the cursor is at its sink");
 }
 
