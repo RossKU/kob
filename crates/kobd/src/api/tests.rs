@@ -3380,7 +3380,7 @@ async fn a_node_claim_ahead_or_behind_changes_no_public_answer() {
 #[tokio::test]
 async fn every_public_read_ends_at_the_read_budget() {
     use kob_protocol::state::{AnyState, AskState};
-    let e = env(|c| c.metrics = true);
+    let mut e = env(|c| c.metrics = true);
     seed_pair(&e.w);
     let ask = AskState { token_cov_id: [TOKEN; 32], ..crate::testkit::ask(2, 130_000_000) };
     seed_live(&e.w, 0x51, &AnyState::KobAsk(ask), 4, 10 * W);
@@ -3435,7 +3435,28 @@ async fn every_public_read_ends_at_the_read_budget() {
         params![n, cid(TOKEN)],
     )
     .unwrap();
+    // R9C2b-5: the honest reads over junk aimed at them. The junk orders are the maker's, of the token, and cancelled, so
+    // a status read of them runs in history order (`orders?maker&token&status=cancelled`); and the registry is open, with
+    // 30,000 fake open tokens a strict program names (`/v1/tokens` reads its open list at its caps).
+    e.w.execute(
+        "WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?1) \
+         INSERT INTO order_state (order_id, status, filled_amount, remaining_amount, amount_exact, state_known, last_block, last_daa) \
+         SELECT o.id, 'cancelled', 0, 0, 1, 1, 8, 800 FROM k JOIN orders o ON o.covenant_id = CAST(printf('o%031d', k.i) AS BLOB)",
+        params![n],
+    )
+    .unwrap();
+    let tpl = Hash32(kob_protocol::artifacts::token_template(kob_protocol::artifacts::TemplateId::Kcc20Ref).hash);
+    e.w.execute(
+        "WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < 30000) \
+         INSERT INTO token_events (token_cov_id, tpl_hash, ext_commit, kind, txid, block_seq, daa) \
+         SELECT CAST(printf('x%031d', i) AS BLOB), ?1, NULL, 'seen', x'00', 9, 900 FROM k",
+        params![tpl.0.to_vec()],
+    )
+    .unwrap();
     e.w.execute_batch("COMMIT").unwrap();
+    let strict = crate::tokens::StrictTemplate { id: "kcc20-ref".into(), family: kob_protocol::Family::Kcc20, powers: vec![] };
+    let entries = e.state.tokens.list().into_iter().cloned().collect::<Vec<_>>();
+    e.state.tokens = Arc::new(TokenAllowlist::from_entries(entries).with_strict_templates([(tpl, strict)]));
     e.state.generation.bump();
     let t = h(TOKEN);
     let routes = [
@@ -3453,6 +3474,7 @@ async fn every_public_read_ends_at_the_read_budget() {
         format!("/v1/orders?token={t}&status=cancelled&limit=200"),
         format!("/v1/orders?maker={}&status=active&limit=200", h(MAKER)),
         format!("/v1/orders?maker={}&token={t}&status=active&limit=200", h(MAKER)),
+        format!("/v1/orders?maker={}&token={t}&status=cancelled&limit=200", h(MAKER)),
         format!("/v1/pairs/{}/{}/orders?limit=200", h(BASE), h(QUOTE)),
         format!("/v1/orders/{}", h(0x51)),
         format!("/v1/orders/{}/events?limit=200", h(0x51)),
@@ -3464,6 +3486,7 @@ async fn every_public_read_ends_at_the_read_budget() {
         format!("/v1/pairs/{}/{}/candles?interval=1m&from=0&limit=1500", h(BASE), h(QUOTE)),
         format!("/v1/pairs/{}/{}/fills?limit=200", h(BASE), h(QUOTE)),
         format!("/v1/tokens/{t}/declaration"),
+        format!("/v1/tokens/{t}"),
         "/v1/creator-locks?due=1800000000000".to_string(),
     ];
     let app = router(e.state.clone());
@@ -3472,6 +3495,7 @@ async fn every_public_read_ends_at_the_read_budget() {
     // the token
     let honest = |r: &str| {
         r == "/v1/tokens"
+            || r == format!("/v1/tokens/{t}")
             || r.starts_with("/v1/books/")
             || r.starts_with("/v1/depth/")
             || r.contains("&token=")

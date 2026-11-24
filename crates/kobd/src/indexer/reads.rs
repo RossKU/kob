@@ -279,26 +279,36 @@ fn claims_another_program(conn: &Connection, token: &[u8], tpl: &[u8]) -> DbResu
     })
 }
 
-/// Most of a token's orders (oldest first) that [`market_scale`] reads. Small (R8C2b-2): the list reads it for each of up
-/// to [`OPEN_TOKEN_ROWS_MAX`] open tokens, so each costs a few dozen index entries whatever orders anyone placed on it;
-/// the first orders of a market set its scale, so the oldest few say it.
+/// Most of a token's oldest orders that [`market_scale`] reads when the token has no listed order at all. Small
+/// (R8C2b-2): the token list reads it for each open token.
 pub const MARKET_SCALE_SCAN_MAX: i64 = 16;
 
 /// The price scale of the market of a token without `decimals`.
 ///
 /// It is the scale of the earliest listed order, open or ended, because the first order of the
-/// token set it. If none of the oldest [`MARKET_SCALE_SCAN_MAX`] orders was listed, it is the
-/// scale of the earliest order. `None` when no order of the token was ever seen. Imported history
-/// (`genesis_block` 0) counts as the oldest. Only scales an order can have (powers of ten up to
-/// 10^9) count. The read is bounded to the oldest rows of the token (index
-/// `orders_token_genesis`).
+/// token set it: one seek of `orders_listed_genesis`, whatever unlisted orders came before it, so
+/// no number of cheap unlisted placements moves it once a listed order exists (R9C2b-3). A token
+/// with no listed order takes the earliest of its oldest [`MARKET_SCALE_SCAN_MAX`] orders (there is
+/// no market yet; its first listed order then sets the scale). `None` when no order of the token
+/// was ever seen. Imported history (`genesis_block` 0) counts as the oldest. Only scales an order
+/// can have (powers of ten up to 10^9) count.
 pub fn market_scale(conn: &Connection, cov: &[u8]) -> DbResult<Option<i64>> {
-    let mut st = conn.prepare_cached(
-        "SELECT scale FROM (SELECT scale, listed, genesis_block, covenant_id FROM orders WHERE token_id = (SELECT id FROM ids WHERE h = ?1) \
-         ORDER BY genesis_block, covenant_id LIMIT ?2) \
-         WHERE scale IN (1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000) \
-         ORDER BY listed DESC, genesis_block, covenant_id LIMIT 1",
-    )?;
+    const SCALES: &str = "(1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000)";
+    // a listed order's scale is one a listing accepted, so the earliest listed order is the answer
+    let listed = conn
+        .prepare_cached(&format!(
+            "SELECT scale FROM orders INDEXED BY orders_listed_genesis WHERE listed = 1 \
+             AND token_id = (SELECT id FROM ids WHERE h = ?1) AND scale IN {SCALES} ORDER BY genesis_block, covenant_id LIMIT 1"
+        ))?
+        .query_row(rusqlite::params![cov], |r| r.get(0))
+        .optional()?;
+    if listed.is_some() {
+        return Ok(listed);
+    }
+    let mut st = conn.prepare_cached(&format!(
+        "SELECT scale FROM (SELECT scale, genesis_block, covenant_id FROM orders WHERE token_id = (SELECT id FROM ids WHERE h = ?1) \
+         ORDER BY genesis_block, covenant_id LIMIT ?2) WHERE scale IN {SCALES} ORDER BY genesis_block, covenant_id LIMIT 1"
+    ))?;
     Ok(st.query_row(rusqlite::params![cov, MARKET_SCALE_SCAN_MAX], |r| r.get(0)).optional()?)
 }
 
@@ -384,13 +394,40 @@ pub fn token_list(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<Vec<To
     Ok(token_list_page(conn, tokens)?.0)
 }
 
-/// The tokens of `GET /v1/tokens`: the allowlist's tokens, then the open list, and whether the open list was cut at
-/// [`OPEN_TOKEN_ROWS_MAX`] (R8C2b-2: the list says `truncated` and keeps the tokens the chain proves first, never fails).
+/// The open tokens the chain proves that the first pass of the open list reads at most ([`proven_open_tokens`]).
 ///
-/// Each view carries the open ask and bid counts and the decimals of its token. The work per open token is a constant
-/// number of index seeks ([`MARKET_SCALE_SCAN_MAX`], the two side counts of fillable book rows), so the whole list is
-/// bounded by the cap, whatever orders and placements its tokens have.
+/// A proven token is one with a holding: an output its token covenant created, decoded under a strict-list program
+/// (`holding_programs`). Creating one takes a token genesis and its holding's carrier, so a flood of them costs a real
+/// token each (R9C2b-2).
+pub const PROVEN_TOKENS_MAX: usize = 2_000;
+
+/// The VM steps the open part of the token list may spend on the tokens the chain does not prove (R9C2b-1): past them the
+/// second pass stops and the answer says `truncated`. With the first pass at its cap, the whole list stays well under
+/// the read budget (`db::READ_BUDGET_STEPS`; measured in `docs/ops/api-bounds.md`).
+pub const OPEN_LIST_STEPS_MAX: u64 = 2_000_000;
+
+/// The tokens of `GET /v1/tokens`: the allowlist's tokens, then the open list, and whether the open list was cut.
+///
+/// The open list is read in two passes (R9C2b-2). The first reads the tokens the chain proves, from `holding_programs`
+/// (oldest first, at most [`PROVEN_TOKENS_MAX`]), so no number of placements on other covenant ids can push one out.
+/// The second reads the tokens only placements name, at most [`OPEN_TOKEN_ROWS_MAX`] rows and [`OPEN_LIST_STEPS_MAX`]
+/// VM steps (R9C2b-1). Either cut says `truncated`; the list never fails for its size. Each view carries the open ask
+/// and bid counts and the decimals of its token, a constant number of index seeks ([`MARKET_SCALE_SCAN_MAX`], the two
+/// side counts of fillable book rows). A token left out is still answered by `GET /v1/tokens/{covenant_id}`
+/// ([`token_view`]).
 pub fn token_list_page(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<(Vec<TokenView>, bool)> {
+    token_list_of(conn, tokens, None)
+}
+
+/// `GET /v1/tokens/{covenant_id}`: the view of one token as the list gives it (a registry token, or an open token the
+/// chain proves or placements name), whether or not the list's caps reach it (R9C2b-2). `None` for a token the list
+/// would never hold. A few seeks: the token's own claims and holdings, none of any other token.
+pub fn token_view(conn: &Connection, tokens: &TokenAllowlist, cov: &Hash32) -> DbResult<Option<TokenView>> {
+    Ok(token_list_of(conn, tokens, Some(&cov.0[..]))?.0.into_iter().next())
+}
+
+/// [`token_list_page`], or with `only` the view of that token alone.
+fn token_list_of(conn: &Connection, tokens: &TokenAllowlist, only: Option<&[u8]>) -> DbResult<(Vec<TokenView>, bool)> {
     let mut truncated = false;
     // The orders the books list: each side of each listed token is counted from the rows of its live
     // book that a taker can fill at the store's DAA score (`book_live`, `open` 1: exact custody, not
@@ -412,6 +449,7 @@ pub fn token_list_page(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<(
     let mut out: Vec<TokenView> = tokens
         .list()
         .into_iter()
+        .filter(|t| only.is_none_or(|o| t.covenant_id.0[..] == *o))
         .map(|t| -> DbResult<TokenView> {
             let id = t.covenant_id.0.to_vec();
             Ok(TokenView {
@@ -437,6 +475,7 @@ pub fn token_list_page(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<(
             })
         })
         .collect::<DbResult<_>>()?;
+    let n_registry = out.len();
     // The open token list holds:
     // - Tokens of a strict-list program that have listed orders but no registry entry (no facts,
     //   no ticker).
@@ -448,12 +487,32 @@ pub fn token_list_page(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<(
     //
     // The strict-list check below applies to every row. At most `OPEN_TOKEN_ROWS_MAX` rows are
     // read.
-    if tokens.is_open() {
+    if tokens.is_open() && (only.is_none() || out.is_empty()) {
         // The strict-list programs the rows name, per token. Rows come in token order, rows of
         // listed orders first.
+        // The steps the open part has spent, when the read runs under a budget (the API's pool, a bound test).
+        let spent0 = crate::indexer::db::steps_spent();
+        let over = || crate::indexer::db::steps_spent().zip(spent0).is_some_and(|(n, s)| n.saturating_sub(s) > OPEN_LIST_STEPS_MAX);
+        // First pass: the tokens the chain proves, each with the proven programs a placement names.
+        let (proven_first, cut) = match only {
+            None => proven_open_tokens(conn, tokens, PROVEN_TOKENS_MAX)?,
+            Some(o) => {
+                let p = proven_claims(conn, tokens, o)?;
+                (if p.is_empty() { vec![] } else { vec![(o.to_vec(), p)] }, false)
+            }
+        };
+        truncated |= cut;
+        // Second pass: the rows placements name, under the open list's step budget.
         let mut claimed: Vec<ClaimedPrograms<'_>> = Vec::new();
-        let (rows, cut) = open_token_rows(conn, OPEN_TOKEN_ROWS_MAX as usize)?;
-        truncated = cut;
+        let (rows, cut) = match only {
+            None => open_token_rows(conn, OPEN_TOKEN_ROWS_MAX as usize, &over)?,
+            // one token: its own claims (a proven one is the first pass's)
+            Some(o) if proven_first.is_empty() && proven_programs(conn, o)?.is_empty() => {
+                (claimed_programs(conn, o, CLAIMED_VIEW_PROGRAMS_MAX)?.into_iter().map(|p| (o.to_vec(), p, 0)).collect(), false)
+            }
+            Some(_) => (vec![], false),
+        };
+        truncated |= cut;
         for (cov, tpl, _fam) in rows {
             let (Ok(cov32), Ok(tpl32)) = (<[u8; 32]>::try_from(cov.as_slice()), <[u8; 32]>::try_from(tpl.as_slice())) else {
                 continue;
@@ -479,18 +538,20 @@ pub fn token_list_page(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<(
                 _ => claimed.push((cov, vec![(tpl, strict)])),
             }
         }
-        for (cov, mut programs) in claimed {
-            // The programs the chain proves win. A placement that pins another program for the
-            // covenant id is ignored, whatever number of them there are, and the token is not
-            // listed under it when it is the only claim. When nothing is proven, the claims stand
-            // and several of them stay ambiguous. The client proves the program from a token
-            // output.
-            let proven = proven_programs(conn, &cov)?;
-            if !proven.is_empty() {
-                programs.retain(|(t, _)| proven.contains(t));
-                if programs.is_empty() {
-                    continue;
-                }
+        let all = proven_first.into_iter().map(|c| (true, c)).chain(claimed.into_iter().map(|c| (false, c)));
+        for (first_pass, (cov, programs)) in all {
+            // A token of the second pass past the open list's step budget is left out, and the answer says so.
+            if !first_pass && over() {
+                truncated = true;
+                break;
+            }
+            // The programs the chain proves win: the first pass lists a proven token under the proven programs its
+            // placements name only, so a placement that pins another program for the covenant id is ignored, whatever
+            // number of them there are. A proven token the second pass meets is the first pass's (listed there, or past
+            // its cap). When nothing is proven, the claims stand and several of them stay ambiguous. The client proves the
+            // program from a token output.
+            if !first_pass && !proven_programs(conn, &cov)?.is_empty() {
+                continue;
             }
             let cid = crate::hex::Hash32(<[u8; 32]>::try_from(cov.as_slice()).expect("32-byte covenant id"));
             let (open_asks, open_bids) = (count(&cov, 1)?, count(&cov, 2)?);
@@ -548,6 +609,8 @@ pub fn token_list_page(conn: &Connection, tokens: &TokenAllowlist) -> DbResult<(
             }
         }
     }
+    // the open part in the order of the covenant ids, both passes together
+    out[n_registry..].sort_by(|a, b| a.covenant_id.cmp(&b.covenant_id));
     // The KCC-23 declarations the indexer holds (one primary-key lookup per row), and so the
     // decimals of each token. The order is its declaration, else its registry entry, else its
     // program's default ([`resolve_decimals`]).
@@ -659,6 +722,65 @@ pub fn token_decimals(conn: &Connection, tokens: &TokenAllowlist, token: &Hash32
 /// The type is (covenant id, [(template hash, template)]).
 type ClaimedPrograms<'a> = (Vec<u8>, Vec<(Vec<u8>, &'a crate::tokens::StrictTemplate)>);
 
+/// The first pass of the open token list (R9C2b-2): the tokens the chain proves, oldest first (the order `ids` first saw
+/// them), each with the proven strict-list programs a placement names (an event row or a listed order of the token under
+/// that program, two seeks each). Registry tokens and proven tokens no placement names are skipped. At most `max` are
+/// returned, and at most `2 max` distinct proven tokens are read; past either the second value says so. The work per
+/// token is a constant number of seeks (its programs are at most the build's token templates), whatever orders any
+/// token has.
+fn proven_open_tokens<'a>(conn: &Connection, tokens: &'a TokenAllowlist, max: usize) -> DbResult<(Vec<ClaimedPrograms<'a>>, bool)> {
+    let mut next = conn.prepare_cached("SELECT token_id FROM holding_programs WHERE token_id > ?1 ORDER BY token_id LIMIT 1")?;
+    let (mut out, mut read, mut prev) = (Vec::new(), 0usize, i64::MIN);
+    while let Some(t) = next.query_row([prev], |r| r.get::<_, i64>(0)).optional()? {
+        prev = t;
+        if out.len() >= max || read >= max.saturating_mul(2) {
+            out.sort_by(|a: &ClaimedPrograms<'a>, b| a.0.cmp(&b.0));
+            return Ok((out, true));
+        }
+        read += 1;
+        let cov = crate::indexer::ids::hash_of(conn, t)?;
+        let Ok(cov32) = <[u8; 32]>::try_from(cov.as_slice()) else { continue };
+        if tokens.get(&crate::hex::Hash32(cov32)).is_some() {
+            continue;
+        }
+        let programs = proven_claims(conn, tokens, &cov)?;
+        if !programs.is_empty() {
+            out.push((cov, programs));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok((out, false))
+}
+
+/// Most programs the single-token view takes from a token's placements ([`token_view`]).
+const CLAIMED_VIEW_PROGRAMS_MAX: usize = 64;
+
+/// The proven strict-list programs of token `cov` that a placement names (an event row or a listed order under the
+/// program: two seeks each), as the open list lists a proven token.
+fn proven_claims<'a>(
+    conn: &Connection,
+    tokens: &'a TokenAllowlist,
+    cov: &[u8],
+) -> DbResult<Vec<(Vec<u8>, &'a crate::tokens::StrictTemplate)>> {
+    let mut by_event = conn.prepare_cached("SELECT 1 FROM token_events WHERE token_cov_id = ?1 AND tpl_hash = ?2 LIMIT 1")?;
+    let mut by_order = conn.prepare_cached(concat!(
+        "SELECT 1 FROM orders INDEXED BY orders_listed_tokens WHERE listed = 1 AND token_id IS NOT NULL AND token_tpl_id IS NOT NULL AND token_id = ",
+        id_of!("?1"),
+        " AND token_tpl_id = ",
+        id_of!("?2"),
+        " LIMIT 1"
+    ))?;
+    let mut programs = Vec::new();
+    for tpl in proven_programs(conn, cov)? {
+        let Ok(tpl32) = <[u8; 32]>::try_from(tpl.as_slice()) else { continue };
+        let Some(strict) = tokens.strict_template(&crate::hex::Hash32(tpl32)) else { continue };
+        if by_event.exists(rusqlite::params![cov, &tpl])? || by_order.exists(rusqlite::params![cov, &tpl])? {
+            programs.push((tpl, strict));
+        }
+    }
+    Ok(programs)
+}
+
 /// A (token, program, family) row of the open token list.
 type OpenTokenRow = (Vec<u8>, Vec<u8>, i64);
 
@@ -670,18 +792,15 @@ type OpenTokenRow = (Vec<u8>, Vec<u8>, i64);
 /// token, then family descending (rows of listed orders first), then program. The rows of the
 /// listed orders are read one index seek each (`orders_listed_tokens`), never by reading the
 /// orders, so the read grows with the tokens and not with the history.
-/// Also says whether the scan stopped at its cap (rows may be left out).
-fn open_token_rows(conn: &Connection, max: usize) -> DbResult<(Vec<OpenTokenRow>, bool)> {
+/// Also says whether the scan stopped at its cap or at `stop` (rows may be left out). The tokens the chain proves are
+/// read apart, first ([`proven_open_tokens`]), so this scan's order decides only among the tokens placements alone name.
+fn open_token_rows(conn: &Connection, max: usize, stop: &dyn Fn() -> bool) -> DbResult<(Vec<OpenTokenRow>, bool)> {
     use std::cmp::Reverse;
     use std::collections::BTreeSet;
-    // The scan reads up to four times the rows the list shows. Past `max`, the tokens the chain
-    // proves (a holding of the token exists) are kept in preference to the rest, so placements
-    // naming covenant ids that sort low cannot push such a token out of the list. The listed
-    // orders name their token and program by id, so their scan is in the order the ids were
-    // first seen and not in the order of the hashes. Past the cap, the rows kept are the first
-    // seen, where the scan of the events keeps the lowest hashes. The rows are put in the order
-    // of the hashes below either way.
-    let scan_max = max.saturating_mul(4);
+    // The scan reads up to twice the rows the list shows, of each kind. The listed orders name their token and program
+    // by id, so their scan is in the order the ids were first seen and not in the order of the hashes. Past the cap, the
+    // rows kept are the lowest hashes of those read. The rows are put in the order of the hashes below either way.
+    let scan_max = max.saturating_mul(2);
     let mut cut = false;
     // In the list's order: (token, family descending, program). It is a set, so a row named twice
     // is one row.
@@ -708,7 +827,7 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<(Vec<OpenTokenRow>
             None => ev_tok.query_row(rusqlite::params![&t], ev_row).optional()?,
         };
         rows.insert((t, Reverse(0), p));
-        if rows.len() >= scan_max {
+        if rows.len() >= scan_max || stop() {
             cut |= ev_cur.is_some();
             break;
         }
@@ -735,7 +854,7 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<(Vec<OpenTokenRow>
     let mut listed_rows = 0usize;
     while let Some((t, p, f)) = cur {
         if last_token.as_ref() != Some(&t) {
-            if listed_rows >= scan_max {
+            if listed_rows >= scan_max || stop() {
                 cut = true;
                 break;
             }
@@ -754,32 +873,7 @@ fn open_token_rows(conn: &Connection, max: usize) -> DbResult<(Vec<OpenTokenRow>
         };
     }
     if rows.len() > max {
-        // Over the cap: the rows of tokens with a holding first, then the others in the list's
-        // order. `holding_programs` records a token that ever had a holding, whether or not the
-        // pruning has deleted it since.
-        let mut held = conn.prepare_cached(concat!("SELECT 1 FROM holding_programs WHERE token_id = ", id_of!("?1"), " LIMIT 1"))?;
-        let mut proven: std::collections::HashMap<Vec<u8>, bool> = std::collections::HashMap::new();
-        let mut keep: Vec<(Vec<u8>, Reverse<i64>, Vec<u8>)> = Vec::with_capacity(max);
-        let mut rest: Vec<(Vec<u8>, Reverse<i64>, Vec<u8>)> = Vec::new();
-        for r in std::mem::take(&mut rows) {
-            let p = match proven.get(&r.0) {
-                Some(p) => *p,
-                None => {
-                    let p = held.exists([&r.0])?;
-                    proven.insert(r.0.clone(), p);
-                    p
-                }
-            };
-            if p && keep.len() < max {
-                keep.push(r);
-            } else {
-                rest.push(r);
-            }
-        }
-        let room = max - keep.len();
-        keep.extend(rest.into_iter().take(room));
-        keep.sort();
-        return Ok((keep.into_iter().map(|(t, f, p)| (t, p, f.0)).collect(), true));
+        return Ok((rows.into_iter().take(max).map(|(t, f, p)| (t, p, f.0)).collect(), true));
     }
     Ok((rows.into_iter().map(|(t, f, p)| (t, p, f.0)).collect(), cut))
 }
@@ -3303,7 +3397,8 @@ pub fn orders(
 /// fillable, fillable, past its window, never as it stands, past its day-order deadline.
 const PAIR_OPEN_STATES: [i64; 5] = [0, 1, 2, 3, 4];
 
-/// `GET /v1/pairs/{base}/{quote}/orders`: the live orders of the pair (base A, quote B), newest first, keyset paged by
+/// `GET /v1/pairs/{base}/{quote}/orders`: the listed live orders of the pair (base A, quote B; an unlisted one, which no
+/// executor fills, is only in `orders`), newest first, keyset paged by
 /// `<genesis block>:<covenant id>` (R8C2b, the web's own-order check of a pair ticket). One range of `pair_live_pair` per
 /// live state, each at most `limit + 1` index entries, merged; each row is rendered as `GET /v1/orders` renders it (a
 /// template this build does not pin is left out). A page costs at most `5 (limit + 1)` index entries and `limit` order

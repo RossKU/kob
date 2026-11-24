@@ -352,6 +352,18 @@ pub async fn tokens(State(app): State<Arc<App>>) -> ApiResult {
     .await
 }
 
+/// `GET /v1/tokens/{covenant_id}`: one token's view, as `GET /v1/tokens` gives it, whether or not the list's caps reach it
+/// (R9C2b-2: a client that knows a token's id is never stuck on the list's cut). `404` for a token the list would never
+/// hold (no registry entry, no strict-list program a placement or a holding names). A few seeks, on the light lane.
+pub async fn token(State(app): State<Arc<App>>, Path(id): Path<String>) -> ApiResult {
+    let id = parse_hash("covenant_id", &id)?;
+    let allow = app.state.tokens.clone();
+    match app.state.pool.with_light(move |c| reads::token_view(c, &allow, &id)).await? {
+        Some(v) => json_ok(v),
+        None => Err(ApiError::not_found("unknown token")),
+    }
+}
+
 /// `GET /v1/tokens/{covenant_id}/declaration`: the KCC-23 launch proof of the covenant id.
 ///
 /// The proof is a `kob_protocol::kcc23::LaunchProof` in the format `kob-kcc23-proof/1`. It holds
@@ -463,7 +475,7 @@ pub async fn pair_book(State(app): State<Arc<App>>, Path((base, quote)): Path<(S
         .await
 }
 
-/// `GET /v1/pairs/{base}/{quote}/orders?limit=&cursor=`: the live orders of the pair, newest first, keyset paged
+/// `GET /v1/pairs/{base}/{quote}/orders?limit=&cursor=`: the listed live orders of the pair, newest first, keyset paged
 /// (`reads::pair_orders`). Each item is the view `GET /v1/orders` gives.
 pub async fn pair_orders(State(app): State<Arc<App>>, Path((base, quote)): Path<(String, String)>, Query(q): Params) -> ApiResult {
     let (base, quote) = pair_path(&base, &quote)?;

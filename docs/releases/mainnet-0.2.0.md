@@ -265,8 +265,11 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
   itself (I/O, corruption, a full disk) answers `503 storage` with `Retry-After: 1`: retry, the order is not unknown.
 - **New: `GET /v1/pairs/{base}/{quote}/orders?limit=&cursor=`**, the live orders of one pair, newest first, paged as
   `/v1/orders`; it reads only that pair's orders, so a client no longer reads both tokens' whole lists to find them.
-- `/v1/tokens` answers `{"tokens": [...], "truncated": bool}`: `truncated` is true when the open list was cut at 5,000 rows
-  (the tokens the chain proves come first). A token's `market_scale` is taken from its 16 oldest orders.
+- `/v1/tokens` answers `{"tokens": [...], "truncated": bool}`. The tokens the chain proves (a holding exists) are always in
+  it, up to the 2,000 oldest; the tokens only placements name follow, at most 5,000 and a budget of work of their own; `truncated`
+  is true when either is cut. **New: `GET /v1/tokens/{covenant_id}`** answers one token's view whether or not the list holds it:
+  a client that knows a token's id reads it there when the list is cut. A token's `market_scale` is its earliest listed order's
+  scale, whatever unlisted orders came before it.
 - `/v1/stats?since=` says `"actors_truncated": true` when `traders` or `executors` of the range reached 50,000 (the counts
   stop there); the all-time counts are exact.
 - A curve whose only fill KIP-9 allows is its whole rest is ranked and shown by that fill (never one unit at its low

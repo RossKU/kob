@@ -16,7 +16,8 @@ client), **M** memory only. Cache: **G** per data generation (the store's commit
 | Route | Lane | Cache | Worst case one computation reads | Test (VM steps measured with N / 2 N rows) |
 |---|---|---|---|---|
 | `/v1/health`, `/v1/health/ready`, `/v1/metrics` | M | the counters at most once a second, one light read outside any client | nothing per request; outside the concurrency cap | `api::health_answers_while_every_request_permit_is_taken`, `api::health_answers_while_the_light_lane_is_busy` |
-| `/v1/tokens` | H | G | per listed token, two counts of at most 1,400 fillable `book_live` rows, its 16 oldest orders (`MARKET_SCALE_SCAN_MAX`) and a few seeks; the open list at most 5,000 rows (`OPEN_TOKEN_ROWS_MAX`, then `truncated`), the tokens the chain proves first (R8C2b-2) | `bounds::the_book_reads_do_not_grow_with_listed_curve_asks` (tokens: 33,934 / 33,934, re-measured 2026-11-24 R8); `bounds::the_token_list_does_not_fail_with_open_tokens` (5,000 / 10,000 open tokens of 50 orders each: 3,191,844 / 3,526,761, under its 4,000,000 ceiling; before R8C2b-2 the 1,000-order scale scan read every order of each) |
+| `/v1/tokens` | H | G | per listed token, two counts of at most 1,400 fillable `book_live` rows, its market scale (one seek of `orders_listed_genesis`) and a few seeks; the open list in two passes: the tokens the chain proves, at most 2,000 (`PROVEN_TOKENS_MAX`), then the tokens placements alone name, at most 5,000 rows (`OPEN_TOKEN_ROWS_MAX`) and 2,000,000 VM steps for the whole open part (`OPEN_LIST_STEPS_MAX`), `truncated` when either is cut (R9C2b-1, R9C2b-2) | `bounds::the_book_reads_do_not_grow_with_listed_curve_asks` (tokens: 33,934 / 33,934); `bounds::the_token_list_does_not_fail_with_open_tokens` (5,000 / 10,000 open tokens of 50 orders each: 1,436,861 / 1,561,772); `bounds::the_token_list_at_every_cap_answers_with_the_proven_tokens` (every cap at once: 2,036,628, the previous build 5,871,852, past the budget); `bounds::a_proven_token_survives_an_open_list_flood` |
+| `/v1/tokens/{id}` | L | U | one token: its registry entry, or its proven programs and claims (a few seeks; an unproven one at most 1,024 of its order programs) and one view | `bounds::the_token_list_at_every_cap_answers_with_the_proven_tokens` (a token the list's cut left out) |
 | `/v1/tokens/{id}/declaration` | L | U | one primary-key lookup and two transactions decoded | `bounds::token_events_and_a_declaration_do_not_grow_with_other_tokens` (declaration: 9 / 9) |
 | `/v1/books/{token}` | H | S, P (`depth`, `aggregate`) | per side the best 1,000 fillable orders with a fixed quote (`BOOK_ORDERS_MAX`), 200 fillable auctions and 200 opened since the last commit (`BOOK_MOVING_MAX`); orders that cannot be filled now are not read | `bounds::the_book_reads_do_not_grow_with_listed_curve_asks` (12,000 / 24,000 curve asks; aggregate: 214,724 / 214,724; orders: 207,325 / 207,325); `bounds::worst_case_book_reads_over_1000_level_curves` (every range full of 1,000-level curves, N / 2 N: orders 249,385 / 253,635, with dust 287,448 / 291,698; the growth is the capped `dust_orders` count); `bounds::orders_that_cannot_be_filled_now_take_no_place_in_the_book` (honest book alone, then with 12,000 not-yet-active, 12,000 between TWAP slices and 12,000 expired asks at a better price: 5,975 / 5,976) |
 | `/v1/depth/{token}` | H | S, P | one book read | same (depth: 214,423 / 214,423; with the junk: 5,984 / 5,985); a single book read of `levels` prices since R7C2b-3 |
@@ -58,7 +59,7 @@ distinct computations one client can cause per data generation (and second, for 
 | Route | Worst case seeded | Wall | VM steps | Keys a client can cause |
 |---|---|---|---|---|
 | `/v1/tokens` | 24,000 curve asks on one token | 0.8 ms | 33,934 | 1 |
-| `/v1/tokens` | 10,000 unproven open tokens of 50 orders each (5,000 listed, `truncated`) | not measured (steps only; under the 1.5 s wall bound in the test run) | 3,526,761 | 1 |
+| `/v1/tokens` | every cap at once: 2,000 proven tokens, event rows of 20,001 tokens with 16 orders each, listed orders of 20,001 more (3,867 listed, `truncated`) | 353 ms (counter on; the previous build 880 ms at 5,871,852 steps, refused) | 2,036,628 | 1 |
 | `/v1/orders?maker=&token=&status=` | 2,000 cancelled orders of the maker on the token behind 40,000 sharing one filter, every page of 200 | 95 ms (11 pages) | 445,932 | one per request parameters and second |
 | `/v1/pairs/{a}/{b}/orders` | 30 orders of the pair behind 40,000 live pair orders of either token, every page of 7 | 4.5 ms (5 pages) | 11,726 | one per request parameters and second |
 | `/v1/books/{token}?aggregate=false&depth=200` | 1,200 curve asks of 1,000 levels at the best price, 250 dust and 250 pending curves of 1,000 levels (2,400 / 500 / 500 for the 2 N run); with `include_dust` | 19 ms; 41 ms (re-measured 2026-11-24, R8: every curve shown as its sequence of smallest fills, at most `depth` steps a curve) | 253,635; 291,698 | 16 per token and second: `depth` is computed at 20, 50, 100 or 200 (`api::rest::DEPTH_STEPS`) and cut, times `aggregate`, times `include_dust` |
@@ -87,7 +88,7 @@ range can only tie the worst level kept), the aggregated levels and the statisti
 need, and the pair reads take each order from its `pair_live` row as the writer decided it (side, source, scale, the amount one
 fill can take, its quote as a function of the DAA score) instead of decoding its state and reading its custody.
 
-No public route is above 100 ms at its worst case (re-measured 2026-11-24, R6C2b-2; the book worst case is `bounds::worst_case_book_reads_over_1000_level_curves`, now a non-ignored test with a VM-steps assertion). A maker page of 200 live orders each with 10,000 live strays is not seeded: each order's view is measured at 3.8 ms with 10,000 strays, so such a page would take about 0.8 s, but it needs 2,000,000 stray token UTXOs of at least `COVENANT_OUTPUT_MIN` (0.08 KAS) each, about 1.6·10^5 KAS given to the maker, so it is left as it is. The pair candles take their volume from `pair_volume`: per pair and candle
+No public route but `/v1/tokens` is above 100 ms at its worst case (`/v1/tokens` at every cap: 353 ms with the step counter on, one computation per data generation for everyone; re-measured 2026-11-25, R9C2b-1; the book worst case is `bounds::worst_case_book_reads_over_1000_level_curves`, now a non-ignored test with a VM-steps assertion). A maker page of 200 live orders each with 10,000 live strays is not seeded: each order's view is measured at 3.8 ms with 10,000 strays, so such a page would take about 0.8 s, but it needs 2,000,000 stray token UTXOs of at least `COVENANT_OUTPUT_MIN` (0.08 KAS) each, about 1.6·10^5 KAS given to the maker, so it is left as it is. The pair candles take their volume from `pair_volume`: per pair and candle
 bucket of each interval served (1 m, 5 m, 1 h, 1 d), kept by triggers on `pair_fills` and the writer's commit
 (`indexer::pair_volume`), so a busy pair's volume on a long window is never cut. Each pair fill adds at most 4 rows (its
 bucket of each interval, shared by the fills of that bucket) and one transient mark; the first open over 100,000 pair fills
@@ -197,8 +198,9 @@ request, has a budget of its own). The progress handler of the read pool's conne
 `maintain_live_books`, which read their own connections, are exempt. A read past it stops at once and fails for that request only:
 `503` with code `read_budget` and `Retry-After: 1`, never cached as a success; a cache key whose computation hit it is refused
 for a second without a new computation (`rest::READ_BUDGET_REFUSED_FOR`), and `/v1/metrics` counts the refusals by route
-(`kob_api_read_budget_refused_total{route}`). The largest honest worst case measured below is 0.93 million steps (a lean store's
-chart over 30,000 fills; 1.4 million before the fills carried their priced flag), so the budget is about 5 times it; the per-route caps stay what keeps honest answers complete.
+(`kob_api_read_budget_refused_total{route}`). The largest worst case measured is `/v1/tokens` at every cap at once, 2.04 million steps (its open part
+stops itself at 2 million and says `truncated`, R9C2b-1); the next is a lean store's chart over 30,000 fills, 0.93 million. The budget is
+about 2.4 times the first; the per-route caps stay what keeps honest answers complete.
 `api::every_public_read_ends_at_the_read_budget` seeds 10^6 fills (half of them self-takes), 10^6 junk orders, 10^6 strays of
 one order, 10^6 pair fills and 10^6 token events and reads every public route: each answers (200, 404) or refuses with
 `read_budget`, in well under a second; with a budget below any real read every route that reads is refused.
@@ -227,17 +229,44 @@ instead of failing. Where a refusal is still possible, its cost and its effect a
 | Where | Who can cause it, and at what cost | What an honest user sees |
 |---|---|---|
 | `/v1/orders?maker=&token=&status=` in history order | Removed (R8C2b-1): the read and its probe walk one index of both filters (`orders_maker_token_genesis`, `orders_maker_quote_genesis`), so other makers' orders of the token and the maker's orders of other tokens are not read. Only orders of that maker on that token lengthen it, and the scan cap (10,000) gives a short page with a cursor | A complete list, paged |
-| `/v1/tokens` | Removed (R8C2b-2): each open token costs a fixed number of seeks (16 oldest orders for its market scale, two capped side counts); the open part is cut at 5,000 rows with `truncated`, the tokens the chain proves first | The registry's tokens and the proven ones always; `truncated` when the open part is cut |
+| `/v1/tokens` | Removed (R9C2b-1, R9C2b-2): the open part stops itself at 2,000,000 VM steps and says `truncated`, so the list never fails for its size (measured at every cap: 2.04 million). The tokens the chain proves are read in a pass of their own (`holding_programs`, oldest first): placements on other covenant ids, of any number, cannot push one out. That pass's cap (2,000) is reached only by 2,000 tokens with a holding each, a token genesis and its holding's carrier apiece (the reference KCC-20's token output floor is 0.08 KAS, KaspaCom's 0.5 KAS: some hundreds of KAS locked for as long as the tokens are held); then the tokens created after them are cut, the answer says `truncated`, and each is still read by its id | The registry's tokens always; every chain-proven token a placement names, up to the 2,000 oldest; `truncated` when a cut leaves any out; `GET /v1/tokens/{id}` answers any token the list would hold, cut or not |
+| The `/v1/tokens` cut, seen from clients | No client reads `truncated` yet: the web's market list and its token selectors take the list as whole | A token the cut leaves out needs `GET /v1/tokens/{id}` (web change, not made here) |
 | `/v1/stats/{t}`, the pair-candle carry (the cross check of the newest price) | Removed (R8C2b-3): the check seeks one transaction's fills (`order_events_priced_tx (token_id, txid)`) | Answers |
 | `/v1/stats?since=` (makers, executors) | Removed (R8C2b-4): all time reads two counters; a range counts at most 50,000 of each and says `actors_truncated` | Totals, "at least" past the cap |
 | `/v1/candles/{t}`, pair candles without `to` | Removed (R8C2b-5): the newest fill time is one seek of the priced fills' index; pair fills and self-takes are not in it | Answers |
 | `/v1/orders/{id}` on a storage fault | Not an outsider's: a fault of the store answers `503 storage` (R8C2b-I3), an unrenderable order `404` | "Retry", never "unknown" for an honest order |
-| Books, depth, pair book, pair orders, order view, strays, holdings, fills, trades, quotes | No outsider path: each has a row cap well below the budget (measured above) | Answers |
+| Books, depth, pair book, pair orders, order view, strays, holdings, fills, trades, quotes | No outsider path to a refusal: each has a row cap well below the budget (measured above). What their caps can leave out is in the next table | Answers |
 | The wall bound under host load | Someone who loads the host's disk or CPU; not demonstrated | A rare `503 read_budget` on a hot key, for a second |
 | A key refused for a second | Only by making that exact key's computation pass the budget; keys are exact, so one key's refusal never reaches another | As above, for that key |
 | The web's own-order list, cut at 50 pages | Per victim: about 5·10^5 orders naming the victim's key on that token (several hundred KAS of fees). Decided (R8B-L3) | That victim's ticket on that token is refused |
 | The web's pair ticket check | The pair's own orders only (`/v1/pairs/{a}/{b}/orders`): each must fund one fill (about 0.16 KAS of carriers, refundable), the cost the pair book's 20,001 rows accept | The ticket waits while the list is longer than the web's page cap |
 | The CLI live-order list (200 pages, a repeated or bad cursor) | A hostile indexer, or per-victim inflation as above | A waivable `own-orders` guard |
+
+## What a cap can leave out (R9)
+
+Every public read with a row cap, scan cap or `LIMIT` over rows an outsider writes, and which honest content the order of its scan
+could push out.
+
+| Read | Cap and order | What could be pushed out, and why that is acceptable or how it is fixed |
+|---|---|---|
+| `/v1/books`, `/v1/depth`, the stats' touch and band | the best 1,000 fixed places by price, 200 auctions, 200 pending (the place rule above) | Only by better-priced orders with real value on offer, which anyone can take: the book shows them because they are the market |
+| `/v1/tokens` | two passes, above | Fixed (R9C2b-1, R9C2b-2): see the table above |
+| `/v1/pairs?token=` | the oldest 20,000 fillable pair orders (of the token, as base and as quote) | Pairs whose orders all came after 20,000 older fillable pair orders: the flood funds one fill each (about 0.16 KAS of carriers, 3,200 KAS locked in all). A pair already listed keeps its place (oldest first); a pair's own book (`/v1/pairs/{a}/{b}/book`) and orders (`/orders`) answer by its ids whatever the list holds. Open: the answer is a bare array and says no `truncated` (a client-visible change) |
+| `/v1/pairs/{a}/{b}/book` | 20,001 oldest fillable orders of the pair, 2,000 resting | Newer orders of that pair, only by orders of that pair that fund a fill each; says `orders_truncated` |
+| `/v1/pairs/{a}/{b}/orders` | keyset pages over the pair's listed live rows | Nothing: every page follows the cursor. Listed orders only (R9C2b-4): an unlisted order, which no executor fills, cannot cross the book, and is in `/v1/orders?maker=` |
+| `/v1/orders?maker=&token=&status=` | 10,000 of the maker's orders of the token per page (both columns in one index) | Nothing: a short page carries the cursor. Only orders of that maker on that token lengthen it (the web's 50-page cut is R8B-L3, decided) |
+| `/v1/orders` other filters | history order, 10,000 scanned per page, cursor | Nothing: paged |
+| `/v1/token-utxos?owner=&token=` | 10,000 of the owner's holdings and the rest of a block per page, cursor | Nothing: paged |
+| `/v1/strays?maker=` | the newest 10,000 live strays of all makers, filtered by maker | A maker's older strays, behind 10,000 newer strays anyone sent (each a token output with its carrier, forfeited to the receiving order). Acceptable: each of the maker's live orders carries its strays in `/v1/orders?maker=` and its order view, and the cancel sweeps them |
+| `/v1/orders/{id}` | 101 children, 101 live strays, two counts of at most 10,000 | An order's strays past 101 (anyone can send them, each with its carrier); the counts say how many there are and the cancel sweeps them all |
+| `/v1/trades`, `/v1/fills`, `/v1/pairs/{a}/{b}/fills` | newest first, `limit`, `before=` | Nothing: paged |
+| `/v1/stats/{t}` 24 h figures | the newest 20,000 priced fills of the day | Older fills of the day behind 20,000 newer priced fills (two keys of one trader washing, fees each): `window_truncated` says so; last, high and low stay those of the fills read |
+| `/v1/stats?since=` | 50,000 actors of each kind per range | Says `actors_truncated` ("at least"); all time is exact |
+| lean `/v1/candles` | the newest 30,000 fills of the window | Says `truncated`; a full store charts from aggregates |
+| `/v1/creator-locks?due=` | the earliest 200 due automatic locks still holding | Later ones wait until those are released (a keeper releases them, which takes them off the list); each lock is a token launch with a declaration |
+| `/v1/token-events?token=` | `limit` events of the token, oldest first | Newer events of that token behind placements that name it: the first sightings come first, which is what the route is for |
+| `/v1/logo-votes`, `/v1/logo-blocklist` | one row per voted or hidden token | Votes need a proof of work, an address with history and a held token; reports are rate-limited |
+| search | none | The API has no search route |
 
 ## What fills the request permits
 
