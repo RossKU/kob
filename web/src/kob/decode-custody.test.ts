@@ -83,3 +83,15 @@ describe('a custody of another class does not release the order', () => {
     expect(codes(decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null }))).toContain('custody-unreleased');
   });
 });
+
+describe('the fee ceiling of the private-key frame does not follow the builder labels (R8F2b-8)', () => {
+  it('a "priority" label with a large minFee does not lift the absolute ceiling without a fee policy', () => {
+    const plan = planCancel(env(), snapOf('create.ask'));
+    const b = clone(plan.built!);
+    const extra = 60_000_000n; // 0.6 KAS more fee, above FEE_ABSOLUTE_MAX
+    const change = b.tx.outputs.find((o) => !o.covenant)!;
+    change.value = (BigInt(change.value) - extra).toString();
+    b.fee = { ...b.fee, fee: (BigInt(b.fee.fee) + extra).toString(), minFee: (30_000_000n).toString(), feeMode: 'priority' };
+    expect(codes(decodeSigning({ kob, built: b, maker: MAKER.pk, registry: null }))).toContain('fee-excessive');
+  });
+});

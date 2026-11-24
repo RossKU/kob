@@ -366,7 +366,14 @@ export async function finishCreation(a: FinishArgs): Promise<string> {
   const now = a.now ?? Date.now;
   // Planned again from the record's facts. Its stored genesis is never signed.
   const plan = checkSavedCreation(a.kob, rec, a.maker, a.feePolicy);
-  if (genesisSigned(rec)) return resumeCreation(node, rec, a);
+  if (genesisSigned(rec)) {
+    // The stored signed transactions are sent only when they are the ones this re-plan just checked
+    // (a txid leaves the signatures out), so a planted record cannot send another genesis (R8F2-I3).
+    if (rec.genesis!.id !== plan.built.tx.id || rec.prep.id !== plan.prep.tx.id || rec.genesisTxid !== plan.built.tx.id) {
+      throw new SignFlowError('submitting', null, 'The saved creation does not match its checked plan: nothing was sent.', 'other');
+    }
+    return resumeCreation(node, rec, a);
+  }
   const built: BuiltTx = plan.built;
   // The coin the genesis spends, as the node lists it, with the wallet's own key and the planned
   // amount.

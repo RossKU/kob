@@ -154,6 +154,27 @@ describe('signAndSubmitCreation: one approval (the private-key signer)', () => {
     expect(listCreations(NET, MAKER_PK, s.storage)).toEqual([]);
   });
 
+  it('"Finish the creation" sends a stored signed genesis only when it is the one its re-plan checked (R8F2-I3)', async () => {
+    const s = setup();
+    const real = s.node.submitTransaction.bind(s.node);
+    let n = 0;
+    s.node.submitTransaction = async (tx) => {
+      if (++n === 2) throw new Error('Rejected transaction x: the node is not taking it now (invalid)');
+      return real(tx);
+    };
+    const w = oneApproval();
+    await signAndSubmitCreation(args(s, w.adapter)).catch(() => undefined);
+    const rec = onlyRecord(s);
+    s.node.submitTransaction = real;
+    const before = s.node.submissions.length;
+    const planted = { ...rec, genesis: { ...rec.genesis!, id: 'ab'.repeat(32) } };
+    const e = (await finishCreation(finishArgs(s, w.adapter, planted)).catch((x) => x)) as SignFlowError;
+    expect(e).toBeInstanceOf(SignFlowError);
+    expect(e.message).toMatch(/does not match its checked plan/);
+    expect(s.node.submissions.length).toBe(before);
+    expect(await finishCreation(finishArgs(s, w.adapter, rec))).toBe(s.plan.built.tx.id);
+  });
+
   it('a genesis the node does not see the input of yet is offered again', async () => {
     const s = setup();
     const real = s.node.submitTransaction.bind(s.node);

@@ -887,7 +887,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     }
     const seen = inputBorrow.get(covId) ?? { all: new Set<string>(), maker: new Set<string>() };
     seen.all.add(borrowKeyOf(st));
-    if (ownedBy === 'maker' && isKeyOwned(st)) seen.maker.add(borrowKeyOf(st));
+    if (ownedBy === 'maker' && isKeyOwned(st, (plan as { template?: TokenProgram }).template ?? null)) seen.maker.add(borrowKeyOf(st));
     inputBorrow.set(covId, seen);
     const witness: 'covenantId' | 'p2pk' | 'p2sh' = plan.kind === 'kronToken' ? (isCovenantOwned(st) ? 'covenantId' : 'p2pk') : plan.witness.kind;
     return {
@@ -1410,7 +1410,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       // wallet input of that token. The owner path spends such a holding, and its change keeps the
       // setting. On a recipient, a custody or any other output it stays blocking.
       const keepsSetting =
-        isKcc20State(st) && isKeyOwned(st) && st.owner === maker && inputBorrow.get(tok.covenantId)?.maker.size === 1 && inputBorrow.get(tok.covenantId)!.maker.has(borrowKeyOf(st));
+        isKcc20State(st) && isKeyOwned(st, tok.program) && st.owner === maker && inputBorrow.get(tok.covenantId)?.maker.size === 1 && inputBorrow.get(tok.covenantId)!.maker.has(borrowKeyOf(st));
       const unplain = keepsSetting ? null : unplainTokenState(st);
       if (unplain) add('token-state-unplain', `output ${j}: the token state carries ${unplain}: tokens with these features could be moved by someone else`, { output: j });
       if (isCovenantOwned(st)) {
@@ -1420,7 +1420,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         add('token-to-unknown-owner', `output ${j}: ${human(ref, token.amount)} would be locked in covenant ${shortId(st.owner)}, which this transaction does not create: the tokens could be lost`, { output: j, params: { owner: st.owner } });
         return { ...blank, kind: 'unknown-covenant', flagged: true, token };
       }
-      if (isKeyOwned(st)) {
+      if (isKeyOwned(st, tok.program)) {
         if (st.owner === maker) return { ...blank, kind: 'token-change', flagged: !ok, token };
         // the tokens a bid this tx fills buys, delivered to its maker
         if (bidMakers.has(st.owner.toLowerCase()) && tok.covenantId === takeToken) return { ...blank, kind: 'fill-payout', flagged: !ok, token, recipient: st.owner };
@@ -2056,7 +2056,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     }
   }
   const absoluteMax = dynamic && policy!.maxFeeSompi > FEE_ABSOLUTE_MAX ? policy!.maxFeeSompi : FEE_ABSOLUTE_MAX;
-  const feeCeiling = (built.fee.feeMode ?? 'relay') === 'priority' && minimumFee * 3n > absoluteMax ? minimumFee * 3n : absoluteMax;
+  // The priority mode's higher ceiling follows the builder's minFee and feeMode labels. Without a fee
+  // policy (the private-key frame, where those labels are the app's) the absolute ceiling holds
+  // whatever the mode (R8F2b-8).
+  const feeCeiling = policy && (built.fee.feeMode ?? 'relay') === 'priority' && minimumFee * 3n > absoluteMax ? minimumFee * 3n : absoluteMax;
   const atOwnRate = minimumFee * FEE_WARN_FACTOR + FEE_WARN_SLACK;
   const feeFloorOk = dynamic && atOwnRate > FEE_FLOOR_OK ? atOwnRate : FEE_FLOOR_OK;
   if (derivedFee > feeCeiling) {
