@@ -574,7 +574,7 @@ fn ensure_kas_locked(conn: &Connection) -> DbResult<()> {
 /// The actors of each kind of all time, kept in `counters` (`actors:1` makers, `actors:2` executors) by triggers on
 /// `actors`, so the all-time `/v1/stats` reads two rows instead of counting the table (R8C2b-4). Recounted at every
 /// open (no marker is trusted).
-fn ensure_actor_counts(conn: &Connection) -> DbResult<()> {
+pub(crate) fn ensure_actor_counts(conn: &Connection) -> DbResult<()> {
     let bump = |kind: &str, d: &str| {
         format!("INSERT INTO counters (name, n) VALUES ('actors:' || {kind}, {d}) ON CONFLICT(name) DO UPDATE SET n = n + excluded.n;")
     };

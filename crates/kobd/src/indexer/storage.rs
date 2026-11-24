@@ -928,6 +928,8 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, from_schema: i64, rep: &mu
     db::backfill_activity(&conn)?;
     db::backfill_executor_txs(&conn)?;
     db::backfill_all_time(&conn)?;
+    // the actor counts of all time (R8C2b-4), as the writer keeps them
+    db::ensure_actor_counts(&conn)?;
     check_activity(&conn)?;
     // The counters the old store kept, against the ones counted from the rows.
     if table_exists(&conn, "old", "counters")? {
