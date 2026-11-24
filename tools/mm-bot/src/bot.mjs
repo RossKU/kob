@@ -47,6 +47,7 @@ const HINTS_MAX = 32; // amounts left passed to kob recover per ask
 export const PAY_SOURCES_MAX = 12;
 export const PAY_HINTS_MAX = 160;
 export const PAY_RANGE_MAX = 200;
+const AMEND_REFUSALS = 2; // amends of one order the CLI refuses in a row before the order is cancelled and placed again (R8T-1)
 const CANCEL_TXIDS_KEEP = 8; // txids of the cancels sent per order, any of which may confirm (R6T-2)
 const INDEXER_READS = 6; // per-order indexer reads in flight at once (R6T-6), within one client's 8 at kobd
 // A paid ask is kept as proven (R5T-1): its level and cap share are free, it is still looked up.
@@ -1506,6 +1507,22 @@ export class Bot {
       // The order's state is unknown now: leave it alone until the next cycle has re-read it.
       if (a.id && this.state.orders[a.id]) this.state.orders[a.id].pending = { kind: 'reread', since: Date.now() };
       if (a.kind === 'place' && !this.dryRun) this.placeFailed(a, r, expiresAt);
+      // An amend the CLI refused before signing leaves the order at its old price and expiry. A
+      // refusal can last (one stray of any token on the order makes every kob replace refuse,
+      // R8T-1), so after AMEND_REFUSALS in a row the order is cancelled through the node (kob
+      // recover --cancel, which strays do not block), with one alert, and its level is placed
+      // again in the normal way. The CLI names no stable code for the refusal: its text is only
+      // shown, never matched.
+      const s = this.state.orders[a.id];
+      if (a.kind === 'amend' && s && !r.sentFee && !this.dryRun) {
+        s.amendRefusals = (s.amendRefusals ?? 0) + 1;
+        if (s.amendRefusals >= AMEND_REFUSALS) {
+          this.alert('warn', 'amend-refused', `Order ${short(a.id)} (${a.side} L${a.level}): the CLI refused its amend ${s.amendRefusals} times (${r.error}); it is cancelled through the node and its level placed again.`);
+          s.amendRefusals = 0;
+          this.save();
+          return this.run1({ kind: 'cancel', id: a.id, side: a.side, level: a.level, reason: 'its amend is refused' });
+        }
+      }
       // A send that may have gone out counts its planned fee toward the daily cap (L25).
       if (r.sentFee && !this.dryRun) {
         addFee(this.state, `${a.kind}-unknown`, r.sentFee);
@@ -1544,6 +1561,7 @@ export class Bot {
       this.placeError = null;
     } else if (a.kind === 'amend') {
       const s = this.state.orders[a.id];
+      s.amendRefusals = 0;
       const inPlace = r.doc?.plan?.inPlace !== false && !r.newIds.length;
       if (inPlace) {
         // Until the amend is seen, the order may still sit under its earlier state (own.prev).

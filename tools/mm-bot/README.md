@@ -155,6 +155,10 @@ On testnet-10 it is a warning. They also refuse until `quotes.askPartialFills` i
   The bot reads the maker list for its token only, newest first, at most 1,000 orders (10 pages of 100). When that cap
   is reached with more left (anyone can post orders under the bot's key), an order the list leaves out may only be
   older: it is not taken as hidden and not cancelled for it, and the bot goes on from its own record and the node.
+- **A refused amend.** When the CLI refuses an order's amend twice in a row (for example: anyone can send a stray token
+  UTXO to an order, and `kob replace` then refuses until it is swept), the bot cancels the order through the node
+  (`kob recover --cancel`, which strays do not block), raises one `amend-refused` alert with the CLI's reason, and places
+  the level again.
 - **Indexer down.** When a pull is due and the wallet or indexer read fails, the bot cancels through the node from its
   records, with no indexer. While the reads fail, the quotes are also pulled this way once fair has moved more than half
   the spread from the fair they were set at, and the 1-minute jump compares with the newest reading at least a minute

@@ -2012,6 +2012,40 @@ test('a kob binary swapped under the running bot: no whole-fill end for the earl
     reset();
   }
 });
+// R8T-1: a stray on an order makes kob replace refuse for good; the bot cancels that order through
+// the node after AMEND_REFUSALS refusals, with an alert, and places its level again.
+test('a_refused_amend_with_strays_cancels_and_requotes (R8T-1)', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain, calls, dir } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    for (let i = 0; i < 3; i++) await bot.cycle();
+    const a = askIds(bot).sort()[0];
+    const level = bot.state.orders[a].level;
+    bot.kob.env.FAKE_KOB_STRAYS = a;
+    const placed = places(calls).length;
+    kasUsd = 0.025 / 1.004; // a move past repriceThreshold: every quote is amended
+    for (let i = 0; i < 4 && chain().orders[a]; i++) await bot.cycle();
+    assert.equal(chain().ended[a], 'cancelled', 'cancelled through the node, strays or not');
+    const recovers = readFileSync(process.env.FAKE_KOB_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x[0] === 'recover' && x.includes('--cancel'));
+    assert.ok(recovers.length >= 1);
+    const al = alertsOf(dir).filter((x) => x.reason === 'amend-refused');
+    assert.equal(al.length, 1, 'one alert');
+    assert.match(al[0].message, /kob sweep/, 'it names the strays (the CLI\'s words)');
+    for (let i = 0; i < 2; i++) {
+      age(bot);
+      await bot.cycle();
+    }
+    assert.equal(bot.state.orders[a], undefined, 'the old order ended on its confirmed cancel');
+    assert.ok(places(calls).length > placed, 'its level is placed again');
+    const c = chain();
+    assert.ok(Object.entries(bot.state.orders).some(([k, s]) => k !== a && s.side === 'sell' && s.level === level && c.orders[k]), 'a new ask holds the level');
+  } finally {
+    delete bot.kob.env.FAKE_KOB_STRAYS;
+    reset();
+  }
+});
+
 // R8T-2: the real kob replace names the replacement's state in plan.replacement only.
 test('cancel_replace_record_carries_the_replacement_state (R8T-2)', { timeout: 120_000 }, async () => {
   reset();

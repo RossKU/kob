@@ -130,6 +130,12 @@ function chain() {
     const id = args[1];
     const o = c.orders[id];
     if (!o) { process.stderr.write('error: unknown order'); process.exit(1); }
+    // FAKE_KOB_STRAYS=id,...: those orders own a stray of another token, and kob replace refuses
+    // them, dry run or not, as the real CLI does (actions.rs:538-544, run_replace's exit 1).
+    if ((process.env.FAKE_KOB_STRAYS ?? '').split(',').includes(id)) {
+      process.stderr.write(`error: the order's covenant id owns 1 stray UTXO(s) of other tokens, which a cancel-replace would leave locked for ever: run \`kob sweep ${id}\` first (the order stays live and they come back to you), then replace\n`);
+      process.exit(1);
+    }
     const np = args.includes('--price') ? Number(val('--price').replace('sompi', '')) : o.price;
     // FAKE_KOB_REPLACE_NEW: a cancel-replace (strays on the order); `lost`: a fill of 1,500,007
     // lands first and the replace never confirms (R6T-2). No change comes back: it rides on the
