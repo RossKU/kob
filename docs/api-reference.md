@@ -142,7 +142,7 @@ lists the omitted ones).
 
 | Endpoint | Order | Continue with | `next_cursor` is |
 |---|---|---|---|
-| `/v1/orders` | newest first | `cursor=` | `<genesis block seq>:<covenant id>` of the last item |
+| `/v1/orders` | newest first | `cursor=` | `<genesis block seq>:<covenant id>` of the last item (a short page of a status read: of the last order read) |
 | `/v1/orders/{id}/events` | oldest first | `after=` (an event id) | id of the last event |
 | `/v1/fills` | newest first | `before=` (an event id) | id of the last fill |
 | `/v1/trades/{token}` | newest first | `before=` (a trade id) | id of the last trade |
@@ -421,7 +421,7 @@ curl -s $API/v1/tokens
 | `genesis_verified` | bool or null | The registry's fact: every genesis output was checked against the pinned program; `null` when it does not say. |
 | `warnings` | array of string | Derived from facts: `genesis_unverified` (unless `genesis_verified` is true), `live_mint_authority` (a genesis record lists a live mint authority; supply can still grow). Show them. |
 | `powers` | array of string | Capabilities of the program that reach balances or supply (`freeze`, `seize`, `blacklist`, `mint-authority`, ...). |
-| `open_asks`, `open_bids` | number | Listed live asks / bids (the orders the KAS book lists, section 3.6), at most 1,400 (its bounds). |
+| `open_asks`, `open_bids` | number | Listed live asks / bids that the KAS book shows by default (section 3.6: no dust), at most 1,400 (its bounds). |
 | `declaration` | `true`, **omitted** | Present only when the indexer holds a verified KCC-23 declaration for the token. |
 
 KOB makes no per-token judgement: there is no standing or "official" flag.
@@ -463,6 +463,15 @@ visible in `/v1/orders`. `/v1/depth` and the touch, depth and order counts of `/
 |---|---|---|---|
 | `depth` | integer | 20 | Rows per side, at most `max_page_size`. |
 | `aggregate` | `true`/`1`/`false`/`0` | `true` | `true`: price levels; `false`: individual orders. Anything else: `400` "aggregate must be true or false". |
+| `include_dust` | `true`/`1`/`false`/`0` | `false` | `true`: the dust orders too, each order or all-dust level marked `"dust": true`. |
+
+**Dust (R6B-L2).** An order is dust when one fill can take less than half the listing minimum (`min_order_value_sompi` / 2,
+0.5 KAS by default) of real value from it now: what the matcher's own fill rules let one transaction take, at the order's
+least favourable quote in its window (a decaying ask at its floor). Dust stays listed and fillable, but the book leaves it out
+unless `include_dust=true`, so no client needs a dust rule of its own; `dust_orders` (number, omitted when 0, at most 1,400 a
+side) says how many dust orders a taker could fill now, left out or held. `truncated` never comes from dust alone. An order
+no single fill can take (its tip above its price, a minimum fill above its maximum fill, a fill whose outputs KIP-9 refuses)
+is not in the book at all. The amounts are at most what one fill can take (`fillable_now`).
 
 ```
 curl -s "$API/v1/books/$TOKEN?depth=5"
@@ -603,7 +612,9 @@ curl -s "$API/v1/orders?cursor=812345:$ORDER"
 order), so its cost grows with the page asked for, not with the store ([ops/executor.md](ops/executor.md), section 5.5). The
 combinations that read more than a page are `maker` + `token`, and a `status` that many orders have combined with a `maker` or
 `token` that has none of them (the read walks that maker's or token's orders to find the page); a status few orders have
-(`active`, `open`, `partial`) is read from the live set instead. Prefer `status=active` plus a `maker` or `token` for "my live
+(`active`, `open`, `partial`) is read from the live set instead. A status read in history order reads at most 10,000 orders of the
+history per call (R6C2b-2): a page that reaches that budget may hold fewer than `limit` items (even none) and still carries a
+`next_cursor`; keep following it until it is absent. Prefer `status=active` plus a `maker` or `token` for "my live
 orders". Any route answers `504 timeout` when a read outlasts `request_timeout_ms`.
 
 ### 3.9 `GET /v1/orders/{covenant_id}`
@@ -870,7 +881,10 @@ OHLCV candles in KAS, **ascending**, empty buckets omitted (carry the close forw
 | `limit` | integer | 500 | Candles kept (the newest `limit` of the window), at most **1500**. |
 
 Without `to`, the window ends with the bucket of the token's newest KAS trade; without `from`, it starts `limit` intervals before
-its end.
+its end. The window is widened to whole buckets of the interval (`from` down, `to` up to a bucket start), so a candle is always
+a whole bucket and the newest one is whole up to now (R6C2b-1). A store that keeps no candle aggregates (a lean store) reads
+at most the newest 30,000 fills of the window and then says `"truncated": true` (older candles may be missing, the oldest
+partial).
 
 ```
 curl -s "$API/v1/candles/$TOKEN?interval=1h&limit=24"
@@ -930,6 +944,7 @@ Cumulative depth of the listed book, levels merged by price per `price_basis`, b
 | Param | Type | Default | Meaning |
 |---|---|---|---|
 | `levels` | integer | 50 | Levels per side, at most `max_page_size`. |
+| `include_dust` | `true`/`1`/`false`/`0` | `false` | As for the book (section 3.6): dust levels only when asked for, marked `"dust": true`; `dust_orders` as there. |
 
 ```json
 { "token": "<hex32>", "price_basis": "1000", "decimals": 3, "ts": 1790000000000, "daa": 1000,
@@ -1178,7 +1193,8 @@ keeps it (`ops/chart-server.md`). An indexer without the route (an older build, 
 The history of the top of the token's KAS book, for the chart's mid line. Heavy; cached. Once a minute the indexer samples the best bid and
 ask (as `best_bid` and `best_ask` of `/v1/stats/{token}`) and keeps a row only when either changed; rows are kept 30 days. A store further
 behind the node than its lag tolerance samples nothing. The parameters, defaults and errors are those of `/v1/candles/{token}` (section 3.16);
-without `to` the window ends with the bucket of the newest row.
+without `to` the window ends with the bucket of the newest row. The window is whole buckets, and at most its last `limit`
+intervals are read (an earlier `from` is moved up to them), since the answer holds at most `limit` buckets.
 
 ```
 curl -s "$API/v1/quotes/$TOKEN?interval=1h&limit=24"
@@ -1390,13 +1406,15 @@ too; WebSocket messages after the upgrade do not, they have their own cap).
 * A request that runs longer than `request_timeout_ms` (default 10,000) is answered `504 timeout`. The wait for a free
   read-pool connection counts. An abandoned uncached read is cancelled (not started if still queued; interrupted if running) and
   its connection returns to the pool. A read the response cache shares (section 5.6) is not: it runs on for the others who ask
-  for the same key, at most 20 s, under the heavy-read permit of the client that started it.
+  for the same key, under the heavy-read permit of the client that started it: its wait for a read connection has no
+  deadline, and the read itself is interrupted after 20 s.
 * Reads run on `read_pool_size` (default 4) database connections, plus one more "light lane" connection for the reads bounded by a
   few index lookups (`/v1/health` counters, `/v1/orders/{id}` and its events, the declaration), so those never queue behind
   heavy reads. Independent of the request timeout, a single pooled read is interrupted by the database after 20 seconds
   (it would surface as `500 internal` only if `request_timeout_ms` were set above that).
-* Candles and stats read every fill of their window (stats at most 20,000 rows, `window_truncated` says when cut), so a wide
-  `/v1/candles` window on a busy token is the usual source of a slow request; narrow `from`/`to` or use a coarser `interval`.
+* The 24 h stats read at most 20,000 fills of their window (`window_truncated` says when cut). The candles (and the pair
+  candles and quotes) answer in whole buckets from the aggregates the indexer keeps, at most `limit` rows, and read no fills;
+  a store without them (a lean store) reads at most the newest 30,000 fills of the window and says `truncated`.
 
 ### 5.4 Client address, proxies
 
@@ -1429,7 +1447,7 @@ connection over a cap gets the bare `503` of section 5.1 and is closed. These ca
 and `/v1/depth/{token}` are kept in a response cache per **data generation** of the store (the generation moves after every
 committed batch, revert, operator import and possibly-frozen flag). The key is the request's parameters plus, for the reads that
 depend on the clock (books, pairs, pair books, stats, depth), the node's DAA score and the wall-clock second, so a cached body is
-byte for byte what the request would have computed. The books, the depth and the pair books are computed at a `depth` (`levels`) of 20, 50, 100 or 200, the first at or above the one asked (at most `max_page_size`), and the answer is cut to the levels asked: the same levels, since the reads are exact by price.
+byte for byte what the request would have computed. The books, the depth and the pair books are computed at a `depth` (`levels`) of 20, 50, 100 or 200, the first at or above the one asked (at most `max_page_size`), and the answer is cut to the levels asked: the same levels as a direct read for the book (the reads are exact by price), at least as complete for the depth and the pair book (a larger read merges more rows into a per-basis level and walks more route orders).
 Concurrent requests of one key wait for one read; a failed read is not kept. The read is started by the first request (which
 needs a heavy read of its own client free within 2 s, section 5.3) and then runs on its own: a request that goes away does not
 stop it, and the others do not wait for the first client's other reads (R4C2-3). At most 1,024 bodies and 32 MiB per generation are

@@ -80,10 +80,16 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
   the API is not up: the web goes to standalone mode and an Executor plans nothing.
 - The same happens once more, at the first commit, when the listing minimum (`min_order_value_sompi`) or the book rules
   change: every row is decided again in that one transaction.
-- **Going back to the previous build:** it runs on a store this build wrote (the same schema 14; the new tables and triggers
-  stay and it ignores them, at a small extra cost per write). But its `kobd db compact` refuses that store ("the old store
-  has a table this build does not know"): compact only with this build. Coming back to this build needs nothing: its first
-  start sets the rows the previous build left unset.
+- **Going back to an earlier build is not supported once this build has opened a store.** An earlier build runs on it
+  (schema 14; the new tables and triggers stay), but it decides the live-book rows it touches by its own rules and leaves
+  them so, and this build does not see that it did: dust and orders no fill can take may then hold book places, and pair
+  orders may be missing from the pair books, until each row's next change. Its `kobd db compact` also refuses the store
+  ("the old store has a table this build does not know"). **Do:** keep the store from before the upgrade. `kobd db migrate`
+  from the deployed schema 13 writes a new file and keeps the old one as `index.sqlite3.before-migrate` in the data
+  directory: to go back, stop the indexer and put that file back as `index.sqlite3` (or rebuild with `kobd db replay`).
+  If an earlier build did run on a store of this build, stop it and, before this build starts again, delete the one meta
+  key that says which rules decided the rows: `sqlite3 <data-dir>/index.sqlite3 "DELETE FROM meta WHERE k = 'book_live_rules'"`.
+  The next start then decides every live-book row again (the first-start time above).
 
 ### The record log is zstd
 
@@ -214,6 +220,16 @@ This build reads schema 14 only. It refuses an older store and says to run `kobd
 - `kob replace <id> --gtd WHEN` sets a new expiry, in place for a plain limit.
 - `kob place` refuses an unlisted token whose decimals only the indexer names, unless `--decimals` gives the same value.
 - `--key` was removed from every command (exit 2). Use `--key-file`, `--key-env` or `KOB_KEY`.
+- **The public book leaves dust out.** `/v1/books` and `/v1/depth` show no order worth less than half the listing minimum to
+  one fill (0.5 KAS by default) unless `include_dust=true` (then each such order or level says `"dust": true`); `dust_orders`
+  says how many. An order no single fill can take (its tip above its price, a minimum fill above its maximum fill, a fill
+  KIP-9 refuses) is in no book; a decaying ask is valued at its floor. The `/v1/tokens` counts count no dust. Book amounts
+  are at most what one fill can take.
+- **Charts are whole buckets.** `/v1/candles`, `/v1/quotes` and the pair candles move `from` down and `to` up to a bucket
+  start. A lean store's candles may say `"truncated": true` (at most the newest 30,000 fills of the window are read).
+- **`/v1/orders?status=`** may return a short (even empty) page with a `next_cursor` when the read in history order reaches
+  its budget of 10,000 orders: follow the cursor until it is absent (the web app and `kob` do).
+- `kob` refuses a malformed holdings cursor from an indexer instead of looping on it.
 
 ## Wallets tested
 

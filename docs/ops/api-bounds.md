@@ -18,7 +18,7 @@ client), **M** memory only. Cache: **G** per data generation (the store's commit
 | `/v1/health`, `/v1/health/ready`, `/v1/metrics` | M | the counters at most once a second, one light read outside any client | nothing per request; outside the concurrency cap | `api::health_answers_while_every_request_permit_is_taken`, `api::health_answers_while_the_light_lane_is_busy` |
 | `/v1/tokens` | H | G | per listed token, two counts of at most 1,400 fillable `book_live` rows; the open list at most 5,000 rows (`OPEN_TOKEN_ROWS_MAX`) | `bounds::the_book_reads_do_not_grow_with_listed_curve_asks` (tokens: 93,611 / 93,611) |
 | `/v1/tokens/{id}/declaration` | L | U | one primary-key lookup and two transactions decoded | `bounds::token_events_and_a_declaration_do_not_grow_with_other_tokens` (declaration: 9 / 9) |
-| `/v1/books/{token}` | H | S, P (`depth`, `aggregate`) | per side the best 1,000 fillable orders with a fixed quote (`BOOK_ORDERS_MAX`), 200 fillable auctions and 200 opened since the last commit (`BOOK_MOVING_MAX`); orders that cannot be filled now are not read | `bounds::the_book_reads_do_not_grow_with_listed_curve_asks` (12,000 / 24,000 curve asks; aggregate: 197,877 / 197,877; orders: 201,917 / 201,917); `bounds::orders_that_cannot_be_filled_now_take_no_place_in_the_book` (honest book alone, then with 12,000 not-yet-active, 12,000 between TWAP slices and 12,000 expired asks at a better price: 5,975 / 5,976) |
+| `/v1/books/{token}` | H | S, P (`depth`, `aggregate`) | per side the best 1,000 fillable orders with a fixed quote (`BOOK_ORDERS_MAX`), 200 fillable auctions and 200 opened since the last commit (`BOOK_MOVING_MAX`); orders that cannot be filled now are not read | `bounds::the_book_reads_do_not_grow_with_listed_curve_asks` (12,000 / 24,000 curve asks; aggregate: 210,680 / 210,680; orders: 203,283 / 203,283); `bounds::worst_case_book_reads_over_1000_level_curves` (every range full of 1,000-level curves, N / 2 N: orders 244,543 / 248,793, with dust 281,806 / 286,056; the growth is the capped `dust_orders` count); `bounds::orders_that_cannot_be_filled_now_take_no_place_in_the_book` (honest book alone, then with 12,000 not-yet-active, 12,000 between TWAP slices and 12,000 expired asks at a better price: 5,975 / 5,976) |
 | `/v1/depth/{token}` | H | S, P | one book read | same (depth: 197,886 / 197,886; with the junk: 5,984 / 5,985) |
 | `/v1/stats/{token}` | H | S | four side reads as the book's; at most 20,000 fills of the 24 h window (`MAX_FILL_ROWS`) | same (stats: 394,463 / 394,463; with the junk: 12,105 / 12,000); `bounds::the_market_reads_do_not_grow_with_fills` (25,000 and 50,000 fills: 952,573 / 952,466) |
 | `/v1/stats?since=` | H | G, P (minute) | the activity buckets of the range | `bounds::the_market_reads_do_not_grow_with_fills` (activity: 211 / 211) |
@@ -26,7 +26,7 @@ client), **M** memory only. Cache: **G** per data generation (the store's commit
 | `/v1/pairs/{a}/{b}/book` | H | S, P | 20,001 fillable `pair_live` rows of the pair, at most 2,000 resting, and 200 opened since the last commit; the KAS route of each token as the book's rows | same (unset rows: 6,220,179 / 6,220,179; 20,001 real fillable orders: 62,183, `bounds::worst_case_pair_reads_over_real_pair_orders`); `bounds::the_book_reads_do_not_grow_with_listed_curve_asks` (pair book, KAS route: 605 / 605) |
 | `/v1/pairs/{a}/{b}/candles` | H | P | the two tokens' candle rows of the window (`limit` at most 1,500) and one `pair_volume` row per shown bucket (the writer's aggregates, R5C2-6); no pair fill | `bounds::the_pair_candles_read_one_volume_row_a_bucket` (210,000 / 420,000 fills in the shown buckets: 1,569 / 1,463) |
 | `/v1/pairs/{a}/{b}/fills` | H | U | a page (`limit` + 1) and at most 20,001 fills of the 24 h window | `bounds::the_pair_reads_do_not_grow_with_pair_orders` (pair fills: 201,253 / 201,210) |
-| `/v1/orders?maker=&token=&status=` | H | S, P | a page of at most `max_page_size` + 1 orders, each with its custody (2 rows), at most 101 strays and a count of at most 10,000 index entries | `bounds::the_order_view_does_not_grow_with_children_strays_or_spent_custody` (orders of a maker: 138,575 / 138,575) |
+| `/v1/orders?maker=&token=&status=` | H | S, P | a page of at most `max_page_size` + 1 orders, each with its custody (2 rows), at most 101 strays and a count of at most 10,000 index entries; a status read in history order reads at most 10,000 orders of the history (`ORDERS_SCAN_MAX`; a short page carries the cursor, R6C2b-2) | `bounds::the_order_view_does_not_grow_with_children_strays_or_spent_custody` (orders of a maker: 138,575 / 138,575) |
 | `/v1/orders/{id}` | L | U | the order, at most 101 children and 101 live strays, two counts of at most 10,000 index entries each (`VIEW_COUNT_MAX`, index only), the custody and the bought-custody (2 rows each, live partial indexes) | same (order view: 220,489 / 220,489; bought custody: 91 / 91) |
 | `/v1/orders/{id}/events` | L | U | `limit` + 1 events (at most 201) | same (order events: 3,398 / 3,398) |
 | `/v1/fills` | H | S, P | `limit` + 1 fills | `bounds::the_market_reads_do_not_grow_with_fills` (fills: 1,545 / 1,545) |
@@ -57,16 +57,18 @@ distinct computations one client can cause per data generation (and second, for 
 | Route | Worst case seeded | Wall | VM steps | Keys a client can cause |
 |---|---|---|---|---|
 | `/v1/tokens` | 24,000 curve asks on one token | 0.7 ms | 31,114 | 1 |
-| `/v1/books/{token}?aggregate=false&depth=200` | 1,200 curve asks of 1,000 levels at the best price | 47 ms | 201,917 | 8 per token and second: `depth` is computed at 20, 50, 100 or 200 (`api::rest::DEPTH_STEPS`) and cut, times `aggregate` |
-| `/v1/books/{token}` (levels, depth 200) | the same | 34 ms | 197,877 | (above) |
-| `/v1/depth/{token}?levels=200` | the same | 72 ms | 197,886 | 4 per token and second (the same steps) |
-| `/v1/stats/{token}` | the same; and 25,000 / 50,000 fills of the day | 71 ms; 53 ms | 394,463; 952,990 | 1 per token and second |
-| `/v1/quotes` sampling (once a minute) | the same | 5 ms | 194,509 | none (the writer's) |
+| `/v1/books/{token}?aggregate=false&depth=200` | 1,200 curve asks of 1,000 levels at the best price, 250 dust and 250 pending curves of 1,000 levels (2,400 / 500 / 500 for the 2 N run); with `include_dust` | 21 ms; 26 ms (was 141 ms before the rows were rendered only when kept) | 248,793; 286,056 | 8 per token and second: `depth` is computed at 20, 50, 100 or 200 (`api::rest::DEPTH_STEPS`) and cut, times `aggregate` |
+| `/v1/books/{token}` (levels, depth 200, `include_dust`) | the same | 47 ms | 291,718 | (above) |
+| `/v1/depth/{token}?levels=200&include_dust=true` | the same | 47 ms (was 119 ms reading 4 x the levels) | 291,422 | 4 per token and second (the same steps) |
+| `/v1/stats/{token}` | the same; and 25,000 / 50,000 fills of the day | 86 ms; 56 ms | 468,905; 953,030 | 1 per token and second |
+| `/v1/quotes` sampling (once a minute) | 12,000 / 24,000 curve asks | 5 ms | 195,510 | none (the writer's) |
 | `/v1/pairs?token=` | 20,001 fillable `KobPair` asks, real states and custodies | 25 ms | 780,122 | 1 per token and second |
 | `/v1/pairs/{a}/{b}/book?depth=` | the same | 1.9 ms | 62,183 | 4 per pair and second (the steps) |
 | `/v1/pairs/{a}/{b}/candles` | 420,000 pair fills in the shown buckets | 1.1 ms (was 226 ms) | 1,463 | one per `interval`, `from`, `to`, `limit`; each at most `limit` candle rows of each token and `limit` volume rows |
 | `/v1/pairs/{a}/{b}/fills` | 24 h of fills (20,001 read) | 19 ms | 201,210 | one per request (uncached) |
-| `/v1/orders?maker=` | a maker's page at its bound | 2.6 ms | 138,575 | one per request parameters and second |
+| `/v1/orders?maker=` | a maker's page at its bound | 2.6 ms | 138,572 | one per request parameters and second |
+| `/v1/orders?status=cancelled` | 2,000 old cancelled orders behind 30,000 / 60,000 newer filled ones (history order) | 10 ms | 301,385 | one per request parameters and second |
+| `/v1/candles/{token}` on a lean store | 35,000 / 70,000 fills in the window (30,000 read) | 84 ms | 1,410,408 | one per bucket edge, `interval`, `limit` |
 | `/v1/orders/{id}` | 10,000 children and strays | 3.8 ms | 220,489 | one per request (light lane, uncached) |
 | `/v1/orders/{id}/events` | 201 events | 0.3 ms | 3,398 | one per request |
 | `/v1/fills`, `/v1/trades/{token}` | 50,000 fills | 0.3 ms; 2.4 ms | 1,545; 58,020 | one per parameters (and second) |
@@ -81,17 +83,20 @@ range can only tie the worst level kept), the aggregated levels and the statisti
 need, and the pair reads take each order from its `pair_live` row as the writer decided it (side, source, scale, the amount one
 fill can take, its quote as a function of the DAA score) instead of decoding its state and reading its custody.
 
-No public route is above 100 ms at its worst case. The pair candles take their volume from `pair_volume`: per pair and candle
+No public route is above 100 ms at its worst case (re-measured 2026-11-24, R6C2b-2; the book worst case is `bounds::worst_case_book_reads_over_1000_level_curves`, now a non-ignored test with a VM-steps assertion). A maker page of 200 live orders each with 10,000 live strays is not seeded: each order's view is measured at 3.8 ms with 10,000 strays, so such a page would take about 0.8 s, but it needs 2,000,000 stray token UTXOs of at least `COVENANT_OUTPUT_MIN` (0.08 KAS) each, about 1.6·10^5 KAS given to the maker, so it is left as it is. The pair candles take their volume from `pair_volume`: per pair and candle
 bucket of each interval served (1 m, 5 m, 1 h, 1 d), kept by triggers on `pair_fills` and the writer's commit
 (`indexer::pair_volume`), so a busy pair's volume on a long window is never cut. Each pair fill adds at most 4 rows (its
 bucket of each interval, shared by the fills of that bucket) and one transient mark; the first open over 100,000 pair fills
 builds them in 0.26 s (37,540 rows over 30,834 minutes; `pair_volume::tests::pair_volume_first_open_time`).
 
-The chart routes (`/v1/candles`, `/v1/quotes`, the pair candles) keep `from`, `to` and `limit` in their keys as asked: a
-larger computation cut to the request is not the same answer (a window that ends inside a bucket has that bucket from its
-own trades; without `from` the window is `limit` intervals long; quotes carry the value in force at its start). Each
-computation is at most `limit` (1,500) rows, about a millisecond, so the number of keys only multiplies a cost the rate limit
-and the client's two heavy reads already bound.
+The chart routes (`/v1/candles`, `/v1/quotes`, the pair candles) answer in whole buckets (R6C2b-1): `from` is moved down and
+`to` up to a bucket start of the interval before the cache key is made and the store read, so the window's edges never fall
+inside a bucket and a chart reads the aggregate rows of its buckets, never the fills of an edge bucket
+(`bounds::candle_edges_do_not_grow_with_the_fills_of_a_day`: 50,000 / 100,000 fills in the edge day cost the same steps). The
+keys are then one per bucket edge, `interval` and `limit`, each at most `limit` (1,500) rows, about a millisecond. A store that
+keeps no candle aggregates (a lean store, `--lean`) charts from the fills: at most the newest 30,000 of the window
+(`market::CANDLE_SCAN_ROWS_MAX`, about 50 ms), then `truncated` (`bounds::lean_candles_read_at_most_their_cap_of_fills`).
+`/v1/quotes` reads at most the last `limit` intervals of its window (an earlier `from` is moved up to them).
 
 A row the writer has not set yet (`ok` NULL: an older build's write to the store) is decided row by row, as the writer would;
 that costs about 90 microseconds a pair order (`bounds::the_pair_reads_do_not_grow_with_pair_orders`, 1.8 s for 20,001). This
@@ -113,28 +118,35 @@ Auction orders (a decaying ask, a rising bid, an armed entry) are ranked by thei
 read apart, at most 200 a side: they cannot take the places of the orders with a fixed quote. Orders whose window opened after the
 store's last commit and by the node's DAA score are read apart too, at most 200.
 
-**The rule of the places (R5A-1, R5C2-1):** a place among the best 1,000 of a side is taken only by an order that offers a taker
-at least the listing minimum (`min_order_value_sompi`, 1 KAS by default) of real value right now. Real value is what one fill can
-take from the order's UTXOs now under the covenant's own arithmetic (`indexer::takeable`), at its limit: an ask's exact custody; a
-bid's buying power; a buy-first if-done entry what its KAS escrow pays after the carriers of the fill; a sell-first entry what its
-KAS funds of the prefund and exit carrier of a fill it outlives; a TWAP or DCA order one slice; a curve its amount at its current
-level. An order that can fund no fill takes no place at all (`ok` 0); one worth less than the minimum (for example one its own
-maker filled down to one base unit) is **dust**: it stays listed, executors fill it, and the book and depth show it from a range
-of its own of at most 200 (`auction` = 2), never from the 1,000. The 24 h statistics' best bid and ask (and so mid, spread and
-the 2 % depth), the sampled quotes of `/v1/quotes` and the KAS legs of a pair book's route read no dust at all, since one base
-unit at any price would set them; the `/v1/tokens` counts count it (it is a fillable order), within their bound.
+**The rule of the places (R5A-1, R5C2-1, R6C2a-1, R6C2a-2):** a place among the best 1,000 of a side is taken only by an order
+that offers a taker at least half the listing minimum (`min_order_value_sompi` / 2, 0.5 KAS by default) of real value right now.
+Real value is what one fill (one transaction) can take from the order now, and what the taker pays or gets for it, by the
+matcher's own fill rules for that order (`matcher::candidate::candidates_of`, `matcher::pair::infos`, called by
+`indexer::takeable`): every fill condition of its covenant (the minimum and maximum fill against the amount left, the tip
+against the quote, a curve's levels and its walk of at most 8 of them, the escrow, prefund and carriers) and the KIP-9 minimum of
+every output the fill builds. It is measured at the least favourable quote of the order's window: a fixed quote at its quote, a
+decaying ask at its floor, a rising bid at its highest quote (its buying power then). An order no fill can take takes no place
+at all (`ok` 0); one worth less than the threshold (an order its own maker filled down to one base unit, a TWAP slice or a
+curve's reachable levels worth less, an auction whose floor is worth less) is **dust**: it stays listed, executors fill it, and
+the reads take it from a range of its own of at most 200 (`auction` = 2), never from the 1,000. `/v1/books` and `/v1/depth`
+leave dust out unless `include_dust=true` (then marked) and say how much (`dust_orders`); the 24 h statistics' best bid and ask
+(and so mid, spread and the 2 % depth), the sampled quotes of `/v1/quotes`, the KAS legs of a pair book's route and the
+`/v1/tokens` counts read no dust at all. Why half: the listing rule measures a bid by its whole escrow, carriers included, and
+real value counts only what the escrow buys, so an honest bid placed at exactly the listing minimum offers a little less than
+the minimum; half keeps every order an honest builder (the web, `kob place`) places at the minimum out of the dust range
+(`bounds::an_honest_minimum_order_is_not_dust`).
 
 **What an attacker must do now to push a real order out of a book read**, per kind on the side (each listed, active, not expired,
 a resting kind with an open slice):
 
 | Kind | What each of the 1,000 must hold | Who can take it |
 |---|---|---|
-| `KobAsk`, `KobAskKron`, `KobCurveAsk`, `KobIfdAsk` (+ KRON) | tokens worth at least 1 KAS at its price in its exact custody (a TWAP ask: per slice); a sell-first entry also the KAS of the prefund and exit carrier of a partial fill, else it can only be taken whole | anyone, at once, below the market |
-| `KobBid`, `KobBidKron` | at least 1 KAS of buying power (a DCA bid: per slice) above the carriers and reserve | anyone, at once, above the market |
-| `KobIfdBid` (+ KRON) | at least 1 KAS that one fill can spend from its escrow after its delivery and exit carriers | anyone, at once, above the market |
+| `KobAsk`, `KobAskKron`, `KobCurveAsk`, `KobIfdAsk` (+ KRON) | tokens worth at least 0.5 KAS at its price (an auction: at its floor; a curve: its reachable levels) in its exact custody (a TWAP ask: per slice); a sell-first entry also the KAS of the prefund and exit carrier of a partial fill, else it can only be taken whole | anyone, at once, below the market |
+| `KobBid`, `KobBidKron` | at least 0.5 KAS of buying power (a DCA bid: per slice) above the carriers and reserve | anyone, at once, above the market |
+| `KobIfdBid` (+ KRON) | at least 0.5 KAS that one fill can spend from its escrow after its delivery and exit carriers | anyone, at once, above the market |
 | unarmed stops, conditionals (`KobCond*`), IOC / FOK takers | not in the books | |
 
-That is at least 1,000 KAS of tokens (asks) or KAS (bids) really on offer, which anyone can take at once. Auctions and dust take
+That is at least 500 KAS of tokens (asks) or KAS (bids) really on offer, which anyone can take at once (and each order must also be listed: worth the whole listing minimum by the listing rule). Auctions and dust take
 at most their own 200 places each. Orders not active yet, between slices, expired, past their deadline, without custody, possibly
 frozen or unable to fund a fill take none, whatever their number or price.
 
@@ -144,7 +156,9 @@ a sell-first one with its prefund, the carriers and tip in KAS) and have somethi
 cost of filling the 20,001 is their carriers, about 0.16 KAS each, recoverable (accepted, R5A-2).
 
 Rows an older build (schema 14) writes through the triggers have no window yet (`ok` NULL): they count as fillable and are
-decided row by row, within the same bounds, until this build's next commit or start sets them.
+decided row by row, within the same bounds, until this build's next commit or start sets them. Running an earlier build on a
+store this build opened is not supported: rows it decides itself keep its decision (`docs/releases/mainnet-0.2.0.md`, first
+start); deleting `meta.book_live_rules` makes the next start decide every row again.
 
 ## What fills the request permits
 
