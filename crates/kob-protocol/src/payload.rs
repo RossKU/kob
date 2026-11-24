@@ -1043,6 +1043,50 @@ fn verify_genesis(tx: &TxJson, o: usize, spk: &str) -> Result<([u8; 32], u64)> {
     Ok((id, txo.value))
 }
 
+/// The covenant id a genesis of `outputs` (index, value, script public key as hex) authorised by
+/// the input spending outpoint (`txid`, `index`) would have: the consensus `covenant_id` (R9FB2-1).
+///
+/// Exported to the web (kob-wasm `genesisCovenantId`) for its own "continues" test.
+pub fn genesis_covenant_id(txid: [u8; 32], index: u32, outputs: &[(u32, u64, String)]) -> Result<[u8; 32]> {
+    let outs: Vec<(u32, TransactionOutput)> = outputs
+        .iter()
+        .map(|(k, v, spk)| Ok((*k, TransactionOutput { value: *v, script_public_key: spk_from_string(spk)?, covenant: None })))
+        .collect::<Result<_>>()?;
+    let op = TransactionOutpoint { transaction_id: TransactionId::from_bytes(txid), index };
+    Ok(covenant_id(op, outs.iter().map(|(k, x)| (*k, x))).as_bytes())
+}
+
+/// Refuses output `o` as a continuation of covenant `id` when, on chain, it would be a genesis
+/// (R9FB2-1).
+///
+/// No signature covers an input's covenant id: it is the node's (or the app's) word. An output
+/// bound to `(input, G)` where `G` is the genesis id of its group (recomputed from that input's
+/// outpoint, as [`verify_genesis`] does) is a genesis whatever id the input is said to carry: the
+/// order's real covenant id is not continued, and what it owns is locked. Every place that treats
+/// an output as continuing an input's covenant id calls this: the verifiers (`verify_amend`,
+/// `verify_sweep`, and through them `recover_amends*` and the sweep recovery) and the builders
+/// (`Draft::seal`, for every bound output that is not a genesis it creates).
+pub fn check_continues(tx: &TxJson, o: usize, id: [u8; 32]) -> Result<()> {
+    let bad = |m: &str| Err(Error::Payload(format!("output {o}: {m}")));
+    let Some(txo) = tx.outputs.get(o) else { return bad("no such output") };
+    let Some(cov) = &txo.covenant else { return bad("the output has no covenant binding") };
+    if cov.covenant_id != id {
+        return bad("the output is bound to another covenant id");
+    }
+    let Some(inp) = tx.inputs.get(cov.authorizing_input as usize) else { return bad("authorising input missing") };
+    let group: Vec<(u32, u64, String)> = tx
+        .outputs
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| x.covenant.as_ref() == Some(cov))
+        .map(|(k, x)| (k as u32, x.value, x.script_public_key.clone()))
+        .collect();
+    if genesis_covenant_id(inp.transaction_id, inp.index, &group)? == id {
+        return bad("the output would start a new covenant, not continue the order (its binding is the genesis id of its group)");
+    }
+    Ok(())
+}
+
 /// The custody output of an order record.
 ///
 /// It is the P2SH of the custody state (`amount` owned by the order's covenant id `id`) under the
@@ -1270,6 +1314,18 @@ pub fn amendable(t: TemplateId) -> bool {
 /// escrow, so every other term may change: price, tip, minimum fill, time in force, timing,
 /// rising-bid terms, `reserve` and `deliveryCarrier`. The builder checks that the continuation
 /// still funds one minimum fill at the new terms ([`crate::build::min_order_value`]).
+/// A new `price` on an order with a schedule that keeps its old end (R9FC2-1).
+///
+/// An auction keeps its start in `price` and its limit in `priceEnd`, moving from an origin that is
+/// past for a live order: a new start with the same slope and end trades at once at the OLD limit,
+/// not at the price the amend gives. A price change must end the schedule (`slope` 0: a fixed
+/// price) or state a new end. Pure: the same rule for every caller (CLI, web through the wasm).
+fn schedule_kept(old_price: i64, new_price: i64, old: (i64, i64), new: (i64, i64)) -> Option<&'static str> {
+    (old_price != new_price && new.0 != 0 && new.1 == old.1).then_some(
+        "a new price on an order with a schedule (slope) that keeps its old priceEnd trades at that old end, not at the new \n         price: amend it to a fixed price (slope 0) or give the schedule a new priceEnd",
+    )
+}
+
 pub fn check_amend_terms(previous: &AnyState, next: &AnyState) -> Result<()> {
     let bad = |m: &str| Err(Error::Payload(format!("amend: {m}")));
     if previous.template_id() != next.template_id() {
@@ -1296,6 +1352,7 @@ pub fn check_amend_terms(previous: &AnyState, next: &AnyState) -> Result<()> {
             if b.amount_left <= 0 {
                 return bad("an amended order must hold tokens");
             }
+            schedule_kept(a.price, b.price, (a.slope, a.price_end), (b.slope, b.price_end)).map_or(Ok(()), &bad)?;
         }
         (AnyState::KobBid(a) | AnyState::KobBidKron(a), AnyState::KobBid(b) | AnyState::KobBidKron(b)) => {
             if a.maker != b.maker {
@@ -1314,6 +1371,7 @@ pub fn check_amend_terms(previous: &AnyState, next: &AnyState) -> Result<()> {
                 // bought-custody stays exactly `bought`.
                 return bad("mode, recvThreshold, topupTip and bought cannot change");
             }
+            schedule_kept(a.price, b.price, (a.slope, a.price_end), (b.slope, b.price_end)).map_or(Ok(()), &bad)?;
         }
         (AnyState::KobCurveAsk(a), AnyState::KobCurveAsk(b)) => {
             // keeps the maker, the token, the commitment, the scale and amountLeft (the custody
@@ -1410,6 +1468,7 @@ pub fn verify_amend(tx: &TxJson, record: &Record, previous: &AnyState, entry: &s
     if txo.covenant.as_ref().map(|c| (c.authorizing_input, c.covenant_id)) != Some((*input, id)) {
         return bad("the output does not continue the order's covenant id from the order input");
     }
+    check_continues(tx, o, id)?;
     let bound = tx.outputs.iter().filter(|x| x.covenant.as_ref().is_some_and(|c| c.covenant_id == id)).count();
     if bound != 1 {
         return bad("other outputs carry the order's covenant id (an amended order is one output)");
@@ -1477,6 +1536,7 @@ pub fn verify_sweep(tx: &TxJson, record: &Record, previous: &AnyState, entry: &s
     if txo.covenant.as_ref().map(|c| (c.authorizing_input, c.covenant_id)) != Some((*input, id)) {
         return bad("the output does not continue the order's covenant id from the order input");
     }
+    check_continues(tx, o, id)?;
     let bound = tx.outputs.iter().filter(|x| x.covenant.as_ref().is_some_and(|c| c.covenant_id == id)).count();
     if bound != 1 {
         return bad("other outputs carry the order's covenant id (a swept order is one output)");

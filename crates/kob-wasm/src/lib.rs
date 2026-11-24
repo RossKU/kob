@@ -73,6 +73,28 @@ pub mod api {
         let t: Vec<tx::TokenUtxo> = parse("inputs", inputs)?;
         build::check_releases_held(&s, cov, &t).map_err(|e| e.to_string())
     }
+    /// The genesis covenant id of a group of outputs authorised by the input spending `txid:index`
+    /// (`payload::genesis_covenant_id`, R9FB2-1). `outputs` is a JSON array of
+    /// `{"index": n, "value": "sompi", "scriptPublicKey": "hex"}`; the answer is the id in hex. An output said to
+    /// continue covenant `id` whose binding equals this id is a genesis: it does not continue it.
+    pub fn genesis_covenant_id(txid: &str, index: u32, outputs: &str) -> R<String> {
+        let t: [u8; 32] = from_hex(txid)?.try_into().map_err(|_| "txid: 32 bytes of hex".to_string())?;
+        let v: Vec<serde_json::Value> = parse("outputs", outputs)?;
+        let outs = v
+            .iter()
+            .map(|o| {
+                let k = o.get("index").and_then(serde_json::Value::as_u64).ok_or("outputs: index")? as u32;
+                let value = match o.get("value") {
+                    Some(serde_json::Value::String(s)) => s.parse::<u64>().map_err(|_| "outputs: value")?,
+                    Some(serde_json::Value::Number(n)) => n.as_u64().ok_or("outputs: value")?,
+                    _ => return Err("outputs: value".to_string()),
+                };
+                let spk = o.get("scriptPublicKey").and_then(serde_json::Value::as_str).ok_or("outputs: scriptPublicKey")?;
+                Ok((k, value, spk.to_string()))
+            })
+            .collect::<R<Vec<_>>>()?;
+        kob_protocol::payload::genesis_covenant_id(t, index, &outs).map(|id| to_hex(&id)).map_err(|e| e.to_string())
+    }
     /// The trigger evidence of a batch leg, from `build::touch_of`.
     ///
     /// It holds the side, token, scale, quote, amount (base units) and `exposedSince` of a plain
@@ -1303,6 +1325,12 @@ pub fn held_custodies(state: &str, order_cov: &str) -> Result<String, JsError> {
 
 /// Checks that a spend ending an order (its token inputs, JSON `TokenUtxo`s) releases everything the
 /// order's state holds, each by its whole state; throws what is left behind.
+/// The genesis covenant id of a group of outputs (R9FB2-1): see `api::genesis_covenant_id`.
+#[wasm_bindgen(js_name = genesisCovenantId)]
+pub fn genesis_covenant_id(txid: &str, index: u32, outputs: &str) -> Result<String, JsError> {
+    js(api::genesis_covenant_id(txid, index, outputs))
+}
+
 #[wasm_bindgen(js_name = checkReleases)]
 pub fn check_releases(state: &str, order_cov: &str, inputs: &str) -> Result<(), JsError> {
     js(api::check_releases(state, order_cov, inputs))

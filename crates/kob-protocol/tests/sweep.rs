@@ -326,3 +326,35 @@ fn a_cancel_releases_the_bought_custody() {
         }
     }
 }
+
+/// R9FB2-1: a sweep whose order input claims the genesis id of the continuation's group is a genesis on chain;
+/// `verify_sweep` refuses it, and the builder refuses that claimed id.
+#[test]
+fn a_genesis_bound_to_the_claimed_id_is_no_sweep() {
+    let t = TemplateId::Kcc20Ref;
+    let o = order(70, CARRIER, O, 1_000, AnyState::KobAsk(ask(MAKER_A, P250, t)));
+    let state = o.state.clone();
+    let req = sweep(o, vec![tutxo(t, TOKEN_COV, 76, 3, O, true)], vec![], true);
+    let mut built = build_sweep_order(&req, &kob_protocol::budget::lookup).unwrap();
+    let c = built.tx.outputs[0].covenant.clone().unwrap();
+    let group: Vec<(u32, u64, String)> = built
+        .tx
+        .outputs
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| x.covenant.as_ref() == Some(&c))
+        .map(|(k, x)| (k as u32, x.value, x.script_public_key.clone()))
+        .collect();
+    let inp = &built.tx.inputs[0];
+    let g = kob_protocol::payload::genesis_covenant_id(inp.transaction_id, inp.index, &group).unwrap();
+    built.tx.outputs[0].covenant = Some(kob_protocol::tx::CovenantJson { authorizing_input: c.authorizing_input, covenant_id: g });
+    built.tx.inputs[0].utxo.covenant_id = Some(g);
+    let p = decode(&built.tx.payload).unwrap().unwrap();
+    let e = verify_sweep(&built.tx, &p.records[0], &state, "cancel").unwrap_err();
+    assert!(e.to_string().contains("would start a new covenant"), "{e}");
+    let mut bad = req.clone();
+    bad.order.utxo.covenant_id = Some(g);
+    bad.strays = vec![tutxo(t, TOKEN_COV, 76, 3, g, true)];
+    let e = build_sweep_order(&bad, &kob_protocol::budget::lookup).unwrap_err();
+    assert!(e.to_string().contains("would start a new covenant"), "{e}");
+}
