@@ -72,15 +72,19 @@
 //! Candidates are sorted once per plan. Each walk scans its passive list from the first live entry
 //! and stops at the first position from which nothing can cross it any more (a suffix bound on the
 //! all-in prices). Once the transaction has no room for a new leg, only the legs already in it are
-//! considered. Netting is a two-pointer walk over each token pair's sorted pair orders. No
-//! candidate cap is needed, because the wall-clock deadline alone bounds a hostile book.
+//! considered. Netting is a two-pointer walk over each token pair's sorted pair orders. A pair order
+//! whose netted part breaks its own quantity rules is left out of netting for the rest of the plan,
+//! each pass resumes below the entries already out, and each token pair's netting has its own share
+//! of the plan's work and time (`NET_BOOK_WORK`, `NET_PLAN_WORK`, `NET_TIME_SHARE`), so the KAS books
+//! are always walked (R8F3b-1). No candidate cap is needed beyond that: the wall-clock deadline
+//! bounds the rest of a hostile book.
 //!
 //! Every choice is a pure function of the view, `t` and the configuration, up to the deadline. So
 //! two honest matchers with the same view build the same batch. Which components a tick plans when
 //! executors compete is the weighted selection's choice (§3.6, `super::select`, from the standalone
 //! allocation of [`work_units`]). It never changes how one component is planned.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
@@ -245,7 +249,32 @@ struct Universe {
     allocations: Cell<u64>,
     pair_tries: Cell<u64>,
     net_steps: Cell<u64>,
+    /// Pair orders whose netted part broke their own quantity rules once in this plan: left out
+    /// of netting for the rest of the plan (they may still route, R8F3b-1).
+    net_dead: RefCell<BTreeSet<usize>>,
+    /// Per netting group: how many entries at the top of each side are in `net_dead`, so that a
+    /// pass resumes below them instead of skipping them again (R8F3b-1).
+    net_from: Vec<Cell<(usize, usize)>>,
+    /// Per netting group: the netting work it took in this plan (steps and skipped entries,
+    /// [`NET_BOOK_WORK`]).
+    net_work: Vec<Cell<u64>>,
+    /// The end of the plan's netting slice ([`NET_TIME_SHARE`]): netting stops then, the class
+    /// walks go on to the plan's deadline.
+    net_deadline: Cell<Option<Instant>>,
 }
+
+/// The netting work (walk steps and skipped entries, `PlanWork::net_steps`) one netting group may
+/// take in one plan, and all groups together. Past either, netting stops for the group or the plan,
+/// and the class walks of the plan (the KAS books) go on: no set of orders on one token pair can
+/// take the planning time of the others (R8F3b-1). The honest books of the tests take about a
+/// million and a half at most (300 untipped pair orders a side, `tests/tick_cost_bound.rs`); a step costs a few tens of
+/// nanoseconds, so a group's bound is well under a second, and the time share below caps it anyway.
+const NET_BOOK_WORK: u64 = 4_000_000;
+const NET_PLAN_WORK: u64 = 8_000_000;
+
+/// The share of the plan's time netting may take, whatever the counts (a backstop for a slow
+/// host): a quarter.
+const NET_TIME_SHARE: u32 = 4;
 
 /// The signed quote per base unit of an active walker (asks ascending, bids descending: lower is
 /// better on both sides).
@@ -447,6 +476,7 @@ impl Universe {
             }
             nets.push(NetBook { g1, g2, mx, my, sur_x, sur_y });
         }
+        let nets_len = nets.len();
         let n = cands.len();
         let mut porder_of: Vec<Option<usize>> = vec![None; n];
         for (p, &(s, b)) in porders.iter().enumerate() {
@@ -673,7 +703,28 @@ impl Universe {
             allocations: Cell::new(0),
             pair_tries: Cell::new(0),
             net_steps: Cell::new(0),
+            net_dead: RefCell::new(BTreeSet::new()),
+            net_from: (0..nets_len).map(|_| Cell::new((0, 0))).collect(),
+            net_work: (0..nets_len).map(|_| Cell::new(0)).collect(),
+            net_deadline: Cell::new(inp.deadline.map(|d| {
+                let now = Instant::now();
+                now + d.saturating_duration_since(now) / NET_TIME_SHARE
+            })),
         }
+    }
+
+    /// Moves the resume point of netting group `k` below the dead entries at the top of each
+    /// side (`net_dead`).
+    fn advance_net_from(&self, k: usize, nb: &NetBook) {
+        let dead = self.net_dead.borrow();
+        let (mut i, mut j) = self.net_from[k].get();
+        while i < nb.g1.len() && dead.contains(&nb.g1[i]) {
+            i += 1;
+        }
+        while j < nb.g2.len() && dead.contains(&nb.g2[j]) {
+            j += 1;
+        }
+        self.net_from[k].set((i, j));
     }
 
     /// Whether a `refPrice` is in line with the plain KAS book of its token: at most
@@ -1616,17 +1667,32 @@ impl<'u> Alloc<'u> {
     /// and their surplus is offered to the plain KAS bids of its token.
     fn net_pairs(&mut self) {
         let u = self.u;
-        for nb in &u.nets {
+        for (k, nb) in u.nets.iter().enumerate() {
             let mut out: BTreeSet<usize> = BTreeSet::new();
             let mut pruned = false;
+            // Where each side's pass starts: below the entries at its top that are out of this
+            // netting (dead for the plan, left out in this allocation, or unusable), so that a pass
+            // does not skip them again: the passes stay linear in the group (R8F3b-1).
+            let mut from = u.net_from[k].get();
             for _ in 0..=(nb.g1.len() + nb.g2.len() + 1) {
-                if self.deadline.is_some_and(|d| Instant::now() >= d) {
+                from = self.net_resume(nb, &out, from);
+                let now = Instant::now();
+                if self.deadline.is_some_and(|d| now >= d) || u.net_deadline.get().is_some_and(|d| now >= d) {
                     return;
                 }
-                match self.net_group(nb, &out) {
+                if u.net_steps.get() >= NET_PLAN_WORK {
+                    return;
+                }
+                if u.net_work[k].get() >= NET_BOOK_WORK {
+                    break;
+                }
+                match self.net_group(k, nb, &out, from) {
                     NetResult::Empty => break,
                     NetResult::Exclude(p) => {
-                        out.insert(p);
+                        // Its netted part broke its own quantity rules: out of netting for the
+                        // whole plan, and the next pass resumes below the dead top of its side.
+                        u.net_dead.borrow_mut().insert(p);
+                        u.advance_net_from(k, nb);
                     }
                     NetResult::Done(parts, steps, sx, sy) => {
                         // A netting moves no KAS. The orders' tips and what the surplus may fetch
@@ -1727,12 +1793,37 @@ impl<'u> Alloc<'u> {
     }
 
     /// One greedy netting pass of a token pair without the participants `out`.
-    fn net_group(&self, nb: &NetBook, out: &BTreeSet<usize>) -> NetResult {
+    /// Whether pair order `p` may take part in a netting pass now.
+    fn net_usable(&self, p: usize, out: &BTreeSet<usize>, dead: &BTreeSet<usize>) -> bool {
+        let (s, b) = self.u.porders[p];
+        !out.contains(&p)
+            && !dead.contains(&p)
+            && self.live[s]
+            && self.live[b]
+            && self.qty[s] == 0
+            && self.qty[b] == 0
+            && self.usable(s)
+    }
+
+    /// `from` moved below the unusable entries at the top of each side of `nb`.
+    fn net_resume(&self, nb: &NetBook, out: &BTreeSet<usize>, from: (usize, usize)) -> (usize, usize) {
+        let dead = self.u.net_dead.borrow();
+        let (mut i, mut j) = from;
+        while i < nb.g1.len() && !self.net_usable(nb.g1[i], out, &dead) {
+            i += 1;
+        }
+        while j < nb.g2.len() && !self.net_usable(nb.g2[j], out, &dead) {
+            j += 1;
+        }
+        let w = (i - from.0 + j - from.1) as u64;
+        self.u.net_steps.set(self.u.net_steps.get() + w);
+        (i, j)
+    }
+
+    fn net_group(&self, k: usize, nb: &NetBook, out: &BTreeSet<usize>, from: (usize, usize)) -> NetResult {
         let u = self.u;
-        let usable = |p: usize| {
-            let (s, b) = u.porders[p];
-            !out.contains(&p) && self.live[s] && self.live[b] && self.qty[s] == 0 && self.qty[b] == 0 && self.usable(s)
-        };
+        let dead = u.net_dead.borrow();
+        let usable = |p: usize| self.net_usable(p, out, &dead);
         let mut n: BTreeMap<usize, i64> = BTreeMap::new();
         let (mut sx, mut bx, mut sy, mut by) = (0i128, 0i128, 0i128, 0i128);
         let (mut abs_x, mut abs_y) = (false, false);
@@ -1759,21 +1850,28 @@ impl<'u> Alloc<'u> {
             _ => (0, 0),
         };
         let (mut kx, mut ky) = (0usize, 0usize);
-        let (mut ii, mut jj) = (0usize, 0usize);
+        let (mut ii, mut jj) = from;
         let mut order: Vec<usize> = vec![];
         let mut steps: Vec<(usize, usize)> = vec![];
         let mut guard = 0usize;
+        // Every step and every skipped entry is netting work, charged to the group and the plan.
+        let charge = |w: u64| {
+            u.net_steps.set(u.net_steps.get() + w);
+            u.net_work[k].set(u.net_work[k].get() + w);
+        };
         loop {
             guard += 1;
-            u.net_steps.set(u.net_steps.get() + 1);
-            if guard > 64 * (nb.g1.len() + nb.g2.len()) + 64 {
+            charge(1);
+            if guard > 64 * (nb.g1.len() + nb.g2.len()) + 64 || u.net_work[k].get() >= NET_BOOK_WORK {
                 break;
             }
             while ii < nb.g1.len() && blocked(nb.g1[ii], &n, &ids) {
                 ii += 1;
+                charge(1);
             }
             while jj < nb.g2.len() && blocked(nb.g2[jj], &n, &ids) {
                 jj += 1;
+                charge(1);
             }
             if ii >= nb.g1.len() || jj >= nb.g2.len() {
                 break;
