@@ -11,7 +11,7 @@ import { parseRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import type { ActionRequest } from '../../kob/types';
 import { FakeChain, MAKER, TOKEN, goldenRequest, keyUtxo, orderViewOf, placeGolden, signAndValidate, snapshotOfRecovered, strayFor, testAddress, tokenUtxoView, tradableRegistryJson } from '../../testing/chain-fixtures';
-import { abandoningOrders, abandonsStrays, describeActionError, dropRecords, lostStrays, markCancelling, planAmendFor, planCancelFor, planCancelMany, planRefundFor, planSweepFor, snapshotFor, strandedCount, straysUnchecked, strayToTokenUtxo } from './actions';
+import { abandoningOrders, abandonsStrays, describeActionError, dropRecords, lacksHeldUtxo, lostStrays, markCancelling, planAmendFor, planCancelFor, planCancelMany, planRefundFor, planSweepFor, snapshotFor, strandedCount, straysUnchecked, strayToTokenUtxo } from './actions';
 import { buildEntries, describeEntry, type OrderEntry } from './orders-model';
 
 const kob = loadKobNode();
@@ -296,6 +296,20 @@ describe('with the indexer down, a maker gets an order back from its record and 
     const { plan } = await planCancelFor(services({ chain: withStrays(chainOf(a), [stray]), indexer: { tokenUtxos: cut } }), MAKER.pk, entryOf(a, false, true), []);
     expect(plan.ok).toBe(false);
     expect(straysUnchecked(plan)).toBe(false);
+  });
+});
+
+describe('the record path is tried whenever the view lacks a UTXO the state holds (R8FX-1, R8FX2-I1)', () => {
+  it('a missing custody, and the missing bought-custody of a Collected bid, send it to the record; a whole view does not', () => {
+    const a = place('create.ask');
+    expect(lacksHeldUtxo(a.snap)).toBe(false);
+    expect(lacksHeldUtxo({ ...a.snap, custody: null })).toBe(true);
+    const bid = place('create.bid').snap;
+    const st = JSON.parse(JSON.stringify(bid.order.state));
+    Object.assign(st.state, { mode: '1', bought: '700' });
+    const collected = { ...bid, order: { ...bid.order, state: st } };
+    expect(lacksHeldUtxo(collected)).toBe(true);
+    expect(lacksHeldUtxo({ ...collected, boughtCustody: strayFor(bid, 700n, 77) })).toBe(false);
   });
 });
 

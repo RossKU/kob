@@ -9,6 +9,7 @@ import type { BuiltTx } from './types';
 import { loadKobNode } from './wasm.node';
 import { MAKER, keyUtxo, nodeFactsOf, placeGolden, tradableRegistryJson } from '../testing/chain-fixtures';
 import { summarize } from '../signer/summary';
+import { sweepTakingCustody } from '../testing/hostile-tx';
 
 const kob = loadKobNode();
 const registry = parseRegistry(tradableRegistryJson(), { kob });
@@ -106,9 +107,9 @@ describe('a spend that keeps the order alive must leave its custody (R8FX-1)', (
     const honest = planSweep(env(), { ...snap, strays: [stray] });
     expect(honest.ok).toBe(true);
     expect(codes(decodeSigning({ kob, built: honest.built!, maker: MAKER.pk, registry: null }))).toEqual([]);
-    // the builder is asked to sweep the custody as a stray (the request the web planner never makes now)
-    const req = { ...honest.request!, strays: [stray, snap.custody!] };
-    const evil = kob.build(req as never);
+    // the honest sweep with its stray input swapped for the custody at the transaction level (the
+    // builder refuses to build it, and the decoder must not depend on that)
+    const evil = sweepTakingCustody(kob, honest.built!, snap, stray);
     expect(codes(decodeSigning({ kob, built: evil, maker: MAKER.pk, registry, nodeInputs: nodeFactsOf(evil) }))).toContain('sweep-custody-spent');
     expect(codes(decodeSigning({ kob, built: evil, maker: MAKER.pk, registry: null }))).toContain('sweep-custody-spent');
     const frame = summarize(kob, evil, MAKER.pk, []);

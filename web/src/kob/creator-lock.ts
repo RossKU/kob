@@ -107,6 +107,11 @@ export interface VerifiedLock {
   extensionCommitment: Hex;
   /** The token's supply when every genesis token output is proven, else null. */
   supply: U64 | null;
+  /**
+   * The genesis holds units of another extension class than the locked ones: a share of supply
+   * across classes would count units that never trade as the token (R8FX-6).
+   */
+  otherClass: boolean;
   /** An automatic lock's coin: the genesis's plain KAS output at the lock's address. */
   coin: LockedOutput | null;
 }
@@ -320,7 +325,7 @@ export function verifiedLockOf(v: unknown, isProgram: (name: string) => name is 
   }
   return {
     kind, until: o.until, key: o.key, script: o.script, authority: o.authority, amount: o.amount, outputs: outputs.map((x) => ({ index: x.index, amount: x.amount, ...(u64(x.value) ? { value: x.value } : {}) })),
-    program: o.program, extensionCommitment: o.extensionCommitment, supply: u64(o.supply) ? o.supply : null, coin,
+    program: o.program, extensionCommitment: o.extensionCommitment, supply: u64(o.supply) ? o.supply : null, otherClass: o.otherClass === true, coin,
   };
 }
 
@@ -334,6 +339,16 @@ export const lockOpen = (until: U64 | bigint, now: number = Date.now(), marginMs
  * The share of the supply a lock holds, as a percent with at most 2 decimals, such as `40` or
  * `12.5`. It is null without a known positive supply.
  */
+/**
+ * The lock's share of the supply of the market `marketExt` trades, or null. It is given only when
+ * the lock's class is that market's class and the genesis holds no other class (R8FX-6); else the
+ * lock is shown without a share.
+ */
+export function lockShareOfMarket(lock: Pick<VerifiedLock, 'amount' | 'supply' | 'extensionCommitment' | 'otherClass'>, marketExt: Hex | null | undefined): string | null {
+  if (lock.otherClass || !marketExt || marketExt.toLowerCase() !== lock.extensionCommitment.toLowerCase()) return null;
+  return lockSharePercent(lock.amount, lock.supply);
+}
+
 export function lockSharePercent(amount: U64 | bigint, supply: U64 | bigint | null | undefined): string | null {
   if (supply === null || supply === undefined || BigInt(supply) <= 0n) return null;
   const bps = (BigInt(amount) * 10_000n) / BigInt(supply);

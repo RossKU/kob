@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadKobNode } from './wasm.node';
 import { pubkeyOf, signBuilt } from '../testing/local-signer';
-import { LOCK_COIN, LOCK_COIN_MAX, buildLockCoin, buildUnlock, creatorLock, lockOfScript, lockSharePercent, parseLockScript, verifiedLockOf } from './creator-lock';
+import { LOCK_COIN, LOCK_COIN_MAX, buildLockCoin, buildUnlock, creatorLock, lockOfScript, lockShareOfMarket, lockSharePercent, parseLockScript, verifiedLockOf } from './creator-lock';
 import { decodeDeclaration, verifyLaunchProof } from './kcc23';
 import { emptyIssueForm, metadataBytes, IssueFormError, planIssue, type IssueForm, type IssuePlan } from './issue';
 import { defaultSaleForm } from './curve';
@@ -354,5 +354,20 @@ describe('the signer protocol', () => {
     expect(msg({ locks: [{ until: '1800000000000', key: maker, extra: 1 }] })).toBeNull();
     // never with a creation
     expect(msg({ locks: [{ until: '1800000000000', key: maker }], prep: p.prep })).toBeNull();
+  });
+});
+
+describe('the lock share is given only for the class the market trades (R8FX-6)', () => {
+  const E = 'aa'.repeat(32);
+  const lock = { amount: '400', supply: '1000', extensionCommitment: E, otherClass: false };
+  it('the same class: the share; another class, an unknown one or a genesis with another class: none', () => {
+    expect(lockShareOfMarket(lock, E)).toBe('40');
+    expect(lockShareOfMarket(lock, E.toUpperCase())).toBe('40');
+    expect(lockShareOfMarket(lock, 'bb'.repeat(32))).toBeNull();
+    expect(lockShareOfMarket(lock, null)).toBeNull();
+    expect(lockShareOfMarket({ ...lock, otherClass: true }, E)).toBeNull();
+  });
+  it('the plain share of supply is unchanged', () => {
+    expect(lockSharePercent(lock.amount, lock.supply)).toBe('40');
   });
 });
