@@ -74,7 +74,8 @@ On testnet-10 it is a warning.
   node, in every mode, and one found live is cancelled through the node, with an error alert (`proven-live`), and
   counts again until the node shows it ended. When a STOP or an IDLE pull begins (once per STOP, once each time
   quoting stops), every proven ask gets one more lookup, 20 a cycle (one `kob recover --cancel` call of at most 4,000
-  candidate scripts), with every hint and the indexer's per-order view when it answers; a STOP ends only after that
+  candidate scripts), after the pull's own cancels of that cycle, with every hint and the indexer's per-order view
+  when it answers (6 such reads at a time); a STOP ends only after that
   pass (at most 10 cycles for 200 records; a record the node does not answer for is tried in 3 calls, then reported),
   and the stop line says how many were looked up, found live and cancelled, and not found, the last listed in
   `<dataDir>/proven-not-found.json` (the shape `kob recover --from` reads). A proven ask is cancelled through the node

@@ -1444,6 +1444,7 @@ test('a STOP with 60 proven asks that are gone ends within the bounded number of
     reset();
   }
 });
+
 // R6T-2: an order ends on its cancel only once the node shows the cancel's own transaction (an
 // output of it to the bot's address), never because the cancel was submitted.
 const age = (bot) => { for (const s of Object.values(bot.state.orders)) if (s.pending) s.pending.since -= 200_000; };
@@ -1653,3 +1654,27 @@ test('a payment that could pay for more than 200 fill amounts is skipped as a hi
   assert.deepEqual(bot.payHints(id), [50_000_000 - 1_500_007]);
 });
 
+// R6T-6: in a STOP or IDLE pull the pull's own cancels go out before the pass over the proven asks.
+test('a STOP sends the pull\'s cancels before the pass over the proven asks (R6T-6)', { timeout: 180_000 }, async () => {
+  reset();
+  const { bot, chain } = setup();
+  try {
+    bot.nodeOutputs = async () => [];
+    const { id, txid, proceeds } = await filledAsk(bot, chain);
+    bot.nodeOutputs = async () => [{ txid, index: 1, amount: proceeds }];
+    await bot.cycle();
+    assert.ok(bot.state.orders[id].proven);
+    cloneProven(bot, id, 5);
+    const seq = [];
+    const exec = bot.execute.bind(bot);
+    bot.execute = async (actions) => { if (actions.some((x) => x.kind === 'cancel')) seq.push('pull'); return exec(actions); };
+    const step = bot.provenPassStep.bind(bot);
+    bot.provenPassStep = async (...a) => { seq.push('pass'); return step(...a); };
+    writeFileSync(bot.p.stop, 'stop\n');
+    await bot.cycle();
+    assert.deepEqual(seq.slice(0, 2), ['pull', 'pass']);
+  } finally {
+    rmSync(bot.p.stop, { force: true });
+    reset();
+  }
+});

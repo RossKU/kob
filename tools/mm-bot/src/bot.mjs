@@ -44,6 +44,7 @@ export const PAY_SOURCES_MAX = 12;
 export const PAY_HINTS_MAX = 160;
 export const PAY_RANGE_MAX = 200;
 const CANCEL_TXIDS_KEEP = 8; // txids of the cancels sent per order, any of which may confirm (R6T-2)
+const INDEXER_READS = 6; // per-order indexer reads in flight at once (R6T-6), within one client's 8 at kobd
 // A paid ask is kept as proven (R5T-1): its level and cap share are free, it is still looked up.
 export const PROVEN_MAX = 200; // proven records kept; past it a proof frees nothing
 // Lookups of proven records a cycle, in rotation: each costs up to 200 candidate scripts in the
@@ -227,7 +228,6 @@ export class Bot {
     const { changed: _c, pull: _p, ...rec } = mode;
     this.state.mode = rec;
     this.provenPassBegin(mode, now);
-    if (this.state.provenPass) await this.provenPassStep(now, { indexer: true });
 
     let sides = { bids: { quoting: false, reason: 'idle' }, asks: { quoting: false, reason: 'idle' } };
     let plan = null;
@@ -244,6 +244,9 @@ export class Bot {
       await this.execute(plan.actions);
     }
     if (Object.keys(this.state.foreign).length) await this.cancelForeign(now);
+    // The pass over the proven asks of a STOP or IDLE pull comes after the pull's own cancels, so
+    // that neither its indexer reads nor its node call delay them (R6T-6).
+    if (this.state.provenPass) await this.provenPassStep(now, { indexer: true });
 
     if (c.retiredTokens.length) await this.retire(bal, mode.mode === STOPPING);
     // A payment that landed while the bot sent is recorded before a later send can spend it.
@@ -303,14 +306,24 @@ export class Bot {
     // quote was set at, it would cross fair, so it is pulled too (T-5).
     const drift = snap.ok ? Math.max(0, ...Object.values(this.state.orders).filter((s) => s.quotedFair > 0 && !s.proven).map((s) => Math.abs(snap.fair / s.quotedFair - 1))) : 0;
     const drifted = drift > c.quotes.spreadPct / 200;
-    // The pass of a STOP or IDLE pull needs no indexer either.
+    // The pass of a STOP or IDLE pull needs no indexer either. It runs after the pull's own
+    // cancels, so that its node call does not delay them (R6T-6).
     this.provenPassBegin(mode, now);
     const passing = !!this.state.provenPass;
-    if (passing) await this.provenPassStep(now, { indexer: false });
+    await this.blindCancels(mode, drift, drifted, passing, now, cause);
+    if (passing) {
+      await this.provenPassStep(now, { indexer: false });
+      this.save();
+    }
+  }
+
+  /** The cancels of blindPull: every order a pull or the drift makes due, from the bot's own records. */
+  async blindCancels(mode, drift, drifted, passing, now, cause) {
+    const c = this.cfg;
     if (!mode.pull && !drifted) return;
     const why = mode.pull ? mode.reason ?? mode.mode : `drift: fair moved ${(drift * 100).toFixed(2)}% from a quote's`;
     const timeout = c.safety.orderVisibleTimeoutSec * 1000;
-    // Proven asks (R5T-1): the pass's batch above, else this cycle's share of the rotation.
+    // Proven asks (R5T-1): the pass's batch (after these cancels), else this cycle's share of the rotation.
     const look = new Set(passing ? [] : this.provenSlice(now));
     const due = Object.keys(this.state.orders).filter((id) => {
       const s = this.state.orders[id];
@@ -604,6 +617,21 @@ export class Bot {
     return !!t && !!this.nodeOutputs && Object.values(this.state.payments).some((p) => p.txid === t);
   }
 
+  /**
+   * The indexer's per-order views of `ids`, INDEXER_READS at a time (R6T-6): the amount left each
+   * names is a hint, which the node checks. One that does not answer adds nothing.
+   */
+  async idxAmounts(ids) {
+    const list = [...ids];
+    const one = async () => {
+      for (let id = list.shift(); id != null; id = list.shift()) {
+        const v = await this.idx.order(id).catch(() => null);
+        if (v?.amountLeft > 0 && this.state.orders[id]) this.state.orders[id].idxAmount = v.amountLeft;
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(INDEXER_READS, list.length) }, one));
+  }
+
   /** One cancel through the node from the bot's record only (kob recover --cancel). */
   async cancelNode(id) {
     const r = (await this.cancelMany([id])).get(id);
@@ -647,12 +675,7 @@ export class Bot {
       else if (s) { pass.looked++; pass.found++; } // found live by the rotation since
     }
     if (batch.length) {
-      if (indexer) {
-        for (const id of batch) {
-          const v = await this.idx.order(id).catch(() => null);
-          if (v?.amountLeft > 0) this.state.orders[id].idxAmount = v.amountLeft;
-        }
-      }
+      if (indexer) await this.idxAmounts(batch);
       const res = this.maker ? await this.cancelMany(batch) : new Map();
       for (const id of batch) {
         const s = this.state.orders[id];
@@ -752,14 +775,16 @@ export class Bot {
     this.endProven(now);
     // Proven asks (R5T-1) are looked up a few a cycle, in rotation, the ones listed first.
     const look = this.provenSlice(now, new Set(Object.keys(this.state.orders).filter((id) => byId.has(id))));
+    // The indexer's per-order views of the asks it does not list, read at once (R6T-6).
+    await this.idxAmounts(Object.keys(this.state.orders).filter((id) => {
+      const s = this.state.orders[id];
+      if (byId.has(id) || !isAsk(s)) return false;
+      return s.proven && !s.proven.liveAt ? look.includes(id) : !(s.pending?.kind === 'place' && !due(s.pending));
+    }));
     for (const id of look) {
       const s = this.state.orders[id];
       this.learn(s, raw.get(id));
       check.push(id);
-      if (!byId.has(id)) {
-        const v = await this.idx.order(id).catch(() => null);
-        if (v?.amountLeft > 0) s.idxAmount = v.amountLeft;
-      }
       hints[id] = this.hintsOf(id, byId.get(id)?.amountLeft ?? null);
     }
     for (const [id, s] of Object.entries(this.state.orders)) {
@@ -771,11 +796,7 @@ export class Bot {
         check.push(id);
         // An ask the list leaves out: the indexer's own view of it may still name its amount, which
         // the node then checks (R3T-3).
-        if (isAsk(s)) {
-          const v = await this.idx.order(id).catch(() => null);
-          if (v?.amountLeft > 0) s.idxAmount = v.amountLeft;
-          hints[id] = this.hintsOf(id);
-        }
+        if (isAsk(s)) hints[id] = this.hintsOf(id);
         continue;
       }
       if (isAsk(s)) hints[id] = this.hintsOf(id, o.amountLeft);
