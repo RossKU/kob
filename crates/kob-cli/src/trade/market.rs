@@ -344,7 +344,12 @@ pub fn declared_from_proof(cov: &[u8; 32], proof: &serde_json::Value) -> Result<
     if v.covenant_id != *cov {
         return Err(format!("the KCC-23 launch proof served for {id} binds {}: refused", to_hex(&v.covenant_id)));
     }
-    Ok(Declared { decimals: v.token.decimals.map(u32::from), symbol: v.token.symbol, name: v.token.name })
+    // the creator's words: shown only through the one sanitiser (R8F3c-2)
+    Ok(Declared {
+        decimals: v.token.decimals.map(u32::from),
+        symbol: v.token.symbol,
+        name: v.token.name.map(|n| crate::text::clean(&n)),
+    })
 }
 
 /// The unit words of an amount: `1250base`, `2tok`, `2KAS` and `1000sompi`.
@@ -415,7 +420,9 @@ pub fn indexer_tokens(v: &serde_json::Value) -> Result<Vec<TokenFacts>, String> 
         .map(|t| {
             Ok(TokenFacts {
                 cov: h(t.get("covenant_id")).ok_or("indexer token without covenant_id")?,
-                ticker: t.get("ticker").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                // an indexer's ticker is the indexer's word: it is used only under the rule of a declared
+                // symbol (ASCII letters and digits, a letter first, no unit word), else the token has none (R8F3c-2)
+                ticker: ticker_of_symbol(t.get("ticker").and_then(|s| s.as_str())).filter(|s| s.len() <= 16).unwrap_or_default(),
                 // An executor reports the decimals of a registry entry as list facts. The decimals
                 // it derives itself (a declaration or a program default, see `decimals_source`) are
                 // resolved here, with the checks against the scale of the market.

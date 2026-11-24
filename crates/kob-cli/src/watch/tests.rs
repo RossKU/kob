@@ -494,3 +494,31 @@ fn arguments() {
     let (w, _) = setup(&a(&format!("order {} {}", to_hex(&ORDER), to_hex(&ORDER)))).unwrap();
     assert_eq!(w.kind.channels().len(), 2, "a repeated id is one channel");
 }
+
+/// R8F3c-2: the executor's text (an order id, a txid, an error message, an unknown frame's type) never reaches the
+/// terminal with a carriage return, a line break, an escape sequence or a bidirectional override.
+#[test]
+fn hostile_feed_text_never_reaches_the_terminal() {
+    const HOSTILE: &str = "X\r  paid 0 KAS\n\u{1b}[2K\u{1b}[1A\u{202e}";
+    let script: Script = Arc::new(|_, ws| {
+        send(ws, subscribed(&["reorg".to_string(), "fills".to_string()]));
+        let mut f = fill("2500");
+        f["data"]["order"] = json!(HOSTILE);
+        f["data"]["txid"] = json!(HOSTILE);
+        send(ws, f);
+        send(ws, json!({"type": "error", "data": {"message": HOSTILE}}));
+        send(ws, json!({"channel": "fills", "type": HOSTILE, "data": {"a": HOSTILE}}));
+        After::Hold
+    });
+    let server = start(routes(), false, script);
+    let r = watch(&server, &["fills"], false, |o, e| {
+        o.contains("fill  ask") && e.contains("error: server") && o.matches('X').count() >= 3
+    });
+    for (what, text) in [("stdout", &r.out), ("stderr", &r.err)] {
+        for bad in ['\r', '\u{1b}', '\u{202e}'] {
+            assert!(!text.contains(bad), "{what}: {bad:?} in {text:?}");
+        }
+        assert!(!text.contains("X\n"), "{what}: a line break of the feed's text: {text:?}");
+    }
+    assert!(r.out.contains(r"order X\u{d}"), "the feed's text is shown escaped: {}", r.out);
+}

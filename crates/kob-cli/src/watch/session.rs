@@ -216,7 +216,7 @@ fn poll(ws: &mut WebSocket<Stream>) -> Result<Option<Value>, String> {
         }
         Ok(Message::Close(f)) => Err(match f {
             Some(f) if f.reason.is_empty() => format!("the server closed the connection (code {})", u16::from(f.code)),
-            Some(f) => format!("the server closed the connection (code {}: {})", u16::from(f.code), f.reason),
+            Some(f) => format!("the server closed the connection (code {}: {})", u16::from(f.code), crate::text::clean(&f.reason)),
             None => "the server closed the connection".into(),
         }),
         // Tungstenite queued the pong, so send it now.
@@ -449,7 +449,7 @@ impl Watch {
             }
             "error" => {
                 out.json_only(f);
-                out.error(&format!("server: {}", data["message"].as_str().unwrap_or("(no message)")));
+                out.error(&format!("server: {}", crate::text::clean_long(data["message"].as_str().unwrap_or("(no message)"), 400)));
             }
             _ => out.event(&frames::generic_line(f), f),
         }

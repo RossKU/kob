@@ -140,7 +140,11 @@ pub fn parse_reply(text: &str, id: u64) -> Result<Reply, WrpcError> {
         return Ok(Reply::Other);
     }
     if let Some(err) = v.get("error").filter(|e| !e.is_null()) {
-        let msg = err.get("message").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| err.to_string());
+        // the node's words: through the one sanitiser, bounded (R8F3c-2)
+        let msg = crate::text::clean_long(
+            &err.get("message").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| err.to_string()),
+            400,
+        );
         return Err(WrpcError::Node(msg));
     }
     match v.get("params") {
