@@ -27,10 +27,28 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+/// Most seconds the present of a public read ([`present_daa`]) runs ahead of the store's cursor: the lag tolerance a
+/// following store keeps (90 s), at the network's DAA rate (900 DAA at 10 per second).
+pub const PRESENT_AHEAD_MAX_SECS: u64 = 90;
+
+/// The DAA score public reads take as the present (R7, the node's claim): the store's own cursor (verified), advanced by
+/// the wall-clock time since the cursor block's header time at the network's rate, never more than
+/// [`PRESENT_AHEAD_MAX_SECS`] of it ahead of the cursor, and never behind it. A node's `virtual_daa_score` is a claim
+/// nothing verifies, so no public answer depends on it: an auction's quote now, the rows a read takes as fillable or
+/// expired, `confirmations` and `settled`. `None` while the store has no cursor (the reads then take the store's).
+pub fn present_daa(cursor_daa: u64, cursor_time_ms: Option<u64>, daa_per_second: u64, now_ms: u64) -> Option<u64> {
+    if cursor_daa == 0 {
+        return None;
+    }
+    let ahead = cursor_time_ms.map_or(0, |t| now_ms.saturating_sub(t).saturating_mul(daa_per_second) / 1_000);
+    Some(cursor_daa.saturating_add(ahead.min(PRESENT_AHEAD_MAX_SECS.saturating_mul(daa_per_second))))
+}
+
 /// Context for deriving `confirmations`, `settled` and `expired`.
 #[derive(Debug, Clone, Copy)]
 pub struct ReadCtx {
-    /// DAA score of the node, when known.
+    /// The present DAA score of the read. Public reads take [`present_daa`] (`api::App::ctx`), never the node's claim;
+    /// the field keeps its name for the internal readers that pass the node's position.
     pub node_daa: Option<u64>,
     /// Confirmations a view needs to count as settled.
     pub settle_depth_daa: u64,

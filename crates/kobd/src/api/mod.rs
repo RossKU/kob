@@ -136,8 +136,11 @@ pub struct App {
 
 impl App {
     pub(crate) fn ctx(&self) -> ReadCtx {
+        // The present of every public read: the store's verified cursor advanced by the wall clock, never the node's claim.
+        let snap = self.state.health.snapshot();
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
         ReadCtx {
-            node_daa: self.state.health.snapshot().node_daa,
+            node_daa: crate::indexer::reads::present_daa(snap.cursor_daa, snap.cursor_time_unix_ms, self.state.daa_per_second, now_ms),
             settle_depth_daa: self.state.settle_depth_daa,
             now_unix: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs()),
         }

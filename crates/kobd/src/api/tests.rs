@@ -42,8 +42,8 @@ fn env(tweak: impl FnOnce(&mut ApiConfig)) -> Env {
     let health = Arc::new(HealthState::new("testnet-10"));
     health.update(|s| {
         s.state = FollowerState::Following;
-        s.node_daa = Some(1000);
-        s.cursor_daa = 990;
+        s.node_daa = Some(1010);
+        s.cursor_daa = 1000;
     });
     let mut cfg = ApiConfig::default();
     cfg.rate_limit.per_ip_rps = 0.0;
@@ -326,7 +326,7 @@ async fn hot_reads_are_kept_for_one_data_generation() {
     e.state.generation.bump();
     let (_, v) = get(&app, &book).await;
     assert_eq!(ids(&v["asks"]), vec![h(2)]);
-    e.state.health.update(|h| h.node_daa = Some(1001));
+    e.state.health.update(|h| h.cursor_daa = 1001);
     let (_, v) = get(&app, &book).await;
     assert_eq!(ids(&v["asks"]), vec![h(2), h(3)], "active from DAA 1001");
 }
@@ -427,7 +427,7 @@ async fn the_kas_book_lists_only_orders_a_matcher_may_fill_now() {
     assert_eq!((v["status"].as_str(), v["expired"].as_bool()), (Some("partial"), Some(true)));
     // One block earlier every one of them was fillable, but the IOC is a taker in flight, never a
     // resting order of the book (from its activation to its kill time too).
-    e.state.health.update(|h| h.node_daa = Some(650));
+    e.state.health.update(|h| h.cursor_daa = 650);
     set("UPDATE orders SET active_from = 600 WHERE covenant_id = ?1", 3);
     set("UPDATE orders SET deadline = NULL WHERE covenant_id = ?1", 7);
     let (_, v) = get(&app, &format!("/v1/books/{}?aggregate=false", h(TOKEN))).await;
@@ -534,7 +534,7 @@ async fn the_kas_book_depth_and_stats_read_resting_orders_at_their_current_quote
     // 300 DAA later: the auction is at 3.20 - 13 x 0.03 = 2.81, the rising bid at 1.80 + 13 x 0.03
     // = 2.19, and the band around their mid 2.50 still empty. The IOC orders are past their kill
     // time.
-    e.state.health.update(|h| h.node_daa = Some(1300));
+    e.state.health.update(|h| h.cursor_daa = 1300);
     let (_, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
     assert_eq!((v["best_bid"].as_str(), v["best_ask"].as_str()), (Some("219000"), Some("281000")));
 }
@@ -3279,4 +3279,57 @@ async fn a_book_of_a_small_depth_is_the_head_of_its_step() {
             assert_eq!(small[side].as_array().unwrap().as_slice(), &b[..1], "{route} {side}");
         }
     }
+}
+
+/// R7 (the node's claim): no public answer depends on a DAA score a node only claimed. The books, depth, statistics, a
+/// pair book and an order view (its `confirmations` and `settled`, a decaying ask's quote now) are the same with the
+/// node's `virtual_daa_score` 10^6 ahead of the store's cursor and 10^6 behind it; the present runs ahead of the cursor
+/// by the wall clock since the cursor block, at most `PRESENT_AHEAD_MAX_SECS` of it.
+#[tokio::test]
+async fn a_node_claim_ahead_or_behind_changes_no_public_answer() {
+    use kob_protocol::state::{AnyState, AskState};
+    let e = env(|_| {});
+    seed_pair(&e.w);
+    let decaying = AskState {
+        token_cov_id: [QUOTE; 32],
+        slope: 1_000,
+        price_end: 100_000_000,
+        decay_step: 10,
+        ..crate::testkit::ask(3, 130_000_000)
+    };
+    seed_live(&e.w, 0x43, &AnyState::KobAsk(decaying), 4, 10 * W);
+    let app = router(e.state.clone());
+    let paths = [
+        format!("/v1/books/{}?aggregate=false&include_dust=true", h(QUOTE)),
+        format!("/v1/books/{}", h(BASE)),
+        format!("/v1/depth/{}", h(QUOTE)),
+        format!("/v1/stats/{}", h(QUOTE)),
+        format!("/v1/orders/{}", h(0x43)),
+        format!("/v1/orders?token={}", h(QUOTE)),
+        format!("/v1/pairs/{}/{}/book", h(BASE), h(QUOTE)),
+    ];
+    let read = || async {
+        let mut out = vec![];
+        for p in &paths {
+            let (s, v) = get(&app, p).await;
+            assert_eq!(s, StatusCode::OK, "{p}: {v}");
+            out.push(v);
+        }
+        out
+    };
+    let honest = read().await;
+    assert_eq!(honest[4]["confirmations"].as_i64(), Some(1000 - 400), "{}", honest[4]);
+    for claim in [1_000 + 1_000_000, 0] {
+        e.state.health.update(|h| h.node_daa = Some(claim));
+        e.state.generation.bump();
+        assert_eq!(read().await, honest, "a node claiming DAA {claim}");
+    }
+    // the present: the cursor, advanced by the wall clock since the cursor block, never more than the bound ahead
+    use crate::indexer::reads::{present_daa, PRESENT_AHEAD_MAX_SECS};
+    let now = 1_800_000_000_000u64;
+    assert_eq!(present_daa(1_000, None, 10, now), Some(1_000));
+    assert_eq!(present_daa(1_000, Some(now - 3_000), 10, now), Some(1_030));
+    assert_eq!(present_daa(1_000, Some(now - 1_000_000_000), 10, now), Some(1_000 + PRESENT_AHEAD_MAX_SECS * 10));
+    assert_eq!(present_daa(1_000, Some(now + 5_000), 10, now), Some(1_000), "a header from the future never moves it back");
+    assert_eq!(present_daa(0, Some(now), 10, now), None);
 }
