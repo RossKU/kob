@@ -111,3 +111,45 @@ export function restateMakerOutput(kob: KobWasm, honest: BuiltTx, maker: string,
   out.scriptPublicKey = kob.tokenScriptPublicKey(leader.template, toMaker);
   return b;
 }
+
+/**
+ * Two builds in one transaction (R9FB2-2): the inputs, plans, roles and sign requests of `a` then
+ * `b`, their outputs likewise (b's covenant bindings re-pointed to its moved inputs), and one payload
+ * with both builds' records at their new indices. The fee and id are a's.
+ */
+export function bundle(kob: KobWasm, a: BuiltTx, b: BuiltTx): BuiltTx {
+  const x = clone(a);
+  const y = clone(b);
+  const di = x.tx.inputs.length;
+  const dout = x.tx.outputs.length;
+  x.tx.inputs.push(...y.tx.inputs);
+  x.plans.push(...y.plans);
+  x.roles.push(...y.roles);
+  x.sign.push(...y.sign.map((r) => ({ ...r, inputIndex: r.inputIndex + di })));
+  x.tx.outputs.push(...y.tx.outputs.map((o) => (o.covenant ? { ...o, covenant: { ...o.covenant, authorizingInput: o.covenant.authorizingInput + di } } : o)));
+  const recs = (t: BuiltTx) => (t.tx.payload ? (kob.decodePayload(t.tx.payload as never)?.records ?? []) : []);
+  const shifted = recs(y).map((r) => {
+    const s = { ...r } as Record<string, unknown>;
+    if (typeof s.output === 'number') s.output = (s.output as number) + dout;
+    if (typeof s.input === 'number') s.input = (s.input as number) + di;
+    return s;
+  });
+  const all = [...recs(x), ...shifted];
+  if (all.length) x.tx.payload = kob.encodePayload(all as never) as never;
+  return x;
+}
+
+/**
+ * The amend or sweep continuation of order input `i` re-bound to the GENESIS id of that input's
+ * outpoint, and the input claimed to carry that id (R9FB2-1): on chain the order ends.
+ */
+export function continuationAsGenesis(b0: BuiltTx, i: number, genesisId: (outpoint: { transactionId: string; index: number }, outs: { index: number; value: string; scriptPublicKey: string }[]) => string): BuiltTx {
+  const b = clone(b0);
+  const at = b.tx.outputs.findIndex((o) => o.covenant?.authorizingInput === i);
+  if (at < 0) throw new Error('no continuation');
+  const o = b.tx.outputs[at]!;
+  const g = genesisId(b.tx.inputs[i]!, [{ index: at, value: String(o.value), scriptPublicKey: o.scriptPublicKey }]);
+  o.covenant = { ...o.covenant!, covenantId: g };
+  (b.tx.inputs[i]!.utxo as { covenantId?: string | null }).covenantId = g;
+  return b;
+}

@@ -27,6 +27,7 @@ import { decimalsOfScale, formatKas, formatTokenAmount } from '../kob/units';
 import type { KobWasm } from '../kob/wasm';
 import { RAW_TOKEN_DECIMALS, t } from '../i18n';
 import { formatRowTime } from '../ui/kit/format';
+import { frameShape } from './shapes';
 import { auctionSeconds, orderRows, orderTitle, orderTypeCode, type Fmt, type MarketFillsFacts } from '../ui/confirm/confirm-model';
 import type { GenesisClaim, LockHint, TokenHint } from './protocol';
 import { div, kasWords, tokensPerKasWords, tokenWords, type Rounding } from './words';
@@ -491,7 +492,7 @@ function withDelivery(sum: SummaryOrder, o: DecodedOrder, hints: TokenHint[]): S
  * - KAS locked into orders and paid to other keys,
  * - the fee.
  */
-export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: KobWasm, terms = false): SignerSummary {
+export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: KobWasm, terms = false, built?: BuiltTx): SignerSummary {
   const hints = withOrderScales(s, appHints);
   const lines: SummaryLine[] = [];
   const k = s.net.kas;
@@ -528,7 +529,11 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   // named. A hostile indexer can only swap one of the user's own orders for another, and this
   // makes the swap visible.
   for (const sp of s.spends.filter((x) => x.makerIsWallet && x.covenantId && (x.action === 'cancel' || x.action === 'refund' || x.action === 'sweep')).slice(0, MAX_CLOSED_LINES)) {
-    lines.push({ label: t(sp.action === 'sweep' ? 'signer.net.sweeps' : sp.retired ? 'signer.net.closesRetired' : 'signer.net.closes'), value: longId(sp.covenantId!), dir: null });
+    // the id is the app's word (no signature covers an input's covenant id); the terms are the
+    // order's bound state (R9FB2-4)
+    const d = sp.description;
+    const value = terms && d ? t('signer.net.orderTerms', { id: longId(sp.covenantId!), terms: `${d.kind}, ${d.side}` }) : longId(sp.covenantId!);
+    lines.push({ label: t(sp.action === 'sweep' ? 'signer.net.sweeps' : sp.retired ? 'signer.net.closesRetired' : 'signer.net.closes'), value, dir: null });
   }
   // A claim (bid-delivery-spec §7) says what the order bought, where it goes and the carrier added
   // to the order.
@@ -564,7 +569,19 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     const chain = orderSummary(o.description, { value: o.value, locked: o.locked, deadline: o.deadline, fills: marketFillsOf(o, kob) }, hints, registry, terms);
     return withDelivery(flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain, terms) ?? chain, o, hints);
   });
-  const found = [...s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)), ...(terms ? scaleMismatches(s, hints) : [])];
+  const found: { code: string }[] = [...s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)), ...(terms ? scaleMismatches(s, hints) : [])];
+  // the frame signs only its closed list of shapes, judged on bound data (signer/shapes.ts)
+  if (terms && kob && built) {
+    const v = frameShape(s, built, s.maker, kob);
+    if (!v.ok) {
+      found.push({ code: 'frame-shape' });
+      lines.push({ label: t('signer.shape.refused'), value: v.reason, dir: null });
+    } else {
+      // a take's claimed fills and price give way to the bound lines of its shape
+      if (v.shape === 'take') for (let i = lines.length - 1; i >= 0; i--) if (lines[i]!.label === t('signer.take.fills') || lines[i]!.label === t('signer.take.price')) lines.splice(i, 1);
+      lines.push(...v.lines);
+    }
+  }
   // The maker's cancel of an order under an older contract version, from the cancel-only table, is
   // titled as such, with what returns to the wallet.
   const retiredCancel = (s.kind === 'cancel' || s.kind === 'cancel-position') && s.spends.some((x) => x.retired);
@@ -579,7 +596,7 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
  * The decoder takes only a lock of this key that is open by `now`, the frame's clock.
  */
 export function summarize(kob: KobWasm, built: BuiltTx, maker: Hex, hints: TokenHint[], locks?: readonly LockHint[], now?: number): SignerSummary {
-  return summaryLines(decodeSigning({ kob, built, maker, registry: null, ...(locks?.length ? { locks } : {}), ...(now !== undefined ? { now } : {}) }), hints, kob, true);
+  return summaryLines(decodeSigning({ kob, built, maker, registry: null, ...(locks?.length ? { locks } : {}), ...(now !== undefined ? { now } : {}) }), hints, kob, true, built);
 }
 
 /**

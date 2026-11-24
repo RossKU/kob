@@ -48,6 +48,7 @@
 // The Schnorr digests in `built.sign` are produced by kob-wasm. TypeScript cannot recompute them,
 // and `kob.finalize` verifies signatures against them.
 import { curveProblems } from './curve';
+import { isGenesisBinding } from './covenant-id';
 import { AUTO_COIN, LOCK_COIN_MAX, creatorLock, type CreatorLockInfo } from './creator-lock';
 import type { WalletId } from '../wallet/types';
 import {
@@ -826,7 +827,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       const byEntry = actionOfEntry(plan.entry);
       const named = role.split('@')[0]!.split('.')[1];
       const byRole = named !== undefined ? actionOfEntry(named) : byEntry;
-      const consistent = byRole === byEntry || (byEntry === 'fill' && byRole === 'refund');
+      const consistent = byRole === byEntry || (byEntry === 'fill' && (byRole === 'refund' || byRole === 'update'));
       if (!consistent) add('malformed-built', `input ${i}: the role "${role}" names another action than the entry "${plan.entry}" the plan signs`, { input: i });
       const action = consistent ? byRole : byEntry;
       if (state && isOrderKind(state.kind)) {
@@ -1974,7 +1975,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     // every order input of the wallet the wallet signs: its signature lets the maker's cancel run
     // whatever entry the plan names (the signature does not cover the signature script)
     if (!o || !st || !cov || (o.action !== 'cancel' && o.action !== 'refund' && !(o.makerIsWallet && d.willSign))) continue;
-    const continues = sweepByInput.has(d.index) || amends.some((a) => a.input === d.index) || tx.outputs.some((x) => x.covenant?.covenantId === cov);
+    const continues = sweepByInput.has(d.index) || amends.some((a) => a.input === d.index) || trulyContinues(d.index);
     let held: { token: Hex; amount: bigint }[];
     try {
       held = custodiesOf(st, kob).filter((c) => c.amount > 0n);
@@ -2013,7 +2014,27 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       }
     }
   }
+  // R9FB2-1: an input's UTXO covenant id is the app's word (no signature covers it). An output bound
+  // to the genesis id of its authorising input's outpoint STARTS a covenant on chain, whatever the
+  // input claims to carry. So a continuation (amend, sweep, claim) bound that way ends the order and
+  // locks its custody: blocking.
+  for (const o of orders) {
+    const from = o.amendedFrom ?? o.sweptFrom ?? o.claimedFrom;
+    if (from === undefined) continue;
+    const bind = tx.outputs[o.output]?.covenant;
+    const group = tx.outputs.filter((x) => x.covenant && bind && x.covenant.authorizingInput === bind.authorizingInput && x.covenant.covenantId === bind.covenantId).length;
+    if (!bind || bind.authorizingInput !== from) add('order-spk-mismatch', `output ${o.output}: the continued order is not authorised by the order input ${from}`, { output: o.output, input: from });
+    else if (isGenesisBinding(tx, from, bind.covenantId)) add('order-spk-mismatch', `output ${o.output}: it starts a new covenant from input ${from}'s outpoint: it does not continue the order, which would end with everything it holds locked`, { output: o.output, input: from });
+    else if (group !== 1) add('order-spk-mismatch', `output ${o.output}: ${group} outputs continue the order; an order continues as one output`, { output: o.output, input: from });
+  }
   outputSideHoldings();
+  /**
+   * Whether input `i`'s covenant continues: an output it authorises whose binding is not the genesis
+   * id of its outpoint (such a binding is, on chain, the input's real covenant id, or the tx is invalid).
+   */
+  function trulyContinues(i: number): boolean {
+    return tx.outputs.some((x) => x.covenant?.authorizingInput === i && !isGenesisBinding(tx, i, x.covenant.covenantId));
+  }
   /**
    * What the wallet's signature binds, judged without trusting the app (R9FB-1). It holds in the
    * private-key frame, which has no node facts: SIGHASH_ALL commits every output in full and, of the
@@ -2044,13 +2065,14 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     type Need = { token: Hex; ext: Hex | null; amount: bigint };
     const ending: { d: DecodedInput; needs: Need[] }[] = [];
     const continuing: { d: DecodedInput; needs: Need[] }[] = [];
-    const key = (t: Hex, e: Hex | null) => `${t.toLowerCase()}|${(e ?? '').toLowerCase()}`;
+    // a KRON token has no class: its ext reads as zero or none alike
+    const key = (t: Hex, e: Hex | null) => `${t.toLowerCase()}|${e && !/^0*$/.test(e) ? e.toLowerCase() : ''}`;
     let unjudgeable: string | null = null;
     for (const d of inputs) {
       const o = d.order;
       const st = orderStates.get(d.index);
       if (!o || !st || !o.makerIsWallet || !d.willSign) continue;
-      const continues = tx.outputs.some((x) => x.covenant?.authorizingInput === d.index && !newCovenantIds.has(x.covenant.covenantId));
+      const continues = trulyContinues(d.index);
       const pf = pairFactsOf(st);
       const needs: Need[] = [];
       let held: { token: Hex; amount: bigint }[] = [];
@@ -2090,10 +2112,9 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       const others = inputs.some((t) => t.order && !t.order.makerIsWallet);
       if (ending.length && others) unjudgeable ??= 'it spends another maker\'s order together with one of yours that ends';
       for (const c of continuing) for (const n of c.needs) if (needEnding.has(key(n.token, n.ext))) unjudgeable ??= 'one of your orders ends and another continues in the same token';
-      // KRON holdings of the wallet need no signature of their own while a plain input of the
-      // wallet's key is in the transaction, so the frame cannot tell them from a custody
-      const presence = inputs.some((t) => t.type === 'kas' && t.ownedBy === 'maker' && t.willSign);
-      if (presence && inputs.some((t) => !t.willSign && (built.plans[t.index] as { kind?: string }).kind === 'kronToken')) unjudgeable ??= 'it spends KRON tokens next to a coin of your key: their owner cannot be told without your node';
+      // KRON holdings of the wallet spent by the presence of its coin (no signature of their own) are
+      // the app's word on their amount; the frame's shapes let them go only to the wallet or to orders
+      // created here (signer/shapes.ts), so they cannot carry a custody away
     }
     if (frame && unjudgeable) {
       add('custody-unreleased', `this signer cannot check what the transaction does with your orders' holdings (${unjudgeable}): use a wallet extension for this action`, { params: { amount: 0n } });
