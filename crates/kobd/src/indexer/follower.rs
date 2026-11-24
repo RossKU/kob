@@ -2453,7 +2453,12 @@ impl<S: ChainSource> Follower<S> {
                 // verified age decides (more than `caught_up_daa` at 10 DAA a second), never the
                 // node's claimed position (R8C1-L4).
                 let age = last_ts.filter(|(h, _)| *h == a.cursor.hash).map(|(_, t)| self.wall_ms() as i64 - t as i64);
-                let more = c.by_window || age.map(|ms| ms > self.cfg.caught_up_daa as i64 * 100).unwrap_or(a.added > 0);
+                // The verified age decides when it is known; the window (which the node's sink claim bounds) only when
+                // it is not (R9C1-L2).
+                let more = match age {
+                    Some(ms) => ms > self.cfg.caught_up_daa as i64 * 100,
+                    None => c.by_window || a.added > 0,
+                };
                 let orders_total =
                     if a.new_orders > 0 || a.reverted_rows_blocks > 0 { self.blocking(|i| i.order_count().ok()).await } else { None };
                 let records_next = self.blocking(|i| i.records_next()).await;
