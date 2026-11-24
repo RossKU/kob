@@ -154,8 +154,8 @@ test('the indexer answers but falls behind the chain: one notification, a yellow
   const sell = await placedWithoutIndexer(mock, await waitSubmitted(page));
   expect(onChainTerms(sell)[0]!.state.price).toBe('5000000');
 
-  // A minute behind is still not caught up: it stays on the node (no flapping).
-  await mock.post('/mock/health', { state: 'following', lag_daa: 600 });
+  // 110 s behind, under the two-minute bound but over the 100 s return bound: it stays on the node (no flapping).
+  await mock.post('/mock/health', { state: 'following', lag_daa: 1_100 });
   await page.waitForTimeout(12_000);
   await expect(dot(page)).toHaveAttribute('data-trading', 'node');
 

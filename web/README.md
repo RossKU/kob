@@ -261,7 +261,7 @@ After connect the adapters listen for account and network changes (`WalletAdapte
   join the book (`StandaloneReceipts`). `services.indexer` then answers the book, order views, token list, trades, candles, stats and depth from that
   (`src/data/stream-market.ts`: fills counted once the node holds an output of their transaction), labelled "since hh:mm"; everything else fails as with the
   indexer down. The ticket, the book check and the signing are unchanged; an open-list token is traded only with declared or program-default decimals. The
-  first usable report ends an automatic mode (`standalone.autoReturn`; off: a button in the bell's entry). Settings / any config layer: `standalone: { manual, auto, autoReturn }`.
+  indexer's usable report within 100 s of the chain (`LAG_RETURN_SECONDS`, above kobd's 90 s keep-up tolerance), seen twice 5 s apart, ends an automatic mode (`standalone.autoReturn`; off: a button in the bell's entry). Settings / any config layer: `standalone: { manual, auto, autoReturn }`.
 * **Guards.** If the indexer cannot list the wallet's own orders (self-trade prevention) or the book, the order cannot be placed: one error line
   ("Could not read the token's guard data; try again in a moment") until the ticket's background refresh reads them, then it clears by itself.
 * **Book against the node.** Every read of the order book for a KAS market (`readMarketPart`, `src/app/book-verify.ts`) checks the first orders of each
