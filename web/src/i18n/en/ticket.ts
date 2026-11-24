@@ -340,6 +340,7 @@ export default {
   'ticket.help.displayedPrice': 'The price you saw.',
   'ticket.help.toleranceBps': 'Accepted distance from that price. Default 3%.',
   'ticket.help.sliceAmount': 'Most traded per interval.',
+  'ticket.help.dust': 'A slice or order worth less than {min} KAS to a taker is not shown in the public book. Executors still fill it.',
   'ticket.help.interval': 'Minutes between fills.',
   'ticket.help.priceEnd': 'Each slice auctions from the price to this one.',
   'ticket.help.duration': 'Minutes to reach the end price.',

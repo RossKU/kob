@@ -28,6 +28,9 @@
 .tk-help-toggle { flex: none; width: 26px; height: 26px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 0.85rem; font-weight: 600; line-height: 1; cursor: pointer; display: inline-grid; place-items: center; padding: 0; }
 .tk-help-toggle[aria-pressed='true'] { color: var(--primary); border-color: var(--primary); }
 .tk-help-toggle:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
+/* once when the order entered turns dust (dust-hint.ts): the confirmation's price flash (send.css), two names so the next one restarts */
+.tk-help-toggle.tk-flash-0 { animation: send-flash-0 1.2s ease-out; }
+.tk-help-toggle.tk-flash-1 { animation: send-flash-1 1.2s ease-out; }
 /* a finger: the "?" is a 34 px target on a coarse pointer (review M-11), the height of the Buy | Sell row's segments */
 @media (pointer: coarse) { .tk-help-toggle { width: 34px; height: 34px; } }
 /* the "Calculating..." indicator: an overlay at the right end of the Order type label row, so it never changes the layout of the ticket */
