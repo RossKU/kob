@@ -573,6 +573,8 @@ struct Blame {
 #[derive(Default)]
 struct EndProofs {
     end: Option<Hash32>,
+    /// The lane proofs the piece's end needs, for `lanes_pending` in `/v1/health`.
+    want: usize,
     got: std::collections::HashMap<kaspa_hashes::Hash, (kaspa_rpc_core::GetSeqCommitLaneProofResponse, Origin)>,
 }
 
@@ -1665,7 +1667,20 @@ impl<S: ChainSource> Follower<S> {
         if cross.alone {
             alarms.push(format!("cross-check: {}", cross.reason.as_deref().unwrap_or("none answers: the chain authority runs alone")));
         }
-        let proof = self.proof.as_ref().map(|p| p.lock().unwrap_or_else(|e| e.into_inner()).status());
+        let pending = {
+            let g = self.end_proofs.lock().unwrap_or_else(|e| e.into_inner());
+            g.want.saturating_sub(g.got.len())
+        };
+        let proof = self.proof.as_ref().map(|p| {
+            let mut g = p.lock().unwrap_or_else(|e| e.into_inner());
+            g.note_lanes(
+                self.proofs_answered.load(std::sync::atomic::Ordering::Relaxed),
+                self.proof_failures.load(std::sync::atomic::Ordering::Relaxed),
+                self.lane_budget.load(std::sync::atomic::Ordering::Relaxed),
+                pending,
+            );
+            g.status()
+        });
         self.health.update(|h| {
             h.cross_checked = cross.checked;
             h.cross_check_alone = cross.alone;
@@ -2290,7 +2305,7 @@ impl<S: ChainSource> Follower<S> {
         let missing: Vec<kaspa_hashes::Hash> = {
             let mut g = self.end_proofs.lock().unwrap_or_else(|e| e.into_inner());
             if g.end != Some(end) {
-                *g = EndProofs { end: Some(end), got: Default::default() };
+                *g = EndProofs { end: Some(end), want: lanes.len(), got: Default::default() };
             }
             lanes.iter().copied().filter(|l| !g.got.contains_key(l)).collect()
         };

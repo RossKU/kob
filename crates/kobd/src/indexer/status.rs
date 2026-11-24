@@ -1080,6 +1080,13 @@ impl HealthSnapshot {
             s.push_str(" | chain proofs OFF");
         }
         if let Some(p) = &self.chain_proof {
+            // a lane-heavy window being proven (R9C1-H1): lane load, which an operator tells from a slow node by it
+            if p.lanes_pending > 0 {
+                s.push_str(&format!(
+                    " | proving lanes: {} pending, {} answered, {} a piece",
+                    p.lanes_pending, p.lane_proofs_answered, p.lane_budget
+                ));
+            }
             if p.refused_total > 0 {
                 s.push_str(&format!(
                     " | chain proofs refused {} batches (last: {})",

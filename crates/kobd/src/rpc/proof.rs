@@ -313,6 +313,18 @@ pub struct ChainProofStatus {
     pub cpu_us_per_block: f64,
     /// Headers the floor's median is taken over now. 0 means the fixed network minimum only.
     pub floor_headers: usize,
+    /// Lane proofs the node answered, at the anchor and at a piece's end (R9C1-H1). While a lane-heavy window is
+    /// proven, this rises although the cursor waits: that is lane load, not a slow node (`docs/ops/executor.md`).
+    pub lane_proofs_answered: u64,
+    /// Lane-proof calls that failed or timed out. A period with one is not excused by the proofs answered.
+    pub lane_proof_failures: u64,
+    /// The lanes one new piece of a window takes now, from the measured lane-proof call time (64 to 4,096).
+    pub lane_budget: usize,
+    /// Lane proofs still to fetch at the end of the piece in progress, 0 when none is.
+    pub lanes_pending: usize,
+    /// User lanes (KIP-21) proven: those on which a window spent an output the store tracks (R9-K). A user lane with
+    /// nothing tracked on it is not proven.
+    pub user_lanes_proven_total: u64,
     #[serde(skip)]
     cpu_ns_total: u128,
 }
@@ -546,6 +558,14 @@ impl ChainProof {
 
     pub fn status(&self) -> ChainProofStatus {
         self.status.clone()
+    }
+
+    /// The follower's lane-proof figures for `/v1/health` ([`ChainProofStatus::lane_proofs_answered`] and on).
+    pub fn note_lanes(&mut self, answered: u64, failures: u64, budget: usize, pending: usize) {
+        self.status.lane_proofs_answered = answered;
+        self.status.lane_proof_failures = failures;
+        self.status.lane_budget = budget;
+        self.status.lanes_pending = pending;
     }
 
     pub fn anchor(&self) -> Option<Anchor> {
@@ -823,6 +843,7 @@ impl ChainProof {
             })?;
         }
         self.status.lane_proofs_total += proofs.len() as u64;
+        self.status.user_lanes_proven_total += expected.iter().filter(|(l, _)| *l != native_lane()).count() as u64;
         self.status.blocks_total += plan.blocks.len() as u64;
         if self.status.blocks_total > 0 {
             self.status.cpu_us_per_block = self.status.cpu_ns_total as f64 / 1000.0 / self.status.blocks_total as f64;
