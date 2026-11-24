@@ -251,6 +251,12 @@ Other order types exist (IOC, FOK, stops, take-profit, OCO, IFD, IFO, TWAP, DCA,
 stop can trigger later than the chart suggests and it has no guaranteed price.
 A stop can also be triggered by someone's own trade: use a tight band and a larger trigger size (`docs/spec/matcher.md` section 4.3).
 
+**Small orders and slices are not shown in the public book.** An order that one fill can take less than half the listing minimum
+from (0.5 KAS by default) is not shown in the public book, depth or statistics: a TWAP or DCA order whose slice is worth less than
+that, a bid whose escrow is mostly its delivery carrier (for example a bid buying 0.2 KAS of tokens with the default 1 KAS
+carrier), an auction whose floor (a Dutch ask) or start (a rising bid) is worth less, a curve whose smallest fill is. It is still
+listed and still filled by executors, and it stays in your own orders list. A client can ask for it with `include_dust=true`.
+
 ## 6. Partial fills, and "You may receive up to"
 
 An order is filled by whoever matches it (a matcher), and it can be filled in several steps. A limit order that is filled in
