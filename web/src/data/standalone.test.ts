@@ -345,22 +345,71 @@ describe('an indexer that falls behind the chain', () => {
     }
   });
 
-  it('a lag that wanders between 95 s and 125 s enters at most about once per back-off stay (R6B-M1, R4B-I2)', async () => {
+  /** Entries and time in the mode while `lagAt(t)` drives the status poll every 15 s for `ms`. */
+  async function lagRun(lagAt: (t: number) => number, ms: number): Promise<{ starts: number; onMs: number }> {
     const h = harness();
     let starts = 0;
+    let since = 0;
+    let onMs = 0;
     let was = false;
     h.c.subscribe((s) => {
-      if (s.active && !was) starts++;
+      if (s.active && !was) (starts++, (since = Date.now()));
+      if (!s.active && was) onMs += Date.now() - since;
       was = s.active;
     });
-    for (let t = 0; t < 3_600_000; t += 15_000) {
-      const sec = (t / 15_000) % 2 === 0 ? 125 : 95;
-      h.setHealth(lagged(sec));
-      h.c.report(assess(lagged(sec)));
-      await vi.advanceTimersByTimeAsync(15_000);
+    for (let t = 0; t < ms; t += 5_000) {
+      // the mode's own looks see the lag of the moment; the status poll reports every 15 s
+      h.setHealth(lagged(lagAt(t)));
+      if (t % 15_000 === 0) h.c.report(assess(lagged(lagAt(t))));
+      await vi.advanceTimersByTimeAsync(5_000);
     }
-    expect(starts).toBeGreaterThan(1);
-    expect(starts).toBeLessThanOrEqual(15);
+    if (was) onMs += Date.now() - since;
+    h.c.dispose();
+    return { starts, onMs };
+  }
+
+  it('a node that spends its whole budget on climbs (lag 90 s, a 16 s spell at 130 s every 10 minutes) holds a tab in the mode about 6 % of the time, not half (R7B-L1)', async () => {
+    const r = await lagRun((t) => (t % 600_000 >= 300_000 && t % 600_000 < 316_000 ? 130 : 90), 7_200_000);
+    expect(r.starts).toBe(12);
+    // each stay is the fixed shortest one, plus the second look: no back-off for a lag entry
+    expect(r.onMs).toBeLessThanOrEqual(12 * (MIN_AUTO_MS + RETURN_CHECK_MS + 10_000));
+    expect(r.onMs / 7_200_000).toBeLessThan(0.07);
+  });
+
+  it('a lag that wanders between 95 s and 125 s every 15 s: each entry ends at the fixed shortest stay, at most one a minute (R7B-L1)', async () => {
+    const r = await lagRun((t) => (Math.floor(t / 15_000) % 2 === 0 ? 125 : 95), 3_600_000);
+    expect(r.starts).toBeGreaterThan(1);
+    expect(r.starts).toBeLessThanOrEqual(60);
+  });
+
+  it('an indexer that goes down keeps its back-off, and a lag entry in between does not reset or raise it (R4B-I2, R7B-L1)', async () => {
+    const h = harness();
+    const stays: number[] = [];
+    let since = 0;
+    let was = false;
+    h.c.subscribe((s) => {
+      if (s.active && !was) since = Date.now();
+      if (!s.active && was) stays.push(Date.now() - since);
+      was = s.active;
+    });
+    const cycle = async (down: boolean) => {
+      h.setHealth(down ? new Error('down') : lagged(130));
+      h.c.report(down ? bad : assess(lagged(130)));
+      await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+      h.setHealth(health('following'));
+      for (let t = 0; t < 400_000 && h.c.state.active; t += 5_000) {
+        h.c.report(good);
+        await vi.advanceTimersByTimeAsync(5_000);
+      }
+    };
+    await cycle(true);
+    await cycle(true);
+    await cycle(false);
+    await cycle(true);
+    expect(stays).toHaveLength(4);
+    expect(stays[1]).toBeGreaterThanOrEqual(2 * MIN_AUTO_MS);
+    expect(stays[2]).toBeLessThan(2 * MIN_AUTO_MS);
+    expect(stays[3]).toBeGreaterThanOrEqual(4 * MIN_AUTO_MS);
   });
 
   it('with automatic fallback off it never switches on lag', async () => {
