@@ -76,7 +76,9 @@ async fn the_stats_of_a_book_of_long_curves_hold_one_curve_at_a_time() {
     let ctx = ReadCtx { node_daa: Some(c.daa()), settle_depth_daa: 100, now_unix: None };
     let warm = market::stats(g.conn(), &ctx, &Hash32(TOKEN_COV), Some(3)).unwrap();
     assert_eq!(warm.open_asks, CURVES * LEVELS as i64, "every remaining level of every curve is counted");
-    assert_eq!(warm.best_ask.as_deref(), Some("250000000"), "the cheapest level of the cheapest curve");
+    // one unit of a level (0.0025 KAS) pays the maker less than KIP-9 lets an output hold: the smallest fill a taker can make
+    // of the cheapest curve is its first 8 levels, at their mean price, which is its place in the book (R7C2a-2)
+    assert_eq!(warm.best_ask.as_deref(), Some("253500000"), "the smallest fill of the cheapest curve");
     let base = LIVE.load(SeqCst);
     PEAK.store(base, SeqCst);
     let v = market::stats(g.conn(), &ctx, &Hash32(TOKEN_COV), Some(3)).unwrap();
